@@ -7,7 +7,10 @@ issues: [6713, 6714, 6720]
 
 # Tasks — #6713 tempfile leak, #6720 jq argv ceiling, #6714 digest liveness monitor
 
-Derived from the finalized (post-review) plan. **Read the plan's Research Reconciliation table
+Derived from the finalized (post-review, post-deepen) plan. Tasks intentionally carry NO
+numeric `AC-N` back-references — the plan's AC numbering shifted twice during review and the
+refs silently drifted. Each task states its own acceptance condition; cross-check against the
+plan's Acceptance Criteria section by description. **Read the plan's Research Reconciliation table
 before starting** — it reverses the fix prescribed in issue #6713 and refines the ones in #6720
 and #6714, all on measured evidence.
 
@@ -25,17 +28,23 @@ The three phases are independent and share no files. They may be implemented in 
       `workspaces-luks-staging.test.sh:413, 802, 1004`.
 - [ ] **1.4** Add a why-comment at both sites: a `trap … EXIT` here would REPLACE the harness
       trap at `workspaces-luks-harness.sh:42` and leak the whole `RUN_SCRATCH` tree. Do not add one.
-- [ ] **1.5** Add residue self-check cases **inside the same suite** (it is already wired at
+- [ ] **1.5** Add residue self-check cases **inside the same suite** (already wired at
       `.github/workflows/infra-validation.yml:395`): re-invoke in a subshell under a private
       `TMPDIR`; assert 0 residue on a clean run, and 0 residue after a forced `SIGTERM` during
       the mutation block (a ≥2-tempfile window).
+- [ ] **1.5a** Add a **recursion guard** (env sentinel) — the suite has none, and a self-check
+      that re-invokes the suite recurses forever without one. Make sure the outer summary parse
+      is not confused by the inner run's own `N passed, N failed` line.
+- [ ] **1.5b** Synchronize the SIGTERM on **file existence, not elapsed time**. Poll for the MUT
+      file; a fixed `sleep` lands outside the window on a loaded runner and the test then passes
+      for the wrong reason (nothing was live, so nothing leaked).
 - [ ] **1.6** Verify: `grep -c 'mktemp' …` → 2; `grep -c 'mktemp -p "$RUN_SCRATCH"' …` → 2;
-      `grep -c '^\s*trap ' …` → 0; harness trap grep → 1. *(AC-1, AC-2, AC-3)*
-- [ ] **1.7** Run the suite: `0 failed`, pass count ≥ 58. *(AC-5)*
+      `grep -c '^\s*trap ' …` → 0; harness trap grep → 1.
+- [ ] **1.7** Run the suite: `0 failed`, pass count ≥ 58.
 - [ ] **1.8** File the tracked tempfile sweep issue: the 2 confirmed class-c/class-d instances
       (`scripts/content-publisher.sh:69-77` + 6 `$(make_tmp)` sites;
       `scripts/skill-freshness-aggregate.sh:101` vs `:270`), the 121 class-(b) no-trap files, and
-      the absence of any lint gate. Link from the PR body. *(AC-6)*
+      the absence of any lint gate. Link from the PR body.
 
 ## 2. #6720 — jq argv ceiling
 
@@ -54,14 +63,20 @@ The three phases are independent and share no files. They may be implemented in 
 - [ ] **2.5** If a top-level trap is introduced, migrate `write_row()` (`:235`) onto it — its
       `trap - EXIT` at `:246` would otherwise clear the new trap. Do not half-migrate.
 - [ ] **2.6** Verify counts are exact: `extract | jq '{f:(.facts|length),b:(.blind_spots|length)}'`
-      → `{"f":350,"b":54}`. A non-emptiness assertion is insufficient. *(AC-8)*
-- [ ] **2.7** Verify byte-identity against the 2.2 baseline. *(AC-9)*
-- [ ] **2.8** Add a >131,072 B fixture to `scripts/domain-model-drift.test.sh` (~1200 synthetic
-      rows); assert exit 0 + correct count, **and** demonstrate the same fixture fails on pre-fix
-      code with `Argument list too long`. The negative half is what makes it non-vacuous. *(AC-10)*
-- [ ] **2.9** Run `bash scripts/domain-model-drift.test.sh`. *(AC-11)*
+      → `{"f":350,"b":54}`. A non-emptiness assertion is insufficient.
+- [ ] **2.7** Verify byte-identity against the 2.2 baseline.
+- [ ] **2.8** Add a >131,072 B fixture to `scripts/domain-model-drift.test.sh` using
+      **production-shaped rows** (full migration anchor + a real `USING (...)` predicate).
+      **Row count is NOT the load-bearing parameter — bytes per fact is.** Measured: 1200
+      *minimal* rows = 75,782 B (under the ceiling → vacuous test); 1200 *realistic* rows =
+      286,982 B. Crossover with realistic rows is between 500 and 600.
+- [ ] **2.8a** Assert **fixture adequacy in-suite**: `jq -c '.facts' | wc -c` must exceed
+      131,072, else fail loudly as vacuous. A PR-body demonstration is not runnable post-merge.
+- [ ] **2.8b** Assert **zero spool residue** on every return path incl. `exit 3`, separately for
+      `drift` (subshell) and `extract` (main shell) — the discriminating pair for Phase 2.2.
+- [ ] **2.9** Run `bash scripts/domain-model-drift.test.sh`.
 - [ ] **2.10** File the argv sibling-sweep issue (ranked list is in plan Phase 2.5). Measure each
-      candidate against 131,072 B — item count is not a proxy for argv bytes. *(AC-27)*
+      candidate against 131,072 B — item count is not a proxy for argv bytes.
 
 ## 3. #6714 — digest liveness monitor
 
@@ -72,9 +87,9 @@ The three phases are independent and share no files. They may be implemented in 
       (from `matched` at `_cron-safe-commit.ts:495`) and `resumed?: true` on the replay-resume
       branch (`:444-455`). Optional, not required — ~38 consumers.
 - [ ] **3.3** Run the `hr-type-widening-cross-consumer-grep` three-pattern sweep, then
-      `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`. *(AC-13)*
+      `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
 - [ ] **3.4** **Assign** the `safe-commit-pr` step's return value at `cron-community-monitor.ts:652`
-      — it is discarded today. This is the primary defect. *(AC-14)*
+      — it is discarded today. This is the primary defect.
 - [ ] **3.5** Add `livenessOk`, derived per the plan's four-arm table (committed+path → GREEN;
       committed+resumed → GREEN; no-changes/failed → RED; committed without the path → RED).
       Feed it to the Sentry check-in at `:708-741`.
@@ -82,22 +97,35 @@ The three phases are independent and share no files. They may be implemented in 
       `grep -c 'if (heartbeatOk && !spawnResult.abortedByTimeout)' …` → 1 and that
       `cron-safe-commit-parity.test.ts` passes unmodified. *(AC-15, R20)*
 - [ ] **3.7** Close the dedup early-return GREEN path (`:437-447`): before returning GREEN,
-      verify the dated digest is committed on the default branch; if not, spawn instead. *(AC-18)*
+      verify the dated digest is committed on the default branch; if not, spawn instead.
 - [ ] **3.8** Add the five markers at their named sites (plan 3.3 table). Marker 1 has **three**
       sites in `_cron-safe-commit.ts` (`:395`, `:547`, `:805`) — assert per-site, and assert the
-      emitted field set, not string presence. *(AC-20)*
+      emitted field set, not string presence.
 - [ ] **3.9** Do **not** invert `:669-671`. Emit marker 1 with `status=failed` from the catch and
       leave retry semantics untouched — inverting causes a replay onto a deleted `spawnCwd` and a
       false `workspace-lost` Sentry event. *(plan 3.5b)*
 - [ ] **3.10** Read the four suites that already exercise `isRealScheduledDigest`; confirm the
       `_cron-shared.ts:937` body-exclusion arm is genuinely unpinned before adding the
-      characterization test. *(AC-19)*
-- [ ] **3.11** Correct the stale Tier-2 comment at `:393-397`. *(AC-22)*
-- [ ] **3.12** Tests: the four `livenessOk` arms, the resumed carve-out, the dedup GREEN-path
-      close, and each marker. *(AC-16, AC-17, AC-18, AC-20)*
+      characterization test.
+- [ ] **3.11** Correct the stale Tier-2 comment at `:393-397`.
+- [ ] **3.12** Land behavioral tests in **`cron-community-monitor-heartbeat.test.ts`** (5
+      `vi.mock`s, real `postSentryHeartbeat`, asserts check-in colour end-to-end) — NOT in
+      `cron-community-monitor.test.ts`, which is pure source-grep (23 `SUT_SOURCE`, 0 `vi.mock`)
+      and would degrade the ACs into the grep-proxy the plan forbids. Cover: the four
+      `livenessOk` arms (split `no-changes` / `failed` / `committed`-without-the-path), the
+      resumed carve-out, the dedup GREEN-path close, and each marker.
+- [ ] **3.12a** Fix the three `{ ok: true }` mocks — `cron-community-monitor-heartbeat.test.ts:122`,
+      `cron-cohort-dedup.test.ts:250`, `cron-community-monitor-dedup.test.ts:160`. They are
+      outside the `SafeCommitResult` union; once the return is assigned, `status` is `undefined`
+      → RED arm → three suites break for reasons unrelated to the defect.
+- [ ] **3.12b** Add behavioral assertions in `cron-safe-commit.test.ts` that `paths` is populated
+      from `matched` and `resumed: true` is set on the replay branch. `tsc --noEmit` is a
+      compile-time proxy and asserts neither.
+      **Scoping gotcha:** `const matched` is block-scoped inside `if (!resuming)` (`:495`) while
+      `fileCount` is hoisted (`:454`) — `paths` must be hoisted the same way.
 - [ ] **3.13** `terraform plan` on `apps/web-platform/infra/sentry/` → no diff for
-      `sentry_cron_monitor.scheduled_community_monitor`. *(AC-21)*
-- [ ] **3.14** File the cohort-audit follow-up issue (plan 3.8). *(AC-27)*
+      `sentry_cron_monitor.scheduled_community_monitor`.
+- [ ] **3.14** File the cohort-audit follow-up issue (plan 3.8).
 
 ## 4. ADR + C4
 
@@ -108,14 +136,16 @@ The three phases are independent and share no files. They may be implemented in 
 - [ ] **4.2** Read all three of `model.c4`, `views.c4`, `spec.c4` in full. Enumerate external
       actors, external systems, data stores, and changed access relationships. Expected outcome
       is "no C4 impact" — but the conclusion must cite the enumeration. Edit + run
-      `c4-code-syntax.test.ts` / `c4-render.test.ts` if a gap is found. *(AC-24)*
+      `c4-code-syntax.test.ts` / `c4-render.test.ts` if a gap is found.
 
 ## 5. Exit
 
-- [ ] **5.1** `bash scripts/test-all.sh` green. *(AC-25)*
+- [ ] **5.1** `bash scripts/test-all.sh` green.
+      **Runner note:** `apps/web-platform` is **vitest** (`package.json:15-16`), not `bun test`.
+      Single-file form: `cd apps/web-platform && npx vitest run test/server/inngest/<file>`.
 - [ ] **5.2** PR body: `Closes #6713`, `Closes #6714`, `Closes #6720`; the H1–H12 evidence table
       with raw excerpts and H9 as UNKNOWN; the corrected #6713 causal chain (R4) and #6714 framing
-      (R13). *(AC-12, AC-26)*
-- [ ] **5.3** Confirm all three follow-up issues are filed and linked. *(AC-27)*
+      (R13).
+- [ ] **5.3** Confirm all three follow-up issues are filed and linked.
 - [ ] **5.4** Surface `decision-challenges.md` (DC-1, marker 4 retained against review
       recommendation) for the operator.

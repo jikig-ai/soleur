@@ -13,9 +13,9 @@ requires_cpo_signoff: false
 ## Enhancement Summary
 
 **Deepened on:** 2026-07-19
-**Review passes:** code-simplicity (plan-review), architecture-strategist (plan-review), plus
-self-executed measurement on this host (every R-row claim was run, not inferred). A test-design
-pass is in flight; its findings land as a follow-up commit if it surfaces anything.
+**Review passes:** code-simplicity (plan-review), architecture-strategist (plan-review),
+test-design (deepen), plus self-executed measurement on this host — every R-row claim and every
+review finding was re-run locally, not taken on trust.
 
 ### What changed from plan v1
 
@@ -42,6 +42,19 @@ pass is in flight; its findings land as a follow-up commit if it surfaces anythi
    have shipped an invisible observability surface.
 8. **`discoverability_test` command fixed**: `betterstack-query.sh` has no `--query` flag; the
    correct form is `--grep <token> --since <N>[hmd]`. Verified against the script's arg parser.
+9. **The >131 KB fixture was vacuous as specified** (test-design, measured): the plan said
+   "~1200 synthetic rows", but 1200 *minimal* rows measure only **75,782 B** — under the ceiling,
+   exit 0, passing on unmodified code. **Bytes per fact is load-bearing, not row count.** The
+   fixture now uses production-shaped rows and asserts its own adequacy *in-suite*.
+10. **Behavioral ACs were routed to a suite that cannot execute behavior**: `cron-community-monitor.test.ts`
+   has 23 `SUT_SOURCE` refs and **zero `vi.mock`**. Retargeted to `cron-community-monitor-heartbeat.test.ts`,
+   the existing behavioral harness. Landing them in the grep suite would have reproduced the exact
+   grep-as-proxy anti-pattern the plan warns about.
+11. **The `SafeCommitResult` widening breaks three suites the plan said were unaffected**: all
+   three mock `{ ok: true }`, which is outside the union — once `status` is read, they fall to the
+   RED arm. Added to Files to Edit.
+12. **AC numbering replaced with descriptive references.** Numeric `AC-N` cross-refs drifted
+   twice during this session's edits; descriptive names ("the no-second-trap AC") do not.
 
 ### Cuts (accepted from code-simplicity review)
 
@@ -174,7 +187,7 @@ and misattributed engineering time, not a single-user incident.
 ### Phase 0 — (removed)
 
 *Cut at plan-review (code-simplicity, accepted).* The three proposed preconditions were
-verbatim duplicates of AC-3, AC-8, and AC-10 respectively. Baselines measured at plan time and
+verbatim duplicates of the "harness trap intact", "fact count relational", and ">131 KB fixture" ACs respectively. Baselines measured at plan time and
 recorded in Research Reconciliation: harness trap present (R1), extract = `{"f":350,"b":54}`
 (R6), argv bisect 131,071 PASS / 131,072 FAIL (R7). The ACs are the checkable post-conditions;
 a "blocking" phase that verifies nothing the ACs don't is ceremony.
@@ -231,7 +244,19 @@ Add instead, inside `apps/web-platform/infra/workspaces-luks-freeze.test.sh` (al
   are simultaneously live — a **≥2-tempfile window**, since a single-tempfile probe cannot
   detect the trap-replacement class) → **zero residue**.
 
-The separate negative-control fixture is dropped: **AC-2** (`trap` count must be 0) already
+**Two mechanics that must be specified or the check is unreliable:**
+
+1. **Synchronize on state, never on elapsed time.** `mutate()` returns immediately and each
+   `MUT` file lives only until its `rm -f` a few lines later. A fixed `sleep N; kill` will miss
+   that window on a loaded CI runner and the test then **passes for the wrong reason** (nothing
+   was live, so nothing leaked). Poll for the MUT file's existence and signal on that.
+2. **Add a recursion guard.** The suite carries only `set -uo pipefail` — no sentinel. A
+   self-check that re-invokes the suite from inside the suite recurses forever without one.
+   Gate the self-check on an env sentinel (e.g. skip when `WL_SELF_CHECK=1`, and set it for the
+   inner run), and make sure the outer summary parse is not confused by the inner run's own
+   `N passed, N failed` line.
+
+The separate negative-control fixture is dropped: the **"no second trap"** AC (`trap` count must be 0) already
 guards the trap-replacement regression deterministically and for free, so the fixture would be
 redundant rather than falsifiability-preserving.
 
@@ -312,11 +337,35 @@ a real complaint, that is a legible trigger to file an issue then, against evide
 
 **2.4 Regression test** — extend `scripts/domain-model-drift.test.sh`:
 - A fixture whose `facts_json` **exceeds 131,072 B** (the existing 1–3-migration fixtures can
-  never reach it — the blind spot the 2026-06-18 learning names explicitly). Generate ~1200
-  synthetic rows; assert exit 0 and the correct fact count.
+  never reach it — the blind spot the 2026-06-18 learning names explicitly).
+
+  **Row COUNT is not the load-bearing parameter — BYTES PER FACT is.** Measured during
+  deepen-plan: 1200 *minimal* rows (`policy\tm1\tt1\tp`) produce only **75,782 B** — under the
+  ceiling, exit 0, and the test would **pass on unmodified code**: vacuous, the R17 class again.
+  1200 *production-shaped* rows (full migration anchor + a real `USING (...)` predicate,
+  ~229 B/fact) produce **286,982 B**. The crossover with realistic rows sits between **500**
+  (119,282 B) and **600** (143,182 B).
+
+  So the fixture MUST assert its own adequacy **inside the suite**, as a precondition — not as a
+  one-time PR-body demonstration (which is unrunnable post-merge, since there is no pre-fix code
+  left to run against):
+
+  ```bash
+  fj_bytes=$(printf '%s' "$out" | jq -c '.facts' | wc -c)
+  [[ "$fj_bytes" -gt 131072 ]] || fail "fixture is only ${fj_bytes} B — below MAX_ARG_STRLEN, this test proves nothing"
+  ```
+
+  Use production-shaped rows and assert exit 0 + the exact fact count.
 - Assert `.facts | length` equals the TSV line count — **not** merely "output is non-empty."
   `add // []` and `$facts[0]` are indistinguishable on a single-array body, so a
   non-emptiness assertion cannot catch the undercount.
+- **Spool-file residue (Phase 2.2's correctness, currently untested).** Phase 2.2 is the most
+  defect-prone step in this plan — v1 got it wrong — yet nothing asserted its outcome. Wrap the
+  existing `exit 3` secret-refuse cases (`scripts/domain-model-drift.test.sh:82` T5 and `:234`
+  T16b) with a private `TMPDIR` and assert **zero residue**, covering BOTH modes separately:
+  `drift` (runs `emit_extract_json` under `$( )` — the subshell case) and `extract` (main
+  shell). That mode pair is exactly the discriminating axis Phase 2.2 describes, and a
+  single-mode test cannot detect the subshell defect.
 
 **2.5 Sibling sweep (do not skip — per the 2026-06-18 learning, "X is unaffected" is a
 hypothesis).** File a tracked follow-up issue enumerating the unbounded `--argjson` bindings
@@ -396,6 +445,9 @@ Required change, in this order:
 1. **Widen `SafeCommitResult`** with an **optional** `paths?: string[]` on the `"committed"` arm,
    populated from the already-computed `matched` array at `_cron-safe-commit.ts:495` (each entry
    carries `.path`; it is currently collapsed to `fileCount = matched.length` at `:549`).
+   **Scoping gotcha:** `const matched` is block-scoped *inside* the `if (!resuming)` block, while
+   `fileCount` is hoisted at `:454`. `paths` must be hoisted the same way — it is **not** in
+   scope at the return statement.
    Optional — not required — because the type is consumed across **~20 handler files and ~18
    test files**; a required field is a breaking change to all of them.
 2. **Handle replay-resume explicitly (R21).** When `resuming` is true (`:444-455`) the scan at
@@ -561,12 +613,31 @@ reject condition.
 | `apps/web-platform/server/inngest/functions/cron-community-monitor.ts` | 3.1–3.6 | Capture the `safe-commit-pr` return (3.1b); add `livenessOk` (no rename); dedup GREEN-path close; markers 2/3/5; stale comment |
 | `apps/web-platform/server/inngest/functions/_cron-safe-commit.ts` | 3.2, 3.3 | Optional `paths?: string[]` + `resumed?: true` on the committed arm; marker 1 at `:395`, `:547`, `:805` |
 | `apps/web-platform/server/inngest/functions/_cron-shared.ts` | 3.3 | Marker 4 at `:750` |
-| `apps/web-platform/test/server/inngest/cron-community-monitor.test.ts` | 3.1–3.5 | Assert `livenessOk` derivation, the four status arms, resumed carve-out, dedup GREEN-path close, markers |
+| `apps/web-platform/test/server/inngest/cron-community-monitor-heartbeat.test.ts` | 3.1–3.5 | **The behavioral harness** (5 `vi.mock`s, real `postSentryHeartbeat`, stubbed `fetch`, asserts check-in colour end-to-end). Home for the `livenessOk` arms + dedup close. Also: fix its `{ ok: true }` mock (F3) |
+| `apps/web-platform/test/server/inngest/cron-community-monitor.test.ts` | 3.6 | Source-grep suite (23 `SUT_SOURCE`, **0 `vi.mock`**) — comment/shape assertions ONLY. Do **not** land behavioral ACs here |
+| `apps/web-platform/test/server/inngest/cron-cohort-dedup.test.ts` | 3.2 | `{ ok: true }` mock at `:250` → union-valid value (F3) |
+| `apps/web-platform/test/server/inngest/cron-community-monitor-dedup.test.ts` | 3.2 | `{ ok: true }` mock at `:160` → union-valid value (F3) |
+| `apps/web-platform/test/server/inngest/cron-safe-commit.test.ts` | 3.2 | Behavioral assertions for `paths` / `resumed` on the committed arm (F4) |
 | `apps/web-platform/test/server/inngest/cron-shared.test.ts` | 3.5 | Characterization test pinning `isRealScheduledDigest`'s `:937` body-exclusion arm. *(Four suites already exercise `isRealScheduledDigest` — `cron-shared`, `cron-cohort-dedup`, `cron-community-monitor-dedup`, `cron-cohort-title-date-pin`. Read them first: confirm the `:937` arm is genuinely unpinned before adding, or the new test is redundant.)* |
 | *(consumers of `SafeCommitResult`)* | 3.2 | ~20 handlers + ~18 tests; the field is **optional** so the widening is additive. Enumerated by `tsc --noEmit`, not by grep |
 
 **`cron-safe-commit-parity.test.ts` needs NO edit** — the no-rename constraint (R20) preserves its
 literal source-text regex. That is the point of splitting by addition.
+
+**But three OTHER suites do need edits (F3, found at deepen-plan).** Every existing mock returns
+a value *outside* the `SafeCommitResult` union:
+
+```
+cron-community-monitor-heartbeat.test.ts:122   safeCommitAndPrSpy.mockResolvedValue({ ok: true });
+cron-cohort-dedup.test.ts:250                  safeCommitAndPrSpy.mockResolvedValue({ ok: true });
+cron-community-monitor-dedup.test.ts:160       safeCommitAndPrSpy.mockResolvedValue({ ok: true });
+```
+
+`{ ok: true }` has no `status`. Once 3.1b assigns the return and 3.2 derives `livenessOk` from
+`status`, `result.status` is `undefined` on all three → falls through to the RED arm → those
+suites go red **for a reason unrelated to the defect**. Update each mock to a union-valid value
+(`{ status: "committed", prNumber: 1, branch: "x", fileCount: 1, deletionCount: 0, paths: [...] }`).
+Plan v1 claimed only the parity suite was spared; that understated the blast radius by three files.
 | `knowledge-base/engineering/architecture/diagrams/{model,views,spec}.c4` | 4.2 | Only if enumeration finds a gap |
 
 **No new test file is created** — the residue check lands in the already-wired freeze suite
@@ -588,9 +659,11 @@ literal source-text regex. That is the point of splitting by addition.
 **#6713**
 1. `grep -c "mktemp" apps/web-platform/infra/workspaces-luks-freeze.test.sh` → `2`, and
    `grep -c 'mktemp -p "\$RUN_SCRATCH"' …` → `2` (both allocations relocated).
-2. `grep -c '^[[:space:]]*trap ' apps/web-platform/infra/workspaces-luks-freeze.test.sh` → `0`
+2. *(invariant guard — passes today; guards this PR's own diff, does not verify the fix)*
+   `grep -c '^[[:space:]]*trap ' apps/web-platform/infra/workspaces-luks-freeze.test.sh` → `0`
    (no second trap introduced — the R1/R2 invariant).
-3. `grep -c 'trap cleanup_scratch EXIT INT TERM HUP' apps/web-platform/infra/workspaces-luks-harness.sh` → `1` (harness trap intact).
+3. *(invariant guard — passes today)*
+   `grep -c 'trap cleanup_scratch EXIT INT TERM HUP' apps/web-platform/infra/workspaces-luks-harness.sh` → `1`.
 4. The residue self-check lives **inside** `apps/web-platform/infra/workspaces-luks-freeze.test.sh`
    (already wired at `infra-validation.yml:395` — no new file, no workflow edit) and covers:
    clean run → 0 residue; forced mid-suite `SIGTERM` in a ≥2-tempfile window → 0 residue.
@@ -603,66 +676,86 @@ literal source-text regex. That is the point of splitting by addition.
 7. `grep -c -- '--argjson facts' scripts/domain-model-drift.sh` → `0`;
    `grep -c -- '--rawfile facts_tsv' scripts/domain-model-drift.sh` → `1`.
    *(Baseline measured at plan time: `1` and `0` respectively.)*
-8. `bash scripts/domain-model-drift.sh extract | jq '{f:(.facts|length),b:(.blind_spots|length)}'`
-   → `{"f":350,"b":54}` — **exact counts** (R6 baseline). A non-emptiness assertion is
-   insufficient: it cannot detect the array-of-arrays undercount.
+8. `.facts | length` equals the **TSV line count**, and `.blind_spots | length` equals its own —
+   a *relational* assertion, not a literal pin. This is fully discriminating against the
+   array-of-arrays undercount (`1 ≠ N`) **and** stable as the corpus grows. Do **not** pin the
+   literal `350`/`54`: the plan characterises fact growth as monotonic, so any migration merged
+   between plan time and merge would turn a literal AC red on a correct pipeline. (Measured at
+   plan time for reference only: 350 facts / 54 blind spots / 72,878 B.)
 9. Post-fix output is **byte-identical** to a captured pre-fix baseline on the current corpus.
 10. A >131,072 B synthetic fixture passes at exit 0 with the correct fact count, **and the same
     fixture is demonstrated to FAIL on the pre-fix code** (`Argument list too long`) — the
     negative half is what proves the test is not vacuous.
-11. `bash scripts/domain-model-drift.test.sh` passes.
+11. **Fixture adequacy is asserted inside the suite** (`facts_json` byte count > 131,072), so the
+    >ceiling test cannot silently degrade to vacuous as the fixture or jq encoding changes.
+12. **Spool-file residue is zero on every return path**, including the `exit 3` secret-refuse,
+    asserted for BOTH `drift` (subshell) and `extract` (main shell) — the discriminating pair for
+    Phase 2.2's defect.
+13. `bash scripts/domain-model-drift.test.sh` passes.
 
 **#6714**
-12. The H1–H12 evidence table is reproduced in the PR body with raw excerpts. **H9 is recorded
+14. The H1–H12 evidence table is reproduced in the PR body with raw excerpts. **H9 is recorded
     as UNKNOWN** with its missing datum named (Inngest step history unreachable). A verdict
     without a datum is a reject condition; an honest UNKNOWN is not.
-13. `SafeCommitResult`'s `"committed"` arm carries **optional** `paths?: string[]` (from `matched`
+15. **Behavioral** (not compile-time) assertions in `cron-safe-commit.test.ts` that `paths` is
+    populated from `matched` on a real committed run and `resumed: true` is set on the replay
+    branch. `tsc --noEmit` alone is a compile-time proxy and asserts neither.
+16. The three `{ ok: true }` mocks (`cron-community-monitor-heartbeat.test.ts:122`,
+    `cron-cohort-dedup.test.ts:250`, `cron-community-monitor-dedup.test.ts:160`) are updated to
+    union-valid values, and all three suites pass.
+17. `SafeCommitResult`'s `"committed"` arm carries **optional** `paths?: string[]` (from `matched`
     at `_cron-safe-commit.ts:495`) and `resumed?: true` on the replay-resume branch;
     `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is clean across all ~38 consumers.
-14. The `safe-commit-pr` step's return value is **assigned** at `cron-community-monitor.ts:652`
+18. The `safe-commit-pr` step's return value is **assigned** at `cron-community-monitor.ts:652`
     (it is discarded today — R16a, the primary defect), and `livenessOk` is derived from it per
     the 3.2 four-arm table.
-15. **`heartbeatOk` is NOT renamed.** `grep -c 'if (heartbeatOk && !spawnResult.abortedByTimeout)'
+19. **`heartbeatOk` is NOT renamed.** `grep -c 'if (heartbeatOk && !spawnResult.abortedByTimeout)'
     apps/web-platform/server/inngest/functions/cron-community-monitor.ts` → `1`, and
-    `bun test apps/web-platform/test/server/inngest/cron-safe-commit-parity.test.ts` passes
-    unmodified (R20 — the cohort invariant survives).
-16. A simulated **issue-filed-but-digest-not-committed** run turns the monitor **RED**. This is
+    `cd apps/web-platform && npx vitest run test/server/inngest/cron-safe-commit-parity.test.ts`
+    passes unmodified (R20 — the cohort invariant survives). **Runner note:** `apps/web-platform`
+    uses **vitest** (`package.json:15-16`, `"test": "vitest"` / `"test:ci": "vitest run"`);
+    `bun test` is used in this repo only for `plugins/soleur/` and three named non-web-platform
+    files. Do not prescribe `bun test` for this package.
+20. *(invariant guard — passes today, and is additionally covered by
+    `cron-safe-commit-parity.test.ts:176` and `cron-community-monitor.test.ts:352`, both of
+    which already fail on a rename.)*
+21. A simulated **issue-filed-but-digest-not-committed** run turns the monitor **RED**. This is
     the exact state that ran GREEN for six days (07-14 → 07-19); without this the fix is
     unverified.
-17. **Replay-resume stays GREEN** (R21): `status === "committed" && resumed === true` with
+22. **Replay-resume stays GREEN** (R21): `status === "committed" && resumed === true` with
     `paths === undefined` → GREEN, not RED. `undefined` must never be read as "nothing committed".
-18. **The dedup early-return no longer posts GREEN without an artifact** (3.4): a test where a
+23. **The dedup early-return no longer posts GREEN without an artifact** (3.4): a test where a
     digest issue exists for the date but the digest is not committed asserts the run **spawns**
     rather than dedup-returning GREEN.
-19. **Characterization test** pins `isRealScheduledDigest`'s body-exclusion arm
+24. **Characterization test** pins `isRealScheduledDigest`'s body-exclusion arm
     (`_cron-shared.ts:937`): an issue with the exact canonical title but an
     `AUDIT_SELF_REPORT_BODY_PREFIX` body is **not** treated as a real digest. *(Replaces plan v1's
     vacuous dedup test — see R17.)*
-20. Each of the five markers in the 3.3 table is asserted **per emission site**, not by a
+25. Each of the five markers in the 3.3 table is asserted **per emission site**, not by a
     repo-wide `grep -c` (marker 1 alone has three sites: `_cron-safe-commit.ts:395`, `:547`,
     `:805`). Each assertion checks the **emitted field set**, not string presence — a comment
     would satisfy a bare grep.
-20b. Every marker is emitted at **pino WARN (level ≥ 40)** and is **fail-open** (wrapped so an
+26. Every marker is emitted at **pino WARN (level ≥ 40)** and is **fail-open** (wrapped so an
     emit failure cannot propagate), per the ADR-108 precedent. An info-level marker never
     reaches Better Stack — a test asserting the level is the only thing that catches this,
     because the code would look correct and simply be invisible in production.
-21. `terraform plan` on `apps/web-platform/infra/sentry/` shows **no diff** for
+27. `terraform plan` on `apps/web-platform/infra/sentry/` shows **no diff** for
     `sentry_cron_monitor.scheduled_community_monitor` (the change is handler-side).
-22. The stale Tier-2 comment at `:393-397` is corrected (R19).
+28. The stale Tier-2 comment at `:393-397` is corrected (R19).
 
 **Cross-cutting**
-23. `ADR-126-*.md` exists. If the ordinal is renumbered, `grep -rn 'ADR-1[0-9][0-9]'` across
+29. `ADR-126-*.md` exists. If the ordinal is renumbered, `grep -rn 'ADR-1[0-9][0-9]'` across
     `knowledge-base/project/{plans,specs}/` shows no stale reference.
-24. The `### C4 views` task either lands `.c4` edits + passing `c4-code-syntax.test.ts` /
+30. The `### C4 views` task either lands `.c4` edits + passing `c4-code-syntax.test.ts` /
     `c4-render.test.ts`, or states "no C4 impact" citing the actors/systems/relationships it
     checked. *(Expected outcome: no impact — this is an observability change adding no container
     or actor. The citation requirement is the plan-skill Phase 2.10 reject condition, kept
     lightweight.)*
-25. Full suite green: `bash scripts/test-all.sh`.
-26. PR body uses `Closes #6713`, `Closes #6714`, `Closes #6720`; corrects the #6713 causal
+31. Full suite green: `bash scripts/test-all.sh`.
+32. PR body uses `Closes #6713`, `Closes #6714`, `Closes #6720`; corrects the #6713 causal
     chain per R4 (the file is not invoked from `test-all.sh`); and corrects the #6714 framing
     per R13 (the cron fired — this is a persistence + liveness-signal bug, not a scheduling one).
-27. Follow-up issues filed and linked for: the Phase 1.4 tempfile sweep, the Phase 2.5 argv
+33. Follow-up issues filed and linked for: the Phase 1.4 tempfile sweep, the Phase 2.5 argv
     sibling sweep, and the Phase 3.8 cohort audit.
 
 ### Post-merge (operator)
@@ -774,7 +867,7 @@ The ADR describes the target state and ships with the change — no soak gating.
 
 No new infrastructure. The Sentry monitor already exists as Terraform
 (`apps/web-platform/infra/sentry/cron-monitors.tf:326`, per ADR-031 Sentry-as-IaC) and its
-resource attributes are **unchanged** — the semantics change handler-side. AC-19 asserts
+resource attributes are **unchanged** — the semantics change handler-side. The **"terraform plan shows no diff"** AC asserts
 `terraform plan` shows no diff for that resource, which is the guard that the change did not
 silently leak into IaC. No servers, secrets, DNS, vendor accounts, or systemd units are
 introduced; no operator SSH or dashboard step appears anywhere in the plan.
@@ -814,13 +907,13 @@ skipped at NONE.
 
 | Risk | Mitigation |
 |---|---|
-| A future "cleanup" PR adds a `trap … EXIT` to the freeze suite, silently re-introducing a worse leak. | AC-2 pins `trap` count at 0 deterministically; the why-comment at the allocation sites (1.2) states the reason; R2's executed proof is quoted in the ADR. |
-| Option R changes output shape and silently undercounts. | AC-8 asserts **exact** counts (350/54); AC-9 asserts byte-identical output vs a captured pre-fix baseline. Proven identical at plan time on small + Unicode fixtures (R9). |
+| A future "cleanup" PR adds a `trap … EXIT` to the freeze suite, silently re-introducing a worse leak. | The **"no second trap"** AC pins `trap` count at 0 deterministically; the why-comment at the allocation sites (1.2) states the reason; R2's executed proof is quoted in the ADR. |
+| Option R changes output shape and silently undercounts. | The **relational count** AC asserts `.facts \| length` == TSV line count (discriminating against the `1 ≠ N` array-of-arrays undercount, and corpus-stable); the **byte-identity** AC compares against a captured pre-fix baseline. Proven identical at plan time on small + Unicode fixtures (R9). |
 | The >131 KB regression fixture is slow or brittle. | Generate synthetically in the test (~1200 rows), not from a real corpus; assert count, not content. |
-| Splitting the gate accidentally lets a RED run commit. | AC-15 is an explicit regression guard on the existing `heartbeatOk && !abortedByTimeout` persistence behavior at `:651`. |
+| Splitting the gate accidentally lets a RED run commit. | The **persistence-gate regression guard** AC pins the existing `heartbeatOk && !spawnResult.abortedByTimeout` behavior at `:651`, and the **no-rename** AC keeps the cohort parity regex matching. |
 | H9 stays UNKNOWN, so the exact branch that swallowed persistence is never identified. | The fix does not depend on H9 — H6 and R16 establish the defect from source. Marker #3 (`SOLEUR_COMMUNITY_DIGEST_FILE`) is designed to convert H9 into a measured datum on the next fire. Accepting an honest UNKNOWN beats manufacturing a verdict. |
 | Inverting the `:669-671` design decision (3.4) makes the monitor noisier — a transient GitHub timeout now pages. | That is the intended trade: a trailing-step failure now *is* an artifact failure under the new semantics. The one observed instance in 90 days (2026-06-11 `pr-create: Connect Timeout`) suggests the noise floor is ~1 page/quarter. If it proves noisy, add a bounded retry before flipping the flag — do not restore the silent-GREEN behavior. |
-| Narrowing the dedup predicate (3.5) causes duplicate digests if the new predicate is too narrow. | AC-19's two-run test covers the false-negative direction; keep the existing same-day success-title match for the true-duplicate direction. |
+| Closing the dedup GREEN path (3.4) causes duplicate digests if the new contents check is wrong. | The **dedup GREEN-path** AC covers the false-negative direction (issue exists, digest absent → must spawn); the existing `isRealScheduledDigest` exact-title match still covers the true-duplicate direction, and the **characterization** AC pins its body-exclusion arm. |
 | Three issues in one PR obscures review. | Phases are independent with no shared files; each has its own ACs. Reviewers can assess each phase standalone. |
 | ADR-126 collides with a sibling PR. | Ordinal is provisional; `/ship` re-verifies against `origin/main` and the renumber sweep (4.1) covers plan/spec/tasks/ACs. |
 
@@ -832,11 +925,11 @@ skipped at NONE.
   text, or omits the threshold will fail `deepen-plan` Phase 4.6.** Filled above.
 - **The issue body's prescribed fix for #6713 is wrong and harmful.** Anyone re-reading the
   issue without this plan's R1/R2 will "correct" the implementation back into the worse bug.
-  The why-comment and AC-2 exist specifically to stop that.
+  The why-comment and the **"no second trap"** AC exist specifically to stop that.
 - **`--slurpfile` on a single top-level array yields `[[…]]`.** If a future edit switches from
   `--rawfile` to `--slurpfile`, `.facts | length` silently becomes `1` and the drift report
-  reads as fully-documented at exit 0 — a fail-open undercount. AC-8's exact-count assertion is
-  the guard; do not weaken it to a non-emptiness check.
+  reads as fully-documented at exit 0 — a fail-open undercount. The **relational count** AC
+  (`.facts | length` == TSV line count) is the guard; do not weaken it to a non-emptiness check.
 - **Test fixtures of 1–3 migrations can never reach the argv ceiling.** This is precisely why
   the defect survived the existing suite. The >131 KB fixture is not optional.
 - **A verification that exercises only one tempfile cannot distinguish the leak classes.** The
@@ -862,8 +955,10 @@ skipped at NONE.
   digests still were not landing — the silence *is* the symptom, because the monitor's assertion
   had drifted off the artifact. Treat "no alerts" as unverified, not as GREEN.
 - **A `SOLEUR_*` string in the source does not prove a marker is emitted.** `SOLEUR_COLLECTOR_STATUS_DIR`
-  is an env var *name*, and the path has zero real markers today. AC-20 asserts the emitted field
-  set per marker, not string presence — a comment would satisfy a bare grep.
+  is an env var *name*, and the path has zero real markers today. The **per-emission-site** AC
+  asserts the emitted field set per marker, not string presence — a comment would satisfy a bare
+  grep. The **WARN-level** AC is equally load-bearing: an info-level marker is correct-looking
+  code that is simply invisible in production.
 
 ---
 
@@ -871,27 +966,33 @@ skipped at NONE.
 
 1. Freeze suite, clean run, private `TMPDIR` → exit 0, 58 passed, **0 residue**.
 2. Freeze suite, `SIGTERM` during the mutation block (BIGF + MUT live) → **0 residue**.
-3. `domain-model-drift extract` on the live repo → `facts=350`, `blind_spots=54`, output
-   byte-identical to the pre-fix baseline.
-4. `domain-model-drift extract` on a >131,072 B synthetic corpus → exit 0, 1200 facts;
-   same fixture on pre-fix code → `Argument list too long`.
-5. Community monitor: issue filed **and** digest committed → monitor GREEN,
+3. `domain-model-drift extract` on the live repo → `.facts | length` equals the TSV line count
+   (relational, not a literal pin) and output is byte-identical to the captured pre-fix baseline.
+4. `domain-model-drift extract` on a **production-shaped** synthetic corpus whose `facts_json`
+   is asserted in-suite to exceed 131,072 B → exit 0, exact fact count. *(Minimal-shape rows do
+   NOT reach the ceiling — 1200 of them measure 75,782 B and the test would be vacuous.)*
+5. Spool-file residue: `exit 3` secret-refuse under a private `TMPDIR` leaves **zero residue**,
+   asserted separately for `drift` (command-substitution) and `extract` (main shell).
+6. Community monitor: issue filed **and** digest committed → monitor GREEN,
    `SOLEUR_COMMUNITY_DIGEST_FILE present=1` + `SOLEUR_CRON_PERSIST_RESULT status=committed`.
-6. Community monitor: issue filed, digest **not** committed → monitor **RED**,
-   `SOLEUR_COMMUNITY_DIGEST_FILE present=0`. *(This ran GREEN for six days — the core regression.)*
-7. Community monitor: `safeCommitAndPr` returns `{status:"failed"}` / `{status:"no-changes"}` →
-   `livenessOk === false`, monitor **RED**, `SOLEUR_CRON_PERSIST_RESULT` emitted. *(Today the
-   return value is discarded and the monitor stays GREEN — the primary regression.)* *(GREEN by explicit design today, `:669-671`.)*
-8. Community monitor: spawn RED → nothing committed (persistence gate intact), monitor RED,
+7. Community monitor: `safeCommitAndPr` returns `{status:"no-changes"}` → `livenessOk === false`,
+   monitor **RED**. *(A digest never written IS `no-changes` — this is the six-day state.)*
+8. Community monitor: `safeCommitAndPr` returns `{status:"failed"}` → `livenessOk === false`,
+   monitor **RED**, `SOLEUR_CRON_PERSIST_RESULT status=failed`. *(Today the return value is
+   discarded and the monitor stays GREEN — the primary regression.)*
+9. Community monitor: `{status:"committed"}` with `paths` present but **lacking** the dated
+   digest → monitor **RED**. *(The only scenario exercising the path-membership check; nothing
+   covers this today.)*
+10. Community monitor: spawn RED → nothing committed (persistence gate intact), monitor RED,
     `SOLEUR_CRON_PERSIST_SKIPPED reason=red`.
-9. Community monitor: aborted by timeout → nothing committed, monitor RED,
+11. Community monitor: aborted by timeout → nothing committed, monitor RED,
     `SOLEUR_CRON_PERSIST_SKIPPED reason=timeout`.
-10. Community monitor: a digest issue exists for the date but the digest is **not committed** →
+12. Community monitor: a digest issue exists for the date but the digest is **not committed** →
     the dedup early-return does **not** post GREEN; the run spawns (3.4).
-11. `isRealScheduledDigest` characterization: exact canonical title + an
+13. `isRealScheduledDigest` characterization: exact canonical title + an
     `AUDIT_SELF_REPORT_BODY_PREFIX` body → **not** a real digest (pins `_cron-shared.ts:937`).
-12. Community monitor: replay-resume (`status:"committed"`, `resumed:true`, `paths:undefined`)
+14. Community monitor: replay-resume (`status:"committed"`, `resumed:true`, `paths:undefined`)
     → monitor **GREEN**, not RED (R21 carve-out).
-13. Community monitor: Tier-2 defer active → `SOLEUR_CRON_TIER2_DEFERRED` emitted, distinguishing
+15. Community monitor: Tier-2 defer active → `SOLEUR_CRON_TIER2_DEFERRED` emitted, distinguishing
     the deferred run from a healthy one. *(Still GREEN-with-no-artifact by decision — marker-only.)*
-14. `terraform plan` on `apps/web-platform/infra/sentry/` → no diff for the monitor resource.
+16. `terraform plan` on `apps/web-platform/infra/sentry/` → no diff for the monitor resource.
