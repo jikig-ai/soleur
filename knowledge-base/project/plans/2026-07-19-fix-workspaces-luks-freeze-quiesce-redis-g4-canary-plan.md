@@ -141,20 +141,18 @@ still does not work:
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** a third consecutive burned irreversible-freeze
-approval and freeze window, and — in the worst case, if the quiesce is incomplete but C1 passes
-— a torn Redis AOF on the new encrypted volume, silently losing armed Inngest future-`ts`
-reminders (the queue's survival mechanism per `inngest-redis.conf`). User-visible symptom:
-scheduled agent work that never fires, with no error.
-
-**If this leaks, the user's data is exposed via:** not a leak vector — this PR is the
-precondition for *closing* the exposure. Until the cutover completes, every user's checked-out
-source code remains plaintext-at-rest on `hcloud_volume.workspaces` while the published privacy
-policy asserts LUKS encryption-at-rest (#6588, DC-1, re-raise trigger 2026-07-23).
-
-**Brand-survival threshold:** `single-user incident` — web-1 is a singleton (`app.soleur.ai` is
-a hard-pinned A record); a botched freeze takes down every user, and a torn AOF loses work
-silently.
+- **If this lands broken, the user experiences:** a third consecutive burned irreversible-freeze
+  approval and freeze window, and — in the worst case, if the quiesce is incomplete but C1 passes
+  — a torn Redis AOF on the new encrypted volume, silently losing armed Inngest future-`ts`
+  reminders (the queue's survival mechanism per `inngest-redis.conf`). User-visible symptom:
+  scheduled agent work that never fires, with no error.
+- **If this leaks, the user's data is exposed via:** not a leak vector — this PR is the
+  precondition for *closing* the exposure. Until the cutover completes, every user's checked-out
+  source code remains plaintext-at-rest on `hcloud_volume.workspaces` while the published privacy
+  policy asserts LUKS encryption-at-rest (#6588, DC-1, re-raise trigger 2026-07-23).
+- **Brand-survival threshold:** `single-user incident` — web-1 is a singleton (`app.soleur.ai` is
+  a hard-pinned A record); a botched freeze takes down every user, and a torn AOF loses work
+  silently.
 
 ## Research Reconciliation — Spec vs. Codebase
 
