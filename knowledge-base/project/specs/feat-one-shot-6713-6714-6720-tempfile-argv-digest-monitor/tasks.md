@@ -140,14 +140,14 @@ The three phases are independent and share no files. They may be implemented in 
 
 ## 5. Exit
 
-- [ ] **5.1** `bash scripts/test-all.sh` green.
+- [x] **5.1** (193/193 suites, rc=0) `bash scripts/test-all.sh` green.
       **Runner note:** `apps/web-platform` is **vitest** (`package.json:15-16`), not `bun test`.
       Single-file form: `cd apps/web-platform && npx vitest run test/server/inngest/<file>`.
-- [ ] **5.2** PR body: `Closes #6713`, `Closes #6714`, `Closes #6720`; the H1–H12 evidence table
+- [x] **5.2** PR body: `Closes #6713`, `Closes #6714`, `Closes #6720`; the H1–H12 evidence table
       with raw excerpts and H9 as UNKNOWN; the corrected #6713 causal chain (R4) and #6714 framing
       (R13).
 - [x] **5.3** (#6734 tempfile sweep, #6736 argv sweep, #6737 cohort audit) Confirm all three follow-up issues are filed and linked.
-- [ ] **5.4** Surface `decision-challenges.md` (DC-1, marker 4 retained against review
+- [x] **5.4** (DC-1 surfaced in the PR body) Surface `decision-challenges.md` (DC-1, marker 4 retained against review
       recommendation) for the operator.
 
 ## Findings (work phase)
@@ -176,3 +176,12 @@ path the digest lands through. (d) changed edges: `webapp -> sentry` (`:491`) al
 carries "the Inngest-fired crons' end-of-run check-ins (`postSentryHeartbeat` …)". This PR changes
 how the colour is COMPUTED inside `webapp`, not the edge, its technology, or its endpoints. No new
 element or edge required, so no `views.c4` include change and no C4 test run needed.
+
+**5.1 note — the first full-suite run was a FALSE RED.** It reported 4 `skill-security-scan`
+failures. Root cause was a *concurrent* `test-all.sh` from a sibling session in a different
+worktree (`feat-one-shot-6721-...`): that suite writes `.scan-meta.json` and runs the scanner
+through shared paths, so two simultaneous runs collide. Not pre-existing, and not this diff —
+`skill-security-scan.test.ts` is untouched here (`git diff --name-only origin/main...HEAD` → 0
+hits). Confirmed three ways: isolated re-run 22 pass / 0 fail; the `skill-security-scan PR gate`
+CI check SUCCESS; and a clean full re-run once the sibling finished, 193/193 rc=0. Recorded rather
+than waved off as flake — the collision is reproducible and worth a learning.
