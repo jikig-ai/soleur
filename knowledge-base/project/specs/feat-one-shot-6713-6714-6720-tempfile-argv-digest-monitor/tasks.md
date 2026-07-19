@@ -41,7 +41,7 @@ The three phases are independent and share no files. They may be implemented in 
 - [x] **1.6** Verify: `grep -c 'mktemp' …` → 2; `grep -c 'mktemp -p "$RUN_SCRATCH"' …` → 2;
       `grep -c '^\s*trap ' …` → 0; harness trap grep → 1.
 - [x] **1.7** Run the suite: `0 failed`, pass count ≥ 58.
-- [ ] **1.8** File the tracked tempfile sweep issue: the 2 confirmed class-c/class-d instances
+- [x] **1.8** (filed: #6734) File the tracked tempfile sweep issue: the 2 confirmed class-c/class-d instances
       (`scripts/content-publisher.sh:69-77` + 6 `$(make_tmp)` sites;
       `scripts/skill-freshness-aggregate.sh:101` vs `:270`), the 121 class-(b) no-trap files, and
       the absence of any lint gate. Link from the PR body.
@@ -75,7 +75,7 @@ The three phases are independent and share no files. They may be implemented in 
 - [x] **2.8b** Assert **zero spool residue** on every return path incl. `exit 3`, separately for
       `drift` (subshell) and `extract` (main shell) — the discriminating pair for Phase 2.2.
 - [x] **2.9** Run `bash scripts/domain-model-drift.test.sh`.
-- [ ] **2.10** File the argv sibling-sweep issue (ranked list is in plan Phase 2.5). Measure each
+- [x] **2.10** (filed: #6736) File the argv sibling-sweep issue (ranked list is in plan Phase 2.5). Measure each
       candidate against 131,072 B — item count is not a proxy for argv bytes.
 
 ## 3. #6714 — digest liveness monitor
@@ -125,7 +125,7 @@ The three phases are independent and share no files. They may be implemented in 
       `fileCount` is hoisted (`:454`) — `paths` must be hoisted the same way.
 - [x] **3.13** `terraform plan` on `apps/web-platform/infra/sentry/` → no diff for
       `sentry_cron_monitor.scheduled_community_monitor`.
-- [ ] **3.14** File the cohort-audit follow-up issue (plan 3.8).
+- [x] **3.14** (filed: #6737) File the cohort-audit follow-up issue (plan 3.8).
 
 ## 4. ADR + C4
 
@@ -146,7 +146,7 @@ The three phases are independent and share no files. They may be implemented in 
 - [ ] **5.2** PR body: `Closes #6713`, `Closes #6714`, `Closes #6720`; the H1–H12 evidence table
       with raw excerpts and H9 as UNKNOWN; the corrected #6713 causal chain (R4) and #6714 framing
       (R13).
-- [ ] **5.3** Confirm all three follow-up issues are filed and linked.
+- [x] **5.3** (#6734 tempfile sweep, #6736 argv sweep, #6737 cohort audit) Confirm all three follow-up issues are filed and linked.
 - [ ] **5.4** Surface `decision-challenges.md` (DC-1, marker 4 retained against review
       recommendation) for the operator.
 
