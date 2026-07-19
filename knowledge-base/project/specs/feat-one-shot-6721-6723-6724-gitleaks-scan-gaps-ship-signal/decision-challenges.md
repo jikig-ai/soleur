@@ -44,4 +44,37 @@ PR body and files them as an `action-required` issue.
 
 **Caveat:** the new `gitleaks dir` step scans the tip, where the literal still lives, and a git-fingerprint does not cover a `dir` scan. So the full composite would be: split the tip literal (the runtime-assembly convention the test suite already uses) + `.gitleaksignore` for the frozen historical commit + add `.gitleaksignore` to CODEOWNERS.
 
-**Status:** UNMEASURED. Must be verified to rc=0 under the shipped config before adoption, to the same standard the plan holds itself to. If it does not verify cleanly, the anchored path entry is an acceptable fallback and is what the plan currently ships.
+**Status: MEASURED → REJECTED.** No longer an open question, and not an
+operator decision — it was an empirical one, and it has been answered.
+
+What was measured:
+
+| check | result |
+|---|---|
+| history scan, `.gitleaksignore` + fingerprint, no carve-out | rc=0 — clears the frozen finding |
+| tree scan, tip literal elided | rc=0 |
+| a NEW real DSN pasted into `review/SKILL.md`, UC-2 config | **rc=1 — caught** |
+| the same, under the shipped path carve-out | **rc=0 — blinded** |
+
+On the security property alone UC-2 wins: the path carve-out permanently
+blinds the file to the rule, so a future real credential pasted there is
+silent, whereas UC-2 keeps it live. Its failure mode is also safer (a broken
+fingerprint reds the gate; a path predicate fails open and silent).
+
+**What killed it:** the fingerprint is commit-pinned, and the cron walks
+`-m --all`. That walk surfaced the *same content at a second commit*
+(`d85d7d577`) with a different fingerprint, unignored. So the ignore set is not
+one line — it grows with every branch and merge that carries the file, and any
+one missed reds the weekly cron. The path predicate is commit-independent by
+construction, which is precisely why it was chosen for a finding frozen in
+history.
+
+The premise inherited from #6706 ("the fingerprint embeds the commit SHA, so
+survival is merge-strategy-dependent") was indeed wrong for this case — the SHA
+is frozen. But re-measuring found a *different* and stronger objection the
+inherited reasoning had not identified. Both the original rejection and its
+stated reason were wrong; the conclusion happens to stand.
+
+**Byproduct:** running this measurement is what exposed that this PR's own
+branch history carried two DSN literals and was failing its own PR-range gate.
+See `session-state.md`.

@@ -50,8 +50,40 @@ Recorded because the checkboxes are not a reliable progress signal:
 - **The background-task notification reported "exit code 0" while the suite had
   actually exited 1.** The command ended in `echo $? > rcf`, so the harness
   reported the trailing echo's status. Only reading the rc FILE surfaced the
-  real result and the 193/194. Never trust the notification's exit code for a
-  wrapped command.
+  real result and the 193/194. A later run inverted it — notification said
+  "failed exit 1" on a run that never wrote its rc file at all (killed when
+  `/tmp`, a 4 GB tmpfs, filled with my own 211 MB verification clones; the
+  casualty suite passed in isolation). Neither notification matched reality.
+  The rc file was correct all three times.
+- **P0, and the worst error of the session: my own PR failed its own
+  secret-scan gate, and I nearly shipped it.** Commit `432081d46` carried the
+  two DSN literals; I fixed them at the tip in a later commit, verified the
+  CI-equivalent TREE scan was clean, and treated that as sufficient. It is not:
+  `gitleaks git` scans a commit RANGE and reads the old blob, so
+  `--no-merges origin/main..HEAD` returned rc=1 with both literals still live.
+
+  This is the exact trap I had written into the runbook hours earlier ("a line
+  waiver cannot clear a history finding"; "fixing the file the red gate names
+  does not turn the gate green"). Writing the warning did not stop me applying
+  the tip-fix reflex and then confirming it with the one scan shape that cannot
+  see the problem. The tree scan's green was worse than no evidence — it was
+  confirmation pointed at the wrong object.
+
+  Found only because the operator challenged why UC-2 was parked; measuring
+  UC-2 required a `-m --all` walk, which surfaced findings at commits I had not
+  thought to scan — two of them mine. Nothing else in the pipeline would have
+  caught it before CI.
+
+  Fixed by rewriting the branch's history (reset --soft to origin/main, five
+  clean commits, no merge), NOT by adding `.gitleaksignore` fingerprints —
+  using the escape hatch this PR exists to make harder to abuse, to cover my
+  own transient mistake, would have been the wrong instinct. The rewrite is
+  provably content-only: tree hash `6d6fe7da9d8e406c7399afdf1333314243b8788d`
+  identical before and after.
+
+  **Generalisation worth keeping:** after fixing any secret-scan finding, the
+  verification must use the SAME scan shape that produced it. A tree scan can
+  never confirm a range finding is cleared.
 
 ### Decisions
 - **#6723's "verified" candidate fix is insufficient and regressive.** Its

@@ -90,7 +90,7 @@ Update `knowledge-base/engineering/operations/secret-scanning.md` by content anc
 - [x] 5.2 `bash plugins/soleur/test/gitleaks-merge-commit.test.sh` exits 0.
 - [x] 5.3 `bash .claude/hooks/pre-merge-rebase.test.sh` exits 0.
 - [x] 5.4 `bash .claude/hooks/pre-merge-rebase-headless.test.sh` exits 0.
-- [ ] 5.5 Full repo test suite exit gate.
+- [x] 5.5 Full repo test suite exit gate.
 - [ ] 5.6 Paste every mutation proof's RED output into the PR body (AC21) — an unexercised mutation claim is the defect class being fixed.
 - [ ] 5.7 PR body states the #6721 direction-1+2 divergence with measured costs (AC19).
 - [ ] 5.8 PR body records the #6724 scope extension to `pre-merge-rebase.sh` (AC20).
