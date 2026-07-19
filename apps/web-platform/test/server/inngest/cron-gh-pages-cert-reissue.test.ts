@@ -1311,6 +1311,80 @@ describe("#6698 onFailure envelope", () => {
   });
 });
 
+describe("emitTerminal must CALL the logger method, not extract it", () => {
+  // A plain `{ info: vi.fn() }` fake cannot catch this class: object-literal
+  // methods have no `this` dependency, so an extracted reference works fine
+  // against the fake and throws only in production. This fake mirrors inngest's
+  // real ProxyLogger, whose info()/warn() begin `if (!this.enabled) return;`.
+  class ProxyLoggerLike {
+    enabled = true;
+    calls: Array<[unknown, unknown]> = [];
+    info(...args: unknown[]) {
+      if (!this.enabled) return;
+      this.calls.push([args[0], args[1]]);
+    }
+    warn(...args: unknown[]) {
+      if (!this.enabled) return;
+      this.calls.push([args[0], args[1]]);
+    }
+    error(...args: unknown[]) {
+      if (!this.enabled) return;
+      this.calls.push([args[0], args[1]]);
+    }
+  }
+
+  it("does not throw on a BENIGN terminal (issued / not_stuck / probe_only_complete)", async () => {
+    // Observed in production on the first post-deploy fire: extracting the
+    // method produced `Cannot read properties of undefined (reading 'enabled')`,
+    // which escaped the handler, exhausted retries and fired onFailure — so a
+    // SUCCESSFUL remediation was recorded as reissue_incomplete_restore_ok.
+    for (const [cfg, ctx, expected] of [
+      [{ willIssue: true }, remediationCtx(), "issued"],
+      [{ stateOverride: "issued" }, remediationCtx(), "not_stuck"],
+      [{}, probeCtx(), "probe_only_complete"],
+    ] as Array<[FakeConfig, ReissueRunContext, string]>) {
+      const { deps } = makeFake(cfg);
+      const proxyLogger = new ProxyLoggerLike();
+      deps.logger = proxyLogger as unknown as ReissueDeps["logger"];
+
+      const result = await runReissueSteps(
+        makeStep(),
+        deps,
+        deps.logger,
+        ctx,
+      );
+
+      expect(result.outcome, expected).toBe(expected);
+      // The benign branch must have actually logged through the bound method.
+      expect(proxyLogger.calls.length, expected).toBeGreaterThan(0);
+      const [payload, msg] = proxyLogger.calls[proxyLogger.calls.length - 1];
+      expect(msg).toBe(`reissue outcome=${expected}`);
+      expect(payload).toMatchObject({ outcome: expected });
+    }
+  });
+
+  it("config_missing routes to warn, still bound", async () => {
+    const proxyLogger = new ProxyLoggerLike();
+    const prevToken = process.env.CF_API_TOKEN_DNS_EDIT;
+    const prevZone = process.env.CF_ZONE_ID;
+    process.env.CF_API_TOKEN_DNS_EDIT = "";
+    process.env.CF_ZONE_ID = "";
+    try {
+      const result = await cronGhPagesCertReissueHandler({
+        step: makeStep(),
+        logger: proxyLogger as unknown as ReissueDeps["logger"],
+      } as unknown as Parameters<typeof cronGhPagesCertReissueHandler>[0]);
+      expect(result.outcome).toBe("config_missing");
+      expect(proxyLogger.calls.length).toBeGreaterThan(0);
+    } finally {
+      if (prevToken === undefined) delete process.env.CF_API_TOKEN_DNS_EDIT;
+      else process.env.CF_API_TOKEN_DNS_EDIT = prevToken;
+      if (prevZone === undefined) delete process.env.CF_ZONE_ID;
+      else process.env.CF_ZONE_ID = prevZone;
+    }
+  });
+});
+
 describe("#6698 routine_runs projection", () => {
   it("sets ok/errorSummary so runLogMiddleware can distinguish outcomes", async () => {
     // run-log.ts projects EXACTLY { ok?, errorSummary? } off the return value.
