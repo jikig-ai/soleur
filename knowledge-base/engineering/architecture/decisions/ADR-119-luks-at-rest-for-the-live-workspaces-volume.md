@@ -365,6 +365,30 @@ it. Split-job (a `rehearse` job with no environment + a `freeze` job with a stat
 auditability-preferred fallback if GitHub's empty-string-environment semantics ever change; the
 conditional form is the primary because it keeps the two arms in one job (no duplicated bridge/teardown).
 
+## Addendum (2026-07-19): the C1 verify is self-diagnosing (#6604 cutover follow-up)
+
+The first real cutover (`workspaces-luks-cutover.yml`, `dry_run=false`) **safe-aborted** on the C1
+itemized verify's *"1 difference"* and DP-6 auto-rolled-back to the plaintext mount (web-1 healthy) —
+the fail-closed gate did its job. But the verify **discarded** the offending path (it `rm`'d the diff
+log and `die`'d with only the count) and **folded rsync's stderr into that count** (`>"$vlog" 2>&1`),
+so the operator could not tell whether the diff was a real byte difference, an mtime-only/dir-mtime
+attribute diff, or a benign stderr warning. That is an observability defect, not a gate defect — fixed
+in `workspaces-cutover.sh :: verify_byte_identity` / `emit_verify_diff`:
+
+- the verify rsync's **stdout** (the `%i %n` itemize lines) and **stderr** are captured **separately**;
+  the count reads only itemize-shaped stdout lines (`^(\*deleting|[<>ch.*][fdLDS])`), so stderr can no
+  longer inflate it and **no itemize code is narrowed away** (attribute-only diffs still count);
+- on a non-zero count OR a verify-rsync error, the capped (≤40) itemized path(s)+code(s) are logged to
+  the run log AND to Better Stack via a new **`SOLEUR_WORKSPACES_LUKS_VERIFY_DIFF`** marker
+  (`op=workspaces-luks-verify-diff`, riding the already-allowlisted `luks-monitor` Vector tag — no
+  `vector.toml` change) **before** the temp files are removed and before `die()`.
+
+**Telemetry taxonomy:** `op=workspaces-luks-drift` remains the at-rest / daily-probe Sentry page;
+`op=workspaces-luks-verify-diff` is the new itemized-diff channel (Better Stack) — the verify still
+also pages Sentry via `emit_drift` on the existing `op=workspaces-luks-drift`. The gate's
+data-integrity contract (0 real content diffs, fail-closed on rsync error) is **unchanged**; this is a
+bug fix, not a new decision.
+
 ## References
 
 - Issue #6588 — the P1 that mandated CTO routing before terraform.

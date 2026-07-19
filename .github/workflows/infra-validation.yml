@@ -378,6 +378,9 @@ jobs:
       - name: Run /workspaces LUKS drift observability guard (#6604 emit tags/DSN + daily probe + gate)
         run: bash apps/web-platform/infra/luks-monitor.test.sh
 
+      - name: Run /workspaces LUKS C1 verify diagnosability guard (#6604 separate stdout/stderr + emit path before rm/die)
+        run: bash apps/web-platform/infra/workspaces-luks-verify.test.sh
+
       # #6511: `connect_timeout = 5` was a bare number where the pinned v4 provider's schema says
       # `string`. It coerced to "5", failed Cloudflare's duration parse, landed as "0s", and the
       # #6357 fail-fast mitigation on the registry origin was inert for weeks while every apply
