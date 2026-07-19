@@ -50,7 +50,7 @@ The three phases are independent and share no files. They may be implemented in 
 
 - [ ] **2.1** Read `scripts/domain-model-drift.sh` in full, especially `emit_extract_json()`
       (`:60-109`) and its `drift`-mode caller at `:127`.
-- [ ] **2.2** Capture a pre-fix output baseline for the byte-identity check (AC-9).
+- [ ] **2.2** Capture a pre-fix output baseline for the byte-identity check.
 - [ ] **2.3** Restructure `:96-108` to a single `jq -Sn … --rawfile facts_tsv --rawfile blind_tsv`,
       moving the existing jq programs into it. Preserve: the unsupported-stack early return
       (`:64-68`) and the secret-scan fail-close (`:91-94`) — **the spool write must come after
@@ -95,7 +95,7 @@ The three phases are independent and share no files. They may be implemented in 
       Feed it to the Sentry check-in at `:708-741`.
 - [ ] **3.6** **Do NOT rename `heartbeatOk`.** Verify
       `grep -c 'if (heartbeatOk && !spawnResult.abortedByTimeout)' …` → 1 and that
-      `cron-safe-commit-parity.test.ts` passes unmodified. *(AC-15, R20)*
+      `cron-safe-commit-parity.test.ts` passes unmodified (plan R20).
 - [ ] **3.7** Close the dedup early-return GREEN path (`:437-447`): before returning GREEN,
       verify the dated digest is committed on the default branch; if not, spawn instead.
 - [ ] **3.8** Add the five markers at their named sites (plan 3.3 table). Marker 1 has **three**
