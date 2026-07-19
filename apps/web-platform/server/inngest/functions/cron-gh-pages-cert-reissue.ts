@@ -992,7 +992,11 @@ async function cfFetch(
   }
 }
 
-function buildLiveDeps(args: {
+// Exported so a test can prove the LIVE deps object actually constructs a real
+// `gatherDnsPropagation` (AC8b). Without that assertion a PR could add the type
+// member, the gate step, and the test fakes — passing every gate test and
+// `tsc` — while production never runs the gate at all.
+export function buildLiveDeps(args: {
   installationToken: string;
   cfToken: string;
   zoneId: string;

@@ -41,7 +41,20 @@ vi.mock("@/server/observability", async (importOriginal) => {
   return { ...actual, reportSilentFallback: vi.fn() };
 });
 
+// Capture every emitted marker (#6698). PARTIAL mock so CERT_REISSUE_PHASES and
+// the types survive — the SUT imports `emitCertReissueMarker` from this module,
+// so overriding the export does intercept its calls. Also keeps the real pino
+// marker stream out of the test runner's stdout.
+const { markerSpy } = vi.hoisted(() => ({ markerSpy: vi.fn() }));
+vi.mock("@/server/cert-reissue-marker", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/server/cert-reissue-marker")>();
+  return { ...actual, emitCertReissueMarker: markerSpy };
+});
+
 import { reportSilentFallback } from "@/server/observability";
+import { CERT_REISSUE_PHASES } from "@/server/cert-reissue-marker";
+import type { CertReissueMarker } from "@/server/cert-reissue-marker";
 import { manualTriggerEventFor } from "@/server/inngest/cron-manifest";
 import {
   runReissueSteps,
@@ -57,6 +70,7 @@ import {
   // #6698
   checkDnsPropagated,
   resolveProbeOnly,
+  buildLiveDeps,
   BENIGN_OUTCOMES,
   REISSUE_ALLOWED_STATES,
   MAX_DNS_ONLY_WINDOW_MS,
@@ -223,7 +237,16 @@ function makeFake(cfg: FakeConfig = {}) {
 
 beforeEach(() => {
   reportSilentFallbackMock.mockClear();
+  markerSpy.mockClear();
 });
+
+/** Every marker emitted so far, in order. */
+function emittedMarkers(): CertReissueMarker[] {
+  return markerSpy.mock.calls.map((c) => c[0] as CertReissueMarker);
+}
+function emittedPhases(): string[] {
+  return emittedMarkers().map((m) => m.phase);
+}
 
 // =============================================================================
 // Pure helper unit tests
@@ -653,5 +676,506 @@ describe("source-shape anchors (registration + replay-safety)", () => {
     expect(body).not.toContain("finally");
     expect(body).toContain("await step.sleep(");
     expect(body).toContain('step.run("restore-steady-state"');
+  });
+});
+
+// =============================================================================
+// #6698 — telemetry, probe-only mode, and the DNS-propagation gate
+// =============================================================================
+
+function probeCtx(): ReissueRunContext {
+  return { probeOnly: true, runId: "run-probe", attempt: 1 };
+}
+
+describe("#6698 checkDnsPropagated — pure verdict function (AC8)", () => {
+  const base: DnsPropagationInputs = {
+    resolved4: ["185.199.108.153", "185.199.111.153"],
+    resolved6: [],
+    resolve6Error: "ENODATA",
+    acmeApexStatus: 404,
+    acmeWwwStatus: 404,
+    acmeGithubShaped: true,
+  };
+
+  it("all-185.199.x + no AAAA + GitHub-shaped ACME → propagated", () => {
+    expect(checkDnsPropagated(base).status).toBe("propagated");
+  });
+
+  it("Cloudflare answers → retry (propagation may still be in flight)", () => {
+    const v = checkDnsPropagated({
+      ...base,
+      resolved4: ["188.114.96.2", "188.114.97.2"],
+    });
+    expect(v.status).toBe("retry");
+    expect(v.reason).toMatch(/188\.114\.96\.2/);
+  });
+
+  it("AAAA present → failed, NOT retry (H-W4 is terminal, waiting cannot help)", () => {
+    // Let's Encrypt prefers IPv6 and will not fall back from a proxied AAAA that
+    // answers 200 with the wrong content, so no window length can succeed. A
+    // `retry` here would burn the remaining budget lengthening a public TLS
+    // outage for an outcome that cannot change.
+    const v = checkDnsPropagated({
+      ...base,
+      resolved6: ["2a06:98c1:3120::2"],
+      resolve6Error: null,
+    });
+    expect(v.status).toBe("failed");
+    expect(v.reason).toMatch(/prefers IPv6/);
+  });
+
+  it("A-records right but ACME not GitHub-shaped → retry (challenge intercepted)", () => {
+    const v = checkDnsPropagated({ ...base, acmeGithubShaped: false });
+    expect(v.status).toBe("retry");
+    expect(v.reason).toMatch(/not GitHub-shaped/);
+  });
+
+  it("no A answer yet → retry", () => {
+    expect(checkDnsPropagated({ ...base, resolved4: [] }).status).toBe("retry");
+  });
+
+  it("a 185.199.x-PREFIXED but non-GitHub octet does not pass by string prefix", () => {
+    // Guards the /16 check against a naive `startsWith("185.199.")`.
+    const v = checkDnsPropagated({ ...base, resolved4: ["185.1990.1.1"] });
+    expect(v.status).toBe("retry");
+  });
+});
+
+describe("#6698 resolveProbeOnly — safe default (AC20/AC23)", () => {
+  it.each([
+    ["absent data", undefined, true],
+    ["empty data", {}, true],
+    ["non-object data", "nope", true],
+    ["explicit true", { probeOnly: true }, true],
+    ["explicit false", { probeOnly: false }, false],
+    ["non-boolean flag", { probeOnly: "false" }, true],
+  ])("%s → probeOnly=%s", (_label, data, expected) => {
+    expect(resolveProbeOnly({ data })).toBe(expected);
+  });
+
+  it("defaults to probe-only for a bare event with no data at all", () => {
+    // Remediation consumes an LE validation attempt against hourly, COMPOUNDING
+    // limits, so the default must never remediate.
+    expect(resolveProbeOnly({})).toBe(true);
+    expect(resolveProbeOnly(undefined)).toBe(true);
+  });
+});
+
+describe("#6698 probe-only mode", () => {
+  it("makes ZERO reissueViaCnameToggle calls — no cname:null PUT (AC11)", async () => {
+    const { deps, calls } = makeFake();
+    const result = await runReissueSteps(
+      makeStep(),
+      deps,
+      deps.logger,
+      probeCtx(),
+    );
+    expect(result.outcome).toBe("probe_only_complete");
+    // Assert on the ABSENCE OF THE `null` ARGUMENT, not on setPagesCname call
+    // count: restoreState legitimately re-asserts the cname when it drifted, so
+    // a call-count assertion would be false in a reachable state and would
+    // pressure someone into making restore conditional on !probeOnly — a direct
+    // regression of the symmetric-restore contract.
+    expect(calls.setPagesCname).not.toContain(null);
+    // And no settle sleep, which only reissueViaCnameToggle performs.
+    expect(calls.sleep).not.toContain(45 * 1000);
+  });
+
+  it("runs ZERO poll steps (AC11c)", async () => {
+    const { deps } = makeFake();
+    const step = makeStep();
+    await runReissueSteps(step, deps, deps.logger, probeCtx());
+    expect(step.calls.filter((c) => c.startsWith("poll-"))).toHaveLength(0);
+    expect(emittedPhases()).not.toContain("poll");
+  });
+
+  it("still flips DNS and still restores (it pays the window, so it must measure)", async () => {
+    const { deps, state, calls } = makeFake();
+    await runReissueSteps(makeStep(), deps, deps.logger, probeCtx());
+    expect(calls.setRecordProxied.some((c) => c.proxied === false)).toBe(true);
+    expect(state.records.every((r) => r.proxied === true)).toBe(true);
+  });
+
+  it("aborts loudly in preflight when the live cname is already wrong (AC11b)", async () => {
+    // A probe against the `cname:null` state a prior failed fire left behind
+    // would otherwise reach restoreState's cname re-assert, issue a real
+    // PUT /pages, re-order the cert and consume an LE attempt — the one thing
+    // probe-only exists to avoid.
+    const { deps, calls } = makeFake({ initialCname: null });
+    const result = await runReissueSteps(
+      makeStep(),
+      deps,
+      deps.logger,
+      probeCtx(),
+    );
+    expect(result.outcome).toBe("precondition_blocked");
+    expect(result.detail).toMatch(/probe-only refused/);
+    // Nothing was mutated at all.
+    expect(calls.setPagesCname).toHaveLength(0);
+    expect(calls.setRecordProxied).toHaveLength(0);
+  });
+
+  it("probe_only_complete is benign (does not page) and is not reachable in remediation", async () => {
+    expect(BENIGN_OUTCOMES.has("probe_only_complete")).toBe(true);
+    const { deps } = makeFake({ willIssue: true });
+    const remediation = await runReissueSteps(
+      makeStep(),
+      deps,
+      deps.logger,
+      remediationCtx(),
+    );
+    expect(remediation.outcome).not.toBe("probe_only_complete");
+    expect(remediation.probeOnly).toBe(false);
+  });
+
+  it("`issued` is unreachable in probe-only mode", async () => {
+    const { deps } = makeFake({ willIssue: true });
+    const result = await runReissueSteps(
+      makeStep(),
+      deps,
+      deps.logger,
+      probeCtx(),
+    );
+    expect(result.outcome).not.toBe("issued");
+    expect(result.probeOnly).toBe(true);
+  });
+});
+
+describe("#6698 DNS-propagation gate", () => {
+  it("AAAA present → dns_propagation_failed, and restore STILL runs (AC9)", async () => {
+    const { deps, state } = makeFake({
+      dnsPropagation: { resolved6: ["2a06:98c1:3120::2"], resolve6Error: null },
+    });
+    const step = makeStep();
+    const result = await runReissueSteps(
+      step,
+      deps,
+      deps.logger,
+      remediationCtx(),
+    );
+    expect(result.outcome).toBe("dns_propagation_failed");
+    expect(step.calls).toContain("restore-steady-state");
+    expect(state.records.every((r) => r.proxied === true)).toBe(true);
+  });
+
+  it("dns_propagation_failed is NOT benign — it pages (AC12)", () => {
+    expect(BENIGN_OUTCOMES.has("dns_propagation_failed")).toBe(false);
+  });
+
+  it("skips the poll entirely when propagation fails (no wasted outage window)", async () => {
+    const { deps } = makeFake({
+      dnsPropagation: { resolved4: ["188.114.96.2"] },
+    });
+    const step = makeStep();
+    await runReissueSteps(step, deps, deps.logger, remediationCtx());
+    expect(step.calls.filter((c) => c.startsWith("poll-"))).toHaveLength(0);
+  });
+
+  it("retries up to the fixed attempt cap with deterministic step names (AC10)", async () => {
+    const { deps } = makeFake({
+      dnsPropagation: { resolved4: ["188.114.96.2"] }, // never converges
+    });
+    const step = makeStep();
+    await runReissueSteps(step, deps, deps.logger, remediationCtx());
+    const gateSteps = step.calls.filter((c) => c.startsWith("dns-gate-"));
+    // Fixed-count names over a constant — a wall-clock-derived counter would
+    // produce non-deterministic ids and break inngest replay memoization.
+    expect(gateSteps.length).toBeLessThanOrEqual(DNS_GATE_MAX_ATTEMPTS * 2);
+    expect(step.calls).toContain("dns-gate-0");
+    expect(gateSteps.every((c) => /^dns-gate-(wait-)?\d+$/.test(c))).toBe(true);
+  });
+
+  it("stops at the FIRST attempt on a terminal AAAA verdict (no wasted retries)", async () => {
+    const { deps } = makeFake({
+      dnsPropagation: { resolved6: ["2a06:98c1:3120::2"], resolve6Error: null },
+    });
+    const step = makeStep();
+    await runReissueSteps(step, deps, deps.logger, remediationCtx());
+    expect(
+      step.calls.filter((c) => /^dns-gate-\d+$/.test(c)),
+    ).toHaveLength(1);
+  });
+});
+
+describe("#6698 step ordering and restore invariant", () => {
+  it("orders capture-pre-flip-dns → toggle-reissue → dns-gate → poll → restore (AC10)", async () => {
+    const { deps } = makeFake({ willIssue: true });
+    const step = makeStep();
+    await runReissueSteps(step, deps, deps.logger, remediationCtx());
+    const idx = (needle: string) =>
+      step.calls.findIndex((c) => c.startsWith(needle));
+    expect(idx("capture-pre-flip-dns")).toBeGreaterThanOrEqual(0);
+    expect(idx("capture-pre-flip-dns")).toBeLessThan(idx("toggle-reissue"));
+    expect(idx("toggle-reissue")).toBeLessThan(idx("dns-gate-"));
+    expect(idx("dns-gate-")).toBeLessThan(idx("poll-"));
+    expect(idx("poll-")).toBeLessThan(idx("restore-steady-state"));
+  });
+
+  it("pre-flip baseline is captured BEFORE the flip, in its own step", async () => {
+    const { deps } = makeFake({ willIssue: true });
+    const step = makeStep();
+    await runReissueSteps(step, deps, deps.logger, remediationCtx());
+    // Emitting it inside toggle-reissue would mean a step RETRY re-reads the
+    // "pre-flip" baseline AFTER the first flip — a misleading baseline on
+    // exactly the retry path that most needs a true one.
+    const phases = emittedPhases();
+    expect(phases.indexOf("pre-flip-dns")).toBeLessThan(
+      phases.indexOf("flip-dns-only"),
+    );
+  });
+
+  it("restore runs on EVERY toggle-ok terminal (issued, timeout, gate-fail, probe)", async () => {
+    const cases: Array<[string, FakeConfig, ReissueRunContext]> = [
+      ["issued", { willIssue: true }, remediationCtx()],
+      ["poll_timeout", { willIssue: false }, remediationCtx()],
+      [
+        "dns_propagation_failed",
+        { dnsPropagation: { resolved4: ["188.114.96.2"] } },
+        remediationCtx(),
+      ],
+      ["probe_only_complete", {}, probeCtx()],
+    ];
+    for (const [label, cfg, ctx] of cases) {
+      const { deps, state } = makeFake(cfg);
+      const step = makeStep();
+      const result = await runReissueSteps(step, deps, deps.logger, ctx);
+      expect(result.outcome, label).toBe(label);
+      expect(step.calls, label).toContain("restore-steady-state");
+      expect(state.records.every((r) => r.proxied === true), label).toBe(true);
+    }
+  });
+
+  it("reissue_failed restores IN-STEP and gains no second body-level restore (AC9)", async () => {
+    // A second body restore would be idempotent but harmful: if it threw, the
+    // body would throw, onFailure would fire, and the precise reissue_failed
+    // diagnostic would be overwritten by a generic restore outcome.
+    const { deps, state } = makeFake({ failCnameOn: "null" });
+    const step = makeStep();
+    const result = await runReissueSteps(
+      step,
+      deps,
+      deps.logger,
+      remediationCtx(),
+    );
+    expect(result.outcome).toBe("reissue_failed");
+    expect(step.calls).not.toContain("restore-steady-state");
+    // ...but the in-step restore DID converge the steady state.
+    expect(state.records.every((r) => r.proxied === true)).toBe(true);
+    expect(state.cname).toBe("soleur.ai");
+  });
+
+  it("has exactly ONE post-toggle return site, after restore (AC9, structural)", () => {
+    const src = readFileSync(
+      resolve(
+        __dirname,
+        "../../../server/inngest/functions/cron-gh-pages-cert-reissue.ts",
+      ),
+      "utf8",
+    );
+    const start = src.indexOf("// POST-TOGGLE.");
+    expect(start).toBeGreaterThan(-1);
+    const end = src.indexOf("// Live-IO dep construction", start);
+    expect(end).toBeGreaterThan(start);
+    const tail = src.slice(start, end);
+    // The invariant is STRUCTURAL: a universal "no post-toggle return bypasses
+    // restore" cannot be proven by driving one path, so the code is shaped so
+    // it holds by construction.
+    //
+    // Anchor on the FUNCTION-EXIT indentation (exactly two spaces). A bare
+    // `\s*return` also matches `return p;` / `return v;` inside the poll and
+    // gate step CALLBACKS, which are not function exits at all — that anchor
+    // would report 3 and say nothing about the invariant.
+    const exitReturns = tail.match(/^ {2}return\s/gm) ?? [];
+    expect(exitReturns).toHaveLength(1);
+    // ...and the single exit is the one that runs terminal observability.
+    expect(tail).toMatch(/^ {2}return emitAndReturn\(/m);
+    // Non-vacuity: the callback returns DO exist at deeper indentation, so the
+    // anchor above is discriminating rather than matching nothing.
+    expect(tail.match(/^ {6,}return\s/gm)?.length ?? 0).toBeGreaterThan(0);
+  });
+});
+
+describe("#6698 marker coverage and correlation", () => {
+  it("emits a terminal marker for BENIGN outcomes too (AC3)", async () => {
+    // The headline defect: emitTerminal routes benign outcomes through
+    // logger.info, and both gates hold there (ProxyLogger disabled outside an
+    // executing step; Vector drops pino INFO). Without a marker inside
+    // emitTerminal the `issued` success path stays dark.
+    for (const [cfg, expected] of [
+      [{ willIssue: true }, "issued"],
+      [{ stateOverride: "issued" }, "not_stuck"],
+    ] as Array<[FakeConfig, string]>) {
+      markerSpy.mockClear();
+      const { deps } = makeFake(cfg);
+      const result = await runReissueSteps(
+        makeStep(),
+        deps,
+        deps.logger,
+        remediationCtx(),
+      );
+      expect(result.outcome).toBe(expected);
+      const terminal = emittedMarkers().filter((m) => m.phase === "terminal");
+      expect(terminal, expected).toHaveLength(1);
+      expect(terminal[0].outcome).toBe(expected);
+    }
+  });
+
+  it("covers every phase in the exported union across both entry points (AC4)", async () => {
+    const seen = new Set<string>();
+
+    // Remediation run: everything except onfailure-restore.
+    const a = makeFake({ willIssue: true });
+    await runReissueSteps(makeStep(), a.deps, a.deps.logger, remediationCtx());
+    emittedPhases().forEach((p) => seen.add(p));
+
+    // onFailure is NOT part of runReissueSteps, so it needs its own drive.
+    markerSpy.mockClear();
+    const prevToken = process.env.CF_API_TOKEN_DNS_EDIT;
+    const prevZone = process.env.CF_ZONE_ID;
+    process.env.CF_API_TOKEN_DNS_EDIT = "";
+    process.env.CF_ZONE_ID = "";
+    try {
+      await cronGhPagesCertReissueOnFailure({
+        error: new Error("body threw"),
+        event: {},
+        step: makeStep(),
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+    } finally {
+      if (prevToken === undefined) delete process.env.CF_API_TOKEN_DNS_EDIT;
+      else process.env.CF_API_TOKEN_DNS_EDIT = prevToken;
+      if (prevZone === undefined) delete process.env.CF_ZONE_ID;
+      else process.env.CF_ZONE_ID = prevZone;
+    }
+    emittedPhases().forEach((p) => seen.add(p));
+
+    // Compare the OBSERVED phase set against the exported union — not a grep
+    // count, so a new phase without an emit site fails here.
+    for (const phase of CERT_REISSUE_PHASES) {
+      expect(Array.from(seen), `phase ${phase} has no emit site`).toContain(
+        phase,
+      );
+    }
+  });
+
+  it("propagates the runId and attempt VALUES into every marker (AC5)", async () => {
+    const { deps } = makeFake({ willIssue: true });
+    await runReissueSteps(makeStep(), deps, deps.logger, {
+      probeOnly: false,
+      runId: "run-XYZ",
+      attempt: 3,
+    });
+    const markers = emittedMarkers();
+    expect(markers.length).toBeGreaterThan(0);
+    // A type-level check alone would pass against a hardcoded `attempt: 0`.
+    for (const m of markers) {
+      expect(m.runId).toBe("run-XYZ");
+      expect(m.attempt).toBe(3);
+    }
+  });
+
+  it("stamps probeOnly on EVERY marker, not just the terminal one", async () => {
+    const { deps } = makeFake();
+    await runReissueSteps(makeStep(), deps, deps.logger, probeCtx());
+    // A row read out of context must never be misreadable as remediation.
+    expect(emittedMarkers().every((m) => m.probeOnly === true)).toBe(true);
+  });
+
+  it("emits once per real execution, bounded (AC6)", async () => {
+    const { deps } = makeFake({ willIssue: false });
+    await runReissueSteps(makeStep(), deps, deps.logger, remediationCtx());
+    const polls = emittedMarkers().filter((m) => m.phase === "poll");
+    // Bounded, not pinned to an exact count — an exact assertion flakes.
+    expect(polls.length).toBeGreaterThan(0);
+    expect(polls.length).toBeLessThanOrEqual(MAX_DNS_ONLY_WINDOW_MS / 60_000);
+    // Poll markers must be emitted INSIDE the step callback, so each carries its
+    // own index rather than repeating one value.
+    expect(new Set(polls.map((m) => m.pollIndex)).size).toBe(polls.length);
+  });
+
+  it("captures the full https_certificate object in poll markers (RI-7)", async () => {
+    const { deps } = makeFake({ willIssue: false });
+    const original = deps.getPages.bind(deps);
+    deps.getPages = async () => ({
+      ...(await original()),
+      description: "LE said something useful",
+      domains: ["soleur.ai"],
+      expiresAt: "2026-08-16",
+      protectedDomainState: "verified",
+    });
+    await runReissueSteps(makeStep(), deps, deps.logger, remediationCtx());
+    const poll = emittedMarkers().find((m) => m.phase === "poll");
+    // `description` is the ONLY in-band field that has ever carried Let's
+    // Encrypt-side detail — the sole candidate for separating "window too short"
+    // from "rate limited", which `state` alone cannot do.
+    expect(poll?.certDescription).toBe("LE said something useful");
+    expect(poll?.certExpiresAt).toBe("2026-08-16");
+    expect(poll?.protectedDomainState).toBe("verified");
+  });
+
+  it("emits a restore marker on entry AND on a THROWING restore (Phase 1.7)", async () => {
+    // A marker emitted only after restoreState returns means a throwing restore
+    // emits nothing, making "never attempted" indistinguishable from
+    // "attempted and failed" — the worse of the two states.
+    const { deps } = makeFake({ listCount: 3 });
+    await expect(restoreState(deps, (phase, fields) =>
+      markerSpy({ phase, ...fields }),
+    )).rejects.toThrow(/only 3\//);
+    const restores = emittedMarkers().filter((m) => m.phase === "restore");
+    expect(restores.length).toBeGreaterThanOrEqual(2);
+    expect(restores.some((m) => m.ok === false)).toBe(true);
+  });
+});
+
+describe("#6698 window budget and allowlist", () => {
+  it("the TOTAL window (poll + settle + gate) stays within 15 minutes (AC13)", () => {
+    // Asserting POLL_MAX_MS alone passed while the real public-TLS-outage window
+    // overran — it already did, by CNAME_SETTLE_MS (45s).
+    expect(TOTAL_DNS_ONLY_WINDOW_MS).toBeLessThanOrEqual(MAX_DNS_ONLY_WINDOW_MS);
+    expect(MAX_DNS_ONLY_WINDOW_MS).toBe(15 * 60 * 1000);
+    // Non-vacuity: the total must actually include all three components, so it
+    // has to exceed the poll budget alone.
+    expect(TOTAL_DNS_ONLY_WINDOW_MS).toBeGreaterThan(10 * 60 * 1000);
+  });
+
+  it("widens the allowlist to the documented terminal failure states (AC16b)", () => {
+    // `errored` and `authorization_revoked` are documented terminal failures a
+    // cert can wedge in; both were previously declined as not_stuck and never
+    // remediated.
+    expect(assertStuckState("errored").proceed).toBe(true);
+    expect(assertStuckState("authorization_revoked").proceed).toBe(true);
+    expect(assertStuckState("bad_authz").proceed).toBe(true);
+    // Healthy and in-flight states are still refused — toggling a healthy
+    // in-flight order can MANUFACTURE a new bad_authz.
+    for (const s of [
+      "issued",
+      "approved",
+      "authorized",
+      "authorization_pending",
+      "dns_changed",
+      "new",
+      "uploaded",
+    ]) {
+      expect(assertStuckState(s).proceed, s).toBe(false);
+    }
+    expect(REISSUE_ALLOWED_STATES).toContain("errored");
+  });
+});
+
+describe("#6698 live deps are real, not a dead twin (AC8b)", () => {
+  it("buildLiveDeps constructs a real gatherDnsPropagation", () => {
+    const deps = buildLiveDeps({
+      installationToken: "t",
+      cfToken: "c",
+      zoneId: "z",
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    expect(typeof deps.gatherDnsPropagation).toBe("function");
+    // Non-vacuity: prove it is the REAL resolver-based implementation, not a
+    // stub returning empty observations. A stub would satisfy the type member,
+    // the gate step, and every fake-driven test while production never gates.
+    const src = deps.gatherDnsPropagation.toString();
+    expect(src).toContain("setServers");
+    expect(src).toContain("resolve6");
   });
 });
