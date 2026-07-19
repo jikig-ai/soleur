@@ -1067,8 +1067,23 @@ logs:
   where: Better Stack source soleur-inngest-vector-prd (id 2457081), source_kind=app_container
   retention: ~40-min hot window via remote(_logs); older rows from the s3 archive via betterstack-query.sh's default UNION ALL
 discoverability_test:
-  command: doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 30m --grep '"SOLEUR_CERT_REISSUE":true'
-  expected_output: at least one row per phase value, each carrying source_kind=app_container
+  # Asserts the DELIVERY CHAIN this marker rides is live, authenticated and
+  # queryable — the typo'd-hostname / unrunnable-command class this field exists
+  # to catch. Deliberately NOT "the cert-reissue markers are present": that
+  # cannot be true before the code is deployed, so making it the pre-merge
+  # expectation would render the check unsatisfiable for every NEW observability
+  # signal (verified: the marker-grep runs clean at rc=0 and returns empty,
+  # which a presence-based expected_output reads as a broken command).
+  command: doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 30m --limit 1 --grep 'soleur-web-platform'
+  expected_output: at least one JSONEachRow row (proves app_container -> Vector -> Better Stack is live)
+  # MARKER PRESENCE is the stronger assertion and is enforced post-deploy, not
+  # by prose: scripts/followthroughs/cert-reissue-markers-6698.sh requires
+  # >=3 distinct phases on source_kind=app_container rows, and is enrolled on
+  # #6698 with the follow-through sweeper. It was live-verified in BOTH
+  # directions before landing (FAIL on the markers-absent state; 86 rows found
+  # against an existing discriminator, proving it can PASS).
+  post_deploy_command: doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/cert-reissue-markers-6698.sh
+  post_deploy_expected_output: "PASS: cert-reissue step markers are reaching Better Stack" 
 ```
 
 ### Soak Follow-Through Enrollment
