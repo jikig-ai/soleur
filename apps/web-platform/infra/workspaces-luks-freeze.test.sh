@@ -43,6 +43,14 @@ fail=0
 ok() { pass=$((pass + 1)); printf 'ok   - %s\n' "$1"; }
 no() { fail=$((fail + 1)); printf 'FAIL - %s\n' "$1"; }
 
+# One scratch root for the whole run, removed on exit. Per-case subdirs keep each case's argv log
+# isolated without scattering loose mktemp files across /tmp where a reaper (or a sibling worktree
+# session) can remove them mid-run.
+RUN_SCRATCH="$(mktemp -d -t wl-freeze-test.XXXXXXXX)"
+CASE_N=0
+cleanup_scratch() { rm -rf "$RUN_SCRATCH"; }
+trap cleanup_scratch EXIT INT TERM HUP
+
 # run_case <script> <func-and-args> <required-fns> [env assignments...]
 #
 # <required-fns> is a space-separated list of function names the case depends on. The subshell
@@ -62,7 +70,10 @@ no() { fail=$((fail + 1)); printf 'FAIL - %s\n' "$1"; }
 # CURL_CODE  stub curl's echoed HTTP code
 run_case() {
   local script="$1" invocation="$2" require="$3"; shift 3
-  CALLS="$(mktemp)"; MARKER_LOG="$(mktemp)"; STATE="$(mktemp -d)"
+  CASE_N=$((CASE_N + 1))
+  local d="$RUN_SCRATCH/case-$CASE_N"; mkdir -p "$d"
+  CALLS="$d/calls"; MARKER_LOG="$d/marker"; STATE="$d/state.d"; mkdir -p "$STATE"
+  : > "$CALLS"; : > "$MARKER_LOG"
   CASE_OUT="$(
     env "$@" \
       CUTOVER="$script" CALLS="$CALLS" MARKER_LOG="$MARKER_LOG" \
@@ -115,8 +126,15 @@ run_case() {
   CASE_RC=$?
 }
 
-calls()  { cat "$CALLS" 2>/dev/null; }
-marker() { cat "$MARKER_LOG" 2>/dev/null; }
+# The scratch files MUST exist after a case ran — a vanished or never-created file reads as empty,
+# which is indistinguishable from "the SUT never made the call" and shows up as a phantom, flaky SUT
+# regression. Fail loud on a missing file instead. (Scratch lives in one per-run dir under TMPDIR so
+# a stale-/tmp reaper cannot pick the files off mid-run.)
+_require_file() {
+  [ -f "$1" ] || { no "HARNESS: scratch file $1 is missing — treat this run as un-run, not as evidence"; return 1; }
+}
+calls()  { _require_file "$CALLS" || return 1; cat "$CALLS"; }
+marker() { _require_file "$MARKER_LOG" || return 1; cat "$MARKER_LOG"; }
 # undef — true when the case never ran because a required function is undefined. Any assertion that
 # reads a non-zero CASE_RC as evidence MUST consult this first, else "the function is missing" is
 # indistinguishable from "the gate fired".
@@ -158,6 +176,20 @@ if calls | grep -qE '^systemctl stop .*inngest-server\.service'; then
   no "T14 freeze_writers stops inngest-server.service — reintroduces the 180s TimeoutStopSec cost for zero quiescence benefit"
 else
   ok "T14 freeze_writers never stops inngest-server.service (deepen decision pinned)"
+fi
+
+# T15 — stop/restore SYMMETRY. freeze_writers stops webhook.service unconditionally, so
+# resume_writers must restore it unconditionally too, even when an override omits it from
+# QUIESCE_UNITS. An asymmetric stop/restore pair is the defect class this whole change fixes: a
+# writer left down after the run is exactly what the missing inngest-redis restore would have been.
+run_case "$CUTOVER" 'freeze_writers' 'freeze_writers' LSOF_OUT="" WORKSPACES_QUIESCE_UNITS="inngest-redis.service"
+stopped_wh=$(calls | grep -cE '^systemctl stop webhook\.service' || true)
+run_case "$CUTOVER" 'resume_writers' 'resume_writers' ACTIVE_UNITS="inngest-server.service" WORKSPACES_QUIESCE_UNITS="inngest-redis.service"
+started_wh=$(calls | grep -cE '^systemctl start webhook\.service' || true)
+if [ "$stopped_wh" -ge 1 ] && [ "$started_wh" -ge 1 ]; then
+  ok "T15 webhook stop/restore stays symmetric even when QUIESCE_UNITS omits it"
+else
+  no "T15 asymmetric stop/restore (stopped=$stopped_wh started=$started_wh) — webhook would stay down after the run"
 fi
 
 # ---------------------------------------------------------------------------
@@ -368,6 +400,21 @@ else
   fi
 fi
 rm -f "$MUT4"
+
+# M5 — make resume_writers drive off the raw QUIESCE_UNITS instead of the symmetric list => T15
+# MUST flip (webhook stopped, never restored).
+MUT5="$(mutate 's|^  for u in \$(_quiesce_list); do rev=|  for u in $QUIESCE_UNITS; do rev=|')"
+if ! grep -qF 'for u in $QUIESCE_UNITS; do rev=' "$MUT5"; then
+  no "mutation M5 sed did NOT land — treat as un-run, not evidence"
+else
+  run_case "$MUT5" 'resume_writers' 'resume_writers' ACTIVE_UNITS="inngest-server.service" WORKSPACES_QUIESCE_UNITS="inngest-redis.service"
+  if [ "$(calls | grep -cE '^systemctl start webhook\.service' || true)" -eq 0 ]; then
+    ok "mutation M5 (resume off raw QUIESCE_UNITS): T15 flips (the symmetric list is load-bearing)"
+  else
+    no "mutation M5 did not flip T15 — the stop/restore symmetry guard is not load-bearing"
+  fi
+fi
+rm -f "$MUT5"
 
 # ---------------------------------------------------------------------------
 echo

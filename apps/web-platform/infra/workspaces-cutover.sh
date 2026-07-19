@@ -268,6 +268,17 @@ verify_byte_identity() {
 QUIESCE_UNITS="${WORKSPACES_QUIESCE_UNITS:-webhook.service inngest-redis.service}"
 FREEZE_HOLDER_CAP="${WORKSPACES_FREEZE_HOLDER_CAP:-40}"
 
+# _quiesce_list — QUIESCE_UNITS with webhook.service guaranteed PRESENT and FIRST.
+# freeze_writers() and resume_writers() BOTH drive off this one list, so the stop set and the
+# restore set cannot drift apart. Hardcoding the webhook stop while restoring only $QUIESCE_UNITS
+# would mean an override that omits webhook.service stops it and never brings it back — an
+# asymmetric stop/restore pair, which is the exact defect class this change exists to fix.
+_quiesce_list() {
+  local u out="webhook.service"
+  for u in $QUIESCE_UNITS; do [ "$u" = "webhook.service" ] || out="$out $u"; done
+  printf '%s' "$out"
+}
+
 # ensure_lsof — G4 is fail-CLOSED, so `lsof` must exist. Mirrors ensure_aws (idempotent, installs
 # on demand). `lsof` is provisioned by no repo artifact on the RUNNING host (web-1 carries
 # lifecycle{ ignore_changes = [user_data] }), so the cloud-init addition covers FUTURE hosts only
@@ -310,13 +321,12 @@ emit_freeze_holders() {
 # checked by static grep, which cannot catch ordering or exit-status defects.
 freeze_writers() {
   # Order: webhook FIRST (so a CI deploy cannot restart the container mid-rsync), then the
-  # container, then the remaining units. resume_writers() reverses this.
-  systemctl stop webhook.service
-  docker stop -t 120 "$CONTAINER"   # C8: drain lets in-flight write() finish (a 10s SIGKILL truncates)
-  local u
-  for u in $QUIESCE_UNITS; do
-    [ "$u" = "webhook.service" ] && continue
+  # container drain, then the remaining units. resume_writers() reverses this exactly.
+  local u first=1
+  for u in $(_quiesce_list); do
     systemctl stop "$u"
+    # C8: drain lets in-flight write() finish (a 10s SIGKILL truncates) — immediately after webhook.
+    [ "$first" = "1" ] && { docker stop -t 120 "$CONTAINER"; first=0; }
   done
   # luks-monitor.timer is armed by a PRIOR successful cutover and is RequiresMountsFor=/mnt/data, so
   # on a RE-dispatch it can fire mid-freeze and hold $MOUNT — which the now fail-closed G4 would
@@ -364,7 +374,7 @@ freeze_writers() {
 # than leaving it stopped. Hence the reset-failed before each start.
 resume_writers() {
   local u rev=""
-  for u in $QUIESCE_UNITS; do rev="$u${rev:+ }$rev"; done   # reverse: webhook comes back LAST
+  for u in $(_quiesce_list); do rev="$u${rev:+ }$rev"; done  # reverse: webhook comes back LAST
   for u in $rev; do
     systemctl reset-failed "$u" 2>/dev/null || true
     systemctl start "$u" 2>/dev/null || true
