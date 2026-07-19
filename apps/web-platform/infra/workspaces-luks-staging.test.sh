@@ -188,33 +188,51 @@ nhas '^rm ' \
 # would pass vacuously.
 # ---------------------------------------------------------------------------
 
+# FIXTURE LAYOUT MIRRORS THE REAL HOST. On web-1 the top level of $MOUNT is INFRASTRUCTURE
+# (`workspaces/`, `plugins/`, `redis/`) and per-user trees live at `workspaces/<id>/`. An earlier
+# revision of these fixtures put entries at depth 1 (`ws-a`, `ws-ORPHAN`), which made the subset
+# check LOOK covered while, on the real host, it reduced to "does $MOUNT contain a directory named
+# workspaces?" — true in every reachable state, including one where the stray held a user's only
+# surviving copy. T4f below is the case that pins the difference: its depth-1 view is IDENTICAL on
+# both sides, so a depth-1 check passes it and only a depth-2 check refuses.
+
 # T4d — the happy path: non-mountpoint non-empty $STAGING, healthy $MOUNT, subset holds.
 # Fixture deliberately includes a DOTFILE: `rm -rf "$STAGING"/*` misses dotfiles, which would
 # leave the stray guard correctly still firing after a "successful" cleanup.
 run_case "$CUTOVER" \
-  'mkdir -p "$WORKSPACES_MOUNT/ws-a" "$WORKSPACES_MOUNT/.cache"; mkdir -p "$WORKSPACES_STAGING/ws-a"; : > "$WORKSPACES_STAGING/.cache"; clean_stray; echo "REMAIN:[$(ls -A "$WORKSPACES_STAGING" 2>/dev/null)]"' \
-  'clean_stray emit_clean_stray _same_dev' \
+  'mkdir -p "$WORKSPACES_MOUNT/workspaces/u1" "$WORKSPACES_MOUNT/redis"; : > "$WORKSPACES_MOUNT/.cache"; \
+   mkdir -p "$WORKSPACES_STAGING/workspaces/u1" "$WORKSPACES_STAGING/redis"; : > "$WORKSPACES_STAGING/.cache"; \
+   clean_stray; echo "REMAIN:[$(ls -A "$WORKSPACES_STAGING" 2>/dev/null | tr "\n" " ")]"' \
+  'clean_stray emit_clean_stray' \
   BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
-  FINDMNT_MOUNT_SRC="$BLKDEV" FINDMNT_STAGING_SRC="" DU_SRC=4096
+  FINDMNT_MOUNT_SRC="$BLKDEV" DU_SRC=4096
 ran && ok "T4d clean_stray removes a provenance-established stray and returns 0" \
     || no "T4d clean_stray did not return 0 (rc=$CASE_RC ${CASE_OUT:0:300})"
 outF 'REMAIN:[]' \
-  && ok "T4d-b the removal is DOTFILE-INCLUSIVE (\$STAGING is empty afterwards, .cache gone)" \
+  && ok "T4d-b the removal is DOTFILE-INCLUSIVE (\$STAGING empty afterwards, .cache gone)" \
   || no "T4d-b \$STAGING is not empty after clean_stray — a dotfile survived and the guard still fires"
-has "^rm -rf .*$STG" \
-  && ok "T4d-c POSITIVE CONTROL: the deletion is visible to the harness recorder" \
-  || no "T4d-c no \$STAGING-scoped rm was recorded — every negative assertion below is VACUOUS"
+# POSITIVE CONTROL, and deliberately stronger than "an rm mentioning \$STAGING happened": it pins
+# that EVERY top-level entry was passed to the observable seam in ONE call. A weaker presence-only
+# assertion is satisfiable by an implementation that rm's a sentinel through the shell and does the
+# bulk removal via `find -exec rm` (the real /bin/rm binary, invisible to the harness recorder) —
+# which would silently restore vacuity to every negative assertion below.
+has "^rm -rf -- .*$STG/workspaces" && has "^rm -rf -- .*$STG/.cache" \
+  && ok "T4d-c POSITIVE CONTROL: every top-level entry went through the recorded shell rm" \
+  || no "T4d-c the deletion did not pass all entries through the observable seam — every negative assertion below is VACUOUS"
 markerF 'SOLEUR_WORKSPACES_LUKS_CLEAN_STRAY' \
   && ok "T4d-d emits under its OWN marker name, not the STAGING_TARGET vocabulary" \
   || no "T4d-d no CLEAN_STRAY marker — the deletion has no operator-visible receipt"
 markerF 'AP-009' \
   && ok "T4d-e the receipt names the AP-009 deviation" \
   || no "T4d-e the receipt does not name AP-009 — the deviation is not legible at run time"
+markerF 'result=start reason=deleting' && markerF 'result=ok reason=cleaned' \
+  && ok "T4d-f the pre-rm row is result=start, not a second result=ok (terminal vocabulary stays distinct)" \
+  || no "T4d-f the pre-deletion receipt overloads result=ok — a failed run leaves a success-keyed row"
 
 # T4e — $STAGING is a MOUNTPOINT: that is the real LUKS volume, not a root-disk stray.
 run_case "$CUTOVER" \
-  ': > "$WORKSPACES_STAGING/ws-a"; clean_stray' \
-  'clean_stray emit_clean_stray _same_dev' \
+  'mkdir -p "$WORKSPACES_STAGING/workspaces"; clean_stray' \
+  'clean_stray emit_clean_stray' \
   BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="0" \
   FINDMNT_MOUNT_SRC="$BLKDEV" DU_SRC=4096
 died && ok "T4e a MOUNTPOINT \$STAGING refuses (that is the real volume, not a stray)" \
@@ -226,28 +244,37 @@ outF 'EMIT_DRIFT: clean_stray_staging_is_mountpoint' \
   && ok "T4e-c the reason is clean_stray_staging_is_mountpoint" \
   || no "T4e-c no clean_stray_staging_is_mountpoint drift emitted"
 
-# T4f — provenance FALSIFIED: a top-level entry exists in $STAGING that $MOUNT does not have.
-# The stray is meant to be a strict duplicate; a unique entry means something else wrote here.
+# T4f — THE DEPTH TEST. Provenance falsified at depth 2: the stray holds workspaces/ORPHAN, a user
+# tree canonical does not have. Note the depth-1 views are IDENTICAL (`workspaces` on both sides),
+# so a -maxdepth 1 subset check PASSES this fixture and deletes a user's only copy. This case is
+# the reason the check runs to $SUBSET_DEPTH.
 run_case "$CUTOVER" \
-  'mkdir -p "$WORKSPACES_MOUNT/ws-a" "$WORKSPACES_STAGING/ws-a" "$WORKSPACES_STAGING/ws-ORPHAN"; clean_stray' \
-  'clean_stray emit_clean_stray _same_dev' \
+  'mkdir -p "$WORKSPACES_MOUNT/workspaces/u1"; \
+   mkdir -p "$WORKSPACES_STAGING/workspaces/u1" "$WORKSPACES_STAGING/workspaces/ORPHAN"; clean_stray' \
+  'clean_stray emit_clean_stray' \
   BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
-  FINDMNT_MOUNT_SRC="$BLKDEV" FINDMNT_STAGING_SRC="" DU_SRC=4096
-died && ok "T4f a top-level entry absent from \$MOUNT refuses (provenance falsified)" \
-     || no "T4f clean_stray deleted a stray holding an entry canonical does not have"
+  FINDMNT_MOUNT_SRC="$BLKDEV" DU_SRC=4096
+died && ok "T4f a depth-2 entry absent from \$MOUNT refuses (provenance falsified where identity lives)" \
+     || no "T4f clean_stray deleted a stray holding a user tree canonical does not have — the depth-1 blind spot"
 nhas "^rm -rf .*$STG" \
   && ok "T4f-b no \$STAGING-scoped rm on the not-subset refusal" \
   || no "T4f-b an rm was issued despite the subset check failing"
 outF 'EMIT_DRIFT: clean_stray_not_subset' \
   && ok "T4f-c the reason is clean_stray_not_subset" \
   || no "T4f-c no clean_stray_not_subset drift emitted"
+markerF 'unique_count=1' \
+  && ok "T4f-d the marker carries a COUNT, so per-user ids do not reach the drift channel" \
+  || no "T4f-d the not-subset marker does not carry unique_count"
+! markerF 'ORPHAN' \
+  && ok "T4f-e the offending entry NAME is withheld from the marker (it is a user identifier)" \
+  || no "T4f-e a per-user workspace id leaked into the marker channel"
 
 # T4g — requirement 2 at the script layer: CLEAN_STRAY=1 must never ride the dry-run arm.
 # It REFUSES rather than forcing DRY_RUN=0 the way ROLLBACK does — forcing is precisely what
 # makes ROLLBACK's ungated arm dangerous.
 run_case "$CUTOVER" \
-  ': > "$WORKSPACES_STAGING/ws-a"; clean_stray' \
-  'clean_stray emit_clean_stray _same_dev' \
+  'mkdir -p "$WORKSPACES_STAGING/workspaces"; clean_stray' \
+  'clean_stray emit_clean_stray' \
   BLK="$BLKDEV" DRY_RUN=1 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
   FINDMNT_MOUNT_SRC="$BLKDEV" DU_SRC=4096
 died && ok "T4g CLEAN_STRAY=1 with DRY_RUN=1 refuses (requirement 2, script layer)" \
@@ -262,43 +289,82 @@ outF 'EMIT_DRIFT: clean_stray_dryrun_conflict' \
 # T4h — mode mutual exclusion. The ROLLBACK block ends `exit 0`, so without this guard an
 # operator who ticks BOTH gets a rollback (umount $MOUNT, cryptsetup close, docker stop) on a
 # host where no freeze was held — a gratuitous outage — the run exits GREEN, and the stray is
-# still there. The operator most likely to tick both is the one who just read "the cutover is
-# wedged, try the recovery modes."
+# still there.
 run_case "$CUTOVER" \
   'assert_mode_exclusive' \
   'assert_mode_exclusive' \
   BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 ROLLBACK=1
-died && ok "T4h ROLLBACK=1 + CLEAN_STRAY=1 refuses before either mode block runs" \
+died && ok "T4h ROLLBACK=1 + CLEAN_STRAY=1 refuses" \
      || no "T4h both modes were accepted — the rollback would silently win and report green"
 outF 'EMIT_DRIFT: clean_stray_mode_conflict' \
   && ok "T4h-b the reason is clean_stray_mode_conflict" \
   || no "T4h-b no clean_stray_mode_conflict drift emitted"
-nhas '^umount ' && nhas '^docker ' \
-  && ok "T4h-c NO rollback side effects ran (no umount, no docker stop) — no gratuitous outage" \
-  || no "T4h-c the conflicting dispatch performed rollback side effects"
-
-# T4i — $MOUNT and $STAGING resolve to the SAME device: deleting the "stray" would be deleting
-# canonical. _same_dev fails closed (it requires readlink to prove a real block device).
+# A THIRD mode is already declared (CONFIRM_WIPE) and its block lands in the Phase-5 converge
+# dispatch. A pairwise rollback-vs-clean_stray test would stop covering the invariant the moment
+# that block exists, so the guard counts set modes and this case pins the count form.
 run_case "$CUTOVER" \
-  'mkdir -p "$WORKSPACES_MOUNT/ws-a" "$WORKSPACES_STAGING/ws-a"; clean_stray' \
-  'clean_stray emit_clean_stray _same_dev' \
+  'assert_mode_exclusive' \
+  'assert_mode_exclusive' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 CONFIRM_WIPE=1
+died && ok "T4h-c CLEAN_STRAY=1 + CONFIRM_WIPE=1 also refuses (the guard counts modes, not one pair)" \
+     || no "T4h-c a non-rollback mode pair slipped past the exclusion guard"
+run_case "$CUTOVER" \
+  'assert_mode_exclusive; echo SOLE_MODE_OK' \
+  'assert_mode_exclusive' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1
+outF 'SOLE_MODE_OK' \
+  && ok "T4h-d POSITIVE CONTROL: exactly one mode is ACCEPTED (the guard is not refuse-everything)" \
+  || no "T4h-d the exclusion guard refuses a single-mode dispatch — CLEAN_STRAY is unreachable"
+
+# T4h-e/f — CALL-SITE ORDER. Every case above invokes the functions DIRECTLY; the harness's
+# BASH_SOURCE guard means no test ever executes the main body, so the guard can be deleted from it,
+# or moved BELOW the ROLLBACK block whose `exit 0` shadows everything after it, and every
+# behavioral assertion above still passes. That mutation is verbatim the failure T4h describes.
+# These assert the wiring against the file itself, which is the only reachable seam.
+ame_ln=$(grep -n '^assert_mode_exclusive$' "$CUTOVER" | head -1 | cut -d: -f1)
+rb_ln=$(grep -n '^if \[ "\$ROLLBACK" = "1" \]; then$' "$CUTOVER" | head -1 | cut -d: -f1)
+cs_ln=$(grep -n '^if \[ "\$CLEAN_STRAY" = "1" \]; then$' "$CUTOVER" | head -1 | cut -d: -f1)
+if [ -n "$ame_ln" ] && [ -n "$rb_ln" ] && [ -n "$cs_ln" ]; then
+  [ "$ame_ln" -lt "$rb_ln" ] \
+    && ok "T4h-e assert_mode_exclusive is CALLED, and above the ROLLBACK block whose exit 0 would shadow it" \
+    || no "T4h-e assert_mode_exclusive is called at line $ame_ln, at/below the ROLLBACK block at $rb_ln — the guard is bypassed"
+  [ "$cs_ln" -gt "$rb_ln" ] \
+    && ok "T4h-f the CLEAN_STRAY mode block is wired into the main body" \
+    || no "T4h-f could not locate the CLEAN_STRAY mode block after the ROLLBACK block"
+else
+  no "T4h-e/f could not locate the mode-block call sites (ame=$ame_ln rollback=$rb_ln clean_stray=$cs_ln) — the anchors drifted and this guard is blind"
+fi
+
+# T4i — $MOUNT and $STAGING on the SAME FILESYSTEM: deleting the "stray" would be deleting
+# canonical. Compared via `stat -c %d` on the directories, because findmnt cannot answer this for
+# a non-mountpoint (which the guard above has already guaranteed $STAGING is).
+run_case "$CUTOVER" \
+  'mkdir -p "$WORKSPACES_MOUNT/workspaces/u1" "$WORKSPACES_STAGING/workspaces/u1"; clean_stray' \
+  'clean_stray emit_clean_stray' \
   BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
-  FINDMNT_MOUNT_SRC="$BLKDEV" FINDMNT_STAGING_SRC="$BLKDEV" DU_SRC=4096
-died && ok "T4i \$MOUNT and \$STAGING on the same device refuses (that is canonical, not a stray)" \
-     || no "T4i clean_stray would have deleted from the canonical device"
+  FINDMNT_MOUNT_SRC="$BLKDEV" STAT_DEV_SAME=1 DU_SRC=4096
+died && ok "T4i \$MOUNT and \$STAGING on the same filesystem refuses (that is canonical, not a stray)" \
+     || no "T4i clean_stray would have deleted from the canonical filesystem"
 nhas "^rm -rf .*$STG" \
-  && ok "T4i-b no \$STAGING-scoped rm on the same-device refusal" \
-  || no "T4i-b an rm was issued against the canonical device"
+  && ok "T4i-b no \$STAGING-scoped rm on the same-filesystem refusal" \
+  || no "T4i-b an rm was issued against the canonical filesystem"
 outF 'EMIT_DRIFT: clean_stray_same_device' \
   && ok "T4i-c the reason is clean_stray_same_device" \
   || no "T4i-c no clean_stray_same_device drift emitted"
+# An unreadable device id must fail CLOSED: it is not proof the two are distinct.
+run_case "$CUTOVER" \
+  'mkdir -p "$WORKSPACES_MOUNT/workspaces/u1" "$WORKSPACES_STAGING/workspaces/u1"; clean_stray' \
+  'clean_stray emit_clean_stray' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
+  FINDMNT_MOUNT_SRC="$BLKDEV" STAT_RC=1 DU_SRC=4096
+died && nhas "^rm -rf .*$STG" \
+  && ok "T4i-d an unreadable st_dev fails CLOSED (a failed probe is not proof of distinctness)" \
+  || no "T4i-d a stat failure was treated as 'different filesystems' and the deletion proceeded"
 
-# T4j — an ALREADY-EMPTY $STAGING is a SUCCESS, not a failure. Re-dispatch is the most likely
-# operator action after an ambiguous run log, and the file already establishes this principle at
-# rollback()'s mapper guard: "a recovery-path signal that cries wolf gets ignored."
+# T4j — an ALREADY-EMPTY $STAGING is a SUCCESS, not a failure.
 run_case "$CUTOVER" \
   'clean_stray' \
-  'clean_stray emit_clean_stray _same_dev' \
+  'clean_stray emit_clean_stray' \
   BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
   FINDMNT_MOUNT_SRC="$BLKDEV"
 ran && ok "T4j an already-empty \$STAGING returns 0 (idempotent re-dispatch, no false alarm)" \
@@ -309,6 +375,93 @@ markerF 'reason=already_clean' \
 nhas "^rm -rf .*$STG" \
   && ok "T4j-c no rm issued when there was nothing to remove" \
   || no "T4j-c an rm was issued against an empty \$STAGING"
+
+# T4k — CANONICAL NOT MOUNTED. The single most consequential guard in the function: with $MOUNT
+# unmounted the stray is no longer a duplicate, it is the ONLY copy. Deleting the guard left the
+# whole suite green before this case existed.
+run_case "$CUTOVER" \
+  'mkdir -p "$WORKSPACES_STAGING/workspaces/u1"; clean_stray' \
+  'clean_stray emit_clean_stray' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 1" \
+  FINDMNT_MOUNT_SRC="$BLKDEV" DU_SRC=4096
+died && ok "T4k an UNMOUNTED \$MOUNT refuses — the stray may be the only copy left" \
+     || no "T4k clean_stray deleted the stray while canonical was not mounted"
+nhas "^rm -rf .*$STG" \
+  && ok "T4k-b no rm was issued while canonical was unmounted" \
+  || no "T4k-b the only surviving copy was deleted"
+outF 'EMIT_DRIFT: clean_stray_mount_unhealthy' \
+  && ok "T4k-c the reason is clean_stray_mount_unhealthy" \
+  || no "T4k-c no clean_stray_mount_unhealthy drift emitted"
+
+# T4l — $MOUNT mounted but its source is NOT a block device: an unverified mount is not proof the
+# canonical copy exists.
+run_case "$CUTOVER" \
+  'mkdir -p "$WORKSPACES_STAGING/workspaces/u1"; clean_stray' \
+  'clean_stray emit_clean_stray' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
+  FINDMNT_MOUNT_SRC="/not/a/block/device" DU_SRC=4096
+died && nhas "^rm -rf .*$STG" \
+  && ok "T4l a non-block-device \$MOUNT source refuses, with no rm" \
+  || no "T4l an unverified mount was accepted as proof canonical exists"
+
+# T4m — the removal FAILS. The receipt must say so rather than reporting a clean run.
+run_case "$CUTOVER" \
+  'mkdir -p "$WORKSPACES_MOUNT/workspaces/u1" "$WORKSPACES_STAGING/workspaces/u1"; clean_stray' \
+  'clean_stray emit_clean_stray' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
+  FINDMNT_MOUNT_SRC="$BLKDEV" RM_RC=1 DU_SRC=4096
+died && ok "T4m a failed rm refuses rather than reporting success" \
+     || no "T4m the removal failed and the run still returned 0"
+outF 'EMIT_DRIFT: clean_stray_rm_failed' \
+  && ok "T4m-b the reason is clean_stray_rm_failed" \
+  || no "T4m-b a failed removal emitted no named reason"
+! markerF 'result=ok reason=cleaned' \
+  && ok "T4m-c NO success receipt is emitted for a failed removal" \
+  || no "T4m-c the permanent record claims 'cleaned' for a run whose rm failed"
+
+# T4n — a SYMLINK $STAGING gets its own reason. `ls -A` follows a symlink and `find` does not, so
+# without this the run enumerates nothing and dies blaming a partial removal — identically on
+# every re-dispatch, sending the operator after a nonexistent rogue writer.
+run_case "$CUTOVER" \
+  'rmdir "$WORKSPACES_STAGING"; ln -s "$WORKSPACES_MOUNT" "$WORKSPACES_STAGING"; clean_stray' \
+  'clean_stray emit_clean_stray' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
+  FINDMNT_MOUNT_SRC="$BLKDEV" DU_SRC=4096
+died && ok "T4n a symlinked \$STAGING refuses" \
+     || no "T4n a symlinked \$STAGING was accepted"
+outF 'EMIT_DRIFT: clean_stray_staging_is_symlink' \
+  && ok "T4n-b the reason names the SYMLINK, not a phantom partial removal" \
+  || no "T4n-b a symlinked \$STAGING produced a misleading reason"
+
+# T4o — a MISSING PROBE BINARY must refuse. `mountpoint -q` on an absent binary exits 127, so the
+# catastrophic-mode `if` reads FALSE and the refusal silently does not fire. Running blind is the
+# failure; refusing is correct.
+run_case "$CUTOVER" \
+  'mkdir -p "$WORKSPACES_STAGING/workspaces/u1"; clean_stray' \
+  'clean_stray emit_clean_stray' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
+  FINDMNT_MOUNT_SRC="$BLKDEV" TOOL_ABSENT=mountpoint DU_SRC=4096
+died && nhas "^rm -rf .*$STG" \
+  && ok "T4o an absent 'mountpoint' binary refuses instead of deleting with a blind guard" \
+  || no "T4o clean_stray ran with a missing probe — the catastrophic-mode guard was inert"
+outF 'EMIT_DRIFT: clean_stray_tool_missing' \
+  && ok "T4o-b the reason is clean_stray_tool_missing" \
+  || no "T4o-b a missing probe emitted no named reason"
+
+# T4p — a mount BENEATH $STAGING. Every guard above tests $STAGING itself; rm -rf would descend
+# through a nested bind-mount into live data and fail only the final rmdir with EBUSY.
+run_case "$CUTOVER" \
+  'mkdir -p "$WORKSPACES_MOUNT/workspaces/u1" "$WORKSPACES_STAGING/workspaces/u1"; \
+   FINDMNT_TARGETS="$WORKSPACES_STAGING/workspaces"; clean_stray' \
+  'clean_stray emit_clean_stray' \
+  BLK="$BLKDEV" DRY_RUN=0 CLEAN_STRAY=1 MOUNTPOINT_RCS="1 0" \
+  FINDMNT_MOUNT_SRC="$BLKDEV" DU_SRC=4096
+died && nhas "^rm -rf .*$STG" \
+  && ok "T4p a mount nested BENEATH \$STAGING refuses, with no rm" \
+  || no "T4p rm -rf would have descended through a nested mount into live data"
+outF 'EMIT_DRIFT: clean_stray_nested_mount' \
+  && ok "T4p-b the reason is clean_stray_nested_mount" \
+  || no "T4p-b a nested mount emitted no named reason"
 
 # ---------------------------------------------------------------------------
 # T9 — $MAPPER absent must be named ACCURATELY. Unguarded, an absent mapper falls through to the
@@ -1265,4 +1418,15 @@ fi
 # ---------------------------------------------------------------------------
 echo
 echo "workspaces-luks-staging.test.sh: $pass passed, $fail failed"
+
+# NON-DEGENERACY FLOOR. `fail -eq 0` alone is satisfied by a suite that runs NOTHING: deleting the
+# entire T4d-T4p region left this file reporting "109 passed, 0 failed" and exiting 0, silently
+# dropping every assertion that covers the user-data deletion. A suite whose whole purpose is
+# refusing to pass vacuously must first prove it ran. Raise this floor when adding cases; if it
+# ever exceeds the real count the failure is loud and one line to fix.
+STAGING_MIN_ASSERTIONS=150
+if [ "$pass" -lt "$STAGING_MIN_ASSERTIONS" ]; then
+  echo "FAIL - only $pass assertions ran (floor $STAGING_MIN_ASSERTIONS) — cases were dropped or a case aborted early; a green run here would be vacuous"
+  exit 1
+fi
 [ "$fail" -eq 0 ]

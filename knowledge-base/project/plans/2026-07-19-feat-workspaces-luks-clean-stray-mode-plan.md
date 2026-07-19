@@ -507,12 +507,28 @@ failure_modes:
   - mode: clean_stray invoked while $STAGING is a mountpoint (would delete the real LUKS volume)
     detection: mountpoint predicate; emits reason=clean_stray_staging_is_mountpoint before die
     alert_route: emit_drift + non-zero workflow exit
-  - mode: $MOUNT and $STAGING are the same device
-    detection: _same_dev check; emits reason=clean_stray_same_device
+  - mode: $MOUNT and $STAGING are on the same filesystem
+    detection: stat -c %d comparison on the two DIRECTORIES; emits reason=clean_stray_same_device.
+      NOT _same_dev/findmnt — the mountpoint refusal upstream guarantees $STAGING is not a mount
+      target, so a findmnt-sourced operand is always empty and that check would be dead code.
     alert_route: emit_drift + non-zero workflow exit
-  - mode: the stray holds a top-level entry canonical does not (provenance falsified)
-    detection: top-level subset check; emits reason=clean_stray_not_subset with the offending entry names
+  - mode: the stray holds a path canonical does not (provenance falsified)
+    detection: relative-path subset check to depth 2 (where user identity lives — a depth-1 check
+      is vacuous on the real host, whose top level is workspaces/ plugins/ redis/); emits
+      reason=clean_stray_not_subset carrying a COUNT, never the offending names (they are per-user
+      workspace ids and the marker channel is a wider audience than the data)
     alert_route: emit_drift + non-zero workflow exit
+  - mode: a probe binary clean_stray depends on is absent (mountpoint/findmnt/find/stat/du)
+    detection: command -v loop before any guard runs; emits reason=clean_stray_tool_missing.
+      Without it, `mountpoint -q` exits 127 and the catastrophic-mode `if` reads FALSE.
+    alert_route: emit_drift + non-zero workflow exit
+  - mode: a filesystem is mounted BENEATH $STAGING (rm -rf would descend into live data)
+    detection: findmnt -rno TARGET prefix scan; emits reason=clean_stray_nested_mount
+    alert_route: emit_drift + non-zero workflow exit
+  - mode: the preflight probe cannot read web-1, so the approver would see an EMPTY magnitude banner
+    detection: probe rc + `state=` shape assertion; the step FAILS and writes
+      "PROBE FAILED — DO NOT APPROVE" to the step summary rather than degrading to a green step
+    alert_route: workflow step failure before the environment gate is reached
   - mode: CLEAN_STRAY=1 dispatched with DRY_RUN=1 (requirement-2 violation attempt)
     detection: pre-gate workflow step, then mode-block predicate; emits reason=clean_stray_dryrun_conflict
     alert_route: workflow step failure before the gate; emit_drift + non-zero exit at the script layer
@@ -528,8 +544,12 @@ logs:
   retention: GitHub Actions default (90d); syslog per host journald retention
 
 discoverability_test:
-  command: gh run view --log | grep SOLEUR_WORKSPACES_LUKS_CLEAN_STRAY
-  expected_output: a marker row carrying result= and reason= plus stray_bytes/stray_entries for the dispatched arm
+  command: gh run view <run-id> --job cutover --log | grep SOLEUR_WORKSPACES_LUKS_CLEAN_STRAY
+  expected_output: a marker row carrying result= and reason= plus stray_bytes/stray_entries for the
+    dispatched arm. NOTE the job must have COMPLETED — `gh run view --log` errors on an in-progress
+    run, and on the clean_stray arm the run sits pending environment approval for an unbounded
+    window, i.e. exactly when an operator is most likely to reach for this. Use
+    `gh run view <run-id> --log-failed` for the refusal arms.
 ```
 
 No `ssh` appears in any verification command (`hr-no-ssh-fallback-in-runbooks`).
@@ -678,6 +698,7 @@ this revision.
 | Escrow the stray to R2 before deleting | Creates a **third** copy of user data on a new egress path with its own retention/DSAR/Art. 30 obligations — arguably a worse AP-009 outcome. The existing escrow path is sized for a ~2 MB LUKS header, not a bulk dataset. |
 | Delete unconditionally with a loud message | Asserts the redundancy claim rather than leaving it falsifiable. |
 | A separate single-purpose cleanup workflow | Would duplicate ~40 lines of subtle, security-load-bearing plumbing (CF Tunnel bridge, persistent-`STATE_DIR` `mktemp`, tar content-carrier, 0600 stdin `.env` with shred trap) **and** create a second workflow that can reach web-1 as root and `rm -rf`. Worse, not cheaper. |
+| **A separate single-purpose cleanup SCRIPT, shipped by the same tar bundle** (surfaced at review, not considered in v1/v2) | Genuinely cheaper than the rejected separate *workflow*: it costs one filename in the existing explicit tar list plus one conditional selecting which file to `bash`, reuses the bridge / `.env` / shred trap / concurrency group / reviewer gate, and inherits every helper via the `BASH_SOURCE` sourced-detection guard that already exists for the verify harness. Its real payoff is structural — `assert_mode_exclusive()` and T4h exist *only* because both modes share one main body in which ROLLBACK's `exit 0` shadows the block below it; separate entrypoints make the modes exclusive **by construction** and delete a guard, a drift reason, a test case, and a class of operator error. **Not adopted here** because the deletion is a one-shot remediation of a specific incident rather than a standing verb, and co-location keeps the stray guard, its magnitude probe, and the deletion that resolves it readable in one place — but the correctness tax is real and this row records it. Revisit if a third mode (`CONFIRM_WIPE`) lands in the same body. |
 | Move the stray guard below the `DRY_RUN` short-circuit | Makes every future rehearsal green over the exact defect that caused this incident (D4). |
 | Make the guard non-fatal in the dry-run arm with a distinct marker | Genuinely separable and would unwedge rehearsals in a 3-line PR — but the stray must go before the real freeze regardless, so the deletion path is needed either way, and it re-opens the certification gap D4 holds shut. |
 | Add a `--force` escape hatch to `prepare_staging_target` | Puts the `rm` inside the function T4c protects, forcing T4c to be weakened — exactly what the constraint forbids. |

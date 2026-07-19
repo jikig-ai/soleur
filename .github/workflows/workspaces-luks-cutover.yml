@@ -173,16 +173,40 @@ jobs:
           STAGING_PATH: /mnt/data-luks
           MOUNT_PATH: /mnt/data
         run: |
-          set -euo pipefail
+          set -uo pipefail
           [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::CF Tunnel SSH bridge did not export WEB_HOST_SSH — cannot reach web-1."; exit 1; }
+          # The remote body runs under `set -e` so a mid-sequence failure aborts rather than
+          # emitting a TRUNCATED banner, which is indistinguishable from a clean result.
+          # `unique_count` is computed to the SAME depth the script's subset check uses (2): at
+          # depth 1 the entries are infrastructure directories (`workspaces`, `plugins`, `redis`)
+          # that the stray necessarily mirrors, so a depth-1 comparison is always empty and tells
+          # the approver nothing. Only the COUNT is published — the names at depth 2 are per-user
+          # workspace ids, and this job is UNGATED, so publishing them would put user identifiers
+          # in the run log of a job any actor with dispatch access can trigger.
           # shellcheck disable=SC2086
-          PROBE="$(${WEB_HOST_SSH} "$WEB_HOST" "S='$STAGING_PATH'; M='$MOUNT_PATH'; \
+          rc=0
+          PROBE="$(${WEB_HOST_SSH} "$WEB_HOST" "set -e; S='$STAGING_PATH'; M='$MOUNT_PATH'; \
             if mountpoint -q \"\$S\"; then echo 'state=MOUNTPOINT'; exit 0; fi; \
             if [ -z \"\$(ls -A \"\$S\" 2>/dev/null)\" ]; then echo 'state=EMPTY'; exit 0; fi; \
-            echo \"state=STRAY bytes=\$(du -s --block-size=1 \"\$S\" 2>/dev/null | cut -f1) entries=\$(find \"\$S\" -mindepth 1 -maxdepth 1 -printf '.' 2>/dev/null | wc -c)\"; \
-            echo 'names:'; find \"\$S\" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | sort; \
-            echo 'unique_to_stray:'; \
-            find \"\$S\" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | while IFS= read -r e; do [ -e \"\$M/\$e\" ] || echo \"\$e\"; done" || true)"
+            echo \"state=STRAY bytes=\$(du -s --block-size=1 \"\$S\" 2>/dev/null | cut -f1) entries=\$(find \"\$S\" -mindepth 1 -maxdepth 1 -printf '.' | wc -c)\"; \
+            u=0; while IFS= read -r -d '' e; do [ -e \"\$M/\$e\" ] || u=\$((u+1)); done < <(find \"\$S\" -mindepth 1 -maxdepth 2 -printf '%P\0'); \
+            echo \"unique_to_stray_count=\$u\"")" || rc=$?
+
+          # FAIL CLOSED. A silently-empty banner under a heading that reads "What will be deleted"
+          # is worse than no banner: the approver reads absence as "nothing unique, safe to
+          # approve". This job's ONLY purpose is that the approver can see what they authorize, so
+          # an unreadable probe must block rather than degrade to a green step with an empty block.
+          if [[ $rc -ne 0 || -z "$PROBE" || "$PROBE" != state=* ]]; then
+            {
+              echo "## PROBE FAILED — DO NOT APPROVE"
+              echo ""
+              echo "Could not read \`${STAGING_PATH}\` on web-1 (rc=${rc}). The deletion's magnitude is **unknown**,"
+              echo "so there is nothing here for an approver to evaluate. Re-dispatch once web-1 is reachable."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::AP-009 probe failed (rc=${rc}) — refusing to page an approver for a user-data deletion with no magnitude shown."
+            exit 1
+          fi
+
           {
             echo "## AP-009 DEVIATION — pending approval will DELETE USER DATA"
             echo ""
@@ -194,15 +218,17 @@ jobs:
             echo "to \`${STAGING_PATH}\` except the misdirected rsync of \`${MOUNT_PATH}\`. The canonical copy at"
             echo "\`${MOUNT_PATH}\` is retained and is **not** touched."
             echo ""
-            echo "### What will be deleted (top-level only)"
+            echo "### Magnitude"
             echo ""
             echo '```'
             echo "${PROBE}"
             echo '```'
             echo ""
-            echo "**If \`unique_to_stray:\` lists ANY entry, do NOT approve** — the duplicate premise is falsified"
-            echo "and the run will refuse anyway. If \`state=MOUNTPOINT\` or \`state=EMPTY\`, there is nothing to"
-            echo "delete and the run will refuse or no-op."
+            echo "**If \`unique_to_stray_count\` is anything other than 0, do NOT approve** — the duplicate premise"
+            echo "is falsified (something other than the misdirected rsync wrote there) and the run will refuse"
+            echo "anyway. If \`state=MOUNTPOINT\` or \`state=EMPTY\`, there is nothing to delete and the run will"
+            echo "refuse or no-op. Entry names are deliberately withheld here: at the depth that discriminates,"
+            echo "they are per-user workspace identifiers and this job is ungated."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Tear down cloudflared SSH bridge
@@ -216,6 +242,10 @@ jobs:
           fi
           if [[ -n "${CLOUDFLARED_PID:-}" ]]; then kill "$CLOUDFLARED_PID" 2>/dev/null || true; fi
           if [[ -n "${CI_SSH_KEYFILE:-}" && -f "$CI_SSH_KEYFILE" ]]; then shred -u "$CI_SSH_KEYFILE" 2>/dev/null || true; fi
+          # The composite action's caller-side teardown contract ends with this tail. Without it a
+          # bridge flake on the probe path is undiagnosable: the probe reports rc but not WHY, and
+          # SSH is not an available recovery path (hr-no-ssh-fallback-in-runbooks).
+          if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi
 
   cutover:
     needs: preflight
@@ -385,7 +415,10 @@ jobs:
           # needs no device at all, while this lookup HARD-FAILS unless exactly one
           # soleur-web-platform-data-luks volume exists. Post-incident that volume may legitimately
           # be detached or absent — which would make the cleanup path unreachable for a reason
-          # entirely unrelated to the cleanup. WORKSPACES_LUKS_DEV is then omitted from the .env.
+          # entirely unrelated to the cleanup. WORKSPACES_LUKS_DEV is still WRITTEN to the .env on
+          # that arm (the printf format is unconditional) but carries an EMPTY value, which is
+          # harmless: clean_stray() exits well above the `[ -n "$FRESH_DEV" ]` assertion that would
+          # otherwise reject it. Do not move that assertion earlier without revisiting this.
           LUKS_DEV=""
           if [[ "$CLEAN_STRAY" != "1" ]]; then
             HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN --plain -p soleur -c prd_terraform)"

@@ -48,7 +48,10 @@ scratch = sys.argv[2]
 verdicts = []
 
 def check(name, cond, detail=""):
-    verdicts.append(("ok" if cond else "FAIL", name, str(detail)[:160]))
+    # Strip tab/newline: the bash reader below splits on tabs, so an embedded one in a YAML value
+    # would desync the loop and manufacture a phantom verdict.
+    d = str(detail)[:160].replace("\t", " ").replace("\n", " ").replace("\r", " ")
+    verdicts.append(("ok" if cond else "FAIL", name.replace("\t", " "), d))
 
 jobs = wf.get("jobs") or {}
 check("jobs are exactly preflight + cutover", set(jobs) == {"preflight", "cutover"}, sorted(jobs))
@@ -101,6 +104,8 @@ if run_step:
 # Extract every run: body so bash can syntax-check them, and the pre-gate step so bash can EXECUTE
 # it against real input combinations.
 n = 0
+pregate_job = None
+pregate_step = None
 for jn, j in jobs.items():
     for s in (j.get("steps") or []):
         r = s.get("run")
@@ -110,10 +115,34 @@ for jn, j in jobs.items():
         open(f"{scratch}/run-{n}.sh", "w").write(r)
         if "Validate dispatch" in str(s.get("name", "")):
             open(f"{scratch}/pregate.sh", "w").write(r)
+            pregate_job, pregate_step = jn, s
 check("extracted at least one run: body for syntax checking", n > 0, n)
 
-with open(f"{scratch}/verdicts.tmp", "w") as f:
-    pass
+# THE STEP WRAPPER, not just its body. The behavioral leg below executes the extracted `run:`
+# script, which observes the shell and NOTHING around it — so moving the step into the gated
+# `cutover` job, disabling it with `if: false`, or marking it continue-on-error all leave every
+# behavioral assertion passing while the guard is inert or runs after a reviewer was paged.
+check("the pre-gate step exists", pregate_step is not None)
+if pregate_step is not None:
+    check("the pre-gate runs in the UNGATED preflight job (a gated job would page the reviewer first)",
+          pregate_job == "preflight", pregate_job)
+    check("the pre-gate step is unconditional (no if:)", "if" not in pregate_step,
+          pregate_step.get("if"))
+    check("the pre-gate step is not continue-on-error (that would make every refusal advisory)",
+          not pregate_step.get("continue-on-error"))
+
+# `needs: preflight` alone does not prove a preflight FAILURE blocks the cutover: an
+# `if: always()` on the job would run it anyway, after a refused dispatch.
+check("cutover declares no job-level if: (a preflight failure must block it)",
+      "if" not in (jobs.get("cutover") or {}), (jobs.get("cutover") or {}).get("if"))
+
+# Key-presence on the env is not enough: a hardcoded CLEAN_STRAY: '1' satisfies "in env" while
+# sending the deletion flag to the host on EVERY dispatch.
+if run_step:
+    cs_env = str((run_step[0].get("env") or {}).get("CLEAN_STRAY", ""))
+    check("CLEAN_STRAY env derives from inputs.clean_stray, not a hardcoded value",
+          "inputs.clean_stray" in cs_env, cs_env)
+
 for v in verdicts:
     print("\t".join(v))
 PY
@@ -185,4 +214,13 @@ else
 fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
+
+# NON-DEGENERACY FLOOR — see the sibling rationale in workspaces-luks-staging.test.sh. A python
+# leg that dies before emitting verdicts, or a `check()` block deleted wholesale, would otherwise
+# leave this suite reporting "0 passed, 0 failed" and exiting 0.
+WF_MIN_ASSERTIONS=32
+if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
+  echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — the structural leg produced fewer verdicts than expected; a green run here would be vacuous"
+  exit 1
+fi
 [[ "$fail" -eq 0 ]] || exit 1
