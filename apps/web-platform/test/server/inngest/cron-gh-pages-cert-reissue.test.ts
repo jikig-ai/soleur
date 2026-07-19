@@ -54,10 +54,20 @@ import {
   cronGhPagesCertReissue,
   cronGhPagesCertReissueOnFailure,
   EXPECTED_TOGGLE_RECORDS,
+  // #6698
+  checkDnsPropagated,
+  resolveProbeOnly,
+  BENIGN_OUTCOMES,
+  REISSUE_ALLOWED_STATES,
+  MAX_DNS_ONLY_WINDOW_MS,
+  TOTAL_DNS_ONLY_WINDOW_MS,
+  DNS_GATE_MAX_ATTEMPTS,
   type ReissueDeps,
   type ReissueStep,
   type CfDnsRecord,
   type PreconditionInputs,
+  type DnsPropagationInputs,
+  type ReissueRunContext,
 } from "@/server/inngest/functions/cron-gh-pages-cert-reissue";
 
 const reportSilentFallbackMock = vi.mocked(reportSilentFallback);
@@ -113,6 +123,38 @@ interface FakeConfig {
   failCnameOn?: "null" | "set";
   writeDoesNotStick?: boolean; // setRecordProxied returns true but does not mutate
   listCount?: number; // force listToggleRecords to return this many records
+  dnsPropagation?: Partial<DnsPropagationInputs>; // #6698 gate observations
+}
+
+/**
+ * A fully-propagated DNS-only reading: GitHub anycast on A, no AAAA, ACME path
+ * GitHub-shaped. This is the DEFAULT for the fake so the pre-existing
+ * remediation scenarios still reach the poll loop — the gate is additive, not a
+ * behavior change for an already-healthy zone.
+ */
+function propagatedDns(): DnsPropagationInputs {
+  return {
+    resolved4: [
+      "185.199.108.153",
+      "185.199.109.153",
+      "185.199.110.153",
+      "185.199.111.153",
+    ],
+    resolved6: [],
+    resolve6Error: "ENODATA",
+    acmeApexStatus: 404,
+    acmeWwwStatus: 404,
+    acmeGithubShaped: true,
+  };
+}
+
+/**
+ * Run context for the pre-existing scenarios: REMEDIATION mode (probeOnly
+ * false), with a known runId/attempt so AC5 can assert the values propagate
+ * rather than merely typecheck.
+ */
+function remediationCtx(): ReissueRunContext {
+  return { probeOnly: false, runId: "run-test", attempt: 0 };
 }
 
 function makeFake(cfg: FakeConfig = {}) {
@@ -127,6 +169,7 @@ function makeFake(cfg: FakeConfig = {}) {
     setPagesCname: [] as Array<string | null>,
     sleep: [] as number[],
     getPages: 0,
+    gatherDnsPropagation: 0,
   };
   const resolveState = () => {
     if (cfg.stateOverride) return cfg.stateOverride;
@@ -165,6 +208,10 @@ function makeFake(cfg: FakeConfig = {}) {
     },
     async gatherPreconditions() {
       return cfg.preconditions ?? healthyPreconditions();
+    },
+    async gatherDnsPropagation() {
+      calls.gatherDnsPropagation += 1;
+      return { ...propagatedDns(), ...(cfg.dnsPropagation ?? {}) };
     },
     sleep: async (ms) => {
       calls.sleep.push(ms);
@@ -258,7 +305,7 @@ describe("setRecordsProxied — partial-toggle abort", () => {
 describe("runReissueSteps — Scenario 1 (happy path, issued)", () => {
   it("bad_authz + healthy → toggle → reissue → issued → restore", async () => {
     const { deps, state, calls } = makeFake({ willIssue: true });
-    const result = await runReissueSteps(makeStep(), deps, deps.logger);
+    const result = await runReissueSteps(makeStep(), deps, deps.logger, remediationCtx());
 
     expect(result.outcome).toBe("issued");
     expect(result.finalState).toBe("issued");
@@ -274,7 +321,7 @@ describe("runReissueSteps — Scenario 1 (happy path, issued)", () => {
 describe("runReissueSteps — Scenario 1b (approved is also healthy)", () => {
   it("poll observing state=approved → outcome issued (SURV-B guard)", async () => {
     const { deps } = makeFake({ willIssue: true, issuedState: "approved" });
-    const result = await runReissueSteps(makeStep(), deps, deps.logger);
+    const result = await runReissueSteps(makeStep(), deps, deps.logger, remediationCtx());
     expect(result.outcome).toBe("issued");
     expect(result.finalState).toBe("approved");
   });
@@ -283,7 +330,7 @@ describe("runReissueSteps — Scenario 1b (approved is also healthy)", () => {
 describe("runReissueSteps — Scenario 3 (poll timeout)", () => {
   it("never issues → poll_timeout + restore still runs", async () => {
     const { deps, state } = makeFake({ willIssue: false });
-    const result = await runReissueSteps(makeStep(), deps, deps.logger);
+    const result = await runReissueSteps(makeStep(), deps, deps.logger, remediationCtx());
 
     expect(result.outcome).toBe("poll_timeout");
     expect(result.attempts).toBeGreaterThan(1);
@@ -297,7 +344,7 @@ describe("runReissueSteps — Scenario 4 (stuck-state allowlist — zero writes)
     "state=%s → not_stuck, ZERO CF/GitHub writes",
     async (stateOverride) => {
       const { deps, calls } = makeFake({ stateOverride });
-      const result = await runReissueSteps(makeStep(), deps, deps.logger);
+      const result = await runReissueSteps(makeStep(), deps, deps.logger, remediationCtx());
 
       expect(result.outcome).toBe("not_stuck");
       expect(calls.setRecordProxied).toHaveLength(0);
@@ -311,7 +358,7 @@ describe("runReissueSteps — Scenario 5 (precondition blocked)", () => {
     const { deps, calls } = makeFake({
       preconditions: { ...healthyPreconditions(), caaCount: 1 },
     });
-    const result = await runReissueSteps(makeStep(), deps, deps.logger);
+    const result = await runReissueSteps(makeStep(), deps, deps.logger, remediationCtx());
 
     expect(result.outcome).toBe("precondition_blocked");
     expect(result.preconditionResults?.caaPermissive).toBe(false);
@@ -323,7 +370,7 @@ describe("runReissueSteps — Scenario 5 (precondition blocked)", () => {
 describe("runReissueSteps — Scenario 6 (reissue_failed → abort→restore)", () => {
   it("partial apex toggle → reissue_failed + restore reasserts proxied=true", async () => {
     const { deps, state, calls } = makeFake({ failToggleOffIds: ["a3"] });
-    const result = await runReissueSteps(makeStep(), deps, deps.logger);
+    const result = await runReissueSteps(makeStep(), deps, deps.logger, remediationCtx());
 
     expect(result.outcome).toBe("reissue_failed");
     expect(result.detail).toContain("partial-toggle");
@@ -333,7 +380,7 @@ describe("runReissueSteps — Scenario 6 (reissue_failed → abort→restore)", 
 
   it("cname:null PUT 403 → reissue_failed (cname-put) + restore", async () => {
     const { deps, state } = makeFake({ failCnameOn: "null" });
-    const result = await runReissueSteps(makeStep(), deps, deps.logger);
+    const result = await runReissueSteps(makeStep(), deps, deps.logger, remediationCtx());
 
     expect(result.outcome).toBe("reissue_failed");
     expect(result.detail).toContain("cname-put");

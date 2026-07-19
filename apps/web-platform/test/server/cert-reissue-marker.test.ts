@@ -10,11 +10,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const { lines } = vi.hoisted(() => ({ lines: [] as string[] }));
 
 vi.mock("pino", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("pino")>();
+  // pino ships as CJS (`export =`), so the namespace's interop `default` is what
+  // `import pino from "pino"` actually binds. Typed loosely on purpose.
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  const realPino = actual.default as (o: unknown, d: unknown) => unknown;
   return {
     ...actual,
     default: (opts: unknown) =>
-      (actual.default as unknown as (o: unknown, d: unknown) => unknown)(opts, {
+      realPino(opts, {
         write: (s: string) => {
           lines.push(s);
         },
