@@ -535,6 +535,32 @@ satisfies the existing `(...a: unknown[]) => void` property shape exactly. Leavi
 untouched is a deliberate simplification over the rejected Option A, which would have
 narrowed a type consumed by 68 modules to no runtime benefit.
 
+
+### Precedent diff (deepen-plan Phase 4.4)
+
+Two in-repo middlewares establish the canonical shape. The new one MUST match it.
+
+| Aspect | `sentry-correlation.ts` | `run-log.ts` | `bound-logger.ts` (new) |
+| --- | --- | --- | --- |
+| Constructor | `new InngestMiddleware({ name, init() {...} })` | same | **same** |
+| Nesting | `init()` → `onFunctionRun({ctx, fn})` → `{ transformInput, beforeExecution, transformOutput }` | `init()` → `onFunctionRun({ctx, fn})` → `{ transformInput, transformOutput }` | `init()` → `onFunctionRun()` → `{ transformInput }` |
+| Scoping | all functions | `if (!(fnId in ROUTINE_METADATA)) return {};` | **all functions** (the bind must be universal — scoping it would leave the un-scoped majority exposed) |
+| `transformInput` returns | nothing (side-effect only) | nothing (captures `attempt`/`maxAttempts`) | **`{ ctx: { logger } }`** — the first in-repo middleware to return a ctx patch |
+
+> ‼️ **Precedent-derived trap — do NOT read `ctx.logger` in `onFunctionRun`.** `run-log.ts`
+> documents this explicitly: *"attempt / maxAttempts are NOT on onFunctionRun's ctx — that
+> ctx is Inngest's InitialRunInfo (`{ event, runId }` only; 'does not necessarily contain
+> all the data'). The retry-attempt fields live on BaseContext, which is only handed to
+> transformInput."* The same applies to `logger`. Capturing it in `onFunctionRun` would
+> silently yield `undefined`, and the facade would forward to nothing — a **silent
+> log-loss across all 60+ crons**, with no error to detect it. The Phase 2 snippet reads
+> `ctx.logger` inside `transformInput` for exactly this reason.
+>
+> **Novelty callout:** returning a `ctx` patch from `transformInput` is **not** an existing
+> in-repo pattern — both current middlewares return void. The pattern is borrowed from
+> Inngest's own built-in logger middleware (`components/Inngest.js:673-676`), which is the
+> right precedent, but reviewers should scrutinize it as new-to-this-repo.
+
 ### Phase 3 — Verify the fleet-wide blast radius
 
 The brief correctly insists the blast radius is every cron, not one routine. Under Option C

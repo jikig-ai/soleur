@@ -42,6 +42,8 @@ refs: ["#6703", "#6657"]
 
 - [ ] 2.1 Create `apps/web-platform/server/inngest/middleware/bound-logger.ts` exporting `boundLoggerMiddleware`, mirroring `run-log.ts`'s `InngestMiddleware` → `init()` → `onFunctionRun()` → `transformInput({ ctx })` structure.
 - [ ] 2.2 Forward `info`/`warn`/`error` as **arrow closures** over a captured `raw = ctx.logger` (no method shorthand — shorthand reintroduces the `this` dependency).
+- [ ] 2.2a ‼️ **Capture `ctx.logger` inside `transformInput`, NEVER inside `onFunctionRun`.** `run-log.ts` documents that `onFunctionRun`'s ctx is Inngest's `InitialRunInfo` (`{ event, runId }` only); the full run ctx reaches `transformInput` alone. Reading `logger` off the `onFunctionRun` ctx yields `undefined` and the facade forwards to nothing — **silent log loss across all 60+ crons with no error to detect it.**
+- [ ] 2.2b Scope the middleware to **all** functions — do NOT copy `run-log.ts`'s `if (!(fnId in ROUTINE_METADATA)) return {};` gate. Scoping would leave the un-scoped majority exposed to the bug being eliminated.
 - [ ] 2.3 Register in `apps/web-platform/server/inngest/client.ts`: append `boundLoggerMiddleware` **last** in the `middleware` array.
 - [ ] 2.4 Comment the ordering rationale (it wraps an already-composed ctx).
 - [ ] 2.5 **Do NOT** add a `logger:` option to `new Inngest({...})`.
