@@ -362,14 +362,51 @@ fi
 if grep -qE 'touch[[:space:]]+-r' "$FUNC_NC"; then
   # Fixed mode. A2 still reproduces the physics; the SUT no longer runs the unbracketed shape.
   ok "A3: assert_mount_quiesced now brackets the probe with a 'touch -r' root-mtime restore (Phase 2 has landed)"
+  # The restore may be INLINE or EXTRACTED into a helper (it is extracted today, so the same
+  # bracket can be reused by the four die paths without four copies). Anchor the ORDERING on
+  # whichever form is present: an extracted call site proves restore-after-unlink exactly as an
+  # inline `touch -r` does. Resolve the call form first, then fall back to inline.
   # shellcheck disable=SC2016  # literal SUT source text, must not expand
   rm_ln="$(grep -nE '^[[:space:]]*rm -f .*\$probe' "$FUNC_NC" | tail -1 | cut -d: -f1 || true)"
   # shellcheck disable=SC2016  # literal SUT source text, must not expand
-  tr_ln="$(grep -nE 'touch[[:space:]]+-r[[:space:]]+"\$ref"' "$FUNC_NC" | tail -1 | cut -d: -f1 || true)"
+  tr_ln="$(grep -nE '_g4_restore_root_mtime[[:space:]]+"\$mref"' "$FUNC_NC" | tail -1 | cut -d: -f1 || true)"
+  restore_form="extracted call"
+  if [ -z "$tr_ln" ]; then
+    # shellcheck disable=SC2016  # literal SUT source text, must not expand
+    tr_ln="$(grep -nE 'touch[[:space:]]+-r[[:space:]]+"\$ref"' "$FUNC_NC" | tail -1 | cut -d: -f1 || true)"
+    restore_form="inline touch -r"
+  fi
   if [ -n "$rm_ln" ] && [ -n "$tr_ln" ] && [ "$tr_ln" -gt "$rm_ln" ]; then
-    ok "A3-order: the restore (line $tr_ln) sits AFTER the probe unlink (line $rm_ln)"
+    ok "A3-order: the restore ($restore_form, line $tr_ln) sits AFTER the probe unlink (line $rm_ln)"
   else
     fail "A3-order: could not prove restore-after-unlink (unlink='$rm_ln' restore='$tr_ln') — a missing anchor must be loud, never a silent '' comparison"
+  fi
+
+  # When the restore is EXTRACTED, the call site alone proves ordering but says nothing about what
+  # the helper DOES. Without this, deleting the helper's body would keep A3-order green — the
+  # extracted form must not buy a weaker assertion than the inline one it replaced.
+  if [ "$restore_form" = "extracted call" ]; then
+    HELPER="$SCRATCH/restore.body"
+    sed -n '/^_g4_restore_root_mtime() {$/,/^}$/p' "$CUTOVER" | sed -e 's/[[:space:]]*#.*$//' >"$HELPER"
+    if [ ! -s "$HELPER" ]; then
+      fail "A3-helper: assert_mount_quiesced calls _g4_restore_root_mtime but the helper body could not be located — the ordering assertion above is vacuous without it"
+    else
+      # shellcheck disable=SC2016  # literal SUT source text, must not expand
+      if grep -qE 'touch[[:space:]]+-r[[:space:]]+"\$ref"[[:space:]]+"\$MOUNT"' "$HELPER"; then
+        ok "A3-helper: _g4_restore_root_mtime stamps \$MOUNT's mtime back from the reference file"
+      else
+        fail "A3-helper: _g4_restore_root_mtime does not carry 'touch -r \"\$ref\" \"\$MOUNT\"' — the call site is ordered correctly but restores nothing"
+      fi
+      # The read-back is the whole point: a truncating touch exits 0, so an exit-status-only check
+      # would re-introduce the defect silently. probe_restored must be MEASURED, not asserted.
+      # shellcheck disable=SC2016  # literal SUT source text, must not expand
+      if grep -qE '\[[[:space:]]+"\$want"[[:space:]]+!=[[:space:]]+"\$got"[[:space:]]+\]' "$HELPER" \
+         && grep -qE '\bdie\b' "$HELPER"; then
+        ok "A3-helper-readback: the helper re-stats \$MOUNT and die()s on skew — the restore is measured, not assumed"
+      else
+        fail "A3-helper-readback: no want-vs-got comparison + die in _g4_restore_root_mtime — a truncating 'touch' exits 0, so without the read-back the restore can silently no-op"
+      fi
+    fi
   fi
 else
   # Defect mode — today. This is the assertion that pins the bug: it holds while the script is

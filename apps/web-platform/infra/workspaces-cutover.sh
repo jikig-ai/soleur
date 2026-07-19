@@ -445,14 +445,92 @@ freeze_writers() {
 #      mount, instead of merely assuming it. Mirrors verify_byte_identity, which captures stdout and
 #      stderr separately and treats a probe error as fail-closed for the same reason.
 #  (d) holders are EMITTED before die(), so the abort self-reports (the #6604 defect class).
+# emit_root_mtime — root-mtime telemetry for the G4 bracket (#6733).
+#
+# TWO DISTINCT FIELDS, deliberately not collapsed into one:
+#   probe_restored        — did OUR restore land? Measured by _g4_restore_root_mtime's read-back
+#                           (which die()s on skew), so reaching this emitter means yes.
+#   src_moved_after_probe — did the root's mtime differ across the whole bracket ANYWAY? After a
+#                           landed restore that can only be a FOREIGN writer, which is a completely
+#                           different incident from our own probe leaking. Collapsing them would
+#                           make a real concurrent write read as a self-inflicted one.
+#
+# Comparison is on `stat -c %y` (full nanosecond precision) — NOT %Y. rsync's dir-mtime comparison
+# happens to be whole-second (measured, run of workspaces-luks-verify-root-mtime.test.sh), so %Y
+# would be *sufficient* for C1; %y is used because a telemetry channel that rounds is one that
+# cannot later prove a sub-second foreign write happened at all.
+#
+# A failed `stat` emits the literal `unknown` — never a silent default that would read as "clean".
+emit_root_mtime() {
+  local phase="${1:-unspecified}" pre="${2:-unknown}" post="${3:-unknown}" moved row
+  if [ "$pre" = unknown ] || [ "$post" = unknown ]; then moved=unknown
+  elif [ "$pre" = "$post" ]; then moved=no
+  else moved=yes; fi
+  row="SOLEUR_WORKSPACES_LUKS_ROOT_MTIME feature=workspaces-luks op=workspaces-luks-root-mtime phase=$(_vscrub "$phase") mount=$(_vscrub "$MOUNT") src_pre_probe=$(_vscrub "$pre") src_post_probe=$(_vscrub "$post") probe_restored=yes src_moved_after_probe=$(_vscrub "$moved") host=$(hostname 2>/dev/null)"
+  echo "$row"; logger -t "$LUKS_LOG_TAG" -- "$row" 2>/dev/null || true
+}
+
+# ensure_mtime_tools — fail-closed instrument guard for the root-mtime bracket below (#6733).
+#
+# Deliberately NOT added to clean_stray()'s `for tool in …` preflight (:1019): that loop guards the
+# DELETION path, and assert_mount_quiesced is never reached from clean_stray() — it runs at
+# `freeze` (:426) and `pre-verify` (:1428). Registering the dependency there would have been a gate
+# that pins nothing. This mirrors ensure_lsof's shape instead, beside the caller it actually
+# protects. No apt fallback: touch/stat are coreutils (Essential: yes on Debian/Ubuntu), so their
+# absence means a broken host, not a missing package.
+ensure_mtime_tools() {
+  local t
+  for t in touch stat find; do
+    command -v "$t" >/dev/null 2>&1 || {
+      emit_drift g4_mtime_tool_missing
+      die "required probe '$t' is not on PATH — the G4 root-mtime save/restore bracket (#6733) cannot run. Without it this gate perturbs the very tree C1 then certifies, so every cutover safe-aborts on a byte-identical copy. Refusing to run a gate that corrupts its own evidence."
+    }
+  done
+}
+
+# _g4_depth1_fingerprint — NUL-delimited, locale-stable hash of $MOUNT's immediate children.
+# Newline-safe by construction: a hostile filename carrying \n cannot forge an entry boundary.
+# Proves the probe bracket is listing-NEUTRAL (nothing added, nothing removed) before the restore
+# stamps the root's mtime back — otherwise a create+delete pair landing inside the bracket would
+# have its evidence overwritten by our own restore.
+_g4_depth1_fingerprint() {
+  find "$MOUNT" -mindepth 1 -maxdepth 1 -print0 2>/dev/null \
+    | LC_ALL=C sort -z | sha256sum | cut -d' ' -f1
+}
+
 assert_mount_quiesced() {
   local phase="${1:-freeze}" probe="$MOUNT/.luks-g4-probe.$$" lout lerr rc holders
   ensure_lsof
+  ensure_mtime_tools
+
+  # --- ROOT-MTIME BRACKET (#6733) ---------------------------------------------------------------
+  # This gate creates an entry under $MOUNT (exec 9>) and unlinks it (rm -f). BOTH mutate the mtime
+  # of $MOUNT's ROOT DIRECTORY. At the `pre-verify` call site (:1428) that lands BETWEEN the pass-2
+  # delta rsync and the C1 itemized verify, so C1 correctly reports `.d..t...... ./` on an otherwise
+  # byte-identical tree and the cutover safe-aborts. Five real freezes aborted this way.
+  #
+  # C1 was RIGHT every time. The defect is here: a gate that certifies a tree must not perturb it.
+  # (Measured, run 29706401639: the same diff appeared on the wrong device AND on the correct one —
+  # the probe touches the SOURCE, so device identity was never the variable.)
+  #
+  # We save the root's mtime to a reference file and stamp it back after the unlink. `touch -r`
+  # rather than a stat/`touch -d` string round-trip: no format/locale/precision parsing in the loop,
+  # and the reference file carries the full timestamp the kernel gave us.
+  local mref mt_pre mt_post fp_pre fp_post
+  mref="$(mktemp)"
+  if ! touch -r "$MOUNT" "$mref"; then
+    rm -f "$mref"; emit_drift g4_root_mtime_capture_failed
+    die "cannot capture \$MOUNT's root mtime before the G4 probe (phase=${phase}) — refusing to run a probe whose perturbation could not be undone"
+  fi
+  mt_pre="$(stat -c %y "$MOUNT" 2>/dev/null || echo unknown)"
+  fp_pre="$(_g4_depth1_fingerprint)"
+
   lout="$(mktemp)"; lerr="$(mktemp)"
   # exec 9> rather than touch: an open fd is what lsof reports, and it cannot be missed by a
   # racing reaper the way a bare file could.
   if ! exec 9>"$probe"; then
-    rm -f "$lout" "$lerr"; emit_drift g4_probe_uncreatable
+    # No restore here: the create FAILED, so nothing perturbed the root and there is nothing to undo.
+    rm -f "$lout" "$lerr" "$mref"; emit_drift g4_probe_uncreatable
     die "cannot create the G4 probe file under $MOUNT (phase=${phase}) — the mount is not writable; refusing to certify quiescence on a mount we cannot even open"
   fi
   lsof +D "$MOUNT" >"$lout" 2>"$lerr"; rc=$?
@@ -460,20 +538,74 @@ assert_mount_quiesced() {
   # rc 0 = holders found, rc 1 = none found OR an error. Anything else is an outright probe failure.
   if [ "$rc" -gt 1 ]; then
     local etail; etail="$(_vscrub "$(tail -c 400 "$lerr" 2>/dev/null || true)")"
-    rm -f "$lout" "$lerr" "$probe"; emit_drift g4_probe_failed
+    rm -f "$lout" "$lerr" "$probe"; _g4_restore_root_mtime "$mref" "$phase" best-effort
+    emit_drift g4_probe_failed
     die "the G4 lsof probe itself FAILED (rc=${rc}, phase=${phase}) — cannot certify quiescence; stderr: ${etail}"
   fi
   # Positive control: our own held fd MUST appear, else lsof never scanned $MOUNT.
   if ! grep -qF -- "$probe" "$lout"; then
     local etail; etail="$(_vscrub "$(tail -c 400 "$lerr" 2>/dev/null || true)")"
-    rm -f "$lout" "$lerr" "$probe"; emit_drift g4_probe_blind
+    rm -f "$lout" "$lerr" "$probe"; _g4_restore_root_mtime "$mref" "$phase" best-effort
+    emit_drift g4_probe_blind
     die "lsof did not report this script's own open fd under $MOUNT (rc=${rc}, phase=${phase}) — the G4 straggler probe is BLIND, not clean; refusing to freeze on unproven quiescence. stderr: ${etail}"
   fi
   holders="$(grep -vF -- "$probe" "$lout" | grep -v '^COMMAND ' || true)"
   rm -f "$lout" "$lerr" "$probe"
+
+  # The unlink must have LANDED before we stamp the mtime back — otherwise the restore would hide a
+  # straggler probe file from the very fingerprint that exists to catch it.
+  if [ -e "$probe" ]; then
+    _g4_restore_root_mtime "$mref" "$phase" best-effort; emit_drift g4_probe_unremovable
+    die "the G4 probe file survived its own unlink (phase=${phase}) — refusing to restore \$MOUNT's mtime over a tree that still carries our artifact"
+  fi
+
+  # Listing must be byte-identical across the bracket. A foreign create+delete PAIR landing inside
+  # the bracket is invisible to mtime alone once we restore, so this is the only thing standing
+  # between us and stamping over someone else's write. (A bare foreign `touch` of the root inside
+  # the bracket remains an OPEN blind spot — see the residual note below.)
+  fp_post="$(_g4_depth1_fingerprint)"
+  if [ "$fp_pre" != "$fp_post" ]; then
+    _g4_restore_root_mtime "$mref" "$phase" best-effort; emit_drift g4_bracket_listing_changed
+    die "\$MOUNT's depth-1 listing changed across the G4 probe bracket (phase=${phase}) — a writer added or removed an entry while we held the mount; refusing to restore the root mtime over a real concurrent write"
+  fi
+
+  _g4_restore_root_mtime "$mref" "$phase"
+  mt_post="$(stat -c %y "$MOUNT" 2>/dev/null || echo unknown)"
+  emit_root_mtime "$phase" "$mt_pre" "$mt_post"
+
   if [ -n "$holders" ]; then
     emit_freeze_holders "$holders"
     die "lsof +D $MOUNT non-empty (phase=${phase}) — a straggler still holds the mount (G4); see the SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER marker for the offending process(es)"
+  fi
+}
+
+# _g4_restore_root_mtime <ref-file> <phase> — stamp $MOUNT's mtime back and PROVE it landed.
+#
+# The read-back is the point. A truncating or silently-degraded `touch` exits 0, so an exit-status
+# check would re-introduce the very defect this bracket exists to remove — invisibly, and only on
+# the hosts where it matters. `probe_restored` is therefore MEASURED, never asserted.
+# MODE is load-bearing, not a convenience:
+#   strict       (success path) — a failed restore leaves the tree perturbed and C1 is next, so the
+#                                 run MUST abort here or it aborts confusingly at C1 instead.
+#   best-effort  (die paths)    — we are ALREADY dying with a more informative message (probe
+#                                 failed / probe blind / straggler holds the mount). A die() here
+#                                 would preempt it and replace a diagnosable G4 verdict with a
+#                                 restore-skew one, re-creating the #6604 undiagnosable-abort class
+#                                 this gate was built to end. Emit the drift, keep going, let the
+#                                 real die() speak.
+_g4_restore_root_mtime() {
+  local ref="$1" phase="$2" mode="${3:-strict}" want got
+  want="$(stat -c %y "$ref" 2>/dev/null || echo unknown)"
+  touch -r "$ref" "$MOUNT" 2>/dev/null || true
+  got="$(stat -c %y "$MOUNT" 2>/dev/null || echo unknown)"
+  rm -f "$ref"
+  if [ "$want" = unknown ] || [ "$got" = unknown ] || [ "$want" != "$got" ]; then
+    emit_drift g4_root_mtime_restore_skew
+    if [ "$mode" != strict ]; then
+      log "G4 root-mtime restore did not land (phase=${phase}; wanted='${want}' got='${got}') — reporting it, but NOT preempting the abort already in flight"
+      return 0
+    fi
+    die "the G4 root-mtime restore did NOT land (phase=${phase}; wanted='${want}' got='${got}') — \$MOUNT's mtime is still perturbed by this gate's own probe, which is exactly what makes C1 abort on a byte-identical tree (#6733). Refusing to proceed on a tree this gate corrupted."
   fi
 }
 
@@ -671,21 +803,41 @@ disarm_dead_man() {
 # Staging-target preparation (#6588) — lay a filesystem INSIDE the mapper, fail-close the
 # mount, and ANCHOR every certified path to its intended device.
 #
-# The 2026-07-19 freeze (run 29695998561) safe-aborted on C1 with a single `.d..t...... ./`
-# diff. C1 was RIGHT; the defect was one layer below what C1 can report. This script
-# luksFormat'd the device and luksOpen'd the mapper but NEVER ran mkfs, so the mapper held no
-# filesystem and `mount "$MAPPER" "$STAGING"` failed with `wrong fs type, bad option, bad
-# superblock`. Under `set -uo pipefail` with NO `-e` that failure was SWALLOWED, and the
-# `mkdir -p "$STAGING"` immediately above had already created /mnt/data-luks as a plain
-# directory ON THE ROOT DISK. Every downstream step then targeted the root disk. The copy
-# succeeded byte-for-byte onto the wrong block device; the rsync itemize vocabulary cannot
-# express "correct copy, wrong target".
+# The 2026-07-19 freeze (run 29695998561) exposed a real defect HERE: this script luksFormat'd
+# the device and luksOpen'd the mapper but NEVER ran mkfs, so the mapper held no filesystem and
+# `mount "$MAPPER" "$STAGING"` failed with `wrong fs type, bad option, bad superblock`. Under
+# `set -uo pipefail` with NO `-e` that failure was SWALLOWED, and the `mkdir -p "$STAGING"`
+# immediately above had already created /mnt/data-luks as a plain directory ON THE ROOT DISK.
+# Every downstream step then targeted the root disk. The copy succeeded byte-for-byte onto the
+# wrong block device; the rsync itemize vocabulary cannot express "correct copy, wrong target".
+#
+# CORRECTION (#6733, measured 2026-07-20 — run 29706401639). This block previously attributed
+# that run's single `.d..t...... ./` C1 diff to the wrong-device copy. **That attribution was
+# wrong.** Run 29706401639 was the first real cutover carrying the mkfs fix; the staging target
+# was PROVABLY correct (`STAGING_TARGET result=ok`, mapper carries ext4, L1/L2/L5b green) and C1
+# emitted the IDENTICAL `.d..t...... ./`. Same diff on the wrong device and on the right one, so
+# the diff was never diagnostic of device identity.
+#
+# The actual cause is `assert_mount_quiesced` (G4): its probe creates and unlinks an entry inside
+# $MOUNT, which advances the transfer ROOT's mtime, and it runs at `pre-verify` BETWEEN the pass-2
+# delta rsync and C1. C1 was correct on all five aborts — it reported a real perturbation of the
+# source tree, inflicted by this script's own gate. Fixed by the root-mtime bracket in
+# assert_mount_quiesced; pinned by workspaces-luks-verify-root-mtime.test.sh. C1 itself is
+# byte-unchanged and was NOT narrowed — narrowing it would have silenced the one signal that
+# catches a wrong-device copy, which is precisely what the paragraph above describes.
 #
 # The sibling git-data volume carries the IDENTICAL `mountpoint … || mount …` line
 # (cloud-init-git-data.yml:159-170) — but under `set -euo pipefail`, where a failed mount is
 # fatal. This script copied the line's SHAPE into a no-`-e` regime, converting a fail-closed
 # line into a fail-open one, and dropped the `mkfs.ext4 /dev/mapper/git-data` that makes the
 # mount succeed at all. git-data-luks.tf:73-78 documents the mechanism verbatim.
+#
+# THE SECOND INVARIANT (#6733): a gate that certifies a tree must not PERTURB that tree. G4 held
+# the first invariant perfectly — it anchored, it fail-closed, it carried a positive control — and
+# still broke every cutover, because certifying quiescence meant writing into the very directory
+# whose byte-identity C1 was about to check. Any probe that mutates its subject is measuring
+# itself. Both invariants are needed: the first stops a gate certifying the wrong thing, the
+# second stops a gate from making the right thing look wrong.
 #
 # THE INVARIANT: a gate that certifies a path must first anchor that path to its intended
 # device. C1, the `du` assert, `git fsck` and the G3 manifest are all pure functions of the two

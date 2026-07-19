@@ -204,6 +204,15 @@ run_case() {
         local _sd="${STAT_DEV_STAGING:-2049}" _md="${STAT_DEV_MOUNT:-64513}"
         # STAT_DEV_SAME=1 collapses both to the staging id — the same-filesystem refusal case.
         [ "${STAT_DEV_SAME:-0}" = "1" ] && _md="$_sd"
+        # PASS-THROUGH on every format except the DEVICE-ID form. This stub exists to drive the
+        # same-filesystem refusal, which reads `stat -c %d`. Matching on the PATH alone would also
+        # capture `stat -c %y` (the #6733 root-mtime bracket) and hand its read-back a device id
+        # instead of an mtime — making a CORRECT restore look like skew and die. A stub must no-op
+        # only the host effect it cannot reproduce, and delegate everything else to the real binary.
+        case "$*" in
+          *"%d"*) ;;
+          *) command stat "$@"; return $? ;;
+        esac
         case "$*" in
           *"$WORKSPACES_STAGING"*) printf "%s\n" "$_sd" ;;
           *"$WORKSPACES_MOUNT"*)   printf "%s\n" "$_md" ;;
