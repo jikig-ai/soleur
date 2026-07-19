@@ -714,11 +714,40 @@ describe("#6698 checkDnsPropagated — pure verdict function (AC8)", () => {
     expect(v.reason).toMatch(/188\.114\.96\.2/);
   });
 
+  it("AAAA present WITH stale Cloudflare A-records → retry, not terminal", () => {
+    // Measured in production (runId 01KXXR3BBF, 2026-07-19): the public
+    // resolvers flap between the new GitHub answer and the still-cached
+    // Cloudflare one for the whole propagation window, and a tick landing on
+    // the stale answer returns Cloudflare's A-records AND its synthetic AAAA
+    // together. The zone provably has zero AAAA records, so treating that as a
+    // surviving AAAA aborts a healthy remediation on a transient read.
+    const v = checkDnsPropagated({
+      ...base,
+      resolved4: ["188.114.96.1", "188.114.97.1"],
+      resolved6: ["2a06:98c1:3121::1", "2a06:98c1:3120::1"],
+      resolve6Error: null,
+    });
+    expect(v.status).toBe("retry");
+    expect(v.reason).toMatch(/pre-flip cached answer/);
+  });
+
+  it("AAAA present with NO A-record answer → retry (cannot confirm post-flip state)", () => {
+    const v = checkDnsPropagated({
+      ...base,
+      resolved4: [],
+      resolved6: ["2a06:98c1:3121::1"],
+      resolve6Error: null,
+    });
+    expect(v.status).toBe("retry");
+  });
+
   it("AAAA present → failed, NOT retry (H-W4 is terminal, waiting cannot help)", () => {
     // Let's Encrypt prefers IPv6 and will not fall back from a proxied AAAA that
     // answers 200 with the wrong content, so no window length can succeed. A
     // `retry` here would burn the remaining budget lengthening a public TLS
     // outage for an outcome that cannot change.
+    // A-records CONVERGED to GitHub anycast (base fixture) AND an AAAA still
+    // answers — that is the real H-W4 condition, and it stays terminal.
     const v = checkDnsPropagated({
       ...base,
       resolved6: ["2a06:98c1:3120::2"],
@@ -726,6 +755,7 @@ describe("#6698 checkDnsPropagated — pure verdict function (AC8)", () => {
     });
     expect(v.status).toBe("failed");
     expect(v.reason).toMatch(/prefers IPv6/);
+    expect(v.reason).toMatch(/converged to GitHub anycast/);
   });
 
   it("A-records right but ACME not GitHub-shaped → retry (challenge intercepted)", () => {

@@ -574,7 +574,19 @@ rollback() {
   systemctl stop webhook.service 2>/dev/null || true
   docker stop -t 30 "$CONTAINER" 2>/dev/null || true
   umount "$MOUNT" 2>/dev/null || true
-  cryptsetup close "$MAPPER_NAME" 2>/dev/null || true
+  # $STAGING MUST be unmounted before the close. Without this, a mapper still mounted at $STAGING
+  # makes `cryptsetup close` fail EBUSY — and the `2>/dev/null || true` swallowed it, so rollback
+  # remounted the plaintext and reported SUCCESS while leaking the mapper open AND mounted,
+  # holding a full divergent copy. That is the repoint-path hazard, on the recovery path where it
+  # matters more. Report an EBUSY rather than swallowing it.
+  umount "$STAGING" 2>/dev/null || true
+  # Guard on existence: `cryptsetup close` on an ALREADY-INACTIVE mapper exits non-zero
+  # ("Device workspaces is not active."), so an unguarded emit would fire WL_LEVEL=fatal on a
+  # second ROLLBACK=1 dispatch — the most likely operator action after a partial recovery — for
+  # a rollback that fully succeeded. A recovery-path signal that cries wolf gets ignored.
+  if [ -e "$MAPPER" ]; then
+    cryptsetup close "$MAPPER_NAME" || emit_drift rollback_mapper_close_failed
+  fi
   # Remount the retained plaintext volume (its by-label / by-id device — never the mapper).
   mount /dev/disk/by-label/workspaces_plain "$MOUNT" 2>/dev/null \
     || mount "$(read_state PLAINTEXT_DEV)" "$MOUNT" 2>/dev/null || true
@@ -637,12 +649,281 @@ arm_dead_man() {
     tstarts="${tstarts}systemctl restart ${u}.timer 2>/dev/null; "
   done
   systemd-run --on-active="${DEAD_MAN_MIN}min" --unit=workspaces-luks-deadman \
-    /bin/sh -c "${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; cryptsetup close ${MAPPER_NAME} 2>/dev/null; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; systemctl start inngest-server.service 2>/dev/null; ${tstarts} fi" \
+    `# umount ${STAGING} BEFORE the close, in lockstep with rollback(): a mapper still mounted at` \
+    `# $STAGING makes cryptsetup close fail EBUSY. This is the UNATTENDED restore path, so the` \
+    `# swallowed failure leaves a complete DECRYPTED copy of every user's source live at $STAGING` \
+    `# through the still-open mapper, indefinitely, with zero telemetry on any channel — the exact` \
+    `# at-rest exposure #6588 exists to close, reached by a different door. The next run's stray` \
+    `# guard does NOT surface it either (it is a mountpoint, so that guard is skipped). The close` \
+    `# keeps its own error visible on the journal rather than 2>/dev/null.` \
+    /bin/sh -c "${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; systemctl start inngest-server.service 2>/dev/null; ${tstarts} fi" \
     2>/dev/null || true
 }
 disarm_dead_man() {
   systemctl stop workspaces-luks-deadman.timer 2>/dev/null || true
   systemctl reset-failed workspaces-luks-deadman 2>/dev/null || true
+}
+
+# ============================================================================
+# Staging-target preparation (#6588) — lay a filesystem INSIDE the mapper, fail-close the
+# mount, and ANCHOR every certified path to its intended device.
+#
+# The 2026-07-19 freeze (run 29695998561) safe-aborted on C1 with a single `.d..t...... ./`
+# diff. C1 was RIGHT; the defect was one layer below what C1 can report. This script
+# luksFormat'd the device and luksOpen'd the mapper but NEVER ran mkfs, so the mapper held no
+# filesystem and `mount "$MAPPER" "$STAGING"` failed with `wrong fs type, bad option, bad
+# superblock`. Under `set -uo pipefail` with NO `-e` that failure was SWALLOWED, and the
+# `mkdir -p "$STAGING"` immediately above had already created /mnt/data-luks as a plain
+# directory ON THE ROOT DISK. Every downstream step then targeted the root disk. The copy
+# succeeded byte-for-byte onto the wrong block device; the rsync itemize vocabulary cannot
+# express "correct copy, wrong target".
+#
+# The sibling git-data volume carries the IDENTICAL `mountpoint … || mount …` line
+# (cloud-init-git-data.yml:159-170) — but under `set -euo pipefail`, where a failed mount is
+# fatal. This script copied the line's SHAPE into a no-`-e` regime, converting a fail-closed
+# line into a fail-open one, and dropped the `mkfs.ext4 /dev/mapper/git-data` that makes the
+# mount succeed at all. git-data-luks.tf:73-78 documents the mechanism verbatim.
+#
+# THE INVARIANT: a gate that certifies a path must first anchor that path to its intended
+# device. C1, the `du` assert, `git fsck` and the G3 manifest are all pure functions of the two
+# STRINGS "$MOUNT" and "$STAGING" — not one anchors either to a block device, so nothing in that
+# closure could ever distinguish "right bytes, wrong device".
+
+# _same_dev — do two path-ish strings name the SAME block device?
+#
+# THIS HELPER CARRIES ITS OWN POSITIVE CONTROL. The naive form
+#   [ "$(readlink -f "$1")" = "$(readlink -f "$2")" ]
+# FAILS OPEN: if readlink errors or is absent, BOTH substitutions yield "" and "" = "" is TRUE,
+# certifying a mount that was never verified. That is verbatim the failure this script already
+# names at the G4 straggler assert ("reads 'the probe failed' as 'the mount is clean'"). The
+# explicit rc checks plus `[ -b "$b" ]` make the canonicalizer prove it ran against a real
+# block device before it may return 0.
+_same_dev() {
+  local a b
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+  a="$(readlink -f -- "$1" 2>/dev/null)" || return 1
+  b="$(readlink -f -- "$2" 2>/dev/null)" || return 1
+  [ -n "$a" ] && [ -n "$b" ] && [ -b "$b" ] && [ "$a" = "$b" ]
+}
+
+# emit_staging_target — the target-preparation marker, on EVERY outcome including success.
+# The swallowed mount emitted NOTHING, which is why the failure surfaced as an uninterpretable
+# C1 itemize code instead of a named condition. A green run emitting result=ok proves the
+# assert EXECUTED (hr-observability-as-plan-quality-gate). Bare `echo` at column 0 + `logger`,
+# matching the emit_freeze_holders convention — log() would indent the marker, and the test
+# harness routes `logger` to $MARKER_LOG.
+emit_staging_target() {
+  local result="${1:-fail}" reason="${2:-unspecified}" extra="${3:-}" row
+  row="SOLEUR_WORKSPACES_LUKS_STAGING_TARGET feature=workspaces-luks op=workspaces-luks-staging-target result=$(_vscrub "$result") reason=$(_vscrub "$reason") staging=$(_vscrub "$STAGING") mapper=$(_vscrub "$MAPPER") host=$(hostname 2>/dev/null)"
+  [ -n "$extra" ] && row="$row $(_vscrub "$extra")"
+  echo "$row"; logger -t "$LUKS_LOG_TAG" -- "$row" 2>/dev/null || true
+}
+
+# Every die() in prepare_staging_target fires at prepare time — BEFORE the freeze (FREEZE_HELD=1
+# is set ~110 lines later), so cleanup()'s rollback condition is NOT met and no rollback runs.
+# That is correct: nothing has been unwound. But the message must SAY so, or an operator reaching
+# for ROLLBACK=1 after a prepare-time abort umounts the LIVE plaintext volume and takes a
+# gratuitous outage.
+_PREPARE_ABORT_NOTE="No freeze was held and nothing was unwound: NO rollback is needed and ROLLBACK=1 must NOT be run (it would umount the LIVE plaintext volume at ${MOUNT} and cause a gratuitous outage). Residual state may be an open mapper, possibly mounted at ${STAGING}; both are idempotent on re-run."
+
+prepare_staging_target() {
+  local fs_type staging_src mapper_dev mount_src src_b avail_b reused_bytes _capacity_bad
+  local _blkid_rc _usable_b _need_b
+  local STAGING_FS_REUSED=0   # read by the marker on EVERY path — an assignment confined to the
+                              # ext4 arm would abort the first-cutover path under `set -u` with
+                              # `unbound variable` and emit NO marker at all.
+
+  mkdir -p "$STAGING" || {
+    emit_staging_target fail mkdir_failed
+    emit_drift staging_mkdir_failed
+    die "cannot create staging mountpoint $STAGING. ${_PREPARE_ABORT_NOTE}"
+  }
+
+  # --- Stray guard: DETECT and REFUSE, never delete. Runs in BOTH arms (read-only), so the
+  # rehearsal reports the condition honestly. Canonical data lives at $MOUNT; post-repoint
+  # $STAGING is unmounted. A non-mountpoint, non-empty $STAGING is therefore a stray root-disk
+  # copy — exactly what the 2026-07-19 run left behind. Deletion is a separate, single-purpose
+  # PR (it is user data: AP-009).
+  if ! mountpoint -q "$STAGING" && [ -n "$(ls -A "$STAGING" 2>/dev/null)" ]; then
+    # Carry MAGNITUDE. This die fires on EVERY dispatch — including every dry run — until the
+    # stray is remediated, so it is the message the operator sees most, and it has to let them
+    # tell "8 workspaces of duplicated user source" apart from "one leftover directory". Same
+    # argument the reused_bytes field is built on: a flag with no number gets ignored.
+    local stray_b stray_n
+    stray_b="$(du -s --block-size=1 "$STAGING" 2>/dev/null | cut -f1)"
+    # find -printf, not `ls | grep -c`: a workspace directory name containing a newline would
+    # otherwise inflate the count (SC2010). One dot per entry, then count the bytes.
+    stray_n="$(find "$STAGING" -mindepth 1 -maxdepth 1 -printf '.' 2>/dev/null | wc -c | tr -dc '0-9')"
+    emit_staging_target fail stray_present "stray_bytes=$(_vscrub "${stray_b:-unknown}") stray_entries=$(_vscrub "${stray_n:-unknown}")"
+    emit_drift staging_stray_present
+    die "$STAGING is a non-mountpoint AND non-empty — a stray plaintext copy is present on the ROOT DISK (${stray_b:-unknown} B across ${stray_n:-unknown} top-level entries). This is a DUPLICATE; the canonical data is at $MOUNT. Refusing to prepare over it — remediate it before any cutover. ${_PREPARE_ABORT_NOTE}"
+  fi
+
+  # --- Refuse a re-run after an already-successful cutover. Re-dispatch is the most likely
+  # operator action and had NO defined outcome: post-cutover $MOUNT *is* the mapper, so the
+  # blkid probe would hit the ext4 reuse arm, $STAGING would not be a mountpoint, and the mapper
+  # would be mounted a SECOND time at $STAGING while live at $MOUNT — making $MOUNT and $STAGING
+  # the same filesystem and the bulk rsync a source-into-itself copy.
+  # Safe in the dry-run arm: with no mapper present _same_dev fails closed and this does not fire.
+  mount_src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
+  if _same_dev "$mount_src" "$MAPPER"; then
+    emit_staging_target fail already_cutover "mount_src=$(_vscrub "$mount_src")"
+    emit_drift staging_already_cutover
+    die "$MOUNT is ALREADY sourced from $MAPPER — this cutover has already completed; refusing to re-stage onto the live volume. ${_PREPARE_ABORT_NOTE}"
+  fi
+
+  # --- DRY_RUN short-circuit, mirroring the rollback()/disarm_dead_man early-return idiom.
+  # Everything ABOVE is a read-only assert and runs in both arms. Everything BELOW touches the
+  # mapper — which the dry-run arm never opens (the luksOpen call site is gated on DRY_RUN != 1),
+  # so asserting `[ -b "$MAPPER" ]` here would abort every rehearsal.
+  if [ "$DRY_RUN" = "1" ]; then
+    log "(dry-run) would assert mapper->device, mkfs-if-empty, mount $MAPPER at $STAGING, then assert the mount source IS the mapper"
+    emit_staging_target dryrun ok
+    return 0
+  fi
+
+  # --- Mapper preconditions: ANCHOR THE DEVICE BEFORE TRUSTING THE NAME.
+  # The three-arm blkid guard at the call site is total over FILESYSTEM TYPES, not over mapper
+  # existence or backing device. $MAPPER is only a NAME: luksOpen is skipped when that name
+  # merely EXISTS ([ ! -e "$MAPPER" ]), so a stale mapper left open by a prior run and backed by
+  # a DIFFERENT container satisfies the guard, and everything downstream — INCLUDING the positive
+  # control below — would operate on the wrong container while reporting success. `cryptsetup
+  # status` is the only thing that establishes mapper -> device, and it was previously consulted
+  # only in the POST-repoint canary: after the freeze, after the copy, after the plaintext was
+  # umounted. Anchor it here, pre-freeze, where an abort costs zero downtime.
+  [ -b "$MAPPER" ] || {
+    emit_staging_target fail mapper_absent
+    emit_drift staging_mapper_absent
+    die "$MAPPER is not a block device — luksOpen did not produce a mapper; refusing to prepare. ${_PREPARE_ABORT_NOTE}"
+  }
+  mapper_dev="$(cryptsetup status "$MAPPER_NAME" 2>/dev/null | sed -n 's/^ *device: *//p')"
+  _same_dev "$mapper_dev" "$FRESH_DEV" || {
+    emit_staging_target fail mapper_wrong_device "mapper_dev=$(_vscrub "${mapper_dev:-<unknown>}") expected=$(_vscrub "$FRESH_DEV")"
+    emit_drift staging_mapper_wrong_device
+    die "$MAPPER is backed by '${mapper_dev:-<unknown>}', not $FRESH_DEV — a stale mapper from a prior run; refusing to prepare. ${_PREPARE_ABORT_NOTE}"
+  }
+
+  # --- mkfs guard: mirror this script's OWN three-arm blkid idiom (the device-side C7 guard at
+  # the call site), on the MAPPER. `-s TYPE -o value` (not bare `blkid`, which exits 0 on a
+  # partition-table-only device and would SKIP the needed mkfs, reproducing this very bug).
+  # `-p` forces a LOW-LEVEL superblock probe bypassing /run/blkid/blkid.tab: a cached entry can
+  # report the PREVIOUS type for the same device name after a rollback-and-reformat cycle, and
+  # one arm here mkfs's destructively while another refuses destructively — a stale read is
+  # wrong in BOTH directions. (`-c /dev/null` is NOT equivalent: it suppresses the cache FILE
+  # but still performs a normal lookup.)
+  # A FAILED PROBE IS NOT PROOF OF AN EMPTY DEVICE. `|| true` collapsed every blkid failure
+  # (rc 4 usage, rc 8 ambivalent, ENOENT, EACCES, EIO, or blkid simply absent from PATH — it
+  # lives in /usr/sbin, which this script has been bitten by before) into fs_type="", which
+  # takes the DESTRUCTIVE mkfs arm. Concrete loss: a prior run completed the hours-long bulk
+  # rsync and died later; the mapper survives open with $STAGING unmounted; a re-dispatch whose
+  # blkid fails then mkfs's over the complete good copy. mke2fs's own mounted-device refusal
+  # does NOT save us — the mapper is not mounted. rc=2 ("nothing detected") is the ONLY empty
+  # that means "no filesystem". This is the same asymmetry this file names at the G4 assert
+  # ("reads 'the probe failed' as 'the mount is clean'"), surviving into the one arm that
+  # destroys data.
+  command -v blkid >/dev/null 2>&1 || {
+    emit_staging_target fail blkid_absent
+    emit_drift staging_blkid_absent
+    die "blkid is not on PATH — cannot discriminate an empty mapper from a populated one; refusing to mkfs blind. ${_PREPARE_ABORT_NOTE}"
+  }
+  fs_type="$(blkid -p -s TYPE -o value "$MAPPER" 2>/dev/null)"; _blkid_rc=$?
+  [ "$_blkid_rc" -eq 0 ] || [ "$_blkid_rc" -eq 2 ] || {
+    emit_staging_target fail blkid_probe_failed "rc=${_blkid_rc}"
+    emit_drift staging_blkid_probe_failed
+    die "blkid -p failed (rc=${_blkid_rc}) on $MAPPER — a failed probe is NOT proof of an empty device; refusing to mkfs. ${_PREPARE_ABORT_NOTE}"
+  }
+  if [ -z "$fs_type" ]; then
+    log "mapper carries NO filesystem — mkfs.ext4 (first cutover)"
+    # lazy_*_init=0 finishes inode-table/journal init NOW rather than in a background kernel
+    # thread that would compete with the bulk rsync. Paid pre-freeze, outside the freeze budget.
+    # On a large volume that write is synchronous, silent and progress-free — say so, or the
+    # operator reads a working run as a hang.
+    log "mkfs may take several minutes on a large volume (lazy init disabled deliberately) — this is NOT a hang"
+    mkfs.ext4 -q -E lazy_itable_init=0,lazy_journal_init=0 "$MAPPER" || {
+      emit_staging_target fail mkfs_failed
+      emit_drift staging_mkfs_failed
+      die "mkfs.ext4 failed on $MAPPER. ${_PREPARE_ABORT_NOTE}"
+    }
+  elif [ "$fs_type" = "ext4" ]; then
+    log "mapper already carries ext4 — no mkfs (idempotent re-run)"
+    STAGING_FS_REUSED=1
+  else
+    # Load-bearing: this arm is what stops a re-run wiping an already-good copy.
+    emit_staging_target fail unexpected_fs "fs=$(_vscrub "$fs_type")"
+    emit_drift staging_unexpected_fs
+    die "$MAPPER carries TYPE=$fs_type (expected empty or ext4) — refusing to mkfs over an unrecognised filesystem. ${_PREPARE_ABORT_NOTE}"
+  fi
+
+  # --- Fail-closed mount. Explicit if/then, never `A || B || C` — the unguarded one-liner this
+  # replaces is the root enabler of the whole silent-target class
+  # (hr-when-a-command-exits-non-zero-or-prints).
+  if ! mountpoint -q "$STAGING"; then
+    mount "$MAPPER" "$STAGING" || {
+      emit_staging_target fail mount_failed
+      emit_drift staging_mount_failed
+      die "cannot mount $MAPPER at $STAGING. ${_PREPARE_ABORT_NOTE}"
+    }
+  fi
+
+  # --- POSITIVE CONTROL: assert WHERE THE BYTES GO. Never infer it from a command that was
+  # allowed to fail. This is the primary regression guard for the 2026-07-19 defect.
+  staging_src="$(findmnt -no SOURCE "$STAGING" 2>/dev/null || true)"
+  _same_dev "$staging_src" "$MAPPER" || {
+    emit_staging_target fail source_not_mapper "source=$(_vscrub "${staging_src:-<none>}")"
+    emit_drift staging_not_mapper
+    die "$STAGING is not mounted from $MAPPER (source='${staging_src:-<none>}') — refusing to copy onto an unverified target. ${_PREPARE_ABORT_NOTE}"
+  }
+
+  # --- Capacity gate. THIS CHANGE IS WHAT FIRST MAKES ENOSPC REACHABLE: before the fix the
+  # copy landed on the root disk (where it evidently fit); now it lands in the mapper, whose
+  # usable capacity is the volume MINUS the LUKS2 header (~16-32 MiB data offset) MINUS ext4
+  # metadata. A fresh volume sized equal to its plaintext source is therefore STRICTLY SMALLER
+  # than that source. The delta rsync is INSIDE the freeze, where an ENOSPC burns an
+  # irreversible-freeze approval exactly as the 2026-07-19 run did. Gate here, pre-freeze.
+  # Measure the WHOLE MOUNT, in ALLOCATED BLOCKS. Both rsyncs copy "$MOUNT"/ — not
+  # "$MOUNT"/workspaces — so gating on the workspaces subtree alone excluded $MOUNT/redis (the
+  # AOF this file spends 20 lines quiescing) and anything else living beside it. And
+  # --apparent-size sums file SIZES, not allocation: the payload is git repos, i.e. enormous
+  # counts of sub-4K loose objects, where block rounding can push real usage well past apparent
+  # size. Both errors point the same way — understating the source — so the gate passed and the
+  # ENOSPC still landed in the delta rsync INSIDE the freeze, which is the exact outcome this
+  # gate exists to prevent.
+  src_b="$(du -s --block-size=1 "$MOUNT" 2>/dev/null | cut -f1)"
+  avail_b="$(df --output=avail -B1 "$STAGING" 2>/dev/null | tail -1 | tr -dc '0-9')"
+  # On the idempotent-resume path the staged copy ALREADY occupies the target, so df reports
+  # avail ~= total - src and a bare `avail > src` aborts a COMPLETE, CORRECT staged copy — every
+  # retry failing identically, with the only escape being to wipe the copy or reach past the
+  # gate. Count the bytes already staged as available-to-us. Computed here (not below) because
+  # the gate needs it; the marker reuses the same value.
+  reused_bytes=0
+  [ "$STAGING_FS_REUSED" = "1" ] && reused_bytes="$(du -s --block-size=1 "$STAGING" 2>/dev/null | cut -f1)"
+  case "${reused_bytes:-}" in ''|*[!0-9]*) reused_bytes=0 ;; esac
+  # Each operand checked SEPARATELY. A combined "$a|$b" pattern is unreadable and gets the
+  # both-empty case wrong (the string is then "|", which an empty-string arm never matches) —
+  # and a vacuous pass here is exactly the fail-open shape this whole change exists to remove.
+  _capacity_bad=0
+  case "$src_b" in ''|*[!0-9]*) _capacity_bad=1 ;; esac
+  case "$avail_b" in ''|*[!0-9]*) _capacity_bad=1 ;; esac
+  if [ "$_capacity_bad" = "1" ]; then
+    emit_staging_target fail capacity_unreadable "src_b=$(_vscrub "${src_b:-<empty>}") avail_b=$(_vscrub "${avail_b:-<empty>}")"
+    emit_drift staging_capacity_unreadable
+    die "capacity probe produced non-numeric output (src='${src_b:-}' avail='${avail_b:-}') — cannot gate ENOSPC. ${_PREPARE_ABORT_NOTE}"
+  fi
+  # 5% margin, not a bare `-gt`: ext4 writes metadata DURING the copy, so one byte of slack is
+  # not headroom. usable = what df reports free PLUS what an already-staged copy occupies.
+  _usable_b=$((avail_b + reused_bytes))
+  _need_b=$((src_b + src_b / 20))
+  [ "$_usable_b" -gt "$_need_b" ] || {
+    emit_staging_target fail insufficient_capacity "src_b=${src_b} avail_b=${avail_b} reused_bytes=${reused_bytes} usable_b=${_usable_b} need_b=${_need_b}"
+    emit_drift staging_insufficient_capacity
+    die "LUKS target has ${_usable_b} B usable (df avail ${avail_b} + ${reused_bytes} already staged) but the source is ${src_b} B and needs ${_need_b} B with margin — the copy cannot fit; aborting BEFORE the freeze. ${_PREPARE_ABORT_NOTE}"
+  }
+
+  # reused_bytes alongside reused=1: the most common retry is "mkfs succeeded, mount failed",
+  # where the filesystem is EMPTY and reused=1 fires anyway. Without a byte count the flag cries
+  # wolf on its most frequent trigger and gets ignored.
+  emit_staging_target ok prepared "fs=$(_vscrub "${fs_type:-none}") reused=${STAGING_FS_REUSED} reused_bytes=$(_vscrub "${reused_bytes:-0}") source=$(_vscrub "$staging_src") avail_b=${avail_b} src_b=${src_b}"
+  log "staging target ready: $MAPPER mounted at $STAGING (fs=${fs_type:-created}, reused=${STAGING_FS_REUSED}, avail=${avail_b}B, src=${src_b}B)"
 }
 
 # Sourced-detection guard: when this file is `source`d (the workspaces-luks-verify.test.sh harness
@@ -667,7 +948,11 @@ fi
 # ============================================================================
 step "L3 gates — host reachability + mount preconditions (pre-freeze, zero downtime)"
 mountpoint -q "$MOUNT" || die "L3: $MOUNT is not mounted — the data is not where the cutover assumes (Phase 0 STOP + Hetzner rescue crypttab/fstab repair, DP-9 F1)"
-[ -b "$(findmnt -no SOURCE "$MOUNT" 2>/dev/null)" ] || log "WARN: $MOUNT source is not a block device"
+# $MOUNT is the SOURCE OF EVERY BYTE and the path rollback() remounts. Anchoring it only as a
+# `log WARN` was a live counterexample to the invariant this file now enforces three functions
+# above (a gate that certifies a path must anchor it to a device) — fail-closed here too.
+[ -b "$(findmnt -no SOURCE "$MOUNT" 2>/dev/null)" ] \
+  || die "L3: $MOUNT source is not a block device — refusing to treat it as the copy source (no freeze was held; NO rollback is needed and ROLLBACK=1 must NOT be run)"
 
 # ============================================================================
 # prepare_luks_target — select the FRESH device by volume ID, format-if-raw, open the mapper
@@ -679,21 +964,31 @@ if [ -z "$KEY" ]; then WL_DOPPLER_REACHABLE=false; export WL_DOPPLER_REACHABLE; 
 # it by its Hetzner volume-ID by-id path (passed as WORKSPACES_LUKS_DEV), never a bare glob — the glob
 # matches the LIVE plaintext volume too (the ambiguity Phase 1 pins).
 FRESH_DEV="${WORKSPACES_LUKS_DEV:-}"
-[ -n "$FRESH_DEV" ] && [ -e "$FRESH_DEV" ] || die "WORKSPACES_LUKS_DEV unset or absent — pass the fresh volume by-id device"
-raw_type="$(blkid -s TYPE -o value "$FRESH_DEV" 2>/dev/null || true)"
+# -b, not -e: this must be a BLOCK DEVICE, matching the sibling asserts on $MOUNT's source and
+# on $MAPPER. A regular file at this path would otherwise reach luksFormat.
+[ -n "$FRESH_DEV" ] && [ -b "$FRESH_DEV" ] || die "WORKSPACES_LUKS_DEV unset, absent, or not a block device — pass the fresh volume by-id device"
+# -p here for the same reason as the mapper arm below: this guard's empty arm runs luksFormat, a
+# DESTRUCTIVE operation on an operator-supplied device. Reading the /run/blkid/blkid.tab cache
+# after a rollback-and-reformat cycle is wrong in both directions. The mapper arm got this
+# reasoning; the device arm — which is the more dangerous of the two — was left on the cache.
+raw_type="$(blkid -p -s TYPE -o value "$FRESH_DEV" 2>/dev/null || true)"
 if [ -z "$raw_type" ]; then
   log "fresh device is RAW (no signature) — luksFormat"
-  [ "$DRY_RUN" = "1" ] || printf '%s' "$KEY" | cryptsetup luksFormat --type luks2 --key-file - "$FRESH_DEV"
+  [ "$DRY_RUN" = "1" ] || printf '%s' "$KEY" | cryptsetup luksFormat --type luks2 --key-file - "$FRESH_DEV" \
+    || { emit_drift luksformat_failed; die "luksFormat failed on $FRESH_DEV — refusing to proceed (no freeze was held; NO rollback is needed and ROLLBACK=1 must NOT be run)"; }
 elif [ "$raw_type" = "crypto_LUKS" ]; then
   log "fresh device already crypto_LUKS — no format (idempotent)"
 else
   die "fresh device carries TYPE=$raw_type (expected raw or crypto_LUKS) — refusing to format a device with a filesystem signature (C7)"
 fi
 if [ "$DRY_RUN" != "1" ] && [ ! -e "$MAPPER" ]; then
-  printf '%s' "$KEY" | cryptsetup luksOpen --key-file - "$FRESH_DEV" "$MAPPER_NAME"
+  # Unguarded, a failed open leaves $MAPPER absent — prepare_staging_target would then take the
+  # "no filesystem" arm and die as staging_mkfs_failed, a MISLEADING reason on the operator's
+  # only no-SSH channel. Name the real failure here.
+  printf '%s' "$KEY" | cryptsetup luksOpen --key-file - "$FRESH_DEV" "$MAPPER_NAME" \
+    || { emit_drift luksopen_failed; die "luksOpen failed on $FRESH_DEV — refusing to proceed (no freeze was held; NO rollback is needed and ROLLBACK=1 must NOT be run)"; }
 fi
-mkdir -p "$STAGING"
-[ "$DRY_RUN" = "1" ] || { mountpoint -q "$STAGING" || mount "$MAPPER" "$STAGING"; }
+prepare_staging_target
 
 # ============================================================================
 # Escrow proof (BLOCKING, AFTER prepare — R7/C3) — against the REAL device via the host token path
@@ -889,14 +1184,19 @@ fi
 step "repoint_luks_mount — mapper -> $MOUNT (backup fstab; findmnt assert)"
 if [ "$DRY_RUN" != "1" ]; then
   cp /etc/fstab "/etc/fstab.pre-luks.$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || echo bak)" 2>/dev/null || cp /etc/fstab /etc/fstab.pre-luks.bak
-  umount "$STAGING" 2>/dev/null || true
+  # Fail-closed: a swallowed failure here leaves $MAPPER mounted at $STAGING *and* then at $MOUNT
+  # below. The post-repoint assert only checks $MOUNT, so it PASSES; rollback() then swallowed the
+  # resulting EBUSY, remounted plaintext and reported success — leaving plaintext live at $MOUNT
+  # and a still-open mapper holding a divergent full copy at $STAGING, with no telemetry at all.
+  umount "$STAGING" || { emit_drift staging_umount_failed; die "cannot umount $STAGING before the repoint — refusing to mount $MAPPER at $MOUNT while it is still mounted at $STAGING (two live divergent copies); the freeze is held and cleanup() will roll back to the retained plaintext"; }
   # umount MUST succeed — a failed umount (a straggler re-acquired the mount) followed by the mapper
   # mount would STACK the mapper OVER the still-mounted plaintext. findmnt -no SOURCE returns the
   # TOPMOST source (=$MAPPER), so the assert below would PASS while the app writes to the mapper and
   # the plaintext is shadowed underneath (the #5274 stranding, silently). Fail loud instead.
   umount "$MOUNT" || die "umount $MOUNT failed — refusing to stack the mapper over live plaintext (#5274)"
   mountpoint -q "$MOUNT" && die "$MOUNT is STILL a mountpoint after umount — refusing to stack the mapper over it (#5274)"
-  mount "$MAPPER" "$MOUNT"
+  mount "$MAPPER" "$MOUNT" \
+    || { emit_drift repoint_mount_failed; die "cannot mount $MAPPER at $MOUNT — the repoint did not happen; the freeze is held and cleanup() will roll back to the retained plaintext"; }
   FLIP_DONE=1; persist_state FLIP_DONE 1
   [ "$(findmnt -no SOURCE "$MOUNT")" = "$MAPPER" ] || die "findmnt: $MOUNT is not $MAPPER after repoint (#5274 stranding)"
 fi
@@ -909,7 +1209,16 @@ if [ "$DRY_RUN" != "1" ]; then
   WL_DEVICE_TYPE="$(blkid -s TYPE -o value "$FRESH_DEV")"; export WL_DEVICE_TYPE
   [ "$WL_DEVICE_TYPE" = "crypto_LUKS" ] || { emit_drift device_not_luks; die "blkid: $FRESH_DEV is not crypto_LUKS"; }
   [ "$(findmnt -no SOURCE "$MOUNT")" = "$MAPPER" ] || { emit_drift mount_not_mapper; die "findmnt: $MOUNT != $MAPPER"; }
+  # ANCHOR, do not merely probe. Asserting `cryptsetup status` exits 0 proves a mapper exists,
+  # not that it is backed by the volume we formatted — the same relational-not-anchored shape
+  # this change closes at prepare time, surviving at the one moment it is most expensive: after
+  # the freeze, after the copy, after the plaintext has been unmounted. Mirrors the prepare-time
+  # anchor. The two diverge if the mapper is closed and reopened against a different device
+  # between prepare and repoint (concurrent operator action, or a stale dead-man firing mid-run).
   cryptsetup status "$MAPPER_NAME" >/dev/null 2>&1 || { emit_drift cryptsetup_status_missing; die "cryptsetup status: no mapper->device link"; }
+  _canary_mapper_dev="$(cryptsetup status "$MAPPER_NAME" 2>/dev/null | sed -n 's/^ *device: *//p')"
+  _same_dev "$_canary_mapper_dev" "$FRESH_DEV" \
+    || { emit_drift canary_mapper_wrong_device; die "C13 canary: $MAPPER is backed by '${_canary_mapper_dev:-<unknown>}', not $FRESH_DEV — refusing to certify the repoint"; }
   mountpoint -q "$MOUNT" || { emit_drift not_mounted; die "mountpoint -q $MOUNT failed"; }
   CANARY_OK=1; persist_state CANARY_OK "1:$(cryptsetup luksUUID "$FRESH_DEV")"  # DP-7: run-keyed + header UUID
   log "host canary PASSED — $MOUNT is the LUKS mapper"

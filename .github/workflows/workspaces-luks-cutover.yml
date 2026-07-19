@@ -23,6 +23,13 @@
 # This is FAIL-CLOSED: the same `!inputs.dry_run` operand drives the gate, so any freeze-reachable run is
 # gated. The C19/AC20b human authorization on the irreversible operation is fully preserved; only the
 # reversible rehearsal is ungated. The reviewer set MUST stay non-empty for the freeze arm.
+#
+# #6588 — a STRUCTURAL loopback-validation gate sits on the `dry_run=false` arm (see the step below).
+# "Do not freeze until the LUKS mkfs/staging path is validated on a loopback device" was, until that
+# step existed, enforced only in PR prose — and prose that has merged can never fire on a dispatch.
+# 87692a0d9 is exactly that failure class: a staging mount that failed silently and put the entire
+# copy on the ROOT DISK. The gate now lives on the arm that can lose data. It only ever makes the
+# irreversible arm HARDER to reach; the reversible rehearsal arm is untouched.
 
 name: workspaces-luks cutover freeze (#6604 / ADR-119)
 
@@ -65,7 +72,12 @@ env:
 jobs:
   cutover:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # 30 → 45 (#6588): the loopback-validation gate below runs a real losetup/cryptsetup/mkfs suite
+    # on the freeze arm before the bridge is raised. Left at 30 it would eat the freeze's own
+    # headroom and a real cutover could be KILLED MID-RUN — a new risk introduced by the gate.
+    # The budget is raised so the gate is additive; the ≤20 min freeze window (ADR-119 §(c)) and the
+    # ≤2h hard abort are unchanged.
+    timeout-minutes: 45
     # The sole human authorization on a sole-copy-data freeze (C19). Applied to the REAL freeze arm
     # ONLY (`dry_run=false`) — a reversible dry-run rehearsal runs ungated for autonomy (#6649). The
     # expression is FAIL-CLOSED: `!inputs.dry_run && 'workspaces-luks-cutover'` yields the gated env
@@ -88,6 +100,65 @@ jobs:
           echo "confirm token accepted (the environment reviewer is the authorization; this is the typo-guard)."
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # ── #6588 STRUCTURAL DISPATCH GATE — the irreversible arm ONLY ──────────────────────────────
+      # Hard-fails a `dry_run=false` dispatch unless the LUKS mkfs/staging path is validated on THIS
+      # commit. It EXECUTES the loopback suite here rather than looking for evidence of a past run:
+      # infra-validation.yml has no `push:` trigger, so after a squash-merge there is NO run at
+      # main's SHA to find — a `head_sha` evidence check would either fail forever or have to be
+      # loosened into a vacuous ancestor match. Running the suite cannot pass vacuously.
+      #
+      # It runs BEFORE the SSH bridge and BEFORE any host contact, so a failure costs nothing and
+      # touches nothing on web-1. `dry_run=true` is deliberately NOT gated: the rehearsal is
+      # reversible (ADR-119, the 2026-07-18 authorization addendum) and gating it would re-break the
+      # autonomy that addendum bought. This step makes ONLY the irreversible arm harder to reach —
+      # it does not touch the `environment:` reviewer gate, `can_admins_bypass`, or the confirm token.
+      - name: Loopback validation gate (real freeze arm only)
+        if: ${{ !inputs.dry_run }}
+        env:
+          # Static literals, never event-controlled input.
+          LOOPBACK_SUITE: apps/web-platform/infra/workspaces-luks-loopback.test.sh
+          INFRA_VALIDATION_WF: .github/workflows/infra-validation.yml
+        run: |
+          set -euo pipefail
+
+          # (1) The suite must EXIST and be executable. `[[ -x ]]` on a missing path is false, so an
+          # absent suite fails HERE rather than silently proving nothing.
+          if [[ ! -x "$LOOPBACK_SUITE" ]]; then
+            echo "::error::${LOOPBACK_SUITE} is missing or not executable — the LUKS mkfs/staging path is unvalidated. Refusing a dry_run=false freeze."
+            exit 1
+          fi
+
+          # (2) It must ALSO be wired into CI on a non-comment line, and the step invoking it must
+          # not carry continue-on-error (which reports conclusion=success over outcome=failure —
+          # exactly how a gate goes quiet). Parsed as YAML, never grepped: a bare grep for the path
+          # would match the path inside a comment and pass vacuously.
+          python3 -c 'import yaml' 2>/dev/null || pip3 install --quiet pyyaml
+          python3 - <<'PY'
+          import os, sys, yaml
+          suite = os.environ["LOOPBACK_SUITE"]
+          wf = yaml.safe_load(open(os.environ["INFRA_VALIDATION_WF"]))
+          hits = []
+          for job in (wf.get("jobs") or {}).values():
+              for step in (job.get("steps") or []):
+                  body = " ".join(str(step.get(k, "")) for k in ("run", "uses"))
+                  body += " " + " ".join(str(v) for v in (step.get("with") or {}).values())
+                  if suite in body:
+                      hits.append(step)
+          if not hits:
+              sys.exit(f"::error::{suite} is invoked by NO step in infra-validation.yml — the loopback suite would never run in CI. Refusing a dry_run=false freeze.")
+          soft = [s.get("name", "<unnamed>") for s in hits if s.get("continue-on-error")]
+          if soft:
+              sys.exit(f"::error::infra-validation.yml invokes {suite} under continue-on-error ({soft}) — a soft-failing gate proves nothing. Refusing a dry_run=false freeze.")
+          print(f"wired into infra-validation.yml by {len(hits)} step(s), none soft-failing")
+          PY
+
+          # (3) Run it, on this commit, on this runner. If cryptsetup/losetup cannot be provisioned
+          # the suite fails and so does the freeze — the correct direction for a fail-closed gate.
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cryptsetup-bin
+          sudo -E bash "$LOOPBACK_SUITE"
+          echo "loopback validation PASSED on ${GITHUB_SHA} — freeze arm may proceed to the environment reviewer gate."
 
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
