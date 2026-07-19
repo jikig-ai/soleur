@@ -24,6 +24,19 @@ REPO="${GH_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 DRY_RUN="${DRY_RUN:-0}"
 SCRIPTS_ROOT="scripts/followthroughs"
 
+# --- Closed-set (reopen path) bounds, #6698 ---------------------------------
+# How far back to look for prematurely-closed follow-throughs. Bounded so the
+# closed query stays cheap and the sweeper does not re-litigate ancient history.
+CLOSED_LOOKBACK_DAYS="${CLOSED_LOOKBACK_DAYS:-14}"
+# Its OWN limit. Deliberately NOT achieved by widening the open query to
+# `--state all`: that shares one 50-item budget between the two sets, so a burst
+# of closed issues would silently starve the open set the sweeper's primary job
+# depends on.
+CLOSED_LIMIT="${CLOSED_LIMIT:-30}"
+# Stateless reopen bound — see closed_precheck. After this many sweeper reopens
+# the issue needs a human, not another automated reopen.
+REOPEN_MAX="${REOPEN_MAX:-3}"
+
 now_epoch=$(date -u +%s)
 
 log()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
@@ -78,9 +91,61 @@ iso_to_epoch() {
   date -u -d "$iso" +%s 2>/dev/null || echo 0
 }
 
+# Marker embedded in every sweeper-authored reopen comment. Counting these
+# bounds the reopen loop WITHOUT any persistent state — the script is stateless
+# and runs its verification under `env -i`, so an in-process counter cannot
+# survive between sweeps. GitHub's own comment history is the state.
+readonly SWEEPER_REOPEN_MARKER="<!-- soleur:sweeper-reopen -->"
+# The PASS block the sweeper writes when it closes an issue itself.
+readonly SWEEPER_PASS_HEADING="### Sweeper run: PASS"
+
+# Decide whether a CLOSED follow-through issue is a reopen candidate.
+# Returns 0 to proceed, 1 to skip. Runs BEFORE the verification script so a
+# skipped issue costs one cheap read instead of a full script execution.
+closed_precheck() {
+  local issue_num="$1"
+  local comments_json rc=0
+  comments_json=$(gh issue view "$issue_num" --repo "$REPO" --json comments 2>&1) || rc=$?
+  if (( rc != 0 )); then
+    # FAIL-CLOSED. Without the comment history we can neither bound the reopen
+    # loop nor tell our own PASS closure apart from someone else's — reopening
+    # blind is how this becomes a daily flapping loop.
+    fail "issue #$issue_num: could not read comments (rc=$rc) — skipping closed-set evaluation"
+    return 1
+  fi
+
+  # Do not re-litigate a closure the sweeper itself justified. This is
+  # EVIDENCE-based, not ACTOR-based: it still catches a premature close by any
+  # actor (operator, agent, a `Closes #N` in prose, or the sweeper on a
+  # different day), while leaving the sweeper's own most recent PASS alone.
+  # Without it, every correctly-closed issue would be re-verified daily for the
+  # whole recency window and reopened the moment its condition regressed — one
+  # follow-through would silently become a permanent monitor.
+  local last_comment
+  last_comment=$(printf '%s' "$comments_json" | jq -r '.comments[-1].body // ""')
+  if [[ "$last_comment" == "$SWEEPER_PASS_HEADING"* ]]; then
+    log "issue #$issue_num: last comment is the sweeper's own PASS block — not re-litigating"
+    return 1
+  fi
+
+  local reopens
+  reopens=$(printf '%s' "$comments_json" \
+    | jq --arg m "$SWEEPER_REOPEN_MARKER" '[.comments[] | select(.body | contains($m))] | length')
+  if (( reopens >= REOPEN_MAX )); then
+    log "issue #$issue_num: already reopened ${reopens}x by the sweeper (cap=$REOPEN_MAX) — giving up, needs a human"
+    return 1
+  fi
+  return 0
+}
+
 run_one() {
   local issue_num="$1"
   local body="$2"
+  # "open"  — the close path: PASS closes the issue.
+  # "closed" — the reopen path: FAIL reopens it. A prematurely-closed
+  #            follow-through is otherwise invisible to the sweeper forever,
+  #            because it only ever listed `--state open`.
+  local mode="${3:-open}"
 
   local script earliest secrets
   while read -r key val; do
@@ -175,12 +240,28 @@ run_one() {
     return 0
   fi
 
-  # Earliest gate
-  local earliest_epoch
-  earliest_epoch=$(iso_to_epoch "${earliest:-}")
-  if (( now_epoch < earliest_epoch )); then
-    log "issue #$issue_num: earliest=$earliest not yet reached (now=$(date -u +%FT%TZ)) — skipping"
-    return 0
+  # Earliest gate — OPEN set only.
+  #
+  # ‼️ THE CLOSED SET DELIBERATELY BYPASSES THIS, and that bypass is what makes
+  # the reopen path work at all. `earliest` exists to prevent a premature CLOSE;
+  # a closed follow-through is already asserting "verified", so its predicate
+  # should be evaluated immediately regardless of the soak clock. Without the
+  # bypass the path would miss its own motivating case: #6657 was closed
+  # 2026-07-18 carrying earliest=2026-07-25, so under any closed-recency window
+  # shorter than ~7 days it leaves the query window before its own `earliest`
+  # elapses — evaluated zero times, reopened never.
+  if [[ "$mode" == "closed" ]]; then
+    log "issue #$issue_num: closed-set evaluation — bypassing earliest=${earliest:-none}"
+    if ! closed_precheck "$issue_num"; then
+      return 0
+    fi
+  else
+    local earliest_epoch
+    earliest_epoch=$(iso_to_epoch "${earliest:-}")
+    if (( now_epoch < earliest_epoch )); then
+      log "issue #$issue_num: earliest=$earliest not yet reached (now=$(date -u +%FT%TZ)) — skipping"
+      return 0
+    fi
   fi
 
   # Build the env allowlist. Default = nothing. Only vars named in
@@ -217,6 +298,60 @@ run_one() {
   trimmed_out=$(printf '%s' "$out" | tail -c 4000)
 
   local verdict body_msg action
+  if [[ "$mode" == "closed" ]]; then
+    # ‼️ INVERTED SEMANTICS. On the closed set the only actionable verdict is
+    # FAIL: the issue asserts "verified" but its own predicate disagrees, so the
+    # closure was premature.
+    case "$rc" in
+      1)
+        verdict="FAIL"
+        action="reopen"
+        body_msg="### Sweeper reopen: verification FAILED ($(date -u +%FT%TZ))
+$SWEEPER_REOPEN_MARKER
+This issue was closed, but \`$script\` still exits 1 — the close criteria are **not** met. Reopening so it is not silently lost.
+
+<details><summary>Output (last 4 KB)</summary>
+
+\`\`\`
+$trimmed_out
+\`\`\`
+
+</details>"
+        ;;
+      0)
+        # FULL no-op — comment included. run_one's open path comments
+        # UNCONDITIONALLY before deciding to close; reusing that here would post
+        # a fresh "still recovered" comment on every correctly-closed issue,
+        # every day, forever. The reopen cap bounds REOPENS, not comments, so
+        # this needs its own guard.
+        log "issue #$issue_num: closed and verification passes — no action, no comment"
+        return 0
+        ;;
+      *)
+        # TRANSIENT on a closed issue: no action AND no comment. A flaky probe
+        # must not accrete daily noise on an issue that is already closed.
+        log "issue #$issue_num: closed, verification TRANSIENT (exit $rc) — no action, no comment"
+        return 0
+        ;;
+    esac
+
+    if [[ "$DRY_RUN" == "1" ]]; then
+      log "issue #$issue_num: DRY_RUN — would $action with verdict=$verdict"
+      return 0
+    fi
+
+    printf '%s' "$body_msg" | gh issue comment "$issue_num" --repo "$REPO" --body-file -
+    # A failed reopen is the ONLY failure surface for this path — surface it as
+    # a workflow annotation rather than letting the caller's `|| fail` swallow
+    # it into the log.
+    if ! gh issue reopen "$issue_num" --repo "$REPO"; then
+      printf '::error::sweeper failed to reopen issue #%s (verification exits 1 but the issue stays closed)\n' "$issue_num"
+      return 1
+    fi
+    log "issue #$issue_num: verdict=$verdict action=$action"
+    return 0
+  fi
+
   case "$rc" in
     0)
       verdict="PASS"
@@ -299,6 +434,44 @@ main() {
     body=$(printf '%s' "$issues_json" | jq -r ".[$i].body")
     run_one "$num" "$body" || fail "issue #$num: run_one returned non-zero (continuing)"
   done
+
+  # --- Closed set: the reopen path (#6698) ----------------------------------
+  # A follow-through can be closed while its condition is still unrecovered —
+  # by the operator, an agent session, or a `Closes #N` that GitHub's keyword
+  # parser matched in descriptive PR prose. Before this, the sweeper listed
+  # `--state open` ONLY, so any such premature close was permanently invisible
+  # and could never be reopened.
+  #
+  # Single pinned `--search` form: mixing `--search` with `--label`/`--state` is
+  # gh-version-sensitive (gh folds them into search qualifiers), so all three
+  # qualifiers live inside the search string.
+  local closed_since
+  closed_since=$(date -u -d "${CLOSED_LOOKBACK_DAYS} days ago" +%F 2>/dev/null || date -u +%F)
+  local closed_json closed_rc=0
+  closed_json=$(gh issue list --repo "$REPO" \
+    --search "label:follow-through state:closed closed:>=${closed_since}" \
+    --limit "$CLOSED_LIMIT" --json number,body,stateReason 2>&1) || closed_rc=$?
+  if (( closed_rc != 0 )); then
+    fail "closed-set query failed (rc=$closed_rc) — skipping reopen path this sweep"
+  else
+    local closed_count
+    closed_count=$(printf '%s' "$closed_json" | jq 'length')
+    log "found $closed_count closed follow-through issue(s) since $closed_since"
+    local j
+    for j in $(seq 0 $((closed_count - 1))); do
+      local cnum cbody creason
+      cnum=$(printf '%s' "$closed_json" | jq -r ".[$j].number")
+      cbody=$(printf '%s' "$closed_json" | jq -r ".[$j].body")
+      creason=$(printf '%s' "$closed_json" | jq -r ".[$j].stateReason // \"\"")
+      # NOT_PLANNED is a deliberate wontfix. Reopening it would override a human
+      # decision, which is the opposite of what this path is for.
+      if [[ "$creason" == "NOT_PLANNED" ]]; then
+        log "issue #$cnum: closed as NOT_PLANNED (wontfix) — leaving closed"
+        continue
+      fi
+      run_one "$cnum" "$cbody" closed || fail "issue #$cnum: closed-set run_one returned non-zero (continuing)"
+    done
+  fi
 
   # No-directive summary. If any issues lacked the directive, emit a
   # structured warning section that bubbles to the workflow summary.

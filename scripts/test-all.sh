@@ -142,6 +142,11 @@ if want_scripts; then
   run_suite "scripts/review-reminder-liveness" bash scripts/review-reminder-liveness.test.sh
   run_suite "scripts/zot-restart-loop-alarm" bash scripts/zot-restart-loop-alarm.test.sh
   run_suite "scripts/followthrough-exec-bit" bash scripts/followthrough-exec-bit.test.sh
+  # Was an ORPHAN until #6698 — the suite existed and passed locally but was
+  # registered in no runner, so it gated nothing (exactly the class the comment
+  # above warns about). It covers the sweeper's path-traversal/symlink rejection
+  # AND the closed-set reopen path.
+  run_suite "scripts/sweep-followthroughs" bash scripts/sweep-followthroughs.test.sh
   # #6462: exit-code harness for the zot soak's decision arms. Registered explicitly because
   # this runner enumerates suites by hand — an unregistered .test.sh is an ORPHAN that never
   # gates (the #5417 class). The soak authorizes an irreversible PAT revoke, so its arms

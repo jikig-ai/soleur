@@ -391,6 +391,202 @@ EOF
   rm -rf "$root"
 }
 
+# =============================================================================
+# T9-T13 (#6698): the CLOSED-set reopen path.
+#
+# A follow-through can be closed while its condition is still unrecovered — by
+# the operator, an agent session, or a `Closes #N` that GitHub's keyword parser
+# matched in descriptive PR prose. The sweeper previously listed `--state open`
+# only, so such a close was permanently invisible.
+# =============================================================================
+
+# A gh stub that serves the queries the closed path makes. Records every
+# invocation so tests can assert what was NOT called (no-comment cases).
+make_gh_stub() {
+  local root="$1" open_json="$2" closed_json="$3" comments_json="$4"
+  cat > "$root/bin/gh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "gh \$*" >> "$root/gh-calls.log"
+case "\$*" in
+  *"state:closed"*)          printf '%s' '$closed_json' ;;
+  *"issue list"*)            printf '%s' '$open_json' ;;
+  *"--json comments"*)       printf '%s' '$comments_json' ;;
+  *"issue comment"*)         cat >/dev/null ;;
+  *"issue reopen"*)          : ;;
+  *"issue close"*)           : ;;
+  *) printf 'UNSTUBBED gh: %s\n' "\$*" >&2; exit 99 ;;
+esac
+EOF
+  chmod +x "$root/bin/gh"
+}
+
+# Run run_one in CLOSED mode (the 3rd arg), for real (DRY_RUN=0) so the
+# comment/reopen calls actually reach the stub and become assertable.
+invoke_closed() {
+  local tmpdir="$1" body="$2" issue_num="${3:-6657}"
+  local out_file="$tmpdir/closed-out"
+  (
+    cd "$tmpdir"
+    export PATH="$tmpdir/bin:$PATH"
+    export GH_REPO="test/test"
+    export DRY_RUN=0
+    # The directive declares `secrets=GH_TOKEN`, and the sweeper refuses to run
+    # a script whose declared secret is absent. Exported HERE rather than in
+    # setup_closed_root: that helper's output is captured via `$(...)`, so its
+    # exports die with the command-substitution subshell.
+    export GH_TOKEN="stub"
+    # shellcheck disable=SC1090
+    source "$SUT"
+    set +e
+    run_one "$issue_num" "$body" closed > "$out_file" 2>&1
+    echo "$?" > "$tmpdir/closed-rc"
+  )
+  cat "$out_file"
+}
+
+# The #6657 shape: closed COMPLETED, `earliest` in the FUTURE, probe exits 1.
+# This is the case the earliest-gate bypass exists for — without it the issue
+# leaves the closed-recency window before its own soak elapses and is evaluated
+# zero times, so the reopen path would miss its own motivating case.
+closed_body_6657() {
+  cat <<'EOF'
+[cert-poll] GitHub Pages cert requires attention
+
+<!-- soleur:followthrough script=scripts/followthroughs/cert-probe.sh earliest=2099-01-01T00:00:00Z secrets=GH_TOKEN -->
+EOF
+}
+
+setup_closed_root() {
+  local exit_code="$1" comments_json="$2"
+  local root; root=$(setup_tmpdir)
+  cat > "$root/scripts/followthroughs/cert-probe.sh" <<EOF
+#!/usr/bin/env bash
+exit $exit_code
+EOF
+  chmod +x "$root/scripts/followthroughs/cert-probe.sh"
+  make_gh_stub "$root" '[]' '[]' "$comments_json"
+  printf '%s' "$root"
+}
+
+# --- T9 (AC14b): #6657's exact shape → reopened despite a future `earliest` --
+t9_closed_fail_reopens_bypassing_earliest() {
+  local root; root=$(setup_closed_root 1 '{"comments":[]}')
+  local out; out=$(invoke_closed "$root" "$(closed_body_6657)")
+  local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
+  assert_contains     "T9 bypasses the earliest gate for the closed set" \
+                      "bypassing earliest=2099-01-01T00:00:00Z" "$out"
+  assert_contains     "T9 reopens the prematurely-closed issue (exit 1)" \
+                      "issue reopen 6657" "$calls"
+  assert_contains     "T9 comments with the reopen block" \
+                      "issue comment 6657" "$calls"
+  unset GH_TOKEN; rm -rf "$root"
+}
+
+# --- T10 (AC14): exit 0 on a closed issue → FULL no-op, comment included -----
+t10_closed_pass_is_full_noop() {
+  local root; root=$(setup_closed_root 0 '{"comments":[]}')
+  local out; out=$(invoke_closed "$root" "$(closed_body_6657)")
+  local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
+  assert_contains     "T10 logs the no-action decision" \
+                      "no action, no comment" "$out"
+  # run_one's OPEN path comments unconditionally before deciding to close;
+  # reusing it here would post a fresh comment on every correctly-closed issue
+  # every day, forever. The reopen cap bounds reopens, not comments.
+  assert_not_contains "T10 posts NO comment on a passing closed issue" \
+                      "issue comment" "$calls"
+  assert_not_contains "T10 does not reopen a passing closed issue" \
+                      "issue reopen" "$calls"
+  unset GH_TOKEN; rm -rf "$root"
+}
+
+# --- T11 (AC14): TRANSIENT on a closed issue → no action AND no comment -----
+t11_closed_transient_is_silent() {
+  local root; root=$(setup_closed_root 3 '{"comments":[]}')
+  local out; out=$(invoke_closed "$root" "$(closed_body_6657)")
+  local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
+  assert_contains     "T11 treats a non-0/1 exit as transient" \
+                      "TRANSIENT (exit 3)" "$out"
+  assert_not_contains "T11 posts NO comment on a transient closed issue" \
+                      "issue comment" "$calls"
+  assert_not_contains "T11 does not reopen on a transient exit" \
+                      "issue reopen" "$calls"
+  unset GH_TOKEN; rm -rf "$root"
+}
+
+# --- T12 (AC14): does not re-litigate the sweeper's own PASS closure --------
+t12_skips_own_pass_closure() {
+  # Evidence-based, not actor-based: still catches a premature close by ANY
+  # actor, while not re-verifying a closure the sweeper itself justified. Absent
+  # this, one follow-through silently becomes a permanent daily monitor.
+  local comments='{"comments":[{"body":"### Sweeper run: PASS (2026-07-18T18:00:00Z)\nScript exited 0."}]}'
+  local root; root=$(setup_closed_root 1 "$comments")
+  local out; out=$(invoke_closed "$root" "$(closed_body_6657)")
+  local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
+  assert_contains     "T12 skips a closure whose last comment is the sweeper PASS" \
+                      "not re-litigating" "$out"
+  assert_not_contains "T12 does not reopen its own PASS closure" \
+                      "issue reopen" "$calls"
+  unset GH_TOKEN; rm -rf "$root"
+}
+
+# --- T13 (AC14): stateless reopen cap bounds the loop ------------------------
+t13_reopen_cap_bounds_the_loop() {
+  # The script is stateless and runs verification under `env -i`, so an
+  # in-process counter cannot survive between sweeps — GitHub's comment history
+  # is the state.
+  local m='<!-- soleur:sweeper-reopen -->'
+  local comments="{\"comments\":[{\"body\":\"r1 $m\"},{\"body\":\"r2 $m\"},{\"body\":\"r3 $m\"}]}"
+  local root; root=$(setup_closed_root 1 "$comments")
+  local out; out=$(invoke_closed "$root" "$(closed_body_6657)")
+  local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
+  assert_contains     "T13 gives up after the reopen cap" \
+                      "cap=3" "$out"
+  assert_not_contains "T13 does not reopen past the cap" \
+                      "issue reopen" "$calls"
+
+  # Non-vacuity: one fewer prior reopen and it DOES act, so the cap is what
+  # stopped it rather than some unrelated skip.
+  local root2; root2=$(setup_closed_root 1 "{\"comments\":[{\"body\":\"r1 $m\"}]}")
+  invoke_closed "$root2" "$(closed_body_6657)" >/dev/null
+  local calls2; calls2=$(cat "$root2/gh-calls.log" 2>/dev/null || echo "")
+  assert_contains     "T13 still reopens below the cap (non-vacuity)" \
+                      "issue reopen" "$calls2"
+  unset GH_TOKEN; rm -rf "$root" "$root2"
+}
+
+# --- T14 (AC14): a failed reopen emits ::error:: ----------------------------
+t14_failed_reopen_emits_error_annotation() {
+  local root; root=$(setup_closed_root 1 '{"comments":[]}')
+  # Re-stub gh so `issue reopen` fails — the only failure surface for this path.
+  cat > "$root/bin/gh" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *"--json comments"*) printf '%s' '{"comments":[]}' ;;
+  *"issue comment"*)   cat >/dev/null ;;
+  *"issue reopen"*)    exit 1 ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "$root/bin/gh"
+  local out; out=$(invoke_closed "$root" "$(closed_body_6657)")
+  assert_contains     "T14 failed reopen emits a ::error:: annotation" \
+                      "::error::sweeper failed to reopen issue #6657" "$out"
+  unset GH_TOKEN; rm -rf "$root"
+}
+
+# --- T15 (AC14): the OPEN path is unchanged ---------------------------------
+t15_open_path_still_honors_earliest() {
+  # The closed set must not have widened the open query or relaxed its gate.
+  local root; root=$(setup_closed_root 1 '{"comments":[]}')
+  local body; body=$(closed_body_6657)
+  local combined; combined=$(invoke_run_one "$root" "$body" 6657)
+  assert_contains     "T15 open path still skips on a future earliest" \
+                      "not yet reached" "$combined"
+  assert_contains     "T15 open issue query keeps its own --state open limit" \
+                      "--state open --limit 50" "$(cat "$SUT")"
+  unset GH_TOKEN; rm -rf "$root"
+}
+
 t1_realpath_rejects_traversal
 t2_first_directive_wins
 t3_anchored_awk_skips_mid_prose
@@ -399,6 +595,13 @@ t5_multi_script_token_first_wins
 t6_fenced_block_directive_is_skipped
 t7_symlink_under_allowlist_rejected
 t8_secrets_gh_token_forwarded
+t9_closed_fail_reopens_bypassing_earliest
+t10_closed_pass_is_full_noop
+t11_closed_transient_is_silent
+t12_skips_own_pass_closure
+t13_reopen_cap_bounds_the_loop
+t14_failed_reopen_emits_error_annotation
+t15_open_path_still_honors_earliest
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
