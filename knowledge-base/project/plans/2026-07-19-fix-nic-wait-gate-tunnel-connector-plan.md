@@ -17,6 +17,68 @@ status: draft
 > **Lane note:** no `spec.md` exists for this branch, so `lane:` could not be carried
 > forward. Defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-19 · **Reviewers/researchers:** CTO domain lead,
+architecture-strategist, spec-flow-analyzer, code-simplicity-reviewer, security-sentinel,
+learnings-researcher, best-practices-researcher, C4 completeness read, precedent-diff sweep.
+
+### Key improvements (each changed the plan, not just annotated it)
+
+1. **A design contradiction was found and fixed.** The first draft put the timeout emit in
+   a caller-side `|| soleur-boot-emit …` arm *while* specifying the helper exits 0 on
+   timeout — so the arm could never fire and `private_nic_timeout` would never be emitted,
+   breaking the plan's only observability guarantee. The same single arm also could not
+   discriminate ready / timeout / probe-fault, so a probe fault would have been mislabelled
+   as "NIC absent" — the exact #6415 defect this plan cites. **Fix:** all emission moved
+   inside the helper; three mutually-exclusive arms; no caller-side error handling.
+2. **A P0 delivery hazard was found that the plan had described as safe.** `Apply path`
+   originally called the two delivery channels independent with "zero downtime". They are
+   **coupled** by `host_scripts_content_hash`, whose mismatch aborts the entire runcmd at
+   `cloud-init.yml:559` under `set -e`. Verified the existing coherence guard covers
+   **only** the web-2-recreate job — not the routine apply or a fresh `web-1` create, which
+   is this plan's target path. Now AC-gated.
+3. **A contract inversion was avoided.** The draft added a `nic` *verb* to the fail-closed
+   `soleur-wait-ready`, then spent a section, an AC, and two test edits managing the
+   inversion. Replaced with a **separate** `soleur-wait-nic`, leaving the shared helper
+   byte-identical and deleting the whole cascade.
+4. **The load-bearing uncited claim is now verified.** "cloudflared resolves origin per
+   connection" — **CONFIRMED** against `cloudflared` source and four Cloudflare doc pages.
+   It carries both the ExecStartPre rejection and the severity split, so verifying it was
+   not optional.
+5. **The severity framing was reconciled with the engineering analysis.** The draft used
+   the maximal framing ("serves nothing") to justify the threshold and the minimal framing
+   (self-healing) to justify a deferral, without reconciling them. Now split explicitly
+   into common vs pathological case, with the threshold justified by the pathological case
+   **having actually occurred** (#6400, ~14 days, all signals green).
+6. **The helper now conforms to house precedent** on loop shape, probe resolution, match
+   flags, and stage naming — with the one deliberate divergence (fail-open next to a
+   fail-closed sibling gating the same step) documented rather than left to be discovered.
+7. **Tests were unrunnable as specified.** The harness is grep-only and never renders the
+   template, so the render tests and behavioural tests could not execute — silently
+   degrading two ACs to string-presence proxies. A render step and a stub-`ip` extraction
+   harness are now in scope.
+8. **17 ACs → 9**, after removing three structurally unsatisfiable, four proxies, and two
+   self-contradictory ones.
+
+### New considerations discovered
+
+- **The blast radius is larger than the archived analysis assumed.** Post-#6594 *all three*
+  ingress services are private-IP-relative, so a NIC-less connector serves **nothing** —
+  the inherited CF-5 trade table ("only `registry.` breaks") is stale.
+- **The C3 budget collision** — an `ExecStartPre` NIC wait would consume
+  `cloudflared_ready`'s ~60 s budget and detonate its pre-existing `|| exit 1`, causing the
+  very CF-5 abort this work exists to prevent. Found during planning, independently
+  confirmed at review.
+- **The firewall attach shares the NIC's construction-order race** (`firewall.tf:91-93`) —
+  same "attach cannot precede create" fact, never written down. Out of scope; flagged.
+- **Two AC-authoring defects were caught by executing the ACs**, not by reading them:
+  `grep -c` exits 1 on a zero count (fails on the *passing* case), and an unscoped
+  `git diff` AC matches this plan's own prose about reboots.
+- **This path is not digest-pinned at all** (`:latest`), but the integrity control that
+  matters here is the repo-derived content hash — *stronger* than a digest for this
+  purpose. Reliance on the unsigned image does not increase.
+
 ## Overview
 
 On a freshly-provisioned `web-1`, cloud-init registers the host as the Cloudflare
@@ -74,6 +136,42 @@ diagnostically — and it is, in fact, the plan's whole thesis:
 | L7 — sshd / fail2ban | Explicitly **not** hypothesised. Per `hr-ssh-diagnosis-verify-firewall`, no service-layer cause is proposed. | n/a |
 
 **No reboot hypothesis is entertained** (ADR-115, finding CF-6).
+
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+The gate fired on `timeout` / `unreachable`. Layer-by-layer verification status, per
+`plan-network-outage-checklist.md`. Telemetry emitted
+(`hr-ssh-diagnosis-verify-firewall applied`).
+
+| Layer | Verified? | Artifact / note |
+|---|---|---|
+| **L3 firewall allow-list** | **Not applicable — and deliberately so.** | This plan changes no firewall rule and no allowlist. The host retains public egress throughout the wait, which is *why* deferral preserves a recovery channel. No `hcloud firewall describe` diff is required because no operator-egress path is involved: the failure is host-internal (web-1 cannot reach its **own** `10.0.1.10`). |
+| **L3 DNS / routing** | **Verified — this is the layer at fault.** | The defect is the absence of the private-NIC route at cloud-init time. `tunnel.tf:53-107` shows all three ingress services dial RFC1918 literals, so no DNS resolution is involved at all. Confirmed by reading `tunnel.tf` this session. |
+| **L7 TLS / proxy** | Not implicated. | The tunnel terminates TLS at Cloudflare's edge; the origin dial is plaintext over the private net. No certificate or proxy change. |
+| **L7 application** | **Explicitly not hypothesised first.** | Per `hr-ssh-diagnosis-verify-firewall`, no sshd/fail2ban/app-layer cause is proposed. The plan's whole thesis is that L7 (connector registration) must be **ordered after** L3 (NIC attach) — the L3→L7 discipline is the fix, not merely the diagnostic order. |
+
+**Gap to close before implementation:** none at the network layers. The one open
+verification is *not* network-layer — it is the cloudflared origin-resolution semantics
+(Phase 0.5), which determines whether the residual outage is bounded or unbounded.
+
+### Downtime & Cutover determination (deepen-plan Phase 4.55)
+
+**Gate evaluated; does NOT fire.** Recorded because the skip is a judgment call:
+
+- **Infra reboot/replace class — excluded by the gate's own carve-out.** The gate exempts
+  attributes the serving host pins via `lifecycle { ignore_changes = [...] }`. `server.tf:278`
+  carries `ignore_changes = [user_data, ssh_keys, image, placement_group_id]` on
+  `hcloud_server.web`, so the `cloud-init.yml`
+  edit does **not** plan a replace or a power-off of the running `web-1`. No
+  `server_type` / `location` / `placement_group_id` change; no singleton→cluster cutover.
+- **Database lock class:** no migration, no DDL, no backfill.
+- **Deploy/router class:** no container swap, no tunnel restructure, and **no restart of
+  the running connector** — the gate lives on the *first-boot* path only.
+
+Residual availability consideration is the **P0 bake/apply skew** documented under
+Infrastructure (IaC), which is a *fresh-create* hazard rather than a cutover of a serving
+host. It is handled there with an AC rather than a maintenance window, because no window
+would help: the failure would land on a host that is being created, not drained.
 
 ---
 
@@ -201,20 +299,38 @@ available.
 **Contract: `soleur-wait-nic` owns ALL emission internally and ALWAYS exits 0.** It emits
 **exactly one** event per invocation, from one of three mutually-exclusive arms:
 
+Shape below **conforms to house precedent** (see Precedent Diff): `IP_BIN` + `PROBE_OK`
+resolution, probe-once-before-the-loop, `for i in $(seq 1 30) … sleep 2` (30 × 2 s = 60 s),
+`grep -qwF --`, snake_case domain-prefixed stages.
+
 ```sh
 # usage: soleur-wait-nic <expected-ip>
 # ALWAYS exits 0. Emits exactly one event. Never aborts a boot.
-soleur-wait-nic() {
-  IP_BIN=$(command -v ip) || { soleur-boot-emit private_nic_probe_fault warning; return 0; }
-  n=0
-  while :; do
-    "$IP_BIN" -4 -o addr show 2>/dev/null | grep -qwF -- "$1" \
-      && { soleur-boot-emit private_nic_ready info; return 0; }
-    n=$((n+1))
-    [ "$n" -ge 30 ] && { soleur-boot-emit private_nic_timeout warning; return 0; }
+EXPECTED="$1"
+
+# Probe resolution FIRST — `ip` lives in /usr/sbin, absent from some minimal PATHs.
+IP_BIN=$(command -v ip 2>/dev/null || true)
+PROBE_OK=true; [ -n "$IP_BIN" ] && [ -x "$IP_BIN" ] || PROBE_OK=false
+
+# Probe-fault SHORT-CIRCUITS before the wait — never spend 60 s on a missing binary,
+# and never read "could not measure" as "the address is absent" (#6415).
+if [ "$PROBE_OK" != true ]; then
+  soleur-boot-emit private_nic_probe_fault warning; exit 0
+fi
+
+nic_ok=false
+"$IP_BIN" -4 -o addr show 2>/dev/null | grep -qwF -- "$EXPECTED" && nic_ok=true
+if [ "$nic_ok" = false ]; then
+  for i in $(seq 1 30); do
     sleep 2
+    "$IP_BIN" -4 -o addr show 2>/dev/null | grep -qwF -- "$EXPECTED" && { nic_ok=true; break; }
   done
-}
+fi
+
+if [ "$nic_ok" = true ]; then soleur-boot-emit private_nic_ready info
+else soleur-boot-emit private_nic_timeout warning
+fi
+exit 0
 ```
 
 `grep -qwF` (exact word, fixed string) is deliberate and mirrors
@@ -311,17 +427,33 @@ surfaced by engineering review and substantially weakens the case for it:
    (`network.tf:9-13`, additive attach after create) is a **first-boot** phenomenon —
    exactly what D2 covers.
 
-   > **⚠️ This claim is load-bearing and currently UNCITED — verify it in Phase 0.**
-   > Review flagged that the per-connection-resolution property is sourced only to
-   > "engineering review," with no vendor citation, test, or detector. It carries two
-   > conclusions: this deferral, *and* the User-Brand Impact severity split. Supporting
-   > evidence is structural — all three `tunnel.tf` origins are **IP literals**
-   > (`:53-54`, `:70-71`, `:106-107`), so there is no start-time DNS binding to cache —
-   > but "no DNS cache" is not the same proposition as "re-dials per connection."
-   > **Phase 0 must confirm it against Cloudflare's documented connector behaviour** (or
-   > empirically) and record the citation. If it is false, the timeout arm is a silent
-   > total-ingress outage carrying only a `warning`, and both conclusions must be revisited.
-   > Note also that nothing currently observes *"NIC up but connector still not serving"*:
+   > **✅ VERIFIED at deepen-plan — the claim is CONFIRMED against primary sources.**
+   > It had been flagged as load-bearing-but-uncited (it carries both this rejection *and*
+   > the User-Brand Impact severity split). Research resolved it:
+   >
+   > - **cloudflared dials origins lazily, per request** — not at process start.
+   >   `proxy.go` establishes the origin connection during `RoundTrip` / `proxyStream`'s
+   >   `originDialer.EstablishConnection()`, i.e. triggered by incoming traffic;
+   >   `ingress/origin_service.go`'s `start()` initialises config but opens no connection.
+   > - **Cloudflare docs, origin configuration:** *"Connections are created **on demand**
+   >   and reused where possible, with no persistent idle pool… **new connections are
+   >   created as traffic resumes**."*
+   > - **No startup origin validation exists.** The 2026.5.2 connectivity pre-checks
+   >   validate only the *Cloudflare edge* path (DNS for `region{1,2}.v2.argotunnel.com`,
+   >   UDP/TCP 7844, api.cloudflare.com) — never origin reachability. The tunnel-status
+   >   doc is explicit: *"The tunnel status only reflects the connection between cloudflared
+   >   and the Cloudflare network. It does not indicate whether cloudflared can reach your
+   >   internal services."*
+   > - **Applies to all rule types** (HTTP, TCP/SSH), and **IP literals get no special
+   >   eager treatment** — they dial per request exactly as hostnames do.
+   >
+   > Sources: `github.com/cloudflare/cloudflared` (`proxy/proxy.go`,
+   > `ingress/origin_service.go`); `developers.cloudflare.com` origin-configuration,
+   > connectivity-prechecks, tunnel-status, and common-errors pages.
+   >
+   > **Consequence:** a NIC-less connector is genuinely a *converging* state — the
+   > rejection above and the severity split both stand. **Residual gap (unchanged):**
+   > nothing observes *"NIC up but connector still not serving"* —
    > `web-private-nic-guard.sh:94` reports `nic_ok=`, never connector-serving state.
 
 **If the drop-in is ever taken**, three requirements are non-negotiable and must be
@@ -911,6 +1043,108 @@ Checked all `Files to Edit` paths against open `code-review`-labelled issues.
   matches.
 
 ---
+
+## Security Review (deepen-plan)
+
+**Verdict: security-neutral. No P0, no P1 introduced by this change.** Findings that
+change the plan's text:
+
+- **Inbound exposure — unchanged.** `firewall.tf:1-89` allows only tcp/22 from
+  `var.admin_ips`, tcp/80+443 from Cloudflare edge ranges, and ICMP. cloudflared is an
+  **outbound dialer** needing no inbound port, so delaying it opens nothing. The only
+  wildcard bind (webhook `-ip 0.0.0.0 -port 9000`, `cloud-init.yml:245`) installs at
+  `:604-615` — **after** the insertion point, so the wait pushes it later, not earlier,
+  and :9000 is not in the allow-list regardless.
+- **`private_ip` in `user_data` — non-finding.** `user_data` already carries
+  `tunnel_token`, `doppler_token`, `webhook_deploy_secret`, `sentry_dsn`,
+  `ghcr_read_token`. An RFC1918 literal is strictly dominated, and the value is already
+  plaintext in `variables.tf:110` and in `tunnel.tf`'s ingress rules.
+- **Argument injection — closed by an existing validation.** `variables.tf`'s
+  `can(regex("^10\\.0\\.1\\.[0-9]{1,3}$", h.private_ip))` means no shell metacharacter can
+  reach `grep -qwF -- "$1"`.
+- **PATH hijack — closed by the content hash.** `/usr/local/bin` does precede `/usr/sbin`,
+  so `command -v ip` could in principle resolve a planted binary — but `/usr/local/bin` is
+  populated only by the hash-verified extraction, and the hash is checked at
+  `cloud-init.yml:559` **before any baked code executes**. Planting requires repo write
+  access or a sha256 preimage.
+- **Egress-firewall ordering — net-zero.** `cron-egress-firewall.service` enables at
+  `:632`, so a ≤60 s wait does push it ≤60 s later. But the subject it constrains — the
+  app container — starts later still (terminal block `docker run`, after the plugin seed),
+  so the extended window **contains no container**. This resolves the concern raised
+  during planning.
+- **Secret-in-log — none.** `soleur-boot-emit` builds a fixed payload (`message`, `level`,
+  tags `stage`/`host_id`/`region`); stage values are literals and the IP is never passed
+  to the emitter.
+
+### ⚠️ Correction: this path is NOT digest-pinned, and that is fine
+
+The framing inherited into this work says *"the digest pin gives integrity, never
+provenance."* **On this path there is no digest pin at all** — `var.image_name` defaults
+to `ghcr.io/jikig-ai/soleur-web-platform:latest` (`variables.tf:66-70`), a **mutable tag**.
+
+The correction matters in the *reassuring* direction: **the integrity control covering the
+new helper is not the image reference.** It is `host_scripts_content_hash`
+(`server.tf:95-97` → injected `:182` → verified `cloud-init.yml:559`), which binds the
+extracted scripts to the **repo files** — strictly stronger than either a tag or a digest
+for this purpose, and it covers `soleur-wait-nic` automatically via
+`local.host_script_files`.
+
+**So adding a baked helper does not increase reliance on the unsigned image.** It
+increases coupling to bake/apply **sequencing** — which is exactly the P0 above. The
+"integrity, never provenance" wording elsewhere in this plan is accurate and correctly
+scoped; no provenance work is proposed (out of scope by explicit decision).
+
+### Adjacent pre-existing observations (NOT in scope — recorded so reviewers see them)
+
+- **The firewall attach has the SAME construction-order race as the NIC.**
+  `hcloud_firewall_attachment.web` depends on `hcloud_server.web[].id`
+  (`firewall.tf:91-93`) — the identical "attach cannot precede create" fact this plan
+  builds its whole argument on for `hcloud_server_network`. There is therefore a
+  fresh-create window where the host boots before the firewall attaches. **This change
+  does not move that window** (it lives entirely inside `runcmd`), but the symmetry is
+  striking and nobody has written it down. Worth a separate look at what is reachable
+  during it; not verified here, so this is a flag to check, not an asserted exposure.
+- **`cloudflared service install ${tunnel_token}` puts the token in argv**
+  (`cloud-init.yml:598`) — visible in `/proc/<pid>/cmdline` and echoed to
+  `/var/log/cloud-init-output.log`. Pre-existing, and the repo already mitigates the same
+  hazard in the terminal block (*"Source token from the restricted env file (avoids
+  exposing it in /proc/<pid>/cmdline)"*). Out of scope, but the new line lands directly
+  above it, so reviewers will read this region.
+
+## Precedent Diff (deepen-plan Phase 4.4)
+
+`soleur-wait-nic` is a pattern-bound behaviour (bounded poll + NIC probe + boot-stage
+emit). Repo precedents were enumerated and diffed; the design above was **revised to
+conform** on three axes, and **one deliberate divergence** is documented.
+
+| Axis | House precedent | This plan | Verdict |
+|---|---|---|---|
+| **Loop shape / bound** | `for i in $(seq 1 30); do … sleep 2; done` — **30 × 2 s = 60 s**, used 6+ times verbatim (`web-private-nic-guard.sh:48-51`, `cloud-init-registry.yml:479-482,660,753,777-781`, `cloud-init.yml:472`). `cloud-init-registry.yml:475` calls it *"the same shape as the volume device-wait"* — the style is self-aware. | **Conformed.** First draft used the `while :; n=$((n+1))` form, which is Shape B — the *fail-closed* variant used exactly once (`soleur-wait-ready`). Revised to Shape A. | ✅ conforms |
+| **Probe resolution** | `IP_BIN=$(command -v ip 2>/dev/null \|\| true)` then `PROBE_OK=true; [ -n "$IP_BIN" ] && [ -x "$IP_BIN" ] \|\| PROBE_OK=false` (`web-private-nic-guard.sh:38-39`, `cloud-init-registry.yml:467-468`). **Never** `command -v ip` inline in the predicate. Probe-fault **short-circuits before the loop** (`web-private-nic-guard.sh:47`). | **Conformed.** First draft inlined `command -v` and did not explicitly short-circuit. Revised to the `IP_BIN`/`PROBE_OK` pair with an early `exit 0`. | ✅ conforms |
+| **Match flags** | `"$IP_BIN" -4 -o addr show 2>/dev/null \| grep -qwF -- "$EXPECTED_IP"` — `-w`/`-F`/`--` all load-bearing and commented at `web-private-nic-guard.sh:40-42`. | Identical. | ✅ conforms |
+| **Stage naming** | snake_case, domain-prefixed (`workspaces_mount`, `inngest_ghcr_fallback`, `cloud_init_complete`). Hyphens **never** appear in a stage name — the guards' hyphenated `converged_by=probe-fault` is a *Better Stack log field*, not a Sentry stage. | `private_nic_ready` / `private_nic_timeout` / `private_nic_probe_fault`. | ✅ conforms |
+| **`warning` level** | Exactly **one** precedent: `inngest_ghcr_fallback` (`cloud-init.yml:705`) — a *measured* degraded path. | Two of our three arms use `warning`, one of which (`probe_fault`) is an **unmeasurable** state. | ⚠️ thin precedent — acceptable, noted |
+| **"Could not measure" stage** | **Novel — no precedent.** No existing Sentry stage encodes instrument failure; the concept lives only in the guards' Better Stack `converged_by=probe-fault` field and has never been promoted to a stage. | `private_nic_probe_fault` is the first. | ⚠️ **novel — flag for reviewer scrutiny** |
+| **Always-exit-0 baked helper** | Precedented: 2 of 4 helpers `soleur-host-bootstrap.sh` authors are fail-open (`soleur-boot-emit:279-300`, `soleur-vector-install:350-449`); 2 are fail-closed (`soleur-wait-ready:307-320`, `soleur-luks-structural-gate:461-491`). House rule: **serving-critical invariants fail closed; observability / best-effort convergence fails open.** | Fail-open. | ⚠️ **deliberate divergence — see below** |
+| **Heredoc authoring guard** | Each helper heredoc is preceded by `STAGE=…; FAILED_FILE=…` so a *write* miss emits a named stage under the top-level `emit_fail` trap (`:278`, `:349`, `:460`). | Must carry its own pair. *(`soleur-wait-ready:307` lacks one and inherits `STAGE=boot_emit` — an existing gap, not a pattern to copy.)* | ✅ conform — add the pair |
+
+### The one deliberate divergence
+
+`soleur-wait-nic` is fail-**open** while its **nearest functional sibling**,
+`soleur-wait-ready`, is fail-**closed** — and they gate the *same* `cloudflared` step,
+five lines apart. That asymmetry is intentional and is the plan's central thesis, but it
+will read as an inconsistency to any reviewer who does not know why:
+
+- `soleur-wait-ready cloudflared` runs **after** the unit exists. A never-ready cloudflared
+  is a *terminal* condition, and its `|| exit 1` is a pre-existing (separately contested)
+  choice.
+- `soleur-wait-nic` runs **before** the unit exists, on a condition that **provably
+  self-heals** — cloudflared dials origins per connection (confirmed below), so a late NIC
+  needs no restart. Aborting here would destroy a recovery channel to prevent a condition
+  that resolves itself.
+
+**Action:** state this rationale in a comment **inside `soleur-host-bootstrap.sh`** (baked,
+0 user_data) — not in `cloud-init.yml`, per the zero-new-comments budget rule.
 
 ## Risks & Mitigations
 

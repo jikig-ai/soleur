@@ -27,9 +27,12 @@ Phase 0's verifications gate design decisions in Phases 2-3.
 - [ ] 0.3 Confirm `soleur-boot-emit` accepts `warning`. *(Verified: `<stage> [info|warning|fatal]`.)*
 - [ ] 0.4 Confirm `private_ip` is absent from the `templatefile` map **and** present on the
       `web_hosts` object type (`variables.tf:98`). Two distinct checks.
-- [ ] 0.5 **Verify the per-connection origin-resolution claim.** Load-bearing for the
-      ExecStartPre rejection *and* the severity split; currently uncited. Record a
-      citation or an empirical result. If false, revisit both.
+- [x] 0.5 **Per-connection origin-resolution claim — RESOLVED at deepen-plan: CONFIRMED.**
+      cloudflared dials origins lazily per request (`proxy/proxy.go` `RoundTrip` /
+      `proxyStream`; `ingress/origin_service.go` `start()` opens no connection); Cloudflare
+      docs state connections are *"created on demand… new connections are created as
+      traffic resumes"*; the 2026.5.2 connectivity pre-checks validate only the **edge**
+      path, never origin reachability. Carry the citations into the ADR amendment.
 - [ ] 0.6 **Decide the P0 bake/apply coherence mitigation.** Confirmed at plan time that
       `web2-recreate-preflight.sh` has exactly one call site
       (`apply-web-platform-infra.yml:1338`) and does **not** cover the routine apply or a
@@ -53,9 +56,30 @@ Phase 0's verifications gate design decisions in Phases 2-3.
       **exactly one** event from three mutually-exclusive arms:
       `private_nic_ready` (info) / `private_nic_timeout` (warning) /
       `private_nic_probe_fault` (warning).
-- [ ] 2.2 Resolve the probe via `command -v ip`; match with `grep -qwF` so `10.0.1.1`
-      cannot match inside `10.0.1.10`.
-- [ ] 2.3 An unresolvable probe takes the **probe-fault** arm, never the timeout arm.
+- [ ] 2.2 **Conform to house precedent** (verified at deepen-plan):
+      - Loop: `for i in $(seq 1 30); do sleep 2; …; done` — **30 × 2 s**, the shape used
+        6+ times verbatim. Do **not** use the `while :; n=$((n+1))` form — that is the
+        *fail-closed* variant used only by `soleur-wait-ready`.
+      - Probe: `IP_BIN=$(command -v ip 2>/dev/null || true)` then
+        `PROBE_OK=true; [ -n "$IP_BIN" ] && [ -x "$IP_BIN" ] || PROBE_OK=false`. Never
+        inline `command -v ip` in the predicate.
+      - Match: `"$IP_BIN" -4 -o addr show 2>/dev/null | grep -qwF -- "$EXPECTED"` —
+        `-w`/`-F`/`--` are all load-bearing.
+      - Probe once **before** the loop, then sleep-first inside it (the NIC-guard form).
+- [ ] 2.3 **Probe-fault short-circuits BEFORE the loop** — both precedents skip the wait
+      entirely when `PROBE_OK=false`. Never spend 60 s on a missing binary, and never read
+      "could not measure" as "the address is absent" (#6415).
+- [ ] 2.3b Precede the heredoc with its own `STAGE=…; FAILED_FILE=soleur-wait-nic` pair, so
+      a *write* miss emits a named stage under the top-level `emit_fail` trap (the form
+      used at `soleur-host-bootstrap.sh:278`, `:349`, `:460`). Note `soleur-wait-ready:307`
+      lacks one — that is an existing gap, not a pattern to copy.
+- [ ] 2.3c Baked form is a **standalone script**, not a shell function: use `exit 0`, never
+      `return 0` (`return` outside a function is an error in dash). All three arms exit 0 —
+      that is the property making the bare, no-`||` call site safe.
+- [ ] 2.3d Put the fail-open-vs-fail-closed **divergence rationale** in a comment inside
+      `soleur-host-bootstrap.sh` (baked, 0 user_data) — `soleur-wait-nic` is fail-open five
+      lines from the fail-closed `soleur-wait-ready` that gates the same cloudflared step,
+      and that asymmetry will read as a bug without the explanation.
 - [ ] 2.4 **Leave `soleur-wait-ready` (`:307-319`) byte-identical.** Do not add a verb, do
       not thread a soft/hard flag, do not touch its header comment.
 - [ ] 2.5 Pin the NIC bound **below** `cloudflared_ready`'s 60 s budget.
