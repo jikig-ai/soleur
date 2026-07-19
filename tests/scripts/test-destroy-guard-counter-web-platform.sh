@@ -941,6 +941,40 @@ t_warm_standby_host_creates_halt_wired() {
     _report "T51d warm_standby HALT text routes + states no-bypass" fail \
       "halt_error_present=$([[ -n "$halt_errors" ]] && echo yes || echo no) routing=$routed no_bypass=$no_bypass"
   fi
+
+  # (5) AC3 — ORDERING, by line offset within the extracted block, not by eyeball.
+  # Two orderings are load-bearing and neither is implied by (1)-(3) passing:
+  #
+  #   a. the parse sits BELOW the `set -e` re-enable. Above it, a jq failure would
+  #      not abort the step, and the guard would evaluate a stale/empty counter.
+  #   b. the ^[0-9]+$ validation precedes the -gt comparison. Reversed, the
+  #      comparison reads an unvalidated value first and `[[ "null" -gt 0 ]]`
+  #      resolves the unset name to 0 and PASSES — the fail-OPEN hole T51b exists
+  #      to close, reintroduced purely by moving two lines.
+  #
+  # grep -n over the block (not the file) so the offsets are block-relative and
+  # stay correct when the job moves within the workflow.
+  # `|| true` on EVERY assignment is load-bearing, not defensive noise. This file
+  # runs under `set -euo pipefail`; a grep that matches nothing exits 1, and an
+  # unguarded `x="$(grep … | cut …)"` therefore ABORTS the whole suite mid-run
+  # instead of reporting a failure. Caught by mutation M1 (deleting the `set -e`
+  # re-enable): the run stopped silently after T51d, emitted no summary line, and
+  # still exited 0 — the anchor-absent branch below was unreachable dead code.
+  local ln_seterr ln_parse ln_valid ln_halt
+  ln_seterr="$(grep -nE '^[[:space:]]*set -e[[:space:]]*$' <<<"$code" | tail -1 | cut -d: -f1 || true)"
+  ln_parse="$(grep -nE 'host_creates=\$\(echo' <<<"$code" | head -1 | cut -d: -f1 || true)"
+  ln_valid="$(grep -nE '\[\[ ! "\$[a-z_]+" =~ \^\[0-9\]\+\$ \]\]' <<<"$code" | head -1 | cut -d: -f1 || true)"
+  ln_halt="$(grep -nF '[[ "$host_creates" -gt 0 ]]' <<<"$code" | head -1 | cut -d: -f1 || true)"
+
+  if [[ -z "$ln_seterr" || -z "$ln_parse" || -z "$ln_valid" || -z "$ln_halt" ]]; then
+    _report "T51e warm_standby HALT ordering (set -e < parse < validation < comparison)" fail \
+      "could not locate all four anchors (set -e='${ln_seterr:-absent}' parse='${ln_parse:-absent}' validation='${ln_valid:-absent}' halt='${ln_halt:-absent}')"
+  elif (( ln_seterr < ln_parse && ln_parse < ln_valid && ln_valid < ln_halt )); then
+    _report "T51e warm_standby HALT ordering (set -e $ln_seterr < parse $ln_parse < validation $ln_valid < comparison $ln_halt)" ok
+  else
+    _report "T51e warm_standby HALT ordering" fail \
+      "want set -e < parse < validation < comparison; got set -e=$ln_seterr parse=$ln_parse validation=$ln_valid comparison=$ln_halt"
+  fi
 }
 
 t_ruleset_rule_removal_trips
