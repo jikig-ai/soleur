@@ -115,11 +115,33 @@ const okSpawn = {
   stderrTail: "",
 };
 
+// #6714 — the handler now CONSUMES safeCommitAndPr's return value (R16a: it was
+// DISCARDED before, which is why a failed persistence could stay GREEN). A bare
+// `{ ok: true }` is NOT a member of the SafeCommitResult union, so it reads as
+// `status !== "committed"` → livenessOk=false → RED, failing every happy-path
+// test here for a fixture reason rather than a real one.
+//
+// Mirrors COMMUNITY_DIGEST_DIR in cron-community-monitor.ts. Computed at CALL
+// time (not at beforeEach time) so the date matches the handler's own
+// `runStartedAt.slice(0,10)` from the same run rather than an earlier tick.
+const digestPathForToday = () =>
+  `knowledge-base/support/community/${new Date().toISOString().slice(0, 10)}-digest.md`;
+
+/** A union-valid "committed" result whose `paths` includes today's digest. */
+const committedWithDigest = () => ({
+  status: "committed" as const,
+  prNumber: 4242,
+  branch: "cron/community-monitor",
+  fileCount: 1,
+  deletionCount: 0,
+  paths: [digestPathForToday()],
+});
+
 beforeEach(() => {
   setupWorkspaceSpy.mockResolvedValue({ ephemeralRoot: "/tmp/x", spawnCwd: "/tmp/x/repo" });
   spawnClaudeEvalSpy.mockResolvedValue(okSpawn);
   resolveOutputAwareOkSpy.mockResolvedValue(true);
-  safeCommitAndPrSpy.mockResolvedValue({ ok: true });
+  safeCommitAndPrSpy.mockImplementation(async () => committedWithDigest());
   teardownSpy.mockResolvedValue(undefined);
   ensureAuditIssueSpy.mockResolvedValue(undefined);
   // Real postSentryHeartbeat requires these env vars + a fetch to actually POST.

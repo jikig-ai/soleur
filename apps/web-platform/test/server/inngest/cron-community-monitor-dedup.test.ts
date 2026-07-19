@@ -34,13 +34,33 @@ let fetchSpy: ReturnType<typeof vi.fn>;
 interface StoredIssue { title: string; body: string; created_at: string }
 let store: StoredIssue[];
 
+// #6714 Phase 3.4 — the SECOND half of the dedup substrate. The short-circuit
+// used to fire on issue-presence ALONE (the wrong artifact); it now also requires
+// the dated digest COMMITTED on the default branch. This set models that commit
+// state, and safeCommitAndPr populates it, so run 2 dedups BECAUSE run 1's commit
+// landed — the causal chain the production fix depends on. Seeding it directly
+// would let a test dedup on a digest nothing ever committed.
+let committedPaths: Set<string>;
+
 const fakeRequest = vi.fn(
-  async (route: string, params: { per_page?: number }) => {
+  async (route: string, params: { per_page?: number; path?: string }) => {
     if (route === "GET /repos/{owner}/{repo}/issues") {
       const sorted = [...store].sort((a, b) =>
         a.created_at < b.created_at ? 1 : -1,
       );
       return { data: sorted.slice(0, params.per_page ?? 30) };
+    }
+    if (route === "GET /repos/{owner}/{repo}/contents/{path}") {
+      if (committedPaths.has(String(params.path))) {
+        return { data: { path: params.path } };
+      }
+      // 404 is the EXPECTED negative ("not committed") and is the one status the
+      // production read stays quiet about — any other status is reported as a
+      // genuine read fault. Throwing a bare Error here would exercise the wrong
+      // arm and emit a spurious reportSilentFallback.
+      const err = new Error("Not Found") as Error & { status?: number };
+      err.status = 404;
+      throw err;
     }
     throw new Error(`unexpected octokit route ${route}`);
   },
@@ -97,6 +117,8 @@ const TODAY = FROZEN.toISOString().slice(0, 10);
 const YESTERDAY = new Date(FROZEN.getTime() - 86_400_000)
   .toISOString()
   .slice(0, 10);
+// Mirrors COMMUNITY_DIGEST_DIR + the `<date>-digest.md` shape in the handler.
+const DIGEST_PATH = `knowledge-base/support/community/${TODAY}-digest.md`;
 
 const okSpawn = {
   ok: true, exitCode: 0, signal: null, abortedByTimeout: false,
@@ -145,6 +167,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(FROZEN);
   store = [];
+  committedPaths = new Set();
   fakeRequest.mockClear();
   setupWorkspaceSpy.mockResolvedValue({ ephemeralRoot: "/tmp/x", spawnCwd: "/tmp/x/repo" });
   // The spawn simulates the agent filing TODAY's digest into the shared store.
@@ -157,7 +180,20 @@ beforeEach(() => {
     return okSpawn;
   });
   resolveOutputAwareOkSpy.mockResolvedValue(true);
-  safeCommitAndPrSpy.mockResolvedValue({ ok: true });
+  // #6714 — union-valid SafeCommitResult (a bare `{ ok: true }` reads as
+  // `status !== "committed"` → livenessOk=false → RED). Landing DIGEST_PATH in
+  // `committedPaths` is what lets the NEXT run's dedup read find it.
+  safeCommitAndPrSpy.mockImplementation(async () => {
+    committedPaths.add(DIGEST_PATH);
+    return {
+      status: "committed" as const,
+      prNumber: 4242,
+      branch: "cron/community-monitor",
+      fileCount: 1,
+      deletionCount: 0,
+      paths: [DIGEST_PATH],
+    };
+  });
   teardownSpy.mockResolvedValue(undefined);
   ensureAuditIssueSpy.mockResolvedValue(undefined);
   vi.stubEnv("SENTRY_INGEST_DOMAIN", "o4509.ingest.sentry.io");
