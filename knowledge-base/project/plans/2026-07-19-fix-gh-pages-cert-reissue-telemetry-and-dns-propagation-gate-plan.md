@@ -393,7 +393,7 @@ disclosure occurs.* The toggled records are GitHub Pages public anycast
 is the loss of edge protections on the two public marketing hostnames for the
 duration of the window.
 
-**Brand-survival threshold:** single-user incident.
+- **Brand-survival threshold:** single-user incident.
 
 `requires_cpo_signoff: true` — CPO sign-off is required at plan time before
 `/work` begins. `user-impact-reviewer` is invoked at review time per
