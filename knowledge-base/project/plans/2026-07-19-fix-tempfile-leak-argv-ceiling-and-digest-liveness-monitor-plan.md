@@ -10,6 +10,51 @@ requires_cpo_signoff: false
 
 # fix: tempfile leak (#6713), jq argv ceiling (#6720), and digest liveness monitor (#6714)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-19
+**Review passes:** code-simplicity (plan-review), architecture-strategist (plan-review), plus
+self-executed measurement on this host (every R-row claim was run, not inferred). A test-design
+pass is in flight; its findings land as a follow-up commit if it surfaces anything.
+
+### What changed from plan v1
+
+1. **#6713's prescribed fix was rejected as harmful** and proven so by execution (R1/R2): a new
+   `trap … EXIT` would replace the harness's existing trap and leak more than the bug it fixes.
+   Replaced with a two-line `-p "$RUN_SCRATCH"` change matching an in-repo sibling.
+2. **#6720 moved from `--slurpfile` to `--rawfile`** (R8/R9) — removes the silent-undercount
+   shape hazard entirely instead of warning about it; proven byte-identical at small scale and
+   proven to survive past the ceiling where `--argjson` dies.
+3. **#6714 re-framed from a scheduling bug to a persistence + liveness bug** (R13): telemetry
+   showed the cron fired daily throughout. The primary defect is that the handler **discards**
+   `safeCommitAndPr`'s return value (R16a).
+4. **The `outputOk` rename was reverted** (R20): `cron-safe-commit-parity.test.ts:176` pins the
+   gate as literal source text across 8 cohort files. Split by addition (`livenessOk`) instead.
+5. **R17 was refuted and Phase 3.5 dropped**: the dedup exclusion the plan proposed to add
+   already exists at `_cron-shared.ts:937`. The proposed test would have passed on unmodified
+   code — a vacuous guard.
+6. **Phase 2.2 was fixed after it reproduced the very bug the plan diagnoses**: `_TMPFILES+=`
+   inside `emit_extract_json()` is lost to the `$( )` subshell in `drift` mode, and the parent
+   EXIT trap does not fire there.
+7. **Marker form corrected to the ADR-108 precedent** (Phase 3.3): markers must be pino **WARN**
+   (level ≥ 40) structured fields, fail-open, on a dedicated non-Sentry-mirroring logger.
+   An info-level marker never leaves the host — the plan's original stdout-string form would
+   have shipped an invisible observability surface.
+8. **`discoverability_test` command fixed**: `betterstack-query.sh` has no `--query` flag; the
+   correct form is `--grep <token> --since <N>[hmd]`. Verified against the script's arg parser.
+
+### Cuts (accepted from code-simplicity review)
+
+Phase 0 (duplicated ACs), Phase 1.4 fold-ins (→ tracked sweep issue), the standalone tmpfile
+test file (would have been unreachable — a real defect it caught), `DM_MAX_FACTS` (invented a
+failure mode the fix removes), and one duplicate marker.
+
+### Recorded disagreement
+
+DC-1 in `specs/…/decision-challenges.md` — marker 4 retained against recommendation.
+
+---
+
 ## Overview
 
 Three sibling defects surfaced by the community-monitor collector review that merged
@@ -289,9 +334,20 @@ against 131,072 B before fixing — item count is not a proxy for argv bytes.
 **3.0 Evidence pull — DONE at plan time** (self-served, `hr-no-dashboard-eyeball-pull-data-yourself`;
 the operator was not asked for anything). Results are the H1–H12 table above and R11–R19. Carry
 the raw excerpts into the PR body. Two residual items for /work:
-- **H9 remains UNKNOWN** — Inngest step-level history is unreachable
-  (`INNGEST_BASE_URL=http://host.docker.internal:8288`, container-internal, `curl` → `000`).
-  Do **not** manufacture a verdict. Phase 3.3 marker #3 is the designed remedy.
+- **H9 remains UNKNOWN** — Inngest step-level run history is unreachable. Per ADR-030 the
+  server is bound to `127.0.0.1:8288` (events) / `:8289` (admin) on the Hetzner host, so it is
+  host-local by design.
+
+  **Deepen-plan checked whether any non-SSH path exists, and there is none for run history.**
+  A CF-Access-fronted `/hooks/inngest-liveness` endpoint does exist (consumed by
+  `.github/workflows/scheduled-inngest-health.yml` via `scripts/inngest-liveness-classify.sh`),
+  but it returns an **inventory** verdict — `.functions` registration state — not per-run step
+  history. So it can answer "is the scheduler alive and are functions registered" and cannot
+  answer "which branch did run N take."
+
+  That absence is itself a telemetry gap and is precisely why Phase 3.3 marker #3 is the
+  remedy: the markers move the deciding datum out of Inngest's local SQLite and into Better
+  Stack, where it is queryable without SSH. Do **not** manufacture a verdict for H9.
 - Probe the **earlier 2026-05-26 → 2026-06-02 gap** (R11) opportunistically; if the datum is
   unavailable, record UNKNOWN and move on. It does not gate the fix.
 
@@ -361,10 +417,37 @@ class #6709 already addressed, and workspace file-existence alone does not prove
 entered the commit (though it is still worth emitting as marker #3, which discriminates
 *written-but-not-committed* from *never-written* — the exact split H9 could not resolve).
 
-**3.3 Emit the missing self-reporting markers.** The path emits **zero** `SOLEUR_*` markers
-today (R15), which is why H9 is unresolvable. Add these six, each at a named site. Structured
-fields must **discriminate all competing hypotheses in one event** — a single boolean that
-fires on only one failure shape is insufficient.
+**3.3 Emit the missing self-reporting markers — following the ADR-108 precedent exactly.**
+
+The path emits **zero** `SOLEUR_*` markers today (R15: exactly one `SOLEUR_` token exists in
+`cron-community-monitor.ts`, and it is the env-var *name* `SOLEUR_COLLECTOR_STATUS_DIR` at
+`:527`; `_cron-safe-commit.ts` has none). That is why H9 is unresolvable.
+
+**Precedent (deepen-plan Phase 4.4 gate).** `apps/web-platform/server/claude-cost-marker.ts` is
+the canonical in-repo form, and four of its properties are load-bearing — a naive
+`console.log("SOLEUR_X foo=bar")` would be **silently invisible**:
+
+1. **pino WARN level (40+), never info.** The Vector `app_container_warn_filter` ships only
+   pino level ≥ 40 to Better Stack. *An info-level marker never leaves the host.* (See
+   `claude-cost-marker.ts:5-8` and runbook `betterstack-log-query.md`.)
+2. **Top-level boolean discriminator + spread fields**, so
+   `betterstack-query.sh --grep SOLEUR_X` matches via its `raw LIKE '%…%'` filter with no
+   script change:
+   ```ts
+   log.warn({ SOLEUR_CRON_PERSIST_RESULT: true, cron, status, files, pr }, "cron persist result");
+   ```
+3. **Fail-open** — wrap every emit in `try { … } catch { /* never propagate */ }`. Observability
+   must never break the run it observes.
+4. **A dedicated pino instance that does NOT install the `mirrorToSentry` logMethod hook**
+   (`logger.ts:123-125` auto-mirrors every WARN+ line to a Sentry breadcrumb; a steady marker
+   stream would evict genuine breadcrumbs).
+
+**Prescription:** add `apps/web-platform/server/cron-liveness-marker.ts` mirroring
+`claude-cost-marker.ts`'s structure (dedicated logger + typed payloads + fail-open wrappers),
+and call its exported emitters from the sites below. Do not hand-roll the emit at each site.
+
+Structured fields must **discriminate all competing hypotheses in one event** — a single boolean
+that fires on only one failure shape is insufficient.
 
 | # | Marker | Site | Resolves |
 |---|---|---|---|
@@ -493,6 +576,7 @@ literal source-text regex. That is the point of splitting by addition.
 
 | File | Phase | Purpose |
 |---|---|---|
+| `apps/web-platform/server/cron-liveness-marker.ts` | 3.3 | Dedicated WARN-level fail-open marker emitters, mirroring `claude-cost-marker.ts` (ADR-108) |
 | `knowledge-base/engineering/architecture/decisions/ADR-126-cron-liveness-must-assert-the-consumed-artifact.md` | 4.1 | The gate-split decision |
 
 ---
@@ -558,6 +642,10 @@ literal source-text regex. That is the point of splitting by addition.
     repo-wide `grep -c` (marker 1 alone has three sites: `_cron-safe-commit.ts:395`, `:547`,
     `:805`). Each assertion checks the **emitted field set**, not string presence — a comment
     would satisfy a bare grep.
+20b. Every marker is emitted at **pino WARN (level ≥ 40)** and is **fail-open** (wrapped so an
+    emit failure cannot propagate), per the ADR-108 precedent. An info-level marker never
+    reaches Better Stack — a test asserting the level is the only thing that catches this,
+    because the code would look correct and simply be invisible in production.
 21. `terraform plan` on `apps/web-platform/infra/sentry/` shows **no diff** for
     `sentry_cron_monitor.scheduled_community_monitor` (the change is handler-side).
 22. The stale Tier-2 comment at `:393-397` is corrected (R19).
@@ -635,7 +723,7 @@ logs:
   retention: "per existing Better Stack plan retention"
 
 discoverability_test:
-  command: "bash scripts/betterstack-query.sh --query 'SOLEUR_COMMUNITY_DIGEST_FILE' --since 48h"
+  command: "bash scripts/betterstack-query.sh --grep SOLEUR_COMMUNITY_DIGEST_FILE --since 48h"
   expected_output: "one SOLEUR_COMMUNITY_DIGEST_FILE record per daily fire with present=0|1 set,
                     paired with a SOLEUR_CRON_PERSIST_RESULT or SOLEUR_CRON_PERSIST_SKIPPED
                     record naming the outcome. Today this query returns ZERO rows for this cron
