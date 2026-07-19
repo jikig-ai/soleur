@@ -404,6 +404,39 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > here rather than endorsed) and #6711 (private-NIC health splits across Sentry and Better Stack
 > with no shared join key).
 
+> **Amendment (2026-07-20, #6718 — the `warm_standby` gap above is CLOSED; #6712 is PREVENTED,
+> not VERIFIED).** Factual status note on the two items the 2026-07-19 amendment left open.
+>
+> **Closed.** The `warm_standby` job now carries the same `host_creates > 0` HALT as the sibling
+> `apply` job, evaluated **outside** the `destroy_count` sum, so `[ack-destroy]` cannot bypass it.
+> The load-bearing edit was extending that job's `^[0-9]+$` validation to cover `host_creates`:
+> `jq -r` on a missing key yields the string `null`, and `[[ "null" -gt 0 ]]` passes — without it
+> the guard would have been present, green, and fail-**open**.
+>
+> **The 2026-07-19 assessment of reachability was correct but incomplete.** It reasoned that
+> web-1 normally exists in state, so targeting its network attachment does not create it — hence
+> "defence-in-depth". The composition it did not state: `warm_standby` passes **no
+> `-var image_name`** (`apply` and `web_2_recreate` both pin), so a transitive birth there would
+> use the mutable `:latest` default. That is #6712's failure mode reached through #6718's hole,
+> which is why the two were closed as one defect.
+>
+> **Measured while closing it (Terraform v1.10.5):** a `-target` naming an unresolvable `for_each`
+> instance key **warns and is silently ignored** — exit 0, `No changes` — it does **not** error.
+> This mattered: had it errored, the plan step would have died before the guard block and the new
+> HALT would have been present but unreachable. It also means `warm_standby`'s three `web-2`
+> `-target`s have been no-ops since #6538 (tracked in #6575).
+>
+> **#6712 is PREVENTED, not VERIFIED, and stays open.** No preflight was added and no resolver
+> shipped — the resolver extraction was cut because its only call site (`web_2_recreate`) is
+> unreachable after the web-2 retirement. The birth is now *blocked* rather than *validated*.
+>
+> **The residual inverted into a capability gap.** The 2026-07-19 residual — an operator-driven
+> fresh create/`-replace` of web-1 with no preflight — is now the *only* remaining route, because
+> every automated route HALTs. That violates
+> `hr-fresh-host-provisioning-reachable-from-terraform-apply` and is tracked in **#6730**. Do not
+> resolve it by weakening either HALT: the correct fix is a pinned, attachment-complete birth path
+> that the tripwire can distinguish from an accidental create.
+
 ### Candidate implementations for I2 — assessed in #6441 (SUPERSEDED — see the amendment above; (b) shipped in #6425)
 
 Two shapes are on the table: **(a)** per-host private-net-relative ingress (`ssh-web-1.` →

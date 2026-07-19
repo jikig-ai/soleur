@@ -385,13 +385,19 @@ assert "the call site hardcodes no 10.0.1.x literal" \
 #     tripwire (#6416), which is what is asserted now. The old assertion would have stayed
 #     green with that tripwire deleted.
 #
-# KNOWN GAP, pre-existing and deliberately NOT closed here: the warm_standby job -targets
+# CLOSED (#6718, 2026-07-20). This formerly read as a KNOWN GAP: the warm_standby job -targets
 # hcloud_server_network.web["web-1"], which transitively reaches hcloud_server.web, and its
-# guard set is resource_deletes / nested_deletes / reboot_updates with NO host_creates check.
-# That path could birth a host on a new bootstrap hash with no coherence preflight. It predates
-# this PR and belongs to the apply workflow's guard set rather than to this gate — tracked in
-# #6718. Not asserted here: pinning the gap's CURRENT (unguarded) state would red the suite the
-# moment someone fixes it, which is backwards.
+# guard set was resource_deletes / nested_deletes / reboot_updates with NO host_creates check —
+# so that path could birth a host on a new bootstrap hash with no coherence preflight. It now
+# carries the same host_creates > 0 HALT as the per-PR apply job, evaluated OUTSIDE the
+# destroy_count sum (no [ack-destroy] bypass). The gap belonged to the apply workflow's guard set
+# rather than to this gate, and it was closed there, not here.
+#
+# Still not asserted here, for the original reason: this gate does not pin the warm_standby guard
+# set either way. The HALT is asserted by T51a-d in
+# tests/scripts/test-destroy-guard-counter-web-platform.sh, which lives in the REQUIRED test
+# shard — deliberately, since this file runs only in infra-validation.yml's advisory
+# deploy-script-tests job, and the check guarding a HALT must not be weaker than the HALT.
 #
 # Residual, also not closed here: an operator-driven fresh create/-replace of web-1 consumes
 # the new hash with no preflight. Closing it needs a preflight that works against a mutable

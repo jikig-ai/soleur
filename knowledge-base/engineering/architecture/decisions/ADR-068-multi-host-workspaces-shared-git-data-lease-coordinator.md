@@ -1032,6 +1032,34 @@ Phase 4b (continuous checkpoint).
 > (§8) is unchanged. `Ref #6538`, `Ref #6463`. Plan:
 > `knowledge-base/project/plans/2026-07-16-chore-retire-web-2-fsn1-orphan-plan.md`.
 
+> **Amendment (2026-07-20, #6718 — factual status: both web-2 dispatch jobs are now unrunnable,
+> and the warm-standby apply cannot birth a host).** No decision is reversed here; this records
+> what the 2026-07-17 retirement did to the two dispatch surfaces this ADR introduced.
+>
+> **`warm_standby` (the "autonomous warm-standby apply", 2026-07-04 amendment) is a zombie.**
+> Three of its six `-target`s name `web-2` addresses, and `var.web_hosts` no longer contains that
+> key. **Measured on Terraform v1.10.5:** a `-target` whose `for_each` instance key is absent is
+> **silently ignored** — exit 0, `No changes`, no error, no mention of the missing key. So those
+> three are no-ops rather than failures, and the job's advertised "additive 6-target set" is
+> really a 3-target set. Nothing warns an operator who dispatches it. Tracked in #6575.
+>
+> **`web_2_recreate` is unreachable for a stronger reason.** It keys every address off `web-2`
+> *and* its gate requires `web2_server_replaced == 1`, which is unsatisfiable when the instance is
+> absent from state. This is why the #6712 resolver extraction was cut rather than deferred: the
+> extraction's only call site cannot run.
+>
+> **The warm-standby apply can no longer birth a host, by design (#6718).** It reaches
+> `hcloud_server.web["web-1"]` transitively (via the surviving
+> `hcloud_server_network.web["web-1"]` target — `-target` closes over **dependencies**) while
+> passing **no `-var image_name`**, so a birth there would have used the mutable `:latest`
+> default. It now carries a `host_creates > 0` HALT with no `[ack-destroy]` bypass.
+>
+> **Consequence for #6459.** The retirement note above says active-active's hosts "start from a
+> clean single-host `web_hosts` roster". That remains right, but the roster is now the *only*
+> thing that is clean: there is no automated path that can create a web host at all — every route
+> HALTs. #6459 will need that birth path as a prerequisite, and it is tracked separately in
+> **#6730** so it is not gated behind #6459's own ADR.
+
 ## Consequences
 
 - **Positive.** The serializable-vs-live-handle split (research reconciliation) kills
