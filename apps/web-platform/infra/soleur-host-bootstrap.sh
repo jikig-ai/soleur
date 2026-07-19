@@ -347,35 +347,68 @@ cat > /usr/local/bin/soleur-wait-nic <<'NICEOF'
 # boot is a blind surface (no SSH, no shell), so an arm that emitted nothing would be
 # indistinguishable from a gate that never shipped.
 EXPECTED="$1"
-# (0) PROBE RESOLUTION FIRST, and short-circuit before the wait. `ip` lives in /usr/sbin,
-# which is absent from some minimal PATHs. An unresolvable probe is ZERO EVIDENCE — it must
-# never be conflated with "the address is absent" (#6415), hence a THIRD arm rather than
-# folding probe-fault into the timeout arm. Short-circuiting also avoids spending the full
-# 60 s budget on a missing binary.
+# (0) ARGUMENT GUARD — load-bearing, and the direction that matters. `grep -qwF -- ""` matches
+# EVERY line, so an empty argument would make the first probe succeed and emit
+# private_nic_ready: positive evidence that a check passed which was never performed. That is
+# strictly worse than the fail-open this helper is designed for, and it inverts the #6415
+# doctrine below (asserting PRESENCE on zero evidence). var.web_hosts validates private_ip
+# against ^10\.0\.1\.[0-9]{1,3}$, but that defence lives in another file behind a templatefile
+# map — "works today, fails silently on a future host" is the shape this repo keeps getting
+# bitten by, so the helper defends itself. Mirrors web-private-nic-guard.sh's own EXPECTED_IP
+# check, which is terminal there; here it takes the probe-fault arm to preserve exit 0.
+[ -n "$EXPECTED" ] || { soleur-boot-emit private_nic_probe_fault warning; exit 0; }
+# (1) PROBE RESOLUTION FIRST, and short-circuit before the wait. An unresolvable probe is ZERO
+# EVIDENCE — it must never be conflated with "the address is absent" (#6415), hence a THIRD arm
+# rather than folding probe-fault into the timeout arm. Short-circuiting also avoids spending
+# the full 60 s budget on a missing binary. `ip` is the one that actually motivates this (it
+# lives in /usr/sbin, absent from some minimal PATHs) but grep is checked too: without it the
+# match can never succeed, and reporting THAT as "the address is absent" is the same mislabel.
 IP_BIN=$(command -v ip 2>/dev/null || true)
-PROBE_OK=true; [ -n "$IP_BIN" ] && [ -x "$IP_BIN" ] || PROBE_OK=false
+GREP_BIN=$(command -v grep 2>/dev/null || true)
+PROBE_OK=true
+[ -n "$IP_BIN" ] && [ -x "$IP_BIN" ] || PROBE_OK=false
+[ -n "$GREP_BIN" ] && [ -x "$GREP_BIN" ] || PROBE_OK=false
 if [ "$PROBE_OK" != true ]; then
   soleur-boot-emit private_nic_probe_fault warning
   exit 0
 fi
-# (1) Probe once before the loop. -w + -F + --: exact word, fixed string, end-of-options — so
-# 10.0.1.1 can never match inside 10.0.1.10 and the dots are not regex wildcards. Mirrors
-# web-private-nic-guard.sh. (No pipefail is set in this helper, so grep's exit governs.)
+# (2) Probe. The probe's EXIT is captured separately from the match result, because a pipeline
+# reports only grep's status: `ip … 2>/dev/null | grep -qwF` makes an `ip` that RUNS AND FAILS
+# (netlink denied, truncated image) indistinguishable from one that ran and found nothing —
+# reporting "could not measure" as "absent", the #6415 mislabel arriving through a second door.
+# probe_ran records whether the instrument EVER worked; the fault arm fires only if it never did
+# (so a transient failure that later recovers is not misreported).
+# -w + -F + --: exact word, fixed string, end-of-options — so 10.0.1.1 can never match inside
+# 10.0.1.10 and the dots are not regex wildcards. Mirrors web-private-nic-guard.sh.
+# (No pipefail is set in this helper, so grep's exit governs the match.)
 nic_ok=false
-"$IP_BIN" -4 -o addr show 2>/dev/null | grep -qwF -- "$EXPECTED" && nic_ok=true
-# (2) Bounded wait — 30 x 2 s = 60 s, the house loop shape. Spent BEFORE `cloudflared service
-# install`, so this budget is SEQUENTIAL with (never nested inside) the downstream
-# cloudflared_ready gate's own ~60 s budget. Nesting them would starve that gate and detonate
-# its pre-existing `|| exit 1` — the exact CF-5 abort this gate exists to prevent.
+probe_ran=false
+if OUT=$("$IP_BIN" -4 -o addr show 2>/dev/null); then
+  probe_ran=true
+  printf '%s\n' "$OUT" | grep -qwF -- "$EXPECTED" && nic_ok=true
+fi
+# (3) Bounded wait — 30 x 2 s = 60 s. Spent BEFORE `cloudflared service install`, so this budget
+# is SEQUENTIAL with the downstream cloudflared_ready gate's own ~60 s budget rather than nested
+# inside it. A POSIX counter rather than `for i in $(seq 1 30)`: an unresolvable `seq` yields an
+# EMPTY word list, so the loop body would run ZERO times and the helper would report a 60 s
+# timeout it never waited — a no-op that looks like it ran. One fewer binary to depend on, and
+# the loop variable was unused anyway.
 if [ "$nic_ok" = false ]; then
-  for i in $(seq 1 30); do
+  n=0
+  while [ "$n" -lt 30 ]; do
+    n=$((n + 1))
     sleep 2
-    "$IP_BIN" -4 -o addr show 2>/dev/null | grep -qwF -- "$EXPECTED" && { nic_ok=true; break; }
+    if OUT=$("$IP_BIN" -4 -o addr show 2>/dev/null); then
+      probe_ran=true
+      printf '%s\n' "$OUT" | grep -qwF -- "$EXPECTED" && { nic_ok=true; break; }
+    fi
   done
 fi
-# (3) Exactly one event, mutually exclusive.
+# (4) Exactly one event, mutually exclusive and total.
 if [ "$nic_ok" = true ]; then
   soleur-boot-emit private_nic_ready info
+elif [ "$probe_ran" = false ]; then
+  soleur-boot-emit private_nic_probe_fault warning
 else
   soleur-boot-emit private_nic_timeout warning
 fi
