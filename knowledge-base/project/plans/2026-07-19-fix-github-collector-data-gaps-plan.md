@@ -118,6 +118,69 @@ unrelated to #6695, but a first-hand demonstration. `cmd_fetch_interactions` has
 latent flaw (`rm -f` on success paths only, no trap; under `set -e` a jq failure skips
 cleanup). Every tempfile uses `trap 'rm -f …' EXIT`; the existing site is fixed while in the file.
 
+## Research Insights (deepen-plan)
+
+### Prior art — and the factual error that made the first fix incomplete
+
+**This exact bug class was already solved in this repo, twice**, and the collector still carries it:
+
+- [`2026-03-28-gh-api-paginate-argument-list-too-long.md`](../../project/learnings/integration-issues/2026-03-28-gh-api-paginate-argument-list-too-long.md)
+  fixed `cmd_fetch_interactions` in **this very file** (it is Precedent A) — but attributed the
+  limit to **`ARG_MAX` (~2 MB)** and concluded: *"The existing `cmd_repo_stats()` uses
+  `--argjson` for stargazers: **This works because stargazers are small**."*
+- [`2026-06-18-sibling-script-shares-byte-identical-argv-accumulation-defect.md`](../../project/learnings/bug-fixes/2026-06-18-sibling-script-shares-byte-identical-argv-accumulation-defect.md)
+  (#5523/#5528) got it right: **`MAX_ARG_STRLEN` ≈ 128 KB — NOT `getconf ARG_MAX` 2 MB, which is
+  the total envp+argv ceiling.** My independent bisection (131,071 → OK, 131,072 → E2BIG)
+  reproduces this exactly.
+
+**The 2026-03-28 learning's wrong threshold model is *why* the fix was never back-propagated.**
+Judged against a 2 MB ceiling, the sibling call sites look safe; judged against the real 128 KB
+per-argument ceiling, `cmd_activity` and `cmd_contributors` were already over it. The
+`2026-03-28` file should be corrected as part of this work — leaving it encodes the model that
+caused the incomplete fix. *(Note the second learning's Solution section already cites
+`github-community.sh:294` as its pattern precedent — the repo has been circling this file.)*
+
+### Sibling sweep — scope claim verified, not assumed
+
+The 2026-06-18 learning's Key Insight is that *"X is unaffected" is a hypothesis, not a fact* —
+grep the byte-identical idiom across siblings before trusting scope. Executed:
+
+```bash
+for f in plugins/soleur/skills/community/scripts/*.sh; do grep -nE '^[[:space:]]*--argjson' "$f"; done
+grep -rnE '\-\-argjson [a-z_]+ "\$' --include=*.sh . | grep -v node_modules
+```
+
+| Site | Payload | Verdict |
+|---|---|---|
+| `github-community.sh` ×7 | issues / prs / commits / stargazers | **Defect — in scope** (5 unbounded) |
+| `bsky-community.sh` `--argjson record` | one post record | Bounded — safe |
+| `linkedin-community.sh` `total_followers`, `share_statistics` | scalar + one stats object | Bounded — safe |
+| `linkedin-setup.sh` ×3 | scalars | Bounded — safe |
+| `scripts/skill-freshness-aggregate.sh` `inventory_json`, `invocations_json` | ~90 skill **names**; `group_by(.skill)`-aggregated to one record per skill | Bounded **by skill count, not log size** — safe |
+| `scripts/audit-bot-codeql-coverage.sh` accumulator | payload arrives via `printf … \| jq` (**stdin**); only scalars on argv | Safe by construction |
+
+**Result: no sibling shares the defect.** The scope claim is now verified.
+
+### Implementation details lifted from the prior fix
+
+- **`trap … EXIT`, never `RETURN`** — a `RETURN` trap does not fire on `exit`, so the `exit 1`
+  failure branches would leak the spool file. This is the concrete form D7 requires.
+  *Independently re-verified at deepen time (not taken on the learning's word): a function with
+  `trap … RETURN` hitting `exit 1` leaked **1** file; the identical function with `trap … EXIT`
+  leaked **0**.*
+- **Spool + single post-loop collapse** — `mktemp` spool then one `jq -s 'add // []'`; file I/O
+  has no argv size limit.
+
+### Hazard for this plan's own ACs (from the prior fix's session errors)
+
+The 2026-06-18 work hit a **structural-guard grep that matched its own explanatory comment** — a
+guard grepping for a forbidden literal FAILed because a comment *describing* the old form
+contained that literal. **AC2 and AC3 grep for `--argjson` and `2>&1` in the script and are
+directly exposed to this.** Implementation constraint: when documenting the change, **never
+write the forbidden literal in a comment in the same file** — say "the old per-page argjson
+accumulation", not the literal token. See
+[`2026-06-17-grep-assertion-over-script-body-false-matches-own-comments.md`](../../project/learnings/test-failures/2026-06-17-grep-assertion-over-script-body-false-matches-own-comments.md).
+
 ## Files to Edit
 
 | File | Change |
@@ -125,6 +188,7 @@ cleanup). Every tempfile uses `trap 'rm -f …' EXIT`; the existing site is fixe
 | `plugins/soleur/skills/community/scripts/github-community.sh` | RC1: tempfile + `--slurpfile` at the **5 unbounded bindings** — `issues`+`prs` (`cmd_activity`), `commits`+`issues` (`cmd_contributors`), `stargazers` (`cmd_repo_stats`) (D1). RC2: separate-stderr shape at the **stargazer fetch only** (D3). D2 cap detection, D6 shape assertion, D7 traps (incl. the existing `cmd_fetch_interactions` leak). `repo_data` + `days` stay `--argjson` (bounded) |
 | `apps/web-platform/server/inngest/functions/cron-community-monitor.ts` | D4a/b/c prompt edits at the three content anchors; D5 output-aware failure signal |
 | `plugins/soleur/test/test-helpers.sh` | **New `make_gh_api_stub`** — dispatches on `$1 == "api"` by URL substring, handles `auth status` → exit 0, supports a stderr-emitting mode. Shared by ~21 suites, so additive only |
+| `knowledge-base/project/learnings/integration-issues/2026-03-28-gh-api-paginate-argument-list-too-long.md` | **Correct the threshold model.** It attributes the limit to `ARG_MAX` (~2 MB) and concludes the sibling `--argjson` sites are safe "because stargazers are small". The real ceiling is `MAX_ARG_STRLEN` (131,072 B **per argument**). That error is why this fix was never back-propagated — leaving it uncorrected reproduces the incomplete fix |
 
 ## Files to Create
 
@@ -280,7 +344,21 @@ public repository metadata through already-granted `gh` auth. No new data catego
 or retention is introduced.
 
 **Brand-survival threshold:** `none` — internal operator reporting, no external surface, no
-customer data. No sensitive path is touched, so no scope-out bullet is required.
+customer data.
+
+**Sensitive-path scope-out** (required — `deepen-plan` Phase 4.6 correctly rejected an earlier
+draft that claimed no sensitive path was touched):
+
+- `threshold: none, reason: the only sensitive-path file is
+  apps/web-platform/server/inngest/functions/cron-community-monitor.ts, and the edits are
+  confined to LLM prompt prose plus one failure-signal call — no auth, credential, payment,
+  schema, or user-data path is read or written.`
+
+The edit surface within that file is: three prompt-string anchors (D4a/b/c) and the D5
+output-aware failure condition. It touches no secret, no Supabase client, no route handler, and
+no request path. `apps/web-platform/server/` matches the canonical sensitive-path regex on the
+directory prefix alone, which is why the scope-out is required even though the change is inert
+with respect to the concerns the regex protects.
 
 ## Domain Review
 

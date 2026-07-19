@@ -76,7 +76,24 @@ Create `plugins/soleur/skills/community/test/github-community.test.sh`. Fixtures
       before emit (precedent anchor `Shape validation BEFORE any` in `linkedin-community.sh`).
 - [ ] 4.7 (D7) `trap 'rm -f …' EXIT` on every tempfile, **including the existing
       `cmd_fetch_interactions` leak** (`rm -f` on success paths only today).
-- [ ] 4.8 Mutation-test the 3.x assertions: break each fix, confirm the test goes red.
+      **`EXIT`, never `RETURN`** — a `RETURN` trap does not fire on `exit`, so the `exit 1`
+      failure branches would leak the spool (per the 2026-06-18 learning).
+- [ ] 4.8 **Do not write the literal tokens `--argjson` or `2>&1` in any comment in this file.**
+      AC2/AC3 grep the script body; a comment describing the old form false-fails them. Say
+      "the old per-page argjson accumulation" instead. (Prior occurrence:
+      `learnings/test-failures/2026-06-17-grep-assertion-over-script-body-false-matches-own-comments.md`.)
+- [ ] 4.9 Mutation-test the 3.x assertions: break each fix, confirm the test goes red.
+
+## 4b. Correct the institutional record (deepen-plan finding)
+
+- [ ] 4b.1 Fix the threshold model in
+      `knowledge-base/project/learnings/integration-issues/2026-03-28-gh-api-paginate-argument-list-too-long.md`.
+      It attributes the limit to `ARG_MAX` (~2 MB) and concludes the sibling `--argjson` sites are
+      safe "because stargazers are small". The real ceiling is **`MAX_ARG_STRLEN` = 131,072 B per
+      argument**. That error is precisely why the 2026-03-28 fix was applied to
+      `cmd_fetch_interactions` only and never back-propagated to `cmd_activity`/`cmd_contributors`.
+      Cross-reference the correct model already recorded in
+      `learnings/bug-fixes/2026-06-18-sibling-script-shares-byte-identical-argv-accumulation-defect.md`.
 
 ## 5. Consumer wiring — `apps/web-platform/server/inngest/functions/cron-community-monitor.ts`
 
