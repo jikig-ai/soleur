@@ -294,6 +294,81 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > (application-level replication), and it does not close the transport-layer determinism gap I2
 > exists to name.
 
+> **Amendment (2026-07-19, #6441 — I1's runtime gate SHIPS for first boot; the three prior
+> status statements are reconciled; the blast-radius claim is corrected).**
+>
+> **1 — Reconciling the three statements about I1's status.** This ADR has said three
+> different things, each true of a different thing, which is why they read as contradictory:
+>
+> | Statement | Where | Verdict |
+> |---|---|---|
+> | *"Not shipped in #6416"* | original text, above | **True and unchanged.** #6416 shipped no I1 enforcement. |
+> | *"I1 is now ENFORCED via the single-connector gate"* | 2026-07-15, #6425 | **Overstated.** #6425 gated *which host may register* — it reduced the POPULATION that can violate I1. It never added the NIC wait, so a gated-in host still registered NIC-less. |
+> | *"I1 is inert on the running fleet"* | 2026-07-17, #6594 | **True, and still true after this PR.** `ignore_changes = [user_data]` means cloud-init never re-runs on a booted host. |
+>
+> The reconciliation: I1 has two halves. **Which host** may register (shipped #6425) and
+> **when** it may register (shipped here). Neither is retroactive to a running host.
+>
+> **2 — What #6441 ships: a first-boot NIC gate.** A baked `soleur-wait-nic` helper, invoked
+> bare in `runcmd` immediately before `cloudflared service install`, inside the existing
+> `web_tunnel_connector` block. It waits up to 60 s for the host's expected private address
+> (single-sourced from `var.web_hosts`), then **defers and continues** — it never aborts and
+> never reboots. Three mutually-exclusive arms emit exactly one Sentry boot-stage event:
+> `private_nic_ready` / `private_nic_timeout` / `private_nic_probe_fault`. The third exists
+> because an unresolvable `ip` binary is *zero evidence*, and must never be recorded as
+> evidence of absence (the #6415 mislabel).
+>
+> This is a **first-boot** gate, not the runtime precondition I1 is worded as. That gap is
+> deliberate and is item 4 below.
+>
+> **3 — The blast-radius claim in this ADR's own trade analysis is STALE.** The inherited
+> framing held that a NIC-less connector breaks only the `registry.` route while `deploy.`
+> and `ssh.` stay up. Post-#6594 that is false: item 3 of the 2026-07-17 amendment repointed
+> **all three** ingress services to private-net literals (`tunnel.tf` — `deploy.` →
+> `http://10.0.1.10:9000`, `ssh.` → `ssh://10.0.1.10:22`, `registry.` → `tcp://10.0.1.30:5000`).
+> A connector without its private NIC therefore serves **nothing**, not one route. The fix
+> that discharged I2 widened I1's blast radius — worth stating plainly, because it means the
+> two invariants are more coupled than either amendment implied.
+>
+> **4 — The runtime arm (`ExecStartPre`) is REJECTED for now, not tracked as an open item.**
+> `ExecStartPre` is the shape that best matches I1's runtime wording, and is the long-term
+> preference on record from engineering review. It is rejected here on three grounds:
+> - **It carries the abort risk the gate exists to remove.** During `ExecStartPre` the unit
+>   sits in `activating`, so `systemctl is-active --quiet` returns false for the whole wait —
+>   consuming the pre-existing `cloudflared_ready` gate's ~60 s budget and detonating its live
+>   `|| exit 1`. Since `runcmd` is one shell and once-per-instance, that abort costs the
+>   instance cloudflared, the webhook, the monitors and the egress firewall permanently.
+>   Placing the wait *before* the install makes the two budgets sequential instead of nested.
+> - **Making it safe means re-tuning a fail-closed gate** currently pinned by an exact-string
+>   test assertion — coupling a low-risk fix to a change that can dark the sole origin.
+> - **Its value is smaller than assumed.** cloudflared dials its ingress origin **per
+>   connection**, not at process start, so a connector that registered NIC-less begins serving
+>   the instant the attach lands. A NIC-less connector is a *converging* state, not a stuck
+>   one. The already-running case is separately covered by `web-private-nic-guard.timer`.
+>
+> Because the state converges on its own, this is a rejection rather than a deferral — the ADR
+> cannot call the state self-healing and simultaneously hold an open item to fix it. **Revival
+> condition:** evidence that per-connection origin resolution is false, or an owner for the
+> `cloudflared_ready` budget. If revived, an `ExecStartPre=-` (leading dash), a wait bound
+> under 45 s, and an explicit `TimeoutStartSec=` pin are mandatory.
+>
+> **5 — A delivery-channel hazard, recorded because it is not obvious from the code.**
+> `soleur-host-bootstrap.sh` feeds `local.host_scripts_content_hash`, which is injected into
+> `user_data` and re-verified at boot under `set -e`. So editing the bootstrap script couples
+> the change to image-bake sequencing: a host created after the apply but before `:latest`
+> carries the matching bootstrap aborts its entire runcmd at `stage=verify`. The existing
+> coherence preflight (`web2-recreate-preflight.sh`) covers **only** the web-2-recreate
+> dispatch and cannot be reused generally — it requires a pinned `@sha256` ref, while the
+> default `var.image_name` is the mutable `:latest`.
+>
+> For the routine merge apply this is a non-issue, and the reason is structural rather than
+> lucky: `hcloud_server.web["web-1"]` appears in **no** `-target=` of the auto-apply workflow,
+> so that workflow cannot create or replace it. (Verified against the target list itself —
+> that workflow's header has carried a false claim before.) The residual exposure is an
+> operator-driven fresh create or `-replace` of web-1, which has no preflight. Both structural
+> facts are now pinned by a test so the argument fails loudly if either changes; closing the
+> residual needs a preflight that works against a mutable tag, tracked separately.
+
 ### Candidate implementations for I2 — assessed in #6441 (SUPERSEDED — see the amendment above; (b) shipped in #6425)
 
 Two shapes are on the table: **(a)** per-host private-net-relative ingress (`ssh-web-1.` →
