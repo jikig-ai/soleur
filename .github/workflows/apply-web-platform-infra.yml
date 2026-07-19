@@ -987,8 +987,33 @@ jobs:
           resource_deletes=$(echo "$counts" | jq -r '.resource_deletes')
           nested_deletes=$(echo "$counts" | jq -r '.nested_deletes')
           reboot_updates=$(echo "$counts" | jq -r '.reboot_updates')
-          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}')."
+          # host_creates (#6718): this job -targets hcloud_server_network.web["web-1"],
+          # and `-target` is TRANSITIVE at the resource level, so hcloud_server.web
+          # ["web-1"] is in this plan's graph. Unlike `apply` and web_2_recreate, this
+          # job passes NO -var image_name, so a transitive web-1 birth here would boot
+          # against the MUTABLE ghcr.io/...:latest default. web-1 is the sole web host
+          # (web-2 retired 2026-07-17, #6538) and cloud-init re-verifies
+          # host_scripts_content_hash at boot under `set -e`, so an incoherent image
+          # aborts the ENTIRE runcmd at stage=verify — once per instance, unrepairable
+          # by reboot. Reachable countable set: hcloud_server.web["web-1"] +
+          # hcloud_volume.workspaces["web-1"] (via server.tf's workspaces_volume_id).
+          # Source of truth: tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+          host_creates=$(echo "$counts" | jq -r '.host_creates')
+          # The ^[0-9]+$ validation is LOAD-BEARING, not hygiene: `jq -r` on a missing
+          # key yields the STRING "null", and [[ "null" -gt 0 ]] resolves an unset name
+          # to 0 and PASSES. Without host_creates in this line the guard fails OPEN.
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]] || [[ ! "$host_creates" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}', host_creates='${host_creates}')."
+            exit 1
+          fi
+          # HALT on a host create. Ordered to mirror `apply` for PARITY, not severity —
+          # on the sole live origin a reboot is the more severe finding, and both arms
+          # exit 1 before any write, so the ordering is cosmetic.
+          if [[ "$host_creates" -gt 0 ]]; then
+            echo "::error::warm-standby plan would CREATE ${host_creates} hcloud_server/hcloud_volume resource(s). This dispatch must never birth a host: it passes no -var image_name, so the host would boot against the mutable ':latest' tag while cloud-init re-verifies host_scripts_content_hash under 'set -e' — a hash mismatch aborts the entire runcmd at stage=verify (no cloudflared, no webhook, no monitors, no egress firewall), once per instance and unrepairable by reboot."
+            echo "::error::ROUTING — do NOT retry this dispatch. A legitimate web-host birth needs an image pinned to a repo@sha256 digest, which no dispatch on this workflow performs: run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) with -var image_name=<pinned digest>. For a NON-web host: hcloud_server.inngest → '-f apply_target=inngest-host'."
+            echo "::error::NO BYPASS on this dispatch. '[skip-web-platform-apply]' and '[ack-destroy]' are merge-commit mechanisms scanned in the preflight job; a workflow_dispatch run has no merge commit to annotate, so neither token can reach this HALT. This is a deliberate dead end — see #6718."
+            grep -E 'will be created|Plan:' tfplan.txt | head -20 >&2
             exit 1
           fi
           if [[ "$reboot_updates" -gt 0 ]]; then

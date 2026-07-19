@@ -837,6 +837,112 @@ t_web2_retire_volume_forget_aborts() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# T51 — STRUCTURAL: the warm_standby host_creates HALT (#6718).
+#
+# WHY A GREP OVER THE YAML AND NOT A COUNTS FIXTURE. `_run_host_creates_gate`
+# above is a hand-maintained bash MIRROR of the workflow block (its own header
+# says so; nothing enforces the mirror). A fixture therefore proves the MIRROR,
+# never the workflow — it would stay green if warm_standby's real YAML lost the
+# guard tomorrow. Only a grep over the workflow can prove warm_standby's own
+# regex. T32 already covers the mirror's parse-failure arm, so this adds the one
+# proof that was missing rather than a second copy of one that exists.
+#
+# WHY warm_standby NEEDS IT. The job -targets hcloud_server_network.web["web-1"]
+# and `-target` is TRANSITIVE at the resource level, so hcloud_server.web
+# ["web-1"] sits in its plan graph. It passes NO -var image_name (unlike `apply`
+# and web_2_recreate, which both pin), so a transitive web-1 birth here would
+# use the mutable :latest default — and web-1 is the sole web host since web-2
+# retired 2026-07-17 (#6538). Reason about THIS tripwire, never about -target
+# membership: "web-1 appears in no -target=" is a recorded invalid inference
+# (ADR-114 2026-07-19 amendment item 5).
+#
+# SHARP EDGES THIS TEST IS BUILT AROUND:
+#   SE-1  The block MUST be extracted with flag-based awk. A range address
+#         (`awk '/^  warm_standby:/,/^  [a-z-]+:/'`) SELF-MATCHES: the end
+#         pattern is satisfied by the start line, so it yields the heading alone
+#         and every `grep -c` over it reads 0 — assertions that pass on an empty
+#         body. Non-emptiness is therefore asserted FIRST.
+#   SE-2  Never `printf "$block" | grep -q`. Under `set -o pipefail` a matching
+#         `grep -q` closes the pipe, the producer takes SIGPIPE (141), and the
+#         pipeline exits non-zero DESPITE the match. Here-strings throughout.
+#   SE-4  `[[ "null" -gt 0 ]]` is TRUE-shaped and evaluates FALSE: `jq -r` on a
+#         missing key yields the string "null", which `[[ ]]` resolves as an
+#         unset name to 0. So the ^[0-9]+$ VALIDATION line — not the comparison
+#         — is the load-bearing assert. Without it the guard fails OPEN.
+#
+# Comments are stripped before asserting: a body-grep sees comment prose too,
+# and every token below also appears in the explanatory comments around it, so
+# an unstripped block would false-PASS on its own documentation.
+# ---------------------------------------------------------------------------
+
+WORKFLOW_YML="${REPO_ROOT}/.github/workflows/apply-web-platform-infra.yml"
+
+_job_block() {
+  local file="$1" job="$2"
+  awk -v job="$job" '
+    $0 ~ "^  " job ":([[:space:]]|$)" { inblock = 1; print; next }
+    inblock && /^  [A-Za-z_]/ { inblock = 0 }
+    inblock && /^[A-Za-z]/    { inblock = 0 }
+    inblock { print }
+  ' "$file"
+}
+
+t_warm_standby_host_creates_halt_wired() {
+  local block code
+  block="$(_job_block "$WORKFLOW_YML" "warm_standby")"
+
+  # SE-1: every assertion below is vacuous against an empty block, so a broken
+  # extractor must fail LOUDLY here rather than silently green four greps.
+  if [[ -z "$block" ]]; then
+    _report "T51 warm_standby block extracts non-empty" fail "empty block — extractor broken (SE-1 self-match?)"
+    return
+  fi
+  code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
+
+  # (1) the counter is parsed out of the shared jq filter's output at all.
+  if grep -qE 'host_creates=\$\(echo "\$counts" \| jq -r' <<<"$code"; then
+    _report "T51a warm_standby parses host_creates from the shared jq filter" ok
+  else
+    _report "T51a warm_standby parses host_creates" fail "no 'host_creates=\$(echo \"\$counts\" | jq -r' in the job block"
+  fi
+
+  # (2) LOAD-BEARING (SE-4): host_creates is inside the ^[0-9]+$ validation.
+  # Anchored on the `[[ ! "$x" =~ ^[0-9]+$ ]]` syntax, which a comment line
+  # cannot produce once comments are stripped.
+  local validation
+  validation="$(grep -E '\[\[ ! "\$[a-z_]+" =~ \^\[0-9\]\+\$ \]\]' <<<"$code" || true)"
+  if [[ -n "$validation" ]] && grep -q 'host_creates' <<<"$validation"; then
+    _report "T51b warm_standby's ^[0-9]+\$ validation covers host_creates (fail-CLOSED)" ok
+  else
+    _report "T51b warm_standby validation covers host_creates" fail \
+      "guard would fail OPEN: [[ \"null\" -gt 0 ]] passes. validation line='${validation}'"
+  fi
+
+  # (3) the HALT comparison itself.
+  if grep -qF '[[ "$host_creates" -gt 0 ]]' <<<"$code"; then
+    _report "T51c warm_standby HALTs on host_creates > 0" ok
+  else
+    _report "T51c warm_standby HALTs on host_creates > 0" fail "no '-gt 0' comparison on host_creates"
+  fi
+
+  # (4) AC14 — a HALT with no next action is a dead end. The ::error:: output
+  # must carry BOTH a routing instruction and an explicit statement that this
+  # dispatch has no bypass ([skip-web-platform-apply]/[ack-destroy] are merge-
+  # commit mechanisms; a workflow_dispatch run has no merge commit to annotate).
+  local halt_errors routed no_bypass
+  halt_errors="$(grep -E '::error::' <<<"$code" | grep -F 'host_creates' || true)"
+  routed=no; no_bypass=no
+  grep -qE 'apply_target=' <<<"$code" && routed=yes
+  grep -qiE 'no bypass' <<<"$code" && no_bypass=yes
+  if [[ -n "$halt_errors" && "$routed" == yes && "$no_bypass" == yes ]]; then
+    _report "T51d warm_standby HALT text routes the operator and states 'no bypass'" ok
+  else
+    _report "T51d warm_standby HALT text routes + states no-bypass" fail \
+      "halt_error_present=$([[ -n "$halt_errors" ]] && echo yes || echo no) routing=$routed no_bypass=$no_bypass"
+  fi
+}
+
 t_ruleset_rule_removal_trips
 t_tunnel_ingress_removal_trips
 t_zone_settings_header_removal_trips
@@ -881,6 +987,7 @@ t_web2_retire_proxy_tls_birth_aborts
 t_web2_retire_noop_aborts
 t_web2_retire_volume_forget_aborts
 t_web2_retire_server_replace_aborts
+t_warm_standby_host_creates_halt_wired
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
