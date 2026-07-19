@@ -23,6 +23,17 @@ Lane: `cross-domain` · Threshold: `single-user incident` · CPO: SIGN OFF WITH 
 | **4.3** | **Already filed — #6575** ("sweep the dead web-2 dispatch surface"). No duplicate created. It independently corroborates the 0.2 no-op finding. |
 | **4.4** | **Filed — #6730** ("web-1 has no executable birth path"). Distinct from #6459, trigger not gated on it. |
 | **4.5** | Posted — issue comment on #6712. |
+| **5.1** | **`bash scripts/test-all.sh` → 193/193 suites passed, exit 0**, on the shipping commit `5dcee934`. Our suite: **49 passed, 0 failed**. (An earlier run recorded 48 — it predated T51e and was re-run rather than reported as-is.) |
+| **5.2** | **CI green on `5dcee934` (= PR headSha): 68 pass, 4 skipping, 0 fail.** Includes `deploy-script-tests`, `infra-validate-required`, `plan (apps/web-platform/infra)`, and the formerly-red `rename-guard (allowlist destinations)`. |
+| **5.3** | All 17 ACs walked. **AC9 — the discriminating one — resolves to the *warn* arm.** |
+
+**AC3 was resting on eyeball and is now asserted (T51e).** T51a–d assert only CONTENT; all four pass
+with the lines in any order. T51e pins the ordering by line offset. **The mutation battery found a
+bug in the new test rather than confirming it:** M1 (delete the `set -e` re-enable) initially
+produced no T51e line, no summary line, and **exit 0** — the four `ln_*` assignments lacked
+`|| true`, so a non-matching grep exited 1 under `set -euo pipefail` and aborted the suite mid-run,
+making the anchor-absent branch unreachable dead code. A broken extractor would have passed CI as a
+silent green. Guarded; both M1 and M2 now fail cleanly and restore to 49/0.
 
 **Byproduct of 0.2 (filed, not fixed):** because unresolvable targets are silently dropped,
 `warm_standby`'s "additive 6-target set" is really a **3-target set**. This does not weaken the
@@ -118,9 +129,9 @@ closure is what made 4.4/#6730 a blocking deliverable rather than a nicety.
 
 ## Phase 5 — Exit gate
 
-- [ ] **5.1** `bash scripts/test-all.sh` (CI shards: `webplat`/`bun`/`scripts`).
-- [ ] **5.2** `infra-validation.yml` suites.
-- [ ] **5.3** Walk all 17 ACs. **AC9 is the discriminating one** — AC1 and the structural test
+- [x] **5.1** `bash scripts/test-all.sh` (CI shards: `webplat`/`bun`/`scripts`).
+- [x] **5.2** `infra-validation.yml` suites.
+- [x] **5.3** Walk all 17 ACs. **AC9 is the discriminating one** — AC1 and the structural test
       pass identically whether the HALT is reachable or dead.
 
 ## PR body
