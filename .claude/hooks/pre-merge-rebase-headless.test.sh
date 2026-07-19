@@ -86,9 +86,21 @@ export INCIDENTS_REPO_ROOT="$INCIDENTS"
 merge_payload "$WORK" | "$HOOK" >"$STDOUT_OUT" 2>"$STDERR_OUT" || true
 unset CLAUDECODE SOLEUR_SESSION_STATE_ROOT INCIDENTS_REPO_ROOT
 
+# Collected into a variable rather than piped into `grep -q .`, for two reasons
+# under this file's `set -uo pipefail`:
+#   * `grep -q` closes the pipe on its FIRST match, so the upstream `xargs`/`grep`
+#     takes SIGPIPE (141) and pipefail propagates that non-zero — the assertion
+#     then reads as "no match" precisely when the match came early. A latent
+#     false-negative that only shows up once a log grows.
+#   * `-print0`/`-0` keeps filenames with spaces or newlines intact (SC2038);
+#     `-r` stops grep reading stdin when find returns nothing, which would
+#     otherwise hang.
+DETACHED_HITS=$(find "$LOG_ROOT/logs" -name '*.log' -print0 2>/dev/null \
+  | xargs -0 -r grep -l "Detached HEAD" 2>/dev/null || true)
+
 if [[ -s "$STDERR_OUT" ]]; then
   fail "T1: stderr non-empty under headless (got: $(cat "$STDERR_OUT"))"
-elif ! find "$LOG_ROOT/logs" -name '*.log' 2>/dev/null | xargs grep -l "Detached HEAD" 2>/dev/null | grep -q .; then
+elif [[ -z "$DETACHED_HITS" ]]; then
   fail "T1: log file does not mention 'Detached HEAD' (logs: $(ls -la "$LOG_ROOT/logs" 2>/dev/null))"
 else
   pass "T1: headless captured to log, stderr silent"
