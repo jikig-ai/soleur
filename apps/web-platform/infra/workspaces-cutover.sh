@@ -260,12 +260,25 @@ verify_byte_identity() {
 # size + mtime — a live-appending file). The C1 gate was RIGHT; the writer was not quiesced.
 #
 # inngest-server.service is deliberately ABSENT: its unit is ProtectSystem=strict with
-# ReadWritePaths=/var/lib/inngest /var/lock, so it provably cannot write $MOUNT (and can never
-# appear in `lsof +D`), while TimeoutStopSec=180 means stopping it could burn 3 minutes of a
-# ~10-minute freeze for zero quiescence benefit. Its residual risk (a crash-loop into `failed`
-# during the redis outage window) is covered by the post-freeze reconcile in resume_writers() at
-# zero freeze cost. See ADR-119 Addendum 2026-07-19.
+# ReadWritePaths=/var/lib/inngest /var/lock, so it provably cannot WRITE $MOUNT, while
+# TimeoutStopSec=180 means stopping it could burn 3 minutes of a ~10-minute freeze for zero
+# quiescence benefit. (The write claim is NOT a hold claim — ProtectSystem=strict makes $MOUNT
+# read-only in its namespace, not invisible, so a read-only open would still show in `lsof +D`.
+# That axis is delegated to G4 on purpose, not argued away.) Its residual risk (a crash-loop into
+# `failed` during the redis outage window) is covered by the post-freeze reconcile in
+# resume_writers() at zero freeze cost. See ADR-119 Addendum 2026-07-19.
 QUIESCE_UNITS="${WORKSPACES_QUIESCE_UNITS:-webhook.service inngest-redis.service}"
+# QUIESCE_TIMERS — timer-driven $MOUNT touchers. Stopped as `<timer> <service>` PAIRS: stopping a
+# .timer only prevents FUTURE triggers, it does not stop the instance the timer already launched.
+#  - orphan-reaper: runs `rm -rf` over $MOUNT/workspaces/*.orphaned-* every 6h as root
+#    (server.tf orphan-reaper.{service,timer}; orphan-reaper.sh WORKSPACE_ROOT=/mnt/data/workspaces)
+#    and carries NO RequiresMountsFor, so nothing stops it firing mid-freeze. A reap between the
+#    pass-2 delta rsync and the C1 verify makes `rsync --delete --dry-run` emit a `*deleting` line
+#    — the IDENTICAL abort signature as the redis AOF, on a ~6h duty cycle against a ~20min freeze.
+#  - luks-monitor: read-only, but RequiresMountsFor=/mnt/data means a mid-run instance holds the
+#    mount and trips the now fail-closed G4 (and would block the umount). Armed only by a PRIOR
+#    successful cutover, so absent on a first run — hence best-effort.
+QUIESCE_TIMERS="${WORKSPACES_QUIESCE_TIMERS:-orphan-reaper luks-monitor}"
 FREEZE_HOLDER_CAP="${WORKSPACES_FREEZE_HOLDER_CAP:-40}"
 
 # _quiesce_list — QUIESCE_UNITS with webhook.service guaranteed PRESENT and FIRST.
@@ -285,14 +298,25 @@ _quiesce_list() {
 # and this IS the real delivery.
 # OPERATOR NOTE: like ensure_aws, this runs in BOTH arms, so a `dry_run=true` rehearsal is NOT
 # host-side-effect-free the FIRST time — it may apt-get install lsof (additive, no service restart).
+# Called PRE-freeze beside ensure_aws (NOT inside freeze_writers): an apt-get inside the freeze
+# window runs with the app down and the dead-man ticking, so a held dpkg lock (Ubuntu's daily
+# unattended-upgrades) or a slow mirror would burn an irreversible-freeze approval. Bounded +
+# lock-tolerant, mirroring cloud-init.yml's apt invocation. Idempotent, so the in-freeze call is a
+# no-op backstop.
 ensure_lsof() {
   if command -v lsof >/dev/null 2>&1; then return 0; fi
   log "lsof absent — installing (G4 is fail-closed; it must never be skipped)"
-  { apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq lsof >/dev/null 2>&1; } || true
-  command -v lsof >/dev/null 2>&1 || {
-    emit_drift lsof_unavailable
-    die "lsof unavailable and could not be installed — the G4 straggler assert cannot run. Refusing to freeze on a mount whose quiescence is unproven: a gate that silently evaporates when a binary is absent is exactly how an unquiesced writer reached two real freezes (#6588)."
-  }
+  local aerr; aerr="$(mktemp)"
+  { timeout 240 apt-get update -qq >>"$aerr" 2>&1 \
+    && timeout 300 apt-get install -y -qq -o DPkg::Lock::Timeout=300 lsof >>"$aerr" 2>&1; } || true
+  if ! command -v lsof >/dev/null 2>&1; then
+    # Carry apt's own tail into the die message — hr-no-ssh-fallback-in-runbooks means the operator
+    # cannot shell in to ask "why"; a bare `lsof_unavailable` is undiagnosable.
+    local atail; atail="$(_vscrub "$(tail -c 400 "$aerr" 2>/dev/null || true)")"; rm -f "$aerr"
+    emit_drift lsof_install_failed
+    die "lsof unavailable and could not be installed — the G4 straggler assert cannot run. Refusing to freeze on a mount whose quiescence is unproven: a gate that silently evaporates when a binary is absent is exactly how an unquiesced writer reached two real freezes (#6588). apt tail: ${atail}"
+  fi
+  rm -f "$aerr"
 }
 
 # emit_freeze_holders — log the processes still holding $MOUNT to the run log AND Better Stack
@@ -300,15 +324,20 @@ ensure_lsof() {
 # for the same defect class on C1): evidence must outlive the abort that produced it.
 emit_freeze_holders() {
   local holders="$1" n k line summary row
-  n="$(printf '%s\n' "$holders" | grep -c . || true)"
-  log "G4 straggler assert FAILED: ${n} line(s) still hold $MOUNT. Capped ${FREEZE_HOLDER_CAP}:"
+  # grep -c . <<< (herestring, not a pipe): the file documents at the escrow negative-probe that a
+  # pipe under `set -o pipefail` can SIGPIPE the producer. `$holders` has already had lsof's
+  # `COMMAND PID USER …` header row stripped by the caller, so this counts PROCESSES, not lines.
+  n="$(grep -c . <<<"$holders" || true)"
+  log "G4 straggler assert FAILED: ${n} process(es) still hold $MOUNT. Capped ${FREEZE_HOLDER_CAP}:"
   summary="SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER feature=workspaces-luks op=workspaces-luks-freeze-holder count=${n} mount=$(_vscrub "$MOUNT") host=$(hostname 2>/dev/null)"
-  log "$summary"; logger -t "$LUKS_LOG_TAG" -- "$summary" 2>/dev/null || true
+  # Bare `echo` for the marker rows, matching emit_verify_diff — log() prefixes "[workspaces-cutover] ",
+  # which would indent SOLEUR_ markers that the sibling emitter writes at column 0.
+  echo "$summary"; logger -t "$LUKS_LOG_TAG" -- "$summary" 2>/dev/null || true
   k=0
   while IFS= read -r line && [ "$k" -lt "$FREEZE_HOLDER_CAP" ]; do
     [ -n "$line" ] || continue
     row="SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER feature=workspaces-luks op=workspaces-luks-freeze-holder count=${n} idx=${k} holder=$(_vscrub "$line")"
-    log "$row"; logger -t "$LUKS_LOG_TAG" -- "$row" 2>/dev/null || true
+    echo "$row"; logger -t "$LUKS_LOG_TAG" -- "$row" 2>/dev/null || true
     k=$((k + 1))
   done <<<"$holders"
   [ "$n" -gt "$FREEZE_HOLDER_CAP" ] 2>/dev/null && log "  … +$((n - FREEZE_HOLDER_CAP)) more"
@@ -324,15 +353,36 @@ freeze_writers() {
   # container drain, then the remaining units. resume_writers() reverses this exactly.
   local u first=1
   for u in $(_quiesce_list); do
-    systemctl stop "$u"
+    systemctl stop "$u" || { emit_drift quiesce_stop_failed; die "systemctl stop $u FAILED — refusing to freeze with a writer still running (the exact #6588 failure)"; }
     # C8: drain lets in-flight write() finish (a 10s SIGKILL truncates) — immediately after webhook.
     [ "$first" = "1" ] && { docker stop -t 120 "$CONTAINER"; first=0; }
   done
-  # luks-monitor.timer is armed by a PRIOR successful cutover and is RequiresMountsFor=/mnt/data, so
-  # on a RE-dispatch it can fire mid-freeze and hold $MOUNT — which the now fail-closed G4 would
-  # abort on. Best-effort: absent on a first cutover. Restored by resume_writers().
-  systemctl stop luks-monitor.timer 2>/dev/null || true
-  persist_state QUIESCED_UNITS "$QUIESCE_UNITS"
+  # The canary container shares the same RW bind mount (-v /mnt/data/workspaces:/workspaces) and is
+  # left running by an aborted deploy. Stopping webhook.service prevents NEW deploys, not a
+  # pre-existing straggler; G4 would catch it, but that is an avoidable abort.
+  docker stop -t 60 "${CONTAINER}-canary" >/dev/null 2>&1 || true
+  # Timer-driven touchers, stopped as <timer> <service> PAIRS — see QUIESCE_TIMERS. Best-effort:
+  # both are absent on a first cutover.
+  for u in $QUIESCE_TIMERS; do
+    systemctl stop "${u}.timer" "${u}.service" 2>/dev/null || true
+  done
+  # Record what was ACTUALLY stopped (the symmetric list), not the raw override — this is the
+  # forensic record an unattended recovery reads.
+  persist_state QUIESCED_UNITS "$(_quiesce_list)"
+
+  # A SIGKILL at TimeoutStopSec leaves a TORN AOF tail, and `systemctl stop` still returns 0 — so
+  # the process is gone (G4 clean) and C1 then certifies a byte-perfect copy of corrupt queue state.
+  # Byte-identity is not integrity. Redis restarts with the default `aof-load-truncated yes`, i.e.
+  # it silently discards the tail: every reminder armed in the last seconds vanishes with no error.
+  # systemd sets Result=timeout on a TimeoutStopSec kill, so this is a real discriminator.
+  local res
+  for u in $(_quiesce_list); do
+    res="$(systemctl show "$u" -p Result --value 2>/dev/null || echo unknown)"
+    case "$res" in
+      success|unknown) ;;
+      *) emit_drift unclean_stop; die "$u did not stop cleanly (Result=${res}) — its on-disk state may be torn; refusing to certify a copy of possibly-corrupt data (C8)" ;;
+    esac
+  done
 
   # Interrupted-write asserts — abort rather than faithfully copy wreckage. The .git-specific checks
   # stay scoped to workspaces/*/; everything else is swept by G4 below (which covers the WHOLE mount,
@@ -345,23 +395,79 @@ freeze_writers() {
     ls "$ws"/.git/objects/pack/tmp_pack_* >/dev/null 2>&1 && die "tmp_pack_* present in $ws — interrupted pack; aborting"
     [ -e "$ws/.git/gc.pid" ] && die "gc.pid present in $ws — interrupted gc; aborting"
   done
+  # The redis-side equivalents. G4 answers a DIFFERENT question (is anyone holding the mount) than
+  # these do (is there wreckage on disk we would faithfully copy), so delegating to G4 is not
+  # sufficient — /mnt/data/redis is a SIBLING of workspaces/ and was unguarded on every axis before.
+  if [ -d "$MOUNT/redis" ]; then
+    ls "$MOUNT"/redis/appendonlydir/temp-rewriteaof-* >/dev/null 2>&1 \
+      && die "temp-rewriteaof-* present in $MOUNT/redis/appendonlydir — an AOF rewrite child was killed rather than reaped; aborting (C8)"
+    ls "$MOUNT"/redis/temp-*.rdb >/dev/null 2>&1 \
+      && die "temp-*.rdb present in $MOUNT/redis — unexpected with \`save \"\"\`; something wrote outside the expected path; aborting (C8)"
+    # Manifest consistency is the strongest available proxy for "the AOF is loadable" without
+    # starting Redis: every file the manifest names must exist, or the copy is a faithful copy of an
+    # unloadable dataset.
+    local mf f
+    mf="$MOUNT/redis/appendonlydir/appendonly.aof.manifest"
+    if [ -f "$mf" ]; then
+      while read -r f; do
+        [ -n "$f" ] || continue
+        [ -e "$MOUNT/redis/appendonlydir/$f" ] \
+          || die "AOF manifest names '$f' but it is absent from $MOUNT/redis/appendonlydir — the queue state is unloadable; aborting rather than copying it (C8)"
+      done < <(grep -oE 'file [^ ]+' "$mf" 2>/dev/null | awk '{print $2}' || true)
+    fi
+  fi
 
-  # G4 — no process is still touching the mount. THREE properties, each load-bearing:
-  #  (a) fail-CLOSED on a missing lsof (ensure_lsof dies rather than skipping). The pre-#6588 form
-  #      wrapped the whole assert in `command -v lsof && …`, so on a host without lsof the gate
-  #      silently vanished — false assurance, and precisely the silent-failure anti-pattern
-  #      (cq-silent-fallback-must-mirror-to-sentry).
-  #  (b) NO pipe. `lsof +D "$MOUNT" | grep -q .` under `set -o pipefail` returns 141 when grep closes
-  #      the pipe on an early match and the producer takes SIGPIPE — so `&& die` never fires. That is
-  #      a SIZE-DEPENDENT fail-OPEN: the gate evaporates exactly when there are many stragglers.
-  #      Same trap the escrow negative-probe already documents at the herestring above.
-  #  (c) holders are EMITTED before die(), so the next abort self-reports (the #6604 defect class).
+  assert_mount_quiesced freeze
+}
+
+# assert_mount_quiesced <phase> — G4. Call it at EVERY point where quiescence must hold, not once:
+# it is a point-in-time sample, and the pass-2 delta rsync + C1 verify run ~10 minutes after the
+# freeze. A writer that starts after a single sample is undetected by construction.
+#
+# FOUR properties, each load-bearing:
+#  (a) fail-CLOSED on a missing lsof (ensure_lsof dies rather than skipping). The pre-#6588 form
+#      wrapped the whole assert in `command -v lsof && …`, so on a host without lsof the gate
+#      silently vanished — the silent-failure anti-pattern (cq-silent-fallback-must-mirror-to-sentry).
+#  (b) NO pipe. `lsof +D "$MOUNT" | grep -q .` under `set -o pipefail` returns 141 when grep closes
+#      the pipe on an early match and the producer takes SIGPIPE — so `&& die` never fires. That is
+#      a SIZE-DEPENDENT fail-OPEN: the gate evaporates exactly when there are many stragglers.
+#  (c) a POSITIVE CONTROL. `lsof` exits 1 BOTH when it finds nothing and when it errors, and writes
+#      diagnostics only to stderr — so `"$(lsof … 2>/dev/null || true)"` reads "the probe failed" as
+#      "the mount is clean". A typo'd $MOUNT, an unstat-able subtree (docker overlay filesystems on
+#      this host already warn), or any lsof error would pass the gate blind. So we hold our OWN fd
+#      under $MOUNT and require the probe to SEE it: empty output then proves the scan reached the
+#      mount, instead of merely assuming it. Mirrors verify_byte_identity, which captures stdout and
+#      stderr separately and treats a probe error as fail-closed for the same reason.
+#  (d) holders are EMITTED before die(), so the abort self-reports (the #6604 defect class).
+assert_mount_quiesced() {
+  local phase="${1:-freeze}" probe="$MOUNT/.luks-g4-probe.$$" lout lerr rc holders
   ensure_lsof
-  local holders
-  holders="$(lsof +D "$MOUNT" 2>/dev/null || true)"
+  lout="$(mktemp)"; lerr="$(mktemp)"
+  # exec 9> rather than touch: an open fd is what lsof reports, and it cannot be missed by a
+  # racing reaper the way a bare file could.
+  if ! exec 9>"$probe"; then
+    rm -f "$lout" "$lerr"; emit_drift g4_probe_uncreatable
+    die "cannot create the G4 probe file under $MOUNT (phase=${phase}) — the mount is not writable; refusing to certify quiescence on a mount we cannot even open"
+  fi
+  lsof +D "$MOUNT" >"$lout" 2>"$lerr"; rc=$?
+  exec 9>&-
+  # rc 0 = holders found, rc 1 = none found OR an error. Anything else is an outright probe failure.
+  if [ "$rc" -gt 1 ]; then
+    local etail; etail="$(_vscrub "$(tail -c 400 "$lerr" 2>/dev/null || true)")"
+    rm -f "$lout" "$lerr" "$probe"; emit_drift g4_probe_failed
+    die "the G4 lsof probe itself FAILED (rc=${rc}, phase=${phase}) — cannot certify quiescence; stderr: ${etail}"
+  fi
+  # Positive control: our own held fd MUST appear, else lsof never scanned $MOUNT.
+  if ! grep -qF -- "$probe" "$lout"; then
+    local etail; etail="$(_vscrub "$(tail -c 400 "$lerr" 2>/dev/null || true)")"
+    rm -f "$lout" "$lerr" "$probe"; emit_drift g4_probe_blind
+    die "lsof did not report this script's own open fd under $MOUNT (rc=${rc}, phase=${phase}) — the G4 straggler probe is BLIND, not clean; refusing to freeze on unproven quiescence. stderr: ${etail}"
+  fi
+  holders="$(grep -vF -- "$probe" "$lout" | grep -v '^COMMAND ' || true)"
+  rm -f "$lout" "$lerr" "$probe"
   if [ -n "$holders" ]; then
     emit_freeze_holders "$holders"
-    die "lsof +D $MOUNT non-empty — a straggler still holds the mount (G4); see the SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER marker for the offending process(es)"
+    die "lsof +D $MOUNT non-empty (phase=${phase}) — a straggler still holds the mount (G4); see the SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER marker for the offending process(es)"
   fi
 }
 
@@ -369,18 +475,35 @@ freeze_writers() {
 # (success, rollback, and the dead-man's inline command carries the equivalent), so a run leaves the
 # host exactly as it found it whether it succeeds, safe-aborts, or dies unattended.
 #
-# MUST run AFTER the mount: every quiesced unit is RequiresMountsFor=/mnt/data, so a start that
-# races the remount leaves the unit `failed` — which silently OUTLIVES the run and is strictly worse
-# than leaving it stopped. Hence the reset-failed before each start.
+# MUST run AFTER the mount is back, and the two quiesced units fail DIFFERENTLY if it is not:
+#   - inngest-redis.service carries RequiresMountsFor=/mnt/data, so it fails SAFELY (systemd
+#     refuses to start it) and merely lands in `failed`, which outlives the run.
+#   - webhook.service carries NO RequiresMountsFor — only ReadWritePaths=/mnt/data — so it starts
+#     SUCCESSFULLY onto the bare root-disk mountpoint directory. It is the CI deploy receiver, so a
+#     deploy landing during the incident writes user data into the ROOT filesystem under /mnt/data,
+#     shadowed the instant the volume is remounted. That is the dangerous one, and it is precisely
+#     the trap inngest-redis.service's own RequiresMountsFor comment was added to prevent.
+# rollback() swallows its remount failure (`|| true`), so this guard is what stops that swallowed
+# failure from becoming a data-loss event.
 resume_writers() {
+  if ! mountpoint -q "$MOUNT" 2>/dev/null; then
+    emit_drift resume_without_mount
+    log "WARN: $MOUNT is NOT mounted — refusing to start writers onto the bare mountpoint directory."
+    log "WARN: units stay stopped; the host needs an operator remount before the data plane returns."
+    return 0
+  fi
   local u rev=""
   for u in $(_quiesce_list); do rev="$u${rev:+ }$rev"; done  # reverse: webhook comes back LAST
   for u in $rev; do
     systemctl reset-failed "$u" 2>/dev/null || true
     systemctl start "$u" 2>/dev/null || true
     systemctl is-active --quiet "$u" 2>/dev/null || {
-      emit_drift quiesced_unit_not_active
+      # Carry the unit in the reason — two units in the set means an undiscriminated reason cannot
+      # tell "the webhook is down" from "the durable queue is down".
+      emit_drift "quiesced_unit_not_active_${u%%.service}"
       log "WARN: $u is not active after resume — the freeze left it down"
+      logger -t "$LUKS_LOG_TAG" -- "SOLEUR_WORKSPACES_LUKS_RESUME_DEGRADED feature=workspaces-luks op=workspaces-luks-resume-degraded unit=$(_vscrub "$u") host=$(hostname 2>/dev/null)" 2>/dev/null || true
+      echo "SOLEUR_WORKSPACES_LUKS_RESUME_DEGRADED feature=workspaces-luks op=workspaces-luks-resume-degraded unit=$(_vscrub "$u")"
     }
   done
   # inngest-server reconcile — never STOPPED by the freeze (it cannot write $MOUNT), but the redis
@@ -389,20 +512,54 @@ resume_writers() {
   systemctl reset-failed inngest-server.service 2>/dev/null || true
   systemctl is-active --quiet inngest-server.service 2>/dev/null || {
     systemctl start inngest-server.service 2>/dev/null || true
-    systemctl is-active --quiet inngest-server.service 2>/dev/null || emit_drift inngest_server_not_active
+    systemctl is-active --quiet inngest-server.service 2>/dev/null || {
+      # NEVER let emit_drift be a path's only channel: it returns 0 silently when the Sentry DSN
+      # cannot be resolved, which is exactly the FIRST-cutover case (the DSN EnvironmentFile is
+      # installed after the canary). Local evidence first, remote best-effort second.
+      emit_drift inngest_server_not_active
+      log "WARN: inngest-server.service is not active after reconcile"
+      logger -t "$LUKS_LOG_TAG" -- "SOLEUR_WORKSPACES_LUKS_RESUME_DEGRADED feature=workspaces-luks op=workspaces-luks-resume-degraded unit=inngest-server.service host=$(hostname 2>/dev/null)" 2>/dev/null || true
+      echo "SOLEUR_WORKSPACES_LUKS_RESUME_DEGRADED feature=workspaces-luks op=workspaces-luks-resume-degraded unit=inngest-server.service"
+    }
   }
-  systemctl start luks-monitor.timer 2>/dev/null || true
+  # `restart`, not `start`: on a RE-dispatch the timer already exists, and a plain `start` on an
+  # already-active unit is a no-op — so the host would keep running the STALE in-memory definition
+  # even though `enable --now` runs later with a changed unit file.
+  for u in $QUIESCE_TIMERS; do
+    systemctl restart "${u}.timer" 2>/dev/null || true
+  done
 }
 
-# app_canary — the post-restart application probe.
-# /health, NOT /api/health: middleware.ts exempts `/health` (the `pathname === "/health"` early
-# return) and there is no /api/health route at all, so /api/health 307-redirects to /login. The
-# pre-#6588 canary asserted == 200 without following redirects, so it would have aborted EVERY
-# otherwise-successful cutover at the very last gate — after the mount was already repointed.
+# app_canary — the post-restart application probe. TWO checks, because neither alone is sufficient.
+#
+# 1. /health (public) proves the Node process is listening. It is served by the CUSTOM SERVER at
+#    server/index.ts (`parsedUrl.pathname === "/health"`), which intercepts BEFORE Next.js routing —
+#    so the middleware.ts:113 CSP exemption never even runs for this path. (The pre-#6588 canary
+#    used /api/health, which has no route and therefore falls through to middleware and 307s to
+#    /login; asserting == 200 on it would have aborted EVERY otherwise-successful cutover at the
+#    very last gate, after the mount was already repointed.)
+#
+# 2. /internal/readyz is the check that actually certifies THIS cutover. /health returns 200
+#    UNCONDITIONALLY ("Always return 200 for load balancer probes" — server/index.ts) and never
+#    touches $MOUNT; server/readiness.ts states the invariant explicitly ("/health stays untouched —
+#    physically enforcing the 'no mount coupling on /health' invariant"). So /health is the one
+#    endpoint in the codebase GUARANTEED not to reflect the volume we just repointed: if the mapper
+#    mounts but $MOUNT/workspaces is absent, docker auto-creates an empty bind source, the container
+#    comes up with an empty /workspaces, /health returns 200, and the cutover is declared green with
+#    every user's source code missing. /internal/readyz asserts workspaces_writable AND
+#    workspaces_populated. It is loopback-gated, hence the localhost probe.
 app_canary() {
-  local health
+  local health ready
   health="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://app.soleur.ai/health || echo 000)"
   [ "$health" = "200" ] || die "app /health=$health (expected 200) after restart"
+  ready="$(curl -sS --max-time 20 http://127.0.0.1:3000/internal/readyz 2>/dev/null || echo '')"
+  case "$ready" in
+    *'"ready":true'*) log "app canary PASSED — /health 200 and /internal/readyz ready=true (workspaces writable + populated)" ;;
+    '') emit_drift readyz_unreachable
+        die "/internal/readyz returned nothing after restart — cannot certify the repointed volume is actually serving user data. /health alone is a 200-always liveness probe and CANNOT fail on an empty or unmounted \$MOUNT (C13)" ;;
+    *)  emit_drift readyz_not_ready
+        die "/internal/readyz did not report ready=true after restart — the repointed \$MOUNT is not writable/populated, i.e. the container is serving an EMPTY /workspaces. Response: $(_vscrub "$ready") (C13)" ;;
+  esac
 }
 
 # Host-local rollback: unmount the mapper, remount the RETAINED plaintext volume at $MOUNT, restart.
@@ -419,9 +576,14 @@ rollback() {
   mount /dev/disk/by-label/workspaces_plain "$MOUNT" 2>/dev/null \
     || mount "$(read_state PLAINTEXT_DEV)" "$MOUNT" 2>/dev/null || true
   docker start "$CONTAINER" 2>/dev/null || true
-  # AFTER the remount (RequiresMountsFor) — restores webhook + inngest-redis + reconciles
-  # inngest-server, so a safe-abort does not silently leave the durable Inngest queue down.
+  # AFTER the remount — resume_writers() itself refuses to start anything if the remount above
+  # failed (the `|| true` swallows it), so webhook cannot land on the bare mountpoint directory.
+  mountpoint -q "$MOUNT" 2>/dev/null || emit_drift rollback_remount_failed
   resume_writers
+  # Disarm HERE too, not only on the success path: an abort that reaches rollback has already
+  # restored the host, so leaving the transient timer armed means it fires DEAD_MAN_MIN later and
+  # takes a second, unannounced outage — one that now stops inngest-redis as well.
+  disarm_dead_man
   emit_drift rollback_engaged
 }
 
@@ -440,14 +602,9 @@ cleanup() {
   exit "$rc"
 }
 
-# Sourced-detection guard: when this file is `source`d (the workspaces-luks-verify.test.sh harness
-# obtains verify_byte_identity/emit_verify_diff without running the cutover), return HERE — after all
-# functions the test needs are defined, but BEFORE `trap cleanup EXIT` and the main body. An executed
-# run (`bash …/workspaces-cutover.sh`, BASH_SOURCE[0]==$0) evaluates this as a no-op and proceeds.
-if [ "${BASH_SOURCE[0]:-$0}" != "$0" ]; then return 0 2>/dev/null || true; fi
-
-trap cleanup EXIT
-
+# NOTE: defined ABOVE the sourced-detection guard so rollback() (which disarms after a
+# restore) and the freeze test harness can both reach them. Definitions only — arm_dead_man is
+# not CALLED until the main body, so sourcing still has no side effect.
 # Arm a host-local dead-man timer: if the orchestrator does not clear it within DEAD_MAN_MIN,
 # systemd-run auto-remounts plaintext + restarts (closes "frozen-and-SSH-unreachable", F3).
 arm_dead_man() {
@@ -462,16 +619,37 @@ arm_dead_man() {
   # operator signal, which is the failure nobody would see. Keep this command in lockstep with
   # resume_writers(); it must stay self-contained (no external binary).
   # Runs even if the SSH session (and this script) is long gone.
-  local dev
+  # DERIVED from _quiesce_list/QUIESCE_TIMERS, not hardcoded: self-containment constrains the
+  # RESULTING string (no external binary at fire time), NOT how the string is built. Hardcoding the
+  # units left the one UNATTENDED restore path asymmetric under a QUIESCE_UNITS override — the exact
+  # drift _quiesce_list() exists to prevent, on the path nobody is watching.
+  local dev u stops="" starts="" tstarts=""
   dev="$(read_state PLAINTEXT_DEV)"
+  for u in $(_quiesce_list); do
+    stops="${stops}systemctl stop ${u} 2>/dev/null; "
+    starts="systemctl reset-failed ${u} 2>/dev/null; systemctl start ${u} 2>/dev/null; ${starts}"  # reverse
+  done
+  for u in $QUIESCE_TIMERS; do
+    stops="${stops}systemctl stop ${u}.timer ${u}.service 2>/dev/null; "
+    tstarts="${tstarts}systemctl restart ${u}.timer 2>/dev/null; "
+  done
   systemd-run --on-active="${DEAD_MAN_MIN}min" --unit=workspaces-luks-deadman \
-    /bin/sh -c "systemctl stop webhook.service 2>/dev/null; systemctl stop inngest-redis.service 2>/dev/null; docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; cryptsetup close ${MAPPER_NAME} 2>/dev/null; mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT} && docker start ${CONTAINER} 2>/dev/null; systemctl reset-failed inngest-redis.service 2>/dev/null; systemctl start inngest-redis.service 2>/dev/null; systemctl reset-failed inngest-server.service 2>/dev/null; systemctl start inngest-server.service 2>/dev/null; systemctl start webhook.service 2>/dev/null; systemctl start luks-monitor.timer 2>/dev/null" \
+    /bin/sh -c "${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; cryptsetup close ${MAPPER_NAME} 2>/dev/null; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; systemctl start inngest-server.service 2>/dev/null; ${tstarts} fi" \
     2>/dev/null || true
 }
 disarm_dead_man() {
   systemctl stop workspaces-luks-deadman.timer 2>/dev/null || true
   systemctl reset-failed workspaces-luks-deadman 2>/dev/null || true
 }
+
+# Sourced-detection guard: when this file is `source`d (the workspaces-luks-verify.test.sh harness
+# obtains verify_byte_identity/emit_verify_diff without running the cutover), return HERE — after all
+# functions the test needs are defined, but BEFORE `trap cleanup EXIT` and the main body. An executed
+# run (`bash …/workspaces-cutover.sh`, BASH_SOURCE[0]==$0) evaluates this as a no-op and proceeds.
+if [ "${BASH_SOURCE[0]:-$0}" != "$0" ]; then return 0 2>/dev/null || true; fi
+
+trap cleanup EXIT
+
 
 # ============================================================================
 # ROLLBACK mode — operator recovery entrypoint
@@ -524,6 +702,10 @@ step "escrow proof: luksOpen --test-passphrase against the REAL device (host tok
 # the escrow path is usable BEFORE any irreversible freeze. This is what kills the false-green where
 # a green dry-run hid an unusable escrow (the gap #6649 fixes).
 ensure_aws
+# Hoisted here beside ensure_aws (#6588): apt-get inside the freeze window runs with the app down
+# and the dead-man ticking, so a held dpkg lock or a slow mirror would burn an irreversible-freeze
+# approval. Idempotent — the in-freeze call is a no-op backstop. Both arms, like ensure_aws.
+ensure_lsof
 load_escrow_creds
 escrow_probe
 
@@ -628,13 +810,21 @@ else
   # (it is inside the DRY_RUN gate), so without this a `dry_run=true` run tells the operator nothing
   # about whether the mount would actually be quiescible — which is how the fail-closed G4 could
   # first surface on a REAL freeze, burning an irreversible-freeze approval.
-  ensure_lsof
-  DRY_HOLDERS="$(lsof +D "$MOUNT" 2>/dev/null || true)"
+  # Herestrings, never `printf … | head`/`| grep`: `head` closes the pipe and SIGPIPEs the producer
+  # under `set -o pipefail` — the same fail-open shape the real G4 removed. AC5's static guard is
+  # scoped to freeze_writers(), so it cannot see this arm; the discipline has to be manual here.
+  DRY_HOLDERS="$(lsof +D "$MOUNT" 2>/dev/null | grep -v '^COMMAND ' || true)"
+  DRY_N="$(grep -c . <<<"$DRY_HOLDERS" || true)"
   if [ -n "$DRY_HOLDERS" ]; then
-    log "(dry-run) ADVISORY: $(printf '%s\n' "$DRY_HOLDERS" | grep -c . || true) process line(s) currently hold $MOUNT."
-    log "(dry-run) These are NOT quiesced in this arm (no freeze runs). A REAL freeze stops $QUIESCE_UNITS first;"
+    log "(dry-run) ADVISORY: ${DRY_N} process(es) currently hold $MOUNT."
+    log "(dry-run) These are NOT quiesced in this arm (no freeze runs). A REAL freeze stops $(_quiesce_list) plus the $QUIESCE_TIMERS timers first;"
     log "(dry-run) anything still listed AFTER that quiesce is what the fail-closed G4 would abort on."
-    printf '%s\n' "$DRY_HOLDERS" | head -n "$FREEZE_HOLDER_CAP" | while IFS= read -r l; do log "  (dry-run) HOLDER $(_vscrub "$l")"; done
+    while IFS= read -r l; do [ -n "$l" ] && log "  (dry-run) HOLDER $(_vscrub "$l")"; done < <(head -n "$FREEZE_HOLDER_CAP" <<<"$DRY_HOLDERS")
+    # Durable channel too — a rehearsal result that lives only in the run log is unanswerable an
+    # hour later. The luks-monitor tag is already allowlisted in vector.toml, so this needs no
+    # infra change.
+    logger -t "$LUKS_LOG_TAG" -- "SOLEUR_WORKSPACES_LUKS_DRYRUN_HOLDER feature=workspaces-luks op=workspaces-luks-dryrun-holder count=${DRY_N} mount=$(_vscrub "$MOUNT") host=$(hostname 2>/dev/null)" 2>/dev/null || true
+    echo "SOLEUR_WORKSPACES_LUKS_DRYRUN_HOLDER feature=workspaces-luks op=workspaces-luks-dryrun-holder count=${DRY_N} mount=$(_vscrub "$MOUNT")"
   else
     log "(dry-run) advisory holder probe: nothing currently holds $MOUNT"
   fi
@@ -650,6 +840,13 @@ if [ "$DRY_RUN" != "1" ]; then
   # cache, so the verify would read RAM, never the dm-crypt round-trip. A drop that CANNOT run
   # (hardened kernel, no perm) must ABORT, not warn — the whole integrity claim rests on the
   # round-trip, so a silently-cached verify is a false-green (data-integrity P1).
+  # G4 RE-ASSERT. The freeze-time sample is ~10 minutes stale by now, and it is a point-in-time
+  # sample: any writer that started AFTER it is undetected by construction. orphan-reaper is the
+  # concrete instance — a 6-hourly root `rm -rf` over $MOUNT/workspaces/*.orphaned-* that, firing
+  # between the delta rsync and the verify, makes `rsync --delete --dry-run` emit a `*deleting`
+  # line, i.e. the IDENTICAL C1 abort signature as the redis AOF. Re-asserting converts that from a
+  # mystery diff into a named holder, and is cheap against the freeze budget.
+  assert_mount_quiesced pre-verify
   sync
   echo 3 > /proc/sys/vm/drop_caches || die "drop_caches failed — cannot trust the dm-crypt round-trip verify; aborting (C1)"
   # C1 — the ITEMIZED verify (the false-green fix): MUST be 0 real content diffs, fail-closed on a
@@ -719,10 +916,22 @@ step "docker start + resume webhook + app canary (C13)"
 if [ "$DRY_RUN" != "1" ]; then
   docker start "$CONTAINER"
   # Restore every unit freeze_writers() quiesced (webhook + inngest-redis) and reconcile
-  # inngest-server — AFTER the mapper mount, which RequiresMountsFor=/mnt/data demands.
+  # inngest-server — AFTER the mapper mount (see resume_writers' mount guard).
   resume_writers
-  disarm_dead_man
+  # app_canary BEFORE disarm_dead_man. CANARY_OK=1 was set by the HOST canary above, so cleanup()
+  # will no longer roll back; if the dead-man were disarmed first, an app-level failure here would
+  # have ZERO automated recovery — on the one gate that actually proves user-facing health. Keeping
+  # the dead-man armed across the canary preserves the unattended backstop for exactly that window.
   app_canary
+  # The durable Inngest queue must be up before this run may call itself green. A dead queue behind
+  # a green cutover is the "component reports SUCCESS but its downstream effect is absent"
+  # anti-pattern — the user's scheduled work silently never fires. Fatal here is SAFE: CANARY_OK=1
+  # is already set, so cleanup() will NOT roll back a correct mount over a service-start failure.
+  systemctl is-active --quiet inngest-redis.service 2>/dev/null || {
+    emit_drift green_run_degraded_queue
+    die "inngest-redis.service is not active after a successful repoint — the durable Inngest queue is DOWN and armed reminders would silently never fire. Refusing to report a green cutover. The mount is correct and retained; restart the unit and re-run workspaces-luks-verify.yml."
+  }
+  disarm_dead_man
   # Deliver the standing observability to the LIVE host via THIS channel (ADR-119 §(e)).
   install -D -m 0755 "${SELF_DIR}/luks-monitor.sh" /usr/local/bin/luks-monitor 2>/dev/null || true
   install -D -m 0755 "$EMIT" /usr/local/bin/workspaces-luks-emit.sh 2>/dev/null || true

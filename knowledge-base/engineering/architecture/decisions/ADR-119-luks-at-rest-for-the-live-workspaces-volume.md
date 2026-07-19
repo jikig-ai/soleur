@@ -101,9 +101,18 @@ encrypted volume and silently lost armed Inngest reminders. The writer was not q
 |---|---|---|
 | `webhook.service` | yes, first | a CI deploy must not restart the container mid-rsync |
 | the app container | yes, `-t 120` | C8 drain (unchanged) |
+| `${CONTAINER}-canary` | yes, best-effort | shares the same `-v /mnt/data/workspaces:/workspaces` bind mount; an aborted deploy leaves it running |
 | `inngest-redis.service` | **yes (new)** | writes `/mnt/data/redis`; `TimeoutStopSec=30` gives a graceful SIGTERM + AOF flush |
-| `luks-monitor.timer` | yes, best-effort | armed by a *prior* successful cutover; `RequiresMountsFor=/mnt/data`, so on a re-dispatch it can hold the mount and trip the now fail-closed G4 |
-| `inngest-server.service` | **no — deliberately** | `ProtectSystem=strict` + `ReadWritePaths=/var/lib/inngest /var/lock` means it provably cannot write `/mnt/data`; `TimeoutStopSec=180` would burn 3 min of a ~10 min freeze for zero quiescence benefit. Reconciled post-freeze instead (clear failed state, start only if inactive). |
+| `orphan-reaper.{timer,service}` | **yes (new)** | a 6-hourly **root `rm -rf`** over `/mnt/data/workspaces/*.orphaned-*` with **no** `RequiresMountsFor`. Firing between the delta rsync and the verify makes `rsync --delete --dry-run` emit a `*deleting` line — the *identical* C1 abort signature as the AOF, on a 6h duty cycle against a ~20 min freeze |
+| `luks-monitor.{timer,service}` | yes, best-effort | armed by a *prior* successful cutover; `luks-monitor.service` is `RequiresMountsFor=/mnt/data`, so a mid-run instance holds the mount and trips the now fail-closed G4 |
+| `inngest-server.service` | **no — deliberately** | `ProtectSystem=strict` + `ReadWritePaths=/var/lib/inngest /var/lock` means it provably cannot **write** `/mnt/data`; `TimeoutStopSec=180` would burn 3 min of a ~10 min freeze for zero quiescence benefit. Reconciled post-freeze instead (clear failed state, start only if inactive). The write claim is **not** a hold claim — `ProtectSystem=strict` makes the mount read-only, not invisible — so the *hold* axis is delegated to G4 by design. |
+
+Timers are stopped as **`<timer> <service>` pairs**: stopping a `.timer` only prevents future
+triggers, it does not stop the instance the timer already launched.
+
+**The quiesce set is not a property of the units, it is a property of the mount.** Both misses above
+were units nobody thought of as "part of the cutover". The enumeration to re-run when adding any
+host-side unit is: *what else opens, writes, or deletes under `/mnt/data`?*
 
 **The straggler assert must be fail-closed and self-delivering.** `lsof +D /mnt/data` was wrapped in
 `if command -v lsof`, so on a host without `lsof` the entire gate silently vanished — false
@@ -117,12 +126,39 @@ it is still absent. The predicate must also carry **no pipe**: `lsof +D … | gr
 stragglers. And holders are emitted (`SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER`) **before** `die`, the
 same evidence-survives-the-abort constraint #6604 established for C1.
 
-**Three restore sites, not two.** Every quiesced unit is `RequiresMountsFor=/mnt/data`, so a restore
-that races the remount leaves the unit `failed` — which silently outlives the run and is worse than
-leaving it stopped. `resume_writers()` therefore clears failed state before each start and runs
-after the mount, on **all three** exit paths: the success path, `rollback()` (the EXIT trap and
-`ROLLBACK=1`), and the dead-man `systemd-run` command. The dead-man is the one that runs
-**unattended** — omitting it there leaves the durable Inngest queue down with no operator signal.
+**G4 is re-asserted, not sampled once.** `assert_mount_quiesced` runs at the freeze *and* again
+immediately before `verify_byte_identity`. A single sample cannot see a writer that starts in the
+~10 minutes between them — which is exactly the orphan-reaper's window.
+
+**G4 carries a positive control.** `lsof` exits 1 *both* when it finds nothing and when it errors,
+and writes diagnostics only to stderr, so `"$(lsof … 2>/dev/null || true)"` reads *"the probe
+failed"* as *"the mount is clean"*. The assert therefore holds its own fd under `$MOUNT` and
+requires the probe to report it: empty output then **proves** the scan reached the mount instead of
+assuming it. Mirrors `verify_byte_identity`, which captures stdout/stderr separately and treats a
+probe error as fail-closed for the same reason.
+
+**Three restore sites, not two** — and the two quiesced units fail *differently* on an unmounted
+`$MOUNT`, which is why `resume_writers()` gates on `mountpoint -q` rather than relying on unit
+properties:
+
+- `inngest-redis.service` carries `RequiresMountsFor=/mnt/data`, so it fails **safely** — systemd
+  refuses to start it and it lands in `failed`, outliving the run.
+- `webhook.service` carries **no** `RequiresMountsFor`, only `ReadWritePaths=/mnt/data`, so it
+  starts **successfully onto the bare root-disk mountpoint directory**. It is the CI deploy
+  receiver, so a deploy landing during the incident writes user data into the root filesystem,
+  shadowed the instant the volume is remounted. That is the dangerous one, and it is precisely the
+  trap `inngest-redis.service`'s own `RequiresMountsFor` comment was added to prevent.
+
+The three sites are the success path, `rollback()` (the EXIT trap and `ROLLBACK=1`), and the
+dead-man `systemd-run` command — whose restore sequence is **derived from `_quiesce_list`** and
+gated on the remount succeeding, because it is the one that runs **unattended**.
+
+**The canary proves the mount, not just the process.** `/health` returns 200 *unconditionally* and
+never touches `$MOUNT` (`server/readiness.ts` states the no-mount-coupling invariant explicitly), so
+it cannot fail on an empty or unmounted volume — if the mapper mounts but `$MOUNT/workspaces` is
+absent, docker auto-creates an empty bind source and a cutover serving zero user data reports green.
+`app_canary` therefore also asserts `/internal/readyz` (`workspaces_writable` + `workspaces_populated`),
+and runs **before** `disarm_dead_man` so an app-level failure still has the unattended backstop.
 
 ### (b) Rollback is the retained plaintext volume — and the "one-way door" framing is wrong
 
