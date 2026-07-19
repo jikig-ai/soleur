@@ -288,6 +288,30 @@ export function checkDnsPropagated(
     };
   }
 
+  // ‼️ An INCONCLUSIVE AAAA lookup is not the same as "no AAAA". `resolve6`
+  // throws `ENODATA`/`ENOTFOUND` when the name genuinely has no AAAA — that is
+  // the PASS condition — but it also throws on `ETIMEOUT` / `ESERVFAIL` /
+  // `ECONNREFUSED`, and `gatherDnsPropagation` coalesces every one of them to an
+  // empty array. Treating that as "no AAAA" fails OPEN in exactly the case this
+  // gate exists to catch: a live proxied AAAA whose lookup happened to time out
+  // (plausible — 10s timeout, 2 tries, two public resolvers, transient blip)
+  // while the A lookup still answered from a warm cache. The gate would return
+  // `propagated`, the routine would consume a Let's Encrypt validation attempt
+  // against a zone that cannot validate, and the resulting `poll_timeout` is
+  // indistinguishable from "window too short" — the precise diagnostic
+  // confusion #6698 exists to remove. `retry` (not `failed`) is correct here:
+  // unlike a confirmed AAAA, a resolver timeout genuinely may clear on the next
+  // attempt.
+  if (
+    inputs.resolve6Error !== null &&
+    !["ENODATA", "ENOTFOUND"].includes(inputs.resolve6Error)
+  ) {
+    return {
+      status: "retry",
+      reason: `AAAA lookup inconclusive (${inputs.resolve6Error}) — cannot confirm no AAAA survives the flip`,
+    };
+  }
+
   if (inputs.resolved4.length === 0) {
     return { status: "retry", reason: "no A-record answer yet" };
   }

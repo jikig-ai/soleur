@@ -730,6 +730,40 @@ describe("#6698 checkDnsPropagated — pure verdict function (AC8)", () => {
     expect(v.reason).toMatch(/not GitHub-shaped/);
   });
 
+  it("inconclusive AAAA lookup (resolver timeout) → retry, NOT propagated", () => {
+    // Fails OPEN if the gate treats every resolve6 error as "no AAAA":
+    // gatherDnsPropagation coalesces ETIMEOUT/ESERVFAIL/ECONNREFUSED to an
+    // empty array exactly like a genuine ENODATA. A live proxied AAAA whose
+    // lookup timed out (while the A lookup answered from a warm cache) would
+    // then read as propagated, burn a Let's Encrypt validation attempt against
+    // a zone that cannot validate, and surface as an indistinguishable
+    // poll_timeout.
+    for (const code of ["ETIMEOUT", "ESERVFAIL", "ECONNREFUSED", "unknown"]) {
+      const v = checkDnsPropagated({
+        ...base,
+        resolved6: [],
+        resolve6Error: code,
+      });
+      expect(v.status, code).toBe("retry");
+      expect(v.reason, code).toMatch(/inconclusive/);
+    }
+  });
+
+  it("ENODATA / ENOTFOUND are the genuine no-AAAA PASS conditions", () => {
+    // Non-vacuity for the guard above: the two codes that really mean "this
+    // name has no AAAA" must still reach propagated.
+    for (const code of ["ENODATA", "ENOTFOUND"]) {
+      expect(
+        checkDnsPropagated({ ...base, resolved6: [], resolve6Error: code })
+          .status,
+        code,
+      ).toBe("propagated");
+    }
+    expect(
+      checkDnsPropagated({ ...base, resolved6: [], resolve6Error: null }).status,
+    ).toBe("propagated");
+  });
+
   it("no A answer yet → retry", () => {
     expect(checkDnsPropagated({ ...base, resolved4: [] }).status).toBe("retry");
   });
