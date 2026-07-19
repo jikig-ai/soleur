@@ -468,6 +468,15 @@ misconfiguration. The job now declares:
 environment: ${{ !inputs.dry_run && 'workspaces-luks-cutover' || '' }}
 ```
 
+> **⚠️ SUPERSEDED — see "Addendum (2026-07-19): the stray-copy carve-out (CLEAN_STRAY, #6588)".**
+> The expression above, and the truth table + tautology argument below, are the **2026-07-18 state**
+> and are retained for provenance. They were **wrong in a way that left a live authorization hole**:
+> the argument assumes `dry_run` is a faithful proxy for "which mode", but the ROLLBACK block
+> force-sets `DRY_RUN=0` in-script while `dry_run` **defaults to `true`** — so `rollback=true` with an
+> untouched form took the **ungated** branch and performed a real umount / `cryptsetup close` /
+> container restart behind nothing but the typo-guard token. Every destructive mode now contributes
+> its own operand; read the addendum for the current expression and truth table.
+
 **Reversibility proof (what the dry-run actually touches on web-1).** The dry-run is NOT
 host-side-effect-free, but every effect is reversible/benign: `ensure_aws` installs a SHA-pinned
 aws-cli (additive, no service restart); `escrow_probe` does a PUT→read-back→delete of a namespaced
@@ -502,12 +511,22 @@ the C19/AC20b gate exists to authorize (the freeze + plaintext wipe), all of whi
 
 The expression reads the **typed** `inputs.dry_run` boolean context (declared `type: boolean, default: true`), so `!inputs.dry_run` coerces on a real boolean — never the string-typed `github.event.inputs.dry_run`, where `!'false'` is `false` and the freeze would run **ungated**. Drift guards `workspaces-luks-header.test.sh` H17 (exact fail-closed byte-form) + H19 (non-empty reviewers) pin this; they go RED on the inversion. **Sequencing:** the boot-token secret rides the DEFAULT apply, not the scoped `apply_target=workspaces-luks-cutover` first-provision — between a scoped first-provision and the next default apply the secret is unpublished, so both workflows fail loud (`[[ -n "$WORKSPACES_LUKS_BOOT_TOKEN" ]] || exit 1`) rather than proceeding tokenless.
 
-The gate and `DRY_RUN` derive from the SAME `inputs.dry_run` operand, so "freeze-reachable" ⟺ "gated"
-is a tautology — there is no input that reaches the freeze arm ungated. The empty-string branch changes
-ONLY autonomy, never the safety property. **Never invert the operands:** `inputs.dry_run && '' || 'X'`
-gates ALWAYS (`''` is falsy, so it falls through to `'X'` in both arms) — the opposite of intent, and it
-would leave the freeze ungated in exactly the case that matters. A drift guard
-(`workspaces-luks-header.test.sh` H17) asserts the exact fail-closed form and goes RED on the inversion.
+~~The gate and `DRY_RUN` derive from the SAME `inputs.dry_run` operand, so "freeze-reachable" ⟺ "gated"
+is a tautology — there is no input that reaches the freeze arm ungated.~~ **This tautology is FALSE and
+was the defect** (corrected 2026-07-19, #6588): it holds only for the freeze arm. `ROLLBACK` and
+`CONFIRM_WIPE` are *separate* destructive modes whose reachability `inputs.dry_run` does not describe,
+and the ROLLBACK block force-sets `DRY_RUN=0`, breaking the derivation the argument rests on. The
+lesson generalizes past this file: **an operand that means "which mode" must be read from the mode,
+never inferred from a sibling flag that merely correlates with it today.**
+
+The empty-string branch changes ONLY autonomy, never the safety property. **Never invert the
+operands:** `inputs.dry_run && '' || 'X'` gates ALWAYS (`''` is falsy, so it falls through to `'X'` in
+both arms) — the opposite of intent, and it would leave the freeze ungated in exactly the case that
+matters. Drift guards: `workspaces-luks-header.test.sh` H17 asserts the fail-closed **shape** (the
+ungated branch is the `''` arm, and every destructive mode contributes an operand), and
+`workspaces-luks-cutover-workflow.test.sh` pins the **exact expression** by parsing the workflow as
+YAML — deliberately in one place only, so the literal is not replicated across two files without a
+parity test.
 
 The reviewer set MUST stay non-empty (a zero-reviewer environment auto-approves — DP-11 F8); H19 asserts
 it. Split-job (a `rehearse` job with no environment + a `freeze` job with a static `environment:`) is the
@@ -537,6 +556,96 @@ in `workspaces-cutover.sh :: verify_byte_identity` / `emit_verify_diff`:
 also pages Sentry via `emit_drift` on the existing `op=workspaces-luks-drift`. The gate's
 data-integrity contract (0 real content diffs, fail-closed on rsync error) is **unchanged**; this is a
 bug fix, not a new decision.
+
+## Addendum (2026-07-19): the stray-copy carve-out (CLEAN_STRAY, #6588)
+
+The 2026-07-19 cutover run swallowed its staging mount and sent the entire bulk rsync to
+`/mnt/data-luks` **on web-1's root disk** instead of onto the LUKS mapper. `bec339250` fixed the
+mount (mkfs the mapper, fail-close the staging mount) and added a **detect-and-refuse stray guard**
+so no future run can prepare over such a residue.
+
+That guard is a read-only assert placed deliberately **above** the `DRY_RUN` short-circuit, so it
+fires in both arms — which means it `die()`s on *every* dispatch, including every rehearsal, for as
+long as the stray exists. No dispatch shape both reached the host and survived it: the cutover was
+fully wedged. The guard is correct and is **not** moved or relaxed here; a rehearsal that proceeded
+over a live stray would certify the staging path while the exact defect that caused the incident sat
+on disk. The wedge is cleared by **remediating the stray**, not by weakening the check.
+
+**Decision.** Add a `CLEAN_STRAY=1` mode — a standalone, explicitly-gated operator entrypoint
+(`clean_stray()` in `workspaces-cutover.sh`, `clean_stray` input on the cutover workflow) that
+removes the stray. It mirrors the `ROLLBACK=1` mode's *shape* and deliberately **not** its *gate*
+(see below).
+
+- **AP-009 (Never delete user data): Deviation — documented carve-out.** `clean_stray()` deletes the
+  contents of `/mnt/data-luks` on web-1's root disk. That content is **user data** — workspace source
+  code. This is not data loss: provenance establishes the copy is a **duplicate**. Nothing ever wrote
+  to that path except the misdirected rsync of `/mnt/data`; no service, mount, or container
+  references it, which is why the guard's own message names it "a DUPLICATE; the canonical data is at
+  $MOUNT". The canonical copy at `/mnt/data` is retained and is never touched. `clean_stray()`
+  refuses — each with its own named reason on the no-SSH marker channel — when: any probe binary it
+  depends on is absent (a missing `mountpoint` exits 127, which an `if` reads as "the dangerous
+  condition does not hold"); `/mnt/data-luks` is a symlink; `/mnt/data-luks` is a **mountpoint** (that
+  is the real LUKS volume); `/mnt/data` is not a healthy mountpoint backed by a block device;
+  `/mnt/data` and `/mnt/data-luks` are on the **same filesystem** (compared by `stat -c %d` on the
+  directories — `findmnt` cannot answer this, because the mountpoint refusal above guarantees
+  `/mnt/data-luks` is not a mount target, so a `findmnt`-based check would be dead code that merely
+  looks like a guard); a filesystem is mounted **beneath** `/mnt/data-luks` (which `rm -rf` would
+  descend through into live data); or the enumeration itself fails.
+
+  The premise is left **falsifiable** rather than asserted: a relative-path subset check refuses if
+  the stray holds any path `/mnt/data` does not. That check runs to **depth 2**, not depth 1, and the
+  distinction is load-bearing: `/mnt/data`'s top level is infrastructure (`workspaces/`, `plugins/`,
+  `redis/`) while user identity lives at `workspaces/<id>/`, so a depth-1 comparison reduces to "does
+  `/mnt/data` contain a directory named `workspaces`?" — true in every reachable state, **including one
+  where the stray holds a user's only surviving copy**. Depth 2 is where the check starts asking a real
+  question; deeper would refuse forever on ordinary per-file churn in a live workspace. The ungated
+  preflight probe publishes that result plus the magnitude for a human to read before approving, and
+  **fails the dispatch** rather than rendering an empty banner if it cannot read the host — an absent
+  magnitude reads to an approver as "nothing to delete", which is the one thing this surface must
+  never say by accident. The carve-out is scoped to this one path, this one mode, and this one
+  incident; it is reachable only behind the `workspaces-luks-cutover` environment reviewer gate and a
+  distinct typed token, `DELETE-STRAY-USER-DATA-AP-009`.
+- **Escrowing the stray before deleting it was considered and rejected.** It would create a *third*
+  copy of user data on a new egress path carrying its own retention, DSAR and Art. 30 obligations —
+  arguably a worse AP-009 outcome than a provenance-established, human-approved delete of a proven
+  duplicate. The existing escrow path is sized for a ~2 MB LUKS header, not a bulk dataset.
+
+**Why the mode does not inherit ROLLBACK's gate.** `dry_run` had been serving as a proxy for "which
+mode" across the workflow, and that synonymy was already false: `dry_run` **defaults to `true`**
+while the script's ROLLBACK block force-sets `DRY_RUN=0`, so a `rollback=true` dispatch with
+`dry_run` left untouched resolved to the **ungated** branch of the `environment:` expression and
+performed a real `umount` / `cryptsetup close` / container restart on web-1's live volume behind
+nothing but a typo-guard token. Mirroring that gate would have satisfied "same approval posture" by
+violating "not reachable from the ungated dry-run arm". Both are fixed together: every destructive
+mode now contributes its own operand, and the ungated branch is reachable only for
+`dry_run=true ∧ clean_stray=false ∧ rollback=false`.
+
+**Why the workflow is now two jobs.** A job's `environment:` gate blocks the job **before its first
+step**, so validation and operator-legibility placed inside the gated job can only ever run *after* a
+reviewer has been paged. An ungated, mutation-free `preflight` job therefore rejects impossible mode
+combinations before waking anyone, and on a `clean_stray` dispatch reaches web-1 read-only to write
+the AP-009 banner and the deletion's magnitude to the run summary. GitHub's approval UI shows
+workflow, actor and ref — never the dispatch inputs — so without this a routine cutover and a
+user-data deletion are indistinguishable at the moment of authorization.
+
+**Mode exclusion is an availability control, not just a correctness one.** ROLLBACK's block ends
+`exit 0`, so a CLEAN_STRAY block after it is unreachable whenever `ROLLBACK=1`: an operator who
+ticked both would type the delete-user-data token, receive a **rollback** on a host where no freeze
+was held — per the script's own `_PREPARE_ABORT_NOTE`, "a gratuitous outage" — see the run exit
+green, and still have the stray. `assert_mode_exclusive()` refuses that combination ahead of both
+blocks, mirrored by the preflight job.
+
+**The detect-and-refuse invariant is unchanged elsewhere.** The deletion lives in its own function,
+never in `prepare_staging_target`, so that suite's "this path issues no `rm`" assertion (T4c) is left
+byte-identical and keeps holding for every arm that is not this explicit entrypoint.
+
+**Telemetry:** `SOLEUR_WORKSPACES_LUKS_CLEAN_STRAY` (`op=workspaces-luks-clean-stray`, carrying
+`deviation=AP-009`) is a **new** marker rather than an overload of
+`SOLEUR_WORKSPACES_LUKS_STAGING_TARGET`, whose `result=`/`reason=` vocabulary is pinned by the
+T-series; a user-data deletion must not be indistinguishable from a staging-prep outcome on the
+operator's only no-SSH channel. Magnitude is reported **top-level only** — a per-path itemization
+would publish workspace structure (repo and branch names) into the Actions log and the Sentry drift
+channel, a wider audience than the data itself.
 
 ## References
 
