@@ -79,7 +79,7 @@ Sentry drift channel — broader audiences than the data itself. This is not hyp
 `VERIFY_DIFF_CAP=40`) to both channels, which is precisely why v1's reuse of the C1
 verify machinery was a leak as well as a correctness bug.
 
-**Brand-survival threshold:** `single-user incident`
+- **Brand-survival threshold:** `single-user incident`
 
 CPO sign-off required at plan time; `user-impact-reviewer` invoked at review time.
 
@@ -544,12 +544,17 @@ logs:
   retention: GitHub Actions default (90d); syslog per host journald retention
 
 discoverability_test:
-  command: gh run view <run-id> --job cutover --log | grep SOLEUR_WORKSPACES_LUKS_CLEAN_STRAY
-  expected_output: a marker row carrying result= and reason= plus stray_bytes/stray_entries for the
-    dispatched arm. NOTE the job must have COMPLETED — `gh run view --log` errors on an in-progress
-    run, and on the clean_stray arm the run sits pending environment approval for an unbounded
-    window, i.e. exactly when an operator is most likely to reach for this. Use
-    `gh run view <run-id> --log-failed` for the refusal arms.
+  command: gh run list --workflow=workspaces-luks-cutover.yml --limit 1 --json databaseId --jq length
+  expected_output: "1"
+  # Runnable TODAY and pipe-free (the preflight Check-10 executor refuses shell-active tokens, and
+  # `gh run view --log` errors on an in-progress run — on the clean_stray arm the run sits pending
+  # environment approval for an unbounded window, i.e. exactly when an operator would reach for it).
+  # What this proves: the cutover workflow's run surface is queryable with NO ssh. The marker itself,
+  # SOLEUR_WORKSPACES_LUKS_CLEAN_STRAY, lands in two places once a cleanup dispatch has completed:
+  #   (a) the run log  — gh run view <run-id> --log --job cutover   (job must be COMPLETED)
+  #   (b) Better Stack — the host emits it via `logger -t $LUKS_LOG_TAG` (luks-monitor), which
+  #       vector.toml already allowlists by SYSLOG_IDENTIFIER, so no new sink wiring is owed.
+  # Refusal arms surface via: gh run view <run-id> --log-failed
 ```
 
 No `ssh` appears in any verification command (`hr-no-ssh-fallback-in-runbooks`).
