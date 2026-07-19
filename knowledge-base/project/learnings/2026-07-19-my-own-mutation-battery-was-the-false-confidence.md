@@ -167,6 +167,14 @@ already shipped in a commit message and a code comment.
 
 ## Related
 
+- `2026-07-19-a-self-graded-mutation-battery-went-vacuous-twice-in-one-pr-and-the-two-producer-count-that-fixed-it.md`
+  — **an independent PR (#6588) hit this same class on the SAME DAY**, landing on `main` while this
+  branch was in review (pulled in by a Phase 7 BEHIND sync). Two unrelated features, two authors'
+  self-graded batteries, both vacuous, both caught only by an outside party. That is no longer a
+  coincidence worth documenting a third time — it is the argument for a *mechanical* gate. Its
+  answer is a two-producer count (assert the derived set's cardinality against the producer's);
+  this one's is fixture-space cardinality. They are the same question asked of different sets:
+  *how many distinct members does the check actually instantiate?*
 - `2026-07-16-a-mutation-battery-only-covers-what-you-mutate.md` — the same class; that one's
   gate is "enumerate the SUT's functions and confirm each is called". **Insufficient here:**
   every function *was* called. The gap was fixture-space cardinality, not call coverage.
