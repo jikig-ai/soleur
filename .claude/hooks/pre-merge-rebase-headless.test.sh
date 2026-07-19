@@ -20,17 +20,38 @@ command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
 
 # Build a minimal work repo with review evidence so we get past the
 # review-evidence gate and reach the detached-HEAD warn at line 110.
+#
+# Since #6724 the todos/ signal is scoped to `origin/main..HEAD`, so this needs
+# a real origin and the evidence must live on a commit that is NOT already on
+# origin/main. The previous shape committed todos/ directly onto main and then
+# detached there, which under branch scoping is correctly read as "no evidence
+# unique to this branch" — the gate would deny and the detached-HEAD warn under
+# test would never be reached.
 make_repo() {
-  local work="$1"
-  mkdir -p "$work/todos"
-  echo "code-review" > "$work/todos/sample.md"
+  local work="$1" origin="$2"
   git -C "$work" init -q
   git -C "$work" symbolic-ref HEAD refs/heads/main
   git -C "$work" config user.email t@t
   git -C "$work" config user.name t
   git -C "$work" config commit.gpgsign false
+  echo base > "$work/base.txt"
+  git -C "$work" add base.txt
+  git -C "$work" commit -q -m base
+
+  # Local bare origin: the hook fetches origin/main, and a local remote keeps
+  # that offline-safe.
+  git init -q --bare -b main "$origin"
+  git -C "$work" remote add origin "$origin"
+  git -C "$work" push -q origin main
+  git -C "$work" fetch -q origin
+
+  # Review evidence on a commit ahead of origin/main.
+  git -C "$work" checkout -q -b feat-headless
+  mkdir -p "$work/todos"
+  echo "code-review" > "$work/todos/sample.md"
   git -C "$work" add todos/sample.md
-  git -C "$work" commit -q -m seed
+  git -C "$work" commit -q -m "review findings"
+
   # Detach HEAD so the line-110 warn fires.
   git -C "$work" checkout -q --detach
 }
@@ -50,7 +71,7 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 WORK="$TMP/work"
 INCIDENTS="$TMP/incidents"
 mkdir -p "$WORK" "$INCIDENTS"
-make_repo "$WORK"
+make_repo "$WORK" "$TMP/origin.git"
 
 STDERR_OUT="$TMP/stderr.out"
 STDOUT_OUT="$TMP/stdout.out"

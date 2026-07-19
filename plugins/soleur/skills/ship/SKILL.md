@@ -115,11 +115,22 @@ Check for evidence that `/review` ran on the current branch. This is defense-in-
 
 **Step 1: Check for review artifacts (legacy).**
 
-Search for todo files tagged as code-review findings:
+Search for todo files tagged as code-review findings **that this branch
+introduced** — refresh `origin/main` first, since the scoping is only as
+accurate as the cached ref:
 
 ```bash
-grep -rl "code-review" todos/ 2>/dev/null | head -1 || true
+git fetch origin main >/dev/null 2>&1 || true
+git log origin/main..HEAD --name-only --format= -- todos/ 2>/dev/null \
+  | sort -u | xargs -r grep -l "code-review" 2>/dev/null | head -1 || true
 ```
+
+This was a repo-global `grep -rl "code-review" todos/`, which made the signal
+structurally unfailable (#6724): `todos/` is a tracked directory on main, so a
+single long-lived review todo anywhere in it satisfied Step 1 for every branch
+forever — including branches where review never ran. `xargs -r` is load-bearing:
+without it, `grep` reads stdin and hangs when the branch touched no todos, which
+is the common case.
 
 **Step 2: Check commit history for review evidence.**
 
@@ -130,6 +141,19 @@ git log origin/main..HEAD --oneline | grep -E "(refactor: add code review findin
 ```
 
 The `^[a-f0-9]+ review:` alternative matches the new convention — `review: <summary> (P<N>)` commits produced when findings are fixed inline per `rf-review-finding-default-fix-inline`.
+
+If that returns nothing, check for the durable review trailer:
+
+```bash
+git log origin/main..HEAD --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' | grep '[^[:space:]]' || true
+```
+
+`Reviewed-By-Soleur:` is emitted by
+`plugins/soleur/skills/review/scripts/emit-review-trailer.sh` and is the **only**
+signal a zero-finding review can produce: review's own step 2 skips the artifact
+commit when there are no local changes, so a clean branch generates no todos and
+no `review:` commit. Before the trailer existed, the gate denied precisely those
+branches with no escape hatch (#6724).
 
 **Step 3: Check for GitHub issues with `code-review` label (current).**
 
@@ -157,9 +181,9 @@ If `gh` fails or is unavailable, treat as no output (fail open on Signal 3).
 
 **Note:** Three signals are checked, any one suffices:
 
-- Signal 1 (`todos/` grep): coupled to legacy review workflow (pre-#1329)
-- Signal 2 (commit message grep): matches legacy `refactor: add code review findings` OR new `review: <summary>` fix-inline commits (post-#2374)
-- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`). Expected to be empty under the new fix-inline default unless findings were scoped out — Signal 2 is the primary signal post-#2374.
+- Signal 1 (`todos/` grep, **branch-scoped**): coupled to legacy review workflow (pre-#1329). Scoped to paths this branch touched — the previous repo-global form could not fail (#6724)
+- Signal 2 (commit message grep **or `Reviewed-By-Soleur:` trailer**): matches legacy `refactor: add code review findings` OR `review: <summary>` fix-inline commits (post-#2374), OR the trailer emitted by `emit-review-trailer.sh`. The trailer is the primary signal post-#6724 and the only one a zero-finding review can produce
+- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`). Expected to be empty under the new fix-inline default unless findings were scoped out.
 
 **If any step produced output:** Review evidence found. Continue to Phase 2.
 
@@ -324,7 +348,7 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 
 Defense-in-depth check that review ran before shipping. Phase 1.5 catches this earlier, but if context compaction erased Phase 1.5's check or the skill was invoked mid-flow, this gate is the second net.
 
-**Detection:** Check for review evidence using the same three signals described in Phase 1.5 (Signal 1: `todos/` grep, Signal 2: commit message grep, Signal 3: GitHub issues with `code-review` label). Run the same commands in the same order. See Phase 1.5 for full details and coupling notes.
+**Detection:** Check for review evidence using the same three signals described in Phase 1.5 (Signal 1: **branch-scoped** `todos/` grep, Signal 2: commit message grep **or the `Reviewed-By-Soleur:` trailer**, Signal 3: GitHub issues with `code-review` label). Run the same commands in the same order — including the `git fetch origin main` that precedes Signal 1, since both local signals are scoped to `origin/main..HEAD` and are only as accurate as the cached ref. See Phase 1.5 for full details and coupling notes.
 
 **If review evidence is found:** Pass silently.
 

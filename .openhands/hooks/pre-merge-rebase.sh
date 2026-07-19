@@ -39,10 +39,36 @@ if [[ "$CURRENT_BRANCH" == "main" ]] || [[ "$CURRENT_BRANCH" == "master" ]]; the
   exit 0
 fi
 
+# Refresh origin/main BEFORE the gate (#6724). Both local signals are scoped
+# with `origin/main..HEAD`, so a stale ref widens the range and lets commits
+# already on main count as this branch's review evidence. Deliberately does not
+# exit on failure: the sync below fails open on network error, and keeping that
+# behaviour here would make "unplug the network" a universal gate bypass.
+FETCH_OK=1
+if ! git -C "$WORK_DIR" fetch origin main >/dev/null 2>&1; then
+  FETCH_OK=0
+fi
+
 # pre-merge:review-evidence-gate
-REVIEW_TODOS=$(grep -rl "code-review" "$WORK_DIR/todos/" 2>/dev/null | head -1 || true)
+# Check 1 was a repo-global `grep -rl "code-review" "$WORK_DIR/todos/"` and was
+# therefore structurally unfailable (#6724): todos/ lives on main, so one
+# long-lived review todo satisfied the gate for every branch forever. Now scoped
+# to paths touched by commits unique to this branch.
+REVIEW_TODOS=$(cd "$WORK_DIR" 2>/dev/null && \
+  git log origin/main..HEAD --name-only --format= -- todos/ 2>/dev/null \
+  | sort -u | xargs -r grep -l "code-review" 2>/dev/null | head -1 || true)
+# Signal 2 had drifted out of sync with the .claude/hooks copy: it matched only
+# the legacy "refactor: add code review findings" subject, missing the "review: "
+# fix-inline convention (post-#2374) entirely. Both are now matched here, plus
+# the durable `Reviewed-By-Soleur:` trailer that emit-review-trailer.sh emits —
+# the only signal a zero-finding review can produce.
 REVIEW_COMMIT=$(git -C "$WORK_DIR" log origin/main..HEAD --oneline 2>/dev/null \
-  | grep "refactor: add code review findings" || true)
+  | grep -E "(refactor: add code review findings|review: )" || true)
+if [[ -z "$REVIEW_COMMIT" ]]; then
+  REVIEW_COMMIT=$(git -C "$WORK_DIR" log origin/main..HEAD \
+    --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' 2>/dev/null \
+    | grep '[^[:space:]]' || true)
+fi
 
 REVIEW_ISSUES=""
 if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]]; then
@@ -75,8 +101,9 @@ if [[ "$(git -C "$WORK_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" == "tr
   fi
 fi
 
-# Fetch latest main
-if ! git -C "$WORK_DIR" fetch origin main >/dev/null 2>&1; then
+# The fetch happens above the review-evidence gate (#6724); its outcome is
+# consumed here, preserving fail-open-on-network-error for SYNCING only.
+if [[ "$FETCH_OK" != "1" ]]; then
   echo "Warning: Could not fetch origin/main (network error). Proceeding with merge." >&2
   exit 0
 fi

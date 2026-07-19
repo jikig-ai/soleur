@@ -99,21 +99,66 @@ if [[ "$CURRENT_BRANCH" == "main" ]] || [[ "$CURRENT_BRANCH" == "master" ]]; the
   exit 0
 fi
 
+# Refresh origin/main BEFORE the review-evidence gate (#6724).
+#
+# Both local signals below are scoped with `origin/main..HEAD`, so they are only
+# as accurate as the locally-cached origin/main ref. A stale ref silently widens
+# that range and lets commits already on main count as this branch's own review
+# evidence — which re-opens the vacuity the scoping exists to close. This hook
+# in particular merges origin/main in and pushes, so on a second merge attempt
+# the cached ref is guaranteed to be behind unless it is refreshed here.
+#
+# This deliberately does NOT exit on failure. The sync logic further down fails
+# open on a network error, which is correct for syncing; but if the fetch kept
+# that behaviour at this position, any network failure would return 0 BEFORE the
+# gate ran, turning "unplug the network" into a universal gate bypass. The
+# outcome is recorded and acted on after the gate instead.
+FETCH_OK=1
+if ! git -C "$WORK_DIR" fetch origin main >/dev/null 2>&1; then
+  FETCH_OK=0
+fi
+
 # pre-merge:review-evidence-gate — Review evidence gate.
 # Block gh pr merge when no review evidence exists on the branch.
 # Signals 1-2 are local; Signal 3 requires network (gh API).
 # Fires before detached HEAD exit because gh pr merge operates on a PR number,
 # not the local checkout state -- review evidence is still visible in detached HEAD.
 
-# Check 1 (legacy): todo files tagged "code-review"
-REVIEW_TODOS=$(grep -rl "code-review" "$WORK_DIR/todos/" 2>/dev/null | head -1 || true)
+# Check 1 (legacy): todo files tagged "code-review" INTRODUCED BY THIS BRANCH.
+#
+# This was `grep -rl "code-review" "$WORK_DIR/todos/"` — a repo-global grep, and
+# therefore structurally unfailable (#6724). todos/ is a tracked directory that
+# lives on main, so a single long-lived review todo anywhere in it satisfied the
+# gate for EVERY branch, forever, including branches where review never ran. The
+# gate could not deny anything for as long as that file existed.
+#
+# Scoped to paths touched by commits unique to this branch. `--format=` strips
+# the commit headers so only paths are emitted; `xargs -r` keeps grep from
+# running at all when the branch touched no todos — without it, grep would read
+# stdin and hang, which is the common case and the one the old form got wrong.
+REVIEW_TODOS=$(cd "$WORK_DIR" 2>/dev/null && \
+  git log origin/main..HEAD --name-only --format= -- todos/ 2>/dev/null \
+  | sort -u | xargs -r grep -l "code-review" 2>/dev/null | head -1 || true)
 
-# Check 2: review commit (coupled to review SKILL.md Step 5 commit message;
-# uses locally-cached origin/main — may be stale if not recently fetched).
-# Matches legacy "refactor: add code review findings" AND new "review: <summary> (P<N>)"
-# fix-inline convention from rf-review-finding-default-fix-inline (post-#2374).
+# Check 2: review commit, or the machine-emitted review trailer.
+#
+# The `Reviewed-By-Soleur:` trailer is the durable signal, emitted by
+# plugins/soleur/skills/review/scripts/emit-review-trailer.sh. It exists because
+# a zero-finding review legitimately produces no artifacts and no commit, so the
+# message-pattern signals below cannot fire for it — the gate would deny exactly
+# the branches that were clean (#6724).
+#
+# The two message patterns are retained as legacy fallbacks for branches
+# reviewed before the trailer existed: "refactor: add code review findings" and
+# the "review: <summary> (P<N>)" fix-inline convention from
+# rf-review-finding-default-fix-inline (post-#2374).
 REVIEW_COMMIT=$(git -C "$WORK_DIR" log origin/main..HEAD --oneline 2>/dev/null \
   | grep -E "(refactor: add code review findings|review: )" || true)
+if [[ -z "$REVIEW_COMMIT" ]]; then
+  REVIEW_COMMIT=$(git -C "$WORK_DIR" log origin/main..HEAD \
+    --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' 2>/dev/null \
+    | grep '[^[:space:]]' || true)
+fi
 
 # Check 3 (current): GitHub issues with "code-review" label referencing this PR.
 # Coupled to review-todo-structure.md issue body template ("**Source:** PR #<number>").
@@ -180,8 +225,10 @@ if [[ "$(git -C "$WORK_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" == "tr
   fi
 fi
 
-# Fetch latest main -- fail open on network error
-if ! git -C "$WORK_DIR" fetch origin main >/dev/null 2>&1; then
+# The fetch itself now happens above the review-evidence gate (#6724) so that a
+# network failure cannot short-circuit the gate. Its outcome is consumed here,
+# preserving the original fail-open-on-network-error behaviour for SYNCING only.
+if [[ "$FETCH_OK" != "1" ]]; then
   headless_or_stderr warn "Could not fetch origin/main (network error). Proceeding with merge."
   exit 0
 fi
