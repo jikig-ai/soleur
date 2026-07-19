@@ -36,7 +36,7 @@ Two parser assumptions compose:
 Every real URL parser takes userinfo to the **last** `@`. So for
 
 ```
-postgres://user:pass@Xq7vNp2LmWd4@db.prod.example.com/appdb
+postgres://user:pass@Xq7vNp2LmWd4@db.test/appdb
 ```
 
 the true password is `pass@Xq7vNp2LmWd4`, but the rule matches only to the first `@`, and the
@@ -45,9 +45,9 @@ reported**. Measured, against the pre-PR config vs the widened one:
 
 | Fixture | pre-PR | widened |
 | --- | --- | --- |
-| `postgres://user:pass@<realsecret>@db.prod.example.com/appdb` | rc=1 detected | **rc=0 silenced** |
-| `postgres://user:pw@<realsecret>@rds.amazonaws.com` | rc=1 detected | **rc=0 silenced** |
-| `postgres://postgres:pass@word2026@db.prod.internal` | rc=1 detected | **rc=0 silenced** |
+| `postgres://user:pass@<realsecret>@db.test/appdb` | rc=1 detected | **rc=0 silenced** |
+| `postgres://user:pw@<realsecret>@rds.test` | rc=1 detected | **rc=0 silenced** |
+| `postgres://postgres:pass@word2026@db.test` | rc=1 detected | **rc=0 silenced** |
 
 Passwords containing `@` are common in generated credentials. The class pre-existed for
 `password`/`secret` (filed as #6723) — the widening turned a narrow gap into a broad one, because
