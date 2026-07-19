@@ -531,11 +531,29 @@ p_luks_dev_passed() {
   echo 1
 }
 
-# H17 — the environment gate is FAIL-CLOSED (gated unless dry_run is exactly true). RED on the
-# inverted `inputs.dry_run && '' || 'X'` form (which gates ALWAYS / ungates the freeze).
+# H17 — the environment gate is FAIL-CLOSED: EVERY destructive mode contributes its own operand,
+# and the ungated branch is the empty-string arm. RED on the inverted
+# `inputs.dry_run && '' || 'X'` form (which gates ALWAYS / ungates the freeze), and RED on a gate
+# keyed on dry_run ALONE — which was a live hole, since `dry_run` defaults to TRUE while the
+# script force-sets DRY_RUN=0 in the ROLLBACK block, so `rollback=true` took the UNGATED branch
+# and performed a real umount/close/restart (#6588).
+#
+# Asserted by PROPERTY, not by byte-exact literal: the exact-string pin lives in
+# workspaces-luks-cutover-workflow.test.sh, which parses the YAML rather than grepping (the header
+# comments in that file discuss this expression at length, so a byte-grep here would also have to
+# out-guess the prose). Duplicating the literal in two files would be a replicated constant with
+# no parity test — the failure class this suite exists to catch.
 p_env_gate_failclosed() {
-  local body; body="$(strip_comments "$1")"   # herestring below — avoid the pipefail+grep -q SIGPIPE flake
-  grep -qF "environment: \${{ !inputs.dry_run && 'workspaces-luks-cutover' || '' }}" <<<"$body" && echo 1 || echo 0
+  local body gate; body="$(strip_comments "$1")"   # herestrings below — avoid the pipefail+grep -q SIGPIPE flake
+  gate="$(grep -m1 -E '^[[:space:]]*environment:' <<<"$body")" || { echo 0; return; }
+  # the ungated branch must be the '' arm, never the environment name
+  grep -qF "|| ''" <<<"$gate" || { echo 0; return; }
+  grep -qF "&& 'workspaces-luks-cutover'" <<<"$gate" || { echo 0; return; }
+  # every destructive mode contributes an operand
+  grep -qF '!inputs.dry_run' <<<"$gate" || { echo 0; return; }
+  grep -qF 'inputs.clean_stray' <<<"$gate" || { echo 0; return; }
+  grep -qF 'inputs.rollback' <<<"$gate" || { echo 0; return; }
+  echo 1
 }
 
 # H18 — luks-monitor.service carries HOME=/root (root doppler unit) + the EnvironmentFile that

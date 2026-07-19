@@ -399,6 +399,14 @@ jobs:
       - name: Run /workspaces LUKS staging-target guard (#6588 mkfs-if-empty + fail-closed staging mount + capacity gate)
         run: bash apps/web-platform/infra/workspaces-luks-staging.test.sh
 
+      # Guards the cutover WORKFLOW rather than the script: the `environment:` gate expression
+      # (exact-string, because operand inversion silently ungates a destructive arm) and the
+      # pre-gate mode validation, which it asserts by EXECUTING the workflow's own extracted `run:`
+      # body against every input combination. Registered explicitly for the same reason as every
+      # line in this job: an unregistered suite is zero coverage, silently green.
+      - name: Run /workspaces LUKS cutover WORKFLOW gate (#6588 mode gating + CLEAN_STRAY reachability)
+        run: bash apps/web-platform/infra/workspaces-luks-cutover-workflow.test.sh
+
       # REGISTRATION IS NOT ENVIRONMENT. The loopback suite below is the only workspaces-luks test
       # that touches a REAL block device (losetup + real cryptsetup luksFormat/luksOpen + real
       # mkfs.ext4 + real mount), so it must land in a job that can actually do that:
