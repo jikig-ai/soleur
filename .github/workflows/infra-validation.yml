@@ -389,6 +389,14 @@ jobs:
       - name: Run /workspaces LUKS C1 verify diagnosability guard (#6604 separate stdout/stderr + emit path before rm/die)
         run: bash apps/web-platform/infra/workspaces-luks-verify.test.sh
 
+      # Reproduction harness for #6733: the G4 quiescence probe creates+unlinks an entry INSIDE
+      # $MOUNT between the pass-2 delta rsync and C1, advancing the transfer root's mtime, so the
+      # itemized verify emits `.d..t...... ./` and every cutover safe-aborts on a byte-identical
+      # tree. Pins the mechanism AND that C1 itself is never narrowed to paper over it.
+      # Skips cleanly on non-GNU coreutils / an ACL-less filesystem rather than false-greening.
+      - name: Run /workspaces LUKS C1 root-mtime reproduction (#6733 G4 probe perturbs the tree C1 certifies)
+        run: bash apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh
+
       # LOAD-BEARING registration: this job lists each infra test explicitly (no glob), so an
       # unregistered suite is ZERO coverage, silently and greenly.
       - name: Run /workspaces LUKS freeze-quiesce guard (#6588 redis in quiesce set + fail-closed G4 + /health canary)
