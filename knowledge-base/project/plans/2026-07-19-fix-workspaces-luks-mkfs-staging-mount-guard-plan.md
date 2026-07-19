@@ -25,6 +25,50 @@ branch: feat-one-shot-6588-luks-mkfs-staging-mount-guard
 > what first makes ENOSPC reachable**. Every change to existing code is **strictly additive
 > fail-closure**.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-19
+**Passes:** CTO domain review → 5-agent plan review (DHH, Kieran, code-simplicity,
+architecture-strategist, spec-flow-analyzer) → deepen-plan gates + verify-the-negative sweep +
+external technical verification.
+
+### Key improvements
+
+1. **The invariant was applied to only one path.** Two independent reviewers found that the plan's own
+   rule — *anchor a path to its device before certifying it* — recursed one layer deeper than v1/v2
+   reached: nothing anchored `$MAPPER` → `$FRESH_DEV`, so a stale mapper backed by a different
+   container would have passed every gate **including the new positive control**. Now anchored at
+   prepare time.
+2. **Verification budget reallocated.** Loopback validation on real devices moved from a deferrable
+   Phase 6 to a blocking Phase 1 — the stubbed harness proves the shell *branches*, and the defect
+   was a real command that was never called. The escape hatch is deleted; a structural dispatch gate
+   on the irreversible arm replaces prose enforcement.
+3. **Destructive scope removed.** The stray-copy **deletion** is gone (split to a follow-up PR). Both
+   simplification reviewers fired on that scope, and architecture showed the dry-run carve-out was
+   *inverted*: it would have put an irreversible `rm -rf` of user source on the arm that has zero
+   human approval by construction, whose reversibility premise is what authorizes it being ungated.
+4. **Six same-class sites folded in.** `:670`, `:686`, `:693`, `:892`, `:899`, and `rollback()` `:577`
+   — all fail-open → fail-closed, all on the freeze-critical or recovery path. `:892` and the
+   `rollback()` `$STAGING` leak are arguably higher severity than the nominal P0.
+5. **Two self-inflicted defects caught before implementation.** `emit_staging_target` was *called but
+   never defined* (a swallowed 127 → the marker would silently never emit), and `_same_dev`'s naive
+   form **fails open** when `readlink` errors. Both were the exact defect class the plan exists to fix.
+6. **ACs cut 26 → 11** and re-anchored by content rather than line number; behaviour is asserted by
+   tests, not greps over shell source.
+
+### New considerations discovered
+
+- **This PR is what first makes `ENOSPC` reachable** — the copy moves from the root disk (where it
+  fit) into a mapper strictly smaller than its source. The capacity gate moved from deferred to
+  in-scope.
+- **Re-running after a successful cutover had no defined outcome** — and re-dispatch is the most
+  likely operator action. It would have mounted the mapper twice and rsynced source-into-itself.
+- **A prepare-time abort could provoke a gratuitous outage** if an operator reached for `ROLLBACK=1`
+  (which umounts the live plaintext volume). Every new die message now says no rollback is needed.
+- **Three `set -u` aborts** would have killed the first-cutover path *before emitting any marker*.
+- **The stubbed harness could not have run the specified tests** — `run_case` lives in a different
+  file, never sets `WORKSPACES_STAGING`, and has a single-rc `mountpoint` stub.
+
 ## Overview
 
 The 2026-07-19 real freeze (run `29695998561`) safe-aborted on C1 and auto-rolled-back to plaintext
@@ -42,7 +86,10 @@ The script runs `set -uo pipefail` with **no `-e`** (`:32`), and `:696` is ungua
 696: [ "$DRY_RUN" = "1" ] || { mountpoint -q "$STAGING" || mount "$MAPPER" "$STAGING"; }
 ```
 
-so that failure is **swallowed**. `mkdir -p "$STAGING"` at `:695` had already created
+so that failure is **swallowed** — a direct violation of `hr-when-a-command-exits-non-zero-or-prints`
+("Investigate any non-zero exit or printed warning before proceeding. Never treat a failed step as
+success"). An unguarded `mount` in a script without `set -e` is the root enabler of this entire
+silent-target class, and closing it is FR1. `mkdir -p "$STAGING"` at `:695` had already created
 `/mnt/data-luks` as a plain directory on the **root disk**, and it stays one. Every downstream step
 then targets the root disk: bulk rsync (`:802`), delta rsync (`:839`), `verify_byte_identity`
 (`:861`), G3 manifest (`:880`).
@@ -214,8 +261,12 @@ it, real `cryptsetup luksFormat`/`luksOpen`, then drive `prepare_staging_target`
 merged PR body — a procedural gate, precisely the class this plan exists to eliminate and the class
 named in the learning it cites. Enforcement, in preference order:
 
-1. **Primary:** run the suite in CI (privileged container) and wire it in `infra-validation.yml` as a
-   real check. Then it is not deferrable.
+1. **Primary:** run the suite in CI and wire it in `infra-validation.yml` as a real check.
+   **Verified at deepen time:** `losetup`, `cryptsetup`, `mkfs.ext4` and `mount` are all present on
+   GitHub-hosted `ubuntu-latest`, `/dev/loop*` is available, and **no privileged container or
+   `--cap-add=SYS_ADMIN` is required** (GH-hosted runners are VMs, not job containers). The
+   "runner privileges might block it" hedge is therefore removed — Phase 1 is feasible as a plain
+   `run:` step, so it is **not deferrable**.
 2. **Structural backstop (ship regardless):** a step in `workspaces-luks-cutover.yml` that hard-fails
    `dry_run=false` unless loopback validation is evidenced. This puts the gate on the **irreversible
    arm**, where it can actually fire — rather than on a merge that has already happened.
@@ -313,10 +364,12 @@ the first-cutover path would abort with `unbound variable` *and emit no marker*.
 4. **mkfs guard** — mirror the script's own three-arm `:683-691` shape, on the **mapper**:
 
    ```bash
-   # -p: LOW-LEVEL probe, bypassing the /run/blkid/blkid.tab cache. A cached entry can report the
-   # PREVIOUS TYPE for the same device name after a rollback-and-reformat cycle — and one arm here
-   # mkfs's destructively while another refuses destructively, so a stale read is wrong in BOTH
-   # directions. (`-c /dev/null` is equivalent.)
+   # -p: LOW-LEVEL probe, bypassing the /run/blkid/blkid.tab cache (man blkid: "Switch to low-level
+   # superblock probing mode"). A cached entry can report the PREVIOUS TYPE for the same device name
+   # after a rollback-and-reformat cycle — and one arm here mkfs's destructively while another
+   # refuses destructively, so a stale read is wrong in BOTH directions.
+   # NOTE: `-c /dev/null` is NOT equivalent (verified) — it suppresses use of a cache FILE but still
+   # performs a normal (non-probing) lookup. Only `-p` forces the live superblock scan. Use `-p`.
    fs_type="$(blkid -p -s TYPE -o value "$MAPPER" 2>/dev/null || true)"
    if [ -z "$fs_type" ]; then
      log "mapper carries NO filesystem — mkfs.ext4 (first cutover)"
@@ -353,8 +406,10 @@ the first-cutover path would abort with `unbound variable` *and emit no marker*.
 6. **Positive control** — the primary regression guard, on **new code only**:
 
    ```bash
-   # findmnt -no SOURCE returns EITHER /dev/mapper/<name> OR /dev/dm-N depending on
-   # kernel/util-linux, so both sides must be canonicalized.
+   # findmnt -no SOURCE returns /dev/mapper/<name> for an active mapper in the common case
+   # (VERIFIED at deepen time), but the form is not contractually guaranteed across
+   # kernel/util-linux versions, so canonicalize both sides rather than string-compare.
+   # `findmnt -no MAJ:MIN` is an equally robust alternative and is form-independent by construction.
    #
    # THIS HELPER CARRIES ITS OWN POSITIVE CONTROL. The naive form
    #   [ "$(readlink -f "$1")" = "$(readlink -f "$2")" ]
@@ -378,8 +433,10 @@ the first-cutover path would abort with `unbound variable` *and emit no marker*.
 7. **Capacity gate — folded in, no longer deferred.** Spec-flow established that this PR is what makes
    `ENOSPC` reachable: before the fix the rsync landed on the **root disk**, where it evidently fit;
    after the fix it lands in the **mapper**, whose usable capacity is the volume *minus* the LUKS2
-   header (~16 MB) *minus* ext4 metadata. If the fresh volume was sized equal to the plaintext source,
-   the mapper is **strictly smaller** than the source filesystem. `df "$STAGING"` at `:877` is a
+   header *minus* ext4 metadata. Verified: LUKS2 metadata + keyslot areas give a default data offset
+   of **~16–32 MiB** (the plan's earlier "~16 MB" was the low end). Since the fresh volume is sized
+   equal to the plaintext source, the mapper is **strictly smaller** than the source filesystem — so
+   this is not a hypothetical. `df "$STAGING"` at `:877` is a
    post-copy preflight for the repoint, not a capacity gate — there is genuinely nothing before `:802`.
    And while `:802` is pre-freeze, the delta rsync at `:839` is **inside** the freeze, where an ENOSPC
    burns the irreversible-freeze approval exactly as the 2026-07-19 run did.
@@ -697,6 +754,36 @@ rule, or persistent runtime process. The change edits a script already shipped t
 `workspaces-luks-cutover.yml` tar-bundle content-carrier path (`:175`, ADR-119 §(e)) and adds workflow
 steps. No `.tf` file is touched, so `apply-web-platform-infra.yml` does not fire.
 
+## Downtime & Cutover
+
+Deepen-plan gate 4.55 fires: the script this PR edits performs a freeze on a serving surface.
+
+**This PR itself takes nothing offline.** It ships code, tests, workflow steps, and an ADR
+amendment. No `.tf` file is touched, so `apply-web-platform-infra.yml` does not fire and no host is
+rebooted or replaced. The freeze is a separately gated, operator-approved dispatch that this task must
+not trigger.
+
+**The zero-downtime path for the cutover itself was already evaluated and is impossible.** ADR-119's
+*Alternatives Considered* records blue-green as **rejected on a hard constraint**, not on preference:
+cx33 is `available = false` in all three EU datacenters, so `-replace` would destroy the sole prod
+host and fail to recreate it. `cryptsetup reencrypt` in place was also rejected — it operates on the
+live device holding sole-copy data with no rollback artifact. The **additive** design (fresh volume +
+copy + repoint, retaining the plaintext volume as the rollback backstop) is what remains, and it
+requires a bounded freeze to copy the delta consistently.
+
+**Residual downtime is therefore accepted, bounded, and pre-existing:** a ≤20 min freeze budget
+(`:805`), armed dead-man (`arm_dead_man`, `:808`), DP-6 `trap cleanup EXIT` auto-rollback, and a
+rollback rehearsal (`:783`) that proves the retained plaintext remounts read-only before the freeze
+begins. This plan does not extend that window.
+
+**This plan strictly reduces expected downtime.** Every new assert is **pre-freeze** (the freeze
+starts at `:807`), so each converts a would-be mid-freeze failure — or, in the 2026-07-19 case, a
+silent wrong-target copy followed by a repoint onto an unformatted mapper — into a zero-downtime
+abort. The capacity gate (Phase 2 step 7) is the clearest instance: without it an `ENOSPC` would fire
+at the delta rsync (`:839`), **inside** the freeze, burning an irreversible-freeze approval; with it
+the run aborts before any user impact. `mkfs`'s synchronous inode-table write is likewise paid
+pre-freeze by design.
+
 ## Risks & Mitigations
 
 | Risk | Mitigation |
@@ -720,6 +807,52 @@ steps. No `.tf` file is touched, so `apply-web-platform-infra.yml` does not fire
 | **New asserts could abort a freeze that would otherwise succeed.** | Every new assert is **pre-freeze** (freeze starts `:807`), so a failure aborts with **zero downtime** — strictly better than proceeding onto the wrong device. Phase 4's changes are all fail-open → fail-closed and cannot make a currently-*correct* run fail. |
 | **Unverified current on-host state.** What `blkid` reports for the mapper on web-1 now is unknown from here (no SSH). | The three-arm guard is total by construction — empty, `ext4`, or anything else are all handled and the third arm dies. No arm assumes a particular current state. |
 | **The stray copy remains on disk after this PR.** | The `staging_stray_present` die **mechanically blocks every cutover** until it is remediated, and emits a Sentry-fatal + marker so it is tracked rather than invisible. Remediation ships in the immediately-following PR (Non-Goals), sequenced before any real freeze. |
+
+## Research Insights (deepen-plan)
+
+### Verify-the-negative sweep — 15/15 CONFIRMS, 0 contradictions
+
+Every negative/absolute claim in this plan was mechanically re-verified against the actual files.
+All 15 hold **verbatim**, including exact line numbers and the zero-hit greps for `mkfs`,
+`emit_staging_target`, `_same_dev`, `run_case` (in `workspaces-luks.test.sh`), and `STAGING` (in
+`workspaces-luks-freeze.test.sh`). Notable confirmations: `rollback()` `:571-591` contains **no**
+`$STAGING` reference at all; `FLIP_DONE` has exactly three occurrences (`:170` init, `:602` reader,
+`:900` setter) confirming `cleanup()` is its only in-script reader; `read_state` is used only for
+`PLAINTEXT_DEV` (`:580`, `:630`).
+
+### External technical verification
+
+| Claim | Verdict | Consequence for the plan |
+|---|---|---|
+| `mkfs.ext4 -E lazy_itable_init=0,lazy_journal_init=0` — valid syntax, disables lazy init, meaningfully lengthens mkfs on large volumes; no conflict with `-q` | **TRUE** | Kept, with the operator "not a hang" log line (Phase 2 step 8) |
+| `blkid -p` performs a live superblock probe bypassing the cache | **TRUE** | Kept |
+| `blkid -c /dev/null` is equivalent to `-p` | **FALSE** | **Corrected** — `-c /dev/null` suppresses the cache *file* but still does a normal lookup. Only `-p` forces the live scan. The plan no longer offers it as an alternative |
+| Bare `blkid <dev>` exits 0 on a partition-table-only device (prints `PTTYPE=`) | **TRUE** | Confirms the rejection of the git-data bare-`blkid` shape in favour of `-s TYPE -o value` |
+| Freshly `luksOpen`'d unformatted mapper → `blkid -s TYPE -o value` prints empty | **TRUE** | Three-arm guard is sound |
+| `findmnt -no SOURCE` returns `/dev/mapper/<name>` for an active mapper | **TRUE (common case)** | **Softened** — the `dm-N` form is not the default, so the existing `:901`/`:911` literal compares are very likely fine. Reinforces the decision **not** to retrofit them. `_same_dev` is retained for new code as cheap insurance; `MAJ:MIN` noted as a form-independent alternative |
+| `cryptsetup status <name>` output contains a `device:` line; `sed -n 's/^ *device: *//p'` extracts it | **TRUE** | The mapper→device anchor (Phase 2 step 1b) is implementable as written |
+| `losetup` + `cryptsetup` + `mkfs.ext4` + `mount` all work on GH-hosted `ubuntu-latest`, `/dev/loop*` available, **no privileged container needed** | **TRUE** | **Strengthens Phase 1** — the "runner privileges might block it" hedge is removed; the loopback suite is a plain `run:` step and is genuinely non-deferrable |
+| LUKS2 default data offset ≈ 16 MiB | **NUANCED** | **Widened to ~16–32 MiB.** A LUKS volume sized equal to its plaintext source is strictly smaller — making the capacity gate (Phase 2 step 7) load-bearing, not precautionary |
+
+### Institutional learnings applied
+
+- `2026-07-19-the-harness-broke-the-rule-it-enforced-and-the-canary-could-not-fail.md` — the #6588
+  post-mortem: 28/28 green tests missed 4 P1s and a P0 because the harness violated the rule it
+  enforced. Directly motivates Phase 1's real-device evidence and the vacuity guard (AC4).
+- `workflow-patterns/2026-07-19-real-cutover-routes-to-workflow-dispatch-and-failclosed-gate-must-self-report.md`
+  — a fail-closed gate must emit its evidence **before** it dies. Encoded in `emit_staging_target`
+  firing pre-`die` on every failure path.
+- `test-failures/2026-07-18-pipefail-grep-q-early-match-sigpipe-flakes-drift-guards.md` — `pipefail` +
+  `grep -q` SIGPIPEs the producer and flips a real match to a false negative. Why the harness rule
+  "never pipe into an assertion predicate" is restated in Phase 1b.
+- `best-practices/2026-06-12-porting-external-ci-gate-needs-calibration-positive-control-fail-closed.md`
+  — the ancestor of the G4 fd positive control; the direct model for `_same_dev` carrying its own.
+- `2026-07-16-the-fix-for-an-inert-monitor-shipped-a-probe-that-could-never-fire.md` and
+  `2026-07-16-a-gate-that-proves-it-cannot-fail-open-shipped-its-own-proof-unwired.md` — why AC5
+  requires a non-zero executed-case count and why the loopback suite may not skip silently.
+- `2026-07-15-a-guard-that-never-ran-has-more-than-one-reason-and-indexof-block-scoping-swallows-siblings.md`
+  — a guard that never ran usually has more than one cause; why Phase 4 sweeps all seven
+  freeze-critical sites rather than stopping at the first.
 
 ## Non-Goals
 

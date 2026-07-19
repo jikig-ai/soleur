@@ -15,6 +15,9 @@
 
 - [ ] 1.1 Create `apps/web-platform/infra/workspaces-luks-loopback.test.sh`: `truncate` a backing
       file, `losetup`, real `cryptsetup luksFormat` + `luksOpen`, fixture data, teardown trap.
+      **Verified at deepen time:** `losetup`/`cryptsetup`/`mkfs.ext4`/`mount` are all present on
+      GH-hosted `ubuntu-latest`, `/dev/loop*` is available, and **no privileged container or
+      `--cap-add=SYS_ADMIN` is needed** — this is a plain `run:` step, so Phase 1 is not deferrable.
 - [ ] 1.2 **Write L5 first** — mkfs suppressed → assert the mount fails (`staging_mount_failed`), and
       with the mount forced, the positive control catches `source_not_mapper`. **Must fail before the
       fix exists.** This reproduces the 2026-07-19 incident on a real device.
@@ -24,6 +27,9 @@
 - [ ] 1.5 L3 — full path: prepare → `rsync` fixture data → `verify_byte_identity` → 0 diffs.
 - [ ] 1.6 L4 — **record which form `findmnt -no SOURCE` actually returns on the runner.** This is the
       evidence that decides the deferred `:901`/`:911` retrofit. Write the observation into the plan.
+      (Deepen-time research says `/dev/mapper/<name>` is the common-case form, so the existing literal
+      compares at `:901`/`:911` are very likely fine — **do not** retrofit them absent a `dm-N`
+      observation here.)
 - [ ] 1.7 Suite must **fail loud, never skip**: exit non-zero with `LOOPBACK_UNAVAILABLE` when
       `losetup`/`cryptsetup` are unavailable; report a non-zero executed-case count.
 
