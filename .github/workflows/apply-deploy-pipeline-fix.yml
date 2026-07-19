@@ -274,7 +274,43 @@ jobs:
             -target=terraform_data.docker_seccomp_config \
             -target=terraform_data.apparmor_bwrap_profile \
             -var="ssh_key_path=${CI_SSH_PUB}" \
-            -no-color -input=false
+            -no-color -input=false -out=tfplan
+
+          # host_creates HALT (#6718). All four -targets reference
+          # hcloud_server.web["web-1"] (server.tf: server_id / connection host), and
+          # `-target` is TRANSITIVE at the resource level, so hcloud_server.web
+          # ["web-1"] and hcloud_volume.workspaces["web-1"] sit in THIS plan's graph
+          # too. This workflow passes no -var image_name, so a transitive web-1 birth
+          # here boots the mutable ghcr.io/...:latest default while cloud-init
+          # re-verifies host_scripts_content_hash under `set -e` — a mismatch aborts
+          # the entire runcmd at stage=verify, once per instance, unrepairable by
+          # reboot. Identical composition to the sibling jobs in
+          # apply-web-platform-infra.yml, and this workflow fires on push:main.
+          #
+          # Added by #6725's review: the PR that guarded warm_standby asserted "no
+          # automated path can birth a web host" WITHOUT enumerating this workflow.
+          # The claim was false until this block landed. Same shared filter, no
+          # second detector.
+          #
+          # The ^[0-9]+$ validation is LOAD-BEARING: `jq -r` on a missing key yields
+          # the STRING "null", and [[ "null" -gt 0 ]] resolves an unset name to 0 and
+          # PASSES. Without host_creates in that line the guard fails OPEN.
+          counts=$(terraform show -json tfplan | \
+            jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq")
+          host_creates=$(echo "$counts" | jq -r '.host_creates')
+          if [[ ! "$host_creates" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (host_creates='${host_creates}'). The shared jq filter did not emit that key; the guard CANNOT evaluate, so this run aborts fail-CLOSED. Fix the filter or its consumer — do NOT re-run."
+            exit 1
+          fi
+          if [[ "$host_creates" -gt 0 ]]; then
+            echo "::error::deploy-pipeline-fix plan would CREATE ${host_creates} hcloud_server/hcloud_volume resource(s). This path must never birth a host: it passes no -var image_name, so the host would boot against the mutable ':latest' tag and cloud-init's host_scripts_content_hash re-verify would abort the entire runcmd at stage=verify (no cloudflared, no webhook, no monitors, no egress firewall) — once per instance, unrepairable by reboot."
+            echo "::error::ROUTING — do NOT re-run. A legitimate web-host birth needs an image pinned to a repo@sha256 digest, which no workflow performs today: run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) with -var image_name=<pinned digest>. Closing that gap is tracked in #6730."
+            echo "::error::NO BYPASS on this path — there is no ack token here to type past."
+            terraform show -no-color tfplan > tfplan.txt || true
+            grep -E 'will be created|Plan:' tfplan.txt | head -20 >&2 || true
+            exit 1
+          fi
+          echo "deploy-pipeline-fix plan creates no hcloud_server/hcloud_volume (host_creates=0)."
 
       - name: Terraform apply
         working-directory: ${{ env.INFRA_DIR }}

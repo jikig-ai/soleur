@@ -394,7 +394,9 @@ assert "the call site hardcodes no 10.0.1.x literal" \
 # rather than to this gate, and it was closed there, not here.
 #
 # Still not asserted here, for the original reason: this gate does not pin the warm_standby guard
-# set either way. The HALT is asserted by T51a-d in
+# set either way. The HALT is asserted by T51a-e (structure/order) and T52-T54
+# (BEHAVIOUR — the guard is extracted and executed against real tfplan fixtures,
+# which is what pins `exit 1`, the jq key, and the fail-closed arm) in
 # tests/scripts/test-destroy-guard-counter-web-platform.sh, which lives in the REQUIRED test
 # shard — deliberately, since this file runs only in infra-validation.yml's advisory
 # deploy-script-tests job, and the check guarding a HALT must not be weaker than the HALT.
