@@ -1,8 +1,12 @@
-# Tasks — web-1 birth-path coherence guards (Refs #6712, #6718)
+# Tasks — close the unguarded web-1 birth path in warm_standby (Refs #6718, #6712)
 
-Plan: `knowledge-base/project/plans/2026-07-19-fix-web1-birth-path-coherence-guards-plan.md`
-Challenges (operator decisions): `./decision-challenges.md`
+Plan: `knowledge-base/project/plans/2026-07-19-fix-warm-standby-web1-birth-halt-plan.md`
+Challenges (operator decisions): `./decision-challenges.md` — **UC-1 RESOLVED: Half B cut**
 Lane: `cross-domain` · Threshold: `single-user incident` · CPO: SIGN OFF WITH CONDITIONS (C1/C2/C3 folded in)
+
+> **Revision 3.** Half B (#6712 resolver extraction) was **cut** by operator ruling. This is now
+> one change: wire the existing `host_creates` HALT into `warm_standby`. **No new files are
+> created.** `web2-recreate-preflight.sh` and `scripts/test-all.sh` are **not** touched.
 
 ---
 
@@ -17,7 +21,7 @@ Lane: `cross-domain` · Threshold: `single-user incident` · CPO: SIGN OFF WITH 
       ```
       If a second key exists → **STOP**; scope the guard to `hcloud_server` only.
 - [ ] **0.2** Determine whether `terraform plan -target` on an unresolvable `for_each` key
-      **warns** or **errors**. Record the answer — AC14 depends on it. If it errors, the HALT is
+      **warns** or **errors**. Record the answer — AC9 depends on it. If it errors, the HALT is
       present but **unreachable**, and the PR must not claim closure.
 - [ ] **0.3** Baseline cloud-init bytes: `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts`.
 - [ ] **0.4** Confirm baseline as **presence/absence** (not an exact count): warm_standby
@@ -40,9 +44,9 @@ Lane: `cross-domain` · Threshold: `single-user incident` · CPO: SIGN OFF WITH 
   - [ ] 1.1.4 the HALT's `::error::` text contains a **routing instruction**
 - [ ] **1.2** Confirm RED before Phase 2.
 
-> Deleted from an earlier draft: the parity test (asserts an equivalence Phase 2 deliberately
-> breaks) and the missing-key fixture (**impossible** — the jq filter emits the key
-> unconditionally; and a fixture proves the bash mirror, not the workflow).
+> Deleted in revision 2: the parity test (asserts an equivalence Phase 2 deliberately breaks) and
+> the missing-key fixture (**impossible** — the jq filter emits the key unconditionally; and a
+> fixture proves the bash mirror, not the workflow).
 
 ## Phase 2 — GREEN: wire the HALT (~5 lines, `warm_standby` only)
 
@@ -65,51 +69,44 @@ Lane: `cross-domain` · Threshold: `single-user incident` · CPO: SIGN OFF WITH 
 - [ ] **3.2** `apply` HALT remediation: drop the warm-standby route; **preserve** the
       legitimate-new-web-host break-glass **and** the `[skip-web-platform-apply]` UNWEDGE line;
       **[CPO C1]** record the `hr-fresh-host-provisioning-reachable-from-terraform-apply`
-      violation and name the 5.4 issue as owner. Scope any absolute to **web** hosts
+      violation and name the 4.4 issue as owner. Scope any absolute to **web** hosts
       (`inngest_host` exists to birth a host).
 - [ ] **3.3** `nic-wait-gate.test.sh`: prose only — "KNOWN GAP … #6718" → closed. No assert changes.
 - [ ] **3.4** `apply_target` menu description: stop advertising warm-standby as a live web-2 fan-out.
 - [ ] **3.5 [CPO C3]** Reconcile `server.tf`'s "cx33-unrebuildable web-1" vs #6538's
       `hel1 → rebuildable_in_place_today: YES`. Comment-only.
 
-## Phase 4 — Half B (see UC-1: five of seven reviewers recommend cutting this)
+## Phase 4 — Record status; file deferrals
 
-- [ ] **4.1** New `apps/web-platform/infra/scripts/resolve-image-digest.sh` — GHCR login via
-      **stdin** (private package; anonymous inspect 401s), `imagetools inspect --format
-      '{{.Manifest.Digest}}'`, validate `^sha256:[0-9a-f]{64}$`, emit `repo@sha256:…`.
-- [ ] **4.2** `web2-recreate-preflight.sh` **contract unchanged** — do not add a mutable-ref arm.
-- [ ] **4.3** New `tests/scripts/test-resolve-image-digest.sh` with an **argv-capturing** seam and
-      a **ref-substitution** arm (resolve A, return B's digest → must fail).
-- [ ] **4.4** Register in `scripts/test-all.sh` **inside the `want_scripts` region**.
-- [ ] **4.5** Do **not** add the script to `local.host_script_files` (would move the hash and eat
-      the 62 B headroom).
-- [ ] **4.6** Refactor `web_2_recreate`'s pin step to call it — behaviour-preserving, **in a
-      zombie job**. Do not describe it as a live call site.
-
-## Phase 5 — Record status; file deferrals
-
-- [ ] **5.1** ADR-114: factual status note on the 2026-07-19 amendment.
-- [ ] **5.2** ADR-068: factual status note (web-2 retired; both dispatch jobs unrunnable).
-- [ ] **5.3** File the `warm_standby` zombie-job issue.
-- [ ] **5.4 [CPO C2 — blocking]** File **"web-1 has no executable birth path"** — distinct from
+- [ ] **4.1** ADR-114: factual status note — #6718 closed; #6712 **prevented, not verified**,
+      resolver deferred.
+- [ ] **4.2** ADR-068: factual status note (web-2 retired; both dispatch jobs unrunnable).
+- [ ] **4.3** File the `warm_standby` zombie-job issue.
+- [ ] **4.4 [CPO C2 — blocking]** File **"web-1 has no executable birth path"** — distinct from
       #6459, trigger **not** gated on it (#6459 is blocked by #6570, itself blocked on vendor
       stock). Record that the cloud-init arming path can now never execute and is never validated.
-- [ ] **5.5** Comment the revisit trigger on **#6712** (issue, not a caller-less code comment).
+      **This issue is the vehicle for #6712's substance.**
+- [ ] **4.5** Comment on **#6712**: the Operator Decision design record (two-scripts shape, TOCTOU
+      reasoning, GHCR-private, digest≠provenance) + cross-link the 4.4 issue. In the issue, not a
+      caller-less code comment.
 
-## Phase 6 — Exit gate
+## Phase 5 — Exit gate
 
-- [ ] **6.1** `bash scripts/test-all.sh` (CI shards: `webplat`/`bun`/`scripts`).
-- [ ] **6.2** `infra-validation.yml` suites.
-- [ ] **6.3** Walk all **20** ACs (numbered AC1–AC21; **AC4 was removed, not renumbered**, so the
-      gap is intentional). **AC14 is the discriminating one** — AC1 and the structural test pass
-      identically whether the HALT is reachable or dead.
+- [ ] **5.1** `bash scripts/test-all.sh` (CI shards: `webplat`/`bun`/`scripts`).
+- [ ] **5.2** `infra-validation.yml` suites.
+- [ ] **5.3** Walk all 17 ACs. **AC9 is the discriminating one** — AC1 and the structural test
+      pass identically whether the HALT is reachable or dead.
 
 ## PR body
 
-- [ ] `Refs #6712` and `Refs #6718`. **No `Closes`/`Fixes` on any issue.** `#6441` carries no
-      closing keyword.
+- [ ] `Refs #6718` and `Refs #6712`. **No `Closes`/`Fixes` keyword for ANY issue**, in the PR body
+      or any commit body (the squash reads both). `#6441` carries no closing keyword.
 - [ ] Do **not** assert web-1 is unreachable from `-target=`. Make **no provenance claim**. Do
-      **not** claim Half B has a live call site.
-- [ ] Record the 0.2 finding (warn vs error) explicitly.
+      **not** claim #6712 is closed or that a resolver shipped.
+- [ ] Record the 0.2 finding (warn vs error) explicitly — AC9.
+- [ ] **[AC17] Restate the force-replace gate.** The original sequencing said "#6712 + #6718
+      closed"; #6712 now stays open, so that can never clear. New wording:
+      **the `warm_standby` `host_creates` HALT is live on `main`, AND the "web-1 has no executable
+      birth path" issue (4.4) is filed.** Both objectively checkable.
 - [ ] Avoid the literal follow-through token; if unavoidable, add
       `<!-- gate-override: soak-followthrough-enrollment -->` + a one-line justification.

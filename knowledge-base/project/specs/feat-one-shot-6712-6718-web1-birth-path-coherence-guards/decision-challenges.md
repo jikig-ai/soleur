@@ -7,6 +7,14 @@ an `action-required` issue. Not auto-applied: each contradicts the operator's st
 
 ## UC-1 — Five of seven reviewers recommend cutting Half B (#6712) from this PR entirely
 
+> **RESOLVED 2026-07-19 — operator ruled Option 2: ship Half A alone; Half B cut to a follow-up.**
+> The panel's finding was upheld, and the operator independently confirmed the zombie claim
+> (`variables.tf` records web-2 RETIRED 2026-07-17 #6538; `web_2_recreate`'s gate requires
+> `web2_server_replaced==1`, unsatisfiable out of state). Plan amended to revision 3 and renamed
+> to `2026-07-19-fix-warm-standby-web1-birth-halt-plan.md`. #6712 stays OPEN with `Refs` + a
+> design record; its substance is carried by the CPO C2 issue. The force-replace sequencing gate
+> was restated (it can no longer key on "#6712 closed") — see plan AC17.
+
 **decisionClass:** user-challenge
 **Operator's stated direction (the default):** "Close the two unguarded web-1 birth paths … #6712
 and #6718, in ONE PR." Half B is half the brief.

@@ -2,23 +2,35 @@
 type: bug-fix
 lane: cross-domain
 created: 2026-07-19
-revision: 2 (post-plan-review, 7-agent panel)
+revision: 3 (operator ruling on UC-1 — Half B cut to a follow-up)
 branch: feat-one-shot-6712-6718-web1-birth-path-coherence-guards
-issues: [6712, 6718]
+issues: [6718]
+design_record_only: [6712]
 umbrella: 6178
 adrs: [ADR-068, ADR-080, ADR-096, ADR-100, ADR-114, ADR-115]
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
-cpo_signoff: SIGN OFF WITH CONDITIONS (C1, C2 folded in; C3 folded in; C4 moot)
+cpo_signoff: SIGN OFF WITH CONDITIONS (C1, C2, C3 folded in; C4 moot after the Half B cut)
 ---
 
-# fix(infra): close the unguarded web-1 birth path in warm_standby (Refs #6712, #6718)
+# fix(infra): close the unguarded web-1 birth path in warm_standby (Refs #6718, #6712)
 
 ## Enhancement Summary
 
-**Plan-reviewed + deepened:** 2026-07-19. **Panel:** dhh, kieran, code-simplicity,
+**Plan-reviewed + deepened + amended:** 2026-07-19. **Panel:** dhh, kieran, code-simplicity,
 architecture-strategist, spec-flow-analyzer (eng, escalated by the `single-user incident`
 threshold) + cto (devex) + cpo (threshold sign-off).
+
+### Revision 3 — operator ruling on UC-1
+
+**Half B (#6712 resolver extraction) is CUT to a follow-up.** The operator upheld the panel's
+finding and independently confirmed the zombie verification. This PR is now **one change**: wire
+the existing `host_creates` HALT into `warm_standby`. The plan file was renamed to match
+(`…-coherence-guards-plan.md` → `…-warm-standby-web1-birth-halt-plan.md`); the plural
+"coherence guards" framing overclaimed once the second half was removed.
+
+See "Operator Decision — Half B cut" below for the evidence trail, deliberately retained in the
+artifact rather than deleted along with the code.
 
 ### Corrections to this plan's own claims (each re-verified independently before adoption)
 
@@ -32,37 +44,32 @@ threshold) + cto (devex) + cpo (threshold sign-off).
 3. **R-A5's mechanism was inverted.** `-target` closes over dependencies, not dependents — its
    mitigation would have shipped exactly the false comment this PR exists to prevent.
 4. **A justification cited a lint that does not apply** — `lint-infra-no-human-steps.py` scans
-   only `.md` under `SCAN_DIRS`, never workflow YAML. Withdrawn; AC10 now *preserves* the
+   only `.md` under `SCAN_DIRS`, never workflow YAML. Withdrawn; AC5 now *preserves* the
    break-glass instead of deleting it.
 5. **The Observability `alert_target` was false** — `deploy-script-tests` is advisory, not
    required. Corrected, **and** the load-bearing test moved into the required shard.
 6. **"Half B has one real call site" was false** — `web_2_recreate` is a zombie for the same
-   reason `warm_standby` is. Half B is now stated as **zero** live consumers.
+   reason `warm_standby` is. This finding is what drove the revision-3 cut.
 7. **[deepen] The brief's secret-scan premise had flipped.** PR #6717 merged 20:59:35Z; main went
    green 20:59:38Z; #6706 is closed. Carrying the "not yours, don't chase it" dismissal forward
    would have suppressed a real finding. See P5 / R-X1.
 
-### Scope changes
+### Still open for you
 
-- **Cut:** the parity test (asserted an equivalence Phase 2 deliberately breaks; same
-  string-matching failure class as SE-3) and the impossible fixture → Phase 1 is now **one** test.
-- **Added:** 4th transitive reacher (`workspaces_luks_cutover`) enumerated + pinned (P6); HALT
-  remediation text now specified with an AC (AC19); the stale `apply_target` menu (AC20); CPO's
-  C1/C2/C3.
-- **AC4 was removed, not renumbered** — the gap is intentional so review references stay stable.
+**UC-2** (extract the guard to a shared lib — CTO's recommendation, declined here on blast-radius
+grounds) and **UC-3** (CPO's conditions, all folded in) remain recorded in
+`knowledge-base/project/specs/<branch>/decision-challenges.md`. The operator has explicitly not
+overridden the inline-vs-shared-lib reasoning. **UC-1 is resolved** (Option 2 — cut).
 
-### Open for you
+**ACs were renumbered 1–17 in revision 3** after the Half B criteria were removed.
 
-Five of seven reviewers recommend **cutting Half B entirely**, which contradicts the "both in ONE
-PR" direction — persisted as **UC-1** in
-`knowledge-base/project/specs/<branch>/decision-challenges.md`, not auto-applied. UC-2 (extract the
-guard to a shared lib) and UC-3 (CPO's scope-expanding conditions) are recorded there too.
+---
 
 ## Overview
 
-Two issues, one defect class: **a path that can birth web-1 with no bake/apply coherence
-guarantee.** web-1 is the sole web host (web-2 retired 2026-07-17, #6538), so a bricked birth is
-a total platform outage, not a degraded replica.
+**One change: `warm_standby` can transitively birth web-1 with no host-creation tripwire, against
+a mutable image tag.** web-1 is the sole web host (web-2 retired 2026-07-17, #6538), so a bricked
+birth is a total platform outage, not a degraded replica.
 
 The mechanism is one boot check. `local.host_scripts_content_hash` is computed from the repo's
 host-script files, injected into `user_data`, and **recomputed and compared at boot** in
@@ -79,7 +86,8 @@ that instance. Meanwhile `var.image_name` defaults to the **mutable**
 
 ### The thesis
 
-The two halves are **not parallel fixes**:
+Both cited issues describe one composite exposure, and the composition is the part neither issue
+states:
 
 - `warm_standby` `-target`s `hcloud_server_network.web["web-1"]`. `-target` **is transitive at the
   resource level**, so `hcloud_server.web["web-1"]` is in that job's plan graph.
@@ -89,10 +97,8 @@ The two halves are **not parallel fixes**:
 - So a transitive web-1 birth there uses the **default `:latest`** — #6712's failure mode reached
   through #6718's hole.
 
-**Half A is the load-bearing change.** Half B is extraction + tests with **zero live consumers**
-(see the honest verdict below — an earlier draft of this plan claimed one, and that claim was
-false). Half A is ~5 lines of YAML; the rest of this document is the evidence that those 5 lines
-are the right 5 lines.
+The HALT is therefore the single change that closes the reachable risk. It is ~5 lines of YAML;
+the rest of this document is the evidence that those are the right 5 lines.
 
 **Reason about the tripwire, never about `-target` membership.** "web-1 appears in no `-target=`"
 proves nothing and is a recorded invalid inference (ADR-114 2026-07-19 amendment item 5;
@@ -101,26 +107,70 @@ HALT.
 
 ---
 
+## Operator Decision — Half B cut (revision 3)
+
+**Decision: ship Half A alone; #6712's resolver extraction moves to a follow-up.** Recorded here
+so the reasoning survives the removal of the code.
+
+**What was cut:** a `resolve-image-digest.sh` extraction (lifting the inline
+`docker buildx imagetools inspect … --format '{{.Manifest.Digest}}'` block out of the
+`web_2_recreate` pin step), its test suite, and its runner registration.
+
+**Evidence that drove the cut:**
+
+1. **Five of seven reviewers independently recommended it.** dhh ("cut entirely" — the block is 6
+   lines and the same step already calls an extracted script, so "inline-only" is cosmetic),
+   code-simplicity ("drop, not defer" — extracting now means guessing an interface for a caller
+   that does not exist), architecture-strategist, cto, and spec-flow all converged.
+2. **Its only call site is dead.** `web_2_recreate` keys every address off `web-2`, which
+   `var.web_hosts` no longer contains (RETIRED 2026-07-17, #6538, recorded in `variables.tf`), and
+   its gate requires `web2_server_replaced==1` — unsatisfiable when the instance is absent from
+   state. Verified by the panel and confirmed independently by the operator.
+3. **The refactor's blast radius was wrong for its value.** It rewrites a step inside the
+   `-replace`-the-sole-web-host path for zero behaviour change.
+
+**Design record preserved for the follow-up** (so the next author does not re-derive it):
+
+> The correct shape is **two scripts, not one**. `web2-recreate-preflight.sh` is a *pure verifier*
+> whose header states the invariant — *"resolved ONCE upstream; AC3b TOCTOU — this script does NOT
+> re-resolve a tag."* Generalizing it to accept a mutable ref would move the TOCTOU closure from
+> "structurally cannot re-resolve" to "the caller faithfully consumes the emitted value", and make
+> its digest `die` branch dead code on the mutable arm — a weaker guarantee sold as a
+> generalization. Keep the verifier byte-unchanged; add a separate resolver; callers compose
+> resolve → verify → `plan -var image_name=<pinned>`, and an AC must pin that the *same* variable
+> feeds both the preflight and `-var image_name` (the composition is where the closure now lives).
+> GHCR is a **private** package — anonymous `imagetools inspect` 401s; log in with
+> `--password-stdin` so the token never lands in argv. Digest = integrity, **never** provenance;
+> no `cosign verify` exists on this path and the image is unsigned there by design.
+
+**#6712 does not close in this PR.** It keeps `Refs #6712` plus this design record. Its
+substantive content — *the sole web host has no verified, executable birth path* — is carried by
+the CPO C2 issue (Deferrals, row 3), which is the correct vehicle: #6712 as written asks for a
+preflight, but the panel established there is no create path for a preflight to guard.
+
+---
+
 ## Research Reconciliation — Spec vs. Codebase
 
-Rows marked **[R2]** were added or corrected by the 7-agent plan review; each was independently
-re-verified against source before adoption.
+Rows marked **[R2]** were added or corrected by the plan review; **[R3]** by the operator ruling.
+Each was independently re-verified against source before adoption.
 
 | Claim | Codebase reality (verified) | Plan response |
 |---|---|---|
 | "#6718 is WIRING; the counter already exists" | **True.** `destroy-guard-filter-web-platform.jq` defines `host_creates` (`select(.type == "hcloud_server" or .type == "hcloud_volume")` + `index("create")`). | Reuse verbatim. No second detector. |
-| "warm_standby has no host_creates HALT" | **True, measured.** Flag-based awk over the job block → `grep -c host_creates` = **0**; `apply` block ≥ 1. | Half A. |
-| "web2-recreate-preflight.sh requires a pinned ref and dies otherwise" | **True.** Header: *"resolved ONCE upstream; AC3b TOCTOU — this script does NOT re-resolve a tag."* | **Preserve byte-for-byte.** Extract a separate resolver (R-B1). |
-| **[R2]** An earlier draft's Phase 1.3 prescribed a fixture whose filter output **omits** `host_creates` | **Impossible.** The filter builds a jq object literal and `host_creates` is a total expression (`[…] \| length`). Verified: `echo '{"resource_changes":[]}' \| jq -f …` emits the key. **No tfplan input can omit it.** | **Fixture deleted.** The load-bearing proof is a structural grep over the YAML — see next row. |
-| **[R2]** An earlier draft claimed the fail-closed property would be "proven by fixture, not inspection" | **False.** `_run_host_creates_gate` is a hand-maintained **bash mirror** of the workflow block (its own header says *"Mirrors apply-web-platform-infra.yml's host_creates block exactly"*). A fixture proves the mirror, never the YAML. Parse-failure coverage **already exists** as `t_host_creates_parse_failure_fails_closed` (T32). | The **structural YAML grep is the only thing that can prove `warm_standby`'s regex.** Phase 1 reduced to one test. |
-| **[R2]** An earlier draft's Phase 0 P1 grep `for_each = var.web_hosts` | **False negative.** Verbatim returns **1** hit (the volume); the two resources the precondition most needs use aligned whitespace (`for_each    =`, `for_each  =`). Corrected regex returns **4**. The load-bearing hard-STOP would have read as failed. | Regex corrected in P1. |
-| **[R2]** An earlier draft's R-A5 said subnet transitivity "can reach other servers" and to document the guard as covering inngest/registry/git-data | **Mechanism inverted.** `-target` closes over **dependencies (upstream)**, not dependents. Those servers are *dependents* of the subnet and are **not in warm_standby's plan graph**. Executing that mitigation would have shipped a **false comment** — the exact R-A3 trap. | R-A5 rewritten. Reachable countable set = `hcloud_server.web["web-1"]` **+** `hcloud_volume.workspaces["web-1"]` (via `server.tf`'s `workspaces_volume_id = hcloud_volume.workspaces[each.key].id`). |
-| **[R2]** An earlier draft justified an absolute "no repo path births a web host" partly via `lint-infra-no-human-steps.py` | **Out of scope for that lint.** It filters `if not name.endswith(".md")` and walks only `SCAN_DIRS` (knowledge-base docs). It does **not** scan `.github/workflows/`. | Justification withdrawn. AC10 rewritten to **preserve** the break-glass. |
-| **[R2]** An earlier draft's Observability said `alert_target: … (required check)` | **False.** `deploy-script-tests` is advisory — its own comment says *"not in ruleset-ci-required.tf … a visible-red signal, not a merge-blocking gate"*, and it is absent from the ruleset contexts. | Corrected, **and** the load-bearing test moved into the required shard (Phase 1). |
-| **[R2]** An earlier draft claimed `web_2_recreate` is Half B's "one real call site" | **False.** That job is a zombie for the *same* reason as `warm_standby`: every address keys `web-2` off `var.web_hosts`, and its gate requires `web2_server_replaced==1`, unsatisfiable when the instance is absent from state. | Half B reframed: **zero** live consumers. |
-| **[R2]** The plan enumerated 2 transitive reachers of `hcloud_server.web` | **Incomplete — there is a 4th.** `workspaces_luks_cutover` `-target`s `hcloud_volume_attachment.workspaces_luks`, and `workspaces-luks.tf` has `server_id = hcloud_server.web["web-1"].id`. It passes **no `-var image_name`** either. Currently closed only *incidentally*: `workspaces-luks-cutover-gate.sh`'s `web1_server_touched` uses `select(positive)` and `positive` includes `create` — a lucky closure whose stated rationale is about *destroy*, not create. | Enumerated + pinned by Phase 0 P6. |
+| "warm_standby has no host_creates HALT" | **True, measured.** Flag-based awk over the job block → `grep -c host_creates` = **0**; `apply` block ≥ 1. | The change. |
+| "web2-recreate-preflight.sh requires a pinned ref and dies otherwise" | **True.** Header: *"resolved ONCE upstream; AC3b TOCTOU — this script does NOT re-resolve a tag."* | **[R3]** Not touched at all this PR. Reasoning preserved in the design record above. |
+| "The fix must cover fresh/`-replace` web-1 creates, not just the recreate path" | **No executable create path exists to wire a preflight into.** The `apply_target` list has no full-apply option; the ADR-096 operator-local apply is prose only; the force-replace dispatch is out of scope. | **[R3]** Closed by **prevention** (the HALT), not verification. The absence of any birth path is itself the finding — carried by the C2 issue. |
+| **[R2]** An earlier draft prescribed a fixture whose filter output **omits** `host_creates` | **Impossible.** The filter builds a jq object literal and `host_creates` is a total expression (`[…] \| length`). Verified: `echo '{"resource_changes":[]}' \| jq -f …` emits the key. | **Fixture deleted.** The load-bearing proof is a structural grep over the YAML. |
+| **[R2]** An earlier draft claimed the fail-closed property would be "proven by fixture, not inspection" | **False.** `_run_host_creates_gate` is a hand-maintained **bash mirror** of the workflow block (its own header says so). A fixture proves the mirror, never the YAML. Parse-failure coverage **already exists** as `t_host_creates_parse_failure_fails_closed` (T32). | The **structural YAML grep is the only thing that can prove `warm_standby`'s regex.** Phase 1 is one test. |
+| **[R2]** An earlier draft's Phase 0 P1 grep `for_each = var.web_hosts` | **False negative.** Verbatim returns **1** hit; the two resources the precondition most needs use aligned whitespace. Corrected regex returns **4**. | Regex corrected in P1. |
+| **[R2]** An earlier draft's R-A5 said subnet transitivity "can reach other servers" | **Mechanism inverted.** `-target` closes over **dependencies**, not dependents. Those servers are dependents and are **not in warm_standby's plan graph**. Would have shipped a false comment. | R-A5 rewritten. Reachable countable set = `hcloud_server.web["web-1"]` **+** `hcloud_volume.workspaces["web-1"]` (via `server.tf`'s `workspaces_volume_id`). |
+| **[R2]** An earlier draft justified an absolute "no repo path births a web host" via `lint-infra-no-human-steps.py` | **Out of scope for that lint** — it filters `if not name.endswith(".md")` and walks only `SCAN_DIRS`. It does **not** scan `.github/workflows/`. | Justification withdrawn. AC5 **preserves** the break-glass. |
+| **[R2]** An earlier draft's Observability said `alert_target: … (required check)` | **False.** `deploy-script-tests` is advisory — absent from `ruleset-ci-required.tf`. | Corrected; the load-bearing test moved into the required shard. |
+| **[R2]/[R3]** An earlier draft called `web_2_recreate` Half B's "one real call site" | **False.** Zombie for the same reason `warm_standby` is. | **Drove the revision-3 cut.** |
+| **[R2]** The plan enumerated 2 transitive reachers of `hcloud_server.web` | **Incomplete — there is a 4th.** `workspaces_luks_cutover` `-target`s `hcloud_volume_attachment.workspaces_luks`, and `workspaces-luks.tf` has `server_id = hcloud_server.web["web-1"].id`. It passes **no `-var image_name`** either. Closed only *incidentally*: the gate's `positive` set happens to include `create`. | Enumerated + pinned by P6. |
 | Brief: AGENTS.md always-loaded is over its 22k threshold | Respected. | **No AGENTS.md edit. No new rule anywhere.** |
-| Brief: user_data 22,388 B / budget 22,450 → 62 B headroom | **Re-derived live: 22,388 B / 22,450 → 62 B.** | **Zero cloud-init bytes added.** No `local.host_script_files` member touched. |
+| Brief: user_data 22,388 B / budget 22,450 → 62 B headroom | **Re-derived live: 22,388 B / 22,450 → 62 B.** | **Zero cloud-init bytes added.** |
 
 ---
 
@@ -140,8 +190,8 @@ no new data surface; the exposure is the *absence* of a control, not a new chann
 
 **If this lands correctly:** accidental web-1 birth becomes impossible on every automated path.
 That is the intended outcome **and** it hardens an existing gap — there is already no working
-automated birth path (the `apply` HALT predates this PR). See the DR posture note in Risks R-X4,
-which CPO required be stated rather than left implicit.
+automated birth path (the `apply` HALT predates this PR). See R-X4 for the DR posture, which CPO
+required be stated rather than left implicit.
 
 - **Brand-survival threshold:** single-user incident
 
@@ -149,15 +199,15 @@ which CPO required be stated rather than left implicit.
 
 ## Hypotheses
 
-The network-outage checklist gate (Phase 1.4) fires on the `timeout` token and on `terraform
-apply` against `hcloud_server.web`, which carries SSH `provisioner`/`connection` blocks.
-Evaluated and recorded as a **no-op**: this is not a connectivity diagnosis. No hypothesis
-proposes an sshd or fail2ban change, no firewall/egress-IP verification is prerequisite to any
-phase, and the plan performs **no SSH and no prod write** — both guards fire *before* `terraform
-apply`. The L3→L7 ordering the checklist enforces has nothing to order.
+The network-outage checklist gate fires on the `timeout` token and on `terraform apply` against
+`hcloud_server.web`, which carries SSH `provisioner`/`connection` blocks. Evaluated and recorded
+as a **no-op**: this is not a connectivity diagnosis. No hypothesis proposes an sshd or fail2ban
+change, no firewall/egress-IP verification is prerequisite to any phase, and the plan performs
+**no SSH and no prod write** — the guard fires *before* `terraform apply`. The L3→L7 ordering the
+checklist enforces has nothing to order.
 
-The one open empirical question is **P2**; the design is correct under either outcome, and
-**AC14 now discriminates the two** rather than merely recording the answer.
+The one open empirical question is **P2**; the design is correct under either outcome, and **AC9
+discriminates the two** rather than merely recording the answer.
 
 ---
 
@@ -183,7 +233,7 @@ mention any path in Files to Edit. The open backlog is entirely app/product-side
   grep -cE 'for_each[[:space:]]*=[[:space:]]*var\.web_hosts' \
     apps/web-platform/infra/server.tf apps/web-platform/infra/network.tf   # expect 3 and 1
   ```
-- **P2 (open question — now discriminated by AC14, not merely recorded).** Determine whether
+- **P2 (open question — discriminated by AC9, not merely recorded).** Determine whether
   `terraform plan -target` on an unresolvable `for_each` key **warns** or **errors**. If it
   **errors**, the plan step dies *before* the guard block and the new HALT is **present but
   unreachable** — structurally green, provably dead. The PR must not claim closure in that case.
@@ -196,15 +246,12 @@ mention any path in Files to Edit. The open backlog is entirely app/product-side
   #6717. **That measurement (2026-07-19T20:46Z) is stale.** Verified live: **PR #6717 MERGED at
   20:59:35Z**, and the next `secret-scan` run on main (20:59:38Z, `48b8bc4a`) was **success**;
   #6706 is **CLOSED**. The two failures at 20:23Z / 20:37Z both predate the merge.
-  **Consequence: a red secret-scan on this branch is no longer pre-dismissible.** Re-derive
-  before dismissing anything:
+  **Consequence: a red secret-scan on this branch is no longer pre-dismissible.** Re-derive:
   ```
   gh run list --workflow=secret-scan.yml --branch=main --limit 3 \
     --json conclusion,createdAt,headSha -q '.[] | .conclusion + "  " + .headSha[0:8]'
   ```
   If main is green and this branch is red, **it is ours — investigate, do not wave it through.**
-  The `gitleaks git --log-opts="origin/main"` discriminator remains useful for locating the
-  offending ref, but it is no longer a licence to skip.
 - **P6 (4th reacher).** Assert `workspaces-luks-cutover-gate.sh`'s `positive` set still includes
   `create`, so `web1_server_touched` continues to close that path. Its stated rationale is about
   *destroy*, so a future narrowing would silently reopen a `:latest` web-1 birth path.
@@ -227,7 +274,7 @@ non-emptiness **first**, then use a **here-string** (SE-2):
 2. the `^[0-9]+$` validation line contains `host_creates` ← **the load-bearing assert**
 3. the block contains `[[ "$host_creates" -gt 0 ]]`
 4. the HALT's `::error::` text contains a **routing instruction**, not just the counter name
-   (AC18 — a HALT with no next action is a dead end)
+   (AC14 — a HALT with no next action is a dead end)
 
 ### Phase 2 — GREEN: wire the HALT (~5 lines)
 
@@ -237,7 +284,7 @@ In `warm_standby`'s existing destroy-guard block:
 2. **Extend the numeric-validation regex to include `host_creates`.** This is the load-bearing
    edit; the comparison is merely the visible one. `jq -r` on a missing key yields the string
    `null`, and `[[ "null" -gt 0 ]]` resolves an unset name to `0` and **passes** — verified
-   empirically (rc=1, i.e. false). Without this line the guard fails **open**.
+   empirically. Without this line the guard fails **open**.
 3. The `-gt 0` HALT, placed to mirror `apply`'s ordering — **for parity, not severity.** (An
    earlier draft claimed "a birth is the more severe finding"; on the sole live origin
    `reboot_updates` is more severe. Both exit 1 before any write, so ordering is cosmetic.)
@@ -247,6 +294,7 @@ In `warm_standby`'s existing destroy-guard block:
    `[ack-destroy]` are merge-commit mechanisms scanned in `preflight`, and a `workflow_dispatch`
    run has no merge commit to annotate. A deliberate dead end that announces itself is not a dead
    end; an undocumented one is.
+6. Do **not** touch `apply`'s guard logic (its remediation *text* is Phase 3.2).
 
 ### Phase 3 — Doc coherence (these become FALSE on merge)
 
@@ -256,7 +304,7 @@ In `warm_standby`'s existing destroy-guard block:
    Correct **all** occurrences; normalize newlines before asserting.
 2. **The `apply` job's HALT remediation** — it routes host births to `-f apply_target=warm-standby`,
    which will HALT after this change. Rewrite. **Preserve the break-glass branch** (the
-   legitimate-new-web-host guidance and the `[skip-web-platform-apply]` UNWEDGE line) — see AC10.
+   legitimate-new-web-host guidance and the `[skip-web-platform-apply]` UNWEDGE line) — see AC5.
    Note `inngest_host` exists *to* birth a host, so "web" must do real work in any absolute claim.
 3. **`nic-wait-gate.test.sh`** — prose-only update: its "KNOWN GAP … tracked in #6718" note now
    records the gap as closed. It deliberately never asserted the unguarded state, so no assert
@@ -268,42 +316,26 @@ In `warm_standby`'s existing destroy-guard block:
 5. **[CPO C3]** Reconcile `server.tf`'s "cx33-unrebuildable web-1" against #6538's table
    (`hel1 → rebuildable_in_place_today: YES`). One is wrong; a coherence PR must not leave it.
 
-### Phase 4 — Half B: extract the resolver (see the honest verdict below)
-
-1. New `apps/web-platform/infra/scripts/resolve-image-digest.sh`: GHCR login (token via **stdin**,
-   never argv — the image is a **private** package and anonymous inspect 401s), `imagetools
-   inspect --format '{{.Manifest.Digest}}'`, format-validate `^sha256:[0-9a-f]{64}$`, emit
-   `repo@sha256:…`, `::error::` + non-zero otherwise.
-2. **`web2-recreate-preflight.sh` stays contract-unchanged** (R-B1).
-3. New `tests/scripts/test-resolve-image-digest.sh` mirroring the sibling harness shape, with an
-   **argv-capturing** seam (an argv-blind stub voids the call-shape contract) and a
-   **ref-substitution** arm: resolve ref A, return B's digest → must fail.
-4. Register in `scripts/test-all.sh` inside the `want_scripts` region — **registration is
-   coverage**; both runners list suites explicitly with no glob.
-5. **Do not add the script to `local.host_script_files`.** That set is hash-bound and baked;
-   adding a file moves `host_scripts_content_hash` and consumes the 62 B headroom — the exact trap
-   this PR guards (AC8).
-6. Refactor `web_2_recreate`'s pin step to call it. **Behaviour-preserving, and that job is a
-   zombie** — this is not a "live call site". Stated plainly so no reviewer has to find it.
-
-### Phase 5 — Record status; file the deferrals
+### Phase 4 — Record status; file the deferrals
 
 1. **ADR-114** — factual status note on its 2026-07-19 amendment: #6718's gap closed; #6712's
-   residual *prevented*, not verified. Status, not a decision.
+   residual **prevented, not verified**, and its resolver deferred. Status, not a decision.
 2. **ADR-068** — factual status note: web-2 is retired and both its warm-standby/recreate dispatch
    jobs are unrunnable, so its Phase 3 premise is dead. Without this, ADR-068 misleads a future
    reader — the ADR gate's own test.
-3. **File the `warm_standby` zombie-job issue** (R-A2).
-4. **[CPO C2 — blocking] File "web-1 has no executable birth path."** A *distinct* DR issue, **not**
-   #6459. CPO verified #6459 is blocked by #6570, whose own blocker is Hetzner **stock
+3. **File the `warm_standby` zombie-job issue.**
+4. **[CPO C2 — blocking] File "web-1 has no executable birth path."** A *distinct* DR issue,
+   **not** #6459. CPO verified #6459 is blocked by #6570, whose own blocker is Hetzner **stock
    availability** — "revisit when #6459 lands" is a chain with no committed end. Trigger: *next
-   web-host loss, or any change to `local.host_script_files`.* Must also record that web-1's live
-   host was armed by SSH `terraform_data` provisioners while a reborn host would be armed by
-   cloud-init — a path that can now never execute, is therefore never validated, and drifts
-   silently until a real DR event.
-5. **Comment on #6712** with the revisit trigger — in the *issue*, not a caller-less code comment.
+   web-host loss, or any change to `local.host_script_files`.* Must record that web-1's live host
+   was armed by SSH `terraform_data` provisioners while a reborn host would be armed by cloud-init
+   — a path that can now never execute, is therefore never validated, and drifts silently until a
+   real DR event. **This issue is the vehicle for #6712's substance.**
+5. **Comment on #6712** with the Operator Decision design record (two-scripts shape, TOCTOU
+   reasoning, GHCR-private, digest≠provenance) and cross-link the C2 issue. In the *issue*, not a
+   caller-less code comment.
 
-### Phase 6 — Exit gate
+### Phase 5 — Exit gate
 
 `bash scripts/test-all.sh` (sharded in CI: `webplat`/`bun`/`scripts`) + `infra-validation.yml`.
 
@@ -313,27 +345,25 @@ In `warm_standby`'s existing destroy-guard block:
 
 | Path | Change |
 |---|---|
-| `.github/workflows/apply-web-platform-infra.yml` | `warm_standby`: +5 lines (parse, regex, HALT, remediation). `apply`: rewrite HALT remediation (preserve break-glass). `apply_target`: menu text. `web_2_recreate`: call the resolver. |
+| `.github/workflows/apply-web-platform-infra.yml` | `warm_standby`: +5 lines (parse, regex, HALT, remediation). `apply`: rewrite HALT remediation (preserve break-glass). `apply_target`: menu text. |
 | `tests/scripts/test-destroy-guard-counter-web-platform.sh` | The one structural test (4 greps, flag-based awk, here-string). |
 | `tests/scripts/lib/destroy-guard-filter-web-platform.jq` | Correct the now-false header claims. **Filter logic unchanged.** |
 | `apps/web-platform/infra/nic-wait-gate.test.sh` | Prose-only: "KNOWN GAP" → closed. |
 | `apps/web-platform/infra/server.tf` | **Comment only** (CPO C3 rebuildability reconciliation). No resource change. |
-| `scripts/test-all.sh` | Register the resolver suite. |
 | `knowledge-base/engineering/architecture/decisions/ADR-114-*.md`, `ADR-068-*.md` | Factual status notes. |
 
 ## Files to Create
 
-| Path | Purpose |
-|---|---|
-| `apps/web-platform/infra/scripts/resolve-image-digest.sh` | Extracted tag→digest resolver. |
-| `tests/scripts/test-resolve-image-digest.sh` | Its suite (argv-capturing seam). |
+**None.** (Revision 3: the resolver script and its suite were cut with Half B.)
 
 **No changes to:** `cloud-init.yml`, `soleur-host-bootstrap.sh`, any `local.host_script_files`
-member, any `.tf` **resource**, `AGENTS.md`.
+member, `web2-recreate-preflight.sh`, `scripts/test-all.sh`, any `.tf` **resource**, `AGENTS.md`.
 
 ---
 
 ## Acceptance Criteria
+
+*(Renumbered 1–17 in revision 3 after the Half B criteria were removed.)*
 
 ### Pre-merge (PR)
 
@@ -345,69 +375,55 @@ member, any `.tf` **resource**, `AGENTS.md`.
   mirror, not the workflow. T32 already covers the mirror's parse-failure arm.)*
 - **AC3** — the HALT is below the `set -e` re-enable, and ordered to mirror `apply`. Verified by
   line-offset assert within the extracted block, not by eyeball.
-- **AC5** — `bash tests/scripts/test-web2-recreate-preflight.sh` still ends `=== 6 passed, 0 failed ===`;
-  `git diff` shows **no** relaxation of `web2-recreate-preflight.sh`'s `die` conditions.
-- **AC6** — `bash tests/scripts/test-resolve-image-digest.sh` passes, **including** the
-  ref-substitution arm.
-- **AC7** — the resolver suite is registered in `scripts/test-all.sh`'s `want_scripts` region
-  (`grep … || true` — `grep -c` exits 1 on zero and would abort under `set -euo pipefail`).
-- **AC8** — `grep -c 'resolve-image-digest' apps/web-platform/infra/server.tf || true` == **0**.
-  *(Guardrail, not coverage — it passes identically on no implementation.)*
-- **AC9** — `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` passes and the
+- **AC4** — `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts` passes and the
   measured byte count is **unchanged** from P3.
-- **AC10** — the `apply` HALT remediation (a) no longer routes births to `warm-standby`, (b)
+- **AC5** — the `apply` HALT remediation (a) no longer routes births to `warm-standby`, (b)
   **preserves** the legitimate-new-web-host break-glass and the `[skip-web-platform-apply]`
   UNWEDGE line, and (c) **[CPO C1]** records that the no-automated-birth-path state violates
-  `hr-fresh-host-provisioning-reachable-from-terraform-apply` and names the AC18 issue as owner.
+  `hr-fresh-host-provisioning-reachable-from-terraform-apply` and names the AC13 issue as owner.
   Any absolute claim scopes to **web** hosts (`inngest_host` exists to birth a host).
-- **AC11** — **no** occurrence of the now-false `host_creates`-consumer claims survives in the jq
+- **AC6** — **no** occurrence of the now-false `host_creates`-consumer claims survives in the jq
   header. Assert after `tr '\n' ' '` newline-normalization — the canonical text is **split across
   two lines** and a line-based `grep` cannot match it.
-- **AC12** — the PR body uses `Refs #6712` and `Refs #6718`. **No `Closes`/`Fixes` on any issue.**
-  `#6441` carries no closing keyword (it holds the ADR-114 §I2 residual and the
-  `WEB_HOST_PRIVATE_IPS` single-sourcing item).
-- **AC13** — the PR body does **not** assert web-1 is unreachable from `-target=`; it reasons
-  about the tripwire. It makes **no provenance claim** (the image is unsigned here by design;
-  digest = integrity only). It does **not** claim Half B has a live call site.
-- **AC14** — **[discriminating]** the PR body states whether P2 resolved to *warn* (HALT
-  executable → risk closed) or *error* (HALT present but **unreachable** → risk closed only once
-  the job is revived). AC1 and the structural test pass identically in both cases, so this is the
-  only criterion that can tell them apart.
-- **AC15** — `bash scripts/test-all.sh` green; `infra-validation.yml` green.
-- **AC16** — the `warm_standby` zombie-job issue exists and is linked.
-- **AC17** — #6712 carries the revisit-trigger comment.
-- **AC18** — **[CPO C2]** the "web-1 has no executable birth path" issue exists, is **distinct**
-  from #6459, and its trigger is *not* gated on #6459.
-- **AC19** — the `warm_standby` HALT's `::error::` output contains a **routing instruction** and an
+- **AC7** — the PR body uses `Refs #6718` and `Refs #6712`. **No `Closes`/`Fixes` keyword appears
+  anywhere for any issue** — not in the PR body and not in any commit body (the squash reads
+  both). `#6441` in particular carries no closing keyword (it holds the ADR-114 §I2 residual and
+  the `WEB_HOST_PRIVATE_IPS` single-sourcing item).
+- **AC8** — the PR body does **not** assert web-1 is unreachable from `-target=`; it reasons about
+  the tripwire. It makes **no provenance claim** (digest = integrity only). It does **not** claim
+  #6712 is closed or that a resolver shipped.
+- **AC9** — **[discriminating]** the PR body states whether P2 resolved to *warn* (HALT executable
+  → risk closed) or *error* (HALT present but **unreachable** → risk closed only once the job is
+  revived). AC1 and the structural test pass identically in both cases, so this is the only
+  criterion that can tell them apart.
+- **AC10** — `bash scripts/test-all.sh` green; `infra-validation.yml` green.
+- **AC11** — the `warm_standby` zombie-job issue exists and is linked.
+- **AC12** — #6712 carries the Operator Decision design record and a cross-link to the AC13 issue.
+- **AC13** — **[CPO C2]** the "web-1 has no executable birth path" issue exists, is **distinct**
+  from #6459, and its trigger is **not** gated on #6459.
+- **AC14** — the `warm_standby` HALT's `::error::` output contains a **routing instruction** and an
   explicit "no bypass on this dispatch" statement.
-- **AC20** — the `apply_target` menu description no longer describes warm-standby as a live
+- **AC15** — the `apply_target` menu description no longer describes warm-standby as a live
   web-2 fan-out.
-- **AC21** — `workspaces-luks-cutover-gate.sh`'s `positive` set still includes `create` (P6).
+- **AC16** — `workspaces-luks-cutover-gate.sh`'s `positive` set still includes `create` (P6).
 
-### Post-merge (operator)
+### Sequencing gate (records a condition; requires no action on this PR)
 
-**None.** Both halves are CI/dispatch-side guards. `apps/web-platform/infra/*.tf` has no
-**resource** change (comment-only), so the merge-triggered auto-apply performs no work on this
-PR's account.
+This PR itself needs **no post-merge operator action**: both changes are CI/dispatch-side guards,
+and `apps/web-platform/infra/*.tf` has no **resource** change (comment-only), so the
+merge-triggered auto-apply performs no work on this PR's account.
 
----
+- **AC17** — **restate the force-replace gate in the PR body.** The original sequencing gated the
+  inngest-host force-replace on *"#6712 + #6718 closed"*. **Under the revision-3 decision #6712
+  stays open, so that gate can never clear as written.** It restates to:
 
-## Paper-resolution verdict on Half B (this is the PR body's framing)
+  > **the `warm_standby` `host_creates` HALT is live on `main`, AND the "web-1 has no executable
+  > birth path" issue (AC13) is filed.**
 
-After this PR, #6712's named hole is closed by **prevention** (Half A makes the create impossible
-on the reachable path), **not** by verification. Half B ships a resolver + tests with **zero live
-consumers** — `web_2_recreate`, its only call site, is a zombie for the same reason `warm_standby`
-is (every address keys `web-2` off a `var.web_hosts` that no longer contains it, and its gate
-requires `web2_server_replaced==1`).
-
-An earlier draft of this plan called that pin step *"Half B's one real call site and its genuine
-non-paper deliverable."* **That was false**, caught by three reviewers independently. Half B is
-pre-staging for #6459 and nothing more. It is stated that way here so it is not discovered at
-review.
-
-**Five of seven reviewers recommend cutting Half B from this PR entirely.** That contradicts the
-operator's explicit "both in ONE PR" direction, so it is **not** auto-applied — it is persisted as
-UC-1 in `knowledge-base/project/specs/<branch>/decision-challenges.md` for the operator to decide.
+  Both conditions are objectively checkable — the first by AC1's command run against `main`, the
+  second by the issue URL. This is the single thing most likely to be got wrong downstream: a
+  reader tracking the old wording would wait indefinitely on an auto-close of #6712 that this
+  plan deliberately never emits.
 
 ---
 
@@ -419,20 +435,20 @@ mechanical UI-surface override did not fire.
 
 ### Engineering (CTO) — **Status:** reviewed
 
-Assessed twice (plan draft + review panel). Adopted: the resolver/verifier split, the
-`-var image_name` thesis, the numeric-validation-regex fail-open bug, the stale remediation text,
-the zombie-job discovery, and (at review) the correction that Half B has **zero** live call sites
-and that "the HALT is worth more because the job is a zombie" is inflated — on the normal path
-web-1 is in state, so the HALT is inert; it fires only in the disaster case. The accurate framing,
-now used: *the HALT is cheap and correct regardless of the job's health.*
+Assessed twice (plan draft + review panel). Adopted: the `-var image_name` thesis, the
+numeric-validation-regex fail-open bug, the stale remediation text, the zombie-job discovery, the
+correction that Half B had **zero** live call sites (which drove the revision-3 cut), and the
+correction that "the HALT is worth more because the job is a zombie" is inflated — on the normal
+path web-1 is in state, so the HALT is inert; it fires only in the disaster case. The accurate
+framing, now used: *the HALT is cheap and correct regardless of the job's health.*
 
 **Recorded disagreement — CTO recommends extracting the guard to a shared lib; the plan keeps it
-inline.** CTO's evidence is strong (and re-counted at deepen — CTO said "11 gate libs across 7
-files"; the accurate figure is **7 distinct gate libs across 22 source-sites**, which does not
-weaken the point). See the Precedent Diff below. The plan declines **only** because extraction requires editing the
-`apply` job's guard — the per-PR merge gate for the whole repo, where a defect halts every merge
-or fails open. That is a materially larger blast radius than "wire an existing counter into a
-sibling job." Persisted as **UC-2**; recorded as the recommended follow-up.
+inline.** CTO's evidence is strong (re-counted at deepen — CTO said "11 gate libs across 7 files";
+the accurate figure is **7 distinct gate libs across 22 source-sites**, which does not weaken the
+point). See the Precedent Diff below. The plan declines **only** because extraction requires
+editing the `apply` job's guard — the per-PR merge gate for the whole repo, where a defect halts
+every merge or fails open. That is a materially larger blast radius than "wire an existing counter
+into a sibling job." Persisted as **UC-2**; the operator has explicitly not overridden it.
 
 ### Product (CPO) — **Status:** reviewed. **Verdict: SIGN OFF WITH CONDITIONS**
 
@@ -440,8 +456,8 @@ CPO independently verified the load-bearing facts and confirmed `single-user inc
 (if anything the vocabulary understates it — web-1 is a hard-pinned singleton, so an incident is
 all-users). Reframed the trade correctly: this PR does **not** trade away a working DR path —
 **there is no working automated birth path today**; it closes the last accidental hole in a
-posture already chosen. C1 and C2 (blocking) are folded into AC10 and AC18; C3 into Phase 3.5; C4
-(resolver seam purity) is routed to implementation.
+posture already chosen. C1 → AC5, C2 → AC13, C3 → Phase 3.5. C4 (resolver seam purity) is **moot**
+after the revision-3 cut.
 
 **Agents invoked:** cto, cpo, dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer,
 architecture-strategist, spec-flow-analyzer. **Skipped specialists:** none.
@@ -452,9 +468,8 @@ architecture-strategist, spec-flow-analyzer. **Skipped specialists:** none.
 
 **No Terraform resource changes; no apply fires.** No new resource, provider, variable, secret,
 vendor, DNS record or persistent process. The only `.tf` edit is a comment (CPO C3).
-`var.image_name`'s `:latest` default is deliberately kept — changing it would drift every apply;
-the fix is to pin *at create time*, not to change the default. No vendor tier gate, no recurring
-expense.
+`var.image_name`'s `:latest` default is deliberately kept — changing it would drift every apply.
+No vendor tier gate, no recurring expense.
 
 ---
 
@@ -462,7 +477,7 @@ expense.
 
 ```yaml
 liveness_signal:
-  what:          the structural warm_standby-HALT test + the resolver suite
+  what:          the structural warm_standby-HALT test (4 greps over the job block)
   cadence:       every PR touching these paths, and every push to main
   alert_target:  job failure in scripts/test-all.sh's `scripts` shard -> the REQUIRED `test`
                  context. (NOT deploy-script-tests: that job is ADVISORY, explicitly absent from
@@ -473,7 +488,7 @@ liveness_signal:
 
 error_reporting:
   destination:   GitHub Actions ::error:: annotations on the dispatch run, read by the operator who
-                 dispatched it. No Sentry/Better Stack layer is added — both guards are
+                 dispatched it. No Sentry/Better Stack layer is added — the guard is
                  CI/dispatch-time, not host-runtime, so there is no running surface to emit from.
                  (Layer citation: the GitHub Actions run log + annotation, the same layer every
                  sibling guard in this workflow reports through.)
@@ -482,21 +497,21 @@ error_reporting:
 failure_modes:
   - mode:        warm_standby plan would birth a host/volume
     detection:   host_creates > 0 in the plan-step guard
-    alert_route: ::error:: with a routing instruction + "no bypass on this dispatch" (AC19),
+    alert_route: ::error:: with a routing instruction + "no bypass on this dispatch" (AC14),
                  BEFORE terraform apply — no prod write occurs
   - mode:        counter absent/non-numeric -> guard fails OPEN ([[ "null" -gt 0 ]] passes)
     detection:   the ^[0-9]+$ validation line, proven by the structural YAML grep (AC2)
     alert_route: ::error:: "destroy-guard counter parse failed" + exit 1
   - mode:        the HALT ships present but UNREACHABLE (P2 resolves to "error")
-    detection:   AC14 — the only criterion that discriminates; AC1 and the structural test pass
+    detection:   AC9 — the only criterion that discriminates; AC1 and the structural test pass
                  identically either way
     alert_route: recorded in the PR body as "closes once the job is revived", not "closed"
-  - mode:        tag->digest resolution returns empty/garbage/a different repo
-    detection:   ^sha256:[0-9a-f]{64}$ validation + the ref-substitution arm
-    alert_route: ::error:: + non-zero
-  - mode:        a suite is silently never run (unregistered)
-    detection:   AC7 grep on scripts/test-all.sh
-    alert_route: AC failure
+  - mode:        the 4th reacher (workspaces_luks_cutover) reopens if its gate narrows
+    detection:   P6 asserts `positive` still includes `create`
+    alert_route: AC16 failure
+  - mode:        a downstream reader waits on an auto-close of #6712 that is never emitted
+    detection:   AC17 restates the force-replace gate in objectively-checkable terms
+    alert_route: PR body / review
 
 logs:
   where:         GitHub Actions run logs; $GITHUB_STEP_SUMMARY for the warm-standby summary
@@ -507,10 +522,11 @@ discoverability_test:
   expected_output: warm_standby_halt_present
 ```
 
-**Verified:** the command was executed this session against the pre-fix tree, returned
-`warm_standby_halt_ABSENT` with exit 0. Real, always-exits-0, output discriminates, no `ssh `.
-`expected_output` is the post-fix value. **Known limitation:** it greps source, not execution —
-AC14 covers the reachability question it cannot see.
+**Verified:** the command was executed against the pre-fix tree (returning
+`warm_standby_halt_ABSENT`, exit 0) and re-executed after the revision-3 amendment — unchanged and
+still runnable, since it targets the half that survived the cut. Real, always-exits-0, output
+discriminates, no `ssh `. `expected_output` is the post-fix value. **Known limitation:** it greps
+source, not execution — AC9 covers the reachability question it cannot see.
 
 No post-deploy time-gated close criterion is declared, so no Follow-Through Enrollment deliverable
 is required.
@@ -519,9 +535,8 @@ is required.
 
 ## Architecture Decision (ADR/C4)
 
-**No new ADR.** Half A mirrors an existing guard into a sibling job — a defect fix, recorded in the
-jq header and workflow comment. Half B ships **no live consumer**, and an ADR recording a contract
-with zero enforcement points is the documentation form of paper resolution.
+**No new ADR.** The change mirrors an existing guard into a sibling job — a defect fix, recorded in
+the jq header and workflow comment.
 
 **Status notes only, to two ADRs that would otherwise misstate themselves** (the gate's own test:
 *would a competent engineer reading the ADRs be misled?* — for both, yes):
@@ -533,7 +548,7 @@ with zero enforcement points is the documentation form of paper resolution.
 **ADR-080 amendment deferred**, not skipped: if resolve-then-pin becomes the standing rule for
 every host-birth path, ADR-080 (*runtime plugin deploys via image rebuild*) owns the image-bake
 staleness trap and is the right vehicle — **not** ADR-114, which is an ingress-topology decision.
-Deferred until an enforcement point exists.
+Deferred until an enforcement point exists; the revision-3 cut makes that strictly later.
 
 **No new ADR ordinal is claimed**, so `adr-ordinals` carries no collision risk. (`ship/SKILL.md`
 still calls it "not a required check" — **stale**, it IS required; irrelevant here only because no
@@ -550,7 +565,7 @@ of baked bootstrap scripts (ADR-080, #5921) — unchanged and **not falsified**.
 relationships:** `hetzner -> ghcr` and `hetzner -> zotRegistry`, both already modelled. No element
 added; no description falsified. *(An earlier draft proposed an "optional, cheap" edge-description
 enrichment — cut: optional work that ships with two mandatory C4 validation runs attached is
-neither.)*
+neither. The revision-3 cut removes even the pretext.)*
 
 ---
 
@@ -558,24 +573,20 @@ neither.)*
 
 | ID | Risk | Mitigation |
 |---|---|---|
-| **R-A1** | **Guard fails OPEN.** Copying the comparison without extending the numeric-validation regex: `jq -r` on a missing key yields `null`, and `[[ "null" -gt 0 ]]` resolves an unset name to `0` and **passes**. (Verified empirically. Note single-bracket `[ ]` would error rc=2 and fail *closed* — the fail-open property is specific to `[[ ]]`, which is what is there.) | Phase 2.2 + AC2's structural grep on the validation line. |
-| **R-A2** | **`warm_standby` is a guaranteed-red zombie.** Its attach-proof asserts two `["web-2"]` addresses destroyed 2026-07-17, and `WEB_HOST_PRIVATE_IPS: "10.0.1.10"` yields `ROSTER_COUNT=1` against a `-ne 2` hard gate. Today it can only apply-then-fail. | Not fixed here; filed (Phase 5.3). The HALT is **cheap and correct regardless of the job's health**, and fires before the apply. |
-| **R-A3** | **A coherence PR shipping new false comments.** | Phase 3 (five doc-coherence items) + AC10/AC11/AC20. This plan already hit the trap once — R-A5 below. |
-| **R-A4** | **A second inline guard copy drifts from the first.** | Accepted for now; the parity test that an earlier draft proposed was **cut** (it asserted an equivalence Phase 2 deliberately breaks, and is the same string-matching failure class as SE-3). The real fix is extraction — UC-2. |
-| **R-A5** | **[CORRECTED]** An earlier draft claimed subnet transitivity reaches inngest/registry/git-data and instructed documenting the guard as covering them. **The mechanism was inverted:** `-target` closes over **dependencies**, not dependents; those servers are dependents and are **not in warm_standby's plan graph**. Executing that mitigation would have shipped a false comment. | Correct statement: the counter is **type-scoped by design**, but warm_standby's **reachable** countable set is `hcloud_server.web["web-1"]` + `hcloud_volume.workspaces["web-1"]` (via `server.tf`'s `workspaces_volume_id` reference). Document the reachable set, not the type scope. |
+| **R-A1** | **Guard fails OPEN.** Copying the comparison without extending the numeric-validation regex: `jq -r` on a missing key yields `null`, and `[[ "null" -gt 0 ]]` resolves an unset name to `0` and **passes**. (Verified empirically. Single-bracket `[ ]` would error rc=2 and fail *closed* — the fail-open property is specific to `[[ ]]`, which is what is there.) | Phase 2.2 + AC2's structural grep on the validation line. |
+| **R-A2** | **`warm_standby` is a guaranteed-red zombie.** Its attach-proof asserts two `["web-2"]` addresses destroyed 2026-07-17, and `WEB_HOST_PRIVATE_IPS: "10.0.1.10"` yields `ROSTER_COUNT=1` against a `-ne 2` hard gate. Today it can only apply-then-fail. | Not fixed here; filed (Phase 4.3). The HALT is **cheap and correct regardless of the job's health**, and fires before the apply. |
+| **R-A3** | **A coherence PR shipping new false comments.** | Phase 3 (five doc-coherence items) + AC5/AC6/AC15. This plan already hit the trap once — R-A5 below. |
+| **R-A4** | **A second inline guard copy drifts from the first.** | Accepted for now; the parity test an earlier draft proposed was **cut** (it asserted an equivalence Phase 2 deliberately breaks, and is the same string-matching failure class as SE-3). The real fix is extraction — UC-2, Precedent Diff below. |
+| **R-A5** | **[CORRECTED]** An earlier draft claimed subnet transitivity reaches inngest/registry/git-data and instructed documenting the guard as covering them. **The mechanism was inverted:** `-target` closes over **dependencies**, not dependents. Executing that mitigation would have shipped a false comment. | Correct statement: the counter is **type-scoped by design**, but warm_standby's **reachable** countable set is `hcloud_server.web["web-1"]` + `hcloud_volume.workspaces["web-1"]` (via `server.tf`'s `workspaces_volume_id` reference). Document the reachable set, not the type scope. |
 | **R-A6** | **P1 inverts** (a second `web_hosts` key returns). | Phase 0 P1 hard STOP with a named alternative. |
 | **R-A7** | **Capability removal, accepted:** if `hcloud_volume.workspaces["web-1"]` is ever lost while the server survives, warm_standby could previously recreate it; post-HALT it aborts. Almost certainly correct (a blank volume mounted where worktrees were is worse), but it is a real removal. | Recorded as an accepted trade. |
-| **R-B1** | **Merging resolver into verifier weakens the guarantee.** `web2-recreate-preflight.sh` is a pure verifier (*"does NOT re-resolve a tag"*); making it resolve-and-emit moves the TOCTOU closure from structural to conventional and makes its `die` branch dead code on the mutable arm. | **Design rejected.** Two scripts; callers compose. AC5 pins non-relaxation. |
-| **R-B2** | **Argv-blind stub voids the call-shape contract.** | Argv-capturing seam + ref-substitution arm (AC6). |
-| **R-B3** | **Adding the resolver to `local.host_script_files`** would move the hash and consume the 62 B headroom — the exact trap this PR guards. | AC8 + AC9. |
+| **R-A8** | **[R3] The cut leaves #6712 open, and a downstream reader may wait on a close that never comes** — the original force-replace sequencing said "#6712 + #6718 closed". | AC17 restates the gate in objectively-checkable terms; AC12 puts the design record on the issue; the C2 issue (AC13) carries the substance. |
 | **R-X1** | **[CORRECTED at deepen]** Mis-dismissing a signal that IS ours. The brief pre-dismisses `secret-scan` as red-on-main; **that premise flipped** — #6717 merged 20:59:35Z, #6706 is closed, main went green 20:59:38Z. Carrying the dismissal forward would suppress a genuine finding on this branch. | Re-derive per P5 **before** dismissing. Still valid to ignore: the #6443 drift signal (always alarms) and the zot veto (correct — leave it). |
 | **R-X2** | The follow-through hook fires on the literal token anywhere in the PR body, including prose calling it a false positive. | Avoid the token; if unavoidable, add `<!-- gate-override: soak-followthrough-enrollment -->` + a one-line justification. |
 | **R-X3** | Touching already-shipped work. | The ADR-114 §I1 first-boot NIC gate (merged/deployed 2026-07-19) and the merged observability half are **not** touched. Sentry if ever needed: org `jikigai-eu`, project `web-platform`, host `de.sentry.io`. |
-| **R-X4** | **[CPO] DR posture, stated rather than left implicit.** After this PR web-1 has no automated birth path (it had none before either — the `apply` HALT predates this). Recovery would run the **cloud-init** arming path, which can now never execute, is therefore never validated, and drifts against the SSH-provisioner path that armed the live host. Discovered only during a real DR event. | AC18's issue owns it. This is acceptable to hold **knowingly**; it was not acceptable to hold unrecorded. |
+| **R-X4** | **[CPO] DR posture, stated rather than left implicit.** After this PR web-1 has no automated birth path (it had none before either — the `apply` HALT predates this). Recovery would run the **cloud-init** arming path, which can now never execute, is therefore never validated, and drifts against the SSH-provisioner path that armed the live host. Discovered only during a real DR event. | AC13's issue owns it. Acceptable to hold **knowingly**; it was not acceptable to hold unrecorded. |
 
----
-
-### Precedent Diff — inline guard vs. sourced gate lib (deepen Phase 4.4)
+### Precedent Diff — inline guard vs. sourced gate lib
 
 The plan prescribes a **pattern-bound behavior** (a plan-step destroy-guard) for which this repo
 has an established canonical form. Precedent is stated rather than assumed, so a reviewer can
@@ -593,7 +604,9 @@ R-A1 structurally (the loop form validates every counter, including ones added l
 the need for any drift guard. It is declined here **only** because the shared lib must also be
 wired into `apply`, the per-PR merge gate for the whole repo, where a defect halts every merge or
 fails open. That blast radius exceeds "wire an existing counter into a sibling job". Carried as
-**UC-2** and as the first Deferrals row, with this diff as its evidence.
+**UC-2** and as the second Deferrals row, with this diff as its evidence.
+
+---
 
 ## Sharp Edges
 
@@ -602,11 +615,10 @@ fails open. That blast radius exceeds "wire an existing counter into a sibling j
 - **SE-3 — a string-matching parity test passes when both copies are equally wrong.** `terraform-target-parity.test.ts` string-matches this same workflow and strips `["key"]`, so the three dead `["web-2"]` targets stay green forever. Do **not** read its green as evidence the target set is live. This is why the proposed parity test was cut rather than added.
 - **SE-4 — `[[ "null" -gt 0 ]]` is TRUE-shaped and evaluates FALSE.** Any counter guard without `^[0-9]+$` validation fails open. The single most likely way this PR ships broken-but-green.
 - **SE-5 — a fixture proves the mirror, not the SUT.** `_run_host_creates_gate` is a hand-maintained bash reimplementation of the workflow block; nothing enforces the mirror. Only a grep over the YAML can prove the workflow's regex. Any AC saying "proven by fixture" about workflow behaviour is false.
-- **SE-6 — a plan-quoted fact is a claim to verify — including a reviewer's.** Revision 2 corrected six of this plan's own claims (impossible fixture, false-negative grep, inverted `-target` direction, out-of-scope lint, non-required check, false "one real call site"), each caught only by re-running the command. Every number here was measured 2026-07-19 and is not a constant.
-- **SE-7 — GHCR is a PRIVATE package.** Anonymous `imagetools inspect` 401s; log in with `--password-stdin` so the token never lands in argv. A prior "live-confirmed no-auth" claim on this path was a cached-`docker login` false-confirm.
-- **SE-8 — digest is integrity, never provenance.** No `cosign verify` exists here; the image is unsigned by design. **No provenance claim anywhere.**
-- **SE-9 — explicit registration is coverage.** Both runners list suites with no glob; an unregistered suite is zero coverage, silently and greenly. Also: `grep -c` exits 1 on zero, so ACs using it need `|| true` under `set -euo pipefail`.
-- **SE-10 — plan-time preflight.** Check 10 runs `discoverability_test.command` via `bash -c` (prose exits 127) — the command above is real and was executed. Check 6 needs the canonical `- **Brand-survival threshold:** <label>` bullet, present verbatim.
+- **SE-6 — a plan-quoted fact is a claim to verify — including a reviewer's, and including the brief's.** Revisions 2–3 corrected seven claims (impossible fixture, false-negative grep, inverted `-target` direction, out-of-scope lint, non-required check, false "one real call site", and the brief's own stale secret-scan premise), each caught only by re-running the command. Every number here was measured 2026-07-19 and is not a constant.
+- **SE-7 — digest is integrity, never provenance.** No `cosign verify` exists on this path; the image is unsigned there by design. **No provenance claim anywhere** (AC8) — this survives the Half B cut because the PR body still describes the `:latest` mechanism.
+- **SE-8 — explicit registration is coverage.** Both runners list suites with no glob; an unregistered suite is zero coverage, silently and greenly. Also: `grep -c` exits 1 on zero, so ACs using it need `|| true` under `set -euo pipefail`.
+- **SE-9 — plan-time preflight.** Check 10 runs `discoverability_test.command` via `bash -c` (prose exits 127) — the command above is real and was executed post-amendment. Check 6 needs the canonical `- **Brand-survival threshold:** <label>` bullet, present verbatim in User-Brand Impact.
 
 ---
 
@@ -615,14 +627,15 @@ fails open. That blast radius exceeds "wire an existing counter into a sibling j
 **#6500** (zot client enrollment), **#6466** (host-addressability), the held `INNGEST_BASE_URL`
 repoint in draft PR **#6348**, **#6710**, **#6711**, the operator force-replace dispatch, the
 ADR-114 **§I2 residual**, the zot veto, the #6443 drift signal, the #6441 NIC gate, and
-**AGENTS.md**.
+**AGENTS.md**. **[R3]** Also now out of scope: the `resolve-image-digest.sh` extraction and any
+change to `web2-recreate-preflight.sh`.
 
 ### Deferrals (each gets a tracking issue)
 
 | Deferred | Why | Re-evaluation trigger |
 |---|---|---|
+| **[R3] #6712's resolver extraction** (Half B) | Five of seven reviewers converged; its only call site (`web_2_recreate`) is a zombie; operator ruled Option 2. Design record preserved in "Operator Decision" above. | **#6459** lands a real web-host create path → compose resolver → preflight → `plan -var image_name=<pinned>`. Recorded on **#6712**, which stays OPEN. |
+| Extract the guard to a shared lib (UC-2) | Requires editing `apply` — the per-PR merge gate. Blast radius beyond the brief. Operator did not override. | Next counter added to the jq filter. |
+| **web-1 has no executable birth path** (CPO C2) — **the vehicle for #6712's substance** | No automated path can birth the sole web host, and the cloud-init arming path has never executed. #6712 asks for a preflight; the panel established there is no create path for one to guard, so the real issue is the missing path itself. | **Next web-host loss, or any change to `local.host_script_files`.** Deliberately **not** gated on #6459. |
 | `warm_standby` zombie state — fix or delete | Deleting implicates ADR-068 Phase 3; the HALT is independently valuable pre-apply. | Next warm-standby dispatch. |
-| Extract the guard to a shared lib (UC-2) | Requires editing `apply` — the per-PR merge gate. Blast radius beyond the brief. | Next counter added to the jq filter. |
-| **web-1 has no executable birth path** (CPO C2) | No automated path can birth the sole web host, and the cloud-init arming path has never executed. | **Next web-host loss, or any change to `local.host_script_files`.** Deliberately **not** gated on #6459. |
 | `terraform-target-parity.test.ts` cannot detect retired `for_each` keys (SE-3) | Needs its own design. | Any host key add/remove. |
-| Half B has zero live consumers; resolve-then-pin not yet a standing rule (no ADR-080 amendment) | No enforcement point exists to record. | **#6459** lands a web-host create path → compose resolver → preflight → `plan -var image_name=<pinned>`. Recorded on **#6712**, which stays OPEN. |
