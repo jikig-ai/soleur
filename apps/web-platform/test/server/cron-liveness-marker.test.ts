@@ -6,7 +6,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // the fail-open contract. Hoisted so the factory can close over them.
 const { warnMock, pinoFactory } = vi.hoisted(() => {
   const warnMock = vi.fn();
-  return { warnMock, pinoFactory: vi.fn(() => ({ warn: warnMock })) };
+  // Rest param, not `() => …`: a zero-parameter vi.fn implementation types
+  // `mock.calls` as a zero-length tuple, so reading `calls[0][0]` below fails
+  // tsc (TS2493) while the vitest run stays green — vitest type-checks test
+  // files lazily, so only the standalone tsc pass catches it.
+  return {
+    warnMock,
+    pinoFactory: vi.fn((..._args: unknown[]) => ({ warn: warnMock })),
+  };
 });
 
 vi.mock("pino", () => ({ default: pinoFactory }));
