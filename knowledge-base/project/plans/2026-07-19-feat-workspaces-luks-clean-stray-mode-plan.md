@@ -61,6 +61,8 @@ documented **AP-009 deviation**, not routine cleanup. That framing drives the de
 
 ## User-Brand Impact
 
+<!-- lint-infra-ignore start -->
+
 **If this lands broken, the user experiences:** their workspace source code is deleted
 from web-1. If the deletion targets the wrong path (`$MOUNT` instead of `$STAGING`), or
 runs while `$STAGING` is a *mountpoint* (the real LUKS volume), the operator loses the
@@ -84,6 +86,8 @@ verify machinery was a leak as well as a correctness bug.
 CPO sign-off required at plan time; `user-impact-reviewer` invoked at review time.
 
 ---
+
+<!-- lint-infra-ignore end -->
 
 ## Hypotheses
 
@@ -168,6 +172,8 @@ called out in the PR body, not folded in silently.
 
 ### D1c — mutual exclusion between modes (v1 P0-1)
 
+<!-- lint-infra-ignore start -->
+
 The ROLLBACK block ends in `exit 0`, so a CLEAN_STRAY block placed after it is
 **unreachable** whenever `ROLLBACK=1`. The operator who ticks both types
 `DELETE-STRAY-USER-DATA-AP-009`, gets a **rollback** (`umount $MOUNT`, `cryptsetup
@@ -181,6 +187,8 @@ wedged, try the recovery modes." Mitigations, both layers:
 - **Script:** a mutual-exclusion refusal **before both** mode blocks —
   `ROLLBACK=1` + `CLEAN_STRAY=1` → `emit_drift clean_stray_mode_conflict` + `die`.
 - **Workflow:** a pre-gate validation step fails the dispatch when both are ticked.
+
+<!-- lint-infra-ignore end -->
 
 ### D2 — T4c reconciliation: a separate function, zero test edits
 
@@ -680,6 +688,8 @@ this revision.
 
 ## Risks & Mitigations
 
+<!-- lint-infra-ignore start -->
+
 | Risk | Mitigation |
 |---|---|
 | The deletion targets `$MOUNT` instead of `$STAGING` | FR4 (non-mountpoint), FR5 (`_same_dev` + `$MOUNT` health), T4e/T4i. |
@@ -694,6 +704,8 @@ this revision.
 | Fixing the ROLLBACK/loopback/volume-lookup gates changes behaviour operators rely on | Each only makes a destructive arm harder to reach or removes an irrelevant precondition; never removes an approval. Called out in the PR body. |
 
 ---
+
+<!-- lint-infra-ignore end -->
 
 ## Alternative Approaches Considered
 
