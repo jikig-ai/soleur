@@ -595,6 +595,7 @@ runcmd:
   # The token encodes tunnel configuration managed remotely via Terraform.
   # #6425: gated to the ingress host (rationale: server.tf web_tunnel_connector; ADR-114).
 %{ if web_tunnel_connector ~}
+  - soleur-wait-nic ${private_ip}
   - cloudflared service install ${tunnel_token}
 
   # #6090 H4: baked readiness poll (enable returns 0 before connect).
