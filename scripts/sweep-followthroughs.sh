@@ -28,6 +28,12 @@ SCRIPTS_ROOT="scripts/followthroughs"
 # How far back to look for prematurely-closed follow-throughs. Bounded so the
 # closed query stays cheap and the sweeper does not re-litigate ancient history.
 CLOSED_LOOKBACK_DAYS="${CLOSED_LOOKBACK_DAYS:-14}"
+# Validate before it reaches `date -d`, which accepts natural language ("next
+# friday", "-1 year") and would silently produce a nonsense window.
+if ! [[ "$CLOSED_LOOKBACK_DAYS" =~ ^[0-9]+$ ]] || (( CLOSED_LOOKBACK_DAYS < 1 )); then
+  printf '::error::CLOSED_LOOKBACK_DAYS must be a positive integer (got %q)\n' "$CLOSED_LOOKBACK_DAYS" >&2
+  exit 2
+fi
 # Its OWN limit. Deliberately NOT achieved by widening the open query to
 # `--state all`: that shares one 50-item budget between the two sets, so a burst
 # of closed issues would silently starve the open set the sweeper's primary job

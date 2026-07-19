@@ -333,6 +333,9 @@ function isGitHubPagesV4(addr: string): boolean {
  * so the four cases are directly unit-testable rather than requiring a fake
  * network (AC8).
  *
+ * Five verdicts are producible: confirmed-AAAA → failed; inconclusive AAAA,
+ * inconclusive A, no-A, and not-GitHub-shaped → retry; fallthrough → propagated.
+ *
  * `retry` means "not yet, and waiting may help". `failed` means "waiting cannot
  * help" and is reserved for the AAAA case: a record that survives the flip will
  * still be there next attempt, so burning the remaining budget on it only
@@ -1621,6 +1624,13 @@ export async function cronGhPagesCertReissueOnFailure({
     });
     return;
   }
+  // Which stage the catch below is describing. The try wraps BOTH the token mint
+  // and the restore, and a single hardcoded "restore FAILED" message would
+  // report a restore that was never attempted when the mint 401s (a live
+  // failure mode — the token needs BOTH administration and pages write). That
+  // is exactly the "never attempted vs attempted and failed" distinction this
+  // routine treats as load-bearing everywhere else.
+  let stage: "mint" | "restore" = "mint";
   try {
     const installationToken = await step.run("onfailure-mint-token", () =>
       mintInstallationToken({
@@ -1630,6 +1640,7 @@ export async function cronGhPagesCertReissueOnFailure({
       }),
     );
     const deps = buildLiveDeps({ installationToken, cfToken, zoneId, logger });
+    stage = "restore";
     await step.run("onfailure-restore-steady-state", () =>
       restoreState(deps, emit),
     );
@@ -1650,18 +1661,22 @@ export async function cronGhPagesCertReissueOnFailure({
     });
   } catch (restoreErr) {
     // The security-regression brake: restore itself failed.
+    const stageDetail =
+      stage === "mint"
+        ? `onFailure could not MINT a token after body error (restore NOT attempted): ${error.message}`
+        : `onFailure restore FAILED after body error: ${error.message}`;
     emit("onfailure-restore", {
       ok: false,
       outcome: "proxy_restore_failed",
-      detail: `onFailure restore FAILED after body error: ${error.message}`,
+      detail: stageDetail,
       errorName: (restoreErr as Error).name,
       errorDetail: (restoreErr as Error).message,
     });
     reportSilentFallback(restoreErr, {
       feature: SENTRY_FEATURE,
       op: "onfailure-restore",
-      message: `onFailure restore FAILED after body error: ${error.message}`,
-      tags: { outcome: "proxy_restore_failed" },
+      message: stageDetail,
+      tags: { outcome: "proxy_restore_failed", stage },
     });
   }
 }
