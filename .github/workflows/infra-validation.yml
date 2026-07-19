@@ -386,6 +386,31 @@ jobs:
       - name: Run /workspaces LUKS freeze-quiesce guard (#6588 redis in quiesce set + fail-closed G4 + /health canary)
         run: bash apps/web-platform/infra/workspaces-luks-freeze.test.sh
 
+      # Shares workspaces-luks-harness.sh with the freeze suite above. Registered EXPLICITLY for the
+      # same reason as every line in this job: an unregistered suite is zero coverage, silently green.
+      - name: Run /workspaces LUKS staging-target guard (#6588 mkfs-if-empty + fail-closed staging mount + capacity gate)
+        run: bash apps/web-platform/infra/workspaces-luks-staging.test.sh
+
+      # REGISTRATION IS NOT ENVIRONMENT. The loopback suite below is the only workspaces-luks test
+      # that touches a REAL block device (losetup + real cryptsetup luksFormat/luksOpen + real
+      # mkfs.ext4 + real mount), so it must land in a job that can actually do that:
+      #   - deploy-script-tests runs on `runs-on: ubuntu-24.04`, a GH-hosted VM — NOT a job
+      #     container — so /dev/loop-control, dm-crypt and privileged mounts are available.
+      #   - GH-hosted runners have passwordless sudo; the suite self-elevates, and is invoked
+      #     under sudo here anyway so the privilege requirement is explicit at the call site.
+      #   - losetup/mount/findmnt/blkid/mkfs.ext4 ship with the image; `cryptsetup` does not, so
+      #     it is installed below rather than assumed. Installing it is what makes the
+      #     registration real: without it the suite exits non-zero with LOOPBACK_UNAVAILABLE.
+      # The suite NEVER self-skips — if the device layer is unusable it fails LOUDLY with the
+      # literal token LOOPBACK_UNAVAILABLE, because a silent skip is the exact fail-open class
+      # #6588 exists to remove (the 2026-07-19 cutover rsynced onto the root disk and every
+      # string-only gate certified it green).
+      - name: Run /workspaces LUKS staging-target loopback evidence (#6588 real mkfs + fail-closed mount + source-is-mapper)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cryptsetup-bin
+          sudo bash apps/web-platform/infra/workspaces-luks-loopback.test.sh
+
       # #6511: `connect_timeout = 5` was a bare number where the pinned v4 provider's schema says
       # `string`. It coerced to "5", failed Cloudflare's duration parse, landed as "0s", and the
       # #6357 fail-fast mitigation on the registry origin was inert for weeks while every apply
