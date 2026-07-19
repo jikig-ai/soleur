@@ -319,6 +319,70 @@ soleur-boot-emit "$STAGE" info
 WAITEOF
 chmod 0755 /usr/local/bin/soleur-wait-ready
 
+# Bounded private-NIC wait (#6441, ADR-114 I1) — baked (0 user_data; the call site is the
+# only inline cost). DELIBERATELY fail-OPEN, unlike its fail-CLOSED neighbour
+# soleur-wait-ready directly above — the two gate the same cloudflared step a few lines
+# apart, so the asymmetry needs stating or it reads as an inconsistency:
+#
+#   - soleur-wait-ready runs AFTER the unit exists. A never-ready cloudflared is a TERMINAL
+#     condition, so its `|| exit 1` caller contract is defensible.
+#   - soleur-wait-nic runs BEFORE the unit exists, on a condition that provably SELF-HEALS:
+#     cloudflared dials its ingress origin per CONNECTION, not at process start, so a
+#     connector that registered NIC-less begins serving the instant the attach lands — no
+#     restart, no operator action. Aborting here would destroy the recovery channel to
+#     prevent a condition that resolves itself.
+#
+# And aborting is not a small cost: runcmd is ONE /bin/sh and is once-per-instance, so an
+# `exit 1` does not skip a step — it terminates cloudflared install, the webhook binary, the
+# :9000 readiness gate, the disk/resource monitors and the container egress firewall, for the
+# life of that instance (CF-5). A NIC that converges at minute 11 would then be irrelevant.
+# No reboot either: web-1 is the SOLE live origin, and ADR-115's converge-by-reboot grant is
+# registry-host-scoped by explicit normative blocker, not class-wide (CF-6).
+STAGE=wait_nic; FAILED_FILE=soleur-wait-nic
+cat > /usr/local/bin/soleur-wait-nic <<'NICEOF'
+#!/bin/sh
+# usage: soleur-wait-nic <expected-ip>
+# ALWAYS exits 0. Emits EXACTLY ONE event, from three mutually-exclusive arms. Never aborts
+# the boot, never reboots. The emit is the ONLY evidence this gate ran: a fresh cloud-init
+# boot is a blind surface (no SSH, no shell), so an arm that emitted nothing would be
+# indistinguishable from a gate that never shipped.
+EXPECTED="$1"
+# (0) PROBE RESOLUTION FIRST, and short-circuit before the wait. `ip` lives in /usr/sbin,
+# which is absent from some minimal PATHs. An unresolvable probe is ZERO EVIDENCE — it must
+# never be conflated with "the address is absent" (#6415), hence a THIRD arm rather than
+# folding probe-fault into the timeout arm. Short-circuiting also avoids spending the full
+# 60 s budget on a missing binary.
+IP_BIN=$(command -v ip 2>/dev/null || true)
+PROBE_OK=true; [ -n "$IP_BIN" ] && [ -x "$IP_BIN" ] || PROBE_OK=false
+if [ "$PROBE_OK" != true ]; then
+  soleur-boot-emit private_nic_probe_fault warning
+  exit 0
+fi
+# (1) Probe once before the loop. -w + -F + --: exact word, fixed string, end-of-options — so
+# 10.0.1.1 can never match inside 10.0.1.10 and the dots are not regex wildcards. Mirrors
+# web-private-nic-guard.sh. (No pipefail is set in this helper, so grep's exit governs.)
+nic_ok=false
+"$IP_BIN" -4 -o addr show 2>/dev/null | grep -qwF -- "$EXPECTED" && nic_ok=true
+# (2) Bounded wait — 30 x 2 s = 60 s, the house loop shape. Spent BEFORE `cloudflared service
+# install`, so this budget is SEQUENTIAL with (never nested inside) the downstream
+# cloudflared_ready gate's own ~60 s budget. Nesting them would starve that gate and detonate
+# its pre-existing `|| exit 1` — the exact CF-5 abort this gate exists to prevent.
+if [ "$nic_ok" = false ]; then
+  for i in $(seq 1 30); do
+    sleep 2
+    "$IP_BIN" -4 -o addr show 2>/dev/null | grep -qwF -- "$EXPECTED" && { nic_ok=true; break; }
+  done
+fi
+# (3) Exactly one event, mutually exclusive.
+if [ "$nic_ok" = true ]; then
+  soleur-boot-emit private_nic_ready info
+else
+  soleur-boot-emit private_nic_timeout warning
+fi
+exit 0
+NICEOF
+chmod 0755 /usr/local/bin/soleur-wait-nic
+
 # Completion breadcrumb (#6090): the SINGLE signal distinguishing "died IN bootstrap"
 # (emit_fail names a bootstrap stage) from "bootstrap COMPLETED, died downstream" (this
 # breadcrumb present + a later cloud-init stage fatal). Fail-open via _sentry_emit.
