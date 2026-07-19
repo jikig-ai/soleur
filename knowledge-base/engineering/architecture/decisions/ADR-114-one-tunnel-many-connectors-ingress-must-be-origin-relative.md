@@ -389,7 +389,11 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > `hcloud_server_network.web["web-1"]` — transitively reaching `hcloud_server.web` — while its
 > guard set is `resource_deletes` / `nested_deletes` / `reboot_updates` with **no**
 > `host_creates` check. That path could birth a host on a new bootstrap hash with no coherence
-> preflight. It belongs to the apply workflow's guard set rather than to this gate.
+> preflight. It belongs to the apply workflow's guard set rather than to this gate, and is
+> tracked in #6718. Reachability is narrow — web-1 normally exists in state, so targeting its
+> network attachment does not create it — so this is a defence-in-depth gap rather than a live
+> outage. The reason to close it is that the sibling `apply` job already decided this class of
+> accident warrants a hard HALT.
 >
 > The residual exposure remains an operator-driven fresh create or `-replace` of web-1, which
 > has no preflight; closing it needs a preflight that works against a mutable tag, tracked in

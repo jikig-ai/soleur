@@ -389,7 +389,9 @@ assert "the call site hardcodes no 10.0.1.x literal" \
 # hcloud_server_network.web["web-1"], which transitively reaches hcloud_server.web, and its
 # guard set is resource_deletes / nested_deletes / reboot_updates with NO host_creates check.
 # That path could birth a host on a new bootstrap hash with no coherence preflight. It predates
-# this PR and belongs to the apply workflow's guard set rather than to this gate.
+# this PR and belongs to the apply workflow's guard set rather than to this gate — tracked in
+# #6718. Not asserted here: pinning the gap's CURRENT (unguarded) state would red the suite the
+# moment someone fixes it, which is backwards.
 #
 # Residual, also not closed here: an operator-driven fresh create/-replace of web-1 consumes
 # the new hash with no preflight. Closing it needs a preflight that works against a mutable
