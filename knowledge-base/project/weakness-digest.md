@@ -3,86 +3,92 @@
 _Read-only recurring-failure signal from learnings added in the last 7d (#6037).
 Triage clusters into `/compound`; this file never edits the harness._
 
-Learnings in window: 102
+Learnings in window: 82
 
 ## Recurring failure patterns
 
 _Clusters of learnings sharing >= 2 tags, ranked by size (>= 3 members)._
 
-### drift-guard + terraform — 4 learnings
-- 2026-07-05-extracted-specialized-shared-script-not-clean-swap-and-parity-blind-spots.md
-- 2026-07-06-migrating-literal-pinned-sync-gate-to-var-referencing-iac-loses-the-number-pin.md
-- 2026-07-09-terraform-source-guard-must-key-on-arming-class-not-ignore-changes-value.md
-- 2026-07-11-cron-egress-sentinel-needs-runbook-row-and-infra-glob-fires-apply.md
+### observability + terraform — 5 learnings
+- 2026-07-15-self-healing-guard-on-a-blind-host-must-fail-safe-on-its-own-instrument.md
+- 2026-07-15-sentry-event-frequency-threshold-unreachable-and-data-source-scope-403.md
+- 2026-07-17-a-detector-placed-before-the-cure-blocks-it.md
+- 2026-07-17-target-scoped-terraform-apply-makes-resource-deletion-a-silent-noop.md
+- 2026-07-18-web-1-root-doppler-unit-needs-home-and-dedicated-token-and-vector-toml-has-no-running-host-delivery.md
 
-### observability + sentry — 4 learnings
-- 2026-07-06-cloud-init-user-data-cap-bake-bodies-and-set-e-scope-fix-ungates-security-checks.md
-- 2026-07-07-scheduled-cron-monitor-red-triage-real-vs-fallback-digest.md
-- 2026-07-09-sentry-fallback-rate-alarm-pre-bootstrap-emitter-and-issue-group-grouping.md
-- 2026-07-08-self-pull-observability-in-diagnostic-loops-never-ask-operator-to-fetch.md
+### observability + review — 4 learnings
+- 2026-07-15-self-healing-guard-on-a-blind-host-must-fail-safe-on-its-own-instrument.md
+- 2026-07-16-a-drift-guard-can-recreate-its-own-bug-and-a-forced-replace-from-a-stale-pin-ships-nothing.md
+- 2026-07-12-dry-run-fixture-must-derive-from-producer-source-not-fabricated-format.md
+- 2026-07-18-count-drift-fix-must-sweep-sibling-non-test-gated-docs.md
 
-### cloud-init + terraform — 3 learnings
-- 2026-07-07-immutable-redeploy.md
-- 2026-07-09-sentry-fallback-rate-alarm-pre-bootstrap-emitter-and-issue-group-grouping.md
-- 2026-07-11-col0-templatefile-directive-breaks-raw-yaml-parsers-sweep-all.md
+### mutation-testing + review — 3 learnings
+- 2026-07-15-narrowing-is-not-anchoring-and-a-documented-class-recurred-four-times-in-one-pr.md
+- 2026-07-16-a-gate-that-proves-it-cannot-fail-open-shipped-its-own-proof-unwired.md
+- 2026-07-17-source-scan-guard-battery-must-vary-shape-not-just-value.md
 
-### review + terraform — 3 learnings
-- 2026-07-05-extracted-specialized-shared-script-not-clean-swap-and-parity-blind-spots.md
-- 2026-07-07-precedent-mirror-is-a-moving-target-re-derive-against-fresh-origin-main.md
-- 2026-07-09-terraform-source-guard-must-key-on-arming-class-not-ignore-changes-value.md
+### drift-guard + terraform — 3 learnings
+- 2026-07-18-web-1-root-doppler-unit-needs-home-and-dedicated-token-and-vector-toml-has-no-running-host-delivery.md
+- 2026-07-17-derive-replicated-literal-and-nonvacuous-drift-guard.md
+- 2026-07-17-a-drift-guard-scoped-by-resource-name-is-addition-blind.md
 
-### git-worktree + observability — 3 learnings
-- 2026-07-07-telemetry-blind-giveup-and-mask-degraded-nonbare-guard.md
-- 2026-07-08-relative-gitroot-mask-corruption-has-many-victims-patch-the-source.md
-- 2026-07-05-config-lock-mask-is-sdk-bwrap-not-substrate-preseed-host-side.md
+### rls + supabase — 3 learnings
+- 2026-07-16-a-gate-that-proves-it-cannot-fail-open-shipped-its-own-proof-unwired.md
+- 2026-07-18-rls-initplan-wrap-breaks-verify-sentinels-and-dev-prod-policy-divergence.md
+- 2026-07-18-supabase-disk-io-warning-self-pull-diagnose-and-heartbeat-coupling.md
 
-### disk-full + no-ssh — 3 learnings
-- 2026-07-08-verify-disk-fullness-write-health-on-deny-all-host-without-ssh.md
-- 2026-07-08-disk-full-reads-as-not-full-when-you-check-block-device-not-filesystem.md
-- 2026-07-09-gc-retention-timing-vs-keepset-capacity-and-telemetry-gated-contingency.md
+### doppler + systemd — 3 learnings
+- 2026-07-16-refuting-a-hypothesis-by-reasoning-while-its-discriminator-is-invisible.md
+- 2026-07-18-web-1-root-doppler-unit-needs-home-and-dedicated-token-and-vector-toml-has-no-running-host-delivery.md
+- no-ssh-cutover-verb-by-verb-audit-inngest-quiesce-20260712.md
+
+### drift-guard + observability — 3 learnings
+- 2026-07-16-a-drift-guard-can-recreate-its-own-bug-and-a-forced-replace-from-a-stale-pin-ships-nothing.md
+- 2026-07-18-web-1-root-doppler-unit-needs-home-and-dedicated-token-and-vector-toml-has-no-running-host-delivery.md
+- 2026-07-17-buy-the-datum-then-read-it-with-the-right-telemetry-key.md
+
+### hetzner + terraform — 3 learnings
+- 2026-07-15-replace-shaped-ops-are-net-zero-on-the-resource-they-exhaust.md
+- 2026-07-13-warm-standby-cross-dc-and-replace-capacity-footgun.md
+- 2026-07-15-infra-incident-diagnose-before-mutate-and-no-out-of-band-applies.md
 
 ### drift-guard + review — 3 learnings
-- 2026-07-05-drift-guard-first-run-live-probe-the-audited-resource.md
-- 2026-07-05-extracted-specialized-shared-script-not-clean-swap-and-parity-blind-spots.md
-- 2026-07-09-terraform-source-guard-must-key-on-arming-class-not-ignore-changes-value.md
+- 2026-07-16-a-drift-guard-can-recreate-its-own-bug-and-a-forced-replace-from-a-stale-pin-ships-nothing.md
+- 2026-07-16-a-gate-that-proves-it-cannot-fail-open-shipped-its-own-proof-unwired.md
+- 2026-07-18-forbiddance-drift-guard-encodes-pre-refactor-threat-model.md
 
-### doppler + terraform — 3 learnings
-- 2026-07-07-precedent-mirror-is-a-moving-target-re-derive-against-fresh-origin-main.md
-- 2026-07-07-doppler-branch-config-does-not-isolate-secrets.md
-- 2026-07-07-agent-runs-terraform-apply-never-route-to-operator.md
+### github-actions + observability — 3 learnings
+- 2026-07-15-silent-fallback-masked-a-dead-primary-for-14-days.md
+- 2026-07-17-live-reconcile-observability-job-copy-fidelity-ssrf-and-two-parity-tests.md
+- 2026-07-13-watchdog-excluded-mode-shares-issue-class-untruthful-comment.md
 
-### observability + telemetry — 3 learnings
-- 2026-07-07-telemetry-blind-giveup-and-mask-degraded-nonbare-guard.md
-- 2026-07-08-relative-gitroot-mask-corruption-has-many-victims-patch-the-source.md
-- 2026-07-09-oom-telemetry-monotonic-counter-not-gauge-and-fail-safe-soak-gate.md
+### drift-guard + mutation-testing — 3 learnings
+- 2026-07-15-widening-a-guard-to-accept-a-future-mechanism-is-a-fail-open-unless-self-validating.md
+- 2026-07-16-a-gate-that-proves-it-cannot-fail-open-shipped-its-own-proof-unwired.md
+- 2026-07-17-a-drift-guard-scoped-by-resource-name-is-addition-blind.md
 
-### terraform + zot — 3 learnings
-- 2026-07-07-immutable-redeploy.md
-- 2026-07-09-sentry-fallback-rate-alarm-pre-bootstrap-emitter-and-issue-group-grouping.md
-- 2026-07-07-doppler-branch-config-does-not-isolate-secrets.md
+### fail-open + mutation-testing — 3 learnings
+- 2026-07-15-widening-a-guard-to-accept-a-future-mechanism-is-a-fail-open-unless-self-validating.md
+- 2026-07-16-a-gate-that-proves-it-cannot-fail-open-shipped-its-own-proof-unwired.md
+- 2026-07-17-source-scan-guard-battery-must-vary-shape-not-just-value.md
 
-### cron + inngest — 3 learnings
-- 2026-07-05-content-starvation-absence-of-work-is-not-an-error.md
-- 2026-07-07-pin-spawned-eval-date-to-memoized-runstarted-via-sentinel-inject.md
-- 2026-07-07-scheduled-cron-monitor-red-triage-real-vs-fallback-digest.md
+### diagnosis + observability — 3 learnings
+- 2026-07-13-web-2-fsn1-fresh-boot-image-pull-auth-denied-stale-baked-cred.md
+- 2026-07-16-refuting-a-hypothesis-by-reasoning-while-its-discriminator-is-invisible.md
+- 2026-07-17-buy-the-datum-then-read-it-with-the-right-telemetry-key.md
 
-### config-lock + git-worktree — 3 learnings
-- 2026-07-07-non-bare-concierge-worktree-identity-wedge-and-evidence-first-overturn.md
-- 2026-07-07-telemetry-blind-giveup-and-mask-degraded-nonbare-guard.md
-- 2026-07-05-config-lock-mask-is-sdk-bwrap-not-substrate-preseed-host-side.md
+### false-green + mutation-testing — 3 learnings
+- 2026-07-15-narrowing-is-not-anchoring-and-a-documented-class-recurred-four-times-in-one-pr.md
+- 2026-07-15-widening-a-guard-to-accept-a-future-mechanism-is-a-fail-open-unless-self-validating.md
+- 2026-07-16-the-fix-for-an-inert-monitor-shipped-a-probe-that-could-never-fire.md
 
-### rls + security-definer — 3 learnings
-- 2026-07-11-rls-migration-verify-savepoint-and-signature-scope.md
-- 2026-07-11-static-security-lint-must-be-case-and-body-form-agnostic-and-subordinate-to-the-runtime-guard.md
-- 2026-07-10-supabase-default-privileges-defeat-revoke-from-public.md
+### observability + systemd — 3 learnings
+- 2026-07-16-refuting-a-hypothesis-by-reasoning-while-its-discriminator-is-invisible.md
+- 2026-07-16-the-fix-for-an-inert-monitor-shipped-a-probe-that-could-never-fire.md
+- 2026-07-18-web-1-root-doppler-unit-needs-home-and-dedicated-token-and-vector-toml-has-no-running-host-delivery.md
 
-### better-stack + observability — 3 learnings
-- 2026-07-07-scheduled-cron-monitor-red-triage-real-vs-fallback-digest.md
-- 2026-07-09-sanitized-marker-alongside-raw-sibling-diagnostic-leaks-and-purity-test-scope.md
-- 2026-07-08-self-pull-observability-in-diagnostic-loops-never-ask-operator-to-fetch.md
-
-### cloud-init + observability — 3 learnings
-- 2026-07-06-cloud-init-user-data-cap-bake-bodies-and-set-e-scope-fix-ungates-security-checks.md
-- 2026-07-09-sentry-fallback-rate-alarm-pre-bootstrap-emitter-and-issue-group-grouping.md
-- 2026-07-09-oom-telemetry-monotonic-counter-not-gauge-and-fail-safe-soak-gate.md
+### observability + sentry — 3 learnings
+- 2026-07-15-sentry-event-frequency-threshold-unreachable-and-data-source-scope-403.md
+- 2026-07-17-live-reconcile-observability-job-copy-fidelity-ssrf-and-two-parity-tests.md
+- 2026-07-17-target-scoped-terraform-apply-makes-resource-deletion-a-silent-noop.md
 
