@@ -46,18 +46,46 @@ Ship an **event-triggered Inngest routine** `cron-gh-pages-cert-reissue` (v1 = m
 only, via `POST /api/internal/trigger-cron`; `retries: 1`; fn+account concurrency = 1) that:
 
 1. **Preflight (fail-loud, zero-write on abort):** re-reads `GET /pages`; proceeds **only** if
-   `state ∈ {bad_authz, failed}` (an allowlist — toggling a healthy in-flight order can
-   *manufacture* a new `bad_authz`); verifies auto-fixable preconditions (ACME carve-out 404,
-   `always_use_https=off`, CAA permissive, `_github-pages-challenge` TXT present).
+   `state ∈ {bad_authz, errored, authorization_revoked, failed}` (an allowlist — toggling a healthy
+   in-flight order can *manufacture* a new `bad_authz`); verifies auto-fixable preconditions (ACME
+   carve-out 404, `always_use_https=off`, CAA permissive, `_github-pages-challenge` TXT present).
+   *(Amended #6698: `errored` and `authorization_revoked` are documented terminal failure states
+   that the original `{bad_authz, failed}` allowlist silently declined as `not_stuck`, so a cert
+   wedged in either was never remediated. `"failed"` is not a documented state and is retained only
+   defensively.)*
 2. **Toggle + reissue (ONE `step.run`):** flips the 4 apex A-records + www CNAME to
    `proxied=false` via a **distinct DNS-edit-only Cloudflare token** (`CF_API_TOKEN_DNS_EDIT`);
    aborts→restores on any partial toggle; then `PUT /pages cname:null` → settle → re-set, using a
    **least-privilege App token** (`generateInstallationToken({ permissions: { administration:
-   "write" }, repositories: ["soleur"] })`).
-3. **Poll (`step.sleep`):** `GET /pages` up to ~15 min for `state ∈ {approved, issued}`.
-4. **Restore:** an **unconditional final `step.run`** re-asserts the declared steady state
+   "write", pages: "write" }, repositories: ["soleur"] })`). *(Amended: `PUT /pages` requires
+   **BOTH** `administration:write` AND `pages:write` — proven empirically on the live installation,
+   pages-only → 403, admin-only → 403, both → 204. GitHub's REST docs do not state this.)*
+3. **DNS-propagation gate (`step.run` + `step.sleep`, added #6698):** before polling, confirm from
+   **public resolvers** (1.1.1.1 / 8.8.8.8) that the flip actually propagated — apex A ⊆
+   `185.199.0.0/16`, **no AAAA**, and a post-flip ACME-shaped probe that answers GitHub-shaped
+   rather than Cloudflare-shaped. A poll that begins before propagation completes is
+   guaranteed-wasted window. An AAAA that survives the flip is **terminal, not retryable**: Let's
+   Encrypt prefers IPv6 and does not fall back from a proxied AAAA that answers successfully with
+   the wrong content, so no window length can succeed. Failure yields the non-benign
+   `dns_propagation_failed` outcome.
+4. **Poll (`step.sleep`):** `GET /pages` for `state ∈ {approved, issued}`. *(Amended #6698: the
+   gate's budget comes **out of** the poll's, not on top — see the window budget below, which
+   shortens the cert poll relative to the original "~15 min".)*
+5. **Restore:** an **unconditional final `step.run`** re-asserts the declared steady state
    (`proxied=true`, `cname=soleur.ai` — symmetric on both fields), **plus an `onFailure`
-   lifecycle handler** that idempotently restores on any throw / retry-exhaustion.
+   lifecycle handler** that idempotently restores on any throw / retry-exhaustion. *(Amended #6698:
+   the post-toggle tail has exactly **one** return site, after restore, so "no post-toggle exit
+   skips restore" holds by construction — `onFailure` does not fire on a clean early `return`.)*
+
+**Total DNS-only window budget (amended #6698).** The public-TLS-outage window is
+`poll + CNAME_SETTLE_MS + gate`, **not** the poll alone — the original ADR budgeted only the poll,
+so the real window already overran by the 45 s settle. The exported `TOTAL_DNS_ONLY_WINDOW_MS`
+asserts the **sum** stays ≤ 15 min.
+
+**Probe-only mode (added #6698).** A probe fire performs the DNS flip, runs the propagation gate,
+and restores — **skipping the cname toggle and the poll entirely**, so it consumes no Let's Encrypt
+validation attempt. It is the **default** for manual fires; remediation requires an explicit
+`{"probeOnly": false}`.
 
 This is registered as a **narrow AP-001 exception (new AP-019 row)** — transient, self-reverting,
 single-attempt, human-gated — NOT compliance-by-no-drift. It references **ADR-077** (routine
@@ -65,9 +93,15 @@ replay-safety contract) for the step structure and **ADR-033** (Inngest cron sub
 extends with a write-to-live-infra capability.
 
 The restore MUST be a final step + `onFailure` handler, **not a JS `try…finally`**: `step.sleep`
-suspends via a control-flow throw that runs `finally` prematurely at the first poll pass, restoring
-the proxy before the cert validates and collapsing the DNS-only window (then the memoized toggle-off
-step never re-runs → silent timeout).
+suspends via a control-flow throw that runs `finally` prematurely at the **first suspension**,
+restoring the proxy before the cert validates and collapsing the DNS-only window (then the memoized
+toggle-off step never re-runs → silent timeout).
+
+*(Correction, #6698: this ADR and the routine's file docstring both previously asserted the poll's
+`step.sleep` was "the only suspension point". The propagation gate's `dns-gate-wait-${i}` sleeps
+make that literally false. The **reasoning** is unaffected — there is still no `finally`, and the
+first suspension is now the gate's rather than the poll's — but both texts were corrected so a
+future reader does not trust a claim the code no longer supports.)*
 
 **v1 accepts a documented residual drift race** (see Consequences); the drift/apply freeze-lock
 coordination and self-heal auto-invoke are **deferred to v2** (#6677).
@@ -118,6 +152,14 @@ coordination and self-heal auto-invoke are **deferred to v2** (#6677).
   `-target`-allowlist exclusion (an earlier draft of this ADR wrongly claimed the records were not
   targeted). This is exactly why the runtime coordination lock is deferred to v2 (#6677), where
   unattended firing removes the operator-in-the-loop backstop and makes a real lock load-bearing.
+- **Probe-only pays the window cost without remediating (added #6698).** A probe fire opens the
+  same DNS-only window — and therefore the same public-TLS degradation on apex+www — while **by
+  design** not attempting the fix. That is a deliberate trade: the alternative is a blind
+  remediation fire that consumes a Let's Encrypt validation attempt against limits that are hourly
+  and **compounding**, and that cannot distinguish "DNS never propagated" from "window too short"
+  from "already rate-limited". Probe-only is materially cheaper than it looks because it skips the
+  poll entirely: ~1–2 min of degradation instead of ~15. The residual is that an operator who fires
+  twice (probe, then remediation) pays two windows rather than one.
 - **Blast radius during the window:** CF WAF/DDoS + origin-IP hiding are absent on apex+www.
   Acceptable because the still-valid cert keeps traffic serving, the window is bounded, and the
   final step + `onFailure` guarantee return to the protected steady state; a failed restore pages
