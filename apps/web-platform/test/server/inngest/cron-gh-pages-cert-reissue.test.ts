@@ -576,7 +576,8 @@ describe("source-shape anchors (registration + replay-safety)", () => {
     ['scope: "fn"', "fn-scoped serialization"],
     ['key: \'"cron-platform"\'', "account concurrency lane"],
     ["onFailure: cronGhPagesCertReissueOnFailure", "onFailure lifecycle restore (AC3)"],
-    ['pages: "write"', "least-privilege scoped mint (AC4)"],
+    ['pages: "write"', "scoped mint: pages (AC4) — PUT /pages needs BOTH admin+pages"],
+    ['administration: "write"', "scoped mint: administration (AC4) — PUT /pages needs BOTH admin+pages"],
     ["repositories: [REPO_NAME]", "repo-scoped token (AC4)"],
     ["await step.sleep(", "poll suspends via step.sleep (ADR-077)"],
   ])("source contains %s (%s)", (anchor) => {

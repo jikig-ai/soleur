@@ -8,7 +8,8 @@
 // postmortem-proven recovery (learning 2026-02-16-github-pages-cloudflare-wiring):
 //   1. flip apex+www to DNS-only (proxied=false) so GitHub sees its own IPs,
 //   2. re-order the cert by toggling the Pages custom domain (cname:null → re-set)
-//      via the GitHub App's `pages:write` grant,
+//      via the GitHub App's `administration:write`+`pages:write` grants (PUT /pages
+//      needs BOTH),
 //   3. poll GET /pages until state ∈ {approved, issued},
 //   4. restore the declared steady state (proxied=true, cname=soleur.ai).
 //
@@ -73,12 +74,15 @@ const REISSUE_ALLOWED_STATES = ["bad_authz", "failed"] as const;
 const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 
 // Least-privilege scope: the reissue calls GET + PUT /repos/{owner}/{repo}/pages
-// (the Pages site-config endpoint), both of which require the `pages` repository
-// permission (write for the cname toggle). `administration:write` is NOT
-// sufficient — live-fire #6657 proved PUT /pages 403s "Resource not accessible by
-// integration" while the minted token held administration:write but no pages
-// grant. repositories:["soleur"] + a 15-min TTL bound the blast radius to one repo.
+// (the Pages site-config endpoint). PUT /pages (the cname toggle) requires BOTH
+// `administration:write` AND `pages:write` — NEITHER alone is sufficient. Verified
+// empirically on the live jikig-ai/soleur installation (#6657): a token with only
+// pages:write → 403, only administration:write → 403, both → 204. (GitHub's REST
+// docs do not surface the fine-grained requirement for this endpoint, so this was
+// confirmed by direct token-minting probes, not the docs.) repositories:["soleur"]
+// + a 15-min TTL bound the blast radius to one repo.
 const REISSUE_TOKEN_PERMISSIONS: Record<string, string> = {
+  administration: "write",
   pages: "write",
 };
 
