@@ -128,10 +128,16 @@ still does not work:
   `knowledge-base/project/learnings/test-failures/2026-07-18-pipefail-grep-q-early-match-sigpipe-flakes-drift-guards.md`
   — and the same file already applies the herestring workaround at `workspaces-cutover.sh:154`.
 
+<!-- lint-infra-ignore start -->
+<!-- Descriptive prose about a DEFECT's symptom, not a prescribed human step: it states what the
+     operator would READ in the run log when the gate fires. The remediation is entirely in-script
+     (emit_freeze_holders before die) and runs under the existing workflow_dispatch — no human
+     action is prescribed anywhere in this bullet. -->
 - **G4-c:** the straggler holders are never **logged**. When G4 does fire, the operator gets
   "a straggler still holds the mount" with no PID/path — reproducing the exact
   undiagnosable-abort failure that #6604 just fixed for C1. The holders must be emitted before
   `die`, mirroring `emit_verify_diff`.
+<!-- lint-infra-ignore end -->
 
 - **Repoint consequence (why this was worse than a verify abort):** `inngest-redis.service`
   declares `RequiresMountsFor=/mnt/data` and holds the AOF open. Had C1 passed, `umount "$MOUNT"`

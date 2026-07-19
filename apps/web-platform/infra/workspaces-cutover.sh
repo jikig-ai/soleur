@@ -293,9 +293,12 @@ _quiesce_list() {
 }
 
 # ensure_lsof — G4 is fail-CLOSED, so `lsof` must exist. Mirrors ensure_aws (idempotent, installs
-# on demand). `lsof` is provisioned by no repo artifact on the RUNNING host (web-1 carries
-# lifecycle{ ignore_changes = [user_data] }), so the cloud-init addition covers FUTURE hosts only
-# and this IS the real delivery.
+# on demand). This is the SOLE delivery mechanism for `lsof`, on every host: web-1 carries
+# lifecycle{ ignore_changes = [user_data] } so cloud-init cannot reach the running host, and the
+# cloud-init package list was NOT extended for future hosts either — the web render sits ~78 B
+# under its base64gzip budget (plugins/soleur/test/cloud-init-user-data-size.test.ts), and adding
+# ` lsof` + a rationale comment consumed all but 2 bytes of that margin, which then failed on CI's
+# zlib. A 2-byte margin is luck, not headroom. Do NOT re-add it without first re-measuring.
 # OPERATOR NOTE: like ensure_aws, this runs in BOTH arms, so a `dry_run=true` rehearsal is NOT
 # host-side-effect-free the FIRST time — it may apt-get install lsof (additive, no service restart).
 # Called PRE-freeze beside ensure_aws (NOT inside freeze_writers): an apt-get inside the freeze
