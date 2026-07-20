@@ -121,10 +121,14 @@ IMPERATIVE_RES = tuple(
         r"\bmount(?:s|ing|ed)?\b",                                    # mount(s|ing|ed)
         r"\battach(?:es|ing|ed)?\s+the\s+volume\b",                   # attach the volume
         r"\bverif(?:y|ies|ied)\b.*?\bprivate\b.*?\bip\b",             # verify … private … IP
-        # -target … apply, anchored on the TOOL like every sibling above. Without
-        # the anchor this was the only imperative with no tool prefix, so a bare
-        # `-target=` cited beside the workflow name `apply-*.yml` matched (#6771).
-        r"\b(?:terraform|tofu|opentofu)\b.*?-target\b.*?\bappl(?:y|ies|ied)\b",
+        # -target … apply. Deliberately NOT anchored on terraform/tofu/opentofu,
+        # unlike the siblings above (ADR: infra-sentinel detection semantics).
+        # Anchoring was measured to silence 41 corpus lines, ~40% of them GENUINE
+        # human steps — "a FULL operator apply", "the operator applies the new
+        # resource manually" — because the natural phrasing omits the tool name.
+        # False positive = author friction; false negative = a non-technical
+        # operator meets an un-automated infra step. Resolve toward sensitivity.
+        r"-target\b.*?\bappl(?:y|ies|ied)\b",
     )
 )
 

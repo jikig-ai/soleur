@@ -482,19 +482,25 @@ EOF
 )"
 run_case "F8 .yaml long-form filename PASSES" 0 "$f"
 
-# F9 — isolates the TOOL ANCHOR on the `-target` imperative. No filename here,
-# so filename neutralization cannot clear it: only requiring a
-# terraform/tofu/opentofu token can. Without the anchor, prose describing a
-# `-target=` line next to CI "applies" flags as a human step. This case is the
-# ONLY mechanical detector of the anchor being reverted — a mutation battery
-# showed every other case stays green without it. Do not drop this case.
+# F9 — POSITIVE CONTROL WITHOUT THE TOKEN `terraform`. Lifted verbatim from
+# knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md.
+#
+# This is the case whose ABSENCE let a bad fix through: anchoring the `-target`
+# imperative on terraform/tofu/opentofu adjacency was measured to silence 41
+# corpus lines, ~40% of them genuine human steps like this one — and every
+# other positive control here contains the literal word "terraform", so the
+# suite stayed green while the sentinel lost its teeth. A human-run apply is
+# routinely phrased WITHOUT naming the tool. Do not drop this case, and do not
+# add a tool anchor without making it RED first.
 f="$(mkcase <<'EOF'
-# Plan
+# Cutover runbook
 
-The operator adds a `-target=` line so the dispatch applies only that resource.
+This maintenance-window apply is a **FULL operator apply** (not the per-PR CI
+`-target` path), so it ALSO lands the resources the dark-launch merge-apply
+deliberately excludes.
 EOF
 )"
-run_case "F9 bare -target beside 'applies' needs a tool anchor" 0 "$f"
+run_case "F9 tool-token-free 'FULL operator apply' STILL FAILS" 1 "$f"
 
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).

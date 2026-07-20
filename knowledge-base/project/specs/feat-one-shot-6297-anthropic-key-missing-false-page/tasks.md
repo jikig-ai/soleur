@@ -99,7 +99,6 @@ Issue: #6297 · Branch: `feat-one-shot-6297-anthropic-key-missing-false-page` ·
       actually reads) and `prd_terraform` as `TF_VAR_ANTHROPIC_ADMIN_KEY` (Terraform's input). A
       `prd_terraform`-only paste never reaches the cron and would leave the tracker TRANSIENT
       forever. Use the 6-row actor table in §Operator Action.
-<!-- lint-infra-ignore start -->
 <!--
   Deferred-orchestrator prose. This describes the CONTENTS of a FUTURE IaC PR that
   is deliberately not opened: it cannot merge before the key exists (a no-default
@@ -131,7 +130,6 @@ Issue: #6297 · Branch: `feat-one-shot-6297-anthropic-key-missing-false-page` ·
       **Filed as #6765**, carrying all three elements plus the ADR-065 merge-order gate
       (secret-in-`prd_terraform`-first, IaC-second) and the `anthropic-admin-key-6297.sh`
       close criterion.
-<!-- lint-infra-ignore end -->
 
 ## Phase 5 — Records
 
