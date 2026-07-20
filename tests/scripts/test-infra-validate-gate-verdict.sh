@@ -273,6 +273,92 @@ BINDINGS
   fi
 fi
 
+# ---------------------------------------------------------------------------
+# A RED MAIN MUST REACH AN OPERATOR (#6766, F4).
+#
+# The push-to-main trigger is worth nothing on its own: without a consumer, a
+# red main is a red square nobody is looking at, which is #6766's complaint
+# RELOCATED rather than fixed. No other workflow covers this one —
+# post-merge-monitor.yml is scoped to workflow "CI" AND `[bot-fix]` commits, and
+# main-health-monitor.yml re-runs scripts/test-all.sh, which explicitly excludes
+# this workflow's heavy jobs. `notify-main-red` is the consumer; these
+# assertions are what stop it being deleted as dead weight.
+notify_job=$(awk '/^  notify-main-red:$/{f=1} f&&/^  [a-z][a-z0-9-]*:$/&&!/^  notify-main-red:$/{exit} f' <<<"$wf_code")
+
+if [[ -z "$notify_job" ]]; then
+  fail=$((fail + 1)); echo "[FAIL] no notify-main-red job — a red main reaches no operator" >&2
+else
+  pass=$((pass + 1)); echo "[ok] notify-main-red job exists"
+
+  # Must fire on aggregator failure, and only for push-to-main.
+  if grep -Eq "^[[:space:]]+if:[[:space:]]*failure\(\)[[:space:]]*&&[[:space:]]*github\.event_name[[:space:]]*==[[:space:]]*'push'[[:space:]]*$" <<<"$notify_job"; then
+    pass=$((pass + 1)); echo "[ok] notify-main-red fires on failure() && push"
+  else
+    fail=$((fail + 1)); echo "[FAIL] notify-main-red is not gated on failure() && github.event_name == 'push'" >&2
+  fi
+
+  # It must depend on the aggregator, or failure() has nothing to observe.
+  if grep -Eq '^[[:space:]]+needs:[[:space:]]*\[[^]]*infra-validate-required[^]]*\]' <<<"$notify_job"; then
+    pass=$((pass + 1)); echo "[ok] notify-main-red needs infra-validate-required"
+  else
+    fail=$((fail + 1)); echo "[FAIL] notify-main-red does not need: infra-validate-required" >&2
+  fi
+
+  # Without issues: write the gh calls 403 and the job reds silently-uselessly.
+  if grep -Eq '^[[:space:]]+issues:[[:space:]]*write[[:space:]]*$' <<<"$notify_job"; then
+    pass=$((pass + 1)); echo "[ok] notify-main-red grants issues: write"
+  else
+    fail=$((fail + 1)); echo "[FAIL] notify-main-red does not grant issues: write" >&2
+  fi
+
+  # SHARED ISSUE IDENTITY with main-health-monitor.yml. Dedupe here is by label
+  # and the auto-close lives in that workflow's `Close issue on success` step,
+  # which selects by `ci/main-broken` alone. A renamed label would open a P1
+  # that nothing ever closes — so the label set is load-bearing, not cosmetic.
+  #
+  # Scoped to the `gh issue create` invocation specifically. A job-wide grep is
+  # satisfied by the `gh issue list --label "ci/main-broken"` dedupe query even
+  # after the CREATE call has been relabelled — which is the same
+  # assertion-matches-the-wrong-line failure this suite exists to prevent.
+  create_call=$(awk '/gh issue create/{f=1} f' <<<"$notify_job")
+  if [[ -z "$create_call" ]]; then
+    fail=$((fail + 1)); echo "[FAIL] notify-main-red never calls gh issue create" >&2
+  else
+    for lbl in 'ci/main-broken' 'priority/p1-high'; do
+      if grep -Eq -- "--label[[:space:]]+\"${lbl}\"" <<<"$create_call"; then
+        pass=$((pass + 1)); echo "[ok] notify-main-red creates the issue with ${lbl}"
+      else
+        fail=$((fail + 1)); echo "[FAIL] gh issue create does not apply ${lbl} (breaks shared dedupe/auto-close)" >&2
+      fi
+    done
+  fi
+
+  # Dedupe before create, or every red push opens a duplicate P1. The dedupe
+  # query must select on the SAME label the create call applies.
+  if grep -Eq -- 'gh issue list' <<<"$notify_job" \
+     && grep -Eq -- '--label "ci/main-broken"' <<<"$notify_job" \
+     && grep -Eq -- 'gh issue comment' <<<"$notify_job"; then
+    pass=$((pass + 1)); echo "[ok] notify-main-red dedupes onto the existing open ci/main-broken issue"
+  else
+    fail=$((fail + 1)); echo "[FAIL] notify-main-red does not dedupe on ci/main-broken (needs gh issue list --label + gh issue comment)" >&2
+  fi
+
+  # The auto-close counterpart must still exist in main-health-monitor.yml.
+  # This assertion is what makes the shared identity a real contract rather
+  # than a comment: if that step is ever dropped, these P1s become immortal.
+  MHM="$REPO_ROOT/.github/workflows/main-health-monitor.yml"
+  if [[ -f "$MHM" ]]; then
+    mhm_code=$(grep -vE '^[[:space:]]*#' "$MHM")
+    if grep -Eq 'gh issue close' <<<"$mhm_code" && grep -Eq -- '--label "ci/main-broken"' <<<"$mhm_code"; then
+      pass=$((pass + 1)); echo "[ok] main-health-monitor.yml still auto-closes ci/main-broken"
+    else
+      fail=$((fail + 1)); echo "[FAIL] main-health-monitor.yml no longer auto-closes ci/main-broken — notify-main-red's P1s would never close" >&2
+    fi
+  else
+    fail=$((fail + 1)); echo "[FAIL] main-health-monitor.yml is missing — the shared issue lifecycle is broken" >&2
+  fi
+fi
+
 # The early-return that WAS the defect must be gone. `$DIRS == "[]"` followed
 # by `exit 0` in the aggregator is the literal F1 shape. Reads wf_code (see the
 # stripping rationale above) so the aggregator's own comment, which quotes the

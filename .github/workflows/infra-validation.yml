@@ -456,6 +456,106 @@ jobs:
         run: |
           bash scripts/infra-validate-gate-verdict.sh "$DETECT" "$VALIDATE" "$DEPLOY" "$DIRS" "$SUITE_RELEVANT"
 
+  # #6766, F4. WITHOUT THIS JOB A RED MAIN REACHES NO OPERATOR, and the push
+  # arm above buys nothing but a red square nobody is looking at.
+  #
+  # Verified by exhaustion at the time of writing — every candidate consumer
+  # was checked and none covers this workflow:
+  #   - post-merge-monitor.yml consumes workflow_run + failure, but is scoped to
+  #     workflow "CI" AND `[bot-fix]` commits.
+  #   - there is no `gh run list --status failure` poller, and no Inngest /
+  #     Sentry / BetterStack CI-run monitor.
+  #   - operator-digest never reads workflow runs.
+  #   - main-health-monitor.yml RE-RUNS scripts/test-all.sh rather than
+  #     observing run conclusions — and test-all.sh states outright
+  #     `(ci-deploy.test.sh runs in infra-validation.yml.)`, so this workflow's
+  #     heavy jobs are explicitly NOT covered by it.
+  # #6766's silence would therefore have been RELOCATED, not fixed.
+  #
+  # ISSUE IDENTITY IS DELIBERATELY SHARED WITH main-health-monitor.yml — same
+  # `ci/main-broken` + `priority/p1-high` + `type/bug` labels, same title, same
+  # milestone. That is not laziness, it is the whole mechanism: dedupe here is
+  # by label, and main-health-monitor's `Close issue on success` step closes
+  # whatever open `ci/main-broken` issue it finds. Sharing the identity means
+  # this job inherits BOTH halves of that lifecycle for free. A new label would
+  # open a P1 nobody ever auto-closes.
+  #
+  # push-only: on a PR the red aggregator already blocks the merge and is
+  # visible in the checks UI, so an issue would be pure noise.
+  notify-main-red:
+    needs: [infra-validate-required]
+    if: failure() && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or comment the ci/main-broken P1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          EXISTING=$(gh issue list \
+            --label "ci/main-broken" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty' 2>/dev/null || true)
+
+          if [[ -n "$EXISTING" ]]; then
+            echo "Open tracking issue already exists: #$EXISTING. Adding comment."
+            COMMENT="Infra Validation is RED on main as of $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+            COMMENT="${COMMENT}"$'\n\n'"Commit: ${COMMIT_SHA}"
+            COMMENT="${COMMENT}"$'\n'"Run: ${RUN_URL}"
+            gh issue comment "$EXISTING" --body "$COMMENT"
+            exit 0
+          fi
+
+          gh label create "ci/main-broken" \
+            --description "Main branch CI is failing" \
+            --color "B60205" \
+            --force 2>/dev/null || true
+
+          # Body built with echo, not a heredoc: heredocs break YAML literal
+          # blocks (same constraint main-health-monitor.yml documents).
+          {
+            echo "## Main branch infra validation is failing"
+            echo ""
+            echo "\`infra-validate-required\` reported a terminal FAILURE on a push to main."
+            echo "This is the fail-closed aggregator for the Infra Validation workflow —"
+            echo "the terraform matrix and the cross-file drift guards in"
+            echo "\`deploy-script-tests\`. Those suites are NOT covered by"
+            echo "\`scripts/test-all.sh\`, so main-health-monitor.yml will not detect this."
+            echo ""
+            echo "### Actions required"
+            echo ""
+            echo "1. Open the run below and read the \`::error::\` line from"
+            echo "   \`scripts/infra-validate-gate-verdict.sh\` — it names the failing axis"
+            echo "   (detect-changes, validate, or deploy-script-tests)."
+            echo "2. Fix forward or revert the offending merge."
+            echo "3. Re-run the workflow on main; this issue is auto-closed by"
+            echo "   main-health-monitor.yml once main is green again."
+            echo ""
+            echo "### Run details"
+            echo ""
+            echo "- **Workflow:** Infra Validation (\`infra-validate-required\`)"
+            echo "- **Run:** ${RUN_URL}"
+            echo "- **Commit:** ${COMMIT_SHA}"
+            echo "- **Detected:** $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > /tmp/issue-body.md
+
+          gh issue create \
+            --title "CI: main branch tests failing" \
+            --body-file /tmp/issue-body.md \
+            --label "ci/main-broken" \
+            --label "priority/p1-high" \
+            --label "type/bug" \
+            --milestone "Post-MVP / Later"
+
+          echo "::error::Infra Validation is red on main. P1 issue created."
+
   deploy-script-tests:
     # Gated on suite_relevant, NOT on `directories` (#6766). This job runs the
     # cross-file drift guards over several non-terraform paths, so keying it on
