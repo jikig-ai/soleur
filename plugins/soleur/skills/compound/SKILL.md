@@ -212,7 +212,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
 8. **Rule budget count.** After deviation analysis, get the always-loaded verdict from the linter, then measure the registry statistics the linter does not compute.
 
-   **[lint-agents-rule-budget.py](../../../../scripts/lint-agents-rule-budget.py) is the authority and the pre-commit reject. This step does NOT restate its thresholds — it runs it and quotes the verdict.** Restating the numbers here is exactly how they went stale (issue #6461: this rubric claimed a reject value the linter had not used for months, and the wrong measurement method besides). If a threshold matters, read it from the linter. Agreement across every restatement site is enforced by `scripts/lint-agents-compound-sync.sh`.
+   **[lint-agents-rule-budget.py](../../../../scripts/lint-agents-rule-budget.py) is the authority and the pre-commit reject. This step does NOT restate its thresholds — it runs it and quotes the verdict.** Restating the numbers here is exactly how they went stale (issue #6461: this rubric claimed a reject value the linter had not used for months, and the wrong measurement method besides). If a threshold matters, read it from the linter. Agreement across every restatement site is enforced by [lint-agents-compound-sync.sh](../../../../scripts/lint-agents-compound-sync.sh).
 
    Emit rule-application telemetry (records that the byte-cap / why-single-line policy ran — see AGENTS.md `cq-agents-md-why-single-line`):
 
@@ -266,7 +266,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    Append warnings:
    - If the linter reported **`[WARN]`** — the payload is approaching the ceiling, and this is the tier where remediation still has room to work, so act on it now rather than waiting for the reject:
      - Apply the placement gate (see Route Learning to Definition) and the discoverability litmus (`wg-every-session-error-must-produce-either`) **before adding any new rule**. Already-enforced and domain-scoped insights MUST route to a skill/agent, NOT `AGENTS.core.md`.
-     - Retire an existing rule via `scripts/retired-rule-ids.txt` (rule IDs are immutable — retire, never renumber or reuse).
+     - Retire an existing rule via [retired-rule-ids.txt](../../../../scripts/retired-rule-ids.txt) (rule IDs are immutable — retire, never renumber or reuse).
      - Demote `wg-*` class-specific rules from `AGENTS.core.md` to `AGENTS.rest.md`. Per CPO sign-off PR #3496, **only `wg-*` may be demoted — never `hr-*`**. Before demoting any `wg-*`, verify loader-class fit: `grep -n 'DOCS_RE=' -A 25 .claude/hooks/session-rules-loader.sh` — if the rule fires on docs-only sessions but `AGENTS.rest.md` does not load on docs-only, KEEP it in core.
      - When trimming `**Why:**` lines to fit, preserve per-issue mechanism labels (the text after each `#N`); strip redundant prose only. Correct: `**Why:** #2618 per-command-ack; #2880 non-interactive exec.` Over-trimmed: `**Why:** #2618; #2880.` (loses the per-issue mechanism distinction downstream readers use to map a rule to its triggering incident class).
    - If the linter reported **`[REJECT]`** — the commit is already blocked. Shrink is mandatory before anything else lands; apply the same remediation ladder above, and do not attempt to add a rule first.

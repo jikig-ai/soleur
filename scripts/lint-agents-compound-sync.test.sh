@@ -20,8 +20,9 @@
 #   T8: PER_RULE_CAP bumped alone   -> every PER_RULE_CAP site named  [coverage]
 #   T9: B_ALWAYS_WARN bumped alone  -> every WARN site named          [coverage]
 #
-# Isolation: each case builds a throwaway tree via `mktemp -d` and points the
-# guard at it via LINT_AGENTS_SYNC_ROOT. Nothing here touches the real repo.
+# Isolation: each case builds a throwaway tree under a single trap-owned root
+# (see new_root below) and points the guard at it via LINT_AGENTS_SYNC_ROOT.
+# Nothing here touches the real repo.
 #
 # Sizing note: the guard is a table-driven loop, so exercising several sites of
 # the SAME symbol is one code path with different array data and proves little
@@ -41,6 +42,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$SCRIPT_DIR/lint-agents-compound-sync.sh"
+
+# Single owning trap for every fixture tree this suite allocates (ADR-129).
+# Cases carve subdirectories out of this root rather than each calling
+# `mktemp -d` unowned, so a mid-suite death cannot leak trees.
+TMPROOT="$(mktemp -d -t lint-agents-compound-sync-test.XXXXXXXX)"
+trap 'rm -rf "$TMPROOT"' EXIT
+new_root() { mktemp -d "$TMPROOT/case.XXXXXX"; }
 
 PASS=0
 FAIL=0
@@ -175,7 +183,7 @@ run_guard() {
 # if this reds, the fixture is broken and the other cases prove nothing.
 # -----------------------------------------------------------------------------
 t1_in_sync_passes() {
-  local root; root="$(mktemp -d)"
+  local root; root="$(new_root)"
   make_fixture_tree "$root"
   run_guard "$root"
   assert_exit "T1 in-sync fixture exits 0" "0" "$GUARD_RC"
@@ -193,7 +201,7 @@ t1_in_sync_passes() {
 # #6461 sit undetected across five artifacts.
 # -----------------------------------------------------------------------------
 t2_linter_only_bump_names_every_site() {
-  local root; root="$(mktemp -d)"
+  local root; root="$(new_root)"
   make_fixture_tree "$root"
   sed -i "s/^B_ALWAYS_REJECT = .*/B_ALWAYS_REJECT = 99000/" "$root/scripts/lint-agents-rule-budget.py"
   run_guard "$root"
@@ -218,7 +226,7 @@ t2_linter_only_bump_names_every_site() {
 # comparison. Naming the unit is what keeps the suspicion alive.
 # -----------------------------------------------------------------------------
 t3_single_site_drift_names_unit() {
-  local root; root="$(mktemp -d)"
+  local root; root="$(new_root)"
   make_fixture_tree "$root"
   sed -i "s/^const MAX_ALWAYS_LOADED_BYTES = .*/const MAX_ALWAYS_LOADED_BYTES = 12345;/" \
     "$root/apps/web-platform/server/inngest/functions/cron-compound-promote.ts"
@@ -241,7 +249,7 @@ t3_single_site_drift_names_unit() {
 # retires the suspicion.
 # -----------------------------------------------------------------------------
 t4_empty_extraction_fails_closed() {
-  local root; root="$(mktemp -d)"
+  local root; root="$(new_root)"
   make_fixture_tree "$root"
   cat > "$root/AGENTS.docs.md" <<'EOF'
 # Docs sidecar
@@ -262,7 +270,7 @@ EOF
 # missing path, not a bare `grep: No such file or directory`.
 # -----------------------------------------------------------------------------
 t5_missing_file_fails_closed() {
-  local root; root="$(mktemp -d)"
+  local root; root="$(new_root)"
   make_fixture_tree "$root"
   rm -f "$root/scripts/compound-promote.sh"
   run_guard "$root"
@@ -283,7 +291,7 @@ t5_missing_file_fails_closed() {
 # re-added literal must be caught.
 # -----------------------------------------------------------------------------
 t6a_deleted_invocation_is_caught() {
-  local root; root="$(mktemp -d)"
+  local root; root="$(new_root)"
   make_fixture_tree "$root"
   # Strip the whole invocation line, keeping everything else intact.
   sed -i '/lint-agents-rule-budget\.py/d' \
@@ -296,7 +304,7 @@ t6a_deleted_invocation_is_caught() {
 }
 
 t6b_dropped_stderr_redirect_is_caught() {
-  local root; root="$(mktemp -d)"
+  local root; root="$(new_root)"
   make_fixture_tree "$root"
   # Drop the load-bearing 2>&1 from the INVOCATION only. The fixture
   # deliberately keeps two decoys the real SKILL.md also has -- a prose sentence
@@ -321,7 +329,7 @@ t6b_dropped_stderr_redirect_is_caught() {
 }
 
 t6c_readded_threshold_literal_is_caught() {
-  local root; root="$(mktemp -d)"
+  local root; root="$(new_root)"
   make_fixture_tree "$root"
   # Re-add exactly the kind of prose that went stale in #6461, inside step 8's
   # tier-decision region.
@@ -340,7 +348,7 @@ t6c_readded_threshold_literal_is_caught() {
 # must not regress what it already did.
 # -----------------------------------------------------------------------------
 t7_sentinel_desync_still_caught() {
-  local root; root="$(mktemp -d)"
+  local root; root="$(new_root)"
   make_fixture_tree "$root"
   sed -i 's/rule-threshold: 115/rule-threshold: 999/' \
     "$root/plugins/soleur/skills/compound/SKILL.md"
@@ -364,7 +372,7 @@ t7_sentinel_desync_still_caught() {
 # is what makes a dropped row loud.
 # -----------------------------------------------------------------------------
 t8_per_rule_cap_covers_every_site() {
-  local root; root="$(mktemp -d)"
+  local root; root="$(new_root)"
   make_fixture_tree "$root"
   sed -i "s/^PER_RULE_CAP = .*/PER_RULE_CAP = 999/" "$root/scripts/lint-agents-rule-budget.py"
   run_guard "$root"
@@ -377,7 +385,7 @@ t8_per_rule_cap_covers_every_site() {
 }
 
 t9_warn_covers_every_site() {
-  local root; root="$(mktemp -d)"
+  local root; root="$(new_root)"
   make_fixture_tree "$root"
   sed -i "s/^B_ALWAYS_WARN = .*/B_ALWAYS_WARN = 29000/" "$root/scripts/lint-agents-rule-budget.py"
   run_guard "$root"
