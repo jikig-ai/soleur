@@ -567,6 +567,29 @@ describe("deadline-repin idempotency guard (#6781)", () => {
     expect(statutoryEmailCalls()).toHaveLength(0); // push path, not email
   });
 
+  it("T11b: a statutory push that reaches ZERO devices is surfaced", async () => {
+    // The guard removes an accidental self-heal. Before it, a failed push left
+    // the subscription un-pruned and the NEXT tick retried. Now the marker is
+    // already written, so nothing retries — an all-fail push is permanent
+    // silence on a legal clock while the step reports `pinged`. That must not
+    // be inferable only from a missing email; it has to page.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [statutoryRow()];
+    dbState.pushSubs["user-1"] = [
+      { id: "sub-1", endpoint: "https://push.example/1", p256dh: "k", auth: "a" },
+    ];
+    // Non-410: no prune, no self-heal.
+    webpushSendSpy.mockRejectedValue({ statusCode: 500 });
+
+    await runHandler();
+
+    expect(warnSilentFallbackSpy).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ op: "statutory-notify-zero-delivery" }),
+    );
+  });
+
   it("T12: the send path is SINGLE-RECIPIENT (R7 tripwire — do not delete)", async () => {
     // ─────────────────────────────────────────────────────────────────────
     // CONSTRAINT: statutory_repin_send is keyed (item_id, tick_key) — ITEM

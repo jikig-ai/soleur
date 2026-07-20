@@ -36,6 +36,7 @@ const {
   heartbeatSpy,
   warnSilentFallbackSpy,
   reportSilentFallbackSpy,
+  infoSilentFallbackSpy,
   ioOrder,
   dbState,
 } = vi.hoisted(() => {
@@ -62,6 +63,7 @@ const {
     heartbeatSpy: vi.fn(async (..._args: unknown[]) => undefined),
     warnSilentFallbackSpy: vi.fn(),
     reportSilentFallbackSpy: vi.fn(),
+    infoSilentFallbackSpy: vi.fn(),
     ioOrder,
     dbState,
   };
@@ -74,6 +76,10 @@ vi.mock("@/server/inngest/client", () => ({
 vi.mock("@/server/observability", () => ({
   warnSilentFallback: warnSilentFallbackSpy,
   reportSilentFallback: reportSilentFallbackSpy,
+  // The repin sweep counter (#6781) goes through the observability layer, not
+  // pino stdout — Vector keeps only level_int >= 40, so an info-level stdout
+  // line would never reach Better Stack.
+  infoSilentFallback: infoSilentFallbackSpy,
 }));
 
 vi.mock("@/server/notifications", () => ({
@@ -152,6 +158,17 @@ function makeBuilder(table: string) {
     inserting = true;
     return builder;
   });
+  // Send-marker insert (#6781) uses `.insert(...).select("id").single()`.
+  // Always a clean insert here: this suite is about step order and the probe
+  // chain, so the repin guard must never suppress. The dedicated
+  // cron-email-ingress-probe-repin-idempotency.test.ts owns 23505 behavior.
+  builder.single = async () => {
+    if (table === "statutory_repin_send") {
+      ioOrder.push("repin-marker-insert");
+      return { data: { id: "marker-1" }, error: null };
+    }
+    return { data: null, error: null };
+  };
   builder.then = (
     onFulfilled: (v: unknown) => unknown,
     onRejected?: (e: unknown) => unknown,
@@ -253,7 +270,11 @@ beforeEach(() => {
   dbState.assertRows = [{ id: "probe-row-1" }];
   dbState.assertError = null;
   rpcSpy.mockReset();
-  rpcSpy.mockImplementation(async () => dbState.purgeResult);
+  rpcSpy.mockImplementation(async (name: string) =>
+    name === "purge_statutory_repin_send"
+      ? { data: 0, error: null }
+      : dbState.purgeResult,
+  );
   notifySpy.mockClear();
   resendSendSpy.mockReset();
   resendSendSpy.mockResolvedValue({ data: { id: "email-1" }, error: null });
@@ -335,9 +356,18 @@ describe("cron-email-ingress-probe — deadline re-pin (acknowledge ≠ legal re
       dsarRow("overdue-1", "2026-05-11T00:00:00.000Z"), // floor -1 — PING (daily)
     ];
     const { result } = runHandler();
-    await result;
+    const resolved = await result;
 
     expect(notifySpy).toHaveBeenCalledTimes(5);
+
+    // #6781: the send-marker guard surfaces a suppression counter on the
+    // handler result. Every insert is clean in this suite's fake, so the
+    // count is 0 here — a NON-zero value in production is the signal that a
+    // second scheduler is live and double-firing.
+    expect(resolved.repinSuppressed).toBe(0);
+    expect(resolved.repinged).toBe(5);
+    // And each ping wrote its marker before dispatching.
+    expect(ioOrder.filter((e) => e === "repin-marker-insert")).toHaveLength(5);
     const pingedIds = notifySpy.mock.calls.map(
       (c) => (c[1] as { emailId: string }).emailId,
     );

@@ -296,7 +296,7 @@ export async function cronEmailIngressProbeHandler({
     // Per-run record via the observability layer, NOT pino stdout: Vector's
     // allowlist keeps only level_int >= 40, so an info-level stdout line would
     // never reach Better Stack and this counter would be invisible off-box.
-    infoSilentFallback({
+    infoSilentFallback(null, {
       feature: "email-triage",
       op: "deadline-repin-sweep-complete",
       message: "statutory deadline repin sweep finished",
