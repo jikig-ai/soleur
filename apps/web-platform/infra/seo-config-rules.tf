@@ -91,18 +91,18 @@
 # string `[email protected]` — the one element whose job is to show a copyable
 # address. With obfuscation off, it renders correctly with no source edit.
 #
-# ── PREREQUISITE: token scope — NOT YET SATISFIED AT MERGE ───────────────────
+# ── PREREQUISITE 1: token scope — SATISFIED 2026-07-20 ───────────────────────
 #
-# The `cloudflare.rulesets` alias token (var.cf_api_token_rulesets) does NOT
-# carry the Configuration-Rules permission. Verified by live probe:
+# The `cloudflare.rulesets` alias token (var.cf_api_token_rulesets) originally
+# did NOT carry the Configuration-Rules permission. Verified by live probe:
 #
 #   GET /zones/<zone>/rulesets/phases/http_config_settings/entrypoint      → 403
 #   GET /zones/<zone>/rulesets/phases/http_request_dynamic_redirect/...    → 200
 #
-# Until that permission is appended, THIS RESOURCE 403s ON APPLY. The widen is
-# tracked in issue #6755 (browser transport was unavailable in the session that
-# authored this file, so it could not be completed inline); the decision test
-# behind it is ADR-128.
+# `Config Rules:Edit` (zone, soleur.ai) was appended to the token on 2026-07-20
+# and the same probe now returns 200. Note the UI spells the permission
+# `Config Rules`, NOT "Configuration Rules". The decision test behind widening
+# the existing token rather than minting an alias is ADR-128.
 #
 # Per that decision test the EXISTING token is widened rather than a new
 # `cf_api_token_config_rules` alias minted. Widening moves no secret material
@@ -118,13 +118,32 @@
 # account-level rulesets endpoint must all return non-403. See ADR-128 for the
 # probe set and issue #6755 for the recorded results.
 #
-# One further probe belongs in that set, for a reason `terraform plan` cannot
-# cover: a `kind = "zone"` ruleset OWNS its phase's entrypoint, which is a
-# whole-list replacement. `plan` reports "1 to add" because the resource is
-# absent from STATE — it cannot see rules created through the Cloudflare
-# dashboard. If this zone already has dashboard-created Configuration Rules,
-# the first apply silently deletes them. Enumerate the entrypoint (expect 404,
-# or an empty rules array) before applying.
+# ── PREREQUISITE 2: entrypoint adoption — NOT SATISFIED. DO NOT APPLY ────────
+#
+# A `kind = "zone"` ruleset OWNS its phase's entrypoint, which is a whole-list
+# replacement. `plan` reports "1 to add" because the resource is absent from
+# STATE — it cannot see rules created through the Cloudflare dashboard.
+#
+# That probe was run on 2026-07-20 and it FAILED CLOSED. The entrypoint already
+# exists (a21ac79d368f425a95c895c43a090d57, version 1, last updated
+# 2026-03-17) and carries one live dashboard-created rule:
+#
+#   description: "Flexible SSL for web platform"
+#   expression:  (http.host eq "app.soleur.ai")
+#   action:      set_config { ssl: "flexible" }
+#
+# This resource declares exactly ONE rules block, so applying it as written
+# would delete that rule and drop app.soleur.ai to the zone-level SSL mode —
+# an outage-class regression on the web platform, invisible to `plan`.
+#
+# Before this resource may be applied it must ADOPT the existing rule:
+#   1. represent "Flexible SSL for web platform" as a second rules block here,
+#      AND
+#   2. `terraform import` ruleset a21ac79d368f425a95c895c43a090d57 into state
+#      so Terraform UPDATES the entrypoint rather than creating it.
+# Both halves are required: (1) alone still creates; (2) alone still deletes.
+# Doing so also retires the deliberate exactly-one-rule pin in
+# test/seo-config-rules.test.ts, which must become a two-rule pin.
 #
 # See:
 #   - knowledge-base/project/plans/2026-07-20-fix-gsc-404-cdn-cgi-email-protection-plan.md

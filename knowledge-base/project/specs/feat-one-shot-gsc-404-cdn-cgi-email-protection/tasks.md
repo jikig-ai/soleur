@@ -114,25 +114,61 @@ merge-triggered apply rather than just this resource.
 
 - [x] 2.9.1 Update the `cf_api_token_rulesets` description in `variables.tf` (it IS the
       scope ledger) and the `cloudflare.rulesets` consumer list + decision rule in `main.tf`.
-- [ ] 2.9.2 **BLOCKED** — append Configuration Rules (zone, soleur.ai) to the token in the
-      Cloudflare dashboard. Browser transport unavailable this session (Playwright MCP
-      disconnected; `agent-browser` daemon wedged across 3 attempts — `os error 11`, then
-      `os error 2`, then a 100s timeout). Classified `attempted-blocked-on-tool`, **not**
-      operator-only. Tracked with full attempt evidence + resume recipe in **#6755**.
-- [ ] 2.9.3 Run the mandatory retained-scope probe set (4 probes: config_settings,
-      dynamic_redirect, cache_settings, account rulesets) — see ADR-128 for the exact
-      commands. All must be non-403; a 404 on an entrypoint is a PASS (phase exists, no
-      ruleset yet), only 403 is a failure. Widening mutates a live credential four
-      production concerns depend on — this converts that risk into a pre-merge gate.
-- [ ] 2.9.3b **Entrypoint-enumeration probe** (added at review — the one unverified
-      destructive edge). A `kind = "zone"` ruleset OWNS its phase entrypoint, which is a
-      whole-list replacement, and `terraform plan` reports "1 to add" only because the
-      resource is absent from STATE — it cannot see rules created via the Cloudflare
-      dashboard. Before the first apply, `GET /zones/<zone>/rulesets/phases/
-      http_config_settings/entrypoint` with the widened token and confirm 404 or an empty
-      `result.rules` array. If it returns existing rules, STOP: applying would silently
-      delete them. (This probe needs the widened token, so it rides on 2.9.3.)
+- [x] 2.9.2 **DONE 2026-07-20** — appended `Config Rules:Edit` (zone, soleur.ai) to
+      `terraform-soleur-ai-rulesets` via the Cloudflare dashboard. Browser transport
+      (Playwright MCP) worked on re-attempt this session, so #6755's premise no longer
+      holds — this was NOT operator-only. Two notes for any future re-scope:
+      - The UI labels the permission **`Config Rules`**, not "Configuration Rules".
+        ADR-128's "probe, never trust the permission label" warning is why this was
+        found by enumerating the option list rather than by typing a guessed name.
+      - The dashboard edit form **prefills all existing permission rows** and exposes an
+        `Add more` button, so this path is an APPEND, not a replace. Verified by reading
+        the form's DOM values before submit and by the pre-submit summary page, which
+        listed all 6 originals plus the new one.
+- [x] 2.9.3 Retained-scope probe set — **4/4 PASS** (2026-07-20, post-widen):
+      | probe | before | after |
+      |---|---|---|
+      | `zones/$ZONE/rulesets/phases/http_config_settings/entrypoint` | 403 | **200** |
+      | `zones/$ZONE/rulesets/phases/http_request_dynamic_redirect/entrypoint` | 200 | 200 |
+      | `zones/$ZONE/rulesets/phases/http_request_cache_settings/entrypoint` | 200 | 200 |
+      | `accounts/$ACCT/rulesets` | 200 | 200 |
+      The widen took effect and nothing was lost — no scope replaced.
+- [ ] 2.9.3b **Entrypoint-enumeration probe — FAILED. STOP. DO NOT APPLY.**
+      The probe did exactly what it was added to do. `http_config_settings` returned
+      **200, not 404**: the entrypoint already exists (`a21ac79d368f425a95c895c43a090d57`,
+      `kind=zone`, version 1, last updated 2026-03-17) and **carries one live
+      dashboard-created rule Terraform has no knowledge of**:
+
+      ```
+      description: "Flexible SSL for web platform"
+      expression:  (http.host eq "app.soleur.ai")
+      action:      set_config { ssl: "flexible" }
+      enabled:     true
+      ref:         dcb85b75bc3c4f4aa2a8c13a080bf854
+      ```
+
+      `cloudflare_ruleset.seo_config_settings` is `kind = "zone"` on this same phase, so
+      it OWNS the entrypoint as a whole-list replacement, and it declares exactly one
+      `rules` block. A first apply would therefore **silently delete the Flexible SSL
+      rule**, dropping `app.soleur.ai` to the zone-level SSL mode. If that mode is
+      Full/Strict and the origin has no valid cert, the web platform goes down. This is
+      an outage-class risk, not a lint.
+
+      `terraform plan` still reports "1 to add" and cannot see any of this — the exact
+      gap recorded in `knowledge-base/project/learnings/
+      2026-07-20-a-plan-can-prescribe-a-resource-its-credential-cannot-create.md`.
+
+      **Resolution required before apply — needs an operator/plan decision:** adopt the
+      existing rule rather than clobber it. That means (a) representing the Flexible SSL
+      rule as a second `rules` block in `seo-config-rules.tf`, and (b) `terraform import`
+      of ruleset `a21ac79d368f425a95c895c43a090d57` into state so Terraform UPDATES the
+      entrypoint instead of creating it. Both halves are required — (a) without (b) still
+      creates, (b) without (a) still deletes on the next plan. Note this also invalidates
+      `test/seo-config-rules.test.ts`'s deliberate exactly-one-rule pin, which must become
+      a two-rule pin that also locks the Flexible SSL rule.
 - [ ] 2.9.4 Paste the four status codes into the PR body, then mark ready.
+      **Blocked on 2.9.3b** — 2.9.3's codes are green and ready to paste, but the PR must
+      not go ready while an apply would delete a live prod SSL rule.
 
 **Do not mark PR #6746 ready until 2.9.2–2.9.4 are green.**
 
