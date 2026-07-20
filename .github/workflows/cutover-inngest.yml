@@ -7,6 +7,8 @@
 #   op=verify-wiped-volume → POST /hooks/inngest-wiped-volume-verify  (async; opt-in destructive proof)
 #   op=backup              → hcloud API create_image (no webhook; pre-cutover server snapshot) (#5509)
 #   op=inventory           → GET  /hooks/inngest-inventory            (full-state baseline for before/after diff) (#5509)
+#   op=registry-probe      → GET  /hooks/inngest-registry-probe       (read-only: has an SDK registered functions against 10.0.1.40?) (#6617)
+#   op=doublefire-probe    → GET  /hooks/inngest-doublefire-probe     (read-only: has 10.0.1.40 actually EXECUTED cron runs?) (#6617)
 # See knowledge-base/engineering/operations/runbooks/inngest-server.md
 # § "Cutover procedure". The live cutover is operator-triggered; this workflow is
 # the no-SSH mechanism, NOT an auto-run.
@@ -26,11 +28,18 @@ on:
           - verify-wiped-volume
           - backup
           - inventory
+          - registry-probe
+          - doublefire-probe
           - execute
           - quiesce-web
           - arm
           - verify
           - rollback
+      cron_period_seconds:
+        description: "Bucket width for the exactly-once check (op=doublefire-probe / op=verify). MUST be <= the SHORTEST registered cron period, hour-aligned. Default 3600."
+        required: false
+        type: string
+        default: "3600"
   # push trigger scoped to this file forces GitHub to register the workflow in
   # the Actions UI (workflow_dispatch-only workflows can take 30+ min to appear).
   push:
@@ -104,6 +113,15 @@ jobs:
           # its own Redis independent of LB weight (DI-C3). No SSH; the deploy webhook fans
           # out to these private IPs over the private net.
           CUTOVER_HOSTS: "10.0.1.10"
+          # #6617 — bucket width for the exactly-once check, consumed by
+          # op=doublefire-probe AND op=verify 2.6. Previously read from a name that
+          # was neither a dispatch input nor a step env var, so it was pinned at the
+          # 3600 default, its validity guard was unreachable, and both arms printed a
+          # remediation ("re-dispatch with CUTOVER_CRON_PERIOD_SECONDS set to …") that
+          # the operator could not perform without editing and merging this file.
+          # Error direction matters: a period LARGER than the real shortest cron
+          # collapses legitimate runs into one bucket and reports a PHANTOM double-fire.
+          CUTOVER_CRON_PERIOD_SECONDS: ${{ inputs.cron_period_seconds }}
         run: |
           set -euo pipefail
           BASE="https://deploy.soleur.ai/hooks"
@@ -167,6 +185,117 @@ jobs:
               COUNT=$(echo "$BODY" | jq 'length')
               IDS=$(echo "$BODY" | jq -r '[.[].reminder_id] | join(",")')
               echo "::notice::$COUNT still-armed reminder(s): [$IDS]"
+              ;;
+
+            registry-probe)
+              # #6617 — STANDALONE read-only registry probe. Same hook op=execute 2.0
+              # calls, but this arm STOPS after reading: no capture, no quiesce, no
+              # secret write, no state transition. It exists so double-scheduler state
+              # is provable BEFORE the maintenance window rather than inside it —
+              # previously the only route to this signal was op=execute, which then
+              # proceeds to capture + quiesce.
+              #
+              # Proxied over the private net by the web host: the runner cannot reach
+              # 10.0.1.40 directly (deny-all-public, SEC-H2), which is why CUTOVER_HOSTS
+              # is irrelevant to this arm.
+              #
+              # Single-shot (no transport retry), mirroring op=execute 2.0: a verdict
+              # here is diagnostic, not gating, so a transient is re-run by dispatching
+              # again rather than by an in-arm loop.
+              SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+              rm -f /tmp/registry-probe-body
+              CODE=$(curl -s --max-time 30 -o /tmp/registry-probe-body -w '%{http_code}' \
+                -X GET \
+                -H "X-Signature-256: sha256=$SIG" \
+                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                "$BASE/inngest-registry-probe" || echo "000")
+              BODY=$(cat /tmp/registry-probe-body 2>/dev/null || echo "")
+              if [[ "$CODE" != "200" ]]; then
+                CAUSE="${BODY//[$'\n\r']/ }"
+                echo "::error::registry-probe returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
+              fi
+              if ! echo "$BODY" | jq -e 'type=="object" and has("registry_empty")' >/dev/null 2>&1; then
+                echo "::error::registry-probe did not return a {registry_empty,function_count,function_ids} object"; echo "$BODY"; exit 1
+              fi
+              REG_EMPTY=$(echo "$BODY" | jq -r '.registry_empty')
+              REG_COUNT=$(echo "$BODY" | jq -r '.function_count // 0')
+              # Counts + ids ONLY (AC-NOBODY) — never a payload.
+              REG_IDS=$(echo "$BODY" | jq -r '[.function_ids[]?] | join(",")')
+              echo "::notice::registry-probe: registry_empty=$REG_EMPTY function_count=$REG_COUNT ids=[$REG_IDS]"
+              if [[ "$REG_EMPTY" == "false" ]]; then
+                echo "::warning::registry-probe: the dedicated host (10.0.1.40) has $REG_COUNT REGISTERED function(s). Pre-cutover this is UNEXPECTED — it means an SDK has registered against the dark host. Run op=doublefire-probe to establish whether those registrations have also EXECUTED runs (registration alone is not proof of a double-fire)."
+              else
+                echo "::notice::registry-probe: dedicated registry is EMPTY — no SDK has registered functions against 10.0.1.40."
+              fi
+              ;;
+
+            doublefire-probe)
+              # #6617 — STANDALONE read-only double-fire probe. The STRONGER instrument:
+              # registry-probe proves an SDK REGISTERED against the dark host;
+              # this proves the dark host has actually EXECUTED cron runs — the harm
+              # itself rather than a proxy for it. Read-only, stops after reading.
+              #
+              # Same bucketing invariant as op=verify 2.6: group every run by
+              # (functionID, floor(startedAt / CRON_PERIOD)); a bucket with >1 run is a
+              # DOUBLE-FIRE. There is no per-tick schedule field in v1.19.4, so the
+              # invariant derives from startedAt alone (ADR-100 Decision 7).
+              CRON_PERIOD="${CUTOVER_CRON_PERIOD_SECONDS:-3600}"
+              if ! [[ "$CRON_PERIOD" =~ ^[1-9][0-9]*$ ]]; then
+                echo "::error::doublefire-probe CRON_PERIOD invalid ('$CRON_PERIOD') — set CUTOVER_CRON_PERIOD_SECONDS to a positive integer ≤ the SHORTEST registered cron period (hour-aligned)."; exit 1
+              fi
+              echo "::warning::doublefire-probe CRON_PERIOD=${CRON_PERIOD}s is applied to ALL functions (P2-c). The verdict is SOUND ONLY IF every registered cron period ≥ ${CRON_PERIOD}s AND hour-aligned. If any cron fires faster, re-dispatch with CUTOVER_CRON_PERIOD_SECONDS set to the SHORTEST registered period before trusting the result."
+              SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+              rm -f /tmp/doublefire-probe-body
+              CODE=$(curl -s --max-time 60 -o /tmp/doublefire-probe-body -w '%{http_code}' \
+                -X GET \
+                -H "X-Signature-256: sha256=$SIG" \
+                -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+                -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+                "$BASE/inngest-doublefire-probe" || echo "000")
+              BODY=$(cat /tmp/doublefire-probe-body 2>/dev/null || echo "")
+              if [[ "$CODE" != "200" ]]; then
+                CAUSE="${BODY//[$'\n\r']/ }"
+                echo "::error::doublefire-probe returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
+              fi
+              if ! echo "$BODY" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
+                echo "::error::doublefire-probe did not return a {runs:[...]} object"; echo "$BODY"; exit 1
+              fi
+              RUN_COUNT=$(echo "$BODY" | jq '.runs | length')
+              echo "::notice::doublefire-probe: $RUN_COUNT run(s) in window; bucketing by (functionID, floor(startedAt / ${CRON_PERIOD}s))"
+              DUPES=$(echo "$BODY" | jq -c --argjson period "$CRON_PERIOD" '
+                [ .runs[] | { fn: .functionID, bucket: ((.startedAt | fromdateiso8601) / $period | floor) } ]
+                | group_by([.fn, .bucket])
+                | map(select(length > 1))
+                | map({ functionID: .[0].fn, bucket: .[0].bucket, count: length }) ')
+              DUPE_COUNT=$(echo "$DUPES" | jq 'length')
+              # ADVERSE is set by either NO-GO branch and consumed at the END of the
+              # arm, AFTER the scope caveat prints. This gives the operator the full
+              # picture (runs + dupes + caveat) in ONE dispatch *and* a red run — an
+              # earlier revision exited 0 to buy the former, which was a false trade:
+              # nothing is truncated by deferring the exit to the last statement.
+              ADVERSE=0
+              if [[ "$DUPE_COUNT" -gt 0 ]]; then
+                echo "::error::doublefire-probe: DOUBLE-FIRE detected — $DUPE_COUNT (functionID, tick-bucket) group(s) with >1 run. Details (ids + counts only, AC-NOBODY):"
+                echo "$DUPES" | jq -c '.[]'
+                ADVERSE=1
+              elif [[ "$RUN_COUNT" -gt 0 ]]; then
+                echo "::error::doublefire-probe: the dedicated host (10.0.1.40) has EXECUTED $RUN_COUNT cron run(s), with no duplicate tick-bucket. Pre-cutover, ANY run on the dark host means its scheduler is live against a registered SDK — treat this as a live double-scheduler condition even without a duplicate bucket, because the colocated scheduler's runs are NOT in this dataset."
+                ADVERSE=1
+              else
+                echo "::notice::doublefire-probe: ZERO runs on the dedicated host — its scheduler has executed nothing in the window."
+              fi
+              # Scope caveat carried VERBATIM from op=verify 2.6 (P2-a / DI-C3).
+              echo "::notice::doublefire-probe SCOPE CAVEAT (P2-a / DI-C3): the doublefire-probe reads ONLY the dedicated host's (10.0.1.40) run history. It is NOT a web-2 double-fire detector — a surviving weight-0 web-2 scheduler fires against prod Postgres via its OWN loopback backend PRE-repoint, whose runs never appear on the dedicated host. The operator's MANDATORY web-2 quiesce (op=execute SEAM, web-2 freeze/recreate) is the control against a web-2 double-fire — this probe cannot substitute for it."
+              # NO-GO must be red. Every sibling arm in this workflow exits non-zero on
+              # its adverse verdict (re-arm precondition, re-arm PARTIAL, wiped-volume
+              # verify); a green run whose annotation says "DOUBLE-FIRE detected" is the
+              # #6374 shape — an operator surface presenting an adverse state as
+              # non-adverse. The plan cites "workflow run summary" as this failure
+              # mode's alert route, and that route is the run's conclusion.
+              if [[ "$ADVERSE" -eq 1 ]]; then
+                echo "::error::doublefire-probe verdict: NO-GO — do not proceed to the cutover until the above is explained."; exit 1
+              fi
               ;;
 
             rearm)
