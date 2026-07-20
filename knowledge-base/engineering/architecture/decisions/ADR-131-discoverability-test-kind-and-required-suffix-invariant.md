@@ -6,7 +6,7 @@ issue: 6774
 supersedes: null
 ---
 
-# ADR-130: `discoverability_test.kind`, and the `*-required` suffix as an enforceable invariant
+# ADR-131: `discoverability_test.kind`, and the `*-required` suffix as an enforceable invariant
 
 ## Context
 
@@ -95,10 +95,20 @@ than the one direction 3 was rejected for.
 Guardrails 4 and 5 together are what make this not a downgrade: they verify that
 a real emitter exists and that the command actually names it.
 
-### 2. The `*-required` suffix is promoted from convention to enforced invariant
+### 2. The `*-required` suffix will be promoted from convention to enforced invariant
 
-A parity test asserts, for every `jobs:` child whose effective context name ends
-in `-required`:
+> **Status at this ADR's merge (PR A): clause 2 is DECIDED but NOT YET ENFORCED.**
+> `required-job-suffix-parity.test.ts` does not exist yet, and
+> `infra-validate-required` appears in none of the three ruleset surfaces. The
+> enforcement lands in the follow-up PR (the ruleset flip, #6480 / #6766), gated on
+> first observing the context post a terminal state on a live PR. PR A ships only
+> the *enabling* change — the workflow routing that makes the context postable.
+> Until that follow-up merges, `.github/workflows/infra-validation.yml` correctly
+> states `STILL NOT REQUIRED IN THIS PR`. Read the clause below as the decision
+> being recorded, not as a description of the repository's current state.
+
+A parity test **will assert**, for every `jobs:` child whose effective context name
+ends in `-required`:
 
 - **membership** in all three surfaces — `infra/github/ruleset-ci-required.tf`,
   `scripts/ci-required-ruleset-canonical-required-status-checks.json`, and
@@ -109,14 +119,54 @@ in `-required`:
 **No exemption allowlist is introduced.** An exemption list would recreate the
 defect class: a guard certifying that the members it chose to look at are fine.
 The enforcement is only honest once `infra-validate-required` is genuinely
-required, which is why the ruleset flip (#6480, #6766) ships alongside it rather
-than after.
+required, which is why the ruleset flip (#6480, #6766) ships *together with* the
+parity test in the follow-up PR rather than before it.
 
-### Caveat, recorded
+### Caveats, recorded
 
-The aggregator observes **job** results, so a `continue-on-error` step inside
-`deploy-script-tests` stays invisible to it. This is a pre-existing property of
-`infra-validation.yml`, not a regression introduced here.
+**The aggregator observes job results, not step results.** A `continue-on-error`
+step is therefore invisible to it. The concrete instance is **not** in
+`deploy-script-tests` (that job has none) — it is the `plan:` job, and the
+situation there is worse than step-granularity: `plan` is not in
+`infra-validate-required`'s `needs:` at all, so a failing `terraform plan` never
+reds the gate. That is pre-existing (`origin/main`'s aggregator also had
+`needs: [detect-changes, validate]`), not a regression introduced here. Stated
+plainly: a green `infra-validate-required` certifies **validate + deploy-script-tests**,
+not `plan`.
+
+**`check-secrets` is ungated and unobserved.** It is deliberately left ungated on
+cost grounds (a checkout-free `[[ -n ]]` presence test), but it is also absent from
+the aggregator's `needs:`, so its result cannot affect the verdict on any event.
+Benign today — its only consumer, `plan`, is now `pull_request`-only.
+
+## Consequences
+
+**Positive.** A run-triggered emitter can now be declared honestly instead of
+forcing either a false FAIL or a rewrite that certifies a different property.
+Guardrails 4 and 5 make `run-log` assert things the `live-probe` path never
+asserted (that a real emitter exists, and that the command names it), so the new
+kind is a net tightening on that axis rather than an escape hatch.
+
+**Negative / accepted.** The contract now lives in two places — the bash runtime in
+`preflight/SKILL.md` and the TypeScript mirror — and every future guardrail must be
+added to both, in the same order. The parity guard added at review time is what
+keeps them honest; without it, mutating the bash left the entire TS suite green.
+Dropping the workflow's `paths:` filter also puts a 12-minute job on the critical
+path of any PR matching the (now wider) `SUITE_RE`.
+
+**Deferred.** Enrolling recorded `run-log` markers into the follow-through sweeper
+is scoped out to #6792, re-evaluated when a second plan declares `kind: run-log`.
+Until then the marker is recorded but nothing downstream consumes it.
+
+## References
+
+- #6774 — Check 10 cannot verify run-triggered emitters (closed by PR A)
+- #6766, #6480 — the `*-required` suffix and the ruleset flip (closed by the follow-up PR)
+- #6792 — deferred follow-through enrollment for `kind: run-log`
+- `plugins/soleur/skills/preflight/SKILL.md` §Check 10 — the production runtime
+- `plugins/soleur/test/lib/discoverability-test-parser.ts` — the TypeScript mirror
+- `knowledge-base/project/learnings/2026-04-27-preflight-security-gates-skip-vs-fail-defaults.md`
+  — SKIP only when truly indeterminate
 
 ## Alternatives Considered
 

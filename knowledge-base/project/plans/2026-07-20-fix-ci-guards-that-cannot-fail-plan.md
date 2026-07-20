@@ -39,7 +39,7 @@ revision: v2 (post 2-agent plan-review — architecture-strategist + spec-flow-a
   verbatim — helper-split message drift is a known dashboard-regression class.
 - `git diff --name-only` includes deletions; guardrail 4 avoids the class entirely by
   grepping the tree at HEAD rather than iterating the diff path list.
-- ADR-130 re-derived from a **freshly-fetched** `origin/main` (not the branch base), per
+- ADR-131 re-derived from a **freshly-fetched** `origin/main` (not the branch base), per
   the stale-ordinal failure mode.
 
 ## Overview
@@ -69,7 +69,7 @@ found that the first draft's own aggregator would have shipped green on the exac
 
 ## Delivery shape: two PRs, workflow-first
 
-**PR A** — workflow routing (#6766 Gap 1) + the whole of #6774 + ADR-130.
+**PR A** — workflow routing (#6766 Gap 1) + the whole of #6774 + ADR-131.
 Closes **#6774**. The ruleset is untouched, so there is no window in which a context is
 required but not posted.
 
@@ -192,7 +192,7 @@ core of the not-a-downgrade argument.
 
 ### ADR
 
-**Create ADR-130 — "`discoverability_test.kind`: live-probe vs run-log, and the
+**Create ADR-131 — "`discoverability_test.kind`: live-probe vs run-log, and the
 `*-required` suffix as an enforceable convention."** Two coupled decisions, one record:
 
 1. The observability contract gains an explicit **kind discriminator**. A gate that
@@ -212,7 +212,7 @@ pre-existing property of `infra-validation.yml`, not a regression.
 
 Ordinal 130 is **provisional** (next free after ADR-129); `/ship`'s ADR-Ordinal Collision
 Gate re-verifies against `origin/main`. On renumber, sweep
-`grep -rn 'ADR-130' knowledge-base/project/{plans,specs}/feat-one-shot-6766-6774-ci-guards-cannot-fail/`
+`grep -rn 'ADR-131' knowledge-base/project/{plans,specs}/feat-one-shot-6766-6774-ci-guards-cannot-fail/`
 plus the ADR body **and AC13**.
 
 ### C4 views
@@ -233,7 +233,7 @@ completeness mandate:
 
 ### Sequencing
 
-Both decisions are true at merge of PR B. ADR-130 ships in **PR A** with
+Both decisions are true at merge of PR B. ADR-131 ships in **PR A** with
 `status: accepted` and a one-line note that clause 2's enforcement lands in PR B.
 
 ## Alternatives Considered
@@ -411,7 +411,7 @@ marker is present at HEAD in `apps/web-platform/infra/workspaces-cutover.sh` (R1
 
 ### Phase 8 — ADR, deferral, docs
 
-8.1 Write ADR-130 per §Architecture Decision via `/soleur:architecture`.
+8.1 Write ADR-131 per §Architecture Decision via `/soleur:architecture`.
 8.2 File the follow-through-enrollment deferral issue (§Non-Goals), labels `chore` +
 `priority/p3-low` (verified present).
 8.3 ~~CHANGELOG entry.~~ **Plan error, corrected at /work: there is no root
@@ -615,7 +615,7 @@ reading `learnings/` or `specs/`; no new artifact distribution surface). The
 | `scripts/infra-validate-gate-verdict.sh` | A | Allow-list aggregator verdict (F1), mirroring `tenant-integration-gate-verdict.sh` |
 | `tests/scripts/test-infra-validate-gate-verdict.sh` | A | Unit test for the above |
 | `plugins/soleur/test/fixtures/preflight-check-10/09-run-log-pass.md` … `16-marker-without-run-log.md` | A | 8 fixtures for guardrails 2–7 |
-| `knowledge-base/engineering/architecture/decisions/ADR-130-*.md` | A | ADR (ordinal provisional) |
+| `knowledge-base/engineering/architecture/decisions/ADR-131-*.md` | A | ADR (ordinal provisional) |
 | `plugins/soleur/test/required-job-suffix-parity.test.ts` | B | `*-required` membership + postability detector |
 
 ## Acceptance Criteria
@@ -650,7 +650,7 @@ reading `learnings/` or `specs/`; no new artifact distribution surface). The
   `bun test plugins/soleur/test/observability-schema-parity.test.ts` green (`CANONICAL.length === 5`).
 - **AC12** No column-0 `kind:` or `marker:`:
   `grep -cE '^(kind|marker):' plugins/soleur/skills/plan/references/plan-issue-templates.md plugins/soleur/skills/plan/SKILL.md` → `0` each.
-- **AC13** `ADR-130-*.md` exists with `## Decision` and `## Alternatives Considered` naming
+- **AC13** `ADR-131-*.md` exists with `## Decision` and `## Alternatives Considered` naming
   directions 1 and 3. *(On `/ship` renumber, sweep this AC with the plan/tasks — §Sharp Edges.)*
 - **AC14** `SENSITIVE_PATH_RE` untouched:
   `grep -cF "SENSITIVE_PATH_RE='^(apps/web-platform" plugins/soleur/skills/preflight/SKILL.md plugins/soleur/skills/deepen-plan/SKILL.md`
@@ -744,7 +744,7 @@ reading `learnings/` or `specs/`; no new artifact distribution surface). The
 | Bot PRs get a synthetic green for the new context (#6049) | Medium | PR B requires the `ALLOWED_PATHS` justification comment; the composite action `exit 1`s outside `{weakness-digest.md, rule-metrics.json}`. |
 | Column-0 `kind:` breaks schema parity | Medium | AC12 greps explicitly; AC11 runs the parity test. |
 | `scripts/post-bot-statuses.sh` is stale | Low | Verified at review to have **zero callers**. Out of scope, noted so its silence is not mistaken for correctness. |
-| ADR-130 ordinal collision | Low | `/ship`'s collision gate re-verifies; §Sharp Edges carries the renumber sweep. |
+| ADR-131 ordinal collision | Low | `/ship`'s collision gate re-verifies; §Sharp Edges carries the renumber sweep. |
 
 ## Decision Challenges
 
@@ -837,7 +837,7 @@ none contradicted.
 | `tenant-integration-gate-verdict.sh` is a fail-closed allow-list | confirms | `:26` allow row, `:31-32` catch-all, `:14-17` rationale |
 | #6458 / #6745 / #4148 | MERGED PRs, roles match | `gh pr view` |
 | #6480 open; #5780 / #6049 / #6454 / #6446 / #4012 / #5145 / #6604 closed issues, roles match | confirms | `gh issue view` |
-| ADR-130 is next free | confirms | derived from **freshly-fetched `origin/main`**; highest existing is ADR-129 |
+| ~~ADR-130 is next free~~ → **ADR-131** | **contradicted, then corrected at review** | Held at plan time (highest was ADR-129). Falsified mid-flight: `ADR-130-cloudflare-token-widen-vs-narrow-alias.md` landed on `origin/main` via #6746 **after** the derivation. Renumbered 130→131 and swept per §Sharp Edges. This is the sibling-lands-mid-flight case the plan predicted — the ordinal is a claim with a shelf life, not a fact. |
 | Labels `chore`, `priority/p3-low` exist | confirms | `gh label list` |
 | AGENTS rule IDs cited are active | confirms | `hr-observability-as-plan-quality-gate`, `hr-no-ssh-fallback-in-runbooks`, `cq-test-fixtures-synthesized-only`, `hr-weigh-every-decision-against-target-user-impact` all present in `AGENTS.md` |
 | Marker resolvable outside planning artifacts | confirms | `apps/web-platform/infra/workspaces-cutover.sh`, `workspaces-luks-loopback.test.sh` |
@@ -924,7 +924,7 @@ none contradicted.
 - **Self-describing counts rot silently.** Five anchors say "8 decision states / 8 fixtures";
   AC8's `≥12 rows` would leave every one of them wrong and green. AC20 gates them.
 - **On ADR renumber, sweep the planning artifacts too:**
-  `grep -rn 'ADR-130' knowledge-base/project/{plans,specs}/feat-one-shot-6766-6774-ci-guards-cannot-fail/`
+  `grep -rn 'ADR-131' knowledge-base/project/{plans,specs}/feat-one-shot-6766-6774-ci-guards-cannot-fail/`
   — otherwise AC13 verifies a nonexistent file.
 - **A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/
   placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6.** Fill it

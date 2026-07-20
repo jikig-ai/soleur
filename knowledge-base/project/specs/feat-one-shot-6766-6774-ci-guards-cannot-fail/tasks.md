@@ -85,7 +85,7 @@ Threshold: `single-user incident` → `requires_cpo_signoff: true`, `user-impact
 
 ## Phase 8 — ADR, deferral, docs (PR A)
 
-- [ ] 8.1 Write ADR-130 via `/soleur:architecture` (both clauses + the job-vs-step `continue-on-error` caveat; directions 1 and 3 in Alternatives Considered)
+- [ ] 8.1 Write ADR-131 via `/soleur:architecture` (both clauses + the job-vs-step `continue-on-error` caveat; directions 1 and 3 in Alternatives Considered)
 - [ ] 8.2 File the follow-through-enrollment deferral issue (labels `chore`, `priority/p3-low`)
 - [ ] 8.3 CHANGELOG entry
 - [ ] 8.4 PR A body: `Closes #6774`, `Ref #6766`, `Ref #6480`
