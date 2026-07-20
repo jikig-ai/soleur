@@ -2,7 +2,7 @@
 # Sourced destroy-guard gate for the web-2 RETIREMENT (#6538) — the operator-local
 # 5-target plan of B6.2, NOT any CI path.
 #
-# EXTRACTED + SOURCED (mirrors web2-recreate-gate.sh): the B6.3 gate invocation AND
+# EXTRACTED + SOURCED (mirrors inngest-host-replace-gate.sh): the B6.3 gate invocation AND
 # tests/scripts/test-destroy-guard-counter-web-platform.sh both source this file and
 # call web2_retire_gate directly, so the bytes the operator runs are the bytes under
 # test (no re-derived inline copy to drift).
@@ -13,13 +13,14 @@
 # hcloud_volume.workspaces["web-2"], plus an in-place UPDATE of
 # hcloud_firewall_attachment.web (dropping web-2 from server_ids).
 #
-# NOT web2-recreate with an extra address. The two gates are OPPOSITES on the data
-# volume: recreate REQUIRES it to survive, retire REQUIRES it to go. Grading a
-# retire plan against web2_allow aborts on the volume destroy that IS the
-# retirement; grading a recreate plan against web2_retire_allow permits destroying
-# the data the recreate exists to preserve.
+# An allow-set is specific to ONE operation's contract. This one REQUIRES the data
+# volume because destroying it IS the retirement; a scoped host -replace needs the
+# OPPOSITE (the volume must survive, and any change to it must abort). The sibling
+# recreate allow-set that encoded that opposite contract was deleted with the web-2
+# dispatch sweep (#6575, 2026-07-20). The warning it carried still binds any future
+# host gate: never grade one operation's plan against another operation's set.
 #
-# NO [ack-destroy] BYPASS (mirrors web2-recreate-gate.sh): a destructive prod host
+# NO [ack-destroy] BYPASS (mirrors registry-host-replace-gate.sh): a destructive prod host
 # retirement is authorized by an explicit per-command operator go-ahead
 # (hr-menu-option-ack-not-prod-write-auth), never a commit trailer. An ack could
 # also permit a web-1 delete, so the precision guard carries no override.
@@ -110,8 +111,9 @@ web2_retire_gate() {
   # retirement CREATES nothing — any create means the plan births a host/volume,
   # i.e. a web-2 REPLACE (delete+create, in-allow-set so oos=0 misses it) that
   # resurrects the host this gate exists to destroy (the #6416 reborn-unattached
-  # hazard). Mirrors the per-PR path's host_creates HALT + the recreate gate's
-  # web2_server_replaced guard so the retire gate is not the weakest sibling.
+  # hazard). Mirrors the per-PR path's host_creates HALT so the retire gate is not
+  # the weakest sibling. (It also mirrored the recreate gate's replaced-counter guard;
+  # that gate was deleted with #6575.)
   hcreates=$(echo "$counts" | jq -r '.host_creates')
 
   # Parse-validate every counter. A jq null/empty would evaluate false in the

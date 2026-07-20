@@ -572,8 +572,6 @@ jobs:
       - name: Run cross-pipeline web-1-swap concurrency parity drift-guard (#6060)
         run: bash apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh
 
-      - name: Run deploy-status fan-out verify retry tests (#6051/#6040)
-        run: bash apps/web-platform/infra/deploy-status-fanout-verify.test.sh
 
       - name: Run web-1 known-good tag resolver semver-guard tests (#6147)
         run: bash apps/web-platform/infra/resolve-web1-known-good-tag.test.sh
@@ -581,8 +579,6 @@ jobs:
       - name: Run firewall port-9000 deny drift-guard
         run: bash apps/web-platform/infra/firewall-9000-deny.test.sh
 
-      - name: Run §(c) LB-weight gate shape-only tests
-        run: bash apps/web-platform/infra/lb-weight-gate.test.sh
 
       # Host monitor family (#5417 registered these; resource-monitor +
       # cat-deploy-state were pre-existing orphan suites CI never ran).

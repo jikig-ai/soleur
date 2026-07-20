@@ -66,23 +66,6 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
     "no destroy; fail-closed on the merge path would wedge every merge (#6285)",
   ],
   [
-    "warm-standby",
-    // The ADDITIVE apply (job `warm_standby`). Its -target list (:788-796) does not NAME
-    // hcloud_server.web — but do NOT reason from that: terraform -target pulls dependencies,
-    // hcloud_server_network.web["web-2"] carries `server_id = hcloud_server.web[each.key].id`
-    // (network.tf:41), and the workflow's own :451 says warm-standby "pulls the server
-    // transitively" and recommends it as THE remediation for a missing web-2. So it CAN
-    // create the server, and it CAN need stock.
-    //
-    // It is excluded anyway, on the sound ground: its own destroy guard (:820-830) asserts
-    // resource_deletes==0 && nested_deletes==0 && reboot_updates==0, so it is structurally
-    // incapable of destroying first. A stock miss there is a failed create with the fleet
-    // intact — recoverable, not a strand. Identical to the `inngest-host` reasoning below.
-    // It is also the ESCAPE PATH the gate's own abort message points operators at — gating it
-    // would close the exit the tripwire exists to open.
-    "additive-only by its own destroy guard (resource_deletes==0, :820-830) — it CAN pull hcloud_server.web transitively (:451), but can never destroy first, so a stock miss is recoverable, not a strand; it is also the gate's own escape path",
-  ],
-  [
     "inngest-host",
     // Additive net-new host (job `inngest_host`). It does create a server, so stock can
     // still make the apply fail — but nothing is destroyed first, so a failed create leaves
@@ -102,15 +85,21 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
   ],
 ]);
 
-// Sentinel: 9 options today (manual-rerun, warm-standby, web-2-recreate, inngest-host,
-// inngest-host-replace, registry-host-replace, registry-region-migrate,
-// git-data-host-replace, workspaces-luks-cutover). `>=` so adding an option raises the count
+// Sentinel: 7 options today (manual-rerun, inngest-host, inngest-host-replace,
+// registry-host-replace, registry-region-migrate, git-data-host-replace,
+// workspaces-luks-cutover).
+// reason: 9 -> 7. warm-standby and web-2-recreate were REMOVED with the web-2
+// dispatch sweep (#6575, 2026-07-20) after web-2 retired; both hard--targeted
+// addresses that no longer exist. This floor is lowered to match a real deletion,
+// NOT to make a failing assertion pass. `>=` so adding an option raises the count
 // without a brittle exact-match edit — the coverage assertion is what enforces correctness. This
 // only guards the parser silently collapsing to zero, which would make every assertion below vacuous.
-const MIN_APPLY_TARGET_OPTIONS = 9;
+const MIN_APPLY_TARGET_OPTIONS = 7;
 
 // Sentinel for the same reason, on the other side of the ledger.
-const MIN_GATED_TARGETS = 5;
+// reason: 5 -> 4. web-2-recreate was the fifth gated target; its job and its gate
+// (tests/scripts/lib/web2-recreate-gate.sh) were both deleted by #6575.
+const MIN_GATED_TARGETS = 4;
 
 type Job = { if?: string; steps?: Array<{ name?: string; run?: string }> };
 
@@ -197,8 +186,8 @@ describe("stock-preflight coverage over apply_target options (#6453 AC3)", () =>
   });
 
   test("no excluded target carries the gate (the allowlist states the truth)", () => {
-    // Guards the allowlist drifting into a lie: if someone gates warm-standby, the reason
-    // recorded here ("additive, no destroy") is no longer why it is excluded.
+    // Guards the allowlist drifting into a lie: if someone gates an excluded target, the
+    // reason recorded here ("additive, no destroy") is no longer why it is excluded.
     const contradictions = [...EXCLUSION_ALLOWLIST.keys()].filter((o) => {
       const found = jobFor(o);
       return found ? callsGate(found[1]) : false;
