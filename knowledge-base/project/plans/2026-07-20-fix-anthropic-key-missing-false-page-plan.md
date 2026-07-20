@@ -686,11 +686,17 @@ merge, which is why the ordering is convenient but not required.
       path, and the query/auth-failure path (positive-liveness requirement), and `exit 0` appears on
       exactly one path.
 - [ ] **AC12 (P0 guard — echo isolation)** The probe's PASS condition is field-isolated and cannot be
-      satisfied by a quoted string in an issue/PR body. Both of the following appear in the script,
-      and the PASS branch requires **both**:
-      `"SOLEUR_CLAUDE_COST_DAILY":true` **and** `"component":"claude-cost"`.
+      satisfied by a quoted string in an issue/PR body. The PASS branch requires **both**
+      `SOLEUR_CLAUDE_COST_DAILY == true` **and** `component == "claude-cost"` as **decoded top-level
+      keys** of the log line — not as substrings of the row. In the shipped probe that is the single
+      `jq` predicate `select(.SOLEUR_CLAUDE_COST_DAILY == true and .component == "claude-cost")`.
       Negative control: running the probe against a window whose only matching rows are the webhook
       echo of this PR body must **not** exit 0.
+      > **Amended during the AC walk (see DC-4).** This AC originally demanded the two *byte-forms*
+      > of the literal `"component":"claude-cost"`. Review found substring matching defeatable by an
+      > embedded newline, so the code moved to the structural form above and this text follows it.
+      > Stated as a literal-substring criterion, this AC would now fail against a probe that is
+      > strictly harder to fool — the AC would be certifying the weaker property.
 - [ ] **AC13** The probe pins `--since 48h` (≤ the 3-day retention at `betterstack-log-query.md:85`).
 - [ ] **AC14** `secrets=` in the #6297 directive names **all five** required secrets, and every one is
       present in the sweeper's `env:` block — scope the check to that block, not the whole file:

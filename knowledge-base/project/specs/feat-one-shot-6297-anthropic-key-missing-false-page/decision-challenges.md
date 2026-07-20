@@ -85,3 +85,33 @@ post-mortem — where the assertion *"no creation API — vendor limit"* was its
 later Playwright run found a working "Create API key" form behind no human gate — the step is marked
 `automation-status: UNVERIFIED`. /work must attempt Playwright against `console.anthropic.com` and
 record `playwright-attempt:` evidence before any operator handoff text ships.
+
+---
+
+## DC-4 — AC12/4.2/5.2 text amended to follow the shipped code (Mechanical, applied)
+
+The plan specified field isolation as a **byte-form substring** match: `"component":"claude-cost"`
+matched in both its unescaped form (for `--grep` / `raw LIKE`) and its backslash-escaped form (for
+`grep -F` over JSONEachRow stdout). The shipped probe does not do that. It decodes `raw` once and
+requires both discriminators as **top-level JSON keys** in a single-pass `jq` filter that fails
+closed on trailing garbage.
+
+The change was forced by review, not by convenience. Two-stage byte matching was **defeatable by an
+embedded newline**: stage 1 materializes a `\n` inside `raw` as a real newline, stage 2 re-tokenizes
+on physical lines, so a forged line from *inside* a multi-line `raw` is evaluated as though it were a
+top-level log line — a false PASS that would auto-close #6297 with the key unminted. Reproduced
+end-to-end; see commit `b12cd46b8` and the committed learning file.
+
+**Decision: the AC text follows the code, rather than the code being held to the AC.** The shipped
+form is strictly stronger — it accepts a superset of nothing and rejects a superset of what the
+byte-form rejected — and it is mutation-proven (fixture 5c + arm 7 splits the filter back into two
+stages and requires the fixture to flip). Holding AC12 to its literal original wording would have
+had the AC certify the *weaker* property, which is the precise failure mode this PR spent its review
+budget removing.
+
+**Recorded rather than silently applied** because "spec follows code" is otherwise indistinguishable
+from rewriting the target after missing it. The distinguishing evidence here is the mutation arm: a
+code change made to dodge an AC cannot also make the guard demonstrably load-bearing.
+
+Amended: plan AC12; `tasks.md` 4.2 and 5.2. The `betterstack-log-query.md` runbook already shipped
+the structural wording and needed no change.

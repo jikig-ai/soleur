@@ -117,6 +117,11 @@ Issue: #6297 · Branch: `feat-one-shot-6297-anthropic-key-missing-false-page` ·
   web UI — the sanctioned non-technical path), and the imperative is `-target … appl…`
   matching the CI workflow FILENAME `apply-web-platform-infra.yml` — i.e. the sentinel
   matched the name of the very automation that makes this non-human.
+
+  REMOVE THIS REGION once #6771 lands (it narrows the imperative so a workflow
+  filename cannot satisfy it). A carve-out that outlives its cause is a permanent
+  blind spot in a P0 gate — this one exists only because the sentinel is currently
+  unable to tell a filename from a command.
 -->
 - [x] 4.11 File the IaC follow-up issue/PR stub (do **not** open it for merge). It must carry **three**
       things together: the no-default sensitive `variable`, the `doppler_secret` with
