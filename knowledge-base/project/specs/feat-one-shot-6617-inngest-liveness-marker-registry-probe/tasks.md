@@ -11,34 +11,34 @@ Three PRs, ordered A → B → C. Do not bundle.
 
 ### Phase A0: Preconditions
 
-- [ ] A0.1 Re-extract the three `_pf_scrub` bodies and confirm byte-identical
+- [x] A0.1 Re-extract the three `_pf_scrub` bodies and confirm byte-identical
       (`inngest-registry-probe.sh:64-69`, `inngest-doublefire-probe.sh:105-110`,
       `inngest-inventory.sh:206-211`)
-- [ ] A0.2 Confirm #6295 still open
+- [x] A0.2 Confirm #6295 still open
 
 ### Phase A1: RED
 
-- [ ] A1.1 Failing test: libpq keyword form → synthetic ref absent from **stdout and stderr**
+- [x] A1.1 Failing test: libpq keyword form → synthetic ref absent from **stdout and stderr**
       (fixture synthesized, never a real ref)
-- [ ] A1.2 Failing test: over-redaction control fed through a **real `_pf_scrub` call site**
+- [x] A1.2 Failing test: over-redaction control fed through a **real `_pf_scrub` call site**
       (GraphQL `errors[].message` text) → survives intact
-      - [ ] A1.2.1 Do NOT build the control from a `SOLEUR_*` marker — markers reach
+      - [x] A1.2.1 Do NOT build the control from a `SOLEUR_*` marker — markers reach
             `_pf_sanitize` (`:56-59`), never `_pf_scrub`
-- [ ] A1.3 Failing test: pairwise byte-identity across all three `_pf_scrub` bodies
-- [ ] A1.4 Confirm all three fail for the right reason
+- [x] A1.3 Failing test: pairwise byte-identity across all three `_pf_scrub` bodies
+- [x] A1.4 Confirm all three fail for the right reason
 
 ### Phase A2: GREEN
 
-- [ ] A2.1 Add a third `sed -E` rule requiring **≥2 co-occurring libpq keywords**
+- [x] A2.1 Add a third `sed -E` rule requiring **≥2 co-occurring libpq keywords**
       (a single-keyword rule makes A-AC2 and A-AC3 mutually unsatisfiable)
-- [ ] A2.2 Apply byte-identically to all three copies
-- [ ] A2.3 A1 tests green; sibling probe suites green
+- [x] A2.2 Apply byte-identically to all three copies
+- [x] A2.3 A1 tests green; sibling probe suites green
 
 ### Phase A3: Close out
 
-- [ ] A3.1 File the `_pf_scrub` shared-library extraction issue, upgrade trigger =
+- [x] A3.1 File the `_pf_scrub` shared-library extraction issue, upgrade trigger =
       "a fourth consumer appears"; record the number in the PR body
-- [ ] A3.2 PR body: `Closes #6295`
+- [x] A3.2 PR body: `Closes #6295`
 
 ---
 
@@ -46,35 +46,35 @@ Three PRs, ordered A → B → C. Do not bundle.
 
 ### Phase B1: RED
 
-- [ ] B1.1 Four **anchored** assertions (unanchored greps false-pass — `registry-probe`
+- [x] B1.1 Four **anchored** assertions (unanchored greps false-pass — `registry-probe`
       already appears 10× as the hook name `inngest-registry-probe`)
-      - [ ] B1.1.1 `^[[:space:]]+-[[:space:]]*registry-probe$`
-      - [ ] B1.1.2 `^[[:space:]]+registry-probe\)`
-      - [ ] B1.1.3 `^[[:space:]]+-[[:space:]]*doublefire-probe$`
-      - [ ] B1.1.4 `^[[:space:]]+doublefire-probe\)`
-- [ ] B1.2 Confirm all four return 0 today (fail RED correctly)
+      - [x] B1.1.1 `^[[:space:]]+-[[:space:]]*registry-probe$`
+      - [x] B1.1.2 `^[[:space:]]+registry-probe\)`
+      - [x] B1.1.3 `^[[:space:]]+-[[:space:]]*doublefire-probe$`
+      - [x] B1.1.4 `^[[:space:]]+doublefire-probe\)`
+- [x] B1.2 Confirm all four return 0 today (fail RED correctly)
 
 ### Phase B2: GREEN
 
-- [ ] B2.1 Add both ops to the `op` enum
-- [ ] B2.2 Case arm `registry-probe)` → `$BASE/inngest-registry-probe`, modelled on `enumerate`
-- [ ] B2.3 Case arm `doublefire-probe)` → `$BASE/inngest-doublefire-probe`
-- [ ] B2.4 Carry `op=verify` step 2.6's scope caveat verbatim into the doublefire summary
-- [ ] B2.5 Surface counts + verdict in the run summary in **both** directions
+- [x] B2.1 Add both ops to the `op` enum
+- [x] B2.2 Case arm `registry-probe)` → `$BASE/inngest-registry-probe`, modelled on `enumerate`
+- [x] B2.3 Case arm `doublefire-probe)` → `$BASE/inngest-doublefire-probe`
+- [x] B2.4 Carry `op=verify` step 2.6's scope caveat verbatim into the doublefire summary
+- [x] B2.5 Surface counts + verdict in the run summary in **both** directions
 
 ### Phase B3: Constraint verification
 
-- [ ] B3.1 `environment:` line byte-identical (pinned at `cutover-inngest-workflow.test.sh:389`)
-- [ ] B3.2 No `${{ inputs.op … }}` expression in either arm; file-wide count stays **1**
-- [ ] B3.3 Both curls carry `--max-time` (parity assertion `:55-58`)
-- [ ] B3.4 No retry loop — `for attempt in 1 2` count stays **3** (`:296-297`)
-- [ ] B3.5 No reminder capture, quiesce, Doppler secret write, or state transition
-- [ ] B3.6 Do not write the shell-remote-login word in a comment (AC-NOSSH `:170` is comment-blind)
-- [ ] B3.7 `cutover-inngest-workflow.test.sh` green
+- [x] B3.1 `environment:` line byte-identical (pinned at `cutover-inngest-workflow.test.sh:389`)
+- [x] B3.2 No `${{ inputs.op … }}` expression in either arm; file-wide count stays **1**
+- [x] B3.3 Both curls carry `--max-time` (parity assertion `:55-58`)
+- [x] B3.4 No retry loop — `for attempt in 1 2` count stays **3** (`:296-297`)
+- [x] B3.5 No reminder capture, quiesce, Doppler secret write, or state transition
+- [x] B3.6 Do not write the shell-remote-login word in a comment (AC-NOSSH `:170` is comment-blind)
+- [x] B3.7 `cutover-inngest-workflow.test.sh` green
 
 ### Phase B4: Close out
 
-- [ ] B4.1 File the counting-assertion tracking issue (the suite asserts a character census)
+- [x] B4.1 File the counting-assertion tracking issue (the suite asserts a character census)
 - [ ] B4.2 **Dispatch both ops standalone; record the results — this answers H4**
 - [ ] B4.3 Do NOT record an H4 verdict anywhere until B4.2's rows are read
 

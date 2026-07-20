@@ -57,3 +57,52 @@ replace decision is better made with the probe reading in hand than ahead of it.
 
 Live race noted: PR #6348 is draft and MERGEABLE. If it merges before PR C, PR C would be
 stranded merged-but-undelivered. This does not affect A or B.
+
+## B4.2 / B5 — the H4 double-scheduler answer (recorded 2026-07-20)
+
+Both standalone ops were dispatched against the branch. **One returned a verdict; one
+surfaced a pre-existing defect that had to be fixed before it could.**
+
+### `op=registry-probe` — ANSWERED (run 29729509511, success)
+
+```
+registry-probe: registry_empty=true function_count=0 ids=[]
+```
+
+**No SDK has registered functions against the dedicated host (10.0.1.40).** Its registry is
+empty. Corroborates #6488's 2026-07-15 finding that `INNGEST_CUTOVER_FLIP` is unset and
+`INNGEST_POSTGRES_URI` still points at the dark soleur-dev backend.
+
+Also confirms **B-AC6**: the run completed with no pending-approval state, i.e. the
+`environment:` expression evaluated to `''` for the new op — no reviewer gate was engaged.
+
+### `op=doublefire-probe` — BLOCKED, then fixed (run 29729623865, failure → HTTP 500)
+
+The dispatch returned HTTP 500. The host's own journald named the cause:
+
+```
+inngest-doublefire-probe: SOLEUR_INNGEST_PREFLIGHT_START op=verify-doublefire
+  host=soleur-web-platform window=2025-07-20T08:57:28Z..open page_ceiling=1000 deadline_s=50
+webhook: command output: jq: invalid JSON text passed to --argjson
+webhook: error occurred: exit status 2
+```
+
+The `page_ceiling=1000 deadline_s=50` in the START marker matches the current repo defaults,
+so the host copy was **not** stale — the defect is in the shipped code. `build_request_body`
+used `printf '%s'`, which emits zero bytes for an empty CSV, so `jq -R` emitted nothing and
+`--argjson fnids ""` aborted.
+
+**This is the DEFAULT path.** `op=verify` step 2.6 passes no `FUNCTION_IDS`, so the cutover's
+exactly-once double-fire check could never have produced a verdict. Fixed inline (one line,
+`printf '%s\n'`) with a test that calls `build_request_body` directly — every pre-existing
+test bypassed it, because the fixture seam returns before that function is reached.
+
+### Outstanding
+
+The doublefire reading itself is **not yet taken**. The host runs the deployed copy of
+`inngest-doublefire-probe.sh`; the fix reaches it via the post-merge infra-config push. Re-dispatch
+`op=doublefire-probe` after this merges and delivery lands, and record the run count there.
+
+**Do not read the registry result alone as "no double-scheduler."** An empty registry means
+nothing has registered *now*; it is not proof that nothing executed earlier. The doublefire
+probe is the instrument that proves the harm, and it has not yet run successfully.
