@@ -325,6 +325,45 @@ OPT_MODE="nopr" OPT_NOTICES=0 \
 run_case "T16 no PR for branch → allow, no notice" allow \
   "gh pr merge 1 --squash" $'fix: thing\n\nnothing to see' ""
 
+# ---------------------------------------------------------------------------
+# Static assertions on the hook SOURCE.
+#
+# Comment lines are stripped first. A raw grep over the whole file matches the
+# hook's own explanatory comments — which name both forbidden constructs
+# precisely BECAUSE the code must not use them — so an unstripped assertion
+# false-FAILs on a correct file and would be "fixed" by deleting the
+# documentation. Anchor on code, never on prose (`cq-assert-anchor-not-bare-token`).
+# ---------------------------------------------------------------------------
+
+HOOK_CODE="$(grep -vE '^[[:space:]]*#' "$HOOK")"
+
+static_case() {   # <name> <expected-count> <extended-regex>
+  local name="$1" expect="$2" pattern="$3" n
+  TOTAL=$((TOTAL+1))
+  n="$(printf '%s\n' "$HOOK_CODE" | grep -cE "$pattern" || true)"
+  if [[ "$n" == "$expect" ]]; then
+    PASS=$((PASS+1)); echo "PASS: $name ($n)"
+  else
+    FAIL=$((FAIL+1)); echo "FAIL: $name — expected $expect match(es), got $n"
+  fi
+}
+
+# AC10 — gh must resolve the repo from the working directory. Hand-building the
+# slug is what made the PR-body arm dead code. Genuine before/after
+# discriminator: this returns 1 against main.
+static_case "AC10 no --repo or hand-built slug in hook code" 0 'remote get-url origin|--repo'
+
+# AC8 — label lookup must stay per-issue. `gh issue list` paginates at 30 by
+# default and a full page is indistinguishable from a truncated one, which would
+# silently exempt the oldest trackers.
+#
+# NOTE: this returns 0 against main too, so it is a guard against INTRODUCING
+# the truncating call, not evidence the label gate works. AC2/AC3 (T3/T4) carry
+# that. Stated explicitly because an assertion that passes before and after
+# reads as state-change proof and is not — the exact vacuity class this suite
+# exists to eliminate.
+static_case "AC8 no paginated gh issue list in hook code" 0 'gh issue list'
+
 echo ""
 echo "=== $PASS/$TOTAL passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]
