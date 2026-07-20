@@ -3,7 +3,7 @@
  *
  * The production runtime is the bash in `plugins/soleur/skills/preflight/SKILL.md`
  * §"Check 10: Discoverability Test Execution". This TypeScript mirror exists
- * so the 8 decision states can be unit-tested without subshells, fake `curl`,
+ * so the decision matrix can be unit-tested without subshells, fake `curl`,
  * or live network. If the bash and TS drift, the bash wins and this file
  * is the bug.
  */
@@ -11,9 +11,27 @@
 export type ExecResult = { rc: number; stdout: string };
 export type Executor = (cmd: string, timeoutMs: number) => Promise<ExecResult>;
 
+/**
+ * `discoverability_test.kind` — which property Check 10 is able to observe.
+ *
+ * - `live-probe` (the default when `kind:` is absent) — today's behaviour,
+ *   byte-for-byte: the command is executed and its output matched.
+ * - `run-log` — the evidence lives in a run log that does not exist yet at
+ *   preflight time (e.g. `gh run view <run-id> --log`). Check 10 declines to
+ *   execute and returns SKIP **with the marker recorded**, so a post-merge
+ *   follow-through can assert it.
+ *
+ * `run-log` is not a weakening: guardrails 4 and 5 (below) require that a real
+ * emitter for the marker exists in the tree and that the declared command
+ * actually names it — assertions the live-probe path never makes.
+ */
+export type DiscoverabilityKind = "live-probe" | "run-log";
+
 export type ClassificationResult = {
   result: "PASS" | "FAIL" | "SKIP";
   reason?: string;
+  /** Set only on a valid `kind: run-log` SKIP — the recorded marker literal. */
+  marker?: string;
 };
 
 export type ClassifyInput = {
@@ -22,6 +40,21 @@ export type ClassifyInput = {
   prBody: string;
   runner: Executor;
   timeoutMs?: number;
+  /**
+   * Guardrail 4's oracle: does an emitter for `marker` exist in the tree
+   * OUTSIDE planning artifacts? Injected so this module stays pure and so
+   * fixtures 09 (emitter present) and 11 (emitter absent) — which are
+   * otherwise byte-identical in shape — are distinguishable.
+   *
+   * The production runtime supplies
+   *   git grep -F -- "$MARKER" -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs'
+   * The exclusions are load-bearing: the plan declaring the marker is itself in
+   * the tree, so without them the check always matches and is vacuous.
+   *
+   * Defaults to fail-closed (`() => false`) — an omitted oracle must never
+   * silently satisfy the guardrail.
+   */
+  markerLookup?: (marker: string) => boolean;
 };
 
 // Use POSIX [:space:] equivalent (not \s) so the TS reject regex behaves
@@ -162,20 +195,102 @@ export function tokenizeExpected(expected: string): string[] {
     .filter((s) => s.length > 0);
 }
 
-export function rejectReason(cmd: string): string | null {
+/**
+ * The SSH reject. Runs UNCONDITIONALLY for every `kind` — see F2 in the plan.
+ *
+ * This was deliberately split out of the old fused `rejectReason`. If it sat
+ * behind the `kind` branch, `kind: run-log` + `command: ssh host 'grep M …'`
+ * would return SKIP and `hr-no-ssh-fallback-in-runbooks` would be silently
+ * defeated. Never move this below kind resolution.
+ */
+export function sshRejectReason(cmd: string): string | null {
   if (SSH_REJECT_RE.test(cmd)) {
     return "discoverability_test.command contains ssh (rule violation per hr-observability-as-plan-quality-gate)";
   }
+  return null;
+}
+
+/**
+ * The shell-substitution reject. Applies to `live-probe` ONLY, because it is a
+ * property of *executing* the command — under `run-log` nothing is executed, so
+ * the tokens carry no execution risk (a run-log command is characteristically
+ * `gh run view <run-id> --log | grep MARKER`, which trips `|`, `<` and `>`).
+ *
+ * The message string is operator-facing and is asserted verbatim downstream —
+ * it enumerates every rejected token. Do not reword it.
+ */
+export function substRejectReason(cmd: string): string | null {
   if (SUBST_REJECT_RE.test(cmd)) {
     return "discoverability_test.command contains shell-active token (;, &&, ||, |, >, <, &, $var, $(, `, <(, >() — refusing to run. Plans must compose single-statement commands without chaining or substitution.";
   }
   return null;
 }
 
+/**
+ * Back-compat wrapper preserving the original fused order for any caller that
+ * still wants "reject for either reason". `classifyDiscoverabilityResult` no
+ * longer uses it — it calls the two halves at their correct positions.
+ */
+export function rejectReason(cmd: string): string | null {
+  return sshRejectReason(cmd) ?? substRejectReason(cmd);
+}
+
+// `kind`/`marker` are Form-A-only sub-fields of `discoverability_test` and MUST
+// be indented. A column-0 `kind:` would become a sixth TOP-LEVEL key of the
+// `## Observability` schema and break `observability-schema-parity.test.ts`'s
+// `CANONICAL.length === 5` (plus three sibling assertions) — so the strict
+// parsers below require leading whitespace, and the loose token detectors
+// deliberately DO match a column-0 or prose form so it FAILs loudly (guardrail 6)
+// rather than being silently ignored.
+const KIND_STRICT_RE = /^[ \t]+kind:[ \t]*["']?(live-probe|run-log)["']?[ \t]*$/m;
+const MARKER_STRICT_RE = /^[ \t]+marker:[ \t]*["']?([^\s"']*)["']?[ \t]*$/m;
+
+// "a line whose first meaningful token is a `kind`/`marker` key", tolerating
+// list bullets, blockquotes and bold decoration. Narrow enough not to fire on
+// incidental prose like "this kind of check".
+const KIND_TOKEN_RE = /^[ \t]*(?:[->*]+[ \t]*)*\**[ \t]*kind[ \t]*\**[ \t]*:/im;
+const MARKER_TOKEN_RE = /^[ \t]*(?:[->*]+[ \t]*)*\**[ \t]*marker[ \t]*\**[ \t]*:/im;
+
+/** The declared kind, or null if absent OR present-but-unparseable. */
+export function parseKind(
+  observabilityBlock: string,
+): DiscoverabilityKind | null {
+  const m = observabilityBlock.match(KIND_STRICT_RE);
+  return m ? (m[1] as DiscoverabilityKind) : null;
+}
+
+/** Whether SOME `kind` key token appears — the guardrail-6 fail-closed trigger. */
+export function hasKindToken(observabilityBlock: string): boolean {
+  return KIND_TOKEN_RE.test(observabilityBlock);
+}
+
+/**
+ * The declared marker, RAW — malformed values are returned as-is so the
+ * classifier (not the parser) owns the charset verdict and can name the bad
+ * value in its diagnostic.
+ */
+export function parseMarker(observabilityBlock: string): string | null {
+  const m = observabilityBlock.match(MARKER_STRICT_RE);
+  return m ? m[1] : null;
+}
+
+/** Whether SOME `marker` key token appears — the guardrail-7 fail-closed trigger. */
+export function hasMarkerToken(observabilityBlock: string): boolean {
+  return MARKER_TOKEN_RE.test(observabilityBlock);
+}
+
+const MARKER_CHARSET_RE = /^[A-Za-z0-9_]+$/;
+
 export async function classifyDiscoverabilityResult(
   input: ClassifyInput,
 ): Promise<ClassificationResult> {
-  const { planPath, planBody, runner, timeoutMs = 15_000 } = input;
+  const {
+    planPath,
+    planBody,
+    runner,
+    timeoutMs = 15_000,
+    markerLookup = () => false, // fail-closed; see ClassifyInput.markerLookup
+  } = input;
 
   if (!planPath || planBody === "") {
     return {
@@ -201,8 +316,93 @@ export async function classifyDiscoverabilityResult(
     };
   }
 
-  const rejected = rejectReason(cmd);
-  if (rejected !== null) return { result: "FAIL", reason: rejected };
+  // ---- ORDER IS LOAD-BEARING (plan F2). Do not reorder these three stages. ----
+  //   1. ssh reject        — ALWAYS, before any `kind` branch
+  //   2. kind resolution + guardrails 2-7
+  //   3. subst reject      — live-probe only
+  // Moving (1) below (2) lets `kind: run-log` + `ssh …` return SKIP, defeating
+  // hr-no-ssh-fallback-in-runbooks. That is a LARGER downgrade than the one
+  // direction 3 was rejected for.
+
+  // --- Stage 1: the SSH reject, unconditionally, for both kinds. ---
+  const sshRejected = sshRejectReason(cmd);
+  if (sshRejected !== null) return { result: "FAIL", reason: sshRejected };
+
+  // --- Stage 2: kind resolution + guardrails 2-7. ---
+
+  const kindDeclared = parseKind(block);
+
+  // Guardrails 2 + 6: a `kind` token that the strict Form-A parser cannot read
+  // is malformed — an unknown value, a prose `Kind:`, or a column-0 key. Fail
+  // loudly. Never fall back to live-probe: an author who wrote `kind:` believes
+  // they declared something, and silently ignoring it is the downgrade.
+  if (kindDeclared === null && hasKindToken(block)) {
+    return {
+      result: "FAIL",
+      reason: `plan ${planPath} declares a discoverability_test kind that could not be parsed. \`kind:\` is Form A only (a strictly INDENTED sub-field of \`discoverability_test:\`) and must be exactly \`live-probe\` or \`run-log\`. A prose or column-0 \`kind\` is refused rather than defaulted.`,
+    };
+  }
+
+  // Guardrail 1: absent `kind` means live-probe — every pre-existing plan
+  // behaves exactly as it did before this field existed.
+  const kind: DiscoverabilityKind = kindDeclared ?? "live-probe";
+
+  // Guardrail 7: a `marker:` outside `kind: run-log` is consumed by nothing. It
+  // signals an author who thinks they declared a run-log test. Fail, don't ignore.
+  if (kind !== "run-log" && hasMarkerToken(block)) {
+    return {
+      result: "FAIL",
+      reason: `plan ${planPath} declares a discoverability_test marker but kind is \`${kind}\` — \`marker:\` is only meaningful under \`kind: run-log\` and nothing consumes it otherwise. Either set \`kind: run-log\` or remove the marker.`,
+    };
+  }
+
+  if (kind === "run-log") {
+    const marker = parseMarker(block);
+
+    // Guardrail 3: run-log without a well-formed marker records nothing, so
+    // nothing downstream could ever assert anything — strictly worse than a FAIL.
+    if (marker === null || !MARKER_CHARSET_RE.test(marker)) {
+      return {
+        result: "FAIL",
+        reason: `plan ${planPath} declares \`kind: run-log\` but its discoverability_test marker is ${marker === null ? "missing" : `malformed (${JSON.stringify(marker)})`}. \`marker:\` is required under run-log and must match ^[A-Za-z0-9_]+$ so a post-merge follow-through can grep for it.`,
+      };
+    }
+
+    // Guardrail 4: the marker must have a REAL emitter in the tree, outside
+    // planning artifacts. Without the plans/specs exclusion this check is
+    // vacuous — the plan declaring the marker is itself in the tree.
+    if (!markerLookup(marker)) {
+      return {
+        result: "FAIL",
+        reason: `plan ${planPath} declares \`kind: run-log\` with marker ${marker}, but no emitter for it exists in the tree outside knowledge-base/project/{plans,specs}. A run-log test may only be declared once something actually emits the marker (git grep -F -- "${marker}" -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs').`,
+      };
+    }
+
+    // Guardrail 5: the command must actually name the marker, else run-log
+    // would certify a command with nothing to do with the recorded evidence.
+    if (!cmd.includes(marker)) {
+      return {
+        result: "FAIL",
+        reason: `plan ${planPath} declares \`kind: run-log\` with marker ${marker}, but its discoverability_test command does not contain that literal. The command must be the one that surfaces the marker.`,
+      };
+    }
+
+    // Valid run-log. SKIP — not PASS: the gate must never certify a property it
+    // did not observe. Per
+    // knowledge-base/project/learnings/2026-04-27-preflight-security-gates-skip-vs-fail-defaults.md
+    // SKIP is correct only when truly indeterminate, and a run that has not
+    // executed yet is genuinely indeterminate.
+    return {
+      result: "SKIP",
+      marker,
+      reason: `discoverability_test declares \`kind: run-log\` with marker ${marker}; the evidence lives in a run log that does not exist at preflight time, so the probe is deferred rather than run. Verified statically: an emitter for ${marker} exists in the tree and the command names it.`,
+    };
+  }
+
+  // --- Stage 3: the substitution reject — live-probe only (nothing is executed
+  // under run-log, so these tokens carry no execution risk there). ---
+  const substRejected = substRejectReason(cmd);
+  if (substRejected !== null) return { result: "FAIL", reason: substRejected };
 
   const expected = parseExpected(block);
   const result = await runner(cmd, timeoutMs);

@@ -215,6 +215,12 @@ if want_scripts; then
   # short answer. That silently starved every soak gate built on it (#6288's needs 2h of
   # span and could never PASS). Hermetic: stubs curl, asserts SQL shape, never live rows.
   run_suite "tests/scripts/betterstack-query-archive" bash tests/scripts/test-betterstack-query-archive.sh
+  # infra-validate-required aggregator verdict (#6766). Registered HERE because
+  # nothing auto-discovers tests/scripts/. The gate it covers used to early-exit 0
+  # whenever no terraform root changed, greening a RED deploy-script-tests on the
+  # exact PR shape #6766 is about — so without this line the fix for a guard that
+  # could not fail would itself ship unverified.
+  run_suite "tests/scripts/infra-validate-gate-verdict" bash tests/scripts/test-infra-validate-gate-verdict.sh
   run_suite "tests/scripts/classifier-regex-parity" bash tests/scripts/test_classifier_regex_parity.sh
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh

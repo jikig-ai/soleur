@@ -730,12 +730,10 @@ logs:
   where: GitHub Actions run log (echo) + Better Stack (logger -t luks-monitor)
   retention: Better Stack default retention for the luks-monitor tag
 discoverability_test:
+  kind: run-log
+  marker: SOLEUR_WORKSPACES_LUKS_FSCK
   command: gh run view <run-id> --log | grep SOLEUR_WORKSPACES_LUKS_FSCK
-  expected_output: >-
-    a phase=advisory summary row (both arms) and, in the real arm, a phase=gate summary row with the
-    per-classification counts, plus one row per workspace carrying classification=, reason=, src_rc=,
-    dst_rc= and a first= excerpt of the actual fsck output — sufficient to decide H1..H5 without any
-    shell on the host, and sufficient to decide H1 from a REHEARSAL alone
+  expected_output: "a phase=advisory summary row (both arms) and, in the real arm, a phase=gate summary row with the per-classification counts, plus one row per workspace carrying classification=, reason=, src_rc=, dst_rc= and a first= excerpt of the actual fsck output — sufficient to decide H1..H5 without any shell on the host, and sufficient to decide H1 from a REHEARSAL alone"
 ```
 
 No `ssh` appears in the discoverability test — the point of this change is that the next cutover, and

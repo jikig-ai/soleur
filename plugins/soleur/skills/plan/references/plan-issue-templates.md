@@ -58,6 +58,14 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
+  kind:            # OPTIONAL, INDENTED. live-probe (default when omitted) | run-log.
+                   # live-probe: preflight Check 10 executes `command` and matches its output.
+                   # run-log: the evidence lives in a CI run log that does not exist yet at
+                   # preflight time; Check 10 records the marker and SKIPs instead of false-FAILing.
+                   # An unrecognised value FAILS — it never falls back to live-probe.
+  marker:          # REQUIRED under `kind: run-log`, FORBIDDEN otherwise. ^[A-Za-z0-9_]+$.
+                   # An emitter for it must already exist in the tree outside
+                   # knowledge-base/project/{plans,specs}, and `command` must contain it.
   command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
   expected_output: # canonical "everything OK" output
 ```
@@ -186,6 +194,14 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
+  kind:            # OPTIONAL, INDENTED. live-probe (default when omitted) | run-log.
+                   # live-probe: preflight Check 10 executes `command` and matches its output.
+                   # run-log: the evidence lives in a CI run log that does not exist yet at
+                   # preflight time; Check 10 records the marker and SKIPs instead of false-FAILing.
+                   # An unrecognised value FAILS — it never falls back to live-probe.
+  marker:          # REQUIRED under `kind: run-log`, FORBIDDEN otherwise. ^[A-Za-z0-9_]+$.
+                   # An emitter for it must already exist in the tree outside
+                   # knowledge-base/project/{plans,specs}, and `command` must contain it.
   command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
   expected_output: # canonical "everything OK" output
 ```
@@ -328,6 +344,14 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
+  kind:            # OPTIONAL, INDENTED. live-probe (default when omitted) | run-log.
+                   # live-probe: preflight Check 10 executes `command` and matches its output.
+                   # run-log: the evidence lives in a CI run log that does not exist yet at
+                   # preflight time; Check 10 records the marker and SKIPs instead of false-FAILing.
+                   # An unrecognised value FAILS — it never falls back to live-probe.
+  marker:          # REQUIRED under `kind: run-log`, FORBIDDEN otherwise. ^[A-Za-z0-9_]+$.
+                   # An emitter for it must already exist in the tree outside
+                   # knowledge-base/project/{plans,specs}, and `command` must contain it.
   command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
   expected_output: # canonical "everything OK" output
 ```
