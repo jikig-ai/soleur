@@ -323,6 +323,10 @@ test_df_argv_ceiling_collapsed_runs() {
   local MAX_ARG_STRLEN=131072
   local pages=5 per_page=400
   local dir; dir=$(mktemp -d)
+  # Owning trap for this case's scratch dir (#6734). RETURN, not EXIT: this harness
+  # allocates per test function, so function-scoped cleanup is the correct lifetime --
+  # and an EXIT trap here would silently replace any other the file later registers.
+  trap 'rm -rf "$dir"' RETURN
 
   local p edges
   for p in 1 2 3 4 5; do

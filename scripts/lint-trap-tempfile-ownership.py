@@ -15,13 +15,16 @@ RULE (a) -- SUBSHELL-APPEND
     call sites. Fix: allocate in the helper, register in the PARENT scope.
 
 RULE (c) -- MKTEMP WITH NO OWNING TRAP
-    A file that calls `mktemp` but registers no `trap ... EXIT` at all.
+    A file that calls `mktemp`, registers no cleanup trap (`EXIT` or `RETURN`)
+    anywhere, and whose offending allocation was ADDED by the current diff.
 
-    This is the "class-b" population: 122 files repo-wide at time of writing.
+    This is the "class-b" population: 102 files repo-wide at time of writing.
     Most are short-lived CI scripts where the leak is bounded, so the existing
     population is ACCEPTED (see ADR-128) rather than fixed file-by-file. Rule (c)
-    is therefore `--changed`-scoped: it gates NEW entrants only. Without it the
-    accept would be a pile nobody fences, which is the gap that let #6713 happen.
+    is therefore scoped to ADDED LINES: it gates NEW entrants only. Scoping it to
+    changed FILES was tried and was wrong -- touching any accepted file then demanded
+    you pay off its pre-existing debt, which is how a gate gets switched off. Without
+    rule (c) entirely, the accept would be a pile nobody fences (the #6713 gap).
 
     Ratchet: scripts/lint-trap-tempfile-ownership.highwater records the accepted
     population size. `--census` recomputes it; CI asserts the live count never
@@ -71,9 +74,18 @@ HIGHWATER_FILE = Path(__file__).resolve().parent / "lint-trap-tempfile-ownership
 ARRAY_APPEND = re.compile(r'^\s*(\w+)\+=\(')
 # `name() {` or `function name {` -- a function definition opening.
 FUNC_DEF = re.compile(r'^\s*(?:function\s+)?(\w+)\s*\(\)\s*\{|^\s*function\s+(\w+)\s*\{')
-# A trap registration on EXIT. Anchored on the `trap` keyword and the EXIT signal
-# so a comment merely *mentioning* traps cannot satisfy it.
-TRAP_EXIT = re.compile(r'^\s*trap\s+.*\bEXIT\b')
+# A cleanup trap registration. Anchored on the `trap` keyword and the signal name so a
+# comment merely *mentioning* traps cannot satisfy it.
+#
+# RETURN counts as ownership, not just EXIT. A per-function `trap 'rm -rf "$d"' RETURN`
+# fires when the function returns and is BETTER scoped than a process-wide EXIT trap for
+# a test harness that allocates per case. An EXIT-only anchor flagged
+# inngest-inventory.test.sh, which carries THIRTY correct RETURN traps -- exactly the
+# fires-on-correct-code failure that gets a gate switched off.
+#
+# Not anchored at line start: these are frequently written mid-line after a `;`
+# (`local d; d=$(mktemp -d); trap 'rm -rf "$d"' RETURN`).
+TRAP_EXIT = re.compile(r'(?:^|;)\s*trap\s+.*\b(?:EXIT|RETURN)\b')
 # `mktemp` in COMMAND POSITION -- not merely the word somewhere on the line.
 #
 # A bare `\bmktemp\b` is the classic anchor-on-a-token bug
@@ -249,7 +261,7 @@ def trap_owned_arrays(lines: list[str]) -> set[str]:
     owned: set[str] = set()
     for ln in lines:
         code = strip_comment(ln)
-        if not TRAP_EXIT.match(code):
+        if not TRAP_EXIT.search(code):
             continue
         owned.update(re.findall(r'\$\{(\w+)\[@\*]?', code))
         owned.update(re.findall(r'\$\{(\w+)\[', code))
@@ -310,13 +322,58 @@ def check_rule_a(path: Path, lines: list[str]) -> list[str]:
     return problems
 
 
+def added_lines(path: Path) -> set[int] | None:
+    """1-based line numbers ADDED to `path` vs the merge base. None = whole file is new.
+
+    Rule (c) gates NEW ENTRANTS. An earlier implementation read that as "any file in the
+    changed set", which meant touching ANY of the 122 accepted class-b files demanded you
+    also pay off its pre-existing debt. That punishes incidental edits and is how a gate
+    gets switched off: inngest-doublefire-probe.test.sh carries 13 allocations and zero
+    traps ON origin/main, and was flagged only because this PR appended a test to it.
+
+    So the unit is the added LINE, not the touched file.
+    """
+    try:
+        base = subprocess.run(
+            ["git", "merge-base", "HEAD", "origin/main"],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        rel = path.relative_to(REPO_ROOT) if path.is_relative_to(REPO_ROOT) else path
+        diff = subprocess.run(
+            ["git", "diff", "--unified=0", f"{base}...HEAD", "--", str(rel)],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+        ).stdout
+        if not diff.strip():
+            # Untracked (never committed) => treat every line as new.
+            tracked = subprocess.run(
+                ["git", "ls-files", "--error-unmatch", str(rel)],
+                cwd=REPO_ROOT, capture_output=True, text=True,
+            ).returncode == 0
+            return None if not tracked else set()
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        # Fail OPEN for this rule: an unresolvable diff must not invent violations.
+        return set()
+
+    out: set[int] = set()
+    for m in re.finditer(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', diff, re.M):
+        start = int(m.group(1))
+        count = 1 if m.group(2) is None else int(m.group(2))
+        out.update(range(start, start + count))
+    return out
+
+
 def check_rule_c(path: Path, lines: list[str]) -> list[str]:
-    """File calls mktemp but registers no trap ... EXIT at all."""
+    """File calls mktemp with no owning trap, and the allocation is NEWLY ADDED."""
     mk_lines = [k for k, ln in enumerate(lines) if MKTEMP.search(strip_literals(strip_comment(ln)))]
     if not mk_lines:
         return []
-    if any(TRAP_EXIT.match(strip_comment(ln)) for ln in lines):
+    if any(TRAP_EXIT.search(strip_comment(ln)) for ln in lines):
         return []
+    fresh = added_lines(path)
+    if fresh is not None:
+        mk_lines = [k for k in mk_lines if (k + 1) in fresh]
+        if not mk_lines:
+            return []
     first = mk_lines[0]
     is_esc, err = escaped(lines, first)
     if err:
@@ -374,7 +431,7 @@ def census() -> int:
             continue
         if not any(MKTEMP.search(strip_literals(strip_comment(ln))) for ln in lines):
             continue
-        if not any(TRAP_EXIT.match(strip_comment(ln)) for ln in lines):
+        if not any(TRAP_EXIT.search(strip_comment(ln)) for ln in lines):
             n += 1
     return n
 

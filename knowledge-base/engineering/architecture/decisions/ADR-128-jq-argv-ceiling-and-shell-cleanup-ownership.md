@@ -75,10 +75,22 @@ Allocate in the helper, register at the call site.
 **3. One owning trap per script.** Extend a cleanup function; never register a
 second `trap … EXIT`.
 
-**4. `mktemp` without an owning trap is gated for NEW files only.** The existing
-population — 122 tracked `*.sh` files at time of writing — is ACCEPTED rather
-than fixed file-by-file. Most are short-lived CI scripts where the leak is
+**4. `mktemp` without an owning trap is gated for NEW ALLOCATIONS only.** The
+existing population — 102 tracked `*.sh` files at time of writing — is ACCEPTED
+rather than fixed file-by-file. Most are short-lived CI scripts where the leak is
 bounded by runner teardown.
+
+Two scoping details, both corrections made after the rule fired on correct code:
+
+- **A `trap … RETURN` counts as ownership, not only `trap … EXIT`.** Per-function
+  cleanup is the right lifetime for a harness that allocates per test case, and
+  is better scoped than a process-wide EXIT trap. An EXIT-only anchor flagged
+  `inngest-inventory.test.sh`, which carries thirty correct RETURN traps.
+- **The unit is the ADDED LINE, not the touched file.** File-level scoping meant
+  that editing any of the accepted files demanded you also pay off its
+  pre-existing debt — `inngest-doublefire-probe.test.sh` carries 13 untrapped
+  allocations on `main` and was flagged merely because this PR appended a test to
+  it. A gate that taxes incidental edits is a gate that gets switched off.
 
 **Upgrade trigger for the accept.** Fix a class-b file when it (a) starts
 running on a long-lived host rather than an ephemeral runner, (b) allocates

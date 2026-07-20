@@ -71,7 +71,8 @@ for case in \
   "good-escape-hatch.sh.fixture|a reason-carrying escape hatch suppresses the finding" \
   "good-local-args-array.sh.fixture|a local args array in a \$()-invoked fn is not flagged (over-broad-rule regression)" \
   "good-local-cleanup-array.sh.fixture|a function-local shadow of a cleanup array is not flagged" \
-  "good-mktemp-word-in-string-only.sh.fixture|the WORD mktemp as string data is not flagged (bare-token-anchor regression)"
+  "good-mktemp-word-in-string-only.sh.fixture|the WORD mktemp as string data is not flagged (bare-token-anchor regression)" \
+  "good-return-trap.sh.fixture|a per-function trap ... RETURN counts as ownership (EXIT-only-anchor regression)"
 do
   IFS='|' read -r file label <<< "$case"
   rc=$(lint_rc "$FIX/$file")

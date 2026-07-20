@@ -525,6 +525,9 @@ t16_argv_ceiling_stage_payloads_exceed_max_arg_strlen() {
   local MAX_ARG_STRLEN=131072
   local rows=700
   local root; root=$(mktemp -d)
+  # Owning trap for this case's fixture root (#6734). RETURN scopes cleanup to this
+  # function, which is the lifetime of the fixture.
+  trap 'rm -rf "$root"' RETURN
   mkdir -p "$root/.claude" "$root/knowledge-base/project"
   {
     printf '# Agent Instructions\n\n## Hard Rules\n\n'
