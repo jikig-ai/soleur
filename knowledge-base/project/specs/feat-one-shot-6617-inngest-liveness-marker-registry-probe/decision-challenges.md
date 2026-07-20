@@ -127,3 +127,22 @@ would make it *harmless* on the one path that reaches users.
 **Not folded in** — it touches product notification code, not infra, and the dark window is the
 constraint here. Cheap at 0 users, expensive at 10. Companion issue required.
 </content>
+
+---
+
+## Operator Ruling — 2026-07-20
+
+UC-1 and UC-2 were both put to the operator before implementation began.
+
+**Ruling: ship PR A + PR B in this run. PR C is HELD.**
+
+- **UC-1 (three-PR split): UPHELD.** The split stands.
+- **UC-2 (priority reorder): UPHELD.** `doublefire-probe` stays in scope and PR B lands first,
+  inverting the originally stated priority-2-first ordering. The operator accepted the panel's
+  reasoning that coupling diagnosis to a production replace was the plan's largest unforced risk.
+- **PR C: HELD, not cancelled.** Its force-replace of the sole production scheduler is deferred
+  until the operator has read PR B's actual probe output (Phase B4.2). PR C must not be
+  implemented, pushed, or merged in this run.
+
+Standing risk carried forward: PR #6348 is draft and MERGEABLE. If it merges before PR C is
+delivered, PR C would be stranded merged-but-undelivered. Unaffected by the A+B scope.
