@@ -90,7 +90,11 @@ New file: `test/server/inngest/cron-email-ingress-probe-repin-idempotency.test.t
 - [ ] 3.7 T3 — two consecutive danger-band days → 2 emails.
 - [ ] 3.8 T4 — two distinct items same day, parameterized same-user / different-user → 2 each.
 - [ ] 3.9 T5 — fail-open on a non-23505 `{error}` return → email still sent + Sentry op.
-- [ ] 3.10 T6 — fail-open on a **thrown** insert (item 3 of 10) → items 4–10 still dispatch.
+- [ ] 3.10 T6 — fail-open on a **thrown** insert (item 3 of 10) → **all 10 dispatch, including
+      item 3**, and the run does not die. Asserting only "items 4–10" would pass even if the
+      throwing item were silently suppressed — the fail-*closed* direction AC5 forbids.
+      (Corrected per CPO ruling 2026-07-20: this task previously encoded the weaker "items 4–10"
+      assertion that the plan's T6 row and AC7 explicitly reject.)
 - [ ] 3.11 T7 — DDL pin (PK, FK, CHECK, ledger delete in down file, no pre-existing function
       replaced), following `test/supabase-migrations/126-beta-crm.test.ts`.
 - [ ] 3.11b T7b — gated live-DB tier (`TENANT_INTEGRATION_TEST=1`): double-insert against the
@@ -101,6 +105,16 @@ New file: `test/server/inngest/cron-email-ingress-probe-repin-idempotency.test.t
 - [ ] 3.12b T9 — single run crossing UTC midnight mid-loop yields ONE tick_key.
 - [ ] 3.12c T10 — rows hitting `!row.user_id` / unknown-rule guards write NO marker.
 - [ ] 3.12d T11 — push-subscribed user, double-fire: exactly one `webpush.sendNotification`.
+- [ ] 3.12e T12 — **single-recipient send path (R7 tripwire)**. Required by CPO ruling
+      2026-07-20 (condition C5, AMENDED); blocks PR-ready. One repin iteration over one item
+      dispatches to **exactly one** recipient, and that recipient is `row.user_id`. Construct the
+      item so the fan-out would land — more than one workspace Owner via migration 111's
+      `is_email_triage_workspace_owner` — and assert the current single-recipient behavior
+      explicitly, so a future fan-out reds T12 at the site the constraint governs instead of
+      collapsing recipients silently in prod. Include a comment naming the ADR constraint and
+      pointing at its clause, so whoever reds this is told to re-key to recipient-grain rather
+      than delete the assertion. **T4 does not satisfy this** — it covers distinct items, not
+      multiple recipients of one item. Fold verification under the AC-walk (task 6.4); no new AC.
 - [ ] 3.13 Mutation control (manual verification step, not an AC): delete the `23505` branch,
       confirm T1 reds, restore.
 - [ ] 3.14 Update `test/server/inngest/cron-email-ingress-probe.test.ts` — route the new table
@@ -145,5 +159,16 @@ New file: `test/server/inngest/cron-email-ingress-probe-repin-idempotency.test.t
 - [ ] 7.4 File: 60-day scan cliff (uncountered permanent silence).
 - [ ] 7.5 File: non-410 push failure = permanent total silence (row never pruned, email branch
       never reached, `pinged` reports success).
-- [ ] 7.6 BLOCKING: CPO ruling on conditions C2 and C5 has returned (frontmatter declares
-      `requires_cpo_signoff: true`; both are currently author-disposed).
+- [x] 7.6 CPO ruling on conditions C2 and C5 — **RETURNED 2026-07-20**.
+      - **C2 UPHELD.** Unconditional dispatch on fail-open stands; AC5 stands. No code change.
+        The CPO overruled their own original condition: the T-7 arm is a structural one-shot, so
+        fail-open suppression there would produce *no heads-up ever* (the next tick no longer
+        satisfies `daysUntilDue === DEADLINE_REPIN_HEADS_UP_DAY`), and the likeliest fail-open
+        trigger — the `42P01` deploy race — is correlated, silently dropping the heads-up for
+        every T-7 item that day with no self-heal.
+      - **C5 AMENDED.** ADR constraint + loop comment retained, **plus T12** (task 3.12e) as a
+        tripwire. Documentation does not fail; the invariant currently holds only by accident of
+        the send path being single-recipient.
+      - Note recorded: the CPO struck "halves the code paths" from C2's rationale — implementation
+        path-count is never an acceptable reason to move risk onto a user holding a statutory
+        deadline. It pointed the same direction here by coincidence, not by merit.

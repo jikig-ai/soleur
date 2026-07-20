@@ -585,15 +585,17 @@ Sign-off was **GRANTED WITH CONDITIONS** on the design. Dispositions:
 | # | Condition | Disposition |
 | --- | --- | --- |
 | C1 | Catch **only** 23505 | **Folded in** — AC5 |
-| C2 | Band-split fail-open (skip at T-7, send in band) | **Not adopted** — sends unconditionally, matching the CLO ruling; halves the code paths, and a T-7 duplicate is harmless |
+| C2 | Band-split fail-open (skip at T-7, send in band) | **Not adopted — UPHELD by CPO ruling 2026-07-20.** Sends unconditionally. The T-7 arm is a structural one-shot: fail-open suppression there yields *no heads-up ever*, since the next tick no longer satisfies `daysUntilDue === DEADLINE_REPIN_HEADS_UP_DAY`. The likeliest fail-open trigger — the `42P01` deploy race — is correlated, so it would drop the heads-up for every T-7 item that day at once, with no self-heal. A duplicate T-7 email occurs only on the already-anomalous, already-Sentry-alerted fail-open path (ordinary double-fire yields `23505` and suppresses correctly) and is the cheaper failure under the governing asymmetry |
 | C3 | No release-on-failure; T-7 loss must be visible | **Folded in** — R9; `mirrorNotifyFailure` surfaces it |
 | C4 | Marker covered by erasure and swept | **Folded in, now structural** — no `user_id` to erase (R6), plus the 90-day sweep |
-| C5 | Uniqueness per-recipient, never workspace-scoped | **Property satisfied, justification corrected.** Item-grain is recipient-grain *today*, but R7 shows that is a property of the send path, not of structure. Recorded as a named ADR constraint + loop comment |
+| C5 | Uniqueness per-recipient, never workspace-scoped | **AMENDED by CPO ruling 2026-07-20.** Property satisfied and justification corrected — item-grain is recipient-grain *today*, but R7 shows that is a property of the send path, not of structure. ADR named constraint + loop comment retained, **plus T12** (task 3.12e) as a tripwire: documentation does not fail, and if a future fan-out lands, the first Owner's marker would suppress every other Owner — N−1 recipients get silence on a statutory deadline while `pinged` reports success. No schema change; re-adding a recipient column stays settled per R6 (Art. 17 residual) |
 | C6 | Test drives the real send path, asserts both directions | **Folded in** — Phase 3 harness contract, T1 + T5/T6 |
 
-> **Pending:** a final CPO ruling on C2 and C5 against this written plan was requested and had
-> not returned at authoring time. Both dispositions above are the author's, informed by the CLO
-> ruling and R7. A returned verdict supersedes this table.
+> **Ruling returned 2026-07-20.** C2 **UPHELD** (no change required). C5 **AMENDED** — the
+> property stands, but the CPO required a test tripwire rather than documentation alone; T12
+> (task 3.12e) is the result and blocks PR-ready. The CPO also struck "halves the code paths"
+> from C2's rationale: implementation path-count is never an acceptable reason to move risk onto
+> a user holding a statutory deadline, and here it pointed the right way only by coincidence.
 
 ## Risks & Mitigations
 
@@ -650,11 +652,10 @@ Per `wg-when-deferring-a-capability-create-a`, each needs an issue **before this
 
 ## Blocking before PR-ready
 
-- [ ] **CPO ruling on C2 and C5 has returned.** The frontmatter declares
-      `requires_cpo_signoff: true`; the plan's CPO table currently records **author**
-      dispositions for both, and C2 is a condition the CPO asked for and the author declined.
-      An author cannot self-dispose a condition on a plan whose own frontmatter requires that
-      sign-off. Do not mark the PR ready until the ruling lands; if it diverges, it supersedes.
+- [x] **CPO ruling on C2 and C5 has returned** (2026-07-20). C2 UPHELD, C5 AMENDED. See the
+      CPO conditions table above.
+- [ ] **T12 (task 3.12e) is implemented and green.** This is the C5 amendment and is the one
+      thing the CPO ruling added as a PR-ready blocker.
 - [ ] All five deferred issues above are filed.
 
 ## Sharp Edges
