@@ -20,6 +20,20 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SCANNER="$REPO_ROOT/plugins/soleur/skills/ship/scripts/auto-close-scan.sh"
 
 PASS=0; FAIL=0; TOTAL=0
+
+# Owning cleanup trap (ADR-129). Every case allocates a tmp work dir and a tmp
+# stderr file; run_case removes them inline on the happy path, but this file runs
+# under `set -e`, so any unexpected failure would otherwise leak both. Register
+# the paths here rather than relying solely on the inline removal.
+_TMP_ARTIFACTS=()
+_cleanup_tmp() {
+  local p
+  for p in ${_TMP_ARTIFACTS+"${_TMP_ARTIFACTS[@]}"}; do
+    [[ -n "$p" ]] && rm -rf "$p"
+  done
+}
+trap _cleanup_tmp EXIT
+
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
 command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
 [[ -f "$SCANNER" ]] || { echo "SKIP: auto-close-scan.sh not found"; exit 0; }
@@ -133,6 +147,7 @@ run_case() {
   wd="$(make_work_dir "$body" "$pr")"
   cwd="$wd"; [[ -n "$OPT_SUBDIR" ]] && cwd="$wd/sub/deeper"
   errf="$(mktemp)"
+  _TMP_ARTIFACTS+=("$wd" "$errf")
   # `env` is required, NOT an assignment prefix. Bash recognises assignment
   # prefixes at PARSE time, so `${OPT_ACK:+FOO=1} bash …` makes the expanded
   # `FOO=1` the COMMAND NAME ("command not found") and the hook never runs —
