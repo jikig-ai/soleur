@@ -180,10 +180,30 @@ if [[ -f "$COMPOUND_ABS" ]]; then
   # (i) The linter invocation must survive, INCLUDING the 2>&1. Without the
   #     redirect the WARN tier prints nothing to stdout and exits 0, so an agent
   #     following step 8 sees no signal at all.
-  if ! grep -qE 'lint-agents-rule-budget\.py' "$COMPOUND_ABS"; then
-    err "$COMPOUND_REL: step 8 no longer invokes $LINTER_REL -- the rubric must run the authority, not restate it"
-  elif ! grep -qE '2>&1' "$COMPOUND_ABS"; then
-    err "$COMPOUND_REL: the linter invocation lost its '2>&1' -- [WARN]/[REJECT] go to stderr, so stdout alone is empty in the tier this repo usually occupies"
+  #
+  #     ANCHORED ON THE FENCED CODE BLOCK, not on a bare `2>&1` token anywhere in
+  #     the file. A file-wide token check is VACUOUS here and was verified to be:
+  #     this SKILL.md contains `2>&1` in three places -- the invocation, the
+  #     prose sentence explaining why the redirect matters, and an unrelated
+  #     aggregator redirect -- so deleting it from the invocation left a
+  #     file-wide grep still matching, and the guard stayed green. The prose
+  #     written to explain the invariant is exactly what blinded the check to
+  #     its violation (`cq-assert-anchor-not-bare-token`).
+  invocation_block=$(awk '
+    /^[[:space:]]*```/ {
+      if (infence) {
+        if (block ~ /lint-agents-rule-budget\.py/) printf "%s", block
+        block = ""; infence = 0
+      } else { infence = 1; block = "" }
+      next
+    }
+    infence { block = block $0 "\n" }
+  ' "$COMPOUND_ABS")
+
+  if [[ -z "$invocation_block" ]]; then
+    err "$COMPOUND_REL: no fenced code block invokes $LINTER_REL -- the rubric must RUN the authority, not restate it (a prose mention does not count)"
+  elif [[ "$invocation_block" != *"2>&1"* ]]; then
+    err "$COMPOUND_REL: the linter invocation block lost its '2>&1' -- [WARN]/[REJECT] go to stderr, so stdout alone is empty and exit is 0 in the tier this repo usually occupies"
   fi
 
   # (ii) No threshold literal in step 8's tier-decision region. Region-scoped,

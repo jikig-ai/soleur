@@ -150,10 +150,16 @@ make_compound_skill() {
        AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>&1
    \`\`\`
 
+   The \`2>&1\` above is load-bearing: [WARN] and [REJECT] go to stderr.
+
    - If \`A > 115\`: advisory. <!-- rule-threshold: 115 -->
    - If \`L > ${FIX_CAP}\`: cap per-rule length at ~${FIX_CAP} by moving context out.
 
    B_TOTAL is informational only -- end of region.
+
+   \`\`\`bash
+   if bash ./scripts/rule-metrics-aggregate.sh >/dev/null 2>&1; then :; fi
+   \`\`\`
 EOF
 }
 
@@ -292,9 +298,22 @@ t6a_deleted_invocation_is_caught() {
 t6b_dropped_stderr_redirect_is_caught() {
   local root; root="$(mktemp -d)"
   make_fixture_tree "$root"
-  # Keep the invocation but drop the load-bearing 2>&1. Without it the WARN
-  # tier prints nothing to stdout, so an agent sees no signal at all.
+  # Drop the load-bearing 2>&1 from the INVOCATION only. The fixture
+  # deliberately keeps two decoys the real SKILL.md also has -- a prose sentence
+  # mentioning `2>&1` and an unrelated fenced block using `>/dev/null 2>&1` --
+  # because a file-wide `grep -q '2>&1'` passes on both of those and was
+  # verified vacuous against the real file. Only a check anchored on the
+  # invocation's own code block can fail here.
   sed -i 's/ 2>&1$//' "$root/plugins/soleur/skills/compound/SKILL.md"
+  local remaining
+  remaining=$(grep -c '2>&1' "$root/plugins/soleur/skills/compound/SKILL.md")
+  # Fixture self-check: if the decoys are gone, this case would pass for the
+  # wrong reason and prove nothing.
+  if (( remaining < 2 )); then
+    fail "T6b fixture invariant" "expected >=2 decoy 2>&1 to survive, found $remaining"
+  else
+    pass "T6b fixture keeps $remaining decoy 2>&1 occurrences"
+  fi
   run_guard "$root"
 
   assert_exit "T6b dropped 2>&1 exits non-zero" "1" "$GUARD_RC"
@@ -386,8 +405,8 @@ t7_sentinel_desync_still_caught
 
 # Minimum-cardinality guard: if a refactor silently drops case invocations, an
 # empty run must not report success.
-if (( TOTAL < 34 )); then
-  echo "FAIL: suite ran only $TOTAL assertions -- expected >= 34 (cases dropped?)"
+if (( TOTAL < 36 )); then
+  echo "FAIL: suite ran only $TOTAL assertions -- expected >= 36 (cases dropped?)"
   exit 1
 fi
 
