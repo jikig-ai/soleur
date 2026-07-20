@@ -14,20 +14,20 @@ Derived from
 - [ ] 0.2 Read `.claude/hooks/ship-soak-followthrough-gate.sh`; confirm deny = `jq -n` JSON + `exit 0`.
 - [ ] 0.3 Confirmed: `scripts/test-all.sh:316` auto-globs BOTH `plugins/soleur/test/*.test.sh` and `.claude/hooks/*.test.sh`.
 - [ ] 0.4 Read `plugins/soleur/test/gitleaks-merge-commit.test.sh` header — the #6727 mutation-proof discipline.
-- [ ] 0.5 Confirm `emit_incident`'s 6th arg (`kind`) accepts an arbitrary value, and that the weekly aggregator will not silently ignore an unknown `kind` (rows written but never read).
+- [ ] 0.5 **RESOLVED by the deepen pass — do not re-litigate.** `emit_incident` accepts a 6th positional `kind`, but `scripts/rule-metrics-aggregate.sh` **never reads `.kind`** (it gates on `schema==1` + `rule_id != null` and counts by `event_type ∈ {deny,bypass,applied,warn}`, :177-184). So a `kind`-based scheme writes rows nothing surfaces. Design is: disposition in `rule_id`, `event_type=applied`. Verify the round-trip at 4.6.
 - [ ] 0.6 Confirm no validator rejects ADR `status: proposed`.
 - [ ] 0.7 Re-verify next free ADR ordinal against `origin/main` (ADR-130 provisional).
 
 ## Phase 1 — Gate script (contract; ships FIRST)
 
-- [ ] 1.1 **RED** — write `plugins/soleur/test/net-issue-flow.test.sh` before the script.
+- [ ] 1.1 **RED** — write `plugins/soleur/test/net-issue-flow.test.sh` before the script. **Fixture seam at the I/O boundary** (stub `gh` on `PATH`), never above the counting logic.
 - [ ] 1.2 Create `plugins/soleur/skills/ship/scripts/net-issue-flow.sh`; `set -uo pipefail`, `export LC_ALL=C`, header documenting stdout contract + exit policy.
 - [ ] 1.3 CLOSING: keep regex `(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+`, `sort -u`.
-- [ ] 1.4 FILED — **all four together**: (a) drop `--label deferred-scope-out`; (b) `--state open` → `--state all`; (c) **add `--limit 500`** (default 30 — the most dangerous defect found in review); (d) full ISO `PR_CREATED_AT`, **no `cut -c1-10`**.
+- [ ] 1.4 FILED — **all four together**: (a) drop `--label deferred-scope-out`; (b) `--state open` → `--state all`; (c) **add `--limit 500`** (default 30); (d) **drop `--search` entirely** — `--json number,body,createdAt` + client-side `jq` filter on full ISO `PR_CREATED_AT`, **no `cut -c1-10`**. `--search` returns empty cross-repo under an App/action token → gate silently always-passes.
 - [ ] 1.5 Body filter: numeric-boundary bare reference `(^|[^0-9A-Za-z])#<PR>([^0-9]|$)` — **not** the `(Ref|Closes|Fixes)` keyword form (40% coverage, measured).
 - [ ] 1.6 Override: `grep -qF '<!-- gate-override: net-issue-flow -->'` + `SOLEUR_SKIP_NET_ISSUE_FLOW_GATE=1`.
 - [ ] 1.7 Exit 1 when `NET > 0` and no override; else 0. **Fail-open** on gh error / unreadable body.
-- [ ] 1.8 `emit_incident net-issue-flow transient …` on every fail-open path; one retry with backoff first (`--search` = Search API, 30 req/min).
+- [ ] 1.8 `emit_incident net-issue-flow transient …` on every fail-open path (fail-open is NOT fail-silent); one retry with backoff first. **Never wrap `emit_incident` in `$(...)` or a pipe** — its output IS the telemetry.
 - [ ] 1.9 Display block enumerates the actual issue numbers behind CLOSING and FILED.
 - [ ] 1.10 **GREEN** — `bash plugins/soleur/test/net-issue-flow.test.sh`.
 
@@ -36,6 +36,7 @@ Derived from
 - [ ] 2.1 **RED** — `.claude/hooks/ship-net-issue-flow-gate.test.sh` using the `ship-unpushed-commits-gate.test.sh` `assert_deny` / `assert_pass` harness.
 - [ ] 2.2 Create `.claude/hooks/ship-net-issue-flow-gate.sh`. **Delegate to the Phase 1 script — do not re-implement.**
 - [ ] 2.3 Command regex **widened to `gh\s+pr\s+(ready|merge)`** — the soak gate's `merge\s+.*--auto` form misses `--squash` (merge queue) and `--admin`.
+- [ ] 2.3b **Audit every early exit before placing the gate** — each is a bypass path. This gate is independent of local repo state, so it fires BEFORE context-dependent exits and AFTER auth checks. Document the ordering.
 - [ ] 2.4 Path via `PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"`, **not** payload `.cwd`.
 - [ ] 2.5 Wrap the delegated call in `timeout 8`.
 - [ ] 2.6 Deny: `emit_incident` + `jq -n` `permissionDecision: "deny"` + `exit 0`. Reason offers 3 remedies.
@@ -54,12 +55,15 @@ Derived from
 - [ ] 4.1 Sweep every site (map: `review/SKILL.md` 496, 500, 507, 509, 513, 532, 740, 750, 1055; `review/workflows/review.workflow.js:279`; `ship/SKILL.md:539`; `work/SKILL.md:887`; `compound/SKILL.md:79`). **The grep is the enumerator, not this list.**
 - [ ] 4.2 Cover hyphenated + `>` forms (`≤30-line`, `>30 lines`, `≤2-file`, `>2 files`).
 - [ ] 4.3 Restate the bookkeeping-vs-edit arithmetic at `review/SKILL.md:500` — it changes at 100 lines.
-- [ ] 4.4 Add `emit_incident cost-of-filing "$DISPOSITION" ... cost_of_filing` (`flip`|`file`) **in `review.workflow.js`**, not SKILL.md prose.
+- [ ] 4.4 Add `emit_incident "cost-of-filing-${DISPOSITION}" applied ...` **in `review.workflow.js`**, not SKILL.md prose. **Disposition rides in `rule_id`, event stays `applied`** — `rule-metrics-aggregate.sh` never reads `.kind` and counts only `event_type ∈ {deny,bypass,applied,warn}`, so a `kind`-based scheme writes rows that are never surfaced.
 - [ ] 4.5 Verify: `git grep -nE '(≤|>) ?30[ -]?line|(≤|>) ?2[ -]?file' -- plugins/soleur/skills/` → 0.
+- [ ] 4.6 Verify the aggregator round-trip: emit one row of each disposition, run `scripts/rule-metrics-aggregate.sh`, confirm both appear with non-zero counts.
 
 ## Phase 5 — action-required sink (#6769)
 
-- [ ] 5.1 Add `--assignee "${OPERATOR_GH_LOGIN}"` to **both** `gh issue create` arms in `operator-digest/assets/operator-digest.workflow.yml:94-100`. **Do NOT call the subscription API** — token lacks `notifications` (measured).
+- [ ] 5.1a Add `OPERATOR_GH_LOGIN: ${{ vars.OPERATOR_GH_LOGIN }}` to the post-step `env:`, plus `--assignee "${OPERATOR_GH_LOGIN}"` on **both** `gh issue create` arms (`operator-digest.workflow.yml` :94 and :98 — verified exactly two, neither has `--assignee`), with an empty-check that **exits non-zero** if unset. **Do NOT call the subscription API** — the token lacks `notifications` (measured).
+- [ ] 5.1b Provision it in `scripts/provision-operator-digest-repo.sh`: `gh variable set OPERATOR_GH_LOGIN -R jikig-ai/operator-digest --body "<login>"`. **The variable does not exist today** — verified against the asset's `env:` blocks (:55, :76) and the provision script.
+- [ ] 5.1c Set it on the already-provisioned repo (the script does not re-run automatically); verify with `gh variable list -R jikig-ai/operator-digest`.
 - [ ] 5.2 `operator-digest/SKILL.md` §4: add `createdAt,labels`; sort age-desc; render `(NNN days old)`; band >90d / 30-90d / <30d. **SLA arm only — no auto-close.**
 - [ ] 5.3 Exclude `decision-challenge` from the action-needed harvest; render separately (never drop).
 - [ ] 5.4 Record the retain-not-retire decision in ADR-130 + PR body.

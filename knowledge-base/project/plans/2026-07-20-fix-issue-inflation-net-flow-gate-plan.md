@@ -7,6 +7,7 @@ lane: cross-domain
 issue_ref: "Closes #6769"
 brand_survival_threshold: none
 requires_cpo_signoff: false
+deepened: 2026-07-20
 ---
 
 # fix(workflow): make the net-issue-flow gate blocking, raise the cost-of-filing threshold, and repair the action-required delivery channel
@@ -14,6 +15,37 @@ requires_cpo_signoff: false
 > Spec lacks valid `lane:` (no `spec.md` for this branch) — defaulted to `cross-domain` (TR2 fail-closed).
 > `Closes #6769` — this PR lands the mechanism AND the diagnosis that issue asked for.
 > **This PR files nothing.** It must itself pass the `NET > 0` gate it installs.
+
+## Enhancement Summary
+
+**Deepened on:** 2026-07-20
+**Agents used:** operator-digest execution diagnosis; gate/test precedent sweep; `code-simplicity-reviewer`;
+`architecture-strategist`; verify-the-negative pass (12 claims, all confirmed);
+`learnings-researcher`; `spec-flow-analyzer`.
+
+The deepen pass **measured** rather than reasoned, and the measurements falsified four load-bearing
+assumptions in v1. Every one of them made the gate *pass* when it should fail — the exact
+structurally-unfailable class the PR exists to eliminate.
+
+1. **`--search` returns empty cross-repo under an App/action token.** The gate would have silently
+   computed `FILED=0` → always-pass, with no error. Now uses the List API + client-side `jq` date
+   filter. The repo already documented this trap at `operator-digest/SKILL.md:79-82`, and v1 cited
+   that exact line in another section while using `--search` anyway.
+2. **`gh issue list` defaults to 30 results.** Measured 30 vs 271. A PR open >18h could not see its
+   own early filings. Now `--limit 500`.
+3. **The `(Ref|Closes|Fixes) #N` filter matches ~40% of real filings**, not ~100%. Measured across 191
+   agent-authored issues. Now a numeric-boundary bare `#N` match; test T11 inverted accordingly.
+4. **The instrumentation would have been written and never read.** `rule-metrics-aggregate.sh` never
+   references `.kind` and counts only `event_type ∈ {deny,bypass,applied,warn}` — so v1's
+   `kind=cost_of_filing` / `event=flip|file` rows were inert. Disposition now rides in `rule_id` with
+   `event=applied`, surfacing in the existing weekly aggregate with no aggregator change.
+
+Also corrected: `OPERATOR_GH_LOGIN` was an identifier v1 invented (it does not exist — the plan now
+creates and provisions it, with a loud empty-check); the `notifications` scope is unavailable so
+delivery moves to `--assignee`; hook registration re-sequenced after the mutation proof; the merge-path
+regex widened and the two structurally-unreachable merge surfaces stated honestly rather than papered
+over; auto-close dropped in favour of the SLA arm; instrumentation moved from SKILL.md prose into
+`review.workflow.js`.
 
 ## Overview
 
@@ -214,7 +246,8 @@ which is the unfailable-gate class this PR exists to eliminate, so they are not 
 + FILED=$(gh issue list \
 +   --state all \
 +   --limit 500 \
-+   --search "created:>=${PR_CREATED_AT_FULL_ISO}" \
++   --json number,body,createdAt \
++   # NO --search: List API + client-side jq date filter (see defect (d))
 ```
 
 with the body filter changed from the keyword form to a numeric-boundary bare reference:
@@ -228,7 +261,17 @@ with the body filter changed from the keyword form to a numeric-boundary bare re
 |---|---|---|---|
 | **a** | **`gh issue list` defaults to 30 results.** No `--limit` today. Harmless at ~22 `deferred-scope-out`/week; fatal at 271/week | `--search "created:>=2026-07-13"` → **30**; with `--limit 500` → **271**. A 3-day PR has 81 candidates. gh returns newest-first, so the cap drops the *oldest* — exactly the issues filed early in the PR cycle | `--limit 500`. **A PR open >~18h currently cannot see its own early filings.** Deterministic, silent, always biased toward passing |
 | **b** | **`(Ref\|Closes\|Fixes) #N` matches ~40% of filings, not ~100%** | Of 191 `deruelle`-authored issues in-window, 77 (40%) match the keyword form; 93 use `see/from/via/per/PR #`. Per-PR: #6748 strict=0 / any-mention=2; #6727 strict=0 / any-mention=2 — both evade entirely | Match a bare `#<PR>` with a numeric boundary. The evading bodies are ordinary agent prose (`PR #6748 was deliberately scoped…`), not evasion — so a keyword filter is simply the wrong instrument |
-| **c** | **`cut -c1-10` truncates `PR_CREATED_AT` to a date**, including everything created earlier that same day, before the PR existed | ~3 spurious candidates/day under the old filter; **~39/day** widened | Pass the full ISO timestamp (`created:>=2026-07-20T14:32:00Z`) — GitHub search accepts it |
+| **c** | **`cut -c1-10` truncates `PR_CREATED_AT` to a date**, including everything created earlier that same day, before the PR existed | ~3 spurious candidates/day under the old filter; **~39/day** widened | Compare the full ISO timestamp client-side (see (d)) |
+| **d** | **`--search` returns EMPTY cross-repo under an in-action App token** — the List API does not | Documented in this repo at `operator-digest/SKILL.md:79-82` (#3403), and the deepen pass surfaced the learning `2026-06-12-gh-search-api-empty-cross-repo-under-in-action-app-token.md` | **Drop `--search` entirely.** Use `gh issue list --state all --limit 500 --json number,body,createdAt` and filter by `createdAt` in `jq` |
+
+**Defect (d) is the most dangerous of the four and was found only by the deepen pass.** `--search`
+silently returning empty under an App/action token means `FILED=0` → `NET ≤ 0` → **the gate passes,
+always, with no error**. A blocking gate that silently self-disables is strictly worse than the
+advisory one it replaces, because it also carries the authority of having "passed." The repo already
+knew this trap — `operator-digest/SKILL.md:79-82` documents it, and *this plan's own Finding 2 cites
+that very line* while the gate design used `--search` anyway. Dropping `--search` also incidentally
+resolves the Search API's 30 req/min rate limit (vs 5,000/hr for REST), which was a separate
+fail-open trigger flagged in architecture review.
 
 **On over-counting.** Fix (b) trades precision for recall, and that is the correct direction here: the
 display block enumerates the exact issue numbers behind the verdict, and the override exists. A gate
@@ -264,9 +307,20 @@ instead of another guess. The repo already has the substrate: `.claude/hooks/lib
 `.claude/.rule-incidents.jsonl`, with schema versioning and log rotation already built.
 
 ```bash
-emit_incident cost-of-filing "$DISPOSITION" "<finding-summary>" "" PostToolUse cost_of_filing
-# DISPOSITION ∈ { flip, file }
+# rule_id encodes the disposition; event_type stays within the aggregator's recognized set.
+emit_incident "cost-of-filing-${DISPOSITION}" applied "<finding-summary>" "" PostToolUse
+# DISPOSITION ∈ { flip, file }  →  rule_id ∈ { cost-of-filing-flip, cost-of-filing-file }
 ```
+
+**Why the disposition rides in `rule_id`, not in `kind` or `event`.** The deepen pass measured the
+consumer: `scripts/rule-metrics-aggregate.sh` **never references `.kind`** — it gates rows on
+`select(.schema == 1) | select(.rule_id != null)` and counts strictly by `event_type`
+(`deny`/`bypass`/`applied`/`warn`, :177-184). An earlier draft emitted `kind=cost_of_filing` with
+`event ∈ {flip, file}`: those rows would have been **written and then silently never surfaced** —
+`kind` is ignored entirely and `flip`/`file` are outside the counted `event_type` set. That is
+instrumentation that produces no data, in the deliverable whose entire justification is producing
+data. Encoding the disposition in `rule_id` makes both counts appear in the existing weekly
+aggregate **with no aggregator change at all.**
 
 **The emission site is `plugins/soleur/skills/review/workflows/review.workflow.js`, NOT SKILL.md
 prose.** Plan-review caught this and it is the single sharpest finding of the pass: a plan whose
@@ -299,17 +353,37 @@ a nag posted into a 0-subscriber repo is not an escalation.
    regardless of watch state, and `--assignee` needs only `repo`, which the workflow token already
    has. The diagnosis corroborates the gap directly — all 7 digests have `assignees=0`.
 
-   One-line change at `operator-digest/assets/operator-digest.workflow.yml:94-96`:
+   Change at `operator-digest/assets/operator-digest.workflow.yml:94-100`, applied to **both**
+   `gh issue create` arms (the withheld-notice arm too — a withheld digest is exactly when the
+   operator most needs to know):
 
    ```diff
+   + env:
+   +   OPERATOR_GH_LOGIN: ${{ vars.OPERATOR_GH_LOGIN }}
+     ...
+   + # Fail loudly rather than silently recreating the dark channel this fix exists to close.
+   + if [[ -z "${OPERATOR_GH_LOGIN:-}" ]]; then
+   +   echo "OPERATOR_GH_LOGIN repo variable is unset — refusing to post an unassigned digest" >&2
+   +   exit 1
+   + fi
      gh issue create -R jikig-ai/operator-digest \
        --title "Digest: ${ISO_WEEK}" \
    +   --assignee "${OPERATOR_GH_LOGIN}" \
        --body-file "$DIGEST"
    ```
 
-   Applied to **both** arms (the withheld-notice arm at :98 too — a withheld digest is exactly when
-   the operator most needs to know). This is fully automatable, in-session, no operator step.
+   **`OPERATOR_GH_LOGIN` does not exist today — this plan creates it.** Verified: the workflow's
+   `env:` blocks (:55, :76) carry only `anthropic_api_key` and `github_token`; there is no operator
+   identity anywhere in the asset or in `scripts/provision-operator-digest-repo.sh`. An earlier draft
+   of this plan referenced `${OPERATOR_GH_LOGIN}` as though it already existed — a paraphrase-without-
+   verification slip caught by the deepen pass. So the variable must also be **provisioned**:
+   `scripts/provision-operator-digest-repo.sh` sets it via
+   `gh variable set OPERATOR_GH_LOGIN -R jikig-ai/operator-digest --body "<login>"`.
+
+   Why a repo variable rather than a literal or `@me`: `@me` resolves to the `github-actions` bot (the
+   workflow actor), and `gh repo view --json owner` returns the **org** `jikig-ai`, not a user — both
+   would silently produce an unassigned or failed assignment. The empty-check is what keeps a
+   misconfiguration loud instead of dark.
 
    The watch subscription remains a nice-to-have belt-and-braces. It is **explicitly deferred** as a
    one-time optional operator step, not claimed as automated.
@@ -419,14 +493,21 @@ Phase order is load-bearing: the contract-defining script (Phase 1) must precede
 
 ### Phase 1 — The gate script (contract-defining; ships first)
 
-- [ ] 1.1 **RED:** write `plugins/soleur/test/net-issue-flow.test.sh` first. Per `cq-write-failing-tests-before`.
+- [ ] 1.1 **RED:** write `plugins/soleur/test/net-issue-flow.test.sh` first. Per
+      `cq-write-failing-tests-before`. **Place the fixture seam at the I/O boundary** — stub the `gh`
+      binary on `PATH`, never short-circuit above the counting logic. A seam placed above the code
+      under test makes the real path unreachable by any test, so the `--state all` / `--limit` /
+      client-side-date changes would stay green while broken in production. See
+      `knowledge-base/project/learnings/test-failures/2026-07-20-a-fixture-seam-above-the-code-under-test-makes-the-default-path-untestable.md`.
 - [ ] 1.2 Create `plugins/soleur/skills/ship/scripts/net-issue-flow.sh`. `set -uo pipefail`,
       `export LC_ALL=C`, header documenting the stdout contract and exit-code policy.
 - [ ] 1.3 CLOSING extraction: unchanged regex `(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+`, `sort -u`.
 - [ ] 1.4 FILED — all four changes together (any one omitted re-opens a pass-biased hole):
       (a) **drop `--label deferred-scope-out`**; (b) `--state open` → `--state all`;
-      (c) **add `--limit 500`** (default is 30 — the single most dangerous defect found in review);
-      (d) full ISO `PR_CREATED_AT`, **no `cut -c1-10`**.
+      (c) **add `--limit 500`** (default is 30); (d) **drop `--search` entirely** — use
+      `--json number,body,createdAt` and filter `createdAt` client-side in `jq` against the full ISO
+      `PR_CREATED_AT`, **no `cut -c1-10`**. `--search` returns empty cross-repo under an App/action
+      token, which would make the gate silently always-pass.
 - [ ] 1.5 Body filter: numeric-boundary bare reference `(^|[^0-9A-Za-z])#<PR>([^0-9]|$)`, **not** the
       `(Ref|Closes|Fixes)` keyword form (40% coverage, measured).
 - [ ] 1.6 Override: `grep -qF '<!-- gate-override: net-issue-flow -->'` on the PR body; plus
@@ -435,9 +516,10 @@ Phase order is load-bearing: the contract-defining script (Phase 1) must precede
       body or a `gh` API error — a gate that blocks on its own transport failure halts all shipping.
 - [ ] 1.8 **Fail-opens must be telemetered**, not just printed: `emit_incident net-issue-flow transient …`
       on every fail-open path. Overrides are already logged; without this the gate can sit silently
-      open for weeks with clean telemetry. Add one retry with backoff before failing open —
-      `--search` hits the Search API (**30 req/min**, vs 5,000/hr REST), so the gate is most likely to
-      fail open under exactly the high-throughput conditions it exists to govern.
+      open for weeks with clean telemetry. Add one retry with backoff before failing open. (Dropping
+      `--search` in 1.4(d) moves the call from the Search API's **30 req/min** onto REST's 5,000/hr,
+      which removes the main rate-limit fail-open trigger — the retry now covers ordinary transport
+      flake rather than a structural throughput ceiling.)
 - [ ] 1.9 Display block enumerates the actual issue numbers behind CLOSING and FILED.
 - [ ] 1.10 **GREEN.** Run `bash plugins/soleur/test/net-issue-flow.test.sh`.
 
@@ -450,6 +532,12 @@ Phase order is load-bearing: the contract-defining script (Phase 1) must precede
 - [ ] 2.3 Command regex **widened to `gh\s+pr\s+(ready|merge)`** — not the `merge\s+.*--auto` form
       copied from the soak gate, which misses `--squash` (merge-queue path) and `--admin`.
       `strip_command_bodies`-guarded.
+- [ ] 2.3b **Audit every early exit in the copied hook structure before placing the gate.** Each early
+      exit is a bypass path. This gate's condition is independent of local repo state (it operates on
+      a PR number, not the checkout), so it must fire **before** context-dependent exits (detached
+      HEAD, dirty tree, `[[ -d ]]` checks) and **after** auth checks. Document the ordering rationale
+      in a hook comment. Precedent:
+      `knowledge-base/project/learnings/2026-03-28-pretooluse-hook-guard-ordering-matters.md`.
 - [ ] 2.4 Resolve the script path via
       `PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"` —
       **not** the payload's `.cwd`. A `gh pr ready` issued from `apps/web-platform/` would resolve
@@ -487,10 +575,17 @@ Phase order is load-bearing: the contract-defining script (Phase 1) must precede
 
 ### Phase 5 — action-required sink (#6769)
 
-- [ ] 5.1 Add `--assignee "${OPERATOR_GH_LOGIN}"` to **both** `gh issue create` arms in
-      `plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml:94-100`. Needs only
-      `repo` scope. **Do NOT attempt the watch-subscription API** — the token lacks `notifications`
-      (measured; see D3.1).
+- [ ] 5.1a Add `OPERATOR_GH_LOGIN: ${{ vars.OPERATOR_GH_LOGIN }}` to the post-step `env:`, plus
+      `--assignee "${OPERATOR_GH_LOGIN}"` on **both** `gh issue create` arms
+      (`operator-digest.workflow.yml` :94 and :98 — verified exactly two, neither has `--assignee`),
+      with an empty-check that **exits non-zero** if unset. Needs only `repo` scope. **Do NOT attempt
+      the watch-subscription API** — the token lacks `notifications` (measured; see D3.1).
+- [ ] 5.1b Provision the variable in `scripts/provision-operator-digest-repo.sh`:
+      `gh variable set OPERATOR_GH_LOGIN -R jikig-ai/operator-digest --body "<login>"`. **The variable
+      does not exist today** — verified against the asset's `env:` blocks (:55, :76, which carry only
+      `anthropic_api_key` and `github_token`) and the provision script.
+- [ ] 5.1c Set it on the already-provisioned repo (the provision script does not re-run
+      automatically); verify with `gh variable list -R jikig-ai/operator-digest`.
 - [ ] 5.2 `operator-digest/SKILL.md` §4: `--json title,url` → `--json title,url,createdAt,labels`;
       sort by age desc; render `(NNN days old)`; band >90d / 30-90d / <30d. This is the SLA arm of the
       staleness contract — **no auto-close mutation.**
@@ -571,11 +666,17 @@ The work is not done when the gate is asserted to work. It is done when the gate
       (`review/SKILL.md:500` `≤30-line`, `:532` `>30 lines OR touches >2 files`, `:750` `≤30-line`,
       `:1055` `≤30-line/≤2-file`). Use:
       `git grep -nE '(≤|>) ?30[ -]?line|(≤|>) ?2[ -]?file' -- plugins/soleur/skills/` returns 0.
-- [ ] **AC9** The `cost_of_filing` emission lives in
+- [ ] **AC9** The disposition emission lives in
       **`plugins/soleur/skills/review/workflows/review.workflow.js`** (executable), not in SKILL.md
-      prose: `git grep -c 'cost_of_filing' plugins/soleur/skills/review/workflows/review.workflow.js`
+      prose: `git grep -c 'cost-of-filing-' plugins/soleur/skills/review/workflows/review.workflow.js`
       ≥ 1. A grep proving prose exists would be honor-system telemetry defended by an argument against
       honor systems.
+- [ ] **AC9b** The emission is **actually counted**, not merely written: the emitted `event_type` is
+      `applied` (within `rule-metrics-aggregate.sh`'s counted set) and the disposition is carried in
+      `rule_id`. Verify by emitting one synthetic row of each disposition and running the aggregator:
+      both `cost-of-filing-flip` and `cost-of-filing-file` appear with non-zero counts. **Writing a
+      row the aggregator ignores is the failure mode this AC exists to catch** — `kind` is never read
+      by the aggregator, so a `kind`-based scheme would be silently inert.
 - [ ] **AC10** Both `gh issue create` arms in `operator-digest.workflow.yml` carry `--assignee`:
       `grep -c -- '--assignee' plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml`
       == 2.
@@ -601,6 +702,11 @@ The work is not done when the gate is asserted to work. It is done when the gate
       fix.
 - [ ] **AC21** Hook registration in `.claude/settings.json` appears in a commit **after** the
       mutation-evidence commit (verifiable in `git log`), per the Phase 8.6 sequencing rationale.
+- [ ] **AC22** The gate script contains **no `--search`**: `grep -c -- '--search' <script>` == 0.
+      Standing guard against the always-pass regression, since `--search` is the more natural-looking
+      way to write the date filter and returns empty cross-repo under an App/action token.
+- [ ] **AC23** No `emit_incident` call in the new script or hook is wrapped in a command substitution
+      or pipe: `grep -nE '\$\(\s*emit_incident|emit_incident[^|]*\|' <script> <hook>` returns nothing.
 
 ### Post-merge (automated — no operator steps)
 
@@ -784,6 +890,16 @@ transcript is what the *operator* reads while the CI proof is what the *machine*
 - **Do not "simplify" the FILED query back to `--label deferred-scope-out`.** It will look like a
   tightening. It is the difference between a gate that fires and a gate that cannot. Finding 1 measured
   the coverage at ~8%.
+- **Do not reintroduce `--search`.** It is the more natural-looking way to express the date filter and
+  it silently returns empty cross-repo under an App/action token — which makes the gate always-pass
+  with no error. Client-side `jq` date filtering is deliberate, not an oversight.
+- **Never wrap `emit_incident` in `$(...)` or a pipe.** Its output *is* the telemetry stream; capturing
+  it into a variable silences the very observability the call exists to provide. Call it as a
+  statement. See
+  `knowledge-base/project/learnings/2026-07-20-the-fix-for-an-evidence-discarding-gate-discarded-its-evidence.md`.
+- **Fail-open is not fail-silent.** Phase 1.7 (exit 0 on transport error) and Phase 1.8 (emit
+  `transient`) are one decision, not two — shipping 1.7 without 1.8 produces a gate that can sit
+  disabled for weeks while looking exactly like a healthy one.
 - **Do not implement the computation twice.** The hook must delegate to the Phase 1 script. A
   hand-mirrored copy in the hook is verbatim the #6727 antipattern: the source of truth drifts and the
   suite stays green.
@@ -822,3 +938,5 @@ transcript is what the *operator* reads while the CI proof is what the *machine*
 | **T21** | Hook: `gh pr merge <N> --squash --admin` | `assert_deny` |
 | **T22** | Hook invoked with cwd = `apps/web-platform/` | resolves via `CLAUDE_PROJECT_DIR`, still denies — not a silent fail-open |
 | **T23** | Fail-open path taken | emits `emit_incident … transient`, not just a stdout marker |
+| **T24** | `gh` stub returns issues whose `createdAt` straddles `PR_CREATED_AT` by minutes | only the post-PR ones counted (client-side full-ISO compare, not a date string) |
+| **T25** | Aggregator round-trip: emit one `cost-of-filing-flip` + one `cost-of-filing-file`, run `rule-metrics-aggregate.sh` | both appear with non-zero counts (AC9b) |
