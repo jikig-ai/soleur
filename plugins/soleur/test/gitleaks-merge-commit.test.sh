@@ -111,6 +111,24 @@ scan_git() {
   )
 }
 
+# scan_git_count <log-opts> -> number of findings reported (NOT the exit code)
+#
+# Use this for any assertion of the form "the shipped config DETECTS X".
+# `gitleaks git` exits 1 on a git-invocation failure as well as on a finding, so
+# an exit-code oracle cannot distinguish "found the secret" from "the walk never
+# ran". Reading the report separates them: a failed walk yields zero findings.
+scan_git_count() {
+  (
+    cd "$FIXTURE" || exit 1
+    rpt=$(mktemp -t glreport.XXXXXXXX.json)
+    gitleaks git --config "$CONFIG" --no-banner --exit-code 1 --log-opts="$1" \
+      --report-format json --report-path "$rpt" >/dev/null 2>&1
+    n=$(jq 'length' "$rpt" 2>/dev/null || echo 0)
+    rm -f "$rpt"
+    echo "${n:-0}"
+  )
+}
+
 # patch_bytes <log-opts-for-git-log> -> bytes of patch body
 # Anchored on 'diff --' so it catches BOTH `diff --git` (normal) and
 # `diff --cc` (combined). Anchoring on 'diff --git' alone silently reports 0
@@ -194,11 +212,19 @@ else
   # The cron ships `-m --all`; --all is meaningless in the fixture repo (no other
   # refs) but harmless. Substitute the fixture's own ref so the walk is scoped.
   fixture_opts="${CRON_OPTS/--all/HEAD}"
-  got=$(scan_git "$fixture_opts")
-  if [[ "$got" == "1" ]]; then
-    pass "shipped cron log-opts ('$CRON_OPTS') DETECTS merge-exclusive secret"
+  # Counts FINDINGS, not the exit code. gitleaks exits 1 both when it detects a
+  # secret AND when the underlying `git log` invocation fails, so an exit-code
+  # oracle passes when the walk never ran at all. Mutation-verified: rewriting
+  # the cron to build its opts in a shell variable (`OPTS="--cc --all"` /
+  # `--log-opts="$OPTS"`) makes git fail on the unexpanded literal, rc=1, and
+  # the old form reported "DETECTS" while the shipped config — now the `--cc`
+  # no-op T2 proves detects nothing — found zero. That is this file's own
+  # defect class: a gate certifying the wrong property.
+  got=$(scan_git_count "$fixture_opts")
+  if [[ "$got" -ge 1 ]]; then
+    pass "shipped cron log-opts ('$CRON_OPTS') DETECTS merge-exclusive secret ($got finding(s))"
   else
-    fail "shipped cron log-opts ('$CRON_OPTS') MISSED merge-exclusive secret (rc=$got) — #6721 is not fixed"
+    fail "shipped cron log-opts ('$CRON_OPTS') found ZERO findings — either #6721 is not fixed, or the walk errored (an exit code alone cannot tell these apart)"
   fi
 fi
 
@@ -381,7 +407,12 @@ fi
 # merge_group steps must NOT carry -m in their log-opts. Anchored on the
 # range-bearing form so the cron's own `-m --all` (a different, correct use)
 # cannot satisfy or trip it.
-pr_dash_m=$(grep -cE 'log-opts="-m \$\{BASE_SHA\}' "$WORKFLOW")
+# Order-independent: `git log` accepts options AFTER revisions, so the original
+# `-m ${BASE_SHA}` anchor was evaded by `${BASE_SHA}..${HEAD_SHA} -m` (verified:
+# the coupling T7 measures returns in full, suite stayed green). Match `-m` as a
+# standalone token anywhere inside a range-bearing log-opts value.
+pr_dash_m=$(grep -E 'log-opts="[^"]*\$\{BASE_SHA\}[^"]*"' "$WORKFLOW" \
+  | grep -cE '(^|[ "])-m([ "]|$)' || true)
 if [[ "$pr_dash_m" == "0" ]]; then
   pass "no PR/merge_group step uses '-m BASE..HEAD' (would couple main's content — see above)"
 else

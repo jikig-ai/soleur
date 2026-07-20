@@ -677,7 +677,12 @@ $body"
 
   # Precondition: the evidence must really be in main's history, or this test
   # passes because there was nothing to find rather than because scoping works.
-  if ! git -C "$work" log origin/main --oneline | grep -qF "${subject:0:20}"; then
+  # Herestring, not a pipe: `git log | grep -q` under `set -o pipefail` makes
+  # git take SIGPIPE when grep closes on the first match, pipefail propagates
+  # the 141, and `!` inverts it into a bogus "fixture invalid". Nondeterministic
+  # — it depends on whether git flushed before grep exited. Same class this PR
+  # documents in the runbook.
+  if ! grep -qF "${subject:0:20}" <<<"$(git -C "$work" log origin/main --oneline)"; then
     echo "FAIL: $case_name fixture invalid — evidence not present on main"
     FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1)); rm -rf "$tmp"; return
   fi
