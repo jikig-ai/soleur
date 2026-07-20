@@ -118,7 +118,7 @@
 # account-level rulesets endpoint must all return non-403. See ADR-130 for the
 # probe set and issue #6755 for the recorded results.
 #
-# ── PREREQUISITE 2: entrypoint adoption — SATISFIED via the import block ─────
+# ── PREREQUISITE 2: entrypoint adoption — SATISFIED ON APPLY (import block) ──
 #
 # A `kind = "zone"` ruleset OWNS its phase's entrypoint, which is a whole-list
 # replacement. `plan` reports "1 to add" because the resource is absent from
@@ -144,22 +144,38 @@
 # Neither half is sufficient alone: (1) without (2) still creates and clobbers;
 # (2) without (1) still deletes the rule on the next plan.
 #
-# Verified plan after this change (2026-07-20, run against live state):
+# Verified plan against live state, re-run 2026-07-20 with the `for_each` gate
+# in its shipped form (an earlier capture predated that gate):
 #
 #   Plan: 1 to import, 0 to add, 1 to change, 0 to destroy.
 #
 # — NOT the "1 to add" that task 3.1 originally recorded. The single change is
 # `+1 rule`; the Flexible SSL rule appears in the diff with every attribute
-# unchanged. **A plan that says "1 to add" means the import block was dropped
-# and the clobber is back.**
+# unchanged. **A plan that says "1 to add" means the import block was dropped.**
 #
-# The adopted rule's `id`/`ref` do show as `-> (known after apply)`. That is
-# inherent to how the v4 provider writes a ruleset — a whole-list PUT, so
-# Cloudflare reassigns rule IDs — and is atomic. The rule's expression, action,
-# parameters and enabled state are all preserved; only its opaque ID changes.
+# ── ROLL FORWARD, NEVER REVERT ───────────────────────────────────────────────
 #
-# Tracked in #6767. The generalisation — every other `kind = "zone"` ruleset in
-# this repo has the same exposure and was never enumerated — is open there too.
+# Once applied, this resource is in state, so `git revert` of the PR removes the
+# resource AND the import block and Terraform plans a DESTROY of the entrypoint
+# — deleting BOTH rules and dropping app.soleur.ai to the zone SSL mode (live
+# zone setting is `strict`). That is strictly worse than the bug this file
+# fixes, and the destroy-guard makes it look survivable: a full resource delete
+# increments `resource_deletes`, so the gate prints "Add [ack-destroy] to
+# acknowledge" — inviting exactly the bypass, under outage pressure, that
+# completes the outage. Recovery from a bad apply is ROLL-FORWARD ONLY: fix the
+# `rules` blocks and re-apply. If the entrypoint is ever emptied, the adopted
+# rule is reproduced verbatim below and can be PUT back through the same
+# `zones/$ZONE/rulesets/phases/http_config_settings/entrypoint` endpoint the
+# ADR-130 probe set already curls — no dashboard needed.
+#
+# Tracked in #6767. Scope of that generalisation, corrected: the other four
+# `kind = "zone"` rulesets in this repo (seo_page_redirects, seo_response_headers,
+# allowlist_ai_crawlers, cache_shared_binaries, bulk_redirects) are ALREADY IN
+# STATE — verified via `terraform state list` — so `plan` refreshes their
+# entrypoints and would surface a dashboard-added rule as drift. Their exposure
+# is RETROSPECTIVE (anything added before their own first apply is already
+# gone), not the prospective hazard this file hit. #6767 is therefore a
+# drift-audit, not a pre-apply gate.
 #
 # See:
 #   - knowledge-base/project/plans/2026-07-20-fix-gsc-404-cdn-cgi-email-protection-plan.md
@@ -168,9 +184,8 @@
 #   - Ref #3379 (the api.soleur.ai dormant-rule tracker — deliberately untouched here)
 
 # ADOPTION, not creation. The http_config_settings entrypoint for this zone
-# already exists and is already populated, so this resource must IMPORT it —
-# see "PREREQUISITE 2" above. Creating instead would replace the entrypoint's
-# whole rule list.
+# already exists and is already populated, so this resource IMPORTS it — see
+# "PREREQUISITE 2" above.
 #
 # Import ID format is `zone/<zone_id>/<ruleset_id>` — SINGULAR `zone`, on the
 # pinned provider 4.52.7. The published docs on the provider's `main` branch say
@@ -184,28 +199,23 @@
 # 2-segment `<zone_id>/<ruleset_id>` → "invalid import identifier";
 # `zones/...` → wrong-path auth error; `zone/...` → correct
 # `GET /zones/<zone_id>/rulesets/<id>`.
+# test/seo-config-rules.test.ts pins the singular form.
 #
-# `provider` is also required and is NOT inherited from the target resource.
-# Without it the import read runs through the DEFAULT `cloudflare` provider,
-# whose token holds none of the ruleset permissions.
-# Gates the import block below. Production default is `true` — adopt.
+# `provider` here is EXPLICIT, not required: an import block DOES inherit its
+# target resource's provider. Measured — with this line deleted and the DEFAULT
+# `cloudflare` provider's token replaced by a garbage value, the plan still
+# succeeded (`1 to import`), which is only possible via the `rulesets` alias.
+# (An earlier revision of this comment claimed the opposite. It was wrong: the
+# `zones/`→`zone/` ID fix alone resolved the failure, and adding `provider` had
+# changed nothing.) Kept because it makes the credential legible at the call
+# site, and pinned by the test so it cannot be dropped silently.
 #
-# This exists solely because `mock_provider` does NOT mock `import` blocks:
-# Terraform performs the import read against the REAL provider even under
-# `terraform test`, so the credential-free `terraform test` leg in
-# infra-validation.yml fails with `Authentication error (10000)` before any of
-# its actual assertions run. `tests/web-hosts-eu-pin.tftest.hcl` sets this to
-# `false` for that reason and that reason only.
-#
-# DO NOT flip this default. At `false` the import disappears, Terraform plans a
-# create against an entrypoint that already exists, and the whole-list clobber
-# (#6767) is silently back with no other visible change to this file.
-# test/seo-config-rules.test.ts pins the default at `true`.
-variable "adopt_seo_config_entrypoint" {
-  type    = bool
-  default = true
-}
-
+# The ruleset ID is hardcoded while the zone is a variable. That coupling is
+# deliberate — the ID is valid only for this zone — and it fails CLOSED: a
+# repointed `cf_zone_id`, or an entrypoint recreated in the dashboard, makes the
+# import read fail rather than clobber. Note the blast radius, though: import
+# targets are validated BEFORE `-target` pruning, so that failure aborts the
+# whole ~70-target apply, not just this resource.
 import {
   for_each = var.adopt_seo_config_entrypoint ? toset(["adopt"]) : toset([])
   provider = cloudflare.rulesets
@@ -240,11 +250,17 @@ resource "cloudflare_ruleset" "seo_config_settings" {
   # Ordered first to match its live position. Order is not semantically
   # load-bearing here (both rules are set_config over disjoint host sets), but
   # matching live keeps the import diff empty.
+  # `ref` is pinned to the live rule's existing ref, not omitted. The v4 provider
+  # preserves rule IDs across a whole-list PUT by matching on `ref` — without it
+  # the original ref is lost on first apply and BOTH rules re-randomise their IDs
+  # on every future rule add/remove. Pinning it is what makes "reproduced
+  # verbatim" literally true and removes the `(known after apply)` churn.
   rules {
     action      = "set_config"
     description = "Flexible SSL for web platform"
     enabled     = true
     expression  = "(http.host eq \"app.soleur.ai\")"
+    ref         = "dcb85b75bc3c4f4aa2a8c13a080bf854"
     action_parameters {
       ssl = "flexible"
     }
@@ -255,7 +271,7 @@ resource "cloudflare_ruleset" "seo_config_settings" {
   # this into the rejected zone-wide option.
   #
   # test/seo-config-rules.test.ts pins this expression by EXACT EQUALITY, and
-  # pins the ruleset to exactly one rule. Both are deliberate: a deny-list of
+  # pins the ruleset to exactly two rules. Both are deliberate: a deny-list of
   # forbidden hostnames constrains spelling rather than scope, and review
   # produced several mutants that name no forbidden host yet widen the rule to
   # the whole zone (`or ends_with(http.host, ".soleur.ai")`, a `zone_name`

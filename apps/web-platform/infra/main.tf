@@ -56,7 +56,12 @@ terraform {
       version = "~> 4.0"
     }
   }
-  required_version = ">= 1.6"
+  # >= 1.7, not 1.6: seo-config-rules.tf uses `for_each` inside an `import` block,
+  # which landed in Terraform 1.7.0 ("import: for_each can now be used to expand the
+  # import block", v1.7.0 CHANGELOG). Plain `import` is 1.5. CI pins 1.10.5 so CI
+  # never exercised the floor; an operator on 1.6.x hit a parse error the constraint
+  # promised would not happen.
+  required_version = ">= 1.7"
 }
 
 provider "doppler" {

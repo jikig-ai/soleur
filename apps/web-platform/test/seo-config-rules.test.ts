@@ -42,6 +42,13 @@ const WORKFLOW_PATH = path.join(
   REPO_ROOT,
   ".github/workflows/apply-web-platform-infra.yml",
 );
+// `adopt_seo_config_entrypoint` lives here, not in seo-config-rules.tf: 50 of
+// the root's 51 variables are declared in variables.tf and the one outlier was
+// drift.
+const VARIABLES_PATH = path.join(
+  REPO_ROOT,
+  "apps/web-platform/infra/variables.tf",
+);
 
 const RESOURCE_NAME = "seo_config_settings";
 const RESOURCE_ADDRESS = `cloudflare_ruleset.${RESOURCE_NAME}`;
@@ -63,6 +70,7 @@ const CANONICAL_EXPRESSION = '(http.host in {"soleur.ai" "www.soleur.ai"})';
  */
 const ADOPTED_SSL_EXPRESSION = '(http.host eq "app.soleur.ai")';
 const ADOPTED_RULESET_ID = "a21ac79d368f425a95c895c43a090d57";
+const ADOPTED_SSL_REF = "dcb85b75bc3c4f4aa2a8c13a080bf854";
 
 /** Hosts the rule MUST cover. */
 const IN_SCOPE_HOSTS = ["soleur.ai", "www.soleur.ai"];
@@ -207,7 +215,7 @@ function extractRuleBlocks(resourceBody: string): string[] {
  * `"(http.host in {\"soleur.ai\"})"` is compared in its logical form.
  */
 function quotedAttr(block: string, name: string): string | null {
-  const re = new RegExp(`\\b${name}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`);
+  const re = new RegExp(`\\b${escapeRegExp(name)}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`);
   const m = re.exec(block);
   if (!m) return null;
   return m[1].replace(/\\(.)/g, "$1");
@@ -254,6 +262,29 @@ function flexibleSslRule(): string {
   return ruleWithParam(/ssl\s*=\s*"flexible"/);
 }
 
+/**
+ * The `import` block's body, brace-matched.
+ *
+ * A `[^}]*` scan cannot be used here: the block contains `${var.cf_zone_id}`,
+ * whose `}` terminates the class early. That made an earlier version of these
+ * assertions depend on `to` happening to precede `id` — reordering two
+ * order-independent HCL arguments broke a green build for no semantic reason.
+ */
+function importBlockBody(): string | null {
+  const tf = stripHclComments(readFileSync(TF_PATH, "utf-8"));
+  const open = tf.indexOf("import {");
+  if (open === -1) return null;
+  let depth = 0;
+  for (let i = tf.indexOf("{", open); i < tf.length; i++) {
+    if (tf[i] === "{") depth++;
+    else if (tf[i] === "}") {
+      depth--;
+      if (depth === 0) return tf.slice(tf.indexOf("{", open) + 1, i);
+    }
+  }
+  return null;
+}
+
 describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () => {
   test("seo-config-rules.tf exists and declares the seo_config_settings ruleset", () => {
     expect(existsSync(TF_PATH), `missing ${TF_PATH}`).toBe(true);
@@ -291,6 +322,33 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
     expect(rule).toMatch(/enabled\s*=\s*true/);
   });
 
+  // Blast radius is measured in EFFECTS, not just hosts.
+  //
+  // The scope assertions above bound which requests the rule matches; they say
+  // nothing about what it does to them. `set_config` can set any of ~24 edge
+  // settings, so a rule that keeps the exact canonical host expression can still
+  // widen production impact — adding `ssl = "off"` alongside `email_obfuscation`
+  // would drop the marketing hosts to a plaintext origin, and it survived every
+  // other assertion in this file. Pin the parameter SET, not just membership.
+  test("each rule's action_parameters set exactly one expected setting", () => {
+    const cases: ReadonlyArray<readonly [string, string, string]> = [
+      ["obfuscation", obfuscationRule(), "email_obfuscation"],
+      ["adopted Flexible SSL", flexibleSslRule(), "ssl"],
+    ];
+    for (const [label, rule, expected] of cases) {
+      const params = rule.match(/action_parameters\s*\{([^}]*)\}/)?.[1];
+      expect(params, `${label} rule has no action_parameters block`).toBeTruthy();
+      const keys = (params as string)
+        .split("\n")
+        .map((l) => l.trim().match(/^([a-z_]+)\s*=/)?.[1])
+        .filter((k): k is string => Boolean(k));
+      expect(
+        keys,
+        `${label} rule must set exactly ["${expected}"] — a second setting widens its effect`,
+      ).toEqual([expected]);
+    }
+  });
+
   // The load-bearing scope assertion. Exact equality, not a forbidden-host
   // deny-list — see the header comment for the mutants that motivated it.
   test("rule expression is exactly the canonical two-host scope", () => {
@@ -312,32 +370,75 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
     expect(rule).toMatch(/action\s*=\s*"set_config"/);
     expect(rule).toMatch(/ssl\s*=\s*"flexible"/);
     expect(rule).toMatch(/enabled\s*=\s*true/);
+    // `ref` is the live rule's existing ref. The v4 provider preserves rule IDs
+    // across a whole-list PUT by matching on it, so dropping it re-randomises
+    // both rules' IDs on every future edit — and makes "verbatim" untrue.
+    expect(quotedAttr(rule, "ref")).toBe(ADOPTED_SSL_REF);
   });
 
-  // Without the import block Terraform CREATES this resource, and creating a
-  // zone entrypoint that already exists replaces its whole rule list — which is
-  // exactly the clobber the adopted rule above exists to prevent. The rules
-  // block and the import block are only safe together, so the pin covers both.
-  test("the ruleset is adopted via an import block, not created", () => {
-    const tf = stripHclComments(readFileSync(TF_PATH, "utf-8"));
-    expect(tf).toMatch(
-      new RegExp(`import\\s*\\{[^}]*to\\s*=\\s*${escapeRegExp(RESOURCE_ADDRESS)}`),
+  // Without a REACHABLE import block Terraform CREATES this resource, and
+  // creating a zone entrypoint that already exists replaces its whole rule list.
+  //
+  // Every assertion here is mutation-motivated: an earlier version checked only
+  // that an `import {` block existed mentioning the resource, plus that the
+  // ruleset ID appeared somewhere in the file. Three independent reviewers
+  // showed that version stayed 10/10 green while the import was disabled
+  // (`for_each = toset([])`), inverted, stripped of its `provider`, or switched
+  // to the v5 `zones/` prefix — i.e. it pinned the block's EXISTENCE and never
+  // its EFFECT.
+  test("the import block is present, reachable, and correctly addressed", () => {
+    const body = importBlockBody();
+    expect(body, "no import block found in seo-config-rules.tf").toBeTruthy();
+
+    // Addressed at this resource.
+    expect(body).toMatch(
+      new RegExp(`to\\s*=\\s*${escapeRegExp(RESOURCE_ADDRESS)}`),
     );
-    expect(tf).toContain(ADOPTED_RULESET_ID);
+
+    // REACHABLE: the gate must actually consume the variable, and the truthy
+    // branch must be the non-empty set. `for_each = toset([])` is the mutation
+    // that silently restores the create-instead-of-import path.
+    expect(
+      body,
+      "for_each must consume var.adopt_seo_config_entrypoint",
+    ).toMatch(/for_each\s*=\s*var\.adopt_seo_config_entrypoint\s*\?/);
+    expect(
+      body,
+      'the truthy branch must be the NON-empty set (toset(["adopt"]))',
+    ).toMatch(
+      /var\.adopt_seo_config_entrypoint\s*\?\s*toset\(\[\s*"adopt"\s*\]\)\s*:\s*toset\(\[\s*\]\)/,
+    );
+
+    // Explicit provider. Not required — an import block inherits its target
+    // resource's provider (measured: with this line removed and the default
+    // provider's token replaced by garbage, the plan still reported `1 to
+    // import`) — but pinned so it cannot be dropped silently.
+    expect(body).toMatch(/provider\s*=\s*cloudflare\.rulesets/);
+
+    // SINGULAR `zone/`. The v5/plural `zones/` form is what the provider's
+    // published docs show, and on v4 it silently routes to the ACCOUNT path and
+    // reports `Authentication error (10000)` — an error that names
+    // authentication and sends you re-probing a credential that is fine.
+    expect(body, "import ID must use the v4 singular `zone/` prefix").toMatch(
+      new RegExp(
+        `id\\s*=\\s*"zone/\\$\\{var\\.cf_zone_id\\}/${ADOPTED_RULESET_ID}"`,
+      ),
+    );
   });
 
-  // The import is gated on `var.adopt_seo_config_entrypoint` so the
-  // credential-free `terraform test` job can opt out — `mock_provider` does NOT
-  // mock import blocks, so Terraform issues a real API read even under test.
-  // That escape hatch is only safe while the DEFAULT is true: flipping it to
-  // false disables the import everywhere, Terraform plans a create again, and
-  // the whole-list clobber is silently back with no other visible change.
+  // The gate exists so the credential-free `terraform test` leg can opt out —
+  // `mock_provider` does NOT mock import blocks, so Terraform issues a real API
+  // read even under test. That escape hatch is only safe while the default is
+  // true. Declared in variables.tf, not here (50 of 51 root vars live there).
   test("entrypoint adoption defaults to true", () => {
-    const tf = stripHclComments(readFileSync(TF_PATH, "utf-8"));
-    const block = tf.match(
+    const vars = stripHclComments(readFileSync(VARIABLES_PATH, "utf-8"));
+    const block = vars.match(
       /variable\s+"adopt_seo_config_entrypoint"\s*\{[^}]*\}/,
     )?.[0];
-    expect(block, "adopt_seo_config_entrypoint variable is missing").toBeTruthy();
+    expect(
+      block,
+      "adopt_seo_config_entrypoint must be declared in variables.tf",
+    ).toBeTruthy();
     expect(block).toMatch(/default\s*=\s*true/);
   });
 
@@ -352,22 +453,18 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
   // "fixing" it by deleting the adopted rule, which is the production
   // regression this whole file now guards against.
   test("rule expression covers both marketing hosts and no others", () => {
-    {
-      const rule = obfuscationRule();
-      const expression = quotedAttr(rule, "expression");
-      expect(expression, "rule has no expression").not.toBeNull();
-      for (const host of IN_SCOPE_HOSTS) {
-        expect(
-          expression,
-          `expression must cover in-scope host ${host}`,
-        ).toContain(`"${host}"`);
-      }
-      for (const host of OUT_OF_SCOPE_HOSTS) {
-        expect(
-          expression,
-          `expression must NOT reach out-of-scope host ${host}`,
-        ).not.toContain(host);
-      }
+    const expression = quotedAttr(obfuscationRule(), "expression");
+    expect(expression, "rule has no expression").not.toBeNull();
+    for (const host of IN_SCOPE_HOSTS) {
+      expect(expression, `expression must cover in-scope host ${host}`).toContain(
+        `"${host}"`,
+      );
+    }
+    for (const host of OUT_OF_SCOPE_HOSTS) {
+      expect(
+        expression,
+        `expression must NOT reach out-of-scope host ${host}`,
+      ).not.toContain(host);
     }
   });
 
