@@ -1736,12 +1736,12 @@ _fsck_emit_and_verdict() {
     # row count the advisory abort's equality test depends on.
     _prio=1
     case "$cls" in copy_corruption|probe_failed|unclassified) _prio=0 ;; esac
+    # Computed into a variable so the `-` placeholder can be applied to the RESULT: scrubbing an
+    # empty `first` still yields empty, so `${first:--}` inline would have placeheld the raw value
+    # and not the scrubbed one. This is the field the comment above is about — `first` is empty for
+    # every `ok` row (_fsck_classify returns "ok|"), and it is the only field whose emptiness was
+    # unguarded. Caught by L6a in CI, on main.
     _first_field="$(_fsck_scrub_first "$(_vscrub "${first:0:$FSCK_OUT_CAP}")")"
-    # `${first:--}`: an EMPTY field is the bug, not a cosmetic gap. bash treats tab as IFS
-    # *whitespace*, so consecutive tabs COLLAPSE — and `first` is empty for every `ok` row
-    # (_fsck_classify returns "ok|"), which shifted the workspace id into `first=` and left `ws=`
-    # EMPTY on every healthy workspace. The comment above claimed all fields were placeholder-filled;
-    # only `reason` and the skip rows actually were. Caught by L6a in CI, on main.
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$_prio" "$cls" "$reason" "$src_rc" "$dst_rc" \
       "${_first_field:--}" "$(_vscrub "$base")" \
       >> "$rows_file"
