@@ -144,14 +144,20 @@
 # Neither half is sufficient alone: (1) without (2) still creates and clobbers;
 # (2) without (1) still deletes the rule on the next plan.
 #
-# Verified plan against live state, re-run 2026-07-20 with the `for_each` gate
-# in its shipped form (an earlier capture predated that gate):
+# Verified plan against live state. Re-run 2026-07-20 against the SHIPPED config
+# — with the `for_each` gate and the `ref` pin both present. An earlier capture
+# predated the gate and was therefore evidence about a config that no longer
+# existed; re-running was cheaper than reasoning about whether it still applied.
 #
 #   Plan: 1 to import, 0 to add, 1 to change, 0 to destroy.
 #
 # — NOT the "1 to add" that task 3.1 originally recorded. The single change is
-# `+1 rule`; the Flexible SSL rule appears in the diff with every attribute
-# unchanged. **A plan that says "1 to add" means the import block was dropped.**
+# `+1 rule`. With `ref` pinned, the adopted rule now carries NO `~` markers at
+# all in the diff (its `id` and `ref` both stay
+# `dcb85b75bc3c4f4aa2a8c13a080bf854` instead of going `(known after apply)`), so
+# the plan proves the apply does not touch it. Only the new rule gets a fresh ID.
+#
+# **A plan that says "1 to add" means the import block was dropped.**
 #
 # ── ROLL FORWARD, NEVER REVERT ───────────────────────────────────────────────
 #

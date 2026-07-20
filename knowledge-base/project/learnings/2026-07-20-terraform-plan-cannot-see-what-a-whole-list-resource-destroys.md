@@ -116,12 +116,35 @@ against 4.52.7:
 | `zones/<zone_id>/<ruleset_id>` (v5 form) | wrong-path `Authentication error (10000)` |
 | `zone/<zone_id>/<ruleset_id>` | correct `GET /zones/<zone_id>/rulesets/<id>` |
 
-**`provider` is not inherited by an import block** from the resource it targets.
-Without an explicit `provider = cloudflare.rulesets`, the import read runs
-through the default `cloudflare` provider, whose token holds none of the ruleset
-permissions — producing the same misleading auth error.
+### The correction that matters more than the trap
 
-Both are the same failure mode as task 2.1's existing instruction ("verify every
+The first version of this learning also claimed **"`provider` is not inherited by
+an import block"**, and said an explicit `provider = cloudflare.rulesets` was
+required. **That is false**, and how it got written is the more useful lesson.
+
+The sequence was: plan fails → add `provider` → plan fails *identically* → find
+the real cause (`zones/` → `zone/`) → fix it → plan succeeds. Two changes were in
+flight and only one was load-bearing, and the write-up credited both. The
+evidence that `provider` changed nothing was already on screen — the second run
+produced the same error, and `TF_LOG` showed the request still going to
+`/accounts/...`. Nobody looked back at it.
+
+Measured afterwards, both directions:
+
+| experiment | result |
+|---|---|
+| remove `provider =`, poison the DEFAULT provider's token | plan still succeeds, `1 to import` |
+| point the `rulesets` alias at an invalid host, no `provider =` | import read fails on **that** host |
+
+Both show the import block using the target resource's provider. It inherits.
+
+Keep `provider =` for legibility if you like — it is now pinned by a test — but
+do not claim it is required. **When two changes are in flight and the symptom
+clears, the one that produced no observable change on its own attempt is not part
+of the fix.** A confidently-wrong correction is worse than the original gap,
+because it is written down and will be mined by whoever hits this next.
+
+Both ID-format traps are the same failure mode as task 2.1's existing instruction ("verify every
 attribute name against the pinned provider — do not copy the plan's illustrative
 block blindly"), extended to a surface nobody thought to apply it to: the import
 ID, and the provider meta-argument.
@@ -164,18 +187,42 @@ import {
 }
 ```
 
-**The default is the load-bearing part, and it is a genuine footgun.** At
-`false` the import block disappears, Terraform plans a create against an
-entrypoint that already exists, and the whole-list clobber is silently back with
-no other visible change to the file. An escape hatch for a test became a
-one-word switch that re-arms an outage. It is pinned by a test
-(`entrypoint adoption defaults to true`) and called out in both the `.tf` header
-and the tftest comment for that reason.
+**Pinning the default was not enough, and the gap is instructive.** The first
+version added a test asserting `default = true` and a comment in three places
+saying the test protected the gate. Three reviewers then mutated the *other* end
+of it: `for_each = toset([])`, or an inverted ternary, disables the import
+entirely while the default still reads `true` and every assertion passes. The
+test pinned the variable's declaration; nothing pinned that the import block
+*consumed* it. Existence, not effect — and the prose claiming otherwise was
+written by the same person who wrote the incomplete test.
+
+Severity, stated accurately rather than dramatically: because the adopted rule is
+reproduced verbatim in config, a create-instead-of-import converges on the same
+two-rule end state. So a flipped gate is a **drift-overwrite** hazard — any
+dashboard edit diverging from the reproduction is silently overwritten — not the
+rule-loss outage the original single-rule version would have caused. The defence
+that actually matters is having the adopted rule in config; the gate pin is the
+second layer.
+
+Worth knowing: the repo's destroy-guard cannot see this either. Its
+`cloudflare_ruleset` clause computes `before.rules − after.rules` and keeps only
+positive results; on a create `before` is null, so `0 − 2 = −2` is filtered out
+and no `[ack-destroy]` prompt fires. A plan-derived guard inherits plan's blind
+spot — which is this learning's thesis one level up.
 
 ## Generalisation still open
 
-Every other `kind = "zone"` ruleset this repo applies has the same exposure and
-was never enumerated against its live entrypoint — `seo-rulesets.tf`,
-`bot-allowlist.tf`, `cache.tf`, `seo-bulk-redirects.tf`. Tracked in **#6767**,
-along with the argument for making the enumeration probe a standing pre-apply
+Corrected scope. The other `kind = "zone"` rulesets — `seo_page_redirects`,
+`seo_response_headers`, `allowlist_ai_crawlers`, `cache_shared_binaries`,
+`bulk_redirects` — are **already in state** (verified with `terraform state
+list`), so `plan` refreshes their entrypoints and would surface a
+dashboard-added rule as ordinary drift. The blind spot exists only *before* a
+resource's first apply. Their exposure is therefore **retrospective** — anything
+added to their entrypoints before their own first apply is already gone, silently
+— rather than the prospective hazard this file hit.
+
+An earlier version of this learning claimed they had "the same exposure". They do
+not, and the difference changes what to do about it: **#6767** is a drift-audit
+plus a pre-apply gate for *future* whole-list resources, not a rescue mission for
+existing ones. Tracked there,
 gate rather than a per-plan task someone has to remember to write.

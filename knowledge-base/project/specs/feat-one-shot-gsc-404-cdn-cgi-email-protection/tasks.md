@@ -160,13 +160,20 @@ merge-triggered apply rather than just this resource.
 
       **RESOLVED 2026-07-20 by adoption** (operator chose inline over a separate PR):
       - the rule is reproduced verbatim as the FIRST `rules` block, and
-      - a declarative `import` block (TF >= 1.6, so no manual CLI step and no operator
-        action — `hr-never-label-any-step-as-manual-without`) adopts ruleset
-        `a21ac79d368f425a95c895c43a090d57` via `zones/<zone_id>/<ruleset_id>`.
+      - a declarative `import` block (needs **TF >= 1.7** — `for_each` on an import
+        block landed in 1.7.0; `main.tf` said `>= 1.6` and was corrected at review —
+        so no manual CLI step and no operator action,
+        `hr-never-label-any-step-as-manual-without`) adopts ruleset
+        `a21ac79d368f425a95c895c43a090d57` via **`zone/<zone_id>/<ruleset_id>`**
+        (SINGULAR — the plural `zones/` form below is the v5 syntax that fails).
       `name`/`description` now mirror the live entrypoint (`"default"` / empty) so the
       plan is one legible `+1 rule` change, not a real change mixed with cosmetic churn.
-      Tests 7 → 9: exactly-one-rule became exactly-two, plus new pins on the adopted
-      rule (expression AND `ssl = "flexible"`) and on the import block's presence.
+      Tests 7 → 11: exactly-one-rule became exactly-two, plus pins on the adopted rule
+      (expression, `ssl = "flexible"`, and `ref`), on each rule's action_parameters KEY
+      SET, and on the import block being REACHABLE — not merely present. The first
+      version of those import pins was vacuous: three reviewers independently mutated
+      `for_each` to `toset([])`, inverted the ternary, deleted `provider =`, and swapped
+      `zone/`→`zones/`, and all four survived 10/10 green. Each is now a caught mutant.
       Scope assertions now select by action parameter, not position — the adopted rule
       legitimately targets `app.soleur.ai`, which is in `OUT_OF_SCOPE_HOSTS`, so the old
       iterate-every-rule form would have failed on the rule it is not about.
@@ -175,11 +182,10 @@ merge-triggered apply rather than just this resource.
       `terraform validate` and `terraform fmt -check` both pass. Generalisation — every
       other `kind = "zone"` ruleset in the repo has the same unaudited exposure —
       remains open in #6767.
-- [ ] 2.9.4 Paste the four status codes into the PR body, then mark ready.
-      Codes are pasted (PR body → Blocker §1). **Remaining gate is the re-run of 3.1** —
-      confirm the plan is now `import` + "0 to add, 1 to change, 0 to destroy" and not
-      "1 to add", which would mean the import block was lost. That re-run needs the
-      Doppler triplet from task 2.8 and has not been done in this session.
+- [x] 2.9.4 Paste the four status codes into the PR body, then mark ready.
+      Codes are pasted (PR body → Blocker §1). Task 3.1 was re-run against the SHIPPED
+      config (with the `for_each` gate and the `ref` pin) and reports
+      `Plan: 1 to import, 0 to add, 1 to change, 0 to destroy` — see 3.1.
 
 **Do not mark PR #6746 ready until 2.9.2–2.9.4 are green.**
 
@@ -207,11 +213,19 @@ merge-triggered apply rather than just this resource.
         a zone ID in an accounts URL, surfacing as `Authentication error (10000)`. That
         error names authentication, so it reads as token scope and sends you back to
         re-probe a credential that was already correct.
-      - **`provider` is not inherited by an import block** from its target resource, so
-        the read ran through the default `cloudflare` provider, whose token holds no
-        ruleset permissions.
       Same lesson as task 2.1's "verify against the pinned provider, do not copy the
       illustrative block" — this time for the import ID rather than an attribute name.
+
+      **Correction (review, 2026-07-20).** This task originally listed a SECOND defect:
+      "`provider` is not inherited by an import block". **That was wrong** — an import
+      block DOES inherit its target resource's provider. Measured both directions: with
+      `provider =` removed and the DEFAULT provider's token replaced by garbage, the plan
+      still reported `1 to import`; and with the `rulesets` alias pointed at an invalid
+      host, the import read failed on *that* host. The `zones/`→`zone/` ID fix alone
+      resolved the original failure. The evidence was already visible at the time — adding
+      `provider` produced a byte-identical error — and was not read. `provider =` is kept
+      for legibility and is now pinned by a test, but it is not required. Two changes were
+      in flight, one was load-bearing, and the write-up credited both.
 - [x] 3.2 Confirm no excluded resource (`hcloud_server.web`, `hcloud_volume.workspaces`,
       volume attachments, SSH keys) appears — `-target` is transitive on dependencies.
 

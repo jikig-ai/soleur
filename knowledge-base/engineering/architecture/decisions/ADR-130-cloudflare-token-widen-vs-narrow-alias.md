@@ -129,6 +129,32 @@ Before the first apply of a ruleset in a **new** phase, enumerate that phase's
 entrypoint and confirm it is 404 or empty, or the apply silently deletes
 dashboard-created rules.
 
+**When the entrypoint is NOT empty, adopt it — both halves.** This probe fired on
+its first real run (#6767): `http_config_settings` on soleur.ai already held a
+dashboard-created rule (`"Flexible SSL for web platform"`, `app.soleur.ai`,
+`set_config { ssl = "flexible" }`). The remedy is:
+
+1. reproduce the live rule verbatim as a `rules` block — including `ref`, which
+   is how the v4 provider preserves rule IDs across a whole-list PUT; and
+2. adopt the ruleset with an `import` block so Terraform **updates** rather than
+   creates.
+
+Neither half suffices alone: (1) without (2) still creates and clobbers; (2)
+without (1) still deletes the rule on the next plan. Import ID on provider v4 is
+`zone/<zone_id>/<ruleset_id>` — **singular**; the plural `zones/` shown in the
+provider's `main`-branch docs is v5 and silently routes to the account path,
+reporting `Authentication error (10000)`. `for_each` on an import block requires
+Terraform **>= 1.7**. Expected plan shape afterwards is
+`N to import, 0 to add, 1 to change, 0 to destroy`; a plan still reporting
+"1 to add" means the import block was dropped.
+
+**Detection is not covered by the destroy-guard.** `destroy-guard-filter-web-platform.jq`
+counts `before.rules − after.rules` and keeps only positive results. On a create
+`before` is null, so the difference is negative and filtered out — no
+`[ack-destroy]` prompt fires. A plan-derived guard inherits plan's blind spot,
+which is precisely why the pre-apply enumeration above is a *probe* and not a
+CI gate. Making it a gate is open in #6767.
+
 **`variables.tf` descriptions are the scope ledger.** The whole gap existed
 because the ledger was accurate and nothing read it against the new phase. A new
 ruleset phase needs a matching permission in the ledger AND on the live token.
