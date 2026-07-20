@@ -126,6 +126,52 @@ attribute name against the pinned provider — do not copy the plan's illustrati
 block blindly"), extended to a surface nobody thought to apply it to: the import
 ID, and the provider meta-argument.
 
+## Third trap: `mock_provider` does not mock `import` blocks
+
+The adoption fix passed locally and broke CI's `validate` leg, which had nothing
+to do with credentials until this change made it about credentials.
+
+`infra-validation.yml` runs `terraform test` against
+`tests/web-hosts-eu-pin.tftest.hcl`, whose entire premise is being
+credential-free — it declares `mock_provider` for all seven providers so
+`command = plan` never touches a real API. Adding an `import` block broke that:
+
+**Terraform performs import reads against the REAL provider even under
+`terraform test` with `mock_provider` declared.** The file failed with
+`error reading ruleset ID ... Authentication error (10000)` before a single
+`var.web_hosts` assertion ran — a credential error in the one job designed not
+to need credentials.
+
+Worth noting what the failure concealed: the file reported
+`0 passed, 1 failed, 2 skipped`. The two "skipped" runs were real EU-residency
+GDPR assertions that silently stopped executing. An import block added anywhere
+in a config can therefore switch off unrelated tests elsewhere in the same root.
+
+Fix: gate the import on a bool variable, default `true`, and have the tftest set
+it `false`.
+
+```hcl
+variable "adopt_seo_config_entrypoint" {
+  type    = bool
+  default = true
+}
+
+import {
+  for_each = var.adopt_seo_config_entrypoint ? toset(["adopt"]) : toset([])
+  provider = cloudflare.rulesets
+  to       = cloudflare_ruleset.seo_config_settings
+  id       = "zone/${var.cf_zone_id}/<ruleset_id>"
+}
+```
+
+**The default is the load-bearing part, and it is a genuine footgun.** At
+`false` the import block disappears, Terraform plans a create against an
+entrypoint that already exists, and the whole-list clobber is silently back with
+no other visible change to the file. An escape hatch for a test became a
+one-word switch that re-arms an outage. It is pinned by a test
+(`entrypoint adoption defaults to true`) and called out in both the `.tf` header
+and the tftest comment for that reason.
+
 ## Generalisation still open
 
 Every other `kind = "zone"` ruleset this repo applies has the same exposure and
