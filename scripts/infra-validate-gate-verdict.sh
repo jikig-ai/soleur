@@ -26,7 +26,8 @@
 # grepping the workflow for a string — a string can sit in unreachable code
 # after an early `exit 0` and satisfy the grep.
 #
-# ALLOW-LIST. Exit 0 ONLY on the three enumerated rows below. Everything else
+# ALLOW-LIST. Exit 0 ONLY on the three PASS rows of the six-row table below
+# (three PASS rows + three FAIL rows are enumerated). Everything else
 # — `cancelled`, a `skipped` the table does not enumerate, an empty string, an
 # impossible axis combination, or a future GitHub-added result state — exits 1.
 #

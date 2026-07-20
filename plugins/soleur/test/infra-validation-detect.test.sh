@@ -92,8 +92,11 @@ if git -C "$REPO_ROOT" rev-parse --verify --quiet '7e6f6726^{commit}' >/dev/null
   ACTUAL=$(git -C "$REPO_ROOT" diff --name-only 7e6f6726^..7e6f6726 | detect_infra_dirs)
   assert_eq "$EXPECTED" "$ACTUAL" "real-commit 7e6f6726 → [apps/web-platform/infra]"
 else
+  # NOT PASS=$((PASS + 1)). A skip is not a pass: counting one inflates the
+  # reported total and certifies a check that never ran — the same
+  # certifies-a-different-property defect this whole suite exists to catch.
   echo "  SKIP: commit 7e6f6726 not present (shallow clone) — TS1-TS7 cover the shape matrix"
-  PASS=$((PASS + 1))
+  SKIPPED=$((SKIPPED + 1))
 fi
 echo ""
 
