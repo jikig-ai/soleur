@@ -99,6 +99,14 @@ export interface ClaudeCostDailyMarker {
   // Authoritative org total for the day, or null (key-missing / no data).
   cost_usd: number | null;
   models: ClaudeCostDailyModelEntry[];
+  // Whole UTC days since the FIRST observed dark fire — key-missing path only,
+  // absent on `status:"ok"`. Deliberately NOT "age of the current dark window":
+  // it does not reset if the key is minted and later unset (ADR-108 names key
+  // exposure a rotation trigger). Inert reporting data; nothing branches on it.
+  // Complies with the ‼️ BOUNDARY above — an integer day count carries no user
+  // id, email, secret, or regulated data. Prior art: `days_since_last` on
+  // cron-skill-freshness.ts.
+  days_since_first_dark?: number;
 }
 
 /**
