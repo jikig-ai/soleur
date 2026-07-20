@@ -837,6 +837,417 @@ t_web2_retire_volume_forget_aborts() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# T51 — STRUCTURAL: the warm_standby host_creates HALT (#6718).
+#
+# WHY A GREP OVER THE YAML AND NOT A COUNTS FIXTURE. `_run_host_creates_gate`
+# above is a hand-maintained bash MIRROR of the workflow block (its own header
+# says so; nothing enforces the mirror). A fixture therefore proves the MIRROR,
+# never the workflow — it would stay green if warm_standby's real YAML lost the
+# guard tomorrow. Only a grep over the workflow can prove warm_standby's own
+# regex. T32 already covers the mirror's parse-failure arm, so this adds the one
+# proof that was missing rather than a second copy of one that exists.
+#
+# WHY warm_standby NEEDS IT. The job -targets hcloud_server_network.web["web-1"]
+# and `-target` is TRANSITIVE at the resource level, so hcloud_server.web
+# ["web-1"] sits in its plan graph. It passes NO -var image_name (only
+# web_2_recreate pins; `apply` is unpinned too and is held by its own #6416
+# HALT, not by pinning), so a transitive web-1 birth here would
+# use the mutable :latest default — and web-1 is the sole web host since web-2
+# retired 2026-07-17 (#6538). Reason about THIS tripwire, never about -target
+# membership: "web-1 appears in no -target=" is a recorded invalid inference
+# (ADR-114 2026-07-19 amendment item 5).
+#
+# SHARP EDGES THIS TEST IS BUILT AROUND:
+#   SE-1  The block MUST be extracted with flag-based awk. A range address
+#         (`awk '/^  warm_standby:/,/^  [a-z-]+:/'`) SELF-MATCHES: the end
+#         pattern is satisfied by the start line, so it yields the heading alone
+#         and every `grep -c` over it reads 0 — assertions that pass on an empty
+#         body. Non-emptiness is therefore asserted FIRST.
+#   SE-2  Never `printf "$block" | grep -q`. Under `set -o pipefail` a matching
+#         `grep -q` closes the pipe, the producer takes SIGPIPE (141), and the
+#         pipeline exits non-zero DESPITE the match. Here-strings throughout.
+#   SE-4  `[[ "null" -gt 0 ]]` is TRUE-shaped and evaluates FALSE: `jq -r` on a
+#         missing key yields the string "null", which `[[ ]]` resolves as an
+#         unset name to 0. So the ^[0-9]+$ VALIDATION line — not the comparison
+#         — is the load-bearing assert. Without it the guard fails OPEN.
+#
+# Comments are stripped before asserting: a body-grep sees comment prose too,
+# and every token below also appears in the explanatory comments around it, so
+# an unstripped block would false-PASS on its own documentation.
+# ---------------------------------------------------------------------------
+
+WORKFLOW_YML="${REPO_ROOT}/.github/workflows/apply-web-platform-infra.yml"
+
+_job_block() {
+  local file="$1" job="$2"
+  awk -v job="$job" '
+    $0 ~ "^  " job ":([[:space:]]|$)" { inblock = 1; print; next }
+    inblock && /^  [A-Za-z_]/ { inblock = 0 }
+    inblock && /^[A-Za-z]/    { inblock = 0 }
+    inblock { print }
+  ' "$file"
+}
+
+t_warm_standby_host_creates_halt_wired() {
+  local block code
+  block="$(_job_block "$WORKFLOW_YML" "warm_standby")"
+
+  # SE-1: every assertion below is vacuous against an empty block, so a broken
+  # extractor must fail LOUDLY here rather than silently green four greps.
+  if [[ -z "$block" ]]; then
+    _report "T51 warm_standby block extracts non-empty" fail "empty block — extractor broken (SE-1 self-match?)"
+    return
+  fi
+  code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
+
+  # (1) the counter is parsed out of the shared jq filter's output at all.
+  if grep -qE 'host_creates=\$\(echo "\$counts" \| jq -r' <<<"$code"; then
+    _report "T51a warm_standby parses host_creates from the shared jq filter" ok
+  else
+    _report "T51a warm_standby parses host_creates" fail "no 'host_creates=\$(echo \"\$counts\" | jq -r' in the job block"
+  fi
+
+  # (2) LOAD-BEARING (SE-4): host_creates is inside the ^[0-9]+$ validation.
+  # Anchored on the `[[ ! "$x" =~ ^[0-9]+$ ]]` syntax, which a comment line
+  # cannot produce once comments are stripped.
+  local validation
+  validation="$(grep -E '\[\[ ! "\$[a-z_]+" =~ \^\[0-9\]\+\$ \]\]' <<<"$code" || true)"
+  if [[ -n "$validation" ]] && grep -q 'host_creates' <<<"$validation"; then
+    _report "T51b warm_standby's ^[0-9]+\$ validation covers host_creates (fail-CLOSED)" ok
+  else
+    _report "T51b warm_standby validation covers host_creates" fail \
+      "guard would fail OPEN: [[ \"null\" -gt 0 ]] passes. validation line='${validation}'"
+  fi
+
+  # (3) the HALT comparison itself.
+  if grep -qF '[[ "$host_creates" -gt 0 ]]' <<<"$code"; then
+    _report "T51c warm_standby HALTs on host_creates > 0" ok
+  else
+    _report "T51c warm_standby HALTs on host_creates > 0" fail "no '-gt 0' comparison on host_creates"
+  fi
+
+  # (4) AC14 — a HALT with no next action is a dead end. The ::error:: output
+  # must carry BOTH a routing instruction and an explicit statement that this
+  # dispatch has no bypass ([skip-web-platform-apply]/[ack-destroy] are merge-
+  # commit mechanisms; a workflow_dispatch run has no merge commit to annotate).
+  local halt_errors routed no_bypass
+  halt_errors="$(grep -E '::error::' <<<"$code" | grep -F 'host_creates' || true)"
+  routed=no; no_bypass=no
+  grep -qE 'apply_target=' <<<"$code" && routed=yes
+  grep -qiE 'no bypass' <<<"$code" && no_bypass=yes
+  if [[ -n "$halt_errors" && "$routed" == yes && "$no_bypass" == yes ]]; then
+    _report "T51d warm_standby HALT text routes the operator and states 'no bypass'" ok
+  else
+    _report "T51d warm_standby HALT text routes + states no-bypass" fail \
+      "halt_error_present=$([[ -n "$halt_errors" ]] && echo yes || echo no) routing=$routed no_bypass=$no_bypass"
+  fi
+
+  # (5) AC3 — ORDERING, by line offset within the extracted block, not by eyeball.
+  # Two orderings are load-bearing and neither is implied by (1)-(3) passing:
+  #
+  #   a. the parse sits BELOW the `set -e` re-enable. Above it, a jq failure would
+  #      not abort the step, and the guard would evaluate a stale/empty counter.
+  #   b. the ^[0-9]+$ validation precedes the -gt comparison. Reversed, the
+  #      comparison reads an unvalidated value first and `[[ "null" -gt 0 ]]`
+  #      resolves the unset name to 0 and PASSES — the fail-OPEN hole T51b exists
+  #      to close, reintroduced purely by moving two lines.
+  #
+  # grep -n over the block (not the file) so the offsets are block-relative and
+  # stay correct when the job moves within the workflow.
+  # `|| true` on EVERY assignment is load-bearing, not defensive noise. This file
+  # runs under `set -euo pipefail`; a grep that matches nothing exits 1, and an
+  # unguarded `x="$(grep … | cut …)"` therefore ABORTS the whole suite mid-run
+  # instead of reporting a failure. Caught by mutation M1 (deleting the `set -e`
+  # re-enable): the run stopped silently after T51d, emitted no summary line, and
+  # still exited 0 — the anchor-absent branch below was unreachable dead code.
+  local ln_seterr ln_parse ln_valid ln_halt
+  ln_seterr="$(grep -nE '^[[:space:]]*set -e[[:space:]]*$' <<<"$code" | tail -1 | cut -d: -f1 || true)"
+  ln_parse="$(grep -nE 'host_creates=\$\(echo' <<<"$code" | head -1 | cut -d: -f1 || true)"
+  ln_valid="$(grep -nE '\[\[ ! "\$[a-z_]+" =~ \^\[0-9\]\+\$ \]\]' <<<"$code" | head -1 | cut -d: -f1 || true)"
+  ln_halt="$(grep -nF '[[ "$host_creates" -gt 0 ]]' <<<"$code" | head -1 | cut -d: -f1 || true)"
+
+  if [[ -z "$ln_seterr" || -z "$ln_parse" || -z "$ln_valid" || -z "$ln_halt" ]]; then
+    _report "T51e warm_standby HALT ordering (set -e < parse < validation < comparison)" fail \
+      "could not locate all four anchors (set -e='${ln_seterr:-absent}' parse='${ln_parse:-absent}' validation='${ln_valid:-absent}' halt='${ln_halt:-absent}')"
+  elif (( ln_seterr < ln_parse && ln_parse < ln_valid && ln_valid < ln_halt )); then
+    _report "T51e warm_standby HALT ordering (set -e $ln_seterr < parse $ln_parse < validation $ln_valid < comparison $ln_halt)" ok
+  else
+    _report "T51e warm_standby HALT ordering" fail \
+      "want set -e < parse < validation < comparison; got set -e=$ln_seterr parse=$ln_parse validation=$ln_valid comparison=$ln_halt"
+  fi
+}
+
+# ── T52 — BEHAVIOURAL. Execute the real guard; do not grep it. ───────────────
+#
+# WHY THIS EXISTS. T51a-e assert the guard's TEXT and its line ORDER. Review
+# (#6725) demonstrated 8 mutations that leave every one of them green while the
+# guard is functionally dead. The worst: DELETING `exit 1` — the block prints
+# three ::error:: lines and falls through to `terraform apply`, and T51a-e cannot
+# see it, because nothing in a grep-based assert says "and then it TERMINATES".
+# Others: `&& [[ "${SKIP_HOST_GUARD:-yes}" != "yes" ]]` appended to the condition
+# (T51c is `grep -qF`, a SUBSTRING match, so any added conjunct passes); parsing
+# `.reboot_updates` into the `host_creates` variable (T51a's regex stops before
+# the key); validating a decoy `host_creates_unused` (T51b greps the matched
+# LINE for the substring).
+#
+# The file header argues a counts FIXTURE would prove the hand-written bash
+# mirror rather than the workflow. That is right, and T52 is not that: it
+# extracts the workflow's OWN guard bytes and runs them, with the REAL jq filter,
+# against real captured tfplan fixtures. Only `terraform` is stubbed — it is the
+# one thing that needs live cloud state. So a mutation to the workflow changes
+# what executes here, which is exactly the property T51 lacks.
+_extract_warm_standby_guard_script() {
+  local block; block="$(_job_block "$WORKFLOW_YML" "warm_standby")"
+  # Start at the tfplan.txt materialisation (the HALT's diagnostic greps it), end
+  # at the all-clear. Anchored on content, not line numbers, so the job may move.
+  awk '
+    /terraform show -no-color tfplan > tfplan\.txt/ { f = 1 }
+    f { print }
+    f && /grep -E .\^Plan:. tfplan\.txt \|\| true/ { exit }
+  ' <<<"$block"
+}
+
+# Runs the extracted guard. Echoes "<rc>|<stdout+stderr on one line>".
+# $2 (optional) = a directory to use as GITHUB_WORKSPACE, letting a caller
+# substitute a doctored jq filter to drive the fail-closed arm.
+_run_warm_standby_guard_live() {
+  local fixture="$1" ws="${2:-$REPO_ROOT}" tmpd rc out script
+  script="$(_extract_warm_standby_guard_script)"
+  [[ -z "$script" ]] && { echo "0|EXTRACTOR-EMPTY"; return; }
+  tmpd="$(mktemp -d)"
+  # `terraform show -json tfplan` → the fixture; `-no-color` → a plan-text stub.
+  { echo '#!/usr/bin/env bash'
+    echo "if [[ \"\$1\" == show && \"\$2\" == -json ]]; then cat '$fixture'; exit 0; fi"
+    echo 'if [[ "$1" == show ]]; then echo "Plan: 1 to add, 0 to change, 0 to destroy."; exit 0; fi'
+    echo 'exit 0'
+  } > "$tmpd/terraform"
+  chmod +x "$tmpd/terraform"
+  out="$(cd "$tmpd" && PATH="$tmpd:$PATH" GITHUB_WORKSPACE="$ws" \
+    bash -c "set -uo pipefail; $script" 2>&1)" && rc=0 || rc=$?
+  rm -rf "$tmpd"
+  printf '%s|%s\n' "$rc" "$(tr '\n' ' ' <<<"$out")"
+}
+
+t_warm_standby_halt_executes() {
+  # (1) A real host-create plan must make the guard EXIT NON-ZERO and route.
+  local res rc msg
+  res="$(_run_warm_standby_guard_live "$FIXTURES/tfplan-hcloud-server-create.json")"
+  rc="${res%%|*}"; msg="${res#*|}"
+  if [[ "$rc" != 0 ]] && grep -qF 'must never birth a host' <<<"$msg"; then
+    _report "T52a warm_standby guard EXECUTES and exits non-zero on a host create (rc=$rc)" ok
+  else
+    _report "T52a warm_standby guard exits non-zero on a host create" fail \
+      "rc='$rc' (want non-zero) msg='${msg:0:200}'"
+  fi
+
+  # (2) Non-vacuity: the clean baseline must PASS. Without this, a guard that
+  # aborts unconditionally would satisfy (1) — RED-only evidence cannot tell a
+  # real guard from one that fires on everything.
+  res="$(_run_warm_standby_guard_live "$FIXTURES/tfplan-web-platform-real-baseline.json")"
+  rc="${res%%|*}"; msg="${res#*|}"
+  if [[ "$rc" == 0 ]]; then
+    _report "T52b warm_standby guard PASSES the real baseline (no false HALT)" ok
+  else
+    _report "T52b warm_standby guard passes the real baseline" fail \
+      "rc='$rc' (want 0) msg='${msg:0:200}'"
+  fi
+
+  # (3) FAIL-CLOSED, proven by execution rather than by grepping the regex.
+  # Swap in a filter that omits host_creates; `jq -r` then yields the STRING
+  # "null" and `[[ "null" -gt 0 ]]` would PASS. The numeric validation is the
+  # only thing standing between that and a birth, so drive it for real.
+  local ws; ws="$(mktemp -d)"
+  mkdir -p "$ws/tests/scripts/lib"
+  sed 's/^  host_creates: (/  host_creates_REMOVED: (/' "$FILTER" \
+    > "$ws/tests/scripts/lib/destroy-guard-filter-web-platform.jq"
+  if grep -q 'host_creates_REMOVED' "$ws/tests/scripts/lib/destroy-guard-filter-web-platform.jq"; then
+    res="$(_run_warm_standby_guard_live "$FIXTURES/tfplan-web-platform-real-baseline.json" "$ws")"
+    rc="${res%%|*}"; msg="${res#*|}"
+    if [[ "$rc" != 0 ]] && grep -qF 'counter parse failed' <<<"$msg"; then
+      _report "T52c a filter missing host_creates FAILS CLOSED at the numeric validation (rc=$rc)" ok
+    else
+      _report "T52c missing host_creates key fails closed" fail \
+        "rc='$rc' (want non-zero) msg='${msg:0:200}'"
+    fi
+  else
+    _report "T52c missing host_creates key fails closed" fail \
+      "could not doctor the filter — sed anchor 'host_creates: (' did not match $FILTER"
+  fi
+  rm -rf "$ws"
+}
+
+# ── T53 — the guard must be in a step that RUNS, and run BEFORE the apply. ───
+# Kills two mutations T51/T52 both miss: disabling the containing step with
+# `if: ${{ false }}`, and relocating the whole HALT below `terraform apply`
+# (T51e's offsets are block-relative, so a relocated block still reads ordered
+# while the host is already born by the time the comparison runs).
+t_warm_standby_halt_step_is_live_and_precedes_apply() {
+  local block ln_halt ln_apply
+  block="$(_job_block "$WORKFLOW_YML" "warm_standby")"
+  ln_halt="$(grep -nF '[[ "$host_creates" -gt 0 ]]' <<<"$block" | head -1 | cut -d: -f1 || true)"
+  ln_apply="$(grep -nE '^[[:space:]]*terraform apply' <<<"$block" | head -1 | cut -d: -f1 || true)"
+  if [[ -z "$ln_halt" || -z "$ln_apply" ]]; then
+    _report "T53a warm_standby HALT precedes terraform apply" fail \
+      "anchors missing (halt='${ln_halt:-absent}' apply='${ln_apply:-absent}')"
+  elif (( ln_halt < ln_apply )); then
+    _report "T53a warm_standby HALT (line $ln_halt) precedes terraform apply (line $ln_apply)" ok
+  else
+    _report "T53a warm_standby HALT precedes terraform apply" fail \
+      "HALT at $ln_halt is BELOW apply at $ln_apply — the host is born before the guard runs"
+  fi
+
+  # The step containing the HALT must carry no step-level `if:` — a disabled step
+  # satisfies every text assertion while never executing. Step keys sit at 8
+  # spaces under `steps:`; slice from the step header down to the HALT.
+  local step_start step_slice
+  step_start="$(grep -nE '^      - name: Terraform plan \(warm-standby' <<<"$block" | head -1 | cut -d: -f1 || true)"
+  if [[ -z "$step_start" || -z "$ln_halt" ]]; then
+    _report "T53b the HALT's step has no disabling 'if:'" fail \
+      "could not locate the step header (start='${step_start:-absent}')"
+  else
+    step_slice="$(sed -n "${step_start},${ln_halt}p" <<<"$block")"
+    if grep -qE '^        if:' <<<"$step_slice"; then
+      _report "T53b the HALT's step has no disabling 'if:'" fail \
+        "step-level 'if:' found — the guard can be silently disabled without touching its text"
+    else
+      _report "T53b the HALT's step carries no step-level 'if:' (cannot be silently disabled)" ok
+    fi
+  fi
+}
+
+# ── T54 — the SIBLING apply job's guard, job-scoped. ─────────────────────────
+#
+# WHY (#6725 review, P1). Adding warm_standby's copy took both host_creates
+# literals from 1 → 2 occurrences in the workflow. Every guard protecting the
+# APPLY job's copy is a WHOLE-FILE grep — regex-parity.sh:98/:119 (`grep -qF …
+# "$WF"`) and nic-wait-gate.test.sh:431 (`grep -c … -ge 1`). With two
+# occurrences present, deleting the apply job's numeric-validation clause leaves
+# every one of them satisfied BY WARM_STANDBY'S COPY. The apply job would ship
+# fail-OPEN (`[[ "null" -gt 0 ]]` passes) — the #6416 failure mode — with the
+# repo's coherence checks reporting intact.
+#
+# This PR built a properly job-scoped all-members guard for its own copy and
+# would otherwise have left the precedent on first-member greps. That is the
+# exact asymmetry the PR exists to argue against, so it is fixed here rather
+# than filed.
+# ── T56 — the SECOND workflow that reaches hcloud_server.web. ────────────────
+#
+# apply-deploy-pipeline-fix.yml fires on push:main AND workflow_dispatch and
+# runs `terraform apply -auto-approve` over four terraform_data targets that each
+# reference hcloud_server.web["web-1"] (server_id / connection host), so -target
+# transitivity puts the server in its plan graph — the identical composition to
+# warm_standby, and it passes no -var image_name either.
+#
+# It was UNGUARDED and unenumerated until #6725's review: that PR asserted "no
+# automated path can birth a web host" without walking the workflow list. The
+# assertion was false. This assert exists so the claim stays checkable rather
+# than re-asserted — if someone strips the guard, the enumeration in the sibling
+# HALT texts, both ADRs and #6730 all become false again, silently.
+t_deploy_pipeline_fix_carries_host_creates_halt() {
+  local wf code validation
+  wf="${REPO_ROOT}/.github/workflows/apply-deploy-pipeline-fix.yml"
+  if [[ ! -f "$wf" ]]; then
+    _report "T56 apply-deploy-pipeline-fix carries the host_creates HALT" fail "missing $wf"
+    return
+  fi
+  code="$(grep -vE '^[[:space:]]*#' "$wf" || true)"
+
+  if grep -qE "host_creates=\\\$\\(echo \"\\\$counts\" \| jq -r '\.host_creates'" <<<"$code"; then
+    _report "T56a deploy-pipeline-fix parses the .host_creates key" ok
+  else
+    _report "T56a deploy-pipeline-fix parses the .host_creates key" fail \
+      "no exact \`jq -r '.host_creates'\` — this push:main workflow reaches hcloud_server.web[\"web-1\"] transitively"
+  fi
+
+  validation="$(grep -E '\[\[ ! "\$host_creates" =~ \^\[0-9\]\+\$ \]\]' <<<"$code" | head -1 || true)"
+  if [[ -n "$validation" ]]; then
+    _report "T56b deploy-pipeline-fix's host_creates is numerically validated (fail-CLOSED)" ok
+  else
+    _report "T56b deploy-pipeline-fix validates host_creates" fail \
+      "missing the ^[0-9]+\$ guard: jq -r on an absent key yields \"null\" and [[ \"null\" -gt 0 ]] PASSES"
+  fi
+
+  if grep -qF '[[ "$host_creates" -gt 0 ]]' <<<"$code"; then
+    _report "T56c deploy-pipeline-fix HALTs on host_creates > 0" ok
+  else
+    _report "T56c deploy-pipeline-fix HALTs on host_creates > 0" fail "no -gt 0 comparison"
+  fi
+
+  # The plan must SAVE a plan for the guard to read; without -out the guard reads
+  # a stale/absent tfplan and the whole block is decorative.
+  if grep -qF '\-out=tfplan' <<<"$code" || grep -qF -- '-out=tfplan' <<<"$code"; then
+    _report "T56d deploy-pipeline-fix saves the plan (-out=tfplan) the guard reads" ok
+  else
+    _report "T56d deploy-pipeline-fix saves the plan the guard reads" fail \
+      "no -out=tfplan — \`terraform show -json tfplan\` would have nothing to read"
+  fi
+}
+
+# ── T55 — the HALT's scope precondition, re-checked on every run. ────────────
+#
+# The host_creates counter counts hcloud_server AND hcloud_volume creates, but
+# every rationale in the shipped HALT text (no -var image_name, mutable :latest,
+# cloud-init stage=verify) applies to hcloud_server ONLY. That is sound while
+# var.web_hosts holds exactly one key: warm_standby's own additive set then
+# creates nothing, so host_creates == 0 on every legitimate run.
+#
+# Add a second key and warm_standby's OWN legitimate volume create trips a HALT
+# whose text says "there is NO automated path" — a false dead end on a valid
+# dispatch. A tripwire that fires on normal operation is the failure mode that
+# gets the tripwire deleted, which is strictly worse than the accident it guards.
+#
+# The plan caught this as a Phase-0 hard STOP, but that was a PLAN-TIME check
+# with nothing re-firing it. This is the same precondition, re-evaluated on
+# every CI run (#6725 review, user-impact finding 2).
+t_web_hosts_single_key_keeps_halt_scoped() {
+  local vars_tf keys
+  vars_tf="${REPO_ROOT}/apps/web-platform/infra/variables.tf"
+  if [[ ! -f "$vars_tf" ]]; then
+    _report "T55 var.web_hosts is single-key (keeps the volume arm sound)" fail "missing $vars_tf"
+    return
+  fi
+  # Count quoted keys inside variable "web_hosts" { … default = { … } }.
+  keys="$(awk '/^variable "web_hosts"/{v=1} v&&/default = \{/{d=1;next} d&&/^  \}/{exit} d&&/^ *"[a-z0-9-]+" *=/{n++} END{print n+0}' "$vars_tf")"
+  if [[ "$keys" == 1 ]]; then
+    _report "T55 var.web_hosts holds exactly 1 key — host_creates may count hcloud_volume safely" ok
+  else
+    _report "T55 var.web_hosts holds exactly 1 key" fail \
+      "found $keys keys. The warm_standby host_creates HALT counts hcloud_volume creates, but its remediation text is written for hcloud_server only — with >1 web host, that job's OWN legitimate volume create now trips a HALT saying 'there is NO automated path'. RE-SCOPE the warm_standby HALT to .type == \"hcloud_server\" (plan Phase 0 P1) before adding a web host."
+  fi
+}
+
+t_apply_job_host_creates_halt_job_scoped() {
+  local block code validation
+  block="$(_job_block "$WORKFLOW_YML" "apply")"
+  if [[ -z "$block" ]]; then
+    _report "T54 apply block extracts non-empty" fail "empty block — extractor broken"
+    return
+  fi
+  code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
+
+  if grep -qE "host_creates=\\\$\\(echo \"\\\$counts\" \| jq -r '\.host_creates'" <<<"$code"; then
+    _report "T54a apply parses host_creates from the .host_creates key (job-scoped)" ok
+  else
+    _report "T54a apply parses the .host_creates key" fail \
+      "no exact \`jq -r '.host_creates'\` in the apply block — a renamed key would go undetected"
+  fi
+
+  validation="$(grep -E '\[\[ ! "\$[a-z_]+" =~ \^\[0-9\]\+\$ \]\]' <<<"$code" | head -1 || true)"
+  if [[ -n "$validation" ]] && grep -qE '! "\$host_creates" =~' <<<"$validation"; then
+    _report "T54b apply's ^[0-9]+\$ validation covers host_creates (job-scoped, fail-CLOSED)" ok
+  else
+    _report "T54b apply's validation covers host_creates" fail \
+      "apply would fail OPEN and warm_standby's copy would satisfy the whole-file greps. line='${validation}'"
+  fi
+
+  if grep -qF '[[ "$host_creates" -gt 0 ]]' <<<"$code"; then
+    _report "T54c apply HALTs on host_creates > 0 (job-scoped)" ok
+  else
+    _report "T54c apply HALTs on host_creates > 0" fail "no -gt 0 comparison in the apply block"
+  fi
+}
+
 t_ruleset_rule_removal_trips
 t_tunnel_ingress_removal_trips
 t_zone_settings_header_removal_trips
@@ -881,6 +1292,12 @@ t_web2_retire_proxy_tls_birth_aborts
 t_web2_retire_noop_aborts
 t_web2_retire_volume_forget_aborts
 t_web2_retire_server_replace_aborts
+t_warm_standby_host_creates_halt_wired
+t_warm_standby_halt_executes
+t_warm_standby_halt_step_is_live_and_precedes_apply
+t_apply_job_host_creates_halt_job_scoped
+t_web_hosts_single_key_keeps_halt_scoped
+t_deploy_pipeline_fix_carries_host_creates_halt
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
