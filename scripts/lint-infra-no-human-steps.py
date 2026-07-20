@@ -188,6 +188,12 @@ def _is_carve_heading(title: str) -> bool:
 
 def _neutralize_filenames(text: str) -> str:
     """Blank out `*.yml`/`*.yaml` filenames so a workflow NAME can't match."""
+    # Fast path. These literals are a silent CORRECTNESS PRECONDITION of the
+    # regex below: they must cover every alternation in YAML_FILENAME_RE, or a
+    # match is skipped here and the pattern never runs. Extending the pattern
+    # (e.g. to `\.(ya?ml|tf)\b`) REQUIRES extending this test in the same edit —
+    # otherwise the new extension is dropped silently and the suite stays green.
+    # F8 pins the `.yaml` arm; add a fixture per arm you add.
     lowered = text.lower()
     if ".yml" not in lowered and ".yaml" not in lowered:
         return text
