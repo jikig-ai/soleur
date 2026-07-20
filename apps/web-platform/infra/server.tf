@@ -277,7 +277,7 @@ resource "hcloud_server" "web" {
   #
   # HARD GATE (ADR-068 §(c), the LB-weight gate) — the deferred cutover orchestrator
   # must NOT remove this entry or shift web-2's Cloudflare LB weight above 0 until the
-  # programmatic gate apps/web-platform/infra/lb-weight-gate.sh exits 0 AND its separate
+  # programmatic gate (DELETED 2026-07-20 with #6575 — see ADR-068 §(c) CORRECTION; nothing checks this today, and it MUST be rebuilt before any second web host is pooled) exits 0 AND its separate
   # runtime-bind probe passes: (1) owner-side relay active (SOLEUR_PROXY_BIND /
   # SOLEUR_PROXY_PEER_ALLOWLIST / SOLEUR_HOST_ROSTER), AND (2) git-data store cut over
   # (GIT_DATA_STORE_ENABLED==true + LUKS soak marker). Pooling web-2 before both = a
@@ -432,9 +432,10 @@ resource "terraform_data" "container_restart_monitor_install" {
 # existing. Both are true: an operator-local full `terraform apply` would succeed, and no
 # CI/dispatch route reaches it. As of #6718 every automated route that can reach
 # hcloud_server.web HALTs on host_creates > 0 — enumerated: apply-web-platform-infra.yml's
-# `apply` (#6416), warm_standby (#6718), web_2_recreate (gate unsatisfiable) and
-# workspaces_luks_cutover (gate requires zero actions on the web-1 server), plus
-# apply-deploy-pipeline-fix.yml (#6718). Scope: WEB hosts — inngest_host legitimately births a
+# `apply` (#6416), workspaces_luks_cutover (gate requires zero actions on the web-1
+# server), and apply-deploy-pipeline-fix.yml (#6718). The warm_standby and
+# web_2_recreate routes were REMOVED with the web-2 dispatch sweep (#6575,
+# 2026-07-20), so the enumeration is three, not five. Scope: WEB hosts — inngest_host legitimately births a
 # host and is unaffected. The gap is tracked by #6730 (it violates
 # hr-fresh-host-provisioning-reachable-from-terraform-apply).
 #
