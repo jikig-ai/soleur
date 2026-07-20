@@ -121,7 +121,7 @@ Issue: #6297 · Branch: `feat-one-shot-6297-anthropic-key-missing-false-page` ·
   `*.yml`/`*.yaml` filenames before scanning, so a workflow name can no longer supply
   an actor or an imperative. (It does this by blanking the filename, not by narrowing
   the imperative — the imperative-narrowing approach was measured and reverted; see
-  ADR-130.) This comment is retained as provenance for why the carve-out existed.
+  ADR-132.) This comment is retained as provenance for why the carve-out existed.
 -->
 - [x] 4.11 File the IaC follow-up issue/PR stub (do **not** open it for merge). It must carry **three**
       things together: the no-default sensitive `variable`, the `doppler_secret` with

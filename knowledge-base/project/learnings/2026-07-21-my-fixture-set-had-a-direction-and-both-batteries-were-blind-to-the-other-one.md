@@ -65,7 +65,7 @@ ever runs. Only F14/F15 (weak actor → neutralization actually executes) could 
 ## Solution
 
 - Keep filename neutralization (option 1). Revert the tool anchor. Record the ruling in
-  ADR-130 with the asymmetry that decides it: **a false positive costs an author one
+  ADR-132 with the asymmetry that decides it: **a false positive costs an author one
   auditable carve-out; a false negative costs a non-technical operator an un-automated
   infra step.** Resolve toward sensitivity. A carve-out is auditable; a silent miss is not,
   so the anchor would have *converted* visible carve-outs into invisible misses.
@@ -169,6 +169,6 @@ line-extraction error. Convergence is evidence only when the errors are independ
   disposition should be a mechanical gate rather than another learning.
 - [[2026-07-19-a-mutation-battery-that-passes-can-still-leave-the-central-mechanism-untestable]]
   — fixture SHAPE as a coverage axis; here the missing axis was fixture DIRECTION.
-- ADR-130 — the binding detection-semantics ruling.
+- ADR-132 — the binding detection-semantics ruling.
 - #6806 — residual false-positive classes (negation context, possessive actors, extension
   boundary, `mount`-as-noun).

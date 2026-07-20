@@ -1,11 +1,11 @@
 ---
-adr: ADR-130
+adr: ADR-132
 title: Infra sentinel — neutralize filenames, never anchor imperatives on tool adjacency
 status: active
 date: 2026-07-21
 ---
 
-# ADR-130: Infra sentinel — neutralize filenames, never anchor imperatives on tool adjacency
+# ADR-132: Infra sentinel — neutralize filenames, never anchor imperatives on tool adjacency
 
 ## Context
 

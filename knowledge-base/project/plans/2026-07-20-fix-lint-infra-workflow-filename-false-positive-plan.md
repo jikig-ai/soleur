@@ -19,7 +19,7 @@ brand_survival_threshold: none
 >
 > What shipped is **option 1 only** (filename neutralization), plus a `STRONG_ACTOR_RE`
 > suppression that closes option 1's own narrow false-negative. The binding record is
-> [ADR-130](../../engineering/architecture/decisions/ADR-130-infra-sentinel-neutralize-filenames-not-tool-anchors.md);
+> [ADR-132](../../engineering/architecture/decisions/ADR-132-infra-sentinel-neutralize-filenames-not-tool-anchors.md);
 > the task-level delta is the AMENDMENT section in
 > [tasks.md](../specs/feat-one-shot-6771-lint-infra-workflow-filename-fp/tasks.md).
 >
