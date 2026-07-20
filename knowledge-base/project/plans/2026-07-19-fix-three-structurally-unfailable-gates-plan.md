@@ -69,7 +69,7 @@ Two of the three (#6721, #6723) share `.gitleaks.toml` / `secret-scan.yml`. All 
 
 **If this leaks, the user's credentials are exposed via:** a production DSN whose password contains `@` committed to a public repository and silenced by the allowlist (#6723 — measured reachable today), or a credential introduced by a hand-resolved merge conflict that no scan job has ever read (#6721 — measured reachable today, `main` carries 35 merge commits with `allow_merge_commit: true`).
 
-**Brand-survival threshold:** `single-user incident` — one leaked production credential on a public repo is a brand-survival event, and both #6721 and #6723 are measured-reachable paths to exactly that.
+- **Brand-survival threshold:** `single-user incident` — one leaked production credential on a public repo is a brand-survival event, and both #6721 and #6723 are measured-reachable paths to exactly that.
 
 ## Open Code-Review Overlap
 
