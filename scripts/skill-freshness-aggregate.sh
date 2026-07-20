@@ -164,6 +164,26 @@ if [[ -s "$INVOCATIONS_MERGED" ]]; then
   fi
 
   if [[ -n "$parsed_records" ]]; then
+    # LOAD-BEARING BOUND (#6736): this `group_by(.skill)` COLLAPSE is what keeps
+    # $invocations_json off the argv ceiling downstream. $parsed_records is the raw
+    # invocation log — one record per skill invocation, unbounded and monotonically
+    # growing across the active file plus every rotated archive. group_by + the map
+    # below reduce it to EXACTLY ONE ROW PER DISTINCT SKILL (94 today), each a fixed
+    # ~90 B {skill, last_invoked, invocation_count} triple, so the result is ~8 KB and
+    # is bounded by the SKILL INVENTORY, not by invocation volume.
+    #
+    # That matters because $invocations_json is later bound as
+    # `--argjson invocations "$invocations_json"` on the report jq — ONE argv argument,
+    # and the kernel caps a SINGLE argv argument at MAX_ARG_STRLEN = 131,072 B (verified
+    # by bisect on this host: 131,071 B passes, 131,072 B fails E2BIG; NOT `getconf
+    # ARG_MAX`, which is 2,097,152 B here — 6% of ARG_MAX still dies).
+    #
+    # The comment is HERE, at the producer, and not at that --argjson consumer, because
+    # the consumer is safe only as a CONSEQUENCE of this collapse. Anyone who widens the
+    # projection to keep per-invocation rows (e.g. dropping group_by to emit a timeline,
+    # or adding a `records: .` passthrough) moves the payload back onto invocation count
+    # and the report dies with `Argument list too long` — at which point the fix is to
+    # spool to a file and bind `--rawfile … | fromjson` (see scripts/domain-model-drift.sh).
     invocations_json=$(printf '%s' "$parsed_records" \
                        | jq -s -c 'group_by(.skill)
                                    | map({

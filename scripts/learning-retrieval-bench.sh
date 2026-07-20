@@ -615,6 +615,21 @@ grep_rank() {
 }
 
 # Hardcoded fixture-seed paths (Plan §3, fixture self-check).
+#
+# LOAD-BEARING BOUND (#6736): the fixed length of this array — 7 — is what keeps
+# $FIXTURE_ROWS off the argv ceiling. It is accumulated one row per seed and ends up
+# bound as `--argjson fixture_seeds "$FIXTURE_ROWS"` on the report jq near the end of
+# this file, i.e. as ONE argv argument. The kernel caps a SINGLE argv argument at
+# MAX_ARG_STRLEN = 131,072 B (verified by bisect on this host: 131,071 B passes,
+# 131,072 B fails E2BIG) — NOT `getconf ARG_MAX`, which is 2,097,152 B here.
+#
+# At ~155 B/row these 7 seeds measure ~1.1 KB, well under 1% of MAX_ARG_STRLEN. That
+# is why this site is NOT converted to --rawfile: the conversion would be pure churn.
+# But the bound is the ARRAY LENGTH, not anything structural. If this list is ever made
+# corpus-driven (e.g. globbing knowledge-base/project/learnings/, ~1,986 files today),
+# $FIXTURE_ROWS lands around 308 KB and this jq dies with `Argument list too long`.
+# Growing it to a few dozen seeds is fine; sourcing it from the corpus is not — spool it
+# to a file and bind with `--rawfile … | fromjson` first (see scripts/domain-model-drift.sh).
 FIXTURE_SEEDS=(
   "knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md"
   "knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md"
@@ -1469,6 +1484,20 @@ WORST_N_WITH_CAUSE=$(jq -s \
   | ($ranks[0] | map(select(.intensity == "heavy" and .retriever == "grep"))
                  | map({(.path): .rank}) | add) as $grep_idx
   | map(select(.intensity == "heavy" and .retriever == "kbsearch" and .rank == null))
+  # LOAD-BEARING BOUND (#6736): this truncation to 20 rows is the only thing keeping
+  # $WORST_N_WITH_CAUSE off the argv ceiling. The result is bound as
+  # `--argjson worst_n "$WORST_N_WITH_CAUSE"` on the report jq near the end of this
+  # file — ONE argv argument, and the kernel caps a SINGLE argv argument at
+  # MAX_ARG_STRLEN = 131,072 B (bisected on this host: 131,071 B passes, 131,072 B
+  # fails E2BIG). NOT `getconf ARG_MAX` (2,097,152 B here); 6% of ARG_MAX still dies.
+  #
+  # 20 rows measure 4,156 B — 3% of MAX_ARG_STRLEN, which is why this site is NOT
+  # converted to --rawfile (churn). The input to this filter is the FULL corpus of
+  # kbsearch misses, drawn from ~1,986 learnings; without this cap a bad-retrieval run
+  # can put thousands of rows on argv and kill the report with `Argument list too long`
+  # AFTER the entire (paid, API-calling) bench has already run. Widening the window is
+  # fine up to ~500 rows; removing the cap, or making N corpus-derived, requires
+  # spooling to a file and binding `--rawfile … | fromjson` (see domain-model-drift.sh).
   | .[0:20]
   | map(
       .path as $p
