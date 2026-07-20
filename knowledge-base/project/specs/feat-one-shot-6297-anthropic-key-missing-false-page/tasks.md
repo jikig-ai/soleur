@@ -95,9 +95,14 @@ Issue: #6297 · Branch: `feat-one-shot-6297-anthropic-key-missing-false-page` ·
 - [ ] 5.1 Amend ADR-108: add `days_since_first_dark` to `## Decision`; note the non-reset semantics in
       `## Consequences`. Do **not** create a new ADR ordinal.
 - [ ] 5.2 Update `betterstack-log-query.md` §"Querying Anthropic cost markers": document
-      `days_since_first_dark` and the `"component":"claude-cost"` field-isolation requirement.
-- [ ] 5.3 File a tracking issue for the 19 pre-existing probes using the banned `${VAR:?}` form,
-      proposing the AC10 grep as a CI guard (`wg-when-an-audit-identifies-pre-existing`).
+      `days_since_first_dark`, the `"component":"claude-cost"` field-isolation requirement (both
+      byte-forms), and the **absent-vs-zero trap** — `JSONExtractInt` returns 0 both for an `ok` row
+      (field omitted) and a genuine day-0 key-missing row, so queries must filter
+      `status='key-missing'` first.
+- [ ] 5.3 File a tracking issue for the **14 of 39** pre-existing probes carrying the banned
+      `${VAR:?}` form on an executable line (measured with AC10's comment-stripping method — the
+      naive count of 19 includes 5 comment-only mentions), proposing the AC10 grep as a CI guard
+      (`wg-when-an-audit-identifies-pre-existing`).
 
 ## Phase 6 — Verification
 
