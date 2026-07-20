@@ -872,6 +872,13 @@ rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
 mkdir -p "$D_SRC/workspaces"
 mk_repo "$D_SRC/workspaces/44444444-0000-0000-0000-00000000000f"
 rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+# THE FIXTURE UID IS LOAD-BEARING. mk_repo chowns to 1001 — which on a GitHub-hosted runner is the
+# `runner` user's own uid, i.e. $SUDO_UID once this suite self-elevates. git-config(1) documents that
+# under sudo git ALSO accepts SUDO_UID as an owner, so a 1001-owned repo can never look foreign to
+# this harness and the ownership refusal silently never fires (observed: src_rc=0 in CI). Re-chown
+# both sides to `nobody` (65534), which is neither 0 nor SUDO_UID on any runner.
+chown -R 65534:65534 "$D_SRC/workspaces/44444444-0000-0000-0000-00000000000f" 2>/dev/null || true
+chown -R 65534:65534 "$D_DST/workspaces/44444444-0000-0000-0000-00000000000f" 2>/dev/null || true
 L6K_OUT="$TMPROOT/l6k.out"; L6K_MARKER="$TMPROOT/l6k.marker"
 : > "$L6K_OUT"; : > "$L6K_MARKER"
 MARKER_LOG="$L6K_MARKER" CUTOVER="$CUTOVER" SRC="$D_SRC" DST="$D_DST" \
@@ -890,7 +897,11 @@ bash -c '
       >"$raw_out" 2>"$raw_err"
     rc=$?
     printf "%s" "$rc" > "$rc_file"
-    printf "0" > "${rc_file%.rc}.objs"
+    # REAL counts, never a hardcoded 0: a 0/0 pair trips the object-count floor
+    # (unclassified reason=zero_objects_inspected) and masks the probe_failed this case asserts.
+    { git --no-optional-locks -c safe.directory="$repo" -C "$repo" count-objects -v 2>/dev/null \
+        | awk "/^count:|^in-pack:/ { s += \$2 } END { print s + 0 }"; } > "${rc_file%.rc}.objs" \
+        2>/dev/null || printf "0" > "${rc_file%.rc}.objs"
     return 0
   }
   verify_git_fsck_differential "$SRC" "$DST"
@@ -980,11 +991,18 @@ bash -c '
   fsck_advisory_probe "$SRC"
 ' > "$L6J_ALL_OUT" 2>&1
 L6J_ALL_RC=$?
-if [ "$L6J_PARTIAL_RC" -eq 0 ] && [ "$L6J_ALL_RC" -ne 0 ] \
+# ANY probe_failed aborts pre-freeze — NOT only the all-of-them case. The all-or-nothing threshold
+# did not cover the incident this probe was built for: run 29725194755 failed on 8 of 10, so an ALL
+# threshold would have gone green, held the freeze, taken the outage, and aborted at the gate anyway.
+# Failing here costs zero downtime. Both arms must therefore abort, and both must name the pre-freeze
+# no-rollback language so an operator never reaches for ROLLBACK=1 after it.
+if [ "$L6J_PARTIAL_RC" -ne 0 ] && [ "$L6J_ALL_RC" -ne 0 ] \
   && grep -qE -- 'phase=advisory' "$L6J_MARKER" \
   && ! grep -qE -- 'phase=gate' "$L6J_MARKER" \
+  && grep -qE -- 'could not inspect 1 of 2' "$L6J_OUT" \
+  && grep -qE -- 'could not inspect 2 of 2' "$L6J_ALL_OUT" \
   && grep -qE -- 'no freeze was held' "$L6J_ALL_OUT"; then
-  ok "L6j: the advisory probe emits phase=advisory rows, tolerates a PARTIAL probe failure, and aborts PRE-FREEZE when every source repo is un-inspectable"
+  ok "L6j: the advisory probe emits phase=advisory rows and aborts PRE-FREEZE on ANY un-inspectable source repo (1-of-2 and 2-of-2), naming the count and the no-rollback language"
 else
   no "L6j: advisory probe misbehaved (partial_rc=$L6J_PARTIAL_RC all_rc=$L6J_ALL_RC)"
   note "partial marker: $(grep -m2 SOLEUR "$L6J_MARKER" 2>/dev/null)"

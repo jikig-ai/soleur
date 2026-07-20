@@ -1615,7 +1615,7 @@ _fsck_classify() {
 # exists to remove. (Observed during implementation, not theorised.)
 _fsck_emit_and_verdict() {
   local phase="$1" work="$2" src_root="$3" dst_root="$4" verdict_file="$5"
-  local ws base skip src_rc dst_rc verdict cls first reason src_objs dst_objs k=0 total=0 truncated=0 more=0
+  local ws base skip src_rc dst_rc verdict cls first reason _first_field src_objs dst_objs k=0 total=0 truncated=0 more=0
   local n_ok=0 n_pre=0 n_srconly=0 n_corrupt=0 n_probefail=0 n_unclass=0
   local n_skip=0 n_skip_wt=0 n_skip_alt=0 n_skip_nogit=0 n_src_missing=0 summary row abort_cls=""
   local _prio rows_file="$work/rows"; : > "$rows_file"
@@ -1714,8 +1714,14 @@ _fsck_emit_and_verdict() {
     # row count the advisory abort's equality test depends on.
     _prio=1
     case "$cls" in copy_corruption|probe_failed|unclassified) _prio=0 ;; esac
+    _first_field="$(_fsck_scrub_first "$(_vscrub "${first:0:$FSCK_OUT_CAP}")")"
+    # `${first:--}`: an EMPTY field is the bug, not a cosmetic gap. bash treats tab as IFS
+    # *whitespace*, so consecutive tabs COLLAPSE — and `first` is empty for every `ok` row
+    # (_fsck_classify returns "ok|"), which shifted the workspace id into `first=` and left `ws=`
+    # EMPTY on every healthy workspace. The comment above claimed all fields were placeholder-filled;
+    # only `reason` and the skip rows actually were. Caught by L6a in CI, on main.
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$_prio" "$cls" "$reason" "$src_rc" "$dst_rc" \
-      "$(_fsck_scrub_first "$(_vscrub "${first:0:$FSCK_OUT_CAP}")")" "$(_vscrub "$base")" \
+      "${_first_field:--}" "$(_vscrub "$base")" \
       >> "$rows_file"
   done
   # Instrument failure, not emptiness: an enumeration that returns nothing while G2 observed
