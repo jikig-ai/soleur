@@ -58,6 +58,17 @@ concurrency:
   # cancellation only ever affects a SUPERSEDED SHA — the new head SHA gets its
   # own run, and the aggregator's verdict is computed per-run. Revisit this
   # value if that ordering ever changes.
+  #
+  # ON MAIN, WHAT MAKES THIS SAFE IS THE PUSH ARM'S ENUMERATION, and that is
+  # load-bearing rather than incidental. Measured: 26% of inter-merge gaps are
+  # under 15 minutes and the longest observed chain was 7 merges over ~66
+  # minutes, so a burst does cancel superseded push runs — but redness is only
+  # DELAYED (~1h worst case), never lost, because the push arm enumerates ALL
+  # infra roots and the burst-terminating run therefore re-tests the identical
+  # surface. If the push arm is ever changed to diff `github.event.before` (the
+  # alternative the plan rejected), that property disappears: each run would
+  # cover only its own merge, cancellation would permanently drop the
+  # superseded verdicts, and `cancel-in-progress` MUST flip to `false`.
   group: infra-validation-${{ github.event.number || github.ref }}
   cancel-in-progress: true
 
@@ -443,9 +454,10 @@ jobs:
       # .github/workflows/restart-inngest-server.yml gives directories='[]' with
       # suite_relevant='true', so a RED deploy-script-tests returned green here
       # and merged: a check certifying a different property than the one it
-      # names, which is the whole subject of #6766. The allow-list and its
-      # 6-row table are documented in the script; the unit test is
-      # tests/scripts/test-infra-validate-gate-verdict.sh.
+      # names, which is the whole subject of #6766. The allow-list is the THREE
+      # PASS rows of the script's six-row table (the other three enumerate the
+      # fail states for the reader); everything not on those three rows exits 1.
+      # The unit test is tests/scripts/test-infra-validate-gate-verdict.sh.
       - name: Fail closed unless an enumerated pass state holds
         env:
           DETECT: ${{ needs.detect-changes.result }}
