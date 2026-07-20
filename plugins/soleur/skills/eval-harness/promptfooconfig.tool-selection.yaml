@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: "L3 phase-scoped tool/skill selection accuracy — phase-scoped arm (hint surface) vs full-surface baseline (#5768 AC(c))"
+
+# Model IDs are single-sourced. Run `bash scripts/gen-models.sh` to (re)generate
+# models.generated.json from the TS registry; no model literal is hardcoded here.
+providers: file://models.generated.json
+
+# Two arms become two grid columns. The skill arm foregrounds the current phase's
+# surface (the same hint phase-surface-hint.sh injects); the baseline arm shows the
+# full flat skill catalog with no phase scoping — that delta is the point.
+prompts:
+  - file://prompts/tool-selection-skill.txt
+  - file://prompts/tool-selection-baseline.txt
+
+defaultTest:
+  vars:
+    # Closed skill-label enum (single source). promptfoo passes this file:// ref to
+    # the custom asserts VERBATIM; the asserts read the file themselves via loadEnum().
+    enum: file://enums/tool-selection.json
+  assert:
+    # MEASUREMENT: always passes, records next-skill-correct rate (1.0 / 0.0).
+    # Aggregated across --repeat N and across arms, the mean IS the
+    # phase-scoped-vs-full-surface uplift (the AC(c) before/after number).
+    - type: javascript
+      value: file://scripts/measure-classification.cjs
+    # GATE: fails if the emitted label is not a member of the enum.
+    - type: javascript
+      value: file://scripts/gate-classification.cjs
+
+# Opt-in/manual only (API spend; NOT CI-wired — see SKILL.md API-budget gate).
+# Run: promptfoo eval -c promptfooconfig.tool-selection.yaml --repeat 5
+# Golden tasks: { vars: { phase, input, golden_label } } per line.
+tests: file://tasks/tool-selection.jsonl

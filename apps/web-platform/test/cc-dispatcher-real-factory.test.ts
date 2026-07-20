@@ -185,6 +185,22 @@ vi.mock("@/server/ensure-workspace-repo", () => ({
   // lives in cc-dispatcher-warm-presandbox-mkdir.test.ts (real mkdir).
   ensureWorkspaceDirExists: vi.fn(async () => undefined),
 }));
+// #5733 D2 — these tests assert SDK-binding / mint / egress shape on a fixture
+// workspace path (`/tmp/cc-test-workspace`) that has no on-disk `.git`. D2 now
+// honest-blocks an absent `.git` at the cold dispatch gate, so force the
+// git-shape readiness to a ready dir-valid here (these tests do NOT exercise the
+// readiness gate — that is owned by cc-dispatcher-repo-gate.test.ts +
+// agent-ready-git-worktree.test.ts).
+vi.mock("@/server/git-worktree-validity", async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return {
+    ...actual,
+    probeGitWorktreeShape: () => ({ kind: "dir-valid" }),
+    isReadyGitWorkTree: () => true,
+    isValidGitWorkTree: () => true,
+    evaluateAgentReadiness: async () => "ready",
+  };
+});
 
 vi.mock("@/server/permission-callback", () => ({
   // The factory composes a canUseTool from this — we capture the ctx
@@ -195,6 +211,8 @@ vi.mock("@/server/permission-callback", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+  // #5733 — reportAgentReadinessSelfStop pre-hashes the workspace id via hashUserId.
+  hashUserId: (s: string) => `hash-${s}`,
   // #3369: mirrorWithDebounce extracted to observability.
   // These dispatcher tests do not exercise the debounce TTL, so
   // the stub forwards every call straight through to the spy.
@@ -354,6 +372,7 @@ function makeArgs(overrides: Partial<Parameters<typeof realSdkQueryFactory>[0]> 
     cwd: "/ignored", // factory uses workspacePath
     userId: "user-1",
     conversationId: "conv-1",
+    persona: "command_center" as const,
     ...overrides,
   };
 }
@@ -418,7 +437,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockQuery).toHaveBeenCalledOnce();
     const callArg = mockQuery.mock.calls[0][0];
     expect(callArg.options.cwd).toBe(WORKSPACE_PATH);
-    expect(callArg.options.model).toBe("claude-sonnet-4-6");
+    expect(callArg.options.model).toBe("claude-sonnet-5");
   });
 
   // -------------------------------------------------------------------------
@@ -445,13 +464,17 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   });
 
   // -------------------------------------------------------------------------
-  // T3: plugins: [{ type: "local", path: <workspace>/plugins/soleur }]
+  // T3: plugins: [{ type: "local", path: <DEPLOYED plugin root> }]  (security fix)
   // -------------------------------------------------------------------------
-  it("T3: plugins points at the per-user workspace plugin copy", async () => {
+  it("T3: plugins points at the DEPLOYED plugin root, not the workspace copy", async () => {
+    // getPluginPath() default (no SOLEUR_PLUGIN_PATH set in test). A workspace whose
+    // connected repo ships its own plugins/soleur/ must NOT shadow the deployed plugin
+    // (security: loading the workspace copy would run its hooks.json in-process).
+    // See knowledge-base/.../2026-07-06-connected-repo-shadows-deployed-plugin-*.md.
     await realSdkQueryFactory(makeArgs());
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.plugins).toEqual([
-      { type: "local", path: `${WORKSPACE_PATH}/plugins/soleur` },
+      { type: "local", path: "/app/shared/plugins/soleur" },
     ]);
   });
 
@@ -468,6 +491,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // follow-up).
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
       allowGithubEgress: false,
+      readOnly: false,
     });
   });
 
@@ -611,8 +635,9 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       { value: "sk-test", scheme: "api_key" },
       { PLAUSIBLE_API_KEY: "plk-1" },
       // Issue A: third opts arg always present; ghToken undefined here
-      // because the default mock resolves no installation (null).
-      { ghToken: undefined },
+      // because the default mock resolves no installation (null). Slice B:
+      // pluginPath (getPluginPath() = deployed root) is always threaded.
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
     );
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.env.ANTHROPIC_API_KEY).toBe("sk-test");
@@ -649,6 +674,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         ghToken: "ghs_minted_xyz",
         gitAskpassScriptPath: `${WORKSPACE_PATH}/.askpass-fixed-test.sh`,
         gitInstallationToken: "ghs_minted_xyz",
+        pluginPath: "/app/shared/plugins/soleur",
       },
     );
   });
@@ -732,6 +758,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         ghToken: undefined,
         gitAskpassScriptPath: undefined,
         gitInstallationToken: undefined,
+        pluginPath: "/app/shared/plugins/soleur",
       },
     );
   });
@@ -776,7 +803,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
     );
     expect(mockQuery).toHaveBeenCalledOnce();
   });
@@ -796,7 +823,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     expect(mockBuildAgentEnv).toHaveBeenCalledWith(
       { value: "sk-test", scheme: "api_key" },
       {},
-      { ghToken: undefined },
+      { ghToken: undefined, pluginPath: "/app/shared/plugins/soleur" },
     );
   });
 
@@ -1034,6 +1061,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       // (b) the SAME dispatch opens GitHub egress — the two move in lockstep.
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: true,
+        readOnly: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       // Literal on purpose (canonical-literal style, do not import the
@@ -1052,6 +1080,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockGenerateInstallationToken).not.toHaveBeenCalled();
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: false,
+        readOnly: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       expect(opts.sandbox.network.allowedDomains).toEqual([]);
@@ -1068,6 +1097,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockQuery).toHaveBeenCalledOnce();
       expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
         allowGithubEgress: false,
+        readOnly: false,
       });
       const opts = mockQuery.mock.calls[0][0].options;
       expect(opts.sandbox.network.allowedDomains).toEqual([]);
@@ -1224,6 +1254,36 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   });
 
   // -------------------------------------------------------------------------
+  // T2 (ADR-113): support persona bypasses the repo-lifecycle and runs read-only
+  // at the plugin docs root. The mirror of T10 — patchWorkspacePermissions must
+  // NOT run — plus cwd + read-only sandbox + kb-search-only skills.
+  // -------------------------------------------------------------------------
+  it("T2: support persona skips patchWorkspacePermissions and runs read-only at the plugin root", async () => {
+    await realSdkQueryFactory(makeArgs({ persona: "support" }));
+
+    // Repo-lifecycle write op is NOT invoked for support (contrast T10).
+    expect(mockPatchWorkspacePermissions).not.toHaveBeenCalled();
+
+    const opts = mockQuery.mock.calls[0][0].options;
+    // cwd is the boot-validated plugin docs root, not the user's workspace.
+    expect(opts.cwd).toBe("/app/shared/plugins/soleur");
+    // SDK skills scoped to kb-search only (support surface).
+    expect(opts.skills).toEqual(["kb-search"]);
+
+    // Sandbox built read-only, at the plugin root — allowWrite:[] is enforced
+    // inside buildAgentSandboxConfig (unit-tested T3 in agent-runner-query-options).
+    expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(
+      "/app/shared/plugins/soleur",
+      expect.objectContaining({
+        allowGithubEgress: false,
+        readOnly: true,
+        // Internal KB obscured from the read-only support session (containment).
+        denyReadExtra: ["/app/shared/knowledge-base"],
+      }),
+    );
+  });
+
+  // -------------------------------------------------------------------------
   // T16: sandbox-required-but-unavailable substring → feature: "agent-sandbox"
   // (filtered by feature tag per learning
   // 2026-04-19-claude-agent-sdk-subprocess-exit-tag-via-stderr-substring.md)
@@ -1262,6 +1322,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // No-token dispatch → fail-closed egress (#5041 follow-up).
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH, {
       allowGithubEgress: false,
+      readOnly: false,
     });
   });
 

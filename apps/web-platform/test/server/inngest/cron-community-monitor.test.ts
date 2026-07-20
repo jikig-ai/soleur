@@ -8,8 +8,11 @@
 //   2. Prompt-canary anchors (## Instructions, community-router.sh path,
 //      Hacker News / Discord / Bluesky verbs, digest output path) — original
 //      anchors from the GHA prompt that must survive silent paraphrasing.
-//   3. Safety-guard anchors (DEDUP RULE for daily cadence, MILESTONE RULE,
-//      platform-persistence directive, "Do NOT push directly to main").
+//   3. Safety-guard anchors (MILESTONE RULE, platform-persistence
+//      directive, "Do NOT push directly to main"). NOTE: the prompt-level
+//      DEDUP RULE was removed in #6143 (same-day dedup is now code-side via
+//      digestIssueExistsForDate before the eval spawns) — a regression guard
+//      below asserts those three strings stay absent.
 //   4. Timing constants exported (MAX_TURN_DURATION_MS, KILL_ESCALATION_MS).
 //   5. buildSpawnEnv allowlist — bucket-ii positive class (7 community vars
 //      added) AND negative class (9-item sensitive denylist + spread operator).
@@ -91,6 +94,10 @@ describe("registration source-shape anchors (cross-check the import-time smoke)"
       "operator manual trigger",
     ],
     ['scope: "fn"', "fn-scoped serialization"],
+    // #6143 — the full { scope: "fn", limit: 1 } is now the SOLE same-day TOCTOU
+    // guard (the prompt-level DEDUP RULE was removed). Mirror
+    // cron-roadmap-review.test.ts's concurrency anchor.
+    ['{ scope: "fn", limit: 1 }', "sole same-day dedup serializer (#6143)"],
     ['scope: "account"', "account-shared lane (cron-platform)"],
     ['key: \'"cron-platform"\'', "cross-handler concurrency lane"],
     ["retries: 1", "no retry storm on agent-loop failure"],
@@ -154,23 +161,37 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
         "handler-side persistence note (#5111)",
       ],
       [
-        "DEDUP RULE",
-        "duplicate-issue prevention (manual+cron same day)",
-      ],
-      [
-        "within the last 24 hours",
-        "daily cadence dedup window (not 6 days)",
-      ],
-      [
         "CLONE DEPTH RULE:",
         "stale git-log misuse on --depth=1 clone",
       ],
-      [
-        "post your findings as a comment on the most recent existing issue",
-        "dedup fallback behaviour",
-      ],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
+    });
+  });
+
+  // #6143 — the prompt-level DEDUP RULE (24h window, comment-and-exit) was
+  // removed; same-day manual+cron duplicates are now handled code-side by
+  // digestIssueExistsForDate BEFORE the eval spawns (serialized by the
+  // registration's { scope: "fn", limit: 1 } concurrency). These strings must
+  // stay ABSENT from cron-community-monitor.ts — scoped to THIS file only,
+  // since _cron-shared.ts legitimately still contains dedup-related language.
+  // Mirrors cron-roadmap-review.test.ts's post-#6139 regression guard.
+  describe("#6143 — prompt-level DEDUP RULE removed (regression guard)", () => {
+    it.each([
+      ["DEDUP RULE", "removed prompt-level dedup keyword"],
+      ["within the last 24 hours", "removed 24h rolling window"],
+      [
+        "post your findings as a comment on the most recent existing issue",
+        "removed comment-and-exit fallback",
+      ],
+    ])("SUT_SOURCE does NOT contain %s (%s)", (removed) => {
+      expect(SUT_SOURCE).not.toContain(removed);
+    });
+
+    it("still creates the dated digest issue unconditionally (prefix anchor present)", () => {
+      // The unconditional-create contract survives: step 5 files the issue on
+      // every run; the code-level dedup skip happens before the eval spawns.
+      expect(SUT_SOURCE).toContain("[Scheduled] Community Monitor");
     });
   });
 });
@@ -262,6 +283,27 @@ describe("buildSpawnEnv allowlist (PR-11 bucket-ii security surface)", () => {
 
     it("allowlist does NOT use ...process.env spread (would defeat allowlist)", () => {
       expect(buildEnvBody).not.toMatch(/\.\.\.process\.env/);
+    });
+
+    // #6695 — the effective spawn env is now composed at the CALL SITE, which
+    // wraps buildSpawnEnv to add the collector-status dir. That composition sits
+    // outside `buildEnvBody`, so every assertion above is blind to it: a future
+    // `...buildSpawnEnv(token), ...process.env` inside the wrapper would pass
+    // the whole negative class with a green suite. Assert against the WHOLE
+    // file — this module has no legitimate use of that spread anywhere.
+    it("no ...process.env spread anywhere in the module (incl. the call-site wrapper)", () => {
+      expect(SUT_SOURCE).not.toMatch(/\.\.\.process\.env/);
+    });
+
+    it("the call-site wrapper adds only the non-secret collector-status dir", () => {
+      const wrapper = SUT_SOURCE.match(
+        /buildSpawnEnv:\s*\(token: string\) => \(\{[\s\S]*?\}\),/,
+      )?.[0];
+      expect(wrapper).toBeDefined();
+      // Exactly one added key, and it is a path — not a credential.
+      expect(wrapper).toContain("...buildSpawnEnv(token)");
+      expect(wrapper).toContain("SOLEUR_COLLECTOR_STATUS_DIR");
+      expect(wrapper).not.toMatch(/process\.env\./);
     });
 
     // Read-only invariant: the community monitor forwards X read credentials

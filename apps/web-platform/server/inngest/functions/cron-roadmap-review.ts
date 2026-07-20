@@ -52,15 +52,20 @@
 import {
   redactToken,
   mintInstallationToken,
+  digestIssueExistsForDate,
+  injectRunDate,
   postSentryHeartbeat,
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
+  finalizeOutputAwareHeartbeat,
+  DeployInProgressError,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
   setupEphemeralWorkspace,
   teardownEphemeralWorkspace,
   spawnClaudeEval,
+  makeThrewSpawnResult,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { inngest } from "@/server/inngest/client";
@@ -89,7 +94,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // options marker). The prompt is the SOLE positional argument after `--`.
 //
 // Mirrors .github/workflows/scheduled-roadmap-review.yml `claude_args`:
-//   --model claude-sonnet-4-6
+//   --model claude-sonnet-5
 //   --max-turns 40
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch
 const CLAUDE_CODE_FLAGS = [
@@ -156,14 +161,8 @@ If any open PR touches roadmap.md, do NOT make conflicting edits. Instead, post 
 
 ## Output
 
-After your analysis, create a GitHub issue summarizing your findings.
-
-DEDUP RULE (BEFORE creating the review issue): run
-  gh issue list --label scheduled-roadmap-review --state open --search 'Weekly Roadmap Review in:title' --json number,title,createdAt
-If any results from within the last 6 days exist, do NOT create a new issue. Instead, post your findings as a comment on the most recent existing issue and exit. This prevents duplicate issues when a manual trigger fires the same week as the natural Monday 09:00 UTC cron.
-
-If no recent duplicate exists, create a new issue with:
-- Title format: [Scheduled] Weekly Roadmap Review - YYYY-MM-DD
+After your analysis, create a new issue with:
+- Title format: [Scheduled] Weekly Roadmap Review - {{RUN_DATE}}
 - Label: scheduled-roadmap-review
 - --milestone "Post-MVP / Later"
 
@@ -201,6 +200,9 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 export async function cronRoadmapReviewHandler({
   step,
   logger,
+  attempt,
+  maxAttempts,
+  runId,
 }: HandlerArgs): Promise<{ ok: boolean }> {
   // Run-window start — the lower bound for the post-run output check. Captured
   // before the mint step (memoized across Inngest replays) so a replay reuses
@@ -209,6 +211,36 @@ export async function cronRoadmapReviewHandler({
     "run-started-at",
     async () => new Date().toISOString(),
   );
+
+  // #5786 — producer-side date-dedup (extends the #5751 community-monitor fix).
+  // If a real `[Scheduled] Weekly Roadmap Review - <date>` digest already exists
+  // for today, skip the eval and post a healthy OK heartbeat — do NOT fall
+  // through to verify-output, whose run-window (updated_at >= THIS runStartedAt)
+  // would exclude the earlier issue and false-RED the skip.
+  // concurrency:{scope:"fn",limit:1} (registration below) serializes the two
+  // invocations, so the second's FRESH LIST read sees the first's create. Date
+  // anchor is runStartedAt.slice(0,10) (replay-stable across the retries:1
+  // memoization). Fail-OPEN: a read error → spawn (a duplicate paper-cut beats a
+  // missed digest).
+  const digestAlreadyExists = await step.run("dedup-digest-check", async () =>
+    digestIssueExistsForDate({
+      label: SENTRY_MONITOR_SLUG,
+      titlePrefix: "[Scheduled] Weekly Roadmap Review -",
+      date: runStartedAt.slice(0, 10),
+      cronName: "cron-roadmap-review",
+    }),
+  );
+  if (digestAlreadyExists) {
+    await step.run("sentry-heartbeat", async () => {
+      await postSentryHeartbeat({
+        ok: true,
+        sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+        cronName: "cron-roadmap-review",
+        logger,
+      });
+    });
+    return { ok: true };
+  }
 
   // --- Step 1: mint installation token (memoized across replays) ---
   // The raw token string is the return value (NEVER log this value).
@@ -231,6 +263,8 @@ export async function cronRoadmapReviewHandler({
     ephemeralRoot = workspace.ephemeralRoot;
     spawnCwd = workspace.spawnCwd;
   } catch (err) {
+    // #5728 G1 — benign deploy-in-progress defer (ADR-078): rethrow bare, no heartbeat.
+    if (err instanceof DeployInProgressError) throw err;
     // Redact token if it sneaks into the error message (defense-in-depth).
     const e = err as Error;
     const redactedMsg = redactToken(e.message ?? "", installationToken);
@@ -255,87 +289,137 @@ export async function cronRoadmapReviewHandler({
   // re-creates a fresh ephemeralRoot from setup-workspace's memoization
   // (or the existsSync guard at the top of spawnClaudeEval rebuilds it).
   try {
-    // --- Step 3: claude-eval (50-min AbortController) ---
-    const spawnResult = await step.run(
-      "claude-eval",
-      async (): Promise<SpawnResult> => {
-        return spawnClaudeEval({
-          spawnCwd: spawnCwd!,
-          installationToken,
-          flags: CLAUDE_CODE_FLAGS,
-          prompt: ROADMAP_REVIEW_PROMPT,
-          maxTurnDurationMs: MAX_TURN_DURATION_MS,
-          cronName: "cron-roadmap-review",
-          buildSpawnEnv,
-          logger,
-        });
-      },
-    );
-
-    if (spawnResult.abortedByTimeout) {
-      reportSilentFallback(
-        new Error(
-          `claude-eval aborted by timeout (${MAX_TURN_DURATION_MS}ms budget exceeded)`,
-        ),
-        {
-          feature: "cron-roadmap-review",
-          op: "claude-eval-timeout",
-          message: "claude-eval aborted by AbortController",
-          extra: {
-            fn: "cron-roadmap-review",
-            durationMs: spawnResult.durationMs,
-            maxMs: MAX_TURN_DURATION_MS,
-          },
+    // #5728 — flag pattern. The body (claude-eval → verify-output) runs in an
+    // inner try whose throw sets `threw`; the single terminal heartbeat is
+    // posted (or skipped-for-retry) by finalizeOutputAwareHeartbeat below — NOT
+    // from a second catch-site (which, under retries:1 memoization, would replay
+    // a stale `ok` while posting a conflicting `error`). A throw before the
+    // heartbeat previously propagated out → the heartbeat step never ran →
+    // silent `missed`. spawnResult is hoisted so the silence-hole audit issue can
+    // read it even when a later step threw.
+    let heartbeatOk = false;
+    let threw = false;
+    let spawnResult: SpawnResult | null = null;
+    try {
+      // --- Step 3: claude-eval (50-min AbortController) ---
+      spawnResult = await step.run(
+        "claude-eval",
+        async (): Promise<SpawnResult> => {
+          return spawnClaudeEval({
+            spawnCwd: spawnCwd!,
+            installationToken,
+            flags: CLAUDE_CODE_FLAGS,
+            prompt: injectRunDate(ROADMAP_REVIEW_PROMPT, runStartedAt),
+            maxTurnDurationMs: MAX_TURN_DURATION_MS,
+            cronName: "cron-roadmap-review",
+            buildSpawnEnv,
+            logger,
+            runId,
+            attempt,
+          });
         },
       );
+
+      if (spawnResult.abortedByTimeout) {
+        reportSilentFallback(
+          new Error(
+            `claude-eval aborted by timeout (${MAX_TURN_DURATION_MS}ms budget exceeded)`,
+          ),
+          {
+            feature: "cron-roadmap-review",
+            op: "claude-eval-timeout",
+            message: "claude-eval aborted by AbortController",
+            extra: {
+              fn: "cron-roadmap-review",
+              durationMs: spawnResult.durationMs,
+              maxMs: MAX_TURN_DURATION_MS,
+            },
+          },
+        );
+      }
+
+      // --- Step 4: output-aware heartbeat. A clean exit that produced no
+      //     `scheduled-roadmap-review` issue in the run window turns the monitor
+      //     RED (and emits `scheduled-output-missing`) instead of false-green. ---
+      heartbeatOk = await step.run("verify-output", async () =>
+        resolveOutputAwareOk({
+          spawnOk: spawnResult!.ok,
+          label: SENTRY_MONITOR_SLUG,
+          runStartedAt,
+          cronName: "cron-roadmap-review",
+          stderrTail: spawnResult!.stderrTail,
+          exitCode: spawnResult!.exitCode,
+          stdoutTail: spawnResult!.stdoutTail,
+        }),
+      );
+    } catch (err) {
+      // #5728 G1 — benign deploy-in-progress defer (ADR-078): rethrow bare, no
+      // heartbeat. Any OTHER throw is a real failure — flag it;
+      // finalizeOutputAwareHeartbeat decides error-vs-retry below.
+      if (err instanceof DeployInProgressError) throw err;
+      threw = true;
+      const e = err as Error;
+      const redactedMsg = redactToken(e.message ?? "", installationToken);
+      const redacted = new Error(redactedMsg);
+      redacted.name = e.name;
+      reportSilentFallback(redacted, {
+        feature: "cron-roadmap-review",
+        op: "handler-body-threw",
+        message:
+          "cron-roadmap-review body threw before the terminal heartbeat",
+        extra: {
+          fn: "cron-roadmap-review",
+          attempt: attempt ?? 0,
+          producedOutput: heartbeatOk,
+        },
+      });
     }
 
-    // --- Step 4: output-aware heartbeat. A clean exit that produced no
-    //     `scheduled-roadmap-review` issue in the run window turns the monitor
-    //     RED (and emits `scheduled-output-missing`) instead of false-green. ---
-    const heartbeatOk = await step.run("verify-output", async () =>
-      resolveOutputAwareOk({
-        spawnOk: spawnResult.ok,
-        label: SENTRY_MONITOR_SLUG,
-        runStartedAt,
-        cronName: "cron-roadmap-review",
-        stderrTail: spawnResult.stderrTail,
-        exitCode: spawnResult.exitCode,
-        stdoutTail: spawnResult.stdoutTail,
-      }),
-    );
-    await step.run("sentry-heartbeat", async () => {
-      await postSentryHeartbeat({ ok: heartbeatOk, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-roadmap-review", logger });
+    // --- Single authoritative terminal heartbeat (memoization-safe,
+    //     final-attempt gated). On a genuine non-final failure the helper skips
+    //     the whole heartbeat step and returns retry:true (we rethrow to trigger
+    //     the Inngest retry, filing NO premature FAILED issue). On the post path,
+    //     the Step-5 silence-hole fallback (#4960/#4978) files a FAILED audit
+    //     issue when red, ordered BEFORE the heartbeat so the heartbeat stays the
+    //     genuine last step. ---
+    const { retry } = await finalizeOutputAwareHeartbeat({
+      step,
+      heartbeatOk,
+      threw,
+      attempt,
+      maxAttempts,
+      sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+      cronName: "cron-roadmap-review",
+      logger,
+      onBeforeHeartbeat: heartbeatOk
+        ? undefined
+        : async () => {
+            await step.run("ensure-audit-issue", async () => {
+              try {
+                await ensureScheduledAuditIssue({
+                  label: SENTRY_MONITOR_SLUG,
+                  titlePrefix: "[Scheduled] Weekly Roadmap Review -",
+                  cronName: "cron-roadmap-review",
+                  runStartedAt,
+                  spawnResult: spawnResult ?? makeThrewSpawnResult("cron-roadmap-review"),
+                  installationToken,
+                });
+              } catch (err) {
+                reportSilentFallback(err, {
+                  feature: "cron-roadmap-review",
+                  op: "ensure-audit-issue-failed",
+                  message:
+                    "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
+                  extra: { fn: "cron-roadmap-review", runStartedAt },
+                });
+              }
+            });
+          },
     });
-
-    // --- Step 5: silence-hole fallback (#4960, generalized #4978). When the
-    //     output-aware check found NO scheduled-roadmap-review issue in the run
-    //     window, the prompt's create-issue step never ran (mid-eval crash /
-    //     API 500 / max-turns kill). Self-report a FAILED audit issue so the run
-    //     is never silent. Wrapped so a create failure cannot crash the
-    //     finally/teardown — reported to Sentry instead; the watchdog still
-    //     catches the absence after threshold (defense-in-depth). ---
-    if (!heartbeatOk) {
-      await step.run("ensure-audit-issue", async () => {
-        try {
-          await ensureScheduledAuditIssue({
-            label: SENTRY_MONITOR_SLUG,
-            titlePrefix: "[Scheduled] Weekly Roadmap Review -",
-            cronName: "cron-roadmap-review",
-            runStartedAt,
-            spawnResult,
-            installationToken,
-          });
-        } catch (err) {
-          reportSilentFallback(err, {
-            feature: "cron-roadmap-review",
-            op: "ensure-audit-issue-failed",
-            message:
-              "Handler-level fallback audit-issue create failed; run remains silent until watchdog threshold",
-            extra: { fn: "cron-roadmap-review", runStartedAt },
-          });
-        }
-      });
+    if (retry) {
+      throw new Error(
+        "cron-roadmap-review failed on a non-final attempt; retrying",
+      );
     }
 
     return { ok: heartbeatOk };

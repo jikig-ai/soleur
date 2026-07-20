@@ -25,9 +25,21 @@ Use the **Glob tool** to count components. Make all four calls in parallel in a 
 
 If the plugin paths do not exist, fall back to the installed plugin paths under `~/.claude/plugins/`.
 
+## Step 2.5: Harness-aware command names
+
+Detect the active harness before printing commands:
+
+- **Claude Code:** commands use the `/soleur:` prefix (`/soleur:go`, `/soleur:sync`, `/soleur:help`). Workflow skills are invoked via the **Skill tool** (`soleur:<skill>`).
+- **Grok Build:** commands are unqualified (`/go`, `/sync`, `/help`). Workflow skills are invoked via **slash commands** (`/brainstorm`, `/one-shot`, …) — not `/soleur:go`.
+- Implementation reference: `plugins/soleur/lib/harness.ts` (`routingInstructions`, `formatSkillInvocation`).
+
+Use the matching column in Step 3 below.
+
 ## Step 3: Output the Help Reference
 
-Present the following formatted overview. Replace placeholder counts with actual values from Step 2.
+Present the following formatted overview. Replace placeholder counts with actual values from Step 2. **Print the Claude block OR the Grok block** based on Step 2.5 — not both.
+
+### Claude Code
 
 ```text
 Soleur - The Company-as-a-Service Platform
@@ -59,6 +71,37 @@ MCP SERVERS:
 
 Quick start: /soleur:go <what you want to do>
 Full docs:   See plugins/soleur/README.md
+```
+
+### Grok Build
+
+```text
+Soleur - The Company-as-a-Service Platform
+
+COMMANDS:
+  /go <what you want>   The recommended way to use Soleur
+  /sync                 Populate knowledge-base from existing codebase
+  /help                 This help listing
+
+WORKFLOW SKILLS (invoked via /go or directly via slash command):
+  brainstorm            Explore requirements and approaches
+  plan                  Create an implementation plan
+  work                  Execute the plan systematically
+  review                Run multi-agent code review
+  compound              Capture learnings from solved problems
+  one-shot              Full autonomous engineering workflow
+
+AGENTS: [N] agents across [M] categories
+  (same category breakdown as Claude block)
+
+SKILLS: [N] skills
+  (list all skills — invoke as /<skill-name>)
+
+MCP SERVERS:
+  context7              Framework documentation lookup
+
+Quick start: /go <what you want to do>
+Full docs:   See plugins/soleur/README.md and knowledge-base/engineering/grok-onboarding.md
 ```
 
 Replace all `[N]`, `[M]`, and `[count]` placeholders with actual values from Step 2. List all skills found, not just a subset.

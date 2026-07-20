@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for infra-config-install.sh — the pinned root-run escalation helper that
-# infra-config-apply.sh invokes via sudo to write the 7 managed files into their
+# infra-config-apply.sh invokes via sudo to write the 15 managed files into their
 # root-owned destination directories (#4827).
 #
 # The helper is the security boundary for the wildcard-free sudoers grant
@@ -160,12 +160,12 @@ test_reject_dest_symlink() {
   teardown
 }
 
-# --- Test 5: All 7 managed dests are accepted with their authoritative spec ---
+# --- Test 5: All 15 managed dests are accepted with their authoritative spec ---
 # Each entry is "dest|mode|owner" — mode/owner MUST match the helper's internal
 # table (caller-supplied values that disagree are rejected, #4827 hardening).
 # The sudoers dest is intentionally absent (root-managed, not helper-writable).
 test_all_managed_dests_accepted() {
-  echo "TEST: install — every FILE_MAP dest is allowlisted (11, sudoers excluded)"
+  echo "TEST: install — every FILE_MAP dest is allowlisted (15, sudoers excluded)"
   setup
   local specs=(
     "/usr/local/bin/ci-deploy.sh|755|root:root"
@@ -180,6 +180,9 @@ test_all_managed_dests_accepted() {
     "/usr/local/bin/inngest-wiped-volume-verify.sh|755|root:root"
     "/usr/local/bin/cat-inngest-verify-state.sh|755|root:root"
     "/usr/local/bin/inngest-inventory.sh|755|root:root"
+    "/usr/local/bin/git-lock-chardevice-sweep.sh|755|root:root"
+    "/usr/local/bin/inngest-registry-probe.sh|755|root:root"
+    "/usr/local/bin/inngest-doublefire-probe.sh|755|root:root"
   )
   local accepted=0 entry d mode owner rc
   for entry in "${specs[@]}"; do
@@ -188,7 +191,7 @@ test_all_managed_dests_accepted() {
     printf 'payload-%s' "$(basename "$d")" | bash "$HELPER" "$d" "$mode" "$owner" 2>/dev/null || rc=$?
     [[ "$rc" == "$RC_OK" ]] && accepted=$((accepted + 1))
   done
-  assert_eq "all 12 managed dests accepted" "12" "$accepted"
+  assert_eq "all 15 managed dests accepted" "15" "$accepted"
   teardown
 }
 
@@ -251,8 +254,8 @@ test_dest_spec_filemap_lockstep() {
   filemap_count=$(grep -cE '^\s*"[A-Z_]+_B64\|/' "$HANDLER")
   # DEST_SPEC keys look like: ["/dest/path"]="mode owner"
   dest_spec_count=$(grep -cE '^\s*\["/' "$HELPER")
-  assert_eq "FILE_MAP has 12 managed dests" "12" "$filemap_count"
-  assert_eq "DEST_SPEC has 12 managed dests" "12" "$dest_spec_count"
+  assert_eq "FILE_MAP has 15 managed dests" "15" "$filemap_count"
+  assert_eq "DEST_SPEC has 15 managed dests" "15" "$dest_spec_count"
   assert_eq "DEST_SPEC and FILE_MAP cardinality match" "$filemap_count" "$dest_spec_count"
   # The sudoers dest must be in NEITHER (root-managed).
   if grep -q '/etc/sudoers.d/deploy-inngest-bootstrap' "$HELPER"; then

@@ -1,5 +1,14 @@
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { buildAgentEnv } from "../server/agent-env";
+
+// Force the production branch of the plugin-path guard (mirrors the harness in
+// plugin-path.test.ts). The `buildAgentEnv` describe's afterEach calls
+// vi.unstubAllEnvs() to revert these. Under the ambient VITEST runner the guard
+// is a no-op — the fail-closed injection only fires in a production env.
+function stubProductionEnv(): void {
+  vi.stubEnv("VITEST", "");
+  vi.stubEnv("NODE_ENV", "production");
+}
 
 // Intentionally duplicated from agent-env.ts -- importing would defeat the
 // security boundary test. Changes to the allowlist must be reflected here,
@@ -61,6 +70,9 @@ describe("buildAgentEnv", () => {
   });
 
   afterEach(() => {
+    // Revert any vi.stubEnv from stubProductionEnv() FIRST, before the manual
+    // save/restore below re-asserts the beforeEach-set allowlist values.
+    vi.unstubAllEnvs();
     // Restore original env
     for (const key of [...EXPECTED_ALLOWLIST, ...SERVER_SECRETS]) {
       if (savedEnv[key] === undefined) {
@@ -224,6 +236,117 @@ describe("buildAgentEnv", () => {
         { ghToken: "lands_via_opts" },
       );
       expect(viaOpts.GH_TOKEN).toBe("lands_via_opts");
+    });
+  });
+
+  // --- CLAUDE_PLUGIN_ROOT injection (Slice B / AC3 — connected-repo shadow
+  // fix) -------------------------------------------------------------------
+  // The per-dispatch deployed plugin root (`getPluginPath()` →
+  // `/app/shared/plugins/soleur`) rides as `CLAUDE_PLUGIN_ROOT` via a typed
+  // `opts.pluginPath` param. It is deliberately NOT in AGENT_ENV_ALLOWLIST
+  // (that list copies ambient process.env; this is a per-dispatch value), so
+  // an ambient process.env.CLAUDE_PLUGIN_ROOT must NEVER leak into the agent
+  // env — only the explicit opts value lands. The deployed skills'
+  // `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` shell-outs read this var so
+  // they run the platform-deployed script, not the untrusted workspace copy.
+  describe("CLAUDE_PLUGIN_ROOT injection", () => {
+    test("injects CLAUDE_PLUGIN_ROOT when opts.pluginPath is set", () => {
+      const env = buildAgentEnv(
+        { value: "sk-ant-test", scheme: "api_key" },
+        undefined,
+        { pluginPath: "/app/shared/plugins/soleur" },
+      );
+      expect(env.CLAUDE_PLUGIN_ROOT).toBe("/app/shared/plugins/soleur");
+      // Auth-var switch untouched.
+      expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-test");
+    });
+
+    // AC2 (mutation coverage — closes the fail-OPEN hole). A fail-OPEN
+    // implementation (bare `if (opts?.pluginPath)` assignment that sets an
+    // UNVALIDATED path and silently omits when absent) MUST NOT pass this set.
+    // The prod-simulated cases below (empty/absent→throw, non-empty-invalid→
+    // throw, valid-/app→set) can only pass a fail-CLOSED injection that routes
+    // through assertTrustedPluginPath and throws on an absent/empty export.
+    describe("AC2 — fail-closed injection (prod-simulated)", () => {
+      test("prod, empty pluginPath → throws (export required)", () => {
+        stubProductionEnv();
+        expect(() =>
+          buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" }, undefined, {
+            pluginPath: "",
+          }),
+        ).toThrow(/CLAUDE_PLUGIN_ROOT export required/);
+      });
+
+      test("prod, absent pluginPath (no opts) → throws (export required)", () => {
+        stubProductionEnv();
+        expect(() =>
+          buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" }),
+        ).toThrow(/CLAUDE_PLUGIN_ROOT export required/);
+      });
+
+      // One isolated, self-labeling case per invalid shape (a shared loop would
+      // throw on the first bad element and mask the rest). Each would be SET
+      // verbatim by a fail-open bare assignment; the fail-closed injection routes
+      // it through assertTrustedPluginPath, which throws /plugin path/i for any
+      // non-/app/ (or relative/traversal) value.
+      test.each([
+        "/workspaces/abc/plugins/soleur",
+        "/tmp/evil/plugins/soleur",
+        "plugins/soleur", // relative
+        "/app/../workspaces/x/plugins/soleur", // traversal → resolves outside /app/
+      ])(
+        "prod, non-empty INVALID pluginPath %s → throws via assertTrustedPluginPath (not a bare assignment)",
+        (bad) => {
+          stubProductionEnv();
+          expect(() =>
+            buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" }, undefined, {
+              pluginPath: bad,
+            }),
+          ).toThrow(/plugin path/i);
+        },
+      );
+
+      test("prod, valid /app pluginPath → sets it (survives validation, not only the ambient-VITEST no-op)", () => {
+        stubProductionEnv();
+        const env = buildAgentEnv(
+          { value: "sk-ant-test", scheme: "api_key" },
+          undefined,
+          { pluginPath: "/app/shared/plugins/soleur" },
+        );
+        expect(env.CLAUDE_PLUGIN_ROOT).toBe("/app/shared/plugins/soleur");
+      });
+    });
+
+    test("ambient-VITEST, absent/empty pluginPath → still omits (fixture ergonomics preserved)", () => {
+      const envNoOpts = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+      expect(envNoOpts).not.toHaveProperty("CLAUDE_PLUGIN_ROOT");
+      const envEmpty = buildAgentEnv(
+        { value: "sk-ant-test", scheme: "api_key" },
+        undefined,
+        { pluginPath: "" },
+      );
+      expect(envEmpty).not.toHaveProperty("CLAUDE_PLUGIN_ROOT");
+      const envUndef = buildAgentEnv(
+        { value: "sk-ant-test", scheme: "api_key" },
+        undefined,
+        {},
+      );
+      expect(envUndef).not.toHaveProperty("CLAUDE_PLUGIN_ROOT");
+    });
+
+    test("does NOT forward an ambient process.env.CLAUDE_PLUGIN_ROOT (not allowlisted)", () => {
+      const mutableEnv = process.env as Record<string, string | undefined>;
+      const saved = mutableEnv.CLAUDE_PLUGIN_ROOT;
+      mutableEnv.CLAUDE_PLUGIN_ROOT = "/app/ambient-should-not-leak";
+      try {
+        // No opts.pluginPath → the ambient value must not ride through the
+        // allowlist loop (CLAUDE_PLUGIN_ROOT is intentionally not allowlisted).
+        const env = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+        expect(env).not.toHaveProperty("CLAUDE_PLUGIN_ROOT");
+      } finally {
+        if (saved === undefined) delete mutableEnv.CLAUDE_PLUGIN_ROOT;
+        else mutableEnv.CLAUDE_PLUGIN_ROOT = saved;
+      }
     });
   });
 });

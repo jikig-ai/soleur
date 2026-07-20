@@ -1,0 +1,207 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BoardIssueInput } from "@/lib/workstream";
+
+// The accessor's IO collaborators are ALL mocked — there are NO live network
+// calls. We assert the empty-vs-throw contract and the mapping wiring.
+
+const readCurrentRepoUrlResult = vi.fn();
+const resolveInstallationId = vi.fn();
+const resolveEffectiveInstallationId = vi.fn();
+const listRepoIssues = vi.fn();
+const fetchBoardStatusMap = vi.fn();
+const reportSilentFallback = vi.fn();
+const getAppSlug = vi.fn();
+
+vi.mock("@/server/current-repo-url", () => ({
+  readCurrentRepoUrlResult: (...a: unknown[]) => readCurrentRepoUrlResult(...a),
+}));
+vi.mock("@/server/resolve-installation-id", () => ({
+  resolveInstallationId: (...a: unknown[]) => resolveInstallationId(...a),
+}));
+vi.mock("@/server/cc-effective-installation", () => ({
+  resolveEffectiveInstallationId: (...a: unknown[]) =>
+    resolveEffectiveInstallationId(...a),
+}));
+vi.mock("@/server/github-read-tools", () => ({
+  listRepoIssues: (...a: unknown[]) => listRepoIssues(...a),
+  fetchBoardStatusMap: (...a: unknown[]) => fetchBoardStatusMap(...a),
+}));
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: (...a: unknown[]) => reportSilentFallback(...a),
+}));
+vi.mock("@/server/github-app", () => ({
+  getAppSlug: (...a: unknown[]) => getAppSlug(...a),
+}));
+
+import { getWorkstreamIssues } from "@/server/workstream/get-workstream-issues";
+
+function rawIssue(over: Partial<BoardIssueInput> = {}): BoardIssueInput {
+  return {
+    number: 5652,
+    title: "Tighten the gap",
+    body: "the body",
+    assignees: ["harry"],
+    labels: ["domain/engineering", "priority/p1-high", "in-progress"],
+    state: "open",
+    state_reason: null,
+    created_at: "2026-06-20T09:00:00.000Z",
+    updated_at: "2026-06-21T09:00:00.000Z",
+    ...over,
+  };
+}
+
+beforeEach(() => {
+  readCurrentRepoUrlResult.mockResolvedValue({
+    url: "https://github.com/acme/widgets",
+    degraded: false,
+  });
+  resolveInstallationId.mockResolvedValue(123);
+  resolveEffectiveInstallationId.mockResolvedValue(123);
+  listRepoIssues.mockResolvedValue([]);
+  fetchBoardStatusMap.mockResolvedValue(new Map());
+  getAppSlug.mockResolvedValue("soleur-ai");
+});
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.unstubAllEnvs();
+});
+
+describe("getWorkstreamIssues", () => {
+  it("returns [] (honest empty) when no repo is connected — no reader call (AC3)", async () => {
+    readCurrentRepoUrlResult.mockResolvedValue({ url: null, degraded: false });
+    const out = await getWorkstreamIssues("u1");
+    expect(out).toEqual([]);
+    expect(listRepoIssues).not.toHaveBeenCalled();
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("returns [] (honest empty) for a connected repo whose reader yields zero issues (AC3)", async () => {
+    listRepoIssues.mockResolvedValue([]);
+    const out = await getWorkstreamIssues("u1");
+    expect(out).toEqual([]);
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("THROWS + mirrors (op:repo-unresolved) BEFORE the throw on a P2 degraded read (AC1)", async () => {
+    const { WorkstreamDegradedError } = await import("@/lib/workstream");
+    readCurrentRepoUrlResult.mockResolvedValue({ url: null, degraded: true });
+    // mirror-precedes-throw: the report fires and no install/list call happens.
+    await expect(getWorkstreamIssues("u1")).rejects.toBeInstanceOf(
+      WorkstreamDegradedError,
+    );
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ feature: "workstream", op: "repo-unresolved" }),
+    );
+    expect(resolveInstallationId).not.toHaveBeenCalled();
+    expect(listRepoIssues).not.toHaveBeenCalled();
+  });
+
+  it("THROWS + mirrors (op:no-installation) when repo present but installation is null (P1, AC2)", async () => {
+    const { WorkstreamDegradedError } = await import("@/lib/workstream");
+    resolveEffectiveInstallationId.mockResolvedValue(null);
+    await expect(getWorkstreamIssues("u1")).rejects.toBeInstanceOf(
+      WorkstreamDegradedError,
+    );
+    expect(listRepoIssues).not.toHaveBeenCalled();
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ feature: "workstream", op: "no-installation" }),
+    );
+  });
+
+  it("maps the reader output via the pure mapper for a connected repo", async () => {
+    listRepoIssues.mockResolvedValue([rawIssue()]);
+    const out = await getWorkstreamIssues("u1");
+    expect(listRepoIssues).toHaveBeenCalledWith(123, "acme", "widgets");
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({
+      id: "5652",
+      title: "Tighten the gap",
+      description: "the body",
+      status: "in_progress",
+      priority: "high",
+      assigneeRole: "cto",
+      user: { name: "harry", initials: "HA" },
+      live: true,
+    });
+  });
+
+  it("propagates (throws) a GitHub reader error — never masquerades as empty", async () => {
+    listRepoIssues.mockRejectedValue(new Error("GitHub API 403"));
+    await expect(getWorkstreamIssues("u1")).rejects.toThrow("GitHub API 403");
+  });
+
+  it("prefers the canonical board Status over label derivation (Phase 2)", async () => {
+    vi.stubEnv("SOLEUR_KANBAN_ORG", "acme");
+    vi.stubEnv("SOLEUR_KANBAN_PROJECT_NUMBER", "2");
+    listRepoIssues.mockResolvedValue([rawIssue()]); // labels would derive in_progress
+    fetchBoardStatusMap.mockResolvedValue(new Map([[5652, "Pending"]]));
+    const out = await getWorkstreamIssues("u1");
+    expect(fetchBoardStatusMap).toHaveBeenCalledWith(123, "acme", 2, "acme/widgets");
+    expect(out[0].status).toBe("pending"); // board Status wins over the in-progress label
+  });
+
+  it("falls back to label derivation + mirrors to Sentry when the board read fails", async () => {
+    vi.stubEnv("SOLEUR_KANBAN_ORG", "acme");
+    vi.stubEnv("SOLEUR_KANBAN_PROJECT_NUMBER", "2");
+    listRepoIssues.mockResolvedValue([rawIssue()]);
+    fetchBoardStatusMap.mockRejectedValue(new Error("GitHub API 403"));
+    const out = await getWorkstreamIssues("u1");
+    expect(out[0].status).toBe("in_progress"); // label fallback, never throws
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ feature: "workstream", op: "board-status-read" }),
+    );
+  });
+
+  it("skips the board read when the repo owner is not the configured board org", async () => {
+    vi.stubEnv("SOLEUR_KANBAN_ORG", "jikig-ai");
+    vi.stubEnv("SOLEUR_KANBAN_PROJECT_NUMBER", "2");
+    listRepoIssues.mockResolvedValue([rawIssue()]);
+    const out = await getWorkstreamIssues("u1");
+    expect(fetchBoardStatusMap).not.toHaveBeenCalled();
+    expect(out[0].status).toBe("in_progress"); // label derivation
+  });
+
+  // --- Creator attribution (PART A) ---------------------------------------
+
+  it("threads the GitHub author into creator (human author)", async () => {
+    listRepoIssues.mockResolvedValue([rawIssue({ authorLogin: "octocat" })]);
+    const out = await getWorkstreamIssues("u1");
+    expect(out[0].creator).toEqual({
+      login: "octocat",
+      isSoleur: false,
+      display: { name: "octocat", initials: "OC" },
+    });
+  });
+
+  it("detects the slug-derived Soleur bot + surfaces the marker initiator", async () => {
+    listRepoIssues.mockResolvedValue([
+      rawIssue({
+        authorLogin: "soleur-ai[bot]",
+        body: "Optimize static pages\n<!-- soleur:initiated-by harry -->",
+      }),
+    ]);
+    const out = await getWorkstreamIssues("u1");
+    expect(out[0].creator?.isSoleur).toBe(true);
+    expect(out[0].creator?.initiatorLogin).toBe("harry");
+  });
+
+  it("degrades gracefully (author rendered as human, no throw) + mirrors when getAppSlug fails", async () => {
+    getAppSlug.mockRejectedValue(new Error("GH /app 500"));
+    listRepoIssues.mockResolvedValue([
+      rawIssue({ authorLogin: "soleur-ai[bot]" }),
+    ]);
+    const out = await getWorkstreamIssues("u1");
+    // botSlug unresolved → biases to human (isSoleur false); never throws.
+    expect(out[0].creator?.isSoleur).toBe(false);
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        feature: "workstream",
+        op: "workstream-botslug-degrade",
+      }),
+    );
+  });
+});

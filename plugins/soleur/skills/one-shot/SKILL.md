@@ -5,7 +5,25 @@ description: "This skill should be used when running the full autonomous enginee
 
 Run these steps in order. Do not do anything else.
 
-**Step 0 (pre): Workspace readiness gate.** Before anything else, confirm a usable git repository exists — `one-shot` can be invoked directly (not only via `/soleur:go`), so it must self-guard. Run `git rev-parse --is-bare-repository 2>/dev/null || true; git rev-parse --is-inside-work-tree 2>/dev/null || true`. If **neither** prints `true`, the workspace has no git checkout (in the Soleur web / Concierge env, a connected repo still cloning in the background or a failed setup leaves a repo-less `/workspaces/<id>`). STOP immediately — do NOT run the collision checks, do NOT create a worktree, do NOT spawn the planning subagent. Reply with the honest, no-wait message: "Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment. If this keeps happening, reconnect your repository in **Settings → Repository**." This prevents the `#4826`-class flail where the agent improvised dozens of exploration commands against a missing repo.
+<!-- one-shot-anti-bypass-protocol:start -->
+## Anti-bypass protocol (load-bearing — especially Grok Build)
+
+You are the **pipeline runner** for this skill. Whether entered via `/go` → `/one-shot` or direct `/one-shot`:
+
+- **FORBIDDEN:** Cherry-picking steps (e.g. 0b worktree + inline implementation + push, then stopping).
+- **FORBIDDEN:** Using Write/Edit/Shell on product code **before** Steps 1–2 (plan) complete — unless Step 1 recovered an on-disk plan and Step 3 (`/work`) is next.
+- **FORBIDDEN:** Treating a draft PR or pushed branch as done. Deliverable = **merged PR** + `<promise>DONE</promise>` (Step 8).
+- **REQUIRED (Grok Build):** Invoke child skills via slash commands — `/plan`, `/deepen-plan`, `/work`, `/review`, `/qa`, `/compound`, `/ship` (ship chains `/postmerge`). Do not read their SKILL.md and improvise.
+- **REQUIRED before `git push` (Grok Build):** Run `bash plugins/soleur/scripts/grok-pre-push-gate.sh` from repo root — local CI parity (`test-all.sh` + fast required checks + `grok-fidelity`). Abort push on non-zero exit; inspect `EXIT=$rc` explicitly (no `| tail`).
+- **Merge → deploy:** YOU poll merge/release/deploy — never ask the operator to watch CI. Grok: **AwaitShell** + `pattern`; Claude: **Monitor tool**. See `harness.ts` `pollInstructions()`.
+- **Continuation gates:** `## Work Phase Complete`, `## Code Review Complete`, and similar exit summaries mean **proceed to the next step in this same turn** — never hand off to the operator.
+
+See `plugins/soleur/lib/workflow-fidelity.ts` (`IMPLEMENTATION_TAIL`, `ONE_SHOT_CHILD_SKILLS`) and `go.md` Step 2.1 (`go-post-route` block).
+
+**Harness adapter (Steps 1–8 child skills):** Use `plugins/soleur/lib/harness.ts` — Grok Build invokes `/plan`, `/work`, `/review`, `/ship`, etc.; Claude Code uses the **Skill tool** (`soleur:plan`, `soleur:work`, …). Never substitute ad-hoc Write/Edit/Shell loops for a registered child skill.
+<!-- one-shot-anti-bypass-protocol:end -->
+
+**Step 0 (pre): Workspace readiness gate.** Before anything else, confirm a usable git repository exists — `one-shot` can be invoked directly (not only via `/soleur:go`), so it must self-guard. Run `git rev-parse --is-bare-repository 2>/dev/null || true; git rev-parse --is-inside-work-tree 2>/dev/null || true`. If **neither** prints `true`, the workspace has no git checkout (in the Soleur web / Concierge env, a connected repo still cloning in the background or a failed setup leaves a repo-less `/workspaces/<id>`). STOP immediately — do NOT run the collision checks, do NOT create a worktree, do NOT spawn the planning subagent. Reply with the honest, no-wait message: "Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment. If this keeps happening, reconnect your repository in **Settings → Repository**." This prevents the missing-repo flail where the agent improvised dozens of exploration commands.
 
 <decision_gate>
 **API budget.** This skill runs the full autonomous engineering pipeline: plan → work → review → resolve-pr-parallel → ship. Typical wall-clock 30–90 min; per-run Anthropic credit cost is non-trivial and scales with plan complexity, review-cycle count, and PR comment volume. The pipeline runs autonomously once Step 0a/0a.5 collision checks pass — there are no per-phase approval gates after that. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
@@ -34,6 +52,7 @@ For each distinct `#<N>` match:
 
 3. **If `state == "OPEN"`:** run a linked-PR probe with NO state filter — `gh pr list --search "linked:issue #<N>" --state all --json number,title,state --jq '.[] | "  #\(.number) [\(.state)]: \(.title)"'`. Partition the results:
    - **Any `MERGED` PR linked to the OPEN issue** is the high-signal collision: the implementation already landed and the issue stayed open only for residual (often operator-only) follow-up. Do NOT trust a name match — the merging PR's branch is frequently NOT `feat-<this issue>` (it may be a `feat-one-shot-<id>-*` or a renamed branch), so a `--head <branch>` probe misses it. Treat a MERGED linked PR as a near-certain "this work is already done" signal. In **interactive mode**, ABORT-by-default: pause via AskUserQuestion naming the merged PR, offering (a) abort (preferred — verify what residual keeps the issue open before spending a dispatch), (b) continue (only if the operator confirms genuinely new scope beyond the merged PR). In **headless mode**, log a prominent warning naming the merged PR and continue — but the operator must treat a merged-linked-PR line in the run log as "verify before trusting this dispatch." **Cited-predecessor false-positive:** `linked:issue #N` matches body cross-references, so a follow-up issue that names its predecessor PR in prose ("Follow-up to #M", "not fixed in #M") surfaces #M as MERGED even though #M closed a DIFFERENT issue. Discriminate with `gh pr view <surfaced-PR> --json closingIssuesReferences` — if #N is ABSENT from the closing refs, the link is a citation (continue, genuinely new scope), not a collision. See `knowledge-base/project/learnings/workflow-patterns/2026-06-15-one-shot-collision-gate-false-positives-on-cited-predecessor-merged-pr.md` (#5356 follow-up to merged #5350).
+   - **Prose-`Ref #N` blind spot (the `linked:issue` probe alone is insufficient).** GitHub's `linked:issue #N` search only surfaces PRs with a **formal** link — created by a `Closes`/`Fixes`/`Resolves` keyword or a manual sidebar link. A merged PR that implemented the issue but referenced it via **prose** (`Ref #N`, `Tracked-by #N`) creates NO link, so it is invisible to the `linked:issue` search above **and** to `closedByPullRequestsReferences` in item 1. To catch it, ALSO run a body-text probe: `gh pr list --search "#<N> in:body is:merged" --json number,title,url --jq '.[] | "  #\(.number): \(.title)"'`. This over-matches (a merged PR that merely CITES #N surfaces too), so it is a **surface-for-verification** signal, not an auto-abort: interactive mode names the hits in the AskUserQuestion; headless mode logs them prominently. The definitive discriminator is scope, not the link — read the surfaced PR's diff (or rely on `/plan` Phase 0.6 premise-validation, the downstream backstop). **Why:** #6197's entire scope merged via PR #6209 under prose `Ref #6197` (`closes:[]`), so both `closedByPullRequestsReferences` and `linked:issue #6197` returned empty; the gate passed clean and a full planning subagent ran before premise-validation flagged the stale premise. See `knowledge-base/project/learnings/workflow-patterns/2026-07-18-one-shot-collision-gate-misses-prose-ref-merged-prs.md`.
    - **Any `OPEN` PR linked to the issue** is the parallel-session collision: surface a multi-line stderr warning naming each. In **interactive mode**, pause via AskUserQuestion offering (a) continue (operator accepts collision risk — they may be racing intentionally or producing alternate designs), (b) abort (preferred when the listed PR is clearly the same scope). In **headless mode**, log the warning and continue — the operator will see it in the run log.
 
 If `$ARGUMENTS` contains no `#N` substrings (e.g., a plan file path or freeform description), this step is a no-op.
@@ -44,10 +63,12 @@ If `$ARGUMENTS` contains no `#N` substrings (e.g., a plan file path or freeform 
 
 ```bash
 SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
-  bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feat-one-shot-<slugified-arguments>
+  bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh --yes create feat-one-shot-<slugified-arguments>
 ```
 
 If the script exits non-zero and its output contains `NO_GIT_REPOSITORY`, the workspace lost its git checkout between the Step 0 (pre) gate and now (e.g. a reclaim). STOP — do NOT spawn the planning subagent. Reply with the same honest, no-wait message from Step 0 (pre). Do not retry or improvise alternative worktree paths.
+
+**Stale orphan branch from a prior aborted run: do NOT hand-clean, do NOT strand.** `create` auto-heals a stale EMPTY remote branch (`origin/feat-one-shot-<same-name>` with 0 commits ahead of main and no live PR) that a prior aborted attempt left behind — it deletes it and proceeds, logging `auto-healed stale empty remote branch`. So a re-run of the same issue is expected to just work; never conclude the run is blocked and ask the operator to `git push origin --delete` by hand (the 2026-07-05 stranding). A branch with real commits or a live PR is NOT auto-deleted — that surfaces as a genuine collision (see Step 0a.5), which is a signal to verify, not a cleanup to force.
 
 Then `cd` into the worktree path printed by the script. Parallel agents on the same repo cause silent merge conflicts when both work on main.
 
@@ -60,7 +81,7 @@ bash .claude/hooks/lib/session-state.sh release_lease "$(basename "$PWD")"
 **Step 0c: Create draft PR.** After creating the feature branch, create a draft PR from inside the worktree (the script errors with "Cannot run from bare repo root" otherwise, and the Bash tool does NOT persist CWD across calls — use a single `cd && bash` to be explicit):
 
 ```bash
-cd <worktree-path> && bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh draft-pr
+cd <worktree-path> && bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh draft-pr
 ```
 
 If this fails (no network, or "No commits between main and <branch>"), print a warning but continue. The branch exists locally and the `/ship` phase will create the PR after implementation commits exist.
@@ -168,11 +189,18 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
    Do NOT end your turn after this step. Proceed to Step 5.5.
 
 5.5. Use the **Skill tool**: `skill: soleur:qa`, args: "<plan_file_path>". QA verifies features work end-to-end by executing the plan's Test Scenarios (browser flows via Playwright MCP, API verification via Doppler + curl). If QA fails, fix the issues and re-run QA before proceeding. If the plan has no Test Scenarios section, QA skips gracefully.
-6. Use the **Skill tool**: `skill: soleur:compound`
-7. Use the **Skill tool**: `skill: soleur:ship`. Ship handles compound re-check (Phase 2), documentation verification (Phase 3), tests (Phase 4), semver label assignment, push, PR creation, CI, merge, and cleanup.
 
-   **The merge/CI wait is owned by ship Phase 7 — never hand-roll it.** Do NOT do the change inline and skip invoking `soleur:ship`, and do NOT issue `gh pr merge` or poll `gh pr`/`gh run` yourself. Ship Phase 7 enforces a HARD GATE (use the **Monitor tool**, NEVER Bash `run_in_background`) for the merge and post-merge release polling; bypassing ship bypasses that gate and reintroduces the silent-background-failure mode of PR #4512 (per `hr-monitor-not-run-in-background-for-polling`, also hook-enforced by `background-poll-prefer-monitor.sh`). Even for a trivial change there is no compressed fast-path: run Steps 3-8 as written and let ship own the wait.
-8. Output `<promise>DONE</promise>` when PR is merged and release workflows pass
+   > **Diagnostic loops here are self-serve — never hand the operator a data-fetch.** When QA (or any review/verification step above) surfaces a failure on a server/cron/prod surface, self-pull the error: Better Stack `SOLEUR_*` markers via `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since <N> --grep <marker>` and Sentry — never ask the operator to paste error output, run probes, or eyeball logs (the operator decides, doesn't fetch). If the needed signal is missing from telemetry, ADD a monitored stdout `SOLEUR_*` marker in the emitting code so it self-reports; do not escalate to the operator for it. Cite `hr-no-dashboard-eyeball-pull-data-yourself`. See `knowledge-base/project/learnings/workflow-patterns/2026-07-08-self-pull-observability-in-diagnostic-loops-never-ask-operator-to-fetch.md` (#5934).
+6. Use the **Skill tool**: `skill: soleur:compound`
+7. Use the **Skill tool**: `skill: soleur:ship` (Grok: `/ship`). Ship handles compound re-check (Phase 2), documentation verification (Phase 3), tests (Phase 4), semver label assignment, push, PR creation, CI, merge, release-workflow polling, **postmerge verification (Step 3.8)**, and cleanup.
+
+   **The merge → deploy wait is owned by ship — never hand-roll it and never ask the operator.** Do NOT skip invoking `soleur:ship`, do NOT issue `gh pr merge` yourself, and do NOT end the turn at MERGED. Ship Phase 7 polls merge + release workflows; Step 3.8 invokes `soleur:postmerge` before cleanup.
+
+   **Harness polling:** Claude → **Monitor tool** (NEVER Bash `run_in_background`). Grok → **AwaitShell** with `pattern` matching terminal poll output, or Shell with adequate `block_until_ms`. Canonical: `plugins/soleur/lib/harness.ts` → `pollInstructions()`.
+
+   > **CONTINUATION GATE:** When ship finishes (including postmerge Step 3.8), proceed immediately to step 8 — do NOT ask "want me to monitor deploy?" or hand off to the operator.
+
+8. Output `<promise>DONE</promise>` **only when** PR is merged, release workflows passed, and **postmerge Phase 7** printed `postmerge verification complete!`. If ship returned without postmerge, invoke `/postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) before emitting DONE.
 
 CRITICAL RULE: If a completion promise is set, you may ONLY output it when the statement is completely and unequivocally TRUE. Do not output false promises to escape the loop.
 

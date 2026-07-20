@@ -20,6 +20,9 @@ import { inngest } from "@/server/inngest/client";
 import { agentOnSpawnRequested } from "@/server/inngest/functions/agent-on-spawn-requested";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronAgentNativeAudit } from "@/server/inngest/functions/cron-agent-native-audit";
+import { cronAnthropicCostReport } from "@/server/inngest/functions/cron-anthropic-cost-report";
+import { cronAnthropicCreditProbe } from "@/server/inngest/functions/cron-anthropic-credit-probe";
+import { cronArchitectureDiagramSync } from "@/server/inngest/functions/cron-architecture-diagram-sync";
 import { cronBugFixer } from "@/server/inngest/functions/cron-bug-fixer";
 import { cronCampaignCalendar } from "@/server/inngest/functions/cron-campaign-calendar";
 import { cronCloudTaskHeartbeat } from "@/server/inngest/functions/cron-cloud-task-heartbeat";
@@ -31,9 +34,13 @@ import { cronContentPublisher } from "@/server/inngest/functions/cron-content-pu
 import { cronContentVendorDrift } from "@/server/inngest/functions/cron-content-vendor-drift";
 import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronDevMigrationDrift } from "@/server/inngest/functions/cron-dev-migration-drift";
+import { cronDomainModelDrift } from "@/server/inngest/functions/cron-domain-model-drift";
 import { cronEmailIngressProbe } from "@/server/inngest/functions/cron-email-ingress-probe";
+import { cronExpensesVerifyBy } from "@/server/inngest/functions/cron-expenses-verify-by";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
+import { cronGhPagesCertReissue } from "@/server/inngest/functions/cron-gh-pages-cert-reissue";
 import { cronGhPagesCertState } from "@/server/inngest/functions/cron-gh-pages-cert-state";
+import { cronGhcrTokenMinter } from "@/server/inngest/functions/cron-ghcr-token-minter";
 import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-app-drift-guard";
 import { cronGithubCidrRefresh } from "@/server/inngest/functions/cron-github-cidr-refresh";
 import { cronGrowthAudit } from "@/server/inngest/functions/cron-growth-audit";
@@ -55,6 +62,7 @@ import { cronSeoAeoAudit } from "@/server/inngest/functions/cron-seo-aeo-audit";
 import { cronSkillFreshness } from "@/server/inngest/functions/cron-skill-freshness";
 import { cronStaleDeferredScopeOuts } from "@/server/inngest/functions/cron-stale-deferred-scope-outs";
 import { cronStrategyReview } from "@/server/inngest/functions/cron-strategy-review";
+import { cronSupabaseAdvisorScan } from "@/server/inngest/functions/cron-supabase-advisor-scan";
 import { cronSupabaseDiskIo } from "@/server/inngest/functions/cron-supabase-disk-io";
 import { cronTerraformDrift } from "@/server/inngest/functions/cron-terraform-drift";
 import { cronUxAudit } from "@/server/inngest/functions/cron-ux-audit";
@@ -117,6 +125,9 @@ export const { GET, POST, PUT } = serve({
     agentOnSpawnRequested,
     cfoOnPaymentFailed,
     cronAgentNativeAudit,
+    cronAnthropicCostReport,
+    cronAnthropicCreditProbe,
+    cronArchitectureDiagramSync,
     cronBugFixer,
     cronCampaignCalendar,
     cronCloudTaskHeartbeat,
@@ -128,9 +139,13 @@ export const { GET, POST, PUT } = serve({
     cronContentVendorDrift,
     cronDailyTriage,
     cronDevMigrationDrift,
+    cronDomainModelDrift,
     cronEmailIngressProbe,
+    cronExpensesVerifyBy,
     cronFollowThroughMonitor,
+    cronGhPagesCertReissue,
     cronGhPagesCertState,
+    cronGhcrTokenMinter,
     cronGithubAppDriftGuard,
     cronGithubCidrRefresh,
     cronGrowthAudit,
@@ -152,6 +167,7 @@ export const { GET, POST, PUT } = serve({
     cronSkillFreshness,
     cronStaleDeferredScopeOuts,
     cronStrategyReview,
+    cronSupabaseAdvisorScan,
     cronSupabaseDiskIo,
     cronTerraformDrift,
     cronUxAudit,

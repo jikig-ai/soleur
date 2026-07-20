@@ -5,6 +5,10 @@ import { ChatSurface } from "@/components/chat/chat-surface";
 import { useKbChat } from "@/components/kb/kb-chat-context";
 import { useKbChatQuoteBridge } from "@/components/kb/kb-chat-quote-bridge";
 import { track } from "@/lib/analytics-client";
+import {
+  isApplePlatform,
+  modShiftChord,
+} from "@/components/command-palette/platform";
 import type { ConversationContext } from "@/lib/types";
 
 export interface KbChatContentProps {
@@ -31,6 +35,10 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
   // hasResumed) performs the guarded `track` call exactly once per path.
   const [hasRealConversation, setHasRealConversation] = useState(false);
   const [hasResumed, setHasResumed] = useState(false);
+  // SSR-safe: init non-Apple (→ `Ctrl+Shift+L`), sync the real platform on
+  // mount so the quote-selection hint shows the key the user actually presses.
+  const [isApple, setIsApple] = useState(false);
+  useEffect(() => setIsApple(isApplePlatform()), []);
   const historicalCountRef = useRef<number>(0);
   const quoteRef = useRef<((text: string) => void) | null>(null);
   const focusRef = useRef<(() => void) | null>(null);
@@ -186,7 +194,7 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
             quoteRef,
             focusRef,
             onBeforeSend: handleBeforeSend,
-            placeholder: "Ask about this document — ⌘⇧L to quote selection",
+            placeholder: `Ask about this document — ${modShiftChord("L", isApple)} to quote selection`,
             draftKey: `kb.chat.draft:${contextPath}`,
           }}
         />

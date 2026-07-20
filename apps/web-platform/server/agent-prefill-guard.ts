@@ -2,7 +2,7 @@
 // (`realSdkQueryFactory`) and legacy (`startAgentSession`) Agent SDK
 // call sites. Issue #3250.
 //
-// Concierge default + every domain-leader default is `claude-sonnet-4-6`
+// Concierge default + every domain-leader default is `claude-sonnet-5`
 // (see `agent-runner-query-options.ts:114`). Anthropic's 4.6+ family
 // rejects assistant-terminated message arrays with HTTP 400 "model does
 // not support assistant message prefill". The Agent SDK's persisted

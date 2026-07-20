@@ -70,6 +70,8 @@ export async function oneshotRecheck4217CalibrationHandler({
   event,
   step,
   logger,
+  runId,
+  attempt,
 }: HandlerArgs & { event: { data: EventData } }): Promise<HandlerResult> {
   const { data } = event;
 
@@ -178,6 +180,8 @@ export async function oneshotRecheck4217CalibrationHandler({
           cronName: FUNCTION_NAME,
           buildSpawnEnv,
           logger,
+          runId,
+          attempt,
         });
       },
     );

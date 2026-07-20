@@ -12,7 +12,7 @@ on:
         type: string
         required: true
       path_filter:
-        description: "Path prefix to detect changes (e.g., apps/web-platform/)"
+        description: "Space-separated list of git pathspecs to detect changes (e.g., 'apps/web-platform/' or 'apps/web-platform/ plugins/soleur/ :(exclude)plugins/soleur/docs/'). No embedded spaces within a token; filesystem globbing is disabled in check_changed, so use git directory-prefix + :(exclude) magic, NOT ** globs."
         type: string
         required: true
       tag_prefix:
@@ -63,6 +63,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write # OIDC token for cosign keyless signing (#5933 Item 4)
     outputs:
       version: ${{ steps.version.outputs.next }}
       tag: ${{ steps.version.outputs.tag }}
@@ -85,13 +86,26 @@ jobs:
       - name: Check if component files changed
         id: check_changed
         run: |
+          set -euo pipefail
           if [ "$FORCE_RUN" = "true" ]; then
             printf 'changed=%s\n' "true" >> "$GITHUB_OUTPUT"
             echo "Release forced (workflow_dispatch or force_run)"
             exit 0
           fi
 
-          CHANGED=$(git diff --name-only HEAD~1 -- "$PATH_FILTER" | head -1)
+          # PATH_FILTER is a SPACE-SEPARATED list of git pathspecs (may include
+          # :(exclude) magic). Disable filesystem globbing so the tokens reach git
+          # verbatim (an unquoted `**` would be shell-expanded and silently miss
+          # newly-added files — the incident's failure mode), then intentionally
+          # word-split PATH_FILTER into multiple pathspec args.
+          set -f
+          # shellcheck disable=SC2086  # deliberate word-split into git pathspecs
+          if ! CHANGED=$(git diff --name-only HEAD~1 -- $PATH_FILTER); then
+            echo "::error::check_changed: git diff failed for PATH_FILTER='$PATH_FILTER'"
+            exit 1
+          fi
+          set +f
+
           if [ -z "$CHANGED" ]; then
             printf 'changed=%s\n' "false" >> "$GITHUB_OUTPUT"
             echo "No $COMPONENT files changed, skipping"
@@ -601,6 +615,216 @@ jobs:
         if: steps.docker_build.outcome == 'success'
         run: printf 'pushed=%s\n' "true" >> "$GITHUB_OUTPUT"
 
+      # Keyless-sign the pushed image DIGEST (#5933 Item 4). `id-token: write`
+      # (job permissions above) mints the OIDC token cosign exchanges with Fulcio
+      # for an ephemeral signing cert; the signature + Rekor bundle land in GHCR as
+      # an OCI referrer keyed to the digest. Signing the digest (not a mutable tag)
+      # gives cryptographic immutability. The host verifies OFFLINE
+      # (`cosign verify --offline`, ci-deploy.sh) using the registry-attached bundle
+      # — no live Rekor/Fulcio call, required because the container egress firewall
+      # (#5046 / cron-egress-allowlist.txt) does not allowlist the sigstore hosts.
+      - name: Install cosign
+        if: steps.docker_build.outcome == 'success'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # Pin the cosign TOOL version to match the verify-side container
+          # (ci-deploy.sh COSIGN_IMAGE cosign v3.1.1) — no sign/verify version skew.
+          cosign-release: v3.1.1
+      - name: Sign image (cosign keyless)
+        if: steps.docker_build.outcome == 'success'
+        env:
+          IMAGE: ${{ inputs.docker_image }}
+          DIGEST: ${{ steps.docker_build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      # --- #6122 (ADR-096) Phase 2: dual-push the pushed image to the self-hosted zot
+      # registry + cosign-sign the zot digest. CI reaches the private-net zot ONLY through
+      # the existing `web` CF Tunnel (cf-tunnel-registry-bridge). The image is COPIED
+      # GHCR→zot with `crane` RUNNER-SIDE (the buildx container driver cannot reach the
+      # runner's 127.0.0.1 bridge listener, so adding a zot tag to build-push would not
+      # work); crane preserves the digest, so the same cosign identity chain the host
+      # offline-verifies holds. GHCR push stays live (break-glass through the Phase-5 soak).
+      # crane + cosign auto-treat loopback (127.0.0.1) as an insecure registry → plain-HTTP
+      # zot over the raw-TCP forward needs no extra flag (Phase-0 spike evidence). This block
+      # is additive: a zot/bridge failure must not fail the GHCR release (the whole block is
+        # (#6416) Gated on `docker_build.outcome`; the BRIDGE outcome is branched on
+        # INTERNALLY below, so a bridge failure reaches degraded() instead of skipping into
+        # silence. Do NOT re-gate this step on zot_bridge — that was the #6416 defect.
+      - name: Bridge to zot registry (CF Tunnel)
+        id: zot_bridge
+        if: steps.docker_build.outcome == 'success'
+        continue-on-error: true
+        uses: ./.github/actions/cf-tunnel-registry-bridge
+        with:
+          # DOPPLER_TOKEN_PRD, NOT the generic DOPPLER_TOKEN (#6122 cutover fix): the bridge
+          # reads REGISTRY_PUSH_* + ZOT_PUSH_* from the `prd` root config, but DOPPLER_TOKEN is
+          # scoped to the `prd_terraform` branch (apply-web-platform-infra.yml documents it
+          # "prd_terraform READ-only") and cannot read the prd root. DOPPLER_TOKEN_PRD is the
+          # prd-scoped token the verify-doppler-secrets required check already uses (doppler run
+          # -c prd). Available here via the caller's `secrets: inherit`.
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          cloudflared-version: "2026.5.0"
+          cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+
+      - name: Mirror image GHCR→zot (crane) + cosign-sign the zot digest
+        id: zot_mirror
+        # (#6416) Gated on docker_build, NOT on zot_bridge. Previously this read
+        # `if: steps.zot_bridge.outcome == 'success'`, which SKIPPED the step whenever
+        # the bridge failed — and a skipped step emits nothing, so
+        # `steps.zot_mirror.outputs.mirror_status` stayed UNSET and the Slack ⚠️ that
+        # reads it (by step id) stayed inert. Net effect: the bridge could fail on every
+        # single release, zot would never receive an image, and the release stayed green
+        # and silent. Adding a sibling step could not fix this — step outputs are
+        # namespaced by step id, so a new id writes an output no consumer reads. The fix
+        # is to keep this id and branch INTERNALLY (below), inheriting the existing
+        # degraded() emitter.
+        #
+        # Matching zot_bridge's own gate is deliberate: dropping the `if:` entirely would
+        # run this step on releases that never built an image (docker_build skipped when
+        # `version.outputs.next` or `inputs.docker_image` is empty), where IMAGE/DIGEST
+        # are empty and crane would fail — emitting a FALSE "zot mirror degraded" on a
+        # release that never intended to mirror anything. docker_build success is exactly
+        # the precondition that guarantees IMAGE and DIGEST are populated.
+        if: steps.docker_build.outcome == 'success'
+        # The continue-on-error marker below is BELT: the zot mirror is a SECONDARY/shadow
+        # copy during the ADR-096 soak (GHCR stays primary + break-glass; the pull
+        # side does an atomic GHCR fallback on any zot miss), so a mirror failure
+        # must NEVER red a successful release. #6274: a single `connection reset by
+        # peer` mid blob-upload over the multi-hop CF-tunnel bridge was failing the
+        # whole `release / release` job after a green deploy.
+        continue-on-error: true
+        env:
+          IMAGE: ${{ inputs.docker_image }}
+          DIGEST: ${{ steps.docker_build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.next }}
+          COMMIT_SHA: ${{ github.sha }}
+          # (#6416) Read as `outcome`, NOT `conclusion`: zot_bridge carries
+          # continue-on-error: true, which forces its conclusion to 'success' while
+          # outcome keeps the TRUE result. That masking is precisely what made the
+          # broken bridge invisible.
+          BRIDGE_OUTCOME: ${{ steps.zot_bridge.outcome }}
+        run: |
+          # No `set -e` — every failure path exits 0 so the release job stays green
+          # (SUSPENDERS to the continue-on-error belt, mirroring the Sentry-audit
+          # step above). A persistent miss is NOT silently swallowed: it surfaces as
+          # mirror_status=degraded → ::warning:: + step summary + the Slack release
+          # line (consumed by the "Post to Slack (release)" step). Because this step
+          # always exits 0, `steps.zot_mirror.outcome` is always 'success' —
+          # downstream gating MUST read the explicit `mirror_status` OUTPUT.
+          set -uo pipefail
+
+          # Bounded retry to self-heal a transient mid-blob TCP reset over the
+          # multi-hop CF-tunnel bridge (crane/cosign have no built-in retry). 3
+          # attempts, 5s then 15s backoff. Wraps only IDEMPOTENT ops (crane copy
+          # skips already-uploaded blobs; cosign sign re-runs safely).
+          retry() {
+            local n=1 max=3 rc=0
+            local -a sleeps=(0 5 15)
+            until "$@"; do
+              rc=$?
+              if (( n >= max )); then return "$rc"; fi
+              echo "::notice::zot mirror attempt ${n}/${max} failed (rc=${rc}); retrying in ${sleeps[$n]}s"
+              sleep "${sleeps[$n]}"
+              n=$(( n + 1 ))
+            done
+          }
+
+          # On any failure: record the degraded signal (output + ::warning:: + step
+          # summary) and exit 0. The release job stays green; the operator sees a
+          # loud, no-SSH signal (ADR-096 "latency, not availability").
+          # $2 = remediation detail. The failure modes are NOT equivalent: a
+          # crane-copy/install miss leaves the image ABSENT → the host's atomic GHCR
+          # fallback covers it cleanly; a cosign-sign failure leaves it PRESENT-BUT-
+          # UNSIGNED, which post-cutover DEFEATS that fallback (see the cosign call
+          # site). EVERY backfill must re-sign — a bare 'crane copy' does NOT write
+          # the signature referrer — so the default remediation includes cosign sign.
+          degraded() {
+            local rc="$1"
+            local detail="${2:-zot redundancy reduced; backfill via 'crane copy GHCR→zot && cosign sign --yes <zot>@<digest>'.}"
+            echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
+            echo "::warning::zot mirror degraded for ${ZOT:-<image>} (rc=${rc}) — release UNAFFECTED (GHCR primary/break-glass). ${detail} If disk-full: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+            echo "⚠️ zot mirror degraded (rc=${rc}) — release OK (GHCR primary). ${detail}" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+
+          # Preserve the FULL org namespace (jikig-ai/…). The pull side
+          # (ci-deploy.sh: zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}") and
+          # zot-entry-gate.sh both address `jikig-ai/soleur-web-platform`. `basename` dropped
+          # the org, pushing to an orphan `soleur-web-platform` repo nothing reads → the gate
+          # MISSED and every pull fell back to GHCR (#6122 namespace fix).
+          #
+          # (#6416) Computed HERE, before the bridge branch below, so the degraded message
+          # can name the real image. Shell state does not cross steps, so this cannot be
+          # borrowed from zot_bridge.
+          REPO="${IMAGE#ghcr.io/}"           # e.g. jikig-ai/soleur-web-platform
+          ZOT="127.0.0.1:5000/${REPO}"
+
+          # (#6416) The bridge is what makes zot reachable at 127.0.0.1:5000. If it FAILED,
+          # there is nothing to mirror into — report degraded through the SAME emitter (and
+          # therefore the same output id the Slack line consumes) instead of being skipped
+          # into silence.
+          #
+          # `== 'failure'`, NOT `!= 'success'`: zot_bridge is itself gated on docker_build,
+          # so a BUILD failure leaves the bridge 'skipped' — and "zot mirror degraded" would
+          # be a misleading thing to say about a build that never produced an image. Only a
+          # genuine bridge failure is worth reporting here.
+          #
+          # rc is a non-numeric sentinel: zot_bridge is a composite `uses:` action, so GitHub
+          # exposes only outcome/conclusion — there is no exit code to forward. degraded()
+          # interpolates rc as text, so no widening is needed.
+          # `:-` guard: the run block is `set -u`, and this step is also executed verbatim
+          # by plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh. An unset value
+          # degrades to the pre-#6416 path (attempt the mirror; crane fails; degraded fires
+          # with a less specific message) — never to silence.
+          if [[ "${BRIDGE_OUTCOME:-}" == "failure" ]]; then
+            degraded "bridge" "the CF-tunnel registry bridge to zot FAILED, so NOTHING was mirrored for this release (not a partial copy). zot is now missing this version entirely; the host's atomic GHCR fallback covers the pull. Backfill: re-run the bridge, then 'crane copy ${IMAGE}:v${VERSION} ${ZOT}:v${VERSION} && cosign sign --yes ${ZOT}@${DIGEST}'. If the bridge keeps failing, the tunnel connector serving registry.soleur.ai may lack a private-net route to 10.0.1.30:5000 (#6416)."
+          fi
+
+          # Install crane (SHA-pinned; supply-chain discipline, same as cloudflared).
+          CRANE_VERSION="v0.20.2"
+          CRANE_SHA256="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
+          install_crane() {
+            curl -fsSL -o /tmp/crane.tgz \
+              "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+              && echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c - \
+              && sudo tar -xzf /tmp/crane.tgz -C /usr/local/bin crane
+          }
+          retry install_crane || degraded "$?"
+          rm -f /tmp/crane.tgz
+
+          # crane reads ~/.docker/config.json for BOTH ghcr.io (Docker login step) and
+          # 127.0.0.1:5000 (cf-tunnel-registry-bridge docker login). Copy every tag the GHCR
+          # build-push wrote (digest preserved → zot manifest byte-identical).
+          for TAG in "v${VERSION}" "${COMMIT_SHA}" "latest"; do
+            retry crane copy "${IMAGE}:${TAG}" "${ZOT}:${TAG}" || degraded "$?"
+          done
+          # Sign the zot digest (same digest; writes a sig referrer into zot so the host's
+          # offline verify — same COSIGN_IDENTITY_REGEXP — passes against the zot copy).
+          # A cosign failure HERE (after the copies already landed) leaves the image
+          # present-but-unsigned — DISTINCT from a copy miss: post-cutover the host would
+          # pull the present zot copy (bypassing the atomic GHCR fallback) and then
+          # HARD-BLOCK on signature verify (ci-deploy.sh verify_image_signature → enforce
+          # fail). Pre-cutover (soak) ZOT_ACTIVE=0 so this is latent, and the
+          # zot-entry-gate/soak-gate catch a missing/unsigned copy before the flip. The
+          # remediation MUST re-sign, not just re-copy — hence the distinct $2 detail.
+          retry cosign sign --yes "${ZOT}@${DIGEST}" \
+            || degraded "$?" "the zot copy is PRESENT BUT UNSIGNED (not a clean miss) — re-sign to clear: 'crane copy ${IMAGE}:v${VERSION} ${ZOT}:v${VERSION} && cosign sign --yes ${ZOT}@${DIGEST}'. Post-cutover an unsigned copy would block the host boot (verify hard-fail)."
+
+          echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
+          echo "zot mirror ok: copied v${VERSION}, ${COMMIT_SHA}, latest to ${ZOT} and signed ${ZOT}@${DIGEST}."
+
+      - name: Tear down cloudflared registry bridge
+        if: always()
+        run: |
+          set +e
+          docker logout 127.0.0.1:5000 2>/dev/null || true
+          if [[ -n "${REGISTRY_BRIDGE_PID:-}" ]]; then
+            kill "$REGISTRY_BRIDGE_PID" 2>/dev/null || true
+          fi
+          [[ -f /tmp/cloudflared-registry.log ]] && tail -n 200 /tmp/cloudflared-registry.log || true
+
       # Publish the draft release once Docker has pushed AND the audit
       # asset has uploaded. GitHub now publishes releases as IMMUTABLE —
       # once a release is out of draft state, `gh release upload` returns
@@ -664,6 +888,17 @@ jobs:
           VERSION: ${{ steps.version.outputs.next }}
           COMPONENT_DISPLAY: ${{ inputs.component_display }}
           RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
+          # #6274: surface a degraded zot mirror on the release message. Empty on the
+          # happy path. Read as OUTPUT, never `outcome` (the step always exits 0, so
+          # outcome is always 'success').
+          #
+          # #6416: this used to also be empty when the mirror step was SKIPPED because the
+          # bridge failed — which meant the one case most worth reporting was the one case
+          # that said nothing, and zot silently never got backfilled. zot_mirror is now
+          # gated on docker_build (not on zot_bridge) and branches internally, so a bridge
+          # failure reaches degraded() and this line fires. Still empty when docker_build
+          # itself was skipped — correct: no image was built, so there is nothing to say.
+          MIRROR_STATUS: ${{ steps.zot_mirror.outputs.mirror_status }}
         run: |
           WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
           if [ -z "$WEBHOOK" ]; then
@@ -704,6 +939,14 @@ jobs:
           # Slack mrkdwn bold is *single asterisk* (not **double**)
           MESSAGE=$(printf '*%s v%s released!*\n\n%s\n\nFull release notes: %s' \
             "$COMPONENT_DISPLAY" "$VERSION" "$BODY" "$RELEASE_URL")
+
+          # #6274: append a loud degraded-mirror line when the zot mirror step
+          # reported degraded. Additive only — the release itself is unaffected
+          # (GHCR primary + break-glass during the ADR-096 soak). ok/empty → no line.
+          if [ "${MIRROR_STATUS:-}" = "degraded" ]; then
+            MESSAGE=$(printf '%s\n\n%s' "$MESSAGE" \
+              "⚠️ zot mirror degraded — release OK (GHCR primary), zot redundancy reduced; backfill needed.")
+          fi
 
           PAYLOAD=$(jq -n \
             --arg text "$MESSAGE" \

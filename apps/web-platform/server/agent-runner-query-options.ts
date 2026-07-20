@@ -22,12 +22,20 @@
 
 import type {
   CanUseTool,
+  HookCallback,
   Options as SDKOptions,
 } from "@anthropic-ai/claude-agent-sdk";
 
+import path from "node:path";
+
 import { buildAgentEnv, type AgentCredential } from "./agent-env";
+import type { WorkspaceMode } from "./workspace-mode";
+import { assertTrustedPluginPath } from "./plugin-path";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
 import { createSandboxHook } from "./sandbox-hook";
+import { createContextQueriesHook } from "./context-queries-hook";
+import { createPhaseSurfaceHook } from "./phase-surface-hook";
+import { createGitLockMarkerHook } from "./git-lock-marker-telemetry";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("agent-query-options");
@@ -60,6 +68,17 @@ export interface AgentQueryOptionsArgs {
   workspacePath: string;
   pluginPath: string;
   /**
+   * Execution mode (feat-wire-concierge-support-chat, ADR-113). Binds cwd + the
+   * sandbox write-set together so the half-wired state is unrepresentable:
+   *  - `command_center` → cwd = workspacePath, sandbox allowWrite = [workspacePath];
+   *  - `support`        → cwd = pluginPath (read-only docs root), allowWrite = [].
+   * REQUIRED (no safe default — the two personas have opposite danger directions;
+   * see workspace-mode.ts). The legacy runner passes
+   * `resolveWorkspaceMode("command_center")` (byte-identical to the prior
+   * `cwd: workspacePath` + `allowWrite:[workspacePath]` behavior).
+   */
+  mode: WorkspaceMode;
+  /**
    * The resolved agent credential (`{ value, scheme }`). Threaded as a
    * single object — NOT a bare key string — so `buildAgentEnv` injects
    * exactly one auth var; a forgotten scheme is a TYPE error, not a silent
@@ -89,7 +108,7 @@ export interface AgentQueryOptionsArgs {
   /** SDK chain step 5 — the canUseTool callback. Required. */
   // biome-ignore lint/suspicious/noExplicitAny: SDK CanUseTool is a typed callable; helper accepts the SDK's type
   canUseTool: CanUseTool;
-  /** Defaults to "claude-sonnet-4-6" (matches both legacy + cc paths today). */
+  /** Defaults to "claude-sonnet-5" (matches both legacy + cc paths today). */
   model?: string;
   /** Defaults to "default" (matches both paths). */
   permissionMode?: SDKOptions["permissionMode"];
@@ -125,6 +144,53 @@ export interface AgentQueryOptionsArgs {
    * (feat-abort-conversation-web PR1, plan §1.6).
    */
   abortController?: AbortController;
+  /**
+   * Opt in to the L3 phase-surface hint (#5772 lever 1, ADR-070). When true, a
+   * fail-open `PostToolUse(Skill)` hook injects the current phase's additive
+   * surface hint as `additionalContext`. ONLY the cc-soleur-go Concierge router
+   * (the eval-covered workflow-routing path) sets this; the legacy domain-leader
+   * runner leaves it undefined (no workflow-phase concept), so the fail-CLOSED
+   * deferred lever 2 never inherits a "both-callers-always-on" default. Additive
+   * hint only — never touches `canUseTool`/`disallowedTools`.
+   */
+  enablePhaseSurfaceHint?: boolean;
+  /**
+   * Opt in to the declarative `context_queries` context-injection hook (#6046,
+   * ADR-086 — the web-parity port of the CLI `.claude/hooks/skill-context-queries.sh`).
+   * When true, a fail-open `PostToolUse(Skill)` hook resolves the invoked skill's
+   * SKILL.md `context_queries:` frontmatter to committed `knowledge-base/`
+   * artifacts and injects a POINTER (a Read-directive) as `additionalContext`.
+   * Registered INDEPENDENTLY of `enablePhaseSurfaceHint` (both use matcher
+   * "Skill"; the SDK delivers both `additionalContext` values). ONLY the
+   * cc-soleur-go Concierge router sets this; the legacy domain-leader runner
+   * leaves it undefined so the AC5 drift snapshot stays byte-identical. Additive
+   * pointer only — never touches `canUseTool`/`disallowedTools`.
+   */
+  enableContextQueries?: boolean;
+  /**
+   * TR3 tool-attempt telemetry (#5843, ADR-070 amendment). When set, this single
+   * fail-open `PreToolUse` hook (minted per query by `createToolAttemptCollector`
+   * in the cc dispatcher) is registered as a SEPARATE, matcher-less PreToolUse
+   * entry — matcher-less so it captures the FULL tool surface (`Skill`/`Task`/
+   * `mcp__*`/`Read`/`Bash`/...), not just the sandbox subset. ONLY the
+   * cc-soleur-go path passes it (its `flush()` fires from `handleCcCloseQuery`);
+   * the legacy runner leaves it undefined so the AC5 drift snapshot stays
+   * byte-identical. Never mutates `canUseTool`/`disallowedTools`; the collector's
+   * hook always returns `{}` (observe-only). Passed as the hook (not a boolean)
+   * because the paired `flush()` handle must escape to the close chokepoint.
+   */
+  toolAttemptPreToolUseHook?: HookCallback;
+  /**
+   * SDK-native skill scope (sdk.d.ts:1867 — `skills?: string[] | 'all'`). When
+   * set, ONLY the listed skills are loaded into the main-session system prompt;
+   * every other discovered skill is hidden from the model's context (a context
+   * filter, not a sandbox). Omit to load every discovered skill (the Command
+   * Center default). The support persona passes `["kb-search"]`
+   * (`SUPPORT_SKILLS_OPTION`) as the PRIMARY scope lever, paired with the
+   * `createCanUseTool` default-deny for the emit-a-non-loaded-skill case.
+   * feat-wire-concierge-support-chat Phase 3; ADR-113.
+   */
+  skills?: string[];
 }
 
 /**
@@ -144,10 +210,36 @@ export function buildAgentQueryOptions(
   const extraLogFields = subagentOverride?.extraLogFields ?? {};
   const logMessage = subagentOverride?.logMessage ?? "Subagent started";
 
+  // Loaded-gun guard, computed ONCE (Slice A + Slice B). Both factories source
+  // args.pluginPath from getPluginPath() (an absolute /app/ platform path).
+  // assertTrustedPluginPath throws LOUDLY if a future regression threads a
+  // connected-repo workspace path — which would both (a) re-execute the
+  // untrusted repo's hooks.json in-process AND (b) inject an untrusted
+  // CLAUDE_PLUGIN_ROOT the deployed skills would shell out to. Validating BEFORE
+  // buildAgentEnv (below) means an untrusted value fails CLOSED — it can never
+  // reach the agent env NOR the plugins: binding of a live dispatch (AC7b).
+  // Test-tolerant (mirrors getPluginPath's VITEST/NODE_ENV=test bypass).
+  const trustedPluginPath = assertTrustedPluginPath(args.pluginPath);
+
+  // ADR-113 — cwd + sandbox write-set derived from the ONE mode value so a docs
+  // cwd can never pair with a non-empty write-set. Support runs at the trusted,
+  // boot-validated plugin root (read-only); Command Center at the workspace.
+  const resolvedCwd =
+    args.mode.cwdSource === "plugin" ? trustedPluginPath : args.workspacePath;
+  const sandboxReadOnly = args.mode.sandboxWrite === "none";
+  // ADR-113 — support containment: obscure the internal `knowledge-base/`
+  // (confidential operator KB) from the read-only support session. The deployed
+  // repo root is the plugin root's grandparent (`getPluginPath()` =
+  // `<root>/plugins/soleur`), so the internal KB is `<root>/knowledge-base`. Only
+  // computed for the support (read-only) mode; Command Center passes nothing.
+  const denyReadExtra = sandboxReadOnly
+    ? [path.resolve(trustedPluginPath, "..", "..", "knowledge-base")]
+    : undefined;
+
   // biome-ignore lint/suspicious/noExplicitAny: SDK Options is a wide union; partial-shape build avoids re-asserting every key
   const opts: any = {
-    cwd: args.workspacePath,
-    model: args.model ?? "claude-sonnet-4-6",
+    cwd: resolvedCwd,
+    model: args.model ?? "claude-sonnet-5",
     permissionMode: args.permissionMode ?? "default",
     // settingSources: [] — defense-in-depth alongside `patchWorkspacePermissions`.
     // Prevents the SDK from loading `.claude/settings.json` whose
@@ -170,6 +262,13 @@ export function buildAgentQueryOptions(
       // only when BOTH the path and token are present (both-or-nothing).
       gitAskpassScriptPath: args.gitAskpassScriptPath,
       gitInstallationToken: args.ghToken,
+      // Deployed plugin root → CLAUDE_PLUGIN_ROOT for the agent's `bash`
+      // shell-outs (Slice B). The assertTrustedPluginPath-validated value (an
+      // absolute /app/ platform path) is threaded so the deployed skills'
+      // `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` runs the platform copy, never
+      // the untrusted connected-repo copy. Proven to reach the bwrap-sandboxed
+      // bash via env inheritance (F2, AC7a — plugin-root-propagation gate).
+      pluginPath: trustedPluginPath,
     }),
     // Sandbox literal lives in `buildAgentSandboxConfig` so legacy + cc
     // share the same shape — identical except for the token-derived
@@ -187,8 +286,18 @@ export function buildAgentQueryOptions(
     // closed (fail-closed, zero behavior change).
     sandbox: buildAgentSandboxConfig(args.workspacePath, {
       allowGithubEgress: Boolean(args.ghToken),
+      // ADR-113 — support persona runs read-only (allowWrite:[]) so a
+      // cwd=pluginPath session cannot write into the shared platform plugin root.
+      readOnly: sandboxReadOnly,
+      // ADR-113 — obscure the internal knowledge base from support (tool-level).
+      denyReadExtra,
     }),
-    plugins: [{ type: "local" as const, path: args.pluginPath }],
+    // Loaded-gun guard: both factories source args.pluginPath from getPluginPath()
+    // (an absolute /app/ platform path). assertTrustedPluginPath fails LOUDLY if a
+    // future regression threads a connected-repo workspace path here — which would
+    // silently re-execute the untrusted repo's hooks.json in-process (the
+    // connected-repo-shadow security hole this PR closes). Test-tolerant.
+    plugins: [{ type: "local" as const, path: trustedPluginPath }],
     hooks: {
       PreToolUse: [
         {
@@ -197,6 +306,14 @@ export function buildAgentQueryOptions(
           matcher: "Read|Write|Edit|Glob|Grep|LS|NotebookRead|NotebookEdit|Bash",
           hooks: [createSandboxHook(args.workspacePath)],
         },
+        // TR3 tool-attempt telemetry (#5843, ADR-070). Separate gated entry — NOT
+        // a modification of the sandbox matcher (preserves the AC5 drift snapshot).
+        // Matcher-less so it captures the FULL surface (`Skill`/`Task`/`mcp__*`/
+        // `Read`/`Bash`/...) — the sandbox regex above only lists the fs/exec
+        // subset. Observe-only + fail-open (always returns `{}`). cc-only opt-in.
+        ...(args.toolAttemptPreToolUseHook
+          ? [{ hooks: [args.toolAttemptPreToolUseHook] }]
+          : []),
       ],
       // Defense-in-depth: log subagent spawns for audit visibility.
       // If a future SDK version stops routing subagent tool calls
@@ -220,11 +337,36 @@ export function buildAgentQueryOptions(
           ],
         },
       ],
+      // PostToolUse hooks (all fail-open, observe/additive-only — never touch the
+      // tool floor):
+      //   - ALWAYS: the #4826 git-lock marker mirror (matcher "Bash"). Observe-only;
+      //     re-emits the in-sandbox SOLEUR_GIT_LOCK_*/"worktree wedge" markers to the
+      //     server-side logger (→ Better Stack + Sentry breadcrumb), closing ADR-081's
+      //     "blind sandbox stdout, not mirrored to any queryable sink" gap. Path-agnostic
+      //     (a wedge can happen on any dispatch), so it is unconditional, not opt-in.
+      //   - Per-caller opt-ins (matcher "Skill"), each additive `additionalContext`:
+      //     the L3 phase-surface hint (#5772 lever 1, ADR-070) and the declarative
+      //     context_queries injection (#6046, ADR-086). Both use matcher "Skill"; the SDK
+      //     runs parallel matching hooks and delivers both values. Only the cc-soleur-go
+      //     Concierge router opts in.
+      PostToolUse: [
+        { matcher: "Bash", hooks: [createGitLockMarkerHook(args.workspacePath)] },
+        ...(args.enablePhaseSurfaceHint
+          ? [{ matcher: "Skill", hooks: [createPhaseSurfaceHook()] }]
+          : []),
+        ...(args.enableContextQueries
+          ? [{ matcher: "Skill", hooks: [createContextQueriesHook(args.workspacePath)] }]
+          : []),
+      ],
     },
     canUseTool: args.canUseTool,
   };
 
   if (args.resumeSessionId) opts.resume = args.resumeSessionId;
+  // SDK-native skill scope. Set ONLY when provided so the Command Center /
+  // legacy default (load every skill) stays byte-identical and off the T4
+  // drift snapshot. Support passes `["kb-search"]`.
+  if (args.skills !== undefined) opts.skills = args.skills;
   if (args.mcpServers !== undefined) opts.mcpServers = args.mcpServers;
   if (args.allowedTools !== undefined) opts.allowedTools = args.allowedTools;
   if (args.maxTurns !== undefined) opts.maxTurns = args.maxTurns;

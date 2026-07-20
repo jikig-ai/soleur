@@ -49,7 +49,7 @@ function makeAssistant(
     message: {
       id: "msg_1",
       role: "assistant",
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-5",
       stop_reason: null,
       stop_sequence: null,
       type: "message",
@@ -190,6 +190,7 @@ describe("command_stream RUNNER forwarding (AC5)", () => {
       },
     });
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-1",
       userId: "user-1",
       userMessage: "hi",

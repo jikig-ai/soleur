@@ -6,12 +6,17 @@
 
 /**
  * Layer 2 cap (ADR-041): per-spawn cost ceiling in cents.
- * 200 cents = $2.00 USD. Locked by brainstorm Key Decisions table.
+ * 260 cents = $2.60 USD. Raised from the original $2.00 (brainstorm Key
+ * Decisions table) by ~30% for the Sonnet 5 tokenizer: the Opus-4.7-family
+ * tokenizer emits ~1.0–1.35x more tokens for the same text, so equivalent
+ * leader work would otherwise hit the old $2.00 cap ~30% sooner. The bump
+ * preserves the effective work-per-spawn budget at unchanged per-token
+ * pricing ($3/$15 in MODEL_PRICING).
  *
  * SSOT — drift-guard test in constants-ssot.test.ts forbids hand-rolled
- * `200` or `$2.00` literals in scoped paths.
+ * `260` or `$2.60` literals in scoped paths.
  */
-export const PER_SPAWN_COST_CEILING_CENTS = 200;
+export const PER_SPAWN_COST_CEILING_CENTS = 260;
 
 /** Flat 8-turn ceiling (Layer 3 backstop per ADR-041). */
 export const LEADER_MAX_TURNS = 8;
@@ -20,7 +25,7 @@ export const LEADER_MAX_TURNS = 8;
 export const LEADER_MAX_TOKENS = 4096;
 
 /** Anthropic model ids. */
-export const SONNET_MODEL = "claude-sonnet-4-6" as const;
+export const SONNET_MODEL = "claude-sonnet-5" as const;
 export const HAIKU_MODEL = "claude-haiku-4-5-20251001" as const;
 
 export type AnthropicModelId = typeof SONNET_MODEL | typeof HAIKU_MODEL;

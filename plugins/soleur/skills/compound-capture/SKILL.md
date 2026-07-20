@@ -339,6 +339,8 @@ This dual-routing ensures session errors feed back into the definitions that cau
 
 #### 8.4 Apply
 
+**Gated-block guard (proposer-agnostic eval gate).** Before applying, run `node plugins/soleur/skills/eval-harness/scripts/eval-gate.cjs --check <target-file>`. If `gated:false`, apply normally. If `gated:true`, you MUST run the gate for the proposed edit — do NOT eyeball whether the classifier block changed and assume `accept`. Write the proposed-edited file to a temp path and run `eval-gate.cjs --candidate-file <tmp> --target <target> --target-task <synthesized row>`: the SCRIPT (not the agent) decides the identical-block short-circuit (when Step 8.3's bullet lands *outside* the `/go` routing table / triage rubric block — the common case — the script extracts an identical block and returns `accept` with no API spend; when the block did change, the script runs promptfoo and computes the verdict in `verdict.cjs`). Then follow heal-skill step 6.0 (buffer pre-check → accept-applies / reject-logs-to-`.claude/.skill-edit-rejections.jsonl`-and-does-NOT-stamp-`synced_to`). **Headless (`HEADLESS_MODE=true`) — fail CLOSED:** if the gate did not run to an `accept:true` (e.g. unattended, to avoid spending the gate's API budget), DO NOT apply the gated-block edit — DEFER it (record a one-line deferred note; the edit is preserved in the learning context and re-attempted interactively; the #5703 CI backstop re-asserts at PR time). Fail-closed on any gate error. The gate validates a prose-rule change to a classifier surface only; it never displaces a deterministic hook fix.
+
 Apply the proposed edit to the definition file. Filing a GitHub issue is NOT an option in either mode -- the backlog-growth pressure that produced 22 stale `compound: route-to-definition proposal` issues by 2026-05 is the original problem this step exists to avoid. If Step 8.3 produced a draft, it has already cleared the "skip if no suitable section / insight is general knowledge" gate; that gate is the only safety hatch.
 
 **Headless mode (`HEADLESS_MODE=true`):** Before writing, assert the resolved target path is prefixed by `plugins/soleur/skills/`, `plugins/soleur/agents/`, or `plugins/soleur/commands/` — refuse otherwise. Then write the edit to the target file directly without prompting. The prefix check enforces `hr-write-boundary-sentinel-sweep-all-write-sites` for this new write surface; the Step 8.1 path map is the implicit allowlist, this assertion makes it explicit.
@@ -468,7 +470,7 @@ Archive ALL discovered artifacts regardless of how many proposals were accepted 
 Run the archival script from the repository root:
 
 ```bash
-bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh
 ```
 
 The script discovers artifacts matching the current branch's feature slug, creates archive directories, and moves each artifact with a timestamped prefix using `git mv`. It handles untracked files automatically. If the script exits non-zero, display the error and stop -- do not proceed to Step F.
@@ -587,7 +589,7 @@ User selects this when the solution represents the start of a new learning domai
 Action:
 
 1. Prompt: "What should the new skill be called? (e.g., stripe-billing, email-processing)"
-2. Run `python3 plugins/soleur/skills/skill-creator/scripts/init_skill.py [skill-name]`
+2. Run `python3 ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/skill-creator/scripts/init_skill.py [skill-name]`
 3. Create initial reference files with this solution as first example
 4. Confirm: "✓ Created new [skill-name] skill with this solution as first example"
 

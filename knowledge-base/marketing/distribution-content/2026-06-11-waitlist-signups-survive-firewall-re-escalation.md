@@ -1,9 +1,9 @@
 ---
 title: "Waitlist signups now survive vendor firewall re-escalation"
 type: feature-launch
-publish_date: ""
+publish_date: 2026-07-16
 channels: x
-status: draft
+status: published
 pr_reference: "#5153"
 ---
 

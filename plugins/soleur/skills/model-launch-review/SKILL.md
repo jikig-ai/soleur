@@ -28,7 +28,7 @@ step), not a PR.
 
 | # | Item | Disposition | Surface |
 |---|------|-------------|---------|
-| 1 | **Model-ID swaps** | **AUTO-FIX** | config-class files (server SDK call sites, Inngest `cron-*.ts`, `leader-prompts/constants.ts`, workflow `--model`, skill reference docs) — never test fixtures, archives, `knowledge-base/project/**`, or community digests |
+| 1 | **Model-ID swaps** | **AUTO-FIX** | config-class files (server SDK call sites, Inngest `cron-*.ts`, `leader-prompts/constants.ts`, workflow `--model`, skill reference docs) — never test fixtures, archives, `knowledge-base/**`, or community digests |
 | 2 | **claude-code-action pin freshness** | flag-only | `.github/workflows/*.yml` pins; auto-bump ONLY when coupled to a `--model` swap in the same workflow (#2540 invariant) |
 | 3 | **Thinking-API shape** | flag-only (no-op v1) | carried by the claude-code-action pin's embedded SDK; no `thinking`/`output_config` params in config today |
 | 4 | **Pricing-table drift** | flag-only | `agent-on-spawn-requested.ts` `MODEL_PRICING` (billing constant — never auto-edit); compare vs the `claude-api` source-of-truth |
@@ -41,17 +41,19 @@ Only item 1 is auto-applied. Items 2–5 are reported in the PR body for human s
 1. **Audit** — see every finding (no silent green; all 5 checks always enumerated):
 
    ```bash
-   bash plugins/soleur/skills/model-launch-review/scripts/audit-models.sh
+   bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/model-launch-review/scripts/audit-models.sh
    ```
 
 2. **Resolve the current landscape from authoritative sources** — never memory. Read the
-   `claude-api` skill model table + the official Anthropic models docs. Update
-   `AUTOFIX_FROM`/`AUTOFIX_TO` in `audit-models.sh` if the current top-tier ID changed.
+   `claude-api` skill model table + the official Anthropic models docs. If a new model
+   shipped in an existing tier (the next Sonnet/Opus/etc.), add a
+   `"<superseded-id>=<current-id>"` entry to the `AUTOFIX_PAIRS` array in `audit-models.sh`
+   (each stale id maps to its OWN same-tier target, so tiers coexist).
 
 3. **Auto-fix** model-ID swaps (mechanical; allowlist + deletion guard; never `git add -A`):
 
    ```bash
-   bash plugins/soleur/skills/model-launch-review/scripts/audit-models.sh --fix
+   bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/model-launch-review/scripts/audit-models.sh --fix
    ```
 
    Then run the suite — config ID swaps red the coupled test fixtures; update them in the
@@ -82,6 +84,19 @@ change" trigger never fired when Fable 5 shipped. The cron files an issue, never
 - Resolve every model ID / pin SHA / release tag via `gh api` or official docs in-pass — never
   from memory (2026-04-18 / 2026-02-22 learnings; SHA-from-memory errors recur).
 - Inventory by independent grep, not by a checklist's file list (inventories undercount).
+- **When the launch migration bumps the Anthropic SDK toolchain in
+  `apps/web-platform/package.json` (`@anthropic-ai/claude-code`,
+  `@anthropic-ai/claude-agent-sdk`, `@anthropic-ai/sdk`), regenerate BOTH
+  lockfiles — `package-lock.json` AND `bun.lock` — in the same PR.** The new
+  releases are <3 days old, so a plain `bun install` is blocked by
+  `bunfig.toml`'s `minimumReleaseAge = 259200` (#1174) and silently leaves
+  `bun.lock` stale; every CI job running `bun install --frozen-lockfile` then
+  fails at the install step. Regenerate with
+  `cd apps/web-platform && bun install --lockfile-only --minimum-release-age=0`,
+  then prove CI-parity with `bun install --frozen-lockfile` (no override →
+  "no changes"). CI's `lockfile-sync` job covers only `package-lock.json`, not
+  `bun.lock`. See
+  [2026-07-01-bun-lock-minimum-release-age-blocks-sdk-toolchain-bump.md](../../../../knowledge-base/project/learnings/best-practices/2026-07-01-bun-lock-minimum-release-age-blocks-sdk-toolchain-bump.md).
 - Pricing is a billing constant — flag, never auto-edit; the opus `MODEL_PRICING` row is
   deferred to #5106 (do not fabricate it).
 - When #5106 lands its `model-tiers.ts` registry, the model-ID grep target collapses to that

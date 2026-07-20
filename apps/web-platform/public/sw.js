@@ -1,7 +1,7 @@
 // Bumping the suffix triggers the activate handler's cache cleanup, which
 // purges _next/static/** chunks cached against an old project ref. Keep
 // push-notification subscriptions intact (registration is unchanged).
-const CACHE_NAME = "soleur-app-shell-v8";
+const CACHE_NAME = "soleur-app-shell-v9";
 
 // Static shell assets cached on install (non-hashed assets only).
 // _next/static/** are cached on fetch via cache-first strategy.
@@ -102,15 +102,17 @@ self.addEventListener("push", (event) => {
     icon: payload.icon || "/icons/icon-192x192.png",
     badge: "/icons/icon-192x192.png",
     data: payload.data || {},
-    // Per-variant tag namespace: browsers REPLACE same-tag notifications,
-    // so an email-triage ping must never collapse into (or overwrite) a
-    // pending review-gate notification. email_triage payloads carry
-    // data.emailId; review-gate payloads carry data.conversationId.
-    tag: payload.data?.emailId
-      ? `email-triage-${payload.data.emailId}`
-      : payload.data?.conversationId
-        ? `review-gate-${payload.data.conversationId}`
-        : "review-gate",
+    // Per-variant tag namespace: browsers REPLACE same-tag notifications, so
+    // each variant must carry its own per-item tag or pings collapse into one
+    // another. inbox_item payloads carry data.inboxItemId; email_triage carry
+    // data.emailId; review-gate carry data.conversationId.
+    tag: payload.data?.inboxItemId
+      ? `inbox-item-${payload.data.inboxItemId}`
+      : payload.data?.emailId
+        ? `email-triage-${payload.data.emailId}`
+        : payload.data?.conversationId
+          ? `review-gate-${payload.data.conversationId}`
+          : "review-gate",
   };
 
   event.waitUntil(self.registration.showNotification(title, options));

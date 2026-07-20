@@ -29,6 +29,7 @@ trap 'rm -rf "$WORK"' EXIT
 # in $WORK instead of the real repo.
 mkdir -p "$WORK/.claude/hooks/lib" "$WORK/scripts/lib"
 cp "$REPO_ROOT/.claude/hooks/lib/incidents.sh" "$WORK/.claude/hooks/lib/"
+cp "$REPO_ROOT/.claude/hooks/lib/freeze-lock.sh" "$WORK/.claude/hooks/lib/"
 cp "$REPO_ROOT/.claude/hooks/guardrails.sh" "$WORK/.claude/hooks/"
 cp "$REPO_ROOT/.claude/hooks/pencil-open-guard.sh" "$WORK/.claude/hooks/"
 cp "$REPO_ROOT/.claude/hooks/worktree-write-guard.sh" "$WORK/.claude/hooks/"
@@ -174,6 +175,32 @@ _check "guardrails: LEFTHOOK=0 bypass preflight" "cq-when-lefthook-hangs-in-a-wo
 echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf .worktrees/foo"}}' \
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
 _check "guardrails: rm -rf worktrees" "guardrails-block-rm-rf-worktrees"
+
+# --- guardrails: block-recursive-delete (hardened ownership proof, #5988)
+# A .git-bearing target resolves onto a checkout → deny + emit the new id.
+mkdir -p "$WORK/nuke-target/.git"
+echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf '"$WORK"'/nuke-target"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check "guardrails: rm -rf .git-bearing checkout" "guardrails-block-recursive-delete"
+# Negative: an ordinary non-protected dir does NOT emit the recursive-delete id.
+mkdir -p "$WORK/scratch-xyz"
+echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf '"$WORK"'/scratch-xyz"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check_silent "guardrails: rm -rf non-protected dir (no over-fire)" "guardrails-block-recursive-delete"
+
+# --- guardrails: freeze-edit-lock (Write|Edit branch, #5988)
+# A valid active freeze + an Edit outside the prefix → deny + emit the id.
+# Freeze root resolves three dirs up from lib/ ($WORK), so write the state file
+# directly at $WORK/.claude/.freeze-lock.
+printf '%s\n' "$WORK/allowed" > "$WORK/.claude/.freeze-lock"
+echo '{"tool_name":"Edit","tool_input":{"file_path":"'"$WORK"'/elsewhere/foo.ts"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check "guardrails: freeze edit outside prefix" "guardrails-freeze-edit-lock"
+# Negative: an Edit INSIDE the prefix does NOT emit the freeze id.
+echo '{"tool_name":"Edit","tool_input":{"file_path":"'"$WORK"'/allowed/foo.ts"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check_silent "guardrails: freeze edit inside prefix (no fire)" "guardrails-freeze-edit-lock"
+rm -f "$WORK/.claude/.freeze-lock"
 
 # --- guardrails: require-milestone
 echo '{"tool_name":"Bash","tool_input":{"command":"gh issue create --title foo"}}' \

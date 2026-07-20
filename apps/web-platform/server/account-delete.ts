@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/service";
 import { abortAllUserSessions } from "@/server/agent-runner";
 import { deleteWorkspace, purgeWorkspaceLogoObjects } from "@/server/workspace";
+import { removeGitDataRepo } from "@/server/git-data-replication";
 import { createChildLogger } from "./logger";
 import { hashUserId, reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
@@ -196,6 +197,28 @@ export async function deleteAccount(
     await deleteWorkspace(userId);
   } catch (err) {
     log.warn({ userId, err }, "Failed to delete workspace during deletion (non-fatal)");
+  }
+
+  // 3.01 Art. 17 erasure of the SHARED git-data bare repo (#5274 Sub-PR 3.D, DL-1/AC9).
+  // deleteWorkspace above reaps only the host-local working tree; when the multi-host
+  // git-data split is live the workspace's refs also live in a bare repo on the git-data
+  // host, which must be erased too. Keyed on userId (=== workspaces.id, mig 053 N2 —
+  // the sole-owned workspace's git-data repo id). NO-OP at flag-off (inside the call).
+  // Best-effort, mirroring the attachments/logo purges: reports, never throws — a
+  // reachability blip must not abort the auth-user deletion that follows.
+  try {
+    await removeGitDataRepo(userId);
+  } catch (err) {
+    // Non-fatal (a git-data reachability blip must not strand the auth-user
+    // deletion), but a failed Art. 17 erasure is a compliance event — mirror to
+    // Sentry so an un-erased bare repo is observable and can be swept, rather than
+    // silently logged (cq-silent-fallback-must-mirror-to-sentry).
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "git-data-bare-repo-erasure",
+      extra: { userId },
+      message: "removeGitDataRepo failed during Art. 17 deletion — bare repo may persist on the git-data host",
+    });
   }
 
   // 3.6 Purge the workspace logo Storage object (#4916). Sole-owned teardown

@@ -1,4 +1,5 @@
 import { PROVIDER_CONFIG } from "./providers";
+import { assertTrustedPluginPath, isPluginPathTestEnv } from "./plugin-path";
 
 /**
  * The auth scheme an agent run is funded by. `api_key` feeds the raw
@@ -105,6 +106,29 @@ export interface BuildAgentEnvOptions {
    * both-present guard is explicit.
    */
   gitInstallationToken?: string;
+  /**
+   * The platform-deployed plugin root (`getPluginPath()` →
+   * `/app/shared/plugins/soleur` in prod), injected as `CLAUDE_PLUGIN_ROOT`.
+   * The deployed skills' `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/…`
+   * shell-outs read this var so they execute the platform-controlled script,
+   * NOT the connected repo's committed (untrusted) `./plugins/soleur/` copy
+   * (the connected-repo-shadow delivery fix — plan §Phase 2). It rides this
+   * dedicated per-dispatch param rather than `AGENT_ENV_ALLOWLIST` on purpose:
+   * the allowlist copies AMBIENT `process.env` (a whole-process constant),
+   * whereas this is a per-dispatch value threaded from
+   * `agent-runner-query-options.ts`. Keeping it out of the allowlist also
+   * prevents an ambient `process.env.CLAUDE_PLUGIN_ROOT` from leaking into the
+   * agent env.
+   *
+   * FAIL-CLOSED (#6223): in a production env this is a dispatch precondition —
+   * absent/empty throws, and a present value is validated via
+   * `assertTrustedPluginPath` before injection (see the injection site below).
+   * The earlier "graceful CLI degradation / empty is a no-op" rationale was
+   * fictional: `buildAgentEnv` is server-only with exactly one caller; the
+   * CLI/worktree surface runs the plugin directly, never through this function.
+   * Omission is tolerated ONLY under the VITEST/NODE_ENV=test bypass.
+   */
+  pluginPath?: string;
 }
 
 export function buildAgentEnv(
@@ -172,6 +196,42 @@ export function buildAgentEnv(
     env.GIT_TERMINAL_PROMPT = "0";
     env.GIT_CONFIG_NOSYSTEM = "1";
     env.GIT_CONFIG_GLOBAL = "/dev/null";
+  }
+
+  // Deployed plugin root for the agent's `bash` shell-outs (Slice B / #6223).
+  // Injected OUTSIDE the allowlist loop and the auth switch — it is a
+  // per-dispatch platform path (getPluginPath()), NOT an ambient process.env
+  // value, so it is deliberately absent from AGENT_ENV_ALLOWLIST. The deployed
+  // skills expand `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` to run the
+  // platform-controlled worktree-manager.sh, never the untrusted connected-repo
+  // copy.
+  //
+  // FAIL-CLOSED (#6223, ADR-093): the injection is the per-dispatch boundary at
+  // which the export invariant is pinned. A dispatch whose env OMITS
+  // CLAUDE_PLUGIN_ROOT would let the `:-./plugins/soleur` fallback resolve the
+  // connected repo's UNTRUSTED committed copy — silently re-opening the hole
+  // ADR-093 closes (neutered redact-sentinel.sh; trigger.sh secret exfil). So:
+  //   - present → validate via assertTrustedPluginPath (rejects non-/app/ in
+  //     prod; returns the value unchanged) then set. This is a SECOND, distinct
+  //     call from the `assertTrustedPluginPath` guard in `buildAgentQueryOptions`
+  //     (agent-runner-query-options.ts) — that one protects the SDK
+  //     `plugins:[{path}]` binding sink; THIS one protects the exported
+  //     CLAUDE_PLUGIN_ROOT bash-env sink. Both are deliberate; do not collapse
+  //     (see ADR-093 amendment + the plan's Alternatives table).
+  //   - absent/empty in a PRODUCTION env → THROW (fail closed). Enforcement
+  //     travels WITH the value-injection point, so any future buildAgentEnv
+  //     caller that bypasses buildAgentQueryOptions is still covered.
+  //   - absent/empty in a test env → omit (fixture ergonomics for the many
+  //     no-pluginPath unit tests). The VITEST/NODE_ENV=test bypass predicate is
+  //     the shared `isPluginPathTestEnv()` from plugin-path.ts (the canonical
+  //     source getPluginPath / assertTrustedPluginPath also consume) — a single
+  //     definition so the three sinks cannot drift toward a more-permissive copy.
+  if (opts?.pluginPath) {
+    env.CLAUDE_PLUGIN_ROOT = assertTrustedPluginPath(opts.pluginPath);
+  } else if (!isPluginPathTestEnv()) {
+    throw new Error(
+      "[plugin-path] CLAUDE_PLUGIN_ROOT export required for agent dispatch — pluginPath was empty/undefined",
+    );
   }
 
   // Auth var LAST and mutually exclusive: the credential branch is

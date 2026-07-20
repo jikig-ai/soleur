@@ -35,7 +35,11 @@ __pycache__/
 # covers `.<sink>.jsonl`, `.<sink>-YYYY-MM.jsonl`, `.<sink>-YYYY-MM.jsonl.gz`,
 # and any HHMMSSN-suffixed collision archive.
 .claude/.rule-incidents*
+# Freeze edit-lock runtime state (.claude/hooks/lib/freeze-lock.sh) — a single
+# worktree-local line holding the active allowed path prefix; never committed.
+.claude/.freeze*
 .claude/.skill-invocations*
+.claude/.skill-edit-rejections*
 .claude/.session-tokens*
 # F2 prod-write defer-gate sinks (.claude/hooks/prod-write-defer-gate.sh):
 # - approvals.jsonl: 1-year TTL, operator-email PII; gitignored-local-only.
@@ -104,3 +108,7 @@ mutants/
 # self-healing/auto PRs, not from state files). Reject any future
 # .github/promotion-*.json re-introduction.
 .github/promotion-*.json
+
+# #6695 — collector-status sidecar written into the cron spawn cwd; run-scoped,
+# never committed (also structurally excluded in _cron-safe-commit.ts).
+.soleur-collector-status/

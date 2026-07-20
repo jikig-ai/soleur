@@ -5,12 +5,23 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { reportSilentFallback } from "@/server/observability";
 import {
+  upsertRoutineRunProgress,
+  heartbeatRoutineRunProgress,
+  HEARTBEAT_INTERVAL_MS,
+} from "@/server/inngest/routine-run-progress";
+import {
   buildAuthenticatedCloneUrl,
+  DeployInProgressError,
+  deployLeaseAgeMsIfFresh,
   redactToken,
   resolveCronWorkspaceRoot,
   warnIfCronWorkspaceLowOnDisk,
   type HandlerArgs,
 } from "./_cron-shared";
+import {
+  emitClaudeCostMarker,
+  type CaptureStatus,
+} from "@/server/claude-cost-marker";
 
 export interface SpawnResult {
   ok: boolean;
@@ -34,6 +45,130 @@ export interface SpawnResult {
   // Sentry extra alongside stderrTail. #4773 (follow-up to #4714/#4770).
   // Optional, same as stderrTail: inline-spawn sibling crons do not populate it.
   stdoutTail?: string;
+  // #cost-attribution (plan Phase 2 / ADR-033 I5): the claude CLI's own
+  // authoritative per-run cost + usage + model, parsed from the final `result`
+  // JSON event when the spawn requests `--output-format json`. All optional so
+  // inline-spawn sibling crons that build their own SpawnResult literals stay
+  // compiling (mirrors stdoutTail?/stderrTail?), and so a parse failure / old
+  // text format degrades to `undefined` (fail-open, never fatal).
+  costUsd?: number;
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation_input_tokens: number;
+  };
+  model?: string | null;
+}
+
+// #5728 — synthetic SpawnResult for the silence-hole audit issue (#4960) when an
+// output-aware handler's body THREW before claude-eval produced a real result.
+// Shared by the cohort so the 6-field literal isn't copy-pasted 8× (the only
+// field the type system can't pin against drift is the exitCode/durationMs
+// values). Carries the cron name in stderrTail so the FAILED issue is
+// self-diagnosing. Returns the exact Pick that ensureScheduledAuditIssue reads.
+export function makeThrewSpawnResult(
+  cronName: string,
+): Pick<
+  SpawnResult,
+  "exitCode" | "signal" | "abortedByTimeout" | "durationMs" | "stdoutTail" | "stderrTail"
+> {
+  return {
+    exitCode: -1,
+    signal: null,
+    abortedByTimeout: false,
+    durationMs: 0,
+    stdoutTail: "",
+    stderrTail: `${cronName} threw before claude-eval completed`,
+  };
+}
+
+// #cost-attribution (plan Phase 2). Parsed shape of the claude CLI's final
+// `{"type":"result",…}` event (Phase-0 probe pinned the field names live):
+// `total_cost_usd` is top-level, the token counts live under `usage`, and the
+// model id is the KEY of `modelUsage` (there is NO top-level `model` field).
+export interface ParsedEvalResult {
+  cost: {
+    costUsd?: number;
+    usage?: SpawnResult["usage"];
+    model: string | null;
+  };
+  // The human-readable `result` text (the CLI's final assistant output OR, on
+  // an API error, the error message). Folded into stdoutTail so the I8
+  // credit/auth/spawn-fault classifier still sees the error string under the
+  // JSON output format (arch P1-A).
+  resultText: string;
+}
+
+/**
+ * Parse one CLI stdout line as the final `result` event, fail-open. Returns
+ * `null` for a non-JSON line or any non-`result` event (the substrate then
+ * preserves the legacy raw-tail behavior). Pure — unit-tested against fixtures
+ * without spawning a child (AC4).
+ */
+export function parseClaudeResultLine(line: string): ParsedEvalResult | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    (parsed as { type?: unknown }).type !== "result"
+  ) {
+    return null;
+  }
+  const r = parsed as {
+    total_cost_usd?: number;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
+    modelUsage?: Record<string, unknown>;
+    result?: unknown;
+  };
+  return {
+    cost: {
+      costUsd:
+        typeof r.total_cost_usd === "number" ? r.total_cost_usd : undefined,
+      usage: r.usage
+        ? {
+            input_tokens: r.usage.input_tokens ?? 0,
+            output_tokens: r.usage.output_tokens ?? 0,
+            cache_read_input_tokens: r.usage.cache_read_input_tokens ?? 0,
+            cache_creation_input_tokens:
+              r.usage.cache_creation_input_tokens ?? 0,
+          }
+        : undefined,
+      model: Object.keys(r.modelUsage ?? {})[0] ?? null,
+    },
+    resultText:
+      typeof r.result === "string"
+        ? r.result
+        : JSON.stringify(r.result ?? ""),
+  };
+}
+
+/**
+ * Resolve the positive `capture_status` for the per-run marker (plan obs P1):
+ * a timeout wins, else a parsed cost is `ok`, else `parse-error` when a JSON-
+ * shaped result line was seen but did not parse to a usable event ("capture
+ * broke"), else `no-result-event` (no result emitted at all). Pure — unit-tested
+ * (AC4). `sawUnparsedResultLine` defaults false so the legacy 2-arg callers/tests
+ * keep the prior ok|no-result-event|timeout behavior.
+ */
+export function resolveEvalCaptureStatus(
+  abortedByTimeout: boolean,
+  evalCost: ParsedEvalResult["cost"] | null,
+  sawUnparsedResultLine = false,
+): CaptureStatus {
+  if (abortedByTimeout) return "timeout";
+  if (evalCost) return "ok";
+  return sawUnparsedResultLine ? "parse-error" : "no-result-event";
 }
 
 export const KILL_ESCALATION_MS = 5_000;
@@ -220,6 +355,10 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
   // validate scripts take a built `_site` arg, unreachable in the
   // node_modules-free clone). Pure issue-creator surface.
   "cron-seo-aeo-audit": ISSUE_CREATOR_BASH_ALLOWLIST,
+  // architecture-diagram-sync (cron-architecture-diagram-sync.ts): only
+  // `gh issue create` for the weekly summary; diagram edits persist handler-side
+  // via safeCommitAndPr (prompt forbids git/gh-pr verbs). Pure issue-creator surface.
+  "cron-architecture-diagram-sync": ISSUE_CREATOR_BASH_ALLOWLIST,
   // content-generator (cron-content-generator.ts): only `gh issue create`;
   // prompt explicitly forbids a local eleventy build. Skills delegate via Task
   // (no inline bash). Pure issue-creator surface.
@@ -558,6 +697,27 @@ export async function setupEphemeralWorkspace(args: {
   cronName: string;
 }): Promise<{ ephemeralRoot: string; spawnCwd: string }> {
   const { installationToken, cronName } = args;
+
+  // Deploy-lease drain gate (#5669 / ADR-078). If ci-deploy.sh is mid-swap it
+  // has written a fresh ${CRON_WORKSPACE_ROOT}/.deploy-lease; defer BEFORE the
+  // mkdtemp+clone so the imminent `docker stop` cannot kill this claude child
+  // (the :706 spawn-cwd symptom). Single pre-spawn choke point — every heavy
+  // claude-eval cron funnels through here. Stale leases are fail-open ignored
+  // (deployLeaseAgeMsIfFresh TTL), so a crashed deploy never darks crons.
+  const leaseAgeMs = await deployLeaseAgeMsIfFresh();
+  if (leaseAgeMs !== null) {
+    // Structured + queryable in Sentry/Better Stack (CTO guardrail 3): the
+    // reportSilentFallback mirror makes "why did cron X skip during the 14:03
+    // deploy?" answerable with no SSH. Distinct reason so it is never read as a
+    // real setup failure.
+    reportSilentFallback(null, {
+      feature: "cron-claude-eval",
+      op: "deploy-lease-fresh",
+      message: `[${cronName}] deferring cron start: deploy in progress (lease age ${leaseAgeMs}ms)`,
+    });
+    throw new DeployInProgressError(cronName, leaseAgeMs);
+  }
+
   const ephemeralRoot = await mkdtemp(
     join(resolveCronWorkspaceRoot(), `soleur-${cronName}-`),
   );
@@ -689,6 +849,12 @@ export async function spawnClaudeEval(args: {
   cronName: string;
   buildSpawnEnv: (token: string) => NodeJS.ProcessEnv;
   logger: HandlerArgs["logger"];
+  // #5766: Inngest run identity, threaded from the caller (ctx.runId / attempt).
+  // When present, this run is recorded as a live DB fact (routine_run_progress):
+  // upsert on entry + heartbeat every ~30s while the child runs. Optional so
+  // non-Inngest callers / tests need not supply it.
+  runId?: string;
+  attempt?: number;
 }): Promise<SpawnResult> {
   const {
     spawnCwd,
@@ -699,6 +865,8 @@ export async function spawnClaudeEval(args: {
     cronName,
     buildSpawnEnv,
     logger,
+    runId,
+    attempt,
   } = args;
 
   if (!existsSync(spawnCwd)) {
@@ -722,14 +890,68 @@ export async function spawnClaudeEval(args: {
   // Carries the `claude --print` max-turns notice (stdout, not stderr) to the
   // Sentry surface. #4773.
   let stdoutTail = "";
+  // #cost-attribution (plan Phase 2): the CLI's own `result` event cost/usage/
+  // model, parsed fail-open from stdout when `--output-format json` is active.
+  // Stays null until a `{"type":"result",…}` line parses (→ capture_status:"ok").
+  let evalCost: ParsedEvalResult["cost"] | null = null;
+  // #cost-attribution (plan Phase 2, obs P1): distinguishes "capture broke" from
+  // "genuinely no result". Set when a JSON-object-shaped stdout line (`{…}` under
+  // `--output-format json`) did NOT yield a usable `result` event — a truncated/
+  // malformed/wrong-shape result. Drives capture_status:"parse-error" so a broken
+  // capture is a queryable event, not silently folded into "no-result-event".
+  let sawUnparsedResultLine = false;
+
+  // #5766: record this run as a live DB fact. upsert on entry (ON CONFLICT
+  // refreshes on replay, preserving started_at), then a wall-clock heartbeat tick
+  // while the child runs — this is what a stale-heartbeat reader uses to detect a
+  // SIGKILL eviction faster than Inngest's step timeout. All fail-soft (never
+  // throws). Cleared in finish() below so no tick fires after child exit.
+  let heartbeatTimer: NodeJS.Timeout | null = null;
+  if (runId) {
+    await upsertRoutineRunProgress(cronName, runId, attempt ?? 1);
+    heartbeatTimer = setInterval(() => {
+      void heartbeatRoutineRunProgress(runId);
+    }, HEARTBEAT_INTERVAL_MS);
+    // Do not keep the event loop alive solely for the heartbeat.
+    heartbeatTimer.unref?.();
+  }
 
   try {
     return await new Promise<SpawnResult>((resolve) => {
-      const child = spawn(claudeBin, [...flags, prompt], {
+      // #5691 — silence non-essential cron egress at source (keep-blocked, NOT
+      // allowlisted; ADR-052 2026-06-29 amendment):
+      //  • `--strict-mcp-config` (prepended at index 0, BEFORE `--print` and
+      //    before any trailing `--` prompt separator) makes the CLI ignore the
+      //    four remote HTTP MCP servers bundled in plugins/soleur/plugin.json
+      //    (context7/cloudflare/vercel/stripe) that `--plugin-dir` would
+      //    otherwise auto-connect at startup. The containment hook denies every
+      //    mcp__* tool anyway (only cron-ux-audit gets Playwright), so these
+      //    startup dials are pure overhead the egress firewall correctly drops.
+      //    cron-ux-audit re-supplies its Playwright server via `--mcp-config`.
+      //  • CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 kills Claude Code's own
+      //    non-essential outbound traffic (telemetry / error-reporting /
+      //    auto-update). Spike A (#5691 PR body) is the at-source proof.
+      // #cost-attribution (plan Phase 2): request the CLI's structured result
+      // event so the final `total_cost_usd`/`usage`/model are captured. Inject
+      // ONLY when the caller has not already set `--output-format` (today none
+      // do — plain text `--print`). `json` (single final object) is the low-
+      // log-volume choice; the result text is extracted back into stdoutTail
+      // below so the ADR-033 I8 classifier + scheduled-output-missing Sentry
+      // extra stay readable.
+      const outputFormatFlags = flags.some((f) => f === "--output-format")
+        ? []
+        : ["--output-format", "json"];
+      const child = spawn(
+        claudeBin,
+        ["--strict-mcp-config", ...outputFormatFlags, ...flags, prompt],
+        {
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
         cwd: spawnCwd,
-        env: buildSpawnEnv(installationToken),
+        env: {
+          ...buildSpawnEnv(installationToken),
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        },
       });
 
       if (child.stdout) {
@@ -737,9 +959,38 @@ export async function spawnClaudeEval(args: {
         rlOut.on("line", (line) => {
           const redacted = redactToken(line, installationToken);
           logger.info({ fn: cronName, stream: "stdout" }, redacted);
-          // Keep a bounded tail (drop oldest) for the Sentry surface — mirrors
-          // the stderrTail accumulation below. Carries the max-turns notice.
-          stdoutTail = (stdoutTail + redacted + "\n").slice(-STDOUT_TAIL_CAP_BYTES);
+          // #cost-attribution (plan Phase 2): parse each line as a CLI JSON
+          // event, fail-open (pure helper — unit-tested against fixtures). On
+          // the final `{"type":"result",…}` event, capture the CLI's own
+          // authoritative cost/usage/model, and fold the human-readable
+          // `result` text (+ any error) INTO stdoutTail so the bounded tail
+          // stays readable for the ADR-033 I8 classifier and the scheduled-
+          // output-missing Sentry extra — raw JSON events must not crowd the
+          // terminal error/notice out of the tail (obs P2 / arch P1-A).
+          const parsedResult = parseClaudeResultLine(line);
+          if (parsedResult) {
+            evalCost = parsedResult.cost;
+            const tailText = redactToken(
+              parsedResult.resultText,
+              installationToken,
+            );
+            stdoutTail = (stdoutTail + tailText + "\n").slice(
+              -STDOUT_TAIL_CAP_BYTES,
+            );
+          } else {
+            // A JSON-object-shaped line that did NOT parse to a `result` event
+            // (truncated / malformed / wrong-shape) is a broken capture, NOT a
+            // benign old-text line — flag it so the exit marker ships
+            // capture_status:"parse-error" (obs P1). Plain-text lines (the
+            // legacy `--print` path, e.g. the max-turns notice) do not start
+            // with `{`, so they never false-trip this.
+            if (line.trimStart().startsWith("{")) sawUnparsedResultLine = true;
+            // Preserve the legacy bounded tail (drop oldest). Carries the
+            // max-turns notice on the text path.
+            stdoutTail = (stdoutTail + redacted + "\n").slice(
+              -STDOUT_TAIL_CAP_BYTES,
+            );
+          }
         });
       }
       if (child.stderr) {
@@ -755,6 +1006,31 @@ export async function spawnClaudeEval(args: {
       const finish = (r: SpawnResult) => {
         exited = true;
         if (escalationTimer) clearTimeout(escalationTimer);
+        // #5766: stop heartbeating once the child has exited — no tick may land
+        // after the middleware's terminal delete (would resurrect a phantom row).
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        // #cost-attribution (plan Phase 2, obs P1): emit a POSITIVE marker on
+        // EVERY exit — never rely on row-absence. `ok` carries the parsed cost;
+        // a parse failure / old format / timeout ships a distinct capture_status
+        // + null cost so "capture broke" is a shipped event, not silence.
+        // `emitClaudeCostMarker` is fail-open (never throws → never reds a cron).
+        const captureStatus = resolveEvalCaptureStatus(
+          r.abortedByTimeout,
+          evalCost,
+          sawUnparsedResultLine,
+        );
+        emitClaudeCostMarker({
+          source: `cron:${cronName}`,
+          id: runId ?? cronName,
+          model: evalCost?.model ?? null,
+          cost_usd: evalCost?.costUsd ?? null,
+          input_tokens: evalCost?.usage?.input_tokens ?? null,
+          output_tokens: evalCost?.usage?.output_tokens ?? null,
+          cache_read_input_tokens: evalCost?.usage?.cache_read_input_tokens ?? null,
+          cache_creation_input_tokens:
+            evalCost?.usage?.cache_creation_input_tokens ?? null,
+          capture_status: captureStatus,
+        });
         resolve(r);
       };
 
@@ -790,6 +1066,11 @@ export async function spawnClaudeEval(args: {
           durationMs: Date.now() - startedAt,
           stderrTail,
           stdoutTail,
+          // ADR-033 I5 deterministic capture: surface the parsed cost on the
+          // SpawnResult (undefined when no result event parsed — fail-open).
+          costUsd: evalCost?.costUsd,
+          usage: evalCost?.usage,
+          model: evalCost?.model,
         });
       });
       child.on("error", (err) => {
@@ -823,5 +1104,9 @@ export async function spawnClaudeEval(args: {
     });
   } finally {
     clearTimeout(timer);
+    // #5766 — guarantee the heartbeat interval is cleared even if the Promise
+    // executor threw synchronously (spawn/buildSpawnEnv config error) before
+    // finish() ran. clearInterval on an already-cleared handle is a safe no-op.
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
   }
 }

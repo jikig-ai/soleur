@@ -83,7 +83,7 @@ The one-person billion-dollar company is not automatic. It requires three things
 
 **A lifecycle, not a prompt.** The founders who plateau at point solutions are using AI transactionally: here is a task, here is a response, done. The founders who build compound organizations treat each task as a step in a lifecycle — brainstorm, plan, implement, review, and compound. The compound step is not optional. It is what makes the next session better than this one.
 
-**Judgment at every gate.** The system executes. The founder decides. This is the design. Human-in-the-loop decision gates are not a concession to AI limitations — they are the architecture that lets a single person exercise judgment across all nine domains without being overwhelmed by execution. The founder who stays in the judgment role rather than the execution role is the founder who can actually manage a nine-department organization alone.
+**Judgment at every gate.** The system executes. The founder decides. This is the design. [Human-in-the-loop decision gates]({{ site.url }}/blog/soleur-vs-polsia/) are not a concession to AI limitations — they are the architecture that lets a single person exercise judgment across all nine domains without being overwhelmed by execution. The founder who stays in the judgment role rather than the execution role is the founder who can actually manage a nine-department organization alone.
 
 ## The Competitive Window
 

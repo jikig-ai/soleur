@@ -52,3 +52,10 @@ jobs:
         uses: ./.github/actions/dev-migration-drift-probe
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          # Scheduled surface is the SOLE authority for byok RPC body-marker
+          # drift: ::error:: + Sentry event + fail-loud (exit 1). PR CI
+          # (tenant-integration.yml) forwards neither → ::warning::-only, so a
+          # pre-existing dev-infra drift never reddens or misattributes to an
+          # unrelated PR (#5920).
+          sentry-dsn: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+          fail-on-rpc-body-drift: 'true'

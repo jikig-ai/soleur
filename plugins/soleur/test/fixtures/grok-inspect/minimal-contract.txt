@@ -1,0 +1,10 @@
+  Skills (10)
+  └ brainstorm                        plugin: soleur
+
+  Agents (67)
+  └ soleur-engineering-review-security-sentinel     project
+  └ soleur-support-ticket-triage                    project
+
+  Plugins (2)
+  └ soleur (project, enabled)         94 skills, 67 agents, hooks
+  └ other (user, enabled)             -

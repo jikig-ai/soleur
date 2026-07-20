@@ -59,6 +59,7 @@ vi.mock("@sentry/nextjs", () => ({
 // Import after mocks
 import {
   notifyOfflineUser,
+  notifyInboxItem,
   sendPushNotifications,
   sendEmailNotification,
 } from "../server/notifications";
@@ -435,6 +436,236 @@ describe("notifications", () => {
       });
 
       expect(mockCaptureException).not.toHaveBeenCalled();
+    });
+  });
+
+  // cost_breaker_tripped variant (feat-l5-runaway-guard PR-A). Honest,
+  // dollar-denominated halt notification. AC4: dollars (not tokens),
+  // amount-vs-ceiling, which_window, never implies the run completed.
+  describe("cost_breaker_tripped variant", () => {
+    const costPayload = {
+      type: "cost_breaker_tripped" as const,
+      reason: "byok_cap_exceeded" as const,
+      which_window: "cap-1h" as const,
+      context: { cumulativeCents: 2014, ceilingCents: 2000 },
+    };
+
+    test("push body carries dollars, window, and never implies completion", async () => {
+      mockSendNotification.mockResolvedValue({});
+      mockFrom.mockReturnValue({ update: () => ({ in: () => ({ error: null }) }) });
+      const subscriptions = [
+        { id: "sub-1", endpoint: "https://push.example.com/1", p256dh: "k", auth: "a" },
+      ];
+
+      await sendPushNotifications(subscriptions, costPayload);
+
+      const body = JSON.parse(mockSendNotification.mock.calls[0][1] as string);
+      // Dollars, not tokens.
+      expect(body.body).toContain("$20.14");
+      expect(body.body).toContain("$20.00");
+      expect(body.body).not.toMatch(/token/i);
+      // Never implies the run finished.
+      expect(body.body).not.toMatch(/completed|finished successfully|shipped/i);
+      expect(body.body).toContain("no pull request");
+      // Deep link routes to the halt banner surface.
+      expect(body.data.url).toContain("/dashboard");
+    });
+
+    test("email carries amount-vs-ceiling and an honest subject", async () => {
+      mockResendSend.mockResolvedValue({ data: { id: "msg-1" }, error: null });
+
+      await sendEmailNotification("founder@example.com", costPayload);
+
+      const call = mockResendSend.mock.calls[0][0];
+      expect(call.to).toContain("founder@example.com");
+      expect(call.html).toContain("$20.14");
+      expect(call.html).toContain("$20.00");
+      expect(call.html).not.toMatch(/completed|finished successfully/i);
+      expect(call.subject).toMatch(/spending cap|stopped/i);
+    });
+
+    test("leader_max_turns_exceeded carries no fabricated dollar figure", async () => {
+      mockSendNotification.mockResolvedValue({});
+      mockFrom.mockReturnValue({ update: () => ({ in: () => ({ error: null }) }) });
+      const subscriptions = [
+        { id: "sub-1", endpoint: "https://push.example.com/1", p256dh: "k", auth: "a" },
+      ];
+
+      await sendPushNotifications(subscriptions, {
+        type: "cost_breaker_tripped",
+        reason: "leader_max_turns_exceeded",
+        which_window: "spawn",
+        context: { cumulativeCents: null, ceilingCents: null },
+      });
+
+      const body = JSON.parse(mockSendNotification.mock.calls[0][1] as string);
+      // No fabricated dollar amount when we have no figure (turn-count halt).
+      expect(body.body).not.toMatch(/\$\d/);
+      expect(body.body).not.toMatch(/completed|finished successfully/i);
+    });
+
+    test("cap_check_unavailable does not claim the budget was exceeded or paused", async () => {
+      mockResendSend.mockResolvedValue({ data: { id: "msg-1" }, error: null });
+
+      await sendEmailNotification("founder@example.com", {
+        type: "cost_breaker_tripped",
+        reason: "cap_check_unavailable",
+        which_window: "cap-1h",
+        context: { cumulativeCents: null, ceilingCents: null },
+      });
+
+      const call = mockResendSend.mock.calls[0][0];
+      // A transient DB error must NOT read as "you overspent".
+      expect(call.html).not.toMatch(/exceeded your|over your (limit|cap|budget)/i);
+      // Nor as "paused" — cap_check_unavailable sets no runtime_paused_at and
+      // renders no Resume affordance (F6: don't send the founder hunting).
+      expect(call.html).not.toMatch(/paused/i);
+      // Apostrophes are HTML-entity-escaped at the sink (couldn&#39;t).
+      expect(call.html).toMatch(/couldn(&#39;|')t (verify|check)/i);
+    });
+  });
+
+  describe("notifyInboxItem", () => {
+    // Route from() by table so the insert (inbox_item), the push-subscription
+    // read/update (push_subscriptions), and the broadcast owner lookup
+    // (workspace_members) each get the right chain shape.
+    function routeFrom(opts: {
+      insert?: { data: unknown; error: unknown };
+      subscriptions?: unknown[];
+      owners?: unknown[];
+      ownersError?: unknown;
+    }) {
+      mockFrom.mockImplementation((table: string) => {
+        if (table === "inbox_item") {
+          return {
+            insert: () => ({
+              select: () => ({
+                single: () =>
+                  opts.insert ?? { data: { id: "ii-1" }, error: null },
+              }),
+            }),
+          };
+        }
+        if (table === "push_subscriptions") {
+          return {
+            select: () => ({
+              eq: () => ({ data: opts.subscriptions ?? [], error: null }),
+            }),
+            update: () => ({ in: () => ({ error: null }) }),
+            delete: () => ({ eq: () => ({ error: null }) }),
+          };
+        }
+        if (table === "workspace_members") {
+          return {
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  data: opts.owners ?? [],
+                  error: opts.ownersError ?? null,
+                }),
+              }),
+            }),
+          };
+        }
+        throw new Error(`unexpected table ${table}`);
+      });
+    }
+
+    test("inserts the row once then dispatches a push (targeted)", async () => {
+      routeFrom({
+        subscriptions: [
+          { id: "sub-1", endpoint: "https://push.example/1", p256dh: "k", auth: "a" },
+        ],
+      });
+      mockSendNotification.mockResolvedValue({});
+
+      await notifyInboxItem({
+        workspaceId: "ws-1",
+        userId: "user-1",
+        severity: "info",
+        source: "task_completed",
+        title: "Chief Legal Officer finished",
+        sourceRef: { conversationId: "conv-9" },
+        deepLinkPath: "/dashboard/chat/conv-9",
+      });
+
+      // Push body carries the per-item tag key + the server-built deep link.
+      expect(mockSendNotification).toHaveBeenCalledTimes(1);
+      const body = mockSendNotification.mock.calls[0][1] as string;
+      expect(body).toContain('"inboxItemId":"ii-1"');
+      expect(body).toContain("/dashboard/chat/conv-9");
+      expect(mockResendSend).not.toHaveBeenCalled();
+    });
+
+    test("deduped insert (23505) dispatches NO push", async () => {
+      routeFrom({
+        insert: { data: null, error: { code: "23505", message: "dup" } },
+        subscriptions: [
+          { id: "sub-1", endpoint: "https://push.example/1", p256dh: "k", auth: "a" },
+        ],
+      });
+
+      await notifyInboxItem({
+        workspaceId: "ws-1",
+        userId: "user-1",
+        severity: "info",
+        source: "task_completed",
+        title: "Chief Legal Officer finished",
+        deepLinkPath: "/dashboard/chat/conv-9",
+      });
+
+      // Retry re-insert is a no-op → no re-push, no email.
+      expect(mockSendNotification).not.toHaveBeenCalled();
+      expect(mockResendSend).not.toHaveBeenCalled();
+    });
+
+    test("action_required insert failure mirrors to Sentry op=notify-inbox-action-required and pushes nothing", async () => {
+      routeFrom({
+        insert: { data: null, error: { code: "23502", message: "not null" } },
+      });
+
+      await notifyInboxItem({
+        workspaceId: "ws-1",
+        userId: "user-1",
+        severity: "action_required",
+        source: "system",
+        title: "From Soleur: billing failed",
+        deepLinkPath: "/dashboard",
+      });
+
+      expect(mockSendNotification).not.toHaveBeenCalled();
+      // A non-Error supabase failure routes through captureMessage; the op tag
+      // is what the Sentry alert rule keys on.
+      const mirrored =
+        mockCaptureMessage.mock.calls.some(
+          (c) => (c[1] as { tags?: { op?: string } })?.tags?.op === "notify-inbox-action-required",
+        ) ||
+        mockCaptureException.mock.calls.some(
+          (c) => (c[1] as { tags?: { op?: string } })?.tags?.op === "notify-inbox-action-required",
+        );
+      expect(mirrored).toBe(true);
+    });
+
+    test("broadcast (userId null) dispatches to every workspace Owner", async () => {
+      routeFrom({
+        owners: [{ user_id: "owner-a" }, { user_id: "owner-b" }],
+        subscriptions: [
+          { id: "sub-1", endpoint: "https://push.example/1", p256dh: "k", auth: "a" },
+        ],
+      });
+      mockSendNotification.mockResolvedValue({});
+
+      await notifyInboxItem({
+        workspaceId: "ws-1",
+        userId: null,
+        severity: "info",
+        source: "system",
+        title: "From Soleur: update",
+        deepLinkPath: "/dashboard",
+      });
+
+      // One push per Owner (each Owner has one subscription in this fixture).
+      expect(mockSendNotification).toHaveBeenCalledTimes(2);
     });
   });
 });

@@ -697,7 +697,9 @@ describe("post_discord webhook URL resolution", () => {
 
   test("skips posting when no webhook URLs set", () => {
     const result = runFunction(`post_discord "test content"`);
-    expect(result.exitCode).toBe(0);
+    // #6065: credential-skip now returns the skip sentinel (3), not 0 —
+    // an all-skip file must stay `scheduled`, never flip to `published`.
+    expect(result.exitCode).toBe(3);
     expect(result.stderr).toContain("No Discord webhook URL set");
   });
 });
@@ -755,7 +757,7 @@ describe("post_linkedin", () => {
     const result = runFunction(
       `post_linkedin "${SAMPLE_CONTENT}"`
     );
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(3); // #6065: skip sentinel, not 0
     expect(result.stderr).toContain("LINKEDIN_ACCESS_TOKEN not set");
     expect(result.stderr).toContain("Skipping LinkedIn posting");
   });
@@ -771,7 +773,7 @@ describe("post_linkedin", () => {
     `,
       { LINKEDIN_ACCESS_TOKEN: "test-token" }
     );
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(3); // #6065: empty-section skip → sentinel
     expect(result.stderr).toContain("No LinkedIn Personal content found");
   });
 
@@ -871,7 +873,10 @@ GHMOCK
       source '${SCRIPT_PATH}'
       post_linkedin_company "${SAMPLE_CONTENT}"
     `], { env: { ...BASE_ENV } });
-    expect(result.exitCode).toBe(0);
+    // #6065: the tracker-route skip (Decision D1) returns the skip sentinel (3)
+    // even though it durably records to the rolling tracker — it posted nowhere
+    // on the public channel, so the file must not flip to `published`.
+    expect(result.exitCode).toBe(3);
     expect(decode(result.stderr)).toContain("LINKEDIN_ORG_ACCESS_TOKEN not set");
     expect(decode(result.stderr)).toContain("Routing to rolling tracker");
   });
@@ -881,7 +886,7 @@ GHMOCK
       `post_linkedin_company "${SAMPLE_CONTENT}"`,
       { LINKEDIN_ORG_ACCESS_TOKEN: "test-token" }
     );
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(3); // #6065: skip sentinel, not 0
     expect(result.stderr).toContain("LINKEDIN_ORG_ID not set");
     expect(result.stderr).toContain("Skipping LinkedIn Company Page posting");
   });
@@ -894,7 +899,7 @@ GHMOCK
         LINKEDIN_ORG_ID: "12345",
       }
     );
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(3); // #6065: gate-off skip → sentinel
     expect(result.stderr).toContain("LINKEDIN_ALLOW_POST is not set");
     expect(result.stderr).toContain("Skipping LinkedIn Company Page posting");
   });
@@ -942,7 +947,7 @@ describe("post_bluesky", () => {
     const result = runFunction(
       `post_bluesky "${SAMPLE_CONTENT}"`
     );
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(3); // #6065: skip sentinel, not 0
     expect(result.stderr).toContain("Bluesky credentials not configured");
     expect(result.stderr).toContain("Skipping Bluesky posting");
   });
@@ -955,7 +960,7 @@ describe("post_bluesky", () => {
         BSKY_APP_PASSWORD: "test-password",
       }
     );
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(3); // #6065: gate-off skip → sentinel
     expect(result.stderr).toContain("BSKY_ALLOW_POST is not set");
     expect(result.stderr).toContain("Skipping Bluesky posting");
   });
@@ -975,7 +980,7 @@ describe("post_bluesky", () => {
         BSKY_ALLOW_POST: "true",
       }
     );
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(3); // #6065: empty-section skip → sentinel
     expect(result.stderr).toContain("No Bluesky content found");
   });
 

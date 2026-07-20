@@ -8,13 +8,16 @@
 //
 // Two load-bearing invariants (5-agent plan-review):
 //
-//   1. FINAL-ATTEMPT GATE. transformOutput fires on EVERY attempt's final
-//      result, not just the last. Writing unconditionally would append a
-//      `failed` row on attempt 0 AND a `completed` row on attempt 1 for a
-//      fail-then-succeed run. So: write on success (always terminal) OR on a
-//      FINAL failed attempt (attempt >= maxAttempts-1). Fail-SAFE to write when
-//      attempt data is absent (attempt=0/maxAttempts=1 → final). Mirrors the
-//      Sentry-heartbeat gate in _cron-shared.ts. See
+//   1. THROWN-ONLY FINAL-ATTEMPT GATE (#5674). transformOutput fires on EVERY
+//      attempt's final result. A cron fails two ways: it THREW (Inngest retries)
+//      or it RETURNED { ok:false } (terminal — NO retry under retries:1). Only
+//      the THROWN path may be gated on the final attempt (a thrown non-final
+//      attempt will retry → suppress the interim write to avoid a double-row). A
+//      returned ok:false lands at attempt 0 (non-final) and is NEVER retried, so
+//      it MUST be written on the spot — gating it on isFinalAttempt would drop
+//      the exact failure we exist to record. So: write on success (terminal), on
+//      a returned ok:false (terminal), OR on a FINAL thrown attempt. Fail-SAFE to
+//      write when attempt data is absent (attempt=0/maxAttempts=1 → final). See
 //      knowledge-base/.../2026-06-12-inngest-cron-heartbeat-gate-on-final-attempt-and-step-memoization.md
 //
 //   2. ATTRIBUTION FROM event.name, NOT caller data. trigger_source is derived
@@ -35,6 +38,7 @@ import * as Sentry from "@sentry/nextjs";
 import { getServiceClient } from "@/lib/supabase/service";
 import { ROUTINE_METADATA } from "@/server/inngest/routine-metadata";
 import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
+import { finishRoutineRunProgress } from "@/server/inngest/routine-run-progress";
 
 const ERROR_SUMMARY_MAX = 500;
 
@@ -49,6 +53,16 @@ function errorSummary(err: unknown): string {
   // boundary (tokens, JWTs, conn-string passwords, emails, UUIDs, IPs).
   const firstLine = msg.split("\n")[0] ?? "";
   return redactCommandForDisplay(firstLine).slice(0, ERROR_SUMMARY_MAX);
+}
+
+// #5674: error_summary for a handler that RETURNED { ok:false } (without
+// throwing). Same firstLine → redact → truncate discipline as errorSummary()
+// above, with a non-null fallback so a returned failure with no reason is still
+// recorded as failed (never a null error_summary on a failed row).
+function formatErrorSummary(summary?: string): string {
+  const firstLine = (summary ?? "").split("\n")[0] ?? "";
+  const scrubbed = redactCommandForDisplay(firstLine).slice(0, ERROR_SUMMARY_MAX);
+  return scrubbed || "cron returned ok:false (see Sentry)";
 }
 
 interface Attribution {
@@ -133,11 +147,24 @@ export const runLogMiddleware = new InngestMiddleware({
             step?: unknown;
           }) {
             if (step) return; // step-level event — only the function-final result lands a row
-            const failed = result.error != null;
+            // #5674: a cron can FAIL two ways — it THREW (Inngest retries), or it
+            // RETURNED { ok:false } (terminal — a returned value never retries,
+            // regardless of the `retries` setting; only a thrown error retries).
+            // Both are `failed` rows, but only the THROWN path may be gated on the
+            // final attempt: a returned ok:false lands at attempt 0 (non-final)
+            // and is never retried, so gating it on isFinalAttempt would DROP the
+            // exact failure we exist to record (the P0 regression the first plan
+            // draft codified).
+            const threw = result.error != null;
+            const data = result.data as
+              | { ok?: boolean; errorSummary?: string }
+              | undefined;
+            const failed = threw || data?.ok === false;
             const isFinalAttempt = attempt >= maxAttempts - 1;
-            // FINAL-ATTEMPT GATE: success is always terminal; a failed
-            // non-final attempt will retry → do not write (avoids double-row).
-            if (failed && !isFinalAttempt) return;
+            // Gate ONLY the thrown path: a thrown error on a non-final attempt
+            // will retry, so suppress the interim write (avoids a double-row on a
+            // fail-then-succeed run). A returned ok:false is terminal → write now.
+            if (threw && !isFinalAttempt) return;
 
             const endedAtMs = Date.now();
             const attribution = deriveAttribution(eventName, eventData);
@@ -153,8 +180,23 @@ export const runLogMiddleware = new InngestMiddleware({
                 p_started_at: new Date(startedAtMs).toISOString(),
                 p_ended_at: new Date(endedAtMs).toISOString(),
                 p_duration_ms: Math.max(0, endedAtMs - startedAtMs),
-                p_error_summary: failed ? errorSummary(result.error) : null,
+                // Reason from whichever failure source is present: a thrown
+                // error scrubs result.error; a returned ok:false scrubs the
+                // handler's data.errorSummary (#5674). A completed run is null.
+                p_error_summary: threw
+                  ? errorSummary(result.error)
+                  : data?.ok === false
+                    ? formatErrorSummary(data?.errorSummary)
+                    : null,
               });
+              // #5766: the terminal row landed — delete the live-state row (a run
+              // that reaches here is no longer in-flight). Placed AFTER the write
+              // resolves and INSIDE the try (arch-A-2 / DI-P1-C): if write_routine_run
+              // threw, we skip this and the live row survives so the reader shows
+              // "stuck" instead of vanishing the run. finishRoutineRunProgress is
+              // itself fail-soft (own Sentry mirror), so it never poisons the write
+              // path. A no-op (0 rows) for light crons that never wrote a live row.
+              await finishRoutineRunProgress(runId);
             } catch (e) {
               // Fail-soft: mirror to Sentry, never propagate (no retry-poisoning).
               try {

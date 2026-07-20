@@ -96,10 +96,10 @@ done
 # The template unit's `@` needs its own anchors (regex-escaping differs).
 assert_grep "delivers cron-egress-alarm@.service (source=)" 'source += +"\$\{path\.module\}/cron-egress-alarm@\.service"' "$SERVER_TF"
 SERVER_BLOCK="$(awk '/resource "terraform_data" "cron_egress_firewall"/,/^}/' "$SERVER_TF")"
-if echo "$SERVER_BLOCK" | grep -qE 'server_id += +hcloud_server\.web\.id'; then
-  PASS=$((PASS + 1)); echo "  PASS: cron_egress_firewall trigger folds hcloud_server.web.id"
+if echo "$SERVER_BLOCK" | grep -qE 'server_id += +hcloud_server\.web\["web-1"\]\.id'; then
+  PASS=$((PASS + 1)); echo "  PASS: cron_egress_firewall trigger folds hcloud_server.web[\"web-1\"].id"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: cron_egress_firewall trigger does not fold hcloud_server.web.id"
+  FAIL=$((FAIL + 1)); echo "  FAIL: cron_egress_firewall trigger does not fold hcloud_server.web[\"web-1\"].id"
 fi
 if echo "$SERVER_BLOCK" | grep -q 'mkdir -p /etc/soleur'; then
   PASS=$((PASS + 1)); echo "  PASS: parent dir created before file provisioners (scp does not mkdir)"
@@ -152,6 +152,20 @@ assert_grep "default-drop terminal rule present" 'counter drop comment "soleur-e
 assert_grep "DNS pin accept rule" 'udp dport 53 ip daddr @soleur_egress_dns accept' "$LOADER"
 assert_grep "DNS exfil drop is logged" 'egress-dns-exfil' "$LOADER"
 assert_grep "host-gateway :8288 accept" 'tcp dport 8288 accept' "$LOADER"
+# Dedicated Inngest host egress (#6178, ADR-100 cutover): the container must be
+# allowed to reach the dedicated host 10.0.1.40:8288. Paren-safe ERE pattern —
+# stop before the `(#6178)` comment tail (an unescaped `(` is an ERE group).
+assert_grep "dedicated inngest host :8288 accept (#6178)" \
+  'ip daddr 10\.0\.1\.40 tcp dport 8288 accept comment "soleur-egress: dedicated inngest host' "$LOADER"
+# Line-order: the dedicated-host accept MUST precede the terminal default drop
+# (first-match-wins), mirroring the RESOLVE_LINE < DROP_LINE block above.
+DEDICATED_LINE="$(grep -n 'ip daddr 10\.0\.1\.40 tcp dport 8288 accept' "$LOADER" | head -1 | cut -d: -f1)"
+DROP_RULE_LINE="$(grep -n 'counter drop comment "soleur-egress: default drop"' "$LOADER" | head -1 | cut -d: -f1)"
+if [[ -n "$DEDICATED_LINE" && -n "$DROP_RULE_LINE" && "$DEDICATED_LINE" -lt "$DROP_RULE_LINE" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: dedicated inngest host accept precedes the default drop (line $DEDICATED_LINE < $DROP_RULE_LINE)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: dedicated inngest host accept must precede the default drop (dedicated=$DEDICATED_LINE drop=$DROP_RULE_LINE)"
+fi
 assert_grep "bridge gateway derived, not hardcoded" 'docker network inspect bridge' "$LOADER"
 assert_grep "IPv6 bypass guard" 'EnableIPv6' "$LOADER"
 assert_grep "jump rule scoped to the bridge interface" 'iifname "\$BRIDGE_IF" counter jump SOLEUR-EGRESS' "$LOADER"
@@ -512,14 +526,31 @@ fi
 assert_not_grep "Better Stack is HOST egress (must not be in the container allowlist)" '^(logs\.)?(betterstack|betteruptime)' "$ALLOWLIST"
 assert_not_grep "GHCR is HOST egress (must not be in the container allowlist)" '^ghcr\.io$' "$ALLOWLIST"
 
-echo "-- cloud-init fresh-host mirror --"
-assert_grep "cloud-init writes the loader" '/usr/local/bin/cron-egress-nftables\.sh' "$CLOUD_INIT"
-assert_grep "cloud-init writes the resolver" '/usr/local/bin/cron-egress-resolve\.sh' "$CLOUD_INIT"
-assert_grep "cloud-init writes the post-apply assert script" '/usr/local/bin/cron-egress-postapply-assert\.sh' "$CLOUD_INIT"
-assert_grep "cloud-init writes the allowlist" '/etc/soleur/cron-egress-allowlist\.txt' "$CLOUD_INIT"
+echo "-- fresh-host mirror via the baked host-scripts set (#5921) --"
+# #5921: the cron-egress artifacts moved out of inline cloud-init write_files: (base64 blobs
+# that blew the 32,768-byte user_data cap) into the baked /opt/soleur/host-scripts/ set. They
+# are delivered on a fresh host by server.tf.local.host_script_files + the Dockerfile COPY +
+# soleur-host-bootstrap.sh's install loop. The systemctl enable + package steps stay inline.
+BOOTSTRAP="$SCRIPT_DIR/soleur-host-bootstrap.sh"
+DOCKERFILE="$SCRIPT_DIR/../Dockerfile"
+for f in cron-egress-nftables.sh cron-egress-resolve.sh cron-egress-alarm.sh \
+  cron-egress-postapply-assert.sh cron-egress-allowlist.txt cron-egress-allowlist-cidr.txt \
+  cron-egress-firewall.service cron-egress-resolve.service cron-egress-resolve.timer \
+  cron-egress-alarm@.service; do
+  # Scope the membership check to the host_script_files array (mirrors journald-config.test.sh)
+  # so a `"$f"` appearing only in an SSH-provisioner reference cannot satisfy it.
+  assert_cmd "baked set includes $f (host_script_files array)" \
+    bash -c "awk '/host_script_files = \[/,/^  \]/' '$SERVER_TF' | grep -qF -- '\"$f\"'"
+  assert_grep "Dockerfile bakes $f" "/app/infra/$f" "$DOCKERFILE"
+done
+assert_grep "bootstrap installs cron-egress scripts (0755)" 'cron-egress-nftables\.sh cron-egress-resolve\.sh cron-egress-alarm\.sh' "$BOOTSTRAP"
+assert_grep "bootstrap installs cron-egress allowlists into /etc/soleur (0644)" 'install -D -m 0644 .* "/etc/soleur/\$f"' "$BOOTSTRAP"
+assert_not_grep "cron-egress loader is NOT re-inlined in cloud-init write_files" '- path: /usr/local/bin/cron-egress-nftables\.sh' "$CLOUD_INIT"
 assert_grep "cloud-init enables the firewall unit" 'systemctl enable --now cron-egress-firewall\.service' "$CLOUD_INIT"
 assert_grep "cloud-init enables the resolve timer" 'systemctl enable --now cron-egress-resolve\.timer' "$CLOUD_INIT"
-assert_grep "cloud-init installs nftables" '^ *- nftables$' "$CLOUD_INIT"
+# #6090: package install moved from cloud-config packages: into an instrumented runcmd apt block
+# (so a config-phase apt hang becomes a named fatal). nftables is still installed — now via apt-get.
+assert_grep "cloud-init installs nftables (runcmd apt block, #6090)" 'apt-get install -y .*nftables' "$CLOUD_INIT"
 
 echo "-- Phase 2.1: assertion-block self-reporting sentinels (#5279) --"
 # The post-apply assertion block (server.tf, the 2nd remote-exec) runs under

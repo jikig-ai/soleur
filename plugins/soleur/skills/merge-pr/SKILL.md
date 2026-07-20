@@ -151,8 +151,10 @@ CHANGELOG requires special handling to preserve entries from both sides without 
 Read both sides using git stage numbers (NOT `git show HEAD:` which only gives one side):
 
 ```bash
-git show :2:plugins/soleur/CHANGELOG.md > /tmp/changelog-ours.md
-git show :3:plugins/soleur/CHANGELOG.md > /tmp/changelog-theirs.md
+ours=$(mktemp -t changelog-ours.XXXXXXXX.md); theirs=$(mktemp -t changelog-theirs.XXXXXXXX.md)
+git show :2:plugins/soleur/CHANGELOG.md > "$ours"
+git show :3:plugins/soleur/CHANGELOG.md > "$theirs"
+echo "ours=$ours theirs=$theirs"  # echo the paths: the Read/Write steps below need them, and a separate tool call does not inherit these vars
 ```
 
 - `:2:` is "ours" (feature branch)
@@ -383,7 +385,7 @@ Navigate to the main repository root directory (the parent of `.worktrees/`). Ru
 ### 6.2 Run cleanup
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
 ```
 
 This detects `[gone]` branches (remote deleted after merge), removes worktrees, archives spec directories, deletes local branches, and pulls latest main so the next worktree branches from the current state.

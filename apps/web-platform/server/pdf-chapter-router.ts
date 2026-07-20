@@ -43,7 +43,7 @@ import { reportSilentFallback } from "./observability";
 import type { ChapterIndex } from "./pdf-text-extract";
 import { sanitizePromptIdentifier } from "./soleur-go-runner";
 
-const ROUTING_MODEL = "claude-sonnet-4-6";
+const ROUTING_MODEL = "claude-sonnet-5";
 const AMBIGUOUS_SENTINEL = "AMBIGUOUS";
 /**
  * Levenshtein-distance ratio threshold for the title-fuzzy-match

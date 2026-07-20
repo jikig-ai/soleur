@@ -15,5 +15,13 @@
 // per-test delete restores the unset state for its own scenarios.
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { installViWaitForFloor } from "./helpers/install-vi-waitfor-floor";
 
 process.env.WORKSPACES_ROOT ||= join(tmpdir(), "soleur-vitest-workspaces");
+
+// #5796 — raise vitest's `vi.waitFor` default timeout floor (1s → 10s) for the
+// node/unit project. Must mirror the identical install in setup-dom.ts: a
+// setup-dom-only fix would leave the node-project sites (cc-dispatcher.test.ts,
+// server/templates/is-template-authorized.test.ts, …) at the 1s default. See
+// ./helpers/install-vi-waitfor-floor.ts for the full rationale.
+installViWaitForFloor();

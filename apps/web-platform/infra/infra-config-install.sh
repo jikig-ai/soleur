@@ -3,7 +3,7 @@
 # /hooks/infra-config webhook handler (#4827, Ref #4804).
 #
 # WHY THIS EXISTS: infra-config-apply.sh runs as User=deploy (webhook.service).
-# Its 11 managed files live in root:root 0755 destination directories
+# Its 15 managed files live in root:root 0755 destination directories
 # (/usr/local/bin, /etc/systemd/system, /etc/webhook). The deploy user cannot
 # mktemp inside those dirs — EACCES — so the handler could never land a single
 # file (the #4827 bug: every push wrote 0 files). systemd ReadWritePaths elevates
@@ -13,7 +13,7 @@
 # wildcard-free sudoers grant
 # (Cmnd_Alias INFRA_CONFIG_INSTALL = /usr/local/bin/infra-config-install). sudo
 # permits the bare command with ANY arguments — so the SECURITY BOUNDARY is here,
-# not in sudoers: the helper hardcodes the 7 allowlisted destinations and refuses
+# not in sudoers: the helper hardcodes the 15 allowlisted destinations and refuses
 # anything else. Because the helper runs as root it has no EACCES problem in the
 # dest dirs: it mktemps in the destination directory itself and does a
 # same-filesystem atomic rename.
@@ -69,6 +69,9 @@ declare -rA DEST_SPEC=(
   ["/usr/local/bin/inngest-wiped-volume-verify.sh"]="755 root:root"
   ["/usr/local/bin/cat-inngest-verify-state.sh"]="755 root:root"
   ["/usr/local/bin/inngest-inventory.sh"]="755 root:root"
+  ["/usr/local/bin/git-lock-chardevice-sweep.sh"]="755 root:root"
+  ["/usr/local/bin/inngest-registry-probe.sh"]="755 root:root"
+  ["/usr/local/bin/inngest-doublefire-probe.sh"]="755 root:root"
 )
 
 # TEST_DESTDIR redirects writes to a sandbox and skips chown (no root needed),

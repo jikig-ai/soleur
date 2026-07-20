@@ -1,9 +1,9 @@
 ---
 title: "Skill Libraries vs. Workflow Plugins: Two Shapes of Claude Code Extension"
 type: pillar
-publish_date: "2026-05-15"
+publish_date: 2026-07-14
 channels: discord, x, bluesky, linkedin-company
-status: draft
+status: published
 ---
 
 ## Discord

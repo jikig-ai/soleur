@@ -12,7 +12,8 @@
  * 4 KB (comments) with a marker pointing at html_url for the full text.
  */
 
-import { githubApiGet } from "./github-api";
+import type { BoardIssueInput } from "@/lib/workstream";
+import { githubApiGet, githubApiPost, GitHubApiError } from "./github-api";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 
@@ -70,7 +71,7 @@ export interface CommentSummary {
 
 interface GhUser { login: string }
 interface GhLabel { name: string }
-interface GhMilestone { title: string }
+interface GhMilestone { number: number; title: string }
 
 interface GhIssueResponse {
   number: number;
@@ -84,6 +85,11 @@ interface GhIssueResponse {
   updated_at: string;
   html_url: string;
   user: GhUser;
+  // The list-issues endpoint ALSO returns pull requests; each carries a
+  // `pull_request` key (issues do not) — used to filter PRs out (#workstream).
+  pull_request?: unknown;
+  // completed | reopened | not_planned | duplicate | null (drives Done vs Cancelled).
+  state_reason?: string | null;
 }
 
 interface GhPullRequestResponse extends GhIssueResponse {
@@ -289,4 +295,227 @@ export async function listPullRequestComments(
   }
 
   return [...review, ...convo];
+}
+
+// ---------------------------------------------------------------------------
+// Workstream board reader
+// ---------------------------------------------------------------------------
+
+// GitHub `GET /repos/{owner}/{repo}/issues` returns max 100 items/page (default
+// 30) and — critically — includes PULL REQUESTS alongside issues. A single
+// `state=all` newest-first scan therefore spends its page budget on PRs and
+// recently-closed noise, silently dropping still-OPEN issues older than the
+// window so the board's active columns under-count. (Measured on jikig-ai/soleur
+// 2026-07-07: 238 of the newest 500 raw items were PRs, so open issues older
+// than the newest ~500 items — 4 of 5 "In progress" cards — never loaded.)
+//
+// So we split the read the way the board is shaped: OPEN issues populate every
+// active column (Backlog/Ready/In progress/In review/Blocked/Pending) and must
+// load in FULL (bounded only by a large safety cap); CLOSED issues only feed the
+// Done column, where the recently-closed are what matter, so they're windowed.
+const BOARD_PER_PAGE = 100;
+const MAX_OPEN_PAGES = 20; // ALL open issues (2000 headroom) — active columns must be complete
+const MAX_CLOSED_PAGES = 3; // Done column: most-recently-updated ~300 closed (old closures aren't actionable)
+
+function toBoardInput(item: GhIssueResponse): BoardIssueInput {
+  return {
+    number: item.number,
+    title: item.title,
+    body: item.body ?? null,
+    assignees: item.assignees.map((a) => a.login),
+    labels: item.labels.map(normalizeLabel),
+    state: item.state === "closed" ? "closed" : "open",
+    state_reason: item.state_reason ?? null,
+    authorLogin: item.user?.login ?? null,
+    milestone: item.milestone
+      ? { number: item.milestone.number, title: item.milestone.title }
+      : null,
+    created_at: item.created_at,
+    updated_at: item.updated_at,
+  };
+}
+
+/**
+ * Page one issue `state` (query string) into `out`, skipping PRs. Returns true
+ * iff the page cap was reached with a still-FULL final page — i.e. a tail was
+ * likely dropped (a short page means we exhausted the list cleanly).
+ */
+async function pageIssuesInto(
+  out: BoardIssueInput[],
+  installationId: number,
+  owner: string,
+  repo: string,
+  query: string,
+  maxPages: number,
+): Promise<boolean> {
+  for (let page = 1; page <= maxPages; page++) {
+    const raw = await githubApiGet<GhIssueResponse[]>(
+      installationId,
+      `/repos/${owner}/${repo}/issues?${query}&per_page=${BOARD_PER_PAGE}&page=${page}`,
+    );
+    for (const item of raw) {
+      if (item.pull_request) continue; // skip PRs — board shows issues only
+      out.push(toBoardInput(item));
+    }
+    if (raw.length < BOARD_PER_PAGE) return false; // short page → exhausted, no tail
+    if (page === maxPages) return true; // full final page → tail likely dropped
+  }
+  return false;
+}
+
+/**
+ * List a repo's issues for the Workstream board, narrowed to `BoardIssueInput`
+ * (the shape the pure `githubIssueToWorkstreamIssue` mapper consumes).
+ *
+ * Split read (see the note above BOARD_PER_PAGE):
+ *   - ALL open issues — `?state=open`, paged to completion (MAX_OPEN_PAGES is a
+ *     safety bound; hitting it is a real truncation of active work → Sentry).
+ *   - Recently-closed — `?state=closed&sort=updated&direction=desc`, windowed to
+ *     MAX_CLOSED_PAGES for the Done column (bounded BY DESIGN, not a data bug).
+ *   - The endpoint also returns PRs — items with a `pull_request` key are skipped.
+ *
+ * Errors PROPAGATE (githubApiGet throws on !ok) — the caller's empty-vs-throw
+ * split must let a GitHub failure surface (route → 502 / tool → isError), never
+ * masquerade as an empty board.
+ */
+export async function listRepoIssues(
+  installationId: number,
+  owner: string,
+  repo: string,
+): Promise<BoardIssueInput[]> {
+  const out: BoardIssueInput[] = [];
+
+  // Active columns: every OPEN issue must load, or the board under-counts.
+  const openTruncated = await pageIssuesInto(
+    out,
+    installationId,
+    owner,
+    repo,
+    "state=open",
+    MAX_OPEN_PAGES,
+  );
+  if (openTruncated) {
+    log.warn(
+      { owner, repo, loaded: out.length, cap: MAX_OPEN_PAGES * BOARD_PER_PAGE },
+      "Workstream OPEN-issue read hit the page cap — active columns may under-count (SOLEUR-DEBT)",
+    );
+    // Mirror to Sentry (cq-silent-fallback-must-mirror-to-sentry) so an on-call
+    // sees a truncated active board without SSH.
+    reportSilentFallback(
+      new Error("workstream open-issue read hit the page cap"),
+      {
+        feature: "github-read-tools",
+        op: "list-repo-issues-open-cap",
+        extra: { owner, repo, loaded: out.length },
+      },
+    );
+  }
+
+  // Done column only needs the recently-closed — windowed on purpose (no warn).
+  await pageIssuesInto(
+    out,
+    installationId,
+    owner,
+    repo,
+    "state=closed&sort=updated&direction=desc",
+    MAX_CLOSED_PAGES,
+  );
+
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Workstream board Status reader (Phase 2, ADR-097)
+//
+// The canonical "Soleur Kanban" Project v2 board is the source of truth for a
+// card's column. This reads each board item's Status single-select via GraphQL
+// so the Workstream tab can PREFER it over label derivation. A Project v2 board
+// can span multiple repos, so items are matched by `nameWithOwner` (not just
+// issue number, which collides across repos). Bounded page count keeps each
+// request small (500k-node GraphQL cost cap) — 512 board items ≈ 6 pages.
+// ---------------------------------------------------------------------------
+
+const MAX_BOARD_STATUS_PAGES = 10;
+
+interface BoardStatusProjectV2 {
+  items: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    nodes: Array<{
+      content:
+        | { number?: number; repository?: { nameWithOwner?: string } }
+        | null;
+      fieldValueByName: { name?: string } | null;
+    }>;
+  };
+}
+
+interface BoardStatusGqlResponse {
+  data?: {
+    organization?: { projectV2?: BoardStatusProjectV2 | null } | null;
+  };
+  errors?: Array<{ message: string }>;
+}
+
+const BOARD_STATUS_QUERY = `query($org:String!,$num:Int!,$field:String!,$cursor:String){
+  organization(login:$org){
+    projectV2(number:$num){
+      items(first:100, after:$cursor){
+        pageInfo{ hasNextPage endCursor }
+        nodes{
+          content{ ... on Issue { number repository { nameWithOwner } } }
+          fieldValueByName(name:$field){ ... on ProjectV2ItemFieldSingleSelectValue { name } }
+        }
+      }
+    }
+  }
+}`;
+
+/**
+ * Fetch `issueNumber → board Status name` for the issues of `repoNwo`
+ * (e.g. "jikig-ai/soleur") that live on the org's Project v2 board
+ * `projectNumber` (Phase 2, ADR-097).
+ *
+ * Requires the App installation to have `organization_projects: read`. THROWS on
+ * any GitHub/GraphQL error (403 = App not granted) so the caller degrades to
+ * label derivation + mirrors to Sentry — a failed board read must NEVER
+ * masquerade as "every issue is Backlog".
+ */
+export async function fetchBoardStatusMap(
+  installationId: number,
+  org: string,
+  projectNumber: number,
+  repoNwo: string,
+): Promise<Map<number, string>> {
+  const map = new Map<number, string>();
+  const wanted = repoNwo.toLowerCase();
+  let cursor: string | null = null;
+  for (let page = 0; page < MAX_BOARD_STATUS_PAGES; page++) {
+    const resp: BoardStatusGqlResponse | null =
+      await githubApiPost<BoardStatusGqlResponse>(installationId, "/graphql", {
+        query: BOARD_STATUS_QUERY,
+        variables: { org, num: projectNumber, field: "Status", cursor },
+      });
+    if (resp?.errors?.length) {
+      throw new GitHubApiError(
+        `board Status GraphQL errors: ${resp.errors
+          .map((e) => e.message)
+          .join("; ")}`,
+        502,
+      );
+    }
+    const proj: BoardStatusProjectV2 | null | undefined =
+      resp?.data?.organization?.projectV2;
+    if (!proj) break; // no project / no access → empty map, caller keeps fallback
+    for (const node of proj.items.nodes) {
+      const num = node.content?.number;
+      const name = node.fieldValueByName?.name;
+      const nwo = node.content?.repository?.nameWithOwner?.toLowerCase();
+      if (typeof num === "number" && name && nwo === wanted) {
+        map.set(num, name);
+      }
+    }
+    if (!proj.items.pageInfo.hasNextPage) break;
+    cursor = proj.items.pageInfo.endCursor;
+  }
+  return map;
 }

@@ -1,9 +1,9 @@
 ---
 title: "From Scattered Positioning to a Full Brand Guide in Two Sessions"
 type: case-study
-publish_date: 2026-03-24
+publish_date: 2026-07-07
 channels: discord, x, bluesky, linkedin-company
-status: draft
+status: stale
 ---
 
 ## Discord

@@ -46,6 +46,16 @@ jobs:
           created=0
           skipped=0
 
+          # Liveness guard (#5999, ADR-094): constitutional paths that MUST be
+          # evaluated on every run. The repo-root AGENTS.core.md lives OUTSIDE
+          # `find knowledge-base`, so it is appended to the feed below AND
+          # tracked here. If a required path is silently dropped (frontmatter or
+          # cadence removed, invalid date, or absent from the feed) the run fails
+          # loudly rather than letting its review clock rot unnoticed. This also
+          # trips if the Phase 3 frontmatter is ever removed from AGENTS.core.md.
+          required_paths=("AGENTS.core.md")
+          declare -A evaluated_required=()
+
           # Ensure label exists (once, before loop)
           gh label create review-reminder --description "Auto-created review reminder" --color "0E8A16" 2>/dev/null || true
 
@@ -87,6 +97,12 @@ jobs:
               next_due_epoch=$((last_epoch + cadence_days * 86400))
               days_until=$(( (next_due_epoch - today_epoch) / 86400 ))
             fi
+
+            # Liveness: mark required constitutional paths as evaluated — their
+            # review clock was successfully read (regardless of whether due yet).
+            for rp in "${required_paths[@]}"; do
+              [[ "$file" == "$rp" ]] && evaluated_required["$rp"]=1
+            done
 
             # Flag documents due within 7 days or already past due
             if [[ $days_until -gt 7 ]]; then
@@ -148,7 +164,19 @@ jobs:
               exit 1
             fi
 
-          done < <(find knowledge-base -name '*.md' -type f 2>/dev/null)
+          done < <( { find knowledge-base -name '*.md' -type f 2>/dev/null; printf '%s\n' "${required_paths[@]}"; } )
+
+          # Liveness assert: every required constitutional path must have been
+          # evaluated. A miss means its frontmatter/cadence was removed or the
+          # path fell out of the feed — fail loudly so it is caught, not rotted.
+          missing_required=()
+          for rp in "${required_paths[@]}"; do
+            [[ -n "${evaluated_required[$rp]:-}" ]] || missing_required+=("$rp")
+          done
+          if [[ ${#missing_required[@]} -gt 0 ]]; then
+            echo "::error::Required constitutional path(s) not evaluated by the review scan: ${missing_required[*]}. Their last_reviewed/review_cadence frontmatter may have been removed, or the path dropped from the find feed (ADR-094, #5999)."
+            exit 1
+          fi
 
           echo ""
           echo "Summary: created=$created, skipped=$skipped"

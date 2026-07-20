@@ -10,6 +10,7 @@ import {
 } from "@/server/repo-readiness-self-heal";
 import { evaluateRepoReadiness } from "@/server/repo-readiness";
 import { ensureWorkspaceRepoCloned } from "@/server/ensure-workspace-repo";
+import { isValidGitWorkTree } from "@/server/git-worktree-validity";
 
 // FIX 1a (Phase 2): the dispatch self-heal orchestrator. The pure
 // `evaluateRepoReadiness` decision is reused as the first seam; the I/O seams
@@ -30,6 +31,11 @@ function makeSeams(over: Partial<RepoSelfHealSeams> = {}): RepoSelfHealSeams {
     setRepoStatus: vi.fn(async () => {}),
     ensureWorkspaceRepoCloned: vi.fn(async () => "ok" as const),
     gitDirExists: vi.fn(() => false),
+    // Validity (2026-06-19) defaults to false to mirror the absent-`.git`
+    // default of `gitDirExists` — the absent/graft paths route correctly. Tests
+    // exercising a VALID on-disk `.git` (the AC7 fast path) set this true; the
+    // corrupt-worktree tests set it via the real `isValidGitWorkTree`.
+    gitDirValid: vi.fn(() => false),
     reportDivergence: vi.fn(),
     ...over,
   };
@@ -66,7 +72,10 @@ describe("resolveRepoReadinessWithSelfHeal (FIX 1a — AC1)", () => {
     // The COMMON case: a ready workspace whose clone is already on disk. The
     // ONLY permitted cost here is the local gitDirExists (existsSync) probe — no
     // clone, no lock, no status write (and, in cc-dispatcher, no getFreshTenantClient).
-    const seams = makeSeams({ gitDirExists: vi.fn(() => true) });
+    const seams = makeSeams({
+      gitDirExists: vi.fn(() => true),
+      gitDirValid: vi.fn(() => true),
+    });
     const r = await resolveRepoReadinessWithSelfHeal(
       { ...baseArgs(), status: "ready" },
       seams,
@@ -75,6 +84,7 @@ describe("resolveRepoReadinessWithSelfHeal (FIX 1a — AC1)", () => {
     expect(seams.claimCloneLock).not.toHaveBeenCalled();
     expect(seams.ensureWorkspaceRepoCloned).not.toHaveBeenCalled();
     expect(seams.setRepoStatus).not.toHaveBeenCalled();
+    expect(seams.reportDivergence).not.toHaveBeenCalled();
   });
 
   it("AC6: ready + .git ABSENT + install + repoUrl → LOCK-FREE clone, .git materializes, returns ok WITHOUT setRepoStatus", async () => {
@@ -119,11 +129,13 @@ describe("resolveRepoReadinessWithSelfHeal (FIX 1a — AC1)", () => {
     expect(onDisk).toBe(true); // .git materialized
   });
 
-  it("AC6: ready + .git ABSENT + clone FAILED → setRepoStatus(error) + honest block { ok:false, code:'error' }", async () => {
-    // On the ready entry, a genuine clone failure must surface honestly (not
-    // silently fast-path {ok:true} with .git absent). The FAILURE sub-branch DOES
-    // write set_repo_status(error, reason) so the gate reads it back next dispatch
-    // (AC6c), plus the op:repo-readiness-self-heal Sentry mirror.
+  it("#5733 AC0f: ready + .git ABSENT + clone FAILED on a TEAM workspace (WS!==USER) → honest block + EMIT-ONLY, ZERO setRepoStatus (F4: a member must not flip a co-owned shared status)", async () => {
+    // baseArgs() has WS !== USER (a member dispatching into a co-owned/team
+    // workspace). The clone genuinely failed, but flipping the shared
+    // repo_status→error here would corrupt the workspace for its Owners — so the
+    // ready-but-absent sibling now matches graftCorruptWorktree's emit-only TEAM
+    // posture (the pre-existing F4 inconsistency this PR fixes). Still an honest
+    // block; the Sentry mirror fires.
     const seams = makeSeams({
       gitDirExists: vi.fn(() => false),
       ensureWorkspaceRepoCloned: vi.fn(async () => "failed" as const),
@@ -135,7 +147,41 @@ describe("resolveRepoReadinessWithSelfHeal (FIX 1a — AC1)", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("error");
     expect(seams.ensureWorkspaceRepoCloned).toHaveBeenCalledTimes(1);
-    expect(seams.setRepoStatus).toHaveBeenCalledWith(WS, "error", expect.any(String));
+    expect(seams.setRepoStatus).not.toHaveBeenCalled();
+  });
+
+  it("#5733 AC0c/AC0f: ready + .git ABSENT + clone FAILED on a SOLO/OWNER workspace (WS===USER) → setRepoStatus(error) IS written + honest block", async () => {
+    // On the solo/owner path the dispatching user OWNS the workspace, so writing
+    // the honest error reason (read back by the gate next dispatch) is safe.
+    const seams = makeSeams({
+      gitDirExists: vi.fn(() => false),
+      ensureWorkspaceRepoCloned: vi.fn(async () => "failed" as const),
+    });
+    const r = await resolveRepoReadinessWithSelfHeal(
+      { ...baseArgs(), workspaceId: USER, status: "ready" },
+      seams,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("error");
+    expect(seams.setRepoStatus).toHaveBeenCalledWith(USER, "error", expect.any(String));
+  });
+
+  it("#5733 AC0d: ready + .git ABSENT at routing but PRESENT at the post-clone CAS re-check (concurrent winner) → NO setRepoStatus even on solo/owner (never clobber a fresh ready)", async () => {
+    // .git is absent when the gate routes to the ready-but-absent graft, but a
+    // concurrent winner (reconcile / another tab) lands .git before the failure's
+    // CAS re-check fires → the error write must be suppressed.
+    const gitDirExists = vi.fn();
+    gitDirExists.mockReturnValueOnce(false).mockReturnValue(true);
+    const seams = makeSeams({
+      gitDirExists,
+      ensureWorkspaceRepoCloned: vi.fn(async () => "failed" as const),
+    });
+    const r = await resolveRepoReadinessWithSelfHeal(
+      { ...baseArgs(), workspaceId: USER, status: "ready" },
+      seams,
+    );
+    expect(r.ok).toBe(false); // still honest-blocks this dispatch
+    expect(seams.setRepoStatus).not.toHaveBeenCalled();
   });
 
   // AC1/AC1b/T1 — the headline divergence case (was previously the BUG: this
@@ -385,29 +431,79 @@ describe("resolveRepoReadinessWithSelfHeal — AC1b (.git actually lands)", () =
     expect(existsSync(join(wsPath, ".git"))).toBe(true);
   });
 
-  it("stale/corrupt .git (existsSync true, not a valid work tree) → documented residual: NOT auto-recovered", async () => {
-    // KNOWN RESIDUAL (plan Phase 2.1 + Test Scenarios): the .git-presence sentinel
-    // is a bare existsSync. A directory named .git that is NOT a valid git work
-    // tree (e.g. a Start-Fresh .git, or a corrupt one) reads true, so the
-    // self-heal honest-blocks WITHOUT re-cloning — a Start-Fresh .git must NOT be
-    // blown away (ensure-workspace-repo.ts:115-120). This asserts the documented
-    // behavior, not an aspirational fix.
+  it("AC8: corrupt .git (existsSync true, NOT a valid work tree) + ready → routes to corrupt recovery, re-clone SUCCEEDS → { ok:true } + recovered emit (NOT silent over a corrupt tree)", async () => {
+    // FLIPPED RESIDUAL (2026-06-19): a directory named .git that is NOT a valid
+    // git work tree (bare `mkdir .git`, no HEAD/objects) used to read `true` from
+    // the presence-only `existsSync` gate → fast-path `{ok:true}` over a corrupt
+    // tree → repo-less agent spawn. Now the VALIDITY gate (`gitDirValid` real)
+    // classifies it invalid → corrupt-worktree graft. The clone seam emulates a
+    // successful rm+reclone landing a valid tree.
     const wsPath = join(dir, "ws-stale-git");
-    await mkdir(join(wsPath, ".git"), { recursive: true }); // present but invalid
+    await mkdir(join(wsPath, ".git"), { recursive: true }); // present but INVALID (no HEAD/objects)
+    expect(isValidGitWorkTree(wsPath)).toBe(false); // precondition: structurally invalid
 
+    const landingClone = vi.fn(async (a: { workspacePath: string }) => {
+      // Emulate ensureWorkspaceRepoCloned's rm-corrupt + re-clone landing a valid tree.
+      await rm(join(a.workspacePath, ".git"), { recursive: true, force: true });
+      await mkdir(join(a.workspacePath, ".git", "objects"), { recursive: true });
+      await mkdir(join(a.workspacePath, ".git"), { recursive: true });
+      // write a HEAD so the result is structurally valid
+      await import("node:fs/promises").then((fs) =>
+        fs.writeFile(join(a.workspacePath, ".git", "HEAD"), "ref: refs/heads/main\n"),
+      );
+      return "ok" as const;
+    });
     const seams = makeSeams({
-      ensureWorkspaceRepoCloned,
+      ensureWorkspaceRepoCloned: landingClone,
       gitDirExists: (p: string) => existsSync(join(p, ".git")),
+      gitDirValid: (p: string) => isValidGitWorkTree(p),
     });
 
     const r = await resolveRepoReadinessWithSelfHeal(
       { ...baseArgs(), status: "ready", workspacePath: wsPath },
       seams,
     );
-    // ready + .git "present" → fast-path ok, NO re-clone (the residual: a corrupt
-    // work tree is not detected by existsSync and is left intact).
+    // Corrupt → recovery attempted (NOT silent fast-path), re-clone succeeded.
+    expect(landingClone).toHaveBeenCalledTimes(1);
     expect(r).toEqual({ ok: true });
-    expect(existsSync(join(wsPath, ".git"))).toBe(true);
+    expect(isValidGitWorkTree(wsPath)).toBe(true); // a VALID tree now on disk
+    // F4: the ready entry never writes status (no member-row corruption).
+    expect(seams.setRepoStatus).not.toHaveBeenCalled();
+    // F5/F7: emitted the corrupt op as recovered.
+    expect(seams.reportDivergence).toHaveBeenCalledWith(
+      "corrupt-worktree-at-dispatch",
+      USER,
+      WS,
+      true,
+    );
+  });
+
+  it("AC8/AC14: corrupt .git + ready, re-clone FAILS → honest block { ok:false } + unrecovered (paging) emit, ZERO setRepoStatus (member-safe)", async () => {
+    const wsPath = join(dir, "ws-corrupt-fail");
+    await mkdir(join(wsPath, ".git"), { recursive: true });
+    const failClone = vi.fn(async () => "failed" as const);
+    const seams = makeSeams({
+      ensureWorkspaceRepoCloned: failClone,
+      gitDirExists: (p: string) => existsSync(join(p, ".git")),
+      gitDirValid: (p: string) => isValidGitWorkTree(p),
+    });
+
+    const r = await resolveRepoReadinessWithSelfHeal(
+      { ...baseArgs(), status: "ready", workspacePath: wsPath },
+      seams,
+    );
+    expect(failClone).toHaveBeenCalledTimes(1);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("error");
+    // F4: a member-triggered corrupt recovery FAILURE must NOT write the owner's
+    // repo_status (emit-only honest block).
+    expect(seams.setRepoStatus).not.toHaveBeenCalled();
+    expect(seams.reportDivergence).toHaveBeenCalledWith(
+      "corrupt-worktree-at-dispatch",
+      USER,
+      WS,
+      false,
+    );
   });
 
   it(".git-present guard reads real disk → honest block, no clone attempted", async () => {

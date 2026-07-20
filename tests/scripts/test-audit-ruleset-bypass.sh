@@ -615,20 +615,103 @@ t_rsc_order_insensitive() {
   rm -rf "$tmp"
 }
 
-# T-rsc-7: real canonical RSC has 5 entries with CodeQL pinned to 57789
+# T-rsc-7: real canonical RSC has 20 entries with CodeQL pinned to 57789.
+# Reconciled from the stale 5-check baseline to the Terraform-managed live set
+# (#4397); bumped 16->17 by #6049 (adr-ordinals reconciled from live); bumped
+# 17->18 by #6103 (rule-body-lint, ADR-091); bumped 18->19 by #6325
+# (grok-fidelity, Phase F); bumped 19->20 by #6589 (sentry-destroy-required —
+# the always-run aggregator that makes an unacknowledged Sentry destroy
+# unmergeable rather than merely visible). The exact count is kept in lockstep
+# with infra/github/ruleset-ci-required.tf by T-rsc-9 below.
+#
+# The literal is deliberate and must stay a literal: deriving it from the file
+# would make this assertion tautological, and its whole job is to catch an
+# addition nobody intended. Bumping it is the acknowledgement.
 t_rsc_real_canonical_shape() {
   local real="$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-checks.json"
   if [[ ! -f "$real" ]]; then
     _report "T-rsc-7 real canonical RSC exists" fail "missing $real"
     return
   fi
-  local n codeql_app
+  local n codeql_app non_codeql_apps
   n=$(jq 'length' < "$real")
   codeql_app=$(jq -r '.[] | select(.context=="CodeQL") | .integration_id' < "$real")
-  if [[ "$n" == "5" && "$codeql_app" == "57789" ]]; then
-    _report "T-rsc-7 real canonical RSC: 5 entries, CodeQL integration_id=57789" ok
+  # Every non-CodeQL check is a GitHub Actions context (15368). A flattened
+  # CodeQL integration_id would let github-actions[bot] spoof the GHAS gate.
+  non_codeql_apps=$(jq -r '[.[] | select(.context!="CodeQL") | .integration_id] | unique | join(",")' < "$real")
+  if [[ "$n" == "20" && "$codeql_app" == "57789" && "$non_codeql_apps" == "15368" ]]; then
+    _report "T-rsc-7 real canonical RSC: 20 entries, CodeQL=57789, rest=15368" ok
   else
-    _report "T-rsc-7 real canonical RSC: 5 entries, CodeQL integration_id=57789" fail "n=$n codeql_app=$codeql_app"
+    _report "T-rsc-7 real canonical RSC: 20 entries, CodeQL=57789, rest=15368" fail "n=$n codeql_app=$codeql_app non_codeql=$non_codeql_apps"
+  fi
+}
+
+# T-rsc-9 (canonical↔terraform sync gate): the canonical RSC JSON context set
+# MUST equal the required_check contexts declared in the Terraform source of
+# truth (infra/github/ruleset-ci-required.tf). This is the root-cause fix for
+# #4397 — the snapshot silently went stale (5) while Terraform widened the live
+# ruleset (16), and nothing forced them back into lockstep. Any future .tf edit
+# now fails CI until the JSON is reconciled in the same PR.
+t_rsc_canonical_matches_terraform() {
+  local real="$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-checks.json"
+  local tf="$REPO_ROOT/infra/github/ruleset-ci-required.tf"
+  if [[ ! -f "$tf" ]]; then
+    _report "T-rsc-9 terraform ruleset source exists" fail "missing $tf"
+    return
+  fi
+  # Context-set equality only. integration_id pinning is covered elsewhere:
+  # T-rsc-7 asserts the JSON's CodeQL=57789/rest=15368, and the live audit's
+  # compareRequiredStatusChecks flags any integration_id divergence as a
+  # critical `removed` — so a CodeQL app swap still surfaces at audit time.
+  local json_ctx tf_ctx
+  json_ctx=$(jq -r '.[].context' < "$real" | sort)
+  # Extract `context = "..."` (required_check blocks are the only `context =`
+  # assignments in this root); strip quotes; sort for set comparison.
+  tf_ctx=$(grep -oE 'context[[:space:]]*=[[:space:]]*"[^"]+"' "$tf" \
+    | sed -E 's/.*"([^"]+)"$/\1/' | sort)
+  if [[ "$json_ctx" == "$tf_ctx" ]]; then
+    _report "T-rsc-9 canonical RSC context set == ruleset-ci-required.tf" ok
+  else
+    _report "T-rsc-9 canonical RSC context set == ruleset-ci-required.tf" fail \
+      "diff:$(diff <(echo "$json_ctx") <(echo "$tf_ctx") | tr '\n' ' ')"
+  fi
+}
+
+# T-mq-1 (merge_queue stays REVERTED, #5780): the merge queue was enabled by
+# PR #5800 then reverted (kill-switch) because GitHub CodeQL default setup does
+# not post the required `CodeQL` context on `merge_group` temp refs → every
+# queue entry deadlocked. Until CodeQL is moved to *advanced* setup with an
+# `on: merge_group` trigger, neither the Terraform source of truth
+# (infra/github/ruleset-ci-required.tf) nor the DR-restore skeleton
+# (scripts/create-ci-required-ruleset.sh) may declare a `merge_queue` rule —
+# re-adding one before the CodeQL fix re-introduces the outage. This guard
+# fails CI if a `merge_queue` rule reappears in either file. See ADR-032 +
+# the PIR. (When re-adopting, replace this guard with a param-parity gate.)
+t_mq_stays_reverted() {
+  local tf="$REPO_ROOT/infra/github/ruleset-ci-required.tf"
+  local dr="$REPO_ROOT/scripts/create-ci-required-ruleset.sh"
+  if [[ ! -f "$tf" || ! -f "$dr" ]]; then
+    _report "T-mq-1 merge_queue source files exist" fail "missing $tf or $dr"
+    return
+  fi
+  # .tf: a `merge_queue {` HCL block (not a comment) would re-enable the queue.
+  # Strip comment lines (leading #) before matching so the revert-rationale
+  # comment that names "merge_queue" does not false-fail.
+  # `grep -c` exits 1 on zero matches — the EXPECTED reverted state — so `|| true`
+  # keeps `set -euo pipefail` from aborting the suite mid-run.
+  local tf_block
+  tf_block=$(grep -vE '^[[:space:]]*#' "$tf" | grep -cE 'merge_queue[[:space:]]*\{' || true)
+  # DR skeleton: a "type": "merge_queue" rule in the heredoc would re-add it.
+  local dr_rule
+  dr_rule=$(sed -n "/cat > \"\$skeleton\" << 'EOF'/,/^EOF\$/p" "$dr" \
+    | sed '1d;$d' \
+    | jq -c '[.rules[] | select(.type=="merge_queue")] | length' 2>/dev/null || true)
+  [[ -z "$dr_rule" ]] && dr_rule=0
+  if [[ "$tf_block" == "0" && "$dr_rule" == "0" ]]; then
+    _report "T-mq-1 merge_queue stays reverted (.tf + DR skeleton)" ok
+  else
+    _report "T-mq-1 merge_queue stays reverted (.tf + DR skeleton)" fail \
+      "tf_merge_queue_blocks=$tf_block dr_merge_queue_rules=$dr_rule — re-adopting requires CodeQL advanced setup first (#5780)"
   fi
 }
 
@@ -663,6 +746,131 @@ t_rsc_shared_lib_used() {
     fi
   fi
   _report "T-rsc-8 shared RSC lib sourced by audit + update; create-ci references canonical; no inline redecl" ok
+}
+
+# ---------- CLA ruleset canonical sync gates (#6061, Terraform-ified #6072) ----------
+# The CLA Required ruleset is Terraform-managed via
+# infra/github/ruleset-cla-required.tf (as of #6072 — the imperative
+# scripts/create-cla-required-ruleset.sh is now a DR-only restore skeleton that
+# reads the canonicals, not the SSOT). These gates pin the two CLA canonical
+# JSONs (which the daily cron-ruleset-bypass-audit Inngest fn reads) to the `.tf`
+# — matching how T-rsc-9 pins the CI canonical to ruleset-ci-required.tf — so a
+# value change in the `.tf` without reconciling the canonical (or vice versa)
+# fails CI. Co-located with T-rsc-9 (the CI canonical↔terraform sync gate).
+CLA_TF="$REPO_ROOT/infra/github/ruleset-cla-required.tf"
+CLA_RSC_CANONICAL="$REPO_ROOT/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"
+CLA_BYPASS_CANONICAL="$REPO_ROOT/scripts/ci-cla-required-ruleset-canonical-bypass-actors.json"
+
+# T-cla-1 (CLA canonical↔terraform RSC sync gate): the canonical RSC JSON context
+# set MUST equal the required_check contexts declared in the Terraform source of
+# truth (infra/github/ruleset-cla-required.tf), and the integration_id is pinned:
+# every canonical row is 15368 AND the `.tf` binds every required_check to
+# var.actions_integration_id (default 15368 per variables.tf), NOT
+# var.codeql_integration_id (which would let github-actions[bot] spoof a GHAS
+# gate). Mirrors T-rsc-9 (context set) + T-rsc-7 (integration_id pin). The `.tf`
+# header/block comments must not carry a literal `context = "..."` token (SE-3),
+# else the comment-naive grep over-counts.
+t_cla_rsc_canonical_matches_tf() {
+  if [[ ! -f "$CLA_TF" ]]; then
+    _report "T-cla-1 CLA terraform ruleset source exists" fail "missing $CLA_TF"
+    return
+  fi
+  if [[ ! -f "$CLA_RSC_CANONICAL" ]]; then
+    _report "T-cla-1 CLA RSC canonical exists" fail "missing $CLA_RSC_CANONICAL"
+    return
+  fi
+  # Context-set equality: canonical `.[].context` vs the `.tf` `context = "..."`
+  # assignments (required_check blocks are the only `context =` lines in the file).
+  # Same extraction mechanism as T-rsc-9.
+  local json_ctx tf_ctx
+  json_ctx=$(jq -r '.[].context' < "$CLA_RSC_CANONICAL" | sort)
+  tf_ctx=$(grep -oE 'context[[:space:]]*=[[:space:]]*"[^"]+"' "$CLA_TF" \
+    | sed -E 's/.*"([^"]+)"$/\1/' | sort)
+  # integration_id pin: every canonical row is 15368, AND the `.tf` binds every
+  # required_check to var.actions_integration_id, never var.codeql_integration_id.
+  local canon_all_15368 actions_binds ctx_count
+  canon_all_15368=$(jq -r 'all(.[]; .integration_id == 15368)' < "$CLA_RSC_CANONICAL")
+  # `grep -c` exits 1 on zero matches (a broken `.tf`); `|| true` keeps
+  # `set -euo pipefail` from aborting the suite on the happy path.
+  actions_binds=$(grep -cE 'integration_id[[:space:]]*=[[:space:]]*var\.actions_integration_id' "$CLA_TF" || true)
+  ctx_count=$(printf '%s\n' "$tf_ctx" | grep -c . || true)
+  # Comment-safe codeql check: match an actual `= var.codeql_integration_id`
+  # BINDING, never the bare token — a comment naming it must not false-fail (same
+  # SE-3 class as the `context = "..."` hygiene). Explicit signal alongside
+  # actions_binds==ctx_count; keeps a clear `codeql=yes` failure line.
+  local has_codeql=no
+  if grep -qE 'integration_id[[:space:]]*=[[:space:]]*var\.codeql_integration_id' "$CLA_TF"; then has_codeql=yes; fi
+  # Pin the integration_id NUMBER end-to-end: the `.tf` binds required_checks to
+  # var.actions_integration_id by NAME, so also assert that var's default == the
+  # canonical's 15368 (restores the literal pin the retired create-script carried;
+  # closes the variables.tf-default→codeql-id path T-rsc-7 guards on the JSON side).
+  local actions_default
+  actions_default=$(awk '/variable "actions_integration_id"/{f=1} f&&/^[[:space:]]*default[[:space:]]*=/{gsub(/[^0-9]/,"",$0); print; exit}' "$REPO_ROOT/infra/github/variables.tf")
+  # No-dup guard: the canonical must not carry a duplicate context row.
+  local dup
+  dup=$(jq -r '(map(.context) | length) - (map(.context) | unique | length)' "$CLA_RSC_CANONICAL")
+  # Non-vacuity floor: CLA requires cla-check + cla-evidence (>= 2). A double-empty
+  # fault (canonical [] AND `.tf` no contexts) is blocked by the floor + the
+  # actions_binds==ctx_count check (both would be 0, but n_canon>=2 fails).
+  local n_canon
+  n_canon=$(jq 'length' "$CLA_RSC_CANONICAL")
+  if [[ "$json_ctx" == "$tf_ctx" && "$canon_all_15368" == "true" \
+        && "$actions_binds" == "$ctx_count" && "$has_codeql" == "no" \
+        && "$actions_default" == "15368" \
+        && "$dup" == "0" && "$n_canon" -ge 2 ]]; then
+    _report "T-cla-1 CLA RSC canonical context set + integration_id == ruleset-cla-required.tf" ok
+  else
+    _report "T-cla-1 CLA RSC canonical context set + integration_id == ruleset-cla-required.tf" fail \
+      "all15368=$canon_all_15368 actions_binds=$actions_binds ctx_count=$ctx_count codeql=$has_codeql actions_default=$actions_default dup=$dup diff:$(diff <(echo "$json_ctx") <(echo "$tf_ctx") | tr '\n' ' ')"
+  fi
+}
+
+# T-cla-1b (CLA canonical↔terraform bypass sync gate): the `.tf` bypass_actors
+# blocks (actor_id|actor_type|bypass_mode triples) MUST equal the canonical bypass
+# JSON, with the `.tf`'s OrganizationAdmin `actor_id = 0` sentinel (provider issue
+# #2536) normalized to the canonical's `null` (SE-1 — the canonical mirrors the
+# LIVE API shape, which is null). The Integration:1236702/always actor is the CLA
+# bot — legitimately `always` and IN the canonical, so the audit flags only
+# ADDITIONAL bypass actors (widening).
+t_cla_bypass_canonical_matches_tf() {
+  if [[ ! -f "$CLA_TF" ]]; then
+    _report "T-cla-1b CLA terraform ruleset source exists" fail "missing $CLA_TF"
+    return
+  fi
+  if [[ ! -f "$CLA_BYPASS_CANONICAL" ]]; then
+    _report "T-cla-1b CLA bypass canonical exists" fail "missing $CLA_BYPASS_CANONICAL"
+    return
+  fi
+  # Parse `.tf` bypass_actors { ... } blocks into actor_id|actor_type|bypass_mode
+  # triples; default actor_id to "null" per block; strip quotes + trailing
+  # comments. Normalize actor_id "0" -> "null" (OrganizationAdmin sentinel; no real
+  # actor has id 0) so the `.tf`'s 0 compares equal to the canonical's null.
+  # Strip any trailing `# ...` comment FIRST (before the greedy `.*=` value slice)
+  # so an inline comment containing a stray `=` cannot corrupt the extracted value
+  # (removes the SE-3 `# ... = ...`-on-assignment-line latent trap at the parser).
+  local tf_triples
+  tf_triples=$(awk '
+    /^[[:space:]]*bypass_actors[[:space:]]*\{/ {blk=1; aid="null"; at=""; bm=""; next}
+    blk && /^[[:space:]]*actor_id[[:space:]]*=/    {v=$0; sub(/#.*/,"",v); sub(/.*=[[:space:]]*/,"",v);  sub(/[[:space:]]*$/,"",v); aid=v}
+    blk && /^[[:space:]]*actor_type[[:space:]]*=/  {v=$0; sub(/#.*/,"",v); sub(/.*=[[:space:]]*"?/,"",v); sub(/"?[[:space:]]*$/,"",v); at=v}
+    blk && /^[[:space:]]*bypass_mode[[:space:]]*=/ {v=$0; sub(/#.*/,"",v); sub(/.*=[[:space:]]*"?/,"",v); sub(/"?[[:space:]]*$/,"",v); bm=v}
+    blk && /^[[:space:]]*\}/ {print aid"|"at"|"bm; blk=0}
+  ' "$CLA_TF" | sed 's/^0|/null|/' | sort)
+  # Canonical triples: null prints as "null".
+  local canon_triples
+  canon_triples=$(jq -r '.[] | "\(.actor_id)|\(.actor_type)|\(.bypass_mode)"' "$CLA_BYPASS_CANONICAL" | sort)
+  # No-dup guard on the canonical.
+  local dup
+  dup=$(jq -r '(map("\(.actor_id)|\(.actor_type)|\(.bypass_mode)")) as $k | ($k | length) - ($k | unique | length)' "$CLA_BYPASS_CANONICAL")
+  # Non-vacuity floor (>= 3): OrgAdmin + RepoRole + CLA-bot Integration.
+  local n_canon
+  n_canon=$(jq 'length' "$CLA_BYPASS_CANONICAL")
+  if [[ "$tf_triples" == "$canon_triples" && "$dup" == "0" && "$n_canon" -ge 3 ]]; then
+    _report "T-cla-1b CLA bypass canonical triples == ruleset-cla-required.tf (0↔null) + no-dup" ok
+  else
+    _report "T-cla-1b CLA bypass canonical triples == ruleset-cla-required.tf (0↔null) + no-dup" fail \
+      "dup=$dup diff:$(diff <(echo "$canon_triples") <(echo "$tf_triples") | tr '\n' ' ')"
+  fi
 }
 
 if [[ ! -f "$SCRIPT" ]]; then
@@ -705,6 +913,12 @@ t_rsc_canonical_duplicate_context
 t_rsc_order_insensitive
 t_rsc_real_canonical_shape
 t_rsc_shared_lib_used
+t_rsc_canonical_matches_terraform
+t_mq_stays_reverted
+
+# CLA ruleset canonical↔terraform sync gates (#6061; Terraform-ified #6072)
+t_cla_rsc_canonical_matches_tf
+t_cla_bypass_canonical_matches_tf
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

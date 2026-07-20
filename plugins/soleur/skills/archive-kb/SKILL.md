@@ -13,15 +13,15 @@ The script generates timestamps internally and uses `git mv` to preserve history
 Run the archive script from the repository root. It derives the feature slug
 from the current branch name automatically:
 
-    bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
+    bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh
 
 To preview what would be archived without making changes:
 
-    bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh --dry-run
+    bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh --dry-run
 
 To archive a specific slug (override branch detection):
 
-    bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh my-feature-slug
+    bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh my-feature-slug
 
 ## What It Archives
 

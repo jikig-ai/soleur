@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 
-const { pushMock, replaceMock, searchParamsRef } = vi.hoisted(() => ({
+const { pushMock, replaceMock, assignMock, searchParamsRef } = vi.hoisted(() => ({
   pushMock: vi.fn(),
   replaceMock: vi.fn(),
+  // GAP E (ADR-067 staleTimes): OTP-verify success now HARD-navs via
+  // window.location.assign instead of a soft router.push.
+  assignMock: vi.fn(),
   searchParamsRef: { current: new URLSearchParams() },
 }));
 
@@ -40,11 +43,28 @@ async function sendCode() {
 }
 
 describe("LoginForm — redirectTo on verify (AC2)", () => {
+  let originalLocation: Location;
   beforeEach(() => {
     vi.clearAllMocks();
     searchParamsRef.current = new URLSearchParams();
     signInWithOtpMock.mockResolvedValue({ error: null });
     verifyOtpMock.mockResolvedValue({ error: null });
+    // Stub window.location for the GAP E hard nav (happy-dom's assign is not
+    // spyable by default).
+    originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: { assign: assignMock, pathname: "/login" } as unknown as Location,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: originalLocation,
+    });
   });
 
   async function verify() {
@@ -59,14 +79,14 @@ describe("LoginForm — redirectTo on verify (AC2)", () => {
     render(<LoginForm />);
     await sendCode();
     await verify();
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/invite/tok123"));
+    await waitFor(() => expect(assignMock).toHaveBeenCalledWith("/invite/tok123"));
   });
 
   it("routes to /dashboard (default) when redirectTo is absent", async () => {
     render(<LoginForm />);
     await sendCode();
     await verify();
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/dashboard"));
+    await waitFor(() => expect(assignMock).toHaveBeenCalledWith("/dashboard"));
   });
 
   it("falls back to /dashboard when redirectTo is an open-redirect vector", async () => {
@@ -74,8 +94,8 @@ describe("LoginForm — redirectTo on verify (AC2)", () => {
     render(<LoginForm />);
     await sendCode();
     await verify();
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/dashboard"));
-    expect(pushMock).not.toHaveBeenCalledWith("//evil.example");
+    await waitFor(() => expect(assignMock).toHaveBeenCalledWith("/dashboard"));
+    expect(assignMock).not.toHaveBeenCalledWith("//evil.example");
   });
 
   it("preserves redirectTo through the no-account login→signup bounce", async () => {

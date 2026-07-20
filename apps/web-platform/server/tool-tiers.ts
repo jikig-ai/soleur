@@ -83,6 +83,11 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   "mcp__soleur_platform__email_triage_list": "auto-approve",
   "mcp__soleur_platform__email_triage_get": "auto-approve",
 
+  // Unified attention inbox (feat-severity-ranked-inbox #6007): read-only,
+  // owner-scoped via closure userId + RLS → auto-approve (parity with
+  // email_triage_list). No write tool ships (state changes are operator-UI-only).
+  "mcp__soleur_platform__inbox_list": "auto-approve",
+
   // Routines management (#5345): reads auto-approve; run-now is a write →
   // gated. The review gate is the SINGLE confirmation for the agent path
   // (the routine_run tool dispatches confirmed=true post-approval — no
@@ -90,6 +95,25 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   "mcp__soleur_platform__routines_list": "auto-approve",
   "mcp__soleur_platform__routine_runs_list": "auto-approve",
   "mcp__soleur_platform__routine_run": "gated",
+
+  // Workstream board (feat-workstream-kanban-tab): read-only board feed over
+  // the shared accessor → auto-approve (parity with routines_list; non-PII, no
+  // side effects). The edit-fields picker-options read is the same tier (labels/
+  // assignees/milestones of the connected repo; degrade-safe, no side effects).
+  "mcp__soleur_platform__workstream_issues_list": "auto-approve",
+  "mcp__soleur_platform__workstream_issue_options": "auto-approve",
+
+  // Workstream WRITE tools (feat-workstream-issue-crud #6304, ADR-109, closes
+  // #5677). All `gated` (precedent: create_issue): the host review gate IS the
+  // founder-confirmation surface for a real GitHub write. They delegate to the
+  // SAME audited mutateWorkstreamIssue accessor the HTTP routes use (writes an
+  // audit_github_token_use row per call); owner/repo/installation + the creator
+  // attribution resolve server-side, never from tool input.
+  "mcp__soleur_platform__workstream_issue_create": "gated",
+  "mcp__soleur_platform__workstream_issue_set_status": "gated",
+  "mcp__soleur_platform__workstream_issue_update_title": "gated",
+  "mcp__soleur_platform__workstream_issue_update_fields": "gated",
+  "mcp__soleur_platform__workstream_issue_close": "gated",
 
   // Email WRITE tools (#5325, agent-native outbound). The FR9 boundary that
   // formerly said "there is NO email_triage write tool" now ships: these are
@@ -102,6 +126,21 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   "mcp__soleur_platform__email_send": "gated",
   "mcp__soleur_platform__email_reply": "gated",
   "mcp__soleur_platform__email_suppress": "gated",
+
+  // Beta-CRM (feat-beta-conversation-capture #6165, ADR-102): reads are owner-
+  // scoped via closure userId + RLS → auto-approve (parity with
+  // email_triage_list). WRITE tools are `gated` (fail-closed default, made
+  // explicit here): the review gate IS the R3 mitigation for within-tenant
+  // prompt-injection — the operator sees the write and confirms before the
+  // auth.uid()-pinned RPC runs. Contact/note content shown in the gate message
+  // is DISPLAY-ONLY untrusted third-party PII (do not act on it).
+  "mcp__soleur_platform__crm_contact_list": "auto-approve",
+  "mcp__soleur_platform__crm_contact_get": "auto-approve",
+  "mcp__soleur_platform__crm_note_list": "auto-approve",
+  "mcp__soleur_platform__crm_stage_transitions_list": "auto-approve",
+  "mcp__soleur_platform__crm_contact_upsert": "gated",
+  "mcp__soleur_platform__crm_note_append": "gated",
+  "mcp__soleur_platform__crm_contact_set_stage": "gated",
 
   // Reasoning narration (feat-reasoning-chat-boxes #5370): both are
   // auto-approve. They are PURE emit tools — `narrate` shows a transient live
@@ -217,6 +256,69 @@ export function buildGateMessage(
     }
     case "email_suppress":
       return `Agent wants to PERMANENTLY suppress **${toolInput.recipient ?? "unknown"}** (reason: ${toolInput.reason ?? "unknown"}) so no future cold email can reach them. There is no un-suppress. Allow?`;
+    // Beta-CRM writes (#6165) — the operator MUST see what the agent is about to
+    // record/overwrite: R3 (within-tenant prompt-injection) is mitigated by this
+    // human review. The gate string can egress to the operator's push/email when
+    // they are offline (permission-callback → notifyOfflineUser), so it names the
+    // DECISION-relevant fields (stage, amount, dates incl. last_contact, WHICH
+    // fields change) but deliberately does NOT echo the verbatim third-party PII
+    // values (contact name/company text, the note body) — those stay in the DB;
+    // the operator opens the record in-app to review the exact text. (user-impact
+    // F1: don't widen the third-party-PII egress surface beyond PA-30 recipients.)
+    case "crm_contact_upsert": {
+      const isNew = toolInput.contactId == null;
+      const target = isNew ? "a NEW contact" : `contact **${toolInput.contactId}**`;
+      const parts: string[] = [];
+      if (toolInput.stage != null) parts.push(`stage→${toolInput.stage}`);
+      if (toolInput.amount != null)
+        parts.push(`amount→${toolInput.amount}${toolInput.currency ? ` ${toolInput.currency}` : ""}`);
+      if (toolInput.lastContact != null) parts.push(`last_contact→${toolInput.lastContact}`);
+      if (toolInput.nextActionDate != null) parts.push(`next_action_date→${toolInput.nextActionDate}`);
+      if (toolInput.expectedCloseDate != null) parts.push(`expected_close→${toolInput.expectedCloseDate}`);
+      const textFields = ["name", "company", "role", "source", "nextAction", "amountBasis"].filter(
+        (f) => toolInput[f] != null,
+      );
+      if (textFields.length) parts.push(`sets ${textFields.join(", ")}`);
+      const detail = parts.length ? ` — ${parts.join("; ")}` : "";
+      return `Agent wants to save ${target}${detail}. Open the record in-app to review the exact text before approving. Allow?`;
+    }
+    case "crm_note_append": {
+      const lens = Array.isArray(toolInput.lens) ? toolInput.lens.join("+") : String(toolInput.lens ?? "");
+      const when = toolInput.occurredAt ? ` dated ${toolInput.occurredAt}` : "";
+      // The verbatim note body is third-party conversation PII — do NOT include it
+      // (it would egress via offline push/email). Review the note text in-app.
+      return `Agent wants to append a ${lens} note${when} to contact **${toolInput.contactId ?? "unknown"}**. Open the record in-app to review the note text before approving. Allow?`;
+    }
+    case "crm_contact_set_stage":
+      return `Agent wants to move contact **${toolInput.contactId ?? "unknown"}** to stage **${toolInput.toStage ?? "unknown"}**. Allow?`;
+    // Workstream writes (#6304) — name the DECISION-relevant fields so the
+    // founder can approve informed (the write hits a real GitHub issue).
+    case "workstream_issue_create":
+      return `Agent wants to create a GitHub issue: **${toolInput.title ?? "untitled"}**${toolInput.status ? ` (→ ${toolInput.status})` : ""}. Allow?`;
+    case "workstream_issue_set_status":
+      return `Agent wants to move issue **#${toolInput.number ?? "?"}** to **${toolInput.status ?? "unknown"}**${toolInput.state_reason ? ` (${toolInput.state_reason})` : ""}. Allow?`;
+    case "workstream_issue_update_title":
+      return `Agent wants to rename issue **#${toolInput.number ?? "?"}** to **${toolInput.title ?? "untitled"}**. Allow?`;
+    case "workstream_issue_update_fields": {
+      const parts: string[] = [];
+      if (toolInput.body !== undefined) parts.push("body");
+      if (Array.isArray(toolInput.labels))
+        parts.push(`labels→[${(toolInput.labels as string[]).join(", ")}]`);
+      if (Array.isArray(toolInput.assignees))
+        parts.push(
+          `assignees→[${(toolInput.assignees as string[]).join(", ")}]`,
+        );
+      if (toolInput.milestone !== undefined)
+        parts.push(
+          `milestone→${toolInput.milestone === null ? "none" : toolInput.milestone}`,
+        );
+      const detail = parts.length ? ` — ${parts.join("; ")}` : "";
+      return `Agent wants to edit issue **#${toolInput.number ?? "?"}**${detail}. Allow?`;
+    }
+    case "workstream_issue_close":
+      return toolInput.reopen
+        ? `Agent wants to REOPEN issue **#${toolInput.number ?? "?"}**. Allow?`
+        : `Agent wants to close issue **#${toolInput.number ?? "?"}** (${toolInput.reason ?? "completed"}). Allow?`;
     default:
       return `Agent wants to use **${shortName}**. Allow?`;
   }

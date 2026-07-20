@@ -78,7 +78,11 @@ describe("CAMPAIGN_CALENDAR_PROMPT — anchor strings (regression-detection)", (
       ["campaign-calendar", "skill invocation"],
       ["overdue", "overdue content detection"],
       ["heartbeat", "heartbeat audit issue"],
-      ["content-strategy.md", "content-strategy review date update"],
+      ["content-strategy.md", "content-strategy freshness-date update"],
+      [
+        "update the frontmatter last_updated field",
+        "source-fix: cron bumps last_updated, NOT last_reviewed (ADR-094, #5999)",
+      ],
       ["PERSISTENCE: Do NOT run git add", "platform-persistence directive (#5111)"],
       ["opens a PR for your changes", "handler-side persistence note (#5111)"],
     ])("contains %s (%s)", (anchor) => {
@@ -190,5 +194,20 @@ describe("#5111 — handler-side persistence (safeCommitAndPr migration)", () =>
     expect(SUT_SOURCE).toMatch(
       /if \(heartbeatOk && !spawnResult\.abortedByTimeout\) \{[\s\S]{0,800}?safeCommitAndPr\(\{/,
     );
+  });
+});
+
+// #5786 — producer-side date-dedup serialization anchor (AC6) + the suffix
+// invariant. The cohort behavioral test proves exactly-one-digest; this anchors
+// `{ scope: "fn", limit: 1 }` (the serializer a fake-store test can't exercise)
+// and the ` (heartbeat)` titleSuffix (cheap future-deletion insurance — dropping
+// it silently no-ops campaign-calendar's dedup with no RED monitor, fail-OPEN).
+describe("#5786 producer-side dedup — concurrency + suffix anchors (AC6)", () => {
+  it('registration concurrency contains { scope: "fn", limit: 1 }', () => {
+    expect(SUT_SOURCE).toContain('{ scope: "fn", limit: 1 }');
+  });
+
+  it('dedup call passes titleSuffix: " (heartbeat)" (campaign-calendar suffix variant)', () => {
+    expect(SUT_SOURCE).toContain('titleSuffix: " (heartbeat)"');
   });
 });

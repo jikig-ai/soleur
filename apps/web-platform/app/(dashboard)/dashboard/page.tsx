@@ -1,18 +1,15 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { createClient } from "@/lib/supabase/client";
 import { swrKeys, jsonFetcher } from "@/lib/swr-config";
-import { fetchInboxItems } from "@/components/inbox/inbox-surface";
+import { isRevocationBounce } from "@/lib/auth/revocation-bounce";
 import { useConversations } from "@/hooks/use-conversations";
 import type { ArchiveFilter } from "@/hooks/use-conversations";
 import { useOnboarding } from "@/hooks/use-onboarding";
 import { ConversationRow } from "@/components/inbox/conversation-row";
-import { EmailTriageRow } from "@/components/inbox/email-triage-row";
-import type { EmailTriageItem } from "@/components/inbox/email-triage-row";
 import { ErrorCard } from "@/components/ui/error-card";
 import { STATUS_LABELS } from "@/lib/types";
 import { FOUNDATION_MIN_CONTENT_BYTES } from "@/lib/kb-constants";
@@ -51,47 +48,33 @@ const FOUNDATION_PATHS = [
 ] as const;
 
 // ---------------------------------------------------------------------------
-// TreeNode flattening (matches server/kb-reader.ts TreeNode interface)
+// Foundation status (existence + size for the KNOWN foundation KB paths)
 // ---------------------------------------------------------------------------
 
-interface TreeNode {
-  name: string;
-  type: "file" | "directory";
-  path?: string;
-  size?: number;
-  children?: TreeNode[];
+interface PathStat {
+  exists: boolean;
+  size: number;
 }
 
-interface FileInfo {
-  size?: number;
-}
+// ADR-067: the dashboard derives foundation-card completion only from a KNOWN
+// set of KB paths, so it fetches /api/dashboard/foundation-status (a targeted
+// stat) instead of the whole-KB-tree walk (/api/kb/tree buildTree()) that used
+// to gate first paint. It caches under its OWN key (NOT swrKeys.kbTree(), whose
+// richer payload + distinct error mapping would cross-contaminate this
+// consumer). Per-route instant warm render still holds.
+const DASHBOARD_FOUNDATION_STATUS_KEY = [
+  "/api/dashboard/foundation-status",
+  "dashboard",
+] as const;
 
-function flattenTree(
-  node: TreeNode,
-  files = new Map<string, FileInfo>(),
-): Map<string, FileInfo> {
-  if (node.type === "file" && node.path) {
-    files.set(node.path, { size: node.size });
-  }
-  for (const child of node.children ?? []) flattenTree(child, files);
-  return files;
-}
-
-// ADR-067: the dashboard reads the KB tree only to derive foundation-card
-// completion, so it caches under its OWN key (NOT the KB tab's swrKeys.kbTree(),
-// whose richer {tree,lastSync,needsReconnect} payload + distinct error-kind
-// mapping would cross-contaminate this tree-only consumer). Per-route instant
-// render still holds; the two routes are never mounted together.
-const DASHBOARD_KB_TREE_KEY = ["/api/kb/tree", "dashboard"] as const;
-
-// Carries the dashboard's KB-tree error states through SWR's single error
-// channel (503 → "provisioning", everything else → "error"; 401 → "redirect"
-// which holds the skeleton through the /login navigation rather than flashing
-// an error/empty state; a 404 returns an empty tree → no error).
-class DashKbTreeError extends Error {
+// Carries the dashboard's foundation-status error states through SWR's single
+// error channel (503 → "provisioning", everything else → "error"; 401 →
+// "redirect" which holds the skeleton through the /login navigation rather than
+// flashing an error/empty state; a 404 returns an empty map → no error).
+class DashFoundationError extends Error {
   constructor(public kind: "provisioning" | "error" | "redirect") {
     super(kind);
-    this.name = "DashKbTreeError";
+    this.name = "DashFoundationError";
   }
 }
 
@@ -157,45 +140,52 @@ export default function DashboardPage() {
   // KB state derivation (inline — extract if this grows)
   // ---------------------------------------------------------------------------
 
-  // ADR-067: cache the KB tree so returning to the dashboard renders instantly.
-  // The skeleton gates on `kbData === undefined && !kbErr` (GAP F) — a warm
-  // remount keeps kbData defined, so the first-load skeleton never re-shows.
-  const fetchDashboardKbTree = useCallback(async (): Promise<{
-    tree: TreeNode | null;
+  // ADR-067: cache the foundation status so returning to the dashboard renders
+  // instantly. The skeleton gates on `foundationData === undefined && !err`
+  // (GAP F) — a warm remount keeps it defined, so the skeleton never re-shows.
+  // This is a targeted stat of ~10 known paths, not a whole-tree walk, so it
+  // resolves far faster than the old /api/kb/tree buildTree() consumer.
+  const fetchFoundationStatus = useCallback(async (): Promise<{
+    paths: Record<string, PathStat>;
   }> => {
-    const res = await fetch("/api/kb/tree");
-    if (res.status === 401) {
-      router.push("/login");
-      throw new DashKbTreeError("redirect"); // navigating away — hold skeleton
+    const res = await fetch("/api/dashboard/foundation-status");
+    // GAP F (ADR-067 staleTimes): a session-revocation bounce is a
+    // principal-LEAVING boundary — HARD-nav to /login so the App Router Router
+    // Cache is wiped (a soft push would leave the ejected principal's warm RSC
+    // shells reachable). isRevocationBounce detects BOTH a direct 401 AND the
+    // #4307 middleware 302→/login (which fetch follows to 200 HTML).
+    if (isRevocationBounce(res)) {
+      window.location.assign("/login");
+      throw new DashFoundationError("redirect"); // navigating away — hold skeleton
     }
-    if (res.status === 503) throw new DashKbTreeError("provisioning");
+    if (res.status === 503) throw new DashFoundationError("provisioning");
     // 404 = no workspace / not connected — fall through to Command Center.
-    if (res.status === 404) return { tree: null };
-    if (!res.ok) throw new DashKbTreeError("error");
+    if (res.status === 404) return { paths: {} };
+    if (!res.ok) throw new DashFoundationError("error");
     const data = await res.json();
-    return { tree: (data?.tree as TreeNode | null) ?? null };
+    return { paths: (data?.paths as Record<string, PathStat>) ?? {} };
   }, [router]);
 
-  const { data: kbData, error: kbErr } = useSWR(
-    DASHBOARD_KB_TREE_KEY,
-    fetchDashboardKbTree,
+  const { data: foundationData, error: foundationErr } = useSWR(
+    DASHBOARD_FOUNDATION_STATUS_KEY,
+    fetchFoundationStatus,
   );
   // 401 (kind "redirect") holds the skeleton through the /login navigation.
   const isRedirecting401 =
-    kbErr instanceof DashKbTreeError && kbErr.kind === "redirect";
+    foundationErr instanceof DashFoundationError && foundationErr.kind === "redirect";
   const kbLoading =
-    kbData === undefined && (kbErr === undefined || isRedirecting401);
+    foundationData === undefined && (foundationErr === undefined || isRedirecting401);
   const kbError: "provisioning" | "error" | null =
-    kbErr instanceof DashKbTreeError
-      ? kbErr.kind === "redirect"
+    foundationErr instanceof DashFoundationError
+      ? foundationErr.kind === "redirect"
         ? null
-        : kbErr.kind
-      : kbErr
+        : foundationErr.kind
+      : foundationErr
         ? "error"
         : null;
-  const kbFiles = useMemo<Map<string, FileInfo>>(
-    () => (kbData?.tree ? flattenTree(kbData.tree) : new Map()),
-    [kbData],
+  const foundationPaths = useMemo<Record<string, PathStat>>(
+    () => foundationData?.paths ?? {},
+    [foundationData],
   );
 
   // Disconnected-with-orphans hint: when a user has disconnected their repo
@@ -226,20 +216,10 @@ export default function DashboardPage() {
     },
   );
 
-  // feat-operator-inbox-delegation Phase 5b — email-triage inbox items.
-  // GET /api/inbox/emails already returns unacknowledged statutory rows
-  // pinned first (server-side ordering contract); render in given order.
-  // ADR-067: shares the SAME cache key as InboxSurface's Active view
-  // (swrKeys.inboxEmails("active")) + the same fetcher → free dedup and a
-  // consistent view across Dashboard ↔ Inbox. Errors stay silent here (the
-  // rest of the page renders); `emailItems` defaults to [] until resolved.
-  const { data: emailItems = [], mutate: mutateEmailItems } = useSWR(
-    swrKeys.inboxEmails("active"),
-    fetchInboxItems,
-  );
-  const fetchEmailItems = useCallback(() => {
-    void mutateEmailItems();
-  }, [mutateEmailItems]);
+  // feat-inbox-attention-badge: the email-triage "Needs attention" list was
+  // removed from the Dashboard — those items now live in the Inbox, surfaced as
+  // a count badge on the Inbox left-nav item (components/dashboard/
+  // inbox-nav-badge.tsx). The Dashboard no longer fetches /api/inbox/emails.
 
   // ADR-044 (#4543): the repo-disconnected hint reflects the ACTIVE workspace's
   // repo (never the caller's own users.repo_url), so an invited member viewing a
@@ -278,18 +258,18 @@ export default function DashboardPage() {
   const repoDisconnected = noActiveRepo;
   const orphanedCount = orphanCount ?? 0;
 
-  const visionExists = kbFiles.has("overview/vision.md");
+  const visionExists = foundationPaths["overview/vision.md"]?.exists ?? false;
   const foundationCards: FoundationCard[] = FOUNDATION_PATHS.map((f) => ({
     ...f,
     done:
-      kbFiles.has(f.kbPath) &&
-      (kbFiles.get(f.kbPath)?.size ?? 0) >= FOUNDATION_MIN_CONTENT_BYTES,
+      (foundationPaths[f.kbPath]?.exists ?? false) &&
+      (foundationPaths[f.kbPath]?.size ?? 0) >= FOUNDATION_MIN_CONTENT_BYTES,
   }));
   const operationalCards: FoundationCard[] = OPERATIONAL_TASKS.map((t) => ({
     ...t,
     done:
-      kbFiles.has(t.kbPath) &&
-      (kbFiles.get(t.kbPath)?.size ?? 0) >= FOUNDATION_MIN_CONTENT_BYTES,
+      (foundationPaths[t.kbPath]?.exists ?? false) &&
+      (foundationPaths[t.kbPath]?.size ?? 0) >= FOUNDATION_MIN_CONTENT_BYTES,
   }));
   const allCards = [...foundationCards, ...operationalCards];
   const allTasksComplete = allCards.every((c) => c.done);
@@ -430,17 +410,19 @@ export default function DashboardPage() {
   //   (b) a kb-tree 401 is navigating to /login (isRedirecting401) — hold the
   //       skeleton through the redirect rather than flash dashboard chrome
   //       (TR2); or
-  //   (c) the user has NO content yet (no conversations, no email items, no
-  //       active filter) AND the KB tree is still loading — only THIS case
-  //       needs the tree, to choose first-run vs. empty without flashing the
-  //       wrong state (FR2). Users WITH conversations never wait on the tree.
+  //   (c) the user has NO content yet (no conversations, no active filter) AND
+  //       the KB tree is still loading — only THIS case needs the tree, to
+  //       choose first-run vs. empty without flashing the wrong state (FR2).
+  //       Users WITH conversations never wait on the tree.
+  // Merge note: this condition originally also required `emailItems.length === 0`.
+  // feat-inbox-attention-badge removed the email-triage list from the Dashboard
+  // (those items now surface as a count badge on the Inbox left-nav item, and
+  // this page no longer fetches /api/inbox/emails), so the clause is dropped
+  // rather than ported — there is no Dashboard-side email state left to gate on.
   const showInitialSkeleton =
     (loading && conversations.length === 0) ||
     isRedirecting401 ||
-    (conversations.length === 0 &&
-      emailItems.length === 0 &&
-      !hasActiveFilter &&
-      kbLoading);
+    (conversations.length === 0 && !hasActiveFilter && kbLoading);
 
   if (showInitialSkeleton) {
     return (
@@ -454,7 +436,7 @@ export default function DashboardPage() {
   }
 
   // ---------------------------------------------------------------------------
-  // Provisioning state (503 from KB tree)
+  // Provisioning state (503 from foundation status)
   // ---------------------------------------------------------------------------
 
   if (kbError === "provisioning") {
@@ -470,9 +452,15 @@ export default function DashboardPage() {
   // First-run state (no vision.md, no conversations)
   // ---------------------------------------------------------------------------
 
-  // emailItems gate: a pending email-triage item (esp. a statutory clock)
-  // must not be hidden behind the conversation-less empty states.
-  if (!kbError && !visionExists && conversations.length === 0 && emailItems.length === 0 && !hasActiveFilter) {
+  // feat-inbox-attention-badge: this empty state no longer special-cases
+  // pending email-triage items. They are surfaced by the Inbox nav count badge —
+  // persistent in the desktop rail in every dashboard state. On mobile the badge
+  // rides the nav drawer, so with the drawer closed the count is one tap from
+  // the top-bar hamburger (an accepted degradation vs. the removed inline block;
+  // a mobile top-bar indicator is out of scope here — it needs its own
+  // wireframe). A statutory clock is thus no longer hidden by the
+  // conversation-less first-run screen on desktop, and is one tap away on mobile.
+  if (!kbError && !visionExists && conversations.length === 0 && !hasActiveFilter) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <p className="mb-3 text-xs font-medium tracking-widest text-soleur-accent-gold-fg">
@@ -579,6 +567,7 @@ export default function DashboardPage() {
                 name="idea"
                 type="text"
                 placeholder="What are you building?"
+                data-tour-id="action:new-conversation"
                 autoFocus
                 className="min-h-[36px] w-full border-none bg-transparent px-1 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:outline-none focus-visible:shadow-none"
                 onPaste={(e) => {
@@ -612,7 +601,7 @@ export default function DashboardPage() {
   // placeholder or suggested prompts depending on foundation status.
   // ---------------------------------------------------------------------------
 
-  if (conversations.length === 0 && emailItems.length === 0 && !hasActiveFilter) {
+  if (conversations.length === 0 && !hasActiveFilter) {
     return (
       <div className={`mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center px-4 py-10 ${visionExists && !allTasksComplete ? "pt-10" : "justify-center"}`}>
         {/* Foundation + operational cards (hidden when all complete) */}
@@ -640,6 +629,7 @@ export default function DashboardPage() {
         <button
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
+          data-tour-id="action:new-conversation"
           className="mb-10 rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-6 py-3 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
         >
           New conversation
@@ -759,6 +749,7 @@ export default function DashboardPage() {
         <button
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
+          data-tour-id="action:new-conversation"
           className="min-h-[44px] rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-4 py-2 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
         >
           + New conversation
@@ -811,33 +802,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Email-triage rows — siblings of conversation rows. Server returns
-          unacknowledged statutory pinned first; render in given order. The
-          "View all" link is the second entry point to /dashboard/inbox (the
-          top-level nav entry is the always-available path). */}
-      {emailItems.length > 0 && (
-        <div className="mb-2 space-y-2">
-          <div className="flex items-center justify-between px-1">
-            <span className="text-xs font-medium uppercase tracking-wide text-soleur-text-muted">
-              Needs attention
-            </span>
-            <Link
-              href="/dashboard/inbox"
-              className="text-xs text-soleur-accent-gold-fg transition-colors hover:text-soleur-text-primary"
-            >
-              View all →
-            </Link>
-          </div>
-          {emailItems.map((item) => (
-            <EmailTriageRow
-              key={item.id}
-              item={item}
-              onChanged={fetchEmailItems}
-            />
-          ))}
-        </div>
-      )}
-
       {/* Conversation list */}
       {!loading && !error && conversations.length > 0 && (
         <div className="space-y-2">
@@ -858,7 +822,7 @@ export default function DashboardPage() {
 
 function LeaderStrip({ onLeaderClick, getIconPath }: { onLeaderClick: (leaderId: string) => void; getIconPath: (id: DomainLeaderId) => string | null }) {
   return (
-    <>
+    <div data-tour-id="action:org-panel" className="flex flex-col items-center">
       <p className="mb-4 text-xs font-medium tracking-widest text-soleur-text-secondary">
         YOUR ORGANIZATION
       </p>
@@ -877,7 +841,7 @@ function LeaderStrip({ onLeaderClick, getIconPath }: { onLeaderClick: (leaderId:
           </button>
         ))}
       </div>
-    </>
+    </div>
   );
 }
 

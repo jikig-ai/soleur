@@ -43,6 +43,11 @@ vi.mock("@/server/logger", () => ({
   }),
 }));
 
+const { emitMarkerSpy } = vi.hoisted(() => ({ emitMarkerSpy: vi.fn() }));
+vi.mock("@/server/claude-cost-marker", () => ({
+  emitClaudeCostMarker: emitMarkerSpy,
+}));
+
 import { persistTurnCost } from "@/server/cost-writer";
 import { reportSilentFallback, mirrorP0Deduped } from "@/server/observability";
 import { ByokDelegationCrossTenantError } from "@/server/byok-resolver";
@@ -56,17 +61,58 @@ beforeEach(() => {
   sendToClientSpy.mockClear();
 });
 
+describe("persistTurnCost — cost marker threading (Phase 1, AC2)", () => {
+  it("emits a SOLEUR_CLAUDE_COST marker with the threaded source + model", () => {
+    emitMarkerSpy.mockClear();
+    persistTurnCost(
+      USER,
+      CONV,
+      "cpo",
+      WORKSPACE,
+      {
+        totalCostUsd: 0.012,
+        usage: {
+          input_tokens: 100,
+          output_tokens: 50,
+          cache_read_input_tokens: 4,
+          cache_creation_input_tokens: 2,
+        },
+      },
+      { source: "agent-runner", model: "claude-opus-4-8" },
+    );
+    expect(emitMarkerSpy).toHaveBeenCalledTimes(1);
+    expect(emitMarkerSpy.mock.calls[0][0]).toMatchObject({
+      source: "agent-runner",
+      model: "claude-opus-4-8",
+      input_tokens: 100,
+      output_tokens: 50,
+      cache_read_input_tokens: 4,
+      cache_creation_input_tokens: 2,
+      cost_usd: 0.012,
+      id: CONV,
+      capture_status: "ok",
+    });
+  });
+});
+
 describe("persistTurnCost — workspace_id wiring (Phase 3)", () => {
   it("passes p_workspace_id to the write_byok_audit RPC", async () => {
-    persistTurnCost(USER, CONV, "cpo", WORKSPACE, {
-      totalCostUsd: 0.012,
-      usage: {
-        input_tokens: 100,
-        output_tokens: 50,
-        cache_read_input_tokens: 0,
-        cache_creation_input_tokens: 0,
+    persistTurnCost(
+      USER,
+      CONV,
+      "cpo",
+      WORKSPACE,
+      {
+        totalCostUsd: 0.012,
+        usage: {
+          input_tokens: 100,
+          output_tokens: 50,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
       },
-    });
+      { source: "cc-soleur-go", model: null },
+    );
 
     // Microtask drain so .then() handlers attached inside persistTurnCost
     // fire before assertion.
@@ -84,15 +130,22 @@ describe("persistTurnCost — workspace_id wiring (Phase 3)", () => {
   });
 
   it("passes p_workspace_id to the increment_conversation_cost RPC (workspace-grain attribution)", async () => {
-    persistTurnCost(USER, CONV, "cpo", WORKSPACE, {
-      totalCostUsd: 0.012,
-      usage: {
-        input_tokens: 100,
-        output_tokens: 50,
-        cache_read_input_tokens: 0,
-        cache_creation_input_tokens: 0,
+    persistTurnCost(
+      USER,
+      CONV,
+      "cpo",
+      WORKSPACE,
+      {
+        totalCostUsd: 0.012,
+        usage: {
+          input_tokens: 100,
+          output_tokens: 50,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
       },
-    });
+      { source: "cc-soleur-go", model: null },
+    );
 
     await new Promise((r) => setImmediate(r));
 
@@ -109,15 +162,22 @@ describe("persistTurnCost — workspace_id wiring (Phase 3)", () => {
   });
 
   it("usage_update WS event includes the workspaceId for client UI attribution", async () => {
-    persistTurnCost(USER, CONV, "cpo", WORKSPACE, {
-      totalCostUsd: 0.012,
-      usage: {
-        input_tokens: 100,
-        output_tokens: 50,
-        cache_read_input_tokens: 0,
-        cache_creation_input_tokens: 0,
+    persistTurnCost(
+      USER,
+      CONV,
+      "cpo",
+      WORKSPACE,
+      {
+        totalCostUsd: 0.012,
+        usage: {
+          input_tokens: 100,
+          output_tokens: 50,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
       },
-    });
+      { source: "cc-soleur-go", model: null },
+    );
 
     expect(sendToClientSpy).toHaveBeenCalledTimes(1);
     const evt = sendToClientSpy.mock.calls[0][1] as Record<string, unknown>;
@@ -172,6 +232,7 @@ describe("persistTurnCost — cross-tenant Art.33 emission (#4364, hardened #465
           cache_creation_input_tokens: 0,
         },
       },
+      { source: "cc-soleur-go", model: null },
       { delegationId: "deadbeef", callerUserId: "g-1" },
     );
     await new Promise((r) => setImmediate(r));

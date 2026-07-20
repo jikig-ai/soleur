@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
+import { enrichConversationFixtures } from "./helpers/mock-supabase";
 
 // RED→GREEN regression for plan
 // 2026-06-15-fix-conversations-rail-empty-repo-url-source-divergence.
@@ -110,6 +111,24 @@ vi.mock("@/lib/supabase/client", () => ({
         data: { user: { id: "user-1" } },
         error: null,
       }),
+    },
+    // The list read flows through list_conversations_enriched (migration 125).
+    // Scope is now the p_repo_url arg; capture it into state.capturedEq so the
+    // scoping assertions are unchanged, and return only that repo's rows.
+    rpc: (name: string, args: Record<string, unknown>) => {
+      if (name !== "list_conversations_enriched") {
+        return Promise.resolve({ data: null, error: { message: `unexpected rpc: ${name}` } });
+      }
+      const repo = (args.p_repo_url as string | null) ?? null;
+      state.capturedEq.push(["repo_url", repo]);
+      const rows = repo == null ? [] : (state.conversationsByRepo[repo] ?? []);
+      return Promise.resolve({
+        data: enrichConversationFixtures(
+          rows as { id: string }[],
+          state.messages as { conversation_id: string; role: string; content: string; leader_id?: string | null; created_at?: string }[],
+        ),
+        error: null,
+      });
     },
     from: (table: string) => {
       if (table === "conversations") return buildConversationsBuilder();

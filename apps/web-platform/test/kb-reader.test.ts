@@ -6,6 +6,7 @@ import {
   buildTree,
   readContent,
   searchKb,
+  statKnownPaths,
   KbNotFoundError,
   KbAccessDeniedError,
   KbValidationError,
@@ -470,5 +471,43 @@ describe("searchKb", () => {
     const row = result.results.find((r) => r.path === "many.md");
     expect(row).toBeDefined();
     expect(row!.matches.length).toBeLessThanOrEqual(50);
+  });
+});
+
+describe("statKnownPaths", () => {
+  test("reports exists+size for present files and absent for missing", async () => {
+    fs.mkdirSync(path.join(kbRoot, "overview"), { recursive: true });
+    fs.writeFileSync(path.join(kbRoot, "overview/vision.md"), "x".repeat(1234));
+
+    const stats = await statKnownPaths(kbRoot, [
+      "overview/vision.md",
+      "marketing/brand-guide.md", // does not exist
+    ]);
+
+    expect(stats["overview/vision.md"]).toEqual({ exists: true, size: 1234 });
+    expect(stats["marketing/brand-guide.md"]).toEqual({ exists: false, size: 0 });
+  });
+
+  test("never escapes kbRoot via path traversal", async () => {
+    // A secret outside the KB root that a traversal path would reach.
+    fs.writeFileSync(path.join(tmpWorkspace, "secret.md"), "TOP SECRET");
+    const stats = await statKnownPaths(kbRoot, ["../secret.md"]);
+    expect(stats["../secret.md"]).toEqual({ exists: false, size: 0 });
+  });
+
+  test("refuses symlinks (O_NOFOLLOW) — a symlinked path reads as absent", async () => {
+    fs.writeFileSync(path.join(tmpWorkspace, "outside.md"), "y".repeat(50));
+    fs.symlinkSync(
+      path.join(tmpWorkspace, "outside.md"),
+      path.join(kbRoot, "linked.md"),
+    );
+    const stats = await statKnownPaths(kbRoot, ["linked.md"]);
+    expect(stats["linked.md"]).toEqual({ exists: false, size: 0 });
+  });
+
+  test("a directory (not a file) reads as absent", async () => {
+    fs.mkdirSync(path.join(kbRoot, "overview"), { recursive: true });
+    const stats = await statKnownPaths(kbRoot, ["overview"]);
+    expect(stats["overview"]).toEqual({ exists: false, size: 0 });
   });
 });

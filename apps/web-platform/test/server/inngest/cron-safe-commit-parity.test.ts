@@ -42,6 +42,7 @@ const MIGRATED_PROMPT = [
   "cron-growth-audit.ts",
   "cron-community-monitor.ts",
   "cron-competitive-analysis.ts",
+  "cron-architecture-diagram-sync.ts",
 ];
 
 // Pure-TS data-refresh pipelines migrated by #5111. No claude spawn → no
@@ -69,9 +70,57 @@ const EXEMPT: Record<string, string> = {
   "cron-bug-fixer.ts": "fix-issue skill owns the commit step (scoped add)",
 };
 
+// Read-only probe crons (#5674) — a third class beyond MIGRATED/EXEMPT.
+// `cron-anthropic-credit-probe.ts` does NO git and opens NO PR (it pages a
+// Sentry heartbeat from a 1-token Anthropic canary call), so the safe-commit
+// invariant does not apply: it is neither migrated (nothing to route through
+// safeCommitAndPr) nor exempt (exemption is for crons that DO self-commit).
+// `cron-anthropic-cost-report.ts` (ADR-107) is the same class — it reads the
+// Anthropic Admin cost_report API and emits a `SOLEUR_CLAUDE_COST_DAILY` marker,
+// holding no git and opening no PR. Both are covered by invariant 1's directory
+// walk (carry no blanket git-add) and need no MIGRATED/EXEMPT entry. Documented
+// here so the cron-tier2-parity sibling-set sweep sees this dependent
+// acknowledged when EXPECTED_CRON_FUNCTIONS grows with a new read-only probe.
+const READ_ONLY_PROBES = [
+  "cron-anthropic-credit-probe.ts",
+  "cron-anthropic-cost-report.ts",
+];
+
+// Dispatch-hybrid crons (#5872 acknowledgment) — a fourth implicit class beyond
+// MIGRATED/EXEMPT/READ_ONLY_PROBES. `cron-dev-migration-drift`, `cron-terraform-drift`
+// and `cron-domain-model-drift` are SCHEDULERS ONLY: the dispatcher mints a
+// short-lived installation token and POSTs a `workflow_dispatch`, holding no git
+// and opening no PR (the git-touching / issue-filing work runs in the ephemeral
+// GHA executor, not the Node dispatcher). Like READ_ONLY_PROBES the safe-commit
+// invariant does not apply — they carry no persistence path — so they need no
+// list entry and are covered by invariant 1's directory walk. Documented here so
+// the cron-tier2-parity sibling-set sweep sees this dependent acknowledged when
+// EXPECTED_CRON_FUNCTIONS grows with a new dispatch-hybrid cron.
+
+// #6657: cron-gh-pages-cert-reissue is a fifth class — an EVENT-TRIGGERED
+// live-infra remediation. It flips CF DNS proxy state + re-orders the GitHub
+// Pages cert via the App token and files/comments issues via the poll cron, but
+// it holds NO git and opens NO PR (no safeCommitAndPr path). Like the read-only
+// probes + dispatch-hybrids, the safe-commit invariant does not apply — it needs
+// no MIGRATED/EXEMPT entry and is covered by invariant 1's directory walk.
+// Acknowledged here so the cron-tier2-parity sibling-set sweep sees this
+// dependent when EXPECTED_CRON_FUNCTIONS grows with a new event-triggered cron.
+
 const cronFiles = readdirSync(FUNCTIONS_DIR).filter((f) =>
   /^(cron|event)-.*\.ts$/.test(f),
 );
+
+describe("safe-commit parity — read-only probe crons own no persistence path", () => {
+  it.each(READ_ONLY_PROBES.map((f) => [f]))(
+    "%s exists, does not import safeCommitAndPr, and is not EXEMPT-listed",
+    (file) => {
+      expect(cronFiles).toContain(file);
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      expect(src).not.toMatch(/safeCommitAndPr\(\{/);
+      expect(EXEMPT[file]).toBeUndefined();
+    },
+  );
+});
 
 describe("safe-commit parity — invariant 1: no blanket git-add literal anywhere", () => {
   it.each(cronFiles.map((f) => [f]))("%s carries no blanket-add literal", (file) => {
@@ -316,4 +365,28 @@ describe("#5199 — restored auto-crons: no gh-api allowlist entry (F4a)", () =>
       ).toEqual([]);
     },
   );
+});
+
+describe("#6031 — cron-ghcr-token-minter is a non-git cron", () => {
+  // The GHCR installation-token minter mints a token and writes to Doppler; it
+  // does NO git operations, so it neither calls safeCommitAndPr nor carries a
+  // CRON_BASH_ALLOWLISTS entry, and is not a deferred Tier-2 cron. Acknowledged
+  // here so the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS
+  // grows (cron-tier2-parity set).
+  it("has no CRON_BASH_ALLOWLISTS entry and is not Tier-2 deferred", () => {
+    expect(CRON_BASH_ALLOWLISTS["cron-ghcr-token-minter"]).toBeUndefined();
+    expect(TIER2_DEFERRED_CRONS.has("cron-ghcr-token-minter")).toBe(false);
+  });
+});
+
+describe("#6602 — cron-expenses-verify-by is a non-git dispatch-hybrid cron", () => {
+  // The expenses verify_by scheduler mints an installation token and dispatches
+  // scheduled-expenses-verify-by.yml; it does NO git operations, so it neither
+  // calls safeCommitAndPr nor carries a CRON_BASH_ALLOWLISTS entry, and is not a
+  // deferred Tier-2 cron. Acknowledged here so the sibling-set sweep sees this
+  // dependent when EXPECTED_CRON_FUNCTIONS grows (cron-tier2-parity set).
+  it("has no CRON_BASH_ALLOWLISTS entry and is not Tier-2 deferred", () => {
+    expect(CRON_BASH_ALLOWLISTS["cron-expenses-verify-by"]).toBeUndefined();
+    expect(TIER2_DEFERRED_CRONS.has("cron-expenses-verify-by")).toBe(false);
+  });
 });

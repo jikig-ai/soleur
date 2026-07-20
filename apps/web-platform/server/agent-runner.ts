@@ -28,8 +28,13 @@ import {
 // inside the resolver's flag-OFF fast path.
 import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import { sendToClient } from "./ws-handler";
+import { getPluginPath } from "./plugin-path";
 import { streamReplayBuffer } from "./stream-replay-buffer";
-import { notifyOfflineUser, type NotificationPayload } from "./notifications";
+import {
+  notifyOfflineUser,
+  notifyTaskCompleted,
+  type NotificationPayload,
+} from "./notifications";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import {
@@ -37,6 +42,7 @@ import {
   ERR_CONVERSATION_NOT_FOUND,
   ERR_NO_ACTIVE_SESSION,
   ERR_REVIEW_GATE_NOT_FOUND,
+  ERR_WORKTREE_LEASE_UNAVAILABLE,
 } from "./error-messages";
 import { isPathInWorkspace } from "./sandbox";
 import { PROVIDER_CONFIG, EXCLUDED_FROM_SERVICES_UI } from "./providers";
@@ -57,16 +63,27 @@ import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
 import { buildEmailTriageTools } from "./email-triage-tools";
+import { buildInboxTools } from "./inbox-tools";
 import { buildAuthStatusTools } from "./auth-status-tools";
 import { buildAccountTools } from "./account-tools";
 import { buildRoutineTools } from "./routines-tools";
+import { buildWorkstreamTools } from "./workstream/workstream-tools";
 import { buildWorkspaceSettingsTools } from "./workspace-settings-tools";
+import { buildCrmTools } from "./crm/crm-tools";
 import { getCurrentRepoUrl, getCurrentRepoStatus } from "./current-repo-url";
 import { evaluateRepoReadiness, type RepoReadiness } from "./repo-readiness";
 import {
   resolveActiveWorkspace,
   resolveActiveWorkspacePath,
+  isGitDataStoreEnabled,
 } from "./workspace-resolver";
+import { replicateToGitData } from "./git-data-replication";
+import { resolveHostId } from "./host-identity";
+import {
+  acquireAndHoldWorktreeLease,
+  resolveWorktreeId,
+  type WorktreeLeaseHandle,
+} from "./worktree-write-lease";
 import { resolveInstallationId } from "./resolve-installation-id";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
@@ -78,7 +95,7 @@ import { extractPdfText } from "./pdf-text-extract";
 import { FULL_TEXT_CAP_BYTES } from "./kb-document-resolver";
 import { applyPrefillGuard } from "./agent-prefill-guard";
 import { updateConversationFor } from "./conversation-writer";
-import { releaseSlot } from "./concurrency";
+import { releaseSlot, SLOT_STALENESS_THRESHOLD_SECONDS } from "./concurrency";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
   READ_TOOL_PDF_CAPABILITY_DIRECTIVE,
@@ -195,7 +212,9 @@ import {
   forEachSessionForConversation,
 } from "./agent-session-registry";
 import { classifyAbortReason, SessionAbortError } from "./abort-classifier";
+import { classifySandboxStartupError } from "./sandbox-startup-classifier";
 import { checkpointInflightWorkForConversation } from "./inflight-checkpoint";
+import { resolveWorkspaceMode } from "./workspace-mode";
 
 export { abortSession, abortAllUserSessions, abortAllSessions };
 
@@ -735,14 +754,15 @@ export function startInactivityTimer(): void {
  * — `last_active` is updated only by status writes, so a long tool-heavy
  * turn streaming partials without status writes would have stale
  * `last_active` and be falsely reaped. Slot heartbeats are refreshed every
- * 30 s by `ws-handler.ts` for the active conversation; their staleness is
- * the authoritative liveness signal.
+ * SLOT_HEARTBEAT_INTERVAL_MS (60 s as of the 2026-07-18 Disk-IO backoff) by
+ * `ws-handler.ts` for the active conversation; their staleness is the
+ * authoritative liveness signal.
  *
- * The 120 s staleness threshold matches the existing pg_cron sweep
- * (migration 029 line 219-225) so the two sweep mechanisms agree on a
- * single liveness threshold. The poll cadence (300 s as of the 2026-06-02
- * disk-IO remediation) is INTENTIONALLY decoupled from that threshold and
- * from the pg_cron sweep cadence — see STUCK_ACTIVE_CHECK_INTERVAL_MS below.
+ * The 240 s staleness threshold matches the pg_cron sweep (migration 133) so
+ * the sweep mechanisms agree on a single liveness threshold. The poll cadence
+ * (300 s as of the 2026-06-02 disk-IO remediation) is INTENTIONALLY decoupled
+ * from that threshold and from the pg_cron sweep cadence — see
+ * STUCK_ACTIVE_CHECK_INTERVAL_MS below.
  *
  * Per-row order: status flip → releaseSlot → abortSession.
  *   - Status flip first means the abort-branch in `startAgentSession`'s
@@ -759,22 +779,22 @@ export function startInactivityTimer(): void {
  * Returns the timer so callers can clear it (used by tests; production
  * server keeps the reference live for the lifetime of the process).
  */
-// THRESHOLD-COUPLING: 120 s appears in four places — keep them in sync.
-//   (1) migration 029 line ~131 (acquire_conversation_slot lazy sweep)
-//   (2) migration 029 line ~224 (pg_cron user_concurrency_slots_sweep)
-//   (3) migration 037 line ~39 (find_stuck_active_conversations default)
-//   (4) ws-handler.ts STALE_HEARTBEAT_THRESHOLD_SECONDS in
-//       tryLedgerDivergenceRecovery (May-6 #3354)
-// Changing this constant without updating those sites desyncs the sweep
-// mechanisms — one will reap rows the others consider live.
-const STUCK_ACTIVE_THRESHOLD_SECONDS = 120;
-// Widened 60s → 300s (2026-06-02 disk-IO remediation): this drives the
-// setInterval that calls `find_stuck_active_conversations` every tick — the #2
-// prod Supabase Disk-IO write consumer (760k ms / 38k calls over a 27-day
-// window). 300s cuts that RPC volume 5×. The 120s STUCK_ACTIVE_THRESHOLD_SECONDS
-// staleness window above is INDEPENDENT of poll cadence (it stays 120s on all
-// four co-locked sources listed above); worst-case reap latency rises 180s →
-// 420s, still far under any user expectation for this rare recovery path. See
+// THRESHOLD-COUPLING: the staleness threshold is the ONE shared const
+// SLOT_STALENESS_THRESHOLD_SECONDS (240 s, server/concurrency.ts), also consumed
+// by ws-handler.ts (ledger-divergence recovery + the cap-drift self-eviction +
+// sibling-snapshot-restore liveCutoff
+// gates) and mirrored in SQL by migration 133 (acquire_conversation_slot lazy
+// sweep, user_concurrency_slots_sweep pg_cron, find_stuck_active_conversations
+// default). Importing the shared symbol (rather than a local literal)
+// structurally prevents the sibling-site drift that historically false-reaped
+// live slots.
+// Widened 60s → 300s (2026-06-02 disk-IO remediation): STUCK_ACTIVE_CHECK_INTERVAL_MS
+// drives the setInterval that calls `find_stuck_active_conversations` every tick
+// — the #2 prod Supabase Disk-IO write consumer (760k ms / 38k calls over a
+// 27-day window). 300s cuts that RPC volume 5×. The staleness window
+// (SLOT_STALENESS_THRESHOLD_SECONDS) is INDEPENDENT of poll cadence; worst-case
+// reap latency rises with the widened threshold but stays far under any user
+// expectation for this rare recovery path. See
 // plan 2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 1.
 const STUCK_ACTIVE_CHECK_INTERVAL_MS = 300 * 1_000;
 
@@ -784,7 +804,7 @@ export function startStuckActiveReaper(): NodeJS.Timeout {
     try {
       const { data, error } = await supabase().rpc(
         "find_stuck_active_conversations",
-        { p_threshold_seconds: STUCK_ACTIVE_THRESHOLD_SECONDS },
+        { p_threshold_seconds: SLOT_STALENESS_THRESHOLD_SECONDS },
       );
       if (error) {
         log.error({ err: error }, "Stuck-active reaper RPC error");
@@ -940,6 +960,11 @@ export async function startAgentSession(
   const existing = getSession(userId, conversationId, leaderId);
   if (existing) existing.abort.abort(new SessionAbortError("superseded"));
 
+  // This controller is the legacy/registry abort surface: it rides inside
+  // `activeSessions` via `registerSession` below, so `abortSession`'s broadcast
+  // reaches it (the host-local abort surface — epic #5274 Phase 1 audit). The
+  // cc-soleur-go lineage has its own controller (`cc-dispatcher.ts`, reached by
+  // `closeCcConversation`), not this one.
   const controller = new AbortController();
   const session: AgentSession = {
     abort: controller,
@@ -947,6 +972,12 @@ export async function startAgentSession(
     sessionId: null,
   };
   registerSession(userId, conversationId, session, leaderId);
+
+  // #5274 PR B — the worktree write-lease held for this session's lifetime, set
+  // once the active workspace resolves (below) when the git-data store is
+  // enabled, released in the finally. `null` while the lease path is gated off
+  // (the dominant prod state today) or before acquire.
+  let worktreeLeaseHandle: WorktreeLeaseHandle | null = null;
 
   // Guards for stream_end idempotency across success, exception, and abort
   // paths. Before #2843, stream_end only fired inside the `result` branch —
@@ -1079,7 +1110,10 @@ export async function startAgentSession(
       sessionTenant,
       activeWorkspaceId,
     );
-    const pluginPath = path.join(workspacePath, "plugins", "soleur");
+    // Load the SDK plugin from the PLATFORM-DEPLOYED root, never the workspace
+    // copy — same trust boundary as cc-dispatcher (this legacy startAgentSession
+    // factory is the one #6115 missed). See the connected-repo-shadows learning.
+    const pluginPath = getPluginPath();
 
     // Unconditional pre-sandbox workspace-dir guarantee (feat-one-shot-warm-
     // reprovision-ensure-dir-presandbox). The leader's bwrap sandbox binds
@@ -1095,6 +1129,43 @@ export async function startAgentSession(
       userId,
     });
 
+    // #5274 PR B — acquire the workspace write-lease before any reprovision /
+    // syncPull / agent write touches the tree. GATED behind isGitDataStoreEnabled()
+    // (ADR-068 amendment): entirely inert at flag-off (no Postgres round-trip, no
+    // fail-closed dependency) until cutover. A null acquire means another host
+    // holds the lease live — fail-closed: this host must not write. Heartbeat loss
+    // mid-session aborts the in-flight write (onLost). Released in the finally.
+    if (isGitDataStoreEnabled()) {
+      const hostId = resolveHostId();
+      worktreeLeaseHandle = await acquireAndHoldWorktreeLease(
+        activeWorkspaceId,
+        resolveWorktreeId(userId),
+        hostId,
+        () => {
+          reportSilentFallback(
+            new Error("worktree write-lease lost mid-session (reclaimed by another host)"),
+            {
+              feature: "worktree_lease",
+              op: "startAgentSession.heartbeat-lost",
+              extra: { userId, workspaceId: activeWorkspaceId },
+            },
+          );
+          controller.abort(new SessionAbortError("superseded"));
+        },
+      );
+      if (!worktreeLeaseHandle) {
+        reportSilentFallback(
+          new Error("worktree write-lease unavailable (held by another host)"),
+          {
+            feature: "worktree_lease",
+            op: "startAgentSession.acquire",
+            extra: { userId, workspaceId: activeWorkspaceId },
+          },
+        );
+        throw new Error(ERR_WORKTREE_LEASE_UNAVAILABLE);
+      }
+    }
+
     // Extract MCP server names from plugin.json for canUseTool allowlisting.
     // Uses explicit server-name matching (not blanket mcp__ prefix).
     // See learning: 2026-04-06-mcp-tool-canusertool-scope-allowlist.md
@@ -1106,10 +1177,12 @@ export async function startAgentSession(
         pluginMcpServerNames = Object.keys(pluginJson.mcpServers);
       }
     } catch (err) {
-      // plugin.json may not exist in all workspaces; proceed without plugin MCP tools.
-      // ENOENT is an expected state (no plugin installed). Parse errors or other
-      // read failures on a committed file are degraded conditions — mirror to
-      // Sentry so we hear about corrupted workspaces.
+      // plugin.json is read from the DEPLOYED plugin root (pluginPath =
+      // getPluginPath()), not the workspace copy; proceed without plugin MCP tools
+      // on any failure. ENOENT is an expected state on a container whose plugin
+      // mount is absent/partial (verifyPluginMountOnce owns that signal). Parse or
+      // other read failures on the deployed file are a degraded deploy condition —
+      // mirror to Sentry so we hear about a corrupted plugin mount.
       if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
         reportSilentFallback(err, {
           feature: "agent-runner",
@@ -1696,6 +1769,14 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       "mcp__soleur_platform__email_suppress",
     );
 
+    // Unified attention-inbox read tool (feat-severity-ranked-inbox #6007):
+    // agent-user parity for the SAME severity-ranked feed the operator sees.
+    // Read-only (auto-approve); merges native inbox_item + email-triage via the
+    // shared fetchInboxSources + mergeAndRank modules.
+    const inboxTools = buildInboxTools({ userId });
+    platformTools.push(...inboxTools);
+    platformToolNames.push("mcp__soleur_platform__inbox_list");
+
     // Routines management tools (#5345): agent-user parity for the Routines
     // surface — registered unconditionally. routines_list / routine_runs_list
     // are read-only (auto-approve); routine_run is gated (the review-gate is the
@@ -1703,6 +1784,15 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     const routineTools = buildRoutineTools({ userId });
     platformTools.push(...routineTools.tools);
     platformToolNames.push(...routineTools.toolNames);
+
+    // Workstream board tools (feat-workstream-kanban-tab): agent-user READ
+    // parity for the kanban board — registered unconditionally.
+    // workstream_issues_list is read-only (auto-approve) and calls the shared
+    // getWorkstreamIssues() accessor (the active workspace's real connected-repo
+    // issues — the same feed the dashboard route serves).
+    const workstreamTools = buildWorkstreamTools({ userId });
+    platformTools.push(...workstreamTools.tools);
+    platformToolNames.push(...workstreamTools.toolNames);
 
     // Auth revocation status tool (#4440 follow-up to #4418): registered
     // unconditionally — agents need self-diagnosis on every authenticated
@@ -1734,6 +1824,24 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     const workspaceSettingsTools = buildWorkspaceSettingsTools({ userId });
     platformTools.push(...workspaceSettingsTools.tools);
     platformToolNames.push(...workspaceSettingsTools.toolNames);
+
+    // Beta-CRM tools (feat-beta-conversation-capture #6165, ADR-102): the make-
+    // or-break agent-native read/write path for the operator's private beta-
+    // tester conversation store. Reads (list/get/note_list) are auto-approve
+    // (owner-only RLS via closure userId); writes (upsert/note_append/set_stage)
+    // are gated — the review gate is the R3 within-tenant-injection mitigation.
+    // userId is closure-captured; writes go through auth.uid()-pinned RPCs.
+    const crmTools = buildCrmTools({ userId });
+    platformTools.push(...crmTools);
+    platformToolNames.push(
+      "mcp__soleur_platform__crm_contact_list",
+      "mcp__soleur_platform__crm_contact_get",
+      "mcp__soleur_platform__crm_note_list",
+      "mcp__soleur_platform__crm_stage_transitions_list",
+      "mcp__soleur_platform__crm_contact_upsert",
+      "mcp__soleur_platform__crm_note_append",
+      "mcp__soleur_platform__crm_contact_set_stage",
+    );
 
     // Build MCP server if any platform tools are registered
     if (platformTools.length > 0) {
@@ -1939,7 +2047,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
 
     // Thread-shape guard for #3250 — drop `resume:` when the persisted
     // SDK session ends on `assistant`. Domain leaders default to
-    // `claude-sonnet-4-6`, which 400s on assistant-terminated threads.
+    // `claude-sonnet-5`, which 400s on assistant-terminated threads.
     // Helper-shared with the cc-soleur-go path (`cc-dispatcher.ts`).
     const {
       safeResumeSessionId,
@@ -1975,6 +2083,9 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       options: buildAgentQueryOptions({
         workspacePath,
         pluginPath,
+        // Legacy domain-leader runner is always Command Center execution:
+        // workspace cwd + workspace write (byte-identical to the prior default).
+        mode: resolveWorkspaceMode("command_center"),
         credential,
         serviceTokens,
         systemPrompt: effectiveSystemPrompt,
@@ -2264,6 +2375,17 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
                 cache_creation_input_tokens: cacheCreationDelta,
               },
             },
+            // Cost-attribution marker (plan Phase 1). The SDK result event
+            // reports the model as the key(s) of `modelUsage` (Phase-0 CLI
+            // probe: no top-level `model` field); surface the first, or null.
+            {
+              source: "agent-runner",
+              model:
+                Object.keys(
+                  (message as { modelUsage?: Record<string, unknown> })
+                    .modelUsage ?? {},
+                )[0] ?? null,
+            },
             lease.delegationId
               ? {
                   delegationId: lease.delegationId,
@@ -2279,6 +2401,29 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // invited member's leader edits to a connected shared workspace).
           await syncPush(userId, workspacePath, supabase(), activeWorkspaceId);
 
+          // #5274 PR B part 2 (ADR-068) — replicate the workspace's refs to the
+          // shared git-data bare store, FENCED by the held lease generation. A
+          // DISTINCT durability tier from the GitHub push above (git-data = the
+          // shared object store Phase 3's 2nd host reads), NOT a redundant
+          // double-write. The lease-gen / worktree-id push-options ride the
+          // git-data push ONLY, never the GitHub `syncPush` above. NO-OP at
+          // flag-off. Its failure (incl. a fence reject) is mirrored to Sentry
+          // inside replicateToGitData and MUST NOT break the turn.
+          if (isGitDataStoreEnabled() && worktreeLeaseHandle) {
+            try {
+              await replicateToGitData({
+                workspacePath,
+                workspaceId: activeWorkspaceId,
+                worktreeId: resolveWorktreeId(userId),
+                leaseGeneration: worktreeLeaseHandle.leaseGeneration,
+                userId,
+              });
+            } catch {
+              // Already reported (feature: worktree_lease) inside; swallow so a
+              // replication failure never fails an otherwise-complete turn.
+            }
+          }
+
           // Notify client that this leader finished streaming. The finally block
           // below emits the same event as a fallback for exception paths; guard
           // with `streamStartSent && !streamEndSent` so the two sites are
@@ -2291,6 +2436,22 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // Mark as waiting_for_user instead of completed -- conversation
           // continues until explicit close or inactivity timeout.
           await updateConversationStatus(userId, conversationId, "waiting_for_user");
+
+          // task_completed inbox nudge (feat-severity-ranked-inbox #6007): a
+          // durable "your {leader} finished" item + push, targeted to the run's
+          // user. Only on a real completion (assistant output persisted). Title
+          // is the static leader title (server-generated — never agent output).
+          // Shared with the cc-soleur-go terminal via notifyTaskCompleted so the
+          // two turn-boundary lineages cannot drift (arch review P1). Fire-and-
+          // forget (never throws + self-mirroring).
+          if (assistantPersisted) {
+            void notifyTaskCompleted({
+              userId,
+              conversationId,
+              workspaceId: activeWorkspaceId,
+              title: `${leader.title} finished`,
+            });
+          }
 
           // In multi-leader mode, dispatchToLeaders sends a single session_ended
           // after all leaders finish — individual leaders must not send it or the
@@ -2360,8 +2521,12 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           throw resultBranchErr;
         }
       } else if (
-        // Partial messages (streaming text deltas — cumulative snapshots)
+        // Partial messages (streaming text deltas — cumulative snapshots).
+        // agent-sdk 0.3 widened `message.message` to `string | MessageParam`;
+        // only the object form carries `.content`, so narrow out the string
+        // case (a string never had a truthy `.content` under 0.2 either).
         "message" in message &&
+        typeof message.message !== "string" &&
         message.message?.content
       ) {
         const content = message.message.content;
@@ -2546,18 +2711,49 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       }
       throw err;
     } else {
-      // Sandbox-required-but-unavailable surfaces as a SDK subprocess
-      // process.exit(1) after writing this substring to stderr (see
-      // `Options.sandbox.failIfUnavailable` in @anthropic-ai/claude-agent-sdk
-      // and #2634). The bare captureException below would land an untagged
-      // generic "command failed" event in Sentry — useless for triage. Tag
-      // it so on-call can filter by `feature: "agent-sandbox"`.
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (errMsg.includes("sandbox required but unavailable")) {
+      // Sandbox-STARTUP failures surface as an SDK subprocess process.exit(1)
+      // with the failure text merged into `err.message` (Phase-0 spike, #5875 /
+      // ADR-079): the SDK's missing-binary preflight
+      // ("sandbox required but unavailable", #2634) AND the #5873 seccomp/userns
+      // EPERM on the split unshare() (`bwrap: … Operation not permitted`). The
+      // bare captureException below would land an untagged generic
+      // "command failed" event — useless for triage; the seccomp EPERM went
+      // WHOLLY unsignalled during #5873. Classify + tag so on-call can filter
+      // by `feature:"agent-sandbox"` and by `sandboxKind`.
+      //
+      // Tag on the error SIGNATURE alone (`sandboxKind !== "other"`) — NOT on a
+      // stream-phase gate (CTO ruling, ADR-079). `streamStartSent` is set
+      // unconditionally at L2111 BEFORE the iterator loop, so it is always true
+      // here; and the #5873 seccomp denial surfaces AFTER stream_start (the
+      // sandbox wraps the model-driven Bash tool, Phase-0 §0.2) — a
+      // `!streamStartSent` gate produced a silent no-op on the exact incident
+      // shape. The classifier's namespace/preflight-token requirement is what
+      // excludes a mid-conversation model/API error (no such token → "other").
+      // Emit is per-user (`reportSilentFallback` is undebounced; cc-dispatcher.ts
+      // uses a per-user debounce) so Sentry's native affected-users threshold can
+      // tell a one-tenant blip from a fleet outage — no global-key debounce.
+      const sandboxClass = classifySandboxStartupError(err);
+      if (sandboxClass.sandboxKind !== "other") {
         reportSilentFallback(err, {
           feature: "agent-sandbox",
           op: "sdk-startup",
-          extra: { userId, conversationId, leaderId },
+          // Low-cardinality searchable dimensions (never PII — raw ids stay in
+          // `extra`, auto-hashed at the emit boundary).
+          // Searchable dimensions only: `sandboxKind` (triage axis) + the SDK
+          // version (the bump that broke the sandbox is the root-cause signal).
+          // `sandboxErrorCode` is a refinement of `sandboxKind` recoverable from
+          // stderr — kept in `extra` rather than a redundant second tag.
+          tags: {
+            sandboxKind: sandboxClass.sandboxKind,
+            sdkVersion: sandboxClass.sdkVersion ?? "unknown",
+          },
+          extra: {
+            userId,
+            conversationId,
+            leaderId,
+            sandboxErrorCode: sandboxClass.errorCode,
+            sandboxStderr: sandboxClass.stderr,
+          },
         });
       } else if (err instanceof MissingByokKeyError) {
         // Phase 3.2 AC-D (Kieran N4): info-level breadcrumb with the
@@ -2615,6 +2811,18 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         );
       }
     }
+    // #5274 PR B — release the worktree write-lease (stops the heartbeat,
+    // unregisters from the SIGTERM drain, frees the row so a surviving host can
+    // reclaim immediately). Idempotent + no-op when the lease path was gated
+    // off or already lost mid-session. Never throws.
+    //
+    // The cast widens past a TS finally-block CFA limitation: every path through
+    // the try returns/throws, so TS narrows this `let` back to its pre-try `null`
+    // initializer here and loses the in-try assignment. At runtime the handle is
+    // set whenever the lease was acquired; the `?.` keeps the gated-off/null case
+    // a no-op.
+    await (worktreeLeaseHandle as WorktreeLeaseHandle | null)?.release();
+
     unregisterSession(userId, conversationId, leaderId);
   }
 }

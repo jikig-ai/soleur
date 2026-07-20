@@ -130,7 +130,7 @@ If the runner is not available (no `node_modules/.bin/vitest`, no test config), 
 Create a worktree for the fix. Do NOT use `git checkout -b` -- it fails on bare repos (`core.bare=true`).
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create bot-fix-<ISSUE_NUMBER>-<SLUG>
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh --yes create bot-fix-<ISSUE_NUMBER>-<SLUG>
 ```
 
 If `worktree-manager.sh` exits non-zero (e.g., exit 128 "fatal: this operation must be run in a work tree" on bare repos where the script's internal `git fetch` fails), fall back to: `git worktree add .worktrees/bot-fix-<ISSUE_NUMBER>-<SLUG> -b bot-fix/<ISSUE_NUMBER>-<SLUG> origin/main`. Then `cd` into the worktree path printed by the script (or the fallback `.worktrees/` path).

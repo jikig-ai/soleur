@@ -66,6 +66,7 @@ async function dispatchRunner(conversationId: string) {
   // CWD-verify detector) when onToolResult is wired — the cc-soleur-go path.
   events.onToolResult = vi.fn();
   await runner.dispatch({
+    persona: "command_center",
     conversationId,
     userId: "u1",
     userMessage: "fix issue",
@@ -143,6 +144,7 @@ describe("soleur-go-runner — worktree-enter CWD-verify loop guardrail (#5313)"
     const events = makeEvents();
     events.onToolResult = vi.fn();
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-single",
       userId: "u1",
       userMessage: "fix",

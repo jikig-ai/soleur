@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { usePanelRef } from "react-resizable-panels";
 import useSWR from "swr";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useFeatureFlag } from "@/components/feature-flags/provider";
+import { isRevocationBounce } from "@/lib/auth/revocation-bounce";
 import type { KbContextValue } from "@/components/kb/kb-context";
 import type { KbChatContextValue } from "@/components/kb/kb-chat-context";
 import { safeSession } from "@/lib/safe-session";
@@ -14,6 +15,7 @@ import type { TreeNode } from "@/server/kb-reader";
 import { reportSilentFallback } from "@/lib/client-observability";
 import { swrKeys } from "@/lib/swr-config";
 import type { KbSyncHistoryRow } from "@/components/kb/kb-sync-status";
+import { useNavResume } from "@/hooks/use-nav-resume";
 
 const KB_SIDEBAR_OPEN_KEY = "kb.chat.sidebarOpen";
 
@@ -68,10 +70,13 @@ export interface UseKbLayoutStateResult {
 
 export function useKbLayoutState(): UseKbLayoutStateResult {
   const pathname = usePathname();
-  const router = useRouter();
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const chatPanelRef = usePanelRef();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // #4826 — expand seed is one-shot per KB layout mount (ref latch). Later
+  // user collapses must not be overwritten by re-reads of sessionStorage.
+  const { workspaceId, readExpanded, writeExpanded } = useNavResume();
+  const expandedSeededRef = useRef(false);
 
   // Runtime feature flag — hydrated server-side via FeatureFlagProvider in
   // app/layout.tsx (ADR-038 v2). No client fetch round-trip.
@@ -90,8 +95,11 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
       reportSilentFallback(err, { feature: "kb-tree", op: "fetch-tree" });
       throw new KbTreeError("unknown");
     }
-    if (res.status === 401) {
-      router.push("/login");
+    // GAP F (ADR-067 staleTimes): revocation bounce — HARD-nav to wipe the
+    // Router Cache. isRevocationBounce detects the direct 401 AND the #4307
+    // middleware 302→/login (fetch follows the redirect to 200 HTML).
+    if (isRevocationBounce(res)) {
+      window.location.assign("/login");
       throw new KbTreeError(null);
     }
     if (res.status === 503) throw new KbTreeError("workspace-not-ready");
@@ -111,7 +119,7 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
       reportSilentFallback(err, { feature: "kb-tree", op: "fetch-tree" });
       throw new KbTreeError("unknown");
     }
-  }, [router]);
+  }, []);
 
   const {
     data: treeData,
@@ -144,17 +152,38 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     await mutateTree();
   }, [mutateTree]);
 
-  const toggleExpanded = useCallback((path: string) => {
+  const toggleExpanded = useCallback(
+    (path: string) => {
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        if (next.has(path)) {
+          next.delete(path);
+        } else {
+          next.add(path);
+        }
+        // Persist after each user toggle (#4826 AC4).
+        writeExpanded(next);
+        return next;
+      });
+    },
+    [writeExpanded],
+  );
+
+  // One-shot seed of expanded dirs from sessionStorage once workspaceId is
+  // known (union with any already-present entries). Latched so later collapses
+  // win — must NOT latch before workspaceId or cold loads skip AC4 restore.
+  useEffect(() => {
+    if (!workspaceId) return;
+    if (expandedSeededRef.current) return;
+    expandedSeededRef.current = true;
+    const stored = readExpanded();
+    if (stored.length === 0) return;
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
+      for (const dir of stored) next.add(dir);
       return next;
     });
-  }, []);
+  }, [workspaceId, readExpanded]);
 
   // Auto-expand ancestor directories when navigating to a file
   useEffect(() => {
@@ -176,9 +205,10 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
           changed = true;
         }
       }
+      if (changed) writeExpanded(next);
       return changed ? next : prev;
     });
-  }, [pathname]);
+  }, [pathname, writeExpanded]);
 
   // ⌘B and rail collapse are owned solely by (dashboard)/layout.tsx (AC5,
   // ADR-047). KB no longer has its own collapse axis — the tree lives in the
@@ -186,6 +216,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
 
   const isContentView = pathname !== "/dashboard/kb";
   const hasTreeContent = !!(tree?.children && tree.children.length > 0);
+
+  // Document 404 clear lives in kb/[...path]/page.tsx (tree-level not-found
+  // is workspace/repo missing, not a single doc path).
 
   const ctxValue: KbContextValue = useMemo(
     () => ({

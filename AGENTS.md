@@ -19,6 +19,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: hr-when-triaging-a-batch-of-issues-never] → core
 - [id: hr-all-infrastructure-provisioning-servers] → core
 - [id: hr-fresh-host-provisioning-reachable-from-terraform-apply] → core
+- [id: hr-prod-host-config-change-immutable-redeploy] → core
 - [id: hr-autonomous-loop-skill-api-budget-disclosure] → core
 - [id: hr-every-new-terraform-root-must-include-an] → core
 - [id: hr-tf-variable-no-operator-mint-default] → core
@@ -47,6 +48,7 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: hr-github-app-auth-not-pat] → core
 - [id: hr-monitor-not-run-in-background-for-polling] → core
 - [id: hr-verify-repo-capability-claim-before-assert] → core
+- [id: hr-pipeline-skills-never-inline-after-go-route] → core
 
 ## Workflow Gates
 
@@ -68,14 +70,14 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: wg-when-an-audit-identifies-pre-existing] → rest
 - [id: wg-when-deferring-a-capability-create-a] → rest
 - [id: wg-defer-only-after-inline-triage] → rest
-- [id: wg-when-a-workflow-gap-causes-a-mistake-fix] → core
+- [id: wg-when-a-workflow-gap-causes-a-mistake-fix] → rest
 - [id: wg-every-session-error-must-produce-either] → rest
 - [id: wg-use-closes-n-in-pr-body-not-title-to] → rest
 - [id: wg-after-merging-a-pr-that-adds-or-modifies] → rest
 - [id: wg-plan-prescribed-skills-must-run-inline] → rest
 - [id: wg-architecture-decision-is-a-plan-deliverable] → rest
 - [id: wg-end-of-work-emit-resume-prompt] → rest
-- [id: wg-block-pr-ready-on-undeferred-operator-steps] → core
+- [id: wg-block-pr-ready-on-undeferred-operator-steps] → rest
 - [id: wg-pm-class-followthrough-for-operator-dogfood] → rest
 - [id: wg-record-recurring-vendor-expense-before-ready] → rest
 - [id: wg-ui-feature-requires-pen-wireframe] → docs-only
@@ -96,6 +98,8 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 - [id: cq-skill-description-budget-headroom] → docs-only
 - [id: cq-test-fixtures-synthesized-only] → rest
 - [id: cq-regex-unicode-separators-escape-only] → rest
+- [id: cq-cite-content-anchor-not-line-number] → rest
+- [id: cq-assert-anchor-not-bare-token] → rest
 
 ## Review & Feedback
 
@@ -115,4 +119,4 @@ Pointer index; bodies in `AGENTS.{core,docs,rest}.md`, injected per change-class
 
 - [id: cm-challenge-reasoning-instead-of] → core
 - [id: cm-delegate-verbose-exploration-3-file] → core
-- [id: cm-when-proposing-to-clear-context-or] → core
+- [id: cm-when-proposing-to-clear-context-or] → rest

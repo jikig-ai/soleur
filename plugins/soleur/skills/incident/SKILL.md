@@ -32,7 +32,9 @@ All prod-touching steps are advisory + ack-gated per `hr-menu-option-ack-not-pro
 
 ## Phase 0 — Capture facts
 
-> **No-SSH fact-pulling (Soleur vision — `hr-no-dashboard-eyeball-pull-data-yourself`).** The operator is non-technical: NEVER ask them to SSH, run `df -h`, or read a dashboard, and do NOT trust the report's stated *mechanism* — pull the actual prod error/state yourself. Toolchain: Doppler `DATABASE_URL_POOLER` (prod DB read), **Sentry issues via `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` / `--latest-event` (prefer the least-privilege `SENTRY_ISSUE_RO_TOKEN`; falls back to `SENTRY_ISSUE_RW_TOKEN`; `SENTRY_AUTH_TOKEN` 403s on issues — the producer's real stderr is in `exception.values[].value`; runbook `sentry-issue-read.md`)**, `/soleur:trigger-cron`, prod HTTP/`gh run`. If a needed signal has no no-SSH read path, **BUILD one** (emit to a GitHub issue/DB/endpoint) rather than deferring. **Why:** #4886 — the incident report blamed ENOSPC; the real cause (a dirty-clone `.claude/settings.json` blocking `git pull`) was one Sentry-issue read away. See [[2026-06-03-no-ssh-prod-signal-toolchain-never-hand-the-operator-an-ssh-task]].
+> **No-SSH fact-pulling (Soleur vision — `hr-no-dashboard-eyeball-pull-data-yourself`).** The operator is non-technical: NEVER ask them to SSH, run `df -h`, or read a dashboard, and do NOT trust the report's stated *mechanism* — pull the actual prod error/state yourself. This includes NEVER asking the operator to paste verbatim error output, run `grep`/`stat`/`git config` probes, or eyeball logs — the operator decides, they do not retrieve. Also pull Better Stack `SOLEUR_*` markers yourself (`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since <N> --grep <marker>`). Toolchain: Doppler `DATABASE_URL_POOLER` (prod DB read), **Sentry issues via `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` / `--latest-event` (prefer the least-privilege `SENTRY_ISSUE_RO_TOKEN`; falls back to `SENTRY_ISSUE_RW_TOKEN`; `SENTRY_AUTH_TOKEN` 403s on issues — the producer's real stderr is in `exception.values[].value`; runbook `sentry-issue-read.md`)**, `/soleur:trigger-cron`, prod HTTP/`gh run`. If a needed signal has no no-SSH read path, **BUILD one** — add a monitored stdout `SOLEUR_*` marker in the emitting code (or emit to a GitHub issue/DB/endpoint) so the next occurrence self-reports, rather than deferring to the operator. **Why:** #4886 — the incident report blamed ENOSPC; the real cause (a dirty-clone `.claude/settings.json` blocking `git pull`) was one Sentry-issue read away. #5934 — the worktree-wedge diagnosis twice asked the operator to paste `grep`/`stat` output that the observability layer held once instrumented (`SOLEUR_GIT_CONFIG_TARGET_MASKED`, `SOLEUR_GIT_WORKTREE_VERIFY_FAILED`). See [[2026-06-03-no-ssh-prod-signal-toolchain-never-hand-the-operator-an-ssh-task]] and [[2026-07-08-self-pull-observability-in-diagnostic-loops-never-ask-operator-to-fetch]].
+
+> **Unreachable host with no log-shipping — READ before you MUTATE (`hr-no-dashboard-eyeball-pull-data-yourself` extended to diagnosis).** When the failing surface is a host that answers nothing (no SSH, no Vector/journald shipping, no Sentry emit), the self-serve read path is the **provider API + rescue mode** — it is NOT an operator-console task. Ladder, in order: (1) **Provider API reads** — `GET /servers/{id}` (status, `private_net`), `/metrics?type=cpu,disk,network`, `/actions`. Query the **BOOT window**, not the current window: an unreachable-but-idle host reads `net=0/disk=0` and looks "dead" when it merely has no clients. (2) **Rescue-mode disk read** (Hetzner: `enable_rescue` with `{"type":"linux64","ssh_keys":[<id>]}` to inject a registered key whose private half is in your agent → key auth, no `sshpass`; scope SSH in by `set_rules` allowing ONLY your egress IP on `:22` and restore `{"rules":[]}` immediately after; `reboot` → SSH → `lsblk` (the OS disk is NOT necessarily `sda` — an attached volume can take it) → mount the boot partition → read `/var/log/cloud-init-output.log`, `grep -iE 'error|fail' /var/log/cloud-init.log`, `/var/lib/cloud/data/status.json`). (3) **Only then mutate**, and only via the sanctioned destroy-guarded dispatch (`apply-web-platform-infra.yml apply_target=…`) — **never a hand-rolled `terraform apply`**: an out-of-band apply on an unverified hypothesis diverges prod from `main` and makes the guarded recovery abort `out_of_scope=1`, blocking the real fix. Guard aborts are information — read their counters (`out_of_scope=`, `server_replaced=`, `volume_created=`) to learn which recovery path actually fits. And `Apply complete` is not proof: `GET` the resource to confirm the provider's reality. **Why:** #6400 — four hypotheses (credential → firewall → store OOM → boot) were mutated-then-tested over hours; a rescue read of `cloud-init.log` named the real cause (a transient IMDS failure left the host with no private NIC) in one shot, and a hypothesis-driven firewall apply blocked the sanctioned recreate three times. See [[2026-07-15-infra-incident-diagnose-before-mutate-and-no-out-of-band-applies]].
 
 Collect from the operator (or from the dry-run fixture):
 
@@ -86,11 +88,14 @@ Compute locally (FR7 LLM-trust boundary — never accept these from an LLM-emitt
 
 ## Phase 1 — Classification
 
-Render the `brand_survival_threshold` decision criteria INLINE before asking for confirmation. Criteria text (3 tiers, paraphrased from `hr-weigh-every-decision-against-target-user-impact`):
+Render the `brand_survival_threshold` decision criteria INLINE before asking for confirmation.
+Criteria text (3 tiers, paraphrased from `hr-weigh-every-decision-against-target-user-impact`):
 
+<!-- eval-gate:block:incident-threshold:start -->
 - **none** — no user-facing artifact, no credential surface, no billing path; internal tooling / docs / CI.
 - **single-user incident** — at least one real user impacted (data loss, trust breach, credential exposure, billing surprise) OR any sensitive-data surface is at risk.
 - **aggregate pattern** — repeated or systemic impact across multiple users or tenants; brand-survival-level severity.
+<!-- eval-gate:block:incident-threshold:end -->
 
 Compute an advisory recommendation from `affected_user_count` + `risk_to_subjects` + `data_categories_breached`. Print:
 
@@ -211,11 +216,19 @@ No public artifact is generated in MVP. Re-evaluation criteria are tracked in #3
 
 ## Phase 6 — Redaction sentinel (BLOCKING, pre-inline-emit)
 
-Run `bash scripts/redact-sentinel.sh <draft-tmpfile>` against the unwritten draft. The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
+Resolve the gate from the **deployed plugin root** (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy; git-root fallback for CLI/worktree), fail closed if it is unreadable, then run it against the unwritten draft. On the Concierge server the deployed-root anchor is load-bearing: a bare CWD-relative path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093). The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
+
+```bash
+SENTINEL="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh"
+[[ -r "$SENTINEL" ]] || { echo "incident: redaction sentinel not found — halt (fail closed)"; exit 2; }
+bash "$SENTINEL" <draft-tmpfile>
+```
+
+`redact-sentinel.sh` is a thin shim over the hardened `redact-engine.py` (#5987): the engine NFKC-normalizes and strips zero-width/bidi/invalid-byte characters BEFORE matching (defeating compatibility-char / zero-width / soft-hyphen / prefix-homoglyph evasion), and fail-closes with a synthetic-HIGH finding on oversize input (raw or NFKC-expanded). The CLI contract — argv, exit codes, and output shape — is unchanged; the shim fails closed (exit 2) if `python3` is absent. See [ADR-095](../../../../knowledge-base/engineering/architecture/decisions/ADR-095-fail-closed-redaction-engine-contract.md) for the scope boundary (named non-goals: full TR39 homoglyph space, whitespace token-splitting, reversibly-encoded secrets).
 
 - Exit 0 → emit `sentinel: pass` and proceed to Phase 7.
 - Exit 1 → print each offset/pattern line from sentinel stdout. Prompt operator to redact. Operator iterates until sentinel exits 0. No max-iteration cap — `Ctrl-C` is the universal abort path.
-- Exit 2 → halt with the sentinel's error message; this is a skill bug.
+- Exit 2 → halt with the error message; this is a skill bug OR an unmet runtime prerequisite (e.g. `python3` absent — the shim fails closed to exit 2 rather than a false "clean"/"secrets found" result; the pre-run `[[ -r "$SENTINEL" ]]` guard also exits 2 here, with its own "sentinel not found — halt" message, before the sentinel runs).
 
 **Why pre-inline-emit (SpecFlow Critical #2):** transcripts ARE write boundaries. If the draft is emitted inline and only then scanned, the un-redacted secret has already crossed the operator transcript surface — and the conversation may be screenshot, exported, or replayed in plan-review tools. The sentinel must run before the draft is visible anywhere.
 

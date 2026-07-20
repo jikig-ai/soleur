@@ -170,6 +170,9 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "debug-mode": false,
       "c4-edit": false,
       "command-palette": false,
+      support: false,
+      "guided-tour": false,
+      "support-live": false,
     });
   });
 
@@ -190,6 +193,9 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "debug-mode": false,
       "c4-edit": false,
       "command-palette": false,
+      support: false,
+      "guided-tour": false,
+      "support-live": false,
     });
   });
 
@@ -210,6 +216,9 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       "debug-mode": false,
       "c4-edit": false,
       "command-palette": false,
+      support: false,
+      "guided-tour": false,
+      "support-live": false,
     });
   });
 
@@ -397,6 +406,9 @@ describe("getIdentityFlags timeout → warn-level debounced mirror (Sentry-bug r
       "debug-mode": false,
       "c4-edit": false,
       "command-palette": false,
+      support: false,
+      "guided-tour": false,
+      "support-live": false,
     });
   });
 

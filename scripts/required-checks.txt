@@ -4,7 +4,7 @@
 #   - "CI Required" ruleset: test, dependency-review, e2e, skill-security-scan PR gate
 #     (created by scripts/create-ci-required-ruleset.sh,
 #      `skill-security-scan PR gate` added by scripts/update-ci-required-ruleset.sh per #3542 R15)
-#   - "CLA Required" ruleset: cla-check
+#   - "CLA Required" ruleset: cla-check, cla-evidence
 #
 # Every scheduled-*.yml workflow that creates PRs via GITHUB_TOKEN must post
 # synthetic check-runs for each name listed here. GITHUB_TOKEN PRs do not
@@ -12,6 +12,16 @@
 # rulesets block auto-merge indefinitely.
 #
 # When adding a new required check to any ruleset, add it here too.
+#
+# ⚠ AUTO-FABRICATION GUARD (#6049): the bot-pr-with-synthetic-checks composite
+# action DERIVES its CHECK_NAMES from this file and posts a green synthetic
+# check-run for every name below — with NO per-check review. Adding a name here
+# therefore fabricates a passing result for bot PRs. A CONTENT-SCOPED gate
+# (secret / PII / lockfile / fixture scanning) MUST first be reproduced in the
+# action's preflight (see action.yml Phase-4 "Secret-safety ceiling") OR be
+# excluded from synthesis via a non-15368 `integration_id` — do NOT add a
+# content gate here that the action cannot actually run over the bot diff.
+# This file is @deruelle CODEOWNERS-gated for exactly this reason.
 #
 # CodeQL is INTENTIONALLY OMITTED from this file. The "CI Required" ruleset
 # pins `CodeQL` to integration_id 57789 (github-advanced-security). A synthetic
@@ -35,13 +45,89 @@
 # Refs: #826, #1468, #3544, #3545
 
 # CI Required ruleset
+#
+# This set MUST equal the `integration_id == 15368` contexts of
+# scripts/ci-required-ruleset-canonical-required-status-checks.json (the CI
+# Required ruleset SSOT). `CodeQL` is the sole 57789 (GHAS) context and is
+# intentionally omitted (see the CodeQL block above). Enforced file-vs-file by
+# plugins/soleur/test/required-checks-canonical-parity.test.sh. Grouped below to
+# mirror infra/github/ruleset-ci-required.tf tiers for legibility.
 test
 dependency-review
 e2e
 skill-security-scan PR gate
+
+# Secret-scan + guard-script-fixture jobs (secret-scan.yml + pr-quality-guards.yml).
+# The action reproduces `gitleaks scan` AND `lint fixture content` over the bot
+# diff before posting these (action.yml Phase-4 ceiling) — the greens are earned,
+# not fabricated. (#6049)
+gitleaks scan
+lint fixture content
+allowlist-diff (.gitleaks.toml paths surface)
+rename-guard (allowlist destinations)
+waiver discipline (issue:#NNN trailer)
+Bash fixture tests for guard scripts
+
+# ci.yml correctness gate jobs (#6049 completed the drift). adr-ordinals was
+# live-required but absent from the IaC + canonical JSON until #6049.
+lockfile-sync
+service-role-allowlist-gate
+tc-document-sha-guard
+adr-ordinals
+
+# #6103 (ADR-092) — hard-rule body-weakening gate. ci.yml `rule-body-lint`
+# always-run job; blocks un-acked hr-*/wg-* rule-BODY changes in AGENTS
+# sidecars. Present here for canonical-JSON set-parity (required-checks-
+# canonical-parity.test.sh Test 1).
+#
+# ⚠ FABRICATED-NOT-EARNED for bot PRs (#6049 auto-fabrication guard): this is a
+# CONTENT-scoped gate, but the bot composite action does NOT reproduce it in its
+# Phase-4 ceiling — so the synthetic green is unconditional. This is SOUND ONLY
+# because the action's ALLOWED_PATHS = {weakness-digest.md, rule-metrics.json}
+# makes AGENTS.{core,docs,rest}.md physically unreachable by every bot PR today,
+# so no bot can weaken a rule body under a fabricated green. The residual goes
+# LIVE the instant #6038's auto-proposer adds an AGENTS path to ALLOWED_PATHS —
+# and the #6049 ceiling forces that PR to reproduce `rule-body-lint --check`
+# over the bot diff first. Do NOT extend ALLOWED_PATHS to any AGENTS path
+# without that reproduction. See the Phase-4 preflight-TODO in
+# .github/actions/bot-pr-with-synthetic-checks/action.yml + ADR-092.
+rule-body-lint
+
+# #6325 Phase F — Grok fidelity gate. ci.yml `grok-fidelity` job: grok inspect
+# contract + /go golden-path eval. Always-runs; installs Grok CLI on ubuntu-latest.
+grok-fidelity
+
 # #4384 — legal-doc-cross-document-gate.yml jobs.enforce. Always-runs (no
 # path filter post-#4384) — synthetic needed for bot PRs only.
 enforce
+# #5585 — tenant-integration.yml jobs.tenant-integration-required. Always-run
+# aggregator gate job (the heavy suite is path-gated behind it). Bot PRs never
+# trigger CI, so they need the synthetic; on relevant human PRs the real gate
+# job posts the context.
+tenant-integration-required
+# #6589 — apply-sentry-infra.yml jobs.sentry-destroy-required. Always-run
+# aggregator gate job (the full-root terraform plan is path-gated behind it).
+# Bot PRs never trigger CI, so they need the synthetic; on relevant human PRs the
+# real gate job posts the context.
+#
+# ⚠ CONTENT-SCOPED — cleared under the #6049 ceiling by the SAME argument as
+# rule-body-lint above, not by exemption. This gate asks "does this PR's plan
+# destroy a Sentry resource without an acknowledgement?", which is a question
+# about the diff, so a fabricated green is only sound if no bot PR can produce a
+# destroying diff. It cannot: the action's ALLOWED_PATHS = {weakness-digest.md,
+# rule-metrics.json} makes apps/web-platform/infra/sentry/** physically
+# unreachable by every bot PR, and the action exits 1 on any path outside that
+# set. A full-root plan over a bot diff is therefore vacuously non-destroying,
+# and the synthetic green asserts something true.
+#
+# The residual goes LIVE the instant any sentry path is added to ALLOWED_PATHS —
+# at which point a bot PR could delete a monitor block under a fabricated green,
+# which is #6074 with a robot holding the pen. Do NOT extend ALLOWED_PATHS to
+# any apps/web-platform/infra/sentry/** path without first reproducing the
+# full-root plan + destroy gate over the bot diff in the action's preflight.
+# See .github/actions/bot-pr-with-synthetic-checks/action.yml ALLOWED_PATHS +
+# the ADR-031 Amendment (2026-07-17, #6589).
+sentry-destroy-required
 
 # CLA Required ruleset
 cla-check

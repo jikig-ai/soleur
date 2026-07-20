@@ -37,14 +37,14 @@ The wrapper script is [scripts/trigger.sh](./scripts/trigger.sh):
 
 ```bash
 # List the allowlisted manual-trigger events (sourced from the cron manifest).
-plugins/soleur/skills/trigger-cron/scripts/trigger.sh --list
+${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/trigger-cron/scripts/trigger.sh --list
 
 # Dry-run: print the curl without firing.
-plugins/soleur/skills/trigger-cron/scripts/trigger.sh \
+${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/trigger-cron/scripts/trigger.sh \
   --event cron/bug-fixer.manual-trigger --data '{"issue_number":4383}' --dry-run
 
 # Fire (default config: prd).
-plugins/soleur/skills/trigger-cron/scripts/trigger.sh \
+${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/trigger-cron/scripts/trigger.sh \
   --event cron/workspace-sync-health.manual-trigger
 ```
 

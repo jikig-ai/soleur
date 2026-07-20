@@ -1,0 +1,3 @@
+{"type":"text","data":"Hello"}
+{"type":"text","data":" world"}
+{"type":"end","stopReason":"EndTurn","sessionId":"sess-test","num_turns":2,"usage":{"input_tokens":100,"output_tokens":40,"cache_read_input_tokens":0},"total_cost_usd":0.0012}

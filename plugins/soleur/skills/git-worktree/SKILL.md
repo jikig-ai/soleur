@@ -34,7 +34,7 @@ The script handles critical setup that raw git commands don't:
 
 ```bash
 # ✅ CORRECT - Always use the script
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh create feature-name
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh create feature-name
 
 # ❌ WRONG - Never do this directly
 git worktree add .worktrees/feature-name -b feature-name main
@@ -66,19 +66,19 @@ You can also invoke the skill directly from bash:
 
 ```bash
 # Create a new worktree (copies .env files automatically)
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh create feature-login
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh create feature-login
 
 # List all worktrees
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh list
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh list
 
 # Switch to a worktree
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh switch feature-login
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh switch feature-login
 
 # Copy .env files to an existing worktree (if they weren't copied)
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh copy-env feature-login
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh copy-env feature-login
 
 # Clean up completed worktrees
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup
 ```
 
 ## Commands
@@ -95,7 +95,7 @@ Creates a new worktree with the given branch name.
 **Example:**
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh create feature-login
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh create feature-login
 ```
 
 **What happens:**
@@ -111,7 +111,7 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh create fea
 Pass `--update-local-main` (as a global flag, before `create`) to additionally fast-forward the local `<from-branch>` ref. Default behavior leaves the local ref untouched.
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --update-local-main create feature-login
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh --update-local-main create feature-login
 ```
 
 ### `list` or `ls`
@@ -121,7 +121,7 @@ Lists all available worktrees with their branches and current status.
 **Example:**
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh list
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh list
 ```
 
 **Output shows:**
@@ -138,7 +138,7 @@ Switches to an existing worktree and cd's into it.
 **Example:**
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh switch feature-login
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh switch feature-login
 ```
 
 **Optional:**
@@ -152,7 +152,7 @@ Interactively cleans up inactive worktrees with confirmation.
 **Example:**
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup
 ```
 
 **What happens:**
@@ -169,7 +169,7 @@ Syncs stale on-disk files from git HEAD in a bare repo. Only needed when the rep
 **Example:**
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh sync-bare-files
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh sync-bare-files
 ```
 
 **What it syncs:**
@@ -194,34 +194,34 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh sync-bare-
 
 # You respond: yes
 # Script runs (copies .env files automatically):
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh create pr-123-feature-name
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh create pr-123-feature-name
 
 # You're now in isolated worktree for review with all env vars
 cd .worktrees/pr-123-feature-name
 
 # After review, return to main:
 cd ../..
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup
 ```
 
 ### Parallel Feature Development
 
 ```bash
 # For first feature (copies .env files):
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh create feature-login
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh create feature-login
 
 # Later, start second feature (also copies .env files):
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh create feature-notifications
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh create feature-notifications
 
 # List what you have:
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh list
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh list
 
 # Switch between them as needed:
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh switch feature-login
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh switch feature-login
 
 # Return to main and cleanup when done:
 cd .
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup
 ```
 
 ## Key Design Principles
@@ -288,7 +288,7 @@ Switch out of the worktree first (to main repo), then cleanup:
 Navigate to the repository root directory, then run:
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh cleanup
 ```
 
 ### Lost in a worktree?
@@ -296,7 +296,7 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup
 See where you are:
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh list
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh list
 ```
 
 ### .env files missing in worktree?
@@ -304,7 +304,7 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh list
 If a worktree was created without .env files (e.g., via raw `git worktree add`), copy them:
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh copy-env feature-name
+bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh copy-env feature-name
 ```
 
 Navigate back to the repository root directory.
@@ -320,6 +320,9 @@ Navigate back to the repository root directory.
 - In bare repos with multiple worktrees, `git fetch origin branch:branch` fails when the target branch is checked out in any worktree -- git rejects the refspec update. The fallback `git fetch origin branch` only updates `origin/branch`, NOT the local ref. Use `git update-ref refs/heads/branch origin/branch` to force-sync when the fetch refspec is rejected. As of #3741 (2026-05-14), `worktree-manager.sh create` bypasses this failure mode by default — new worktrees are based on `refs/remotes/origin/<from>` directly. The refspec-fetch path only runs when `--update-local-main` is passed.
 - After creating a worktree via the script, always verify it exists in `git worktree list` before attempting to `cd` into it -- the script may report success for names that silently fail (e.g., excessively long names). A 2026-04-18 recurrence under a normal short name (#2611) confirms the silent-failure mode is not limited to edge-case names; see `knowledge-base/project/learnings/2026-04-18-worktree-manager-silent-registration-failure.md`.
 - In bare repos, `git branch --show-current` from the bare root returns `main` (or empty), not the worktree's branch. Always ensure CWD is inside the target worktree before running branch-detecting git commands.
+- **Never re-add a raw `git config` write to the shared config in `worktree-manager.sh`** — every shared-config mutation must route through `atomic_git_config`, which resolves the common-dir config via `rev-parse --path-format=absolute --git-common-dir` and survives a masked `config.lock` (ADR-081). A raw `git config --local`/`--file` write EEXISTs on the sandbox's char-device lock and wedges creation (RC=255).
+- **A bare-vs-non-bare guard must detect layout via a pure filesystem fact, not mask-degradable `git rev-parse` (#5934).** Under the sandbox's char-device config mask, `git rev-parse --show-toplevel` returns empty (`GIT_ROOT=""`) and `--is-bare-repository` degrades to `true` because both must read the masked `.git/config` — so a genuinely NON-bare clone gets wrongly routed into bare-repo config surgery and wedges on the doomed `mv … .git/config` (EBUSY). Detect non-bare via `git_dir` being a `.git` **directory** (with a `$PWD/.git` fallback when `GIT_ROOT` resolves empty), which never reads the masked config; skip the surgery on non-bare and fail LOUD only on genuinely-bare-under-mask. Pin bare-vs-non-bare + the exact masked node via live probes (`--is-bare-repository`, `stat .git`, `stat .git/config*`) BEFORE scoping any fix. See `knowledge-base/project/learnings/2026-07-07-telemetry-blind-giveup-and-mask-degraded-nonbare-guard.md`.
+- **Identity authority is inverted between environments (ADR-099, #6184).** On the non-bare Concierge agent workspace the LOCAL identity is the host-seeded workspace **owner** (authoritative); on the bare CLI dev repo the operator's **global** is the human, and the bare root frequently carries an inherited `github-actions[bot]` LOCAL that worktrees inherit (the #2815 CLA-reject bug). `ensure_worktree_identity` discriminates on **bot-shape** (`_identity_is_bot`: a `[bot]` marker in name/email), NOT on presence: it respects a present NON-bot local, overrides a bot-shaped local from a human `--global`, and REFUSES to ever write a bot-shaped `--global` (`reason=bot-global-refused`) so it can never misattribute a commit. Do NOT re-introduce a blanket "force global over local" (wrong on Concierge) OR a blanket "respect any present local" (wrong on the bare-dev bot-local) — neither is correct alone.
 
 ## Technical Details
 

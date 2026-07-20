@@ -1,0 +1,4471 @@
+{
+  "version": "2.11",
+  "children": [
+    {
+      "type": "frame",
+      "id": "Wxoib",
+      "x": 3800,
+      "y": 0,
+      "name": "Cmp/GoldBtn",
+      "reusable": true,
+      "fill": {
+        "type": "gradient",
+        "gradientType": "linear",
+        "enabled": true,
+        "rotation": 270,
+        "size": {
+          "height": 1
+        },
+        "colors": [
+          {
+            "color": "#D4B36A",
+            "position": 0
+          },
+          {
+            "color": "#B8923E",
+            "position": 1
+          }
+        ]
+      },
+      "padding": [
+        18,
+        10
+      ],
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "umdus",
+          "name": "gbt",
+          "fill": "#1A1612",
+          "content": "Button",
+          "fontFamily": "Inter",
+          "fontSize": 14,
+          "fontWeight": "600"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Efhyi",
+      "x": 3800,
+      "y": 80,
+      "name": "Cmp/GhostBtn",
+      "reusable": true,
+      "fill": "#141414",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "padding": [
+        18,
+        10
+      ],
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "McPQj",
+          "name": "ght",
+          "fill": "#C9C9C9",
+          "content": "Button",
+          "fontFamily": "Inter",
+          "fontSize": 14,
+          "fontWeight": "500"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "ErvYD",
+      "x": 3800,
+      "y": 160,
+      "name": "Cmp/Input",
+      "reusable": true,
+      "width": 300,
+      "fill": "#0F0F0F",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "padding": [
+        14,
+        11
+      ],
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "WjiBM",
+          "name": "ipt",
+          "fill": "#5A5A5A",
+          "content": "Placeholder",
+          "fontFamily": "Inter",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "8wf2S",
+      "x": 3800,
+      "y": 240,
+      "name": "Cmp/MetaRow",
+      "reusable": true,
+      "width": "fill_container(0)",
+      "gap": 16,
+      "children": [
+        {
+          "type": "text",
+          "id": "aM2dv",
+          "name": "mrl",
+          "fill": "#848484",
+          "textGrowth": "fixed-width",
+          "width": 120,
+          "content": "Label",
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "mTlHu",
+          "name": "mrv",
+          "fill": "#FFFFFF",
+          "content": "Value",
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "OnYED",
+      "x": 3800,
+      "y": 320,
+      "name": "Cmp/BoardCard",
+      "reusable": true,
+      "width": "fill_container(0)",
+      "fill": "#141414",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "layout": "vertical",
+      "gap": 10,
+      "padding": 14,
+      "children": [
+        {
+          "type": "text",
+          "id": "5iPtE",
+          "name": "cck",
+          "fill": "#C9A962",
+          "content": "SOLAA-000",
+          "fontFamily": "JetBrains Mono",
+          "fontSize": 11,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "DxIQ3",
+          "name": "cct",
+          "fill": "#FFFFFF",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Card title goes here",
+          "fontFamily": "Inter",
+          "fontSize": 14,
+          "fontWeight": "500"
+        },
+        {
+          "type": "frame",
+          "id": "wycB3",
+          "name": "cf",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "Hl4bO",
+              "name": "cfp",
+              "fill": "#848484",
+              "content": "High",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "KbS64",
+              "name": "cfu",
+              "fill": "#848484",
+              "content": "HC",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "ed9Gq",
+      "x": 0,
+      "y": 30,
+      "name": "capA1",
+      "fill": "#C9A962",
+      "content": "A1 · New Issue — Quick add (ready to create)",
+      "fontFamily": "Inter",
+      "fontSize": 15,
+      "fontWeight": "600"
+    },
+    {
+      "type": "frame",
+      "id": "KHAFK",
+      "x": 0,
+      "y": 70,
+      "name": "A1 New Issue Quick-add",
+      "width": 560,
+      "fill": "#141414",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 28,
+      "children": [
+        {
+          "type": "frame",
+          "id": "OuGFt",
+          "name": "hdr",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "12Fd0",
+              "fill": "#FFFFFF",
+              "content": "New Issue",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "icon_font",
+              "id": "DLaKE",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "x",
+              "iconFontFamily": "lucide",
+              "fill": "#6A6A6A"
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "BlE7C",
+          "fill": "#2A2A2A",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "o4Nnt",
+          "name": "tf",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "frame",
+              "id": "Nds4v",
+              "name": "tl",
+              "gap": 4,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Je1Xd",
+                  "fill": "#848484",
+                  "content": "Title",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "KJpLV",
+                  "fill": "#C9A962",
+                  "content": "*",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "id": "dRPsR",
+              "type": "ref",
+              "ref": "ErvYD",
+              "width": "fill_container",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#8A7440"
+              },
+              "name": "ti",
+              "descendants": {
+                "WjiBM": {
+                  "content": "Persist board drag-and-drop to the issue store",
+                  "fill": "#FFFFFF"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Bztzi",
+          "name": "df",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "ifOs0",
+              "fill": "#848484",
+              "content": "Description",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "id": "SN8rM",
+              "type": "ref",
+              "ref": "ErvYD",
+              "width": "fill_container",
+              "height": 96,
+              "alignItems": "start",
+              "name": "di",
+              "descendants": {
+                "WjiBM": {
+                  "content": "Board reflects real GitHub status, but drag-and-drop isn't persisted yet. Wire the mutation so a moved card writes labels.",
+                  "fill": "#C9C9C9",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "s2TMc",
+          "name": "cp",
+          "width": "fill_container",
+          "fill": "#1A1A1A",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#2A2A2A"
+          },
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "frame",
+              "id": "JW16K",
+              "name": "ch",
+              "width": "fill_container",
+              "gap": 10,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "4tvau",
+                  "name": "av",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "#3A3222",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ACOB1",
+                      "fill": "#C9A962",
+                      "content": "C",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "6Cc1k",
+                  "fill": "#FFFFFF",
+                  "content": "Create with Concierge",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "M7QO9",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Describe an outcome — Concierge drafts the title, body & labels, then you confirm before it's created.",
+              "lineHeight": 1.4,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "id": "3umvm",
+              "type": "ref",
+              "ref": "ErvYD",
+              "width": "fill_container",
+              "name": "cin",
+              "descendants": {
+                "WjiBM": {
+                  "content": "e.g. Make moving a card on the board persist to GitHub"
+                }
+              }
+            },
+            {
+              "id": "p0CQx",
+              "type": "ref",
+              "ref": "Efhyi",
+              "width": "fit_content",
+              "name": "db",
+              "descendants": {
+                "McPQj": {
+                  "content": "Draft with Concierge",
+                  "fill": "#C9A962"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "g2oum",
+          "name": "ft",
+          "width": "fill_container",
+          "gap": 12,
+          "justifyContent": "end",
+          "alignItems": "center",
+          "children": [
+            {
+              "id": "egi6n",
+              "type": "ref",
+              "ref": "Efhyi",
+              "width": "fit_content",
+              "name": "cancel",
+              "descendants": {
+                "McPQj": {
+                  "content": "Cancel"
+                }
+              }
+            },
+            {
+              "id": "3kIma",
+              "type": "ref",
+              "ref": "Wxoib",
+              "width": "fit_content",
+              "name": "create",
+              "descendants": {
+                "umdus": {
+                  "content": "Create issue"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "4RQXx",
+      "x": 760,
+      "y": 70,
+      "name": "A2 New Issue Creating",
+      "width": 560,
+      "fill": "#141414",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 28,
+      "children": [
+        {
+          "type": "frame",
+          "id": "fAeMl",
+          "name": "hdr",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "Kztrp",
+              "fill": "#FFFFFF",
+              "content": "New Issue",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "icon_font",
+              "id": "gHRdG",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "x",
+              "iconFontFamily": "lucide",
+              "fill": "#6A6A6A"
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "EfJKB",
+          "fill": "#2A2A2A",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "DYWDq",
+          "name": "tf",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "frame",
+              "id": "KSn81",
+              "name": "tl",
+              "gap": 4,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Ks1Kb",
+                  "fill": "#848484",
+                  "content": "Title",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "Tg1Uz",
+                  "fill": "#C9A962",
+                  "content": "*",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "id": "1VN69",
+              "type": "ref",
+              "ref": "ErvYD",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "width": "fill_container",
+              "name": "ti",
+              "descendants": {
+                "WjiBM": {
+                  "content": "Persist board drag-and-drop to the issue store",
+                  "fill": "#FFFFFF"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "YHBhX",
+          "name": "df",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "YDfnO",
+              "fill": "#848484",
+              "content": "Description",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "id": "M2oQg",
+              "type": "ref",
+              "ref": "ErvYD",
+              "width": "fill_container",
+              "height": 96,
+              "alignItems": "start",
+              "name": "di",
+              "descendants": {
+                "WjiBM": {
+                  "content": "Board reflects real GitHub status, but drag-and-drop isn't persisted yet. Wire the mutation so a moved card writes labels.",
+                  "fill": "#C9C9C9",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "JbJpr",
+          "name": "cp",
+          "width": "fill_container",
+          "fill": "#1A1A1A",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#2A2A2A"
+          },
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "frame",
+              "id": "2w68g",
+              "name": "ch",
+              "width": "fill_container",
+              "gap": 10,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "PUKOp",
+                  "name": "av",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "#3A3222",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "DmOo3",
+                      "fill": "#C9A962",
+                      "content": "C",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "bT6H5",
+                  "fill": "#FFFFFF",
+                  "content": "Create with Concierge",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "cUP7U",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Describe an outcome — Concierge drafts the title, body & labels, then you confirm before it's created.",
+              "lineHeight": 1.4,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "id": "4u2m8",
+              "type": "ref",
+              "ref": "ErvYD",
+              "width": "fill_container",
+              "name": "cin",
+              "descendants": {
+                "WjiBM": {
+                  "content": "e.g. Make moving a card on the board persist to GitHub"
+                }
+              }
+            },
+            {
+              "id": "z6Xhf",
+              "type": "ref",
+              "ref": "Efhyi",
+              "width": "fit_content",
+              "name": "db",
+              "descendants": {
+                "McPQj": {
+                  "content": "Draft with Concierge",
+                  "fill": "#C9A962"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "nAUWF",
+          "name": "ft",
+          "width": "fill_container",
+          "gap": 12,
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "DRReX",
+              "name": "st",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "1e8nK",
+                  "width": 14,
+                  "height": 14,
+                  "iconFontName": "loader",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "VSD8P",
+                  "fill": "#C9A962",
+                  "content": "Creating issue on GitHub…",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "id": "nOlkq",
+              "type": "ref",
+              "ref": "Efhyi",
+              "width": "fit_content",
+              "name": "cancel",
+              "descendants": {
+                "McPQj": {
+                  "content": "Cancel"
+                }
+              }
+            },
+            {
+              "id": "gyvuu",
+              "type": "ref",
+              "ref": "Wxoib",
+              "opacity": 0.55,
+              "width": "fit_content",
+              "name": "create",
+              "descendants": {
+                "umdus": {
+                  "content": "Creating…"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "uN7A0",
+      "x": 1520,
+      "y": 70,
+      "name": "A3 New Issue Failed",
+      "width": 560,
+      "fill": "#141414",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 28,
+      "children": [
+        {
+          "type": "frame",
+          "id": "VYqjE",
+          "name": "hdr",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "9axd8",
+              "fill": "#FFFFFF",
+              "content": "New Issue",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "icon_font",
+              "id": "7pv4y",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "x",
+              "iconFontFamily": "lucide",
+              "fill": "#6A6A6A"
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "SS0Hx",
+          "fill": "#2A2A2A",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "vVi99",
+          "name": "tf",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "frame",
+              "id": "0x5yU",
+              "name": "tl",
+              "gap": 4,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "1dFLM",
+                  "fill": "#848484",
+                  "content": "Title",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "Zl9xG",
+                  "fill": "#C9A962",
+                  "content": "*",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "id": "MzjJ7",
+              "type": "ref",
+              "ref": "ErvYD",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "width": "fill_container",
+              "name": "ti",
+              "descendants": {
+                "WjiBM": {
+                  "content": "Persist board drag-and-drop to the issue store",
+                  "fill": "#FFFFFF"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "tYbBe",
+          "name": "df",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "hAfDU",
+              "fill": "#848484",
+              "content": "Description",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "id": "4DfvI",
+              "type": "ref",
+              "ref": "ErvYD",
+              "width": "fill_container",
+              "height": 96,
+              "alignItems": "start",
+              "name": "di",
+              "descendants": {
+                "WjiBM": {
+                  "content": "Board reflects real GitHub status, but drag-and-drop isn't persisted yet. Wire the mutation so a moved card writes labels.",
+                  "fill": "#C9C9C9",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "wv7g4",
+          "name": "cp",
+          "width": "fill_container",
+          "fill": "#1A1A1A",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#2A2A2A"
+          },
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "frame",
+              "id": "5NvLj",
+              "name": "ch",
+              "width": "fill_container",
+              "gap": 10,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "G0d9I",
+                  "name": "av",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "#3A3222",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "zR4Y7",
+                      "fill": "#C9A962",
+                      "content": "C",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "ADsNv",
+                  "fill": "#FFFFFF",
+                  "content": "Create with Concierge",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "P1ydF",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Describe an outcome — Concierge drafts the title, body & labels, then you confirm before it's created.",
+              "lineHeight": 1.4,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "id": "gbuIF",
+              "type": "ref",
+              "ref": "ErvYD",
+              "width": "fill_container",
+              "name": "cin",
+              "descendants": {
+                "WjiBM": {
+                  "content": "e.g. Make moving a card on the board persist to GitHub"
+                }
+              }
+            },
+            {
+              "id": "3uytx",
+              "type": "ref",
+              "ref": "Efhyi",
+              "width": "fit_content",
+              "name": "db",
+              "descendants": {
+                "McPQj": {
+                  "content": "Draft with Concierge",
+                  "fill": "#C9A962"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Vlv4i",
+          "name": "eb",
+          "width": "fill_container",
+          "fill": "#2A1614",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#7A322C"
+          },
+          "gap": 10,
+          "padding": 14,
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "3MmeR",
+              "width": 16,
+              "height": 16,
+              "iconFontName": "triangle-alert",
+              "iconFontFamily": "lucide",
+              "fill": "#C8635B"
+            },
+            {
+              "type": "frame",
+              "id": "c5zeE",
+              "name": "ebc",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 3,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "DXlJT",
+                  "fill": "#E0938C",
+                  "content": "Couldn't create issue on GitHub",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "0Xqaz",
+                  "fill": "#B08882",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "GitHub returned 503. Nothing was written — your title & description are preserved. Retry when ready.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "fjabK",
+          "name": "ft",
+          "width": "fill_container",
+          "gap": 12,
+          "justifyContent": "end",
+          "alignItems": "center",
+          "children": [
+            {
+              "id": "u3NLX",
+              "type": "ref",
+              "ref": "Efhyi",
+              "width": "fit_content",
+              "name": "cancel",
+              "descendants": {
+                "McPQj": {
+                  "content": "Cancel"
+                }
+              }
+            },
+            {
+              "id": "bN7g0",
+              "type": "ref",
+              "ref": "Wxoib",
+              "width": "fit_content",
+              "name": "create",
+              "descendants": {
+                "umdus": {
+                  "content": "Retry create"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "lJnlg",
+      "x": 0,
+      "y": 780,
+      "name": "capA4",
+      "fill": "#C9A962",
+      "content": "A4 · Create with Concierge — describe the outcome",
+      "fontFamily": "Inter",
+      "fontSize": 15,
+      "fontWeight": "600"
+    },
+    {
+      "type": "frame",
+      "id": "3MCTN",
+      "x": 0,
+      "y": 820,
+      "name": "A4 Concierge Describe",
+      "width": 520,
+      "fill": "#1A1A1A",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "layout": "vertical",
+      "gap": 14,
+      "padding": 20,
+      "children": [
+        {
+          "type": "frame",
+          "id": "qu0ms",
+          "name": "h",
+          "width": "fill_container",
+          "gap": 10,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "zXNIk",
+              "name": "av",
+              "width": 24,
+              "height": 24,
+              "fill": "#3A3222",
+              "cornerRadius": 12,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "RUbKH",
+                  "fill": "#C9A962",
+                  "content": "C",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "yeRG6",
+              "fill": "#FFFFFF",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Create with Concierge",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "gRU7W",
+              "fill": "#C9A962",
+              "content": "AGENT",
+              "fontFamily": "Inter",
+              "fontSize": 10,
+              "fontWeight": "600",
+              "letterSpacing": 2
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "1oUc2",
+          "fill": "#848484",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Describe what you want to happen. Concierge drafts a title, body & labels — you confirm before anything is created.",
+          "lineHeight": 1.45,
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "id": "Lhx6D",
+          "type": "ref",
+          "ref": "ErvYD",
+          "width": "fill_container",
+          "height": 88,
+          "alignItems": "start",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#8A7440"
+          },
+          "name": "ta",
+          "descendants": {
+            "WjiBM": {
+              "content": "When I drag a card to a new column, persist the move to GitHub so it survives a reload — and mirror it on the Project board.",
+              "fill": "#FFFFFF",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "lineHeight": 1.45
+            }
+          }
+        },
+        {
+          "type": "frame",
+          "id": "V53je",
+          "name": "ft",
+          "width": "fill_container",
+          "gap": 10,
+          "justifyContent": "end",
+          "alignItems": "center",
+          "children": [
+            {
+              "id": "rh7Cr",
+              "type": "ref",
+              "ref": "Efhyi",
+              "width": "fit_content",
+              "name": "c",
+              "descendants": {
+                "McPQj": {
+                  "content": "Cancel"
+                }
+              }
+            },
+            {
+              "id": "IOhth",
+              "type": "ref",
+              "ref": "Wxoib",
+              "width": "fit_content",
+              "name": "dr",
+              "descendants": {
+                "umdus": {
+                  "content": "Draft with Concierge"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "MQ8Km",
+      "x": 760,
+      "y": 780,
+      "name": "capA5",
+      "fill": "#C9A962",
+      "content": "A5 · Create with Concierge — drafting",
+      "fontFamily": "Inter",
+      "fontSize": 15,
+      "fontWeight": "600"
+    },
+    {
+      "type": "frame",
+      "id": "HHEVX",
+      "x": 760,
+      "y": 820,
+      "name": "A5 Concierge Drafting",
+      "width": 520,
+      "fill": "#1A1A1A",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "layout": "vertical",
+      "gap": 14,
+      "padding": 20,
+      "children": [
+        {
+          "type": "frame",
+          "id": "NEKoU",
+          "name": "h",
+          "width": "fill_container",
+          "gap": 10,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "naDbR",
+              "name": "av",
+              "width": 24,
+              "height": 24,
+              "fill": "#3A3222",
+              "cornerRadius": 12,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "PR4Im",
+                  "fill": "#C9A962",
+                  "content": "C",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "GXFzC",
+              "fill": "#FFFFFF",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Create with Concierge",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "6cvnc",
+              "fill": "#C9A962",
+              "content": "AGENT",
+              "fontFamily": "Inter",
+              "fontSize": 10,
+              "fontWeight": "600",
+              "letterSpacing": 2
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "btgt1",
+          "fill": "#6A6A6A",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Your prompt: “Persist card moves to GitHub so they survive a reload”",
+          "lineHeight": 1.4,
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "normal",
+          "fontStyle": "italic"
+        },
+        {
+          "type": "frame",
+          "id": "yfbWV",
+          "name": "dw",
+          "width": "fill_container",
+          "fill": "#0F0F0F",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#2A2A2A"
+          },
+          "layout": "vertical",
+          "gap": 10,
+          "padding": 28,
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "MFSuh",
+              "width": 22,
+              "height": 22,
+              "iconFontName": "loader",
+              "iconFontFamily": "lucide",
+              "fill": "#C9A962"
+            },
+            {
+              "type": "text",
+              "id": "Tg5ts",
+              "fill": "#FFFFFF",
+              "content": "Concierge is drafting…",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "N8ztT",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Reading the board and your description to propose a title, body & labels.",
+              "lineHeight": 1.45,
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "T0udP",
+          "name": "ft",
+          "width": "fill_container",
+          "gap": 10,
+          "justifyContent": "end",
+          "alignItems": "center",
+          "children": [
+            {
+              "id": "tYmU4",
+              "type": "ref",
+              "ref": "Efhyi",
+              "width": "fit_content",
+              "name": "c",
+              "descendants": {
+                "McPQj": {
+                  "content": "Cancel"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "adtvl",
+      "x": 1520,
+      "y": 780,
+      "name": "capA6",
+      "fill": "#C9A962",
+      "content": "A6 · Create with Concierge — draft preview & confirm",
+      "fontFamily": "Inter",
+      "fontSize": 15,
+      "fontWeight": "600"
+    },
+    {
+      "type": "frame",
+      "id": "Lp6BU",
+      "x": 1520,
+      "y": 820,
+      "name": "A6 Concierge Draft Preview",
+      "width": 560,
+      "fill": "#1A1A1A",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "layout": "vertical",
+      "gap": 14,
+      "padding": 20,
+      "children": [
+        {
+          "type": "frame",
+          "id": "eyzeV",
+          "name": "h",
+          "width": "fill_container",
+          "gap": 10,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "X1n1U",
+              "name": "av",
+              "width": 24,
+              "height": 24,
+              "fill": "#3A3222",
+              "cornerRadius": 12,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "GY1Fk",
+                  "fill": "#C9A962",
+                  "content": "C",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "qlld9",
+              "fill": "#FFFFFF",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Concierge drafted this",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "ikjzW",
+              "fill": "#C9A962",
+              "content": "REVIEW",
+              "fontFamily": "Inter",
+              "fontSize": 10,
+              "fontWeight": "600",
+              "letterSpacing": 2
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "Ms0yx",
+          "fill": "#C9A962",
+          "content": "PROPOSED TITLE",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 3
+        },
+        {
+          "type": "frame",
+          "id": "M7vrB",
+          "name": "tbox",
+          "width": "fill_container",
+          "fill": "#0F0F0F",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            12,
+            10
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "omGCf",
+              "fill": "#FFFFFF",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Persist board drag-and-drop moves to GitHub",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "500"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "XiCQM",
+          "fill": "#C9A962",
+          "content": "PROPOSED BODY",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 3
+        },
+        {
+          "type": "frame",
+          "id": "dUd5H",
+          "name": "bbox",
+          "width": "fill_container",
+          "fill": "#0F0F0F",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#2A2A2A"
+          },
+          "layout": "vertical",
+          "padding": 12,
+          "children": [
+            {
+              "type": "text",
+              "id": "hQhtN",
+              "fill": "#C9C9C9",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "When a card is dragged to a new column, write the corresponding status labels to the GitHub issue and mirror the change to the Project board. The move must survive a page reload. Read-only board stays as fallback if the write fails.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "PJNPe",
+          "fill": "#C9A962",
+          "content": "LABELS",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 3
+        },
+        {
+          "type": "frame",
+          "id": "6osuX",
+          "name": "chips",
+          "width": "fill_container",
+          "gap": 8,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "VmgVK",
+              "name": "c1",
+              "fill": "#23201A",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#3A3222"
+              },
+              "padding": [
+                10,
+                4
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "POwpz",
+                  "fill": "#C9A962",
+                  "content": "type/feature",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "zVsUD",
+              "name": "c2",
+              "fill": "#23201A",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#3A3222"
+              },
+              "padding": [
+                10,
+                4
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "PLe8O",
+                  "fill": "#C9A962",
+                  "content": "area/workstream",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "q73rO",
+              "name": "c3",
+              "fill": "#23201A",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#3A3222"
+              },
+              "padding": [
+                10,
+                4
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "1xeF5",
+                  "fill": "#C9A962",
+                  "content": "priority/high",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "YM1Ga",
+          "name": "hint",
+          "fill": "#848484",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Review and edit anything — nothing is created until you confirm.",
+          "lineHeight": 1.4,
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "75SNh",
+          "name": "ft",
+          "width": "fill_container",
+          "gap": 10,
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "id": "FVfTg",
+              "type": "ref",
+              "ref": "Efhyi",
+              "width": "fit_content",
+              "name": "discard",
+              "descendants": {
+                "McPQj": {
+                  "content": "Discard"
+                }
+              }
+            },
+            {
+              "type": "frame",
+              "id": "uLm5G",
+              "name": "rgroup",
+              "gap": 10,
+              "alignItems": "center",
+              "children": [
+                {
+                  "id": "2bWP2",
+                  "type": "ref",
+                  "ref": "Efhyi",
+                  "width": "fit_content",
+                  "name": "edit",
+                  "descendants": {
+                    "McPQj": {
+                      "content": "Edit draft"
+                    }
+                  }
+                },
+                {
+                  "id": "KSqtu",
+                  "type": "ref",
+                  "ref": "Wxoib",
+                  "width": "fit_content",
+                  "name": "create",
+                  "descendants": {
+                    "umdus": {
+                      "content": "Create issue"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "CQKSW",
+      "x": 0,
+      "y": 1440,
+      "name": "capB1",
+      "fill": "#C9A962",
+      "content": "B1 · Issue detail — inline title edit (editing)",
+      "fontFamily": "Inter",
+      "fontSize": 15,
+      "fontWeight": "600"
+    },
+    {
+      "type": "frame",
+      "id": "U2vxg",
+      "x": 0,
+      "y": 1480,
+      "name": "B1 Detail Title Edit",
+      "width": 620,
+      "fill": "#0D0D0D",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 28,
+      "children": [
+        {
+          "type": "frame",
+          "id": "7948e",
+          "name": "hd",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "children": [
+            {
+              "type": "text",
+              "id": "yUuBj",
+              "fill": "#6A6A6A",
+              "content": "SOLAA-198",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "v5tRg",
+              "name": "hr",
+              "gap": 14,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "oL6pd",
+                  "name": "sp",
+                  "fill": "#1A1710",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#6A5A38"
+                  },
+                  "gap": 6,
+                  "padding": [
+                    10,
+                    5
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "OOZZ1",
+                      "fill": "#C9A962",
+                      "width": 6,
+                      "height": 6
+                    },
+                    {
+                      "type": "text",
+                      "id": "L9nxz",
+                      "fill": "#C9A962",
+                      "content": "In Progress",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "icon_font",
+                  "id": "TQGF4",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "x",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6A6A6A"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "lZwZP",
+          "name": "ta",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "children": [
+            {
+              "type": "frame",
+              "id": "aHJm7",
+              "name": "tarow",
+              "width": "fill_container",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "id": "ZEMJ6",
+                  "type": "ref",
+                  "ref": "ErvYD",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#8A7440"
+                  },
+                  "name": "tinp",
+                  "descendants": {
+                    "WjiBM": {
+                      "content": "Wire Workstream board to live issue store",
+                      "fill": "#FFFFFF",
+                      "fontSize": 18,
+                      "fontWeight": "600"
+                    }
+                  }
+                },
+                {
+                  "id": "WQl72",
+                  "type": "ref",
+                  "ref": "Wxoib",
+                  "width": "fit_content",
+                  "name": "save",
+                  "descendants": {
+                    "umdus": {
+                      "content": "Save"
+                    }
+                  }
+                },
+                {
+                  "id": "rMY0c",
+                  "type": "ref",
+                  "ref": "Efhyi",
+                  "width": "fit_content",
+                  "name": "cancel",
+                  "descendants": {
+                    "McPQj": {
+                      "content": "Cancel"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "mVafx",
+              "x": 0,
+              "y": 0,
+              "name": "sl",
+              "enabled": false,
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "BnZl9",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "loader",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "koYgR",
+                  "fill": "#C9A962",
+                  "content": "Saving title to GitHub…",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "7zxt1",
+              "x": 0,
+              "y": 0,
+              "name": "el",
+              "enabled": false,
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "pw0ux",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "triangle-alert",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C8635B"
+                },
+                {
+                  "type": "text",
+                  "id": "8uLRD",
+                  "fill": "#E0938C",
+                  "content": "Couldn't save title — change rolled back. Retry.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "RpExh",
+              "fill": "#6A6A6A",
+              "content": "Editing — Save writes to GitHub, Cancel discards. Click any title to edit.",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "ZFHfi",
+          "name": "mw",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 14,
+          "children": [
+            {
+              "type": "rectangle",
+              "id": "WPhPR",
+              "fill": "#2A2A2A",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "id": "PkyKG",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m1",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Status"
+                },
+                "mTlHu": {
+                  "content": "In Progress",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "iqbzD",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m2",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Assignee (role)"
+                },
+                "mTlHu": {
+                  "content": "Chief Technology (role lead)",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "Jr9eK",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m3",
+              "descendants": {
+                "aM2dv": {
+                  "content": "User"
+                },
+                "mTlHu": {
+                  "content": "Harry Cole",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "Y9QSw",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m4",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Priority"
+                },
+                "mTlHu": {
+                  "content": "High",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "7P7nL",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m5",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Created"
+                },
+                "mTlHu": {
+                  "content": "Jun 24, 2026",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "jqC2Q",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m6",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Updated"
+                },
+                "mTlHu": {
+                  "content": "Jun 26, 2026",
+                  "fill": "#FFFFFF"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "amk3x",
+          "name": "dv",
+          "fill": "#2A2A2A",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "Ry7oN",
+          "name": "ds",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "xxfNo",
+              "fill": "#C9A962",
+              "content": "DESCRIPTION",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "XPRqp",
+              "fill": "#C9C9C9",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Connect the Workstream board to the live issue store so columns reflect real status. Moving a card now persists to GitHub and mirrors to the Project board.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "KqBVw",
+          "name": "dv2",
+          "fill": "#2A2A2A",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "YsD6n",
+          "name": "ab",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "NpPFJ",
+              "name": "cb",
+              "fill": "#141414",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "gap": 8,
+              "padding": [
+                16,
+                9
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "Dc1Ha",
+                  "width": 15,
+                  "height": 15,
+                  "iconFontName": "circle-check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#848484"
+                },
+                {
+                  "type": "text",
+                  "id": "ey9YL",
+                  "fill": "#C9C9C9",
+                  "content": "Close issue",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "TwZyh",
+              "name": "gh",
+              "gap": 6,
+              "padding": [
+                14,
+                9
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "LOnfe",
+                  "fill": "#6A6A6A",
+                  "content": "Open on GitHub",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "icon_font",
+                  "id": "fvhyK",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "arrow-up-right",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6A6A6A"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "Jnvli",
+      "x": 680,
+      "y": 1440,
+      "name": "cap2",
+      "fill": "#C9A962",
+      "content": "B2 · Inline title edit — saving to GitHub",
+      "fontFamily": "Inter",
+      "fontSize": 15,
+      "fontWeight": "600"
+    },
+    {
+      "type": "frame",
+      "id": "fkJnh",
+      "x": 680,
+      "y": 1480,
+      "name": "B2 Detail Title Saving",
+      "width": 620,
+      "fill": "#0D0D0D",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 28,
+      "children": [
+        {
+          "type": "frame",
+          "id": "XRwJX",
+          "name": "hd",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "children": [
+            {
+              "type": "text",
+              "id": "RPfNN",
+              "fill": "#6A6A6A",
+              "content": "SOLAA-198",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "zpehy",
+              "name": "hr",
+              "gap": 14,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "TrNaN",
+                  "name": "sp",
+                  "fill": "#1A1710",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#6A5A38"
+                  },
+                  "gap": 6,
+                  "padding": [
+                    10,
+                    5
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "RXAeV",
+                      "fill": "#C9A962",
+                      "width": 6,
+                      "height": 6
+                    },
+                    {
+                      "type": "text",
+                      "id": "AIGXc",
+                      "fill": "#C9A962",
+                      "content": "In Progress",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "icon_font",
+                  "id": "J33Pu",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "x",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6A6A6A"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "ia2Rw",
+          "name": "ta",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "children": [
+            {
+              "type": "frame",
+              "id": "Z0jpD",
+              "name": "tarow",
+              "width": "fill_container",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "id": "hbXqE",
+                  "type": "ref",
+                  "ref": "ErvYD",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#8A7440"
+                  },
+                  "name": "tinp",
+                  "descendants": {
+                    "WjiBM": {
+                      "content": "Wire Workstream board to live issue store",
+                      "fill": "#FFFFFF",
+                      "fontSize": 18,
+                      "fontWeight": "600"
+                    }
+                  }
+                },
+                {
+                  "id": "19izB",
+                  "type": "ref",
+                  "ref": "Wxoib",
+                  "opacity": 0.55,
+                  "width": "fit_content",
+                  "name": "save",
+                  "descendants": {
+                    "umdus": {
+                      "content": "Saving…"
+                    }
+                  }
+                },
+                {
+                  "id": "6RHy7",
+                  "type": "ref",
+                  "ref": "Efhyi",
+                  "opacity": 0.5,
+                  "width": "fit_content",
+                  "name": "cancel",
+                  "descendants": {
+                    "McPQj": {
+                      "content": "Cancel"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "2lneY",
+              "name": "sl",
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "ascqv",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "loader",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "a6cho",
+                  "fill": "#C9A962",
+                  "content": "Saving title to GitHub…",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "5IT9c",
+              "x": 0,
+              "y": 0,
+              "name": "el",
+              "enabled": false,
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "DZIDx",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "triangle-alert",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C8635B"
+                },
+                {
+                  "type": "text",
+                  "id": "aRCxa",
+                  "fill": "#E0938C",
+                  "content": "Couldn't save title — change rolled back. Retry.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "NodWa",
+              "fill": "#6A6A6A",
+              "content": "Editing — Save writes to GitHub, Cancel discards. Click any title to edit.",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "bgDXO",
+          "name": "mw",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 14,
+          "children": [
+            {
+              "type": "rectangle",
+              "id": "aAL0Q",
+              "fill": "#2A2A2A",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "id": "36O89",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m1",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Status"
+                },
+                "mTlHu": {
+                  "content": "In Progress",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "TN8r2",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m2",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Assignee (role)"
+                },
+                "mTlHu": {
+                  "content": "Chief Technology (role lead)",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "20mJ1",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m3",
+              "descendants": {
+                "aM2dv": {
+                  "content": "User"
+                },
+                "mTlHu": {
+                  "content": "Harry Cole",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "TUIA5",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m4",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Priority"
+                },
+                "mTlHu": {
+                  "content": "High",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "L36E9",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m5",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Created"
+                },
+                "mTlHu": {
+                  "content": "Jun 24, 2026",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "MIp9G",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m6",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Updated"
+                },
+                "mTlHu": {
+                  "content": "Jun 26, 2026",
+                  "fill": "#FFFFFF"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "XDNGX",
+          "name": "dv",
+          "fill": "#2A2A2A",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "50CW9",
+          "name": "ds",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "RLYg2",
+              "fill": "#C9A962",
+              "content": "DESCRIPTION",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "akIB5",
+              "fill": "#C9C9C9",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Connect the Workstream board to the live issue store so columns reflect real status. Moving a card now persists to GitHub and mirrors to the Project board.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "avQJQ",
+          "name": "dv2",
+          "fill": "#2A2A2A",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "AJSkw",
+          "name": "ab",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "whKWO",
+              "name": "cb",
+              "fill": "#141414",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "gap": 8,
+              "padding": [
+                16,
+                9
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "TQxIc",
+                  "width": 15,
+                  "height": 15,
+                  "iconFontName": "circle-check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#848484"
+                },
+                {
+                  "type": "text",
+                  "id": "TAmeI",
+                  "fill": "#C9C9C9",
+                  "content": "Close issue",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "e5RVt",
+              "name": "gh",
+              "gap": 6,
+              "padding": [
+                14,
+                9
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "iGjuy",
+                  "fill": "#6A6A6A",
+                  "content": "Open on GitHub",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "icon_font",
+                  "id": "yx4FA",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "arrow-up-right",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6A6A6A"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "dFmhY",
+      "x": 1360,
+      "y": 1440,
+      "name": "cap3",
+      "fill": "#C9A962",
+      "content": "B3 · Inline title edit — save failed (rolled back)",
+      "fontFamily": "Inter",
+      "fontSize": 15,
+      "fontWeight": "600"
+    },
+    {
+      "type": "frame",
+      "id": "4nl9g",
+      "x": 1360,
+      "y": 1480,
+      "name": "B3 Detail Title Error",
+      "width": 620,
+      "fill": "#0D0D0D",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 28,
+      "children": [
+        {
+          "type": "frame",
+          "id": "Ft2Xc",
+          "name": "hd",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "children": [
+            {
+              "type": "text",
+              "id": "OYNs7",
+              "fill": "#6A6A6A",
+              "content": "SOLAA-198",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "02js1",
+              "name": "hr",
+              "gap": 14,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "wKm3k",
+                  "name": "sp",
+                  "fill": "#1A1710",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#6A5A38"
+                  },
+                  "gap": 6,
+                  "padding": [
+                    10,
+                    5
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "Dhho8",
+                      "fill": "#C9A962",
+                      "width": 6,
+                      "height": 6
+                    },
+                    {
+                      "type": "text",
+                      "id": "2VCfV",
+                      "fill": "#C9A962",
+                      "content": "In Progress",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "icon_font",
+                  "id": "iViJf",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "x",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6A6A6A"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "d86p8",
+          "name": "ta",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 10,
+          "children": [
+            {
+              "type": "frame",
+              "id": "wanvr",
+              "name": "tarow",
+              "width": "fill_container",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "id": "hDzLi",
+                  "type": "ref",
+                  "ref": "ErvYD",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#7A322C"
+                  },
+                  "width": "fill_container",
+                  "name": "tinp",
+                  "descendants": {
+                    "WjiBM": {
+                      "content": "Wire Workstream board to live issue store",
+                      "fill": "#FFFFFF",
+                      "fontSize": 18,
+                      "fontWeight": "600"
+                    }
+                  }
+                },
+                {
+                  "id": "upiaB",
+                  "type": "ref",
+                  "ref": "Wxoib",
+                  "width": "fit_content",
+                  "name": "save",
+                  "descendants": {
+                    "umdus": {
+                      "content": "Retry"
+                    }
+                  }
+                },
+                {
+                  "id": "WT63j",
+                  "type": "ref",
+                  "ref": "Efhyi",
+                  "width": "fit_content",
+                  "name": "cancel",
+                  "descendants": {
+                    "McPQj": {
+                      "content": "Cancel"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "AqK0F",
+              "x": 0,
+              "y": 0,
+              "name": "sl",
+              "enabled": false,
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "rPEYz",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "loader",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "A2W3p",
+                  "fill": "#C9A962",
+                  "content": "Saving title to GitHub…",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "zpVqT",
+              "name": "el",
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "mYROa",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "triangle-alert",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C8635B"
+                },
+                {
+                  "type": "text",
+                  "id": "hGF4C",
+                  "fill": "#E0938C",
+                  "content": "Couldn't save title — change rolled back. Retry.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "4colV",
+              "fill": "#6A6A6A",
+              "content": "Editing — Save writes to GitHub, Cancel discards. Click any title to edit.",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "xYCOq",
+          "name": "mw",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 14,
+          "children": [
+            {
+              "type": "rectangle",
+              "id": "IH5Pf",
+              "fill": "#2A2A2A",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "id": "70vca",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m1",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Status"
+                },
+                "mTlHu": {
+                  "content": "In Progress",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "TnnG7",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m2",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Assignee (role)"
+                },
+                "mTlHu": {
+                  "content": "Chief Technology (role lead)",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "MD5cg",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m3",
+              "descendants": {
+                "aM2dv": {
+                  "content": "User"
+                },
+                "mTlHu": {
+                  "content": "Harry Cole",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "7Wvhv",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m4",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Priority"
+                },
+                "mTlHu": {
+                  "content": "High",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "7UbOT",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m5",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Created"
+                },
+                "mTlHu": {
+                  "content": "Jun 24, 2026",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "pqLqn",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m6",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Updated"
+                },
+                "mTlHu": {
+                  "content": "Jun 26, 2026",
+                  "fill": "#FFFFFF"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "DWqRo",
+          "name": "dv",
+          "fill": "#2A2A2A",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "HtcOi",
+          "name": "ds",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "oWtnn",
+              "fill": "#C9A962",
+              "content": "DESCRIPTION",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "XAHBx",
+              "fill": "#C9C9C9",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Connect the Workstream board to the live issue store so columns reflect real status. Moving a card now persists to GitHub and mirrors to the Project board.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "SgKGi",
+          "name": "dv2",
+          "fill": "#2A2A2A",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "l1J5E",
+          "name": "ab",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "qWQbQ",
+              "name": "cb",
+              "fill": "#141414",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "gap": 8,
+              "padding": [
+                16,
+                9
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "mWfGo",
+                  "width": 15,
+                  "height": 15,
+                  "iconFontName": "circle-check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#848484"
+                },
+                {
+                  "type": "text",
+                  "id": "V7xqp",
+                  "fill": "#C9C9C9",
+                  "content": "Close issue",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "4GJfn",
+              "name": "gh",
+              "gap": 6,
+              "padding": [
+                14,
+                9
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "v9ZNA",
+                  "fill": "#6A6A6A",
+                  "content": "Open on GitHub",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "icon_font",
+                  "id": "oy13w",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "arrow-up-right",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6A6A6A"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "FUebw",
+      "x": 2040,
+      "y": 1440,
+      "name": "capB4",
+      "fill": "#C9A962",
+      "content": "B4 · Issue detail — persisted status / column control (syncing to board)",
+      "fontFamily": "Inter",
+      "fontSize": 15,
+      "fontWeight": "600"
+    },
+    {
+      "type": "frame",
+      "id": "lt0Bp",
+      "x": 2040,
+      "y": 1480,
+      "name": "B4 Detail Status Control",
+      "width": 620,
+      "fill": "#0D0D0D",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 28,
+      "children": [
+        {
+          "type": "frame",
+          "id": "zE5B5",
+          "name": "hd",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "children": [
+            {
+              "type": "text",
+              "id": "FoKae",
+              "fill": "#6A6A6A",
+              "content": "SOLAA-198",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "dVxmw",
+              "name": "hr",
+              "gap": 14,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "svyIa",
+                  "name": "sp",
+                  "fill": "#1A1710",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#6A5A38"
+                  },
+                  "gap": 6,
+                  "padding": [
+                    10,
+                    5
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "z7PBM",
+                      "fill": "#C9A962",
+                      "width": 6,
+                      "height": 6
+                    },
+                    {
+                      "type": "text",
+                      "id": "YkpRV",
+                      "fill": "#C9A962",
+                      "content": "In Progress",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "icon_font",
+                  "id": "PnivD",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "x",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6A6A6A"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "ukHG3",
+          "name": "trow",
+          "width": "fill_container",
+          "gap": 10,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "ULvzl",
+              "fill": "#FFFFFF",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Wire Workstream board to live issue store",
+              "fontFamily": "Inter",
+              "fontSize": 20,
+              "fontWeight": "600"
+            },
+            {
+              "type": "icon_font",
+              "id": "VSrB3",
+              "width": 15,
+              "height": 15,
+              "iconFontName": "pencil",
+              "iconFontFamily": "lucide",
+              "fill": "#6A6A6A"
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "QghBj",
+          "fill": "#2A2A2A",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "JjJ0l",
+          "name": "sc",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "DYC3c",
+              "fill": "#C9A962",
+              "content": "STATUS / COLUMN",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "frame",
+              "id": "ZnpMZ",
+              "name": "sel",
+              "width": "fill_container",
+              "fill": "#141414",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#6A5A38"
+              },
+              "padding": [
+                12,
+                10
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "kT1gM",
+                  "name": "selL",
+                  "gap": 8,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "jtP3j",
+                      "fill": "#C9A962",
+                      "width": 6,
+                      "height": 6
+                    },
+                    {
+                      "type": "text",
+                      "id": "PUU7k",
+                      "fill": "#FFFFFF",
+                      "content": "In Progress",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "icon_font",
+                  "id": "lq4FF",
+                  "width": 16,
+                  "height": 16,
+                  "iconFontName": "chevron-down",
+                  "iconFontFamily": "lucide",
+                  "fill": "#848484"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "E7KvC",
+              "name": "syn",
+              "width": "fill_container",
+              "gap": 8,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "KBGsr",
+                  "width": 13,
+                  "height": 13,
+                  "iconFontName": "loader",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "wB38n",
+                  "fill": "#C9A962",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Syncing to Project board — GitHub is already updated; the board mirror catches up in a moment.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "6bGwI",
+          "fill": "#2A2A2A",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "SfMZo",
+          "name": "mw",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 14,
+          "children": [
+            {
+              "id": "HSeP1",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m1",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Priority"
+                },
+                "mTlHu": {
+                  "content": "High",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "5uj5n",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m2",
+              "descendants": {
+                "aM2dv": {
+                  "content": "User"
+                },
+                "mTlHu": {
+                  "content": "Harry Cole",
+                  "fill": "#FFFFFF"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "xSAo9",
+          "fill": "#2A2A2A",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "y4d8C",
+          "name": "ds",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "k8PX3",
+              "fill": "#C9A962",
+              "content": "DESCRIPTION",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "J5xLm",
+              "fill": "#C9C9C9",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Moving a card writes the matching status labels to GitHub, then mirrors to the Project board. The label write is source-of-truth; the board mirror is eventually-consistent.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "6DpUu",
+      "x": 0,
+      "y": 2560,
+      "name": "capB5",
+      "fill": "#C9A962",
+      "content": "B5 · Close issue — choose a reason (menu from the Close action)",
+      "fontFamily": "Inter",
+      "fontSize": 15,
+      "fontWeight": "600"
+    },
+    {
+      "type": "frame",
+      "id": "nInMo",
+      "x": 0,
+      "y": 2600,
+      "name": "B5 Close Reason Menu",
+      "width": 360,
+      "fill": "#141414",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "layout": "vertical",
+      "gap": 2,
+      "padding": 6,
+      "children": [
+        {
+          "type": "frame",
+          "id": "OCmQS",
+          "name": "hdr",
+          "width": "fill_container",
+          "padding": [
+            12,
+            9
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "yDvKz",
+              "name": "h1",
+              "fill": "#848484",
+              "content": "Close this issue as…",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "uMXHw",
+          "name": "o1",
+          "width": "fill_container",
+          "fill": "#1F1B12",
+          "gap": 12,
+          "padding": [
+            12,
+            11
+          ],
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "JGONZ",
+              "name": "o1i",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "circle-check",
+              "iconFontFamily": "lucide",
+              "fill": "#C9A962"
+            },
+            {
+              "type": "frame",
+              "id": "rgQGK",
+              "name": "o1c",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 3,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "lVy2z",
+                  "name": "o1a",
+                  "fill": "#FFFFFF",
+                  "content": "Completed",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "8R5yb",
+                  "name": "o1b",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Shipped or resolved as intended",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "FFqiw",
+          "name": "o2",
+          "width": "fill_container",
+          "gap": 12,
+          "padding": [
+            12,
+            11
+          ],
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "KOZVr",
+              "name": "o2i",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "circle-x",
+              "iconFontFamily": "lucide",
+              "fill": "#848484"
+            },
+            {
+              "type": "frame",
+              "id": "QGpLb",
+              "name": "o2c",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 3,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "a38oF",
+                  "name": "o2a",
+                  "fill": "#FFFFFF",
+                  "content": "Not planned",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "YjxLB",
+                  "name": "o2b",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Won't do — out of scope or duplicate",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "xU7CV",
+      "x": 520,
+      "y": 2560,
+      "name": "capB6",
+      "fill": "#C9A962",
+      "content": "B6 · Issue detail — closed state + Reopen (closed-card treatment)",
+      "fontFamily": "Inter",
+      "fontSize": 15,
+      "fontWeight": "600"
+    },
+    {
+      "type": "frame",
+      "id": "ziFlG",
+      "x": 520,
+      "y": 2600,
+      "name": "B6 Detail Closed Reopen",
+      "width": 620,
+      "fill": "#0D0D0D",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 28,
+      "children": [
+        {
+          "type": "frame",
+          "id": "NBEPq",
+          "name": "hd",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "children": [
+            {
+              "type": "text",
+              "id": "kJv5Z",
+              "fill": "#6A6A6A",
+              "content": "SOLAA-198",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "ZnGRX",
+              "name": "hr",
+              "gap": 14,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "NmeoI",
+                  "name": "sp",
+                  "fill": "#1C1C1C",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#3A3A3A"
+                  },
+                  "gap": 6,
+                  "padding": [
+                    10,
+                    5
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "61VfA",
+                      "fill": "#8A8A8A",
+                      "width": 6,
+                      "height": 6
+                    },
+                    {
+                      "type": "text",
+                      "id": "77OZR",
+                      "fill": "#A0A0A0",
+                      "content": "Closed",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "icon_font",
+                  "id": "SJCqv",
+                  "width": 18,
+                  "height": 18,
+                  "iconFontName": "x",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6A6A6A"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "ALAOT",
+          "name": "trow",
+          "width": "fill_container",
+          "gap": 10,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "Ym3tS",
+              "width": 18,
+              "height": 18,
+              "iconFontName": "circle-check",
+              "iconFontFamily": "lucide",
+              "fill": "#6A6A6A"
+            },
+            {
+              "type": "text",
+              "id": "DVVUw",
+              "fill": "#8A8A8A",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Wire Workstream board to live issue store",
+              "fontFamily": "Inter",
+              "fontSize": 20,
+              "fontWeight": "600"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "3rY1N",
+          "name": "bn",
+          "width": "fill_container",
+          "fill": "#141414",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#2A2A2A"
+          },
+          "gap": 8,
+          "padding": [
+            14,
+            10
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "7S5Ux",
+              "width": 15,
+              "height": 15,
+              "iconFontName": "circle-check",
+              "iconFontFamily": "lucide",
+              "fill": "#9BA88A"
+            },
+            {
+              "type": "text",
+              "id": "UgJS8",
+              "fill": "#A0A0A0",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Closed as completed · by Harry Cole · Jul 10, 2026",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "mqeHT",
+          "fill": "#2A2A2A",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "zenku",
+          "name": "mw",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 14,
+          "children": [
+            {
+              "id": "darcO",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m1",
+              "descendants": {
+                "aM2dv": {
+                  "content": "Priority"
+                },
+                "mTlHu": {
+                  "content": "High",
+                  "fill": "#FFFFFF"
+                }
+              }
+            },
+            {
+              "id": "cbUsT",
+              "type": "ref",
+              "ref": "8wf2S",
+              "width": "fill_container",
+              "name": "m2",
+              "descendants": {
+                "aM2dv": {
+                  "content": "User"
+                },
+                "mTlHu": {
+                  "content": "Harry Cole",
+                  "fill": "#FFFFFF"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "rectangle",
+          "id": "Aj8E9",
+          "name": "dvx",
+          "fill": "#2A2A2A",
+          "width": "fill_container",
+          "height": 1
+        },
+        {
+          "type": "frame",
+          "id": "CsIZJ",
+          "name": "ab",
+          "width": "fill_container",
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "1M4Tg",
+              "name": "ro",
+              "fill": "#141414",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#6A5A38"
+              },
+              "gap": 8,
+              "padding": [
+                16,
+                9
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "doRDR",
+                  "width": 15,
+                  "height": 15,
+                  "iconFontName": "rotate-ccw",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C9A962"
+                },
+                {
+                  "type": "text",
+                  "id": "FhBqw",
+                  "fill": "#C9A962",
+                  "content": "Reopen issue",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "QCtU2",
+              "name": "gh",
+              "gap": 6,
+              "padding": [
+                14,
+                9
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "mZd3I",
+                  "fill": "#6A6A6A",
+                  "content": "Open on GitHub",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "wtsfd",
+          "name": "lbl",
+          "fill": "#6A6A6A",
+          "content": "ON THE BOARD · DONE COLUMN",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 3
+        },
+        {
+          "id": "5gD0C",
+          "type": "ref",
+          "ref": "OnYED",
+          "width": "fill_container",
+          "opacity": 0.5,
+          "name": "mc",
+          "descendants": {
+            "5iPtE": {
+              "content": "SOLAA-198"
+            },
+            "DxIQ3": {
+              "content": "Wire Workstream board to live issue store",
+              "fill": "#8A8A8A"
+            },
+            "Hl4bO": {
+              "content": "Completed"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "jpyDK",
+      "x": 1360,
+      "y": 2540,
+      "name": "capC",
+      "fill": "#C9A962",
+      "textGrowth": "fixed-width",
+      "width": 1300,
+      "content": "C · Write-integrity lifecycle — optimistic → confirmed → failed. The board never shows a change GitHub didn't persist.",
+      "fontFamily": "Inter",
+      "fontSize": 15,
+      "fontWeight": "600"
+    },
+    {
+      "type": "frame",
+      "id": "0FnIy",
+      "x": 1360,
+      "y": 2600,
+      "name": "C Write-integrity Lifecycle",
+      "fill": "#0A0A0A",
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "gap": 24,
+      "padding": 24,
+      "children": [
+        {
+          "type": "frame",
+          "id": "QhgOW",
+          "name": "col1",
+          "width": 380,
+          "layout": "vertical",
+          "gap": 12,
+          "children": [
+            {
+              "type": "frame",
+              "id": "8Gb00",
+              "name": "h1",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 4,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "PgdVf",
+                  "fill": "#FFFFFF",
+                  "content": "1 · Optimistic (pending)",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "8QDzE",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Card appears immediately, greyed, while the write is in flight.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "yxaiM",
+              "name": "bc1",
+              "width": "fill_container",
+              "fill": "#0F0F0F",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "layout": "vertical",
+              "gap": 10,
+              "padding": 14,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "AL8Q5",
+                  "fill": "#6A6A6A",
+                  "content": "BACKLOG",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "pawSx",
+                  "name": "card1",
+                  "opacity": 0.65,
+                  "width": "fill_container",
+                  "fill": "#141414",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#3A3A3A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 14,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "25uyq",
+                      "fill": "#C9A962",
+                      "content": "SOLAA-212",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "kC5PG",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Persist board drag-and-drop moves",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "aE8HM",
+                      "name": "pend",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "YcaSc",
+                          "width": 12,
+                          "height": 12,
+                          "iconFontName": "loader",
+                          "iconFontFamily": "lucide",
+                          "fill": "#C9A962"
+                        },
+                        {
+                          "type": "text",
+                          "id": "vwN3N",
+                          "fill": "#C9A962",
+                          "content": "Creating on GitHub…",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "UamZ4",
+          "name": "col2",
+          "width": 380,
+          "layout": "vertical",
+          "gap": 12,
+          "children": [
+            {
+              "type": "frame",
+              "id": "4dSzh",
+              "name": "h2",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 4,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "xQpbr",
+                  "fill": "#FFFFFF",
+                  "content": "2 · Confirmed (settled)",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "kbq1F",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "GitHub acknowledged. Card is solid and survives a reload — no “resets on reload”.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "W3Qao",
+              "name": "bc2",
+              "width": "fill_container",
+              "fill": "#0F0F0F",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "layout": "vertical",
+              "gap": 10,
+              "padding": 14,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "YTU10",
+                  "fill": "#6A6A6A",
+                  "content": "BACKLOG",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "rwtqY",
+                  "name": "card2",
+                  "width": "fill_container",
+                  "fill": "#141414",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 14,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "iPvC2",
+                      "fill": "#C9A962",
+                      "content": "SOLAA-212",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "TaNZG",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Persist board drag-and-drop moves",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "N0nrZ",
+                      "name": "foot2",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "DyUM8",
+                          "width": 12,
+                          "height": 12,
+                          "iconFontName": "circle-check",
+                          "iconFontFamily": "lucide",
+                          "fill": "#9BA88A"
+                        },
+                        {
+                          "type": "text",
+                          "id": "k2CJy",
+                          "fill": "#9BA88A",
+                          "content": "Persisted · just now",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "yiNNg",
+          "name": "col3",
+          "width": 380,
+          "layout": "vertical",
+          "gap": 12,
+          "children": [
+            {
+              "type": "frame",
+              "id": "Td6UD",
+              "name": "h3",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 4,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "8TACT",
+                  "fill": "#FFFFFF",
+                  "content": "3 · Failed (rolled back)",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "SNNAS",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Write failed — the optimistic card is removed and a retryable toast explains why.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "HXvq8",
+              "name": "bc3",
+              "width": "fill_container",
+              "fill": "#0F0F0F",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "layout": "vertical",
+              "gap": 10,
+              "padding": 14,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "EB2DD",
+                  "fill": "#6A6A6A",
+                  "content": "BACKLOG",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "frame",
+                  "id": "XdHoh",
+                  "name": "slot",
+                  "width": "fill_container",
+                  "fill": "#0F0F0F",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#3A3A3A"
+                  },
+                  "layout": "vertical",
+                  "gap": 4,
+                  "padding": [
+                    18,
+                    16
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "9feEz",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Card removed — never persisted",
+                      "textAlign": "center",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "pbFTu",
+              "name": "toast",
+              "width": "fill_container",
+              "fill": "#2A1614",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#7A322C"
+              },
+              "gap": 10,
+              "padding": 14,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "ug34x",
+                  "width": 16,
+                  "height": 16,
+                  "iconFontName": "triangle-alert",
+                  "iconFontFamily": "lucide",
+                  "fill": "#C8635B"
+                },
+                {
+                  "type": "frame",
+                  "id": "IkBgH",
+                  "name": "tb",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 6,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "RxXGa",
+                      "fill": "#E0938C",
+                      "content": "Couldn't save to GitHub",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "JXJj5",
+                      "fill": "#B08882",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Your change was rolled back — nothing was persisted.",
+                      "lineHeight": 1.4,
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "PTPXe",
+                      "name": "retry",
+                      "fill": "#2A1614",
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#7A322C"
+                      },
+                      "gap": 6,
+                      "padding": [
+                        12,
+                        7
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "kq0Kw",
+                          "width": 12,
+                          "height": 12,
+                          "iconFontName": "rotate-ccw",
+                          "iconFontFamily": "lucide",
+                          "fill": "#E0938C"
+                        },
+                        {
+                          "type": "text",
+                          "id": "j7jm5",
+                          "fill": "#E0938C",
+                          "content": "Retry",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -46,19 +46,30 @@ teardown() {
   unset INFRA_CONFIG_STAGING_DIR INFRA_CONFIG_INSTALL_HELPER
 }
 
+# #6178: the handler now reads each payload as a FILE PATH — hooks.json.tmpl's infra-config
+# hook uses pass-file-to-command + base64decode, so webhook writes the DECODED content to a
+# temp file and passes its PATH via the env var (this dodges the 128KB MAX_ARG_STRLEN exec-env
+# ceiling that ci-deploy.sh's ~140KB base64 blew, killing fork/exec with E2BIG). So these test
+# env vars hold PATHS to files with the already-decoded content — NOT base64 strings.
+_payload_file() {  # <content> → prints a fresh temp-file path holding exactly that content
+  local f; f=$(mktemp "${TMPDIR_ROOT}/payload.XXXXXX"); printf '%s' "$1" > "$f"; printf '%s' "$f"
+}
 export_valid_env_vars() {
-  export CI_DEPLOY_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export CI_DEPLOY_WRAPPER_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export WEBHOOK_SERVICE_B64=$(echo -n "[Unit]" | base64 -w0)
-  export CAT_DEPLOY_STATE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export CANARY_BUNDLE_CLAIM_CHECK_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export HOOKS_JSON_B64=$(echo -n '{}' | base64 -w0)
-  export CAT_INFRA_CONFIG_STATE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export INNGEST_ENUMERATE_REMINDERS_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export INNGEST_REARM_REMINDERS_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export INNGEST_WIPED_VOLUME_VERIFY_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export CAT_INNGEST_VERIFY_STATE_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
-  export INNGEST_INVENTORY_SH_B64=$(echo -n "#!/bin/bash" | base64 -w0)
+  export CI_DEPLOY_SH_B64=$(_payload_file "#!/bin/bash")
+  export CI_DEPLOY_WRAPPER_SH_B64=$(_payload_file "#!/bin/bash")
+  export WEBHOOK_SERVICE_B64=$(_payload_file "[Unit]")
+  export CAT_DEPLOY_STATE_SH_B64=$(_payload_file "#!/bin/bash")
+  export CANARY_BUNDLE_CLAIM_CHECK_SH_B64=$(_payload_file "#!/bin/bash")
+  export HOOKS_JSON_B64=$(_payload_file '{}')
+  export CAT_INFRA_CONFIG_STATE_SH_B64=$(_payload_file "#!/bin/bash")
+  export INNGEST_ENUMERATE_REMINDERS_SH_B64=$(_payload_file "#!/bin/bash")
+  export INNGEST_REARM_REMINDERS_SH_B64=$(_payload_file "#!/bin/bash")
+  export INNGEST_WIPED_VOLUME_VERIFY_SH_B64=$(_payload_file "#!/bin/bash")
+  export CAT_INNGEST_VERIFY_STATE_SH_B64=$(_payload_file "#!/bin/bash")
+  export INNGEST_INVENTORY_SH_B64=$(_payload_file "#!/bin/bash")
+  export GIT_LOCK_CHARDEVICE_SWEEP_SH_B64=$(_payload_file "#!/bin/bash")
+  export INNGEST_REGISTRY_PROBE_SH_B64=$(_payload_file "#!/bin/bash")
+  export INNGEST_DOUBLEFIRE_PROBE_SH_B64=$(_payload_file "#!/bin/bash")
 }
 
 assert_eq() {
@@ -127,8 +138,10 @@ test_happy_path() {
     PASS=$((PASS + 1))
   fi
   assert_file_exists "cat-infra-config-state.sh written" "$TEST_DESTDIR/usr/local/bin/cat-infra-config-state.sh"
+  assert_file_exists "git-lock-chardevice-sweep.sh written (#5934)" "$TEST_DESTDIR/usr/local/bin/git-lock-chardevice-sweep.sh"
 
   assert_file_mode "ci-deploy.sh is executable" "$TEST_DESTDIR/usr/local/bin/ci-deploy.sh" "755"
+  assert_file_mode "git-lock-chardevice-sweep.sh is executable (#5934)" "$TEST_DESTDIR/usr/local/bin/git-lock-chardevice-sweep.sh" "755"
   assert_file_mode "hooks.json is 640" "$TEST_DESTDIR/etc/webhook/hooks.json" "640"
 
   teardown
@@ -189,7 +202,7 @@ test_atomic_write() {
 
   local content="line1\nline2\nline3\nthis is the end"
   export_valid_env_vars
-  export CI_DEPLOY_SH_B64=$(echo -n "$content" | base64 -w0)
+  export CI_DEPLOY_SH_B64=$(_payload_file "$content")
 
   bash "$HANDLER"
 
@@ -222,9 +235,9 @@ test_state_file_happy_path() {
   local files_total
   files_total=$(jq -r '.files_total' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   assert_eq "exit_code is 0" "0" "$exit_code"
-  assert_eq "files_written is 12" "12" "$files_written"
+  assert_eq "files_written is 15" "15" "$files_written"
   assert_eq "files_failed is 0" "0" "$files_failed"
-  assert_eq "files_total is 12" "12" "$files_total"
+  assert_eq "files_total is 15" "15" "$files_total"
 
   local first_file_status first_file_sha
   first_file_status=$(jq -r '.files[0].status' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
@@ -252,13 +265,15 @@ test_state_file_happy_path() {
   teardown
 }
 
-# --- Test 7: State file partial failure — bad base64 ---
+# --- Test 7: State file partial failure — unreadable payload file ---
 test_state_file_partial_failure() {
-  echo "TEST: state file — partial failure with bad base64"
+  echo "TEST: state file — partial failure with an unreadable payload file"
   setup
   export_valid_env_vars
-  # Inject invalid base64 for one file
-  export CI_DEPLOY_SH_B64="!!!not-valid-base64!!!"
+  # #6178: payloads are now FILE PATHS (pass-file-to-command). Point one at a path that
+  # does not exist so the handler's cp fails (reason=payload_file_unreadable) while the
+  # rest still land — the per-file failure contract.
+  export CI_DEPLOY_SH_B64="${TMPDIR_ROOT}/does-not-exist-payload"
 
   bash "$HANDLER" 2>/dev/null || true
 
@@ -394,7 +409,7 @@ test_exit_trap_unhandled() {
 # the env mapping), instead of the former upfront all-or-nothing exit 1 that
 # wrote nothing and froze every file.
 test_missing_env_partial_write() {
-  echo "TEST: one missing env var — other 10 files still written (#4804)"
+  echo "TEST: one missing env var — other 14 files still written (#4804)"
   setup
   export_valid_env_vars
   unset CAT_INFRA_CONFIG_STATE_SH_B64  # simulate host hooks.json drift on the newest key
@@ -420,14 +435,14 @@ test_missing_env_partial_write() {
     PASS=$((PASS + 1))
   fi
 
-  # State JSON counts: 10 written, 1 failed, 11 total
+  # State JSON counts: 14 written, 1 failed, 15 total (one env var deliberately missing)
   local files_written files_failed files_total
   files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   files_failed=$(jq -r '.files_failed' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   files_total=$(jq -r '.files_total' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
-  assert_eq "files_written is 11" "11" "$files_written"
+  assert_eq "files_written is 14" "14" "$files_written"
   assert_eq "files_failed is 1" "1" "$files_failed"
-  assert_eq "files_total is 12" "12" "$files_total"
+  assert_eq "files_total is 15" "15" "$files_total"
 
   # The missing file's entry records status:failed, reason:missing_env
   local mstatus mreason
@@ -489,11 +504,11 @@ test_prod_mode_escalated_move() {
   bash "$HANDLER" 2>/dev/null || rc=$?
   assert_eq "handler exits 0 in prod mode" "0" "$rc"
 
-  # The helper must be invoked once per managed file (7 total; sudoers is
+  # The helper must be invoked once per managed file (15 total; sudoers is
   # root-managed and not in FILE_MAP, #4827 security review).
   local calls
   calls=$([[ -f "$helper_log" ]] && wc -l < "$helper_log" | tr -d ' ' || echo 0)
-  assert_eq "escalation helper invoked once per file (12)" "12" "$calls"
+  assert_eq "escalation helper invoked once per file (15)" "15" "$calls"
 
   # The handler exiting 0 proves it staged in INFRA_CONFIG_STAGING_DIR rather than
   # mktemp-ing in a root-owned dest dir (which would EACCES as non-root) — the
@@ -516,7 +531,7 @@ test_prod_mode_escalated_move() {
   local files_written exit_code
   files_written=$(jq -r '.files_written' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   exit_code=$(jq -r '.exit_code' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
-  assert_eq "prod-mode files_written is 12" "12" "$files_written"
+  assert_eq "prod-mode files_written is 15" "15" "$files_written"
   assert_eq "prod-mode exit_code is 0" "0" "$exit_code"
 
   teardown
@@ -545,6 +560,42 @@ test_b64_delivery_parity() {
     FAIL=$((FAIL + 1)); fi
 }
 
+# --- #6178: orphan-hook self-check — a hooks.json execute-command pointing at a
+# /usr/local/bin script NOT on disk after the push is a DANGLING HOOK (webhook
+# fork/exec's a missing file → empty HTTP 500). The handler must flag it LOUD
+# (files[] reason=orphan_hook_command + exit 1 + SOLEUR_INFRA_CONFIG_HOOK_ORPHAN
+# marker), while a hook pointing at a delivered FILE_MAP script is NOT flagged.
+test_orphan_hook_selfcheck() {
+  echo "TEST: orphan-hook self-check — dangling hook command fails loud (#6178)"
+  setup
+  export_valid_env_vars
+  # hooks.json referencing one DELIVERED script (inngest-inventory.sh ∈ FILE_MAP)
+  # and one UNDELIVERED script (orphan-missing.sh ∉ FILE_MAP → never on disk).
+  export HOOKS_JSON_B64=$(_payload_file '[{"id":"good","execute-command":"/usr/local/bin/inngest-inventory.sh"},{"id":"orphan","execute-command":"/usr/local/bin/orphan-missing.sh"}]')
+
+  local rc=0
+  bash "$HANDLER" 2>/dev/null || rc=$?
+  assert_eq "handler exits 1 on dangling hook" "1" "$rc"
+
+  local orphan_reason good_flagged
+  orphan_reason=$(jq -r '.files[] | select(.file == "/usr/local/bin/orphan-missing.sh") | .reason' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "orphan hook reason is orphan_hook_command" "orphan_hook_command" "$orphan_reason"
+
+  # The delivered script's hook must NOT be flagged as orphan.
+  good_flagged=$(jq -r '[.files[] | select(.file == "/usr/local/bin/inngest-inventory.sh" and .reason == "orphan_hook_command")] | length' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
+  assert_eq "delivered-script hook not flagged as orphan" "0" "$good_flagged"
+
+  if grep -q "SOLEUR_INFRA_CONFIG_HOOK_ORPHAN" "$LOGGER_LOG" 2>/dev/null; then
+    echo "  PASS: SOLEUR_INFRA_CONFIG_HOOK_ORPHAN marker emitted"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: no SOLEUR_INFRA_CONFIG_HOOK_ORPHAN marker in logger output"
+    FAIL=$((FAIL + 1))
+  fi
+
+  teardown
+}
+
 # --- Run all tests ---
 echo "=== infra-config-apply.sh test suite ==="
 test_happy_path
@@ -559,6 +610,7 @@ test_exit_trap_unhandled
 test_missing_env_partial_write
 test_prod_mode_escalated_move
 test_b64_delivery_parity
+test_orphan_hook_selfcheck
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then

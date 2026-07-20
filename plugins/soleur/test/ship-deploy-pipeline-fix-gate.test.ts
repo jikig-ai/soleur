@@ -54,6 +54,9 @@ const TRIGGER_FILES = [
   "apps/web-platform/infra/inngest-wiped-volume-verify.sh",
   "apps/web-platform/infra/cat-inngest-verify-state.sh",
   "apps/web-platform/infra/inngest-inventory.sh",
+  "apps/web-platform/infra/git-lock-chardevice-sweep.sh",
+  "apps/web-platform/infra/inngest-registry-probe.sh",
+  "apps/web-platform/infra/inngest-doublefire-probe.sh",
 ];
 
 function buildTriggerRegex(files: string[]): RegExp {
@@ -365,10 +368,24 @@ describe("apply-deploy-pipeline-fix.yml on.push.paths in sync with TRIGGER_FILES
     expect(paths.length).toBeGreaterThan(0);
   });
 
-  test("paths filter equals TRIGGER_FILES ∪ {server.tf} (set equality)", () => {
+  test("paths filter equals TRIGGER_FILES ∪ {server.tf, seccomp-bwrap.json, apparmor-soleur-bwrap.profile} (set equality)", () => {
     const expected = new Set([
       ...TRIGGER_FILES,
       "apps/web-platform/infra/server.tf",
+      // #5873 — seccomp-bwrap.json is hashed by docker_seccomp_config's OWN
+      // triggers_replace (server.tf), NOT by deploy_pipeline_fix, so it is
+      // deliberately absent from TRIGGER_FILES. The workflow still applies
+      // docker_seccomp_config (see the seccomp coupling describe below), so a
+      // profile-only edit must fire this workflow — hence it IS in paths:.
+      "apps/web-platform/infra/seccomp-bwrap.json",
+      // #5875 apply-parity — apparmor-soleur-bwrap.profile is hashed by
+      // apparmor_bwrap_profile's OWN triggers_replace (server.tf), the twin of
+      // docker_seccomp_config. Before #5875 it was absent from BOTH the
+      // workflow's -target= set AND this paths filter, so an apparmor-only edit
+      // did not auto-apply at all (identical bug to the #5873 seccomp gap). The
+      // apparmor apply-parity describe below pins the co-target; this line pins
+      // the paths reachability.
+      "apps/web-platform/infra/apparmor-soleur-bwrap.profile",
     ]);
     expect(new Set(paths)).toEqual(expected);
   });
@@ -492,5 +509,189 @@ describe("deploy_pipeline_fix orders after the handler bridge (#5515)", () => {
     const inner = blockMatch![1];
     expect(inner).toContain('file("${path.module}/infra-config-apply.sh")');
     expect(inner).toContain("local.hooks_json");
+  });
+});
+
+// #5873 — the seccomp coupling triangle. The container seccomp profile
+// (seccomp-bwrap.json) is delivered by terraform_data.docker_seccomp_config,
+// a DIFFERENT resource from deploy_pipeline_fix. For a profile-only edit to
+// reach prod, three facts must hold together — and terraform-target-parity.test.ts
+// does NOT guard them for THIS workflow (docker_seccomp_config is also covered by
+// apply-web-platform-infra.yml's union, so dropping it here fails no existing test).
+// This closes that gap the same way #5505/#5515 did for deploy_pipeline_fix.
+describe("seccomp profile auto-apply coupling (#5873)", () => {
+  test("apply-deploy-pipeline-fix.yml co-targets docker_seccomp_config in BOTH plan and apply", () => {
+    expect(existsSync(APPLY_DPF_WORKFLOW)).toBe(true);
+    const yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
+    const planIdx = yml.indexOf("terraform plan -target=");
+    const applyIdx = yml.indexOf("terraform apply -target=");
+    expect(planIdx).toBeGreaterThanOrEqual(0);
+    expect(applyIdx).toBeGreaterThanOrEqual(0);
+    // Bound each invocation to its own -target= run of lines (generous 800 chars).
+    expect(yml.slice(planIdx, planIdx + 800)).toContain(
+      "-target=terraform_data.docker_seccomp_config",
+    );
+    expect(yml.slice(applyIdx, applyIdx + 800)).toContain(
+      "-target=terraform_data.docker_seccomp_config",
+    );
+  });
+
+  test("docker_seccomp_config triggers_replace hashes seccomp-bwrap.json (edit re-fires the apply)", () => {
+    expect(existsSync(SERVER_TF)).toBe(true);
+    const serverTf = readFileSync(SERVER_TF, "utf8");
+    const resourceStart = serverTf.indexOf(
+      'resource "terraform_data" "docker_seccomp_config"',
+    );
+    expect(resourceStart).toBeGreaterThanOrEqual(0);
+    const TOP_LEVEL_BLOCK_RE =
+      /\n(resource|data|module|output|locals|variable|provider|terraform)\b/;
+    const tail = serverTf.slice(resourceStart + 1);
+    const tailMatch = tail.match(TOP_LEVEL_BLOCK_RE);
+    const resourceBlock =
+      tailMatch && tailMatch.index !== undefined
+        ? serverTf.slice(resourceStart, resourceStart + 1 + tailMatch.index)
+        : serverTf.slice(resourceStart);
+    expect(resourceBlock).toContain(
+      'sha256(file("${path.module}/seccomp-bwrap.json"))',
+    );
+  });
+});
+
+// #5875 apply-parity — the apparmor twin of the #5873 seccomp coupling. The
+// container apparmor profile (apparmor-soleur-bwrap.profile) is delivered by
+// terraform_data.apparmor_bwrap_profile, a DIFFERENT resource from
+// docker_seccomp_config. Before #5875 it was in deploy_pipeline_fix's depends_on
+// (the #5515 describe above) but NOT co-`-target`ed by apply-deploy-pipeline-fix.yml
+// nor in its paths filter — so the depends_on edge was inert for THIS workflow and
+// an apparmor-only edit did not auto-apply at all. The faithful canary drives real
+// bwrap, which exercises BOTH --security-opt seccomp AND --security-opt apparmor, so
+// an apparmor regression must reach prod on the same auto-apply path as seccomp.
+describe("apparmor profile auto-apply parity (#5875)", () => {
+  test("apply-deploy-pipeline-fix.yml co-targets apparmor_bwrap_profile in BOTH plan and apply", () => {
+    expect(existsSync(APPLY_DPF_WORKFLOW)).toBe(true);
+    const yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
+    const planIdx = yml.indexOf("terraform plan -target=");
+    const applyIdx = yml.indexOf("terraform apply -target=");
+    expect(planIdx).toBeGreaterThanOrEqual(0);
+    expect(applyIdx).toBeGreaterThan(planIdx);
+    // Bound PRECISELY, not with a fixed window: the plan invocation ends where the
+    // apply invocation begins, and the apply invocation ends at the next step. A
+    // fixed 800-char window spills across the plan→apply boundary and — because
+    // apparmor_bwrap_profile is the LAST -target= in each list — could let the apply
+    // block's target satisfy the plan assertion, masking a dropped plan -target
+    // (pattern-review finding, #5875). This is the same precise bounding the
+    // loaded-verification describe uses.
+    const planBlock = yml.slice(planIdx, applyIdx);
+    const applyRest = yml.slice(applyIdx);
+    const applyStepEnd = applyRest.indexOf("\n      - name:");
+    const applyBlock =
+      applyStepEnd >= 0 ? applyRest.slice(0, applyStepEnd) : applyRest;
+    expect(planBlock).toContain(
+      "-target=terraform_data.apparmor_bwrap_profile",
+    );
+    expect(applyBlock).toContain(
+      "-target=terraform_data.apparmor_bwrap_profile",
+    );
+  });
+
+  test("apparmor_bwrap_profile triggers_replace hashes apparmor-soleur-bwrap.profile (edit re-fires the apply)", () => {
+    expect(existsSync(SERVER_TF)).toBe(true);
+    const serverTf = readFileSync(SERVER_TF, "utf8");
+    const resourceStart = serverTf.indexOf(
+      'resource "terraform_data" "apparmor_bwrap_profile"',
+    );
+    expect(resourceStart).toBeGreaterThanOrEqual(0);
+    const TOP_LEVEL_BLOCK_RE =
+      /\n(resource|data|module|output|locals|variable|provider|terraform)\b/;
+    const tail = serverTf.slice(resourceStart + 1);
+    const tailMatch = tail.match(TOP_LEVEL_BLOCK_RE);
+    const resourceBlock =
+      tailMatch && tailMatch.index !== undefined
+        ? serverTf.slice(resourceStart, resourceStart + 1 + tailMatch.index)
+        : serverTf.slice(resourceStart);
+    expect(resourceBlock).toContain(
+      'sha256(file("${path.module}/apparmor-soleur-bwrap.profile"))',
+    );
+  });
+});
+
+// #5875 item 4 — "applied ≠ loaded" loaded-verification guard. A seccomp/apparmor
+// profile edit auto-applies to the HOST (docker_seccomp_config / apparmor_bwrap_profile
+// SSH provisioners write /etc/docker/seccomp-profiles/…), but the RUNNING container
+// only loads a new --security-opt at `docker run`. The concurrent web-platform-release
+// deploy is unordered on the same merge (different concurrency groups), so the fix
+// deploy can run the STALE profile and go green while every tenant stays broken. This
+// guard pins that apply-deploy-pipeline-fix.yml itself performs a SEQUENCED redeploy
+// AFTER the terraform apply and asserts the running container's loaded profile hash
+// equals the committed one, fail-loud. Without the ordering + assert, a #5874-style
+// RECOVERY fix could "apply" without ever loading.
+describe("profile→redeploy loaded-verification guard (#5875 item 4)", () => {
+  let yml: string;
+
+  beforeAll(() => {
+    expect(existsSync(APPLY_DPF_WORKFLOW)).toBe(true);
+    yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
+  });
+
+  test("a redeploy step is ordered AFTER the terraform apply step", () => {
+    // The durable apply step (`- name: Terraform apply`) must precede the
+    // redeploy step. Index comparison on the step-name markers proves ordering;
+    // GitHub Actions runs steps top-to-bottom within a job.
+    const applyStepIdx = yml.indexOf("- name: Terraform apply");
+    const redeployStepIdx = yml.indexOf(
+      "- name: Redeploy to load applied profile",
+    );
+    expect(applyStepIdx).toBeGreaterThanOrEqual(0);
+    expect(redeployStepIdx).toBeGreaterThanOrEqual(0);
+    expect(redeployStepIdx).toBeGreaterThan(applyStepIdx);
+  });
+
+  test("redeploy step POSTs /hooks/deploy to trigger the profile-loading swap", () => {
+    const redeployStepIdx = yml.indexOf(
+      "- name: Redeploy to load applied profile",
+    );
+    expect(redeployStepIdx).toBeGreaterThanOrEqual(0);
+    // Bound to this step (up to the next `- name:` step or end of job).
+    const rest = yml.slice(redeployStepIdx + 1);
+    const nextStep = rest.indexOf("\n      - name:");
+    const stepBlock =
+      nextStep >= 0 ? yml.slice(redeployStepIdx, redeployStepIdx + 1 + nextStep) : yml.slice(redeployStepIdx);
+    expect(stepBlock).toContain("/hooks/deploy");
+  });
+
+  test("redeploy step asserts loaded==committed seccomp profile hash, fail-loud (::error:: + exit 1)", () => {
+    const redeployStepIdx = yml.indexOf(
+      "- name: Redeploy to load applied profile",
+    );
+    expect(redeployStepIdx).toBeGreaterThanOrEqual(0);
+    const rest = yml.slice(redeployStepIdx + 1);
+    const nextStep = rest.indexOf("\n      - name:");
+    const stepBlock =
+      nextStep >= 0 ? yml.slice(redeployStepIdx, redeployStepIdx + 1 + nextStep) : yml.slice(redeployStepIdx);
+    // Committed hash: raw sha256 of the in-repo profile. #5960 reads the LOADED
+    // profile live from the running container via cat-deploy-state.sh's
+    // seccomp_profile_loaded_matches_host (reload leg) + seccomp_profile_host_sha256
+    // (raw delivery leg) — NOT the ephemeral recorded seccomp_profile_sha256, which
+    // is now an inert diagnostic (reboot-cleared, latch-blind). Assert the two
+    // load-bearing discriminators so this gate tracks the real contract, not a
+    // coincidental comment match.
+    expect(stepBlock).toMatch(/sha256sum\s+.*seccomp-bwrap\.json/);
+    expect(stepBlock).toContain("seccomp_profile_loaded_matches_host");
+    expect(stepBlock).toContain("seccomp_profile_host_sha256");
+    // Fail-loud on a loaded≠committed mismatch (the whole point of item 4).
+    expect(stepBlock).toContain("::error::");
+    expect(stepBlock).toMatch(/\bexit 1\b/);
+  });
+
+  test("redeploy step is gated on the apply succeeding (if: success())", () => {
+    const redeployStepIdx = yml.indexOf(
+      "- name: Redeploy to load applied profile",
+    );
+    expect(redeployStepIdx).toBeGreaterThanOrEqual(0);
+    const rest = yml.slice(redeployStepIdx + 1);
+    const nextStep = rest.indexOf("\n      - name:");
+    const stepBlock =
+      nextStep >= 0 ? yml.slice(redeployStepIdx, redeployStepIdx + 1 + nextStep) : yml.slice(redeployStepIdx);
+    expect(stepBlock).toMatch(/if:\s*success\(\)/);
   });
 });

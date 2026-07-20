@@ -5,6 +5,96 @@ locals {
   hooks_json = templatefile("${path.module}/hooks.json.tmpl", {
     webhook_deploy_secret = var.webhook_deploy_secret
   })
+
+  # Fresh-host bootstrap assets baked into var.image_name and extracted by cloud-init.yml
+  # at first boot (#5921). These 22 scripts + hooks.json.tmpl were REMOVED from cloud-init
+  # write_files: — as base64 blobs they pushed the rendered Hetzner user_data to ~282 KB,
+  # ~8.6x over the 32,768-byte cap. KEEP THIS LIST IN LOCKSTEP with the COPY into
+  # /opt/soleur/host-scripts/ in apps/web-platform/Dockerfile (cloud-init-user-data-
+  # size.test.ts asserts the two sets are identical). Running hosts continue to receive
+  # these files via the unchanged SSH/webhook terraform_data provisioners below.
+  host_script_files = [
+    "ci-deploy.sh",
+    "ci-deploy-wrapper.sh",
+    "cat-deploy-state.sh",
+    "canary-bundle-claim-check.sh",
+    "disk-monitor.sh",
+    "resource-monitor.sh",
+    "container-restart-monitor.sh",
+    "container-restart-monitor.service",
+    "container-restart-monitor.timer",
+    "infra-config-apply.sh",
+    "infra-config-install.sh",
+    "cat-infra-config-state.sh",
+    "cron-egress-nftables.sh",
+    "cron-egress-resolve.sh",
+    "cron-egress-alarm.sh",
+    "cron-egress-allowlist.txt",
+    "cron-egress-allowlist-cidr.txt",
+    "cron-egress-firewall.service",
+    "cron-egress-resolve.service",
+    "cron-egress-resolve.timer",
+    "cron-egress-alarm@.service",
+    "cron-egress-postapply-assert.sh",
+    # Fresh-host POST-CONTAINER egress-enforcement probe (#5933 item 3). The SSH
+    # provisioner's cron-egress-postapply-assert.sh SKIPS the container probes on a
+    # fresh host (no container yet); this baked script runs them at boot AFTER the app
+    # container starts (cloud-init.yml terminal block) and fail-closed poweroffs a host
+    # whose container egress is not provably enforcing.
+    "cron-egress-enforce-probe.sh",
+    "hooks.json.tmpl",
+    # journald drop-in — moved out of inline write_files: (its 2.4 KB base64 blob was the
+    # biggest remaining user_data expansion). Still delivered to the running host byte-for-byte
+    # by terraform_data.journald_persistent below (which reads the same on-disk file).
+    "journald-soleur.conf",
+    # The baked installer that cloud-init's minimal launcher runs AFTER the combined-hash
+    # verify (moving the ~90-line install/verify/assert ceremony out of user_data — #5921).
+    "soleur-host-bootstrap.sh",
+    # Pinned cosign trusted root (#6005). Public trust material (NOT a secret), baked into
+    # the HOST base image (NOT the app image cosign verifies — so no circular trust, ADR-087)
+    # and installed to /etc/soleur/cosign-trusted-root.json by soleur-host-bootstrap.sh. Too
+    # large (~6.8 KB) for cloud-init user_data (32,768-byte cap; already ~29.6 KB). The
+    # running host gets it byte-for-byte from terraform_data.cosign_trusted_root below.
+    "cosign-trusted-root.json",
+    # Vector shipper config (#6396) — baked so the ungated web-host Vector install
+    # (soleur-host-bootstrap.sh authors /usr/local/bin/soleur-vector-install, run fail-open
+    # at end-of-cloud-init) can render + install it to /etc/vector/vector.toml. Carries the
+    # @@HOST_NAME@@ sentinel resolved per-host at install. This decouples web-host log shipping
+    # from web_colocate_inngest (default-false post-ADR-100), which otherwise ships NO logs.
+    "vector.toml",
+    # (#6629) Container-sandbox security-control profiles. Their ONLY prior delivery was the
+    # SSH provisioners terraform_data.docker_seccomp_config / apparmor_bwrap_profile below,
+    # which reach RUNNING hosts only — a FRESH host (web-1 replacement, or the web-2 warm
+    # standby that never receives the web-1 SSH provisioners) came up with NEITHER file, so
+    # cat-deploy-state reported seccomp_profile_host_present=false and the boot docker run
+    # ran the tenant sandbox unenforced. Baked here (ADR-080/#5921 image-bake, NOT user_data —
+    # seccomp-bwrap.json is 16,615 B and would red the WEB_GZIP_BUDGET cap), extracted +
+    # installed + apparmor-loaded by soleur-host-bootstrap.sh, enforced at the boot docker run
+    # with a fail-closed poweroff if absent. Restores the dual-delivery invariant
+    # (hr-fresh-host-provisioning-reachable-from-terraform-apply). See ADR-122.
+    "seccomp-bwrap.json",
+    "apparmor-soleur-bwrap.profile",
+  ]
+
+  # Combined content-hash over the baked set: each file's sha256 hex, sorted, joined
+  # (no separator), hashed again. Injected into user_data (~64 B) and re-verified at boot
+  # BEFORE install — a stale/mis-built image aborts the boot loudly instead of silently
+  # installing old scripts (turns the ADR-080 image-bake stale trap into a loud failure).
+  # The boot recompute is the shell equivalent in cloud-init.yml's extraction block:
+  # `find … -exec sha256sum {} + | awk '{print $1}' | LC_ALL=C sort | tr -d '\n' | sha256sum`.
+  #
+  # THREAT MODEL (scope of this control): this is a STALENESS / COHERENCE control (does the
+  # image's baked-file CONTENT match the applied Terraform commit?), NOT a supply-chain
+  # control. It hashes the multiset of file CONTENTS (not names), so an actor who can push
+  # to the public GHCR repo could in principle permute trusted contents across filenames and
+  # pass this check — but that same push access already yields RCE via the app container
+  # layers (`docker run … ${image_name}` runs the SAME unpinned image), so filename-binding
+  # here raises no real bar. The honest supply-chain defense is pinning `var.image_name` to
+  # an immutable digest + signature verification — tracked as a fresh-host provisioning
+  # hardening on the #5887 cutover, not this cap-fix PR.
+  host_scripts_content_hash = sha256(join("", sort([
+    for f in local.host_script_files : filesha256("${path.module}/${f}")
+  ])))
 }
 
 resource "hcloud_ssh_key" "default" {
@@ -19,56 +109,184 @@ resource "hcloud_ssh_key" "default" {
 }
 
 resource "hcloud_server" "web" {
-  name        = "soleur-web-platform"
-  server_type = var.server_type
-  location    = var.location
+  # Multi-host web cluster (#5274 Phase 3, ADR-068). web-1 is the PRE-EXISTING
+  # host; its name/server_type/location come from var.web_hosts pinned to current
+  # state so the `moved` migration below is 0-destroy (a location change would
+  # force-REPLACE the live prod host). web-2 is fresh — provisioned entirely by
+  # cloud-init at boot (the 11 SSH provisioners below stay web-1-scoped, mirroring
+  # the git-data host's cloud-init-only shape, so a web-2 that is not yet
+  # SSH-reachable never hangs the merge-triggered auto-apply).
+  for_each    = var.web_hosts
+  name        = each.key == "web-1" ? "soleur-web-platform" : "soleur-${each.key}"
+  server_type = each.value.server_type
+  location    = each.value.location
   image       = "ubuntu-24.04"
   keep_disk   = true
   ssh_keys    = [hcloud_ssh_key.default.id]
 
-  user_data = templatefile("${path.module}/cloud-init.yml", {
-    image_name                            = var.image_name
-    ci_deploy_script_b64                  = base64encode(file("${path.module}/ci-deploy.sh"))
-    ci_deploy_wrapper_script_b64          = base64encode(file("${path.module}/ci-deploy-wrapper.sh"))
-    cat_deploy_state_script_b64           = base64encode(file("${path.module}/cat-deploy-state.sh"))
-    canary_bundle_claim_check_script_b64  = base64encode(file("${path.module}/canary-bundle-claim-check.sh"))
-    disk_monitor_script_b64               = base64encode(file("${path.module}/disk-monitor.sh"))
-    resource_monitor_script_b64           = base64encode(file("${path.module}/resource-monitor.sh"))
-    container_restart_monitor_script_b64  = base64encode(file("${path.module}/container-restart-monitor.sh"))
-    container_restart_monitor_service_b64 = base64encode(file("${path.module}/container-restart-monitor.service"))
-    container_restart_monitor_timer_b64   = base64encode(file("${path.module}/container-restart-monitor.timer"))
-    fail2ban_sshd_local_b64               = base64encode(file("${path.module}/fail2ban-sshd.local"))
-    journald_soleur_conf_b64              = base64encode(file("${path.module}/journald-soleur.conf"))
-    hooks_json_b64                        = base64encode(local.hooks_json)
-    infra_config_apply_script_b64         = base64encode(file("${path.module}/infra-config-apply.sh"))
-    infra_config_install_script_b64       = base64encode(file("${path.module}/infra-config-install.sh"))
-    cat_infra_config_state_script_b64     = base64encode(file("${path.module}/cat-infra-config-state.sh"))
-    cron_egress_nftables_script_b64       = base64encode(file("${path.module}/cron-egress-nftables.sh"))
-    cron_egress_resolve_script_b64        = base64encode(file("${path.module}/cron-egress-resolve.sh"))
-    cron_egress_alarm_script_b64          = base64encode(file("${path.module}/cron-egress-alarm.sh"))
-    cron_egress_allowlist_b64             = base64encode(file("${path.module}/cron-egress-allowlist.txt"))
-    cron_egress_allowlist_cidr_b64        = base64encode(file("${path.module}/cron-egress-allowlist-cidr.txt"))
-    cron_egress_firewall_service_b64      = base64encode(file("${path.module}/cron-egress-firewall.service"))
-    cron_egress_resolve_service_b64       = base64encode(file("${path.module}/cron-egress-resolve.service"))
-    cron_egress_resolve_timer_b64         = base64encode(file("${path.module}/cron-egress-resolve.timer"))
-    cron_egress_alarm_unit_b64            = base64encode(file("${path.module}/cron-egress-alarm@.service"))
-    cron_egress_postapply_assert_b64      = base64encode(file("${path.module}/cron-egress-postapply-assert.sh"))
-    tunnel_token                          = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
-    webhook_deploy_secret                 = var.webhook_deploy_secret
-    doppler_token                         = var.doppler_token
-    resend_api_key                        = var.resend_api_key
+  # Spread across distinct physical hosts within the EU location (HA). Attaching to
+  # the RUNNING web-1 forces a power-off → maintenance-window apply (an in-place
+  # reboot, NOT a replace — verify `0 to destroy` in the plan before applying).
+  # A Hetzner placement group is LOCATION-scoped: a host in a different DC than web-1
+  # cannot join web_spread, so it gets null. That is not a downgrade — a cross-DC host
+  # is already spread from web-1 at the DC level (stronger HA than same-DC spread), and
+  # it stays placeable when web-1's DC is capacity-starved (2026-07-13: web-2 hel1→fsn1).
+  placement_group_id = each.value.location == var.web_hosts["web-1"].location ? hcloud_placement_group.web_spread.id : null
+
+  # #5921 — the 22 bootstrap scripts + hooks.json were REMOVED from this map (they blew
+  # the 32,768-byte Hetzner user_data cap). They are now baked into var.image_name and
+  # extracted at boot by cloud-init.yml (see local.host_script_files above). ONLY the
+  # keep-inline set (fail2ban/journald, consumed pre-Docker) + non-file args remain, plus
+  # host_scripts_content_hash for the boot integrity check. hooks.json is rendered on-host
+  # from the baked hooks.json.tmpl with webhook_deploy_secret injected at boot.
+  # gzip-first (#6090). The web host's rendered cloud-config reached the raw 31,500-byte
+  # sub-cap budget organically (~31.3 KB), and the #6090 fresh-boot observability additions
+  # (readiness gates + emit call-sites that CANNOT be baked — they run IN cloud-init,
+  # post-install) pushed it over. #5921's bake-and-extract (ADR-080) is RETAINED underneath —
+  # the host scripts stay baked into var.image_name; base64gzip() is layered ON TOP of the
+  # residual launcher + call-sites, exactly as git-data adopted it in #5927. NOT a reversal
+  # of #5921.
+  #
+  # Decode contract (identical to git-data.tf, same ubuntu-24.04 image): Hetzner base64-decodes
+  # the stored string (DataSourceHetzner.maybe_b64decode, ≥20.3) → raw gzip bytes (magic 1f 8b)
+  # → cloud-init auto-gunzips → byte-identical #cloud-config, so every runcmd / write_files /
+  # ${host_scripts_content_hash} runs unchanged. base64 is MANDATORY on Hetzner, which makes
+  # base64gzip() the intended path, not a datasource gamble. web-1 carries
+  # ignore_changes=[user_data], so ONLY a fresh create (the web-2 recreate this PR instruments)
+  # receives the gzipped form; its readiness gates fail-closed if decode ever produced a
+  # non-#cloud-config. Byte-exact size is confirmed at `terraform plan`. See ADR-080 (amended
+  # for the web host).
+  # (#6454) cloud-init.yml is a Terraform templatefile() SOURCE, not literal YAML: it
+  # carries a `%{ if web_colocate_inngest ~}` directive at column 1, and YAML reads a
+  # leading '%' as a directive indicator — so schema-checking that file RAW always fails.
+  # CI renders it via `terraform console` and schema-checks the RENDERED document; see
+  # .github/scripts/validate-infra-templates.sh. Both directive arms are validated, and
+  # the false arm (variables.tf default) is the doc real web hosts boot.
+  #
+  # This note lives HERE, at the call site, and deliberately NOT inside cloud-init.yml:
+  # that file is baked into user_data against Hetzner's 32,768-byte cap, and the
+  # base64gzip'd budget (plugins/soleur/test/cloud-init-user-data-size.test.ts,
+  # WEB_GZIP_BUDGET) has under ~300 bytes of headroom — an 8-line comment there costs
+  # ~276 gzipped bytes and reds that test. cloud-init.yml is effectively comment-frozen;
+  # .tf files cost nothing.
+  user_data = base64gzip(templatefile("${path.module}/cloud-init.yml", {
+    image_name = var.image_name
+    # Keep-inline: fail2ban is reloaded early (at the package-audit stage, before Docker) so
+    # its drop-in cannot come from the post-Docker image extraction. journald was ALSO inline
+    # historically, but its 2.4 KB base64 blob was the biggest remaining user_data expansion,
+    # so #5921 moved it into the baked set (its only consumer, the --log-driver journald app
+    # container, starts last — safe to configure post-extraction). fail2ban's b64 arg stays;
+    # journald's was removed (dropping it while cloud-init.yml still interpolated the var would
+    # fail templatefile()).
+    fail2ban_sshd_local_b64   = base64encode(file("${path.module}/fail2ban-sshd.local"))
+    host_scripts_content_hash = local.host_scripts_content_hash
+    tunnel_token              = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
+    # #6425 — gates `cloudflared service install` (the tunnel REGISTRATION, not the apt
+    # install) to the designated ingress host. ADR-114 I1/I2: Cloudflare binds ingress to a
+    # TUNNEL and then selects a connector per edge colo, so with two connectors every
+    # `localhost:` ingress rule means "whichever replica answered", not "this host" — and
+    # only /hooks/deploy fans out, so deploy-status, infra-config (a WRITE) and ssh. all
+    # land coin-flipped. One connector ⇒ deterministic by construction.
+    #
+    # The predicate is `each.key == "web-1"` — the in-file idiom (`name` above, `host_name`
+    # below) — NOT a variable. A knob here would look like a promotion switch and isn't:
+    # `web["web-1"]` is pinned 23 times across 5 files (`grep -c 'web\["web-1"\]' *.tf`:
+    # server.tf 15 provisioner/attachment hosts, outputs.tf 4, placement-group.tf 2,
+    # dns.tf 1 (the app A record), ci-ssh-key.tf 1). Promotion must move all of them in
+    # lockstep; a lone connector flip would put the connector on web-2 while the A record
+    # still points at web-1 — ingress split, at 3am. The coupling is recorded in ADR-068.
+    # (No load balancer exists yet — ADR-068 §(c)'s LB weight is future-tense, so it is NOT
+    # part of this coupling today. Fold it in when the LB actually lands.)
+    #
+    # `tunnel_token` above stays in this map unconditionally and is NOT ternary'd to "":
+    # templatefile pre-checks expr.Variables() across BOTH branches of the `if` directive, so
+    # omitting the key errors even for a gated-off host. And a second predicate could diverge
+    # from this one — web-1 rendering gate-on with an empty token would `service install `,
+    # fail the readiness poll, and boot the LIVE host with deploy+ssh+registry dark. One
+    # predicate, one place.
+    web_tunnel_connector = each.key == "web-1"
+    # webhook_deploy_secret stays: hooks.json is no longer rendered into user_data, but the
+    # secret is injected at boot into the extracted hooks.json.tmpl (small, ~64 B).
+    webhook_deploy_secret = var.webhook_deploy_secret
+    doppler_token         = var.doppler_token
+    # Baked so the fresh-boot fatal Sentry emit does not depend on doppler (which may be the
+    # broken stage). Semi-public DSN (already in the client bundle). See on_err in cloud-init.yml.
+    sentry_dsn     = var.sentry_dsn
+    resend_api_key = var.resend_api_key
+    # (#6090) Baked so the cold-boot ghcr_login does not depend on doppler answering at the
+    # first-boot instant (an empty answer skipped docker login → anonymous private pull → 401
+    # → abort at stage=pull). Scoped read:packages PAT; user_data already carries the strictly
+    # stronger doppler_token, so this adds no new trust boundary. See cloud-init.yml ghcr_login.
+    ghcr_read_user  = var.ghcr_read_user
+    ghcr_read_token = var.ghcr_read_token
     # Fresh-host parity for the CI SSH keypair generated in
     # ci-ssh-key.tf. local.ci_ssh_pubkey is trimspaced — see locals{}
     # block in ci-ssh-key.tf for the rationale.
     ci_ssh_public_key_openssh = local.ci_ssh_pubkey
-  })
+    # #6178 — gates the "Bootstrap Inngest server on first boot" runcmd item via a
+    # templatefile `%{ if web_colocate_inngest }` directive. Default false (dedicated
+    # scheduler, ADR-100). Bool is load-bearing (see variables.tf).
+    web_colocate_inngest = var.web_colocate_inngest
+    # #6396 — TF-derived per-host Better Stack host_name, injected into the bootstrap
+    # invocation (SOLEUR_HOST_NAME) and rendered into the ungated web-host vector.toml's
+    # @@HOST_NAME@@ sentinel. MUST equal each host's server name (`name` above) so web-1 and
+    # web-2 resolve to DISTINCT sources in the shared Logs source 2457081 — a generic/duplicate
+    # OS hostname would collapse them. NOT runtime $(hostname): cloud-init sets no explicit
+    # hostname:/fqdn: and relies on Hetzner seeding hostname=server-name, which is not guaranteed
+    # distinct on a re-imaged host.
+    host_name = each.key == "web-1" ? "soleur-web-platform" : "soleur-${each.key}"
+    # #6448 — the fresh-host inline daemon.json derives its insecure-registries allowlist from
+    # local.registry_endpoint (the single source, zot-registry.tf:44), same as the running-host
+    # terraform_data.registry_insecure_config delivery. A subnet renumber propagates to both
+    # host classes instead of drifting from a hardcoded copy.
+    registry_endpoint = local.registry_endpoint
+    # #6604 — pin /mnt/data to THIS host's workspaces volume by stable by-id device
+    # (/dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id}), never the scsi-0HC_Volume_*
+    # glob: once the LUKS volume attaches, the glob matches TWO devices and the "which is LUKS"
+    # predicate binds to the wrong one. Same by-id + nofail shape as cloud-init-git-data.yml,
+    # cloud-init-inngest.yml, cloud-init-registry.yml (web-platform was the lone glob holdout).
+    workspaces_volume_id = hcloud_volume.workspaces[each.key].id
+    # #6441 — the address the first-boot NIC gate waits on, before `cloudflared service
+    # install` registers this host as the tunnel's sole connector (ADR-114 I1). Single-sourced
+    # from var.web_hosts per ADR-115's single-definition doctrine: a hardcoded literal in
+    # cloud-init.yml would drift silently from variables.tf on a subnet renumber, and the gate
+    # would then wait out its whole budget on an address that will never appear.
+    #
+    # NOT sourced from /etc/default/web-private-nic-guard: that file is written by an SSH
+    # provisioner (below) which reaches RUNNING hosts only, so on the fresh boot this gate
+    # exists for it does not yet exist. Reusing it would work on web-1 today and fail silently
+    # on any future host — the worst failure shape.
+    private_ip = each.value.private_ip
+  }))
 
   # cloud-init and ssh_keys are create-time attributes. After import,
   # template interpolation differs from the original user_data, and
   # ssh_keys forces replacement. Both are safe to ignore (#967).
   # TODO: remove ignore_changes after clean reprovisioning (import artifact)
+  #
+  # placement_group_id — TEMPORARY GA-deferral (#5887, ADR-068 blue-green ingress
+  # prereqs). web-1 pre-dates the web_spread group; attaching it to the RUNNING host
+  # forces a Hetzner power-off reboot (see the placement_group_id comment above).
+  # Ignoring it keeps the pending 0 -> web_spread attach OUT of every plan so the
+  # destroy-guard `reboot_updates` counter (#5911) does not halt the targeted CI
+  # applies — unwedging #5887 with ZERO reboot. web-2 was born INTO the group at
+  # create time, so this defers ONLY web-1. REMOVE this entry in the GA maintenance-
+  # window PR as its FIRST diff, then take the reboot on a drained host (blue-green).
+  # Guarded by plugins/soleur/test/terraform-target-parity.test.ts so it is not
+  # dropped silently.
+  #
+  # HARD GATE (ADR-068 §(c), the LB-weight gate) — the deferred cutover orchestrator
+  # must NOT remove this entry or shift web-2's Cloudflare LB weight above 0 until the
+  # programmatic gate (DELETED 2026-07-20 with #6575 — see ADR-068 §(c) CORRECTION; nothing checks this today, and it MUST be rebuilt before any second web host is pooled) exits 0 AND its separate
+  # runtime-bind probe passes: (1) owner-side relay active (SOLEUR_PROXY_BIND /
+  # SOLEUR_PROXY_PEER_ALLOWLIST / SOLEUR_HOST_ROSTER), AND (2) git-data store cut over
+  # (GIT_DATA_STORE_ENABLED==true + LUKS soak marker). Pooling web-2 before both = a
+  # request lands on a host without that user's /workspaces → empty workspace →
+  # "workspace-gone" single-user incident. The gate is SHAPE-ONLY (prints
+  # requires_runtime_bind_probe=true) so exit 0 alone is NOT weight-flip authorization.
+  # See the ADR §(c) amendment + runbook moved-block-wedge-cutover-5887.md §Scope B.
   lifecycle {
-    ignore_changes = [user_data, ssh_keys, image]
+    ignore_changes = [user_data, ssh_keys, image, placement_group_id]
   }
 
   labels = {
@@ -88,7 +306,7 @@ resource "terraform_data" "disk_monitor_install" {
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -128,7 +346,7 @@ resource "terraform_data" "resource_monitor_install" {
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -172,7 +390,7 @@ resource "terraform_data" "container_restart_monitor_install" {
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -206,6 +424,195 @@ resource "terraform_data" "container_restart_monitor_install" {
   }
 }
 
+# --- #6438/#6548: web-host private-net consumer-probe + §3 NIC-guard delivery (web-1) ----------
+# TERMINOLOGY (#6538 reconciliation, CPO C3): "unrebuildable" below means web-1 cannot be rebuilt
+# by any AUTOMATED path. It does NOT contradict #6538, whose table lists
+# `soleur-web-platform / cx33 / hel1 / rebuildable_in_place_today: YES` — that column is about the
+# host's LOCATION being viable (web-2 was NO only because it sat in fsn1), not about a CI route
+# existing. Both are true: an operator-local full `terraform apply` would succeed, and no
+# CI/dispatch route reaches it. As of #6718 every automated route that can reach
+# hcloud_server.web HALTs on host_creates > 0 — enumerated: apply-web-platform-infra.yml's
+# `apply` (#6416), workspaces_luks_cutover (gate requires zero actions on the web-1
+# server), and apply-deploy-pipeline-fix.yml (#6718). The warm_standby and
+# web_2_recreate routes were REMOVED with the web-2 dispatch sweep (#6575,
+# 2026-07-20), so the enumeration is three, not five. Scope: WEB hosts — inngest_host legitimately births a
+# host and is unaffected. The gap is tracked by #6730 (it violates
+# hr-fresh-host-provisioning-reachable-from-terraform-apply).
+#
+# The SSH terraform_data provisioner is the SOLE path that arms web-1 (see the terminology note
+# above — "unrebuildable" here means no AUTOMATED path, not a stock constraint):
+# ignore_changes=[user_data] (above) means cloud-init changes never reach it, and ci-deploy.sh
+# re-seed installs NO host systemd units (verified :2331-2355). cloud-init.yml bakes the SAME
+# scripts+units for FUTURE fresh hosts (#6459, A5). All three mirror disk_monitor_install (same
+# connection + trigger-hash shape); units ship as FILES because their doppler-wrapped ExecStart's
+# nested single-quotes do not survive a terraform inline heredoc (container_restart_monitor
+# precedent, :357). Shows "will be created" in CI drift reports — expected (#1409-class).
+#
+# The `systemctl enable --now web-*.timer` lines below are the ARMING CONSTRUCTS that
+# heartbeat-manifest.ts cites as executable feeder evidence (the parity guard greps them here).
+
+# §3 private-NIC self-report (detect+emit+alarm, NO reboot). Its liveness beat (web_nic_guard) is
+# pinged every healthy run so the SOLEUR_PRIVATE_NIC emitter is observable-when-healthy.
+resource "terraform_data" "private_nic_guard_install" {
+  # Reload Vector (Source 4 live on web-1) BEFORE (re)enabling the probe timers, so the first post-fix
+  # FATAL/canary line ships instead of waiting a timer tick (probe-first intent; #6438/#6548 review).
+  depends_on = [terraform_data.journald_persistent]
+
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/web-private-nic-guard.sh"),
+    file("${path.module}/web-private-nic-guard.service"),
+    file("${path.module}/web-private-nic-guard.timer"),
+    var.web_hosts["web-1"].private_ip,
+    local.betterstack_logs_ingest_url,
+    # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery of the new key
+    # into /etc/default/web-private-nic-guard. nonsensitive() on a one-way digest of the token
+    # reveals nothing while keeping triggers_replace readable in plan output (#6438/#6548).
+    nonsensitive(sha256(doppler_service_token.web_probes.key)),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/web-private-nic-guard.sh"
+    destination = "/usr/local/bin/web-private-nic-guard.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-private-nic-guard.service"
+    destination = "/etc/systemd/system/web-private-nic-guard.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-private-nic-guard.timer"
+    destination = "/etc/systemd/system/web-private-nic-guard.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/web-private-nic-guard.sh",
+      # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit are the two-fold fix for the
+      # unit-start failure: the root `doppler run` needs both to authenticate. No DOPPLER_CONFIG_DIR
+      # (root uses /root/.doppler, never /tmp/.doppler — the #6536 clash surface). VERSION_CHECK off
+      # matches every fleet doppler env file (avoids a per-fire egress version-check warning shipping
+      # to Source 4 as noise). #6438 §3.
+      # umask 0137 so the file is NEVER created world/group-readable — the env file now holds a live
+      # prd read token (before this fix it held only URL key-names). Closes the sub-ms TOCTOU window
+      # between create-at-default-umask and chmod (security review; precedent cloud-init-inngest.yml).
+      "( umask 0137 && printf 'EXPECTED_IP=%s\\nBETTERSTACK_INGEST_URL=%s\\nWEB_NIC_GUARD_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${var.web_hosts["web-1"].private_ip}' '${local.betterstack_logs_ingest_url}' 'WEB_NIC_GUARD_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-private-nic-guard )",
+      "chmod 600 /etc/default/web-private-nic-guard",
+      "systemctl daemon-reload",
+      "systemctl enable --now web-private-nic-guard.timer",
+      "systemctl list-timers web-private-nic-guard.timer --no-pager",
+    ]
+  }
+}
+
+# §1 zot consumer serviceability probe.
+resource "terraform_data" "zot_consumer_probe_install" {
+  # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first ordering).
+  depends_on = [terraform_data.journald_persistent]
+
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/web-zot-consumer-probe.sh"),
+    file("${path.module}/web-zot-consumer-probe.service"),
+    file("${path.module}/web-zot-consumer-probe.timer"),
+    local.registry_endpoint,
+    local.zot_probe_repo,
+    # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
+    nonsensitive(sha256(doppler_service_token.web_probes.key)),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/web-zot-consumer-probe.sh"
+    destination = "/usr/local/bin/web-zot-consumer-probe.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-zot-consumer-probe.service"
+    destination = "/etc/systemd/system/web-zot-consumer-probe.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-zot-consumer-probe.timer"
+    destination = "/etc/systemd/system/web-zot-consumer-probe.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/web-zot-consumer-probe.sh",
+      # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit are the two-fold unit-start
+      # fix — see the web-private-nic-guard install above. #6438 §1.
+      # umask 0137: never world/group-readable — the env file now holds a live prd read token (see nic-guard install).
+      "( umask 0137 && printf 'ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${local.registry_endpoint}' '${local.zot_probe_repo}' 'WEB_ZOT_CONSUMER_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-zot-consumer-probe )",
+      "chmod 600 /etc/default/web-zot-consumer-probe",
+      "systemctl daemon-reload",
+      "systemctl enable --now web-zot-consumer-probe.timer",
+      "systemctl list-timers web-zot-consumer-probe.timer --no-pager",
+    ]
+  }
+}
+
+# #6548 git-data reachability probe (fail-soft; arms the existing git_data_prd).
+resource "terraform_data" "git_data_probe_install" {
+  # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first ordering).
+  depends_on = [terraform_data.journald_persistent]
+
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/web-git-data-probe.sh"),
+    file("${path.module}/web-git-data-probe.service"),
+    file("${path.module}/web-git-data-probe.timer"),
+    # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
+    nonsensitive(sha256(doppler_service_token.web_probes.key)),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/web-git-data-probe.sh"
+    destination = "/usr/local/bin/web-git-data-probe.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-git-data-probe.service"
+    destination = "/etc/systemd/system/web-git-data-probe.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-git-data-probe.timer"
+    destination = "/etc/systemd/system/web-git-data-probe.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/web-git-data-probe.sh",
+      # GIT_DATA_ENDPOINT mirrors the git-data SSH transport (git-data.tf); the script also defaults
+      # to it. GIT_DATA_HEARTBEAT_URL is a SINGLE (non-for_each) secret, so the KEY is unsuffixed.
+      # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit are the two-fold unit-start
+      # fix — see the web-private-nic-guard install above. #6548.
+      # umask 0137: never world/group-readable — the env file now holds a live prd read token (see nic-guard install).
+      "( umask 0137 && printf 'GIT_DATA_ENDPOINT=%s\\nGIT_DATA_HEARTBEAT_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '10.0.1.20:22' 'GIT_DATA_HEARTBEAT_URL' '${doppler_service_token.web_probes.key}' > /etc/default/web-git-data-probe )",
+      "chmod 600 /etc/default/web-git-data-probe",
+      "systemctl daemon-reload",
+      "systemctl enable --now web-git-data-probe.timer",
+      "systemctl list-timers web-git-data-probe.timer --no-pager",
+    ]
+  }
+}
+
 # Deploy fail2ban sshd tuning drop-in to the existing server (issue #2654).
 # Caps bantime.increment recidivism at 1h so an operator typo against
 # AllowUsers does not snowball into a multi-hour (or multi-day) SSH lockout.
@@ -214,12 +621,36 @@ resource "terraform_data" "container_restart_monitor_install" {
 # Source of truth for jail content: fail2ban-sshd.local (sibling file).
 # Shows as "will be created" in CI drift reports -- expected behavior.
 # Runbook for acute lockout recovery: knowledge-base/engineering/operations/runbooks/ssh-fail2ban-unban.md
+#
+# Why the jail carries `ignoreip = ... 10.0.1.0/24` (#6594). The rationale lives here, not in
+# the .local file: that file is base64'd into user_data whole (see the keep-inline note above),
+# so its comments are byte-budgeted while .tf comments are free.
+#
+# Until #6594 pinned the tunnel ingress, `ssh.` resolved to `ssh://localhost:22`, so sshd saw
+# every tunnelled CI login as 127.0.0.1 — covered by fail2ban's default loopback ignore. Pinning
+# the ingress to web-1's private IP means a PEER connector (web-2, 10.0.1.11) now proxies in from
+# a REAL source address, which `ignoreself` does not cover (it covers only web-1's own IPs).
+#
+# Without the grant, a key-mismatch window (`-replace=tls_private_key.ci_ssh`, or a fresh web-1
+# before root_authorized_keys lands) puts >=5 failures in 10m from 10.0.1.11 and bans it —
+# killing `ssh.` for the ~half of CF colos routed via that connector, for 10m rising to 1h. That
+# is a failure AMPLIFIER on the one path with no in-band recovery: ssh-fail2ban-unban.md calls a
+# fail2ban lockout "the one operator task where the Hetzner Cloud Console (noVNC) is the only
+# tool".
+#
+# The private net is not an attack surface fail2ban should police: it is unreachable from the
+# internet (firewall.tf admits only 22/80/443/icmp on the public interface), and its only members
+# are our own hosts.
+#
+# SCOPE: this grant exists because a peer connector proxies to web-1. It is web-2-lifetime-scoped
+# — #6538 (retire the fsn1 orphan) removes the only peer, after which the 10.0.1.0/24 clause is
+# vestigial and should be re-evaluated rather than inherited.
 resource "terraform_data" "fail2ban_tuning" {
   triggers_replace = sha256(file("${path.module}/fail2ban-sshd.local"))
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -293,11 +724,19 @@ resource "terraform_data" "fail2ban_tuning" {
 # `connection reset by peer` here is admin-IP drift (fix: /soleur:admin-ip-refresh,
 # runbook admin-ip-drift.md), NOT an sshd/journald fault — per hr-ssh-diagnosis-verify-firewall.
 resource "terraform_data" "journald_persistent" {
-  triggers_replace = sha256(file("${path.module}/journald-soleur.conf"))
+  # Also hashes vector.toml so an edit to the Vector config (e.g. adding the web-host probe
+  # SyslogIdentifiers to Source 4) re-fires this provisioner and re-delivers + reloads Vector on
+  # the running web-1. web-1 installs Vector ONLY at cloud-init boot and never re-runs cloud-init
+  # (ignore_changes=[user_data]), so without this fold a vector.toml change is file-only, never live
+  # on the host — the exact gap that kept the 3 probe units' FATAL stderr off Better Stack. #6438/#6548.
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/journald-soleur.conf"),
+    file("${path.module}/vector.toml"),
+  ]))
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -320,6 +759,14 @@ resource "terraform_data" "journald_persistent" {
   provisioner "file" {
     source      = "${path.module}/journald-soleur.conf"
     destination = "/etc/systemd/journald.conf.d/00-soleur.conf"
+  }
+
+  # #6438/#6548: stage the shared vector.toml (with the @@HOST_NAME@@ sentinel) so the remote-exec
+  # below can render THIS host's Better Stack host_name and re-deliver it to the running Vector
+  # agent. Same live-prod-only apply path as the journald drop-in above.
+  provisioner "file" {
+    source      = "${path.module}/vector.toml"
+    destination = "/tmp/soleur-vector.toml.staged"
   }
 
   provisioner "remote-exec" {
@@ -353,6 +800,162 @@ resource "terraform_data" "journald_persistent" {
       # has files under /var/log/journal. Volatile-only journals list /run paths.
       "journalctl --header | grep -q '/var/log/journal'",
       "test \"$(systemctl is-active systemd-journald)\" = 'active'",
+      # --- #6438/#6548: re-deliver vector.toml + reload the Vector agent on the running web-1 ------
+      # Render the @@HOST_NAME@@ sentinel to THIS host's TF-derived Better Stack host_name (the SAME
+      # value cloud-init passes as SOLEUR_HOST_NAME → soleur-host-bootstrap.sh; server.tf:237), write
+      # it to /etc/vector/vector.toml, and restart the agent so Source 4's new probe SyslogIdentifiers
+      # (web-zot-consumer-probe / web-git-data-probe / web-nic-guard) go live. Vector's journald
+      # sources read by sd_journal cursor and resume after a sub-second restart with no gap. The
+      # positive assertions below fail the apply loud if the probe tags did not land or the agent did
+      # not come back — never ship dead config (the fail2ban_tuning/journald positive-assert pattern).
+      "install -d -m 0755 /etc/vector /opt/soleur",
+      "sed 's|@@HOST_NAME@@|${hcloud_server.web["web-1"].name}|g' /tmp/soleur-vector.toml.staged > /opt/soleur/vector.toml",
+      # Render-sanity gate BEFORE we touch the live agent: a botched render (empty sed output,
+      # unsubstituted sentinel, missing sink) must fail the apply while the RUNNING vector stays up —
+      # a dead vector on web-1 darkens ALL host observability, a far bigger blast than the 3 probes.
+      # (A full `vector validate` is not used here: it would false-fail on the unset
+      # ${BETTERSTACK_LOGS_TOKEN} env interpolation — vector.service injects it via doppler run, this
+      # remote-exec has no such env. The committed vector.toml is already CI-validated TOML, and the
+      # only runtime transform is the @@HOST_NAME@@ string substitution.) #6438/#6548 review.
+      "test -s /opt/soleur/vector.toml",
+      "! grep -q '@@HOST_NAME@@' /opt/soleur/vector.toml",
+      "grep -q '\\[sinks.betterstack\\]' /opt/soleur/vector.toml",
+      "grep -q 'web-zot-consumer-probe' /opt/soleur/vector.toml",
+      "install -m 0644 /opt/soleur/vector.toml /etc/vector/vector.toml",
+      "rm -f /tmp/soleur-vector.toml.staged",
+      "systemctl restart vector.service",
+      "grep -q 'web-zot-consumer-probe' /etc/vector/vector.toml",
+      "grep -q 'web-git-data-probe' /etc/vector/vector.toml",
+      "grep -q 'web-nic-guard' /etc/vector/vector.toml",
+      "test \"$(systemctl is-active vector.service)\" = 'active'",
+    ]
+  }
+}
+
+# #6005: deliver the pinned cosign trusted root to the RUNNING host byte-for-byte
+# (the fresh-host copy comes from the baked host_script_files set + soleur-host-
+# bootstrap.sh). ci-deploy.sh mounts /etc/soleur/cosign-trusted-root.json :ro into
+# the ephemeral cosign verifier (ADR-087). Public trust material, not a secret.
+# Mirrors terraform_data.journald_persistent: file() keeps triggers_replace and the
+# delivered content in lockstep; the pre-`file` mkdir is load-bearing because the
+# `file` provisioner (scp) does not create remote parents and cloud-init's write_files
+# never re-runs on the existing host (ignore_changes=[user_data]).
+resource "terraform_data" "cosign_trusted_root" {
+  triggers_replace = sha256(file("${path.module}/cosign-trusted-root.json"))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/soleur",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/cosign-trusted-root.json"
+    destination = "/etc/soleur/cosign-trusted-root.json"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chown root:root /etc/soleur/cosign-trusted-root.json",
+      "chmod 0644 /etc/soleur/cosign-trusted-root.json",
+      # Positive assertions: the file landed and is a valid sigstore trusted root
+      # (has certificateAuthorities) — a truncated/empty scp would else ship silently
+      # and every deploy's cosign verify would fail-open in WARN.
+      "test -s /etc/soleur/cosign-trusted-root.json",
+      "grep -q certificateAuthorities /etc/soleur/cosign-trusted-root.json",
+    ]
+  }
+}
+
+# #6122/ADR-096 (Edge A, RUNNING hosts): deliver the canonical docker daemon.json — which
+# now allowlists the plain-HTTP private-net zot registry under insecure-registries — to the
+# ALREADY-RUNNING web host and hot-reload dockerd. The allowlisted endpoint is DERIVED from
+# local.registry_endpoint (the single source, zot-registry.tf:44) via local.docker_daemon_json
+# below: the delivered daemon.json is rendered from docker-daemon.json.tmpl, so a subnet
+# renumber propagates here automatically instead of drifting from a hardcoded copy (#6448).
+# Fresh hosts get the same DERIVED content from cloud-init.yml's daemon.json write (task 3.0a);
+# a running host has NO cloud-init re-run path (lifecycle ignore_changes=[user_data]), so this
+# SSH provisioner is the ONLY running-host delivery — mirrors terraform_data.journald_persistent
+# / cosign_trusted_root. HIGH-RISK (mutates the prod docker daemon), so:
+#   (a) validate the delivered JSON parses BEFORE reloading — a malformed daemon.json makes
+#       dockerd refuse the reload AND fail the NEXT restart (boot-bricking); the guard aborts
+#       the apply with dockerd untouched (still on its valid in-memory config); and
+#   (b) `systemctl reload docker` (SIGHUP) — NOT restart — so running containers
+#       (app/inngest/redis) are NOT bounced mid-deploy; dockerd applies insecure-registries
+#       on reload.
+# This is the ONE #6122 resource that is CI-`-target`ed: it bridges over SSH to the existing
+# host (like journald), so it rides the apply-web-platform-infra.yml SSH `-target` list + the
+# terraform-target-parity SSH-provisioned set — NOT OPERATOR_APPLIED_EXCLUSIONS (the git-data
+# model of the other 24 #6122 resources). See apply-path-cto-ruling.md §"Two load-bearing
+# conditions" #1: an SSH-provisioned terraform_data MUST be in the `-target` list.
+locals {
+  # #6448 — the delivered docker daemon.json derives its insecure-registries allowlist from
+  # local.registry_endpoint (the single source, zot-registry.tf:44), so a subnet renumber
+  # propagates to every copy automatically instead of drifting silently (the #6400 shape).
+  # docker-daemon.json.tmpl renders BYTE-IDENTICAL to the prior static file at the current
+  # endpoint value, so sha256(local.docker_daemon_json) == the prior sha256(file(...)) value
+  # ⇒ triggers_replace is unchanged ⇒ zero replace/churn on the running fleet.
+  docker_daemon_json = templatefile("${path.module}/docker-daemon.json.tmpl", {
+    registry_endpoint = local.registry_endpoint
+  })
+}
+
+resource "terraform_data" "registry_insecure_config" {
+  triggers_replace = sha256(local.docker_daemon_json)
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/docker",
+    ]
+  }
+
+  provisioner "file" {
+    # content= (not source=): the delivered daemon.json is RENDERED from the .tmpl (a string),
+    # so it cannot be shipped as an on-disk source. content scps the rendered string over the
+    # same connection {}. This is the first content= file-provisioner in this repo — non-secret
+    # rendered content, so no base64 heredoc (that pattern exists only to protect SECRET
+    # interpolation; a public host:port needs no such guard). See #6448.
+    content     = local.docker_daemon_json
+    destination = "/etc/docker/daemon.json"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      # Malformed-JSON guard: parse the DELIVERED file before touching dockerd. A config
+      # that does not parse makes `systemctl reload docker` a no-op AND bricks the next
+      # restart — abort here (file delivered, daemon untouched) rather than reload a
+      # broken config. python3 is base-Ubuntu-guaranteed on the Hetzner image.
+      "python3 -c 'import json; json.load(open(\"/etc/docker/daemon.json\"))'",
+      "chown root:root /etc/docker/daemon.json",
+      "chmod 0644 /etc/docker/daemon.json",
+      # SIGHUP reload (NOT restart): dockerd applies insecure-registries live without
+      # bouncing running containers. A restart would kill the app/inngest/redis mid-deploy.
+      "systemctl reload docker",
+      # Assert dockerd now honors the private-net zot registry as insecure (fail loud if
+      # the reload silently did not pick it up). Endpoint DERIVED from local.registry_endpoint
+      # (#6448) so this probe follows a subnet renumber automatically; -qF = fixed-string so
+      # the '.'/':' are literal.
+      "docker info 2>/dev/null | grep -qF '${local.registry_endpoint}'",
     ]
   }
 }
@@ -464,7 +1067,7 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
   # 2026-05-20-terraform-go-ssh-client-ignores-ssh-config-multi-agent-catch.md).
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -536,6 +1139,10 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # The sudoers grant landed and parses (the INFRA_CONFIG_INSTALL alias is
       # what makes the webhook handler's prod-mode escalation work).
       "grep -q INFRA_CONFIG_INSTALL /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #5934 — the char-device sweep grant landed (without it ci-deploy.sh's
+      # pre-canary sweep is sudo-denied and the durable #5912 wedge remediation is
+      # a silent no-op). Fail the provisioner loud rather than ship it missing.
+      "grep -q GIT_LOCK_CHARDEVICE_SWEEP /etc/sudoers.d/deploy-inngest-bootstrap",
       # hooks.json re-registers the status hook + maps the state-reporter key (the
       # exact host drift that caused the #4804 freeze: stale hooks.json had neither).
       "grep -q infra-config-status /etc/webhook/hooks.json",
@@ -598,8 +1205,14 @@ resource "terraform_data" "deploy_pipeline_fix" {
   #
   # Secondary benefit: the edge also serializes the bridge's synchronous
   # webhook-listener restart (server.tf:529, an existing Terraform-managed remote-exec)
-  # BEFORE this push's `provisioner "local-exec"` below, so the push never races a
-  # mid-flight listener restart (a connection-reset window that exists today).
+  # BEFORE this push's `provisioner "local-exec"` below. This NARROWS the connection-
+  # reset window but does NOT close it — the ordering is a happens-before on Terraform's
+  # graph, not a wait-for-ready on the listener. nonce-1 (#6313, 2026-07-10;
+  # push-infra-config.sh:25-31) is the counterexample: the bridge's `systemctl restart
+  # webhook` returned ~10ms BEFORE the push fired, yet the webhook was still coming up,
+  # so the push RACED the mid-flight restart — it got HTTP 202 from the restarting
+  # listener but the async handler exec was disrupted and no files landed. The race is
+  # real; the edge only makes it less likely, it is not a guarantee.
   #
   # The apparmor_bwrap_profile element is unchanged (#1570, see the note above).
   # Do NOT "simplify" either element away — see ship-deploy-pipeline-fix-gate.test.ts.
@@ -651,6 +1264,22 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/inngest-wiped-volume-verify.sh"),
     file("${path.module}/cat-inngest-verify-state.sh"),
     file("${path.module}/inngest-inventory.sh"),
+    # #6178 — the two web-host Inngest cutover probes are webhook-delivered
+    # (push-infra-config.sh payload + FILE_MAP + DEST_SPEC). inngest-registry-probe
+    # is the 2.0 empty-registry pre-flight; inngest-doublefire-probe is the 2.6
+    # exactly-once run-enumeration (both POST the dedicated host 10.0.1.40:8288 GQL
+    # over the private net). Registering them here makes a body-only edit re-fire
+    # deploy_pipeline_fix so the fix reaches /usr/local/bin (same #5492 rationale as
+    # the inngest scripts above). Keep in lockstep with the ship
+    # DEPLOY_PIPELINE_FIX_TRIGGERS array + DPF_REGEX + the gate test.
+    file("${path.module}/inngest-registry-probe.sh"),
+    file("${path.module}/inngest-doublefire-probe.sh"),
+    # #5934 — the privileged char-device config.lock substrate sweep is
+    # webhook-delivered (push-infra-config.sh payload + FILE_MAP + DEST_SPEC), so a
+    # body-only edit must re-fire deploy_pipeline_fix to reach /usr/local/bin (same
+    # #5492 rationale as the inngest scripts above). Keep in lockstep with the ship
+    # DEPLOY_PIPELINE_FIX_TRIGGERS array + DPF_REGEX + the gate test.
+    file("${path.module}/git-lock-chardevice-sweep.sh"),
     local.hooks_json,
   ]))
 
@@ -693,12 +1322,12 @@ resource "terraform_data" "docker_seccomp_config" {
   # whenever the host is replaced.
   triggers_replace = {
     seccomp_profile = sha256(file("${path.module}/seccomp-bwrap.json"))
-    server_id       = hcloud_server.web.id
+    server_id       = hcloud_server.web["web-1"].id
   }
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -745,11 +1374,20 @@ resource "terraform_data" "docker_seccomp_config" {
 # mount/umount/pivot_root while maintaining Docker's other restrictions.
 # Shows as "will be created" in CI drift reports -- expected behavior.
 resource "terraform_data" "apparmor_bwrap_profile" {
-  triggers_replace = sha256(file("${path.module}/apparmor-soleur-bwrap.profile"))
+  # (#6629) server_id fold-in — parity with docker_seccomp_config. A bare
+  # sha256(file(...)) trigger is hash-only: on a host REPLACEMENT the profile content is
+  # unchanged, so the trigger does NOT re-fire and the new VM never gets the AppArmor
+  # profile SSH-delivered (the exact fresh-host trap the #4927/#4928 precedent + the
+  # docker_seccomp_config comment warn about). The boot-time image-bake (host_script_files)
+  # closes the FRESH-host half; this closes the running-host re-apply half.
+  triggers_replace = {
+    apparmor_profile = sha256(file("${path.module}/apparmor-soleur-bwrap.profile"))
+    server_id        = hcloud_server.web["web-1"].id
+  }
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -778,7 +1416,7 @@ resource "terraform_data" "orphan_reaper_install" {
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -831,12 +1469,12 @@ resource "terraform_data" "cron_egress_firewall" {
       # no-ops (the block lived in the 2nd remote-exec, outside this hash).
       file("${path.module}/cron-egress-postapply-assert.sh"),
     ]))
-    server_id = hcloud_server.web.id
+    server_id = hcloud_server.web["web-1"].id
   }
 
   connection {
     type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
+    host        = hcloud_server.web["web-1"].ipv4_address
     user        = "root"
     private_key = var.ci_ssh_private_key         # null in operator-local context
     agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
@@ -923,10 +1561,16 @@ resource "terraform_data" "cron_egress_firewall" {
   }
 }
 
+# Per-host local worktree volume (multi-host /workspaces, #5274 Phase 3). Each web
+# host has its OWN /workspaces block volume (per-user worktrees live host-local on
+# NVMe — ADR-068 §1). web-1 keeps its exact current name/location so the `moved`
+# migration below is 0-destroy (a volume location change would force-replace and
+# drop the live data).
 resource "hcloud_volume" "workspaces" {
-  name     = "soleur-web-platform-data"
+  for_each = var.web_hosts
+  name     = each.key == "web-1" ? "soleur-web-platform-data" : "soleur-web-platform-data-${each.key}"
   size     = var.volume_size
-  location = var.location
+  location = each.value.location
   format   = "ext4"
 
   labels = {
@@ -935,6 +1579,7 @@ resource "hcloud_volume" "workspaces" {
 }
 
 resource "hcloud_volume_attachment" "workspaces" {
-  volume_id = hcloud_volume.workspaces.id
-  server_id = hcloud_server.web.id
+  for_each  = var.web_hosts
+  volume_id = hcloud_volume.workspaces[each.key].id
+  server_id = hcloud_server.web[each.key].id
 }

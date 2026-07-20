@@ -59,17 +59,37 @@ const SEEDED_MESSAGES = [
     conversation_id: "conv-active",
     role: "user",
     content: "Active rail row title",
-    leader_id: null,
+    leader_id: null as string | null,
     created_at: "2026-04-28T09:01:00Z",
   },
   {
     conversation_id: "conv-other",
     role: "user",
     content: "Other rail row title",
-    leader_id: null,
+    leader_id: null as string | null,
     created_at: "2026-04-27T09:01:00Z",
   },
 ];
+
+// The rail now reads via the list_conversations_enriched RPC (mig 125), which
+// returns each conversation plus the 4 message snippets the UI derives its
+// title/preview from. Build that shape from the seeded fixtures the same way the
+// SQL LATERAL joins do (first-user / first-assistant / last message).
+const SEEDED_ENRICHED_ROWS = SEEDED_CONVERSATIONS.map((c) => {
+  const msgs = SEEDED_MESSAGES.filter((m) => m.conversation_id === c.id).sort(
+    (a, b) => a.created_at.localeCompare(b.created_at),
+  );
+  const firstUser = msgs.find((m) => m.role === "user");
+  const firstAssistant = msgs.find((m) => m.role === "assistant");
+  const last = msgs[msgs.length - 1];
+  return {
+    ...c,
+    first_user_content: firstUser?.content ?? null,
+    first_assistant_content: firstAssistant?.content ?? null,
+    last_content: last?.content ?? null,
+    last_leader: last?.leader_id ?? null,
+  };
+});
 
 async function setupRailMocks(page: Page) {
   // Shared auth + session + realtime stubs (see e2e/helpers/supabase-mocks.ts).
@@ -145,19 +165,38 @@ async function setupRailMocks(page: Page) {
     });
   });
 
+  // Rail list read: the enriched RPC (mig 125). Returns the seeded conversations
+  // with their message snippets so the rail derives the same row titles.
+  await page.route("**/rest/v1/rpc/list_conversations_enriched*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(SEEDED_ENRICHED_ROWS),
+    });
+  });
+
+  // The "View all" link navigates to /dashboard, which now derives its
+  // foundation-card state from /api/dashboard/foundation-status (was the
+  // /api/kb/tree walk). Mock it so the dashboard renders deterministically
+  // instead of hitting the real (unmocked) route on nav.
+  await page.route("**/api/dashboard/foundation-status*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        paths: { "overview/vision.md": { exists: true, size: 1000 } },
+      }),
+    });
+  });
+
+  // Retained for the orphan-count query + any archive/status mutation the rail
+  // issues (still direct `.from("conversations")`); the rail LIST no longer
+  // reads this path.
   await page.route("**/rest/v1/conversations*", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(SEEDED_CONVERSATIONS),
-    });
-  });
-
-  await page.route("**/rest/v1/messages*", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(SEEDED_MESSAGES),
     });
   });
 
@@ -228,6 +267,10 @@ test.describe("ConversationsRail e2e (Phase 5a — mock-supabase)", () => {
     const dialog = page.getByRole("dialog");
     await dialog.waitFor({ state: "visible", timeout: 5_000 });
     await dialog.getByRole("button", { name: "Sign out" }).click();
-    await page.waitForURL("**/login", { timeout: 10_000 });
+    // Sign-out is now a HARD navigation (window.location.assign, ADR-067 GAP C),
+    // a full document load that detaches the current frame. `waitUntil: "commit"`
+    // resolves as soon as the /login navigation commits — robust to the frame
+    // detachment that makes the default `load` wait flake with net::ERR_ABORTED.
+    await page.waitForURL("**/login", { timeout: 10_000, waitUntil: "commit" });
   });
 });

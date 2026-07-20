@@ -1,11 +1,11 @@
 output "server_ip" {
   description = "Public IPv4 address of the web platform server"
-  value       = hcloud_server.web.ipv4_address
+  value       = hcloud_server.web["web-1"].ipv4_address
 }
 
 output "ssh_command" {
   description = "SSH command to connect to the server"
-  value       = "ssh root@${hcloud_server.web.ipv4_address}"
+  value       = "ssh root@${hcloud_server.web["web-1"].ipv4_address}"
 }
 
 output "app_url" {
@@ -15,12 +15,12 @@ output "app_url" {
 
 output "app_url_direct" {
   description = "Direct app URL (bypasses Cloudflare)"
-  value       = "http://${hcloud_server.web.ipv4_address}:3000"
+  value       = "http://${hcloud_server.web["web-1"].ipv4_address}:3000"
 }
 
 output "server_status" {
   description = "Current server status"
-  value       = hcloud_server.web.status
+  value       = hcloud_server.web["web-1"].status
 }
 
 output "inngest_heartbeat_url" {
@@ -37,4 +37,14 @@ output "github_app_webhook_url" {
 output "github_app_webhook_secret_rotate_command" {
   description = "Command to rotate the GitHub App webhook secret. After rotating, paste the new value into the GitHub App config in the UI."
   value       = "terraform apply -replace=random_id.github_webhook_secret"
+}
+
+output "grok_dogfood_ip" {
+  description = "Public IPv4 of the Grok Build dogfood host when enable_grok_dogfood=true; null otherwise (#6545)."
+  value       = try(hcloud_server.grok_dogfood[0].ipv4_address, null)
+}
+
+output "grok_dogfood_ssh" {
+  description = "SSH command for the Grok dogfood host when provisioned."
+  value       = try("ssh root@${hcloud_server.grok_dogfood[0].ipv4_address}", null)
 }

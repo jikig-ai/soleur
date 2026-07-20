@@ -54,7 +54,11 @@ export async function clearSwrCache(mutate: ScopedMutator): Promise<void> {
  * used to gate a request until a precondition (e.g. a contextPath) is known.
  */
 export const swrKeys = {
-  inboxEmails: (status: string) => ["/api/inbox/emails", status] as const,
+  // Unified severity-ranked inbox (feat-severity-ranked-inbox #6007). The
+  // surface + the nav badge share this key so one request feeds both (free
+  // dedup) and they can never disagree. (The former `inboxEmails` key was
+  // removed once both consumers migrated here — no remaining consumer.)
+  inbox: (status: string) => ["/api/inbox", status] as const,
   kbTree: () => ["/api/kb/tree"] as const,
   chatThreadInfo: (contextPath: string | null) =>
     contextPath ? (["/api/chat/thread-info", contextPath] as const) : null,
@@ -63,7 +67,26 @@ export const swrKeys = {
   // Not an HTTP endpoint — the fetcher runs a Supabase count query. Key is a
   // plain sentinel (no URL shape) so it can't be mistaken for a route.
   dashboardOrphanCount: () => ["dashboard:orphan-conversation-count"] as const,
+  // Nav-badge count of conversations needing founder attention/decision, scoped
+  // to the active workspace's repo (matches the dashboard list scope). Keyed on
+  // (repoUrl, workspaceId) so it re-counts on workspace switch and gates until
+  // the active repo resolves. Supabase count query — no URL shape.
+  dashboardConversationAttention: (repoUrl: string, workspaceId: string) =>
+    ["dashboard:conversation-attention-count", repoUrl, workspaceId] as const,
   routinesList: () => ["/api/dashboard/routines"] as const,
+  releasesList: () => ["/api/dashboard/releases"] as const,
+  workstreamIssues: () => ["/api/workstream/issues"] as const,
+  /** Picker options (labels/assignees/milestones) for the edit-fields drawer —
+   *  fetched lazily (key gated to null until an editor opens). */
+  workstreamIssueOptions: () => ["/api/workstream/issues/options"] as const,
+  // Read-only beta-CRM surfaces (feat-beta-crm-ui #6172). The first tuple
+  // element is the fetch URL (jsonFetcher reads key[0]); the detail key embeds
+  // the id in the URL so each contact caches distinctly. A null id gates the
+  // fetch (SWR convention) until a contact is selected.
+  crmContacts: () => ["/api/crm/contacts"] as const,
+  crmContactDetail: (id: string | null) =>
+    id ? ([`/api/crm/contacts/${encodeURIComponent(id)}`] as const) : null,
+  crmFunnel: () => ["/api/crm/funnel"] as const,
   conversations: (filters: {
     statusFilter?: string;
     domainFilter?: string;

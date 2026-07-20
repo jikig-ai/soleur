@@ -17,6 +17,8 @@ import {
 import { generateInstallationToken, checkRepoAccess } from "./github-app";
 import { getPluginPath } from "./plugin-path";
 import { reportSilentFallback } from "./observability";
+import { seedWorktreeConfig } from "./worktree-config-seed";
+import { atomicGitConfig } from "./git-config-atomic";
 
 // Minimal structural type for the Storage remove path — avoids dragging the
 // full SupabaseClient generic into this FS/git-focused module.
@@ -129,6 +131,13 @@ export async function provisionWorkspace(workspaceId: string): Promise<string> {
     log.warn({ err, workspaceId }, "Git init failed");
   }
 
+  // Heal worktree git config HOST-SIDE (#4826): remove any extensions.worktreeConfig
+  // that would force in-sandbox git to read the masked/unreadable .git/config.worktree
+  // and fatal. Deliberately OUTSIDE the init/commit try so it runs whenever `git init`
+  // produced a `.git/` even if `git add`/`git commit` failed (e.g. no git identity on a
+  // runner). Best-effort + no-op on a healthy/absent-`.git` workspace.
+  seedWorktreeConfig(workspacePath);
+
   return workspacePath;
 }
 
@@ -222,27 +231,30 @@ export async function provisionWorkspaceWithRepo(
     );
   }
 
-  // 6. Set git identity per workspace
+  // 6. Set git identity per workspace. Route the raw `git config` writes through
+  //    the lock-free atomic writer (#6191, ADR-099 §Known latent surfaces): atomic
+  //    by rename(2), so a stale/masked `.git/config.lock` cannot EEXIST the seed.
+  //    Still best-effort — the outer try/catch → log.warn keeps a seed failure from
+  //    ever stranding provisioning (atomicGitConfig itself never throws).
   if (userName) {
     try {
-      execFileSync("git", ["config", "user.name", userName], {
-        cwd: workspacePath,
-        stdio: "pipe",
-      });
+      atomicGitConfig(workspacePath, ["config", "user.name", userName]);
     } catch (err) {
       log.warn({ err, workspaceId }, "Failed to set git user.name");
     }
   }
   if (userEmail) {
     try {
-      execFileSync("git", ["config", "user.email", userEmail], {
-        cwd: workspacePath,
-        stdio: "pipe",
-      });
+      atomicGitConfig(workspacePath, ["config", "user.email", userEmail]);
     } catch (err) {
       log.warn({ err, workspaceId }, "Failed to set git user.email");
     }
   }
+
+  // 6.5. Heal worktree git config HOST-SIDE (#4826): a fresh clone has no
+  // extensions.worktreeConfig, so this is a no-op here — but keeps the provision and
+  // session-boot paths symmetric with ensureWorkspaceRepoCloned.
+  seedWorktreeConfig(workspacePath);
 
   // 7-9. Overlay plugin symlink, .claude/settings.json, and KB scaffolding
   // via the shared helper. Missing entries are created; existing directories
@@ -427,6 +439,25 @@ export function scaffoldWorkspaceDefaults(
       symlinkSync(getPluginPath(), symlinkTarget);
     } catch (err) {
       log.warn({ err, workspacePath }, "Failed to symlink plugin");
+    }
+  } else {
+    // Diagnostic breadcrumb (C3 / ADR-093): the workspace already has a
+    // plugins/soleur entry, so the symlink is skipped. If it is a REAL directory
+    // (not our symlink), the connected repo ships its OWN committed plugin copy —
+    // the previously-SILENT shadow condition behind the #4826 delivery wedge. This
+    // is diagnostic-only, NOT an alert: both SDK factories load getPluginPath()
+    // (the deployed root), so the committed copy is inert for the SDK — the fix
+    // this ADR records already neutralizes it. Emitting the field makes the
+    // collision path observable (it was blind during the 5-round saga).
+    try {
+      if (lstatSync(symlinkTarget).isDirectory()) {
+        log.warn(
+          { workspacePath, connectedRepoShipsPlugin: true },
+          "connected repo ships plugins/soleur/ — deployed plugin is authoritative via SDK load (getPluginPath()); workspace copy is inert for the SDK (ADR-093)",
+        );
+      }
+    } catch {
+      // lstat race (entry removed between existsSync and lstat) — non-critical diagnostic; ignore.
     }
   }
 }

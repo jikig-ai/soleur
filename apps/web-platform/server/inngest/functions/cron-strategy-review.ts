@@ -22,9 +22,10 @@
 //        (This handler emits none.)
 //
 // NAME NOTE: Sentry monitor slug "scheduled-strategy-review" is NEW — the
-// GHA predecessor had NO Sentry check-in. Resource added in same commit
-// AND added to apply-sentry-infra.yml -target= allow-list (11 entries
-// after this PR, up from 10).
+// GHA predecessor had NO Sentry check-in. The resource was added to
+// cron-monitors.tf in the same commit. It also needed a matching
+// apply-sentry-infra.yml `-target=` line at the time; that requirement is gone
+// since #6589 made the apply full-root, so declaring a monitor now applies it.
 //
 // PURE-TS PATTERN — PR-6 is the first TR9 child with ZERO agent spawn
 // (no claude-eval, no bash script invocation). All GH ops via Octokit;

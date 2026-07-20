@@ -99,3 +99,159 @@ leaf; an in-memory client cache is internal to it. Caching changes fetch
   guarantee only because the cache is global; a future per-subtree `<SWRConfig>`
   with its own provider would need its own clear wiring. The conversations rail
   remains on its bespoke realtime path until the TR3 follow-up.
+
+## Amendment (2026-07-09): Router-Cache `staleTimes` (the RSC-shell half)
+
+**Status:** Accepted. **Issue/PR:** feat-one-shot-router-cache-staletimes-tab-switch.
+**Threshold:** `single-user incident` (inherited).
+
+### Context
+
+The SWR cache above made the dashboard tabs' *data* fetches instant, but users
+still saw a `loading.tsx` skeleton flash on returning to a previously-visited
+tab. The residual cause is a **second, independent client cache**: the Next.js
+App Router **Router Cache**, which holds each route segment's server-rendered
+**RSC shell**. Next.js 15 defaults `staleTimes.dynamic = 0` (it was `30` in
+Next 14), so the Router Cache discards a dynamic route's RSC the instant you
+navigate away — every return refetches the RSC from the server and re-triggers
+the route-segment Suspense skeleton. SWR does not, and structurally cannot,
+cover this (it caches `fetch` results, not the RSC shell).
+
+### Decision
+
+The tab-switch story now has **two cooperating client caches**:
+
+| Layer | Mechanism | Wiped/cleared at a principal boundary by |
+|---|---|---|
+| **Data** | SWR in-memory cache | `clearSwrCache(mutate)` on sign-out + workspace-switch (FR4) |
+| **RSC shell** | App Router Router Cache | **hard navigation** (`window.location.assign` / full document load) — the ONLY Router-Cache wipe |
+
+Enable Router-Cache reuse with `experimental.staleTimes = { dynamic: 30 }` in
+`apps/web-platform/next.config.ts` (`static` left at its Next 15 default 300 s —
+irrelevant to the dynamic tab bug). `withSentryConfig` preserves the key
+(Next 15.5.18).
+
+### The load-bearing isolation invariant
+
+A **Router-Cache hit serves an RSC payload from client memory with NO server
+round-trip**, so `middleware.ts` — the auth gate, the #4307 revocation gate, the
+T&C-consent gate, and billing — does **not** run for cached segments. A warm
+cache therefore defers not just transition-time isolation but the **continuous,
+per-request** authorization gates by up to `dynamic` seconds. There is no public
+API to selectively evict the App Router Router Cache (`router.refresh()` busts
+only the *current* route); a **hard navigation (full document load) is the only
+full wipe**. The invariant is thus:
+
+> The Router Cache is wiped by a hard navigation at **every** navigation that
+> crosses an authenticated-principal boundary, in **any** tab.
+
+The complete, enumerated boundary set (not "three transitions"):
+
+- **Principal-ENTRY:** OTP sign-in success (`components/auth/login-form.tsx` —
+  the *default* login UI verifies client-side, a **soft** nav, so this was a live
+  cross-user vector), and the onboarding funnel's terminal hops into
+  `/dashboard`/`/dashboard/kb` (`setup-key`, `connect-repo` ×5, `signup`,
+  `accept-terms`). OAuth/magic-link (`(auth)/callback/route.ts`) and dev-signin
+  already hard-load — no change.
+- **Principal-LEAVING:** sign-out button + the sibling-tab `SIGNED_OUT` listener
+  (`components/auth/use-sign-out.ts`, GAP C/D), account deletion
+  (`components/settings/delete-account-dialog.tsx`, GAP F), and the in-session
+  401/**302** session-revocation bounces (`dashboard/page.tsx`,
+  `hooks/use-kb-layout-state.tsx`, `kb/[...path]/page.tsx`, GAP F).
+- **Workspace switch:** `components/dashboard/org-switcher-container.tsx` (already
+  hard-navs — the precedent) and **both invite-accept call sites**
+  (`invite/[token]/invite-actions.tsx` `handleAccept` AND
+  `components/dashboard/pending-invite-banner.tsx` `handleAccept` — both POST
+  `/api/workspace/accept-invite`, which calls `set_current_workspace_id`, so each
+  crosses a workspace boundary and was converted to a hard nav; `handleDecline`
+  does NOT switch workspace and stays soft).
+
+**Two revocation sub-cases (distinct backstops):**
+
+- **jti session-revocation** (`revoked=true`): every mount-time SWR data fetch
+  hits `/api/*` → middleware → the #4307 gate → `clearSessionAndRedirect`
+  **302→/login**. Fast backstop, well inside 30 s — via **middleware, not RLS**.
+  The 401 handlers (GAP F) must detect this **302** (`fetch` follows it to 200
+  HTML, so a `status===401`-only guard silently never fires); they also key on
+  `res.redirected && new URL(res.url).pathname === "/login"`.
+- **workspace-membership removal** (session still valid): does **not** 401/302.
+
+### The data backstop is `resolveActiveWorkspace()`, NOT RLS
+
+For the cached tabs whose data routes use the RLS-**bypassing**
+`createServiceClient()` (`/api/dashboard/foundation-status`, `/api/kb/tree`, and
+`/api/workspace/active-repo`), workspace scoping is enforced by
+**`resolveActiveWorkspace()`'s membership probe** (`server/workspace-resolver.ts`
+— explicit `workspace_members` query + solo shortcut; foundation-status/kb-tree
+reach it via the `resolveActiveWorkspaceKbRoot` wrapper, and active-repo carries
+its own inline `set_current_workspace_id(solo)` self-heal for the same effect),
+which returns own/empty scope after removal at **HTTP 200** (empty ≠ leak). RLS
+`is_workspace_member` (migrations 053/059/075) backstops only the
+**session-client** routes; `kb_files`/`kb_chunks` are owner/shared-keyed.
+
+**Backstop enumeration (verified 2026-07-09):** all 9 `force-dynamic` tabs
+(inbox, routines, workstream, audit, audit/github, releases, settings/privacy,
+settings/scope-grants, inbox/email) use the **cookie-scoped `createClient()`**
+(RLS session client) with belt-and-suspenders `.eq(user_id/founder_id/workspace_id)`
+filters — own/tenant-scoped, no cross-principal exposure. The unified inbox
+SWR route `/api/inbox` uses the session client ("NEVER `createServiceClient`
+here"). The three service-client SWR routes (foundation-status, kb-tree,
+active-repo) route through the membership probe (above). The **one exception with
+no probe/RLS backstop** was `admin/analytics/page.tsx`, which baked **all-tenant**
+data (every user's email + all conversations) into a cacheable RSC via
+`createServiceClient()`, gated only by an `ADMIN_USER_IDS` **env** check —
+**GAP H** closes it (below).
+
+### GAP H — admin/analytics: all-tenant data off the RSC
+
+`admin/analytics` is the one route that reads **all-tenant** data (every user's
+email + all conversations) via the RLS-bypassing `createServiceClient()`, gated
+only by an `ADMIN_USER_IDS` **env** check. With `staleTimes.dynamic = 30` a warm
+Router-Cache restore would reuse the RSC **without** re-running that server gate —
+so a de-provisioned admin (env change, redeploy-gated) with a warm cache could
+soft-navigate back and briefly paint the stale all-tenant payload before any
+re-validation. GAP H moves the all-tenant read **off the RSC**: the page
+(`app/(dashboard)/dashboard/admin/analytics/page.tsx`) keeps the server-side
+`isAdmin` gate for the first (uncached) render but renders a data-less client
+loader (`components/analytics/analytics-dashboard-loader.tsx`) that fetches from
+the admin-gated `/api/admin/analytics` route via SWR. The route's `isAdmin` gate
+re-runs on **every** fetch (through middleware): a de-provisioned admin gets a
+fresh **403** and nothing sensitive is ever baked into a cacheable RSC (an earlier
+draft used a mount-time `router.refresh()`, but that paints the cached RSC first
+then corrects — a sub-second all-tenant-PII flash — so the API+SWR form was
+adopted, which also avoids the double-render re-fetch of the heavy all-tenant
+query on every visit).
+
+### Router Cache ≠ bfcache
+
+A hard navigation wipes the in-memory Router Cache but **not** the browser's
+back/forward cache (bfcache) — a whole-document snapshot that could restore a
+rendered authenticated page after sign-out + Back. `force-dynamic` tabs already
+emit `no-store`; **GAP G** sets `Cache-Control: no-store` on authenticated
+(non-`PUBLIC_PATHS`) **document** responses in **`middleware.ts`** (route groups
+are URL-stripped, so the global `security-headers.ts` `source:"/(.*)"` matcher
+cannot select authenticated routes; middleware has the auth + per-path signal).
+It is **fail-closed on `Sec-Fetch-Dest`**: only requests whose dest is an
+explicit non-document value (`empty` for API/RSC, `script`/`style`/`image`/…) are
+spared `no-store`; a real `document` nav OR a request that **omits** the header
+(legacy Safari < 16.4 still supports bfcache but sends no `Sec-Fetch-*`) is
+treated as a document and gets `no-store`. So API/RSC caching, the client Router
+Cache, and public-page bfcache are untouched, while no authenticated document
+slips through the bfcache defense.
+
+### Bounded, accepted residual
+
+RSC-only `force-dynamic` tabs with no mount-time SWR fetch bake **own**
+user-scoped rows, so a stale shell there is the user's own data (no
+cross-principal exposure), bounded to ≤ `dynamic` (30) s. Session hijack is
+unchanged (the JWT is already valid ~1 h). `dynamic: 30` is the deliberate
+UX-vs-revocation-latency bound (the descope lever is a smaller `dynamic`).
+
+### C4 impact
+
+**None** — verified against `model.c4`, `views.c4`, `spec.c4` (same basis this
+ADR recorded for SWR): `staleTimes` is an in-process Next.js flag, the Router
+Cache is in-memory in the existing `dashboard` React container leaf, no external
+actor / vendor / data-store / access-relationship changes. Caching changes fetch
+*timing*; the boundary-wipe invariant keeps per-principal isolation identical. No
+`.c4` edit.

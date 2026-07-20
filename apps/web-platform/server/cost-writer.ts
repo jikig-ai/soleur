@@ -27,6 +27,10 @@ import { reportSilentFallback, mirrorP0Deduped } from "@/server/observability";
 import { sendToClient } from "@/server/ws-handler";
 import { createChildLogger } from "@/server/logger";
 import {
+  emitClaudeCostMarker,
+  type ClaudeCostSource,
+} from "@/server/claude-cost-marker";
+import {
   ByokDelegationRevokedError,
   ByokDelegationExpiredError,
   ByokDelegationHourlyCapError,
@@ -95,16 +99,42 @@ export interface ByokDelegationContext {
   callerUserId: string;
 }
 
+// Attribution marker context threaded from the 3 session call sites
+// (`agent-runner`, `cc-dispatcher`, `agent-on-spawn-requested`; plan R2/R6).
+// `TurnCostInput` carries neither `source` nor `model`, so we widen the
+// signature rather than mutate the cost payload (hr-type-widening-cross-
+// consumer-grep).
+export interface TurnCostMarker {
+  source: ClaudeCostSource;
+  model: string | null;
+}
+
 export function persistTurnCost(
   userId: string,
   conversationId: string,
   leaderId: string,
   workspaceId: string,
   input: TurnCostInput,
+  marker: TurnCostMarker,
   delegation?: ByokDelegationContext,
 ): void {
   const costDelta = Number.isFinite(input.totalCostUsd) ? input.totalCostUsd : 0;
   const usage = input.usage;
+
+  // Side-effect #5 (plan Phase 1): emit the queryable cost marker. Synchronous,
+  // BEFORE the fire-and-forget RPCs (does not change turn timing). Fail-open —
+  // `emitClaudeCostMarker` never throws.
+  emitClaudeCostMarker({
+    source: marker.source,
+    model: marker.model,
+    input_tokens: usage.input_tokens,
+    output_tokens: usage.output_tokens,
+    cache_read_input_tokens: usage.cache_read_input_tokens,
+    cache_creation_input_tokens: usage.cache_creation_input_tokens,
+    cost_usd: costDelta,
+    id: conversationId,
+    capture_status: "ok",
+  });
 
   // (1) Atomic increment via v2 RPC (5 deltas).
   supabase()
@@ -302,9 +332,23 @@ export async function persistTurnCostAwaitable(
   leaderId: string,
   workspaceId: string,
   input: TurnCostInput,
+  marker: TurnCostMarker,
 ): Promise<void> {
   const costDelta = Number.isFinite(input.totalCostUsd) ? input.totalCostUsd : 0;
   const usage = input.usage;
+
+  // Cost marker (plan Phase 1 / leader-loop path). Fail-open, before the RPCs.
+  emitClaudeCostMarker({
+    source: marker.source,
+    model: marker.model,
+    input_tokens: usage.input_tokens,
+    output_tokens: usage.output_tokens,
+    cache_read_input_tokens: usage.cache_read_input_tokens,
+    cache_creation_input_tokens: usage.cache_creation_input_tokens,
+    cost_usd: costDelta,
+    id: conversationId,
+    capture_status: "ok",
+  });
 
   const incrementResult = supabase().rpc("increment_conversation_cost", {
     conv_id: conversationId,

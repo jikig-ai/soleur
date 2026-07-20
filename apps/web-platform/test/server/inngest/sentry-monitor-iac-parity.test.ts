@@ -23,12 +23,21 @@ const MONITORS_TF = resolve(
   __dirname,
   "../../../infra/sentry/cron-monitors.tf",
 );
+const WORKFLOWS_DIR = resolve(__dirname, "../../../../../.github/workflows");
 
 // Per ADR-033's prefix table, oneshot-* functions must declare NO monitor
 // slug (a crontab monitor pages MISSED forever after the single fire).
 // The one historical deviation is grandfathered here; new entries require
 // the same deliberate decision this list makes visible.
 const ONESHOT_SLUG_EXEMPTIONS = new Set(["oneshot-gdpr-gate-50d-eval"]);
+
+// Cron slugs whose sentry_cron_monitor was intentionally REMOVED because the
+// cron is DISABLED via a kill-switch (#6031 — the GHCR minter: App installation
+// tokens can't pull the private packages, ADR-088 arm-b). The handler keeps its
+// SENTRY_MONITOR_SLUG const for easy re-enable, but heartbeats never fire (it
+// no-ops under GHCR_MINTER_DISABLED=true), so there is no dropped-check-in risk.
+// Remove this exemption when the monitor + cron are restored.
+const DISABLED_CRON_SLUG_EXEMPTIONS = new Set(["scheduled-ghcr-token-minter"]);
 
 // Slugs assigned via SENTRY_MONITOR_SLUG consts in cron/event handlers.
 // The literal-extraction regex is deliberately narrow (double-quoted
@@ -75,6 +84,98 @@ function iacResourceCount(): number {
   const tf = readFileSync(MONITORS_TF, "utf-8");
   return [...tf.matchAll(/^resource "sentry_cron_monitor" /gm)].length;
 }
+
+// ---------------------------------------------------------------------------
+// #6374 — GHA-workflow heartbeat-slug parity. The Inngest-cron guard above is
+// one-way (code → IaC). GHA workflows (scheduled-inngest-health, realtime-probe,
+// terraform-drift, …) heartbeat to Sentry via the `sentry-heartbeat` action with
+// a `monitor-slug:` — and those slugs need a matching sentry_cron_monitor in
+// cron-monitors.tf, or Sentry silently drops the check-ins to an unknown slug and
+// the heartbeat pages nowhere (the #6374 root cause).
+//
+// This guard once had a second clause: that the monitor's resource also appear in
+// apply-sentry-infra.yml's `-target=` allowlist, since a saved plan built against
+// an explicit target set left un-targeted monitors declared-but-never-applied. The
+// workflow now plans the sentry root FULL, so `declared ≡ applied` by construction
+// and that clause could no longer fail. The slug → monitor clause below is NOT
+// covered by that change — Sentry slug matching is exact and a workflow can still
+// name a slug no resource declares.
+// ---------------------------------------------------------------------------
+
+// Every `monitor-slug: <slug>` used by a .github/workflows/*.yml sentry-heartbeat step.
+function workflowHeartbeatSlugs(): string[] {
+  const slugs = new Set<string>();
+  for (const file of readdirSync(WORKFLOWS_DIR)) {
+    if (!file.endsWith(".yml") && !file.endsWith(".yaml")) continue;
+    const src = readFileSync(join(WORKFLOWS_DIR, file), "utf-8");
+    // Tolerate an optionally-quoted slug + an optional trailing inline comment so a future
+    // emitter written `monitor-slug: "foo"` or `monitor-slug: foo  # note` cannot silently
+    // drop from the parity set (fail-open) — the exact class this guard exists to prevent.
+    for (const m of src.matchAll(/^\s*monitor-slug:\s*"?([a-z0-9-]+)"?\s*(?:#.*)?$/gm)) {
+      slugs.add(m[1]);
+    }
+  }
+  return [...slugs].sort();
+}
+
+// The set of cron-monitor `name`s (the Sentry slugs) DECLARED in cron-monitors.tf.
+// Parsed per-resource (not a whole-file slug grep) so a `name = "..."` appearing in
+// a comment or a non-cron-monitor block cannot satisfy a workflow's slug. Only
+// membership is ever queried, so this is a Set — it used to be a Map<name,id>
+// whose value half was read only by the `-target=` parity check retired in #6589.
+function tfDeclaredMonitorSlugs(tf: string): Set<string> {
+  const slugs = new Set<string>();
+  const re =
+    /^resource\s+"sentry_cron_monitor"\s+"[a-z0-9_]+"\s*\{([\s\S]*?)^\}/gm;
+  for (const m of tf.matchAll(re)) {
+    const nameMatch = m[1].match(/\n\s*name\s*=\s*"([a-z0-9-]+)"/);
+    if (nameMatch) slugs.add(nameMatch[1]);
+  }
+  return slugs;
+}
+
+// Pure gap detector. Extracted so the deliberately-broken-fixture test can
+// exercise it without mutating the tree.
+function workflowSlugGaps(
+  slugs: string[],
+  tf: string,
+): { missingMonitor: string[] } {
+  const declared = tfDeclaredMonitorSlugs(tf);
+  const missingMonitor = slugs.filter((slug) => !declared.has(slug));
+  return { missingMonitor };
+}
+
+describe("Sentry GHA-workflow heartbeat-slug parity (#6374)", () => {
+  it("discovers the known workflow-heartbeat slug cohort (anti-vacuity)", () => {
+    const slugs = workflowHeartbeatSlugs();
+    expect(slugs.length).toBeGreaterThanOrEqual(4);
+    expect(slugs).toContain("scheduled-inngest-health");
+    expect(slugs).toContain("scheduled-realtime-probe");
+  });
+
+  it("every workflow heartbeat slug has a cron-monitor in cron-monitors.tf", () => {
+    const tf = readFileSync(MONITORS_TF, "utf-8");
+    const { missingMonitor } = workflowSlugGaps(workflowHeartbeatSlugs(), tf);
+    expect(
+      missingMonitor,
+      `workflow heartbeat slug(s) with NO sentry_cron_monitor in cron-monitors.tf ` +
+        `(Sentry silently drops check-ins to unknown slugs — the error heartbeat ` +
+        `pages nowhere): ${missingMonitor.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("a broken fixture (slug missing from cron-monitors.tf) is caught", () => {
+    const tf = 'resource "sentry_cron_monitor" "foo" {\n  name = "foo"\n}\n';
+    const { missingMonitor } = workflowSlugGaps(["orphan-slug"], tf);
+    expect(missingMonitor).toEqual(["orphan-slug"]);
+  });
+
+  it("a slug WITH a declared monitor is not reported as a gap (no false positives)", () => {
+    const tf = 'resource "sentry_cron_monitor" "bar" {\n  name = "bar-slug"\n}\n';
+    const { missingMonitor } = workflowSlugGaps(["bar-slug"], tf);
+    expect(missingMonitor).toEqual([]);
+  });
+});
 
 describe("Sentry cron-monitor IaC parity", () => {
   it("discovers a sane slug universe (anti-vacuity: the extractor must find the known cohort)", () => {
@@ -135,7 +236,9 @@ describe("Sentry cron-monitor IaC parity", () => {
 
   it("every code slug has a sentry_cron_monitor resource in cron-monitors.tf", () => {
     const names = iacMonitorNames();
-    const missing = codeSlugs().filter((s) => !names.has(s));
+    const missing = codeSlugs().filter(
+      (s) => !names.has(s) && !DISABLED_CRON_SLUG_EXEMPTIONS.has(s),
+    );
     expect(
       missing,
       `Inngest handlers heartbeat to monitor slug(s) with no IaC resource — ` +

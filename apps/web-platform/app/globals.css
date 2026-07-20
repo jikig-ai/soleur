@@ -43,6 +43,9 @@
   --soleur-bg-surface-1: #141414;
   --soleur-bg-surface-2: #1c1c1c;
   --soleur-bg-accent-surface: #1c1c1c;
+  /* Nav count-badge fill — a fixed neutral (NOT gold, which is the active-state
+     signal); white text rides it in both themes (feat-inbox-attention-badge). */
+  --soleur-bg-badge: #2f2f2f;
   /* Borders */
   --soleur-border-default: #2a2a2a;
   --soleur-border-emphasized: #c9a962;
@@ -67,6 +70,9 @@
   --soleur-bg-surface-1: #f4eedf;
   --soleur-bg-surface-2: #ede4cc;
   --soleur-bg-accent-surface: #f8efd4;
+  /* Nav count-badge fill — same fixed neutral chip on the light rail; white
+     text keeps a high-contrast counter (feat-inbox-attention-badge). */
+  --soleur-bg-badge: #2f2f2f;
   /* Borders */
   --soleur-border-default: #d8c9a6;
   --soleur-border-emphasized: #9b8857;
@@ -98,6 +104,7 @@
     --soleur-bg-surface-1: #f4eedf;
     --soleur-bg-surface-2: #ede4cc;
     --soleur-bg-accent-surface: #f8efd4;
+    --soleur-bg-badge: #2f2f2f;
     --soleur-border-default: #d8c9a6;
     --soleur-border-emphasized: #9b8857;
     --soleur-text-primary: #1a1612;
@@ -124,6 +131,7 @@
   --color-soleur-bg-surface-1: var(--soleur-bg-surface-1);
   --color-soleur-bg-surface-2: var(--soleur-bg-surface-2);
   --color-soleur-bg-accent-surface: var(--soleur-bg-accent-surface);
+  --color-soleur-bg-badge: var(--soleur-bg-badge);
   --color-soleur-border-default: var(--soleur-border-default);
   --color-soleur-border-emphasized: var(--soleur-border-emphasized);
   --color-soleur-text-primary: var(--soleur-text-primary);

@@ -51,7 +51,7 @@ const PROTECTED = {
 function mockFetch(handlers: {
   routines?: unknown;
   runStatus?: number;
-  runs?: { runs: unknown[]; nextCursor: string | null };
+  runs?: { runs: unknown[]; nextCursor: string | null; live?: unknown[] };
 }) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -137,6 +137,51 @@ describe("RoutinesSurface", () => {
     await waitFor(() =>
       expect(screen.getByText(/No runs yet/)).toBeTruthy(),
     );
+  });
+
+  it("Recent Runs renders in-flight live rows: running/stuck distinct + Resumed badge (#5766)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        runs: {
+          runs: [],
+          nextCursor: null,
+          live: [
+            {
+              id: "L1",
+              routine_id: "cron-bug-fixer",
+              run_id: "r1",
+              status: "running",
+              resumed: false,
+              started_at: new Date().toISOString(),
+              last_heartbeat_at: new Date().toISOString(),
+            },
+            {
+              id: "L2",
+              routine_id: "cron-ux-audit",
+              run_id: "r2",
+              status: "stuck",
+              resumed: true,
+              started_at: new Date().toISOString(),
+              last_heartbeat_at: new Date().toISOString(),
+            },
+          ],
+        },
+      }),
+    );
+    render(<RoutinesSurface />);
+    fireEvent.click(screen.getByRole("tab", { name: "Recent Runs" }));
+    // Both live rows render (not the empty state).
+    const running = await waitFor(() =>
+      screen.getByTestId("live-run-row-L1"),
+    );
+    const stuck = screen.getByTestId("live-run-row-L2");
+    // running vs stuck are DISTINCT statuses (AC5 / P2-2), carried on the row.
+    expect(running.getAttribute("data-status")).toBe("running");
+    expect(stuck.getAttribute("data-status")).toBe("stuck");
+    // Resumed badge appears ONLY on the resumed run (attempt>1), as an overlay.
+    expect(screen.getByTestId("resumed-badge-L2")).toBeTruthy();
+    expect(screen.queryByTestId("resumed-badge-L1")).toBeNull();
   });
 
   it("Recent Runs row click opens the detail panel (error_summary, run_id, actor as text, no UUID)", async () => {

@@ -100,10 +100,20 @@ deny_self_fault() {
   exit 0
 }
 
-# --- Operator-email resolver (inline, 4-line) ---------------------------
-# Per learning 2026-04-24-fake-git-author-bare-repo-bot-override: prefer
-# --global git config because bare-repo+worktree topology silently reads
-# repo-level git config which is operator-controlled at lower trust.
+# --- Operator-email resolver (inline) -----------------------------------
+# Per learning 2026-04-24-fake-git-author-bare-repo-bot-override: on a BARE
+# repo + worktree topology, prefer `--global` git config because repo-level
+# config is operator-controllable at lower trust.
+#
+# CAVEAT — authority inversion on the non-bare Concierge surface (ADR-099
+# §Known latent surfaces, #6191): there `--global` is the baked
+# `github-actions[bot]` identity while `--local` is the host-seeded owner, so
+# on Concierge this `--global` fallback can record the BOT as the operator in
+# the approval audit log. Accepted (not resolved): the path feeds an audit log
+# — NOT a git operation — and is reached ONLY when BOTH SOLEUR_OPERATOR_EMAIL
+# and GITHUB_ACTOR are unset. An active fix (a bot-shape discriminator applied
+# to both scopes) would trade a known-wrong value for a possibly-mis-downgraded
+# human/service account; see ADR-099 §latent + decision-challenges.md D1.
 resolve_operator_email() {
   if [[ -n "${SOLEUR_OPERATOR_EMAIL:-}" ]]; then echo "$SOLEUR_OPERATOR_EMAIL"
   elif [[ -n "${GITHUB_ACTOR:-}" ]]; then echo "${GITHUB_ACTOR}@users.noreply.github.com"

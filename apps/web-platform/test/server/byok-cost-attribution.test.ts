@@ -64,15 +64,22 @@ beforeEach(() => {
 
 describe("BYOK cost attribution — Harry-in-Jean's-workspace split (TR7 / AC8)", () => {
   it("write_byok_audit RPC carries p_founder_id=Harry and p_workspace_id=Jean", async () => {
-    persistTurnCost(HARRY, CONV, "cco", JEAN_WORKSPACE, {
-      totalCostUsd: 0.07,
-      usage: {
-        input_tokens: 1234,
-        output_tokens: 567,
-        cache_read_input_tokens: 0,
-        cache_creation_input_tokens: 0,
+    persistTurnCost(
+      HARRY,
+      CONV,
+      "cco",
+      JEAN_WORKSPACE,
+      {
+        totalCostUsd: 0.07,
+        usage: {
+          input_tokens: 1234,
+          output_tokens: 567,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
       },
-    });
+      { source: "cc-soleur-go", model: null },
+    );
 
     await new Promise((r) => setImmediate(r));
 
@@ -91,15 +98,22 @@ describe("BYOK cost attribution — Harry-in-Jean's-workspace split (TR7 / AC8)"
   });
 
   it("usage_update WebSocket fan-out is keyed on Harry (key owner), not Jean", async () => {
-    persistTurnCost(HARRY, CONV, "cco", JEAN_WORKSPACE, {
-      totalCostUsd: 0.07,
-      usage: {
-        input_tokens: 1234,
-        output_tokens: 567,
-        cache_read_input_tokens: 0,
-        cache_creation_input_tokens: 0,
+    persistTurnCost(
+      HARRY,
+      CONV,
+      "cco",
+      JEAN_WORKSPACE,
+      {
+        totalCostUsd: 0.07,
+        usage: {
+          input_tokens: 1234,
+          output_tokens: 567,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
       },
-    });
+      { source: "cc-soleur-go", model: null },
+    );
     await new Promise((r) => setImmediate(r));
 
     // sendToClient(userId, msg) — userId arg MUST be Harry (he's the

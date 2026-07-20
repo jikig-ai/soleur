@@ -165,10 +165,28 @@ vi.mock("@/server/ensure-workspace-repo", async () => {
 vi.mock("@/server/permission-callback", () => ({
   createCanUseTool: vi.fn(() => async () => ({ behavior: "allow" })),
 }));
+// #5733 D2 — T2 models a CONNECTED reclaimed workspace whose `.git` is absent
+// (clone stubbed to a no-op). D2 now honest-blocks an absent `.git` at the cold
+// gate, which would prevent reaching sandbox construction. This file's invariant
+// is the pre-sandbox MKDIR (the REAL ensureWorkspaceDirExists), not the git-shape
+// readiness gate — so force the shape ready here. The real mkdir still runs and
+// the dir-exists-at-sandbox-build assertion is unaffected.
+vi.mock("@/server/git-worktree-validity", async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return {
+    ...actual,
+    probeGitWorktreeShape: () => ({ kind: "dir-valid" }),
+    isReadyGitWorkTree: () => true,
+    isValidGitWorkTree: () => true,
+    evaluateAgentReadiness: async () => "ready",
+  };
+});
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+  // #5733 — reportAgentReadinessSelfStop pre-hashes the workspace id via hashUserId.
+  hashUserId: (s: string) => `hash-${s}`,
   mirrorWithDebounce: mockReportSilentFallback,
   __resetMirrorDebounceForTests: vi.fn(),
   MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
@@ -261,6 +279,7 @@ function makeArgs(overrides: Partial<Parameters<typeof realSdkQueryFactory>[0]> 
     cwd: "/ignored",
     userId: "user-1",
     conversationId: "conv-1",
+    persona: "command_center" as const,
     ...overrides,
   };
 }

@@ -43,12 +43,15 @@ FILE_MAP=(
   "INNGEST_WIPED_VOLUME_VERIFY_SH_B64|/usr/local/bin/inngest-wiped-volume-verify.sh|755|root:root"
   "CAT_INNGEST_VERIFY_STATE_SH_B64|/usr/local/bin/cat-inngest-verify-state.sh|755|root:root"
   "INNGEST_INVENTORY_SH_B64|/usr/local/bin/inngest-inventory.sh|755|root:root"
+  "GIT_LOCK_CHARDEVICE_SWEEP_SH_B64|/usr/local/bin/git-lock-chardevice-sweep.sh|755|root:root"
+  "INNGEST_REGISTRY_PROBE_SH_B64|/usr/local/bin/inngest-registry-probe.sh|755|root:root"
+  "INNGEST_DOUBLEFIRE_PROBE_SH_B64|/usr/local/bin/inngest-doublefire-probe.sh|755|root:root"
 )
 
 # TEST_DESTDIR allows tests to redirect writes to a sandbox
 DESTDIR="${TEST_DESTDIR:-}"
 
-# Prod-mode escalation (#4827): the handler runs as User=deploy but the 7 managed
+# Prod-mode escalation (#4827): the handler runs as User=deploy but the 15 managed
 # files live in root:root 0755 dirs the deploy user cannot mktemp into (EACCES).
 # In prod mode (DESTDIR empty) we stage each decoded payload in a deploy-writable
 # dir, then escalate the atomic install to root via the pinned sudoers helper
@@ -85,7 +88,7 @@ fi; rm -f "${TMPFILES[@]}" "${STATE_FILE}.final"' EXIT
 # hooks.json env-passing atomically, the host's stale hooks.json could not pass
 # the new key, leaving its env var empty — and the upfront gate then aborted the
 # ENTIRE write, including the new hooks.json that would have re-aligned the
-# mapping. Per-file accounting lets the 7 good files (crucially the new
+# mapping. Per-file accounting lets the 15 good files (crucially the new
 # hooks.json) land while the absent one is recorded as a failure and surfaces a
 # loud exit_code=1 to the CI verify gate.
 
@@ -116,7 +119,7 @@ for entry in "${FILE_MAP[@]}"; do
 
   logger -t "$LOG_TAG" "writing: $dest_path"
 
-  # Stage the decoded payload.
+  # Stage the payload.
   #  - test mode (DESTDIR set): stage IN the sandbox dest dir; same-fs mv is atomic
   #    and the sandbox dirs are writable (legacy path, unchanged).
   #  - prod mode (DESTDIR empty): stage in the deploy-writable STAGING_DIR; the
@@ -128,15 +131,21 @@ for entry in "${FILE_MAP[@]}"; do
     stage_dir="$STAGING_DIR"
   fi
 
-  # Decode to a temp file in the staging dir.
+  # #6178: the payload arrives as a FILE (pass-file-to-command + base64decode in
+  # hooks.json.tmpl), NOT a base64 string in the environment — the exec env has a
+  # 128KB per-var ceiling (MAX_ARG_STRLEN) that ci-deploy.sh's ~140KB base64 blew,
+  # killing fork/exec with E2BIG. So ${!env_var} now holds the PATH to the already-
+  # DECODED payload that webhook wrote; copy it into our own mktemp temp (so the
+  # atomic-install + cleanup contract below is unchanged and we never install the
+  # webhook temp directly). A missing/unreadable source is a per-file failure.
   tmpfile=$(mktemp "${stage_dir}/tmp.infra-config.XXXXXX")
   TMPFILES+=("$tmpfile")
 
-  if ! echo "${!env_var}" | base64 -d > "$tmpfile" 2>/dev/null; then
-    logger -t "$LOG_TAG" "FAILED: $dest_path reason=base64_decode"
-    echo "ERROR: base64 decode failed for $dest_path" >&2
+  if ! cp "${!env_var}" "$tmpfile" 2>/dev/null; then
+    logger -t "$LOG_TAG" "FAILED: $dest_path reason=payload_file_unreadable path=${!env_var}"
+    echo "ERROR: could not read webhook payload file for $dest_path (env $env_var=${!env_var})" >&2
     [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
-    FILES_JSON+="{\"file\":\"$dest_path\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"base64_decode\"}"
+    FILES_JSON+="{\"file\":\"$dest_path\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"payload_file_unreadable\"}"
     FAIL_COUNT=$((FAIL_COUNT + 1))
     rm -f "$tmpfile"
     continue
@@ -190,6 +199,32 @@ for entry in "${FILE_MAP[@]}"; do
 done
 
 logger -t "$LOG_TAG" "complete: $WRITTEN_COUNT/$TOTAL_COUNT files written, $FAIL_COUNT failed"
+
+# --- Orphan-hook self-check (#6178) ---
+# A hooks.json execute-command that points at a /usr/local/bin script NOT present on
+# disk after this push is a DANGLING HOOK: the webhook (adnanh/webhook) fork/exec's a
+# missing file and returns an EMPTY HTTP 500 — silent, fast, and undiagnosable without
+# SSH. This exact drift (hooks.json advertised inngest-registry-probe but the script
+# was never delivered) fast-500'd the cutover op=verify / op=execute empty-registry
+# gate. Cross-check the JUST-WRITTEN hooks.json against on-disk scripts and fail LOUD +
+# emit a monitored marker so the drift self-reports at DELIVERY time (before it can
+# 500) instead of silently. Only /usr/local/bin/* commands are guarded — the handler
+# itself (/usr/local/bin/infra-config-apply.sh) is cloud-init/SSH-bridge delivered, not
+# FILE_MAP, but it exists on disk in prod so it passes the on-disk existence check.
+hooks_dest="${DESTDIR}/etc/webhook/hooks.json"
+if [[ -f "$hooks_dest" ]] && command -v jq >/dev/null 2>&1; then
+  while IFS= read -r cmd_path; do
+    [[ -n "$cmd_path" ]] || continue
+    case "$cmd_path" in /usr/local/bin/*) : ;; *) continue ;; esac
+    if [[ ! -e "${DESTDIR}${cmd_path}" ]]; then
+      logger -t "$LOG_TAG" "SOLEUR_INFRA_CONFIG_HOOK_ORPHAN dangling_hook_command=$cmd_path reason=script_not_on_disk_after_push"
+      echo "ERROR: hooks.json advertises $cmd_path but no script is on disk after this push — webhook exec of this hook would fast-500 (dangling hook)" >&2
+      [[ -n "$FILES_JSON" ]] && FILES_JSON+=","
+      FILES_JSON+="{\"file\":\"$cmd_path\",\"sha256\":\"\",\"status\":\"failed\",\"reason\":\"orphan_hook_command\"}"
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+  done < <(jq -r '.[]."execute-command" // empty' "$hooks_dest" 2>/dev/null || true)
+fi
 
 # --- Write state file (before self-restart) ---
 END_TS=$(date +%s)

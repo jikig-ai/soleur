@@ -4,6 +4,18 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Merge queue (#5780). The queue dispatches `merge_group` against the
+  # gh-readonly-queue/main/* temp ref; every required-context producer here —
+  # `test`, `e2e`, `lockfile-sync`, `service-role-allowlist-gate`,
+  # `tc-document-sha-guard` (FIVE; do NOT add an `event_name == 'pull_request'`
+  # gate to any of them or that required context never reports → the queue
+  # entry stalls pending forever) — must run on `merge_group`. None gate on the
+  # event, so they run unconditionally. `tc-document-sha-guard` additionally
+  # receives `MERGE_GROUP_BASE_SHA` so its T&C TC_VERSION-bump bypass still works
+  # on the candidate (github.base_ref is empty on merge_group). `detect-changes`
+  # short-circuits non-PR events to docs=true (critical-css-gate runs — extra,
+  # not required); its event-shape refinement is optional polish (P2-6).
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -72,10 +84,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Full history so lint-infra-no-human-steps can merge-base against the
+          # PR base ref (changed-files grandfathering mode).
+          fetch-depth: 0
       - name: Lint bot synthetic statuses
         run: bash scripts/lint-bot-synthetic-statuses.sh
       - name: Lint bot synthetic completeness
         run: bash scripts/lint-bot-synthetic-completeness.sh
+      # Enforcement teeth for hr-no-ssh-fallback-in-runbooks: fail a
+      # plan/spec/runbook/ADR/legal-runbook that prescribes a *human-run*
+      # terraform / SSH / reboot / verify-on-private-net infra step. Changed-files
+      # mode grandfathers pre-existing docs; the diff base is the PR base ref
+      # (falls back to origin/main on push/merge_group).
+      - name: Lint infra no-human-steps (changed vs base)
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            python3 scripts/lint-infra-no-human-steps.py --changed --base "origin/$BASE_REF"
+          else
+            python3 scripts/lint-infra-no-human-steps.py --changed
+          fi
 
   lint-conversations-update-callsites:
     runs-on: ubuntu-latest
@@ -116,6 +146,11 @@ jobs:
       - name: Verify all 9 legal-doc SHAs pinned
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
+          # github.base_ref is empty on merge_group; the script falls back to
+          # this candidate base SHA so the T&C TC_VERSION-bump bypass still works
+          # on the queue ref (else a legit stale-SHA + TC_VERSION-bump PR is
+          # green-on-PR but red-on-queue → dequeued). #5780.
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: bash apps/web-platform/scripts/check-tc-document-sha.sh
 
   # ADR ordinal + required-content sentinel (PR-B #4379 ADR-040 + ADR-041).
@@ -131,6 +166,31 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Check ADR ordinals + content completeness
         run: bash scripts/check-adr-ordinals.sh
+
+  # Hard-rule body-weakening gate (ADR-092, #6103). BLOCKS any un-acked change
+  # or deletion of an `hr-*`/`wg-*` rule BODY line in AGENTS.{core,docs,rest}.md
+  # (see scripts/lint-rule-bodies.py). This job's name IS the `rule-body-lint`
+  # required context pinned in infra/github/ruleset-ci-required.tf +
+  # scripts/ci-required-ruleset-canonical-required-status-checks.json — a rename
+  # requires a paired terraform apply. MUST stay ALWAYS-RUN (no `paths:`/`if:`
+  # event gate) and green on the no-op path: a path-gated required 15368 context
+  # never posts on unrelated PRs → permanent `pending` → wedges every human PR
+  # (CTO ruling 2026-07-06; mirrors the `enforce`/`tenant-integration-required`
+  # always-run contexts). The gate itself is green when no body changed, so the
+  # no-op path needs no explicit short-circuit. fetch-depth: 0 + `git fetch
+  # origin main` so the merge-base (NOT origin/main tip) is resolvable on
+  # pull_request / push / merge_group alike.
+  rule-body-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - name: Hard-rule body-weakening gate (ADR-092)
+        run: |
+          git fetch --no-tags --quiet origin main
+          BASE="$(git merge-base origin/main HEAD)"
+          python3 scripts/lint-rule-bodies.py --check --base "$BASE"
 
   rule-metrics-shape:
     runs-on: ubuntu-latest
@@ -193,6 +253,123 @@ jobs:
             echo "::error::Run 'npx --yes npm@11 install --package-lock-only' in apps/web-platform/ and commit the updated package-lock.json. (CI pins npm@11 — using a different npm version locally will produce a divergent lockfile shape.)"
             exit 1
           fi
+
+      # #5875 item 3 / ADR-079 — SDK-bump sandbox gate (BLOCKING). Asserts
+      # bun.lock↔package-lock parity for both @anthropic-ai SDK packages AND, on a
+      # resolved-version bump vs the base branch, requires an `sdk-bump-verified:`
+      # ack (a maintainer attests the committed seccomp profile was validated against
+      # the new SDK). Closes the #5849 "a routine SDK bump shipped green because
+      # nothing forced a look" class deterministically (no model turn / creds). The
+      # base comparison needs origin/main; the default checkout is depth-1, so fetch it.
+      - name: SDK-bump sandbox gate (lockfile parity + bump ack)
+        run: |
+          git fetch --no-tags --depth=1 origin main 2>/dev/null || true
+          bash apps/web-platform/scripts/sdk-bump-sandbox-gate.sh
+
+  # #5913 / ADR-079 deferral B — creds-gated canary CAPTURE gate. DARK-LAUNCH:
+  # NOT a required status check yet (do not add to branch protection until it has
+  # soaked — see ADR-079 amendment). It re-captures the SDK's real bwrap argv,
+  # canonically projects it, and byte-diffs the committed fixture (block on drift),
+  # ONLY on PRs that touch a capture input. Same-repo PRs only: fork PRs get no
+  # secrets → skipped (the capture check "passes"; section 2's bump-ack in
+  # lockfile-sync still applies to forks). Skips merge_group so it never stalls the
+  # queue. The --verify runs INSIDE the deploy base image (node:22-slim) via
+  # sandbox-canary-verify-in-image.sh — the capture-env==replay-env invariant
+  # (ADR-079 amendment): running the capture on the ubuntu-latest runner (which has
+  # /etc/ssh) would emit a host-conditional --tmpfs /etc/ssh token absent in the
+  # node:22-slim deploy image and byte-diff-fail the committed fixture. bwrap is
+  # REPLACED by an in-process PATH shim during capture (no real bubblewrap needed).
+  sandbox-canary-capture-gate:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Detect capture-input changes
+        id: trigger
+        run: |
+          git fetch --no-tags --depth=1 origin main 2>/dev/null || true
+          CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
+          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
+            echo "hit=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=0" >> "$GITHUB_OUTPUT"
+            echo "sandbox-canary-capture-gate: no capture-input change — skipping (nothing to re-verify)."
+          fi
+
+      # No node/bun/npm-ci on the runner: the --verify runs inside a node:22-slim
+      # container (the deploy base image) via the helper below, which does its own
+      # npm ci. The runner needs only docker (preinstalled) + git.
+      - name: Canary capture gate (in-image --verify drift + ack-fallback)
+        if: steps.trigger.outputs.hit == '1'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SANDBOX_CANARY_GATE_ENABLED: "1"
+          # --verify runs inside node:22-slim (deploy base) — see helper header.
+          SDK_GATE_VERIFY_CMD: bash apps/web-platform/scripts/sandbox-canary-verify-in-image.sh
+        run: |
+          git fetch --no-tags --depth=1 origin main 2>/dev/null || true
+          bash apps/web-platform/scripts/sdk-bump-sandbox-gate.sh
+
+  # plugin-root-propagation-verify-in-image.sh — the F2 runtime guarantee
+  # (Slice B / AC7a, #6121): proves CLAUDE_PLUGIN_ROOT (injected by buildAgentEnv)
+  # actually reaches the bwrap-SANDBOXED Bash env, so the deployed skills'
+  # `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` never silently falls back to the
+  # untrusted connected-repo copy on the server. Must run in the node:22-slim
+  # deploy base (with socat) — the SDK's claude-CLI → bwrap env projection is
+  # SDK-internal; a future `--clearenv` regression would break propagation and is
+  # caught here. Creds-gated (one paid Haiku turn); skipped when the injection
+  # inputs or the SDK are unchanged.
+  plugin-root-propagation-gate:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Detect propagation-input changes
+        id: trigger
+        run: |
+          git fetch --no-tags --depth=1 origin main 2>/dev/null || true
+          CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
+          # Trigger set = the probe's ACTUAL inputs: it imports buildAgentEnv
+          # (agent-env.ts) + buildAgentSandboxConfig (agent-runner-sandbox-config.ts)
+          # + the SDK (package-lock.json) + the probe itself. Deliberately NOT
+          # agent-runner-query-options.ts: the probe calls buildAgentEnv directly,
+          # so a query-options `pluginPath`-threading regression is invisible to it
+          # (covered by agent-runner-query-options.test.ts instead) — including it
+          # would burn a paid Haiku turn on a probe that cannot detect the change.
+          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-runner-sandbox-config\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)'; then
+            echo "hit=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=0" >> "$GITHUB_OUTPUT"
+            echo "plugin-root-propagation-gate: no propagation-input change — skipping."
+          fi
+
+      # Runs entirely inside node:22-slim (deploy base) via the helper, which does
+      # its own apt (socat) + npm ci. The runner needs only docker + git.
+      - name: CLAUDE_PLUGIN_ROOT sandbox-propagation (in-image, fail-closed)
+        if: steps.trigger.outputs.hit == '1'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          VERDICT_JSON="$(bash apps/web-platform/scripts/plugin-root-propagation-verify-in-image.sh | tail -1)"
+          echo "verdict: $VERDICT_JSON"
+          V="$(printf '%s' "$VERDICT_JSON" | sed -n 's/.*"verdict":"\([a-z_]*\)".*/\1/p')"
+          case "$V" in
+            propagates) echo "OK: CLAUDE_PLUGIN_ROOT reaches sandbox bash." ;;
+            infra_error) echo "::warning::propagation probe infra_error (creds/sandbox-engage) — not a regression signal." ;;
+            does_not_propagate) echo "::error::CLAUDE_PLUGIN_ROOT no longer reaches sandbox bash — deployed skills would run the untrusted ./plugins copy. See #6121 / ADR-093."; exit 1 ;;
+            *) echo "::error::unrecognized propagation verdict: $VERDICT_JSON"; exit 1 ;;
+          esac
 
   # next build runs the App Router route-file validator that vitest and `tsc --noEmit`
   # skip — catches non-HTTP exports from `app/**/route.{ts,tsx}` before merge instead
@@ -375,6 +552,28 @@ jobs:
         run: bash scripts/test-all.sh scripts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
+  # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.
+  grok-fidelity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Install Grok CLI
+        run: |
+          set -euo pipefail
+          curl -fsSL https://x.ai/cli/install.sh | bash
+          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
+          grok --version
+
+      - name: Grok fidelity gate (inspect contract + golden-path eval)
+        run: bash plugins/soleur/scripts/grok-fidelity-gate.sh
 
   # Synthetic aggregator.
   #

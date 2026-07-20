@@ -1,0 +1,386 @@
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+# Override justification (anchored on ADR-033's OWN carve-out, per architecture review —
+# substrate-independence is real but low-weight here, so it is NOT the load-bearing reason):
+#   (i) ADR-033 Invariant I7 + the 2026-06-02 scope note. The Inngest cron-containment hook
+#       governs only the claude-code TOOL layer, NOT Node-level `child_process.spawn("bash", …)`;
+#       a "spawn-bash cron" is I7's explicitly *uncontained/deferred* class. This alarm IS
+#       fundamentally a bash pipeline (`betterstack-query.sh` ClickHouse-SQL read + a shell decode +
+#       `gh issue`), so folding it into Inngest would either force a TS rewrite of the decode
+#       (forking the single decode source-of-truth in scripts/lib/zot-telemetry-parse.sh) OR land a
+#       `spawn("bash")` in I7's uncontained class. ADR-033 says GHA is *correct* for a
+#       credential-heavy infra cron that must stay in an ephemeral runner ("Do not mis-cite this
+#       rejection as a blanket ban").
+#   (ii) The signal is read via `betterstack-query.sh` (shell + creds) and fired via `gh issue` —
+#       both GH-Actions-native.
+#   (iii) Secondary/weak: substrate-independence from the Hetzner registry fleet (failure-correlation
+#       only — the registry is a SEPARATE host from Inngest, pulled only at deploy time, so this is
+#       NOT a true circular dependency like scheduled-inngest-health.yml's).
+# Structural precedent (probe → classify → dedup-issue → Sentry-heartbeat): scheduled-inngest-health.yml
+# / scheduled-realtime-probe.yml / scheduled-followthrough-sweeper.yml.
+#
+# WHAT THIS WATCHES (#6291). The self-hosted zot registry (ADR-096, deny-all / no-SSH Hetzner host)
+# can crash-loop in a way the disk-absence heartbeat `soleur-registry-disk-prd` is structurally
+# blind to (it pings ONLY while /var/lib/zot < 85%, so a disk-independent OOM restart-loop — the
+# #6288 failure mode — leaves the heartbeat GREEN). This workflow stands watch on the enriched
+# SOLEUR_ZOT_DISK self-report in Better Stack Logs (source 2457081) and, scoped to the newest
+# boot_id, fires when zot_restarts climbs across >= CLIMB_N consecutive events, or exit_code=137 is
+# seen, or oom_kills_5m > 0. On fire it opens/updates a deduped action-required GitHub issue with a
+# decoded cause; on recovery it auto-closes. Producer-silence (the reporter going dark while the
+# heartbeats stay GREEN) escalates its own [ci/zot-telemetry-silent] issue. The alarm's own liveness
+# is a Sentry cron monitor (apps/web-platform/infra/sentry/cron-monitors.tf) so a DARK alarm alerts.
+#
+# Security: all untrusted telemetry (the decoded cause / detail) flows through env vars +
+# strip_log_injection before any echo into ::error:: / $GITHUB_OUTPUT / an issue body. No
+# github.event.* inputs are consumed. The checker's exit code is DATA (captured to $GITHUB_OUTPUT) —
+# the step never `exit 1`s, so a FIRE/TRANSIENT never self-darks the final Sentry check-in.
+#
+# Closes #6291.
+
+name: "Scheduled: Zot Restart-Loop Recurrence Alarm"
+
+on:
+  schedule:
+    # 30-min cadence. Detection is WINDOW-bound, not poll-bound: the checker reads a 3h WINDOW
+    # against the reporter's 5-min emit (~36 events/boot >> CLIMB_N=3), so a loop is caught
+    # regardless of which tick sees it. 30 (over 20) keeps the Sentry self-liveness margin tolerant
+    # of GHA schedule: jitter (checkin_margin_minutes=30 in cron-monitors.tf).
+    - cron: '*/30 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: scheduled-zot-restart-loop
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  alarm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Run zot restart-loop checker
+        id: alarm
+        env:
+          # Reused GH Actions secrets (provisioned 2026-07-03, also consumed by
+          # scheduled-followthrough-sweeper.yml). If unset they resolve to "" and the checker is
+          # fail-safe TRANSIENT (never a false page) — the secrets are the invocation, not a gate.
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from scheduled-inngest-health.yml)
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+
+          # The checker exit code is DATA, not a job failure — capture it, never let it `exit 1` the
+          # step (a non-zero exit would skip the final if:always heartbeat's success path semantics
+          # and self-dark the liveness signal). Mirrors scheduled-inngest-health.yml.
+          out="$(bash scripts/zot-restart-loop-alarm.sh 2>&1)"; rc=$?
+          printf '%s\n' "$out"
+
+          verdict="$(printf '%s\n' "$out" | grep -oE 'ZOT_ALARM_VERDICT=[A-Z_]+' | head -1 | cut -d= -f2 || true)"
+          cause="$(printf '%s\n' "$out" | sed -n 's/^ZOT_ALARM_CAUSE=//p' | head -1)"
+          detail="$(printf '%s\n' "$out" | sed -n 's/^ZOT_ALARM_DETAIL=//p' | head -1)"
+
+          # The private-NIC stream (#6415) is an INDEPENDENT verdict, not encoded in $rc — see
+          # the checker's EXIT CONTRACT header. It rides every exit path, so it is readable even
+          # when the zot legs early-exit on a probe fault.
+          nic_verdict="$(printf '%s\n' "$out" | grep -oE 'NIC_ALARM_VERDICT=[A-Z_]+' | head -1 | cut -d= -f2 || true)"
+          nic_cause="$(printf '%s\n' "$out" | sed -n 's/^NIC_ALARM_CAUSE=//p' | head -1)"
+          nic_detail="$(printf '%s\n' "$out" | sed -n 's/^NIC_ALARM_DETAIL=//p' | head -1)"
+
+          verdict_safe="$(strip_log_injection "$verdict")"
+          cause_safe="$(strip_log_injection "$cause")"
+          detail_safe="$(strip_log_injection "$detail")"
+          nic_verdict_safe="$(strip_log_injection "$nic_verdict")"
+          nic_cause_safe="$(strip_log_injection "$nic_cause")"
+          nic_detail_safe="$(strip_log_injection "$nic_detail")"
+
+          {
+            echo "exit_code=${rc}"
+            echo "verdict=${verdict_safe}"
+            echo "cause=${cause_safe}"
+            echo "detail=${detail_safe}"
+            echo "nic_verdict=${nic_verdict_safe}"
+            echo "nic_cause=${nic_cause_safe}"
+            echo "nic_detail=${nic_detail_safe}"
+          } >> "$GITHUB_OUTPUT"
+
+          case "$rc" in
+            0) echo "::notice::zot restart-loop alarm GREEN — registry serving healthy." ;;
+            1) echo "::error::zot restart-loop alarm FIRE — ${cause_safe}" ;;
+            2) echo "::warning::zot restart-loop alarm TRANSIENT (probe fault / zero valid evidence) — ${detail_safe}. No issue filed; the errored Sentry check-in surfaces a persistent probe fault." ;;
+            3) echo "::error::zot telemetry PRODUCER-SILENT — ${detail_safe}" ;;
+            *) echo "::warning::zot restart-loop checker returned unexpected exit ${rc}: ${detail_safe}" ;;
+          esac
+
+          case "$nic_verdict_safe" in
+            GREEN)     echo "::notice::private-NIC GREEN — ${nic_detail_safe}" ;;
+            FIRE)      echo "::error::private-NIC alarm FIRE — ${nic_cause_safe}" ;;
+            ADVISORY)  echo "::warning::private-NIC self-heal observed — ${nic_cause_safe}" ;;
+            SILENT)    echo "::error::private-NIC guard went dark — ${nic_detail_safe}" ;;
+            *)         echo "::warning::private-NIC evaluation TRANSIENT — ${nic_detail_safe}. No issue filed." ;;
+          esac
+
+      - name: Open or comment recurrence issue (FIRE)
+        if: steps.alarm.outputs.exit_code == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CAUSE: ${{ steps.alarm.outputs.cause }}
+          DETAIL: ${{ steps.alarm.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
+          set -euo pipefail
+          ISSUE_TITLE="[ci/zot-restart-loop] Zot registry restart-loop recurrence detected"
+          ISSUE_SEARCH='in:title "[ci/zot-restart-loop] Zot registry restart-loop recurrence detected"'
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          gh label create "ci/zot-restart-loop" --repo "$GH_REPO" \
+            --description "Standing alarm: zot registry restart-loop recurrence (SOLEUR_ZOT_DISK)" --color "B60205" 2>/dev/null || true
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Zot registry restart-loop recurrence detected\n\n'
+            printf -- '- **Decoded cause:** %s\n' "$CAUSE"
+            printf -- '- **Detail:** %s\n' "$DETAIL"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### What fired\n\nScoped to the newest `boot_id`, ANY of: `exit_code=137` (OOM exit), `zot_restarts` climbing across >= 3 consecutive events (crash-loop signature), or `oom_kills_5m > 0` (journald kernel-OOM). The disk-absence heartbeat (`soleur-registry-disk-prd`) is blind to a disk-independent OOM loop — this alarm covers that gap (ADR-096, #6288/#6291).\n\n'
+            printf '### Decode table\n\n- `exit_code=137` AND `oom_kills_5m>0` -> host/kernel OOM (the box ran out of memory).\n- `oom_killed=true` -> the cgroup `--memory` cap contained it (container-scoped OOM). The cap is DERIVED from the server type and reported per-sample as `zot_memory_cap_mb` — read it from the event, do not assume 7168 (it is 3072 on a 4 GB host).\n- `exit_code!=137` (non-OOM) -> read the `zot_last_err` tail in the decoded cause above.\n\n'
+            printf '### Reproduce (no SSH)\n\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_DISK --limit 50\ndoppler run -p soleur -c prd_terraform -- bash scripts/zot-restart-loop-alarm.sh\n```\n\nRemediation context: the #6288 PR body OOM decode + `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`. Escalate host size or route off the OOM hypothesis per the decoded cause.\n'
+          } > "$BODY_FILE"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still looping at ${NOW} — ${CAUSE}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/zot-restart-loop" --label "action-required" --label "observability" --label "domain/engineering" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Open or comment producer-silence issue (PRODUCER-SILENT)
+        if: steps.alarm.outputs.exit_code == '3'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CAUSE: ${{ steps.alarm.outputs.cause }}
+          DETAIL: ${{ steps.alarm.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
+          set -euo pipefail
+          ISSUE_TITLE="[ci/zot-telemetry-silent] Zot SOLEUR_ZOT_DISK reporter went dark"
+          ISSUE_SEARCH='in:title "[ci/zot-telemetry-silent] Zot SOLEUR_ZOT_DISK reporter went dark"'
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          gh label create "ci/zot-telemetry-silent" --repo "$GH_REPO" \
+            --description "Standing alarm: the SOLEUR_ZOT_DISK reporter went dark while heartbeats stay GREEN" --color "D93F0B" 2>/dev/null || true
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Zot SOLEUR_ZOT_DISK reporter went dark\n\n'
+            printf -- '- **Detail:** %s\n' "$DETAIL"
+            printf -- '- **Likely cause:** %s\n' "$CAUSE"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### Why this pages\n\nBetter Stack is reachable and had `SOLEUR_ZOT_DISK` rows in the last 24h, but NONE in the recent 3h window. The token-gated reporter stopped while the token-free disk heartbeat (`soleur-registry-disk-prd`) AND this alarm'\''s Sentry monitor both stay GREEN — the exact GREEN-while-broken blind spot this alarm exists to kill, resurfacing one layer up. The restart-loop signal is now UNOBSERVABLE until the reporter is restored.\n\n'
+            printf '### Remediation (no SSH)\n\n1. Confirm the gap:\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_ZOT_DISK --limit 5\n```\n2. Most likely: `BETTERSTACK_LOGS_TOKEN` (isolated `soleur-registry/prd`) rotation/revocation or a Better Stack ingest outage. The reporter cron is wrapped in `doppler run --project soleur-registry --config prd` (cloud-init-registry.yml); a re-`registry-host-replace` re-injects the token. See `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`.\n'
+          } > "$BODY_FILE"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Reporter still dark at ${NOW} — ${DETAIL}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/zot-telemetry-silent" --label "action-required" --label "observability" --label "domain/engineering" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Open or comment private-NIC issue (NIC FIRE)
+        if: steps.alarm.outputs.nic_verdict == 'FIRE'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CAUSE: ${{ steps.alarm.outputs.nic_cause }}
+          DETAIL: ${{ steps.alarm.outputs.nic_detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
+          set -euo pipefail
+          ISSUE_TITLE="[ci/registry-private-nic] Registry host has no private NIC"
+          ISSUE_SEARCH='in:title "[ci/registry-private-nic] Registry host has no private NIC"'
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          gh label create "ci/registry-private-nic" --repo "$GH_REPO" \
+            --description "Standing alarm: the registry host's private NIC is absent (SOLEUR_PRIVATE_NIC)" --color "B60205" 2>/dev/null || true
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Registry host has no private NIC\n\n'
+            printf -- '- **Decoded cause:** %s\n' "$CAUSE"
+            printf -- '- **Detail:** %s\n' "$DETAIL"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### Why this matters\n\nThe host holds no `10.0.1.30`, so the fleet'"'"'s PRIMARY image-pull path is unreachable. Deploys still succeed via the ADR-096 GHCR atomic fallback — which is exactly why this is dangerous: it is invisible from the deploy pipeline. This is #6400, where the same state ran for ~14 days because a NIC-less host keeps public egress and every other signal stayed green.\n\n'
+            printf '### Decode table\n\n- `imds_rc!=0` -> H1: the metadata service was unreachable. The guard will NOT reboot without corroboration.\n- `imds_rc=0 && imds_nets=0` -> H2: the `hcloud_server_network` additive online-attach had not landed when the guest configured its network. Usually self-heals on a later tick.\n- `imds_nets>0 && converged_by!=already` -> the attach landed but the guest never configured it. If `reboot_count` is at the cap (2) the guard is out of budget: this is terminal.\n\n'
+            printf '### Reproduce (no SSH)\n\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_PRIVATE_NIC --limit 50\ndoppler run -p soleur -c prd_terraform -- bash scripts/zot-restart-loop-alarm.sh\n```\n\n'
+            printf '### Remediation (no SSH)\n\nThe host is ForceNew and has no SSH provisioner, so there is no in-place fix — re-dispatch. **Check the whole pull path FIRST:** in #6400 the GHCR fallback was ALSO degraded, which is what turned a registry outage into a total deploy outage, so firing the replace blind can leave the pull path with no source at all. Since #6512 a web reload can also survive on the host-local image cache (`registry=local-cache`, both registries dead) — a host silently on local-cache reads CLEAN on a ghcr-fallback-only check, so grep BOTH signals or you fire the replace blind on an already-doubly-degraded pull path.\n\n```\n# 1. Is the pull path healthy? (GHCR fallback OR local-cache reuse; sustained hits on EITHER = degraded => do NOT fire yet)\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep ghcr-fallback --grep local-cache --limit 20\n\n# 2. Only if step 1 is clean, re-provision (reason is a REQUIRED dispatch input):\ngh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f reason=\"private NIC absent (this issue)\"\n```\n\nSee ADR-115.\n'
+          } > "$BODY_FILE"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Private NIC still absent at ${NOW} — ${CAUSE}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/registry-private-nic" --label "action-required" --label "observability" --label "domain/engineering" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Open or comment private-NIC self-heal advisory (NIC ADVISORY)
+        if: steps.alarm.outputs.nic_verdict == 'ADVISORY'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CAUSE: ${{ steps.alarm.outputs.nic_cause }}
+          DETAIL: ${{ steps.alarm.outputs.nic_detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
+          set -euo pipefail
+          ISSUE_TITLE="[ci/registry-private-nic] Registry private-NIC boot race self-healed"
+          ISSUE_SEARCH='in:title "[ci/registry-private-nic] Registry private-NIC boot race self-healed"'
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          gh label create "ci/registry-private-nic" --repo "$GH_REPO" \
+            --description "Standing alarm: the registry host's private NIC is absent (SOLEUR_PRIVATE_NIC)" --color "B60205" 2>/dev/null || true
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Registry private-NIC boot race self-healed\n\n'
+            printf -- '- **What happened:** %s\n' "$CAUSE"
+            printf -- '- **Detail:** %s\n' "$DETAIL"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### Why this is filed at all (serving is FINE)\n\nA successful self-heal emits `nic_ok=true`, so the terminal alarm cannot see it. Without this advisory the boot race would self-heal silently forever and never be reported — a LOST ceiling, because today the race at least eventually surfaces as an outage (#6400). A production host rebooting itself is a STANDING signal, not a one-time post-merge read.\n\n'
+            printf '### What it confirms\n\nThis is the empirical H2 verdict: `hcloud_server_network` is an ADDITIVE ONLINE ATTACH that landed after the guest configured its network. No terraform ordering can fix that (the attach needs a created server, and a created server is already booting) — which is why the convergence lives on the host. See ADR-115.\n\n'
+            printf '### Action\n\nNone urgent. Triage: if `reboot_count` climbs toward the cap (2) across boots, the race is worsening and the bounded wait may need lengthening. Reproduce (no SSH):\n\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_PRIVATE_NIC --limit 50\n```\n'
+          } > "$BODY_FILE"
+          # CREATE-ONLY — deliberately NOT create-or-comment like the FIRE/SILENT steps.
+          # reboot_count lives on the ROOT DISK, so once a host self-heals it emits reboot_count>0
+          # on EVERY subsequent tick for the life of that instance. A create-or-comment shape would
+          # therefore post ~48 comments/day, forever, on an issue whose own body says "Action: None
+          # urgent" — and the operator would mute `ci/registry-private-nic`, which ALSO carries the
+          # terminal FIRE. The standing signal is the OPEN ISSUE, not a comment stream.
+          #
+          # Lifecycle: opens once per host instance that self-heals; the NIC-GREEN auto-close
+          # closes it when a replace gives the host a fresh root disk (=> reboot_count=0). That is
+          # the correct span for "this instance experienced the race".
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            echo "::notice::private-NIC self-heal advisory already open as #${EXISTING} — not commenting (create-only; the open issue IS the standing signal)."
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/registry-private-nic" --label "observability" --label "domain/engineering" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Open or comment private-NIC guard silence issue (NIC SILENT)
+        if: steps.alarm.outputs.nic_verdict == 'SILENT'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CAUSE: ${{ steps.alarm.outputs.nic_cause }}
+          DETAIL: ${{ steps.alarm.outputs.nic_detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search + backticked markdown are intentional
+          set -euo pipefail
+          ISSUE_TITLE="[ci/registry-private-nic] Private-NIC guard went dark"
+          ISSUE_SEARCH='in:title "[ci/registry-private-nic] Private-NIC guard went dark"'
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          gh label create "ci/registry-private-nic" --repo "$GH_REPO" \
+            --description "Standing alarm: the registry host's private NIC is absent (SOLEUR_PRIVATE_NIC)" --color "B60205" 2>/dev/null || true
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Private-NIC guard went dark\n\n'
+            printf -- '- **Detail:** %s\n' "$DETAIL"
+            printf -- '- **Likely cause:** %s\n' "$CAUSE"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### Why this pages\n\nBetter Stack is reachable and had `SOLEUR_PRIVATE_NIC` rows in the last 24h, but NONE in the recent 3h window. The private-NIC signal is now UNOBSERVABLE — the exact GREEN-while-broken blind spot #6415 exists to kill, resurfacing one layer up.\n\nThis is a DEDICATED absence probe. The `SOLEUR_ZOT_DISK` producer-silence branch cannot cover it: if the NIC guard dies while the disk heartbeat keeps emitting, that branch never even evaluates and the run reads GREEN.\n\n'
+            printf '### Remediation (no SSH)\n\n1. Confirm the gap:\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_PRIVATE_NIC --limit 5\n```\n2. Most likely: the guard was never deployed (the host predates #6415), or its install failed, or the `BETTERSTACK_LOGS_TOKEN` (isolated `soleur-registry/prd`) rotated. A re-dispatch re-injects the token and reinstalls the guard (`reason` is a REQUIRED input):\n```\ngh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f reason=\"private-NIC guard silent (this issue)\"\n```\nSee `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`.\n'
+          } > "$BODY_FILE"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Guard still dark at ${NOW} — ${DETAIL}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/registry-private-nic" --label "action-required" --label "observability" --label "domain/engineering" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Auto-close stale private-NIC issues (NIC GREEN)
+        if: steps.alarm.outputs.nic_verdict == 'GREEN'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search strings are intentional
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # Close EACH class with its OWN-title search — never a union search across the three
+          # titles (a union close-search would close the wrong issue; #5562 plan R5 / union-AC trap).
+          # Keyed on nic_verdict, NOT exit_code: zot and the NIC are independent verdicts, so a
+          # zot-GREEN run must never close a live NIC issue (and vice versa).
+          for T in \
+            '[ci/registry-private-nic] Registry host has no private NIC' \
+            '[ci/registry-private-nic] Registry private-NIC boot race self-healed' \
+            '[ci/registry-private-nic] Private-NIC guard went dark'; do
+            N=$(gh issue list --repo "$GH_REPO" --state open --search "in:title \"$T\"" --json number --jq '.[0].number // empty')
+            if [[ -n "$N" ]]; then
+              gh issue close "$N" --repo "$GH_REPO" --comment "Registry private NIC healthy again at ${NOW} (newest boot: nic_ok=true, converged_by=already, reboot_count=0). Run: ${RUN_URL}"
+            fi
+          done
+
+      - name: Auto-close stale issues (GREEN)
+        if: steps.alarm.outputs.exit_code == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search strings are intentional
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # Close EACH class with its OWN-title search — never a union search across the two titles
+          # (a union close-search would close the wrong issue; #5562 plan R5 / union-AC trap).
+          STALE_LOOP=$(gh issue list --repo "$GH_REPO" --state open \
+            --search 'in:title "[ci/zot-restart-loop] Zot registry restart-loop recurrence detected"' --json number --jq '.[0].number // empty')
+          if [[ -n "$STALE_LOOP" ]]; then
+            gh issue close "$STALE_LOOP" --repo "$GH_REPO" --comment "Zot registry serving healthy again at ${NOW} (newest boot flat, no OOM). Run: ${RUN_URL}"
+          fi
+          STALE_SILENT=$(gh issue list --repo "$GH_REPO" --state open \
+            --search 'in:title "[ci/zot-telemetry-silent] Zot SOLEUR_ZOT_DISK reporter went dark"' --json number --jq '.[0].number // empty')
+          if [[ -n "$STALE_SILENT" ]]; then
+            gh issue close "$STALE_SILENT" --repo "$GH_REPO" --comment "SOLEUR_ZOT_DISK reporting resumed at ${NOW} (fresh rows in the 3h window). Run: ${RUN_URL}"
+          fi
+
+      # TRANSIENT (exit_code == 2): intentionally NO issue step — a standing alarm that pages on its
+      # own query fault trains the operator to ignore it. The loud ::warning:: above + the errored
+      # Sentry check-in below surface a PERSISTENT probe fault as a monitor problem.
+
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-zot-restart-loop
+          # ok ONLY on GREEN(0)/FIRE(1)/PRODUCER-SILENT(3) — those are SUCCESSFUL evaluations that
+          # reached a verdict; error on TRANSIENT(2) so a persistent probe fault (and a MISSING run)
+          # alert. Fail-loud on ANY OTHER exit code too (an abnormal set -u/signal abort) — an
+          # unexpected exit must surface as a monitor problem, never be silently checked-in ok.
+          # A FIRE is NOT a monitor error — the recurrence issue is its surface.
+          status: ${{ (steps.alarm.outputs.exit_code == '0' || steps.alarm.outputs.exit_code == '1' || steps.alarm.outputs.exit_code == '3') && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

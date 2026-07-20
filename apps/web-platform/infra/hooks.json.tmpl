@@ -13,6 +13,39 @@
         "source": "payload",
         "name": "command",
         "envname": "SSH_ORIGINAL_COMMAND"
+      },
+      {
+        "source": "payload",
+        "name": "peers",
+        "envname": "SOLEUR_DEPLOY_PEERS"
+      }
+    ],
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hmac-sha256",
+        "secret": ${jsonencode(webhook_deploy_secret)},
+        "parameter": {
+          "source": "header",
+          "name": "X-Signature-256"
+        }
+      }
+    }
+  },
+  {
+    "id": "deploy-peer",
+    "execute-command": "/usr/local/bin/ci-deploy-wrapper.sh",
+    "command-working-directory": "/",
+    "include-command-output-in-response": false,
+    "success-http-response-code": 202,
+    "response-message": "Peer deploy initiated",
+    "http-methods": ["POST"],
+    "trigger-rule-mismatch-http-response-code": 403,
+    "__comment": "2-host deploy fan-out target (#5274 Phase 3, ADR-068). A receiving host forwards the deploy here over the private net. DELIBERATELY does NOT pass `peers` → SOLEUR_DEPLOY_PEERS is unset here → ci-deploy.sh does NOT re-fan (A->B must never trigger B->A). Same HMAC secret as /hooks/deploy — the forwarder re-signs the peer payload with the shared webhook_deploy_secret.",
+    "pass-environment-to-command": [
+      {
+        "source": "payload",
+        "name": "command",
+        "envname": "SSH_ORIGINAL_COMMAND"
       }
     ],
     "trigger-rule": {
@@ -29,25 +62,28 @@
   {
     "id": "infra-config",
     "execute-command": "/usr/local/bin/infra-config-apply.sh",
-    "command-working-directory": "/",
+    "command-working-directory": "/var/lock",
     "include-command-output-in-response": false,
     "success-http-response-code": 202,
     "response-message": "Infra config update initiated",
     "http-methods": ["POST"],
     "trigger-rule-mismatch-http-response-code": 403,
-    "pass-environment-to-command": [
-      { "source": "payload", "name": "ci_deploy_sh_b64", "envname": "CI_DEPLOY_SH_B64" },
-      { "source": "payload", "name": "ci_deploy_wrapper_sh_b64", "envname": "CI_DEPLOY_WRAPPER_SH_B64" },
-      { "source": "payload", "name": "webhook_service_b64", "envname": "WEBHOOK_SERVICE_B64" },
-      { "source": "payload", "name": "cat_deploy_state_sh_b64", "envname": "CAT_DEPLOY_STATE_SH_B64" },
-      { "source": "payload", "name": "canary_bundle_claim_check_sh_b64", "envname": "CANARY_BUNDLE_CLAIM_CHECK_SH_B64" },
-      { "source": "payload", "name": "hooks_json_b64", "envname": "HOOKS_JSON_B64" },
-      { "source": "payload", "name": "cat_infra_config_state_sh_b64", "envname": "CAT_INFRA_CONFIG_STATE_SH_B64" },
-      { "source": "payload", "name": "inngest_enumerate_reminders_sh_b64", "envname": "INNGEST_ENUMERATE_REMINDERS_SH_B64" },
-      { "source": "payload", "name": "inngest_rearm_reminders_sh_b64", "envname": "INNGEST_REARM_REMINDERS_SH_B64" },
-      { "source": "payload", "name": "inngest_wiped_volume_verify_sh_b64", "envname": "INNGEST_WIPED_VOLUME_VERIFY_SH_B64" },
-      { "source": "payload", "name": "cat_inngest_verify_state_sh_b64", "envname": "CAT_INNGEST_VERIFY_STATE_SH_B64" },
-      { "source": "payload", "name": "inngest_inventory_sh_b64", "envname": "INNGEST_INVENTORY_SH_B64" }
+    "pass-file-to-command": [
+      { "source": "payload", "name": "ci_deploy_sh_b64", "envname": "CI_DEPLOY_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "ci_deploy_wrapper_sh_b64", "envname": "CI_DEPLOY_WRAPPER_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "webhook_service_b64", "envname": "WEBHOOK_SERVICE_B64", "base64decode": true },
+      { "source": "payload", "name": "cat_deploy_state_sh_b64", "envname": "CAT_DEPLOY_STATE_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "canary_bundle_claim_check_sh_b64", "envname": "CANARY_BUNDLE_CLAIM_CHECK_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "hooks_json_b64", "envname": "HOOKS_JSON_B64", "base64decode": true },
+      { "source": "payload", "name": "cat_infra_config_state_sh_b64", "envname": "CAT_INFRA_CONFIG_STATE_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "inngest_enumerate_reminders_sh_b64", "envname": "INNGEST_ENUMERATE_REMINDERS_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "inngest_rearm_reminders_sh_b64", "envname": "INNGEST_REARM_REMINDERS_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "inngest_wiped_volume_verify_sh_b64", "envname": "INNGEST_WIPED_VOLUME_VERIFY_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "cat_inngest_verify_state_sh_b64", "envname": "CAT_INNGEST_VERIFY_STATE_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "inngest_inventory_sh_b64", "envname": "INNGEST_INVENTORY_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "git_lock_chardevice_sweep_sh_b64", "envname": "GIT_LOCK_CHARDEVICE_SWEEP_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "inngest_registry_probe_sh_b64", "envname": "INNGEST_REGISTRY_PROBE_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "inngest_doublefire_probe_sh_b64", "envname": "INNGEST_DOUBLEFIRE_PROBE_SH_B64", "base64decode": true }
     ],
     "trigger-rule": {
       "match": {
@@ -104,6 +140,29 @@
     "include-command-output-in-response-on-error": true,
     "http-methods": ["GET"],
     "trigger-rule-mismatch-http-response-code": 403,
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hmac-sha256",
+        "secret": ${jsonencode(webhook_deploy_secret)},
+        "parameter": {
+          "source": "header",
+          "name": "X-Signature-256"
+        }
+      }
+    }
+  },
+  {
+    "id": "inngest-liveness",
+    "__comment": "#6374 Defect 2: the EXTERNAL inngest health watchdog's lightweight liveness probe. Runs the ALREADY-STAGED inngest-inventory.sh in INVENTORY_LIVENESS_ONLY mode (static-string env source) so it executes ONLY the cheap /v0/gql functions query + durability_state and SKIPS the heavy 365-day eventsV2 scan whose faults false-positived as inngest_down (the #6374 root cause). Same script as /hooks/inngest-inventory — no new FILE_MAP row / push-infra-config payload / vector.toml tag (the inngest-inventory journald tag already covers it). include-command-output-in-response-on-error surfaces the FATAL body on a real down so the watchdog can classify inngest_down vs a broken/undeployed probe (404/000).",
+    "execute-command": "/usr/local/bin/inngest-inventory.sh",
+    "command-working-directory": "/",
+    "include-command-output-in-response": true,
+    "include-command-output-in-response-on-error": true,
+    "http-methods": ["GET"],
+    "trigger-rule-mismatch-http-response-code": 403,
+    "pass-environment-to-command": [
+      { "source": "string", "name": "1", "envname": "INVENTORY_LIVENESS_ONLY" }
+    ],
     "trigger-rule": {
       "match": {
         "type": "payload-hmac-sha256",
@@ -181,6 +240,44 @@
     "execute-command": "/usr/local/bin/cat-inngest-verify-state.sh",
     "command-working-directory": "/",
     "include-command-output-in-response": true,
+    "http-methods": ["GET"],
+    "trigger-rule-mismatch-http-response-code": 403,
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hmac-sha256",
+        "secret": ${jsonencode(webhook_deploy_secret)},
+        "parameter": {
+          "source": "header",
+          "name": "X-Signature-256"
+        }
+      }
+    }
+  },
+  {
+    "id": "inngest-registry-probe",
+    "execute-command": "/usr/local/bin/inngest-registry-probe.sh",
+    "command-working-directory": "/",
+    "include-command-output-in-response": true,
+    "include-command-output-in-response-on-error": true,
+    "http-methods": ["GET"],
+    "trigger-rule-mismatch-http-response-code": 403,
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hmac-sha256",
+        "secret": ${jsonencode(webhook_deploy_secret)},
+        "parameter": {
+          "source": "header",
+          "name": "X-Signature-256"
+        }
+      }
+    }
+  },
+  {
+    "id": "inngest-doublefire-probe",
+    "execute-command": "/usr/local/bin/inngest-doublefire-probe.sh",
+    "command-working-directory": "/",
+    "include-command-output-in-response": true,
+    "include-command-output-in-response-on-error": true,
     "http-methods": ["GET"],
     "trigger-rule-mismatch-http-response-code": 403,
     "trigger-rule": {

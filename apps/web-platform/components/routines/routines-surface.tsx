@@ -15,6 +15,10 @@ import useSWR from "swr";
 
 import { ChatSurface } from "@/components/chat/chat-surface";
 import { swrKeys } from "@/lib/swr-config";
+import {
+  ROUTINE_DRAFT_TAB_EVENT,
+  type RoutineDraftTabEventDetail,
+} from "./routine-draft-tab-event";
 
 // Delay before the single post-trigger reconciliation refetch that swaps the
 // optimistic "running" row for the real terminal routine_runs row.
@@ -45,6 +49,17 @@ interface RecentRun extends RunSummary {
   // actor_class is a coarse enum (system | human | agent).
   run_id: string | null;
   actor_class: string;
+}
+// #5766 — an in-flight heavy-cron run (routine_run_progress). status is
+// reader-computed (running | stuck); `resumed` is a badge overlay (attempt > 1).
+interface LiveRun {
+  id: string;
+  routine_id: string;
+  run_id: string;
+  status: "running" | "stuck";
+  resumed: boolean;
+  started_at: string;
+  last_heartbeat_at: string;
 }
 
 // ADR-067: shared fetcher for the routines list — RoutinesTab and the Recent
@@ -108,6 +123,12 @@ const STATUS_COLOR: Record<string, string> = {
   completed: "text-green-400",
   failed: "text-red-400",
   running: "text-blue-400",
+  // #5766 — stuck (evicted, stale heartbeat) is deliberately DISTINCT from
+  // running (amber vs blue) so a dead run never reads as healthy. `never` is
+  // listed explicitly (self-documenting) though its value equals the muted
+  // fallback below — a marker that "Never" is an intended status, not unknown.
+  stuck: "text-amber-400",
+  never: "text-soleur-text-muted",
 };
 
 function StatusPill({ status }: { status: string }) {
@@ -122,6 +143,21 @@ function StatusPill({ status }: { status: string }) {
 
 export function RoutinesSurface() {
   const [tab, setTab] = useState<"routines" | "runs" | "draft">("routines");
+
+  // The guided tour switches to the "Draft a routine" tab to spotlight the
+  // creation composer, then switches back on leave. Driven by a window event
+  // (same decoupled pattern as the rail expand / New Issue dialog) — inert when
+  // no tour is running.
+  useEffect(() => {
+    function onTourToggle(e: Event) {
+      const detail = (e as CustomEvent<RoutineDraftTabEventDetail>).detail;
+      setTab(detail?.open ? "draft" : "routines");
+    }
+    window.addEventListener(ROUTINE_DRAFT_TAB_EVENT, onTourToggle);
+    return () =>
+      window.removeEventListener(ROUTINE_DRAFT_TAB_EVENT, onTourToggle);
+  }, []);
+
   return (
     <div>
       <div
@@ -138,6 +174,7 @@ export function RoutinesSurface() {
           role="tab"
           aria-selected={tab === "draft"}
           onClick={() => setTab("draft")}
+          data-tour-id="action:draft-routine"
           className={`-mb-px ml-auto self-center border-b-2 pb-2 text-sm ${
             tab === "draft"
               ? "border-soleur-text-primary text-soleur-text-primary"
@@ -241,7 +278,7 @@ function DraftRoutineTab() {
           the PR; it goes live on merge + deploy.
         </p>
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1" data-tour-id="action:draft-routine-composer">
         <ChatSurface
           variant="sidebar"
           conversationId="new"
@@ -569,6 +606,8 @@ function RunLogView({
 }) {
   const [filters, setFilters] = useState<RunFilters>(EMPTY_FILTERS);
   const [runs, setRuns] = useState<RecentRun[]>([]);
+  // #5766 — in-flight live rows (first page only; not paginated).
+  const [live, setLive] = useState<LiveRun[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -616,9 +655,12 @@ function RunLogView({
         const json = (await res.json()) as {
           runs: RecentRun[];
           nextCursor: string | null;
+          live?: LiveRun[];
         };
         setError(null);
         setRuns((prev) => (reset ? json.runs : [...prev, ...json.runs]));
+        // Live rows exist only on the first page (reset); pagination keeps them.
+        if (reset) setLive(json.live ?? []);
         setCursor(json.nextCursor);
       } catch {
         setError("Failed to load runs");
@@ -665,7 +707,7 @@ function RunLogView({
             Retry
           </button>
         </div>
-      ) : loaded && runs.length === 0 ? (
+      ) : loaded && runs.length === 0 && live.length === 0 ? (
         <div className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-8 text-center text-sm text-soleur-text-muted">
           {hasActiveFilters
             ? "No runs match these filters."
@@ -686,6 +728,15 @@ function RunLogView({
               </tr>
             </thead>
             <tbody>
+              {/* #5766 — in-flight live rows sit at the top (newest); terminal
+                  history follows. */}
+              {live.map((l) => (
+                <LiveRunRow
+                  key={l.id}
+                  live={l}
+                  showRoutine={!fixedRoutineId}
+                />
+              ))}
               {runs.map((r) => (
                 <RecentRunRow
                   key={r.id}
@@ -843,6 +894,56 @@ function RecentRunRow({
         {formatDuration(run.duration_ms)}
       </td>
       <td className="py-2 text-soleur-text-muted">{run.trigger_source}</td>
+    </tr>
+  );
+}
+
+// #5766 — an in-flight (live) run row. Rendered above the terminal history in
+// Recent Runs. `resumed` shows as a badge OVERLAY (not a mutually-exclusive
+// status): a resumed run is still running/stuck. The heartbeat freshness (from
+// last_heartbeat_at) is what distinguishes a healthy long run from a stuck one.
+function LiveRunRow({
+  live,
+  showRoutine,
+}: {
+  live: LiveRun;
+  showRoutine: boolean;
+}) {
+  const heartbeat = relativeTime(live.last_heartbeat_at);
+  return (
+    <tr
+      className="border-b border-soleur-border-default"
+      data-testid={`live-run-row-${live.id}`}
+      data-status={live.status}
+    >
+      {showRoutine && (
+        <td className="py-2 text-soleur-text-primary">
+          {humanizeFnId(live.routine_id)}
+        </td>
+      )}
+      <td className="py-2">
+        <span className="inline-flex items-center gap-2">
+          <StatusPill status={live.status} />
+          {live.resumed && (
+            <span
+              data-testid={`resumed-badge-${live.id}`}
+              className="inline-flex items-center rounded-full border border-amber-400/40 px-1.5 text-[10px] uppercase tracking-wide text-amber-300"
+              title="Resumed after an interruption — completed steps were not re-run"
+            >
+              Resumed
+            </span>
+          )}
+        </span>
+      </td>
+      <td className="py-2 font-mono text-soleur-text-muted">
+        {relativeTime(live.started_at)}
+      </td>
+      <td className="py-2 text-soleur-text-muted">
+        {live.status === "stuck"
+          ? `no heartbeat · ${heartbeat}`
+          : `running · updated ${heartbeat}`}
+      </td>
+      <td className="py-2 text-soleur-text-muted">—</td>
     </tr>
   );
 }

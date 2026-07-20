@@ -19,7 +19,11 @@
 // shape, ignoring divergent per-call overrides (mcpServers,
 // allowedTools, maxTurns, maxBudgetUsd).
 
-import { describe, it, expect, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { buildAgentSandboxConfig } from "@/server/agent-runner-sandbox-config";
 
@@ -31,95 +35,156 @@ vi.mock("@/server/sandbox-hook", () => ({
 }));
 
 import { buildAgentQueryOptions } from "@/server/agent-runner-query-options";
+import { resolveWorkspaceMode } from "@/server/workspace-mode";
 
+// The filesystem `denyRead` is now computed per-dispatch from a live
+// `readdirSync(WORKSPACES_ROOT)` (per-sibling deny — #5733 follow-up, PR
+// #5848's `allowRead` re-bind made the workspace read-only). These tests
+// stub `WORKSPACES_ROOT` to a real temp fixture (own + two siblings) so the
+// enumeration is deterministic. Focused enumerator unit + fail-closed tests
+// live in `agent-sandbox-sibling-deny.test.ts`.
 describe("buildAgentSandboxConfig drift guard", () => {
-  it("matches the canonical inline shape verbatim (T17)", () => {
-    const workspacePath = "/tmp/test-workspace";
-    const result = buildAgentSandboxConfig(workspacePath);
+  let root: string;
+  let own: string;
+  let sibA: string;
+  let sibB: string;
 
-    // Verbatim copy of the literal that lived at the prior
-    // `agent-runner.ts` `query({ options: { sandbox: ... } })` call site.
-    // A field drop in the helper trips this assertion.
-    expect(result).toEqual({
-      enabled: true,
-      failIfUnavailable: true,
-      autoAllowBashIfSandboxed: true,
-      allowUnsandboxedCommands: false,
-      enableWeakerNestedSandbox: true,
-      network: {
-        allowedDomains: [],
-        allowManagedDomainsOnly: true,
-      },
-      filesystem: {
-        allowWrite: [workspacePath],
-        denyRead: ["/workspaces", "/proc"],
-      },
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "sbx-drift-"));
+    own = join(root, "00000000-0000-0000-0000-000000000001");
+    sibA = join(root, "00000000-0000-0000-0000-0000000000a1");
+    sibB = join(root, "00000000-0000-0000-0000-0000000000b2");
+    mkdirSync(own);
+    mkdirSync(sibA);
+    mkdirSync(sibB);
+    vi.stubEnv("WORKSPACES_ROOT", root);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("matches the canonical non-filesystem shape verbatim (T17)", () => {
+    const result = buildAgentSandboxConfig(own);
+    // Non-filesystem fields are static and must stay byte-identical.
+    expect(result.enabled).toBe(true);
+    expect(result.failIfUnavailable).toBe(true);
+    expect(result.autoAllowBashIfSandboxed).toBe(true);
+    expect(result.allowUnsandboxedCommands).toBe(false);
+    expect(result.enableWeakerNestedSandbox).toBe(true);
+    expect(result.network).toEqual({
+      allowedDomains: [],
+      allowManagedDomainsOnly: true,
     });
+    // filesystem: write own; deny every sibling + /proc; NO allowRead key.
+    expect(result.filesystem.allowWrite).toEqual([own]);
+    expect(result.filesystem).not.toHaveProperty("allowRead");
+    // EXACT set (order-independent): denyRead must be precisely the two
+    // siblings + /proc. `arrayContaining` would let a stray/extra entry or a
+    // silently-widened deny set slip through the guard — and denyRead is now
+    // the sole bwrap-level cross-tenant guard, so an unexpected member is
+    // exactly what this must fail on.
+    expect([...result.filesystem.denyRead].sort()).toEqual(
+      [sibA, sibB, "/proc"].sort(),
+    );
   });
 
   it("threads the workspacePath into filesystem.allowWrite (per-user write isolation)", () => {
-    const result = buildAgentSandboxConfig("/workspaces/alice");
-    expect(result.filesystem.allowWrite).toEqual(["/workspaces/alice"]);
+    const result = buildAgentSandboxConfig(own);
+    expect(result.filesystem.allowWrite).toEqual([own]);
   });
 
-  it("filesystem.denyRead is constant across workspaces", () => {
-    const a = buildAgentSandboxConfig("/workspaces/alice");
-    const b = buildAgentSandboxConfig("/workspaces/bob");
-    expect(a.filesystem.denyRead).toEqual(b.filesystem.denyRead);
-    expect(a.filesystem.denyRead).toEqual(["/workspaces", "/proc"]);
+  // #5733 core fix: the agent's OWN workspace must be READ+WRITE, so it must
+  // NOT appear in denyRead (a broad `/workspaces` deny `--tmpfs`-obscures it,
+  // and the SDK's only post-tmpfs re-allow — `allowRead` — is read-only and
+  // shadows the write bind; PR #5848 shipped exactly that read-only regression).
+  it("does NOT deny the agent's own workspace (own stays read+write)", () => {
+    const result = buildAgentSandboxConfig(own);
+    expect(result.filesystem.denyRead).not.toContain(own);
+    expect(result.filesystem.allowWrite).toContain(own);
+    // No allowRead re-bind — it is the read-only shadow that broke writes.
+    expect(result.filesystem).not.toHaveProperty("allowRead");
+  });
+
+  // Security invariant: every OTHER tenant workspace is denied. A broad-only
+  // deny (or a missing sibling) would let the agent `cat` a sibling's repo via
+  // Bash (the runtime `createSandboxHook` containment covers file-tools, NOT
+  // Bash — so bwrap denyRead is the sole guard for that vector).
+  it("denies every sibling workspace + /proc (cross-tenant isolation)", () => {
+    const result = buildAgentSandboxConfig(own);
+    expect(result.filesystem.denyRead).toContain(sibA);
+    expect(result.filesystem.denyRead).toContain(sibB);
+    expect(result.filesystem.denyRead).toContain("/proc");
+  });
+
+  it("denyRead tracks the live sibling set (per-dispatch, not constant)", () => {
+    const a = buildAgentSandboxConfig(own);
+    // A new tenant appears before the next dispatch → it must be denied too.
+    const sibC = join(root, "00000000-0000-0000-0000-0000000000c3");
+    mkdirSync(sibC);
+    const b = buildAgentSandboxConfig(own);
+    expect(a.filesystem.denyRead).not.toContain(sibC);
+    expect(b.filesystem.denyRead).toContain(sibC);
   });
 
   it("network is locked down — no allowed domains, managed-only", () => {
-    const result = buildAgentSandboxConfig("/tmp/x");
+    const result = buildAgentSandboxConfig(own);
     expect(result.network.allowedDomains).toEqual([]);
     expect(result.network.allowManagedDomainsOnly).toBe(true);
   });
 });
 
 describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", () => {
-  it("allowGithubEgress: true → exact-host GitHub allowlist, all other fields canonical", () => {
-    const workspacePath = "/tmp/test-workspace";
-    const result = buildAgentSandboxConfig(workspacePath, {
-      allowGithubEgress: true,
-    });
+  let root: string;
+  let own: string;
+  let sibA: string;
 
-    // Canonical-literal style (same as T17): every non-network field must
-    // stay byte-identical to the locked-down profile — egress widens the
-    // domain allowlist and NOTHING else.
-    expect(result).toEqual({
-      enabled: true,
-      failIfUnavailable: true,
-      autoAllowBashIfSandboxed: true,
-      allowUnsandboxedCommands: false,
-      enableWeakerNestedSandbox: true,
-      network: {
-        allowedDomains: ["github.com", "api.github.com"],
-        allowManagedDomainsOnly: true,
-      },
-      filesystem: {
-        allowWrite: [workspacePath],
-        denyRead: ["/workspaces", "/proc"],
-      },
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "sbx-egress-"));
+    own = join(root, "00000000-0000-0000-0000-000000000001");
+    sibA = join(root, "00000000-0000-0000-0000-0000000000a1");
+    mkdirSync(own);
+    mkdirSync(sibA);
+    vi.stubEnv("WORKSPACES_ROOT", root);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("allowGithubEgress: true → exact-host GitHub allowlist; egress widens NOTHING else", () => {
+    const result = buildAgentSandboxConfig(own, { allowGithubEgress: true });
+    expect(result.network).toEqual({
+      allowedDomains: ["github.com", "api.github.com"],
+      allowManagedDomainsOnly: true,
     });
+    // Filesystem is unchanged by the egress flag.
+    expect(result.filesystem.allowWrite).toEqual([own]);
+    expect(result.filesystem).not.toHaveProperty("allowRead");
+    // EXACT set (order-independent) — see the T17 guard rationale above.
+    expect([...result.filesystem.denyRead].sort()).toEqual(
+      [sibA, "/proc"].sort(),
+    );
   });
 
   it("allowGithubEgress: false → locked down, identical to the default call", () => {
-    const explicit = buildAgentSandboxConfig("/tmp/x", {
-      allowGithubEgress: false,
-    });
+    const explicit = buildAgentSandboxConfig(own, { allowGithubEgress: false });
     expect(explicit.network.allowedDomains).toEqual([]);
-    expect(explicit).toEqual(buildAgentSandboxConfig("/tmp/x"));
+    expect(explicit).toEqual(buildAgentSandboxConfig(own));
   });
 
   it("returns a fresh allowedDomains array per call (frozen const must not leak)", () => {
-    const a = buildAgentSandboxConfig("/tmp/x", { allowGithubEgress: true });
-    const b = buildAgentSandboxConfig("/tmp/x", { allowGithubEgress: true });
+    const a = buildAgentSandboxConfig(own, { allowGithubEgress: true });
+    const b = buildAgentSandboxConfig(own, { allowGithubEgress: true });
     expect(a.network.allowedDomains).not.toBe(b.network.allowedDomains);
   });
 });
 
 describe("buildAgentQueryOptions drift guard (legacy ↔ cc — #2922)", () => {
   const baseArgs = {
+    mode: resolveWorkspaceMode("command_center"),
     workspacePath: "/tmp/test-workspace",
     pluginPath: "/tmp/test-workspace/plugins/soleur",
     credential: { value: "sk-test", scheme: "api_key" as const },

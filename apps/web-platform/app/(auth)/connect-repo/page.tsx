@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 
 import { safeReturnTo } from "@/lib/safe-return-to";
 import type { Repo, SetupStep } from "@/components/connect-repo/types";
@@ -50,7 +50,6 @@ const SETUP_STEPS_TEMPLATE: SetupStep[] = [
 // Main Page Component
 // ---------------------------------------------------------------------------
 export default function ConnectRepoPage() {
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const [state, setState] = useState<State>(() => {
@@ -70,6 +69,12 @@ export default function ConnectRepoPage() {
   const [setupSteps, setSetupSteps] = useState<SetupStep[]>(SETUP_STEPS_TEMPLATE);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [setupErrorCode, setSetupErrorCode] = useState<string | null>(null);
+  // feat-repo-connect-block-offer-join: the caller's OWN workspace id, surfaced
+  // only on the switch outcome (409 workspace_switch_required) so FailedState's
+  // switch CTA can call set_current_workspace_id.
+  const [existingWorkspaceId, setExistingWorkspaceId] = useState<string | null>(
+    null,
+  );
   const [healthSnapshot, setHealthSnapshot] = useState<ProjectHealthSnapshot | null>(null);
   const [syncConversationId, setSyncConversationId] = useState<string | null>(null);
   const [pendingCreate, setPendingCreate] = useState<{
@@ -120,7 +125,10 @@ export default function ConnectRepoPage() {
         if (statusRes.ok) {
           const statusData = await statusRes.json();
           if (statusData.status === "ready") {
-            router.push("/dashboard");
+            // GAP E (ADR-067 staleTimes): hard-nav into /dashboard so the App
+            // Router Router Cache is wiped — a soft push could serve a prior
+            // principal's warm RSC shell on this device.
+            window.location.assign("/dashboard");
             return;
           }
         }
@@ -208,7 +216,8 @@ export default function ConnectRepoPage() {
             if (statusRes.ok) {
               const statusData = await statusRes.json();
               if (statusData.status === "ready") {
-                router.push("/dashboard");
+                // GAP E (ADR-067 staleTimes): hard-nav wipes the Router Cache.
+                window.location.assign("/dashboard");
                 return;
               }
             }
@@ -340,6 +349,10 @@ export default function ConnectRepoPage() {
           if (stepTimerRef.current) clearInterval(stepTimerRef.current);
           const data = await res.json().catch(() => null);
           setSetupError(data?.error ?? "Failed to start project setup");
+          // Connect-time block (409): `code` selects the switch/decline copy in
+          // FailedState; `existingWorkspaceId` (switch only) drives its CTA.
+          setSetupErrorCode(data?.code ?? null);
+          setExistingWorkspaceId(data?.existingWorkspaceId ?? null);
           setState("failed");
           return;
         }
@@ -472,7 +485,9 @@ export default function ConnectRepoPage() {
       // Also check URL param directly (no GitHub redirect happened)
       returnPath = safeReturnTo(searchParams.get("return_to")) ?? "/dashboard";
     }
-    router.push(returnPath);
+    // GAP E (ADR-067 staleTimes): terminal entry into /dashboard (or a
+    // safeReturnTo-sanitized invite target) — hard-nav to wipe the Router Cache.
+    window.location.assign(returnPath);
   }
 
   async function handleCreateSubmit(name: string, isPrivate: boolean) {
@@ -579,6 +594,7 @@ export default function ConnectRepoPage() {
   function handleRetry() {
     setSetupError(null);
     setSetupErrorCode(null);
+    setExistingWorkspaceId(null);
     setState("choose");
   }
 
@@ -598,11 +614,13 @@ export default function ConnectRepoPage() {
     try {
       sessionStorage.removeItem("soleur_create_flow");
     } catch { /* sessionStorage unavailable */ }
-    router.push(consumeReturnTo());
+    // GAP E (ADR-067 staleTimes): terminal entry into /dashboard — hard-nav.
+    window.location.assign(consumeReturnTo());
   }
 
   function handleViewKb() {
-    router.push("/dashboard/kb");
+    // GAP E (ADR-067 staleTimes): terminal entry into /dashboard/kb — hard-nav.
+    window.location.assign("/dashboard/kb");
   }
 
   // ---------------------------------------------------------------------------
@@ -676,6 +694,7 @@ export default function ConnectRepoPage() {
             onRetry={handleRetry}
             errorMessage={setupError}
             errorCode={setupErrorCode}
+            existingWorkspaceId={existingWorkspaceId}
           />
         )}
         {state === "interrupted" && (

@@ -31,8 +31,8 @@
 #     delivers the handler + the infra-config-install escalation helper + the
 #     sudoers grant, which the webhook path cannot self-deliver (chicken-and-egg,
 #     #4811). The GitHub-hosted runner's egress IP is not in var.admin_ips, so this
-#     job bridges SSH through the existing CF Tunnel SSH route (tunnel.tf:
-#     ssh://localhost:22 ingress + CF Access ci_ssh service token): install
+#     job bridges SSH through the existing CF Tunnel SSH route (tunnel.tf's `ssh.`
+#     ingress, origin-relative to web-1 since #6594 + CF Access ci_ssh service token): install
 #     cloudflared, open a `cloudflared access tcp` localhost forward, and add an
 #     `iptables -t nat OUTPUT REDIRECT` rule rewriting SERVER_IP:22 → 127.0.0.1:2222
 #     (transparent to terraform's Go SSH client, which ignores ~/.ssh/config —
@@ -87,6 +87,31 @@ on:
       - "apps/web-platform/infra/inngest-wiped-volume-verify.sh"
       - "apps/web-platform/infra/cat-inngest-verify-state.sh"
       - "apps/web-platform/infra/inngest-inventory.sh"
+      - "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
+      # #6178 — the two web-host Inngest cutover probes are webhook-delivered AND
+      # registered in server.tf's deploy_pipeline_fix triggers_replace hash, so a
+      # body-only edit to either must fire this apply. Kept in sync with
+      # TRIGGER_FILES by ship-deploy-pipeline-fix-gate.test.ts.
+      - "apps/web-platform/infra/inngest-registry-probe.sh"
+      - "apps/web-platform/infra/inngest-doublefire-probe.sh"
+      # #5873 — the container seccomp profile is delivered by the
+      # docker_seccomp_config SSH provisioner (server.tf), whose triggers_replace
+      # hashes this file. A profile-only edit must fire this apply so the new
+      # profile reaches /etc/docker/seccomp-profiles/soleur-bwrap.json on the
+      # host. NOTE: the RUNNING container only loads a new seccomp profile at
+      # `docker run` (container start), so a redeploy is required AFTER this apply
+      # for a profile change to take effect — sequence apply→redeploy explicitly
+      # (do not rely on the concurrent web-platform-release run winning the race).
+      - "apps/web-platform/infra/seccomp-bwrap.json"
+      # #5875 apply-parity — the container apparmor profile is delivered by the
+      # apparmor_bwrap_profile SSH provisioner (server.tf), whose triggers_replace
+      # hashes this file. Before #5875 it was in deploy_pipeline_fix's depends_on
+      # but NOT co-`-target`ed here nor in this paths filter, so an apparmor-only
+      # edit did not auto-apply at all (identical gap to the #5873 seccomp case).
+      # The RUNNING container only loads a new --security-opt apparmor at
+      # `docker run`, so the sequenced apply→redeploy below applies to it too.
+      # Kept in sync with the #5505 paths-union test in ship-deploy-pipeline-fix-gate.ts.
+      - "apps/web-platform/infra/apparmor-soleur-bwrap.profile"
       - "apps/web-platform/infra/server.tf"
   workflow_dispatch:
     inputs:
@@ -159,7 +184,24 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Shared cross-pipeline web-1-swap mutex (#6060 item (c); ADR-068 amendment):
+    # the "Redeploy to load applied profile" step below POSTs `deploy web-platform`
+    # to /hooks/deploy → swaps web-1, so this job shares the `web-1-swap` group with
+    # the release deploy / web_2_recreate / warm_standby — at most one web-1 swap in
+    # flight at a time. Job-level group COEXISTS with (does not replace) the
+    # workflow-level R2 serializer above. `cancel-in-progress: false`: never kill an
+    # in-progress swap or terraform apply.
+    concurrency:
+      group: web-1-swap
+      cancel-in-progress: false
+    # 90 min (was 15) because the #5875 item-4 "Redeploy to load applied profile"
+    # step below can trigger ONE graceful ci-deploy.sh swap, which inherits the
+    # ADR-078 cron drain (CRON_DRAIN_TIMEOUT=4200s ≈ 70 min worst case). This is a
+    # CEILING, not a duration: the redeploy only fires when the running container's
+    # loaded seccomp profile differs from committed (a rare profile change), so a
+    # routine script/server.tf-only apply skips the swap and finishes in minutes.
+    # Matches web-platform-release.yml's deploy job (also 90).
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -229,8 +271,46 @@ jobs:
           doppler run --name-transformer tf-var -- \
             terraform plan -target=terraform_data.deploy_pipeline_fix \
             -target=terraform_data.infra_config_handler_bootstrap \
+            -target=terraform_data.docker_seccomp_config \
+            -target=terraform_data.apparmor_bwrap_profile \
             -var="ssh_key_path=${CI_SSH_PUB}" \
-            -no-color -input=false
+            -no-color -input=false -out=tfplan
+
+          # host_creates HALT (#6718). All four -targets reference
+          # hcloud_server.web["web-1"] (server.tf: server_id / connection host), and
+          # `-target` is TRANSITIVE at the resource level, so hcloud_server.web
+          # ["web-1"] and hcloud_volume.workspaces["web-1"] sit in THIS plan's graph
+          # too. This workflow passes no -var image_name, so a transitive web-1 birth
+          # here boots the mutable ghcr.io/...:latest default while cloud-init
+          # re-verifies host_scripts_content_hash under `set -e` — a mismatch aborts
+          # the entire runcmd at stage=verify, once per instance, unrepairable by
+          # reboot. Identical composition to the sibling jobs in
+          # apply-web-platform-infra.yml, and this workflow fires on push:main.
+          #
+          # Added by #6725's review: the PR that guarded warm_standby asserted "no
+          # automated path can birth a web host" WITHOUT enumerating this workflow.
+          # The claim was false until this block landed. Same shared filter, no
+          # second detector.
+          #
+          # The ^[0-9]+$ validation is LOAD-BEARING: `jq -r` on a missing key yields
+          # the STRING "null", and [[ "null" -gt 0 ]] resolves an unset name to 0 and
+          # PASSES. Without host_creates in that line the guard fails OPEN.
+          counts=$(terraform show -json tfplan | \
+            jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq")
+          host_creates=$(echo "$counts" | jq -r '.host_creates')
+          if [[ ! "$host_creates" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (host_creates='${host_creates}'). The shared jq filter did not emit that key; the guard CANNOT evaluate, so this run aborts fail-CLOSED. Fix the filter or its consumer — do NOT re-run."
+            exit 1
+          fi
+          if [[ "$host_creates" -gt 0 ]]; then
+            echo "::error::deploy-pipeline-fix plan would CREATE ${host_creates} hcloud_server/hcloud_volume resource(s). This path must never birth a host: it passes no -var image_name, so the host would boot against the mutable ':latest' tag and cloud-init's host_scripts_content_hash re-verify would abort the entire runcmd at stage=verify (no cloudflared, no webhook, no monitors, no egress firewall) — once per instance, unrepairable by reboot."
+            echo "::error::ROUTING — do NOT re-run. A legitimate web-host birth needs an image pinned to a repo@sha256 digest, which no workflow performs today: run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) with -var image_name=<pinned digest>. Closing that gap is tracked in #6730."
+            echo "::error::NO BYPASS on this path — there is no ack token here to type past."
+            terraform show -no-color tfplan > tfplan.txt || true
+            grep -E 'will be created|Plan:' tfplan.txt | head -20 >&2 || true
+            exit 1
+          fi
+          echo "deploy-pipeline-fix plan creates no hcloud_server/hcloud_volume (host_creates=0)."
 
       - name: Terraform apply
         working-directory: ${{ env.INFRA_DIR }}
@@ -243,6 +323,8 @@ jobs:
           doppler run --name-transformer tf-var -- \
             terraform apply -target=terraform_data.deploy_pipeline_fix \
             -target=terraform_data.infra_config_handler_bootstrap \
+            -target=terraform_data.docker_seccomp_config \
+            -target=terraform_data.apparmor_bwrap_profile \
             -var="ssh_key_path=${CI_SSH_PUB}" \
             -auto-approve -input=false
 
@@ -345,8 +427,34 @@ jobs:
           # #4804). So success is NOT "the proxy responded" — it is "the state
           # JSON proves every file landed". Assert the full invariant:
           #   exit_code == 0 AND files_failed == 0 AND files_written == files_total
-          # files_total is derived from the JSON (never hardcoded to the FILE_MAP
-          # length) so the gate survives future FILE_MAP additions.
+          #                 AND files_total == EXPECTED (repo FILE_MAP length)
+          #
+          # #6178 false-green fix: the prior gate compared files_written vs the
+          # JSON's OWN files_total, which passes on a STALE status from an older,
+          # smaller FILE_MAP (a webhook restart-race left the host at 13/13 clean
+          # while the repo FILE_MAP was 15 — the gate went green while the 2
+          # cutover probe scripts were NEVER delivered). Derive the EXPECTED count
+          # from the repo's infra-config-apply.sh FILE_MAP at verify time: this
+          # still auto-tracks future FILE_MAP additions (not hardcoded) AND now
+          # catches UNDER-delivery (a host that landed fewer files than the repo
+          # expects). handler_bootstrap runs before this push and updates the host
+          # handler to the current FILE_MAP, so the count is aligned on a healthy
+          # apply.
+          # #6594 (PR-B): the adjudication logic lives in a sourceable, TESTED script
+          # (infra-config-gate.sh; infra-config-gate.test.sh drives it). CWD is INFRA_DIR.
+          # shellcheck source=/dev/null
+          source ./infra-config-gate.sh
+          # `|| true`: infra_config_expected_count ends in `grep -c`, which exits 1 on
+          # zero matches. Without this, a zero-row FILE_MAP would abort the step here
+          # under `set -eo pipefail` BEFORE the numeric guard below can emit its
+          # diagnostic (review, code-quality P-low). The guard still fails closed —
+          # an empty EXPECTED_COUNT trips the regex check.
+          EXPECTED_COUNT=$(infra_config_expected_count infra-config-apply.sh || true)
+          if [[ ! "$EXPECTED_COUNT" =~ ^[0-9]+$ || "$EXPECTED_COUNT" -eq 0 ]]; then
+            echo "::error::Could not derive EXPECTED FILE_MAP count from infra-config-apply.sh (got '$EXPECTED_COUNT')."
+            exit 1
+          fi
+          echo "Expected delivered-file count (repo FILE_MAP): $EXPECTED_COUNT"
           EXIT_CODE=""
           FILES_FAILED=""
           FILES_WRITTEN=""
@@ -365,14 +473,16 @@ jobs:
               FILES_FAILED=$(jq -r '.files_failed' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
               FILES_WRITTEN=$(jq -r '.files_written' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
               FILES_TOTAL=$(jq -r '.files_total' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
-              if [[ "$EXIT_CODE" == "0" && "$FILES_FAILED" == "0" \
-                    && "$FILES_TOTAL" != "MISSING" && "$FILES_TOTAL" != "null" \
-                    && "$FILES_WRITTEN" == "$FILES_TOTAL" ]]; then
-                echo "Infra-config apply succeeded (exit_code=0, files_written=${FILES_WRITTEN}/${FILES_TOTAL}, files_failed=0 on attempt $attempt)"
+              # Poll fast-path: stop polling once the COUNT invariant holds (single-
+              # sourced in infra-config-gate.sh). The CONTENT assert is deliberately NOT
+              # here — it runs once after the loop (terminal). Asserting content inside
+              # the loop would retry across fresh connector selections = any-of-3 (#6594).
+              if infra_config_count_invariant /tmp/infra-config-status-response.txt infra-config-apply.sh; then
+                echo "Infra-config apply count invariant holds (exit_code=0, files_written=${FILES_WRITTEN}/${FILES_TOTAL}, expected=${EXPECTED_COUNT}, files_failed=0 on attempt $attempt); running terminal adjudication."
                 cat /tmp/infra-config-status-response.txt
                 break
               fi
-              echo "Attempt $attempt: exit_code=$EXIT_CODE files_failed=$FILES_FAILED files_written=$FILES_WRITTEN files_total=$FILES_TOTAL (retrying in 5s...)"
+              echo "Attempt $attempt: exit_code=$EXIT_CODE files_failed=$FILES_FAILED files_written=$FILES_WRITTEN files_total=$FILES_TOTAL expected=$EXPECTED_COUNT (retrying in 5s...)"
             elif [[ "$HTTP_CODE" == "404" ]]; then
               echo "Attempt $attempt: infra-config-status endpoint not found (HTTP 404)"
             else
@@ -394,26 +504,315 @@ jobs:
               exit 1
             fi
           elif [[ "$HTTP_CODE" == "200" ]]; then
-            if [[ "$EXIT_CODE" != "0" ]]; then
-              echo "::error::infra-config-apply reported exit_code=$EXIT_CODE (partial failure)."
+            # Terminal adjudication (OUTSIDE the retry loop, #6594 PR-B): the count
+            # invariant (#6178 under-delivery guard) AND the per-file content assert —
+            # each delivered file's reported sha256 must equal the repo file the apply
+            # ran from (CWD is the checked-out INFRA_DIR at the applied SHA). A content
+            # mismatch is terminal and names the diverging file. This is what catches a
+            # stale-but-same-count host: 15/15 clean while ci-deploy.sh was never re-
+            # delivered (the exact #6594 false-green). Single-sourced in
+            # infra-config-gate.sh; driven by infra-config-gate.test.sh.
+            if ! adjudicate_infra_config /tmp/infra-config-status-response.txt . infra-config-apply.sh; then
               cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
               exit 1
             fi
-            if [[ "$FILES_FAILED" != "0" ]]; then
-              echo "::error::infra-config-apply reported files_failed=$FILES_FAILED — one or more files did not land on the host."
-              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
-              exit 1
-            fi
-            if [[ "$FILES_TOTAL" == "MISSING" || "$FILES_TOTAL" == "null" || "$FILES_WRITTEN" != "$FILES_TOTAL" ]]; then
-              echo "::error::infra-config-apply landed-files mismatch: files_written=$FILES_WRITTEN files_total=$FILES_TOTAL (expected equal and non-null)."
-              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
-              exit 1
-            fi
+            echo "Infra-config apply verified: count invariant + per-file content match (#6594 PR-B)."
           else
             echo "::error::infra-config-status did not respond with HTTP 200 after 3 attempts (last HTTP $HTTP_CODE). The handler is async behind a 202 trigger-and-forget, so a non-responding status endpoint cannot be treated as success."
             cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
             exit 1
           fi
+
+      - name: Redeploy to load applied profile and assert loaded==committed (#5875 item 4)
+        if: success()
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+          # #6512 Fix 2a — actionable no-SSH alert (plain-language GitHub issue + Sentry event)
+          # when the redeploy terminally fails and leaves the profile UNENFORCED. issues:write is
+          # already granted at the job level; a red CI job is invisible to a non-technical founder.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
+          SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
+          SECCOMP_ALERT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SECCOMP_ALERT_SHA: ${{ github.sha }}
+        # "Applied ≠ loaded" gap closer (#5875 item 4 / ADR-079). The terraform
+        # apply above delivered the seccomp profile to the HOST
+        # (/etc/docker/seccomp-profiles/soleur-bwrap.json), but the RUNNING container
+        # only loads a new `--security-opt seccomp=<file>` at `docker run`. The
+        # concurrent web-platform-release deploy is UNORDERED on the same merge
+        # (different concurrency groups), so the fix deploy can run the STALE profile
+        # and go green while every tenant stays broken — worst during a #5874-style
+        # RECOVERY. This step sequences the redeploy AFTER the apply and fails loud
+        # unless the running container's LOADED seccomp hash equals the committed one.
+        #
+        # AppArmor needs NO redeploy: apparmor_bwrap_profile runs `apparmor_parser -r`
+        # at apply (server.tf), which reloads the kernel profile for the running
+        # confined container immediately. Only seccomp is bound at container start.
+        #
+        # Conditional-by-construction (AC "fires only on an actual profile change"):
+        # if the running container's loaded hash already equals committed (a
+        # script/server.tf/apparmor-only apply, OR an already-current profile), this
+        # step no-ops without a swap. Only a seccomp change (loaded != committed)
+        # triggers ONE graceful, canary-validated, ADR-078-cron-drained swap via
+        # /hooks/deploy (ci-deploy.sh); `flock -n` in ci-deploy.sh dedupes any
+        # concurrent release deploy (idempotent). No drift-poll/retrigger loop.
+        run: |
+          set -euo pipefail
+          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
+          CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
+          CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+
+          # #6512 Fix 2a: source the actionable-alert emitter (fail-open) called at every terminal
+          # failure below that leaves the running container's seccomp profile UNENFORCED.
+          source "$GITHUB_WORKSPACE/scripts/seccomp-unenforced-alert.sh"
+
+          STATUS_URL="https://deploy.${APP_DOMAIN_BASE}/hooks/deploy-status"
+          DEPLOY_URL="https://deploy.${APP_DOMAIN_BASE}/hooks/deploy"
+
+          # Committed profile hash — sha256 of the in-repo file at this merge commit.
+          COMMITTED_SHA=$(sha256sum seccomp-bwrap.json | cut -d' ' -f1)
+          echo "Committed seccomp profile sha256: ${COMMITTED_SHA}"
+
+          # GET /hooks/deploy-status (HMAC over empty body + CF-Access).
+          get_status() {
+            local sig
+            sig=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+            curl -s --max-time 15 -o /tmp/redeploy-status.json -w '%{http_code}' \
+              -X GET \
+              -H "X-Signature-256: sha256=${sig}" \
+              -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
+              -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
+              "$STATUS_URL" 2>/dev/null || echo "000"
+          }
+
+          # Read the seccomp state-invariant fields from a status JSON file into
+          # globals. #5960: the load-bearing proof is now the LIVE host+container
+          # discriminators (cat-deploy-state.sh seccomp_live_json), NOT the ephemeral
+          # recorded .seccomp_profile_sha256 (reboot-cleared, latch-blind).
+          read_frame() {
+            local f="$1"
+            HOST_PRESENT=$(jq -r '.seccomp_profile_host_present // false' "$f" 2>/dev/null || echo false)
+            HOST_SHA=$(jq -r '.seccomp_profile_host_sha256 // ""' "$f" 2>/dev/null || echo "")
+            LOADED_MATCHES=$(jq -r '.seccomp_profile_loaded_matches_host // false' "$f" 2>/dev/null || echo false)
+          }
+
+          # STATE invariant: the running container is enforcing the committed
+          # profile. Delivery leg host==committed is raw sha256sum on BOTH sides
+          # (version-independent); reload leg loaded==host is precomputed host-side
+          # (skew-immune). No cross-jq comparison anywhere on this path.
+          invariant_holds() {
+            [[ "$HOST_PRESENT" == "true" && -n "$HOST_SHA" \
+               && "$HOST_SHA" == "$COMMITTED_SHA" && "$LOADED_MATCHES" == "true" ]]
+          }
+
+          # Self-diagnosing failure: name the discriminator class (not-delivered /
+          # host-stale / not-reloaded) from the frozen frame, then fail loud.
+          diagnose_and_fail() {
+            if [[ "$HOST_PRESENT" != "true" ]]; then
+              echo "::error::seccomp profile NOT DELIVERED to the host at /etc/docker/seccomp-profiles/soleur-bwrap.json (seccomp_profile_host_present=false). The terraform apply did not place the file."
+            elif [[ "$HOST_SHA" != "$COMMITTED_SHA" ]]; then
+              echo "::error::Host has a STALE/WRONG seccomp profile: host sha256='${HOST_SHA:-<none>}' != committed '${COMMITTED_SHA}' — delivery/path drift."
+            elif [[ "$LOADED_MATCHES" != "true" ]]; then
+              echo "::error::Seccomp profile is on the host and matches committed, but the RUNNING container did NOT reload it (seccomp_profile_loaded_matches_host=false) — the redeploy did not swap the container onto the committed profile."
+            else
+              echo "::error::Seccomp loaded-profile invariant failed, unclassified (host_present=${HOST_PRESENT}, host_sha='${HOST_SHA:-<none>}', loaded_matches=${LOADED_MATCHES})."
+            fi
+            cat /tmp/redeploy-terminal.json >&2 2>/dev/null || true
+            # #6512 Fix 2a: the profile is confirmed UNENFORCED — raise the actionable no-SSH alert
+            # (plain-language GitHub issue + Sentry) before failing loud. Fail-open (never masks exit 1).
+            seccomp_unenforced_alert "loaded-profile invariant not held: host_present=${HOST_PRESENT} host_sha='${HOST_SHA:-<none>}' loaded_matches=${LOADED_MATCHES}"
+            exit 1
+          }
+
+          # --- Baseline: read live discriminators + running tag + prior start_ts ---
+          HTTP=$(get_status)
+          if [[ "$HTTP" != "200" ]]; then
+            echo "::error::Cannot read /hooks/deploy-status (HTTP $HTTP) — refusing to assert loaded profile blind."
+            cat /tmp/redeploy-status.json >&2 2>/dev/null || true
+            exit 1
+          fi
+          cp /tmp/redeploy-status.json /tmp/redeploy-terminal.json
+          read_frame /tmp/redeploy-terminal.json
+          CURRENT_TAG=$(jq -r '.tag // ""' /tmp/redeploy-terminal.json 2>/dev/null || echo "")
+          PRIOR_START=$(jq -r '.start_ts // 0' /tmp/redeploy-terminal.json 2>/dev/null || echo 0)
+          [[ "$PRIOR_START" =~ ^[0-9]+$ ]] || PRIOR_START=0
+          echo "Baseline: host_present=${HOST_PRESENT} host_sha256='${HOST_SHA:-<none>}' loaded_matches_host=${LOADED_MATCHES} (committed='${COMMITTED_SHA}', tag='${CURRENT_TAG}')."
+
+          # --- Fast path: STATE invariant already holds → no swap needed ---
+          if invariant_holds; then
+            echo "Running container is already enforcing the committed profile (host==committed AND loaded==host) — no redeploy needed."
+            exit 0
+          fi
+
+          # Settle-once guard: if the ONLY unmet condition is the reload leg (host
+          # already has the committed profile but the container reload is
+          # unconfirmed — e.g. an in-flight swap mid-window), settle 30s and re-read
+          # before triggering a ~70-min redeploy on a transient false-negative.
+          if [[ "$HOST_PRESENT" == "true" && "$HOST_SHA" == "$COMMITTED_SHA" && "$LOADED_MATCHES" != "true" ]]; then
+            echo "Host has the committed profile but the container reload is unconfirmed — settling 30s and re-reading before deciding to redeploy."
+            sleep 30
+            HTTP=$(get_status)
+            if [[ "$HTTP" == "200" ]]; then
+              cp /tmp/redeploy-status.json /tmp/redeploy-terminal.json
+              read_frame /tmp/redeploy-terminal.json
+              if invariant_holds; then
+                echo "Re-read confirms the container is now enforcing the committed profile — no redeploy needed."
+                exit 0
+              fi
+            fi
+          fi
+
+          echo "STATE invariant not satisfied — a seccomp change is applied but the running container is not enforcing it. Redeploying to load it."
+
+          # Resolve the redeploy tag from the RUNNING container's real version, NOT from
+          # /hooks/deploy-status .tag. That .tag is the ci-deploy STATE FILE's last-ATTEMPT
+          # tag (cat-deploy-state.sh reads /var/lock/ci-deploy.state) — which the Terraform
+          # bootstrap default image (variables.tf `...:latest`) and any REJECTED attempt
+          # leave as a non-semver value. ci-deploy.sh:713 requires ^v[0-9]+\.[0-9]+\.[0-9]+$,
+          # so re-sending `latest` is rejected (reason=tag_malformed) AND re-stamps
+          # .tag=latest — a self-perpetuating wedge (#5955, ADR-079 amendment). /health
+          # returns the baked BUILD_VERSION (bare semver); the release pipeline pushes
+          # :v<version> and :latest to the SAME digest (reusable-release.yml), so v<version>
+          # is a true same-image reload that ci-deploy.sh accepts. Public endpoint, no
+          # CF-Access (same one web-platform-release.yml curls for its health gate).
+          HEALTH_URL="https://app.${APP_DOMAIN_BASE}/health"
+          RUNNING_VERSION=$(curl -sf --max-time 15 "$HEALTH_URL" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || echo "")
+          TARGET_TAG="v${RUNNING_VERSION}"
+
+          # Fail fast with the SAME semver shape ci-deploy.sh:713 enforces — never POST a
+          # doomed non-semver tag (which ci-deploy.sh would reject AND re-stamp as .tag,
+          # perpetuating the wedge). A non-released image (BUILD_VERSION unset → "dev" →
+          # "vdev") is caught here with a clear remediation instead of a tag_malformed loop.
+          if [[ ! "$TARGET_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Cannot resolve a semver tag for the running container from ${HEALTH_URL} (.version='${RUNNING_VERSION}', state-file .tag='${CURRENT_TAG}'). The container is not reporting a released BUILD_VERSION. Trigger a normal web-platform release, then re-run this apply."
+            exit 1
+          fi
+          echo "Redeploying running version as ${TARGET_TAG} (state-file .tag was '${CURRENT_TAG}')."
+
+          # POST /hooks/deploy — redeploy the SAME image (same digest as the running
+          # :latest) so the container restarts and loads the applied profile. No `peers`
+          # (single-host reload; fan-out is a dormant no-op at single-host, ADR-068).
+          # ci-deploy.sh's flock dedupes any concurrent web-platform-release deploy.
+          PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform %s"}' "$TARGET_TAG")
+          POST_SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+          POST_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Signature-256: sha256=${POST_SIG}" \
+            -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
+            -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
+            -d "$PAYLOAD" \
+            "$DEPLOY_URL" 2>/dev/null || echo "000")
+          if [[ "$POST_CODE" != "202" ]]; then
+            echo "::error::Redeploy webhook rejected (HTTP $POST_CODE) — profile is applied but NOT loaded."
+            exit 1
+          fi
+          echo "Redeploy initiated (HTTP 202). Polling for completion (bounded by the ADR-078 cron drain)..."
+
+          # Poll for a GENUINE web-platform swap terminal of OUR target tag that
+          # started after our trigger. lock_contention / adr027_prod_already_running
+          # / running(exit -1) are NON-TERMINAL: a flock loser stamps OUR
+          # component+tag with exit_code=1 (START_TS + COMPONENT/TAG are set
+          # pre-flock, ci-deploy.sh:207/:674) and that frame persists for the
+          # winner's whole multi-minute swap — failing on it would false-red under
+          # any concurrent web-platform deploy. The winner's ok/ok_peer_fanout_
+          # degraded terminal is authoritative (it loads the same committed profile);
+          # on poll exhaustion the STATE check below adjudicates. 160 × 30s = 4800s ≥
+          # CRON_DRAIN_TIMEOUT (4200s), inside the 90-min job ceiling.
+          ACCEPTED=""
+          for attempt in $(seq 1 160); do
+            sleep 30
+            HTTP=$(get_status)
+            [[ "$HTTP" == "200" ]] || { echo "Attempt $attempt: status HTTP $HTTP"; continue; }
+            COMPONENT=$(jq -r '.component // ""' /tmp/redeploy-status.json 2>/dev/null || echo "")
+            FRAME_TAG=$(jq -r '.tag // ""' /tmp/redeploy-status.json 2>/dev/null || echo "")
+            REASON=$(jq -r '.reason // ""' /tmp/redeploy-status.json 2>/dev/null || echo "")
+            EXIT=$(jq -r '.exit_code // -99' /tmp/redeploy-status.json 2>/dev/null || echo -99)
+            START=$(jq -r '.start_ts // 0' /tmp/redeploy-status.json 2>/dev/null || echo 0)
+            [[ "$START" =~ ^[0-9]+$ ]] || START=0
+
+            # Terminal acceptance gate: only OUR web-platform swap of the target
+            # tag, started after our POST. Foreign component / mismatched tag /
+            # stale start_ts → ignore and keep polling.
+            if [[ "$COMPONENT" != "web-platform" ]] || [[ "$FRAME_TAG" != "$TARGET_TAG" ]] || ! [[ "$START" -gt "$PRIOR_START" ]]; then
+              echo "Attempt $attempt/160: ignoring frame (component='${COMPONENT}' tag='${FRAME_TAG}' start_ts=${START}); waiting for our web-platform ${TARGET_TAG} swap (prior_start=${PRIOR_START})..."
+              continue
+            fi
+
+            # Our frame — adjudicate on reason/exit_code (BLOCKING #5960 fix).
+            case "$REASON" in
+              lock_contention|adr027_prod_already_running)
+                echo "Attempt $attempt/160: reason=${REASON} (a concurrent deploy holds the lock) — NON-TERMINAL, keep polling for the winner's terminal..."
+                continue
+                ;;
+            esac
+            if [[ "$EXIT" =~ ^-?[0-9]+$ ]] && [[ "$EXIT" -lt 0 ]]; then
+              echo "Attempt $attempt/160: exit_code=${EXIT} reason=${REASON} (running) — keep polling..."
+              continue
+            fi
+            case "$REASON" in
+              ok|ok_peer_fanout_degraded)
+                cp /tmp/redeploy-status.json /tmp/redeploy-terminal.json
+                ACCEPTED="$REASON"
+                echo "Redeploy terminal after ${attempt} poll(s): reason=${REASON} exit_code=${EXIT}."
+                break
+                ;;
+              *)
+                cp /tmp/redeploy-status.json /tmp/redeploy-terminal.json
+                echo "::error::Redeploy FAILED: web-platform ${TARGET_TAG} terminal reason='${REASON}' exit_code=${EXIT}. The applied seccomp profile was NOT loaded."
+                cat /tmp/redeploy-terminal.json >&2 2>/dev/null || true
+                # #6512 Fix 2a: the redeploy that would load the profile terminally failed (e.g.
+                # image_pull_failed) — the profile is left UNENFORCED. Raise the actionable alert.
+                seccomp_unenforced_alert "redeploy terminal reason='${REASON}' exit_code=${EXIT} for ${TARGET_TAG} — image not loaded (e.g. image_pull_failed)"
+                exit 1
+                ;;
+            esac
+          done
+
+          # --- Adjudicate from the FROZEN terminal frame ---
+          if [[ -z "$ACCEPTED" ]]; then
+            # Poll window exhausted with no accepted swap terminal (e.g. a concurrent
+            # release starved our tag via lock_contention for the whole window). Do
+            # ONE final STATE check: the invariant is about host state NOW, not which
+            # deploy caused it. If a concurrent deploy loaded the SAME committed
+            # profile, the invariant holds and we PASS; else fail loud UNVERIFIED.
+            echo "Poll window exhausted without an accepted web-platform ${TARGET_TAG} terminal — final STATE check (the committed profile may already be loaded by a concurrent deploy)."
+            HTTP=$(get_status)
+            if [[ "$HTTP" != "200" ]]; then
+              echo "::error::Poll exhausted AND final /hooks/deploy-status read failed (HTTP $HTTP) — profile load UNVERIFIED."
+              exit 1
+            fi
+            cp /tmp/redeploy-status.json /tmp/redeploy-terminal.json
+            read_frame /tmp/redeploy-terminal.json
+            if invariant_holds; then
+              echo "Final STATE check PASSES: host_present=true, host_sha256==committed, loaded_matches_host=true — the committed profile is loaded (a concurrent deploy satisfied the invariant). Profile is live."
+              exit 0
+            fi
+            echo "::error::Redeploy did not reach a terminal within the poll window AND the committed profile is NOT loaded now — profile load UNVERIFIED."
+            diagnose_and_fail
+          fi
+
+          # Accepted an ok/ok_peer_fanout_degraded terminal — assert the STATE
+          # invariant from the FROZEN frame (get_status overwrites redeploy-status.json).
+          read_frame /tmp/redeploy-terminal.json
+          FINAL_VERDICT=$(jq -r '.sandbox_canary.verdict // "unknown"' /tmp/redeploy-terminal.json 2>/dev/null || echo unknown)
+          if ! invariant_holds; then
+            diagnose_and_fail
+          fi
+          # Per ADR-079 the faithful canary is still NON-BLOCKING dark-launch: pass /
+          # canary_infra_error / fixture_uncaptured are all acceptable here; only a
+          # faithful sandbox_broken (a real bwrap EPERM against the committed profile)
+          # is fatal. Promotion of the canary to a blocking gate is soak-owned (#5889).
+          if [[ "$FINAL_VERDICT" == "sandbox_broken" ]]; then
+            echo "::error::Faithful sandbox canary verdict=sandbox_broken after redeploy — the committed seccomp profile EPERMs the real SDK bwrap argv. Do NOT leave this profile live."
+            exit 1
+          fi
+          echo "STATE invariant holds: host_sha256==committed (${COMMITTED_SHA}) AND loaded_matches_host=true; canary verdict=${FINAL_VERDICT} (not sandbox_broken). Profile is live."
 
       - name: Check whether #4804 is still open (scopes the one-time self-heal verification)
         id: check_4804

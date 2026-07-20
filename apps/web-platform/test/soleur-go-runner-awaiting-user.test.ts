@@ -85,6 +85,7 @@ describe("soleur-go-runner notifyAwaitingUser pause/resume", () => {
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-pause",
       userId: "u1",
       userMessage: "do",
@@ -131,6 +132,7 @@ describe("soleur-go-runner notifyAwaitingUser pause/resume", () => {
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-resume",
       userId: "u1",
       userMessage: "go",
@@ -196,6 +198,7 @@ describe("soleur-go-runner notifyAwaitingUser pause/resume", () => {
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-safetynet",
       userId: "u1",
       userMessage: "do",
@@ -278,6 +281,7 @@ describe("soleur-go-runner notifyAwaitingUser pause/resume", () => {
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-reaper-paused",
       userId: "u1",
       userMessage: "hi",
@@ -314,6 +318,7 @@ describe("soleur-go-runner notifyAwaitingUser pause/resume", () => {
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-hardcap",
       userId: "u1",
       userMessage: "go",
@@ -366,6 +371,7 @@ describe("soleur-go-runner notifyAwaitingUser pause/resume", () => {
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-multiturn",
       userId: "u1",
       userMessage: "go",
@@ -457,6 +463,7 @@ describe("soleur-go-runner notifyAwaitingUser pause/resume", () => {
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-regression",
       userId: "u1",
       userMessage: "do",
@@ -520,6 +527,7 @@ describe("soleur-go-runner runaway window reset (Bug 1: PDF summarize idle)", ()
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-reset-tool",
       userId: "u1",
       userMessage: "summarize",
@@ -565,6 +573,7 @@ describe("soleur-go-runner runaway window reset (Bug 1: PDF summarize idle)", ()
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-reset-text",
       userId: "u1",
       userMessage: "summarize",
@@ -598,8 +607,8 @@ describe("soleur-go-runner runaway window reset (Bug 1: PDF summarize idle)", ()
     expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
   });
 
-  it("DEFAULT_MAX_TURN_DURATION_MS is 10 min — absolute ceiling on a single turn, not reset by per-block activity", () => {
-    expect(DEFAULT_MAX_TURN_DURATION_MS).toBe(10 * 60 * 1000);
+  it("DEFAULT_MAX_TURN_DURATION_MS is 45 min — absolute ceiling on a single turn, not reset by per-block activity", () => {
+    expect(DEFAULT_MAX_TURN_DURATION_MS).toBe(45 * 60 * 1000);
   });
 
   it("absolute turn ceiling fires runaway with reason=max_turn_duration even when blocks keep arriving (chatty-stall defense-in-depth)", async () => {
@@ -618,6 +627,7 @@ describe("soleur-go-runner runaway window reset (Bug 1: PDF summarize idle)", ()
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-hardcap",
       userId: "u1",
       userMessage: "loop forever",
@@ -673,6 +683,7 @@ describe("soleur-go-runner runaway window reset (Bug 1: PDF summarize idle)", ()
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-redispatch",
       userId: "u1",
       userMessage: "first turn",
@@ -692,6 +703,7 @@ describe("soleur-go-runner runaway window reset (Bug 1: PDF summarize idle)", ()
 
     // User fires a follow-up dispatch before turn 1's result arrives.
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-redispatch",
       userId: "u1",
       userMessage: "second turn",
@@ -728,6 +740,7 @@ describe("soleur-go-runner runaway window reset (Bug 1: PDF summarize idle)", ()
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-elapsed",
       userId: "u1",
       userMessage: "summarize",
@@ -779,6 +792,7 @@ describe("soleur-go-runner runaway window reset (Bug 1: PDF summarize idle)", ()
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-observ",
       userId: "u1",
       userMessage: "summarize",
@@ -843,6 +857,7 @@ describe("soleur-go-runner runaway window reset (tool_progress heartbeat)", () =
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-progress-reset",
       userId: "u1",
       userMessage: "read big file",
@@ -886,6 +901,7 @@ describe("soleur-go-runner runaway window reset (tool_progress heartbeat)", () =
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-hung-tool",
       userId: "u1",
       userMessage: "read hung file",
@@ -927,6 +943,7 @@ describe("soleur-go-runner runaway window reset (tool_progress heartbeat)", () =
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-progress-hardcap",
       userId: "u1",
       userMessage: "read forever",

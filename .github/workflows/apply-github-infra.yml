@@ -197,22 +197,38 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         run: terraform init -input=false -lockfile=readonly
 
-      - name: First-apply import (idempotent)
+      - name: First-apply import (idempotent, per-address)
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          # Match any github_repository_ruleset.* address (not just .ci_required)
-          # so a future `moved {}` block rename doesn't silently re-trigger an
-          # import that would fail with "resource already managed".
-          if terraform state list 2>/dev/null | grep -qE '^github_repository_ruleset\.'; then
-            echo "Resource already in state, skipping import."
-          else
-            echo "Importing existing ruleset 14145388 into state (one-time bootstrap)."
-            doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
-              terraform import github_repository_ruleset.ci_required soleur:14145388
-          fi
+          # Per-address import so BOTH rulesets import independently. A blanket
+          # `grep -qE '^github_repository_ruleset\.'` would skip the CLA import
+          # once the CI resource is in state, and the next apply would compute
+          # cla_required as a CREATE against a "CLA Required" ruleset that already
+          # exists live (name collision → apply fails). `grep -qxF` matches the
+          # full address line exactly (no prefix false-positive).
+          state_list=$(terraform state list 2>/dev/null || true)
+          import_ruleset() {
+            local addr=$1 id=$2
+            if grep -qxF "$addr" <<<"$state_list"; then
+              echo "Resource $addr already in state, skipping import."
+            else
+              echo "Importing ruleset $id as $addr (one-time bootstrap)."
+              doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+                terraform import "$addr" "soleur:$id"
+              state_list=$(terraform state list 2>/dev/null || true)  # refresh
+            fi
+          }
+          # `moved {}` caveat: if either resource is later renamed via a `moved {}`
+          # block, update the hardcoded import address here in the same PR (else
+          # `terraform import` errors "resource already managed"). This
+          # per-address form replaces the blanket
+          # `grep -qE '^github_repository_ruleset\.'` gate that previously served
+          # the same defense.
+          import_ruleset github_repository_ruleset.ci_required 14145388
+          import_ruleset github_repository_ruleset.cla_required 13304872
 
       - name: Terraform plan
         id: plan
@@ -277,7 +293,7 @@ jobs:
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
 
-      - name: Post-apply verify (ruleset 14145388 required check count)
+      - name: Post-apply verify (ruleset required check counts — CI 14145388 + CLA 13304872)
         id: verify
         env:
           # Mint a short-lived App-installation token from the soleur-ai App
@@ -337,7 +353,11 @@ jobs:
             echo "::error::gh api rulesets/14145388 failed — App lacks Administration:Read or ruleset deleted. Response: ${RULESET_JSON}"
             exit 1
           }
-          ACTUAL=$(echo "$RULESET_JSON" | jq '.rules[0].parameters.required_status_checks | length')
+          # Order-independent select (#5780): adding a sibling `merge_queue`
+          # rule in PR-2 can reorder `rules[]` so `rules[0]` is no longer the
+          # required_status_checks rule (→ null → the ^[0-9]+$ guard exit 1).
+          # Selecting by .type is stable regardless of rule order.
+          ACTUAL=$(echo "$RULESET_JSON" | jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks | length')
           if [[ ! "$ACTUAL" =~ ^[0-9]+$ ]]; then
             echo "::error::Unexpected jq result for required_status_checks count: ${ACTUAL}."
             exit 1
@@ -347,7 +367,25 @@ jobs:
           # step (covers both success and failure paths).
 
           echo "actual_count=$ACTUAL" >> "$GITHUB_OUTPUT"
-          echo "Ruleset 14145388: required_status_checks count = ${ACTUAL}."
+          echo "Ruleset 14145388 (CI): required_status_checks count = ${ACTUAL}."
+
+          # ---- Step 4: CLA ruleset (13304872) count probe (reuse INSTALL_TOKEN) ----
+          # Symmetric with the CI probe above; same order-independent
+          # select(.type==…) (never a positional .rules[0]). Expected count = 2
+          # (cla-check + cla-evidence). This probes RSC COUNT only, not
+          # bypass_actors — the no-op-first-apply / no-bypass-widening guarantee is
+          # the daily cron-ruleset-bypass-audit's, not this verify's.
+          CLA_RULESET_JSON=$(GH_TOKEN="$INSTALL_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/rulesets/13304872" 2>&1) || {
+            echo "::error::gh api rulesets/13304872 failed — App lacks Administration:Read or CLA ruleset deleted. Response: ${CLA_RULESET_JSON}"
+            exit 1
+          }
+          CLA_ACTUAL=$(echo "$CLA_RULESET_JSON" | jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks | length')
+          if [[ ! "$CLA_ACTUAL" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unexpected jq result for CLA required_status_checks count: ${CLA_ACTUAL}."
+            exit 1
+          fi
+          echo "cla_actual_count=$CLA_ACTUAL" >> "$GITHUB_OUTPUT"
+          echo "Ruleset 13304872 (CLA): required_status_checks count = ${CLA_ACTUAL}."
 
       - name: Post-apply summary
         if: always()
@@ -358,6 +396,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ACTUAL: ${{ steps.verify.outputs.actual_count }}
+          CLA_ACTUAL: ${{ steps.verify.outputs.cla_actual_count }}
         run: |
           {
             echo "## Apply github infra (rulesets)"
@@ -366,6 +405,7 @@ jobs:
             echo "**Merge SHA:** ${MERGE_SHA}"
             echo "**Reason (manual only):** ${REASON:-n/a}"
             echo "**Status:** ${JOB_STATUS}"
-            echo "**Ruleset 14145388 required_status_checks count:** ${ACTUAL:-n/a}"
+            echo "**Ruleset 14145388 (CI) required_status_checks count:** ${ACTUAL:-n/a}"
+            echo "**Ruleset 13304872 (CLA) required_status_checks count:** ${CLA_ACTUAL:-n/a}"
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"

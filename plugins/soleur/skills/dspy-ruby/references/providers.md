@@ -54,7 +54,7 @@ DSPy.configure do |c|
     api_key: ENV['ANTHROPIC_API_KEY'])
 
   # Claude Sonnet 4.6 (best speed/intelligence balance)
-  c.lm = DSPy::LM.new('anthropic/claude-sonnet-4-6',
+  c.lm = DSPy::LM.new('anthropic/claude-sonnet-5',
     api_key: ENV['ANTHROPIC_API_KEY'])
 
   # Claude Haiku 4.5 (fastest, cost-effective)
@@ -108,7 +108,7 @@ end
 ```ruby
 DSPy.configure do |c|
   # Access 200+ models through OpenRouter
-  c.lm = DSPy::LM.new('openrouter/anthropic/claude-sonnet-4-6',
+  c.lm = DSPy::LM.new('openrouter/anthropic/claude-sonnet-5',
     api_key: ENV['OPENROUTER_API_KEY'],
     base_url: 'https://openrouter.ai/api/v1')
 
@@ -176,7 +176,7 @@ Use different models for different tasks:
 fast_lm = DSPy::LM.new('openai/gpt-4o-mini', api_key: ENV['OPENAI_API_KEY'])
 
 # Powerful model for complex tasks
-powerful_lm = DSPy::LM.new('anthropic/claude-sonnet-4-6',
+powerful_lm = DSPy::LM.new('anthropic/claude-sonnet-5',
   api_key: ENV['ANTHROPIC_API_KEY'])
 
 # Use different models in different modules
@@ -220,7 +220,7 @@ result2 = predictor.forward(
 
 1. **Development**: Use cheaper, faster models (gpt-4o-mini, claude-haiku-4-5, gemini-1.5-flash)
 2. **Production Simple Tasks**: Continue with cheaper models if quality is sufficient
-3. **Production Complex Tasks**: Upgrade to more capable models (gpt-4o, claude-sonnet-4-6, gemini-1.5-pro)
+3. **Production Complex Tasks**: Upgrade to more capable models (gpt-4o, claude-sonnet-5, gemini-1.5-pro)
 4. **Local Development**: Use Ollama for privacy and zero API costs
 
 ### Example Cost-Conscious Setup
@@ -238,7 +238,7 @@ elsif Rails.env.test?
   end
 else  # production
   DSPy.configure do |c|
-    c.lm = DSPy::LM.new('anthropic/claude-sonnet-4-6',
+    c.lm = DSPy::LM.new('anthropic/claude-sonnet-5',
       api_key: ENV['ANTHROPIC_API_KEY'])
   end
 end

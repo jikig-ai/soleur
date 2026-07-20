@@ -93,6 +93,7 @@ describe("soleur-go-runner interactive-prompt bridge (Stage 2.10)", () => {
       emitInteractivePrompt,
     });
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-1",
       userId: "user-1",
       userMessage: "hi",
@@ -228,7 +229,16 @@ describe("soleur-go-runner interactive-prompt bridge (Stage 2.10)", () => {
     expect(emittedEvents).toHaveLength(0);
   });
 
-  it("AskUserQuestion tool_use → emit interactive_prompt with kind ask_user", async () => {
+  it("AskUserQuestion tool_use → emits NO interactive_prompt (AC1: ask_user card suppressed; the amber review_gate is the single surface)", async () => {
+    // De-dup fix (feat-one-shot-concierge-web-duplicate-question-box, AC1):
+    // AskUserQuestion no longer produces an `ask_user` interactive-prompt card.
+    // The authoritative `review_gate` (permission-callback.ts `canUseTool`,
+    // fired unconditionally for every AskUserQuestion) is the single question
+    // surface — the amber "Confirm scope" card with per-option descriptions.
+    // classifyInteractiveTool returns null, mirroring the Bash suppression
+    // above, so no `interactive_prompt` is emitted and no pending prompt is
+    // registered. The `ask_user` variant is KEPT in the union +
+    // InteractivePromptCard for replay of already-persisted prompts.
     await runOneToolUse({
       id: "toolu_ask",
       name: "AskUserQuestion",
@@ -239,14 +249,8 @@ describe("soleur-go-runner interactive-prompt bridge (Stage 2.10)", () => {
       },
     });
 
-    expect(emittedEvents).toHaveLength(1);
-    const { event } = emittedEvents[0]!;
-    expect(event.kind).toBe("ask_user");
-    if (event.kind === "ask_user") {
-      expect(event.payload.question).toBe("A or B?");
-      expect(event.payload.options).toEqual(["A", "B"]);
-      expect(event.payload.multiSelect).toBe(false);
-    }
+    expect(emittedEvents).toHaveLength(0);
+    expect(registry.size()).toBe(0);
   });
 
   it("non-interactive tool_use (Skill) does NOT emit or register", async () => {
@@ -267,6 +271,7 @@ describe("soleur-go-runner interactive-prompt bridge (Stage 2.10)", () => {
       now: () => Date.now(),
     });
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-2",
       userId: "user-2",
       userMessage: "hi",

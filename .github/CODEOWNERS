@@ -36,6 +36,21 @@
 # Always-loaded workflow rules.
 /AGENTS.md                                              @deruelle
 
+# Hard-rule body-weakening gate (#6103, ADR-092). The three sidecars hold the
+# `hr-*`/`wg-*` rule BODIES; the manifest + WORM ack file + the linter are the
+# gate's load-bearing state. Pinning them means an un-acked body weakening (or a
+# tampered manifest / edited-history ack) cannot land without a CODEOWNERS review
+# the day branch protection enforces it. (Live enforcement today = the required
+# `rule-body-lint` CI check + deliberate ack authoring; CODEOWNERS-review on main
+# is a tracked operator follow-up — see this file's header.)
+/AGENTS.core.md                                         @deruelle
+/AGENTS.docs.md                                         @deruelle
+/AGENTS.rest.md                                         @deruelle
+/scripts/lint-rule-bodies.py                            @deruelle
+/scripts/_agents_md_sections.py                         @deruelle
+/.claude/rule-body-hashes.txt                          @deruelle
+/.claude/rule-weakening-acks.txt                        @deruelle
+
 # PR-B §1.6 — Service-role allowlist gate. Without these pins, an
 # attacker-modeled PR (or a careless agent loop) could add a
 # service-role import AND its allowlist line in one commit; the gate
@@ -115,6 +130,13 @@
 /.github/workflows/                                     @deruelle
 /.github/workflows/apply-sentry-infra.yml               @deruelle
 /.github/workflows/apply-web-platform-infra.yml         @deruelle
+
+# Inngest RLS-lockdown (ADR-030 I8). The SQL artifact REVOKEs anon/authenticated
+# on the production Inngest project and the workflow auto-applies it via the
+# Supabase Management API — a change here can re-expose prod data or break Inngest's
+# owner access, so both carry explicit @deruelle review scope.
+/apps/web-platform/infra/inngest-rls/                   @deruelle
+/.github/workflows/apply-inngest-rls.yml                @deruelle
 
 # CF Tunnel SSH bridge composite action (#4844). The security-critical
 # root-SSH mechanism shared by apply-web-platform-infra.yml and

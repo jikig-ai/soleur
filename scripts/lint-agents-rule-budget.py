@@ -41,6 +41,31 @@ if _SCRIPTS_DIR not in sys.path:
 
 from _agents_md_sections import SECTIONS
 
+# Shared frontmatter-strip contract (issue #5999, ADR-094). AGENTS.core.md now
+# carries OPTIONAL leading YAML frontmatter (last_reviewed / review_cadence) that
+# the session loader STRIPS before injecting into context. B_ALWAYS must measure
+# the LOADED bytes (what the agent actually sees), not the on-disk bytes — so we
+# strip core's frontmatter here with the byte-identical twin of the loader's
+# strip. AGENTS.md is loaded raw via the harness `@`-import (unstrippable) and is
+# NOT stripped. See scripts/lib/frontmatter-strip/SPEC.md.
+_FM_STRIP_DIR = str(Path(__file__).parent / "lib" / "frontmatter-strip")
+if _FM_STRIP_DIR not in sys.path:
+    sys.path.insert(0, _FM_STRIP_DIR)
+from strip import strip_frontmatter  # noqa: E402
+
+# Rule-line shape. MIRRORED in .claude/hooks/session-rules-loader.sh's over-strip
+# guard (`grep -cE '^- .*\[id: '`) — both count the same lines so the loader's
+# RAW-injection guard and this lint's fail-hard agree on "the strip dropped a
+# rule". If this shape ever changes (e.g. `*` bullets, tighter id charset),
+# change BOTH sites in lockstep.
+_RULE_LINE_RE = re.compile(r"^- .*\[id: ")
+
+
+def _rule_line_count(text: str) -> int:
+    """Count `- …[id: …]` rule-body lines. A correct frontmatter strip removes
+    only `key: value` YAML and leaves this count invariant."""
+    return sum(1 for ln in text.splitlines() if _RULE_LINE_RE.match(ln))
+
 # Reject raised 22000 -> 23000 in #4599. Floor: the 89-line pointer index plus
 # the 40 hr-* + 1 compliance-tier bodies that lint-rule-ids.py PINS to core
 # (#3496, cannot demote). Going under 22000 needs guidance-weakening or demoting
@@ -115,7 +140,27 @@ def lint(paths: list[Path]) -> int:
         return 2
 
     b_index = file_bytes(index_path)
-    b_core = file_bytes(core_path)
+
+    # Measure LOADED core bytes: strip the leading YAML frontmatter (matching the
+    # session loader) before counting. Over-strip guard (fail-hard, not shrink):
+    # if the strip removed any `- …[id: …]` rule line, the frontmatter was
+    # malformed (e.g. unterminated `---`) and consumed body — ERROR rather than
+    # report a falsely-low B_ALWAYS that would mask a governance-blackout regression.
+    core_text = core_path.read_text(encoding="utf-8")
+    stripped_core = strip_frontmatter(core_text)
+    raw_rules = _rule_line_count(core_text)
+    stripped_rules = _rule_line_count(stripped_core)
+    if stripped_rules != raw_rules:
+        print(
+            f"ERROR: AGENTS.core.md frontmatter-strip removed "
+            f"{raw_rules - stripped_rules} rule line(s) — malformed frontmatter "
+            f"(unterminated '---'?). Refusing to report a falsely-low B_ALWAYS. "
+            f"Fix the frontmatter so only 'key: value' lines sit between the "
+            f"leading '---' delimiters.",
+            file=sys.stderr,
+        )
+        return 1
+    b_core = len(stripped_core.encode("utf-8"))
     b_always = b_index + b_core
 
     reject = False

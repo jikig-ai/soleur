@@ -16,13 +16,24 @@ import { RailSlotProvider, RailCollapsedProvider, RAIL_EXPAND_EVENT } from "@/co
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
 import { segmentToDrillLevel, isKbDocView } from "@/hooks/segment-to-drill-level";
+import { useNavResume } from "@/hooks/use-nav-resume";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
 import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "@/components/command-palette/nav-items";
+import { InboxNavBadge } from "@/components/dashboard/inbox-nav-badge";
+import { ConversationsNavBadge } from "@/components/dashboard/conversations-nav-badge";
+import { WorkstreamNavBadge } from "@/components/dashboard/workstream-nav-badge";
+import { ReleasesNavBadge } from "@/components/dashboard/releases-nav-badge";
 import { ShortcutsProvider } from "@/components/command-palette/use-shortcuts";
+import {
+  isApplePlatform as detectApplePlatform,
+  modChord,
+} from "@/components/command-palette/platform";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { HelpOverlay } from "@/components/command-palette/help-overlay";
+import { SupportLauncher } from "@/components/support/support-launcher";
+import { TourProvider } from "@/components/tour/tour-provider";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
@@ -104,6 +115,8 @@ export function PaymentWarningBanner({
 const NAV_ICONS: Record<string, (props: { className?: string }) => React.JSX.Element> = {
   "/dashboard": GridIcon,
   "/dashboard/inbox": InboxIcon,
+  "/dashboard/workstream": KanbanIcon,
+  "/dashboard/crm": ContactsIcon,
   "/dashboard/kb": BookIcon,
   "/dashboard/routines": RepeatIcon,
   "/dashboard/admin/analytics": ChartIcon,
@@ -115,6 +128,11 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  // #4826 — sticky KB (and chat) section-root hrefs from sessionStorage.
+  // Bookmarks to bare `/dashboard/kb` still mean landing; only the main-nav
+  // Link href is rewritten so re-entry restores last-open path.
+  const { getKbEntryHref } = useNavResume();
+  const kbEntryHref = getKbEntryHref();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -136,6 +154,9 @@ export default function DashboardLayout({
   // Secondary-nav slot node — drilled sections portal their nav here (ADR-047).
   // A useState ref-callback so the provider value updates once the slot mounts.
   const [railSlotEl, setRailSlotEl] = useState<HTMLElement | null>(null);
+  // SSR-safe: init non-Apple (→ `Ctrl` glyph) then read the real platform on
+  // mount, so the ⌘B tooltip shows `Ctrl+B` on Windows/Linux (FR2).
+  const [isApplePlatform, setIsApplePlatform] = useState(false);
 
   // Check admin status on mount
   useEffect(() => {
@@ -143,6 +164,11 @@ export default function DashboardLayout({
       .then((res) => res.json())
       .then((data: { isAdmin: boolean }) => setIsAdmin(data.isAdmin))
       .catch(() => {});
+  }, []);
+
+  // Read the platform once post-hydration for the ⌘/Ctrl tooltip glyph.
+  useEffect(() => {
+    setIsApplePlatform(detectApplePlatform());
   }, []);
 
   useEffect(() => {
@@ -167,6 +193,16 @@ export default function DashboardLayout({
   // pathname.startsWith("/dashboard/(kb|settings|chat)") literal lives here.
   const drill = segmentToDrillLevel(pathname);
   const settingsActive = drill === "settings";
+  // Releases is a read-only info feed rendered in the footer info/settings
+  // group (alongside Status/Settings), NOT the primary action-tab loop. It
+  // stays in NAV_ITEMS (the ⌘K palette / `g l` / help-overlay source of
+  // truth) and is filtered out of the primary render below. RELEASES_HREF
+  // pins the single route literal shared by the filter, the footer <Link>,
+  // and releasesActive. Releases is not a drill segment (DrillLevel is only
+  // "kb" | "settings" | "chat"), so its active state is a direct pathname
+  // check — `drill === "releases"` would be a TS error.
+  const RELEASES_HREF = "/dashboard/releases";
+  const releasesActive = pathname.startsWith(RELEASES_HREF);
   // The widen affordance applies to ANY expanded rail (every drill state),
   // subordinate to collapse. `kbExpanded` and `mainExpanded` are a structural
   // PARTITION of "expanded" (drill === "kb" XOR drill !== "kb"), so at most one
@@ -352,7 +388,11 @@ export default function DashboardLayout({
         <button
           onClick={toggleCollapsed}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
+          title={
+            collapsed
+              ? `Expand sidebar (${modChord("B", isApplePlatform)})`
+              : `Collapse sidebar (${modChord("B", isApplePlatform)})`
+          }
           className={`absolute ${collapsed ? "left-1/2 -translate-x-1/2 top-3" : "right-3 top-10"} z-10 hidden h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:flex`}
         >
           <RailToggleIcon
@@ -383,7 +423,12 @@ export default function DashboardLayout({
           <>
             {/* Navigation */}
             <nav className={`flex-1 space-y-1 pt-3 ${collapsed ? "px-1" : "px-3"}`}>
-              {navItems.map((item) => {
+              {navItems.filter((item) => item.href !== RELEASES_HREF).map((item) => {
+                // Sticky resume only rewrites the Knowledge Base main-nav href
+                // (#4826 AC2). Active-state still keys on the canonical
+                // section-root href so deep docs keep the gold treatment.
+                const href =
+                  item.href === "/dashboard/kb" ? kbEntryHref : item.href;
                 const active =
                   item.href === "/dashboard"
                     ? pathname === "/dashboard" || drill === "chat"
@@ -393,7 +438,8 @@ export default function DashboardLayout({
                 return (
                   <Link
                     key={item.href}
-                    href={item.href}
+                    href={href}
+                    data-tour-id={item.href}
                     title={collapsed ? item.label : undefined}
                     aria-current={active ? "page" : undefined}
                     className={`relative flex min-h-[44px] items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
@@ -416,6 +462,22 @@ export default function DashboardLayout({
                     <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
                       {item.label}
                     </span>
+                    {/* Nav attention-count badges, special-cased by href (matching
+                        the `/dashboard` active-check above) to keep nav-items.ts
+                        as pure route/label data. Mounted here — inside this
+                        layout's <SWRConfig> (ADR-067) — so each fetch dedups with
+                        its surface's list under the shared key. Inbox counts the
+                        active email feed; Dashboard counts conversations needing a
+                        decision; Workstream counts items needing attention. */}
+                    {item.href === "/dashboard/inbox" && (
+                      <InboxNavBadge collapsed={collapsed} />
+                    )}
+                    {item.href === "/dashboard" && (
+                      <ConversationsNavBadge collapsed={collapsed} />
+                    )}
+                    {item.href === "/dashboard/workstream" && (
+                      <WorkstreamNavBadge collapsed={collapsed} />
+                    )}
                   </Link>
                 );
               })}
@@ -431,6 +493,30 @@ export default function DashboardLayout({
                   {userEmail}
                 </p>
               )}
+              {/* Releases — read-only release-notes feed, grouped with the
+                  info/settings chrome. Icon referenced directly (not via
+                  NAV_ICONS, which is consumed only inside the primary loop);
+                  neutral active treatment mirrors Settings so it reads as part
+                  of this group, driven by the direct pathname check. */}
+              <Link
+                href={RELEASES_HREF}
+                data-tour-id={RELEASES_HREF}
+                title={collapsed ? "Releases" : undefined}
+                aria-current={releasesActive ? "page" : undefined}
+                className={`relative flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                  releasesActive
+                    ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+                    : "text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
+                } ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
+              >
+                <RocketIcon className="h-4 w-4 shrink-0" />
+                <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Releases</span>
+                {/* "New version published" cue — a calm gold dot when a web-v*
+                    release newer than this device's last-seen tag has shipped
+                    (feat-releases-nav-badge). Mounted inside the layout's
+                    <SWRConfig> so its fetch dedups with the Releases surface. */}
+                <ReleasesNavBadge collapsed={collapsed} />
+              </Link>
               <a
                 href="https://soleur-ai.betteruptime.com/"
                 target="_blank"
@@ -443,6 +529,7 @@ export default function DashboardLayout({
               </a>
               <Link
                 href="/dashboard/settings"
+                data-tour-id="/dashboard/settings"
                 title={collapsed ? "Settings" : undefined}
                 aria-current={settingsActive ? "page" : undefined}
                 className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
@@ -565,9 +652,16 @@ export default function DashboardLayout({
     </div>
     {/* Command layer (feat-web-app-shortcuts) — portal-rendered (Radix), so
         placement inside the provider is positional only. Both no-op when the
-        command-palette flag is off (enabled=false). */}
-    <CommandPalette />
-    <HelpOverlay />
+        command-palette flag is off (enabled=false). feat-guided-tour: TourProvider
+        wraps the launch surfaces (support panel + ? overlay) + auto-first-run; no-op
+        when the guided-tour flag is off. */}
+    <TourProvider>
+      <CommandPalette />
+      <HelpOverlay />
+      {/* feat-support-interface — flag-gated floating support launcher + slide-over.
+          No-op when the `support` flag is off (renders null internally). */}
+      <SupportLauncher />
+    </TourProvider>
     </ShortcutsProvider>
     </RailCollapsedProvider>
     </RailSlotProvider>
@@ -761,6 +855,62 @@ function ChartIcon({ className }: { className?: string }) {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z"
+      />
+    </svg>
+  );
+}
+
+function KanbanIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3.75 5.25h4.5v13.5h-4.5V5.25Zm6 0h4.5v9h-4.5v-9Zm6 0h4.5v6h-4.5v-6Z"
+      />
+    </svg>
+  );
+}
+
+// CRM nav glyph (#6172): people/contacts — the beta-CRM pipeline of prospects.
+function ContactsIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M18 18.72a9.094 9.094 0 0 0 3.741-.479 3 3 0 0 0-4.682-2.72m.94 3.198.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0 1 12 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 0 1 6 18.719m12 0a5.971 5.971 0 0 0-.941-3.197m0 0A5.995 5.995 0 0 0 12 12.75a5.995 5.995 0 0 0-5.058 2.772m0 0a3 3 0 0 0-4.681 2.72 8.986 8.986 0 0 0 3.74.477m.94-3.197a5.971 5.971 0 0 0-.94 3.197M15 6.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm6 3a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Zm-13.5 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Z"
+      />
+    </svg>
+  );
+}
+
+// Releases nav glyph (#5958): a rocket — "what we've shipped".
+function RocketIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15.59 14.37a6 6 0 0 1-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 0 0 6.16-12.12A14.98 14.98 0 0 0 9.63 8.41m5.96 5.96a14.926 14.926 0 0 1-5.84 2.58m0 0a6.003 6.003 0 0 0-7.38-5.84 6 6 0 0 1 7.38 5.84Zm-2.58-5.96a3 3 0 1 0-4.24-4.24 3 3 0 0 0 4.24 4.24Z"
       />
     </svg>
   );

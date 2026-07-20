@@ -107,7 +107,7 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/c4-model.md` 
 | API Routes | Not Implemented | — | No uptime monitoring |
 | Agent Runtime | Not Implemented | — | No service health tracking |
 | Supabase PostgreSQL | Implemented | Supabase Dashboard | Built-in service health monitoring |
-| Inngest session pool (durable backend) | Implemented | `scheduled-inngest-health.yml` pool-utilization probe (#5562, metric corrected #5563) | External 15-min Management-API read of `pg_stat_activity`, counting ONLY inngest-attributable client backends (not infra baseline); alerts at ~80% of inngest's client cap (10, `--postgres-max-open-conns`) as a leading indicator BEFORE `EMAXCONNSESSION`, and classifies the cliff as `pool_exhausted` (alert, excluded from auto-restart). Capacity/utilization monitor, not just up/down. |
+| Inngest session pool (durable backend) | Implemented | `scheduled-inngest-health.yml` pool-utilization probe (#5562, metric corrected #5563) | External 15-min Management-API read of `pg_stat_activity`, counting ONLY inngest-attributable client backends (not infra baseline); alerts at ~80% of inngest's worst-case TOTAL footprint (`INNGEST_CLIENT_CAP` = P × per-pool cap 5 ≤ 20; `--postgres-max-open-conns` is per-pool, #6258/ADR-105) as a leading indicator BEFORE `EMAXCONNSESSION`, and classifies the cliff as `pool_exhausted` (alert, excluded from auto-restart). Capacity/utilization monitor, not just up/down. |
 
 ### NFR-004: Process-Level Monitoring
 
@@ -401,14 +401,14 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/c4-model.md` 
 
 ### NFR-019: Auto-Scaling
 
-**Category:** Scaling & Recovery | **Scope:** Container | **System-Level Status:** N/A (by ADR-027)
+**Category:** Scaling & Recovery | **Scope:** Container | **System-Level Status:** Adopting (ADR-068; horizontal multi-host lands 3.D, realized at Phase-3 GA cutover — soak-gated)
 
 | Container/Link | Status | Enforced By | Evidence |
 |----------------|--------|-------------|----------|
-| Dashboard | N/A | ADR-027 | Process-local session/approval state; replicas=1 invariant |
-| API Routes | N/A | ADR-027 | Process-local session/approval state; replicas=1 invariant |
-| Agent Runtime | N/A | ADR-027 | Process-local session/approval state; replicas=1 invariant |
-| Compute | N/A | — | No orchestrator for auto-scaling |
+| Dashboard | Adopting | ADR-068 | Per-user host-sticky routing (ADR-068 D0 `worktree_id`) retires the ADR-027 replicas=1 invariant; process-local state now host-affine. Horizontal 2-host scale-out lands 3.D; realized at GA cutover (soak-gated, AC11) |
+| API Routes | Adopting | ADR-068 | Per-user host-sticky routing retires the replicas=1 invariant; realized at GA cutover (soak-gated, AC11) |
+| Agent Runtime | Adopting | ADR-068 | Per-user worktree lease + host-sticky routing; realized at GA cutover (soak-gated, AC11) |
+| Compute | N/A | — | No orchestrator for auto-scaling (fixed 2-host user-sticky topology, not elastic auto-scale) |
 
 ### NFR-020: Auto-Healing
 
@@ -508,6 +508,7 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/c4-model.md` 
 | Cloudflare Tunnel -> API Routes | Implemented | HTTPS | Tunnel uses encrypted connection |
 | Doppler -> Agent Runtime | Implemented | HTTPS | Doppler CLI uses HTTPS for secret fetch |
 | Dashboard -> Plausible | Implemented | HTTPS | JS snippet loaded via HTTPS |
+| Web Host -> Owner Host (proxy) | Adopting | One-way TLS | Host↔host WS relay: long-lived self-signed server cert, client pins our CA (`rejectUnauthorized:true`, ADR-068 §6 amendment). Realized + verified at GA cutover (soak-gated) — status flips to Implemented only after the one-way-TLS channel is verified in prod |
 
 ### NFR-027: Encryption At-Rest
 
@@ -517,7 +518,8 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/c4-model.md` 
 |----------------|--------|-------------|----------|
 | Supabase PostgreSQL | Implemented | Supabase | Database encrypted at rest by default |
 | Agent Runtime | Implemented | BYOK | User API keys: AES-256-GCM + HKDF per-user (ADR-004) |
-| Compute | Not Implemented | — | Hetzner server volumes not encrypted at disk level |
+| git-data volume | Adopting | LUKS (cryptsetup) | Fresh LUKS-encrypted git-data volume, guest-side (Doppler-env key at boot, never argv; idempotent `cryptsetup isLuks` guard; mount `/dev/mapper/git-data`). Lands 3.D; realized + verified at GA cutover (soak-gated) — flips to Implemented after LUKS-at-rest verified in prod |
+| Compute | Not Implemented | — | Hetzner web/workspaces server volumes not encrypted at disk level (only the git-data volume is LUKS-encrypted, 3.D) |
 
 ### NFR-028: Geo Distribution
 

@@ -72,7 +72,7 @@ type AsyncState =
   | { phase: "needsReconnect" };
 
 export function CommandPalette() {
-  const { enabled, paletteOpen, closePalette, isAdmin, runEffect } =
+  const { enabled, paletteOpen, closePalette, isAdmin, isApplePlatform, runEffect } =
     useShortcuts();
 
   const [query, setQuery] = useState("");
@@ -206,7 +206,7 @@ export function CommandPalette() {
 
   if (!enabled) return null;
 
-  const statics = buildCommands({ isAdmin });
+  const statics = buildCommands({ isAdmin }, { isApplePlatform });
   const navCmds = statics.filter((c) => c.group === "Navigation");
   const settingsCmds = statics.filter((c) => c.group === "Settings");
   const askCmd = statics.find((c) => c.id === "ask-agent");
@@ -278,13 +278,25 @@ export function CommandPalette() {
               {askCmd && (
                 <Command.Group heading="Ask an agent">
                   <Command.Item
-                    value={trimmed ? `ask agent ${trimmed}` : "ask an agent"}
+                    value={
+                      trimmed
+                        ? `ask agent ${trimmed}`
+                        : `ask an agent ${askCmd.keys ?? ""}`
+                    }
                     onSelect={() =>
                       runEffect({ kind: "openChat", query: trimmed || undefined })
                     }
                     data-testid="cmd-ask-agent"
                   >
                     {trimmed ? `Ask an agent about “${trimmed}”` : askCmd.label}
+                    {/* Accel + g-seq hints share the `!trimmed` gate (Kieran
+                        P2b) so neither renders once the user types a query. */}
+                    {!trimmed && askCmd.accelKeys && (
+                      <span className="cmdk-keys"> {askCmd.accelKeys}</span>
+                    )}
+                    {!trimmed && askCmd.keys && (
+                      <span className="cmdk-keys"> {askCmd.keys}</span>
+                    )}
                   </Command.Item>
                 </Command.Group>
               )}
@@ -293,10 +305,16 @@ export function CommandPalette() {
                 {navCmds.map((cmd) => (
                   <Command.Item
                     key={cmd.id}
-                    value={cmd.label}
+                    value={`${cmd.label} ${cmd.keys ?? ""}`}
                     onSelect={() => onSelectCommand(cmd)}
                   >
                     {cmd.label}
+                    {/* Accelerator glyph FIRST (Apple-only), then the g-seq —
+                        both muted, flush-right, no separator (wireframe). */}
+                    {cmd.accelKeys && (
+                      <span className="cmdk-keys"> {cmd.accelKeys}</span>
+                    )}
+                    {cmd.keys && <span className="cmdk-keys"> {cmd.keys}</span>}
                   </Command.Item>
                 ))}
               </Command.Group>

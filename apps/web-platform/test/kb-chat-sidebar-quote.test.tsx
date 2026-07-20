@@ -136,11 +136,13 @@ describe("KbChatSidebar — quote wiring", () => {
     expect(calls).not.toContain("kb.chat.selection_sent");
   });
 
-  it("sidebar input placeholder includes the ⌘⇧L shortcut hint", async () => {
+  it("sidebar input placeholder includes the platform quote-selection hint (Ctrl+Shift+L off-Apple)", async () => {
     await renderSidebar();
     const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
+    // happy-dom's navigator is non-Apple → the hint renders `Ctrl+Shift+L`
+    // (the ⌘⇧L glyph shows only on Apple platforms — FR2 platform-aware glyphs).
     expect(textarea.getAttribute("placeholder") ?? "").toMatch(
-      /ask about this document.*⌘⇧L/i,
+      /ask about this document.*Ctrl\+Shift\+L/i,
     );
   });
 });

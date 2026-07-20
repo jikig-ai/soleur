@@ -48,6 +48,7 @@ vi.mock("@/server/inngest/functions/_predicate-validator", () => ({
 
 const reportSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
+  mirrorWarnWithDebounce: vi.fn(),
   reportSilentFallback: reportSilentFallbackSpy,
 }));
 
@@ -567,5 +568,104 @@ describe("cron-follow-through-monitor — T6 SSRF hardening (#4068)", () => {
     expect(allowedToolsValue).toContain("Bash(gh issue list:");
     expect(allowedToolsValue).toContain("Bash(gh issue comment:");
     expect(allowedToolsValue).toContain("Bash(gh issue close:");
+  });
+});
+
+describe("cron-follow-through-monitor — T9 Guard C not-planned close semantics (#6132)", () => {
+  // #6132: Guard C ("MAX POLLING EXCEEDED") used a BARE `gh issue close`, which
+  // the GitHub CLI records as state_reason: COMPLETED — a false "done" signal on
+  // a timed-out, never-verified follow-through. Guard C now closes with
+  // `--reason "not planned"` and strips the now-misleading `needs-attention`
+  // label BEFORE closing. Guard A (predicate PASSES → auto-close) is unchanged:
+  // its bare close correctly records COMPLETED. These assertions read the
+  // exported prompt instruction text (the strongest available guard — the agent
+  // itself cannot be executed in-suite; runtime correctness is verified post-
+  // merge via the AC8 discoverability gh query).
+
+  // Region-slice helper: [startAnchor, endAnchor) substring of the prompt.
+  function region(prompt: string, startAnchor: string, endAnchor: string): string {
+    const start = prompt.indexOf(startAnchor);
+    expect(start, `start anchor not found: ${startAnchor}`).toBeGreaterThan(-1);
+    const end = prompt.indexOf(endAnchor, start);
+    expect(end, `end anchor not found: ${endAnchor}`).toBeGreaterThan(start);
+    return prompt.slice(start, end);
+  }
+
+  it('Guard C closes with --reason "not planned" and strips needs-attention before close', async () => {
+    const { FOLLOW_THROUGH_PROMPT } = await import(
+      "@/server/inngest/functions/cron-follow-through-monitor"
+    );
+    const guardC = region(
+      FOLLOW_THROUGH_PROMPT,
+      "MAX POLLING EXCEEDED",
+      "WITHIN SLA, NO STATE CHANGE",
+    );
+
+    // Closes as not-planned (never a bare close = COMPLETED, the #6132 bug).
+    expect(guardC).toContain('gh issue close <number> --reason "not planned"');
+    // Strips the now-misleading needs-attention label before closing.
+    expect(guardC).toContain(
+      'gh issue edit <number> --remove-label "needs-attention"',
+    );
+    // The old contradictory add-then-strip step is gone — `--add-label` (the
+    // old Guard C step 1) must not appear in the Guard C region. Scoped to
+    // guardC (not the whole prompt) so a future Guard B edit that renders its
+    // "add needs-attention label" instruction as a literal flag does not
+    // false-fail this assertion; the RED-on-revert guarantee is preserved
+    // because the removed --add-label lived in Guard C.
+    expect(guardC).not.toContain("--add-label");
+
+    // ORDERING IS LOAD-BEARING (the fix's core invariant): comment FIRST →
+    // strip needs-attention BEFORE close. toContain proves presence, not
+    // order — a regression emitting the close before the strip (leaving
+    // needs-attention on a closed issue, the exact failure mode #6132 fixes)
+    // would pass a presence-only check. Assert the three steps are in order.
+    const commentIdx = guardC.indexOf("gh issue comment <number>");
+    const stripIdx = guardC.indexOf(
+      'gh issue edit <number> --remove-label "needs-attention"',
+    );
+    const closeIdx = guardC.indexOf(
+      'gh issue close <number> --reason "not planned"',
+    );
+    expect(commentIdx).toBeGreaterThan(-1);
+    expect(stripIdx).toBeGreaterThan(commentIdx); // strip after comment…
+    expect(closeIdx).toBeGreaterThan(stripIdx); // …and before close
+  });
+
+  it("Guard A (predicate PASSES) stays a bare COMPLETED close — no --reason", async () => {
+    const { FOLLOW_THROUGH_PROMPT } = await import(
+      "@/server/inngest/functions/cron-follow-through-monitor"
+    );
+    const guardA = region(
+      FOLLOW_THROUGH_PROMPT,
+      "PREDICATE PASSES",
+      "SLA EXCEEDED (first time",
+    );
+
+    // Guard A still closes the issue…
+    expect(guardA).toContain("gh issue close <number>");
+    // …but WITHOUT a reason flag — predicate-pass closes are correctly COMPLETED.
+    expect(guardA).not.toContain("--reason");
+    expect(guardA).not.toContain("not planned");
+  });
+
+  it('the ONLY --reason "not planned" close command is in the Guard C region', async () => {
+    const { FOLLOW_THROUGH_PROMPT } = await import(
+      "@/server/inngest/functions/cron-follow-through-monitor"
+    );
+    // AC3 determinism: the exact <number>-command form appears exactly once,
+    // and it falls inside Guard C. (The Guard A inline comment and the Sharp
+    // Edges clarifier may mention the words "not planned" in prose, but MUST
+    // NOT reproduce this exact command string — so a count of the command form
+    // stays deterministic at 1.)
+    const cmd = 'gh issue close <number> --reason "not planned"';
+    const occurrences = FOLLOW_THROUGH_PROMPT.split(cmd).length - 1;
+    expect(occurrences).toBe(1);
+    const guardC = region(
+      FOLLOW_THROUGH_PROMPT,
+      "MAX POLLING EXCEEDED",
+      "WITHIN SLA, NO STATE CHANGE",
+    );
+    expect(guardC).toContain(cmd);
   });
 });

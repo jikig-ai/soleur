@@ -199,6 +199,34 @@ async function setupNavMocks(page: Page): Promise<void> {
   });
 
   // Populated so the collapsed Chat case asserts overflow against REAL rows.
+  // The rail LIST now reads via the list_conversations_enriched RPC (mig 125):
+  // return each seeded conversation plus its message snippets (derived the same
+  // way the SQL LATERAL joins do) so the rail renders the seeded row titles.
+  // The /rest/v1/conversations + /rest/v1/messages routes below are retained for
+  // the orphan-count query + any archive/status mutation; the rail LIST no
+  // longer reads them.
+  await page.route("**/rest/v1/rpc/list_conversations_enriched*", (route) => {
+    const enriched = SEEDED_CONVERSATIONS.map((c) => {
+      const msgs = SEEDED_MESSAGES.filter((m) => m.conversation_id === c.id).sort(
+        (a, b) => a.created_at.localeCompare(b.created_at),
+      );
+      const firstUser = msgs.find((m) => m.role === "user");
+      const firstAssistant = msgs.find((m) => m.role === "assistant");
+      const last = msgs[msgs.length - 1];
+      return {
+        ...c,
+        first_user_content: firstUser?.content ?? null,
+        first_assistant_content: firstAssistant?.content ?? null,
+        last_content: last?.content ?? null,
+        last_leader: last?.leader_id ?? null,
+      };
+    });
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(enriched),
+    });
+  });
   await page.route("**/rest/v1/conversations*", (route) =>
     route.fulfill({
       status: 200,
@@ -266,6 +294,19 @@ async function setupNavMocks(page: Page): Promise<void> {
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(SEEDED_KB_TREE),
+    }),
+  );
+  // The DASHBOARD page (unlike the KB rail) now derives its foundation-card +
+  // first-run state from /api/dashboard/foundation-status (a targeted stat),
+  // NOT /api/kb/tree. Return a populated paths map so `/dashboard` renders its
+  // normal command-center chrome (vision present ⇒ not the first-run screen).
+  await page.route("**/api/dashboard/foundation-status*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        paths: { "overview/vision.md": { exists: true, size: 1000 } },
+      }),
     }),
   );
   await page.route("**/api/byok/**", (route) =>
@@ -834,6 +875,11 @@ test.describe("widenable KB rail — desktop", () => {
     await expect(toggle).toHaveAccessibleName("Collapse sidebar");
     await expect(toggle.locator("svg")).not.toHaveClass(/rotate-180/);
 
+    // The collapse toggle's onClick attaches at hydration; settle before the
+    // first click so it is not a no-op (mirrors the sibling double-click and
+    // mobile-drawer tests). See e2e trap #2 (hydration-before-interaction) in
+    // knowledge-base/project/learnings/ui-bugs/2026-06-03-dynamic-width-needs-css-var-not-tailwind-arbitrary-or-usemediaquery.md
+    await page.waitForTimeout(1500);
     await toggle.click();
 
     // Collapsed: rail is the 56px icon rail, the toggle now reads "Expand

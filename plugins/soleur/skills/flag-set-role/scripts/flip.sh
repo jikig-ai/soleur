@@ -58,6 +58,10 @@ declare -A FLAG_ENV_VARS=(
   ["c4-visualizer"]="FLAG_C4_VISUALIZER"
   ["debug-mode"]="FLAG_DEBUG_MODE"
   ["c4-edit"]="FLAG_C4_EDIT"
+  ["command-palette"]="FLAG_COMMAND_PALETTE"
+  ["support"]="FLAG_SUPPORT"
+  ["support-live"]="FLAG_SUPPORT_LIVE"
+  ["guided-tour"]="FLAG_GUIDED_TOUR"
 )
 
 # --- arg parsing ------------------------------------------------------------

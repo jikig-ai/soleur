@@ -65,7 +65,7 @@ function makeAssistant(
     message: {
       id: partial.uuid ?? "msg_1",
       role: "assistant",
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-5",
       stop_reason: null,
       stop_sequence: null,
       type: "message",
@@ -268,6 +268,7 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     const routing: ConversationRouting = { kind: "soleur_go_pending" };
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-1",
       userId: "user-1",
       userMessage: "Plan a new feature for onboarding.",
@@ -314,6 +315,7 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-1",
       userId: "user-1",
       userMessage: "hey",
@@ -367,6 +369,7 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "conv-sentinel",
       userId: "u1",
       userMessage: "review my branch",
@@ -407,6 +410,7 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-cap",
       userId: "u1",
       userMessage: "brainstorm a feature",
@@ -447,6 +451,7 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-default-cap",
       userId: "u1",
       userMessage: "do something",
@@ -480,6 +485,7 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-runaway",
       userId: "u1",
       userMessage: "do forever",
@@ -561,6 +567,7 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-cost",
       userId: "u1",
       userMessage: "ok",
@@ -601,6 +608,7 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-turn",
       userId: "u1",
       userMessage: "hi",
@@ -636,6 +644,7 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     const events = makeEvents();
 
     await runner.dispatch({
+      persona: "command_center",
       conversationId: "c-text",
       userId: "u1",
       userMessage: "hi",

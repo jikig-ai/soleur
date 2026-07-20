@@ -146,6 +146,7 @@ describe("cc-dispatcher — onResult wires persistTurnCost (#3626)", () => {
     __setCcRunnerForTests(stubRunner);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-cost-1",
       conversationId: "conv-cost-1",
       userMessage: "hi",
@@ -172,6 +173,9 @@ describe("cc-dispatcher — onResult wires persistTurnCost (#3626)", () => {
           cache_creation_input_tokens: 800,
         },
       },
+      // #cost-attribution (plan Phase 1): the cc-soleur-go marker (model rides
+      // null on this path — see cc-dispatcher.ts onResult).
+      { source: "cc-soleur-go", model: null },
       undefined,
     );
   });
@@ -193,6 +197,7 @@ describe("cc-dispatcher — onResult wires persistTurnCost (#3626)", () => {
     __setCcRunnerForTests(stubRunner);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-cost-2",
       conversationId: "conv-cost-2",
       userMessage: "hi",

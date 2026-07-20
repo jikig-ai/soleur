@@ -39,23 +39,24 @@ AGENTS
   echo "$root"
 }
 
-# T1: empty jsonl → all hit_count=0, rules listed, summary correct
+# T1: empty jsonl → no-op guard leaves file UNWRITTEN (issue #6042); the report
+# is still buildable via --dry-run (3 rules, all unused). The old behavior
+# (empty input writes an all-zero snapshot) was the clobber #6042 removes.
 t_empty() {
   local root; root=$(_setup)
+  local out="$root/knowledge-base/project/rule-metrics.json"
   INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" >/dev/null 2>&1 || {
-    _report "empty jsonl aggregation" fail "non-zero exit"
+    _report "empty jsonl → exit 0" fail "non-zero exit"
     rm -rf "$root"; return
   }
-  local out="$root/knowledge-base/project/rule-metrics.json"
-  [[ -s "$out" ]] || { _report "empty: output exists" fail; rm -rf "$root"; return; }
-  jq empty "$out" >/dev/null 2>&1 || { _report "empty: valid JSON" fail; rm -rf "$root"; return; }
-  local total unused
-  total=$(jq '.rules | length' < "$out")
-  unused=$(jq '.summary.rules_unused_over_8w // 0' < "$out")
-  [[ "$total" == "3" ]] || { _report "empty: 3 rules parsed" fail "got $total"; rm -rf "$root"; return; }
-  # all rules unused because jsonl is empty
-  [[ "$unused" == "3" ]] || { _report "empty: all 3 unused" fail "got $unused"; rm -rf "$root"; return; }
-  _report "empty jsonl aggregation" ok
+  [[ ! -f "$out" ]] || { _report "empty jsonl → no file written (no-op)" fail; rm -rf "$root"; return; }
+  local dry total unused
+  dry=$(INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" --dry-run 2>/dev/null)
+  total=$(jq '.summary.total_rules_tagged' <<< "$dry")
+  unused=$(jq '.summary.rules_unused_over_8w' <<< "$dry")
+  [[ "$total" == "3" ]] || { _report "empty: --dry-run 3 rules parsed" fail "got $total"; rm -rf "$root"; return; }
+  [[ "$unused" == "3" ]] || { _report "empty: --dry-run all 3 unused" fail "got $unused"; rm -rf "$root"; return; }
+  _report "empty jsonl → no-op write, --dry-run reports all unused" ok
   rm -rf "$root"
 }
 
@@ -89,6 +90,11 @@ t_counts() {
 # T3: re-run with no new data → no rewrite (idempotent, diff-noise)
 t_idempotent() {
   local root; root=$(_setup)
+  # Seed a real event so the aggregator actually writes (the empty-log path now
+  # no-ops per #6042); idempotency is about the material-change gate, not the
+  # no-op guard.
+  jq -nc '{schema:1, timestamp:"2026-04-10T00:00:00Z", rule_id:"hr-rule-a", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
+    >> "$root/.claude/.rule-incidents.jsonl"
   INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" >/dev/null 2>&1
   local out="$root/knowledge-base/project/rule-metrics.json"
   local first_mtime
@@ -155,6 +161,9 @@ t_malformed_tolerance() {
 # T6: schema field present on output
 t_schema_field() {
   local root; root=$(_setup)
+  # Seed a real event so the aggregator writes a file (empty-log now no-ops, #6042).
+  jq -nc '{schema:1, timestamp:"2026-04-10T00:00:00Z", rule_id:"hr-rule-a", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
+    >> "$root/.claude/.rule-incidents.jsonl"
   INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" >/dev/null 2>&1
   local out="$root/knowledge-base/project/rule-metrics.json"
   local schema; schema=$(jq -r '.schema' < "$out")
@@ -205,6 +214,29 @@ t_orphan_ids_surfaced() {
   rm -rf "$root"
 }
 
+# T8b: context-reviewed-* telemetry ids are EXEMPT from the orphan gate
+# (issue #5999, ADR-094) — the freshness audit tripwire logs undeclared
+# last_reviewed bumps under operational rule_ids that have no AGENTS.md tag
+# (B_ALWAYS has no headroom for one). They must NOT surface as orphans and
+# must NOT fail the run. Mirrors the te-*/gdpr-gate-* exemptions.
+t_context_reviewed_exempt() {
+  local root; root=$(_setup)
+  jq -nc '{schema:1, timestamp:"2026-07-05T00:00:00Z", rule_id:"context-reviewed-gate", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+  jq -nc '{schema:1, timestamp:"2026-07-05T00:01:00Z", rule_id:"context-reviewed-hook-self-fault", event_type:"warn", rule_text_prefix:"", command_snippet:"", kind:"hook_self_fault"}' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+  local exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" >/dev/null 2>&1 || exit_code=$?
+  local orphan
+  orphan=$(jq -r '.summary.orphan_rule_ids | join(",")' < "$root/knowledge-base/project/rule-metrics.json")
+  if [[ -z "$orphan" && "$exit_code" == "0" ]]; then
+    _report "context-reviewed-* exempt from orphan gate (exit 0, no orphans)" ok
+  else
+    _report "context-reviewed-* exempt from orphan gate" fail "orphan='$orphan' exit=$exit_code"
+  fi
+  rm -rf "$root"
+}
+
 # T9: rotate-twice-same-month → second archive uniquified (no clobber).
 t_rotate_twice_same_month() {
   local root; root=$(_setup)
@@ -245,6 +277,7 @@ t_malformed_tolerance
 t_schema_field
 t_malformed_first_seen
 t_orphan_ids_surfaced
+t_context_reviewed_exempt
 t_rotate_twice_same_month
 
 echo "=== $pass passed, $fail failed ==="

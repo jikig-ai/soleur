@@ -75,6 +75,10 @@ elif [[ ! -f "$REDIS_CONF" ]]; then
 fi
 if [[ -f /tmp/inngest-redis.service ]]; then
   assert_not_symlink /tmp/inngest-redis.service
+  # #6555: the redis unit dropped `--project` and resolves the project from
+  # EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime — no
+  # @@DOPPLER_PROJECT@@ sentinel remains, so install it verbatim (no substitution round-trip
+  # that could mask a re-introduction).
   install -m 0644 /tmp/inngest-redis.service "$UNIT_FILE"
 fi
 if [[ ! -f "$UNIT_FILE" ]]; then

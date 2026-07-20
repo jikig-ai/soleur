@@ -60,7 +60,7 @@ Default is `Post-MVP / Later`: plan-time verification showed 15+ of the 22 open 
 Delegate to the helper [group-by-area.sh](./scripts/group-by-area.sh):
 
 ```bash
-bash plugins/soleur/skills/drain-labeled-backlog/scripts/group-by-area.sh \
+bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/drain-labeled-backlog/scripts/group-by-area.sh \
   --label "${LABEL:-deferred-scope-out}" \
   --milestone "$MILESTONE" \
   --top-n "${N:-1}" \
@@ -126,7 +126,7 @@ The `/soleur:schedule` skill accepts any soleur skill as `--skill <name>` and ge
 
 ```text
 /soleur:schedule create --name weekly-deferred-scope-out-drain \
-  --skill drain-labeled-backlog --cron "0 14 * * 1" --model claude-sonnet-4-6
+  --skill drain-labeled-backlog --cron "0 14 * * 1" --model claude-sonnet-5
 ```
 
 This turns the skill from a manual cadence tool into a programmatic backlog opener. Tracked as a follow-up issue rather than bundled into this skill, so the skill lands clean.

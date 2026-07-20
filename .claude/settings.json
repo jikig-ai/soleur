@@ -6,7 +6,13 @@
       "Bash(git add && git commit:*)",
       "Bash(git commit -m:*)",
       "Bash(git commit -F:*)",
-      "Bash(bash $(git rev-parse --show-toplevel)/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh *)"
+      "Bash(bash $(git rev-parse --show-toplevel)/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh *)",
+      "Bash(gh pr merge:*)"
+    ],
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/lib/stripe.ts)"
     ]
   },
   "env": {
@@ -51,6 +57,15 @@
         "hooks": [
           {
             "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-merge-auto-close-scan.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/ship-unpushed-commits-gate.sh"
           }
         ]
@@ -69,7 +84,25 @@
         "hooks": [
           {
             "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/ship-soak-followthrough-gate.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/follow-through-directive-gate.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/context-reviewed-gate.sh"
           }
         ]
       },
@@ -142,6 +175,15 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/worktree-write-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guardrails.sh"
           }
         ]
       },
@@ -270,6 +312,24 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pencil-collapse-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/phase-surface-hint.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/skill-context-queries.sh"
           }
         ]
       }

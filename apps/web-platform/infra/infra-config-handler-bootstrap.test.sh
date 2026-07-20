@@ -79,8 +79,8 @@ echo ""
 echo "--- AC2: SSH connection block matches the 7-sibling shape ---"
 assert "SSH connection block (type = ssh)" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'type[[:space:]]*=[[:space:]]*\"ssh\"'"
-assert "connection host = hcloud_server.web.ipv4_address" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\.ipv4_address'"
+assert "connection host = hcloud_server.web[\"web-1\"].ipv4_address" \
+  "printf '%s' \"\$BLOCK\" | grep -qE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\[\"web-1\"\]\.ipv4_address'"
 assert "connection user = root" \
   "printf '%s' \"\$BLOCK\" | grep -qE 'user[[:space:]]*=[[:space:]]*\"root\"'"
 # `agent = true` was stale post-#4845: server.tf now uses the dual-context

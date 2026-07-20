@@ -106,6 +106,7 @@ vi.mock("node:fs", () => ({
 const reportSilentFallbackSpy = vi.fn();
 const warnSilentFallbackSpy = vi.fn();
 vi.mock("@/server/observability", () => ({
+  mirrorWarnWithDebounce: vi.fn(),
   reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: warnSilentFallbackSpy,
 }));
@@ -708,7 +709,7 @@ describe("cron-bug-fixer — (c) spawn argv shape", () => {
     expect(args).toContain("--max-turns");
     expect(args).toContain("55");
     expect(args).toContain("--model");
-    expect(args).toContain("claude-sonnet-4-6");
+    expect(args).toContain("claude-sonnet-5");
 
     // Regression guard for #4017 bug 8/8: `--` MUST be immediately before
     // the prompt (the last argument).
@@ -1004,12 +1005,13 @@ describe("cron-bug-fixer — (e) Sentry heartbeat URL shape", () => {
     expect(noFixWarn).toBeDefined();
   });
 
-  it("claude-eval aborted by 50-min timeout → ?status=ok (monitor stays green; chronic-timeout still surfaces as non-paging telemetry)", async () => {
-    // A timeout is the same liveness class as a non-zero exit: the pipeline
-    // fired and ran to a heartbeat without an infrastructure fault, so the
-    // monitor must read ok. The chronic-timeout signal is preserved as a
-    // separate non-paging reportSilentFallback breadcrumb (op=claude-eval-timeout),
-    // NOT as a cron-monitor status=error page. (H2 in the same plan.)
+  it("claude-eval aborted by 50-min timeout → ?status=error (FATAL class — monitor flips red; #5674 classify-fatal)", async () => {
+    // #5674 reclassifies the AbortController timeout as a FATAL class (folded
+    // into resolveBestEffortEvalOk): a chronically-timing-out fixer that ships
+    // nothing is an infrastructure-shaped failure the operator must see, so the
+    // monitor now flips RED and routine_runs records the reason. This supersedes
+    // the prior "timeout stays green" policy (the old claude-eval-timeout
+    // breadcrumb is folded into the single op=claude-eval-fatal signal).
     vi.useFakeTimers();
     try {
       const p3Issues = [
@@ -1057,18 +1059,20 @@ describe("cron-bug-fixer — (e) Sentry heartbeat URL shape", () => {
 
       const result = await resultPromise;
 
-      expect(result.ok).toBe(true);
+      expect(result.ok).toBe(false);
+      expect(result.errorSummary).toMatch(/timeout/i);
       const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
       const sentryCall = fetchMock.mock.calls.find(([url]) =>
         typeof url === "string" && url.includes("/cron/scheduled-bug-fixer/"),
       );
       expect(sentryCall).toBeDefined();
-      expect(sentryCall![0] as string).toContain("status=ok");
-      // Chronic-timeout telemetry preserved (non-paging breadcrumb).
-      const timeoutReport = reportSilentFallbackSpy.mock.calls.find(
-        ([, ctx]) => (ctx as { op?: string }).op === "claude-eval-timeout",
+      expect(sentryCall![0] as string).toContain("status=error");
+      // FATAL-class signal — the timeout reports under the single fatal op.
+      const fatalReport = reportSilentFallbackSpy.mock.calls.find(
+        ([, ctx]) => (ctx as { op?: string }).op === "claude-eval-fatal",
       );
-      expect(timeoutReport).toBeDefined();
+      expect(fatalReport).toBeDefined();
+      expect((fatalReport![1] as { extra?: { fatalClass?: string } }).extra?.fatalClass).toBe("timeout");
     } finally {
       vi.useRealTimers();
     }

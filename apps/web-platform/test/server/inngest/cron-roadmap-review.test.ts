@@ -7,11 +7,14 @@
 //   2. Prompt-canary anchors (Part 1, Part 2, MILESTONE RULE, BIDIRECTIONAL
 //      RULE) — original anchors from the GHA prompt that must survive
 //      silent paraphrasing across plan→work→ship cycles.
-//   3. Safety-guard anchors (DEDUP RULE, ISSUE CLOSURE SAFETY, ROADMAP.MD
-//      CONFLICT GUARD, CLONE DEPTH RULE) — added at review time to bound
-//      blast radius (duplicate-issue, stale-issue closure, conflict with
-//      human edits, shallow-clone staleness). A regression removing these
-//      reverts the data-integrity-guardian P1/P2 fixes from PR review.
+//   3. Safety-guard anchors (ISSUE CLOSURE SAFETY, ROADMAP.MD CONFLICT
+//      GUARD, CLONE DEPTH RULE) — added at review time to bound blast
+//      radius (stale-issue closure, conflict with human edits, shallow-clone
+//      staleness). A regression removing these reverts the
+//      data-integrity-guardian P1/P2 fixes from PR review. The prompt-level
+//      6-day DEDUP RULE was removed in the roadmap-review output-contract fix
+//      (rely on the code-level same-date dedup); a regression guard below
+//      asserts its strings stay absent.
 //   4. Timing constants exported (MAX_TURN_DURATION_MS, KILL_ESCALATION_MS)
 //      so the substrate-extraction follow-up can centralise them without
 //      breaking parity with the handler's actual values.
@@ -100,7 +103,6 @@ describe("ROADMAP_REVIEW_PROMPT — anchor strings (regression-detection)", () =
 
   describe("review-added safety-guard anchors (PR-7 data-integrity-guardian fixes)", () => {
     it.each([
-      ["DEDUP RULE", "duplicate-issue prevention (manual+cron same week)"],
       ["ISSUE CLOSURE SAFETY:", "close/reassign blast-radius bound"],
       ["ROADMAP.MD CONFLICT GUARD:", "human/agent edit collision"],
       ["CLONE DEPTH RULE:", "stale `git log` misuse on --depth=1 clone"],
@@ -110,12 +112,46 @@ describe("ROADMAP_REVIEW_PROMPT — anchor strings (regression-detection)", () =
         "activity-window guard for closures",
       ],
       ["priority/p0-critical", "exclusion label for closures"],
-      [
-        "post your findings as a comment on the most recent existing issue",
-        "dedup fallback behaviour",
-      ],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
     });
+  });
+});
+
+// Output-contract fix — the prompt-level 6-day DEDUP RULE (comment-and-exit)
+// was removed so every distinct run-day that reaches the eval creates its dated
+// digest (the monitor's check-in artifact). Same-day manual+cron duplicates are
+// handled code-side by digestIssueExistsForDate BEFORE the eval spawns. These
+// strings must stay absent from cron-roadmap-review.ts — scoped to THIS file
+// only, since _cron-shared.ts legitimately still contains dedup-related
+// language. (cron-community-monitor.ts's prompt-level DEDUP RULE was also
+// removed in #6143.)
+describe("output-contract fix — 6-day DEDUP RULE removed (regression guard)", () => {
+  it.each([
+    ["DEDUP RULE", "removed prompt-level dedup keyword"],
+    ["within the last 6 days", "removed 6-day rolling window"],
+    [
+      "post your findings as a comment on the most recent existing issue",
+      "removed comment-and-exit fallback",
+    ],
+    ["If no recent duplicate exists", "removed conditional-create preamble"],
+  ])("SUT_SOURCE does NOT contain %s (%s)", (removed) => {
+    expect(SUT_SOURCE).not.toContain(removed);
+  });
+
+  it("## Output unconditionally creates the dated digest", () => {
+    expect(SUT_SOURCE).toContain("create a new issue with:");
+  });
+});
+
+// #5786 — producer-side date-dedup serialization anchor (AC6). The cohort
+// behavioral test (cron-cohort-dedup.test.ts) proves the exactly-one-digest
+// invariant; that fake-store test serializes by invoking the handler twice in
+// sequence, so it CANNOT exercise real Inngest concurrency. This anchors the
+// registration's `{ scope: "fn", limit: 1 }` — the serializer BOTH the handler
+// dedup and the cohort test's "invocation #2 sees #1's create" depend on.
+describe("#5786 producer-side dedup — concurrency serialization anchor (AC6)", () => {
+  it('registration concurrency contains { scope: "fn", limit: 1 }', () => {
+    expect(SUT_SOURCE).toContain('{ scope: "fn", limit: 1 }');
   });
 });

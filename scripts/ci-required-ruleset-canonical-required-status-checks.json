@@ -18,5 +18,65 @@
   {
     "context": "skill-security-scan PR gate",
     "integration_id": 15368
+  },
+  {
+    "context": "gitleaks scan",
+    "integration_id": 15368
+  },
+  {
+    "context": "lint fixture content",
+    "integration_id": 15368
+  },
+  {
+    "context": "allowlist-diff (.gitleaks.toml paths surface)",
+    "integration_id": 15368
+  },
+  {
+    "context": "rename-guard (allowlist destinations)",
+    "integration_id": 15368
+  },
+  {
+    "context": "waiver discipline (issue:#NNN trailer)",
+    "integration_id": 15368
+  },
+  {
+    "context": "Bash fixture tests for guard scripts",
+    "integration_id": 15368
+  },
+  {
+    "context": "lockfile-sync",
+    "integration_id": 15368
+  },
+  {
+    "context": "service-role-allowlist-gate",
+    "integration_id": 15368
+  },
+  {
+    "context": "tc-document-sha-guard",
+    "integration_id": 15368
+  },
+  {
+    "context": "adr-ordinals",
+    "integration_id": 15368
+  },
+  {
+    "context": "enforce",
+    "integration_id": 15368
+  },
+  {
+    "context": "tenant-integration-required",
+    "integration_id": 15368
+  },
+  {
+    "context": "rule-body-lint",
+    "integration_id": 15368
+  },
+  {
+    "context": "grok-fidelity",
+    "integration_id": 15368
+  },
+  {
+    "context": "sentry-destroy-required",
+    "integration_id": 15368
   }
 ]

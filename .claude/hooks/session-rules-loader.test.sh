@@ -466,6 +466,96 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# ------------- Test 22 (AC6): frontmatter stripped on the MAIN-CONCAT path --
+# A frontmatter-bearing AGENTS.core.md → injected context carries the rule
+# bodies but NOT the YAML frontmatter keys (last_reviewed / review_cadence).
+# The fixture includes the sentinel rule-id so the over-strip guard's
+# was-present-then-gone clause has something to verify survived.
+write_frontmatter_core() {
+  cat > "$1/AGENTS.core.md" <<'CORE'
+---
+last_reviewed: 2026-07-05
+review_cadence: monthly
+owner: founder
+---
+
+# AGENTS Core
+
+## Hard Rules
+
+- Core rule [id: hr-test-core].
+- Never git stash in worktrees [id: hr-never-git-stash-in-worktrees].
+CORE
+}
+TOTAL=$((TOTAL+1))
+T22=$(mktemp -d); setup_repo "$T22" ""
+write_frontmatter_core "$T22"
+out22=$(invoke_hook "$T22")
+ctx22=$(printf '%s' "$out22" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+if printf '%s' "$ctx22" | grep -qF '[id: hr-test-core]' \
+   && printf '%s' "$ctx22" | grep -qF '[id: hr-never-git-stash-in-worktrees]' \
+   && ! printf '%s' "$ctx22" | grep -q 'last_reviewed:' \
+   && ! printf '%s' "$ctx22" | grep -q 'review_cadence:' \
+   && ! printf '%s' "$ctx22" | grep -qE '^\[rules-loader\] loaded:.*over-strip'; then
+  echo "PASS: AC6 main-concat strips frontmatter, keeps rules"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC6 main-concat strip (ctx head=$(printf '%s' "$ctx22" | head -8 | tr '\n' '~'))"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 23 (AC6): frontmatter stripped on the CORE-ONLY FALLBACK path (:50)
+# cwd NOT inside a git worktree → emit_core_only_fallback fires, reading
+# AGENTS.core.md via emit_stripped_sidecar. Frontmatter must be stripped there
+# too (the error path is not exempt).
+TOTAL=$((TOTAL+1))
+T23=$(mktemp -d)   # NOT a git repo
+write_frontmatter_core "$T23"
+payload23=$(jq -nc --arg cwd "$T23" '{cwd: $cwd, session_id: "fallback-strip"}')
+out23=$(printf '%s' "$payload23" | "$HOOK" 2>/dev/null)
+ctx23=$(printf '%s' "$out23" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+if printf '%s' "$ctx23" | grep -q 'FALLBACK' \
+   && printf '%s' "$ctx23" | grep -qF '[id: hr-test-core]' \
+   && ! printf '%s' "$ctx23" | grep -q 'last_reviewed:' \
+   && ! printf '%s' "$ctx23" | grep -q 'review_cadence:'; then
+  echo "PASS: AC6 core-only fallback (:50) strips frontmatter, keeps rules"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC6 core-only fallback strip (ctx head=$(printf '%s' "$ctx23" | head -6 | tr '\n' '~'))"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 24 (AC6): over-strip guard on MALFORMED frontmatter -----
+# An unterminated leading `---` would make the strip consume the whole sidecar
+# (empty output). The over-strip guard MUST detect this (rule count / sentinel
+# drop), inject the RAW sidecar instead (no `- [id:` rule line lost), and mark
+# the stamp with a loud over-strip note.
+TOTAL=$((TOTAL+1))
+T24=$(mktemp -d); setup_repo "$T24" ""
+cat > "$T24/AGENTS.core.md" <<'CORE'
+---
+last_reviewed: 2026-07-05
+review_cadence: monthly
+
+# AGENTS Core (unterminated frontmatter — no closing ---)
+
+## Hard Rules
+
+- Core rule [id: hr-test-core].
+- Never git stash in worktrees [id: hr-never-git-stash-in-worktrees].
+CORE
+out24=$(invoke_hook "$T24")
+ctx24=$(printf '%s' "$out24" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+if printf '%s' "$ctx24" | grep -qF '[id: hr-test-core]' \
+   && printf '%s' "$ctx24" | grep -qF '[id: hr-never-git-stash-in-worktrees]' \
+   && printf '%s' "$ctx24" | grep -qE '^\[rules-loader\] loaded:.*over-strip'; then
+  echo "PASS: AC6 malformed frontmatter → over-strip guard injects raw (no rule lost) + loud note"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC6 over-strip guard (ctx head=$(printf '%s' "$ctx24" | head -3 | tr '\n' '~'))"
+  FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "RESULT: $PASS/$TOTAL passed ($FAIL failed)"
 [[ $FAIL -eq 0 ]] || exit 1

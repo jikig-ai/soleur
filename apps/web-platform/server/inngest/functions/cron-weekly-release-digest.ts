@@ -34,6 +34,11 @@ import {
   type HandlerArgs,
 } from "./_cron-shared";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
+import {
+  sanitizeReleases,
+  type RawGithubRelease,
+  type SanitizedRelease,
+} from "@/server/release-notes";
 
 const FUNCTION_NAME = "cron-weekly-release-digest";
 const SENTRY_MONITOR_SLUG = "cron-weekly-release-digest";
@@ -72,12 +77,6 @@ const CURATE_OUTPUT_SCHEMA = {
     },
   },
 } as const;
-// Raw bodies are bounded BEFORE the PII regexes run: EMAIL_RE is O(n²) and a
-// 125k-char body (GitHub's ceiling) measures ~17s of synchronous regex —
-// inside the shared Next.js process that is an event-loop stall for the whole
-// app (review perf P1). 10k preserves sanitize-then-truncate semantics.
-const MAX_RAW_BODY_CHARS = 10_000;
-const MAX_RELEASE_BODY_CHARS = 1500;
 const MAX_HIGHLIGHTS = 5;
 const DISCORD_CONTENT_MAX = 2000;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -138,77 +137,9 @@ export function isHighlightEligible(tag: string): boolean {
   return /^v\d/.test(tag) || /^web-v\d/.test(tag);
 }
 
-// Word-boundaried: bare `rce` matches "sou-rce-" as a substring and would
-// silently down-detail every release mentioning "source" (review perf note).
-const SECURITY_DOWN_DETAIL_RE =
-  /\bsecurity\b|vulnerab|\bcve\b|\bxss\b|\brce\b|\bssrf\b|\bcsrf\b|\binjection\b|privilege escalation|auth bypass|\bexploit\b|\b0day\b|deserializ|path traversal|prototype pollution|sandbox escape/i;
-const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-const HANDLE_RE = /@[A-Za-z0-9][A-Za-z0-9-]*/g;
-const CO_AUTHORED_RE = /^\s*co-authored-by:.*$/gim;
-
-export interface RawGithubRelease {
-  tag_name: string;
-  name?: string | null;
-  body?: string | null;
-  published_at: string;
-  draft: boolean;
-  prerelease: boolean;
-  author?: { login?: string } | null;
-}
-
-export interface SanitizedRelease {
-  tag: string;
-  title: string;
-  body: string;
-  securitySensitive: boolean;
-}
-
-function stripPii(s: string): string {
-  return s.replace(CO_AUTHORED_RE, "").replace(EMAIL_RE, "").replace(HANDLE_RE, "");
-}
-
-// Release names for plugin/web releases are usually just the version tag
-// (gh release create defaults the title to the tag), so a bare-version name
-// carries zero reader value — the fallback digest would post "• v3.148.0"
-// (the 2026-06-11 operator report). When the name is version-shaped, the
-// first changelog line (the squashed PR title) is the real content.
-const VERSION_ONLY_TITLE_RE = /^[a-z-]*v?\d[\w.-]*$/i;
-const MAX_DERIVED_TITLE_CHARS = 150;
-
-function deriveTitle(base: string, body: string): string {
-  if (!VERSION_ONLY_TITLE_RE.test(base)) return base;
-  for (const raw of body.split("\n")) {
-    const line = raw.trim().replace(/^[-*]\s+/, "");
-    if (!line || line.startsWith("#")) continue;
-    // Strip BEFORE slicing — truncation could bisect an email and leave a
-    // local-part fragment the regexes no longer match (stripPii is
-    // idempotent, so the caller's wrapper strip is harmless). A line that
-    // strips to empty (pure Co-Authored-By) falls back to the version.
-    const derived = stripPii(line).trim().slice(0, MAX_DERIVED_TITLE_CHARS);
-    return derived || base;
-  }
-  return base;
-}
-
-// PII-strip (spec TR4: author dropped; @handles, emails, Co-Authored-By
-// lines removed — release bodies derive from PR-body Changelogs which embed
-// both) + security down-detail (spec TR2: matching releases render
-// title-only; the body is withheld from the LLM input so generated prose
-// cannot widen an exploit window — so security bodies are NEVER mined for
-// titles either) + per-release truncation.
-export function sanitizeReleases(releases: RawGithubRelease[]): SanitizedRelease[] {
-  return releases.map((r) => {
-    // Pre-bound BEFORE regexing — see MAX_RAW_BODY_CHARS rationale.
-    const rawBody = (r.body ?? "").slice(0, MAX_RAW_BODY_CHARS);
-    const securitySensitive = SECURITY_DOWN_DETAIL_RE.test(`${r.name ?? ""}\n${rawBody}`);
-    const base = (r.name || r.tag_name).trim();
-    const title = stripPii(securitySensitive ? base : deriveTitle(base, rawBody)).trim();
-    const body = securitySensitive
-      ? ""
-      : stripPii(rawBody).slice(0, MAX_RELEASE_BODY_CHARS);
-    return { tag: r.tag_name, title, body, securitySensitive };
-  });
-}
+// Sanitize (PII strip + security down-detail) + release types now live in the
+// shared `@/server/release-notes` module (imported above) so the in-app
+// Releases page reuses the exact same brand-critical hygiene (#5958).
 
 export interface Highlight {
   tag: string;

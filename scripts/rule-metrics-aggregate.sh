@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Weekly aggregator: parse AGENTS.md rule IDs + .claude/.rule-incidents.jsonl
+# On-demand + local aggregator: parse AGENTS.md rule IDs + .claude/.rule-incidents.jsonl
 # and write knowledge-base/project/rule-metrics.json.
 #
 # Output schema (plan Phase 5):
@@ -84,7 +84,7 @@ fi
 
 # --- Counts from jsonl ----------------------------------------------------
 # Per-line parse via `jq -R 'fromjson?'` so a single malformed line from a
-# crash-mid-write or OOM does NOT abort the whole weekly aggregation. Bad
+# crash-mid-write or OOM does NOT abort the whole aggregation. Bad
 # lines are dropped with a stderr warning; valid lines are still counted.
 #
 # Archive-spanning input (#3508): per-write rotation moves data from the
@@ -105,6 +105,12 @@ jq_counts='{}'
 # `rule_id` / `event_type`; the valid_stream filter below excludes them
 # from the reduce. A separate jq pass populates these counts.
 drops_counts_json='{}'
+# Initialized at top level so the no-op guard (issue #6042) can read them on
+# the empty / absent / sentinel-only path without a `set -euo pipefail`
+# unbound-variable abort; the `[[ -s "$INCIDENTS_MERGED" ]]` block below only
+# assigns them when the merged log is non-empty.
+valid_lines=0
+drops_total=0
 if [[ -s "$INCIDENTS_MERGED" ]]; then
   total_lines=$(wc -l < "$INCIDENTS_MERGED")
   # Tolerant parse: fromjson? yields null on parse failure; select(.) drops
@@ -244,7 +250,7 @@ report=$(jq -n \
         | map(select(. as $id | ($known_ids | index($id)) | not))
         # LOAD-BEARING: te-* prefix reserved for token-efficiency telemetry
         # (issue #3494, compound Phase 1.6). Removing this filter breaks the
-        # weekly cron — every Phase 1.6 outlier would fail orphan-gate.
+        # aggregation run — every Phase 1.6 outlier would fail orphan-gate.
         # Tests T6/T7/T8 in scripts/rule-metrics-aggregate.test.sh cover this.
         # AGENTS.md section prefixes are hr|wg|cq|rf|pdr|cm; te- cannot collide.
         | map(select(startswith("te-") | not))
@@ -253,6 +259,13 @@ report=$(jq -n \
         # the last introduced by PR #3541). These are operational events
         # tied to the skill, not rule_ids in the AGENTS.md taxonomy.
         | map(select(startswith("gdpr-gate-") | not))
+        # context-reviewed-* prefix reserved for context-reviewed-gate.sh
+        # telemetry (context-reviewed-gate deny, context-reviewed-hook-self-fault
+        # warn — issue #5999, ADR-094). The freshness audit tripwire logs
+        # undeclared last_reviewed bumps; these are operational events tied to
+        # the hook, not rule_ids in the AGENTS.md taxonomy (the always-loaded
+        # B_ALWAYS budget has no room for a new core tag).
+        | map(select(startswith("context-reviewed-") | not))
         # Hook-canonical Pencil rule_ids: per cq-agents-md-tier-gate, the rule
         # body lives in the hook header + pencil-setup SKILL (a Pencil-domain
         # rule is tier-gated OUT of AGENTS.md), so they legitimately never appear
@@ -299,7 +312,7 @@ echo "$report" | jq -e '.schema == 1' >/dev/null 2>&1 \
 
 # Orphan invariant: any rule_id emitted by a hook / skill that is not tagged
 # in AGENTS.md indicates drift (renamed rule, typo in snippet, dead rule-id).
-# Weekly cron surfaces this as a failing workflow step — the next run is a
+# The aggregation run surfaces this as a failing step — the next run is a
 # silent normalization otherwise. The file IS still written first so
 # operators have forensic context for the orphan list on failed runs.
 orphan_count=$(echo "$report" | jq -r '.summary.orphan_rule_ids | length')
@@ -310,6 +323,26 @@ if [[ "$DRY_RUN" == "1" ]]; then
     orphan_list=$(echo "$report" | jq -r '.summary.orphan_rule_ids | join(", ")')
     echo "ERROR: orphan rule_id(s) in incidents jsonl not tagged in AGENTS.md: $orphan_list" >&2
     exit 5
+  fi
+  exit 0
+fi
+
+# --- No-op guard: zero rule-carrying incident lines (issue #6042) ----------
+# When the merged incident stream has zero valid rule_id rows — an empty or
+# absent .rule-incidents.jsonl (the fresh-checkout CI case) OR a sentinel-only
+# log (non-empty, but zero rule_id rows) — do NOT write rule-metrics.json and
+# do NOT rotate. A write here would clobber the committed real aggregate with an
+# all-zero snapshot; the authoritative producer is the local compound flow where
+# the log actually exists (ADR-091). Keyed on valid_lines (rule-carrying rows),
+# NOT file size — a sentinel-only file is non-empty but carries zero rule_id
+# rows, and that is the exact clobber this guard exists to prevent. The report
+# build and --dry-run print above are intentionally left intact so compound's
+# unused-rules hint (compound/SKILL.md step 8) still parses.
+if [[ "${valid_lines:-0}" -eq 0 ]]; then
+  echo "rule-metrics: 0 rule-carrying incident lines; leaving committed $OUT unchanged." >&2
+  if [[ "${drops_total:-0}" -gt 0 ]]; then
+    drops_breakdown=$(jq -r 'to_entries | map("\(.key)=\(.value)") | join(" ")' <<< "$drops_counts_json" 2>/dev/null || echo "")
+    echo "rule-metrics: filtered $drops_total telemetry-drop sentinel row(s) [${drops_breakdown}]; no aggregate written." >&2
   fi
   exit 0
 fi
@@ -340,7 +373,7 @@ fi
 # Orphan gate (post-write): fail loudly if the jsonl emitted rule_ids not
 # present in AGENTS.md. File is already written so operators have forensic
 # context; rotation below is skipped because the exit short-circuits. The
-# weekly workflow's notify-ops-email catches this via `if: failure()`.
+# workflow's notify-ops-email catches this via `if: failure()`.
 if [[ "${orphan_count:-0}" -gt 0 ]]; then
   orphan_list=$(echo "$report" | jq -r '.summary.orphan_rule_ids | join(", ")')
   echo "ERROR: orphan rule_id(s) in incidents jsonl not tagged in AGENTS.md: $orphan_list" >&2

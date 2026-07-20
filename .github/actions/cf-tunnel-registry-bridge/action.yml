@@ -1,0 +1,174 @@
+# CF Tunnel registry-push bridge — setup steps for a GitHub runner to `docker push`
+# container images to the private-net zot registry host (#6122 / ADR-096). The Hetzner
+# registry firewall denies all public ingress; the runner reaches zot ONLY through the
+# existing `web` Cloudflare Tunnel (tunnel.tf `registry.${app_domain_base}` ingress_rule →
+# a web-host cloudflared connector → tcp://10.0.1.30:5000).
+#
+# `tcp://`, NOT `http://`: `cloudflared access tcp` bridges a raw TCP stream over a WebSocket, and
+# an `http://` service makes the origin HTTP-proxy the WS-upgrade → "websocket: bad handshake".
+# That was the #6122 cutover bug — see tunnel.tf's registry ingress_rule for the full rationale.
+#
+# "A web-host cloudflared connector", NOT "THE web host's": ONE tunnel, MULTIPLE connector
+# replicas, CF load-balances across them. This ingress works only if EVERY connector host is a
+# 10.0.1.0/24 member — web-2 was not, which is #6416. See ADR-114 (I1 connector homogeneity).
+#
+# Sibling of `.github/actions/cf-tunnel-ssh-bridge` (#4177), but SIMPLER: the docker client
+# connects to a real `127.0.0.1:5000` listener, so there is NO iptables NAT redirect (that
+# hack exists only for terraform's Go SSH client, which ignores ~/.ssh/config). `127.0.0.1`
+# is auto-treated as an insecure registry by the docker daemon, so plain-HTTP zot rides the
+# raw-TCP forward with no `insecure-registries` edit on the runner.
+#
+# ── CALLER-SIDE TEARDOWN CONTRACT (load-bearing) ───────────────────────────
+# This composite action CANNOT register a post-job hook, so it does NOT tear itself down.
+# Every caller MUST add an `if: always()` teardown step AFTER its push, guarded so a
+# pre-bridge failure does not error the teardown:
+#
+#   - name: Tear down cloudflared registry bridge
+#     if: always()
+#     shell: bash
+#     run: |
+#       set +e
+#       docker logout 127.0.0.1:5000 2>/dev/null || true
+#       if [[ -n "${REGISTRY_BRIDGE_PID:-}" ]]; then
+#         kill "$REGISTRY_BRIDGE_PID" 2>/dev/null || true
+#       fi
+#       [[ -f /tmp/cloudflared-registry.log ]] && tail -n 200 /tmp/cloudflared-registry.log || true
+#
+# ── SHA-RECOMPUTE DISCIPLINE ───────────────────────────────────────────────
+# `cloudflared-sha256` MUST be computed against the REAL released binary at the pinned
+# `cloudflared-version` (curl the asset, `sha256sum` it). NEVER paste a checksum from docs or
+# AI output. Re-verify at /work time on a version bump. (Same discipline as the SSH bridge.)
+#
+# ── PREREQUISITES ──────────────────────────────────────────────────────────
+#  - The CF Access `registry_push` service token + the zot-push htpasswd creds must be in
+#    Doppler prd (root): REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET (written by the operator full
+#    apply per tunnel.tf) + ZOT_PUSH_USER/ZOT_PUSH_TOKEN + ZOT_REGISTRY_URL (written by
+#    zot-registry.tf). Both live in the `prd` root because the release DOPPLER_TOKEN is
+#    prd-scoped. All pull/decode steps fail loud if any is missing/empty.
+#
+# ── OUTPUTS (to $GITHUB_ENV, job-scoped) ───────────────────────────────────
+#  REGISTRY_BRIDGE_PID  — the cloudflared PID (for the caller's teardown).
+#  (docker is already logged in to 127.0.0.1:5000 by this action's final step.)
+#
+# Composite actions cannot read the `secrets` context — every secret is an explicit input
+# referenced ONLY inside `env:` mappings (never a `run:` body or step `name:`), because action
+# inputs are NOT auto-masked. Values are add-masked per-line at decode time.
+
+name: 'CF Tunnel registry-push bridge'
+description: 'Bring up a cloudflared TCP bridge to the private-net zot registry + docker login, so a GH runner can docker push over the Cloudflare Tunnel. Setup only; caller must add an if:always() teardown.'
+
+inputs:
+  doppler-token:
+    description: 'Doppler service token scoped to the prd root config (read-only). Caller forwards the DOPPLER_TOKEN repo secret. Reads the CF Access registry_push token AND ZOT_PUSH_* + ZOT_REGISTRY_URL — all from the prd root.'
+    required: true
+  cloudflared-version:
+    description: 'cloudflared release version to install (e.g. 2026.5.0). Keep in sync with the SSH bridge pin.'
+    required: true
+  cloudflared-sha256:
+    description: 'SHA-256 of the cloudflared-linux-amd64 binary at cloudflared-version (recompute against the real binary — see header).'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # The Doppler CLI is NOT pre-installed on the release/inngest runners (only jobs that
+    # explicitly install it — e.g. verify-doppler-secrets — have it). This composite's secret
+    # reads below shell out to `doppler`, so install it FIRST. Omitting this was the #6122 zot
+    # bridge failure: `doppler secrets get` errored `command not found`, which the `2>/dev/null`
+    # on the reads swallowed into an empty value → the guards misreported it as "missing secret".
+    - name: Install Doppler CLI
+      uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+
+    - name: Install cloudflared (SHA-pinned)
+      shell: bash
+      env:
+        CLOUDFLARED_VERSION: ${{ inputs.cloudflared-version }}
+        CLOUDFLARED_SHA256: ${{ inputs.cloudflared-sha256 }}
+      run: |
+        set -euo pipefail
+        # Idempotent: the SSH bridge may already have installed the same pinned binary.
+        if ! command -v cloudflared >/dev/null 2>&1; then
+          curl -fsSL -o /tmp/cloudflared \
+            "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64"
+          echo "${CLOUDFLARED_SHA256}  /tmp/cloudflared" | sha256sum -c -
+          sudo install -m 0755 /tmp/cloudflared /usr/local/bin/cloudflared
+          rm /tmp/cloudflared
+        fi
+        cloudflared --version
+
+    - name: Start cloudflared registry bridge (127.0.0.1:5000 → tunnel → zot)
+      shell: bash
+      env:
+        DOPPLER_TOKEN: ${{ inputs.doppler-token }}
+        DOPPLER_PROJECT: soleur
+        # `prd` (root), same config the docker-login step below reads ZOT_PUSH_* from. The caller
+        # MUST pass a prd-scoped token (DOPPLER_TOKEN_PRD) — the generic DOPPLER_TOKEN is scoped to
+        # the `prd_terraform` branch and CANNOT read the prd root (#6122 cutover fix). tunnel.tf
+        # writes REGISTRY_PUSH_* to the `prd` root; zot-registry.tf writes ZOT_PUSH_* there too.
+        DOPPLER_CONFIG: prd
+      run: |
+        set -euo pipefail
+        # NO 2>/dev/null: a doppler error (command-not-found, auth, wrong config) must surface in
+        # the step log, not be swallowed into an empty value. `doppler secrets get --plain` writes
+        # the value only to stdout (captured), so unsuppressing stderr cannot leak it.
+        TOKEN_ID=$(doppler secrets get REGISTRY_PUSH_ACCESS_TOKEN_ID --plain || true)
+        TOKEN_SECRET=$(doppler secrets get REGISTRY_PUSH_ACCESS_TOKEN_SECRET --plain || true)
+        if [[ -z "$TOKEN_ID" || -z "$TOKEN_SECRET" ]]; then
+          echo "::error::REGISTRY_PUSH_ACCESS_TOKEN_ID/_SECRET missing or empty reading Doppler soleur/prd. Confirm the caller passes the prd-scoped DOPPLER_TOKEN_PRD (not the prd_terraform-scoped DOPPLER_TOKEN) and that tunnel.tf wrote both to the prd root config."
+          # Diagnostic on failure (secret NAMES only — never values): shows whether this token can
+          # read soleur/prd at all and whether it resolves the expected keys. An auth/permission
+          # error here (captured via 2>&1) means the token is scoped to a different config.
+          echo "::group::doppler read diagnostic (names only, no values)"
+          doppler secrets --only-names 2>&1 | grep -iE 'REGISTRY_PUSH|ZOT_' | head -10 || true
+          doppler secrets --only-names 2>&1 | head -3 || true
+          echo "::endgroup::"
+          exit 1
+        fi
+        printf '::add-mask::%s\n' "$TOKEN_ID"
+        printf '::add-mask::%s\n' "$TOKEN_SECRET"
+        # APP_DOMAIN_BASE is not in prd — fall back to the canonical default exactly
+        # like the SSH bridge / caller verify steps (bare form exits non-zero under set -e).
+        APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+
+        # cloudflared reads the CF Access service token from these env vars.
+        export TUNNEL_SERVICE_TOKEN_ID="$TOKEN_ID"
+        export TUNNEL_SERVICE_TOKEN_SECRET="$TOKEN_SECRET"
+        cloudflared access tcp \
+          --loglevel warn \
+          --hostname "registry.${APP_DOMAIN_BASE}" \
+          --url 127.0.0.1:5000 \
+          > /tmp/cloudflared-registry.log 2>&1 &
+        CF_PID=$!
+        printf 'REGISTRY_BRIDGE_PID=%s\n' "$CF_PID" >> "$GITHUB_ENV"
+        disown "$CF_PID"
+
+        for _ in $(seq 1 15); do
+          nc -z 127.0.0.1 5000 2>/dev/null && break
+          sleep 1
+        done
+        if ! nc -z 127.0.0.1 5000 2>/dev/null; then
+          echo "::error::cloudflared TCP forward did not open on 127.0.0.1:5000 within 15s (CF Access registry_push token may be expired/missing, or the zot host is down)."
+          cat /tmp/cloudflared-registry.log >&2 || true
+          exit 1
+        fi
+
+    - name: Docker login to zot (127.0.0.1:5000, zot-push htpasswd)
+      shell: bash
+      env:
+        DOPPLER_TOKEN: ${{ inputs.doppler-token }}
+        DOPPLER_PROJECT: soleur
+        DOPPLER_CONFIG: prd
+      # zot-push creds live in the `prd` config (written by zot-registry.tf). The bridge
+      # listener is up (previous step), so `docker login 127.0.0.1:5000` reaches zot's /v2/
+      # over the tunnel. --password-stdin (never argv). 127.0.0.1 is auto-insecure to docker.
+      run: |
+        set -euo pipefail
+        # NO 2>/dev/null (see the bridge step): a doppler error must be visible, not swallowed.
+        ZOT_PUSH_USER=$(doppler secrets get ZOT_PUSH_USER --plain || true)
+        ZOT_PUSH_TOKEN=$(doppler secrets get ZOT_PUSH_TOKEN --plain || true)
+        if [[ -z "$ZOT_PUSH_USER" || -z "$ZOT_PUSH_TOKEN" ]]; then
+          echo "::error::ZOT_PUSH_USER/ZOT_PUSH_TOKEN missing or empty in Doppler prd (written by zot-registry.tf on the operator full apply)."
+          exit 1
+        fi
+        printf '::add-mask::%s\n' "$ZOT_PUSH_TOKEN"
+        printf '%s' "$ZOT_PUSH_TOKEN" | docker login 127.0.0.1:5000 -u "$ZOT_PUSH_USER" --password-stdin

@@ -7,7 +7,9 @@ import { createServer } from "http";
 import next from "next";
 import { parse } from "url";
 import { WebSocket } from "ws";
-import { setupWebSocket } from "./ws-handler";
+import { setupWebSocket, attachProxiedSession } from "./ws-handler";
+import { createProxyServer } from "./session-proxy";
+import { logProxyCertExpiryAtStartup } from "./proxy-tls";
 import { streamReplayBuffer } from "./stream-replay-buffer";
 import { WS_CLOSE_CODES } from "@/lib/types";
 import {
@@ -21,6 +23,7 @@ import {
   startCcIdleReaper,
 } from "./cc-dispatcher";
 import { handleConversationMessages } from "./api-messages";
+import { releaseAllHeldLeases } from "./worktree-write-lease";
 import { createChildLogger } from "./logger";
 import { installCrashHandlers } from "./crash-handlers";
 import { verifyPluginMountOnce } from "./plugin-mount-check";
@@ -30,6 +33,11 @@ import {
   buildHealthResponse,
   buildInternalMetricsResponse,
 } from "./health";
+import {
+  handleReadyzRequest,
+  verifyWorkspacesMountOnce,
+} from "./readiness";
+import { isLoopbackHost } from "./loopback";
 // NOTE: do NOT statically import "@/server/inngest/client" here — it throws at
 // module-load when INNGEST_SIGNING_KEY is unset (client.ts), which would crash
 // the server at startup in environments without Inngest configured (e2e CI,
@@ -38,18 +46,9 @@ import {
 import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
 import { reportSilentFallback } from "@/server/observability";
 
-// Accept loopback hostnames only. resource-monitor.sh runs on the same host
-// and curls http://127.0.0.1:3000/internal/metrics; external callers (via CF
-// tunnel) arrive with the public Host header. This is defense-in-depth: a
-// sophisticated attacker could try to spoof the Host via the tunnel, but CF
-// normalizes Host for origin routing so a spoofed 127.0.0.1 header doesn't
-// reach here. Port suffix is optional so e2e tests that hit a non-3000 port
-// still match.
-function isLoopbackHost(hostHeader: string | undefined): boolean {
-  if (!hostHeader) return false;
-  const host = hostHeader.split(":")[0];
-  return host === "127.0.0.1" || host === "localhost" || host === "::1";
-}
+// isLoopbackHost (the /internal/metrics + /internal/readyz Host-header gate)
+// lives in ./loopback — a leaf module shared with readiness.ts so the loopback
+// logic has a single source of truth. See ./loopback for the CF-tunnel rationale.
 
 const log = createChildLogger("startup");
 
@@ -68,6 +67,11 @@ const handle = app.getRequestHandler();
 app.prepare().then(() => {
   assertSingleReplicaInvariant();
   verifyPluginMountOnce();
+  // #5966 — one-shot boot-time deep-readiness mirror. verifyPluginMountOnce
+  // above checks the PLUGIN mount, not /workspaces; this covers the host-local
+  // workspace volume so a mis-mounted/read-only web-1 surfaces a Sentry event
+  // at boot instead of only when a live request hits an empty /workspaces.
+  verifyWorkspacesMountOnce();
   emitTeamWorkspaceInviteBootBreadcrumb();
 
   const server = createServer(async (req, res) => {
@@ -100,6 +104,16 @@ app.prepare().then(() => {
       return;
     }
 
+    // Deep-readiness (#5966, ADR-068 Sharp Edge C1). Unlike /health (liveness:
+    // status:"ok" + shared-Supabase probe), this answers "can THIS host serve?"
+    // — /workspaces writable + populated. Gated to the loopback transport peer
+    // and returns 503 when the host cannot serve locally. All gating + the
+    // fail-closed try/catch live in handleReadyzRequest (server/readiness.ts).
+    if (parsedUrl.pathname === "/internal/readyz") {
+      handleReadyzRequest(req, res);
+      return;
+    }
+
     // REST API: conversation message history
     const messagesMatch = parsedUrl.pathname?.match(
       /^\/api\/conversations\/([^/]+)\/messages$/,
@@ -114,6 +128,26 @@ app.prepare().then(() => {
 
   const wss = setupWebSocket(server);
 
+  // #5274 Phase 3 Sub-PR 3.D (ADR-068 b2) — the OWNER host's private-net TLS
+  // proxy listener. A session that lands on a non-owning web host is relayed
+  // here (session-proxy.ts) and attached as a PRE-AUTHENTICATED native session
+  // via `attachProxiedSession`. `createProxyServer` returns null in dev/
+  // single-host (no PROXY_TLS material, or SOLEUR_PROXY_BIND unset) — entirely
+  // inert, no throw. Log the long-lived cert's expiry once at startup (the only
+  // expiry signal besides the Better Stack monitor).
+  logProxyCertExpiryAtStartup();
+  const proxyServer = createProxyServer({
+    onProxiedSession: (proxiedWs, ctx) => {
+      attachProxiedSession(proxiedWs, ctx).catch((err) => {
+        reportSilentFallback(err, {
+          feature: "control_plane_route",
+          op: "proxied-attach",
+          extra: { userId: ctx.userId, workspaceId: ctx.workspaceId },
+        });
+      });
+    },
+  });
+
   // Clean up conversations left in active/waiting_for_user from before restart
   cleanupOrphanedConversations().catch((err) => {
     log.error({ err }, "Failed to clean up orphaned conversations");
@@ -122,8 +156,9 @@ app.prepare().then(() => {
   // Start periodic inactivity check (24h timeout, hourly checks)
   startInactivityTimer();
 
-  // Start periodic stuck-active reaper (60s cadence, 120s slot-heartbeat
-  // staleness threshold). Defense-in-depth against the AC1 try/catch wrap:
+  // Start periodic stuck-active reaper (300s poll cadence, 240s slot-heartbeat
+  // staleness threshold — SLOT_STALENESS_THRESHOLD_SECONDS, mig 133).
+  // Defense-in-depth against the AC1 try/catch wrap:
   // catches process-killed-mid-stream + future regressions that strand
   // conversations at status='active'. See agent-runner.ts for the full
   // contract. Capture the timer so SIGTERM can stop it explicitly —
@@ -270,8 +305,20 @@ app.prepare().then(() => {
     // on shutdown (process-local; nothing to persist). See ADR-059.
     streamReplayBuffer.clearAll();
 
+    // #5274 PR B — gracefully release every worktree write-lease this host
+    // holds so a surviving host reclaims immediately rather than waiting out the
+    // 240s heartbeat expiry. Best-effort + bounded (allSettled, never throws);
+    // a lease that fails to release simply expires. Inert when the lease path is
+    // gated off (the registry is empty) — no git-data dependency at flag-off.
+    await releaseAllHeldLeases();
+
     server.close();
     server.closeIdleConnections();
+
+    // #5274 3.D — stop accepting new proxied sessions from peer hosts. Inert
+    // (null) in dev/single-host. In-flight proxied sessions drain via the wss
+    // client-close loop below, same as native ones.
+    if (proxyServer) proxyServer.close();
 
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN) {

@@ -53,6 +53,7 @@ If the command fails (e.g., offline, no remote), every path-gated check falls ba
 | 8 (SW cache bump) | No `fix(`/`fix:`/`hotfix` commit subject AND zero client-bundle surface matches. |
 | 9 (Node-only encodings) | Always runs (uses `git ls-files`, full-universe scan — does NOT use the cached path-set; see Sharp Edges). |
 | 10 (Discoverability test) | Zero matches for the canonical sensitive-path regex (re-use Check 6 SSOT). |
+| 11 (Register drift) | Zero matches for `(^\|/)apps/web-platform/supabase/migrations/.*\.sql$`, `(^\|/)apps/web-platform/server/workspace-resolver\.ts$`, or `(^\|/)knowledge-base/engineering/architecture/domain-model\.md$` (empty/missing cache → run, never SKIP). |
 | Not-Bare-Repo | Always runs. |
 
 For PR #3488-class diffs (lockfile bumps + orphan-cleanup deletions), Checks 1, 2, 5, 6, 7, 8 fast-skip → Checks 3 (lockfile fires), 4 (env isolation always), 9 (always), Not-Bare-Repo (always) execute. Of those four, only Check 3 and Check 9 do "real work" against the diff; Check 4 and Not-Bare-Repo are constant-cost.
@@ -110,7 +111,7 @@ Re-use the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-dif
 grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt"
 ```
 
-The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > /tmp/A.txt && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > /tmp/B.txt && diff -u /tmp/A.txt /tmp/B.txt`.
+The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `a=$(mktemp) && b=$(mktemp) && git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > "$a" && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > "$b" && diff -u "$a" "$b"`.
 
 If no migration files are found (grep rc=1), return **SKIP**.
 
@@ -362,19 +363,24 @@ Otherwise **PASS**.
 
 Webpack chunking is not stable across releases — the inlined Supabase init may live in the login page chunk, in a numeric shared chunk (`/_next/static/chunks/8237-*.js`), or in a layout chunk. Hardcoding a single path produces SKIP-on-chunking-change, which silently disables the gate (issue #3010). Discover the candidate set dynamically by enumerating every chunk URL the login HTML references — that is the authoritative "what /login loads" surface.
 
-Run as separate Bash calls (no command substitution per skill convention):
+Run as separate Bash calls (no command substitution per skill convention). Each block
+re-derives `PREFLIGHT_TMP` — it is `$(git rev-parse --git-dir)`, so it is stable across
+separate Bash calls (which do NOT inherit env) AND distinct per worktree, which is what a
+later call needs to find these artifacts by name without colliding with a sibling session:
 
 ```bash
-curl -fsSL --max-time 10 -A "Mozilla/5.0" https://app.soleur.ai/login -o /tmp/preflight-login.html
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
+curl -fsSL --max-time 10 -A "Mozilla/5.0" https://app.soleur.ai/login -o "$PREFLIGHT_TMP/preflight-login.html"
 ```
 
 ```bash
-grep -oE '/_next/static/chunks/[^"]+\.js' /tmp/preflight-login.html | awk '!seen[$0]++' | head -20 > /tmp/preflight-candidates.txt
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
+grep -oE '/_next/static/chunks/[^"]+\.js' "$PREFLIGHT_TMP/preflight-login.html" | awk '!seen[$0]++' | head -20 > "$PREFLIGHT_TMP/preflight-candidates.txt"
 ```
 
 The cap of 20 is generous (current prod loads 13 chunks); if ever hit on a future release, prefer raising the cap over reverting to the hardcoded login-chunk path. The grep matches both `<script src=...>` and `<link rel=preload href=...>` references — both are valid candidates.
 
-If the `curl` fails (rc != 0) or `/tmp/preflight-candidates.txt` is empty, return **SKIP** with note: "Could not fetch /login HTML or could not locate any /_next/static/chunks references."
+If the `curl` fails (rc != 0) or `"$PREFLIGHT_TMP/preflight-candidates.txt"` is empty, return **SKIP** with note: "Could not fetch /login HTML or could not locate any /_next/static/chunks references."
 
 **Step 5.2: Probe each candidate chunk for Supabase shapes.**
 
@@ -383,7 +389,8 @@ The Supabase host string and the inlined anon-key JWT may live in DIFFERENT chun
 This block is operator-executed under the skill's `set -euo pipefail` convention. Failed `curl` per chunk and `grep` rc=1 on no-match must NOT abort the loop — the gate-level SKIP/FAIL decision is made from the accumulated state at end-of-loop, not from per-iteration rc.
 
 ```bash
-mkdir -p /tmp/preflight-chunks
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
+mkdir -p "$PREFLIGHT_TMP/preflight-chunks"
 host_union=""
 jwt_chunk=""
 while IFS= read -r chunk_path; do
@@ -391,24 +398,24 @@ while IFS= read -r chunk_path; do
   # before interpolating into the curl URL (no `..`, no `@`, no `?`, no whitespace).
   [[ "$chunk_path" =~ ^/_next/static/chunks/[A-Za-z0-9_/().-]+\.js$ ]] || continue
   base=$(basename "$chunk_path")
-  curl -fsSL --max-time 10 --max-filesize 5242880 "https://app.soleur.ai${chunk_path}" -o "/tmp/preflight-chunks/${base}" || continue
-  hosts=$(grep -oE 'https?://([a-z0-9.-]*supabase\.co|api\.soleur\.ai)' "/tmp/preflight-chunks/${base}" | sort -u || true)
+  curl -fsSL --max-time 10 --max-filesize 5242880 "https://app.soleur.ai${chunk_path}" -o "$PREFLIGHT_TMP/preflight-chunks/${base}" || continue
+  hosts=$(grep -oE 'https?://([a-z0-9.-]*supabase\.co|api\.soleur\.ai)' "$PREFLIGHT_TMP/preflight-chunks/${base}" | sort -u || true)
   if [[ -n "$hosts" ]]; then
     host_union="${host_union}${hosts}"$'\n'
   fi
   if [[ -z "$jwt_chunk" ]]; then
-    jwt=$(grep -oE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' "/tmp/preflight-chunks/${base}" | head -1 || true)
+    jwt=$(grep -oE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' "$PREFLIGHT_TMP/preflight-chunks/${base}" | head -1 || true)
     if [[ -n "$jwt" ]]; then
-      jwt_chunk="/tmp/preflight-chunks/${base}"
+      jwt_chunk="$PREFLIGHT_TMP/preflight-chunks/${base}"
     fi
   fi
-done < /tmp/preflight-candidates.txt
+done < "$PREFLIGHT_TMP/preflight-candidates.txt"
 
 printf '%s' "$host_union" | sort -u
 printf 'jwt_chunk=%s\n' "${jwt_chunk:-<none>}"
 ```
 
-The redirected-stdin form (`< /tmp/preflight-candidates.txt`) is required — piping (`cat ... | while read`) scopes loop variables to a subshell and loses `host_union` / `jwt_chunk` at loop exit. The `--max-filesize 5242880` (5 MB) cap defends against a misbehaving CDN response filling tmpfs across 20 fetches. The strict path regex rejects `..`, `@`, `?`, and whitespace before any string interpolation into the curl URL — a defense-in-depth gate even though the source HTML is served by our own CDN. Full traversal (no early-break) ensures placeholder-host leaks in late-candidate chunks are still detected (matrix row 6).
+The redirected-stdin form (`< "$PREFLIGHT_TMP/preflight-candidates.txt"`) is required — piping (`cat ... | while read`) scopes loop variables to a subshell and loses `host_union` / `jwt_chunk` at loop exit. The `--max-filesize 5242880` (5 MB) cap defends against a misbehaving CDN response filling tmpfs across 20 fetches. The strict path regex rejects `..`, `@`, `?`, and whitespace before any string interpolation into the curl URL — a defense-in-depth gate even though the source HTML is served by our own CDN. Full traversal (no early-break) ensures placeholder-host leaks in late-candidate chunks are still detected (matrix row 6).
 
 **Step 5.3: Assert canonical shape.**
 
@@ -684,8 +691,17 @@ esac
 **Step 10.3: Extract the `## Observability` block from the plan file.**
 
 ```bash
-awk '/^## Observability/{in=1; next} /^## /{if (in) exit} in' "$PLAN_PATH" > /tmp/preflight-observability.txt
-test -s /tmp/preflight-observability.txt || { echo "FAIL: Plan touches sensitive paths but '## Observability' block is missing. See hr-observability-as-plan-quality-gate."; exit 1; }
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
+# ‼️ ANCHOR the heading match. `/^## Observability/` is a PREFIX match, so it
+# also matches `## Observability layer citation` — a section name that
+# `hr-observability-layer-citation` actively encourages, making the collision
+# systemic rather than incidental. When both sections exist, the unanchored form
+# extracts the FIRST (the prose citation), finds no `discoverability_test`, and
+# FAILs with "no command could be parsed" — a false FAIL on a plan that is
+# perfectly well-formed. Verified against #6698's plan: unanchored extracted 47
+# lines of the wrong section; anchored reaches the real block.
+awk '/^## Observability$/{ino=1; next} /^## /{if (ino) exit} ino' "$PLAN_PATH" > "$PREFLIGHT_TMP/preflight-observability.txt"
+test -s "$PREFLIGHT_TMP/preflight-observability.txt" || { echo "FAIL: Plan touches sensitive paths but '## Observability' block is missing. See hr-observability-as-plan-quality-gate."; exit 1; }
 ```
 
 If the block is missing, return **FAIL** with: "Sensitive-path diff but plan file `<PLAN_PATH>` is missing the `## Observability` block. See `hr-observability-as-plan-quality-gate`. Add the section per `plugins/soleur/skills/plan/references/plan-issue-templates.md`."
@@ -725,17 +741,18 @@ Detection: `awk '/^[[:space:]]*command:/'` returns the value on the same line af
 Detection: find the first `discoverability_test` line in the Observability block; from that point, locate the first fenced code block — its contents are the command. Then locate the first line matching `^[[:space:]]*Expected output:` (case-insensitive) — its value is the expected.
 
 ```bash
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # Form A first (anchored YAML key — strongest signal).
 CMD=$(awk '
   /^[[:space:]]*command:[[:space:]]*\|/  { mode="block"; next }
   /^[[:space:]]*command:/                { sub(/^[[:space:]]*command:[[:space:]]*/, ""); print; exit }
   mode=="block" && /^[[:space:]]+[^[:space:]]/ { print; next }
   mode=="block" && /^[[:space:]]*[^[:space:]]/ { exit }
-' /tmp/preflight-observability.txt)
+' "$PREFLIGHT_TMP/preflight-observability.txt")
 
 EXPECTED=$(awk '
   /^[[:space:]]*expected_output:/ { sub(/^[[:space:]]*expected_output:[[:space:]]*/, ""); print; exit }
-' /tmp/preflight-observability.txt)
+' "$PREFLIGHT_TMP/preflight-observability.txt")
 
 # Fallback to Form B (fenced block under `discoverability_test.command:` prose).
 # Skip leading `#` comment lines inside the fence — operator prose comments
@@ -748,11 +765,11 @@ if [[ -z "$CMD" ]]; then
     found && /^[[:space:]]*```/ { fence=!fence; if (!fence && lines>0) exit; next }
     found && fence && /^[[:space:]]*#/ { next }
     found && fence { print; lines++ }
-  ' /tmp/preflight-observability.txt)
+  ' "$PREFLIGHT_TMP/preflight-observability.txt")
 fi
 
 if [[ -z "$EXPECTED" ]]; then
-  EXPECTED=$(grep -iE '^[[:space:]]*(\*\*)?Expected output:(\*\*)?' /tmp/preflight-observability.txt | head -1 | sed -E 's/^[[:space:]]*(\*\*)?Expected output:(\*\*)?[[:space:]]*//I')
+  EXPECTED=$(grep -iE '^[[:space:]]*(\*\*)?Expected output:(\*\*)?' "$PREFLIGHT_TMP/preflight-observability.txt" | head -1 | sed -E 's/^[[:space:]]*(\*\*)?Expected output:(\*\*)?[[:space:]]*//I')
 fi
 ```
 
@@ -876,6 +893,60 @@ The grep MUST exit 0 — the canary must reject any rendered HTML containing the
 - **PASS** — all three greps satisfy their conditions.
 - **FAIL** — any of: `/dashboard` missing from canary, `/login` missing from canary, or the error-sentinel body check absent. Operator must restore the layered probe before re-running preflight.
 - **SKIP** — `apps/web-platform/infra/ci-deploy.sh` was not modified in this branch.
+
+### Check 11: Domain-Model Register Drift
+
+Enforces the domain-model register's maintenance contract (#5871): a PR that changes a
+business rule must not leave the register with a **stale citation** (a cited migration/symbol
+that no longer resolves). Consumes the deterministic analyzer `domain-model-drift.sh`
+(#5754, ADR-076). The register (`knowledge-base/engineering/architecture/domain-model.md`) is a
+**curated subset**, so "undocumented source facts" is ~every un-curated table by design — it is
+**advisory-only, never a FAIL input**. This check gates on **stale citations only**.
+
+**Step 11.1 — diff-scope (fast-path SKIP).** SKIP unless the cached path-set
+(`"$PREFLIGHT_TMP/preflight-diff-files.txt"`) matches a business-rule surface OR the register itself:
+
+```bash
+DIFF="$PREFLIGHT_TMP/preflight-diff-files.txt"
+# Fail-safe: never SKIP on a missing/empty cache — recompute inline, then run if still empty.
+if [[ ! -s "$DIFF" ]]; then git diff --name-only origin/main...HEAD > "$DIFF" 2>/dev/null || true; fi
+if [[ -s "$DIFF" ]] && ! grep -qE '(^|/)apps/web-platform/supabase/migrations/.*\.sql$|(^|/)apps/web-platform/server/workspace-resolver\.ts$|(^|/)knowledge-base/engineering/architecture/domain-model\.md$' "$DIFF"; then
+  echo "SKIP — no business-rule surface (migration/workspace-resolver/register) in diff"; exit 0
+fi
+```
+
+The register-file literal is load-bearing: a register-only edit can introduce a stale citation.
+Check 11 reads `origin/main...HEAD` (PR-independent), so it **RUNS pre-PR** — do NOT "fix" it to
+SKIP-on-no-PR (that would fail it open).
+
+**Step 11.2 — run + parse the stale sub-count** (line-anchored; the raw exit code is NOT the signal):
+
+```bash
+bash scripts/domain-model-drift.sh drift --repo . \
+  --register knowledge-base/engineering/architecture/domain-model.md > "$PREFLIGHT_TMP/register-drift.txt" 2>&1; rc=$?
+stale=$(grep -oE '^## Stale register citations \([0-9]+\)' "$PREFLIGHT_TMP/register-drift.txt" | head -1 | grep -oE '[0-9]+')
+stale=${stale:-0}
+```
+
+The `^` anchor + `head -1` guarantee a single integer from the canonical column-0 header — an
+unanchored grep could match a verbatim-SQL predicate line echoing the substring (multiline capture
+breaks the numeric test).
+
+**Result:**
+
+- **PASS** — `rc == 0` (register clean). The "Undocumented source facts (M)" count is surfaced by the
+  advisory review note, never here.
+- **FAIL** — `stale > 0`: "domain-model register has $stale stale citation(s) — the register cites a
+  file/symbol that no longer resolves. Fix the cited row(s), or run `/soleur:sync domain-model`. If a
+  citation backticks a *filename*, unbacktick it (known citation-parser false-positive — see
+  `knowledge-base/project/learnings/best-practices/2026-07-01-domain-model-register-curation-citation-parser-and-grep-validation.md`)."
+- **FAIL** — `rc == 2` (analyzer error / unanalyzable source): "register-drift check could not run
+  (analyzer exit 2) — inspect `--repo`/jq/migrations dir; NOT a drift finding."
+- **FAIL** — `rc == 3` (secret-refuse): "domain-model analyzer refused to emit — a secret-shaped
+  substring was found in extracted structural text. Likely a recently-changed migration column/value
+  matching `sk_test`/`ghp_`/`AKIA…`/`-----BEGIN` (a benign column name can false-positive). Inspect the
+  newest `apps/web-platform/supabase/migrations/*.sql`."
+- **SKIP** — no business-rule surface (or the register) in the diff.
 
 ## Phase 2: Aggregate Go/No-Go Report
 

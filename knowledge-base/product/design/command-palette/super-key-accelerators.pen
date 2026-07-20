@@ -1,0 +1,1158 @@
+{
+  "version": "2.11",
+  "children": [
+    {
+      "type": "frame",
+      "id": "57a4m",
+      "x": 1720,
+      "y": 40,
+      "name": "Component/CmdkRow",
+      "reusable": true,
+      "width": 600,
+      "cornerRadius": 8,
+      "padding": [
+        9,
+        10
+      ],
+      "justifyContent": "space_between",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "JGwOn",
+          "name": "lbl",
+          "fill": "#CFCFCF",
+          "content": "Go to Dashboard",
+          "fontFamily": "Inter",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "F474R",
+          "name": "hints",
+          "gap": 8,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "oKf1S",
+              "name": "accel",
+              "fill": "#8A8A8A",
+              "content": "⌘D",
+              "fontFamily": "Roboto Mono",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "hAsis",
+              "name": "seq",
+              "fill": "#8A8A8A",
+              "content": "G D",
+              "fontFamily": "Roboto Mono",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "nkVfJ",
+      "x": 40,
+      "y": 80,
+      "name": "Help Overlay — macOS",
+      "width": 640,
+      "fill": "#161616",
+      "cornerRadius": 12,
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "effect": {
+        "type": "shadow",
+        "shadowType": "outer",
+        "color": "#00000080",
+        "offset": {
+          "x": 0,
+          "y": 16
+        },
+        "blur": 48
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "pKB4t",
+          "name": "input",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            14,
+            16
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "w6rxA",
+              "name": "it1",
+              "fill": "#8A8A8A",
+              "content": "Search shortcuts…",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "C3kC3",
+          "name": "list",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "0WaVL",
+              "name": "h1a",
+              "fill": "#8A8A8A",
+              "content": "ASK AN AGENT",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 0.5
+            },
+            {
+              "id": "6rI5i",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "r0",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Ask an agent"
+                },
+                "oKf1S": {
+                  "content": "⌘C"
+                },
+                "hAsis": {
+                  "content": "G C"
+                }
+              }
+            },
+            {
+              "type": "text",
+              "id": "PkHqz",
+              "name": "h1b",
+              "fill": "#8A8A8A",
+              "content": "GO TO",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 0.5
+            },
+            {
+              "id": "HOjaw",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "fill": "#222222",
+              "name": "r1",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Go to Dashboard",
+                  "fill": "#EDEDED"
+                },
+                "oKf1S": {
+                  "content": "⌘D"
+                },
+                "hAsis": {
+                  "content": "G D"
+                }
+              }
+            },
+            {
+              "id": "VuWk1",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "r2",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Go to Inbox"
+                },
+                "oKf1S": {
+                  "content": "⌘I"
+                },
+                "hAsis": {
+                  "content": "G I"
+                }
+              }
+            },
+            {
+              "id": "TYGt0",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "r3",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Go to Workstream"
+                },
+                "oKf1S": {
+                  "enabled": false
+                },
+                "hAsis": {
+                  "content": "G W"
+                }
+              }
+            },
+            {
+              "id": "n6m6u",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "r4",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Go to Knowledge Base"
+                },
+                "oKf1S": {
+                  "enabled": false
+                },
+                "hAsis": {
+                  "content": "G K"
+                }
+              }
+            },
+            {
+              "id": "ToWmx",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "r5",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Go to Routines"
+                },
+                "oKf1S": {
+                  "content": "⌘R"
+                },
+                "hAsis": {
+                  "content": "G R"
+                }
+              }
+            },
+            {
+              "id": "9FWhC",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "r6",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Go to Analytics"
+                },
+                "oKf1S": {
+                  "content": "⌘A"
+                },
+                "hAsis": {
+                  "content": "G A"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "yJ5YV",
+      "x": 760,
+      "y": 80,
+      "name": "Help Overlay — Windows/Linux",
+      "width": 640,
+      "fill": "#161616",
+      "cornerRadius": 12,
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "effect": {
+        "type": "shadow",
+        "shadowType": "outer",
+        "color": "#00000080",
+        "offset": {
+          "x": 0,
+          "y": 16
+        },
+        "blur": 48
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "RTzud",
+          "name": "input",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            14,
+            16
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "VDDHT",
+              "name": "it2",
+              "fill": "#8A8A8A",
+              "content": "Search shortcuts…",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "As4Q6",
+          "name": "list",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "1GbGk",
+              "name": "h2a",
+              "fill": "#8A8A8A",
+              "content": "ASK AN AGENT",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 0.5
+            },
+            {
+              "id": "BYUwF",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "q0",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Ask an agent"
+                },
+                "oKf1S": {
+                  "content": "Ctrl+C"
+                },
+                "hAsis": {
+                  "content": "G C"
+                }
+              }
+            },
+            {
+              "type": "text",
+              "id": "oLybo",
+              "name": "h2b",
+              "fill": "#8A8A8A",
+              "content": "GO TO",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 0.5
+            },
+            {
+              "id": "5MSuG",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "fill": "#222222",
+              "name": "q1",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Go to Dashboard",
+                  "fill": "#EDEDED"
+                },
+                "oKf1S": {
+                  "content": "Ctrl+D"
+                },
+                "hAsis": {
+                  "content": "G D"
+                }
+              }
+            },
+            {
+              "id": "rwKqD",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "q2",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Go to Inbox"
+                },
+                "oKf1S": {
+                  "content": "Ctrl+I"
+                },
+                "hAsis": {
+                  "content": "G I"
+                }
+              }
+            },
+            {
+              "id": "7wuxt",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "q3",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Go to Workstream"
+                },
+                "oKf1S": {
+                  "enabled": false
+                },
+                "hAsis": {
+                  "content": "G W"
+                }
+              }
+            },
+            {
+              "id": "7pbb9",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "q4",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Go to Knowledge Base"
+                },
+                "oKf1S": {
+                  "enabled": false
+                },
+                "hAsis": {
+                  "content": "G K"
+                }
+              }
+            },
+            {
+              "id": "Z3Bw1",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "q5",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Go to Routines"
+                },
+                "oKf1S": {
+                  "content": "Ctrl+R"
+                },
+                "hAsis": {
+                  "content": "G R"
+                }
+              }
+            },
+            {
+              "id": "mCtjQ",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "q6",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Go to Analytics"
+                },
+                "oKf1S": {
+                  "content": "Ctrl+A"
+                },
+                "hAsis": {
+                  "content": "G A"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "XgSnr",
+      "x": 40,
+      "y": 560,
+      "name": "Command Palette — macOS",
+      "width": 640,
+      "fill": "#161616",
+      "cornerRadius": 12,
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "effect": {
+        "type": "shadow",
+        "shadowType": "outer",
+        "color": "#00000080",
+        "offset": {
+          "x": 0,
+          "y": 16
+        },
+        "blur": 48
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "W2AHr",
+          "name": "input",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            14,
+            16
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "4HEKV",
+              "name": "pit1",
+              "fill": "#8A8A8A",
+              "content": "Search commands… (Knowledge Base · Workflows · Settings)",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "r3bI7",
+          "name": "list",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "Dmg4i",
+              "name": "ph1a",
+              "fill": "#8A8A8A",
+              "content": "ASK AN AGENT",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 0.5
+            },
+            {
+              "id": "qca8E",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "pr0",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Ask an agent"
+                },
+                "oKf1S": {
+                  "content": "⌘C"
+                },
+                "hAsis": {
+                  "content": "G C"
+                }
+              }
+            },
+            {
+              "type": "text",
+              "id": "opgNm",
+              "name": "ph1b",
+              "fill": "#8A8A8A",
+              "content": "NAVIGATION",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 0.5
+            },
+            {
+              "id": "estAg",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "fill": "#222222",
+              "name": "pr1",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Dashboard",
+                  "fill": "#EDEDED"
+                },
+                "oKf1S": {
+                  "content": "⌘D"
+                },
+                "hAsis": {
+                  "content": "G D"
+                }
+              }
+            },
+            {
+              "id": "ggYpA",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "pr2",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Inbox"
+                },
+                "oKf1S": {
+                  "content": "⌘I"
+                },
+                "hAsis": {
+                  "content": "G I"
+                }
+              }
+            },
+            {
+              "id": "JbSRn",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "pr3",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Workstream"
+                },
+                "oKf1S": {
+                  "enabled": false
+                },
+                "hAsis": {
+                  "content": "G W"
+                }
+              }
+            },
+            {
+              "id": "aiXQb",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "pr4",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Knowledge Base"
+                },
+                "oKf1S": {
+                  "enabled": false
+                },
+                "hAsis": {
+                  "content": "G K"
+                }
+              }
+            },
+            {
+              "id": "N9cvL",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "pr5",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Routines"
+                },
+                "oKf1S": {
+                  "content": "⌘R"
+                },
+                "hAsis": {
+                  "content": "G R"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "vWOgy",
+      "x": 760,
+      "y": 560,
+      "name": "Command Palette — Windows/Linux",
+      "width": 640,
+      "fill": "#161616",
+      "cornerRadius": 12,
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "effect": {
+        "type": "shadow",
+        "shadowType": "outer",
+        "color": "#00000080",
+        "offset": {
+          "x": 0,
+          "y": 16
+        },
+        "blur": 48
+      },
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "r1g99",
+          "name": "input",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            14,
+            16
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "LjBAX",
+              "name": "pit2",
+              "fill": "#8A8A8A",
+              "content": "Search commands… (Knowledge Base · Workflows · Settings)",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "QDBiK",
+          "name": "list",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "IATWU",
+              "name": "ph2a",
+              "fill": "#8A8A8A",
+              "content": "ASK AN AGENT",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 0.5
+            },
+            {
+              "id": "idkrg",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "sr0",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Ask an agent"
+                },
+                "oKf1S": {
+                  "content": "Ctrl+C"
+                },
+                "hAsis": {
+                  "content": "G C"
+                }
+              }
+            },
+            {
+              "type": "text",
+              "id": "Xicsd",
+              "name": "ph2b",
+              "fill": "#8A8A8A",
+              "content": "NAVIGATION",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 0.5
+            },
+            {
+              "id": "ukcUq",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "fill": "#222222",
+              "name": "sr1",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Dashboard",
+                  "fill": "#EDEDED"
+                },
+                "oKf1S": {
+                  "content": "Ctrl+D"
+                },
+                "hAsis": {
+                  "content": "G D"
+                }
+              }
+            },
+            {
+              "id": "lNktw",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "sr2",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Inbox"
+                },
+                "oKf1S": {
+                  "content": "Ctrl+I"
+                },
+                "hAsis": {
+                  "content": "G I"
+                }
+              }
+            },
+            {
+              "id": "heap5",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "sr3",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Workstream"
+                },
+                "oKf1S": {
+                  "enabled": false
+                },
+                "hAsis": {
+                  "content": "G W"
+                }
+              }
+            },
+            {
+              "id": "75wYh",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "sr4",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Knowledge Base"
+                },
+                "oKf1S": {
+                  "enabled": false
+                },
+                "hAsis": {
+                  "content": "G K"
+                }
+              }
+            },
+            {
+              "id": "aON6X",
+              "type": "ref",
+              "ref": "57a4m",
+              "width": "fill_container",
+              "name": "sr5",
+              "descendants": {
+                "JGwOn": {
+                  "content": "Routines"
+                },
+                "oKf1S": {
+                  "content": "Ctrl+R"
+                },
+                "hAsis": {
+                  "content": "G R"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "NDWir",
+      "x": 40,
+      "y": 1000,
+      "name": "Badge micro-layout — anatomy",
+      "width": 1360,
+      "fill": "#1C1C1C",
+      "cornerRadius": 12,
+      "stroke": {
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "layout": "vertical",
+      "gap": 22,
+      "padding": 32,
+      "children": [
+        {
+          "type": "frame",
+          "id": "zeA9q",
+          "name": "hdr",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "children": [
+            {
+              "type": "text",
+              "id": "u5BXZ",
+              "name": "t",
+              "fill": "#EDEDED",
+              "content": "Badge micro-layout — dual key hints",
+              "fontFamily": "Inter",
+              "fontSize": 20,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "Merlr",
+              "name": "d",
+              "fill": "#CFCFCF",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Additive change only: existing rows gain a SECOND key hint. Where a destination has both a Super/Meta accelerator and a g-leader sequence, the row shows two hints; where it has only a sequence, it shows one. Same .cmdk-keys style (muted monospace) throughout — no new component.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "qh5uO",
+          "name": "body",
+          "width": "fill_container",
+          "gap": 44,
+          "children": [
+            {
+              "type": "frame",
+              "id": "jt3bB",
+              "name": "card",
+              "width": 600,
+              "fill": "#161616",
+              "cornerRadius": 12,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "layout": "vertical",
+              "gap": 4,
+              "padding": 8,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "b0c7E",
+                  "name": "ch",
+                  "fill": "#8A8A8A",
+                  "content": "GO TO",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 0.5
+                },
+                {
+                  "id": "Ym6sB",
+                  "type": "ref",
+                  "ref": "57a4m",
+                  "width": "fill_container",
+                  "fill": "#222222",
+                  "name": "a1",
+                  "descendants": {
+                    "JGwOn": {
+                      "content": "Go to Dashboard",
+                      "fill": "#EDEDED"
+                    },
+                    "oKf1S": {
+                      "content": "⌘D"
+                    },
+                    "hAsis": {
+                      "content": "G D"
+                    }
+                  }
+                },
+                {
+                  "id": "34jDR",
+                  "type": "ref",
+                  "ref": "57a4m",
+                  "width": "fill_container",
+                  "name": "a2",
+                  "descendants": {
+                    "JGwOn": {
+                      "content": "Go to Inbox"
+                    },
+                    "oKf1S": {
+                      "content": "⌘I"
+                    },
+                    "hAsis": {
+                      "content": "G I"
+                    }
+                  }
+                },
+                {
+                  "id": "FVmoF",
+                  "type": "ref",
+                  "ref": "57a4m",
+                  "width": "fill_container",
+                  "name": "a3",
+                  "descendants": {
+                    "JGwOn": {
+                      "content": "Go to Workstream"
+                    },
+                    "oKf1S": {
+                      "enabled": false
+                    },
+                    "hAsis": {
+                      "content": "G W"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "QcQUE",
+              "name": "notes",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 12,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "2YXsL",
+                  "name": "n1",
+                  "fill": "#CFCFCF",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "•  Order — accelerator first (⌘D / Ctrl+D), then the g-leader (G D). Left to right.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "7Srcn",
+                  "name": "n2",
+                  "fill": "#CFCFCF",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "•  Spacing — 8px gap between the two hints, no separator glyph. Keeping it a bare gap is the KISS call; a dot or pipe would be clutter.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "7ncrv",
+                  "name": "n3",
+                  "fill": "#CFCFCF",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "•  The g-leader is always the last (rightmost) element and flush-right, so it forms one consistent right-hand column across every row.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "JitqW",
+                  "name": "n4",
+                  "fill": "#CFCFCF",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "•  Single-hint rows (Workstream, Knowledge Base) show one hint in that SAME column — the accelerator slot is simply empty, so the asymmetry reads as intentional, not broken.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "NCoB4",
+                  "name": "n5",
+                  "fill": "#CFCFCF",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "•  Both hints reuse .cmdk-keys verbatim: monospace, 0.72rem, colour #8A8A8A. The selected row brightens only the LABEL; hint colour is unchanged.",
+                  "lineHeight": 1.45,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "vVW0j",
+      "x": 40,
+      "y": 52,
+      "name": "c1",
+      "fill": "#8A8A8A",
+      "content": "? help overlay — macOS",
+      "fontFamily": "Inter",
+      "fontSize": 13,
+      "fontWeight": "600"
+    },
+    {
+      "type": "text",
+      "id": "v6PS5",
+      "x": 760,
+      "y": 52,
+      "name": "c2",
+      "fill": "#8A8A8A",
+      "content": "? help overlay — Windows / Linux",
+      "fontFamily": "Inter",
+      "fontSize": 13,
+      "fontWeight": "600"
+    },
+    {
+      "type": "text",
+      "id": "JYbxt",
+      "x": 40,
+      "y": 532,
+      "name": "c3",
+      "fill": "#8A8A8A",
+      "content": "⌘K command palette — macOS",
+      "fontFamily": "Inter",
+      "fontSize": 13,
+      "fontWeight": "600"
+    },
+    {
+      "type": "text",
+      "id": "00Ovi",
+      "x": 760,
+      "y": 532,
+      "name": "c4",
+      "fill": "#8A8A8A",
+      "content": "Ctrl+K command palette — Windows / Linux",
+      "fontFamily": "Inter",
+      "fontSize": 13,
+      "fontWeight": "600"
+    }
+  ]
+}

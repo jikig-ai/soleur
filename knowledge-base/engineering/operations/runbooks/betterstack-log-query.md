@@ -13,6 +13,58 @@ doppler run -p soleur -c prd_terraform -- \
   'SELECT count() AS n FROM remote($BS_TABLE) WHERE dt >= now() - INTERVAL 2 HOUR FORMAT JSONEachRow'
 ```
 
+## Standing alarms over this source (log-content recurrence alarms)
+
+A **log-*content* recurrence alarm** over this Better Stack Logs source is an **in-repo GitHub-Actions
+cron poller**, NOT a native Better Stack alert — query via `betterstack-query.sh` → decode/threshold
+in a `scripts/` checker → deduped `action-required` GitHub issue → Sentry self-liveness heartbeat.
+This is the reusable **"Pattern: Better Stack log-content alarms"** recorded in
+[`ADR-096` §Consequences](../../architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md)
+(the `better-uptime` TF provider has no log-alert resource, and the Telemetry v2 SQL-alert API is
+rejected for stateful/newest-scoped signals + the operator-surface reasons documented there).
+
+Live standing alarms over this source:
+
+- **`scheduled-zot-restart-loop.yml`** (#6291, every 30 min) — the zot registry restart-loop
+  recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
+  issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
+  reporter goes dark. Checker: `scripts/zot-restart-loop-alarm.sh` (shared parse helper
+  `scripts/lib/zot-telemetry-parse.sh`); self-liveness `sentry_cron_monitor.zot_restart_loop_alarm`.
+  Dry-run: `doppler run -p soleur -c prd_terraform -- bash scripts/zot-restart-loop-alarm.sh`.
+  - **Also reads `SOLEUR_PRIVATE_NIC`** (#6415 / ADR-115) — the registry host's own assertion
+    that its private IP (`10.0.1.30`) is configured. Carried as an **independent** verdict
+    (`NIC_ALARM_VERDICT`, deliberately NOT in the exit code) and firing three deduped
+    `[ci/registry-private-nic]` classes: *host has no private NIC* (terminal),
+    *boot race self-healed* (advisory — a successful heal emits `nic_ok=true`, so the terminal
+    branch structurally cannot see it), and *guard went dark* (absence).
+    Query: `… --grep SOLEUR_PRIVATE_NIC`. Decode: `imds_rc!=0` → H1 (metadata-service blip);
+    `imds_rc=0 && imds_nets=0` → H2 (the `hcloud_server_network` additive online-attach race);
+    `imds_nets>0 && converged_by!=already` → the attach landed and the guest never configured it.
+    **If zot is reported unreachable, rule the private NIC out FIRST** — #6400 was 14 days of
+    "zot mysteriously down" that was actually a missing NIC, and a NIC-less host keeps public
+    egress so every other signal here stays green.
+- **`scheduled-followthrough-sweeper.yml`** — one-shot soak follow-throughs (e.g.
+  `scripts/followthroughs/zot-restart-plateau-6288.sh`) recur the same query+decode shape.
+
+## ⚠️ A "no creds" / TRANSIENT error is NOT "no access" (repeat misdiagnosis)
+
+`betterstack-query.sh` does **not** read Doppler itself — it needs the query creds
+**injected** via `doppler run`. Run it in a bare shell and it exits with
+`BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not set`; a follow-through that wraps it
+(e.g. `chardevice-wedge-nonrecurrence-5934.sh`) then reports `TRANSIENT: … auth/config/network`.
+
+**Neither means this session lacks Better Stack access.** Both mean the call was not
+wrapped in `doppler run`. The fix is always the same — re-run:
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh <args>
+```
+
+Do NOT conclude "I can't verify from here" and stop. This mistake has now happened
+twice (the note below, and #5934); the script's error message itself now spells out
+the correct invocation. See hard rule `hr-verify-repo-capability-claim-before-assert`
+— a fail-safe/degraded probe output is *inconclusive*, never proof of a capability gap.
+
 ## Why this exists (the three-token trap)
 
 Better Stack has **three** distinct credentials and it is easy to reach for the
@@ -107,6 +159,62 @@ Two deliberate trade-offs:
   container with no matching source just isn't shipped until the config lands.
   No operator action beyond a normal deploy of both components.
 
+## Querying Anthropic cost markers (`SOLEUR_CLAUDE_COST` / `_DAILY`)
+
+The production Claude fleet emits two structured cost-marker families at pino
+**WARN** (so the same `app_container_warn_filter` ships them). Both ride the
+existing app-container → journald → Vector → Better Stack path — **no
+`betterstack-query.sh` change**; the `--grep` form already does `raw LIKE '%…%'`:
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  scripts/betterstack-query.sh --since 48h --grep SOLEUR_CLAUDE_COST --limit 20
+```
+
+- **`SOLEUR_CLAUDE_COST`** — per-turn (sessions) + per-run (crons). Emitted from
+  the `cost-writer` choke point (`source ∈ {agent-runner, cc-soleur-go,
+  leader-loop}`), the `spawnClaudeEval` substrate (`source: "cron:<name>"`,
+  `capture_status ∈ {ok, no-result-event, parse-error, timeout}`), and the
+  `postAnthropicMessage` HTTP transport (`cron:<name>`, tokens-only). A
+  `capture_status != "ok"` row is a *shipped* capture-failure event — NOT
+  row-absence — so "capture broke" is distinguishable from "genuinely \$0".
+- **`SOLEUR_CLAUDE_COST_DAILY`** — the once-a-day Admin cost-report cron
+  (`cron-anthropic-cost-report`), carrying the org-total `cost_usd` + a per-model
+  array. A `{status:"key-missing"}` row is the correct **dark** signal while
+  `ANTHROPIC_ADMIN_KEY` is unprovisioned (do NOT triage its absence as a
+  regression during the mint window).
+
+Ranked SQL (run against `remote(t520508_..._logs)`):
+
+```sql
+-- Per-cron spend/token totals over the window (per-run marker)
+SELECT JSONExtractString(raw, 'source') AS source,
+       count() AS runs,
+       sum(JSONExtractFloat(raw, 'cost_usd')) AS cost_usd
+FROM remote(t520508_..._logs)
+WHERE raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
+GROUP BY source ORDER BY cost_usd DESC FORMAT JSONEachRow
+
+-- Per-model spend attribution (per-run marker)
+SELECT JSONExtractString(raw, 'model') AS model,
+       count() AS turns,
+       sum(JSONExtractFloat(raw, 'cost_usd')) AS cost_usd
+FROM remote(t520508_..._logs)
+WHERE raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
+GROUP BY model ORDER BY cost_usd DESC FORMAT JSONEachRow
+
+-- Daily authoritative org total (Admin report)
+SELECT dt, JSONExtractString(raw, 'date') AS day,
+       JSONExtractFloat(raw, 'cost_usd') AS org_cost_usd
+FROM remote(t520508_..._logs)
+WHERE raw LIKE '%"SOLEUR_CLAUDE_COST_DAILY":true%'
+ORDER BY dt DESC LIMIT 30 FORMAT JSONEachRow
+```
+
+The markers carry `conversationId`/`runId`, token counts, cost, model, and
+`source` — no PII, and the daily marker is field-allowlisted so `api_key_id`/
+`workspace_id` never reach Better Stack.
+
 Two further blind spots surfaced by the cron-workspace ENOSPC incident
 (#4684/#4689): (a) the `_metrics` table stores **empty** `AggregateFunction`
 values — the actual metric numbers live as JSON in the `_logs` `raw` column, so
@@ -134,3 +242,66 @@ single-arg path) silently returns empty strings. Use the multi-key form
 `JSONExtractString(raw, 'tags', 'mountpoint')` to descend into the `tags`
 object. When a tag extraction unexpectedly groups everything under one empty
 key, sample one raw row (`SELECT raw ... LIMIT 1`) before trusting the path.
+
+## Verifying disk-fullness / write-health on a deny-all host WITHOUT SSH (registry, #6122 session)
+
+> **⚠️ Correction (#6240/#6244, 2026-07-08): triangulation does NOT prove a disk is
+> *not* full.** Source 1 (Hetzner Volume API) reports the **block-device** size — NOT
+> the guest **filesystem** size; these diverge if `resize2fs` failed. Source 3 ("the
+> last push succeeded") does **not** prove `<85%` — zot dedups blobs and a partial
+> write can still fit, so a push can succeed on a nearly-full fs. In the follow-up
+> incident the disk **was** full: the volume was grown to 30 GB but `resize2fs` had
+> silently failed (`|| true`), leaving the ext4 fs at ~10 GB. **For a "disk full?"
+> question you MUST see the guest `df%`** — ship it as telemetry
+> (`betterstack-query.sh --grep SOLEUR_ZOT_DISK` → `pcent`, `fs_size_gb`,
+> `block_size_gb`), never infer fullness from the provider API. The triangulation
+> below is still valid for *host-down vs cron-not-installed vs full*, but corroborate
+> genuine fullness with the shipped `df%` marker. Full write-up:
+> [../../../project/learnings/best-practices/2026-07-08-disk-full-reads-as-not-full-when-you-check-block-device-not-filesystem.md](../../../project/learnings/best-practices/2026-07-08-disk-full-reads-as-not-full-when-you-check-block-device-not-filesystem.md).
+
+A disk-gated **missed-heartbeat** (e.g. `soleur-registry-disk-prd`, which pings only
+while `/var/lib/zot < 85%`) is **ambiguous** on a deny-all-public host with no SSH: it
+means *either* the cron isn't installed yet (benign false positive — common right after a
+host `-replace`) *or* the disk genuinely crossed 85%. You cannot `df` the box. Triangulate
+from three SSH-free sources instead of eyeballing a dashboard (`hr-no-dashboard-eyeball-pull-data-yourself`):
+
+1. **Hetzner Volume API** — `GET /v1/volumes?name=soleur-registry-store` → block-device size
+   (30 GB) + attach status (the "percent full" denominator).
+2. **Hetzner server disk metrics** — `GET /v1/servers/{id}/metrics?type=disk` → write activity;
+   near-idle = not actively filling.
+3. **The last CI release run's zot-mirror step logs** — many `pushed blob: sha256:...` with
+   NO `500 no space left on device` = the disk **accepted writes** = not full. The
+   success/failure of the **last real write attempt** is the most decisive SSH-free signal.
+
+A never-pinged disk-gated heartbeat (`last_event_at` absent → cron not installed) is **NOT**
+proof of disk-full — corroborate with an independent write-success signal (source 3) before
+concluding either way. Read liveness from `attributes.status ∈ {paused,pending,up,down}`
+(only `up` proves a ping arrived); the heartbeat API has **no `last_event_at` field**. Full
+write-up: [2026-07-08-verify-disk-fullness-write-health-on-deny-all-host-without-ssh.md](../../../project/learnings/2026-07-08-verify-disk-fullness-write-health-on-deny-all-host-without-ssh.md).
+
+## Verifying disk-fullness / write-health on a deny-all host WITHOUT SSH
+
+A **disk-gated missed-heartbeat** (e.g. `soleur-registry-disk-prd` — pings only
+while `/var/lib/zot < 85%`) is **ambiguous**: cron-not-installed false positive
+vs genuine disk-full. On a deny-all-public host with no SSH you cannot `df`.
+Do NOT conclude from the heartbeat alone — triangulate three SSH-free sources:
+
+1. **Hetzner Volume API** — `GET /v1/volumes?name=<store>` → block-device size +
+   attach status (the "percent full" denominator; rules out a detached volume).
+2. **Hetzner server disk metrics** — `GET /v1/servers/{id}/metrics?type=disk` →
+   write activity; near-idle = not actively filling.
+3. **The last CI release run's zot-mirror step logs** — many `pushed blob:
+   sha256:...` with **no** `500 no space left on device` = the disk **accepted
+   writes** = not full. The last real write attempt's outcome is the most
+   decisive SSH-free signal.
+
+A never-pinged heartbeat (`last_event_at` absent → cron simply not installed) is
+**NOT proof of disk-full** — corroborate with the independent write-success
+signal (3) before concluding either way. Serves
+`hr-no-dashboard-eyeball-pull-data-yourself`.
+
+**Heartbeat liveness = `attributes.status`, not a ping timestamp.** The Better
+Stack heartbeat API exposes `attributes.status ∈ {paused,pending,up,down}` and
+has **no `last_event_at` field**; only `status == "up"` proves a ping arrived.
+Full write-up:
+[2026-07-08-verify-disk-fullness-write-health-on-deny-all-host-without-ssh.md](../../../project/learnings/2026-07-08-verify-disk-fullness-write-health-on-deny-all-host-without-ssh.md).

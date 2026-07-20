@@ -11,8 +11,8 @@ fixed), and what now needs their attention. Autonomous loops ship features, move
 incidents faster than a solo owner can track; this digest is the antidote to that comprehension debt.
 
 This skill runs **headless inside `claude-code-action`** in the private `jikig-ai/operator-digest`
-repo, with the **public** `jikig-ai/soleur` repo checked out at `$GITHUB_WORKSPACE`. It reads four
-sources, synthesizes four sections of prose, and writes `$GITHUB_WORKSPACE/digest.md`. It then
+repo, with the **public** `jikig-ai/soleur` repo checked out at `$GITHUB_WORKSPACE`. It reads five
+sources, synthesizes five sections of prose, and writes `$GITHUB_WORKSPACE/digest.md`. It then
 **STOPS**. A deterministic workflow post-step scrubs that file (fail-closed) and is the only thing
 that posts the issue — this skill itself must never post the digest (it writes the file and STOPS).
 
@@ -51,7 +51,7 @@ Only emit the "Nothing …" fallback when the command **succeeded** and genuinel
 
 ## Scope guardrails (load-bearing — do not weaken)
 
-- **L1 — path scope.** Read ONLY the four named sources below. Any other file path is out of scope.
+- **L1 — path scope.** Read ONLY the five named sources below. Any other file path is out of scope.
   Do not wander the repository.
 - **L2 — summaries only (the named-PII + customer-email control).** A regex cannot catch "Jane Doe".
   - Incidents: build the section from each post-mortem's **frontmatter, title, and status ONLY —
@@ -62,8 +62,14 @@ Only emit the "Nothing …" fallback when the command **succeeded** and genuinel
   - Money: emit **amounts and vendor names only.** Never echo the ledger's Notes column (it carries
     contact emails, IPs, and account detail).
   - Never copy a raw record, email address, IP, token, or log line into the digest. Summarize.
+- **L3 — velocity metrics are aggregate-only (the shipping-cadence and cost-trend metrics below).**
+  Report **company-aggregate** figures only — one merge-pace band, one rounded run-rate figure. One
+  operator plus autonomous agents means a per-contributor or per-author breakdown is meaningless noise,
+  so **never add an `author` field to the §1 `gh pr list --json` list.** Both metrics suppress to a
+  neutral hedge on any read doubt, and both are stated as a business consequence — never a raw count, a
+  percentage, or an up/down arrow as the signal.
 
-## The four sections
+## The five sections
 
 ### 1. What your company built
 
@@ -75,12 +81,34 @@ Source: merged pull requests in the window.
 # would silently render "Nothing shipped" every week. The List API works cross-repo (same path
 # as the action-required read below). Filter by mergedAt >= $SINCE in your synthesis.
 gh pr list -R jikig-ai/soleur --state merged --limit 300 \
-  --json title,labels,mergedAt
+  --json title,labels,mergedAt,number,url
 ```
+
+(`number,url` are used ONLY by §5's substantiation links — never surface a PR
+number in §1's prose; still no `author` field per L3.)
 
 Keep only PRs whose `mergedAt` is on or after `$SINCE`. Rewrite each meaningful change into its
 **business consequence** in plain language. Group related work. Drop pure chores/dependency bumps
 unless they matter to the owner. No PR numbers, no paths.
+
+**Shipping cadence (aggregate, comparison-framed).** Alongside the summary, judge how much your
+company shipped **this week** against **recent weeks (roughly the last month)** using the same
+`mergedAt` data — count only the *meaningful* merges (the same set you kept above; still drop pure
+chore/dependency bumps), a merge count and never a code-size measure. Fold one qualitative band into
+the prose — *clearly quieter than usual* / *about as much as a normal week* / *clearly busier than
+usual* — stated as a consequence ("Your company shipped about as much as a normal week."). **When in
+doubt, say "about the same."** Judge the band; never pin an exact ratio, a percentage, or an up/down
+arrow, and never use the words "velocity", "throughput", or "cadence" in the output.
+
+Degrade gracefully, and never alarm off a bad read:
+
+- With fewer than a few weeks of history, default to "about the same" (or a plain "still getting
+  started" line) — never a confident band.
+- If the §1 read FAILED (the ⚠️ warning above fired), OR the PR list hit the `--limit 300` cap across
+  the comparison window (a truncated read undercounts the prior weeks), OR this week reads suspiciously
+  empty, do **not** emit a definite band, and **never** emit the downward "quieter" band off a doubtful
+  read — render "about the same" or a one-line hedge instead. A silent undercount must never surface as
+  a confident "quieter than usual".
 
 ### 2. Money & vendors
 
@@ -92,6 +120,30 @@ git log --since="$SINCE" -p -- knowledge-base/operations/expenses.md
 
 Report **new costs, cost changes, and vendor changes** as amounts + vendor names only. "Sentry went
 from $29 to ~$40/mo." "No new vendors this week." Never reproduce the Notes column.
+
+**Cost trend (this week's direction + a coarse run-rate).** After the raw changes above, add framing:
+
+- **Direction (the primary, always-honest signal)** from the `git log -p` diff window: the real added
+  or changed *active* costs this week ("up ~$Y a month — added Resend Pro") or "no cost changes — spend
+  is holding steady." A row merely **recorded** in the diff at a non-active status (`deferred`,
+  `approved-not-billing`) is **not** a cost increase — do not report it as "cost up."
+- **Coarse run-rate anchor (only when the ledger reads cleanly).** `Read` the current
+  `knowledge-base/operations/expenses.md` and sum the **Recurring** table's Amount,
+  counting **only** rows whose `status` is `active` (and `accruing` only when it carries a real
+  actual). This is a **fail-safe allowlist, not a denylist** — the rule is the catch-all, not a list
+  to maintain: any status that is not `active`/`accruing`-with-actual (`deferred` and
+  `approved-not-billing` are the common ones, but a future/unknown status counts too) is invisible to
+  the run-rate; an unrecognized status is excluded, never summed. Normalize known non-monthly rows (a
+  2-year `.ai` registration, annual-billed rows) to a monthly figure. **Suppress the anchor entirely**
+  if any counted row's billing cadence is ambiguous — a mis-read annual row is a 12–24× error, the
+  exact false alarm this digest exists to prevent. When clean, hard-round to one coarse aggregate
+  figure: "recurring spend is roughly $X a month, mostly hosting and tooling." Emit **one aggregate
+  figure only** — never a per-row Notes value; read the **Recurring** table only (the One-Time table's
+  registration and credit rows must never enter the run-rate).
+- If the `Read` of `expenses.md` **errors** (distinct from an empty ledger), suppress the anchor behind
+  the ⚠️ warning line — a failed read is NOT "spend holding steady."
+- **First run:** an empty ledger read → "first reading — no cost trend yet," mirroring the
+  first-digest continuity pattern.
 
 ### 3. What broke & whether it's fixed
 
@@ -118,6 +170,28 @@ These are genuine owner-action signals (expiring tokens, saturating disks, TLS/c
 content, stale CLA). Recap each as a plain "what needs you to act" line with its link. This is a
 read-only recap — do **not** mutate, close, or comment on any issue.
 
+### 5. What got smarter this week
+
+Source: the self-improvements Soleur's compounding loop **completed** in the window — the promotion
+PRs it merged into how your agents work. **Reuse §1's already-fetched merged-PR list — do NOT run
+another `gh` call, and NEVER `--search`** (the Search API returns empty cross-repo under the
+in-action App token, exactly as noted in §1; a `--search` here would silently render "nothing got
+smarter" every week). From §1's list, keep only PRs whose `labels` contains `self-healing/auto`
+**and** whose `mergedAt` is on or after `$SINCE`. Production shape: title
+`self-healing(auto): promote cluster <hash> <date>`, label `self-healing/auto`.
+
+Render as a **platform-level outcome, framed for the operator** — the improvement is to the shared
+Soleur harness (the rules and skills every workspace runs on), not to any one workspace's data:
+"Soleur got sharper this week — N improvements shipped to the shared brain your agents run on."
+Add a compact `Details:` line linking each kept PR (its `url`) as substantiation. Do **not** invent
+a per-item description from the cluster-hash title — it carries no human summary, and reading a PR
+body to synthesize one would violate L2 (summaries only). The count plus the links is the honest
+claim; the link is the drill-in path.
+
+**Never write "your workspace got smarter"** — that phrasing implies a per-tenant benefit the loop
+does not produce (improvements are global harness edits). Because §5 reuses §1's read, a §1 read
+FAILURE (the ⚠️ warning) suppresses §5 too — do not render a "nothing" line off a failed read.
+
 ## Deterministic fallback (never blank)
 
 A quiet week is itself information. **Even an all-empty week still posts.** If a source yields nothing
@@ -127,6 +201,7 @@ in the window, write the section's labelled fallback line — **never leave a se
 - Section 2 → "No money or vendor changes this week."
 - Section 3 → "Nothing broke this week."
 - Section 4 → "Nothing needs your attention this week."
+- Section 5 → "Nothing was promoted to the shared harness this week."
 
 Every section must contain at least one full sentence. A blank or byte-for-byte command-dump section
 is a failure.
@@ -153,7 +228,7 @@ the operator-visible signal that a week was skipped.
 Write the assembled digest to `$GITHUB_WORKSPACE/digest.md`:
 
 - A short title line: `# Weekly digest: <ISO week or date range>`.
-- The four `##` sections above, in order, each with prose (or its fallback line).
+- The five `##` sections above, in order, each with prose (or its fallback line).
 - The final `Last week: #N` continuity line.
 
 Then **STOP**. Do not open, post, or create any issue — the gated workflow post-step owns publishing.

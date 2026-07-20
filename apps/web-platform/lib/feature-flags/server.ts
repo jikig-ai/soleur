@@ -58,6 +58,24 @@ const RUNTIME_FLAGS = {
   // command layer (apps/web-platform/components/command-palette). Default OFF
   // for all roles; dev-cohort rollout via Flagsmith. Fail-closed: FLAG_COMMAND_PALETTE=0 mirror.
   "command-palette": "FLAG_COMMAND_PALETTE",
+  // feat-support-interface — gates the floating support launcher + slide-over
+  // support chat (apps/web-platform/components/support). Currently ON for all prd.
+  // Whether a sent message gets a LIVE Concierge reply or the canned interface-
+  // preview reply is gated SEPARATELY by `support-live` below. Fail-closed:
+  // FLAG_SUPPORT=0 mirror.
+  support: "FLAG_SUPPORT",
+  // feat-wire-concierge-support-chat (ADR-113) — gates the LIVE Concierge backend
+  // for the support chat (SSE via POST /api/support, support-scoped skills). Default
+  // OFF for all roles: while OFF the bubble shows the canned interface-preview reply
+  // (no network). Flip ON only AFTER the Phase-4 product-help corpus + search-root
+  // restriction are validated against a deployed env (else the read-only support
+  // agent could grep the internal knowledge base). Fail-closed: FLAG_SUPPORT_LIVE=0 mirror.
+  "support-live": "FLAG_SUPPORT_LIVE",
+  // feat-guided-tour — gates the onboarding tour: spotlight overlay + TourProvider
+  // (apps/web-platform/components/tour) and the "Take a tour" launch points. Default
+  // OFF for all roles until rollout. Fail-closed: FLAG_GUIDED_TOUR=0 mirror (the
+  // env fallback is role-blind, so keep it 0 until the Flagsmith feature is created).
+  "guided-tour": "FLAG_GUIDED_TOUR",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;

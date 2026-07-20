@@ -10,14 +10,20 @@ import { ShortcutsProvider } from "@/components/command-palette/use-shortcuts";
 import { HelpOverlay } from "@/components/command-palette/help-overlay";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 
+// next/navigation router — capture push() for go-to navigate-effect assertions.
+const routerPush = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }),
+  useRouter: () => ({ push: routerPush, replace: vi.fn(), prefetch: vi.fn() }),
 }));
 vi.mock("@/lib/client-observability", () => ({ reportSilentFallback: vi.fn() }));
 
-function renderHelp() {
+function renderHelp(props: Partial<{ isAdmin: boolean }> = {}) {
   return render(
-    <ShortcutsProvider enabled isAdmin={false} onToggleSidebar={() => {}}>
+    <ShortcutsProvider
+      enabled
+      isAdmin={props.isAdmin ?? false}
+      onToggleSidebar={() => {}}
+    >
       <input data-testid="outside-input" />
       <HelpOverlay />
     </ShortcutsProvider>,
@@ -63,6 +69,7 @@ function pressKey(
 }
 
 beforeEach(() => {
+  routerPush.mockClear();
   Element.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal("fetch", vi.fn());
   try {
@@ -77,7 +84,7 @@ afterEach(() => {
 });
 
 describe("HelpOverlay", () => {
-  it("opens on ⌘/ and lists only the working v1 shortcuts (no G-sequence rows)", async () => {
+  it("opens on ⌘/ and lists the chords, the go-to sequences, and the agent summon", async () => {
     renderHelp();
     pressKey("/", { meta: true });
     expect(
@@ -85,9 +92,57 @@ describe("HelpOverlay", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Open command palette")).toBeInTheDocument();
     expect(screen.getByText("Toggle sidebar")).toBeInTheDocument();
-    // NG2-deferred nav sequences must NOT be documented.
-    expect(screen.queryByText(/then/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Go to/i)).not.toBeInTheDocument();
+    // #5636 go-to sequences are now un-deferred and documented.
+    expect(screen.getByText("Go to Dashboard")).toBeInTheDocument();
+    expect(screen.getByText("Go to Inbox")).toBeInTheDocument();
+    expect(screen.getByText("Go to Knowledge Base")).toBeInTheDocument();
+    expect(screen.getByTestId("help-row-G D")).toBeInTheDocument();
+    // The agent summon is grouped as an action (G C), not navigation.
+    expect(screen.getByTestId("help-row-G C")).toHaveTextContent("Ask an agent");
+    // Admin-only Analytics row is absent for a non-admin.
+    expect(screen.queryByText("Go to Analytics")).not.toBeInTheDocument();
+  });
+
+  it("renders Ctrl (not ⌘) glyphs on a non-Apple platform (happy-dom default) — FR2/AC2", async () => {
+    renderHelp();
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    // The chord rows are keyed by stable id; the visible <kbd> carries the
+    // platform-specific glyph. happy-dom's navigator is non-Apple → Ctrl.
+    expect(screen.getByTestId("help-row-palette")).toHaveTextContent("Ctrl+K");
+    expect(screen.getByTestId("help-row-sidebar")).toHaveTextContent("Ctrl+B");
+    expect(screen.getByTestId("help-row-palette")).not.toHaveTextContent("⌘");
+    expect(screen.getByTestId("help-row-sidebar")).not.toHaveTextContent("⌘");
+  });
+
+  it("shows the Go to Analytics row only for an admin", async () => {
+    renderHelp({ isAdmin: true });
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    expect(screen.getByText("Go to Analytics")).toBeInTheDocument();
+    expect(screen.getByTestId("help-row-G A")).toBeInTheDocument();
+  });
+
+  it("selecting a go-to row navigates and closes the overlay", async () => {
+    renderHelp();
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    fireEvent.click(screen.getByTestId("help-row-G D"));
+    expect(routerPush).toHaveBeenCalledWith("/dashboard");
+    expect(
+      screen.queryByLabelText("Search keyboard shortcuts"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("selecting the agent row opens chat and closes the overlay", async () => {
+    renderHelp();
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    fireEvent.click(screen.getByTestId("help-row-G C"));
+    expect(routerPush).toHaveBeenCalledWith("/dashboard/chat/new");
+    expect(
+      screen.queryByLabelText("Search keyboard shortcuts"),
+    ).not.toBeInTheDocument();
   });
 
   it("opens on a bare ? from the body", async () => {
@@ -108,12 +163,44 @@ describe("HelpOverlay", () => {
   });
 });
 
+describe("HelpOverlay — accelerator hint is Apple-only (AC12)", () => {
+  it("renders ONLY the G-seq on happy-dom's non-Apple default", async () => {
+    renderHelp();
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    const row = screen.getByTestId("help-row-G D");
+    expect(row).toHaveTextContent("G D");
+    expect(row).not.toHaveTextContent("⌘D");
+  });
+
+  it("renders BOTH ⌘D and G D on Apple; Workstream stays G-seq only", async () => {
+    vi.stubGlobal("navigator", {
+      platform: "MacIntel",
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    });
+    renderHelp();
+    // Provider reads the platform in a mount effect — let it settle.
+    await act(async () => {});
+    pressKey("/", { meta: true });
+    await screen.findByLabelText("Search keyboard shortcuts");
+    const dash = screen.getByTestId("help-row-G D");
+    expect(dash).toHaveTextContent("⌘D");
+    expect(dash).toHaveTextContent("G D");
+    // Ask-agent row (G C) also shows its ⌘C accel on Apple.
+    expect(screen.getByTestId("help-row-G C")).toHaveTextContent("⌘C");
+    // Workstream has no accel — only its G-seq.
+    const work = screen.getByTestId("help-row-G W");
+    expect(work).toHaveTextContent("G W");
+    expect(work).not.toHaveTextContent("⌘W");
+  });
+});
+
 describe("HelpOverlay — rows run their command (not just close)", () => {
   it("selecting the ⌘K row opens the command palette and closes the overlay", async () => {
     renderHelpAndPalette();
     pressKey("/", { meta: true }); // open help overlay
     await screen.findByLabelText("Search keyboard shortcuts");
-    fireEvent.click(screen.getByTestId("help-row-⌘K"));
+    fireEvent.click(screen.getByTestId("help-row-palette"));
     // The command palette is now open…
     expect(
       await screen.findByLabelText("Command palette search"),
@@ -129,7 +216,7 @@ describe("HelpOverlay — rows run their command (not just close)", () => {
     renderHelpAndPalette(onToggleSidebar);
     pressKey("/", { meta: true });
     await screen.findByLabelText("Search keyboard shortcuts");
-    fireEvent.click(screen.getByTestId("help-row-⌘B"));
+    fireEvent.click(screen.getByTestId("help-row-sidebar"));
     expect(onToggleSidebar).toHaveBeenCalledTimes(1);
     expect(
       screen.queryByLabelText("Search keyboard shortcuts"),

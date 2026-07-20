@@ -594,6 +594,44 @@ that is **deterministically re-cloned**:
   pg_temp`, REVOKE/GRANT precedent per migration 108; the membership check is
   retained.)
 
+### Amendment 2026-06-30 (#5733) — the in-process dispatch clone is the authoritative same-FS lander; absent/dir-invalid + empty-output are strands
+
+A third multi-workspace defect on the same dispatch surface: a connected
+workspace (`754ee124`) whose `/workspaces/<id>/.git` is **ABSENT** stranded
+`/soleur:go` Step 0.0 while emitting ZERO server-side signal — every prior
+re-clone mechanism (push-reconcile, `/api/repo/setup` reconnect) failed to land
+the repo, and the cold dispatch path's existing in-process clone outcome was
+**silently discarded**. Decided here:
+
+- **The authoritative lander is the IN-PROCESS dispatch-time clone.** The repo
+  re-clone the agent depends on MUST run in the SAME process that constructs the
+  agent sandbox (the cc-dispatcher cold path, `ensureWorkspaceRepoCloned` into the
+  agent's own `workspacePath` — the one placement guaranteed to share the agent's
+  bwrap filesystem), keyed on the **workspace's OWN `github_installation_id`**
+  (never the dispatching user's membership-resolved install, never founder/owner
+  resolution — the #5591 owner-canary drift makes founder resolution unusable).
+  Out-of-process re-clones (Inngest reconcile, cron) are best-effort backstops
+  only; they are NOT guaranteed to share the agent's filesystem (an open
+  FS/mount-divergence question for multi-replica `/workspaces` — tracked for a
+  same-container periodic backstop if confirmed).
+- **The clone outcome must be consumed LOUDLY, never swallowed.** On a `"failed"`
+  clone a distinct, paging `repo_clone_failed` Sentry event fires with the
+  git-token-redacted + path/url-sanitized reason (ADR-029 pseudonymization), and
+  the dispatch honest-blocks. The `repo_status→error` write is **F4-gated**: only
+  on the solo/owner path (`workspaceId===userId`) AND after a post-clone
+  `.git`-absence CAS (a member must not flip a co-owned workspace's shared status;
+  a concurrent winner's fresh `ready` must never be clobbered). The pre-existing
+  `graftReadyButGitAbsent` failure write is gated identically (matching the
+  corrupt sibling's emit-only team posture). cc-dispatcher stays OFF the
+  service-role allowlist (no new column read).
+- **The DB `repo_status` is NOT authoritative over on-disk reality.** The shared
+  dispatch gate (`evaluateAgentReadiness`) treats `absent`/`dir-invalid` `.git` as
+  a confirmed terminal strand on the **post-heal** surface (cold/warm) →
+  honest-block + `agent_readiness_self_stop`; on the **pre-heal** surface
+  (reconcile, which re-clones the same shape one line later) it does NOT emit
+  (soak-signal guard). The agent's in-sandbox Step 0.0 `git rev-parse … 2>/dev/null
+  || true` EMPTY output is also a strand signal (the C2 in-sandbox backstop).
+
 ### C4 edge note
 
 No `.c4` model edit. C4 enumeration for this change (all already covered or
@@ -712,6 +750,93 @@ Behavioral correction shipped in the same PR (no soak gate; not a destructive
 migration; no schema change — the credential RPC is unmodified and no new
 migration is added).
 
+## Amendment 2026-06-19 — dispatch readiness is on-disk worktree VALIDITY (not mere `.git` presence)
+
+**Lineage:** extends the 2026-06-18 *"dispatch readiness must be (repo_status-ok
+AND physical `.git` present)"* consequence (the Bug-2 graft) and its
+2026-06-18 *"distinguish membership-deny NULL install from not-connected"*
+sibling. Same dispatch-readiness theme, tightening the final clause from
+*"physical `.git` present"* to *"**valid** git work tree"*.
+
+**Defect (third distinct gap).** A cold Concierge dispatch into a
+FULLY-connected workspace (install NON-null, `repoUrl` present, `repo_status`
+`ready`) whose on-disk `<ws>/.git` EXISTS but is **not a valid work tree**
+(a partial/interrupted clone, or a leftover from a failed atomic-rename) was
+fast-pathed by the presence-only `existsSync(<ws>/.git)` gate at three sites
+(`cc-dispatcher.ts` `needsSelfHeal`, the `gitDirExists` self-heal seam, and
+`ensure-workspace-repo.ts`'s `.git`-present early-return). Self-heal was skipped
+entirely, no clone was attempted, no error was set, **no Sentry signal** was
+emitted, and the agent spawned into a corrupt repo — `/soleur:go` Step 0.0's
+`git rev-parse --is-inside-work-tree` then reported "no git repository". Verified
+live: operator `52af49c2…`, active workspace `754ee124…`, both connected,
+`repo_error` null, zero divergence/self-heal Sentry events in 24h. Distinct from
+both prior 2026-06-18 fixes (install resolves NON-null; `.git` is NOT cleanly
+absent).
+
+**Decision (decided here).** Dispatch readiness = `repo_status`-ok **AND on-disk
+worktree VALIDITY**. The gate keys on a SYNCHRONOUS structural validity proxy
+(`isValidGitWorkTree`: `.git` is a FILE gitdir pointer → valid; or a directory
+with both `HEAD` and `objects` → valid; else invalid) — deliberately WEAKER than
+`git rev-parse --is-inside-work-tree` but cheap enough to keep the AC7 zero-await
+hot path (a valid `.git` touches no DB/JWT). A corrupt `.git` routes to a
+corrupt-worktree graft that:
+
+- removes the corrupt `.git` **only on a POSITIVE empty-corrupt fingerprint**
+  (`isEmptyCorruptGitDir`: `.git` is a directory AND `HEAD` ENOENT AND `objects`
+  ENOENT — no objects ⇒ no commits to lose), **never** on the negation of the
+  validity probe (an EACCES/EIO blip or a `.git` FILE must not be destroyed);
+- runs the rm+reclone **serialized under `withWorkspacePermissionLock`** (the rm
+  is a second `.git` writer the graft sentinel never guarded);
+- on a populated-but-broken / EACCES / gitdir-FILE `.git`, **honest-blocks**
+  (never destroys) rather than removing;
+- emits a new `repo_resolver_divergence` op `corrupt-worktree-at-dispatch`
+  carrying `extra.recovered` (true = self-healed re-clone; false = unrecovered
+  honest-block), routed through the existing feature-only paging alert (NO
+  Terraform change);
+- on recovery FAILURE performs **ZERO `workspaces` writes** (no `setRepoStatus`)
+  — a removed/transient MEMBER dispatching into a corrupt TEAM workspace must not
+  flip its `repo_status` to `error` for the Owners (the same hazard the
+  membership-deny-NULL amendment's `failConnectionUnresolved` avoids).
+
+A Start-Fresh `git init` tree (HEAD+objects, no origin) is VALID → preserved,
+never re-cloned. `/soleur:go` Step 0.0 still runs the authoritative `rev-parse`.
+
+### Considered Options (amendment)
+
+- *Invert the single `gitDirExists` seam to "valid" everywhere* — **REJECTED**:
+  the null-install divergence gates require TRUE ABSENCE; inverting them would
+  mis-route a corrupt-`.git` + null-install workspace to
+  `connected-null-install-at-dispatch` (wrong op, no removal). The presence seam
+  is kept for those gates; validity is a SEPARATE seam.
+- *Trigger the rm on the negation of the validity probe* — **REJECTED**:
+  `existsSync`/`stat` collapse ENOENT with EACCES/EIO, so a transient unreadable
+  populated `.git` (or a gitdir-FILE worktree) would be destroyed, losing
+  un-pushed commits. The rm is authorized ONLY by the positive empty-corrupt
+  fingerprint.
+- *Run `git rev-parse` on the hot path for full validity* — **REJECTED**: adds a
+  subprocess to the common valid-`.git` dispatch (AC7 regression). The structural
+  proxy is the hot-path gate; no off-hot-path `rev-parse` recovery probe ships. A
+  fully-populated-but-internally-broken `.git` that passes the structural proxy is
+  honest-blocked STRUCTURALLY — it is never auto-recovered (it has objects, so the
+  empty-corrupt fingerprint never authorizes an `rm`) and never silently destroyed
+  (rare; honest Step-0.0 error + operator reconnect).
+
+### C4 edge note
+
+**No `.c4` model edit.** Same enumeration as the 2026-06-18 amendments: GitHub is
+the `github` `#external` system (clone source); the affected member is a
+workspace Owner already covered by the multi-Owner `founder` actor; the
+`/workspaces` volume and `workspaces.repo_status`/`repo_error` are below the
+`supabase`-element granularity. The corrupt-worktree path tightens the on-disk
+validity semantics of an already-modeled dispatch edge (block-vs-spawn-vs-reclone)
+and adds no actor, system, store, or access relationship. Grep of
+`knowledge-base/**/*.c4` for the relevant identifiers is empty. **No C4 impact.**
+
+### Sequencing
+
+Single atomic PR — TS-only, no migration, no Terraform change (the feature-only
+Sentry alert auto-covers the new op). Behavioral correction; no soak gate.
+
 ## Amendment 2026-06-22 — PR-3: extend resolve-once-and-thread to the per-dispatch reprovision resolver
 
 PR-1's always-enforce-workspace invariant was applied in the **cold dispatch
@@ -799,3 +924,436 @@ follow-up.
 Single atomic PR (wiring + new breadcrumb op + tests + this amendment). No schema
 change, no migration, no soak gate on the code change; the breadcrumb's
 prod-soak observation is a post-merge verification only.
+
+## Amendment 2026-06-29 — application-enforced scoped solo-uniqueness at the connect boundary (#5673)
+
+**Status: adopting** → accepted after the AC8 soak holds `op:founder-ambiguous` at
+~0 for 7 days post-deploy.
+
+This **closes the "connect path" half of the gap R7 (Amendment 2026-06-17b) named**:
+R7 recorded that the "one solo workspace per `(installation_id, repo_url)`"
+invariant became "enforced **nowhere structurally** — only by the connect path +
+this PR's runtime `>1` fail-closed," but the **connect path itself had no guard** —
+a second solo workspace could still bind an already-owned `(install, repo)`, after
+which every non-push webhook for that install 404-dropped + paged (WEB-PLATFORM-3M).
+This amendment implements that connect-path check.
+
+### Decision
+
+A **second solo workspace** is prevented from binding `(github_installation_id,
+normalizeRepoUrl(repo_url))` already owned by a *different* solo workspace, via an
+**application-level TypeScript check at the `repo/setup` connect boundary**
+(`server/repo-connect-guard.ts`, invoked from `app/api/repo/setup/route.ts` before
+the `:202-215` cloning-flip write). The guard **reuses the existing
+`resolveSoloFounderForInstallation`** (one source of truth for the solo invariant —
+not a second, drift-prone SQL copy) and branches:
+
+- resolver `none` → **proceed** (happy path).
+- `found`, founder == caller's active workspace → **proceed** (re-connect/no-op).
+- `found`, founder == caller's OWN solo (≠ active) AND that workspace `ready` →
+  **switch** redirect (reuse `set_current_workspace_id`; the surfaced
+  `existingWorkspaceId` is the caller's OWN id only).
+- `found`, founder == caller's own solo but NOT `ready` → **decline**.
+- `found`, founder == a DIFFERENT user's solo → **generic decline** (fixed 409,
+  no workspace/user reference — no information disclosure / IDOR).
+- `ambiguous` / `db-error` → **decline** + `reportSilentFallback` (fail-closed).
+
+The owning solo workspace is always solo (id == owner user id, ADR-038 N2), so
+"the caller is the owner" reduces to `founderId == user.id` — no membership query.
+The `repo_status == 'ready'` switch gate needs an **explicit** `workspaces`
+read keyed on `founderId` (the resolver returns only `{kind, founderId}`).
+
+### Considered Options (amendment)
+
+- **Option A (chosen): application-enforced scoped solo-uniqueness in TS, reusing
+  the resolver.** No new migration/RPC/advisory-lock. The WEB-PLATFORM-3M incident
+  is **sequential** (one operator, two sessions); the double-click race is already
+  covered by the optimistic `.neq("repo_status","cloning")` lock on the cloning-flip
+  write in `repo/setup/route.ts`; the
+  rare true concurrent double-connect degrades to **today's** behavior via the
+  retained resolver `>1` backstop. One source of truth for the solo invariant.
+- **Rejected: a SECURITY-DEFINER RPC + advisory lock for hard atomicity.** The
+  advisory lock releases at the RPC tx end, but the route's cloning-flip write is a
+  separate PostgREST tx — the lock would NOT span read→write, so it adds a second
+  drift-prone SQL copy of the solo invariant for **no** atomicity the optimistic
+  lock + `>1` backstop don't already provide for the realistic (sequential) threat.
+- **NOT a reversal of Option C** (the original ADR-044 rejected global
+  `UNIQUE(repo_url)`). This invariant is scoped to `(install, repo)` **and** further
+  narrowed to **solo-only**; cross-install fan-out (two users + same public repo
+  under DIFFERENT installs) is preserved exactly (resolver returns `none` → proceed).
+  Option C's global uniqueness threw `23505` on that legitimate case; this does not.
+- **NOT case-normalized** (dropped TR2/AC2): the resolver matches `repo_url`
+  case-sensitively and GitHub sends one canonical casing, so `Foo/Bar` vs `foo/bar`
+  never yields `>1`. Mis-cased-row-gets-no-webhooks is a separate hardening issue.
+
+### Dropped-atomicity tradeoff (accepted)
+
+The retained `soloRows.length > 1` ambiguous branch in
+`resolve-founder-for-installation.ts` is now the
+**primary** race safety net (commented as such), not merely webhook defense-in-depth.
+A sub-ms concurrent double-connect by two *different* users on the same
+`(install, repo)` (never observed; same install ≈ same org/account) would create two
+well-formed rows on distinct keys — never a torn/dirty row — and the next non-push
+webhook fail-closes (drop + page) until an operator re-points: **today's** behavior,
+not worse. Escape hatch if it ever materializes: fold the write into the
+`claim_repo_clone_lock` (mig-108) advisory-lock shape.
+
+### Existence-oracle residual (accepted, v1)
+
+The decline **body** is uniform across decline sub-cases, but the proceed-vs-decline
+**outcome** (200 cloning vs 409) reveals to the caller whether `(install, repo)` is
+already connected. This is inherent to any duplicate block and **bounded to
+same-installation members**: a true stranger never reaches the decline — they bounce
+at the `400 "GitHub App not installed"` gate first, because `installationId` is
+resolved only from the caller's own reachable set. Same-install members already hold
+GitHub read access to the repo. The genuine fix (collaborator-gate) is the
+**deferred** request-to-join path; v1 accepts this residual.
+
+### C4 edge note
+
+**No `.c4` model edit.** Verified against all three model files
+(`model.c4`/`views.c4`/`spec.c4`): (a) the connecting user is the existing `founder`
+Owner actor (description already models multiple Owners, ADR-038) — no new actor;
+(b) GitHub is modeled but v1 makes **no** collaborator-API call (that `api -> github`
+edge belongs to the deferred request-to-join path); (c) `api` + `supabase` are
+modeled and the new guard logic is TS inside `api`, reached via the existing
+`api -> supabase` edge; (d) the switch reuses the existing
+`api/dashboard -> supabase set_current_workspace_id` path. No access-relationship
+edge is added or falsified. Grep of `knowledge-base/**/*.c4` for the relevant
+identifiers is empty. **No C4 impact.**
+
+### Observability
+
+The connect-time guard mirrors `ambiguous` (a pre-existing duplicate-solo pair hit
+at the connect boundary) and `db-error` (fail-closed) to Sentry via
+`reportSilentFallback` with `feature=repo-setup`, op `connect-guard-ambiguous` /
+`connect-guard-db-error` — distinct from the webhook-time
+`op:founder-ambiguous` page so on-call can tell a connect-time block from a
+webhook-time drop. The existing `github_webhook_founder_ambiguous` paging rule
+(R8) is unchanged. A **detection-only** query surfaces any remaining
+duplicate-solo `(install, lower(repo_url))` groups at deploy for the operator's
+keep-which intent decision (no automated remediation — wrong-keep risk).
+
+### Sequencing
+
+Single atomic PR (guard + route wiring + UI switch/decline states + resolver
+comments + this amendment + tests). No schema change, no migration, no soak gate on
+the **code**; the AC8 `op:founder-ambiguous`-stays-at-0 soak is a post-merge
+verification that flips this amendment's status `adopting` → accepted and closes
+#5673 (the PR uses `Ref #5673`, not `Closes`).
+
+## Amendment 2026-06-29 — periodic backstop reconciles ready+NULL-install (entitlement-scoped, solo-only) (#5675)
+
+**Lineage.** The 2026-06-18 *"dispatch readiness must distinguish membership-deny
+NULL install from not-connected"* amendment (above) closed the **synchronous
+dispatch** dark path and established the **zero-write rule** at that gate. This
+amendment is its **operational-reconciliation counterpart** on the **periodic
+backstop** (`cron-workspace-sync-health.ts` arm-1), and carries the zero-write
+rule forward only in its **narrow** form. The two are deliberately different:
+the dispatch gate reads a **membership-deny NULL** (it cannot tell deny from
+not-connected) and therefore must **never** bind an install; the cron reads the
+**true NULL** via service-role (no membership gate in scope) and **can** safely
+backfill within entitlement scope.
+
+**Defect.** A workspace in `repo_status='ready'` whose
+`workspaces.github_installation_id IS NULL` is unreachable by the push-driven
+reconcile (`workspace-reconcile-on-push.ts` filters `WHERE github_installation_id
+= <push.installation.id> AND repo_url = …`, so a NULL-install row never matches).
+Arm-1 **detected** this class and reported it to Sentry
+(`op:ready-null-installation`) but **never resolved** it — so a genuine
+ready+NULL-install workspace stayed frozen indefinitely (this exact state froze
+the founder's own KB for ~5 weeks; Sentry folds the recurring daily occurrences
+into one standing issue, so "33 occurrences" ≈ one workspace stuck ~33 days, not
+33 distinct alerts).
+
+**Decision (decided here).** Arm-1 backfills `workspaces.github_installation_id`
+for **SOLO workspaces only**, resolving the install via the **entitlement-scoped
+connect-path resolver** (`resolveReachableInstallationIds` keyed on the owner's
+`user_id` + `github_username` → `resolveOwningInstallationForRepoDetailed`), and
+writing through the canonical `writeRepoColsToWorkspace` boundary (keyed on the
+finding's own server-derived id). Team workspaces (never auto-detect their
+install — `detect-installation`) and genuinely-unresolvable findings (owner not
+entitled / app uninstalled / empty listing) keep the existing folded, **visible**
+`op:ready-null-installation` signal; an all-degraded GitHub probe no-ops as
+**transient** and self-recovers on the next fire. It **NEVER** flips
+`repo_status`.
+
+**The load-bearing correctness invariant** is that the backfilled id MUST equal
+the `installation.id` GitHub sends in future push webhooks for that repo. The
+entitlement-scoped resolver guarantees this — it returns the owner's *owning*
+install for the repo (which is the push-webhook install). A bare
+`findInstallationByAccountLogin(owner)` + `checkRepoAccess` would NOT: its own
+docstring notes `checkRepoAccess` cannot distinguish the owning install from a
+collaborator install, so for an org repo it would over-grant the org's full-write
+install onto a workspace whose owner is not entitled to it.
+
+**Honest exception-carve (this is NOT "zero workspaces writes").** This carries
+forward only the narrow *"never persist `repo_status=error`"* sub-rule of the
+2026-06-18 zero-write rule — it does **not** inherit "zero `workspaces` writes."
+A *populating* `github_installation_id` write is safe here (unlike the dispatch
+path) because: **(a)** the cron reads the **true** NULL via service-role, not a
+membership-deny NULL; **(b)** resolution is **entitlement-scoped** to the owner's
+reachable installs — it does **not** widen the credential RPC (the option the
+2026-06-18 amendment rejected); **(c)** it is **solo-only**, so there is no
+shared-row cross-tenant corruption surface. The dispatch gate's zero-write rule
+stands unchanged on the dispatch path.
+
+**Reconcile against the 2026-06-18 rejected option.** That amendment **rejected**
+*"widen `resolve_workspace_installation_id` to return the install on
+membership-deny."* That rejection **stands**. This amendment does the **opposite
+of widening**: it resolves the install **server-side, within the owner's
+entitlement scope**, and **never** exposes the credential to a non-member. The
+credential RPC is unmodified.
+
+**Arc status.** The column-ownership decision (`workspaces` is the source of
+truth for the repo-connection columns) remains **COMPLETE**; this amends only the
+*operational reconciliation consequence* of a NULL-install row, not the ownership
+grain.
+
+### Considered Options (amendment)
+
+- **Demote-only signal (the issue's literal "skip-with-reason so it no-ops
+  cleanly")** — **REJECTED.** Leaves the KB frozen (non-resolution is the real
+  defect, not paging fatigue); and the `workspace_sync_health` alert is
+  **feature-only / level-agnostic**, so demoting the report's level is a **no-op**
+  (a warn still trips the feature rule; the daily occurrences already fold into
+  one issue). Resolution, not demotion, is the fix.
+- **Bare `findInstallationByAccountLogin(owner)` + `checkRepoAccess`** —
+  **REJECTED.** Over-grants an org's full-write install onto a non-entitled
+  owner's workspace (cross-tenant credential escalation). This is the exact
+  pattern the connect flow already rejected for credential binding.
+- **Flip `repo_status='error'`** — **REJECTED.** A 409 on the `/api/kb/tree` read
+  would BLANK the user's tree (strictly worse than a stale-but-visible tree); and
+  on a transient install blip it converts a self-recovering state into a sticky
+  failure (the dispatch amendment's sticky-transient failure mode).
+
+### C4 edge note
+
+No `.c4` model edit. The affected user is a workspace Owner (already covered by
+the `founder` actor's multi-Owner ADR-038 description); the install resolution +
+repo probe (`api`/`engine -> github`) and the `workspaces` write (`-> supabase`)
+are already modeled; `github_installation_id` is a column, below the C4 component
+grain — consistent with every prior ADR-044 amendment ("captured in ADR prose,
+not a `.c4` edit"). Grep of `knowledge-base/**/*.c4` for
+`installation`/`reconcile`/`sync-health`/`adr-044` is empty. **No C4 impact.**
+
+### Sequencing
+
+Single atomic PR (arm-1 reconcile wiring + the `resolveOwningInstallationForRepoDetailed`
+variant + allowlist rationale + tests + this amendment). No schema change, no
+migration, no soak gate on the code (the credential RPC is unmodified). Post-merge
+verification (AC11–AC13) is observation-only: confirm reconciled solo workspaces
+carry a non-NULL install and drop out of the next scan; if a `needs-reauth` /
+`transient` residual persists after a one-week soak, the write-path that mints
+`ready`+NULL rows is investigated (the cron is a backstop, not the fix-of-record).
+
+**Follow-on (#5689 item 2, 2026-06-29).** Arm-1 now also performs an immediate
+in-arm `syncWorkspace` (live default-branch HEAD pull) right after a successful
+backfill, audited under a truthful `reconcile_backfill` `kb_sync_history` trigger,
+so a reconciled solo workspace's KB no longer waits days for the next push to
+catch up. It emits no Inngest event (ADR-033 I6 preserved) and needs no migration
+(`trigger` is free-form JSONB). On sync failure the row is not re-synced by arm-1
+(it has left the scan predicate); push + arm-2 `stale-sync-failed` own the failure
+loudness. Item 1 (producer investigation above) remains soak-gated.
+
+## Amendment 2026-06-29 — reconcile readiness gates on worktree VALIDITY + re-clone
+
+The push-reconcile readiness gate was "filesystem existence of the workspace dir." That made a
+dir-exists-but-`.git`-broken (or `.git`-absent) workspace a permanent trap: reconcile fired on
+every push but `syncWorkspace` only pulls/resets — it never re-clones. Readiness now gates on
+`isValidGitWorkTree` (the validity primitive landed in PR #5584; this amendment wires it into the
+reconcile readiness gate). A VALID `.git` keeps the existing pull/reset path; an INVALID or
+ABSENT `.git` is re-cloned via `ensureWorkspaceRepoCloned` (clones if absent; removes a
+positively-fingerprinted empty-corrupt `.git`; honest-blocks populated-broken/EACCES/gitdir-FILE,
+never destroying commits). Recovery is push-triggered. This supersedes the
+"readiness is a filesystem-existence check" note (Amendment 2026-06-17b context). The owner-less /
+duplicate-workspace anomaly that produced the corrupt state is tracked separately in #5591.
+
+## Amendment 2026-06-30 — readiness is `git rev-parse`-AWARE (closes the dominant strand case), not lstat-structural-only; keying-divergence boundary; strand observability (#5733)
+
+Investigation of #5733 (operator `/soleur:go` strands on `not a git repository`
+after #5716/#5584/#5730) refuted the issue's separate-container hypothesis (one
+container, one `/mnt/data/workspaces` volume; the agent is an in-process bubblewrap
+sandbox) and isolated three load-bearing corrections:
+
+1. **`isValidGitWorkTree` (lstat-structural) is INSUFFICIENT as the readiness
+   invariant.** It returns `true` for a `.git` FILE (a `gitdir:` pointer;
+   `git-worktree-validity.ts:60`). The agent's Bash tool runs `git rev-parse
+   --is-inside-work-tree` INSIDE a bubblewrap sandbox whose mount set is frozen
+   per `query()` with `denyRead:["/workspaces"]`. A `.git` FILE whose gitdir
+   target resolves under `/workspaces` is therefore unreadable in-sandbox → the
+   agent's `rev-parse` fails and `/soleur:go` Step 0.0 self-stops, even though the
+   host-side lstat gate passed. **A personal workspace root is never a legitimate
+   linked-worktree/submodule, so a `.git` FILE there is an anomalous stale
+   pointer.** Readiness now uses `isReadyGitWorkTree` (a self-contained valid dir
+   OR a NON-escaping in-workspace pointer that is readable in-sandbox) — a
+   structural, `rev-parse`-AWARE check; it does not itself run `rev-parse`. Only an
+   ESCAPING (or unclassifiable) pointer is treated as not-ready and re-cloned to a
+   SELF-CONTAINED `.git` (unlink the single pointer file under the workspace lock —
+   NOT a widening of the empty-corrupt recursive-rm fingerprint — then clone from
+   origin HEAD); a non-escaping in-workspace pointer is left untouched. The
+   predicate is swept across **all THREE** workspace-readiness gates — cold
+   dispatch (`cc-dispatcher`), WARM re-provision (`cc-reprovision`), and
+   reconcile-on-push — so a pointer arising mid-session heals on the next warm turn
+   too. The new `agent-readiness-self-stop` signal is **query-only by design** (the
+   strand auto-heals in the same dispatch), a discoverability event, not a page.
+
+2. **Keying-divergence trust boundary (root architectural cause).** The two
+   writers/readers of the `/workspaces/<id>` volume key the path by DIFFERENT
+   identifiers: reconcile-on-push heals `<id>` by `(installation_id, repo_url)`
+   (independent of any session claim); the agent resolves its cwd from the user's
+   ACTIVE workspace (`user_session_state.current_workspace_id` →
+   membership-verified → fail-closed to solo). These keys can point at different
+   dirs. For the operator's solo case they coincide (`current_workspace_id ==
+   userId == workspace_id`), so the strand was purely the `.git`-shape blind spot
+   above, not a resolution divergence.
+
+3. **The prompt-driven readiness self-stop MUST emit a server-side signal.** The
+   self-stop is the agent reasoning over `/soleur:go` Step 0.0 prompt text — it
+   produces NO server Sentry event, the deepest reason all three prior server-side
+   fixes left "zero events on the agent surface." A distinct
+   `agent-readiness-self-stop` event (own Sentry issue group) now fires at the
+   dispatch readiness gate carrying the resolved id + path + `.git` shape, BEFORE
+   the heal.
+
+**Owner model note (supersedes #4520, dedicated ADR to follow).** #5733 also found
+the "owner-less reconciled ×28" headline was a FALSE positive: the reconcile
+owner-attribution used `.maybeSingle()`, which ERRORS on a workspace with ≥2
+`workspace_members(role='owner')` rows. Per the founder, **workspaces support N
+co-owners by design** — this supersedes the single-owner-strict model asserted in
+migration `075` (#4520). The reconcile attribution now tolerates N owners
+(deterministic self-row/earliest pick; "owner-less" warns only on genuinely zero
+owners). Reconciling the single-owner ownership RPCs (`transfer_workspace_ownership`,
+the `update_workspace_member_role` owner-promotion block) to the multi-owner model
+is tracked as a follow-up; this ADR records the direction, and the dedicated
+decision-of-record is now **ADR-073** (multi-owner workspaces + the
+`organizations.owner_user_id` primary-owner pointer), which captures the
+supersession and additionally pins the `owner_user_id` pointer semantics under
+N owners.
+
+## Amendment 2026-06-30 — dispatch readiness adds a host `git rev-parse` confirm for `dir-valid` worktrees (SUPERSEDES the 2026-06-19 zero-await trade-off for the connected cold path) + an agent-context observability backstop (#5733)
+
+The prior #5733 fix (commit `190ab58a5`) shipped the lstat-structural
+`rev-parse`-AWARE scaffolding above and the `agent-readiness-self-stop` mirror,
+but left a GAP confirmed against live prod: the operator's workspace `754ee124`
+strands `/soleur:go` on `not a git repository` even though its on-disk `.git` is
+**`dir-valid`** (lstat sees `HEAD`+`objects`), because the lstat verdict
+`isReadyGitWorkTree` returns `true` for a `dir-valid` whose `.git` `git` itself
+cannot resolve as a work tree (broken `config`/`commondir`/refs/gitdir
+indirection). This is the textbook proxy-vs-invariant divergence: the cheap lstat
+proxy greenlights a spawn the agent's own in-bwrap `git rev-parse` then strands
+on, and — because the on-main mirror fires on the SAME lstat proxy
+(`!isReadyGitWorkTree`) — the observability is blind precisely on the shape it was
+built to see.
+
+### Decision
+
+1. **Add an authoritative host `git rev-parse --is-inside-work-tree` CONFIRM,
+   scoped to `dir-valid` shapes** in the lstat-ready + connected (`repoUrl`) +
+   DB-ready population (`hostGitRevParseOutcome` / the shared
+   `evaluateAgentReadiness` in `git-worktree-validity.ts`). Outcomes:
+   `worktree` → ready (fast path); `not-a-worktree` → emit the self-stop
+   (`gitRevParseValid=false`, `gitKind=dir-valid`) + honest-block
+   `RepoNotReadyError` (NO spawn, **NO destroy** — `ensureWorkspaceRepoCloned`
+   no-ops on a populated `.git`, so honest-block is the only safe outcome);
+   `inconclusive` (spawn-error/timeout/EACCES) → re-probe once, then **FAIL-OPEN**
+   to spawn + a low-signal `agent-readiness-probe-inconclusive` breadcrumb (a
+   transient blip must NEVER honest-block a healthy repo — fail-closed-to-heal
+   manufactures the exact #5733 strand on a working repo). Hardened like the
+   `git-auth.ts` spawn precedent: `execFile` array form, `GIT_CONFIG_NOSYSTEM` /
+   `GIT_CONFIG_GLOBAL=/dev/null` / `GIT_TERMINAL_PROMPT=0`, **no installation
+   token / askpass**, ~2s timeout + `maxBuffer` + `killSignal`, and
+   `GIT_CEILING_DIRECTORIES=<abs, symlink-resolved parent>` so host git cannot
+   ascend into a parent `.git` and false-pass.
+
+2. **One shared `evaluateAgentReadiness` helper across all THREE gates** (cold
+   `cc-dispatcher`, warm `cc-reprovision`, reconcile `workspace-reconcile-on-push`)
+   so the emit + heal-route + re-probe + fail-open decision is **structural, not
+   re-specified per gate** — the cold-only-emit / warm+reconcile-dark drift was the
+   26×-fired-yet-unqueryable incident. **No warm memoization** (a stale positive
+   masks sub-lstat corruption from a concurrent reconcile/pull and re-darkens the
+   warm path). Reconcile computes the verdict ONCE per event (one `rev-parse`
+   spawn) and swaps both its readiness gate and its `recovered` re-probe to the
+   shared verdict.
+
+3. **An agent-context observability backstop (deliverable C2).** Because the host
+   `rev-parse` is blind to the escaping-pointer strand (host git is NOT sandboxed)
+   AND to object-store corruption (rev-parse passes both sides), a host-side emit
+   alone can leave a strand dark for shapes it cannot see. The agent's OWN in-bwrap
+   Step 0.0 `git rev-parse --is-inside-work-tree` RESULT is the guaranteed signal:
+   the dispatcher's `onToolResult` mirror (`isInSandboxRevParseStrand`) fires the
+   self-stop with a distinct `source: "in-sandbox-backstop"` tag, so a strand of
+   ANY on-disk shape — including the object-store residual the host confirm is
+   blind to — produces a queryable event without pre-confirming 754ee124's
+   (unobservable) shape.
+
+### SUPERSESSION of the 2026-06-19 zero-await trade-off
+
+The 2026-06-19 amendment chose the lstat proxy *explicitly* as "deliberately
+WEAKER than `git rev-parse --is-inside-work-tree` but cheap enough to keep the AC7
+zero-await hot path." This amendment **supersedes** that guarantee **for the
+connected cold path**: an async `dir-valid` host `rev-parse` confirm now runs on
+the common healthy connected cold dispatch (and the warm dir-valid turn). The fast
+sync lstat routing is unchanged and still owns the absent / dir-invalid / pointer /
+repo-less / not-DB-ready shapes; the subprocess is additive and `dir-valid`-gated.
+This is NOT a "retained" fast path — the zero-await property no longer holds for a
+connected `dir-valid` dispatch, and that cost is accepted because the dispatch does
+an agent round-trip regardless.
+
+### Scope of the subprocess's net-new coverage (attributed honestly)
+
+The host confirm's net-new coverage is **exactly the corrupt-`dir-valid` slice**.
+It is **blind to the escaping pointer** (host git is not sandboxed → returns
+`worktree`; the lstat verdict already heals that case structurally) and **blind to
+object-store corruption** (HEAD→missing objects / broken `objects/info/alternates`
+pass `--is-inside-work-tree`, which validates gitdir *discoverability*, not object
+integrity — the documented out-of-scope residual). Deliverable C2 is what surfaces
+both blind shapes. The destroy authorizations are **UNCHANGED** — exactly the two
+`.git`-targeting `rm` sites (`ensure-workspace-repo.ts` stale-pointer FILE +
+empty-corrupt dir); a populated `dir-valid` satisfies neither fingerprint, so it
+can only hit the `:207` no-op or the honest block, never an `rm`.
+
+### Considered Options (amendment)
+
+- **(CHOSEN) `dir-valid`-only host `rev-parse` confirm + the C2 in-sandbox
+  backstop.** Behind the lstat pre-filter the escaping-pointer arm is already dead
+  (the on-main verdict heals it), so the confirm collapses to a single `dir-valid`
+  slice — removing a dead arm and two overlapping authorities for the pointer
+  shape. Fail-OPEN on inconclusive; never destroys a populated `.git`.
+- **(REJECTED) A bwrap-reproducing probe** (run `rev-parse` under a hand-rolled
+  `denyRead:["/workspaces"]` mount to reproduce the sandbox exactly). The only
+  host/in-sandbox divergence is the escaping pointer, already healed structurally
+  on main; host `rev-parse` cannot reproduce the sandbox `denyRead`, so a
+  reproduction adds the expensive namespace setup **and** a silent-drift coupling
+  to `agent-runner-sandbox-config.ts` for ZERO extra coverage. The C2 backstop —
+  which reads the agent's REAL in-sandbox result — covers that divergence for free.
+- **(REJECTED) Widen the destructive re-clone to "rev-parse-invalid + has origin →
+  reclone".** Origin is canonical for the *base*, not the working tree; a populated
+  `.git` may hold the only copy of un-pushed prior-turn work. Loses the
+  brand-survival invariant. The populated-corrupt `dir-valid` is observed +
+  honest-blocked, never destroyed.
+- **(REJECTED) Unconditional `rev-parse` on every dispatch / warm memoization.**
+  Scoped to `dir-valid` in the lstat-ready + connected + DB-ready population
+  instead; memoization was dropped because a stale positive masks sub-lstat
+  corruption and re-darkens the warm path.
+
+### Observability
+
+`agent-readiness-self-stop` (own Sentry issue group, query-only by design) now
+fires from all THREE gates AND the C2 in-sandbox backstop, carrying
+`gitRevParseValid` + `gitValid` + `gitKind` + `source` + `activeWorkspaceIdHash`.
+SECURITY: the probe's `stderr` / `error.message` is NEVER placed in `extra` — git's
+failure text embeds the raw absolute path (`fatal: not a git repository:
+/workspaces/<id>/.git`), and for a solo workspace `id == raw userId`, so leaking it
+would defeat the deliberate boundary-rename pseudonymization. Only the structured
+booleans + `gitKind` + `source` are emitted (no `installationId`/`repoUrl`/raw
+path/`gitdirTarget`). The fail-OPEN path emits a DISTINCT
+`agent-readiness-probe-inconclusive` op so it does not inflate the strand
+discoverability count.
+
+### C4 edge note
+
+No C4 impact. The fix tightens the **pre-condition on the existing `api -> claude
+"Spawns agent sessions"` edge** (`model.c4:249`), not the topology — no actors,
+external systems, containers, data-stores, or access relationships added or
+changed. Consistent with this ADR's prior no-C4-impact readiness amendments.

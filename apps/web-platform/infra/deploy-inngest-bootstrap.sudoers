@@ -10,6 +10,14 @@
 # env_keep is the modern alternative to `sudo -E env K=V ...`: the two
 # version pins are preserved across the sudo boundary by name.
 #
+# (#6555) DOPPLER_PROJECT was previously kept here as a deliberate forward-guard: a caller that
+# DID set it could not have it silently stripped across the sudo boundary, for the day the inngest
+# units would resolve their Doppler project from that variable. #6555 landed exactly that — but
+# the other way: the units now read DOPPLER_PROJECT from EnvironmentFile=/etc/default/inngest-server
+# (written at cloud-init:324 / the bootstrap heredoc + in-place augment), NOT from the
+# sudo-inherited env. Preserving it here is therefore no longer load-bearing, so it is removed.
+# (It was never a secret regardless — a project NAME; the token it selects is fetched separately.)
+#
 # Provisioned via cloud-init (fresh hosts) and terraform_data.deploy_pipeline_fix
 # (already-running hosts). See #4144 / #4118.
 Cmnd_Alias INNGEST_BOOTSTRAP = /usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh
@@ -41,6 +49,28 @@ deploy ALL=(root) NOPASSWD: INNGEST_STOP
 Cmnd_Alias INNGEST_START = /usr/bin/systemctl start inngest-server.service
 deploy ALL=(root) NOPASSWD: INNGEST_START
 
+# #6178 (no-SSH inngest quiesce/enable web) — closes the dedicated-host cutover 2.2
+# gap: operators have NO SSH, so the co-located web scheduler cannot be quiesced by
+# hand (hr-no-ssh-fallback-in-runbooks). ci-deploy.sh's `quiesce inngest _ _` handler
+# (op=quiesce-web) stop+disables inngest-server.service, mirroring the no-SSH
+# INNGEST_RESTART (#4538) precedent over the deploy webhook. Two pinned, wildcard-free
+# argv (sudo-rs safe). The stop verb INTENTIONALLY mirrors the pre-existing INNGEST_STOP
+# (#5450) alias — sudo matches a command against ANY granting alias, so the overlap is
+# harmless; the genuinely-new verb is `disable` (removes the [Install] WantedBy symlink
+# so a mid-window reboot cannot auto-restart the quiesced old scheduler → the exact
+# double-fire the quiesce prevents).
+Cmnd_Alias INNGEST_QUIESCE = /usr/bin/systemctl stop inngest-server.service, /usr/bin/systemctl disable inngest-server.service
+deploy ALL=(root) NOPASSWD: INNGEST_QUIESCE
+
+# #6178 — permits ci-deploy.sh's `enable inngest _ _` handler (the no-SSH REVERSE of
+# quiesce, driven ONLY by op=rollback) to re-enable inngest-server.service — restoring
+# the [Install] symlink a quiesce-disable removed so the scheduler survives a reboot
+# (a `restart` never touches [Install]). The enable handler's `start` half reuses the
+# pre-existing INNGEST_START (#5450) grant above — NO new start grant is added here.
+# Pinned, wildcard-free (sudo-rs safe).
+Cmnd_Alias INNGEST_ENABLE = /usr/bin/systemctl enable inngest-server.service
+deploy ALL=(root) NOPASSWD: INNGEST_ENABLE
+
 # #4827 — permits infra-config-apply.sh (the /hooks/infra-config handler, running
 # as the deploy user) to escalate the atomic install of its 11 managed files into
 # their root:root 0755 destination dirs, which the deploy user cannot mktemp into
@@ -49,3 +79,18 @@ deploy ALL=(root) NOPASSWD: INNGEST_START
 # TOCTOU-guards the staged source, so the bare-command grant is the safe form.
 Cmnd_Alias INFRA_CONFIG_INSTALL = /usr/local/bin/infra-config-install
 deploy ALL=(root) NOPASSWD: INFRA_CONFIG_INSTALL
+
+# #5934 / ADR-081 — permits ci-deploy.sh's pre-canary durable substrate sweep
+# (`sudo timeout 60 /usr/local/bin/git-lock-chardevice-sweep.sh`) to run as root.
+# The sweep clears any residual CHARACTER-DEVICE .git/config.lock the container
+# substrate leaves on /mnt/data/workspaces, which otherwise wedges worktree
+# creation for every agent session (#5912). WITHOUT this grant sudo denies the
+# sweep ("command not allowed") and the durable remediation is a SILENT no-op —
+# ci-deploy.sh's `|| true` swallows the denial, so the wedge persists into live
+# sessions and #5934's soak probe never sees a DONE marker. The alias pins the
+# EXACT argv ci-deploy.sh invokes, including the resolved `/usr/bin/timeout 60`
+# prefix (sudo matches the full resolved command) — no wildcards, sudo-rs safe.
+# The `timeout 60` value is COUPLED to ci-deploy.sh's invocation; the two must
+# change in lockstep (git-lock-chardevice-sweep.test.sh asserts consistency).
+Cmnd_Alias GIT_LOCK_CHARDEVICE_SWEEP = /usr/bin/timeout 60 /usr/local/bin/git-lock-chardevice-sweep.sh
+deploy ALL=(root) NOPASSWD: GIT_LOCK_CHARDEVICE_SWEEP

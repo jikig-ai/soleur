@@ -150,6 +150,69 @@ No SSH, no dashboard-eyeball: read the `retained` count and the `egress-blocked`
 CIDR to "fix" a rotation drop — that is the wrong layer and the wrong blast
 radius.
 
+## Intended-by-design drops (NOT a gap — do not "fix" by allowlisting) — #5676
+
+The single `op=egress_blocked` Sentry issue groups **every** blocked destination
+(no per-DST grouping), so a steady, never-zeroing hit count is often **not** a
+bug — some drops are deliberate and permanent:
+
+- **`registry.npmjs.org` (Cloudflare anycast `104.16.x.34`, constant `.34`
+  host-octet).** Bare `npx` (cron-ux-audit's Playwright MCP) performs a spawn-time
+  registry-metadata dial. #5199 deliberately keeps `registry.npmjs.org` OFF the
+  allowlist so `@playwright/mcp` resolves to the **image-baked** dep, not a
+  runtime supply-chain fetch — the firewall dropping that dial is **working as
+  designed**. The cron proceeds on the baked dep. #5676 silenced the dial at
+  source (`npm_config_prefer_offline` on the npx env), so it stops being generated
+  when the image `_cacache` is warm; a cold cache degrades to drop+baked-dep
+  fallback (never a hard cron failure).
+
+**Do NOT** allowlist `registry.npmjs.org` (reverses #5199's supply-chain intent)
+and **do NOT** add a DST-IP/range exclusion at the emitter: `registry.npmjs.org`
+shares Cloudflare's `104.16.0.0/13` anycast with countless other zones, so an
+IP-mute would simultaneously blind a genuine future gap to another
+Cloudflare-fronted host (ADR-052 amendment 2026-06-29). **Recovery/health is
+judged PER-IDENTIFIED-HOST, never a raw `egress-blocked` count → zero.** Identify
+the host behind a `DST` before acting: resolve every codebase egress host via DoH
+(`8.8.8.8` + `1.1.1.1`) and match the `DST` fingerprint, and/or
+`openssl s_client -connect <DST>:443 -servername <candidate>` to read the cert CN
+(Cloudflare anycast hides the customer in the IP). A drop whose host is a known
+intended-drop (npm registry probe) is expected; a drop to a **new** legitimately-
+needed host is the allowlist-gap remediation above; a drop to an **un-enumerated,
+sporadic** host (remote MCP servers, third-party telemetry) stays **blocked**
+pending per-host evidence — do not reflexively allowlist it.
+
+### Remote plugin-MCP + CC-telemetry dials (#5691)
+
+The sporadic, low-volume drops the #5676 follow-up enumerated were identified and
+silenced at source — **kept blocked, never allowlisted**:
+
+| Blocked DST | Host | Dialer | Disposition |
+|---|---|---|---|
+| `64.239.123.129` | `mcp.vercel.com` | claude-eval substrate `--plugin-dir plugins/soleur` auto-connects the four remote HTTP MCP servers bundled in `plugin.json` (context7/cloudflare/vercel/stripe) at CLI startup | silenced via `--strict-mcp-config` (substrate prepends it; `cron-ux-audit` re-supplies only Playwright via `--mcp-config .mcp.json`) |
+| `104.18.25.159` | `mcp.cloudflare.com` | same | same |
+| `198.202.176.231` / `198.137.150.161` | `mcp.stripe.com` | same | same |
+| `34.149.66.137` | GCP global-LB serving a Datadog `us5` *default* vhost (default-cert; **not** proof of the dialer — the app's own Sentry ingest `34.160.81.0` is never blocked) | most likely Claude Code's own non-essential outbound traffic (telemetry/error-reporting/auto-update) OR the `context7` MCP backend | silenced via `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` in the cron spawn env (+ `context7` dropped by `--strict-mcp-config`) |
+
+These dials are **non-essential by construction**: the containment hook
+(`buildCronEvalSettings`, relax-minimal) denies every `mcp__*` tool — only
+`cron-ux-audit` is granted Playwright — so the cloudflare/vercel/stripe/context7
+startup handshakes are pure overhead the firewall correctly drops. The at-source
+proof is the Spike A `--debug` zero-connect trace (PR #5700 body), strictly stronger
+than any post-merge production-absence inference (the drops are vol 1–3 sporadic, so
+an absence window cannot *confirm* removal). **Do NOT** allowlist any of these hosts
+or add a provider CIDR — that reverses ADR-052's default-drop boundary for zero
+benefit (their tools are denied anyway). If `34.149.66.137` (the one vol-21 DST that
+carries rate signal) persists after both at-source levers, it is a dependency
+phone-home needing a `--debug`/strace trace → file a follow-up; still do not
+allowlist it. See ADR-052 amendment 2026-06-29 (#5691).
+
+> **Re-verify on Claude Code CLI upgrades.** That `--strict-mcp-config` suppresses
+> *plugin-bundled* MCP servers (vs only project/user scope) is an observed behavior,
+> not a documented guarantee — the in-repo tests pin only the flag's *presence and
+> position*, not the runtime suppression. After bumping the pinned `claude` CLI,
+> re-run the Spike A `--debug-file` zero-connect trace from the repo root
+> (`claude --print --plugin-dir plugins/soleur --strict-mcp-config --debug-file /tmp/t.log --allowedTools Skill -- "stop"` then `grep -iE 'mcp\.(cloudflare|vercel|stripe|context7)' /tmp/t.log` → expect zero) to confirm the suppression still holds.
+
 ## Remediation (loader `die "invalid CIDR …"`)
 
 If `cron-egress-firewall.service` failed (not a drop page) and journald shows
@@ -196,6 +259,7 @@ table, so the mapping cannot silently desync from `server.tf`):
 | `egress-probe-negative` | a non-allowlisted host was REACHABLE from the container — the ruleset is **inert** | a real containment bug; fix the firewall, never the probe |
 | `egress-probe-positive` | an allowlisted host was unreachable from the container | an allowlist gap — add the host (allowlist-gap remediation above) |
 | `chmod-scripts` / `daemon-reload` / `resolve-timer-enable` / `inngest-8288-accept` | systemd/script plumbing — script not executable, unit file unparseable, timer failed to enable, or the host-gateway `:8288` accept rule is absent | read the shell error above the sentinel; these are early-setup failures, not containment gaps |
+| `dedicated-inngest-8288-accept` | the dedicated Inngest host egress rule (`ip daddr 10.0.1.40 tcp dport 8288 accept`, #6178 / ADR-100 cutover) is absent from `SOLEUR-EGRESS` — post-cutover this default-drops every `inngest.send()` container→`10.0.1.40:8288` POST (missed reminders/crons) | confirm `cron-egress-nftables.sh` still carries the `10.0.1.40 tcp dport 8288 accept` rule and the firewall service restarted; the IP is pinned to `inngest-host.tf:33` `inngest_private_ip` |
 
 The fix lands via the existing `apply-web-platform-infra.yml` on merge (the
 resource is tainted and re-fires; no manual apply). **Do NOT make the apply

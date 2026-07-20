@@ -21,11 +21,23 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 ADR_DIR=knowledge-base/engineering/architecture/decisions
 
-# Known pre-existing collisions on main as of 2026-05-25, accepted as
-# tech debt (filed as cleanup follow-up issue post-PR-B; brainstorm flagged
-# at 2026-05-25-pr-b-anthropic-leader-loop-brainstorm.md "Sharp Edges").
+# Known pre-existing collisions on main, accepted as tech debt (renumber
+# deferred to a single cleanup PR; brainstorm flagged at
+# 2026-05-25-pr-b-anthropic-leader-loop-brainstorm.md "Sharp Edges").
 # Any NEW collision (e.g., a future ADR-042 duplicate) trips the gate.
 # When the cleanup issue lands, shrink this allowlist accordingly.
+#
+# ADR-068 was resolved (#5274 Phase 3): the graceful-cron-drain ADR was renumbered
+# to ADR-078-graceful-cron-drain-before-container-swap, leaving ADR-068 uniquely
+# the multi-host-workspaces coordinator ADR. Dropped from the allowlist here.
+#
+# ADR-086 WAS a three-way concurrent-merge collision that landed on main directly
+# (#6035 declarative-skill-context-injection + fail-closed-redaction-engine +
+# freshness-last-reviewed-source-fix all authored ADR-086 and merged in the same
+# window). Resolved in #6054: declarative-skill-context-injection kept ADR-086,
+# fail-closed-redaction-engine → ADR-095, freshness-last-reviewed-source-fix → ADR-094.
+# (redaction took 095 not 093 — a sibling ADR claimed 093 on main mid-pipeline.)
+# Dropped from the allowlist here.
 ALLOWED_COLLISIONS=(ADR-027 ADR-030 ADR-031 ADR-033 ADR-038)
 
 # (1) New (non-allowlisted) ordinal collisions.

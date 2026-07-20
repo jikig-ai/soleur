@@ -125,6 +125,15 @@ jobs:
           if [[ -n "$v_sha" && ! "$v_sha" =~ ^[0-9a-f]{64}$ ]]; then
             echo "ERROR: vector_sha256 is not a 64-hex-char SHA256"; exit 1
           fi
+          # #6197: format-guard the arm64 Vector SHA local too. It is consumed via
+          # templatefile (inngest-host.tf -> cloud-init VECTOR_CLI_SHA256), NOT the image
+          # env, so it needs no GITHUB_OUTPUT — but validating it here catches format drift
+          # in the same place the amd64 SHA is guarded. The `\s*=` anchor keeps this grep from
+          # matching the sibling `vector_sha256 =` line (which is followed by ` =`, not `_arm64`).
+          v_sha_arm64=$(grep -E '^\s*vector_sha256_arm64\s*=' apps/web-platform/infra/vector.tf | sed -E 's/.*"([^"]+)".*/\1/' || true)
+          if [[ -n "$v_sha_arm64" && ! "$v_sha_arm64" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ERROR: vector_sha256_arm64 is not a 64-hex-char SHA256"; exit 1
+          fi
           printf 'vector_version=%s\n' "$v_version" >> "$GITHUB_OUTPUT"
           printf 'vector_sha256=%s\n' "$v_sha" >> "$GITHUB_OUTPUT"
 
@@ -168,6 +177,14 @@ jobs:
           cp apps/web-platform/infra/inngest-redis.conf "$BUILD_DIR/inngest-redis.conf"
           cp apps/web-platform/infra/inngest-redis.service "$BUILD_DIR/inngest-redis.service"
           cp apps/web-platform/infra/inngest-redis-bootstrap.sh "$BUILD_DIR/inngest-redis-bootstrap.sh"
+          # Cutover flip trio + arm-atomicity guard (#6178) — dedicated-host only;
+          # baked here, staged to /tmp at entrypoint, installed (gated on the
+          # soleur-inngest project) by inngest-bootstrap.sh.
+          cp apps/web-platform/infra/inngest-cutover-flip.sh "$BUILD_DIR/inngest-cutover-flip.sh"
+          cp apps/web-platform/infra/inngest-server-flip-guard.sh "$BUILD_DIR/inngest-server-flip-guard.sh"
+          cp apps/web-platform/infra/cat-inngest-cutover-state.sh "$BUILD_DIR/cat-inngest-cutover-state.sh"
+          cp apps/web-platform/infra/inngest-cutover-flip.service "$BUILD_DIR/inngest-cutover-flip.service"
+          cp apps/web-platform/infra/inngest-cutover-flip.timer "$BUILD_DIR/inngest-cutover-flip.timer"
 
           # Conditional Vector env block — empty pin values produce empty
           # ENV lines, which the bootstrap script's `${VECTOR_CLI_VERSION:-}`
@@ -184,12 +201,144 @@ jobs:
           COPY inngest-redis.conf /inngest-redis.conf
           COPY inngest-redis.service /inngest-redis.service
           COPY inngest-redis-bootstrap.sh /inngest-redis-bootstrap.sh
-          RUN chmod +x /inngest-bootstrap.sh /inngest-redis-bootstrap.sh
-          # The bootstrap script reads /tmp/vector.toml + /tmp/inngest-redis.*
-          # at install time; stage the OCI-bundled assets there at entrypoint.
-          ENTRYPOINT ["/bin/bash", "-c", "cp /vector.toml /tmp/vector.toml && cp /inngest-redis.conf /inngest-redis.service /inngest-redis-bootstrap.sh /tmp/ && /inngest-bootstrap.sh"]
+          COPY inngest-cutover-flip.sh /inngest-cutover-flip.sh
+          COPY inngest-server-flip-guard.sh /inngest-server-flip-guard.sh
+          COPY cat-inngest-cutover-state.sh /cat-inngest-cutover-state.sh
+          COPY inngest-cutover-flip.service /inngest-cutover-flip.service
+          COPY inngest-cutover-flip.timer /inngest-cutover-flip.timer
+          RUN chmod +x /inngest-bootstrap.sh /inngest-redis-bootstrap.sh /inngest-cutover-flip.sh /inngest-server-flip-guard.sh /cat-inngest-cutover-state.sh
+          # The bootstrap script reads /tmp/vector.toml + /tmp/inngest-redis.* +
+          # /tmp/inngest-cutover-flip.* (flip trio + guard, #6178) at install time;
+          # stage the OCI-bundled assets there at entrypoint.
+          ENTRYPOINT ["/bin/bash", "-c", "cp /vector.toml /tmp/vector.toml && cp /inngest-redis.conf /inngest-redis.service /inngest-redis-bootstrap.sh /tmp/ && cp /inngest-cutover-flip.sh /inngest-server-flip-guard.sh /cat-inngest-cutover-state.sh /inngest-cutover-flip.service /inngest-cutover-flip.timer /tmp/ && /inngest-bootstrap.sh"]
           DOCKERFILE
 
           docker build -t "$IMAGE:$TAG" "$BUILD_DIR"
           docker push "$IMAGE:$TAG"
           echo "Pushed $IMAGE:$TAG"
+
+      # --- #6122 (ADR-096) Phase 2: dual-push the inngest-bootstrap image to the self-hosted
+      # zot registry. The plain `docker build`/`docker push` above leaves the image in the
+      # runner's local docker, so `docker tag` + `docker push 127.0.0.1:5000/...` mirrors it
+      # over the CF Tunnel bridge directly (no crane/buildx-localhost issue). GHCR push stays
+      # primary (break-glass through the Phase-5 soak). Additive: a zot/bridge failure must not
+      # fail the GHCR release (bridge continue-on-error; teardown if:always()). This image is
+      # NOT cosign-signed (no id-token perm) — parity with the GHCR side, no sign step.
+      - name: Bridge to zot registry (CF Tunnel)
+        id: zot_bridge
+        continue-on-error: true
+        uses: ./.github/actions/cf-tunnel-registry-bridge
+        with:
+          # DOPPLER_TOKEN_PRD, NOT the generic DOPPLER_TOKEN (#6122 cutover fix): the bridge
+          # reads REGISTRY_PUSH_* + ZOT_PUSH_* from the `prd` root config; DOPPLER_TOKEN is
+          # scoped to the `prd_terraform` branch and cannot read prd root. DOPPLER_TOKEN_PRD is
+          # the prd-scoped token (see reusable-release.yml for the full rationale).
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          cloudflared-version: "2026.5.0"
+          cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+
+      - name: Mirror inngest image GHCR→zot (docker tag + push)
+        id: zot_mirror
+        if: steps.zot_bridge.outcome == 'success'
+        # The continue-on-error marker below is BELT: the zot mirror is a SECONDARY/shadow
+        # copy during the ADR-096 soak (GHCR primary + break-glass; atomic GHCR
+        # pull-side fallback), so a mirror failure must NEVER red this build. #6274:
+        # a transient `connection reset` mid blob-upload over the CF-tunnel bridge
+        # was failing the whole job. Sibling of reusable-release.yml's mirror step.
+        continue-on-error: true
+        env:
+          IMAGE: ghcr.io/jikig-ai/soleur-inngest-bootstrap
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # No `set -e` — every failure path exits 0 so this build stays green
+          # (SUSPENDERS to the continue-on-error belt). A persistent miss surfaces
+          # as mirror_status=degraded → ::warning:: + step summary AND (#6278) a Slack
+          # ⚠️ via the "Post to Slack (inngest mirror status)" step below — degrade-only
+          # (this workflow fires on inngest-bootstrap infra changes, not a per-release
+          # operator event). Before #6278 the degrade was annotations-only; a sustained
+          # pre-cutover degrade now gets push-notification parity with reusable-release.yml.
+          set -uo pipefail
+
+          # Bounded retry to self-heal a transient TCP reset over the CF-tunnel
+          # bridge. 3 attempts, 5s then 15s backoff. Idempotent ops only (docker
+          # tag is local; docker push re-runs safely).
+          retry() {
+            local n=1 max=3 rc=0
+            local -a sleeps=(0 5 15)
+            until "$@"; do
+              rc=$?
+              if (( n >= max )); then return "$rc"; fi
+              echo "::notice::zot mirror attempt ${n}/${max} failed (rc=${rc}); retrying in ${sleeps[$n]}s"
+              sleep "${sleeps[$n]}"
+              n=$(( n + 1 ))
+            done
+          }
+
+          degraded() {
+            local rc="$1"
+            echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
+            echo "::warning::zot mirror degraded for ${ZOT:-<image>} (rc=${rc}) — build UNAFFECTED (GHCR primary/break-glass); zot redundancy reduced, backfill via 'docker pull ghcr + docker push zot'. If disk-full: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+            echo "⚠️ zot mirror degraded (rc=${rc}) — inngest image push failed; GHCR unaffected, backfill needed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+
+          # Full org namespace (jikig-ai/…) to match the ci-deploy.sh pull path
+          # (zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}") + zot-entry-gate.sh. A bare
+          # `soleur-inngest-bootstrap` is an orphan repo nothing reads (#6122 namespace fix).
+          ZOT="127.0.0.1:5000/${IMAGE#ghcr.io/}"
+          retry docker tag "$IMAGE:$TAG" "$ZOT:$TAG" || degraded "$?"
+          retry docker push "$ZOT:$TAG" || degraded "$?"
+
+          echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
+          echo "Pushed $ZOT:$TAG"
+
+      - name: Tear down cloudflared registry bridge
+        if: always()
+        run: |
+          set +e
+          docker logout 127.0.0.1:5000 2>/dev/null || true
+          if [[ -n "${REGISTRY_BRIDGE_PID:-}" ]]; then
+            kill "$REGISTRY_BRIDGE_PID" 2>/dev/null || true
+          fi
+          [[ -f /tmp/cloudflared-registry.log ]] && tail -n 200 /tmp/cloudflared-registry.log || true
+
+      - name: Post to Slack (inngest mirror status)
+        # #6278: pre-cutover push-notification parity with reusable-release.yml's mirror
+        # step. Degrade-only — this workflow has no per-release happy-path Slack (it fires
+        # on inngest-bootstrap infra changes, not an operator-triggered release), so a
+        # degrade-only ⚠️ is the minimal push signal. Before the ADR-096 Phase-5 GHCR-push
+        # retirement a sustained inngest-mirror degrade must not stay annotations-only.
+        if: steps.zot_mirror.outputs.mirror_status == 'degraded'
+        continue-on-error: true
+        env:
+          SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
+          # Resolved image tag (internal, validated by "Resolve image tag") — env-injected,
+          # never inline-interpolated into the run script.
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -uo pipefail
+          WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::SLACK_RELEASES_WEBHOOK_URL unset; skipping inngest mirror Slack notification"
+            exit 0
+          fi
+          echo "::add-mask::$WEBHOOK"
+
+          MESSAGE="⚠️ inngest-bootstrap zot mirror degraded ($TAG) — GHCR unaffected, zot redundancy reduced; backfill needed."
+          # jq --arg keeps the payload injection-inert (TAG is JSON-escaped).
+          PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text, unfurl_links: false}')
+
+          # `|| echo 000` keeps a curl transport failure (timeout, DNS) on the ::warning
+          # path — without it `set -u`/pipefail would abort before the warning is emitted.
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            --max-time 15 \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK" || echo "000")
+
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Slack notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Slack notification failed (HTTP $HTTP_CODE)"
+          fi

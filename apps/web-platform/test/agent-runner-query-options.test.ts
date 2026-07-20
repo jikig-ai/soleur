@@ -15,14 +15,16 @@
 import { describe, it, expect, vi } from "vitest";
 
 vi.mock("@/server/agent-env", () => ({
-  buildAgentEnv: vi.fn(
-    (
-      credential: { value: string; scheme: string },
-      _tokens: Record<string, string>,
-    ) => ({
-      ANTHROPIC_API_KEY: credential.value,
-    }),
-  ),
+  // `satisfies typeof …buildAgentEnv` pins the mock to the REAL signature so a
+  // 3rd-arg shape drift (e.g. a `pluginPath` rename) is a compile break here,
+  // not a silently-green AC3 tested on the wrong side of the mock seam.
+  buildAgentEnv: vi.fn(((credential, _tokens, opts) => ({
+    ANTHROPIC_API_KEY: credential.value,
+    // Mirror the real buildAgentEnv contract for the CLAUDE_PLUGIN_ROOT export
+    // so the AC3 integration pin below can assert the value survives
+    // pass-through into the final options.env (catches a downstream drop).
+    ...(opts?.pluginPath ? { CLAUDE_PLUGIN_ROOT: opts.pluginPath } : {}),
+  })) satisfies typeof import("@/server/agent-env").buildAgentEnv),
 }));
 
 vi.mock("@/server/sandbox-hook", () => ({
@@ -31,6 +33,7 @@ vi.mock("@/server/sandbox-hook", () => ({
 
 import { buildAgentQueryOptions } from "@/server/agent-runner-query-options";
 import { buildAgentEnv } from "@/server/agent-env";
+import { resolveWorkspaceMode } from "@/server/workspace-mode";
 
 const WORKSPACE = "/tmp/test-workspace";
 const PLUGIN = "/tmp/test-workspace/plugins/soleur";
@@ -38,6 +41,7 @@ const PLUGIN = "/tmp/test-workspace/plugins/soleur";
 const minArgs = {
   workspacePath: WORKSPACE,
   pluginPath: PLUGIN,
+  mode: resolveWorkspaceMode("command_center"),
   credential: { value: "sk-test", scheme: "api_key" as const },
   serviceTokens: {} as Record<string, string>,
   systemPrompt: "you are a router",
@@ -49,7 +53,7 @@ describe("buildAgentQueryOptions — canonical shape (T1)", () => {
     const opts = buildAgentQueryOptions(minArgs);
 
     expect(opts.cwd).toBe(WORKSPACE);
-    expect(opts.model).toBe("claude-sonnet-4-6");
+    expect(opts.model).toBe("claude-sonnet-5");
     expect(opts.permissionMode).toBe("default");
     expect(opts.settingSources).toEqual([]);
     expect(opts.includePartialMessages).toBe(true);
@@ -65,6 +69,77 @@ describe("buildAgentQueryOptions — canonical shape (T1)", () => {
     expect(opts.hooks!.PreToolUse![0].matcher).toContain("Bash");
     expect(opts.systemPrompt).toBe("you are a router");
     expect(opts.canUseTool).toBe(minArgs.canUseTool);
+  });
+});
+
+describe("buildAgentQueryOptions — PostToolUse(Bash) git-lock telemetry always-on (#4826)", () => {
+  it("ALWAYS registers the Bash git-lock marker hook, even for the legacy caller", () => {
+    const off = buildAgentQueryOptions(minArgs);
+    // PostToolUse is now always present: the #4826 telemetry hook is unconditional
+    // (a git-lock wedge is path-agnostic). The Bash entry is index 0; Skill hints append.
+    expect(Array.isArray(off.hooks?.PostToolUse)).toBe(true);
+    expect(off.hooks!.PostToolUse![0].matcher).toBe("Bash");
+    // The other hooks remain regardless.
+    expect(off.hooks?.PreToolUse).toBeDefined();
+    expect(off.hooks?.SubagentStart).toBeDefined();
+  });
+
+  it("registers ONLY the Bash hook when neither Skill opt-in is set", () => {
+    const off = buildAgentQueryOptions(minArgs);
+    expect(off.hooks!.PostToolUse!).toHaveLength(1);
+    expect(off.hooks!.PostToolUse![0].matcher).toBe("Bash");
+  });
+});
+
+describe("buildAgentQueryOptions — phase-surface hint per-caller opt-in (#5772 lever 1)", () => {
+  it("appends PostToolUse(Skill) after the always-on Bash hook when enablePhaseSurfaceHint is true", () => {
+    const on = buildAgentQueryOptions({ ...minArgs, enablePhaseSurfaceHint: true });
+    expect(on.hooks!.PostToolUse!).toHaveLength(2);
+    expect(on.hooks!.PostToolUse![0].matcher).toBe("Bash");
+    expect(on.hooks!.PostToolUse![1].matcher).toBe("Skill");
+  });
+});
+
+describe("buildAgentQueryOptions — context_queries hook per-caller opt-in (#6046, AC9)", () => {
+  it("appends one Skill entry after the Bash hook when only enableContextQueries is true", () => {
+    const on = buildAgentQueryOptions({ ...minArgs, enableContextQueries: true });
+    expect(on.hooks!.PostToolUse!).toHaveLength(2);
+    expect(on.hooks!.PostToolUse![0].matcher).toBe("Bash");
+    expect(on.hooks!.PostToolUse![1].matcher).toBe("Skill");
+  });
+
+  it("registers the Bash hook + TWO independent Skill entries when both flags are true", () => {
+    const both = buildAgentQueryOptions({
+      ...minArgs,
+      enablePhaseSurfaceHint: true,
+      enableContextQueries: true,
+    });
+    expect(both.hooks!.PostToolUse!).toHaveLength(3);
+    expect(both.hooks!.PostToolUse![0].matcher).toBe("Bash");
+    expect(both.hooks!.PostToolUse!.slice(1).every((e: { matcher?: string }) => e.matcher === "Skill")).toBe(true);
+  });
+});
+
+describe("buildAgentQueryOptions — tool-attempt telemetry per-caller opt-in (#5843, AC5)", () => {
+  const telemetryHook = (async () => ({})) as never;
+
+  it("appends a SEPARATE matcher-less PreToolUse entry only when the hook is passed", () => {
+    const on = buildAgentQueryOptions({
+      ...minArgs,
+      toolAttemptPreToolUseHook: telemetryHook,
+    });
+    // The sandbox entry stays first + unchanged (its matcher is preserved), and
+    // the telemetry entry is appended matcher-less (full-surface capture).
+    expect(on.hooks!.PreToolUse).toHaveLength(2);
+    expect(on.hooks!.PreToolUse![0].matcher).toContain("Bash");
+    expect(on.hooks!.PreToolUse![1].matcher).toBeUndefined();
+    expect(on.hooks!.PreToolUse![1].hooks).toEqual([telemetryHook]);
+  });
+
+  it("legacy caller (hook absent) keeps exactly ONE PreToolUse entry — the sandbox hook (AC5 byte-unchanged)", () => {
+    const off = buildAgentQueryOptions(minArgs);
+    expect(off.hooks!.PreToolUse).toHaveLength(1);
+    expect(off.hooks!.PreToolUse![0].matcher).toContain("Bash");
   });
 });
 
@@ -100,7 +175,7 @@ describe("buildAgentQueryOptions — per-call overrides (T2/T3)", () => {
     expect(opts.resume).toBeUndefined();
   });
 
-  it("threads model override (cc path uses claude-sonnet-4-6 too — same default)", () => {
+  it("threads model override (cc path uses claude-sonnet-5 too — same default)", () => {
     const opts = buildAgentQueryOptions({
       ...minArgs,
       model: "claude-opus-4-7",
@@ -162,8 +237,28 @@ describe("buildAgentQueryOptions — in-sandbox git askpass threading (item 1c)"
         gitAskpassScriptPath: "/tmp/test-workspace/.askpass-xyz.sh",
         // The askpass token IS the installation token (same value as ghToken).
         gitInstallationToken: "ghs_install_tok",
+        // Slice B: deployed plugin root → CLAUDE_PLUGIN_ROOT for the agent's
+        // bash shell-outs; threaded verbatim from args.pluginPath.
+        pluginPath: PLUGIN,
       },
     );
+  });
+
+  // AC3 (dispatch integration pin). The CLAUDE_PLUGIN_ROOT that buildAgentEnv
+  // exports must survive verbatim into the FINAL returned options.env — asserting
+  // the returned object (not the buildAgentEnv call args) catches any downstream
+  // drop/allowlist-filter after buildAgentEnv returns. Positive-only by design:
+  // a negative case cannot isolate the buildAgentEnv guard because
+  // assertTrustedPluginPath(args.pluginPath) at :197 throws first — the
+  // guard-specific negatives live in agent-env.test.ts (AC2).
+  it("AC3: threads CLAUDE_PLUGIN_ROOT through to the final options.env", () => {
+    const opts = buildAgentQueryOptions({
+      ...minArgs,
+      pluginPath: "/app/shared/plugins/soleur",
+    });
+    expect(
+      (opts.env as Record<string, string>).CLAUDE_PLUGIN_ROOT,
+    ).toBe("/app/shared/plugins/soleur");
   });
 
   it("omits the askpass path when gitAskpassScriptPath is absent (legacy runner parity)", () => {
@@ -176,6 +271,9 @@ describe("buildAgentQueryOptions — in-sandbox git askpass threading (item 1c)"
         ghToken: undefined,
         gitAskpassScriptPath: undefined,
         gitInstallationToken: undefined,
+        // Slice B: pluginPath is ALWAYS threaded (both factories pass
+        // getPluginPath()); only the git-askpass extras are per-call divergent.
+        pluginPath: PLUGIN,
       },
     );
   });
@@ -206,6 +304,65 @@ describe("buildAgentQueryOptions — GitHub egress derived from ghToken (#5041 f
   });
 });
 
+describe("buildAgentQueryOptions — SDK skills allowlist (support scope)", () => {
+  it("omits `skills` by default (Command Center loads every skill)", () => {
+    const opts = buildAgentQueryOptions(minArgs);
+    expect("skills" in opts).toBe(false);
+  });
+
+  it("threads `skills` verbatim when provided (support passes ['kb-search'])", () => {
+    const opts = buildAgentQueryOptions({ ...minArgs, skills: ["kb-search"] });
+    expect(opts.skills).toEqual(["kb-search"]);
+  });
+
+  it("support extra-disallowed pins Edit/Write/Task/Agent alongside the canonical list, keeping Bash out of it", () => {
+    const opts = buildAgentQueryOptions({
+      ...minArgs,
+      extraDisallowedTools: ["Edit", "Write", "MultiEdit", "NotebookEdit", "Task", "Agent"],
+    });
+    expect(opts.disallowedTools).toEqual([
+      "WebSearch",
+      "WebFetch",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "NotebookEdit",
+      "Task",
+      "Agent",
+    ]);
+    expect(opts.disallowedTools).not.toContain("Bash");
+  });
+});
+
+describe("buildAgentQueryOptions — WorkspaceMode-driven cwd + sandbox write-set (ADR-113)", () => {
+  it("command_center: cwd = workspace, sandbox allowWrite = [workspace]", () => {
+    const opts = buildAgentQueryOptions({ ...minArgs, mode: resolveWorkspaceMode("command_center") });
+    expect(opts.cwd).toBe(WORKSPACE);
+    expect(opts.sandbox?.filesystem?.allowWrite).toEqual([WORKSPACE]);
+  });
+
+  it("support: cwd = plugin root, sandbox allowWrite = [] (T3 — the P1 read-only invariant)", () => {
+    const opts = buildAgentQueryOptions({ ...minArgs, mode: resolveWorkspaceMode("support") });
+    // cwd is the boot-validated plugin root, NOT the workspace.
+    expect(opts.cwd).toBe(PLUGIN);
+    // The write-set is EMPTY — a cwd=pluginPath session must not be able to write
+    // into the shared platform plugin root (the CTO-flagged supply-chain escape).
+    expect(opts.sandbox?.filesystem?.allowWrite).toEqual([]);
+    expect(opts.sandbox?.filesystem?.allowWrite).not.toContain(PLUGIN);
+  });
+
+  it("support: sandbox denyRead obscures the internal knowledge base (containment defense)", () => {
+    // PLUGIN = /tmp/test-workspace/plugins/soleur → internal KB is two levels up.
+    const opts = buildAgentQueryOptions({ ...minArgs, mode: resolveWorkspaceMode("support") });
+    expect(opts.sandbox?.filesystem?.denyRead).toContain("/tmp/test-workspace/knowledge-base");
+  });
+
+  it("command_center: does NOT add the internal-KB deny (no support containment)", () => {
+    const opts = buildAgentQueryOptions({ ...minArgs, mode: resolveWorkspaceMode("command_center") });
+    expect(opts.sandbox?.filesystem?.denyRead ?? []).not.toContain("/tmp/test-workspace/knowledge-base");
+  });
+});
+
 describe("buildAgentQueryOptions — drift-guard snapshot (T4)", () => {
   // Stable JSON serialization across Node versions per plan Enhancement #2:
   // sort keys explicitly and exclude function-valued fields (canUseTool,
@@ -230,7 +387,7 @@ describe("buildAgentQueryOptions — drift-guard snapshot (T4)", () => {
       JSON.stringify(
         {
           cwd: WORKSPACE,
-          model: "claude-sonnet-4-6",
+          model: "claude-sonnet-5",
           permissionMode: "default",
           settingSources: [],
           includePartialMessages: true,

@@ -65,7 +65,24 @@ export interface TodayCardState {
   showUndo: boolean;
   /** Whether to render the Retry button (Retry-eligible failure). */
   showRetry: boolean;
+  /**
+   * Whether to render the Resume button (feat-l5-runaway-guard PR-A). True
+   * only for the paused-state failure reasons — the two that set
+   * users.runtime_paused_at (run_paused, byok_cap_exceeded). Resume clears
+   * the founder's pause via POST /api/dashboard/runtime/resume, then the
+   * founder starts a fresh run (terminal-halt).
+   */
+  showResume: boolean;
 }
+
+// The failure reasons that leave the founder's account paused (the only two
+// that write runtime_paused_at). Distinct from cost_ceiling_exceeded (a
+// per-spawn ceiling that pauses nothing) and cap_check_unavailable (a
+// transient error that pauses nothing).
+const PAUSED_STATE_REASONS: ReadonlySet<string> = new Set([
+  "run_paused",
+  "byok_cap_exceeded",
+]);
 
 function isKnownFailureReason(s: string): s is FailureReason {
   return Object.prototype.hasOwnProperty.call(FAILURE_REASON_COPY, s);
@@ -99,6 +116,7 @@ export function deriveTodayCardState(
   if (row.failure_reason) {
     const copy = failureCopy(row.failure_reason);
     const retry = failureRetryEligible(row.failure_reason);
+    const resume = PAUSED_STATE_REASONS.has(row.failure_reason);
     if (hasArtifact) {
       return {
         kind: "failure_with_artifact",
@@ -107,6 +125,7 @@ export function deriveTodayCardState(
         stopDisabled: false,
         showUndo: true,
         showRetry: retry,
+        showResume: resume,
       };
     }
     return {
@@ -116,6 +135,7 @@ export function deriveTodayCardState(
       stopDisabled: false,
       showUndo: false,
       showRetry: retry,
+      showResume: resume,
     };
   }
 
@@ -128,6 +148,7 @@ export function deriveTodayCardState(
       stopDisabled: false,
       showUndo: false,
       showRetry: false,
+      showResume: false,
     };
   }
 
@@ -142,6 +163,7 @@ export function deriveTodayCardState(
       stopDisabled: false,
       showUndo: true,
       showRetry: false,
+      showResume: false,
     };
   }
 
@@ -155,6 +177,7 @@ export function deriveTodayCardState(
       stopDisabled: true,
       showUndo: false,
       showRetry: false,
+      showResume: false,
     };
   }
 
@@ -167,6 +190,7 @@ export function deriveTodayCardState(
       stopDisabled: false,
       showUndo: false,
       showRetry: false,
+      showResume: false,
     };
   }
 
@@ -178,5 +202,6 @@ export function deriveTodayCardState(
     stopDisabled: false,
     showUndo: false,
     showRetry: false,
+    showResume: false,
   };
 }

@@ -305,6 +305,46 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // (user_id FK is ON DELETE RESTRICT; anonymise runs before auth-delete).
   email_triage_items: { ownerField: "user_id", article: "15+20" },
 
+  // feat-severity-ranked-inbox (migration 122) — operational-inbox notifications.
+  // Art. 15 ACCESS (not 20 portability): the `title`/`source_ref` are
+  // server-generated pointers, but the row's `created_at`/`read_at`/`acted_at`/
+  // `archived_at` are the subject's notification-INTERACTION history (when they
+  // were notified, when they acted) — controller-generated personal data held in
+  // NO other allowlisted table (the referenced conversations/messages carry
+  // message timestamps, not the notification's read/acted timestamps). Same Art.
+  // 15 basis the sibling `email_triage_items` is allowlisted on. `ownerField =
+  // user_id` naturally scopes the export to TARGETED rows and excludes
+  // `user_id IS NULL` broadcasts (workspace-level, not personal to a subject).
+  // Art. 17 erasure via user_id ON DELETE CASCADE (no anonymise RPC needed).
+  inbox_item: { ownerField: "user_id", article: "15" },
+
+  // feat-beta-conversation-capture (migration 126, #6165, ADR-102) — the
+  // operator's private beta-tester/prospect CRM. beta_contacts holds the
+  // contact head (name/company/role/source + pipeline fields) and interview_notes
+  // holds verbatim dual-lens conversation notes — both are personal data the
+  // owner curated about third parties, held under Art. 6(1)(f) legitimate
+  // interest (LIA; PA-30). Art. 15+20: the owner PROVIDED this content, so it is
+  // portable. Art. 17 erasure via user_id ON DELETE CASCADE (no anonymise RPC —
+  // no statutory-retention class; ADR-102 §4). ownerField = user_id (direct).
+  beta_contacts: { ownerField: "user_id", article: "15+20" },
+  interview_notes: { ownerField: "user_id", article: "15+20" },
+
+  // beta_contact_stage_transitions (migration 126) — append-only pipeline
+  // velocity history. Art. 15 ACCESS only (not 20 portability): the row is
+  // controller-GENERATED audit evidence of stage changes (from_stage/to_stage/
+  // entered_at), not user-provided content — analogous to workspace_member_actions.
+  // user_id is the direct owner column; Art. 17 via ON DELETE CASCADE.
+  beta_contact_stage_transitions: { ownerField: "user_id", article: "15" },
+
+  // beta_contact_access_log (migration 127, #6172, ADR-102 UI phase) —
+  // append-only owner-read accountability log (Art. 5(2)): who read which
+  // contact's PII, when. Art. 15 ACCESS only (not 20 portability): the row is
+  // controller-GENERATED audit evidence (contact_id + accessed_at), not
+  // user-provided content — same class as beta_contact_stage_transitions.
+  // user_id is the direct owner column; Art. 17 via the composite-FK
+  // (contact_id, user_id) ON DELETE CASCADE (swept with the contact).
+  beta_contact_access_log: { ownerField: "user_id", article: "15" },
+
 };
 
 /**
@@ -413,6 +453,22 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "executions, not user-profile data. Promote to DSAR_TABLE_ALLOWLIST " +
     "(actor_id, Art. 15) when a non-Soleur tenant exists or the " +
     "dsar-export.ts chain is wired.",
+
+  // #5274 (Phase 2, ADR-068 §2): per-worktree write-lease coordination state.
+  // workspace_id is the only user-transitive FK; the remaining columns
+  // (worktree_id, host_id, lease_generation, two timestamps) are pure infra
+  // coordination. host_id is a host-STABLE server identity, explicitly NEVER
+  // an auth.uid() (migration 116) — it identifies a machine, not a data
+  // subject. Nothing here is Art. 15-relevant personal data.
+  worktree_write_lease:
+    "Migration 116 operational write-lease state for the multi-host " +
+    "/workspaces layer (epic #5274). Columns are infra coordination only: " +
+    "workspace_id (FK), worktree_id, host_id (host-stable server identity, " +
+    "NEVER auth.uid()), lease_generation, acquired_at, heartbeat_at. No " +
+    "user-provided content and no personal-profile data. Art. 17 erasure is " +
+    "satisfied by ON DELETE CASCADE from public.workspaces (no anonymise RPC " +
+    "needed — the row has zero audit lineage; proven by the AC5 " +
+    "cascade integration test). No DSAR export surface.",
 };
 
 /**

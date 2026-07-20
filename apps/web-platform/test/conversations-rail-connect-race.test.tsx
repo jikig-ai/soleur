@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, render, screen, waitFor, act, cleanup } from "@testing-library/react";
 import type { Conversation } from "@/lib/types";
+import { enrichConversationFixtures } from "./helpers/mock-supabase";
 
 // RED→GREEN regression for plan
 // 2026-06-16-fix-recent-conversations-rail-optimistic-insert.
@@ -166,6 +167,19 @@ vi.mock("@/lib/supabase/client", () => ({
         Promise.resolve({ data: { user: { id: "user-1" } }, error: null }),
       ),
     },
+    // The list read now flows through list_conversations_enriched (migration
+    // 125). Each RPC call consumes the next per-call conversations result
+    // (preserving the connect-race call-index semantics) and attaches snippets
+    // from state.messages exactly as the old messages-chain fed derivation.
+    rpc: vi.fn((name: string) => {
+      if (name !== "list_conversations_enriched") {
+        return Promise.resolve({ data: null, error: { message: `unexpected rpc: ${name}` } });
+      }
+      return Promise.resolve({
+        data: enrichConversationFixtures(nextConvResult(), state.messages),
+        error: null,
+      });
+    }),
     from: vi.fn((table: string) => {
       if (table === "conversations") return buildConversationsChain();
       if (table === "messages") return buildMessagesChain();

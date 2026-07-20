@@ -47,6 +47,7 @@ import {
   getActiveTurnConversation,
   setActiveTurnConversation,
   clearActiveTurnConversation,
+  forEachSessionForConversation,
 } from "./agent-session-registry";
 import {
   streamReplayBuffer,
@@ -58,7 +59,11 @@ import {
   getWorkspaceForUserInOrganization,
   readWorkspaceIdFromDb,
   workspacePathForWorkspaceId,
+  isGitDataStoreEnabled,
 } from "./workspace-resolver";
+import { resolveHostId } from "./host-identity";
+import { resolveSessionRoute } from "./session-router";
+import { proxyClientToOwner } from "./session-proxy";
 import {
   restoreInflightCheckpoint,
   CHECKPOINT_REFUSED_MESSAGE,
@@ -71,6 +76,8 @@ import {
   releaseSlot,
   touchSlot,
   emitConcurrencyCapHit,
+  SLOT_STALENESS_THRESHOLD_SECONDS,
+  SLOT_HEARTBEAT_INTERVAL_MS,
 } from "./concurrency";
 import {
   parseConversationRouting,
@@ -226,6 +233,29 @@ const DISCONNECT_GRACE_MS = 30_000;
  * any turn-boundary lifecycle hook needs wiring on BOTH lineages.
  */
 export function runDisconnectGraceAbort(uid: string, convId: string): void {
+  // Host-local owning-host guard (TR2 — epic #5274 Phase 1, ADR-068 §5).
+  // A live local OPEN socket for this user means they have reconnected. This
+  // CLOSES A REAL replicas=1 RACE: the auth/connect handler registers the new
+  // socket (`sessions.set`) BEFORE its `pendingDisconnects`-cancel loop runs —
+  // and that cancel sits behind three awaited workspace-bind DB calls
+  // (resolveCurrentOrganizationId / getWorkspaceForUserInOrganization /
+  // getDefaultWorkspaceForUser). A 30s grace timer expiring in that window would
+  // otherwise abort a just-reconnected live turn (#5240). This guard relies on
+  // `sessions` being keyed by userId (one live socket per user), so an OPEN entry
+  // means the user is back — the same user-level semantics as that cancel loop,
+  // which clears every `${userId}:`-prefixed timer regardless of conversation. It
+  // also localises the ownership decision inside this function — the one seam
+  // Phase 3 routes through the coordinator/Postgres lease so a reconnect landing
+  // on ANOTHER host no longer lets this host abort a now-remote-live session. NO
+  // host_id / lease / poll in Phase 1.
+  const live = sessions.get(uid);
+  if (live && live.ws.readyState === WebSocket.OPEN) {
+    log.info(
+      { userId: uid, conversationId: convId },
+      "Reconnected on this host before grace fired — skipping grace abort (owning-host guard)",
+    );
+    return;
+  }
   log.info(
     { userId: uid, conversationId: convId },
     "Grace period expired, aborting session",
@@ -421,6 +451,27 @@ export function abortActiveSession(userId: string, session: ClientSession): void
  * Exported for tests; call site is the `start_session` cap_hit branch
  * below.
  */
+/**
+ * Is there a LIVE agent loop for this conversation on THIS instance? Reconciles
+ * BOTH process-local loop registries (the dual-lineage invariant at
+ * agent-session-registry.ts): the cc-soleur-go runner (`hasActiveCcQuery`, the
+ * dominant path) OR the legacy `activeSessions` map (any `userId:convId[:leaderId]`
+ * key). Used by the AC14 dead-socket reap so a backgrounded-but-live loop (a
+ * conversation not focused by the current socket, e.g. after crash+reconnect, or
+ * one paused on a review gate) is NEVER reaped — CTO ruling 2026-07-18
+ * (knowledge-base/engineering/architecture/decisions): reap on agent-loop
+ * liveness, not socket focus.
+ */
+function hasLiveAgentLoop(userId: string, conversationId: string): boolean {
+  if (hasActiveCcQuery(conversationId)) return true;
+  let found = false;
+  forEachSessionForConversation(userId, conversationId, () => {
+    found = true;
+    return true; // stop at the first match
+  });
+  return found;
+}
+
 export async function tryLedgerDivergenceRecovery(
   userId: string,
 ): Promise<{ didRecover: boolean }> {
@@ -474,8 +525,9 @@ export async function tryLedgerDivergenceRecovery(
     // Stale-heartbeat detector (May-6 #3354). The orphan check above only
     // catches slots whose conversation is NOT in the visible-active set;
     // it misses the boundary case where a `status='active'` conversation row
-    // IS visible but its slot's `last_heartbeat_at` lapsed past 120 s
-    // between the RPC's lazy sweep and this helper's processing — e.g.
+    // IS visible but its slot's `last_heartbeat_at` lapsed past 240 s
+    // (SLOT_STALENESS_THRESHOLD_SECONDS) between the RPC's lazy sweep and this
+    // helper's processing — e.g.
     // a tab supersession that clears the old WS's `pingInterval` so no
     // refresh fires while the helper runs. Catching it here (vs waiting
     // up to 60 s for the agent-runner reaper) flips the conv row to
@@ -483,8 +535,8 @@ export async function tryLedgerDivergenceRecovery(
     // truths up, and surfaces the divergence to Sentry.
     //
     // WHY THIS BRANCH IS MOSTLY INACTIVE IN STEADY STATE (#3372):
-    // `acquire_conversation_slot` (migration 029 ~line 131) runs the IDENTICAL
-    // lazy-sweep predicate (`last_heartbeat_at < now() - 120 s`) inside its
+    // `acquire_conversation_slot` (migration 133) runs the IDENTICAL
+    // lazy-sweep predicate (`last_heartbeat_at < now() - 240 s`) inside its
     // own transaction BEFORE the count-check. When the RPC returns `cap_hit`,
     // every surviving slot has already been swept clean — so this SELECT finds
     // stale rows only in a narrow boundary race (~50–200 ms between the RPC's
@@ -499,25 +551,25 @@ export async function tryLedgerDivergenceRecovery(
     //   3. Defense-in-depth: if the RPC's lazy sweep is ever refactored away,
     //      this branch becomes the primary stale-slot reaper without any code
     //      change here.
-    // Decision: keep at 120 s (option C). Re-evaluate if any of the four
-    // sibling threshold sites change, the async reaper interval changes, or
-    // Sentry shows staleHeartbeatCount > 1% of cap-hit events at scale (which
-    // would confirm the branch is load-bearing, not just boundary-race defense).
+    // Decision: use the shared SLOT_STALENESS_THRESHOLD_SECONDS (240 s as of the
+    // 2026-07-18 Disk-IO backoff). Re-evaluate if the async reaper interval
+    // changes, or Sentry shows staleHeartbeatCount > 1% of cap-hit events at
+    // scale (which would confirm the branch is load-bearing, not just
+    // boundary-race defense).
     //
-    // THRESHOLD-COUPLING: 120 s here matches the four pre-existing sites:
-    //   (1) migration 029 line ~131 (acquire_conversation_slot lazy sweep)
-    //   (2) migration 029 line ~224 (pg_cron user_concurrency_slots_sweep)
-    //   (3) migration 037 line ~39 (find_stuck_active_conversations default)
-    //   (4) agent-runner.ts STUCK_ACTIVE_THRESHOLD_SECONDS
-    // Changing this constant without updating the four sibling sites
-    // desyncs the sweep mechanisms — one will reap rows the others
-    // consider live. Naming + unit mirror agent-runner.ts so a grep on
-    // `STUCK_ACTIVE_THRESHOLD_SECONDS` surfaces this site too. Index
-    // path: `user_concurrency_slots_user_heartbeat_idx` (migration 029)
-    // on `(user_id, last_heartbeat_at)`.
-    const STALE_HEARTBEAT_THRESHOLD_SECONDS = 120;
+    // THRESHOLD-COUPLING: the 240 s staleness value is the ONE shared const
+    // SLOT_STALENESS_THRESHOLD_SECONDS (server/concurrency.ts), also consumed by
+    // agent-runner.ts (find_stuck_active_conversations arg) and the cap-drift
+    // self-eviction + sibling-snapshot-restore liveCutoff gates below, and
+    // mirrored in SQL by migration 133
+    // (acquire_conversation_slot lazy sweep, user_concurrency_slots_sweep
+    // pg_cron, find_stuck_active_conversations default). Importing the shared
+    // symbol here (rather than a local literal) structurally prevents the
+    // sibling-site drift that historically false-reaped live slots. Index path:
+    // `user_concurrency_slots_user_heartbeat_idx` (migration 029) on
+    // `(user_id, last_heartbeat_at)`.
     const staleCutoff = new Date(
-      Date.now() - STALE_HEARTBEAT_THRESHOLD_SECONDS * 1_000,
+      Date.now() - SLOT_STALENESS_THRESHOLD_SECONDS * 1_000,
     ).toISOString();
     const staleResp = await tenant
       .from("user_concurrency_slots")
@@ -538,9 +590,47 @@ export async function tryLedgerDivergenceRecovery(
         .map((r) => r.conversation_id);
     }
 
-    // Dedup union: one releaseSlot + one finalize per unique conversation_id.
     const orphanSet = new Set<string>(orphans);
-    const reapableSet = new Set<string>([...orphans, ...staleConversationIds]);
+    const staleSet = new Set<string>(staleConversationIds);
+
+    // AC14 (Phase 3e) — THRESHOLD-INDEPENDENT immediate cap-hit reclaim.
+    // Raising the staleness threshold 120→240 s (mig 133) would otherwise lock a
+    // cap-hit user out for up to 240 s: after a socket crash, the crashed
+    // conversation's slot is still visible-active (not an orphan) AND stale
+    // <240 s (not caught by the stale branch above), so starting a NEW
+    // conversation trips CONCURRENCY_CAP until the threshold elapses. Reap the
+    // NEW class the orphan/stale branches miss: a slot whose conversation has NO
+    // live agent loop on this instance (hasLiveAgentLoop = cc + legacy
+    // registries) AND is not the focused socket conversation — restoring the
+    // immediate-free-on-reconnect behavior, independent of the heartbeat
+    // threshold. Computed EXCLUSIVE of orphan/stale (they already reap those) so
+    // it only adds the visible+fresh-heartbeat-but-dead case. Uses only slots
+    // already fetched (no extra query). CTO ruling 2026-07-18: gate on agent-loop
+    // liveness, NOT socket focus (a focus-only reap kills backgrounded-live loops
+    // #5273 and review-gate-paused conversations). CROSS-HOST CAVEAT (ADR-124):
+    // hasLiveAgentLoop is instance-local, so this branch's no-false-reap guarantee
+    // is CONDITIONAL on user-sticky placement (ADR-068 D0 / #5274, replicas=1
+    // today). Any weakening of sticky placement must re-audit this reaper.
+    const focusedSession = sessions.get(userId);
+    const focusedConvIds = new Set<string>(
+      [focusedSession?.conversationId, focusedSession?.pending?.id].filter(
+        (v): v is string => typeof v === "string",
+      ),
+    );
+    const deadSocketConversationIds = slotConversationIds.filter(
+      (cid) =>
+        !orphanSet.has(cid) &&
+        !staleSet.has(cid) &&
+        !focusedConvIds.has(cid) &&
+        !hasLiveAgentLoop(userId, cid),
+    );
+
+    // Dedup union: one releaseSlot + one finalize per unique conversation_id.
+    const reapableSet = new Set<string>([
+      ...orphans,
+      ...staleConversationIds,
+      ...deadSocketConversationIds,
+    ]);
     const reapable = Array.from(reapableSet);
 
     if (reapable.length === 0) {
@@ -578,7 +668,9 @@ export async function tryLedgerDivergenceRecovery(
             feature: "concurrency-ledger-divergence",
             op: orphanSet.has(cid)
               ? "start_session-recovery-finalize-orphan"
-              : "start_session-recovery-finalize-stale-heartbeat",
+              : staleSet.has(cid)
+                ? "start_session-recovery-finalize-stale-heartbeat"
+                : "start_session-recovery-finalize-dead-socket",
             expectMatch: false,
             onlyIfStatusIn: ["active"],
           },
@@ -588,14 +680,16 @@ export async function tryLedgerDivergenceRecovery(
 
     // Single Sentry mirror for the divergence detection itself. AC4
     // excludes the recovered-OK path. `recoveryCause` lets dashboards
-    // segment orphan vs stale-heartbeat without spawning a new feature
-    // key; existing aggregations on `feature` + `op` are preserved.
-    const recoveryCause: "orphan" | "stale-heartbeat" | "orphan-and-stale" =
-      orphans.length > 0 && staleConversationIds.length > 0
-        ? "orphan-and-stale"
-        : orphans.length > 0
-          ? "orphan"
-          : "stale-heartbeat";
+    // segment orphan vs stale-heartbeat vs dead-socket without spawning a new
+    // feature key; existing aggregations on `feature` + `op` are preserved.
+    const recoveryCause =
+      [
+        orphans.length > 0 ? "orphan" : null,
+        staleConversationIds.length > 0 ? "stale-heartbeat" : null,
+        deadSocketConversationIds.length > 0 ? "dead-socket" : null,
+      ]
+        .filter((v): v is string => v !== null)
+        .join("+") || "none";
     reportSilentFallback(new Error("ledger-divergence"), {
       feature: "concurrency-ledger-divergence",
       op: "start_session-recovery",
@@ -605,6 +699,7 @@ export async function tryLedgerDivergenceRecovery(
         slotCount: slotConversationIds.length,
         orphanCount: orphans.length,
         staleHeartbeatCount: staleConversationIds.length,
+        deadSocketCount: deadSocketConversationIds.length,
         reapableCount: reapable.length,
         recoveryCause,
       },
@@ -765,10 +860,23 @@ export async function refreshSubscriptionStatus(
     // Non-deterministic which over-cap session gets closed — all of them
     // will on their next refresh tick, converging within one interval.
     const newCap = effectiveCap(session.planTier, session.concurrencyOverride);
+    // Freshness-filter the count so crashed-but-unreaped slots don't trigger a
+    // false eviction. Mirrors the acquire-RPC self-reap (093:79-81) and the
+    // sibling slot probes (:526 divergence, :2013 sibling-slot). Load-bearing
+    // for the migration-115 throttle (#5738): the slots sweep moved */15 → hourly,
+    // so stale rows linger up to ~1h; without this filter a downgraded user with
+    // a stale slot would be falsely evicted on the next refresh tick. Uses the
+    // shared SLOT_STALENESS_THRESHOLD_SECONDS (240 s) so the read-side liveness
+    // window matches the 240 s reaper (mig 133) — leaving it at 120 s would
+    // desync from the widened threshold.
+    const liveCutoff = new Date(
+      Date.now() - SLOT_STALENESS_THRESHOLD_SECONDS * 1_000,
+    ).toISOString();
     const { count, error: countErr } = await tenant
       .from("user_concurrency_slots")
       .select("*", { count: "exact", head: true })
-      .eq("user_id", userId);
+      .eq("user_id", userId)
+      .gte("last_heartbeat_at", liveCutoff);
     if (!countErr && typeof count === "number" && count > newCap) {
       const convId = session.conversationId ?? session.pending?.id;
       log.info(
@@ -854,6 +962,12 @@ async function createConversation(
   id?: string,
   contextPath?: string,
   activeWorkflow?: string | null,
+  // feat-wire-concierge-support-chat (ADR-113) — B2 repo-less support rows. A
+  // "support" conversation is repo-INDEPENDENT: it carries `kind='support'` +
+  // `repo_url=null`, is created even for a repo-less user (the repo-less throw
+  // below is skipped), and stays out of the Command Center rail (which scopes by
+  // repo_url). Default "command_center" preserves the existing behavior exactly.
+  kind: "command_center" | "support" = "command_center",
 ): Promise<string> {
   if (!id) id = randomUUID();
 
@@ -862,12 +976,16 @@ async function createConversation(
   // mid-session have repo_url=null; we abort rather than orphan the row
   // (plan risk R-D). See
   // 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md.
+  //
+  // Support conversations are repo-independent — never throw on a null repo_url,
+  // and always persist repo_url=null so they never enter the repo-scoped rail.
   const repoUrl = await getCurrentRepoUrl(userId);
-  if (!repoUrl) {
+  if (!repoUrl && kind !== "support") {
     throw new Error(
       "No connected repository — conversation insert aborted (disconnect race).",
     );
   }
+  const persistedRepoUrl = kind === "support" ? null : repoUrl;
 
   // PR-C §2.10 (#3244): tenant client. `getCurrentRepoUrl` above
   // already ran a tenant-scoped users read (Phase 2.6), so a failure
@@ -898,7 +1016,8 @@ async function createConversation(
     id,
     user_id: userId,
     workspace_id: wsId,
-    repo_url: repoUrl,
+    repo_url: persistedRepoUrl,
+    kind,
     domain_leader: leaderId ?? null,
     status: "active" as Conversation["status"],
     last_active: new Date().toISOString(),
@@ -1244,6 +1363,12 @@ export async function dispatchSoleurGoForConversation(
     // buildSoleurGoSystemPrompt. Document context (path/content) is unused
     // for this mode (it carries no path).
     routineAuthoring: context?.type === "routine-authoring",
+    // feat-wire-concierge-support-chat (ADR-113) — resolve the persona from the
+    // validated chat context. `"support"` (the in-app support chat) runs the
+    // Concierge read-only with the repo-lifecycle gates bypassed and skills scoped
+    // to kb-search; everything else is the Command Center default. REQUIRED — an
+    // explicit value, never an implicit undefined.
+    persona: context?.type === "support" ? "support" : "command_center",
     ...documentArgs,
   });
   } finally {
@@ -2002,9 +2127,13 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // the sibling. The clean-tree gate proves "nothing uncommitted to
           // lose" but NOT "this snapshot belongs to this conversation" — the slot
           // probe is what supplies the latter. Liveness-filtered: stale slots are
-          // swept lazily / by pg_cron but NOT on this read path.
+          // swept lazily / by pg_cron but NOT on this read path. Uses the shared
+          // SLOT_STALENESS_THRESHOLD_SECONDS (240 s) so this snapshot-restore gate
+          // reads the same liveness window as the 240 s reaper (mig 133).
           let siblingSlotActive = false;
-          const liveCutoff = new Date(Date.now() - 120_000).toISOString();
+          const liveCutoff = new Date(
+            Date.now() - SLOT_STALENESS_THRESHOLD_SECONDS * 1_000,
+          ).toISOString();
           const { data: siblingSlots, error: slotErr } = await tenantResumeConv
             .from("user_concurrency_slots")
             .select("conversation_id")
@@ -2194,6 +2323,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             pendingId,
             pendingContextPath,
             initialActiveWorkflow,
+            // feat-wire-concierge-support-chat — a support-context session
+            // materializes a repo-less kind='support' conversation (never throws
+            // on a missing repo; the repo-less support user is exactly who needs help).
+            pendingContext?.type === "support" ? "support" : "command_center",
           );
           session.conversationId = resolvedId;
           session.pending = undefined;
@@ -2811,13 +2944,7 @@ export function setupWebSocket(server: HTTPServer) {
         }
 
         // If user already has an open socket, close the old one
-        const existing = sessions.get(userId);
-        if (existing && existing.ws.readyState === WebSocket.OPEN) {
-          if (existing.subscriptionRefreshTimer) {
-            clearInterval(existing.subscriptionRefreshTimer);
-          }
-          existing.ws.close(WS_CLOSE_CODES.SUPERSEDED, "Superseded by new connection");
-        }
+        supersedeExistingUserSocket(userId);
 
         // Register session — cancel any pending disconnect grace period
         const userRowTyped = userRow as {
@@ -2849,6 +2976,8 @@ export function setupWebSocket(server: HTTPServer) {
         // sibling sessions in the user's other workspaces). user_session_state
         // (migration 060) is the source of truth; the lookup translates
         // org_id → workspace_id once at WS open.
+        // Resolved once here, reused by the session-router placement hook below.
+        let boundWorkspaceId: string | null = null;
         try {
           const orgId = await resolveCurrentOrganizationId(
             user.id,
@@ -2879,6 +3008,7 @@ export function setupWebSocket(server: HTTPServer) {
             }
           }
           if (workspaceId) setUserWorkspace(user.id, workspaceId);
+          boundWorkspaceId = workspaceId;
         } catch (workspaceBindErr) {
           // Silent fallback per cq-silent-fallback-must-mirror-to-sentry: the
           // session still opens (the binding is for SIGTERM precision, not
@@ -2904,14 +3034,13 @@ export function setupWebSocket(server: HTTPServer) {
 
         // Start heartbeat after auth. In addition to the WebSocket ping, touch
         // user_concurrency_slots.last_heartbeat_at for the active/pending
-        // conversation so the pg_cron sweep (120s threshold) does not reclaim
-        // a still-live session. Uses the dedicated `touch_conversation_slot`
+        // conversation so the pg_cron sweep (240s threshold, mig 133) does not
+        // reclaim a still-live session. Uses the dedicated `touch_conversation_slot`
         // RPC — a single UPDATE, no cap check, no sweep, no lock — so
-        // steady-state heartbeat load is O(N) cheap UPDATEs per 30s rather
-        // than re-running the full acquire path. Matters at scale: at 1k
-        // live sessions, the full-acquire heartbeat cost ~33 writes/s +
-        // 33 per-user advisory locks/s; touchSlot cuts that to 33 cheap
-        // UPDATEs with no lock contention.
+        // steady-state heartbeat load is O(N) cheap UPDATEs per SLOT_HEARTBEAT_INTERVAL_MS
+        // (60s as of the 2026-07-18 Disk-IO backoff — halves this UPDATE's WAL)
+        // rather than re-running the full acquire path. The 240s reaper threshold
+        // is 4× this interval, so missed-beat tolerance is unchanged.
         pingInterval = setInterval(() => {
           if (ws.readyState !== WebSocket.OPEN) return;
           ws.ping();
@@ -2920,7 +3049,64 @@ export function setupWebSocket(server: HTTPServer) {
           if (current && convId) {
             void touchSlot(userId!, convId);
           }
-        }, 30_000);
+        }, SLOT_HEARTBEAT_INTERVAL_MS);
+
+        // --- User-sticky session placement (epic #5274 Phase 3, ADR-068 D0 / CTO
+        //     ruling b2) -----------------------------------------------------------
+        // GATED on isGitDataStoreEnabled(): entirely inert (no per-connection DB
+        // read) until the 3.D cutover — at flag-off this whole block is skipped and
+        // the connection serves locally, byte-identical to pre-#5274. When on: read
+        // this user's live worktree-lease holder; if a PEER host owns it,
+        // TRANSPARENTLY proxy the socket to the owner over one-way TLS BEFORE
+        // auth_ok (no client-visible reconnect — the fly-replay invariant). At a
+        // single host every route resolves `local`, so this stays inert until a 2nd
+        // host + roster come online at 3.D.
+        if (isGitDataStoreEnabled() && boundWorkspaceId) {
+          let route;
+          try {
+            route = await resolveSessionRoute({
+              workspaceId: boundWorkspaceId,
+              userId,
+              myHostId: resolveHostId(),
+            });
+          } catch (routeErr) {
+            // Fail-safe: a routing error degrades to local-serve (the lease acquire
+            // on the write path is itself fail-closed, and the git-data fence is the
+            // ultimate write guard) — never a wrong proxy dial. Mirror to Sentry.
+            reportSilentFallback(routeErr, {
+              feature: "ws-handler",
+              op: "resolveSessionRoute",
+              extra: { userId, workspaceId: boundWorkspaceId },
+            });
+            route = { decision: "local" as const, reason: "cold" as const };
+          }
+          if (ws.readyState !== WebSocket.OPEN) return; // closed during the await
+          if (route.decision === "owner-unresolved") {
+            // A peer owns the lease but its address is not resolvable — fail loud
+            // (already Sentry'd in the router). Non-transient close → the client
+            // reconnects and self-heals once the roster/owner recovers.
+            ws.close(WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "session owner unreachable");
+            return;
+          }
+          if (route.decision === "proxy") {
+            // b2: relay this authenticated socket to the owner; the relay owns the
+            // socket lifecycle from here (frames + close forwarded both ways). Tear
+            // down the local pre-session state we set up above so this host holds no
+            // stale binding for a session it is not serving.
+            clearTimeout(authTimer);
+            if (pingInterval) clearInterval(pingInterval);
+            sessions.delete(userId);
+            clearUserWorkspace(userId);
+            void proxyClientToOwner({
+              clientWs: ws,
+              ownerAddress: route.ownerAddress,
+              userId,
+              workspaceId: boundWorkspaceId,
+            });
+            return;
+          }
+          // decision === "local" → fall through and serve here.
+        }
 
         ws.send(JSON.stringify({ type: "auth_ok" }));
         return;
@@ -2946,31 +3132,7 @@ export function setupWebSocket(server: HTTPServer) {
         pendingConnections.remove(clientIp);
       }
       if (userId) {
-        const current = sessions.get(userId);
-        if (current?.ws === ws) {
-          if (current.idleTimer) clearTimeout(current.idleTimer);
-          if (current.subscriptionRefreshTimer) {
-            clearInterval(current.subscriptionRefreshTimer);
-          }
-          sessions.delete(userId);
-          // Phase 5.5: drop the workspace binding so a future reconnect
-          // re-resolves from user_session_state (handles the org-switch +
-          // reconnect sequence cleanly — see AC-FLOW3 multi-tab race coverage).
-          clearUserWorkspace(userId);
-          // Grace period: defer abort to allow reconnection
-          if (current.conversationId) {
-            const convId = current.conversationId;
-            const uid = userId;
-            const timer = setTimeout(
-              () => runDisconnectGraceAbort(uid, convId),
-              DISCONNECT_GRACE_MS,
-            );
-            timer.unref();
-            // Store timer so reconnecting user can cancel it
-            pendingDisconnects.set(`${uid}:${convId}`, timer);
-          }
-        }
-        log.info({ userId, gracePeriodSec: DISCONNECT_GRACE_MS / 1000 }, "User disconnected");
+        teardownAuthedSessionOnClose(userId, ws);
       }
     });
 
@@ -2981,4 +3143,220 @@ export function setupWebSocket(server: HTTPServer) {
   });
 
   return wss;
+}
+
+/**
+ * Close a user's existing OPEN socket before a new one supersedes it (one live
+ * socket per user). Factored out of the native connection path so the proxied
+ * attach (#5274 3.D) supersedes identically — a stale native socket and a fresh
+ * proxied attach for the same user must not both stay registered.
+ */
+function supersedeExistingUserSocket(userId: string): void {
+  const existing = sessions.get(userId);
+  if (existing && existing.ws.readyState === WebSocket.OPEN) {
+    if (existing.subscriptionRefreshTimer) {
+      clearInterval(existing.subscriptionRefreshTimer);
+    }
+    existing.ws.close(WS_CLOSE_CODES.SUPERSEDED, "Superseded by new connection");
+  }
+}
+
+/**
+ * Teardown for an AUTHENTICATED session whose socket closed — clears the idle +
+ * subscription timers, drops the session + workspace binding, and arms the
+ * disconnect grace-abort. Factored out of the native `ws.on("close")` so the
+ * proxied attach (#5274 3.D) tears down through the SAME path: the grace-abort is
+ * host-locality-correctness-critical (#2191 / #5240) and must never drift between
+ * the native and proxied lifecycles. Guards on `current.ws === ws` so a socket
+ * that was already superseded does not delete its successor's registration.
+ */
+function teardownAuthedSessionOnClose(userId: string, ws: WebSocket): void {
+  const current = sessions.get(userId);
+  if (current?.ws === ws) {
+    if (current.idleTimer) clearTimeout(current.idleTimer);
+    if (current.subscriptionRefreshTimer) {
+      clearInterval(current.subscriptionRefreshTimer);
+    }
+    sessions.delete(userId);
+    // Phase 5.5: drop the workspace binding so a future reconnect re-resolves
+    // from user_session_state (handles the org-switch + reconnect sequence
+    // cleanly — see AC-FLOW3 multi-tab race coverage).
+    clearUserWorkspace(userId);
+    // Grace period: defer abort to allow reconnection
+    if (current.conversationId) {
+      const convId = current.conversationId;
+      const uid = userId;
+      const timer = setTimeout(
+        () => runDisconnectGraceAbort(uid, convId),
+        DISCONNECT_GRACE_MS,
+      );
+      timer.unref();
+      // Store timer so reconnecting user can cancel it
+      pendingDisconnects.set(`${uid}:${convId}`, timer);
+    }
+  }
+  // No raw `userId` on this direct-logger breadcrumb — the userid-bypass-lint guard
+  // (#3698) scans NEW source for `log.*({ userId })`; runtime is already safe (pino
+  // formatters.log hashes top-level userId). Same posture as ensure-workspace-repo.ts.
+  log.info({ gracePeriodSec: DISCONNECT_GRACE_MS / 1000 }, "User disconnected");
+}
+
+/**
+ * Attach a PRE-AUTHENTICATED proxied session on the OWNER host (epic #5274 Phase
+ * 3 Sub-PR 3.D, ADR-068 b2). A session that lands on a non-owning web host is
+ * relayed here over one-way TLS (session-proxy.ts): the proxying host already
+ * authenticated the client and the owner's proxy listener re-verified AP-2
+ * membership before invoking this. So there is NO token re-auth, NO T&C gate, and
+ * NO placement/routing (the session is already on its owner). This mirrors the
+ * register → bind → idle → heartbeat → `auth_ok` TAIL of the native connection
+ * path for a socket that arrives already-authed, then wires message→handleMessage
+ * and close→teardown (through the SAME shared helpers as the native path).
+ *
+ * It sends only `auth_ok` — NOT a fresh-session greeting (AC8: a drain/deploy-
+ * migrated session RESUMES; it must not be greeted as a new one). Never throws to
+ * the caller in a way that escapes; the caller (server/index.ts) mirrors any
+ * rejection to Sentry.
+ */
+export async function attachProxiedSession(
+  ws: WebSocket,
+  ctx: { userId: string; workspaceId: string },
+): Promise<void> {
+  const { userId, workspaceId } = ctx;
+
+  // Supersede any existing socket for this user (mirrors the native path).
+  supersedeExistingUserSocket(userId);
+
+  // Register with a conservative free-tier PLACEHOLDER cap, then hydrate the real
+  // subscription state inline BELOW before any message (hence any start_session)
+  // is wired. Registering before the DB await mirrors the native path so the
+  // owning-host grace-abort guard sees this OPEN socket if a supersede-armed
+  // grace timer fires during the read. The free default is never consumed: no
+  // message handler and no heartbeat run until after hydration completes.
+  const session: ClientSession = {
+    ws,
+    lastActivity: Date.now(),
+    planTier: "free",
+  };
+  sessions.set(userId, session);
+  startSubscriptionRefresh(userId, session);
+
+  // Phase 5.5: bind userId → workspaceId (the owner already holds this user's
+  // worktree lease) so workspace-membership revocation SIGTERMs precisely.
+  setUserWorkspace(userId, workspaceId);
+
+  // Hydrate the migrated session's REAL plan/cap inline, BEFORE wiring
+  // message→handleMessage (i.e. before any start_session can run). #5274 3.D
+  // user-impact: a coordinated drain migrates many PAID users at once; without
+  // this read they would be capped at the free placeholder (=1) until the first
+  // ~60s subscription-refresh tick, so a start_session while already holding a
+  // slot would spuriously cap_hit → hard-close the just-resumed session + pop an
+  // upgrade modal at a paying customer (brand-fatal). Also populates
+  // stripeSubscriptionId so the Stripe webhook-lag rescue path is reachable
+  // (the native handshake sets it; the old free literal did not). Mirrors the
+  // native read (subscription_status / plan_tier / concurrency_override /
+  // stripe_subscription_id). Fail-open: on any DB failure keep the conservative
+  // free default (mirrored to Sentry) — startSubscriptionRefresh still hydrates
+  // on its next tick.
+  try {
+    const tenant = await tenantFor(userId, "attachProxiedSession");
+    if (tenant) {
+      const { data, error } = await tenant
+        .from("users")
+        .select(
+          "tc_accepted_version, subscription_status, plan_tier, concurrency_override, stripe_subscription_id",
+        )
+        .eq("id", userId)
+        .single();
+      if (error || !data) {
+        reportSilentFallback(
+          error ?? new Error("proxied-attach subscription read returned no row"),
+          {
+            feature: "control_plane_route",
+            op: "proxied-attach.subscription-read",
+            extra: { userId },
+          },
+        );
+      } else {
+        const row = data as {
+          tc_accepted_version?: string | null;
+          subscription_status?: string | null;
+          plan_tier?: PlanTier | null;
+          concurrency_override?: number | null;
+          stripe_subscription_id?: string | null;
+        };
+        session.subscriptionStatus = row.subscription_status ?? undefined;
+        session.planTier = row.plan_tier ?? "free";
+        session.concurrencyOverride = row.concurrency_override ?? null;
+        session.stripeSubscriptionId = row.stripe_subscription_id ?? null;
+        session.tcVersionAtHandshake = row.tc_accepted_version ?? null;
+      }
+    }
+    // `tenant === null` → tenantFor already mirrored to Sentry; keep free default.
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "control_plane_route",
+      op: "proxied-attach.subscription-read",
+      extra: { userId },
+    });
+  }
+
+  // Socket may have closed during the read — tear down the registration we made
+  // above (grace-abort is a no-op: no conversation is active on a fresh attach).
+  if (ws.readyState !== WebSocket.OPEN) {
+    teardownAuthedSessionOnClose(userId, ws);
+    return;
+  }
+
+  // This attach IS the reconnect — cancel any armed disconnect grace-abort (incl.
+  // one armed by the supersede above) so a migrated in-flight turn is not aborted
+  // out from under the resumed session.
+  for (const [key, timer] of pendingDisconnects) {
+    if (key.startsWith(`${userId}:`)) {
+      clearTimeout(timer);
+      pendingDisconnects.delete(key);
+      log.info({ key }, "Cancelled pending disconnect (proxied session attached)");
+    }
+  }
+
+  log.info({ workspaceId }, "Proxied session attached (owner-side)"); // no raw user id (#3698 lint; pino hashes at runtime)
+
+  resetIdleTimer(userId, session);
+
+  // Heartbeat (mirrors the native path): WS ping + touch the concurrency slot so
+  // the pg_cron sweep does not reclaim a still-live proxied session. Cleared on
+  // close. `.unref()` so it never keeps the process alive on its own. Same
+  // SLOT_HEARTBEAT_INTERVAL_MS (60s) as the native path — both must move together.
+  const pingInterval = setInterval(() => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    ws.ping();
+    const current = sessions.get(userId);
+    const convId = current?.conversationId ?? current?.pending?.id;
+    if (current && convId) {
+      void touchSlot(userId, convId);
+    }
+  }, SLOT_HEARTBEAT_INTERVAL_MS);
+  pingInterval.unref?.();
+
+  // Authenticated frames route straight to handleMessage — no auth branch (the
+  // socket arrived pre-authed).
+  ws.on("message", (data: unknown) => {
+    handleMessage(userId, String(data)).catch((err) => {
+      Sentry.captureException(err); // Sentry carries the error; local breadcrumb omits raw userId (#3698)
+      log.error({ err }, "Unhandled message error (proxied)");
+      sendToClient(userId, { type: "error", message: "Internal server error" });
+    });
+  });
+
+  ws.on("close", () => {
+    clearInterval(pingInterval);
+    teardownAuthedSessionOnClose(userId, ws);
+  });
+
+  ws.on("error", (err) => {
+    Sentry.captureException(err); // Sentry carries the error; local breadcrumb omits raw userId (#3698)
+    log.error({ err }, "Proxied socket error");
+  });
+
+  // Resume signal — NOT a fresh greeting (AC8).
+  ws.send(JSON.stringify({ type: "auth_ok" }));
 }

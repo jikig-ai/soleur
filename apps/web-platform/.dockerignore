@@ -11,6 +11,51 @@ infra/
 # FS read. Excluding the JSON file shrinks the build context by 28 lines —
 # leaving it in is harmless to the runtime image.
 !infra/github-app-manifest.json
+# Re-include the faithful sandbox canary argv fixture (#5875 / ADR-079). The
+# Dockerfile runner stage bakes it in (`COPY --from=builder
+# /app/infra/sandbox-canary-argv.json`) so ci-deploy.sh's in-container replay
+# can read it with no network; without this re-include the builder-stage
+# `COPY . .` drops it and the runner COPY fails the image build.
+!infra/sandbox-canary-argv.json
+# Re-include the host-bootstrap scripts baked into the image (#5921 / ADR-080).
+# The Dockerfile runner stage bakes these into /opt/soleur/host-scripts/ via
+# `COPY --from=builder /app/infra/<file>` so cloud-init can `docker cp` the set
+# onto a fresh Hetzner host (externalized out of the 32 KB user_data cap). The
+# `infra/` exclude above drops them from the builder-stage `COPY . .`, so each
+# baked file MUST be re-included here or the runner COPY fails the image build
+# (the #5922 release break). Keep this list in lockstep with the Dockerfile
+# baked-set COPY and the server.tf host-scripts set — the
+# cloud-init-user-data-size.test.ts guard asserts the three stay in parity.
+!infra/ci-deploy.sh
+!infra/ci-deploy-wrapper.sh
+!infra/cat-deploy-state.sh
+!infra/canary-bundle-claim-check.sh
+!infra/disk-monitor.sh
+!infra/resource-monitor.sh
+!infra/container-restart-monitor.sh
+!infra/container-restart-monitor.service
+!infra/container-restart-monitor.timer
+!infra/infra-config-apply.sh
+!infra/infra-config-install.sh
+!infra/cat-infra-config-state.sh
+!infra/cron-egress-nftables.sh
+!infra/cron-egress-resolve.sh
+!infra/cron-egress-alarm.sh
+!infra/cron-egress-allowlist.txt
+!infra/cron-egress-allowlist-cidr.txt
+!infra/cron-egress-firewall.service
+!infra/cron-egress-resolve.service
+!infra/cron-egress-resolve.timer
+!infra/cron-egress-alarm@.service
+!infra/cron-egress-postapply-assert.sh
+!infra/cron-egress-enforce-probe.sh
+!infra/hooks.json.tmpl
+!infra/journald-soleur.conf
+!infra/soleur-host-bootstrap.sh
+!infra/cosign-trusted-root.json
+!infra/vector.toml
+!infra/seccomp-bwrap.json
+!infra/apparmor-soleur-bwrap.profile
 scripts/
 # Allow the post-build dev-signin grep gate (R3 / feat-dev-signin-bypass).
 # The Dockerfile builder stage runs `bash scripts/assert-dev-signin-eliminated.sh`
@@ -19,6 +64,12 @@ scripts/
 # found), failing the prd image build. The runner stage is a separate
 # `FROM` so this re-include does NOT bloat the runtime image.
 !scripts/assert-dev-signin-eliminated.sh
+# Re-include the faithful sandbox canary payload (#5875 / ADR-079). The
+# Dockerfile runner stage bakes it in (`COPY --from=builder
+# /app/scripts/sandbox-canary.mjs`) so ci-deploy.sh can `docker exec` it inside
+# the canary container; without this re-include the builder-stage `COPY . .`
+# drops it and the runner COPY fails the image build (the #5890 release break).
+!scripts/sandbox-canary.mjs
 
 .git
 .gitignore

@@ -266,6 +266,80 @@ t7_multi_byte_utf8_per_rule() {
   rm -rf "$tmp"
 }
 
+# Case T8: AGENTS.core.md leading YAML frontmatter is EXCLUDED from B_ALWAYS
+# (issue #5999, ADR-094) — the lint measures LOADED bytes (post-strip), matching
+# the session loader. Reported B_ALWAYS must equal index + stripped-core bytes,
+# and be strictly less than the raw on-disk sum (the frontmatter had bytes).
+t8_frontmatter_excluded_from_b_always() {
+  local tmp; tmp=$(mktemp -d)
+  make_index "$tmp/AGENTS.md"
+  : > "$tmp/AGENTS.docs.md"; : > "$tmp/AGENTS.rest.md"
+  cat > "$tmp/AGENTS.core.md" <<'EOF'
+---
+last_reviewed: 2026-07-05
+review_cadence: monthly
+owner: founder
+---
+
+# AGENTS Core-class
+
+## Hard Rules
+
+- One-line body for hr-test-pointer with [id: hr-test-pointer]. **Why:** test fixture.
+EOF
+  local idx_b stripped_b expected reported raw_core_b raw_sum out rc
+  idx_b=$(wc -c < "$tmp/AGENTS.md")
+  stripped_b=$(python3 "$REPO_ROOT/scripts/lib/frontmatter-strip/strip.py" < "$tmp/AGENTS.core.md" | wc -c)
+  expected=$((idx_b + stripped_b))
+  set +e
+  out=$(python3 "$SUT" "$tmp/AGENTS.md" "$tmp/AGENTS.core.md" "$tmp/AGENTS.docs.md" "$tmp/AGENTS.rest.md" 2>&1)
+  rc=$?
+  set -e
+  reported=$(printf '%s' "$out" | grep -oE 'B_ALWAYS=[0-9]+' | head -1 | cut -d= -f2)
+  assert_exit "T8 frontmatter tree exit 0" "0" "$rc"
+  if [[ "$reported" == "$expected" ]]; then
+    pass "T8 B_ALWAYS excludes frontmatter (=$expected)"
+  else
+    fail "T8 B_ALWAYS excludes frontmatter" "reported=$reported expected=$expected (idx=$idx_b stripped=$stripped_b)"
+  fi
+  raw_core_b=$(wc -c < "$tmp/AGENTS.core.md")
+  raw_sum=$((idx_b + raw_core_b))
+  if [[ -n "$reported" ]] && (( reported < raw_sum )); then
+    pass "T8 B_ALWAYS < raw on-disk sum (frontmatter bytes not counted)"
+  else
+    fail "T8 B_ALWAYS < raw on-disk sum" "reported=$reported raw_sum=$raw_sum"
+  fi
+  rm -rf "$tmp"
+}
+
+# Case T9: malformed (unterminated) AGENTS.core.md frontmatter → the strip would
+# consume the rule body, so the lint ERRORS (exit 1) rather than reporting a
+# falsely-low B_ALWAYS. This is the over-strip fail-hard guard.
+t9_malformed_frontmatter_errors() {
+  local tmp; tmp=$(mktemp -d)
+  make_index "$tmp/AGENTS.md"
+  : > "$tmp/AGENTS.docs.md"; : > "$tmp/AGENTS.rest.md"
+  cat > "$tmp/AGENTS.core.md" <<'EOF'
+---
+last_reviewed: 2026-07-05
+review_cadence: monthly
+
+# AGENTS Core-class (no closing frontmatter delimiter)
+
+## Hard Rules
+
+- One-line body for hr-test-pointer with [id: hr-test-pointer]. **Why:** test fixture.
+EOF
+  local out rc
+  set +e
+  out=$(python3 "$SUT" "$tmp/AGENTS.md" "$tmp/AGENTS.core.md" "$tmp/AGENTS.docs.md" "$tmp/AGENTS.rest.md" 2>&1)
+  rc=$?
+  set -e
+  assert_exit "T9 malformed frontmatter exit 1" "1" "$rc"
+  assert_contains "T9 over-strip ERROR reported" "frontmatter-strip removed" "$out"
+  rm -rf "$tmp"
+}
+
 # Case T6: pointer index lines (short by construction) are never cap-rejected.
 t6_pointer_index_under_cap() {
   local tmp; tmp=$(mktemp -d)
@@ -300,6 +374,8 @@ t4_missing_core
 t5_per_rule_in_docs_sidecar
 t6_pointer_index_under_cap
 t7_multi_byte_utf8_per_rule
+t8_frontmatter_excluded_from_b_always
+t9_malformed_frontmatter_errors
 
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"

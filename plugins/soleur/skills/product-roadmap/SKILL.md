@@ -1,6 +1,6 @@
 ---
 name: product-roadmap
-description: "This skill should be used when roadmapping."
+description: "This skill should be used when roadmapping. Sub-commands: validate (read-only roadmap-vs-GitHub-milestone drift report) and next (advisory next-action, routes to /soleur:go or names an operator action)."
 ---
 
 # Product Roadmap Workshop
@@ -8,6 +8,38 @@ description: "This skill should be used when roadmapping."
 A CPO-grade interactive workshop for defining and operationalizing product roadmaps. Synthesizes knowledge-base context, guides the founder through strategic decisions, and creates GitHub milestones.
 
 **Note: The current year is 2026.**
+
+## Sub-commands
+
+| Command | Description |
+|---------|-------------|
+| `product-roadmap` (no sub-command) | The interactive CPO workshop below (default). |
+| `product-roadmap validate` | **Read-only** drift report: reconcile `roadmap.md` Current State counts against live GitHub milestones. Never writes. |
+| `product-roadmap next` | **Read-only** advisory: report the next action for the first incomplete phase. |
+
+**Dispatch.** If the first token of `$ARGUMENTS` is `validate` or `next`, run that sub-command below and STOP — do **not** run the workshop. Otherwise, skip to **Roadmap Context** and run the workshop. Both sub-commands are strictly read-only (they never edit `roadmap.md`); the existing `cron-roadmap-review.ts` Inngest cron remains the sole writer, via reviewed fix PRs (ADR-033 / ADR-054).
+
+### Sub-command: validate
+
+Reconcile the roadmap against live GitHub milestone state and print a drift report. **Makes no file writes.**
+
+Run the shared module ([roadmap-reconcile.sh](./scripts/roadmap-reconcile.sh)) from the repo root:
+
+```bash
+bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadmap-reconcile.sh validate
+```
+
+It prints `STALE_STATUS` / `MISSING_ISSUE` / `EMPTY_MILESTONE` verdicts (the same vocabulary the roadmap-review cron uses) and exits non-zero on drift. Relay the report verbatim. When drift is found, the report already names the remediation — trigger the roadmap-review cron (`/soleur:trigger-cron cron/roadmap-review.manual-trigger`), which opens a reviewed PR. Do **not** edit `roadmap.md` from this skill.
+
+### Sub-command: next
+
+Report the single next action for the first incomplete roadmap phase. **Read-only — invokes no build.**
+
+```bash
+bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/product-roadmap/scripts/roadmap-reconcile.sh next
+```
+
+It finds the first phase with open issues, picks the lowest-numbered open issue (deterministic tie-break), and classifies it: a **codeable** item (engineering label) is surfaced as a paste-ready `/soleur:go #N`; an **operator** item (recruitment, interviews, research, marketing, ops) is named for the founder to action directly; an empty milestone yields an explicit "no actionable next item". Relay the output. **Never** invoke `/soleur:one-shot` or any build from this sub-command — surface the recommendation and stop.
 
 ## Roadmap Context
 

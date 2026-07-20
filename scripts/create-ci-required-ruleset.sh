@@ -1,14 +1,26 @@
 #!/usr/bin/env bash
 # Create the "CI Required" repository ruleset on jikig-ai/soleur.
 #
-# This script adds the `test`, `dependency-review`, and `e2e` status checks
-# as required checks on main, preventing auto-merge when CI fails or is skipped.
+# This is the documented DISASTER-RECOVERY restore path: it POSTs the full
+# ruleset skeleton ONLY when no "CI Required" ruleset exists (it exits early
+# if one is already present, so it never replaces a live ruleset). The
+# canonical management path is Terraform (infra/github/ruleset-ci-required.tf
+# + apply-github-infra.yml). After running this DR restore, run
+# `terraform import` + `terraform plan/apply` to reconcile the ruleset back
+# to Terraform-managed state.
+#
+# The skeleton restores the single `required_status_checks` rule. (#5780 briefly
+# added a `merge_queue` rule here too, but that was REVERTED — the merge queue
+# deadlocked main because CodeQL default setup does not post on `merge_group`
+# temp refs. See ADR-032 + the PIR.) The jq below addresses the status-checks
+# rule by TYPE (not a positional `.rules[0]`) so it stays correct if a second
+# rule is ever re-introduced.
 #
 # IMPORTANT: Run this AFTER the bot workflow updates have merged to main.
 # If run before, bot PRs using [skip ci] will be permanently blocked
 # because the required checks remain in "Pending" state forever.
 #
-# Refs: #826, #820
+# Refs: #826, #820, #5780
 
 set -euo pipefail
 
@@ -84,15 +96,19 @@ cat > "$skeleton" << 'EOF'
 EOF
 
 # Merge canonical bypass_actors AND required_status_checks into the skeleton.
-# required_status_checks lives at rules[0].parameters.required_status_checks
-# (rules[0] is the only rule today; future siblings would need select-by-type).
+# Address the status-checks rule by TYPE, never a positional .rules[0], so this
+# stays correct if a second rule (e.g. a future merge_queue) is reintroduced.
 jq --slurpfile bypass "$CANONICAL_BYPASS_FILE" --slurpfile rsc "$CANONICAL_RSC_FILE" \
   '. + {bypass_actors: $bypass[0]}
-     | .rules[0].parameters.required_status_checks = $rsc[0]' \
+     | (.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks) = $rsc[0]' \
   "$skeleton" > "$payload"
 
 echo "Creating '${RULESET_NAME}' ruleset on ${REPO}..."
 result=$(gh api "repos/${REPO}/rulesets" -X POST --input "$payload")
 
 echo "Ruleset created. Verification:"
-echo "$result" | jq '{id, name, enforcement, checks: .rules[0].parameters.required_status_checks, bypass_actors: [.bypass_actors[] | {actor_type, bypass_mode}]}'
+echo "$result" | jq '{
+  id, name, enforcement,
+  checks: (.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks),
+  bypass_actors: [.bypass_actors[] | {actor_type, bypass_mode}]
+}'

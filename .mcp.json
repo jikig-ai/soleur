@@ -1,11 +1,10 @@
 {
   "mcpServers": {
     "playwright": {
-      "command": "npx",
+      "command": "bash",
       "args": [
-        "@playwright/mcp@latest",
-        "--user-data-dir=/home/jean/.cache/playwright-mcp-profile",
-        "--config=.claude/playwright-mcp.config.json"
+        "-c",
+        "prof=$HOME/.cache/playwright-mcp-profile; pkill -9 -f \"[b]in/playwright-mcp .*$prof\" 2>/dev/null || true; pkill -9 -f \"[c]hrome.*$prof\" 2>/dev/null || true; rm -f \"$prof\"/Singleton* 2>/dev/null || true; exec env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 GDK_BACKEND=x11 DISPLAY=${DISPLAY:-:0} npx @playwright/mcp@0.0.78 --user-data-dir=$prof --config=.claude/playwright-mcp.config.json"
       ]
     }
   }

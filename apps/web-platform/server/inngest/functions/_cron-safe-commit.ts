@@ -12,6 +12,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Octokit } from "@octokit/core";
+import { emitCronPersistResult } from "@/server/cron-liveness-marker";
 import { reportSilentFallback } from "@/server/observability";
 import { redactToken, REPO_OWNER, REPO_NAME, type HandlerArgs } from "./_cron-shared";
 
@@ -26,7 +27,16 @@ export const DEFAULT_MAX_DELETIONS = 10;
 // allowlist filter is mirrored to Sentry. PREFIX semantics (trailing slash
 // required): a literal-entry exclusion would let deletions UNDER a scaffolded
 // directory flow into the deletion guard on every run (#5091 plan review).
-export const STRUCTURAL_EXCLUSION_PREFIXES: readonly string[] = [".claude/"];
+// Workspace scaffolding the substrate itself writes on EVERY run. These are
+// excluded BEFORE the allowlist filter so they never reach the loud
+// "paths-dropped" report -- that signal exists to catch a bot writing outside
+// its allowlist, and a path that appears on every single run would drown it.
+// `.soleur-collector-status/` is the #6695 collector-status sidecar, written by
+// github-community.sh and read by cron-community-monitor before teardown.
+export const STRUCTURAL_EXCLUSION_PREFIXES: readonly string[] = [
+  ".claude/",
+  ".soleur-collector-status/",
+];
 
 // #5111 — the bot-PR-with-synthetic-checks pattern: deterministic data-refresh
 // PRs post these check-runs as completed/success so the integration-pinned
@@ -112,6 +122,28 @@ export type SafeCommitResult =
       /** 0 on a replay-resume (counts are not recomputed for an existing commit). */
       fileCount: number;
       deletionCount: number;
+      /**
+       * Repo-relative paths that entered the commit, from the allowlist-matched
+       * scan. **OPTIONAL, and `undefined` means "NOT DETERMINED" — never
+       * "nothing was committed"** (#6714 R21): on the replay-resume branch the
+       * scan never runs, so there is nothing to report even though the artifact
+       * did land. A caller asserting "my artifact is in here" MUST treat
+       * `undefined` as inconclusive and consult `resumed` before turning red.
+       *
+       * Optional rather than required because the replay-resume branch cannot
+       * know a value to supply — it never runs the allowlist scan. (An earlier
+       * draft justified this with "~38 consumers construct this arm"; that
+       * number is the count of files REFERENCING safeCommitAndPr. Only 12 sites
+       * across 7 files construct the committed arm, so the blast-radius claim
+       * was ~5x overstated. The decision stands on the replay-resume leg.)
+       */
+      paths?: string[];
+      /**
+       * Set only on the replay-resume branch (a prior attempt already created
+       * the commit). Its presence is what licenses a liveness check to stay
+       * GREEN despite `paths` being undetermined.
+       */
+      resumed?: true;
     }
   | { status: "no-changes" }
   | {
@@ -383,6 +415,13 @@ async function failure(
       extra: { fn: config.cronName, stage },
     });
   }
+  emitCronPersistResult({
+    cron: config.cronName,
+    status: "failed",
+    files: 0,
+    pr: null,
+    stage,
+  });
   return { status: "failed", stage, message: scrubbed };
 }
 
@@ -442,6 +481,11 @@ export async function safeCommitAndPr(
 
     let fileCount = 0;
     let deletionCount = 0;
+    // Hoisted for the SAME reason as fileCount: `matched` is block-scoped inside
+    // the `if (!resuming)` below and is NOT in scope at the return statement.
+    // Stays `undefined` on the replay-resume branch — see the `paths` doc on
+    // SafeCommitResult: undefined is "not determined", not "nothing committed".
+    let paths: string[] | undefined;
     const prBodyExtras: string[] = [];
 
     if (!resuming) {
@@ -535,9 +579,17 @@ export async function safeCommitAndPr(
           { fn: cronName, op: "safe-commit-no-changes" },
           `safeCommitAndPr: no committable changes inside allowedPaths for ${cronName}`,
         );
+        emitCronPersistResult({
+          cron: cronName,
+          status: "no-changes",
+          files: 0,
+          pr: null,
+          stage: null,
+        });
         return { status: "no-changes" };
       }
       fileCount = matched.length;
+      paths = matched.map((e) => e.path);
 
       // -- 8. Branch + scoped add + commit (identity + dates via env).
       const checkout = await runGit(spawnCwd, ["checkout", "-B", branch]);
@@ -793,7 +845,24 @@ export async function safeCommitAndPr(
       { fn: cronName, op: "safe-commit-pr", prNumber, branch, fileCount },
       `safeCommitAndPr: opened PR #${prNumber} from ${branch}`,
     );
-    return { status: "committed", prNumber, branch, fileCount, deletionCount };
+    emitCronPersistResult({
+      cron: cronName,
+      status: "committed",
+      files: fileCount,
+      pr: prNumber,
+      stage: null,
+    });
+    return {
+      status: "committed",
+      prNumber,
+      branch,
+      fileCount,
+      deletionCount,
+      // Spread-conditional so the replay-resume arm carries NEITHER key rather
+      // than an explicit `paths: undefined` — callers discriminate on presence.
+      ...(paths ? { paths } : {}),
+      ...(resuming ? { resumed: true as const } : {}),
+    };
   } catch (err) {
     // Belt-and-suspenders: the contract is non-throwing; anything that
     // escapes the per-stage handling above still resolves to a failure

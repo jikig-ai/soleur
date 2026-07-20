@@ -21,6 +21,8 @@ verification passes — no human revisit required.
    - Any other exit = TRANSIENT (network failure, timeout → sweeper retries next sweep)
    - The script may print human-readable output to stdout/stderr; the sweeper captures the last 4 KB and posts it as a comment.
    - The script must be deterministic in its exit semantics: do not exit 0 on partial success.
+   - **Never gate the exit code on `: "${VAR:?msg}"`.** Under a non-interactive shell that word-expansion aborts with status **1** (= FAIL in this contract), so a trailing `|| { echo TRANSIENT; exit 2; }` is dead code and an unprovisioned/empty secret reports FAIL instead of TRANSIENT. Use `if [[ -z "${VAR:-}" ]]; then echo "TRANSIENT: ..." >&2; exit 2; fi`. Accept both `200` AND `201` from the Supabase Management query endpoint (`/database/query` returns 201). Verified in `scripts/followthroughs/autovacuum-thrash-6168.sh` (PR #6164) — see `knowledge-base/project/learnings/best-practices/2026-07-07-followthrough-and-shape-gate-silent-falseness.md`.
+   - **Query a sink the signal is ACTUALLY written to, and fail-safe when the signal path is unproven.** A soak that greps a sink the target signal never reaches PASSes vacuously and auto-closes the tracker blind (#5934: queried Sentry for an in-sandbox line that this host's `vector.toml` never mirrors to Sentry — only Better Stack). Verify the emit→sink wiring before trusting a zero-count; require a positive liveness marker (proof the producer ran) before treating "zero bad events" as PASS, and exit **TRANSIENT** (not PASS) on any auth/query failure or missing-liveness — so the gate can never false-close.
 3. **Declare needed secrets** via the directive's `secrets=` clause. Only the named secrets get exported into the script's environment. Add the secret to `.github/workflows/scheduled-followthrough-sweeper.yml` `env:` block if it isn't already wired.
 4. **Add the directive** to the issue body:
 
@@ -59,6 +61,7 @@ instead of rotting open. Each trigger shape maps 1:1 to an exit-code probe:
 | **Dependency** — `Re-evaluate when #N lands` | filing date | `GH_TOKEN` | `[[ "$(gh issue view N --json state --jq .state)" == CLOSED ]] && exit 0 \|\| exit 2` |
 | **Event-grep** — `Re-evaluate when <pattern> matches in <corpus>` | filing date | `GH_TOKEN` (gh corpus) | corpus probe nonempty ? `exit 0` : `exit 2` — e.g. `gh run list --workflow X --status success --created ">=<cutoff>" --json conclusion \| jq -e 'length >= 1' >/dev/null && exit 0 \|\| exit 2` |
 | **Counter** — `Re-evaluate when <counter> exceeds <threshold>` | filing date | `GH_TOKEN` (gh/API counter) | `[[ "$count" -ge "$threshold" ]] && exit 0 \|\| exit 2` where `$count` comes from `gh`/SQL/grep |
+| **Soak** — `<signal> stays at ~0 for N days post-deploy` (often gating an ADR `adopting → accepted` flip) | `<deploy>+Nd` (UTC; gates the first check to after the soak window) | `SENTRY_AUTH_TOKEN` (Sentry-rate soaks) | rate==0 over a window pinned strictly after deploy ? `exit 0` : `exit 1` — mirror [`reconcile-ff-only-sentry-4977.sh`](../../../../scripts/followthroughs/reconcile-ff-only-sentry-4977.sh) / [`ac8-founder-ambiguous-soak-5673.sh`](../../../../scripts/followthroughs/ac8-founder-ambiguous-soak-5673.sh) (`start=` pins the window past deploy so pre-deploy events don't contaminate the verdict). Enforced at ship time by the **Soak-Gated Follow-Through Enrollment Gate** (ship/SKILL.md Phase 5.5) — a soak declared in PR/plan prose blocks PR-ready until its tracker is enrolled here. |
 
 **`secrets=GH_TOKEN` is MANDATORY for any gh-using probe.** The sweeper runs
 verification scripts under `env -i` (PATH + HOME + directive-declared `secrets=`
@@ -101,6 +104,10 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 - The sweeper exports a narrow allowlist of secrets (declared per-script), not the full workflow env.
 - Issue body content reaches the sweeper via `awk` on stdin (no shell interpolation). Directive values are passed to the verification script as environment values and command-line args, never via shell-evaluated strings.
 - The sweeper uses `gh` CLI for issue close/comment, not raw token interpolation.
+
+## Sharp edges for Better Stack log-content probes
+
+- **Discriminate on the journald SYSLOG_IDENTIFIER FIELD, never a bare payload substring, and model fixtures on the REAL escaped JSONEachRow shape.** The Vector source is shared: inngest ships GitHub-webhook logs (SYSLOG_IDENTIFIER=doppler etc.) that embed branch names, issue/PR bodies, and quoted marker strings — so any marker a human types into GitHub appears in *another* producer's rows, and a bare-substring probe self-contaminates (the tracker's own body quotes the marker → false-FAIL → sweeper re-seeds it). Isolate the field in both byte-forms: server `--grep 'SYSLOG_IDENTIFIER":"<tag>'` (LIKE, unescaped column) + client `grep -F 'SYSLOG_IDENTIFIER\":\"<tag>\"'` (escaped stdout). Fixtures must reproduce the escaped JSON `raw`, not bare syslog. **Run the live discoverability query at /work, not post-merge** — it is the only check that surfaces the escaping and the contamination before merge. See `knowledge-base/project/learnings/2026-07-18-betterstack-followthrough-probe-must-field-isolate-syslog-identifier.md` (#6475).
 
 ## What the sweeper does NOT cover
 

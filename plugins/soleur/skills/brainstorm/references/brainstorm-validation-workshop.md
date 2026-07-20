@@ -4,7 +4,7 @@
 
 1. **Create worktree:**
    - Derive feature name: use the first 2-3 descriptive words from the feature description in kebab-case (e.g., "validate my SaaS idea" -> `validate-saas`). If the description is fewer than 3 words, default to `business-validation`.
-   - Run `./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`
+   - Run `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh feature <name>`
    - Set `WORKTREE_PATH`
 
 2. **Handle issue:**
@@ -21,7 +21,7 @@
    After verifying the path, create a draft PR:
 
    ```bash
-   bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh draft-pr
+   bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh draft-pr
    ```
 
    If this fails (no network), print a warning but continue.

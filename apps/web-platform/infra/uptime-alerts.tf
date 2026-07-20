@@ -76,6 +76,43 @@ resource "betteruptime_monitor" "soleur_apex" {
   paused     = false
 }
 
+# App dashboard uptime monitor (app.soleur.ai) — the LB-fronted surface users actually hit.
+# REPLACES the #5933 per-host absence detector (betteruptime_monitor.web_host): with the
+# multi-host cluster fronted by Cloudflare, an external per-host HTTP probe requires each
+# host's origin to serve its own web-<n>.soleur.ai Host/SNI — it does not (the probe returned
+# CF 521 because the origin only answers the app.soleur.ai Host, both records sharing one
+# origin IP). Per-host "is this specific host dead" is better covered by Cloudflare LB origin
+# health checks + the per-host resource-monitor.sh/container-restart-monitor.sh emails to
+# ops@ — not an external HTTP monitor that would need per-host origin vhosts/certs. So we
+# monitor app.soleur.ai directly; a dead host is drained by the LB and the remaining pool
+# keeps this green, which is the correct user-facing signal.
+#
+# follow_redirects = true: app.soleur.ai/ 307s to /login for an unauthenticated probe, so
+# the monitor succeeds only if the full chain / -> 307 -> /login -> 200 returns 200 (proves
+# the app is actually serving, not just that the CF edge answered).
+resource "betteruptime_monitor" "app" {
+  monitor_type       = "status"
+  url                = "https://app.soleur.ai/"
+  pronounceable_name = "soleur app dashboard"
+
+  check_frequency     = 180
+  request_timeout     = 10
+  confirmation_period = 60
+  recovery_period     = 60
+  follow_redirects    = true
+
+  email = true
+  call  = false
+  sms   = false
+  push  = false
+
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+
+  verify_ssl = true
+  paused     = false
+}
+
 # Conditional escalation policy — mirrors betteruptime_policy.inngest
 # (inngest.tf:140-156). count-gated on the same paid-tier flag so a free-tier
 # operator does not see an apply-time error attempting to create a paid feature.
@@ -95,6 +132,74 @@ resource "betteruptime_policy" "uptime" {
       type = "current_on_call"
     }
   }
+}
+
+# ── Better Stack managed alert recipient: ops@jikigai.com ──────────────────
+#
+# ops@jikigai.com as a managed Better Stack team member so free-tier heartbeat/
+# monitor email alerts reach ops@ (not just the account owner, jean.deruelle@).
+# Root cause of the unacknowledged soleur-registry-disk-prd incident: recipients
+# were not managed in Terraform at all, so only the account owner was emailed.
+#
+# No new no-default var — the betteruptime provider authenticates via the existing
+# var.betterstack_api_token (main.tf:66-68). ops@ is the operator's own contact
+# address, not a secret. role = "responder" is the provider default and free-tier
+# valid (Phase 0.1: schema — email required, role optional, team_name optional).
+# team_name = "Your team" mirrors every other team-scoped betteruptime resource in
+# this root (the global token routes to the named team — see soleur_apex above,
+# inngest.tf:120-129 for the case-sensitivity rationale).
+#
+# INERT until ops@ accepts the one-time invite (ops@'s own inbox — analogous to
+# OAuth consent). A pending (un-accepted) member receives no alerts; free-tier
+# non-owner routing is best-effort. Documented fallback if it proves owner-only:
+# betteruptime_outgoing_webhook forward or a Responder-tier upgrade (expense-gated).
+# #6604 — the DAILY /workspaces LUKS at-rest probe heartbeat (DP-10: the steady-state dead-probe
+# switch, distinct from the soak's log-line query). luks-monitor.sh pushes it once a day on a
+# fully-green escrow+header re-test, so a MISSED push (period 86400 + 1h grace) pages — a dead probe
+# fails the heartbeat (P1-4). paused until the operator unpauses at cutover; policy-gated on the
+# paid tier like every sibling heartbeat. Mirrors betteruptime_heartbeat.git_data_prd.
+resource "betteruptime_heartbeat" "workspaces_luks" {
+  name      = "soleur-workspaces-luks-prd"
+  period    = 86400
+  grace     = 3600
+  call      = false
+  sms       = false
+  email     = true
+  push      = false
+  team_wait = 0
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+  paused    = true
+
+  lifecycle {
+    # Operator unpause via UI MUST NOT be reverted by subsequent applies (mirrors git_data_prd).
+    ignore_changes = [paused]
+  }
+}
+
+# #6604 — luks-monitor.sh reads this URL with the SAME pinned `doppler secrets get … --config
+# prd_workspaces_luks` form as the passphrase (so the probe never widens to `doppler run`). Kept
+# HERE (beside the heartbeat), NOT in workspaces-luks.tf, whose anti-laundering guard
+# (workspaces-luks.test.sh A9/A11) forbids any extra resource / ignore_changes in that pristine
+# five-resource security surface. Mirrors doppler_secret.git_data_heartbeat_url_prd; it +
+# betteruptime_heartbeat.workspaces_luks are BOTH OPERATOR_APPLIED_EXCLUSIONS, applied together by
+# the operator apply. NOT one of the five cutover-gate resources; never rides the gated cutover set.
+resource "doppler_secret" "workspaces_luks_heartbeat_url" {
+  project    = "soleur"
+  config     = "prd_workspaces_luks"
+  name       = "WORKSPACES_LUKS_HEARTBEAT_URL"
+  value      = betteruptime_heartbeat.workspaces_luks.url
+  visibility = "masked"
+
+  lifecycle {
+    ignore_changes = [value] # URL is stable per heartbeat resource lifetime.
+  }
+}
+
+resource "betteruptime_team_member" "ops" {
+  email     = "ops@jikigai.com"
+  role      = "responder"
+  team_name = "Your team"
 }
 
 # ── Cloudflare zone-level origin-5xx notification policy: NOT shipped ──────

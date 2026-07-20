@@ -181,3 +181,116 @@ export function mockRpcResult<T>(
       Promise.resolve(resolved).then(onfulfilled),
   };
 }
+
+// --- list_conversations_enriched RPC mock (migration 125) ---------------------
+//
+// The conversation-rail hook (`useConversations`) now fetches its list via ONE
+// `supabase.rpc("list_conversations_enriched", {...})` call that returns each
+// conversation PLUS four message snippets — replacing the old
+// `.from("conversations")` + unbounded `.from("messages").in(ids)` fan-out.
+//
+// `makeEnrichedListRpc` is a faithful JS mirror of that SQL RPC for hook tests:
+// it filters the fixture conversations by the RPC args (archive/status/domain,
+// plus repo_url/workspace_id ONLY when a fixture actually carries that field —
+// so lenient fixtures that omit scope columns are not accidentally emptied),
+// sorts by last_active desc then created_at desc, applies the limit, and
+// attaches the snippet fields computed the same way the LATERAL joins do
+// (first user message, first assistant message, last message content + leader).
+
+interface FixtureMessage {
+  conversation_id: string;
+  // Accepts `string` so tests whose message fixtures type role loosely can be
+  // passed directly; only "user"/"assistant" are matched by the derivation.
+  role: string;
+  content: string;
+  leader_id?: string | null;
+  created_at?: string;
+}
+
+type EnrichedSnippets = {
+  first_user_content: string | null;
+  first_assistant_content: string | null;
+  last_content: string | null;
+  last_leader: string | null;
+};
+
+/** Attach first-user / first-assistant / last-content / last-leader snippets. */
+export function enrichConversationFixtures<T extends { id: string }>(
+  conversations: readonly T[],
+  messages: FixtureMessage[],
+): (T & EnrichedSnippets)[] {
+  return conversations.map((c) => {
+    const msgs = messages
+      .filter((m) => m.conversation_id === c.id)
+      .slice()
+      .sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""));
+    const firstUser = msgs.find((m) => m.role === "user");
+    const firstAssistant = msgs.find((m) => m.role === "assistant");
+    const last = msgs[msgs.length - 1];
+    return {
+      ...c,
+      first_user_content: firstUser?.content ?? null,
+      first_assistant_content: firstAssistant?.content ?? null,
+      last_content: last?.content ?? null,
+      last_leader: last?.leader_id ?? null,
+    };
+  });
+}
+
+/** A `vi.fn()` suitable for `client.rpc` that serves `list_conversations_enriched`. */
+export function makeEnrichedListRpc<T extends { id: string }>(
+  conversations: readonly T[],
+  messages: FixtureMessage[] = [],
+): Mock {
+  return vi.fn((name: string, args: Record<string, unknown> = {}) => {
+    if (name !== "list_conversations_enriched") {
+      return Promise.resolve({
+        data: null,
+        error: { message: `unexpected rpc: ${name}` },
+      });
+    }
+    const pRepo = args.p_repo_url as string | null | undefined;
+    const pWs = args.p_workspace_id as string | null | undefined;
+    const pArchive = (args.p_archive as string | undefined) ?? "active";
+    const pStatus = args.p_status as string | null | undefined;
+    const pDomain = args.p_domain as string | null | undefined;
+    const pLimit = args.p_limit as number | undefined;
+
+    let rows = conversations.filter((row) => {
+      const c = row as Record<string, unknown>;
+      // repo_url / workspace_id: only enforced when the fixture defines the
+      // field (undefined = "test didn't scope"; mirrors the old lenient mocks).
+      if (pRepo != null && c.repo_url !== undefined && (c.repo_url ?? null) !== pRepo) {
+        return false;
+      }
+      if (pWs != null && c.workspace_id !== undefined && (c.workspace_id ?? null) !== pWs) {
+        return false;
+      }
+      const archived = (c.archived_at ?? null) !== null;
+      if (pArchive === "archived" ? !archived : archived) return false;
+      if (pStatus != null && c.status !== pStatus) return false;
+      if (pDomain != null) {
+        if (pDomain === "general") {
+          if ((c.domain_leader ?? null) !== null) return false;
+        } else if (c.domain_leader !== pDomain) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    rows = rows.slice().sort((a, b) => {
+      const ca = a as Record<string, unknown>;
+      const cb = b as Record<string, unknown>;
+      const byActive = String(cb.last_active ?? "").localeCompare(String(ca.last_active ?? ""));
+      if (byActive !== 0) return byActive;
+      return String(cb.created_at ?? "").localeCompare(String(ca.created_at ?? ""));
+    });
+    if (pLimit != null) rows = rows.slice(0, pLimit);
+
+    return Promise.resolve({
+      data: enrichConversationFixtures(rows, messages),
+      error: null,
+    });
+  });
+}

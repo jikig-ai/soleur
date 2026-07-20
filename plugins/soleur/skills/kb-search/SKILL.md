@@ -114,7 +114,7 @@ kb-search: refusing to paraphrase query containing sensitive value-shape token. 
 **Cache lookup:**
 
 ```bash
-variants=$(bash plugins/soleur/skills/kb-search/scripts/kb-search-cache.sh lookup "$KEYWORD")
+variants=$(bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/kb-search/scripts/kb-search-cache.sh lookup "$KEYWORD")
 ```
 
 On hit (newline-separated variants, < 14 days old) skip variant generation and go straight to union execution. On miss (empty output) proceed.
@@ -126,7 +126,7 @@ On hit (newline-separated variants, < 14 days old) skip variant generation and g
 **Cache write:**
 
 ```bash
-bash plugins/soleur/skills/kb-search/scripts/kb-search-cache.sh append "$KEYWORD" "$v1" "$v2" "$v3"
+bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/kb-search/scripts/kb-search-cache.sh append "$KEYWORD" "$v1" "$v2" "$v3"
 ```
 
 **Union execution:** for each of the 4 strings (original `$KEYWORD` + 3 variants), run Phase 3's two-tier grep under its own per-tier 8+12 caps. The 4 per-variant ranked lists are then merged into a single flat hit-count rerank capped at 20 — per-tier identity does not survive the union (by design — union-by-hit-count is the new ranking signal), and 20 is the absolute ceiling on what kb-search returns.

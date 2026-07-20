@@ -66,8 +66,8 @@ describe("PII regex parity (AC8)", () => {
 // =============================================================================
 
 describe("Anthropic body constants (AC9)", () => {
-  it("model is claude-sonnet-4-6", () => {
-    expect(ANTHROPIC_MODEL).toBe("claude-sonnet-4-6");
+  it("model is claude-sonnet-5", () => {
+    expect(ANTHROPIC_MODEL).toBe("claude-sonnet-5");
   });
 
   it("max_tokens is 16384", () => {

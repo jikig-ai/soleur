@@ -8,14 +8,16 @@
 // (`https://github.com/<fullName>`) then normalized — the TS↔SQL
 // normalizeRepoUrl parity (test/repo-url-sql-parity.test.ts) is the sole
 // matching contract. Workspace path is derived directly from the workspace
-// id (`<WORKSPACES_ROOT>/<workspace_id>`); readiness is a filesystem-
-// existence check (no `users.workspace_status` dependency). kb_sync_history
-// rows are attributed to each workspace's owner.
+// id (`<WORKSPACES_ROOT>/<workspace_id>`); readiness gates on git work-tree
+// VALIDITY (`isValidGitWorkTree`, ADR-044 amendment 2026-06-29) — an INVALID or
+// ABSENT `.git` is re-cloned via `ensureWorkspaceRepoCloned`, not skipped (no
+// `users.workspace_status` dependency). kb_sync_history rows are attributed to
+// each workspace's owner.
 //
 // Coalescing primitive is Inngest CEL concurrency keyed on installation_id.
 // Failure mirroring uses `reportSilentFallback` with explicit `message:`.
 
-import { promises as fs } from "node:fs";
+import * as Sentry from "@sentry/nextjs";
 import { inngest } from "@/server/inngest/client";
 import {
   reportSilentFallback,
@@ -23,6 +25,14 @@ import {
   mirrorWarnWithDebounce,
 } from "@/server/observability";
 import { syncWorkspace } from "@/server/kb-route-helpers";
+import {
+  isReadyGitWorkTree,
+  evaluateAgentReadiness,
+  probeGitWorktreeShape,
+  isLstatValidKind,
+} from "@/server/git-worktree-validity";
+import { reportAgentReadinessSelfStop } from "@/server/repo-resolver-divergence";
+import { ensureWorkspaceRepoCloned } from "@/server/ensure-workspace-repo";
 import { normalizeRepoUrl } from "@/lib/repo-url";
 import { workspacePathForWorkspaceId } from "@/server/workspace-resolver";
 import {
@@ -98,15 +108,6 @@ function repoSlug(repoUrl: string): string {
 function isIgnoredReconcileRepo(repoUrl: string): boolean {
   const slug = repoSlug(repoUrl);
   return RECONCILE_IGNORED_REPO_SLUGS.some((s) => s === slug);
-}
-
-async function workspaceDirExists(path: string): Promise<boolean> {
-  try {
-    const st = await fs.stat(path);
-    return st.isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 export async function workspaceReconcileOnPushHandler({
@@ -230,9 +231,10 @@ export async function workspaceReconcileOnPushHandler({
   // breadcrumb became a per-push alert flood with zero signal. Record it at pino
   // `info` (Better Stack audit trail) so an operator can still pull "which
   // ignored repos still have live workspaces" on demand — but do NOT mirror to
-  // Sentry. Genuine reconcile failures (sync / skip-not-ready / resolve) still
-  // page via the reportSilentFallback sites. Mirrors the benign-skip info-log
-  // above (skip-no-workspace-match).
+  // Sentry. Genuine reconcile failures (sync / resolve, plus the inner
+  // ensure-workspace-repo mirrors on a reclone honest-block) still page via the
+  // reportSilentFallback sites. Mirrors the benign-skip info-log above
+  // (skip-no-workspace-match).
   if (isIgnoredReconcileRepo(targetRepoUrl)) {
     logger.info(
       {
@@ -255,14 +257,44 @@ export async function workspaceReconcileOnPushHandler({
       const { createServiceClient } = await import("@/lib/supabase/service");
       const service = createServiceClient();
 
-      // Owner for kb_sync_history attribution (the workspace's owner row).
-      const { data: ownerRow } = await service
+      // Owner for kb_sync_history attribution. #5733 — workspaces support N
+      // co-owners by design (supersedes #4520 single-owner-strict;
+      // `transfer_workspace_ownership` also opens a transient 2-owner window).
+      // The former `.maybeSingle()` ERRORED on ≥2 owner rows → ownerId=null → a
+      // FALSE "owner-less workspace reconciled" warn EVERY push (the operator's
+      // soleur workspace: 2 legitimate owners). Select ALL owner rows and pick
+      // the attribution owner deterministically: the solo self-row
+      // (user_id == ws.id) when present, else the earliest-created owner.
+      // `ownerId` is used ONLY for kb_sync attribution + the breadcrumb here, so
+      // any stable pick is sound. "owner-less" now means GENUINELY zero rows.
+      const { data: ownerRows, error: ownerErr } = await service
         .from("workspace_members")
-        .select("user_id")
+        .select("user_id, created_at")
         .eq("workspace_id", ws.id)
         .eq("role", "owner")
-        .maybeSingle();
-      const ownerId = (ownerRow as { user_id?: string } | null)?.user_id ?? null;
+        // `user_id` is the deterministic tie-break: two co-owners inserted in the
+        // same transaction share `created_at = now()`, so without it `owners[0]`
+        // is order-undefined (the team-workspace-without-self-row branch).
+        .order("created_at", { ascending: true })
+        .order("user_id", { ascending: true });
+      if (ownerErr) {
+        // A real probe error is NOT "owner-less" — never emit the drift warn on
+        // a transient read failure (cq-silent-fallback-must-mirror-to-sentry).
+        // Fall back to the workspace-keyed audit (ownerId stays null) and
+        // surface the error under its own op so it is queryable.
+        reportSilentFallback(ownerErr, {
+          feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
+          op: "owner-attribution-probe",
+          extra: { workspaceId: ws.id, installationId, deliveryId },
+          message:
+            "Owner-attribution read failed — reconciling via workspace-keyed audit",
+        });
+      }
+      const owners = (ownerRows as { user_id: string }[] | null) ?? [];
+      const ownerId =
+        owners.find((o) => o.user_id === ws.id)?.user_id ??
+        owners[0]?.user_id ??
+        null;
 
       // #4906 — an owner-less workspace is an invariant drift (every solo
       // workspace should carry a workspace_members(role='owner') canary row,
@@ -280,8 +312,25 @@ export async function workspaceReconcileOnPushHandler({
           ? appendKbSyncRow(ownerId, row)
           : appendKbSyncRowForWorkspace(service, ws.id, row);
 
-      if (!ownerId) {
-        // Per-workspace 5-min TTL on the Sentry mirror (mirrorWarnWithDebounce,
+      if (owners.length > 1) {
+        // ≥2 legitimate co-owners (multi-owner is BY DESIGN, #5733). Record the
+        // state with a distinct, non-paging info breadcrumb — NEVER the false
+        // "owner-less" warn the pre-fix `.maybeSingle()` error produced. This is
+        // the honest signal that distinguishes by-design multi-owner from drift.
+        Sentry.addBreadcrumb({
+          category: "workspace-reconcile-push",
+          message: "multiple-owners-reconcile",
+          level: "info",
+          data: {
+            op: "multiple-owners-reconcile",
+            workspaceId: ws.id,
+            ownerCount: owners.length,
+          },
+        });
+      }
+      if (!ownerId && !ownerErr) {
+        // GENUINELY zero owner rows (not a transient probe error). Per-workspace
+        // 5-min TTL on the Sentry mirror (mirrorWarnWithDebounce,
         // keyed on ws.id). A SYSTEMIC owner-canary regression (a provisioning
         // bug dropping owner rows for a whole cohort) would otherwise emit one
         // warn per owner-less workspace PER PUSH — the same per-push alert-flood
@@ -303,31 +352,126 @@ export async function workspaceReconcileOnPushHandler({
       }
 
       const workspacePath = workspacePathForWorkspaceId(ws.id);
+      // userId is for logging/breadcrumb ONLY — pseudonymized downstream. Owner-less
+      // workspaces (#5591) carry no canary row, so fall back to the workspace id.
+      const breadcrumbUserId = ownerId ?? ws.id;
 
-      // Readiness = filesystem existence (ADR-044, operator decision). A
-      // not-yet-provisioned workspace dir skips without touching git.
-      if (!(await workspaceDirExists(workspacePath))) {
-        reportSilentFallback(new Error("workspace dir missing"), {
-          feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
-          op: "skip-not-ready",
-          extra: { workspaceId: ws.id, installationId, deliveryId },
-          message: "Workspace dir not provisioned — skipping reconcile",
+      // Readiness = git work-tree VALIDITY, not mere dir existence (ADR-044 amendment
+      // 2026-06-29). A VALID .git takes the existing pull/reset sync path. An INVALID
+      // or ABSENT .git is re-cloned via the validity+corrupt-aware ensure path — the
+      // permanent-trap that a dir-existence-only readiness check could never recover.
+      // #5733 deliverable A — compute the shared host `rev-parse` confirm ONCE per
+      // event (AC8: one rev-parse spawn per reconcile invocation, single
+      // workspace). `evaluateAgentReadiness` runs the host confirm ONLY for a
+      // `dir-valid` shape and emits the self-stop internally on a confirmed
+      // `"not-a-worktree"` — the SAME shared helper the cold + warm gates use, so
+      // the emit + heal-route is structural (the cold-only-emit drift was the
+      // 26×-dark incident on THIS reconcile surface). A `dir-valid` `.git` the host
+      // rev-parse rejects is lstat-READY, so it would otherwise skip the heal
+      // branch entirely and take the sync path into a strand.
+      const agentReady = await evaluateAgentReadiness(workspacePath, {
+        userId: breadcrumbUserId,
+        activeWorkspaceId: ws.id,
+        connected: Boolean(targetRepoUrl),
+        dbReady: true,
+        // #5733 D2 — reconcile is PRE-heal: it re-clones an absent/dir-invalid
+        // `.git` one line below via `!isReadyGitWorkTree`. Emitting an absent
+        // self-stop here would be a pre-heal false-strand that pollutes the soak
+        // signal — so the gate returns "ready" (no emit) for absent/dir-invalid
+        // and this surface's net-new coverage stays the dir-valid-corrupt confirm.
+        phase: "pre-heal",
+      });
+      if (!isReadyGitWorkTree(workspacePath) || agentReady === "block") {
+        const outcome = await ensureWorkspaceRepoCloned({
+          userId: breadcrumbUserId,
+          workspacePath,
+          installationId, // number, from the push event
+          repoUrl: targetRepoUrl, // composed + normalized in scope above
         });
-        const skipAt = Date.now();
+
+        // Assert the INVARIANT, not the "ok" proxy: ensureWorkspaceRepoCloned returns
+        // "ok" for a benign skip (e.g. a repo_url that fails its github-https allowlist)
+        // WITHOUT having healed anything. Recovered requires BOTH lstat readiness AND
+        // the host rev-parse confirm (#5733): a populated-corrupt `dir-valid` that
+        // ensureWorkspaceRepoCloned no-op'd reads `isReadyGitWorkTree=true` but
+        // `agentReady` stays `"block"`, so it is correctly NOT recovered (the
+        // self-stop already fired inside evaluateAgentReadiness above).
+        const recovered =
+          outcome === "ok" &&
+          isReadyGitWorkTree(workspacePath) &&
+          agentReady === "ready";
+
+        // Best-effort transaction-trace context (task-mandated). NOTE: a breadcrumb is
+        // only transmitted when a captureException/Message fires on the same Sentry scope;
+        // this handler returns cleanly on both paths, so the DURABLE signals are the
+        // kb_sync_history row (below) + the inner ensure-workspace-repo Sentry mirrors —
+        // not this breadcrumb (observability-review P1). Do NOT add a captureException
+        // here (would double-page; ensureWorkspaceRepoCloned already mirrors failures).
+        Sentry.addBreadcrumb({
+          category: "workspace-reconcile-push",
+          message: "corrupt-worktree-reclone",
+          level: recovered ? "info" : "warning",
+          data: { op: "corrupt-worktree-reclone", recovered, workspaceId: ws.id },
+        });
+
+        const at = Date.now();
+        if (!recovered) {
+          // #5733 — un-blind the RECONCILE benign-skip (the 26×-dark surface): a
+          // clone that returned "ok" WITHOUT healing (repo_url failed the
+          // github-https allowlist, EACCES, gitdir-FILE) leaves the workspace
+          // not-ready but previously wrote ONLY a kb_sync_history row — no Sentry
+          // event, so the strand was unqueryable on the path that actually fired.
+          // Emit the agent-readiness self-stop from THIS gate too. Deduped by
+          // (userId, workspace, gitKind, source): a `dir-valid` corruption already
+          // emitted inside evaluateAgentReadiness above (same gitKind+source) →
+          // collapsed; a non-dir-valid benign-skip (absent / escaping pointer) has
+          // a distinct gitKind → emits here. `gitRevParseValid` omitted (no host
+          // confirm ran for these shapes). NEVER the subprocess stderr/raw path.
+          const unrecoveredShape = probeGitWorktreeShape(workspacePath);
+          reportAgentReadinessSelfStop({
+            userId: breadcrumbUserId,
+            activeWorkspaceId: ws.id,
+            gitValid: isLstatValidKind(unrecoveredShape.kind),
+            gitKind: unrecoveredShape.kind,
+            gitdirEscapesWorkspace: unrecoveredShape.gitdirEscapesWorkspace,
+            source: "host-pre-heal",
+          });
+          // Honest-block (populated-broken / EACCES / gitdir-FILE), clone failure, or a
+          // benign skip that did not heal. ensureWorkspaceRepoCloned already mirrored the
+          // genuine failures to Sentry via reportSilentFallback (op: corrupt-worktree-block
+          // / corrupt-worktree-rm / clone) — do NOT double-page here. Record the audit row
+          // so the workspace stays observably not-ready.
+          await writeAuditRow({
+            at: new Date(at).toISOString(),
+            trigger: "webhook_push",
+            sha_before: beforeSha,
+            sha_after: headSha,
+            ok: false,
+            error_class: ERROR_CLASS_WORKSPACE_NOT_READY,
+            push_received_at: pushReceivedAt,
+            sync_completed_at: at,
+            workspace_id: ws.id,
+          });
+          return { synced: false };
+        }
+
+        // Re-cloned successfully: the shallow clone is already at origin HEAD, so a
+        // subsequent pull would be redundant. Record an OK audit row marked recovered.
         await writeAuditRow({
-          at: new Date(skipAt).toISOString(),
+          at: new Date(at).toISOString(),
           trigger: "webhook_push",
           sha_before: beforeSha,
           sha_after: headSha,
-          ok: false,
-          error_class: ERROR_CLASS_WORKSPACE_NOT_READY,
+          ok: true,
+          recovered: true,
           push_received_at: pushReceivedAt,
-          sync_completed_at: skipAt,
-          workspace_id: ws.id, // #4728 — discriminator (id in scope from fan-out loop)
+          sync_completed_at: at,
+          workspace_id: ws.id,
         });
-        return { synced: false };
+        return { synced: true };
       }
 
+      // VALID .git — preserve the existing pull/reset sync path unchanged.
       const syncResult = await syncWorkspace(installationId, workspacePath, logger, {
         userId: ownerId ?? ws.id,
         op: "push",
@@ -380,9 +524,11 @@ export async function workspaceReconcileOnPushHandler({
   if (synced === 0) {
     // Intentionally silent: every path that lands here already emitted its own
     // mirror inside the fan-out loop (reportSilentFallback op="sync" on sync
-    // failure, op="skip-not-ready" on a missing workspace dir). An aggregate
-    // mirror here would double-report the same incident. (cq-silent-fallback-
-    // must-mirror-to-sentry is satisfied by the per-workspace sites.)
+    // failure; the inner ensure-workspace-repo mirrors — corrupt-worktree-block
+    // / clone — on a reclone honest-block / clone-fail). The not-recovered
+    // reclone path adds only a breadcrumb (no double-page). An aggregate mirror
+    // here would double-report the same incident. (cq-silent-fallback-must-
+    // mirror-to-sentry is satisfied by the per-workspace sites.)
     return { ok: false, reason: "no-workspace-synced" };
   }
   return { ok: true, synced };

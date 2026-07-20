@@ -16,6 +16,7 @@ Per ADR-030 the Inngest server runs as a single-host SQLite-backed durable trigg
 | Unpause heartbeat after first ping | [§ Unpause heartbeat](#unpause-heartbeat) |
 | Cron bug-fixer manual trigger | [§ Cron bug-fixer](#cron-bug-fixer) |
 | Fire any cron on demand | [§ On-demand cron trigger (HTTP)](#on-demand-cron-trigger-http--primary) |
+| Dedicated-host cutover (#6178) | [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178) |
 
 ## On-demand cron trigger (HTTP — PRIMARY)
 
@@ -104,7 +105,8 @@ The external watchdog (`.github/workflows/scheduled-inngest-health.yml`) runs a
 pool-utilization probe every 15 min: it reads `pg_stat_activity` on the dedicated
 inngest Supabase project (ref `pigsfuxruiopinouvjwy`) via the Management API and
 files a `[ci/inngest-pool]` issue + Sentry `error` when **inngest-attributable**
-client connections cross ~80% of inngest's CLIENT cap (10, `--postgres-max-open-conns`)
+client connections cross ~80% of inngest's worst-case TOTAL footprint
+(`INNGEST_CLIENT_CAP` = P × per-pool cap 5 ≤ 20; #6258, ADR-105)
 — `pool_pressure`, the leading indicator — or `EMAXCONNSESSION` fires (`pool_exhausted`,
 the cliff). It counts ONLY inngest's own connections (role `postgres`, minus the
 pooler's Supavisor warm connections + the probe), NOT total `pg_stat_activity` (which
@@ -129,8 +131,40 @@ inngest-server for a `[ci/inngest-pool]` alert.** Triage (no-SSH first):
      -H "Authorization: Bearer $SUPA" -H 'Content-Type: application/json' \
      -d '{"query":"select pg_terminate_backend(pid) from pg_stat_activity where state = '\''idle'\'' and state_change < now() - interval '\''10 minutes'\''"}'
    ```
-   The durable fix is already live: inngest-server runs `--postgres-max-open-conns 10` (#5559, `inngest-bootstrap.sh:354`). The probe's leading indicator tracks THIS client cap (`INNGEST_CLIENT_CAP=10` in the workflow), not the pooler `default_pool_size` — so a `pool_pressure` alert means inngest's OWN connections approach 10 (a stuck/looping function holding pooled connections), independent of the separate #5562 `default_pool_size` 30→15 revert (see `apps/web-platform/infra/inngest.tf`).
+   The durable fix (#6258, ADR-105): inngest-server runs `--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1` (idle-time in MINUTES). `--postgres-max-open-conns` is PER-POOL, not total — inngest opens ~P separate Postgres pools (queue/state/history/api), so worst-case total = P × 5 ≤ 20; the idle-conns cap + 1-min idle drain release pinned Supavisor sessions so cutover-probe scans cannot ratchet the pool. The probe's leading indicator tracks this worst-case total (`INNGEST_CLIENT_CAP=20` in the workflow), not the pooler `default_pool_size` — so a `pool_pressure` alert means inngest's OWN connections approach the total ceiling (a stuck/looping function holding pooled connections, or more pools than expected). `default_pool_size` stays 30 — the #5562 30→15 revert is SUPERSEDED (its premise was falsified by the per-pool model; a 15-slot upstream would worsen exhaustion; see `apps/web-platform/infra/inngest.tf` + `decision-challenges.md`).
 4. **`pool_probe_unavailable`** (401/403/non-JSON) is a *soft* mode — the probe itself is degraded, not the pool. Check the printed response body in the run log; a Supabase Management-API 401 is often a validation/scope signal, not pure auth (verify the PAT in Doppler `prd` and the `SUPABASE_ACCESS_TOKEN` GH secret).
+
+### Cutover pre-flight-hang triage (`op=inventory` / `op=verify` `HTTP 000`) — #6258, ADR-106
+
+An `op=inventory` / `op=verify` hook that returns **`HTTP 000` (empty body)** is a pre-flight scan
+that ran past its budget — a distinct failure from the `[ci/inngest-pool]` `EMAXCONNSESSION` (500)
+two-writer topology above. Since ADR-106 the scans are bounded (wall-clock deadline + page ceiling)
+and **abandon-safe** (on timeout they emit a LOUD marker and `exit 1`, releasing the pool instead of
+orphaning the scan). Triage off-box (no SSH):
+
+1. **Query the in-surface marker** (the pre-flight path is now observable):
+   ```
+   scripts/betterstack-query.sh --grep 'SOLEUR_INNGEST_PREFLIGHT' --since 1h
+   ```
+   Read the discriminator fields on the `START` / `TIMEOUT` line for the run:
+   - **No `SOLEUR_INNGEST_PREFLIGHT_START` for the run** → transport/host-down (the hook never
+     executed) — check the Cloudflare tunnel + `webhook.service`, not the scan.
+   - `TIMEOUT reason=deadline` with a progressing `pages=N`, `last_curl_exit=0` → a legitimately
+     slow scan hit the wall-clock budget. Raise `PREFLIGHT_DEADLINE_S` (and the outer curl
+     `--max-time`, keeping the sum bound) or the `INNGEST_MAX_PAGES` ceiling; do NOT narrow the window.
+   - `TIMEOUT` with `last_curl_exit=28` / `pages_timed_out>0` → a **pool-pressure STALL** (the
+     `HTTP 000` shape), NOT a slow scan — triage as `[ci/inngest-pool]` above (the durable fix is
+     #6178, gated by #6230). `reason=gql_error` with `last_curl_exit=28` is the same stall surfacing
+     via the `.data` guard.
+2. **A fast LOUD error ≠ a hang.** Since ADR-106 the correct behaviour on an over-budget scan is a
+   quick `exit 1` → webhook **non-200** with a `SOLEUR_*_TIMEOUT` cause in the run log's `::error::`.
+   That is the fix working (it releases the pool), not a regression — re-run; the bounded transport
+   retry (2 attempts) absorbs a transient two-writer 500.
+3. **`op=verify` verdict ≠ transport-200.** A green op=verify sub-probe **transport** (no 000/500 on
+   registry-probe / doublefire) is the ADR-106 success signal. The op=verify **JOB** still
+   legitimately halts at its `registry_empty` precondition on the dark pre-cutover host
+   (`cutover-inngest.yml:628-631`) — that is a verdict, not a transport hang, and a green op=verify
+   job is a post-#6178 concern. Do NOT read a `registry_empty` halt as a pre-flight hang.
 
 ### Last-resort (host login)
 
@@ -142,11 +176,59 @@ ssh root@<host> 'journalctl -u inngest-server.service -n 50 | grep -i "conn\|poo
 A host-level restart is the WRONG lever here (it worsens `EMAXCONNSESSION`); the
 host login is for log inspection only, not remediation.
 
+## External watchdog: functions-query degraded + restart `lock_contention` — #6407
+
+Two soft/benign states the external inngest health watchdog handles WITHOUT paging or
+churning a restart. Both are no-SSH — read Better Stack + the GitHub issue, never the host.
+
+### `[ci/inngest-functions-degraded]` — `/v0/gql functions` transiently degraded (SOFT, NO restart)
+
+**What it means.** The watchdog's cheap `/v0/gql functions` liveness read transiently failed
+(a curl transport blip → the `__FETCH_FAILED__` envelope), but the on-host probe corroborated
+the SAME loopback server's `/health` and got **HTTP 200** — inngest-server is UP and processing
+events; only the functions read blipped. The classifier maps this to the soft mode
+`functions_query_degraded`: **NO restart is dispatched, NO `[ci/inngest-down]` P1 is filed, and
+the Sentry heartbeat stays `ok`** (no page). This is the #6407 false-positive class (the FATAL
+sentinel used to fire `inngest_down` → restart even though inngest was healthy).
+
+**Expected resolution.** Self-heals on the next `*/15` tick (the issue auto-closes on recovery).
+
+**Persistence-escalation ceiling.** If the degraded state PERSISTS for ≥ ~45 min (3 `*/15`
+cycles — the `/health`-ok-but-functions-permanently-wedged residual), the watchdog reclassifies
+the verdict to `inngest_down`: it dispatches a restart AND flips the heartbeat to `error` (page).
+First occurrence is soft; a sustained one is never masked forever.
+
+**How to see it (no-SSH).** Query Better Stack for the verdict marker (tag `inngest-inventory`):
+```
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_INNGEST_LIVENESS_VERDICT
+```
+A `mode=degraded health_code=200` line confirms inngest is serving (soft); a `mode=down
+health_code=<000|5xx>` line is a genuine down (the classifier routes it to `inngest_down` →
+restart). No SSH — the marker rides Vector Source 4 → Better Stack Logs source 2457081. For a
+second no-SSH signal, a GET of `https://deploy.soleur.ai/hooks/deploy-status` (HMAC + CF-Access)
+shows `services.inngest_server`.
+
+### Restart `reason=lock_contention` is BENIGN (not a restart failure)
+
+When the watchdog dispatches `restart-inngest-server.yml` and the restart's verify poll reads
+`reason=lock_contention` for `component=inngest`, it means **another deploy/restart already
+holds the `ci-deploy.sh` critical section** (FD-200 `flock -n 200` loser) and will bring inngest
+current — benign, not a failure. Per ADR-079 amendment #5960 (applied to the restart poll in
+#6407), the poll treats it as NON-TERMINAL: it keeps polling for a fresh `component=inngest`
+terminal success, and at budget expiry does a FINAL STATE re-read (`/hooks/deploy-status` for a
+fresh inngest success, or `/hooks/inngest-liveness` healthy) before exiting benign — an
+unconfirmed state fails loud (`UNVERIFIED`, exit 1). Marker (tag `ci-deploy`):
+```
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_INNGEST_RESTART_LOCK_CONTENTION
+```
+
 ## Key rotation
 
 Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_id` resources.
 
 > **Secret delivery (#5560).** inngest-server reads `INNGEST_POSTGRES_URI`, `INNGEST_REDIS_URI`, `INNGEST_SIGNING_KEY`, and `INNGEST_EVENT_KEY` from the doppler-run **environment** (owner-only `/proc/<pid>/environ`), never the `inngest start` argv (world-readable `/proc/<pid>/cmdline`). A rotated value loads on the next inngest-server restart/redeploy **without** being re-exposed on argv. **Ordering matters:** when rotating because a value leaked, deploy the env-delivery build FIRST (verify `ps -eo args | grep inngest` shows no secret), THEN rotate — rotating while an old argv-form image is still running would re-leak the new value immediately. After rotation, NEVER roll back to a pre-#5560 (argv-form) image.
+
+<!-- lint-infra-ignore start -->
 
 **⚠ The ONLY supported rotation path is the `terraform taint` flow below.** Do NOT rotate via the Doppler UI — every `doppler_secret` carries `lifecycle.ignore_changes = [value]`, so out-of-band Doppler-side changes are INVISIBLE to subsequent `terraform plan` runs. The provider skips the value read-back when `ignore_changes` is set; you'd get silent dashboard ↔ tfstate divergence. If you've accidentally rotated via the UI, run `terraform apply -replace=doppler_secret.<key>` to force TF to re-converge.
 
@@ -167,6 +249,8 @@ Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_
    ```
    ssh root@<host> 'systemctl restart soleur-web-platform inngest-server.service'
    ```
+
+<!-- lint-infra-ignore end -->
 
 ## CLI version bump
 
@@ -260,6 +344,8 @@ curl -X PATCH https://uptime.betterstack.com/api/v2/heartbeats/460830 \
 unset TOKEN
 ```
 
+<!-- lint-infra-ignore start -->
+
 The `lifecycle { ignore_changes = [paused] }` on `betteruptime_heartbeat.inngest_prd` ensures future `terraform apply` runs do NOT revert the unpause regardless of which option you used.
 
 Confirm pings are flowing:
@@ -270,6 +356,8 @@ curl -s https://uptime.betterstack.com/api/v2/heartbeats/460830 \
   | jq '.data.attributes | {status, last_ping_at}'
 unset TOKEN
 ```
+
+<!-- lint-infra-ignore end -->
 
 ## SQLite event-store retention
 
@@ -479,6 +567,359 @@ setting).
    reminders AND could double-fire ones Postgres recorded → **forward-fix only**. On a committed
    cutover, wipe the old `/var/lib/inngest` SQLite so an accidental SQLite boot cannot replay dead
    reminders.
+
+## Dedicated-host cutover (Phase 2, `op=execute` gated sequence) — Ref #6178
+
+> **This is the ADR-100 dedicated-host extraction cutover** (move Inngest off the
+> co-located web host onto the singleton `hcloud_server.inngest` at `10.0.1.40`),
+> distinct from the same-host durable-backend cutover above. It flips the dedicated
+> host from its **dark, non-prod Postgres** backend to **prod Postgres**, gated behind a
+> Redis `FLUSHALL` + `DBSIZE==0` assertion (ADR-100 Decision 6/6a). **Every operator
+> action here is a Doppler write, a `workflow_dispatch`, or a Better Stack read — there is
+> NO `ssh`/host-shell step** (`hr-no-ssh-fallback-in-runbooks`; the dedicated host is
+> deny-all-public). Only counts + `reminder_id`s / `function_id`s ever surface in a run
+> log — never reminder bodies, actors, or connection strings.
+
+**Precondition (do this DURING the dark window, well before the maintenance window):** the
+flip oneshot (`inngest-cutover-flip.sh` + `.service`/`.timer` + `inngest-server-flip-guard.sh`)
+must already be baked into the OCI image and installed on the dark host. Installing it is a
+cloud-init/OCI change that **force-replaces the singleton** — zero prod-downtime by
+construction (the host is on the non-prod dark backend serving zero prod crons; the AOF
+Redis volume survives the replace). Never run that force-replace inside the maintenance
+window. The poll timer ships **enabled and stays enabled for the host's whole life** — the
+FSM flag (`INNGEST_CUTOVER_FLIP`) is the sole gate, so arming is pure Doppler writes with no
+`systemctl` step.
+
+### Op order (the gated sequence)
+
+`op=execute` → **`op=arm` (no-SSH flip arm)** → **operator app-repoint (2.4)** → `op=rearm` →
+`op=verify`. `op=execute` automates the web-host-expressible spine (2.0 → 2.2) and then
+**withholds a SEAM**. As of #6369 the flip arm (2.2b/2.3) is **no longer an operator Doppler
+write** — it is the no-SSH **`op=arm`** dispatch (a prod-write behind explicit dispatch + the
+`inngest-cutover` GitHub Environment required-reviewer gate, which satisfies
+`hr-menu-option-ack-not-prod-write-auth`: the dispatch + approval IS the ack). The remaining true
+operator seams are **2.2a** (web-2 freeze/recreate lifecycle) and **2.4** (app-repoint, a code
+merge) — both printed in the SEAM as an out-of-band hand-off.
+
+> **`op=quiesce-web` (#6178) — the no-SSH remediation when the 2.2 gate reports STILL
+> RUNNING.** The `op=execute` 2.2 gate only CHECKS (inventory non-200 = quiesced); it has no
+> path to actually STOP the old co-located scheduler. When the gate fails with
+> `2.2 QUIESCE HARD GATE FAILED / STILL RUNNING`, run `op=quiesce-web` (below) to
+> stop+disable inngest across the host-set over the private net (HMAC + CF-Access, **no
+> SSH**), then re-run `op=execute`. Operators have no SSH — this replaces the old operator
+> host-shell stop-and-disable step (`hr-no-ssh-fallback-in-runbooks`). op=quiesce-web POLLS
+> `/hooks/deploy-status` for each host's synchronous `quiesced` verdict (not-serving AND
+> unit-inactive AND not-enabled) — it does NOT immediate-probe (the unit's
+> `TimeoutStopSec=180` means the async stop can lag the 202). Its own failure verdicts each
+> print a no-SSH forward action: `inngest_still_serving`/`inngest_still_enabled` (persistent
+> = the unit is being RESURRECTED → pull `reason=` from `/hooks/deploy-status` + Better Stack
+> `logger -t ci-deploy` and investigate what restarts/re-enables it — do **not** SSH);
+> `quiesced_peer_fanout_unaccepted` (a peer 202 was not accepted → check the peer host + the
+> web→web:9000 firewall + re-dispatch); UNKNOWN/000 (webhook unreachable → check
+> CF-Access/HMAC + re-dispatch). NB the two "quiesce" meanings differ:
+> `INNGEST_CUTOVER_QUIESCE` (Doppler arming-quiesce, blocks new reminders into the old
+> SQLite — the same-host cutover above) vs `op=quiesce-web` (stop-and-disable the scheduler
+> **process**).
+>
+> ```bash
+> gh workflow run cutover-inngest.yml --field op=quiesce-web   # no-SSH stop+disable across the host-set; poll deploy-status for reason=quiesced
+> ```
+
+> **Pre-flight scans are bounded + observable (#6258, ADR-106).** The `op=inventory` /
+> `op=verify` sub-probe scans (`inngest-inventory`, `inngest-registry-probe`,
+> `inngest-doublefire-probe`) now enforce a wall-clock deadline + page ceiling and are
+> abandon-safe (on timeout they emit `SOLEUR_INNGEST_PREFLIGHT_TIMEOUT` and `exit 1` →
+> webhook non-200, releasing the pool). If a pre-flight op returns `HTTP 000`/`500`, use the
+> **[Cutover pre-flight-hang triage](#cutover-pre-flight-hang-triage-opinventory--opverify-http-000--6258-adr-106)**
+> above — a fast LOUD `SOLEUR_*_TIMEOUT` error is the fix working, NOT a hang, and an
+> `op=verify` halt at its `registry_empty` precondition is a legitimate verdict on the dark
+> pre-cutover host, NOT a transport failure.
+
+1. **`op=execute`** (pre-flip orchestrator — no prod-write):
+   ```bash
+   gh workflow run cutover-inngest.yml --field op=execute
+   ```
+   It runs: **2.0** empty-registry pre-flight (aborts if the dark registry is non-empty — see
+   remediation below); **2.1** capture of still-armed reminders (records persist on-host;
+   `Σcaptured` + `reminder_id`s only in the log); **2.2** quiesce followed by a **QUIESCE HARD
+   GATE** that re-inventories the **LB-reachable host** and **fails loud + withholds the SEAM**
+   if inngest still serves there. If the gate fails (`STILL RUNNING`), run **`op=quiesce-web`**
+   (the no-SSH stop+disable across the host-set — see the op-order note above) and re-run
+   `op=execute`; the gate is a CHECK, `op=quiesce-web` is the ACT. When the gate passes it
+   prints the SEAM with the exact operator steps below, then exits 0. Read the SEAM from the
+   run log:
+   ```bash
+   gh run view <op=execute run id> --log | grep -E '::notice::|::error::|::warning::'
+   ```
+
+   > **DI-C3 LIMITATION — web-2 is NOT auto-verified (tracked #6227).** Both 2.1
+   > capture and the 2.2 gate reach inngest via a web-host webhook that resolves over the **load
+   > balancer** to `127.0.0.1:8288` on **whichever host the LB routed to** — there is no
+   > host-targeting mechanism today (no firewall rule for web→web:8288 + no host-targeting
+   > inventory/capture hook; that per-host fan-out infra is DEFERRED, see the tracking issue).
+   > So `op=execute` positively confirms only the **LB-reachable** host. The **weight-0 warm-
+   > standby web-2 (10.0.1.11)** self-arms oneshots into its **own** Redis independent of LB
+   > weight, and is **neither captured nor quiesce-verified** by CI. **Step 1a below (web-2
+   > quiesce) is MANDATORY, not advisory** — skipping it can (a) silently drop a reminder that
+   > web-2 self-armed into its local Redis, and (b) leave a surviving web-2 scheduler
+   > double-firing against prod Postgres that `op=verify` cannot detect (it reads only the
+   > dedicated host's runs).
+
+> **SUPERSEDED (#6538, 2026-07-17): web-2 was retired and destroyed; `var.web_hosts` is now
+> web-1 only.** There is no warm-standby scheduler left to self-arm reminders or double-fire, so
+> step 1a and the DI-C3 limitation above are **historical** — the cutover now runs against a
+> single-host web set (web-1, `10.0.1.10`), which `op=execute` fully captures + quiesce-verifies.
+> Skip 1a unless a second self-arming web host is ever re-provisioned before the cutover. (#6230
+> — the web-2 quiesce action-required — was closed as obviated by this retirement.)
+
+1a. **[HISTORICAL — web-2 retired #6538] Quiesce web-2 (was MANDATORY — DI-C3, before arming the flip).** `op=quiesce-web` (when run)
+   now stop+disables web-2's SCHEDULER too (an ACT over the private net — a real improvement
+   over operator-only web-2 handling), **but the freeze/recreate lifecycle STILL REMAINS
+   MANDATORY**: CI cannot VERIFY web-2 (LB-scoped) AND web-2's local reminders were never
+   captured (2.1 capture is also LB-scoped) — a fan-out stop does not capture/re-arm them, and
+   web-2 self-arms oneshots into its OWN Redis independent of LB weight. So do **not** read a
+   green `op=quiesce-web` as "web-2 handled." Recreate web-2 per the plan's **web-2
+   freeze/recreate lifecycle** (§Bounded-outage / Downtime): take web-2 **out of the warm-standby
+   rotation and recreate it onto the post-cutover config** so no surviving web-2 scheduler
+   self-arms a reminder into its local Redis. This is a lifecycle action (freeze → recreate),
+   **not** an `ssh`/host-shell step (`hr-no-ssh-fallback-in-runbooks`). Do **not** proceed to
+   step 2 until web-2 is recreated. Tracks #6227 (real per-host web→web fan-out to auto-verify
+   web-2).
+
+2. **Arm the flip (2.2b/2.3) — dispatch the no-SSH `op=arm` verb (#6369).** This REPLACES the
+   former three manual Doppler writes. `op=arm` performs all three writes on
+   **`soleur-inngest/prd`** itself and confirms the on-host FSM reached `done` via Better Stack,
+   with **no secret value ever echoed** (AC-NOBODY):
+   ```bash
+   gh workflow run cutover-inngest.yml --field op=arm
+   ```
+   Then **approve the `inngest-cutover` GitHub Environment required-reviewer gate** on the run —
+   that approval IS the prod-write ack (`hr-menu-option-ack-not-prod-write-auth`; the dispatch +
+   approval replace the old Doppler-console write). What `op=arm` does, in order:
+   - **G1 pre-write FSM-state guard (DI-C2):** refuses to arm over a non-safe
+     `INNGEST_CUTOVER_FLIP` state (armed/flipping/flushed/done) — a second arm would re-`FLUSHALL`
+     the now-PROD Redis and wipe the live cron queue.
+   - **G2 read-through sources (ADR-100 6b):** reads `INNGEST_POSTGRES_URI` +
+     `INNGEST_HEARTBEAT_URL` **from `prd_terraform`** via the existing read-only `DOPPLER_TOKEN`
+     (the canonical prod values already live there — **no operator seed**), masking each value.
+   - **G3 positive prod-URI assertion (DI-C3):** asserts the value differs from the current dark
+     `soleur-inngest/prd` URI, uses the `:5432` session pooler (never `:6543`), and targets the
+     prod host — all value-silent.
+   - **G4/G5 writes:** `INNGEST_POSTGRES_URI` → `INNGEST_HEARTBEAT_URL` → `INNGEST_CUTOVER_FLIP`
+     set to `armed` (last), each via **stdin** (never argv), exit-gated. The enabled 30s poll
+     timer then drives the forward FSM **stop → `FLUSHALL` → assert `DBSIZE==0` → start → `done`**.
+   - **G6 confirm:** polls Better Stack for the `logger -t inngest-cutover-flip` line, time-bounded
+     to the arm moment (so a stale prior terminal line cannot false-succeed), requiring `"flag":"done"`
+     / `"exit_code":0` (the FSM state lives in the `flag` field; `reason` is a cause string like
+     `flip-complete`); it FAILS LOUD on `aborted`/`rolled-back`/timeout (**do NOT proceed to 2.4**
+     in that case — see aborted-state recovery below).
+
+   > **No operator secret-seed (#6369 / ADR-100 Decision 6b).** The prod `INNGEST_POSTGRES_URI`
+   > already lives in `prd_terraform` (canonical, `:5432`, distinct from the dark value), so op=arm
+   > reads it **read-through** — there is **no `INNGEST_POSTGRES_URI_PROD` seed and no pre-window
+   > human write**. The only new credential is the TF-provisioned read/write token
+   > (`doppler_service_token.inngest_arm_write`) published as the `inngest-cutover` **environment**
+   > secret `DOPPLER_TOKEN_INNGEST_ARM` (required-reviewer gated).
+
+3. **Independent confirm / troubleshooting (optional — op=arm already gates on this).** op=arm
+   only exits 0 after Better Stack shows the FSM `done`. To re-read the line yourself
+   (`hr-no-dashboard-eyeball-pull-data-yourself`), or if op=arm failed loud at G6:
+   ```bash
+   doppler run -p soleur -c prd_terraform -- \
+     scripts/betterstack-query.sh --since 30m --grep inngest-cutover-flip --raw-only --limit 20
+   ```
+   A clean flip surfaces a `"flag":"done"` line (with `"reason":"flip-complete"`) within a single 30s poll of arming. A
+   `"reason":"dbsize-nonzero"` line means the DBSIZE gate tripped; a `"reason":"unexpected-exit(...)"`
+   line means a flag-write/systemctl failure drove the flag to terminal `aborted` (the ERR-trap
+   loud-fail) → either way see **aborted-state recovery** below. Do **NOT** `ssh`/`cat` the
+   deny-all-public host to read state — `cat-inngest-cutover-state.sh` exists on-host as a **debug
+   aid only**, never the operator gate. (These tags are on the `vector.toml` Source 4 allowlist —
+   see the `vector-pii-scrub.test.sh` drift-guard — so they are guaranteed to ship off-box.)
+
+3b. **Post-cutover: revoke the arm-write token (#6369, security F4/D6 — after AC17).** Once
+   `op=verify` confirms exactly-once on the dedicated host, `DOPPLER_TOKEN_INNGEST_ARM` is a
+   **standing read+write handle to the now-armed prod `INNGEST_POSTGRES_URI`** on
+   `soleur-inngest/prd`. Rotate + revoke it (no-SSH); there is **no seed to delete** (reads are
+   read-through):
+   ```bash
+   # (a) mint a fresh key + orphan the old one (propagates to the env secret in the same apply):
+   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+     terraform -chdir=apps/web-platform/infra apply -replace=doppler_service_token.inngest_arm_write
+   # (b) revoke the orphaned key so no standing prod-DSN read handle survives:
+   doppler configs tokens revoke --project soleur-inngest --config prd --slug <orphaned-token-slug> --yes
+   ```
+   The next per-merge apply keeps a fresh `inngest-cutover` env secret available for a future
+   cutover; the required-reviewer gate means it cannot be used without an approved dispatch.
+
+4. **App-repoint (2.4).** Merge the `ci-deploy.sh` `INNGEST_BASE_URL` → `http://10.0.1.40:8288`
+   change (both the canary and prod sites) and redeploy the web app so the functions re-sync
+   (register) onto the dedicated host. `op=rearm`/`op=verify` precondition-check that this
+   landed (registry-non-empty).
+
+5. **`op=rearm`** (re-arm the captured reminders after the flip):
+   ```bash
+   gh workflow run cutover-inngest.yml --field op=rearm
+   ```
+   It precondition-checks 2.4 (registry non-empty), consumes the on-host capture, and
+   reconciles `Σcaptured == rearmed`; a delta **fails loud** with the missing `reminder_id`s and
+   offers a retry (in-window ticks are not auto-backfilled).
+
+6. **`op=verify`** (exactly-once):
+   ```bash
+   gh workflow run cutover-inngest.yml --field op=verify
+   ```
+   It reaches the dedicated GQL over the private net via `/hooks/inngest-doublefire-probe`
+   (P1-12 — the runner cannot curl `10.0.1.40` directly), buckets every run by
+   `(functionID, floor(startedAt / cron_period))`, and fails if any bucket has >1 run
+   (double-fire). It also auto-emits the missed-tick `soleur:trigger-cron` list for ticks that
+   fell in the quiesce→register gap (P2-16). Re-fire that list via `soleur:trigger-cron`.
+
+   > **`op=verify` caveats — read before trusting the verdict:**
+   > - **NOT a web-2 double-fire detector (P2-a / DI-C3).** The doublefire-probe reads **only the
+   >   dedicated host's** (`10.0.1.40`) run history. A surviving weight-0 web-2 scheduler fires
+   >   against prod Postgres via its **own loopback backend PRE-repoint**, whose runs never appear
+   >   on the dedicated host — so `op=verify` cannot see a web-2 double-fire. The **operator's
+   >   mandatory web-2 quiesce (step 1a)** is the control; `op=verify` does not substitute for it.
+   > - **Single global `CRON_PERIOD` (P2-c).** One `CUTOVER_CRON_PERIOD_SECONDS` (default 3600)
+   >   buckets **every** function. The exactly-once verdict is sound **only if every registered
+   >   cron period ≥ `CRON_PERIOD` and hour-aligned**; a cron firing faster than the period yields
+   >   >1 run/bucket (false-positive, blocks verify — safe) or a boundary-straddling double-fire
+   >   reads clean (false-negative — unsafe). If any cron is sub-hourly, re-run with
+   >   `CUTOVER_CRON_PERIOD_SECONDS` set to the **shortest** registered cron period.
+   > - **Non-empty registry ≠ fully synced (P3-c).** The precondition only proves the re-sync
+   >   **started**. Set `CUTOVER_REGISTRY_BASELINE` to the pre-cutover `op=inventory` `functions`
+   >   count so `op=rearm`/`op=verify` enforce `function_count ≥ baseline` (a half-sync otherwise
+   >   passes); without it, confirm the count matches the pre-cutover inventory manually.
+
+### 2.0 registry-non-empty remediation (P1-6)
+
+If `op=execute` aborts at 2.0 with `registry-probe: dark registry NON-empty`, the dark host has
+functions registered against it — flipping now would carry stray state onto prod Postgres. To
+empty the dark registry and re-run (all no-SSH):
+1. Confirm `INNGEST_POSTGRES_URI` on `soleur-inngest/prd` still points at the **non-prod dark**
+   backend (it must NOT be the prod URI yet — that is only written at step 2 above).
+2. Stop whatever dev/test backend is re-syncing functions into the dark server (typically a
+   stray `--sdk-url` pointing at the dark host), so nothing re-registers after you clear it.
+3. Clear the dark registry (re-provision the dark host via the
+   `apply_target=inngest-host-replace` dispatch, which force-replaces onto the empty dark
+   backend), then re-dispatch `op=execute`. The 2.0 probe must report `registry_empty:true`
+   before the SEAM is reachable.
+
+### nftables web-host allowlist parity (#6608)
+
+`inngest-host.tf` `local.web_host_private_ips` is rendered into the dedicated host's nftables
+`ip saddr { … }` allowlist for the `:8288`/`:8289` control API (SEC-H2). It must equal the live
+web-host roster (`var.web_hosts` `private_ip` set). web-2 (`.11`) was retired 2026-07-17 (#6538),
+so the roster is web-1 (`10.0.1.10`) only; the literal was corrected to match (#6608) and is now
+**drift-guarded** by `inngest-host.test.sh` §6b (the allowlist IP set must byte-equal the
+`var.web_hosts` private_ip set — the edge to `var.web_hosts` the roster previously lacked, so a
+future roster change red-lines CI until the allowlist follows).
+
+**Apply path — the literal is baked into `user_data`, so the edit force-replaces the host.**
+`hcloud_server.inngest` deliberately carries **no** `lifecycle.ignore_changes=[user_data]`
+(ADR-100), and its resources are **excluded from the per-PR CI `-target`**, so the corrected
+literal is **inert at merge** — nothing applies. Deliver it by folding into the HELD Phase-2
+cutover re-provision (the same `apply_target=inngest-host-replace` dispatch above that delivers the
+#6197 arm64-Vector wiring), which is scoped, AOF-volume-preserving, and menu-ack authorized. Do
+**not** fire a separate gratuitous replace: during Phase-1 the host is dark/inert (zero prod crons),
+so there is no urgency unless a read-only check shows `10.0.1.11` reallocated to a live host before
+Phase-2.
+
+**Post-apply verification (no-SSH).** Confirm the rendered nftables set no longer contains `.11`
+and the `:8288`/`:8289` control API still accepts from web-1 (`10.0.1.10`) via the Vector
+journald→Better Stack boot marker / registry-probe class check — never `ssh` (the host is
+deny-all-public; `hr-no-ssh-fallback-in-runbooks`). Then `gh issue close 6608`.
+
+### Rollback sequence (P1-13) — mirrors the forward gate, stop the dedicated host FIRST
+
+1. **Dispatch `op=rollback` (no-SSH — it now does BOTH halves, #6369).** As of #6369 `op=rollback`
+   first writes `INNGEST_CUTOVER_FLIP=rollback` on `soleur-inngest/prd` itself (the still-enabled
+   timer then stops `inngest-server` on its next poll), confirms `"flag":"rolled-back"` /
+   `"exit_code":0` via Better Stack (time-bounded), and THEN runs the web re-enable fan-out
+   (step 3 below) **only after that confirm** — so the dedicated scheduler is proven stopped before
+   the web schedulers come back (no two-live-scheduler double-fire; on an unconfirmed rolled-back it
+   fails loud and withholds the web re-enable). Half (A) writes `rollback` when the forward flip is
+   armed or progressing (`armed`/`flipping`/`flushed`/`done`), behind the same `inngest-cutover`
+   environment required-reviewer gate; it writes ONLY the flip value (never re-writes
+   POSTGRES_URI/HEARTBEAT). For a non-forward state (`aborted`/`unset`) there is nothing to reverse
+   and it proceeds straight to the web re-enable (the documented aborted-state / P0-3 recovery):
+   ```bash
+   gh workflow run cutover-inngest.yml --field op=rollback   # then APPROVE the inngest-cutover environment gate
+   ```
+   There is **no separate operator Doppler write** — the dedicated-host stop is now folded into
+   this single dispatch.
+2. **Repoint the app back to loopback** — revert the `ci-deploy.sh` `INNGEST_BASE_URL` change
+   (back to the loopback `host.docker.internal:8288`) and redeploy.
+
+<!-- lint-infra-ignore start -->
+
+3. **Re-enable web inngest — Half (B) of the SAME `op=rollback` dispatch from step 1** (it runs
+   automatically after the `rolled-back` confirm; no second dispatch needed). `op=rollback` issues
+   a SINGLE no-SSH `enable inngest _ _` fan-out (enable + start + verify-serving-and-enabled in ONE
+   flock-held ci-deploy.sh handler, #6178) across the `$CUTOVER_HOSTS` set, then POLLS
+   `/hooks/deploy-status` for the terminal `reason=enabled` verdict. The `enable` verb restores
+   the `[Install]` symlink the 2.2 disable removed (a `restart` never touches it) so the web
+   scheduler survives a reboot — **no operator `systemctl` step is needed** (this is the no-SSH
+   reverse of `op=quiesce-web`; there is deliberately no two-POST enable+restart, which would
+   race the `flock -n` and could leave the unit enabled-but-stopped reported as success).
+   web-2 is re-enabled by the fan-out but its verdict is acceptance-only (DI-C3) — confirm web-2
+   via its freeze/recreate lifecycle. On `inngest_enable_failed` / `inngest_start_failed` /
+   `inngest_reenable_unverified` / `enabled_peer_fanout_unaccepted`, pull `reason=` from
+   `/hooks/deploy-status` + Better Stack (`logger -t ci-deploy`) — do **not** SSH the host.
+
+<!-- lint-infra-ignore end -->
+
+The capture file is retained on-host for a later retry. Rollback is data-safe only before any
+**real** (non-throwaway) reminder is armed against prod Postgres — after that, forward-fix only.
+
+> **Do NOT target a web host with `restart-inngest-server.yml` after the cutover completes
+> (arch P2-4).** Post-cutover the web hosts' inngest is intentionally stopped+disabled
+> (10.0.1.40 is the sole scheduler). A routine `restart-inngest-server.yml` restart is
+> LB-routed to a web host and would START its disabled unit → a TRANSIENT second scheduler on
+> prod Postgres (double-fire), independent of any enable-folding — the `inngest-server`
+> `ExecStartPre` flip-guard blocks only the DEDICATED host, not web hosts. The only web verb to
+> touch post-cutover is `op=quiesce-web` (forward) / `op=rollback` (reverse), never `restart`.
+
+<!-- lint-infra-ignore start -->
+
+> **Editor guard — a "no-SSH cutover" claim must be verified verb-by-verb (#6178).** Any host
+> mutation this runbook performs (quiesce/stop/disable, enable/start, a future drain/pause) needs
+> its OWN no-SSH webhook verb + pinned sudoers grant — an existing verb for a *different* mutation
+> (e.g. `restart`) does NOT make the cutover no-SSH; that asymmetry is exactly what left 2.2
+> quiesce on operator SSH. Re-arm uses `enable` (restores the `[Install]` symlink `disable`
+> removed), never `restart` (which leaves the unit enabled-at-runtime but dropped on reboot). Before
+> claiming no-SSH, list every mutation and confirm each has a verb.
+
+<!-- lint-infra-ignore end -->
+
+### `aborted`-state recovery (P0-3)
+
+If the flip's DBSIZE gate tripped (`"exit_code":1`, `"reason":"dbsize-nonzero"`), the oneshot
+refused to start and transitioned the flag to the terminal `aborted` (the 30s poll halts — no
+re-attempt storm, and `aborted` never reads as success). The web schedulers are already
+quiesced/disabled from `op=execute` 2.2, so **recover via the same rollback path**: run
+`gh workflow run cutover-inngest.yml --field op=rollback` to bring the web schedulers back,
+fix the Redis state (the non-zero `DBSIZE` means stale dark queue state — investigate why the
+dark Redis was not empty), then re-arm from `op=execute`.
+
+### Heartbeat suppression window (P2-14)
+
+Both pushers (the co-located web scheduler and the dedicated host) are silent across the
+window — the web pusher is quiesced at 2.2 and the dedicated host only begins pinging
+`INNGEST_HEARTBEAT_URL` **after** the flip. So set a **Better Stack maintenance / suppression
+window** on the `soleur-inngest-server-prd` heartbeat spanning the cutover (or rely on the
+monitor's grace period) so the pusher-quiesce → post-flip gap does not page. Lift the
+suppression once step 3 confirms `done` and the dedicated host is pinging.
+
+### Bounded-outage note
+
+The window between 2.2 (quiesce) and functions registering after 2.4 (app-repoint) is the
+parent plan's **accepted bounded residual** (ADR-100: a fully zero-downtime switchover is
+impossible under the single-writer constraint — two schedulers on prod Postgres would
+double-fire every cron, strictly worse than a brief gap). The flip oneshot restarts inngest
+**in place** (pre-installed during dark, so the window is bounded by the restart + app-redeploy,
+target < 5 min — NOT a cold OCI pull). Ticks missed in-window are not backfilled; `op=verify`
+enumerates them for `soleur:trigger-cron` re-fire.
 
 ## Concurrency conventions
 

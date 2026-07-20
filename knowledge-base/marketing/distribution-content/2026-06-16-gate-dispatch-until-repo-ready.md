@@ -1,9 +1,9 @@
 ---
 title: "Start chatting before your repo finishes connecting? You get an honest 'still setting up' instead of a dead-end"
 type: feature-launch
-publish_date: ""
+publish_date: 2026-07-21
 channels: x, bluesky
-status: draft
+status: scheduled
 pr_reference: "#5405"
 issue_reference: "#5399"
 ---

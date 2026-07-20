@@ -183,7 +183,7 @@ One-time mode does not pass through Step 1 — all flags are mandatory at the co
    - Reject schedules more frequent than every 5 minutes
    - Note: GitHub Actions cron has ~15-minute variance in trigger timing
 
-4. **Model** — Which Claude model to use. Default: `claude-sonnet-4-6` (good balance of cost and capability). Accept any valid Anthropic model identifier.
+4. **Model** — Which Claude model to use. Default: `claude-sonnet-5` (good balance of cost and capability). Accept any valid Anthropic model identifier.
 
 5. **Timeout (minutes)** — Job-level timeout to prevent runaway billing. Default: 30. Validate: positive integer, minimum 5 minutes.
 
@@ -469,7 +469,7 @@ jobs:
                  parallel CC sessions don't queue concurrent auto-merges
                  (the `--` separator terminates `with_lock`'s positional
                  args; required):
-                 `bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- gh pr merge --squash --auto "$PR_URL" 2>/tmp/merge.err`.
+                 `bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- gh pr merge --squash --auto "$PR_URL" 2>"$(mktemp -t merge.XXXXXXXX.err)"`.
                  If the wrapper returns rc=99 (`>600s` contention), the
                  merge was NOT queued — surface to the operator and retry
                  rather than treating the auto-merge as successful.

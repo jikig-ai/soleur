@@ -1,237 +1,288 @@
 ---
-title: CI Required Ruleset `bypass_actors` Drift
+title: CI Required Ruleset Drift (bypass_actors · required_status_checks · enforcement)
 audience: operator
-on_page_for: scheduled-ruleset-bypass-audit
-issues: [3544, 3542, 2719, 3569]
+on_page_for: cron-ruleset-bypass-audit
+issues: [3544, 3542, 2719, 3569, 4397, 5759, 6061]
 brand_survival_threshold: single-user incident
-last_updated: 2026-05-13
+last_updated: 2026-07-05
 ---
 
-# CI Required Ruleset `bypass_actors` Drift
+# CI Required Ruleset Drift
 
-This runbook covers triage and remediation when
-[`Scheduled: Ruleset Bypass Audit`](../../../../.github/workflows/scheduled-ruleset-bypass-audit.yml)
-fires.
+This runbook covers triage and remediation when the **`cron-ruleset-bypass-audit`
+Inngest function** files a drift issue titled `[Ruleset Audit] CI Required
+ruleset drift`.
+
+> **Mechanism note (2026-06-30).** The audit used to be the GitHub Actions
+> workflow `scheduled-ruleset-bypass-audit.yml`. That workflow was deleted in
+> #4483 (TR9 Phase 2) and the audit re-implemented as the Inngest cron
+> [`cron-ruleset-bypass-audit`](../../../../apps/web-platform/server/inngest/functions/cron-ruleset-bypass-audit.ts)
+> (daily 06:13 UTC). The original port covered only `bypass_actors`;
+> `required_status_checks` + `enforcement` detection and auto-close-on-green
+> were dropped and later restored (#4397, #5759). There is no `gh workflow run`
+> path any more — fire the audit on demand with the **`soleur:trigger-cron`**
+> skill (below).
 
 ## Why this audit exists
 
-The R15 mitigation (#3542, PR #3543) made `skill-security-scan PR gate`
-a required check on `main` via the "CI Required" repository ruleset
-(#14145388). The ruleset's `bypass_actors` array names who may merge
-around that gate. A widened entry (mode broadened from `pull_request`
-to `always`, or a new actor added) lets a malicious skill-install PR
-land without the gate ever running — one merged skill-install =
-installable-skill code-execution on any operator who pulls.
+The R15 mitigation (#3542, PR #3543) made `skill-security-scan PR gate` a
+required check on `main` via the "CI Required" repository ruleset (#14145388).
+The ruleset is now **Terraform-managed** (`infra/github/ruleset-ci-required.tf`,
+applied on merge by `.github/workflows/apply-github-infra.yml`). Three live
+properties of that ruleset are security-load-bearing, and an out-of-band GitHub
+UI edit to any of them leaves no repo-side trace — GitHub's organization audit
+log is the only surface. This daily audit closes that gap with a 24-hour
+worst-case detection window:
 
-`scripts/update-ci-required-ruleset.sh` PUTs `bypass_actors` verbatim
-from the live snapshot (GitHub's PUT API replaces the entire payload;
-omitting a field silently strips it). An admin who edits `bypass_actors`
-directly via the GitHub UI between two PUTs leaves no repo-side trace —
-GitHub's organization audit log is the only surface. This daily audit
-closes that gap with a 24-hour worst-case detection window.
+1. **`bypass_actors`** — who may merge around the required checks. A widened
+   entry (new actor, or mode broadened `pull_request` → `always`) lets a
+   malicious skill-install PR land without the gate running. One merged
+   skill-install = installable-skill code-execution on any operator who pulls.
+2. **`required_status_checks`** — which checks are required. Un-requiring a gate
+   (e.g. dropping `skill-security-scan PR gate`) silently removes the
+   protection. The integration_id is part of the match: `CodeQL` is pinned to
+   the GitHub Advanced Security app (57789); a same-named check from
+   `github-actions[bot]` (15368) would NOT satisfy the gate.
+3. **`enforcement`** — must be `"active"`. If set to `disabled`/`evaluate`,
+   **every** required check and bypass guarantee is suspended at once.
 
-Brand-survival threshold: **single-user incident** (inherited from
-#2719). One unauthorized merge under a widened bypass is the
-brand-ending incident. Threshold change requires CPO + user-impact-
-reviewer sign-off.
+Brand-survival threshold: **single-user incident** (inherited from #2719). One
+unauthorized merge under a widened bypass — or one un-required gate — is the
+brand-ending incident. Threshold change requires CPO + user-impact-reviewer
+sign-off.
 
-## Failure modes
+## Source of truth & the canonical snapshots
 
-The audit emits one of three outcomes via `$GITHUB_OUTPUT`:
+The live ruleset's source of truth is **Terraform** (`infra/github/
+ruleset-ci-required.tf`). The audit compares the live ruleset against two
+canonical JSON snapshots the Inngest function reads via the GitHub contents API:
 
-| `failure_mode`             | `failure_label`    | What it means                                              |
-|----------------------------|--------------------|------------------------------------------------------------|
-| `""` (empty)               | `""`               | Green. Live `bypass_actors` matches canonical.             |
-| `bypass_actors_drift`      | `ci/auth-broken`   | Drift detected. **The load-bearing detection.**            |
-| `ruleset_enforcement_disabled` | `ci/auth-broken` | Ruleset id matches canonical but `enforcement` is no longer `active`; bypass_actors guarantee is suspended (#3569). |
-| `github_api_network`       | `ci/guard-broken`  | curl failed to reach api.github.com (>15s or unreachable). |
-| `github_api_http`          | `ci/guard-broken`  | GitHub returned non-200 for the ruleset GET.               |
-| `github_api_invalid_json`  | `ci/guard-broken`  | Response body did not parse as JSON.                       |
-| `live_missing_bypass_actors` | `ci/guard-broken` | Response had no `.bypass_actors` array AND id+enforcement sentinel did NOT match → ruleset is likely actually deleted. |
-| `token_scope_insufficient` | `ci/guard-broken`  | Response 200 OK + missing `.bypass_actors` BUT id+enforcement sentinel matched canonical → audit token lacks `administration:read`. Ruleset itself is intact (#3569). |
-| `canonical_file_missing`   | `ci/guard-broken`  | Canonical JSON file is gone from the checkout.             |
-| `canonical_file_invalid_json` | `ci/guard-broken` | Canonical JSON file did not parse.                       |
-| `missing_gh_token`         | `ci/guard-broken`  | Workflow ran without `GH_TOKEN` env var.                   |
+- `scripts/ci-required-ruleset-canonical-bypass-actors.json`
+- `scripts/ci-required-ruleset-canonical-required-status-checks.json`
 
-`ci/auth-broken` failures also get `compliance/critical` +
-`domain/legal` labels (CLO routing). `ci/guard-broken` failures stop
-at `priority/p1-high`.
+These snapshots are kept in **lockstep with the `.tf`** by the sync gate
+`T-rsc-9` in `tests/scripts/test-audit-ruleset-bypass.sh` (run in CI via
+`scripts/test-all.sh`). Editing `ruleset-ci-required.tf` without updating the
+matching canonical JSON fails CI. This gate is the root-cause fix for #4397,
+where the snapshot silently went stale (5 checks) while Terraform widened the
+live ruleset (16) and nothing forced them back into agreement.
+
+## Findings & labels
+
+The audit assembles a list of findings and files **one** combined issue
+(`[Ruleset Audit] CI Required ruleset drift`) when any fire, then auto-closes it
+on the next green run. Labels: `ci/auth-broken`, `compliance/critical`,
+`priority/p1-high`, `domain/legal` (CLO routing).
+
+| Finding | `critical` | Direction that fires |
+|---------|------------|----------------------|
+| `enforcement` not `active` | yes | ruleset suspended |
+| `bypass_actors` widened | yes | actor present live but NOT in canonical |
+| `required_status_checks` dropped | yes | check in canonical but NOT enforced live (gate un-required) |
+| `required_status_checks` diverged | no | check enforced live but NOT in canonical (snapshot stale — reconcile) |
+
+A critical finding sets the Sentry heartbeat (`scheduled-ruleset-bypass-audit`)
+to failing. A divergence-only finding still files the issue (so the stale
+snapshot gets reconciled) but keeps the heartbeat green — merge-security is
+intact. Guard errors (canonical unreadable, ruleset missing, token under-scoped)
+throw and surface via the Sentry monitor + `reportSilentFallback` — **no SSH is
+needed to see them** (per `hr-no-ssh-fallback-in-runbooks`; observability layer:
+Sentry → the `scheduled-ruleset-bypass-audit` monitor, and Better Stack logs for
+the `cron-ruleset-bypass-audit` function).
+
+## CLA Required ruleset drift (#6061)
+
+The same `cron-ruleset-bypass-audit` function audits a **second** ruleset — the
+**"CLA Required"** ruleset (id `13304872`) — in its own `step.run` step, and
+files a separately-titled issue **`[Ruleset Audit] CLA Required ruleset drift`**
+(same labels: `ci/auth-broken`, `compliance/critical`, `priority/p1-high`,
+`domain/legal`). A CLA-step fault or drift cannot abort the CI step, and vice
+versa.
+
+**Source of truth (now Terraform, same as CI):** as of #6072 the CLA ruleset is
+**Terraform-managed** by [`infra/github/ruleset-cla-required.tf`](../../../../infra/github/ruleset-cla-required.tf),
+applied by `apply-github-infra.yml` on merge — exactly like the CI ruleset.
+[`scripts/create-cla-required-ruleset.sh`](../../../../scripts/create-cla-required-ruleset.sh)
+is now a **DR-only restore skeleton** (it reads the canonicals; the update path
+is `terraform apply`). The audit compares the live ruleset against two canonical
+snapshots:
+
+- `scripts/ci-cla-required-ruleset-canonical-bypass-actors.json`
+- `scripts/ci-cla-required-ruleset-canonical-required-status-checks.json`
+
+kept in lockstep with `infra/github/ruleset-cla-required.tf` by the `T-cla-1` /
+`T-cla-1b` sync gates in `tests/scripts/test-audit-ruleset-bypass.sh`, and with
+`scripts/required-checks.txt` by Test 7 in
+`plugins/soleur/test/required-checks-canonical-parity.test.sh`.
+
+**CLA drift classes:**
+
+| Finding | `critical` | What it means |
+|---------|------------|---------------|
+| `cla-check` / `cla-evidence` dropped (or the whole RSC rule gone) | yes | a PR could merge without the CLA-signature / CLA-evidence gate |
+| `bypass_actors` widened | yes | a named actor can merge around the CLA gate while the gate still looks intact (the quiet defeat vector) |
+| `enforcement` not `active` | yes | the entire CLA gate is suspended |
+| a NEW `cla-*` context required live but absent from the canonical JSON | no (divergence) | the audit flags a non-critical "live has extra gates" finding (canonical snapshot is stale — reconcile). If that context is ALSO missing from `required-checks.txt`, bot PRs deadlock (no synthetic posted) — Test 7 guards the canonical↔`required-checks.txt` lockstep, so a green heartbeat does NOT by itself mean "no CLA problem" |
+
+> The `Integration:1236702/always` bypass actor is the **CLA bot** — it
+> legitimately needs `always` to update CLA status and is IN the canonical, so
+> the audit flags only *additional* bypass actors.
+
+**Remedy the `domain/legal` recipient must action (NOT just "reconcile the
+canonical"):** a real CLA drift means unsigned external contributions may have
+merged to `main` without a recorded CLA. Beyond reconciling the ruleset, the
+CLO/operator must **chase the contributor's CLA signature post-hoc** (request it
+from the identifiable contributor) or, if unobtainable (anonymous/adversarial
+author), **revert the unsigned contribution** to keep the IP-provenance chain
+auditable. If the drift was an *authorized* change, reconcile
+`infra/github/ruleset-cla-required.tf` **and** the two CLA canonical JSONs
+together (the sync gates require both; `apply-github-infra.yml` applies the `.tf`
+on merge).
+
+**Probe the live CLA state directly** (read-only, admin-scoped workstation):
+
+```bash
+gh api repos/jikig-ai/soleur/rulesets/13304872 \
+  --jq '{enforcement, bypass_actors, required_status_checks: [.rules[]
+        | select(.type=="required_status_checks")
+        | .parameters.required_status_checks[]]}'
+```
+
+Guard faults on the CLA path (canonical empty/corrupt on `main`, `bypass_actors`
+redacted by token scope, network/API error) are routed to Sentry via
+`reportSilentFallback` + degrade the heartbeat — they do **NOT** file a
+`compliance/critical` drift issue (a corrupt-JSON-on-main fault is an ops/infra
+issue for the CTO, not a legal-compliance drift).
+
+## Run the audit on demand (no SSH)
+
+```bash
+# From any worktree (not the bare root):
+plugins/soleur/skills/trigger-cron/scripts/trigger.sh \
+  --event cron/ruleset-bypass-audit.manual-trigger
+# HTTP 202 = dispatched. Watch the run in the Inngest dashboard / Better Stack;
+# on green it auto-closes any open drift issue.
+```
+
+Probe the live state directly from an admin-scoped workstation (read-only):
+
+```bash
+gh api repos/jikig-ai/soleur/rulesets/14145388 \
+  --jq '{enforcement, bypass_actors, required_status_checks: [.rules[]
+        | select(.type=="required_status_checks")
+        | .parameters.required_status_checks[]]}'
+```
 
 ## Triage by drift kind
 
-### Drift = legitimate authorized change (e.g., onboarding a 2nd admin)
+### Drift = legitimate authorized change
 
-1. Verify with the editing actor via GitHub organization audit log
-   (Settings → Audit log → filter by `repository_ruleset`).
-2. Open a PR that:
-   - Edits `scripts/ci-required-ruleset-canonical-bypass-actors.json` to
-     match the new live state.
-   - Adds `requires_cpo_signoff: true` to the PR body (inherits #2719's
-     posture).
-   - Appends a row to `knowledge-base/legal/compliance-posture.md`
-     `#2719` section documenting the new actor.
-3. Merge; the daily audit auto-closes the drift issue on the next green
-   run.
+(e.g. onboarding a 2nd admin to `bypass_actors`, or adding a required check)
 
-### Drift = unauthorized broadening
+1. Verify with the editing actor via the GitHub organization audit log
+   (Settings → Audit log → filter `repository_ruleset`).
+2. Open a PR that updates **`infra/github/ruleset-ci-required.tf`** (the source
+   of truth) AND the matching canonical JSON snapshot in the same change — the
+   `T-rsc-9` sync gate requires both. For a `bypass_actors` change, add
+   `requires_cpo_signoff: true` to the PR body (inherits #2719's posture) and
+   append a row to `knowledge-base/legal/compliance-posture.md` `#2719` section.
+3. Merge. `apply-github-infra.yml` reconciles the live ruleset; the next audit
+   run auto-closes the drift issue.
 
-1. **Rotate immediately:** if a non-trusted org admin has gained
-   write access, rotate the org owner credentials (GitHub Settings →
-   Organization → Owners).
-2. **Restore canonical:** the canonical JSON file is the source of
-   truth. Use the audit's "fast path":
+### Drift = unauthorized broadening / un-requiring
+
+(a `bypass_actors` widen, a dropped required check, or enforcement turned off,
+with no authorizing PR)
+
+1. **Rotate immediately:** if a non-trusted org admin gained write access,
+   rotate the org owner credentials (Settings → Organization → Owners).
+2. **Restore from Terraform:** the `.tf` is the source of truth. Re-apply it via
+   the manual escape hatch (no destructive plan expected):
    ```bash
-   gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '.bypass_actors' > /tmp/live-now.json
-   diff <(jq -S . /tmp/live-now.json) <(jq -S . scripts/ci-required-ruleset-canonical-bypass-actors.json)
+   gh workflow run apply-github-infra.yml -f reason='restore ruleset after unauthorized drift'
    ```
-   If the live diff confirms drift, file a destructive-write
-   confirmation gate per `hr-menu-option-ack-not-prod-write-auth` and
-   re-PUT the canonical via a short ad-hoc script (the
-   `update-ci-required-ruleset.sh` post-PUT verification will now diff
-   against the canonical and exit 2 on mismatch — see #3544).
+   Confirm the plan only re-adds the removed/known-good state before it applies
+   (CODEOWNERS pins `/infra/github/` to `@deruelle`; a destructive plan also
+   needs `[ack-destroy]` per `hr-menu-option-ack-not-prod-write-auth`).
 3. **Post-mortem:** file under
-   `knowledge-base/project/learnings/security-issues/` with timeline,
-   blast radius, remediation, and prevention.
-4. **Update compliance-posture.md:** add an entry under Active Items
-   noting the incident and its resolution.
+   `knowledge-base/project/learnings/security-issues/` with timeline, blast
+   radius, remediation, and prevention.
+4. **Update compliance-posture.md:** add an entry under Active Items noting the
+   incident and its resolution.
 
-### Drift = guard malfunction (`ci/guard-broken`)
+### Drift = `enforcement` not active
 
-The audit itself failed — not the bypass_actors state. Common causes:
+The ruleset still exists at id `14145388` but `enforcement` is `disabled` or
+`evaluate` — every required check is suspended.
 
-| `failure_mode`             | Likely cause                                | Fix                                                                                                |
-|----------------------------|---------------------------------------------|----------------------------------------------------------------------------------------------------|
-| `github_api_network`       | api.github.com transient outage             | Wait one cycle and re-run via `gh workflow run scheduled-ruleset-bypass-audit.yml`.                |
-| `github_api_http`          | 403 rate limit, 502/503 upstream, 401 token | Check token scope; if 401, `GH_TOKEN` (`${{ github.token }}`) lost `contents:read`/`issues:write`. |
-| `github_api_invalid_json`  | upstream regression in GitHub API           | Open a GitHub Support ticket if persistent.                                                        |
-| `live_missing_bypass_actors` | ruleset deleted entirely (id+enforcement sentinel did NOT match) | **PROBE FIRST.** Run from an admin-scoped workstation: `gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '.bypass_actors'`. (a) Returns the canonical array → the live ruleset is healthy; the audit emitted a false positive — investigate the audit script's HTTP-200 path (likely a contract drift in GitHub's response shape). (b) Returns `null`/empty or the API 404s → ruleset is genuinely deleted; then restore via `scripts/create-ci-required-ruleset.sh` and re-add `skill-security-scan PR gate` via `scripts/update-ci-required-ruleset.sh`. **NEVER run the restore without the probe** — the script PUTs from the canonical, which would overwrite a healthy live state. (#3569) |
-| `token_scope_insufficient` | audit token lost `administration:read` (GitHub redacts `bypass_actors` from the response payload when caller is not admin-scoped) | See "Drift = `token_scope_insufficient`" subsection below. The ruleset itself is intact — the audit's App-installation-token mint is the broken surface. |
-| `canonical_file_missing`   | sparse-checkout misconfigured               | Verify the workflow's `sparse-checkout:` block includes the JSON path.                             |
-| `canonical_file_invalid_json` | bad merge to the canonical                | Run `jq -e . scripts/ci-required-ruleset-canonical-bypass-actors.json` locally; fix syntax.        |
+1. Confirm: `gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '.enforcement'`.
+2. Re-enable via Settings → Rules → Rulesets → CI Required → Enforcement status
+   → Active (no `gh` subcommand exists for this today), OR re-apply the `.tf`
+   (which pins `enforcement = "active"`) via the escape hatch above.
+3. Investigate who/when via the org audit log; if unauthorized, treat as the
+   "unauthorized broadening" path (rotate, post-mortem).
 
-### Drift = `ruleset_enforcement_disabled` (#3569)
+### Guard malfunction (the audit itself errored)
 
-The ruleset still exists at id `14145388` but `enforcement` is set to
-something other than `"active"` (e.g., `"disabled"`, `"evaluate"`).
-The `skill-security-scan PR gate` requirement is suspended for as
-long as enforcement stays non-active — every PR can merge without
-the gate running. Routes as `ci/auth-broken` because the auth
-surface IS effectively widened, even though the bypass_actors array
-is unchanged.
+The audit threw instead of completing — surfaced via the Sentry monitor
+`scheduled-ruleset-bypass-audit` and `reportSilentFallback`, not a drift issue.
+Common causes:
 
-1. Confirm the live state from an admin workstation:
-   ```bash
-   gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '.enforcement'
-   ```
-2. If enforcement is `disabled` or `evaluate`, re-enable via Settings
-   → Rules → Rulesets → CI Required → Enforcement status → Active.
-   The org owner (or anyone with admin write on the ruleset) can do
-   this from the GitHub UI; there is no `gh` subcommand for
-   ruleset enforcement state today.
-3. Investigate via the GitHub organization audit log
-   (Settings → Audit log → filter `repository_ruleset`) to
-   identify who and when. If the change was unauthorized, treat as
-   the "Drift = unauthorized broadening" path above (rotate org
-   owner credentials, post-mortem).
-4. Re-run `gh workflow run scheduled-ruleset-bypass-audit.yml` from
-   an admin workstation to confirm green.
+| Symptom in logs | Likely cause | Fix |
+|---|---|---|
+| `missing bypass_actors — installation token may lack administration:read` | driftguard App lost `administration:read`, OR the install was removed | Probe live state first (read-only `gh api` above). If the ruleset is healthy, the App token is the broken surface — see "Token scope" below. |
+| `Ruleset "CI Required" not found` | ruleset deleted entirely | **Probe first** (`gh api …/rulesets/14145388`). If 404, restore by re-applying `infra/github/ruleset-ci-required.tf` via `apply-github-infra.yml`. NEVER restore without the probe. |
+| `has no required_status_checks rule` | the required-check rule was removed wholesale | Same as "dropped required check" — restore from Terraform. |
+| `Unexpected content encoding` / JSON parse error | a canonical JSON snapshot is malformed | `jq -e . scripts/ci-required-ruleset-canonical-*.json` locally; fix syntax. |
 
-### Drift = `token_scope_insufficient` (#3569)
+### Token scope (driftguard GitHub App)
 
-The audit's App-installation token lost `administration:read` permission
-(or the installation was deleted entirely). The ruleset itself is
-intact — the audit just cannot read `bypass_actors`. The script
-distinguishes this from "ruleset deleted" by checking
-`.id == 14145388 AND .enforcement == "active"` on the HTTP-200 response.
+The function mints an installation token via `mintInstallationToken`
+(driftguard App, `administration:read` on this repo). If the token cannot read
+`bypass_actors`/rulesets:
 
-The audit workflow mints the install token from the `soleur-ai`
-GitHub App (drift-guard's App, reused per #3569 Phase 0.1 decision)
-via the App-JWT → installation-token pattern. Failure modes:
-
-1. **Probe live state first** — confirm the ruleset is actually healthy
-   before touching App config:
-   ```bash
-   # Admin workstation token (gh CLI, not GHA token):
-   gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '.bypass_actors'
-   ```
-   Expect the canonical 2-entry array (OrganizationAdmin + RepositoryRole
-   id=5). If this returns `null` or 404s, the failure is misclassified —
-   the ruleset is genuinely deleted and you want the
-   `live_missing_bypass_actors` triage path instead.
-
-2. **Confirm the App installation has admin scope** — admin workstation:
+1. **Probe live state first** (read-only `gh api` above) — confirm the ruleset
+   is actually healthy before touching App config.
+2. Confirm the App installation still has admin scope:
    ```bash
    gh api /orgs/jikig-ai/installations --jq \
      '.installations[] | select(.app_slug=="soleur-ai") | {id, repository_selection, permissions}'
    ```
-   The `permissions` map MUST include `administration` (any value: read
-   or write). If absent, the org owner narrowed the App's permission set;
-   widen via Settings → Developer settings → GitHub Apps → `soleur-ai` →
-   Permissions & events → Repository permissions → Administration: Read.
-   The org owner must accept the new permission via the install settings
-   page.
+   The `permissions` map MUST include `administration`. If absent, widen via
+   Settings → Developer settings → GitHub Apps → `soleur-ai` → Permissions &
+   events → Repository permissions → Administration: Read (the org owner must
+   accept the new permission).
+3. Re-run the audit (`trigger-cron` above). It should complete green and
+   auto-close any stale issue.
 
-3. **Confirm the mint step is finding the App** — check the run log for
-   the `mint-jwt` step. Failure modes (each routes its own warning):
-   - `missing_app_id` / `app_id_not_numeric` → `GH_APP_DRIFTGUARD_APP_ID`
-     secret missing or corrupted. Re-set from the App's settings page.
-   - `missing_private_key` / `pem_b64_decode_failed` / `pem_shape_invalid`
-     → `GH_APP_DRIFTGUARD_PRIVATE_KEY_B64` secret missing or corrupted.
-     Re-generate the App's PEM, base64-encode (`base64 -w 0 < pem`), and
-     re-set the secret.
-   - `jwt_mint_failed` → check `mint-stderr.log` line printed in the
-     run; typically a transient `openssl` failure (rare).
+## Smoke test (safe, no real drift event)
 
-4. **Re-run after fix:** `gh workflow run scheduled-ruleset-bypass-audit.yml`
-   from an admin workstation. The next run should emit
-   `Ruleset bypass audit passed.` and auto-close any stale issue.
+Because the audit reads the canonical snapshots from `main` via the GitHub API
+(not a local checkout), a real drift smoke would require editing the live
+ruleset — outward-facing and risky. Prefer the safe path:
 
-**Do NOT run `scripts/create-ci-required-ruleset.sh`** under
-`token_scope_insufficient` — the ruleset is healthy and the script
-would re-PUT the canonical, overwriting the live state.
-
-## Green recovery
-
-The audit auto-closes the tracking issue on the next green run
-(Step "Auto-close stale tracking issue"). **Do NOT manually close
-a drift-fired issue without verifying the next audit pass.** The
-auto-close comment links to the green run as the durable receipt.
-
-Manual run for verification:
-```bash
-gh workflow run scheduled-ruleset-bypass-audit.yml
-gh run list --workflow=scheduled-ruleset-bypass-audit.yml --limit=1 --json conclusion,status
-```
-
-## Smoke test (post-deploy)
-
-After any change to `scripts/audit-ruleset-bypass.sh` or
-`scripts/ci-required-ruleset-canonical-bypass-actors.json`:
-
-1. Open a short-lived branch.
-2. Temporarily edit the canonical to a known-different state (e.g.,
-   remove the `RepositoryRole` entry).
-3. Push, open a tiny PR.
-4. `gh workflow run scheduled-ruleset-bypass-audit.yml --ref <branch>`.
-5. Expect: tracking issue filed with `bypass_actors_drift` failure mode.
-6. Close the smoke PR without merging; revert the canonical; manually
-   close the test issue (no auto-close happens until the next *main*
-   run, which will read the restored canonical and close it).
+1. Probe live vs canonical (read-only `gh api` above) → expect a match.
+2. Fire `trigger-cron` (above) → expect HTTP 202, green run, no issue filed.
+3. The drift→label logic is unit-covered by
+   `apps/web-platform/test/server/inngest/cron-ruleset-bypass-audit.test.ts`
+   (`compareBypassActors`, `compareRequiredStatusChecks`, `buildFindings`).
 
 ## References
 
-- `.github/workflows/scheduled-ruleset-bypass-audit.yml` — the workflow.
-- `scripts/audit-ruleset-bypass.sh` — extracted audit logic.
-- `scripts/ci-required-ruleset-canonical-bypass-actors.json` — canonical.
-- `scripts/update-ci-required-ruleset.sh` — R15 mutation script; now
-  diffs post-PUT against the canonical (audit fast-path).
-- `scripts/create-ci-required-ruleset.sh` — bootstrap script; sources
-  bypass_actors from the canonical via `jq --slurpfile`.
+- `apps/web-platform/server/inngest/functions/cron-ruleset-bypass-audit.ts` —
+  the audit (Inngest cron).
+- `apps/web-platform/test/server/inngest/cron-ruleset-bypass-audit.test.ts` —
+  unit coverage of the three drift classes.
+- `infra/github/ruleset-ci-required.tf` — Terraform source of truth for the
+  ruleset; applied by `.github/workflows/apply-github-infra.yml`.
+- `scripts/ci-required-ruleset-canonical-bypass-actors.json` — bypass_actors
+  snapshot (read live by the audit).
+- `scripts/ci-required-ruleset-canonical-required-status-checks.json` —
+  required_status_checks snapshot.
+- `tests/scripts/test-audit-ruleset-bypass.sh` — `T-rsc-9` keeps the snapshots
+  in lockstep with the `.tf`.
+- `plugins/soleur/skills/trigger-cron/SKILL.md` — fire the audit on demand.
 - `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md`
   — parent R15 runbook.
-- `knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md` — sibling lint
-  runbook (#3546) covering pre-merge enforcement of bot-PR synthetic check-run
-  completeness.
 - `knowledge-base/legal/compliance-posture.md` `#2719` row.
-- GitHub Ruleset PUT API:
-  https://docs.github.com/en/rest/repos/rules#update-a-repository-ruleset
+- GitHub Rulesets API: https://docs.github.com/en/rest/repos/rules

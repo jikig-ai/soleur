@@ -114,6 +114,8 @@ export async function eventShipMergeHandler({
   event,
   step,
   logger,
+  runId,
+  attempt,
 }: HandlerArgs & { event: { data: EventData } }): Promise<HandlerResult> {
   const { data } = event;
 
@@ -199,6 +201,8 @@ export async function eventShipMergeHandler({
           cronName: FUNCTION_NAME,
           buildSpawnEnv,
           logger,
+          runId,
+          attempt,
         });
       },
     );

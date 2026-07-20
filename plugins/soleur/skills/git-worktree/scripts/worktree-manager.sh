@@ -99,6 +99,17 @@ else
   GIT_ROOT=$(git rev-parse --show-toplevel)
   # Check if we're in a worktree of a bare repo
   _common_dir=$(git rev-parse --git-common-dir 2>/dev/null)
+  # #5934 round-3: under the Concierge char-device config mask (and, benignly, at the
+  # toplevel of ANY normal clone) git returns the RELATIVE string ".git" for
+  # --git-common-dir. Left relative, the `*/.git` strip below cannot match (no slash) and
+  # GIT_ROOT collapses to the relative ".git" — which makes WORKTREE_DIR ".git/.worktrees"
+  # and detonates verify_worktree_created's absolute-vs-relative --show-toplevel compare
+  # ("Worktree path mismatch"). Resolve to ABSOLUTE here, BEFORE the strip, so the strip
+  # yields the true absolute workspace ROOT (sibling .worktrees) rather than a path buried
+  # inside .git.
+  if [[ -n "$_common_dir" && "$_common_dir" != /* ]]; then
+    _common_dir="$(cd "$_common_dir" 2>/dev/null && pwd)" || _common_dir=""
+  fi
   if [[ -n "$_common_dir" ]] && git -C "$_common_dir" rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
     IS_BARE=true
     # GIT_ROOT should point to the bare repo, not the worktree
@@ -109,6 +120,22 @@ else
     fi
   fi
 fi
+# #5934 round-3 defense-in-depth: GIT_ROOT MUST be absolute before it feeds WORKTREE_DIR
+# (and every other consumer: ensure_bare_config, copy_env_files, verify_worktree_created).
+# Any branch above can hand back a RELATIVE root (mask-degraded --show-toplevel /
+# --git-common-dir) or an EMPTY one; a relative WORKTREE_DIR then mismatches git's absolute
+# --show-toplevel in verify. Normalize a relative root against $PWD (create runs from the
+# workspace root); if it resolves empty, fall back to $PWD when that IS a real checkout. A
+# no-op for an already-absolute root (the common, healthy case).
+ensure_git_root_absolute() {
+  if [[ -n "$GIT_ROOT" && "$GIT_ROOT" != /* ]]; then
+    GIT_ROOT="$(cd "$GIT_ROOT" 2>/dev/null && pwd)" || GIT_ROOT=""
+  fi
+  if [[ -z "$GIT_ROOT" && -d "$PWD/.git" ]]; then
+    GIT_ROOT="$PWD"
+  fi
+}
+ensure_git_root_absolute
 WORKTREE_DIR="$GIT_ROOT/.worktrees"
 
 # Exit with error if running at the bare repo root (no working tree available).
@@ -119,6 +146,359 @@ require_working_tree() {
     echo -e "${YELLOW}Run from an existing worktree, or use: git worktree add .worktrees/<name> -b <branch> main${NC}"
     exit 1
   fi
+}
+
+# Map GNU `rm` strerror text -> a stable errno label for the diagnostic sentinel.
+# (GNU rm prints "rm: cannot remove '<f>': <strerror>"; we match the strerror.)
+_rm_errno() {
+  case "$1" in
+    *"Device or resource busy"*) echo "EBUSY" ;;
+    *"Operation not permitted"*) echo "EPERM" ;;
+    *"Permission denied"*)       echo "EACCES" ;;
+    *"Read-only file system"*)   echo "EROFS" ;;
+    *)                           echo "OTHER" ;;
+  esac
+}
+
+# Instrument + self-heal the stale git config-write locks that wedge worktree
+# creation (e.g., the 2026-07-01 seccomp outage killed git under `unshare` EPERM,
+# leaving `.git/config.lock` on the mounted volume; every later `git config` write
+# then fails EEXIST — "could not lock config file …: File exists" — forever).
+#
+# The Concierge agent-sandbox is a BLIND surface (no interactive ls/stat/findmnt,
+# and asking the operator is a hard-rule violation), so this sweep IS the only
+# diagnostic instrument. For EVERY present lock it emits one grep-able
+# SOLEUR_GIT_LOCK_DIAG line on STDOUT (the stream the orchestrating agent greps —
+# stderr is invisible under `claude --bg`, mirroring the SOLEUR_FEATURE_PUSH_FAILED
+# precedent below) carrying type/owner/perms/mtime/age/mount. It then:
+#   - auto-removes ONLY a stale REGULAR lock (a config.lock is created by git via
+#     open(O_CREAT|O_EXCL) — always a regular file), age-guarded so an in-flight
+#     sub-second writer is never clobbered; clock-skew guard preserves future-dated;
+#   - on a non-regular lock (dir/symlink/mount) OR a regular lock whose rm fails
+#     (EBUSY/EPERM/EACCES/EROFS), emits a loud SOLEUR_GIT_LOCK_UNREMOVABLE line with
+#     the errno/reason and does NOT proceed — it never marches into the doomed
+#     `git config` write. Removal of non-regular locks is deferred to the targeted
+#     fix this probe informs (auto-`rm -rf` on a blind surface is out of scope).
+#
+# Returns non-zero iff a config-write lock remained present-and-unremovable, so
+# ensure_bare_config can short-circuit before the EEXIST write. GNU-only stat
+# (Linux containers + CI ubuntu + dev; mirrors the existing GNU `stat -c%s`).
+# Idempotent; safe for parallel sessions — the age-guard, not a flock, is the
+# safety mechanism. Every capture is set -e-safe (`|| default` / `if !`) so an
+# abort never pre-empts the loud sentinel on the exact case it exists for.
+sweep_stale_git_locks() {
+  local git_dir="$1"
+  local threshold="${2:-60}"   # seconds
+  [[ -d "$git_dir" ]] || return 0
+  local now lock path mtime age swept=0 unremovable=0
+  local ftype owner perms mount rp rm_err rm_rc rdev whiteout is_mp
+  now=$(date +%s)
+  # Scope: ONLY the config-write locks (`config.lock`, `config.worktree.lock`) —
+  # the confirmed EEXIST wedge that blocks ensure_bare_config's writes below.
+  # Deliberately NOT index.lock / HEAD.lock: on a NON-bare git_dir those are the
+  # LIVE working-tree locks a concurrent >60s commit/checkout/rebase legitimately
+  # holds (removing one mid-op tears that tenant's index), and they never block a
+  # `git config` write, so they add live-clobber risk with zero wedge-fix value.
+  # Also NOT the per-worktree lock dirs (.git/worktrees/*/index.lock) — a
+  # different failure class (a wedged checkout/rebase) with a larger blast radius.
+  for lock in config.lock config.worktree.lock; do
+    path="$git_dir/$lock"
+    is_mp=false   # reset at loop scope beside rdev/mount/whiteout — never let a
+                  # prior iteration's mountpoint verdict leak into this one.
+    # Type precedence is load-bearing: -L (symlink) FIRST because -e/-f/-d all
+    # dereference symlinks; mountpoint BEFORE -d because a mountpoint is also a dir.
+    if [[ -L "$path" ]]; then
+      ftype=symlink
+    elif [[ -e "$path" ]]; then
+      rp=$(realpath -- "$path" 2>/dev/null) || rp=""
+      # `stat -c%m` prints the file's mount root; == its own realpath iff the path
+      # IS a mountpoint. (Do NOT use bare `findmnt -T`: it exits 0 + prints the
+      # containing-fs SOURCE for every existing path and never yields "none".)
+      # Computed ONCE here (is_mp was reset at loop scope above) and reused for both
+      # the `mount` classification and the char-device `mount=` attribute (a bound
+      # /dev/null is BOTH -c and a mountpoint).
+      if [[ -n "$rp" && "$(stat -c%m -- "$rp" 2>/dev/null)" == "$rp" ]]; then is_mp=true; fi
+      # Character-device FIRST — the confirmed #5934 substrate wedge signature. A
+      # masked config.lock is a char-special inode: either a bound /dev/null (rdev
+      # 1:3, ALSO a mountpoint) or a real mknod/overlay-whiteout node (whiteout ⇒
+      # rdev 0:0). git's open(O_CREAT|O_EXCL) EEXISTs against ANY pre-existing inode.
+      # Typed `chardevice` (NOT `mount`) so the rdev discriminator stays on the DIAG
+      # line; is_mp is preserved in `mount=` so the privileged Phase-2 sweep knows
+      # whether it must umount before rm.
+      if [[ -c "$path" ]]; then
+        ftype=chardevice
+      elif [[ "$is_mp" == true ]]; then
+        ftype=mount
+      elif [[ -d "$path" ]]; then
+        ftype=dir
+      elif [[ -f "$path" ]]; then
+        ftype=regular
+      else
+        ftype=other
+      fi
+    else
+      continue   # missing: nothing present to diagnose
+    fi
+
+    owner=$(stat -c '%u:%g' -- "$path" 2>/dev/null) || owner=unknown
+    perms=$(stat -c '%a' -- "$path" 2>/dev/null) || perms=unknown
+    mtime=$(stat -c '%Y' -- "$path" 2>/dev/null) || mtime=unknown
+    age=unknown
+    # Numeric guard: a non-numeric mtime flowing into $(( )) aborts under set -e.
+    if [[ "$mtime" =~ ^[0-9]+$ ]]; then age=$(( now - mtime )); fi
+    # rdev — GNU stat hex major:minor of a device node; the #5934 substrate
+    # discriminator (kernel-grounded, ADR-081): `1:3` ⇒ a bound /dev/null (Phase-2
+    # must umount before rm); `0:0` ⇒ an overlay whiteout; other non-zero ⇒ a real
+    # mknod device (`rm` clears it). `none` for every non-device type.
+    rdev=none
+    if [[ "$ftype" == "chardevice" ]]; then
+      rdev=$(stat -c '%t:%T' -- "$path" 2>/dev/null) || rdev=unknown
+    fi
+    mount=none
+    if [[ "$ftype" == "mount" ]]; then
+      if command -v findmnt >/dev/null 2>&1; then
+        mount=$(findmnt -n -o SOURCE -T "$path" 2>/dev/null) || mount=unknown
+      else
+        mount=findmnt-unavailable
+      fi
+    elif [[ "$ftype" == "chardevice" && "$is_mp" == true ]]; then
+      mount=mountpoint   # bound device node → Phase-2 sweep umounts before rm
+    fi
+    # Overlay-whiteout alternate form: a ZERO-SIZE REGULAR file bearing the
+    # trusted.overlay.whiteout xattr is semantically a whiteout, not an ordinary
+    # stale lock — so it must NOT be auto-rm'd as one below. Probe with getfattr when
+    # available. NOTE: reading a `trusted.*` xattr needs CAP_SYS_ADMIN, so on the
+    # unprivileged blind sandbox this reliably reports `no` (unprobeable); the probe
+    # earns its keep under the privileged Phase-2 sweep and in root-run forensics.
+    whiteout=no
+    if [[ "$ftype" == "regular" ]] && command -v getfattr >/dev/null 2>&1; then
+      if getfattr -n trusted.overlay.whiteout --only-values -- "$path" >/dev/null 2>&1; then
+        whiteout=yes
+      fi
+    fi
+    # Plain, color-free, STDOUT — color would break the agent's grep.
+    echo "SOLEUR_GIT_LOCK_DIAG file=$lock type=$ftype owner=$owner perms=$perms mtime=$mtime age=$age mount=$mount rdev=$rdev whiteout=$whiteout"
+
+    if [[ "$ftype" == "regular" && "$whiteout" != "yes" ]]; then
+      # In-flight-writer safety applies ONLY to a regular lock (a real git writer
+      # holds a regular config.lock for single-digit ms): remove it only once stale
+      # (age >= threshold); fresh AND future-dated (clock skew) are left untouched —
+      # the DIAG line above already surfaced them. Arithmetic nested in `if` so a
+      # false `(( ))` never trips set -e (mirrors cleanup_merged_worktrees).
+      if [[ "$age" =~ ^[0-9]+$ ]] && (( age >= threshold )); then
+        rm_err=""; rm_rc=0
+        # 2>&1 >/dev/null order is load-bearing: capture stderr, discard stdout.
+        # LC_ALL=C pins strerror to English so _rm_errno maps the label reliably
+        # under a non-C operator/CI locale (else every failure degrades to OTHER).
+        rm_err=$(LC_ALL=C rm -f -- "$path" 2>&1 >/dev/null) || rm_rc=$?
+        if (( rm_rc == 0 )); then
+          swept=$(( swept + 1 ))   # assignment form, NOT (( swept++ )) — old value 0 -> rc 1 -> set -e abort
+        else
+          unremovable=1
+          echo "SOLEUR_GIT_LOCK_UNREMOVABLE file=$lock type=regular errno=$(_rm_errno "$rm_err") reason=rm-failed hint=\"git config write will fail EEXIST — targeted fix needed\""
+        fi
+      fi
+    elif [[ "$whiteout" == "yes" ]]; then
+      # A zero-size REGULAR file carrying trusted.overlay.whiteout is a whiteout, not
+      # a real in-flight lock: never auto-rm it on the blind surface (its removal is
+      # the privileged Phase-2 sweep's job). Flagged unremovable so ensure_bare_config
+      # routes around it, exactly like a non-regular lock. (rdev is `none` for this
+      # regular-xattr whiteout form; the type stays `regular` for grep continuity.)
+      unremovable=1
+      echo "SOLEUR_GIT_LOCK_UNREMOVABLE file=$lock type=regular rdev=$rdev whiteout=yes errno=none reason=overlay-whiteout-regular hint=\"regular-file overlay whiteout — targeted fix required; not auto-removed\""
+    else
+      # chardevice / dir / symlink / mount / other: a config.lock is created by git
+      # via open(O_CREAT|O_EXCL) — ALWAYS a regular file. A non-regular lock is NEVER
+      # a legitimate in-flight writer and ALWAYS blocks the git config write (EEXIST)
+      # regardless of age, so flag it unremovable UNCONDITIONALLY (no staleness gate
+      # — that gate exists only for the regular in-flight-writer case above). Never
+      # auto-removed on a blind surface; the DIAG line above carries the forensic
+      # detail (type + rdev) to design/scope the privileged Phase-2 substrate fix.
+      unremovable=1
+      echo "SOLEUR_GIT_LOCK_UNREMOVABLE file=$lock type=$ftype rdev=$rdev errno=none reason=non-regular-lock hint=\"observed non-regular config lock — targeted fix required; not auto-removed\""
+    fi
+  done
+  # Report progress BEFORE the return so a partial sweep (one lock removed, the
+  # other stuck) still surfaces its count.
+  if (( swept > 0 )); then
+    echo -e "${YELLOW}Swept $swept stale git lock file(s) from $git_dir${NC}"
+  fi
+  (( unremovable == 0 ))   # non-zero iff a config-write lock remained unremovable
+}
+
+# _config_lock_wedged <file> — rc 0 (WEDGED) iff "<file>.lock" is PRESENT and
+# NON-REGULAR (symlink / dir / mountpoint / character-device / other). This is the
+# masked-lock signature the sweep flags reason=non-regular-lock: a genuine git config
+# lock is ALWAYS a regular file (git creates it via open(O_CREAT|O_EXCL)), so a
+# non-regular lock is never a legitimate in-flight writer and blocks every native
+# `git config` write with EEXIST. An ABSENT or REGULAR lock is NOT wedged (rc 1):
+# git's native writer either succeeds or legitimately blocks on a real concurrent
+# writer. Mirrors the type precedence in sweep_stale_git_locks (symlink first —
+# -e/-f dereference symlinks).
+_config_lock_wedged() {
+  local lock="$1.lock"
+  if [[ -L "$lock" ]]; then return 0; fi     # symlink -> non-regular -> wedged
+  if [[ ! -e "$lock" ]]; then return 1; fi   # absent -> not wedged
+  if [[ -f "$lock" ]]; then return 1; fi     # regular -> real/handled, not the wedge
+  return 0                                    # dir / mount / char-device / other -> wedged
+}
+
+# _config_target_masked <path> — rc 0 (MASKED) iff the RENAME TARGET itself is a
+# character-device OR a mountpoint — the #5934 substrate signature. This is the direct
+# cause of the verbatim live wedge:
+#   mv: cannot move '.git/config.soleur-tmp.N' to '.git/config': Device or resource busy
+# where `.git/config` (the target of atomic_git_config's same-dir rename), not merely its
+# lock, is a bind-mounted / masked node. Reuses the EXACT `[[ -c ]]` + `stat -c%m`-self
+# mountpoint idiom already proven in sweep_stale_git_locks (:187-193): `-c` (which
+# dereferences a symlink, so a symlink→/dev/null is caught too) OR realpath is its own
+# mount root. A regular file is NEVER masked (`-c` false; `stat -c%m` yields the containing
+# fs root, not the file's own path), so this cannot over-trigger on a legitimate config —
+# the load-bearing guarantee for the T22 regression (masked LOCK + regular config routes
+# around, no false positive). GNU-only stat, consistent with the sweep.
+_config_target_masked() {
+  local t="$1" rp
+  [[ -c "$t" ]] && return 0
+  rp=$(realpath -- "$t" 2>/dev/null) || rp=""
+  [[ -n "$rp" && "$(stat -c%m -- "$rp" 2>/dev/null)" == "$rp" ]] && return 0
+  return 1
+}
+
+# atomic_git_config <file> <git-config-args…> — apply a `git config --file <file>`
+# mutation without depending on <file>'s native "<file>.lock" when that lock is
+# wedged (the #5912 Concierge char-device). The targeted fix for the config.lock
+# worktree-creation wedge; composes read-first idempotence with a gated lockless
+# writer, and is the sole config-mutation entry point for ensure_bare_config below.
+#
+#   FR2 read-first — a `key value` set whose value already matches, or an `--unset`
+#     of an already-absent key, returns 0 with NO write. Reads never acquire
+#     "<file>.lock", so this fast path works even while the lock is wedged.
+#   FR3 gated writer — CLEAN/absent lock: native `git config` (preserves git's flock
+#     serialization for healthy concurrent writers; a real regular lock surfaces its
+#     own EEXIST here, the correct back-off). WEDGED (non-regular) lock: redirect
+#     git's own INI writer to a same-directory temp copy and atomic-rename over the
+#     target. git creates "<temp>.lock" — a clean path distinct from the masked
+#     "<file>.lock" — so the write never touches the wedge.
+#   TR1/TR2 — cp -p original -> same-dir temp (preserves mode/owner; plain cp
+#     perm-drifts), git edits the temp, `mv -f` atomically replaces the target
+#     (same-dir rename is atomic; a cross-fs /tmp temp would be a non-atomic
+#     copy+unlink).
+#   TR3 symlink guard — when <file> is itself a symlink, resolve to its target so the
+#     rename preserves the indirection instead of clobbering the link with a regular
+#     file.
+#
+# Parallel-session safety: last-rename-wins can drop a concurrent edit. For SAME-key
+# writes every writer converges to the same idempotent value (a lost update is
+# redundant, not corrupting). For DISTINCT-key writes by two concurrent lockless
+# sessions the result is only EVENTUALLY consistent — an interleave can momentarily
+# drop one key, self-healed on the next ensure_bare_config run. Native writers cannot
+# race here: under a wedge they EEXIST on the masked lock, so only Soleur's own
+# lockless sessions contend. Acceptable under this script's existing age-guard-not-flock
+# posture (see sweep_stale_git_locks). GNU-only tooling (cp -p / realpath / mv),
+# consistent with the sweep. Returns non-zero (with a loud headless_or_stderr line) on
+# any write failure so ensure_bare_config can fail loud instead of proceeding
+# half-applied. Self-contained return status (never relies on the caller's `if !`
+# context to disarm set -e), so a future bare call site stays safe.
+atomic_git_config() {
+  local file="$1"; shift
+
+  # --- FR2: read-first idempotence (reads never acquire "<file>.lock") ---
+  if [[ "${1:-}" == "--unset" ]]; then
+    # Skip ONLY when the key is truly ABSENT (git config --get rc 1). A multi-valued
+    # key exits rc 2 ("multiple values") — do NOT swallow that as "absent" or the
+    # unset silently no-ops (fail-open); fall through so the writer surfaces git's
+    # loud --unset-all-required error. Reads never take the lock.
+    local _grc=0
+    git config --file "$file" --get "${2:-}" >/dev/null 2>&1 || _grc=$?
+    (( _grc == 1 )) && return 0
+  elif [[ "$#" -eq 2 && "$1" != --* ]]; then
+    local _cur
+    _cur=$(git config --file "$file" --get "$1" 2>/dev/null || true)
+    [[ "$_cur" == "$2" ]] && return 0
+  fi
+
+  # --- D2: masked-TARGET pre-check (BEFORE any write, covering BOTH branches below) ---
+  # The #5934 LIVE wedge: `.git/config` — the write TARGET itself, not just its lock — is a
+  # char-device/bind-mount masked node, so EVERY write path fails (the native writer's own
+  # rename over the target EBUSYs, and so does the lockless same-dir rename at the mv below).
+  # Detect it here, AFTER the FR2 read-first fast path (an already-satisfied set/unset still
+  # short-circuits with no write, correct even under the mask) but BEFORE the native-vs-
+  # lockless decision, so a masked target NEVER reaches a doomed write. Checking "$file"
+  # (whose `-c` test dereferences a symlink) covers a symlinked-to-masked config too. Fail
+  # loud with the VISIBLE stdout sentinel (a bare echo, NOT headless_or_stderr — the latter's
+  # per-PID logfile sink is invisible to the git-lock-marker telemetry scanner; #5934 D1).
+  if _config_target_masked "$file"; then
+    echo "SOLEUR_GIT_CONFIG_TARGET_MASKED file=$(basename -- "$file") reason=target-bind-mount branch=target-masked-precheck hint=\"config write TARGET is a char-device/bind-mount; rename would EBUSY — host-side pre-seed needed, see #6191,#5934\""
+    headless_or_stderr error "atomic_git_config: config TARGET $file is masked (char-device/mountpoint); refusing the doomed write (see SOLEUR_GIT_CONFIG_TARGET_MASKED)."
+    return 1
+  fi
+
+  # --- FR3: clean/absent lock -> native writer (keeps flock serialization) ---
+  # Capture rc explicitly so the function is correct regardless of call context
+  # (a bare `atomic_git_config …` call site must not abort at the git line under set -e).
+  if ! _config_lock_wedged "$file"; then
+    local _nrc=0
+    git config --file "$file" "$@" || _nrc=$?
+    return "$_nrc"
+  fi
+
+  # --- FR3 wedged + TR1/TR2/TR3: lockless temp-copy + same-dir atomic rename ---
+  # TR3: resolve a symlinked config to its target so the rename preserves the link.
+  local target="$file"
+  if [[ -L "$file" ]]; then
+    if ! target=$(realpath -- "$file" 2>/dev/null) || [[ -z "$target" ]]; then
+      headless_or_stderr error "atomic_git_config: cannot resolve symlinked config $file; refusing lockless write."
+      return 1
+    fi
+  fi
+  local dir base tmp
+  dir=$(dirname -- "$target")
+  base=$(basename -- "$target")
+  tmp="$dir/$base.soleur-tmp.$$"   # same-dir temp -> atomic rename; distinct .lock path
+  # Seed the temp with current content (or empty when the target is absent),
+  # preserving mode/owner via cp -p (TR2).
+  if [[ -f "$target" ]]; then
+    if ! cp -p -- "$target" "$tmp"; then
+      rm -f -- "$tmp" 2>/dev/null || true   # cp can fail mid-copy leaving a partial temp
+      headless_or_stderr error "atomic_git_config: cp -p failed for $target."
+      return 1
+    fi
+  elif ! : > "$tmp" 2>/dev/null; then
+    headless_or_stderr error "atomic_git_config: cannot create temp $tmp."
+    return 1
+  fi
+  # Edit the temp copy with git's own INI writer (creates a clean "$tmp.lock").
+  if ! git config --file "$tmp" "$@"; then
+    rm -f -- "$tmp" "$tmp.lock" 2>/dev/null || true
+    # Failing to write even the temp copy means git could not create the temp's OWN
+    # clean lock ("$tmp.lock") — the strongest in-surface signal that the sandbox
+    # masks *.lock as a GLOB, not just literal config.lock (the spec's BLOCKING
+    # ASSUMPTION). Emit a DISTINCT stdout sentinel so the next blind-surface session
+    # can tell glob-masking apart from the now-fixed single-path wedge (feeds #5934).
+    echo "SOLEUR_GIT_LOCK_TEMP_WEDGED file=$base.soleur-tmp type=temp-write-failed reason=lockless-temp-unwritable hint=\"clean temp lock could not be created — sandbox may mask *.lock as a glob; see #5934\""
+    headless_or_stderr error "atomic_git_config: git config write to temp failed for $target (temp lock unwritable — possible glob masking)."
+    return 1
+  fi
+  # Defensive re-check on the RESOLVED target immediately before the rename (D2). Guard A
+  # above already refuses a masked "$file"; this covers a symlink whose resolved target is
+  # masked and any TOCTOU between the two points — so we never attempt the EBUSY-doomed mv.
+  if _config_target_masked "$target"; then
+    rm -f -- "$tmp" "$tmp.lock" 2>/dev/null || true
+    echo "SOLEUR_GIT_CONFIG_TARGET_MASKED file=$base reason=target-bind-mount branch=target-masked-precheck hint=\"resolved rename target is masked; not attempting mv — host-side pre-seed needed, see #6191,#5934\""
+    headless_or_stderr error "atomic_git_config: resolved config TARGET $target is masked; refusing the doomed rename."
+    return 1
+  fi
+  # Atomic same-dir rename over the target; never touches the masked "<file>.lock".
+  if ! mv -f -- "$tmp" "$target"; then
+    rm -f -- "$tmp" "$tmp.lock" 2>/dev/null || true
+    # A same-dir rename of a temp we just created failing is overwhelmingly the masked-target
+    # EBUSY (the verbatim #5934 error). Emit the VISIBLE stdout sentinel (D1a) so the outcome
+    # reaches the telemetry scanner regardless of headless_or_stderr's logfile sink.
+    echo "SOLEUR_GIT_CONFIG_TARGET_MASKED file=$base reason=rename-failed branch=target-masked-precheck hint=\"same-dir atomic rename failed (likely EBUSY on a masked target); see #6191,#5934\""
+    headless_or_stderr error "atomic_git_config: atomic rename failed for $target."
+    return 1
+  fi
+  rm -f -- "$tmp.lock" 2>/dev/null || true   # defensive: git normally consumes it
+  return 0
 }
 
 # Ensure bare repo config uses per-worktree core.bare (defense-in-depth).
@@ -135,34 +515,139 @@ ensure_bare_config() {
   if [[ ! -d "$git_dir" ]]; then
     git_dir="$GIT_ROOT"
   fi
+  # Mask-robust root fallback (#5934 D3 follow-up). Under the Concierge char-device config
+  # mask, GIT_ROOT can resolve two ways, BOTH of which misdirect git_dir: it may resolve
+  # EMPTY (`--show-toplevel` returns nothing → git_dir collapses to "", shared_config becomes
+  # "/config"); or, because `--is-bare-repository` DEGRADES to a false "true" at init, the top
+  # of this script recomputes GIT_ROOT from `--absolute-git-dir`/`--git-common-dir` to the
+  # RELATIVE string ".git" (non-empty → git_dir collapses to ".git", which has NO slash, so the
+  # line-532 `*/.git` non-bare skip cannot match → the bare surgery misfires and wedges,
+  # telemetry branch=target-masked-precheck/bare-fail). The predecessor D3 fix (merged
+  # 2026-07-07) gated this fallback on `-z "$GIT_ROOT"`, so it caught only the EMPTY case and
+  # MISSED the relative-".git" case. The mask-proof invariant: a corrupted GIT_ROOT is ALWAYS
+  # non-absolute (empty or a relative ".git"), while a LEGITIMATE GIT_ROOT — bare or non-bare —
+  # is always an absolute path. create_worktree runs from the workspace root, so recover git_dir
+  # from the ABSOLUTE $PWD/.git whenever GIT_ROOT is non-absolute (a pure filesystem fact that
+  # does NOT read the masked config), so the line-532 `*/.git` skip fires for BOTH the empty and
+  # the relative-".git" cases. Gating on `$GIT_ROOT != /*` (not unconditional) preserves the
+  # genuine-bare path: a real bare repo carries an ABSOLUTE GIT_ROOT → fallback stays inert →
+  # its surgery still runs even if the invoking CWD happens to be an unrelated non-bare checkout.
+  # Genuine bare repos also have no `.git` subdir and linked worktrees carry `.git` as a FILE
+  # (both `-d` false), so the fallback also stays inert there when GIT_ROOT is legitimately set.
+  if [[ "$GIT_ROOT" != /* && -d "$PWD/.git" ]]; then
+    git_dir="$PWD/.git"
+  fi
+
+  # Self-heal: sweep BEFORE the config writes below for its diagnostics + stale
+  # REGULAR-lock removal (the 2026-07-01 outage class). Runs on EVERY repo (bare or
+  # normal) — it writes NO config, only removes stale regular locks and emits the
+  # blind-surface SOLEUR_GIT_LOCK_* forensic — so it stays ABOVE the non-bare guard
+  # below. A NON-REGULAR (masked) lock is NO LONGER fatal here — atomic_git_config
+  # routes every write below around it via a lockless temp-copy+rename (#5912). So we
+  # intentionally ignore the sweep's non-zero return: the per-write gate in
+  # atomic_git_config makes the correct native-vs-lockless choice, and a genuinely
+  # stuck REGULAR lock (a real in-flight writer) still surfaces as a native `git config`
+  # EEXIST failure from atomic_git_config's clean-lock branch. `|| true` disarms set -e.
+  sweep_stale_git_locks "$git_dir" || true
+
+  # NON-BARE GUARD (#6184 → #5934, hardened round 6). Everything BELOW is a BARE-repo
+  # accommodation: on a bare repo `git worktree add` corrupts the shared config (see
+  # header), and setting extensions.worktreeConfig=true steers those writes off it. A
+  # NORMAL working clone (the Concierge workspace layout, core.bare=false) needs NONE of
+  # it — `git worktree add` writes only to `.git/worktrees/<id>/`. Worse, enabling
+  # worktreeConfig FORCES git to read `.git/config.worktree`, which in the agent sandbox
+  # is an unreadable /dev/null char device → `fatal: … Permission denied` on EVERY git
+  # command. So: proceed with the surgery ONLY when the repo is DEFINITIVELY bare;
+  # default to SKIP.
+  #
+  # ROUND-6 root cause (#5934, operator-CONFIRMED non-bare workspace): the round-5 guard
+  # trusted `git rev-parse --is-bare-repository`, but under the char-device config mask that
+  # command DEGRADES — it (and `--show-toplevel`, → GIT_ROOT="") must read the masked
+  # `.git/config`, and can report a false "true" — so the guard fell through to the surgery
+  # on a NON-bare clone and wedged the config write at the give-up below. Fix: detect non-bare
+  # by a PURE FILESYSTEM fact that never reads the masked config — `git_dir` is a `.git`
+  # DIRECTORY (a normal clone) — and SKIP the surgery there. Only a GENUINELY bare repo
+  # (gitdir IS the root; no `.git` subdir) consults git, and only then can the fail-loud
+  # branch fire.
+  if [[ "$git_dir" == */.git && -d "$git_dir" ]]; then
+    # Effectively NON-BARE → the bare surgery is unneeded and native `git worktree add`
+    # (writing only to .git/worktrees/<id>/, never the masked .git/config) proceeds. If the
+    # config family IS masked, emit a BENIGN diagnostic (mirrored, NOT paged) so telemetry
+    # finally shows the graceful-degrade path fired — it records branch=non-bare-skip.
+    if _config_target_masked "$git_dir/config" || _config_target_masked "$git_dir/config.worktree"; then
+      echo "SOLEUR_GIT_CONFIG_MASK_SKIP file=config reason=non-bare-skip branch=non-bare-skip hint=\"masked .git/config on a non-bare clone; bare surgery skipped — native worktree add writes only .git/worktrees/<id>/\""
+    fi
+    return 0
+  fi
+  # git_dir is NOT a `.git` directory → a genuine bare repo (gitdir IS the root) or an
+  # indeterminate resolution. Consult git's authoritative check ONLY now; a non-"true"
+  # verdict (normal clone / indeterminate / wedged) still skips safely.
+  local _bare_status
+  _bare_status="$(git -C "${GIT_ROOT:-.}" rev-parse --is-bare-repository 2>/dev/null || true)"
+  if [[ "$_bare_status" != "true" ]]; then
+    return 0
+  fi
+  # GENUINELY bare AND its config is masked → the shared-config write is REQUIRED (prevents
+  # core.bare bleeding into worktrees) but IMPOSSIBLE in-sandbox. Fail LOUD + VISIBLE naming
+  # the host-seed remedy — never ship a core.bare-bleeding worktree. This is the RARE
+  # fallback (the operator's live wedge is the non-bare-skip above); the durable fix is
+  # host-side (pre-seed .git/config before the bwrap mask, #6191/#5934).
+  if _config_target_masked "$git_dir/config"; then
+    echo "SOLEUR_GIT_CONFIG_TARGET_MASKED file=config reason=bare-under-mask branch=bare-fail remedy=host-pre-seed-.git/config-before-bwrap-mask see=#6191,#5934"
+    echo "worktree wedge: bare repo config write impossible under masked .git/config in $git_dir (host-side pre-seed required; see #6191,#5934)"
+    headless_or_stderr error "worktree wedge: bare repo + masked .git/config in $git_dir — host-side pre-seed required (see #6191,#5934)."
+    return 1
+  fi
 
   local shared_config="$git_dir/config"
   local wt_config="$git_dir/config.worktree"
   local fixed=false
 
-  # Ensure prerequisites for per-worktree config
-  git config --file "$shared_config" core.repositoryformatversion 1
-  git config --file "$shared_config" extensions.worktreeConfig true
+  # Ensure prerequisites for per-worktree config. Routed through atomic_git_config so
+  # a wedged config.lock (the char-device wedge) does not block them — setting
+  # extensions.worktreeConfig here is what steers the subsequent `git worktree add`
+  # onto the per-worktree config instead of the wedged shared config.lock.
+  if ! atomic_git_config "$shared_config" core.repositoryformatversion 1 \
+     || ! atomic_git_config "$shared_config" extensions.worktreeConfig true; then
+    # Bare stdout echo (D1a) so this fatal give-up reaches the telemetry scanner even under
+    # the headless_or_stderr per-PID logfile sink that hid it from four prior fixes (#5934).
+    echo "worktree wedge: could not apply shared-config prerequisites in $git_dir (see atomic_git_config / SOLEUR_GIT_CONFIG_TARGET_MASKED / SOLEUR_GIT_LOCK_UNREMOVABLE errors above)"
+    headless_or_stderr error "worktree wedge: could not apply shared-config prerequisites in $git_dir (see atomic_git_config / SOLEUR_GIT_LOCK_UNREMOVABLE errors above)."
+    return 1
+  fi
 
   # Remove core.bare from shared config (any value — it belongs in per-worktree only)
   if git config --file "$shared_config" core.bare &>/dev/null; then
     echo -e "${BLUE}Fixing bare repo config: removing core.bare from shared config...${NC}"
-    git config --file "$shared_config" --unset core.bare
+    if ! atomic_git_config "$shared_config" --unset core.bare; then
+      echo "worktree wedge: could not unset core.bare in $shared_config (see errors above)"
+      headless_or_stderr error "worktree wedge: could not unset core.bare in $shared_config (see errors above)."
+      return 1
+    fi
     fixed=true
   fi
 
   # Remove stale core.worktree from shared config (leftover from worktree operations)
   if git config --file "$shared_config" core.worktree &>/dev/null; then
     echo -e "${BLUE}Fixing bare repo config: removing stale core.worktree from shared config...${NC}"
-    git config --file "$shared_config" --unset core.worktree
+    if ! atomic_git_config "$shared_config" --unset core.worktree; then
+      echo "worktree wedge: could not unset core.worktree in $shared_config (see errors above)"
+      headless_or_stderr error "worktree wedge: could not unset core.worktree in $shared_config (see errors above)."
+      return 1
+    fi
     fixed=true
   fi
 
-  # Ensure per-worktree config has core.bare=true for the bare root
+  # Ensure per-worktree config has core.bare=true for the bare root (a SECOND wedge
+  # surface: config.worktree.lock — routed through the helper too).
   local current_bare
   current_bare=$(git config --file "$wt_config" core.bare 2>/dev/null || echo "")
   if [[ "$current_bare" != "true" ]]; then
-    git config --file "$wt_config" core.bare true
+    if ! atomic_git_config "$wt_config" core.bare true; then
+      echo "worktree wedge: could not set core.bare in $wt_config (see errors above)"
+      headless_or_stderr error "worktree wedge: could not set core.bare in $wt_config (see errors above)."
+      return 1
+    fi
     fixed=true
   fi
 
@@ -186,6 +671,10 @@ verify_worktree_created() {
 
   # Check 0: Fast-fail if directory was not created at all
   if [[ ! -d "$worktree_path" ]]; then
+    # Bare stdout marker (D1a) so this failure reaches the git-lock-marker telemetry scanner
+    # — verify_worktree_created was SILENT to every sink before #5934 round-3, so the round-2
+    # relative-GIT_ROOT path-mismatch could only be diagnosed from an operator paste.
+    echo "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=dir-not-created branch=$branch_name expected=$worktree_path"
     echo -e "${RED}Error: Worktree directory not created at $worktree_path${NC}"
     echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
     exit 1
@@ -194,12 +683,17 @@ verify_worktree_created() {
   # Check 1: Verify the directory is a valid git worktree
   local actual_toplevel
   if ! actual_toplevel=$(git -C "$worktree_path" rev-parse --show-toplevel 2>/dev/null); then
+    echo "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=not-a-worktree branch=$branch_name expected=$worktree_path"
     echo -e "${RED}Error: Worktree creation failed — $worktree_path is not a valid git worktree${NC}"
     echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
     git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
     exit 1
   fi
   if [[ "$actual_toplevel" != "$worktree_path" ]]; then
+    # The #5934 round-2 LIVE failure: a RELATIVE GIT_ROOT (".git") made WORKTREE_DIR relative,
+    # so the expected path is a relative string while git reports the same location ABSOLUTE.
+    # Emit both so the relative-vs-absolute mismatch is self-diagnosable from telemetry.
+    echo "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=path-mismatch branch=$branch_name expected=$worktree_path actual=$actual_toplevel"
     echo -e "${RED}Error: Worktree path mismatch — expected $worktree_path, got $actual_toplevel${NC}"
     git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
     exit 1
@@ -210,6 +704,7 @@ verify_worktree_created() {
     echo -e "${YELLOW}Warning: Worktree not in git worktree list — attempting repair...${NC}"
     git worktree repair "$worktree_path" 2>/dev/null || true
     if ! git worktree list --porcelain | grep -qxF "worktree $worktree_path"; then
+      echo "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=unregistered branch=$branch_name expected=$worktree_path"
       echo -e "${RED}Error: Worktree directory exists but is not registered after repair${NC}"
       git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
       exit 1
@@ -219,6 +714,7 @@ verify_worktree_created() {
 
   # Check 3: Verify the branch was actually created
   if ! git show-ref --verify --quiet "refs/heads/$branch_name"; then
+    echo "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=branch-missing branch=$branch_name expected=$worktree_path"
     echo -e "${RED}Error: Branch $branch_name was not created despite successful worktree add${NC}"
     echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
     git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
@@ -226,33 +722,134 @@ verify_worktree_created() {
   fi
 }
 
-# Ensure the worktree uses the operator's global git identity, not the bare repo's
-# local identity. The bare repo frequently has a CI-bot identity set at the repo
-# level (e.g., `user.email=41898282+github-actions[bot]@users.noreply.github.com`)
-# which worktrees inherit and which silently produces commits that fail CLA checks
-# or misattribute authorship. This function copies the operator's --global identity
-# onto the worktree's local config so every commit made from inside the worktree
-# is authored as the real human. Idempotent: skips silently if no global identity
-# exists, or if the worktree already has a matching local identity.
+# Ensure the worktree has a git identity, RESPECTING an already-present host-seeded
+# owner identity (#6184).
+#
+# IDENTITY AUTHORITY IS INVERTED BETWEEN THE TWO NON-BARE/BARE SURFACES (ADR-099):
+#   - Non-bare Concierge agent workspace (where this runs in production): the host seeds
+#     the shared config with the per-workspace OWNER as the LOCAL identity
+#     (workspace.ts), while the sandbox image bakes a `github-actions[bot]` --GLOBAL
+#     (Dockerfile). So in-sandbox: LOCAL = owner (authoritative), GLOBAL = bot.
+#   - Bare CLI dev repo: the bare repo may carry a bot LOCAL and the operator's --GLOBAL
+#     is the real human.
+# The prior logic FORCED global over local — correct only for the bare dev repo, but on
+# Concierge it clobbered the correct OWNER with the bot GLOBAL via a raw per-worktree
+# `--local` config write. That write locked the shared config → O_CREAT|O_EXCL on
+# the masked config.lock (ADR-081) → EEXIST → RC=255 wedge; and had it "succeeded" it
+# would have misattributed the operator's commits to `github-actions[bot]`.
+#
+# Fix (bot-aware, #6184 F1/F2): the discriminator is BOT-SHAPE, not presence — because
+# authority is inverted (ADR-099) and neither "always force global" (old — wrong on
+# non-bare Concierge) nor "always respect local" (wrong on the bare CLI dev repo, which
+# frequently carries a poisoned bot LOCAL — the #2815 CLA-reject bug) is correct alone.
+#   - present NON-bot local → authoritative; return WITHOUT writing (the common Concierge
+#     owner path; also a human dev-local). No lock, no wedge, correct attribution.
+#   - bot-shaped or absent local → correct it from a present, NON-bot --global, routed
+#     through atomic_git_config against the resolved common-dir config so a masked
+#     config.lock cannot wedge it. A bot-shaped --global is NEVER written (that is the
+#     silent misattribution the plan rejects): a present owner-local is left intact, a
+#     fully-absent local refuses loudly (reason=bot-global-refused).
+# `user.*` is not an RCE-relevant config key. Never re-add a raw `git config` write here
+# (see SKILL.md Sharp Edges).
+# A git identity is BOT-shaped iff its name OR email carries a `[bot]` marker
+# (github-actions[bot], dependabot[bot], …) — the unambiguous CI-bot signature that the
+# GitHub Actions default committer and `actions/checkout` inject. Used by
+# ensure_worktree_identity as the authority discriminator; see its header (#6184 F1/F2).
+_identity_is_bot() {
+  [[ "${1:-}" == *'[bot]'* || "${2:-}" == *'[bot]'* ]]
+}
+
 ensure_worktree_identity() {
   local worktree_path="$1"
-  local global_email global_name
+
+  # Read BOTH identities up front. On a linked worktree `--local` targets the shared
+  # common-dir config (on Concierge, the host-seeded owner). --global is the operator's
+  # identity locally, but the sandbox IMAGE bakes a `github-actions[bot]` --global.
+  local local_email local_name global_email global_name
+  local_email=$(git -C "$worktree_path" config --local --get user.email 2>/dev/null || true)
+  local_name=$(git -C "$worktree_path" config --local --get user.name 2>/dev/null || true)
   global_email=$(git config --global --get user.email 2>/dev/null || true)
   global_name=$(git config --global --get user.name 2>/dev/null || true)
 
-  # No global identity configured — nothing to do; the user is responsible for
-  # their own git config.
-  [[ -z "$global_email" || -z "$global_name" ]] && return 0
-
-  local local_email local_name
-  local_email=$(git -C "$worktree_path" config --local --get user.email 2>/dev/null || true)
-  local_name=$(git -C "$worktree_path" config --local --get user.name 2>/dev/null || true)
-
-  if [[ "$local_email" != "$global_email" || "$local_name" != "$global_name" ]]; then
-    git -C "$worktree_path" config --local user.email "$global_email"
-    git -C "$worktree_path" config --local user.name "$global_name"
-    echo -e "${GREEN}Set worktree git identity: $global_name <$global_email>${NC}"
+  # PRIMARY: a present, non-empty, NON-bot local identity is authoritative — the
+  # host-seeded owner on Concierge, or a human dev-local on any clone. Respect it with
+  # ZERO config work (the common Concierge path — no lock, no wedge, correct attribution).
+  # The bot-shape guard is load-bearing (#6184 F1): a bare CLI dev root FREQUENTLY carries
+  # an inherited `github-actions[bot]` LOCAL that every worktree inherits (learning
+  # 2026-04-24-fake-git-author-bare-repo-bot-override; PR #2815 CLA reject) — respecting
+  # THAT would re-open the exact bug ensure_worktree_identity was born to fix. Neither
+  # blanket rule works (ADR-099 "authority is inverted, never blanket-force"); bot-shape is
+  # the discriminator that is correct on both surfaces.
+  if [[ -n "$local_email" && -n "$local_name" ]] && ! _identity_is_bot "$local_email" "$local_name"; then
+    return 0
   fi
+
+  # Reached iff local is NOT authoritative (absent, partial, or bot-shaped). We can only
+  # correct it FROM a present, non-bot --global.
+  local have_global=0 global_is_bot=0
+  [[ -n "$global_email" && -n "$global_name" ]] && have_global=1
+  if (( have_global )) && _identity_is_bot "$global_email" "$global_name"; then global_is_bot=1; fi
+
+  if (( ! have_global )); then
+    # Nothing to set from. If local is bot-shaped and uncorrectable, warn (the commit will
+    # be bot-authored and bounce at the CLA gate, hr-cla-signed-author-before-merge).
+    if [[ -n "$local_email$local_name" ]] && _identity_is_bot "$local_email" "$local_name"; then
+      headless_or_stderr warn "ensure_worktree_identity: $worktree_path has a bot-shaped local identity and no human --global to override it; commits may fail the CLA author gate."
+    fi
+    return 0   # the user owns their git config; nothing to assert
+  fi
+
+  if (( global_is_bot )); then
+    # The only --global is the sandbox bot. NEVER write it — that is the Layer-A silent
+    # misattribution the plan rejects, reached via the local-absent/​bot-local trigger.
+    # A present (owner) local, even partial, is left intact; a fully-absent local means
+    # host-seeding failed/raced (#6184 F2) → refuse LOUDLY rather than author as the bot.
+    if [[ -n "$local_email" || -n "$local_name" ]]; then
+      return 0
+    fi
+    echo "SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=bot-global-refused file=config"
+    return 1
+  fi
+
+  # A human --global is available → set/override the worktree identity from it.
+  # DIAG-class precondition marker (NOT a wedge; excluded from WEDGE_RE): device/path
+  # forensic only, never the identity values. It signals the DEGRADED/fallback path (a
+  # human dev repo, or a Concierge owner-seed that went missing) — NOT the normal
+  # Concierge path, which early-returns above with no marker.
+  if [[ -n "$local_email" || -n "$local_name" ]]; then
+    echo "SOLEUR_GIT_LOCK_IDENTITY_DIAG source=ensure_worktree_identity reason=identity-drift-override-bot-local"
+  else
+    echo "SOLEUR_GIT_LOCK_IDENTITY_DIAG source=ensure_worktree_identity reason=identity-drift-set-from-global"
+  fi
+
+  # Resolve the SHARED (common-dir) config as an ABSOLUTE path. --path-format=absolute is
+  # load-bearing: a bare `--git-common-dir` can return a RELATIVE `.git`
+  # (learning 2026-03-18-git-common-dir-vs-show-toplevel-semantics; --path-format needs
+  # git ≥ 2.31, universally present in 2026). On empty/failure,
+  # emit the wedge sentinel + return 1 — do NOT fall back to $GIT_ROOT/.git/config (wrong
+  # on the bare layout, where $GIT_ROOT has no .git/ subdir).
+  local common_dir common_config
+  common_dir=$(git -C "$worktree_path" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+  if [[ -z "$common_dir" ]]; then
+    echo "SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=common-dir-unresolved file=config"
+    return 1
+  fi
+  common_config="$common_dir/config"
+
+  # set -e DISCIPLINE (MANDATORY shape): `if !`-wrapping this function at the call site
+  # DISARMS errexit for the whole function body, so a bare `atomic_git_config …` failure
+  # would silently fall through to the success `return 0` (vacuous success — worse than
+  # the wedge). Each write is therefore its OWN explicit `if !` guard. The call-site wrap
+  # matters (a) to give a contextual red error + exit 1 instead of a bare abort, and
+  # (b) precisely BECAUSE it disarms errexit, forcing these per-write checks — NOT because
+  # "an echo wouldn't print" (an echo before `return 1` always flushes).
+  if ! atomic_git_config "$common_config" user.email "$global_email" \
+     || ! atomic_git_config "$common_config" user.name "$global_name"; then
+    echo "SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=native-eexist file=config"
+    return 1
+  fi
+  echo -e "${GREEN}Set worktree git identity from global: $global_name <$global_email>${NC}"
+  return 0
 }
 
 # Ensure .worktrees is in .gitignore
@@ -447,9 +1044,133 @@ install_deps() {
   done
 }
 
+# Auto-heal a stale, EMPTY orphan branch left behind by a prior aborted
+# create/one-shot run, so a fresh create of the same branch proceeds cleanly
+# instead of stranding the operator with a hand-cleanup step (the failure a
+# prior aborted 2026-07-05 run hit: it had pushed `feat-one-shot-<name>-*` with
+# zero commits and no PR, and the next attempt had to be rescued by a manual
+# `git push origin --delete`).
+#
+# STRICTLY SCOPED — the auto-delete only ever fires when ALL hold:
+#   1. the branch name EXACTLY equals the one this run is about to create
+#      (so we only touch our own aborted-attempt namespace, never a sibling's);
+#   2. it is provably EMPTY — 0 commits ahead of its base (origin/<from>);
+#   3. no LIVE (open/merged) PR is attached (a parallel session may have opened a
+#      draft before committing — that collision is left untouched, never healed).
+# Real work (commits) or a live PR is left untouched and logged for the operator's
+# run log (these warnings are informational only — no automated caller gate
+# consumes heal's output; one-shot's Step 0a.5 collision gate is issue-ref-based
+# and runs BEFORE create). Fully fail-open: any probe/network/auth failure warns
+# and returns 0 — healing must NEVER block worktree creation. Runs identically
+# from the CLI and the web (Concierge) surface, since both call this script's
+# `create`/`feature` path — that is the CLI/web parity guarantee.
+heal_stale_branch() {
+  local branch="$1"
+  local from_branch="${2:-main}"
+  [[ -n "$branch" ]] || return 0
+
+  # A branch checked out in ANY worktree is ACTIVE, not a stale orphan — never
+  # heal it (guards both the remote delete and the local prune below in one place;
+  # a checked-out branch is exactly the thing we must not touch).
+  if git worktree list --porcelain 2>/dev/null | grep -qx "branch refs/heads/$branch"; then
+    return 0
+  fi
+
+  local remote_ref="refs/remotes/origin/$branch"
+
+  # Base to measure "empty" against: the freshly-fetched origin/<from>, else the
+  # local <from>. If neither resolves we cannot judge emptiness — bail rather than
+  # risk deleting a branch that only LOOKS empty against a missing base. This
+  # deliberately does NOT reuse fetch_origin_branch_base(): that helper falls back
+  # to FETCH_HEAD / the literal branch name (never bails), which would be an unsafe
+  # emptiness baseline here — heal must bail, not measure against a wrong base.
+  git fetch origin "$from_branch" >/dev/null 2>&1 || true
+  local base_ref
+  if git rev-parse --verify --quiet "refs/remotes/origin/$from_branch" >/dev/null 2>&1; then
+    base_ref="refs/remotes/origin/$from_branch"
+  elif git rev-parse --verify --quiet "refs/heads/$from_branch" >/dev/null 2>&1; then
+    base_ref="refs/heads/$from_branch"
+  else
+    return 0
+  fi
+
+  # --- Remote orphan ---
+  # Resolve the remote tip via a direct ls-remote query (a SHA), NOT a cached
+  # refs/remotes/origin/<branch> tracking ref — bare clones created without the
+  # standard `+refs/heads/*:refs/remotes/origin/*` fetch refspec never populate
+  # those tracking refs, so relying on them silently skips the heal. The fetch
+  # brings the tip's objects local so rev-list can measure it.
+  git fetch origin "$branch" >/dev/null 2>&1 || true
+  # Full `refs/heads/<branch>` (not the bare name) so ls-remote's tail-at-slash
+  # matching can't false-match a suffix branch (e.g. `sub/<branch>`). The trailing
+  # `|| remote_sha=""` keeps a non-zero ls-remote (offline) set -e-safe.
+  local remote_sha
+  remote_sha="$(git ls-remote --heads origin "refs/heads/$branch" 2>/dev/null | awk 'NR==1{print $1}')" || remote_sha=""
+  if [[ -n "$remote_sha" ]]; then
+    local ahead
+    ahead="$(git rev-list --count "$base_ref..$remote_sha" 2>/dev/null || echo unknown)"
+    if [[ "$ahead" == "0" ]]; then
+      # Empty vs base. Refuse to delete if a LIVE PR exists. The PR probe has THREE
+      # outcomes — and the error case must fail SAFE (asymmetry matters: unlike the
+      # emptiness probe, a wrong "no PR" answer deletes a parallel session's draft):
+      #   gh ABSENT          → policy: exact-name + empty is sufficient evidence of
+      #                        a prior aborted run → allow delete.
+      #   gh present, OK      → trust the count (0 = no live PR → delete).
+      #   gh present, ERRORED → unknown (auth/rate-limit/network) → do NOT delete;
+      #                        a transient gh outage must not yank a live PR's branch.
+      local pr_check="absent" live_pr="0"
+      if command -v gh >/dev/null 2>&1; then
+        if live_pr="$(gh pr list --head "$branch" --state all \
+             --json state --jq '[.[] | select(.state=="OPEN" or .state=="MERGED")] | length' 2>/dev/null)" \
+           && [[ -n "$live_pr" ]]; then
+          pr_check="ok"
+        else
+          pr_check="error"; live_pr=""
+        fi
+      fi
+      if [[ "$pr_check" == "error" ]]; then
+        headless_or_stderr warn "remote branch origin/$branch is empty but gh could not confirm PR state — NOT auto-deleting (fail-safe); logged for the operator's run log"
+      elif [[ "$live_pr" == "0" ]]; then
+        if git push origin --delete "$branch" >/dev/null 2>&1; then
+          headless_or_stderr warn "auto-healed stale empty remote branch origin/$branch (0 commits ahead of $from_branch, no live PR) — left by a prior aborted run"
+        else
+          headless_or_stderr warn "stale empty remote branch origin/$branch detected but delete failed (offline / no push auth) — continuing; a fresh push will fast-forward it"
+        fi
+      else
+        headless_or_stderr warn "remote branch origin/$branch is empty but has a live PR — NOT auto-deleting; logged for the operator's run log"
+      fi
+    else
+      headless_or_stderr warn "remote branch origin/$branch has $ahead commit(s) ahead of $from_branch — NOT auto-deleting (real work); logged for the operator's run log"
+    fi
+  else
+    # Not on remote (already deleted, or never pushed). Prune any stale tracking ref.
+    git update-ref -d "$remote_ref" 2>/dev/null || true
+  fi
+
+  # --- Local orphan ref (would block `git worktree add -b <branch>`) ---
+  # The not-checked-out condition is already guaranteed by the early return at the
+  # top, so only the emptiness gate remains. `git branch -D` skips git's merge
+  # check, but `lahead == 0` (0 commits ahead of base) is the correct substitute:
+  # a ref with unique unpushed commits reads lahead > 0 and is kept.
+  if git show-ref --verify --quiet "refs/heads/$branch"; then
+    local lahead
+    lahead="$(git rev-list --count "$base_ref..refs/heads/$branch" 2>/dev/null || echo unknown)"
+    if [[ "$lahead" == "0" ]]; then
+      if git branch -D "$branch" >/dev/null 2>&1; then
+        headless_or_stderr warn "auto-healed stale empty local branch $branch (0 commits ahead of $from_branch) — would have blocked worktree add"
+      fi
+    fi
+  fi
+
+  return 0
+}
+
 # Create a new worktree
 create_worktree() {
-  ensure_bare_config
+  if ! ensure_bare_config; then
+    echo -e "${RED}Cannot create worktree — wedged on an unremovable git lock (see SOLEUR_GIT_LOCK_UNREMOVABLE above).${NC}" >&2
+    exit 1
+  fi
   local branch_name="$1"
   local from_branch="${2:-main}"
 
@@ -493,6 +1214,10 @@ create_worktree() {
     return
   fi
 
+  # Auto-heal a stale empty orphan branch from a prior aborted run before we
+  # try to (re)create the branch of the same name — see heal_stale_branch().
+  heal_stale_branch "$branch_name" "$from_branch"
+
   # Create worktree
   mkdir -p "$WORKTREE_DIR"
   ensure_gitignore
@@ -510,11 +1235,18 @@ create_worktree() {
   verify_worktree_created "$worktree_path" "$branch_name" "$BASE_REF"
 
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
-  ensure_bare_config
+  if ! ensure_bare_config; then
+    echo -e "${RED}Worktree created but shared-config repair is wedged on an unremovable git lock (see SOLEUR_GIT_LOCK_UNREMOVABLE above).${NC}" >&2
+    exit 1
+  fi
 
-  # Force the worktree to use the operator's global git identity (not a CI-bot
-  # identity that may be set at the bare repo level).
-  ensure_worktree_identity "$worktree_path"
+  # Respect a host-seeded owner identity; only set from --global when local is absent
+  # (#6184). Wrapped in `if !` so a genuine identity wedge fails LOUD with context +
+  # exit 1 instead of a bare set -e abort (see ensure_worktree_identity's set -e note).
+  if ! ensure_worktree_identity "$worktree_path"; then
+    echo -e "${RED}Cannot create worktree — git identity could not be set (see SOLEUR_GIT_LOCK_IDENTITY_WEDGED above).${NC}" >&2
+    exit 1
+  fi
 
   # Copy environment files
   copy_env_files "$worktree_path"
@@ -532,7 +1264,10 @@ create_worktree() {
 # Create a worktree for a feature with spec directory
 # Simplified version: no prompts, just creates everything
 create_for_feature() {
-  ensure_bare_config
+  if ! ensure_bare_config; then
+    echo -e "${RED}Cannot create worktree — wedged on an unremovable git lock (see SOLEUR_GIT_LOCK_UNREMOVABLE above).${NC}" >&2
+    exit 1
+  fi
   local name="$1"
   local from_branch="${2:-main}"
 
@@ -558,6 +1293,10 @@ create_for_feature() {
   echo "  Worktree: $worktree_path"
   echo "  Spec dir: $spec_dir"
   echo ""
+
+  # Auto-heal a stale empty orphan branch from a prior aborted run before we
+  # try to (re)create the branch of the same name — see heal_stale_branch().
+  heal_stale_branch "$branch_name" "$from_branch"
 
   # Ensure directories exist
   mkdir -p "$WORKTREE_DIR"
@@ -586,11 +1325,18 @@ create_for_feature() {
   verify_worktree_created "$worktree_path" "$branch_name" "$base_ref"
 
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
-  ensure_bare_config
+  if ! ensure_bare_config; then
+    echo -e "${RED}Worktree created but shared-config repair is wedged on an unremovable git lock (see SOLEUR_GIT_LOCK_UNREMOVABLE above).${NC}" >&2
+    exit 1
+  fi
 
-  # Force the worktree to use the operator's global git identity (not a CI-bot
-  # identity that may be set at the bare repo level).
-  ensure_worktree_identity "$worktree_path"
+  # Respect a host-seeded owner identity; only set from --global when local is absent
+  # (#6184). Wrapped in `if !` so a genuine identity wedge fails LOUD with context +
+  # exit 1 instead of a bare set -e abort (see ensure_worktree_identity's set -e note).
+  if ! ensure_worktree_identity "$worktree_path"; then
+    echo -e "${RED}Cannot create worktree — git identity could not be set (see SOLEUR_GIT_LOCK_IDENTITY_WEDGED above).${NC}" >&2
+    exit 1
+  fi
 
   # Create spec directory inside the worktree so it's tracked on the feature branch
   if [[ -d "$worktree_path/knowledge-base" ]]; then
@@ -884,8 +1630,13 @@ cleanup_merged_worktrees() {
   # RETURN trap fires on any function-level return without clobbering EXIT.
   trap 'release_lock cleanup-merged' RETURN
 
-  # Fix bare repo config if broken (defense-in-depth on every session start)
-  ensure_bare_config
+  # Fix bare repo config if broken (defense-in-depth on every session start).
+  # Guard the non-zero return so a wedged config lock does NOT abort the unrelated
+  # session-start maintenance below (orphan-dir cleanup, tmp reclamation, runaway-
+  # process kill). The loud SOLEUR_GIT_LOCK_UNREMOVABLE sentinel already printed.
+  if ! ensure_bare_config; then
+    headless_or_stderr warn "cleanup-merged: ensure_bare_config wedged on an unremovable git lock (see SOLEUR_GIT_LOCK_UNREMOVABLE above); continuing with remaining maintenance."
+  fi
 
   # Determine output mode: verbose if TTY, quiet otherwise
   local verbose=false
@@ -904,9 +1655,10 @@ cleanup_merged_worktrees() {
   fi
   release_lock fetch-prune
 
-  # Find stale branches using two complementary detection methods:
+  # Find stale branches using three complementary detection methods:
   # 1. [gone] tracking: remote branch was deleted (e.g., GitHub auto-delete after PR merge)
   # 2. Merged to main: branch is fully merged but remote still exists (e.g., auto-delete disabled)
+  # 3. GH-merged: squash-merged branches in the GitHub auto-delete propagation window
   local gone_branches
   gone_branches=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null | grep '\[gone\]' | cut -d' ' -f1 || true)
 
@@ -918,9 +1670,25 @@ cleanup_merged_worktrees() {
     | grep -v -E '^(main|master)$' \
     || true)
 
-  # Combine both lists, deduplicate
+  # Squash-merged branches produce a new commit on main with a different SHA, so
+  # they appear in neither [gone] nor --merged main during the auto-delete propagation
+  # window. Query GitHub directly as the authoritative source of truth.
+  local gh_merged_branches=""
+  local _wt_branch
+  while IFS= read -r _line; do
+    if [[ "$_line" == "branch refs/heads/"* ]]; then
+      _wt_branch="${_line#branch refs/heads/}"
+      [[ "$_wt_branch" == "main" || "$_wt_branch" == "master" ]] && continue
+      if printf '%s\n' "$gone_branches" "$merged_branches" | grep -qxF "$_wt_branch"; then continue; fi
+      local _merged_count
+      _merged_count=$(gh pr list --head "$_wt_branch" --state merged --limit 1 --json number --jq 'length' 2>/dev/null || echo "0")
+      [[ "$_merged_count" == "1" ]] && gh_merged_branches+="${_wt_branch}"$'\n'
+    fi
+  done < <(git worktree list --porcelain 2>/dev/null)
+
+  # Combine all three lists, deduplicate
   local all_stale_branches
-  all_stale_branches=$(printf '%s\n%s' "$gone_branches" "$merged_branches" | sort -u | sed '/^$/d' || true)
+  all_stale_branches=$(printf '%s\n%s\n%s' "$gone_branches" "$merged_branches" "$gh_merged_branches" | sort -u | sed '/^$/d' || true)
 
   if [[ -z "$all_stale_branches" ]]; then
     [[ "$verbose" == "true" ]] && echo -e "${GREEN}No merged branches to clean up${NC}"
@@ -1100,6 +1868,11 @@ cleanup_merged_worktrees() {
   # Always clean up stale Claude tmp files (RAM-backed, can be huge)
   cleanup_claude_tmp
 
+  # Reap stale Bash-sandbox temp the harness orphans directly under /tmp. No
+  # settings.json/env lever exists to relocate or auto-clean it (verified against
+  # Claude Code docs 2026-07-11), so this session-start sweep is the only lever.
+  cleanup_stale_sandbox_tmp
+
   # Kill runaway processes that waste CPU (e.g., stuck gst-plugin-scanner)
   cleanup_runaway_processes
 
@@ -1192,6 +1965,66 @@ cleanup_claude_tmp() {
 
   if [[ $files_removed -gt 0 ]]; then
     echo -e "${GREEN}Cleaned $files_removed stale Claude task output(s), freed ~${total_freed} MB${NC}"
+  fi
+}
+
+# Reap stale Claude Code Bash-sandbox temp to reclaim tmpfs (RAM-backed /tmp).
+# Beyond cleanup_claude_tmp (which reaps /tmp/claude-<uid> task output), the Bash
+# sandbox leaves per-invocation artifacts DIRECTLY under /tmp that the harness does
+# not garbage-collect and that no settings.json/env option can relocate or auto-clean
+# (verified against Claude Code sandbox/application-data docs 2026-07-11: only
+# `cleanupPeriodDays` exists and it covers ~/.claude/projects/, not /tmp). On a small
+# tmpfs these starve the machine mid-run — the 2026-07-11 disk-full that interrupted a
+# planning subagent had ~10k dirs / ~23k dirents in /tmp. Two safely-reapable classes:
+#   - empty temp-dir shells left by mkdtemp callers      -> the dirent driver (~8.5k)
+#   - stale sandbox copies (child repo/apps/plugins/NOTICE or <id>/ssr) + creds copies
+#                                                        -> the space driver (~170M)
+# Reap is AGE-gated so a live in-flight sandbox (seconds-to-minutes old) is never
+# touched, SIGNATURE-gated so a random non-empty tmp dir another tool owns is spared,
+# and uses find -delete / rmdir (never rm -rf) to stay inside the repo rm-guardrail.
+# node-compile-cache is deliberately spared (a reusable Node V8 cache, not a leak).
+# Thresholds and the tmp root are env-overridable for unit testing.
+cleanup_stale_sandbox_tmp() {
+  local uid tmp_root empty_age stale_age
+  uid=$(id -u)
+  tmp_root="${SOLEUR_SANDBOX_TMP_ROOT:-/tmp}"
+  # Empty shells cannot hold live data; a short floor still spares a just-created
+  # dir about to be written. Non-empty copies get a full-day floor (a sandbox
+  # invocation lives seconds, so 24h is unambiguously orphaned).
+  empty_age="${SOLEUR_SANDBOX_EMPTY_MAX_AGE_MIN:-60}"
+  stale_age="${SOLEUR_SANDBOX_STALE_MAX_AGE_MIN:-1440}"
+  [[ -d "$tmp_root" ]] || return 0
+
+  local removed_empty=0 removed_stale=0 d
+
+  # 1) Empty temp-pattern dirs (the dirent driver). `-empty -type d` = empty dirs.
+  while IFS= read -r d; do
+    if rmdir "$d" 2>/dev/null; then
+      removed_empty=$((removed_empty + 1))
+    fi
+  done < <(find "$tmp_root" -mindepth 1 -maxdepth 1 -type d -empty -uid "$uid" \
+             -mmin +"$empty_age" -regextype posix-extended \
+             -regex "$tmp_root/[A-Za-z0-9_-]{15,}" 2>/dev/null)
+
+  # 2) Non-empty sandbox artifacts older than the stale floor, matched by signature.
+  while IFS= read -r d; do
+    case "$(basename "$d")" in
+      claude-creds-copy*) : ;;                       # harness credential copy
+      *)
+        # Only reap dirs bearing a known sandbox signature; never a random
+        # non-empty tmp dir some other tool owns.
+        [[ -d "$d/ssr" || -d "$d/repo" || -d "$d/apps" || -d "$d/plugins" || -e "$d/NOTICE" ]] || continue
+        ;;
+    esac
+    if find "$d" -delete 2>/dev/null; then
+      removed_stale=$((removed_stale + 1))
+    fi
+  done < <(find "$tmp_root" -mindepth 1 -maxdepth 1 -type d -uid "$uid" \
+             -mmin +"$stale_age" -regextype posix-extended \
+             -regex "$tmp_root/[A-Za-z0-9_-]{15,}" 2>/dev/null)
+
+  if [[ $removed_empty -gt 0 || $removed_stale -gt 0 ]]; then
+    echo -e "${GREEN}Reaped ${removed_empty} empty + ${removed_stale} stale sandbox temp dir(s) from ${tmp_root}${NC}"
   fi
 }
 

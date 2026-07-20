@@ -115,20 +115,96 @@ run_suite() {
 if want_scripts; then
   run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
   run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
+  run_suite "tests/hooks/openhands-guardrails" bash tests/hooks/test_openhands_guardrails.sh
   run_suite "tests/scripts/lint-rule-ids" python3 -m unittest tests.scripts.test_lint_rule_ids
   run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
+  # Hard-rule body-weakening gate (#6103, ADR-091): hermetic fixtures + a live
+  # calibration (base HEAD → zero findings on the committed corpus). The real
+  # merge-blocking gate is the standalone `rule-body-lint` ci.yml job with
+  # --base <merge-base>; this live line is the calibration + orphan-suite guard.
+  run_suite "tests/scripts/lint-rule-bodies" python3 -m unittest tests.scripts.test_lint_rule_bodies
+  run_suite "scripts/lint-rule-bodies-live" python3 scripts/lint-rule-bodies.py --check --base HEAD
   # AGENTS B_ALWAYS rule-budget gate — CI-wired in #4599 (was lefthook pre-commit only).
   run_suite "scripts/lint-agents-rule-budget-live" python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
   run_suite "scripts/lint-agents-rule-budget-unit" bash scripts/lint-agents-rule-budget.test.sh
+  run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
   run_suite "scripts/extract-api-spend" bash scripts/extract-api-spend.test.sh
+  run_suite "scripts/domain-model-drift" bash scripts/domain-model-drift.test.sh
+  # #6602: exit-code harness for the expenses verify_by expiry gate. Registered
+  # explicitly — this runner enumerates by hand and scripts/*.test.sh is NOT in
+  # the auto-glob below, so an unregistered suite is an ORPHAN that never gates
+  # (the #5417 class). The gate authorizes a fail-loud financial-accuracy alarm,
+  # so its arms returning the right exit codes is load-bearing coverage.
+  run_suite "scripts/expenses-verify-by-check" bash scripts/expenses-verify-by-check.test.sh
   run_suite "scripts/sentry-issue" bash scripts/sentry-issue.test.sh
+  run_suite "scripts/content-publisher" bash scripts/test-content-publisher.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
+  run_suite "scripts/review-reminder-liveness" bash scripts/review-reminder-liveness.test.sh
+  run_suite "scripts/zot-restart-loop-alarm" bash scripts/zot-restart-loop-alarm.test.sh
+  run_suite "scripts/followthrough-exec-bit" bash scripts/followthrough-exec-bit.test.sh
+  # Was an ORPHAN until #6698 — the suite existed and passed locally but was
+  # registered in no runner, so it gated nothing (exactly the class the comment
+  # above warns about). It covers the sweeper's path-traversal/symlink rejection
+  # AND the closed-set reopen path.
+  run_suite "scripts/sweep-followthroughs" bash scripts/sweep-followthroughs.test.sh
+  # #6462: exit-code harness for the zot soak's decision arms. Registered explicitly because
+  # this runner enumerates suites by hand — an unregistered .test.sh is an ORPHAN that never
+  # gates (the #5417 class). The soak authorizes an irreversible PAT revoke, so its arms
+  # returning the right codes is not optional coverage.
+  run_suite "scripts/zot-soak-6122-arms" bash scripts/followthroughs/zot-soak-6122.test.sh
+  # #6616: exit-code harness for the host_name-mislabel follow-through's decision tree (identity,
+  # liveness, TRANSIENT-not-PASS). Registered explicitly (orphan-suite class above) — its exit code
+  # gates whether the sweeper auto-closes #6616, so a vacuous PASS regression must redden CI.
+  run_suite "scripts/hostname-mislabel-web1-6616" bash scripts/followthroughs/hostname-mislabel-web1-6616.test.sh
+  # #6475 (D-6): exit-code harness for the ci-deploy Sentry-POST-failure soak probe. Registered
+  # explicitly (orphan-suite class above) — its exit code gates whether the sweeper auto-closes
+  # #6475, and the probe's whole purpose is to be the fail-loud alarm, so a vacuous PASS (or a
+  # false FAIL that pages a green codebase) must redden CI here.
+  run_suite "scripts/ci-deploy-sentry-post-fail-6475" bash scripts/followthroughs/ci-deploy-sentry-post-fail-6475.test.sh
+  # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
+  # these sourceable classifiers/gates were previously orphan suites (run only when invoked
+  # manually), so a regression to the watchdog decision logic would have shipped with green CI.
+  run_suite "scripts/inngest-liveness-classify" bash scripts/inngest-liveness-classify.test.sh
+  run_suite "scripts/inngest-restart-age-gate" bash scripts/inngest-restart-age-gate.test.sh
+  run_suite "scripts/inngest-restart-poll-classify" bash scripts/inngest-restart-poll-classify.test.sh
+  run_suite "scripts/tunnel-connector-census" bash scripts/tunnel-connector-census.test.sh
+  # #6512 Fix 2a: the seccomp-unenforced actionable-alert emitter (sourced by
+  # apply-deploy-pipeline-fix.yml). Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
+  run_suite "scripts/seccomp-unenforced-alert" bash scripts/seccomp-unenforced-alert.test.sh
+  # Dogfood Grok measure/bootstrap (#6545/#6546). Explicit run_suite — scripts/dogfood/
+  # is not in the auto-glob; orphan suites are the #5417 class (green CI, zero coverage).
+  run_suite "scripts/dogfood/grok-gpu-bootstrap" bash scripts/dogfood/grok-gpu-bootstrap.test.sh
+  run_suite "scripts/dogfood/grok-measure" bash scripts/dogfood/grok-measure.test.sh
+  # Stock preflight gate (#6453). Registered HERE because nothing auto-discovers
+  # tests/scripts/ — the bash *.test.sh glob further down does NOT include it, and
+  # infra-validation.yml only lists apps/web-platform/infra/*.test.sh. Without this line
+  # the gate that stands between a -replace and a stranded fleet ships with zero coverage.
+  run_suite "tests/scripts/stock-preflight-gate" bash tests/scripts/test-stock-preflight-gate.sh
+  # Supabase advisor RLS gate (#3366). Registered HERE for the same reason as the
+  # line above: nothing auto-discovers tests/scripts/. This is the harness that
+  # proves the gate cannot silently pass (a 401 must not parse to a clean 0);
+  # without this line that proof runs nowhere and the gate's entire value claim
+  # is unverified on every PR — the exact defect the gate exists to catch.
+  run_suite "tests/scripts/supabase-advisor-scan" bash tests/scripts/test-supabase-advisor-scan.sh
+  # EU residency allow-set parity (#6453 review). {nbg1,fsn1,hel1} is replicated across three
+  # terraform validations + the stock gate's default; nothing pinned them together, and the
+  # gate's own suite overrides the value to stay hermetic, so the shipped default was asserted
+  # nowhere. Drift makes the gate advise a location terraform rejects.
+  run_suite "tests/scripts/eu-location-allowset-parity" bash tests/scripts/test-eu-location-allowset-parity.sh
+  # betterstack-query.sh hot+archive UNION (#6288). remote() alone is the ~40-minute hot
+  # window, so a hot-only query answers `--since 24h` with 40 minutes — no error, just a
+  # short answer. That silently starved every soak gate built on it (#6288's needs 2h of
+  # span and could never PASS). Hermetic: stubs curl, asserts SQL shape, never live rows.
+  run_suite "tests/scripts/betterstack-query-archive" bash tests/scripts/test-betterstack-query-archive.sh
   run_suite "tests/scripts/classifier-regex-parity" bash tests/scripts/test_classifier_regex_parity.sh
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
+  run_suite "scripts/rule-metrics-aggregate" bash scripts/rule-metrics-aggregate.test.sh
+  run_suite "tests/scripts/weakness-miner" bash tests/scripts/test-weakness-miner.sh
   run_suite "tests/scripts/audit-ruleset-bypass" bash tests/scripts/test-audit-ruleset-bypass.sh
   run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh
   run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
+  run_suite "tests/commands/sync-domain-model" bash tests/commands/test-sync-domain-model.sh
   run_suite "tests/scripts/kb-drift-walker" bash tests/scripts/test-kb-drift-walker.sh
   # Destroy-guard counters (apply-* workflow trio). Pre-existing gap from
   # #4420 closed in #4419 — without these in CI, a PR that mutates a filter
@@ -136,8 +212,44 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-counter-github" bash tests/scripts/test-destroy-guard-counter.sh
   run_suite "tests/scripts/destroy-guard-counter-sentry" bash tests/scripts/test-destroy-guard-counter-sentry.sh
   run_suite "tests/scripts/destroy-guard-counter-web-platform" bash tests/scripts/test-destroy-guard-counter-web-platform.sh
+  # host image/apply coherence preflight (AC10b) — drives the standalone preflight
+  # via its test seams (no docker/network/prod write). Registered here alongside
+  # the destroy-guard trio: it is the host-agnostic coherence verifier the
+  # host_creates HALT's pinned-image chain names (#6575).
+  run_suite "tests/scripts/host-image-coherence-preflight" bash tests/scripts/test-host-image-coherence-preflight.sh
+  # #6197: inngest-host-replace scoped-recreate destroy-guard (same sourced-gate shape the
+  # web2-recreate gate used before #6575 deleted it).
+  run_suite "tests/scripts/inngest-host-replace-gate" bash tests/scripts/test-inngest-host-replace-gate.sh
+  # registry-host-replace scoped-recreate destroy-guard (5-target; preserves the zot store volume).
+  run_suite "tests/scripts/registry-host-replace-gate" bash tests/scripts/test-registry-host-replace-gate.sh
+  # registry-region-migrate destroy-guard (#6288; permits the registry's OWN store-volume replace across regions, forbids all out-of-scope destroys).
+  run_suite "tests/scripts/registry-region-migrate-gate" bash tests/scripts/test-registry-region-migrate-gate.sh
+  # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
+  run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
+  # workspaces-luks-cutover FIRST-PROVISION destroy-guard (#6604). Permits the +create of the
+  # five #6593-authored workspaces_luks resources; ABORTs any touch of the live plaintext
+  # /mnt/data volume/attachment or the web-1 server, any passphrase re-mint, any destroy/forget,
+  # or anything out of scope. Registered HERE — nothing auto-discovers tests/scripts/.
+  run_suite "tests/scripts/workspaces-luks-cutover-gate" bash tests/scripts/test-workspaces-luks-cutover-gate.sh
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
+  run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
+  # #6589 — the Sentry full-root delete path. These three gate the contract that
+  # makes `terraform destroy` reachable at all for infra/sentry/**: the absence of
+  # address-scoping in the apply (the #6074/#4929 root cause), the fail-closed
+  # aggregator verdict, and the squash-body emulation that decides whether a
+  # pre-staged [ack-destroy] will actually reach the merge commit.
+  run_suite "tests/scripts/sentry-destroy-counts" bash tests/scripts/test-sentry-destroy-counts.sh
+  run_suite "tests/scripts/sentry-full-root-apply" bash tests/scripts/test-sentry-full-root-apply.sh
+  run_suite "tests/scripts/sentry-destroy-gate-verdict" bash tests/scripts/test-sentry-destroy-gate-verdict.sh
+  run_suite "tests/scripts/sentry-squash-ack-detect" bash tests/scripts/test-sentry-squash-ack-detect.sh
+  run_suite "tests/scripts/sentry-create-gate" bash tests/scripts/test-sentry-create-gate.sh
+  # Class D (live monitor with no .tf block) is the delete path's other half: the
+  # full-root apply can only reclaim a monitor the config once declared. Its whole
+  # value is the non-zero exit — registered here because nothing auto-discovers
+  # tests/scripts/, and an unregistered suite would leave the gate's fail-closed
+  # claim asserted nowhere.
+  run_suite "tests/scripts/sentry-monitors-audit-class-d" bash tests/scripts/test-sentry-monitors-audit-class-d.sh
   # md->Slack-mrkdwn converter (scripts/md-to-mrkdwn.mjs). Runs under stock
   # ubuntu-latest node (no setup-node — same bare-`node` precedent as
   # secret-scan.yml). node --test ships in Node >=18.
@@ -182,7 +294,7 @@ fi
 # .claude/hooks/*.test.sh added 2026-05-15 (#3799 prereq to #3789); covers the
 # 8 hook tests that previously only the session-rules-loader entry pulled in.
 if want_scripts; then
-  for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh .claude/hooks/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
+  for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh plugins/soleur/scripts/*.test.sh .claude/hooks/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
     [[ -f "$f" ]] || continue
     run_suite "$f" bash "$f"
   done

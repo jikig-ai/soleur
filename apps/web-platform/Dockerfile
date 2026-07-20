@@ -145,6 +145,15 @@ COPY --from=builder /app/.next ./.next
 # Compiled custom server
 COPY --from=builder /app/dist/server ./dist/server
 
+# Faithful sandbox canary payload + captured-argv fixture (#5875 / ADR-079).
+# Baked into the image so ci-deploy.sh can `docker exec <canary> node
+# /app/scripts/sandbox-canary.mjs --replay` against the LOADED profile — the
+# host has no node, and the replay path is pure JS (reads the fixture, spawns
+# bwrap) with no runtime TypeScript/SDK dependency. The fixture is version-
+# consistent with this image's SDK because both are baked at build time.
+COPY --from=builder /app/scripts/sandbox-canary.mjs ./scripts/sandbox-canary.mjs
+COPY --from=builder /app/infra/sandbox-canary-argv.json ./infra/sandbox-canary-argv.json
+
 # Config file (compiled from .ts to .mjs to avoid TypeScript dep at runtime)
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 
@@ -154,6 +163,49 @@ COPY --from=builder /app/next.config.mjs ./next.config.mjs
 # The bind-mount /mnt/data/plugins/soleur is seeded from this path by ci-deploy.sh
 # via `docker cp <ephemeral>:/opt/soleur/plugin/. /mnt/data/plugins/soleur/`.
 COPY _plugin-vendored /opt/soleur/plugin
+
+# Fresh-host bootstrap scripts + hooks template baked for cloud-init extraction (#5921).
+# These 22 scripts + hooks.json.tmpl were REMOVED from cloud-init.yml write_files: as
+# base64 blobs they pushed the rendered Hetzner user_data to ~282 KB, ~8.6x over the
+# 32,768-byte cap. cloud-init.yml now `docker cp`s them out of this dir at first boot
+# (the same idiom as the plugin-seed above), verifies a combined content-hash, and
+# installs each with an authoritative mode. Boot integrity: server.tf computes
+# host_scripts_content_hash over local.host_script_files (this exact set) at plan time
+# and the extraction stub re-verifies it before install — a stale/mis-built image aborts
+# the boot loudly. KEEP THIS LIST IN LOCKSTEP with local.host_script_files in server.tf
+# (cloud-init-user-data-size.test.ts asserts the two sets are identical).
+COPY --from=builder \
+  /app/infra/ci-deploy.sh \
+  /app/infra/ci-deploy-wrapper.sh \
+  /app/infra/cat-deploy-state.sh \
+  /app/infra/canary-bundle-claim-check.sh \
+  /app/infra/disk-monitor.sh \
+  /app/infra/resource-monitor.sh \
+  /app/infra/container-restart-monitor.sh \
+  /app/infra/container-restart-monitor.service \
+  /app/infra/container-restart-monitor.timer \
+  /app/infra/infra-config-apply.sh \
+  /app/infra/infra-config-install.sh \
+  /app/infra/cat-infra-config-state.sh \
+  /app/infra/cron-egress-nftables.sh \
+  /app/infra/cron-egress-resolve.sh \
+  /app/infra/cron-egress-alarm.sh \
+  /app/infra/cron-egress-allowlist.txt \
+  /app/infra/cron-egress-allowlist-cidr.txt \
+  /app/infra/cron-egress-firewall.service \
+  /app/infra/cron-egress-resolve.service \
+  /app/infra/cron-egress-resolve.timer \
+  /app/infra/cron-egress-alarm@.service \
+  /app/infra/cron-egress-postapply-assert.sh \
+  /app/infra/cron-egress-enforce-probe.sh \
+  /app/infra/hooks.json.tmpl \
+  /app/infra/journald-soleur.conf \
+  /app/infra/soleur-host-bootstrap.sh \
+  /app/infra/cosign-trusted-root.json \
+  /app/infra/vector.toml \
+  /app/infra/seccomp-bwrap.json \
+  /app/infra/apparmor-soleur-bwrap.profile \
+  /opt/soleur/host-scripts/
 RUN chown -R 1001:1001 /opt/soleur
 
 # Non-root user (UID 1001 avoids collision with node:22-slim's built-in node user at UID 1000)
