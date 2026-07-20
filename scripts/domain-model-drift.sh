@@ -29,6 +29,32 @@ source "$SCRIPT_DIR/lib/domain-model-lib.sh"
 SCHEMA_VERSION=1
 DISCLAIMER="Best-effort structural extraction from migrations/RLS/types; NOT a security audit or access-control attestation. Absence from this report does not imply an invariant is unenforced, and presence does not imply it is correctly enforced. Dynamic SQL and function-body logic are disclosed as blind_spots, not analyzed."
 
+# --- shared tempfile cleanup: ONE array, ONE trap, registered in the MAIN shell ---
+# Every mktemp in this script registers here. The trap is the only cleanup path.
+#
+# INVARIANT (do not break): allocation must happen in the MAIN SHELL, never inside
+# a function that a caller runs under `$( )`. `drift` mode invokes emit_extract_json
+# via command substitution (see emit_drift_report), so an append made inside that
+# function would land in a subshell copy of the array and be lost, AND bash does not
+# run the parent's EXIT trap when the subshell exits — the files would leak on every
+# `drift` run while the trap looked correct. Allocate in the caller; pass paths in.
+_TMPFILES=()
+_cleanup_tmpfiles() { [[ ${#_TMPFILES[@]} -gt 0 ]] && rm -f "${_TMPFILES[@]}"; return 0; }
+# INT/TERM as well as EXIT: bash does not run an EXIT trap for an uncaught
+# SIGINT/SIGTERM in a non-interactive script, so Ctrl-C or a CI job kill would
+# otherwise leak the spool files. Contents are non-sensitive by construction (the
+# secret scan runs BEFORE any spool write) and mode is 0600, so this is disk
+# hygiene rather than disclosure — but the leak is free to close.
+trap _cleanup_tmpfiles EXIT INT TERM
+
+# Allocate the two extract spool files in main-shell scope (see the invariant above).
+SPOOL_FACTS=""
+SPOOL_BLIND=""
+alloc_spools() {
+  SPOOL_FACTS="$(mktemp)"; SPOOL_BLIND="$(mktemp)"
+  _TMPFILES+=("$SPOOL_FACTS" "$SPOOL_BLIND")
+}
+
 die() { echo "domain-model-drift: $*" >&2; exit 2; }
 usage() { echo "usage: domain-model-drift.sh <extract|drift|write-row> [--repo <path>] [--register <path>] [--anchor <a>] [--statement <s>]" >&2; exit 2; }
 
@@ -57,7 +83,11 @@ REPO="$(realpath -e -- "$REPO" 2>/dev/null)" || die "--repo does not resolve to 
 # ---------------------------------------------------------------------------
 # extract: emit the structural-facts JSON for REPO
 # ---------------------------------------------------------------------------
+#
+# Spool files are ALLOCATED BY THE CALLER (alloc_spools) and passed in — this
+# function is called under `$( )` in drift mode, so it must not own cleanup.
 emit_extract_json() {
+  local facts_f="$1" blind_f="$2"
   local migdir facts_tsv blind_tsv events
   migdir="$(dm_find_migrations_dir "$REPO")"
 
@@ -93,19 +123,30 @@ emit_extract_json() {
     exit 3
   fi
 
-  local facts_json blind_json
-  facts_json="$(printf '%s' "$facts_tsv" | jq -R -s -c '
-    split("\n") | map(select(length>0)) | map(split("\t")) |
-    map({kind:.[0], anchor:.[1], object:.[2], detail:.[3]}
-        + (if .[0]=="policy" then {predicate:.[3]} else {} end))
-    | sort_by(.anchor)')"
-  blind_json="$(printf '%s' "$blind_tsv" | jq -R -s -c '
-    split("\n") | map(select(length>0)) | map(split("\t")) |
-    map({file:.[0], detail:.[1]}) | sort_by([.file,.detail])')"
+  # Spool the TSVs to files and bind with --rawfile (#6720). A shell variable bound
+  # via --argjson is ONE argv argument and is capped by MAX_ARG_STRLEN = 131,072 B
+  # PER ARGUMENT (not ARG_MAX) — verified by bisect: 131,071 B passes, 131,072 B
+  # fails E2BIG. The fact corpus grows monotonically with the migration set, so the
+  # old form was on a collision course with a hard `Argument list too long`.
+  # --rawfile binds the file's RAW TEXT to a string variable and file I/O has no
+  # per-argument limit, so the ceiling is gone. The jq programs below are moved
+  # verbatim from the two former pre-passes — the source is TSV, and the program
+  # already parses TSV from a string, so this is a MOVE, not a rewrite.
+  # (--slurpfile was rejected: the payload is a single top-level array, so it would
+  # bind as [[...]] and yield a SILENT `.facts|length == 1` undercount.)
+  # Precedent: scripts/rule-metrics-aggregate.sh (rules_tsv_file / --rawfile rules_tsv).
+  printf '%s' "$facts_tsv" > "$facts_f"
+  printf '%s' "$blind_tsv" > "$blind_f"
 
   jq -Sn --argjson v "$SCHEMA_VERSION" --arg d "$DISCLAIMER" \
-    --argjson facts "${facts_json:-[]}" --argjson blind "${blind_json:-[]}" \
-    '{schema_version:$v, stack:"supabase-ts", disclaimer:$d, facts:$facts, blind_spots:$blind}'
+    --rawfile facts_tsv "$facts_f" --rawfile blind_tsv "$blind_f" \
+    '{schema_version:$v, stack:"supabase-ts", disclaimer:$d,
+      facts: ($facts_tsv | split("\n") | map(select(length>0)) | map(split("\t")) |
+              map({kind:.[0], anchor:.[1], object:.[2], detail:.[3]}
+                  + (if .[0]=="policy" then {predicate:.[3]} else {} end))
+              | sort_by(.anchor)),
+      blind_spots: ($blind_tsv | split("\n") | map(select(length>0)) | map(split("\t")) |
+                    map({file:.[0], detail:.[1]}) | sort_by([.file,.detail]))}'
 }
 
 # ---------------------------------------------------------------------------
@@ -124,7 +165,7 @@ emit_drift_report() {
   # NOTE: declare + assign on SEPARATE lines — `local x="$(cmd)"` masks the
   # subshell exit code, which would swallow the fail-closed secret-refuse (exit 3).
   local extract_json
-  extract_json="$(emit_extract_json)" || exit $?
+  extract_json="$(emit_extract_json "$SPOOL_FACTS" "$SPOOL_BLIND")" || exit $?
 
   # FAIL-OPEN GUARD (user-impact P1): if no Supabase migrations dir resolved, the
   # extract is empty and a naive report reads identical to a fully-documented repo
@@ -232,7 +273,10 @@ write_row() {
   fi
 
   # atomic whole-file rewrite (mktemp + mv), inserting the row after the heading's table
-  local tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
+  # migrated onto the shared _TMPFILES trap — a local `trap … EXIT` here would
+  # REPLACE it, and the matching `trap - EXIT` would CLEAR it (write_row runs in
+  # the main shell, so the append is visible to the parent array).
+  local tmp; tmp="$(mktemp)"; _TMPFILES+=("$tmp")
   awk -v row="| $esc_anchor | $esc_stmt |" '
     { print }
     /^## Auto-inferred \(unreviewed\)/ { insec = 1 }
@@ -243,12 +287,11 @@ write_row() {
     die "could not locate the Auto-inferred table separator — aborting (register unchanged)"
   fi
   mv "$tmp" "$reg"
-  trap - EXIT
 }
 
 case "$MODE" in
-  extract)   emit_extract_json ;;
-  drift)     emit_drift_report ;;
+  extract)   alloc_spools; emit_extract_json "$SPOOL_FACTS" "$SPOOL_BLIND" ;;
+  drift)     alloc_spools; emit_drift_report ;;
   write-row) write_row ;;
   *) usage ;;
 esac
