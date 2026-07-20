@@ -6,7 +6,7 @@ type: bug
 lane: cross-domain
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
-status: draft
+status: implemented
 ---
 
 # fix(notifications): idempotency guard for the statutory-deadline cron send-path
@@ -375,32 +375,32 @@ Full suite before ship. `bunfig.toml` sets `pathIgnorePatterns = ["**"]` — vit
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** Migration hygiene: no `CONCURRENTLY`, no top-level `BEGIN`/`COMMIT`.
-- [ ] **AC2** PK is exactly `(item_id, tick_key)`; RLS enabled with zero policies; the FK to
+- [x] **AC1** Migration hygiene: no `CONCURRENTLY`, no top-level `BEGIN`/`COMMIT`.
+- [x] **AC2** PK is exactly `(item_id, tick_key)`; RLS enabled with zero policies; the FK to
       `email_triage_items` is present; there is **no** `user_id` column.
-- [ ] **AC3** No pre-existing function is replaced. Verify:
+- [x] **AC3** No pre-existing function is replaced. Verify:
       `grep -cE 'purge_email_triage_items|anonymise_email_triage_items' <migration>` returns `0`.
       *(The earlier `grep -c 'statutory_repin_send' ≥ 2` form was vacuous — the migration
       creates that table, so it self-matches; empirically `grep -c probe_tokens` on migration
       102 returns 10.)*
-- [ ] **AC4** `purge_statutory_repin_send()` declares `SECURITY DEFINER`,
+- [x] **AC4** `purge_statutory_repin_send()` declares `SECURITY DEFINER`,
       `SET search_path = public, pg_temp`, and the `REVOKE` / `GRANT EXECUTE … TO service_role` pair.
-- [ ] **AC5** Suppression occurs **only** on `23505`. Every other outcome — `{error}` return
+- [x] **AC5** Suppression occurs **only** on `23505`. Every other outcome — `{error}` return
       **or** thrown rejection — dispatches. *(Supersedes an earlier AC5/AC6 pair that
       contradicted each other: "dispatch only on a clean insert" forbade the fail-open the
       design rests on.)*
-- [ ] **AC6** T2 passes — the T-7 heads-up sends exactly once across a calendar-day straddle.
-- [ ] **AC7** T6 passes — a thrown insert does not kill the run; later items still dispatch.
-- [ ] **AC8** T1 passes and asserts marker-before-dispatch ordering.
-- [ ] **AC9** The new test never references the notifications module. Verify:
+- [x] **AC6** T2 passes — the T-7 heads-up sends exactly once across a calendar-day straddle.
+- [x] **AC7** T6 passes — a thrown insert does not kill the run; later items still dispatch.
+- [x] **AC8** T1 passes and asserts marker-before-dispatch ordering.
+- [x] **AC9** The new test never references the notifications module. Verify:
       `grep -c "@/server/notifications" <new-test-file> || true` returns `0`. *(Bare-name grep,
       not `vi.mock("…"` — the latter misses multi-line, single-quoted, and `vi.doMock` forms;
       `|| true` because `grep -c` exits 1 on zero matches and would abort a `set -e` script.)*
-- [ ] **AC10** `dsar-allowlist-completeness.test.ts` passes, and T8 asserts the table is
+- [x] **AC10** `dsar-allowlist-completeness.test.ts` passes, and T8 asserts the table is
       actually discovered — not merely that the suite is green.
-- [ ] **AC11** The four cross-document-gate files are updated; the gate is green.
-- [ ] **AC12** Art. 30 PA-27 limbs (c)/(f)/(g) amended; no new PA row.
-- [ ] **AC13** The ADR file with frontmatter `adr: 035`
+- [x] **AC11** The four cross-document-gate files are updated; the gate is green.
+- [x] **AC12** Art. 30 PA-27 limbs (c)/(f)/(g) amended; no new PA row.
+- [x] **AC13** The ADR file with frontmatter `adr: 035`
       (`ADR-037-messages-source-ref-composite-unique-for-multi-source-dedup.md`) is amended —
       assert it **appears** in `git diff --name-only origin/main...HEAD`.
       `ADR-035-template-registry-code-static.md` gains **no decision content**: if it appears
@@ -411,8 +411,8 @@ Full suite before ship. `bunfig.toml` sets `pathIgnorePatterns = ["**"]` — vit
       false-positives on anything that landed after the branch point; the cross-document gate
       documents this exact trap. A filename-absence assertion would be wrong here, since the
       pointer is permitted — assert the shape of the change, not its absence.)*
-- [ ] **AC14** No new Sentry paging rule (`apps/web-platform/infra/sentry/` untouched).
-- [ ] **AC15** PR body uses `Closes #6781`.
+- [x] **AC14** No new Sentry paging rule (`apps/web-platform/infra/sentry/` untouched).
+- [x] **AC15** PR body uses `Closes #6781`.
 
 ### Post-merge (operator)
 
@@ -654,9 +654,11 @@ Per `wg-when-deferring-a-capability-create-a`, each needs an issue **before this
 
 - [x] **CPO ruling on C2 and C5 has returned** (2026-07-20). C2 UPHELD, C5 AMENDED. See the
       CPO conditions table above.
-- [ ] **T12 (task 3.12e) is implemented and green.** This is the C5 amendment and is the one
+- [x] **T12 (task 3.12e) is implemented and green.** This is the C5 amendment and is the one
       thing the CPO ruling added as a PR-ready blocker.
-- [ ] All five deferred issues above are filed.
+- [x] All five deferred issues above are filed: #6798 (reliance framing), #6799 (T-7
+      equality fragility), #6800 (ADR ordinals), #6801 (60-day scan cliff), #6802 (non-410
+      push silence).
 
 ## Sharp Edges
 
