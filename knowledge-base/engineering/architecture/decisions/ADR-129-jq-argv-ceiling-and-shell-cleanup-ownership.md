@@ -6,7 +6,7 @@ issue: 6736
 supersedes: null
 ---
 
-# ADR-128: the jq argv ceiling, and shell tempfile-cleanup ownership
+# ADR-129: the jq argv ceiling, and shell tempfile-cleanup ownership
 
 ## Context
 

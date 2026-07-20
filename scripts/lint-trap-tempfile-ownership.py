@@ -20,7 +20,7 @@ RULE (c) -- MKTEMP WITH NO OWNING TRAP
 
     This is the "class-b" population: 102 files repo-wide at time of writing.
     Most are short-lived CI scripts where the leak is bounded, so the existing
-    population is ACCEPTED (see ADR-128) rather than fixed file-by-file. Rule (c)
+    population is ACCEPTED (see ADR-129) rather than fixed file-by-file. Rule (c)
     is therefore scoped to ADDED LINES: it gates NEW entrants only. Scoping it to
     changed FILES was tried and was wrong -- touching any accepted file then demanded
     you pay off its pre-existing debt, which is how a gate gets switched off. Without
@@ -415,7 +415,7 @@ def check_rule_c(path: Path, lines: list[str], line_scoped: bool = True) -> list
         f"a tempfile but registers no `trap ... EXIT`, so nothing removes it if the "
         f"script dies between allocation and cleanup. Add a single owning trap, or "
         f"annotate `# lint-trap-ownership: ok <reason>` if the leak is genuinely bounded "
-        f"(see ADR-128)."
+        f"(see ADR-129)."
     ]
 
 
@@ -529,7 +529,7 @@ def main() -> int:
     else:
         targets = all_shell_files()
         # Rule (c) is ALWAYS new-entrant-scoped: the existing class-b population is
-        # accepted (ADR-128), so a full scan must not re-litigate it.
+        # accepted (ADR-129), so a full scan must not re-litigate it.
         changed_scope = set(git_changed_files())
 
     problems: list[str] = []

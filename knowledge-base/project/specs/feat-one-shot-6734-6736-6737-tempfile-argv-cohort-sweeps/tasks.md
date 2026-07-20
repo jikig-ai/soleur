@@ -133,7 +133,7 @@ Derived from
 
 ## Phase 4 — ADR + close-out
 
-- [x] 4.1 Write `ADR-128-jq-argv-ceiling-and-shell-cleanup-ownership.md` — core argv decision,
+- [x] 4.1 Write `ADR-129-jq-argv-ceiling-and-shell-cleanup-ownership.md` — core argv decision,
       secondary lint-enforced cleanup-ownership rules, the class-b accept + upgrade trigger, the
       honest enforcement level, and `## Alternatives Considered` (AGENTS.md rule declined at 100 B
       headroom; shellcheck; converting bounded sites; rule (b)).

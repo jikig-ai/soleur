@@ -35,7 +35,7 @@ than the number:
   `skill-freshness-aggregate.sh`, and adding owning traps to this PR's own new harnesses,
   moved several more out.
 - **Multi-trap count is no longer tracked.** It existed to size rule (b), which was
-  rejected as incoherent (ADR-128 § Alternatives Considered).
+  rejected as incoherent (ADR-129 § Alternatives Considered).
 
 ## What the census does NOT cover
 

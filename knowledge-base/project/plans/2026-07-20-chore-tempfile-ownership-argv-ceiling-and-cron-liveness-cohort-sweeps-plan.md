@@ -293,7 +293,7 @@ measurement.
   `test-content-publisher.sh` prefix; do not collide)
 - `scripts/cron-artifact-age.sh` + `.test.sh`
 - `knowledge-base/engineering/audits/2026-07-20-cron-liveness-cohort-audit.md`
-- `knowledge-base/engineering/architecture/decisions/ADR-128-jq-argv-ceiling-and-shell-cleanup-ownership.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-129-jq-argv-ceiling-and-shell-cleanup-ownership.md`
   (**128, not 127** — 127 is taken on `origin/main`; this worktree was a commit behind. Provisional;
   `/ship` re-verifies, and a renumber must sweep this plan and `tasks.md`.)
 
@@ -400,7 +400,7 @@ No `ssh` appears in any verification path.
 
 ### ADR
 
-**ADR-128 — the jq argv ceiling, plus shell cleanup ownership.** Scoped down from v1's four
+**ADR-129 — the jq argv ceiling, plus shell cleanup ownership.** Scoped down from v1's four
 invariants after review showed v1's stated rationale ("they share one enforcement mechanism") was
 **factually false** — the argv rule is enforced by per-site tests, not by any lint.
 
@@ -578,7 +578,7 @@ symptom, and no host-replace, lock-taking DDL, or router change.
    green" proves only that `heartbeatOk` was not renamed.
 9. **Cron self-authorship ≠ artifact currency, and a 12-day window cannot measure a monthly cron**
    (R22b/R22c). Any staleness claim must carry two genuinely independent producers and state cadence.
-10. **ADR-128, not 127** — 127 is taken on `origin/main`. Re-verify at ship; a renumber must sweep this
+10. **ADR-129, not 127** — 127 is taken on `origin/main`. Re-verify at ship; a renumber must sweep this
     plan and `tasks.md`.
 11. **`emitCronPersistResult` already fires for every caller** (R20b). Do not add handler-side emission
     — it double-emits and makes any emitter-count guard vacuous.
@@ -597,5 +597,5 @@ symptom, and no host-replace, lock-taking DDL, or router change.
   pre-existing P1-HIGH in a different subsystem. Its issue stays open and untouched.
 - **The community-monitor liveness-vs-dedup predicate asymmetry** — out of scope by instruction;
   contested design. Its issue stays open and untouched.
-- **Repo-wide shellcheck**, and **converting bounded argv sites** — rejected in ADR-128.
+- **Repo-wide shellcheck**, and **converting bounded argv sites** — rejected in ADR-129.
 - **Backfilling the ~6 missing articles** — resume forward cadence only.

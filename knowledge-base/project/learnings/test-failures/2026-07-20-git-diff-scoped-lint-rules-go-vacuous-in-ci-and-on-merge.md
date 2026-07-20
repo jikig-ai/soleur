@@ -15,7 +15,7 @@ tags: [lint-gates, ci, git-scoping, vacuous-tests, fetch-depth, shellcheck]
 
 `scripts/lint-trap-tempfile-ownership.py` rule (c) flags a shell file that allocates a
 tempfile with no owning trap. To avoid re-litigating an accepted 102-file population
-(ADR-128), commit 6404e99d2 scoped it to **lines added vs the merge base**, computed with
+(ADR-129), commit 6404e99d2 scoped it to **lines added vs the merge base**, computed with
 `git merge-base HEAD origin/main`.
 
 The suite recorded 203/203 green locally. In CI, 5 of 17 failed, with the fifth naming the
@@ -65,7 +65,7 @@ clone depth, merge — perturbs the findings.
 
 1. **Explicit-path mode lints the whole file and consults git not at all.** Line scoping
    stays in the full-scan and `--changed` modes, which are what actually enforce the
-   ADR-128 new-entrant accept.
+   ADR-129 new-entrant accept.
 2. **`merge_base()` tries `origin/main`, `main`, `origin/HEAD` and returns `None`** rather
    than raising, so a clone with a differently-named remote works.
 3. **`git_changed_files()` degrades to untracked-only with a loud warning** instead of
@@ -144,7 +144,7 @@ newness as a precondition will stop seeing its own fixtures one merge later.
 
 ## Related
 
-- ADR-128 — jq argv ceiling and shell cleanup ownership (defines the class-b accept this
+- ADR-129 — jq argv ceiling and shell cleanup ownership (defines the class-b accept this
   rule ratchets)
 - #6752 — the three genuine remaining class-c/d tempfile-ownership sites
 - #6750 — deferred handler-local cron liveness work

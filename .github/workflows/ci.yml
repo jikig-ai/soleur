@@ -108,11 +108,11 @@ jobs:
           fi
       # #6734 tempfile-cleanup ownership. Rule (a) subshell-append runs repo-wide;
       # rule (c) mktemp-with-no-owning-trap is new-entrant-scoped, because the existing
-      # class-b population is an accepted, ratcheted debt (ADR-128).
+      # class-b population is an accepted, ratcheted debt (ADR-129).
       #
       # ENFORCEMENT LEVEL IS ADVISORY, NOT BLOCKING. This job is absent from BOTH
       # scripts/required-checks.txt and the Terraform ruleset, so a PR can merge with it
-      # red. That is stated here, in ADR-128, and in the linter's own docstring rather
+      # red. That is stated here, in ADR-129, and in the linter's own docstring rather
       # than left implied -- a gate that claims teeth it lacks is worse than one that
       # does not, because it stops people looking. Promoting it is a deliberate
       # follow-up: add the job to required-checks.txt AND the ruleset together.
