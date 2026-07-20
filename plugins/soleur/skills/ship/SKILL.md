@@ -474,79 +474,85 @@ findings were filed but never resolved before ship. This gate enforces the
 fix-inline default at the merge boundary. See rule
 `rf-review-finding-default-fix-inline`.
 
-### Net-Issue-Flow Surfacing (advisory)
+### Net-Issue-Flow Gate (blocking)
 
-Before queueing auto-merge, compute and display the per-PR net-issue-flow:
-how many issues this PR **closes** vs. how many `deferred-scope-out` issues
-it **files**. The display is advisory — it does NOT block merge — but it
-makes the backlog math visible at the last moment when the operator can
-still pivot a filed issue back to inline.
+Before queueing auto-merge, compute the per-PR net-issue-flow: how many issues
+this PR **closes** vs. how many issues it **files**. **`NET > 0` blocks
+PR-ready and merge.** Every PR must close at least as many issues as it files.
 
-**Why this surface exists.** PR #4452 introduced the cost-of-filing
-auto-flip and concrete-trigger rules; this metric is the observability
-layer that catches regressions in those rules. PRs #4418 and #4440 were on
-track to file 6 deferred-scope-out issues combined; the operator manually
-walked them back to 1 — but only because the math was visible during
-synthesis. Once outside review synthesis, the per-PR delta becomes
-invisible and the backlog accretes silently.
+**Why this gate exists.** PR #4452 introduced the cost-of-filing auto-flip and
+concrete-trigger rules; this metric was added as the observability layer that
+catches regressions in them. It ran **advisory for three months and did not
+work** — advisory output is trivially skipped, and it was skipped. Measured
+over the 7 days to 2026-07-20: 269 issues filed against 132 merged PRs (2.04
+per PR) and 125 closed, growing the queue +144/week to 1,024 open, with 63% of
+open issues older than 30 days. Shipping better does not help and shipping more
+makes it worse, because the dominant issue *source* is the self-checking
+apparatus itself — every gate, linter, probe and cron is software whose job is
+finding defects and which has defects of its own. Filing is free; closing is
+expensive. A surface that only *displays* that asymmetry does not correct it.
 
-**Detection:**
+**Threshold: `NET > 0`, not `NET > +1`.** At ~132 merged PRs/week a `+1`
+per-PR allowance authorizes +132 issues/week against the observed +144/week —
+roughly an 8% reduction, wearing the authority of a passing gate. `NET > 0` is
+the only threshold that flattens the queue.
+
+**Detection:** run the script — do not re-implement it inline.
 
 ```bash
-PR_NUMBER=$(gh pr view --json number --jq .number)
-[[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "Error: PR_NUMBER is not a positive integer: $PR_NUMBER"; exit 1; }
-
-# N: issues this PR closes via `Closes #X` / `Fixes #X` / `Resolves #X`.
-# Body-keyword detection matches /ship Phase 6 issue detection conventions.
-PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body)
-CLOSING=$(printf '%s\n' "$PR_BODY" \
-  | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' \
-  | grep -oE '#[0-9]+' \
-  | sort -u \
-  | wc -l)
-
-# M: deferred-scope-out issues opened AFTER the PR was created that cross-reference
-# this PR via `Ref|Closes|Fixes #<N>` in the body. The `created:>=<PR-opened-date>`
-# filter scopes the count to issues filed during THIS PR cycle (not pre-existing
-# scope-outs that merely cross-reference the PR for context). Matches Phase 5.5
-# detection regex.
-PR_CREATED_AT=$(gh pr view "$PR_NUMBER" --json createdAt --jq .createdAt | cut -c1-10)
-FILED=$(gh issue list \
-  --label deferred-scope-out \
-  --state open \
-  --search "created:>=${PR_CREATED_AT}" \
-  --json number,body \
-  --jq '[.[] | select((.body // "") | test("(^|\\s)(Ref|Closes|Fixes) #'"$PR_NUMBER"'(\\s|$|[^0-9])"))] | length')
-
-NET=$(( FILED - CLOSING ))
+bash plugins/soleur/skills/ship/scripts/net-issue-flow.sh "$PR_NUMBER"
 ```
 
-**Display (always emit, never block):**
+[`net-issue-flow.sh`](./scripts/net-issue-flow.sh) emits the
+CLOSING / FILED / NET block (enumerating the actual issue numbers behind each
+count), exits **1** when `NET > 0` with no override, and **0** otherwise.
+
+The FILED query deliberately does **not** use `--search`, does **not** filter by
+`--label deferred-scope-out`, uses `--state all`, passes `--limit 500`, and
+matches a bare `#N` with a numeric boundary. Each of those was independently
+measured: `--search` returns empty cross-repo under a GitHub App/action token;
+`gh issue list` defaults to 30 (measured 30 returned vs 271 real); the
+`(Ref|Closes|Fixes)` keyword form covers ~40% of real filings; the
+`deferred-scope-out` label covers ~8%. **Any one of them left in place makes a
+blocking gate silently always-pass** — strictly worse than the advisory surface
+it replaces, because it also carries the authority of having passed. Do not
+"simplify" the query without re-running
+[`plugins/soleur/test/net-issue-flow.test.sh`](../../test/net-issue-flow.test.sh);
+its 18 assertions pin all four, and the mutation battery in
+`specs/<branch>/mutation-evidence.md` proves each can fail.
+
+**Override (deliberate, not default).** Legitimate architectural-pivot
+deferrals can be net-positive and correct. To proceed net-positive, add to the
+PR body:
 
 ```text
-PR net-issue-flow:
-  Closing: <CLOSING> (extracted from `Closes #X` keywords in body)
-  Filing:  <FILED> (count of deferred-scope-out issues created during this PR cycle that Ref #<PR>)
-  Net:     <signed NET> (positive = backlog growth)
+<!-- gate-override: net-issue-flow -->
 ```
 
-**If `NET > 0`** (net-positive backlog growth), print a warning ABOVE the
-PR body in the ship checklist:
+plus **a one-line justification per filed issue**, or run with
+`SOLEUR_SKIP_NET_ISSUE_FLOW_GATE=1`. Both paths are announced in the output and
+recorded as telemetry — an override is a decision on the record, not a silent
+bypass.
 
-```text
-⚠ Net-positive backlog flow: this PR adds +<NET> issues to the deferred-scope-out queue.
-  Before merging, consider whether any of the <FILED> filed issues could be done inline instead.
-  Cost-of-filing gate: ≤30 lines AND ≤2 files → auto-flip to fix-inline (see
-  plugins/soleur/skills/review/SKILL.md "Mechanical pre-CONCUR auto-flip").
-```
+**Fail-open, not fail-silent.** A `gh`/API error exits 0 so an outage cannot
+wedge every merge, but each fail-open emits an `emit_incident … transient` row.
+A gate that fails open silently is indistinguishable from one that passes.
 
-The warning is advisory — it does NOT block auto-merge. The pipeline
-continues into Phase 6 immediately after emitting the warning. The point
-is to surface the math at the moment when the operator can still pivot,
-not to add a new merge-blocker (the Review-Findings Exit Gate above
-already covers the "unjustified filing" case).
+**Reachability (stated honestly).** The blocking enforcement is a PreToolUse
+hook on `gh pr ready` / `gh pr merge`. It therefore covers agent-driven merges
+only. It does **not** cover:
 
-**Why advisory (not blocking).** Advisory only — legitimate architectural-pivot deferrals can be net-positive and correct.
+| Merge surface | Covered? |
+|---|---|
+| `gh pr ready` / `gh pr merge` from an agent session | yes |
+| GitHub web UI merge button | no |
+| GitHub native auto-merge (queued before the gate runs) | no |
+| CI-driven merges (merge queue, bot merges) | no |
+
+Closing those would require a **required status check**, which is deliberately
+out of scope here: proposing a new CI gate inside the same change that drafts a
+gate-moratorium ADR would be self-undermining. The hook covers the dominant
+path; the residue is named rather than papered over.
 
 ### Pre-Ship Domain Review (conditional)
 

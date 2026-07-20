@@ -76,7 +76,7 @@ HARD RULE: Immediately after the Session Error Inventory, classify EVERY invento
 For each item, decide:
 
 - **recurring** — the same class will bite again on a future session/PR (a flaky blocking gate, a missing guard, a foot-gun in a shared script, an inaccurate comment that misleads the next reader). Then pick a disposition:
-  - **fix-now-inline** — ≤30 lines AND ≤2 files AND in a subsystem this PR already touches → fold the fix into THIS work. (The first two conjuncts mirror the cost-of-filing gate in `review/SKILL.md` §5; the subsystem clause is the scope-discipline overlay — a different-subsystem defect is file-tracked, never inlined here.)
+  - **fix-now-inline** — ≤100 lines AND ≤4 files AND in a subsystem this PR already touches → fold the fix into THIS work. (The first two conjuncts mirror the cost-of-filing gate in `review/SKILL.md` §5; the subsystem clause is the scope-discipline overlay — a different-subsystem defect is file-tracked, never inlined here.)
   - **file-tracked** — larger, a different subsystem, or security/infra-sensitive → file a `deferred-scope-out` GitHub issue via the `review/SKILL.md` §5 mechanics (cost-of-filing + net-issue-flow: consolidate sibling follow-ups into one tracker; do not net-grow the backlog for trivia). A discovered defect in a DIFFERENT subsystem MUST stay its own issue and PR — never bundle it into an unrelated feature branch (scope discipline).
 - **one-off** — a typo, a transient flake that already self-resolved, or a context-specific misstep with no recurrence vector. Note it in the learning's Session Errors and move on (no fix, no issue).
 

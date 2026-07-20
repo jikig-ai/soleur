@@ -493,24 +493,61 @@ equally.
 
 **Cost-of-filing gate (FIRST FILTER — apply BEFORE invoking the CONCUR
 second-reviewer gate AND BEFORE evaluating the four scope-out criteria below):**
-If the fix is ≤30 lines of code AND touches ≤2 files AND no reviewer agent
+If the fix is ≤100 lines of code AND touches ≤4 files AND no reviewer agent
 independently dissents on technical grounds (e.g., contested-design with named
 alternatives), fix inline. The bookkeeping cost of `gh issue create + scope-out
 justification + future triage + closure + follow-up PR` averages ~30 minutes of
-cumulative human attention; a ≤30-line code edit averages ~5 minutes. Filing
-the issue is NET-NEGATIVE work for the team. This gate is load-bearing: a PR
-that opens more issues than it closes is a workflow failure, not a normal
-review outcome.
+cumulative human attention, and that cost is **fixed** — it does not shrink
+with the size of the deferred fix. The edit cost is what scales: a ≤100-line
+edit runs roughly 5–20 minutes. So the two curves cross well above the old
+30-line boundary, and everything below the crossover is NET-NEGATIVE work to
+file.
+
+**Why 100/4 and not 30/2 (raised 2026-07-20).** The old boundary was set when
+filing looked cheap. Measured over the 7 days to 2026-07-20: 269 issues filed
+against 132 merged PRs (2.04 filed per PR) and 125 closed, growing the queue
++144/week — up from +7.2/day over the prior 23 days. A 30-line boundary sends
+most real findings to the queue, and the queue does not drain. Raising to
+≤100 lines AND ≤4 files moves the crossover to where the arithmetic actually
+sits. This threshold is **instrumented**, not guessed: every disposition emits
+a telemetry row (see the auto-flip below), so the next tuning pass reads data
+instead of re-arguing from intuition.
+
+This gate is load-bearing: a PR that opens more issues than it closes is a
+workflow failure, not a normal review outcome. That is now enforced rather
+than asserted — see the blocking net-issue-flow gate in
+[`ship/SKILL.md`](../ship/SKILL.md) and
+[`net-issue-flow.sh`](../ship/scripts/net-issue-flow.sh).
 
 **Mechanical pre-CONCUR auto-flip:**
 
-Before invoking `code-simplicity-reviewer`, self-assess fix size. If ≤30 lines AND ≤2 files, BYPASS the CONCUR gate — the disposition is auto-flipped to fix-inline. Apply the fix; do not file.
+Before invoking `code-simplicity-reviewer`, self-assess fix size. If ≤100 lines AND ≤4 files, BYPASS the CONCUR gate — the disposition is auto-flipped to fix-inline. Apply the fix; do not file.
 
-If the fix size cannot be confidently bounded without writing it, write a 5-minute spike. If the spike exceeds 30 lines, run CONCUR; if it doesn't, commit the spike. Do NOT run CONCUR on a fix you've already written and verified to be small.
+**Instrumentation (REQUIRED, not optional).** Emit one telemetry row per
+finding disposition, so the next threshold tuning reads measured flip-vs-file
+ratios instead of re-arguing from intuition. This is the half of the change
+that makes the *next* change cheap:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh"
+# DISPOSITION is exactly one of: flip-inline | file
+emit_incident "cost-of-filing-${DISPOSITION}" applied \
+  "review disposition: ${DISPOSITION} (${LINES} lines, ${FILES} files)"
+```
+
+The disposition rides in the **`rule_id`** (`cost-of-filing-flip-inline` vs
+`cost-of-filing-file`) and the event stays `applied`. That is not a stylistic
+choice: the `rule-metrics-aggregate.sh` report keys every counter on `rule_id` and
+gates on `event_type ∈ {deny,bypass,applied,warn}` — it **never reads `.kind`**,
+so a `kind`-based scheme would write rows that no report ever surfaces. Read the
+resulting ratio with `bash scripts/rule-metrics-aggregate.sh` and compare the
+two `applied_count` values.
+
+If the fix size cannot be confidently bounded without writing it, write a 5-minute spike. If the spike exceeds 100 lines, run CONCUR; if it doesn't, commit the spike. Do NOT run CONCUR on a fix you've already written and verified to be small.
 
 The gate fails (fix-inline is required) when:
 
-- Fix is ≤30 lines AND ≤2 files, regardless of "feels like a follow-up" framing.
+- Fix is ≤100 lines AND ≤4 files, regardless of "feels like a follow-up" framing.
 - The only objection to fixing inline is bookkeeping/scope discipline (vs. a
     concrete technical contest the agent named).
 - The finding is `pr-introduced` (per Step 1 provenance triage) — these always
@@ -529,7 +566,7 @@ The gate fails (fix-inline is required) when:
 
 The gate may pass (proceed to evaluate the four scope-out criteria) when:
 
-- Fix is >30 lines OR touches >2 files, AND
+- Fix is >100 lines OR touches >4 files, AND
 - The fix demonstrably matches at least one of the four criteria below.
 
 Filing a GitHub issue instead of fixing is allowed ONLY when both the cost-of-
@@ -737,7 +774,7 @@ this really cross-cutting?") for findings the PR itself introduced.
 candidate "Filed as scope-out" list from your synthesis. For each candidate,
 re-apply the cost-of-filing gate from §5:
 
-- Is the fix ≤30 lines AND ≤2 files? → Remove from the scope-out list; fix
+- Is the fix ≤100 lines AND ≤4 files? → Remove from the scope-out list; fix
     inline and add to "Fixed inline" instead.
 - Is the only objection bookkeeping ("feels like a follow-up", "not core to
     this PR") rather than a concrete technical contest? → Remove; fix inline.
@@ -747,7 +784,7 @@ re-apply the cost-of-filing gate from §5:
 
 Only items that survive ALL three checks appear in "Filed as scope-out". This
 loop prevents the failure mode where pipeline mode rationalizes filing
-≤30-line cleanup items because the marker template makes filing look like a
+≤100-line cleanup items because the marker template makes filing look like a
 first-class option. **Target: the marker frequently shows "Filed as scope-out:
 0".** A PR that nets +N issues from review is a workflow failure.
 
@@ -1054,7 +1091,7 @@ Concurrent mutating agents contaminate the shared worktree — `test-design-revi
 
 When a reviewer prescribes adding a PRE-FLIGHT integrity check (a "verify before you mutate" guard) ahead of an operation that REMOVES a redundant/fallback source (a shared override being detached, a dual-write sibling being dropped, a cached value being invalidated), trace which sources satisfy the guard's assertion AT GUARD TIME. If a soon-to-be-removed source is one of them, the pre-flight guard is vacuous — it passes in exactly the dangerous case (it reads through the fallback it is about to delete) and gives false confidence. The load-bearing assertion belongs AFTER the mutation, where only the intended source can satisfy it. Reject the pre-flight suggestion with that rationale and keep the post-mutation eval-verify. **Why:** PR #4619 (#4617) — `flip.sh --detach-shared`; a proposed pre-detach "member enabled=true" check would have passed via the un-removed `org-targeted` override even when `<flag>-orgs` was never provisioned. See `knowledge-base/project/learnings/2026-05-29-pre-flight-integrity-check-through-unremoved-fallback-gives-false-confidence.md`.
 
-When `code-simplifier` returns DISSENT on a bundled scope-out filing, do NOT argue back — read the dissent for the specific finding it cites, flip ONLY that finding inline, and re-run the CONCUR gate on the residual bundle. The gate exists precisely to catch bundling pathology where a single criterion (cross-cutting-refactor, contested-design) gets satisfied by the bundle as a whole while individual items inside it cross the ≤30-line/≤2-file cost-of-filing threshold. Filing the entire bundle inline (out of frustration with the dissent) is also wrong — the residual findings may legitimately scope out. Per-finding triage, not per-bundle. See `knowledge-base/project/learnings/2026-05-11-scope-out-bundling-hides-cheap-inline-fixes.md`.
+When `code-simplifier` returns DISSENT on a bundled scope-out filing, do NOT argue back — read the dissent for the specific finding it cites, flip ONLY that finding inline, and re-run the CONCUR gate on the residual bundle. The gate exists precisely to catch bundling pathology where a single criterion (cross-cutting-refactor, contested-design) gets satisfied by the bundle as a whole while individual items inside it cross the ≤100-line/≤4-file cost-of-filing threshold. Filing the entire bundle inline (out of frustration with the dissent) is also wrong — the residual findings may legitimately scope out. Per-finding triage, not per-bundle. See `knowledge-base/project/learnings/2026-05-11-scope-out-bundling-hides-cheap-inline-fixes.md`.
 
 Before reporting a broken link or missing file, reviewer agents MUST verify via Glob or Read. Unverified "broken link" claims waste reviewer-response cycles — the file may exist at the exact path. **Why:** PR #2226 pattern-recognition-specialist false-positive on a `runtime-errors/2026-02-13-...` learning file that did exist.
 
