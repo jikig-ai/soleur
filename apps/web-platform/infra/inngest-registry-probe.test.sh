@@ -177,6 +177,119 @@ test_rp_marker_tag_in_vector() {
   else echo "  FAIL: tag NOT in vector.toml"; FAIL=$((FAIL+1)); fi
 }
 
+# ===========================================================================
+# #6295 — _pf_scrub must redact the libpq KEYWORD-CONNSTRING DSN form
+#
+# The two original rules cover the URI form (scheme://…) and the credential
+# form (user:pass@host). The libpq keyword form carries NEITHER a scheme nor
+# an `@`, so a DSN in a GraphQL errors[].message leaked the prd Supabase
+# project ref straight into stdout (the Actions run log) and stderr.
+#
+# All fixtures are SYNTHESIZED (cq-test-fixtures-synthesized-only) — the ref
+# below is a fixed non-existent 20-char string, never a real project ref.
+# ===========================================================================
+
+# A synthetic project ref: same shape as a real Supabase ref (20 lowercase
+# letters) but not allocated to any project.
+SYNTH_REF="qzwxecrvtbynumikolpa"
+
+# Drive a DSN-bearing GraphQL error envelope through the REAL _pf_scrub call
+# site (run_probe's non-array branch at inngest-registry-probe.sh:107), and
+# capture stdout and stderr SEPARATELY so each can be asserted independently.
+# $1 = the errors[].message string to embed.
+run_probe_errmsg() {
+  local msg="$1" fixture out err rc
+  fixture=$(mktemp); out=$(mktemp); err=$(mktemp)
+  jq -nc --arg m "$msg" '{errors:[{message:$m}],data:null}' > "$fixture"
+  set +e
+  INNGEST_PROBE_FUNCTIONS_FIXTURE="$fixture" bash "$TARGET" > "$out" 2> "$err"
+  rc=$?
+  set -e
+  # rc is expected non-zero (fail-loud branch); the payload is what we assert.
+  RP_OUT=$(cat "$out"); RP_ERR=$(cat "$err"); RP_RC=$rc
+  rm -f "$fixture" "$out" "$err"
+}
+
+# --- #6295 T1: libpq keyword form — ref must leak to NEITHER stdout nor stderr ---
+test_pf_scrub_libpq_keyword_form() {
+  echo "TEST: _pf_scrub — libpq keyword-connstring DSN is redacted (#6295)"
+  run_probe_errmsg "connection to server failed: host=db.${SYNTH_REF}.supabase.co port=5432 dbname=postgres user=postgres password=hunter2sentinel"
+
+  if ! grep -qF "$SYNTH_REF" <<<"$RP_OUT"; then echo "  PASS: synthetic ref absent from stdout"; PASS=$((PASS+1));
+  else echo "  FAIL: synthetic ref LEAKED to stdout"; FAIL=$((FAIL+1)); fi
+  if ! grep -qF "$SYNTH_REF" <<<"$RP_ERR"; then echo "  PASS: synthetic ref absent from stderr"; PASS=$((PASS+1));
+  else echo "  FAIL: synthetic ref LEAKED to stderr"; FAIL=$((FAIL+1)); fi
+  # The password must not survive either.
+  if ! grep -qF "hunter2sentinel" <<<"$RP_OUT$RP_ERR"; then echo "  PASS: password absent from both streams"; PASS=$((PASS+1));
+  else echo "  FAIL: password LEAKED"; FAIL=$((FAIL+1)); fi
+  # Fail-loud contract still holds — the redaction must not swallow the exit code.
+  if [[ "$RP_RC" -ne 0 ]]; then echo "  PASS: still fails loud (rc=$RP_RC)"; PASS=$((PASS+1));
+  else echo "  FAIL: expected non-zero exit on the error branch"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6295 T2: over-redaction control through the REAL call site ---
+# v1 of this plan used a SOLEUR_* marker as the control, but markers reach
+# _pf_sanitize and never _pf_scrub — that control tested an impossible path
+# and would have passed against any implementation. This drives benign
+# diagnostic prose through the same errors[].message seam as T1.
+test_pf_scrub_no_over_redaction() {
+  echo "TEST: _pf_scrub — benign diagnostic text survives intact (over-redaction control)"
+  run_probe_errmsg "function sync incomplete: 3 of 7 handlers registered, retry scheduled"
+
+  for token in "function sync incomplete" "3 of 7 handlers registered" "retry scheduled"; do
+    if grep -qF "$token" <<<"$RP_OUT"; then echo "  PASS: preserved \"$token\""; PASS=$((PASS+1));
+    else echo "  FAIL: over-redacted \"$token\""; FAIL=$((FAIL+1)); fi
+  done
+}
+
+# --- #6295 T3: a LONE libpq keyword must NOT trigger redaction (A-AC3) ---
+# The rule requires >=2 co-occurring keywords. A single `host=` in prose is
+# ordinary diagnostic text and must survive; redacting it would be the
+# over-redaction failure the co-occurrence requirement exists to prevent.
+test_pf_scrub_lone_keyword_not_redacted() {
+  echo "TEST: _pf_scrub — a lone libpq keyword does not trigger redaction"
+  run_probe_errmsg "resolver could not determine host=unset for the upstream pool"
+
+  if grep -qF "host=unset" <<<"$RP_OUT"; then echo "  PASS: lone host= survived"; PASS=$((PASS+1));
+  else echo "  FAIL: lone host= was redacted (over-redaction)"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6295 T4: the two ORIGINAL rules still redact (no regression) ---
+test_pf_scrub_original_rules_intact() {
+  echo "TEST: _pf_scrub — URI and credential forms still redacted (no regression)"
+  run_probe_errmsg "dial failed for postgresql://postgres:pw@db.${SYNTH_REF}.supabase.co:5432/postgres"
+  if ! grep -qF "$SYNTH_REF" <<<"$RP_OUT$RP_ERR"; then echo "  PASS: URI form still redacted"; PASS=$((PASS+1));
+  else echo "  FAIL: URI form REGRESSED"; FAIL=$((FAIL+1)); fi
+
+  run_probe_errmsg "auth rejected for postgres:secretpw@db.${SYNTH_REF}.supabase.co"
+  if ! grep -qF "$SYNTH_REF" <<<"$RP_OUT$RP_ERR"; then echo "  PASS: credential form still redacted"; PASS=$((PASS+1));
+  else echo "  FAIL: credential form REGRESSED"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6295 T5: PERMANENT identity guard across all three _pf_scrub copies ---
+# The function is triplicated across the three cutover-path probes. The cost
+# of triplication is DRIFT; this test converts that from silent divergence
+# into a mechanical check. Extraction is deferred until a fourth consumer
+# appears (see the tracking issue in the PR body).
+test_pf_scrub_bodies_byte_identical() {
+  echo "TEST: _pf_scrub — all three copies byte-identical (anti-drift guard)"
+  local files=(inngest-registry-probe.sh inngest-doublefire-probe.sh inngest-inventory.sh)
+  local ref_body="" f body n=0
+  for f in "${files[@]}"; do
+    local path="$SCRIPT_DIR/$f"
+    if [[ ! -f "$path" ]]; then echo "  FAIL: missing $f"; FAIL=$((FAIL+1)); continue; fi
+    body=$(sed -n '/^_pf_scrub() {$/,/^}$/p' "$path")
+    if [[ -z "$body" ]]; then echo "  FAIL: no _pf_scrub body extracted from $f"; FAIL=$((FAIL+1)); continue; fi
+    n=$((n+1))
+    if [[ -z "$ref_body" ]]; then ref_body="$body"; continue; fi
+    if [[ "$body" == "$ref_body" ]]; then echo "  PASS: $f identical to reference"; PASS=$((PASS+1));
+    else echo "  FAIL: $f DRIFTED from reference"; FAIL=$((FAIL+1)); fi
+  done
+  # Minimum-cardinality guard: an empty/unreadable file set must not pass vacuously.
+  if [[ "$n" -eq "${#files[@]}" ]]; then echo "  PASS: all ${#files[@]} copies extracted"; PASS=$((PASS+1));
+  else echo "  FAIL: extracted only $n of ${#files[@]} copies"; FAIL=$((FAIL+1)); fi
+}
+
 echo "=== inngest-registry-probe.sh test suite ==="
 test_empty_registry
 test_nonempty_registry
@@ -188,6 +301,11 @@ test_rp_markers_journald_only
 test_rp_start_on_failure
 test_rp_connect_timeout_no_loop
 test_rp_marker_tag_in_vector
+test_pf_scrub_libpq_keyword_form
+test_pf_scrub_no_over_redaction
+test_pf_scrub_lone_keyword_not_redacted
+test_pf_scrub_original_rules_intact
+test_pf_scrub_bodies_byte_identical
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
