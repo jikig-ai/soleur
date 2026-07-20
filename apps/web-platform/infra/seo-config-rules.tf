@@ -118,7 +118,7 @@
 # account-level rulesets endpoint must all return non-403. See ADR-128 for the
 # probe set and issue #6755 for the recorded results.
 #
-# ── PREREQUISITE 2: entrypoint adoption — NOT SATISFIED. DO NOT APPLY ────────
+# ── PREREQUISITE 2: entrypoint adoption — SATISFIED via the import block ─────
 #
 # A `kind = "zone"` ruleset OWNS its phase's entrypoint, which is a whole-list
 # replacement. `plan` reports "1 to add" because the resource is absent from
@@ -126,24 +126,31 @@
 #
 # That probe was run on 2026-07-20 and it FAILED CLOSED. The entrypoint already
 # exists (a21ac79d368f425a95c895c43a090d57, version 1, last updated
-# 2026-03-17) and carries one live dashboard-created rule:
+# 2026-03-17) and carried one live dashboard-created rule:
 #
 #   description: "Flexible SSL for web platform"
 #   expression:  (http.host eq "app.soleur.ai")
 #   action:      set_config { ssl: "flexible" }
 #
-# This resource declares exactly ONE rules block, so applying it as written
-# would delete that rule and drop app.soleur.ai to the zone-level SSL mode —
-# an outage-class regression on the web platform, invisible to `plan`.
+# Had this resource been applied as originally written — one rules block, no
+# import — it would have deleted that rule and dropped app.soleur.ai to the
+# zone-level SSL mode. Outage-class, and completely invisible to `plan`, which
+# reported a clean "1 to add, 0 to change, 0 to destroy" throughout.
 #
-# Before this resource may be applied it must ADOPT the existing rule:
-#   1. represent "Flexible SSL for web platform" as a second rules block here,
-#      AND
-#   2. `terraform import` ruleset a21ac79d368f425a95c895c43a090d57 into state
-#      so Terraform UPDATES the entrypoint rather than creating it.
-# Both halves are required: (1) alone still creates; (2) alone still deletes.
-# Doing so also retires the deliberate exactly-one-rule pin in
-# test/seo-config-rules.test.ts, which must become a two-rule pin.
+# Both halves of the fix are now in this file:
+#   1. the rule is reproduced verbatim as the FIRST rules block below, and
+#   2. the `import` block adopts the existing ruleset into state, so Terraform
+#      UPDATES the entrypoint rather than creating it.
+# Neither half is sufficient alone: (1) without (2) still creates and clobbers;
+# (2) without (1) still deletes the rule on the next plan.
+#
+# Expected plan after this change is therefore an IMPORT plus "0 to add,
+# 1 to change, 0 to destroy", where the single change is `+1 rule` — NOT the
+# "1 to add" that task 3.1 originally recorded. A plan that still says "1 to
+# add" means the import block was dropped and the clobber is back.
+#
+# Tracked in #6767. The generalisation — every other `kind = "zone"` ruleset in
+# this repo has the same exposure and was never enumerated — is open there too.
 #
 # See:
 #   - knowledge-base/project/plans/2026-07-20-fix-gsc-404-cdn-cgi-email-protection-plan.md
@@ -151,13 +158,53 @@
 #   - seo-rulesets.tf (sibling rulesets on the same provider alias)
 #   - Ref #3379 (the api.soleur.ai dormant-rule tracker — deliberately untouched here)
 
+# ADOPTION, not creation. The http_config_settings entrypoint for this zone
+# already exists and is already populated, so this resource must IMPORT it —
+# see "PREREQUISITE 2" above. Creating instead would replace the entrypoint's
+# whole rule list.
+#
+# Import ID format is `zones/<zone_id>/<ruleset_id>` (provider v4 docs).
+import {
+  to = cloudflare_ruleset.seo_config_settings
+  id = "zones/${var.cf_zone_id}/a21ac79d368f425a95c895c43a090d57"
+}
+
+# `name` and `description` deliberately mirror the live entrypoint EXACTLY
+# ("default" / empty) rather than carrying a descriptive label. Cloudflare names
+# every phase entrypoint "default", and matching it keeps the adoption plan to a
+# single legible change — `+1 rule` — instead of mixing a real rule addition in
+# with cosmetic attribute churn. The rationale that would have gone in a
+# descriptive name lives in this file's header and in each rule's own
+# `description`.
 resource "cloudflare_ruleset" "seo_config_settings" {
   provider    = cloudflare.rulesets
   zone_id     = var.cf_zone_id
-  name        = "Marketing-host Scrape Shield configuration"
-  description = "Disables Cloudflare Email Obfuscation on the apex + www marketing hosts so /cdn-cgi/l/email-protection hrefs stop being emitted into crawlable HTML. See GSC 'Not found (404)' validation 2026-07-20."
+  name        = "default"
+  description = ""
   kind        = "zone"
   phase       = "http_config_settings"
+
+  # ── ADOPTED RULE — pre-existing, NOT part of this change ───────────────────
+  #
+  # Created in the Cloudflare dashboard on 2026-03-17, never represented in
+  # Terraform. It is reproduced here verbatim because a `kind = "zone"` ruleset
+  # owns its phase entrypoint as a whole-list replacement: omitting it does not
+  # leave it alone, it DELETES it, dropping app.soleur.ai to the zone-level SSL
+  # mode. test/seo-config-rules.test.ts pins this block for exactly that reason
+  # — the regression it guards is a future edit quietly dropping it.
+  #
+  # Ordered first to match its live position. Order is not semantically
+  # load-bearing here (both rules are set_config over disjoint host sets), but
+  # matching live keeps the import diff empty.
+  rules {
+    action      = "set_config"
+    description = "Flexible SSL for web platform"
+    enabled     = true
+    expression  = "(http.host eq \"app.soleur.ai\")"
+    action_parameters {
+      ssl = "flexible"
+    }
+  }
 
   # Scoped to the two marketing hosts ONLY. app./deploy./api. are deliberately
   # excluded — they serve no marketing copy, and including them would collapse

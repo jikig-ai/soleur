@@ -54,6 +54,16 @@ const RESOURCE_ADDRESS = `cloudflare_ruleset.${RESOURCE_NAME}`;
  */
 const CANONICAL_EXPRESSION = '(http.host in {"soleur.ai" "www.soleur.ai"})';
 
+/**
+ * The pre-existing dashboard-created rule this resource had to ADOPT, and the
+ * ID of the ruleset it lives in. Not this PR's work: a `kind = "zone"` ruleset
+ * owns its phase entrypoint as a whole-list replacement, so leaving this rule
+ * out of the config would have DELETED it from production rather than left it
+ * alone, dropping app.soleur.ai to the zone-level SSL mode. See #6767.
+ */
+const ADOPTED_SSL_EXPRESSION = '(http.host eq "app.soleur.ai")';
+const ADOPTED_RULESET_ID = "a21ac79d368f425a95c895c43a090d57";
+
 /** Hosts the rule MUST cover. */
 const IN_SCOPE_HOSTS = ["soleur.ai", "www.soleur.ai"];
 
@@ -219,6 +229,31 @@ function allRuleBlocks(): string[] {
   return extractRuleBlocks(extractResourceBody(tf, RESOURCE_NAME));
 }
 
+/**
+ * The ruleset carries two rules with opposite host scopes, so every scope
+ * assertion has to name which one it means. Selecting on the action parameter
+ * rather than on position means reordering the blocks cannot silently point an
+ * assertion at the wrong rule.
+ */
+function ruleWithParam(param: RegExp): string {
+  const matches = allRuleBlocks().filter((r) => param.test(r));
+  expect(
+    matches,
+    `expected exactly one rule matching ${param}`,
+  ).toHaveLength(1);
+  return matches[0];
+}
+
+/** This PR's rule: disables Email Obfuscation on the marketing hosts. */
+function obfuscationRule(): string {
+  return ruleWithParam(/email_obfuscation\s*=/);
+}
+
+/** The adopted pre-existing rule: Flexible SSL on app.soleur.ai. */
+function flexibleSslRule(): string {
+  return ruleWithParam(/ssl\s*=\s*"flexible"/);
+}
+
 describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () => {
   test("seo-config-rules.tf exists and declares the seo_config_settings ruleset", () => {
     expect(existsSync(TF_PATH), `missing ${TF_PATH}`).toBe(true);
@@ -240,12 +275,17 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
   // so a second rule has full production effect; a guard that inspects only the
   // first `set_config` block would never see it. Pinning the count forces any
   // future rule to arrive with a deliberate test update.
-  test("ruleset declares exactly one rule", () => {
-    expect(allRuleBlocks()).toHaveLength(1);
+  //
+  // The count is TWO, not one, and the second is not this PR's: a `kind="zone"`
+  // ruleset owns its phase entrypoint as a whole-list replacement, so the
+  // pre-existing dashboard-created Flexible SSL rule had to be adopted into
+  // this resource or applying would have deleted it (#6767).
+  test("ruleset declares exactly two rules", () => {
+    expect(allRuleBlocks()).toHaveLength(2);
   });
 
   test("the rule disables email obfuscation via set_config and is enabled", () => {
-    const [rule] = allRuleBlocks();
+    const rule = obfuscationRule();
     expect(rule).toMatch(/action\s*=\s*"set_config"/);
     expect(rule).toMatch(/email_obfuscation\s*=\s*false/);
     expect(rule).toMatch(/enabled\s*=\s*true/);
@@ -254,15 +294,51 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
   // The load-bearing scope assertion. Exact equality, not a forbidden-host
   // deny-list — see the header comment for the mutants that motivated it.
   test("rule expression is exactly the canonical two-host scope", () => {
-    const [rule] = allRuleBlocks();
-    expect(quotedAttr(rule, "expression")).toBe(CANONICAL_EXPRESSION);
+    expect(quotedAttr(obfuscationRule(), "expression")).toBe(
+      CANONICAL_EXPRESSION,
+    );
+  });
+
+  // Guards the adoption itself. This rule is NOT this PR's work — it is a live
+  // production rule reproduced verbatim so that applying this resource does not
+  // delete it. The failure mode being pinned is a future edit "tidying up" a
+  // rule that looks unrelated to this file's stated purpose; doing so would
+  // drop app.soleur.ai to the zone-level SSL mode. Both the expression and the
+  // action parameter are pinned, because silently changing `flexible` to
+  // `full`/`strict` breaks the origin just as effectively as deleting it.
+  test("the adopted Flexible SSL rule is preserved verbatim", () => {
+    const rule = flexibleSslRule();
+    expect(quotedAttr(rule, "expression")).toBe(ADOPTED_SSL_EXPRESSION);
+    expect(rule).toMatch(/action\s*=\s*"set_config"/);
+    expect(rule).toMatch(/ssl\s*=\s*"flexible"/);
+    expect(rule).toMatch(/enabled\s*=\s*true/);
+  });
+
+  // Without the import block Terraform CREATES this resource, and creating a
+  // zone entrypoint that already exists replaces its whole rule list — which is
+  // exactly the clobber the adopted rule above exists to prevent. The rules
+  // block and the import block are only safe together, so the pin covers both.
+  test("the ruleset is adopted via an import block, not created", () => {
+    const tf = stripHclComments(readFileSync(TF_PATH, "utf-8"));
+    expect(tf).toMatch(
+      new RegExp(`import\\s*\\{[^}]*to\\s*=\\s*${escapeRegExp(RESOURCE_ADDRESS)}`),
+    );
+    expect(tf).toContain(ADOPTED_RULESET_ID);
   });
 
   // Secondary assertions: strictly weaker than the exact-equality test above,
   // kept because they produce a far more legible failure message naming the
   // specific host that was gained or lost.
+  //
+  // Scoped to the obfuscation rule ONLY. It cannot iterate every rule any more:
+  // the adopted Flexible SSL rule legitimately targets app.soleur.ai, which is
+  // in OUT_OF_SCOPE_HOSTS. Running this over both rules would fail on the rule
+  // it is not about — a false positive that would push someone toward
+  // "fixing" it by deleting the adopted rule, which is the production
+  // regression this whole file now guards against.
   test("rule expression covers both marketing hosts and no others", () => {
-    for (const rule of allRuleBlocks()) {
+    {
+      const rule = obfuscationRule();
       const expression = quotedAttr(rule, "expression");
       expect(expression, "rule has no expression").not.toBeNull();
       for (const host of IN_SCOPE_HOSTS) {
