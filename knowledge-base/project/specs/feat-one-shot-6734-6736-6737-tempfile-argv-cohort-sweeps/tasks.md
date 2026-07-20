@@ -139,8 +139,20 @@ Derived from
       headroom; shellcheck; converting bounded sites; rule (b)).
 - [x] 4.2 Full suite: `bash scripts/test-all.sh`; `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
 - [x] 4.3 Verify every `knowledge-base/` path cited in the plan resolves (run from repo root).
-- [ ] 4.4 Confirm `decision-challenges.md` (UC-1/2/3, E1, E2) is carried into the PR body by `/ship`.
-- [ ] 4.5 PR body uses `Closes #6734`, `Closes #6736`, `Closes #6737`.
+- [x] 4.4 Confirm `decision-challenges.md` (UC-1/2/3, E1, E2) is carried into the PR body by `/ship`.
+      Rendered under `## Model Dissents (informational)` — a heading deliberately outside the
+      `ship-operator-step-gate` deny set (`Operator`/`Post-merge`/`Follow-up`). E1 and E2 were
+      RE-VERIFIED at ship time rather than transcribed: E2's queue count had moved 28 -> 29, and
+      E1 proved worse than recorded (current intel marks *every* Polsia revenue figure unverified,
+      so the pages assert a contested number as fact rather than merely a stale one). Both filed
+      as their own trackers — E1 #6768, E2 #6769.
+      NOT filed: the Phase 6 step 2.5 `action-required` decision-challenge issue. Its trigger is
+      dissents a HEADLESS phase auto-decided that the operator has not seen; this run was
+      interactive and `decision-challenges.md` records a binding operator resolution for each.
+      Filing one would have added a 30th item to the queue #6769 documents as non-draining.
+- [x] 4.5 PR body uses `Closes #6734`, `Closes #6736`, `Closes #6737`.
+      Closes-after-verification gate run first: the only `CLOSE_DEFER_RE` hit was "close the gap"
+      in R21b prose, not a deferral instruction, so `Closes` is correct rather than `Ref`.
 
 ---
 
