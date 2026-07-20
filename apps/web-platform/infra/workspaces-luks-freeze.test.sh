@@ -98,7 +98,8 @@ run_case "$CUTOVER" 'freeze_writers' 'freeze_writers ensure_lsof' LSOF_ABSENT=1 
 died && ok "T7 G4 is fail-closed: absent+un-installable lsof aborts the freeze" \
      || no "T7 G4 silently skipped on a missing lsof — the gate evaporates exactly when needed"
 
-BIGF="$(mktemp)"; yes 'redis-server 1234 root  7w REG 0,42 /mnt/data/redis/appendonlydir/appendonly.aof' 2>/dev/null | head -20000 > "$BIGF"
+# -p "$RUN_SCRATCH", NOT a trap: a `trap … EXIT` here would REPLACE workspaces-luks-harness.sh:42's `trap cleanup_scratch EXIT INT TERM HUP` and leak the whole RUN_SCRATCH tree (#6713).
+BIGF="$(mktemp -p "$RUN_SCRATCH" bigf.XXXXXX)"; yes 'redis-server 1234 root  7w REG 0,42 /mnt/data/redis/appendonlydir/appendonly.aof' 2>/dev/null | head -20000 > "$BIGF"
 run_case "$CUTOVER" 'freeze_writers' 'freeze_writers' LSOF_OUT_FILE="$BIGF"
 died && ok "T8 G4 still aborts on a large holder list (no pipefail/SIGPIPE fail-open)" \
      || no "T8 G4 returned success on a large holder list — the pipe fail-open is present"
@@ -328,7 +329,8 @@ fi
 # Mutation tests — each carries the did-the-sed-land guard.
 # ---------------------------------------------------------------------------
 mutate() {
-  local mut; mut="$(mktemp --suffix=.sh)"
+  # -p "$RUN_SCRATCH", NOT a trap: a `trap … EXIT` here would REPLACE workspaces-luks-harness.sh:42's `trap cleanup_scratch EXIT INT TERM HUP` and leak the whole RUN_SCRATCH tree (#6713).
+  local mut; mut="$(mktemp -p "$RUN_SCRATCH" mut.XXXXXX.sh)"
   cp "$CUTOVER" "$mut"
   local e; for e in "$@"; do sed -i "$e" "$mut"; done
   printf '%s\n' "$mut"
@@ -413,6 +415,99 @@ else
 fi
 rm -f "$MUT7"
 rm -f "$BIGF"
+
+# ---------------------------------------------------------------------------
+# Residue self-check (#6713) — re-invokes THIS suite under a PRIVATE TMPDIR and asserts it
+# allocates no tempfile outside the harness's trapped scratch tree.
+#
+# RECURSION GUARD (mandatory): this suite has no sentinel and only `set -uo pipefail`, so a
+# self-check that re-invokes the suite would recurse forever. WL_SELF_CHECK=1 is set for the inner
+# run and skips this whole block. The inner run's stdout — including its OWN
+# "N passed, N failed" line — is captured to a FILE, never to stdout, so the outer summary below
+# stays the only summary on the wire and the outer parse cannot read the inner one as its own.
+# ---------------------------------------------------------------------------
+if [ "${WL_SELF_CHECK:-0}" != "1" ]; then
+  SELF="$SCRIPT_DIR/workspaces-luks-freeze.test.sh"
+
+  # R0 — POSITIVE CONTROL FOR THE PROBE. "0 residue" is only evidence if the counter can count.
+  # A deliberately leaked tempfile under a private TMPDIR must register as 1. (Written with a
+  # plain redirect rather than the allocator itself so the AC1 token count stays exactly 2.)
+  sc_ctl="$RUN_SCRATCH/sc-control"; mkdir -p "$sc_ctl"
+  TMPDIR="$sc_ctl" bash -c ': > "$TMPDIR/leaked-control.probe"' >/dev/null 2>&1
+  [ "$(find "$sc_ctl" -mindepth 1 | wc -l)" -eq 1 ] \
+    && ok "R0 residue probe positive control: a leaked tempfile IS counted (the probe is not blind)" \
+    || no "R0 residue probe is BLIND — it did not count a deliberately leaked tempfile; R1/R2 prove nothing"
+
+  # R1 — clean run => ZERO residue.
+  sc_a="$RUN_SCRATCH/sc-clean"; mkdir -p "$sc_a"; sc_a_out="$RUN_SCRATCH/sc-clean.out"
+  env TMPDIR="$sc_a" WL_SELF_CHECK=1 bash "$SELF" >"$sc_a_out" 2>&1
+  sc_a_rc=$?
+  sc_a_res="$(find "$sc_a" -mindepth 1 | wc -l)"
+  if [ "$sc_a_rc" -ne 0 ] || ! grep -qE '[0-9]+ passed, 0 failed' "$sc_a_out"; then
+    no "R1 the inner suite did not complete cleanly (rc=$sc_a_rc) — the residue result is not evidence, treat as UN-RUN"
+  elif [ "$sc_a_res" -eq 0 ]; then
+    ok "R1 a clean run under a private TMPDIR leaves ZERO residue"
+  else
+    no "R1 a clean run leaked $sc_a_res path(s) into TMPDIR: $(find "$sc_a" -mindepth 1 -printf '%f ' 2>/dev/null || true)"
+  fi
+
+  # R2 — forced mid-suite abort inside a >=2-tempfile window => ZERO residue outside the tree.
+  sc_b="$RUN_SCRATCH/sc-term"; mkdir -p "$sc_b"; sc_b_out="$RUN_SCRATCH/sc-term.out"
+  env TMPDIR="$sc_b" WL_SELF_CHECK=1 bash "$SELF" >"$sc_b_out" 2>&1 &
+  sc_pid=$!
+
+  # SYNCHRONIZE ON FILE EXISTENCE, NEVER ON ELAPSED TIME. mutate() returns immediately and each
+  # MUT file lives only until its `rm -f` a few lines later; a fixed `sleep N; kill` lands outside
+  # that window on a loaded runner and this case then PASSES FOR THE WRONG REASON (nothing was
+  # live, so nothing could leak). SECONDS below is a failure CEILING only, never the trigger.
+  # The poll globs in-process: a `find` fork per iteration is slow enough to miss the window
+  # outright (measured). `*.sh` matches BOTH the fixed form (mut.XXXXXX.sh, depth 2 inside the
+  # scratch tree) and the pre-fix form (tmp.XXXXXXXXXX.sh, depth 1 in TMPDIR), so a regression
+  # cannot make the poll silently blind and report a vacuous pass.
+  shopt -s nullglob
+  sc_win=""; sc_deadline=$((SECONDS + 120))
+  while [ "$SECONDS" -lt "$sc_deadline" ]; do
+    sc_glob=( "$sc_b"/*.sh "$sc_b"/*/*.sh )
+    if [ "${#sc_glob[@]}" -gt 0 ]; then sc_win="${sc_glob[0]}"; break; fi
+    kill -0 "$sc_pid" 2>/dev/null || break
+  done
+  # The >=2-tempfile requirement, verified AT the window rather than assumed: BIGF is ~1.6 MB and
+  # is the only file this suite writes above 1 MB. A single-tempfile probe cannot discriminate the
+  # trap-replacement class, so "no second file live" is reported as UN-RUN, never as a pass.
+  sc_big="$(find "$sc_b" -type f -size +1M -print -quit 2>/dev/null || true)"
+
+  kill -TERM "$sc_pid" 2>/dev/null || true
+  # WHY A SIGKILL FOLLOWS THE SIGTERM: cleanup_scratch (workspaces-luks-harness.sh:41) does NOT
+  # exit — bash runs the TERM handler and RESUMES — so a bare SIGTERM lets the suite run on to its
+  # tail `rm -f` lines, which would scrub the stray files and mask the very leak this case exists
+  # to detect (measured: bare SIGTERM => rc 0, 0 residue, even on the unfixed code). So: wait for
+  # the trap to have removed the scratch tree (state, not elapsed time), then SIGKILL so the tail
+  # `rm -f` can never run. What survives is then exactly "allocated OUTSIDE the trapped tree".
+  sc_deadline=$((SECONDS + 60))
+  while [ "$SECONDS" -lt "$sc_deadline" ]; do
+    sc_tree=( "$sc_b"/wl-harness.* )
+    [ "${#sc_tree[@]}" -eq 0 ] && break
+    kill -0 "$sc_pid" 2>/dev/null || break
+  done
+  kill -KILL "$sc_pid" 2>/dev/null || true
+  wait "$sc_pid" 2>/dev/null
+  shopt -u nullglob
+
+  # Residue that matters = depth-1 entries that are NOT the scratch tree. A run_case after the
+  # trap fired can RE-create wl-harness.*, and because we deliberately SIGKILLed, that tree's own
+  # EXIT-trap removal never runs — expected by construction, and not the #6713 defect.
+  sc_stray() { find "$sc_b" -mindepth 1 -maxdepth 1 -not -name 'wl-harness.*' "$@" 2>/dev/null || true; }
+  sc_b_res="$(sc_stray | wc -l)"
+  if [ -z "$sc_win" ]; then
+    no "R2 the mutation-block tempfile window never opened — the abort was not inside it; treat as UN-RUN, not evidence"
+  elif [ -z "$sc_big" ]; then
+    no "R2 only ONE tempfile was live at the abort (no >1M BIGF) — a single-tempfile probe cannot detect the trap-replacement class; treat as UN-RUN"
+  elif [ "$sc_b_res" -eq 0 ]; then
+    ok "R2 a forced mid-suite abort in a >=2-tempfile window leaves ZERO tempfiles outside the trapped scratch tree"
+  else
+    no "R2 mid-suite abort LEAKED $sc_b_res path(s) outside the harness scratch tree: $(sc_stray -printf '%f ') — an allocation is missing -p \"\$RUN_SCRATCH\""
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 echo

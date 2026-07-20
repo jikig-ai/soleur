@@ -72,6 +72,7 @@ import {
   postSentryHeartbeat,
   resolveOutputAwareOk,
   digestIssueExistsForDate,
+  digestCommittedOnDefaultBranch,
   injectRunDate,
   SCHEDULED_DIGEST_TITLE_PREFIX,
   ensureScheduledAuditIssue,
@@ -89,6 +90,13 @@ import {
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { safeCommitAndPr } from "./_cron-safe-commit";
+import {
+  emitCommunityDigestFile,
+  emitCronDedupSkip,
+  emitCronDigestLiveness,
+  emitCronPersistSkipped,
+  type CronDigestLivenessMarker,
+} from "@/server/cron-liveness-marker";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
@@ -245,9 +253,15 @@ CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log
 
 // Persistence allowlist (#5111): verbatim from the prompt's former scoped
 // staging list (the dated digest directory).
-const COMMUNITY_MONITOR_ALLOWED_PATHS = [
-  "knowledge-base/support/community/",
-] as const;
+// The dated digest lives directly under this dir as `<YYYY-MM-DD>-digest.md`.
+// Single source of truth for the persistence allowlist, the workspace stat
+// (marker 3) and the committed-artifact liveness assertion — a drifted copy in
+// any one of the three would silently un-assert the artifact.
+// EXPORTED so the three test suites that assert against the dated digest path
+// derive it from this value instead of hardcoding a mirror. The comment below
+// calls this the single source of truth; before the export it was not one.
+export const COMMUNITY_DIGEST_DIR = "knowledge-base/support/community/";
+const COMMUNITY_MONITOR_ALLOWED_PATHS = [COMMUNITY_DIGEST_DIR] as const;
 
 // --- Collector-status sidecar (#6695) ---------------------------------------
 //
@@ -390,11 +404,16 @@ export async function cronCommunityMonitorHandler({
   maxAttempts,
   runId,
 }: HandlerArgs): Promise<{ ok: boolean }> {
-  // D6 (#5018) / #5046 PR-2: still Tier-2-deferred — the firewall landed but
-  // this cron needs per-construct Bash-allowlist refinement or non-GitHub
-  // egress coverage before restore (see TIER2_DEFERRED_CRONS). Posts an
-  // honest on-schedule check-in and skips the claude spawn (no fail-closed
-  // FAILED-issue/RED-monitor storm); the scheduled output issue visibly stops.
+  // D6 (#5018) / #5046 PR-2 — HISTORICAL. This cron was Tier-2-deferred from
+  // a48c57e8d (2026-06-08) to ff42a3ef6 (2026-06-12) and is NOT deferred today:
+  // TIER2_DEFERRED_CRONS is EMPTY at HEAD (_cron-shared.ts, "#5199 … the FINAL
+  // restore"), so this call is a defensive no-op that returns false. The old
+  // "still Tier-2-deferred" wording was stale and actively misled the #6714
+  // investigation into attributing a 41-day digest gap to a 4-day defer window.
+  // If the set is ever repopulated, this branch posts an honest on-schedule
+  // check-in and skips the claude spawn (no fail-closed FAILED-issue/RED-monitor
+  // storm) — a GREEN-with-no-artifact path, which is why it now emits
+  // SOLEUR_CRON_TIER2_DEFERRED from deferIfTier2Cron.
   if (
     await deferIfTier2Cron({
       cronName: "cron-community-monitor",
@@ -434,7 +453,33 @@ export async function cronCommunityMonitorHandler({
       cronName: "cron-community-monitor",
     }),
   );
+  // #6714 Phase 3.4 — the dedup early-return used to post GREEN and return on
+  // issue-presence ALONE, which is a GREEN-with-no-artifact path by
+  // construction. Observed shape: run 1 files a genuine digest issue but fails
+  // to commit; run 2 dedups on that issue and posts GREEN with nothing landed —
+  // the exact 2026-07-14 → 07-19 state, and it SURVIVES the captured-return and
+  // livenessOk fixes below unless closed here. So the short-circuit now requires
+  // BOTH the issue AND the dated digest committed on the default branch.
+  const digestPath = `${COMMUNITY_DIGEST_DIR}${runStartedAt.slice(0, 10)}-digest.md`;
+  const digestCommitted = digestAlreadyExists
+    ? await step.run("dedup-digest-committed-check", async () =>
+        digestCommittedOnDefaultBranch({
+          path: digestPath,
+          cronName: "cron-community-monitor",
+        }),
+      )
+    : false;
   if (digestAlreadyExists) {
+    // Marker 5 is emitted on BOTH outcomes — the dedup-and-return case and the
+    // issue-without-artifact recovery case. An emit on only one of them could
+    // not distinguish "healthy dedup" from "recovered from a lost artifact".
+    emitCronDedupSkip({
+      cron: "cron-community-monitor",
+      date: runStartedAt.slice(0, 10),
+      digest_committed: digestCommitted ? 1 : 0,
+    });
+  }
+  if (digestAlreadyExists && digestCommitted) {
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({
         ok: true,
@@ -506,6 +551,32 @@ export async function cronCommunityMonitorHandler({
     // AFTER the persistence step, leaving the cohort-wide issue-verified gate
     // shape (asserted by cron-safe-commit-parity) untouched.
     let collectorSignalRed = false;
+    // #6714 — the LIVENESS signal, split from heartbeatOk by ADDITION (R20:
+    // heartbeatOk is asserted as literal source text by cron-safe-commit-parity
+    // across all 8 MIGRATED_PROMPT cohort files, so it keeps its name AND its
+    // role as the persistence gate). heartbeatOk answers "did a labelled issue
+    // land"; livenessOk answers "did the digest the operator actually consumes
+    // get COMMITTED". Applied to heartbeatOk below, alongside collectorSignalRed.
+    //
+    // Initialised FALSE and set true ONLY by an observed positive. An earlier
+    // draft initialised it true ("no evidence the artifact is missing") and
+    // justified that by the retry hazard below. Review falsified both halves:
+    //
+    //  1. It left the bug class REACHABLE. A throw anywhere between
+    //     verify-output and the persistence gate leaves heartbeatOk true and
+    //     livenessOk never falsified → `failed = threw && !heartbeatOk` is
+    //     false → NO retry → terminal GREEN with nothing committed, on the
+    //     FIRST attempt. That is verbatim the shape ADR-126 forbids.
+    //  2. The retry hazard it claimed to avoid ALREADY EXISTS on main via the
+    //     pre-existing `if (collectorSignalRed) heartbeatOk = false` below, so
+    //     the fail-open default bought nothing main had not already lost.
+    //
+    // A liveness signal that votes GREEN on an UNOBSERVED artifact is precisely
+    // the defect this file exists to close, so fail-closed is the only
+    // defensible default. The retry consequence is handled properly by
+    // `retryEligible: false` at the finalize call rather than by weakening the
+    // signal — see the four-arm table below and ADR-126.
+    let livenessOk = false;
     let threw = false;
     let spawnResult: SpawnResult | null = null;
     try {
@@ -648,8 +719,29 @@ export async function cronCommunityMonitorHandler({
       //     a hard kill can land mid-edit, and the timeout is already loud via
       //     the reportSilentFallback above. Guard aborts / persistence failures
       //     self-report inside the helper (Sentry + issue comment).
+      // #6714 marker 3 — THE signal that would have decided H9 on day one.
+      // Stat'ing the digest in the workspace immediately BEFORE the gate splits
+      // "the agent never wrote the file" from "the file was written but never
+      // entered the commit". Emitted unconditionally (outside the gate) so a
+      // skipped run is covered too, and outside step.run because it has no
+      // side effect worth memoizing.
+      //
+      // Lazy imports for the SAME reason as readCollectorStatus above: a
+      // top-level node:fs binding lands in the static graph of every sibling
+      // test that mocks node builtins with partial factories.
+      const { existsSync } = await import("node:fs");
+      const { join: joinPath } = await import("node:path");
+      emitCommunityDigestFile({
+        cron: "cron-community-monitor",
+        attempt: attempt ?? 0,
+        digest_path: digestPath,
+        present: existsSync(joinPath(spawnCwd!, digestPath)) ? 1 : 0,
+      });
       if (heartbeatOk && !spawnResult.abortedByTimeout) {
-        await step.run("safe-commit-pr", async () =>
+        // #6714 R16a, THE PRIMARY DEFECT: this return value was DISCARDED, so a
+        // {status:"failed"} or {status:"no-changes"} was silently dropped and
+        // the monitor stayed GREEN with nothing committed.
+        const commitResult = await step.run("safe-commit-pr", async () =>
           safeCommitAndPr({
             spawnCwd: spawnCwd!,
             installationToken,
@@ -661,6 +753,67 @@ export async function cronCommunityMonitorHandler({
             logger,
           }),
         );
+        // The liveness table. `livenessOk` is FALSE until proven otherwise, so
+        // only the two arms below can turn the run GREEN; everything else —
+        // "no-changes", "failed", committed-without-today's-digest, and every
+        // throw that never reaches here — falls through still RED.
+        let livenessReason: CronDigestLivenessMarker["reason"] =
+          "persistence-not-committed";
+        if (commitResult.status === "committed") {
+          if (commitResult.paths?.includes(digestPath)) {
+            // THE POSITIVE: today's digest is demonstrably in the commit.
+            // `includes` is membership, not position — the allowlist covers the
+            // whole community directory, so the agent may land other files
+            // beside the digest and the digest need not be first.
+            livenessOk = true;
+            livenessReason = "digest-committed";
+          } else if (commitResult.paths === undefined) {
+            // NOT DETERMINED (R21), never "nothing committed". But ONLY the
+            // replay-resume branch has a legitimate reason to leave it
+            // undetermined — it is the one path that skips the allowlist scan.
+            // Any OTHER undetermined shape means the result contract drifted,
+            // and voting GREEN on an unknown is exactly the failure this issue
+            // is about, so it stays red.
+            livenessOk = commitResult.resumed === true;
+            livenessReason = commitResult.resumed
+              ? "undetermined-replay-resume"
+              : "undetermined-contract-drift";
+          } else {
+            // committed something, but not today's digest → stays RED.
+            livenessReason = "digest-absent-from-commit";
+          }
+        }
+        // Marker 6 — the VERDICT plus the arm that decided it. Without this the
+        // RED arms are indistinguishable in Better Stack: marker 1 already
+        // emitted `status:"committed"` from inside safeCommitAndPr before this
+        // table ran.
+        emitCronDigestLiveness({
+          cron: "cron-community-monitor",
+          run_id: runId ?? "unknown",
+          attempt: attempt ?? 0,
+          ok: livenessOk ? 1 : 0,
+          reason: livenessReason,
+        });
+      } else {
+        // #6714 marker 2 — this gate had NO else, so a RED or timed-out run
+        // skipped persistence leaving no trace on any operator-reachable
+        // surface. abortedByTimeout is checked first because a timed-out run is
+        // also usually red, and the timeout is the more specific cause.
+        emitCronPersistSkipped({
+          cron: "cron-community-monitor",
+          reason: spawnResult.abortedByTimeout ? "timeout" : "red",
+        });
+        // Nothing was persisted. If heartbeatOk is false the run is already RED;
+        // the case this catches is a timed-out run whose issue landed, which was
+        // GREEN-with-no-artifact before this line.
+        livenessOk = false;
+        emitCronDigestLiveness({
+          cron: "cron-community-monitor",
+          run_id: runId ?? "unknown",
+          attempt: attempt ?? 0,
+          ok: 0,
+          reason: "persistence-skipped",
+        });
       }
     } catch (err) {
       // #5728 G1 — a deploy-in-progress defer is benign (ADR-078/#5686): rethrow
@@ -698,6 +851,19 @@ export async function cronCommunityMonitorHandler({
     //     exactly the compound-failure run. The catch falls through to here.
     if (collectorSignalRed) heartbeatOk = false;
 
+    // #6714 — the liveness signal APPLIED. Same two reasons as #6695 above:
+    // after persistence (heartbeatOk gates safeCommitAndPr, so lowering it any
+    // earlier would discard the very digest whose absence we are reporting) and
+    // outside the try (a trailing throw must not skip the page).
+    //
+    // Reachability note for the `threw && !heartbeatOk → retry` hazard called
+    // out on the livenessOk declaration: livenessOk is falsified ONLY at the
+    // tail of the try, with nothing throwing after it, and a throw out of
+    // safe-commit-pr leaves it true by construction. So "threw AND liveness-red"
+    // is unreachable here, and this line cannot induce a replay against the
+    // already-deleted spawnCwd.
+    if (!livenessOk) heartbeatOk = false;
+
     // --- Single authoritative terminal heartbeat (memoization-safe,
     //     final-attempt gated). On a genuine non-final failure the helper skips
     //     the whole heartbeat step and returns retry:true (we rethrow to trigger
@@ -714,6 +880,16 @@ export async function cronCommunityMonitorHandler({
       sentryMonitorSlug: SENTRY_MONITOR_SLUG,
       cronName: "cron-community-monitor",
       logger,
+      // #6714 — a replay CANNOT recover any failure inside the guarded body:
+      // `setup-workspace` is memoized, so attempt 1 reads back an ephemeralRoot
+      // the `finally` below already deleted, and safeCommitAndPr then hits its
+      // `workspace-lost` guard unconditionally — which comments a misleading
+      // "PR withheld" + runbook pointer onto the operator's issue. This is what
+      // lets livenessOk be honestly fail-closed without buying that useless
+      // replay. Scoped precisely: throws BEFORE the try (token mint,
+      // setup-workspace itself) are unaffected and still retry into a fresh
+      // workspace, and DeployInProgressError still rethrows bare.
+      retryEligible: false,
       onBeforeHeartbeat: heartbeatOk
         ? undefined
         : async () => {
