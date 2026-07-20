@@ -414,7 +414,13 @@ marker is present at HEAD in `apps/web-platform/infra/workspaces-cutover.sh` (R1
 8.1 Write ADR-130 per §Architecture Decision via `/soleur:architecture`.
 8.2 File the follow-through-enrollment deferral issue (§Non-Goals), labels `chore` +
 `priority/p3-low` (verified present).
-8.3 CHANGELOG entry.
+8.3 ~~CHANGELOG entry.~~ **Plan error, corrected at /work: there is no root
+`CHANGELOG.md`.** `git ls-tree origin/main --name-only | grep -ci changelog` → `0`;
+the changelog is derived from the GitHub API at docs-build time by
+`plugins/soleur/docs/_data/changelog.js`. The only committed `CHANGELOG.md` belongs to
+`.github/actions/bot-pr-with-synthetic-checks/` and is unrelated. No file to edit — the
+PR title and body carry this role. (`hr-when-a-plan-specifies-relative-paths-e-g`: plan
+paths are claims to verify, never facts.)
 
 ### PR B — Phase 4 (after the inter-PR verification gate)
 
@@ -422,6 +428,18 @@ marker is present at HEAD in `apps/web-platform/infra/workspaces-cutover.sh` (R1
 
 4.0 **Gate:** confirm on a live docs-only PR that `infra-validate-required` posts a
 terminal state. Do not proceed otherwise.
+
+4.0b **Revisit `cancel-in-progress` before the flip (carried forward from PR A).**
+PR A ships `cancel-in-progress: true` per F7. **Both** sibling required workflows
+(`tenant-integration.yml`, `apply-sentry-infra.yml`) use `false`, and their written
+rationale is precisely that a cancelled run reds a *required* gate. F7's justification for
+diverging — "no required-context-on-cancel hazard **because PR A ships before the context
+is required**" — is therefore self-expiring: **PR B is the event that expires it.**
+Re-evaluate here, do not inherit silently. If keeping `true`, record why the
+cancelled-run-reds-a-required-check hazard does not apply (the aggregator re-runs on the
+new head SHA, and GitHub evaluates required contexts against the latest SHA); if that
+argument does not survive scrutiny, flip to `false` and match the precedents. The divergence
+and its expiry condition are recorded in the workflow's own `concurrency:` comment.
 4.1 `infra/github/ruleset-ci-required.tf` — add one
 `required_check { context = "infra-validate-required"; integration_id = var.actions_integration_id }`.
 Fix the stale "the 19 `context` strings" header comment (already wrong at 20 → 21).
@@ -636,7 +654,13 @@ reading `learnings/` or `specs/`; no new artifact distribution surface). The
   directions 1 and 3. *(On `/ship` renumber, sweep this AC with the plan/tasks — §Sharp Edges.)*
 - **AC14** `SENSITIVE_PATH_RE` untouched:
   `grep -cF "SENSITIVE_PATH_RE='^(apps/web-platform" plugins/soleur/skills/preflight/SKILL.md plugins/soleur/skills/deepen-plan/SKILL.md`
-  → `2` and `1` (unchanged from Phase 0 baseline).
+  → `3` and `1` (unchanged from Phase 0 baseline).
+  *(Corrected at /work: the plan was authored with `2`, but the measured baseline on
+  `origin/main` is `3` — the third preflight hit is a Sharp Edges prose bullet, not a
+  second copy of the literal. Left as `2`, this AC would have red for a reason unrelated
+  to the change — the same "self-describing counts rot silently" class AC20 exists to
+  catch. The invariant it protects is asserted directly:
+  `git diff origin/main...HEAD -- <both files> | grep -cE '^[+-].*SENSITIVE_PATH_RE'` → `0`.)*
 - **AC20** No stale count survives:
   `git grep -c "8 decision states\|8 states\|all 8 fixtures" -- plugins/soleur/skills/preflight/SKILL.md plugins/soleur/test/lib/discoverability-test-parser.ts plugins/soleur/test/preflight-discoverability-test.test.ts`
   → `0` for each (F9).
