@@ -135,11 +135,9 @@ if ! (cd "$WORK_DIR" && timeout "$(gh_budget)" gh pr view "$BRANCH" --json body 
 fi
 [[ -s "$SCAN_FILE" ]] || exit 0
 
-# Reuse the canonical scanner (single-sources GitHub's keyword set + locale pin),
-# then keep only PROSE-EMBEDDED matches: lines whose close-keyword is NOT the
-# start-of-line directive (a standalone `Closes #N` / `- Fixes #N` is intentional).
-# Resolve from the repo toplevel, not the payload cwd: a `gh pr merge` issued
-# from a subdirectory would otherwise miss the scanner and exit 0 in silence.
+# The canonical scanner single-sources GitHub's keyword set and locale pin.
+# Resolve it from the repo toplevel, not the payload cwd: a `gh pr merge` issued
+# from a subdirectory would otherwise miss it and exit 0 in silence.
 REPO_TOP=$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$WORK_DIR")
 SCANNER="$REPO_TOP/plugins/soleur/skills/ship/scripts/auto-close-scan.sh"
 if [[ ! -f "$SCANNER" ]]; then
