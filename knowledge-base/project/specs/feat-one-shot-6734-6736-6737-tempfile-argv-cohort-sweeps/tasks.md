@@ -116,6 +116,13 @@ Derived from
       (the real delta is monitor **colour**, not silence).
 - [ ] 3.2.1 `scripts/cron-artifact-age.sh` — days-since-last-artifact **on the default branch** for
       all **9** producers, from git history, with a per-cron threshold from its own schedule.
+- [ ] 3.2.1a **Schedule it as a GitHub Actions `schedule:` workflow, NOT an Inngest cron** (plan
+      §3.2a). Counter-default: ADR-033 makes Inngest canonical and
+      `.claude/hooks/new-scheduled-cron-prefer-inngest.sh` will soft-warn — take the exception
+      deliberately, because putting the cohort's watchdog on Inngest means a wedged Inngest stops the
+      crons **and** the detector. Precedent: `scheduled-inngest-health.yml` ("the EXTERNAL probe that
+      runs independently of inngest") and `scheduled-zot-restart-loop.yml`. **Write the rationale into
+      the workflow file itself**, not only the plan — the hook fires on the file.
 - [ ] 3.2.2 `.test.sh` proving **both arms**: flags a synthesized stale cron, passes a synthesized
       fresh one. Register in `test-all.sh`.
 - [ ] 3.3.1 Tracking issue for the deferred handler-local work (`livenessOk`, Class A ports,

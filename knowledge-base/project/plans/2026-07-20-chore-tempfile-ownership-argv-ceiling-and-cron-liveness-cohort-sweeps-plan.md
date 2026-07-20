@@ -242,6 +242,25 @@ Why measure from outside the handler, and why this instead of handler edits:
 - **Dissolves the Class A/B problem** — the *threshold* differs per cron, the *mechanism* does not.
 - Avoids the R26 fixture hazard, the R27 missing-harness cost, and the R20b double-emit entirely.
 
+**3.2a Substrate — GitHub Actions `schedule:`, NOT an Inngest cron (deepen-pass finding).** This is
+load-bearing and counter-default. ADR-033 makes Inngest canonical for scheduled work (51 Inngest crons
+vs 9 remaining GHA `scheduled-*`), and `.claude/hooks/new-scheduled-cron-prefer-inngest.sh` will
+soft-warn at `/work` time. Take the exception deliberately:
+
+- **Putting the cohort's watchdog on Inngest reintroduces "the reporter is the subject" at the
+  substrate level.** If Inngest is down or wedged, the crons stop *and* the detector stops — the exact
+  correlated-failure shape that let this go unnoticed for weeks.
+- **There is an exact, self-documented precedent.** Of the 4 `schedule:`-fired GHA workflows,
+  `scheduled-inngest-health.yml` states in its own header: *"This workflow is the EXTERNAL probe that
+  runs independently of inngest"* — written after the #5542 ~3.5h silent crash-loop.
+  `scheduled-zot-restart-loop.yml` is the same class.
+- **It satisfies ADR-033's stated exception**: the work is purely git/repo-scoped (it reads commit
+  history on the default branch — no app context, no app secrets) and gains nothing from `step.run`
+  memoization or Inngest replay.
+
+Record this rationale **in the workflow file itself**, not only here — the hook fires on the file, and
+the next reader needs the reason at the point of surprise.
+
 **Deferred to a tracking issue, with reasons:** handler-local `livenessOk`; Class A ports; the
 `retryEligible` sweep (R28 — and it must land **before** return-value consumption, not beside it); the
 `inngest -> kb` C4 edge (R24). Any of these needs **its own ADR** (or an ADR-126 amendment), because
@@ -481,6 +500,59 @@ artifacts. Product/UX Gate: no UI-surface file in either Files list; mechanical 
 
 **GDPR gate:** not invoked — no schema, migration, auth flow, API route or `.sql`; markers carry no
 personal data; none of triggers (a)-(d) fire.
+
+---
+
+## Research Insights (deepen pass, 2026-07-20)
+
+The plan had already been through an 8-agent review, so this pass focused on the **verification
+classes that produced v1's errors** rather than on more opinion.
+
+### Citation verification — all clean
+
+Every cited PR, issue and commit was resolved live (`gh pr/issue view`, `git rev-parse`,
+`git merge-base --is-ancestor origin/main`) rather than trusted from context:
+
+- **15 PR/issue citations** all resolve and match their claimed role. Two worth calling out because
+  the plan's argument depends on their *state*, not just their existence: **#5026 is `CLOSED`, not
+  `MERGED`** — which is exactly what R23 ("opened but never merged") asserts; and **#4375 is `OPEN`**
+  at 57 days, which is what makes UC-3's "0% success rate" claim measurable rather than rhetorical.
+- **2 commit attributions verified by diff, not by message.** `5ea440f4c` genuinely contains
+  `-export const TIER2_DEFERRED_CRONS ... = new Set([` → `+ ... = new Set([])` dated **2026-06-13**,
+  confirming R22c's defer-window boundary. `5b2c1922d` genuinely touches
+  `scheduled-content-publisher.yml`, confirming R2. Both are ancestors of `origin/main`.
+
+This matters because v1's failure mode was precisely an attribution that *read* plausible. The
+`git show <sha> | grep` form is what separates "the commit exists" from "the commit did the thing".
+
+### Precedent-diff gate (Phase 4.4)
+
+Every pattern-bound behaviour in this plan has an in-repo precedent, and each is cited at its
+anchor rather than described: the lint analyzer follows `lint-infra-no-human-steps.py` (analyzer +
+`--changed --base` + `.test.sh` + `test-all.sh` registration + `ci.yml` step); the residue harness
+follows `workspaces-luks-freeze.test.sh`'s R0/R1/R2; the argv conversion follows
+`rule-metrics-aggregate.sh`'s own in-file `--rawfile` site and `domain-model-drift.sh`'s comment
+block; the fixture-adequacy self-check follows `domain-model-drift.test.sh` T20. **No pattern here
+is novel** — which is the point, and is why the plan's residual risk is concentrated in the two
+places it deviates (the detector's substrate, below, and the residue harness's missing scratch tree).
+
+### Scheduled-work substrate — the one counter-default choice
+
+The scheduled-work precedent check (Phase 4.4) surfaced the plan's only genuine architectural
+decision, and it points *away* from the canonical answer. See **3.2a**: the detector belongs on GitHub
+Actions precisely because Inngest is the substrate under observation. Measured: 51 Inngest crons vs 9
+GHA `scheduled-*` (4 `schedule:`-fired), of which `scheduled-inngest-health.yml` and
+`scheduled-zot-restart-loop.yml` are self-documented external probes. This is a real exception with a
+real precedent — not an escape from ADR-033.
+
+### Gates run
+
+Phase 4.6 (User-Brand Impact) **pass** — section present, 23 non-blank lines, valid threshold.
+Phase 4.7 (Observability) **pass** — all 5 fields present, no placeholder values, no `ssh` in
+`discoverability_test.command`. Phase 4.8 (PAT-shaped variables) **pass** — no matches.
+Phase 4.9 (UI wireframe) **skipped** — no UI-surface file in either Files list.
+Phase 4.5 (network-outage) and 4.55 (downtime/cutover) **not triggered** — no SSH/connectivity
+symptom, and no host-replace, lock-taking DDL, or router change.
 
 ---
 
