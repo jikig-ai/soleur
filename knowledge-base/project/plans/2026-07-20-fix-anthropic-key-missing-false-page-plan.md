@@ -114,8 +114,8 @@ surface goes dark with no positive signal — the exact mis-triage ADR-108 Decis
 carries no request data; the marker's per-model rows are a strict field allowlist (`api_key_id` /
 `workspace_id` are never spread). The change moves a severity level and adds an integer day count.
 
-**Brand-survival threshold:** `aggregate pattern` — the harm is cumulative alarm fatigue and a
-decayed dark state, not a single-user incident.
+- **Brand-survival threshold:** `aggregate pattern` — the harm is cumulative alarm fatigue and a
+  decayed dark state, not a single-user incident.
 
 ## Open Code-Review Overlap
 
@@ -450,9 +450,12 @@ logs:
   where: Better Stack Logs (ClickHouse remote t520508_..._logs, source 2457081), via Vector
   retention: 3 days (hot window, betterstack-log-query.md:85); quota 3 GB/mo
 discoverability_test:
-  command: >-
-    doppler run -p soleur -c prd_terraform --
-    scripts/betterstack-query.sh --since 48h --grep SOLEUR_CLAUDE_COST_DAILY --limit 20
+  # Single-line plain scalar, NOT a `>-` folded scalar. preflight Check 10's
+  # Form A parser handles `command: <inline>` and `command: |` but NOT `>-`:
+  # it strips the key and yields the literal `>-`, which then trips its own
+  # shell-active-token reject (`>`) and FAILs the check without ever running
+  # the probe. See #6772.
+  command: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 48h --grep SOLEUR_CLAUDE_COST_DAILY --limit 20
   expected_output: >-
     a row matching BOTH raw LIKE '%"SOLEUR_CLAUDE_COST_DAILY":true%' and
     '%"component":"claude-cost"%', carrying "status":"key-missing" and a
