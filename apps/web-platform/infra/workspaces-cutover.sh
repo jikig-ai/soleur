@@ -430,13 +430,15 @@ freeze_writers() {
 # it is a point-in-time sample, and the pass-2 delta rsync + C1 verify run ~10 minutes after the
 # freeze. A writer that starts after a single sample is undetected by construction.
 #
-# FOUR properties, each load-bearing:
+# FIVE properties, each load-bearing. The first four are the original G4 contract; the fifth is
+# #6733's, and it is the one that broke five real cutovers.
 #  (a) fail-CLOSED on a missing lsof (ensure_lsof dies rather than skipping). The pre-#6588 form
 #      wrapped the whole assert in `command -v lsof && …`, so on a host without lsof the gate
 #      silently vanished — the silent-failure anti-pattern (cq-silent-fallback-must-mirror-to-sentry).
 #  (b) NO pipe. `lsof +D "$MOUNT" | grep -q .` under `set -o pipefail` returns 141 when grep closes
 #      the pipe on an early match and the producer takes SIGPIPE — so `&& die` never fires. That is
-#      a SIZE-DEPENDENT fail-OPEN: the gate evaporates exactly when there are many stragglers.
+#      a SIZE-DEPENDENT fail-OPEN: the gate evaporates exactly when there are many stragglers. Every
+#      predicate below therefore reads a FILE (`awk … >"$pc"` + `[ -s ]`) or matches in-shell.
 #  (c) a POSITIVE CONTROL. `lsof` exits 1 BOTH when it finds nothing and when it errors, and writes
 #      diagnostics only to stderr — so `"$(lsof … 2>/dev/null || true)"` reads "the probe failed" as
 #      "the mount is clean". A typo'd $MOUNT, an unstat-able subtree (docker overlay filesystems on
@@ -445,32 +447,134 @@ freeze_writers() {
 #      mount, instead of merely assuming it. Mirrors verify_byte_identity, which captures stdout and
 #      stderr separately and treats a probe error as fail-closed for the same reason.
 #  (d) holders are EMITTED before die(), so the abort self-reports (the #6604 defect class).
-assert_mount_quiesced() {
-  local phase="${1:-freeze}" probe="$MOUNT/.luks-g4-probe.$$" lout lerr rc holders
-  ensure_lsof
-  lout="$(mktemp)"; lerr="$(mktemp)"
-  # exec 9> rather than touch: an open fd is what lsof reports, and it cannot be missed by a
-  # racing reaper the way a bare file could.
-  if ! exec 9>"$probe"; then
-    rm -f "$lout" "$lerr"; emit_drift g4_probe_uncreatable
-    die "cannot create the G4 probe file under $MOUNT (phase=${phase}) — the mount is not writable; refusing to certify quiescence on a mount we cannot even open"
+#  (e) the probe does NOT PERTURB THE TREE IT CERTIFIES (#6733). See the block inside the function.
+
+# _assert_mount_rw <phase> — the writability signal the old WRITE-probe smuggled in, restated as its
+# own named assert (#6733).
+#
+# The removed probe was `exec 9>"$MOUNT/.luks-g4-probe.$$"`, and its failure arm doubled as an
+# unnamed second assertion: a $MOUNT that had gone read-only (the kernel's `errors=remount-ro`
+# default, after an I/O or ext4 error) could not be written, so the run aborted. The read-open that
+# replaces it cannot fail that way. Dropping the signal silently would trade one defect for another,
+# so it is asserted EXPLICITLY here — and it is now STRONGER than the side effect it replaces,
+# because it names the condition instead of inferring it from a failed create.
+#
+# TOKEN comparison, never a substring. Measured on a live host 2026-07-20: `findmnt -no OPTIONS /`
+# returns `rw,relatime,errors=remount-ro`. A substring test for "ro" matches inside the
+# `errors=remount-ro` VALUE and would declare a perfectly writable mount read-only — an
+# unconditional false abort. The options field is a comma-separated list, so it is split on `,` and
+# each token compared WHOLE.
+_assert_mount_rw() {
+  local phase="$1" opts tok
+  local -a toks
+  opts="$(findmnt -no OPTIONS "$MOUNT" 2>/dev/null)"
+  if [ -z "$opts" ]; then
+    emit_drift g4_mount_opts_unreadable
+    die "cannot read \$MOUNT's mount options via findmnt (phase=${phase}) — refusing to certify quiescence on a mount whose read/write state is unknown. The pre-#6733 write-probe proved writability as a side effect; this gate must not lose that signal silently"
   fi
-  lsof +D "$MOUNT" >"$lout" 2>"$lerr"; rc=$?
-  exec 9>&-
+  IFS=',' read -r -a toks <<<"$opts"
+  for tok in "${toks[@]}"; do
+    if [ "$tok" = ro ]; then
+      emit_drift g4_mount_read_only
+      die "\$MOUNT is mounted READ-ONLY (phase=${phase}; options='${opts}') — the kernel has almost certainly remounted it ro after an I/O or filesystem error. Refusing to freeze or verify against a mount that cannot accept rollback()'s remount: the retained plaintext is the ONLY copy until Phase 5, and a rollback that cannot write is not a rollback"
+    fi
+  done
+}
+
+assert_mount_quiesced() {
+  local phase="${1:-freeze}" wsdir="$MOUNT/workspaces" lout lerr pc rc hdr holders
+
+  ensure_lsof
+  # Runs at BOTH phases, like the rest of G4 — a mount that went read-only between the freeze and
+  # the pre-verify re-assert is exactly the drift this gate exists to catch.
+  _assert_mount_rw "$phase"
+
+  # --- THE PROBE IS A READ, NOT A WRITE (#6733) -------------------------------------------------
+  # This gate used to hold its positive-control fd by CREATING an entry under the mount
+  # (`exec 9>"$MOUNT/.luks-g4-probe.$$"`) and unlinking it. BOTH operations advance the mtime of
+  # $MOUNT's ROOT DIRECTORY, and the `pre-verify` call site lands BETWEEN the pass-2 delta rsync and
+  # the C1 itemized verify — so C1 correctly emitted `.d..t...... ./` on an otherwise byte-identical
+  # tree and five real cutovers safe-aborted. C1 was RIGHT every time. The gate was perturbing the
+  # very tree it was about to certify.
+  #
+  # The fix is at SOURCE: a READ-open of a directory that ALREADY EXISTS. Measured 2026-07-20:
+  #   * `lsof +D` reports a read-only directory fd — `bash <pid> <user> 9r DIR … /mnt/data/workspaces`
+  #     — so the positive control keeps its FULL strength; and
+  #   * opening a directory for read does NOT advance its mtime (ns-precision, before == after).
+  # There is consequently nothing to save, restore, fingerprint or prove-restored. An earlier
+  # attempt bracketed the write with a touch -r save/restore; that repaired the symptom and left the
+  # gate mutating its own subject. Removing the mutation is strictly smaller and strictly safer.
+  #
+  # WHY `workspaces/` AND NOT $MOUNT ITSELF: it is the directory every other gate on this path
+  # already REQUIRES (the `du --apparent-size -sb "$MOUNT"/workspaces` byte assert, and the
+  # `for ws in "$MOUNT"/workspaces/*/` loops in freeze_writers and the G3 manifest). Requiring it
+  # here adds no new precondition — and its ABSENCE is the single most valuable thing this gate can
+  # fail on, which is why the die below is worded the way it is.
+  #
+  # WHY REUSING A REAL PATH IS SAFE NOW: the old holder filter subtracted the probe BY PATH
+  # (`grep -vF -- "$probe"`), so pointing the probe at a real path would have subtracted a GENUINE
+  # straggler that happened to hold that same path — a fail-open in the exact gate meant to catch
+  # stragglers. The filter below subtracts by PID instead, so only THIS process's own rows are
+  # excluded and a straggler holding workspaces/ is still reported. The PID filter is what makes the
+  # read-probe admissible; the two changes are one change and must not be separated.
+  if ! exec 9<"$wsdir"; then
+    emit_drift g4_workspaces_unopenable
+    die "cannot open '$wsdir' for reading (phase=${phase}) — this is the WRONG-DEVICE / EMPTY-AUTO-CREATED-BIND-SOURCE state. Either \$MOUNT is not the volume carrying user data, or 'workspaces/' was auto-created empty beneath a bind mount. A cutover that proceeds from here copies an EMPTY tree, and every gate downstream compares empty against empty and reports GREEN: C1 finds no differences, the du byte match reads 0 == 0, and G3's counts agree at zero. That is a cutover declared successful with every user's data missing. Refusing to certify quiescence on a mount whose workspaces/ directory cannot even be opened"
+  fi
+
+  lout="$(mktemp)"; lerr="$(mktemp)"; pc="$(mktemp)"
+  # `9<&-` closes fd 9 IN THE CHILD ONLY. Bash does not set O_CLOEXEC on `exec 9<`, so without this
+  # redirection every child inherits the directory fd — and under the PID filter below an inheriting
+  # child is indistinguishable from a foreign straggler, i.e. this gate would report ITSELF and
+  # abort every cutover. Measured 2026-07-20: a child process in the same pipeline appears in
+  # `lsof +D` output with its own inherited `9r DIR` row. (The lsof on this host happens to exempt
+  # its own process from its output, but that is one implementation's behaviour, not a contract to
+  # rest a production gate on — and it does not exempt any OTHER child.)
+  lsof +D "$MOUNT" 9<&- >"$lout" 2>"$lerr"; rc=$?
+  exec 9<&-
+
   # rc 0 = holders found, rc 1 = none found OR an error. Anything else is an outright probe failure.
   if [ "$rc" -gt 1 ]; then
     local etail; etail="$(_vscrub "$(tail -c 400 "$lerr" 2>/dev/null || true)")"
-    rm -f "$lout" "$lerr" "$probe"; emit_drift g4_probe_failed
+    rm -f "$lout" "$lerr" "$pc"; emit_drift g4_probe_failed
     die "the G4 lsof probe itself FAILED (rc=${rc}, phase=${phase}) — cannot certify quiescence; stderr: ${etail}"
   fi
-  # Positive control: our own held fd MUST appear, else lsof never scanned $MOUNT.
-  if ! grep -qF -- "$probe" "$lout"; then
-    local etail; etail="$(_vscrub "$(tail -c 400 "$lerr" 2>/dev/null || true)")"
-    rm -f "$lout" "$lerr" "$probe"; emit_drift g4_probe_blind
-    die "lsof did not report this script's own open fd under $MOUNT (rc=${rc}, phase=${phase}) — the G4 straggler probe is BLIND, not clean; refusing to freeze on unproven quiescence. stderr: ${etail}"
+
+  # HEADER-SHAPE ASSERT — lsof output-format drift must fail CLOSED.
+  # Both predicates below read lsof's SECOND whitespace-separated field as the PID and drop row 1 as
+  # the header. If a future lsof reordered its columns or dropped the header, the holder filter would
+  # start reading a different column entirely: header text could be counted as a straggler, or — the
+  # dangerous direction — real holders could stop matching and the gate would certify a busy mount as
+  # quiesced. Asserting the shape converts that from a silent miscount into a named abort.
+  # No pipe (`head -n1 … | grep -q` would SIGPIPE the producer to 141 under pipefail, property (b));
+  # the first line is read directly from the file and matched in-shell.
+  hdr=""; IFS= read -r hdr <"$lout" || true
+  if [[ ! "$hdr" =~ ^COMMAND[[:space:]]+PID[[:space:]]+USER ]]; then
+    rm -f "$lout" "$lerr" "$pc"; emit_drift g4_lsof_header_unrecognized
+    die "lsof's output header is not the expected 'COMMAND PID USER …' shape (phase=${phase}; got: '$(_vscrub "$hdr")') — this gate parses the PID column by position, so an unrecognised format means every holder verdict below is unreliable. Refusing to certify quiescence from output this gate cannot parse"
   fi
-  holders="$(grep -vF -- "$probe" "$lout" | grep -v '^COMMAND ' || true)"
-  rm -f "$lout" "$lerr" "$probe"
+
+  # POSITIVE CONTROL — our own fd MUST appear, matched on BOTH our PID and the probed path.
+  # Requiring the PATH too is what makes an EMPTY holder list evidence: a row bearing our PID alone
+  # could come from anywhere in the tree, whereas a row bearing our PID AND "$wsdir" proves the scan
+  # actually descended to the subtree we opened. Without the path term, an lsof that scanned only
+  # $MOUNT's top level would satisfy the control while never having looked where the data lives.
+  # `awk … >"$pc"` then `[ -s ]`: a file test, never `| grep -q` (property (b)).
+  awk -v p="$$" -v n="$wsdir" '$2 == p && index($0, n)' "$lout" >"$pc" 2>/dev/null
+  if [ ! -s "$pc" ]; then
+    local etail; etail="$(_vscrub "$(tail -c 400 "$lerr" 2>/dev/null || true)")"
+    rm -f "$lout" "$lerr" "$pc"; emit_drift g4_probe_blind
+    die "lsof did not report this script's own read fd on '$wsdir' (rc=${rc}, phase=${phase}) — the G4 straggler probe is BLIND, not clean; refusing to freeze on unproven quiescence. stderr: ${etail}"
+  fi
+
+  # HOLDERS — every row that is not the header and not one of OUR OWN.
+  # `NR>1` drops the header structurally; the pre-#6733 form used `grep -v '^COMMAND '`, a heuristic
+  # that would also have dropped a genuine holder whose COMMAND happened to start that way. Filtering
+  # by PID (not by path) is what lets the probe reuse a real directory without subtracting a real
+  # straggler — see the block above.
+  holders="$(awk -v p="$$" 'NR>1 && $2 != p' "$lout" || true)"
+  rm -f "$lout" "$lerr" "$pc"
+
   if [ -n "$holders" ]; then
     emit_freeze_holders "$holders"
     die "lsof +D $MOUNT non-empty (phase=${phase}) — a straggler still holds the mount (G4); see the SOLEUR_WORKSPACES_LUKS_FREEZE_HOLDER marker for the offending process(es)"
@@ -671,21 +775,57 @@ disarm_dead_man() {
 # Staging-target preparation (#6588) — lay a filesystem INSIDE the mapper, fail-close the
 # mount, and ANCHOR every certified path to its intended device.
 #
-# The 2026-07-19 freeze (run 29695998561) safe-aborted on C1 with a single `.d..t...... ./`
-# diff. C1 was RIGHT; the defect was one layer below what C1 can report. This script
-# luksFormat'd the device and luksOpen'd the mapper but NEVER ran mkfs, so the mapper held no
-# filesystem and `mount "$MAPPER" "$STAGING"` failed with `wrong fs type, bad option, bad
-# superblock`. Under `set -uo pipefail` with NO `-e` that failure was SWALLOWED, and the
-# `mkdir -p "$STAGING"` immediately above had already created /mnt/data-luks as a plain
-# directory ON THE ROOT DISK. Every downstream step then targeted the root disk. The copy
-# succeeded byte-for-byte onto the wrong block device; the rsync itemize vocabulary cannot
-# express "correct copy, wrong target".
+# The 2026-07-19 freeze (run 29695998561) exposed a real defect HERE: this script luksFormat'd
+# the device and luksOpen'd the mapper but NEVER ran mkfs, so the mapper held no filesystem and
+# `mount "$MAPPER" "$STAGING"` failed with `wrong fs type, bad option, bad superblock`. Under
+# `set -uo pipefail` with NO `-e` that failure was SWALLOWED, and the `mkdir -p "$STAGING"`
+# immediately above had already created /mnt/data-luks as a plain directory ON THE ROOT DISK.
+# Every downstream step then targeted the root disk. The copy succeeded byte-for-byte onto the
+# wrong block device; the rsync itemize vocabulary cannot express "correct copy, wrong target".
+#
+# CORRECTION (#6733, measured 2026-07-20 — run 29706401639). This block previously attributed
+# that run's single `.d..t...... ./` C1 diff to the wrong-device copy. **That attribution was
+# wrong.** Run 29706401639 was the first real cutover carrying the mkfs fix; the staging target
+# was PROVABLY correct (`STAGING_TARGET result=ok`, mapper carries ext4, L1/L2/L5b green) and C1
+# emitted the IDENTICAL `.d..t...... ./`. Same diff on the wrong device and on the right one, so
+# the diff was never diagnostic of device identity.
+#
+# The actual cause was `assert_mount_quiesced` (G4): its positive-control probe CREATED and
+# unlinked an entry inside $MOUNT, which advances the transfer ROOT's mtime, and it runs at
+# `pre-verify` BETWEEN the pass-2 delta rsync and C1. C1 was correct on all five aborts — it
+# reported a real perturbation of the source tree, inflicted by this script's own gate.
+#
+# FIXED BY REMOVING THE PERTURBATION AT SOURCE, not by compensating for it: the probe is now a
+# READ-open of the already-required `$MOUNT/workspaces` directory (`exec 9<`), which `lsof +D`
+# reports just as it reported the write fd, and which does not move any mtime at all. An
+# intermediate attempt bracketed the write with a touch -r save/restore; it was replaced because a
+# gate that mutates its subject and then repairs the evidence is still a gate that mutates its
+# subject, and every repair path was one more way to fail. Pinned by
+# workspaces-luks-verify-root-mtime.test.sh and workspaces-luks-g4-mutation.test.sh. C1 itself is
+# byte-unchanged and was NOT narrowed — narrowing it would have silenced the one signal that
+# catches a wrong-device copy, which is precisely what the paragraph above describes.
 #
 # The sibling git-data volume carries the IDENTICAL `mountpoint … || mount …` line
 # (cloud-init-git-data.yml:159-170) — but under `set -euo pipefail`, where a failed mount is
 # fatal. This script copied the line's SHAPE into a no-`-e` regime, converting a fail-closed
 # line into a fail-open one, and dropped the `mkfs.ext4 /dev/mapper/git-data` that makes the
 # mount succeed at all. git-data-luks.tf:73-78 documents the mechanism verbatim.
+#
+# THE SECOND INVARIANT (#6733): a gate that certifies a tree must not PERTURB that tree. G4 held
+# the first invariant perfectly — it anchored, it fail-closed, it carried a positive control — and
+# still broke every cutover, because certifying quiescence meant writing into the very directory
+# whose byte-identity C1 was about to check. Any probe that mutates its subject is measuring
+# itself. Both invariants are needed: the first stops a gate certifying the wrong thing, the
+# second stops a gate from making the right thing look wrong.
+#
+# The second invariant has THREE enforcement sites in this file, because it has three channels:
+#   1. assert_mount_quiesced's probe is a READ (`exec 9<`), never a create+unlink.
+#   2. manifest_of passes --no-optional-locks, so `git status` cannot rewrite .git/index inside
+#      $STAGING after verify_byte_identity has already certified it.
+#   3. the L3 gates refuse to run when $TMPDIR resolves under $MOUNT, so this script's six mktemp
+#      sites cannot perturb the tree either.
+# Any future gate added on this path owes the same question: does this WRITE anywhere under $MOUNT
+# or $STAGING between the last rsync and C1? If the answer is yes, it belongs somewhere else.
 #
 # THE INVARIANT: a gate that certifies a path must first anchor that path to its intended
 # device. C1, the `du` assert, `git fsck` and the G3 manifest are all pure functions of the two
@@ -1229,6 +1369,21 @@ fi
 # ============================================================================
 step "L3 gates — host reachability + mount preconditions (pre-freeze, zero downtime)"
 mountpoint -q "$MOUNT" || die "L3: $MOUNT is not mounted — the data is not where the cutover assumes (Phase 0 STOP + Hetzner rescue crypttab/fstab repair, DP-9 F1)"
+# $TMPDIR MUST NOT resolve under $MOUNT (#6733). This script calls `mktemp` at six sites — the
+# aws-cli unpack, the escrow probe body, C1's own stdout/stderr capture, ensure_lsof's apt log, and
+# G4's three lsof capture files — and every one of them creates AND unlinks a file. If $TMPDIR
+# pointed inside $MOUNT, each of those would advance a directory mtime inside the very tree C1
+# certifies, re-creating the #6733 abort through a channel the G4 fix does not cover: G4's probe is
+# now a pure read, but mktemp is not. Asserted here, ONCE, at the top rather than at six call sites,
+# because the property belongs to the environment and not to any one caller.
+# `mktemp -u` resolves the full template path WITHOUT creating anything — so this check cannot
+# itself perturb the tree it is checking.
+case "$(mktemp -u)" in
+  "$MOUNT"/*)
+    emit_drift tmpdir_under_mount
+    die "L3: \$TMPDIR resolves under $MOUNT (mktemp would create '$(mktemp -u)') — every temp file this script creates would perturb a directory inside the tree C1 is about to certify byte-for-byte, and the cutover would safe-abort on a correct copy (#6733). Re-run with TMPDIR pointed outside $MOUNT (no freeze was held; NO rollback is needed and ROLLBACK=1 must NOT be run)"
+    ;;
+esac
 # $MOUNT is the SOURCE OF EVERY BYTE and the path rollback() remounts. Anchoring it only as a
 # `log WARN` was a live counterexample to the invariant this file now enforces three functions
 # above (a gate that certifies a path must anchor it to a device) — fail-closed here too.
@@ -1334,14 +1489,30 @@ fi
 # G2 manifest (writers live) — enumerate every workspace + ref, derive a count floor
 # ============================================================================
 step "G2 manifest — enumerate workspaces + all refs (incl refs/checkpoints/*), derive count floor"
+# --no-optional-locks ON EVERY INVOCATION (#6733) — the SAME invariant as the G4 defect, one gate
+# over: a gate that certifies a tree must not WRITE to that tree.
+#
+# `git status --porcelain` is not read-only. When a file's cached stat data is racily stale, git
+# REFRESHES the index and writes it back — .git/index is rewritten, under $root. This function is
+# called TWICE: G2 against $MOUNT (harmless, it runs while writers are still live and before any
+# copy), and G3 against $STAGING at a call site that runs AFTER verify_byte_identity has already
+# certified DST == SRC byte-for-byte. A rewritten .git/index there mutates the destination tree
+# immediately after the proof that it matched, silently invalidating that proof. GIT_OPTIONAL_LOCKS=0
+# / --no-optional-locks makes git skip the refresh-and-write entirely and report from the index as
+# it stands, which is exactly what a manifest reader wants.
+#
+# Applied UNIFORMLY to all three invocations, not only to `status`. `for-each-ref` does not write
+# the index, so two of these three are belt-and-braces — deliberately, so the property is one a
+# static test can pin over the WHOLE function ("no bare `git -C` here") rather than a per-subcommand
+# judgement call that the next editor has to re-derive and can get wrong in the silent direction.
 manifest_of() {  # $1 = root dir
   local root="$1" ws
   for ws in "$root"/workspaces/*/; do
     [ -d "$ws" ] || continue
     echo "WS $(basename "$ws")"
-    git -C "$ws" for-each-ref --format='REF %(refname) %(objectname)' 2>/dev/null || true
-    git -C "$ws" for-each-ref --format='CHK %(refname) %(objectname)' 'refs/checkpoints/*' 2>/dev/null || true
-    git -C "$ws" status --porcelain 2>/dev/null | sed 's/^/DIRTY /' || true
+    git --no-optional-locks -C "$ws" for-each-ref --format='REF %(refname) %(objectname)' 2>/dev/null || true
+    git --no-optional-locks -C "$ws" for-each-ref --format='CHK %(refname) %(objectname)' 'refs/checkpoints/*' 2>/dev/null || true
+    git --no-optional-locks -C "$ws" status --porcelain 2>/dev/null | sed 's/^/DIRTY /' || true
   done
 }
 G2="$(manifest_of "$MOUNT")"
