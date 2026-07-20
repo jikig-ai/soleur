@@ -14,6 +14,21 @@ requires_cpo_signoff: false
 
 Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed). No spec directory exists for this branch.
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-20 · **Gates:** 4.5 (no network trigger), 4.6 PASS (`aggregate pattern`), 4.7 SKIP (pure-docs), 4.8 PASS (no PAT shapes), 4.9 SKIP (no UI surface), 4.55 (no downtime trigger). Both cited rule IDs verified active in `AGENTS.md` and absent from the retired registry.
+
+**Key improvements**
+
+1. **A v2 rationale was falsified and corrected.** The plan justified its rendered↔JSON-LD parity requirement on "Google's FAQPage policy requires visible content." Google **deprecated FAQPage rich results on 2026-05-07** — no rich result, no penalty. The requirement survives on stronger ground (answer engines tokenize the `<script>` block as raw quotable text), but shipping the dead rationale would have been the same paraphrase-without-verification defect this PR fixes.
+2. **Canonical framing refined: attribution beats hedging.** Current AEO evidence shows hedged language *reduces* extraction fidelity; attributed, bounded, quantitative claims perform best. Converges with the CMO's independent "one clause" note. AC2's token set widened accordingly.
+3. **`dateModified` confirmed; `CorrectionComment` explicitly rejected** — defined in schema.org, consumed by nothing.
+4. Corrections propagated to `tasks.md` in the same pass.
+
+**Prior round (v2, 7-agent panel)** corrected three false v1 claims, folded in a stale Paperclip star count, and rewrote a structurally vacuous parity AC — detail below.
+
+---
+
 **v2 — rewritten after a 7-agent review panel.** Three v1 claims were **false** and are corrected below (grep baseline, `seo-refresh-queue.md:208` disposition, `business-validation.md:124` hedging), one v1 instruction would have **shipped a known-stale figure** (Paperclip stars), and one v1 fallback rule would have **degraded a good citation** (403 ≠ dead). Ceremony trimmed per DHH/simplicity; verification strengthened per spec-flow (v1's AC5 was structurally vacuous).
 
 ## Overview
@@ -63,7 +78,7 @@ The frontmatter `description:` at `2026-03-26-soleur-vs-polsia.md:5` — *"Polsi
 | Preserve Paperclip's `14,600+ GitHub stars` as unrelated | **Same defect class, ~3.6× stale** — `competitive-intelligence.md` records 53k+; sits in the same sentence *and* the same `acceptedAnswer` being rewritten | Folded in, with verify-before-cite |
 | Citation URL returns 200; non-200 → fallback | **Returns 403** (bot-gated CDN, not dead). `competitive-intelligence.md:98` already cites it as canonical | Rule amended: `401/403/405/429` → cite and note; only `404/410`/DNS → fallback |
 | AC5 guards rendered↔JSON-LD parity | **Structurally vacuous** — the JSON-LD literal lives *inside* the same `.md`, so `name in md` is always true | Rewritten to extract `**Q:**` lines and assert bidirectional set equality |
-| Two published pages; figure in `acceptedAnswer` | Confirmed; **also in `Question.name`** on the Polsia page. Google's FAQPage policy requires marked-up content be visible, so the pair must move together | Scope widened to the Q/A pair |
+| Two published pages; figure in `acceptedAnswer` | Confirmed; **also in `Question.name`** on the Polsia page | Scope widened to the Q/A pair — but see the corrected rationale in Research Insights below; v1's "Google policy requires visibility" justification is **deprecated** |
 | — | Atom feed `_site/blog/feed.xml` embeds full post content incl. JSON-LD: **7× `1.5M`, 5× `2,000+`** | Added to AC targets (self-heals on rebuild; AC coverage gap only) |
 | — | Non-`.md` sweep (`.njk/.html/.json/.ts/.js/.yml`) → **zero**. OG images are textless line-art. `llms.txt` never enumerates posts | No further surfaces |
 
@@ -102,8 +117,9 @@ Source of truth: `competitive-intelligence.md` Tier-3 Polsia row (`last_updated:
 
 - **Verifiable signal:** Polsia raised **$30M at a $250M valuation** (Sound Ventures lead, True Ventures participating, **May 2026**). Pricing **$49/mo base + 20% revenue share**.
 - **Vendor-reported and contradictory — never state as fact:** ~$10M ARR / 7,600 customers / 85% month-two retention; ~$689K run-rate (Feb 2026 Mixergy); earlier $1.5M, then ~$450K.
-- **Required hedge verbs:** reported / vendor-reported / claimed / contradictory across sources.
 - **Prohibited:** any single ARR or customer count as settled fact — **including `$10M`**.
+- **Preferred form: attribution, not vague hedging** (see Research Insights). Write *"third-party reports cite figures ranging from ~$689K to ~$10M ARR"* — attributed, specific, and bounded — rather than *"figures are contradictory"*. Attribution carries the same epistemic honesty while remaining extractable; vague hedging degrades both.
+- **Accepted hedge/attribution tokens** (AC2 keys on these): reported / vendor-reported / claimed / contradictory / unverified / attributed / *according to*.
 
 **Brand-voice reconciliation (load-bearing).** `brand-guide.md` forbids hedging with *might/could/potentially*. That rule governs **Soleur's claims about itself**; attribution hedges on a third party's unverified metrics are a different move and are required here. Keep the hedge to **one clause** — *"reported figures vary widely across sources"* beats a three-source reconciliation in marketing copy.
 
@@ -116,6 +132,51 @@ Source of truth: `competitive-intelligence.md` Tier-3 Polsia row (`last_updated:
 > `**Updated 2026-07-20:** This post originally cited vendor-reported ARR and customer figures for Polsia as fact. Those figures are contradictory across sources; the verifiable signal is Polsia's May 2026 raise. Revenue and customer counts below are attributed, not asserted.`
 
 A page whose prose says "Updated 2026-07-20" while its structured data claims nothing changed since March is the same rendered-vs-JSON-LD incoherence this PR exists to remove.
+
+## Research Insights (deepen-plan, 2026-07-20)
+
+Three findings changed plan decisions. The first **invalidates a v2 rationale**; the second **refines the canonical framing**; the third confirms a choice.
+
+### 1. Google FAQPage rich results are DEPRECATED — the parity rationale was wrong, the requirement survives
+
+Google deprecated FAQPage rich results **2026-05-07** (docs removed June 2026, API support ending August 2026), after restricting them to authoritative government/health sites in August 2023. **No rich result renders, and there is no penalty or manual-action risk for markup that diverges from visible copy.**
+
+So v2's stated justification — *"Google's FAQPage policy requires marked-up content be visible, so the pair must move together"* — **no longer holds.** That is a paraphrase-without-verification defect of exactly the class this PR exists to fix, and it is corrected here rather than shipped.
+
+**The parity requirement itself still stands, for a stronger reason.** A Feb 2026 controlled experiment (Williams-Cook) showed ChatGPT and Perplexity extracting data from *intentionally invalid* schema — answer engines **do not parse JSON-LD semantically; they tokenize the `<script>` block as raw text.** A wrong `acceptedAnswer` is therefore still directly quotable by an LLM, independent of any Google feature. The defect is real; only the cited authority was wrong.
+
+**Net effect on the plan:** AC3 and AC4 stay exactly as written. Their rationale changes from *"Google policy compliance"* to *"the JSON-LD string is LLM-extractable raw text."* If anything this raises AC4's importance — the `acceptedAnswer` is not decorative metadata, it is quotable prose.
+
+- <https://developers.google.com/search/blog/2023/08/howto-faq-changes>
+- <https://developers.google.com/search/docs/appearance/structured-data/faqpage>
+
+### 2. Attribution beats hedging for answer-engine extraction
+
+Current AEO consensus: **hedged language reduces extraction fidelity** — engines build uncertainty around qualified claims and quote them less. What performs best is *explicit source attribution with quantitative data in the same sentence* (`according to [Source] ([Year]), [figure]`). Where sources genuinely conflict, the guidance is to attribute each side rather than collapse to "contradictory".
+
+This does **not** reverse the plan — leading with the verifiable $30M round is exactly the recommended shape (clean, attributable, quantitative). It **refines the hedge form**, and happily converges with the CMO's independent "keep it to one clause" note:
+
+| Avoid | Prefer |
+|---|---|
+| "figures are contradictory across sources" | "third-party reports cite figures ranging from ~$689K to ~$10M ARR" |
+| "unverified vendor metrics" | "Polsia has not published audited figures" |
+
+Canonical framing updated accordingly; AC2's token set widened to include `attributed` / `according to`.
+
+- <https://ziptie.dev/blog/faq-schema-for-ai-answers/>
+- <https://phantom-iq.com/insights/how-perplexity-claude-and-chatgpt-choose-sources>
+
+### 3. `dateModified` + a visible dated note is the right pair — skip `CorrectionComment`
+
+Confirmed: update `dateModified` to the correction date, leave `datePublished` at the March date. schema.org does define a `correction` property and a `CorrectionComment` type (v30.0+), but **there is no evidence any engine consumes them** — they are markup for its own sake here.
+
+Because engines tokenize rendered HTML rather than parsing metadata, the **visible** correction note is doing the real work; `dateModified` is the machine-side freshness signal. Plan v2 already prescribes exactly this pair. **No change** — and explicitly do *not* add `CorrectionComment`.
+
+- <https://schema.org/correction> · <https://schema.org/datePublished>
+
+### Out-of-scope observation
+
+The FAQPage deprecation applies site-wide, not just to these two pages. Whether Soleur should keep investing in FAQPage blocks at all is a real question — but it is a site-wide AEO strategy decision, not a figure correction. **Not folded in.** Worth raising alongside the follow-up issues if the operator wants it.
 
 ## Implementation Phases
 

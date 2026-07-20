@@ -6,6 +6,10 @@ Derived from `knowledge-base/project/plans/2026-07-20-fix-polsia-unverified-figu
 
 Edit by **quoted content anchor**, never line number — the first rewrite in a file invalidates every subsequent line number (`cq-cite-content-anchor-not-line-number`). Line numbers in the plan are cross-references only.
 
+**Copy rule for every rewrite task below (deepen-plan finding 2): prefer attribution over vague hedging.** Write *"third-party reports cite figures ranging from ~$689K to ~$10M ARR"*, not *"figures are contradictory across sources"*. Attributed, bounded, quantitative claims extract well; vague hedging degrades extraction fidelity and reads as mush. Accepted tokens for AC2: `reported`, `vendor-reported`, `claimed`, `contradictory`, `unverified`, `attributed`, `according to`.
+
+**Why the JSON-LD matters (corrected rationale):** Google's FAQPage rich results were deprecated 2026-05-07 — there is no rich result and no penalty for divergence. The `acceptedAnswer` is still load-bearing because answer engines **tokenize the `<script>` block as raw text** rather than parsing it semantically, so a wrong `acceptedAnswer` remains directly quotable by an LLM. Tasks 2.5/2.7/3.2 and ACs 6.4/6.5 are unchanged; only the justification changed.
+
 ---
 
 ## Phase 0 — Preconditions (no edits)
@@ -37,7 +41,7 @@ Rendered copy and JSON-LD twin are **matched pairs** — same commit, textually 
 - [ ] **2.6** FAQ rendered answer: concede the round validates the category; keep the output-quality/trajectory/stakes argument; add the **one-clause** hedge.
 - [ ] **2.7** JSON-LD `acceptedAnswer.text`: semantically identical to 2.6, self-contained (no page context), em-dashes per existing block style.
 - [ ] **2.8** Body pricing (`$29-59/month`, ~3 sites) → `$49/mo base`. **Keep** the 20% rev-share arithmetic (`$2,000/month on $10k revenue`) — still accurate.
-- [ ] **2.9** `BlogPosting` JSON-LD: add/set `dateModified: 2026-07-20`; leave `datePublished` at the March date.
+- [ ] **2.9** `BlogPosting` JSON-LD: add/set `dateModified: 2026-07-20`; leave `datePublished` at the March date. **Do NOT add schema.org `correction`/`CorrectionComment`** — defined but consumed by nothing (deepen-plan finding 3); the visible note does the real work.
 - [ ] **2.10** Confirm the JSON-LD block terminator stays a literal `</script>` and the new text introduces no raw `"` or control characters.
 
 ## Phase 3 — `plugins/soleur/docs/blog/2026-03-31-soleur-vs-paperclip.md`
