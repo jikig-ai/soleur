@@ -1532,10 +1532,19 @@ resource "sentry_issue_alert" "zot_mirror_fallback_rate" {
 # a web-1 that aborts its cloud-init runcmd at stage=verify never binds :80/:3000, and `runcmd` is
 # once-per-instance so no reboot repairs it. The #5933 per-host origin uptime probe was RETIRED
 # (dns.tf), and `betteruptime_monitor.app` probes the app.soleur.ai A-record — which is web-1
-# itself, so on a dead web-1 it goes red only after the host is already dark. This alert is the
-# DETECTION arm for the one coherence failure mode the repo cannot currently prevent: apply-time
-# skew between the mutable `:latest` default and the applying commit's host_scripts_content_hash
-# (ADR-128 cross-commit skew; open under #6712, prevention owned by #6730).
+# itself, so on a dead web-1 it goes red only after the host is already dark.
+#
+# SCOPE — READ BEFORE RELYING ON THIS (corrected at review, #6575). This alert does NOT detect
+# the ADR-128 cross-commit skew mode (#6712). That failure aborts cloud-init at `stage=verify`,
+# and `verify` is NOT among the four stages in `filters_v2` below (`terminal_preamble`,
+# `hostscripts_incomplete`, `doppler_download`, `docker_run`). The whole `runcmd` stage set —
+# verify/extract/pull/ghcr_login/runcmd_early/apt_install/doppler_dl/docker_apt/docker_restart —
+# emits `fatal` to Sentry via the baked DSN and matches NO alert rule, so those events are
+# write-only today. Detection for the skew mode is therefore ABSENT; the mitigation is
+# PREVENTION (the coherence preflight, run per runbooks/web-host-birth.md step 2).
+# Widening this rule to the runcmd stages is the obvious fix and is deliberately NOT bundled
+# into a deletion PR — it changes live paging behaviour and wants its own change. Do not read
+# the paragraph above as "boot failures page"; only these four stages do.
 #
 # Pages on the FIRST occurrence (a serving-host boot
 # failure is high-severity), NOT a rate. The four stage tags are emitted ONLY at fatal level by the
