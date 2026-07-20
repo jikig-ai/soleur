@@ -884,7 +884,7 @@ After resolution, re-scan; the section MUST contain zero unaccompanied operator/
 
 Before issuing ANY `gh issue create` for a follow-up in this phase, run the gate:
 
-1. **Cost-of-filing, per candidate filing** (mirrors `review/SKILL.md` §CONCUR): if the deferred work is **≤30 changed lines AND ≤2 files**, do it inline (fold into THIS PR if unmerged; otherwise it is genuinely a follow-up). Only file when the work is genuinely larger, a separate work-stream/Non-Goal, an operator-only step, or a **discovered defect in a different subsystem** (the last MUST stay its own issue — never bury a possible-P1 bug in a consolidated tracker).
+1. **Cost-of-filing, per candidate filing** (mirrors `review/SKILL.md` §CONCUR): if the deferred work is **≤100 changed lines AND ≤4 files**, do it inline (fold into THIS PR if unmerged; otherwise it is genuinely a follow-up). Only file when the work is genuinely larger, a separate work-stream/Non-Goal, an operator-only step, or a **discovered defect in a different subsystem** (the last MUST stay its own issue — never bury a possible-P1 bug in a consolidated tracker).
 2. **Consolidate deferred-FEATURE follow-ups into ONE tracker.** Multiple `deferred-scope-out` follow-ups from the same PR (ADR + future-feature + sibling-upstream …) collapse into a single "**\<feature\> (#N): post-MVP follow-ups**" issue with a checklist. Discovered bugs stay separate.
 3. **Surface the net count BEFORE filing.** Compute and print: `Closing: <count of Closes #N in PR body> / Filing: <new issues> / Net: <signed>`. If `Net > 0`, state one sentence per filing on why it could not be inlined or consolidated. Net-positive backlog growth from a single feature PR is the smell this gate exists to catch.
 
