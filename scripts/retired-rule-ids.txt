@@ -98,3 +98,6 @@ wg-when-a-feature-stores-user-generated | 2026-04-24 | - | knowledge-base/projec
 
 wg-when-moving-github-issues-between | 2026-05-20 | #4117 | covered-by wg-every-feature-listed-in-a-roadmap-phase + wg-when-closing-a-phase-milestone-update
 wg-before-every-commit-run-compound-skill | 2026-05-20 | #4117 | structurally-enforced at ship-time via plugins/soleur/skills/ship/SKILL.md Phase 1.7/Phase 2 compound invocation; per-intermediate-commit invariant intentionally dropped (compound runs once per feature, not per-commit)
+hr-lifecycle-skills-never-inline-after-handoff | 2026-07-11 | #6347 | consolidated into hr-pipeline-skills-never-inline-after-go-route (workflow-fidelity.ts)
+hr-merge-deploy-monitor-without-asking | 2026-07-11 | #6347 | consolidated into hr-pipeline-skills-never-inline-after-go-route (workflow-fidelity.ts)
+hr-pr-behind-stop-and-resync | 2026-07-11 | #6347 | consolidated into hr-pipeline-skills-never-inline-after-go-route (pr-merge-poll.ts + sync-pr-behind.sh)

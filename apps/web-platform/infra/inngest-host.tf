@@ -7,7 +7,8 @@
 # host so exactly-one-instance is enforced by TOPOLOGY, not a runtime role-guard:
 # OSS Inngest v1.x is single-writer and two servers on the same prod Postgres
 # double-fire every cron (ADR-100 Context). This host is the prerequisite that
-# unblocks active-active web (web-2 pooled, #6178 / #6185).
+# unblocks active-active web (HA deferred to active-active-N, #6459; web-2 was retired
+# 2026-07-17, #6538 — do NOT re-add a web-2 key).
 #
 # STRUCTURAL PRECEDENT: zot-registry.tf (ADR-096) / git-data.tf (ADR-068), NOT the
 # co-located inngest.tf. inngest.tf provisions keys/secrets for the ON-web-host
@@ -29,7 +30,7 @@
 # Redis FLUSHALL + DBSIZE==0 assertion (ADR-100 Decision 6). No window at provision.
 
 locals {
-  # Fresh private IP in 10.0.1.0/24 — web = .10/.11, git-data = .20, registry = .30.
+  # Fresh private IP in 10.0.1.0/24 — web = .10 (.11 retired 2026-07-17, #6538), git-data = .20, registry = .30.
   inngest_private_ip = "10.0.1.40"
 
   # nftables allowlist for the inngest control API (:8288/:8289): ONLY the web-host
@@ -37,7 +38,13 @@ locals {
   # peer-host compromise must not pivot into the (unauthenticated in `start` mode)
   # :8288/v0/gql trigger control plane without the signing key (SEC-H2). Comma-joined
   # for the nft `ip saddr { ... }` set rendered into inngest-nftables.sh.
-  web_host_private_ips = "10.0.1.10,10.0.1.11"
+  #
+  # SINGLE-HOST (#6608): web-2 (the retired .11 host) was destroyed 2026-07-17 (#6538), so the
+  # roster is web-1 only. This literal is DRIFT-GUARDED against var.web_hosts by
+  # inngest-host.test.sh §6b (the allowlist IP set must byte-equal the var.web_hosts
+  # private_ip set) — that guard is the edge to var.web_hosts the roster previously lacked,
+  # so a stale .11 (or a future roster change) red-lines CI instead of silently re-granting.
+  web_host_private_ips = "10.0.1.10"
 
   # Arch DERIVED from var.inngest_server_type (mirrors zot-registry.tf local.registry_arch):
   # `cax*` (Ampere) → arm64, anything else (`cpx*`/`cx*`) → amd64. Lets the dedicated Inngest
@@ -145,10 +152,30 @@ resource "doppler_secret" "inngest_redis_password_dedicated" {
 # (Phase 2.x), when the dedicated host BECOMES the sole scheduler and the co-located pusher
 # is quiesced — one unambiguous pusher per monitor at all times. Set via `doppler secrets
 # set INNGEST_HEARTBEAT_URL` on the soleur-inngest prd config (stdin). During dark the URL is
-# absent → the dark host's heartbeat curl no-ops (no false-green). Accepted minor gap: the
-# dark host has no liveness push during dark (a dark, inert host bricking is surfaced at the
-# Phase-2 pre-flight registry-empty check, not by continuous monitoring). Same out-of-band
-# doctrine as INNGEST_POSTGRES_URI below.
+# absent → the dark host must not push, which is what preserves the no-false-green invariant.
+#
+# #6536 — CORRECTION. This comment used to claim the absent URL made "the dark host's
+# heartbeat curl no-op". That was FALSE, and the false claim is what authorized the bug:
+# `curl -fsS --max-time 10 ""` exits 2 ("option : blank argument where content is expected"
+# — measured; unset behaves identically), so the dark host's oneshot did not no-op, it FAILED
+# every 60s for 3 days (3,724 fires) while this prose asserted the design was already safe.
+# The monitor stayed green throughout only because the co-located host is the sole pusher —
+# monitor greenness is NOT evidence about the dark host's unit. Same class as #4116: wrapping
+# the ping in `doppler run` fixed WHERE the URL comes from, never made its ABSENCE safe.
+#
+# The skip is now implemented EXPLICITLY, not assumed from curl's behaviour: the ping script
+# in inngest-bootstrap.sh carries an @@DARK_ARM@@ sentinel rendered ONLY on this host
+# (DOPPLER_PROJECT=soleur-inngest), which logs `url_present=no` and exits 0. The co-located
+# web host renders it EMPTY, so an absent URL there still reaches curl and exits 2 — loud, as
+# it must be on the live pusher. Accepted minor gap: the dark host has no liveness push
+# during dark (a dark, inert host bricking is surfaced at the Phase-2 pre-flight
+# registry-empty check, not by continuous monitoring). The dark-arm row is BEST-EFFORT
+# evidence, NOT a liveness guarantee: the ping script exits 0 whether or not `logger`
+# succeeds, so journald being down / its volume full produces silence + exit 0 —
+# byte-identical to a healthy dark host (#4792 makes that a known surface here). Absence of
+# the row therefore proves nothing; presence proves the script ran. Stated precisely because
+# an over-claimed comment is exactly what #6536 was. Same out-of-band doctrine as
+# INNGEST_POSTGRES_URI below.
 # ---------------------------------------------------------------------------------------
 # INNGEST_POSTGRES_URI — provisioned OUT-OF-BAND into THIS project's `prd` config, NOT a
 # TF resource (mirrors the co-located inngest.tf:170-194 out-of-band doctrine + the
@@ -210,7 +237,7 @@ resource "hcloud_server" "inngest" {
     doppler_token = doppler_service_token.inngest.key
     # Single stable --sdk-url to the ACTIVE web backend's private interface (10.0.1.10).
     # The degenerate no-flap case of the route-once mechanism (ADR-100 Decision 1); migrate
-    # to a private VIP when web-2 is pooled (Phase 4.2). Consumed by inngest-bootstrap.sh.
+    # to a private VIP when active-active-N web lands (#6459; web-2 retired #6538). Consumed by inngest-bootstrap.sh.
     sdk_url = "http://10.0.1.10:3000/api/inngest"
     # Arch DERIVED from the server type (local.inngest_arch): cax* → arm64, else amd64. The
     # bootstrap consumes INNGEST_CLI_ARCH (inngest-bootstrap.sh:37/54) and verifies the download
@@ -231,6 +258,14 @@ resource "hcloud_server" "inngest" {
     ghcr_read_token = var.ghcr_read_token
     # nftables allowlist for the :8288/:8289 control API — web hosts only (SEC-H2).
     web_host_private_ips = local.web_host_private_ips
+    # #6178 boot observability: bake the write-only Better Stack Logs ingest token so the
+    # earliest runcmd can emit a phone-home marker BEFORE Doppler/OCI/bootstrap — otherwise a
+    # failure in those early stages (or a Doppler-CLI-install failure) is a total blind spot on
+    # this deny-all-public host. Same low-sensitivity append-only token vector.service already
+    # uses; steady-state the marker token is re-fetched from Doppler (this baked copy is the
+    # pre-Doppler fallback). Retrievable via the host metadata API — acceptable for an ingest-only
+    # logs token on a deny-all host given the diagnosability it buys (weigh before widening use).
+    betterstack_logs_token = var.betterstack_logs_token
   }))
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,

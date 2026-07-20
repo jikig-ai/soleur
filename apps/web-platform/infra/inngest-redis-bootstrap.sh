@@ -75,15 +75,11 @@ elif [[ ! -f "$REDIS_CONF" ]]; then
 fi
 if [[ -f /tmp/inngest-redis.service ]]; then
   assert_not_symlink /tmp/inngest-redis.service
-  # #6178: render the @@DOPPLER_PROJECT@@ sentinel (bash param expansion, not sed —
-  # consistent with inngest-bootstrap.sh's server-unit substitution). Default `soleur`
-  # preserves the co-located web host; the dedicated inngest host exports
-  # DOPPLER_PROJECT=soleur-inngest (its isolated project) via the parent bootstrap.
-  redis_doppler_project="${DOPPLER_PROJECT:-soleur}"
-  redis_unit_content="$(cat /tmp/inngest-redis.service)"
-  redis_unit_content="${redis_unit_content//@@DOPPLER_PROJECT@@/$redis_doppler_project}"
-  printf '%s\n' "$redis_unit_content" > "$UNIT_FILE"
-  chmod 0644 "$UNIT_FILE"
+  # #6555: the redis unit dropped `--project` and resolves the project from
+  # EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime — no
+  # @@DOPPLER_PROJECT@@ sentinel remains, so install it verbatim (no substitution round-trip
+  # that could mask a re-introduction).
+  install -m 0644 /tmp/inngest-redis.service "$UNIT_FILE"
 fi
 if [[ ! -f "$UNIT_FILE" ]]; then
   log "ERROR: $UNIT_FILE not installed (no /tmp staging and not pre-present)"

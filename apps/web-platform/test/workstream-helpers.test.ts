@@ -376,6 +376,46 @@ describe("githubIssueToWorkstreamIssue (full mapper)", () => {
   });
 });
 
+describe("githubIssueToWorkstreamIssue — editable fields (edit-fields)", () => {
+  it("exposes a marker-STRIPPED body distinct from the verbatim description", () => {
+    const out = githubIssueToWorkstreamIssue(
+      input({ body: "Hello world\n\n<!-- soleur:initiated-by harry -->" }),
+    );
+    expect(out.body).toBe("Hello world");
+    expect(out.body).not.toContain("initiated-by");
+    // description stays verbatim (the marker is invisible in rendered markdown).
+    expect(out.description).toContain("initiated-by");
+  });
+
+  it("null body → empty-string body", () => {
+    expect(githubIssueToWorkstreamIssue(input({ body: null })).body).toBe("");
+  });
+
+  it("exposes only NON-status labels (status labels stay owned by the column)", () => {
+    const out = githubIssueToWorkstreamIssue(
+      input({ labels: ["domain/engineering", "in-progress", "bug", "blocked"] }),
+    );
+    expect(out.labels).toEqual(["domain/engineering", "bug"]);
+    expect(out.labels).not.toContain("in-progress");
+    expect(out.labels).not.toContain("blocked");
+  });
+
+  it("exposes all assignee logins and the milestone ({number,title}|null)", () => {
+    const out = githubIssueToWorkstreamIssue(
+      input({
+        assignees: ["harry", "ada"],
+        milestone: { number: 3, title: "v1" },
+      }),
+    );
+    expect(out.assignees).toEqual(["harry", "ada"]);
+    expect(out.milestone).toEqual({ number: 3, title: "v1" });
+  });
+
+  it("milestone defaults to null when absent", () => {
+    expect(githubIssueToWorkstreamIssue(input()).milestone).toBeNull();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Creator attribution (PART A read path) — issue author + Soleur-bot detection
 // + human-initiator marker parse. All pure + defensive (never throw).

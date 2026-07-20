@@ -1,7 +1,8 @@
 # Better Stack Logs ingest token for the dedicated arm64 Inngest host's Vector shipper (#6197).
 #
 # The dedicated host (cax11, arm64, 10.0.1.40) runs vector.service under
-# `doppler run --project soleur-inngest --config prd`, so BETTERSTACK_LOGS_TOKEN must live in
+# `doppler run --config prd` (the soleur-inngest project resolves from
+# EnvironmentFile=/etc/default/inngest-server, #6555), so BETTERSTACK_LOGS_TOKEN must live in
 # the ISOLATED soleur-inngest project's `prd` root config — it currently exists only in
 # soleur/prd (the co-located web host reads it there). This mirrors ghcr-read-credential.tf:
 # a `doppler_secret` whose value comes from a sensitive, no-default var sourced from Doppler

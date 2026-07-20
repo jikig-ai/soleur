@@ -1,0 +1,36 @@
+# Project-level Grok configuration for the Soleur repository.
+#
+# This file ensures consistent behavior when using Grok Build inside this repo,
+# especially for loading the local development copy of the Soleur plugin.
+#
+# Project config supports [plugins], [mcp_servers], and [permission] only.
+# See https://docs.x.ai/build/settings
+
+[plugins]
+# Load the in-repository Soleur plugin.
+# This is the Grok equivalent of `claude --plugin-dir ./plugins/soleur`.
+#
+# Two mechanisms are used for reliability:
+# 1. .grok/plugins/soleur  (symlink) — first-class project plugin location
+# 2. paths below            — additional plugin directory scan
+#
+# These ensure the *local* development copy (./plugins/soleur) wins over
+# any version installed into ~/.claude/plugins/ or ~/.grok/plugins/.
+paths = ["./plugins/soleur"]
+
+# Make sure the soleur plugin is active in this project.
+enabled = ["soleur"]
+
+# Agent discoverability (Phase E #6324): compat stubs are generated under
+# .grok/agents/ by plugins/soleur/scripts/sync-grok-agent-compat.ts.
+# Canonical agent sources remain in plugins/soleur/agents/**.
+
+# Claude-compat hooks, permissions, MCP servers, and project rules load by
+# default from .claude/settings*.json, CLAUDE.md, and AGENTS.md — no project
+# [compat.*] stanza is required.
+#
+# Optional native Grok permission rules merge with Claude sources:
+#
+# [permission]
+# allow = ["Bash(safe-tool:*)"]
+# deny = ["Read(**/secrets/**)"]

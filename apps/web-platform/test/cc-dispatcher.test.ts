@@ -347,6 +347,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     __setCcRunnerForTests(stubRunner);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u1",
       conversationId: "conv-runaway",
       userMessage: "summarize",
@@ -403,6 +404,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
       // biome-ignore lint/suspicious/noExplicitAny: minimal stub
     } as any);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u1",
       conversationId: "conv-reclaim",
       userMessage: "resume",
@@ -472,6 +474,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     __setCcRunnerForTests(stubRunner);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u1",
       conversationId: "conv-1",
       userMessage: "hi",
@@ -521,6 +524,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
       userId: "u-debounce",
       conversationId: "conv-1",
       userMessage: "hi",
+      persona: "command_center" as const,
       currentRouting: { kind: "soleur_go_pending" } as const,
       sendToClient,
       persistActiveWorkflow,
@@ -586,6 +590,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     } as any);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-revoked",
       conversationId: "conv-revoked",
       userMessage: "hi",
@@ -650,6 +655,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     } as any);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-mint-fail",
       conversationId: "conv-mint",
       userMessage: "hi",
@@ -692,6 +698,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     } as any);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-A",
       conversationId: "conv-1",
       userMessage: "hi",
@@ -701,6 +708,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     });
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-B",
       conversationId: "conv-1",
       userMessage: "hi",
@@ -745,6 +753,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-kb",
       conversationId: "conv-kb",
       userMessage: "summarize this document",
@@ -791,6 +800,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-extract-err",
       conversationId: "conv-extract-err",
       userMessage: "summarize this document",
@@ -835,6 +845,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-meta",
       conversationId: "conv-meta",
       userMessage: "summarize this document",
@@ -878,6 +889,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-streamend",
       conversationId: "conv-streamend",
       userMessage: "hi",
@@ -919,6 +931,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     __setCcRunnerForTests(stubRunner);
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u1",
       conversationId: "conv-1",
       userMessage: "hi",
@@ -1010,6 +1023,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-tool-label",
       conversationId: "conv-tool-label",
       userMessage: "summarize this PDF",
@@ -1056,6 +1070,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     );
 
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-fallback-mirror",
       conversationId: "conv-fallback-mirror",
       userMessage: "summarize",
@@ -1098,6 +1113,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-fallback-label",
       conversationId: "conv-fallback-label",
       userMessage: "summarize",
@@ -1211,6 +1227,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-ws-user",
       conversationId: "conv-ws-user",
       userMessage: "hello",
@@ -1240,6 +1257,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-ws-asst",
       conversationId: "conv-ws-asst",
       userMessage: "summarize",
@@ -1293,6 +1311,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     const sendToClient = vi.fn().mockReturnValue(true);
     await expect(
       dispatchSoleurGo({
+        persona: "command_center",
         userId: "u-ws-fail",
         conversationId: "conv-ws-fail",
         userMessage: "hello",
@@ -1325,6 +1344,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-persist-1",
       conversationId: "conv-persist-1",
       userMessage: "summarize",
@@ -1369,6 +1389,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-empty-turn",
       conversationId: "conv-empty-turn",
       userMessage: "run a tool",
@@ -1416,6 +1437,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-w8-1",
       conversationId: "conv-w8-1",
       userMessage: "ping",
@@ -1461,6 +1483,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-w8-2",
       conversationId: "conv-w8-2",
       userMessage: "ping",
@@ -1522,6 +1545,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
       const sendToClient = vi.fn().mockReturnValue(true);
       await dispatchSoleurGo({
+        persona: "command_center",
         userId: `u-w2-${statusFixture.status}`,
         conversationId: `conv-w2-${statusFixture.status}`,
         userMessage: "hi",
@@ -1565,6 +1589,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-w2-empty",
       conversationId: "conv-w2-empty",
       userMessage: "tool only",
@@ -1595,6 +1620,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-w2-completed",
       conversationId: "conv-w2-completed",
       userMessage: "hi",
@@ -1641,6 +1667,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-w2-async",
       conversationId: "conv-w2-async",
       userMessage: "hi",
@@ -1677,6 +1704,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-w2-late",
       conversationId: "conv-w2-late",
       userMessage: "hi",
@@ -1724,6 +1752,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     const sendToClient = vi.fn().mockReturnValue(true);
     await expect(
       dispatchSoleurGo({
+        persona: "command_center",
         userId: "u-mirror-fail",
         conversationId: "conv-mirror-fail",
         userMessage: "hi",
@@ -1775,6 +1804,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-w4-on",
       conversationId: "conv-w4-on",
       userMessage: "summarize",
@@ -1809,6 +1839,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-w4-off",
       conversationId: "conv-w4-off",
       userMessage: "summarize",
@@ -1869,6 +1900,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-w4-race",
       conversationId: "conv-w4-race",
       userMessage: "two turns",
@@ -1913,6 +1945,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-w4-orphan",
       conversationId: "conv-w4-orphan",
       userMessage: "tool-only orphan",
@@ -1952,6 +1985,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-w4-symmetry",
       conversationId: "conv-w4-symmetry",
       userMessage: "hi",
@@ -1991,6 +2025,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
     const sendToClient = vi.fn().mockReturnValue(true);
     await dispatchSoleurGo({
+      persona: "command_center",
       userId: "u-w4-reset",
       conversationId: "conv-w4-reset",
       userMessage: "hi",
@@ -2073,6 +2108,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
       const sendToClient = vi.fn().mockReturnValue(true);
       await dispatchSoleurGo({
+        persona: "command_center",
         userId: "u-scope",
         conversationId: "conv-scope",
         userMessage: "hi",

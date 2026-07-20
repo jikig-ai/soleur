@@ -5,6 +5,21 @@ description: "This skill should be used when preparing a feature for production 
 
 # ship Skill
 
+<!-- ship-merge-deploy-protocol:start -->
+## Merge → deploy protocol (load-bearing — especially Grok Build)
+
+**You own merge through production verification — never ask the operator to monitor.**
+
+1. Phase 7: poll PR merge to `MERGED` (auto-merge queue, BEHIND sync, required-check failure exit).
+2. After merge: poll release/deploy workflows on the merge commit to `completed` + `success`.
+3. Step 3.8: invoke `/postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) **before** Step 4 cleanup.
+4. **FORBIDDEN:** Ending the session at merge, at a red release run you did not investigate, or with "want me to watch CI?"
+5. **Harness polling:** `plugins/soleur/lib/harness.ts` → `pollInstructions()` — Claude uses **Monitor tool**; Grok uses **AwaitShell** (`pattern` for `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `postmerge verification complete`) or blocking Shell with `block_until_ms`.
+6. **BEHIND stop-and-sync:** When `mergeStateStatus` is `BEHIND`, **stop** CI-only polling and resync before continuing. Grok/ad-hoc polls: `bash plugins/soleur/scripts/sync-pr-behind.sh <PR>` from the feature worktree. Canonical spec: `plugins/soleur/lib/pr-merge-poll.ts`.
+
+See `workflow-fidelity.ts` (`SHIP_MERGE_DEPLOY_SENTINEL`, `POST_MERGE_VERIFICATION_SKILLS`) and `wg-after-a-pr-merges-to-main-verify-all`.
+<!-- ship-merge-deploy-protocol:end -->
+
 **Purpose:** Enforce the full feature lifecycle before creating a PR, preventing missed steps like forgotten /compound runs and uncommitted artifacts. Version bumping is handled by CI at merge time via semver labels.
 
 **CRITICAL: No command substitution.** Never use `$()` in Bash commands. When a step says "get value X, then use it in command Y", run them as **two separate Bash tool calls** -- first get the value, then use it literally in the next call. This avoids Claude Code's security prompt for command substitution.
@@ -37,12 +52,31 @@ pwd
 **Trailer-parse verification gate (defense-in-depth for [hr-always-read-a-file-before-editing-it]).** For every commit on this branch since `origin/main`, parse any `Key: value`-shaped lines in the body and confirm `git interpret-trailers` recognises each as a trailer. The modal failure is a blank line between an `Allowlist-Widened-By:`/`Reviewed-by:`/`Signed-off-by:` line and `Co-Authored-By:`, which silently demotes the upstream trailer into body prose and breaks downstream consumers parsing via `git log --format='%(trailers:key=NAME,valueonly)'`:
 
 ```bash
+# Scan the WHOLE body, but only for KNOWN trailer keys.
+#
+# Two wrong ways to scope this, both tried:
+#   * Any `^Word: ` anywhere — flags ordinary prose ("Suites: 18/18",
+#     "Note: …", "Runbook: …"), so the gate fails on almost every
+#     well-written commit message. A gate that cannot pass gets routinely
+#     ignored, which is worse than no gate: it trains the reader to walk
+#     past red. Measured on PR #6727: 6 hits, all prose, while every
+#     intended trailer parsed fine.
+#   * Final paragraph only — VACUOUS for the exact class this gate exists
+#     to catch. The modal failure is a blank line BEFORE `Co-Authored-By:`,
+#     which leaves the orphaned trailer in the second-to-last paragraph
+#     while the final paragraph stays a clean parseable block. Verified
+#     vacuous against a synthetic demotion.
+#
+# The real signal is neither position nor shape: it is whether the key is
+# one a downstream consumer actually reads. Prose keys are not. Extend this
+# list when a new machine-read trailer is introduced.
+KNOWN_TRAILER_KEYS='Co-Authored-By|Signed-off-by|Allowlist-Widened-By|Reviewed-by|Reviewed-By-Soleur|Acked-by|Tested-by|Cc'
 RC=0
 for sha in $(git rev-list origin/main..HEAD); do
   BODY=$(git log -1 --format=%B "$sha")
   declare -a CANDIDATES=()
   while IFS= read -r line; do
-    [[ "$line" =~ ^([A-Z][A-Za-z-]+):[[:space:]] ]] && CANDIDATES+=("${BASH_REMATCH[1]}")
+    [[ "$line" =~ ^(${KNOWN_TRAILER_KEYS}):[[:space:]] ]] && CANDIDATES+=("${BASH_REMATCH[1]}")
   done <<< "$BODY"
   for key in "${CANDIDATES[@]}"; do
     val=$(git log -1 --format="%(trailers:key=${key},valueonly)" "$sha")
@@ -100,11 +134,38 @@ Check for evidence that `/review` ran on the current branch. This is defense-in-
 
 **Step 1: Check for review artifacts (legacy).**
 
-Search for todo files tagged as code-review findings:
+Search for todo files tagged as code-review findings **that this branch
+introduced** — refresh `origin/main` first, since the scoping is only as
+accurate as the cached ref:
 
 ```bash
-grep -rl "code-review" todos/ 2>/dev/null | head -1 || true
+if ! git fetch origin main >/dev/null 2>&1; then
+  echo "origin/main is stale — Signals 1-2 are unreliable; use Signal 3 only" >&2
+else
+  git log origin/main..HEAD -G'code-review' --name-only --format= -- todos/ 2>/dev/null \
+    | sort -u | while read -r f; do
+        git show "HEAD:$f" 2>/dev/null | grep -q "code-review" && echo "$f"
+      done | head -1
+fi
 ```
+
+This was a repo-global `grep -rl "code-review" todos/`, which made the signal
+structurally unfailable (#6724): `todos/` is a tracked directory on main, so a
+single long-lived review todo anywhere in it satisfied Step 1 for every branch
+forever — including branches where review never ran.
+
+Three details are load-bearing, each closing a narrower version of the same
+vacuity (all verified during #6727's review):
+
+- **Do not `|| true` the fetch.** A stale `origin/main` widens
+  `origin/main..HEAD` to include commits already on main, so main's review
+  history counts as this branch's. The hooks discard both local signals in that
+  case; do the same here rather than proceeding on a stale ref.
+- **`-G'code-review'` matches the DIFF, not the working tree.** Listing paths
+  and grepping them reads whatever the current checkout contains, so a branch
+  that merely touches a pre-existing main-side todo inherits main's tag.
+- **The `git show HEAD:` check.** `-G` matches added *or removed* lines, so
+  deleting a completed todo would otherwise count as evidence.
 
 **Step 2: Check commit history for review evidence.**
 
@@ -115,6 +176,19 @@ git log origin/main..HEAD --oneline | grep -E "(refactor: add code review findin
 ```
 
 The `^[a-f0-9]+ review:` alternative matches the new convention — `review: <summary> (P<N>)` commits produced when findings are fixed inline per `rf-review-finding-default-fix-inline`.
+
+If that returns nothing, check for the durable review trailer:
+
+```bash
+git log origin/main..HEAD --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' | grep '[^[:space:]]' || true
+```
+
+`Reviewed-By-Soleur:` is emitted by
+`plugins/soleur/skills/review/scripts/emit-review-trailer.sh` and is the **only**
+signal a zero-finding review can produce: review's own step 2 skips the artifact
+commit when there are no local changes, so a clean branch generates no todos and
+no `review:` commit. Before the trailer existed, the gate denied precisely those
+branches with no escape hatch (#6724).
 
 **Step 3: Check for GitHub issues with `code-review` label (current).**
 
@@ -142,9 +216,9 @@ If `gh` fails or is unavailable, treat as no output (fail open on Signal 3).
 
 **Note:** Three signals are checked, any one suffices:
 
-- Signal 1 (`todos/` grep): coupled to legacy review workflow (pre-#1329)
-- Signal 2 (commit message grep): matches legacy `refactor: add code review findings` OR new `review: <summary>` fix-inline commits (post-#2374)
-- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`). Expected to be empty under the new fix-inline default unless findings were scoped out — Signal 2 is the primary signal post-#2374.
+- Signal 1 (`todos/` grep, **branch-scoped**): coupled to legacy review workflow (pre-#1329). Scoped to paths this branch touched — the previous repo-global form could not fail (#6724)
+- Signal 2 (commit message grep **or `Reviewed-By-Soleur:` trailer**): matches legacy `refactor: add code review findings` OR `review: <summary>` fix-inline commits (post-#2374), OR the trailer emitted by `emit-review-trailer.sh`. The trailer is the primary signal post-#6724 and the only one a zero-finding review can produce
+- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`). Expected to be empty under the new fix-inline default unless findings were scoped out.
 
 **If any step produced output:** Review evidence found. Continue to Phase 2.
 
@@ -309,7 +383,7 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 
 Defense-in-depth check that review ran before shipping. Phase 1.5 catches this earlier, but if context compaction erased Phase 1.5's check or the skill was invoked mid-flow, this gate is the second net.
 
-**Detection:** Check for review evidence using the same three signals described in Phase 1.5 (Signal 1: `todos/` grep, Signal 2: commit message grep, Signal 3: GitHub issues with `code-review` label). Run the same commands in the same order. See Phase 1.5 for full details and coupling notes.
+**Detection:** Check for review evidence using the same three signals described in Phase 1.5 (Signal 1: **branch-scoped** `todos/` grep, Signal 2: commit message grep **or the `Reviewed-By-Soleur:` trailer**, Signal 3: GitHub issues with `code-review` label). Run the same commands in the same order — including the `git fetch origin main` that precedes Signal 1, since both local signals are scoped to `origin/main..HEAD` and are only as accurate as the cached ref. See Phase 1.5 for full details and coupling notes.
 
 **If review evidence is found:** Pass silently.
 
@@ -1137,6 +1211,23 @@ If an issue number is found, store it as `ISSUE_NUMBER` for use in the PR body b
 
 **Important:** Use `Closes #N` syntax (not `Ref #N`, not `(#N)` in the title). GitHub only auto-closes issues when the PR body contains a keyword (`Closes`, `Fixes`, or `Resolves`) followed by the issue reference.
 
+**Closes-after-verification gate (check BEFORE choosing the keyword).** `Closes #N` fires at MERGE, which is decoupled from whether the thing the issue actually asked for is true yet. When the fix's proof lands POST-merge (a reprovision, an apply, a deploy probe, an arming step), `Closes` closes the issue on a promise. Grep the plan + `tasks.md` for a close-after-verification instruction before writing the body:
+
+```bash
+# NO `\b` — the host grep is ugrep, where \b is NOT a word boundary in ERE and silently
+# matches nothing (verified: `close[sd]?.*after` MATCHES, `close[sd]?\b.*\bafter\b` does NOT).
+# A \b here makes this gate catch zero lines while reading as if it works.
+CLOSE_DEFER_RE='close[sd]?.*(after|once|when)|closes-after-apply|manual close after|close manually|post-merge.*(close|verif)'
+PLAN_REFS=$(git diff --name-only origin/main...HEAD | grep -E 'knowledge-base/project/(plans|specs)/' || true)
+[[ -n "$PLAN_REFS" ]] && grep -inE "$CLOSE_DEFER_RE" $PLAN_REFS | head -5
+```
+
+Any hit ⇒ use **`Ref #N`**, not `Closes #N`, and close the issue yourself after the proof lands (`gh issue close N --comment "<live evidence>"`). Over-detection is deliberate and cheap here: a spurious hit costs one re-read of the keyword; a miss closes an issue whose work is not done.
+
+Match the SHAPE (a close verb + an ordering word), not the canonical phrasing. The grep is wider than [work/SKILL.md](../work/SKILL.md)'s prose list ("Closes-after-apply", "manual close after", …) because a plan rarely uses those exact words — it writes *"close #N only **after** Phase 4.5 passes"*, where the markdown bold also defeats any regex that expects `after` to be followed by a space.
+
+**Why this lives here and not only in `work`:** the rule was already documented in `work/SKILL.md` §Common Pitfalls, but `/ship` Phase 6 is where the PR body is actually written — a rule that fires in a different skill than the action it governs cannot catch anyone. #6537 proved it: `tasks.md` 7.6 said *"`gh issue close 6537` only **after** Phase 4.5 passes"*, the body shipped `Closes #6537`, and the merge closed the issue while the monitor it was filed about was **still paused**. The issue had to be reopened post-merge. Recording an observability gap as handled while it silently alarms nobody is that issue's own defect, reproduced by the PR fixing it.
+
 ### Auto-Close Keyword Pre-Creation Scan (#3407)
 
 Before invoking `gh pr edit` or `gh pr create` below, scan the proposed PR title and body AND the branch's commit messages for unintentional auto-close-keyword + #N references. Two traps to know:
@@ -1165,6 +1256,17 @@ If `T_MATCHES` OR `B_MATCHES` OR `C_MATCHES` is non-empty:
 The CI workflow [`.github/workflows/pr-auto-close-scanner.yml`](../../../../.github/workflows/pr-auto-close-scanner.yml) is the observational post-creation surface for PRs created outside this skill (manual `gh pr create`, GitHub UI, third-party plugins). This pre-creation scan is the only blocking surface; both share [`./scripts/auto-close-scan.sh`](./scripts/auto-close-scan.sh) so the regex stays canonical.
 
 The PR body of THIS Soleur PR will typically contain `Closes #N` lines that ARE intentional — those are not traps and should be kept. The trap pattern is auto-close keyword + #N where the issue is NOT in the intentional `ISSUE_NUMBER` set, OR where the form is a checkbox / prose / code-fence rather than the canonical body line.
+
+<!-- grok-pre-push-gate:start -->
+**Grok Build pre-push gate (mandatory before `git push`).** When the harness is Grok (`GROK_HOME` / `GROK_AGENT`), run from repo root and inspect exit code explicitly (do not pipe through `tail`):
+
+```bash
+log=$(mktemp -t grok-pre-push-gate.XXXXXXXX.log)
+bash plugins/soleur/scripts/grok-pre-push-gate.sh > "$log" 2>&1; rc=$?; echo "EXIT=$rc LOG=$log"
+```
+
+Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Pushing without it wastes CI cycles. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run this gate here even if Phase 4 test-all.sh already ran (Phase 4 is mid-pipeline; this gate is the push-time recheck).
+<!-- grok-pre-push-gate:end -->
 
 Push the branch to remote. Get the branch name first:
 
@@ -1362,6 +1464,14 @@ git fetch origin main
 gh pr view --json mergeable,mergeStateStatus | jq '{mergeable, mergeStateStatus}'
 ```
 
+**Why this precedes any read of the check list (#6536):** a `pull_request` workflow runs against
+`refs/pull/N/merge`, which GitHub **cannot compute while the PR conflicts** — so CI never
+dispatches, while `pull_request_target` jobs (CLA) run against the *base*, dispatch fine, and go
+green. `gh pr checks` then reports "all checks settled, zero failures" over zero relevant checks.
+**"No failures" and "the checks ran" are different claims**, and a conflicting PR silently
+produces the first without the second. Assert the checks you *expect* are **present**, not merely
+non-failing: `gh api "repos/<o>/<r>/actions/runs?head_sha=$(git rev-parse HEAD)" --jq '[.workflow_runs[].name]'`.
+
 **If `mergeable` is `MERGEABLE`:** Continue to Phase 7.
 
 **If `mergeable` is `CONFLICTING`:**
@@ -1425,7 +1535,14 @@ Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks report
 
 After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now or later?" -- auto-merge handles it. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
 
-**HARD GATE: Use the Monitor tool, NEVER Bash `run_in_background`.** The Monitor tool streams each stdout line as a real-time notification (state-change visibility). Bash `run_in_background` is opaque until completion — the agent and operator see nothing until the entire loop finishes or fails, which defeats the purpose of heartbeat polling. If you catch yourself reaching for `Bash` with `run_in_background: true` for a polling loop, stop — that is the failure mode this gate exists to block. **Why:** PR #4512 — the agent used `Bash run_in_background` for release monitoring; the background task failed silently with exit code 1, producing zero visibility into the release state. The Monitor tool would have surfaced every state transition as it happened.
+**HARD GATE — harness-aware polling (see `ship-merge-deploy-protocol` above).**
+
+- **Claude Code:** Use the **Monitor tool**, NEVER Bash `run_in_background`. The Monitor tool streams each stdout line as a real-time notification (state-change visibility).
+- **Grok Build:** Use **AwaitShell** with a `pattern` matching poll output (`MERGED`, `CLOSED`, `completed success`, `TIMEOUT`), or **Shell** with `block_until_ms` ≥ loop duration. NEVER ask the operator to watch merge status.
+
+Bash `run_in_background` is forbidden on all harnesses — opaque until completion (#4512).
+
+**Claude — Monitor tool loop** (Grok: same loop body via AwaitShell/Shell per `pollInstructions()`):
 
 Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 iterations = 15 minutes). The loop covers three structurally-unmergeable states in addition to the terminal MERGED/CLOSED exits: **required-check failure** (exit at first failing required check, name it in stderr), **BEHIND** (auto-sync main into the branch up to 6 attempts, then emit a structured "main moving faster than CI" warning at the inflection point), and **DIRTY** (server-side merge conflict — exit and surface). See "Auto-sync on BEHIND" and "Required-check failure exit" below:
 
@@ -1820,10 +1937,10 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    4. Paste run-URL + byte count + verbatim URLs into the closing comment
    ```
 
-   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `{ echo "..."; } > /tmp/follow-through-body.md`), then create the issue:
+   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `body=$(mktemp -t follow-through-body.XXXXXXXX.md); { echo "..."; } > "$body"`, then `echo "BODY=$body"` so the path survives into the later `--body-file` and precondition-gate calls — a separate Bash call does not inherit `$body`), then create the issue:
 
    ```bash
-   gh issue create --title "follow-through: <ITEM_DESCRIPTION>" --label "follow-through" --milestone "<MILESTONE>" --body-file /tmp/follow-through-body.md
+   gh issue create --title "follow-through: <ITEM_DESCRIPTION>" --label "follow-through" --milestone "<MILESTONE>" --body-file "$body"
    ```
 
    Replace `<ITEM_DESCRIPTION>` with the text after the ⏳ emoji (trimmed). Replace `<MILESTONE>` with the value from the roadmap or "Post-MVP / Later".
@@ -1912,7 +2029,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
          if ($i ~ /^secrets=/)  { sub(/^secrets=/, "", $i);  print "secrets "  $i }
        }
      }
-   ' /tmp/follow-through-body.md
+   ' "$body"
    ```
 
    Assert that:
@@ -2028,11 +2145,12 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    **Step 3:** Display the warning and ask: "Run `terraform apply` now, or defer with justification?" If deferred, record the justification in the PR body.
 
-3.8. **Chain to postmerge verification (CONTINUATION GATE — MUST complete before Step 4).** After release workflows pass and migration verification completes, invoke `/soleur:postmerge` to verify production health, Sentry cron monitors, and file freshness:
+3.8. **Chain to postmerge verification (CONTINUATION GATE — MUST complete before Step 4).** After release workflows pass and migration verification completes, invoke postmerge to verify production health, Sentry cron monitors, and file freshness:
 
-   ```
-   skill: soleur:postmerge <PR-number>
-   ```
+   - **Claude Code:** `skill: soleur:postmerge <PR-number>`
+   - **Grok Build:** `/postmerge <PR-number>`
+
+   **Do NOT ask the operator** whether to run postmerge or monitor deploy — invoke it in the same turn.
 
    If postmerge reports any FAILED phase (production health, Sentry warning, browser regression), display the failures prominently but do NOT block cleanup — the deploy has already happened; the signal is for immediate operator attention, not rollback.
 

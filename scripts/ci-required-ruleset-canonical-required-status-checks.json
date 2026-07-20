@@ -70,5 +70,13 @@
   {
     "context": "rule-body-lint",
     "integration_id": 15368
+  },
+  {
+    "context": "grok-fidelity",
+    "integration_id": 15368
+  },
+  {
+    "context": "sentry-destroy-required",
+    "integration_id": 15368
   }
 ]

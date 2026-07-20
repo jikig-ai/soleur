@@ -1890,6 +1890,11 @@ cleanup_merged_worktrees() {
   # Always clean up stale Claude tmp files (RAM-backed, can be huge)
   cleanup_claude_tmp
 
+  # Reap stale Bash-sandbox temp the harness orphans directly under /tmp. No
+  # settings.json/env lever exists to relocate or auto-clean it (verified against
+  # Claude Code docs 2026-07-11), so this session-start sweep is the only lever.
+  cleanup_stale_sandbox_tmp
+
   # Kill runaway processes that waste CPU (e.g., stuck gst-plugin-scanner)
   cleanup_runaway_processes
 
@@ -1982,6 +1987,66 @@ cleanup_claude_tmp() {
 
   if [[ $files_removed -gt 0 ]]; then
     echo -e "${GREEN}Cleaned $files_removed stale Claude task output(s), freed ~${total_freed} MB${NC}"
+  fi
+}
+
+# Reap stale Claude Code Bash-sandbox temp to reclaim tmpfs (RAM-backed /tmp).
+# Beyond cleanup_claude_tmp (which reaps /tmp/claude-<uid> task output), the Bash
+# sandbox leaves per-invocation artifacts DIRECTLY under /tmp that the harness does
+# not garbage-collect and that no settings.json/env option can relocate or auto-clean
+# (verified against Claude Code sandbox/application-data docs 2026-07-11: only
+# `cleanupPeriodDays` exists and it covers ~/.claude/projects/, not /tmp). On a small
+# tmpfs these starve the machine mid-run — the 2026-07-11 disk-full that interrupted a
+# planning subagent had ~10k dirs / ~23k dirents in /tmp. Two safely-reapable classes:
+#   - empty temp-dir shells left by mkdtemp callers      -> the dirent driver (~8.5k)
+#   - stale sandbox copies (child repo/apps/plugins/NOTICE or <id>/ssr) + creds copies
+#                                                        -> the space driver (~170M)
+# Reap is AGE-gated so a live in-flight sandbox (seconds-to-minutes old) is never
+# touched, SIGNATURE-gated so a random non-empty tmp dir another tool owns is spared,
+# and uses find -delete / rmdir (never rm -rf) to stay inside the repo rm-guardrail.
+# node-compile-cache is deliberately spared (a reusable Node V8 cache, not a leak).
+# Thresholds and the tmp root are env-overridable for unit testing.
+cleanup_stale_sandbox_tmp() {
+  local uid tmp_root empty_age stale_age
+  uid=$(id -u)
+  tmp_root="${SOLEUR_SANDBOX_TMP_ROOT:-/tmp}"
+  # Empty shells cannot hold live data; a short floor still spares a just-created
+  # dir about to be written. Non-empty copies get a full-day floor (a sandbox
+  # invocation lives seconds, so 24h is unambiguously orphaned).
+  empty_age="${SOLEUR_SANDBOX_EMPTY_MAX_AGE_MIN:-60}"
+  stale_age="${SOLEUR_SANDBOX_STALE_MAX_AGE_MIN:-1440}"
+  [[ -d "$tmp_root" ]] || return 0
+
+  local removed_empty=0 removed_stale=0 d
+
+  # 1) Empty temp-pattern dirs (the dirent driver). `-empty -type d` = empty dirs.
+  while IFS= read -r d; do
+    if rmdir "$d" 2>/dev/null; then
+      removed_empty=$((removed_empty + 1))
+    fi
+  done < <(find "$tmp_root" -mindepth 1 -maxdepth 1 -type d -empty -uid "$uid" \
+             -mmin +"$empty_age" -regextype posix-extended \
+             -regex "$tmp_root/[A-Za-z0-9_-]{15,}" 2>/dev/null)
+
+  # 2) Non-empty sandbox artifacts older than the stale floor, matched by signature.
+  while IFS= read -r d; do
+    case "$(basename "$d")" in
+      claude-creds-copy*) : ;;                       # harness credential copy
+      *)
+        # Only reap dirs bearing a known sandbox signature; never a random
+        # non-empty tmp dir some other tool owns.
+        [[ -d "$d/ssr" || -d "$d/repo" || -d "$d/apps" || -d "$d/plugins" || -e "$d/NOTICE" ]] || continue
+        ;;
+    esac
+    if find "$d" -delete 2>/dev/null; then
+      removed_stale=$((removed_stale + 1))
+    fi
+  done < <(find "$tmp_root" -mindepth 1 -maxdepth 1 -type d -uid "$uid" \
+             -mmin +"$stale_age" -regextype posix-extended \
+             -regex "$tmp_root/[A-Za-z0-9_-]{15,}" 2>/dev/null)
+
+  if [[ $removed_empty -gt 0 || $removed_stale -gt 0 ]]; then
+    echo -e "${GREEN}Reaped ${removed_empty} empty + ${removed_stale} stale sandbox temp dir(s) from ${tmp_root}${NC}"
   fi
 }
 

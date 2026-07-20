@@ -101,6 +101,23 @@ install -D -m 0644 -o root -g root "$SEED/cosign-trusted-root.json" /etc/soleur/
 FAILED_FILE=journald-soleur.conf
 install -D -m 0644 -o root -g root "$SEED/journald-soleur.conf" /etc/systemd/journald.conf.d/00-soleur.conf
 
+# Container-sandbox security-control profiles (#6629). Their only prior delivery was the
+# SSH provisioners (terraform_data.docker_seccomp_config / apparmor_bwrap_profile), which
+# reach RUNNING hosts only — a FRESH host came up with neither, so the terminal docker run
+# ran the tenant sandbox unenforced (seccomp_profile_host_present=false). Installed here
+# (post-extraction, hash-verified) and apparmor-loaded BEFORE the terminal docker run so its
+# --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json + apparmor=soleur-bwrap
+# succeed on a cold host. FAIL-CLOSED: apparmor_parser -r runs under the top-level set -e +
+# emit_fail trap, so a load failure aborts the boot with a named stage (no sentinel → the
+# terminal docker run block poweroffs). 0644 root:root; dockerd (root) reads both.
+STAGE=sandbox_profiles
+FAILED_FILE=seccomp-bwrap.json
+install -D -m 0644 -o root -g root "$SEED/seccomp-bwrap.json" /etc/docker/seccomp-profiles/soleur-bwrap.json
+FAILED_FILE=apparmor-soleur-bwrap.profile
+install -D -m 0644 -o root -g root "$SEED/apparmor-soleur-bwrap.profile" /etc/apparmor.d/soleur-bwrap
+FAILED_FILE=apparmor-load
+apparmor_parser -r /etc/apparmor.d/soleur-bwrap
+
 # hooks.json: the baked hooks.json.tmpl carries the Terraform token literally; inject the
 # small webhook_deploy_secret at boot (jsonencode-equivalent via python3 json.dumps —
 # python3 is a cloud-init dependency, always present), validate the JSON, then mirror the SSH
@@ -148,6 +165,12 @@ FAILED_FILE=cron-egress-allowlist.txt; test -f /etc/soleur/cron-egress-allowlist
 FAILED_FILE=cron-egress-allowlist-cidr.txt; test -f /etc/soleur/cron-egress-allowlist-cidr.txt
 FAILED_FILE=cosign-trusted-root.json; test -f /etc/soleur/cosign-trusted-root.json
 FAILED_FILE=journald-soleur.conf; test -f /etc/systemd/journald.conf.d/00-soleur.conf
+# (#6629) sandbox profiles present on-host AND the AppArmor profile is kernel-loaded — the
+# terminal docker run's --security-opt apparmor=soleur-bwrap fails-to-create the container
+# if the profile is not loaded, so assert the load here to fail with a NAMED stage instead.
+FAILED_FILE=seccomp-bwrap.json; test -f /etc/docker/seccomp-profiles/soleur-bwrap.json
+FAILED_FILE=apparmor-soleur-bwrap.profile; test -f /etc/apparmor.d/soleur-bwrap
+FAILED_FILE=apparmor-loaded; aa-status 2>/dev/null | grep -qE '^[[:space:]]+soleur-bwrap$'
 
 STAGE=reload
 systemctl daemon-reload
@@ -189,8 +212,11 @@ STAGE=ghcr_login
   # cold host even when Doppler answers EMPTY at the boot instant — the same failure class the
   # cloud-init ghcr_login (#6090) and the ci-deploy prelude (#6161) already bake against. An
   # empty fetch here skipped docker login → anonymous inngest pull → /var/lib/inngest never
-  # created → webhook.service fails 226/NAMESPACE (it ReadWritePaths=/var/lib/inngest) → :9000
-  # never binds → the peer fan-out degrades. Hardened Doppler fallback (timeout 45 + 3-try retry).
+  # created. (The old downstream "→ webhook.service 226/NAMESPACE → :9000 never binds → peer
+  # fan-out degrades" chain is SEVERED as of #6090: webhook.service now marks /var/lib/inngest
+  # `-`-optional, so an absent dir no longer wedges the unit. This baked-creds path still matters
+  # when web_colocate_inngest is ON — the inngest pull itself needs auth.) Hardened Doppler
+  # fallback (timeout 45 + 3-try retry).
   GHCR_USER=""; GHCR_TOKEN=""
   if [ -r /etc/default/soleur-ghcr-read ]; then
     # shellcheck disable=SC1091
@@ -293,11 +319,273 @@ soleur-boot-emit "$STAGE" info
 WAITEOF
 chmod 0755 /usr/local/bin/soleur-wait-ready
 
+# Bounded private-NIC wait (#6441, ADR-114 I1) — baked (0 user_data; the call site is the
+# only inline cost). DELIBERATELY fail-OPEN, unlike its fail-CLOSED neighbour
+# soleur-wait-ready directly above — the two gate the same cloudflared step a few lines
+# apart, so the asymmetry needs stating or it reads as an inconsistency:
+#
+#   - soleur-wait-ready runs AFTER the unit exists. A never-ready cloudflared is a TERMINAL
+#     condition, so its `|| exit 1` caller contract is defensible.
+#   - soleur-wait-nic runs BEFORE the unit exists, on a condition that provably SELF-HEALS:
+#     cloudflared dials its ingress origin per CONNECTION, not at process start, so a
+#     connector that registered NIC-less begins serving the instant the attach lands — no
+#     restart, no operator action. Aborting here would destroy the recovery channel to
+#     prevent a condition that resolves itself.
+#
+# And aborting is not a small cost: runcmd is ONE /bin/sh and is once-per-instance, so an
+# `exit 1` does not skip a step — it terminates cloudflared install, the webhook binary, the
+# :9000 readiness gate, the disk/resource monitors and the container egress firewall, for the
+# life of that instance (CF-5). A NIC that converges at minute 11 would then be irrelevant.
+# No reboot either: web-1 is the SOLE live origin, and ADR-115's converge-by-reboot grant is
+# registry-host-scoped by explicit normative blocker, not class-wide (CF-6).
+STAGE=wait_nic; FAILED_FILE=soleur-wait-nic
+cat > /usr/local/bin/soleur-wait-nic <<'NICEOF'
+#!/bin/sh
+# usage: soleur-wait-nic <expected-ip>
+# ALWAYS exits 0. Emits EXACTLY ONE event, from three mutually-exclusive arms. Never aborts
+# the boot, never reboots. The emit is the ONLY evidence this gate ran: a fresh cloud-init
+# boot is a blind surface (no SSH, no shell), so an arm that emitted nothing would be
+# indistinguishable from a gate that never shipped.
+EXPECTED="$1"
+# (0) ARGUMENT GUARD — load-bearing, and the direction that matters. `grep -qwF -- ""` matches
+# EVERY line, so an empty argument would make the first probe succeed and emit
+# private_nic_ready: positive evidence that a check passed which was never performed. That is
+# strictly worse than the fail-open this helper is designed for, and it inverts the #6415
+# doctrine below (asserting PRESENCE on zero evidence). var.web_hosts validates private_ip
+# against ^10\.0\.1\.[0-9]{1,3}$, but that defence lives in another file behind a templatefile
+# map — "works today, fails silently on a future host" is the shape this repo keeps getting
+# bitten by, so the helper defends itself. Mirrors web-private-nic-guard.sh's own EXPECTED_IP
+# check, which is terminal there; here it takes the probe-fault arm to preserve exit 0.
+[ -n "$EXPECTED" ] || { soleur-boot-emit private_nic_probe_fault warning; exit 0; }
+# (1) PROBE RESOLUTION FIRST, and short-circuit before the wait. An unresolvable probe is ZERO
+# EVIDENCE — it must never be conflated with "the address is absent" (#6415), hence a THIRD arm
+# rather than folding probe-fault into the timeout arm. Short-circuiting also avoids spending
+# the full 60 s budget on a missing binary. `ip` is the one that actually motivates this (it
+# lives in /usr/sbin, absent from some minimal PATHs) but grep is checked too: without it the
+# match can never succeed, and reporting THAT as "the address is absent" is the same mislabel.
+IP_BIN=$(command -v ip 2>/dev/null || true)
+GREP_BIN=$(command -v grep 2>/dev/null || true)
+PROBE_OK=true
+[ -n "$IP_BIN" ] && [ -x "$IP_BIN" ] || PROBE_OK=false
+[ -n "$GREP_BIN" ] && [ -x "$GREP_BIN" ] || PROBE_OK=false
+if [ "$PROBE_OK" != true ]; then
+  soleur-boot-emit private_nic_probe_fault warning
+  exit 0
+fi
+# (2) Probe. The probe's EXIT is captured separately from the match result, because a pipeline
+# reports only grep's status: `ip … 2>/dev/null | grep -qwF` makes an `ip` that RUNS AND FAILS
+# (netlink denied, truncated image) indistinguishable from one that ran and found nothing —
+# reporting "could not measure" as "absent", the #6415 mislabel arriving through a second door.
+# probe_ran records whether the instrument EVER worked; the fault arm fires only if it never did
+# (so a transient failure that later recovers is not misreported).
+# -w + -F + --: exact word, fixed string, end-of-options — so 10.0.1.1 can never match inside
+# 10.0.1.10 and the dots are not regex wildcards. Mirrors web-private-nic-guard.sh.
+# (No pipefail is set in this helper, so grep's exit governs the match.)
+nic_ok=false
+probe_ran=false
+if OUT=$("$IP_BIN" -4 -o addr show 2>/dev/null); then
+  probe_ran=true
+  printf '%s\n' "$OUT" | grep -qwF -- "$EXPECTED" && nic_ok=true
+fi
+# (3) Bounded wait — 30 x 2 s = 60 s. Spent BEFORE `cloudflared service install`, so this budget
+# is SEQUENTIAL with the downstream cloudflared_ready gate's own ~60 s budget rather than nested
+# inside it. A POSIX counter rather than `for i in $(seq 1 30)`: an unresolvable `seq` yields an
+# EMPTY word list, so the loop body would run ZERO times and the helper would report a 60 s
+# timeout it never waited — a no-op that looks like it ran. One fewer binary to depend on, and
+# the loop variable was unused anyway.
+if [ "$nic_ok" = false ]; then
+  n=0
+  while [ "$n" -lt 30 ]; do
+    n=$((n + 1))
+    sleep 2
+    if OUT=$("$IP_BIN" -4 -o addr show 2>/dev/null); then
+      probe_ran=true
+      printf '%s\n' "$OUT" | grep -qwF -- "$EXPECTED" && { nic_ok=true; break; }
+    fi
+  done
+fi
+# (4) Exactly one event, mutually exclusive and total.
+if [ "$nic_ok" = true ]; then
+  soleur-boot-emit private_nic_ready info
+elif [ "$probe_ran" = false ]; then
+  soleur-boot-emit private_nic_probe_fault warning
+else
+  soleur-boot-emit private_nic_timeout warning
+fi
+exit 0
+NICEOF
+chmod 0755 /usr/local/bin/soleur-wait-nic
+
 # Completion breadcrumb (#6090): the SINGLE signal distinguishing "died IN bootstrap"
 # (emit_fail names a bootstrap stage) from "bootstrap COMPLETED, died downstream" (this
 # breadcrumb present + a later cloud-init stage fatal). Fail-open via _sentry_emit.
 STAGE=bootstrap_complete
 _sentry_emit "$(printf '{"message":"soleur-host-bootstrap complete","level":"info","tags":{"stage":"bootstrap_complete","host_id":"%s","region":"bootstrap"}}' "$HOST_ID")"
+
+# ---------------------------------------------------------------------------
+# Vector observability shipper — UNGATED web-host path (#6396). ADR-100 moved
+# scheduling off the web host (web_colocate_inngest default false), so a fresh
+# web host installs NO Vector via the inngest path and ships NO logs. This
+# decouples the shipper: stage the baked config here (SEED is rm -rf'd after
+# bootstrap), then author /usr/local/bin/soleur-vector-install for the ungated,
+# fail-open, timeout-bounded end-of-cloud-init run (AFTER the app binds :80/:3000,
+# so observing the boot can NEVER break serving). Same journald/host_metrics data
+# class already ships from the inngest source — no new processor.
+#
+# The STAGING below is under `set -e` + emit_fail ON PURPOSE: vector.toml is a
+# hash-verified baked file (host_scripts_content_hash gate), so its absence is a
+# coherence violation (fail-closed, like every other baked asset). The RUNTIME
+# install (binary download, unit start) is where fail-open lives — see the helper.
+STAGE=vector_stage; FAILED_FILE=vector.toml
+mkdir -p /opt/soleur /etc/vector
+# Persist the shared config with @@HOST_NAME@@ resolved to THIS host's TF-injected server
+# name (SOLEUR_HOST_NAME, passed by cloud-init). Distinct per host so web-1/web-2 do not
+# collapse into one host_name in the shared Better Stack source 2457081.
+sed "s|@@HOST_NAME@@|${SOLEUR_HOST_NAME:-$(hostname)}|g" "$SEED/vector.toml" > /opt/soleur/vector.toml
+
+STAGE=vector_install_author; FAILED_FILE=soleur-vector-install
+cat > /usr/local/bin/soleur-vector-install <<'VINEOF'
+#!/bin/sh
+# Fail-open Vector installer for the ungated web-host path (#6396). Invoked once at
+# end-of-cloud-init as `timeout 60 sh -c 'soleur-vector-install' || true`, AFTER the app
+# container binds :80/:3000. Vector is observability, NEVER serving-critical: EVERY step
+# here is swallowed (the outer ( set +e … ) || true), so a slow/failed fetch or unit start
+# can never wedge the boot. Idempotent: version-pinned + sha-verified + skip-on-match.
+( set +e
+  # Pin MUST stay in lockstep with vector.tf locals (vector_version / vector_sha256[_arm64]);
+  # soleur-host-bootstrap-observability.test.sh AC22 asserts byte-identity vs vector.tf.
+  VECTOR_VERSION="0.43.1"
+  case "$(uname -m)" in
+    x86_64|amd64)  VEC_TRIPLE="x86_64-unknown-linux-musl";  VEC_SHA="8a3cc62d18ec88bb8433159d1d3455d3c77fefff73ce46d4f8cc464e100f65f1" ;;
+    aarch64|arm64) VEC_TRIPLE="aarch64-unknown-linux-musl"; VEC_SHA="365bab73244780083eb95b3e42161a9179f23a0811ffa6180f613c3af06ed8e6" ;;
+    *) echo "soleur-vector-install: unsupported arch $(uname -m); skipping" >&2; exit 0 ;;
+  esac
+  BIN=/usr/local/bin/vector
+  VERFILE=/var/lib/vector/version
+  CFG=/etc/vector/vector.toml
+  UNIT=/etc/systemd/system/vector.service
+
+  # #6396: on a (deprecated) web_colocate_inngest=true host the inngest path already installed +
+  # started an inngest-OWNED vector.service (host_name=soleur-inngest-prd,
+  # EnvironmentFile=/etc/default/inngest-server). Do NOT clobber it — the two Vector paths are
+  # made mutually exclusive by THIS runtime guard, not by runcmd ordering (a template gate can't
+  # negate the string-"false" rollback value cleanly). Default hosts (colocate=false) have no
+  # such unit, so the web install proceeds.
+  if [ -f "$UNIT" ] && grep -q '/etc/default/inngest-server' "$UNIT" 2>/dev/null; then
+    echo "soleur-vector-install: inngest-owned vector.service present; skipping web install" >&2
+    exit 0
+  fi
+
+  [ -f /opt/soleur/vector.toml ] || { echo "soleur-vector-install: staged config missing; skipping" >&2; exit 0; }
+  mkdir -p /etc/vector /var/lib/vector
+  install -m 0644 /opt/soleur/vector.toml "$CFG"
+  chown -R deploy:deploy /var/lib/vector 2>/dev/null || true
+
+  cur=""; [ -f "$VERFILE" ] && cur="$(cat "$VERFILE" 2>/dev/null)"
+  if [ "$cur" != "$VECTOR_VERSION" ] || [ ! -x "$BIN" ]; then
+    tmp="$(mktemp -d)" || exit 0
+    url="https://packages.timber.io/vector/${VECTOR_VERSION}/vector-${VECTOR_VERSION}-${VEC_TRIPLE}.tar.gz"
+    if curl -fsSL --max-time 120 -o "$tmp/v.tgz" "$url"; then
+      got="$(sha256sum "$tmp/v.tgz" | awk '{print $1}')"
+      if [ "$got" = "$VEC_SHA" ]; then
+        if tar -xzf "$tmp/v.tgz" -C "$tmp" && install -m 0755 "$tmp/vector-${VEC_TRIPLE}/bin/vector" "$BIN"; then
+          printf '%s\n' "$VECTOR_VERSION" > "$VERFILE"
+        fi
+      else
+        echo "soleur-vector-install: sha mismatch (exp $VEC_SHA got $got); skipping" >&2
+      fi
+    fi
+    rm -rf "$tmp"
+  fi
+  [ -x "$BIN" ] || { echo "soleur-vector-install: vector binary absent; skipping unit" >&2; exit 0; }
+
+  # Web-host unit — DOPPLER_TOKEN comes from /etc/default/webhook-deploy (present on EVERY web
+  # host), NOT /etc/default/inngest-server (inngest-only). Without it `doppler run` has no token
+  # → Vector never starts → fail-open masks it → silent absent host_name source (spec-flow P0).
+  # Project is always `soleur` for a web host (dev!=prd; web reads --config prd).
+  # doppler is resolved via `command -v` (NOT a hardcoded /usr/bin/doppler): on the web host the
+  # doppler CLI is tarball-installed to /usr/local/bin (cloud-init.yml), NOT /usr/bin — every
+  # sibling web-host unit (cron-egress-firewall.service etc.) uses this same resolution to avoid
+  # a 203/EXEC crash-loop. Fail-open else-branch: if doppler/token is somehow absent, exec vector
+  # directly (it starts but the Better Stack sink 401s — ships nothing — rather than crash-looping).
+  cat > "$UNIT" <<'UNITEOF'
+[Unit]
+Description=Vector observability shipper (journald + host_metrics -> Better Stack Logs)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/webhook-deploy
+ExecStart=/bin/sh -c 'D="$(command -v doppler || true)"; if [ -n "$D" ] && [ -n "$DOPPLER_TOKEN" ]; then exec "$D" run --project soleur --config prd -- /usr/local/bin/vector --config /etc/vector/vector.toml; else exec /usr/local/bin/vector --config /etc/vector/vector.toml; fi'
+Restart=on-failure
+RestartSec=10
+User=deploy
+Group=deploy
+SupplementaryGroups=systemd-journal
+MemoryMax=256M
+CPUQuota=50%
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/lib/vector
+ReadOnlyPaths=/etc/vector
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+  systemctl daemon-reload 2>/dev/null || true
+  # enable + restart --no-block (NOT enable --now: --now no-ops on an already-running unit and
+  # keeps a stale config; --no-block keeps the fail-open install off the serving-latency path).
+  systemctl enable vector.service 2>/dev/null || true
+  systemctl restart --no-block vector.service 2>/dev/null || true
+) || true
+exit 0
+VINEOF
+chmod 0755 /usr/local/bin/soleur-vector-install
+
+# #6604 — bake the STRUCTURAL fail-closed /mnt/data mapper gate for the FUTURE fresh-host path.
+# ACKNOWLEDGED DEAD ON WEB-1 (ADR-119 §(e)): cx33 is unrebuildable in all 3 EU DCs, so web-1 never
+# re-creates and cloud-init never re-runs — the LIVE gate is delivered to web-1 over the cutover
+# channel (workspaces-cutover.sh). This baked helper is the fresh-host analogue: it makes
+# "container running ⇒ /mnt/data is the LUKS mapper" hold BY CONSTRUCTION across the dockerd
+# `--restart unless-stopped` reboot resurrection (C2), where a pre-`docker run` shell gate catches
+# nothing. Kept MINIMAL per DP-10 (crypttab + RequiresMountsFor + chattr +i, no gold-plating); the
+# full fresh-host LUKS provisioning (keyscript wiring, luksFormat-on-birth) is a tracked deferral —
+# it cannot be exercised until a fresh host is actually born, and web-1 never will be.
+STAGE=luks_structural_gate_author; FAILED_FILE=soleur-luks-structural-gate
+cat > /usr/local/bin/soleur-luks-structural-gate <<'LUKSGATEEOF'
+#!/bin/sh
+# Idempotent structural fail-closed gate: /mnt/data MUST be the LUKS mapper before the app
+# container can start. Safe no-op on a host with no LUKS volume attached (today's plaintext
+# fresh host) — it only arms once /dev/mapper/workspaces exists.
+set -eu
+MOUNT=/mnt/data
+MAPPER=/dev/mapper/workspaces
+# 1. crypttab: name the mapper so systemd opens it at boot (keyfile wiring is the deferred half).
+if [ ! -e /etc/crypttab ] || ! grep -q '^workspaces[[:space:]]' /etc/crypttab; then
+  echo 'workspaces  /dev/disk/by-label/workspaces_luks  none  luks,nofail' >> /etc/crypttab
+fi
+# 2. chattr +i the ROOT-DISK mountpoint inode so, if the mapper mount is absent, Docker's implicit
+#    bind-mount mkdir gets EPERM and the container REFUSES to start (an outage, not a silent
+#    plaintext write to the root disk — the #5274 data-stranding mode). Only immutabilize the bare
+#    (unmounted) mountpoint; never the live mapper mount.
+mkdir -p "$MOUNT"
+if ! mountpoint -q "$MOUNT"; then
+  chattr +i "$MOUNT" 2>/dev/null || true
+fi
+# 3. RequiresMountsFor drop-in: the app container unit must order after the /mnt/data mount so it
+#    can never start before the mapper is mounted (survives the --restart resurrection — C2).
+mkdir -p /etc/systemd/system/docker.service.d
+cat > /etc/systemd/system/docker.service.d/10-workspaces-luks-mount.conf <<'DROPIN'
+[Unit]
+RequiresMountsFor=/mnt/data
+DROPIN
+systemctl daemon-reload 2>/dev/null || true
+: "$MAPPER"  # referenced for documentation; the crypttab name is the load-bearing binding
+LUKSGATEEOF
+chmod 0755 /usr/local/bin/soleur-luks-structural-gate
 
 # Sentinel LAST: extraction + install proven complete. The terminal `docker run` block gates
 # on this file; without it the host poweroffs (fail-closed) instead of serving with an

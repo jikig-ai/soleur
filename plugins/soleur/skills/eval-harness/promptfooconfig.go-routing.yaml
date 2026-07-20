@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: "soleur:go routing accuracy — skill arm (routing table) vs baseline (no table)"
+description: "soleur:go routing accuracy — skill arm (routing table) vs baseline (no table). Grok arm (Phase C #6323): asserts /go slash + spawn_subagent paths via harness adapter (see SKILL.md + go.md self-ref)."
 
 # Model IDs are single-sourced. Run `bash scripts/gen-models.sh` to (re)generate
 # models.generated.json from the TS registry; no model literal is hardcoded here,

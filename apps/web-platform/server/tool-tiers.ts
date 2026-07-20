@@ -97,9 +97,23 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   "mcp__soleur_platform__routine_run": "gated",
 
   // Workstream board (feat-workstream-kanban-tab): read-only board feed over
-  // the shared in-repo seed accessor → auto-approve (parity with routines_list;
-  // non-PII, no side effects). WRITE tools are deferred + tracked.
+  // the shared accessor → auto-approve (parity with routines_list; non-PII, no
+  // side effects). The edit-fields picker-options read is the same tier (labels/
+  // assignees/milestones of the connected repo; degrade-safe, no side effects).
   "mcp__soleur_platform__workstream_issues_list": "auto-approve",
+  "mcp__soleur_platform__workstream_issue_options": "auto-approve",
+
+  // Workstream WRITE tools (feat-workstream-issue-crud #6304, ADR-109, closes
+  // #5677). All `gated` (precedent: create_issue): the host review gate IS the
+  // founder-confirmation surface for a real GitHub write. They delegate to the
+  // SAME audited mutateWorkstreamIssue accessor the HTTP routes use (writes an
+  // audit_github_token_use row per call); owner/repo/installation + the creator
+  // attribution resolve server-side, never from tool input.
+  "mcp__soleur_platform__workstream_issue_create": "gated",
+  "mcp__soleur_platform__workstream_issue_set_status": "gated",
+  "mcp__soleur_platform__workstream_issue_update_title": "gated",
+  "mcp__soleur_platform__workstream_issue_update_fields": "gated",
+  "mcp__soleur_platform__workstream_issue_close": "gated",
 
   // Email WRITE tools (#5325, agent-native outbound). The FR9 boundary that
   // formerly said "there is NO email_triage write tool" now ships: these are
@@ -277,6 +291,34 @@ export function buildGateMessage(
     }
     case "crm_contact_set_stage":
       return `Agent wants to move contact **${toolInput.contactId ?? "unknown"}** to stage **${toolInput.toStage ?? "unknown"}**. Allow?`;
+    // Workstream writes (#6304) — name the DECISION-relevant fields so the
+    // founder can approve informed (the write hits a real GitHub issue).
+    case "workstream_issue_create":
+      return `Agent wants to create a GitHub issue: **${toolInput.title ?? "untitled"}**${toolInput.status ? ` (→ ${toolInput.status})` : ""}. Allow?`;
+    case "workstream_issue_set_status":
+      return `Agent wants to move issue **#${toolInput.number ?? "?"}** to **${toolInput.status ?? "unknown"}**${toolInput.state_reason ? ` (${toolInput.state_reason})` : ""}. Allow?`;
+    case "workstream_issue_update_title":
+      return `Agent wants to rename issue **#${toolInput.number ?? "?"}** to **${toolInput.title ?? "untitled"}**. Allow?`;
+    case "workstream_issue_update_fields": {
+      const parts: string[] = [];
+      if (toolInput.body !== undefined) parts.push("body");
+      if (Array.isArray(toolInput.labels))
+        parts.push(`labels→[${(toolInput.labels as string[]).join(", ")}]`);
+      if (Array.isArray(toolInput.assignees))
+        parts.push(
+          `assignees→[${(toolInput.assignees as string[]).join(", ")}]`,
+        );
+      if (toolInput.milestone !== undefined)
+        parts.push(
+          `milestone→${toolInput.milestone === null ? "none" : toolInput.milestone}`,
+        );
+      const detail = parts.length ? ` — ${parts.join("; ")}` : "";
+      return `Agent wants to edit issue **#${toolInput.number ?? "?"}**${detail}. Allow?`;
+    }
+    case "workstream_issue_close":
+      return toolInput.reopen
+        ? `Agent wants to REOPEN issue **#${toolInput.number ?? "?"}**. Allow?`
+        : `Agent wants to close issue **#${toolInput.number ?? "?"}** (${toolInput.reason ?? "completed"}). Allow?`;
     default:
       return `Agent wants to use **${shortName}**. Allow?`;
   }

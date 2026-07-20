@@ -1,0 +1,24 @@
+[Unit]
+# #6604 — the DAILY /workspaces LUKS at-rest probe (luks-monitor.sh). oneshot, timer-fired.
+Description=Daily /workspaces LUKS at-rest escrow + header probe (#6604)
+# Only meaningful once /mnt/data is the LUKS mapper mount; do not race the mount at boot.
+RequiresMountsFor=/mnt/data
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# SyslogIdentifier MUST equal the vector.toml include_matches tag and luks-monitor.sh's LOG_TAG —
+# else the unit's own stderr is tagged with the ExecStart basename (`bash`/`doppler`) and never
+# reaches Better Stack (the #6536 class this pattern exists to prevent).
+SyslogIdentifier=luks-monitor
+# DOPPLER_TOKEN (scoped workspaces-luks-boot) + SOLEUR_SENTRY_DSN (baked). Written via the cutover
+# channel (ADR-119 §(e)); the DSN half is baked by cloud-init so a Doppler outage still pages.
+EnvironmentFile=-/etc/default/luks-monitor
+# HOME must be set for the root doppler CLI (it writes/reads its config dir under $HOME); a root
+# systemd unit has no HOME by default, so `doppler secrets get` dies "$HOME is not defined" and the
+# probe emits doppler_unreachable every run. Every sibling root-doppler unit sets this (#6649).
+Environment=HOME=/root
+ExecStart=/usr/local/bin/luks-monitor
+# A failed probe already emitted its discriminating Sentry event; do not let systemd retry-storm.
+Nice=10

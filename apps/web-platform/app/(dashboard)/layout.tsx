@@ -16,6 +16,7 @@ import { RailSlotProvider, RailCollapsedProvider, RAIL_EXPAND_EVENT } from "@/co
 import { RailResizeHandle } from "@/components/dashboard/rail-resize-handle";
 import { useRailWidth, railMaxPx, RAIL_MIN_PX } from "@/hooks/use-rail-width";
 import { segmentToDrillLevel, isKbDocView } from "@/hooks/segment-to-drill-level";
+import { useNavResume } from "@/hooks/use-nav-resume";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
@@ -23,6 +24,7 @@ import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "@/components/command-palette/nav-ite
 import { InboxNavBadge } from "@/components/dashboard/inbox-nav-badge";
 import { ConversationsNavBadge } from "@/components/dashboard/conversations-nav-badge";
 import { WorkstreamNavBadge } from "@/components/dashboard/workstream-nav-badge";
+import { ReleasesNavBadge } from "@/components/dashboard/releases-nav-badge";
 import { ShortcutsProvider } from "@/components/command-palette/use-shortcuts";
 import {
   isApplePlatform as detectApplePlatform,
@@ -126,6 +128,11 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  // #4826 — sticky KB (and chat) section-root hrefs from sessionStorage.
+  // Bookmarks to bare `/dashboard/kb` still mean landing; only the main-nav
+  // Link href is rewritten so re-entry restores last-open path.
+  const { getKbEntryHref } = useNavResume();
+  const kbEntryHref = getKbEntryHref();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -417,6 +424,11 @@ export default function DashboardLayout({
             {/* Navigation */}
             <nav className={`flex-1 space-y-1 pt-3 ${collapsed ? "px-1" : "px-3"}`}>
               {navItems.filter((item) => item.href !== RELEASES_HREF).map((item) => {
+                // Sticky resume only rewrites the Knowledge Base main-nav href
+                // (#4826 AC2). Active-state still keys on the canonical
+                // section-root href so deep docs keep the gold treatment.
+                const href =
+                  item.href === "/dashboard/kb" ? kbEntryHref : item.href;
                 const active =
                   item.href === "/dashboard"
                     ? pathname === "/dashboard" || drill === "chat"
@@ -426,7 +438,7 @@ export default function DashboardLayout({
                 return (
                   <Link
                     key={item.href}
-                    href={item.href}
+                    href={href}
                     data-tour-id={item.href}
                     title={collapsed ? item.label : undefined}
                     aria-current={active ? "page" : undefined}
@@ -491,7 +503,7 @@ export default function DashboardLayout({
                 data-tour-id={RELEASES_HREF}
                 title={collapsed ? "Releases" : undefined}
                 aria-current={releasesActive ? "page" : undefined}
-                className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                className={`relative flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
                   releasesActive
                     ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
                     : "text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
@@ -499,6 +511,11 @@ export default function DashboardLayout({
               >
                 <RocketIcon className="h-4 w-4 shrink-0" />
                 <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Releases</span>
+                {/* "New version published" cue — a calm gold dot when a web-v*
+                    release newer than this device's last-seen tag has shipped
+                    (feat-releases-nav-badge). Mounted inside the layout's
+                    <SWRConfig> so its fetch dedups with the Releases surface. */}
+                <ReleasesNavBadge collapsed={collapsed} />
               </Link>
               <a
                 href="https://soleur-ai.betteruptime.com/"

@@ -111,7 +111,7 @@ Re-use the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-dif
 grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt"
 ```
 
-The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > /tmp/A.txt && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > /tmp/B.txt && diff -u /tmp/A.txt /tmp/B.txt`.
+The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `a=$(mktemp) && b=$(mktemp) && git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > "$a" && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > "$b" && diff -u "$a" "$b"`.
 
 If no migration files are found (grep rc=1), return **SKIP**.
 
@@ -363,19 +363,24 @@ Otherwise **PASS**.
 
 Webpack chunking is not stable across releases — the inlined Supabase init may live in the login page chunk, in a numeric shared chunk (`/_next/static/chunks/8237-*.js`), or in a layout chunk. Hardcoding a single path produces SKIP-on-chunking-change, which silently disables the gate (issue #3010). Discover the candidate set dynamically by enumerating every chunk URL the login HTML references — that is the authoritative "what /login loads" surface.
 
-Run as separate Bash calls (no command substitution per skill convention):
+Run as separate Bash calls (no command substitution per skill convention). Each block
+re-derives `PREFLIGHT_TMP` — it is `$(git rev-parse --git-dir)`, so it is stable across
+separate Bash calls (which do NOT inherit env) AND distinct per worktree, which is what a
+later call needs to find these artifacts by name without colliding with a sibling session:
 
 ```bash
-curl -fsSL --max-time 10 -A "Mozilla/5.0" https://app.soleur.ai/login -o /tmp/preflight-login.html
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
+curl -fsSL --max-time 10 -A "Mozilla/5.0" https://app.soleur.ai/login -o "$PREFLIGHT_TMP/preflight-login.html"
 ```
 
 ```bash
-grep -oE '/_next/static/chunks/[^"]+\.js' /tmp/preflight-login.html | awk '!seen[$0]++' | head -20 > /tmp/preflight-candidates.txt
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
+grep -oE '/_next/static/chunks/[^"]+\.js' "$PREFLIGHT_TMP/preflight-login.html" | awk '!seen[$0]++' | head -20 > "$PREFLIGHT_TMP/preflight-candidates.txt"
 ```
 
 The cap of 20 is generous (current prod loads 13 chunks); if ever hit on a future release, prefer raising the cap over reverting to the hardcoded login-chunk path. The grep matches both `<script src=...>` and `<link rel=preload href=...>` references — both are valid candidates.
 
-If the `curl` fails (rc != 0) or `/tmp/preflight-candidates.txt` is empty, return **SKIP** with note: "Could not fetch /login HTML or could not locate any /_next/static/chunks references."
+If the `curl` fails (rc != 0) or `"$PREFLIGHT_TMP/preflight-candidates.txt"` is empty, return **SKIP** with note: "Could not fetch /login HTML or could not locate any /_next/static/chunks references."
 
 **Step 5.2: Probe each candidate chunk for Supabase shapes.**
 
@@ -384,7 +389,8 @@ The Supabase host string and the inlined anon-key JWT may live in DIFFERENT chun
 This block is operator-executed under the skill's `set -euo pipefail` convention. Failed `curl` per chunk and `grep` rc=1 on no-match must NOT abort the loop — the gate-level SKIP/FAIL decision is made from the accumulated state at end-of-loop, not from per-iteration rc.
 
 ```bash
-mkdir -p /tmp/preflight-chunks
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
+mkdir -p "$PREFLIGHT_TMP/preflight-chunks"
 host_union=""
 jwt_chunk=""
 while IFS= read -r chunk_path; do
@@ -392,24 +398,24 @@ while IFS= read -r chunk_path; do
   # before interpolating into the curl URL (no `..`, no `@`, no `?`, no whitespace).
   [[ "$chunk_path" =~ ^/_next/static/chunks/[A-Za-z0-9_/().-]+\.js$ ]] || continue
   base=$(basename "$chunk_path")
-  curl -fsSL --max-time 10 --max-filesize 5242880 "https://app.soleur.ai${chunk_path}" -o "/tmp/preflight-chunks/${base}" || continue
-  hosts=$(grep -oE 'https?://([a-z0-9.-]*supabase\.co|api\.soleur\.ai)' "/tmp/preflight-chunks/${base}" | sort -u || true)
+  curl -fsSL --max-time 10 --max-filesize 5242880 "https://app.soleur.ai${chunk_path}" -o "$PREFLIGHT_TMP/preflight-chunks/${base}" || continue
+  hosts=$(grep -oE 'https?://([a-z0-9.-]*supabase\.co|api\.soleur\.ai)' "$PREFLIGHT_TMP/preflight-chunks/${base}" | sort -u || true)
   if [[ -n "$hosts" ]]; then
     host_union="${host_union}${hosts}"$'\n'
   fi
   if [[ -z "$jwt_chunk" ]]; then
-    jwt=$(grep -oE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' "/tmp/preflight-chunks/${base}" | head -1 || true)
+    jwt=$(grep -oE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' "$PREFLIGHT_TMP/preflight-chunks/${base}" | head -1 || true)
     if [[ -n "$jwt" ]]; then
-      jwt_chunk="/tmp/preflight-chunks/${base}"
+      jwt_chunk="$PREFLIGHT_TMP/preflight-chunks/${base}"
     fi
   fi
-done < /tmp/preflight-candidates.txt
+done < "$PREFLIGHT_TMP/preflight-candidates.txt"
 
 printf '%s' "$host_union" | sort -u
 printf 'jwt_chunk=%s\n' "${jwt_chunk:-<none>}"
 ```
 
-The redirected-stdin form (`< /tmp/preflight-candidates.txt`) is required — piping (`cat ... | while read`) scopes loop variables to a subshell and loses `host_union` / `jwt_chunk` at loop exit. The `--max-filesize 5242880` (5 MB) cap defends against a misbehaving CDN response filling tmpfs across 20 fetches. The strict path regex rejects `..`, `@`, `?`, and whitespace before any string interpolation into the curl URL — a defense-in-depth gate even though the source HTML is served by our own CDN. Full traversal (no early-break) ensures placeholder-host leaks in late-candidate chunks are still detected (matrix row 6).
+The redirected-stdin form (`< "$PREFLIGHT_TMP/preflight-candidates.txt"`) is required — piping (`cat ... | while read`) scopes loop variables to a subshell and loses `host_union` / `jwt_chunk` at loop exit. The `--max-filesize 5242880` (5 MB) cap defends against a misbehaving CDN response filling tmpfs across 20 fetches. The strict path regex rejects `..`, `@`, `?`, and whitespace before any string interpolation into the curl URL — a defense-in-depth gate even though the source HTML is served by our own CDN. Full traversal (no early-break) ensures placeholder-host leaks in late-candidate chunks are still detected (matrix row 6).
 
 **Step 5.3: Assert canonical shape.**
 
@@ -685,8 +691,17 @@ esac
 **Step 10.3: Extract the `## Observability` block from the plan file.**
 
 ```bash
-awk '/^## Observability/{in=1; next} /^## /{if (in) exit} in' "$PLAN_PATH" > /tmp/preflight-observability.txt
-test -s /tmp/preflight-observability.txt || { echo "FAIL: Plan touches sensitive paths but '## Observability' block is missing. See hr-observability-as-plan-quality-gate."; exit 1; }
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
+# ‼️ ANCHOR the heading match. `/^## Observability/` is a PREFIX match, so it
+# also matches `## Observability layer citation` — a section name that
+# `hr-observability-layer-citation` actively encourages, making the collision
+# systemic rather than incidental. When both sections exist, the unanchored form
+# extracts the FIRST (the prose citation), finds no `discoverability_test`, and
+# FAILs with "no command could be parsed" — a false FAIL on a plan that is
+# perfectly well-formed. Verified against #6698's plan: unanchored extracted 47
+# lines of the wrong section; anchored reaches the real block.
+awk '/^## Observability$/{ino=1; next} /^## /{if (ino) exit} ino' "$PLAN_PATH" > "$PREFLIGHT_TMP/preflight-observability.txt"
+test -s "$PREFLIGHT_TMP/preflight-observability.txt" || { echo "FAIL: Plan touches sensitive paths but '## Observability' block is missing. See hr-observability-as-plan-quality-gate."; exit 1; }
 ```
 
 If the block is missing, return **FAIL** with: "Sensitive-path diff but plan file `<PLAN_PATH>` is missing the `## Observability` block. See `hr-observability-as-plan-quality-gate`. Add the section per `plugins/soleur/skills/plan/references/plan-issue-templates.md`."
@@ -726,17 +741,18 @@ Detection: `awk '/^[[:space:]]*command:/'` returns the value on the same line af
 Detection: find the first `discoverability_test` line in the Observability block; from that point, locate the first fenced code block — its contents are the command. Then locate the first line matching `^[[:space:]]*Expected output:` (case-insensitive) — its value is the expected.
 
 ```bash
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # Form A first (anchored YAML key — strongest signal).
 CMD=$(awk '
   /^[[:space:]]*command:[[:space:]]*\|/  { mode="block"; next }
   /^[[:space:]]*command:/                { sub(/^[[:space:]]*command:[[:space:]]*/, ""); print; exit }
   mode=="block" && /^[[:space:]]+[^[:space:]]/ { print; next }
   mode=="block" && /^[[:space:]]*[^[:space:]]/ { exit }
-' /tmp/preflight-observability.txt)
+' "$PREFLIGHT_TMP/preflight-observability.txt")
 
 EXPECTED=$(awk '
   /^[[:space:]]*expected_output:/ { sub(/^[[:space:]]*expected_output:[[:space:]]*/, ""); print; exit }
-' /tmp/preflight-observability.txt)
+' "$PREFLIGHT_TMP/preflight-observability.txt")
 
 # Fallback to Form B (fenced block under `discoverability_test.command:` prose).
 # Skip leading `#` comment lines inside the fence — operator prose comments
@@ -749,11 +765,11 @@ if [[ -z "$CMD" ]]; then
     found && /^[[:space:]]*```/ { fence=!fence; if (!fence && lines>0) exit; next }
     found && fence && /^[[:space:]]*#/ { next }
     found && fence { print; lines++ }
-  ' /tmp/preflight-observability.txt)
+  ' "$PREFLIGHT_TMP/preflight-observability.txt")
 fi
 
 if [[ -z "$EXPECTED" ]]; then
-  EXPECTED=$(grep -iE '^[[:space:]]*(\*\*)?Expected output:(\*\*)?' /tmp/preflight-observability.txt | head -1 | sed -E 's/^[[:space:]]*(\*\*)?Expected output:(\*\*)?[[:space:]]*//I')
+  EXPECTED=$(grep -iE '^[[:space:]]*(\*\*)?Expected output:(\*\*)?' "$PREFLIGHT_TMP/preflight-observability.txt" | head -1 | sed -E 's/^[[:space:]]*(\*\*)?Expected output:(\*\*)?[[:space:]]*//I')
 fi
 ```
 

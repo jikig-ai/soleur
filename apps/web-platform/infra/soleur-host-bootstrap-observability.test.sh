@@ -28,7 +28,6 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOOT="$DIR/soleur-host-bootstrap.sh"
 CI="$DIR/cloud-init.yml"
-WF="$DIR/../../../.github/workflows/apply-web-platform-infra.yml"
 
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
@@ -162,12 +161,24 @@ else
 fi
 
 # ── AC6b (no tolerance inversion + composite trap) ──
-# Bare currently-tolerated commands keep their disposition (mount keeps || true; the
-# cloudflared apt lines are NOT wrapped in a fresh set -e + exit 1 block).
-if grep -qE 'mount /dev/disk/by-id/scsi-0HC_Volume_\* /mnt/data \|\| true' "$CI"; then
-  ok "AC6b: volume mount retains '|| true' continuation (no inversion)"
+# Bare currently-tolerated commands keep their disposition (the /mnt/data mount stays survivable;
+# the cloudflared apt lines are NOT wrapped in a fresh set -e + exit 1 block).
+#
+# #6604 RE-POINT (Q6/C10): the /mnt/data mount was pinned from the ambiguous scsi-0HC_Volume_*
+# glob to the stable by-id device (once the LUKS volume attaches the glob binds the wrong device).
+# The survivability this AC protects is NOT inverted — it is STRENGTHENED: it moved from the
+# single runcmd `|| true` into `nofail` in the fstab line, which survives EVERY boot (not just the
+# one runcmd pass), and the runcmd mount chain STILL ends non-fatal (`|| soleur-boot-emit … || true`,
+# a pageable-but-survivable degrade). Assert (a) the bare-glob mount is GONE, (b) the mount is
+# by-id-pinned and still ends `|| true`, (c) fstab carries `nofail`. Anchored on the pin construct
+# + `nofail`, not a bare token (cq-assert-anchor-not-bare-token).
+if grep -qE 'mount /dev/disk/by-id/scsi-0HC_Volume_\* /mnt/data' "$CI"; then
+  no "AC6b: the ambiguous scsi-0HC_Volume_* glob mount for /mnt/data must be REMOVED (#6604 pin by-id)"
+elif grep -qE 'mount /dev/disk/by-id/scsi-0HC_Volume_\$\{workspaces_volume_id\} /mnt/data \|\| soleur-boot-emit workspaces_mount fatal \|\| true' "$CI" \
+  && grep -qE 'scsi-0HC_Volume_\$\{workspaces_volume_id\} /mnt/data ext4 defaults,nofail ' "$CI"; then
+  ok "AC6b: /mnt/data mount pinned by-id + fstab nofail; survivability strengthened, not inverted"
 else
-  no "AC6b: the volume mount must keep '|| true' (do not invert survivable→fatal)"
+  no "AC6b: /mnt/data mount must be by-id-pinned, end '|| true', and carry fstab 'nofail' (survivable, not fatal)"
 fi
 # plugin_seed + inngest keep a COMPOSITE trap that still calls cleanup.
 n_comp=$(grep -cE "trap 'rc=\\\$\?; cleanup;" "$CI" || true)
@@ -192,60 +203,27 @@ else
   ok "AC7: cloud-init.yml carries only soleur-boot-emit CALL sites (no duplicated body)"
 fi
 
-# ── AC8 (lockstep, byte-equality): every emit message is a substring of the WF QUERY ──
-QUERY_LINE=$(grep -nE "^\s*QUERY='" "$WF" | head -1 | cut -d: -f1 || true)
-if [ -z "$QUERY_LINE" ]; then
-  no "AC8: could not locate the QUERY line in $WF"
-else
-  QUERY=$(sed -n "${QUERY_LINE}p" "$WF")
-  # The four canonical emit messages the query must surface (boot-death path).
-  for msg in \
-    "soleur-hostscript-seed failed" \
-    "soleur-host-bootstrap failed" \
-    "soleur-host-bootstrap complete" \
-    "soleur-cloud-init boot stage"; do
-    if printf '%s' "$QUERY" | grep -qF -- "$msg"; then
-      ok "AC8: QUERY includes message \"$msg\""
-    else
-      no "AC8: workflow QUERY missing message \"$msg\" (lockstep drift re-opens the blind spot)"
-    fi
-  done
-  # Bidirectional lockstep: each of the FOUR query literals must actually be emitted at its
-  # source site (a rename of ANY emit — new OR legacy — would leave the QUERY listing a dead
-  # string that matches nothing → dark query, uncaught). Covers both new and pre-existing.
-  for pair in \
-    "soleur-hostscript-seed failed:$CI" \
-    "soleur-host-bootstrap failed:$BOOT" \
-    "soleur-host-bootstrap complete:$BOOT" \
-    "soleur-cloud-init boot stage:$BOOT"; do
-    msg="${pair%%:*}"; src="${pair##*:}"
-    if grep -qF -- "$msg" "$src"; then
-      ok "AC8: message \"$msg\" is emitted in $(basename "$src")"
-    else
-      no "AC8: message \"$msg\" not found in $(basename "$src") (query would match nothing)"
-    fi
-  done
-fi
-
-# ── AC8b (EU data plane + always-run breadcrumb surface) ──
-# The auto Sentry-read must hit the EU host (project is jikigai-eu / de.sentry.io);
-# a US sentry.io query against an EU project returns empty.
-if grep -qE 'https://de\.sentry\.io/api/0/projects/' "$WF"; then
-  ok "AC8b: recreate workflow queries the EU Sentry host (de.sentry.io)"
-else
-  no "AC8b: workflow Sentry endpoint must be de.sentry.io (EU) — a US host returns empty"
-fi
-if grep -qE 'https://sentry\.io/api/0/projects/' "$WF"; then
-  no "AC8b: workflow must NOT query the US sentry.io host (EU-resident project)"
-else
-  ok "AC8b: no US sentry.io endpoint remains"
-fi
-# The breadcrumb-trail surface must run on success too (green boot must show the probe fired).
-if awk '/Surface fresh-host Sentry/{f=1} f&&/if: always\(\)/{print "y"; exit}' "$WF" | grep -q y; then
-  ok "AC8b: fresh-host Sentry surface runs if: always() (green boot shows the probe fired)"
-else
-  no "AC8b: the Sentry surface step must be if: always() (spec-flow F4)"
-fi
+# ── CAPABILITY LOST 2026-07-20 (#6575) — carried forward, not dropped ──────────
+# AC8 / AC8b / AC13 / AC14 / AC16 asserted against the `web_2_recreate` job in
+# apply-web-platform-infra.yml. That job was deleted with the web-2 dispatch sweep,
+# and it was the ONLY consumer of $WF in this file — so those five assertions had no
+# subject left and were removed rather than left to pass vacuously.
+#
+# What they enforced was NEVER web-2-specific, and is NOT re-implemented anywhere yet:
+#   AC14  `SENTRY_DSN` must be non-empty in Doppler prd_terraform BEFORE a host is
+#         created. The pre-extraction boot stages depend SOLELY on the baked
+#         ${sentry_dsn} (doppler is not installed yet, so its fallback is dead), so an
+#         empty DSN means a fresh host boots DARK — no telemetry, no page, no signal.
+#   AC8/AC8b/AC13/AC16  the fresh-host Sentry surfacing step: EU host (de.sentry.io),
+#         `if: always()`, token from Doppler, client-side regex filter (the events
+#         endpoint ignores `message:` queries and returns 0).
+#
+# There is no surviving automated host-create path to move them to — every route
+# HALTs, and building one is #6730's scope. So the requirement is carried in two
+# places instead: the operator pinned-image chain in the host_creates HALT, and
+# ADR-128, which makes both a MUST for #6730's birth path. Re-add assertions here
+# the moment that path exists.
+# ------------------------------------------------------------------------------
 
 # ── AC8c (transport parity for the BAKED emitter) ──
 # The DSN-parse + store-endpoint transport now exists in THREE copies inside bootstrap.sh:
@@ -326,24 +304,6 @@ for st in doppler_dl docker_apt docker_restart; do
   fi
 done
 
-# ── AC13 (#6090 follow-up): the recreate auto-read sources its Sentry token from Doppler ──
-# The GitHub repo secret SENTRY_AUTH_TOKEN is unset, so the surface step self-skipped. It must
-# now fetch the token (+org+project) from Doppler prd_terraform like every other step in the job.
-if grep -qE 'doppler secrets get SENTRY_AUTH_TOKEN .*-c prd_terraform' "$WF"; then
-  ok "AC13: surface step resolves SENTRY_AUTH_TOKEN from Doppler prd_terraform (not the unset repo secret)"
-else
-  no "AC13: the fresh-host Sentry surface step must fetch SENTRY_AUTH_TOKEN via doppler -c prd_terraform"
-fi
-
-# ── AC14 (#6090 P2-1): the recreate asserts the baked DSN is non-empty before -replace ──
-# The pre-extraction fresh-boot stages depend SOLELY on the baked ${sentry_dsn} (doppler isn't
-# installed yet, so its fallback is dead). An empty SENTRY_DSN (var.sentry_dsn's TF default) would
-# silently re-open the zero-emit blind spot. The recreate must fail loudly, not boot dark.
-if grep -qE 'SENTRY_DSN is empty in Doppler prd_terraform' "$WF"; then
-  ok "AC14: web-2-recreate asserts baked SENTRY_DSN non-empty before -replace (pre-extraction can't go dark)"
-else
-  no "AC14: the recreate must assert SENTRY_DSN is non-empty before -replace (empty baked DSN = silent pre-extraction blind spot)"
-fi
 
 # ── AC15 (#6090): earliest bootcmd beacon + runcmd_start breadcrumb bracket a pre-runcmd death ──
 # recreate 28812931362 (on the merged pre-extraction fix) was STILL fully dark — web-2 emits
@@ -368,20 +328,6 @@ else
   no "AC15: _emit must be defined exactly once in cloud-init runcmd (found $n_emit_def)"
 fi
 
-# ── AC16 (#6090): the auto-read must NOT use the broken message: query ──
-# The /projects/../events/ endpoint ignores `message:"x"` search (returns 0 for events that exist).
-# The surface step must derive a client-side regex from QUERY and filter fetched events, NOT pass
-# `query=${QUERY}` to the endpoint.
-if grep -qF 'query=${QUERY}' "$WF"; then
-  no "AC16: surface step still passes the broken message: query to the events endpoint (returns 0)"
-else
-  ok "AC16: surface step no longer passes the broken message: query to the endpoint"
-fi
-if grep -qF 'MSG_RE=' "$WF" && grep -qF 'test($re)' "$WF"; then
-  ok "AC16: surface step filters recent events client-side via a regex derived from QUERY"
-else
-  no "AC16: surface step must derive MSG_RE from QUERY and filter events client-side (test(\$re))"
-fi
 
 # ── AC17 (#6090): package install moved from the opaque config phase into instrumented runcmd ──
 # recreate 28819237402 localized web-2's death to the packages:/config phase (bootcmd_start fired,
@@ -524,8 +470,10 @@ fi
 # The seed pull (AC19) + app pull (AC20) bakes weren't enough: soleur-host-bootstrap.sh had a
 # THIRD unhardened `timeout 15 doppler secrets get GHCR_READ_*` login for the inngest-bootstrap
 # image pull. On a cold host it skipped docker login → anonymous inngest pull → /var/lib/inngest
-# never created → webhook.service 226/NAMESPACE → :9000 unbound → peer fan-out degraded. Fix:
-# bootstrap prefers the baked /etc/default/soleur-ghcr-read, hardened doppler fallback.
+# never created. (The "→ webhook.service 226/NAMESPACE → :9000 unbound → peer fan-out degraded"
+# downstream is SEVERED as of #6090 — webhook.service now marks /var/lib/inngest `-`-optional; an
+# absent dir no longer wedges the unit. This bake still matters when web_colocate_inngest is ON.)
+# Fix: bootstrap prefers the baked /etc/default/soleur-ghcr-read, hardened doppler fallback.
 if grep -qF '/etc/default/soleur-ghcr-read' "$BOOT"; then
   ok "AC21: soleur-host-bootstrap ghcr_login prefers the baked /etc/default/soleur-ghcr-read"
 else
@@ -548,6 +496,200 @@ if grep -qF 'ghcr_login_warn credential_absent' "$BOOT" && grep -qF 'ghcr_login_
   ok "AC21: bootstrap ghcr_login still emits ghcr_login_warn on both failure branches (no-SSH Sentry warning)"
 else
   no "AC21: bootstrap ghcr_login must emit ghcr_login_warn credential_absent + auth_denied on failure"
+fi
+
+# ── AC22 (#6396): ungated web-host Vector install (decoupled from web_colocate_inngest) ──
+# ADR-100 defaulted web_colocate_inngest=false, so a fresh web host installed NO Vector and
+# shipped NO logs. The shipper is now baked into soleur-host-bootstrap.sh (authors
+# /usr/local/bin/soleur-vector-install) and invoked fail-open at end-of-cloud-init.
+DOCKERFILE="$DIR/../Dockerfile"
+VECTOR_TF="$DIR/vector.tf"
+VECTOR_TOML="$DIR/vector.toml"
+# (1) bootstrap authors the installer exactly once (baked, 0 user_data body)
+n_vi=$( (grep -cE 'cat > /usr/local/bin/soleur-vector-install <<' "$BOOT") || true )
+if [ "$n_vi" = 1 ]; then
+  ok "AC22: soleur-host-bootstrap authors /usr/local/bin/soleur-vector-install once (baked)"
+else
+  no "AC22: bootstrap must author /usr/local/bin/soleur-vector-install exactly once (found $n_vi)"
+fi
+# (2) cloud-init call site: fail-open + wall-clock-bounded, at end-of-chain. The outer `timeout`
+#     MUST strictly exceed the helper's inner `curl --max-time N` — else a slow cold-boot tarball
+#     fetch is SIGTERM-truncated into a silently-absent Better Stack source (perf review P2).
+outer_to=$( (grep -oE "timeout [0-9]+ sh -c 'soleur-vector-install'" "$CI" | head -1 | grep -oE '[0-9]+') || true )
+inner_ct=$( (grep -oE 'curl -fsSL --max-time [0-9]+' "$BOOT" | head -1 | grep -oE '[0-9]+$') || true )
+if grep -qE "timeout [0-9]+ sh -c 'soleur-vector-install' \|\| true" "$CI" \
+   && [ -n "$outer_to" ] && [ -n "$inner_ct" ] && [ "$outer_to" -gt "$inner_ct" ]; then
+  ok "AC22: cloud-init Vector install is fail-open + timeout-bounded; outer timeout ${outer_to}s > inner curl ${inner_ct}s"
+else
+  no "AC22: ungated Vector install must be 'timeout N sh -c … || true' with outer N (${outer_to:-?}) > inner curl --max-time (${inner_ct:-?})"
+fi
+# (3) the call site is the LAST runcmd — AFTER the terminal cloud_init_complete breadcrumb
+vi_ln=$( (grep -nE "timeout [0-9]+ sh -c 'soleur-vector-install'" "$CI" | head -1 | cut -d: -f1) || true )
+cc_ln=$( (grep -nF 'soleur-boot-emit cloud_init_complete info' "$CI" | head -1 | cut -d: -f1) || true )
+if [ -n "$vi_ln" ] && [ -n "$cc_ln" ] && [ "$vi_ln" -gt "$cc_ln" ]; then
+  ok "AC22: Vector install runcmd (line $vi_ln) is AFTER cloud_init_complete (line $cc_ln) — end-of-chain"
+else
+  no "AC22: Vector install must be end-of-chain, after cloud_init_complete (vi=$vi_ln cc=$cc_ln)"
+fi
+# (4) web-host unit carries EnvironmentFile=/etc/default/webhook-deploy (the DOPPLER_TOKEN source
+#     — spec-flow P0; NOT the inngest-only /etc/default/inngest-server), and NO After=inngest
+if grep -qE 'EnvironmentFile=/etc/default/webhook-deploy' "$BOOT" \
+   && ! awk '/cat > \/usr\/local\/bin\/soleur-vector-install/,/^VINEOF$/' "$BOOT" | grep -qF 'After=network-online.target inngest-server.service'; then
+  ok "AC22: web-host vector.service uses EnvironmentFile=/etc/default/webhook-deploy (no inngest coupling)"
+else
+  no "AC22: web vector.service must carry EnvironmentFile=/etc/default/webhook-deploy (DOPPLER_TOKEN source) + no After=inngest-server.service"
+fi
+# (4b) ExecStart resolves doppler via `command -v` — NOT a hardcoded /usr/bin/doppler. On the web
+#      host doppler is tarball-installed to /usr/local/bin (cloud-init), so a hardcoded /usr/bin
+#      path is a 203/EXEC crash-loop → Vector never runs → silent absent source (code-quality P1).
+#      Mirrors every sibling web-host unit (cron-egress-firewall.service etc.).
+if awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | grep -qF 'ExecStart=/bin/sh -c ' \
+   && awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | grep -qF 'command -v doppler' \
+   && ! awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | grep -qE '^ExecStart=/usr/bin/doppler'; then
+  ok "AC22: web vector.service ExecStart resolves doppler via 'command -v' (no hardcoded /usr/bin/doppler crash-loop)"
+else
+  no "AC22: web vector.service ExecStart must resolve doppler via 'command -v' (web host has doppler at /usr/local/bin, NOT /usr/bin)"
+fi
+# (4c) the helper skips when an inngest-OWNED vector.service already exists (deprecated
+#      web_colocate_inngest=true host) — mutual exclusion enforced at runtime, not by runcmd order.
+if awk '/cat > \/usr\/local\/bin\/soleur-vector-install/,/^VINEOF$/' "$BOOT" \
+   | grep -qE "grep -q '/etc/default/inngest-server' \"\\\$UNIT\""; then
+  ok "AC22: helper skips install when an inngest-owned vector.service is present (no clobber on colocate hosts)"
+else
+  no "AC22: soleur-vector-install must skip when /etc/systemd/system/vector.service is inngest-owned (colocate mutual-exclusion)"
+fi
+# (5) bootstrap stages vector.toml, rendering @@HOST_NAME@@ from the TF-injected SOLEUR_HOST_NAME
+if grep -qE 's\|@@HOST_NAME@@\|\$\{SOLEUR_HOST_NAME:-\$\(hostname\)\}\|g' "$BOOT"; then
+  ok "AC22: bootstrap renders @@HOST_NAME@@ → \${SOLEUR_HOST_NAME:-\$(hostname)} at staging"
+else
+  no "AC22: bootstrap must render @@HOST_NAME@@ from SOLEUR_HOST_NAME (per-host discriminator)"
+fi
+# (6) cloud-init passes SOLEUR_HOST_NAME='${host_name}' to the bootstrap invocation
+if grep -qF "SOLEUR_HOST_NAME='\${host_name}'" "$CI"; then
+  ok "AC22: cloud-init passes SOLEUR_HOST_NAME='\${host_name}' to bootstrap (TF per-host injection)"
+else
+  no "AC22: bootstrap invocation must pass SOLEUR_HOST_NAME='\${host_name}'"
+fi
+# (7) server.tf injects the per-host host_name templatefile var (distinct per host)
+if grep -qE 'host_name\s*=\s*each\.key == "web-1" \? "soleur-web-platform" : "soleur-\$\{each\.key\}"' "$TF"; then
+  ok "AC22: server.tf injects per-host host_name (web-1→soleur-web-platform, web-N→soleur-web-N)"
+else
+  no "AC22: server.tf templatefile map must inject a per-host host_name var"
+fi
+# (8) delivery lockstep: vector.toml in host_script_files AND baked by the Dockerfile COPY
+if awk '/host_script_files = \[/,/^  \]/' "$TF" | grep -qF -- '"vector.toml"'; then
+  ok "AC22: vector.toml is in server.tf host_script_files"
+else
+  no "AC22: vector.toml must be in server.tf host_script_files (baked-set membership)"
+fi
+if grep -qF '/app/infra/vector.toml' "$DOCKERFILE"; then
+  ok "AC22: Dockerfile bakes /app/infra/vector.toml (lockstep with host_script_files)"
+else
+  no "AC22: Dockerfile COPY must include /app/infra/vector.toml (host_scripts_content_hash lockstep)"
+fi
+# (9) vector.toml carries the @@HOST_NAME@@ sentinel (both transforms), no bare inngest literal
+n_hn=$( (grep -cF '.host_name = "@@HOST_NAME@@"' "$VECTOR_TOML") || true )
+if [ "$n_hn" = 2 ] && ! grep -qF '.host_name = "soleur-inngest-prd"' "$VECTOR_TOML"; then
+  ok "AC22: vector.toml carries @@HOST_NAME@@ at both host_name sites (no bare soleur-inngest-prd)"
+else
+  no "AC22: vector.toml must carry @@HOST_NAME@@ at both host_name sites (found $n_hn; no bare literal)"
+fi
+# (10) inngest path renders @@HOST_NAME@@ → soleur-inngest-prd (byte-identical to pre-#6396)
+if grep -qF "sed -i 's|@@HOST_NAME@@|soleur-inngest-prd|g'" "$DIR/inngest-bootstrap.sh"; then
+  ok "AC22: inngest-bootstrap renders @@HOST_NAME@@ → soleur-inngest-prd (host_name unchanged)"
+else
+  no "AC22: inngest-bootstrap must render @@HOST_NAME@@ → soleur-inngest-prd on its Vector config"
+fi
+# (11) version/sha drift guard: the baked installer's pin equals vector.tf locals, with each sha
+#      BOUND TO ITS ARCH case-branch (an amd64↔arm64 sha swap must go RED — presence-anywhere
+#      would silently pass while the runtime `got=VEC_SHA` check fails on the mis-bound arch;
+#      test-design P2). vector.tf `_arm64` line does NOT satisfy the plain `vector_sha256=` awk.
+tf_ver=$( (awk -F'"' '/vector_version[[:space:]]*=/ { print $2; exit }' "$VECTOR_TF") || true )
+tf_sha=$( (awk -F'"' '/vector_sha256[[:space:]]*=/ { print $2; exit }' "$VECTOR_TF") || true )
+tf_sha_arm=$( (awk -F'"' '/vector_sha256_arm64[[:space:]]*=/ { print $2; exit }' "$VECTOR_TF") || true )
+if [ -n "$tf_ver" ] && grep -qF "VECTOR_VERSION=\"$tf_ver\"" "$BOOT" \
+   && [ -n "$tf_sha" ] && grep -qE "x86_64-unknown-linux-musl\";[[:space:]]*VEC_SHA=\"$tf_sha\"" "$BOOT" \
+   && [ -n "$tf_sha_arm" ] && grep -qE "aarch64-unknown-linux-musl\";[[:space:]]*VEC_SHA=\"$tf_sha_arm\"" "$BOOT"; then
+  ok "AC22: baked pins match vector.tf, each sha bound to its arch branch (version=$tf_ver; amd64+arm64 sha256)"
+else
+  no "AC22: baked installer version/sha must equal vector.tf locals with amd64 sha on the x86_64 branch AND arm64 sha on the aarch64 branch"
+fi
+# (12) hardening-directive parity between the two hand-maintained vector.service heredocs (web in
+#      soleur-host-bootstrap.sh, inngest in inngest-bootstrap.sh). A future hardening add to one
+#      must propagate to the other — else a dropped ProtectSystem/sandbox line is a silent
+#      regression (pattern-recognition P3). Only shared sandbox directives (the intended
+#      divergences — After=/EnvironmentFile=/ExecStart — are excluded).
+INNGEST_BS="$DIR/inngest-bootstrap.sh"
+parity_ok=1
+for d in 'Type=simple' 'Restart=on-failure' 'RestartSec=10' 'User=deploy' 'Group=deploy' \
+         'SupplementaryGroups=systemd-journal' 'MemoryMax=256M' 'CPUQuota=50%' \
+         'ProtectSystem=strict' 'ProtectHome=read-only' 'PrivateTmp=true' \
+         'ReadWritePaths=/var/lib/vector' 'ReadOnlyPaths=/etc/vector' 'TimeoutStopSec=30' \
+         'WantedBy=multi-user.target'; do
+  if ! grep -qF "$d" "$BOOT" || ! grep -qF "$d" "$INNGEST_BS"; then
+    parity_ok=0; no "AC22: vector.service hardening directive '$d' missing from web+inngest parity set"
+  fi
+done
+[ "$parity_ok" = 1 ] && ok "AC22: web + inngest vector.service share all 15 sandbox/hardening directives (parity)"
+
+# ── AC23 (#6396): terminal serving-block boot-emit trap (DC-2) ──
+# The cloud-init terminal docker-run block had NO named soleur-boot-emit fatal trap: a doppler
+# download exit 1 / docker run set -e abort reached only the SSH-only cloud-init-output.log.
+# (1) composite EXIT trap armed with a mutable stage + TMPENV-safe cleanup (arm-time TMPENV unset)
+# NOTE: cloud-init.yml escapes the shell `${TMPENV:-}` as `$${TMPENV:-}` so terraform's
+# templatefile() renders it back to `${TMPENV:-}` on the host (else the render fails). Match the
+# SOURCE form (`$$`).
+if grep -qE "trap 'rc=\\\$\?; rm -f \"\\\$\\\$\{TMPENV:-\}\"; \[ \"\\\$rc\" = 0 \] \|\| soleur-boot-emit \"\\\$stage\" fatal' EXIT" "$CI"; then
+  ok "AC23: terminal-block EXIT trap armed (rm -f \$\${TMPENV:-} + soleur-boot-emit \$stage fatal)"
+else
+  no "AC23: terminal block must arm 'trap rc=\$?; rm -f \${TMPENV:-}; [ \$rc = 0 ] || soleur-boot-emit \$stage fatal EXIT'"
+fi
+# (2) armed EARLY: stage=terminal_preamble appears BEFORE the hostscripts poweroff test
+tp_ln=$( (grep -nF 'stage=terminal_preamble' "$CI" | head -1 | cut -d: -f1) || true )
+hs_ln=$( (grep -nF 'refusing to start app' "$CI" | head -1 | cut -d: -f1) || true )
+if [ -n "$tp_ln" ] && [ -n "$hs_ln" ] && [ "$tp_ln" -lt "$hs_ln" ]; then
+  ok "AC23: stage=terminal_preamble armed (line $tp_ln) before the hostscripts poweroff (line $hs_ln)"
+else
+  no "AC23: trap must be armed (stage=terminal_preamble) before the hostscripts poweroff (tp=$tp_ln hs=$hs_ln)"
+fi
+# (3) explicit hostscripts_incomplete emit BEFORE the poweroff -f (poweroff bypasses the EXIT trap)
+if grep -qE 'soleur-boot-emit hostscripts_incomplete fatal;.*poweroff -f' "$CI"; then
+  ok "AC23: explicit soleur-boot-emit hostscripts_incomplete fatal precedes the hostscripts poweroff -f"
+else
+  no "AC23: the hostscripts test must emit hostscripts_incomplete fatal BEFORE its poweroff -f (poweroff skips the trap)"
+fi
+# (4) mutable stage advances through doppler_download and docker_run
+if grep -qF 'stage=doppler_download' "$CI" && grep -qF 'stage=docker_run' "$CI"; then
+  ok "AC23: mutable stage advances (doppler_download, docker_run)"
+else
+  no "AC23: the trap stage must advance through doppler_download + docker_run"
+fi
+# (5) disarm (trap - EXIT) AFTER docker_run/rm-TMPENV, BEFORE the self-emitting egress probe
+dr_ln=$( (grep -nF 'stage=docker_run' "$CI" | head -1 | cut -d: -f1) || true )
+# find the disarm that sits between docker_run and the egress probe
+ep_ln=$( (grep -nF 'cron-egress-enforce-probe.sh' "$CI" | head -1 | cut -d: -f1) || true )
+disarm_ln=$( (awk -v a="$dr_ln" -v b="$ep_ln" 'NR>a && NR<b && /^    trap - EXIT$/ {print NR; exit}' "$CI") || true )
+if [ -n "$disarm_ln" ]; then
+  ok "AC23: EXIT trap disarmed (line $disarm_ln) between docker_run and the self-emitting egress probe"
+else
+  no "AC23: the EXIT trap must be disarmed (trap - EXIT) after docker_run and before the egress probe (dr=$dr_ln ep=$ep_ln)"
+fi
+# (6) all four terminal stages the Sentry issue-alert filters on are EMITTED by this block.
+#     Match the EMIT construct, not the bare token (every stage also appears in comment prose, so a
+#     bare `grep -qF "$st"` false-passes even if the real emit were deleted — test-design P2).
+#     terminal_preamble/doppler_download/docker_run are set via `stage=<x>` (the trap emits $stage);
+#     hostscripts_incomplete is the explicit `soleur-boot-emit hostscripts_incomplete fatal`.
+for st in terminal_preamble doppler_download docker_run; do
+  if grep -qF "stage=$st" "$CI"; then
+    ok "AC23: terminal stage '$st' is a real 'stage=' assignment (trap emits it; wired to the Sentry alert)"
+  else
+    no "AC23: terminal stage '$st' must be a real 'stage=$st' assignment (not comment prose)"
+  fi
+done
+if grep -qF 'soleur-boot-emit hostscripts_incomplete fatal' "$CI"; then
+  ok "AC23: terminal stage 'hostscripts_incomplete' is a real soleur-boot-emit call (wired to the Sentry alert)"
+else
+  no "AC23: 'hostscripts_incomplete' must be a real soleur-boot-emit call (not comment prose)"
 fi
 
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="

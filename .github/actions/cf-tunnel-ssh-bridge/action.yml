@@ -38,23 +38,35 @@
 #       if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
 #         kill "$CLOUDFLARED_PID" 2>/dev/null || true
 #       fi
-#       [[ -f /tmp/cloudflared.log ]] && tail -n 200 /tmp/cloudflared.log || true
+#       if [[ -n "${CI_SSH_KEYFILE:-}" && -f "$CI_SSH_KEYFILE" ]]; then
+#         shred -u "$CI_SSH_KEYFILE" 2>/dev/null || true
+#       fi
+#       if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi
 #
-# The `-n` guards are mandatory: SERVER_IP / CLOUDFLARED_PID are unset if the
-# bridge failed before exporting them (SpecFlow 1a). A left-over OUTPUT NAT rule
-# or orphaned cloudflared would corrupt a later job on a persistent runner (moot
-# on GH-hosted ephemeral runners, but the discipline is required).
+# The `-n` guards are mandatory: SERVER_IP / CLOUDFLARED_PID / CI_SSH_KEYFILE are
+# unset if the bridge failed before exporting them (SpecFlow 1a). A left-over
+# OUTPUT NAT rule, orphaned cloudflared, or on-disk CI keyfile would corrupt/leak
+# into a later job on a persistent runner (moot on GH-hosted ephemeral runners,
+# but the discipline is required). The `CI_SSH_KEYFILE` shred applies only to
+# `server-ip` (bash-ssh) callers; it is unset for terraform callers.
 #
 # ── PREREQUISITES ──────────────────────────────────────────────────────────
-#  - `terraform init` must have run in `infra-dir` BEFORE this action (the bridge
-#    reads `terraform output -raw server_ip` from the R2 state).
+#  - `terraform init` must have run in `infra-dir` BEFORE this action ONLY when
+#    the `server-ip` input is EMPTY (the bridge then reads `terraform output -raw
+#    server_ip` from the R2 state). When `server-ip` is supplied, no terraform is
+#    needed — the caller passes the address directly.
 #  - The CF Access ci_ssh service token + DEPLOY_SSH_PRIVATE_KEY must be present
 #    in Doppler prd_terraform (apply-web-platform-infra.yml auto-syncs both
 #    post-apply). The pull/decode steps fail loud if either is missing/empty.
 #
 # ── OUTPUTS (to $GITHUB_ENV, job-scoped, visible to the caller's later steps) ─
-#  SERVER_IP, CLOUDFLARED_PID, TF_VAR_ci_ssh_private_key,
-#  TUNNEL_SERVICE_TOKEN_ID, TUNNEL_SERVICE_TOKEN_SECRET.
+#  Always: SERVER_IP, CLOUDFLARED_PID, TUNNEL_SERVICE_TOKEN_ID,
+#  TUNNEL_SERVICE_TOKEN_SECRET.
+#  When `server-ip` is EMPTY (terraform callers): TF_VAR_ci_ssh_private_key.
+#  When `server-ip` is SET (bash-ssh callers): CI_SSH_KEYFILE (chmod 600 temp key)
+#  + WEB_HOST_SSH + GIT_DATA_SSH (ready `ssh -i <keyfile> … -l root` invocations the
+#  cutover/verify scripts consume via `${WEB_HOST_SSH}`). The key form is
+#  mutually exclusive per caller class — the key never lands on an unused surface.
 #
 # Composite actions cannot read the `secrets` context — every secret is an
 # explicit input referenced ONLY inside `env:` mappings (never a `run:` body or
@@ -69,7 +81,7 @@ inputs:
     description: 'Doppler service token (prd_terraform, read-only). Caller forwards the DOPPLER_TOKEN repo secret.'
     required: true
   infra-dir:
-    description: 'Path to the terraform root (reads `terraform output -raw server_ip`). e.g. apps/web-platform/infra.'
+    description: 'Path to the terraform root; `terraform output -raw server_ip` is read from it ONLY when `server-ip` is empty. e.g. apps/web-platform/infra.'
     required: true
   cloudflared-version:
     description: 'cloudflared release version to install (e.g. 2026.5.0).'
@@ -77,6 +89,16 @@ inputs:
   cloudflared-sha256:
     description: 'SHA-256 of the cloudflared-linux-amd64 binary at cloudflared-version (recompute against the real binary — see header).'
     required: true
+  server-ip:
+    description: >-
+      Optional. The address the redirect scopes to AND (for bash-ssh callers) the
+      keyfile+WEB_HOST_SSH/GIT_DATA_SSH export is enabled by. When set, the bridge
+      skips `terraform output -raw server_ip` (no terraform needed) and writes the
+      CI key to a temp file + exports the ready ssh invocation the cutover scripts
+      consume. When empty (default), behavior is byte-identical to the pre-input
+      terraform path (apply-web-platform-infra.yml relies on this).
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -119,12 +141,13 @@ runs:
         printf 'TUNNEL_SERVICE_TOKEN_ID=%s\n' "$TOKEN_ID" >> "$GITHUB_ENV"
         printf 'TUNNEL_SERVICE_TOKEN_SECRET=%s\n' "$TOKEN_SECRET" >> "$GITHUB_ENV"
 
-    - name: Decode CI SSH private key into TF_VAR_ci_ssh_private_key
+    - name: Decode CI SSH private key (TF_VAR + optional keyfile/WEB_HOST_SSH export)
       shell: bash
       env:
         DOPPLER_TOKEN: ${{ inputs.doppler-token }}
         DOPPLER_PROJECT: soleur
         DOPPLER_CONFIG: prd_terraform
+        SERVER_IP_INPUT: ${{ inputs.server-ip }}
       # The bridge connection authenticates with var.ci_ssh_private_key
       # (agent = false in CI). The secret name (DEPLOY_SSH_PRIVATE_KEY) does NOT
       # map to the var name (ci_ssh_private_key) via --name-transformer tf-var,
@@ -142,11 +165,33 @@ runs:
         while IFS= read -r line; do
           [[ -n "$line" ]] && printf '::add-mask::%s\n' "$line"
         done <<< "$KEY"
-        {
-          echo "TF_VAR_ci_ssh_private_key<<__SOLEUR_CI_SSH_KEY_EOF__"
-          printf '%s\n' "$KEY"
-          echo "__SOLEUR_CI_SSH_KEY_EOF__"
-        } >> "$GITHUB_ENV"
+        # The two caller classes are mutually exclusive and each gets ONLY the key
+        # form it uses — the key never lands on a surface its caller does not need:
+        if [[ -n "${SERVER_IP_INPUT:-}" ]]; then
+          # bash-ssh callers (LUKS cutover/verify pipe a script over
+          # `${WEB_HOST_SSH} "$HOST"`): write the key to a chmod 600 temp keyfile
+          # and export the ready ssh invocation. NO TF_VAR — these callers run no
+          # terraform, so the key stays OFF $GITHUB_ENV (only the keyfile holds
+          # it, and the caller's if:always() teardown shreds that).
+          KEYFILE=$(mktemp)
+          chmod 600 "$KEYFILE"
+          # Export the path BEFORE writing key bytes so the caller's if:always()
+          # teardown can shred the file even if the write below is interrupted.
+          echo "CI_SSH_KEYFILE=$KEYFILE" >> "$GITHUB_ENV"
+          printf '%s\n' "$KEY" > "$KEYFILE"
+          SSH_INVOCATION="ssh -i $KEYFILE -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -l root"
+          printf 'WEB_HOST_SSH=%s\n' "$SSH_INVOCATION" >> "$GITHUB_ENV"
+          printf 'GIT_DATA_SSH=%s\n' "$SSH_INVOCATION" >> "$GITHUB_ENV"
+        else
+          # terraform callers (apply-web-platform-infra.yml): the Go SSH client
+          # authenticates with var.ci_ssh_private_key. Byte-identical to the
+          # pre-server-ip behavior (this heredoc was previously unconditional).
+          {
+            echo "TF_VAR_ci_ssh_private_key<<__SOLEUR_CI_SSH_KEY_EOF__"
+            printf '%s\n' "$KEY"
+            echo "__SOLEUR_CI_SSH_KEY_EOF__"
+          } >> "$GITHUB_ENV"
+        fi
 
     - name: Start cloudflared SSH bridge + iptables NAT redirect
       shell: bash
@@ -155,6 +200,7 @@ runs:
         DOPPLER_TOKEN: ${{ inputs.doppler-token }}
         DOPPLER_PROJECT: soleur
         DOPPLER_CONFIG: prd_terraform
+        SERVER_IP_INPUT: ${{ inputs.server-ip }}
       run: |
         set -euo pipefail
         # APP_DOMAIN_BASE is NOT in the prd_terraform config — fall back to the
@@ -162,9 +208,17 @@ runs:
         # use the bare form: it exits non-zero under `set -e` and kills the step
         # before cloudflared starts; #4829 post-merge hotfix #4840).
         APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
-        SERVER_IP=$(terraform output -raw server_ip)
+        # When server-ip is supplied (bash-ssh callers: the LUKS cutover/verify
+        # workflows), scope the NAT redirect to it directly — no terraform needed.
+        # When empty (terraform callers: apply-web-platform-infra.yml), read the
+        # public IP from state exactly as before. The empty-check + export below
+        # are COMMON to both paths (teardown needs SERVER_IP either way).
+        SERVER_IP="${SERVER_IP_INPUT:-}"
         if [[ -z "$SERVER_IP" ]]; then
-          echo "::error::terraform output server_ip is empty — state not populated; cannot scope the NAT redirect to the prod host."
+          SERVER_IP=$(terraform output -raw server_ip)
+        fi
+        if [[ -z "$SERVER_IP" ]]; then
+          echo "::error::server-ip input empty AND terraform output server_ip empty — cannot scope the NAT redirect to the prod host."
           exit 1
         fi
         printf '::add-mask::%s\n' "$SERVER_IP"

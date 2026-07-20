@@ -97,6 +97,15 @@ const READ_ONLY_PROBES = [
 // the cron-tier2-parity sibling-set sweep sees this dependent acknowledged when
 // EXPECTED_CRON_FUNCTIONS grows with a new dispatch-hybrid cron.
 
+// #6657: cron-gh-pages-cert-reissue is a fifth class — an EVENT-TRIGGERED
+// live-infra remediation. It flips CF DNS proxy state + re-orders the GitHub
+// Pages cert via the App token and files/comments issues via the poll cron, but
+// it holds NO git and opens NO PR (no safeCommitAndPr path). Like the read-only
+// probes + dispatch-hybrids, the safe-commit invariant does not apply — it needs
+// no MIGRATED/EXEMPT entry and is covered by invariant 1's directory walk.
+// Acknowledged here so the cron-tier2-parity sibling-set sweep sees this
+// dependent when EXPECTED_CRON_FUNCTIONS grows with a new event-triggered cron.
+
 const cronFiles = readdirSync(FUNCTIONS_DIR).filter((f) =>
   /^(cron|event)-.*\.ts$/.test(f),
 );
@@ -367,5 +376,17 @@ describe("#6031 — cron-ghcr-token-minter is a non-git cron", () => {
   it("has no CRON_BASH_ALLOWLISTS entry and is not Tier-2 deferred", () => {
     expect(CRON_BASH_ALLOWLISTS["cron-ghcr-token-minter"]).toBeUndefined();
     expect(TIER2_DEFERRED_CRONS.has("cron-ghcr-token-minter")).toBe(false);
+  });
+});
+
+describe("#6602 — cron-expenses-verify-by is a non-git dispatch-hybrid cron", () => {
+  // The expenses verify_by scheduler mints an installation token and dispatches
+  // scheduled-expenses-verify-by.yml; it does NO git operations, so it neither
+  // calls safeCommitAndPr nor carries a CRON_BASH_ALLOWLISTS entry, and is not a
+  // deferred Tier-2 cron. Acknowledged here so the sibling-set sweep sees this
+  // dependent when EXPECTED_CRON_FUNCTIONS grows (cron-tier2-parity set).
+  it("has no CRON_BASH_ALLOWLISTS entry and is not Tier-2 deferred", () => {
+    expect(CRON_BASH_ALLOWLISTS["cron-expenses-verify-by"]).toBeUndefined();
+    expect(TIER2_DEFERRED_CRONS.has("cron-expenses-verify-by")).toBe(false);
   });
 });

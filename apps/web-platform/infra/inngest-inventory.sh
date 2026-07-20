@@ -76,7 +76,55 @@ set -euo pipefail
 
 readonly LOG_TAG="inngest-inventory"
 
+# Identity of the host that answered this read (#6425). /hooks/inngest-liveness is reached
+# through the Cloudflare Tunnel, which selects a connector per edge colo — so this hook can
+# answer from a host the caller never meant. That is not hypothetical: a freshly-recreated
+# non-primary host has NO inngest-inventory.sh baked at all, so a read that lands there is a
+# false `inngest_down` P1 against a perfectly healthy inngest. Emitting the emitter's identity
+# discriminates "two origins" from "one broken origin" in ONE read.
+#
+# Declared empty at top level (NO network) so the BASH_SOURCE guard's invariant below holds and
+# a sourced reference is `set -u`-safe; resolved inside the execution guard.
+HOST_ID=""
+
+# SOLEUR-DEBT: 3rd of 3 resolve_host_id copies (ci-deploy.sh source-of-truth,
+# cat-deploy-state.sh, this). Kept in sync by test_host_id_drift_guard, NOT a shared sourced
+# lib — sourcing works in infra (ci-deploy.sh sources its env file), but DISTRIBUTING a new script costs ~11
+# surfaces (push-infra-config.sh, hooks.json.tmpl, infra-config-apply.sh FILE_MAP,
+# infra-config-install.sh DEST_SPEC + its 2 hardcoded counts, server.tf triggers_replace,
+# apply-deploy-pipeline-fix.yml paths, ship-deploy-pipeline-fix-gate.test.ts, ship/SKILL.md)
+# plus the bake path. Upgrade trigger: a 4th copy OR any consumer outside infra/. Tracked: #6465.
+resolve_host_id() {
+  if [[ -n "${SOLEUR_HOST_ID_OVERRIDE:-}" ]]; then
+    printf '%s' "$SOLEUR_HOST_ID_OVERRIDE"
+    return 0
+  fi
+  local url="${SOLEUR_HOST_ID_METADATA_URL:-http://169.254.169.254/hetzner/v1/metadata/instance-id}"
+  local id
+  id=$(curl -sf --max-time 3 "$url" 2>/dev/null || true)
+  if [[ "$id" =~ ^[0-9]+$ ]]; then
+    printf 'hetzner-%s' "$id"
+    return 0
+  fi
+  id=$(tr -d '[:space:]' < /etc/machine-id 2>/dev/null || true)
+  if [[ -n "$id" ]]; then
+    # HASHED, never raw: machine-id(5) says the value "should be considered confidential and
+    # must not be exposed in untrusted environments" — systemd's own guidance is to hash it
+    # per-application (sd_id128_get_machine_app_specific). This fallback now reaches an HTTP
+    # response body and journald -> Vector -> Better Stack (a third-party vendor), which the
+    # ci-deploy.sh original never did. Hashing is LOSSLESS here: host_id only ever needs to be
+    # STABLE and COMPARABLE (same-host vs different-host), never reversible.
+    printf 'machine-%s' "$(printf '%s' "$id" | sha256sum | cut -c1-12)"
+    return 0
+  fi
+  return 1
+}
+
 GQL_URL="${INNGEST_GQL_URL:-http://127.0.0.1:8288/v0/gql}"
+# #6407 Defect A — loopback /health endpoint used to CORROBORATE a functions-query failure
+# in LIVENESS_ONLY mode before declaring a hard down. Same loopback server + same /health
+# path that ci-deploy.sh verify_inngest_health gates on (ci-deploy.sh:1002).
+INNGEST_HEALTH_URL="${INNGEST_HEALTH_URL:-http://127.0.0.1:8288/health}"
 # Cost lever (#6258 Deepen Finding 3): raise PAGE_SIZE (lossless round-trip cut) — the ONLY
 # completeness-preserving lever. Never narrow FROM_TS. Env-overridable for tests.
 PAGE_SIZE="${INNGEST_GQL_PAGE_SIZE:-500}"
@@ -91,6 +139,18 @@ NOW_MS="${INVENTORY_NOW_MS:-$(date +%s%3N)}"
 FIXTURE_DIR="${INNGEST_GQL_FIXTURE_DIR:-}"
 REMINDER_FIXTURE_DIR="${INNGEST_REMINDER_FIXTURE_DIR:-}"
 FUNCTIONS_FIXTURE="${INVENTORY_FUNCTIONS_FIXTURE:-}"
+# --- Liveness-only mode (#6374, Defect 2) ---
+# The external inngest health watchdog (.github/workflows/scheduled-inngest-health.yml)
+# invokes this script through the /hooks/inngest-liveness hook with INVENTORY_LIVENESS_ONLY
+# set. In that mode we run ONLY the cheap /v0/gql `functions` liveness query + the
+# durability_state read and SKIP the heavy paginated eventsV2 scan (the 365-day read whose
+# deadline/page-ceiling/pool/gateway faults false-positived as inngest_down while the cron
+# executor kept firing — the #6374 root cause). The heavy full-inventory path is unchanged
+# for the cutover-baseline caller (/hooks/inngest-inventory, no flag). functions fail-loud
+# and durability purity are preserved verbatim; only the eventsV2 scans are elided
+# (event_names / armed_reminders emit as empty arrays — they are cutover-baseline fields,
+# not liveness signals).
+LIVENESS_ONLY="${INVENTORY_LIVENESS_ONLY:-}"
 
 # --- Bounding seams (#6258, ADR-106) ---
 # In-script wall-clock deadline. Default 22s < the outer curl 30s (cutover-inngest.yml:341);
@@ -172,8 +232,8 @@ _pf_timeout_marker() {  # $1=reason(enum) $2=pages $3=pages_timed_out $4=last_cu
 # spool cleaned; the non-zero exit maps to a webhook non-200 (hooks.json.tmpl:140).
 _pf_abort() {  # $1=reason $2=pages $3=pages_timed_out $4=last_curl_exit
   _pf_timeout_marker "$1" "$2" "$3" "$4"
-  echo "inngest-inventory: FATAL preflight scan aborted reason=$1 pages_scanned=$2 (deadline_s=$PREFLIGHT_DEADLINE_S page_ceiling=$MAX_PAGES from=$FROM_TS) — refusing to emit a truncated (false-clean) inventory"
-  echo "ERROR: preflight scan aborted reason=$1 pages_scanned=$2" >&2
+  echo "inngest-inventory: FATAL host_id=$HOST_ID preflight scan aborted reason=$1 pages_scanned=$2 (deadline_s=$PREFLIGHT_DEADLINE_S page_ceiling=$MAX_PAGES from=$FROM_TS) — refusing to emit a truncated (false-clean) inventory"
+  echo "ERROR: host_id=$HOST_ID preflight scan aborted reason=$1 pages_scanned=$2" >&2
   exit 1
 }
 
@@ -261,8 +321,8 @@ run_events_scan() {
       gql_msg=$(printf '%s' "$gql_msg" | _pf_scrub)
       _pf_timeout_marker gql_error "$page" "$timed_out" "$last_curl_exit"
       logger -t "$LOG_TAG" "ERROR: malformed GraphQL response on page $page: errors=$err_msgs data_keys=$data_keys" 2>/dev/null || true
-      echo "inngest-inventory: FATAL malformed GraphQL response on page $page (from=$FROM_TS): ${gql_msg:-eventsV2 missing; check the inngest Time bound / endpoint}"
-      echo "ERROR: malformed GraphQL response on page $page: errors=$err_msgs data_keys=$data_keys" >&2
+      echo "inngest-inventory: FATAL host_id=$HOST_ID malformed GraphQL response on page $page (from=$FROM_TS): ${gql_msg:-eventsV2 missing; check the inngest Time bound / endpoint}"
+      echo "ERROR: host_id=$HOST_ID malformed GraphQL response on page $page: errors=$err_msgs data_keys=$data_keys" >&2
       exit 1
     fi
     # Append this page's edges array as ONE JSON value (one line) to the spool file.
@@ -275,8 +335,8 @@ run_events_scan() {
       if [[ -z "$end_cursor" ]]; then
         _pf_timeout_marker gql_error "$page" "$timed_out" "$last_curl_exit"
         logger -t "$LOG_TAG" "ERROR: pagination hasNextPage=true but endCursor empty on page $page — refusing to truncate" 2>/dev/null || true
-        echo "inngest-inventory: FATAL hasNextPage=true but endCursor empty on page $page — would truncate the inventory"
-        echo "ERROR: pagination hasNextPage=true but empty endCursor on page $page" >&2
+        echo "inngest-inventory: FATAL host_id=$HOST_ID hasNextPage=true but endCursor empty on page $page — would truncate the inventory"
+        echo "ERROR: host_id=$HOST_ID pagination hasNextPage=true but empty endCursor on page $page" >&2
         exit 1
       fi
       # Page ceiling — gate as "about to fetch page > MAX_PAGES WHILE hasNextPage=true" so a
@@ -391,11 +451,54 @@ run_inventory() {
     fn_keys=$(echo "$fn_body" | jq -c '((.data // {}) | keys)' 2>/dev/null || echo '[]')
     _pf_timeout_marker gql_error 0 0 0
     logger -t "$LOG_TAG" "ERROR: /v0/gql functions unreachable or non-array: errors=$fn_errs data_keys=$fn_keys" 2>/dev/null || true
-    echo "inngest-inventory: FATAL /v0/gql functions query failed or non-array (errors=$fn_errs data_keys=$fn_keys); is inngest-server.service up? — refusing to emit a false-clean empty functions baseline"
-    echo "ERROR: /v0/gql functions non-array (errors=$fn_errs data_keys=$fn_keys)" >&2
+    # #6407 Defect A — /health corroboration (LIVENESS_ONLY only). The external watchdog's
+    # cheap /v0/gql functions curl can transiently fail (a transport blip → the
+    # __FETCH_FAILED__ envelope) while inngest-server is UP and processing events. Before
+    # declaring a hard down (→ inngest_down → restart + [ci/inngest-down] P1), corroborate
+    # against the SAME loopback server's /health endpoint (the one ci-deploy.sh
+    # verify_inngest_health gates on):
+    #   /health=200  → the HTTP server IS serving; the GQL read blipped → emit a SOFT DEGRADED
+    #                  sentinel (classifier → functions_query_degraded → NO restart). #6407.
+    #   /health !=200 → wedged/stopped → keep the FATAL sentinel (inngest_down → restart, which
+    #                  recovers a wedge). is-active/ExecStart are NOT specificity-correct here
+    #                  (both read for a wedged/stopped unit); /health is the only same-signal-
+    #                  class corroborator. The full-inventory (non-liveness) caller keeps the
+    #                  original fail-loud FATAL — corroboration is a liveness-verdict concern only.
+    if [[ -n "$LIVENESS_ONLY" ]]; then
+      local health_code durability_state_dg verdict_mode
+      health_code="${INVENTORY_INNGEST_HEALTH_CODE-$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$INNGEST_HEALTH_URL" 2>/dev/null || echo 000)}"
+      durability_state_dg=$(derive_durability_state)
+      if [[ "$health_code" == "200" ]]; then verdict_mode="degraded"; else verdict_mode="down"; fi
+      # #6407 Defect C — SOLEUR_INNGEST_LIVENESS_VERDICT marker (journald-only; tag
+      # inngest-inventory → Vector Source 4 → Better Stack). Enum/count fields only (mode +
+      # HTTP code + count + durability enum) — never a raw GraphQL errors[].message (#5503 purity).
+      logger -t "$LOG_TAG" "SOLEUR_INNGEST_LIVENESS_VERDICT mode=$verdict_mode health_code=$health_code functions=0 durability=$durability_state_dg host_id=$HOST_ID" 2>/dev/null || true
+      if [[ "$health_code" == "200" ]]; then
+        echo "inngest-inventory: DEGRADED host_id=$HOST_ID /v0/gql functions query transiently unreachable but /health=200 (errors=$fn_errs) — soft, no restart"
+        echo "DEGRADED: host_id=$HOST_ID /v0/gql functions transiently unreachable, /health=200 (errors=$fn_errs)" >&2
+        exit 1
+      fi
+    fi
+    echo "inngest-inventory: FATAL host_id=$HOST_ID /v0/gql functions query failed or non-array (errors=$fn_errs data_keys=$fn_keys); is inngest-server.service up? — refusing to emit a false-clean empty functions baseline"
+    echo "ERROR: host_id=$HOST_ID /v0/gql functions non-array (errors=$fn_errs data_keys=$fn_keys)" >&2
     exit 1
   fi
   functions=$(echo "$fn_body" | jq -c '[ .data.functions[] | (.name // .slug // .id // empty) ] | sort')
+
+  # --- Liveness-only short-circuit (#6374): skip the heavy eventsV2 scans entirely.
+  # functions (above) + durability_state are the ONLY liveness signals; event_names /
+  # armed_reminders are cutover-baseline fields, emitted empty here. This decouples the
+  # liveness verdict from the 365-day read path whose faults caused the #6374 false-positive.
+  if [[ -n "$LIVENESS_ONLY" ]]; then
+    local durability_state_lo fn_count_lo
+    durability_state_lo=$(derive_durability_state)
+    fn_count_lo=$(echo "$functions" | jq 'length')
+    logger -t "$LOG_TAG" "liveness: functions=$fn_count_lo durability=$durability_state_lo mode=liveness_only" 2>/dev/null || true
+    _pf_done_marker
+    jq -nc --argjson f "$functions" --arg d "$durability_state_lo" --arg hid "$HOST_ID" \
+      '{functions:$f, event_names:[], armed_reminders:[], durability_state:$d, host_id:$hid}'
+    return 0
+  fi
 
   # --- bounded scans: spool + collapse via file I/O (no argv size limit, #5523) ---
   local pf_tmp
@@ -442,11 +545,18 @@ run_inventory() {
   _pf_done_marker
 
   # Single pure-JSON object on stdout (the webhook body the workflow jq-parses).
-  jq -nc --argjson f "$functions" --argjson e "$event_names" --argjson r "$armed" --arg d "$durability_state" \
-    '{functions:$f, event_names:$e, armed_reminders:$r, durability_state:$d}'
+  jq -nc --argjson f "$functions" --argjson e "$event_names" --argjson r "$armed" --arg d "$durability_state" --arg hid "$HOST_ID" \
+    '{functions:$f, event_names:$e, armed_reminders:$r, durability_state:$d, host_id:$hid}'
 }
 
 # Run only when executed directly — sourcing (the unit test) must NOT hit the network.
+# HOST_ID resolves HERE, inside the guard, for exactly that reason: a top-level assignment
+# would fire resolve_host_id's `curl --max-time 3` on every source. `|| true` is load-bearing
+# under `set -euo pipefail` — resolve_host_id return-1s when metadata is unreachable AND
+# /etc/machine-id is unreadable, and a bare assignment would abort the hook into a non-200,
+# losing the whole liveness verdict to protect one field.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  HOST_ID="$(resolve_host_id || true)"
+  readonly HOST_ID
   run_inventory
 fi

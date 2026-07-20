@@ -15,6 +15,36 @@
 #                      is NOT the right source)
 set -euo pipefail
 
+# REDEPLOY NONCE (#6178, 2026-07-10). deploy_pipeline_fix.triggers_replace hashes
+# THIS file's content (server.tf), so bumping the nonce forces terraform to recreate
+# the terraform_data and re-run this push — re-delivering EVERY webhook-managed file.
+# THIS file is NOT hashed by infra_config_handler_bootstrap, so bumping the nonce
+# re-runs ONLY the push (deploy_pipeline_fix) and does NOT restart the webhook —
+# which is the whole point of nonce-2 below.
+#
+# nonce-1 (probes absent, 13-file host): recreated BOTH deploy_pipeline_fix AND
+# handler_bootstrap in one apply. handler_bootstrap `systemctl restart webhook`
+# (server.tf) completed ~10ms BEFORE deploy_pipeline_fix's push fired, so the push
+# RACED the webhook restart: it got HTTP 202 from the restarting webhook but the
+# async handler exec was disrupted — no files written, infra-config-status stayed
+# stale (13/13). The new 15-entry handler + fresh hooks.json DID land via
+# handler_bootstrap's SSH path, so the host is now primed for a clean push.
+# nonce-2 changes ONLY this file → recreates ONLY deploy_pipeline_fix → the push
+# runs against the now-stable webhook + current handler/hooks.json → delivers all
+# 15 files (incl. the two cutover probes) in a single non-racing push.
+#
+# nonce-3 (#6594 recovery, 2026-07-17). #6594: the "Verify infra-config apply" gate
+# was count-only, so a stale host (frozen on ci-deploy.sh sha256=2208300a, #6577's
+# instrument never delivered) passed 15/15 and terraform latched the non-delivery as
+# success — a LATCHED false-green (a plain re-run is a no-op: no trigger hash change).
+# PR-B's content assert (infra-config-gate.sh) would go truthfully RED against that
+# stale host. This nonce bump is the recovery: it changes ONLY this file → recreates
+# ONLY deploy_pipeline_fix → re-fires the push (no bridge, no restart, no nonce-1 race)
+# → re-delivers the current 15 files → the new content assert then verifies each
+# byte-for-byte. The merge IS the authorization; no -replace, no workflow_dispatch, no
+# SSH. Gated on PR-A (the tunnel origin-relative pin), which was applied and verified
+# on prod 2026-07-17 before this landed.
+#   redeploy-nonce: 6594-content-assert-recovery-3
 for var in WEBHOOK_SECRET CF_ACCESS_ID CF_ACCESS_SECRET APP_DOMAIN_BASE INFRA_DIR HOOKS_JSON_B64; do
   if [[ -z "${!var:-}" ]]; then
     echo "ERROR: required env var $var is missing or empty" >&2

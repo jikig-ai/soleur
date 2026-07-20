@@ -148,6 +148,11 @@ add rule ip filter SOLEUR-EGRESS udp dport 53 counter drop comment "soleur-egres
 add rule ip filter SOLEUR-EGRESS tcp dport 53 limit rate 10/minute burst 50 packets log prefix "egress-dns-exfil: " comment "soleur-egress: dns exfil log tcp"
 add rule ip filter SOLEUR-EGRESS tcp dport 53 counter drop comment "soleur-egress: dns exfil drop tcp"
 add rule ip filter SOLEUR-EGRESS ip daddr $BRIDGE_GW tcp dport 8288 accept comment "soleur-egress: host-gateway inngest"
+# 10.0.1.40 = inngest-host.tf:33 inngest_private_ip (bash literal, NOT injected from the
+# Terraform local; if that IP changes, update this rule + inngest-registry-probe.sh +
+# inngest-doublefire-probe.sh together). Dedicated Inngest host egress for the #6178 /
+# ADR-100 cutover (INNGEST_BASE_URL repoint to http://10.0.1.40:8288, PR #6348).
+add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.40 tcp dport 8288 accept comment "soleur-egress: dedicated inngest host (#6178)"
 add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "soleur-egress: allowlist"
 add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow_cidr accept comment "soleur-egress: cidr allowlist (github git LB ranges)"
 add rule ip filter SOLEUR-EGRESS limit rate 10/minute burst 50 packets log prefix "egress-blocked: " level notice comment "soleur-egress: default drop log"

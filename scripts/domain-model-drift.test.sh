@@ -77,9 +77,15 @@ t5_repo="$(mktemp -d)"; t5_mig="$t5_repo/apps/web-platform/supabase/migrations";
 # concatenation so the file itself carries no contiguous real-looking token pattern
 # that push-protection would flag — the runtime string still matches the redactor)
 printf 'CREATE POLICY leaky ON t FOR SELECT USING (token = %s);\n' "'sk-ant-$(printf 'api03')-XXXXXXXXXXXXXXXXXXXX'" > "$t5_mig/001.sql"
-bash "$DRIFT" extract --repo "$t5_repo" >/dev/null 2>&1
+# Private TMPDIR so the extract-mode (MAIN SHELL) spool files are attributable: this is
+# the `exit 3` secret-refuse return path, where the spools are allocated but never written.
+t5_tmp="$(mktemp -d)"
+TMPDIR="$t5_tmp" bash "$DRIFT" extract --repo "$t5_repo" >/dev/null 2>&1
 rc5=$?
 [[ "$rc5" -ne 0 ]] && pass || fail "T5: secret-shaped literal did not trigger fail-closed refuse (exit=$rc5)"
+# Spool residue on the exit-3 path, EXTRACT mode (emit_extract_json runs in the main shell).
+t5_residue="$(find "$t5_tmp" -mindepth 1 | wc -l)"
+[[ "$t5_residue" -eq 0 ]] && pass || fail "T5: extract-mode exit-3 leaked $t5_residue spool file(s)"
 
 # --- Test 6: DO $$ / EXECUTE format() → blind_spots (never silent zero) -----
 t6_repo="$(mktemp -d)"; t6_mig="$t6_repo/apps/web-platform/supabase/migrations"; mkdir -p "$t6_mig"
@@ -230,8 +236,15 @@ rc16=$?
 t16b_repo="$(mktemp -d)"; t16b_mig="$t16b_repo/apps/web-platform/supabase/migrations"; mkdir -p "$t16b_mig"
 printf 'CREATE POLICY leaky ON t FOR SELECT USING (k = %s);\n' "'sk-ant-$(printf api03)-YYYYYYYYYYYYYYYY'" > "$t16b_mig/001.sql"
 t16b_reg="$t16b_repo/register.md"; printf '# R\n## Business Rules\n| ID | Rule | Statement | Source |\n|---|---|---|---|\n' > "$t16b_reg"
-bash "$DRIFT" drift --repo "$t16b_repo" --register "$t16b_reg" >/dev/null 2>&1
+# Private TMPDIR — DRIFT mode runs emit_extract_json under `$( )`, so this is the
+# SUBSHELL half of the residue pair. A function-local trap (or a _TMPFILES append made
+# inside the function) would be lost here while T5's main-shell case still passed:
+# the two modes together are the only thing that discriminates the Phase 2.2 defect.
+t16b_tmp="$(mktemp -d)"
+TMPDIR="$t16b_tmp" bash "$DRIFT" drift --repo "$t16b_repo" --register "$t16b_reg" >/dev/null 2>&1
 [[ $? -eq 3 ]] && pass || fail "T16b: drift did not fail-closed on secret in migration"
+t16b_residue="$(find "$t16b_tmp" -mindepth 1 | wc -l)"
+[[ "$t16b_residue" -eq 0 ]] && pass || fail "T16b: drift-mode exit-3 leaked $t16b_residue spool file(s) (subshell cleanup path)"
 
 # --- Test 17: drift FAIL-OPEN guard — no migrations dir → exit 2, loud banner ---
 t17_repo="$(mktemp -d)"; mkdir -p "$t17_repo/src"; echo "x" > "$t17_repo/src/a.go"
@@ -272,6 +285,49 @@ echo "$out19" | jq -e 'all(.facts[]; (.anchor | contains("public.")) | not)' >/d
 echo "$out19" | jq -e '[.facts[] | select(.anchor | contains("› bar.bar_pkey"))] | length == 1' >/dev/null 2>&1 && pass || fail "T19b: derived pkey object still schema-qualified"
 # (c) non-default schema (storage.) is PRESERVED
 echo "$out19" | jq -e '[.facts[] | select(.anchor | contains("storage.objects"))] | length >= 1' >/dev/null 2>&1 && pass || fail "T19c: storage. schema wrongly stripped"
+
+# --- Test 20: argv-ceiling regression — facts payload EXCEEDS MAX_ARG_STRLEN (#6720) ---
+# The accumulator was bound as ONE jq `--argjson` argument. The kernel caps a SINGLE
+# argv argument at MAX_ARG_STRLEN = 131,072 B (NOT ARG_MAX, the 2 MB argv+envp total);
+# bisected on this host: 131,071 B passes, 131,072 B fails E2BIG. `--rawfile` moves the
+# payload to file I/O, which has no per-argument limit.
+#
+# ROW COUNT IS NOT THE LOAD-BEARING PARAMETER — BYTES PER FACT IS. 1200 *minimal* rows
+# (`policy\tm1\tt1\tp`) measure only 75,782 B: UNDER the ceiling, so that fixture exits 0
+# and PASSES ON UNMODIFIED CODE — vacuous. These rows are production-shaped (full
+# migration anchor + a real `USING (...)` predicate), which is what carries the bytes.
+t20_rows=1200
+t20_repo="$(mktemp -d)"; t20_mig="$t20_repo/apps/web-platform/supabase/migrations"; mkdir -p "$t20_mig"
+{
+  for i in $(seq 1 "$t20_rows"); do
+    printf 'CREATE POLICY workspace_records_select_for_active_org_member_%04d ON public.workspace_membership_records_%04d FOR SELECT USING (public.is_active_workspace_member(workspace_membership_records_%04d.workspace_id, auth.uid()) AND workspace_membership_records_%04d.deleted_at IS NULL);\n' "$i" "$i" "$i" "$i"
+  done
+} > "$t20_mig/20260719000000_bulk_policies.sql"
+# minimum-cardinality guard: an empty/short generator would make every assert below vacuous
+t20_srclines="$(grep -c '^CREATE POLICY ' "$t20_mig/20260719000000_bulk_policies.sql")"
+[[ "$t20_srclines" -eq "$t20_rows" ]] && pass || fail "T20: fixture generator emitted $t20_srclines rows (want $t20_rows) — asserts below would be vacuous"
+
+t20_tmp="$(mktemp -d)"
+out20="$(TMPDIR="$t20_tmp" bash "$DRIFT" extract --repo "$t20_repo" 2>/dev/null)"
+rc20=$?
+[[ "$rc20" -eq 0 ]] && pass || fail "T20: >ceiling extract exit=$rc20 (want 0; pre-fix this dies 'Argument list too long')"
+
+# FIXTURE ADEQUACY, asserted IN-SUITE so this test cannot silently degrade to vacuous as
+# the fixture, the extractor's field set, or jq's encoding changes. A PR-body demonstration
+# is unrunnable post-merge — there is no pre-fix code left to run against.
+t20_fj_bytes="$(printf '%s' "$out20" | jq -c '.facts' | wc -c)"
+[[ "$t20_fj_bytes" -gt 131072 ]] && pass || fail "T20: fixture is only ${t20_fj_bytes} B — below MAX_ARG_STRLEN (131072), this test proves nothing"
+
+# EXACT count, asserted RELATIONALLY against the source row count — not a literal pin.
+# This is fully discriminating against the --slurpfile array-of-arrays undercount, which
+# would yield 1, and it stays correct as the fixture grows.
+t20_facts="$(printf '%s' "$out20" | jq '.facts | length')"
+[[ "$t20_facts" -eq "$t20_srclines" ]] && pass || fail "T20: .facts|length=$t20_facts != source row count $t20_srclines (undercount / truncation)"
+# the payload really is policy facts carrying predicates, not empty shells
+printf '%s' "$out20" | jq -e --argjson n "$t20_rows" '[.facts[] | select(.kind=="policy" and (.predicate | contains("is_active_workspace_member")))] | length == $n' >/dev/null 2>&1 && pass || fail "T20: policy predicates not preserved at >ceiling size"
+# success path leaves no spool residue either (T5/T16b cover the exit-3 paths)
+t20_residue="$(find "$t20_tmp" -mindepth 1 | wc -l)"
+[[ "$t20_residue" -eq 0 ]] && pass || fail "T20: successful extract leaked $t20_residue spool file(s)"
 
 echo "domain-model-drift.test.sh: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

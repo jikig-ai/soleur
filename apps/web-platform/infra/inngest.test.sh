@@ -123,15 +123,17 @@ HEARTBEAT_BLOCK=$(awk '/cat > "\$HEARTBEAT_UNIT" <</,/^HEARTBEATEOF$/' "$BOOTSTR
 # Reference the block BY NAME ("$HEARTBEAT_BLOCK"), never by embedding its
 # value ('$HEARTBEAT_BLOCK'): the block's comments contain apostrophes
 # (e.g. "inngest-server.service's"), which break the single-quoted eval form.
-# #6178: the heartbeat unit doppler project is templated (${DOPPLER_PROJECT}, an
-# UNQUOTED-heredoc expansion — resolves at write time to the default soleur on the web
-# host, or soleur-inngest on the dedicated host). Source carries the literal ${DOPPLER_PROJECT}.
-assert "heartbeat unit uses doppler run (templated \${DOPPLER_PROJECT})" \
-  "[[ -n \"\$HEARTBEAT_BLOCK\" ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE 'run --project [\$][{]DOPPLER_PROJECT[}] --config prd'"
+# #6555: the heartbeat unit dropped `--project` — it resolves the Doppler project from
+# EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime, not a flag. The
+# ExecStart is `doppler run --config prd -- ${HEARTBEAT_SCRIPT}` with NO --project.
+assert "heartbeat unit uses doppler run --config prd with NO --project (#6555)" \
+  "[[ -n \"\$HEARTBEAT_BLOCK\" ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE 'run --config prd' && ! printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^ExecStart=.*--project'"
 assert "heartbeat unit ExecStart is exactly one line" \
   "[[ \$(printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
-assert "heartbeat unit ExecStart wraps HEARTBEAT_SCRIPT under doppler" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^ExecStart=.* run --project [\$][{]DOPPLER_PROJECT[}] --config prd -- \\\$\\{HEARTBEAT_SCRIPT\\}'"
+assert "heartbeat unit ExecStart wraps HEARTBEAT_SCRIPT under doppler run --config prd" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^ExecStart=.* run --config prd -- \\\$\\{HEARTBEAT_SCRIPT\\}'"
+assert "heartbeat unit reads EnvironmentFile=/etc/default/inngest-server (project delivery, #6555)" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qxF 'EnvironmentFile=/etc/default/inngest-server'"
 assert "DOPPLER_PROJECT is exported (so inngest-redis-bootstrap.sh inherits it), default soleur" \
   "grep -qF 'export DOPPLER_PROJECT=\"\${DOPPLER_PROJECT:-soleur}\"' '$BOOTSTRAP_SH'"
 DOPPLER_BIN_LINE=$(grep -nE 'DOPPLER_BIN=.*command -v doppler' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
@@ -141,6 +143,570 @@ DOPPLER_BIN_LINE=$(grep -nE 'DOPPLER_BIN=.*command -v doppler' "$BOOTSTRAP_SH" 2
 HEARTBEAT_UNIT_LINE=$(grep -nE 'cat > "\$HEARTBEAT_UNIT"' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
 assert "DOPPLER_BIN resolved via command -v before HEARTBEAT_UNIT write" \
   "[[ -n '$DOPPLER_BIN_LINE' && -n '$HEARTBEAT_UNIT_LINE' && '$DOPPLER_BIN_LINE' -lt '$HEARTBEAT_UNIT_LINE' ]]"
+
+# #6536 / FR4: without SyslogIdentifier=, systemd derives SYSLOG_IDENTIFIER from the
+# ExecStart basename -> `doppler`, which matches NO vector.toml source. The unit's own
+# stderr (doppler's AND curl's) then never leaves the host, and a
+# _SYSTEMD_UNIT='inngest-heartbeat.service' query returns zero rows -- the state that made
+# 3,724 failures undiagnosable off-box. This retag onto Source 4's `inngest-heartbeat`
+# channel is what makes the "no row at all + unit failed" signature readable with no SSH.
+assert "heartbeat unit sets SyslogIdentifier=inngest-heartbeat (AC1, #6536)" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-heartbeat$'"
+
+# #6556 Part 2 — the OnFailure alarm unit (push-less, queryable-only). The heartbeat unit
+# declares OnFailure=; the target unit reuses the inngest-heartbeat Source 4 tag and emits a
+# bare `logger` ERR line with NO `doppler run` wrapper (a wrapper would hardcode a project,
+# wrong on the soleur-inngest host, re-introducing the #6555 project-resolution surface).
+assert "heartbeat unit declares OnFailure=inngest-heartbeat-failure-log.service (#6556)" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^OnFailure=inngest-heartbeat-failure-log\\.service$'"
+FAILLOG_BLOCK=$(awk '/cat > "\$HEARTBEAT_FAILURE_LOG_UNIT" <</,/^FAILLOGEOF$/' "$BOOTSTRAP_SH")
+assert "failure-log unit block extraction is non-empty (non-vacuity)" \
+  "[[ -n \"\$FAILLOG_BLOCK\" ]]"
+assert "failure-log unit is Type=oneshot" \
+  "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -qE '^Type=oneshot$'"
+assert "failure-log unit reuses SyslogIdentifier=inngest-heartbeat (no new Source 4 entry)" \
+  "printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-heartbeat$'"
+# Anchor on the ExecStart LINE (not the whole block, whose comments mention doppler/--project):
+# the command must BE /usr/bin/logger and must NOT be a `doppler run`/`--project` wrapper.
+FAILLOG_EXECSTART=$(printf '%s\n' "$FAILLOG_BLOCK" | grep -E '^ExecStart=')
+assert "failure-log ExecStart is exactly one line" \
+  "[[ \$(printf '%s\n' \"\$FAILLOG_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
+assert "failure-log ExecStart command is /usr/bin/logger (bare)" \
+  "printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE '^ExecStart=/usr/bin/logger '"
+assert "failure-log ExecStart carries NO doppler run / --project wrapper (#6555 surface)" \
+  "! printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE 'doppler|--project'"
+assert "failure-log ExecStart emits at ERR priority on the inngest-heartbeat tag" \
+  "printf '%s\n' \"\$FAILLOG_EXECSTART\" | grep -qE '^ExecStart=/usr/bin/logger -t inngest-heartbeat -p err '"
+
+# #6536 ROUND 2: EVERY doppler-wrapped unit MUST set PrivateTmp=true.
+#
+# Not a style rule — a correctness one. /etc/default/inngest-server sets
+# DOPPLER_CONFIG_DIR=/tmp/.doppler for all of them, and cloud-init-inngest.yml's boot
+# isolation self-check runs `doppler secrets` as ROOT against that same path
+# (cloud-init-inngest.yml:212/226/289), so /tmp/.doppler is ROOT-OWNED from first boot.
+# A unit with a private /tmp never sees it and the CLI recreates it as `deploy`; a unit on
+# the shared /tmp gets `permission denied`, and `doppler run` dies BEFORE exec — the child
+# never runs. That is measured, not theorised: it is verbatim what the heartbeat's channel
+# shipped on the fresh host, and it is why this unit failed every 60s for 3 days while its
+# two siblings (which already set PrivateTmp) were fine.
+#
+# ALL-MEMBERS, derived — not a spot-check of the one unit we just fixed. The heartbeat was
+# the lone omission out of three; the next doppler unit added here inherits the same trap,
+# and nothing else would catch it (the failure is invisible off-box by construction — that
+# is #6536's whole thesis). Enumerating from the source means a NEW unit is guarded the day
+# it lands, not the day it breaks.
+PRIVATE_TMP_VIOLATORS=$(python3 - "$BOOTSTRAP_SH" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1]).read()
+bad = []
+# Each unit is written by `cat > "$VAR" <<'MARKER' ... MARKER`.
+for m in re.finditer(r'cat > "?\$\{?(\w+)\}?"? <<\'?(\w+EOF)\'?\n(.*?)\n\2', src, re.S):
+    var, body = m.group(1), m.group(3)
+    if '[Service]' not in body:
+        continue
+    execstart = re.search(r'^ExecStart=(.*)$', body, re.M)
+    if not execstart:
+        continue
+    # doppler-wrapped = the ExecStart runs the doppler CLI (literally or via ${DOPPLER_BIN}).
+    if 'doppler' not in execstart.group(1).lower() and 'DOPPLER_BIN' not in execstart.group(1):
+        continue
+    if not re.search(r'^PrivateTmp=true$', body, re.M):
+        bad.append(var)
+print(' '.join(bad))
+PYEOF
+)
+assert "every doppler-wrapped unit sets PrivateTmp=true (#6536 — root-owned /tmp/.doppler kills the child before exec)" \
+  "[[ -z '$PRIVATE_TMP_VIOLATORS' ]]"
+if [[ -n "$PRIVATE_TMP_VIOLATORS" ]]; then
+  echo "        VIOLATORS: $PRIVATE_TMP_VIOLATORS"
+  echo "        These units run doppler with DOPPLER_CONFIG_DIR=/tmp/.doppler on the SHARED"
+  echo "        /tmp, where cloud-init's root-run boot self-check already created that dir."
+  echo "        doppler run will exit 'permission denied' BEFORE exec and the child never runs."
+fi
+# Non-vacuity: the enumeration must actually FIND the units. A regex that matches nothing
+# reports zero violators and passes forever — the exact false-green this guard exists to
+# prevent. Three doppler units ship today (heartbeat, inngest-server, vector).
+DOPPLER_UNIT_COUNT=$(python3 - "$BOOTSTRAP_SH" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1]).read()
+n = 0
+for m in re.finditer(r'cat > "?\$\{?(\w+)\}?"? <<\'?(\w+EOF)\'?\n(.*?)\n\2', src, re.S):
+    body = m.group(3)
+    if '[Service]' not in body:
+        continue
+    e = re.search(r'^ExecStart=(.*)$', body, re.M)
+    if e and ('doppler' in e.group(1).lower() or 'DOPPLER_BIN' in e.group(1)):
+        n += 1
+print(n)
+PYEOF
+)
+assert "PrivateTmp guard is non-vacuous: it found >=3 doppler-wrapped units (found $DOPPLER_UNIT_COUNT)" \
+  "[[ '$DOPPLER_UNIT_COUNT' -ge 3 ]]"
+
+# --- #6536 / FR3: heartbeat ping-script render split (@@DARK_ARM@@) ---
+echo ""
+echo "--- Heartbeat ping-script render split (@@DARK_ARM@@, #6536) ---"
+
+PING_TMP="$(mktemp -d)"
+trap 'rm -rf "$PING_TMP"' EXIT
+
+# The bearer-URL control: :156-159 indirects the curl through a script file so systemd never
+# journals a resolved ExecStart=. That control survives ONLY while the heredoc stays QUOTED --
+# unquoting it to expand a dark arm would also expand $INNGEST_HEARTBEAT_URL into a 0755
+# world-readable file. AC3's canary asserts runtime OUTPUT, not file CONTENTS, so AC3 is
+# structurally blind to that leak. This assertion is the only guard for it.
+# shellcheck disable=SC2016
+assert "ping-script heredoc is QUOTED (bearer URL never baked into the 0755 file)" \
+  "grep -qF 'cat > \"\$HEARTBEAT_SCRIPT\" <<'\"'\"'HEARTBEATSCRIPTEOF'\"'\"'' '$BOOTSTRAP_SH'"
+
+PING_BODY="$PING_TMP/ping-body.sh"
+# shellcheck disable=SC2016
+awk '/^cat > "\$HEARTBEAT_SCRIPT" <</{f=1;next} /^HEARTBEATSCRIPTEOF$/{f=0} f' \
+  "$BOOTSTRAP_SH" > "$PING_BODY"
+
+# Extract the PRODUCTION render block verbatim between its markers and execute it, rather
+# than re-typing the sed expressions here: a re-typed copy drifts, and the guard would then
+# pass against a broken bootstrap (the drift-guard-extraction-mirrors-the-producer rule).
+DARK_ARM_RENDER_BLOCK=$(
+  awk '/^# @@DARK_ARM@@ render begin/{f=1;next} /^# @@DARK_ARM@@ render end/{f=0} f' "$BOOTSTRAP_SH"
+)
+
+assert "ping-script heredoc body extracted (carries the curl exec)" \
+  "[[ -s '$PING_BODY' ]] && grep -qF 'exec /usr/bin/curl' '$PING_BODY'"
+# Anchored on the STANDALONE sentinel line, mirroring the production sed's own `^...$`
+# anchors: the sentinel is also named in the heredoc's explanatory comment, so a bare-token
+# grep would match the prose and pass vacuously against a deleted sentinel.
+assert "ping-script carries the @@DARK_ARM@@ sentinel line (render-time split, not a runtime if)" \
+  "grep -qE '^@@DARK_ARM@@$' '$PING_BODY'"
+assert "@@DARK_ARM@@ render block extracted from the bootstrap (non-empty)" \
+  "[[ -n \"\$DARK_ARM_RENDER_BLOCK\" ]] && printf '%s\n' \"\$DARK_ARM_RENDER_BLOCK\" | grep -qF 'sed -i'"
+
+# LOG_TAG must be a REAL assignment, never a bare `logger -t inngest-heartbeat` literal:
+# vector-pii-scrub.test.sh:392-404 derives EXPECTED_TAGS from
+# `^\s*(readonly\s+)?LOG_TAG="..."` across infra/*.sh, and its `logger -t` probe is
+# heredoc-blind -- so a literal pulls this file into the fixture's loop and yields NO tag,
+# hard-failing that fixture's exact-set equality.
+assert "ping script assigns LOG_TAG=\"inngest-heartbeat\" (drift-fixture contract)" \
+  "grep -qE '^LOG_TAG=\"inngest-heartbeat\"$' '$PING_BODY'"
+# Anchored on the CALL shape (`logger -t <bare-word>`), not the tag token: the heredoc's own
+# comment explains this contract, and a token-grep would false-match that prose.
+assert "ping script never inlines the tag literal in a logger call (drift-fixture contract)" \
+  "! grep -qE '^[[:space:]]*logger[[:space:]]+-t[[:space:]]+[a-z]' '$PING_BODY'"
+
+# `logger` is PATH-resolved by the ping script, so a stub records the emitted rows.
+# `curl` is deliberately NOT stubbed: the script execs the ABSOLUTE /usr/bin/curl, so the
+# URL-present cases drive the real binary against a closed loopback port -- rc=7 in ~0ms,
+# no DNS and no network, which keeps the leg hermetic in CI.
+mkdir -p "$PING_TMP/bin"
+cat > "$PING_TMP/bin/logger" <<'LOGGEREOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$LOGGER_OUT"
+LOGGEREOF
+chmod +x "$PING_TMP/bin/logger"
+
+# `log()` is the bootstrap's own stderr helper, defined far above the render block; stub it
+# so the extracted block runs standalone. This is the ONLY seam the extraction stubs.
+render_ping_script() {
+  local project="$1" out="$2"
+  cp "$PING_BODY" "$out"
+  DOPPLER_PROJECT="$project" HEARTBEAT_SCRIPT="$out" \
+    bash -c "log() { :; }; $DARK_ARM_RENDER_BLOCK"
+}
+
+run_ping() {
+  # $1 = rendered script, $2 = INNGEST_HEARTBEAT_URL, $3 = logger sink
+  : > "$3"
+  PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$3" INNGEST_HEARTBEAT_URL="$2" \
+    sh "$1" 2>&1
+}
+
+DEDICATED_PING="$PING_TMP/ping-dedicated.sh"
+WEB_PING="$PING_TMP/ping-web.sh"
+render_ping_script "soleur-inngest" "$DEDICATED_PING"
+render_ping_script "soleur" "$WEB_PING"
+
+assert "rendered scripts are POSIX-clean under sh -n (both hosts)" \
+  "sh -n '$DEDICATED_PING' && sh -n '$WEB_PING'"
+assert "no unrendered @@DARK_ARM@@ sentinel LINE survives either render" \
+  "! grep -qE '^@@DARK_ARM@@$' '$DEDICATED_PING' && ! grep -qE '^@@DARK_ARM@@$' '$WEB_PING'"
+# The sed replacement's own logger call must use "$LOG_TAG" too -- the rendered dedicated
+# script is the artifact the drift fixture's contract ultimately has to hold for.
+assert "rendered dark arm calls logger via \"\$LOG_TAG\", not an inlined tag literal" \
+  "! grep -qE '^[[:space:]]*logger[[:space:]]+-t[[:space:]]+[a-z]' '$DEDICATED_PING'"
+
+# AC5b case 1 -- dedicated render, URL absent: exit 0 + exactly one url_present=no row.
+DED_LOG="$PING_TMP/logger-dedicated-absent.txt"
+DED_ABSENT_OUT=$(run_ping "$DEDICATED_PING" "" "$DED_LOG") && DED_ABSENT_RC=0 || DED_ABSENT_RC=$?
+assert "AC5b/1 dedicated render + URL absent -> exit 0 (was rc=2, the 60s storm)" \
+  "[[ '$DED_ABSENT_RC' -eq 0 ]]"
+assert "AC5b/1 dedicated render + URL absent -> exactly one url_present=no row (never silent)" \
+  "[[ \$(grep -c 'url_present=no' '$DED_LOG') -eq 1 ]]"
+assert "AC5b/1 dedicated render + URL absent -> curl never ran (no curl error on output)" \
+  "! printf '%s' \"\$DED_ABSENT_OUT\" | grep -qi 'curl'"
+
+# --- #6617b (A6): the dark arm is RATE-LIMITED, not ELIMINATED (plan CF-9) ---
+# The dark arm fires every 60s and each fire ships a row through Source 4 (which applies no
+# PRIORITY filter): ~1,440 rows/day against a ~25k/day Better Stack quota, for a message whose
+# content never changes. The obvious fix -- emit once per boot, or only on transition -- is the
+# one ADR-117 forbids: it deletes the positive control, after which a dead pusher and a healthy
+# quiet one are the same observation (no rows), which is #6617 itself. So: a LOW PERIODIC
+# CADENCE. ~24 rows/day, and the host still says "I am alive and deliberately dark" every hour.
+#
+# Asserted BEHAVIOURALLY against the real rendered script, not by grepping for a constant: the
+# property is "repeat fires inside the window emit once AND the window reopens", and only
+# executing it can distinguish rate-limiting from suppression.
+echo ""
+echo "--- #6617b (A6): dark-arm hourly rate limit (CF-9 positive control preserved) ---"
+A6_STAMP="$PING_TMP/a6-run/dark.stamp"
+mkdir -p "$(dirname "$A6_STAMP")"
+A6_LOG="$PING_TMP/logger-a6.txt"
+: > "$A6_LOG"
+rm -f "$A6_STAMP"
+a6_fire() {
+  PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$A6_LOG" INNGEST_HEARTBEAT_URL="" \
+    INNGEST_HEARTBEAT_DARK_STAMP="$A6_STAMP" sh "$DEDICATED_PING" >/dev/null 2>&1
+}
+a6_fire && A6_RC1=0 || A6_RC1=$?
+a6_fire; a6_fire; a6_fire
+A6_BURST_ROWS=$(grep -c 'url_present=no' "$A6_LOG" || true)
+assert "A6 dark arm still exits 0 (the #6536 storm fix is intact)" \
+  "[[ '$A6_RC1' -eq 0 ]]"
+assert "A6 four fires inside one window emit exactly ONE row (was one per 60s fire)" \
+  "[[ '$A6_BURST_ROWS' -eq 1 ]]"
+# CF-9 -- the load-bearing half. Age the stamp past the interval: the marker MUST return. An
+# assertion that only checks suppression passes just as happily against "emit once, ever",
+# which is the elimination this rejects.
+printf '%s' "$(( $(date +%s) - 7200 ))" > "$A6_STAMP"
+a6_fire
+A6_AFTER_ROWS=$(grep -c 'url_present=no' "$A6_LOG" || true)
+assert "A6/CF-9 an aged stamp RE-EMITS (rate-limited, not transition-only/once-per-boot)" \
+  "[[ '$A6_AFTER_ROWS' -eq 2 ]]"
+# The window is an hour, not an arbitrary number: pin it so a later edit to 24h (which would
+# pass both behavioural legs above) has to justify itself.
+assert "A6 the dark-arm window is 3600s (hourly)" \
+  "grep -qE '^[[:space:]]*_interval=\\\$\\{INNGEST_HEARTBEAT_DARK_INTERVAL:-3600\\}$' '$PING_BODY'"
+# ...but that grep pins the ASSIGNMENT LINE, and nothing in it reaches the `-ge "$_interval"`
+# comparison the dark arm actually runs. Measured: mutating that comparison to a literal
+# `-ge 60` restores the full ~1,440 rows/day bug and still passes 138/138 here, because every
+# leg above uses inputs (0s and 7200s) that fall on the same side of both windows.
+#
+# Half a window is the discriminating input: 1800s is >= 60 but < 3600, so a too-small window
+# re-emits and the real one stays silent. Deterministic — the stamp is computed relative to
+# now, so there is no sleep and no wall-clock coupling.
+printf '%s' "$(( $(date +%s) - 1800 ))" > "$A6_STAMP"
+a6_fire
+assert "A6/CF-9 a half-window-old stamp does NOT re-emit (the CONSUMED window is >=3600, not 60s)" \
+  "[[ \$(grep -c 'url_present=no' '$A6_LOG') -eq 2 ]]"
+
+# The override seam: dark_arm_emit_due declares INNGEST_HEARTBEAT_DARK_INTERVAL, and the test
+# harness above names it in a comment, but no leg ever DRIVES it — so a comparison against a
+# hardcoded 3600 would satisfy everything so far. Explicit helper rather than a
+# `VAR=v a6_fire` prefix: bash leaves assignments that prefix a FUNCTION call set in the shell
+# afterwards, which would silently re-window every later leg.
+a6_fire_with_interval() {
+  PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$A6_LOG" INNGEST_HEARTBEAT_URL="" \
+    INNGEST_HEARTBEAT_DARK_STAMP="$A6_STAMP" INNGEST_HEARTBEAT_DARK_INTERVAL="$1" \
+    sh "$DEDICATED_PING" >/dev/null 2>&1
+}
+# One stamp age, two windows, two outcomes -- that pair is what proves the env var is READ
+# rather than decorative. 3s is inside the default window and outside a 2s one.
+printf '%s' "$(( $(date +%s) - 3 ))" > "$A6_STAMP"
+a6_fire
+assert "A6 a 3s-old stamp does NOT re-emit under the DEFAULT window" \
+  "[[ \$(grep -c 'url_present=no' '$A6_LOG') -eq 2 ]]"
+a6_fire_with_interval 2
+assert "A6 the SAME 3s-old stamp DOES re-emit under INNGEST_HEARTBEAT_DARK_INTERVAL=2 (override seam is consumed)" \
+  "[[ \$(grep -c 'url_present=no' '$A6_LOG') -eq 3 ]]"
+# P3-3: the function's comment claims it FAILS OPEN. That held for read/write failure but NOT
+# for a FUTURE-DATED stamp, which is neither. Boot before NTP writes `now+skew`; timesyncd
+# steps the clock BACK; `_now - _last` goes NEGATIVE, never reaches the interval, and the
+# marker is suppressed for the whole skew — on a host whose liveness signal IS this marker, a
+# routine clock correction would read as a dead pusher. 2h ahead is a realistic pre-NTP skew.
+printf '%s' "$(( $(date +%s) + 7200 ))" > "$A6_STAMP"
+a6_fire
+assert "A6/P3-3 a FUTURE-dated stamp (boot-before-NTP, clock stepped back) still emits — fails OPEN" \
+  "[[ \$(grep -c 'url_present=no' '$A6_LOG') -eq 4 ]]"
+# ...and the recovery write must leave a SANE stamp behind, or the next fire re-enters the
+# same suppressed state and the fix only papers over one cycle.
+assert "A6/P3-3 the recovering fire overwrites the future stamp with a non-future value" \
+  "[[ \$(cat '$A6_STAMP') -le \$(date +%s) ]]"
+# The stamp lives in a systemd-managed RuntimeDirectory: the unit runs User=deploy, and /run
+# itself is root-owned 0755, so without this the write fails every fire, the rate limit
+# silently never engages, and the quota fix is a no-op that tests-in-CI cannot see (the test
+# above supplies its own writable dir). RuntimeDirectoryPreserve=yes is equally load-bearing:
+# this is a ONESHOT, so systemd would otherwise delete the directory -- and the stamp -- the
+# instant it exits, on every single fire.
+assert "A6 heartbeat unit declares RuntimeDirectory=inngest-heartbeat (deploy cannot write bare /run)" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^RuntimeDirectory=inngest-heartbeat$'"
+assert "A6 heartbeat unit declares RuntimeDirectoryPreserve=yes (a oneshot would else drop the stamp each fire)" \
+  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^RuntimeDirectoryPreserve=yes$'"
+
+# --- #6617b task 1.6.2: this change provisions NO heartbeat URL ---
+# Writing the URL early would put TWO pushers on one monitor -- the co-located web host (live
+# today) and the dedicated host -- which is precisely the dual-pusher state #6552 exists to
+# prevent. Provisioning it is `op=arm`'s job at cutover (G4), and nothing before it.
+# Anchored on ASSIGNMENT constructs, not the bare name: this repo is full of prose and
+# `name = "INNGEST_HEARTBEAT_URL"` definitions that a token grep would match.
+assert "1.6.2 no INNGEST_HEARTBEAT_URL is assigned a literal URL anywhere in infra/" \
+  "! grep -rIE '^[^#]*INNGEST_HEARTBEAT_URL[[:space:]]*=[[:space:]]*\"?https?://' '$SCRIPT_DIR'"
+# `--exclude=*.test.sh`: zot-liveness-heartbeat.test.sh carries a SYNTHETIC
+# `.../heartbeat/synthetic-liveness` fixture (cq-test-fixtures-synthesized-only). Excluding
+# the suites keeps this assertion pointed at DELIVERED artifacts -- cloud-init, units,
+# bootstrap, HCL -- which is where a baked URL would actually arm a second pusher.
+assert "1.6.2 no Better Stack heartbeat URL literal is baked into a delivered infra artifact" \
+  "! grep -rIE --exclude='*.test.sh' 'uptime\\.betterstack\\.com/api/v[0-9]+/heartbeat/[A-Za-z0-9]' '$SCRIPT_DIR'"
+
+# AC5b case 3 -- web render, URL absent: NO dark arm, so the absent URL reaches curl and
+# exits 2, loudly. This is what makes CPO P1-1 STRUCTURALLY unreachable rather than gated:
+# the live co-located pusher's script has no exit-0 branch to reach at all.
+assert "AC5b/3 web render carries NO dark arm (no exit-0 branch on the live pusher)" \
+  "! grep -qF 'url_present=no' '$WEB_PING'"
+WEB_LOG="$PING_TMP/logger-web-absent.txt"
+WEB_ABSENT_OUT=$(run_ping "$WEB_PING" "" "$WEB_LOG") && WEB_ABSENT_RC=0 || WEB_ABSENT_RC=$?
+# The contract is LOUD (non-zero) and CURL-attributable — NOT a specific exit code. curl's
+# empty-URL code is version-dependent: 8.18 exits 2 ("option : blank argument where content is
+# expected"), while #4116 recorded exit 3 ("URL using bad/illegal format or missing URL") on an
+# older curl. #6536's prod host measured 2, so an `-eq 2` assertion looks right on a modern box
+# and hard-fails on any runner shipping an older curl — it pins the AUTHOR'S curl build, not the
+# behaviour under test. Both halves are load-bearing:
+#   - `-ne 0` is the actual property (the live pusher must not silently succeed with no URL);
+#   - `^curl:` proves curl RAN and rejected the URL. Without it a missing binary would exit 127
+#     (`sh: exec: /usr/bin/curl: not found` — sh's message, not curl's) and satisfy a bare
+#     `-ne 0`, passing this assertion for the one reason that would mean the test proved nothing.
+assert "AC5b/3 web render + URL absent -> non-zero AND curl is what rejected it (loud; absent URL on the live pusher is a fault)" \
+  "[[ '$WEB_ABSENT_RC' -ne 0 && '$WEB_ABSENT_RC' -ne 127 ]] && printf '%s' \"\$WEB_ABSENT_OUT\" | grep -q '^curl:'"
+assert "AC5b/3 web render + URL absent -> emitted no dark-arm row" \
+  "[[ ! -s '$WEB_LOG' ]]"
+
+# AC5b case 2 + AC3 (leak gate) -- dedicated render, URL PRESENT: the happy path is
+# unchanged (exec curl runs), AND the canary value never appears in stdout+stderr+logger.
+# Value-based by design: v2's source-grep caught 1 of 3 leak shapes (it missed the brace
+# form ${INNGEST_HEARTBEAT_URL} -- this repo's own house style -- and printf '%s'), and is
+# blind to set -x / curl -v / --write-out '%{url}'. Asserting the VALUE's absence in the
+# real output cannot be defeated by any of those shapes.
+CANARY_URL="http://127.0.0.1:1/api/v1/heartbeat/CANARY_SENTINEL"
+DED_PRESENT_LOG="$PING_TMP/logger-dedicated-present.txt"
+DED_PRESENT_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$DED_PRESENT_LOG") \
+  && DED_PRESENT_RC=0 || DED_PRESENT_RC=$?
+assert "AC5b/2 dedicated render + URL present -> exec curl runs (rc=7 vs closed port, happy path intact)" \
+  "[[ '$DED_PRESENT_RC' -eq 7 ]]"
+assert "AC5b/2 dedicated render + URL present -> dark arm NOT taken" \
+  "! grep -q 'url_present=no' '$DED_PRESENT_LOG'"
+assert "AC3 leak gate: canary value appears ZERO times in stdout+stderr" \
+  "[[ \$(printf '%s' \"\$DED_PRESENT_OUT\" | grep -c 'CANARY_SENTINEL') -eq 0 ]]"
+assert "AC3 leak gate: canary value appears ZERO times in logger output" \
+  "[[ \$(grep -c 'CANARY_SENTINEL' '$DED_PRESENT_LOG') -eq 0 ]]"
+# Non-vacuity: prove the canary WOULD be observable if the script leaked it. Without this,
+# the two assertions above pass against a harness that simply cannot see the value -- the
+# laundered-target/vacuous-green class. Uses the printf leak shape v2's source-grep missed.
+assert "AC3 non-vacuity: the harness observes a leaked canary when one IS emitted" \
+  "[[ \$(INNGEST_HEARTBEAT_URL='$CANARY_URL' sh -c 'printf \"url=%s\n\" \"\$INNGEST_HEARTBEAT_URL\"' 2>&1 | grep -c CANARY_SENTINEL) -eq 1 ]]"
+# Cheap secondary (AC3): no logger/echo/printf line may reference the URL value. Asserted on
+# the RENDERED scripts (not the heredoc body) so it also covers the sed replacement's text.
+assert "AC3 secondary: no logger/echo/printf line references the URL value (both renders)" \
+  "! grep -qE '^[[:space:]]*(logger|echo|printf)[[:space:]].*INNGEST_HEARTBEAT_URL' '$DEDICATED_PING' '$WEB_PING'"
+
+# --- #6617a (A4): the inngest-server POSITIVE liveness probe -------------------------
+# The probe ships three artifacts (script, .service, .timer) plus an `enable --now`, and had
+# exactly two string assertions against it (both in journald-config.test.sh, both about the
+# SyslogIdentifier tag). Measured: deleting the whole timer heredoc AND the enable line AND
+# gutting the script body still passed both. That is a positive control with no coverage —
+# the same class of hole this probe exists to close.
+#
+# Behavioural where it can be (the script is executed against stubs, mirroring the heartbeat
+# harness above), structural where it must be (unit/timer/enable are systemd's contract).
+echo ""
+echo "--- #6617a (A4): inngest-server liveness probe (script + unit + timer + enable) ---"
+
+PROBE_BODY="$PING_TMP/probe-body.sh"
+# shellcheck disable=SC2016
+awk '/^cat > "\$PROBE_SCRIPT" <</{f=1;next} /^PROBESCRIPTEOF$/{f=0} f' "$BOOTSTRAP_SH" > "$PROBE_BODY"
+PROBE_UNIT_BLOCK="$(awk '/^cat > "\$PROBE_UNIT" <</{f=1;next} /^PROBEUNITEOF$/{f=0} f' "$BOOTSTRAP_SH")"
+PROBE_TIMER_BLOCK="$(awk '/^cat > "\$PROBE_TIMER" <</{f=1;next} /^PROBETIMEREOF$/{f=0} f' "$BOOTSTRAP_SH")"
+
+assert "A4 probe script heredoc body extracted (non-empty)" \
+  "[[ -s '$PROBE_BODY' ]]"
+assert "A4 probe UNIT block extracted from the bootstrap (non-empty)" \
+  "[[ -n \"\$PROBE_UNIT_BLOCK\" ]]"
+assert "A4 probe TIMER block extracted from the bootstrap (non-empty)" \
+  "[[ -n \"\$PROBE_TIMER_BLOCK\" ]]"
+
+# Oneshot, not simple: a `simple` probe would be considered "running" forever and
+# OnUnitActiveSec would never re-arm, silently reducing the hourly probe to one fire per boot.
+assert "A4 probe unit is Type=oneshot (a 'simple' unit never re-arms OnUnitActiveSec)" \
+  "grep -qE '^Type=oneshot$' <<<\"\$PROBE_UNIT_BLOCK\""
+assert "A4 probe unit ExecStart points at the probe script" \
+  "grep -qE '^ExecStart=/usr/local/bin/inngest-server-probe\.sh$' <<<\"\$PROBE_UNIT_BLOCK\""
+
+# HOURLY is load-bearing in BOTH directions: Source 4 applies no PRIORITY filter, so a 60s
+# cadence would cost ~1,440 rows/day against a ~25k/day quota (the exact cost #6617b is
+# removing from the heartbeat in this same change), while a daily cadence would make the
+# positive control too coarse to catch a replace that failed to bind :8288.
+assert "A4 probe timer re-arms HOURLY (OnUnitActiveSec=1h)" \
+  "grep -qE '^OnUnitActiveSec=1h$' <<<\"\$PROBE_TIMER_BLOCK\""
+# Reboot survival for a MONOTONIC timer is OnBootSec=, not Persistent=. systemd honours
+# Persistent= only for OnCalendar= timers — inngest-bootstrap.sh says so itself about the
+# heartbeat timer ("a no-op for a monotonic timer"), so asserting it here would have forced a
+# directive systemd ignores into the unit and read as coverage while buying nothing.
+# OnBootSec is also the stronger property for this probe: the highest-value fire is the one
+# right after a replace.
+assert "A4 probe timer fires shortly after every boot (OnBootSec — the monotonic reboot-survival seam)" \
+  "grep -qE '^OnBootSec=[0-9]+s?$' <<<\"\$PROBE_TIMER_BLOCK\""
+assert "A4 probe timer installs into timers.target (else enable --now is a no-op)" \
+  "grep -qE '^WantedBy=timers\.target$' <<<\"\$PROBE_TIMER_BLOCK\""
+# A timer that is written but never enabled ships zero rows — indistinguishable from a dead
+# host, which is #6617 itself.
+assert "A4 bootstrap actually enables the timer (systemctl enable --now inngest-server-probe.timer)" \
+  "grep -qE '^systemctl enable --now inngest-server-probe\.timer$' '$BOOTSTRAP_SH'"
+
+# LOG_TAG must be a REAL assignment and the logger call must go through it — same
+# drift-fixture contract the heartbeat script is held to above (vector-pii-scrub.test.sh
+# derives EXPECTED_TAGS from `LOG_TAG="..."` across infra/*.sh and is heredoc-blind).
+# The probe's health URL is a FLEET contract, not a free choice. #6617's review flagged
+# /health as an "unverified route" that appears nowhere else and asked for a switch to the
+# bare root. That premise is false, and acting on it would have made this probe the only
+# :8288 consumer on a different path and desynced it from #6407's watchdog semantics.
+# /health is verified against the running router by production evidence:
+#   - ci-deploy.sh gates the quiesce probe on `curl -sf http://127.0.0.1:8288/health`; -f
+#     FAILS on 404 and a SERVED /health is its "STILL RUNNING" signal, so a 404 route would
+#     have wedged the deploy path long ago;
+#   - inngest-inventory.sh defaults INNGEST_HEALTH_URL to the same loopback path;
+#   - #6407's soak gate calls a `mode=down health_code=200` row a CONTRADICTION, i.e.
+#     health_code=200 is routinely observed in prod.
+# Pinned on BOTH sides so drift in either direction fails CI rather than silently hardcoding
+# http_code to 404 — the unit's own comment calls http_code "the single most diagnostic value
+# here", and a permanently-404 positive control is a muted alert, the exact outcome #6617
+# exists to prevent.
+assert "A4 probe curls the fleet-standard loopback /health route" \
+  "grep -qF 'http://127.0.0.1:8288/health' '$PROBE_BODY'"
+assert "A4 ci-deploy.sh gates on the SAME loopback /health route (probe is not a lone snowflake)" \
+  "grep -qF 'curl -sf --max-time 5 http://127.0.0.1:8288/health' '$SCRIPT_DIR/ci-deploy.sh'"
+assert "A4 inngest-inventory.sh defaults INNGEST_HEALTH_URL to the same loopback /health route" \
+  "grep -qF 'INNGEST_HEALTH_URL:-http://127.0.0.1:8288/health' '$SCRIPT_DIR/inngest-inventory.sh'"
+
+assert "A4 probe script assigns LOG_TAG=\"inngest-server-probe\" (drift-fixture contract)" \
+  "grep -qE '^LOG_TAG=\"inngest-server-probe\"$' '$PROBE_BODY'"
+assert "A4 probe script never inlines the tag literal in a logger call (drift-fixture contract)" \
+  "! grep -qE '^[[:space:]]*logger[[:space:]]+-t[[:space:]]+[a-z]' '$PROBE_BODY'"
+
+# --- behavioural: execute the probe against stubs ---
+# `curl` and `systemctl` are stubbed (the script calls both unqualified, unlike the
+# heartbeat's absolute /usr/bin/curl) so the leg is hermetic: no network, no host services.
+PROBE_BIN="$PING_TMP/probe-bin"
+mkdir -p "$PROBE_BIN"
+cp "$PING_TMP/bin/logger" "$PROBE_BIN/logger"
+# Exit 7 + empty stdout = "could not connect", the realistic failure the probe must survive.
+cat > "$PROBE_BIN/curl" <<'CURLEOF'
+#!/bin/sh
+exit 7
+CURLEOF
+cat > "$PROBE_BIN/systemctl" <<'SYSTEMCTLEOF'
+#!/bin/sh
+echo active
+SYSTEMCTLEOF
+chmod +x "$PROBE_BIN/curl" "$PROBE_BIN/systemctl"
+
+PROBE_LOG="$PING_TMP/logger-probe.txt"
+: > "$PROBE_LOG"
+PATH="$PROBE_BIN:$PATH" LOGGER_OUT="$PROBE_LOG" sh "$PROBE_BODY" >/dev/null 2>&1 \
+  && PROBE_RC=0 || PROBE_RC=$?
+
+assert "A4 probe script is POSIX-clean under sh -n" \
+  "sh -n '$PROBE_BODY'"
+assert "A4 probe exits 0 even when curl cannot connect (observability, never a gate)" \
+  "[[ '$PROBE_RC' -eq 0 ]]"
+# The whole point of the unit: exactly ONE marker row per fire, unconditionally.
+assert "A4 probe emits exactly one SOLEUR_INNGEST_SERVER_PROBE marker per fire" \
+  "[[ \$(grep -c 'SOLEUR_INNGEST_SERVER_PROBE' '$PROBE_LOG') -eq 1 ]]"
+# The stub records logger's full argv, so this pins the RESOLVED tag: `-t <tag>` proves
+# "$LOG_TAG" expanded to the value vector.toml's Source 4 allowlist matches on. A tag that
+# drifts from that allowlist is a silent no-op — the marker never leaves the host (#6536).
+assert "A4 probe emits the marker under the resolved inngest-server-probe tag (logger -t \"\$LOG_TAG\")" \
+  "grep -qE '^-t inngest-server-probe SOLEUR_INNGEST_SERVER_PROBE ' '$PROBE_LOG'"
+# A degraded capture must degrade a FIELD, never the event: curl exited 7 with no stdout, and
+# http_code — the unit's own comment calls it "the single most diagnostic value here" — must
+# still be a VALUE (000), not an empty field that reads as missing data.
+assert "A4 a failed curl degrades http_code to the literal 000, not to an empty field" \
+  "grep -qE 'http_code=000( |\$)' '$PROBE_LOG'"
+# Every field present and non-empty. An empty field silently reads as "no data" in Better
+# Stack, which is the same ambiguity a missing row creates.
+for _f in server_active vector_active redis_active uptime_s boot_id image_ref; do
+  assert "A4 probe marker carries a non-empty $_f= field" \
+    "grep -qE '$_f=[^ ]+' '$PROBE_LOG'"
+done
+# The field is named for what it CONTAINS. cloud-init-inngest.yml writes
+# INNGEST_BOOTSTRAP_IMAGE=$IREF, and $IREF is the FULL ref (registry/repo:tag@sha256:...), not
+# a bare digest. Under the old `image_sha=` name a Better Stack consumer keying on
+# `image_sha=sha256:` matched nothing, forever — a silent gap of exactly the class this probe
+# exists to close. Both sides pinned so a rename on either drifts loudly.
+assert "A4 the image field is named image_ref (it carries a full ref, not a bare sha)" \
+  "grep -qE 'image_ref=' '$PROBE_LOG' && ! grep -qE 'image_sha=' '$PROBE_LOG'"
+assert "A4 cloud-init writes INNGEST_BOOTSTRAP_IMAGE from the full \$IREF (what image_ref reports)" \
+  "grep -qF \"printf 'INNGEST_BOOTSTRAP_IMAGE=%s\\\\n' \\\"\\\$IREF\\\"\" '$SCRIPT_DIR/cloud-init-inngest.yml'"
+
+# --- P2-B: vector_active is unobservable through the channel it describes ---
+# This marker reaches Better Stack via journald -> Vector Source 4. So vector_active is the ONE
+# field whose only off-box path is Vector ITSELF: precisely when it carries information
+# (Vector down), the row cannot ship, and the result is indistinguishable from a dead host —
+# the #6536 ambiguity. The non-active branch must therefore ALSO fire the direct-curl
+# phone-home, which bypasses Vector entirely.
+#
+# The probe calls the emitter by ABSOLUTE path, so the leg runs a copy with that path rewritten
+# to a stub. Rewriting (not stubbing PATH) is what keeps the assertion honest: it proves the
+# script invokes THAT path, not merely some command named phone-home.
+PROBE_PH_LOG="$PING_TMP/probe-phonehome.txt"
+: > "$PROBE_PH_LOG"
+cat > "$PROBE_BIN/phone-home-stub.sh" <<PHSTUBEOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$PROBE_PH_LOG"
+exit 0
+PHSTUBEOF
+chmod +x "$PROBE_BIN/phone-home-stub.sh"
+PROBE_PH_BODY="$PING_TMP/probe-body-phonehome.sh"
+sed "s#/usr/local/bin/inngest-boot-phone-home.sh#$PROBE_BIN/phone-home-stub.sh#g" \
+  "$PROBE_BODY" > "$PROBE_PH_BODY"
+
+# Vector DOWN: systemctl reports inactive for vector.service, active for everything else.
+cat > "$PROBE_BIN/systemctl" <<'SYSDOWNEOF'
+#!/bin/sh
+case "$*" in *vector.service*) echo inactive ;; *) echo active ;; esac
+SYSDOWNEOF
+chmod +x "$PROBE_BIN/systemctl"
+PROBE_DOWN_LOG="$PING_TMP/logger-probe-vector-down.txt"
+: > "$PROBE_DOWN_LOG"
+PATH="$PROBE_BIN:$PATH" LOGGER_OUT="$PROBE_DOWN_LOG" sh "$PROBE_PH_BODY" >/dev/null 2>&1 \
+  && PROBE_DOWN_RC=0 || PROBE_DOWN_RC=$?
+
+assert "P2-B probe still exits 0 with Vector down (second channel is never a gate)" \
+  "[[ '$PROBE_DOWN_RC' -eq 0 ]]"
+# ADR-117: the unconditional journald emit happens REGARDLESS. The new `if` sits after it and
+# adds a channel; it must not have become a branch that replaces the emit.
+assert "P2-B the unconditional journald emit STILL fires with Vector down (ADR-117 intact)" \
+  "[[ \$(grep -c 'SOLEUR_INNGEST_SERVER_PROBE' '$PROBE_DOWN_LOG') -eq 1 ]]"
+assert "P2-B vector_active=inactive ALSO reaches the Vector-independent phone-home channel" \
+  "[[ -s '$PROBE_PH_LOG' ]] && grep -qF 'vector_active=inactive' '$PROBE_PH_LOG'"
+# Same fields on both channels — an off-box consumer reading only the phone-home row must be
+# able to make the same call as one reading the journald row.
+for _f in http_code server_active redis_active uptime_s boot_id image_ref; do
+  assert "P2-B the phone-home payload carries the same $_f= field as the journald marker" \
+    "grep -qE '$_f=[^ ]+' '$PROBE_PH_LOG'"
+done
+
+# Vector UP: the second channel must stay silent, or the steady-state row cost is not zero and
+# this fix re-creates the quota problem #6617b is removing.
+cat > "$PROBE_BIN/systemctl" <<'SYSUPEOF'
+#!/bin/sh
+echo active
+SYSUPEOF
+chmod +x "$PROBE_BIN/systemctl"
+: > "$PROBE_PH_LOG"
+PATH="$PROBE_BIN:$PATH" LOGGER_OUT="$PING_TMP/logger-probe-vector-up.txt" \
+  sh "$PROBE_PH_BODY" >/dev/null 2>&1
+assert "P2-B a HEALTHY vector fires NO phone-home (second channel costs zero in steady state)" \
+  "[[ ! -s '$PROBE_PH_LOG' ]]"
+# The guard that keeps this fail-open on the co-located web host, where the emitter is absent.
+assert "P2-B the phone-home call is guarded by [ -x ] (absent emitter must not fail the probe)" \
+  "grep -qF '[ -x /usr/local/bin/inngest-boot-phone-home.sh ]' '$PROBE_BODY'"
 
 # --- Inngest-SERVER unit ExecStart: poll-interval + sdk-url (#4652) ---
 echo ""
@@ -171,12 +737,15 @@ assert "the @@SDK_URL@@ sentinel is substituted (bash param expansion, not sed)"
   "grep -qE '@@SDK_URL@@/' \"\$BOOTSTRAP_SH\""
 assert "SDK_URL default PRESERVES the co-located loopback app route (web regression guard, #6178)" \
   "grep -qF 'SDK_URL=\"\${SDK_URL:-http://127.0.0.1:3000/api/inngest}\"' \"\$BOOTSTRAP_SH\""
-# #6178: the ExecStart doppler project is templated (@@DOPPLER_PROJECT@@) so the dedicated
-# host targets its ISOLATED `soleur-inngest` project; the default preserves `soleur` for web.
-assert "server ExecStart carries the @@DOPPLER_PROJECT@@ sentinel (templated, #6178)" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'run --project @@DOPPLER_PROJECT@@ --config prd'"
-assert "the @@DOPPLER_PROJECT@@ sentinel is substituted" \
-  "grep -qE '@@DOPPLER_PROJECT@@/' \"\$BOOTSTRAP_SH\""
+# #6555: the server ExecStart dropped `--project` — it resolves the Doppler project from
+# EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime, not a sentinel flag.
+assert "server ExecStart is doppler run --config prd with NO --project (#6555)" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qF 'run --config prd' && ! printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -qE '^ExecStart=.*--project'"
+# No @@DOPPLER_PROJECT@@ SUBSTITUTION (`${var//@@DOPPLER_PROJECT@@/...}`) survives anywhere in the
+# bootstrap — a lingering render mechanism could silently re-introduce a hardcoded --project.
+# Anchored on the substitution syntax, NOT the bare sentinel (comments legitimately name it).
+assert "no @@DOPPLER_PROJECT@@ substitution mechanism remains in bootstrap (#6555)" \
+  "! grep -qF '//@@DOPPLER_PROJECT@@/' \"\$BOOTSTRAP_SH\""
 assert "DOPPLER_PROJECT default PRESERVES 'soleur' for the co-located web host (regression guard, #6178)" \
   "grep -qF 'DOPPLER_PROJECT=\"\${DOPPLER_PROJECT:-soleur}\"' \"\$BOOTSTRAP_SH\""
 # Regression guard: the signing-key strip survives the edit as an ENV export (#5560 —
@@ -361,15 +930,15 @@ assert "redis.conf loopback bind"         "grep -qE '^bind 127.0.0.1' '$REDIS_CO
 # password via doppler (never a literal in the file).
 assert "redis.service RequiresMountsFor=/mnt/data" "grep -qE '^RequiresMountsFor=/mnt/data' '$REDIS_SERVICE'"
 assert "redis.service requirepass injected from Doppler" "grep -qF 'requirepass \"\$INNGEST_REDIS_PASSWORD\"' '$REDIS_SERVICE'"
-# #6178: redis.service doppler project is templated (@@DOPPLER_PROJECT@@) so the dedicated
-# inngest host targets its isolated soleur-inngest project; inngest-redis-bootstrap.sh renders
-# the sentinel (default soleur preserves the web host — regression guard).
-assert "redis.service runs under doppler run prd (templated @@DOPPLER_PROJECT@@)" \
-  "grep -qE 'doppler run --project @@DOPPLER_PROJECT@@ --config prd' '$REDIS_SERVICE'"
-assert "inngest-redis-bootstrap.sh renders the @@DOPPLER_PROJECT@@ sentinel" \
-  "grep -qF '@@DOPPLER_PROJECT@@/' '$SCRIPT_DIR/inngest-redis-bootstrap.sh'"
-assert "redis unit DOPPLER_PROJECT default PRESERVES soleur for the web host (regression guard)" \
-  "grep -qF 'redis_doppler_project=\"\${DOPPLER_PROJECT:-soleur}\"' '$SCRIPT_DIR/inngest-redis-bootstrap.sh'"
+# #6555: the redis.service ExecStart dropped `--project` — it resolves the Doppler project from
+# EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime. The bootstrap installs
+# the unit verbatim (no @@DOPPLER_PROJECT@@ substitution round-trip).
+assert "redis.service runs under doppler run --config prd with NO --project (#6555)" \
+  "grep -qF 'doppler run --config prd' '$REDIS_SERVICE' && ! grep -qE '^ExecStart=.*--project' '$REDIS_SERVICE'"
+assert "redis.service reads EnvironmentFile=/etc/default/inngest-server (project delivery, #6555)" \
+  "grep -qxF 'EnvironmentFile=/etc/default/inngest-server' '$REDIS_SERVICE'"
+assert "inngest-redis-bootstrap.sh no longer renders a @@DOPPLER_PROJECT@@ substitution (#6555)" \
+  "! grep -qF '//@@DOPPLER_PROJECT@@/' '$SCRIPT_DIR/inngest-redis-bootstrap.sh'"
 # #5450 F1 regression guard: the conf MUST live under /mnt/data/redis, NOT
 # /etc/redis — on the existing-host deploy the bootstrap runs inside
 # webhook.service's ProtectSystem=strict namespace where /etc is read-only and
@@ -396,6 +965,50 @@ RESTART_LINE=$(grep -nE '^systemctl restart inngest-server.service' "$BOOTSTRAP_
 assert "bootstrap runs inngest-redis-bootstrap.sh (REDIS_READY probe) BEFORE the inngest-server restart" \
   "[[ -n '$REDIS_RUN_LINE' && -n '$RESTART_LINE' && '$REDIS_RUN_LINE' -lt '$RESTART_LINE' ]]"
 
+# --- #6090: webhook.service ReadWritePaths /var/lib/inngest must be `-`-optional ---
+# On web_colocate_inngest=false (default since the co-located-inngest gate), the
+# inngest-bootstrap runcmd block that CREATES /var/lib/inngest is gated off, so a
+# MANDATORY RWP token makes systemd fail webhook.service with 226/NAMESPACE on a
+# fresh host (:9000 never binds -> ok_peer_fanout_degraded -> web-2 undeployed).
+# The `-` prefix marks the dir optional (systemd ignores it if absent), mirroring
+# the -/var/lib/vector precedent (PR #4257). Both lockstep copies must match:
+#   - cloud-init.yml (baked at first boot)
+#   - webhook.service (base64-delivered to running web-1 via deploy_pipeline_fix).
+echo ""
+echo "--- #6090: webhook RWP /var/lib/inngest -optional (both lockstep copies) ---"
+CLOUD_INIT="$SCRIPT_DIR/cloud-init.yml"
+WEBHOOK_SERVICE="$SCRIPT_DIR/webhook.service"
+assert "cloud-init.yml + webhook.service exist" "[[ -f '$CLOUD_INIT' && -f '$WEBHOOK_SERVICE' ]]"
+
+# Exactly ONE ReadWritePaths= line per file — makes the head -1 extraction below safe.
+# systemd ACCUMULATES RWP directives, so a future 2nd (mandatory) `/var/lib/inngest` line
+# would slip past the token asserts and silently re-open the 226/NAMESPACE bug; a REMOVED
+# line would abort under set -e/pipefail instead of a labeled FAIL. (#6363 review: security
+# + architecture + code-quality converged.)
+# shellcheck disable=SC2034  # consumed via assert's eval, below
+CI_RWP_COUNT="$(grep -cE '^[[:space:]]*ReadWritePaths=' "$CLOUD_INIT" || true)"
+# shellcheck disable=SC2034
+WS_RWP_COUNT="$(grep -cE '^[[:space:]]*ReadWritePaths=' "$WEBHOOK_SERVICE" || true)"
+assert "cloud-init.yml has exactly one ReadWritePaths= line (head -1 safety)" "[[ \"\$CI_RWP_COUNT\" -eq 1 ]]"
+assert "webhook.service has exactly one ReadWritePaths= line (head -1 safety)" "[[ \"\$WS_RWP_COUNT\" -eq 1 ]]"
+
+# CI_RWP/WS_RWP are consumed inside assert's `eval "$condition"` (SC can't see through eval).
+# shellcheck disable=SC2034
+CI_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$CLOUD_INIT" | head -1 | sed -E 's/^[[:space:]]*ReadWritePaths=//' || true)"
+# shellcheck disable=SC2034
+WS_RWP="$(grep -E '^[[:space:]]*ReadWritePaths=' "$WEBHOOK_SERVICE" | head -1 | sed -E 's/^[[:space:]]*ReadWritePaths=//' || true)"
+
+assert "cloud-init RWP marks /var/lib/inngest optional (-prefix)" \
+  "grep -qE -- '(^|[[:space:]])-/var/lib/inngest([[:space:]]|\$)' <<< \"\$CI_RWP\""
+assert "cloud-init RWP has NO mandatory (bare) /var/lib/inngest" \
+  "! grep -qE -- '(^|[[:space:]])/var/lib/inngest([[:space:]]|\$)' <<< \"\$CI_RWP\""
+assert "webhook.service RWP marks /var/lib/inngest optional (-prefix)" \
+  "grep -qE -- '(^|[[:space:]])-/var/lib/inngest([[:space:]]|\$)' <<< \"\$WS_RWP\""
+assert "webhook.service RWP has NO mandatory (bare) /var/lib/inngest" \
+  "! grep -qE -- '(^|[[:space:]])/var/lib/inngest([[:space:]]|\$)' <<< \"\$WS_RWP\""
+assert "RWP token lists byte-identical across both lockstep copies" \
+  "[[ -n \"\$CI_RWP\" && \"\$CI_RWP\" == \"\$WS_RWP\" ]]"
+
 # --- `terraform fmt -check` for HCL hygiene ---
 echo ""
 echo "--- terraform fmt -check ---"
@@ -410,6 +1023,34 @@ if command -v terraform >/dev/null 2>&1; then
 else
   echo "  SKIP: terraform not installed locally"
 fi
+
+# --- #6555: DOPPLER_PROJECT via EnvironmentFile (the units dropped --project) ---
+echo ""
+echo "--- #6555: DOPPLER_PROJECT env-file delivery + --project removal ---"
+CLOUD_INIT_INNGEST="$SCRIPT_DIR/cloud-init-inngest.yml"
+CUTOVER_FLIP_SERVICE="$SCRIPT_DIR/inngest-cutover-flip.service"
+SUDOERS_SRC="$SCRIPT_DIR/deploy-inngest-bootstrap.sudoers"
+CI_DEPLOY="$SCRIPT_DIR/ci-deploy.sh"
+assert "cloud-init pre-create writes DOPPLER_PROJECT=soleur-inngest into the env-file (dedicated path)" \
+  "grep -qE \"printf 'DOPPLER_TOKEN=.*DOPPLER_PROJECT=soleur-inngest\" '$CLOUD_INIT_INNGEST'"
+assert "bootstrap heredoc writes DOPPLER_PROJECT into the env-file (web path)" \
+  "grep -qxF 'DOPPLER_PROJECT=\$DOPPLER_PROJECT' '$BOOTSTRAP_SH'"
+assert "bootstrap fail-closes on a missing/empty DOPPLER_PROJECT env-file line (#6555 AC6)" \
+  "grep -qF 'no non-empty DOPPLER_PROJECT= line' '$BOOTSTRAP_SH'"
+assert "bootstrap augments a preserved env-file with DOPPLER_PROJECT (in-place re-bootstrap safety)" \
+  "grep -qF 'appended DOPPLER_PROJECT=' '$BOOTSTRAP_SH'"
+# Negative anchored on ExecStart / FLIP_GUARD assignment lines only — comments legitimately
+# name `run --project …` (e.g. the failure-log unit's do-NOT-wrap rationale).
+assert "no ExecStart --project remains in inngest-bootstrap.sh units (#6555)" \
+  "! grep -qE '^ExecStart=.*--project' '$BOOTSTRAP_SH' && ! grep -qE 'FLIP_GUARD_LINE=.*--project' '$BOOTSTRAP_SH'"
+assert "inngest-cutover-flip.service ExecStart has NO --project (#6555)" \
+  "grep -qF 'doppler run --config prd' '$CUTOVER_FLIP_SERVICE' && ! grep -qE '^ExecStart=.*--project' '$CUTOVER_FLIP_SERVICE'"
+assert "deploy-inngest-bootstrap.sudoers env_keep drops DOPPLER_PROJECT (#6555)" \
+  "! grep -qE '^Defaults!INNGEST_BOOTSTRAP env_keep.*DOPPLER_PROJECT' '$SUDOERS_SRC'"
+assert "cloud-init.yml inline sudoers env_keep drops DOPPLER_PROJECT (#6555)" \
+  "! grep -qE 'Defaults!INNGEST_BOOTSTRAP env_keep.*DOPPLER_PROJECT' '$CLOUD_INIT'"
+assert "ci-deploy.sh --preserve-env drops DOPPLER_PROJECT (#6555)" \
+  "! grep -qE 'preserve-env=.*DOPPLER_PROJECT' '$CI_DEPLOY'"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

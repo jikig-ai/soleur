@@ -62,12 +62,18 @@ afterEach(() => {
 });
 
 describe("buildWorkstreamTools", () => {
-  it("registers exactly the read tool name (auto-approve namespaced id)", () => {
+  it("registers the read tool name (auto-approve) alongside the write tools", () => {
     const built = buildWorkstreamTools({ userId: "u1" });
-    expect(built.toolNames).toEqual([
+    expect(built.toolNames).toContain(
       "mcp__soleur_platform__workstream_issues_list",
-    ]);
-    expect(built.tools).toHaveLength(1);
+    );
+    // Read tool is still present + invokable (write tools covered separately).
+    expect(
+      built.tools.some(
+        (t) =>
+          (t as unknown as { name: string }).name === "workstream_issues_list",
+      ),
+    ).toBe(true);
   });
 
   it("threads userId into the accessor and returns its mapped issues (read parity)", async () => {
@@ -89,6 +95,17 @@ describe("buildWorkstreamTools", () => {
 
   it("returns isError when the accessor throws (GitHub failure, not empty)", async () => {
     getWorkstreamIssues.mockRejectedValue(new Error("GitHub API 502"));
+    const res = await getListTool().handler();
+    expect(res.isError).toBe(true);
+    const parsed = JSON.parse(res.content[0].text) as { error: string };
+    expect(parsed.error).toBe("workstream_query_error");
+  });
+
+  it("surfaces a degraded read as isError, NOT a misleading empty board (AC6)", async () => {
+    const { WorkstreamDegradedError } = await import("@/lib/workstream");
+    getWorkstreamIssues.mockRejectedValue(
+      new WorkstreamDegradedError("workstream read degraded"),
+    );
     const res = await getListTool().handler();
     expect(res.isError).toBe(true);
     const parsed = JSON.parse(res.content[0].text) as { error: string };

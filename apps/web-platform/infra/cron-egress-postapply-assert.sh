@@ -52,6 +52,11 @@ nft list chain ip filter DOCKER-USER | grep -q 'jump SOLEUR-EGRESS' || { echo 'A
 nft list chain ip filter SOLEUR-EGRESS | grep -q 'egress-blocked' || { echo 'ASSERT-FAILED: default-drop'; exit 1; }
 nft list chain ip filter SOLEUR-EGRESS | grep -q 'egress-dns-exfil' || { echo 'ASSERT-FAILED: dns-exfil-drop'; exit 1; }
 nft list chain ip filter SOLEUR-EGRESS | grep -q 'dport 8288 accept' || { echo 'ASSERT-FAILED: inngest-8288-accept'; exit 1; }
+# Dedicated Inngest host (#6178, ADR-100 cutover): the generic sentinel above passes with
+# ONLY the host-gateway rule present, so a recreated host missing 10.0.1.40:8288 would slip
+# through. Assert the dedicated-host accept specifically so a missing rule fails post-apply
+# loudly (closes the "hides from the cutover gate" hole — op=verify never sees container egress).
+nft list chain ip filter SOLEUR-EGRESS | grep -q '10.0.1.40 tcp dport 8288 accept' || { echo 'ASSERT-FAILED: dedicated-inngest-8288-accept'; exit 1; }
 nft list set ip filter soleur_egress_allow | grep -qE '[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+' || { echo 'ASSERT-FAILED: allow-set-populated'; exit 1; }
 nft list chain ip filter SOLEUR-EGRESS | grep -q 'cidr allowlist' || { echo 'ASSERT-FAILED: cidr-allowlist-rule'; exit 1; }
 # Match the GitHub octet, NOT the literal /20: nft renders an interval-set

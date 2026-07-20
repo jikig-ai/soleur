@@ -97,7 +97,7 @@ if parse_err != null {
 '''
 
 # ---------------- Source 4: host-script journald (logger -t tags) (#5499, #6178) ----------------
-# Twelve bash scripts under apps/web-platform/infra/ log operational events to
+# Thirteen bash scripts under apps/web-platform/infra/ log operational events to
 # the journal via `logger -t <LOG_TAG>`. They run under webhook.service / cron on
 # the web hosts, or (the #6178 cutover trio: inngest-cutover-flip +
 # inngest-server-flip-guard) as systemd oneshot/ExecStartPre on the dedicated
@@ -110,17 +110,41 @@ if parse_err != null {
 # prefix/regex — a tag typo silently matches nothing).
 #
 # NO `include_matches.PRIORITY` filter (deliberate — differs from Sources 1/2):
-# these lines are PRIORITY 4-5, which Source 2 drops; the SYSLOG_IDENTIFIER
-# scoping to 12 known tags is already the narrowing. We do NOT widen
+# these lines are PRIORITY 4-6 (the #6536 inngest-heartbeat channel is PRIORITY 5-6),
+# which Source 2 drops; the SYSLOG_IDENTIFIER scoping to 14 known tags is already
+# the narrowing. We do NOT widen
 # system_journald's PRIORITY filter — that would ship every host NOTICE+ line
 # (sshd, cron, systemd units, fail2ban) and blow the Better Stack logs quota
 # (per the 2026-06-10 quota-diagnosis learning + #5110 verdict).
 #
-# Quota (#5110 reality check): all 12 are event-driven (deploy/webhook/cron-fire/
+# Quota (#5110 reality check): 13 of the 14 are event-driven (deploy/webhook/cron-fire/
 # cutover-flip), not continuous request-per-line firehoses — projected
 # tens-to-low-hundreds of rows/day, well within the ~20% headroom under 25k/day.
+#
+# `inngest-heartbeat` (#6536) is the ONE exception. The unit still FIRES every 60s, but as
+# of #6617b its dark-arm row is rate-limited to one per hour (`dark_arm_emit_due` in
+# inngest-bootstrap.sh), so it costs ~24 rows/day on the dedicated host — NOT the ~1,440
+# this comment claimed before that change. See the Source 4 note below, which states the
+# same ~24 figure; the two must not drift apart again. (The co-located web host renders no
+# dark arm and emits NO success-path row, so it adds ~0.)
+#
+# Steady-state delta is now a real SAVING, where pre-#6617b it was roughly neutral: the
+# `Failed to start` storm this replaced was itself shipping ~1,240 rows/day — though via a
+# mechanism this file does not explain (a live row carries SYSLOG_IDENTIFIER=systemd, which
+# NO source here admits; tracked separately).
+#
+# Rate-limited, NOT transition-only: what the ~24 buys is best-effort dark-host evidence the
+# host never had, and "emit once" or "emit on transition" would make a DEAD pusher and a
+# healthy deliberately-dark one produce the identical observation — nothing. Best-effort
+# because the script exits 0 regardless of whether `logger` succeeds, so ABSENCE of the row
+# proves nothing (journald down looks like a healthy dark host). Presence proves the script
+# ran; that is the whole claim. Deliberately NO success-path row on the URL-present path: at
+# 60s that would add ~2,880/day to duplicate what the Better Stack heartbeat monitor already
+# asserts.
+#
 # Adding a tag here is a quota decision; keep the list to genuinely-diagnostic
-# host scripts. The drift-guard + no-PRIORITY-filter fixtures in
+# host scripts, and treat any further timer-driven tag as a fresh quota decision.
+# The drift-guard + no-PRIORITY-filter fixtures in
 # vector-pii-scrub.test.sh pin this exact-tag set and the absent PRIORITY filter.
 [sources.host_scripts_journald]
 type = "journald"
@@ -133,6 +157,14 @@ include_matches.SYSLOG_IDENTIFIER = [
   "inngest-wiped-volume-verify",
   "inngest-inventory",
   "git-lock-chardevice-sweep",
+  # #6178 webhook-exec diagnosis: the adnanh/webhook binary runs `-verbose`
+  # (webhook.service ExecStart) and logs each hook match + command execution + any
+  # fork/exec error to journald as SYSLOG_IDENTIFIER=webhook. Without this, a hook that
+  # returns its success code (e.g. /hooks/infra-config → 202) while its command
+  # SILENTLY fails to exec is undiagnosable off-box — exactly the state that stalled the
+  # cutover infra-config delivery (handler never ran, host stuck at 13/15). Shipping the
+  # webhook channel makes that exec failure self-report to Better Stack.
+  "webhook",
   # #6178 cutover (ADR-100): the no-SSH flip-state + guard channels. Without these the
   # `inngest-cutover-flip` marker never reaches Better Stack and the P0-2 operator gate is
   # dead (the flip oneshot has no synchronous webhook response — Better Stack is the ONLY
@@ -143,6 +175,51 @@ include_matches.SYSLOG_IDENTIFIER = [
   "inngest-server-flip-guard",
   "inngest-registry-probe",
   "inngest-doublefire-probe",
+  # #6536: inngest-heartbeat.service exited non-zero every 60s for 3 days (3,724 fires) and
+  # the stderr proving why never left the host — the unit set no SyslogIdentifier=, so systemd
+  # tagged it with the ExecStart basename (`doppler`), which matches no source here. The
+  # unit now sets SyslogIdentifier=inngest-heartbeat (inngest-bootstrap.sh) and this entry
+  # ships that channel: BOTH the ping script's own dark-arm row AND the unit's raw
+  # doppler/curl stderr. Source 4 is the ONLY viable home — the unit's output is PRIORITY 5-6
+  # (SyslogLevel=info), which Source 1's PRIORITY 0-4 cut drops; this source has no PRIORITY
+  # filter. Adding it to Source 1 instead is the trap the naive fix falls into.
+  "inngest-heartbeat",
+  # #6604: the daily LUKS at-rest probe (luks-monitor.timer → luks-monitor.sh, `logger -t
+  # luks-monitor`) + the workspaces-luks-emit.sh discriminating-field emit. Without this tag the
+  # drift log-lines never reach Better Stack and the soak's positive-control heartbeat query
+  # (workspaces-luks-soak-6604.sh) has no channel to read — a dead probe would look identical to a
+  # healthy silent one. Exact-value match: the units set SyslogIdentifier=luks-monitor / logger -t.
+  "luks-monitor",
+  # #6438 §1/§3 + #6548: the three web-host consumer/guard oneshot probes (web-*.service,
+  # for_each var.web_hosts). Each declares SyslogIdentifier= (retagging the ExecStart basename
+  # `bash`) so its fault-CLASSIFICATION stderr reaches Better Stack off-box, not SSH-only: the
+  # heartbeat only says "suppressed", the journal line says WHY (zot 401 vs 404 vs 000; git-data
+  # unreachable; NIC-guard "SOLEUR_PRIVATE_NIC direct-curl egress FAILED"). Same #6556 lesson as
+  # inngest-heartbeat above. Exact-value match: the units set these SyslogIdentifier= tags.
+  "web-zot-consumer-probe",
+  "web-git-data-probe",
+  "web-nic-guard",
+  # #6617 (a/c): the dedicated inngest host's three remaining dark channels. Each entry here
+  # is HALF a change — Source 4 is sd_journal_add_match EXACT-VALUE equality, so an entry
+  # whose unit does not set that literal SyslogIdentifier= is a permanently-dead no-op that
+  # reads like coverage. Two of these three were exactly that until #6617c set the tag:
+  #   inngest-redis     — the unit set NO SyslogIdentifier=, so journald tagged it from the
+  #                       ExecStart basename `doppler` (inngest-redis.service now sets it).
+  #   inngest-nftables  — same, tagged `inngest-nftables.sh` WITH the .sh
+  #                       (cloud-init-inngest.yml's unit now sets it).
+  #   inngest-server-probe — new #6617a unit; declares the tag from birth.
+  # journald-config.test.sh asserts each literal on BOTH sides. Quota: the two service
+  # channels are event-driven (a boot + failures); the probe is HOURLY by design (~24 rows/
+  # day) and lands in the SAME change that takes inngest-heartbeat's dark arm from ~1,440
+  # rows/day to ~24 (#6617b), so this trio is a large net saving, not a new cost.
+  #
+  # DELIBERATELY ABSENT: `inngest-boot-phone-home`. It is a pure curl POST to the Better
+  # Stack HTTP ingest and never calls `logger` — it has NO journald channel at all, so an
+  # entry for it could never match anything. It already ships direct; the tag would buy a
+  # dead line in an allowlist that is read as an inventory of live channels.
+  "inngest-redis",
+  "inngest-nftables",
+  "inngest-server-probe",
 ]
 journal_directory = "/var/log/journal"
 batch_size = 16
@@ -304,6 +381,21 @@ if contains(tag, "structured") {
   msg = replace(msg, r'\b[\w.+\-]+@[\w\-]+\.[\w.\-]+\b', "[email]")
   msg = replace(msg, r'(?i)(authorization:\s*)bearer\s+\S+', "$${1}Bearer [redacted]")
   msg = replace(msg, r'(?i)(authorization:\s*)basic\s+\S+', "$${1}Basic [redacted]")
+  # Source 4 now allowlists `inngest-redis`, which routes that unit's RAW STDERR here — and
+  # raw stderr is not JSON, so pii_scrub_structured skips it and this is the ONLY scrubber it
+  # meets. redis-server echoes an offending directive VERBATIM on any config parse failure
+  # (`>>> 'requirepass "<value>"'`) and the unit's ExecStart passes the live prd password as
+  # exactly that directive, so without this rule a malformed inngest-redis.conf ships the
+  # password to Better Stack. Value-shaped, not key=value: redis prints it as a bare
+  # space-separated directive, which none of the rules above match.
+  msg = replace(msg, r'(?i)requirepass\s+\S+', "requirepass [redacted]")
+  # Same channel, same reason: INNGEST_POSTGRES_URI is a postgres://<user>:<pw>@host DSN in the
+  # same unit's env, and DSNs surface in connection-failure diagnostics verbatim. Anchored on
+  # the CREDENTIAL shape (`scheme://<user>:<pw>@`), never on `://` — this host legitimately logs
+  # credential-less internal URLs (http://10.0.1.40:8288/) that must pass through intact, and
+  # a `://` ban would either mangle those or get muted. Scheme-agnostic so redis://, amqp://
+  # and https:// DSNs are covered by the same rule.
+  msg = replace(msg, r'([a-z][a-z0-9+.-]*://)[^:/@\s]+:[^@/\s]+@', "$${1}[redacted]@")
   msg = replace(msg, r'[\x00-\x1f\x7f\u{2028}\u{2029}]', "")
   .message = msg
   .pii_scrub_applied = tag + "+string"
@@ -333,7 +425,12 @@ if exists(.CONTAINER_NAME) {
   .source_kind = "journald"
 }
 .shipper = "vector"
-.host_name = "soleur-inngest-prd"
+# @@HOST_NAME@@ (#6396): per-host Better Stack discriminator. ALL hosts multiplex into
+# the ONE Logs source 2457081 — host_name is the sole discriminator. The inngest path
+# (inngest-bootstrap.sh) renders this to `soleur-inngest-prd` (byte-identical to pre-#6396);
+# the ungated web-host path (soleur-host-bootstrap.sh) renders the TF-injected per-host
+# server name (`soleur-web-platform`/`soleur-web-2`). Keep both render sites in lockstep.
+.host_name = "@@HOST_NAME@@"
 '''
 
 # ---------------- Transform: host_metrics → flat log shape ----------------
@@ -347,7 +444,8 @@ inputs = ["host_metrics"]
 source = '''
 .source_kind = "host_metrics"
 .shipper = "vector"
-.host_name = "soleur-inngest-prd"
+# @@HOST_NAME@@ (#6396) — see the tag_journald note above; rendered per-host at install.
+.host_name = "@@HOST_NAME@@"
 
 metric_name = "unknown"
 if exists(.name) {

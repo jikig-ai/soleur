@@ -42,6 +42,10 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Shared trusted-region parse + newest-boot scoping (single source of truth with the #6291
+# standing restart-loop alarm — the spoof-resistance invariant lives in ONE file, sourced here).
+# shellcheck source=scripts/lib/zot-telemetry-parse.sh
+source "$SCRIPT_DIR/../lib/zot-telemetry-parse.sh"
 BQ="${ZOT_BQ_OVERRIDE:-$SCRIPT_DIR/../betterstack-query.sh}"
 
 WINDOW="${ZOT_RESTART_SOAK_WINDOW:-6h}"
@@ -66,22 +70,20 @@ if [[ -z "$OUT" ]]; then
   echo "TRANSIENT: no SOLEUR_ZOT_DISK rows in ${WINDOW} — telemetry not observed yet (no deploy in window, or delivery not live)" >&2; exit 2
 fi
 
-# betterstack-query.sh returns JSONEachRow lines `{"dt":"<iso>","raw":"..."}`; each line begins with
-# the ISO dt, so a lexical `sort` orders rows chronologically REGARDLESS of the query's ORDER BY —
-# do NOT hard-couple to the shared tool's dt-ASC default (#6251-spirit). Also strip each row's
-# free-text `zot_last_err=` tail BEFORE parsing any key=value field: zot_last_err is emitted LAST,
-# so a greedy cut from its first occurrence bounds the trusted region and a crafted zot log line
-# (containing e.g. `boot_id=`/`exit_code=137`) cannot spoof the fields the verdict keys on.
-TRUSTED="$(printf '%s\n' "$OUT" | sort | sed 's/ zot_last_err=.*//')"
+# Trusted-region parse + newest-boot scoping via the shared helper (scripts/lib/zot-telemetry-parse.sh):
+# lexical `sort` orders rows chronologically REGARDLESS of the query's ORDER BY (#6251-spirit); the
+# free-text `zot_last_err=` tail (emitted LAST) is stripped BEFORE any key=value parse so a crafted
+# zot log line (containing e.g. `boot_id=`/`exit_code=137`) cannot spoof the verdict fields.
+TRUSTED="$(printf '%s\n' "$OUT" | zot_trusted_region)"
 
 # Newest boot_id = the last (newest, post-sort) row carrying a real boot_id.
-NEWEST_BOOT="$(printf '%s\n' "$TRUSTED" | grep -oE 'boot_id=[0-9a-fA-F-]+' | grep -v 'boot_id=unknown' | tail -1 | cut -d= -f2)"
+NEWEST_BOOT="$(printf '%s\n' "$TRUSTED" | zot_newest_boot)"
 if [[ -z "$NEWEST_BOOT" ]]; then
   echo "TRANSIENT: no usable boot_id in window (pre-#6288 reporter, or all-sentinel rows) — cannot scope to the newest host" >&2; exit 2
 fi
 
 # Scope to the newest boot_id, chronological order.
-SCOPED="$(printf '%s\n' "$TRUSTED" | grep -F "boot_id=$NEWEST_BOOT")"
+SCOPED="$(printf '%s\n' "$TRUSTED" | zot_scope_to_boot "$NEWEST_BOOT")"
 n_events="$(printf '%s\n' "$SCOPED" | grep -c . || true)"
 
 # Soak-gate: enough events AND a wide-enough span. A fresh host reads zot_restarts=0 before the
@@ -107,7 +109,7 @@ fi
 # evidence — a vacuous close of #6288 while zot is actually DOWN. Treat "soak filled but no usable
 # container data" as TRANSIENT, never PASS. (observability + test-design + pattern-recognition all
 # converged on this false-PASS path.)
-restarts="$(printf '%s\n' "$SCOPED" | grep -oE 'zot_restarts=-?[0-9]+' | cut -d= -f2 | grep -vE '^-' || true)"
+restarts="$(printf '%s\n' "$SCOPED" | zot_nonsentinel_values zot_restarts)"
 if [[ -z "$restarts" ]]; then
   echo "TRANSIENT: soak filled (${n_events} events / ${span}s) but every zot_restarts is a -1 inspect-miss sentinel for boot_id=$NEWEST_BOOT — zot may be down/absent; cannot confirm a plateau on zero valid container samples" >&2; exit 2
 fi
@@ -130,22 +132,46 @@ fi
 # (3) container-cgroup OOM-kill counter (MONOTONIC memory.events oom_kill; survives the point-
 # sampling race, unlike the zot_anon_mb gauge — the real cgroup-OOM confirmation). Any nonzero on
 # the newest boot = the cgroup OOM-killed zot at least once.
-maxoomk="$(printf '%s\n' "$SCOPED" | grep -oE 'zot_oom_kills=-?[0-9]+' | cut -d= -f2 | grep -vE '^-' | sort -n | tail -1 || true)"
+maxoomk="$(printf '%s\n' "$SCOPED" | zot_nonsentinel_values zot_oom_kills | sort -n | tail -1)"
 if [[ -n "$maxoomk" && "$maxoomk" -gt 0 ]]; then
   FAILS+=("zot_oom_kills reached ${maxoomk} — the container cgroup OOM-killed zot (monotonic memory.events counter)")
 fi
 
 # (4) journald kernel-OOM window backstop.
-maxoom="$(printf '%s\n' "$SCOPED" | grep -oE 'oom_kills_5m=[0-9]+' | cut -d= -f2 | sort -n | tail -1)"
+maxoom="$(printf '%s\n' "$SCOPED" | zot_nonsentinel_values oom_kills_5m | sort -n | tail -1)"
 if [[ -n "$maxoom" && "$maxoom" -gt 0 ]]; then
   FAILS+=("oom_kills_5m peaked at ${maxoom} — the kernel OOM-killer fired in-window")
 fi
 
 # (5) anon RSS pressure near the --memory cap (context signal, backs up the monotonic counter).
-threshold=$(( CAP_MB - ANON_HEADROOM_MB ))
-maxanon="$(printf '%s\n' "$SCOPED" | grep -oE 'zot_anon_mb=-?[0-9]+' | cut -d= -f2 | grep -vE '^-' | sort -n | tail -1 || true)"
+# The cap is REPORTED by the host (zot_memory_cap_mb, read from the container's live cgroup
+# memory.max), not assumed here. It used to default to a hardcoded 7168 — correct only while
+# the host was cx33. The cap is now derived from var.registry_server_type
+# (zot-registry.tf local.registry_memory_cap_mb), so on a 4 GB host it is 3072. A gate holding
+# the stale 7168 would test zot_anon_mb against 7168-1024=6144 on a container the kernel kills
+# at 3072: unreachable, so it PASSES a starved host — a gate that does not pin the thing it
+# names. Fall back to CAP_MB only when the host reports nothing (older boot with no such
+# field); a reported cap always wins.
+reported_cap="$(printf '%s\n' "$SCOPED" | zot_nonsentinel_values zot_memory_cap_mb | sort -n | tail -1)"
+effective_cap="${reported_cap:-$CAP_MB}"
+cap_source="reported by host"
+[[ -z "$reported_cap" ]] && cap_source="assumed (host reported none)"
+threshold=$(( effective_cap - ANON_HEADROOM_MB ))
+
+# UNCAPPED is its own failure, not a missing reading. zot_memory_cap_mb cannot express it (-1 is
+# the parse lib's drop-sentinel, 0 would mean "capped at nothing"), so the host reports
+# zot_memory_capped=true|false|unknown separately. Without this branch an uncapped container
+# looks exactly like a mid-restart one: reported_cap is empty, the gate ASSUMES 7168, and check
+# (5) below tests anon against a ceiling that does not exist — on a 4 GB host, 6144 is
+# unreachable, so it passes. Uncapped-on-a-small-host IS #6288's root condition; a gate that
+# cannot see it is the gate this issue needed and did not have. Any `false` on the newest boot
+# fails: the cap either binds or it does not.
+if printf '%s\n' "$SCOPED" | grep -qF 'zot_memory_capped=false'; then
+  FAILS+=("zot is running UNCAPPED (zot_memory_capped=false) — docker started it with no --memory limit, so the cgroup cannot contain a large-store scan and the host OOM-killer is the only backstop. This is #6288's root condition.")
+fi
+maxanon="$(printf '%s\n' "$SCOPED" | zot_nonsentinel_values zot_anon_mb | sort -n | tail -1)"
 if [[ -n "$maxanon" && "$maxanon" -gt "$threshold" ]]; then
-  FAILS+=("zot_anon_mb peaked at ${maxanon} MB (> cap ${CAP_MB} - headroom ${ANON_HEADROOM_MB} = ${threshold}) — the --memory cap is under-sized")
+  FAILS+=("zot_anon_mb peaked at ${maxanon} MB (> cap ${effective_cap} [${cap_source}] - headroom ${ANON_HEADROOM_MB} = ${threshold}) — the --memory cap is under-sized")
 fi
 
 if [[ "${#FAILS[@]}" -gt 0 ]]; then
@@ -155,5 +181,5 @@ if [[ "${#FAILS[@]}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "PASS: zot restart-loop plateaued for boot_id=$NEWEST_BOOT over ${span}s / ${n_events} events (>=1 valid container sample) — restarts flat (delta<=${PLATEAU_TOL}), no exit_code=137, zot_oom_kills=0, oom_kills_5m=0, zot_anon_mb below the ${CAP_MB}m cap. #6288 remediation holds."
+echo "PASS: zot restart-loop plateaued for boot_id=$NEWEST_BOOT over ${span}s / ${n_events} events (>=1 valid container sample) — restarts flat (delta<=${PLATEAU_TOL}), no exit_code=137, zot_oom_kills=0, oom_kills_5m=0, zot_anon_mb below the ${effective_cap}m cap [${cap_source}]. #6288 remediation holds."
 exit 0

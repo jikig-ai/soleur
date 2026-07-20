@@ -23,6 +23,21 @@ packages:
 groups:
   - docker
 
+# The inngest-server systemd unit runs as User=deploy (inngest-bootstrap.sh:184/414) and the
+# bootstrap chowns /var/lib/inngest to deploy:deploy (else SQLite CANTOPEN(14)). The web hosts
+# create `deploy` in their cloud-init (the `name: deploy` entry under `users:` in
+# cloud-init.yml); the dedicated inngest host never
+# did, so the bootstrap aborted with `chown: invalid user: 'deploy:deploy'` and inngest never
+# started (found via the #6178 boot probe, after the HOME fix). Mirror the web deploy user;
+# `- default` preserves the distro root user (+ its hcloud-injected SSH key). deploy gets a home
+# (/home/deploy) so the unit's User=deploy `doppler run` resolves $HOME at runtime.
+users:
+  - default
+  - name: deploy
+    groups: docker
+    shell: /bin/bash
+    lock_passwd: true
+
 write_files:
   # SSH hardening parity with registry / git-data / the web host's minimal set.
   - path: /etc/ssh/sshd_config.d/01-hardening.conf
@@ -74,6 +89,13 @@ write_files:
       Wants=network-online.target
       [Service]
       Type=oneshot
+      # #6617c: without this, systemd tags this unit from the ExecStart basename —
+      # `inngest-nftables.sh`, WITH the .sh — which matches no vector.toml source, so the
+      # script's own "[inngest-nft] nft binary not found" / rule-load failure never leaves
+      # this deny-all-public host. Source 4 is EXACT-VALUE equality: the tag here and the
+      # allowlist entry in vector.toml are one change, asserted on both sides by
+      # journald-config.test.sh.
+      SyslogIdentifier=inngest-nftables
       ExecStart=/usr/local/bin/inngest-nftables.sh
       RemainAfterExit=yes
       [Install]
@@ -81,9 +103,77 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # --- #6178 boot observability: early-boot stage-marker emitter -----------------------
+  # Ships a SOLEUR_INNGEST_BOOT_STAGE marker to the Better Stack Logs HTTP ingest, INDEPENDENT
+  # of the journald->Vector shipper (which only starts LATE in the bootstrap, if at all — so a
+  # dark host that bricks BEFORE Vector is otherwise a total blind spot: no logs, deny-all-public
+  # so no SSH). URI + token mirror the vector.toml `[sinks.betterstack]` sink, so markers land in
+  # the SAME source table and are queryable via `betterstack-query.sh --grep SOLEUR_INNGEST_BOOT_STAGE`.
+  # Fail-OPEN: never blocks or fails the boot (a broken emitter must not brick the host). This POST
+  # bypasses Vector's PII scrub, so the free-form detail arg is masked here before shipping.
+  - path: /usr/local/bin/inngest-boot-phone-home.sh
+    content: |
+      #!/usr/bin/env bash
+      set +e
+      stage="$1"; detail="$2"
+      tok_file=/run/inngest-bs-logs-token
+      [ -r "$tok_file" ] || exit 0
+      bs_token="$(cat "$tok_file" 2>/dev/null)"
+      [ -n "$bs_token" ] || exit 0
+      host="$(hostname 2>/dev/null)"
+      ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+      detail="$(printf '%s' "$detail" | sed -E 's#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g' 2>/dev/null)"
+      payload="$(jq -nc --arg m SOLEUR_INNGEST_BOOT_STAGE --arg s "$stage" --arg d "$detail" --arg h "$host" --arg t "$ts" '{message:($m+" stage="+$s+" "+$d), marker:$m, stage:$s, detail:$d, host:$h, dt:$t, shipper:"cloud-init-phone-home"}' 2>/dev/null)"
+      [ -n "$payload" ] || payload="{\"message\":\"SOLEUR_INNGEST_BOOT_STAGE stage=$stage\",\"marker\":\"SOLEUR_INNGEST_BOOT_STAGE\",\"stage\":\"$stage\",\"host\":\"$host\"}"
+      curl -fsS --max-time 8 -X POST "https://s2457081.eu-fsn-3.betterstackdata.com/" -H "Authorization: Bearer $bs_token" -H "Content-Type: application/json" -d "$payload" >/dev/null 2>&1
+      exit 0
+    owner: root:root
+    permissions: '0755'
+
+  # --- #6178 boot observability: value-based secret redaction for the shipped log tail ---
+  # The phone-home POST bypasses Vector's PII scrub, so any log tail it ships MUST be scrubbed
+  # here first. Pattern-masking alone is incomplete (it misses non-hex tokens / redis passwords),
+  # so this redacts by KNOWN VALUE — every enumerated inngest secret (token files + the isolated
+  # soleur-inngest/prd set) is replaced literally, catching secrets of ANY format. It uses bash
+  # quoted-pattern parameter replacement (literal, not glob) so regex/glob metachars in a secret
+  # value are matched safely.
+  # Fail-open: if Doppler is unreachable the value list degrades to the token files + the pattern
+  # backstop (never errors). Reads the tail on stdin, writes the scrubbed tail on stdout.
+  - path: /usr/local/bin/inngest-redact.sh
+    content: |
+      #!/usr/bin/env bash
+      set +e
+      data="$(cat)"
+      vals=()
+      [ -r /run/inngest-bs-logs-token ] && vals+=("$(cat /run/inngest-bs-logs-token 2>/dev/null)")
+      . /etc/default/soleur-ghcr-read 2>/dev/null; vals+=("$GHCR_READ_TOKEN")
+      . /etc/default/inngest-doppler 2>/dev/null; vals+=("$DOPPLER_TOKEN")
+      if [ -n "$DOPPLER_TOKEN" ]; then
+        while IFS= read -r v; do vals+=("$v"); done < <(doppler secrets download --no-file --format json --project soleur-inngest --config prd 2>/dev/null | jq -r 'to_entries[]|select(.key|startswith("DOPPLER_")|not)|.value' 2>/dev/null)
+      fi
+      for s in "$${vals[@]}"; do
+        [ -n "$s" ] && [ "$(printf %s "$s" | wc -c)" -ge 6 ] && data="$${data//"$s"/REDACTED}"
+      done
+      printf '%s' "$data" | sed -E 's#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#[0-9a-f]{32,}#REDACTED#g; s#[A-Za-z0-9_+/-]{40,}#REDACTED#g'
+    owner: root:root
+    permissions: '0755'
+
 runcmd:
+  # --- #6178 boot observability: EARLIEST marker (Doppler-INDEPENDENT) -------------------
+  # First instruction. Stage the baked Better Stack token and phone home immediately. If this
+  # `runcmd-entered` marker arrives, cloud-init IS running my code AND the host can reach Better
+  # Stack — so the boot failure is whichever LATER marker is the last received. If not even this
+  # arrives, the host cannot POST at all (egress/TLS/clock skew) and the sink must be rethought.
+  # set +e: fail-open, never blocks boot.
+  - |
+    set +e
+    printf '%s' '${betterstack_logs_token}' > /run/inngest-bs-logs-token
+    chmod 600 /run/inngest-bs-logs-token 2>/dev/null
+    /usr/local/bin/inngest-boot-phone-home.sh runcmd-entered "host booted"
+
   # Apply SSH hardening immediately.
   - systemctl restart sshd
+  - /usr/local/bin/inngest-boot-phone-home.sh sshd-restarted
 
   # Mount the Redis AOF volume by id at /mnt/data (inngest-redis.conf `dir /mnt/data/redis`).
   # `nofail` so a volume hiccup does not wedge boot; the redis unit's RequiresMountsFor=
@@ -104,20 +194,84 @@ runcmd:
     echo "$${DOPPLER_SHA256}  /tmp/doppler.tar.gz" | sha256sum -c -
     tar xzf /tmp/doppler.tar.gz -C /usr/local/bin doppler
     chmod +x /usr/local/bin/doppler
+    # #6178: the inngest-server / flip-guard / vector / cutover-flip units hardcode
+    # ExecStart=/usr/bin/doppler (inngest-bootstrap.sh:411/473/619, inngest-cutover-flip.service:19),
+    # but cloud-init installs to /usr/local/bin — so every unit died with systemd status=203/EXEC and
+    # inngest never bound :8288 (found via the post-boot-health probe). Web hosts have doppler at
+    # /usr/bin; this host did not. Symlink so the hardcoded path resolves for all units.
+    ln -sf /usr/local/bin/doppler /usr/bin/doppler
     rm /tmp/doppler.tar.gz
+    command -v doppler >/dev/null 2>&1 \
+      && /usr/local/bin/inngest-boot-phone-home.sh doppler-cli-installed "$(doppler --version 2>/dev/null | head -1)" \
+      || /usr/local/bin/inngest-boot-phone-home.sh doppler-cli-install-FAILED
   # Restricted (0600 root) env file with the scoped Doppler service token — NOT world-
   # readable /etc/environment (mirrors registry's /etc/default/registry-doppler). The token
   # is scoped to the ISOLATED `soleur-inngest` project's `prd` root config (a SEPARATE
   # project — NO inheritance path to soleur/prd), so a host compromise reads ONLY the
   # inngest secret set.
-  - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/inngest-doppler
+  # HOME is REQUIRED (#6122 boot fix — the actual dark-host boot bug, found via the #6178 boot
+  # probe): cloud-init runcmd runs with NO $HOME, and the Doppler CLI aborts with
+  # "Doppler Error: $HOME is not defined" even when DOPPLER_CONFIG_DIR is set. Without it the
+  # boot isolation self-check `doppler run` (+ its nested `doppler secrets`) and the token fetch
+  # both fail → inngest never bootstraps → the host is dark+silent+unreachable. The registry host
+  # got this fix (cloud-init-registry.yml, the (3) Store-mount self-heal block); the inngest host never did, so it never booted.
+  # (systemd units set HOME=/root themselves, so only these cloud-init-level doppler calls need it.)
+  - printf 'HOME=/root\nDOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/inngest-doppler
   - chmod 600 /etc/default/inngest-doppler
 
+  # --- #6178 boot observability: stage the Better Stack token + emit the FIRST marker ---
+  # Reached only if the volume mount + Doppler CLI install + scoped-token auth all succeeded,
+  # so a received `doppler-token-fetched` marker proves the boot got this far AND Doppler auth
+  # works; TOTAL marker absence localizes the failure to those earlier stages (or lost egress).
+  # 0600 in tmpfs /run (re-fetched every boot; the phone-home reads it). set +e: fail-open.
+  - |
+    set +e
+    set -a; . /etc/default/inngest-doppler; set +a
+    # #6178 diag: capture WHY doppler reads fail on the host (works off-host w/ same token+env).
+    # Probe api.doppler.com reachability (DNS/connect/http) + the doppler CLI's own stderr.
+    api_probe="$(curl -sS -o /dev/null -w 'http=%%{http_code};ip=%%{remote_ip};dns=%%{time_namelookup}s;conn=%%{time_connect}s;curlrc=%%{exitcode}' --max-time 12 https://api.doppler.com/v3/me 2>&1 | head -c 160)"
+    derr="$(doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config prd --plain 2>&1 1>/tmp/bstok)"; drc=$?
+    t="$(cat /tmp/bstok 2>/dev/null)"; rm -f /tmp/bstok
+    if [ -n "$t" ]; then
+      printf '%s' "$t" > /run/inngest-bs-logs-token; chmod 600 /run/inngest-bs-logs-token 2>/dev/null
+      /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetched "arch=${inngest_cli_arch} apiprobe=[$api_probe]"
+    else
+      /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetch-FAILED "drc=$drc apiprobe=[$api_probe] derr=[$(printf %s "$derr" | head -c 200)]"
+    fi
+
   # --- Bake scoped GHCR read-creds (#6179/#6161) --------------------------------------
-  # So the cold-boot soleur-inngest-bootstrap OCI pull + cosign-verify authenticates even
+  # CORRECTED (#6617 / plan CF-2): this comment used to assert that the cold-boot OCI pull was
+  # signature-verified. THERE IS NO SIGNATURE VERIFICATION ON THIS PATH, and there never was.
+  # `grep -n cosign` on this file returned exactly one hit — that sentence, which named a
+  # verification step no line of this file performs. Real verification exists only in
+  # ci-deploy.sh (the app-deploy path); cloud-init-registry.yml only retains the sha256-*
+  # signature tags that verify depends on. build-inngest-bootstrap-image.yml states plainly that
+  # this image is "NOT cosign-signed (no id-token perm) — no sign step", so there is no
+  # signature for a verify to check and adding one would gate the sole scheduler's boot on an
+  # artifact that has never been produced.
+  #
+  # The correction is recorded rather than quietly deleted because a false comment is how this
+  # class propagates: the plan for this very change inherited the claim instead of grepping
+  # the path, and restated it as an acceptance criterion.
+  #
+  # Be precise about what the DIGEST PIN on IREF below does and does not buy, because
+  # overstating it would repeat this same error one layer down. The pin gives INTEGRITY: the
+  # bytes are content-addressed, so a swapped or spoofed payload fails the pull regardless of
+  # transport or which registry served it. It does NOT give PROVENANCE: it proves you got the
+  # bytes someone recorded, never who built them. Provenance here still rests entirely on
+  # GHCR's TLS + authn. Signing the image is a separate change that must land BEFORE any
+  # verify step, not with it — until then this path is integrity-pinned and unsigned, and
+  # that is the honest description of it.
+  #
+  # So the cold-boot soleur-inngest-bootstrap OCI pull authenticates even
   # when Doppler answers empty at the boot instant (else anonymous private pull → 401 →
-  # 226/NAMESPACE abort). Same 0600 protection as the token file. Copy of the web
-  # cloud-init.yml:398 + :462-468 bake+login pattern.
+  # 226/NAMESPACE abort). Same 0600 protection as the token file. Mirrors the web
+  # cloud-init's `> /etc/default/soleur-ghcr-read` bake — but the hosts diverge
+  # downstream: there the file is write-only at boot and is consumed later by
+  # ci-deploy.sh (its baked-cred path), while that host's `STAGE=ghcr_login` seed-pull
+  # authenticates from the template-interpolated vars directly. Here the file IS sourced
+  # for the login below. (An earlier draft said the web bake "feeds" that seed-pull login.
+  # It does not — the bake→login relationship holds on THIS host only.)
   - printf 'GHCR_READ_USER=%s\nGHCR_READ_TOKEN=%s\n' '${ghcr_read_user}' '${ghcr_read_token}' > /etc/default/soleur-ghcr-read
   - chmod 600 /etc/default/soleur-ghcr-read
 
@@ -133,10 +287,13 @@ runcmd:
     . /etc/default/soleur-ghcr-read 2>/dev/null || true
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     if [ -n "$GHCR_READ_USER" ] && [ -n "$GHCR_READ_TOKEN" ]; then
-      printf '%s' "$GHCR_READ_TOKEN" | docker login ghcr.io -u "$GHCR_READ_USER" --password-stdin >/dev/null 2>&1 \
-        && echo "[inngest] ghcr login ok" || echo "[inngest] ghcr login failed (bootstrap pull may 401)"
+      if printf '%s' "$GHCR_READ_TOKEN" | docker login ghcr.io -u "$GHCR_READ_USER" --password-stdin >/dev/null 2>&1; then
+        echo "[inngest] ghcr login ok"; /usr/local/bin/inngest-boot-phone-home.sh ghcr-login-ok
+      else
+        echo "[inngest] ghcr login failed (bootstrap pull may 401)"; /usr/local/bin/inngest-boot-phone-home.sh ghcr-login-FAILED
+      fi
     else
-      echo "[inngest] WARN: baked GHCR creds empty — bootstrap pull may 401"
+      echo "[inngest] WARN: baked GHCR creds empty — bootstrap pull may 401"; /usr/local/bin/inngest-boot-phone-home.sh ghcr-creds-EMPTY
     fi
 
   # --- Fail-closed boot isolation self-check (mirrors registry) ------------------------
@@ -169,13 +326,41 @@ runcmd:
     CHKEOF
     then
       : > /run/soleur-inngest-doppler.ok
+      /usr/local/bin/inngest-boot-phone-home.sh isolation-check-passed
     else
       echo "[inngest] FATAL: doppler isolation self-check failed — inngest will NOT bootstrap" >&2
+      /usr/local/bin/inngest-boot-phone-home.sh isolation-check-FAILED
     fi
     set +e
 
+  # #6178: ensure the deploy user+group exist BEFORE the bootstrap chowns /var/lib/inngest to
+  # deploy:deploy. The cloud-config `users:` block above did NOT create deploy on this host (the
+  # Hetzner datasource did not apply user-data users_groups — verified: bootstrap still aborted
+  # `chown: invalid user: deploy:deploy` with the block present). Create it explicitly + idempotently
+  # in runcmd, which reliably runs before the bootstrap block below. -m → /home/deploy so the
+  # inngest-server unit's User=deploy resolves $HOME at runtime.
+  - groupadd -f docker
+  - groupadd -f deploy
+  - id -u deploy >/dev/null 2>&1 || useradd -m -g deploy -G docker -s /bin/bash deploy
+  - /usr/local/bin/inngest-boot-phone-home.sh deploy-user-ensured "$(id deploy 2>&1 | head -c 80)"
+
+  # #6178: pre-create /etc/default/inngest-server with the Doppler token so inngest-bootstrap.sh's
+  # "preserve" branch (inngest-bootstrap.sh:220) fires. The dedicated host has NO
+  # /etc/default/webhook-deploy (a web-host webhook.service file) that the bootstrap otherwise reads
+  # the token from — so without this it aborts 'webhook-deploy not found — cannot source DOPPLER_TOKEN'.
+  # Same content + umask 0137 (mode 0640) + root:deploy the bootstrap itself writes (:238-245); deploy
+  # must exist first (created above). The unit's User=deploy gets HOME=/home/deploy from systemd, so
+  # this env file carries DOPPLER_CONFIG_DIR (not HOME).
+  # #6555: DOPPLER_PROJECT=soleur-inngest lands in the env-file so the inngest units (which
+  # dropped `--project`) resolve the dedicated project from EnvironmentFile at runtime. Literal
+  # here (not $DOPPLER_PROJECT) — this cloud-init write runs BEFORE the bootstrap that would set
+  # the shell var; the dedicated host is always soleur-inngest.
+  - ( umask 0137 && printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\nDOPPLER_PROJECT=soleur-inngest\n' '${doppler_token}' > /etc/default/inngest-server )
+  - chown root:deploy /etc/default/inngest-server
+
   # --- Extract + run inngest-bootstrap.sh from the baked OCI image ---------------------
-  # Gated on the isolation sentinel above (fail-closed). Mirrors web cloud-init.yml:642-682:
+  # Gated on the isolation sentinel above (fail-closed). Mirrors the web block in
+  # cloud-init.yml opened by `docker create --name soleur-inngest-bootstrap-extract`:
   # docker create → docker cp the script + durable-Redis assets → read INNGEST_CLI_VERSION/
   # SHA from the image env → run it. Passes the dedicated-host env: INNGEST_CLI_ARCH
   # (arch-derived — arm64 on cax*, amd64 otherwise; inngest-bootstrap.sh:37/54) + SDK_URL
@@ -183,9 +368,46 @@ runcmd:
   - |
     set -e
     test -f /run/soleur-inngest-doppler.ok || { echo "FATAL: doppler isolation self-check did not pass — refusing to bootstrap inngest" >&2; exit 1; }
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.19
+    # DIGEST-PINNED (plan CF-2). What follows this line is `docker pull` -> `docker create`/`cp`
+    # -> `bash inngest-bootstrap.sh` EXECUTED AS ROOT on the sole scheduler. Until this pin, the
+    # only integrity control on that root-executed payload was GHCR's TLS + authn against a
+    # MUTABLE tag: anything able to re-point :v1.1.24 between the build and a host replace
+    # would have served a different root shell script, and nothing on this path would have
+    # noticed. The comment above the GHCR bake used to claim a signature check covered this; it
+    # did not, and the image is not signed at all (see that correction).
+    #
+    # BOTH halves are load-bearing. The `@sha256:` is the actual control — docker resolves by
+    # digest and ignores the tag, so these are immutable bytes. The `:v1.1.24` is retained
+    # because the pin-drift guard (cloud-init-inngest-bootstrap.test.sh AC6/AC6b) matches
+    # `soleur-inngest-bootstrap:vX.Y.Z` and compares it to the semver-max published
+    # vinngest-v* git tag; dropping the tag would silently disarm that guard, which is the
+    # #6536 failure (a stale pin rebuilding the dark host pre-fix) all over again.
+    #
+    # Digest verified from three independent sources before pinning: `docker buildx imagetools
+    # inspect`, the build-inngest-bootstrap-image.yml push log for run 29694156854, and the
+    # GitHub packages API. Bumping the tag WITHOUT re-resolving this digest gives you a
+    # v1.1.25 tag pinned to v1.1.24's bytes — silently, since the drift guard only reads tags.
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.24@sha256:6cdaa63d1496642e681898a831234b712f75d3b09bd0844bcabec3de74b0a0f8
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
-    docker pull "$IREF"
+    # #6178 boot observability: bracket the OCI pull so a pull hang/401 self-reports the STAGE
+    # (pre-oci-pull with no oci-pull-rc-* = hung; oci-pull-rc-N!=0 = failed, with masked tail).
+    /usr/local/bin/inngest-boot-phone-home.sh pre-oci-pull "$IREF"
+    set +e
+    install -m 600 /dev/null /var/log/inngest-oci-pull.log   # 0600 pre-create so the redirect can't leave secrets world-readable
+    docker pull "$IREF" > /var/log/inngest-oci-pull.log 2>&1
+    pull_rc=$?
+    set -e
+    pull_tail="$(tail -n 8 /var/log/inngest-oci-pull.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
+    /usr/local/bin/inngest-boot-phone-home.sh oci-pull-rc-$pull_rc "$pull_tail"
+    [ "$pull_rc" -eq 0 ] || { echo "FATAL: OCI pull failed rc=$pull_rc" >&2; exit "$pull_rc"; }
+    # #6617a: record WHICH image produced this host, for the liveness probe's image_ref field.
+    # Named image_REF on the probe side because this writes the FULL $IREF — registry, repo,
+    # tag AND digest — not a bare sha256. A consumer keying on `image_sha=sha256:` never matched.
+    # CF-3's lesson is that inngest-bootstrap.sh and vector.toml reach the host ONLY through
+    # this image, so "the fix is on main" never implies "the fix is on the host" — #6539
+    # measured two published releases containing none of the fix they were dispatched for.
+    # $IREF is digest-pinned above, so this records the exact bytes, not a mutable tag.
+    printf 'INNGEST_BOOTSTRAP_IMAGE=%s\n' "$IREF" > /etc/default/soleur-inngest-image
     EXTRACT_DIR=$(mktemp -d)
     cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
     trap cleanup EXIT
@@ -201,7 +423,8 @@ runcmd:
     # VECTOR_CLI_ARCH + aarch64 triple map) and BETTERSTACK_LOGS_TOKEN is provisioned into
     # the isolated soleur-inngest/prd project (inngest-betterstack-token.tf; admitted by the
     # boot isolation self-check above). Stage /tmp/vector.toml (docker-cp from the OCI image,
-    # same as web cloud-init.yml:659) so the bootstrap writes the vector.service unit; pass
+    # same as the identical `soleur-inngest-bootstrap-extract:/vector.toml` docker-cp line
+    # in web cloud-init.yml) so the bootstrap writes the vector.service unit; pass
     # the arm64 Vector env (non-empty VERSION + arm64 SHA override + VECTOR_CLI_ARCH) below.
     docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
     chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
@@ -213,16 +436,52 @@ runcmd:
     # the wrong-arch SHA would reject at verify. Version is arch-independent (from the image).
     INNGEST_CLI_SHA256="${inngest_cli_sha256}"
     # #6197: read the arch-independent Vector version from the image env (mirror the
-    # INNGEST_CLI_VERSION read above; web cloud-init.yml:677). The SHA is OVERRIDDEN with the
+    # INNGEST_CLI_VERSION read above; the web `grep '^VECTOR_CLI_VERSION='` read in
+    # cloud-init.yml). The SHA is OVERRIDDEN with the
     # arch-matched checksum (templatefile-derived, mirroring the INNGEST_CLI_SHA256 override)
     # because this host downloads the arch-matched tarball — a wrong-arch SHA would fail verify.
     VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | head -1 | cut -d= -f2- || true)
     # DOPPLER_PROJECT=soleur-inngest routes every doppler-wrapped unit (server/heartbeat/redis/
     # vector) at THIS host's ISOLATED project (AC3) — the scoped boot token can read only
     # soleur-inngest. VECTOR_CLI_ARCH (=${inngest_cli_arch}) selects the matching triple in the bootstrap map.
+    # #6178 boot observability: capture the bootstrap's combined output to a file and self-report
+    # its exit code + a masked tail. The bootstrap's own log() goes to journald->Vector, which is
+    # DOWN until the bootstrap installs+starts Vector near its end — so a mid-bootstrap failure is
+    # otherwise invisible. pre-bootstrap-run with no bootstrap-exit-* = hung; bootstrap-exit-N!=0 =
+    # the actual failure, tail masked (postgres creds / 32+hex tokens / signing keys) before ship.
+    /usr/local/bin/inngest-boot-phone-home.sh pre-bootstrap-run
+    set +e
+    install -m 600 /dev/null /var/log/inngest-bootstrap.log   # 0600 pre-create (secrets in the tail; see inngest-redact.sh)
     env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
         "INNGEST_CLI_ARCH=${inngest_cli_arch}" "SDK_URL=${sdk_url}" \
         "DOPPLER_PROJECT=soleur-inngest" \
         "VECTOR_CLI_VERSION=$VECTOR_CLI_VERSION" "VECTOR_CLI_SHA256=${vector_sha256}" "VECTOR_CLI_ARCH=${inngest_cli_arch}" \
-      bash "$EXTRACT_DIR/inngest-bootstrap.sh"
+      bash "$EXTRACT_DIR/inngest-bootstrap.sh" > /var/log/inngest-bootstrap.log 2>&1
+    boot_rc=$?
+    set -e
+    boot_tail="$(tail -n 20 /var/log/inngest-bootstrap.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
+    /usr/local/bin/inngest-boot-phone-home.sh bootstrap-exit-$boot_rc "$boot_tail"
+    if [ "$boot_rc" -ne 0 ]; then
+      echo "FATAL: inngest bootstrap failed rc=$boot_rc (see /var/log/inngest-bootstrap.log)" >&2
+      exit "$boot_rc"
+    fi
     trap - EXIT
+    /usr/local/bin/inngest-boot-phone-home.sh bootstrap-done
+    # #6178 diag: the bootstrap `systemctl restart` returns once the process is SPAWNED, not once
+    # it is HEALTHY — so bootstrap-done does not prove inngest bound :8288. Capture the service
+    # states + loopback :8288 + the inngest-server journal tail (redacted) via the phone-home
+    # (Vector journald shipping is separately unreliable on this host, so this is the visibility).
+    set +e
+    sleep 8
+    svc="$(systemctl is-active inngest-server.service inngest-redis.service vector.service 2>&1 | tr '\n' ',')"
+    lo="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://127.0.0.1:8288/ 2>&1)"
+    jl="$(journalctl -u inngest-server.service --no-pager -n 15 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' | head -c 400)"
+    /usr/local/bin/inngest-boot-phone-home.sh post-boot-health "svc=[$svc] lo8288=$lo jl=[$jl]"
+    # #6178 diag: loopback :8288 is healthy but the web-host->10.0.1.40:8288 registry-probe 500s —
+    # capture the private-net readiness: self-curl the private IP, the configured 10.0.1.x NIC
+    # addr(s), what :8288 is bound to (0.0.0.0 vs 127.0.0.1), and the nftables allowlist chain.
+    priv="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://10.0.1.40:8288/ 2>&1)"
+    nic="$(ip -o -4 addr show 2>/dev/null | grep -oE '10\.0\.1\.[0-9]+' | tr '\n' ',')"
+    bind="$(ss -tlnH 2>/dev/null | grep ':8288' | awk '{print $4}' | tr '\n' ',')"
+    nft="$(nft list chain inet soleur_inngest input 2>/dev/null | tr '\n' ' ' | head -c 160)"
+    /usr/local/bin/inngest-boot-phone-home.sh net-health "priv8288=$priv nic=[$nic] bind=[$bind] nft=[$nft]"

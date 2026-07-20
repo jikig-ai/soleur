@@ -1,9 +1,58 @@
+---
+adr: ADR-082
+title: Fresh web-2 boot observability + supply-chain hardening contract
+status: superseded-in-part
+date: 2026-07-03
+superseded_by: [ADR-128]
+---
+
 # ADR-082: Fresh web-2 boot observability + supply-chain hardening contract
 
-- **Status:** Adopting
+> **Status: superseded-in-part by [ADR-128](./ADR-128-coherence-two-invariants.md) (2026-07-20, #6575).**
+> This ADR's entire subject is **web-2**, which was retired 2026-07-17 (#6538/#6463). `var.web_hosts`
+> is single-host; every "fresh web-2 boot" premise below is historical. What is superseded is the
+> **web-2 scoping**, not the controls — three of the five items have a live disposition:
+>
+> **Remains IN FORCE.** *Item 3* (fresh-host post-container egress-enforcement probe) — shipped, baked,
+> host-generic, and it executes at boot on **any** fresh web host. *Item 5* (web-host Vector log
+> shipping + terminal-block boot-emit trap + `pull_failure` `host_id`) — the terminal-block trap is
+> now web-1's **sole no-SSH boot page**, retained deliberately (ADR-128 §Consequences).
+>
+> **Remains IN FORCE but UNMET — owned by #6730.** *Item 4* (image digest pin + signature
+> verification). The **running-host** half shipped (`ci-deploy.sh` cosign verify, WARN). The
+> **fresh-host** half did **not**: nothing pins `var.image_name`, which still defaults to the mutable
+> `ghcr.io/jikig-ai/soleur-web-platform:latest`, and the boot path performs **no** signature
+> verification — `server.tf`'s own threat-model comment says so. **Do not record Item 4 as
+> discharged.** It is the enforcement arm of ADR-128's *cross-commit skew* invariant, and #6730's
+> digest-pinned birth path is what would meet it.
+>
+> **Dies with the retire.** *Item 1* (per-host uptime absence detector) — its subject host is gone and
+> the #5933 per-host probe was already retired; the app.soleur.ai probe fully covers the single-host
+> fleet. *Item 2* (A-record drain on boot failure) — there is no second origin to drain to; a
+> round-robin/LB drain rides #6459, not this ADR. *Item 5's web-2-specific clauses* — see the two
+> corrections below.
+>
+> **Two claims below are FALSIFIED by the retire and are corrected here rather than edited away:**
+>
+> 1. **`:52-53`** — *"the SOLE page for a dead web-2 warm standby"*. The alert
+>    (`sentry_issue_alert.web_terminal_boot_fatal`) filters on `stage` and **never on host**, so it
+>    was never web-2-specific. Post-retire it is the sole no-SSH boot page for **web-1**. The same
+>    false framing was encoded in that resource's Terraform comment and is corrected there in the
+>    same change. The alert itself is host-generic and survives unchanged — deleting it as "web-2
+>    surface" would have removed live coverage for the only web host.
+> 2. **`:45-46`** — Item 5's Vector log shipping described as *"Half-met at ship (web-2 only)"*. With
+>    web-2 retired the only host that ever met it no longer exists, so post-retire Item 5's log-shipping
+>    clause is **0%-met**: web-1 still ships `host_name=soleur-inngest-prd` and gets correct per-host
+>    attribution only at its next recreate (#6616). "Half-met" now reads as more coverage than exists.
+>
+> Read the web-2 provisioning framing below as historical. For the coherence invariants that replaced
+> Item 4's framing, and for the retention rule governing which verifiers survived the sweep, see
+> ADR-128.
+
+- **Status:** superseded-in-part (was: Adopting)
 - **Date:** 2026-07-03
 - **Deciders:** one-shot pipeline (plan + work), CPO threshold carried from ADR-080 (single-user-incident substrate)
-- **Relates to:** #5933 (this contract); #5921 / ADR-080 (fresh-host bake-and-extract boot path — the surface these controls observe); **#5274 Phase 3.D** (the operator web-2 provisioning cutover these are prerequisites of — `dns.tf:4`); #5887 (a `moved`-block CI fix that RED-blocked the auto-apply; **now CLOSED/merged** — Item 1's original deferral reason, see amendment below); #5046 (container egress firewall — the enforcement Item 3 proves); ADR-068 (multi-host web cluster)
+- **Relates to:** #5933 (this contract); #5921 / ADR-080 (fresh-host bake-and-extract boot path — the surface these controls observe); **#5274 Phase 3.D** (the operator web-2 provisioning cutover these are prerequisites of — `dns.tf:4`); #5887 (a `moved`-block CI fix that RED-blocked the auto-apply; **now CLOSED/merged** — Item 1's original deferral reason, see amendment below); #5046 (container egress firewall — the enforcement Item 3 proves); ADR-068 (multi-host web cluster); **ADR-100 / #6396** (Item 5 — the inngest cutover defaulted `web_colocate_inngest=false`, dropping the co-located web-host Vector path; #6396 re-adds it independently + the terminal-block trap + pull-failure host_id)
 
 ## Context
 
@@ -25,6 +74,35 @@ targets a distinct blind-surface failure mode:
 2. **A-record drain on boot failure.**
 3. **Fresh-host post-container egress-enforcement probe** — **SHIPPED in this PR**.
 4. **Image digest pin + signature verification.**
+5. **Layer-3 web-host log shipping + terminal-block no-SSH cause breadcrumb + pull-failure host attribution** — **added #6396** (see Item 5 below).
+
+### Item 5 — web-host Vector log shipping + terminal-block boot-emit trap + pull_failure host_id (#6396)
+
+Three additions closing the observability blind spots left after the ADR-100 inngest cutover:
+
+- **Vector on every web host, ungated from `web_colocate_inngest`.** ADR-100 moved scheduling to
+  a dedicated host and defaulted `web_colocate_inngest = false`, which silently dropped the
+  co-located web-host Vector install — so a fresh `soleur-web-platform` / `soleur-web-2` host
+  ships **no** journald/host_metrics to Better Stack. The shipper is now decoupled: baked into the
+  ungated `soleur-host-bootstrap.sh` path (authors `/usr/local/bin/soleur-vector-install`), run
+  **fail-open** and **wall-clock-bounded** at the END of the cloud-init runcmd chain (AFTER the app
+  binds `:80`/`:3000`) so *observing* the boot can never *break* serving. The shared `vector.toml`
+  carries a `@@HOST_NAME@@` sentinel resolved per-host from the TF-injected server name (the sole
+  discriminator in the ONE shared Logs source 2457081); the web unit carries
+  `EnvironmentFile=/etc/default/webhook-deploy` (its DOPPLER_TOKEN source — the inngest-only
+  `/etc/default/inngest-server` is absent on a non-colocated host). No new secret:
+  `BETTERSTACK_LOGS_TOKEN` already lives in `soleur/prd`. **Half-met at ship (web-2 only)** — web-1
+  is never force-`-replace`d; it ships logs after its next ADR-068 blue-green recreate (tracked).
+- **Terminal serving-block boot-emit trap.** The cloud-init terminal `docker run` block had no
+  named `soleur-boot-emit` fatal trap: a `doppler secrets download` `exit 1` or a `docker run`
+  `set -e` abort reached only the SSH-only `cloud-init-output.log`. A composite EXIT trap (armed
+  right after `set -e`, mutable `stage` ∈ {`terminal_preamble`, `hostscripts_incomplete`,
+  `doppler_download`, `docker_run`}, disarmed before the self-emitting egress probe) now makes
+  these boot failures no-SSH observable and PAGES via a NEW Sentry issue-alert — the SOLE page for
+  a dead web-2 warm standby (no standing uptime coverage; the #5933 per-host probe was retired).
+- **`host_id` on `ci-deploy.sh`'s `pull_failure_event`.** A deploy-path `image pull failed` now
+  carries `tags.host_id`, so the failing host is identifiable from Sentry alone (PR #6395 had to
+  cross-reference the release aggregate JSON to attribute it to web-2).
 
 ### Item 3 — post-container egress-enforcement probe (SHIPPED)
 
@@ -154,6 +232,20 @@ the CI trusted-root staleness gate (`cosign-trusted-root-staleness.test.sh`).
 - **Reuse `cron-egress-postapply-assert.sh` verbatim on the fresh path.** Rejected: it SKIPS
   the container probes when the container is absent; on the fresh path we run precisely because
   the container is up, so the skip branch would defeat the control.
+- **Item 5: inline the Vector-install + emit bodies directly in `cloud-init.yml` runcmd.**
+  Rejected: comments + bodies count against the 32,768-byte user_data cap (already ~29.6 KB,
+  ~0.4 KB headroom). Baked into `soleur-host-bootstrap.sh` (0 user_data), per the bake-and-extract
+  precedent (learning `2026-07-06-cloud-init-user-data-cap-bake-bodies`).
+- **Item 5: provision a new `doppler_secret` / `TF_VAR` for the web-host Better Stack token.**
+  Rejected: `BETTERSTACK_LOGS_TOKEN` already lives in `soleur/prd`; a new var re-introduces the
+  no-default-var-on-auto-apply footgun for zero benefit.
+- **Item 5: force a web-1 `-replace` to apply Vector immediately.** Rejected: powers off the sole
+  live origin. web-1 rides the immutable-redeploy channel; it ships logs at its next ADR-068
+  blue-green recreate.
+- **Item 5: derive `host_name` from runtime `$(hostname)`.** Rejected: cloud-init sets no explicit
+  `hostname:`/`fqdn:` and relies on Hetzner seeding it — a generic/duplicate value would collapse
+  web-1 and web-2 into one host_name in the shared source. Chosen: the TF-injected per-host server
+  name (`SOLEUR_HOST_NAME`), guaranteed distinct.
 
 ## Consequences
 
@@ -161,6 +253,27 @@ the CI trusted-root staleness gate (`cosign-trusted-root-staleness.test.sh`).
   and emits a discriminating Sentry event, instead of serving an exfil path.
 - Items 1, 2, 4 remain tracked (follow-up issues) and sequenced against #5887; #5933 closes
   when all four are merged and the web-2 cutover is verified.
+- **Item 5 (#6396):** every web host ships journald + host_metrics to Better Stack, and the
+  terminal serving-block + deploy-path pull failures are no-SSH observable/pageable. Half-met at
+  ship (web-2 only); web-1 ships logs after its next ADR-068 blue-green recreate (tracked). The
+  fail-open Vector install can never wedge the boot; the terminal-block trap PAGES a dead web-2
+  standby that otherwise has no standing uptime coverage (the #5933 per-host probe was retired).
+- **Item 5 amendment (2026-07-15, #6425) — host attribution extends to the READ surfaces.**
+  #6396 gave per-host attribution to *pushed* signals (journald `host_name`, the boot-fatal Sentry
+  emits, `pull_failure` `host_id`). The **pull** surfaces had none: `/hooks/deploy-status` and
+  `/hooks/inngest-liveness` answer over the Cloudflare Tunnel, which selects a connector per edge
+  colo, so a read could be served by a host the caller never meant — and the response did not say
+  which. Both now emit `host_id` (the hcloud id terraform knows), on the **success × failure**
+  axis: the failure bodies are the ones the watchdog reads
+  (`hooks.json.tmpl` `include-command-output-in-response-on-error`), and the 2026-07-15 incident
+  was a plain-text `FATAL __FETCH_FAILED__` — so `host_id` on the JSON success emits alone would
+  have been absent from the very incident that motivated it. This closes the ADR's attribution
+  story: **pushed signals say who sent them; pulled signals now say who answered.**
+  > **The stale `monitored = false` note above (`:91`, `:104`) is about the per-host uptime
+  > MONITOR, not the connector.** Do not read "web-2 unmonitored until cutover" as "web-2 is
+  > inert": until #6425 it ran a live connector and answered management-plane reads ~50% of the
+  > time while carrying no monitor at all — unmonitored **and** load-bearing. Since #6425 it runs
+  > no connector (ADR-114 I1), which is what finally makes the `monitored=false` posture honest.
 
 ## C4 impact
 
@@ -178,3 +291,10 @@ shipped item (Item 3):**
 **Deferred C4 work:** Item 1 (per-host absence detector) WILL add an external
 uptime-monitor actor (Sentry/BetterStack) + a per-host probe edge to the Hetzner compute
 container — that `.c4` edit lands with Item 1's cutover PR, not here.
+
+**Item 5 C4 change (#6396):** adds the `hetzner -> betterstack` container-view edge (web-host
+Vector log shipping to the shared Logs source 2457081), mirroring the existing `inngest ->
+betterstack` edge; and CORRECTS the stale `betterstack -> hetzner` edge that asserted the
+#5933-retired per-host origin uptime probe. Both endpoints are already in the `containers` view
+include, so no `views.c4` change is needed (LikeC4 auto-draws the edge). `model.likec4.json`
+regenerated + committed (the `c4-model-freshness` orphan suite gates it).

@@ -257,3 +257,208 @@ jobs:
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
+
+  # Source-vs-live Better Stack heartbeat reconcile (#6549 item 2). The static
+  # heartbeat-reprovision-parity.test.ts proves a feeder exists in SOURCE, but
+  # `ignore_changes = [paused]` (plus these resources being untargeted) makes the
+  # .tf `paused` value only a LOWER BOUND on live state — a heartbeat live-paused
+  # or live-absent is invisible to any source-only test (the #6537 9-days-dark
+  # shape). This job READS `GET /api/v2/heartbeats` and reconciles it against the
+  # executable MANIFEST; it never unpauses anything. Rides the same twice-daily
+  # Inngest dispatch as drift-check (no new schedule/Inngest function).
+  heartbeat-live-reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Reconcile live heartbeats
+        id: reconcile
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set +e
+          TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN_READONLY --plain 2>/dev/null)
+          if [[ -n "$TOKEN" ]]; then
+            printf '::add-mask::%s\n' "$TOKEN"
+          fi
+          # The script reads the BETTERSTACK_API_TOKEN env, sourced from the Read-scoped
+          # BETTERSTACK_API_TOKEN_READONLY secret in Doppler (least privilege: reconcile only
+          # GETs /api/v2/heartbeats). It prints SOLEUR_HEARTBEAT_RECONCILE_* markers, and NEVER
+          # echoes the token. Capture stdout+stderr to a file.
+          BETTERSTACK_API_TOKEN="$TOKEN" \
+            bun plugins/soleur/scripts/reconcile-live-heartbeats.ts \
+            > "${RUNNER_TEMP}/reconcile-output.txt" 2>&1
+          RC=$?
+          set -e
+          # Normalize any exit outside the script's own 0/1/2 contract (a bun-level crash: OOM 137,
+          # SIGSEGV 139, timeout 124) into the error path. An abnormal crash MUST page, never green
+          # the liveness monitor — that is the 9-days-dark failure class this whole job exists to kill.
+          if [[ "$RC" != "0" && "$RC" != "1" && "$RC" != "2" ]]; then
+            echo "::error::Better Stack heartbeat live-reconcile exited abnormally (rc=$RC)"
+            RC=1
+          fi
+          echo "rc=$RC" >> "$GITHUB_OUTPUT"
+          cat "${RUNNER_TEMP}/reconcile-output.txt"
+          if [[ "$RC" == "2" ]]; then
+            echo "::warning::Better Stack heartbeat live-reconcile found a mismatch (see the heartbeat-reconcile-mismatch issue)"
+          elif [[ "$RC" == "1" ]]; then
+            echo "::error::Better Stack heartbeat live-reconcile errored (auth/token/malformed response)"
+          elif grep -q "SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE" "${RUNNER_TEMP}/reconcile-output.txt"; then
+            echo "::warning::Better Stack unreachable after retries — reconcile skipped this run (no page)"
+          fi
+
+      - name: Ensure heartbeat-reconcile-mismatch label exists
+        if: steps.reconcile.outputs.rc == '2'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh label create "heartbeat-reconcile-mismatch" --description "Better Stack heartbeat live-reconcile mismatch (source vs live)" --color "5319E7" 2>/dev/null || true
+
+      - name: Create or update reconcile issue
+        id: reconcile_issue
+        if: steps.reconcile.outputs.rc == '2'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_NUMBER: ${{ github.run_number }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          TITLE="infra: Better Stack heartbeat live-reconcile mismatch"
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # Only the structured markers reach the issue body (the script never emits the token).
+          MARKERS=$(grep -E '^SOLEUR_HEARTBEAT_RECONCILE_' "${RUNNER_TEMP}/reconcile-output.txt" || true)
+
+          EXISTING=$(gh issue list --label "heartbeat-reconcile-mismatch" --state open \
+            --limit 100 \
+            --json number,title \
+            --jq ".[] | select(.title == \"${TITLE}\") | .number" \
+            | head -1)
+
+          if [[ -n "$EXISTING" ]]; then
+            {
+              echo "Mismatch still present as of ${TIMESTAMP}."
+              echo ""
+              echo "<details><summary>Reconcile markers</summary>"
+              echo ""
+              echo '```'
+              echo "$MARKERS"
+              echo '```'
+              echo ""
+              echo "</details>"
+            } > /tmp/reconcile-body.md
+            # Escalate (re-email) when a NEW mismatched heartbeat appears while the issue is already
+            # open — a real regression must not hide silently under the deduped git_data/workspaces
+            # issue. Compare current marker names against everything already recorded on the issue.
+            CUR_NAMES=$(printf '%s\n' "$MARKERS" | grep -oE 'name=[^ ]+' | sort -u || true)
+            PRIOR=$(gh issue view "$EXISTING" --json body,comments \
+              --jq '.body + " " + ([.comments[].body] | join(" "))' 2>/dev/null || true)
+            ESCALATE=false
+            while IFS= read -r n; do
+              [[ -z "$n" ]] && continue
+              printf '%s' "$PRIOR" | grep -qF "$n" || ESCALATE=true
+            done <<< "$CUR_NAMES"
+            gh issue comment "$EXISTING" --body-file /tmp/reconcile-body.md
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            echo "escalate=$ESCALATE" >> "$GITHUB_OUTPUT"
+            echo "Updated existing reconcile issue #$EXISTING (escalate=$ESCALATE)"
+          else
+            {
+              echo "## Better Stack heartbeat live-reconcile mismatch"
+              echo ""
+              echo "**Detected:** ${TIMESTAMP}"
+              echo "**Workflow:** [Run #${RUN_NUMBER}](${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID})"
+              echo ""
+              echo "The nightly source-vs-live reconcile found a heartbeat whose LIVE Better Stack"
+              echo "state diverges from the executable MANIFEST — a state the static parity guard"
+              echo "cannot see. Each marker discriminates the class:"
+              echo ""
+              echo "- \`reason=fed-but-paused\` — a fed heartbeat is \`paused\` live (the #6537 shape)."
+              echo "- \`reason=absent-live\` — a non-count-gated heartbeat is missing live (the #6548 \`git_data\` shape)."
+              echo ""
+              echo "<details><summary>Reconcile markers</summary>"
+              echo ""
+              echo '```'
+              echo "$MARKERS"
+              echo '```'
+              echo ""
+              echo "</details>"
+              echo ""
+              echo "## Next Steps"
+              echo ""
+              echo "1. For \`fed-but-paused\`: verify a real ping lands, then unpause via the Better Stack UI/API (#6210 — never unpause an unfed monitor)."
+              echo "2. For \`absent-live\`: disposition the heartbeat — build its feeder or delete the monitor (the #6548 build-vs-delete call)."
+              echo "3. Close this issue when every listed heartbeat reconciles; the reconcile re-opens it if a mismatch recurs."
+              echo ""
+              echo "_Auto-created by the [terraform-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml) heartbeat-live-reconcile job._"
+            } > /tmp/reconcile-body.md
+            gh issue create \
+              --title "$TITLE" \
+              --label "heartbeat-reconcile-mismatch" \
+              --milestone "Post-MVP / Later" \
+              --body-file /tmp/reconcile-body.md
+            echo "created=true" >> "$GITHUB_OUTPUT"
+            echo "escalate=false" >> "$GITHUB_OUTPUT"
+            echo "Created new reconcile-mismatch issue"
+          fi
+
+      - name: Prepare reconcile email content
+        id: reconcile_email
+        # Creation-only for a mismatch (avoid twice-daily spam while a heartbeat awaits
+        # disposition); always on a hard error (rc=1).
+        if: steps.reconcile.outputs.rc == '1' || steps.reconcile_issue.outputs.created == 'true' || steps.reconcile_issue.outputs.escalate == 'true'
+        env:
+          RC: ${{ steps.reconcile.outputs.rc }}
+        run: |
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
+          MARKERS=$(grep -E '^SOLEUR_HEARTBEAT_RECONCILE_' "${RUNNER_TEMP}/reconcile-output.txt" \
+            | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' || true)
+          if [[ "$RC" == "1" ]]; then
+            SUBJECT="[ERROR] Better Stack heartbeat live-reconcile failed"
+            ALERT_TYPE="Reconcile error (auth/token/malformed)"
+          else
+            SUBJECT="[HEARTBEAT] Better Stack heartbeat live-reconcile mismatch"
+            ALERT_TYPE="Live-reconcile mismatch"
+          fi
+          { echo "<h2>${ALERT_TYPE}</h2>"
+            echo "<p><strong>Time:</strong> ${TIMESTAMP}<br>"
+            echo "<strong>Run:</strong> <a href=\"${RUN_URL}\">${RUN_URL}</a></p>"
+            echo "<pre>${MARKERS}</pre>"
+          } > /tmp/reconcile-email.html
+          echo "subject=${SUBJECT}" >> "$GITHUB_OUTPUT"
+          { echo "body<<EOFBODY"; cat /tmp/reconcile-email.html; echo "EOFBODY"; } >> "$GITHUB_OUTPUT"
+
+      - name: Email notification (reconcile)
+        if: steps.reconcile.outputs.rc == '1' || steps.reconcile_issue.outputs.created == 'true' || steps.reconcile_issue.outputs.escalate == 'true'
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: ${{ steps.reconcile_email.outputs.subject }}
+          body: ${{ steps.reconcile_email.outputs.body }}
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      # Single end-of-job liveness check-in. Status mirrors the drift job:
+      #   rc 0 (OK/UNREACHABLE) or rc 2 (mismatch — the issue/email are the signal) -> ok
+      #   rc 1 (real error)                                                          -> error
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-heartbeat-reconcile
+          status: ${{ (steps.reconcile.outputs.rc == '0' || steps.reconcile.outputs.rc == '2') && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

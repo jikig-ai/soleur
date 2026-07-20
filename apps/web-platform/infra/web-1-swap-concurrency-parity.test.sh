@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
 #
-# Drift guard: the FOUR GitHub Actions jobs that swap the web-1 container (each
-# POSTs `command: deploy web-platform …` to /hooks/deploy, then ci-deploy.sh swaps
-# web-1 and fans out to peers) MUST share ONE job-level `web-1-swap` concurrency
-# group so GitHub's scheduler serializes them across pipelines — at most one web-1
-# swap in flight at a time (#6060 item (c) / FINDING 1 from #6051's review).
+# Drift guard: the THREE GitHub Actions jobs that MUTATE web-1 (two swap the web-1
+# container via `command: deploy web-platform …` → /hooks/deploy → ci-deploy.sh; the
+# third, #6604, attaches the encrypted volume to web-1) MUST share ONE job-level
+# `web-1-swap` concurrency group so GitHub's scheduler serializes them across
+# pipelines — at most one web-1 mutation in flight at a time (#6060 item (c) /
+# FINDING 1 from #6051's review). A FOURTH member — the #6604 freeze workflow — carries
+# the group at WORKFLOW scope (it is a dedicated dispatch, not a job in a shared
+# workflow), asserted separately below.
 #
-# The four members (allow-list — an explicit named list so a DELIBERATE future
-# member is a visible allow-list edit, while a silently-dropped copy OR an
+# reason: 5 job-level members -> 3. The `warm_standby` and `web_2_recreate` members were
+# DELETED with the web-2 dispatch sweep (#6575, 2026-07-20).
+#
+# The three job-level members (allow-list — an explicit named list so a DELIBERATE
+# future member is a visible allow-list edit, while a silently-dropped copy OR an
 # accidentally-enrolled job both fail loud):
-#   1. web-platform-release.yml        job `deploy`         (tagged-release deploy)
-#   2. apply-web-platform-infra.yml    job `web_2_recreate` (#6030 operator recreate)
-#   3. apply-web-platform-infra.yml    job `warm_standby`   (ADR-068 warm-standby)
-#   4. apply-deploy-pipeline-fix.yml   job `apply`          (POSTs deploy at :607)
+#   1. web-platform-release.yml        job `deploy`                 (tagged-release deploy)
+#   2. apply-deploy-pipeline-fix.yml   job `apply`                  (POSTs deploy at :607)
+#   3. apply-web-platform-infra.yml    job `workspaces_luks_cutover` (#6604 attaches the LUKS volume to web-1)
+# Plus the WORKFLOW-level member: workspaces-luks-cutover.yml (#6604 freeze — stops/repoints web-1's /mnt/data).
 #
 # NOT a member (negative assertion): the routine `apply` job in
 # apply-web-platform-infra.yml runs terraform but does NOT POST /hooks/deploy
@@ -22,8 +28,8 @@
 # Invariants asserted:
 #   - each named member carries a job-level `concurrency.group: web-1-swap` with
 #     `cancel-in-progress: false` (a killed in-progress swap would widen a 521 window);
-#   - the TOTAL count of `group: web-1-swap` across the three workflows == 4
-#     (allow-list length — NOT head -1, NOT >= 4: a dropped OR an unlisted member fails);
+#   - the TOTAL count of `group: web-1-swap` across the three workflows == 3
+#     (allow-list length — NOT head -1, NOT >= 3: a dropped OR an unlisted member fails);
 #   - the workflow-level `terraform-apply-web-platform-host` R2 serializer literal is
 #     still present in BOTH apply-web-platform-infra.yml AND apply-deploy-pipeline-fix.yml
 #     (job-level web-1-swap coexists with, does not replace, the R2 state serializer);
@@ -41,13 +47,14 @@ WF_DIR="${DIR}/../../../.github/workflows"
 RELEASE_WF="${WF_DIR}/web-platform-release.yml"
 APPLY_INFRA_WF="${WF_DIR}/apply-web-platform-infra.yml"
 PIPELINE_FIX_WF="${WF_DIR}/apply-deploy-pipeline-fix.yml"
+FREEZE_WF="${WF_DIR}/workspaces-luks-cutover.yml"
 
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 
-for f in "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF"; do
+for f in "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" "$FREEZE_WF"; do
   [ -f "$f" ] || { echo "FAIL: workflow not found at $f" >&2; exit 1; }
 done
 
@@ -73,33 +80,57 @@ assert_member() {
     fail "$label: job '$job' not found in $(basename "$file")"
     return
   fi
-  if printf '%s\n' "$block" | grep -qE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$'; then
+  # #6178: use a here-string, NOT `printf "$block" | grep -q`. Under `set -o pipefail`
+  # a matching `grep -q` closes the pipe early → printf gets SIGPIPE (141) → the pipeline
+  # exits non-zero even on a MATCH → the `if` spuriously takes the else branch. The race
+  # only bites LARGE blocks (printf still writing when grep exits), so it flaked on the
+  # big pipeline-fix `apply` job in CI while passing locally. A here-string has no pipe.
+  if grep -qE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' <<<"$block"; then
     pass
   else
     fail "$label: job '$job' missing job-level concurrency.group: web-1-swap"
   fi
-  if printf '%s\n' "$block" | grep -qE '^[[:space:]]+cancel-in-progress:[[:space:]]*false[[:space:]]*$'; then
+  if grep -qE '^[[:space:]]+cancel-in-progress:[[:space:]]*false[[:space:]]*$' <<<"$block"; then
     pass
   else
     fail "$label: job '$job' missing cancel-in-progress: false"
   fi
 }
 
-# --- The four named members (allow-list) ---
-assert_member "$RELEASE_WF"      "deploy"         "release-deploy"
-assert_member "$APPLY_INFRA_WF"  "web_2_recreate" "web-2-recreate"
-assert_member "$APPLY_INFRA_WF"  "warm_standby"   "warm-standby"
-assert_member "$PIPELINE_FIX_WF" "apply"          "pipeline-fix-apply"
+# --- The three named members (allow-list) ---
+assert_member "$RELEASE_WF"      "deploy"                 "release-deploy"
+assert_member "$PIPELINE_FIX_WF" "apply"                  "pipeline-fix-apply"
+assert_member "$APPLY_INFRA_WF"  "workspaces_luks_cutover" "workspaces-luks-cutover"
 
-# --- Total count of `group: web-1-swap` across the workflows == 4 (allow-list
-# length). A silently-dropped member drops below 4; an accidentally-enrolled or
-# duplicated job pushes above 4. Either fails loud. ---
-web1_count=$(grep -rhE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' \
-  "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" | grep -c .)
-if [ "$web1_count" -eq 4 ]; then
+# --- The #6604 freeze workflow (workspaces-luks-cutover.yml) carries web-1-swap at
+# WORKFLOW scope (it is a dedicated dispatch, not a job in a shared workflow), so it
+# is asserted directly, not via job_block. It stops/repoints web-1's /mnt/data and MUST
+# serialize against the container-swap jobs. ---
+if grep -qE '^[[:space:]]*group:[[:space:]]*web-1-swap[[:space:]]*$' "$FREEZE_WF"; then
   pass
 else
-  fail "expected exactly 4 'group: web-1-swap' occurrences (allow-list length), found $web1_count"
+  fail "workspaces-luks-cutover.yml (freeze): workflow-level 'group: web-1-swap' missing"
+fi
+if grep -qE '^[[:space:]]*cancel-in-progress:[[:space:]]*false[[:space:]]*$' "$FREEZE_WF"; then
+  pass
+else
+  fail "workspaces-luks-cutover.yml (freeze): 'cancel-in-progress: false' missing"
+fi
+
+# --- Total count of job-level `group: web-1-swap` across the three shared workflows
+# == 3. reason: 5 -> 3. The warm_standby and web_2_recreate members were DELETED with
+# the web-2 dispatch sweep (#6575, 2026-07-20); the remaining members are the release
+# deploy, pipeline-fix apply, and the #6604 volume-attach job. A silently-dropped member
+# drops below 3; an accidentally-enrolled or duplicated job pushes above 3.
+# NOTE the pre-existing header above said 4 while the real count was 5 — that stale
+# figure is corrected to 3 here rather than carried forward. Either fails loud. The
+# freeze workflow's workflow-level group is asserted above and NOT part of this count. ---
+web1_count=$(grep -rhE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' \
+  "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" | grep -c .)
+if [ "$web1_count" -eq 3 ]; then
+  pass
+else
+  fail "expected exactly 3 'group: web-1-swap' occurrences (allow-list length), found $web1_count"
 fi
 
 # --- Workflow-level R2 serializer preserved in BOTH apply workflows (coexists
@@ -132,7 +163,7 @@ fi
 routine_apply_block="$(job_block "$APPLY_INFRA_WF" "apply")"
 if [ -z "$routine_apply_block" ]; then
   fail "routine 'apply' job not found in apply-web-platform-infra.yml — negative assertion cannot run (extractor regressed or job renamed)"
-elif printf '%s\n' "$routine_apply_block" | grep -qE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$'; then
+elif grep -qE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' <<<"$routine_apply_block"; then
   fail "routine 'apply' job in apply-web-platform-infra.yml is enrolled in web-1-swap (over-serialization trap)"
 else
   pass

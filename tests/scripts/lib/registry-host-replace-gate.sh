@@ -2,7 +2,7 @@
 # Sourced destroy-guard gate for the registry-host-replace scoped -replace
 # (apply_target=registry-host-replace in .github/workflows/apply-web-platform-infra.yml).
 #
-# EXTRACTED + SOURCED (mirrors inngest-host-replace-gate.sh / web2-recreate-gate.sh): both
+# EXTRACTED + SOURCED (mirrors inngest-host-replace-gate.sh): both
 # the workflow's registry_host_replace plan step AND
 # tests/scripts/test-registry-host-replace-gate.sh source this file and call
 # registry_host_replace_gate directly, so the CI decision logic is the SAME bytes the test
@@ -27,6 +27,20 @@
 #       token that the amended 3-secret boot guard requires; MUST ride the SAME dispatch or the
 #       guard FATALs and zot never launches. A pure-create on first apply, no-op thereafter. No
 #       special assertion beyond allow-set membership — it just must not count as out_of_scope.)
+#
+# DELIBERATELY ABSENT (#6497) — doppler_secret.zot_pull_token_registry / zot_push_token_registry.
+# hcloud_server.registry gained an explicit `depends_on` on both (zot-registry.tf), so `-target`
+# pulls them into this plan's dependency closure. They are NOT allow-set members, and that is the
+# point: they are already applied and stable, so they plan as `no-op` and the positive-action
+# filter below skips them (verified against live prod state — out_of_scope=0, gate PASS). If one
+# ever shows a create/update/delete, the credential the host bakes its htpasswd from has DRIFTED
+# from Terraform — and a scoped host-replace is exactly the wrong thing to do while that is true.
+# The abort is the correct outcome, not a false positive. Do NOT "fix" it by widening the
+# allow-set: #6244 is not the precedent (its secret was a genuine pending CREATE against an
+# already-existing host; these have no pending create and cannot acquire one on this path).
+# Note a from-empty stand-up does NOT reach this branch — with no host in state the plan is a
+# bare `create`, so `server_replaced=0` aborts first (and apply-web-platform-infra.yml:453 says
+# no dispatch creates this host at all; that is the operator-local full apply's job).
 #
 # LARGER + STRICTER than the inngest gate (6-member allow-set, positive NIC/firewall
 # assertions, size-update-only volume preserve). Do NOT "simplify" it back to the inngest

@@ -54,6 +54,29 @@ Detection is free: **run the FULL test file**, not just `-t "<new test>"`. The
 RED run surfaced the 10 sibling failures immediately, each naming the missing
 export — a `-t` filter would have hidden them until the full-suite exit gate.
 
+### Sharp sub-case: `importOriginal`+spread does NOT restore `@sentry/nextjs` getter re-exports
+
+The "default to `importOriginal`+spread" fix above has an exception for modules
+that expose named exports via **getters / `export *` re-exports** rather than
+own-enumerable properties — `@sentry/nextjs` is the canonical one.
+`{ ...(await importOriginal()) }` copies only own-enumerable keys, so
+getter-based re-exports (`addBreadcrumb`, most of the SDK surface) silently drop
+and a transitive sibling (here the rate-limiter's `Sentry.addBreadcrumb` at
+`server/rate-limiter.ts`) still fails with `No "addBreadcrumb" export is defined
+on the "@sentry/nextjs" mock`. Fix: **enumerate the specific methods the file's
+code paths reach explicitly**, no spread:
+
+```ts
+vi.mock("@sentry/nextjs", () => ({
+  captureException: (...a: unknown[]) => captureException(...a),
+  addBreadcrumb: vi.fn(), // transitive: rate-limiter rejection log
+}));
+```
+
+Detection is the same free move — run the FULL test file; the transitive-sibling
+test names the missing method. (Encountered wiring a `captureException` spy for a
+workstream route degrade test, PR for the workstream degraded-read fix.)
+
 ## Session Errors
 
 1. **Wholesale `@/server/logger` mock dropped `createChildLogger`** — broke 10
