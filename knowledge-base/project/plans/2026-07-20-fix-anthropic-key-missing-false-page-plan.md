@@ -532,7 +532,42 @@ already recorded Finance as advisory with "creates no new vendor expense". No
 
 ## Operator Action
 
-**`automation-status: UNVERIFIED — /work MUST run a Playwright attempt before any operator handoff.`**
+**`automation-status: VERIFIED operator-only — but NOT for the reason this plan assumed.`**
+
+> **/work ran the Playwright attempt. The result falsified this section's core premise.**
+>
+> ```
+> playwright-attempt: navigated https://console.anthropic.com/settings/keys → redirected to
+>   https://platform.claude.com/login?returnTo=%2Fsettings%2Fkeys; reached an unauthenticated
+>   sign-in wall (Google OAuth consent / email-OTP / SSO). After the operator authenticated,
+>   re-navigated as org "Jean's Individual Org" (role: Admin) and found:
+>     - /settings/keys renders WORKSPACE keys only ("API keys are owned by workspaces"),
+>       with no Admin key type in the create flow — so this plan's step 3 was wrong;
+>     - /settings/admin-keys — the canonical path per the Anthropic docs — returns
+>       "Page not found", and no "Admin keys" item exists in Console navigation;
+>     - /settings/organization offers "Convert to team organization" → button "Convert to team".
+>   Blocking gate: ACCOUNT TIER, not a human-interaction gate. Docs (Admin API overview):
+>   "The Admin API is unavailable for individual accounts."
+> ```
+>
+> **The key is not un-minted; it is un-mintable.** No amount of Playwright, credential
+> hunting, or IaC resolves it — `/v1/organizations/cost_report` is simply not available to
+> this account tier. The prerequisite is converting the individual org to a **team
+> organization**, which carries seat/billing implications and is a *product/account* decision
+> reserved for the operator (never an agent's call, and not an architecture fork for the CTO
+> agent either). It is therefore left un-clicked.
+>
+> Consequence for sequencing: the mint is **not** a "3-minute paste" and may never happen at
+> all if the operator judges a daily cost report not worth converting the account. That is a
+> legitimate outcome — the D1 fix stands on its own, the surface is now positively dark and
+> non-paging, and the probe reports TRANSIENT indefinitely rather than false-closing. The IaC
+> follow-up in §Infrastructure stays unopened.
+>
+> The original conditional handoff text below is retained for the case where the operator
+> **does** convert, but its steps 1–3 are corrected: the key is created at
+> **Settings → Admin keys** (which appears only post-conversion), not at Settings → API keys,
+> and Console Admin keys carry **no selectable scopes** — every key has full Admin-API access,
+> so the "read-only" framing in ADR-108 describes intended use, not an enforced scope.
 
 Verified: the Admin API has **no** key-creation endpoint (docs FAQ: *"new API keys can only be created
 through the Claude Console for security reasons"*). That establishes there is no API path — it does
