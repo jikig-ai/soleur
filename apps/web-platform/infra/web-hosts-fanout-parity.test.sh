@@ -2,17 +2,22 @@
 #
 # Drift guard: EVERY workflow copy of the WEB_HOST_PRIVATE_IPS fan-out peer list
 # (#5274 Phase 3 / ADR-068) MUST equal the set of private_ips in var.web_hosts
-# (variables.tf). A drift means a deploy fans out to the wrong peers (or misses
-# web-2 entirely) → web-2 silently ships stale code (single-user incident). There
-# are THREE in-repo copies of this roster today and this guard covers EVERY one:
+# (variables.tf). A drift means a deploy fans out to the wrong peers → a host
+# silently ships stale code (single-user incident). There is ONE in-repo copy of
+# this roster today and this guard covers it:
 #   1. web-platform-release.yml — the tagged-release deploy fan-out (×1).
-#   2. apply-web-platform-infra.yml `warm_standby` job — the ADR-068 warm-standby
-#      dispatch re-uses the SAME literal to fan a current-version redeploy out to
-#      web-2 (env WEB_HOST_PRIVATE_IPS).
-#   3. apply-web-platform-infra.yml `web_2_recreate` job (#6030) — the same env,
-#      a 2nd copy in the apply workflow. Previously this guard extracted only the
-#      FIRST occurrence per file (`head -1`), so this copy would have shipped
-#      un-guarded; it now validates EACH copy independently.
+#
+# reason: 3 copies -> 1. The two apply-web-platform-infra.yml copies lived in the
+# `warm_standby` and `web_2_recreate` jobs, both DELETED with the web-2 dispatch
+# sweep (#6575, 2026-07-20). The apply-workflow operand is dropped rather than
+# asserted at 0: `check_all_copies "$APPLY_WORKFLOW" ... 0` would pass vacuously
+# whether the copies were deleted or the extractor silently broke.
+#
+# The multi-copy machinery is RETAINED deliberately. It exists because an earlier
+# version extracted only the FIRST occurrence per file (`head -1`) and would have
+# shipped a second copy un-guarded; that hazard returns the moment any workflow
+# grows a second WEB_HOST_PRIVATE_IPS. Add the operand back — do not re-introduce
+# head -1.
 # Extracts EACH copy by shape and compares its sorted set to var.web_hosts.
 #
 # Run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
@@ -23,7 +28,6 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VARS_TF="${DIR}/variables.tf"
 WORKFLOW="${DIR}/../../../.github/workflows/web-platform-release.yml"
-APPLY_WORKFLOW="${DIR}/../../../.github/workflows/apply-web-platform-infra.yml"
 
 passes=0
 fails=0
@@ -32,7 +36,6 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 
 [ -f "$VARS_TF" ] || { echo "FAIL: variables.tf not found at $VARS_TF" >&2; exit 1; }
 [ -f "$WORKFLOW" ] || { echo "FAIL: workflow not found at $WORKFLOW" >&2; exit 1; }
-[ -f "$APPLY_WORKFLOW" ] || { echo "FAIL: apply workflow not found at $APPLY_WORKFLOW" >&2; exit 1; }
 
 # --- Operand 1: private_ips declared in var.web_hosts (variables.tf) ---
 # Match `private_ip = "10.0.1.NN"` — the only shape these lines take. Sorted,
@@ -95,8 +98,6 @@ check_all_copies() {
 
 # Operand 2: web-platform-release.yml — 1 copy (the tagged-release deploy fan-out).
 check_all_copies "$WORKFLOW" "release-workflow" 1
-# Operand 3: apply-web-platform-infra.yml — 2 copies (warm_standby + web_2_recreate, #6030).
-check_all_copies "$APPLY_WORKFLOW" "apply-workflow" 2
 
 total=$((passes + fails))
 echo "web-hosts-fanout-parity: ${passes} passed, ${fails} failed (${total} assertions)"

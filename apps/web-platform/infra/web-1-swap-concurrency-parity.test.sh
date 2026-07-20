@@ -13,7 +13,6 @@
 # future member is a visible allow-list edit, while a silently-dropped copy OR an
 # accidentally-enrolled job both fail loud):
 #   1. web-platform-release.yml        job `deploy`                 (tagged-release deploy)
-#   2. apply-web-platform-infra.yml    job `web_2_recreate`         (#6030 operator recreate)
 #   3. apply-web-platform-infra.yml    job `warm_standby`           (ADR-068 warm-standby)
 #   4. apply-deploy-pipeline-fix.yml   job `apply`                  (POSTs deploy at :607)
 #   5. apply-web-platform-infra.yml    job `workspaces_luks_cutover` (#6604 attaches the LUKS volume to web-1)
@@ -27,7 +26,7 @@
 # Invariants asserted:
 #   - each named member carries a job-level `concurrency.group: web-1-swap` with
 #     `cancel-in-progress: false` (a killed in-progress swap would widen a 521 window);
-#   - the TOTAL count of `group: web-1-swap` across the three workflows == 4
+#   - the TOTAL count of `group: web-1-swap` across the three workflows == 3
 #     (allow-list length — NOT head -1, NOT >= 4: a dropped OR an unlisted member fails);
 #   - the workflow-level `terraform-apply-web-platform-host` R2 serializer literal is
 #     still present in BOTH apply-web-platform-infra.yml AND apply-deploy-pipeline-fix.yml
@@ -98,8 +97,6 @@ assert_member() {
 
 # --- The four named members (allow-list) ---
 assert_member "$RELEASE_WF"      "deploy"                 "release-deploy"
-assert_member "$APPLY_INFRA_WF"  "web_2_recreate"         "web-2-recreate"
-assert_member "$APPLY_INFRA_WF"  "warm_standby"           "warm-standby"
 assert_member "$PIPELINE_FIX_WF" "apply"                  "pipeline-fix-apply"
 assert_member "$APPLY_INFRA_WF"  "workspaces_luks_cutover" "workspaces-luks-cutover"
 
@@ -119,16 +116,19 @@ else
 fi
 
 # --- Total count of job-level `group: web-1-swap` across the three shared workflows
-# == 5 (allow-list length: the four container-swap jobs + the #6604 volume-attach job,
-# all in RELEASE/APPLY_INFRA/PIPELINE_FIX). A silently-dropped member drops below 5;
-# an accidentally-enrolled or duplicated job pushes above 5. Either fails loud. The
+# == 3. reason: 5 -> 3. The warm_standby and web_2_recreate members were DELETED with
+# the web-2 dispatch sweep (#6575, 2026-07-20); the remaining members are the release
+# deploy, pipeline-fix apply, and the #6604 volume-attach job. A silently-dropped member
+# drops below 3; an accidentally-enrolled or duplicated job pushes above 3.
+# NOTE the pre-existing header above said 4 while the real count was 5 — that stale
+# figure is corrected to 3 here rather than carried forward. Either fails loud. The
 # freeze workflow's workflow-level group is asserted above and NOT part of this count. ---
 web1_count=$(grep -rhE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' \
   "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" | grep -c .)
-if [ "$web1_count" -eq 5 ]; then
+if [ "$web1_count" -eq 3 ]; then
   pass
 else
-  fail "expected exactly 5 'group: web-1-swap' occurrences (allow-list length), found $web1_count"
+  fail "expected exactly 3 'group: web-1-swap' occurrences (allow-list length), found $web1_count"
 fi
 
 # --- Workflow-level R2 serializer preserved in BOTH apply workflows (coexists
