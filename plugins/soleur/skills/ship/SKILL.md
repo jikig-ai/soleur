@@ -52,12 +52,31 @@ pwd
 **Trailer-parse verification gate (defense-in-depth for [hr-always-read-a-file-before-editing-it]).** For every commit on this branch since `origin/main`, parse any `Key: value`-shaped lines in the body and confirm `git interpret-trailers` recognises each as a trailer. The modal failure is a blank line between an `Allowlist-Widened-By:`/`Reviewed-by:`/`Signed-off-by:` line and `Co-Authored-By:`, which silently demotes the upstream trailer into body prose and breaks downstream consumers parsing via `git log --format='%(trailers:key=NAME,valueonly)'`:
 
 ```bash
+# Scan the WHOLE body, but only for KNOWN trailer keys.
+#
+# Two wrong ways to scope this, both tried:
+#   * Any `^Word: ` anywhere — flags ordinary prose ("Suites: 18/18",
+#     "Note: …", "Runbook: …"), so the gate fails on almost every
+#     well-written commit message. A gate that cannot pass gets routinely
+#     ignored, which is worse than no gate: it trains the reader to walk
+#     past red. Measured on PR #6727: 6 hits, all prose, while every
+#     intended trailer parsed fine.
+#   * Final paragraph only — VACUOUS for the exact class this gate exists
+#     to catch. The modal failure is a blank line BEFORE `Co-Authored-By:`,
+#     which leaves the orphaned trailer in the second-to-last paragraph
+#     while the final paragraph stays a clean parseable block. Verified
+#     vacuous against a synthetic demotion.
+#
+# The real signal is neither position nor shape: it is whether the key is
+# one a downstream consumer actually reads. Prose keys are not. Extend this
+# list when a new machine-read trailer is introduced.
+KNOWN_TRAILER_KEYS='Co-Authored-By|Signed-off-by|Allowlist-Widened-By|Reviewed-by|Reviewed-By-Soleur|Acked-by|Tested-by|Cc'
 RC=0
 for sha in $(git rev-list origin/main..HEAD); do
   BODY=$(git log -1 --format=%B "$sha")
   declare -a CANDIDATES=()
   while IFS= read -r line; do
-    [[ "$line" =~ ^([A-Z][A-Za-z-]+):[[:space:]] ]] && CANDIDATES+=("${BASH_REMATCH[1]}")
+    [[ "$line" =~ ^(${KNOWN_TRAILER_KEYS}):[[:space:]] ]] && CANDIDATES+=("${BASH_REMATCH[1]}")
   done <<< "$BODY"
   for key in "${CANDIDATES[@]}"; do
     val=$(git log -1 --format="%(trailers:key=${key},valueonly)" "$sha")
