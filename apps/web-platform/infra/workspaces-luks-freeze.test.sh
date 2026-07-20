@@ -356,7 +356,7 @@ else
 fi
 rm -f "$MUT2"
 
-MUT3="$(mutate 's|^ *lsof +D "\$MOUNT" >"\$lout" 2>"\$lerr"; rc=\$?$|  holders=""; lsof +D "$MOUNT" 2>/dev/null \| grep -q . \&\& holders=x; rc=0; : >"$lout"; : >"$lerr"; printf "%s\\n" "$probe" >>"$lout"|')"
+MUT3="$(mutate 's|^ *lsof +D "\$MOUNT" 9<&- >"\$lout" 2>"\$lerr"; rc=\$?$|  holders=""; lsof +D "$MOUNT" 2>/dev/null \| grep -q . \&\& holders=x; rc=0; : >"$lout"; : >"$lerr"; printf "COMMAND     PID USER FD   TYPE DEVICE SIZE/OFF    NODE NAME\\nbash %s root 9r DIR 0,50 40 1 %s\\n" "$$" "$wsdir" >>"$lout"|')"
 if ! grep -qF 'lsof +D "$MOUNT" 2>/dev/null | grep -q . && holders=x' "$MUT3"; then
   no "mutation M3 sed did NOT land — treat as un-run, not evidence"
 else

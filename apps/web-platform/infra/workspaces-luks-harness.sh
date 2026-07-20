@@ -91,9 +91,17 @@ harness_blockdev_other() {
 #       STG (the stub $WORKSPACES_STAGING, pre-created and EMPTY).
 #
 # Stub knobs:
-#   LSOF_OUT / LSOF_OUT_FILE  stub lsof stdout (the g4 probe line is ALWAYS emitted, see the stub)
+#   LSOF_OUT / LSOF_OUT_FILE  stub lsof stdout (the header + the g4 read-fd line are ALWAYS emitted
+#                             ahead of it, see the stub — the SUT asserts the header shape and drops
+#                             row 1 with NR>1)
 #   LSOF_ABSENT=1             `command -v lsof` fails AND the install fails (fail-closed probe)
 #   LSOF_BLIND=1              lsof runs but never reports the probe fd (a scan that did not reach $MOUNT)
+#   FINDMNT_MOUNT_OPTS        `findmnt -no OPTIONS $MOUNT` stdout, read by G4's _assert_mount_rw
+#                             (#6733). Default `rw,relatime,errors=remount-ro` — a HEALTHY mount
+#                             whose options nonetheless contain the substring "ro", so a case that
+#                             passes cannot be passing via a broken substring comparison. Set to
+#                             `ro,relatime` for the read-only refusal, or `` (empty, via the `-`
+#                             form) for the unreadable-options refusal.
 #   LSOF_RC=<n>               force the lsof exit status (rc>1 = an outright probe failure)
 #   ACTIVE_UNITS              space-separated units for which `systemctl is-active` succeeds
 #   CURL_CODE / READYZ_BODY   stub curl's /health code and /internal/readyz body
@@ -125,7 +133,11 @@ run_case() {
   CASE_N=$((CASE_N + 1))
   local d="$RUN_SCRATCH/case-$CASE_N"; mkdir -p "$d"
   CALLS="$d/calls"; MARKER_LOG="$d/marker"; STATE="$d/state.d"; MNT="$d/mnt"; STG="$d/staging"
-  mkdir -p "$STATE" "$MNT" "$STG"
+  # $MNT/workspaces is created because the G4 probe READ-OPENS it (#6733) and dies
+  # g4_workspaces_unopenable when it is absent — the wrong-device / empty-bind-source state. Cases
+  # that want that refusal remove the directory themselves; every other case needs it present, or
+  # the gate aborts before reaching whatever the case is actually about.
+  mkdir -p "$STATE" "$MNT" "$MNT/workspaces" "$STG"
   : > "$CALLS"; : > "$MARKER_LOG"
   CASE_OUT="$(
     env "$@" \
@@ -187,6 +199,18 @@ run_case() {
           # to refuse a mount nested BENEATH $STAGING, which rm -rf would otherwise descend
           # through into live data. Default empty = no nested mounts.
           *"-rno TARGET"*|*"TARGET"*) printf "%s" "${FINDMNT_TARGETS:-}" ;;
+          # OPTIONS must be matched BEFORE the path arms below, which would otherwise answer an
+          # options query with a SOURCE device. G4 asks `findmnt -no OPTIONS "$MOUNT"` to prove the
+          # mount is not read-only (_assert_mount_rw, #6733); $MOUNT here is a scratch DIRECTORY and
+          # not a real mountpoint, so the real findmnt returns EMPTY and the gate correctly refuses.
+          # That refusal is right in production and useless as a fixture default, so the default is
+          # a healthy read-write mount and FINDMNT_MOUNT_OPTS overrides it.
+          #
+          # The default deliberately carries `errors=remount-ro`: it is what the kernel really sets
+          # on ext4 (measured on a live host), and it is the exact string a substring test for "ro"
+          # trips over. A fixture whose default cannot express that trap would let a broken
+          # substring comparison pass every case in both suites.
+          *OPTIONS*) printf "%s\n" "${FINDMNT_MOUNT_OPTS-rw,relatime,errors=remount-ro}" ;;
           *"$WORKSPACES_STAGING"*) printf "%s\n" "${FINDMNT_STAGING_SRC:-}" ;;
           *"$WORKSPACES_MOUNT"*)   printf "%s\n" "${FINDMNT_MOUNT_SRC:-}" ;;
         esac
@@ -204,15 +228,6 @@ run_case() {
         local _sd="${STAT_DEV_STAGING:-2049}" _md="${STAT_DEV_MOUNT:-64513}"
         # STAT_DEV_SAME=1 collapses both to the staging id — the same-filesystem refusal case.
         [ "${STAT_DEV_SAME:-0}" = "1" ] && _md="$_sd"
-        # PASS-THROUGH on every format except the DEVICE-ID form. This stub exists to drive the
-        # same-filesystem refusal, which reads `stat -c %d`. Matching on the PATH alone would also
-        # capture `stat -c %y` (the #6733 root-mtime bracket) and hand its read-back a device id
-        # instead of an mtime — making a CORRECT restore look like skew and die. A stub must no-op
-        # only the host effect it cannot reproduce, and delegate everything else to the real binary.
-        case "$*" in
-          *"%d"*) ;;
-          *) command stat "$@"; return $? ;;
-        esac
         case "$*" in
           *"$WORKSPACES_STAGING"*) printf "%s\n" "$_sd" ;;
           *"$WORKSPACES_MOUNT"*)   printf "%s\n" "$_md" ;;
@@ -274,13 +289,17 @@ run_case() {
       emit_drift() { echo "EMIT_DRIFT: $1"; }
       lsof()    {
         rec "lsof $*"
-        # Always report the script own probe fd unless LSOF_BLIND — a real lsof scanning $MOUNT
-        # cannot miss an fd this process holds open there, so the positive control must model it.
+        # The HEADER is always emitted: the SUT asserts its shape (`^COMMAND +PID +USER`) and drops
+        # row 1 structurally with `NR>1`, so a headerless fixture would both fail the shape assert
+        # and shift every holder count by one.
+        printf "COMMAND     PID USER FD   TYPE DEVICE SIZE/OFF    NODE NAME\n"
+        # Then the script own READ fd on workspaces/ (#6733), unless LSOF_BLIND. A real lsof
+        # scanning $MOUNT cannot miss an fd this process holds open there, so the positive control
+        # must model it — and it must carry THIS shell PID ($$, the same value the SUT keys its
+        # positive control and holder filter on) and the workspaces/ path the SUT requires. A
+        # hardcoded PID would make the fixture test itself rather than the gate.
         if [ "${LSOF_BLIND:-}" != "1" ]; then
-          local p
-          for p in "$WORKSPACES_MOUNT"/.luks-g4-probe.*; do
-            [ -e "$p" ] && printf "COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\nbash    111 root    9w   REG   0,1        0    1 %s\n" "$p"
-          done
+          printf "bash    %s root 9r   DIR   0,50       40    1 %s\n" "$$" "$WORKSPACES_MOUNT/workspaces"
         fi
         if [ -n "${LSOF_OUT_FILE:-}" ]; then cat "$LSOF_OUT_FILE"; return "${LSOF_RC:-0}"; fi
         [ -n "${LSOF_OUT:-}" ] && printf "%s\n" "$LSOF_OUT"
