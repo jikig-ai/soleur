@@ -188,7 +188,26 @@
 # `provider` is also required and is NOT inherited from the target resource.
 # Without it the import read runs through the DEFAULT `cloudflare` provider,
 # whose token holds none of the ruleset permissions.
+# Gates the import block below. Production default is `true` — adopt.
+#
+# This exists solely because `mock_provider` does NOT mock `import` blocks:
+# Terraform performs the import read against the REAL provider even under
+# `terraform test`, so the credential-free `terraform test` leg in
+# infra-validation.yml fails with `Authentication error (10000)` before any of
+# its actual assertions run. `tests/web-hosts-eu-pin.tftest.hcl` sets this to
+# `false` for that reason and that reason only.
+#
+# DO NOT flip this default. At `false` the import disappears, Terraform plans a
+# create against an entrypoint that already exists, and the whole-list clobber
+# (#6767) is silently back with no other visible change to this file.
+# test/seo-config-rules.test.ts pins the default at `true`.
+variable "adopt_seo_config_entrypoint" {
+  type    = bool
+  default = true
+}
+
 import {
+  for_each = var.adopt_seo_config_entrypoint ? toset(["adopt"]) : toset([])
   provider = cloudflare.rulesets
   to       = cloudflare_ruleset.seo_config_settings
   id       = "zone/${var.cf_zone_id}/a21ac79d368f425a95c895c43a090d57"

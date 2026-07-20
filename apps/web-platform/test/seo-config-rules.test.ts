@@ -326,6 +326,21 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
     expect(tf).toContain(ADOPTED_RULESET_ID);
   });
 
+  // The import is gated on `var.adopt_seo_config_entrypoint` so the
+  // credential-free `terraform test` job can opt out — `mock_provider` does NOT
+  // mock import blocks, so Terraform issues a real API read even under test.
+  // That escape hatch is only safe while the DEFAULT is true: flipping it to
+  // false disables the import everywhere, Terraform plans a create again, and
+  // the whole-list clobber is silently back with no other visible change.
+  test("entrypoint adoption defaults to true", () => {
+    const tf = stripHclComments(readFileSync(TF_PATH, "utf-8"));
+    const block = tf.match(
+      /variable\s+"adopt_seo_config_entrypoint"\s*\{[^}]*\}/,
+    )?.[0];
+    expect(block, "adopt_seo_config_entrypoint variable is missing").toBeTruthy();
+    expect(block).toMatch(/default\s*=\s*true/);
+  });
+
   // Secondary assertions: strictly weaker than the exact-equality test above,
   // kept because they produce a far more legible failure message naming the
   // specific host that was gained or lost.
