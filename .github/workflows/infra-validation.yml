@@ -9,43 +9,57 @@
 name: Infra Validation
 
 on:
+  # push-to-main (#6766). Nothing re-ran this suite against main, so main could
+  # be red INDEFINITELY with no signal — the defining complaint of #6766. This
+  # arm enumerates ALL infra roots rather than diffing github.event.before,
+  # deliberately: a diff-based push only catches redness THIS merge introduced,
+  # which is not the failure being fixed. The cost (full matrix + the 12-minute
+  # deploy-script-tests on every merge) is an accepted trade-off, bounded by the
+  # cancel-in-progress concurrency group below. A nightly `schedule:` was
+  # considered and rejected — up to 24h of blind time.
+  push:
+    branches: [main]
+  # The workflow-level `paths:` filter was REMOVED here (#6766, tracked in
+  # #6480). A path-filtered workflow posts NO status context at all on a PR it
+  # does not match, so `infra-validate-required` would sit at
+  # "Expected — Waiting for status" forever and wedge every non-infra PR the
+  # moment it becomes a required context. Path detection moved into the
+  # `detect-changes` job, which is now the single authority for what is in
+  # scope: `directories` for the terraform matrix and `suite_relevant` for the
+  # cross-file guard surface. The per-path rationale that used to live in the
+  # `paths:` block moved VERBATIM onto SUITE_RE in that job — it is the only
+  # record of why each non-infra path is listed. tenant-integration.yml is the
+  # precedent this copies.
   pull_request:
-    paths:
-      - "apps/*/infra/**"
-      - "infra/**"
-      - ".github/workflows/infra-validation.yml"
-      # (#6454) The render-then-validate gate and its fixture suite. Without these,
-      # editing the validator would not run the validator's own tests — the job that
-      # proves the gate works would be skipped by the very PR changing the gate.
-      - ".github/scripts/validate-infra-templates.sh"
-      - ".github/scripts/test/fixtures-validate-infra-templates.sh"
-      # ci-deploy.test.sh cross-file drift guard (#5145) reads the restart
-      # workflow's poll budget; without this path the guard never fires on
-      # client-side edits (deploy-script-tests job is ungated).
-      - ".github/workflows/restart-inngest-server.yml"
-      # apply-inngest-rls-dev-workflow.test.sh asserts the PAIR of RLS apply
-      # workflows (path routing, project pinning, issue/concurrency identity).
-      # Without these paths, an edit to either workflow — including re-widening
-      # the prd `paths:` glob that used to auto-apply 0001 to Inngest prd — would
-      # never run the guard that catches it.
-      - ".github/workflows/apply-inngest-rls.yml"
-      - ".github/workflows/apply-inngest-rls-dev.yml"
-      # (#3366) supabase-advisor/scan-workflow.test.sh reads all of these. The
-      # guard's whole job is to catch a gate that looks present but does nothing
-      # — so a guard that cannot fire when its own subjects are edited would be
-      # that same defect. cron-monitors.tf is already covered by apps/*/infra/**;
-      # these five are not. apply-sentry-infra.yml is here because its plan gate
-      # and destroy gate are what make an infra/sentry/** change safe: since
-      # #6589 it plans the FULL ROOT (declared ≡ applied — the per-resource
-      # `-target=` list that could leave a monitor declared-but-never-applied is
-      # gone), so the risk moved from a dropped allow-list line to a weakened
-      # gate. Editing that workflow must still be able to trip this guard.
-      - ".github/workflows/scheduled-supabase-advisor-scan.yml"
-      - ".github/workflows/apply-sentry-infra.yml"
-      - "scripts/supabase-advisor-scan.sh"
-      - "apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts"
-      - "knowledge-base/engineering/architecture/diagrams/model.c4"
+    branches: [main]
+  # Merge queue (#5780, currently disabled — prophylactic). Once
+  # `infra-validate-required` is a required context it must report on the
+  # gh-readonly-queue/main/* temp ref or the queue stalls. The heavy suites are
+  # NOT re-run here: they already ran authoritatively on the PR pre-queue, and
+  # secrets.* may be absent on a GITHUB_TOKEN-authored merge_group event.
+  # detect-changes emits directories='[]' + suite_relevant=false on merge_group
+  # and the always-run aggregator posts a PASS via the nothing-in-scope row.
+  # Declaring this trigger without ROUTING it in detect-changes would be worse
+  # than omitting it: github.base_ref is empty on merge_group, so the diff arm
+  # would run `git diff origin/...HEAD`, die, and red every queue candidate.
+  merge_group:
   workflow_dispatch:
+
+concurrency:
+  # Added with the push+PR triggers above (#6766): this workflow now fires on
+  # every PR and every push to main and contains a 12-minute job, so superseded
+  # runs would otherwise stack unbounded on a rapidly-updated branch.
+  #
+  # cancel-in-progress: true DIVERGES from tenant-integration.yml and
+  # apply-sentry-infra.yml, which both keep it false because a cancelled run
+  # concludes `cancelled` and fails their required gate on the head SHA until a
+  # re-run. That hazard does not apply here yet: `infra-validate-required` is
+  # not a required context in this PR (the ruleset flip is a follow-up), and
+  # cancellation only ever affects a SUPERSEDED SHA — the new head SHA gets its
+  # own run, and the aggregator's verdict is computed per-run. Revisit this
+  # value if that ordering ever changes.
+  group: infra-validation-${{ github.event.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -57,7 +71,13 @@ jobs:
   detect-changes:
     runs-on: ubuntu-24.04
     outputs:
+      # Two DISTINCT scope axes, deliberately not derived from one another
+      # (#6766). `directories` is the terraform matrix — terraform roots only.
+      # `suite_relevant` is the cross-file drift-guard surface, which includes
+      # several NON-terraform paths. Deriving the latter from the former would
+      # silently disable every guard listed on SUITE_RE below.
       directories: ${{ steps.dirs.outputs.directories }}
+      suite_relevant: ${{ steps.dirs.outputs.suite_relevant }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -82,18 +102,100 @@ jobs:
           # under any future `set -o pipefail`. Downstream `sort -u | jq`
           # collapses empty input to `[]`. Mirror unit test:
           # plugins/soleur/test/infra-validation-detect.test.sh. See #4012.
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+          #
+          # SUITE_RE is the full union of the paths that used to live in this
+          # workflow's `paths:` block, and it gates `deploy-script-tests`. The
+          # per-path rationale below was MOVED VERBATIM out of that block when
+          # it was deleted (#6766) — it is the only record of why each
+          # non-infra path is listed, and every entry is a cross-file drift
+          # guard that stops firing if its path is dropped here:
+          #
+          #   apps/*/infra/, infra/ — the terraform roots themselves.
+          #
+          #   (#6454) The render-then-validate gate and its fixture suite.
+          #   Without these, editing the validator would not run the
+          #   validator's own tests — the job that proves the gate works would
+          #   be skipped by the very PR changing the gate.
+          #     .github/scripts/validate-infra-templates.sh
+          #     .github/scripts/test/fixtures-validate-infra-templates.sh
+          #
+          #   ci-deploy.test.sh cross-file drift guard (#5145) reads the
+          #   restart workflow's poll budget; without this path the guard never
+          #   fires on client-side edits.
+          #     .github/workflows/restart-inngest-server.yml
+          #
+          #   apply-inngest-rls-dev-workflow.test.sh asserts the PAIR of RLS
+          #   apply workflows (path routing, project pinning, issue/concurrency
+          #   identity). Without these paths, an edit to either workflow —
+          #   including re-widening the prd `paths:` glob that used to
+          #   auto-apply 0001 to Inngest prd — would never run the guard that
+          #   catches it.
+          #     .github/workflows/apply-inngest-rls.yml
+          #     .github/workflows/apply-inngest-rls-dev.yml
+          #
+          #   (#3366) supabase-advisor/scan-workflow.test.sh reads all of
+          #   these. The guard's whole job is to catch a gate that looks
+          #   present but does nothing — so a guard that cannot fire when its
+          #   own subjects are edited would be that same defect. cron-monitors.tf
+          #   is already covered by apps/*/infra/; these five are not.
+          #   apply-sentry-infra.yml is here because its plan gate and destroy
+          #   gate are what make an infra/sentry/ change safe: since #6589 it
+          #   plans the FULL ROOT (declared ≡ applied — the per-resource
+          #   `-target=` list that could leave a monitor declared-but-never-
+          #   applied is gone), so the risk moved from a dropped allow-list
+          #   line to a weakened gate. Editing that workflow must still be able
+          #   to trip this guard.
+          #     .github/workflows/scheduled-supabase-advisor-scan.yml
+          #     .github/workflows/apply-sentry-infra.yml
+          #     scripts/supabase-advisor-scan.sh
+          #     apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts
+          #     knowledge-base/engineering/architecture/diagrams/model.c4
+          #
+          # Kept byte-identical to SUITE_RE in the mirror unit test, which
+          # asserts that equality (a prose-only sync would drift silently).
+          SUITE_RE='^(apps/[^/]+/infra/|infra/|\.github/scripts/validate-infra-templates\.sh$|\.github/scripts/test/fixtures-validate-infra-templates\.sh$|\.github/workflows/(infra-validation|restart-inngest-server|apply-inngest-rls|apply-inngest-rls-dev|scheduled-supabase-advisor-scan|apply-sentry-infra)\.yml$|scripts/supabase-advisor-scan\.sh$|apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan\.ts$|knowledge-base/engineering/architecture/diagrams/model\.c4$)'
+
+          # merge_group FIRST, and as an explicit branch rather than a
+          # fall-through: github.base_ref is EMPTY on merge_group, so reaching
+          # the diff arm would run `git diff origin/...HEAD`, fail fatally, and
+          # red the required aggregator on every merge-queue candidate. Same
+          # shape as tenant-integration.yml's detect-changes and
+          # apply-sentry-infra.yml. The heavy suites already ran authoritatively
+          # on the PR pre-queue; the aggregator PASSes via its nothing-in-scope
+          # row.
+          if [[ "$EVENT_NAME" == "merge_group" ]]; then
+            printf 'directories=[]\n' >> "$GITHUB_OUTPUT"
+            printf 'suite_relevant=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "push" ]]; then
+            # Enumerate every root. On push-to-main this is the point: a diff
+            # would only see what THIS merge changed, and #6766 is about main
+            # being red from an earlier cause.
             DIRS=$( { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
                        find infra/* -maxdepth 0 -type d 2>/dev/null ; } \
                     | jq -R -s -c 'split("\n") | map(select(. != ""))')
+            SUITE_RELEVANT=true
           else
-            DIRS=$(git diff --name-only "origin/${BASE_REF}...HEAD" \
+            CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+            DIRS=$(printf '%s\n' "$CHANGED" \
               | { grep -E '^(apps/[^/]+/infra|infra/[^/]+)/' || true; } \
               | sed -E 's|^(apps/[^/]+/infra)/.*|\1|; s|^(infra/[^/]+)/.*|\1|' \
               | sort -u \
               | jq -R -s -c 'split("\n") | map(select(. != ""))')
+            # `grep -Eq PATTERN <<<"$var"`, never `printf … | grep -q`: grep -q
+            # exits on first match and SIGPIPEs the producer (141), which under
+            # `set -o pipefail` reports failure in exactly the arm that should
+            # have said "true".
+            if grep -Eq "$SUITE_RE" <<<"$CHANGED"; then
+              SUITE_RELEVANT=true
+            else
+              SUITE_RELEVANT=false
+            fi
           fi
           printf 'directories=%s\n' "$DIRS" >> "$GITHUB_OUTPUT"
+          printf 'suite_relevant=%s\n' "$SUITE_RELEVANT" >> "$GITHUB_OUTPUT"
 
   validate:
     needs: detect-changes
@@ -243,46 +345,69 @@ jobs:
   # the anti-silent-skip guard at JOB level: infra changed but validate did not
   # succeed (skipped/cancelled/failure) -> red.
   #
-  # DO NOT make this a required context yet — it would deadlock every non-infra PR.
-  # `if: always()` is a JOB-level condition: it only guarantees the job runs once the
-  # WORKFLOW runs. This workflow still carries a top-level `paths:` filter (see `on:`),
-  # so a PR touching no infra never triggers it, no context is ever posted, and a
-  # required check sits at "Expected — Waiting for status" forever. This workflow also
-  # has no `merge_group:` trigger, so the context would never post on the queue's temp
-  # ref either.
+  # WORKFLOW-SIDE PREREQUISITES FOR MAKING THIS REQUIRED ARE NOW MET (#6766).
+  # They were, in order: drop the workflow-level `paths:` filter (done — see
+  # `on:`), keep the heavy matrix gated on `detect-changes` (done — `validate` on
+  # `directories`, `deploy-script-tests` on `suite_relevant`), and add
+  # `merge_group:` AND route it (done — see detect-changes' first branch; a
+  # declared-but-unrouted merge_group would red every queue candidate). So this
+  # job now posts a terminal context on EVERY pull request, push to main, and
+  # merge-queue candidate, which is what `if: always()` alone could never
+  # guarantee: it is a JOB-level condition and only fires once the WORKFLOW runs.
   #
-  # `tenant-integration-required` (ruleset-ci-required.tf) is the precedent to COPY,
-  # and it is the counter-example to the shortcut: that workflow DROPPED its
-  # workflow-level `paths:` filter and moved path detection into its `detect-changes`
-  # job precisely so the always-run gate reports on every PR. Making this required is
-  # therefore NOT a one-line ruleset edit — the prerequisites are: drop `paths:` here
-  # (keep the heavy matrix gated on `detect-changes`), add `merge_group:`, register the
-  # context in ruleset-ci-required.tf AND scripts/required-checks.txt (bot PRs block
-  # otherwise). And `deploy-script-tests` + `check-secrets` currently have NO
-  # `needs:`/`if:`, so dropping `paths:` without gating them on `detect-changes` puts
-  # an 8-minute docker build on every docs-only PR. Tracked in #6480.
+  # STILL NOT REQUIRED IN THIS PR. The remaining prerequisites are ruleset-side
+  # and land in a follow-up PR: register the context in
+  # infra/github/ruleset-ci-required.tf, the canonical required-status-checks
+  # JSON, and scripts/required-checks.txt (bot PRs deadlock otherwise). That PR
+  # is deliberately separate so the context can first be OBSERVED posting a
+  # terminal state on a live docs-only PR — the ruleset auto-applies on merge,
+  # so a ruleset-first order would leave a live window where the context is
+  # required but never posted and every PR in the repo wedges at
+  # "Expected — Waiting for status". Tracked in #6480.
+  #
+  # `tenant-integration-required` (ruleset-ci-required.tf) is the precedent this
+  # now matches on every axis.
   infra-validate-required:
     name: infra-validate-required
-    needs: [detect-changes, validate]
+    needs: [detect-changes, validate, deploy-script-tests]
     if: always()
     runs-on: ubuntu-24.04
     steps:
-      - name: Fail closed if validate did not succeed when it should have
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # The verdict lives in a script, not inline here, because the inline form
+      # THIS REPLACED opened with `if [[ "$DIRS" == "[]" ]]; then exit 0; fi` —
+      # and `directories` is terraform roots only. A PR touching only
+      # .github/workflows/restart-inngest-server.yml gives directories='[]' with
+      # suite_relevant='true', so a RED deploy-script-tests returned green here
+      # and merged: a check certifying a different property than the one it
+      # names, which is the whole subject of #6766. The allow-list and its
+      # 6-row table are documented in the script; the unit test is
+      # tests/scripts/test-infra-validate-gate-verdict.sh.
+      - name: Fail closed unless an enumerated pass state holds
         env:
+          DETECT: ${{ needs.detect-changes.result }}
+          VALIDATE: ${{ needs.validate.result }}
+          DEPLOY: ${{ needs.deploy-script-tests.result }}
           DIRS: ${{ needs.detect-changes.outputs.directories }}
-          RESULT: ${{ needs.validate.result }}
+          SUITE_RELEVANT: ${{ needs.detect-changes.outputs.suite_relevant }}
         run: |
-          if [[ "$DIRS" == "[]" ]]; then
-            echo "No infra directories changed; nothing to validate."
-            exit 0
-          fi
-          if [[ "$RESULT" != "success" ]]; then
-            echo "validate did not succeed (result=$RESULT) while infra changed: $DIRS"
-            exit 1
-          fi
-          echo "validate succeeded for: $DIRS"
+          bash scripts/infra-validate-gate-verdict.sh "$DETECT" "$VALIDATE" "$DEPLOY" "$DIRS" "$SUITE_RELEVANT"
 
   deploy-script-tests:
+    # Gated on suite_relevant, NOT on `directories` (#6766). This job runs the
+    # cross-file drift guards over several non-terraform paths, so keying it on
+    # the terraform matrix would under-trigger and silently stop firing on the
+    # only edits those guards exist to catch (see SUITE_RE in detect-changes).
+    # The gate lands in the same change as the `paths:` removal so a docs-only
+    # PR never pays for the 12-minute build below.
+    #
+    # `check-secrets` is deliberately left UNGATED: it is a checkout-free
+    # `[[ -n ]]` secret-presence test costing seconds, and gating it would
+    # serialize it behind detect-changes' fetch-depth: 0 clone while coupling
+    # `plan`'s skip semantics to suite_relevant.
+    needs: detect-changes
+    if: needs.detect-changes.outputs.suite_relevant == 'true'
     runs-on: ubuntu-24.04
     # 12 (was 8, was 5): the #5875 sandbox-canary regression below builds a small
     # alpine+bubblewrap image and runs two docker bwrap probes on top of the existing
@@ -721,7 +846,12 @@ jobs:
 
   plan:
     needs: [detect-changes, validate, check-secrets]
+    # pull_request only (#6766). This job posts a PR comment, which has no
+    # subject off-PR; its concurrency group degenerates to github.run_id
+    # without github.event.number; and the guard keeps secrets.DOPPLER_TOKEN
+    # off the newly-added push and merge_group paths entirely.
     if: |
+      github.event_name == 'pull_request' &&
       needs.detect-changes.outputs.directories != '[]' &&
       needs.check-secrets.outputs.has-doppler-token == 'true'
     runs-on: ubuntu-24.04
