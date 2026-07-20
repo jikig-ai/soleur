@@ -63,9 +63,21 @@ pre-commit:
       run: python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
     agents-compound-sync:
       priority: 4
+      # Enumerate EVERY file the guard reads. Two pre-existing gaps (#6461):
+      # (a) AGENTS.docs.md was missing -- the rule-threshold sentinel moved
+      #     there post-#3493 and this glob never followed, so editing the
+      #     sentinel did not fire the guard that reads it;
+      # (b) no self-glob, so editing the guard did not re-run the guard.
       glob:
         - "AGENTS.md"
+        - "AGENTS.docs.md"
         - "plugins/soleur/skills/compound/SKILL.md"
+        - "plugins/soleur/skills/plan/SKILL.md"
+        - "scripts/lint-agents-rule-budget.py"
+        - "scripts/compound-promote.sh"
+        - "apps/web-platform/server/inngest/functions/cron-compound-promote.ts"
+        - "scripts/lint-agents-compound-sync.sh"
+        - "scripts/lint-agents-compound-sync.test.sh"
       run: bash scripts/lint-agents-compound-sync.sh
     agents-enforcement-tag-lint:
       priority: 5
