@@ -8,6 +8,29 @@ lane: procedural
 brand_survival_threshold: none
 ---
 
+> **SUPERSEDED IN PART — read this before trusting the recommendation below.**
+>
+> This plan makes **option 2** (anchoring the `-target … apply` imperative on
+> terraform/tofu/opentofu adjacency) the primary fix, on the strength of a measured
+> "~45 latent false positives removed" vs option 1's ~8. **That premise is false and
+> option 2 was reverted.** Reading all 41 lines option 2 removes shows ~29% are GENUINE
+> human-run infra steps it silences — including one in a runbook — because the natural
+> phrasing omits the tool name.
+>
+> What shipped is **option 1 only** (filename neutralization), plus a `STRONG_ACTOR_RE`
+> suppression that closes option 1's own narrow false-negative. The binding record is
+> [ADR-130](../../engineering/architecture/decisions/ADR-130-infra-sentinel-neutralize-filenames-not-tool-anchors.md);
+> the task-level delta is the AMENDMENT section in
+> [tasks.md](../specs/feat-one-shot-6771-lint-infra-workflow-filename-fp/tasks.md).
+>
+> Also stale below: the Phase 3 carve-out sweep names 7 regions (derived under the
+> anchored script); only **2** are freed by what shipped. And the "overlap by 4"
+> arithmetic in the measurement section is wrong — the two transforms do not compose
+> additively; measured overlap is 5.
+>
+> The issue author's original preference order (filenames first) was correct. Plan-quoted
+> measurements are preconditions to re-derive, not facts.
+
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 <!-- Phase 2.8 reviewed: this plan introduces NO infrastructure. Every
      "operator runs …" / "SSHes into …" string below is a TEST FIXTURE — the

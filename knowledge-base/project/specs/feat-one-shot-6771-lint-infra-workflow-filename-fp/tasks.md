@@ -20,8 +20,10 @@ Lane: `procedural`
       `terraform apply` during the window. Expect exit **1**.
 - [x] 1.4 Append the filename-class breadth case: a line citing a hypothetical
       `reboot-web-hosts.yml` beside `operator`. Expect exit **0**.
-- [x] 1.5 Append the glob-form case: a line citing `destroy-*.yml` beside `operator`.
-      Expect exit **0** (this is what the `*` in the char class buys).
+- [x] 1.5 Append the glob-form case. Shipped as F4 using `reboot-*.yml`, NOT the plan's
+      `destroy-*.yml`: bare `destroy` is not an imperative (it requires a terraform/tofu
+      prefix), so a `destroy-*` fixture passes with or without the `*` in the char class
+      and pins nothing. Rationale recorded at the F4 site. Expect exit **0**.
 - [x] 1.6 Append the anchored-`-target` case: an actor line containing
       `` `terraform -target=x apply` `` performed by hand. Expect exit **1**.
 - [x] 1.7 Append the adjacency-hazard guard: `The operator runs terraform pipeline.yml applies cleanly.`
@@ -121,9 +123,11 @@ Consequences for the tasks below:
 
 - [x] 4.1 `bash scripts/lint-infra-no-human-steps.test.sh` → exit 0, `FAIL=0`, `TOTAL` matches
       the new `MIN_CASES` (**39**, derived — see 1.9).
-- [x] 4.2 Full scan violation count drops by **~49**. Compute the delta on this machine in
-      this run — do NOT assert absolute 478/429; the corpus drifts (this PR adds its own
-      plan + spec into scan dirs) and observed baselines vary 32-73 s across hosts.
+- [x] 4.2 Full scan violation count drops by **8** (478 -> 470), NOT the ~49 the plan
+      predicted — ~49 was the opt1+opt2 figure and opt2 was reverted (see AMENDMENT).
+      Compute the delta on this machine in this run; do NOT assert absolute counts, the
+      corpus drifts (this PR adds its own plan + spec into scan dirs) and observed
+      baselines vary 32-73 s across hosts.
 - [x] 4.3 Run BOTH scripts on the **pre-sweep tree** (before Phase 3) and confirm the
       post-fix hit set is a strict **subset** — zero newly-flagged lines. Doing this after
       the sweep corrupts the comparison: removing carve-outs legitimately adds hits under

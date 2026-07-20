@@ -117,10 +117,11 @@ Issue: #6297 · Branch: `feat-one-shot-6297-anthropic-key-missing-false-page` ·
   matching the CI workflow FILENAME `apply-web-platform-infra.yml` — i.e. the sentinel
   matched the name of the very automation that makes this non-human.
 
-  REMOVE THIS REGION once #6771 lands (it narrows the imperative so a workflow
-  filename cannot satisfy it). A carve-out that outlives its cause is a permanent
-  blind spot in a P0 gate — this one exists only because the sentinel is currently
-  unable to tell a filename from a command.
+  RESOLVED: #6771 landed and the region was removed. The sentinel now neutralizes
+  `*.yml`/`*.yaml` filenames before scanning, so a workflow name can no longer supply
+  an actor or an imperative. (It does this by blanking the filename, not by narrowing
+  the imperative — the imperative-narrowing approach was measured and reverted; see
+  ADR-130.) This comment is retained as provenance for why the carve-out existed.
 -->
 - [x] 4.11 File the IaC follow-up issue/PR stub (do **not** open it for merge). It must carry **three**
       things together: the no-default sensitive `variable`, the `doppler_secret` with

@@ -37,9 +37,10 @@ inversion was wrong and what governs the sentinel going forward.
 
 - **Option A: filename neutralization only.** Blank `*.yml`/`*.yaml` filenames to `_`
   before the actor/imperative scan, on the reasoning that a filename NAMES automation and
-  can never instruct. Pros: closes the reported defect; removes 8 false positives; blunts
-  nothing; matches the issue author's ordering. Cons: leaves ~41 latent `-target … apply`
-  false positives in the corpus.
+  can never instruct. Pros: closes the reported defect; removes 8 false positives;
+  matches the issue author's ordering. Cons: leaves ~41 latent `-target … apply` false
+  positives in the corpus, and carries a narrow false-negative of its own (an imperative
+  living only inside a filename), mitigated by `STRONG_ACTOR_RE` — see Decision.
 - **Option B: filename neutralization + tool anchor.** Additionally require a
   `terraform|tofu|opentofu` token adjacent to `-target`. Pros: removes 49 false positives
   total; makes the imperative set internally consistent, since every sibling is
@@ -65,9 +66,11 @@ pinned on every `sort`/`comm`:
 
 Both arms are strict subsets of the baseline (zero newly-flagged lines).
 
-The plan assumed those 41 were latent false positives. Reading them shows roughly **40%
-are genuine human-run infra steps**, silenced because the natural phrasing omits the tool
-name. Representative confirmed cases:
+The plan assumed those 41 were latent false positives. Reading all 41 shows **12 are
+unambiguously genuine human-run infra steps (~29%)**, rising to ~17 (~41%) on a generous
+reading of the borderline cases — silenced because the natural phrasing omits the tool
+name. Confirmed cases, each verified flagged **in context** (whole file, not an extracted
+line):
 
 <!-- lint-infra-ignore start: EVIDENCE CITATIONS. These quote the corpus lines that a tool
      anchor would silence — they are the measurement this ADR records, not steps anyone
@@ -76,13 +79,21 @@ name. Representative confirmed cases:
   "This maintenance-window apply is a **FULL operator apply** (not the per-PR CI `-target`
   path)". This is a RUNBOOK, the exact artifact class `hr-no-ssh-fallback-in-runbooks`
   polices.
-- `knowledge-base/project/plans/2026-07-07-fix-zot-doppler-registry-isolation-plan.md:410`
-  — "stage the operator apply — `-target` the `doppler_project`+secrets+token first … THEN
-  apply the host". This step was already ruled genuinely operator-run in a prior CTO
-  decision, and was carved out on that basis.
+- `knowledge-base/project/plans/2026-04-30-fix-terraform-drift-deploy-pipeline-fix-3061-plan.md:323`
+  — "Operator must read the plan output and type `yes` interactively".
+- `knowledge-base/project/specs/feat-one-shot-fix-ci-ssh-auth-deploy-pipeline-fix/session-state.md:13`
+  — `terraform_data.root_authorized_keys` "must be applied LOCALLY by the operator".
 - `knowledge-base/project/specs/feat-one-shot-3485-tf-drift-fix/session-state.md:12` —
   two `-target`-scoped applies, "each requires its own per-command operator ack".
 <!-- lint-infra-ignore end -->
+
+**A correction worth recording, because it nearly became the ADR's evidence.** An earlier
+draft cited `2026-07-07-fix-zot-doppler-registry-isolation-plan.md` as a fourth confirmed
+case. It is not a member of the 41: that line sits inside a `lint-infra-ignore` region, so
+it is flagged by **zero** arms. The error came from verifying it by extracting the single
+line into a temp file — which strips it from its region and changes the verdict. A
+line-level probe is not a valid measurement for a scanner whose unit of judgment is the
+file. Verify in context, always.
 
 The deciding asymmetry: **a false positive costs an author one carve-out; a false negative
 costs a non-technical operator an un-automated infra step**, which is the entire reason the
@@ -92,6 +103,34 @@ invisible misses, which is strictly worse than the erosion it was meant to cure.
 
 Option A alone closes #6771 as filed. This was verified by mutation: with the anchor
 reverted, the regression test reproducing the reported defect stays green.
+
+<!-- lint-infra-ignore start: EVIDENCE CITATIONS. The two quoted strings below are
+     the corpus shapes this decision reasons ABOUT — a false negative the fix had to
+     close, and a true positive the fix must preserve. Both are deliberately quoted
+     verbatim so the boundary is checkable; neither is a step anyone performs here.
+     Removing this region makes the ADR flag under its own sentinel, which is the
+     guard behaving correctly. -->
+**Option A is not free either, and the same asymmetry applies to it.** Neutralization
+deletes a token, so any imperative that lives ONLY inside a `*.yml` filename is deleted
+with it — "you ssh in and run the `cryptsetup-unlock-workspaces.yml` playbook by hand"
+loses its only imperative and goes silent. That is the false-negative mirror of the defect
+being fixed, and it lands on runbooks. Review caught it; the mitigation is
+`STRONG_ACTOR_RE`: a line carrying an unambiguous human-agency signal (`by hand`,
+`manually`, `yourself`, `your laptop`, `ssh into`, `<role> runs`) is scanned RAW, so a
+filename can still supply its imperative. Bare `operator`/`you`/`founder` are excluded —
+those weak mentions are what the #6771 false positive is made of, and including them would
+re-open it. Measured cost at production scan scope: **zero** (identical flagged set to
+neutralization-alone; its one corpus hit is under `/archive/`, already excluded).
+
+**The `.yml`/`.yaml` boundary is a deliberate choice, not an oversight.** The neutralization
+does not extend to `.sh`, `.service`, `.tf`, `.md`, or `.ts`, and the extensions are not
+equivalent: a shell script is something a human *can* run, so "the operator runs
+`reboot-hosts.sh`" is a true positive that must keep flagging. Only extensions that are
+CI-by-construction (or pure citations) qualify. Two corpus lines currently exhibit the same
+word-boundary defect via `.ts` and `.md` filenames; widening to citation extensions is
+tracked separately rather than folded in here, because each candidate extension needs its
+own true-positive/false-positive measurement.
+<!-- lint-infra-ignore end -->
 
 ## Consequences
 
