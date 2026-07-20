@@ -45,7 +45,7 @@ import { randomUUID } from "node:crypto";
 import { Resend } from "resend";
 import { inngest } from "@/server/inngest/client";
 import { createServiceClient } from "@/lib/supabase/service";
-import { warnSilentFallback } from "@/server/observability";
+import { infoSilentFallback, warnSilentFallback } from "@/server/observability";
 import { notifyOfflineUser } from "@/server/notifications";
 import {
   PROBE_MARKER_PREFIX,
@@ -112,6 +112,12 @@ interface HandlerResult {
   ok: boolean;
   purged: unknown;
   repinged: number;
+  /**
+   * Dispatches skipped because a send-marker for this (item, tick) already
+   * existed — i.e. a double-fire that did NOT reach the user (#6781). A
+   * non-zero value here is the signal that a second scheduler is live.
+   */
+  repinSuppressed: number;
   probeFound: boolean;
 }
 
@@ -136,6 +142,24 @@ export async function cronEmailIngressProbeHandler({
         `purge_email_triage_items RPC failed: ${error.message ?? "unknown"}`,
       );
     }
+    // Send-marker sweep (#6781). Separate RPC, not folded into the one above:
+    // replacing that function would drop its security attributes, and both
+    // AP-018 guard tiers are blind to the drop. Retention here MUST be
+    // explicit — statutory parent rows are evidence and are never purged, so
+    // the marker's ON DELETE CASCADE effectively never fires.
+    const { error: markerPurgeError } = await sb.rpc(
+      "purge_statutory_repin_send",
+    );
+    if (markerPurgeError) {
+      // Deliberately NOT fatal: a stale marker delays nothing and suppresses
+      // nothing (the tick_key has already moved on). Failing the run here
+      // would take the ingress liveness probe down for a retention nicety.
+      warnSilentFallback(markerPurgeError, {
+        feature: "email-triage",
+        op: "statutory-repin-marker-purge-failed",
+        message: "statutory repin send-marker retention sweep failed",
+      });
+    }
     return data as Record<string, number>;
   });
 
@@ -158,7 +182,23 @@ export async function cronEmailIngressProbeHandler({
       );
     }
 
+    // Computed ONCE, before the loop, and returned from the step so it is
+    // checkpointed (mirrors send-probe's `sentAt`). A per-iteration date would
+    // let a run that straddles UTC midnight key its own tail differently and
+    // re-send those items on the next tick.
+    const runDateUtc = new Date().toISOString().slice(0, 10);
+
     let pinged = 0;
+    let suppressed = 0;
+    // RECIPIENT-GRAIN CONSTRAINT (ADR-035; migration 135 header note 4).
+    // statutory_repin_send is keyed (item_id, tick_key) — ITEM grain. That
+    // equals RECIPIENT grain only because this loop pings `row.user_id` and
+    // nobody else. Migration 111 already makes an item visible to every
+    // workspace Owner, so this is a property of THIS SEND PATH, not a
+    // structural guarantee. Before fanning out to multiple recipients, re-key
+    // the marker table to recipient grain — otherwise the first Owner's marker
+    // suppresses every other Owner and N-1 people get silence on a statutory
+    // deadline while this step reports success. Test T12 is the tripwire.
     for (const row of (data ?? []) as AcknowledgedStatutoryRow[]) {
       // Anonymised rows (Art. 17) have user_id NULL — nobody to ping.
       if (!row.user_id) continue;
@@ -185,6 +225,62 @@ export async function cronEmailIngressProbeHandler({
         continue;
       }
 
+      // ---- idempotency guard (#6781) ------------------------------------
+      // The tick identity is BRANCH-DERIVED because the repin has two
+      // cadences. `daysUntilDue === 7` is a one-shot heads-up that spans a 24h
+      // window (so a calendar date would let jitter produce two T-7 emails),
+      // while the T-2-through-overdue band is genuinely daily (so a constant
+      // would silence it after day 1). See migration 135 header note 3.
+      const tickKey =
+        daysUntilDue === DEADLINE_REPIN_HEADS_UP_DAY
+          ? "headsup"
+          : `daily:${runDateUtc}`;
+
+      // Marker BEFORE dispatch: the insert is the durable record that this
+      // send is claimed. Sending first would mean a crash in between re-sends
+      // forever — the exact failure this guard exists to prevent.
+      //
+      // FAIL OPEN on everything except a clean 23505. Over-suppression is
+      // strictly worse than duplication here: a duplicate statutory-deadline
+      // email is annoying, but a suppressed one is SILENCE on a legal clock.
+      // The T-7 arm makes this asymmetry sharper still — it is a structural
+      // one-shot, so suppressing it does not delay the heads-up, it deletes
+      // it (the next tick no longer satisfies the equality). And the likeliest
+      // fail-open trigger, a 42P01 during the deploy window, is correlated
+      // across every item in the band at once.
+      try {
+        const { error: markerError } = await sb
+          .from("statutory_repin_send")
+          .insert({ item_id: row.id, tick_key: tickKey })
+          .select("id")
+          .single();
+        if (markerError) {
+          if (markerError.code === "23505") {
+            // Already sent for this logical tick — a double-fire.
+            suppressed += 1;
+            continue;
+          }
+          warnSilentFallback(markerError, {
+            feature: "email-triage",
+            op: "deadline-repin-marker-insert-failed",
+            message:
+              "statutory repin send-marker insert failed; dispatching anyway (fail open)",
+            extra: { itemId: row.id, tickKey, code: markerError.code ?? null },
+          });
+        }
+      } catch (err) {
+        // A THROWN rejection must not escape the iteration: under `retries: 0`
+        // an escape would kill the whole run, taking the ingress liveness
+        // probe (steps 3-5) down with it.
+        warnSilentFallback(err, {
+          feature: "email-triage",
+          op: "deadline-repin-marker-insert-failed",
+          message:
+            "statutory repin send-marker insert threw; dispatching anyway (fail open)",
+          extra: { itemId: row.id, tickKey },
+        });
+      }
+
       // Title carries only the registry-derived due string — never the
       // third-party subject (TR3 hygiene is moot for this synthetic title,
       // but keeping email content out of the ping keeps the surface uniform).
@@ -196,7 +292,23 @@ export async function cronEmailIngressProbeHandler({
       });
       pinged += 1;
     }
-    return { pinged, scanned: (data ?? []).length };
+
+    // Per-run record via the observability layer, NOT pino stdout: Vector's
+    // allowlist keeps only level_int >= 40, so an info-level stdout line would
+    // never reach Better Stack and this counter would be invisible off-box.
+    infoSilentFallback({
+      feature: "email-triage",
+      op: "deadline-repin-sweep-complete",
+      message: "statutory deadline repin sweep finished",
+      extra: {
+        pinged,
+        suppressed,
+        scanned: (data ?? []).length,
+        runDateUtc,
+      },
+    });
+
+    return { pinged, suppressed, scanned: (data ?? []).length, runDateUtc };
   });
 
   // ---- (3) send probe -------------------------------------------------------
@@ -294,6 +406,7 @@ export async function cronEmailIngressProbeHandler({
     ok: true,
     purged,
     repinged: repin.pinged,
+    repinSuppressed: repin.suppressed,
     probeFound: found.found,
   };
 }
