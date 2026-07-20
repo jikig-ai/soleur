@@ -216,6 +216,64 @@ run_gate
 if [[ "$CASE_RC" -eq 0 ]]; then pass "#9990 does not substring-match #999 (net=0)"
 else fail "numeric boundary broken: #9990 matched #999; exit $CASE_RC"; fi
 
+# ---------------------------------------------------------------------------
+# Case 11 (review finding): the override marker must NOT match inside a fenced
+# code block. The BLOCKED message prints the literal marker, so pasting gate
+# output into the PR description as context would otherwise self-override.
+# ---------------------------------------------------------------------------
+PR_BODY_FILE="$WORK/body11"; export PR_BODY_FILE
+ISSUE_LIST_FILE="$WORK/issues3"; export ISSUE_LIST_FILE
+mk_issues 3 > "$ISSUE_LIST_FILE"
+{
+  printf 'Here is what the gate printed when it blocked me:\n\n'
+  printf '```text\n'
+  printf '  (c) Override — add to the PR body:\n'
+  printf '        <!-- gate-override: net-issue-flow -->\n'
+  printf '```\n\n'
+  printf 'Still working on it.\n'
+} > "$PR_BODY_FILE"
+run_gate
+if [[ "$CASE_RC" -eq 1 ]]; then pass "marker inside a fenced block does NOT override"
+else fail "fenced-block marker self-overrode; exit $CASE_RC"; fi
+
+# Case 12: the marker OUTSIDE a fence still overrides even when a fence exists
+# elsewhere in the body (proves the strip is scoped, not a blanket disable).
+PR_BODY_FILE="$WORK/body12"; export PR_BODY_FILE
+{
+  printf '```text\nsome unrelated quoted output\n```\n\n'
+  printf '<!-- gate-override: net-issue-flow -->\n'
+  printf -- '- #7001 genuinely deferred\n'
+} > "$PR_BODY_FILE"
+run_gate
+if [[ "$CASE_RC" -eq 0 ]]; then pass "marker outside a fence still overrides"
+else fail "real override was swallowed by the fence strip; exit $CASE_RC"; fi
+
+# ---------------------------------------------------------------------------
+# Case 13 (review finding): the fail-open event_type must be one the aggregator
+# actually counts. rule-metrics-aggregate.sh counts only deny/bypass/applied/
+# warn -- a 'transient' row increments nothing, so the operator cannot tell
+# "never fired" from "fail-opened every time".
+# ---------------------------------------------------------------------------
+if grep -qE '_emit[[:space:]]+warn' "$GATE" && ! grep -qE '_emit[[:space:]]+transient' "$GATE"; then
+  pass "fail-open emits a counted event_type (warn, not transient)"
+else
+  fail "fail-open must emit 'warn'; 'transient' is counted by nothing"
+fi
+
+# Case 14: the emitted rule_id must be exempt in the aggregator, or the first
+# real event hard-fails the metrics run (exit 5) via the orphan gate.
+AGG="$REPO_ROOT/scripts/rule-metrics-aggregate.sh"
+if [[ -r "$AGG" ]] && grep -qF 'startswith("net-issue-flow")' "$AGG"; then
+  pass "net-issue-flow rule_id is exempted in rule-metrics-aggregate.sh"
+else
+  fail "net-issue-flow rule_id would be an orphan -> aggregator exit 5"
+fi
+if [[ -r "$AGG" ]] && grep -qF 'startswith("cost-of-filing-")' "$AGG"; then
+  pass "cost-of-filing-* rule_ids are exempted in rule-metrics-aggregate.sh"
+else
+  fail "cost-of-filing-* would be orphans -> aggregator exit 5"
+fi
+
 printf '\n'
 if [[ "$fails" -eq 0 ]]; then
   printf 'net-issue-flow.test.sh: ALL PASS\n'

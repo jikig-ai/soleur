@@ -33,8 +33,10 @@
 #   3. gate script missing/not exec    -> exit 0 (fail-open: infra, not policy)
 #   4. delegated script exit != 1      -> exit 0 (pass or transient fail-open)
 #   5. delegated script exit == 1      -> DENY
-# This gate is independent of local repo state, so it does NOT gate on .cwd
-# being a valid directory the way context-dependent siblings do.
+# The hook cds into the payload .cwd (when absolute and existing) before
+# delegating, matching every sibling ship gate. The delegated script resolves
+# the PR from the process cwd, so skipping this makes the gate silently
+# fail-open whenever the session cwd is not the PR's worktree.
 #
 # Fail-open conditions (exit 0 silently or with a note):
 #   - command is not `gh pr ready` / `gh pr merge`
@@ -50,8 +52,9 @@ set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh" 2>/dev/null || true
 
 INPUT=$(cat)
-eval "$(echo "$INPUT" | jq -r '@sh "CMD=\(.tool_input.command // "")"' 2>/dev/null || echo 'CMD=""')"
+eval "$(echo "$INPUT" | jq -r '@sh "CMD=\(.tool_input.command // "") WORK_DIR=\(.cwd // "")"' 2>/dev/null || echo 'CMD="" WORK_DIR=""')"
 : "${CMD:=}"
+: "${WORK_DIR:=}"
 
 # Strip commit bodies/heredocs so a commit message *documenting* the command is
 # not mistaken for one (#5192).
@@ -69,10 +72,22 @@ if [[ "${SOLEUR_SKIP_NET_ISSUE_FLOW_GATE:-}" == "1" ]]; then
   exit 0
 fi
 
-# Script path resolves from the project dir, NOT the payload .cwd (2.4).
+# The SCRIPT PATH resolves from the project dir (it is the same checkout
+# regardless of which worktree the command runs in). The WORKING DIRECTORY must
+# still be the payload .cwd: the delegated script resolves the PR via
+# `gh pr view` and `gh issue list`, both of which read the repo/branch from the
+# process cwd. Resolving only the script path and inheriting the hook process's
+# cwd is a real bypass — a session started in the main checkout that then runs
+# `gh pr merge` against a feature worktree would resolve NO PR, fail open, and
+# never block. That is the exact class this gate exists to close, so it is not
+# left to convention: the suite asserts .cwd is honored.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 GATE="$PROJECT_DIR/plugins/soleur/skills/ship/scripts/net-issue-flow.sh"
 [[ -x "$GATE" ]] || exit 0
+
+if [[ "$WORK_DIR" == /* ]] && [[ -d "$WORK_DIR" ]]; then
+  cd "$WORK_DIR" 2>/dev/null || exit 0
+fi
 
 OUT="$(timeout 8 bash "$GATE" 2>&1)"
 RC=$?

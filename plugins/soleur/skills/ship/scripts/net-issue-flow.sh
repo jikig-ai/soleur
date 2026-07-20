@@ -47,6 +47,11 @@
 # fail-open emits telemetry via emit_incident. A gate that fails open silently
 # is indistinguishable from a gate that passes.
 #
+# The fail-open event_type is `warn`, NOT `transient`: rule-metrics-aggregate.sh
+# counts only deny/bypass/applied/warn, so a `transient` row would increment
+# nothing — and the operator could not tell "gate never fired" from "gate
+# fail-opened on every invocation", which is precisely the claim above.
+#
 set -uo pipefail
 export LC_ALL=C
 
@@ -71,7 +76,7 @@ _fail_open() {
   printf 'net-issue-flow: TRANSIENT — could not compute net flow (%s).\n' "$1"
   printf '  Failing OPEN so an API outage cannot wedge every merge.\n'
   printf '  This is recorded as telemetry, not swallowed.\n'
-  _emit transient "net-issue-flow fail-open: $1"
+  _emit warn "net-issue-flow fail-open: $1"
   exit 0
 }
 
@@ -137,7 +142,19 @@ if [[ "$NET" -le 0 ]]; then
 fi
 
 # --- NET > 0: override or block ---------------------------------------------
-if printf '%s' "$PR_BODY" | grep -qF -- "$MARKER"; then
+# Strip fenced code blocks before the marker match, mirroring the soak gate's
+# corpus handling. The BLOCKED message below PRINTS the literal marker, so an
+# agent that pastes a gate failure into the PR description as context would
+# otherwise smuggle in its own override — reported as OVERRIDDEN with a bypass
+# event, while nothing in the body reads as a deliberate decision. Same
+# self-override class the hook header guards against for spec files, via a
+# different corpus path.
+PR_BODY_SCAN="$(printf '%s\n' "$PR_BODY" | awk '
+  /^[[:space:]]*```/ { in_fence = !in_fence; next }
+  !in_fence { print }
+')"
+
+if printf '%s' "$PR_BODY_SCAN" | grep -qF -- "$MARKER"; then
   printf '\nnet-issue-flow: OVERRIDDEN via the gate-override marker in the PR body.\n'
   printf '  Net is +%d; the override is recorded as a deliberate decision.\n' "$NET"
   _emit bypass "net-issue-flow overridden net=${NET} pr=${PR_NUMBER}"

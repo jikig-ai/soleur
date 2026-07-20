@@ -112,6 +112,41 @@ done
 if [[ "$reason" == *"Net:     +3"* ]]; then pass "deny reason embeds the delegated script's output"
 else fail "deny reason must embed delegated output"; fi
 
+# --- .cwd is honored (review finding: real bypass) --------------------------
+# The delegated script resolves the PR from the process cwd via `gh pr view`.
+# If the hook ignores payload .cwd, a session whose cwd is the main checkout
+# resolves NO PR for a feature-branch merge, fails open, and never blocks --
+# the exact bypass class this gate exists to close.
+#
+# Seam: a stub gate that records its own $PWD. The assertion is that the
+# recorded cwd equals the payload .cwd, not the hook's inherited cwd.
+CWD_PROBE="$WORK/cwd-probe"
+mkdir -p "$CWD_PROBE/plugins/soleur/skills/ship/scripts"
+PAYLOAD_CWD="$WORK/payload-cwd"; mkdir -p "$PAYLOAD_CWD"
+cat > "$CWD_PROBE/plugins/soleur/skills/ship/scripts/net-issue-flow.sh" <<PROBE
+#!/usr/bin/env bash
+pwd > "$WORK/recorded-cwd"
+exit 0
+PROBE
+chmod +x "$CWD_PROBE/plugins/soleur/skills/ship/scripts/net-issue-flow.sh"
+
+rm -f "$WORK/recorded-cwd"
+printf '{"tool_input":{"command":"gh pr ready"},"cwd":"%s"}\n' "$PAYLOAD_CWD" \
+  | ( export CLAUDE_PROJECT_DIR="$CWD_PROBE"; cd /; bash "$HOOK" ) >/dev/null 2>&1
+recorded="$(cat "$WORK/recorded-cwd" 2>/dev/null || echo MISSING)"
+if [[ "$recorded" == "$PAYLOAD_CWD" ]]; then
+  pass "hook cds into payload .cwd before delegating"
+else
+  fail "hook must cd into payload .cwd; delegated ran in '$recorded' (expected '$PAYLOAD_CWD')"
+fi
+
+# A non-absolute / nonexistent .cwd must not wedge the hook (fail-open).
+rm -f "$WORK/recorded-cwd"
+printf '{"tool_input":{"command":"gh pr ready"},"cwd":"/nonexistent-%s"}\n' "$$" \
+  | ( export CLAUDE_PROJECT_DIR="$CWD_PROBE"; bash "$HOOK" ) >"$WORK/out" 2>&1
+if is_deny; then fail "bad .cwd must not produce a deny"
+else pass "nonexistent .cwd falls back without denying"; fi
+
 printf '\n'
 if [[ "$fails" -eq 0 ]]; then
   printf 'ship-net-issue-flow-gate.test.sh: ALL PASS\n'; exit 0
