@@ -727,8 +727,19 @@ Phase 4b (continuous checkpoint).
 > laptop-local run and never remote-shells a host. The plan-scoped `reboot_updates=0` destroy-guard
 > runs before the apply so no placement reboot can enter the additive path.
 >
-> **(2) §(c) is a fail-closed, SHAPE-ONLY programmatic check.**
-> `apps/web-platform/infra/lb-weight-gate.sh` verifies the config-shape of BOTH §(c) conditions
+> **(2) §(c) WAS a fail-closed, SHAPE-ONLY programmatic check — the checker is now DELETED.**
+>
+> **CORRECTION 2026-07-20 (#6575).** `apps/web-platform/infra/lb-weight-gate.sh` was deleted with
+> the web-2 dispatch sweep. It was never wired to a required CI context, and after web-2 retired
+> (2026-07-17, #6538) its first assertion — `SOLEUR_HOST_ROSTER` must contain web-2 — could only
+> ever FAIL: a *correct* post-retire roster omitting web-2 trips `A_web2_not_in_roster` forever.
+> A gate that a correct configuration cannot pass is not a guard. It was removed under the
+> retention rule (retain a verifier iff it is named in a procedure an operator can execute today);
+> its design record is preserved in ADR-128. **There is no programmatic §(c) checker today** — the
+> paragraph below describes what it DID, retained because the contract it encoded (especially the
+> `GIT_DATA_LUKS_CUTOVER_AT` soak-marker semantics) still binds any future implementation.
+>
+> As deleted, it verified the config-shape of BOTH §(c) conditions
 > over injected env (owner-side relay: `SOLEUR_PROXY_BIND` + `SOLEUR_PROXY_PEER_ALLOWLIST` +
 > `SOLEUR_HOST_ROSTER` with web-2 in-roster and allowlist ⊆ roster, parser-parity with
 > `parseProxyPeerAllowlist`/`loadHostRoster`; git-data cut-over: `GIT_DATA_STORE_ENABLED=="true"`

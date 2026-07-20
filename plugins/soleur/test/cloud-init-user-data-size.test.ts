@@ -484,10 +484,26 @@ describe("baked bootstrap installer contract (AC4/AC5/AC6/AC8/AC9)", () => {
 });
 
 describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
-  function serverTfBakedSet(): string[] {
-    const defMatch = /host_script_files\s*=\s*\[([\s\S]*?)\]/.exec(serverTf);
-    const body = defMatch?.[1] ?? "";
+  // Parser is parameterized on the source text so the comment-hazard fixture below can
+  // exercise the SAME code path the real server.tf goes through (a fixture that tested a
+  // reimplementation would prove nothing about this parser).
+  function parseHostScriptFiles(src: string): string[] {
+    const defMatch = /host_script_files\s*=\s*\[([\s\S]*?)\]/.exec(src);
+    // Strip whole-line `#` comments BEFORE the quoted-string match. The real block carries
+    // ~10 interleaved comment lines; none contains a double-quoted string TODAY, but one
+    // future comment reading `# ... installs "vector.toml" ...` would silently inject a
+    // phantom entry into the parsed set — a wrong answer with no diagnostic. Anchored on
+    // `^\s*#`, which is HCL comment syntax and cannot appear inside a list element.
+    const body = (defMatch?.[1] ?? "")
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n");
+    // NOTE: duplicates are deliberately PRESERVED here (map-then-sort, not a Set) so the
+    // duplicate-entry assertion below has something to detect.
     return [...body.matchAll(/"([^"]+)"/g)].map((x) => x[1]).sort();
+  }
+  function serverTfBakedSet(): string[] {
+    return parseHostScriptFiles(serverTf);
   }
   function dockerfileBakedSet(): string[] {
     // Match ONLY the multi-line COPY that ends in /opt/soleur/host-scripts/ (the `\`
@@ -497,6 +513,38 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     );
     const body = copyMatch?.[1] ?? "";
     return [...body.matchAll(/\/app\/infra\/([^\s\\]+)/g)].map((x) => x[1]).sort();
+  }
+
+  // Everything AFTER the host-scripts COPY, truncated at the next stage boundary. The
+  // runner is the last stage today, so this is COPY-to-EOF; the `^FROM` cut keeps the
+  // region correct if a stage is ever appended.
+  function dockerfileRunnerTailAfterBakedCopy(): string {
+    const copy = /COPY --from=builder\s*\\\n[\s\S]*?\/opt\/soleur\/host-scripts\/[^\S\n]*\n/.exec(
+      dockerfile,
+    );
+    if (!copy) throw new Error("host-scripts COPY not found in Dockerfile — parser is stale");
+    const tail = dockerfile.slice(copy.index + copy[0].length);
+    const nextStage = /^FROM\s/m.exec(tail);
+    return nextStage ? tail.slice(0, nextStage.index) : tail;
+  }
+
+  // Logical RUN instructions in a Dockerfile region, one per array entry.
+  function runInstructions(region: string): string[] {
+    const src = region
+      .split("\n")
+      // Drop full-line `#` comments FIRST. A comment can never be an instruction, and
+      // prose inside one must not be able to satisfy the `^RUN` anchor below.
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n");
+    // Fold `\` continuations so a multi-line RUN is ONE logical instruction (otherwise a
+    // mutation hidden on a continuation line would never be seen by the `^RUN` anchor).
+    return src
+      .replace(/\\\n/g, " ")
+      .split("\n")
+      .map((line) => line.trim())
+      // Anchor on the RUN *instruction keyword at line start* — Dockerfile syntax a
+      // comment or a prose mention of the word "RUN" structurally cannot produce.
+      .filter((line) => /^RUN\s/.test(line));
   }
 
   test("both sides list the same files, incl. hooks.json.tmpl + bootstrap + journald", () => {
@@ -522,6 +570,68 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // ADR-122). Previously SSH-provisioner-only, so a fresh host ran the tenant sandbox
     // unenforced. Data files, not scripts.
     expect(serverTfBakedSet().length).toBe(30);
+  });
+
+  // ASSERTION A (build-integrity). server.tf computes local.host_scripts_content_hash over
+  // the on-disk repo tree at plan time; cloud-init recomputes it at boot over the files it
+  // extracts FROM THE IMAGE. Any Dockerfile RUN that rewrites a baked file's CONTENT after
+  // the COPY makes those two constructions disagree permanently — every fresh boot aborts,
+  // and no list-parity test above can see it (the two LISTS still match perfectly).
+  test("no RUN after the host-scripts COPY mutates the baked directory's content", () => {
+    const runs = runInstructions(dockerfileRunnerTailAfterBakedCopy());
+    // Non-vacuity floor: this region has RUN instructions today (chown, useradd, git
+    // config). If the parser ever yields 0, the filter below is trivially satisfied and
+    // this assertion silently stops guarding anything.
+    expect(runs.length).toBeGreaterThan(0);
+
+    // Candidates: any RUN naming the baked dir, or /opt/soleur which CONTAINS it (a
+    // recursive op on the parent reaches the baked files just as directly).
+    const touching = runs.filter((r) => r.includes("/opt/soleur"));
+
+    // ALLOW-LIST — ownership only, and only this exact form. `chown -R 1001:1001
+    // /opt/soleur` is safe because it changes the owner uid/gid recorded in the layer's
+    // metadata and NOTHING ELSE: file CONTENT is byte-identical before and after, so the
+    // sha256-over-contents that both sides compute is unaffected. Anything else reaching
+    // this path — `sed -i`, a `>` or `>>` redirect, `install`, `cp`, `truncate`, `chmod`
+    // combined with a rewrite — alters content and MUST fail here.
+    const OWNERSHIP_ONLY = /^RUN chown -R 1001:1001 \/opt\/soleur$/;
+    expect(touching.filter((r) => !OWNERSHIP_ONLY.test(r))).toEqual([]);
+    // The allow-list must stay LIVE: if the chown is renamed or removed, this trips so the
+    // exemption is re-justified rather than silently covering nothing.
+    expect(touching.filter((r) => OWNERSHIP_ONLY.test(r)).length).toBe(1);
+  });
+
+  // ASSERTION B (build-integrity). Terraform hashes the ENUMERATED list — sort() preserves
+  // duplicates, so a repeated entry contributes its filesha256 twice. The boot side hashes
+  // files FOUND ON DISK, where the duplicate collapses to one. The two hashes then disagree
+  // permanently and every fresh host aborts at the pre-install verify. List parity above
+  // cannot catch it: the Dockerfile COPY tolerates a repeated source path silently.
+  test("host_script_files contains no duplicate entries", () => {
+    const tf = serverTfBakedSet();
+    const duplicates = [...new Set(tf.filter((f, i) => tf.indexOf(f) !== i))];
+    expect(duplicates).toEqual([]);
+  });
+
+  // Parser hazard (Phase 1.2). Pins the `^\s*#` strip in parseHostScriptFiles: without it,
+  // a future comment quoting a filename injects a phantom entry and every downstream
+  // assertion in this describe silently reasons about a wrong set.
+  test("a quoted filename inside a comment does not enter the parsed set", () => {
+    const clean = `locals {
+  host_script_files = [
+    "alpha.sh",
+    "beta.conf",
+  ]
+}`;
+    const commented = `locals {
+  host_script_files = [
+    "alpha.sh",
+    # the bootstrap also installs "phantom.toml" to /etc/soleur — prose, not an entry
+    "beta.conf",
+  ]
+}`;
+    expect(parseHostScriptFiles(clean)).toEqual(["alpha.sh", "beta.conf"]);
+    expect(parseHostScriptFiles(commented)).toEqual(parseHostScriptFiles(clean));
+    expect(parseHostScriptFiles(commented)).not.toContain("phantom.toml");
   });
 
   // #5922 release break: the Dockerfile bakes the host-scripts via

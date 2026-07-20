@@ -459,24 +459,22 @@ WEB1_DIRECT=0
 for wf in "$WF_DIR"/*.yml; do
   grep -hoE -- "-target=('?)hcloud_server\.web[^ '\\\\]*" "$wf" 2>/dev/null | tr -d "'" >> "$WORK/targets.txt" || true
 done
-# The ONE legitimate direct target is hcloud_server.web["web-2"], in the web-2-recreate job —
-# the single path that DOES run web2-recreate-preflight.sh, so a create there is coherence-
-# checked. Everything else is a finding: an unindexed `hcloud_server.web` targets every
-# instance including web-1, and an explicit ["web-1"] is the live sole origin.
-grep -v 'hcloud_server\.web\["web-2"\]' "$WORK/targets.txt" > "$WORK/targets-unexpected.txt" || true
-WEB1_DIRECT=$(grep -c 'hcloud_server\.web' "$WORK/targets-unexpected.txt" 2>/dev/null | tr -d ' ' || true)
+# CARVE-OUT REMOVED (#6575, 2026-07-20) — this is the cleanup its own control demanded. The
+# carve-out excluded hcloud_server.web["web-2"] from this scan, because the web-2-recreate job was
+# the ONE legitimate direct target (it ran the coherence preflight, so a create there was checked).
+# A paired control below asserted the web-2 entry was still findable, with the standing instruction
+# "if 0, delete the carve-out" — i.e. once the dead workflow arm was swept, the carve-out becomes
+# dead code to DELETE, not a needle to fix. #6575 swept it: the extractor now finds zero
+# hcloud_server.web targets in any workflow, so the exclusion filter and its control are both gone
+# and the scan is unconditional. Any direct target is now a finding, full stop — an unindexed
+# `hcloud_server.web` targets every instance including web-1, and an explicit ["web-1"] is the
+# live sole origin. This is STRICTLY STRONGER than what it replaces: there is no allowance left
+# that could silently widen into a blanket pass.
+WEB1_DIRECT=$(grep -c 'hcloud_server\.web' "$WORK/targets.txt" 2>/dev/null | tr -d ' ' || true)
 [ -n "$WEB1_DIRECT" ] || WEB1_DIRECT=0
-DIRECT_LIST=$(sort -u "$WORK/targets-unexpected.txt" 2>/dev/null | paste -sd, - || true)
-assert "no workflow -targets hcloud_server.web[web-1] or unindexed, any spelling (found ${WEB1_DIRECT}: ${DIRECT_LIST:-<none>})" \
+DIRECT_LIST=$(sort -u "$WORK/targets.txt" 2>/dev/null | paste -sd, - || true)
+assert "no workflow -targets hcloud_server.web at all, any spelling or index (found ${WEB1_DIRECT}: ${DIRECT_LIST:-<none>})" \
   "[[ '$WEB1_DIRECT' == '0' ]]"
-# Control on the ALLOWANCE, so the carve-out cannot silently become a blanket pass: the web-2
-# entry must still be found by the extractor. If web-2's dead workflow arm is ever cleaned up
-# this goes RED — correctly, because the carve-out above would then be dead code to delete,
-# not a needle to fix.
-WEB2_SEEN=$(grep -c 'hcloud_server\.web\["web-2"\]' "$WORK/targets.txt" 2>/dev/null | tr -d ' ' || true)
-[ -n "$WEB2_SEEN" ] || WEB2_SEEN=0
-assert "control: the web-2 carve-out is still live (found $WEB2_SEEN); if 0, delete the carve-out" \
-  "[[ '$WEB2_SEEN' -ge 1 ]]"
 # Positive control on the EXTRACTOR, not on a retired host's spelling. An earlier draft
 # controlled on the web-2 needle — but web-2 is retired (var.web_hosts holds only web-1), so a
 # future cleanup deleting that dead workflow arm would have RED-ed this suite while the failure

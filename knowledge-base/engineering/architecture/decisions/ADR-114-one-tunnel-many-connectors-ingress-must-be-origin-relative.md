@@ -366,10 +366,23 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > `soleur-host-bootstrap.sh` feeds `local.host_scripts_content_hash`, which is injected into
 > `user_data` and re-verified at boot under `set -e`. So editing the bootstrap script couples
 > the change to image-bake sequencing: a host created after the apply but before `:latest`
-> carries the matching bootstrap aborts its entire runcmd at `stage=verify`. The existing
-> coherence preflight (`web2-recreate-preflight.sh`) covers **only** the web-2-recreate
-> dispatch and cannot be reused generally — it requires a pinned `@sha256` ref, while the
-> default `var.image_name` is the mutable `:latest`.
+> carries the matching bootstrap aborts its entire runcmd at `stage=verify`.
+>
+> **[Scope corrected 2026-07-20, #6575 — the hazard survives; only its scope statement changes.]**
+> This bullet previously said the coherence preflight covered **only** the web-2-recreate dispatch.
+> That scoping is gone with the dispatch job. The verifier is retained, renamed host-agnostic
+> (`host-scripts-coherence-preflight.sh`, comparison logic byte-unchanged), and is reachable by any
+> host through a documented operator procedure: the `host_creates` HALT runbook now carries the
+> complete `crane digest` → preflight → `terraform apply -var image_name=<pinned>` chain. So the
+> preflight is no longer web-2-scoped and no longer callerless.
+>
+> **What did not change is the hazard itself.** The verifier still requires a pinned `@sha256` ref
+> while the default `var.image_name` is the mutable `:latest`, so the routine merge apply is still
+> not coherence-verified. ADR-128 names this the **cross-commit skew** invariant and records that no
+> build-time artifact can observe it; it is open under **#6712** and closable only by **#6730**'s
+> digest-pinned birth path. The separable half — that the image's baked host-scripts match the tree
+> it was built from — is *build-integrity*, and is statically enforced in
+> `cloud-init-user-data-size.test.ts`.
 >
 > For the routine merge apply this is a non-issue, but **not** for the reason an earlier draft
 > of this amendment gave. That draft argued: *"`hcloud_server.web["web-1"]` appears in no
@@ -454,6 +467,17 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > `hr-fresh-host-provisioning-reachable-from-terraform-apply` and is tracked in **#6730**. Do not
 > resolve it by weakening either HALT: the correct fix is a pinned, attachment-complete birth path
 > that the tripwire can distinguish from an accidental create.
+>
+> **[Enumeration correction, 2026-07-20, #6575.]** Two entries in the five-path enumeration above
+> are no longer *guarded paths* — they are **deleted paths**. `warm_standby` and `web_2_recreate`
+> were removed with the rest of the web-2 dispatch surface, so the surviving enumeration is: apply
+> (#6416 HALT), apply-deploy-pipeline-fix (#6718 HALT), workspaces_luks_cutover (gate requires zero
+> actions on the web-1 server). Read as-written, "warm_standby (#6718)" now credits a HALT to a job
+> that does not exist, which overstates the guarded surface by two. The **conclusion is unchanged
+> and if anything stronger** — every *remaining* automated route to `hcloud_server.web` still HALTs,
+> and two routes that could reach it no longer exist at all. Also measured-and-now-moot: the note
+> that `warm_standby`'s three `web-2` `-target`s had been no-ops since #6538 was the tracking item
+> #6575 closed by deleting them.
 
 ### Candidate implementations for I2 — assessed in #6441 (SUPERSEDED — see the amendment above; (b) shipped in #6425)
 

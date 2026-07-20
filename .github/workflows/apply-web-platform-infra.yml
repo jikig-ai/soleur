@@ -169,8 +169,9 @@ jobs:
   apply:
     needs: preflight
     # Runs on push (auto-apply) and on the `manual-rerun` dispatch (the historical
-    # escape hatch). A `warm-standby` dispatch selects the `warm_standby` job below
-    # INSTEAD — the two are mutually exclusive so exactly one apply path executes.
+    # escape hatch). Every other `apply_target` value selects a dedicated dispatch
+    # job below INSTEAD — the `if:` guards are mutually exclusive, so exactly one
+    # apply path executes per dispatch.
     # On push, `inputs.apply_target` is null → the `github.event_name == 'push'`
     # clause carries it (current behavior, unchanged).
     if: >-
@@ -464,11 +465,18 @@ jobs:
           if [[ "$host_creates" -gt 0 ]]; then
             echo "::error::terraform plan would CREATE ${host_creates} hcloud_server/hcloud_volume resource(s) on the per-PR apply path. This path must never birth a host: the server is target-reachable but its hcloud_server_network attachment is not, so the host would come up with no private-net IP (and, transiently, no firewall) — the #6416 failure mode."
             echo "::error::Remediation depends on WHICH host is being created (see the plan output above):"
-            echo "::error::  • ANY hcloud_server.web[*] / its volume → there is NO automated path. Every route that could reach hcloud_server.web now HALTs: this job (#6416), warm-standby (#6718 — and its -targets name web-2, RETIRED 2026-07-17 #6538, so they resolve to nothing), apply-deploy-pipeline-fix.yml (#6718), web-2-recreate (gate needs web2_server_replaced==1, unsatisfiable with the instance absent) and workspaces-luks-cutover (gate requires zero actions on the web-1 server). Use the operator-local full apply below."
+            echo "::error::  • ANY hcloud_server.web[*] / its volume → there is NO automated path. Every route that could reach hcloud_server.web HALTs: this job (#6416), apply-deploy-pipeline-fix.yml (#6718) and workspaces-luks-cutover (gate requires zero actions on the web-1 server). Use the operator-local full apply below, run through the PINNED-IMAGE CHAIN at the end of this message."
             echo "::error::    This no-automated-web-host-birth state violates hr-fresh-host-provisioning-reachable-from-terraform-apply and is tracked by #6730 — that issue owns closing it. Scope: WEB hosts only (inngest-host below does birth a host, and the registry/git-data paths are scoped -replace)."
             echo "::error::  • hcloud_server.inngest → dispatch '-f apply_target=inngest-host'."
             echo "::error::  • hcloud_server.registry → NO dispatch creates it (registry-host-replace and registry-region-migrate are both scoped -replace and need the resource already in state). Run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) BEFORE merging."
-            echo "::error::  • a legitimate new host (e.g. web-3 added to var.web_hosts) → NO dispatch creates it either. The durable reason is the host_creates HALT on every web-reaching path (above), NOT warm-standby's hardcoded web-2 targets — those could be re-pointed tomorrow and the guarantee would still hold. It needs an operator-local full apply BEFORE the code merges, or EVERY subsequent merge HALTs here — not just this PR's."
+            echo "::error::  • a legitimate new host (e.g. web-3 added to var.web_hosts) → NO dispatch creates it either. The durable reason is the host_creates HALT firing on every web-reaching path (above); it is a property of this tripwire, not of any one dispatch job's target list, so it holds no matter which dispatch targets are added later. It needs an operator-local full apply BEFORE the code merges, or EVERY subsequent merge HALTs here — not just this PR's."
+            echo "::error::PINNED-IMAGE CHAIN — run this BEFORE any operator-local apply that CREATES a web host. A create bakes var.image_name into user_data; the mutable ':latest' can resolve to an image whose baked /opt/soleur/host-scripts disagree with this tree, and the new host then aborts cloud-init at STAGE=verify and never serves (ADR-080). Pin a digest and prove coherence first:"
+            echo "::error::    DIGEST=\$(crane digest ghcr.io/jikig-ai/soleur-web-platform:latest)   # any OCI digest reader works; crane is not preinstalled — go install github.com/google/go-containerregistry/cmd/crane@latest"
+            echo "::error::    PINNED=\"ghcr.io/jikig-ai/soleur-web-platform@\${DIGEST}\""
+            echo "::error::    PINNED=\"\$PINNED\" bash apps/web-platform/infra/scripts/web2-recreate-preflight.sh   # docker-cp the pinned image's baked host-scripts out, recompute their combined sha256 byte-identically to the cloud-init boot check, and compare against 'terraform console local.host_scripts_content_hash'. exit 0 = coherent, non-zero = do NOT apply. (This script may have been renamed host-agnostically — run 'ls apps/web-platform/infra/scripts/' for the current coherence-preflight name.)"
+            echo "::error::    cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -var image_name=\"\$PINNED\"   # full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096)"
+            echo "::error::    Do not substitute 'just run the preflight' for this chain: the preflight REFUSES a mutable tag by design, so it is only actionable once DIGEST is resolved. And do not skip it — an incoherent pin destroys nothing at plan time, it strands you with a booted host that never passes verify."
+            echo "::error::    hcloud_server.web carries lifecycle ignore_changes = [user_data, ssh_keys, image, placement_group_id] (server.tf). Two consequences: the pin is honoured ONLY at create, and a later routine merge apply passing ':latest' will NOT drift it back; conversely, editing user_data or image is INERT for an already-running host, so this chain matters only on the create path."
             echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. That is the only bypass — [ack-destroy] deliberately does NOT reach this HALT. Use it to unblock merges while the correct dispatch/apply above is arranged; it skips the apply, it does not perform it."
             grep -E 'will be created|Plan:' tfplan.txt | head -20 >&2
             exit 1
@@ -952,7 +960,7 @@ jobs:
             exit $rc
           fi
           set -e
-          # Additive-only guard (same filter the apply/warm-standby jobs use): a net-new
+          # Additive-only guard (the same filter the `apply` job uses): a net-new
           # host provisioning must create, never destroy. Any delete → abort BEFORE apply.
           counts=$(terraform show -json tfplan | \
             jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq")
@@ -997,7 +1005,8 @@ jobs:
   # Selected by `-f apply_target=inngest-host-replace`. The additive-only `inngest_host`
   # job above CANNOT force-replace the host (its destroy-guard aborts on any delete), so a
   # cloud-init/bootstrap change (e.g. the arm64 Vector wiring, #6197) that force-replaces
-  # hcloud_server.inngest needs THIS scoped -replace path — mirroring web_2_recreate. The
+  # hcloud_server.inngest needs THIS scoped -replace path — the same gated, scoped -replace
+  # shape the registry-host-replace and git-data-host-replace jobs use. The
   # sourced inngest_host_replace_gate permits EXACTLY the server + its 2 id-referencing
   # dependents and PRESERVES the durable Redis AOF volume (hcloud_volume.inngest_redis).
   # ADR-100: this host is the SOLE scheduler post-cutover — gate this to the maintenance window.
@@ -1866,7 +1875,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # Job-level web-1-swap mutex (DP-3): this job attaches a volume to web-1, so it shares the
-    # cross-pipeline `web-1-swap` group with warm_standby / web_2_recreate / the release deploy —
+    # cross-pipeline `web-1-swap` group with the release deploy (web-platform-release.yml),
+    # apply-deploy-pipeline-fix.yml and workspaces-luks-cutover.yml —
     # at most one web-1 mutation in flight. COEXISTS with (does not replace) the workflow-level R2
     # serializer (terraform-apply-web-platform-host) that protects the lockless backend.
     concurrency:
