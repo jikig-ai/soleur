@@ -22,6 +22,14 @@ hidden behind an inline `terraform apply` span, or an actor named as
 `` `operator` ``, still counts. Only *fenced* code blocks (``` / ~~~) are
 skipped wholesale — a runnable multi-line example, never prose.
 
+The one exception is a `*.yml` / `*.yaml` FILENAME, blanked before the scan
+(#6771). This is not a contradiction of "raw line": a backtick span can contain
+a command, so stripping backticks would hide real imperatives — but a filename
+never can. It NAMES automation, it does not instruct. Citing
+`apply-web-platform-infra.yml` is how this repo documents a CI-driven apply, yet
+`apply-` satisfied `\bappl(y|ies|ied)\b` (the `-` is a word boundary), so the
+sentinel flagged the very automation that makes the step non-human.
+
 Carve-outs (a matched line is NOT flagged when):
   * inside a paired `<!-- lint-infra-ignore start -->` … `<!-- lint-infra-ignore
     end -->` region. The markers MUST be HTML comments (a bare `lint-infra-ignore`
@@ -113,9 +121,16 @@ IMPERATIVE_RES = tuple(
         r"\bmount(?:s|ing|ed)?\b",                                    # mount(s|ing|ed)
         r"\battach(?:es|ing|ed)?\s+the\s+volume\b",                   # attach the volume
         r"\bverif(?:y|ies|ied)\b.*?\bprivate\b.*?\bip\b",             # verify … private … IP
-        r"-target\b.*?\bappl(?:y|ies|ied)\b",                         # -target … apply
+        # -target … apply, anchored on the TOOL like every sibling above. Without
+        # the anchor this was the only imperative with no tool prefix, so a bare
+        # `-target=` cited beside the workflow name `apply-*.yml` matched (#6771).
+        r"\b(?:terraform|tofu|opentofu)\b.*?-target\b.*?\bappl(?:y|ies|ied)\b",
     )
 )
+
+# A `*.yml` / `*.yaml` filename NAMES automation; it never instructs. `*` is in
+# the class so a globbed workflow name (`reboot-*.yml`) is covered too.
+YAML_FILENAME_RE = re.compile(r"\b[\w.*-]+\.ya?ml\b", re.IGNORECASE)
 
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
@@ -138,6 +153,17 @@ def _is_carve_heading(title: str) -> bool:
     if re.match(r"Last-resort diagnosis\b", t, re.IGNORECASE):
         return True
     return False
+
+
+def _neutralize_filenames(text: str) -> str:
+    """Blank out `*.yml`/`*.yaml` filenames so a workflow NAME can't match."""
+    lowered = text.lower()
+    if ".yml" not in lowered and ".yaml" not in lowered:
+        return text
+    # Substitute `_`, never `""` — deleting the span can splice the surrounding
+    # tokens together and CREATE a match absent from the source (e.g.
+    # "terraform pipeline.yml applies" → "terraform  applies").
+    return YAML_FILENAME_RE.sub("_", text)
 
 
 def _has_actor(text: str) -> bool:
@@ -213,9 +239,13 @@ def scan_text(text: str) -> tuple[list[int], list[str]]:
         if carve:
             continue
 
-        # 5. Actor / imperative on the RAW line (inline backticks NOT stripped).
-        actor[i] = _has_actor(raw)
-        imper[i] = _has_imperative(raw)
+        # 5. Actor / imperative on the RAW line (inline backticks NOT stripped),
+        #    minus any `*.yml`/`*.yaml` filename. Computed ONCE and fed to both
+        #    predicates — substituting inside each predicate re-scans the line
+        #    per regex and was measured at ~2.3x the full-scan cost.
+        scan = _neutralize_filenames(raw)
+        actor[i] = _has_actor(scan)
+        imper[i] = _has_imperative(scan)
 
     flagged: set[int] = set()
     # Same-line co-occurrence.

@@ -384,9 +384,122 @@ EOF
 run_case "multi-line start comment region PASSES" 0 "$f"
 
 # ---------------------------------------------------------------------------
+# Defect 10 (#6771) — a CI workflow FILENAME must not satisfy the imperative.
+#
+# `apply-web-platform-infra.yml` matched `-target\b.*?\bappl(y|ies|ied)\b`
+# because the `-` after `apply` is a word boundary; `reboot-*.yml` matches the
+# bare `\breboot\b` imperative the same way. A filename NAMES automation — it
+# never instructs — so filenames are neutralized before the actor/imperative
+# scan. See the module docstring in the SUT.
+# ---------------------------------------------------------------------------
+
+# F1 — the live #6749 repro, verbatim. Actor `operator's` on the first line,
+# `-target=` + `apply-...yml` on the second: adjacency, not a human step.
+f="$(mkcase <<'EOF'
+# Plan
+
+`lifecycle { ignore_changes = [value] }` (so TF adopts the operator's value), **and the matching
+`-target=` line in `apply-web-platform-infra.yml`** — without that line the resource is declared
+EOF
+)"
+run_case "F1 workflow filename beside 'operator' PASSES (#6749 repro)" 0 "$f"
+
+# F2 — POSITIVE CONTROL. The fix must not blunt the sentinel: a human
+# personally running terraform apply still FAILS.
+f="$(mkcase <<'EOF'
+# Runbook
+
+The operator runs `terraform apply` from their laptop during the window.
+EOF
+)"
+run_case "F2 human runs terraform apply STILL FAILS" 1 "$f"
+
+# F3 — filename-class breadth: `reboot-*.yml` names a workflow, and `reboot`
+# is a bare imperative, so the neutralization (not the `-target` anchor) is
+# what clears this one.
+f="$(mkcase <<'EOF'
+# Plan
+
+The operator is paged by `reboot-web-hosts.yml` when the drain stalls.
+EOF
+)"
+run_case "F3 reboot-*.yml filename beside 'operator' PASSES" 0 "$f"
+
+# F4 — glob form. `*` is in the filename char class so a globbed workflow
+# name is neutralized too. Uses `reboot-*.yml` rather than the `destroy-*.yml`
+# of plan task 1.5: bare `destroy` is NOT an imperative (it requires a
+# terraform/tofu prefix), so a `destroy-*` fixture cannot distinguish a char
+# class with `*` from one without it — it would pass either way (vacuous).
+f="$(mkcase <<'EOF'
+# Plan
+
+The operator reviews the `reboot-*.yml` workflows before the freeze.
+EOF
+)"
+run_case "F4 globbed workflow filename PASSES" 0 "$f"
+
+# F5 — REGRESSION GUARD for the tool-anchored `-target` imperative: a human
+# hand-running a targeted apply must still FAIL.
+f="$(mkcase <<'EOF'
+# Runbook
+
+The operator runs `terraform -target=doppler_secret.foo apply` by hand.
+EOF
+)"
+run_case "F5 hand-run terraform -target apply STILL FAILS" 1 "$f"
+
+# F6 — ADJACENCY HAZARD. This is the ONLY mechanical detector of an
+# empty-string substitution: deleting the filename span would splice
+# `terraform` against `applies` and CREATE a match that is not in the source.
+# Substituting `_` keeps the tokens apart. Do not drop this case.
+f="$(mkcase <<'EOF'
+# Plan
+
+The operator runs terraform pipeline.yml applies cleanly.
+EOF
+)"
+run_case "F6 filename removal must not splice a new match" 0 "$f"
+
+# F7 — actor-side neutralization: the ACTOR half is scanned on the
+# neutralized text too, so a workflow named `operator-*.yml` does not supply
+# a human actor.
+f="$(mkcase <<'EOF'
+# Plan
+
+The `operator-digest.yml` workflow runs terraform apply on merge.
+EOF
+)"
+run_case "F7 workflow filename does not supply a human actor" 0 "$f"
+
+# F8 — `.yaml` long form. LOAD-BEARING: an implementation whose fast path
+# tests only the literal ".yml" passes every other case here and is still
+# broken for ".yaml".
+f="$(mkcase <<'EOF'
+# Plan
+
+The operator is paged by `reboot-web-hosts.yaml` when the drain stalls.
+EOF
+)"
+run_case "F8 .yaml long-form filename PASSES" 0 "$f"
+
+# F9 — isolates the TOOL ANCHOR on the `-target` imperative. No filename here,
+# so filename neutralization cannot clear it: only requiring a
+# terraform/tofu/opentofu token can. Without the anchor, prose describing a
+# `-target=` line next to CI "applies" flags as a human step. This case is the
+# ONLY mechanical detector of the anchor being reverted — a mutation battery
+# showed every other case stays green without it. Do not drop this case.
+f="$(mkcase <<'EOF'
+# Plan
+
+The operator adds a `-target=` line so the dispatch applies only that resource.
+EOF
+)"
+run_case "F9 bare -target beside 'applies' needs a tool anchor" 0 "$f"
+
+# ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=30
+MIN_CASES=39
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
