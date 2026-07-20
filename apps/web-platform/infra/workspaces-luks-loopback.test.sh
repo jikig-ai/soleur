@@ -858,6 +858,70 @@ else
   note "out: $(tail -n 5 "$L6H4_OUT" 2>/dev/null)"
 fi
 
+# --- L6k: H1 — `detected dubious ownership`, the leading hypothesis, BOTH directions -------------
+# This is the failure the whole design is defensive about: the cutover runs as root, container repos
+# are uid 1001, and git refuses with rc 128 BEFORE reading a single object. Two assertions, and the
+# second is the one that proves half (A) of the design rather than just half (B):
+#   (i)  with safe.directory SUPPRESSED, the ownership fatal must classify probe_failed and ABORT —
+#        never `preexisting`, which is the no-op-disguised-as-a-fix this plan exists to prevent.
+#   (ii) with the SUT's real per-repo `-c safe.directory=` in place, the SAME repo must classify ok —
+#        proving the flag is load-bearing and the gate can actually inspect uid-1001 repos.
+# GIT_TEST_ASSUME_DIFFERENT_OWNER=1 drives git's identical code path deterministically, so the case
+# does not depend on the harness's uid or on passwordless sudo semantics.
+rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+mkdir -p "$D_SRC/workspaces"
+mk_repo "$D_SRC/workspaces/44444444-0000-0000-0000-00000000000f"
+rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+L6K_OUT="$TMPROOT/l6k.out"; L6K_MARKER="$TMPROOT/l6k.marker"
+: > "$L6K_OUT"; : > "$L6K_MARKER"
+MARKER_LOG="$L6K_MARKER" CUTOVER="$CUTOVER" SRC="$D_SRC" DST="$D_DST" \
+WORKSPACES_MOUNT="$D_SRC" WORKSPACES_STAGING="$D_DST" WORKSPACES_MAPPER_NAME="$MAPPER_NAME" \
+GIT_TEST_ASSUME_DIFFERENT_OWNER=1 \
+bash -c '
+  source "$CUTOVER"
+  logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+  die()        { echo "DIE: $*"; exit 1; }
+  emit_drift() { echo "EMIT_DRIFT: $1"; }
+  # Re-declare _fsck_one WITHOUT the -c safe.directory= the SUT ships, so the ownership refusal is
+  # actually reached. Everything else mirrors the real prober.
+  _fsck_one() {
+    local repo="$1" rc_file="$2" raw_out="$3" raw_err="$4" rc
+    git --no-optional-locks -C "$repo" fsck --full --no-progress --no-dangling --no-reflogs \
+      >"$raw_out" 2>"$raw_err"
+    rc=$?
+    printf "%s" "$rc" > "$rc_file"
+    printf "0" > "${rc_file%.rc}.objs"
+    return 0
+  }
+  verify_git_fsck_differential "$SRC" "$DST"
+' > "$L6K_OUT" 2>&1
+L6K_SUPPRESSED_RC=$?
+# (ii) the SAME fixture through the REAL prober, ownership still forced.
+L6K2_OUT="$TMPROOT/l6k2.out"; L6K2_MARKER="$TMPROOT/l6k2.marker"
+: > "$L6K2_OUT"; : > "$L6K2_MARKER"
+MARKER_LOG="$L6K2_MARKER" CUTOVER="$CUTOVER" SRC="$D_SRC" DST="$D_DST" \
+WORKSPACES_MOUNT="$D_SRC" WORKSPACES_STAGING="$D_DST" WORKSPACES_MAPPER_NAME="$MAPPER_NAME" \
+GIT_TEST_ASSUME_DIFFERENT_OWNER=1 \
+bash -c '
+  source "$CUTOVER"
+  logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+  die()        { echo "DIE: $*"; exit 1; }
+  emit_drift() { echo "EMIT_DRIFT: $1"; }
+  verify_git_fsck_differential "$SRC" "$DST"
+' > "$L6K2_OUT" 2>&1
+L6K_REAL_RC=$?
+if [ "$L6K_SUPPRESSED_RC" -ne 0 ] \
+  && grep -qE -- 'classification=probe_failed .*first=.*detected dubious ownership' "$L6K_MARKER" \
+  && grep -qE -- 'could NOT INSPECT' "$L6K_OUT" \
+  && [ "$L6K_REAL_RC" -eq 0 ] \
+  && grep -qE -- 'classification=ok' "$L6K2_MARKER"; then
+  ok "L6k: H1 (dubious ownership) classifies probe_failed and ABORTS when the probe cannot inspect — and the SAME repo classifies ok through the real prober, proving the per-repo -c safe.directory= is load-bearing"
+else
+  no "L6k: the H1 trap is not closed (suppressed_rc=$L6K_SUPPRESSED_RC real_rc=$L6K_REAL_RC) — either an un-inspectable repo does not abort, or safe.directory is not what makes the real path work"
+  note "suppressed: $(grep -m1 'classification=' "$L6K_MARKER" 2>/dev/null)"
+  note "real:       $(grep -m1 'classification=' "$L6K2_MARKER" 2>/dev/null)"
+fi
+
 # --- L6i: MUTATION CONTROL (L5d discipline) — prove L6b's abort is load-bearing ------------------
 # Without this, L6b's "it aborted" is indistinguishable from a gate that aborts unconditionally.
 L6I_MUT="$TMPROOT/cutover-l6i-mutated.sh"
