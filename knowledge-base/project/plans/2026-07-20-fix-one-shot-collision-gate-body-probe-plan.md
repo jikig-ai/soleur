@@ -435,13 +435,90 @@ unmentioned gap.
 The mechanical UI-surface override did not fire: no path in Files to Edit/Create matches any
 UI-surface glob. Product/UX Gate: **NONE**.
 
-## Observability / Architecture Decision (ADR/C4)
+## Observability
 
-**Both skipped — justified, docs-and-test class.** Files to Edit are three markdown documents
-and one file under `plugins/soleur/test/` — a test, not a runtime surface, and not under
-`plugins/*/scripts/`. No new runtime code path, service, persistent process, or runtime-reachable
-failure mode; the change's own correctness signal is the CI `test` check. No architectural
-decision: no ownership/tenancy boundary moves, no new substrate or trust boundary, no ADR
-reversed. No C4 impact — the change introduces no external actor, system, container, data store,
-or access relationship; GitHub is a pre-existing dependency of the one-shot workflow and only a
-flag on an existing call changes.
+Plan Phase 2.9's trigger set (`apps/*/server/`, `apps/*/src/`, `apps/*/infra/`,
+`plugins/*/scripts/`) does not fire — `components.test.ts` lives under `plugins/soleur/test/`.
+But deepen-plan Phase 4.7's skip rule requires *every* Files-to-Edit path to be pure-docs, and a
+`.ts` file is not. **Filled fail-closed rather than argued away** — a plan about silent-open
+failures should not skip a gate on a technicality.
+
+```yaml
+liveness_signal:
+  what: the `test` aggregator check on every PR (the form-lint runs in the `test-bun` shard)
+  cadence: every push to any PR, and on merge to main
+  alert_target: GitHub required-check failure on the PR; blocks merge
+  configured_in: .github/workflows/ci.yml (`test-bun` job -> `bash scripts/test-all.sh bun`)
+error_reporting:
+  destination: CI job log + the PR's failed-check annotation; the assertion message names the
+    mechanism, the consequence ("collision gate fails silently open"), and issue #6786
+  fail_loud: true — the offender assertion is `toEqual([])` on a named list, so the failure
+    output enumerates the offending file and command verbatim
+failure_modes:
+  - mode: a future probe is added without an explicit --state (the recurrence vector)
+    detection: the offender test enumerates it from the extracted command set
+    alert_route: required `test` check fails on that PR
+  - mode: the glob or the extraction regex silently stops matching (lint goes vacuous)
+    detection: the anti-vacuity population test asserts the extracted command count > 0
+    alert_route: required `test` check fails
+  - mode: GitHub/`gh` semantics change so the now-correct form stops returning hits
+    detection: NOT covered by CI — accepted residual, named in Phase 3 and the learning
+    alert_route: `/plan` Phase 0.6 premise-validation (the load-bearing backstop)
+logs:
+  where: GitHub Actions run logs for the `test-bun` job; retained per repo Actions settings
+  retention: GitHub default (90 days)
+discoverability_test:
+  command: bun test plugins/soleur/test/components.test.ts -t "collision-gate probes"
+  expected_output: 4 tests pass; on regression, the offender assertion prints the offending
+    file and command plus the #6786 mechanism note
+```
+
+No SSH anywhere in the verification path.
+
+## Architecture Decision (ADR/C4)
+
+**Skipped — justified.** No architectural decision: no ownership/tenancy boundary moves, no new
+substrate or trust boundary, no existing ADR reversed or extended. A competent engineer reading
+the existing ADRs and C4 model would not be misled after this ships.
+
+**C4 completeness:** no external human actor, external system/vendor, container, data store, or
+actor↔surface access relationship is introduced or changed. GitHub is a pre-existing dependency
+of the one-shot workflow; only a flag on an existing call changes. No `.c4` edit required.
+
+## Enhancement Summary
+
+**Deepened on:** 2026-07-20
+**Plan-review panel:** 6 agents (dhh, kieran, code-simplicity, architecture-strategist,
+spec-flow-analyzer, cto)
+
+### Key improvements over v1
+
+1. **The guard was disarmed by its own fix.** v1's line-based lint would have been excluded
+   unconditionally once Phase 1's mechanism note put the literal `--state` in the same line's
+   prose. Reproduced empirically (line filter: 0 offenders / command extraction: 1). Now lints
+   extracted backtick command spans.
+2. **The invariant under-fit its own defect class.** v1 required an in-query state qualifier
+   before checking for `--state` — but the original 2026-05-29 occurrence had no qualifier, and
+   Phase 1 removes the only one in the file, so the v1 trigger would have had zero population.
+   Now: every skill `--search` carries an explicit `--state`.
+3. **A live third instance was found.** `triage/SKILL.md:32` hunts a *dismissing* (merged) PR
+   with no `--state`. Folded in — one token.
+4. **The probe's hits had no consumer.** The bullet pointed at an AskUserQuestion that does not
+   exist on the path the probe fires on. Now self-contained.
+5. **The nearest discriminator inverts the verdict.** `closingIssuesReferences` is empty by
+   construction for body-probe hits — measured `[]` for all four `#6197` hits *including the
+   true positive #6209*, so it would say "citation, continue" on the real collision.
+6. **Negative control moved from ritual to structure.** A pure exported detector with
+   synthesized fixtures replaces v1's revert-and-restore dance, satisfying
+   `cq-test-fixtures-synthesized-only` and `cq-write-failing-tests-before`.
+
+### Verification performed during deepen
+
+- All 14 cited PR/issue numbers resolved live; states match the plan's claims.
+- Both cited rule IDs (`cq-write-failing-tests-before`, `cq-test-fixtures-synthesized-only`)
+  confirmed active in `AGENTS.md` — no fabricated or retired IDs.
+- All knowledge-base / plugins / scripts path citations resolve on disk.
+- Gates 4.5 (no network keywords), 4.6 (threshold + scope-out valid, no sensitive paths),
+  4.8 (no PAT-shaped variables), 4.9 (no UI surface) — all pass.
+- The Edit anchor in Phase 1a is unique in the target file (1 occurrence).
+- `markdownlint` clean on plan and tasks.
