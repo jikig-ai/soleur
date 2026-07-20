@@ -497,8 +497,10 @@ liveness_signal:    # what / cadence / alert_target / configured_in
 error_reporting:    # destination / fail_loud
 failure_modes:      # list of {mode, detection, alert_route}
 logs:               # where / retention
-discoverability_test:  # command (NO ssh) / expected_output
+discoverability_test:  # kind / marker / command (NO ssh) / expected_output
 ```
+
+`kind` and `marker` are **optional, indented sub-fields** — never top-level keys (a column-0 `kind:` would become a sixth top-level field and break the schema-parity guard). `kind` is `live-probe` (the default when omitted, and today's behaviour) or `run-log`; `marker` is required under `run-log` and forbidden otherwise. See [plan-issue-templates.md](./references/plan-issue-templates.md) §Observability for the full contract.
 
 **Reject conditions** (enforced at deepen-plan Phase 4.7 — see `deepen-plan/SKILL.md`):
 

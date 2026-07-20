@@ -652,7 +652,7 @@ The current ban-list (extend as new classes are discovered):
 
 Invariant gate per `knowledge-base/project/learnings/2026-04-27-preflight-security-gates-skip-vs-fail-defaults.md`: SKIP only when truly indeterminate; FAIL when the invariant ("the documented command actually works against the live world") is contradicted.
 
-**Reference implementation.** `plugins/soleur/test/lib/discoverability-test-parser.ts` mirrors the parser + classifier in TypeScript so the 8 decision states can be unit-tested without subshells. The bash below IS the production runtime — the TS file is for tests. If they drift, the bash wins.
+**Reference implementation.** `plugins/soleur/test/lib/discoverability-test-parser.ts` mirrors the parser + classifier in TypeScript so every state of the Step 10.6 decision matrix can be unit-tested without subshells. The bash below IS the production runtime — the TS file is for tests. If they drift, the bash wins.
 
 **Step 10.1: Sensitive-path gate (re-use Check 6 SSOT).**
 
@@ -784,6 +784,84 @@ if [[ "$CMD" =~ (^|[[:space:]]|/)ssh([[:space:]]|$) ]]; then
 fi
 ```
 
+**Step 10.4b: Resolve `discoverability_test.kind` and apply the anti-downgrade guardrails.**
+
+‼️ **This step MUST sit after the Step 10.4 ssh reject and before the Step 10.5 substitution reject.** The ssh reject runs for BOTH kinds, unconditionally. If kind resolution moved above it, `kind: run-log` + `command: ssh host 'grep MARKER …'` would return SKIP and `hr-no-ssh-fallback-in-runbooks` would be silently defeated — a larger downgrade than the one this field exists to avoid. The TypeScript mirror keeps the identical order.
+
+`kind` declares **which property Check 10 is able to observe**:
+
+- **`live-probe`** — today's behaviour, byte-for-byte. The command is executed and its output matched. **This is the default whenever `kind:` is absent**, so every plan written before this field existed behaves exactly as it did.
+- **`run-log`** — the evidence lives in a CI run log that does not exist yet at preflight time (the canonical shape is `gh run view <run-id> --log | grep MARKER`; `<run-id>` names a run that has not happened). Check 10 declines to execute and returns **SKIP with the marker recorded**, instead of a false FAIL.
+
+`kind:` and `marker:` are **Form A only** and MUST be **indented** sub-fields of `discoverability_test:`. A column-0 `kind:` would become a sixth top-level key of the `## Observability` schema and break the schema-parity guard; it is refused, not ignored.
+
+`run-log` is **not** a weakening. Guardrails 4 and 5 make it assert things the live-probe path never asserts: that a real emitter for the marker exists in the tree, and that the declared command actually names it.
+
+```bash
+# --- Parse (strict, indented, Form A only) ---
+KIND=$(grep -oE '^[[:space:]]+kind:[[:space:]]*"?(live-probe|run-log)"?[[:space:]]*$' \
+         "$PREFLIGHT_TMP/preflight-observability.txt" \
+       | head -1 | sed -E 's/.*kind:[[:space:]]*"?//; s/"?[[:space:]]*$//')
+MARKER=$(grep -oE '^[[:space:]]+marker:[[:space:]]*"?[^"[:space:]]*"?[[:space:]]*$' \
+         "$PREFLIGHT_TMP/preflight-observability.txt" \
+       | head -1 | sed -E 's/.*marker:[[:space:]]*"?//; s/"?[[:space:]]*$//')
+
+# "some kind/marker key token appears" — tolerates bullets, bold and column-0,
+# so a form the strict parser cannot read FAILS LOUDLY rather than defaulting.
+HAS_KIND_TOKEN=$(grep -ciE '^[[:space:]]*([->*]+[[:space:]]*)*\**[[:space:]]*kind[[:space:]]*\**[[:space:]]*:' \
+                   "$PREFLIGHT_TMP/preflight-observability.txt")
+HAS_MARKER_TOKEN=$(grep -ciE '^[[:space:]]*([->*]+[[:space:]]*)*\**[[:space:]]*marker[[:space:]]*\**[[:space:]]*:' \
+                   "$PREFLIGHT_TMP/preflight-observability.txt")
+
+# --- Guardrails 2 + 6: a kind token present but unparseable => FAIL ---
+if [[ -z "$KIND" && "$HAS_KIND_TOKEN" -gt 0 ]]; then
+  echo "FAIL: discoverability_test declares a kind that could not be parsed. \`kind:\` is Form A only (a strictly INDENTED sub-field of \`discoverability_test:\`) and must be exactly 'live-probe' or 'run-log'. Refusing to default."
+  exit 1
+fi
+
+# --- Guardrail 1: absent kind => live-probe (today's behaviour, unchanged) ---
+KIND="${KIND:-live-probe}"
+
+# --- Guardrail 7: marker without kind: run-log => FAIL ---
+if [[ "$KIND" != "run-log" && "$HAS_MARKER_TOKEN" -gt 0 ]]; then
+  echo "FAIL: discoverability_test declares a marker but kind is '$KIND'. \`marker:\` is only meaningful under \`kind: run-log\`; nothing consumes it otherwise."
+  exit 1
+fi
+
+if [[ "$KIND" == "run-log" ]]; then
+  # --- Guardrail 3: run-log requires a well-formed marker ---
+  if [[ ! "$MARKER" =~ ^[A-Za-z0-9_]+$ ]]; then
+    echo "FAIL: \`kind: run-log\` requires a \`marker:\` matching ^[A-Za-z0-9_]+\$ so a post-merge follow-through can grep for it. Got: '$MARKER'."
+    exit 1
+  fi
+
+  # --- Guardrail 4: the marker must have a REAL emitter, outside planning artifacts ---
+  # The two exclusion pathspecs are LOAD-BEARING. The plan declaring the marker
+  # is itself in the tree, so without them this check always matches and is
+  # vacuous. Present-at-HEAD (not added-by-this-diff) so an emitter that landed
+  # in an earlier PR is accepted.
+  # NOTE: do NOT grep "$PREFLIGHT_TMP/preflight-diff-files.txt" — it holds
+  # FILENAMES, not file contents, so it can never match a marker.
+  if ! git grep -q -F -- "$MARKER" -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs'; then
+    echo "FAIL: \`kind: run-log\` declares marker '$MARKER' but no emitter for it exists in the tree outside knowledge-base/project/{plans,specs}. Declare a run-log test only once something actually emits the marker."
+    exit 1
+  fi
+
+  # --- Guardrail 5: the command must actually name the marker ---
+  if [[ "$CMD" != *"$MARKER"* ]]; then
+    echo "FAIL: \`kind: run-log\` declares marker '$MARKER' but discoverability_test.command does not contain that literal. The command must be the one that surfaces the marker."
+    exit 1
+  fi
+
+  # Valid run-log — SKIP, never PASS. The gate must not certify a property it
+  # did not observe; per the SKIP-vs-FAIL learning, SKIP is correct only when
+  # truly indeterminate, and a run that has not executed yet is exactly that.
+  echo "SKIP: discoverability_test declares kind: run-log with marker '$MARKER'; the evidence lives in a run log that does not exist at preflight time, so the probe is deferred rather than run. Verified statically: an emitter for '$MARKER' exists in the tree and the command names it."
+  exit 0
+fi
+# Falls through to Step 10.5 for kind == live-probe only.
+```
+
 **Step 10.5: Sanitize and run with a tight timeout.**
 
 The block below uses a `text` fence (not `bash`) so the skill-security-scan
@@ -825,7 +903,7 @@ DT_STDOUT_SAFE=$(sanitize "$DT_STDOUT")
 
 The 15-second cap is a hard ceiling. Plans typically prescribe `curl --max-time 10`; the 15s outer cap accommodates 10s curl + 5s DNS + handshake without giving the curl invocation infinite headroom if it lacks `--max-time`.
 
-**Step 10.6: Decision matrix (8 states, 1 PASS terminal).**
+**Step 10.6: Decision matrix (12 states, 1 PASS terminal).**
 
 | # | State | Detection | Result | Rationale |
 | --- | --- | --- | --- | --- |
@@ -837,6 +915,10 @@ The 15-second cap is a hard ceiling. Plans typically prescribe `curl --max-time 
 | 6 | Command returns a code/output the plan's `expected_output` does NOT include | `$DT_STDOUT_SAFE` not present in `$EXPECTED` | **FAIL** | Plan's expectation drifted from production reality. |
 | 7 | Command requires creds not in Doppler (auth-gated probe) | `$DT_RC == 22` AND HTTP 401/403 AND `$EXPECTED` does NOT explicitly list 401/403 | **SKIP** | Auth-gated probe with no operator creds; surface diagnostic suggesting to add a Doppler-fetched probe variant. |
 | 8 | Command returns expected output | All other paths — `$DT_RC == 0` AND stdout matches `$EXPECTED` | **PASS** | Invariant proven by live execution. |
+| 9 | Valid `kind: run-log` — well-formed marker, emitter present, command names it | Step 10.4b passes all of guardrails 3, 4, 5 | **SKIP** | Genuinely indeterminate: the run log does not exist yet, so there is nothing to observe. SKIP-only-when-indeterminate per [`2026-04-27-preflight-security-gates-skip-vs-fail-defaults.md`](../../../../knowledge-base/project/learnings/2026-04-27-preflight-security-gates-skip-vs-fail-defaults.md). The marker is **recorded** so a post-merge follow-through can assert it — this is a deferral, never a certification. |
+| 10 | `kind` token present but unparseable (unknown value, prose `Kind:`, column-0 key) | `$KIND` empty AND `$HAS_KIND_TOKEN > 0` (guardrails 2 + 6) | **FAIL** | An unrecognised kind must never fall back to `live-probe` and must never be treated as SKIP-eligible. The author wrote `kind:` believing they declared something; ignoring it is the silent downgrade. |
+| 11 | `kind: run-log` with a missing/malformed marker, or a marker with no emitter in the tree | `$MARKER` fails `^[A-Za-z0-9_]+$`, or the `git grep` of guardrail 4 finds nothing outside `knowledge-base/project/{plans,specs}` | **FAIL** | Without a real marker and a real emitter nothing downstream could ever assert anything, so a SKIP here would be strictly worse than a FAIL. |
+| 12 | `kind: run-log` whose `command` does not contain the marker, or `marker:` declared outside `kind: run-log` | `$CMD` lacks `$MARKER` (guardrail 5), or `$HAS_MARKER_TOKEN > 0` with `$KIND != run-log` (guardrail 7) | **FAIL** | `run-log` must not certify a command unrelated to the recorded evidence; a marker outside run-log is consumed by nothing and signals an author who thinks they declared a run-log test. |
 
 **Expected-output matching semantics.** When `$EXPECTED` is a comma-separated or "or"-joined list (e.g., `200 or 401`, `200, 401`, `["200","401"]`), tokenize on `,|\s+or\s+|\bor\b|[\`"\[\]/]+` and treat as a list. Match if any token is a non-empty substring of `$DT_STDOUT_SAFE`. When `$EXPECTED` is a single value, substring-match. The tokenizer accepts both `200` and `"200"`.
 
@@ -854,9 +936,9 @@ On **FAIL**, present the failure reason + sanitized command + diagnostic and off
 
 **Result:**
 
-- **PASS** — Sensitive-path diff with valid plan-linked Observability block AND command ran AND output matches `expected_output`.
-- **FAIL** — Sensitive-path diff with any of: missing Observability block, missing `discoverability_test.command`, command requires SSH, command contains shell substitution, DNS failure, timeout, or output mismatch.
-- **SKIP** — No sensitive paths touched, OR no PR available, OR no plan file linked from PR body, OR command is auth-gated with no operator creds.
+- **PASS** — Sensitive-path diff with valid plan-linked Observability block AND `kind` is `live-probe` (or absent) AND command ran AND output matches `expected_output`. **Only a live probe can PASS** — `run-log` never certifies.
+- **FAIL** — Sensitive-path diff with any of: missing Observability block, missing `discoverability_test.command`, command requires SSH (**both kinds**), command contains shell substitution (live-probe), DNS failure, timeout, output mismatch, an unparseable `kind`, a missing/malformed `marker` under `run-log`, a `run-log` marker with no emitter outside planning artifacts, a `run-log` command that does not name its marker, or a `marker:` declared without `kind: run-log`.
+- **SKIP** — No sensitive paths touched, OR no PR available, OR no plan file linked from PR body, OR command is auth-gated with no operator creds, OR a fully-validated `kind: run-log` whose evidence lives in a not-yet-existing run log (marker recorded).
 
 ### Check 7: Canary Probe Set Covers Authenticated Surface
 
@@ -995,6 +1077,6 @@ Preflight validation passed. Return control to the calling orchestrator.
 
 - **Triple-SSOT for `SENSITIVE_PATH_RE`.** The literal lives at Check 6 Step 6.1, Check 10 Step 10.1, AND `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2. All three MUST stay byte-identical. The Check 10 regression test (`plugins/soleur/test/preflight-discoverability-test.test.ts`) asserts ≥2 matches in `preflight/SKILL.md`; the canonical grep is `grep -cF "SENSITIVE_PATH_RE='^(apps/web-platform" plugins/soleur/skills/preflight/SKILL.md plugins/soleur/skills/deepen-plan/SKILL.md`. `grep -cF` is substring-based and tolerates the 2-space indentation difference between top-level (preflight) and markdown-bullet (deepen-plan) contexts — keep AC2's grep un-anchored.
 - **Shared Plan-File Resolution is a SSOT.** Both Check 6 Step 6.2 and Check 10 Step 10.2 call it. A future PR that changes the scrub/extract logic must edit the shared sub-section once — both consumers pick it up. Do NOT copy-paste the logic back into a caller block.
-- **Check 10 parser duality (Form A YAML vs Form B prose+fence).** PR #4148 used Form B; the canonical template uses Form A. Both must be accepted OR Check 10 silently SKIPs on currently-valid plans. The TS reference impl at `plugins/soleur/test/lib/discoverability-test-parser.ts` exercises both forms across all 8 fixtures.
+- **Check 10 parser duality (Form A YAML vs Form B prose+fence).** PR #4148 used Form B; the canonical template uses Form A. Both must be accepted OR Check 10 silently SKIPs on currently-valid plans. The TS reference impl at `plugins/soleur/test/lib/discoverability-test-parser.ts` exercises both forms across the whole `plugins/soleur/test/fixtures/preflight-check-10/` set. Note the asymmetry introduced by `kind`: `kind:`/`marker:` are **Form A only**, so a prose `Kind:` inside a Form B block FAILs (guardrail 6) rather than silently defaulting to `live-probe`.
 - **`bash -c "$CMD"` stdout always ends in `\n`.** The matcher MUST normalize trailing newlines (via `sanitize()` or `${var%$'\n'}`) before substring comparison, or `expected_output: 200` fails when production correctly emits `200\n`.
 - **The `\b` word-boundary trap.** Bash `[[ $x =~ \bssh \b ]]` matches `ssh ` only when whitespace is on BOTH sides; trailing-EOF or trailing-newline `ssh ` does NOT match. Always use `(^|[[:space:]])ssh([[:space:]]|$)` — the canonical Check 10 reject form — when checking for `ssh ` in operator-facing prose.

@@ -107,6 +107,14 @@ Note: the PreToolUse hook `ship-runbook-ssh-gate.sh` enforces this mechanically 
 
 In each plan's `## Observability` block, the `discoverability_test.command` field must NOT include `ssh`, `docker exec`, `journalctl -f`, or any other in-host interactive verb. Acceptable shapes: `curl ...`, `gh run view ...`, `gh issue view ...`, `gh api ...`, `doppler secrets get ...`. Violations = **P1 finding**.
 
+**The `kind` distinction does not soften this check.** `discoverability_test` may carry an optional indented `kind:` sub-field — `live-probe` (the default when omitted; preflight Check 10 executes the command) or `run-log` (the evidence lives in a CI run log that does not exist yet, so Check 10 records the `marker:` and SKIPs rather than false-FAILing). **The no-SSH rule applies identically to both.** A `kind: run-log` command containing `ssh` is still a P1 — arguably worse, because the SKIP verdict makes it look sanctioned. Treat `kind: run-log` as a claim to audit, not a waiver:
+
+- `marker:` must be present and match `^[A-Za-z0-9_]+$`.
+- An emitter for the marker must actually exist in the tree outside `knowledge-base/project/{plans,specs}` — verify with `git grep -F -- "<MARKER>" -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs'`. The exclusions matter: the declaring plan is itself in the tree.
+- `command` must contain the marker literal, i.e. it must plausibly be the command that surfaces the evidence.
+
+A `kind: run-log` block failing any of these = **P1 finding**: it defers a check without leaving anything assertable behind.
+
 ### Step 7: Report
 
 Output severity-scored findings (P0 / P1 / P2) per file. Each finding cites the rule ID and proposes the concrete fix. Format follows the standard reviewer-agent contract (Markdown table with file:line, rule, finding, suggestion).

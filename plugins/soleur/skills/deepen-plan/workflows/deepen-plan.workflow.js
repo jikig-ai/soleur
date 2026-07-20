@@ -81,7 +81,10 @@ const GATES = {
     halt:
       'Plan touches production code/infra but is missing or has a non-compliant `## Observability` section ' +
       '(5 fields: liveness_signal, error_reporting, failure_modes, logs, discoverability_test; no placeholders; ' +
-      'discoverability_test.command must not require ssh). See plan-issue-templates.md for the schema.',
+      'discoverability_test.command must not require ssh, for EITHER kind). The optional indented sub-fields ' +
+      '`kind` (live-probe | run-log; default live-probe when omitted) and `marker` (required under run-log, ' +
+      'forbidden otherwise, ^[A-Za-z0-9_]+$) must parse — an unreadable kind is rejected, never defaulted. ' +
+      'See plan-issue-templates.md for the schema.',
   },
   patShape: {
     rule: 'hr-github-app-auth-not-pat',
@@ -233,7 +236,7 @@ If the file is unreadable, return exists=false with an empty sections array.
 
 STEP 1 — Run the four pre-fan-out hard gates. For each, set { applicable, satisfied, detail }:
 - userBrandImpact (ALWAYS applicable): the plan MUST contain a non-empty \`## User-Brand Impact\` section whose threshold line is one of none / "single-user incident" / "aggregate pattern", with no placeholder-only bullets, and (when threshold=none AND the diff/Files-to-Edit touch a sensitive path) a "threshold: none, reason: <one sentence>" scope-out bullet. applicable=true always; satisfied=false if the section is missing, empty, placeholder-only, has an invalid threshold, or is none-without-scope-out.
-- observability (applicable ONLY when the plan's Files-to-Edit touch production code/infra — i.e. NOT pure-docs: not all paths under knowledge-base/, docs/, README.md, CHANGELOG.md, or *.md outside plugins/*/skills and apps/*): a \`## Observability\` section with all 5 fields (liveness_signal, error_reporting, failure_modes, logs, discoverability_test), no placeholder values (TODO/TBD/N/A/placeholder/"manual operator check"), no empty field, and discoverability_test.command must NOT require ssh. If pure-docs, applicable=false, satisfied=true.
+- observability (applicable ONLY when the plan's Files-to-Edit touch production code/infra — i.e. NOT pure-docs: not all paths under knowledge-base/, docs/, README.md, CHANGELOG.md, or *.md outside plugins/*/skills and apps/*): a \`## Observability\` section with all 5 fields (liveness_signal, error_reporting, failure_modes, logs, discoverability_test), no placeholder values (TODO/TBD/N/A/placeholder/"manual operator check"), no empty field, and discoverability_test.command must NOT require ssh (for EITHER kind — \`kind: run-log\` never exempts a command from the ssh reject). \`kind\` and \`marker\` are OPTIONAL, strictly INDENTED, Form-A-only sub-fields of discoverability_test: \`kind\` must be exactly live-probe or run-log (omitted means live-probe); a kind token that does not parse is a reject, never a default. \`marker\` is required under run-log (^[A-Za-z0-9_]+$) and forbidden otherwise. If pure-docs, applicable=false, satisfied=true.
 - patShape (ALWAYS applicable): grep the plan for PAT-shaped TF vars / env vars / literal tokens — \`var.*_(token|pat)\`, \`TF_VAR_(GITHUB|GH)_(TOKEN|PAT|AUTH)\`, literal \`ghp_<40>\` or \`github_pat_<82+>\` (placeholder forms like ghp_XXX are allowed). satisfied=false if any real PAT-shape matches.
 - uiWireframe (applicable ONLY when the plan's Files-to-Edit/Create touch a UI surface — tsx/jsx/css under app/components, or UI-surface terms): the plan must reference a committed \`knowledge-base/product/design/**.pen\` wireframe (confirm committed via \`git ls-files --error-unmatch <path>\`). If no UI surface, applicable=false, satisfied=true.
 
