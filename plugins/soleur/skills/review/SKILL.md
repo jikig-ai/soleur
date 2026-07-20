@@ -537,7 +537,7 @@ emit_incident "cost-of-filing-${DISPOSITION}" applied \
 
 The disposition rides in the **`rule_id`** (`cost-of-filing-flip-inline` vs
 `cost-of-filing-file`) and the event stays `applied`. That is not a stylistic
-choice: `scripts/rule-metrics-aggregate.sh` keys every counter on `rule_id` and
+choice: the `rule-metrics-aggregate.sh` report keys every counter on `rule_id` and
 gates on `event_type ∈ {deny,bypass,applied,warn}` — it **never reads `.kind`**,
 so a `kind`-based scheme would write rows that no report ever surfaces. Read the
 resulting ratio with `bash scripts/rule-metrics-aggregate.sh` and compare the

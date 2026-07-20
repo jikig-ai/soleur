@@ -503,7 +503,7 @@ the only threshold that flattens the queue.
 bash plugins/soleur/skills/ship/scripts/net-issue-flow.sh "$PR_NUMBER"
 ```
 
-[`scripts/net-issue-flow.sh`](./scripts/net-issue-flow.sh) emits the
+[`net-issue-flow.sh`](./scripts/net-issue-flow.sh) emits the
 CLOSING / FILED / NET block (enumerating the actual issue numbers behind each
 count), exits **1** when `NET > 0` with no override, and **0** otherwise.
 
