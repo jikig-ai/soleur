@@ -389,6 +389,45 @@ jobs:
       - name: Run /workspaces LUKS C1 verify diagnosability guard (#6604 separate stdout/stderr + emit path before rm/die)
         run: bash apps/web-platform/infra/workspaces-luks-verify.test.sh
 
+      # MECHANISM + STRUCTURE harness for #6733. The G4 quiescence probe used to create+unlink an
+      # entry INSIDE $MOUNT between the pass-2 delta rsync and C1, advancing the transfer root's
+      # mtime, so the itemized verify emitted `.d..t...... ./` and five real cutovers safe-aborted
+      # on a byte-identical tree. Keeps the RED reproduction (so the mechanism stays measured, not
+      # remembered), then pins the SHIPPED shape: the probe is a READ-open of $MOUNT/workspaces
+      # (`exec 9<`), the holder filter subtracts by PID rather than by path (which is what makes
+      # reusing a real path safe), the lsof child cannot inherit fd 9, and the bracket-era repair
+      # helpers are gone from the file. Also pins that C1 itself is never narrowed to paper over it.
+      # Skips cleanly on non-GNU coreutils / an ACL-less filesystem rather than false-greening.
+      - name: Run /workspaces LUKS C1 root-mtime mechanism + read-probe structure (#6733)
+        run: bash apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh
+
+      # The #6733 MUTATION BATTERY. Distinct from the reproduction harness above, and registered
+      # separately BECAUSE registration here is the only coverage this directory gets (no glob):
+      # the harness above proves the MECHANISM with filesystem physics, this suite mutates the SUT
+      # (it copies workspaces-cutover.sh into scratch, edits it against a pristine backup, and runs
+      # the REAL assert_mount_quiesced out of the mutated copy) and mutates the DESTINATION tree to
+      # prove C1 still rejects every difference it rejected before the fix.
+      #
+      # Covers: m1-m12 + a newline-bearing hostile filename (C1 non-regression, every icode MEASURED
+      # by running rsync — none predicted); m13/m14 the non-vacuity pair, one character apart (the
+      # shipped `exec 9<` vs a reverted `exec 9>`), run at BOTH call-site phases (`pre-verify` AND
+      # `freeze` — the freeze phase was structurally uncovered before this change); m15 an absent
+      # workspaces/ fails closed (the wrong-device / empty-bind-source state in which every
+      # downstream gate compares empty against empty and reports green); m16 our own fd and any
+      # inheriting child are NOT counted as stragglers WHILE a genuine straggler still IS (the pair
+      # that pins the PID filter's operator); m18 a post-probe foreign write still aborts C1;
+      # m19 lsof header/format drift fails closed; m20 a read-only mount fails closed while
+      # `errors=remount-ro` does NOT (the substring trap); m21 lsof-unavailable refuses; m22 the
+      # positive control still requires BOTH our PID and the probed path.
+      # m17 is deliberately NOT asserted — it is FALSIFIED and re-measured as such on every run.
+      #
+      # Every mutation carries a landing assertion against a pristine backup measured with an
+      # instrument INDEPENDENT of rsync; a mutation that did not land reports UN-RUN and reds the
+      # job rather than passing. Skips cleanly (exit 0) when nanosecond mtime fidelity or ACL/xattr
+      # support is absent, rather than false-greening on a host that cannot observe the defect.
+      - name: Run /workspaces LUKS G4 mutation battery (#6733 C1 non-regression + read-probe mutations)
+        run: bash apps/web-platform/infra/workspaces-luks-g4-mutation.test.sh
+
       # LOAD-BEARING registration: this job lists each infra test explicitly (no glob), so an
       # unregistered suite is ZERO coverage, silently and greenly.
       - name: Run /workspaces LUKS freeze-quiesce guard (#6588 redis in quiesce set + fail-closed G4 + /health canary)
