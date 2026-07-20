@@ -15,13 +15,47 @@
 # This hook makes the guard merge-path-independent, mirroring how
 # pre-merge-rebase.sh already intercepts `gh pr merge`.
 #
-# Precision (why it does NOT block legitimate closes): an intentional `Closes #N`
-# on its own line (the conventional form /ship PRs use) is ALLOWED. Only a
-# close-keyword that appears AFTER prose on its line — the accidental vector —
-# denies. So normal fix-PRs that mean to close their issue merge unimpeded.
+# Two independent checks, in this order:
+#
+#   1. follow-through label gate — denies a close of ANY form (standalone or
+#      prose-embedded) when the target issue carries `follow-through`. Closing
+#      such a tracker makes the daily sweeper skip it (it evaluates only OPEN
+#      issues), so the soak verification it exists to enforce never runs.
+#   2. prose-embedded arm — denies a close-keyword that appears AFTER prose on
+#      its line, for any issue, labelled or not. An intentional `Closes #N` on
+#      its own line (the conventional form /ship PRs use) is ALLOWED, so normal
+#      fix-PRs that mean to close their issue merge unimpeded.
+#
+# Escape hatches — each disarms exactly one check:
+#   SOLEUR_ACK_AUTOCLOSE=1            everything (checked above corpus construction)
+#   SOLEUR_ACK_FOLLOWTHROUGH_CLOSE=1  the label gate only; prose arm stays armed
+#
+# Where this sits among the four follow-through / auto-close surfaces:
+#
+#   /ship Phase 6                     pre-creation, `gh pr create`   blocking, prose arm
+#   pr-auto-close-scanner.yml         CI, on PR events               OBSERVATIONAL only
+#   ship-soak-followthrough-gate.sh   PreToolUse, ready/merge --auto denies when a tracker
+#                                                                    is MISSING enrollment
+#   this hook                         PreToolUse, plain `gh pr merge` denies when an issue
+#                                                                    HAS `follow-through`
+#
+# The last two have INVERSE semantics and can both fire on one `--auto` merge, so
+# their deny messages name themselves and their distinct override envs.
+#
+# Best-effort, NOT a boundary. It only sees merges this harness intercepts.
+# Known bypasses: merging from `main` (the branch guard exits first), the GitHub
+# web UI, an admin merge, a CI-queued `--auto` merge that GitHub completes
+# minutes-to-hours later (the body and labels can both change in that window),
+# and the OpenHands harness, which has `pre-merge-rebase.sh` but no auto-close
+# counterpart. `main` carries no branch protection, so no server-side required
+# check backstops any of these today. The durable reversal layer is
+# `follow-through-closure-guard.yml` (`on: issues.closed`), which is
+# path-independent by construction.
 #
 # Fail-open: any infrastructure error (bad payload, missing git, scan failure)
-# exits 0 (allow). A hook must never wedge a merge on its own bug.
+# exits 0 (allow). A hook must never wedge a merge on its own bug — but every
+# skipped arm prints one stderr line naming itself. Silence is how the PR-body
+# arm stayed dead for 17 days while its test suite reported 8/8 passed.
 set -uo pipefail
 
 _LIB_DIR="$(dirname "${BASH_SOURCE[0]}")/lib"
