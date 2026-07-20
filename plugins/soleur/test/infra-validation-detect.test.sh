@@ -271,9 +271,21 @@ echo "TS19: the workflow's detect-changes matches the mirrors above"
 WORKFLOW="$SCRIPT_DIR/../../../.github/workflows/infra-validation.yml"
 WF_BODY=$(cat "$WORKFLOW")
 
+# COMMENT LINES ARE STRIPPED ONCE, HERE, AND EVERY WORKFLOW GREP BELOW READS
+# WF_CODE — never WF_BODY. This workflow's comments quote the defects these
+# assertions exist to catch VERBATIM (the `paths:` removal rationale, the
+# merge_group routing rationale, the `$DIRS == "[]"` early-return that was the
+# bug), so a grep over the raw body is satisfied by the DOCUMENTATION of the
+# defect even after the executable code implementing the fix has been deleted.
+# Measured: setting the live branch to "NEVER" and dropping `push` from the
+# dispatch arm left this suite fully green because the replaced lines survived
+# as `# was: ...` comments. A guard that fires on the description of the bug
+# instead of the bug is the exact defect class #6766 names.
+WF_CODE=$(grep -vE '^[[:space:]]*#' <<<"$WF_BODY")
+
 # `merge_group` must be a real branch condition, not a mention in prose.
 # shellcheck disable=SC2016  # single quotes are intentional — the pattern must match the LITERAL text "$EVENT_NAME" in the workflow, not this shell's expansion of it
-if grep -Eq '\[\[[[:space:]]*"\$EVENT_NAME"[[:space:]]*==[[:space:]]*"merge_group"[[:space:]]*\]\]' <<<"$WF_BODY"; then
+if grep -Eq '\[\[[[:space:]]*"\$EVENT_NAME"[[:space:]]*==[[:space:]]*"merge_group"[[:space:]]*\]\]' <<<"$WF_CODE"; then
   echo "  PASS: workflow branches on EVENT_NAME == merge_group"; PASS=$((PASS + 1))
 else
   echo "  FAIL: workflow has no [[ \"\$EVENT_NAME\" == \"merge_group\" ]] branch"; FAIL=$((FAIL + 1))
@@ -282,7 +294,7 @@ fi
 # `push` must reach the enumerate-all arm, i.e. appear in a test against
 # EVENT_NAME — not merely in the `on:` block.
 # shellcheck disable=SC2016  # single quotes are intentional — literal "$EVENT_NAME" text match, see above
-if grep -Eq '\$EVENT_NAME"[[:space:]]*==[[:space:]]*"push"' <<<"$WF_BODY"; then
+if grep -Eq '\$EVENT_NAME"[[:space:]]*==[[:space:]]*"push"' <<<"$WF_CODE"; then
   echo "  PASS: workflow routes EVENT_NAME == push"; PASS=$((PASS + 1))
 else
   echo "  FAIL: workflow does not route EVENT_NAME == push"; FAIL=$((FAIL + 1))
@@ -290,7 +302,7 @@ fi
 
 # The suite_relevant regex in the workflow must be byte-identical to SUITE_RE
 # here. A prose-only sync would let the two diverge silently.
-if grep -Fq "$SUITE_RE" <<<"$WF_BODY"; then
+if grep -Fq "$SUITE_RE" <<<"$WF_CODE"; then
   echo "  PASS: workflow SUITE_RE is byte-identical to the mirror"; PASS=$((PASS + 1))
 else
   echo "  FAIL: workflow SUITE_RE has drifted from this mirror"; FAIL=$((FAIL + 1))
@@ -298,7 +310,7 @@ fi
 
 # detect-changes must publish suite_relevant as a JOB OUTPUT — computing it and
 # not exporting it would leave every consumer reading the empty string.
-if grep -Eq '^[[:space:]]+suite_relevant:[[:space:]]*\$\{\{[[:space:]]*steps\.' <<<"$WF_BODY"; then
+if grep -Eq '^[[:space:]]+suite_relevant:[[:space:]]*\$\{\{[[:space:]]*steps\.' <<<"$WF_CODE"; then
   echo "  PASS: suite_relevant is declared as a job output"; PASS=$((PASS + 1))
 else
   echo "  FAIL: suite_relevant is not declared as a job output"; FAIL=$((FAIL + 1))
@@ -306,7 +318,12 @@ fi
 
 # The workflow-level `paths:` filter must be gone: while it is present, a
 # non-infra PR posts no context at all and a required check waits forever.
-ON_BLOCK=$(awk '/^on:/{f=1} f&&/^[a-z]/&&!/^on:/{exit} f' "$WORKFLOW")
+#
+# Extracted from WF_CODE (comments already stripped above), not the raw file:
+# the `on:` block's own comment block explains the removed `paths:` filter by
+# name, which satisfies a raw-body grep and inverts this assertion into a
+# permanent FAIL on correct code.
+ON_BLOCK=$(awk '/^on:/{f=1} f&&/^[a-z]/&&!/^on:/{exit} f' <<<"$WF_CODE")
 if grep -Eq '^[[:space:]]+paths:' <<<"$ON_BLOCK"; then
   echo "  FAIL: workflow-level paths: filter is still present in on:"; FAIL=$((FAIL + 1))
 else

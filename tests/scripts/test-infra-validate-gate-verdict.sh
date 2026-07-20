@@ -176,21 +176,29 @@ echo "=== infra-validate-gate-verdict: workflow wiring ==="
 # bare filename token that a comment mentioning the script would also match.
 WF="$REPO_ROOT/.github/workflows/infra-validation.yml"
 wf_body=$(cat "$WF")
-if grep -Eq 'bash[[:space:]]+(\$\{?GITHUB_WORKSPACE\}?/)?scripts/infra-validate-gate-verdict\.sh([[:space:]]+"\$[A-Z_]+"){5}' <<<"$wf_body"; then
+
+# COMMENT LINES ARE STRIPPED ONCE, HERE, AND EVERY WORKFLOW GREP BELOW READS
+# wf_code — never wf_body. The aggregator's own comments quote the defects these
+# assertions exist to catch VERBATIM (the `$DIRS == "[]"` early-return, the
+# script filename, the needs: wiring), so a grep over the raw body is satisfied
+# by the DOCUMENTATION of the defect even after the executable code has been
+# deleted. Measured: replacing the verdict invocation with `echo "gate
+# disabled"` left this suite fully green, because the comment above the step
+# names the script. A guard that fires on the description of the bug instead of
+# the bug is the same defect class this suite exists to catch — anchor on
+# executable syntax only.
+wf_code=$(grep -vE '^[[:space:]]*#' <<<"$wf_body")
+
+if grep -Eq 'bash[[:space:]]+(\$\{?GITHUB_WORKSPACE\}?/)?scripts/infra-validate-gate-verdict\.sh([[:space:]]+"\$[A-Z_]+"){5}' <<<"$wf_code"; then
   pass=$((pass + 1)); echo "[ok] infra-validation.yml invokes the verdict script with 5 args"
 else
   fail=$((fail + 1)); echo "[FAIL] infra-validation.yml does not invoke the verdict script with 5 quoted args" >&2
 fi
 
 # The early-return that WAS the defect must be gone. `$DIRS == "[]"` followed
-# by `exit 0` in the aggregator is the literal F1 shape.
-#
-# Comment lines are stripped FIRST. The aggregator's own comment quotes the
-# defect verbatim to explain why the verdict was extracted, and a bare token
-# match would red on that documentation — a guard that fires on the description
-# of the bug instead of the bug is the same class of error this suite exists to
-# catch. Anchor on executable syntax only.
-wf_code=$(grep -vE '^[[:space:]]*#' <<<"$wf_body")
+# by `exit 0` in the aggregator is the literal F1 shape. Reads wf_code (see the
+# stripping rationale above) so the aggregator's own comment, which quotes the
+# defect verbatim, cannot invert this into a permanent FAIL on correct code.
 # shellcheck disable=SC2016  # single quotes are intentional — the pattern must match the LITERAL text "$DIRS" in the workflow, not this shell's expansion of it
 if grep -Eq '\$DIRS"?[[:space:]]*==[[:space:]]*"\[\]"' <<<"$wf_code"; then
   fail=$((fail + 1)); echo "[FAIL] infra-validation.yml still branches on \$DIRS == \"[]\" (the F1 early-return)" >&2
@@ -201,7 +209,7 @@ fi
 # The aggregator must actually depend on deploy-script-tests — otherwise
 # needs.deploy-script-tests.result is the empty string and every run reds
 # (or, worse, a future edit defaults it to something benign).
-if grep -Eq '^[[:space:]]*needs:[[:space:]]*\[[^]]*deploy-script-tests[^]]*\]' <<<"$wf_body"; then
+if grep -Eq '^[[:space:]]*needs:[[:space:]]*\[[^]]*deploy-script-tests[^]]*\]' <<<"$wf_code"; then
   pass=$((pass + 1)); echo "[ok] an aggregator needs: list includes deploy-script-tests"
 else
   fail=$((fail + 1)); echo "[FAIL] no needs: list includes deploy-script-tests" >&2
