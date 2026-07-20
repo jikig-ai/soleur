@@ -27,6 +27,7 @@ Derived from
 - [ ] 1.5 Body filter: numeric-boundary bare reference `(^|[^0-9A-Za-z])#<PR>([^0-9]|$)` — **not** the `(Ref|Closes|Fixes)` keyword form (40% coverage, measured).
 - [ ] 1.6 Override: `grep -qF '<!-- gate-override: net-issue-flow -->'` + `SOLEUR_SKIP_NET_ISSUE_FLOW_GATE=1`.
 - [ ] 1.7 Exit 1 when `NET > 0` and no override; else 0. **Fail-open** on gh error / unreadable body.
+- [ ] 1.8b **Bound consecutive fail-opens**: memoize FILED per PR for the session; N consecutive fail-opens in-window → deny, env escape as remedy. `/drain-prs` bulk loops correlate fail-opens with exactly the load the gate governs.
 - [ ] 1.8 `emit_incident net-issue-flow transient …` on every fail-open path (fail-open is NOT fail-silent); one retry with backoff first. **Never wrap `emit_incident` in `$(...)` or a pipe** — its output IS the telemetry.
 - [ ] 1.9 Display block enumerates the actual issue numbers behind CLOSING and FILED.
 - [ ] 1.10 **GREEN** — `bash plugins/soleur/test/net-issue-flow.test.sh`.
@@ -64,10 +65,12 @@ Derived from
 - [ ] 5.1a Add `OPERATOR_GH_LOGIN: ${{ vars.OPERATOR_GH_LOGIN }}` to the post-step `env:`, plus `--assignee "${OPERATOR_GH_LOGIN}"` on **both** `gh issue create` arms (`operator-digest.workflow.yml` :94 and :98 — verified exactly two, neither has `--assignee`), with an empty-check that **exits non-zero** if unset. **Do NOT call the subscription API** — the token lacks `notifications` (measured).
 - [ ] 5.1b Provision it in `scripts/provision-operator-digest-repo.sh`: `gh variable set OPERATOR_GH_LOGIN -R jikig-ai/operator-digest --body "<login>"`. **The variable does not exist today** — verified against the asset's `env:` blocks (:55, :76) and the provision script.
 - [ ] 5.1c Set it on the already-provisioned repo (the script does not re-run automatically); verify with `gh variable list -R jikig-ai/operator-digest`.
+- [ ] 5.1d **Re-run the provision script to actually INSTALL the edited workflow.** The asset is INERT in soleur; the live copy lives in the private repo and only changes via `install_workflow()` in `plugins/soleur/skills/operator-digest/scripts/provision-operator-digest-repo.sh`. Without this, 5.1a edits a file nothing runs. Requires Doppler (`ANTHROPIC_API_KEY`) or the script `die`s.
 - [ ] 5.2 `operator-digest/SKILL.md` §4: add `createdAt,labels`; sort age-desc; render `(NNN days old)`; band >90d / 30-90d / <30d. **SLA arm only — no auto-close.**
 - [ ] 5.3 Exclude `decision-challenge` from the action-needed harvest; render separately (never drop).
+- [ ] 5.3b Surface ADRs with `status: proposed` in that same "decisions awaiting your call" line — ADR-130's only return path.
 - [ ] 5.4 Record the retain-not-retire decision in ADR-130 + PR body.
-- [ ] 5.5 Route the one-time optional watch subscription through the deferred-operator-step path.
+- [ ] 5.5 **DROP the watch subscription — do NOT route it through the deferred-operator-step path.** That path (`ship/SKILL.md:1072`) runs `gh issue create` and writes `Tracks #NNNN` into the PR body, which the widened matcher counts by construction → FILED=1, NET=0 with zero margin, AC16 false, and a deadlock if anything else files once. `--assignee` already solves delivery.
 
 ## Phase 6 — ADR + C4
 
@@ -80,7 +83,8 @@ Derived from
 ## Phase 7 — Follow-through enrollment (fail-closed at /ship)
 
 - [ ] 7.1 `scripts/followthroughs/filed-per-pr-soak-6769.sh`; exit 0=PASS / 1=FAIL / *=TRANSIENT. **Two criteria:** (a) filed-per-PR ≤ 0.95 over PR-attributable filings; (b) total open issue count at merge+14d ≤ count at merge.
-- [ ] 7.2 Directive on #6769: `<!-- soleur:followthrough script=scripts/followthroughs/filed-per-pr-soak-6769.sh earliest=<merge+14d> secrets=GH_TOKEN -->` + `follow-through` label.
+- [ ] 7.2 Directive on #6769 with **`earliest=<merge+10d>` (NOT +14d)** + `follow-through` label. At +14d exactly one sweep both clears `earliest` and still sees #6769 in the 14-day closed window; a single TRANSIENT loses the soak forever, silently.
+- [ ] 7.4 Commit the open-issue-count **baseline** into the soak script at ship time — GitHub cannot reconstruct a historical open-count, so AC18(b) is unverifiable without it.
 - [ ] 7.3 `GH_TOKEN` already wired at `scheduled-followthrough-sweeper.yml:56` — no new secret.
 
 ## Phase 8 — Mutation evidence, THEN registration
@@ -88,6 +92,7 @@ Derived from
 - [ ] 8.1 Build a synthetic `NET = +3` PR body.
 - [ ] 8.2 Run the gate; **capture the verbatim failing output**.
 - [ ] 8.3 Add the override marker; re-run; capture the passing output.
+- [ ] 8.3b **Write the marker into the evidence file split/escaped so `grep -qF` cannot match it**, and state in 2.2 that the hook's corpus is the PR body ONLY (no linked-file expansion). The precedent hook `cat`s linked `specs/**.md` into its corpus — inheriting that would let the gate find its own override marker and silently self-override, invisible to AC16.
 - [ ] 8.4 Commit both to `specs/<branch>/mutation-evidence.md` (#6727 convention).
 - [ ] 8.5 Cite it in the PR body.
 - [ ] 8.6 **ONLY NOW** register the hook in `.claude/settings.json` after `ship-soak-followthrough-gate.sh`. Flag the config change in the PR body. (Registering earlier would run Phases 3–7 under a live unproven gate that this PR must itself pass.)

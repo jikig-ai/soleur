@@ -40,6 +40,28 @@ structurally-unfailable class the PR exists to eliminate.
    `kind=cost_of_filing` / `event=flip|file` rows were inert. Disposition now rides in `rule_id` with
    `event=applied`, surfacing in the existing weekly aggregate with no aggregator change.
 
+Flow analysis then found three P0s that no other lens caught, all of the same shape — **a green check
+over an unchanged world**:
+
+5. **The digest fix would never have reached the running workflow.** The edited file is *inert in
+   `soleur`*; the live copy lives in the private repo and only changes when the provision script
+   re-installs it. v1 grepped the inert asset. The fix would have shipped, passed, and left the
+   channel byte-identically dark. Now: re-run the provision script (5.1d) and assert the **installed**
+   artifact via `gh api`.
+6. **The PR could deadlock itself.** Phase 5.5 routed a deferred operator step through a path that
+   **files an issue** — putting this PR at NET=0 with zero margin, and making the override (which
+   AC16 forbids) the only forward path if anything else filed once. The step is now dropped.
+7. **AC19 had no writer path and could not have one** — the sweeper's token is scoped to `soleur` and
+   cannot read the private repo at all. Split: the mechanical half folded into AC10; the behavioral
+   half dropped, since encoding operator behavior as an automated pass criterion means a holiday
+   returns FAIL forever on a working system.
+
+Plus: the soak had exactly **one** evaluation attempt (a single transient would have lost it silently
+— `earliest` moved to `+10d`); the override marker was to be committed verbatim into a file the gate's
+own precedent hook `cat`s into its corpus (**self-override**, invisible to AC16); AC5's extractive form
+was a proxy that a permanently-fail-open gate would satisfy; and two negative ACs used a relative path
+that does not exist, so they passed vacuously.
+
 Also corrected: `OPERATOR_GH_LOGIN` was an identifier v1 invented (it does not exist — the plan now
 creates and provisions it, with a loud empty-check); the `notifications` scope is unavailable so
 delivery moves to `--assignee`; hook registration re-sequenced after the mutation proof; the merge-path
@@ -196,6 +218,22 @@ filed-per-PR target did.
 plus a one-line justification per filed issue. Architectural-pivot deferrals can legitimately be
 net-positive. Plus `SOLEUR_SKIP_NET_ISSUE_FLOW_GATE=1` as the emergency escape, matching every sibling
 gate.
+
+**The honest limit on this gate's authority.** Both escapes are writable by the actor being governed:
+the agent authors the PR body the marker is grepped from, and controls the env the `SOLEUR_SKIP_*` var
+lives in. The stated cost — "a one-line justification per filed issue" — is **unenforced prose**; the
+hook only tests for the marker's presence. Two mitigations, both in scope:
+
+1. **Make the marker non-free.** Require an adjacent non-empty reason
+   (`<!-- gate-override: net-issue-flow — <reason> -->`) with a minimum length, enforced in the hook,
+   not in prose.
+2. **Name where override telemetry surfaces.** `emit_incident` writes to `.claude/.rule-incidents.jsonl`
+   and the weekly aggregate — but if that aggregate surfaces only as an `action-required` issue, the
+   gate's sole accountability mechanism depends on the exact channel this PR is proving has a 0% read
+   rate. D3's delivery fix is therefore load-bearing *for D1*, not merely adjacent to it.
+
+Until both land, this is **blocking-with-friction, not unbypassable** — and the plan says so rather
+than overclaiming.
 
 Three artifacts, because prose in a SKILL.md is skippable by construction:
 
@@ -372,6 +410,18 @@ a nag posted into a 0-subscriber repo is not an escalation.
        --body-file "$DIGEST"
    ```
 
+   **CRITICAL — editing this asset changes nothing on its own.** The file is **inert in `soleur`**;
+   its own header says so. The workflow that actually runs is a *copy* installed into the private
+   `jikig-ai/operator-digest` repo by `install_workflow()` in
+   `plugins/soleur/skills/operator-digest/scripts/provision-operator-digest-repo.sh` (a
+   `PUT repos/.../contents/...`). **Nothing re-syncs it** — there is no installer workflow in
+   `.github/workflows/`. So the PR must **re-run the provision script in-session** (it is idempotent,
+   create-or-update), and the acceptance criterion must assert the **installed** artifact, not the
+   asset. An earlier draft grepped the inert asset — a green AC over a byte-identical dark channel,
+   which is exactly the proxy-vs-invariant failure this whole PR is about. Precondition: the script
+   calls `fetch_secret` against Doppler and `die`s without `ANTHROPIC_API_KEY`, so Phase 5 cannot
+   complete in a Doppler-less session.
+
    **`OPERATOR_GH_LOGIN` does not exist today — this plan creates it.** Verified: the workflow's
    `env:` blocks (:55, :76) carry only `anthropic_api_key` and `github_token`; there is no operator
    identity anywhere in the asset or in `scripts/provision-operator-digest-repo.sh`. An earlier draft
@@ -448,6 +498,15 @@ the ADR, not for this PR's scope.
 This ADR carries **two** proposed policies for one operator decision session: the meta-work drain-window
 rule from D4, and the gate moratorium below. Neither is decided here.
 
+**And it needs a return path, or it is exactly the thing D4 condemns.** Flow analysis caught this:
+`status: proposed` with no reviewer, no directive, no issue, and no digest surface is written, merged,
+and forgotten — the "filed-and-ignored" state D4's own proposed rule calls equivalent to never filing.
+The plan cannot use the `decision-challenges.md` → `action-required` route (it would file an issue and
+trip AC16). **Cheapest real fix, and it costs almost nothing:** Phase 5.3 is already building a
+"decisions awaiting your call" line in the digest — have ADRs with `status: proposed` surface in that
+same line. That converts the dead end into a channel, and it rides on the delivery fix this PR is
+already making.
+
 This is a policy call about how the system should behave, not an engineering fix. **An agent must not
 settle it alone.** Both sides go to the operator:
 
@@ -520,6 +579,11 @@ Phase order is load-bearing: the contract-defining script (Phase 1) must precede
       `--search` in 1.4(d) moves the call from the Search API's **30 req/min** onto REST's 5,000/hr,
       which removes the main rate-limit fail-open trigger — the retry now covers ordinary transport
       flake rather than a structural throughput ceiling.)
+- [ ] 1.8b **Bound consecutive fail-opens.** Memoize the FILED computation per PR number for the
+      session, and escalate: N consecutive fail-opens inside a window → **deny**, with the documented
+      env escape as the remedy. `/drain-prs` shells `gh pr merge` per PR in a bulk loop, so fail-opens
+      correlate with exactly the load the gate exists to govern. A gate whose failure mode is silent
+      permissiveness under load has the same shape as the 8%-coverage gate it replaces.
 - [ ] 1.9 Display block enumerates the actual issue numbers behind CLOSING and FILED.
 - [ ] 1.10 **GREEN.** Run `bash plugins/soleur/test/net-issue-flow.test.sh`.
 
@@ -586,14 +650,26 @@ Phase order is load-bearing: the contract-defining script (Phase 1) must precede
       `anthropic_api_key` and `github_token`) and the provision script.
 - [ ] 5.1c Set it on the already-provisioned repo (the provision script does not re-run
       automatically); verify with `gh variable list -R jikig-ai/operator-digest`.
+- [ ] 5.1d **Re-run the provision script to actually install the edited workflow.** Without this, 5.1a
+      edits an inert asset and the running workflow is unchanged — the dark channel stays dark with a
+      green AC on top. Requires Doppler (`ANTHROPIC_API_KEY`) or the script `die`s.
 - [ ] 5.2 `operator-digest/SKILL.md` §4: `--json title,url` → `--json title,url,createdAt,labels`;
       sort by age desc; render `(NNN days old)`; band >90d / 30-90d / <30d. This is the SLA arm of the
       staleness contract — **no auto-close mutation.**
 - [ ] 5.3 Exclude `decision-challenge` from the action-needed harvest; render separately (never drop —
       a silent drop would be a second dark channel).
+- [ ] 5.3b In that same "decisions awaiting your call" line, surface ADRs with `status: proposed`.
+      This is ADR-130's only return path — without it the ADR is a dead end (see D5).
 - [ ] 5.4 Record the retain-not-retire decision in the ADR body and the PR body.
-- [ ] 5.5 Note the deferred optional operator step (one-time watch subscription) via the repo's
-      deferred-operator-step path, so `wg-block-pr-ready-on-undeferred-operator-steps` is satisfied.
+- [ ] 5.5 **Drop the watch-subscription entirely — do NOT route it through the deferred-operator-step
+      path.** That path (`ship/SKILL.md:1072`) runs `gh issue create --label type/chore` and writes
+      `Tracks #NNNN` into the PR body — i.e. **it files an issue**, whose body then contains `#<PR>`
+      and is counted by the widened matcher **by construction**. That would make FILED=1, put this PR
+      at NET=0 with zero margin, and falsify AC16. Worse, one more filing from any cron pushes NET to
+      +1, whereupon the agent's only forward path is the override — which AC16 forbids. **The PR
+      deadlocks.** `ship/SKILL.md:1072-1074`'s remedy 2 (remove the bullet) is the correct disposition:
+      `--assignee` already solves delivery, and an optional nicety does not warrant a tracking issue
+      inside the PR whose thesis is that tracking issues are the problem.
 
 ### Phase 6 — ADR + proposal artifacts
 
@@ -613,8 +689,19 @@ and is fail-closed at `/ship` Phase 5.5 + the `ship-soak-followthrough-gate.sh` 
       `0` = PASS, `1` = FAIL (still above target), `*` = TRANSIENT. Measures filed-per-PR over a
       trailing 14d window **restricted to PR-attributable filings** — a raw all-issues count would fold
       in the ~29% cron share the gate cannot reach and could never pass.
-- [ ] 7.2 Directive on #6769:
-      `<!-- soleur:followthrough script=scripts/followthroughs/filed-per-pr-soak-6769.sh earliest=<merge+14d> secrets=GH_TOKEN -->`
+- [ ] 7.2 Directive on #6769, with **`earliest=<merge+10d>`, not `+14d`**:
+      `<!-- soleur:followthrough script=scripts/followthroughs/filed-per-pr-soak-6769.sh earliest=<merge+10d> secrets=GH_TOKEN -->`
+
+      **Why 10, not 14.** `Closes #6769` closes the issue at merge (day D). The sweeper's closed-set
+      query is `closed:>=today-14d` at **date** granularity (`sweep-followthroughs.sh:492-496`) and the
+      `earliest` gate blocks evaluation until the named day. At `+14d` there is **exactly one** sweep
+      that both clears `earliest` and still sees #6769 in the closed window. If that single run returns
+      TRANSIENT (gh error, rate limit, `CLOSED_LIMIT=30` overflow), the D+15 sweep's window starts at
+      D+1, #6769 drops out of the candidate set, and **the soak never runs again — silently.** `+10d`
+      is still a real soak and leaves four retry days inside the window.
+- [ ] 7.4 Commit the **open-issue-count baseline** into the soak script at ship time. GitHub cannot
+      reconstruct a historical open-count after the fact, so AC18(b) is unverifiable without a number
+      captured at merge.
       plus the `follow-through` label.
 - [ ] 7.3 `GH_TOKEN` is already wired in `scheduled-followthrough-sweeper.yml:56` — no new secret.
 
@@ -625,6 +712,15 @@ The work is not done when the gate is asserted to work. It is done when the gate
 - [ ] 8.1 Construct a synthetic PR body with `NET = +3` (0 closing, 3 filed).
 - [ ] 8.2 Run the gate. **Capture the actual failing output verbatim.**
 - [ ] 8.3 Add `<!-- gate-override: net-issue-flow -->`; re-run; capture the passing output.
+- [ ] 8.3b **Write the marker into the evidence file in a split/escaped form that `grep -qF` cannot
+      match.** The precedent hook this one copies (`ship-soak-followthrough-gate.sh`) builds its scan
+      corpus by grepping the PR body for a `knowledge-base/project/(plans|specs)/…\.md` path and
+      **`cat`ing that file into the corpus**. If the new hook inherits that pattern — or if anyone
+      quotes the evidence inline instead of linking it — the gate finds its own override marker inside
+      the committed transcript and **silently self-overrides**, while AC16 asserts "no override marker"
+      and cannot see it. Also state explicitly in 2.2 that this hook's corpus is the **PR body only**
+      (no linked-file expansion), and add a test asserting the rendered PR body does not contain the
+      literal marker.
 - [ ] 8.4 Commit both to `knowledge-base/project/specs/<branch>/mutation-evidence.md`, per the repo
       convention established by #6727
       (`specs/feat-one-shot-6721-6723-6724-gitleaks-scan-gaps-ship-signal/mutation-evidence.md`).
@@ -652,8 +748,14 @@ The work is not done when the gate is asserted to work. It is done when the gate
       addressed; without it the gate is unfailable in the field.
 - [ ] **AC4** The suite **ABORTs (exit 2)** rather than skipping if its `gh` stub is unavailable — per
       #6727, "a fresh mutation proof must never be able to silently skip."
-- [ ] **AC5** The threshold assertion is **extracted from the script**, not hand-mirrored in the test.
-      Mutation proof: deleting the `NET > 0` comparison from the script must turn the suite red.
+- [ ] **AC5** **Behavioral, not extractive.** T1 invokes the real script with a stubbed `gh` and
+      asserts **exit 1 end-to-end**, PLUS a case proving the **fail-open path was not taken** with a
+      healthy stub. An earlier draft also allowed "extract the threshold from the script text" — that
+      is a proxy: a grep finding `-gt 0` passes even when the comparison sits on an unreachable branch
+      behind the Phase 1.7 fail-open. **A gate that always fails open satisfies T1–T23 except T7** —
+      the unfailable class, reintroduced at the verification layer. Never hand-mirror the threshold in
+      the test (precedent: `gitleaks-merge-commit.test.sh`, whose hardcoded mirror left the suite
+      fully green).
 - [ ] **AC6** `.claude/hooks/ship-net-issue-flow-gate.test.sh` asserts both `assert_deny` (NET>0) and
       `assert_pass` (NET≤0), and that the hook exits **0** in both cases with the decision in JSON.
 - [ ] **AC7** The word "advisory" no longer appears **within the net-issue-flow section**. `git grep -c`
@@ -661,7 +763,11 @@ The work is not done when the gate is asserted to work. It is done when the gate
       whole-file count can never reach 0. Use a bounded extraction:
       `awk '/^### Net-Issue-Flow/{f=1;next} /^### /{f=0} f' plugins/soleur/skills/ship/SKILL.md | grep -c advisory`
       returns 0. (Both reviewers flagged the original as unsatisfiable.)
-- [ ] **AC8** All 9 threshold sites updated. **The verification regex must cover the hyphenated and
+- [ ] **AC8b** The glyph regex is necessary but **not** sufficient — it misses `at most 30 lines`,
+      `two files`, `fewer than 3 files`, and ASCII `<=`. Run a one-time semantic sweep
+      (`git grep -nE '\b30\b|\bthreshold\b' -- plugins/soleur/skills/{review,ship,work,compound}`),
+      eyeball it once, and record the resulting count in the PR body so future drift is diffable.
+- [ ] **AC8** All threshold sites updated. **The verification regex must cover the hyphenated and
       `>` forms** — a naive `'≤ ?30 lines|≤ ?2 files'` returns 0 while four stale sites survive
       (`review/SKILL.md:500` `≤30-line`, `:532` `>30 lines OR touches >2 files`, `:750` `≤30-line`,
       `:1055` `≤30-line/≤2-file`). Use:
@@ -677,23 +783,30 @@ The work is not done when the gate is asserted to work. It is done when the gate
       both `cost-of-filing-flip` and `cost-of-filing-file` appear with non-zero counts. **Writing a
       row the aggregator ignores is the failure mode this AC exists to catch** — `kind` is never read
       by the aggregator, so a `kind`-based scheme would be silently inert.
-- [ ] **AC10** Both `gh issue create` arms in `operator-digest.workflow.yml` carry `--assignee`:
-      `grep -c -- '--assignee' plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml`
-      == 2.
+- [ ] **AC10** The **INSTALLED** workflow in the private repo assigns — not the inert asset:
+      `gh api repos/jikig-ai/operator-digest/contents/.github/workflows/operator-digest.yml --jq .content | base64 -d | grep -c -- '--assignee'`
+      == 2. **Grepping the asset would be a pure proxy** — the asset is inert in `soleur` and the
+      running copy only changes when the provision script re-installs it (Phase 5.1d).
 - [ ] **AC11** `operator-digest/SKILL.md` §4 query includes `createdAt`, and the section specifies
       age-descending sort with a >90d escalation band.
 - [ ] **AC12** `ADR-130-gate-moratorium.md` exists with `status: proposed`, and contains **both** a
       for- and an against- section. An ADR presenting only one side fails this AC.
-- [ ] **AC13** ADR-130 also contains the D4 meta-work drain-window proposal, and **no AGENTS.md edit
-      appears in the diff** (`git diff --name-only origin/main | grep -c '^AGENTS' == 0`) and **no
-      `decision-challenges.md` is created** (`test ! -f specs/<branch>/decision-challenges.md`) —
-      creating it would make `ship` file an issue and trip AC16.
+- [ ] **AC13** ADR-130 also contains the D4 meta-work drain-window proposal; **no AGENTS.md edit
+      appears in the diff** (`git diff --name-only origin/main | grep -cE '(^|/)AGENTS[.a-z]*\.md$'`
+      == 0 — the anchored form, since a bare `^AGENTS` misses `plugins/soleur/AGENTS.md`); and **no
+      `decision-challenges.md` is created**
+      (`test ! -f knowledge-base/project/specs/<branch>/decision-challenges.md` — **full path**; the
+      earlier relative `specs/<branch>/...` form named a directory that does not exist, so the negative
+      assertion passed vacuously and could never fail).
 - [ ] **AC14** `scripts/followthroughs/filed-per-pr-soak-6769.sh` exists, is executable, and #6769
       carries the `soleur:followthrough` directive + `follow-through` label.
 - [ ] **AC15** `specs/<branch>/mutation-evidence.md` contains the **verbatim failing run output** from
       Phase 8.2 — not a description of it.
-- [ ] **AC16** **This PR files zero issues.** `NET` for this PR ≤ 0 (it closes #6769). The gate it
-      installs passes on itself, with no override marker.
+- [ ] **AC16** **Mechanical, not prose** — run as a pre-ready check:
+      `FILED == 0 AND NET <= 0 AND no override marker in the rendered PR body`. Phase 5.5's removal is
+      what makes `FILED == 0` actually true; leaving the deferred-operator-step bullet in place would
+      file one issue, put NET at zero margin, and make the override the only forward path — which this
+      AC forbids, deadlocking the PR.
 - [ ] **AC17** `bash scripts/test-all.sh` green.
 
 - [ ] **AC20** The gate script passes `--limit 500` and does **not** `cut` `PR_CREATED_AT` to a date:
@@ -716,10 +829,15 @@ The work is not done when the gate is asserted to work. It is done when the gate
       count at `merge+14d` ≤ count at merge. Metric (a) alone is scoped to exclude the ~29% cron share
       the gate cannot reach, so it can pass while the queue still grows; metric (b) cannot. Sweeper
       auto-closes #6769 only when both hold.
-- [ ] **AC19** Delivery is **observed**, not assumed: the newest `Digest:` issue in
-      `jikig-ai/operator-digest` has `assignees` ≥ 1, and by `merge+14d` has non-zero `comments` **or**
-      a state change — i.e. a human touched it. An earlier draft verified AC19 by re-asserting AC10,
-      which could not detect delivery at all — the exact blind spot that let 7 digests go unread.
+- [ ] **AC19** ~~Behavioral delivery check~~ — **split and mostly cut.** The mechanical half is now
+      AC10 (assert the *installed* workflow), which needs no new secret. The behavioral half ("a human
+      touched the digest") is **dropped**: (i) it had no writer path — no script, no directive, no
+      workflow ever ran it; (ii) the sweeper runs with `GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` scoped
+      to `jikig-ai/soleur` and **cannot read the private `operator-digest` repo at all**, so folding it
+      into the soak would need a new cross-repo token the plan would have to own rather than wave off;
+      and (iii) encoding *operator behavior* as an automated pass criterion means a holiday returns
+      FAIL forever on a correctly-working system. The first digest after merge is the real check, and
+      it is the operator's to make.
 
 ## Open Code-Review Overlap
 
@@ -940,3 +1058,7 @@ transcript is what the *operator* reads while the CI proof is what the *machine*
 | **T23** | Fail-open path taken | emits `emit_incident … transient`, not just a stdout marker |
 | **T24** | `gh` stub returns issues whose `createdAt` straddles `PR_CREATED_AT` by minutes | only the post-PR ones counted (client-side full-ISO compare, not a date string) |
 | **T25** | Aggregator round-trip: emit one `cost-of-filing-flip` + one `cost-of-filing-file`, run `rule-metrics-aggregate.sh` | both appear with non-zero counts (AC9b) |
+| **T26** | **Healthy stub, NET>0** — assert the fail-open path was NOT taken | exit 1 with no `transient` incident row. Without this, "always fails open" passes every other test |
+| **T27** | N consecutive fail-opens in-window | escalates to deny (1.8b), not indefinite silent permissiveness |
+| **T28** | Override marker present only inside a linked `specs/**.md`, not the PR body | **not** honoured — corpus is the PR body only (guards the 8.3b self-override trap) |
+| **T29** | Override marker with an empty/missing reason | **not** honoured (marker must carry a non-empty reason) |
