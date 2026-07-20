@@ -1837,10 +1837,16 @@ fsck_advisory_probe() {
   # equality the pre-freeze abort depends on.
   probed="$(awk -F'\t' '$1 ~ /^[01]$/ { n++ } END { print n + 0 }' "$work/rows" 2>/dev/null || echo 0)"
   probe_failed_n="$(awk -F'\t' '$2 == "probe_failed" { n++ } END { print n + 0 }' "$work/rows" 2>/dev/null || echo 0)"
-  # Abort ONLY when EVERY probed source repo is un-inspectable. A partial failure is evidence, not a
-  # verdict — some repos genuinely differ. This runs BEFORE `FREEZE_HELD=1; arm_dead_man`, so die()
-  # reaches cleanup() with both flags 0 and NO rollback runs. That is correct; do not "fix" it into a
-  # rollback. Language mirrors the script's other pre-freeze dies.
+  # Runs BEFORE `FREEZE_HELD=1; arm_dead_man`, so die() reaches cleanup() with both flags 0 and NO
+  # rollback runs. That is correct; do not "fix" it into a rollback. Language mirrors the script's
+  # other pre-freeze dies.
+  #
+  # (An earlier revision of this comment said "abort ONLY when EVERY probed source repo is
+  # un-inspectable; a partial failure is evidence, not a verdict". That described the SUPERSEDED
+  # all-or-nothing threshold and was left in place when the code changed to abort-on-ANY, so the
+  # comment block asserted both rules at once — which is what made L6j read as a test-vs-SUT
+  # contradiction rather than a stale comment. Removed; the rule below is the only one.)
+  #
   # ANY un-inspectable source repo aborts pre-freeze — not just the all-of-them case. The original
   # all-or-nothing threshold did not cover the incident this probe was built for: run 29725194755
   # failed on 8 of 10, so an ALL threshold would have gone green, held the freeze, taken the outage,
