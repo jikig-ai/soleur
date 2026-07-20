@@ -231,9 +231,18 @@ merge-triggered apply rather than just this resource.
 
 ## Phase 4 — Follow-ups (do not fold into the diff)
 
-- [ ] 4.1 File the **28-day GSC re-check** issue (AC12), due merge+28d: re-check the
-      "Not found (404)" report, confirm all four rows cleared. Note GSC has no API for
-      validation state, but the AC9 census **is** automatable if recurrence is a concern.
+- [x] 4.1 File the **28-day GSC re-check** issue (AC12), due merge+28d → **#6788**,
+      filed at ship time rather than post-merge (a promise to file after merge is exactly
+      the rot the follow-through substrate exists to prevent).
+      Enrolled in the sweeper: `scripts/followthroughs/gsc-404-cdn-cgi-census-6746.sh`,
+      `earliest=2026-08-17T09:00:00Z` (merge + 28d). The task note that "the AC9 census
+      **is** automatable" was acted on rather than left conditional — the script re-runs
+      the 5-path Googlebot census and passes only at 0, so the mechanical gate is the
+      census, not a dashboard eyeball (`hr-no-dashboard-eyeball-pull-data-yourself`).
+      Dry-run at filing time returned FAIL with the exact baseline 0/2/1/20/7 = 30,
+      proving it discriminates rather than certifying silence. GSC coverage-**validation**
+      state has no API and stays human, but it is strictly downstream: zero hrefs ⇒ the
+      404s stop on Google's next crawl.
 - [ ] 4.2 Optionally file the "Book intro" CTA → booking-link conversion follow-up
       (`decision-challenges.md` §Also noted). Low priority, separate concern.
 
