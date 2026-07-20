@@ -195,6 +195,84 @@ else
   fail=$((fail + 1)); echo "[FAIL] infra-validation.yml does not invoke the verdict script with 5 quoted args" >&2
 fi
 
+# ---------------------------------------------------------------------------
+# THE GATE'S WIRING, NOT JUST ITS LOGIC.
+#
+# Everything above this point pins what the verdict script DECIDES. Nothing
+# above it pins what the workflow FEEDS it — and a gate wired to the wrong
+# inputs is #6766 verbatim regardless of how correct its logic is.
+#
+# Measured: changing exactly one token, `DEPLOY: ${{ needs.deploy-script-tests
+# .result }}` -> `${{ needs.validate.result }}`, left BOTH suites fully green
+# (verdict 28/0, detect 41/0). The `needs:` list still named deploy-script-tests
+# and the call shape was untouched, so every existing assertion held — while in
+# real CI (terraform roots changed, validate green, deploy-script-tests RED) the
+# gate exited 0 and certified a red suite as green. T14d pins that state's
+# VERDICT; it cannot see that DEPLOY no longer carries deploy-script-tests.
+#
+# The call-shape regex above is deliberately order-blind (`("\$[A-Z_]+"){5}`),
+# so swapping two positional args also survived it. Both axes are pinned below:
+# each env name against the exact expression it must bind, and the five
+# positionals against the script's documented order.
+#
+# Scoped to the `infra-validate-required` job block so a same-named env binding
+# in some other job cannot satisfy these.
+agg_job=$(awk '/^  infra-validate-required:$/{f=1} f&&/^  [a-z][a-z0-9-]*:$/&&!/^  infra-validate-required:$/{exit} f' <<<"$wf_code")
+
+if [[ -z "$agg_job" ]]; then
+  fail=$((fail + 1)); echo "[FAIL] could not locate the infra-validate-required job block in the workflow" >&2
+else
+  pass=$((pass + 1)); echo "[ok] located the infra-validate-required job block"
+
+  # F3 — `if: always()`. Without it the job SKIPS whenever any `needs` job
+  # fails, which is EXACTLY when the fail-closed verdict has to run: the
+  # required context then never reports failure and the PR is merge-eligible on
+  # a red suite. Deleting the line left both suites green before this assertion.
+  if grep -Eq '^[[:space:]]+if:[[:space:]]*always\(\)[[:space:]]*$' <<<"$agg_job"; then
+    pass=$((pass + 1)); echo "[ok] infra-validate-required declares if: always()"
+  else
+    fail=$((fail + 1)); echo "[FAIL] infra-validate-required has no 'if: always()' — it will skip when a needs: job fails" >&2
+  fi
+
+  # F2a — each env name binds to the ONE expression it must carry.
+  while IFS='|' read -r env_name expr; do
+    # `expr` is a regex (dots escaped); strip the backslashes for the message so
+    # an operator reading the checks UI sees the expression, not the pattern.
+    expr_display="${expr//\\/}"
+    if grep -Eq "^[[:space:]]+${env_name}:[[:space:]]*\\\$\{\{[[:space:]]*${expr}[[:space:]]*\}\}[[:space:]]*$" <<<"$agg_job"; then
+      pass=$((pass + 1)); echo "[ok] ${env_name} binds \${{ ${expr_display} }}"
+    else
+      fail=$((fail + 1)); echo "[FAIL] ${env_name} does not bind \${{ ${expr_display} }} in infra-validate-required" >&2
+    fi
+  done <<'BINDINGS'
+DETECT|needs\.detect-changes\.result
+VALIDATE|needs\.validate\.result
+DEPLOY|needs\.deploy-script-tests\.result
+DIRS|needs\.detect-changes\.outputs\.directories
+SUITE_RELEVANT|needs\.detect-changes\.outputs\.suite_relevant
+BINDINGS
+
+  # F2b — the five positionals in the script's DOCUMENTED order:
+  #   <detect> <validate> <deploy> <directories> <suite_relevant>
+  # (see the Usage block in scripts/infra-validate-gate-verdict.sh). Swapping
+  # any two survives the order-blind call-shape regex above while silently
+  # re-pointing every row of the verdict table at the wrong axis.
+  # shellcheck disable=SC2016  # single quotes intentional — match the LITERAL "$DETECT" etc. text in the workflow, not this shell's expansion
+  if grep -Eq 'bash[[:space:]]+(\$\{?GITHUB_WORKSPACE\}?/)?scripts/infra-validate-gate-verdict\.sh[[:space:]]+"\$DETECT"[[:space:]]+"\$VALIDATE"[[:space:]]+"\$DEPLOY"[[:space:]]+"\$DIRS"[[:space:]]+"\$SUITE_RELEVANT"[[:space:]]*$' <<<"$agg_job"; then
+    pass=$((pass + 1)); echo "[ok] the five positional args are passed in the script's documented order"
+  else
+    fail=$((fail + 1)); echo "[FAIL] verdict-script args are not in the documented order (detect validate deploy dirs suite_relevant)" >&2
+  fi
+
+  # F2c — SUITE_RELEVANT must come from detect-changes, never a literal. A
+  # hardcoded 'false' routes every run to the nothing-in-scope PASS row.
+  if grep -Eq "^[[:space:]]+SUITE_RELEVANT:[[:space:]]*'?(true|false)'?[[:space:]]*$" <<<"$agg_job"; then
+    fail=$((fail + 1)); echo "[FAIL] SUITE_RELEVANT is hardcoded to a literal — the gate no longer reads detect-changes" >&2
+  else
+    pass=$((pass + 1)); echo "[ok] SUITE_RELEVANT is not hardcoded to a literal"
+  fi
+fi
+
 # The early-return that WAS the defect must be gone. `$DIRS == "[]"` followed
 # by `exit 0` in the aggregator is the literal F1 shape. Reads wf_code (see the
 # stripping rationale above) so the aggregator's own comment, which quotes the
