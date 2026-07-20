@@ -101,11 +101,14 @@ provider "cloudflare" {
   api_token = var.cf_api_token_zone_settings
 }
 
-# Separate provider for Cloudflare Rulesets APIs (cache rules, firewall
-# custom rules, dynamic redirects). The default cf_api_token lacks
-# Cache Rules:Edit, Zone WAF:Edit, Single Redirect Rules:Edit, and
-# Transform Rules:Edit; this alias uses a narrow token scoped to all on
-# soleur.ai. Current consumers:
+# Separate provider for Cloudflare Rulesets APIs. The default cf_api_token
+# holds none of the ruleset permissions; this alias uses a token scoped to
+# them on soleur.ai.
+#
+# The AUTHORITATIVE permission set is the `cf_api_token_rulesets` description
+# in variables.tf (the scope ledger) — do not maintain a second enumeration
+# here; this list had already drifted two phases behind it. What follows is
+# only the phase-to-file consumer mapping. Current consumers:
 #   - cache.tf                    (http_request_cache_settings)  — #2542
 #   - bot-allowlist.tf            (http_request_firewall_custom) — #2662
 #   - seo-rulesets.tf             (http_request_dynamic_redirect; absorbed the
@@ -117,13 +120,13 @@ provider "cloudflare" {
 #     on the marketing hosts; needed a Config Rules:Edit widen, 2026-07-20 GSC
 #     "Not found (404)" on /cdn-cgi/l/email-protection)
 #
-# Decision rule for the next phase added here (see ADR): the new permission is
-# in the SAME API family (zone rulesets) and on the SAME zone → widen THIS
-# token. A distinct API surface (R2 object storage, zone settings) → mint a
-# narrow alias instead. Widening moves no secret material, so it adds no
-# no-default root variable — and an unprovisioned one fails the WHOLE
-# merge-triggered apply, since Terraform resolves root vars before -target
-# pruning.
+# Decision rule for the next phase added here: ADR-128. Summary — a permission
+# in the SAME API family (the zone/account rulesets endpoints) widens THIS
+# token; a distinct API surface (R2 object storage, zone settings) mints a
+# narrow alias. The ADR weighs both axes (least-privilege AND the Terraform
+# root-var hazard) and records #5092 honestly as a scope ESCALATION to
+# account-level rather than as clean supporting precedent. Read it before
+# minting or widening — the rule is not "always widen".
 provider "cloudflare" {
   alias     = "rulesets"
   api_token = var.cf_api_token_rulesets

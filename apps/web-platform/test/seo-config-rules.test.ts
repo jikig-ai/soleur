@@ -5,29 +5,28 @@ import path from "node:path";
 // Source-text regression guard for the host-scoped Email Obfuscation
 // Configuration Rule.
 //
-// Context: Google Search Console's "Not found (404)" report (validation export
-// 2026-07-20) failed on `https://soleur.ai/cdn-cgi/l/email-protection`.
-// Cloudflare's Email Obfuscation feature rewrites every `mailto:` href and
-// plaintext address in the served marketing HTML into a
-// `/cdn-cgi/l/email-protection#<xor>` link. That path only resolves for the
-// JS-decoded click path — a bare Googlebot crawl gets a 404. The census at
-// implementation time found 30 such hrefs across the marketing pages
-// (privacy-policy alone accounted for 20).
+// The full rationale — the GSC "Not found (404)" report, the 30-href census,
+// why not robots.txt, why not zone-wide, and what the change trades away —
+// lives in the header of the artifact this guards:
+//   apps/web-platform/infra/seo-config-rules.tf
+// It is deliberately NOT restated here; a duplicated rationale drifts the
+// moment one copy is edited.
 //
-// The remedy is a Configuration Rule (`http_config_settings` phase) that turns
-// the feature OFF for the two marketing hosts, removing the hrefs at source.
+// What this file guards: the rule exists, is live, disables the feature, is
+// registered for auto-apply, and — the load-bearing part — is scoped to
+// EXACTLY the two marketing hosts.
 //
-// Why not `Disallow: /cdn-cgi/` in robots.txt: Google explicitly advises
-// against using robots.txt to block 404s, robots.txt cannot de-index, and the
-// 30 internal links supply the precondition for "Indexed, though blocked by
-// robots.txt" — the exact trap
-// `knowledge-base/project/learnings/2026-06-14-gsc-indexed-though-blocked-by-robots-is-a-real-misconfig-not-benign.md`
-// documents on this same zone.
-//
-// Why not zone-wide (`cloudflare_zone_settings_override`): the bounded host
-// scope is the property that keeps this off `app.` / `deploy.` / `api.`. That
-// scope is asserted explicitly below, in BOTH directions — it is the load-
-// bearing difference between this remedy and the rejected zone-wide one.
+// The scope assertion is exact-equality against a canonical expression rather
+// than a deny-list of forbidden hostnames. That is deliberate: a deny-list
+// constrains SPELLING, not SCOPE, and review demonstrated three separate
+// mutants that name no forbidden host yet widen the rule to every subdomain
+// in the zone (`or ends_with(http.host, ".soleur.ai")`,
+// `or (http.zone_name eq "soleur.ai")`, a tautological disjunct). Each of
+// those reintroduces the rejected zone-wide option through a guard whose
+// stated purpose is to prevent it. Exact equality is appropriate here because
+// the value is committed source text with zero measurement variance — there is
+// no flake surface, and an expression edit SHOULD require a deliberate test
+// update.
 //
 // Mirrors the sibling source-text-assertion precedent
 // `apps/web-platform/test/seo-rulesets-noindex.test.ts` (vitest + readFileSync
@@ -47,14 +46,21 @@ const WORKFLOW_PATH = path.join(
 const RESOURCE_NAME = "seo_config_settings";
 const RESOURCE_ADDRESS = `cloudflare_ruleset.${RESOURCE_NAME}`;
 
-/** The two marketing hosts the rule is scoped to. */
+/**
+ * The one expression the rule is permitted to carry, in DECODED form (HCL
+ * backslash escapes resolved). Changing the rule's scope is a deliberate,
+ * reviewed act — updating this constant alongside it is the feature, not
+ * friction.
+ */
+const CANONICAL_EXPRESSION = '(http.host in {"soleur.ai" "www.soleur.ai"})';
+
+/** Hosts the rule MUST cover. */
 const IN_SCOPE_HOSTS = ["soleur.ai", "www.soleur.ai"];
 
 /**
- * Hosts that MUST NOT be caught by the rule. `app.` is the login-gated product
- * host, `deploy.` the Cloudflare Access surface, `api.` the Supabase REST root
- * — none of them serve marketing copy, and widening the rule to cover them
- * would silently re-create the rejected zone-wide option.
+ * Hosts that MUST NOT be caught. `app.` is the login-gated product host,
+ * `deploy.` the Cloudflare Access surface, `api.` the Supabase REST root —
+ * none serve marketing copy.
  */
 const OUT_OF_SCOPE_HOSTS = [
   "app.soleur.ai",
@@ -63,16 +69,22 @@ const OUT_OF_SCOPE_HOSTS = [
 ];
 
 /**
- * Strip HCL line comments (`#` and `//`) while respecting double-quoted
- * strings, so an explanatory comment can freely name `app.soleur.ai` or
- * `robots.txt` without satisfying — or breaking — an assertion meant to bind
- * to real configuration.
+ * Strip HCL comments — `#` and `//` line comments AND `/* *\/` block comments —
+ * while respecting double-quoted strings.
  *
- * This is load-bearing: the negative blast-radius assertions below would
- * false-FAIL on the file's own rationale comment (which names every
- * out-of-scope host to explain why they are excluded) if comments survived.
- * Anchoring on syntax rather than bare tokens is the rule that keeps a
- * drift-guard honest — see AGENTS.md `cq-assert-anchor-not-bare-token`.
+ * Block-comment handling is load-bearing for the EXTRACTION helpers below, not
+ * for the assertions. `extractResourceBody` and `extractRuleBlocks` brace-count
+ * over raw text, so a commented-out `rules { }` block would otherwise be
+ * indistinguishable from a live one: review demonstrated a mutant that wraps
+ * the real rule in a block comment and adds a live wider rule beside it, which
+ * passed the whole suite because the extractor bound to the dead block. An
+ * unbalanced brace inside a block comment breaks brace-counting in the other
+ * direction, failing the suite for no reason.
+ *
+ * Note this is NOT what isolates the scope assertions from the .tf file's own
+ * rationale comment (which names every out-of-scope host to explain why they
+ * are excluded) — that isolation comes from `quotedAttr`, which reads the
+ * expression's quoted attribute value, somewhere a comment cannot appear.
  */
 function stripHclComments(src: string): string {
   let out = "";
@@ -97,11 +109,18 @@ function stripHclComments(src: string): string {
       out += ch;
       continue;
     }
-    const isHashComment = ch === "#";
-    const isSlashComment = ch === "/" && src[i + 1] === "/";
-    if (isHashComment || isSlashComment) {
-      // Skip to end of line, preserving the newline so line structure (and
-      // therefore any line-oriented assertion) is unchanged.
+    if (ch === "/" && src[i + 1] === "*") {
+      // Block comment: skip to the closing delimiter, preserving newlines so
+      // line structure is unchanged.
+      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) {
+        if (src[i] === "\n") out += "\n";
+        i++;
+      }
+      i++; // land on the '/' of the closer; loop's i++ steps past it
+      continue;
+    }
+    if (ch === "#" || (ch === "/" && src[i + 1] === "/")) {
       while (i < src.length && src[i] !== "\n") i++;
       out += "\n";
       continue;
@@ -113,10 +132,8 @@ function stripHclComments(src: string): string {
 
 /**
  * Extract the body of a `resource "cloudflare_ruleset" "<name>" { ... }` block
- * by brace-counting from the resource declaration. Returns the substring
- * between the opening `{` and its matching `}` (exclusive). Throws if the
- * resource is absent so a deleted-resource regression fails loudly rather than
- * silently passing on an empty string.
+ * by brace-counting. Throws if absent so a deleted-resource regression fails
+ * loudly rather than passing on an empty string.
  */
 function extractResourceBody(src: string, name: string): string {
   const marker = `resource "cloudflare_ruleset" "${name}"`;
@@ -143,7 +160,7 @@ function extractResourceBody(src: string, name: string): string {
 }
 
 /**
- * Return every `rules { ... }` block body within a resource body, brace-counted
+ * Return EVERY `rules { ... }` block body within a resource body, brace-counted
  * so nested `action_parameters { ... }` is captured in full. Anchors on
  * `rules\s*\{` (the block opener) rather than the bare word "rules", which also
  * appears in `provider = cloudflare.rulesets`.
@@ -175,10 +192,9 @@ function extractRuleBlocks(resourceBody: string): string[] {
 }
 
 /**
- * Read a quoted attribute value (`name = "..."`) out of a block, decoding
- * HCL's backslash escapes so a Cloudflare filter expression such as
- * `"(http.host in {\"soleur.ai\"})"` is compared in its logical form
- * `(http.host in {"soleur.ai"})` rather than its escaped source form.
+ * Read a quoted attribute value (`name = "..."`), decoding HCL's backslash
+ * escapes so a Cloudflare filter expression such as
+ * `"(http.host in {\"soleur.ai\"})"` is compared in its logical form.
  */
 function quotedAttr(block: string, name: string): string | null {
   const re = new RegExp(`\\b${name}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`);
@@ -187,27 +203,16 @@ function quotedAttr(block: string, name: string): string | null {
   return m[1].replace(/\\(.)/g, "$1");
 }
 
-/** The single rule that turns Email Obfuscation off. */
-function extractSetConfigRule(): string {
+/** Every rules block in the ruleset, comment-stripped. */
+function allRuleBlocks(): string[] {
   const tf = stripHclComments(readFileSync(TF_PATH, "utf-8"));
-  const body = extractResourceBody(tf, RESOURCE_NAME);
-  const rules = extractRuleBlocks(body);
-  // Minimum-cardinality guard: a resource that parsed but yielded zero rules
-  // would make every downstream `.find()` assertion vacuous.
-  expect(rules.length, "expected at least one rules block").toBeGreaterThan(0);
-  const rule = rules.find((r) => /action\s*=\s*"set_config"/.test(r));
-  if (!rule) {
-    throw new Error(
-      `no rules block with action = "set_config" found in ${RESOURCE_NAME}`,
-    );
-  }
-  return rule;
+  return extractRuleBlocks(extractResourceBody(tf, RESOURCE_NAME));
 }
 
 describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () => {
   test("seo-config-rules.tf exists and declares the seo_config_settings ruleset", () => {
     expect(existsSync(TF_PATH), `missing ${TF_PATH}`).toBe(true);
-    const tf = readFileSync(TF_PATH, "utf-8");
+    const tf = stripHclComments(readFileSync(TF_PATH, "utf-8"));
     expect(tf).toContain(`resource "cloudflare_ruleset" "${RESOURCE_NAME}"`);
   });
 
@@ -221,59 +226,70 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
     expect(body).toMatch(/kind\s*=\s*"zone"/);
   });
 
-  // The rule must actually turn the feature OFF and be live. `email_obfuscation
-  // = true` (or a disabled rule) would leave the 404-producing hrefs in place
-  // while the file still looked correct.
-  test("set_config rule disables email obfuscation and is enabled", () => {
-    const rule = extractSetConfigRule();
+  // Cardinality is load-bearing. Cloudflare evaluates EVERY rule in a ruleset,
+  // so a second rule has full production effect; a guard that inspects only the
+  // first `set_config` block would never see it. Pinning the count forces any
+  // future rule to arrive with a deliberate test update.
+  test("ruleset declares exactly one rule", () => {
+    expect(allRuleBlocks()).toHaveLength(1);
+  });
+
+  test("the rule disables email obfuscation via set_config and is enabled", () => {
+    const [rule] = allRuleBlocks();
+    expect(rule).toMatch(/action\s*=\s*"set_config"/);
     expect(rule).toMatch(/email_obfuscation\s*=\s*false/);
     expect(rule).toMatch(/enabled\s*=\s*true/);
   });
 
-  // Blast radius, positive direction: both marketing hosts must be covered.
-  // Asserted on the QUOTED host literal so `"soleur.ai"` is not satisfied by
-  // the `soleur.ai` tail of `"www.soleur.ai"`.
-  test("rule expression covers both marketing hosts", () => {
-    const rule = extractSetConfigRule();
-    const expression = quotedAttr(rule, "expression");
-    expect(expression, "set_config rule has no expression").not.toBeNull();
-    for (const host of IN_SCOPE_HOSTS) {
-      expect(
-        expression,
-        `expression must cover in-scope host ${host}`,
-      ).toContain(`"${host}"`);
-    }
+  // The load-bearing scope assertion. Exact equality, not a forbidden-host
+  // deny-list — see the header comment for the mutants that motivated it.
+  test("rule expression is exactly the canonical two-host scope", () => {
+    const [rule] = allRuleBlocks();
+    expect(quotedAttr(rule, "expression")).toBe(CANONICAL_EXPRESSION);
   });
 
-  // Blast radius, negative direction — the load-bearing one. This is what
-  // distinguishes the host-scoped remedy from the rejected zone-wide
-  // `cloudflare_zone_settings_override`. Asserted against the decoded
-  // expression only, so the file's rationale comment may name these hosts.
-  test("rule expression does not reach non-marketing hosts", () => {
-    const rule = extractSetConfigRule();
-    const expression = quotedAttr(rule, "expression");
-    expect(expression, "set_config rule has no expression").not.toBeNull();
-    for (const host of OUT_OF_SCOPE_HOSTS) {
-      expect(
-        expression,
-        `expression must NOT reach out-of-scope host ${host}`,
-      ).not.toContain(host);
+  // Secondary assertions: strictly weaker than the exact-equality test above,
+  // kept because they produce a far more legible failure message naming the
+  // specific host that was gained or lost.
+  test("rule expression covers both marketing hosts and no others", () => {
+    for (const rule of allRuleBlocks()) {
+      const expression = quotedAttr(rule, "expression");
+      expect(expression, "rule has no expression").not.toBeNull();
+      for (const host of IN_SCOPE_HOSTS) {
+        expect(
+          expression,
+          `expression must cover in-scope host ${host}`,
+        ).toContain(`"${host}"`);
+      }
+      for (const host of OUT_OF_SCOPE_HOSTS) {
+        expect(
+          expression,
+          `expression must NOT reach out-of-scope host ${host}`,
+        ).not.toContain(host);
+      }
     }
   });
 
   // A resource absent from the auto-apply allow-list is committed but never
-  // applied — the silent-no-op class that tracker #3379 already documents for
-  // a sibling rule on this same zone.
+  // applied — the silent-no-op class that tracker #3379 documents for a sibling
+  // rule on this same zone.
   test("resource is present in the apply workflow -target allow-list", () => {
     expect(existsSync(WORKFLOW_PATH), `missing ${WORKFLOW_PATH}`).toBe(true);
     const workflow = readFileSync(WORKFLOW_PATH, "utf-8");
+    // Drop YAML-commented lines before scanning: a `#`-commented -target entry
+    // is inert, and the workflow carries a long header comment block that is
+    // in scope for a naive whole-file substring scan.
+    const liveLines = workflow
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n");
     // Trailing boundary forbids a longer resource name (e.g.
     // `..._settings_v2`) from satisfying the assertion.
     const targetRe = new RegExp(
       `-target=${RESOURCE_ADDRESS.replace(/\./g, "\\.")}(?![\\w.])`,
     );
     expect(
-      workflow,
+      liveLines,
       `${RESOURCE_ADDRESS} must appear in the -target allow-list`,
     ).toMatch(targetRe);
   });

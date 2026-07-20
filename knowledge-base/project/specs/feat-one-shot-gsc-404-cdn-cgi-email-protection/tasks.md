@@ -120,9 +120,18 @@ merge-triggered apply rather than just this resource.
       `os error 2`, then a 100s timeout). Classified `attempted-blocked-on-tool`, **not**
       operator-only. Tracked with full attempt evidence + resume recipe in **#6755**.
 - [ ] 2.9.3 Run the mandatory retained-scope probe set (4 probes: config_settings,
-      dynamic_redirect, cache_settings, account rulesets). All must be 200; a 404 on an
-      entrypoint is a pass, only 403 is a failure. Widening mutates a live credential four
+      dynamic_redirect, cache_settings, account rulesets) — see ADR-128 for the exact
+      commands. All must be non-403; a 404 on an entrypoint is a PASS (phase exists, no
+      ruleset yet), only 403 is a failure. Widening mutates a live credential four
       production concerns depend on — this converts that risk into a pre-merge gate.
+- [ ] 2.9.3b **Entrypoint-enumeration probe** (added at review — the one unverified
+      destructive edge). A `kind = "zone"` ruleset OWNS its phase entrypoint, which is a
+      whole-list replacement, and `terraform plan` reports "1 to add" only because the
+      resource is absent from STATE — it cannot see rules created via the Cloudflare
+      dashboard. Before the first apply, `GET /zones/<zone>/rulesets/phases/
+      http_config_settings/entrypoint` with the widened token and confirm 404 or an empty
+      `result.rules` array. If it returns existing rules, STOP: applying would silently
+      delete them. (This probe needs the widened token, so it rides on 2.9.3.)
 - [ ] 2.9.4 Paste the four status codes into the PR body, then mark ready.
 
 **Do not mark PR #6746 ready until 2.9.2–2.9.4 are green.**
