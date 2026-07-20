@@ -502,12 +502,24 @@ mk_repo() {
 
 # corrupt_loose — truncate a loose object into garbage. Measured: yields `error:` on stderr +
 # `missing blob` on stdout at rc 3 (NOT rc 1 — the exit code is a bitmask).
+# corrupt_loose <repo> <kind>  — kind = commit | blob. NEVER pick "whatever find returns first":
+# MEASURED (git 2.53.0) the shapes differ materially and select DIFFERENT classifier branches —
+#   commit/tree -> rc 128 + `fatal: loose object <sha> … is corrupt`  (matches _FSCK_CONTENT_FATAL_RE)
+#   blob        -> rc 3   + `missing blob <sha>` on STDOUT, ZERO fatal lines
+# `find | head -n1` picked by readdir order, which on ext4 is a per-filesystem hash of the object
+# name, so the branch under test was a coin flip per run and nothing asserted which one ran.
 corrupt_loose() {
-  local repo="$1" f
-  f="$(find "$repo/.git/objects" -type f -regex '.*/[0-9a-f][0-9a-f]/.*' 2>/dev/null | head -n 1)"
+  local repo="$1" kind="${2:-commit}" sha f
+  case "$kind" in
+    commit) sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null)" ;;
+    blob)   sha="$(git -C "$repo" rev-parse HEAD:f.txt 2>/dev/null)" ;;
+    *)      echo "FIXTURE ERROR: unknown kind '$kind'" >&2; return 1 ;;
+  esac
+  [ -n "$sha" ] || { echo "FIXTURE ERROR: could not resolve $kind sha in $repo" >&2; return 1; }
+  f="$repo/.git/objects/${sha:0:2}/${sha:2}"
   # Fail LOUD rather than returning a repo that was never corrupted: a silently-uncorrupted fixture
   # makes L6b/L6d/L6h pass vacuously (they would assert "no dst-only line" against no fault at all).
-  [ -n "$f" ] || { echo "FIXTURE ERROR: no loose object found under $repo" >&2; return 1; }
+  [ -f "$f" ] || { echo "FIXTURE ERROR: $kind object not loose at $f" >&2; return 1; }
   # git writes loose objects 0444. Root can clobber them regardless (CAP_DAC_OVERRIDE), but the
   # chmod keeps the fixture honest if this ever runs non-root.
   chmod u+w "$f" 2>/dev/null || true
@@ -564,12 +576,19 @@ rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
 L6A_OUT="$TMPROOT/l6a.out"; L6A_MARKER="$TMPROOT/l6a.marker"
 run_gate "$L6A_OUT" "$L6A_MARKER" "$D_SRC" "$D_DST"
 L6A_RC=$?
-if [ "$L6A_RC" -eq 0 ] \
-  && grep -qE -- 'classification=ok .*src_rc=0' "$L6A_MARKER" \
-  && grep -qE -- 'reason=worktree_pointer|skipped_worktree=1' "$L6A_MARKER" \
-  && grep -qE -- 'skipped_worktree=1' "$L6A_MARKER" \
-  && grep -qE -- 'phase=gate' "$L6A_MARKER"; then
-  ok "L6a: clean uid-1001 repos both sides pass (rc=0); non-repo and linked worktree are skipped and DISTINGUISHED on the summary row"
+if [ ! -f "$D_SRC/workspaces/linked-wt/.git" ]; then
+  no "L6a FIXTURE ERROR: git worktree add did not produce a .git FILE — the worktree_pointer branch is not being exercised; treat as un-run, not as evidence"
+elif [ "$L6A_RC" -eq 0 ] \
+  && grep -qE -- 'classification=ok .*ws=aaaaaaaa-0000-0000-0000-000000000001$' "$L6A_MARKER" \
+  && grep -qE -- 'classification=ok .*ws=ws with space$' "$L6A_MARKER" \
+  && grep -qE -- 'classification=skipped reason=worktree_pointer .*ws=linked-wt$' "$L6A_MARKER" \
+  && grep -qE -- 'classification=skipped reason=no_git_dir .*ws=not-a-repo$' "$L6A_MARKER" \
+  && grep -qE -- 'skipped_worktree=1 ' "$L6A_MARKER" \
+  && grep -qE -- 'skipped_no_git_dir=1 ' "$L6A_MARKER" \
+  && grep -qE -- 'skipped_alternates=0 ' "$L6A_MARKER" \
+  && grep -qE -- 'phase=gate' "$L6A_MARKER" \
+  && grep -qE -- 'SOLEUR_WORKSPACES_LUKS_FSCK .*phase=gate .*total=' "$L6A_OUT"; then
+  ok "L6a: clean uid-1001 repos pass (rc=0) with a spaced ws= captured whole; the worktree pointer and the non-repo are each skipped with an ATTRIBUTABLE ws= and distinct reason=; markers reach STDOUT as well as the logger"
 else
   no "L6a: clean-path gate did not behave (rc=$L6A_RC)"
   note "marker: $(head -n 4 "$L6A_MARKER" 2>/dev/null)"
@@ -581,15 +600,18 @@ rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
 mkdir -p "$D_SRC/workspaces"
 mk_repo "$D_SRC/workspaces/bbbbbbbb-0000-0000-0000-000000000002"
 rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
-corrupt_loose "$D_DST/workspaces/bbbbbbbb-0000-0000-0000-000000000002"
+corrupt_loose "$D_DST/workspaces/bbbbbbbb-0000-0000-0000-000000000002" blob
 L6B_OUT="$TMPROOT/l6b.out"; L6B_MARKER="$TMPROOT/l6b.marker"
 run_gate "$L6B_OUT" "$L6B_MARKER" "$D_SRC" "$D_DST"
 L6B_RC=$?
+# Line-ANCHORED: `classification=` and `ws=` asserted on the SAME row. Independent whole-file greps
+# would pass against a SUT that attached the classification to the wrong workspace.
 if [ "$L6B_RC" -ne 0 ] \
-  && grep -qE -- 'classification=copy_corruption' "$L6B_MARKER" \
-  && grep -qE -- 'first=[^ ]' "$L6B_MARKER" \
-  && grep -qE -- 'regressed on 1 workspace' "$L6B_OUT"; then
-  ok "L6b: an object corrupted ONLY on the LUKS copy still ABORTS, classification=copy_corruption, with the real fsck line in first="
+  && grep -qE -- 'classification=copy_corruption .*ws=bbbbbbbb-0000-0000-0000-000000000002$' "$L6B_MARKER" \
+  && grep -qE -- 'classification=copy_corruption .*first=[^ ]' "$L6B_MARKER" \
+  && grep -qE -- 'regressed on 1 workspace' "$L6B_OUT" \
+  && grep -qE -- 'SOLEUR_WORKSPACES_LUKS_FSCK .*classification=copy_corruption' "$L6B_OUT"; then
+  ok "L6b: a blob corrupted ONLY on the LUKS copy still ABORTS as copy_corruption on that exact ws=, with the real fsck line in first=, and the marker reaches STDOUT (not just the logger)"
 else
   no "L6b: copy corruption did NOT abort (rc=$L6B_RC) — the differential has weakened the gate"
   note "marker: $(grep -m2 SOLEUR "$L6B_MARKER" 2>/dev/null)"
@@ -600,13 +622,21 @@ fi
 rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
 mkdir -p "$D_SRC/workspaces"
 mk_repo "$D_SRC/workspaces/cccccccc-0000-0000-0000-000000000003"
-corrupt_loose "$D_SRC/workspaces/cccccccc-0000-0000-0000-000000000003"
+corrupt_loose "$D_SRC/workspaces/cccccccc-0000-0000-0000-000000000003" blob
+mk_repo "$D_SRC/workspaces/cccccccc-0000-0000-0000-000000000013"
+# A CONTENT fatal (corrupt commit -> rc 128 + `fatal: loose object … is corrupt`) on BOTH sides.
+# This is the case the setup-vs-content taxonomy exists for: keying probe_failed on rc 128 or on any
+# `fatal:` would abort here, reintroducing the exact false positive this change removes.
+corrupt_loose "$D_SRC/workspaces/cccccccc-0000-0000-0000-000000000013" commit
 rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
 L6C_OUT="$TMPROOT/l6c.out"; L6C_MARKER="$TMPROOT/l6c.marker"
 run_gate "$L6C_OUT" "$L6C_MARKER" "$D_SRC" "$D_DST"
 L6C_RC=$?
-if [ "$L6C_RC" -eq 0 ] && grep -qE -- 'classification=preexisting' "$L6C_MARKER"; then
-  ok "L6c: an identical fault on BOTH sides classifies preexisting and does NOT abort (rc=0)"
+if [ "$L6C_RC" -eq 0 ] \
+  && grep -qE -- 'classification=preexisting .*ws=cccccccc-0000-0000-0000-000000000003$' "$L6C_MARKER" \
+  && grep -qE -- 'classification=preexisting .*ws=cccccccc-0000-0000-0000-000000000013$' "$L6C_MARKER" \
+  && ! grep -qE -- 'classification=(copy_corruption|probe_failed|unclassified)' "$L6C_MARKER"; then
+  ok "L6c: identical faults on BOTH sides classify preexisting and do NOT abort (rc=0) — for a blob fault (rc 3, no fatal) AND a commit fault (rc 128 WITH a content fatal), pinning the setup-vs-content taxonomy"
 else
   no "L6c: a pre-existing both-sides fault still aborted (rc=$L6C_RC) — the false positive is not fixed"
   note "marker: $(grep -m2 SOLEUR "$L6C_MARKER" 2>/dev/null)"

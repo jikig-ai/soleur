@@ -1362,7 +1362,11 @@ FSCK_OUT_CAP="${WORKSPACES_FSCK_OUT_CAP:-256}"
 _FSCK_SETUP_FATAL_RE='^fatal: (detected dubious ownership|bad config|not a git repository|cannot chdir|unable to access|could not open|unable to read config)'
 # _FSCK_CONTENT_FATAL_RE — a genuine FINDING about the objects. Goes through the differential like
 # any other error line, so the same finding on both sides is `preexisting`, not an abort.
-_FSCK_CONTENT_FATAL_RE='^fatal: (loose object .* is corrupt|bad object |missing blob |empty object )'
+# MEASURED, so the list stays honest: `missing blob` is emitted on STDOUT with no `fatal: ` prefix
+# (rc 2/3) and an empty object yields `error: object file … is empty` — neither can ever carry a
+# `fatal: ` prefix, so listing them here would be dead regex implying coverage that does not exist.
+# Only the two shapes git actually emits as fatals are listed.
+_FSCK_CONTENT_FATAL_RE='^fatal: (loose object .* is corrupt|bad object )'
 
 # emit_fsck_row — one marker line to the run log (echo, column 0) AND Better Stack (logger -t
 # luks-monitor, already allowlisted in vector.toml). Mirrors emit_verify_diff. `ws=` is LAST so a
@@ -1400,12 +1404,45 @@ _fsck_one() {
       >"$raw_out" 2>"$raw_err"
   rc=$?
   printf '%s' "$rc" > "$rc_file"
+  # POSITIVE EVIDENCE THAT WORK HAPPENED. Without this, `ok` (rc 0 + empty sets on both sides) is
+  # byte-identical to "the probe inspected zero objects" — the structural form of the very trap this
+  # gate exists to avoid, since nothing else asserts the walk occurred. `count-objects -v` is cheap
+  # (reads pack indexes, does not walk the graph) and its sum is compared dst-vs-src below.
+  { git --no-optional-locks -c safe.directory="$repo" -C "$repo" count-objects -v 2>/dev/null \
+      | awk '/^count:|^in-pack:/ { s += $2 } END { print s + 0 }'; } > "${rc_file%.rc}.objs" 2>/dev/null \
+      || printf '0' > "${rc_file%.rc}.objs"
   # Bound what lands on disk (the root disk is the one the stray-copy incident filled). Truncate
   # AFTER the write — `git … | head -c N` under `set -o pipefail` yields rc 141, a SIGPIPE that would
   # land in `unclassified` and abort a healthy run.
-  truncate -s "<$((FSCK_OUT_CAP * 400))" "$raw_out" 2>/dev/null || true
-  truncate -s "<$((FSCK_OUT_CAP * 400))" "$raw_err" 2>/dev/null || true
+  #
+  # FAIL CLOSED WHEN THE CEILING IS HIT. The comparison reads THESE files, so a silently-truncated
+  # capture would make the differential compare partial sets — and the truncation is asymmetric in
+  # the UNSAFE direction: pre-normalization dst lines carry `/mnt/data-luks/` (5 bytes longer per
+  # occurrence) than src's `/mnt/data/`, so dst loses its tail FIRST, preferentially discarding
+  # dst-only lines → `dst ⊆ src` → `preexisting` → rc 0 → Phase 5 wipes the plaintext original.
+  # That is the one outcome this gate exists to prevent, and it is reachable exactly in the
+  # wide-corruption case (a lost rsync extent emits thousands of `missing blob` lines). So a capture
+  # that hit the ceiling is recorded and classified `unclassified` → ABORT, never compared partially.
+  local cap_bytes=$((FSCK_OUT_CAP * 400)) out_b err_b
+  out_b="$(stat -c%s "$raw_out" 2>/dev/null || echo 0)"
+  err_b="$(stat -c%s "$raw_err" 2>/dev/null || echo 0)"
+  if [ "${out_b:-0}" -gt "$cap_bytes" ] || [ "${err_b:-0}" -gt "$cap_bytes" ]; then
+    printf '%s' "$((out_b + err_b))" > "${rc_file%.rc}.capped"
+  fi
+  truncate -s "<$cap_bytes" "$raw_out" 2>/dev/null || true
+  truncate -s "<$cap_bytes" "$raw_err" 2>/dev/null || true
   return 0
+}
+
+# _fsck_scrub_first — extra scrub for the off-box `first=` field, on top of _vscrub.
+# MEASURED: `git fsck` names user-authored REF PATHS with NO `--name-objects` —
+#   error: refs/heads/feature/acme-corp-payroll: badRefOid: points to invalid object ID '000…'
+# Branch names routinely carry client names, ticket titles and project codenames, and this field
+# ships to Better Stack via `logger -t luks-monitor`. The plan's leak analysis assumed fsck output is
+# object-id-shaped unless --name-objects is passed; that premise is wrong for refs. Keep the
+# diagnostic token and any object id, redact the ref path.
+_fsck_scrub_first() {
+  printf '%s' "${1:-}" | sed -E 's#refs/[^ :]*#refs/<redacted>#g'
 }
 
 # _fsck_normalize — collapse one side's report into a comparable, order-immune line SET.
@@ -1417,8 +1454,17 @@ _fsck_normalize() {
   # LC_ALL=C on BOTH the sort here and the comm that consumes it: a locale collation order makes
   # comm read its input as unsorted and its diff becomes undefined — the differential would then run
   # blind, which is the one failure mode this gate cannot afford.
+  # Prefixes are DERIVED from $MOUNT/$STAGING, never hardcoded to /mnt/data*: both are env-overridable
+  # (WORKSPACES_MOUNT / WORKSPACES_STAGING), so hardcoding made substitutions 2 and 3 unconditional
+  # no-ops under the loopback harness — i.e. the <WS>/ mapping shipped to production untested, and
+  # would have silently stopped applying if the mount were ever relocated.
+  # BOTH roots map to the SAME <WS>/ token, and the bare `s|${root}/||g` is deliberately GONE.
+  # Applying the side's own root first made the <WS>/ rules root-DEPENDENT: a dst line carrying the
+  # source path normalized to `<WS>/ws1/x` while the identical logical line on src normalized to
+  # `workspaces/ws1/x` — a spurious dst-only line → `copy_corruption` abort inside the freeze. The
+  # symmetric form cannot produce that asymmetry in either direction.
   cat "$raw_out" "$raw_err" 2>/dev/null \
-    | sed "s|${root}/||g; s|/mnt/data-luks/workspaces/|<WS>/|g; s|/mnt/data/workspaces/|<WS>/|g" \
+    | sed "s|${STAGING}/workspaces/|<WS>/|g; s|${MOUNT}/workspaces/|<WS>/|g; s|${root}/workspaces/|<WS>/|g" \
     | grep -vE '^(dangling|unreachable) ' \
     | LC_ALL=C sort -u > "$dest"
 }
@@ -1434,25 +1480,47 @@ _fsck_normalize() {
 # FSCK_MARKER_CAP budget to say "not a probeable repo"). A non-zero count is a genuine coverage hole
 # in the gate — made visible rather than silent.
 _fsck_probeable() {
-  local repo="$1" root="$2" alt
+  local repo="$1" root="$2" other="${3:-}" alt line
   if [ -f "$repo/.git" ]; then printf 'worktree_pointer'; return 0; fi
   if [ ! -d "$repo/.git" ]; then printf 'no_git_dir'; return 0; fi
   alt="$repo/.git/objects/info/alternates"
-  if [ -f "$alt" ] && grep -qE "^/" "$alt" 2>/dev/null && ! grep -qE "^${root}/" "$alt" 2>/dev/null; then
-    printf 'alternates_escape'; return 0
-  fi
+  [ -f "$alt" ] || { printf ''; return 0; }
+  # BOTH roots are acceptable, and that is load-bearing: rsync copies `alternates` VERBATIM, so a
+  # file that legitimately points inside $MOUNT (the normal `git clone --shared/--reference` form)
+  # still holds the SOURCE path after being copied to $STAGING. Testing containment against only the
+  # side's own root made the same file "probeable" on src and "alternates_escape" on dst — and since
+  # the skip was keyed off the SRC decision, dst wrote no .rc, dst_rc fell back to 127 with an empty
+  # set, and the classifier's rc!=0-with-empty-output row fired: `unclassified` → ABORT mid-freeze,
+  # with a die message ("non-zero rc with no error output") that names nothing resembling the cause.
+  # That is hypothesis H2's exact shape, which the plan specifies as a COUNTED coverage hole, never
+  # an abort. Two review agents converged on it independently.
+  #
+  # Per LINE, not per file: two whole-file greps let a file with one in-root line and one escaping
+  # line pass, silently following the escaping alternate. `case` globs, not an ERE — $MOUNT/$STAGING
+  # are operator-overridable and would otherwise be interpolated unescaped into a regex.
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      /*)
+        case "$line" in
+          "$root"/*) : ;;
+          "$other"/*) [ -n "$other" ] || { printf 'alternates_escape'; return 0; } ;;
+          *) printf 'alternates_escape'; return 0 ;;
+        esac ;;
+    esac
+  done < "$alt"
   printf ''
 }
 
 # _fsck_side — probe every workspace under one root into $out_dir/<basename>.{rc,out,err}.
 # NEVER calls die (see the _fsck_one invariant). $1=root $2=out_dir
 _fsck_side() {
-  local root="$1" out_dir="$2" ws base skip
+  local root="$1" out_dir="$2" other="${3:-}" ws base skip
   for ws in "$root"/workspaces/*/; do
     [ -d "$ws" ] || continue
     ws="${ws%/}"
     base="$(basename "$ws")"
-    skip="$(_fsck_probeable "$ws" "$root")"
+    skip="$(_fsck_probeable "$ws" "$root" "$other")"
     if [ -n "$skip" ]; then printf '%s' "$skip" > "$out_dir/$base.skip"; continue; fi
     _fsck_one "$ws" "$out_dir/$base.rc" "$out_dir/$base.out" "$out_dir/$base.err"
   done
@@ -1499,6 +1567,17 @@ _fsck_classify() {
   if grep -qE '^fatal: ' "$src_set" 2>/dev/null && ! grep -qE "$_FSCK_CONTENT_FATAL_RE" "$src_set" 2>/dev/null; then
     printf 'unclassified|src:%s' "$(grep -m1 -E '^fatal: ' "$src_set")"; return 0
   fi
+  # (2c) A SIGNAL-killed probe, regardless of what it managed to emit. Row (3) below catches only the
+  # EMPTY-output variant, but an OOM-kill mid-walk (rc 137) that already emitted a SUBSET of src's
+  # lines yields dst ⊆ src → `preexisting` → no abort, on a copy that was maybe 40% inspected.
+  # Measured: git fsck returns 0/1/2/3/128 and a content fatal is exactly 128, so `> 128` cleanly
+  # isolates signal deaths (128+N) without swallowing any real fsck verdict.
+  if [ "$src_rc" -gt 128 ] 2>/dev/null; then
+    printf 'unclassified|src probe killed by signal (rc=%s) — partial walk' "$src_rc"; return 0
+  fi
+  if [ "$dst_rc" -gt 128 ] 2>/dev/null; then
+    printf 'unclassified|dst probe killed by signal (rc=%s) — partial walk' "$dst_rc"; return 0
+  fi
   # (3) A non-zero rc with an EMPTY set is a probe anomaly (OOM-kill, SIGKILL, SIGPIPE), not a pass.
   if { [ "$src_rc" != "0" ] && [ ! -s "$src_set" ]; }; then
     printf 'unclassified|rc=%s with empty output on src' "$src_rc"; return 0
@@ -1536,21 +1615,34 @@ _fsck_classify() {
 # exists to remove. (Observed during implementation, not theorised.)
 _fsck_emit_and_verdict() {
   local phase="$1" work="$2" src_root="$3" dst_root="$4" verdict_file="$5"
-  local ws base skip src_rc dst_rc verdict cls first k=0 total=0 truncated=0 more=0
+  local ws base skip src_rc dst_rc verdict cls first reason src_objs dst_objs k=0 total=0 truncated=0 more=0
   local n_ok=0 n_pre=0 n_srconly=0 n_corrupt=0 n_probefail=0 n_unclass=0
-  local n_skip=0 n_skip_wt=0 n_skip_alt=0 n_src_missing=0 summary row abort_cls=""
-  local rows_file="$work/rows"; : > "$rows_file"
+  local n_skip=0 n_skip_wt=0 n_skip_alt=0 n_skip_nogit=0 n_src_missing=0 summary row abort_cls=""
+  local _prio rows_file="$work/rows"; : > "$rows_file"
   for ws in "$src_root"/workspaces/*/; do
     [ -d "$ws" ] || continue
     base="$(basename "${ws%/}")"
-    if [ -f "$work/src/$base.skip" ]; then
-      skip="$(cat "$work/src/$base.skip")"
+    # Consult BOTH sides' skip decisions. Keying only on src let a dst-side skip fall through to the
+    # classifier with no dst .rc written → dst_rc=127 + empty set → `unclassified` → ABORT.
+    skip=""
+    [ -f "$work/src/$base.skip" ] && skip="$(cat "$work/src/$base.skip")"
+    [ -z "$skip" ] && [ -n "$dst_root" ] && [ -f "$work/dst/$base.skip" ] && skip="$(cat "$work/dst/$base.skip")"
+    if [ -n "$skip" ]; then
       n_skip=$((n_skip + 1))
-      [ "$skip" = "worktree_pointer" ] && n_skip_wt=$((n_skip_wt + 1))
-      [ "$skip" = "alternates_escape" ] && n_skip_alt=$((n_skip_alt + 1))
+      case "$skip" in
+        worktree_pointer)   n_skip_wt=$((n_skip_wt + 1)) ;;
+        alternates_escape)  n_skip_alt=$((n_skip_alt + 1)) ;;
+        *)                  n_skip_nogit=$((n_skip_nogit + 1)) ;;
+      esac
+      # Skips DO get a row (prio 2 — after aborting rows, before clean ones) so a coverage hole is
+      # ATTRIBUTABLE to a workspace id. Counters alone tell an operator that 3 workspaces were
+      # un-probeable but never WHICH, and there is no shell on this host to ask
+      # (hr-no-ssh-fallback-in-runbooks).
+      printf '2\t%s\t%s\t%s\t%s\t%s\t%s\n' skipped "$skip" - - - "$(_vscrub "$base")" >> "$rows_file"
       continue
     fi
     total=$((total + 1))
+    reason=-
     src_rc="$(cat "$work/src/$base.rc" 2>/dev/null || echo 127)"
     _fsck_normalize "$work/src/$base.out" "$work/src/$base.err" "$src_root" "$work/src/$base.set"
     if [ -n "$dst_root" ]; then
@@ -1558,19 +1650,45 @@ _fsck_emit_and_verdict() {
       # after this gate) — but an absent DST here means this gate verified nothing for it, which is
       # not a state it may report as clean.
       if [ ! -d "$dst_root/workspaces/$base" ]; then
-        n_src_missing=$((n_src_missing + 1)); cls=probe_failed; first="src_absent"; dst_rc=127
+        n_src_missing=$((n_src_missing + 1)); cls=probe_failed; first="dst_absent"; reason=dst_absent; dst_rc=127
+      elif [ -f "$work/src/$base.capped" ] || [ -f "$work/dst/$base.capped" ]; then
+        # A capture that hit the disk ceiling was truncated at a byte offset, so the sets are
+        # PARTIAL and comparing them would silently drop dst-only lines (dst paths are longer, so
+        # dst loses its tail first). Fail closed rather than compare a partial set.
+        cls=unclassified; reason=capture_capped; dst_rc="$(cat "$work/dst/$base.rc" 2>/dev/null || echo 127)"
+        first="fsck output exceeded the capture ceiling; comparison would be partial"
       else
         dst_rc="$(cat "$work/dst/$base.rc" 2>/dev/null || echo 127)"
         _fsck_normalize "$work/dst/$base.out" "$work/dst/$base.err" "$dst_root" "$work/dst/$base.set"
         verdict="$(_fsck_classify "$src_rc" "$dst_rc" "$work/src/$base.set" "$work/dst/$base.set")"
         cls="${verdict%%|*}"; first="${verdict#*|}"
+        # OBJECT-COUNT FLOOR. A non-aborting verdict must also be backed by evidence that the copy
+        # actually holds the objects. `ok` on its own cannot distinguish "walked N objects, found
+        # nothing wrong" from "walked zero objects" — and a dst that holds FEWER objects than src is
+        # loss the error-line differential cannot see, because a silently-absent object emits no
+        # error line on either side.
+        case "$cls" in
+          ok|preexisting|src_only)
+            src_objs="$(cat "$work/src/$base.objs" 2>/dev/null || echo 0)"
+            dst_objs="$(cat "$work/dst/$base.objs" 2>/dev/null || echo 0)"
+            if [ "${dst_objs:-0}" -lt "${src_objs:-0}" ] 2>/dev/null; then
+              cls=copy_corruption; reason=object_count_regression
+              first="dst holds ${dst_objs} object(s) vs src ${src_objs} — objects lost in transit"
+            elif [ "${src_objs:-0}" -eq 0 ] && [ "${dst_objs:-0}" -eq 0 ]; then
+              cls=unclassified; reason=zero_objects_inspected
+              first="both sides report 0 objects — the probe inspected nothing; 'clean' is unproven"
+            fi ;;
+        esac
       fi
     else
       # Advisory (source-only): there is nothing to differ against, so only the probe's ABILITY to
       # inspect is under test. This is EVIDENCE, never the gate's comparand.
+      # Uses the SAME setup-vs-content fatal taxonomy as the gate: keying on `rc == 128` or on any
+      # `fatal:` would report genuine SOURCE corruption as "nothing was verified", pointing the
+      # operator at ownership/config and away from live damage to user data on the plaintext volume.
       dst_rc="-"
-      if [ "$src_rc" = "128" ] || grep -qE '^fatal: ' "$work/src/$base.set" 2>/dev/null; then
-        cls=probe_failed; first="src:$(grep -m1 -E '^fatal: ' "$work/src/$base.set" 2>/dev/null)"
+      if grep -qE "$_FSCK_SETUP_FATAL_RE" "$work/src/$base.set" 2>/dev/null; then
+        cls=probe_failed; first="src:$(grep -m1 -E "$_FSCK_SETUP_FATAL_RE" "$work/src/$base.set")"
       elif [ -s "$work/src/$base.set" ]; then
         cls=preexisting; first="$(head -n 1 "$work/src/$base.set")"
       else
@@ -1588,29 +1706,39 @@ _fsck_emit_and_verdict() {
     # Aborting rows are written FIRST so the emission cap can never truncate away the row that
     # EXPLAINS the abort. The cap bounds EMISSION only — the comparison above always consumed the
     # full capture, so a dst-only line beyond the cap still aborts.
-    case "$cls" in
-      copy_corruption|probe_failed|unclassified)
-        printf '0\t%s\t%s\t%s\t%s\t%s\n' "$cls" "$src_rc" "$dst_rc" "$(_vscrub "${first:0:$FSCK_OUT_CAP}")" "$base" >> "$rows_file" ;;
-      *)
-        printf '1\t%s\t%s\t%s\t%s\t%s\n' "$cls" "$src_rc" "$dst_rc" "$(_vscrub "${first:0:$FSCK_OUT_CAP}")" "$base" >> "$rows_file" ;;
-    esac
+    # EVERY field is written non-empty (`-` placeholder) and _vscrub'd AT WRITE TIME. Both matter:
+    # bash treats tab as IFS *whitespace*, so consecutive tabs COLLAPSE — an empty `first` (which is
+    # every `classification=ok` row) shifted the workspace id into `first=` and left `ws=` empty on
+    # every clean workspace. And scrubbing `$base` only at emission was too late: a newline in a
+    # workspace name forged a second row with an attacker-chosen `classification=`, and inflated the
+    # row count the advisory abort's equality test depends on.
+    _prio=1
+    case "$cls" in copy_corruption|probe_failed|unclassified) _prio=0 ;; esac
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$_prio" "$cls" "$reason" "$src_rc" "$dst_rc" \
+      "$(_fsck_scrub_first "$(_vscrub "${first:0:$FSCK_OUT_CAP}")")" "$(_vscrub "$base")" \
+      >> "$rows_file"
   done
   # Instrument failure, not emptiness: an enumeration that returns nothing while G2 observed
   # workspaces is a broken instrument. DP-9 F10 — floors derive from the observed count.
   if [ "$total" -eq 0 ] && [ "${G2_COUNT:-0}" -gt 0 ] 2>/dev/null; then
     abort_cls="instrument_failure"
   fi
-  [ "$(grep -c . "$rows_file" 2>/dev/null || echo 0)" -gt "$FSCK_MARKER_CAP" ] && truncated=1
-  summary="SOLEUR_WORKSPACES_LUKS_FSCK feature=workspaces-luks op=workspaces-luks-fsck phase=${phase} total=${total} ok=${n_ok} preexisting=${n_pre} src_only=${n_srconly} copy_corruption=${n_corrupt} probe_failed=${n_probefail} unclassified=${n_unclass} skipped=${n_skip} skipped_worktree=${n_skip_wt} skipped_alternates=${n_skip_alt} src_missing_on_dst=${n_src_missing} truncated=${truncated} host=$(hostname 2>/dev/null)"
+  local row_n; row_n="$(grep -c . "$rows_file" 2>/dev/null || echo 0)"
+  [ "${row_n:-0}" -gt "$FSCK_MARKER_CAP" ] && { truncated=1; more=$((row_n - FSCK_MARKER_CAP)); }
+  # `more` and the coverage-hole counters ride the SUMMARY row, not a bare `log` line: a `log` reaches
+  # the Actions run log only, so a Better-Stack-only consumer would see truncated=1 and never learn N.
+  summary="SOLEUR_WORKSPACES_LUKS_FSCK feature=workspaces-luks op=workspaces-luks-fsck phase=${phase} total=${total} ok=${n_ok} preexisting=${n_pre} src_only=${n_srconly} copy_corruption=${n_corrupt} probe_failed=${n_probefail} unclassified=${n_unclass} skipped=${n_skip} skipped_worktree=${n_skip_wt} skipped_alternates=${n_skip_alt} skipped_no_git_dir=${n_skip_nogit} src_missing_on_dst=${n_src_missing} truncated=${truncated} more=${more} host=$(hostname 2>/dev/null)"
   emit_fsck_row "$summary"
-  while IFS=$'\t' read -r _prio cls src_rc dst_rc first base; do
-    [ "$k" -lt "$FSCK_MARKER_CAP" ] || { more=$((more + 1)); continue; }
-    row="SOLEUR_WORKSPACES_LUKS_FSCK feature=workspaces-luks op=workspaces-luks-fsck phase=${phase} idx=${k} classification=${cls} src_rc=${src_rc} dst_rc=${dst_rc} truncated=${truncated} first=${first} ws=$(_vscrub "$base")"
+  # -s (stable): without it, ties fall through to a whole-line comparison, so WHICH aborting rows
+  # survive the cap becomes content-determined rather than enumeration-ordered.
+  while IFS=$'\t' read -r _prio cls reason src_rc dst_rc first base; do
+    [ "$k" -lt "$FSCK_MARKER_CAP" ] || continue
+    row="SOLEUR_WORKSPACES_LUKS_FSCK feature=workspaces-luks op=workspaces-luks-fsck phase=${phase} idx=${k} classification=${cls} reason=${reason} src_rc=${src_rc} dst_rc=${dst_rc} truncated=${truncated} first=${first} ws=${base}"
     emit_fsck_row "$row"
     k=$((k + 1))
-  done < <(sort -k1,1 "$rows_file" 2>/dev/null)
+  done < <(LC_ALL=C sort -s -k1,1 "$rows_file" 2>/dev/null)
   [ "$more" -gt 0 ] && log "  … +${more} more"
-  [ "$n_skip" -gt 0 ] && log "fsck coverage hole: ${n_skip} workspace(s) not probeable (worktree_pointer=${n_skip_wt} alternates_escape=${n_skip_alt}) — visible, not silent"
+  [ "$n_skip" -gt 0 ] && log "fsck coverage hole: ${n_skip} workspace(s) not probeable (worktree_pointer=${n_skip_wt} alternates_escape=${n_skip_alt} no_git_dir=${n_skip_nogit}) — visible, not silent; each carries a classification=skipped row naming its ws="
   # One emit_drift per DISTINCT aborting classification per run (never per workspace: that could fire
   # up to FSCK_MARKER_CAP Sentry events for a single abort). emit_verify_diff fires exactly once.
   if [ -z "$abort_cls" ]; then
@@ -1640,8 +1768,8 @@ verify_git_fsck_differential() {
   # `preexisting` -> no abort -> Phase 5 wipes the plaintext original. Freezing both sides makes the
   # comparand src-at-gate-time and deletes the failure mode. The two roots sit on independent
   # devices, so wall clock is max(4.5,4.5) ≈ 5 min, not 9.
-  _fsck_side "$src_root" "$work/src" &
-  _fsck_side "$dst_root" "$work/dst" &
+  _fsck_side "$src_root" "$work/src" "$dst_root" &
+  _fsck_side "$dst_root" "$work/dst" "$src_root" &
   wait
   _fsck_emit_and_verdict gate "$work" "$src_root" "$dst_root" "$work/verdict"
   abort_cls="$(cat "$work/verdict" 2>/dev/null || true)"
@@ -1652,13 +1780,13 @@ verify_git_fsck_differential() {
     case "$abort_cls" in
       copy_corruption)
         emit_drift workspaces_luks_fsck_copy_corruption
-        die "git fsck regressed on $(grep -c 'copy_corruption' "$work/rows" 2>/dev/null || echo 1) workspace(s) between the plaintext source and the LUKS copy — see the SOLEUR_WORKSPACES_LUKS_FSCK marker for the workspace id(s) and the fsck output" ;;
+        die "git fsck regressed on $(awk -F'\t' '$2=="copy_corruption"{n++} END{print n+0}' "$work/rows" 2>/dev/null || echo 1) workspace(s) between the plaintext source and the LUKS copy — see the SOLEUR_WORKSPACES_LUKS_FSCK marker for the workspace id(s) and the fsck output" ;;
       probe_failed)
         emit_drift workspaces_luks_fsck_probe_failed
-        die "git fsck could NOT INSPECT $(grep -c 'probe_failed' "$work/rows" 2>/dev/null || echo 1) workspace(s) — nothing was verified, so the copy is uncertified; see the marker for rc and the fatal: line" ;;
+        die "git fsck could NOT INSPECT $(awk -F'\t' '$2=="probe_failed"{n++} END{print n+0}' "$work/rows" 2>/dev/null || echo 1) workspace(s) — nothing was verified, so the copy is uncertified; see the marker for rc and the fatal: line" ;;
       unclassified)
         emit_drift workspaces_luks_fsck_unclassified
-        die "git fsck returned a state this gate cannot classify on $(grep -c 'unclassified' "$work/rows" 2>/dev/null || echo 1) workspace(s) (non-zero rc with no error output) — failing closed; see the marker" ;;
+        die "git fsck returned a state this gate cannot classify on $(awk -F'\t' '$2=="unclassified"{n++} END{print n+0}' "$work/rows" 2>/dev/null || echo 1) workspace(s) (non-zero rc with no error output) — failing closed; see the marker" ;;
       instrument_failure)
         emit_drift workspaces_luks_fsck_instrument_failure
         die "git fsck enumerated ZERO workspaces while G2 observed ${G2_COUNT:-?} — an empty enumeration is instrument failure, not emptiness" ;;
@@ -1677,7 +1805,7 @@ verify_git_fsck_differential() {
 # is usable BEFORE any irreversible freeze") and ensure_lsof (hoisted out of the freeze window).
 # $1=src_root
 fsck_advisory_probe() {
-  local src_root="$1" work abort_cls probed
+  local src_root="$1" work abort_cls probed probe_failed_n
   work="$(mktemp -d)"
   mkdir -p "$work/src"
   log "fsck advisory probe (pre-freeze, source only, ionice'd): evidence for the differential gate — NEVER its comparand"
@@ -1691,16 +1819,37 @@ fsck_advisory_probe() {
     _fsck_side "$src_root" "$work/src" ) || true
   _fsck_emit_and_verdict advisory "$work" "$src_root" "" "$work/verdict"
   abort_cls="$(cat "$work/verdict" 2>/dev/null || true)"
-  probed="$(grep -c . "$work/rows" 2>/dev/null || echo 0)"
+  # instrument_failure must abort HERE too — the pre-freeze arm is precisely the one designed to
+  # catch a broken instrument before a freeze approval is spent. Reading the verdict and discarding
+  # it meant a zero-enumeration against a non-zero G2 logged "0 workspace(s) probed" and returned 0.
+  if [ "$abort_cls" = "instrument_failure" ]; then
+    emit_drift workspaces_luks_fsck_advisory_instrument_failure
+    die "the fsck advisory probe enumerated ZERO source workspaces while G2 observed ${G2_COUNT:-?} — an empty enumeration is instrument failure, not emptiness. Aborting PRE-FREEZE: no freeze was held, NO rollback is needed and ROLLBACK=1 must NOT be run."
+  fi
+  # Anchored on the CLASS FIELD via awk, never a substring grep: `first=` carries raw fsck text, so a
+  # diagnostic containing the literal "probe_failed" would inflate the count and perturb the very
+  # equality the pre-freeze abort depends on.
+  probed="$(awk -F'\t' '$1 ~ /^[01]$/ { n++ } END { print n + 0 }' "$work/rows" 2>/dev/null || echo 0)"
+  probe_failed_n="$(awk -F'\t' '$2 == "probe_failed" { n++ } END { print n + 0 }' "$work/rows" 2>/dev/null || echo 0)"
   # Abort ONLY when EVERY probed source repo is un-inspectable. A partial failure is evidence, not a
   # verdict — some repos genuinely differ. This runs BEFORE `FREEZE_HELD=1; arm_dead_man`, so die()
   # reaches cleanup() with both flags 0 and NO rollback runs. That is correct; do not "fix" it into a
   # rollback. Language mirrors the script's other pre-freeze dies.
-  if [ "$probed" -gt 0 ] && [ "$(grep -c 'probe_failed' "$work/rows" 2>/dev/null || echo 0)" -eq "$probed" ]; then
-    emit_drift workspaces_luks_fsck_advisory_all_probe_failed
-    die "the fsck advisory probe could not inspect ANY of the ${probed} source workspace(s) — the differential gate would verify nothing, so the copy could never be certified. Aborting PRE-FREEZE: no freeze was held, NO rollback is needed and ROLLBACK=1 must NOT be run. See the SOLEUR_WORKSPACES_LUKS_FSCK phase=advisory marker for rc and the fatal: line."
+  # ANY un-inspectable source repo aborts pre-freeze — not just the all-of-them case. The original
+  # all-or-nothing threshold did not cover the incident this probe was built for: run 29725194755
+  # failed on 8 of 10, so an ALL threshold would have gone green, held the freeze, taken the outage,
+  # run the delta rsync, and aborted at the gate — precisely the sequence the probe exists to
+  # prevent. Any probe_failed here is already disqualifying: the gate cannot certify those
+  # workspaces, so the cutover is doomed either way. Failing here costs zero downtime.
+  if [ "$probe_failed_n" -gt 0 ]; then
+    emit_drift workspaces_luks_fsck_advisory_probe_failed
+    die "the fsck advisory probe could not inspect ${probe_failed_n} of ${probed} source workspace(s) — the differential gate cannot certify those, so the cutover would abort mid-freeze. Aborting PRE-FREEZE instead: no freeze was held, NO rollback is needed and ROLLBACK=1 must NOT be run. See the SOLEUR_WORKSPACES_LUKS_FSCK phase=advisory marker for rc and the fatal: line."
   fi
   log "fsck advisory probe complete (${probed} source workspace(s) probed) — advisory only, never a gate"
+  # Removed on the non-abort path only (the die paths above grep $work/rows). Without this the
+  # advisory leaked a mktemp -d of fsck captures on EVERY run of BOTH arms, including rehearsals —
+  # contradicting the root-disk budget the capture ceiling exists to respect.
+  rm -rf "$work"
 }
 
 # Sourced-detection guard: when this file is `source`d (the workspaces-luks-verify.test.sh harness
