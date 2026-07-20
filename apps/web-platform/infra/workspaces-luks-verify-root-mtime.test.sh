@@ -2,8 +2,8 @@
 #
 # Reproduction harness for the C1 false abort (#6733).
 #
-# THE DEFECT (measured, not hypothesised). `assert_mount_quiesced` (workspaces-cutover.sh, the
-# G4 quiescence gate) opens its positive-control probe INSIDE the mount:
+# THE DEFECT, AS IT WAS (measured, not hypothesised). `assert_mount_quiesced` (workspaces-cutover.sh,
+# the G4 quiescence gate) used to open its positive-control probe by CREATING an entry in the mount:
 #
 #     probe="$MOUNT/.luks-g4-probe.$$"
 #     exec 9>"$probe"                    # creates a depth-1 entry in $MOUNT
@@ -15,48 +15,55 @@
 #
 # $MOUNT *is* the rsync transfer root, so `./` is $MOUNT. Create+unlink is a NET-ZERO listing
 # change — but both operations advance the ROOT DIRECTORY's mtime. C1's itemized rsync therefore
-# emits exactly one line, `.d..t...... ./`, and the cutover safe-aborts having copied a
+# emitted exactly one line, `.d..t...... ./`, and five real cutovers safe-aborted having copied a
 # byte-identical tree.
 #
-# C1 IS CORRECT. The probe is the defect. This suite pins the mechanism so that a fix is
-# measured rather than asserted, and so that nobody "fixes" it by narrowing C1.
+# C1 IS CORRECT. The probe was the defect, and it was fixed AT SOURCE: the probe is now a
+# READ-open of an already-existing directory (`exec 9<"$MOUNT/workspaces"`), which lsof reports
+# just as it reported the write fd and which moves no mtime at all. This suite keeps the RED
+# reproduction (A2) so the mechanism stays measured rather than remembered, pins the shipped
+# read-probe as the thing that actually runs (A3/A4), and pins that nobody "fixes" any future
+# recurrence by narrowing C1 instead.
 #
-# WHAT THIS SUITE PROVES (the three rows of the plan's mechanism table):
+# THE INVARIANT THIS SUITE PINS (post-fix):
+#     THE G4 PROBE DOES NOT MOVE $MOUNT's ROOT MTIME.
+# Stated as a direct property of the shipped probe, not as a property inferred through a repair.
+#
+# WHAT THIS SUITE PROVES:
 #   A1  clean immediately after a pass-2-equivalent rsync          (with a positive control)
-#   A2  `.d..t...... ./` after the G4 create+unlink run VERBATIM   <- the RED reproduction
-#   A4  clean when the same sequence is bracketed by an mtime save/restore (the Phase 2 shape)
-#   A3  couples the above to the REAL script: is today's `assert_mount_quiesced` unbracketed?
+#   A2  `.d..t...... ./` after the OLD create+unlink probe run VERBATIM  <- why it had to change
+#   A4  the SHIPPED read-open probe moves NO mtime and leaves C1 clean   <- the fix's shape
+#   A3  couples the above to the REAL script: is today's `assert_mount_quiesced` a read-probe?
 #
 # ---------------------------------------------------------------------------------------------
-# TASK 1.6 — WHY THE PROBE FD CANNOT SIMPLY BE RELOCATED OUTSIDE $MOUNT. REJECTED. Concretely:
+# WHY THE FD IS A READ-OPEN OF AN EXISTING DIRECTORY UNDER $MOUNT (#6733, the CTO's ruling).
 #
 # G4 property (c) is a POSITIVE CONTROL. `lsof` exits 1 BOTH when it finds nothing and when it
 # errors, writing diagnostics only to stderr — so an errored probe is indistinguishable from a
 # quiesced mount. The script closes that by holding its OWN fd under $MOUNT and REQUIRING the
-# scan to report it back:
+# scan to report it back, or dying with `g4_probe_blind`.
 #
-#     workspaces-cutover.sh:467   if ! grep -qF -- "$probe" "$lout"; then ... die "the G4
-#                                 straggler probe is BLIND, not clean"
+# RELOCATING THE FD OUTSIDE $MOUNT IS STILL REJECTED, and for an unchanged reason: `lsof +D
+# "$MOUNT"` enumerates open files *under the directory tree $MOUNT*. An fd opened outside that
+# tree is by construction never listed, so the positive control could never match and EVERY
+# invocation would take the `g4_probe_blind` die path. Relocation does not weaken the control —
+# it converts the gate into an unconditional abort.
 #
-# `lsof +D "$MOUNT"` enumerates open files *under the directory tree $MOUNT*. An fd opened
-# outside $MOUNT is BY CONSTRUCTION not in that tree, so `lsof +D "$MOUNT"` would never list it,
-# the `:467` grep would never match, and EVERY invocation would take the `g4_probe_blind` die
-# path. Relocation does not weaken the positive control — it converts the gate into an
-# unconditional abort. The freeze could never proceed.
+# WHAT CHANGED: holding a READ-ONLY fd on a path that ALREADY EXISTS under $MOUNT was previously
+# rejected here, on the grounds that the holder filter subtracted the probe BY PATH
+# (`grep -vF -- "$probe"`), so aiming the probe at a real path would subtract a GENUINE straggler
+# holding that same path — a fail-open in the gate meant to catch stragglers. That objection was
+# correct about the OLD filter and is now obsolete: the shipped filter subtracts by PID
+# (`awk -v p="$$" 'NR>1 && $2 != p'`), so only THIS process's rows are removed and a straggler
+# holding workspaces/ is still reported in full. The PID filter is what makes the read-probe
+# admissible. The two changes are ONE change and must not be separated — a future edit that
+# returns the holder filter to a path-subtraction re-opens the fail-open this paragraph describes.
 #
-# The adjacent candidate — hold a read-only fd on a file that ALREADY exists under $MOUNT — is
-# zero-perturbation (a read moves only atime, and C1 at :229 compares neither atime nor ctime),
-# but it is rejected for a stronger reason: the holder filter at
-#
-#     workspaces-cutover.sh:472   holders="$(grep -vF -- "$probe" "$lout" | grep -v '^COMMAND ')"
-#
-# subtracts $probe from the holder list. Pointing $probe at a real path would make G4 subtract a
-# GENUINE straggler that happens to hold that same file — a fail-open in the exact gate whose
-# purpose is to catch stragglers. Worse than the bug it would fix.
-#
-# The probe must therefore stay a fresh entry under $MOUNT; the fix belongs on the mtime, not on
-# the location. Also rejected (plan Non-Goals): relocating one level deeper, which merely moves
-# the diff to `.d..t...... workspaces/` — still a real difference C1 must reject.
+# The read-open is zero-perturbation: it moves atime only, and C1 compares neither atime nor
+# ctime. Measured directly as A4 below, and again against the real function in the mutation
+# battery. Also still rejected (plan Non-Goals): keeping a CREATE and relocating it one level
+# deeper, which merely moves the diff to `.d..t...... workspaces/` — a real difference C1 must
+# reject, and it would additionally have to create in a directory holding user data.
 # ---------------------------------------------------------------------------------------------
 #
 # HARNESS DISCIPLINE (both classes below have bitten this repo inside the last week):
@@ -83,7 +90,14 @@ note() { printf '#      %s\n' "$1"; }
 
 # Non-degeneracy floor (task 1.5). Bumped deliberately when cases are added; a suite that runs
 # fewer assertions than it claims to own has silently lost coverage and must not report green.
-MIN_ASSERTIONS=17
+#
+# 29 is the ACTUAL count this suite executes on a capable host, not a round number below it. It was
+# 17 while the suite carried a defect-mode branch that emitted `ok` when the fix was ABSENT — so the
+# suite passed with AND without the fix (measured: stripping the fix still gave 18 passed / 0
+# failed). Both halves of that are fixed here: the defect branches now `fail`, and the floor is the
+# real count, so a case that silently stops executing reds the suite instead of sliding under a
+# floor with headroom to spare.
+MIN_ASSERTIONS=29
 
 skip() { printf 'SKIP: %s\n' "$1"; exit 0; }
 
@@ -287,42 +301,48 @@ else
 fi
 
 # =================================================================================================
-# A4 — the third row of the mechanism table: the SAME sequence, bracketed by an mtime
-# save/restore, verifies CLEAN. This is the shape Phase 2 puts into `assert_mount_quiesced`, and
-# it is what makes A2 a statement about the BRACKETING rather than about `exec 9>` itself.
+# A4 — THE SHIPPED SHAPE. The same interval, the same lsof stand-in, but the fd is a READ-OPEN of
+# an EXISTING directory (`exec 9<"$MOUNT/workspaces"`) instead of a create+unlink. Nothing is
+# created, nothing is unlinked, and NOTHING IS REPAIRED: the root's mtime is asserted unchanged as
+# a DIRECT property of the probe, not inferred through a restore that could itself be wrong.
 #
-# The same `sleep` stand-in for the lsof scan is MANDATORY here. Without it the bracket stays
-# inside one whole second, C1 could not have seen the move anyway (A2-gran), and A4's clean
-# result would be a granularity artifact wearing a working fix's clothes — the precise shape of
-# "a gate that certifies a property adjacent to the one that matters".
+# The same `sleep` stand-in for the lsof scan is MANDATORY here, for the reason A2-gran measured:
+# without it the whole sequence stays inside one whole second, C1 could not have seen a move
+# anyway, and A4's clean result would be a granularity artifact wearing a working fix's clothes.
+# With it, A2 and A4 differ in EXACTLY ONE variable — the direction of the redirection — so A4's
+# clean result is attributable to that and nothing else.
 # =================================================================================================
 pass2 >/dev/null 2>&1
-ref="$SCRATCH/g4ref"; : >"$ref"
-touch -r "$MOUNT" "$ref"                      # capture by reference, not via a %y string round-trip
 b_pre="$(stat -c %y -- "$MOUNT")"
 b_sec_pre="$(stat -c %Y -- "$MOUNT")"
-probe2="$MOUNT/.luks-g4-probe.b$$"
-exec 9>"$probe2"; sleep 1.1; exec 9>&-; rm -f "$probe2"
-[ ! -e "$probe2" ] || fail "A4: probe2 unlink failed — the restore must not run over a surviving entry"
-b_sec_unres="$(stat -c %Y -- "$MOUNT")"
-if [ "$b_sec_pre" != "$b_sec_unres" ]; then
-  ok "A4-pre: before the restore, the root had moved a whole second ($b_sec_pre -> $b_sec_unres) — A4's clean result below is attributable to the RESTORE, not to granularity"
-else
-  fail "A4-pre: the bracket did not move the root by a whole second — A4 cannot distinguish a working restore from an invisible move"
-fi
-touch -r "$ref" "$MOUNT"                      # restore
+exec 9<"$MOUNT/workspaces"   # the SHIPPED probe: read-open an already-required directory
+sleep 1.1                    # stands in for `lsof +D "$MOUNT"` (seconds on the real mount)
+exec 9<&-
 b_post="$(stat -c %y -- "$MOUNT")"
-if [ "$b_post" = "$b_pre" ]; then
-  ok "A4-readback: the restore is MEASURED — \$MOUNT's mtime reads back identical ($b_post)"
+b_sec_post="$(stat -c %Y -- "$MOUNT")"
+
+# Non-vacuity: A2 proved this same interval DOES move the root when the fd is a create. So the
+# interval is long enough to be seen; a clean A4 is therefore about the read, not about the clock.
+if [ "$b_sec_pre" = "$b_sec_post" ] && [ "$b_pre" = "$b_post" ]; then
+  ok "A4-mtime: the READ-open probe left \$MOUNT's root mtime byte-identical at ns precision ($b_post) — no perturbation to repair (A2 proved the same interval moves it when the fd is a create)"
 else
-  fail "A4-readback: restore skew — pre=$b_pre post=$b_post (a truncating touch exits 0 and would pass an exit-status-only guard)"
+  fail "A4-mtime: the read-open moved the root mtime ($b_pre -> $b_post) — the shipped probe perturbs the tree C1 certifies, which is the whole defect"
 fi
+
+# The listing must ALSO be untouched — a read cannot add an entry, and this is what makes "no
+# mtime move" mean "no perturbation" rather than "a perturbation that happened to be restored".
+if [ ! -e "$MOUNT/.luks-g4-probe.$$" ] && [ -z "$(find "$MOUNT" -maxdepth 1 -name '.luks-g4-probe.*' -print -quit)" ]; then
+  ok "A4-listing: the read-open created NO entry under \$MOUNT — nothing to unlink, so the failed-unlink and surviving-artifact failure modes cannot exist"
+else
+  fail "A4-listing: a probe entry exists under \$MOUNT after a read-open — the probe is still creating"
+fi
+
 rc=0; verify_into "$VOUT" "$VERR" || rc=$?
 n="$(diff_n "$VOUT")"
 if [ "$rc" -eq 0 ] && [ "$n" -eq 0 ]; then
-  ok "A4: probe + root-mtime save/restore => C1 verify CLEAN — the fix shape is sufficient"
+  ok "A4: read-open probe => C1 verify CLEAN (0 differences) — the shipped fix shape is sufficient"
 else
-  fail "A4: expected a clean verify with the restore applied, got $n difference(s) (rc=$rc): $(tr '\n' '|' <"$VOUT")"
+  fail "A4: expected a clean verify with the read-open probe, got $n difference(s) (rc=$rc): $(tr '\n' '|' <"$VOUT")"
 fi
 
 # =================================================================================================
@@ -348,70 +368,108 @@ else
   fail "A3-anchor: could NOT locate assert_mount_quiesced() — every A3 verdict below would be vacuous"
 fi
 
-# The defect signature in the SUT: the probe is created under $MOUNT ...
+# THE SHIPPED SIGNATURE — the probe is a READ-OPEN of an existing directory under $MOUNT.
+# Anchored on the REDIRECTION OPERATOR, which is the entire behavioural difference between the
+# defect and the fix. `<` vs `>` is one character, and it is the character that decides whether
+# this gate perturbs the tree C1 certifies.
+#
+# NOTE ON MUTATION-RESISTANCE: asserting only "an fd is opened under $MOUNT" would be satisfied by
+# `exec 9>"$MOUNT/..."` — i.e. by the defect itself. The direction is asserted POSITIVELY (a read
+# redirection must be present) AND the write form is asserted ABSENT, so neither a re-introduced
+# create nor a read-plus-create hybrid can satisfy this pair.
 # shellcheck disable=SC2016  # literal SUT source text, must not expand
-if grep -qE 'probe="\$MOUNT/\.luks-g4-probe' "$FUNC_NC"; then
-  ok "A3-site: the probe path is still composed under \$MOUNT (\$MOUNT/.luks-g4-probe.\$\$)"
+if grep -qE 'exec 9<"\$wsdir"' "$FUNC_NC"; then
+  ok "A3-site: the probe READ-opens \$wsdir (exec 9<) — the fd is acquired without creating anything"
 else
-  fail "A3-site: the probe is no longer created under \$MOUNT — see the task-1.6 block above; relocation defeats G4's positive control at :467"
+  fail "A3-site: no 'exec 9<\"\$wsdir\"' in assert_mount_quiesced — the shipped read-probe is not what runs"
 fi
 
-# ... and nothing restores the root's mtime around it. `touch -r` is the anchor: `git grep 'touch -r'`
-# over the tree returns zero hits today, so its APPEARANCE inside this function is an unambiguous
-# signal that the Phase 2 fix has landed.
-if grep -qE 'touch[[:space:]]+-r' "$FUNC_NC"; then
-  # Fixed mode. A2 still reproduces the physics; the SUT no longer runs the unbracketed shape.
-  ok "A3: assert_mount_quiesced now brackets the probe with a 'touch -r' root-mtime restore (Phase 2 has landed)"
-  # The restore may be INLINE or EXTRACTED into a helper (it is extracted today, so the same
-  # bracket can be reused by the four die paths without four copies). Anchor the ORDERING on
-  # whichever form is present: an extracted call site proves restore-after-unlink exactly as an
-  # inline `touch -r` does. Resolve the call form first, then fall back to inline.
-  # shellcheck disable=SC2016  # literal SUT source text, must not expand
-  rm_ln="$(grep -nE '^[[:space:]]*rm -f .*\$probe' "$FUNC_NC" | tail -1 | cut -d: -f1 || true)"
-  # shellcheck disable=SC2016  # literal SUT source text, must not expand
-  tr_ln="$(grep -nE '_g4_restore_root_mtime[[:space:]]+"\$mref"' "$FUNC_NC" | tail -1 | cut -d: -f1 || true)"
-  restore_form="extracted call"
-  if [ -z "$tr_ln" ]; then
-    # shellcheck disable=SC2016  # literal SUT source text, must not expand
-    tr_ln="$(grep -nE 'touch[[:space:]]+-r[[:space:]]+"\$ref"' "$FUNC_NC" | tail -1 | cut -d: -f1 || true)"
-    restore_form="inline touch -r"
-  fi
-  if [ -n "$rm_ln" ] && [ -n "$tr_ln" ] && [ "$tr_ln" -gt "$rm_ln" ]; then
-    ok "A3-order: the restore ($restore_form, line $tr_ln) sits AFTER the probe unlink (line $rm_ln)"
-  else
-    fail "A3-order: could not prove restore-after-unlink (unlink='$rm_ln' restore='$tr_ln') — a missing anchor must be loud, never a silent '' comparison"
-  fi
-
-  # When the restore is EXTRACTED, the call site alone proves ordering but says nothing about what
-  # the helper DOES. Without this, deleting the helper's body would keep A3-order green — the
-  # extracted form must not buy a weaker assertion than the inline one it replaced.
-  if [ "$restore_form" = "extracted call" ]; then
-    HELPER="$SCRATCH/restore.body"
-    sed -n '/^_g4_restore_root_mtime() {$/,/^}$/p' "$CUTOVER" | sed -e 's/[[:space:]]*#.*$//' >"$HELPER"
-    if [ ! -s "$HELPER" ]; then
-      fail "A3-helper: assert_mount_quiesced calls _g4_restore_root_mtime but the helper body could not be located — the ordering assertion above is vacuous without it"
-    else
-      # shellcheck disable=SC2016  # literal SUT source text, must not expand
-      if grep -qE 'touch[[:space:]]+-r[[:space:]]+"\$ref"[[:space:]]+"\$MOUNT"' "$HELPER"; then
-        ok "A3-helper: _g4_restore_root_mtime stamps \$MOUNT's mtime back from the reference file"
-      else
-        fail "A3-helper: _g4_restore_root_mtime does not carry 'touch -r \"\$ref\" \"\$MOUNT\"' — the call site is ordered correctly but restores nothing"
-      fi
-      # The read-back is the whole point: a truncating touch exits 0, so an exit-status-only check
-      # would re-introduce the defect silently. probe_restored must be MEASURED, not asserted.
-      # shellcheck disable=SC2016  # literal SUT source text, must not expand
-      if grep -qE '\[[[:space:]]+"\$want"[[:space:]]+!=[[:space:]]+"\$got"[[:space:]]+\]' "$HELPER" \
-         && grep -qE '\bdie\b' "$HELPER"; then
-        ok "A3-helper-readback: the helper re-stats \$MOUNT and die()s on skew — the restore is measured, not assumed"
-      else
-        fail "A3-helper-readback: no want-vs-got comparison + die in _g4_restore_root_mtime — a truncating 'touch' exits 0, so without the read-back the restore can silently no-op"
-      fi
-    fi
-  fi
+# $wsdir must actually resolve UNDER $MOUNT, or `lsof +D "$MOUNT"` can never report the fd and the
+# positive control becomes an unconditional abort (see the header block). Asserted on the
+# assignment, not assumed from the variable's name.
+# shellcheck disable=SC2016  # literal SUT source text, must not expand
+if grep -qE 'wsdir="\$MOUNT/workspaces"' "$FUNC_NC"; then
+  ok "A3-under: \$wsdir is composed as \$MOUNT/workspaces — the fd is inside the tree 'lsof +D \$MOUNT' scans"
 else
-  # Defect mode — today. This is the assertion that pins the bug: it holds while the script is
-  # unfixed and flips the moment Phase 2 lands, at which point the branch above takes over.
-  ok "A3: assert_mount_quiesced has NO root-mtime restore around the probe — the unbracketed A2 shape is what runs at 'assert_mount_quiesced pre-verify', so the '.d..t...... ./' abort is the SCRIPT's own doing (DEFECT PRESENT)"
+  fail "A3-under: \$wsdir is not composed under \$MOUNT — an fd outside that tree is never listed, so G4 would take the g4_probe_blind die path on EVERY run"
+fi
+
+# The WRITE forms must be gone. Both the redirection and the old probe-path composition: either one
+# returning re-creates the #6733 abort, and the second is how it would come back (a helper that
+# rebuilds the path, then writes to it elsewhere).
+# shellcheck disable=SC2016  # literal SUT source text, must not expand
+if grep -qE 'exec 9>' "$FUNC_NC"; then
+  fail "A3-nowrite: assert_mount_quiesced still contains a WRITE redirection (exec 9>) — the probe creates an entry under \$MOUNT and C1 will abort on a byte-identical tree (#6733)"
+else
+  ok "A3-nowrite: no 'exec 9>' write redirection anywhere in assert_mount_quiesced"
+fi
+# shellcheck disable=SC2016  # literal SUT source text, must not expand
+if grep -qE 'luks-g4-probe' "$FUNC_NC"; then
+  fail "A3-noprobefile: the '.luks-g4-probe' entry name is back in assert_mount_quiesced — the create+unlink probe has been reintroduced"
+else
+  ok "A3-noprobefile: the '.luks-g4-probe' entry name is gone — nothing composes a file to create under \$MOUNT"
+fi
+
+# NO REPAIR MACHINERY. The fix is the ABSENCE of a perturbation, so the presence of a restore is
+# itself a regression signal: it would mean something started perturbing again. `touch -r` is the
+# anchor (`git grep 'touch -r'` over the tree is otherwise empty in this function).
+if grep -qE 'touch[[:space:]]+-r' "$FUNC_NC"; then
+  fail "A3-norestore: assert_mount_quiesced contains a 'touch -r' mtime restore — Option B removes the perturbation at source, so a restore means a write-probe has returned and is being compensated for rather than removed"
+else
+  ok "A3-norestore: no 'touch -r' restore in assert_mount_quiesced — there is no perturbation to repair (the fix is removal, not compensation)"
+fi
+
+# The helpers the bracket needed must be GONE FROM THE FILE, not merely unused. A dead
+# _g4_restore_root_mtime left behind is a loaded gun for the next editor.
+for _fn in _g4_restore_root_mtime _g4_depth1_fingerprint ensure_mtime_tools emit_root_mtime; do
+  if grep -qE "^${_fn}\(\) \{" "$CUTOVER"; then
+    fail "A3-nohelpers: the bracket helper ${_fn}() is still defined in $CUTOVER — dead repair machinery for a perturbation that no longer exists"
+  else
+    ok "A3-nohelpers: ${_fn}() is gone from the script"
+  fi
+done
+
+# --- The PID-based holder filter (the change that MAKES the read-probe admissible) ---------------
+# This is the load-bearing pair described in the header: a read-probe on a REAL path is only safe
+# because the holder filter subtracts by PID, not by path. If the filter ever reverts to a path
+# subtraction, a genuine straggler holding workspaces/ would be subtracted from the holder list —
+# a fail-open in the exact gate whose purpose is to catch stragglers.
+#
+# Inverting this guard (using `==` instead of `!=`) would report ONLY our own fd as a holder and
+# never a real one, so the assertion below pins the OPERATOR, not merely the presence of an awk.
+# shellcheck disable=SC2016  # literal SUT source text, must not expand
+if grep -qE 'holders="\$\(awk -v p="\$\$" .NR>1 && \$2 != p.' "$FUNC_NC"; then
+  ok "A3-pidfilter: holders are filtered by PID with '!=' (NR>1 && \$2 != p) — our own rows are dropped, a straggler's are NOT"
+else
+  fail "A3-pidfilter: the holder filter is not the PID-based 'NR>1 && \$2 != p' form — a path-subtraction filter would subtract a GENUINE straggler holding workspaces/, which is what made the read-probe inadmissible before"
+fi
+# The old path-subtraction must be gone, or the fail-open above can coexist with the new filter.
+# shellcheck disable=SC2016  # literal SUT source text, must not expand
+if grep -qE 'grep -vF -- "\$probe"' "$FUNC_NC"; then
+  fail "A3-nopathsub: the old path-subtraction holder filter (grep -vF -- \"\$probe\") is still present — it subtracts a genuine straggler that holds the probed path"
+else
+  ok "A3-nopathsub: the path-subtraction holder filter is gone"
+fi
+
+# --- No pipe in the gate (property (b), the SIGPIPE fail-open) ------------------------------------
+# `producer | grep -q` under pipefail returns 141 on an early match, so `if ! ...` fails OPEN. The
+# function must contain no pipe into a predicate at all. Anchored on the comment-stripped body so
+# the prose explaining the trap cannot satisfy the check.
+if grep -qE '\|[[:space:]]*grep -q' "$FUNC_NC"; then
+  fail "A3-nopipe: assert_mount_quiesced pipes into 'grep -q' — under pipefail an early match SIGPIPEs the producer to 141 and a negative assertion fails OPEN (property (b))"
+else
+  ok "A3-nopipe: no '| grep -q' predicate in assert_mount_quiesced — property (b) holds"
+fi
+
+# --- The child-inheritance guard ------------------------------------------------------------------
+# Bash does not set O_CLOEXEC on `exec 9<`, so a child inherits fd 9. Under the PID filter a child
+# that inherited it reads as a FOREIGN straggler and would abort every cutover. Measured 2026-07-20:
+# a child in the same pipeline appears in `lsof +D` output with its own inherited `9r DIR` row.
+# shellcheck disable=SC2016  # literal SUT source text, must not expand
+if grep -qE 'lsof \+D "\$MOUNT" 9<&-' "$FUNC_NC"; then
+  ok "A3-cloexec: the lsof invocation carries '9<&-' — the child cannot inherit the probe fd and be miscounted as a straggler"
+else
+  fail "A3-cloexec: the lsof invocation does not close fd 9 in the child ('9<&-') — an inheriting child is indistinguishable from a foreign straggler under the PID filter, and would abort every run"
 fi
 
 # Entry-point coupling: the perturbing call must actually sit between the pass-2 write and C1.

@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 #
-# MUTATION BATTERY for the #6733 G4 root-mtime bracket, and for C1's non-regression.
+# MUTATION BATTERY for the #6733 G4 read-probe, and for C1's non-regression.
 #
 # WHY THIS IS A SEPARATE FILE (and not an extension of workspaces-luks-verify-root-mtime.test.sh):
-# that suite is the MECHANISM harness — it proves the three rows of the plan's mechanism table
-# using filesystem physics performed by the harness itself, and its assertions are narrative and
-# ordered. This suite does something structurally different: it MUTATES THE SUT (it copies
-# workspaces-cutover.sh into scratch, edits it against a pristine backup, and executes the REAL
-# `assert_mount_quiesced` out of the mutated copy) and it MUTATES THE DESTINATION TREE to prove
-# C1 still rejects. Those need a per-case teardown, a per-case landing assertion, and a shim PATH.
+# that suite is the MECHANISM harness — it proves the mechanism using filesystem physics performed
+# by the harness itself, plus STRUCTURAL assertions that the shipped script has the right shape.
+# This suite does something different in kind: it MUTATES THE SUT (it copies workspaces-cutover.sh
+# into scratch, edits it against a pristine backup, and EXECUTES the real `assert_mount_quiesced`
+# out of the mutated copy) and it MUTATES THE DESTINATION TREE to prove C1 still rejects. So the
+# structural suite answers "is the code shaped like the fix?" and this one answers "does the code
+# BEHAVE like the fix when you run it?" — the second is what catches a guard that is present,
+# correctly placed, and inverted. Those need a per-case teardown, a landing assertion, and a shim
+# PATH.
 # Folding them in would have made the mechanism suite's floor and narrative unreadable, and would
 # have coupled a RED in the battery to a RED in the reproduction. They are registered as two
 # explicit steps in infra-validation.yml, so both are visible coverage.
@@ -37,11 +40,25 @@
 #     (cq-assert-anchor-not-bare-token).
 #   * Zero assertions executed is a LOUD FAILURE, never a green run.
 #
-# OPEN FINDINGS. Two mutations SURVIVE the shipped fix. They are reported through open_finding(),
-# which prints an unmissable block and is counted in the summary, but does NOT fail the suite:
-# a permanently-RED registered step is a gate everyone learns to ignore. The findings are for the
-# fix author to resolve; when either is fixed, the pin below flips and this file must be updated.
-# See the OPEN FINDING blocks at m19a and m21 for the measured evidence.
+# OPEN FINDINGS. None. The open_finding() machinery is RETAINED deliberately even though nothing
+# currently uses it: the two findings it carried (m19a — the depth-1 fingerprint could not catch a
+# matched in-bracket create+delete pair; m21 — the surviving-probe guard restored the mtime while
+# its die message said it refused to) were both properties of the ROOT-MTIME BRACKET, and the
+# bracket is gone. Neither survived into this design because neither failure mode exists in it:
+# there is no fingerprint, no restore, and no probe artifact to survive an unlink. Removing the
+# reporting machinery along with them would mean the next surviving mutation has nowhere to be
+# recorded except a FAIL that reds a registered step forever, which is the pressure that makes
+# people delete the case instead of the defect.
+#
+# WHAT REPLACED THE BRACKET CASES. m19a/m19b, the restore-skew case, the mtime-tool-missing case,
+# C-diepaths, C-uncreatable and C-localmask's bracket-helper scope all pinned the internals of a
+# repair that no longer exists; asserting them here would be asserting the placement of code that
+# is not present. In their place this battery measures the properties the read-probe actually has:
+# the root mtime is unchanged across the REAL function (m13, a DIRECT invariant rather than one
+# inferred through a restore), an absent workspaces/ fails closed (m15), a genuine straggler is
+# still caught while our own fd and any inheriting child are not (m16/m16-foreign), lsof format
+# drift fails closed (m19), and a read-only mount fails closed while `errors=remount-ro` does not
+# (m20/m20-token).
 # ------------------------------------------------------------------------------------------------
 set -uo pipefail
 
@@ -67,7 +84,9 @@ record_unmeasured() { unmeasured=$((unmeasured + 1)); UNMEASURED_LOG+=("$1|$2");
 
 # Non-degeneracy floor. Bumped deliberately when cases are added; a suite that runs fewer
 # assertions than it claims to own has silently lost coverage and must not report green.
-MIN_ASSERTIONS=48
+# 79 is the ACTUAL count executed on a capable host, not a round number below it: a floor with
+# headroom is a floor that lets a whole case silently stop running.
+MIN_ASSERTIONS=79
 
 skip() { printf 'SKIP: %s\n' "$1"; exit 0; }
 
@@ -412,30 +431,58 @@ PY
   return 0
 }
 
-# make_lsof_shim <body> — a PATH-shadowing lsof that runs <body> INSIDE the probe bracket (it is
-# invoked between `exec 9>` and the fingerprint re-check) and then reports the script's real probe
-# fd back, so the positive control passes unless the case wants it to fail.
+# make_lsof_shim <body> — a PATH-shadowing lsof that runs <body> DURING the scan (it is invoked
+# while the SUT holds its read fd) and then reports that fd back, so the positive control passes
+# unless the case wants it to fail.
+#
+# $PPID is the SUT shell — the process that holds fd 9 and whose `$$` the positive control and the
+# holder filter are both keyed on. Hardcoding a PID here (the pre-#6733 shim printed a literal `1`)
+# would make every positive control fail against the shipped PID filter, i.e. the shim would be
+# testing the shim. HEADER shape matters too: the SUT now asserts `^COMMAND +PID +USER`.
 make_lsof_shim() {
   mkdir -p "$SHIMBIN"
   { printf '#!/usr/bin/env bash\n'
-    # shellcheck disable=SC2016  # literal SUT source text / shim body, must not expand
+    # shellcheck disable=SC2016  # literal shim body, must not expand here
     printf 'ln="$2"\n'
     printf '%s\n' "$1"
-    printf 'echo "COMMAND PID USER FD TYPE DEVICE SIZE NODE NAME"\n'
-    # shellcheck disable=SC2016  # literal SUT source text / shim body, must not expand
-    printf 'for p in "$ln"/.luks-g4-probe.*; do [ -e "$p" ] && echo "bash 1 u 9w REG 0,0 0 1 $p"; done\n'
+    printf 'echo "COMMAND     PID USER FD   TYPE DEVICE SIZE/OFF    NODE NAME"\n'
+    # shellcheck disable=SC2016  # literal shim body, must not expand here
+    printf 'echo "bash    $PPID $(id -un) 9r   DIR   0,50       40 1 $ln/workspaces"\n'
     printf 'exit 0\n'; } >"$SHIMBIN/lsof"
   chmod +x "$SHIMBIN/lsof"
 }
 
-# run_amq <use-shim:yes|no> — run the REAL assert_mount_quiesced against $MOUNT out of $SUT.
-# Sets AMQ_RC and AMQ_OUT.
+# --- the findmnt seam ------------------------------------------------------------------------------
+# $MOUNT here is a scratch DIRECTORY, not a real mountpoint, so `findmnt -no OPTIONS "$MOUNT"`
+# returns EMPTY on the fixture and the shipped _assert_mount_rw correctly refuses. That refusal is
+# right in production and useless as a fixture default, so every case gets a findmnt shim reporting
+# a healthy mount, and the cases that are ABOUT mount options override it (m20).
+#
+# This is a stub of a HOST FACT the fixture cannot reproduce, not of the logic under test: the
+# token-splitting comparison in _assert_mount_rw runs for real against whatever this shim reports.
+_mk_findmnt() {   # $1 = the OPTIONS string findmnt should report for $MOUNT
+  mkdir -p "$SHIMBIN"
+  { printf '#!/usr/bin/env bash\n'
+    printf 'case "$*" in *OPTIONS*) echo "%s";; *) exit 0;; esac\n' "$1"; } >"$SHIMBIN/findmnt"
+  chmod +x "$SHIMBIN/findmnt"
+}
+_mk_findmnt 'rw,relatime'          # the fixture default: a healthy read-write mount
+
+# run_amq <use-lsof-shim:yes|no> [phase] — run the REAL assert_mount_quiesced out of $SUT.
+#
+# $SHIMBIN is ALWAYS on PATH (the findmnt shim above must always apply). `no` means "no LSOF shim"
+# — the real lsof is reached by removing the shadow — NOT "no shims at all". Conflating the two is
+# what made every real-lsof case abort in _assert_mount_rw instead of exercising the probe.
+#
+# PHASE IS A PARAMETER (#6733): `assert_mount_quiesced freeze` (the freeze_writers call site) was
+# never executed by either suite before this change — only `pre-verify` — so half the gate's call
+# sites were structurally uncovered. Both are exercised now.
 AMQ_RC=0; AMQ_OUT=""
 run_amq() {
-  local p="$PATH"
-  [ "$1" = yes ] && p="$SHIMBIN:$PATH"
-  AMQ_OUT="$(PATH="$p" WORKSPACES_MOUNT="$MOUNT" WORKSPACES_STAGING="$STAGING" \
-    bash -c '. "$1"; assert_mount_quiesced pre-verify; echo AMQ_RETURNED_OK' _ "$SUT" 2>&1)"
+  local phase="${2:-pre-verify}"
+  [ "$1" = no ] && rm -f "$SHIMBIN/lsof"
+  AMQ_OUT="$(PATH="$SHIMBIN:$PATH" WORKSPACES_MOUNT="$MOUNT" WORKSPACES_STAGING="$STAGING" \
+    bash -c '. "$1"; assert_mount_quiesced "$2"; echo AMQ_RETURNED_OK' _ "$SUT" "$phase" 2>&1)"
   AMQ_RC=$?
 }
 # Negative/positive assertions on the captured output use a HERESTRING, never `echo | grep -q`
@@ -443,155 +490,155 @@ run_amq() {
 # fails OPEN.
 out_has()  { grep -qE -- "$1" <<<"$AMQ_OUT"; }
 
-# --- m13 / m14: THE NON-VACUITY PAIR (task 5.4) ---------------------------------------------------
+# --- m13 / m14: THE NON-VACUITY PAIR -------------------------------------------------------------
+# m13 runs the SHIPPED read-probe; m14 mutates ONLY the redirection direction (`9<` -> `9>`) and
+# must go RED. One character apart, so m13's green is attributable to the read and to nothing else.
+#
 # The shim sleeps 1.1s in place of `lsof +D "$MOUNT"`, which on the real /workspaces volume is a
 # multi-second recursive scan. That is not cosmetic: rsync compares directory mtimes at WHOLE-SECOND
-# granularity (measured as A2-gran in workspaces-luks-verify-root-mtime.test.sh, and re-measured as
-# m17 below), so without the sleep the probe's create and unlink land inside one second, C1 could
-# not see the move ANYWAY, and m13's clean result would be a granularity artifact wearing a working
-# fix's clothes. The sleep makes m14's RED attributable to the missing restore and m13's GREEN
-# attributable to the restore.
+# granularity (re-measured as m17 below), so without the sleep a create+unlink would land inside one
+# second, C1 could not see the move ANYWAY, and m14's RED would be unattributable while m13's green
+# would be a granularity artifact wearing a working fix's clothes.
 make_lsof_shim 'sleep 1.1'
 
-sut_reset
-pass2 >/dev/null 2>&1
-m13_pre="$(stat -c %y -- "$MOUNT")"
-run_amq yes
-m13_post="$(stat -c %y -- "$MOUNT")"
-if [ "$AMQ_RC" -eq 0 ] && out_has 'AMQ_RETURNED_OK'; then
-  ok "m13-run: the REAL assert_mount_quiesced ran to completion through the unmodified fix (rc=0)"
-else
-  fail "m13-run: assert_mount_quiesced did not complete (rc=$AMQ_RC) — every m13 verdict below is about a run that did not happen: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
-fi
-if [ "$m13_pre" = "$m13_post" ]; then
-  ok "m13-mtime: \$MOUNT's root mtime is byte-identical across the real G4 bracket ($m13_post)"
-else
-  fail "m13-mtime: the root mtime moved across the bracket ($m13_pre -> $m13_post) — the restore did not hold"
-fi
-if out_has 'SOLEUR_WORKSPACES_LUKS_ROOT_MTIME .*probe_restored=yes' && out_has 'src_moved_after_probe=no'; then
-  ok "m13-telemetry: the run emits probe_restored=yes and src_moved_after_probe=no"
-else
-  fail "m13-telemetry: expected probe_restored=yes + src_moved_after_probe=no in the emitted marker: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 300)"
-fi
-rc=0; verify_into "$VOUT" "$VERR" || rc=$?
-n="$(diff_n "$VOUT")"
-if [ "$rc" -eq 0 ] && [ "$n" -eq 0 ]; then
-  ok "m13: fix APPLIED — C1 is CLEAN after the real G4 probe ran between pass-2 and the verify"
-else
-  fail "m13: expected a clean C1 with the fix applied, got $n difference(s) (rc=$rc): $(tr '\n' '|' <"$VOUT")"
-fi
+# m13 runs at BOTH phases. The root-mtime invariant is now DIRECT — asserted on the probe itself,
+# not inferred through a restore that could be wrong in its own right.
+for _phase in pre-verify freeze; do
+  sut_reset
+  pass2 >/dev/null 2>&1
+  m13_pre="$(stat -c %y -- "$MOUNT")"
+  run_amq yes "$_phase"
+  m13_post="$(stat -c %y -- "$MOUNT")"
+  if [ "$AMQ_RC" -eq 0 ] && out_has 'AMQ_RETURNED_OK'; then
+    ok "m13-run[$_phase]: the REAL assert_mount_quiesced ran to completion through the shipped read-probe (rc=0)"
+  else
+    fail "m13-run[$_phase]: assert_mount_quiesced did not complete (rc=$AMQ_RC) — every m13 verdict for this phase is about a run that did not happen: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
+  fi
+  if [ "$m13_pre" = "$m13_post" ]; then
+    ok "m13-mtime[$_phase]: \$MOUNT's root mtime is byte-identical across the real G4 probe ($m13_post) — a DIRECT invariant, with no restore in the path to be trusted"
+  else
+    fail "m13-mtime[$_phase]: the root mtime moved across the probe ($m13_pre -> $m13_post) — the gate is perturbing the tree C1 certifies"
+  fi
+  if [ -z "$(find "$MOUNT" -maxdepth 1 -name '.luks-g4-probe.*' -print -quit)" ]; then
+    ok "m13-listing[$_phase]: no probe artifact was created under \$MOUNT — the create+unlink failure modes cannot exist"
+  else
+    fail "m13-listing[$_phase]: a .luks-g4-probe.* entry exists under \$MOUNT after the run — the probe is creating again"
+  fi
+  rc=0; verify_into "$VOUT" "$VERR" || rc=$?
+  n="$(diff_n "$VOUT")"
+  if [ "$rc" -eq 0 ] && [ "$n" -eq 0 ]; then
+    ok "m13[$_phase]: C1 is CLEAN after the real G4 probe ran between pass-2 and the verify"
+  else
+    fail "m13[$_phase]: expected a clean C1 with the shipped probe, got $n difference(s) (rc=$rc): $(tr '\n' '|' <"$VOUT")"
+  fi
+done
 
-# m14 — revert the fix by neutering the SUCCESS-PATH restore only. The four die-path calls are left
-# in place deliberately: this must isolate "the restore did not run on the path C1 follows", not
-# delete the whole bracket (which would also delete the fingerprint and the read-back and make the
-# RED unattributable).
+# m14 — flip ONLY the redirection direction. This is the mutation that would satisfy a placement-only
+# assertion ("an fd is opened under $MOUNT") while violating the property, so it is measured against
+# BEHAVIOUR (C1's verdict), not against the file's text.
 sut_reset
-# shellcheck disable=SC2016  # literal SUT source text / shim body, must not expand
-if sut_mutate '  _g4_restore_root_mtime "$mref" "$phase"
-  mt_post=' '  : "REVERTED BY m14 — no restore on the success path"; rm -f "$mref"
-  mt_post='; then
-  ok "m14-land: the SUT mutation LANDED — the success-path restore call is replaced in the copy (anchor found exactly once, file differs from the pristine backup)"
+# shellcheck disable=SC2016  # literal SUT source text, must not expand
+# The write must land in the MOUNT ROOT, not in workspaces/: `./` in C1's itemize output IS $MOUNT,
+# and a create one level deeper produces `.d..t...... workspaces/` instead — a different (also real)
+# diff that would not reproduce the reported signature.
+if sut_mutate 'if ! exec 9<"$wsdir"; then' 'if ! exec 9>"$MOUNT/.luks-g4-probe.$$"; then'; then
+  ok "m14-land: the SUT mutation LANDED — the probe is a WRITE-open in the copy (anchor found exactly once, file differs from the pristine backup)"
   pass2 >/dev/null 2>&1
   m14_sec_pre="$(stat -c %Y -- "$MOUNT")"
   run_amq yes
   m14_sec_post="$(stat -c %Y -- "$MOUNT")"
+  rm -f "$MOUNT"/.luks-g4-probe.*
   if [ "$m14_sec_pre" != "$m14_sec_post" ]; then
-    ok "m14-sec: the unbracketed probe moved \$MOUNT's root mtime across a WHOLE SECOND ($m14_sec_pre -> $m14_sec_post) — C1 can see this move, so a RED below is the missing restore and not a coin flip"
+    ok "m14-sec: the write-probe moved \$MOUNT's root mtime across a WHOLE SECOND ($m14_sec_pre -> $m14_sec_post) — C1 can see this move, so the RED below is the write and not a coin flip"
   else
-    unrun "m14-sec: create and unlink landed in the same whole second — C1 cannot see this move, so m14's result carries no information (task 5.8)"
+    unrun "m14-sec: the write-probe's create landed in the same whole second — C1 cannot see this move, so m14 carries no information (task 5.8)"
   fi
   rc=0; verify_into "$VOUT" "$VERR" || rc=$?
   root_line="$(grep -cE '^\.d\.\.t\.\.\.\.\.\. \./$' "$VOUT" || true)"
-  n="$(diff_n "$VOUT")"
-  if [ "$rc" -eq 0 ] && [ "$root_line" -eq 1 ] && [ "$n" -eq 1 ]; then
-    ok "m14: fix REVERTED — C1 emits exactly '.d..t...... ./' and nothing else. The battery is NON-VACUOUS: m13's green is caused by the restore."
-    record_icode m14 ".d..t...... ./"
+  if [ "$rc" -eq 0 ] && [ "$root_line" -ge 1 ]; then
+    ok "m14: probe reverted to a WRITE => C1 emits '.d..t...... ./'. The battery is NON-VACUOUS: m13's green is caused by the read-open, one character away."
+    record_icode m14 ".d..t...... ./ (write-probe reintroduced)"
   else
-    fail "m14: expected exactly one '.d..t...... ./' with the restore reverted, got root_line=$root_line total=$n (rc=$rc) — m13's green is then NOT attributable to the fix: $(tr '\n' '|' <"$VOUT")"
+    fail "m14: expected '.d..t...... ./' with the probe reverted to a write, got root_line=$root_line (rc=$rc) — m13's green is then NOT attributable to the fix: $(tr '\n' '|' <"$VOUT")"
   fi
 else
-  fail "m14: the SUT mutation did not land (rc=$?) — a missing/ambiguous anchor must be LOUD, never a silent skip that reports green"
+  fail "m14: the SUT mutation did not land — a missing/ambiguous anchor must be LOUD, never a silent skip that reports green"
 fi
 
-# --- m15: the restore fires on a die path AND does not preempt the original die -------------------
-# Forced through the g4_probe_blind path by a shim lsof that exits 0 having reported NO probe line.
-# This is an ENVIRONMENT mutation, not a SUT mutation: the die path is reached by the script's own
-# unmodified logic, which is what makes the verdict about the shipped code.
+# --- m15: an ABSENT workspaces/ fails CLOSED ------------------------------------------------------
+# The state this guard exists for is the one where a cutover is declared GREEN with every user's
+# data missing: $MOUNT is the wrong device, or workspaces/ was auto-created empty beneath a bind
+# mount. Downstream, C1 finds no differences, the du byte match reads 0 == 0 and G3's counts agree
+# at zero — so nothing further down can catch it. It has to be caught here.
 sut_reset
-mkdir -p "$SHIMBIN"
-{ printf '#!/usr/bin/env bash\n'
-  printf 'echo "COMMAND PID USER FD TYPE DEVICE SIZE NODE NAME"\n'
-  printf 'exit 0\n'; } >"$SHIMBIN/lsof"
-chmod +x "$SHIMBIN/lsof"
-m15_pre="$(stat -c %y -- "$MOUNT")"
+make_lsof_shim ':'
+mv "$MOUNT/workspaces" "$SCRATCH/workspaces.parked"
 run_amq yes
-m15_post="$(stat -c %y -- "$MOUNT")"
-if [ "$AMQ_RC" -ne 0 ] && out_has 'g4_probe_blind'; then
-  ok "m15-path: the g4_probe_blind die path was actually taken (rc=$AMQ_RC) — the case is not vacuous"
+mv "$SCRATCH/workspaces.parked" "$MOUNT/workspaces"
+if [ "$AMQ_RC" -ne 0 ] && out_has 'g4_workspaces_unopenable'; then
+  ok "m15: an absent \$MOUNT/workspaces makes the gate REFUSE (rc=$AMQ_RC, g4_workspaces_unopenable) — the wrong-device / empty-bind-source state is caught before any gate can green-light it"
 else
-  unrun "m15-path: the blind die path was NOT reached (rc=$AMQ_RC) — every m15 verdict below would be about a path that did not run: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 300)"
+  fail "m15: the gate did NOT refuse with workspaces/ absent (rc=$AMQ_RC) — a cutover would proceed and every downstream gate would compare empty against empty and report success: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
 fi
-if [ "$m15_pre" = "$m15_post" ]; then
-  ok "m15-restore: the best-effort restore FIRED on the die path — \$MOUNT's root mtime is byte-identical across an aborting run ($m15_post)"
+if out_has 'AMQ_RETURNED_OK'; then
+  fail "m15-noproceed: assert_mount_quiesced RETURNED SUCCESSFULLY with workspaces/ absent — fail-open"
 else
-  fail "m15-restore: the root mtime was left perturbed on the die path ($m15_pre -> $m15_post) — an abort that corrupts the tree it was certifying"
+  ok "m15-noproceed: the function never returned success with workspaces/ absent"
 fi
-# The point of best-effort mode: the ORIGINAL, more informative reason must still reach the operator.
-if out_has 'the G4 straggler probe is BLIND, not clean'; then
-  ok "m15-reason: the ORIGINAL die reason ('BLIND, not clean') reached the operator — the restore did not preempt it"
+# The mount must be restored, or every case below measures a broken fixture.
+if [ -d "$MOUNT/workspaces" ]; then
+  ok "m15-restore: the fixture's workspaces/ was put back — the cases below run against the real tree"
 else
-  fail "m15-reason: the original G4 verdict did NOT reach the operator — a restore-skew die replaced a diagnosable abort, re-creating the #6604 undiagnosable-abort class: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
-fi
-if out_has 'the G4 root-mtime restore did NOT land'; then
-  fail "m15-nopreempt: the STRICT restore-skew die fired on a die path — best-effort mode is not in force and the informative abort was replaced"
-else
-  ok "m15-nopreempt: no strict restore-skew die on the abort path — best-effort mode holds"
+  fail "m15-restore: workspaces/ was not restored — every subsequent verdict is about a broken fixture"
 fi
 
-# --- m16: instrument unavailable => the gate REFUSES (task 5.5 / AC7) -----------------------------
-# The unifying question from the 2026-07-19 learning: if this instrument were unavailable, does the
-# guard REFUSE or PROCEED? Built by symlinking every PATH entry EXCEPT the excluded tool, so the
-# absence is real rather than a stubbed `command -v` and lsof is still present (ensure_lsof runs
-# first and must not be the thing that fires).
-sut_reset
-NOSTAT="$SCRATCH/nostat"; mkdir -p "$NOSTAT"
-IFS=':' read -r -a _pdirs <<<"$PATH"
-for d in "${_pdirs[@]}"; do
-  [ -d "$d" ] || continue
-  for f in "$d"/*; do
-    b="$(basename -- "$f")"
-    [ "$b" = stat ] && continue
-    [ -e "$NOSTAT/$b" ] && continue
-    [ -x "$f" ] && ln -s "$f" "$NOSTAT/$b" 2>/dev/null
-  done
-done
-if [ -x "$NOSTAT/lsof" ] && [ ! -e "$NOSTAT/stat" ]; then
-  ok "m16-land: the instrument-stripped PATH LANDED — lsof present, stat absent (so ensure_lsof cannot be what fires)"
-  m16_out="$(PATH="$NOSTAT" WORKSPACES_MOUNT="$MOUNT" \
-    bash -c '. "$1"; assert_mount_quiesced pre-verify; echo AMQ_RETURNED_OK' _ "$SUT" 2>&1)"
-  m16_rc=$?
-  if [ "$m16_rc" -ne 0 ] && grep -qE -- 'g4_mtime_tool_missing' <<<"$m16_out" \
-     && grep -qE -- "required probe 'stat' is not on PATH" <<<"$m16_out"; then
-    ok "m16: stat unavailable => the gate REFUSES (rc=$m16_rc, g4_mtime_tool_missing) — it does not proceed with an unverifiable bracket"
+# --- m16: an INHERITED fd in a child is NOT counted as a straggler --------------------------------
+# Bash does not set O_CLOEXEC on `exec 9<`, so children inherit fd 9. Under the PID filter an
+# inheriting child reads as a FOREIGN straggler, which would abort every cutover. First the PHYSICS
+# is measured with real lsof (so the guard is shown to be guarding something real), then the SHIPPED
+# function is run with real lsof and must return clean.
+if command -v lsof >/dev/null 2>&1; then
+  _inh="$SCRATCH/inherit.out"
+  ( exec 9<"$MOUNT/workspaces"; lsof +D "$MOUNT" 2>/dev/null | cat >"$_inh" ) || true
+  _inh_rows="$(awk 'NR>1 && $0 ~ /workspaces/' "$_inh" 2>/dev/null | grep -c . || true)"
+  if [ "${_inh_rows:-0}" -ge 2 ]; then
+    ok "m16-physics: an inheriting child really does appear in 'lsof +D' output as its own row ($_inh_rows rows) — the '9<&-' guard is guarding a measured behaviour, not a hypothetical one"
   else
-    fail "m16: with stat absent the gate did NOT refuse (rc=$m16_rc) — a gate that evaporates when a binary is missing is the #6588 silent-failure class: $(tr '\n' '|' <<<"$m16_out" | tail -c 400)"
+    note "m16-physics: could not observe an inheriting child in lsof output on this host ($_inh_rows row(s)) — the shipped guard is retained as defence in depth; the behavioural assertion below still runs"
   fi
-  if grep -qE -- 'AMQ_RETURNED_OK' <<<"$m16_out"; then
-    fail "m16-noproceed: assert_mount_quiesced RETURNED SUCCESSFULLY with its instruments missing — fail-open"
+  sut_reset
+  pass2 >/dev/null 2>&1
+  run_amq no                       # REAL lsof, no shim: this is the end-to-end shape
+  if [ "$AMQ_RC" -eq 0 ] && out_has 'AMQ_RETURNED_OK'; then
+    ok "m16: with REAL lsof and only our own fd held, the gate returns CLEAN — neither the script's own probe fd nor any child of it is miscounted as a straggler"
   else
-    ok "m16-noproceed: the function never returned success with its instruments missing"
+    fail "m16: the gate aborted on a quiesced mount with real lsof (rc=$AMQ_RC) — the probe fd or an inheriting child is being counted as a foreign holder: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
+  fi
+  # THE OTHER DIRECTION. Without this, m16 above is satisfied by a gate that reports NOTHING ever —
+  # including a real straggler. A genuine foreign holder MUST still be caught. This is the pair that
+  # pins the PID filter's OPERATOR: inverting `!=` to `==` makes m16 die and m16-foreign pass.
+  _hold="$SCRATCH/holder.sh"
+  printf '#!/usr/bin/env bash\nexec 9<"$1/workspaces"\nsleep 12\n' >"$_hold"; chmod +x "$_hold"
+  "$_hold" "$MOUNT" & _hpid=$!
+  sleep 0.4
+  run_amq no
+  kill "$_hpid" 2>/dev/null || true; wait "$_hpid" 2>/dev/null || true
+  if [ "$AMQ_RC" -ne 0 ] && out_has 'a straggler still holds the mount'; then
+    ok "m16-foreign: a GENUINE foreign holder of \$MOUNT/workspaces IS caught (rc=$AMQ_RC) — the PID filter drops only our own rows, so m16's clean result is not a gate that reports nothing"
+  else
+    fail "m16-foreign: a real straggler holding the mount was NOT reported (rc=$AMQ_RC) — the holder filter is subtracting more than this process's own rows, which is a fail-open in the gate's entire purpose: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
   fi
 else
-  unrun "m16: could not build an instrument-stripped PATH (lsof present=$([ -x "$NOSTAT/lsof" ] && echo y || echo n), stat absent=$([ ! -e "$NOSTAT/stat" ] && echo y || echo n)) — the case did not run"
+  unrun "m16: lsof is unavailable — the end-to-end read-probe cases did not run"
 fi
 
 # --- m17: FALSIFIED. RECORDED, NOT ASSERTED. -----------------------------------------------------
 # The plan (AC8) claims a %Y-precision restore still emits the diff, "pinning ns precision". It does
 # not. rsync 3.4.1 compares directory mtimes at WHOLE-SECOND granularity, so a whole-second-accurate
 # restore is SUFFICIENT for C1. Re-measured here rather than cited, because a falsification carried
-# forward on a citation is the same unmeasured claim in the other direction. `%y` remains the right
-# choice for the fix (strictly more faithful, costs nothing) — but it must not be asserted as an
-# icode requirement, and the fix's ns read-back is what actually pins it at runtime (see m20).
+# forward on a citation is the same unmeasured claim in the other direction. The record is KEPT even
+# though the restore it was about is gone: it is what justifies the 1.1s sleep in every shim above,
+# and a future editor who deletes that sleep needs to find this measurement, not re-derive it.
 pass2 >/dev/null 2>&1
 m17_base="$(stat -c %Y -- "$MOUNT")"
 touch -d "@${m17_base}.500000000" -- "$MOUNT"
@@ -605,149 +652,178 @@ else
   fail "m17-FALSIFIED: expected a sub-second-only root move to be invisible, got $m17_n difference(s) — the falsification itself is wrong on this rsync and the plan's m17 must be revisited: $(tr '\n' '|' <"$VOUT")"
 fi
 
-# --- m18: a residual perturbation AFTER the probe bracket still aborts C1 (task 5.7 / AC9) --------
-# This is the signal the fix must NOT blind: the restore must undo OUR probe, never a foreign write
-# that lands after the bracket closes.
+# --- m18: a perturbation AFTER the probe still aborts C1 ------------------------------------------
+# This is the signal the fix must NOT blind. The read-probe absorbs nothing by construction (it
+# writes nothing), but that has to be MEASURED, because "absorbs nothing" is exactly what the
+# previous restore-based attempt also claimed while silently absorbing a foreign create+delete pair.
 sut_reset
 make_lsof_shim 'sleep 1.1'
 pass2 >/dev/null 2>&1
 run_amq yes
 if [ "$AMQ_RC" -eq 0 ]; then
-  ok "m18-pre: the bracket completed cleanly first (rc=0) — the abort below is attributable to the POST-bracket write, not to the probe"
+  ok "m18-pre: the probe completed cleanly first (rc=0) — the abort below is attributable to the POST-probe write"
 else
-  unrun "m18-pre: assert_mount_quiesced did not complete (rc=$AMQ_RC) — m18 cannot isolate a post-bracket perturbation"
+  unrun "m18-pre: assert_mount_quiesced did not complete (rc=$AMQ_RC) — m18 cannot isolate a post-probe perturbation"
 fi
 m18_base="$(stat -c %Y -- "$MOUNT")"
 touch -d "@$((m18_base + 2))" -- "$MOUNT"        # whole-second move: C1 can see it (see m17)
 m18_after="$(stat -c %Y -- "$MOUNT")"
 if [ "$m18_base" != "$m18_after" ]; then
-  ok "m18-land: the residual post-bracket perturbation LANDED and crossed a whole second ($m18_base -> $m18_after)"
+  ok "m18-land: the residual post-probe perturbation LANDED and crossed a whole second ($m18_base -> $m18_after)"
 else
   unrun "m18-land: the residual perturbation did not land — the case did not run"
 fi
 rc=0; verify_into "$VOUT" "$VERR" || rc=$?
 root_line="$(grep -cE '^\.d\.\.t\.\.\.\.\.\. \./$' "$VOUT" || true)"
 if [ "$rc" -eq 0 ] && [ "$root_line" -eq 1 ]; then
-  ok "m18: a residual root perturbation AFTER the bracket still ABORTS C1 ('.d..t...... ./') — the fix restores its own probe without blinding the foreign-writer signal"
-  record_icode m18 ".d..t...... ./ (post-bracket foreign write — correctly NOT absorbed)"
+  ok "m18: a foreign root perturbation AFTER the probe still ABORTS C1 ('.d..t...... ./') — the fix removes its own perturbation without blinding the foreign-writer signal"
+  record_icode m18 ".d..t...... ./ (post-probe foreign write — correctly NOT absorbed)"
 else
-  fail "m18: a post-bracket root perturbation did NOT reach C1 (root_line=$root_line rc=$rc) — the fix has blinded the residual-writer signal it promised to preserve: $(tr '\n' '|' <"$VOUT")"
+  fail "m18: a post-probe root perturbation did NOT reach C1 (root_line=$root_line rc=$rc) — the foreign-writer signal has been blinded: $(tr '\n' '|' <"$VOUT")"
 fi
 
-# --- m19: the depth-1 listing fingerprint. TWO variants, because the shipped claim is broader than
-#     the shipped behaviour and only measurement separates them. ------------------------------------
-# m19b first (the case that WORKS), so m19a's failure cannot be confused with a dead fingerprint.
+# --- m19: lsof OUTPUT-FORMAT DRIFT fails CLOSED ---------------------------------------------------
+# Both the positive control and the holder filter read lsof's SECOND whitespace field as the PID and
+# drop row 1 as a header. If a future lsof reordered its columns, the holder filter would read a
+# different column entirely — and the dangerous direction is silent: real holders stop matching and
+# the gate certifies a busy mount as quiesced. Asserting the header shape converts that into a
+# named abort. Driven by a shim that emits a plausible-but-different header.
 sut_reset
-# shellcheck disable=SC2016  # literal SUT source text / shim body, must not expand
-make_lsof_shim ': > "$ln/foreign.keep"'          # an UNMATCHED create: a NET listing change
-pass2 >/dev/null 2>&1
+mkdir -p "$SHIMBIN"
+{ printf '#!/usr/bin/env bash\n'
+  printf 'echo "PID COMMAND USER FD TYPE DEVICE SIZE/OFF NODE NAME"\n'
+  # shellcheck disable=SC2016  # literal shim body, must not expand here
+  printf 'echo "$PPID bash $(id -un) 9r DIR 0,50 40 1 $2/workspaces"\n'
+  printf 'exit 0\n'; } >"$SHIMBIN/lsof"
+chmod +x "$SHIMBIN/lsof"
 run_amq yes
-if [ "$AMQ_RC" -ne 0 ] && out_has 'g4_bracket_listing_changed'; then
-  ok "m19b: an UNMATCHED in-bracket create (net listing change) is CAUGHT by the depth-1 fingerprint — it dies with g4_bracket_listing_changed and refuses to stamp the root mtime over a real concurrent write"
+if [ "$AMQ_RC" -ne 0 ] && out_has 'g4_lsof_header_unrecognized'; then
+  ok "m19: an unrecognised lsof header makes the gate REFUSE (rc=$AMQ_RC, g4_lsof_header_unrecognized) — format drift fails CLOSED instead of silently miscounting the PID column"
 else
-  fail "m19b: the depth-1 fingerprint did NOT catch a net listing change inside the bracket (rc=$AMQ_RC) — the fingerprint is inert: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
+  fail "m19: a reordered lsof header did NOT stop the run (rc=$AMQ_RC) — the gate would parse the wrong column and could certify a busy mount as quiesced: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
 fi
-rm -f "$MOUNT/foreign.keep"
+if out_has 'AMQ_RETURNED_OK'; then
+  fail "m19-noproceed: the function RETURNED SUCCESSFULLY on an unparseable lsof format — fail-open"
+else
+  ok "m19-noproceed: the function never returned success on an unrecognised lsof format"
+fi
 
-# m19a — the case the plan and the in-code comment actually CLAIM: a foreign create+delete PAIR
-# landing inside the bracket, "structurally identical to the probe's own".
+# --- m20: a READ-ONLY $MOUNT fails CLOSED, and 'errors=remount-ro' does NOT ------------------------
+# The removed write-probe proved writability as a side effect; _assert_mount_rw restates it. The
+# TOKEN-vs-SUBSTRING distinction is the whole case: `findmnt -no OPTIONS /` really returns
+# `rw,relatime,errors=remount-ro` on this host, so a substring test for "ro" would declare every
+# healthy mount read-only. Both directions are asserted — a real `ro` must abort, and the
+# remount-ro VALUE must not.
 sut_reset
-# shellcheck disable=SC2016  # literal SUT source text / shim body, must not expand
-make_lsof_shim ': > "$ln/foreign.tmp"; sleep 1.1; rm -f "$ln/foreign.tmp"'
-pass2 >/dev/null 2>&1
-m19a_pre="$(stat -c %y -- "$MOUNT")"
+make_lsof_shim ':'
+_mk_findmnt 'ro,relatime'
 run_amq yes
-m19a_post="$(stat -c %y -- "$MOUNT")"
-if [ -e "$MOUNT/foreign.tmp" ]; then
-  unrun "m19a: the foreign entry survived the shim — this is not a create+delete PAIR and the case did not run"
-elif [ "$AMQ_RC" -ne 0 ] && out_has 'g4_bracket_listing_changed'; then
-  ok "m19a: a MATCHED in-bracket create+delete pair is caught by the fingerprint — the shipped comment's claim holds (if you are reading this after a fix, the OPEN FINDING below has been resolved)"
+if [ "$AMQ_RC" -ne 0 ] && out_has 'g4_mount_read_only'; then
+  ok "m20: a READ-ONLY \$MOUNT makes the gate REFUSE (rc=$AMQ_RC, g4_mount_read_only) — the writability signal the write-probe smuggled in is preserved without writing"
 else
-  open_finding "m19a SURVIVES — the depth-1 listing fingerprint does NOT catch a matched in-bracket create+delete pair. MEASURED: assert_mount_quiesced returned rc=$AMQ_RC (success), and \$MOUNT's root mtime was stamped back to $m19a_post (pre=$m19a_pre), erasing the foreign writer's only evidence. This is the exact case the in-code comment claims to cover: _g4_depth1_fingerprint's header says it exists so that 'a create+delete pair landing inside the bracket' does not 'have its evidence overwritten by our own restore', and assert_mount_quiesced's bracket comment says a 'foreign create+delete PAIR ... is invisible to mtime alone once we restore, so this is the only thing standing between us and stamping over someone else's write'. It is not: fp_pre and fp_post are both taken with no probe present, so a MATCHED pair is net-zero and the fingerprint compares equal by construction. The fingerprint catches NET listing changes (m19b) only. The residual blind spot is therefore strictly larger than the comment admits: not just a bare 'touch \$MOUNT', but any foreign create+delete pair. Fix the COMMENT (narrow the claim to net listing changes and widen the recorded residual), or fix the MECHANISM (e.g. fingerprint the root's mtime continuously, or refuse to restore when \$MOUNT's mtime moved more than the probe's own two operations can account for)."
-  record_icode m19a "SURVIVED — rc=0, foreign create+delete pair absorbed by the restore"
+  fail "m20: a read-only \$MOUNT did NOT stop the run (rc=$AMQ_RC) — rollback() could not remount, and the retained plaintext is the only copy until Phase 5: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
 fi
+# THE SUBSTRING TRAP, asserted in the direction that would break production. A `case "$opts" in *ro*)`
+# implementation passes m20 above and fails here — which is precisely why m20 alone is not enough.
+_mk_findmnt 'rw,relatime,errors=remount-ro'
+run_amq yes
+if [ "$AMQ_RC" -eq 0 ] && out_has 'AMQ_RETURNED_OK'; then
+  ok "m20-token: 'rw,relatime,errors=remount-ro' is accepted — the check compares comma-separated TOKENS, so the 'ro' inside the errors= VALUE does not trip it"
+else
+  fail "m20-token: a healthy 'rw,relatime,errors=remount-ro' mount was REJECTED (rc=$AMQ_RC) — the option check is matching a substring, which aborts every cutover on the kernel's default mount options: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
+fi
+# An UNREADABLE options list must also refuse: an unknown read/write state is not a writable one.
+_mk_findmnt ''
+run_amq yes
+if [ "$AMQ_RC" -ne 0 ] && out_has 'g4_mount_opts_unreadable'; then
+  ok "m20-unreadable: unreadable mount options make the gate REFUSE (g4_mount_opts_unreadable) — an unknown read/write state is not treated as writable"
+else
+  fail "m20-unreadable: the gate proceeded with unreadable mount options (rc=$AMQ_RC) — a silent unknown reads as healthy: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
+fi
+_mk_findmnt 'rw,relatime'   # restore the healthy-mount default for the cases below
 
-# --- m20: a TRUNCATING restore is caught by the read-back (task 5.7c / AC18) ----------------------
-# A `touch` that exits 0 but writes a coarser stamp is not a failure exit, so an exit-status-only
-# guard would pass while the root stayed perturbed. Simulated by mutating the restore primitive to a
-# whole-second form that still exits 0.
+# --- m21: lsof unavailable => the gate REFUSES (task 5.5 / AC7) -----------------------------------
+# The unifying question from the 2026-07-19 learning: if this instrument were unavailable, does the
+# guard REFUSE or PROCEED? Built by symlinking every PATH entry EXCEPT lsof, so the absence is real
+# rather than a stubbed `command -v`.
 sut_reset
-pass2 >/dev/null 2>&1
-touch -d '@1784500000.123456789' -- "$MOUNT"     # force a NON-ZERO ns component ...
-m20_ns="$(stat -c %y -- "$MOUNT")"
-case "$m20_ns" in
-  *.123456789*) ok "m20-pre: \$MOUNT carries a non-zero nanosecond component ($m20_ns) — a whole-second truncation is therefore observable, measured rather than assumed" ;;
-  *) unrun "m20-pre: could not establish a non-zero ns component (got $m20_ns) — a truncating restore would be indistinguishable from a faithful one and the case cannot run" ;;
-esac
-# shellcheck disable=SC2016  # literal SUT source text / shim body, must not expand
-if sut_mutate 'touch -r "$ref" "$MOUNT" 2>/dev/null || true' 'touch -d "@$(stat -c %Y "$ref")" "$MOUNT" 2>/dev/null || true'; then
-  ok "m20-land: the SUT mutation LANDED — the restore primitive now writes a whole-second stamp and still exits 0"
-  make_lsof_shim ':'
-  run_amq yes
-  if [ "$AMQ_RC" -ne 0 ] && out_has 'g4_root_mtime_restore_skew' && out_has 'the G4 root-mtime restore did NOT land'; then
-    ok "m20: a TRUNCATING restore that exits 0 is CAUGHT by the read-back — dies with g4_root_mtime_restore_skew. probe_restored is MEASURED, not asserted."
+NOLSOF="$SCRATCH/nolsof"; mkdir -p "$NOLSOF"
+IFS=':' read -r -a _pdirs <<<"$PATH"
+for d in "${_pdirs[@]}"; do
+  [ -d "$d" ] || continue
+  for f in "$d"/*; do
+    b="$(basename -- "$f")"
+    [ "$b" = lsof ] && continue
+    [ -e "$NOLSOF/$b" ] && continue
+    [ -x "$f" ] && ln -s "$f" "$NOLSOF/$b" 2>/dev/null
+  done
+done
+if [ -x "$NOLSOF/stat" ] && [ ! -e "$NOLSOF/lsof" ]; then
+  ok "m21-land: the instrument-stripped PATH LANDED — stat present, lsof absent"
+  m21_out="$(PATH="$NOLSOF" WORKSPACES_MOUNT="$MOUNT" \
+    bash -c '. "$1"; assert_mount_quiesced pre-verify; echo AMQ_RETURNED_OK' _ "$SUT" 2>&1)"
+  m21_rc=$?
+  if [ "$m21_rc" -ne 0 ] && grep -qE -- 'lsof_install_failed' <<<"$m21_out"; then
+    ok "m21: lsof unavailable => the gate REFUSES (rc=$m21_rc, lsof_install_failed) — property (a), it does not silently skip"
   else
-    fail "m20: a truncating restore was NOT caught (rc=$AMQ_RC) — the read-back guard is inert and the defect can re-enter invisibly: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
+    fail "m21: with lsof absent the gate did NOT refuse (rc=$m21_rc) — a gate that evaporates when a binary is missing is the #6588 silent-failure class: $(tr '\n' '|' <<<"$m21_out" | tail -c 400)"
   fi
-  if out_has 'probe_restored=yes'; then
-    fail "m20-notelemetry: the run still emitted probe_restored=yes after a failed restore — the telemetry asserts a property the read-back just disproved"
+  if grep -qE -- 'AMQ_RETURNED_OK' <<<"$m21_out"; then
+    fail "m21-noproceed: assert_mount_quiesced RETURNED SUCCESSFULLY with lsof missing — fail-open"
   else
-    ok "m20-notelemetry: no probe_restored=yes was emitted on the skew path — the emitter is downstream of the guard, so it cannot certify a restore that did not land"
+    ok "m21-noproceed: the function never returned success with lsof missing"
   fi
 else
-  fail "m20: the SUT mutation did not land — a missing/ambiguous anchor must be LOUD, never a silent skip"
+  unrun "m21: could not build an instrument-stripped PATH (stat present=$([ -x "$NOLSOF/stat" ] && echo y || echo n), lsof absent=$([ ! -e "$NOLSOF/lsof" ] && echo y || echo n)) — the case did not run"
 fi
 
-# --- m21: a failed unlink and the restore (task 5.7d / AC19) --------------------------------------
-# Simulated by removing "$probe" from the unlink so the entry survives, which is what an EPERM /
-# immutable / EROFS unlink failure produces.
+# --- m22: the POSITIVE CONTROL is still load-bearing ----------------------------------------------
+# An lsof that scans nothing (exits 0, reports only a header) must reach g4_probe_blind. Without
+# this, every "clean" verdict above could be produced by a probe that never looked.
 sut_reset
-# shellcheck disable=SC2016  # literal SUT source text / shim body, must not expand
-if sut_mutate 'rm -f "$lout" "$lerr" "$probe"
-
-  # The unlink must have LANDED' 'rm -f "$lout" "$lerr"
-
-  # The unlink must have LANDED'; then
-  ok "m21-land: the SUT mutation LANDED — the probe is no longer unlinked, simulating a failed unlink"
-  make_lsof_shim ':'
-  pass2 >/dev/null 2>&1
-  m21_pre="$(stat -c %y -- "$MOUNT")"
-  run_amq yes
-  m21_post="$(stat -c %y -- "$MOUNT")"
-  m21_left="$(find "$MOUNT" -maxdepth 1 -name '.luks-g4-probe.*' 2>/dev/null | wc -l)"
-  if [ "$m21_left" -ge 1 ]; then
-    ok "m21-pre: the probe entry really did survive ($m21_left present) — the guard's precondition is measured, not assumed"
-  else
-    unrun "m21-pre: no surviving probe entry — the failed-unlink case did not run"
-  fi
-  if [ "$AMQ_RC" -ne 0 ] && out_has 'g4_probe_unremovable' \
-     && out_has 'the G4 probe file survived its own unlink'; then
-    ok "m21: a surviving probe entry BLOCKS the run — the guard fires with g4_probe_unremovable and the gate refuses (fail-closed)"
-  else
-    fail "m21: a surviving probe entry did NOT stop the run (rc=$AMQ_RC) — the gate would certify a tree still carrying its own artifact: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
-  fi
-  # The second half of m21, and the part the task actually asks about: does the surviving probe
-  # BLOCK the restore? Measured against the mtime, not against the message.
-  if [ "$m21_pre" = "$m21_post" ]; then
-    open_finding "m21 PARTIALLY SURVIVES — the surviving-probe guard fires, but it does NOT block the restore, and its own die message says it does. MEASURED: \$MOUNT's root mtime is UNCHANGED across the run ($m21_post), i.e. the restore RAN, while the die message reads 'refusing to restore \$MOUNT's mtime over a tree that still carries our artifact'. The code is workspaces-cutover.sh's g4_probe_unremovable branch: it calls _g4_restore_root_mtime ... best-effort on the line BEFORE the die that claims it refused to. Not fail-open — the run still aborts and C1 never certifies anything — but the operator (and any forensic reader of the tree afterwards) is told the mtime was left perturbed when it was stamped back, over a root that still carries a probe artifact. Either drop the restore call from this branch to match AC19's '[ ! -e \$probe ] || die sits between unlink and restore', or reword the die to say what it does."
-    record_icode m21 "guard fires; restore NOT blocked (message/behaviour mismatch)"
-  else
-    ok "m21-norestore: the surviving probe BLOCKED the restore — \$MOUNT's mtime was left perturbed ($m21_pre -> $m21_post), matching the die message's claim"
-  fi
-  rm -f "$MOUNT"/.luks-g4-probe.*
+mkdir -p "$SHIMBIN"
+{ printf '#!/usr/bin/env bash\n'
+  printf 'echo "COMMAND     PID USER FD   TYPE DEVICE SIZE/OFF    NODE NAME"\n'
+  printf 'exit 0\n'; } >"$SHIMBIN/lsof"
+chmod +x "$SHIMBIN/lsof"
+run_amq yes
+if [ "$AMQ_RC" -ne 0 ] && out_has 'g4_probe_blind'; then
+  ok "m22: an lsof that reports no fd at all reaches g4_probe_blind (rc=$AMQ_RC) — property (c) holds; a scan that did not reach the mount is not a clean mount"
 else
-  fail "m21: the SUT mutation did not land — a missing/ambiguous anchor must be LOUD, never a silent skip"
+  fail "m22: a blind lsof did NOT abort the run (rc=$AMQ_RC) — every clean verdict in this suite could be produced by a probe that never looked: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
 fi
+# The positive control requires the PATH too, not just our PID — so an lsof that reported our
+# process holding something ELSE cannot satisfy it. This is what makes an empty holder list evidence
+# that the scan descended to workspaces/.
+sut_reset
+mkdir -p "$SHIMBIN"
+{ printf '#!/usr/bin/env bash\n'
+  printf 'echo "COMMAND     PID USER FD   TYPE DEVICE SIZE/OFF    NODE NAME"\n'
+  # shellcheck disable=SC2016  # literal shim body, must not expand here
+  printf 'echo "bash    $PPID $(id -un) 9r   DIR   0,50       40 1 $2/plugins"\n'
+  printf 'exit 0\n'; } >"$SHIMBIN/lsof"
+chmod +x "$SHIMBIN/lsof"
+run_amq yes
+if [ "$AMQ_RC" -ne 0 ] && out_has 'g4_probe_blind'; then
+  ok "m22-path: our PID reported against a DIFFERENT path does not satisfy the positive control — it still dies g4_probe_blind, so the control proves the scan reached workspaces/ and not merely that lsof ran"
+else
+  fail "m22-path: the positive control was satisfied by a row bearing our PID but the WRONG path (rc=$AMQ_RC) — an lsof that scanned only \$MOUNT's top level would pass the control while never looking where the data lives: $(tr '\n' '|' <<<"$AMQ_OUT" | tail -c 400)"
+fi
+rm -f "$SHIMBIN/lsof"
 
 # =================================================================================================
-# PART C — CALL-ORDER ASSERTIONS AGAINST THE FILE (task 5.9 / AC10).
+# PART C — ORDER + STRUCTURE ASSERTIONS AGAINST THE FILE (task 5.9 / AC10).
 #
-# Data-only and behaviour-only mutations cannot catch a MISORDERED restore: every case in Part B
-# would stay green if the restore were moved above the unlink on a run where the unlink happened to
-# succeed anyway. The only seam that can see ordering is the file itself. Anchored on SYNTAX against
-# a COMMENT-STRIPPED copy — a bare-token grep matching the comment that EXPLAINS the trap is a
-# documented recurring error here (cq-assert-anchor-not-bare-token). Every missing anchor is LOUD:
-# there is no silent '' comparison anywhere below.
+# Behaviour-only mutations cannot catch every misordering: a gate whose steps run in the wrong order
+# can still produce the right verdict on the one run the test happened to observe. The only seam
+# that sees ordering is the file itself. Anchored on SYNTAX against a COMMENT-STRIPPED copy — a
+# bare-token grep matching the comment that EXPLAINS the trap is a documented recurring error here
+# (cq-assert-anchor-not-bare-token). Every missing anchor is LOUD: there is no silent '' comparison.
+#
+# NOTE ON SCOPE. The bracket-era ordering set (fingerprint-before-open, unlink-before-guard,
+# restore-after-unlink, the four die-path restores) is GONE, not relaxed: it pinned the internal
+# steps of a repair that no longer exists. Asserting it against this function would be asserting
+# placement of code that is not there. What remains are the orderings that still carry meaning.
 # =================================================================================================
 FUNC="$SCRATCH/amq.body"
 sed -n '/^assert_mount_quiesced() {$/,/^}$/p' "$CUTOVER" | sed -e 's/[[:space:]]*#.*$//' >"$FUNC"
@@ -770,17 +846,21 @@ ln_of() {
 }
 
 # shellcheck disable=SC2016  # literal SUT source text: these must match the script's syntax, not expand
-a_fp_pre="$(ln_of 'fingerprint capture'  'fp_pre="\$\(_g4_depth1_fingerprint\)"')" || a_fp_pre=""
+a_rw="$(ln_of 'writability assert'  '^[[:space:]]*_assert_mount_rw "\$phase"')" || a_rw=""
 # shellcheck disable=SC2016
-a_open="$(ln_of 'probe open'             'exec 9>"\$probe"')" || a_open=""
+a_open="$(ln_of 'probe read-open'   'exec 9<"\$wsdir"')" || a_open=""
 # shellcheck disable=SC2016
-a_rm="$(ln_of 'probe unlink'             '^[[:space:]]*rm -f "\$lout" "\$lerr" "\$probe"')" || a_rm=""
+a_lsof="$(ln_of 'lsof invocation'   'lsof \+D "\$MOUNT" 9<&-')" || a_lsof=""
 # shellcheck disable=SC2016
-a_exists="$(ln_of 'surviving-probe guard' '^[[:space:]]*if \[ -e "\$probe" \]; then')" || a_exists=""
+a_hdr="$(ln_of 'header assert'      'g4_lsof_header_unrecognized')" || a_hdr=""
 # shellcheck disable=SC2016
-a_fp_post="$(ln_of 'fingerprint re-check' 'fp_post="\$\(_g4_depth1_fingerprint\)"')" || a_fp_post=""
+a_pc="$(ln_of 'positive control'    'awk -v p="\$\$" -v n="\$wsdir"')" || a_pc=""
 # shellcheck disable=SC2016
-a_restore="$(ln_of 'strict restore'       '^[[:space:]]*_g4_restore_root_mtime "\$mref" "\$phase"$')" || a_restore=""
+a_hold="$(ln_of 'holder filter'     'holders="\$\(awk -v p="\$\$"')" || a_hold=""
+# shellcheck disable=SC2016
+a_emit="$(ln_of 'holder emit'       '^[[:space:]]*emit_freeze_holders "\$holders"')" || a_emit=""
+# shellcheck disable=SC2016
+a_die="$(ln_of 'straggler die'      'a straggler still holds the mount')" || a_die=""
 
 order_pair() {                      # <desc> <earlier-name> <earlier> <later-name> <later>
   if [ -z "$3" ] || [ -z "$5" ]; then
@@ -791,47 +871,93 @@ order_pair() {                      # <desc> <earlier-name> <earlier> <later-nam
     fail "C-order: $1 VIOLATED — $2 (line $3) does not precede $4 (line $5)"
   fi
 }
-order_pair "the fingerprint is captured BEFORE the probe is opened" fp_pre "$a_fp_pre" exec9 "$a_open"
-order_pair "the probe is opened BEFORE it is unlinked"              exec9 "$a_open" unlink "$a_rm"
-order_pair "the surviving-probe guard sits AFTER the unlink"        unlink "$a_rm" guard "$a_exists"
-order_pair "the fingerprint is re-checked AFTER the unlink"         unlink "$a_rm" fp_post "$a_fp_post"
-order_pair "the strict restore sits AFTER the surviving-probe guard" guard "$a_exists" restore "$a_restore"
-order_pair "the strict restore sits AFTER the fingerprint re-check"  fp_post "$a_fp_post" restore "$a_restore"
+# The fd must be open BEFORE the scan, or the positive control can never see it.
+order_pair "the probe fd is opened BEFORE lsof runs"                  open "$a_open" lsof "$a_lsof"
+# The header shape must be checked BEFORE anything parses a column out of the output — otherwise the
+# parse the assert exists to protect has already happened.
+order_pair "the header assert precedes the positive control"          header "$a_hdr" poscontrol "$a_pc"
+order_pair "the header assert precedes the holder filter"             header "$a_hdr" holders "$a_hold"
+# Property (c): the positive control must gate the holder verdict, not follow it.
+order_pair "the positive control precedes the holder filter"          poscontrol "$a_pc" holders "$a_hold"
+# Property (d): holders are EMITTED before die(), so the abort self-reports (#6604).
+order_pair "holders are EMITTED before the straggler die"             emit "$a_emit" die "$a_die"
+# The writability assert is a precondition, not an afterthought.
+order_pair "the writability assert precedes the probe open"           rwassert "$a_rw" open "$a_open"
 
-# Die paths must not leave the tree SILENTLY perturbed. Three of the four restore; the
-# probe-unremovable path deliberately does NOT — the probe is still sitting in the tree there, so
-# stamping the mtime back would dress a contaminated tree as a pristine one. Perturbed-with-the-
-# artifact-present is strictly more honest than pristine-looking-but-contaminated, and the run
-# aborts either way so C1 never certifies it.
-#
-# This asserted 4 until the m21 finding: the unremovable branch restored AND its die message said
-# it refused to. The count moved to 3 because the CODE was corrected to match the message — so the
-# guard here is the count PLUS the no-restore-with-a-stated-reason, not a relaxed count.
-# Counted, not sampled: `grep -c` (never `| grep -q`, task 5.7g).
-# shellcheck disable=SC2016  # literal SUT source text, must not expand
-be_n="$(grep -cE '_g4_restore_root_mtime "\$mref" "\$phase" best-effort' "$FUNC" || true)"
-# shellcheck disable=SC2016  # literal SUT source text, must not expand
-unrem_body="$(sed -n '/if \[ -e "\$probe" \]; then/,/^  fi$/p' "$FUNC")"
-unrem_restores="$(grep -cE '_g4_restore_root_mtime' <<<"$unrem_body" || true)"
-unrem_says_no="$(grep -cE 'refusing to restore' <<<"$unrem_body" || true)"
-if [ "$be_n" -eq 3 ] && [ "$unrem_restores" -eq 0 ] && [ "$unrem_says_no" -ge 1 ]; then
-  ok "C-diepaths: 3 die paths restore best-effort; the probe-unremovable path does NOT restore and its die says so (code and message agree — m21)"
+# _assert_mount_rw must compare TOKENS, not a substring. This is the one assertion in Part C whose
+# inversion is invisible to a reader: `case "$opts" in *ro*)` looks correct and aborts every real
+# cutover (measured: `findmnt -no OPTIONS /` returns `rw,relatime,errors=remount-ro`). m20-token
+# catches it behaviourally; this catches it structurally, because the two failure directions are
+# different and a future edit could satisfy one while breaking the other.
+RWFN="$SCRATCH/rw.body"
+sed -n '/^_assert_mount_rw() {$/,/^}$/p' "$CUTOVER" | sed -e 's/[[:space:]]*#.*$//' >"$RWFN"
+if [ ! -s "$RWFN" ]; then
+  fail "C-rw-anchor: could NOT locate _assert_mount_rw() — the writability assertions are vacuous without it"
 else
-  fail "C-diepaths: expected 3 best-effort restores + a non-restoring probe-unremovable path whose die states it (found be=$be_n unrem_restores=$unrem_restores unrem_says_no=$unrem_says_no) — either an abort leaves \$MOUNT silently perturbed, or the die message contradicts the code"
+  ok "C-rw-anchor: located _assert_mount_rw() ($(wc -l <"$RWFN") lines, comments stripped)"
+  # shellcheck disable=SC2016  # literal SUT source text, must not expand
+  if grep -qE "IFS=','[[:space:]]+read -r -a" "$RWFN" && grep -qE '\[ "\$tok" = ro \]' "$RWFN"; then
+    ok "C-rw-token: the options list is SPLIT on ',' and each token compared WHOLE ([ \"\$tok\" = ro ]) — 'errors=remount-ro' cannot trip it"
+  else
+    fail "C-rw-token: _assert_mount_rw does not split on ',' and compare whole tokens — a substring test for 'ro' matches inside 'errors=remount-ro' and would abort every cutover on the kernel's default options"
+  fi
+  # The inverse: no substring glob against the whole options string.
+  if grep -qE 'case "\$opts" in|\*ro\*' "$RWFN"; then
+    fail "C-rw-nosubstr: _assert_mount_rw contains a substring match against the whole options string — this is the 'errors=remount-ro' trap"
+  else
+    ok "C-rw-nosubstr: no substring match against the whole options string"
+  fi
 fi
 
-# The `exec 9>` failure path must NOT restore: nothing was created, so there is nothing to undo, and
-# a restore there would stamp a timestamp the probe never moved.
-uncreatable_body="$(sed -n '/emit_drift g4_probe_uncreatable/{=;}' "$FUNC" | head -1)"
-if [ -n "$uncreatable_body" ]; then
-  ctx="$(sed -n "$((uncreatable_body - 3)),${uncreatable_body}p" "$FUNC")"
-  if grep -qE -- '_g4_restore_root_mtime' <<<"$ctx"; then
-    fail "C-uncreatable: the g4_probe_uncreatable path restores the mtime — but exec 9> FAILED there, so nothing was perturbed and the restore stamps a move that never happened"
-  else
-    ok "C-uncreatable: the g4_probe_uncreatable path correctly does NOT restore (exec 9> failed; nothing was created)"
-  fi
+# NO WRITE ANYWHERE UNDER $MOUNT. The invariant this whole change exists to enforce, asserted as a
+# property of the function rather than of any one line: the gate must not create, truncate, unlink
+# or restamp anything inside the tree C1 certifies. Quantified over ALL the shapes that could do it.
+wrote=0
+while IFS= read -r _pat; do
+  [ -n "$_pat" ] || continue
+  c="$(grep -cE -- "$_pat" "$FUNC" || true)"
+  if [ "$c" -gt 0 ]; then wrote=$((wrote + c)); note "  write-shaped construct in assert_mount_quiesced: /$_pat/ x$c"; fi
+done <<'PATEOF'
+exec 9>
+touch[[:space:]]+-r
+rm -f "\$probe"
+>[[:space:]]*"\$MOUNT
+>[[:space:]]*"\$wsdir
+mkdir[[:space:]]
+PATEOF
+if [ "$wrote" -eq 0 ]; then
+  ok "C-nowrite: assert_mount_quiesced contains ZERO write-shaped constructs targeting \$MOUNT (6 shapes checked) — the gate cannot perturb the tree it certifies"
 else
-  fail "C-uncreatable: ANCHOR MISSING — could not locate the g4_probe_uncreatable path"
+  fail "C-nowrite: $wrote write-shaped construct(s) in assert_mount_quiesced — the gate is mutating the tree C1 is about to certify byte-for-byte (#6733)"
+fi
+
+# The mktemp files the gate DOES create must live outside $MOUNT. The L3 startup gate is what
+# enforces that; assert the gate exists, because without it the three mktemp calls in this function
+# would perturb the tree whenever $TMPDIR happened to point inside the mount.
+BODY_NC="$SCRATCH/cutover.nocomment"
+sed -e 's/[[:space:]]*#.*$//' "$CUTOVER" >"$BODY_NC"
+if grep -qE 'emit_drift tmpdir_under_mount' "$BODY_NC" && grep -qE 'case "\$\(mktemp -u\)" in' "$BODY_NC"; then
+  ok "C-tmpdir: the L3 gates refuse to run when \$TMPDIR resolves under \$MOUNT — this function's mktemp files cannot perturb the certified tree"
+else
+  fail "C-tmpdir: no startup assert that \$TMPDIR is outside \$MOUNT — the six mktemp sites in this script would perturb the tree C1 certifies whenever TMPDIR points inside the mount"
+fi
+
+# manifest_of must not write either — the SAME invariant, one gate over. `git status --porcelain`
+# refreshes and REWRITES .git/index when stat data is racily stale, and the G3 call site runs
+# against $STAGING AFTER verify_byte_identity certified DST == SRC. Quantified over ALL THREE
+# invocations, not sampled: a fix applied to `status` alone would satisfy a one-member check.
+MFN="$SCRATCH/manifest.body"
+sed -n '/^manifest_of() {/,/^}$/p' "$CUTOVER" | sed -e 's/[[:space:]]*#.*$//' >"$MFN"
+if [ ! -s "$MFN" ]; then
+  fail "C-manifest-anchor: could NOT locate manifest_of() — the index-write assertions are vacuous without it"
+else
+  git_total="$(grep -cE '^[[:space:]]*git ' "$MFN" || true)"
+  git_safe="$(grep -cE '^[[:space:]]*git --no-optional-locks -C ' "$MFN" || true)"
+  if [ "$git_total" -ge 3 ] && [ "$git_safe" -eq "$git_total" ]; then
+    ok "C-manifest: ALL $git_total git invocations in manifest_of carry --no-optional-locks — 'git status' cannot rewrite .git/index inside \$STAGING after C1 certified it"
+  else
+    fail "C-manifest: only $git_safe of $git_total git invocations in manifest_of carry --no-optional-locks — a bare 'git status --porcelain' refreshes and REWRITES .git/index, mutating the destination tree immediately after verify_byte_identity proved it matched"
+  fi
 fi
 
 # C1's predicate must remain byte-unchanged: this bug is fixed on the probe, never by narrowing the
@@ -869,17 +995,18 @@ else
 fi
 
 # AC21: no `local x="$(cmd)"` in the new code — `local` returns 0 regardless, masking the exit
-# status in a shell with no `-e`. Scoped to the two functions this fix added.
+# status in a shell with no `-e`. Scoped to the two functions this change owns: the new
+# _assert_mount_rw and the rewritten assert_mount_quiesced.
 masked=0
-for fn in _g4_restore_root_mtime _g4_depth1_fingerprint emit_root_mtime ensure_mtime_tools; do
+for fn in _assert_mount_rw assert_mount_quiesced; do
   sed -n "/^${fn}() {\$/,/^}\$/p" "$CUTOVER" | sed -e 's/[[:space:]]*#.*$//' >"$SCRATCH/fn.body"
   c="$(grep -cE -- 'local [a-zA-Z_]+="\$\(' "$SCRATCH/fn.body" || true)"
   [ "$c" -gt 0 ] && { masked=$((masked + c)); note "  masked-status site in $fn: $c"; }
 done
 if [ "$masked" -eq 0 ]; then
-  ok "C-localmask: no 'local x=\$(cmd)' in the fix's new functions — exit status is not masked in a shell with no -e (AC21)"
+  ok "C-localmask: no 'local x=\$(cmd)' in the fix's functions — exit status is not masked in a shell with no -e (AC21)"
 else
-  fail "C-localmask: $masked 'local x=\$(cmd)' site(s) in the fix's new functions — 'local' returns 0 regardless, so a failed stat/touch never reaches its die (AC21)"
+  fail "C-localmask: $masked 'local x=\$(cmd)' site(s) in the fix's functions — 'local' returns 0 regardless, so a failed findmnt/mktemp never reaches its die (AC21)"
 fi
 
 # =================================================================================================
