@@ -160,24 +160,29 @@ _rm_errno() {
   esac
 }
 
-# classify_lock_node <path> — prints the node-type token for <path> to stdout
-# (symlink/chardevice/mount/dir/regular/other) and returns 0, or returns 1 with
-# no output if <path> is absent. Single source of truth for the type-precedence
+# classify_lock_node <path> — prints "<type> <is_mp>" for <path> to stdout, where
+# <type> is symlink/chardevice/mount/dir/regular/other, and returns 0; or returns
+# 1 with no output if <path> is absent. Single source of truth for the type-precedence
 # check (symlink FIRST because -e/-f/-d all dereference symlinks; char-device
 # BEFORE mountpoint BEFORE dir BEFORE regular — a bound /dev/null is BOTH -c and
 # a mountpoint, and a mountpoint is also a dir) shared by BOTH
 # sweep_stale_git_locks and _config_lock_wedged (#6186 — the two used to run
 # independent, disagreeing checks: a bind-mounted REGULAR config.lock passes
 # _config_lock_wedged's own `-f` test as "regular"/not-wedged, while the sweep's
-# mountpoint check classified the SAME node "mount"/non-regular-lock). Also sets
-# the global CLASSIFY_LOCK_NODE_IS_MP ("true"/"false") so a caller needing the
-# mountpoint flag (the sweep's `mount=` attribute) doesn't recompute `stat -c%m`.
+# mountpoint check classified the SAME node "mount"/non-regular-lock).
+#
+# Output contract: ONE line, two space-separated fields — `<type> <is_mp>` where
+# <is_mp> is "true"/"false" — so a caller needing the mountpoint flag (the
+# sweep's `mount=` attribute) doesn't recompute `stat -c%m`. The flag is part of
+# STDOUT, deliberately NOT a global: every call site is a command substitution
+# (`ftype=$(classify_lock_node …)`), which runs the function in a SUBSHELL, so a
+# global assignment here is discarded on subshell exit and the parent reads it
+# unset — fatal under this script's `set -u`. Callers split with `read -r`.
 # GNU-only stat, consistent with the rest of this file.
 classify_lock_node() {
-  local path="$1" rp
-  CLASSIFY_LOCK_NODE_IS_MP=false
+  local path="$1" rp is_mp=false
   if [[ -L "$path" ]]; then
-    echo symlink
+    echo "symlink $is_mp"
     return 0
   fi
   [[ -e "$path" ]] || return 1
@@ -186,18 +191,18 @@ classify_lock_node() {
   # containing-fs SOURCE for every existing path and never yields "none".)
   rp=$(realpath -- "$path" 2>/dev/null) || rp=""
   if [[ -n "$rp" && "$(stat -c%m -- "$rp" 2>/dev/null)" == "$rp" ]]; then
-    CLASSIFY_LOCK_NODE_IS_MP=true
+    is_mp=true
   fi
   if [[ -c "$path" ]]; then
-    echo chardevice
-  elif [[ "$CLASSIFY_LOCK_NODE_IS_MP" == true ]]; then
-    echo mount
+    echo "chardevice $is_mp"
+  elif [[ "$is_mp" == true ]]; then
+    echo "mount $is_mp"
   elif [[ -d "$path" ]]; then
-    echo dir
+    echo "dir $is_mp"
   elif [[ -f "$path" ]]; then
-    echo regular
+    echo "regular $is_mp"
   else
-    echo other
+    echo "other $is_mp"
   fi
   return 0
 }
@@ -233,7 +238,7 @@ sweep_stale_git_locks() {
   local threshold="${2:-60}"   # seconds
   [[ -d "$git_dir" ]] || return 0
   local now lock path mtime age swept=0 unremovable=0
-  local ftype owner perms mount rm_err rm_rc rdev whiteout is_mp
+  local ftype owner perms mount rm_err rm_rc rdev whiteout is_mp classify_out
   now=$(date +%s)
   # Scope: ONLY the config-write locks (`config.lock`, `config.worktree.lock`) —
   # the confirmed EEXIST wedge that blocks ensure_bare_config's writes below.
@@ -246,11 +251,13 @@ sweep_stale_git_locks() {
   for lock in config.lock config.worktree.lock; do
     path="$git_dir/$lock"
     # Node classification is unified in classify_lock_node() (#6186, shared with
-    # _config_lock_wedged) so both detectors agree on every node type.
-    if ! ftype=$(classify_lock_node "$path"); then
+    # _config_lock_wedged) so both detectors agree on every node type. It emits
+    # "<type> <is_mp>" on one line; split both fields out of the SAME call so the
+    # mountpoint flag survives the command substitution's subshell.
+    if ! classify_out=$(classify_lock_node "$path"); then
       continue   # missing: nothing present to diagnose
     fi
-    is_mp="$CLASSIFY_LOCK_NODE_IS_MP"
+    read -r ftype is_mp <<<"$classify_out"
 
     owner=$(stat -c '%u:%g' -- "$path" 2>/dev/null) || owner=unknown
     perms=$(stat -c '%a' -- "$path" 2>/dev/null) || perms=unknown
@@ -351,10 +358,11 @@ sweep_stale_git_locks() {
 # detectors; before this unification a duplicated `-f`-only check here read that
 # node as regular/not-wedged while the sweep flagged it non-regular-lock.
 _config_lock_wedged() {
-  local lock="$1.lock" ftype
-  ftype=$(classify_lock_node "$lock") || return 1   # absent -> not wedged
-  [[ "$ftype" == "regular" ]] && return 1           # regular -> real/handled, not the wedge
-  return 0                                          # symlink/chardevice/mount/dir/other -> wedged
+  local lock="$1.lock" classify_out ftype
+  classify_out=$(classify_lock_node "$lock") || return 1  # absent -> not wedged
+  read -r ftype _ <<<"$classify_out"                      # field 2 (is_mp) unused here
+  [[ "$ftype" == "regular" ]] && return 1                 # regular -> real/handled, not the wedge
+  return 0                                                # symlink/chardevice/mount/dir/other -> wedged
 }
 
 # _config_target_masked <path> — rc 0 (MASKED) iff the RENAME TARGET itself is a
