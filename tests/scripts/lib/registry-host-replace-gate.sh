@@ -2,7 +2,7 @@
 # Sourced destroy-guard gate for the registry-host-replace scoped -replace
 # (apply_target=registry-host-replace in .github/workflows/apply-web-platform-infra.yml).
 #
-# EXTRACTED + SOURCED (mirrors inngest-host-replace-gate.sh / web2-recreate-gate.sh): both
+# EXTRACTED + SOURCED (mirrors inngest-host-replace-gate.sh): both
 # the workflow's registry_host_replace plan step AND
 # tests/scripts/test-registry-host-replace-gate.sh source this file and call
 # registry_host_replace_gate directly, so the CI decision logic is the SAME bytes the test

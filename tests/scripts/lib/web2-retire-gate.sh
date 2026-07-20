@@ -2,7 +2,7 @@
 # Sourced destroy-guard gate for the web-2 RETIREMENT (#6538) — the operator-local
 # 5-target plan of B6.2, NOT any CI path.
 #
-# EXTRACTED + SOURCED (mirrors web2-recreate-gate.sh): the B6.3 gate invocation AND
+# EXTRACTED + SOURCED (mirrors inngest-host-replace-gate.sh): the B6.3 gate invocation AND
 # tests/scripts/test-destroy-guard-counter-web-platform.sh both source this file and
 # call web2_retire_gate directly, so the bytes the operator runs are the bytes under
 # test (no re-derived inline copy to drift).
@@ -19,7 +19,7 @@
 # retirement; grading a recreate plan against web2_retire_allow permits destroying
 # the data the recreate exists to preserve.
 #
-# NO [ack-destroy] BYPASS (mirrors web2-recreate-gate.sh): a destructive prod host
+# NO [ack-destroy] BYPASS (mirrors registry-host-replace-gate.sh): a destructive prod host
 # retirement is authorized by an explicit per-command operator go-ahead
 # (hr-menu-option-ack-not-prod-write-auth), never a commit trailer. An ack could
 # also permit a web-1 delete, so the precision guard carries no override.

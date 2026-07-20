@@ -366,10 +366,17 @@ assert "the call site hardcodes no 10.0.1.x literal" \
 # exact catastrophe this gate exists to prevent, arriving through the delivery channel
 # rather than the code.
 #
-# The existing coherence guard (web2-recreate-preflight.sh) CANNOT be reused on the routine
-# path: it hard-requires a pinned repo@sha256 ref and dies on anything else, while
-# var.image_name defaults to the mutable `:latest`. So the safety argument is structural, and
-# the facts it rests on are ASSERTED below rather than assumed.
+# The coherence guard (host-scripts-coherence-preflight.sh; renamed from
+# web2-recreate-preflight.sh in #6575, comparison logic byte-unchanged) is now HOST-AGNOSTIC and
+# reachable through a documented operator procedure — the host_creates HALT runbook carries the
+# full `crane digest` -> preflight -> `apply -var image_name=<pinned>` chain. What did NOT change
+# is why it cannot be reused on the ROUTINE path: it hard-requires a pinned repo@sha256 ref and
+# dies on anything else, while var.image_name defaults to the mutable `:latest`. So the safety
+# argument on this path is still structural, and the facts it rests on are ASSERTED below rather
+# than assumed. ADR-128 names the split: build-integrity (the image's baked host-scripts match the
+# tree it was built from) is statically enforced in cloud-init-user-data-size.test.ts; cross-commit
+# skew (apply at C_tf while :latest points at C_img) is enforced NOWHERE today, is open under
+# #6712, and needs #6730's digest-pinned birth path.
 #
 # TWO CORRECTIONS to an earlier draft of this block, recorded because the wrong version READ as
 # more reassuring than the right one:
@@ -385,25 +392,31 @@ assert "the call site hardcodes no 10.0.1.x literal" \
 #     tripwire (#6416), which is what is asserted now. The old assertion would have stayed
 #     green with that tripwire deleted.
 #
-# CLOSED (#6718, 2026-07-20). This formerly read as a KNOWN GAP: the warm_standby job -targets
-# hcloud_server_network.web["web-1"], which transitively reaches hcloud_server.web, and its
-# guard set was resource_deletes / nested_deletes / reboot_updates with NO host_creates check —
-# so that path could birth a host on a new bootstrap hash with no coherence preflight. It now
-# carries the same host_creates > 0 HALT as the per-PR apply job, evaluated OUTSIDE the
-# destroy_count sum (no [ack-destroy] bypass). The gap belonged to the apply workflow's guard set
-# rather than to this gate, and it was closed there, not here.
+# CLOSED then DELETED (#6718 2026-07-20, then #6575 2026-07-20). This formerly read as a KNOWN
+# GAP: the warm_standby job -targeted hcloud_server_network.web["web-1"], which transitively
+# reaches hcloud_server.web, and its guard set was resource_deletes / nested_deletes /
+# reboot_updates with NO host_creates check — so that path could birth a host on a new bootstrap
+# hash with no coherence preflight. #6718 closed it by adding the same host_creates > 0 HALT as
+# the per-PR apply job. #6575 then deleted the job outright with the rest of the dead web-2
+# dispatch surface, so the path no longer exists to guard. Recorded rather than deleted because
+# the SEQUENCE is the point: the gap was closed on its merits first, so nothing here depends on
+# the deletion having happened.
 #
-# Still not asserted here, for the original reason: this gate does not pin the warm_standby guard
-# set either way. The HALT is asserted by T51a-e (structure/order) and T52-T54
+# Still not asserted here, for the original reason: this gate does not pin any dispatch job's
+# guard set either way. The surviving HALTs are asserted by T51a-e (structure/order) and T52-T54
 # (BEHAVIOUR — the guard is extracted and executed against real tfplan fixtures,
 # which is what pins `exit 1`, the jq key, and the fail-closed arm) in
 # tests/scripts/test-destroy-guard-counter-web-platform.sh, which lives in the REQUIRED test
 # shard — deliberately, since this file runs only in infra-validation.yml's advisory
 # deploy-script-tests job, and the check guarding a HALT must not be weaker than the HALT.
 #
-# Residual, also not closed here: an operator-driven fresh create/-replace of web-1 consumes
-# the new hash with no preflight. Closing it needs a preflight that works against a mutable
-# tag — different work from this gate.
+# Residual, also not closed here: an operator-driven fresh create/-replace of web-1 consumes the
+# new hash. The coherence preflight IS now reachable for that operator — #6575 made it
+# host-agnostic and wrote the full crane-digest -> verify -> pin chain into the host_creates HALT
+# runbook — but reachability is not enforcement: nothing makes the routine apply path use it,
+# because var.image_name still defaults to the mutable `:latest`. That is ADR-128's cross-commit
+# skew invariant: open under #6712, closable only by #6730's digest-pinned birth path. It is
+# different work from this gate.
 echo ""
 echo "--- AC8: bake/apply coherence — the guard that actually holds ---"
 WF_DIR="$DIR/../../../.github/workflows"
