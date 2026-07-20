@@ -882,7 +882,8 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    If there are no local changes, skip the commit (this is the expected case — review's
    primary output is GitHub issues, which are remote-only). If push fails (no network),
    warn and continue.
-3. **Emit the review-evidence trailer (ALWAYS — not conditional on step 2).**
+3. **Emit the review-evidence trailer (ALWAYS — not conditional on step 2)**, via
+   [emit-review-trailer.sh](./scripts/emit-review-trailer.sh).
 
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/review/scripts/emit-review-trailer.sh" --findings <n>
