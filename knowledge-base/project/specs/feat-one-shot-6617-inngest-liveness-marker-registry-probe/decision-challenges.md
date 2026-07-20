@@ -126,7 +126,6 @@ would make it *harmless* on the one path that reaches users.
 
 **Not folded in** — it touches product notification code, not infra, and the dark window is the
 constraint here. Cheap at 0 users, expensive at 10. Companion issue required.
-</content>
 
 ---
 

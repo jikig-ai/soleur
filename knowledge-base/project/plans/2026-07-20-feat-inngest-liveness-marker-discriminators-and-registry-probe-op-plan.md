@@ -789,4 +789,3 @@ introduced (the `/proc/<pid>/environ` read). No Article 30 entry — no new proc
 - **`Ref #6617`, not `Closes`.** The close-condition is a post-merge replace. `Closes #6295` in PR A is correct.
 - **Do not record an H4 verdict before reading a probe row.** The instrument exists to test it.
 - **An AC that greps for a forbidden literal must not spell that literal** — writing the banned command string into an AC trips the repo's IaC-routing PreToolUse hook and blocks the plan write. Describe the prohibition; let `/work` own the pattern. v1 hit this once.
-</content>

@@ -75,8 +75,21 @@ Three PRs, ordered A → B → C. Do not bundle.
 ### Phase B4: Close out
 
 - [x] B4.1 File the counting-assertion tracking issue (the suite asserts a character census)
-- [ ] B4.2 **Dispatch both ops standalone; record the results — this answers H4**
-- [ ] B4.3 Do NOT record an H4 verdict anywhere until B4.2's rows are read
+- [~] B4.2 **Dispatch both ops standalone; record the results — this answers H4**
+      - [x] B4.2.a `op=registry-probe` dispatched and read (run 29729509511, success):
+            `registry_empty=true function_count=0 ids=[]`. Recorded in `session-state.md`.
+      - [ ] B4.2.b `op=doublefire-probe` — **blocked until post-merge delivery.** The first
+            dispatch (run 29729623865) surfaced a pre-existing defect on the DEFAULT path
+            (`build_request_body` used `printf '%s'`, emitting zero bytes for an empty CSV →
+            `jq --argjson fnids ""` aborted). Fixed inline on this branch. The host runs the
+            *deployed* copy, so the reading cannot be taken until the fix reaches it via the
+            post-merge infra-config push. Re-dispatch then and record the run count.
+- [x] B4.3 Do NOT record an H4 verdict anywhere until B4.2's rows are read
+      — **honoured.** The only verdict recorded is the registry one, and it is backed by an
+      actual read row (B4.2.a), not by inference. `session-state.md` carries the explicit
+      caveat that an empty registry is **not** proof of "no double-scheduler": it shows
+      nothing is registered *now*, not that nothing executed earlier. The doublefire verdict
+      remains unrecorded pending B4.2.b.
 
 ---
 
@@ -165,4 +178,3 @@ Three PRs, ordered A → B → C. Do not bundle.
 - [ ] C6.5 Otherwise close #6617
 - [ ] C6.6 Verify #6608 separately post-replace (rides along, closed on its own evidence)
 - [ ] C6.7 File the companion issue: cron send-path idempotency (see decision-challenges.md T-4)
-</content>
