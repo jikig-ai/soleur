@@ -51,7 +51,10 @@ Modes:
     --changed             only files changed vs the merge base (rule (c) is
                           ALWAYS restricted to this set regardless of mode)
     --census              print the class-b population count and exit 0
-    explicit paths        scan exactly those files (lefthook / test harness)
+    explicit paths        scan exactly those files, WHOLE-file (lefthook / test
+                          harness). Rule (c) is not line-scoped here: naming a path
+                          is already the scoping decision, and deferring it to git
+                          history would make the fixture suite expire on merge.
 
 Exit codes:
     0  clean
@@ -322,6 +325,25 @@ def check_rule_a(path: Path, lines: list[str]) -> list[str]:
     return problems
 
 
+def merge_base() -> str | None:
+    """The merge base against the trunk, or None if it cannot be resolved.
+
+    NOT always resolvable, and the failure is NOT hypothetical: `actions/checkout`
+    defaults to `fetch-depth: 1`, so on a shallow CI checkout `origin/main` does not
+    exist and `git merge-base` exits 128. This linter must also run on a developer
+    clone that named its remote something other than `origin`, or has no remote at
+    all. Hence: try the candidates, and let the caller decide how to degrade.
+    """
+    for ref in ("origin/main", "main", "origin/HEAD"):
+        proc = subprocess.run(
+            ["git", "merge-base", "HEAD", ref],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+    return None
+
+
 def added_lines(path: Path) -> set[int] | None:
     """1-based line numbers ADDED to `path` vs the merge base. None = whole file is new.
 
@@ -333,11 +355,11 @@ def added_lines(path: Path) -> set[int] | None:
 
     So the unit is the added LINE, not the touched file.
     """
+    base = merge_base()
+    if base is None:
+        # Fail OPEN for this rule: an unresolvable base must not invent violations.
+        return set()
     try:
-        base = subprocess.run(
-            ["git", "merge-base", "HEAD", "origin/main"],
-            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-        ).stdout.strip()
         rel = path.relative_to(REPO_ROOT) if path.is_relative_to(REPO_ROOT) else path
         diff = subprocess.run(
             ["git", "diff", "--unified=0", f"{base}...HEAD", "--", str(rel)],
@@ -362,14 +384,22 @@ def added_lines(path: Path) -> set[int] | None:
     return out
 
 
-def check_rule_c(path: Path, lines: list[str]) -> list[str]:
-    """File calls mktemp with no owning trap, and the allocation is NEWLY ADDED."""
+def check_rule_c(path: Path, lines: list[str], line_scoped: bool = True) -> list[str]:
+    """File calls mktemp with no owning trap, and the allocation is NEWLY ADDED.
+
+    `line_scoped=False` lints the WHOLE file and asks git nothing. That is the right
+    semantics when a caller named the path explicitly ("lint this file"), and it is
+    load-bearing for the test suite: the fixtures are committed, so under line scoping
+    they read as "added" only until this PR merges, after which the diff against the
+    base is empty and every rule (c) positive-arm assertion silently stops firing. A
+    gate whose own tests expire on merge is worse than no gate.
+    """
     mk_lines = [k for k, ln in enumerate(lines) if MKTEMP.search(strip_literals(strip_comment(ln)))]
     if not mk_lines:
         return []
     if any(TRAP_EXIT.search(strip_comment(ln)) for ln in lines):
         return []
-    fresh = added_lines(path)
+    fresh = added_lines(path) if line_scoped else None
     if fresh is not None:
         mk_lines = [k for k in mk_lines if (k + 1) in fresh]
         if not mk_lines:
@@ -390,19 +420,34 @@ def check_rule_c(path: Path, lines: list[str]) -> list[str]:
 
 
 def git_changed_files() -> list[Path]:
+    """Files changed vs the merge base, plus untracked ones.
+
+    Degrades rather than aborting when the base is unresolvable (shallow checkout, no
+    remote). The degraded set is untracked-only, which NARROWS rule (c) — so the
+    warning below is not decoration: it is the only signal that new-entrant scoping
+    ran blind. CI pins `fetch-depth: 0` on the test-scripts job precisely so the real
+    semantics, not this fallback, are what gets exercised there.
+    """
+    base = merge_base()
     try:
-        base = subprocess.run(
-            ["git", "merge-base", "HEAD", "origin/main"],
-            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        out = subprocess.run(
-            ["git", "diff", "--name-only", "--diff-filter=d", f"{base}...HEAD"],
-            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-        ).stdout.split()
         untracked = subprocess.run(
             ["git", "ls-files", "--others", "--exclude-standard"],
             cwd=REPO_ROOT, capture_output=True, text=True, check=True,
         ).stdout.split()
+        if base is None:
+            print(
+                "warning: cannot resolve a merge base against the trunk (shallow "
+                "checkout or no remote). Rule (c) new-entrant scoping is degraded to "
+                "untracked files only; committed changes are NOT gated in this run. "
+                "Fetch full history (`fetch-depth: 0`) for the real semantics.",
+                file=sys.stderr,
+            )
+            out: list[str] = []
+        else:
+            out = subprocess.run(
+                ["git", "diff", "--name-only", "--diff-filter=d", f"{base}...HEAD"],
+                cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+            ).stdout.split()
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         print(f"error: cannot resolve changed files: {exc}", file=sys.stderr)
         sys.exit(2)
@@ -470,9 +515,14 @@ def main() -> int:
             )
         return 0
 
+    # Explicit paths mean "lint exactly this file". Asking git which of its lines are
+    # new would make the answer depend on branch history rather than file content.
+    line_scoped = True
+
     if args.paths:
         targets = [p if p.is_absolute() else REPO_ROOT / p for p in args.paths]
         changed_scope = set(targets)
+        line_scoped = False
     elif args.changed:
         targets = git_changed_files()
         changed_scope = set(targets)
@@ -493,7 +543,10 @@ def main() -> int:
         rel = p.relative_to(REPO_ROOT) if p.is_relative_to(REPO_ROOT) else p
         problems.extend(s.replace(str(p), str(rel)) for s in check_rule_a(p, lines))
         if p in changed_scope:
-            problems.extend(s.replace(str(p), str(rel)) for s in check_rule_c(p, lines))
+            problems.extend(
+                s.replace(str(p), str(rel))
+                for s in check_rule_c(p, lines, line_scoped=line_scoped)
+            )
 
     for line in problems:
         print(line, file=sys.stderr)

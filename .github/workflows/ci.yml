@@ -545,7 +545,15 @@ jobs:
       GITLEAKS_VERSION: "8.24.2"
       GITLEAKS_SHA256: "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
     steps:
+      # fetch-depth: 0 — scripts/lint-trap-tempfile-ownership.py scopes rule (c) to
+      # lines added vs the merge base against origin/main. The default shallow
+      # checkout (depth 1) has no origin/main, so `git merge-base` exits 128 and the
+      # linter degrades to an untracked-only scope: it emits nothing, returns 0, and
+      # its own test suite's "should fire" assertions all fail. Full history is what
+      # gives that job the real new-entrant semantics.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
 
       - name: Install gitleaks (pinned, sha-verified)
         run: |

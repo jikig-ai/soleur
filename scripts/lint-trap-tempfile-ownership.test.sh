@@ -66,6 +66,43 @@ do
   fi
 done
 
+# --- Explicit-path mode must not depend on git history --------------------------------
+# REGRESSION (this is what broke CI, and it broke ONLY in CI): rule (c) scopes itself to
+# lines added vs `git merge-base HEAD origin/main`. The test-scripts job checked out at
+# fetch-depth 1, where origin/main does not exist -- merge-base exited 128, the changed
+# set resolved empty, and every positive-arm assertion above went green-on-nothing.
+#
+# The same scoping had a second, worse consequence: the fixtures are COMMITTED, so they
+# read as "added" only until this PR merges. After merge the diff against the base is
+# empty and rule (c) stops firing on them permanently. Explicit paths therefore lint the
+# WHOLE file and ask git nothing.
+#
+# Asserted by putting a `git` on PATH that fails every invocation, which is a strictly
+# harsher environment than a shallow checkout. If rule (c) still fires, it consulted no
+# history and neither shallowness nor merge can make it vacuous.
+GITSHIM="$(mktemp -d)"
+trap 'rm -rf "$GITSHIM"' EXIT
+printf '#!/bin/sh\nexit 128\n' > "$GITSHIM/git"
+chmod +x "$GITSHIM/git"
+
+shim_rc=0
+shim_err="$(PATH="$GITSHIM:$PATH" python3 "$LINT" "$FIX/bad-mktemp-no-trap.sh.fixture" 2>&1 >/dev/null)" || shim_rc=$?
+if [[ "$shim_rc" == "1" ]] && grep -qF "rule (c) mktemp with no owning trap" <<< "$shim_err"; then
+  ok "rule (c) fires on an explicit path with git entirely unavailable (shallow-checkout regression)"
+else
+  no "rule (c) went vacuous without git (rc=$shim_rc): ${shim_err:0:200}"
+fi
+
+# The negative arm must stay negative under the same shim -- a rule (c) that fired on
+# everything once git was gone would also satisfy the assertion above.
+shim_good_rc=0
+PATH="$GITSHIM:$PATH" python3 "$LINT" "$FIX/good-mktemp-with-trap.sh.fixture" >/dev/null 2>&1 || shim_good_rc=$?
+if [[ "$shim_good_rc" == "0" ]]; then
+  ok "a trap-owning file is still clean with git unavailable (shim is not flag-everything)"
+else
+  no "shim made the gate flag a good file (rc=$shim_good_rc)"
+fi
+
 # --- Negative arm: the gate must NOT flag these ---------------------------------------
 # These are the shapes a naive rule gets wrong. R7 in the plan: provision-hetzner.sh is
 # safe only because its second trap sits inside `( … )`, and vendor-pin-integrity.test.sh
