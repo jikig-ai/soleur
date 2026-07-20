@@ -1359,7 +1359,29 @@ FSCK_OUT_CAP="${WORKSPACES_FSCK_OUT_CAP:-256}"
 # verified, so this ABORTS as probe_failed and must never be read as a finding about the data. The
 # first alternative is H1, the leading hypothesis for run 29725194755's 8-of-10 failure (cutover runs
 # as root; container repos are uid 1001 per the Dockerfile's `USER soleur`).
-_FSCK_SETUP_FATAL_RE='^fatal: (detected dubious ownership|bad config|not a git repository|cannot chdir|unable to access|could not open|unable to read config)'
+#
+# MEASURED PER ALTERNATIVE (git 2.53.0), to the same standard _FSCK_CONTENT_FATAL_RE below already
+# holds itself to — an unmeasured alternative is dead regex implying coverage that does not exist,
+# which is this file's whole defect class. Reproduce with `git fsck --full` against each fixture:
+#   detected dubious ownership  MEASURED. Foreign-owned repo, no safe.directory. rc 128.
+#   bad config                  MEASURED. `printf '[core\n' > .git/config`. rc 128. (L6e's fixture.)
+#   not a git repository        MEASURED. Also emitted for a repo whose .git/objects or .git/HEAD
+#                               was removed — both reach here, since _fsck_probeable only filters a
+#                               MISSING .git, so this alternative is live, not dead-by-construction.
+#   cannot change to            MEASURED. Was `cannot chdir` until #6759 and NEVER MATCHED: git
+#                               emits `fatal: cannot change to '<path>': No such file or directory`.
+#                               A vanished repo therefore fell through to (2b) and aborted as
+#                               `unclassified` — fail-CLOSED, so no cutover was ever mis-certified,
+#                               but the alternative asserted a precision it did not have.
+#   unable to access            UNMEASURED as a fatal. `chmod 000 .git/config` emits it as
+#                               `warning:`, which this `^fatal: `-anchored regex cannot match. Kept
+#                               deliberately: (2b) fails closed either way, and dropping it would
+#                               narrow the allowlist on a guess rather than a measurement.
+#   could not open              UNMEASURED.
+#   unable to read config       UNMEASURED.
+# The three UNMEASURED alternatives cost nothing: an unrecognised `fatal:` still aborts via (2b).
+# They are listed as candidates, and this comment is the record that they are candidates.
+_FSCK_SETUP_FATAL_RE='^fatal: (detected dubious ownership|bad config|not a git repository|cannot change to|unable to access|could not open|unable to read config)'
 # _FSCK_CONTENT_FATAL_RE — a genuine FINDING about the objects. Goes through the differential like
 # any other error line, so the same finding on both sides is `preexisting`, not an abort.
 # MEASURED, so the list stays honest: `missing blob` is emitted on STDOUT with no `fatal: ` prefix
@@ -1841,11 +1863,15 @@ fsck_advisory_probe() {
   # rollback runs. That is correct; do not "fix" it into a rollback. Language mirrors the script's
   # other pre-freeze dies.
   #
-  # (An earlier revision of this comment said "abort ONLY when EVERY probed source repo is
-  # un-inspectable; a partial failure is evidence, not a verdict". That described the SUPERSEDED
-  # all-or-nothing threshold and was left in place when the code changed to abort-on-ANY, so the
-  # comment block asserted both rules at once — which is what made L6j read as a test-vs-SUT
-  # contradiction rather than a stale comment. Removed; the rule below is the only one.)
+  # (Until #6759 this block ALSO carried a paragraph reading "abort ONLY when EVERY probed source
+  # repo is un-inspectable; a partial failure is evidence, not a verdict" — directly above the
+  # opposite rule. Both shipped in the SAME commit, #6745: `git show aaabd8c12` adds the ALL
+  # paragraph, the ANY paragraph and `-gt 0` together, and the function did not exist before it. So
+  # this was never a stale comment that drifted; the contradiction was born whole, when the F4
+  # review finding moved the code to abort-on-ANY mid-review and the ALL paragraph was not updated
+  # before merge. The distinction matters: `git log` shows no revision where the ALL rule was true,
+  # so a reader trying to date the supersession finds nothing. Removed; the rule below is the only
+  # one.)
   #
   # ANY un-inspectable source repo aborts pre-freeze — not just the all-of-them case. The original
   # all-or-nothing threshold did not cover the incident this probe was built for: run 29725194755

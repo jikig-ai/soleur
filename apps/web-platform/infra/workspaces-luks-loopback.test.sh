@@ -882,8 +882,8 @@ fi
 #        alternative of _FSCK_SETUP_FATAL_RE.
 #   (ii) The "-c safe.directory= is load-bearing" proof requires a real refusal and therefore CANNOT
 #        run in CI. It is NOT asserted here and NOT silently skipped: L6k-CAP reports the host's
-#        capability every run, and the gap is tracked (see the deferred issue in the PR body). A
-#        green L6k must never be read as evidence that the flag was exercised.
+#        capability every run. A green L6k must never be read as evidence that the flag was
+#        exercised. The CI-visibility gap that let this stay green for four PRs is tracked in #6766.
 rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
 mkdir -p "$D_SRC/workspaces"
 mk_repo "$D_SRC/workspaces/44444444-0000-0000-0000-00000000000f"
@@ -983,6 +983,57 @@ else
   note "real:       $(grep -m1 'classification=' "$L6K2_MARKER" 2>/dev/null)"
 fi
 
+# --- L6l: (2b) FAIL-CLOSED — an UNRECOGNISED fatal, identical on BOTH sides, must NOT go green ---
+# The single most dangerous input this gate can receive, and until #6759 nothing exercised it.
+# _FSCK_SETUP_FATAL_RE is an ALLOWLIST, and three of its seven alternatives are unmeasured (see the
+# per-alternative record on the regex). If a fatal shape neither allowlisted nor known-content
+# reached the differential, and it appeared IDENTICALLY on both sides — which is exactly what a
+# setup failure does, since both roots hit the same condition — `comm -13` would find no dst-only
+# line, the verdict would be `preexisting`, the gate would return 0, and Phase 5 would wipe the
+# plaintext original against a copy the probe never inspected. Branch (2b) is the only thing
+# standing between that input and a green run.
+#
+# Synthesized deliberately: the point is a fatal git does NOT emit today, since any shape that IS
+# emitted would be a candidate for the allowlist instead. This is the fail-closed default under
+# test, not a specific git behaviour.
+rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+mkdir -p "$D_SRC/workspaces"
+mk_repo "$D_SRC/workspaces/55555555-0000-0000-0000-000000000010"
+rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+L6L_OUT="$TMPROOT/l6l.out"; L6L_MARKER="$TMPROOT/l6l.marker"
+: > "$L6L_OUT"; : > "$L6L_MARKER"
+MARKER_LOG="$L6L_MARKER" CUTOVER="$CUTOVER" SRC="$D_SRC" DST="$D_DST" \
+WORKSPACES_MOUNT="$D_SRC" WORKSPACES_STAGING="$D_DST" WORKSPACES_MAPPER_NAME="$MAPPER_NAME" \
+bash -c '
+  source "$CUTOVER"
+  logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+  die()        { echo "DIE: $*"; exit 1; }
+  emit_drift() { echo "EMIT_DRIFT: $1"; }
+  _fsck_one() {
+    local repo="$1" rc_file="$2" raw_out="$3" raw_err="$4"
+    : > "$raw_out"
+    printf "fatal: a shape no git version emits and no allowlist names\n" > "$raw_err"
+    printf "128" > "$rc_file"
+    { git --no-optional-locks -c safe.directory="$repo" -C "$repo" count-objects -v 2>/dev/null \
+        | awk "/^count:|^in-pack:/ { s += \$2 } END { print s + 0 }"; } > "${rc_file%.rc}.objs" \
+        2>/dev/null || printf "0" > "${rc_file%.rc}.objs"
+    return 0
+  }
+  verify_git_fsck_differential "$SRC" "$DST"
+' > "$L6L_OUT" 2>&1
+L6L_RC=$?
+# NOT `-ne 0` alone: probe_failed also aborts, and if the allowlist ever widened to swallow this
+# shape the case would still "pass" while proving nothing about (2b). Pin the classification.
+if [ "$L6L_RC" -ne 0 ] \
+  && grep -qE -- 'classification=unclassified' "$L6L_MARKER" \
+  && ! grep -qE -- 'classification=preexisting' "$L6L_MARKER"; then
+  ok "L6l: an UNRECOGNISED fatal appearing identically on BOTH sides fails CLOSED as unclassified and ABORTS — never preexisting, the one outcome this design may not produce"
+else
+  no "L6l: (2b) did not fail closed (rc=$L6L_RC) — an unallowlisted fatal reached the differential, and a gate that green-lights it certifies a copy it never inspected"
+  note "marker: $(grep -m2 'classification=' "$L6L_MARKER" 2>/dev/null)"
+  note "out:    $(tail -n 3 "$L6L_OUT" 2>/dev/null)"
+fi
+
 # --- L6i: MUTATION CONTROL (L5d discipline) — prove L6b's abort is load-bearing ------------------
 # Without this, L6b's "it aborted" is indistinguishable from a gate that aborts unconditionally.
 L6I_MUT="$TMPROOT/cutover-l6i-mutated.sh"
@@ -1007,9 +1058,16 @@ else
 fi
 
 # --- L6j: the pre-freeze ADVISORY probe ---------------------------------------------------------
-# It runs in BOTH arms and is EVIDENCE, never the gate's comparand. Its one aborting condition is
-# "every probed source repo is un-inspectable" — under H1 that is the whole point: fail BEFORE the
-# freeze rather than after the outage. A partial failure must NOT abort.
+# It runs in BOTH arms and is EVIDENCE, never the gate's comparand. It aborts on ANY un-inspectable
+# source repo — under H1 that is the whole point: fail BEFORE the freeze rather than after the
+# outage. A PARTIAL failure aborts too, and that is deliberate: run 29725194755 failed on 8 of 10,
+# so an all-or-nothing threshold would have gone green, held the freeze, taken the outage and
+# aborted at the gate anyway. Failing here costs zero downtime.
+#
+# (This header said the opposite — "its one aborting condition is every probed source repo" and
+# "a partial failure must NOT abort" — until #6759. The SUT never behaved that way: `-gt 0` shipped
+# in the same commit as the paragraph claiming `every`. Reading this header first was what made L6j
+# look like a test-vs-SUT design contradiction rather than a stale comment.)
 rm -rf "${D_SRC:?}/workspaces"
 mkdir -p "$D_SRC/workspaces"
 mk_repo "$D_SRC/workspaces/22222222-0000-0000-0000-00000000000b"
@@ -1051,6 +1109,7 @@ if [ "$L6J_PARTIAL_RC" -ne 0 ] && [ "$L6J_ALL_RC" -ne 0 ] \
   && ! grep -qE -- 'phase=gate' "$L6J_MARKER" \
   && grep -qE -- 'could not inspect 1 of 2' "$L6J_OUT" \
   && grep -qE -- 'could not inspect 2 of 2' "$L6J_ALL_OUT" \
+  && grep -qE -- 'no freeze was held' "$L6J_OUT" \
   && grep -qE -- 'no freeze was held' "$L6J_ALL_OUT"; then
   ok "L6j: the advisory probe emits phase=advisory rows and aborts PRE-FREEZE on ANY un-inspectable source repo (1-of-2 and 2-of-2), naming the count and the no-rollback language"
 else
