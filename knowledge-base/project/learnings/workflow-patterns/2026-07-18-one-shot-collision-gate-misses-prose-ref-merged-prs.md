@@ -117,9 +117,14 @@ on the sibling `linked:issue` probe. The 2026-07-18 body probe reintroduced the 
 call site, because that fix was a one-line patch rather than an enforced invariant. While fixing
 this, a **third** live instance was found in `triage/SKILL.md` (hunting a *dismissing* — therefore
 merged — PR with no `--state`), plus two more in `review/` and `ship/` that the issue's own
-enumeration missed because they place `--label` between `list` and `--search`. The class had
-spread to five call sites before anyone linted for it. The lint added in #6786 asserts every
-`gh pr|issue list --search` in `plugins/soleur/skills/*/SKILL.md` carries an explicit `--state`.
+enumeration missed because they place `--label` between `list` and `--search`. So **four live
+call sites** at the time of the fix; a fifth, the `linked:issue` probe, was the already-fixed
+2026-05-29 instance. Review of the fix then found two more the first lint could not see: a
+dedupe probe one directory deeper (`review/references/review-todo-structure.md`) and an
+un-synced hook mirror (`.openhands/hooks/pre-merge-rebase.sh`, whose `.claude` twin had carried
+both `--state all` and an exact-phrase fix since #2186). The lint added in #6786 asserts every
+`gh pr|issue list --search` under `plugins/soleur/skills/**/*.md` carries an explicit `--state`,
+and additionally rejects pinning state in both the query and a flag.
 
 **Named residual:** the lint proves the probe is *well-formed*, not that it *works*. A GitHub or
 `gh` semantic change would pass it. That is accepted — `/plan` Phase 0.6 premise-validation remains

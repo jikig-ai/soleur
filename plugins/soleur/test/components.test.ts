@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test";
+import { Glob } from "bun";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import {
@@ -370,28 +371,63 @@ describe("invoice skill credential boundary (ADR-107)", () => {
 // gh --search probes must pin --state explicitly (#6786)
 // ---------------------------------------------------------------------------
 
-// Captures a `gh pr|issue list ...` command from the point the binary is named
-// to the end of its enclosing backtick span. The leading `[^`]*?` is load-bearing:
-// probes are frequently embedded in a shell assignment (`EXISTING=$(gh pr list …)`),
-// so anchoring the capture at the span's opening backtick would silently skip them.
-const GH_LIST_CMD = /`[^`]*?(gh (?:pr|issue) list [^`]*)`/g;
+// Captures one `gh pr|issue list …` command, from the point the binary is named to
+// the end of ITS OWN LINE (or the closing backtick of an inline span, whichever comes
+// first). Two properties are load-bearing and were both learned the hard way:
+//
+//   1. The capture must NOT cross a newline. An earlier `[^`]*` form spanned lines, so
+//      inside a ```fence the capture ran to the closing fence and swallowed every
+//      following command — a `--state` belonging to a DIFFERENT command then satisfied
+//      the check and laundered its stateless neighbour. That is the very fail-open
+//      shape this lint exists to catch, reproduced inside the lint (#6786 review).
+//   2. The match must be findable mid-line, not anchored at a span opener: probes are
+//      frequently embedded in a shell assignment (`EXISTING=$(gh pr list …)`).
+const GH_LIST_CMD = /\bgh (?:pr|issue) list\b[^`\n]*/g;
 
-/** Every `gh pr|issue list` command carrying `--search`, extracted from backtick spans. */
-export function extractSearchProbes(
-  files: { file: string; raw: string }[],
-): { file: string; cmd: string }[] {
-  return files.flatMap(({ file, raw }) =>
-    [...raw.matchAll(GH_LIST_CMD)]
-      .map((m) => ({ file, cmd: m[1] }))
-      .filter(({ cmd }) => /--search\b/.test(cmd)),
-  );
+// An `is:`/`state:` qualifier inside the --search string. Mixing one of these with an
+// explicit --state is the exact contradiction that produced #6786 (an appended open
+// filter ANDed against `is:merged` matches nothing), so pin state in ONE place only.
+const IN_QUERY_STATE = /--search\s+(["'])[^"']*(?:\bis:(?:merged|closed|open)\b|\bstate:)[^"']*\1/;
+
+interface Probe {
+  file: string;
+  cmd: string;
+  /** True when the command sits inside a fenced code block rather than an inline span. */
+  fenced: boolean;
+}
+
+/** Every `gh pr|issue list` command carrying `--search`, one entry per command. */
+export function extractSearchProbes(files: { file: string; raw: string }[]): Probe[] {
+  return files
+    .flatMap(({ file, raw }) => {
+      const found: Probe[] = [];
+      let fenced = false;
+      for (const line of raw.split("\n")) {
+        if (/^\s*```/.test(line)) {
+          fenced = !fenced;
+          continue;
+        }
+        for (const m of line.matchAll(GH_LIST_CMD)) {
+          found.push({ file, cmd: m[0].trim(), fenced });
+        }
+      }
+      return found;
+    })
+    .filter(({ cmd }) => /--search\b/.test(cmd));
 }
 
 /** Search probes that omit an explicit `--state` — the #6786 silent-open defect class. */
-export function findStatelessProbes(
-  files: { file: string; raw: string }[],
-): { file: string; cmd: string }[] {
+export function findStatelessProbes(files: { file: string; raw: string }[]): Probe[] {
   return extractSearchProbes(files).filter(({ cmd }) => !/--state\b/.test(cmd));
+}
+
+/** Search probes that pin state in BOTH the query and a flag — #6786's literal shape. */
+export function findContradictingStateProbes(
+  files: { file: string; raw: string }[],
+): Probe[] {
+  return extractSearchProbes(files).filter(
+    ({ cmd }) => /--state\b/.test(cmd) && IN_QUERY_STATE.test(cmd),
+  );
 }
 
 describe("collision-gate probes carry an explicit --state", () => {
@@ -422,7 +458,7 @@ describe("collision-gate probes carry an explicit --state", () => {
     ).toHaveLength(1);
   });
 
-  test("detector ignores a --state flag that precedes --search", () => {
+  test("detector accepts --state appearing before --search", () => {
     expect(
       findStatelessProbes([
         { file: "f", raw: '`gh issue list --state closed --search "topic"`' },
@@ -430,27 +466,115 @@ describe("collision-gate probes carry an explicit --state", () => {
     ).toHaveLength(0);
   });
 
-  const files = discoverSkills().map((f) => ({
+  // The three classes below were unfixtured in the first cut of this lint and ALL of
+  // them fail-opened. They are the guard's real discriminating power: the live corpus
+  // is clean, so the corpus assertion below compares [] to [] and proves nothing.
+  const FENCE = "```";
+
+  test("detector flags a stateless probe inside a fenced block", () => {
+    expect(
+      findStatelessProbes([
+        {
+          file: "f",
+          raw: `${FENCE}bash\ngh pr list --search "#1 in:body is:merged" --json number\n${FENCE}`,
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("a later --state in the same fence does not launder a stateless probe", () => {
+    expect(
+      findStatelessProbes([
+        {
+          file: "f",
+          raw:
+            `${FENCE}bash\ngh pr list --search "#1 in:body is:merged" --json number\n` +
+            `gh issue list --state open --label foo\n${FENCE}`,
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("each command in a fence is evaluated independently", () => {
+    expect(
+      findStatelessProbes([
+        {
+          file: "f",
+          raw:
+            `${FENCE}bash\ngh pr list --search "a" --state merged\n` +
+            `gh pr list --search "#1 in:body is:merged"\n${FENCE}`,
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("detector flags a query/flag state contradiction", () => {
+    expect(
+      findContradictingStateProbes([
+        { file: "f", raw: '`gh pr list --search "#1 in:body is:merged" --state open`' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("detector accepts state pinned in exactly one place", () => {
+    expect(
+      findContradictingStateProbes([
+        { file: "f", raw: '`gh pr list --search "#1 in:body" --state merged`' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  // `skills/**/*.md` — deliberately wider than discoverSkills()'s `skills/*/SKILL.md`.
+  // The dedupe probe in review/references/review-todo-structure.md is one directory
+  // deeper and carried the identical defect; scoping to SKILL.md missed it (#6786 review).
+  const files = [...new Glob("skills/**/*.md").scanSync(PLUGIN_ROOT)].map((f) => ({
     file: f,
     raw: readFileSync(resolve(PLUGIN_ROOT, f), "utf-8"),
   }));
 
-  // Anti-vacuity: a broken glob or a drifted regex must red-line here rather than
-  // emptying the population and turning the offender assertion green for free.
-  test("probe population is non-empty", () => {
+  // Anti-vacuity. A bare `length > 0` floor is too weak: narrowing the regex so it can
+  // no longer see fenced probes leaves the inline ones behind, keeps the population
+  // non-empty, and silently blinds the guard to a whole structural class. Bound EACH
+  // class instead, so losing either one red-lines here.
+  test("both probe classes are represented in the corpus", () => {
+    const probes = extractSearchProbes(files);
+    const inline = probes.filter((p) => !p.fenced).length;
+    const fenced = probes.filter((p) => p.fenced).length;
     expect(
-      extractSearchProbes(files).length,
-      "no `gh pr|issue list --search` commands found in skills/*/SKILL.md — " +
-        "the glob or the extraction regex broke, so the offender check below is vacuous",
-    ).toBeGreaterThan(0);
+      { inline: inline > 0, fenced: fenced > 0 },
+      `extraction saw ${inline} inline and ${fenced} fenced probes across ${files.length} ` +
+        "files — a zero in either class means the glob or the regex stopped seeing that " +
+        "shape, so the offender checks below are vacuous for it",
+    ).toEqual({ inline: true, fenced: true });
+  });
+
+  // Pins the WIDENING itself. Without this, narrowing the glob back to
+  // `skills/*/SKILL.md` stays green (the corpus is clean either way) and silently
+  // re-blinds the lint to the deeper `references/` probe that review caught.
+  test("the scan is wider than skills/*/SKILL.md", () => {
+    expect(
+      files.length,
+      `scanned ${files.length} markdown files vs ${discoverSkills().length} SKILL.md files — ` +
+        "the glob must stay wider than SKILL.md-only; a stateless probe living in " +
+        "skills/*/references/ is exactly the case that escaped the first cut of this lint",
+    ).toBeGreaterThan(discoverSkills().length);
   });
 
   test("no skill probe omits --state", () => {
     expect(
-      findStatelessProbes(files).map((o) => `${o.file}: ${o.cmd.slice(0, 70)}`),
+      findStatelessProbes(files).map((o) => `${o.file}: ${o.cmd.slice(0, 90)}`),
       "`gh pr list --search` defaults to --state open and appends that filter unless it " +
         "detects an in-query state qualifier, so a probe without an explicit --state " +
-        "silently misses MERGED PRs and the collision gate fails open. See #6786.",
+        "silently misses MERGED/CLOSED records and the gate fails open. See #6786.",
+    ).toEqual([]);
+  });
+
+  test("no skill probe pins state in both the query and a flag", () => {
+    expect(
+      findContradictingStateProbes(files).map((o) => `${o.file}: ${o.cmd.slice(0, 90)}`),
+      "this probe pins state twice (an `is:`/`state:` qualifier inside --search AND an " +
+        "explicit --state). That is #6786's literal shape: the two are ANDed, so a " +
+        "disagreement matches nothing and reads as a clean result. Pin state in one place.",
     ).toEqual([]);
   });
 });
