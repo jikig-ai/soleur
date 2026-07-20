@@ -6,7 +6,7 @@ issue: 6724
 supersedes: null
 ---
 
-# ADR-126: the review-evidence trailer is a boolean, not a content attestation
+# ADR-127: the review-evidence trailer is a boolean, not a content attestation
 
 ## Context
 

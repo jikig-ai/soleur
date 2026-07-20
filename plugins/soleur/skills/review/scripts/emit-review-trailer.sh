@@ -21,7 +21,7 @@
 # The trailer is emitted by a script rather than described in prose because a
 # described `git commit` line is advisory and a script invocation is not.
 #
-# WHAT THIS TRAILER DOES AND DOES NOT MEAN (ADR-126)
+# WHAT THIS TRAILER DOES AND DOES NOT MEAN (ADR-127)
 #
 # It is a BOOLEAN: "a review ran on this branch". It is NOT an attestation that
 # the merged tree is the tree that was reviewed. Reviewing early and then
@@ -152,13 +152,13 @@ fi
 # stay in the body prose above.
 #
 # `Reviewed-Commit:` records the sha under review. NO consumer reads it — see
-# the ADR-126 note in the header. It is recorded now because adding a field
+# the ADR-127 note in the header. It is recorded now because adding a field
 # later, once the key is in main's permanent history and read by three
 # consumers, is the expensive part; enforcing a field already present is cheap.
 REVIEWED_SHA=$(git rev-parse HEAD)
 COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: soleur:review\n%s: %s\n' \
   "review: ${SUMMARY}" \
-  "Records that soleur:review ran on this branch (see issue 6724). Empty by design: a review that finds nothing still needs to prove it ran. This is a boolean, not an attestation that the merged tree is the reviewed tree — see ADR-126." \
+  "Records that soleur:review ran on this branch (see issue 6724). Empty by design: a review that finds nothing still needs to prove it ran. This is a boolean, not an attestation that the merged tree is the reviewed tree — see ADR-127." \
   "$TRAILER_KEY" \
   "Reviewed-Commit" "$REVIEWED_SHA")
 
