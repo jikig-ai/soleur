@@ -24,7 +24,7 @@ Polsia and Soleur both operate in the Company-as-a-Service space. Both use Anthr
 
 **Polsia** is a fully autonomous AI company-operating platform. Its architecture centers on role-based agents -- a CEO agent, an Engineer agent, a Growth Manager agent -- that run nightly autonomous cycles. Each cycle evaluates the company's current state, decides what to prioritize, executes the tasks, and delivers a summary. The founder receives a morning briefing. Polsia provisions all infrastructure: email servers, databases, Stripe, GitHub. The philosophy, in founder Ben Broca's words: ["80% AI, 20% taste."](https://polsia.com)
 
-Polsia is built on the Claude Agent SDK (Claude Opus 4.6) and is cloud-hosted and proprietary. Pricing is [$49/month](https://polsia.com) for the base tier (one nightly autonomous task plus on-demand credits), with a 20% revenue share (historically also 20% of managed ad spend -- whether the ad-spend component applies to current tiers should be confirmed directly with Polsia).
+Polsia is built on the Claude Agent SDK (Claude Opus 4.6) and is cloud-hosted and proprietary. Pricing is [$49/month](https://polsia.com) for the base tier (one nightly autonomous task plus 5 on-demand credits), with a 20% revenue share (historically also 20% of managed ad spend -- whether the ad-spend component applies to current tiers should be confirmed directly with Polsia).
 
 Polsia covers five business domains: engineering, marketing, cold outreach, social media, and Meta ads.
 
@@ -76,7 +76,7 @@ The difference between an autonomous cron job and an organizational workflow is 
 
 [Polsia's pricing](https://polsia.com):
 
-- **Base tier:** $49/month (one nightly autonomous task plus on-demand credits)
+- **Base tier:** $49/month (one nightly autonomous task plus 5 on-demand credits)
 - **Revenue share:** 20% of business revenue; historically also 20% of managed ad spend (current applicability of the ad-spend component should be confirmed with Polsia)
 
 Soleur is source-available (BSL 1.1). The platform is free.
@@ -119,7 +119,7 @@ Only if the autonomous decisions are reliably good. The efficiency argument for 
 
 **Q: Polsia raised $30M at a $250M valuation. Doesn't that prove autonomous CaaS works?**
 
-It proves the category is venture-validated. Investors of that calibre committing at that valuation is real evidence that solo founders will pay for AI-powered company operation, and we do not dispute it. What a funding round does not validate is the output quality of autonomous execution, the long-term trajectory of companies running on that model, or whether the autonomous approach produces results competitive with human-guided execution at higher stakes. Polsia has not published audited revenue or customer figures -- third-party reports cite figures ranging from roughly $689K to $10M in annual recurring revenue, which is a spread wide enough that none of them should be treated as settled. The market exists. The architecture question remains open.
+It proves the category is venture-validated. Polsia raised $30M at a $250M valuation in May 2026, led by Sound Ventures with True Ventures participating -- a round of that size is real evidence that sophisticated investors expect solo founders to pay for AI-powered company operation, and Soleur does not dispute it. What a funding round does not validate is the output quality of autonomous execution, the long-term trajectory of companies running on that model, or whether the autonomous approach produces results competitive with human-guided execution at higher stakes. Polsia has not published audited revenue or customer figures, and the figures in circulation do not agree: a February 2026 founder interview implied a run-rate near $689K, an earlier scan read roughly $450K, and newer third-party reports claim about $10M in annual recurring revenue. That spread is wide enough that no single figure should be treated as settled. The market exists. The architecture question remains open.
 
 **Q: Is Soleur's source-available model sustainable against a venture-backed competitor?**
 
@@ -151,7 +151,7 @@ Soleur's compounding knowledge base, cross-domain institutional memory, and sour
       "name": "Polsia raised $30M at a $250M valuation. Doesn't that prove autonomous CaaS works?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "It proves the category is venture-validated. Polsia raised $30M at a $250M valuation in May 2026, led by Sound Ventures with True Ventures participating — real evidence that solo founders will pay for AI-powered company operation, and Soleur does not dispute it. What a funding round does not validate is the output quality of autonomous execution, the long-term trajectory of companies running on that model, or whether the autonomous approach produces results competitive with human-guided execution at higher stakes. Polsia has not published audited revenue or customer figures — third-party reports cite figures ranging from roughly $689K to $10M in annual recurring revenue, which is a spread wide enough that none of them should be treated as settled. The market exists. The architecture question remains open."
+        "text": "It proves the category is venture-validated. Polsia raised $30M at a $250M valuation in May 2026, led by Sound Ventures with True Ventures participating — a round of that size is real evidence that sophisticated investors expect solo founders to pay for AI-powered company operation, and Soleur does not dispute it. What a funding round does not validate is the output quality of autonomous execution, the long-term trajectory of companies running on that model, or whether the autonomous approach produces results competitive with human-guided execution at higher stakes. Polsia has not published audited revenue or customer figures, and the figures in circulation do not agree: a February 2026 founder interview implied a run-rate near $689K, an earlier scan read roughly $450K, and newer third-party reports claim about $10M in annual recurring revenue. That spread is wide enough that no single figure should be treated as settled. The market exists. The architecture question remains open."
       }
     },
     {

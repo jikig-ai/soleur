@@ -14,7 +14,7 @@ tags:
 
 [Paperclip](https://paperclip.ing/) has passed [74,000 GitHub stars](https://github.com/paperclipai/paperclip) with a straightforward premise: give AI agents an org chart, a budget, a schedule, and governance controls, and they can run a company without humans. Zero-human company orchestration, MIT-licensed, self-hosted. The traction is real. The category framing is direct.
 
-**Updated 2026-07-20:** This post originally cited vendor-reported ARR and customer figures for Polsia as fact. Those figures are contradictory across sources; the verifiable signal is Polsia's May 2026 raise. Revenue and customer counts below are attributed, not asserted.
+**Updated 2026-07-20:** Two figures in this post were corrected. Paperclip's GitHub star count was stated as 14,600+, which was roughly 5x stale; it is now above 74,000 (verified against the GitHub API for `paperclipai/paperclip`, the canonical repository). And this post originally cited vendor-reported ARR and customer figures for Polsia as fact; those figures are contradictory across sources, so the Polsia reference below now cites the verifiable signal — its May 2026 raise — instead.
 
 Soleur and Paperclip both target the same destination -- a company that operates with minimal human overhead -- but they approach it from opposite ends of the stack.
 
@@ -57,7 +57,7 @@ Paperclip solves the governance problem: how do you control autonomous agents op
 
 Soleur solves the knowledge problem: what should agents actually know and do? A marketing agent that does not understand brand voice, competitive positioning, and SEO strategy will produce content. Whether that content is good is a different question entirely. A legal agent without knowledge of the company's regulatory context will generate documents. Whether those documents are accurate and appropriately protective depends on domain depth that cannot be scaffolded from an org chart.
 
-The gap in Paperclip's model is real: with tens of thousands of GitHub stars and no pre-built domain agents, the majority of setup time goes to defining agent behavior rather than extracting value from it. Clipmart will lower this barrier with company templates, but pre-built org structures still require users to fill in the actual domain intelligence -- the reasoning, the institutional context, the quality standards.
+The gap in Paperclip's model is real: with 74,000+ GitHub stars and no pre-built domain agents, the majority of setup time goes to defining agent behavior rather than extracting value from it. Clipmart will lower this barrier with company templates, but pre-built org structures still require users to fill in the actual domain intelligence -- the reasoning, the institutional context, the quality standards.
 
 The gap in Soleur's model is equally real: the workflow lifecycle is purpose-built for Claude Code sessions initiated by a human. It does not offer Paperclip's heartbeat scheduling (agents running on autonomous cron cadences), per-agent budget enforcement, or multi-company governance. These are problems Soleur has not solved. Paperclip has.
 
