@@ -276,7 +276,7 @@ The FOUR scope-out criteria (a filing needs at least one, AND a concrete re-eval
 3. architectural-pivot — fix changes a codebase-wide pattern deserving its own planning cycle.
 4. pre-existing-unrelated — finding existed on main and is not exacerbated by this PR. NEVER valid for pr-introduced findings.
 
-Hard rules: pr-introduced findings MUST fix inline (auto-DISSENT). A fix ≤30 lines AND ≤2 files MUST fix inline (auto-DISSENT). DISSENT on any vague re-eval trigger.
+Hard rules: pr-introduced findings MUST fix inline (auto-DISSENT). A fix ≤100 lines AND ≤4 files MUST fix inline (auto-DISSENT). DISSENT on any vague re-eval trigger.
 Reply with decision CONCUR or DISSENT and a one-sentence reason.`
 }
 
