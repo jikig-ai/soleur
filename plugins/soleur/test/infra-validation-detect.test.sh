@@ -316,18 +316,25 @@ else
   echo "  FAIL: suite_relevant is not declared as a job output"; FAIL=$((FAIL + 1))
 fi
 
-# The workflow-level `paths:` filter must be gone: while it is present, a
+# The workflow-level path filter must be gone: while it is present, a
 # non-infra PR posts no context at all and a required check waits forever.
+#
+# `paths(-ignore)?:` — BOTH forms, because they share one wedging mode. A
+# `paths-ignore: ['**.md']` under pull_request: excludes docs-only PRs from the
+# workflow entirely, so they post no `infra-validate-required` context and wedge
+# at "Expected — Waiting for status" exactly as a `paths:` allow-list would.
+# Measured: with the `paths:`-only pattern, adding that paths-ignore left this
+# suite fully green.
 #
 # Extracted from WF_CODE (comments already stripped above), not the raw file:
 # the `on:` block's own comment block explains the removed `paths:` filter by
 # name, which satisfies a raw-body grep and inverts this assertion into a
 # permanent FAIL on correct code.
 ON_BLOCK=$(awk '/^on:/{f=1} f&&/^[a-z]/&&!/^on:/{exit} f' <<<"$WF_CODE")
-if grep -Eq '^[[:space:]]+paths:' <<<"$ON_BLOCK"; then
-  echo "  FAIL: workflow-level paths: filter is still present in on:"; FAIL=$((FAIL + 1))
+if grep -Eq '^[[:space:]]+paths(-ignore)?:' <<<"$ON_BLOCK"; then
+  echo "  FAIL: workflow-level paths:/paths-ignore: filter is still present in on:"; FAIL=$((FAIL + 1))
 else
-  echo "  PASS: workflow-level paths: filter removed from on:"; PASS=$((PASS + 1))
+  echo "  PASS: workflow-level paths:/paths-ignore: filter removed from on:"; PASS=$((PASS + 1))
 fi
 echo ""
 
