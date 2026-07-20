@@ -266,6 +266,68 @@ test_pf_scrub_original_rules_intact() {
   else echo "  FAIL: credential form REGRESSED"; FAIL=$((FAIL+1)); fi
 }
 
+# --- #6295 T6: ENCODING-SHAPE regression battery (the leaks the first cut missed) ---
+#
+# The original rule required >=2 libpq keywords separated by [[:space:]]+, and
+# every fixture used the ONE shape it was written against: space-separated,
+# unquoted values. Three encodings defeated it, all verified leaking BEFORE the
+# fix (ref AND password reaching stdout + stderr):
+#
+#   A2  jq -c re-encodes a real newline as the two-character escape \n, which
+#       [[:space:]] cannot match; the greedy value class then swallowed the
+#       whole remainder as ONE token so the co-occurrence group never fired.
+#   A3  same for \t.
+#   B1  a double quote TERMINATES [^[:space:]"]*, so a legal double-quoted
+#       libpq value killed the chain at the first keyword.
+#   E   the sibling raw path (doublefire/inventory) used tr -d on newlines,
+#       WELDING host=X and password=Y into one token — same failure, opposite
+#       cause. Fixed by translating control chars to SPACE instead of deleting.
+#
+# Each case asserts BOTH the project ref and the password are absent.
+test_pf_scrub_encoding_shapes() {
+  echo "TEST: _pf_scrub — encoding-shape battery (json-escaped / quoted / welded)"
+  local -a cases=(
+    "A2-json-newline|connection failed:\\nhost=db.${SYNTH_REF}.supabase.co\\npassword=hunter2sentinel"
+    "A3-json-tab|failed: host=db.${SYNTH_REF}.supabase.co\\tpassword=hunter2sentinel"
+    "B1-json-quoted|failed: host=\\\"db.${SYNTH_REF}.supabase.co\\\" password=\\\"hunter2sentinel\\\""
+    "B3-single-quoted|failed: host='db.${SYNTH_REF}.supabase.co' password='hunter2sentinel'"
+    "D-lone-host|host=db.${SYNTH_REF}.supabase.co"
+    "F-uppercase-kw|failed: HOST=db.${SYNTH_REF}.supabase.co PASSWORD=hunter2sentinel"
+  )
+  local n=0 entry label msg
+  for entry in "${cases[@]}"; do
+    label="${entry%%|*}"; msg="${entry#*|}"
+    run_probe_errmsg "$msg"
+    n=$((n+1))
+    if ! grep -qF "$SYNTH_REF" <<<"$RP_OUT$RP_ERR"; then echo "  PASS: $label — ref redacted"; PASS=$((PASS+1));
+    else echo "  FAIL: $label — ref LEAKED"; FAIL=$((FAIL+1)); fi
+    if ! grep -qF "hunter2sentinel" <<<"$RP_OUT$RP_ERR"; then echo "  PASS: $label — password redacted"; PASS=$((PASS+1));
+    else echo "  FAIL: $label — password LEAKED"; FAIL=$((FAIL+1)); fi
+  done
+  # Minimum-cardinality guard: an empty case array must not pass vacuously.
+  if [[ "$n" -eq "${#cases[@]}" && "$n" -ge 6 ]]; then echo "  PASS: all $n encoding shapes exercised"; PASS=$((PASS+1));
+  else echo "  FAIL: only $n shape(s) exercised"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6295 T7: over-redaction controls for the WIDENED rules ---
+# The hardened rules redact more aggressively (a lone supabase host, any
+# password=). These pin the boundary so the widening cannot creep into
+# ordinary diagnostics.
+test_pf_scrub_widened_over_redaction() {
+  echo "TEST: _pf_scrub — widened rules do not over-redact ordinary diagnostics"
+  local -a controls=(
+    "upstream_host=web1 port=8080 healthcheck returned 200"
+    "myhost=alpha xuser=beta"
+    "resolver could not determine host=unset for the upstream pool"
+  )
+  local c
+  for c in "${controls[@]}"; do
+    run_probe_errmsg "$c"
+    if grep -qF "$c" <<<"$RP_OUT"; then echo "  PASS: preserved \"${c:0:40}...\""; PASS=$((PASS+1));
+    else echo "  FAIL: over-redacted \"$c\" -> $RP_OUT"; FAIL=$((FAIL+1)); fi
+  done
+}
+
 # --- #6295 T5: PERMANENT identity guard across all three _pf_scrub copies ---
 # The function is triplicated across the three cutover-path probes. The cost
 # of triplication is DRIFT; this test converts that from silent divergence
@@ -305,6 +367,8 @@ test_pf_scrub_libpq_keyword_form
 test_pf_scrub_no_over_redaction
 test_pf_scrub_lone_keyword_not_redacted
 test_pf_scrub_original_rules_intact
+test_pf_scrub_encoding_shapes
+test_pf_scrub_widened_over_redaction
 test_pf_scrub_bodies_byte_identical
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

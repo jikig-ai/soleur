@@ -35,6 +35,11 @@ on:
           - arm
           - verify
           - rollback
+      cron_period_seconds:
+        description: "Bucket width for the exactly-once check (op=doublefire-probe / op=verify). MUST be <= the SHORTEST registered cron period, hour-aligned. Default 3600."
+        required: false
+        type: string
+        default: "3600"
   # push trigger scoped to this file forces GitHub to register the workflow in
   # the Actions UI (workflow_dispatch-only workflows can take 30+ min to appear).
   push:
@@ -108,6 +113,15 @@ jobs:
           # its own Redis independent of LB weight (DI-C3). No SSH; the deploy webhook fans
           # out to these private IPs over the private net.
           CUTOVER_HOSTS: "10.0.1.10"
+          # #6617 — bucket width for the exactly-once check, consumed by
+          # op=doublefire-probe AND op=verify 2.6. Previously read from a name that
+          # was neither a dispatch input nor a step env var, so it was pinned at the
+          # 3600 default, its validity guard was unreachable, and both arms printed a
+          # remediation ("re-dispatch with CUTOVER_CRON_PERIOD_SECONDS set to …") that
+          # the operator could not perform without editing and merging this file.
+          # Error direction matters: a period LARGER than the real shortest cron
+          # collapses legitimate runs into one bucket and reports a PHANTOM double-fire.
+          CUTOVER_CRON_PERIOD_SECONDS: ${{ inputs.cron_period_seconds }}
         run: |
           set -euo pipefail
           BASE="https://deploy.soleur.ai/hooks"
@@ -255,20 +269,33 @@ jobs:
                 | map(select(length > 1))
                 | map({ functionID: .[0].fn, bucket: .[0].bucket, count: length }) ')
               DUPE_COUNT=$(echo "$DUPES" | jq 'length')
+              # ADVERSE is set by either NO-GO branch and consumed at the END of the
+              # arm, AFTER the scope caveat prints. This gives the operator the full
+              # picture (runs + dupes + caveat) in ONE dispatch *and* a red run — an
+              # earlier revision exited 0 to buy the former, which was a false trade:
+              # nothing is truncated by deferring the exit to the last statement.
+              ADVERSE=0
               if [[ "$DUPE_COUNT" -gt 0 ]]; then
                 echo "::error::doublefire-probe: DOUBLE-FIRE detected — $DUPE_COUNT (functionID, tick-bucket) group(s) with >1 run. Details (ids + counts only, AC-NOBODY):"
                 echo "$DUPES" | jq -c '.[]'
+                ADVERSE=1
               elif [[ "$RUN_COUNT" -gt 0 ]]; then
-                echo "::warning::doublefire-probe: the dedicated host (10.0.1.40) has EXECUTED $RUN_COUNT cron run(s), with no duplicate tick-bucket. Pre-cutover, ANY run on the dark host means its scheduler is live against a registered SDK — treat this as a live double-scheduler condition even without a duplicate bucket, because the colocated scheduler's runs are NOT in this dataset."
+                echo "::error::doublefire-probe: the dedicated host (10.0.1.40) has EXECUTED $RUN_COUNT cron run(s), with no duplicate tick-bucket. Pre-cutover, ANY run on the dark host means its scheduler is live against a registered SDK — treat this as a live double-scheduler condition even without a duplicate bucket, because the colocated scheduler's runs are NOT in this dataset."
+                ADVERSE=1
               else
                 echo "::notice::doublefire-probe: ZERO runs on the dedicated host — its scheduler has executed nothing in the window."
               fi
               # Scope caveat carried VERBATIM from op=verify 2.6 (P2-a / DI-C3).
               echo "::notice::doublefire-probe SCOPE CAVEAT (P2-a / DI-C3): the doublefire-probe reads ONLY the dedicated host's (10.0.1.40) run history. It is NOT a web-2 double-fire detector — a surviving weight-0 web-2 scheduler fires against prod Postgres via its OWN loopback backend PRE-repoint, whose runs never appear on the dedicated host. The operator's MANDATORY web-2 quiesce (op=execute SEAM, web-2 freeze/recreate) is the control against a web-2 double-fire — this probe cannot substitute for it."
-              # Diagnostic, not gating: a non-zero DUPE_COUNT is reported via ::error::
-              # above for visibility but does NOT fail the run, so an operator reading
-              # the pre-window signal always gets the full picture (registry + runs +
-              # caveat) in one dispatch rather than a truncated one.
+              # NO-GO must be red. Every sibling arm in this workflow exits non-zero on
+              # its adverse verdict (re-arm precondition, re-arm PARTIAL, wiped-volume
+              # verify); a green run whose annotation says "DOUBLE-FIRE detected" is the
+              # #6374 shape — an operator surface presenting an adverse state as
+              # non-adverse. The plan cites "workflow run summary" as this failure
+              # mode's alert route, and that route is the run's conclusion.
+              if [[ "$ADVERSE" -eq 1 ]]; then
+                echo "::error::doublefire-probe verdict: NO-GO — do not proceed to the cutover until the above is explained."; exit 1
+              fi
               ;;
 
             rearm)
