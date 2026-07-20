@@ -212,7 +212,7 @@ run_probe() {
   # RETURN) so the loud-abort `exit 1` branches still clean the spool.
   trap "rm -rf '$pf_tmp'" EXIT
   local spool="$pf_tmp/runs.spool" resp_file="$pf_tmp/runs.resp"
-  local after="" page=1 resp has_next end_cursor all_runs
+  local after="" page=1 resp has_next end_cursor
   local timed_out=0 last_curl_exit=0 now elapsed remaining
   : > "$spool"
   while :; do
@@ -267,18 +267,39 @@ run_probe() {
       break
     fi
   done
-  # Collapse all spooled per-page arrays into one flat run array via file input.
-  all_runs=$(jq -s 'add // []' "$spool")
+  # Collapse all spooled per-page arrays into one flat run array — file IN, file OUT.
+  #
+  # ARGV CEILING (#6736). The collapsed set stays in a FILE and is never round-tripped
+  # through a shell variable on its way to jq. It used to land in $all_runs and be bound
+  # as `--argjson r "$all_runs"` on the final emit, which made the entire paginated run
+  # set ONE argv argument; the kernel caps a SINGLE argv argument at
+  # MAX_ARG_STRLEN = 131,072 B — verified by bisect on this host: 131,071 B passes,
+  # 131,072 B fails E2BIG. That is NOT `getconf ARG_MAX` (2,097,152 B, the argv+envp
+  # total); a payload at 6% of ARG_MAX still dies.
+  #
+  # This was the #5523 defect re-introduced ONE LINE AFTER its own fix: the loop above
+  # spools every page to disk precisely to avoid an argv-sized accumulator (see the
+  # "no argv size limit — the #5523 pattern" comment on the spool), and then the final
+  # emit handed the whole thing back to execve. The spool bought nothing.
+  #
+  # The bound is the page ceiling ($MAX_PAGES × $PAGE_SIZE runs), not anything about
+  # bytes, so it was never safe: at the default page budget the run set can exceed
+  # 131,072 B long before MAX_PAGES is reached, and the failure lands on the LOUD path
+  # (exit non-zero → webhook non-200) only by luck — `jq` dying on E2BIG here would
+  # surface as a probe crash, not as the deliberate TIMEOUT marker.
+  local runs_file="$pf_tmp/runs.json"
+  jq -s 'add // []' "$spool" > "$runs_file"
   _pf_pages=$(( _pf_pages + page ))
 
   # Observability summary (count ONLY, never run bodies) → journald only.
   local run_count
-  run_count=$(echo "$all_runs" | jq 'length')
+  run_count=$(jq 'length' "$runs_file")
   logger -t "$LOG_TAG" "doublefire probe: runs=$run_count from=$FROM_TS until=${UNTIL_TS:-<open>}" 2>/dev/null || true
   _pf_done_marker
 
   # Single pure-JSON object on stdout (the webhook body the workflow jq-parses).
-  jq -nc --argjson r "$all_runs" '{runs:$r}'
+  # File input, so the run array never crosses execve.
+  jq -c '{runs: .}' "$runs_file"
 }
 
 # Run only when executed directly — sourcing (unit tests) must NOT hit the network.

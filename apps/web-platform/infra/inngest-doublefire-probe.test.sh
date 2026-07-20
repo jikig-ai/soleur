@@ -285,6 +285,83 @@ test_df_marker_tag_in_vector() {
   else echo "  FAIL: tag NOT in vector.toml (marker would not ship)"; FAIL=$((FAIL+1)); fi
 }
 
+# --- Test: argv ceiling — the collapsed run set EXCEEDS MAX_ARG_STRLEN (#6736) ---
+#
+# The final emit used to bind the whole paginated run set as `--argjson r "$all_runs"`,
+# i.e. ONE argv argument. The kernel caps a SINGLE argv argument at
+# MAX_ARG_STRLEN = 131,072 B (NOT `getconf ARG_MAX`, the 2,097,152 B argv+envp total);
+# bisected on this host: 131,071 B passes, 131,072 B fails E2BIG.
+#
+# This was the #5523 defect RE-INTRODUCED ONE LINE AFTER ITS OWN FIX: the pagination loop
+# spools every page to disk precisely to avoid an argv-sized accumulator, and then the emit
+# handed the collapsed result straight back to execve. The spool bought nothing. The probe
+# now keeps the collapsed set in a file and emits with `jq -c '{runs: .}' "$runs_file"`.
+#
+# ROW COUNT IS NOT THE LOAD-BEARING PARAMETER — BYTES PER RUN IS. The projection keeps only
+# {functionID, startedAt}, so short synthetic ids give ~60 B/run and even 1,500 runs would
+# stay under the ceiling and PASS ON UNMODIFIED CODE (vacuous). These fixture runs carry
+# production-shaped functionIDs (the app-slug/function-slug form Inngest actually returns),
+# which is what carries the bytes.
+test_df_argv_ceiling_collapsed_runs() {
+  echo "TEST: doublefire-probe — >MAX_ARG_STRLEN collapsed run set (#6736)"
+  # Named at every use, never bare.
+  local MAX_ARG_STRLEN=131072
+  local pages=5 per_page=400
+  local dir; dir=$(mktemp -d)
+  # Owning trap for this case's scratch dir (#6734). RETURN, not EXIT: this harness
+  # allocates per test function, so function-scoped cleanup is the correct lifetime --
+  # and an EXIT trap here would silently replace any other the file later registers.
+  trap 'rm -rf "$dir"' RETURN
+
+  local p edges
+  for p in 1 2 3 4 5; do
+    edges=$(jq -nc --argjson n "$per_page" --argjson pg "$p" '
+      [ range(0; $n) as $i
+        | { cursor: "cur-\($pg)-\($i)",
+            node: { id: "01SYNTHESIZEDRUNIDFIXTURE\($pg)\($i)",
+                    functionID: "synthesized-fixture-app/scheduled-reminder-dispatch-worker-with-a-production-shaped-slug-\($pg)-\($i)",
+                    status: "COMPLETED",
+                    queuedAt: "2026-07-08T10:00:00Z",
+                    startedAt: "2026-07-08T10:00:00Z",
+                    endedAt: "2026-07-08T10:00:00Z" } } ]')
+    if [[ "$p" -lt "$pages" ]]; then
+      make_page true "cursor-$p" "$edges" > "$dir/page-$p.json"
+    else
+      make_page false "" "$edges" > "$dir/page-$p.json"
+    fi
+  done
+
+  # Generator cardinality: an under-filled generator makes every assert below vacuous.
+  local want=$(( pages * per_page ))
+  local gen
+  gen=$(jq -s '[.[].data.runs.edges | length] | add' "$dir"/page-*.json)
+  assert_eq "argv-ceiling fixture generated $want edges across $pages pages" "$want" "$gen"
+
+  local out rc=0
+  out=$(INNGEST_DOUBLEFIRE_RUNS_FIXTURE="$dir" bash "$TARGET" 2>/dev/null) || rc=$?
+  assert_eq ">ceiling run set exits 0 (pre-fix: 'Argument list too long')" "0" "$rc"
+
+  # FIXTURE ADEQUACY, asserted IN-SUITE so this cannot silently degrade to vacuous as the
+  # projection, the fixture, or jq's encoding changes. A PR-body demonstration is
+  # unrunnable post-merge — there is no pre-fix code left to run it against.
+  local runs_bytes over="no"
+  runs_bytes=$(printf '%s' "$out" | jq -c '.runs' | wc -c)
+  [[ "$runs_bytes" -gt "$MAX_ARG_STRLEN" ]] && over="yes"
+  assert_eq "collapsed runs payload (${runs_bytes} B) exceeds MAX_ARG_STRLEN ($MAX_ARG_STRLEN)" "yes" "$over"
+
+  # EXACT count asserted RELATIONALLY against the generated edge count, not a literal pin.
+  # Fully discriminating against a truncating collapse (and against the --slurpfile
+  # array-of-arrays undercount, which would yield 1).
+  assert_eq "runs|length == generated edge count (all pages, no truncation)" "$gen" \
+    "$(printf '%s' "$out" | jq -r '.runs | length')"
+
+  # The rows really carry their projected fields at >ceiling size, not empty shells.
+  assert_eq "every run carries functionID + startedAt at >ceiling size" "$gen" \
+    "$(printf '%s' "$out" | jq -r '[.runs[] | select(.functionID != null and .startedAt != null)] | length')"
+
+  rm -rf "$dir"
+}
+
 echo "=== inngest-doublefire-probe.sh test suite ==="
 test_valid_runs_single_page
 test_pagination
@@ -301,6 +378,7 @@ test_df_connect_timeout_and_clamp
 test_df_window_not_narrowed
 test_df_marker_purity
 test_df_marker_tag_in_vector
+test_df_argv_ceiling_collapsed_runs
 # ===========================================================================
 # #6617 — build_request_body must produce VALID JSON on the empty-CSV path
 #

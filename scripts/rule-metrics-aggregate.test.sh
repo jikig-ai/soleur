@@ -503,6 +503,96 @@ t12_pencil_hook_ids_not_orphan() {
   rm -rf "$root"
 }
 
+# --- T16: argv-ceiling regression — stage payloads EXCEED MAX_ARG_STRLEN (#6736) ---
+#
+# The inter-stage payloads ($rules / $counts / $enriched) were bound as `--argjson`,
+# i.e. ONE argv argument each. The kernel caps a SINGLE argv argument at
+# MAX_ARG_STRLEN = 131,072 B (NOT `getconf ARG_MAX`, the 2,097,152 B argv+envp total);
+# bisected on this host: 131,071 B passes, 131,072 B fails E2BIG. `--rawfile … | fromjson`
+# moves them to file I/O, which has no per-argument limit.
+#
+# Measured pre-fix against the real AGENTS.md: 101 tagged rules → stage_enriched 31,445 B
+# (35,081 B with timestamps populated), 27% of the ceiling at ~347 B/rule. That collides
+# at ~378 rules, and AGENTS.md gains rules every compound cycle.
+#
+# ROW COUNT IS NOT THE LOAD-BEARING PARAMETER — BYTES PER RULE IS. A rule whose bullet
+# body is a few chars produces a ~120 B enriched row, so ~1,100 such rules still measure
+# under the ceiling and would PASS ON UNMODIFIED CODE (vacuous). These bullets are
+# production-shaped: a full-length rule id and a bullet body long enough to fill the
+# RULE_PREFIX_LEN prefix window, which is what actually carries the bytes.
+t16_argv_ceiling_stage_payloads_exceed_max_arg_strlen() {
+  # Named at every use, never bare.
+  local MAX_ARG_STRLEN=131072
+  local rows=700
+  local root; root=$(mktemp -d)
+  # Owning trap for this case's fixture root (#6734). RETURN scopes cleanup to this
+  # function, which is the lifetime of the fixture.
+  trap 'rm -rf "$root"' RETURN
+  mkdir -p "$root/.claude" "$root/knowledge-base/project"
+  {
+    printf '# Agent Instructions\n\n## Hard Rules\n\n'
+    local i
+    for i in $(seq 1 "$rows"); do
+      printf -- '- Synthesized aggregator fixture bullet %04d whose body is deliberately long enough to fill the rule_text_prefix window that the aggregator slices out of AGENTS.md [id: hr-synthesized-argv-ceiling-fixture-rule-%04d].\n' "$i" "$i"
+    done
+  } > "$root/AGENTS.md"
+
+  # Seed real incidents. Without at least one valid line the #6042 no-op guard short-
+  # circuits and never writes rule-metrics.json at all, which would make every assertion
+  # below read a missing file rather than exercise the stage pipeline. Every rule_id here
+  # exists in the AGENTS.md above, so the orphan gate (exit 5) stays clean.
+  write_event "$root" "hr-synthesized-argv-ceiling-fixture-rule-0001" deny    2026-07-01T10:00:00Z
+  write_event "$root" "hr-synthesized-argv-ceiling-fixture-rule-0001" bypass  2026-07-02T10:00:00Z
+  write_event "$root" "hr-synthesized-argv-ceiling-fixture-rule-0500" applied 2026-07-03T10:00:00Z
+
+  # Generator cardinality: an under-filled generator makes every assert below vacuous.
+  local srclines
+  srclines=$(grep -c '^- Synthesized aggregator fixture bullet ' "$root/AGENTS.md")
+  assert_eq "T16 fixture generator emitted $rows rule bullets" "$rows" "$srclines"
+
+  local exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T16 >ceiling AGENTS.md exits 0 (pre-fix: 'Argument list too long')" "0" "$exit_code"
+
+  local metrics="$root/knowledge-base/project/rule-metrics.json"
+  # Fail CLEANLY rather than letting every assertion below error on a missing file. On
+  # the pre-fix code the aggregator dies at 126 (E2BIG) and never writes the report, so
+  # without this guard the RED signal arrives as a wall of `No such file or directory`
+  # noise instead of a named failure.
+  if [[ ! -f "$metrics" ]]; then
+    assert_eq "T16 aggregator wrote rule-metrics.json (exit was $exit_code)" "yes" "no"
+    rm -rf "$root"
+    return
+  fi
+
+  # FIXTURE ADEQUACY, asserted IN-SUITE so this cannot silently degrade to vacuous as the
+  # fixture, the emitted field set, or jq's encoding changes. A PR-body demonstration is
+  # unrunnable post-merge — there is no pre-fix code left to run it against.
+  local enriched_bytes over="no"
+  enriched_bytes=$(jq -c '.rules' < "$metrics" | wc -c)
+  [[ "$enriched_bytes" -gt "$MAX_ARG_STRLEN" ]] && over="yes"
+  assert_eq "T16 enriched payload (${enriched_bytes} B) exceeds MAX_ARG_STRLEN ($MAX_ARG_STRLEN)" "yes" "$over"
+
+  # EXACT count asserted RELATIONALLY against the source bullet count, not a literal pin:
+  # fully discriminating against a truncating/undercounting rewrite, and it stays correct
+  # as the fixture grows.
+  assert_eq "T16 rules|length == source bullet count (no truncation)" "$srclines" \
+    "$(jq -r '.rules | length' < "$metrics")"
+  assert_eq "T16 total_rules_tagged == source bullet count" "$srclines" \
+    "$(jq -r '.summary.total_rules_tagged' < "$metrics")"
+
+  # The rows really carry their prefix text — not empty shells at >ceiling size.
+  assert_eq "T16 every row carries a non-empty rule_text_prefix" "$srclines" \
+    "$(jq -r '[.rules[] | select(.rule_text_prefix != null and .rule_text_prefix != "")] | length' < "$metrics")"
+
+  # Success path leaves no spool residue in the aggregator's work area.
+  local residue
+  residue=$(find "$root" -name 'stage-*.json' | wc -l)
+  assert_eq "T16 no stage spool file leaked into the fixture repo" "0" "$residue"
+
+  rm -rf "$root"
+}
+
 t1_mixed_events
 t2_unused_predicate_uses_fire_count
 t3_orphan_rule_id_exits_nonzero
@@ -519,6 +609,7 @@ t12_pencil_hook_ids_not_orphan
 t13_empty_log_noop_leaves_committed_file_untouched
 t14_sentinel_only_noop_leaves_file_and_reports_drops
 t15_dry_run_empty_still_prints_json
+t16_argv_ceiling_stage_payloads_exceed_max_arg_strlen
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"

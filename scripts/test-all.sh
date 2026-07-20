@@ -138,6 +138,18 @@ if want_scripts; then
   run_suite "scripts/expenses-verify-by-check" bash scripts/expenses-verify-by-check.test.sh
   run_suite "scripts/sentry-issue" bash scripts/sentry-issue.test.sh
   run_suite "scripts/content-publisher" bash scripts/test-content-publisher.sh
+  # Registered by #6734. scripts/*.test.sh is NOT covered by any glob here (only
+  # scripts/lib/*.test.sh is), so each one must be named explicitly. The first four below
+  # had silently never run in any CI job; scripts/lint-orphan-test-suites.sh now fails
+  # when a scripts/*.test.sh is missing from this list.
+  # NOTE: "scripts/content-publisher" above is the LEGACY test-content-publisher.sh suite;
+  # the residue harness below is a different file (content-publisher.test.sh). Both run.
+  run_suite "scripts/content-publisher-residue" bash scripts/content-publisher.test.sh
+  run_suite "scripts/skill-freshness-aggregate" bash scripts/skill-freshness-aggregate.test.sh
+  run_suite "scripts/compound-promote" bash scripts/compound-promote.test.sh
+  run_suite "scripts/lint-trap-tempfile-ownership" bash scripts/lint-trap-tempfile-ownership.test.sh
+  run_suite "scripts/lint-orphan-test-suites" bash scripts/lint-orphan-test-suites.sh
+  run_suite "scripts/cron-artifact-age" bash scripts/cron-artifact-age.test.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
   run_suite "scripts/review-reminder-liveness" bash scripts/review-reminder-liveness.test.sh
   run_suite "scripts/zot-restart-loop-alarm" bash scripts/zot-restart-loop-alarm.test.sh

@@ -1,0 +1,4 @@
+102  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+# Derive with: python3 scripts/lint-trap-tempfile-ownership.py --census
+# CI asserts the live count never EXCEEDS this. Lower it freely when the population
+# shrinks; raising it is a deliberate act that needs a reason in the PR body.
