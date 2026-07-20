@@ -155,7 +155,11 @@ Issue: #6297 · Branch: `feat-one-shot-6297-anthropic-key-missing-false-page` ·
 - [x] 6.1 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0.
 - [x] 6.2 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-anthropic-cost-report.test.ts`
       exits 0.
-- [ ] 6.3 Full-suite exit gate.
+- [x] 6.3 Full-suite exit gate.
+      Re-run after the AC14b fixtures landed (the earlier `196/196` predated them):
+      `bash scripts/test-all.sh` → **196/196 suites passed**, exit 0, 602 assertions, 0 failures,
+      including `[ok] scripts/anthropic-admin-key-6297` at 22/22. The suite *count* is unchanged
+      because the new fixtures extend an already-registered suite rather than adding one.
 - [x] 6.4 Walk all pre-merge ACs (AC1–AC19, incl. AC14b/AC14c). Confirm AC6 and AC10 use the `if … grep -q` / `if grep …` forms,
       not `grep -c` (exit-status inversion).
       **Walked. AC1–AC19 all MET; AC20–AC23 are post-merge (they need a producer row / post-fix
