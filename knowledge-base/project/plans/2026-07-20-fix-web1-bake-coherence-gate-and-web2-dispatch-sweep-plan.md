@@ -160,7 +160,7 @@ connector, no deploy webhook, no monitors, no egress firewall. `runcmd` is once-
 reaching the network before its egress firewall and AppArmor/seccomp profiles apply is briefly
 unconfined (the #6416 class). No new secret material is introduced.
 
-**Brand-survival threshold:** `single-user incident`
+- **Brand-survival threshold:** `single-user incident`
 
 Sole operator, sole web host, hard-pinned singleton A record. One bad birth is a total outage with no
 automated recovery. CPO sign-off required at plan time; `user-impact-reviewer` at review time.
@@ -304,9 +304,12 @@ logs:
   retention: GitHub Actions default (90 days); Sentry per project retention
 discoverability_test:
   command: bun test plugins/soleur/test/cloud-init-user-data-size.test.ts
-  expected_output: >-
-    the "Dockerfile <-> server.tf baked-set parity" describe block passes, including the two new
-    assertions; a deliberately duplicated host_script_files entry makes it fail
+  expected_output: "0 fail"
+  # Substring-matched against the command's real stdout (bun prints "30 pass" / "0 fail").
+  # Prose here would never match and would FAIL preflight Check 10 row 6 — the
+  # expected_output field is EXECUTED, not read.
+  # Semantics: the "Dockerfile <-> server.tf baked-set parity" describe block passes,
+  # including the two new assertions; a duplicated host_script_files entry makes it fail.
 ```
 
 No `ssh` appears in any command. No soak/time-gated close criterion is declared, so §2.9.1
