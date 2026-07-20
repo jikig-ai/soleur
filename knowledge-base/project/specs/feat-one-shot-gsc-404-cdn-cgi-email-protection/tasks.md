@@ -185,13 +185,33 @@ merge-triggered apply rather than just this resource.
 
 ## Phase 3 — Plan review of the apply
 
-- [ ] 3.1 ~~`terraform plan` → confirm **1 to add, 0 to change, 0 to destroy** (AC4).~~
-      **SUPERSEDED and re-opened by 2.9.3b.** That clean 1-add plan was real and is
-      exactly the trap: it says "add" because the resource is absent from STATE, and
-      never calls the API to discover the entrypoint is already populated. The expected
-      plan is now an **import** plus **0 to add, 1 to change, 0 to destroy**, where the
-      single change is `+1 rule`. Re-run and confirm the new shape. **A plan that still
-      reports "1 to add" means the import block was dropped and the clobber is back.**
+- [x] 3.1 ~~`terraform plan` → confirm **1 to add, 0 to change, 0 to destroy** (AC4).~~
+      **SUPERSEDED by 2.9.3b, re-run 2026-07-20 against live state:**
+
+      ```
+      Plan: 1 to import, 0 to add, 1 to change, 0 to destroy.
+      ```
+
+      The single change is `+1 rule`; the adopted Flexible SSL rule appears in the diff
+      with action, description, enabled, expression and `ssl = "flexible"` all unchanged
+      (its `id`/`ref` show `-> (known after apply)` — the v4 provider writes a ruleset as
+      one whole-list PUT, so Cloudflare reassigns rule IDs; atomic, effect preserved).
+      **A plan reporting "1 to add" means the import block was dropped.**
+
+      Running this is what caught two defects that would have failed the apply — the
+      import block as first written could not have worked:
+      - **Import ID was v5 syntax.** `zones/<zone_id>/<ruleset_id>` is what the provider's
+        `main`-branch docs show; we are pinned to **4.52.7**, which wants singular
+        `zone/<zone_id>/<ruleset_id>`. v4 does not reject the unknown prefix — it falls
+        through to the account path and issues `GET /accounts/<zone_id>/rulesets/<id>`,
+        a zone ID in an accounts URL, surfacing as `Authentication error (10000)`. That
+        error names authentication, so it reads as token scope and sends you back to
+        re-probe a credential that was already correct.
+      - **`provider` is not inherited by an import block** from its target resource, so
+        the read ran through the default `cloudflare` provider, whose token holds no
+        ruleset permissions.
+      Same lesson as task 2.1's "verify against the pinned provider, do not copy the
+      illustrative block" — this time for the import ID rather than an attribute name.
 - [x] 3.2 Confirm no excluded resource (`hcloud_server.web`, `hcloud_volume.workspaces`,
       volume attachments, SSH keys) appears — `-target` is transitive on dependencies.
 
