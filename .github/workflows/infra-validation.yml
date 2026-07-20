@@ -142,6 +142,59 @@ jobs:
           #   both"); this is the same precedent applied here.
           #     scripts/infra-validate-gate-verdict.sh
           #
+          #   BASELINE CORRECTION (#6766). Everything below this line was
+          #   MISSING from the deleted `paths:` block — that block was the wrong
+          #   baseline to transcribe, because it had drifted from the surface
+          #   deploy-script-tests actually verifies. Each entry is a SUT path
+          #   assigned in a guard this job runs, so today an edit to it cannot
+          #   trip the guard that exists to check it. Adding them DELIBERATELY
+          #   WIDENS what triggers the 12-minute job: that cost is the point —
+          #   the guards exist to check these files, and a guard that cannot
+          #   fire on its own subject is the #6766 defect by definition.
+          #
+          #   ci-deploy.test.sh, ci-deploy-wrapper.test.sh,
+          #   cutover-inngest-workflow.test.sh and web-hosts-fanout-parity.test.sh
+          #   all assign this as a SUT (release/deploy pipeline shape + fan-out
+          #   peer-list parity).
+          #     .github/workflows/web-platform-release.yml
+          #
+          #   cron-egress-firewall, registry-insecure-config and
+          #   web-hosts-fanout-parity all read the apply workflow.
+          #     .github/workflows/apply-web-platform-infra.yml
+          #
+          #   infra-config-gate.test.sh's apply-gate adjudicator SUT.
+          #     .github/workflows/apply-deploy-pipeline-fix.yml
+          #
+          #   cutover-inngest-workflow.test.sh + ci-deploy.test.sh read these.
+          #     .github/workflows/cutover-inngest.yml
+          #     .github/workflows/build-inngest-bootstrap-image.yml
+          #
+          #   workspaces-luks-{cutover-workflow,freeze,header}.test.sh assert the
+          #   cutover workflow's `environment:` gate and mode validation; the
+          #   header suite also reads the verify workflow. #6588's cutover
+          #   rsynced onto the root disk while every string-only gate certified
+          #   it green — these are the guards that now catch that.
+          #     .github/workflows/workspaces-luks-cutover.yml
+          #     .github/workflows/workspaces-luks-verify.yml
+          #
+          #   scan-workflow.test.sh asserts the cron-placement hook permits the
+          #   workflow, and that test-all.sh still REGISTERS the advisor-scan
+          #   suite (an unregistered suite is zero coverage, silently green).
+          #     .claude/hooks/new-scheduled-cron-prefer-inngest.sh
+          #     scripts/test-all.sh
+          #
+          #   cron-egress-firewall.test.sh cross-checks every sentinel name
+          #   against the runbook; runbook drift is the failure it catches.
+          #     knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md
+          #
+          #   www-apex-canonicalizer.test.sh reads the published CNAME.
+          #     plugins/soleur/docs/CNAME
+          #
+          #   This job RUNS this suite directly, yet it lives outside
+          #   apps/*/infra/ — so editing the suite did not trigger the job that
+          #   executes it.
+          #     apps/web-platform/scripts/sandbox-canary-regression.test.sh
+          #
           #   (#3366) supabase-advisor/scan-workflow.test.sh reads all of
           #   these. The guard's whole job is to catch a gate that looks
           #   present but does nothing — so a guard that cannot fire when its
@@ -162,7 +215,7 @@ jobs:
           #
           # Kept byte-identical to SUITE_RE in the mirror unit test, which
           # asserts that equality (a prose-only sync would drift silently).
-          SUITE_RE='^(apps/[^/]+/infra/|infra/|\.github/scripts/validate-infra-templates\.sh$|\.github/scripts/test/fixtures-validate-infra-templates\.sh$|\.github/workflows/(infra-validation|restart-inngest-server|apply-inngest-rls|apply-inngest-rls-dev|scheduled-supabase-advisor-scan|apply-sentry-infra)\.yml$|scripts/(supabase-advisor-scan|infra-validate-gate-verdict)\.sh$|apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan\.ts$|knowledge-base/engineering/architecture/diagrams/model\.c4$)'
+          SUITE_RE='^(apps/[^/]+/infra/|infra/|apps/web-platform/scripts/sandbox-canary-regression\.test\.sh$|\.claude/hooks/new-scheduled-cron-prefer-inngest\.sh$|\.github/scripts/validate-infra-templates\.sh$|\.github/scripts/test/fixtures-validate-infra-templates\.sh$|\.github/workflows/(infra-validation|restart-inngest-server|apply-inngest-rls|apply-inngest-rls-dev|scheduled-supabase-advisor-scan|apply-sentry-infra|web-platform-release|apply-web-platform-infra|apply-deploy-pipeline-fix|cutover-inngest|build-inngest-bootstrap-image|workspaces-luks-cutover|workspaces-luks-verify)\.yml$|scripts/(supabase-advisor-scan|infra-validate-gate-verdict|test-all)\.sh$|apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan\.ts$|knowledge-base/engineering/architecture/diagrams/model\.c4$|knowledge-base/engineering/operations/runbooks/cron-egress-blocked\.md$|plugins/soleur/docs/CNAME$)'
 
           # merge_group FIRST, and as an explicit branch rather than a
           # fall-through: github.base_ref is EMPTY on merge_group, so reaching

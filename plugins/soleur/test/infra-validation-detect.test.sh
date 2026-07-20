@@ -181,7 +181,7 @@ echo ""
 # detect-changes step. The per-path rationale lives beside that copy (it was
 # moved there verbatim from the deleted `paths:` block); it is not duplicated
 # here so the two cannot drift in prose.
-SUITE_RE='^(apps/[^/]+/infra/|infra/|\.github/scripts/validate-infra-templates\.sh$|\.github/scripts/test/fixtures-validate-infra-templates\.sh$|\.github/workflows/(infra-validation|restart-inngest-server|apply-inngest-rls|apply-inngest-rls-dev|scheduled-supabase-advisor-scan|apply-sentry-infra)\.yml$|scripts/(supabase-advisor-scan|infra-validate-gate-verdict)\.sh$|apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan\.ts$|knowledge-base/engineering/architecture/diagrams/model\.c4$)'
+SUITE_RE='^(apps/[^/]+/infra/|infra/|apps/web-platform/scripts/sandbox-canary-regression\.test\.sh$|\.claude/hooks/new-scheduled-cron-prefer-inngest\.sh$|\.github/scripts/validate-infra-templates\.sh$|\.github/scripts/test/fixtures-validate-infra-templates\.sh$|\.github/workflows/(infra-validation|restart-inngest-server|apply-inngest-rls|apply-inngest-rls-dev|scheduled-supabase-advisor-scan|apply-sentry-infra|web-platform-release|apply-web-platform-infra|apply-deploy-pipeline-fix|cutover-inngest|build-inngest-bootstrap-image|workspaces-luks-cutover|workspaces-luks-verify)\.yml$|scripts/(supabase-advisor-scan|infra-validate-gate-verdict|test-all)\.sh$|apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan\.ts$|knowledge-base/engineering/architecture/diagrams/model\.c4$|knowledge-base/engineering/operations/runbooks/cron-egress-blocked\.md$|plugins/soleur/docs/CNAME$)'
 
 # Reads the changed-file list on stdin into a variable, then matches with a
 # here-string. NOT `producer | grep -q`: under `set -o pipefail` grep -q exits
@@ -226,7 +226,19 @@ for p in \
   "scripts/supabase-advisor-scan.sh" \
   "apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts" \
   "knowledge-base/engineering/architecture/diagrams/model.c4" \
-  "scripts/infra-validate-gate-verdict.sh"
+  "scripts/infra-validate-gate-verdict.sh" \
+  ".github/workflows/web-platform-release.yml" \
+  ".github/workflows/apply-web-platform-infra.yml" \
+  ".github/workflows/apply-deploy-pipeline-fix.yml" \
+  ".github/workflows/cutover-inngest.yml" \
+  ".github/workflows/build-inngest-bootstrap-image.yml" \
+  ".github/workflows/workspaces-luks-cutover.yml" \
+  ".github/workflows/workspaces-luks-verify.yml" \
+  ".claude/hooks/new-scheduled-cron-prefer-inngest.sh" \
+  "scripts/test-all.sh" \
+  "knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md" \
+  "plugins/soleur/docs/CNAME" \
+  "apps/web-platform/scripts/sandbox-canary-regression.test.sh"
 do
   OUT=$(printf '%s\n' "$p" | detect_suite_relevant)
   assert_eq 'true' "$OUT" "$p → suite_relevant=true"
@@ -259,7 +271,12 @@ for p in \
   ".github/workflows/apply-inngest-rls-prd.yml" \
   "apps/web-platform/infrastructure/main.tf" \
   "scripts/supabase-advisor-scan.sh.bak" \
-  "scripts/infra-validate-gate-verdict.sh.orig"
+  "scripts/test-all.sh.bak" \
+  "scripts/infra-validate-gate-verdict.sh.orig" \
+  ".github/workflows/cutover-inngest-extra.yml" \
+  ".github/workflows/workspaces-luks-verify-old.yml" \
+  "plugins/soleur/docs/CNAME.bak" \
+  "apps/web-platform/scripts/other-canary.test.sh"
 do
   OUT=$(printf '%s\n' "$p" | detect_suite_relevant)
   assert_eq 'false' "$OUT" "$p → suite_relevant=false (near-miss, must not match)"
