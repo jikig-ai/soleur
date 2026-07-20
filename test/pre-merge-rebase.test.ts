@@ -549,11 +549,54 @@ esac
       { cwd: remoteDir }
     );
 
-    // Add review evidence via filesystem todos/ directory so Guard 6 passes.
-    // Bare repos have no working tree, but the grep -rl check on $WORK_DIR/todos/
-    // just reads regular files at that path — works regardless of bare status.
-    mkdirSync(join(remoteDir, "todos"), { recursive: true });
-    writeFileSync(join(remoteDir, "todos", "review.md"), "tags: code-review\n");
+    // Add review evidence that the BRANCH-SCOPED gate accepts (#6724).
+    //
+    // This previously dropped a todos/review.md onto the filesystem without
+    // committing it, which worked only because Check 1 was a repo-global
+    // `grep -rl "$WORK_DIR/todos/"`. An uncommitted file is exactly the
+    // vacuous evidence the #6724 fix stops honouring, so that no longer
+    // satisfies the gate — correctly.
+    //
+    // Two things are needed instead, both via plumbing since a bare repo has
+    // no working tree to commit from:
+    //   1. A resolvable origin/main. The bare repo IS the origin, so there is
+    //      no remote to fetch from; seeding the remote-tracking ref directly
+    //      is what a successful fetch would have produced.
+    //   2. A commit ahead of origin/main carrying the review trailer.
+    spawnChecked(
+      ["git", "update-ref", "refs/remotes/origin/main", mainSha],
+      { cwd: remoteDir }
+    );
+    // The hook fetches origin/main before the gate and, since #6724, DISCARDS
+    // both local signals when that fetch fails — a stale ref widens
+    // origin/main..HEAD in the unsafe direction. This bare repo is its own
+    // origin, so point `origin` at itself to make the fetch succeed offline.
+    // Without this the gate correctly denies and never reaches the
+    // uncommitted-changes check this test exercises.
+    Bun.spawnSync(["git", "remote", "remove", "origin"], { cwd: remoteDir, env: GIT_ENV });
+    spawnChecked(["git", "remote", "add", "origin", remoteDir], { cwd: remoteDir });
+    // commit-tree needs a committer identity, and GIT_ENV deliberately nulls
+    // the global config (GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_NOSYSTEM=1),
+    // so set it locally on the bare repo.
+    spawnChecked(["git", "config", "user.email", "test@test.local"], { cwd: remoteDir });
+    spawnChecked(["git", "config", "user.name", "Test User"], { cwd: remoteDir });
+    const mainTree = new TextDecoder().decode(
+      spawnChecked(["git", "rev-parse", "main^{tree}"], { cwd: remoteDir }).stdout
+    ).trim();
+    const reviewSha = new TextDecoder().decode(
+      spawnChecked(
+        [
+          "git", "commit-tree", mainTree, "-p", mainSha,
+          "-m",
+          "chore: post-review checkpoint\n\nReviewed-By-Soleur: soleur:review",
+        ],
+        { cwd: remoteDir }
+      ).stdout
+    ).trim();
+    spawnChecked(
+      ["git", "update-ref", "refs/heads/test-feature", reviewSha],
+      { cwd: remoteDir }
+    );
 
     try {
       const result = await runHook(
@@ -572,6 +615,12 @@ esac
       );
       Bun.spawnSync(
         ["git", "update-ref", "-d", "refs/heads/test-feature"],
+        { cwd: remoteDir, env: GIT_ENV }
+      );
+      // Seeded above so the branch-scoped signals had a base ref; remove it so
+      // this test leaves no state for siblings sharing remoteDir.
+      Bun.spawnSync(
+        ["git", "update-ref", "-d", "refs/remotes/origin/main"],
         { cwd: remoteDir, env: GIT_ENV }
       );
       rmSync(join(remoteDir, "todos"), { recursive: true, force: true });

@@ -52,12 +52,31 @@ pwd
 **Trailer-parse verification gate (defense-in-depth for [hr-always-read-a-file-before-editing-it]).** For every commit on this branch since `origin/main`, parse any `Key: value`-shaped lines in the body and confirm `git interpret-trailers` recognises each as a trailer. The modal failure is a blank line between an `Allowlist-Widened-By:`/`Reviewed-by:`/`Signed-off-by:` line and `Co-Authored-By:`, which silently demotes the upstream trailer into body prose and breaks downstream consumers parsing via `git log --format='%(trailers:key=NAME,valueonly)'`:
 
 ```bash
+# Scan the WHOLE body, but only for KNOWN trailer keys.
+#
+# Two wrong ways to scope this, both tried:
+#   * Any `^Word: ` anywhere — flags ordinary prose ("Suites: 18/18",
+#     "Note: …", "Runbook: …"), so the gate fails on almost every
+#     well-written commit message. A gate that cannot pass gets routinely
+#     ignored, which is worse than no gate: it trains the reader to walk
+#     past red. Measured on PR #6727: 6 hits, all prose, while every
+#     intended trailer parsed fine.
+#   * Final paragraph only — VACUOUS for the exact class this gate exists
+#     to catch. The modal failure is a blank line BEFORE `Co-Authored-By:`,
+#     which leaves the orphaned trailer in the second-to-last paragraph
+#     while the final paragraph stays a clean parseable block. Verified
+#     vacuous against a synthetic demotion.
+#
+# The real signal is neither position nor shape: it is whether the key is
+# one a downstream consumer actually reads. Prose keys are not. Extend this
+# list when a new machine-read trailer is introduced.
+KNOWN_TRAILER_KEYS='Co-Authored-By|Signed-off-by|Allowlist-Widened-By|Reviewed-by|Reviewed-By-Soleur|Acked-by|Tested-by|Cc'
 RC=0
 for sha in $(git rev-list origin/main..HEAD); do
   BODY=$(git log -1 --format=%B "$sha")
   declare -a CANDIDATES=()
   while IFS= read -r line; do
-    [[ "$line" =~ ^([A-Z][A-Za-z-]+):[[:space:]] ]] && CANDIDATES+=("${BASH_REMATCH[1]}")
+    [[ "$line" =~ ^(${KNOWN_TRAILER_KEYS}):[[:space:]] ]] && CANDIDATES+=("${BASH_REMATCH[1]}")
   done <<< "$BODY"
   for key in "${CANDIDATES[@]}"; do
     val=$(git log -1 --format="%(trailers:key=${key},valueonly)" "$sha")
@@ -115,11 +134,38 @@ Check for evidence that `/review` ran on the current branch. This is defense-in-
 
 **Step 1: Check for review artifacts (legacy).**
 
-Search for todo files tagged as code-review findings:
+Search for todo files tagged as code-review findings **that this branch
+introduced** — refresh `origin/main` first, since the scoping is only as
+accurate as the cached ref:
 
 ```bash
-grep -rl "code-review" todos/ 2>/dev/null | head -1 || true
+if ! git fetch origin main >/dev/null 2>&1; then
+  echo "origin/main is stale — Signals 1-2 are unreliable; use Signal 3 only" >&2
+else
+  git log origin/main..HEAD -G'code-review' --name-only --format= -- todos/ 2>/dev/null \
+    | sort -u | while read -r f; do
+        git show "HEAD:$f" 2>/dev/null | grep -q "code-review" && echo "$f"
+      done | head -1
+fi
 ```
+
+This was a repo-global `grep -rl "code-review" todos/`, which made the signal
+structurally unfailable (#6724): `todos/` is a tracked directory on main, so a
+single long-lived review todo anywhere in it satisfied Step 1 for every branch
+forever — including branches where review never ran.
+
+Three details are load-bearing, each closing a narrower version of the same
+vacuity (all verified during #6727's review):
+
+- **Do not `|| true` the fetch.** A stale `origin/main` widens
+  `origin/main..HEAD` to include commits already on main, so main's review
+  history counts as this branch's. The hooks discard both local signals in that
+  case; do the same here rather than proceeding on a stale ref.
+- **`-G'code-review'` matches the DIFF, not the working tree.** Listing paths
+  and grepping them reads whatever the current checkout contains, so a branch
+  that merely touches a pre-existing main-side todo inherits main's tag.
+- **The `git show HEAD:` check.** `-G` matches added *or removed* lines, so
+  deleting a completed todo would otherwise count as evidence.
 
 **Step 2: Check commit history for review evidence.**
 
@@ -130,6 +176,19 @@ git log origin/main..HEAD --oneline | grep -E "(refactor: add code review findin
 ```
 
 The `^[a-f0-9]+ review:` alternative matches the new convention — `review: <summary> (P<N>)` commits produced when findings are fixed inline per `rf-review-finding-default-fix-inline`.
+
+If that returns nothing, check for the durable review trailer:
+
+```bash
+git log origin/main..HEAD --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' | grep '[^[:space:]]' || true
+```
+
+`Reviewed-By-Soleur:` is emitted by
+`plugins/soleur/skills/review/scripts/emit-review-trailer.sh` and is the **only**
+signal a zero-finding review can produce: review's own step 2 skips the artifact
+commit when there are no local changes, so a clean branch generates no todos and
+no `review:` commit. Before the trailer existed, the gate denied precisely those
+branches with no escape hatch (#6724).
 
 **Step 3: Check for GitHub issues with `code-review` label (current).**
 
@@ -157,9 +216,9 @@ If `gh` fails or is unavailable, treat as no output (fail open on Signal 3).
 
 **Note:** Three signals are checked, any one suffices:
 
-- Signal 1 (`todos/` grep): coupled to legacy review workflow (pre-#1329)
-- Signal 2 (commit message grep): matches legacy `refactor: add code review findings` OR new `review: <summary>` fix-inline commits (post-#2374)
-- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`). Expected to be empty under the new fix-inline default unless findings were scoped out — Signal 2 is the primary signal post-#2374.
+- Signal 1 (`todos/` grep, **branch-scoped**): coupled to legacy review workflow (pre-#1329). Scoped to paths this branch touched — the previous repo-global form could not fail (#6724)
+- Signal 2 (commit message grep **or `Reviewed-By-Soleur:` trailer**): matches legacy `refactor: add code review findings` OR `review: <summary>` fix-inline commits (post-#2374), OR the trailer emitted by `emit-review-trailer.sh`. The trailer is the primary signal post-#6724 and the only one a zero-finding review can produce
+- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`). Expected to be empty under the new fix-inline default unless findings were scoped out.
 
 **If any step produced output:** Review evidence found. Continue to Phase 2.
 
@@ -324,7 +383,7 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 
 Defense-in-depth check that review ran before shipping. Phase 1.5 catches this earlier, but if context compaction erased Phase 1.5's check or the skill was invoked mid-flow, this gate is the second net.
 
-**Detection:** Check for review evidence using the same three signals described in Phase 1.5 (Signal 1: `todos/` grep, Signal 2: commit message grep, Signal 3: GitHub issues with `code-review` label). Run the same commands in the same order. See Phase 1.5 for full details and coupling notes.
+**Detection:** Check for review evidence using the same three signals described in Phase 1.5 (Signal 1: **branch-scoped** `todos/` grep, Signal 2: commit message grep **or the `Reviewed-By-Soleur:` trailer**, Signal 3: GitHub issues with `code-review` label). Run the same commands in the same order — including the `git fetch origin main` that precedes Signal 1, since both local signals are scoped to `origin/main..HEAD` and are only as accurate as the cached ref. See Phase 1.5 for full details and coupling notes.
 
 **If review evidence is found:** Pass silently.
 

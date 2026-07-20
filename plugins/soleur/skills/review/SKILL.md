@@ -882,7 +882,30 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    If there are no local changes, skip the commit (this is the expected case — review's
    primary output is GitHub issues, which are remote-only). If push fails (no network),
    warn and continue.
-3. Display: "Review complete. All findings are tracked as GitHub issues.
+3. **Emit the review-evidence trailer (ALWAYS — not conditional on step 2)**, via
+   [emit-review-trailer.sh](./scripts/emit-review-trailer.sh).
+
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/review/scripts/emit-review-trailer.sh" --findings <n>
+   ```
+
+   This is a script invocation rather than a described `git commit` line because
+   the described form has measured zero compliance on exactly the branches that
+   matter. Step 2 above tells you to skip the commit when there are no local
+   changes — which is the *expected* case — so a review that finds nothing
+   leaves no local evidence at all, and every downstream review-evidence gate
+   then reads "review never ran" and denies the merge with no escape hatch
+   (issue 6724).
+
+   The script therefore commits `--allow-empty`. It is idempotent (a second
+   review pass will not stack a duplicate), it refuses to run on `main`/`master`
+   or in detached HEAD, and it verifies the trailer actually parses before
+   reporting success — an unparseable trailer looks like evidence to a human
+   reading the log while being invisible to the gate that consumes it.
+
+   Run it even when step 2 committed something: the trailer is the durable
+   machine-readable signal, and the commit subject is only a legacy fallback.
+4. Display: "Review complete. All findings are tracked as GitHub issues.
    Run `/clear` then `/soleur:work` or `/soleur:ship` for maximum context headroom."
 
 ### 7. End-to-End Testing (Optional)
