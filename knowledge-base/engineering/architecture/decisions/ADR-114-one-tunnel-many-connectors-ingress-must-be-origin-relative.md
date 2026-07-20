@@ -404,6 +404,57 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > here rather than endorsed) and #6711 (private-NIC health splits across Sentry and Better Stack
 > with no shared join key).
 
+> **Amendment (2026-07-20, #6718 — the `warm_standby` gap above is CLOSED; #6712 is PREVENTED,
+> not VERIFIED).** Factual status note on the two items the 2026-07-19 amendment left open.
+>
+> **Closed.** The `warm_standby` job now carries the same `host_creates > 0` HALT as the sibling
+> `apply` job. It is unbypassable for a *stronger* reason than the sibling: `apply` evaluates its
+> HALT **outside** the `destroy_count` sum so `[ack-destroy]` cannot reach it, whereas
+> `warm_standby` has **no `destroy_count` sum and no ack path at all** — it is `workflow_dispatch`
+> -only and never reads a commit message. (An earlier revision of this amendment imported the
+> sibling's rationale verbatim and misdescribed the mechanism it was documenting; caught in
+> #6725's review.)
+> The load-bearing edit was extending that job's `^[0-9]+$` validation to cover `host_creates`:
+> `jq -r` on a missing key yields the string `null`, and `[[ "null" -gt 0 ]]` passes — without it
+> the guard would have been present, green, and fail-**open**.
+>
+> **The 2026-07-19 assessment of reachability was correct but incomplete.** It reasoned that
+> web-1 normally exists in state, so targeting its network attachment does not create it — hence
+> "defence-in-depth". The composition it did not state: `warm_standby` passes **no
+> `-var image_name`** (only `web_2_recreate` pins — `apply` is unpinned too and is held by its own
+> #6416 HALT rather than by pinning, so the mutable-tag exposure is a property of the WORKFLOW,
+> not of one dispatch; this makes the HALT more justified, not less), so a transitive birth would
+> use the mutable `:latest` default. That is #6712's failure mode reached through #6718's hole,
+> which is why the two were closed as one defect.
+>
+> **Measured while closing it (Terraform v1.10.5):** a `-target` naming an unresolvable `for_each`
+> instance key **warns and is silently ignored** — exit 0, `No changes` — it does **not** error.
+> This mattered: had it errored, the plan step would have died before the guard block and the new
+> HALT would have been present but unreachable. It also means `warm_standby`'s three `web-2`
+> `-target`s have been no-ops since #6538 (tracked in #6575).
+>
+> **#6712 is PREVENTED, not VERIFIED, and stays open.** No preflight was added and no resolver
+> shipped — the resolver extraction was cut because its only call site (`web_2_recreate`) is
+> unreachable after the web-2 retirement. The birth is now *blocked* rather than *validated*.
+>
+> **A second unguarded path existed and was closed here too.** The first revision of this PR
+> asserted "no automated path can birth a web host" **without enumerating the workflows** — and
+> the assertion was false: `apply-deploy-pipeline-fix.yml` fires on `push:main` *and*
+> `workflow_dispatch`, runs `terraform apply -auto-approve` over four `terraform_data` targets
+> that each reference `hcloud_server.web["web-1"]`, and carried no counter, no HALT and no
+> `-var image_name` — the identical composition. #6725's review caught it; the same shared-filter
+> HALT now guards it. **The enumeration is the deliverable, not the claim**: apply (#6416),
+> warm_standby (#6718), apply-deploy-pipeline-fix (#6718), web_2_recreate (gate unsatisfiable),
+> workspaces_luks_cutover (gate requires zero actions on the web-1 server).
+>
+> **The residual inverted into a capability gap.** The 2026-07-19 residual — an operator-driven
+> fresh create/`-replace` of web-1 with no preflight — is now the *only* remaining route, because
+> every automated route that can reach `hcloud_server.web` HALTs (scope: **web** hosts;
+> `inngest_host` legitimately births a host). That violates
+> `hr-fresh-host-provisioning-reachable-from-terraform-apply` and is tracked in **#6730**. Do not
+> resolve it by weakening either HALT: the correct fix is a pinned, attachment-complete birth path
+> that the tripwire can distinguish from an accidental create.
+
 ### Candidate implementations for I2 — assessed in #6441 (SUPERSEDED — see the amendment above; (b) shipped in #6425)
 
 Two shapes are on the table: **(a)** per-host private-net-relative ingress (`ssh-web-1.` →

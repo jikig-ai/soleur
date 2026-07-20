@@ -31,13 +31,122 @@ Two enforcement layers, one source of truth.
 |---|---|---|---|---|
 | **Lefthook `gitleaks-staged`** | local pre-commit | every `git commit` | yes (`--no-verify`, hook removal) | fast feedback before a leak hits the local index |
 | **Lefthook `lint-fixture-content`** | local pre-commit | every `git commit` | yes | catches semi-sensitive shapes (real emails, prod-shape UUIDs, Supabase project refs) gitleaks misses |
-| **CI `secret-scan` workflow** | GitHub Actions | PR + push:main + weekly cron | no (CODEOWNERS-protected) | load-bearing enforcer; the rule's `[hook-enforced: ...]` tag points here |
+| **CI `secret-scan` workflow** | GitHub Actions | PR + merge_group + push:main + weekly cron | no (CODEOWNERS-protected) | load-bearing enforcer; the rule's `[hook-enforced: ...]` tag points here |
+
+Each trigger scans a **different set of commits** — see
+[Ref scope per event](#ref-scope-per-event-which-commits-each-trigger-actually-scans)
+below. That distinction is load-bearing: it is what determines whether a finding
+on an in-flight branch can redden `main`'s gate.
 
 The local hook is a **fast-feedback courtesy**, not a safety floor. The CI
 workflow is what stops a secret from reaching `main`. Operators MUST NOT
 disable the CI job to "unblock" a PR; if a finding is a false positive, add
 a per-rule `[[rules.allowlists]]` block in `.gitleaks.toml` or a `# gitleaks:allow`
 waiver in the source file.
+
+## Ref scope per event: which commits each trigger actually scans
+
+`gitleaks git` scans a **commit range**, not the working tree. Fixing a file in a
+later commit does not clear a finding introduced by an earlier one — which is why
+a red gate is sometimes unfixable by editing the file it names.
+
+| Event | Range scanned | Invocation |
+|---|---|---|
+| `pull_request` | the PR diff, `base..head` | `--log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}"` |
+| `merge_group` | the merge-queue candidate diff, `base..head` | `--log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}"` |
+| `push` (main) — **blocking** | **main's ancestry only** | `--log-opts="--no-merges HEAD"` |
+| `push` (main) — **advisory** | **every fetched ref** | bare `gitleaks git -v`, `\|\| echo ::warning` — never fails the job |
+| `schedule` (weekly) | **every fetched ref** | bare `gitleaks git`, plus `-v` |
+
+`push:main` runs **two** invocations on purpose. Blocking *verdict* scope and scan
+*breadth* are independent axes: the first decides whether `main`'s required check
+goes red (main's ancestry only — the #6706 fix), the second keeps full all-refs
+visibility as a `::warning` so a finding on a pushed branch that never opened a PR
+still surfaces within minutes. The advisory step ends in `|| echo`, so it cannot
+fail and cannot redden `main` no matter what it finds.
+
+**Why `push:main` is explicitly scoped ([#6706](https://github.com/jikig-ai/soleur/issues/6706)).**
+Bare `gitleaks git` defaults to walking every ref the checkout fetched, and
+`actions/checkout` runs with `fetch-depth: 0` — which fetches *all* remote
+branches. So before this was scoped, a finding on an unmerged in-flight branch
+turned `main`'s required check red for a commit that had never merged, and the
+output named no branch.
+
+Reproduce the difference on any checkout that has an off-main ref present (exact
+totals grow with `main`, so compare the two runs against each other, not against
+a remembered number):
+
+```bash
+gitleaks git --redact --no-banner --exit-code 1                            # walks ALL refs
+gitleaks git --redact --no-banner --exit-code 1 --log-opts="--no-merges HEAD"  # main only
+```
+
+The bare form scans strictly more commits — the ones reachable only from unmerged
+remote-tracking branches — and it is exactly those extra commits that could redden
+`main`. Compare the two runs against each other rather than against a remembered
+number: the totals track `main`'s growth and go stale within days.
+
+**Triaging a red weekly cron.** The cron keeps all-refs breadth on purpose — it
+is the retroactive net that re-scans history against the *current* rule pack. `-v`
+makes that breadth diagnosable, printing per finding:
+
+```
+RuleID:      <rule>
+File:        <path>
+Line:        <n>
+Commit:      <full sha>
+Fingerprint: <sha>:<file>:<rule>:<line>
+```
+
+Resolve the owning branch from the SHA:
+
+```bash
+git branch -r --contains <Commit>
+```
+
+If the answer is an unmerged feature branch, the finding is **not** on `main` — fix
+it on that branch (or delete the branch); do not treat it as a `main` incident.
+
+**Do this resolution step BEFORE the `## When an alert fires` decision tree below.**
+That tree routes the `push:main / weekly cron` column straight to *ROTATE NOW /
+assume exfil*, which is correct only once you know the finding is actually in
+`main`'s ancestry. The all-refs surfaces (the advisory sweep and the cron) can both
+report a commit that never merged. Resolve the owning ref first, then enter the
+tree. (A secret pushed to any branch of a public repo still warrants rotation — but
+"rotate" and "treat as a `main` incident" are different responses.)
+
+**Un-PR'd branches: reduced, not removed.** A branch pushed to `origin` with no PR
+opened is invisible to the `pull_request` job, and since #6706 it no longer
+contributes to `main`'s **blocking** verdict. It is still swept on every push to
+`main` by the advisory step above, which emits a `::warning` naming the commit —
+so the practical detection window is minutes, not the weekly cron. What is
+genuinely given up is *enforcement*: nothing blocks on such a finding, and if the
+branch is deleted before anyone reads the warning it goes unnoticed. That is the
+deliberate trade: `main`'s required check answers "is `main` clean?", and a branch
+that never merged cannot make it red.
+
+Note this is a detection question, not a `main`-integrity one — on a public repo a
+secret pushed to any branch is already exposed at push time, so rotation is the
+remedy regardless of which gate reports it.
+
+**Blind spot: merge-commit-exclusive content.** `gitleaks git` drives `git log -p`
+without `-m`/`--cc`, so a merge commit contributes **no** patch content to any
+scan. Measured on `cbd6c948d`:
+
+```bash
+# patch portion only — everything from the first `diff --git` onward
+git log -p -1 cbd6c948d          | sed -n '/^diff --git/,$p' | wc -c   # -> 0
+git log -p -1 cbd6c948d^         | sed -n '/^diff --git/,$p' | wc -c   # -> 10901
+```
+
+(Note the total output for the merge is 302 bytes, not 0 — that is the commit
+header alone, with zero diff beneath it. Measure the patch portion, or the
+result looks like a contradiction.) Content introduced *only* by a merge commit's own tree — the
+plausible shape being a hand-resolved conflict — is therefore invisible to **every**
+job, including the weekly cron. `--no-merges` removes nothing that was ever
+scanned. This is pre-existing and not a consequence of the #6706 scoping; it
+matters because `main` genuinely carries merge commits (`allow_merge_commit` is
+enabled). Tracked separately.
 
 ## Rule pack
 
@@ -110,6 +219,31 @@ allowlist covers:
   literal asterisks) — added via
   [#3877](https://github.com/jikig-ai/soleur/issues/3877) to recognize the
   canonical Doppler/`psql`/pooler-output redaction convention.
+
+**Known gap — a real password containing `@` is silenced.**
+[#6723](https://github.com/jikig-ai/soleur/issues/6723). The rule's password class
+`[^@/\s]+` stops at the FIRST `@`, while every real URL parser takes userinfo to
+the LAST one. Because the allowlist entry is an unanchored *search* against the
+rule's match, a credential like `postgres://user:password@<realsecret>@<host>`
+contains the substring `postgres://user:password@` and allowlists itself. Verified;
+the currently-usable prefixes are `password`/`PASSWORD`/`secret`/`<...>`/`***`.
+
+This is why the placeholder alternation is **deliberately not widened** with short
+tokens. #6706 proposed adding `pass`/`passwd`/`pw` and the change was reverted on
+measurement: those prefixes are far likelier to head a real password, so the
+widening turned a narrow pre-existing gap into a broad one
+(`postgres://user:pass@<realsecret>@<host>` went from detected to silent). If you
+need to document a DSN shape in a comment, use the angle-bracket form
+`postgres://<user>:<pw>@host`, which the `<[^>]+>` branch already covers — that is
+what `apps/web-platform/infra/vector.toml` does.
+
+`plugins/soleur/test/gitleaks-rules.test.sh` T6/T7/T8 pin this rule's behaviour:
+T6 that documentation shapes stay quiet, T7 that real credentials still fire (one
+varied dimension per row — user, host, scheme, password length), and T8 that the
+allowlist stays a single entry. T7 is also T6's positive control: T6 alone passes
+vacuously if the scanner is degraded. Extend all three together if you touch the
+rule; the suite deliberately does **not** assert the #6723 gap, so fixing it will
+not require rewriting a test that cemented it.
 
 The placeholder regex covers ONLY the canonical shapes. Prose-style redactions
 that extend beyond placeholder form (e.g., a Supabase pooler URL like

@@ -33,9 +33,17 @@
 # because `change.actions = ["forget"]` is excluded only from resource_deletes
 # (the `index("delete")` check) but `before.rules` is populated while `after`
 # is null → positive count. Currently no `removed` blocks in
-# apps/web-platform/infra/; if you add one, acknowledge with `[ack-destroy]`
-# (operator intent matches) or widen the nested-clause guard to
-# `index("delete") + index("forget")`.
+# apps/web-platform/infra/; if you add one, the remedy DEPENDS ON THE CONSUMER:
+#   - `apply` job only — acknowledge with `[ack-destroy]` (operator intent matches).
+#   - warm_standby / apply-deploy-pipeline-fix — `[ack-destroy]` is UNAVAILABLE
+#     there (both are dispatch/push paths with no ack token to type past), so the
+#     only remedy is widening the nested-clause guard to
+#     `index("delete") + index("forget")`.
+# Prefer the widening: it is the one fix that works for every consumer. Note also
+# that `["forget"]` is counted by NO host_creates arm on any path — a state-drop
+# of hcloud_server/hcloud_volume passes every gate and silently strands the
+# volume (the hazard T49 guards on the retire path). Pre-existing, no `removed`
+# blocks exist today; recorded here so the next author does not rediscover it.
 #
 # PROVIDER PIN: cloudflare/cloudflare ~> 4.0 (currently 4.52.7). Two of
 # the five clauses are at risk on a v5 upgrade
@@ -56,11 +64,14 @@
 #          web2_out_of_scope_changes: int, web2_server_replaced: int,
 #          host_creates: int}.
 # Every key past the first three is ADDITIVE; the first three are byte-unchanged
-# so the apply / warm_standby / manual-rerun consumers that read only them keep
-# working. Only the web_2_recreate job's sourced gate
-# (tests/scripts/lib/web2-recreate-gate.sh) reads the web2_* keys. Only the
-# `apply` job reads host_creates (#6416) — and evaluates it OUTSIDE the
-# destroy_count sum, so `[ack-destroy]` cannot bypass it.
+# so the manual-rerun consumer that reads only them keeps working. Only the
+# web_2_recreate job's sourced gate (tests/scripts/lib/web2-recreate-gate.sh)
+# reads the web2_* keys. host_creates has THREE readers: the `apply` job
+# (#6416), the `warm_standby` job (#6718), and apply-deploy-pipeline-fix.yml
+# (#6718) — plus tests/scripts/lib/web2-retire-gate.sh, which is test-only
+# (sourced by the counter suite, never by a workflow). The two workflow readers
+# evaluate it OUTSIDE any destroy_count sum, so `[ack-destroy]` cannot bypass
+# either; warm_standby and deploy-pipeline-fix have no ack path at all.
 #
 # Each `_count($side)` helper uses `$side` value-binding (jq 1.7+; safe on
 # jq 1.8.x). NOT the call-by-name filter-arg shape that crashed v1 of
@@ -223,8 +234,10 @@ def destroyed_at($addr):
   # today; this closes the theoretical state-drift hole pre-emptively. The
   # allow-set's 3 addresses never emit "forget" on a scoped recreate — they
   # replace via delete+create — so this adds no false-positive.)
-  # BACKWARD-COMPAT: additive key; the apply / warm_standby / manual-rerun
-  # consumers read only resource_deletes/nested_deletes/reboot_updates (unchanged).
+  # BACKWARD-COMPAT: additive key; no consumer of THIS key exists outside the
+  # web_2_recreate gate. (Do not restate which keys the other consumers read —
+  # that enumeration lives at the host_creates key below and drifted twice
+  # before #6725 caught it. One statement, one place.)
   web2_out_of_scope_changes: (
     [ .resource_changes[]?
       | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
@@ -295,13 +308,14 @@ def destroyed_at($addr):
   # #6416, but detaching a live host's private NIC would pass. That is the I1
   # runtime-precondition gap tracked in #6441, not a counter this filter can add.
   #
-  # BACKWARD-COMPAT: additive key. The apply / warm_standby / manual-rerun
-  # consumers that read only resource_deletes/nested_deletes/reboot_updates stay
-  # byte-unchanged. Only the `apply` job reads host_creates, and it evaluates the
-  # HALT OUTSIDE the destroy_count sum — there is deliberately NO [ack-destroy]
-  # bypass (a host create is never the right thing to type past on an unattended
-  # per-PR apply; the dispatch jobs that legitimately create/replace are separate
-  # jobs and do not read this key).
+  # BACKWARD-COMPAT: additive key. The manual-rerun consumer that reads only
+  # resource_deletes/nested_deletes/reboot_updates stays byte-unchanged.
+  # host_creates is read by BOTH the `apply` job (#6416) and the `warm_standby`
+  # job (#6718), and each evaluates its HALT OUTSIDE the destroy_count sum —
+  # there is deliberately NO [ack-destroy] bypass on either (a host create is
+  # never the right thing to type past on an unattended per-PR apply, nor on a
+  # dispatch that passes no -var image_name; the dispatch jobs that legitimately
+  # create/replace are separate jobs and do not read this key).
   host_creates: (
     [ .resource_changes[]?
       | select(.type == "hcloud_server" or .type == "hcloud_volume")

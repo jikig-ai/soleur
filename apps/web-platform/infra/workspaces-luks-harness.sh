@@ -183,8 +183,31 @@ run_case() {
       findmnt() {
         rec "findmnt $*"
         case "$*" in
+          # `findmnt -rno TARGET` (no path operand) lists every mount target. clean_stray uses it
+          # to refuse a mount nested BENEATH $STAGING, which rm -rf would otherwise descend
+          # through into live data. Default empty = no nested mounts.
+          *"-rno TARGET"*|*"TARGET"*) printf "%s" "${FINDMNT_TARGETS:-}" ;;
           *"$WORKSPACES_STAGING"*) printf "%s\n" "${FINDMNT_STAGING_SRC:-}" ;;
           *"$WORKSPACES_MOUNT"*)   printf "%s\n" "${FINDMNT_MOUNT_SRC:-}" ;;
+        esac
+        return 0
+      }
+      # stat is the DEVICE-IDENTITY seam. clean_stray compares `stat -c %d` on $MOUNT vs $STAGING
+      # to refuse deleting from the canonical filesystem. It cannot use the real stat here: the
+      # harness creates MNT and STG as siblings under one scratch dir, so they genuinely ARE on
+      # the same device and every case would refuse. The knobs default to DIFFERENT ids (the
+      # production-normal case: a Hetzner data volume vs the root disk); STAT_DEV_SAME=1 collapses
+      # them to exercise the refusal. STAT_RC forces the unreadable-device-id fail-closed arm.
+      stat() {
+        rec "stat $*"
+        [ -n "${STAT_RC:-}" ] && return "$STAT_RC"
+        local _sd="${STAT_DEV_STAGING:-2049}" _md="${STAT_DEV_MOUNT:-64513}"
+        # STAT_DEV_SAME=1 collapses both to the staging id — the same-filesystem refusal case.
+        [ "${STAT_DEV_SAME:-0}" = "1" ] && _md="$_sd"
+        case "$*" in
+          *"$WORKSPACES_STAGING"*) printf "%s\n" "$_sd" ;;
+          *"$WORKSPACES_MOUNT"*)   printf "%s\n" "$_md" ;;
+          *) command stat "$@"; return $? ;;
         esac
         return 0
       }
@@ -211,7 +234,10 @@ run_case() {
       # rm is a PASSTHROUGH recorder: the stray-guard case asserts "no rm ANYWHERE in the recorded
       # calls" (detect-and-refuse, never delete — the staged copy is user data, AP-009), and other
       # suites rely on rm actually removing their temp files.
-      rm()      { rec "rm $*"; command rm "$@"; return $?; }
+      # RM_RC forces the removal to fail WITHOUT removing, making the rm-failure arm reachable.
+      # It returns BEFORE `command rm`, so the fixture survives for the assertion.
+      # NOTE: no apostrophes in this block — it lives inside a single-quoted bash -c body.
+      rm()      { rec "rm $*"; [ -n "${RM_RC:-}" ] && return "$RM_RC"; command rm "$@"; return $?; }
       cp()      { rec "cp $*"; return 0; }
       rsync()   { rec "rsync $*"; return 0; }
       # readlink is load-bearing for _same_dev: the naive canonicalizer fails OPEN when readlink
@@ -256,6 +282,10 @@ run_case() {
         # blkid lives in /usr/sbin, which this script has been bitten by before. An absent blkid
         # must refuse, never fall through to the DESTRUCTIVE mkfs arm.
         if [ "${1:-}" = "-v" ] && [ "${2:-}" = "blkid" ] && [ "${BLKID_ABSENT:-}" = "1" ]; then return 1; fi
+        # TOOL_ABSENT=<name> makes exactly one probe binary unresolvable. clean_stray refuses to
+        # run at all with a missing instrument, because `mountpoint -q` on an absent binary exits
+        # 127 -> the `if` reads false -> the catastrophic-mode refusal silently does not fire.
+        if [ "${1:-}" = "-v" ] && [ -n "${TOOL_ABSENT:-}" ] && [ "${2:-}" = "${TOOL_ABSENT}" ]; then return 1; fi
         builtin command "$@"
       }
       for f in ${REQUIRE_FNS:-}; do

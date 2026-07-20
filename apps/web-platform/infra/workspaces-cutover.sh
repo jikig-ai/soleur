@@ -57,6 +57,9 @@ AWSCLI_SHA256="${WORKSPACES_AWSCLI_SHA256:-483e3c43b59255aef243bde90e9f09bb21cb9
 DEAD_MAN_MIN="${WORKSPACES_DEAD_MAN_MIN:-30}"
 DRY_RUN="${DRY_RUN:-1}"
 ROLLBACK="${ROLLBACK:-0}"
+# CLEAN_STRAY — the stray-copy carve-out. Default 0 like ROLLBACK: it must never be the arm a
+# dispatch falls into by omission. Unlike ROLLBACK it does NOT force DRY_RUN=0; see clean_stray().
+CLEAN_STRAY="${CLEAN_STRAY:-0}"
 CONFIRM_WIPE="${CONFIRM_WIPE:-0}"
 
 # Locate sibling scripts relative to THIS file. The workflow ships this script + its siblings
@@ -926,6 +929,267 @@ prepare_staging_target() {
   log "staging target ready: $MAPPER mounted at $STAGING (fs=${fs_type:-created}, reused=${STAGING_FS_REUSED}, avail=${avail_b}B, src=${src_b}B)"
 }
 
+# ============================================================================
+# CLEAN_STRAY — the stray-copy carve-out (AP-009 DOCUMENTED DEVIATION)
+#
+# AP-009 ("Never delete user data", constitution.md) is an architecture principle this code
+# DEVIATES from, deliberately, in exactly one narrow place. The carve-out is recorded in ADR-119
+# "Addendum (2026-07-19): the stray-copy carve-out (CLEAN_STRAY, #6588)".
+#
+# The deviation is sound ONLY because provenance establishes the target is a duplicate: nothing
+# ever wrote to $STAGING except the misdirected rsync of $MOUNT — no service, no mount, no
+# container points at it. The canonical copy at $MOUNT is retained and never touched here.
+#
+# Deliberately NOT folded into prepare_staging_target: that function's contract is
+# detect-and-refuse, and its suite pins "no rm" (T4c). Keeping the deletion in a separate
+# entrypoint is what lets that invariant stay mechanically enforced for every other arm.
+# ============================================================================
+
+# emit_clean_stray — the receipt, on EVERY outcome including refusals and the idempotent no-op.
+# Its OWN marker name: SOLEUR_WORKSPACES_LUKS_STAGING_TARGET's result=/reason= vocabulary is
+# pinned by the T-series and the record_arm coverage matrix, and overloading it would make a
+# user-data deletion indistinguishable from a staging-prep outcome on the operator's only no-SSH
+# channel. Bare `echo` at column 0 + `logger`, matching emit_staging_target.
+emit_clean_stray() {
+  local result="${1:-fail}" reason="${2:-unspecified}" extra="${3:-}" row
+  row="SOLEUR_WORKSPACES_LUKS_CLEAN_STRAY feature=workspaces-luks op=workspaces-luks-clean-stray result=$(_vscrub "$result") reason=$(_vscrub "$reason") deviation=AP-009 staging=$(_vscrub "$STAGING") host=$(hostname 2>/dev/null)"
+  [ -n "$extra" ] && row="$row $(_vscrub "$extra")"
+  echo "$row"; logger -t "$LUKS_LOG_TAG" -- "$row" 2>/dev/null || true
+}
+
+# assert_mode_exclusive — refuse ROLLBACK=1 together with CLEAN_STRAY=1. MUST be called BEFORE
+# both mode blocks: the ROLLBACK block ends `exit 0`, so a CLEAN_STRAY block after it is
+# UNREACHABLE whenever ROLLBACK=1. Without this, an operator who ticks both types the
+# delete-user-data token, receives a ROLLBACK instead (umount $MOUNT, cryptsetup close, docker
+# stop) on a host where no freeze was held — per _PREPARE_ABORT_NOTE, "a gratuitous outage" — the
+# run exits 0, and the stray is still there while the operator believes a deletion succeeded.
+# The operator most likely to tick both is exactly the one who just read "the cutover is wedged,
+# try the recovery modes."
+# shellcheck disable=SC2317  # invoked from the main body, below the sourced-detection guard
+assert_mode_exclusive() {
+  # Counted, not pairwise. A pairwise ROLLBACK-vs-CLEAN_STRAY test is correct today but silently
+  # stops covering the invariant the moment a THIRD mode block lands (CONFIRM_WIPE is already
+  # declared and its block is authored in the Phase-5 converge dispatch) — whichever block came
+  # first would win by `exit 0`, which is the exact failure this function exists to prevent.
+  # Each mode is counted by STRING equality against "1", never by arithmetic on the raw value:
+  # these arrive from an operator-supplied .env, and $(( ... + CONFIRM_WIPE )) on a non-numeric
+  # value is an evaluation hazard rather than a count.
+  local n=0 m
+  for m in "${ROLLBACK:-0}" "${CLEAN_STRAY:-0}" "${CONFIRM_WIPE:-0}"; do
+    [ "$m" = "1" ] && n=$((n + 1))
+  done
+  if [ "$n" -gt 1 ]; then
+    emit_clean_stray fail clean_stray_mode_conflict "rollback=$(_vscrub "${ROLLBACK:-0}") clean_stray=$(_vscrub "${CLEAN_STRAY:-0}") confirm_wipe=$(_vscrub "${CONFIRM_WIPE:-0}")"
+    emit_drift clean_stray_mode_conflict
+    die "$n operator modes were dispatched together (rollback=${ROLLBACK:-0} clean_stray=${CLEAN_STRAY:-0} confirm_wipe=${CONFIRM_WIPE:-0}). These are different verbs and the FIRST matching block would silently win via its early exit — performing e.g. a umount/close/restart on a host where no freeze is held while leaving the stray untouched, and reporting green. Re-dispatch with exactly ONE mode ticked."
+  fi
+}
+
+# clean_stray — remove the stray plaintext copy at $STAGING. The single sanctioned deletion.
+# shellcheck disable=SC2317  # invoked from the CLEAN_STRAY mode block, below the sourced guard
+clean_stray() {
+  local stray_b stray_n mount_src mount_dev staging_dev entry nested_mnt tool
+  local missing_n missing_sample
+  local -a victims=()
+  local -a rel=()
+  # The depth at which USER IDENTITY lives under $MOUNT, and therefore the depth the subset
+  # check must reach to have any discriminating power. On web-1 the top level is infrastructure
+  # (`workspaces/`, `plugins/`, `redis/`, `lost+found`) and per-user trees sit at
+  # `workspaces/<id>/` — so a -maxdepth 1 comparison reduces to "does $MOUNT contain a directory
+  # named workspaces?", which is TRUE in every reachable state INCLUDING one where the stray
+  # holds a user's only surviving copy. Depth 2 is where the check starts asking a real question.
+  # Deeper is not better here: per-file churn in a live workspace (build artifacts, .git objects)
+  # would make a full-depth check refuse forever, re-creating the wedge this mode exists to clear.
+  local SUBSET_DEPTH=2
+  step "CLEAN_STRAY — remove the stray plaintext copy at $STAGING (AP-009 documented deviation)"
+
+  # --- Requirement 2, script layer. REFUSE rather than force DRY_RUN=0 the way ROLLBACK does:
+  # that silent coercion is precisely what makes ROLLBACK's ungated arm dangerous. dry_run
+  # DEFAULTS TO TRUE, so "tick clean_stray, change nothing else" lands here — name the remedy.
+  if [ "$DRY_RUN" = "1" ]; then
+    emit_clean_stray fail clean_stray_dryrun_conflict
+    emit_drift clean_stray_dryrun_conflict
+    die "CLEAN_STRAY=1 was dispatched with DRY_RUN=1. This mode deletes user data and has no rehearsal — there is nothing it could safely simulate. Remedy: re-dispatch with dry_run UNTICKED (it defaults to TRUE, so an unchanged form lands here)."
+  fi
+
+  # --- Instrument availability, FIRST. Every guard below is a probe, and a probe whose binary is
+  # absent returns a falsy rc that reads exactly like "the dangerous condition does not hold".
+  # `mountpoint -q` on a missing binary exits 127 -> the `if` is false -> the catastrophic-mode
+  # refusal silently does not fire. Refuse to run at all rather than run blind.
+  for tool in mountpoint findmnt find stat du; do
+    command -v "$tool" >/dev/null 2>&1 || {
+      emit_clean_stray fail clean_stray_tool_missing "tool=$(_vscrub "$tool")"
+      emit_drift clean_stray_tool_missing
+      die "required probe '$tool' is not on PATH — every guard protecting this deletion depends on it. Refusing to delete user data with a blind instrument."
+    }
+  done
+
+  # --- A SYMLINK $STAGING is refused with its OWN reason. `ls -A` follows a symlink while `find`
+  # does not, so without this the run would enumerate nothing, delete nothing, and then die as
+  # `clean_stray_incomplete` — blaming a partial removal for what is actually a path-type problem,
+  # and doing so identically on every re-dispatch.
+  if [ -L "$STAGING" ]; then
+    emit_clean_stray fail clean_stray_staging_is_symlink
+    emit_drift clean_stray_staging_is_symlink
+    die "$STAGING is a SYMLINK, not a directory. Refusing — resolve it and re-dispatch."
+  fi
+
+  # --- A MOUNTPOINT $STAGING is the REAL LUKS volume, not a root-disk stray. This is the
+  # catastrophic mode: deleting here destroys canonical, not a duplicate. (`mountpoint -q`
+  # resolves symlinks, so a symlink-to-the-real-mountpoint is caught here too.)
+  if mountpoint -q "$STAGING"; then
+    emit_clean_stray fail clean_stray_staging_is_mountpoint
+    emit_drift clean_stray_staging_is_mountpoint
+    die "$STAGING is a MOUNTPOINT — that is the real LUKS volume, not a stray root-disk copy. Refusing to delete. Unmount it first if a cleanup is genuinely intended."
+  fi
+
+  # --- Idempotent re-dispatch is a SUCCESS. Re-dispatch is the most likely operator action
+  # after an ambiguous run log, and this file already establishes the principle at rollback()'s
+  # mapper guard: "a recovery-path signal that cries wolf gets ignored."
+  # `ls` failure must NOT read as "empty" — that would report result=ok on an instrument failure.
+  if ! ls -A "$STAGING" >/dev/null 2>&1; then
+    emit_clean_stray fail clean_stray_staging_unreadable
+    emit_drift clean_stray_staging_unreadable
+    die "cannot read $STAGING — refusing to draw any conclusion about its contents."
+  fi
+  if [ -z "$(ls -A "$STAGING" 2>/dev/null)" ]; then
+    emit_clean_stray ok already_clean
+    log "$STAGING is already empty — nothing to remove. This is a SUCCESS (idempotent re-dispatch), not a silent skip."
+    return 0
+  fi
+
+  # --- Canonical must be HEALTHY and DISTINCT before anything is deleted.
+  mountpoint -q "$MOUNT" || {
+    emit_clean_stray fail clean_stray_mount_unhealthy "mount=$(_vscrub "$MOUNT")"
+    emit_drift clean_stray_mount_unhealthy
+    die "$MOUNT is not mounted — the canonical copy is not where this deletion assumes it is. Refusing to delete the only other copy of the data."
+  }
+  mount_src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
+  [ -b "$mount_src" ] || {
+    emit_clean_stray fail clean_stray_mount_unhealthy "mount_src=$(_vscrub "${mount_src:-none}")"
+    emit_drift clean_stray_mount_unhealthy
+    die "$MOUNT source is not a block device — refusing to treat an unverified mount as proof that the canonical copy exists."
+  }
+
+  # --- Same-FILESYSTEM refusal, via st_dev on the DIRECTORIES themselves.
+  # `findmnt -no SOURCE "$STAGING"` cannot serve here: the mountpoint refusal above guarantees
+  # $STAGING is NOT a mountpoint, and findmnt matches exact mount targets only — so it returns
+  # empty in 100% of reachable states and any _same_dev() built on it is dead code that merely
+  # LOOKS like a guard. `stat -c %d` asks the question actually being posed ("do these two paths
+  # live on the same filesystem?"), and it answers it for plain directories.
+  mount_dev="$(stat -c %d "$MOUNT" 2>/dev/null || true)"
+  staging_dev="$(stat -c %d "$STAGING" 2>/dev/null || true)"
+  if [ -z "$mount_dev" ] || [ -z "$staging_dev" ]; then
+    emit_clean_stray fail clean_stray_stat_failed
+    emit_drift clean_stray_stat_failed
+    die "could not stat $MOUNT and/or $STAGING — an unreadable device id is NOT proof they are distinct filesystems. Refusing."
+  fi
+  if [ "$mount_dev" = "$staging_dev" ]; then
+    emit_clean_stray fail clean_stray_same_device "dev=$(_vscrub "$staging_dev")"
+    emit_drift clean_stray_same_device
+    die "$MOUNT and $STAGING are on the SAME filesystem (st_dev=$staging_dev) — what looks like a stray IS canonical, and deleting it would free no root-disk space. Refusing."
+  fi
+
+  # --- No mount may live BENEATH $STAGING. Every guard above tests $STAGING itself; without this
+  # a bind-mount at e.g. $STAGING/workspaces would be descended into by `rm -rf`, deleting the
+  # canonical tree through it and failing only the final rmdir with EBUSY. awk (not `grep -q`)
+  # because a pipeline whose consumer exits early takes SIGPIPE under `pipefail` and the
+  # non-zero rc would read as "no nested mount".
+  nested_mnt="$(findmnt -rno TARGET 2>/dev/null | awk -v s="$STAGING/" 'index($0, s) == 1 { print; exit }')"
+  if [ -n "$nested_mnt" ]; then
+    emit_clean_stray fail clean_stray_nested_mount "nested=$(_vscrub "$nested_mnt")"
+    emit_drift clean_stray_nested_mount
+    die "a filesystem is mounted BENEATH $STAGING (at $nested_mnt) — rm -rf would descend through it into live data. Refusing. Unmount it and re-dispatch."
+  fi
+
+  # --- Enumerate ONCE. The subset proof and the deletion MUST read the same snapshot: two
+  # independent `find` runs let an entry created between them be deleted having never been
+  # subset-checked, falsifying the exact premise the check exists to establish.
+  # `-print0` / `read -d ''` throughout — this file already establishes (at the stray guard's own
+  # magnitude probe) that a workspace directory name may contain a newline, and a line-based read
+  # would split such a name into two pseudo-entries that can both spuriously match under $MOUNT.
+  while IFS= read -r -d '' entry; do rel+=("$entry"); done < <(find "$STAGING" -mindepth 1 -maxdepth "$SUBSET_DEPTH" -printf '%P\0' 2>/dev/null)
+
+  # An EMPTY enumeration here is INSTRUMENT FAILURE, not an empty directory — the already_clean
+  # return above already proved $STAGING is non-empty. A `find` that is non-GNU (no -printf),
+  # erroring, or killed must be indistinguishable from "premise FALSIFIED", never from "premise
+  # confirmed". The heredoc-with-command-substitution form this replaces discarded find's exit
+  # status entirely, so its failure silently passed the check and the deletion proceeded.
+  if [ "${#rel[@]}" -eq 0 ]; then
+    emit_clean_stray fail clean_stray_enumerate_failed
+    emit_drift clean_stray_enumerate_failed
+    die "could not enumerate $STAGING — find returned nothing for a directory already proven non-empty. The subset check could not run; refusing to delete on an unverified premise."
+  fi
+
+  # --- Subset check: every enumerated relative path in $STAGING must also exist under $MOUNT.
+  # The marker carries a COUNT only. The offending NAMES go to the host log + the run log but not
+  # to the marker's `extra`, because at $SUBSET_DEPTH those names include per-user workspace ids —
+  # publishing them to the drift channel would be a wider audience than the data itself.
+  missing_n=0
+  missing_sample=""
+  for entry in "${rel[@]}"; do
+    [ -n "$entry" ] || continue
+    [ -e "$MOUNT/$entry" ] && continue
+    missing_n=$((missing_n + 1))
+    [ "$missing_n" -le 5 ] && missing_sample="$missing_sample [$entry]"
+  done
+  if [ "$missing_n" -gt 0 ]; then
+    emit_clean_stray fail clean_stray_not_subset "unique_count=$(_vscrub "$missing_n") depth=$(_vscrub "$SUBSET_DEPTH")"
+    emit_drift clean_stray_not_subset
+    die "$STAGING holds $missing_n path(s) (to depth $SUBSET_DEPTH) that $MOUNT does NOT have; first few:${missing_sample}. The duplicate premise this deletion rests on is FALSIFIED — something other than the misdirected rsync wrote here. Refusing. Inspect via the preflight probe before proceeding."
+  fi
+
+  # --- Victims are the DEPTH-1 entries of the same snapshot (those with no path separator).
+  for entry in "${rel[@]}"; do
+    case "$entry" in */*) continue ;; esac
+    victims+=("$STAGING/$entry")
+  done
+  if [ "${#victims[@]}" -eq 0 ]; then
+    emit_clean_stray fail clean_stray_enumerate_failed
+    emit_drift clean_stray_enumerate_failed
+    die "enumerated $STAGING but derived no top-level entries to remove — refusing rather than reporting a vacuous success."
+  fi
+
+  # --- The AP-009 banner + magnitude, BEFORE the first rm.
+  stray_b="$(du -s --block-size=1 "$STAGING" 2>/dev/null | cut -f1)"
+  stray_n="${#victims[@]}"
+  log "AP-009 DEVIATION (documented carve-out, ADR-119 Addendum 2026-07-19): about to delete USER DATA — workspace source code — from the ROOT DISK at $STAGING: ${stray_b:-unknown} B across ${stray_n} top-level entries. This is sound only because provenance establishes the copy is a DUPLICATE; the canonical copy at $MOUNT is retained and is not touched."
+  # result=START, not ok: `ok` is reserved for TERMINAL outcomes. Emitting ok here left a
+  # success-keyed row in the permanent record for runs that went on to fail, and double-counted
+  # every successful deletion for any consumer tallying result=ok on this marker.
+  emit_clean_stray start deleting "stray_bytes=$(_vscrub "${stray_b:-unknown}") stray_entries=$(_vscrub "$stray_n")"
+
+  # --- The deletion. DOTFILE-INCLUSIVE: `rm -rf "$STAGING"/*` misses .git/.cache, and a workspace
+  # tree is full of them — a glob would leave the stray guard correctly still firing after a
+  # "successful" run, with the remainder now a strict subset that behaves differently on retry.
+  # Removed with a SHELL `rm` rather than `find -exec rm {} +`: -exec invokes the real /bin/rm
+  # BINARY, which the test harness's rm() recorder cannot observe, which would make every "no rm
+  # was issued" refusal assertion in the suite VACUOUS.
+  # $STAGING ITSELF is left in place as an empty directory — the next run's `mkdir -p` and the
+  # guard's own non-mountpoint predicate both expect it to exist.
+  rm -rf -- "${victims[@]}" || {
+    emit_clean_stray fail clean_stray_rm_failed
+    emit_drift clean_stray_rm_failed
+    die "the removal failed against $STAGING — the stray is partially or wholly intact."
+  }
+
+  # --- Post-deletion assertion. A partial removal must be NAMED: the guard would keep refusing
+  # and the operator needs to know the cleanup is the reason, not a new stray. An `ls` failure
+  # here must not read as "empty" — that would emit result=ok cleaned over an unverified state.
+  if ! ls -A "$STAGING" >/dev/null 2>&1; then
+    emit_clean_stray fail clean_stray_verify_unreadable
+    emit_drift clean_stray_verify_unreadable
+    die "cannot re-read $STAGING after the removal — refusing to certify the cleanup succeeded."
+  fi
+  if [ -n "$(ls -A "$STAGING" 2>/dev/null)" ]; then
+    emit_clean_stray fail clean_stray_incomplete
+    emit_drift clean_stray_incomplete
+    die "$STAGING is STILL non-empty after the removal — the cleanup is incomplete and the stray guard will correctly keep refusing. Re-dispatch, or inspect via the preflight probe."
+  fi
+  emit_clean_stray ok cleaned "stray_bytes=$(_vscrub "${stray_b:-unknown}") stray_entries=$(_vscrub "${stray_n:-unknown}")"
+  log "stray removed: $STAGING is now an empty non-mountpoint directory. The cutover is unwedged — a rehearsal should now run past prepare_staging_target."
+}
+
 # Sourced-detection guard: when this file is `source`d (the workspaces-luks-verify.test.sh harness
 # obtains verify_byte_identity/emit_verify_diff without running the cutover), return HERE — after all
 # functions the test needs are defined, but BEFORE `trap cleanup EXIT` and the main body. An executed
@@ -935,11 +1199,28 @@ if [ "${BASH_SOURCE[0]:-$0}" != "$0" ]; then return 0 2>/dev/null || true; fi
 trap cleanup EXIT
 
 
+# Mode mutual exclusion — MUST precede BOTH mode blocks. ROLLBACK's block ends `exit 0`, so a
+# CLEAN_STRAY block placed after it is unreachable whenever ROLLBACK=1 (see assert_mode_exclusive).
+assert_mode_exclusive
+
 # ============================================================================
 # ROLLBACK mode — operator recovery entrypoint
 # ============================================================================
 if [ "$ROLLBACK" = "1" ]; then
   DRY_RUN=0 rollback
+  exit 0
+fi
+
+# ============================================================================
+# CLEAN_STRAY mode — the stray-copy carve-out (AP-009 documented deviation, ADR-119 addendum)
+#
+# Note the DELIBERATE divergence from ROLLBACK's shape one block above: ROLLBACK force-sets
+# `DRY_RUN=0`, defeating rollback()'s own dry-run early-return. clean_stray() REFUSES a DRY_RUN=1
+# dispatch instead. Forcing is what makes ROLLBACK reachable — and destructive — from the ungated
+# dry_run=true arm; this mode must never inherit that.
+# ============================================================================
+if [ "$CLEAN_STRAY" = "1" ]; then
+  clean_stray
   exit 0
 fi
 

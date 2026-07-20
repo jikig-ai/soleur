@@ -425,7 +425,21 @@ resource "terraform_data" "container_restart_monitor_install" {
 }
 
 # --- #6438/#6548: web-host private-net consumer-probe + §3 NIC-guard delivery (web-1) ----------
-# The SSH terraform_data provisioner is the SOLE path that arms the cx33-unrebuildable web-1:
+# TERMINOLOGY (#6538 reconciliation, CPO C3): "unrebuildable" below means web-1 cannot be rebuilt
+# by any AUTOMATED path. It does NOT contradict #6538, whose table lists
+# `soleur-web-platform / cx33 / hel1 / rebuildable_in_place_today: YES` — that column is about the
+# host's LOCATION being viable (web-2 was NO only because it sat in fsn1), not about a CI route
+# existing. Both are true: an operator-local full `terraform apply` would succeed, and no
+# CI/dispatch route reaches it. As of #6718 every automated route that can reach
+# hcloud_server.web HALTs on host_creates > 0 — enumerated: apply-web-platform-infra.yml's
+# `apply` (#6416), warm_standby (#6718), web_2_recreate (gate unsatisfiable) and
+# workspaces_luks_cutover (gate requires zero actions on the web-1 server), plus
+# apply-deploy-pipeline-fix.yml (#6718). Scope: WEB hosts — inngest_host legitimately births a
+# host and is unaffected. The gap is tracked by #6730 (it violates
+# hr-fresh-host-provisioning-reachable-from-terraform-apply).
+#
+# The SSH terraform_data provisioner is the SOLE path that arms web-1 (see the terminology note
+# above — "unrebuildable" here means no AUTOMATED path, not a stock constraint):
 # ignore_changes=[user_data] (above) means cloud-init changes never reach it, and ci-deploy.sh
 # re-seed installs NO host systemd units (verified :2331-2355). cloud-init.yml bakes the SAME
 # scripts+units for FUTURE fresh hosts (#6459, A5). All three mirror disk_monitor_install (same
