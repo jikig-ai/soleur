@@ -215,7 +215,7 @@ if want_scripts; then
   # web-2-recreate coherence preflight (AC10b) — drives the standalone preflight
   # via its test seams (no docker/network/prod write). Registered here alongside
   # the destroy-guard trio since it gates the same web-2-recreate dispatch.
-  run_suite "tests/scripts/web2-recreate-preflight" bash tests/scripts/test-web2-recreate-preflight.sh
+  run_suite "tests/scripts/host-image-coherence-preflight" bash tests/scripts/test-host-image-coherence-preflight.sh
   # #6197: inngest-host-replace scoped-recreate destroy-guard (mirrors the web2-recreate gate).
   run_suite "tests/scripts/inngest-host-replace-gate" bash tests/scripts/test-inngest-host-replace-gate.sh
   # registry-host-replace scoped-recreate destroy-guard (5-target; preserves the zot store volume).
