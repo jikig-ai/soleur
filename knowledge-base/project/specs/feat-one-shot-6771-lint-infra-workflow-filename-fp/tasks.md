@@ -130,7 +130,7 @@ Consequences for the tasks below:
       the old script.
 - [x] 4.4 Time both arms in the same run; assert post-fix ≤ **1.25×** the baseline measured
       alongside it. No absolute second-count.
-- [ ] 4.5 `bash scripts/test-all.sh` passes.
+- [x] 4.5 `bash scripts/test-all.sh` passes.
 - [x] 4.6 `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` is clean
       on this PR's own diff — this PR edits files under the scan dirs and must not trip its
       own gate.
