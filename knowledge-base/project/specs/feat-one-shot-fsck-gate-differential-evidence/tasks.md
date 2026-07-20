@@ -35,10 +35,19 @@ deepened: 2026-07-20
 >   arm (i) therefore synthesizes the refusal, and the "`-c safe.directory=` is load-bearing" proof
 >   is explicitly UNPROVEN in CI rather than silently assumed. See L6k-CAP.
 > - **3.1 — the expected case count.** Said `20 passed`. The suite carried **24** executed cases at
->   #6745 and carries **25** after #6759 adds L6l. A 26th id, `L6k-CAP`, is CONDITIONAL: it emits
->   `ok`/`no` only on a host that can produce a real ownership refusal and stays note-only otherwise,
->   so the runner executes 25 and a capable dev host executes 26. Any future "expected N" here must
->   name which of the two it means.
+>   #6745 and **25** after #6759 adds L6l (confirmed in CI: `25 passed, 0 failed`). Two further ids,
+>   `L6k-CAP` and `L6m`, are CONDITIONAL on the host being able to produce a real ownership refusal,
+>   so the total is **25 or 27**, never 26. Any future "expected N" must name which it means.
+>   Initially the runner measured CANNOT-produce and both stayed note-only; that turned out to be the
+>   runner image shipping `safe.directory = *` in `/etc/gitconfig`, not a property of the host — the
+>   probes now neutralize ambient git config, which should make both assert. See the next note.
+> - **The cause of the H1 mystery, measured rather than guessed (added after the first green run).**
+>   Three separate explanations were advanced across #6745 and #6759 for why the ownership refusal
+>   never fired — the fixture uid, then git 2.54.0-vs-2.53.0, then "the runner simply cannot". All
+>   three were wrong. `L6k-CAP` printed the answer on its first CI run: the GitHub runner image ships
+>   a SYSTEM gitconfig containing `safe.directory = *`, so git allowed every directory and no
+>   ownership check could fire. Neutralizing `GIT_CONFIG_SYSTEM/GLOBAL` makes the refusal fire, which
+>   makes the load-bearing `-c safe.directory=` proof runnable in CI after all — it is now `L6m`.
 
 ## Phase 0 — Preconditions
 

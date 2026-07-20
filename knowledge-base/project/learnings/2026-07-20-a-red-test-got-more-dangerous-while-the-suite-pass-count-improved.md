@@ -119,7 +119,17 @@ probe, which is the strictly less dangerous of the two locations.
   owns. A cheap conditional assertion on hosts that *can* produce the real thing costs nothing and
   is the only drift detector left.
 - **Measure the harness's ability to produce the precondition, and print it every run.** "Cannot
-  produce" is a third outcome, neither pass nor skip.
+  produce" is a third outcome, neither pass nor skip. **This paid off on its first CI run and is the
+  strongest result here.** Three explanations had been advanced for why the ownership refusal never
+  fired — the fixture uid, then git 2.54.0-vs-2.53.0, then "the runner cannot". All three were
+  inference and all three were wrong. The probe printed the answer next to its own verdict: the
+  runner image ships `safe.directory = *` in the SYSTEM gitconfig, so git allowed every directory
+  and no ownership check could fire. Neutralizing `GIT_CONFIG_SYSTEM/GLOBAL` makes the refusal fire,
+  which makes the load-bearing proof runnable in CI after all (now `L6m`). An instrument that
+  reports its own inputs alongside its verdict found in one run what three commits of reasoning got
+  wrong — and note the failure shape: the probe's *conclusion* ("this host CANNOT produce H1") was
+  itself a measurement artifact, true of the measurement and false of the host. Print the inputs,
+  not just the verdict.
 - **Treat another project's test-only env knob as unavailable.** `GIT_TEST_*` is not API.
 
 ## Related
