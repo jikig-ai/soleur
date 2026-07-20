@@ -203,6 +203,16 @@ function quotedAttr(block: string, name: string): string | null {
   return m[1].replace(/\\(.)/g, "$1");
 }
 
+/**
+ * Escape every regex metacharacter so an interpolated literal matches itself.
+ * Escaping only `.` leaves `\` unescaped, which lets the input alter the
+ * pattern's meaning rather than being matched verbatim (CodeQL
+ * js/incomplete-sanitization).
+ */
+function escapeRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /** Every rules block in the ruleset, comment-stripped. */
 function allRuleBlocks(): string[] {
   const tf = stripHclComments(readFileSync(TF_PATH, "utf-8"));
@@ -286,7 +296,7 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
     // Trailing boundary forbids a longer resource name (e.g.
     // `..._settings_v2`) from satisfying the assertion.
     const targetRe = new RegExp(
-      `-target=${RESOURCE_ADDRESS.replace(/\./g, "\\.")}(?![\\w.])`,
+      `-target=${escapeRegExp(RESOURCE_ADDRESS)}(?![\\w.])`,
     );
     expect(
       liveLines,
