@@ -38,6 +38,13 @@ lint_rc() {
 # Capture stderr so a message can be asserted (proves the RIGHT rule fired, not just
 # that something failed).
 lint_err() {
+  # `2>&1 >/dev/null` is deliberate and order-dependent: fd2 is duped to the CURRENT
+  # fd1 (the caller's capture), THEN fd1 is sent to /dev/null -- so this yields stderr
+  # ONLY, which is where the linter prints its findings. Verified: a command emitting
+  # both streams through this form captures exactly the stderr line.
+  # Reversing to `>/dev/null 2>&1` would capture NOTHING and silently make every
+  # message assertion below vacuous.
+  # shellcheck disable=SC2069
   python3 "$LINT" "$1" 2>&1 >/dev/null || true
 }
 
