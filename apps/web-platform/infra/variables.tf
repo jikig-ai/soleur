@@ -221,9 +221,45 @@ variable "cf_api_token_zone_settings" {
 }
 
 variable "cf_api_token_rulesets" {
-  description = "Cloudflare API token narrowed to Cache Rules:Edit + Zone WAF:Edit + Single Redirect Rules:Edit + Transform Rules:Edit on soleur.ai, PLUS (post-#5092 widen) account-level Account Rulesets:Edit + Account Filter Lists:Edit for Bulk Redirects (cloudflare_ruleset/cloudflare_list resources across http_request_cache_settings, http_request_firewall_custom, http_request_dynamic_redirect, http_response_headers_transform, and account http_request_redirect phases; see cache.tf, bot-allowlist.tf, seo-rulesets.tf, and seo-bulk-redirects.tf)"
+  description = "Cloudflare API token narrowed to Cache Rules:Edit + Zone WAF:Edit + Single Redirect Rules:Edit + Transform Rules:Edit + Config Rules:Edit on soleur.ai, PLUS (post-#5092 widen) account-level Account Rulesets:Edit + Account Filter Lists:Edit for Bulk Redirects (cloudflare_ruleset/cloudflare_list resources across http_request_cache_settings, http_request_firewall_custom, http_request_dynamic_redirect, http_response_headers_transform, http_config_settings, and account http_request_redirect phases; see cache.tf, bot-allowlist.tf, seo-rulesets.tf, seo-bulk-redirects.tf, and seo-config-rules.tf). THIS DESCRIPTION IS THE SCOPE LEDGER — a new ruleset phase needs a matching permission here AND on the live token, or the apply 403s. Config Rules:Edit was APPENDED 2026-07-20 (#6755) and is live: the http_config_settings entrypoint probe went 403 -> 200 and the three retained-scope controls (dynamic_redirect, cache_settings, account rulesets) stayed 200, so nothing was replaced. The Cloudflare UI spells that permission `Config Rules`, NOT `Configuration Rules`. Verify any re-scope by live probe, never by the permission label — see ADR-130 for the four-probe set and for the widen-vs-mint decision test."
   type        = string
   sensitive   = true
+}
+
+# Gates the `import` block in seo-config-rules.tf. Production default is `true`.
+#
+# It exists solely because `mock_provider` does NOT mock `import` blocks —
+# Terraform performs the import read against the REAL provider even under
+# `terraform test`, so the credential-free leg in infra-validation.yml dies with
+# `Authentication error (10000)` before any of its own assertions run.
+# tests/web-hosts-eu-pin.tftest.hcl sets this `false` for that reason alone.
+#
+# At `false` the import block disappears and Terraform plans a CREATE against a
+# live, populated entrypoint. Because seo-config-rules.tf reproduces the adopted
+# rule verbatim, that create converges on the same two-rule end state rather
+# than dropping a rule — so this is a DRIFT-OVERWRITE hazard (any dashboard edit
+# diverging from the reproduction is silently overwritten), not the outage the
+# single-rule version of this resource would have caused. It is still wrong, and
+# it is invisible: the destroy-guard cannot see it either, because on a create
+# `change.before` is null so its `before.rules - after.rules` count goes
+# negative and is filtered out.
+#
+# Two things hold the line, neither of them this default alone:
+#   - test/seo-config-rules.test.ts pins the default AND pins that the import
+#     block's `for_each` actually consumes this variable (pinning only the
+#     default was insufficient: `for_each = toset([])` left the whole suite
+#     green while silently disabling the import);
+#   - the adopted rule is reproduced in config and pinned by two tests, which is
+#     what downgrades a flip from rule-loss to drift-overwrite.
+#
+# Not covered: `-var`, `*.auto.tfvars`, or `TF_VAR_adopt_seo_config_entrypoint`
+# — and the apply runs under `doppler run --name-transformer tf-var`, so a
+# Doppler secret named ADOPT_SEO_CONFIG_ENTRYPOINT would override this silently.
+# No such secret exists; recorded because it is the fail-open shape, not a live
+# misconfiguration.
+variable "adopt_seo_config_entrypoint" {
+  type    = bool
+  default = true
 }
 
 variable "cf_api_token_bot_management" {

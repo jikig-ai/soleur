@@ -28,12 +28,16 @@
 # also carry `<meta name="robots" content="noindex">` now as a defensive interim.
 #
 # Provider/token scope: this resource is ACCOUNT-level (account_id, not zone_id) —
-# the only account-scoped Cloudflare ruleset in the repo. The `cloudflare.rulesets`
-# alias's token (var.cf_api_token_rulesets) is currently ZONE-scoped only
-# (Cache/WAF/Single-Redirect/Transform on soleur.ai). Bulk Redirects additionally
-# require account-level `Account Rulesets:Edit` + `Account Filter Lists:Edit`. The
-# token MUST be widened before apply succeeds — flagged BLOCKING in the PR body.
-# There is no Terraform-managed path for CF API-token permission grants.
+# the only account-scoped Cloudflare ruleset in the repo. Bulk Redirects require
+# account-level `Account Rulesets:Edit` + `Account Filter Lists:Edit`, which the
+# `cloudflare.rulesets` token GAINED via the #5092 widen; the "token is currently
+# ZONE-scoped only / MUST be widened before apply" note that stood here was
+# falsified by that widen and has been removed.
+#
+# The authoritative permission set is the `cf_api_token_rulesets` description in
+# variables.tf (the scope ledger) — do not re-enumerate it here. There is no
+# Terraform-managed path for CF API-token permission grants; see ADR-130 for the
+# widen-vs-mint decision test and the mandatory retained-scope probe set.
 #
 # Provider is pinned cloudflare/cloudflare 4.52.7 (~> 4.0) — ALL HCL below uses v4
 # BLOCK syntax (`item { value { redirect { ... } } }`, `action_parameters { from_list {} }`).
