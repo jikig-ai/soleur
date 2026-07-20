@@ -1523,10 +1523,30 @@ resource "sentry_issue_alert" "zot_mirror_fallback_rate" {
 
 # web-host terminal serving-block boot FATAL (#6396). The cloud-init terminal `docker run` block
 # emits `soleur-boot-emit <stage> fatal` (tags.stage ∈ {terminal_preamble, hostscripts_incomplete,
-# doppler_download, docker_run}) on a no-SSH boot abort. This is the SOLE PAGE for a dead web-2
-# WARM STANDBY: web-2 takes no app.soleur.ai traffic, so `betteruptime_monitor.app` (LB surface,
-# A-record → web-1) stays GREEN on a dead standby, and the #5933 per-host origin uptime probe was
-# RETIRED (dns.tf) — no other signal fires. Pages on the FIRST occurrence (a serving-host boot
+# doppler_download, docker_run}) on a no-SSH boot abort.
+#
+# HOST-GENERIC — DO NOT DELETE AS "web-2 surface" (#6575). This alert filters on `stage` and NEVER
+# on host, so it was never web-2-specific; the original comment here said it was "the SOLE PAGE for
+# a dead web-2 WARM STANDBY", which was already the wrong framing and became a live falsehood when
+# web-2 was retired 2026-07-17 (#6538/#6463). Post-retire this is **web-1's sole no-SSH boot page**:
+# a web-1 that aborts its cloud-init runcmd at stage=verify never binds :80/:3000, and `runcmd` is
+# once-per-instance so no reboot repairs it. The #5933 per-host origin uptime probe was RETIRED
+# (dns.tf), and `betteruptime_monitor.app` probes the app.soleur.ai A-record — which is web-1
+# itself, so on a dead web-1 it goes red only after the host is already dark.
+#
+# SCOPE — READ BEFORE RELYING ON THIS (corrected at review, #6575). This alert does NOT detect
+# the ADR-128 cross-commit skew mode (#6712). That failure aborts cloud-init at `stage=verify`,
+# and `verify` is NOT among the four stages in `filters_v2` below (`terminal_preamble`,
+# `hostscripts_incomplete`, `doppler_download`, `docker_run`). The whole `runcmd` stage set —
+# verify/extract/pull/ghcr_login/runcmd_early/apt_install/doppler_dl/docker_apt/docker_restart —
+# emits `fatal` to Sentry via the baked DSN and matches NO alert rule, so those events are
+# write-only today. Detection for the skew mode is therefore ABSENT; the mitigation is
+# PREVENTION (the coherence preflight, run per runbooks/web-host-birth.md step 2).
+# Widening this rule to the runcmd stages is the obvious fix and is deliberately NOT bundled
+# into a deletion PR — it changes live paging behaviour and wants its own change. Do not read
+# the paragraph above as "boot failures page"; only these four stages do.
+#
+# Pages on the FIRST occurrence (a serving-host boot
 # failure is high-severity), NOT a rate. The four stage tags are emitted ONLY at fatal level by the
 # terminal-block EXIT trap + the explicit hostscripts_incomplete emit, so the stage filter alone
 # selects fatal terminal-block failures (no separate level filter needed).

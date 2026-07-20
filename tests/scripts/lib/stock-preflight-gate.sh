@@ -2,10 +2,11 @@
 # Sourced STOCK preflight gate for every destroy-shaped apply_target in
 # .github/workflows/apply-web-platform-infra.yml (#6453).
 #
-# EXTRACTED + SOURCED: the workflow's five destroy-guard plan steps AND
+# EXTRACTED + SOURCED: the workflow's four destroy-guard plan steps (inngest-host-replace,
+# registry-host-replace, registry-region-migrate, git-data-host-replace) AND
 # tests/scripts/test-stock-preflight-gate.sh source this file and call
 # stock_preflight_gate directly, so CI runs the SAME bytes the test exercises
-# (no re-derived inline jq to drift). Mirrors tests/scripts/lib/web2-recreate-gate.sh.
+# (no re-derived inline jq to drift). Mirrors the sibling *-gate.sh files in this directory.
 #
 # WHAT IT GUARDS — and what it deliberately does NOT:
 #   A terraform `-replace` DESTROYS BEFORE IT CREATES. It therefore frees its own
@@ -17,14 +18,15 @@
 #   prod deploy leg ~10h (PIR corrected 2026-07-14, #6400).
 #
 #   This gate asserts every server the plan will CREATE is orderable in its target
-#   location BEFORE the destroy runs. It is a TRIPWIRE, not a routine gate
-#   (matching apply-web-platform-infra.yml:447).
+#   location BEFORE the destroy runs. It is a TRIPWIRE, not a routine gate — matching
+#   the host_creates HALT in apply-web-platform-infra.yml (search: "This is a TRIPWIRE,
+#   not a routine gate").
 #
 # NO [ack-destroy] BYPASS: a destructive prod host recreate is authorized by the
 # menu-ack workflow_dispatch (hr-menu-option-ack-not-prod-write-auth), never a
 # commit trailer — and an ack cannot conjure stock. Matches the sibling gates
-# (web2-recreate, inngest-host-replace, registry-host-replace, git-data-host-replace),
-# none of which carry an override.
+# (inngest-host-replace, registry-host-replace, registry-region-migrate,
+# git-data-host-replace), none of which carry an override.
 #
 # `available` vs `.supported` — LOAD-BEARING:
 #   /v1/datacenters exposes BOTH. `.supported` (24 per EU DC) is what a DC *can*
@@ -46,8 +48,9 @@
 # FAIL-CLOSED on every resolution/API failure: an unreachable API is not evidence of
 # availability. A blocked recreate is recoverable; a stranded fleet is a deploy freeze.
 
-# EU allow-set — mirrors the residency validation at
-# apps/web-platform/infra/variables.tf:111-113 (GDPR residency, CLO T-1). /v1/datacenters
+# EU allow-set — mirrors the `web_hosts` residency validation in
+# apps/web-platform/infra/variables.tf (search: "must be an EU Hetzner DC") — GDPR
+# residency, CLO T-1. /v1/datacenters
 # also returns ash-dc1 (US), hil-dc1 (US) and sin-dc1 (Singapore); an unfiltered
 # "orderable elsewhere" suggestion would advise putting a prod host in Singapore.
 STOCK_PREFLIGHT_EU_LOCATIONS="${STOCK_PREFLIGHT_EU_LOCATIONS:-nbg1 fsn1 hel1}"
@@ -148,39 +151,33 @@ stock_preflight() {
 
   elsewhere=$(_stock_eu_locations_for "$dcs_json" "$type_id")
   echo "::error::stock-preflight ABORT: server_type '${want_type}' is NOT orderable in '${want_loc}' today (orderable in EU: ${elsewhere:-<none>}). A -replace DESTROYS before it creates — this recreate would strand the fleet with no rollback (#6393, #6463)." >&2
-  # The warm-standby tine is load-bearing: hcloud_server_network.web is a SEPARATE
-  # for_each'd resource — an ADDITIVE online attach (apps/web-platform/infra/network.tf:9-13),
-  # deliberately not an inline network{} block (which would force-replace the host). So a
-  # private-NIC or /workspaces-volume repair is NOT a recreate and needs NO stock. That is how
-  # web-2's private IP was restored 2026-07-13 without recreating it. Omitting this tine funnels
-  # a free repair into #6463 (a cost/HA escalation) — the opposite of the intent.
+  # REMEDIATION MENU — order is the point: the cheapest correct action first, so an operator
+  # reading this mid-abort does not escalate to a cost/HA decision when waiting would do.
   #
-  # ...but it is WEB-2-SPECIFIC. apply_target=warm-standby's six -target's
-  # (apply-web-platform-infra.yml:788-796) are hcloud_network.private,
-  # hcloud_network_subnet.private, hcloud_server_network.web["web-1"],
-  # hcloud_server_network.web["web-2"], hcloud_volume.workspaces["web-2"] and
-  # hcloud_volume_attachment.workspaces["web-2"] — the web-2-specific half is what makes the
-  # tine relevant, and NOTHING it targets helps the inngest/registry/git-data hosts. Offering
-  # it on those aborts would point an operator at a dispatch that does nothing for their host
-  # — misdirection in the one message they read during a prod abort.
+  # DELETED 2026-07-20 (#6575): the warm-standby tine. It offered a genuinely FREE repair —
+  # "if you only need the private NIC or the /workspaces volume re-attached, that is not a
+  # recreate; dispatch apply_target=warm-standby, no stock required" — and it was web-2-scoped
+  # via a per-address _STOCK_TINE_ADDR setter. With web-2 retired (#6538) and the warm_standby
+  # job removed, BOTH the subject and the dispatch are gone. State the loss plainly rather than
+  # paper over it: **no additive dispatch remains** that can re-attach a NIC or a workspaces
+  # volume. The Terraform shape is unchanged — hcloud_server_network.web is still a SEPARATE
+  # for_each'd resource, an "ADDITIVE online attach" (network.tf), not an inline network{}
+  # block that would force-replace the host — so the repair is still non-destructive; only the
+  # one-click route to it is gone. It now requires the operator-local full apply per the
+  # OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096).
   #
-  # _STOCK_TINE_ADDR is set per-address by stock_preflight_gate, so every PRODUCTION path
-  # (all five) knows its host exactly: web-2 gets the tine, everyone else is suppressed.
-  #
-  # A DIRECT `stock_preflight <type> <location>` call takes no address and therefore cannot
-  # know the host — the operator probe and the test suite are the only such callers. Silently
-  # suppressing there would strip the tine from the plan's own documented web-2 probe;
-  # emitting it unconditionally misdirects a non-web-2 probe (`stock_preflight cax11 fsn1`
-  # for git-data was observed claiming a web-2-only dispatch would help). So the unknown-host
-  # variant is emitted CONDITIONALLY-WORDED instead: it names web-2 as the precondition, which
-  # is correct whichever host the operator is probing.
-  if [[ "${_STOCK_TINE_ADDR:-}" == 'hcloud_server.web["web-2"]' ]]; then
-    echo "::error::  - If you only need the private NIC or the /workspaces volume re-attached, this is NOT a recreate: dispatch apply_target=warm-standby (additive, no destroy, no stock required). See apply-web-platform-infra.yml:451." >&2
-  elif [[ -z "${_STOCK_TINE_ADDR+x}" ]]; then
-    echo "::error::  - If this host is web-2 AND you only need its private NIC or /workspaces volume re-attached, that is NOT a recreate: dispatch apply_target=warm-standby (additive, no destroy, no stock required; web-2 ONLY — it does nothing for inngest/registry/git-data). See apply-web-platform-infra.yml:451." >&2
-  fi
-  echo "::error::  - If the host genuinely must be reborn: see #6463 (type/DC change is an operator cost/HA decision)." >&2
-  echo "::error::  - Stock is time-varying (cx33 went orderable->nowhere in ~3h on 2026-07-15) — re-run later." >&2
+  # WHY THE WEB-1 CLAUSE BELOW IS CONDITIONALLY WORDED: after #6575, NO production call site of
+  # stock_preflight_gate preflights a web host at all. The four surviving callers are
+  # inngest-host-replace, registry-host-replace, registry-region-migrate and
+  # git-data-host-replace (see the `source .../stock-preflight-gate.sh` steps in
+  # apply-web-platform-infra.yml). A web address reaches this function only through a direct
+  # `stock_preflight <type> <location>` operator probe, which carries no address at all. So the
+  # web-1 specifics are emitted as a guarded "if this host is web-1" clause the operator can
+  # self-apply — never as an unconditional claim, which would misdirect the four live
+  # non-web paths in the one message they read during a blocked prod recreate.
+  echo "::error::  - PRIMARY: wait and re-dispatch. Nothing has been destroyed — this gate runs BEFORE the destroy — so a retry costs nothing, and stock is time-varying on an HOURS timescale (cx33 went orderable -> nowhere in ~3h on 2026-07-15)." >&2
+  echo "::error::  - SECONDARY: change server_type WITHIN the same location (the 'orderable in EU' list above is what is actually orderable right now). This is an operator cost/HA decision — see #6463 — not a free action." >&2
+  echo "::error::  - IF THIS HOST IS web-1: change server_type within hel1 ONLY; do NOT relocate it. hcloud_server.web pins its location precisely because 'a location change would force-REPLACE the live prod host' (server.tf), and hcloud_volume.workspaces is location-bound — so relocating web-1 strands or RECREATES the workspaces volume. That is a data-migration decision, not a stock workaround." >&2
   echo "::error::  Do NOT bypass." >&2
   return 1
 }
@@ -233,10 +230,10 @@ stock_preflight_gate() {
   # `if ! pairs=$(jq …)` — NEVER a bare assignment. jq exits 5 on a runtime error (e.g.
   # `.resource_changes` present but a string, so `.resource_changes[]` cannot iterate), and a
   # bare assignment + `2>/dev/null` swallows that into an empty `pairs`, which the emptiness
-  # branch below would read as "nothing to preflight" and authorize the destroy. The sibling
-  # gate does exactly this check for exactly this reason — web2-recreate-gate.sh:51-54:
-  # "A jq null/empty would evaluate false in the arithmetic below and could silently
-  # mis-decide; fail LOUD instead."
+  # branch below would read as "nothing to preflight" and authorize the destroy. The now-deleted
+  # web2-recreate-gate.sh (removed with its job, #6575) carried this same check for this same
+  # stated reason — "A jq null/empty would evaluate false in the arithmetic below and could
+  # silently mis-decide; fail LOUD instead." — recorded here so the rationale outlives it.
   if ! pairs=$(jq -r '
     .resource_changes[]
     | select(.type == "hcloud_server")
@@ -257,8 +254,8 @@ stock_preflight_gate() {
     # guaranteed present — an empty extraction there means the jq broke (a provider field
     # rename, a terraform-show-json shape change), NOT a legitimate no-op. Returning 0
     # silently would make a rotted gate indistinguishable from a passing one in the run log,
-    # which is the one place an operator looks. Every sibling gate echoes a positive line on
-    # its success path for this reason (web2-recreate-gate.sh:69,71).
+    # which is the one place an operator looks. Every sibling *-gate.sh in this directory echoes
+    # a positive line on its success path for this reason.
     echo "stock-preflight: 0 planned server creates in '${plan_json}' — nothing to preflight (in-place update / volume-only / no-op)." >&2
     return 0
   fi
@@ -271,8 +268,10 @@ stock_preflight_gate() {
       rc=1
       continue
     fi
-    # _STOCK_TINE_ADDR scopes the web-2-only warm-standby suggestion to web-2's address.
-    if ! _STOCK_TINE_ADDR="$addr" stock_preflight "$stype" "$sloc"; then
+    # No per-address tine scoping remains: the only address-scoped suggestion was the web-2
+    # warm-standby tine, deleted with its subject (#6575). The surviving menu is correct for
+    # every host, so the address is reported by the trailing "...while preflighting" line only.
+    if ! stock_preflight "$stype" "$sloc"; then
       echo "::error::  ...while preflighting ${addr} (${stype} @ ${sloc})." >&2
       rc=1
     fi
