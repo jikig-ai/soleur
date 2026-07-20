@@ -17,7 +17,7 @@ RULE (a) -- SUBSHELL-APPEND
 RULE (c) -- MKTEMP WITH NO OWNING TRAP
     A file that calls `mktemp` but registers no `trap ... EXIT` at all.
 
-    This is the "class-b" population: ~123 files repo-wide at time of writing.
+    This is the "class-b" population: 122 files repo-wide at time of writing.
     Most are short-lived CI scripts where the leak is bounded, so the existing
     population is ACCEPTED (see ADR-128) rather than fixed file-by-file. Rule (c)
     is therefore `--changed`-scoped: it gates NEW entrants only. Without it the
@@ -74,8 +74,19 @@ FUNC_DEF = re.compile(r'^\s*(?:function\s+)?(\w+)\s*\(\)\s*\{|^\s*function\s+(\w
 # A trap registration on EXIT. Anchored on the `trap` keyword and the EXIT signal
 # so a comment merely *mentioning* traps cannot satisfy it.
 TRAP_EXIT = re.compile(r'^\s*trap\s+.*\bEXIT\b')
-# `mktemp` as a command word, not as a substring of another identifier.
-MKTEMP = re.compile(r'\bmktemp\b')
+# `mktemp` in COMMAND POSITION -- not merely the word somewhere on the line.
+#
+# A bare `\bmktemp\b` is the classic anchor-on-a-token bug
+# (cq-assert-anchor-not-bare-token). It matched this gate's OWN test file, where the
+# word appears inside string data -- a fixture filename (`bad-mktemp-no-trap.sh.fixture`)
+# and an assertion needle ("rule (c) mktemp with no owning trap") -- neither of which
+# allocates anything. Stripping quoted strings is not the fix either: the real
+# invocation is frequently written `f="$(mktemp -d)"`, i.e. INSIDE double quotes.
+#
+# So anchor on the positions a command can actually start from: line start, inside
+# `$( )`, inside backticks, or after a `;` / `&&` / `||` / `|` separator, a `{` or `(`
+# block opener (`mk_root() { mktemp -d; }` is a real allocation), or then/do/else.
+MKTEMP = re.compile(r'(?:^|\$\(|`|[;&|{(]|\bthen\b|\bdo\b|\belse\b)\s*mktemp\b')
 # The escape hatch. The trailing group must be non-empty -- a bare marker is an error.
 ESCAPE = re.compile(r'#\s*lint-trap-ownership:\s*ok\b[ \t]*(.*)$')
 
@@ -94,6 +105,85 @@ def escaped(lines: list[str], idx: int) -> tuple[bool, str | None]:
                 )
             return True, None
     return False, None
+
+
+def strip_literals(line: str) -> str:
+    """Drop string CONTENT that bash treats as literal, keeping live code.
+
+    Bash semantics, and the reason a cruder pass is wrong in both directions:
+      * single quotes are fully literal      -> drop the whole span
+      * double quotes are literal EXCEPT for `$( … )` / backticks -> keep only those
+
+    Without this, `mktemp` appearing as DATA is read as an allocation: a fixture
+    filename, an assertion message, or a `|`-delimited test-case string all matched an
+    earlier anchor and flagged this gate's own test file. Simply deleting every quoted
+    span would be the opposite error, because the real allocation is often written
+    `work="$(mktemp -d)"` -- inside double quotes.
+    """
+    def match_paren(s: str, open_idx: int) -> int:
+        """Index of the `)` matching the `(` at open_idx, honouring nesting."""
+        depth = 0
+        for k in range(open_idx, len(s)):
+            if s[k] == "(":
+                depth += 1
+            elif s[k] == ")":
+                depth -= 1
+                if depth == 0:
+                    return k
+        return len(s) - 1
+
+    def take_subst(s: str, i: int, out: list[str]) -> int | None:
+        """Emit a `$( … )` or backtick span verbatim; return the new index."""
+        if s[i] == "$" and i + 1 < len(s) and s[i + 1] == "(":
+            j = match_paren(s, i + 1)
+            out.append(s[i:j + 1])
+            return j + 1
+        if s[i] == "`":
+            j = s.find("`", i + 1)
+            j = len(s) - 1 if j == -1 else j
+            out.append(s[i:j + 1])
+            return j + 1
+        return None
+
+    out: list[str] = []
+    i = 0
+    n = len(line)
+    mode = "normal"
+    while i < n:
+        ch = line[i]
+        if mode == "single":
+            if ch == "'":
+                mode = "normal"
+            out.append(" ")
+            i += 1
+            continue
+        # A command substitution is live in BOTH normal and double-quoted state, and its
+        # body may itself contain quotes -- `"$(mktemp "${DIR}/x.XXXXXX")"` is the common
+        # production shape. Matching the closing paren by DEPTH rather than scanning to
+        # the next quote is what keeps that visible; an earlier draft truncated the span
+        # at the inner quote and silently stopped counting 14 files, four of them real
+        # production allocations.
+        nxt = take_subst(line, i, out)
+        if nxt is not None:
+            i = nxt
+            continue
+        if mode == "normal":
+            if ch == "'":
+                mode = "single"
+                out.append(" ")
+            elif ch == '"':
+                mode = "double"
+                out.append(" ")
+            else:
+                out.append(ch)
+            i += 1
+            continue
+        # double-quoted literal content
+        if ch == '"':
+            mode = "normal"
+        out.append(" ")
+        i += 1
+    return "".join(out)
 
 
 def strip_comment(line: str) -> str:
@@ -222,7 +312,7 @@ def check_rule_a(path: Path, lines: list[str]) -> list[str]:
 
 def check_rule_c(path: Path, lines: list[str]) -> list[str]:
     """File calls mktemp but registers no trap ... EXIT at all."""
-    mk_lines = [k for k, ln in enumerate(lines) if MKTEMP.search(strip_comment(ln))]
+    mk_lines = [k for k, ln in enumerate(lines) if MKTEMP.search(strip_literals(strip_comment(ln)))]
     if not mk_lines:
         return []
     if any(TRAP_EXIT.match(strip_comment(ln)) for ln in lines):
@@ -282,7 +372,7 @@ def census() -> int:
             lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
-        if not any(MKTEMP.search(strip_comment(ln)) for ln in lines):
+        if not any(MKTEMP.search(strip_literals(strip_comment(ln))) for ln in lines):
             continue
         if not any(TRAP_EXIT.match(strip_comment(ln)) for ln in lines):
             n += 1

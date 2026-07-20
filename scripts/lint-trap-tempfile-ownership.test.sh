@@ -45,7 +45,9 @@ lint_err() {
 for case in \
   "bad-subshell-append.sh.fixture|rule (a) subshell-append|rule (a) flags the command-substitution append" \
   "bad-mktemp-no-trap.sh.fixture|rule (c) mktemp with no owning trap|rule (c) flags mktemp with zero traps" \
-  "bad-escape-hatch-no-reason.sh.fixture|with no reason|a bare escape hatch is itself an error"
+  "bad-escape-hatch-no-reason.sh.fixture|with no reason|a bare escape hatch is itself an error" \
+  "bad-mktemp-inside-double-quotes.sh.fixture|rule (c) mktemp with no owning trap|rule (c) still fires on an allocation inside double quotes" \
+  "bad-mktemp-in-brace-body.sh.fixture|rule (c) mktemp with no owning trap|rule (c) fires on mktemp in a { } function body"
 do
   IFS='|' read -r file needle label <<< "$case"
   rc=$(lint_rc "$FIX/$file")
@@ -68,7 +70,8 @@ for case in \
   "good-trap-clear-handoff.sh.fixture|a deliberate 'trap - EXIT' handoff is not flagged (R7)" \
   "good-escape-hatch.sh.fixture|a reason-carrying escape hatch suppresses the finding" \
   "good-local-args-array.sh.fixture|a local args array in a \$()-invoked fn is not flagged (over-broad-rule regression)" \
-  "good-local-cleanup-array.sh.fixture|a function-local shadow of a cleanup array is not flagged"
+  "good-local-cleanup-array.sh.fixture|a function-local shadow of a cleanup array is not flagged" \
+  "good-mktemp-word-in-string-only.sh.fixture|the WORD mktemp as string data is not flagged (bare-token-anchor regression)"
 do
   IFS='|' read -r file label <<< "$case"
   rc=$(lint_rc "$FIX/$file")
