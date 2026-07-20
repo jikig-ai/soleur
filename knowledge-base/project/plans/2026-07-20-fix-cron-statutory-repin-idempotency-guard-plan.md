@@ -109,6 +109,47 @@ This also covers the deploy race: `web-platform-release.yml` orders `migrate` �
 schema hits `42P01`, which is not `23505`, so the guard falls open to today's behavior.
 Correct degradation — and another reason the catch must be unconditional.
 
+### The delivery-path hole (found at deepen-plan; changes the design)
+
+Two reviewers independently established the same thing, and it is the sharpest edge in this
+change. `notifyOfflineUser` takes the push branch whenever `subscriptions.length > 0` and
+reaches email **only** in the `else`. `sendPushNotifications` deletes rows that answer
+`410 Gone`. So today there is a **working two-run self-heal**: run 1 pushes to a stale
+endpoint, gets 410, prunes the row, delivers nothing; run 2 — the next day, or an operator
+manual-trigger the same day — finds zero subscriptions and sends the email.
+
+**The guard destroys that self-heal.** Run 2's marker insert returns `23505` and suppresses.
+And this is the guard *working exactly as designed*, so fail-open never reaches it: the
+insert was clean. `pinged` incremented on a delivery of nothing.
+
+Three consequences the plan must carry rather than discover at `/work`:
+
+1. **A zero-delivery signal is mandatory** (Phase 2 step 3b). Suppressing on `23505` is sound
+   only if the prior marker evidences a *delivery*; it evidences a dispatch *attempt*.
+2. **A targeted release verb is mandatory** (Phase 4 step 5). "Post-merge (operator): None"
+   was false as first written — there was no way to clear a marker short of hand-written SQL
+   against prod, which the operator posture forbids.
+3. **A non-410 push failure** (egress-firewall DROP, WNS exclusion — both named in
+   `sendPushNotifications`' own comment) never prunes the row, so the email branch is never
+   reached and the user receives **nothing, on every tick, forever** while `pinged` reports
+   success. Pre-existing, not caused by this change — but the marker now certifies each of
+   those non-sends as "sent". Deferred issue #5.
+
+### Marker-before-dispatch: argued, not assumed
+
+The ordering contradicts this plan's own asymmetry (a crash between insert and dispatch loses
+that tick; dispatch-first would risk only a duplicate), so it needs an argument rather than an
+appeal to `notifyInboxItem`.
+
+It is correct **because of what this issue is about**. The defect is a *concurrent* double-fire
+from two schedulers; `concurrency: [{ scope: "fn", limit: 1 }]` is per-Inngest-instance and
+does not bind across two instances. Dispatch-first would let both runs send before either
+marks — the guard would not guard the very scenario it exists for. Marker-first is the only
+ordering that holds under true concurrency.
+
+The accepted cost is a crash window. For the daily band it self-heals next tick (new
+`tick_key`); for `'headsup'` it is permanent, which is why the release verb exists.
+
 ### Suppression is recorded, never paged
 
 `suppressed > 0` is **not** a fault: `cron/email-ingress-probe.manual-trigger` is a legitimate
@@ -164,18 +205,39 @@ Schema contract lands before its consumer
   - `item_id uuid NOT NULL REFERENCES public.email_triage_items(id) ON DELETE CASCADE`
   - `tick_key text NOT NULL` — `'headsup'` or `'daily:YYYY-MM-DD'`
   - `created_at timestamptz NOT NULL DEFAULT now()` — the dispatch instant
-  - `PRIMARY KEY (item_id, tick_key)`
+  - `PRIMARY KEY (item_id, tick_key)` — `item_id` leads, so the PK index also serves the
+    `ON DELETE CASCADE` FK lookup; no separate FK index is needed.
+  - `CONSTRAINT statutory_repin_send_tick_key_shape CHECK (tick_key = 'headsup' OR tick_key ~ '^daily:\d{4}-\d{2}-\d{2}$')`
+    — bounds an otherwise-unbounded `text` PK component, matching the house style
+    (`probe_tokens` uses `CHECK (length(token) BETWEEN 1 AND 128)`). A malformed `tick_key`
+    from a future code path is itself an over-suppression vector.
   - **No `user_id` column** (R6).
-- `ENABLE ROW LEVEL SECURITY`, **zero policies**.
+- `ENABLE ROW LEVEL SECURITY`, **zero policies**, **plus** the explicit
+  `REVOKE INSERT/UPDATE/DELETE … FROM PUBLIC, anon, authenticated` defense-in-depth from
+  `122_inbox_item.sql`, so a future `CREATE POLICY … FOR ALL` cannot silently open writes.
+  Add a `COMMENT ON TABLE` — every table in migrations 102 and 122 carries one.
 - New standalone `public.purge_statutory_repin_send()`: deletes rows older than **90 days** —
   derived as `DEADLINE_REPIN_SCAN_WINDOW_DAYS` (60) plus a month of margin, since a marker
   older than the scan window can never be consulted again. Must carry `SECURITY DEFINER`,
-  `SET search_path = public, pg_temp`, `REVOKE ALL … FROM PUBLIC, anon, authenticated`, and
-  `GRANT EXECUTE … TO service_role`, matching migration 102's convention.
+  `SET search_path = public, pg_temp`, `REVOKE ALL … FROM PUBLIC, anon, authenticated, service_role`
+  followed by `GRANT EXECUTE … TO service_role` (102's literal shape), and an explicit
+  `RETURNS integer` with `GET DIAGNOSTICS` — §Observability promises a purge count, so the
+  return type is load-bearing, not incidental.
+- **No index on `created_at`.** The sweep is a seq scan by design: `probe_tokens` is swept by
+  the identical predicate with no such index, volume is bounded (~33 markers per statutory
+  item), and `132_drop_unused_indexes.sql` establishes the direction against speculative indexes.
 - **Do not `CREATE OR REPLACE` `purge_email_triage_items` or `anonymise_email_triage_items`** (R5).
 - Header comment records: why retention is explicit (R2), why `tick_key` is branch-derived
   (R3/R4), why `user_id` is absent (R6), and the R7 recipient-grain constraint.
-- `.down.sql` is a plain `DROP TABLE` + `DROP FUNCTION` — no function bodies to restore.
+- `.down.sql`: `DROP TABLE IF EXISTS` + `DROP FUNCTION IF EXISTS` (a bare `DROP` aborts the
+  whole `--single-transaction` stream if a partial apply left one object missing), **plus the
+  `_schema_migrations` ledger delete** —
+  `DELETE FROM public._schema_migrations WHERE filename = '135_statutory_repin_send.sql';`.
+  House convention per `102_email_triage_items.down.sql` (*"Ledger row. Required for
+  re-apply"*): `run-migrations.sh` skips filenames already in the ledger, so omitting it leaves
+  135 marked applied and the re-apply silently no-ops. Header comment must state that rollback
+  is **intentionally lossy** — dropping the table re-sends one duplicate per in-band item on
+  the next tick, which is the safe direction.
 
 ### Phase 2 — Guard in the repin loop
 
@@ -188,6 +250,20 @@ Schema contract lands before its consumer
 3. Insert `{ item_id: row.id, tick_key }` using the house idiom
    `.insert({…}).select("id").single()` (matches `notifyInboxItem`, and makes the existing
    cron test's fake fail loudly rather than silently — see §Risks).
+
+   **Placement is load-bearing.** The insert goes **after every pre-existing `continue`
+   guard** — `if (!row.user_id) continue` (Art. 17 anonymised rows) and the unknown-`rule_id`
+   `warnSilentFallback` + `continue` — and immediately before dispatch. A marker written
+   before those guards marks a row that is then never pinged, permanently suppressing it:
+   exactly the over-suppression this plan calls strictly worse than duplication.
+
+3b. **Zero-delivery signal (new, required).** `notifyOfflineUser` dispatches push **or**
+   email, never both, and `sendPushNotifications` `Promise.allSettled`s every send without
+   throwing — so a user whose only subscription is stale gets nothing while `pinged`
+   increments. Have `sendPushNotifications` return a delivery tally and emit
+   `warnSilentFallback` (op `statutory-notify-zero-delivery`) from `notifyOfflineUser` when
+   `delivered === 0 && payload.isStatutory`. Without this the guard converts a currently-
+   working remediation into silence — see §Design "The delivery-path hole".
 4. Wrap the insert in `try/catch` so no outcome escapes the iteration:
    - `(err as { code?: string }).code === "23505"` → `suppressed += 1`; `continue`.
      `server/ws-handler.ts`'s `isContextPathUniqueViolation` documents that supabase-js does
@@ -210,7 +286,14 @@ New file `test/server/inngest/cron-email-ingress-probe-repin-idempotency.test.ts
 - Mock the `resend` package with the house vitest-4 idiom — a **`function`-keyword**
   constructor assigning `this.emails = { send: mockResendSend }` (an arrow returning an object
   throws "is not a constructor").
-- Mock `web-push`, `@/server/logger`, `@sentry/nextjs`, `@/server/inngest/client`.
+- Mock `web-push`, `@/server/logger`, `@sentry/nextjs`, `@/server/inngest/client`, and
+  **`@/server/observability`** — T5 asserts `warnSilentFallback` was called, so the spy must
+  exist; ten sibling files under `test/server/inngest/` already mock it.
+- The fake returns **`[]` for `push_subscriptions` by default**, which is what makes T1–T4
+  count *emails* — `notifyOfflineUser` sends push **or** email, never both. State this
+  explicitly; T11 overrides it.
+- `beforeEach` must reset the uniqueness `Set` **and** all fake DB state. A marker leaking
+  between cases makes T3/T4 fail confusingly rather than vacuously pass.
 - The fake `@/lib/supabase/service` must route `email_triage_items`, `probe_tokens`,
   `statutory_repin_send`, `push_subscriptions`, and `auth.admin.getUserById` — the last two
   because the **real** `notifyOfflineUser` now executes — and must **enforce uniqueness** on
@@ -229,9 +312,13 @@ New file `test/server/inngest/cron-email-ingress-probe-repin-idempotency.test.ts
 | T3 | **Cadence:** two consecutive days in the danger band | **2** emails |
 | T4 | **Distinct items, same day** — parameterized over same-user and different-user | **2** emails each (evidences the issue's "recipients not collapsed" criterion) |
 | T5 | **Fail-open, `{error}` shape:** non-23505 error returned | Email **still sent**; `warnSilentFallback` called with op `deadline-repin-marker-insert-failed` |
-| T6 | **Fail-open, throw shape:** insert rejects on item 3 of 10 | Items 4–10 **still dispatch**; the run does not die |
-| T7 | **DDL pin:** read `135_…sql` — PK is exactly `(item_id, tick_key)`, the FK exists, and no pre-existing function is replaced | Pins the fake's uniqueness emulation to the real constraint |
-| T8 | **DSAR discovery pin:** the new table appears in `discoverUserFkTables`' output | Guards `parseTables`' regex silently missing the table (a trailing `CHECK (…)` before `);` is the known failure shape) |
+| T6 | **Fail-open, throw shape:** insert rejects on item 3 of 10 | **All 10 dispatch** — including item 3. Asserting only "items 4–10" would pass even if the throwing item were silently suppressed, which is the fail-*closed* direction AC5 forbids. The run does not die |
+| T7 | **DDL pin:** read `135_…sql` — PK is exactly `(item_id, tick_key)`, the FK and the `tick_key` CHECK exist, no pre-existing function is replaced, and `.down.sql` carries the `_schema_migrations` delete | Tier 1 of the house two-tier migration-test convention |
+| T7b | **Live-DB tier (gated):** `describe.skipIf(process.env.TENANT_INTEGRATION_TEST !== "1")` — double-insert the same `(item_id, tick_key)` against the real table, assert the surfaced error carries `code === "23505"` | The one contract the in-memory fake **cannot** test — and `server/ws-handler.ts`'s `isContextPathUniqueViolation` exists precisely because supabase-js does not reliably populate `code`. Follow `test/supabase-migrations/126-beta-crm.test.ts`. **Site it under `test/server/`**: `tenant-integration.yml` scopes vitest to `test/server/`, so a gated block elsewhere never runs. No new workflow (#3221 stays deferred) |
+| T8 | **Harness negative control:** assert the fake itself returns `23505` on a repeat `(item_id, tick_key)` and no error for a distinct `item_id` or distinct `tick_key` | The harness contract says "without that enforcement every case below is vacuous" — this makes that sentence a test instead of a comment. Committable, unlike the manual mutation step |
+| T9 | **Once-per-run date:** a single run whose clock crosses UTC midnight mid-loop | All markers in that run share ONE `tick_key`. This is a listed Sharp Edge with zero coverage — T3 uses two separate runs and structurally cannot catch per-row computation |
+| T10 | **Marker placement:** a row hitting `!row.user_id` and a row hitting unknown-`rule_id` | **No marker written** for either; a later run for a now-valid row still dispatches. A marker without a dispatch is permanent over-suppression |
+| T11 | **Push channel:** a user WITH push subscriptions, double-fire | Exactly **one** `webpush.sendNotification`. §Design justifies cron-site placement precisely because guarding at `resend` would leave duplicate pushes live — currently untested |
 
 **Mutation control (verification step, not an AC):** delete the `23505` branch and confirm T1
 reds. This is a manual procedure, not a committable test — recorded as a Phase 3 step so it is
@@ -239,13 +326,31 @@ actually performed, rather than as a checkbox that gets ticked regardless.
 
 ### Phase 4 — Compliance surfaces (CI-forced)
 
-1. `dsar-export-allowlist.ts`:
-   `statutory_repin_send: { ownerField: "user_id", article: "15", joinVia: { parentTable: "email_triage_items", parentJoinColumn: "item_id" } }`.
+1. `dsar-export-allowlist.ts`: add `statutory_repin_send` to **`DSAR_TABLE_EXCLUSIONS`**, not
+   the allowlist, with the reason *"Operational send-suppression marker. No user-provided
+   content and no direct subject identifier — only an item FK, a tick string, and a timestamp.
+   The underlying statutory item is exported via `email_triage_items`."*
+
+   **Why not `joinVia`** (this reverses an earlier draft): `joinVia` is **not data-driven**.
+   `server/dsar-export.ts` carries hand-written per-table blocks (`-- messages (joinVia
+   conversations)`, `-- message_attachments (joinVia messages)`), and
+   `test/dsar-worker-per-row-where.test.ts` iterates `Object.keys(DSAR_TABLE_ALLOWLIST)` and
+   asserts each has a `service.from("<table>")` chain in the worker, failing with *"silent
+   absence is an Art. 15 completeness regression."* An allowlist entry without a worker block
+   would export nothing **and** hard-fail CI. Exclusion is the honest shape for a payload this
+   thin; precedent is `runtime_mint_intent` in the same file.
 2. Update the four cross-document-gate files — minimal and truthful: an internal
-   send-suppression marker, 90-day retention, no new recipient or transfer.
+   send-suppression marker, 90-day retention, no new recipient or transfer. (Owed for
+   *touching the file*; an exclusion entry trips the gate identically to an allowlist entry.)
 3. Art. 30 **PA-27** limbs (c)/(f)/(g). **No new PA** — inflating the register for a TOM detail
    degrades it.
 4. `domain-model.md`: a `BR-*` rule in the `BR-DSAR-1` shape.
+5. **Operator release verb.** Extend `purge_statutory_repin_send()` with an optional
+   `p_item_id uuid DEFAULT NULL` — when supplied, delete that item's markers instead of
+   sweeping by age. Expose it the way `soleur:trigger-cron` reaches the cron, so an operator
+   can clear a marker whose dispatch delivered nothing (§Design, "The delivery-path hole")
+   without hand-written SQL against prod. Without this the plan has no recovery path and
+   `hr-never-label-any-step-as-manual-without` / `hr-no-ssh-fallback-in-runbooks` are violated.
 
 ### Phase 5 — ADR amendment
 
@@ -295,12 +400,17 @@ Full suite before ship. `bunfig.toml` sets `pathIgnorePatterns = ["**"]` — vit
       actually discovered — not merely that the suite is green.
 - [ ] **AC11** The four cross-document-gate files are updated; the gate is green.
 - [ ] **AC12** Art. 30 PA-27 limbs (c)/(f)/(g) amended; no new PA row.
-- [ ] **AC13** The ADR file with frontmatter `adr: 035` is amended.
-      `ADR-035-template-registry-code-static.md` gains **no decision content** — a one-line
-      see-also pointer is permitted and encouraged. Verify with a **three-dot** diff:
-      `git diff --name-only origin/main...HEAD` *(two-dot compares against origin/main's tip and
-      false-positives on anything that landed after the branch point — the cross-document gate
-      documents this exact trap)*.
+- [ ] **AC13** The ADR file with frontmatter `adr: 035`
+      (`ADR-037-messages-source-ref-composite-unique-for-multi-source-dedup.md`) is amended —
+      assert it **appears** in `git diff --name-only origin/main...HEAD`.
+      `ADR-035-template-registry-code-static.md` gains **no decision content**: if it appears
+      in the diff at all, its added lines must number ≤ 2 and every one must reference
+      `ADR-037` (the permitted see-also pointer). Verify with
+      `git diff --unified=0 origin/main...HEAD -- <that-file> | grep -c '^+[^+]'`.
+      *(Use the **three-dot** form throughout — two-dot compares against origin/main's tip and
+      false-positives on anything that landed after the branch point; the cross-document gate
+      documents this exact trap. A filename-absence assertion would be wrong here, since the
+      pointer is permitted — assert the shape of the change, not its absence.)*
 - [ ] **AC14** No new Sentry paging rule (`apps/web-platform/infra/sentry/` untouched).
 - [ ] **AC15** PR body uses `Closes #6781`.
 
@@ -329,18 +439,18 @@ failure_modes:
   - mode: "new code meets old schema (migrate skipped, deploy proceeds)"
     detection: "insert returns 42P01 undefined_table"
     alert_route: "same fail-open path; degrades to today's behavior. Documented, not alarmed."
-  - mode: "marker written but dispatch delivers nothing (stale push endpoints)"
-    detection: "notifyOfflineUser never throws; mirrors via mirrorNotifyFailure to Sentry"
-    alert_route: "existing mirrorNotifyFailure path (unchanged). NOTE: `pinged` counts dispatch attempts, not deliveries."
+  - mode: "STATUTORY ZERO-DELIVERY — marker written, nothing delivered (stale push endpoints)"
+    detection: "sendPushNotifications returns a delivery tally; notifyOfflineUser emits when delivered === 0 && payload.isStatutory"
+    alert_route: "Sentry op=statutory-notify-zero-delivery (warn). NEW SIGNAL — REQUIRED. mirrorNotifyFailure does NOT cover this: it is reachable only from notifyOfflineUser's outer catch, the email-lookup miss, and the sendEmail* error branches. sendPushNotifications Promise.allSettle()s every send and never throws, and its 410 branch is log.info + delete with no Sentry at all. Today this mode emits NOTHING."
   - mode: "marker table grows without bound"
-    detection: "purge_statutory_repin_send() return count in the retention-purge step return"
-    alert_route: "step return in run history"
+    detection: "purge_statutory_repin_send() count, carried in the per-run infoSilentFallback payload below"
+    alert_route: "Sentry op=deadline-repin-sweep-complete (info)"
 logs:
-  where: "pino to Better Stack Logs source 2457081; Sentry breadcrumbs via the Inngest sentry-correlation middleware (step deadline-repin)"
-  retention: "Better Stack Logs retention (existing). Marker rows: explicit 90-day sweep via purge_statutory_repin_send (NOT cascade — R2)."
+  where: "Sentry, via a per-run infoSilentFallback(null, { feature: 'email-triage', op: 'deadline-repin-sweep-complete', extra: { pinged, suppressed, scanned, runDateUtc, purgedMarkers } }) — mirroring cron-workspace-gc.ts. NOT pino stdout: apps/web-platform/infra/vector.toml [transforms.app_container_warn_filter] keeps only level_int >= 40, so INFO and step-return values are DROPPED and never reach Better Stack. An earlier draft of this plan claimed these counters reach Better Stack source 2457081 — that claim was false. WARN-level events (the two ops above) do clear the filter and reach both."
+  retention: "Sentry retention (existing). Marker rows: explicit 90-day sweep via purge_statutory_repin_send (NOT cascade — R2)."
 discoverability_test:
-  command: "cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-email-ingress-probe-repin-idempotency.test.ts"
-  expected_output: "All cases pass: T1 double-fire + ordering, T2 T-7 straddle, T3 cadence, T4 distinct items, T5/T6 fail-open on both error shapes, T7 DDL pin, T8 DSAR discovery pin. No SSH involved."
+  command: "bash -c 'doppler run -p soleur -c prd -- scripts/sentry-issue.sh op:deadline-repin-sweep-complete'  # after firing cron/email-ingress-probe.manual-trigger via soleur:trigger-cron"
+  expected_output: "The most recent run's counter payload (pinged / suppressed / scanned / runDateUtc / purgedMarkers). No SSH. The manual-trigger event is auto-allowlisted via EXPECTED_CRON_FUNCTIONS in lib/inngest/manual-trigger-allowlist.ts. NOTE: the vitest suite is a pre-merge gate, NOT the discoverability probe — a test proves the code works on the author's laptop, not that the signal is visible in prod from a keyboard."
 ```
 
 ### Affected-surface note (§2.9.2)
@@ -529,8 +639,23 @@ Per `wg-when-deferring-a-capability-create-a`, each needs an issue **before this
 3. **ADR ordinal/frontmatter normalization.** Duplicate filenames and two frontmatter formats
    make `ADR-NNN` greps ambiguous corpus-wide.
 4. **60-day scan cliff.** An item acknowledged more than `DEADLINE_REPIN_SCAN_WINDOW_DAYS` after
-   receipt gets **zero pings, ever**, with no counter. Emit a counter for band-eligible rows
-   excluded by `scanFloor` so the silence is at least detectable.
+   receipt gets **zero pings, ever**, with no counter. Fold the excluded-row count into the
+   per-run `infoSilentFallback` payload rather than a separate emit.
+5. **Non-410 push failure = permanent total silence.** A subscription that fails with anything
+   other than `410` is never pruned, so `subscriptions.length > 0` holds forever, the email
+   branch is never reached, and the user receives **no statutory notice on any tick** while
+   `pinged` reports success. Pre-existing (not caused by this change), but the marker now
+   certifies each non-send as sent. The zero-delivery signal in Phase 2 step 3b makes it
+   *visible*; actually fixing it (fall back to email on non-410 push failure) is its own issue.
+
+## Blocking before PR-ready
+
+- [ ] **CPO ruling on C2 and C5 has returned.** The frontmatter declares
+      `requires_cpo_signoff: true`; the plan's CPO table currently records **author**
+      dispositions for both, and C2 is a condition the CPO asked for and the author declined.
+      An author cannot self-dispose a condition on a plan whose own frontmatter requires that
+      sign-off. Do not mark the PR ready until the ruling lands; if it diverges, it supersedes.
+- [ ] All five deferred issues above are filed.
 
 ## Sharp Edges
 
@@ -542,6 +667,17 @@ Per `wg-when-deferring-a-capability-create-a`, each needs an issue **before this
 - **Compute the run date once, before the loop, and checkpoint it** — mirroring `send-probe`'s
   `sentAt`. Per-row computation reintroduces the duplicate class across UTC midnight.
 - **`ON DELETE CASCADE` is decorative for retention here.** Statutory parents are never purged.
+- **A `CHECK` constraint does NOT break DSAR `parseTables`.** An earlier draft of this plan
+  warned that a trailing `CHECK (…)` before `);` was a known failure shape. That was
+  **empirically false** — the actual regex was run against three DDL variants and the whole
+  corpus (51/51 tables parsed, zero missed), and migration 102's own `email_triage_items`
+  already ends in a trailing `CONSTRAINT … CHECK` and parses fine. The lazy `[\s\S]*?\)\s*;`
+  cannot terminate early because a CHECK's closing paren is followed by `,` or `\n)`, never
+  `;`. Add the constraint.
+- **`joinVia` is not data-driven.** An allowlist entry without a hand-written block in
+  `server/dsar-export.ts` exports nothing and hard-fails `dsar-worker-per-row-where.test.ts`.
+- **`pinged` counts dispatch attempts, not deliveries** — and a stale-push user gets nothing
+  while it increments. Never cite it as evidence of notice.
 - **Touching `dsar-export-allowlist.ts` forces four legal-doc edits** — and an exclusion entry
   trips the gate identically, since both maps live in that one file.
 - **Do not add a Sentry paging rule for suppression** — `manual-trigger` makes it benign.
