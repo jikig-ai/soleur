@@ -209,7 +209,7 @@ gh pr list --head <branch-name> --state open --json number --jq '.[0].number // 
 Step 3c — if Step 3b returned a PR number, search for code-review issues referencing it:
 
 ```bash
-gh issue list --label code-review --search "PR #<number>" --limit 1 --json number --jq '.[0].number // empty'
+gh issue list --label code-review --search "PR #<number>" --state all --limit 1 --json number --jq '.[0].number // empty'
 ```
 
 If `gh` fails or is unavailable, treat as no output (fail open on Signal 3).
@@ -218,7 +218,7 @@ If `gh` fails or is unavailable, treat as no output (fail open on Signal 3).
 
 - Signal 1 (`todos/` grep, **branch-scoped**): coupled to legacy review workflow (pre-#1329). Scoped to paths this branch touched — the previous repo-global form could not fail (#6724)
 - Signal 2 (commit message grep **or `Reviewed-By-Soleur:` trailer**): matches legacy `refactor: add code review findings` OR `review: <summary>` fix-inline commits (post-#2374), OR the trailer emitted by `emit-review-trailer.sh`. The trailer is the primary signal post-#6724 and the only one a zero-finding review can produce
-- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`). Expected to be empty under the new fix-inline default unless findings were scoped out.
+- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`). Expected to be empty under the new fix-inline default unless findings were scoped out. **`--state all` is deliberate (#6786):** `gh issue list` defaults to open-only, but a review-origin issue that was filed and then RESOLVED (the fix-inline default closes them) is still valid evidence that `/review` ran — scoping to open would discard exactly the healthy case.
 
 **If any step produced output:** Review evidence found. Continue to Phase 2.
 

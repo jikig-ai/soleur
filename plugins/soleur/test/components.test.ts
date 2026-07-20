@@ -365,3 +365,92 @@ describe("invoice skill credential boundary (ADR-107)", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// gh --search probes must pin --state explicitly (#6786)
+// ---------------------------------------------------------------------------
+
+// Captures a `gh pr|issue list ...` command from the point the binary is named
+// to the end of its enclosing backtick span. The leading `[^`]*?` is load-bearing:
+// probes are frequently embedded in a shell assignment (`EXISTING=$(gh pr list …)`),
+// so anchoring the capture at the span's opening backtick would silently skip them.
+const GH_LIST_CMD = /`[^`]*?(gh (?:pr|issue) list [^`]*)`/g;
+
+/** Every `gh pr|issue list` command carrying `--search`, extracted from backtick spans. */
+export function extractSearchProbes(
+  files: { file: string; raw: string }[],
+): { file: string; cmd: string }[] {
+  return files.flatMap(({ file, raw }) =>
+    [...raw.matchAll(GH_LIST_CMD)]
+      .map((m) => ({ file, cmd: m[1] }))
+      .filter(({ cmd }) => /--search\b/.test(cmd)),
+  );
+}
+
+/** Search probes that omit an explicit `--state` — the #6786 silent-open defect class. */
+export function findStatelessProbes(
+  files: { file: string; raw: string }[],
+): { file: string; cmd: string }[] {
+  return extractSearchProbes(files).filter(({ cmd }) => !/--state\b/.test(cmd));
+}
+
+describe("collision-gate probes carry an explicit --state", () => {
+  // Permanent negative controls — synthesized fixtures, no file I/O
+  // (cq-test-fixtures-synthesized-only). These keep the detector honest even if
+  // every real call site is compliant, so the gate can never go vacuously green.
+  test("detector flags a stateless probe", () => {
+    expect(
+      findStatelessProbes([
+        { file: "f", raw: '`gh pr list --search "#1 in:body is:merged" --json number`' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("detector accepts a state-explicit probe", () => {
+    expect(
+      findStatelessProbes([
+        { file: "f", raw: '`gh pr list --search "#1 in:body" --state merged --json number`' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("detector sees a probe wrapped in a shell assignment", () => {
+    expect(
+      findStatelessProbes([
+        { file: "f", raw: '`X=$(gh pr list --search "head:foo" --json url --jq \'.[0]\')`' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("detector ignores a --state flag that precedes --search", () => {
+    expect(
+      findStatelessProbes([
+        { file: "f", raw: '`gh issue list --state closed --search "topic"`' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  const files = discoverSkills().map((f) => ({
+    file: f,
+    raw: readFileSync(resolve(PLUGIN_ROOT, f), "utf-8"),
+  }));
+
+  // Anti-vacuity: a broken glob or a drifted regex must red-line here rather than
+  // emptying the population and turning the offender assertion green for free.
+  test("probe population is non-empty", () => {
+    expect(
+      extractSearchProbes(files).length,
+      "no `gh pr|issue list --search` commands found in skills/*/SKILL.md — " +
+        "the glob or the extraction regex broke, so the offender check below is vacuous",
+    ).toBeGreaterThan(0);
+  });
+
+  test("no skill probe omits --state", () => {
+    expect(
+      findStatelessProbes(files).map((o) => `${o.file}: ${o.cmd.slice(0, 70)}`),
+      "`gh pr list --search` defaults to --state open and appends that filter unless it " +
+        "detects an in-query state qualifier, so a probe without an explicit --state " +
+        "silently misses MERGED PRs and the collision gate fails open. See #6786.",
+    ).toEqual([]);
+  });
+});

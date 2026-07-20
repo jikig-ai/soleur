@@ -832,7 +832,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 2. **Inspect any scope-out issues**: Review findings filed as `deferred-scope-out` with justification.
 
    ```bash
-   gh issue list --label deferred-scope-out --search "Ref #<PR_NUMBER>"
+   gh issue list --label deferred-scope-out --search "Ref #<PR_NUMBER>" --state open
    ```
 
 3. **Phase 5.5 gate self-check**: `/ship` will run the Review-Findings Exit Gate and block merge on any open review-origin issue cross-referencing the PR without the `deferred-scope-out` label. If the gate blocks, either fix inline and close the issue, or add the `deferred-scope-out` label + `## Scope-Out Justification`.
