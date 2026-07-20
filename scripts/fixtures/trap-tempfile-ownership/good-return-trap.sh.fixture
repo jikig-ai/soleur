@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Per-function cleanup via `trap ... RETURN`. This is ownership, and is BETTER scoped than
+# a process-wide EXIT trap for a harness that allocates per case. An EXIT-only anchor
+# flagged inngest-inventory.test.sh, which carries 30 of these. Must not be flagged.
+set -euo pipefail
+one_case() {
+  local d; d=$(mktemp -d); trap 'rm -rf "$d"' RETURN
+  echo scratch > "$d/f"
+}
+one_case

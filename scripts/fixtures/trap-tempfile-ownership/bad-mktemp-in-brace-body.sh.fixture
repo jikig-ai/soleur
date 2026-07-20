@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# A real allocation in a single-line function body, no owning trap. Rule (c) MUST fire.
+# `{` is a command position; an anchor that omitted it silently missed this shape.
+set -euo pipefail
+mk_root() { mktemp -d; }
+r=$(mk_root)
+echo "$r"

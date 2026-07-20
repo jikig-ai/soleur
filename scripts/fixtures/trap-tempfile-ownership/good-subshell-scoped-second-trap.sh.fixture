@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+outer=$(mktemp)
+trap 'rm -f "$outer"' EXIT
+(
+  inner=$(mktemp)
+  trap 'rm -f "$inner"' EXIT
+  echo nested > "$inner"
+)
+echo done > "$outer"

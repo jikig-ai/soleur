@@ -40,13 +40,32 @@ aggregate_verdict() {
 #               filesystem-boundary | telemetry-surface
 #   - findings_json_array: a JSON array string (use build_findings to assemble)
 # ---------------------------------------------------------------------------
+#
+# ARGV CEILING (#6736). The findings array arrives here as a shell variable and is
+# fed to jq on STDIN, never as an `--argjson` argument. `--argjson f "$findings_json"`
+# makes the whole array ONE argv argument, and the kernel caps a SINGLE argv argument
+# at MAX_ARG_STRLEN = 131,072 B — verified by bisect on this host: 131,071 B passes,
+# 131,072 B fails E2BIG. This is NOT `getconf ARG_MAX` (2,097,152 B, the argv+envp
+# total); a payload at 6% of ARG_MAX still dies.
+#
+# This is the only genuinely UNBOUNDED site in the scanner. `apply_yaml_rules` caps
+# each snippet at 200 chars, but nothing caps the FINDING COUNT: one grep hit per
+# matching line, over a file of any length. At ~265 B/finding the ceiling lands at
+# ~490 findings — and this repo already carries a 220,523 B SKILL.md.
+#
+# The failure was SILENT, which is why it is worth a comment: run-scan.sh invokes each
+# category as `bash check-*.sh … || echo '{"…check-failed…"}'`, so an E2BIG here is
+# swallowed into a "category script error" placeholder and the scan reports a REVIEW
+# verdict with ZERO real findings instead of the hundreds it actually found.
+#
+# A pipe has no size limit and streams, so this needs no spool file and no cleanup
+# trap (unlike the --rawfile form used in run-scan.sh, which already owns a tmpdir).
 emit_result() {
   local verdict="$1" category="$2" findings_json="$3"
-  jq -cn \
+  printf '%s' "$findings_json" | jq -c \
     --arg v "$verdict" \
     --arg c "$category" \
-    --argjson f "$findings_json" \
-    '{verdict: $v, category: $c, findings: $f}'
+    '{verdict: $v, category: $c, findings: .}'
 }
 
 # ---------------------------------------------------------------------------

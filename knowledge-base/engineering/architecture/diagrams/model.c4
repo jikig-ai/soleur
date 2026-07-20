@@ -443,7 +443,10 @@ model {
   // #6438 §3 / ADR-123 — the web-host private-NIC self-report guard. Same in-surface emit as the
   // registry's SOLEUR_PRIVATE_NIC (this edge is the SECOND source of that event), but the web host
   // makes a STRUCTURALLY DIFFERENT decision: detect + emit + alarm, NO reboot (a web-1 reboot would
-  // power-off the sole live origin, apply-web-platform-infra.yml:878). Cites ADR-115's reboot
+  // power-off the sole live origin). Re-anchored to content 2026-07-20 (#6575,
+  // cq-cite-content-anchor-not-line-number): this cited apply-web-platform-infra.yml:878, which was
+  // inside the `warm_standby` dispatch job deleted with the web-2 sweep — that line number now
+  // points at unrelated apply-job SSH-key setup. The reasoning stands on its own. Cites ADR-115's reboot
   // blockers as the REASON it does not self-converge; remediation deferred to #6459 + operator.
   hetzner -> betterstack "Ships SOLEUR_PRIVATE_NIC from web-1 (the §3 private-NIC guard, #6438 §3/ADR-123) to the shared Logs source 2457081 — detect + emit + alarm, NO reboot (unlike the registry's self-converging guard). ALSO pings the web_nic_guard liveness heartbeat every healthy run so the fault-emitter is observable-when-healthy (a SOLEUR_PRIVATE_NIC that never fires is indistinguishable from a dead guard). Distinct from the Vector journald edge above" { technology "curl → Better Stack Logs + heartbeat (HTTPS)" }
   betterstack -> hetzner "Origin uptime probe at the LB-fronted app.soleur.ai surface (betteruptime_monitor.app/soleur_apex) — covers web-1 (the app A-record → web-1, dns.tf); the #5933 per-host web-<n> probe was RETIRED (CF 521, no per-host origin vhost). web-2 (the fsn1 warm standby) was retired 2026-07-17 (#6538/#6463) — the fleet is single-host, fully covered by the app.soleur.ai probe; no second host needs separate uptime coverage" { technology "HTTPS via CF edge" }

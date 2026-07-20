@@ -286,6 +286,91 @@ test_no_argv_accumulation() {
 # inside the loop. The in-function `trap 'rm -f ...' EXIT` (NOT RETURN — RETURN does not
 # fire on `exit`) must still clean the spool file. Isolate mktemp via a private TMPDIR
 # and assert nothing survives.
+# --- Test: argv ceiling at the FINAL EMIT — armed_reminders > MAX_ARG_STRLEN (#6736) ---
+#
+# COVERAGE GAP THIS CLOSES. Test 11/12 prove the PER-PAGE accumulator is spooled, and Test
+# 12's own comment explicitly blesses "the legitimate `--argjson f/e/r` in the final object
+# assembly" as safe. It was not. Test 11's fixture produces exactly ONE armed reminder and
+# two event names, so the final emit it exercises is a few hundred bytes — it never touched
+# that binding. `--argjson r "$armed"` made the armed set ONE argv argument, and the kernel
+# caps a SINGLE argv argument at MAX_ARG_STRLEN = 131,072 B (NOT `getconf ARG_MAX`, the
+# 2,097,152 B argv+envp total); bisected on this host: 131,071 B passes, 131,072 B fails E2BIG.
+#
+# WHY $armed IS THE UNBOUNDED ONE. It is one object per ARMED REMINDER, produced by a
+# dedicated full-window reminder.scheduled scan with no page-ceiling narrowing (#6258
+# completeness-by-construction). $functions and $event_names are weakly bounded, but they
+# shared the same per-argument budget, so bounding one of the three bounded nothing — all
+# three are now `--rawfile … | fromjson`.
+#
+# ROW COUNT IS NOT THE LOAD-BEARING PARAMETER — BYTES PER REMINDER IS. The projection keeps
+# {reminder_id, fire_at, actor, action}, and `action` is the caller-supplied payload. With a
+# stub action these rows are ~110 B and even 1,000 of them stay under the ceiling, i.e. they
+# PASS ON UNMODIFIED CODE (vacuous). These carry a production-shaped issue-comment action
+# body, which is what actually crosses the ceiling.
+test_argv_ceiling_final_emit_armed() {
+  echo "TEST: inventory — >MAX_ARG_STRLEN armed set at the final emit (#6736)"
+  # Named at every use, never bare.
+  local MAX_ARG_STRLEN=131072
+  local rows=600
+  local d ff; d=$(mktemp -d); ff=$(mktemp)
+  trap 'rm -rf "$d" "$ff"' RETURN
+  make_functions '["synthesized-fixture-reminder-dispatch"]' > "$ff"
+
+  # One page of $rows future-dated reminder.scheduled edges with NO terminal runs, so
+  # derive_armed keeps every one of them. Synthesized, never copied from a real event.
+  jq -nc --argjson n "$rows" --argjson ts "$FUTURE_MS" '
+    {data:{eventsV2:{
+      totalCount:$n,
+      pageInfo:{hasNextPage:false,endCursor:""},
+      edges:[ range($n) as $i
+        | { cursor:("rem-\($i)"),
+            node:{ id:("rem-\($i)"), name:"reminder.scheduled",
+                   occurredAt:"2026-06-10T00:00:00Z", receivedAt:"2026-06-10T00:00:00Z",
+                   idempotencyKey:null,
+                   raw:({ data:{ reminder_id:("synthesized-fixture-reminder-\($i)-with-a-production-shaped-identifier"),
+                                 fire_at:"2026-12-01T00:00:00Z",
+                                 actor:"synthesized-fixture-platform-scheduler",
+                                 action:{ type:"issue-comment", issue:(1000 + $i),
+                                          body:("Synthesized fixture reminder action body number \($i). This text stands in for a real issue-comment payload and is deliberately long enough that bytes-per-reminder, not reminder count, is what drives this fixture past the per-argument kernel ceiling.") } },
+                          id:("rem-\($i)"), name:"reminder.scheduled", ts:$ts, v:null }|tojson),
+                   runs:[] } } ]
+    }}}' > "$d/page-1.json"
+
+  # Generator cardinality: an under-filled generator makes every assert below vacuous.
+  local gen
+  gen=$(jq '.data.eventsV2.edges | length' "$d/page-1.json")
+  assert_eq "argv-ceiling fixture generated $rows reminder edges" "$rows" "$gen"
+
+  local out rc=0
+  out=$(run_inv "$d" "$ff") || rc=$?
+  assert_eq ">ceiling armed set exits 0 (pre-fix: 'Argument list too long')" "0" "$rc"
+
+  # FIXTURE ADEQUACY, asserted IN-SUITE so this cannot silently degrade to vacuous as the
+  # projection, the fixture, or jq's encoding changes. A PR-body demonstration is
+  # unrunnable post-merge — there is no pre-fix code left to run it against.
+  local armed_bytes over="no"
+  armed_bytes=$(printf '%s' "$out" | jq -c '.armed_reminders' | wc -c)
+  [[ "$armed_bytes" -gt "$MAX_ARG_STRLEN" ]] && over="yes"
+  assert_eq "armed_reminders payload (${armed_bytes} B) exceeds MAX_ARG_STRLEN ($MAX_ARG_STRLEN)" "yes" "$over"
+
+  # EXACT count asserted RELATIONALLY against the generated edge count, not a literal pin.
+  # Discriminating against a truncating collapse and against the --slurpfile
+  # array-of-arrays undercount (which would yield 1).
+  assert_eq "armed_reminders|length == generated edge count (no truncation)" "$gen" \
+    "$(printf '%s' "$out" | jq -r '.armed_reminders | length')"
+
+  # The rows really carry their projected fields at >ceiling size, not empty shells.
+  assert_eq "every armed row carries reminder_id + fire_at + action" "$gen" \
+    "$(printf '%s' "$out" | jq -r '[.armed_reminders[] | select(.reminder_id != null and .fire_at != null and .action != null)] | length')"
+
+  # The sibling fields must still be correct on the same >ceiling emit — this is what
+  # catches converting only $r and leaving $f/$e on argv.
+  assert_eq "functions still emitted alongside a >ceiling armed set" "1" \
+    "$(printf '%s' "$out" | jq -r '.functions | length')"
+  assert_eq "event_names still emitted alongside a >ceiling armed set" "reminder.scheduled" \
+    "$(printf '%s' "$out" | jq -r '.event_names | join(",")')"
+}
+
 test_fatal_cleans_spool_tempfile() {
   local d; d=$(mktemp -d); local ff; ff=$(mktemp); local tmpd; tmpd=$(mktemp -d)
   trap 'rm -rf "$d" "$ff" "$tmpd"' RETURN
@@ -833,6 +918,7 @@ test_empty_state
 test_large_accumulator_no_argv_overflow
 test_no_argv_accumulation
 test_fatal_cleans_spool_tempfile
+test_argv_ceiling_final_emit_armed
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

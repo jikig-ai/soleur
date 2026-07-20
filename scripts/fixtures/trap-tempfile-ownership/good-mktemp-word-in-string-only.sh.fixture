@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# The word mktemp appears here only as DATA -- a filename and an assertion message.
+# Nothing is allocated, so rule (c) must not fire. This is the shape that made an
+# earlier bare-token \bmktemp\b anchor flag the gate's own test file.
+set -euo pipefail
+cases=("bad-mktemp-no-trap.sh.fixture|rule (c) mktemp with no owning trap")
+for c in "${cases[@]}"; do
+  echo "checking: ${c%%|*}"
+done
