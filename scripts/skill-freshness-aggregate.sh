@@ -98,7 +98,21 @@ total_skills=$(echo "$inventory_json" | jq -r 'length')
 # irrelevant — the parser computes `last_invoked` and counts from the
 # event-level `ts`/`skill` fields.
 INVOCATIONS_TMPDIR=$(mktemp -d)
-trap 'rm -rf "$INVOCATIONS_TMPDIR"' EXIT
+# SINGLE OWNING TRAP (#6734). Bash allows exactly ONE EXIT trap per shell -- registering a
+# second one SILENTLY REPLACES the first, it does not chain. This script previously did
+# both: a later `trap 'rm -f "$OUT.tmp"' EXIT` in the write block dropped ownership of
+# INVOCATIONS_TMPDIR, and a trailing `trap - EXIT` then cleared cleanup entirely. Net
+# effect: the SUCCESS path leaked the tmpdir every time it wrote a report.
+#
+# So this trap owns BOTH artifacts for the life of the process. Do not add another
+# `trap … EXIT` anywhere in this file; extend the cleanup function instead.
+# `$OUT.tmp` is removed unconditionally -- rm -f on a nonexistent path is a no-op, and
+# after a successful `mv` there is nothing left to remove.
+_sfa_cleanup() {
+  rm -rf "$INVOCATIONS_TMPDIR"
+  rm -f "$OUT.tmp"
+}
+trap _sfa_cleanup EXIT
 INVOCATIONS_MERGED="$INVOCATIONS_TMPDIR/invocations-merged.jsonl"
 : > "$INVOCATIONS_MERGED"
 [[ -f "$INVOCATIONS" && -s "$INVOCATIONS" ]] && cat "$INVOCATIONS" >> "$INVOCATIONS_MERGED"
@@ -267,11 +281,12 @@ if [[ -f "$OUT" ]]; then
 fi
 
 if [[ "$write" == "1" ]]; then
-  trap 'rm -f "$OUT.tmp"' EXIT
+  # No `trap … EXIT` here and no `trap - EXIT` after: the single owning trap registered
+  # with INVOCATIONS_TMPDIR already covers "$OUT.tmp" (#6734). Re-adding one here would
+  # silently replace that trap and reinstate the tmpdir leak on the success path.
   echo "$report" > "$OUT.tmp"
   jq empty "$OUT.tmp" >/dev/null 2>&1 || { echo "ERROR: tmp file malformed (try --dry-run to inspect output)" >&2; exit 5; }
   mv "$OUT.tmp" "$OUT" || { echo "ERROR: mv $OUT.tmp -> $OUT failed (check filesystem permissions)" >&2; exit 6; }
-  trap - EXIT
   echo "Wrote $OUT (total_skills=$(jq -r '.summary.total_skills' < "$OUT"), idle_180d=$(jq -r '.summary.idle_180d' < "$OUT"), idle_365d=$(jq -r '.summary.idle_365d' < "$OUT"), never_invoked=$(jq -r '.summary.never_invoked' < "$OUT"))"
 else
   echo "No material change to $OUT"
