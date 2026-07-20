@@ -225,6 +225,12 @@ test_pf_scrub_libpq_keyword_form() {
   # Fail-loud contract still holds — the redaction must not swallow the exit code.
   if [[ "$RP_RC" -ne 0 ]]; then echo "  PASS: still fails loud (rc=$RP_RC)"; PASS=$((PASS+1));
   else echo "  FAIL: expected non-zero exit on the error branch"; FAIL=$((FAIL+1)); fi
+  # POSITIVE CONTROL (F4): absence-only assertions pass just as happily when the
+  # redaction DESTROYS the diagnostic as when it scrubs it. A rule widened to
+  # nuke the whole line would satisfy every assertion above. Pin the surrounding
+  # prose so scrub-vs-annihilate are distinguishable.
+  if grep -qF "connection to server failed" <<<"$RP_OUT"; then echo "  PASS: diagnostic prose survived the redaction"; PASS=$((PASS+1));
+  else echo "  FAIL: redaction ANNIHILATED the diagnostic (over-redaction, not scrubbing)"; FAIL=$((FAIL+1)); fi
 }
 
 # --- #6295 T2: over-redaction control through the REAL call site ---
@@ -293,6 +299,13 @@ test_pf_scrub_encoding_shapes() {
     "B3-single-quoted|failed: host='db.${SYNTH_REF}.supabase.co' password='hunter2sentinel'"
     "D-lone-host|host=db.${SYNTH_REF}.supabase.co"
     "F-uppercase-kw|failed: HOST=db.${SYNTH_REF}.supabase.co PASSWORD=hunter2sentinel"
+    # RAW control bytes (F3): the cases above are all JSON-ESCAPED forms handled
+    # by the \\[nrt] alternation — none of them ever reach the `tr` stage. This
+    # one carries a real 0x0A, which is what `tr` exists to neutralise. Deleting
+    # the tr stage must redden the suite.
+    "G-raw-newline|$(printf 'failed:\nhost=db.%s.supabase.co\npassword=hunter2sentinel' "$SYNTH_REF")"
+    "H-raw-esc|$(printf 'failed:\x1bhost=db.%s.supabase.co\x1bpassword=hunter2sentinel' "$SYNTH_REF")"
+    "I-u2028|$(printf 'failed:\u2028host=db.%s.supabase.co\u2028password=hunter2sentinel' "$SYNTH_REF")"
   )
   local n=0 entry label msg
   for entry in "${cases[@]}"; do
@@ -305,7 +318,7 @@ test_pf_scrub_encoding_shapes() {
     else echo "  FAIL: $label — password LEAKED"; FAIL=$((FAIL+1)); fi
   done
   # Minimum-cardinality guard: an empty case array must not pass vacuously.
-  if [[ "$n" -eq "${#cases[@]}" && "$n" -ge 6 ]]; then echo "  PASS: all $n encoding shapes exercised"; PASS=$((PASS+1));
+  if [[ "$n" -eq "${#cases[@]}" && "$n" -ge 9 ]]; then echo "  PASS: all $n encoding shapes exercised"; PASS=$((PASS+1));
   else echo "  FAIL: only $n shape(s) exercised"; FAIL=$((FAIL+1)); fi
 }
 
@@ -326,6 +339,52 @@ test_pf_scrub_widened_over_redaction() {
     if grep -qF "$c" <<<"$RP_OUT"; then echo "  PASS: preserved \"${c:0:40}...\""; PASS=$((PASS+1));
     else echo "  FAIL: over-redacted \"$c\" -> $RP_OUT"; FAIL=$((FAIL+1)); fi
   done
+}
+
+# --- #6295 T8: RAW control bytes, driven straight into _pf_scrub ---
+#
+# The encoding battery above cannot reach the `tr` stage: run_probe_errmsg
+# builds its fixture with `jq --arg`, which RE-ENCODES a real 0x0A back into
+# the two-character escape \n. So every "raw" case arrives escaped, and
+# deleting the tr stage entirely left the suite green.
+#
+# This harness pipes raw bytes directly into the extracted _pf_scrub, which is
+# the only way to exercise the stage that unwelds control-separated tokens.
+# Deleting `tr` must redden this block.
+scrub_raw() {
+  printf '%b' "$1" | (
+    eval "$(sed -n '/^_pf_scrub() {$/,/^}$/p' "$TARGET")"
+    _pf_scrub
+  )
+}
+
+test_pf_scrub_raw_control_bytes() {
+  echo "TEST: _pf_scrub — RAW control bytes reach the tr stage (#6617)"
+  # Harness liveness: the extraction must yield a callable function.
+  local probe; probe=$(scrub_raw 'plain text' 2>/dev/null || true)
+  if [[ "$probe" == "plain text" ]]; then echo "  PASS: raw harness is live"; PASS=$((PASS+1));
+  else echo "  FAIL: raw harness is vacuous (got '$probe')"; FAIL=$((FAIL+1)); fi
+
+  local -a raw=(
+    "RAW-newline|failed:\nhost=db.${SYNTH_REF}.supabase.co\npassword=hunter2sentinel"
+    "RAW-tab|failed:\thost=db.${SYNTH_REF}.supabase.co\tpassword=hunter2sentinel"
+    "RAW-esc|failed:\x1bhost=db.${SYNTH_REF}.supabase.co\x1bpassword=hunter2sentinel"
+    "RAW-vtab|failed:\vhost=db.${SYNTH_REF}.supabase.co\vpassword=hunter2sentinel"
+  )
+  local n=0 e label msg out
+  for e in "${raw[@]}"; do
+    label="${e%%|*}"; msg="${e#*|}"; n=$((n+1))
+    out=$(scrub_raw "$msg")
+    if ! grep -qF "$SYNTH_REF" <<<"$out"; then echo "  PASS: $label — ref redacted"; PASS=$((PASS+1));
+    else echo "  FAIL: $label — ref LEAKED ($out)"; FAIL=$((FAIL+1)); fi
+    if ! grep -qF "hunter2sentinel" <<<"$out"; then echo "  PASS: $label — password redacted"; PASS=$((PASS+1));
+    else echo "  FAIL: $label — password LEAKED ($out)"; FAIL=$((FAIL+1)); fi
+    # No raw control byte may survive into a journald/stdout line.
+    if ! grep -qP '[\x00-\x1f\x7f]' <<<"$out" 2>/dev/null; then echo "  PASS: $label — no control byte survives"; PASS=$((PASS+1));
+    else echo "  FAIL: $label — control byte SURVIVED (log-injection risk)"; FAIL=$((FAIL+1)); fi
+  done
+  if [[ "$n" -eq "${#raw[@]}" && "$n" -ge 4 ]]; then echo "  PASS: all $n raw shapes exercised"; PASS=$((PASS+1));
+  else echo "  FAIL: only $n raw shape(s)"; FAIL=$((FAIL+1)); fi
 }
 
 # --- #6295 T5: PERMANENT identity guard across all three _pf_scrub copies ---
@@ -368,6 +427,7 @@ test_pf_scrub_no_over_redaction
 test_pf_scrub_lone_keyword_not_redacted
 test_pf_scrub_original_rules_intact
 test_pf_scrub_encoding_shapes
+test_pf_scrub_raw_control_bytes
 test_pf_scrub_widened_over_redaction
 test_pf_scrub_bodies_byte_identical
 echo ""

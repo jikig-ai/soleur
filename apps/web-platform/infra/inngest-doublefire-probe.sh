@@ -176,13 +176,18 @@ build_request_body() {
 #   $1=out_file $2=after $3=page $4=max_time
 _fetch_runs_page() {
   local out="$1" after="$2" page_num="$3" max_time="$4"
+  # Build the body BEFORE the fixture short-circuit (#6617). The seam used to
+  # return above this line, so every fixture-driven test bypassed request
+  # construction entirely — which is exactly how the empty-CSV --argjson abort
+  # shipped green and only surfaced as a live HTTP 500. Constructing first costs
+  # one jq call per fixture page and puts ~15 existing tests on the real path.
+  local body
+  body=$(build_request_body "$after")
   if [[ -n "$FIXTURE_DIR" ]]; then
     cat "${FIXTURE_DIR}/page-${page_num}.json" > "$out"
     _last_curl_exit=0
     return 0
   fi
-  local body
-  body=$(build_request_body "$after")
   if curl -s --max-time "$max_time" --connect-timeout "$CONNECT_TIMEOUT" \
        -X POST -H "Content-Type: application/json" \
        --data-binary "$body" "$GQL_URL" > "$out"; then

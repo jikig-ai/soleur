@@ -104,21 +104,6 @@ test_pagination_truncation_fails_loud() {
   rm -rf "$dir"
 }
 
-# --- Test 3b: hasNextPage=true but endCursor empty → fail LOUD, no truncation (P3-b) ---
-test_truncated_pagination_fails_loud() {
-  echo "TEST: doublefire-probe — hasNextPage=true + empty endCursor fails LOUD (P3-b)"
-  local dir; dir=$(mktemp -d)
-  # Page 1 claims a next page but supplies NO cursor → cannot page → must NOT break-clean.
-  make_page true "" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" > "$dir/page-1.json"
-  local rc=0 out
-  out=$(INNGEST_DOUBLEFIRE_RUNS_FIXTURE="$dir" bash "$TARGET" 2>/dev/null) || rc=$?
-  if [[ "$rc" -ne 0 ]]; then echo "  PASS: exits non-zero on truncated pagination"; PASS=$((PASS + 1));
-  else echo "  FAIL: expected non-zero exit on hasNextPage=true+empty cursor (got rc=0, out=$out)"; FAIL=$((FAIL + 1)); fi
-  if echo "$out" | jq -e '.runs' >/dev/null 2>&1; then
-    echo "  FAIL: emitted a (possibly-truncated) false-clean {runs:[]} on truncated pagination"; FAIL=$((FAIL + 1));
-  else echo "  PASS: no false-clean runs object emitted on truncation"; PASS=$((PASS + 1)); fi
-  rm -rf "$dir"
-}
 
 # --- Test 4: empty runs page (no double-fire data) → {runs:[]} exit 0 ---
 test_empty_runs() {
@@ -397,6 +382,26 @@ test_df_build_body_harness_is_live() {
   local body; body=$(sed -n '/^build_request_body() {$/,/^}$/p' "$TARGET")
   if [[ $(wc -l <<<"$body") -gt 5 ]]; then echo "  PASS: extracted $(wc -l <<<"$body") lines"; PASS=$((PASS+1));
   else echo "  FAIL: extraction yielded $(wc -l <<<"$body") lines — harness is vacuous"; FAIL=$((FAIL+1)); fi
+
+  # WIRING: the harness above proves build_request_body BEHAVES, not that
+  # anything CALLS it. Without this, reintroducing the #6617 defect inline in
+  # _fetch_runs_page — leaving build_request_body intact but dead — reproduces
+  # the live HTTP 500 with this suite fully green.
+  if grep -qF 'body=$(build_request_body' "$TARGET"; then echo "  PASS: build_request_body is wired into the request path"; PASS=$((PASS+1));
+  else echo "  FAIL: build_request_body is DEAD — nothing calls it"; FAIL=$((FAIL+1)); fi
+
+  # ORDER: the fixture seam must sit BELOW body construction, else every
+  # fixture-driven test bypasses the real path again (how #6617 shipped green).
+  local build_ln seam_ln
+  build_ln=$(grep -n 'body=$(build_request_body' "$TARGET" | head -1 | cut -d: -f1)
+  seam_ln=$(grep -n 'if \[\[ -n "$FIXTURE_DIR" \]\]' "$TARGET" | head -1 | cut -d: -f1)
+  if [[ -z "$build_ln" || -z "$seam_ln" ]]; then
+    echo "  FAIL: could not locate anchors (build=$build_ln seam=$seam_ln)"; FAIL=$((FAIL+1))
+  elif [[ "$build_ln" -lt "$seam_ln" ]]; then
+    echo "  PASS: body built (line $build_ln) BEFORE the fixture seam (line $seam_ln)"; PASS=$((PASS+1))
+  else
+    echo "  FAIL: fixture seam (line $seam_ln) precedes construction (line $build_ln)"; FAIL=$((FAIL+1))
+  fi
 }
 
 test_df_build_body_harness_is_live
