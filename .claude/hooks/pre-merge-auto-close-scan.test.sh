@@ -33,10 +33,12 @@ OPT_FT=""         # newline/space separated issue numbers carrying `follow-throu
 OPT_SUBDIR=""     # non-empty -> run the hook with cwd set to a subdirectory
 OPT_NOSCANNER=""  # non-empty -> do not install the scanner in the tmp repo
 OPT_NOTICES=""    # expected count of stderr notice lines ("" = do not assert)
-OPT_REASON=""     # substring the deny reason must contain ("" = do not assert).
-                  # This is the discriminator for WHICH arm denied — the prose
-                  # arm and the label gate both emit `deny`, so a decision-only
-                  # assertion cannot tell them apart.
+OPT_REASON=""     # newline-separated substrings the deny reason must ALL contain
+                  # ("" = do not assert). This is the discriminator for WHICH
+                  # arm denied — the prose arm and the label gate both emit
+                  # `deny`, so a decision-only assertion cannot tell them apart —
+                  # and for WHICH body the operator has to scrub, which is the
+                  # entire lesson of #6775 (the keyword lived in two places).
 
 # Build a tmp WORK_DIR: a git repo on a feature branch with an origin/main ref,
 # the scanner copied in, and an argv-dispatching gh stub on PATH.
@@ -151,8 +153,17 @@ run_case() {
   if [[ -n "$OPT_NOTICES" && "$notices" != "$OPT_NOTICES" ]]; then
     ok=0; detail="${detail:+$detail; }expected $OPT_NOTICES notice(s), got $notices"
   fi
-  if [[ -n "$OPT_REASON" ]] && ! printf '%s' "$reason" | grep -qF -- "$OPT_REASON"; then
-    ok=0; detail="${detail:+$detail; }deny reason lacks '$OPT_REASON'"
+  if [[ -n "$OPT_REASON" ]]; then
+    local want
+    while IFS= read -r want; do
+      [[ -n "$want" ]] || continue
+      # grep a FILE-free herestring, never `printf | grep -q`: under pipefail an
+      # early match makes grep close the pipe, the producer takes SIGPIPE (141),
+      # and the pipeline reports failure even though the pattern matched.
+      grep -qF -- "$want" <<<"$reason" || {
+        ok=0; detail="${detail:+$detail; }deny reason lacks '$want'"
+      }
+    done <<< "$OPT_REASON"
   fi
 
   OPT_ACK=""; OPT_FTACK=""; OPT_MODE="ok"; OPT_FT=""
@@ -217,12 +228,17 @@ run_case "T8 gh pr merge in quoted string → allow" allow \
 # T3 — REACHABILITY (AC2). A standalone close produces an EMPTY prose-arm
 # result, so a gate appended after the `[[ -n "$EMBEDDED" ]] || exit 0` early
 # exit can never fire on it. This case is what proves the gate is reachable.
-OPT_FT="6617" OPT_REASON="follow-through" \
+# The reason must also name the SURFACE. #6775's whole story is that the keyword
+# had to be scrubbed in two places; a deny that does not say which body it found
+# the close in sends the operator hunting.
+OPT_FT="6617" OPT_REASON=$'follow-through\n#6617 — referenced from the PR body' \
 run_case "T3 PR-body standalone Closes on follow-through → deny" deny \
   "gh pr merge 1 --squash" "fix: thing" $'Summary.\n\nCloses #6617'
 
-# T4 — same, carried by the COMMIT message.
-OPT_FT="6617" OPT_REASON="follow-through" \
+# T4 — same, carried by the COMMIT message. Same fixture, different surface:
+# together these two pin the attribution in BOTH directions, so an
+# implementation that hardcodes either label fails one of them.
+OPT_FT="6617" OPT_REASON=$'follow-through\n#6617 — referenced from the commit message' \
 run_case "T4 commit standalone Closes on follow-through → deny" deny \
   "gh pr merge 1 --squash" $'fix: thing\n\nCloses #6617' ""
 
