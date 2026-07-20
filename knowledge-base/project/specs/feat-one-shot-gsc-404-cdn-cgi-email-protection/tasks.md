@@ -21,9 +21,9 @@ at deepen-plan**: the remedy is a host-scoped Cloudflare Configuration Rule, **n
 
 ## Phase 0 — Preconditions
 
-- [ ] 0.1 Confirm branch: `git branch --show-current` →
+- [x] 0.1 Confirm branch: `git branch --show-current` →
       `feat-one-shot-gsc-404-cdn-cgi-email-protection`
-- [ ] 0.2 Capture the **baseline census** so AC9 has a before/after. Expected today:
+- [x] 0.2 Capture the **baseline census** so AC9 has a before/after. Expected today:
       `/`=0, `/getting-started/`=2, `/pricing/`=1, `/legal/privacy-policy/`=20,
       `/legal/terms-and-conditions/`=7.
       ```bash
@@ -34,63 +34,103 @@ at deepen-plan**: the remedy is a host-scoped Cloudflare Configuration Rule, **n
       done
       ```
       Use `grep -o … | wc -l`, never `grep -c` (counts lines, undercounts on minified HTML).
-- [ ] 0.3 Confirm baseline suite green: `cd apps/web-platform && npm run test:ci`
-- [ ] 0.4 Read `apps/web-platform/infra/seo-rulesets.tf` (comment density + `cloudflare.rulesets`
+- [x] 0.3 Confirm baseline suite green: `cd apps/web-platform && npm run test:ci`
+- [x] 0.4 Read `apps/web-platform/infra/seo-rulesets.tf` (comment density + `cloudflare.rulesets`
       provider alias) and `apps/web-platform/test/seo-rulesets-noindex.test.ts`
       (brace-counting text-parse approach to mirror). Per `hr-always-read-a-file-before-editing-it`.
-- [ ] 0.5 Confirm the provider alias name and `var.cf_zone_id` in
+- [x] 0.5 Confirm the provider alias name and `var.cf_zone_id` in
       `apps/web-platform/infra/main.tf` / `variables.tf`.
 
 ## Phase 1 — RED: source guard
 
-- [ ] 1.1 Create `apps/web-platform/test/seo-config-rules.test.ts` (**vitest**;
+- [x] 1.1 Create `apps/web-platform/test/seo-config-rules.test.ts` (**vitest**;
       `apps/web-platform/vitest.config.ts` `unit` project includes `test/**/*.test.ts`).
       Mirror the sibling `seo-rulesets-noindex.test.ts` text-parse approach — `readFileSync`
       + brace-counting, **not** an HCL parser.
-- [ ] 1.2 Assert `apps/web-platform/infra/seo-config-rules.tf` declares a `cloudflare_ruleset`
+- [x] 1.2 Assert `apps/web-platform/infra/seo-config-rules.tf` declares a `cloudflare_ruleset`
       with `phase = "http_config_settings"` and `kind = "zone"`.
-- [ ] 1.3 Assert a rule with `action = "set_config"` and `email_obfuscation = false`,
+- [x] 1.3 Assert a rule with `action = "set_config"` and `email_obfuscation = false`,
       `enabled = true`.
-- [ ] 1.4 **Blast-radius assertions (load-bearing — both directions).**
+- [x] 1.4 **Blast-radius assertions (load-bearing — both directions).**
       Positive: expression contains `soleur.ai` AND `www.soleur.ai`.
       Negative: expression contains **none** of `app.soleur.ai`, `deploy.soleur.ai`,
       `api.soleur.ai`. The bounded scope is the property that distinguishes this from the
       rejected zone-wide Option A — assert it explicitly.
-- [ ] 1.5 Assert the new resource address appears in the `-target=` allow-list in
+- [x] 1.5 Assert the new resource address appears in the `-target=` allow-list in
       `.github/workflows/apply-web-platform-infra.yml`. Without this the rule is committed
       but never applied — the silent-no-op class #3379 already documents.
-- [ ] 1.6 Confirm RED:
+- [x] 1.6 Confirm RED:
       `cd apps/web-platform && ./node_modules/.bin/vitest run test/seo-config-rules.test.ts`
 
 ## Phase 2 — GREEN: the Terraform rule
 
-- [ ] 2.1 Create `apps/web-platform/infra/seo-config-rules.tf` per plan §Phase 2 step 4.
+- [x] 2.1 Create `apps/web-platform/infra/seo-config-rules.tf` per plan §Phase 2 step 4.
       **Verify every attribute name against the pinned provider (4.52.7) before writing** —
       do not copy the plan's illustrative block blindly.
-- [ ] 2.2 Carry a comment block explaining why: the GSC 404, the 30 hrefs, why not
+- [x] 2.2 Carry a comment block explaining why: the GSC 404, the 30 hrefs, why not
       robots.txt (Google's "don't block 404s" + the `2026-06-14` learning), why host-scoped
       not zone-wide. Match the comment density of `seo-rulesets.tf`.
-- [ ] 2.3 Add the resource to the `-target=` allow-list in `apply-web-platform-infra.yml`.
-- [ ] 2.4 **Sweep every guard suite** asserting on that list — orphan suites are the ones
+- [x] 2.3 Add the resource to the `-target=` allow-list in `apply-web-platform-infra.yml`.
+- [x] 2.4 **Sweep every guard suite** asserting on that list — orphan suites are the ones
       plans reliably miss:
       `git grep -ln 'cloudflare_ruleset\|\-target=' scripts/ apps/web-platform/infra/*.test.sh`
       Update every hit.
-- [ ] 2.5 Confirm GREEN:
+- [x] 2.5 Confirm GREEN:
       `cd apps/web-platform && ./node_modules/.bin/vitest run test/seo-config-rules.test.ts`
-- [ ] 2.6 Confirm the gate can FAIL (AC2): flip `email_obfuscation` to `true` → test fails;
+- [x] 2.6 Confirm the gate can FAIL (AC2): flip `email_obfuscation` to `true` → test fails;
       add `app.soleur.ai` to the expression → test fails; restore → passes. Do not skip.
-- [ ] 2.7 Full suite green: `cd apps/web-platform && npm run test:ci` — especially the 3
+- [x] 2.7 Full suite green: `cd apps/web-platform && npm run test:ci` — especially the 3
       existing `api.soleur.ai` tests in `seo-rulesets-noindex.test.ts`.
-- [ ] 2.8 `terraform fmt -check` + `terraform validate` in `apps/web-platform/infra/`.
+- [x] 2.8 `terraform fmt -check` + `terraform validate` in `apps/web-platform/infra/`.
       Use the canonical Doppler triplet (raw `AWS_*` exports for the R2 backend, then
       `--name-transformer tf-var`) — see
       `knowledge-base/project/learnings/2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md`.
       Without `tf-var`, ~13 required variables fail to resolve.
 
+## Phase 2.9 — PREREQUISITE: token scope widen (BLOCKING, discovered at /work)
+
+**The plan and its review panel missed this.** The `cloudflare.rulesets` alias token
+(`var.cf_api_token_rulesets`) did not carry the Configuration-Rules permission that the
+`http_config_settings` phase requires, so the resource as planned would commit, enter the
+auto-apply `-target=` list, and then **403 on apply** — the silent-no-op class #3379 already
+documents on this zone.
+
+Verified by live probe against Doppler `soleur/prd_terraform`:
+
+| Probe | Result |
+|---|---|
+| `http_config_settings` entrypoint | **403** `request is not authorized` |
+| `http_request_dynamic_redirect` entrypoint (control) | **200** |
+
+Every other CF token in `prd_terraform` was probed against `http_config_settings` — all 403.
+No token holds `User API Tokens:Edit` (all 403 on `GET /user/tokens`) and there is no Global
+API Key, so the widen requires the Cloudflare dashboard.
+
+Routed to the `soleur:engineering:cto` agent per the architectural-fork rule (two competing
+in-repo precedents: widen-existing per #5092 vs. mint-narrow-alias per `cf_api_token_r2`).
+**Ruling: widen the existing token** — same API family and zone; widening moves no secret
+material, so it adds no no-default root variable, whose absence would fail the WHOLE
+merge-triggered apply rather than just this resource.
+
+- [x] 2.9.1 Update the `cf_api_token_rulesets` description in `variables.tf` (it IS the
+      scope ledger) and the `cloudflare.rulesets` consumer list + decision rule in `main.tf`.
+- [ ] 2.9.2 **BLOCKED** — append Configuration Rules (zone, soleur.ai) to the token in the
+      Cloudflare dashboard. Browser transport unavailable this session (Playwright MCP
+      disconnected; `agent-browser` daemon wedged across 3 attempts — `os error 11`, then
+      `os error 2`, then a 100s timeout). Classified `attempted-blocked-on-tool`, **not**
+      operator-only. Tracked with full attempt evidence + resume recipe in **#6755**.
+- [ ] 2.9.3 Run the mandatory retained-scope probe set (4 probes: config_settings,
+      dynamic_redirect, cache_settings, account rulesets). All must be 200; a 404 on an
+      entrypoint is a pass, only 403 is a failure. Widening mutates a live credential four
+      production concerns depend on — this converts that risk into a pre-merge gate.
+- [ ] 2.9.4 Paste the four status codes into the PR body, then mark ready.
+
+**Do not mark PR #6746 ready until 2.9.2–2.9.4 are green.**
+
 ## Phase 3 — Plan review of the apply
 
-- [ ] 3.1 `terraform plan` → confirm **1 to add, 0 to change, 0 to destroy** (AC4).
-- [ ] 3.2 Confirm no excluded resource (`hcloud_server.web`, `hcloud_volume.workspaces`,
+- [x] 3.1 `terraform plan` → confirm **1 to add, 0 to change, 0 to destroy** (AC4).
+- [x] 3.2 Confirm no excluded resource (`hcloud_server.web`, `hcloud_volume.workspaces`,
       volume attachments, SSH keys) appears — `-target` is transitive on dependencies.
 
 ## Phase 4 — Follow-ups (do not fold into the diff)
@@ -103,7 +143,7 @@ at deepen-plan**: the remedy is a host-scoped Cloudflare Configuration Rule, **n
 
 ## Phase 5 — Ship
 
-- [ ] 5.1 AC6: `git diff --name-only origin/main...HEAD` contains **no**
+- [x] 5.1 AC6: `git diff --name-only origin/main...HEAD` contains **no**
       `plugins/soleur/docs/robots.txt` — the rejected Option B must not leak back in.
 - [ ] 5.2 PR body uses **`Ref #3379`**, not `Closes`.
 - [ ] 5.3 Ensure `/ship` surfaces `decision-challenges.md` into the PR body and files the
