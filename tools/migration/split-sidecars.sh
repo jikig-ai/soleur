@@ -253,7 +253,12 @@ for sec in section_order_seen:
 
 Path("AGENTS.md").write_text("\n".join(index_out).rstrip() + "\n")
 
-# Sanity output
+# Sanity output.
+# HISTORICAL: the "target" below is the #3493 migration's point-in-time goal,
+# not a current threshold. This one-shot tool has already run and gates nothing.
+# The live authority is scripts/lint-agents-rule-budget.py, enforced across
+# consumers by scripts/lint-agents-compound-sync.sh -- do NOT "sync" this number
+# to it, and do not read it as drift (#6461).
 core_bytes = Path("AGENTS.core.md").stat().st_size
 docs_bytes = Path("AGENTS.docs.md").stat().st_size
 rest_bytes = Path("AGENTS.rest.md").stat().st_size
