@@ -12,6 +12,36 @@ revision: v2 (post 2-agent plan-review — architecture-strategist + spec-flow-a
 
 # fix: two CI guards that structurally cannot fail (#6766, #6774)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-20
+**Prior pass:** 2-agent plan-review (architecture-strategist + spec-flow-analyzer) → v2, 14 findings applied (§Plan Review Findings)
+**This pass:** gates 4.4/4.5/4.55/4.6/4.7/4.8/4.9, verify-the-negative sweep, live attribution probes
+
+### Key improvements
+1. **Verdict-script contract specified** — exact 5-arg signature and a 6-row allow-list
+   table for `scripts/infra-validate-gate-verdict.sh`, diffed against the
+   `tenant-integration-gate-verdict.sh` precedent (which was read in full, not paraphrased).
+   The `detect ≠ success ⇒ fail` row is called out as a second, independent defence for F3.
+2. **`merge_group` routing precedent captured** — both sibling required workflows handle it
+   as an explicit *first* branch with a written rationale; copy verbatim.
+3. **Verification ledger added** — 16 load-bearing claims probed, all confirmed, none
+   contradicted. Covers every negative claim, every cited PR/issue, the ADR ordinal, the
+   labels, and the AGENTS rule IDs.
+4. **Gate dispositions recorded** — including two *false* triggers (4.5 network-outage
+   matches only Check 10's SSH reject-regex prose; 4.9 UI matches only the Product/UX
+   Gate's own negation), so a later reader does not re-litigate them.
+
+### New considerations discovered
+- The verdict script's `detect ≠ success` arm is load-bearing beyond its obvious purpose:
+  it is what makes an unrouted `merge_group` fail loudly rather than pass green.
+- `substRejectReason`'s operator-facing message string must survive the function split
+  verbatim — helper-split message drift is a known dashboard-regression class.
+- `git diff --name-only` includes deletions; guardrail 4 avoids the class entirely by
+  grepping the tree at HEAD rather than iterating the diff path list.
+- ADR-130 re-derived from a **freshly-fetched** `origin/main` (not the branch base), per
+  the stale-ordinal failure mode.
+
 ## Overview
 
 Two guards assert a property they cannot actually verify.
@@ -713,6 +743,116 @@ context."*
 Headless run — persist to
 `knowledge-base/project/specs/feat-one-shot-6766-6774-ci-guards-cannot-fail/decision-challenges.md`
 for `/ship` to render into the PR body and file as an `action-required` issue.
+
+## Research Insights (deepen-plan pass)
+
+### Precedent diff — the aggregator verdict script (Phase 3.5)
+
+Pattern-bound behavior with an established canonical form in-repo. Precedent read in full:
+`scripts/tenant-integration-gate-verdict.sh` (32 lines) + `tests/scripts/test-tenant-integration-gate-verdict.sh`.
+
+**Precedent shape (verified):** two positional args; exits 0 **only** on the enumerated
+combination `detect == "success" && (suite == "success" || suite == "skipped")`; exits 1
+with a loud `::error::` for **every** other combination, including the empty string. Its
+header names the rationale explicitly — the *"DROP-1 fail-open class"*. It is standalone
+and unit-testable rather than inline workflow YAML.
+
+**New script — `scripts/infra-validate-gate-verdict.sh`.** Copy the shape; widen the arity
+from 2 to 5. Signature:
+
+```
+infra-validate-gate-verdict.sh <detect_result> <validate_result> <deploy_result> <directories> <suite_relevant>
+```
+
+Allow-list — exit 0 **only** on these rows; anything else (including `cancelled`,
+`skipped` where not enumerated, or an empty string) exits 1:
+
+| detect | directories | suite_relevant | validate | deploy-script-tests | verdict |
+|---|---|---|---|---|---|
+| success | `[]` | `false` | skipped | skipped | **0** — nothing in scope |
+| success | `[]` | `true` | skipped | success | **0** — non-terraform guard surface only |
+| success | non-`[]` | `true` | success | success | **0** — full pass |
+| success | any | `true` | any | **failure** | **1** — the F1 defect (T14) |
+| success | non-`[]` | any | **≠ success** | any | **1** |
+| **≠ success** | any | any | any | any | **1** — detect itself failed |
+
+The last row is load-bearing and inherited from the precedent: it is what makes an
+unrouted `merge_group` (F3) fail **loudly** rather than silently green. Keep it.
+
+**Divergence from precedent, recorded:** the precedent folds "no work in scope" into a
+single `skipped` arm; this script needs two distinct in-scope axes (`directories` for the
+terraform matrix, `suite_relevant` for the cross-file guard surface — R3), which is why the
+table has two separate zero-work rows rather than one.
+
+### Precedent diff — `merge_group` routing (Phase 2.2)
+
+Both sibling required workflows handle `merge_group` as an **explicit first branch**, not
+as a fall-through: `tenant-integration.yml` `detect-changes` (`if [[ "$EVENT_NAME" == "merge_group" ]]` → `tenant=false`,
+aggregator PASSes via the `suite=skipped` path) and `apply-sentry-infra.yml:99-102`
+(same shape, `sentry=false`). Both carry a written rationale that the heavy suite already
+ran authoritatively on the PR pre-queue and that `secrets.*` may be absent on a
+GITHUB_TOKEN-authored `merge_group` event. **Copy this shape verbatim** — it is why F3 is a
+P0 rather than a nice-to-have.
+
+### Verification ledger
+
+Every load-bearing negative and attribution claim in this plan was probed. All confirmed;
+none contradicted.
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| `scripts/post-bot-statuses.sh` has zero callers | confirms | only self-references at `:2,5,22` |
+| `tests/scripts/*.sh` not globbed; `plugins/soleur/test/*` is | confirms | `scripts/test-all.sh:316` glob; `:198` comment; hand-registered `run_suite` at `:201,207,212,217` |
+| `test-scripts` shard has no bun/node pin | confirms | `ci.yml:522-526` comment + no `setup-bun`/`setup-node` in `:522-577` |
+| `topLevelKeys()` is column-0 only | confirms | `observability-schema-parity.test.ts:48-53`, `^([a-z_]+):` |
+| Merge queue disabled | confirms | `ruleset-ci-required.tf:36` — comment only, no live block |
+| `check-secrets` + `deploy-script-tests` have no `needs:`/`if:` | confirms | `infra-validation.yml:285-294`, `:706-716` |
+| `infra-validate-required` early-`exit 0` on `$DIRS == "[]"` | confirms | `infra-validation.yml:264-283` — the F1 defect, quoted |
+| `preflight-diff-files.txt` holds filenames | confirms | `preflight/SKILL.md:35` `git diff --name-only`; 12 consumers all treat it as a path set |
+| `rejectReason` fuses ssh + subst | confirms | `discoverability-test-parser.ts:165-173`, single call site `:204` |
+| `tenant-integration-gate-verdict.sh` is a fail-closed allow-list | confirms | `:26` allow row, `:31-32` catch-all, `:14-17` rationale |
+| #6458 / #6745 / #4148 | MERGED PRs, roles match | `gh pr view` |
+| #6480 open; #5780 / #6049 / #6454 / #6446 / #4012 / #5145 / #6604 closed issues, roles match | confirms | `gh issue view` |
+| ADR-130 is next free | confirms | derived from **freshly-fetched `origin/main`**; highest existing is ADR-129 |
+| Labels `chore`, `priority/p3-low` exist | confirms | `gh label list` |
+| AGENTS rule IDs cited are active | confirms | `hr-observability-as-plan-quality-gate`, `hr-no-ssh-fallback-in-runbooks`, `cq-test-fixtures-synthesized-only`, `hr-weigh-every-decision-against-target-user-impact` all present in `AGENTS.md` |
+| Marker resolvable outside planning artifacts | confirms | `apps/web-platform/infra/workspaces-cutover.sh`, `workspaces-luks-loopback.test.sh` |
+
+### Gate dispositions
+
+- **Phase 4.5 (network-outage): not applicable.** The keyword scan matches `ssh`/`unreachable`
+  only inside §R7 and §F2, which discuss Check 10's **SSH reject regex** — a string-matching
+  rule, not a connectivity symptom. No `terraform apply` on a resource carrying
+  `provisioner "file"` / `"remote-exec"` / a `connection { type = "ssh" }` block. False trigger.
+- **Phase 4.55 (downtime & cutover): not triggered, but the discipline was applied anyway.**
+  No infra reboot/replace, no lock-taking DDL, no deploy/router restructure — no serving
+  surface goes offline. The *developer* surface (merge capability) does carry an availability
+  risk, and the A/B split with the AC24 verification gate is precisely the zero-downtime
+  cutover shape that phase asks for: stage the new capability, verify it live, then switch.
+- **Phase 4.8 (PAT-shaped): pass.** No `var.*_token` / `TF_VAR_GITHUB_*` / literal token
+  shapes. The ruleset change reuses `var.actions_integration_id` (an integer app id, not a
+  credential); auth is the existing GitHub App via Doppler `prd_terraform`.
+- **Phase 4.9 (UI wireframe): not applicable.** The `components/**/*.tsx` /
+  `app/**/page.tsx` matches in this plan are inside the Product/UX Gate's own *negation*
+  prose, not in §Files to Edit or §Files to Create. No UI surface.
+- **Scheduled-work pattern check: not applicable.** No new scheduled job. The `push:`
+  trigger is an event trigger on an existing workflow, not a cron; the nightly `schedule:`
+  alternative is explicitly rejected in §Alternatives Considered.
+
+### Implementation notes surfaced by research
+
+- **The verdict script's `detect ≠ success ⇒ 1` row doubles as the merge_group safety net.**
+  If Phase 2.2's routing is ever regressed, `detect-changes` fails on the empty `base_ref`
+  and the aggregator reds loudly instead of passing green. Two independent defences for F3.
+- **`substRejectReason` must keep the precedent's full message string.** The existing text
+  enumerates every rejected token (`;, &&, ||, |, >, <, &, $var, $(, \`, <(, >()`) and is
+  what an operator sees on a FAIL. Preserve it verbatim when splitting the function —
+  message-string drift on a helper split is a known operator-dashboard regression class.
+- **`rejectReason` has exactly one call site** (`:204`), so the split is low-risk: keep a
+  thin back-compat wrapper only if an external consumer appears in `git grep rejectReason`.
+- **`git diff --name-only` includes deletions**, so any path-list consumer must tolerate
+  missing files. Guardrail 4 sidesteps this entirely by using `git grep` over the tree at
+  HEAD rather than iterating the diff's path list.
 
 ## Sharp Edges
 

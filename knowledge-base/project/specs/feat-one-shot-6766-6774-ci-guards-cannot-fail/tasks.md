@@ -29,9 +29,12 @@ Threshold: `single-user incident` → `requires_cpo_signoff: true`, `user-impact
 - [ ] 1.2 Add `detect_suite_relevant()` mirror
   - [ ] 1.2.1 `restart-inngest-server.yml`-only diff → `true` (T4 — the R3 under-trigger trap)
   - [ ] 1.2.2 docs-only diff → `false` (T5)
-- [ ] 1.3 New `tests/scripts/test-infra-validate-gate-verdict.sh` (T13–T17), modelled on the tenant precedent
+- [ ] 1.3 New `tests/scripts/test-infra-validate-gate-verdict.sh` (T13–T17), modelled on `tests/scripts/test-tenant-integration-gate-verdict.sh`
+  - Signature under test: `infra-validate-gate-verdict.sh <detect_result> <validate_result> <deploy_result> <directories> <suite_relevant>` (5 args — the precedent takes 2; see plan §Research Insights for the 6-row allow-list table)
   - [ ] 1.3.1 **T14 is load-bearing**: `dirs='[]' suite_relevant=true deploy=failure` ⇒ FAIL
   - [ ] 1.3.2 T17: unenumerated state (e.g. `cancelled`) ⇒ FAIL (allow-list, fail-closed)
+  - [ ] 1.3.3 `detect ≠ success` ⇒ FAIL — inherited from the precedent; doubles as the second defence for unrouted `merge_group` (F3)
+  - [ ] 1.3.4 Empty-string arg ⇒ FAIL (precedent covers this explicitly)
 - [ ] 1.4 Register the new suite via `run_suite` in `scripts/test-all.sh` (`tests/scripts/*.sh` is NOT globbed)
 
 ## Phase 2 — GREEN: detect-changes routing + suite_relevant (PR A)
@@ -46,7 +49,7 @@ Threshold: `single-user incident` → `requires_cpo_signoff: true`, `user-impact
 - [ ] 3.2 Workflow-level `concurrency:` group + `cancel-in-progress: true` + rationale (F7)
 - [ ] 3.3 Gate `deploy-script-tests` on `suite_relevant`; leave `check-secrets` **ungated** (F8)
 - [ ] 3.4 `plan` job — add `github.event_name == 'pull_request'` to its `if:`
-- [ ] 3.5 Create `scripts/infra-validate-gate-verdict.sh` (fail-closed allow-list) and have `infra-validate-required` delegate to it, replacing the inline early-`exit 0` step (F1). Add `deploy-script-tests` to its `needs:`. Update the stale "DO NOT make this required yet" comment
+- [ ] 3.5 Create `scripts/infra-validate-gate-verdict.sh` — 5 positional args, fail-closed allow-list per the plan's §Research Insights table, `chmod +x`, mirroring `scripts/tenant-integration-gate-verdict.sh` (loud `::error::` on every unenumerated combination incl. empty string). Have `infra-validate-required` delegate to it, **replacing** the inline early-`exit 0` step (F1). Add `deploy-script-tests` to its `needs:`. Update the stale "DO NOT make this required yet" comment
 
 ## Phase 5 — RED: kind fixtures + tests (PR A)
 
