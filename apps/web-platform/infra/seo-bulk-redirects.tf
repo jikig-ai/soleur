@@ -36,7 +36,7 @@
 #
 # The authoritative permission set is the `cf_api_token_rulesets` description in
 # variables.tf (the scope ledger) — do not re-enumerate it here. There is no
-# Terraform-managed path for CF API-token permission grants; see ADR-128 for the
+# Terraform-managed path for CF API-token permission grants; see ADR-130 for the
 # widen-vs-mint decision test and the mandatory retained-scope probe set.
 #
 # Provider is pinned cloudflare/cloudflare 4.52.7 (~> 4.0) — ALL HCL below uses v4

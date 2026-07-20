@@ -6,7 +6,7 @@ issue: 6755
 supersedes: null
 ---
 
-# ADR-128: Cloudflare token widen vs. narrow alias
+# ADR-130: Cloudflare token widen vs. narrow alias
 
 ## Context
 

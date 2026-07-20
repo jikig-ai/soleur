@@ -102,7 +102,7 @@
 # `Config Rules:Edit` (zone, soleur.ai) was appended to the token on 2026-07-20
 # and the same probe now returns 200. Note the UI spells the permission
 # `Config Rules`, NOT "Configuration Rules". The decision test behind widening
-# the existing token rather than minting an alias is ADR-128.
+# the existing token rather than minting an alias is ADR-130.
 #
 # Per that decision test the EXISTING token is widened rather than a new
 # `cf_api_token_config_rules` alias minted. Widening moves no secret material
@@ -115,7 +115,7 @@
 # already depend on, a retained-scope probe set is MANDATORY after this widen
 # and after any future re-scope of this token: http_config_settings,
 # http_request_dynamic_redirect, http_request_cache_settings, and the
-# account-level rulesets endpoint must all return non-403. See ADR-128 for the
+# account-level rulesets endpoint must all return non-403. See ADR-130 for the
 # probe set and issue #6755 for the recorded results.
 #
 # ── PREREQUISITE 2: entrypoint adoption — SATISFIED via the import block ─────

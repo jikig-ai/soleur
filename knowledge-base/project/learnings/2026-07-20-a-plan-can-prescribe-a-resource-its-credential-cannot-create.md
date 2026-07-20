@@ -42,7 +42,7 @@ cause to the permission.
 
 The widen-vs-mint decision that followed was an architecture fork with two
 contradictory in-repo precedents and no stated rule, so it routed to the `cto`
-agent and became **ADR-128**.
+agent and became **ADR-130**.
 
 ## Key Insight
 
@@ -68,7 +68,7 @@ before the first apply of any new phase.
 ## Session Errors
 
 **Plan prescribed a resource its credential could not create.** — Recovery:
-live probe at /work; CTO ruling; ADR-128; widen tracked in #6755, PR held in
+live probe at /work; CTO ruling; ADR-130; widen tracked in #6755, PR held in
 draft. — Prevention: at plan time, when a change targets a new API phase or
 surface, probe the credential against it with a known-granted control probe.
 Routed as a bullet to the `plan` skill.
@@ -98,7 +98,7 @@ assertions while violating the property* — that prompt is what produced all fi
 **Doc comments asserted a post-merge state as accomplished fact.** Three agents
 independently flagged `the token was WIDENED`, a scope ledger listing a
 permission the token does not hold, and citations to an ADR that did not exist.
-— Recovery: rewritten in pending tense naming #6755; ADR-128 written. —
+— Recovery: rewritten in pending tense naming #6755; ADR-130 written. —
 Prevention: documented class (present-tense claims for post-merge state); the
 cheap gate is to grep new prose for state verbs and ask "is this true at merge,
 and true if the post-merge step never runs?"
@@ -119,7 +119,7 @@ MCP disconnected mid-session; `agent-browser` then failed three distinct ways
 with `DISPLAY` and `WAYLAND_DISPLAY` both set, so not a headless problem. —
 Recovery: classified `attempted-blocked-on-tool` (NOT operator-only) per the
 work skill, filed #6755 with attempt evidence + a resume recipe. — Prevention:
-the capability gap is real and named in ADR-128 — there is no first-party skill
+the capability gap is real and named in ADR-130 — there is no first-party skill
 for Cloudflare token scope changes, because `soleur:provision-cloudflare` mints
 *tenant* tokens via a resource requiring `User API Tokens:Edit`, which no Soleur
 token holds. Third ad-hoc dashboard trip on record (#6657, #6649, #6755).

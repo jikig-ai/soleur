@@ -120,7 +120,7 @@ provider "cloudflare" {
 #     on the marketing hosts; needed a Config Rules:Edit widen, 2026-07-20 GSC
 #     "Not found (404)" on /cdn-cgi/l/email-protection)
 #
-# Decision rule for the next phase added here: ADR-128. Summary — a permission
+# Decision rule for the next phase added here: ADR-130. Summary — a permission
 # in the SAME API family (the zone/account rulesets endpoints) widens THIS
 # token; a distinct API surface (R2 object storage, zone settings) mints a
 # narrow alias. The ADR weighs both axes (least-privilege AND the Terraform

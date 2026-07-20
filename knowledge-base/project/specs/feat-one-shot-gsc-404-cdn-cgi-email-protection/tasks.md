@@ -119,7 +119,7 @@ merge-triggered apply rather than just this resource.
       (Playwright MCP) worked on re-attempt this session, so #6755's premise no longer
       holds — this was NOT operator-only. Two notes for any future re-scope:
       - The UI labels the permission **`Config Rules`**, not "Configuration Rules".
-        ADR-128's "probe, never trust the permission label" warning is why this was
+        ADR-130's "probe, never trust the permission label" warning is why this was
         found by enumerating the option list rather than by typing a guessed name.
       - The dashboard edit form **prefills all existing permission rows** and exposes an
         `Add more` button, so this path is an APPEND, not a replace. Verified by reading
