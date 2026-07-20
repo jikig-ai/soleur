@@ -133,6 +133,15 @@ jobs:
           #     .github/workflows/apply-inngest-rls.yml
           #     .github/workflows/apply-inngest-rls-dev.yml
           #
+          #   ANTI-BYPASS (#6766). The verdict script IS the gate: SUITE_RE
+          #   selecting for it is what stops a PR that edits ONLY the verdict
+          #   from landing with suite_relevant=false, taking the "nothing in
+          #   scope" PASS row, and never running the suite that proves the
+          #   verdict still fails closed. tenant-integration.yml anchors its own
+          #   verdict script for exactly this reason ("gate logic now lives in
+          #   both"); this is the same precedent applied here.
+          #     scripts/infra-validate-gate-verdict.sh
+          #
           #   (#3366) supabase-advisor/scan-workflow.test.sh reads all of
           #   these. The guard's whole job is to catch a gate that looks
           #   present but does nothing — so a guard that cannot fire when its
@@ -153,7 +162,7 @@ jobs:
           #
           # Kept byte-identical to SUITE_RE in the mirror unit test, which
           # asserts that equality (a prose-only sync would drift silently).
-          SUITE_RE='^(apps/[^/]+/infra/|infra/|\.github/scripts/validate-infra-templates\.sh$|\.github/scripts/test/fixtures-validate-infra-templates\.sh$|\.github/workflows/(infra-validation|restart-inngest-server|apply-inngest-rls|apply-inngest-rls-dev|scheduled-supabase-advisor-scan|apply-sentry-infra)\.yml$|scripts/supabase-advisor-scan\.sh$|apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan\.ts$|knowledge-base/engineering/architecture/diagrams/model\.c4$)'
+          SUITE_RE='^(apps/[^/]+/infra/|infra/|\.github/scripts/validate-infra-templates\.sh$|\.github/scripts/test/fixtures-validate-infra-templates\.sh$|\.github/workflows/(infra-validation|restart-inngest-server|apply-inngest-rls|apply-inngest-rls-dev|scheduled-supabase-advisor-scan|apply-sentry-infra)\.yml$|scripts/(supabase-advisor-scan|infra-validate-gate-verdict)\.sh$|apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan\.ts$|knowledge-base/engineering/architecture/diagrams/model\.c4$)'
 
           # merge_group FIRST, and as an explicit branch rather than a
           # fall-through: github.base_ref is EMPTY on merge_group, so reaching
