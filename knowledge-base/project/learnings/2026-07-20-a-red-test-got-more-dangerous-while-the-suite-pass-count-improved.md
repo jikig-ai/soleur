@@ -80,7 +80,9 @@ probe, which is the strictly less dangerous of the two locations.
 2. **The precondition was assumed, never measured.** Nothing checked whether the harness could
    *produce* an ownership refusal. Two mechanisms were tried — a foreign uid (65534) and
    `GIT_TEST_ASSUME_DIFFERENT_OWNER=1`, a git **test-suite knob with no compatibility promise** —
-   and neither fires on the runner.
+   and neither fired on the runner. The cause was neither of them and was found only once the probe
+   printed its own inputs: the runner image ships `safe.directory = *` in the SYSTEM gitconfig, so
+   git allowed every directory and no ownership check could fire under any mechanism. See Prevention.
 3. **One fixture per case, for logic that is about counts.** A threshold cannot be tested by a
    population of one.
 4. **A dead regex alternative.** Measuring all seven alternatives of `_FSCK_SETUP_FATAL_RE` found
@@ -96,7 +98,12 @@ probe, which is the strictly less dangerous of the two locations.
   instead of git's ownership heuristics. `L6e` already proves the same wiring against **real** git
   via `fatal: bad config`, uid-independently.
 - Arm (ii) downgraded from "proves `-c safe.directory=` is load-bearing" to a health control, and
-  the `ok()` string says so.
+  the `ok()` string says so. The real proof lives in **L6m** (below), which the probe made possible.
+- New **L6m** — the load-bearing proof, against **real** git, in CI. Once ambient config is
+  neutralized the refusal fires on the runner, so two runs over the same foreign-uid repo differing
+  only in `-c safe.directory=` (absent → `probe_failed` + abort; present → `ok`) attribute the
+  rescue to the flag and nothing else. Gated on L6k-CAP, so a host that genuinely cannot produce a
+  refusal skips with a note instead of failing environmentally.
 - **L6k-CAP** measures the host's ownership-check capability every run and, on a host that CAN
   produce H1, **asserts real git's refusal still matches `_FSCK_SETUP_FATAL_RE`** — re-joining the
   contract that synthesizing forked, at zero flake cost where the host cannot.
