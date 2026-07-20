@@ -187,6 +187,107 @@ else
   check "$rc" 0 "two-stage mutation makes the multi-line echo PASS (single-pass is load-bearing)"
 fi
 
+# ---------------------------------------------------------------------------
+# 8-12 — the ZERO-ROW mitigations (AC14b).
+#
+# Tests 1-7 all run `run_probe`, which is `env -i` with only BETTERSTACK_QUERY_*
+# and discards stdout. So GH_TOKEN/SENTRY_AUTH_TOKEN are ALWAYS unset there and
+# every zero-row run takes the two "skipped/unavailable" arms — the Sentry
+# DIVERGENCE branch and the STALLED branch were reachable code that no fixture
+# ever executed, and no arm's output was asserted at all.
+#
+# That is the same defect class this suite already guards twice over: a branch
+# whose green proves nothing about the property it names. Both mitigations exit
+# 2 exactly like the plain TRANSIENT, so an exit-code-only harness structurally
+# CANNOT tell them apart — these arms must assert on stdout.
+#
+# Hermeticity is preserved: the stubs are explicit files in a sandbox-local
+# bin/ prepended to PATH inside the same `env -i`, never an ambient binary.
+
+# Install stub `gh` / `curl` into the sandbox and run with tokens set,
+# capturing stdout. Passing a token here is what selects the live arm.
+run_probe_out() { # run_probe_out <dir> <gh-stub-body> <curl-stub-body>
+  local dir="$1" gh_body="$2" curl_body="$3"
+  mkdir -p "$dir/bin"
+  printf '#!/usr/bin/env bash\n%s\n' "$gh_body" > "$dir/bin/gh"
+  printf '#!/usr/bin/env bash\n%s\n' "$curl_body" > "$dir/bin/curl"
+  chmod +x "$dir/bin/gh" "$dir/bin/curl"
+  ( cd "$dir" && env -i \
+      PATH="$dir/bin:$PATH" HOME="$HOME" \
+      BETTERSTACK_QUERY_HOST=h \
+      BETTERSTACK_QUERY_USERNAME=u \
+      BETTERSTACK_QUERY_PASSWORD=p \
+      GH_TOKEN=t SENTRY_AUTH_TOKEN=s \
+      bash scripts/followthroughs/anthropic-admin-key-6297.sh 2>&1 )
+}
+
+# Assert a substring is present (or absent) in captured stdout.
+check_out() { # check_out <haystack> <needle> <label>
+  if grep -qF -- "$2" <<<"$1"; then pass "$3"; else fail "$3 — stdout lacked: $2"; fi
+}
+check_no_out() { # check_no_out <haystack> <needle> <label>
+  if grep -qF -- "$2" <<<"$1"; then fail "$3 — stdout unexpectedly had: $2"; else pass "$3"; fi
+}
+
+GH_ZERO='echo 0'
+CURL_ZERO='echo "{\"data\":[{\"count()\":0}]}"'
+
+# 8 — Sentry reports events while Better Stack has none: the shipping path is
+#     broken. This is failure mode #5, invisible to the Sentry cron monitor.
+f=$(mktemp -t ft.XXXXXXXX); : > "$f"
+d=$(make_sandbox "$f")
+out=$(run_probe_out "$d" "$GH_ZERO" 'echo "{\"data\":[{\"count()\":42}]}"')
+check_out "$out" "DIVERGENCE: Sentry shows 42 event(s) in 48h" "zero rows + Sentry events → DIVERGENCE reported"
+check_out "$out" "shipping path is dropping rows" "DIVERGENCE names the shipping path as the fault"
+
+# 9 — Sentry reports zero. Must NOT be stated as evidence the cron is dead:
+#     the tag is emitted only on the dark branch, so 0 is consistent with a
+#     healthy cron whose rows are not shipping.
+f=$(mktemp -t ft.XXXXXXXX); : > "$f"
+d=$(make_sandbox "$f")
+out=$(run_probe_out "$d" "$GH_ZERO" "$CURL_ZERO")
+check_out "$out" "NOT decisive" "zero rows + zero Sentry events → hedged, not concluded"
+check_no_out "$out" "DIVERGENCE" "zero Sentry events does not claim DIVERGENCE"
+
+# 10 — Sentry auth failure must read as inconclusive, NOT as a substantive
+#      zero. `--fail` on the curl is the single thing that makes this true, so
+#      the stub MODELS REAL CURL rather than hardcoding a non-zero exit:
+#      given a 401, real curl WITHOUT --fail prints the error body and exits 0
+#      (jq then maps {"detail":"Invalid token"} through `// 0` to a false
+#      "0 events"), and WITH --fail exits 22 printing nothing. A stub that just
+#      `exit 22`s passes either way and proves nothing about the flag.
+CURL_401='if [[ " $* " == *" --fail "* ]]; then exit 22; fi
+echo "{\"detail\":\"Invalid token\"}"'
+f=$(mktemp -t ft.XXXXXXXX); : > "$f"
+d=$(make_sandbox "$f")
+out=$(run_probe_out "$d" "$GH_ZERO" "$CURL_401")
+check_out "$out" "Sentry cross-check inconclusive" "Sentry 401 → inconclusive, not a substantive zero"
+check_no_out "$out" "NOT decisive" "a 401 does not render the zero-events verdict"
+
+# 11 — the stall bound actually fires. A probe that shrugs identically forever
+#      is the decayed-dark-state defect #6297 exists to remove.
+f=$(mktemp -t ft.XXXXXXXX); : > "$f"
+d=$(make_sandbox "$f")
+out=$(run_probe_out "$d" 'echo 9' "$CURL_ZERO"); rc=$?
+check_out "$out" "STALLED: 9 consecutive sweeps" "9 prior zero-row sweeps → STALLED fires"
+# Still TRANSIENT, never FAIL — STALLED escalates attention, not the verdict.
+check "$rc" 2 "STALLED still exits 2 (attention, not verdict)"
+
+# 11b — boundary: 6 prior sweeps is below the >=7 bound and must stay silent,
+#       so the threshold is pinned rather than "any positive count fires".
+f=$(mktemp -t ft.XXXXXXXX); : > "$f"
+d=$(make_sandbox "$f")
+out=$(run_probe_out "$d" 'echo 6' "$CURL_ZERO")
+check_no_out "$out" "STALLED" "6 prior sweeps → below the >=7 bound, stays silent"
+
+# 12 — a dead counter must sentinel loudly. `|| echo 0` as the failure path
+#      would make a broken counter look identical to "first sweep" forever.
+f=$(mktemp -t ft.XXXXXXXX); : > "$f"
+d=$(make_sandbox "$f")
+out=$(run_probe_out "$d" 'exit 1' "$CURL_ZERO")
+check_out "$out" "Stall counter query FAILED" "gh failure → loud sentinel, not a silent 0"
+check_no_out "$out" "STALLED" "a failed counter does not also claim STALLED"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "All fixtures passed."

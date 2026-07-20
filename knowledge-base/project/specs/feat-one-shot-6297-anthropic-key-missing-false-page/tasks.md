@@ -151,8 +151,21 @@ Issue: #6297 · Branch: `feat-one-shot-6297-anthropic-key-missing-false-page` ·
 - [x] 6.2 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-anthropic-cost-report.test.ts`
       exits 0.
 - [ ] 6.3 Full-suite exit gate.
-- [ ] 6.4 Walk all pre-merge ACs (AC1–AC19, incl. AC14b/AC14c). Confirm AC6 and AC10 use the `if … grep -q` / `if grep …` forms,
+- [x] 6.4 Walk all pre-merge ACs (AC1–AC19, incl. AC14b/AC14c). Confirm AC6 and AC10 use the `if … grep -q` / `if grep …` forms,
       not `grep -c` (exit-status inversion).
+      **Walked. AC1–AC19 all MET; AC20–AC23 are post-merge (they need a producer row / post-fix
+      Sentry events / a sweeper run).** Two started NOT MET and were fixed rather than waived:
+      **AC1** — the RED existed but not *in the PR body*, where AC1 requires it; now added.
+      **AC14b** — the Sentry `DIVERGENCE` and `STALLED` branches were reachable but *unexercised*:
+      `run_probe` is `env -i` with only `BETTERSTACK_QUERY_*`, so both tokens were always unset and
+      every zero-row fixture took the "skipped/unavailable" arm, with stdout discarded to
+      `/dev/null`. Both mitigations exit 2 exactly like a plain TRANSIENT, so an exit-code-only
+      harness cannot tell them apart. Closed with 11 stdout-asserting fixtures (8–12) driven by
+      sandbox-local `gh`/`curl` stubs, mutation-proven three ways.
+      **`grep -c` question: clean.** AC6 (`if … grep -qE`) and AC10 (`if grep -vE … | grep -nE`)
+      both specify the `if`-tested form. Every `grep -c` in the shipped scripts captures stdout
+      into a variable (`ROWS=$(… grep -c . || true)`, `HAS_OK=$(… grep -c '^ok$' || true)`) which
+      then drives an arithmetic test — no `grep -c` exit status is tested anywhere.
 - [x] 6.5 `bash -n` the probe; run the AC12 negative control (probe must not exit 0 against a window
       whose only matches are the webhook echo).
 - [x] 6.6 PR body uses **`Ref #6297`**, not `Closes #6297`.
