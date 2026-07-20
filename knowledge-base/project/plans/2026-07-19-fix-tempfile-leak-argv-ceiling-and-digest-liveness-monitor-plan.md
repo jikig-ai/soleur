@@ -177,8 +177,8 @@ time on a defect that lives elsewhere.
 fixes are internal tooling, CI, and observability. No user data, credentials, or
 customer-facing surface is touched. The tempfile fix strictly *reduces* residue left on disk.
 
-**Brand-survival threshold:** `aggregate pattern` — the harm is cumulative operator blindness
-and misattributed engineering time, not a single-user incident.
+- **Brand-survival threshold:** `aggregate pattern` — the harm is cumulative operator blindness
+  and misattributed engineering time, not a single-user incident.
 
 ---
 
