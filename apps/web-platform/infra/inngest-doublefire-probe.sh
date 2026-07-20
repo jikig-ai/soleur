@@ -103,10 +103,20 @@ _pf_sanitize() {
 # DSN can appear in a DB errors[].message on the pool-pressure path this probe targets;
 # the SOLEUR_* markers enum-map it, the FATAL/ERROR diagnostics scrub it. stdin→stdout.
 _pf_scrub() {
-  LC_ALL=C tr -d '\000-\037\177' \
-    | sed $'s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g' \
+  # Control chars are translated to SPACE, not deleted. Deleting them WELDS
+  # adjacent tokens (`host=db.X` + newline + `password=Y` -> one token), which
+  # defeats every separator-based rule below. Translating preserves the
+  # log-injection guarantee (no raw newline reaches journald) AND keeps tokens
+  # separated. (#6617)
+  LC_ALL=C tr '\000-\037\177' '[ *]' \
+    | sed $'s/\xc2\x85/ /g; s/\xe2\x80\xa8/ /g; s/\xe2\x80\xa9/ /g' \
     | sed -E -e 's#[a-zA-Z][a-zA-Z0-9+.-]*://[^[:space:]"]*#<uri-redacted>#g' \
-             -e 's#[A-Za-z0-9._%+-]+:[^[:space:]"@/]*@[A-Za-z0-9.-]+#<cred-redacted>#g'
+             -e 's#[A-Za-z0-9._%+-]+:[^[:space:]"@/]*@[A-Za-z0-9.-]+#<cred-redacted>#g' \
+             -e 's#[A-Za-z0-9-]*\.?[a-z0-9]{16,}\.supabase\.co#<db-host-redacted>#g' \
+             -e 's#(password|pgpassword)[[:space:]]*=[[:space:]]*\\*"[^"\\]*\\*"#\1=<redacted>#gI' \
+             -e 's#(password|pgpassword)[[:space:]]*=[[:space:]]*'"'"'[^'"'"']*'"'"'#\1=<redacted>#gI' \
+             -e 's#(password|pgpassword)[[:space:]]*=[^[:space:]",;\\]*#\1=<redacted>#gI' \
+             -e 's#(^|[[:space:]])(host|hostaddr|port|dbname|user|password|sslmode|sslrootcert|connect_timeout|application_name|target_session_attrs)=[^[:space:]"]*(([[:space:]]|\\[nrt])+(host|hostaddr|port|dbname|user|password|sslmode|sslrootcert|connect_timeout|application_name|target_session_attrs)=[^[:space:]"]*)+#\1<dsn-redacted>#g'
 }
 _pf_marker() {
   logger -t "$LOG_TAG" "$(_pf_sanitize "$1")" 2>/dev/null || true
@@ -138,8 +148,14 @@ build_request_body() {
   local after_json="null"
   [[ -n "$after" ]] && after_json=$(jq -nc --arg a "$after" '$a')
   # functionIDs: JSON array from the CSV (empty CSV ⇒ [] ⇒ all functions).
+  # `printf '%s\n'` (NOT '%s') is load-bearing: with an empty CSV, '%s' emits
+  # ZERO BYTES, so `jq -R` has no line to read and emits NOTHING — fn_ids_json
+  # becomes "" and the --argjson below aborts with "invalid JSON text passed to
+  # --argjson". That is the DEFAULT path (op=verify 2.6 passes no FUNCTION_IDS),
+  # so the exactly-once check returned HTTP 500 rather than a verdict. The
+  # trailing newline gives jq -R an empty line to split into []. (#6617)
   local fn_ids_json
-  fn_ids_json=$(printf '%s' "$FUNCTION_IDS_CSV" | jq -Rc 'split(",") | map(select(length > 0))')
+  fn_ids_json=$(printf '%s\n' "$FUNCTION_IDS_CSV" | jq -Rc 'split(",") | map(select(length > 0))')
   local until_json="null"
   [[ -n "$UNTIL_TS" ]] && until_json=$(jq -nc --arg u "$UNTIL_TS" '$u')
   jq -nc \
@@ -160,13 +176,18 @@ build_request_body() {
 #   $1=out_file $2=after $3=page $4=max_time
 _fetch_runs_page() {
   local out="$1" after="$2" page_num="$3" max_time="$4"
+  # Build the body BEFORE the fixture short-circuit (#6617). The seam used to
+  # return above this line, so every fixture-driven test bypassed request
+  # construction entirely — which is exactly how the empty-CSV --argjson abort
+  # shipped green and only surfaced as a live HTTP 500. Constructing first costs
+  # one jq call per fixture page and puts ~15 existing tests on the real path.
+  local body
+  body=$(build_request_body "$after")
   if [[ -n "$FIXTURE_DIR" ]]; then
     cat "${FIXTURE_DIR}/page-${page_num}.json" > "$out"
     _last_curl_exit=0
     return 0
   fi
-  local body
-  body=$(build_request_body "$after")
   if curl -s --max-time "$max_time" --connect-timeout "$CONNECT_TIMEOUT" \
        -X POST -H "Content-Type: application/json" \
        --data-binary "$body" "$GQL_URL" > "$out"; then
@@ -191,7 +212,7 @@ run_probe() {
   # RETURN) so the loud-abort `exit 1` branches still clean the spool.
   trap "rm -rf '$pf_tmp'" EXIT
   local spool="$pf_tmp/runs.spool" resp_file="$pf_tmp/runs.resp"
-  local after="" page=1 resp has_next end_cursor all_runs
+  local after="" page=1 resp has_next end_cursor
   local timed_out=0 last_curl_exit=0 now elapsed remaining
   : > "$spool"
   while :; do
@@ -246,18 +267,39 @@ run_probe() {
       break
     fi
   done
-  # Collapse all spooled per-page arrays into one flat run array via file input.
-  all_runs=$(jq -s 'add // []' "$spool")
+  # Collapse all spooled per-page arrays into one flat run array — file IN, file OUT.
+  #
+  # ARGV CEILING (#6736). The collapsed set stays in a FILE and is never round-tripped
+  # through a shell variable on its way to jq. It used to land in $all_runs and be bound
+  # as `--argjson r "$all_runs"` on the final emit, which made the entire paginated run
+  # set ONE argv argument; the kernel caps a SINGLE argv argument at
+  # MAX_ARG_STRLEN = 131,072 B — verified by bisect on this host: 131,071 B passes,
+  # 131,072 B fails E2BIG. That is NOT `getconf ARG_MAX` (2,097,152 B, the argv+envp
+  # total); a payload at 6% of ARG_MAX still dies.
+  #
+  # This was the #5523 defect re-introduced ONE LINE AFTER its own fix: the loop above
+  # spools every page to disk precisely to avoid an argv-sized accumulator (see the
+  # "no argv size limit — the #5523 pattern" comment on the spool), and then the final
+  # emit handed the whole thing back to execve. The spool bought nothing.
+  #
+  # The bound is the page ceiling ($MAX_PAGES × $PAGE_SIZE runs), not anything about
+  # bytes, so it was never safe: at the default page budget the run set can exceed
+  # 131,072 B long before MAX_PAGES is reached, and the failure lands on the LOUD path
+  # (exit non-zero → webhook non-200) only by luck — `jq` dying on E2BIG here would
+  # surface as a probe crash, not as the deliberate TIMEOUT marker.
+  local runs_file="$pf_tmp/runs.json"
+  jq -s 'add // []' "$spool" > "$runs_file"
   _pf_pages=$(( _pf_pages + page ))
 
   # Observability summary (count ONLY, never run bodies) → journald only.
   local run_count
-  run_count=$(echo "$all_runs" | jq 'length')
+  run_count=$(jq 'length' "$runs_file")
   logger -t "$LOG_TAG" "doublefire probe: runs=$run_count from=$FROM_TS until=${UNTIL_TS:-<open>}" 2>/dev/null || true
   _pf_done_marker
 
   # Single pure-JSON object on stdout (the webhook body the workflow jq-parses).
-  jq -nc --argjson r "$all_runs" '{runs:$r}'
+  # File input, so the run array never crosses execve.
+  jq -c '{runs: .}' "$runs_file"
 }
 
 # Run only when executed directly — sourcing (unit tests) must NOT hit the network.

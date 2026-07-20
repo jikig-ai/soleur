@@ -1,0 +1,146 @@
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+#
+# Override justification — READ THIS BEFORE "FIXING" THIS FILE ONTO INNGEST.
+#
+# ADR-033 makes Inngest the canonical substrate for scheduled work, and it is
+# right for ~51 of the repo's ~60 scheduled jobs. This workflow is a deliberate
+# exception, and the reason is the entire point of the detector it runs.
+#
+# THE SUBJECT UNDER OBSERVATION IS INNGEST ITSELF. This job watches the nine
+# committed-file cron producers — every one of them an Inngest cron. Scheduling
+# the watchdog on Inngest would mean a wedged, crash-looping, or unregistered
+# Inngest server stops the crons AND stops the detector that is supposed to
+# notice, in the same instant. The failure would be perfectly correlated with
+# the thing being detected, and the alert would simply never fire. That is not a
+# hypothetical: it is the shape of the gap ADR-126 was written to close, where a
+# handler-local monitor reported healthy about itself for six days.
+#
+# It is also the general lesson of #6737: THE REPORTER MUST NOT BE THE SUBJECT.
+# Every handler-local remedy considered for this cohort — consuming
+# safeCommitAndPr's return value, adding a `livenessOk` flag, emitting more
+# markers — is authored by, and executes inside, the very handler under
+# suspicion. This job runs on GitHub's scheduler, reads GitHub's git history,
+# and shares no process, host, queue, or dependency with Inngest.
+#
+# PRECEDENT — this is an established pattern here, not a one-off escape:
+#   * .github/workflows/scheduled-inngest-health.yml states in its own header
+#     that it is "the EXTERNAL probe that runs independently of inngest",
+#     written after the #5542 ~3.5h silent crash-loop that no internal cron
+#     could report.
+#   * .github/workflows/scheduled-zot-restart-loop.yml is the same class.
+#
+# IT ALSO MEETS ADR-033's OWN STATED EXCEPTION. The work is purely git/repo
+# scoped: it reads commit history on the default branch. No app context, no app
+# secrets, no database, no Inngest event. It gains nothing from `step.run`
+# memoization or Inngest replay, and it must not inherit Inngest's availability.
+#
+# Tracks #6737. Detector: scripts/cron-artifact-age.sh (unit-tested in
+# scripts/cron-artifact-age.test.sh). Decision record: ADR-126.
+
+name: "Scheduled: Cron Artifact Age"
+
+on:
+  schedule:
+    # Daily at 06:00 UTC — ahead of the earliest cohort producer
+    # (cron-growth-audit, `0 7 * * 1`), so a staleness verdict is already
+    # visible before the day's producers run. Per-cron thresholds are derived
+    # inside the detector from each cron's OWN schedule; this cadence is only
+    # the sampling rate, never the staleness window. A daily sample says nothing
+    # about a monthly cron, and the detector is what keeps those separate.
+    - cron: '0 6 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: scheduled-cron-artifact-age
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  artifact-age:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Full history: the detector measures days since each producer last landed
+      # its artifact, and a shallow clone would report every producer as NEVER —
+      # a detector that is loud for a reason unrelated to the defect is as
+      # useless as one that is silent.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - id: age
+        run: |
+          set -uo pipefail
+          # The detector exits 1 when any producer is STALE. That is a verdict,
+          # not a job failure, so the exit status is captured rather than left
+          # to abort the step before the reporting logic below can run.
+          REPORT="$(bash scripts/cron-artifact-age.sh --all 2>&1)"; RC=$?
+          printf '%s\n' "$REPORT"
+          {
+            echo "rc=$RC"
+            echo "report<<CRON_AGE_EOF"
+            printf '%s\n' "$REPORT"
+            echo "CRON_AGE_EOF"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Report staleness
+        if: steps.age.outputs.rc != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REPORT: ${{ steps.age.outputs.report }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # Deduped: one open tracking issue per staleness episode, commented on
+          # rather than re-filed. Mirrors scheduled-inngest-health.yml's
+          # find-existing-then-comment pattern.
+          #
+          # DELIBERATELY NOT `action-required`. That queue is 28 items deep with
+          # its oldest from 2026-03-12, and #4375 ("competitive-analysis has not
+          # fired in 36 days") has sat in it since 2026-05-24. Appending a 29th
+          # item to a queue with a measured 0% response rate on this exact
+          # finding is an append, not an escalation. The label below is a
+          # machine-readable CI signal; escalation is reconciled with #4375 by a
+          # human, once a defer-corrected diagnosis exists.
+          LABEL="ci/cron-artifact-stale"
+          TITLE="[CI] Cron artifact staleness detected"
+          BODY="$(printf '%s\n\n```\n%s\n```\n\nDetector: `scripts/cron-artifact-age.sh --all` (ADR-126 follow-up, #6737).\nMeasured from git history on the default branch — independent of Inngest and of the handlers themselves.\nRun: %s\n' \
+            "One or more committed-file cron producers exceeded the threshold derived from its own schedule." \
+            "$REPORT" "$RUN_URL")"
+
+          gh label create "$LABEL" --repo "$GH_REPO" \
+            --description "cron-artifact-age.sh: a producer exceeded its schedule-derived threshold" \
+            --color BFD4F2 2>/dev/null || true
+
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label "$LABEL" --state open \
+            --json number --jq '.[0].number // empty' 2>/dev/null || true)
+
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY"
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label "$LABEL" --body "$BODY"
+          fi
+
+          # Fail the job so the workflow's own status is a second, dashboard-free
+          # surface for the same verdict.
+          exit 1
+
+      - name: Close stale tracking issue when all producers recover
+        if: steps.age.outputs.rc == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          RECOVERED=$(gh issue list --repo "$GH_REPO" --label ci/cron-artifact-stale \
+            --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [[ -n "$RECOVERED" ]]; then
+            gh issue close "$RECOVERED" --repo "$GH_REPO" \
+              --comment "All 9 cron producers are within their schedule-derived thresholds again. Run: $RUN_URL"
+          fi

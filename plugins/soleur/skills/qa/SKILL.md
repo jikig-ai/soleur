@@ -3,6 +3,10 @@ name: qa
 description: "This skill should be used when running functional QA before merge."
 ---
 
+<!-- lifecycle-handoff-protocol:start -->
+**Lifecycle handoff (standalone `/qa`):** When no parent orchestrator (`one-shot`, `work`) owns the pipeline, invoke `/compound` then `/ship` after the QA report — do not end at the report. A PASS is a checkpoint, not completion. If a recorded operator ruling already authorizes shipping (a scope ruling in `session-state.md`, an explicit instruction), proceed under `wg-verified-work-ships-without-asking` rather than pausing to re-confirm — held scope that was never implemented has no files to carry along and is not a reason to halt.
+<!-- lifecycle-handoff-protocol:end -->
+
 # Functional QA
 
 Verify that features actually work before merge -- not just that pages render, but that forms submit correctly, external services receive the right data, and data integrity holds across system boundaries.

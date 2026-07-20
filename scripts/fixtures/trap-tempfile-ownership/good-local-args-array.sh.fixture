@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# A local args array built and consumed inside a $()-invoked function. NOT a cleanup
+# array, no EXIT trap owns it. This is the discord-setup.sh / git-data-pre-receive.test.sh
+# shape that an over-broad rule (a) flagged. It must never be flagged.
+set -euo pipefail
+do_request() {
+  local method="$1" data="$2"
+  local curl_args=(-s -X "$method")
+  if [[ -n "$data" ]]; then
+    curl_args+=(-d "$data")
+  fi
+  curl "${curl_args[@]}" https://example.invalid
+}
+out=$(do_request GET "")
+echo "$out"

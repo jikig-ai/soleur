@@ -177,6 +177,240 @@ test_rp_marker_tag_in_vector() {
   else echo "  FAIL: tag NOT in vector.toml"; FAIL=$((FAIL+1)); fi
 }
 
+# ===========================================================================
+# #6295 — _pf_scrub must redact the libpq KEYWORD-CONNSTRING DSN form
+#
+# The two original rules cover the URI form (scheme://…) and the credential
+# form (user:pass@host). The libpq keyword form carries NEITHER a scheme nor
+# an `@`, so a DSN in a GraphQL errors[].message leaked the prd Supabase
+# project ref straight into stdout (the Actions run log) and stderr.
+#
+# All fixtures are SYNTHESIZED (cq-test-fixtures-synthesized-only) — the ref
+# below is a fixed non-existent 20-char string, never a real project ref.
+# ===========================================================================
+
+# A synthetic project ref: same shape as a real Supabase ref (20 lowercase
+# letters) but not allocated to any project.
+SYNTH_REF="qzwxecrvtbynumikolpa"
+
+# Drive a DSN-bearing GraphQL error envelope through the REAL _pf_scrub call
+# site (run_probe's non-array branch at inngest-registry-probe.sh:107), and
+# capture stdout and stderr SEPARATELY so each can be asserted independently.
+# $1 = the errors[].message string to embed.
+run_probe_errmsg() {
+  local msg="$1" fixture out err rc
+  fixture=$(mktemp); out=$(mktemp); err=$(mktemp)
+  jq -nc --arg m "$msg" '{errors:[{message:$m}],data:null}' > "$fixture"
+  set +e
+  INNGEST_PROBE_FUNCTIONS_FIXTURE="$fixture" bash "$TARGET" > "$out" 2> "$err"
+  rc=$?
+  set -e
+  # rc is expected non-zero (fail-loud branch); the payload is what we assert.
+  RP_OUT=$(cat "$out"); RP_ERR=$(cat "$err"); RP_RC=$rc
+  rm -f "$fixture" "$out" "$err"
+}
+
+# --- #6295 T1: libpq keyword form — ref must leak to NEITHER stdout nor stderr ---
+test_pf_scrub_libpq_keyword_form() {
+  echo "TEST: _pf_scrub — libpq keyword-connstring DSN is redacted (#6295)"
+  run_probe_errmsg "connection to server failed: host=db.${SYNTH_REF}.supabase.co port=5432 dbname=postgres user=postgres password=hunter2sentinel"
+
+  if ! grep -qF "$SYNTH_REF" <<<"$RP_OUT"; then echo "  PASS: synthetic ref absent from stdout"; PASS=$((PASS+1));
+  else echo "  FAIL: synthetic ref LEAKED to stdout"; FAIL=$((FAIL+1)); fi
+  if ! grep -qF "$SYNTH_REF" <<<"$RP_ERR"; then echo "  PASS: synthetic ref absent from stderr"; PASS=$((PASS+1));
+  else echo "  FAIL: synthetic ref LEAKED to stderr"; FAIL=$((FAIL+1)); fi
+  # The password must not survive either.
+  if ! grep -qF "hunter2sentinel" <<<"$RP_OUT$RP_ERR"; then echo "  PASS: password absent from both streams"; PASS=$((PASS+1));
+  else echo "  FAIL: password LEAKED"; FAIL=$((FAIL+1)); fi
+  # Fail-loud contract still holds — the redaction must not swallow the exit code.
+  if [[ "$RP_RC" -ne 0 ]]; then echo "  PASS: still fails loud (rc=$RP_RC)"; PASS=$((PASS+1));
+  else echo "  FAIL: expected non-zero exit on the error branch"; FAIL=$((FAIL+1)); fi
+  # POSITIVE CONTROL (F4): absence-only assertions pass just as happily when the
+  # redaction DESTROYS the diagnostic as when it scrubs it. A rule widened to
+  # nuke the whole line would satisfy every assertion above. Pin the surrounding
+  # prose so scrub-vs-annihilate are distinguishable.
+  if grep -qF "connection to server failed" <<<"$RP_OUT"; then echo "  PASS: diagnostic prose survived the redaction"; PASS=$((PASS+1));
+  else echo "  FAIL: redaction ANNIHILATED the diagnostic (over-redaction, not scrubbing)"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6295 T2: over-redaction control through the REAL call site ---
+# v1 of this plan used a SOLEUR_* marker as the control, but markers reach
+# _pf_sanitize and never _pf_scrub — that control tested an impossible path
+# and would have passed against any implementation. This drives benign
+# diagnostic prose through the same errors[].message seam as T1.
+test_pf_scrub_no_over_redaction() {
+  echo "TEST: _pf_scrub — benign diagnostic text survives intact (over-redaction control)"
+  run_probe_errmsg "function sync incomplete: 3 of 7 handlers registered, retry scheduled"
+
+  for token in "function sync incomplete" "3 of 7 handlers registered" "retry scheduled"; do
+    if grep -qF "$token" <<<"$RP_OUT"; then echo "  PASS: preserved \"$token\""; PASS=$((PASS+1));
+    else echo "  FAIL: over-redacted \"$token\""; FAIL=$((FAIL+1)); fi
+  done
+}
+
+# --- #6295 T3: a LONE libpq keyword must NOT trigger redaction (A-AC3) ---
+# The rule requires >=2 co-occurring keywords. A single `host=` in prose is
+# ordinary diagnostic text and must survive; redacting it would be the
+# over-redaction failure the co-occurrence requirement exists to prevent.
+test_pf_scrub_lone_keyword_not_redacted() {
+  echo "TEST: _pf_scrub — a lone libpq keyword does not trigger redaction"
+  run_probe_errmsg "resolver could not determine host=unset for the upstream pool"
+
+  if grep -qF "host=unset" <<<"$RP_OUT"; then echo "  PASS: lone host= survived"; PASS=$((PASS+1));
+  else echo "  FAIL: lone host= was redacted (over-redaction)"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6295 T4: the two ORIGINAL rules still redact (no regression) ---
+test_pf_scrub_original_rules_intact() {
+  echo "TEST: _pf_scrub — URI and credential forms still redacted (no regression)"
+  run_probe_errmsg "dial failed for postgresql://postgres:pw@db.${SYNTH_REF}.supabase.co:5432/postgres"
+  if ! grep -qF "$SYNTH_REF" <<<"$RP_OUT$RP_ERR"; then echo "  PASS: URI form still redacted"; PASS=$((PASS+1));
+  else echo "  FAIL: URI form REGRESSED"; FAIL=$((FAIL+1)); fi
+
+  run_probe_errmsg "auth rejected for postgres:secretpw@db.${SYNTH_REF}.supabase.co"
+  if ! grep -qF "$SYNTH_REF" <<<"$RP_OUT$RP_ERR"; then echo "  PASS: credential form still redacted"; PASS=$((PASS+1));
+  else echo "  FAIL: credential form REGRESSED"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6295 T6: ENCODING-SHAPE regression battery (the leaks the first cut missed) ---
+#
+# The original rule required >=2 libpq keywords separated by [[:space:]]+, and
+# every fixture used the ONE shape it was written against: space-separated,
+# unquoted values. Three encodings defeated it, all verified leaking BEFORE the
+# fix (ref AND password reaching stdout + stderr):
+#
+#   A2  jq -c re-encodes a real newline as the two-character escape \n, which
+#       [[:space:]] cannot match; the greedy value class then swallowed the
+#       whole remainder as ONE token so the co-occurrence group never fired.
+#   A3  same for \t.
+#   B1  a double quote TERMINATES [^[:space:]"]*, so a legal double-quoted
+#       libpq value killed the chain at the first keyword.
+#   E   the sibling raw path (doublefire/inventory) used tr -d on newlines,
+#       WELDING host=X and password=Y into one token — same failure, opposite
+#       cause. Fixed by translating control chars to SPACE instead of deleting.
+#
+# Each case asserts BOTH the project ref and the password are absent.
+test_pf_scrub_encoding_shapes() {
+  echo "TEST: _pf_scrub — encoding-shape battery (json-escaped / quoted / welded)"
+  local -a cases=(
+    "A2-json-newline|connection failed:\\nhost=db.${SYNTH_REF}.supabase.co\\npassword=hunter2sentinel"
+    "A3-json-tab|failed: host=db.${SYNTH_REF}.supabase.co\\tpassword=hunter2sentinel"
+    "B1-json-quoted|failed: host=\\\"db.${SYNTH_REF}.supabase.co\\\" password=\\\"hunter2sentinel\\\""
+    "B3-single-quoted|failed: host='db.${SYNTH_REF}.supabase.co' password='hunter2sentinel'"
+    "D-lone-host|host=db.${SYNTH_REF}.supabase.co"
+    "F-uppercase-kw|failed: HOST=db.${SYNTH_REF}.supabase.co PASSWORD=hunter2sentinel"
+    # RAW control bytes (F3): the cases above are all JSON-ESCAPED forms handled
+    # by the \\[nrt] alternation — none of them ever reach the `tr` stage. This
+    # one carries a real 0x0A, which is what `tr` exists to neutralise. Deleting
+    # the tr stage must redden the suite.
+    "G-raw-newline|$(printf 'failed:\nhost=db.%s.supabase.co\npassword=hunter2sentinel' "$SYNTH_REF")"
+    "H-raw-esc|$(printf 'failed:\x1bhost=db.%s.supabase.co\x1bpassword=hunter2sentinel' "$SYNTH_REF")"
+    "I-u2028|$(printf 'failed:\u2028host=db.%s.supabase.co\u2028password=hunter2sentinel' "$SYNTH_REF")"
+  )
+  local n=0 entry label msg
+  for entry in "${cases[@]}"; do
+    label="${entry%%|*}"; msg="${entry#*|}"
+    run_probe_errmsg "$msg"
+    n=$((n+1))
+    if ! grep -qF "$SYNTH_REF" <<<"$RP_OUT$RP_ERR"; then echo "  PASS: $label — ref redacted"; PASS=$((PASS+1));
+    else echo "  FAIL: $label — ref LEAKED"; FAIL=$((FAIL+1)); fi
+    if ! grep -qF "hunter2sentinel" <<<"$RP_OUT$RP_ERR"; then echo "  PASS: $label — password redacted"; PASS=$((PASS+1));
+    else echo "  FAIL: $label — password LEAKED"; FAIL=$((FAIL+1)); fi
+  done
+  # Minimum-cardinality guard: an empty case array must not pass vacuously.
+  if [[ "$n" -eq "${#cases[@]}" && "$n" -ge 9 ]]; then echo "  PASS: all $n encoding shapes exercised"; PASS=$((PASS+1));
+  else echo "  FAIL: only $n shape(s) exercised"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6295 T7: over-redaction controls for the WIDENED rules ---
+# The hardened rules redact more aggressively (a lone supabase host, any
+# password=). These pin the boundary so the widening cannot creep into
+# ordinary diagnostics.
+test_pf_scrub_widened_over_redaction() {
+  echo "TEST: _pf_scrub — widened rules do not over-redact ordinary diagnostics"
+  local -a controls=(
+    "upstream_host=web1 port=8080 healthcheck returned 200"
+    "myhost=alpha xuser=beta"
+    "resolver could not determine host=unset for the upstream pool"
+  )
+  local c
+  for c in "${controls[@]}"; do
+    run_probe_errmsg "$c"
+    if grep -qF "$c" <<<"$RP_OUT"; then echo "  PASS: preserved \"${c:0:40}...\""; PASS=$((PASS+1));
+    else echo "  FAIL: over-redacted \"$c\" -> $RP_OUT"; FAIL=$((FAIL+1)); fi
+  done
+}
+
+# --- #6295 T8: RAW control bytes, driven straight into _pf_scrub ---
+#
+# The encoding battery above cannot reach the `tr` stage: run_probe_errmsg
+# builds its fixture with `jq --arg`, which RE-ENCODES a real 0x0A back into
+# the two-character escape \n. So every "raw" case arrives escaped, and
+# deleting the tr stage entirely left the suite green.
+#
+# This harness pipes raw bytes directly into the extracted _pf_scrub, which is
+# the only way to exercise the stage that unwelds control-separated tokens.
+# Deleting `tr` must redden this block.
+scrub_raw() {
+  printf '%b' "$1" | (
+    eval "$(sed -n '/^_pf_scrub() {$/,/^}$/p' "$TARGET")"
+    _pf_scrub
+  )
+}
+
+test_pf_scrub_raw_control_bytes() {
+  echo "TEST: _pf_scrub — RAW control bytes reach the tr stage (#6617)"
+  # Harness liveness: the extraction must yield a callable function.
+  local probe; probe=$(scrub_raw 'plain text' 2>/dev/null || true)
+  if [[ "$probe" == "plain text" ]]; then echo "  PASS: raw harness is live"; PASS=$((PASS+1));
+  else echo "  FAIL: raw harness is vacuous (got '$probe')"; FAIL=$((FAIL+1)); fi
+
+  local -a raw=(
+    "RAW-newline|failed:\nhost=db.${SYNTH_REF}.supabase.co\npassword=hunter2sentinel"
+    "RAW-tab|failed:\thost=db.${SYNTH_REF}.supabase.co\tpassword=hunter2sentinel"
+    "RAW-esc|failed:\x1bhost=db.${SYNTH_REF}.supabase.co\x1bpassword=hunter2sentinel"
+    "RAW-vtab|failed:\vhost=db.${SYNTH_REF}.supabase.co\vpassword=hunter2sentinel"
+  )
+  local n=0 e label msg out
+  for e in "${raw[@]}"; do
+    label="${e%%|*}"; msg="${e#*|}"; n=$((n+1))
+    out=$(scrub_raw "$msg")
+    if ! grep -qF "$SYNTH_REF" <<<"$out"; then echo "  PASS: $label — ref redacted"; PASS=$((PASS+1));
+    else echo "  FAIL: $label — ref LEAKED ($out)"; FAIL=$((FAIL+1)); fi
+    if ! grep -qF "hunter2sentinel" <<<"$out"; then echo "  PASS: $label — password redacted"; PASS=$((PASS+1));
+    else echo "  FAIL: $label — password LEAKED ($out)"; FAIL=$((FAIL+1)); fi
+    # No raw control byte may survive into a journald/stdout line.
+    if ! grep -qP '[\x00-\x1f\x7f]' <<<"$out" 2>/dev/null; then echo "  PASS: $label — no control byte survives"; PASS=$((PASS+1));
+    else echo "  FAIL: $label — control byte SURVIVED (log-injection risk)"; FAIL=$((FAIL+1)); fi
+  done
+  if [[ "$n" -eq "${#raw[@]}" && "$n" -ge 4 ]]; then echo "  PASS: all $n raw shapes exercised"; PASS=$((PASS+1));
+  else echo "  FAIL: only $n raw shape(s)"; FAIL=$((FAIL+1)); fi
+}
+
+# --- #6295 T5: PERMANENT identity guard across all three _pf_scrub copies ---
+# The function is triplicated across the three cutover-path probes. The cost
+# of triplication is DRIFT; this test converts that from silent divergence
+# into a mechanical check. Extraction is deferred until a fourth consumer
+# appears (see the tracking issue in the PR body).
+test_pf_scrub_bodies_byte_identical() {
+  echo "TEST: _pf_scrub — all three copies byte-identical (anti-drift guard)"
+  local files=(inngest-registry-probe.sh inngest-doublefire-probe.sh inngest-inventory.sh)
+  local ref_body="" f body n=0
+  for f in "${files[@]}"; do
+    local path="$SCRIPT_DIR/$f"
+    if [[ ! -f "$path" ]]; then echo "  FAIL: missing $f"; FAIL=$((FAIL+1)); continue; fi
+    body=$(sed -n '/^_pf_scrub() {$/,/^}$/p' "$path")
+    if [[ -z "$body" ]]; then echo "  FAIL: no _pf_scrub body extracted from $f"; FAIL=$((FAIL+1)); continue; fi
+    n=$((n+1))
+    if [[ -z "$ref_body" ]]; then ref_body="$body"; continue; fi
+    if [[ "$body" == "$ref_body" ]]; then echo "  PASS: $f identical to reference"; PASS=$((PASS+1));
+    else echo "  FAIL: $f DRIFTED from reference"; FAIL=$((FAIL+1)); fi
+  done
+  # Minimum-cardinality guard: an empty/unreadable file set must not pass vacuously.
+  if [[ "$n" -eq "${#files[@]}" ]]; then echo "  PASS: all ${#files[@]} copies extracted"; PASS=$((PASS+1));
+  else echo "  FAIL: extracted only $n of ${#files[@]} copies"; FAIL=$((FAIL+1)); fi
+}
+
 echo "=== inngest-registry-probe.sh test suite ==="
 test_empty_registry
 test_nonempty_registry
@@ -188,6 +422,14 @@ test_rp_markers_journald_only
 test_rp_start_on_failure
 test_rp_connect_timeout_no_loop
 test_rp_marker_tag_in_vector
+test_pf_scrub_libpq_keyword_form
+test_pf_scrub_no_over_redaction
+test_pf_scrub_lone_keyword_not_redacted
+test_pf_scrub_original_rules_intact
+test_pf_scrub_encoding_shapes
+test_pf_scrub_raw_control_bytes
+test_pf_scrub_widened_over_redaction
+test_pf_scrub_bodies_byte_identical
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

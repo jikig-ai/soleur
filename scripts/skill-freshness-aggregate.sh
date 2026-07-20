@@ -98,7 +98,21 @@ total_skills=$(echo "$inventory_json" | jq -r 'length')
 # irrelevant — the parser computes `last_invoked` and counts from the
 # event-level `ts`/`skill` fields.
 INVOCATIONS_TMPDIR=$(mktemp -d)
-trap 'rm -rf "$INVOCATIONS_TMPDIR"' EXIT
+# SINGLE OWNING TRAP (#6734). Bash allows exactly ONE EXIT trap per shell -- registering a
+# second one SILENTLY REPLACES the first, it does not chain. This script previously did
+# both: a later `trap 'rm -f "$OUT.tmp"' EXIT` in the write block dropped ownership of
+# INVOCATIONS_TMPDIR, and a trailing `trap - EXIT` then cleared cleanup entirely. Net
+# effect: the SUCCESS path leaked the tmpdir every time it wrote a report.
+#
+# So this trap owns BOTH artifacts for the life of the process. Do not add another
+# `trap … EXIT` anywhere in this file; extend the cleanup function instead.
+# `$OUT.tmp` is removed unconditionally -- rm -f on a nonexistent path is a no-op, and
+# after a successful `mv` there is nothing left to remove.
+_sfa_cleanup() {
+  rm -rf "$INVOCATIONS_TMPDIR"
+  rm -f "$OUT.tmp"
+}
+trap _sfa_cleanup EXIT
 INVOCATIONS_MERGED="$INVOCATIONS_TMPDIR/invocations-merged.jsonl"
 : > "$INVOCATIONS_MERGED"
 [[ -f "$INVOCATIONS" && -s "$INVOCATIONS" ]] && cat "$INVOCATIONS" >> "$INVOCATIONS_MERGED"
@@ -150,6 +164,26 @@ if [[ -s "$INVOCATIONS_MERGED" ]]; then
   fi
 
   if [[ -n "$parsed_records" ]]; then
+    # LOAD-BEARING BOUND (#6736): this `group_by(.skill)` COLLAPSE is what keeps
+    # $invocations_json off the argv ceiling downstream. $parsed_records is the raw
+    # invocation log — one record per skill invocation, unbounded and monotonically
+    # growing across the active file plus every rotated archive. group_by + the map
+    # below reduce it to EXACTLY ONE ROW PER DISTINCT SKILL (94 today), each a fixed
+    # ~90 B {skill, last_invoked, invocation_count} triple, so the result is ~8 KB and
+    # is bounded by the SKILL INVENTORY, not by invocation volume.
+    #
+    # That matters because $invocations_json is later bound as
+    # `--argjson invocations "$invocations_json"` on the report jq — ONE argv argument,
+    # and the kernel caps a SINGLE argv argument at MAX_ARG_STRLEN = 131,072 B (verified
+    # by bisect on this host: 131,071 B passes, 131,072 B fails E2BIG; NOT `getconf
+    # ARG_MAX`, which is 2,097,152 B here — 6% of ARG_MAX still dies).
+    #
+    # The comment is HERE, at the producer, and not at that --argjson consumer, because
+    # the consumer is safe only as a CONSEQUENCE of this collapse. Anyone who widens the
+    # projection to keep per-invocation rows (e.g. dropping group_by to emit a timeline,
+    # or adding a `records: .` passthrough) moves the payload back onto invocation count
+    # and the report dies with `Argument list too long` — at which point the fix is to
+    # spool to a file and bind `--rawfile … | fromjson` (see scripts/domain-model-drift.sh).
     invocations_json=$(printf '%s' "$parsed_records" \
                        | jq -s -c 'group_by(.skill)
                                    | map({
@@ -267,11 +301,12 @@ if [[ -f "$OUT" ]]; then
 fi
 
 if [[ "$write" == "1" ]]; then
-  trap 'rm -f "$OUT.tmp"' EXIT
+  # No `trap … EXIT` here and no `trap - EXIT` after: the single owning trap registered
+  # with INVOCATIONS_TMPDIR already covers "$OUT.tmp" (#6734). Re-adding one here would
+  # silently replace that trap and reinstate the tmpdir leak on the success path.
   echo "$report" > "$OUT.tmp"
   jq empty "$OUT.tmp" >/dev/null 2>&1 || { echo "ERROR: tmp file malformed (try --dry-run to inspect output)" >&2; exit 5; }
   mv "$OUT.tmp" "$OUT" || { echo "ERROR: mv $OUT.tmp -> $OUT failed (check filesystem permissions)" >&2; exit 6; }
-  trap - EXIT
   echo "Wrote $OUT (total_skills=$(jq -r '.summary.total_skills' < "$OUT"), idle_180d=$(jq -r '.summary.idle_180d' < "$OUT"), idle_365d=$(jq -r '.summary.idle_365d' < "$OUT"), never_invoked=$(jq -r '.summary.never_invoked' < "$OUT"))"
 else
   echo "No material change to $OUT"

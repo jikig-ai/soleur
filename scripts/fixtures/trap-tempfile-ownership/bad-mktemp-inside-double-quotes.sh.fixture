@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# A real allocation written inside double quotes, with no owning trap. Rule (c) MUST
+# still fire -- stripping quoted strings would have missed this.
+set -euo pipefail
+work="$(mktemp -d)"
+echo scratch > "$work/f"

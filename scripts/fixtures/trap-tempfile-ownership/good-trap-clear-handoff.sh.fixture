@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+staged=$(mktemp)
+trap 'rm -f "$staged"' EXIT
+echo payload > "$staged"
+mv "$staged" ./final.txt
+trap - EXIT

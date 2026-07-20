@@ -366,10 +366,17 @@ assert "the call site hardcodes no 10.0.1.x literal" \
 # exact catastrophe this gate exists to prevent, arriving through the delivery channel
 # rather than the code.
 #
-# The existing coherence guard (web2-recreate-preflight.sh) CANNOT be reused on the routine
-# path: it hard-requires a pinned repo@sha256 ref and dies on anything else, while
-# var.image_name defaults to the mutable `:latest`. So the safety argument is structural, and
-# the facts it rests on are ASSERTED below rather than assumed.
+# The coherence guard (host-image-coherence-preflight.sh; renamed from
+# web2-recreate-preflight.sh in #6575, comparison logic byte-unchanged) is now HOST-AGNOSTIC and
+# reachable through a documented operator procedure — the host_creates HALT runbook carries the
+# full `crane digest` -> preflight -> `apply -var image_name=<pinned>` chain. What did NOT change
+# is why it cannot be reused on the ROUTINE path: it hard-requires a pinned repo@sha256 ref and
+# dies on anything else, while var.image_name defaults to the mutable `:latest`. So the safety
+# argument on this path is still structural, and the facts it rests on are ASSERTED below rather
+# than assumed. ADR-128 names the split: build-integrity (the image's baked host-scripts match the
+# tree it was built from) is statically enforced in cloud-init-user-data-size.test.ts; cross-commit
+# skew (apply at C_tf while :latest points at C_img) is enforced NOWHERE today, is open under
+# #6712, and needs #6730's digest-pinned birth path.
 #
 # TWO CORRECTIONS to an earlier draft of this block, recorded because the wrong version READ as
 # more reassuring than the right one:
@@ -385,25 +392,31 @@ assert "the call site hardcodes no 10.0.1.x literal" \
 #     tripwire (#6416), which is what is asserted now. The old assertion would have stayed
 #     green with that tripwire deleted.
 #
-# CLOSED (#6718, 2026-07-20). This formerly read as a KNOWN GAP: the warm_standby job -targets
-# hcloud_server_network.web["web-1"], which transitively reaches hcloud_server.web, and its
-# guard set was resource_deletes / nested_deletes / reboot_updates with NO host_creates check —
-# so that path could birth a host on a new bootstrap hash with no coherence preflight. It now
-# carries the same host_creates > 0 HALT as the per-PR apply job, evaluated OUTSIDE the
-# destroy_count sum (no [ack-destroy] bypass). The gap belonged to the apply workflow's guard set
-# rather than to this gate, and it was closed there, not here.
+# CLOSED then DELETED (#6718 2026-07-20, then #6575 2026-07-20). This formerly read as a KNOWN
+# GAP: the warm_standby job -targeted hcloud_server_network.web["web-1"], which transitively
+# reaches hcloud_server.web, and its guard set was resource_deletes / nested_deletes /
+# reboot_updates with NO host_creates check — so that path could birth a host on a new bootstrap
+# hash with no coherence preflight. #6718 closed it by adding the same host_creates > 0 HALT as
+# the per-PR apply job. #6575 then deleted the job outright with the rest of the dead web-2
+# dispatch surface, so the path no longer exists to guard. Recorded rather than deleted because
+# the SEQUENCE is the point: the gap was closed on its merits first, so nothing here depends on
+# the deletion having happened.
 #
-# Still not asserted here, for the original reason: this gate does not pin the warm_standby guard
-# set either way. The HALT is asserted by T51a-e (structure/order) and T52-T54
+# Still not asserted here, for the original reason: this gate does not pin any dispatch job's
+# guard set either way. The surviving HALTs are asserted by T54 (the apply job) and T56 (deploy-pipeline-fix)
 # (BEHAVIOUR — the guard is extracted and executed against real tfplan fixtures,
 # which is what pins `exit 1`, the jq key, and the fail-closed arm) in
 # tests/scripts/test-destroy-guard-counter-web-platform.sh, which lives in the REQUIRED test
 # shard — deliberately, since this file runs only in infra-validation.yml's advisory
 # deploy-script-tests job, and the check guarding a HALT must not be weaker than the HALT.
 #
-# Residual, also not closed here: an operator-driven fresh create/-replace of web-1 consumes
-# the new hash with no preflight. Closing it needs a preflight that works against a mutable
-# tag — different work from this gate.
+# Residual, also not closed here: an operator-driven fresh create/-replace of web-1 consumes the
+# new hash. The coherence preflight IS now reachable for that operator — #6575 made it
+# host-agnostic and wrote the full crane-digest -> verify -> pin chain into the host_creates HALT
+# runbook — but reachability is not enforcement: nothing makes the routine apply path use it,
+# because var.image_name still defaults to the mutable `:latest`. That is ADR-128's cross-commit
+# skew invariant: open under #6712, closable only by #6730's digest-pinned birth path. It is
+# different work from this gate.
 echo ""
 echo "--- AC8: bake/apply coherence — the guard that actually holds ---"
 WF_DIR="$DIR/../../../.github/workflows"
@@ -446,24 +459,22 @@ WEB1_DIRECT=0
 for wf in "$WF_DIR"/*.yml; do
   grep -hoE -- "-target=('?)hcloud_server\.web[^ '\\\\]*" "$wf" 2>/dev/null | tr -d "'" >> "$WORK/targets.txt" || true
 done
-# The ONE legitimate direct target is hcloud_server.web["web-2"], in the web-2-recreate job —
-# the single path that DOES run web2-recreate-preflight.sh, so a create there is coherence-
-# checked. Everything else is a finding: an unindexed `hcloud_server.web` targets every
-# instance including web-1, and an explicit ["web-1"] is the live sole origin.
-grep -v 'hcloud_server\.web\["web-2"\]' "$WORK/targets.txt" > "$WORK/targets-unexpected.txt" || true
-WEB1_DIRECT=$(grep -c 'hcloud_server\.web' "$WORK/targets-unexpected.txt" 2>/dev/null | tr -d ' ' || true)
+# CARVE-OUT REMOVED (#6575, 2026-07-20) — this is the cleanup its own control demanded. The
+# carve-out excluded hcloud_server.web["web-2"] from this scan, because the web-2-recreate job was
+# the ONE legitimate direct target (it ran the coherence preflight, so a create there was checked).
+# A paired control below asserted the web-2 entry was still findable, with the standing instruction
+# "if 0, delete the carve-out" — i.e. once the dead workflow arm was swept, the carve-out becomes
+# dead code to DELETE, not a needle to fix. #6575 swept it: the extractor now finds zero
+# hcloud_server.web targets in any workflow, so the exclusion filter and its control are both gone
+# and the scan is unconditional. Any direct target is now a finding, full stop — an unindexed
+# `hcloud_server.web` targets every instance including web-1, and an explicit ["web-1"] is the
+# live sole origin. This is STRICTLY STRONGER than what it replaces: there is no allowance left
+# that could silently widen into a blanket pass.
+WEB1_DIRECT=$(grep -c 'hcloud_server\.web' "$WORK/targets.txt" 2>/dev/null | tr -d ' ' || true)
 [ -n "$WEB1_DIRECT" ] || WEB1_DIRECT=0
-DIRECT_LIST=$(sort -u "$WORK/targets-unexpected.txt" 2>/dev/null | paste -sd, - || true)
-assert "no workflow -targets hcloud_server.web[web-1] or unindexed, any spelling (found ${WEB1_DIRECT}: ${DIRECT_LIST:-<none>})" \
+DIRECT_LIST=$(sort -u "$WORK/targets.txt" 2>/dev/null | paste -sd, - || true)
+assert "no workflow -targets hcloud_server.web at all, any spelling or index (found ${WEB1_DIRECT}: ${DIRECT_LIST:-<none>})" \
   "[[ '$WEB1_DIRECT' == '0' ]]"
-# Control on the ALLOWANCE, so the carve-out cannot silently become a blanket pass: the web-2
-# entry must still be found by the extractor. If web-2's dead workflow arm is ever cleaned up
-# this goes RED — correctly, because the carve-out above would then be dead code to delete,
-# not a needle to fix.
-WEB2_SEEN=$(grep -c 'hcloud_server\.web\["web-2"\]' "$WORK/targets.txt" 2>/dev/null | tr -d ' ' || true)
-[ -n "$WEB2_SEEN" ] || WEB2_SEEN=0
-assert "control: the web-2 carve-out is still live (found $WEB2_SEEN); if 0, delete the carve-out" \
-  "[[ '$WEB2_SEEN' -ge 1 ]]"
 # Positive control on the EXTRACTOR, not on a retired host's spelling. An earlier draft
 # controlled on the web-2 needle — but web-2 is retired (var.web_hosts holds only web-1), so a
 # future cleanup deleting that dead workflow arm would have RED-ed this suite while the failure

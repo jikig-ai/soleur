@@ -140,6 +140,23 @@ pre-existing web-1 needs a power-off to join. So reboot a **drained, non-serving
    `hr-fresh-host-provisioning-reachable-from-terraform-apply`).
 
 ### web-2 host bootstrap — recreate (autonomous dispatch — PREREQUISITE to warm-standby)
+
+> **SUPERSEDED 2026-07-20 — DO NOT FOLLOW (#6538 retire, #6575 sweep).**
+> web-2 was RETIRED 2026-07-17 (#6538) and is absent from `var.web_hosts`. The two dispatches
+> this section and the next one instruct — `apply_target=web-2-recreate` and
+> `apply_target=warm-standby` — were DELETED from the `apply_target` enum by #6575, so
+> `gh workflow run` now fails with an HTTP 422; there is nothing to recreate and nothing to
+> stand by. **web-1 is the sole web host.**
+>
+> There is NO automated path that births or recreates a web host — every automated route HALTs
+> on `host_creates > 0`, and building one is tracked by
+> [#6730](https://github.com/jikig-ai/soleur/issues/6730). The operator-local birth procedure
+> (resolve a digest, verify image/apply coherence, assert `SENTRY_DSN` is non-empty, apply with
+> `-var image_name=<pinned digest>`) lives in
+> [`web-host-birth.md`](./web-host-birth.md) — read that, not the two sections below.
+>
+> Everything below is retained as the historical record of the #5887 cutover. It is accurate
+> about what happened; it is NOT executable today.
 web-2's ORIGINAL first boot aborted before the webhook-enable step, so its `:9000` listener is
 unbound and the warm-standby fan-out below verifies `ok_peer_fanout_degraded` instead of `ok`.
 web-2 must bind `:9000` FIRST. Because `hcloud_server.web` carries

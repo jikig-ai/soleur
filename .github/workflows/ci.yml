@@ -106,6 +106,22 @@ jobs:
           else
             python3 scripts/lint-infra-no-human-steps.py --changed
           fi
+      # #6734 tempfile-cleanup ownership. Rule (a) subshell-append runs repo-wide;
+      # rule (c) mktemp-with-no-owning-trap is new-entrant-scoped, because the existing
+      # class-b population is an accepted, ratcheted debt (ADR-129).
+      #
+      # ENFORCEMENT LEVEL IS ADVISORY, NOT BLOCKING. This job is absent from BOTH
+      # scripts/required-checks.txt and the Terraform ruleset, so a PR can merge with it
+      # red. That is stated here, in ADR-129, and in the linter's own docstring rather
+      # than left implied -- a gate that claims teeth it lacks is worse than one that
+      # does not, because it stops people looking. Promoting it is a deliberate
+      # follow-up: add the job to required-checks.txt AND the ruleset together.
+      - name: Lint tempfile-cleanup ownership (#6734)
+        run: python3 scripts/lint-trap-tempfile-ownership.py
+      - name: Ratchet the accepted class-b tempfile population
+        run: python3 scripts/lint-trap-tempfile-ownership.py --check-highwater
+      - name: Lint orphan test suites (scripts/*.test.sh must be registered)
+        run: bash scripts/lint-orphan-test-suites.sh
 
   lint-conversations-update-callsites:
     runs-on: ubuntu-latest
@@ -529,7 +545,15 @@ jobs:
       GITLEAKS_VERSION: "8.24.2"
       GITLEAKS_SHA256: "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
     steps:
+      # fetch-depth: 0 — scripts/lint-trap-tempfile-ownership.py scopes rule (c) to
+      # lines added vs the merge base against origin/main. The default shallow
+      # checkout (depth 1) has no origin/main, so `git merge-base` exits 128 and the
+      # linter degrades to an untracked-only scope: it emits nothing, returns 0, and
+      # its own test suite's "should fire" assertions all fail. Full history is what
+      # gives that job the real new-entrant semantics.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
 
       - name: Install gitleaks (pinned, sha-verified)
         run: |
