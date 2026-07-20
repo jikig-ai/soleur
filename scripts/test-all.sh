@@ -161,6 +161,13 @@ if want_scripts; then
   # #6475, and the probe's whole purpose is to be the fail-loud alarm, so a vacuous PASS (or a
   # false FAIL that pages a green codebase) must redden CI here.
   run_suite "scripts/ci-deploy-sentry-post-fail-6475" bash scripts/followthroughs/ci-deploy-sentry-post-fail-6475.test.sh
+  # #6297: exit-code harness for the Anthropic admin-key follow-through. Registered explicitly
+  # (orphan-suite class above). Its load-bearing arm is CONTAMINATION: GitHub webhook payloads
+  # ship into the same Better Stack source from the same app container, so a substring-matching
+  # probe could PASS on an echo of the PR/issue body that merely QUOTES the marker and auto-close
+  # #6297 while the key is still unminted. The suite mutation-proves that guard, so a regression
+  # to structural matching must redden CI rather than silently false-close a tracker.
+  run_suite "scripts/anthropic-admin-key-6297" bash scripts/followthroughs/anthropic-admin-key-6297.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
