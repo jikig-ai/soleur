@@ -20,7 +20,7 @@
 //   - success                           → GREEN heartbeat + the daily marker.
 
 import { inngest } from "@/server/inngest/client";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import {
   postSentryHeartbeat,
   getAnthropicAdminReport,
@@ -40,6 +40,22 @@ const ADMIN_REPORT_TIMEOUT_MS = 30_000;
 // -----------------------------------------------------------------------------
 // Pure parse helpers (unit-tested against synthesized fixtures — AC6/AC6b).
 // -----------------------------------------------------------------------------
+
+// First observed dark fire (Sentry e0e6f356764b4bb6be8b0a8e74898e9f, release
+// web-platform@0.208.0). A frozen historical date, NOT a window start — see the
+// field comment on `days_since_first_dark` in claude-cost-marker.ts. Measured
+// from here rather than process start so a container restart never resets it.
+const FIRST_DARK_FIRE = "2026-07-10";
+
+// Whole UTC days elapsed since FIRST_DARK_FIRE, floored at 0. Pure and
+// inert — nothing branches on the result; it is reporting data only, so a
+// stale reading can never page. Floored so clock skew or a backfill cannot
+// produce a negative count.
+export function daysSinceFirstDark(now: Date = new Date()): number {
+  const first = Date.parse(`${FIRST_DARK_FIRE}T00:00:00Z`);
+  const days = Math.floor((now.getTime() - first) / 86_400_000);
+  return days > 0 ? days : 0;
+}
 
 // `YYYY-MM-DD` for the prior UTC day (the bucket the daily report covers).
 export function priorUtcDay(now: Date = new Date()): string {
@@ -157,18 +173,28 @@ export async function cronAnthropicCostReportHandler({
     // a POSITIVE dark marker so the daily Better Stack surface is positively
     // dark, not absent (obs P4 — an absent row is mis-triageable during the
     // code-merges-first → mint window).
-    reportSilentFallback(null, {
+    const daysDark = daysSinceFirstDark();
+    // WARNING, not ERROR. Sentry derives issue priority from level, and the
+    // operator's "high priority issues" notification rule fires on the derived
+    // priority — so an `error`-level emit here paged daily for a state this
+    // function's own header calls BENIGN (#6297). `warnSilentFallback` still
+    // logs at pino 40, which is exactly Vector's `app_container_warn_filter`
+    // threshold, so the Better Stack marker keeps shipping; an `info`-level
+    // "fix" would have gone dark instead. Mirroring to Sentry at all is
+    // required by cq-silent-fallback-must-mirror-to-sentry.
+    warnSilentFallback(null, {
       feature: CRON_NAME,
       op: "anthropic-admin-key-missing",
       message:
         "ANTHROPIC_ADMIN_KEY unset — daily cost report is dark until the key is provisioned (expected during the mint window)",
-      extra: { fn: CRON_NAME },
+      extra: { fn: CRON_NAME, days_since_first_dark: daysDark },
     });
     emitClaudeCostDailyMarker({
       status: "key-missing",
       date: priorUtcDay(),
       cost_usd: null,
       models: [],
+      days_since_first_dark: daysDark,
     });
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({
