@@ -506,7 +506,12 @@ discoverability_test:  # kind / marker / command (NO ssh) / expected_output
 
 - Section missing entirely.
 - Any required field contains the substring `TODO`, `TBD`, `placeholder`, or `manual operator check` AS THE FIELD VALUE (a fallback note in surrounding prose mentioning TBD is allowed; the canonical "field is empty" reject regex is `^\s*<field>:\s*(TODO|TBD|placeholder|manual operator check)\s*$`).
-- `discoverability_test.command` contains `ssh ` (with trailing space — distinguish "ssh " the verb from "ssh-free" in docs).
+- `discoverability_test.command` contains `ssh ` (with trailing space — distinguish "ssh " the verb from "ssh-free" in docs). **Applies to both kinds — `kind: run-log` never exempts a command from the SSH reject.**
+- `discoverability_test.kind` is present but unparseable (anything other than exactly `live-probe` or `run-log`, indented, Form A). An unrecognised `kind` FAILS — it never falls back to `live-probe`, because the author wrote it believing they had declared something.
+- `discoverability_test.marker` is missing or malformed (`^[A-Za-z0-9_]+$`) under `kind: run-log`.
+- `discoverability_test.marker` is present *without* `kind: run-log` — nothing consumes it, and it signals an author who thinks they declared a run-log test.
+
+Preflight Check 10 adds two more at PR time (they need a repo-wide `git grep`, so they cannot run at authoring time): a `run-log` marker must have a real emitter in the tree outside `knowledge-base/project/{plans,specs}`, and `command` must contain the marker literal. This list mirrors deepen-plan Phase 4.7 — if the two drift, Phase 4.7 is authoritative.
 
 **Skip silently** when:
 
