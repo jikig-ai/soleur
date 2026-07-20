@@ -70,6 +70,7 @@ beforeEach(() => {
   process.env.ANTHROPIC_ADMIN_KEY = "sk-ant-admin01-synthetic";
 });
 afterEach(() => {
+  vi.useRealTimers();
   if (ORIGINAL_KEY === undefined) delete process.env.ANTHROPIC_ADMIN_KEY;
   else process.env.ANTHROPIC_ADMIN_KEY = ORIGINAL_KEY;
 });
@@ -145,6 +146,15 @@ describe("daysSinceFirstDark", () => {
   it("floors at 0 for a date before the constant (clock skew / backfill)", () => {
     expect(daysSinceFirstDark(new Date("2026-07-01T00:00:00Z"))).toBe(0);
   });
+  // The midnight samples above are all exact multiples of 86.4e6, where
+  // floor === ceil === round — so on their own they do NOT pin the flooring
+  // semantics, and Math.ceil satisfies every one of them. These mid-day
+  // samples are the ones that distinguish. 06:17 UTC is the real fire time.
+  it("FLOORS a partial day rather than rounding or ceiling it", () => {
+    expect(daysSinceFirstDark(new Date("2026-07-20T06:17:00Z"))).toBe(10);
+    expect(daysSinceFirstDark(new Date("2026-07-20T23:59:59Z"))).toBe(10);
+    expect(daysSinceFirstDark(new Date("2026-07-10T23:59:59Z"))).toBe(0);
+  });
 });
 
 // -----------------------------------------------------------------------------
@@ -153,6 +163,11 @@ describe("daysSinceFirstDark", () => {
 describe("cronAnthropicCostReportHandler (AC6)", () => {
   it("missing ANTHROPIC_ADMIN_KEY → benign (no page) + a positive key-missing daily marker", async () => {
     delete process.env.ANTHROPIC_ADMIN_KEY;
+    // Pin the clock so days_since_first_dark has one correct value to assert.
+    // 2026-07-10 (FIRST_DARK_FIRE) + 25d = 2026-08-04; the mid-day time also
+    // keeps this sample off the floor/ceil-equivalent midnight boundary.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-04T06:17:00Z"));
     const res = await cronAnthropicCostReportHandler({ step, logger });
     expect(res).toEqual({ ok: true, status: "key-missing" });
     expect(dailyMarkerSpy).toHaveBeenCalledTimes(1);
@@ -162,11 +177,13 @@ describe("cronAnthropicCostReportHandler (AC6)", () => {
       models: [],
     });
     // The dark window carries its own age, so a stale mint is visible in the
-    // marker rather than inferred from the absence of an `ok` row.
-    expect(typeof dailyMarkerSpy.mock.calls[0][0].days_since_first_dark).toBe(
-      "number",
-    );
+    // marker rather than inferred from the absence of an `ok` row. Assert the
+    // VALUE against a pinned clock — a `typeof … === "number"` check is
+    // satisfied by a hardcoded 0, which is exactly the stale-reporting bug
+    // this field exists to prevent.
+    expect(dailyMarkerSpy.mock.calls[0][0].days_since_first_dark).toBe(25);
     // Benign heartbeat (ok:true — NOT a fleet-down page).
+    expect(heartbeatSpy).toHaveBeenCalledTimes(1);
     expect(heartbeatSpy).toHaveBeenCalledWith(
       expect.objectContaining({ ok: true }),
     );
@@ -191,6 +208,7 @@ describe("cronAnthropicCostReportHandler (AC6)", () => {
     getAdminReportSpy.mockRejectedValue(new AnthropicApiError(401, "bad key"));
     const res = await cronAnthropicCostReportHandler({ step, logger });
     expect(res).toEqual({ ok: false, status: "error" });
+    expect(heartbeatSpy).toHaveBeenCalledTimes(1);
     expect(heartbeatSpy).toHaveBeenCalledWith(
       expect.objectContaining({ ok: false }),
     );
@@ -208,6 +226,7 @@ describe("cronAnthropicCostReportHandler (AC6)", () => {
     getAdminReportSpy.mockRejectedValue(new AnthropicApiError(403, "forbidden"));
     const res = await cronAnthropicCostReportHandler({ step, logger });
     expect(res).toEqual({ ok: false, status: "error" });
+    expect(heartbeatSpy).toHaveBeenCalledTimes(1);
     expect(heartbeatSpy).toHaveBeenCalledWith(
       expect.objectContaining({ ok: false }),
     );
@@ -236,6 +255,7 @@ describe("cronAnthropicCostReportHandler (AC6)", () => {
       maxAttempts: 2,
     });
     expect(res).toEqual({ ok: false, status: "error" });
+    expect(heartbeatSpy).toHaveBeenCalledTimes(1);
     expect(heartbeatSpy).toHaveBeenCalledWith(
       expect.objectContaining({ ok: false }),
     );
@@ -268,6 +288,7 @@ describe("cronAnthropicCostReportHandler (AC6)", () => {
     const res = await cronAnthropicCostReportHandler({ step, logger });
     expect(res).toEqual({ ok: true, status: "ok" });
     expect(getAdminReportSpy).toHaveBeenCalledTimes(2);
+    expect(heartbeatSpy).toHaveBeenCalledTimes(1);
     expect(heartbeatSpy).toHaveBeenCalledWith(
       expect.objectContaining({ ok: true }),
     );

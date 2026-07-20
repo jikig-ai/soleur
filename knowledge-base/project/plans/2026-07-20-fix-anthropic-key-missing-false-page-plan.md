@@ -808,7 +808,7 @@ merge, which is why the ordering is convenient but not required.
 
 **Status:** reviewed
 **Assessment:** Core change is a one-symbol severity swap backed by an existing, widely-used helper
-(65 `warnSilentFallback` call sites; `email-on-received.ts:496` is the exact `warnSilentFallback(null, …)`
+(60 `warnSilentFallback` call sites, measured `git grep -n "warnSilentFallback(" -- apps/**/*.ts` minus the definition and tests; `email-on-received.ts:496` is the exact `warnSilentFallback(null, …)`
 shape). The genuine engineering risk is not the swap but the two adjacent traps, both now pinned in
 the plan: (1) the mock factory omission turning a clean assertion failure into a `TypeError`; (2) any
 "fix" that lowers the pino line below level 40, which would silently stop the marker shipping to

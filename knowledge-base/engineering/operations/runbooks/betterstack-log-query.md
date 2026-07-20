@@ -195,10 +195,11 @@ doppler run -p soleur -c prd_terraform -- \
     that extract alone. Any panel or query MUST filter `status='key-missing'`
     **first**.
   - **Field-isolate before trusting a match.** `--grep` is an unanchored
-    `raw LIKE '%…%'`, and Inngest ships GitHub webhook payloads (issue and PR
-    bodies) into this *same* source from the *same* app container — so
-    `source_kind` does not discriminate here and any issue/PR text quoting the
-    marker name will match. A trustworthy producer row has `component` =
+    `raw LIKE '%…%'` over the single Better Stack source every host multiplexes
+    into, and GitHub webhook payloads (issue and PR bodies) reach that source —
+    so any issue/PR text quoting the marker name will match. A structural check
+    is used rather than a `source_kind` filter because it holds regardless of
+    which Vector source an echo arrives on. A trustworthy producer row has `component` =
     `claude-cost` (the pino base field from `claude-cost-marker.ts`) as a
     **top-level key** of the decoded `raw`, not as nested string content. Match
     structurally (decode `raw`, then check top-level keys) rather than by

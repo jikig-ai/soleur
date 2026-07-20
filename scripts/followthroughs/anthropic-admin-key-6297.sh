@@ -48,17 +48,23 @@ done
 OUT=$(bash "$QUERY" --since 48h --grep '"SOLEUR_CLAUDE_COST_DAILY":true' --limit 200 2>&1)
 RC=$?
 if (( RC != 0 )); then
-  echo "TRANSIENT: betterstack-query.sh exited $RC"
-  printf '%s\n' "$OUT" | tail -5
+  # Do NOT echo $OUT. It captured stderr, and betterstack-query.sh uses
+  # `curl --fail-with-body`, so a ClickHouse auth failure prints a body that
+  # echoes the username ("no user with such name: <user>") and curl's own -sS
+  # errors echo the host. The sweeper posts this stdout verbatim as a PUBLIC
+  # comment on #6297, so the exit code is all that may leave this branch.
+  echo "TRANSIENT: betterstack-query.sh exited $RC (output withheld — may contain credentials)"
   exit 2
 fi
 
-# ‼️ ECHO ISOLATION (P0). `--grep` compiles to an unanchored `raw LIKE '%…%'`,
-# and Inngest ships GitHub webhook payloads (issue and PR bodies) into this
-# SAME source from this SAME app container — so `source_kind` cannot
-# discriminate here, and any prose that merely QUOTES the marker name would
-# satisfy a substring probe. This PR body, the issue body, and the sweeper's
-# own comments all quote it.
+# ‼️ ECHO ISOLATION (P0). `--grep` compiles to an unanchored `raw LIKE '%…%'`
+# over the single Better Stack source that every host multiplexes into, and
+# GitHub webhook payloads (issue and PR bodies) reach that source — so any
+# prose that merely QUOTES the marker name could satisfy a substring probe.
+# This PR body, the issue body, and the sweeper's own comments all quote it.
+# (Scoping on `source_kind` is NOT relied on here: the structural check below
+# is strictly stronger and holds regardless of which Vector source the echo
+# arrives on, so no claim is made about where echoes land.)
 #
 # So match STRUCTURALLY, not by substring: decode the `raw` column, parse it as
 # JSON, and require the discriminators to be TOP-LEVEL KEYS. In a webhook echo
@@ -66,9 +72,26 @@ fi
 # field, never as top-level keys of the log line — so an echo cannot satisfy
 # this no matter what it quotes. `component` is the pino base field stamped by
 # the dedicated marker instance (claude-cost-marker.ts).
+#
+# ‼️ SINGLE PASS, DELIBERATELY. An earlier revision piped two `jq -R` stages
+# (decode `raw`, then select). That was exploitable: `jq -r` materializes an
+# embedded `\n` as a REAL newline, so the second `-R` stage re-tokenizes on
+# physical lines and evaluates a line from INSIDE a multi-line `raw` as though
+# it were a top-level log line. A stack trace or journald entry embedding
+# attacker-supplied issue/PR text then satisfies the guard and auto-closes
+# #6297 with the key still unminted — verified end-to-end. Chaining
+# `fromjson? | .raw | fromjson?` inside ONE filter keeps the decoded value a
+# single jq value: the trailing garbage makes `fromjson` fail, and `?` drops
+# the row closed. Do not split this back into two stages.
+# Emit "<dt>\t<status>" and sort on dt HERE rather than trusting the query's
+# output order. betterstack-query.sh does emit an outer `ORDER BY dt ASC`
+# today, but that is a cross-script coupling held by a comment with no
+# enforcement on either side — and if it ever flips, `tail -1` silently reads
+# the OLDEST row, so an active key revocation (ok newest → dark) would invert
+# into PASS and auto-close #6297. The rows already carry dt; use it.
 PRODUCER=$(printf '%s\n' "$OUT" \
-  | jq -R -r 'fromjson? | .raw // empty' 2>/dev/null \
-  | jq -R -r 'fromjson? | select(.SOLEUR_CLAUDE_COST_DAILY == true and .component == "claude-cost") | .status // "unknown"' 2>/dev/null \
+  | jq -R -r 'fromjson? | . as $r | ($r.raw // empty | fromjson? | select(.SOLEUR_CLAUDE_COST_DAILY == true and .component == "claude-cost") | .status // "unknown") as $s | "\($r.dt)\t\($s)"' 2>/dev/null \
+  | LC_ALL=C sort \
   || true)
 
 ROWS=$(printf '%s' "$PRODUCER" | grep -c . || true)
@@ -90,7 +113,10 @@ if (( ROWS == 0 )); then
   else
     SENTRY_HOST="${SENTRY_API_HOST:-jikigai-eu.sentry.io}"
     SENTRY_ORG="${SENTRY_ORG:-jikigai-eu}"
-    SC=$(curl -sS --max-time 25 -G \
+    # --fail is load-bearing: without it curl exits 0 on 4xx and jq's
+    # `(.data[0]["count()"] // 0)` maps an {"detail":"Invalid token"} body to
+    # "0" — so an auth failure would be reported as a substantive zero events.
+    SC=$(curl -sS --fail --max-time 25 -G \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       --data-urlencode 'field=count()' \
       --data-urlencode 'query=op:anthropic-admin-key-missing' \
@@ -100,7 +126,15 @@ if (( ROWS == 0 )); then
     if [[ -z "$SC" ]]; then
       echo "  Sentry cross-check inconclusive (query failed)."
     elif [[ "$SC" == "0" ]]; then
-      echo "  Sentry also shows 0 events in 48h → the producer is not running at all."
+      # Do NOT conclude "the producer is not running". This tag is emitted ONLY
+      # on the dark branch, so a healthy producer whose rows are not shipping
+      # ALSO reads 0 here — which is precisely failure mode #5, the reason this
+      # cross-check exists. A zero is not evidence of absence.
+      echo "  Sentry shows 0 key-missing events in 48h. NOT decisive: this tag is"
+      echo "  emitted only on the dark branch, so this is equally consistent with"
+      echo "  (a) the cron not running, or (b) a healthy cron whose rows are not"
+      echo "  reaching Better Stack. Check the scheduled-anthropic-cost-report"
+      echo "  monitor's check-in history, which is populated on BOTH branches."
     else
       echo "  DIVERGENCE: Sentry shows ${SC} event(s) in 48h but Better Stack has none."
       echo "  → the cron IS running; the Vector→Better Stack shipping path is dropping rows."
@@ -113,9 +147,15 @@ if (( ROWS == 0 )); then
   if [[ -z "${GH_TOKEN:-}" ]]; then
     echo "  Stall counter unavailable: GH_TOKEN not set."
   else
+    # `|| echo 0` must NOT be the failure path: a dead counter would then look
+    # identical to "first sweep" and print nothing forever — the same decayed
+    # silent state this issue exists to remove. Sentinel the failure instead.
     PRIOR=$(gh issue view "$ISSUE" --json comments \
-      --jq '[.comments[] | select(.body | contains("ZERO_PRODUCER_ROWS"))] | length' 2>/dev/null || echo 0)
-    if [[ "$PRIOR" =~ ^[0-9]+$ ]] && (( PRIOR >= 7 )); then
+      --jq '[.comments[] | select(.body | contains("ZERO_PRODUCER_ROWS"))] | length' 2>/dev/null || echo "ERR")
+    if [[ "$PRIOR" == "ERR" || ! "$PRIOR" =~ ^[0-9]+$ ]]; then
+      echo "  Stall counter query FAILED (gh could not read #$ISSUE) — the stall"
+      echo "  bound is not being enforced this run."
+    elif (( PRIOR >= 7 )); then
       echo "  STALLED: ${PRIOR} consecutive sweeps have reported zero producer rows."
       echo "  This is no longer 'not minted yet' — the observability path itself needs attention."
     fi
@@ -123,8 +163,8 @@ if (( ROWS == 0 )); then
   exit 2
 fi
 
-LAST=$(printf '%s\n' "$PRODUCER" | tail -1)   # query emits dt ASC → last is newest
-HAS_OK=$(printf '%s\n' "$PRODUCER" | grep -c '^ok$' || true)
+LAST=$(printf '%s\n' "$PRODUCER" | tail -1 | cut -f2)   # sorted by dt above → newest
+HAS_OK=$(printf '%s\n' "$PRODUCER" | cut -f2 | grep -c '^ok$' || true)
 
 echo "observed ${ROWS} producer row(s) in 48h; most recent status=${LAST}; ok rows=${HAS_OK}"
 
@@ -141,5 +181,9 @@ if (( HAS_OK > 0 )); then
 fi
 
 echo "TRANSIENT: still key-missing — the admin key has not been provisioned yet."
-echo "  See the issue body for the mint + Doppler steps."
+echo "  This state is EXPECTED to persist indefinitely and is deliberately NOT"
+echo "  stall-bounded: the Admin API is unavailable to individual accounts, and"
+echo "  this org is one, so the key cannot be minted until the operator decides"
+echo "  whether to convert to a team organization. Repeating this line is the"
+echo "  correct behaviour, not a decayed probe. See the #6297 body."
 exit 2
