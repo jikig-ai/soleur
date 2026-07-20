@@ -2,12 +2,20 @@
 
 Derived from
 `knowledge-base/project/plans/2026-07-20-fix-gsc-404-cdn-cgi-email-protection-plan.md`
-(post-plan-review). Read the plan's **Sharp Edges** before starting — several encode
-traps a draft of this plan already fell into.
+(post-plan-review + post-deepen-plan).
 
-**Change set is intentionally 2 files.** If you find yourself editing `validate-seo.sh`,
-`apps/web-platform/infra/**`, or adding a `scripts/followthroughs/` probe, stop — all three
-were explicitly cut by plan review. See plan §Files to Edit.
+**Read the plan's Decision and Sharp Edges before starting.** The decision was **reversed
+at deepen-plan**: the remedy is a host-scoped Cloudflare Configuration Rule, **not** a
+`Disallow: /cdn-cgi/` in robots.txt. Google explicitly advises against robots-blocking
+404s, and this repo already has a learning about the trap that creates.
+
+**Do NOT**, under any circumstances:
+
+- add `Disallow: /cdn-cgi/` to `plugins/soleur/docs/robots.txt` (rejected — Option B);
+- disable Email Obfuscation zone-wide via `cloudflare_zone_settings_override` (rejected — Option A);
+- add a `/cdn-cgi/` check to `plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh`
+  (distributed plugin skill; would break consumer sites and the green 21-test suite);
+- add a `scripts/followthroughs/` probe for `api.soleur.ai` (would auto-close #3379).
 
 ---
 
@@ -15,78 +23,94 @@ were explicitly cut by plan review. See plan §Files to Edit.
 
 - [ ] 0.1 Confirm branch: `git branch --show-current` →
       `feat-one-shot-gsc-404-cdn-cgi-email-protection`
-- [ ] 0.2 Confirm the baseline suite is green before touching anything:
-      `bun test plugins/soleur/test/validate-seo.test.ts` → expect **21 pass, 0 fail**.
-      (This suite must still be green at the end — AC5.)
-- [ ] 0.3 Read `plugins/soleur/docs/robots.txt` (3 lines) and
-      `plugins/soleur/test/validate-seo.test.ts` (for the `bun:test` import style to mirror).
-      Per `hr-always-read-a-file-before-editing-it`.
+- [ ] 0.2 Capture the **baseline census** so AC9 has a before/after. Expected today:
+      `/`=0, `/getting-started/`=2, `/pricing/`=1, `/legal/privacy-policy/`=20,
+      `/legal/terms-and-conditions/`=7.
+      ```bash
+      UA="Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+      for p in "" "getting-started/" "pricing/" "legal/privacy-policy/" "legal/terms-and-conditions/"; do
+        n=$(curl -sS -A "$UA" "https://soleur.ai/$p" | grep -o 'cdn-cgi/l/email-protection' | wc -l | tr -d ' ')
+        echo "/$p -> $n"
+      done
+      ```
+      Use `grep -o … | wc -l`, never `grep -c` (counts lines, undercounts on minified HTML).
+- [ ] 0.3 Confirm baseline suite green: `cd apps/web-platform && npm run test:ci`
+- [ ] 0.4 Read `apps/web-platform/infra/seo-rulesets.tf` (comment density + `cloudflare.rulesets`
+      provider alias) and `apps/web-platform/test/seo-rulesets-noindex.test.ts`
+      (brace-counting text-parse approach to mirror). Per `hr-always-read-a-file-before-editing-it`.
+- [ ] 0.5 Confirm the provider alias name and `var.cf_zone_id` in
+      `apps/web-platform/infra/main.tf` / `variables.tf`.
 
-## Phase 1 — RED: the gate
+## Phase 1 — RED: source guard
 
-- [ ] 1.1 Create `plugins/soleur/test/robots-cdn-cgi.test.ts` using `bun:test`
-      (mirror the import line at `plugins/soleur/test/validate-seo.test.ts:1`).
-      Resolve `plugins/soleur/docs/robots.txt` relative to the test file, not to CWD.
-- [ ] 1.2 Assertion A — anchored, case-insensitive directive:
-      `robots.txt` matches `/^\s*disallow:\s*\/cdn-cgi\//im`.
-      Anchored per `cq-assert-anchor-not-bare-token`; case-insensitive per RFC 9309.
-- [ ] 1.3 Assertion B — no Googlebot-specific stanza:
-      `robots.txt` does **not** match `/^\s*user-agent:\s*googlebot/im`.
-      *Why:* Googlebot obeys the `*` group only when no Googlebot group exists; without
-      this, assertion A could pass while the directive is inert for the one crawler
-      this work targets.
-- [ ] 1.4 Assertion C — passthrough intact: `eleventy.config.js` contains the
-      `robots.txt` passthrough-copy line (currently `eleventy.config.js:69`).
-      Match on the content anchor, not the line number (`cq-cite-content-anchor-not-line-number`).
-- [ ] 1.5 Record the Cloudflare-Images condition as a **comment in this test file**:
-      if image transformations are ever adopted, `Allow: /cdn-cgi/image/` must be added
-      above the `Disallow`. **Do not put this note in `robots.txt`** — see plan Sharp Edges
-      (it makes any `cdn-cgi/image` grep self-falsifying).
-- [ ] 1.6 Confirm RED: `bun test plugins/soleur/test/robots-cdn-cgi.test.ts` → assertion A fails.
+- [ ] 1.1 Create `apps/web-platform/test/seo-config-rules.test.ts` (**vitest**;
+      `apps/web-platform/vitest.config.ts` `unit` project includes `test/**/*.test.ts`).
+      Mirror the sibling `seo-rulesets-noindex.test.ts` text-parse approach — `readFileSync`
+      + brace-counting, **not** an HCL parser.
+- [ ] 1.2 Assert `apps/web-platform/infra/seo-config-rules.tf` declares a `cloudflare_ruleset`
+      with `phase = "http_config_settings"` and `kind = "zone"`.
+- [ ] 1.3 Assert a rule with `action = "set_config"` and `email_obfuscation = false`,
+      `enabled = true`.
+- [ ] 1.4 **Blast-radius assertions (load-bearing — both directions).**
+      Positive: expression contains `soleur.ai` AND `www.soleur.ai`.
+      Negative: expression contains **none** of `app.soleur.ai`, `deploy.soleur.ai`,
+      `api.soleur.ai`. The bounded scope is the property that distinguishes this from the
+      rejected zone-wide Option A — assert it explicitly.
+- [ ] 1.5 Assert the new resource address appears in the `-target=` allow-list in
+      `.github/workflows/apply-web-platform-infra.yml`. Without this the rule is committed
+      but never applied — the silent-no-op class #3379 already documents.
+- [ ] 1.6 Confirm RED:
+      `cd apps/web-platform && ./node_modules/.bin/vitest run test/seo-config-rules.test.ts`
 
-## Phase 2 — GREEN: the fix
+## Phase 2 — GREEN: the Terraform rule
 
-- [ ] 2.1 Edit `plugins/soleur/docs/robots.txt` to the exact form in plan §Phase 2 step 3:
-      `User-agent: *` / `Allow: /` / blank / 2-line vendor-citation comment /
-      `Disallow: /cdn-cgi/` / blank / `Sitemap: …`.
-      Keep the comment to the two lines specified — no internal repo paths on a public file.
-- [ ] 2.2 Confirm GREEN: `bun test plugins/soleur/test/robots-cdn-cgi.test.ts`
-- [ ] 2.3 Confirm the gate can FAIL (AC2): temporarily delete the `Disallow` line, re-run
-      the test, observe failure, restore the line, re-run, observe pass.
-      Do not skip — this is the anti-`7f84318dc` check.
-- [ ] 2.4 Build: `npx @11ty/eleventy`
-- [ ] 2.5 Verify the artifact (AC3):
-      `grep -iE '^\s*disallow:\s*/cdn-cgi/' _site/robots.txt`
-- [ ] 2.6 Verify no regression in the existing SEO gate (AC4), exactly as `deploy-docs.yml:75`
-      invokes it: `bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site` → exit 0
-- [ ] 2.7 Verify the untouched suite is still green (AC5):
-      `bun test plugins/soleur/test/` → the 21 `validate-seo` tests still pass
+- [ ] 2.1 Create `apps/web-platform/infra/seo-config-rules.tf` per plan §Phase 2 step 4.
+      **Verify every attribute name against the pinned provider (4.52.7) before writing** —
+      do not copy the plan's illustrative block blindly.
+- [ ] 2.2 Carry a comment block explaining why: the GSC 404, the 30 hrefs, why not
+      robots.txt (Google's "don't block 404s" + the `2026-06-14` learning), why host-scoped
+      not zone-wide. Match the comment density of `seo-rulesets.tf`.
+- [ ] 2.3 Add the resource to the `-target=` allow-list in `apply-web-platform-infra.yml`.
+- [ ] 2.4 **Sweep every guard suite** asserting on that list — orphan suites are the ones
+      plans reliably miss:
+      `git grep -ln 'cloudflare_ruleset\|\-target=' scripts/ apps/web-platform/infra/*.test.sh`
+      Update every hit.
+- [ ] 2.5 Confirm GREEN:
+      `cd apps/web-platform && ./node_modules/.bin/vitest run test/seo-config-rules.test.ts`
+- [ ] 2.6 Confirm the gate can FAIL (AC2): flip `email_obfuscation` to `true` → test fails;
+      add `app.soleur.ai` to the expression → test fails; restore → passes. Do not skip.
+- [ ] 2.7 Full suite green: `cd apps/web-platform && npm run test:ci` — especially the 3
+      existing `api.soleur.ai` tests in `seo-rulesets-noindex.test.ts`.
+- [ ] 2.8 `terraform fmt -check` + `terraform validate` in `apps/web-platform/infra/`.
+      Use the canonical Doppler triplet (raw `AWS_*` exports for the R2 backend, then
+      `--name-transformer tf-var`) — see
+      `knowledge-base/project/learnings/2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md`.
+      Without `tf-var`, ~13 required variables fail to resolve.
 
-## Phase 3 — Follow-ups the plan defers (do not fold into the diff)
+## Phase 3 — Plan review of the apply
 
-- [ ] 3.1 File a tracking issue for the **CTA fallback rendering defect** (plan §Deferred):
-      `getting-started.njk:22` renders `[email protected]` where a copyable address
-      belongs; same for `pricing.njk:275`. Include the recommended fix
-      (`<!--email_off-->` + `ops at jikigai dot com`) and the explicit warning **not** to
-      use bare plaintext. Label `domain/marketing`, `chore`.
-- [ ] 3.2 File the **28-day GSC re-check** follow-up issue (AC12), due merge+28d:
-      re-check the "Not found (404)" report and confirm all four rows cleared.
-      Note in the body that a `scripts/followthroughs/` probe is **not** usable — GSC
-      exposes no API for coverage-validation state.
-- [ ] 3.3 Optionally file the "Book intro" CTA → booking-link conversion follow-up
+- [ ] 3.1 `terraform plan` → confirm **1 to add, 0 to change, 0 to destroy** (AC4).
+- [ ] 3.2 Confirm no excluded resource (`hcloud_server.web`, `hcloud_volume.workspaces`,
+      volume attachments, SSH keys) appears — `-target` is transitive on dependencies.
+
+## Phase 4 — Follow-ups (do not fold into the diff)
+
+- [ ] 4.1 File the **28-day GSC re-check** issue (AC12), due merge+28d: re-check the
+      "Not found (404)" report, confirm all four rows cleared. Note GSC has no API for
+      validation state, but the AC9 census **is** automatable if recurrence is a concern.
+- [ ] 4.2 Optionally file the "Book intro" CTA → booking-link conversion follow-up
       (`decision-challenges.md` §Also noted). Low priority, separate concern.
 
-## Phase 4 — Ship
+## Phase 5 — Ship
 
-- [ ] 4.1 Verify AC6: `git diff --name-only origin/main...HEAD` contains **no**
-      `apps/web-platform/infra/` paths.
-- [ ] 4.2 PR body uses **`Ref #3379`**, not `Closes` (AC7). #3379 is not resolved here.
-- [ ] 4.3 Ensure `/ship` surfaces
-      `knowledge-base/project/specs/feat-one-shot-gsc-404-cdn-cgi-email-protection/decision-challenges.md`
-      into the PR body and files the `action-required` issue (UC-1 Option C, UC-2 CTA fix).
-- [ ] 4.4 Post-merge operator steps are AC8–AC12 in the plan. Note AC11 (GSC "Validate Fix")
-      is genuinely human-only — GSC has no validation-trigger API. Do not re-litigate
-      automating it; the justification is recorded inline in the plan.
+- [ ] 5.1 AC6: `git diff --name-only origin/main...HEAD` contains **no**
+      `plugins/soleur/docs/robots.txt` — the rejected Option B must not leak back in.
+- [ ] 5.2 PR body uses **`Ref #3379`**, not `Closes`.
+- [ ] 5.3 Ensure `/ship` surfaces `decision-challenges.md` into the PR body and files the
+      `action-required` issue.
+- [ ] 5.4 Post-merge operator steps are AC8–AC12. **AC9 is load-bearing** — it is the only
+      proof Cloudflare honours the rule; source assertions cannot establish it. AC11 (GSC
+      "Validate Fix") is genuinely human-only (no API); justification is inline in the plan.
 
 ---
 
@@ -94,11 +118,11 @@ were explicitly cut by plan review. See plan §Files to Edit.
 
 | AC | Task |
 |---|---|
-| AC1 (gate assertions) | 1.2, 1.3, 1.4 |
-| AC2 (gate can fail) | 2.3 |
-| AC3 (built artifact) | 2.5 |
-| AC4 (no validator regression) | 2.6 |
-| AC5 (existing suite green) | 0.2, 2.7 |
-| AC6 (no infra diff) | 4.1 |
-| AC7 (`Ref #3379`) | 4.2 |
-| AC8–AC12 (post-merge operator) | 4.4 |
+| AC1 (rule assertions incl. scope) | 1.2, 1.3, 1.4 |
+| AC2 (gate can fail) | 2.6 |
+| AC3 (full suite green) | 0.3, 2.7 |
+| AC4 (clean 1-add plan) | 3.1, 3.2 |
+| AC5 (-target + guard sweep) | 2.3, 2.4, 1.5 |
+| AC6 (no robots.txt in diff) | 5.1 |
+| AC7 (`Ref #3379`) | 5.2 |
+| AC8–AC12 (post-merge operator) | 0.2 baseline, 5.4 |

@@ -1,5 +1,5 @@
 ---
-title: "fix: GSC 'Not found (404)' — Cloudflare email-obfuscation /cdn-cgi/ crawl leak"
+title: "fix: GSC 'Not found (404)' — disable Cloudflare email obfuscation on marketing hosts"
 date: 2026-07-20
 type: bug-fix
 lane: cross-domain
@@ -11,36 +11,40 @@ related_issues: ["#3379"]
 
 # fix: GSC "Not found (404)" — Cloudflare email-obfuscation `/cdn-cgi/` crawl leak
 
-> **Lane note:** no `spec.md` exists for this branch, so `lane:` could not be carried
-> forward. Defaulted to `cross-domain` (TR2 fail-closed).
+> **Lane note:** no `spec.md` exists for this branch; `lane:` defaulted to `cross-domain`
+> (TR2 fail-closed).
 >
-> **[Updated 2026-07-20]** Revised after 6-agent plan review. Phase 4 (api.soleur.ai
-> probe) cut on unanimous panel finding; the `validate-seo.sh` edit replaced with a
-> repo-local test; two User-Challenges recorded in
-> `knowledge-base/project/specs/feat-one-shot-gsc-404-cdn-cgi-email-protection/decision-challenges.md`.
+> **[Updated 2026-07-20 — decision REVERSED at deepen-plan.]** v1 chose
+> `Disallow: /cdn-cgi/` in robots.txt. Deepen-plan research found Google **explicitly
+> advises against that remedy for this exact case**, corroborated by a repo learning v1
+> had not applied. The plan now adopts a **host-scoped Cloudflare Configuration Rule**.
+> Full reversal record in [Decision](#decision). Earlier review also cut a Phase 4
+> api.soleur.ai probe (would have auto-closed #3379).
 
 ## Overview
 
-Google Search Console's `soleur.ai-Coverage-Validation-2026-07-20` export reports a
-**failed** validation for "Not found (404)" across 4 URLs. This plan fixes the one URL
-with a live repo-side defect and documents why the other three are deliberately untouched.
+GSC's `soleur.ai-Coverage-Validation-2026-07-20` export reports a **failed** validation
+for "Not found (404)" across 4 URLs. This plan fixes the one URL with a live repo-side
+defect and documents why the other three are deliberately untouched.
 
-The defect: **Cloudflare Email Obfuscation (Scrape Shield) is enabled on the `soleur.ai`
-zone and rewrites `mailto:` hrefs and plaintext addresses in the served marketing-site
-HTML into `/cdn-cgi/l/email-protection` links.** Googlebot follows them and gets a 404.
+The defect: **Cloudflare Email Obfuscation (Scrape Shield) is on for the `soleur.ai`
+zone and rewrites `mailto:` hrefs and plaintext addresses in served marketing HTML into
+`/cdn-cgi/l/email-protection` links** (30 of them site-wide). Googlebot follows them and
+gets a 404.
 
-**Remedy: add `Disallow: /cdn-cgi/` to the marketing site's `robots.txt`** — Cloudflare's
-own documented best practice — rather than disabling Email Obfuscation. See
-[Decision](#decision).
+**Remedy: disable Email Obfuscation for `soleur.ai` + `www.soleur.ai` only**, via a
+host-scoped `cloudflare_ruleset` in the `http_config_settings` phase. This **removes the
+hrefs from the HTML at the source**, so there is nothing left for Googlebot to crawl.
 
-**Change set: 2 files.** One directive in a static file, plus one repo-local test.
+This is option (a) exactly as the brief framed it — *"disabling Cloudflare Email
+Obfuscation for the zone/**marketing pages** via Terraform"* — scoped to the marketing
+pages rather than the whole zone.
 
 ## Root Cause — verified live
 
-Verified 2026-07-20 by fetching served HTML as Googlebot UA. The hypothesis reproduced
-exactly.
+Verified 2026-07-20 by fetching served HTML as Googlebot UA.
 
-**Site-wide occurrence census** (counted with `grep -o … | wc -l`, not `grep -c`):
+**Site-wide census** (counted `grep -o … | wc -l`, not `grep -c`):
 
 | Page | Occurrences |
 |---|---|
@@ -51,10 +55,10 @@ exactly.
 | `/`, `/changelog/` | 0 |
 | **Total** | **30** |
 
-Two structurally different rewrite forms exist. On `/getting-started/`:
+Two rewrite forms. On `/getting-started/`:
 
-**Form 1 — fragment form** (rewrite of the `mailto:` href at
-`plugins/soleur/docs/pages/getting-started.njk`, the anchor whose source href begins
+**Form 1 — fragment form** (rewrite of the `mailto:` href in
+`plugins/soleur/docs/pages/getting-started.njk`, source href beginning
 `mailto:ops@jikigai.com?subject=`):
 
 ```html
@@ -71,462 +75,500 @@ fallback). **This is the crawlable one Googlebot followed:**
 ```
 
 Both resolve to `/cdn-cgi/l/email-protection` once a crawler strips the fragment.
-Cloudflare also injects the decoder `/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js`.
+Cloudflare also injects `/cdn-cgi/scripts/…/email-decode.min.js`.
 
 **Edge-injected, not committed:** `grep -rn 'cdn-cgi' plugins/soleur/docs/` returns
-**zero**. Source ships plain `mailto:`; Cloudflare rewrites at the edge. Plaintext
-`ops@jikigai.com` appears **0 times** in served HTML.
+**zero** (independently re-verified). Source ships plain `mailto:`; Cloudflare rewrites at
+the edge. Plaintext `ops@jikigai.com` appears **0 times** in served HTML.
 
-**Consequence for gate design:** because the rewrite happens at the edge, the built
-artifact *never* contains `/cdn-cgi/`. A build-time gate asserting "built HTML is free of
-`/cdn-cgi/l/email-protection`" would be **structurally incapable of failing**. Only the
-robots.txt invariant is deterministically checkable in CI.
+**Consequence for gate design:** the built artifact *never* contains `/cdn-cgi/`, so a
+build-time gate asserting "built HTML is free of `/cdn-cgi/l/email-protection`" is
+**structurally incapable of failing**. The gate must assert the Terraform rule in source
+plus a post-deploy live probe.
 
 ## Per-URL disposition
 
 | URL | GSC | Verified live | Disposition |
 |---|---|---|---|
-| `soleur.ai/cdn-cgi/l/email-protection` | **Failed** | 404 | **FIXED** — `Disallow: /cdn-cgi/` in apex `robots.txt` |
-| `www.soleur.ai/cdn-cgi/l/email-protection` | Pending | 404 | **FIXED by the same change.** `www.soleur.ai/robots.txt` `301`s to the apex file (verified) — one file covers both hosts. Note the redirect itself is not controlled by this repo. |
-| `api.soleur.ai/` | Pending | 404, no `x-robots-tag` | **NO CHANGE.** DNS-only CNAME → `ifsccnjhymdmidffkzhl.supabase.co` (verified via `dig`), so Cloudflare Rules on our zone never see it and we don't control the Supabase gateway to serve a `robots.txt`. An `X-Robots-Tag` rule already exists at `apps/web-platform/infra/seo-rulesets.tf` (the `seo_response_headers` ruleset's api rule) and is deliberately dormant. Owned by **#3379** (OPEN, `p3-low`), whose two re-evaluation criteria are unchanged by this PR. Non-indexability is **already asserted** by 3 existing tests in `apps/web-platform/test/seo-rulesets-noindex.test.ts` (the api-rule presence, exact-header, and `#3379`-reference tests). No new work. |
-| `soleur.ai/pages/legal/terms-of-service.html` | Pending | `301` → canonical, final `200` | **NO CHANGE — deliberately.** Already correct; clears on next crawl. Per `knowledge-base/project/learnings/2026-06-01-gsc-page-with-redirect-is-historical-memory-verify-against-build.md`, this row shape is Google's historical memory, not a live defect. Adding a redirect, canonical, or sitemap entry would create a chain or soft-404 and make it worse. |
+| `soleur.ai/cdn-cgi/l/email-protection` | **Failed** | 404 | **FIXED** — hrefs removed at the edge |
+| `www.soleur.ai/cdn-cgi/l/email-protection` | Pending | 404 | **FIXED by the same rule** (`www.soleur.ai` is in the rule's host set) |
+| `api.soleur.ai/` | Pending | 404, no `x-robots-tag` | **NO CHANGE.** DNS-only CNAME → `ifsccnjhymdmidffkzhl.supabase.co` (verified via `dig`), so Cloudflare Rules on our zone never see it, and we don't control the Supabase gateway to serve a `robots.txt`. An `X-Robots-Tag` rule already exists in `apps/web-platform/infra/seo-rulesets.tf` and is deliberately dormant. Owned by **#3379** (OPEN, `p3-low`), criteria unchanged. Non-indexability is **already asserted** by 3 existing tests in `apps/web-platform/test/seo-rulesets-noindex.test.ts`. No new work. |
+| `soleur.ai/pages/legal/terms-of-service.html` | Pending | `301` → canonical, final `200` | **NO CHANGE — deliberately.** Already correct; clears on next crawl. Per `knowledge-base/project/learnings/2026-06-01-gsc-page-with-redirect-is-historical-memory-verify-against-build.md` this row shape is Google's historical memory, not a live defect. Adding a redirect, canonical, or sitemap entry would create a chain or soft-404 and make it worse. |
 
 ## Decision
+
+### Option B (REJECTED — was v1's choice) — `Disallow: /cdn-cgi/` in robots.txt
+
+Cloudflare does recommend this as generic hygiene, verbatim: *"As a best practice, update
+your `robots.txt` file to include `Disallow: /cdn-cgi/`"*
+([developers.cloudflare.com](https://developers.cloudflare.com/fundamentals/reference/cdn-cgi-endpoint/)).
+v1 adopted it on that basis. **Deepen-plan research reversed it.** Three independent lines
+of evidence:
+
+1. **Google explicitly advises against it for this exact situation.** From Google's own
+   404 documentation, verbatim: *"Don't create fake content, redirect to your homepage, or
+   **use robots.txt to block 404s** — all of these things make it harder for us to
+   recognize your site's structure."*
+   ([support.google.com/webmasters/answer/2445990](https://support.google.com/webmasters/answer/2445990))
+   Cloudflare's advice is generic hygiene for sites with no GSC 404 report on that path;
+   Google's is specific to the case we actually have, and it governs.
+
+2. **robots.txt cannot de-index, and we supply the precondition for indexing.** Google:
+   *"A page that's disallowed in robots.txt can still be indexed if linked to from other
+   sites … the URL address … can still appear in Google Search results"*; and *"it is not
+   a mechanism for keeping a web page out of Google"*
+   ([Google robots.txt intro](https://developers.google.com/search/docs/crawling-indexing/robots/intro)).
+   We have **30 internal links from indexed pages** to the target. Blocking the crawl
+   removes the 404 signal that would otherwise have retired the URL, while leaving the
+   links that keep it discoverable — the textbook recipe for **"Indexed, though blocked by
+   robots.txt"**, which is strictly worse than the 404 we started with.
+
+3. **The repo already learned this the hard way, and v1 missed the learning.**
+   `knowledge-base/project/learnings/2026-06-14-gsc-indexed-though-blocked-by-robots-is-a-real-misconfig-not-benign.md`
+   — title and Key Insight are unambiguous: *"robots.txt is never an indexing control and
+   never a security control — it only asks compliant bots not to crawl."* That learning
+   documents `app.soleur.ai/` becoming indexed **because** a robots.txt `Disallow`
+   prevented Googlebot from ever reading the `noindex`. Same trap, same zone, six weeks ago.
+
+Also note Google states **404s do not harm indexing or ranking**, and *"if it is a bad URL
+that never existed on your site, you probably don't need to worry about it."* So a remedy
+that risks converting a harmless self-clearing 404 into a persistent indexed-but-blocked
+row is **negative value**.
 
 ### Option A (rejected) — disable Email Obfuscation zone-wide
 
 `cloudflare_zone_settings_override.soleur_ai` + `email_obfuscation = "off"`.
 
-**Rejected because:**
+Correct mechanism, wrong scope. The setting is per-zone, so it would also change
+`app.soleur.ai` and every other host. `cloudflare_zone_settings_override.soleur_ai` is
+inside the `-target=` auto-apply allow-list
+(`.github/workflows/apply-web-platform-infra.yml:322`), so it applies to production on
+merge. Option C achieves the same outcome with the blast radius bounded to two hostnames.
 
-1. **Zone-wide blast radius, applied to production automatically.** The setting is
-   per-zone, so it also changes `app.soleur.ai` and every other host.
-   `cloudflare_zone_settings_override.soleur_ai` is **inside** the `-target=` allow-list
-   at `.github/workflows/apply-web-platform-infra.yml:322`, so it auto-applies on merge.
-   Fixing a report-hygiene issue with a zone-wide production infra apply is
-   disproportionate. **This is the load-bearing objection.**
-2. **It exposes two addresses whose spam-load has real cost.** `legal@jikigai.com`
-   (used throughout `plugins/soleur/docs/pages/legal/`) is the **GDPR/DSAR and
-   automated-decision contestation channel** — a DSAR lost in a spam flood has statutory
-   consequences, not just annoyance. `ops@jikigai.com` is the founder inbox *and* the
-   founding-cohort conversion channel; flooding it degrades response latency to the
-   highest-intent prospects.
+### Option C (CHOSEN) — host-scoped Configuration Rule
 
-   *Calibration:* obfuscation is **cheap friction, not a security control.** Cloudflare's
-   `data-cfemail` is a single-byte XOR whose key is the first hex byte — publicly
-   documented and decoded by off-the-shelf scrapers. It stops naive regex harvesters and
-   nothing else. The argument above rests on "free friction worth keeping", not on
-   "removing a control".
-3. Leaves the other `/cdn-cgi/` crawl surfaces (`challenge-platform/`, `rum`, `trace`)
-   crawlable — a recurring source of the same GSC noise.
+A new `cloudflare_ruleset` in the `http_config_settings` phase, action `set_config`,
+`email_obfuscation = false`, scoped by
+`(http.host eq "soleur.ai" or http.host eq "www.soleur.ai")`.
 
-### Option C (rejected, but closer than A) — host-scoped Configuration Rule
+1. **It eliminates the surface instead of annotating it.** With obfuscation off for the
+   marketing hosts, Cloudflare stops rewriting — the 30 `/cdn-cgi/l/email-protection`
+   hrefs simply cease to exist. Google recrawls the pages, finds no links, and the URLs
+   retire naturally. This is the disposition
+   `knowledge-base/project/learnings/2026-05-05-gsc-indexing-triage-patterns.md` prescribes:
+   *"eliminate the surface entirely rather than annotating it."*
+2. **Blast radius is two hostnames.** `app.soleur.ai`, `deploy.soleur.ai`, and everything
+   else keep obfuscation. This is the objection that sank Option A, and Option C answers it.
+3. **It is committed IaC**, as the brief required — not a dashboard click.
+4. **It fixes a real user-facing defect as a side effect** — see [below](#side-effect-fix).
+5. **Feasible on the pinned provider — verified, not assumed.** `apps/web-platform/infra/.terraform.lock.hcl`
+   pins `cloudflare/cloudflare 4.52.7`. The v4 provider docs confirm all three required
+   pieces exist: `email_obfuscation` *(Boolean) "Turn on or off the Cloudflare Email
+   Obfuscation feature"*, `http_config_settings` as a valid `phase`, and `set_config` as a
+   valid `action`.
 
-A `cloudflare_ruleset` in the `http_config_settings` phase with
-`email_obfuscation = false` scoped by `http.host in {"soleur.ai" "www.soleur.ai"}`.
+**Accepted cost — stated plainly.** The marketing pages' addresses (`ops@jikigai.com`,
+`hello@soleur.ai`, `legal@jikigai.com`) become plaintext in HTML and therefore
+harvestable. Weighing it honestly:
 
-This **defeats Option A's blast-radius objection** — `app.soleur.ai` and every other host
-keep obfuscation — and it removes the hrefs from the link graph entirely, which is a
-strictly stronger fix for the GSC row than hiding them from crawlers. It is Terraform-native
-and the repo already has 5 `cloudflare_ruleset` resources to pattern-match against (though
-no `http_config_settings` phase ruleset exists yet, so it would be a new resource).
+- What is lost is **cheap friction, not a security control.** Cloudflare's `data-cfemail`
+  is a single-byte XOR whose key is the first hex byte — publicly documented and decoded
+  by off-the-shelf scrapers for over a decade.
+- Plaintext contact addresses on a privacy policy / legal page are near-universal practice.
+- `legal@jikigai.com` is the GDPR/DSAR channel and `ops@jikigai.com` is the founder inbox,
+  so spam load is a genuine (if modest) cost. If it becomes material, the escalation is a
+  contact form or an alias — **not** re-enabling obfuscation, which would reintroduce this
+  exact bug.
 
-**Rejected for this PR** on proportionality: it is a new production infra resource on an
-auto-applying path, to fix a 404 that Google states does not harm ranking. **But it is the
-correct escalation** if the risk in [Risks](#risks--mitigations) row 1 materialises, and it
-is recorded as a User-Challenge (see [Open questions](#open-questions-for-the-operator))
-because a reasonable reviewer would choose it over Option B up front.
+**No robots.txt change is made.** Per the brief's *"do not do both blindly"*: once the
+hrefs are gone, a `/cdn-cgi/` disallow is unnecessary for the reported issue, and Google
+advises against robots-blocking 404s. Generic `/cdn-cgi/` hygiene for the *other*
+endpoints (`challenge-platform/`, `rum`, `trace`) is a separate, non-urgent decision.
 
-### Option B (chosen) — `Disallow: /cdn-cgi/` in `plugins/soleur/docs/robots.txt`
+### Side-effect fix
 
-1. **Cloudflare's own documented best practice**, verbatim: *"As a best practice, update
-   your `robots.txt` file to include `Disallow: /cdn-cgi/`."* —
-   [developers.cloudflare.com/fundamentals/reference/cdn-cgi-endpoint/](https://developers.cloudflare.com/fundamentals/reference/cdn-cgi-endpoint/)
-   (fetched 2026-07-20). This **reverses** the common assumption that `/cdn-cgi/` must
-   stay crawlable.
-2. Keeps the free anti-spam friction on `legal@` and `ops@`.
-3. Fixes the whole `/cdn-cgi/` class, not just `email-protection`.
-4. One line in committed source, passthrough-copied to the artifact
-   (`eleventy.config.js:69`), therefore deterministically gate-able in CI.
-5. Covers apex **and** `www` via the existing 301.
-6. **No Terraform change, no production apply, no infra blast radius.**
-
-**Two notes a future reviewer will otherwise re-derive:**
-
-- **Cloudflare Images:** the vendor page notes that sites using image transformations need
-  `Allow: /cdn-cgi/image/` *above* the `Disallow`. `grep` for
-  `cdn-cgi/image|cloudflare_image|imagedelivery` returns **zero** — not in use. The
-  condition is recorded in the test file (not in the public `robots.txt`, which would make
-  the file its own false-positive; see [Sharp Edges](#sharp-edges)).
-- **Blocked JS is intentional and harmless.** The disallow also stops Googlebot fetching
-  `email-decode.min.js` and the challenge-platform scripts. Blocking JS is normally an SEO
-  smell; here the only thing that script renders is an email address, which is not content
-  Google needs. Cloudflare's guidance accounts for this.
-- **CSP is a non-issue either way.** The site's strict hash-based CSP
-  (`plugins/soleur/docs/_includes/base.njk:30`) is `script-src 'self' https://plausible.io`
-  + 3 hashes. The decoder is an *external same-origin* script, so `'self'` permits it. No
-  interaction with this change.
-
-## Implementation Phases
-
-### Phase 1 — RED
-
-1. Create `plugins/soleur/test/robots-cdn-cgi.test.ts` (runner: **`bun:test`**, matching
-   the sibling `plugins/soleur/test/validate-seo.test.ts:1`). Assert, reading
-   `plugins/soleur/docs/robots.txt` from disk:
-   - it contains a line matching `/^\s*disallow:\s*\/cdn-cgi\//im` (anchored directive,
-     case-insensitive — robots.txt directives are case-insensitive per RFC 9309, and
-     `cq-assert-anchor-not-bare-token` requires an anchor, not a bare substring);
-   - it contains **no** `^\s*User-agent:\s*Googlebot` stanza. *Why:* Googlebot obeys the
-     `*` group **only if** no Googlebot-specific group exists. If one were ever added, the
-     `*` group becomes inert for the one crawler this plan is about, and a
-     directive-presence assertion would still pass. This closes that hole;
-   - `eleventy.config.js` still contains the `robots.txt` passthrough-copy line, so the
-     directive reaches the built artifact.
-2. Confirm RED: `bun test plugins/soleur/test/robots-cdn-cgi.test.ts`
-
-### Phase 2 — GREEN
-
-3. Edit `plugins/soleur/docs/robots.txt` to:
-
-   ```text
-   User-agent: *
-   Allow: /
-
-   # Cloudflare-internal endpoints; 404/204 to crawlers.
-   # https://developers.cloudflare.com/fundamentals/reference/cdn-cgi-endpoint/
-   Disallow: /cdn-cgi/
-
-   Sitemap: https://soleur.ai/sitemap.xml
-   ```
-
-   **Ordering note:** robots.txt resolves `Allow`/`Disallow` conflicts by **longest match**,
-   not file order (RFC 9309) — `/cdn-cgi/` (9 chars) beats `/` (1 char), so `Allow: /` does
-   not defeat it. Do not "fix" this file by reordering.
-
-4. Confirm GREEN: `bun test plugins/soleur/test/robots-cdn-cgi.test.ts`
-5. Build and confirm the artifact carries it: `npx @11ty/eleventy` then
-   `grep -iE '^\s*disallow:\s*/cdn-cgi/' _site/robots.txt`
-6. Confirm no regression in the existing SEO gate, exactly as `deploy-docs.yml:75` runs it:
-   `bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site`
-
-## Files to Edit
-
-- `plugins/soleur/docs/robots.txt` — the directive + a 2-line vendor-citation comment.
-
-## Files to Create
-
-- `plugins/soleur/test/robots-cdn-cgi.test.ts` — the gate.
-
-**Explicitly NOT edited, and why:**
-
-- `plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh` — **deliberately not touched.**
-  This script is a **distributed plugin skill**, shipped to Soleur users and invoked by
-  `.openhands/skills/seo-aeo-analyst/SKILL.md` and two Inngest cron prompts. Making
-  `Disallow: /cdn-cgi/` a hard FAIL there would impose a Cloudflare-specific requirement on
-  every consumer site, including sites not behind Cloudflare where the directive is
-  meaningless. The gate belongs in a repo-local test. *(This also avoids a real defect: the
-  shared `setupSite()` fixture at `plugins/soleur/test/validate-seo.test.ts:41` defaults to
-  `"User-agent: *\nAllow: /\n"`, and 8 tests assert exit 0 against it — an unconditional
-  check would have turned the currently-green 21-test suite red.)*
-- `apps/web-platform/infra/**` — no Terraform change (see [Decision](#decision)).
-- `plugins/soleur/docs/pages/*.njk` — the `mailto:` sources stay as-is. **But a real
-  user-facing defect was identified here and is being deliberately deferred, not
-  overlooked** — see [Deferred](#deferred-cta-fallback-rendering-defect).
-
-## Deferred: CTA fallback rendering defect
-
-Two independent reviewers (architecture + CMO) surfaced a user-facing defect that this
-plan's SEO framing did not set out to fix. Recording it so it is visibly deferred rather
-than silently dropped.
-
-`plugins/soleur/docs/pages/getting-started.njk:22` deliberately ships a
-graceful-degradation fallback beside the founding-cohort CTA:
+Disabling obfuscation on the marketing hosts also repairs a user-facing defect that two
+reviewers flagged independently. `plugins/soleur/docs/pages/getting-started.njk:22` ships
+a deliberate graceful-degradation fallback:
 
 ```html
 <span class="hero-meta-fallback">(or email <code>ops@jikigai.com</code>)</span>
 ```
 
-Cloudflare rewrites it to render literally as **`[email protected]`**. The fallback is not
-degraded — it is *inverted*: the one element whose entire job is to show a copyable address
-now shows a string that is not an address. To Soleur's stated beachhead audience
-(technical builders), that is a recognisable broken-Cloudflare artifact on a page selling
-engineering competence. The same applies to `mailto:hello@soleur.ai` at
-`plugins/soleur/docs/pages/pricing.njk:275`.
+which currently renders as literal **`[email protected]`** — the one element whose job is
+to show a copyable address instead shows a string that is not an address, on the page
+selling engineering competence to technical builders. The founding-cohort CTA href is
+likewise currently a 404 for any visitor without JS. Both revert to correct behavior with
+no `.njk` edit. (Severity was bounded: the hero's primary CTA `Join the waitlist` and
+secondary `Run the self-hosted version today` were never affected.)
 
-Severity is bounded: the hero's **primary** CTA (`Join the waitlist` → `/pricing/#waitlist`)
-and **secondary** CTA (`Run the self-hosted version today`) are unaffected; only the
-tertiary `hero-meta` line is.
+## Implementation Phases
 
-**Recommended fix (not in this PR):** wrap the fallback in `<!--email_off-->` and write the
-address in a non-harvestable human form (`ops at jikigai dot com`). Do **not** simply
-`<!--email_off-->` the plaintext — that publishes a harvestable address and reintroduces
-exactly the exposure Option A was rejected for.
+### Phase 1 — RED: source guard for the new rule
 
-**Action:** `/work` files a tracking issue for this with the above analysis. It is out of
-scope here because it changes operator-stated scope — recorded as a User-Challenge in
-`decision-challenges.md`.
+1. Create `apps/web-platform/test/seo-config-rules.test.ts` (runner: **vitest**;
+   `apps/web-platform/vitest.config.ts` `unit` project includes `test/**/*.test.ts`).
+   Mirror the text-parsing approach of the sibling `test/seo-rulesets-noindex.test.ts`
+   (`readFileSync` + brace-counting extraction — **not** an HCL parser). Assert that
+   `apps/web-platform/infra/seo-config-rules.tf`:
+   - declares a `cloudflare_ruleset` with `phase = "http_config_settings"` and `kind = "zone"`;
+   - has a rule with `action = "set_config"` and `email_obfuscation = false`;
+   - scopes the expression to **both** `soleur.ai` and `www.soleur.ai`, and to **neither**
+     `app.soleur.ai` nor `deploy.soleur.ai` nor `api.soleur.ai` (the blast-radius bound is
+     the load-bearing property — assert it explicitly, both positively and negatively);
+   - is `enabled = true`.
+2. Assert the `-target=` allow-list in `.github/workflows/apply-web-platform-infra.yml`
+   contains the new resource address (otherwise the rule is committed but never applied —
+   a silent no-op of exactly the class `#3379` already documents).
+3. Confirm RED:
+   `cd apps/web-platform && ./node_modules/.bin/vitest run test/seo-config-rules.test.ts`
+
+### Phase 2 — GREEN: the Terraform rule
+
+4. Create `apps/web-platform/infra/seo-config-rules.tf`. Shape (verify attribute names
+   against the pinned v4.52.7 provider before writing — do not copy this block blindly):
+
+   ```hcl
+   resource "cloudflare_ruleset" "seo_config_settings" {
+     provider = cloudflare.rulesets
+     zone_id  = var.cf_zone_id
+     name     = "Marketing-host config overrides"
+     kind     = "zone"
+     phase    = "http_config_settings"
+
+     rules {
+       action      = "set_config"
+       description = "Disable Email Obfuscation on marketing hosts (GSC 404 on /cdn-cgi/l/email-protection)"
+       enabled     = true
+       expression  = "(http.host eq \"soleur.ai\" or http.host eq \"www.soleur.ai\")"
+       action_parameters {
+         email_obfuscation = false
+       }
+     }
+   }
+   ```
+
+   Carry a comment block explaining *why* (the GSC 404, the 30 hrefs, why not robots.txt,
+   why host-scoped not zone-wide), following the precedent density of `seo-rulesets.tf`.
+   Reuse the existing `cloudflare.rulesets` provider alias — confirm its name in `main.tf`.
+
+5. Add the resource to the `-target=` allow-list in
+   `.github/workflows/apply-web-platform-infra.yml`.
+   **Sweep the guard suites**: a `-target=` allow-list is typically asserted on by more
+   than one artifact. Run `git grep -ln 'cloudflare_ruleset\|\-target=' scripts/ apps/web-platform/infra/*.test.sh`
+   and update **every** hit — the scope-guard suites are orphan suites that only the
+   full-suite run exercises, and are the ones plans reliably miss.
+6. Confirm GREEN: `cd apps/web-platform && ./node_modules/.bin/vitest run test/seo-config-rules.test.ts`
+7. Confirm no regression: `cd apps/web-platform && npm run test:ci`
+8. `terraform fmt -check` and `terraform validate` in `apps/web-platform/infra/`
+   (use the canonical Doppler invocation triplet — see
+   `knowledge-base/project/learnings/2026-05-09-drift-runbook-canonical-tf-invocation-and-fresh-plan.md`;
+   `--name-transformer tf-var` is required or ~13 variables fail to resolve).
+
+### Phase 3 — plan review of the apply
+
+9. Run `terraform plan` and confirm it shows **exactly one resource to add** and
+   **zero to change or destroy**. A `-target`-scoped apply is transitive on dependencies;
+   confirm no `hcloud_server`/volume or other excluded resource is dragged in.
+
+## Files to Edit
+
+- `.github/workflows/apply-web-platform-infra.yml` — add the new resource to `-target=`.
+- Any guard suite asserting on the `-target=` list (enumerate via the Phase 2 step 5 grep).
+
+## Files to Create
+
+- `apps/web-platform/infra/seo-config-rules.tf` — the Configuration Rule.
+- `apps/web-platform/test/seo-config-rules.test.ts` — the source guard.
+
+**Explicitly NOT edited:**
+
+- `plugins/soleur/docs/robots.txt` — no `Disallow: /cdn-cgi/`. See
+  [Option B rejection](#option-b-rejected--was-v1s-choice).
+- `plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh` — a **distributed plugin skill**
+  shipped to Soleur users and referenced by `.openhands/skills/seo-aeo-analyst/SKILL.md`
+  and two Inngest cron prompts (all three references verified). A Cloudflare-specific
+  hard FAIL there would break consumer sites not behind Cloudflare.
+- `plugins/soleur/docs/pages/*.njk` — the `mailto:` sources are correct as written; the
+  rendering defect is fixed by removing the edge rewrite, not by editing source.
+- `apps/web-platform/infra/cloudflare-settings.tf` — zone-wide change rejected (Option A).
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-1. `plugins/soleur/test/robots-cdn-cgi.test.ts` passes, and its assertions cover: the
-   anchored `Disallow: /cdn-cgi/` directive, the absence of a `User-agent: Googlebot`
-   stanza, and the `eleventy.config.js` passthrough line.
-2. The gate is **capable of failing**: temporarily removing the directive from
-   `plugins/soleur/docs/robots.txt` makes the test fail; restoring it makes it pass.
-   (Guards against a structurally-unfailable gate — cf. commit `7f84318dc`.)
-3. After `npx @11ty/eleventy`, `grep -iE '^\s*disallow:\s*/cdn-cgi/' _site/robots.txt`
-   matches — proving passthrough-copy carries the directive to the deployed artifact.
-4. `bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site` still exits `0`
-   (no regression in the existing SEO gate). *Verified achievable at plan time — see
-   [Preflight](#preflight).*
-5. `bun test plugins/soleur/test/` passes in full — specifically, the pre-existing
-   21-test `validate-seo.test.ts` suite is still green (proving the distributed skill and
-   its shared fixture were left untouched).
-6. `git diff --name-only origin/main...HEAD` contains no files under
-   `apps/web-platform/infra/` — proving the chosen remedy required no production infra apply.
-7. PR body uses `Ref #3379`, **not** `Closes` — #3379 is not resolved by this PR and its
-   re-evaluation criteria are unchanged.
+1. `apps/web-platform/test/seo-config-rules.test.ts` passes and asserts: the
+   `http_config_settings` phase, `set_config` + `email_obfuscation = false`, **both**
+   marketing hosts present, and `app.`/`deploy.`/`api.` **absent** from the expression.
+2. The gate is **capable of failing**: flipping `email_obfuscation` to `true`, or adding
+   `app.soleur.ai` to the expression, makes the test fail. (Guards against a
+   structurally-unfailable gate — cf. commit `7f84318dc`.)
+3. `cd apps/web-platform && npm run test:ci` passes in full — in particular the 3 existing
+   `api.soleur.ai` tests in `test/seo-rulesets-noindex.test.ts` are untouched and green.
+4. `terraform validate` passes and `terraform plan` reports **1 to add, 0 to change,
+   0 to destroy**, with no excluded resource (`hcloud_server.web`, volumes, SSH keys)
+   appearing in the plan.
+5. The new resource address appears in the `-target=` allow-list in
+   `apply-web-platform-infra.yml`, and every guard suite asserting on that list was
+   updated (`git grep -ln 'cloudflare_ruleset\|\-target=' scripts/ apps/web-platform/infra/*.test.sh`
+   returns no un-updated hit).
+6. `git diff --name-only origin/main...HEAD` contains **no** `plugins/soleur/docs/robots.txt`
+   — confirming the rejected Option B did not leak back in.
+7. PR body uses `Ref #3379`, **not** `Closes`.
 
 ### Post-merge (operator)
 
-8. `deploy-docs.yml` succeeded for the merge SHA:
-   `gh run list --workflow=deploy-docs.yml --branch=main --limit=1 --json conclusion,headSha`
-9. **Live confirmation, with propagation tolerance.** `deploy-docs.yml` documents a
-   **~15-minute GitHub Pages re-propagation window** (observed 2026-05-29, #4573/#4578), and
-   the apex is Cloudflare-proxied, so a single-shot curl can read a stale body and
-   falsely look like failure:
+8. `apply-web-platform-infra.yml` succeeded for the merge SHA:
+   `gh run list --workflow=apply-web-platform-infra.yml --branch=main --limit=1 --json conclusion,headSha`
+9. **The rule is live — the load-bearing check.** The whole plan rests on Cloudflare
+   actually honouring a `set_config` rule for this feature, which cannot be proven from
+   source. Assert the hrefs are gone from served HTML:
 
    ```bash
-   for i in $(seq 1 10); do
-     curl -sS -H 'Cache-Control: no-cache' https://soleur.ai/robots.txt \
-       | grep -iqE '^\s*disallow:\s*/cdn-cgi/' && { echo "apex OK"; break; }
-     echo "attempt $i: not yet propagated"; sleep 120
+   UA="Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+   for p in "" "getting-started/" "pricing/" "legal/privacy-policy/" "legal/terms-and-conditions/"; do
+     n=$(curl -sS -H 'Cache-Control: no-cache' -A "$UA" "https://soleur.ai/$p" \
+          | grep -o 'cdn-cgi/l/email-protection' | wc -l | tr -d ' ')
+     echo "/$p -> $n"
    done
-   curl -sSL -H 'Cache-Control: no-cache' https://www.soleur.ai/robots.txt \
-     | grep -iE '^\s*disallow:\s*/cdn-cgi/'
    ```
 
-   Both must ultimately print the directive. (The second proves the `www` 301 inherits it.)
+   **Every count must be 0** (baseline before the change: 0, 2, 1, 20, 7). Use `grep -o …
+   | wc -l`, never `grep -c` — see [Sharp Edges](#sharp-edges). Allow for Cloudflare
+   propagation; retry for a few minutes before concluding failure.
 
-10. **Semantic confirmation of Google's own parse** — converts the presence-of-directive
-    proxy into the actual invariant. In GSC → **URL Inspection**, live-test
-    `https://soleur.ai/cdn-cgi/l/email-protection` and confirm it reports
-    **"Blocked by robots.txt"**. This is the precondition for step 11.
+10. **The addresses render correctly again** (the side-effect fix):
+    `curl -sS https://soleur.ai/getting-started/ | grep -c 'ops@jikigai.com'` returns ≥1,
+    and `grep -c '\[email&#160;protected\]'` returns 0.
 
-11. **GSC re-validation.** *Precondition:* step 9 green **and** step 10 reports "Blocked by
-    robots.txt". Google caches `robots.txt` for roughly **24h**, so do not trigger before
-    then — a premature click fails the run and GSC imposes a cooldown before retry.
+11. **GSC re-validation.** *Precondition:* step 9 shows 0 across all pages.
 
     *Action:* GSC → **Page indexing → "Not found (404)" → Validate Fix.**
 
-    *Post-condition:* the validation state reads "Validation passed", or the two
-    `/cdn-cgi/` rows leave the report. Google's validation runs take **up to 28 days**.
+    *Post-condition:* validation state reads "Validation passed", or the two `/cdn-cgi/`
+    rows leave the report. Google's validation runs take **up to 28 days**.
 
-    *If instead they migrate to "Indexed, though blocked by robots.txt"*, that is the
-    documented Low–Medium risk case — escalate per [Risks](#risks--mitigations) row 1.
-    Do not read this criterion as a promise; it is the expected outcome, not a guaranteed one.
+    Because the hrefs no longer exist, Google recrawls the linking pages, finds no
+    references, and retires the URLs — the mechanism Google's own 404 guidance describes
+    for URLs that should simply cease to be discovered. This is a materially stronger
+    position than v1's robots.txt approach, which would have left 30 live links pointing
+    at an uncrawlable URL.
 
     *`Automation: not feasible because` Google Search Console exposes no public API for
-    triggering a coverage-issue validation run or reading its state. The Search Console API
-    covers Search Analytics, sitemaps, and URL Inspection only — there is no
-    validation-trigger endpoint. This is a genuine human-only step; do not re-litigate
-    automating it.*
+    triggering a coverage-issue validation run or reading its state — the Search Console
+    API covers Search Analytics, sitemaps, and URL Inspection only. Genuine human-only
+    step; do not re-litigate automating it.*
 
-12. **Feedback loop.** `/work` files a follow-up issue, due 28 days post-merge, to re-check
-    the GSC "Not found (404)" report and confirm all four rows cleared. Without this, a
-    non-clear is silent until the next ad-hoc export. (A `scripts/followthroughs/` probe is
-    **not** usable here — it would need to read GSC, which has no API per step 11.)
+12. **Feedback loop.** `/work` files a follow-up issue due 28 days post-merge to re-check
+    the "Not found (404)" report and confirm all four rows cleared. (A
+    `scripts/followthroughs/` probe cannot serve here — it would need to read GSC, which
+    has no API. But note the *step 9* census **is** automatable and would make a fine
+    followthrough probe if recurrence is a concern.)
 
 ## Rollback
 
-**Trigger:** soleur.ai marketing pages begin dropping out of Google's index — watched via
-the GSC **Pages** report's valid-page count, or a `site:soleur.ai` result count, checked at
-step 12's 28-day mark and any time an anomaly is suspected.
+**Trigger:** unexpected breakage on the marketing hosts after apply — most plausibly an
+unrelated Configuration Rule side effect, since `http_config_settings` is a phase this zone
+has not used before.
 
-**Mechanism:** `git revert` the commit. `plugins/soleur/docs/robots.txt` is inside
-`deploy-docs.yml`'s path filter, so the revert redeploys itself — no manual publish step.
+**Mechanism:** `git revert` the commit; `apply-web-platform-infra.yml` re-applies on merge
+to `main` and removes the ruleset. Effect is near-immediate at the edge (unlike a
+robots.txt change, which Google would take ~24h+ to re-read — a further advantage of this
+remedy over Option B).
 
-**Time-to-effect is asymmetric and must be expected.** Removing a `Disallow` does **not**
-restore crawling immediately. Google re-reads `robots.txt` on its own ~24h cadence, then
-re-crawl and re-index take further days. An operator expecting instant recovery will
-escalate wrongly. Budget ~1 week for full recovery.
+**Residual after revert:** obfuscation returns, the `/cdn-cgi/` hrefs return, and the GSC
+404 rows return. No data loss; the only cost is being back at the starting state.
 
 ## Risks & Mitigations
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| **URLs migrate to "Indexed, though blocked by robots.txt" rather than dropping.** The 30 hrefs **remain** in the served HTML, so Google keeps seeing internal links to a now-uncrawlable URL — and the disallow removes the very signal (the 404) that would otherwise have dropped it organically. **This repo hit this exact trap before:** `app.soleur.ai/` was indexed *because* robots.txt blocked the crawl, preventing Googlebot from reading the `noindex` (see the `app.soleur.ai` comment block in `apps/web-platform/infra/seo-rulesets.tf`). | Low–Medium | The precedent differs on the axis that matters: `app.soleur.ai/` served a **200 page**; `/cdn-cgi/l/email-protection` returns a **404 with no body**, and Google does not index contentless 404s. **This is the plan's weakest argument and is flagged as such** — a reviewer argued the operative condition in the precedent was *linked + disallowed*, which does hold here (30 internal links). **Defined escalation:** if step 11 surfaces this migration, adopt **Option C** (host-scoped Configuration Rule disabling obfuscation for `soleur.ai`/`www.soleur.ai` only), which removes the hrefs from the link graph entirely. Recorded as a User-Challenge. |
-| **Over-broad disallow de-indexes the site.** A typo (`Disallow: /`) would remove soleur.ai from search — top of funnel for a pre-revenue product. | Low | AC1 asserts the exact anchored directive; AC2 proves the gate can fail; the pre-existing validator independently checks no AI-bot stanza carries `Disallow: /`. [Preflight](#preflight) confirmed no validator regression. [Rollback](#rollback) defined. |
-| **A `User-agent: Googlebot` stanza is added later**, silently making the `*` group inert for Googlebot. | Low | AC1's second assertion fails the build if such a stanza appears. |
-| **Cloudflare Images adopted later**, silently de-indexing transformed images. | Low | Condition recorded in the test file; `grep` confirms zero current usage. |
-| **`www` coverage depends on a 301 this repo does not control.** | Low | AC9's second curl proves it at operator-check time. |
-
-## Preflight (executed 2026-07-20)
-
-The proposed `robots.txt` was run against the **real** validator before this plan was
-frozen — the concern being that adding a `Disallow` line might trip the validator's AI-bot
-stanza detector, whose own header comment warns it "only checks the line immediately after
-User-agent":
-
-```text
-PASS: robots.txt exists
-PASS: robots.txt does not block GPTBot / PerplexityBot / ClaudeBot / Google-Extended
-PASS: sitemap host matches robots.txt Sitemap line
-```
-
-**No regression.** (Other `FAIL:` lines in that run came from a deliberately minimal
-fixture — missing `llms.txt`, canonical, JSON-LD — not from the change. A full real build
-was separately confirmed to pass the validator with `EXIT=0`.)
+| **`http_config_settings` is a new phase for this zone** — Cloudflare allows only one user-defined ruleset per (zone, phase), and this zone has 5 rulesets across 5 *other* phases. An unexpected API rejection is possible. | Low | `terraform validate` + `terraform plan` in Phase 2/3 catch schema errors pre-merge; AC4 requires a clean 1-add plan. Provider support for all three attributes was verified against the pinned 4.52.7 docs, not assumed. |
+| **The rule applies but Cloudflare does not actually stop rewriting** (config-derived expectation vs. real edge behavior). | Low | AC9 measures the outcome on 5 real pages rather than inferring it from config. This is the load-bearing check and is explicitly called out as such. |
+| **Marketing-page email addresses become harvestable**, increasing spam on the DSAR channel (`legal@`) and the founder inbox (`ops@`). | Medium | Accepted, with rationale in [Decision](#option-c-chosen--host-scoped-configuration-rule). What is lost is XOR-trivial friction, not a control. Escalation if material: contact form or alias — **not** re-enabling obfuscation. |
+| **`-target=` allow-list edit misses a guard suite**, leaving a suite red post-merge. | Medium | Phase 2 step 5 mandates the `git grep` sweep; AC5 asserts it. This class has bitten before (`2026-05-29-target-allowlist-extension-must-sweep-all-guard-suites.md`). |
+| **`-target` is transitive on dependencies** and could drag an excluded resource (e.g. `hcloud_server.web`) into the apply. | Low | AC4 requires `terraform plan` to show exactly 1 add / 0 change / 0 destroy. The new ruleset depends only on `var.cf_zone_id`. |
 
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: "https://soleur.ai/robots.txt serves a line matching (?i)^\\s*disallow:\\s*/cdn-cgi/"
-  cadence: "on every merge to main touching plugins/soleur/docs/** (deploy-docs.yml), plus CI on every PR (bun test)"
-  alert_target: "GitHub Actions job failure annotation"
-  configured_in: "plugins/soleur/test/robots-cdn-cgi.test.ts (CI) + .github/workflows/deploy-docs.yml"
+  what: "Served marketing HTML contains zero occurrences of cdn-cgi/l/email-protection across the 5 known pages"
+  cadence: "post-merge operator check (AC9); CI asserts the Terraform source on every PR"
+  alert_target: "GitHub Actions job failure annotation; apply-web-platform-infra.yml run status"
+  configured_in: "apps/web-platform/test/seo-config-rules.test.ts (source) + .github/workflows/apply-web-platform-infra.yml (apply)"
 
 error_reporting:
-  destination: "GitHub Actions job failure; bun test prints the failing assertion"
+  destination: "GitHub Actions job failure; terraform apply errors surface in the workflow run log"
   fail_loud: true
 
 failure_modes:
-  - mode: "robots.txt loses the /cdn-cgi/ disallow (regression or bad edit)"
-    detection: "plugins/soleur/test/robots-cdn-cgi.test.ts anchored-directive assertion"
+  - mode: "Terraform rule present in source but never applied (omitted from the -target allow-list)"
+    detection: "seo-config-rules.test.ts asserts the resource address appears in apply-web-platform-infra.yml"
     alert_route: "CI fails on the PR -> merge blocked"
-  - mode: "robots.txt not passthrough-copied into _site (eleventy config regression)"
-    detection: "same test asserts the eleventy.config.js passthrough line; validate-seo.sh 'robots.txt exists' check on _site"
-    alert_route: "CI fails; deploy-docs.yml fails before GitHub Pages publish"
-  - mode: "a User-agent: Googlebot stanza is introduced, making the * group inert"
-    detection: "same test asserts no Googlebot stanza exists"
+  - mode: "Rule applied but Cloudflare still rewrites (edge behavior differs from config)"
+    detection: "AC9 per-page occurrence census as Googlebot UA"
+    alert_route: "operator observes non-zero counts; revert path in Rollback"
+  - mode: "Rule scope widened to app./deploy./api. hosts, disabling obfuscation where it is still wanted"
+    detection: "seo-config-rules.test.ts negative assertions on the expression"
     alert_route: "CI fails on the PR"
 
 logs:
-  where: "GitHub Actions run logs (bun test output; deploy-docs.yml validate-seo.sh stdout)"
+  where: "GitHub Actions run logs (vitest output; terraform plan/apply output)"
   retention: "90 days"
 
 discoverability_test:
-  command: "curl -sS https://soleur.ai/robots.txt | grep -iE '^\\s*disallow:\\s*/cdn-cgi/'"
-  expected_output: "Disallow: /cdn-cgi/"
+  command: "curl -sS -A 'Googlebot' https://soleur.ai/legal/privacy-policy/ | grep -o 'cdn-cgi/l/email-protection' | wc -l"
+  expected_output: "0"
 ```
 
 No SSH in any verification path.
 
 ## Infrastructure (IaC)
 
-**No Terraform change.** Asserted by AC6. Nothing in `## Files to Edit` sits under
-`apps/web-platform/infra/`, so `apply-web-platform-infra.yml` will not fire. No new servers,
-secrets, vendors, DNS records, or runtime processes.
+### Terraform changes
 
-The rejected Options A and C *would* have been infra — see [Decision](#decision) for the
-auto-apply reasoning that drove the rejection.
+- **New:** `apps/web-platform/infra/seo-config-rules.tf` — one `cloudflare_ruleset`
+  (`http_config_settings` phase, `set_config` action, `email_obfuscation = false`),
+  host-scoped to `soleur.ai` + `www.soleur.ai`.
+- **Provider:** `cloudflare/cloudflare` pinned at **4.52.7**
+  (`apps/web-platform/infra/.terraform.lock.hcl`, constraint `~> 4.0`). All three required
+  schema elements verified present in the v4 docs. Reuses the existing
+  `cloudflare.rulesets` provider alias and `var.cf_zone_id`.
+- **No new variables**, so no Doppler provisioning and no operator mint is required — the
+  `hr-tf-variable-no-operator-mint-default` sequencing hazard does not apply here.
+
+### Apply path
+
+Merge-triggered auto-apply via `.github/workflows/apply-web-platform-infra.yml` (fires on
+push to `main` touching `apps/web-platform/infra/**`), scoped by the `-target=` allow-list
+which this PR extends. **Expected downtime: none** — adding a Configuration Rule is a
+metadata change at the edge; no origin, DNS, or serving resource is touched.
+
+### Distinctness / drift safeguards
+
+Zone-scoped to the production `soleur.ai` zone via `var.cf_zone_id`; there is no dev
+counterpart zone, so no `dev != prd` precondition applies. The rule is fully declarative
+with no `lifecycle.ignore_changes` and no secret values, so nothing sensitive lands in
+`terraform.tfstate`.
+
+### Vendor-tier reality check
+
+Configuration Rules are available on all Cloudflare plans including Free (rule-count
+quotas differ by plan). This zone currently uses 5 rulesets across other phases and adds
+its first `http_config_settings` ruleset with a single rule — comfortably inside any tier
+quota. No paid-tier gate needed.
 
 ## Architecture Decision (ADR/C4)
 
-**No ADR.** A crawl-exclusion directive plus a CI check changes no ownership/tenancy
-boundary, substrate, integration pattern, or trust boundary, and reverses no existing ADR.
+**No ADR.** Disabling a vendor content-rewriting feature for two hostnames changes no
+ownership/tenancy boundary, substrate, integration pattern, or trust boundary, and reverses
+no existing ADR. It extends the established `cloudflare_ruleset`-in-Terraform pattern
+already set by `seo-rulesets.tf` rather than introducing a new one.
 
-**C4:** the external actors involved (Googlebot, Cloudflare, GitHub Pages) and their
-relationships are unchanged — this narrows *which paths* Googlebot requests, adding no
-element, container, data store, or access relationship. No `.c4` edit in scope.
+**C4:** the external actors (Googlebot, Cloudflare, GitHub Pages) and their relationships
+are unchanged — this removes an edge *transformation*, adding no element, container, data
+store, or access relationship. No `.c4` edit in scope.
 
-*Reviewer dissent, recorded:* architecture-strategist argued an ADR is warranted because the
-PR sets a reusable precedent ("when the edge injects artifacts that leak into the crawl
-graph, hide them from crawlers rather than stopping their emission") while explicitly
-rejecting the Terraform-native alternative. Deferred — if Option C is later adopted per the
-escalation path, that reversal is the natural ADR trigger.
+*Recorded dissent:* architecture-strategist argued for an ADR on the grounds that the PR
+sets a precedent about edge-injected artifacts leaking into the crawl graph. With the
+decision now reversed to "eliminate the surface", the precedent it sets is simply the
+existing one from `2026-05-05-gsc-indexing-triage-patterns.md`, so an ADR is redundant.
 
 ## Domain Review
 
 **Domains relevant:** Marketing (SEO), Engineering
 
-- **Marketing (SEO):** correctly scoped as report hygiene, **not** ranking recovery —
-  Google states 404s do not harm ranking, so the purchase is GSC cleanliness. The plan
-  must not promise ranking improvements (AC11 wording adjusted accordingly). Preserving
-  obfuscation protects the `legal@` DSAR channel and the `ops@` conversion SLA.
-- **Engineering:** minimal blast radius — one static file plus one repo-local test, no
-  infra apply, no migration, no runtime code. The distributed-skill boundary
-  (`validate-seo.sh`) is deliberately not crossed.
+- **Marketing (SEO):** correctly scoped as hygiene, **not** ranking recovery — Google
+  states 404s do not harm ranking. The reversal to Option C additionally repairs a
+  user-visible CTA/fallback rendering defect on the highest-intent page. Accepted cost is
+  plaintext addresses; escalation if spam becomes material is a contact form, not
+  re-enabling obfuscation.
+- **Engineering:** blast radius bounded to two hostnames and one new declarative edge rule;
+  no origin, DNS, or serving resource touched; no new variables or secrets. The main
+  execution risk is the `-target=` allow-list guard-suite sweep, which has its own AC.
 
-**Product/UX Gate:** not applicable — no UI-surface paths in `## Files to Edit` /
-`## Files to Create`. The mechanical UI-surface override did not fire. (The deferred
-`.njk` CTA-fallback defect is a *product* concern and is explicitly recorded above rather
-than folded in silently.)
+**Product/UX Gate:** not applicable — no UI-surface paths in Files to Edit/Create. The
+`.njk` rendering defect is repaired without a source edit.
 
 ## GDPR / Compliance Gate
 
 **Skipped** — no regulated-data surface: no schema, migration, auth flow, API route, or
-`.sql` file; no new processing activity or distribution surface. Threshold `none`.
+`.sql` file; no new processing activity. Threshold `none`.
 
-Noted inversely: the rejected Option A would have de-obfuscated `legal@jikigai.com`, the
-DSAR intake channel — a compliance-relevant reason to keep obfuscation.
+Noted: `legal@jikigai.com` (the DSAR intake channel) becomes plaintext on the legal pages.
+This is a spam-volume consideration, not a compliance defect — the address is *intended* to
+be publicly reachable, and Article 13/14 transparency obligations favour a contact point
+being plainly readable. Obfuscation was arguably in mild tension with that.
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** a malformed `robots.txt` at
-`https://soleur.ai/robots.txt` — realistically an over-broad `Disallow` that de-indexes the
-marketing site, removing Soleur from search results.
+**If this lands broken, the user experiences:** a misapplied Configuration Rule affecting
+the marketing site's edge behavior. Because `http_config_settings` is a new phase for this
+zone, the realistic failure is the rule not taking effect (no user-visible change,
+`/cdn-cgi/` hrefs persist) rather than a serving outage. A mis-scoped expression would
+disable obfuscation on hosts where it is still wanted — surfaced by AC1's negative
+assertions before merge.
 
-**If this leaks, the user's data / workflow / money is exposed via:** nothing. A
-crawl-exclusion directive in a public static file touches no user data, credentials,
-authenticated surface, or production infrastructure. The *rejected* Option A **would** have
-had an exposure vector (de-obfuscating the DSAR and founder inboxes) — part of why it lost.
+**If this leaks, the user's data / workflow / money is exposed via:** no user data is
+touched. The deliberate, accepted exposure is that three *company* contact addresses
+(`ops@`, `hello@`, `legal@jikigai.com`) become plaintext on public marketing pages,
+increasing spam volume. No customer data, credential, or authenticated surface is involved.
 
 **Brand-survival threshold:** `none`
 
-*Justification:* no sensitive-path files are touched — only a static `robots.txt` and a test.
+*Justification:* files touched are `apps/[^/]+/infra/` — which **does** match the canonical
+sensitive-path regex, so a scope-out is required: `threshold: none, reason:` the change adds
+a single declarative Cloudflare edge rule affecting only public marketing-page HTML
+rendering, touching no user data, credentials, auth flow, or serving infrastructure.
 
 ## Open questions for the operator
 
-Recorded in full at
+Recorded at
 `knowledge-base/project/specs/feat-one-shot-gsc-404-cdn-cgi-email-protection/decision-challenges.md`
-(rendered into the PR body and filed as an `action-required` issue by `/ship`):
-
-1. **Option C vs Option B** — should the host-scoped Configuration Rule be adopted up front
-   rather than as an escalation?
-2. **CTA fallback fix** — should the `[email protected]` rendering defect be folded into
-   this PR rather than deferred?
+(rendered into the PR body and filed as an `action-required` issue by `/ship`).
 
 ## Open Code-Review Overlap
 
-**None.** All planned paths checked against the 61 open `code-review` issues via
-`gh issue list --json` piped through a standalone `jq --arg` contains-filter. Zero matches.
+**None.** Planned paths checked against the 61 open `code-review` issues via
+`gh issue list --json` piped through a standalone `jq --arg` contains-filter. Zero matches
+for `apps/web-platform/infra/seo-rulesets.tf` and the new file paths.
 
 ## Sharp Edges
 
 - **`grep -c` undercounts occurrences in minified HTML.** During verification
   `grep -c 'cdn-cgi/l/email-protection'` reported `1` where the page had **2** — `grep -c`
-  counts matching *lines*, and served HTML puts both hrefs on one line. Use
-  `grep -o … | wc -l`. This is why the census table above is per-occurrence.
+  counts matching *lines*, and served HTML puts both hrefs on one line. AC9's census uses
+  `grep -o … | wc -l` for this reason.
 - **`&&`-chained verification stops on a zero-match `grep`.** A chain in this session
-  silently truncated because `grep -o` found nothing and returned exit 1. Append `|| true`
-  or split commands. (Also in
-  `2026-06-01-gsc-page-with-redirect-is-historical-memory-verify-against-build.md`.)
+  silently truncated when `grep -o` found nothing (exit 1). Append `|| true` or split
+  commands. Especially relevant to AC9, whose *success* condition is a zero match.
 - **`ugrep` rejects wide `.{0,N}` context patterns** with `exceeds complexity limits`. The
-  host `grep` is `ugrep`; use `python3` slicing for context extraction on large single-line files.
-- **Do not put the Cloudflare-Images note in the public `robots.txt`.** A plan draft did,
-  and it made an AC self-falsifying: the AC grepped for `cdn-cgi/image` returning zero,
-  while the comment it shipped *contained* that string. A detector that fires on its own
-  documentation is not a detector. The condition lives in the test file instead.
-- **Do not add the `/cdn-cgi/` check to `validate-seo.sh`.** It is a distributed plugin
-  skill; a hard FAIL there imposes a Cloudflare-specific requirement on every consumer
-  site. It would also have turned the green 21-test `validate-seo.test.ts` suite red, since
-  `setupSite()`'s default fixture (line 41) omits the directive and 8 tests assert exit 0.
-- **robots.txt conflict resolution is longest-match, not first-match** (RFC 9309).
-  `Allow: /` does not override `Disallow: /cdn-cgi/`. Do not "fix" the file by reordering.
-- **A directive-presence assertion is only sound while no `User-agent: Googlebot` stanza
-  exists.** Googlebot obeys the `*` group only in that case. AC1 pins it.
-- **Do not add `X-Robots-Tag` or a `robots.txt` for `api.soleur.ai`.** Both are structurally
-  inert on a DNS-only CNAME; a rule exists and is deliberately dormant. This surface has now
-  been examined three times (#3297 → #4575 → #3379); **#3379 is the single live tracker** —
-  add findings there rather than creating a fourth artifact.
+  host `grep` is `ugrep`; use `python3` slicing for context extraction on large
+  single-line files.
+- **Do not "fix" this with `Disallow: /cdn-cgi/`.** It is Cloudflare's generic advice and
+  it is wrong here: Google explicitly says *"don't use robots.txt to block 404s"*, robots
+  cannot de-index, and 30 internal links supply the precondition for
+  "Indexed, though blocked by robots.txt" — the exact trap
+  `2026-06-14-gsc-indexed-though-blocked-by-robots-is-a-real-misconfig-not-benign.md`
+  documents on this same zone. **Vendor hygiene advice does not override the more specific
+  vendor guidance for the situation you actually have.**
+- **Do not disable Email Obfuscation zone-wide.** `cloudflare_zone_settings_override` is
+  per-zone and is inside the auto-apply `-target=` list; scope with a Configuration Rule.
+- **Do not add the check to `validate-seo.sh`.** It is a distributed plugin skill; a
+  Cloudflare-specific hard FAIL there breaks consumer sites. It would also have turned the
+  green 21-test `validate-seo.test.ts` suite red, since `setupSite()`'s default fixture
+  (line 41) omits any `Disallow` and 8 tests assert exit 0 against it.
+- **Extending a `-target=` allow-list requires sweeping every guard suite**, not just the
+  workflow. Scope-guard suites are orphan suites exercised only by the full run.
+- **`-target` is transitive on dependencies** — a new targeted resource referencing an
+  excluded sibling can drag it into the apply. AC4 pins 1-add / 0-change / 0-destroy.
+- **Do not add `X-Robots-Tag` or a `robots.txt` for `api.soleur.ai`.** Both are
+  structurally inert on a DNS-only CNAME; a rule exists and is deliberately dormant. This
+  surface has been examined three times (#3297 → #4575 → #3379); **#3379 is the single
+  live tracker** — add findings there rather than creating a fourth artifact.
 - **The `scripts/followthroughs/` sweeper closes issues on exit 0.** A draft of this plan
   proposed enrolling an `api.soleur.ai` probe against #3379; because the probe's asserted
   condition is *already true today*, the sweeper would have **closed #3379 on its first
-  run** — contradicting the plan's own "`Ref`, not `Closes`" criterion. Follow-through
-  probes are *trigger detectors* (fire once, close the tracker), not *regression detectors*.
-  Do not conflate them.
+  run**. Follow-through probes are *trigger detectors* (fire once, close the tracker), not
+  *regression detectors*.
