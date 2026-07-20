@@ -144,10 +144,19 @@
 # Neither half is sufficient alone: (1) without (2) still creates and clobbers;
 # (2) without (1) still deletes the rule on the next plan.
 #
-# Expected plan after this change is therefore an IMPORT plus "0 to add,
-# 1 to change, 0 to destroy", where the single change is `+1 rule` — NOT the
-# "1 to add" that task 3.1 originally recorded. A plan that still says "1 to
-# add" means the import block was dropped and the clobber is back.
+# Verified plan after this change (2026-07-20, run against live state):
+#
+#   Plan: 1 to import, 0 to add, 1 to change, 0 to destroy.
+#
+# — NOT the "1 to add" that task 3.1 originally recorded. The single change is
+# `+1 rule`; the Flexible SSL rule appears in the diff with every attribute
+# unchanged. **A plan that says "1 to add" means the import block was dropped
+# and the clobber is back.**
+#
+# The adopted rule's `id`/`ref` do show as `-> (known after apply)`. That is
+# inherent to how the v4 provider writes a ruleset — a whole-list PUT, so
+# Cloudflare reassigns rule IDs — and is atomic. The rule's expression, action,
+# parameters and enabled state are all preserved; only its opaque ID changes.
 #
 # Tracked in #6767. The generalisation — every other `kind = "zone"` ruleset in
 # this repo has the same exposure and was never enumerated — is open there too.
@@ -163,10 +172,26 @@
 # see "PREREQUISITE 2" above. Creating instead would replace the entrypoint's
 # whole rule list.
 #
-# Import ID format is `zones/<zone_id>/<ruleset_id>` (provider v4 docs).
+# Import ID format is `zone/<zone_id>/<ruleset_id>` — SINGULAR `zone`, on the
+# pinned provider 4.52.7. The published docs on the provider's `main` branch say
+# `zones/...` (plural); that is v5 syntax and it FAILS HERE, but not loudly:
+# v4 does not reject the unknown prefix, it silently falls through to the
+# account-level path and issues
+# `GET /accounts/<zone_id>/rulesets/<id>` — a zone ID in an accounts URL — which
+# surfaces as `Authentication error (10000)`. The error names authentication, so
+# it reads like a token-scope problem and sends you back to re-probe a
+# credential that was already correct. Verified empirically against 4.52.7:
+# 2-segment `<zone_id>/<ruleset_id>` → "invalid import identifier";
+# `zones/...` → wrong-path auth error; `zone/...` → correct
+# `GET /zones/<zone_id>/rulesets/<id>`.
+#
+# `provider` is also required and is NOT inherited from the target resource.
+# Without it the import read runs through the DEFAULT `cloudflare` provider,
+# whose token holds none of the ruleset permissions.
 import {
-  to = cloudflare_ruleset.seo_config_settings
-  id = "zones/${var.cf_zone_id}/a21ac79d368f425a95c895c43a090d57"
+  provider = cloudflare.rulesets
+  to       = cloudflare_ruleset.seo_config_settings
+  id       = "zone/${var.cf_zone_id}/a21ac79d368f425a95c895c43a090d57"
 }
 
 # `name` and `description` deliberately mirror the live entrypoint EXACTLY

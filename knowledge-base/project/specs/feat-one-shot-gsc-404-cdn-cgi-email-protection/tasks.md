@@ -133,7 +133,7 @@ merge-triggered apply rather than just this resource.
       | `zones/$ZONE/rulesets/phases/http_request_cache_settings/entrypoint` | 200 | 200 |
       | `accounts/$ACCT/rulesets` | 200 | 200 |
       The widen took effect and nothing was lost — no scope replaced.
-- [ ] 2.9.3b **Entrypoint-enumeration probe — FAILED. STOP. DO NOT APPLY.**
+- [x] 2.9.3b **Entrypoint-enumeration probe — FAILED CLOSED, then RESOLVED by adoption.**
       The probe did exactly what it was added to do. `http_config_settings` returned
       **200, not 404**: the entrypoint already exists (`a21ac79d368f425a95c895c43a090d57`,
       `kind=zone`, version 1, last updated 2026-03-17) and **carries one live
@@ -158,23 +158,40 @@ merge-triggered apply rather than just this resource.
       gap recorded in `knowledge-base/project/learnings/
       2026-07-20-a-plan-can-prescribe-a-resource-its-credential-cannot-create.md`.
 
-      **Resolution required before apply — needs an operator/plan decision:** adopt the
-      existing rule rather than clobber it. That means (a) representing the Flexible SSL
-      rule as a second `rules` block in `seo-config-rules.tf`, and (b) `terraform import`
-      of ruleset `a21ac79d368f425a95c895c43a090d57` into state so Terraform UPDATES the
-      entrypoint instead of creating it. Both halves are required — (a) without (b) still
-      creates, (b) without (a) still deletes on the next plan. Note this also invalidates
-      `test/seo-config-rules.test.ts`'s deliberate exactly-one-rule pin, which must become
-      a two-rule pin that also locks the Flexible SSL rule.
+      **RESOLVED 2026-07-20 by adoption** (operator chose inline over a separate PR):
+      - the rule is reproduced verbatim as the FIRST `rules` block, and
+      - a declarative `import` block (TF >= 1.6, so no manual CLI step and no operator
+        action — `hr-never-label-any-step-as-manual-without`) adopts ruleset
+        `a21ac79d368f425a95c895c43a090d57` via `zones/<zone_id>/<ruleset_id>`.
+      `name`/`description` now mirror the live entrypoint (`"default"` / empty) so the
+      plan is one legible `+1 rule` change, not a real change mixed with cosmetic churn.
+      Tests 7 → 9: exactly-one-rule became exactly-two, plus new pins on the adopted
+      rule (expression AND `ssl = "flexible"`) and on the import block's presence.
+      Scope assertions now select by action parameter, not position — the adopted rule
+      legitimately targets `app.soleur.ai`, which is in `OUT_OF_SCOPE_HOSTS`, so the old
+      iterate-every-rule form would have failed on the rule it is not about.
+      **Mutation-verified capable of failing** (not merely green): deleting the adopted
+      rule fails 2 tests, `flexible`→`full` fails 1, deleting the import block fails 1.
+      `terraform validate` and `terraform fmt -check` both pass. Generalisation — every
+      other `kind = "zone"` ruleset in the repo has the same unaudited exposure —
+      remains open in #6767.
 - [ ] 2.9.4 Paste the four status codes into the PR body, then mark ready.
-      **Blocked on 2.9.3b** — 2.9.3's codes are green and ready to paste, but the PR must
-      not go ready while an apply would delete a live prod SSL rule.
+      Codes are pasted (PR body → Blocker §1). **Remaining gate is the re-run of 3.1** —
+      confirm the plan is now `import` + "0 to add, 1 to change, 0 to destroy" and not
+      "1 to add", which would mean the import block was lost. That re-run needs the
+      Doppler triplet from task 2.8 and has not been done in this session.
 
 **Do not mark PR #6746 ready until 2.9.2–2.9.4 are green.**
 
 ## Phase 3 — Plan review of the apply
 
-- [x] 3.1 `terraform plan` → confirm **1 to add, 0 to change, 0 to destroy** (AC4).
+- [ ] 3.1 ~~`terraform plan` → confirm **1 to add, 0 to change, 0 to destroy** (AC4).~~
+      **SUPERSEDED and re-opened by 2.9.3b.** That clean 1-add plan was real and is
+      exactly the trap: it says "add" because the resource is absent from STATE, and
+      never calls the API to discover the entrypoint is already populated. The expected
+      plan is now an **import** plus **0 to add, 1 to change, 0 to destroy**, where the
+      single change is `+1 rule`. Re-run and confirm the new shape. **A plan that still
+      reports "1 to add" means the import block was dropped and the clobber is back.**
 - [x] 3.2 Confirm no excluded resource (`hcloud_server.web`, `hcloud_volume.workspaces`,
       volume attachments, SSH keys) appears — `-target` is transitive on dependencies.
 
