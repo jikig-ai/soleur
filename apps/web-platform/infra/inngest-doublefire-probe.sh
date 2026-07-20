@@ -139,8 +139,14 @@ build_request_body() {
   local after_json="null"
   [[ -n "$after" ]] && after_json=$(jq -nc --arg a "$after" '$a')
   # functionIDs: JSON array from the CSV (empty CSV ⇒ [] ⇒ all functions).
+  # `printf '%s\n'` (NOT '%s') is load-bearing: with an empty CSV, '%s' emits
+  # ZERO BYTES, so `jq -R` has no line to read and emits NOTHING — fn_ids_json
+  # becomes "" and the --argjson below aborts with "invalid JSON text passed to
+  # --argjson". That is the DEFAULT path (op=verify 2.6 passes no FUNCTION_IDS),
+  # so the exactly-once check returned HTTP 500 rather than a verdict. The
+  # trailing newline gives jq -R an empty line to split into []. (#6617)
   local fn_ids_json
-  fn_ids_json=$(printf '%s' "$FUNCTION_IDS_CSV" | jq -Rc 'split(",") | map(select(length > 0))')
+  fn_ids_json=$(printf '%s\n' "$FUNCTION_IDS_CSV" | jq -Rc 'split(",") | map(select(length > 0))')
   local until_json="null"
   [[ -n "$UNTIL_TS" ]] && until_json=$(jq -nc --arg u "$UNTIL_TS" '$u')
   jq -nc \
