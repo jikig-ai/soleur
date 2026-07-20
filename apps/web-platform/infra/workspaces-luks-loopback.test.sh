@@ -858,50 +858,174 @@ else
   note "out: $(tail -n 5 "$L6H4_OUT" 2>/dev/null)"
 fi
 
-# --- L6k: H1 — `detected dubious ownership`, the leading hypothesis, BOTH directions -------------
+# --- L6k: H1 — `detected dubious ownership`, the leading hypothesis ------------------------------
 # This is the failure the whole design is defensive about: the cutover runs as root, container repos
-# are uid 1001, and git refuses with rc 128 BEFORE reading a single object. Two assertions, and the
-# second is the one that proves half (A) of the design rather than just half (B):
-#   (i)  with safe.directory SUPPRESSED, the ownership fatal must classify probe_failed and ABORT —
-#        never `preexisting`, which is the no-op-disguised-as-a-fix this plan exists to prevent.
-#   (ii) with the SUT's real per-repo `-c safe.directory=` in place, the SAME repo must classify ok —
-#        proving the flag is load-bearing and the gate can actually inspect uid-1001 repos.
-# GIT_TEST_ASSUME_DIFFERENT_OWNER=1 drives git's identical code path deterministically, so the case
-# does not depend on the harness's uid or on passwordless sudo semantics.
+# are uid 1001, and git refuses with rc 128 BEFORE reading a single object.
+#
+# WHAT THIS CASE MAY AND MAY NOT ASSERT — measured, not assumed. Two independent attempts to provoke
+# a REAL ownership refusal on the GH-hosted runner both failed, each producing src_rc=0 dst_rc=0:
+#   - a foreign-uid fixture (chown 65534, neither 0 nor $SUDO_UID), and
+#   - GIT_TEST_ASSUME_DIFFERENT_OWNER=1, a git *test-suite* knob carrying no compatibility promise.
+#
+# BOTH failures had ONE cause, and it was neither of the two guessed at the time (an earlier revision
+# of this comment blamed git 2.54.0 vs 2.53.0; a still earlier one blamed the fixture uid). L6k-CAP
+# measured it on its first CI run: the GitHub runner image ships `safe.directory = *` in the SYSTEM
+# gitconfig, so git allowed every directory and no ownership check could ever fire. Neutralizing
+# GIT_CONFIG_SYSTEM/GLOBAL makes the refusal fire on the runner — see L6m, which is the real
+# load-bearing proof and DOES run in CI.
+#
+# The instrument found in one run what three commits of inference got wrong. That is the argument for
+# L6k-CAP existing at all, and it is why the capability is re-measured every run rather than recorded
+# here as a fact.
+#
+# So the two halves are split by what is actually provable HERE:
+#   (i)  DETERMINISTIC, asserted below: given the H1 stderr shape, the gate must classify
+#        probe_failed and ABORT — never `preexisting`, the no-op-disguised-as-a-fix this plan exists
+#        to prevent. The stub SYNTHESIZES that stderr rather than trying to provoke it out of git,
+#        so the case tests the SUT's classifier — which is what this repo owns — and not git's
+#        ownership heuristics, which it does not. L6e already proves the same abort wiring end-to-end
+#        against REAL git via `fatal: bad config`, uid-independently; this case pins the specific H1
+#        alternative of _FSCK_SETUP_FATAL_RE.
+#   (ii) A health CONTROL, not a proof: it shows the fixture is otherwise clean, so arm (i)'s abort
+#        is attributable to the synthesized fatal. The "-c safe.directory= is load-bearing" proof
+#        lives in L6m, against real git. A green L6k alone must never be read as evidence that the
+#        flag was exercised — L6m is what carries that claim.
 rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
 mkdir -p "$D_SRC/workspaces"
 mk_repo "$D_SRC/workspaces/44444444-0000-0000-0000-00000000000f"
+# TWO workspaces, and the SECOND ONE IS THE POINT. Every other gate case (L6b, L6e, L6f, L6g, L6i)
+# probes exactly one repo, under which 1-of-1 is indistinguishable from all-of-1 — so the gate's
+# `elif [ "$n_probefail" -gt 0 ]` ANY threshold had NO test in the suite. Restoring the superseded
+# ALL threshold (`&& [ "$n_probefail" -eq "$total" ]`) passed every single-workspace case while
+# turning a 1-of-2 probe_failed into rc 0, "no copy-introduced regression". That is run
+# 29725194755's 8-of-10 shape landing in the GATE path — inside the freeze, where a false green is
+# followed by Phase 5 wiping the plaintext original. L6j guards the same threshold only for the
+# pre-freeze advisory probe, which is the strictly less dangerous of the two locations.
+mk_repo "$D_SRC/workspaces/66666666-0000-0000-0000-000000000011"
 rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+# Foreign uid (neither 0 nor $SUDO_UID) is kept so L6k-CAP measures the REAL production shape. It is
+# no longer load-bearing for the assertion — arm (i) synthesizes the refusal.
+chown -R 65534:65534 "$D_SRC/workspaces/44444444-0000-0000-0000-00000000000f" 2>/dev/null || true
+chown -R 65534:65534 "$D_DST/workspaces/44444444-0000-0000-0000-00000000000f" 2>/dev/null || true
+
+# L6k-CAP — does real git on THIS host refuse an un-owned repo when safe.directory is absent? Emitted
+# as evidence on EVERY run, green or red. Without it, "the refusal never fired" is indistinguishable
+# from "nobody looked" — the exact blindness class this suite exists to remove. Not an assertion:
+# a runner that cannot produce H1 is a fact about the runner, not a defect in the gate.
+L6KCAP_REPO="$D_SRC/workspaces/44444444-0000-0000-0000-00000000000f"
+# AMBIENT CONFIG IS NEUTRALIZED FOR THE PROBES, and that is the whole point. The first CI run of this
+# block measured `rc=0 err=` for BOTH mechanisms and reported "this host CANNOT produce H1" — and the
+# very next line it printed explained why: `safe.directory in scope  file:/etc/gitconfig  *`. The
+# GitHub runner image ships a SYSTEM gitconfig that blanket-allows every directory, so an
+# un-neutralized probe measures the runner's opt-out, not git's ownership behaviour, and reporting
+# that as a property of the host is a measurement artifact dressed as a fact.
+#
+# GIT_CONFIG_SYSTEM/GLOBAL=/dev/null removes it. That also makes the probe FAITHFUL to production:
+# web-1 has no blanket `safe.directory=*`, so the neutralized run is the one that resembles the
+# cutover host. The ambient value is still reported below, because it is the diagnostic.
+L6KCAP_ERR="$TMPROOT/l6kcap.err"
+GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
+  git --no-optional-locks -C "$L6KCAP_REPO" fsck --full --no-progress --no-dangling --no-reflogs \
+  >/dev/null 2>"$L6KCAP_ERR"
+L6KCAP_RC=$?
+L6KCAP_ENVERR="$TMPROOT/l6kcap-env.err"
+GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null GIT_TEST_ASSUME_DIFFERENT_OWNER=1 \
+  git --no-optional-locks -C "$L6KCAP_REPO" fsck --full --no-progress --no-dangling --no-reflogs \
+  >/dev/null 2>"$L6KCAP_ENVERR"
+L6KCAP_ENVRC=$?
+note "L6k-CAP: git=$(git --version 2>/dev/null | awk '{print $3}') euid=$(id -u) SUDO_UID=${SUDO_UID:-<unset>} fixture_uid=$(stat -c %u "$L6KCAP_REPO" 2>/dev/null || echo '?')"
+note "L6k-CAP: foreign-uid, cfg neutralized   rc=$L6KCAP_RC    err=$(head -n1 "$L6KCAP_ERR" 2>/dev/null || echo '<empty>')"
+note "L6k-CAP: + ASSUME_DIFFERENT_OWNER=1     rc=$L6KCAP_ENVRC err=$(head -n1 "$L6KCAP_ENVERR" 2>/dev/null || echo '<empty>')"
+L6KCAP_SD="$(git config --show-origin --get-all safe.directory 2>/dev/null | tr '\n' ' ')"
+note "L6k-CAP: ambient safe.directory (NOT in effect above) ${L6KCAP_SD:-<none>}"
+# CONDITIONAL ASSERTION, not a bare note. Synthesizing arm (i) forked this case from the contract it
+# models: the only place git's real refusal wording appears is now a printf the test owns, so if git
+# reworded it (say to `fatal: repository ownership is not trusted`), every real H1 in production
+# would demote from probe_failed to unclassified — different marker, different emit_drift, different
+# die string, operator pointed at "cannot classify" instead of "could not inspect" — and this suite
+# would stay green forever. This re-joins the fork at zero flake cost: on a host that CANNOT produce
+# H1 it stays a note; on any host that CAN (a dev laptop today, a future runner, a git that
+# re-enables the knob) it becomes a hard assertion that real git's bytes still match the regex.
+# It is the only check in the suite able to detect that drift.
+if grep -qE 'detected dubious ownership' "$L6KCAP_ERR" "$L6KCAP_ENVERR" 2>/dev/null; then
+  if CUTOVER="$CUTOVER" bash -c \
+      'source "$CUTOVER" >/dev/null 2>&1; grep -qE "$_FSCK_SETUP_FATAL_RE" "$1" "$2"' \
+      _ "$L6KCAP_ERR" "$L6KCAP_ENVERR" 2>/dev/null; then
+    ok "L6k-CAP: this host CAN produce H1, and real git's refusal still matches _FSCK_SETUP_FATAL_RE — the synthesized arm (i) is faithful to git's actual wording"
+  else
+    no "L6k-CAP: real git refused but _FSCK_SETUP_FATAL_RE did NOT match it — the regex has drifted from git's wording, so every real H1 now demotes to unclassified and arm (i) is testing a string git no longer emits"
+    note "real refusal: $(head -n1 "$L6KCAP_ERR" "$L6KCAP_ENVERR" 2>/dev/null | grep -m1 fatal:)"
+  fi
+else
+  note "L6k-CAP: this host CANNOT produce H1 — arm (ii) (safe.directory is load-bearing) is UNPROVEN in CI, and the regex-vs-reality check above is vacuous here"
+fi
 L6K_OUT="$TMPROOT/l6k.out"; L6K_MARKER="$TMPROOT/l6k.marker"
 : > "$L6K_OUT"; : > "$L6K_MARKER"
 MARKER_LOG="$L6K_MARKER" CUTOVER="$CUTOVER" SRC="$D_SRC" DST="$D_DST" \
 WORKSPACES_MOUNT="$D_SRC" WORKSPACES_STAGING="$D_DST" WORKSPACES_MAPPER_NAME="$MAPPER_NAME" \
-GIT_TEST_ASSUME_DIFFERENT_OWNER=1 \
 bash -c '
   source "$CUTOVER"
   logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
   die()        { echo "DIE: $*"; exit 1; }
   emit_drift() { echo "EMIT_DRIFT: $1"; }
-  # Re-declare _fsck_one WITHOUT the -c safe.directory= the SUT ships, so the ownership refusal is
-  # actually reached. Everything else mirrors the real prober.
+  # SYNTHESIZE the H1 refusal rather than provoke it. Real git will not emit it on this runner (see
+  # L6k-CAP), and a case that silently cannot produce its own precondition is the blindness this
+  # suite removes. The byte shape is git\047s own, including the surrounding single quotes; \047 is
+  # used because this stub body is single-quoted. rc 128 is what git exits with on a setup fatal.
   _fsck_one() {
-    local repo="$1" rc_file="$2" raw_out="$3" raw_err="$4" rc
-    git --no-optional-locks -C "$repo" fsck --full --no-progress --no-dangling --no-reflogs \
-      >"$raw_out" 2>"$raw_err"
-    rc=$?
-    printf "%s" "$rc" > "$rc_file"
-    printf "0" > "${rc_file%.rc}.objs"
+    local repo="$1" rc_file="$2" raw_out="$3" raw_err="$4"
+    # ONLY the 4444 workspace is un-inspectable; 6666 goes through the REAL prober. A stub that
+    # synthesized for every repo would make total==probe_failed again and re-hide the ANY-vs-ALL
+    # threshold this fixture exists to pin.
+    case "$repo" in
+      *44444444-*) : ;;
+      *) git --no-optional-locks -c safe.directory="$repo" -C "$repo" \
+           fsck --full --no-progress --no-dangling --no-reflogs >"$raw_out" 2>"$raw_err"
+         printf "%s" "$?" > "$rc_file"
+         { git --no-optional-locks -c safe.directory="$repo" -C "$repo" count-objects -v 2>/dev/null \
+             | awk "/^count:|^in-pack:/ { s += \$2 } END { print s + 0 }"; } > "${rc_file%.rc}.objs" \
+             2>/dev/null || printf "0" > "${rc_file%.rc}.objs"
+         return 0 ;;
+    esac
+    : > "$raw_out"
+    printf "fatal: detected dubious ownership in repository at \047%s\047\n" "$repo" > "$raw_err"
+    printf "128" > "$rc_file"
+    # NOT load-bearing for this case, and deliberately so: a setup fatal short-circuits to
+    # probe_failed in _fsck_classify BEFORE the object-count floor is ever consulted, so the value
+    # here cannot change the verdict (measured). Computed for real anyway so this stub differs from
+    # the shipped _fsck_one in exactly ONE dimension — the synthesized stderr — and a future edit
+    # that does reach the floor is not silently sitting on a hardcoded 0.
+    #
+    # What actually keeps this case honest is the `classification=probe_failed` grep in the
+    # assertion, NOT this count. Measured: if _FSCK_SETUP_FATAL_RE ever stops matching the H1 line,
+    # the run lands in `unclassified` and STILL aborts rc=1 — so an assertion that only checked "it
+    # aborted" would stay green while proving nothing.
+    #
+    # NOTE: no apostrophes anywhere in this stub body — it is inside a single-quoted bash -c, and
+    # one would terminate the string. That is why \047 is used for the quotes in the fatal above.
+    #
+    # For the record, because an earlier revision of this comment got it backwards: on main this
+    # case was RED, not green. objs=0 tripped the object-count floor into `unclassified`, whose die
+    # string is "cannot classify", so the `could NOT INSPECT` conjunct in the old assertion failed.
+    # It failed for a reason unrelated to the one it names — worse than a clean failure, because the
+    # recorded rc still looked like the trap had been sprung.
+    { git --no-optional-locks -c safe.directory="$repo" -C "$repo" count-objects -v 2>/dev/null \
+        | awk "/^count:|^in-pack:/ { s += \$2 } END { print s + 0 }"; } > "${rc_file%.rc}.objs" \
+        2>/dev/null || printf "0" > "${rc_file%.rc}.objs"
     return 0
   }
   verify_git_fsck_differential "$SRC" "$DST"
 ' > "$L6K_OUT" 2>&1
 L6K_SUPPRESSED_RC=$?
-# (ii) the SAME fixture through the REAL prober, ownership still forced.
+# (ii) CONTROL — the SAME fixture through the REAL prober must classify ok. This is a mutation
+# control, NOT the load-bearing proof: since arm (i) now synthesizes the refusal, this arm shows only
+# that the fixture is otherwise healthy, so arm (i)'s abort is attributable to the synthesized fatal
+# and not to something wrong with the repo. Proving `-c safe.directory=` is what rescues a foreign-uid
+# repo needs a real refusal, which this host cannot produce (see L6k-CAP).
 L6K2_OUT="$TMPROOT/l6k2.out"; L6K2_MARKER="$TMPROOT/l6k2.marker"
 : > "$L6K2_OUT"; : > "$L6K2_MARKER"
 MARKER_LOG="$L6K2_MARKER" CUTOVER="$CUTOVER" SRC="$D_SRC" DST="$D_DST" \
 WORKSPACES_MOUNT="$D_SRC" WORKSPACES_STAGING="$D_DST" WORKSPACES_MAPPER_NAME="$MAPPER_NAME" \
-GIT_TEST_ASSUME_DIFFERENT_OWNER=1 \
 bash -c '
   source "$CUTOVER"
   logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
@@ -910,16 +1034,148 @@ bash -c '
   verify_git_fsck_differential "$SRC" "$DST"
 ' > "$L6K2_OUT" 2>&1
 L6K_REAL_RC=$?
+# `could NOT INSPECT 1 workspace` — the COUNT is the load-bearing token, not the phrase. A bare
+# 'could NOT INSPECT' grep passes under the superseded ALL threshold too (it would simply never be
+# reached, and the case would fail on rc instead — for the wrong reason, which is how this case has
+# already misreported once). Pinning `1` asserts that ONE un-inspectable repo out of two aborts.
 if [ "$L6K_SUPPRESSED_RC" -ne 0 ] \
   && grep -qE -- 'classification=probe_failed .*first=.*detected dubious ownership' "$L6K_MARKER" \
-  && grep -qE -- 'could NOT INSPECT' "$L6K_OUT" \
+  && grep -qE -- 'could NOT INSPECT 1 workspace' "$L6K_OUT" \
+  && grep -qE -- 'classification=ok .*ws=66666666-0000-0000-0000-000000000011$' "$L6K_MARKER" \
   && [ "$L6K_REAL_RC" -eq 0 ] \
   && grep -qE -- 'classification=ok' "$L6K2_MARKER"; then
-  ok "L6k: H1 (dubious ownership) classifies probe_failed and ABORTS when the probe cannot inspect — and the SAME repo classifies ok through the real prober, proving the per-repo -c safe.directory= is load-bearing"
+  ok "L6k: ONE un-inspectable repo out of two aborts the gate as probe_failed (never preexisting) while its healthy sibling classifies ok — pinning the ANY-not-ALL threshold; arm (ii) is a health control, NOT proof that -c safe.directory= is load-bearing (see L6k-CAP)"
 else
-  no "L6k: the H1 trap is not closed (suppressed_rc=$L6K_SUPPRESSED_RC real_rc=$L6K_REAL_RC) — either an un-inspectable repo does not abort, or safe.directory is not what makes the real path work"
+  no "L6k: the H1 trap is not closed (suppressed_rc=$L6K_SUPPRESSED_RC real_rc=$L6K_REAL_RC) — either the synthesized ownership fatal did not classify probe_failed and abort, or the healthy control did not classify ok"
   note "suppressed: $(grep -m1 'classification=' "$L6K_MARKER" 2>/dev/null)"
   note "real:       $(grep -m1 'classification=' "$L6K2_MARKER" 2>/dev/null)"
+fi
+
+# --- L6m: THE LOAD-BEARING PROOF — `-c safe.directory=` is what rescues a foreign-uid repo --------
+# This is the half of the H1 design that arm (i) cannot prove, because arm (i) synthesizes. It needs
+# a REAL refusal out of REAL git, which the first CI run appeared to say was impossible here — until
+# L6k-CAP printed `safe.directory  file:/etc/gitconfig  *` and the "impossibility" turned out to be
+# the runner image blanket-allowing every directory. Neutralizing that (see L6k-CAP) makes the
+# refusal fire, and also makes the fixture resemble the production cutover host, which has no such
+# blanket entry.
+#
+# Two runs over the SAME foreign-uid (65534) repo, ambient config neutralized in both:
+#   (A) WITHOUT `-c safe.directory=` -> real git refuses -> probe_failed -> ABORT
+#   (B) WITH the SUT's real prober   -> the flag rescues it -> ok -> rc 0
+# Only the flag differs, so (A)+(B) together attribute the rescue to the flag and nothing else. If
+# either arm behaved the same as the other, the flag would be doing nothing and H1 would be live in
+# production.
+#
+# GATED on L6k-CAP: if a host genuinely cannot produce a refusal even with config neutralized, this
+# proof is unrunnable there and says so, rather than failing for an environmental reason.
+if [ "$L6KCAP_RC" -ne 0 ] && grep -qE 'detected dubious ownership' "$L6KCAP_ERR" 2>/dev/null; then
+  rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+  mkdir -p "$D_SRC/workspaces"
+  mk_repo "$D_SRC/workspaces/77777777-0000-0000-0000-000000000012"
+  rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+  chown -R 65534:65534 "$D_SRC/workspaces/77777777-0000-0000-0000-000000000012" 2>/dev/null || true
+  chown -R 65534:65534 "$D_DST/workspaces/77777777-0000-0000-0000-000000000012" 2>/dev/null || true
+  L6M_A_OUT="$TMPROOT/l6m-a.out"; L6M_A_MARKER="$TMPROOT/l6m-a.marker"
+  : > "$L6M_A_OUT"; : > "$L6M_A_MARKER"
+  MARKER_LOG="$L6M_A_MARKER" CUTOVER="$CUTOVER" SRC="$D_SRC" DST="$D_DST" \
+  WORKSPACES_MOUNT="$D_SRC" WORKSPACES_STAGING="$D_DST" WORKSPACES_MAPPER_NAME="$MAPPER_NAME" \
+  GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
+  bash -c '
+    source "$CUTOVER"
+    logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+    die()        { echo "DIE: $*"; exit 1; }
+    emit_drift() { echo "EMIT_DRIFT: $1"; }
+    # The SUT prober with the -c safe.directory= REMOVED and nothing else changed.
+    _fsck_one() {
+      local repo="$1" rc_file="$2" raw_out="$3" raw_err="$4"
+      git --no-optional-locks -C "$repo" \
+        fsck --full --no-progress --no-dangling --no-reflogs >"$raw_out" 2>"$raw_err"
+      printf "%s" "$?" > "$rc_file"
+      { git --no-optional-locks -c safe.directory="$repo" -C "$repo" count-objects -v 2>/dev/null \
+          | awk "/^count:|^in-pack:/ { s += \$2 } END { print s + 0 }"; } > "${rc_file%.rc}.objs" \
+          2>/dev/null || printf "0" > "${rc_file%.rc}.objs"
+      return 0
+    }
+    verify_git_fsck_differential "$SRC" "$DST"
+  ' > "$L6M_A_OUT" 2>&1
+  L6M_A_RC=$?
+  L6M_B_OUT="$TMPROOT/l6m-b.out"; L6M_B_MARKER="$TMPROOT/l6m-b.marker"
+  : > "$L6M_B_OUT"; : > "$L6M_B_MARKER"
+  MARKER_LOG="$L6M_B_MARKER" CUTOVER="$CUTOVER" SRC="$D_SRC" DST="$D_DST" \
+  WORKSPACES_MOUNT="$D_SRC" WORKSPACES_STAGING="$D_DST" WORKSPACES_MAPPER_NAME="$MAPPER_NAME" \
+  GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
+  bash -c '
+    source "$CUTOVER"
+    logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+    die()        { echo "DIE: $*"; exit 1; }
+    emit_drift() { echo "EMIT_DRIFT: $1"; }
+    verify_git_fsck_differential "$SRC" "$DST"
+  ' > "$L6M_B_OUT" 2>&1
+  L6M_B_RC=$?
+  if [ "$L6M_A_RC" -ne 0 ] \
+    && grep -qE -- 'classification=probe_failed .*first=.*detected dubious ownership' "$L6M_A_MARKER" \
+    && grep -qE -- 'could NOT INSPECT' "$L6M_A_OUT" \
+    && [ "$L6M_B_RC" -eq 0 ] \
+    && grep -qE -- 'classification=ok' "$L6M_B_MARKER"; then
+    ok "L6m: REAL git refuses a foreign-uid repo (probe_failed, ABORT) with -c safe.directory= removed, and the SAME repo classifies ok through the shipped prober — the flag is LOAD-BEARING, proven against real git, not synthesized"
+  else
+    no "L6m: the -c safe.directory= load-bearing proof FAILED (no_flag_rc=$L6M_A_RC shipped_rc=$L6M_B_RC) — either a foreign-uid repo does not abort without the flag, or the flag is not what makes the shipped prober able to inspect it"
+    note "no-flag: $(grep -m1 'classification=' "$L6M_A_MARKER" 2>/dev/null)"
+    note "shipped: $(grep -m1 'classification=' "$L6M_B_MARKER" 2>/dev/null)"
+  fi
+else
+  note "L6m: SKIPPED — L6k-CAP reports this host cannot produce a real ownership refusal even with ambient git config neutralized, so the load-bearing proof is unrunnable here (rc=$L6KCAP_RC)"
+fi
+
+# --- L6l: (2b) FAIL-CLOSED — an UNRECOGNISED fatal, identical on BOTH sides, must NOT go green ---
+# The single most dangerous input this gate can receive, and until #6759 nothing exercised it.
+# _FSCK_SETUP_FATAL_RE is an ALLOWLIST, and three of its seven alternatives are unmeasured (see the
+# per-alternative record on the regex). If a fatal shape neither allowlisted nor known-content
+# reached the differential, and it appeared IDENTICALLY on both sides — which is exactly what a
+# setup failure does, since both roots hit the same condition — `comm -13` would find no dst-only
+# line, the verdict would be `preexisting`, the gate would return 0, and Phase 5 would wipe the
+# plaintext original against a copy the probe never inspected. Branch (2b) is the only thing
+# standing between that input and a green run.
+#
+# Synthesized deliberately: the point is a fatal git does NOT emit today, since any shape that IS
+# emitted would be a candidate for the allowlist instead. This is the fail-closed default under
+# test, not a specific git behaviour.
+rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+mkdir -p "$D_SRC/workspaces"
+mk_repo "$D_SRC/workspaces/55555555-0000-0000-0000-000000000010"
+rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+L6L_OUT="$TMPROOT/l6l.out"; L6L_MARKER="$TMPROOT/l6l.marker"
+: > "$L6L_OUT"; : > "$L6L_MARKER"
+MARKER_LOG="$L6L_MARKER" CUTOVER="$CUTOVER" SRC="$D_SRC" DST="$D_DST" \
+WORKSPACES_MOUNT="$D_SRC" WORKSPACES_STAGING="$D_DST" WORKSPACES_MAPPER_NAME="$MAPPER_NAME" \
+bash -c '
+  source "$CUTOVER"
+  logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+  die()        { echo "DIE: $*"; exit 1; }
+  emit_drift() { echo "EMIT_DRIFT: $1"; }
+  _fsck_one() {
+    local repo="$1" rc_file="$2" raw_out="$3" raw_err="$4"
+    : > "$raw_out"
+    printf "fatal: a shape no git version emits and no allowlist names\n" > "$raw_err"
+    printf "128" > "$rc_file"
+    { git --no-optional-locks -c safe.directory="$repo" -C "$repo" count-objects -v 2>/dev/null \
+        | awk "/^count:|^in-pack:/ { s += \$2 } END { print s + 0 }"; } > "${rc_file%.rc}.objs" \
+        2>/dev/null || printf "0" > "${rc_file%.rc}.objs"
+    return 0
+  }
+  verify_git_fsck_differential "$SRC" "$DST"
+' > "$L6L_OUT" 2>&1
+L6L_RC=$?
+# NOT `-ne 0` alone: probe_failed also aborts, and if the allowlist ever widened to swallow this
+# shape the case would still "pass" while proving nothing about (2b). Pin the classification.
+if [ "$L6L_RC" -ne 0 ] \
+  && grep -qE -- 'classification=unclassified' "$L6L_MARKER" \
+  && ! grep -qE -- 'classification=preexisting' "$L6L_MARKER"; then
+  ok "L6l: an UNRECOGNISED fatal appearing identically on BOTH sides fails CLOSED as unclassified and ABORTS — never preexisting, the one outcome this design may not produce"
+else
+  no "L6l: (2b) did not fail closed (rc=$L6L_RC) — an unallowlisted fatal reached the differential, and a gate that green-lights it certifies a copy it never inspected"
+  note "marker: $(grep -m2 'classification=' "$L6L_MARKER" 2>/dev/null)"
+  note "out:    $(tail -n 3 "$L6L_OUT" 2>/dev/null)"
 fi
 
 # --- L6i: MUTATION CONTROL (L5d discipline) — prove L6b's abort is load-bearing ------------------
@@ -946,9 +1202,16 @@ else
 fi
 
 # --- L6j: the pre-freeze ADVISORY probe ---------------------------------------------------------
-# It runs in BOTH arms and is EVIDENCE, never the gate's comparand. Its one aborting condition is
-# "every probed source repo is un-inspectable" — under H1 that is the whole point: fail BEFORE the
-# freeze rather than after the outage. A partial failure must NOT abort.
+# It runs in BOTH arms and is EVIDENCE, never the gate's comparand. It aborts on ANY un-inspectable
+# source repo — under H1 that is the whole point: fail BEFORE the freeze rather than after the
+# outage. A PARTIAL failure aborts too, and that is deliberate: run 29725194755 failed on 8 of 10,
+# so an all-or-nothing threshold would have gone green, held the freeze, taken the outage and
+# aborted at the gate anyway. Failing here costs zero downtime.
+#
+# (This header said the opposite — "its one aborting condition is every probed source repo" and
+# "a partial failure must NOT abort" — until #6759. The SUT never behaved that way: `-gt 0` shipped
+# in the same commit as the paragraph claiming `every`. Reading this header first was what made L6j
+# look like a test-vs-SUT design contradiction rather than a stale comment.)
 rm -rf "${D_SRC:?}/workspaces"
 mkdir -p "$D_SRC/workspaces"
 mk_repo "$D_SRC/workspaces/22222222-0000-0000-0000-00000000000b"
@@ -980,11 +1243,19 @@ bash -c '
   fsck_advisory_probe "$SRC"
 ' > "$L6J_ALL_OUT" 2>&1
 L6J_ALL_RC=$?
-if [ "$L6J_PARTIAL_RC" -eq 0 ] && [ "$L6J_ALL_RC" -ne 0 ] \
+# ANY probe_failed aborts pre-freeze — NOT only the all-of-them case. The all-or-nothing threshold
+# did not cover the incident this probe was built for: run 29725194755 failed on 8 of 10, so an ALL
+# threshold would have gone green, held the freeze, taken the outage, and aborted at the gate anyway.
+# Failing here costs zero downtime. Both arms must therefore abort, and both must name the pre-freeze
+# no-rollback language so an operator never reaches for ROLLBACK=1 after it.
+if [ "$L6J_PARTIAL_RC" -ne 0 ] && [ "$L6J_ALL_RC" -ne 0 ] \
   && grep -qE -- 'phase=advisory' "$L6J_MARKER" \
   && ! grep -qE -- 'phase=gate' "$L6J_MARKER" \
+  && grep -qE -- 'could not inspect 1 of 2' "$L6J_OUT" \
+  && grep -qE -- 'could not inspect 2 of 2' "$L6J_ALL_OUT" \
+  && grep -qE -- 'no freeze was held' "$L6J_OUT" \
   && grep -qE -- 'no freeze was held' "$L6J_ALL_OUT"; then
-  ok "L6j: the advisory probe emits phase=advisory rows, tolerates a PARTIAL probe failure, and aborts PRE-FREEZE when every source repo is un-inspectable"
+  ok "L6j: the advisory probe emits phase=advisory rows and aborts PRE-FREEZE on ANY un-inspectable source repo (1-of-2 and 2-of-2), naming the count and the no-rollback language"
 else
   no "L6j: advisory probe misbehaved (partial_rc=$L6J_PARTIAL_RC all_rc=$L6J_ALL_RC)"
   note "partial marker: $(grep -m2 SOLEUR "$L6J_MARKER" 2>/dev/null)"

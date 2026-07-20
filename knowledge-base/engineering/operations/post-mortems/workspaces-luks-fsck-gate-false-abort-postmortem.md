@@ -120,6 +120,34 @@ discarded) is `fatal: detected dubious ownership`: the cutover runs as root, con
   hypothesis without spending a freeze approval — and aborts before the outage if any source repo is
   un-inspectable.
 
+## Amendment — what the corrective actions did NOT cover (PR #6759, 2026-07-20)
+
+The section above describes the gate as shipped. Follow-up work found that three of its properties
+were **asserted but untested**, so this report should not be read as evidence the gate was
+trustworthy on the day it merged:
+
+- **The abort threshold had no test.** `_fsck_emit_and_verdict` aborts on ANY `probe_failed`
+  (`-gt 0`), but every gate fixture in the loopback suite probed exactly ONE workspace, where
+  `1-of-1` is indistinguishable from `all-of-1`. Mutation-proven: restoring the superseded ALL
+  threshold passed every case while turning a 1-of-2 `probe_failed` into `rc 0, "no copy-introduced
+  regression"` — this incident's own 8-of-10 shape, in the **gate** path, inside the freeze, where a
+  false green precedes Phase 5's plaintext wipe. Now covered by L6k's two-workspace fixture.
+- **`_FSCK_SETUP_FATAL_RE` carried a dead alternative.** `cannot chdir` never matched anything —
+  git emits `fatal: cannot change to '<path>'`. Fail-closed via branch (2b), so no cutover was
+  mis-certified, but the allowlist claimed precision it did not have. Every alternative now carries
+  a measured/unmeasured record.
+- **Branch (2b) itself had no test.** It is the only thing preventing an unrecognised fatal —
+  which appears *identically on both sides*, so the differential finds no delta — from classifying
+  `preexisting` and returning 0. Now covered by L6l.
+- **H1 was never actually reproduced in CI.** The ownership refusal had not fired once across five
+  PRs. The cause was measured, not inferred: the GitHub runner image ships `safe.directory = *` in
+  its system gitconfig, so no ownership check could fire under any mechanism. With ambient config
+  neutralized it fires from genuine foreign-uid ownership, and L6m now proves `-c safe.directory=`
+  load-bearing against real git.
+
+None of this changes the incident's timeline or its Art. 33/34 assessment. It does change how much
+confidence the "Corrective actions" section above should carry on its own.
+
 ## Action Items & Follow-ups
 
 | Issue | Item | Owner |
@@ -127,6 +155,7 @@ discarded) is `fatal: detected dubious ownership`: the cutover runs as root, con
 | #6754 | Phase 5's plaintext wipe should gate on `skipped=0` — a skipped workspace was never inspected, and nothing between the gate's log line and that wipe reads the count | engineering |
 | #6754 | Loopback Session D builds a dm-crypt device it never mounts, so the cross-mount hazard L6a describes is not reproduced | engineering |
 | #6733 | The cutover itself is still not complete. This report covers the aborts; only a completed run closes it | engineering |
+| #6766 | The loopback suite ran red on `main` unnoticed: `infra-validation.yml` has no `push` trigger and `deploy-script-tests` is not a required check, so an absent or failing run is indistinguishable from a passing one | engineering |
 
 ## Cross-references
 
