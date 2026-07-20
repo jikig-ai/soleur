@@ -579,7 +579,9 @@ and let a `dry_run=true` rehearsal decide H1 for free.
 
 ### Phase 3 — Verify
 
-- Loopback suite green: 10 pre-existing + 10 new = **20** pass/fail cases, 0 failures.
+- Loopback suite green: 10 pre-existing + 13 new = **23** pass/fail cases, 0 failures.
+  (13, not 10: review added L6h2 byte-ceiling fail-closed, L6h3 object-count floor, L6h4 instrument
+  failure — three abort classes that were unreachable from any fixture as originally written.)
 - `bash -n` on both edited files.
 - `shellcheck` only if `.github/workflows/infra-validation.yml` already runs it on these files —
   verify before asserting.
@@ -636,10 +638,13 @@ converted to behavioural assertions in the harness. What remains are checkable p
 ### Pre-merge (PR)
 
 1. The old anchor is gone **and** the new form is present — absence alone would pass for `&>/dev/null`
-   or a re-folded `>"$out" 2>&1`, which is the defect the plan forbids by name:
-   - `grep -c 'fsck --full >/dev/null 2>&1' <script>` → `0`
+   or a re-folded `>"$out" 2>&1`, which is the defect the plan forbids by name. Both greps below
+   EXCLUDE comment lines (`grep -v '^[[:space:]]*#'`): the new code quotes both forbidden strings
+   verbatim in its explanatory comments, so the bare greps return 1 against correct code and the
+   privacy gate stops being a mechanical check:
+   - `grep -v '^[[:space:]]*#' <script> | grep -c 'fsck --full >/dev/null 2>&1'` → `0`
    - the new probe redirects to **separate** files: a `>"$…" 2>"$…"` form on the fsck invocation.
-2. `grep -c -- '--name-objects' <script>` → `0`.
+2. `grep -v '^[[:space:]]*#' <script> | grep -c -- '--name-objects'` → `0`.
 3. **No bare `git -C` in the new functions** — every git invocation inside them carries
    `--no-optional-locks`, mirroring the statically-checkable property `manifest_of` was written to
    have. Assert over the function bodies, not the whole file.
@@ -648,7 +653,7 @@ converted to behavioural assertions in the harness. What remains are checkable p
    `grep -nE 'safe\.directory' <script>` — inspect every hit; assert none matches
    `safe\.directory=["']?\*` and none is preceded by `config --global`.
 5. The loopback suite: `sudo bash apps/web-platform/infra/workspaces-luks-loopback.test.sh` → exit 0,
-   output matches `workspaces-luks-loopback: 20 passed, 0 failed`. This subsumes the behavioural
+   output matches `workspaces-luks-loopback: 23 passed, 0 failed`. This subsumes the behavioural
    proof of every classification — including **L6e** (`probe_failed` aborts: the anti-no-op proof),
    **L6f** (rc 0 with errors still aborts), **L6g** (the classifier is total and fails closed),
    **L6h** (a dst-only line beyond the cap still aborts), and **L6i** (L6b's abort is load-bearing,

@@ -651,18 +651,22 @@ rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
 mkdir -p "$D_SRC/workspaces"
 mk_repo "$D_SRC/workspaces/dddddddd-0000-0000-0000-000000000004"
 mk_repo "$D_SRC/workspaces/dddddddd-0000-0000-0000-000000000005"
-corrupt_loose "$D_SRC/workspaces/dddddddd-0000-0000-0000-000000000004"
+corrupt_loose "$D_SRC/workspaces/dddddddd-0000-0000-0000-000000000004" blob
 rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
-corrupt_loose "$D_DST/workspaces/dddddddd-0000-0000-0000-000000000005"
+corrupt_loose "$D_DST/workspaces/dddddddd-0000-0000-0000-000000000005" blob
 L6D_OUT="$TMPROOT/l6d.out"; L6D_MARKER="$TMPROOT/l6d.marker"
 run_gate "$L6D_OUT" "$L6D_MARKER" "$D_SRC" "$D_DST"
 L6D_RC=$?
+# Line-ANCHORED with a NEGATIVE CONTROL. Four independent whole-file greps passed against a SUT
+# that attached copy_corruption to 004 (the SHARED fault) and preexisting to 005 (the dst-only
+# fault) — i.e. the case named "path prefixes normalized" went green under exactly the
+# normalization hole it claims to exclude.
 if [ "$L6D_RC" -ne 0 ] \
-  && grep -qE -- 'ws=dddddddd-0000-0000-0000-000000000005' "$L6D_MARKER" \
-  && grep -qE -- 'classification=copy_corruption' "$L6D_MARKER" \
-  && grep -qE -- 'classification=preexisting' "$L6D_MARKER" \
-  && grep -qE -- 'copy_corruption=1' "$L6D_MARKER"; then
-  ok "L6d: a dst-only fault aborts while the shared fault stays preexisting — path prefixes normalized, exactly ONE copy_corruption"
+  && grep -qE -- 'classification=copy_corruption .*ws=dddddddd-0000-0000-0000-000000000005$' "$L6D_MARKER" \
+  && grep -qE -- 'classification=preexisting .*ws=dddddddd-0000-0000-0000-000000000004$' "$L6D_MARKER" \
+  && ! grep -qE -- 'classification=copy_corruption .*ws=dddddddd-0000-0000-0000-000000000004$' "$L6D_MARKER" \
+  && grep -qE -- 'copy_corruption=1 ' "$L6D_MARKER"; then
+  ok "L6d: the dst-only fault aborts on ITS OWN ws= while the shared fault stays preexisting on ITS OWN ws= (negative control on the inverse) — prefixes normalized, exactly ONE copy_corruption"
 else
   no "L6d: mixed shared/dst-only faults misclassified (rc=$L6D_RC) — likely a prefix-normalization hole"
   note "marker: $(grep -c SOLEUR "$L6D_MARKER" 2>/dev/null) rows; $(grep -m3 'classification=' "$L6D_MARKER" 2>/dev/null)"
@@ -703,10 +707,12 @@ break_alternates "$D_DST/workspaces/ffffffff-0000-0000-0000-000000000007" 1
 L6F_OUT="$TMPROOT/l6f.out"; L6F_MARKER="$TMPROOT/l6f.marker"
 run_gate "$L6F_OUT" "$L6F_MARKER" "$D_SRC" "$D_DST"
 L6F_RC=$?
+# NOT an alternation. `classification=(copy_corruption|skipped)` was a permanent fail-open: it would
+# have been satisfied by a SUT that skipped the workspace entirely and inspected nothing.
 if [ "$L6F_RC" -ne 0 ] \
-  && grep -qE -- 'classification=(copy_corruption|skipped)' "$L6F_MARKER" \
-  && grep -qE -- 'dst_rc=0' "$L6F_MARKER"; then
-  ok "L6f: a dst-only error line emitted at rc 0 still aborts — rc never short-circuits the set comparison"
+  && grep -qE -- 'classification=copy_corruption .*ws=ffffffff-0000-0000-0000-000000000007$' "$L6F_MARKER" \
+  && grep -qE -- 'classification=copy_corruption .*dst_rc=0 ' "$L6F_MARKER"; then
+  ok "L6f: a dst-only error line emitted at rc 0 still aborts as copy_corruption — rc never short-circuits the set comparison"
 else
   no "L6f: rc-0-with-errors was treated as clean (rc=$L6F_RC) — the new gate is weaker than the old one"
   note "marker: $(grep -m2 'classification=' "$L6F_MARKER" 2>/dev/null)"
@@ -748,26 +754,108 @@ fi
 # --- L6h: caps bound EMISSION only — a dst-only line beyond the cap must STILL abort -------------
 # The cap exists to stop a log flood, not to stop the comparison. If comparison consumed the capped
 # capture, a pathological repo could hide the one line that matters behind 40 benign ones.
+# THREE workspaces, so cap=1 genuinely truncates (the earlier single-workspace form was
+# UNSATISFIABLE: `truncated` needs rows > cap, and 1 > 1 is false, so the case could never have been
+# observed green). The corrupt one must still abort and must be the row that SURVIVES the cap.
 rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
 mkdir -p "$D_SRC/workspaces"
 mk_repo "$D_SRC/workspaces/77777777-0000-0000-0000-000000000009"
-break_alternates "$D_SRC/workspaces/77777777-0000-0000-0000-000000000009" 30
+mk_repo "$D_SRC/workspaces/77777777-0000-0000-0000-000000000019"
+mk_repo "$D_SRC/workspaces/77777777-0000-0000-0000-000000000029"
 rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
-corrupt_loose "$D_DST/workspaces/77777777-0000-0000-0000-000000000009"
+corrupt_loose "$D_DST/workspaces/77777777-0000-0000-0000-000000000009" blob
 L6H_OUT="$TMPROOT/l6h.out"; L6H_MARKER="$TMPROOT/l6h.marker"
-FSCK_MARKER_CAP_OVERRIDE=1 FSCK_OUT_CAP_OVERRIDE=32 \
-  run_gate "$L6H_OUT" "$L6H_MARKER" "$D_SRC" "$D_DST"
+FSCK_MARKER_CAP_OVERRIDE=1 run_gate "$L6H_OUT" "$L6H_MARKER" "$D_SRC" "$D_DST"
 L6H_RC=$?
 L6H_ROWS="$(grep -c 'idx=' "$L6H_MARKER" 2>/dev/null || true)"
 if [ "$L6H_RC" -ne 0 ] \
-  && grep -qE -- 'classification=copy_corruption' "$L6H_MARKER" \
-  && grep -qE -- 'truncated=1' "$L6H_MARKER" \
-  && [ "${L6H_ROWS:-0}" -le 1 ]; then
-  ok "L6h: caps truncate EMISSION (rows=$L6H_ROWS, truncated=1) while the beyond-cap dst-only line still ABORTS"
+  && grep -qE -- 'classification=copy_corruption .*ws=77777777-0000-0000-0000-000000000009$' "$L6H_MARKER" \
+  && grep -qE -- 'truncated=1 ' "$L6H_MARKER" \
+  && grep -qE -- 'more=2 ' "$L6H_MARKER" \
+  && [ "${L6H_ROWS:-0}" -eq 1 ]; then
+  ok "L6h: the emission cap drops 2 of 3 rows (truncated=1 more=2) yet the ABORTING row is the one that survives, and the verdict is unchanged"
 else
-  no "L6h: capping changed the verdict (rc=$L6H_RC rows=${L6H_ROWS:-?}) — comparison is consuming the capped capture"
-  note "marker: $(grep -m2 'classification=' "$L6H_MARKER" 2>/dev/null)"
+  no "L6h: capping changed the verdict or dropped the aborting row (rc=$L6H_RC rows=${L6H_ROWS:-?})"
+  note "marker: $(grep -m3 'classification=' "$L6H_MARKER" 2>/dev/null)"
   note "out:    $(tail -n 5 "$L6H_OUT" 2>/dev/null)"
+fi
+
+# --- L6h2: a capture that exceeds the BYTE ceiling fails CLOSED ---------------------------------
+# The byte cap (FSCK_OUT_CAP*400) bounds the RAW capture that _fsck_normalize reads, so a truncated
+# capture would make the differential compare PARTIAL sets — and truncation is asymmetric in the
+# unsafe direction (dst paths are longer, so dst loses its tail first, preferentially discarding the
+# dst-only lines that abort). The gate must refuse to compare rather than compare partially.
+rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+mkdir -p "$D_SRC/workspaces"
+mk_repo "$D_SRC/workspaces/88888888-0000-0000-0000-00000000000d"
+break_alternates "$D_SRC/workspaces/88888888-0000-0000-0000-00000000000d" 400
+rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+L6H2_OUT="$TMPROOT/l6h2.out"; L6H2_MARKER="$TMPROOT/l6h2.marker"
+FSCK_OUT_CAP_OVERRIDE=1 run_gate "$L6H2_OUT" "$L6H2_MARKER" "$D_SRC" "$D_DST"
+L6H2_RC=$?
+if [ "$L6H2_RC" -ne 0 ] \
+  && grep -qE -- 'classification=unclassified reason=capture_capped' "$L6H2_MARKER" \
+  && grep -qE -- 'cannot classify' "$L6H2_OUT"; then
+  ok "L6h2: a capture that hit the byte ceiling fails CLOSED (reason=capture_capped) instead of comparing a partial set"
+else
+  no "L6h2: a byte-capped capture did NOT fail closed (rc=$L6H2_RC) — the differential is comparing truncated captures"
+  note "marker: $(grep -m2 'classification=' "$L6H2_MARKER" 2>/dev/null)"
+  note "out:    $(tail -n 5 "$L6H2_OUT" 2>/dev/null)"
+fi
+
+# --- L6h3: object-count floor — loss with NO error line on either side ---------------------------
+# An UNREFERENCED object is reported only as `dangling`, which the gate filters out as a notice. Its
+# absence on the copy therefore produces ZERO error lines on either side, so the error-line
+# differential is structurally blind to it. Only the per-side object count can see it — this is what
+# makes `ok` mean "walked N objects and found nothing" rather than "walked nothing".
+rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+mkdir -p "$D_SRC/workspaces"
+mk_repo "$D_SRC/workspaces/aaaaaaaa-0000-0000-0000-00000000000e"
+L6H3_EXTRA="$(printf 'unreferenced payload\n' | git -C "$D_SRC/workspaces/aaaaaaaa-0000-0000-0000-00000000000e" hash-object -w --stdin 2>/dev/null)"
+rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+if [ -z "$L6H3_EXTRA" ]; then
+  no "L6h3 FIXTURE ERROR: hash-object did not produce an unreferenced blob — treat as un-run"
+else
+  rm -f "$D_DST/workspaces/aaaaaaaa-0000-0000-0000-00000000000e/.git/objects/${L6H3_EXTRA:0:2}/${L6H3_EXTRA:2}"
+  L6H3_OUT="$TMPROOT/l6h3.out"; L6H3_MARKER="$TMPROOT/l6h3.marker"
+  run_gate "$L6H3_OUT" "$L6H3_MARKER" "$D_SRC" "$D_DST"
+  L6H3_RC=$?
+  if [ "$L6H3_RC" -ne 0 ] \
+    && grep -qE -- 'classification=copy_corruption reason=object_count_regression' "$L6H3_MARKER"; then
+    ok "L6h3: an object lost on the copy that emits NO error line on either side is still caught, by the object-count floor — 'clean' now means 'inspected', not 'found nothing'"
+  else
+    no "L6h3: object loss with no error line went UNDETECTED (rc=$L6H3_RC) — the gate cannot distinguish a clean walk from a walk of nothing"
+    note "marker: $(grep -m2 'classification=' "$L6H3_MARKER" 2>/dev/null)"
+  fi
+fi
+
+# --- L6h4: instrument failure — zero enumeration against a non-zero G2 --------------------------
+# An empty enumeration is a broken instrument, not an empty volume (DP-9 F10: floors derive from the
+# OBSERVED count, never a hardcoded zero). G2_COUNT lives in the main body past the sourced-detection
+# guard, so the harness must inject it — without that, this whole abort class is unreachable from
+# any test and could be deleted with the suite green.
+rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+mkdir -p "$D_SRC/workspaces" "$D_DST/workspaces"
+L6H4_OUT="$TMPROOT/l6h4.out"; L6H4_MARKER="$TMPROOT/l6h4.marker"
+: > "$L6H4_OUT"; : > "$L6H4_MARKER"
+MARKER_LOG="$L6H4_MARKER" CUTOVER="$CUTOVER" SRC="$D_SRC" DST="$D_DST" \
+WORKSPACES_MOUNT="$D_SRC" WORKSPACES_STAGING="$D_DST" WORKSPACES_MAPPER_NAME="$MAPPER_NAME" \
+bash -c '
+  source "$CUTOVER"
+  logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+  die()        { echo "DIE: $*"; exit 1; }
+  emit_drift() { echo "EMIT_DRIFT: $1"; }
+  G2_COUNT=7
+  verify_git_fsck_differential "$SRC" "$DST"
+' > "$L6H4_OUT" 2>&1
+L6H4_RC=$?
+if [ "$L6H4_RC" -ne 0 ] \
+  && grep -qE -- 'total=0 ' "$L6H4_MARKER" \
+  && grep -qE -- 'enumerated ZERO workspaces while G2 observed 7' "$L6H4_OUT"; then
+  ok "L6h4: zero workspaces enumerated against G2=7 aborts as instrument failure — an empty enumeration is never read as emptiness"
+else
+  no "L6h4: zero enumeration did NOT abort (rc=$L6H4_RC) — the gate would certify a volume it never read"
+  note "out: $(tail -n 5 "$L6H4_OUT" 2>/dev/null)"
 fi
 
 # --- L6i: MUTATION CONTROL (L5d discipline) — prove L6b's abort is load-bearing ------------------
