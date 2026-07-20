@@ -191,6 +191,7 @@ fi
 # of the bug instead of the bug is the same class of error this suite exists to
 # catch. Anchor on executable syntax only.
 wf_code=$(grep -vE '^[[:space:]]*#' <<<"$wf_body")
+# shellcheck disable=SC2016  # single quotes are intentional — the pattern must match the LITERAL text "$DIRS" in the workflow, not this shell's expansion of it
 if grep -Eq '\$DIRS"?[[:space:]]*==[[:space:]]*"\[\]"' <<<"$wf_code"; then
   fail=$((fail + 1)); echo "[FAIL] infra-validation.yml still branches on \$DIRS == \"[]\" (the F1 early-return)" >&2
 else

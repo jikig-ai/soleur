@@ -272,6 +272,7 @@ WORKFLOW="$SCRIPT_DIR/../../../.github/workflows/infra-validation.yml"
 WF_BODY=$(cat "$WORKFLOW")
 
 # `merge_group` must be a real branch condition, not a mention in prose.
+# shellcheck disable=SC2016  # single quotes are intentional — the pattern must match the LITERAL text "$EVENT_NAME" in the workflow, not this shell's expansion of it
 if grep -Eq '\[\[[[:space:]]*"\$EVENT_NAME"[[:space:]]*==[[:space:]]*"merge_group"[[:space:]]*\]\]' <<<"$WF_BODY"; then
   echo "  PASS: workflow branches on EVENT_NAME == merge_group"; PASS=$((PASS + 1))
 else
@@ -280,6 +281,7 @@ fi
 
 # `push` must reach the enumerate-all arm, i.e. appear in a test against
 # EVENT_NAME — not merely in the `on:` block.
+# shellcheck disable=SC2016  # single quotes are intentional — literal "$EVENT_NAME" text match, see above
 if grep -Eq '\$EVENT_NAME"[[:space:]]*==[[:space:]]*"push"' <<<"$WF_BODY"; then
   echo "  PASS: workflow routes EVENT_NAME == push"; PASS=$((PASS + 1))
 else
