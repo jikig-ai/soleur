@@ -424,10 +424,10 @@ a nag posted into a 0-subscriber repo is not an escalation.
 
    **`OPERATOR_GH_LOGIN` does not exist today — this plan creates it.** Verified: the workflow's
    `env:` blocks (:55, :76) carry only `anthropic_api_key` and `github_token`; there is no operator
-   identity anywhere in the asset or in `scripts/provision-operator-digest-repo.sh`. An earlier draft
+   identity anywhere in the asset or in `plugins/soleur/skills/operator-digest/scripts/provision-operator-digest-repo.sh`. An earlier draft
    of this plan referenced `${OPERATOR_GH_LOGIN}` as though it already existed — a paraphrase-without-
    verification slip caught by the deepen pass. So the variable must also be **provisioned**:
-   `scripts/provision-operator-digest-repo.sh` sets it via
+   `plugins/soleur/skills/operator-digest/scripts/provision-operator-digest-repo.sh` sets it via
    `gh variable set OPERATOR_GH_LOGIN -R jikig-ai/operator-digest --body "<login>"`.
 
    Why a repo variable rather than a literal or `@me`: `@me` resolves to the `github-actions` bot (the
@@ -644,7 +644,7 @@ Phase order is load-bearing: the contract-defining script (Phase 1) must precede
       (`operator-digest.workflow.yml` :94 and :98 — verified exactly two, neither has `--assignee`),
       with an empty-check that **exits non-zero** if unset. Needs only `repo` scope. **Do NOT attempt
       the watch-subscription API** — the token lacks `notifications` (measured; see D3.1).
-- [ ] 5.1b Provision the variable in `scripts/provision-operator-digest-repo.sh`:
+- [ ] 5.1b Provision the variable in `plugins/soleur/skills/operator-digest/scripts/provision-operator-digest-repo.sh`:
       `gh variable set OPERATOR_GH_LOGIN -R jikig-ai/operator-digest --body "<login>"`. **The variable
       does not exist today** — verified against the asset's `env:` blocks (:55, :76, which carry only
       `anthropic_api_key` and `github_token`) and the provision script.

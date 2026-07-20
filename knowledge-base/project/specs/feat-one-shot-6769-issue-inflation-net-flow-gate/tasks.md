@@ -63,7 +63,7 @@ Derived from
 ## Phase 5 — action-required sink (#6769)
 
 - [ ] 5.1a Add `OPERATOR_GH_LOGIN: ${{ vars.OPERATOR_GH_LOGIN }}` to the post-step `env:`, plus `--assignee "${OPERATOR_GH_LOGIN}"` on **both** `gh issue create` arms (`operator-digest.workflow.yml` :94 and :98 — verified exactly two, neither has `--assignee`), with an empty-check that **exits non-zero** if unset. **Do NOT call the subscription API** — the token lacks `notifications` (measured).
-- [ ] 5.1b Provision it in `scripts/provision-operator-digest-repo.sh`: `gh variable set OPERATOR_GH_LOGIN -R jikig-ai/operator-digest --body "<login>"`. **The variable does not exist today** — verified against the asset's `env:` blocks (:55, :76) and the provision script.
+- [ ] 5.1b Provision it in `plugins/soleur/skills/operator-digest/scripts/provision-operator-digest-repo.sh`: `gh variable set OPERATOR_GH_LOGIN -R jikig-ai/operator-digest --body "<login>"`. **The variable does not exist today** — verified against the asset's `env:` blocks (:55, :76) and the provision script.
 - [ ] 5.1c Set it on the already-provisioned repo (the script does not re-run automatically); verify with `gh variable list -R jikig-ai/operator-digest`.
 - [ ] 5.1d **Re-run the provision script to actually INSTALL the edited workflow.** The asset is INERT in soleur; the live copy lives in the private repo and only changes via `install_workflow()` in `plugins/soleur/skills/operator-digest/scripts/provision-operator-digest-repo.sh`. Without this, 5.1a edits a file nothing runs. Requires Doppler (`ANTHROPIC_API_KEY`) or the script `die`s.
 - [ ] 5.2 `operator-digest/SKILL.md` §4: add `createdAt,labels`; sort age-desc; render `(NNN days old)`; band >90d / 30-90d / <30d. **SLA arm only — no auto-close.**
