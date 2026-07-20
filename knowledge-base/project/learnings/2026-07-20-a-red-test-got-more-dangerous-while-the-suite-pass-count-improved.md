@@ -137,6 +137,13 @@ probe, which is the strictly less dangerous of the two locations.
   wrong — and note the failure shape: the probe's *conclusion* ("this host CANNOT produce H1") was
   itself a measurement artifact, true of the measurement and false of the host. Print the inputs,
   not just the verdict.
+
+  **Confirmed on the next run (29746786010): 27 passed, 0 failed.** With ambient config neutralized
+  the refusal fires from genuine foreign-uid ownership alone — `rc=128 fatal: detected dubious
+  ownership`, no `GIT_TEST_*` knob involved — so `L6m` proves `-c safe.directory=` load-bearing
+  against real git, in CI, and L6k-CAP's conditional assertion confirms git's wording still matches
+  `_FSCK_SETUP_FATAL_RE`. The capability that three commits had written off as impossible was
+  available the whole time, behind one line of ambient config.
 - **Treat another project's test-only env knob as unavailable.** `GIT_TEST_*` is not API.
 
 ## Related

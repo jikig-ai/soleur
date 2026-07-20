@@ -28,26 +28,30 @@ deepened: 2026-07-20
 >   read as a test-vs-SUT design contradiction; #6759 removed it from both.
 > - **1.1 — the `chown -R 1001:1001` fixture rationale.** The premise ("exercises `safe.directory`")
 >   does not hold on a GitHub-hosted runner: uid 1001 is the `runner` user, i.e. `$SUDO_UID` once the
->   suite self-elevates, and git accepts `SUDO_UID` as an owner. Measured further in #6759: the
->   ownership refusal does not fire on the runner **at all** — not via a foreign uid (65534) and not
->   via `GIT_TEST_ASSUME_DIFFERENT_OWNER=1` (which does fire locally on git 2.53.0; the runner is on
->   2.54.0, but no experiment isolated the version, so that remains a candidate, not a cause). L6k's
->   arm (i) therefore synthesizes the refusal, and the "`-c safe.directory=` is load-bearing" proof
->   is explicitly UNPROVEN in CI rather than silently assumed. See L6k-CAP.
+>   suite self-elevates, and git accepts `SUDO_UID` as an owner. So uid 1001 was indeed the wrong
+>   fixture — but re-chowning to 65534 did not make the refusal fire either, and #6759 spent three
+>   commits guessing why before `L6k-CAP` measured it: the runner image ships `safe.directory = *` in
+>   `/etc/gitconfig`, which allowed every directory regardless of uid. With ambient config
+>   neutralized, uid 65534 refuses exactly as the design assumed — `rc=128 fatal: detected dubious
+>   ownership`, no `GIT_TEST_*` knob needed. The corrected fixture rationale is therefore: a foreign
+>   uid IS the right mechanism, and it must be paired with `GIT_CONFIG_SYSTEM/GLOBAL=/dev/null` or
+>   the ambient allow-list silently defeats it. L6k arm (i) still synthesizes (deterministic
+>   classifier test); `L6m` carries the load-bearing proof against real git and PASSES in CI.
 > - **3.1 — the expected case count.** Said `20 passed`. The suite carried **24** executed cases at
 >   #6745 and **25** after #6759 adds L6l (confirmed in CI: `25 passed, 0 failed`). Two further ids,
 >   `L6k-CAP` and `L6m`, are CONDITIONAL on the host being able to produce a real ownership refusal,
 >   so the total is **25 or 27**, never 26. Any future "expected N" must name which it means.
->   Initially the runner measured CANNOT-produce and both stayed note-only; that turned out to be the
->   runner image shipping `safe.directory = *` in `/etc/gitconfig`, not a property of the host — the
->   probes now neutralize ambient git config, which should make both assert. See the next note.
+>   **Measured on run 29746786010: 27 passed, 0 failed** — both conditional cases assert on the
+>   runner once ambient git config is neutralized.
 > - **The cause of the H1 mystery, measured rather than guessed (added after the first green run).**
 >   Three separate explanations were advanced across #6745 and #6759 for why the ownership refusal
 >   never fired — the fixture uid, then git 2.54.0-vs-2.53.0, then "the runner simply cannot". All
 >   three were wrong. `L6k-CAP` printed the answer on its first CI run: the GitHub runner image ships
 >   a SYSTEM gitconfig containing `safe.directory = *`, so git allowed every directory and no
 >   ownership check could fire. Neutralizing `GIT_CONFIG_SYSTEM/GLOBAL` makes the refusal fire, which
->   makes the load-bearing `-c safe.directory=` proof runnable in CI after all — it is now `L6m`.
+>   makes the load-bearing `-c safe.directory=` proof runnable in CI after all — it is now `L6m`,
+>   and it PASSES: `rc=128 fatal: detected dubious ownership` fires from genuine foreign-uid
+>   ownership alone, with no `GIT_TEST_*` knob involved. H1 is proven against real git in CI.
 
 ## Phase 0 — Preconditions
 
@@ -138,8 +142,9 @@ deepened: 2026-07-20
 
 ## Phase 3 — Verify
 
-- [ ] 3.1 Loopback suite → `25 passed, 0 failed`, exit 0 **on the runner** (26 on a host where
-      L6k-CAP asserts — see the count note above). Corrected v3: the stated `20` never matched the
+- [x] 3.1 Loopback suite → **`27 passed, 0 failed`, exit 0** (run 29746786010, sha d0ad9b3b9): 25
+      unconditional + L6k-CAP + L6m, both of which assert because the runner CAN produce H1 once
+      ambient git config is neutralized. Corrected v3: the stated `20` never matched the
       suite. #6745 merged at 21/3; #6759 took it to 23/1, then added L6l and the ANY-vs-ALL
       two-workspace fixture. This is a **CI-only** verification: the suite requires root + loopback +
       dm-crypt and self-elevates, so `deploy-script-tests` on the PR is the authoritative channel.
