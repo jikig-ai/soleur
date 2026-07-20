@@ -113,6 +113,17 @@ provider "cloudflare" {
 #   - seo-bulk-redirects.tf       (ACCOUNT-level http_request_redirect +
 #     redirect list — needs Account Rulesets:Edit + Account Filter Lists:Edit,
 #     the widen tracked in #5092) — #3367
+#   - seo-config-rules.tf         (http_config_settings — Email Obfuscation off
+#     on the marketing hosts; needed a Config Rules:Edit widen, 2026-07-20 GSC
+#     "Not found (404)" on /cdn-cgi/l/email-protection)
+#
+# Decision rule for the next phase added here (see ADR): the new permission is
+# in the SAME API family (zone rulesets) and on the SAME zone → widen THIS
+# token. A distinct API surface (R2 object storage, zone settings) → mint a
+# narrow alias instead. Widening moves no secret material, so it adds no
+# no-default root variable — and an unprovisioned one fails the WHOLE
+# merge-triggered apply, since Terraform resolves root vars before -target
+# pruning.
 provider "cloudflare" {
   alias     = "rulesets"
   api_token = var.cf_api_token_rulesets

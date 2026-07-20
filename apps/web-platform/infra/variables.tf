@@ -221,7 +221,7 @@ variable "cf_api_token_zone_settings" {
 }
 
 variable "cf_api_token_rulesets" {
-  description = "Cloudflare API token narrowed to Cache Rules:Edit + Zone WAF:Edit + Single Redirect Rules:Edit + Transform Rules:Edit on soleur.ai, PLUS (post-#5092 widen) account-level Account Rulesets:Edit + Account Filter Lists:Edit for Bulk Redirects (cloudflare_ruleset/cloudflare_list resources across http_request_cache_settings, http_request_firewall_custom, http_request_dynamic_redirect, http_response_headers_transform, and account http_request_redirect phases; see cache.tf, bot-allowlist.tf, seo-rulesets.tf, and seo-bulk-redirects.tf)"
+  description = "Cloudflare API token narrowed to Cache Rules:Edit + Zone WAF:Edit + Single Redirect Rules:Edit + Transform Rules:Edit + Config Rules:Edit on soleur.ai, PLUS (post-#5092 widen) account-level Account Rulesets:Edit + Account Filter Lists:Edit for Bulk Redirects (cloudflare_ruleset/cloudflare_list resources across http_request_cache_settings, http_request_firewall_custom, http_request_dynamic_redirect, http_response_headers_transform, http_config_settings, and account http_request_redirect phases; see cache.tf, bot-allowlist.tf, seo-rulesets.tf, seo-bulk-redirects.tf, and seo-config-rules.tf). THIS DESCRIPTION IS THE SCOPE LEDGER — a new ruleset phase needs a matching permission here AND on the live token, or the apply 403s (the http_config_settings widen was verified by live probe, not by the permission label)."
   type        = string
   sensitive   = true
 }
