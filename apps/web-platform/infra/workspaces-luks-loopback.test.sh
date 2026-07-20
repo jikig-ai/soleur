@@ -865,9 +865,12 @@ fi
 # WHAT THIS CASE MAY AND MAY NOT ASSERT — measured, not assumed. Two independent attempts to provoke
 # a REAL ownership refusal on the GH-hosted runner both failed, each producing src_rc=0 dst_rc=0:
 #   - a foreign-uid fixture (chown 65534, neither 0 nor $SUDO_UID), and
-#   - GIT_TEST_ASSUME_DIFFERENT_OWNER=1, which DOES fire locally on git 2.53.0 but does not on the
-#     runner's git 2.54.0. It is a git *test-suite* knob and carries no compatibility promise.
-# The L6k-CAP probe below measures that capability on every run instead of leaving it inferred.
+#   - GIT_TEST_ASSUME_DIFFERENT_OWNER=1, a git *test-suite* knob carrying no compatibility promise.
+# MEASURED: the env var DOES produce the refusal locally on git 2.53.0, and the refusal does NOT
+# appear on the runner (git 2.54.0) through either mechanism. The version difference is the leading
+# CANDIDATE explanation, NOT an isolated cause — nothing here has varied git version alone. That is
+# exactly why L6k-CAP below measures the capability on every run instead of leaving it inferred: the
+# next run reports which mechanism (if any) works on that host, rather than restating this guess.
 #
 # So the two halves are split by what is actually provable HERE:
 #   (i)  DETERMINISTIC, asserted below: given the H1 stderr shape, the gate must classify
