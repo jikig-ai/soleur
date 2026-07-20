@@ -76,30 +76,30 @@ Derived from
 ## Phase 2 — #6736 argv ceiling
 
 ### 2.1–2.2 Convert (4 sites)
-- [ ] 2.1.1 `rule-metrics-aggregate.sh` `--argjson enriched` → `--rawfile`, lifting the in-file
+- [x] 2.1.1 `rule-metrics-aggregate.sh` `--argjson enriched` → `--rawfile`, lifting the in-file
       precedent; plus in-file siblings.
-- [ ] 2.2.1 `skill-security-scan/scripts/lib.sh` + `run-scan.sh` (the only genuinely unbounded site
+- [x] 2.2.1 `skill-security-scan/scripts/lib.sh` + `run-scan.sh` (the only genuinely unbounded site
       in the issue's list).
-- [ ] 2.2.2 `apps/web-platform/infra/inngest-doublefire-probe.sh` (issue missed it).
-- [ ] 2.2.3 `apps/web-platform/infra/inngest-inventory.sh` (issue missed it; its sibling already
+- [x] 2.2.2 `apps/web-platform/infra/inngest-doublefire-probe.sh` (issue missed it).
+- [x] 2.2.3 `apps/web-platform/infra/inngest-inventory.sh` (issue missed it; its sibling already
       carries the #5523 comment).
 
 ### 2.3 Comment, don't assert — one exception
-- [ ] 2.3.1 `learning-retrieval-bench.sh` — comment the `.[0:20]` cap and the 7-seed array as
+- [x] 2.3.1 `learning-retrieval-bench.sh` — comment the `.[0:20]` cap and the 7-seed array as
       load-bearing. **No conversion, no harness.**
-- [ ] 2.3.2 `audit-bot-codeql-coverage.sh` — comment at the **corrected anchor**
+- [x] 2.3.2 `audit-bot-codeql-coverage.sh` — comment at the **corrected anchor**
       (`--argjson drift_entries`, one of the two lines the issue listed). **v1 pointed at `:275`,
       which does not exist.** Name `--limit 100` as the bound.
-- [ ] 2.3.3 `skill-freshness-aggregate.sh` — comment at the **producer** (`jq -s group_by(.skill)`),
+- [x] 2.3.3 `skill-freshness-aggregate.sh` — comment at the **producer** (`jq -s group_by(.skill)`),
       not the `--argjson` consumer, explaining the collapse-to-94-skills bound.
-- [ ] 2.3.4 `triage-prs.sh` — comment `--limit 200`, **and** the `PR_JSON` herestring invariant.
-- [ ] 2.3.5 **The one assertion**: a test that fails when `PR_JSON`'s herestring is replaced by
+- [x] 2.3.4 `triage-prs.sh` — comment `--limit 200`, **and** the `PR_JSON` herestring invariant.
+- [x] 2.3.5 **The one assertion**: a test that fails when `PR_JSON`'s herestring is replaced by
       `--argjson` (328,940 B at 17 PRs — 2.5× the ceiling today).
 
 ### 2.4 Fixture adequacy
-- [ ] 2.4.1 For each 2.1/2.2 conversion: generator-cardinality check **plus** an in-suite byte
+- [x] 2.4.1 For each 2.1/2.2 conversion: generator-cardinality check **plus** an in-suite byte
       assertion `> MAX_ARG_STRLEN`. Write the constant **named** at every use.
-- [ ] 2.4.2 Verify each fixture is **production-shaped**, not minimal — 1,200 minimal rows measure
+- [x] 2.4.2 Verify each fixture is **production-shaped**, not minimal — 1,200 minimal rows measure
       75,782 B, under the ceiling, and pass on unmodified code.
 
 ## Phase 3 — #6737 audit only
@@ -141,3 +141,37 @@ Derived from
 - [x] 4.3 Verify every `knowledge-base/` path cited in the plan resolves (run from repo root).
 - [ ] 4.4 Confirm `decision-challenges.md` (UC-1/2/3, E1, E2) is carried into the PR body by `/ship`.
 - [ ] 4.5 PR body uses `Closes #6734`, `Closes #6736`, `Closes #6737`.
+
+---
+
+## Deviations and corrections found during implementation
+
+Recorded rather than silently applied, per the plan's own practice of making corrections
+first-class rows.
+
+- **AC1's ">=2-tempfile window" is unreachable and was answered by measurement.** All six
+  `content-publisher.sh` allocation sites `rm -f` their own tempfile before returning, so
+  at most ONE is live at any instant. AC1 inherited ">=2" from a precedent guarding
+  trap REPLACEMENT, where it was load-bearing; this defect class is an EMPTY array, which
+  a single live tempfile separates unambiguously. `content-publisher.test.sh` R3 asserts
+  the production ceiling so the deviation is pinned by a test, not a comment.
+- **The issue's "removes nothing on every run" is half right.** The trap owned nothing,
+  but the explicit per-site `rm -f` means a completed run never leaked. Only aborts inside
+  the mktemp->rm window leaked. R1 is therefore a regression guard, not the discriminator;
+  R2 is (mutation-verified RED pre-fix, GREEN post-fix).
+- **PR_JSON outgrew the plan's figure**: 392,170 B at 20 open PRs (2.99x the ceiling), not
+  328,940 B at 17 (2.5x). Conclusion unchanged, magnitude larger.
+- **A regression test had blessed the R17 defect.** `inngest-inventory.test.sh` Test 12
+  (#5523 AC2) anchors narrowly, in its own words, so the "legitimate" `--argjson f/e/r` in
+  the final emit would not false-trip -- permanently exempting the site R17 identifies.
+- **R22c's own retraction was wrong in the direction that cuts against it.**
+  `TIER2_DEFERRED_CRONS` held 7 of 8 (not 6) and was INTRODUCED 2026-06-08, so the
+  confounding window is 5 days, not open-ended. 37-105 days per producer remain
+  unexplained after subtraction.
+- **The lint gate was wrong twice before it was right**, once too broad (flagged 3 correct
+  sites) and once too narrow (silently dropped 14 files, 4 real production allocations).
+  Both failure shapes are pinned as fixtures.
+- **Unreproduced subagent claim, deliberately NOT filed**: a report that
+  `check-supply-chain.sh` fails with `eco: unbound variable` on non-offline runs. All four
+  `add_query` call sites pass 2 arguments and the script exits 0 on bash 5.3.9. Not filed
+  as an issue, because filing an unverified claim is worse than not filing.
