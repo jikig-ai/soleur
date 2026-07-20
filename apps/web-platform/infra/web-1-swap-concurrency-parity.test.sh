@@ -13,7 +13,6 @@
 # future member is a visible allow-list edit, while a silently-dropped copy OR an
 # accidentally-enrolled job both fail loud):
 #   1. web-platform-release.yml        job `deploy`                 (tagged-release deploy)
-#   3. apply-web-platform-infra.yml    job `warm_standby`           (ADR-068 warm-standby)
 #   4. apply-deploy-pipeline-fix.yml   job `apply`                  (POSTs deploy at :607)
 #   5. apply-web-platform-infra.yml    job `workspaces_luks_cutover` (#6604 attaches the LUKS volume to web-1)
 # Plus the WORKFLOW-level member: workspaces-luks-cutover.yml (#6604 freeze — stops/repoints web-1's /mnt/data).

@@ -212,9 +212,10 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-counter-github" bash tests/scripts/test-destroy-guard-counter.sh
   run_suite "tests/scripts/destroy-guard-counter-sentry" bash tests/scripts/test-destroy-guard-counter-sentry.sh
   run_suite "tests/scripts/destroy-guard-counter-web-platform" bash tests/scripts/test-destroy-guard-counter-web-platform.sh
-  # web-2-recreate coherence preflight (AC10b) — drives the standalone preflight
+  # host image/apply coherence preflight (AC10b) — drives the standalone preflight
   # via its test seams (no docker/network/prod write). Registered here alongside
-  # the destroy-guard trio since it gates the same web-2-recreate dispatch.
+  # the destroy-guard trio: it is the host-agnostic coherence verifier the
+  # host_creates HALT's pinned-image chain names (#6575).
   run_suite "tests/scripts/host-image-coherence-preflight" bash tests/scripts/test-host-image-coherence-preflight.sh
   # #6197: inngest-host-replace scoped-recreate destroy-guard (mirrors the web2-recreate gate).
   run_suite "tests/scripts/inngest-host-replace-gate" bash tests/scripts/test-inngest-host-replace-gate.sh

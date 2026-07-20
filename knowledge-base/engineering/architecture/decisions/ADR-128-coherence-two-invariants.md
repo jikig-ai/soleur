@@ -238,6 +238,27 @@ Reviewed all three model files (`model.c4`, `views.c4`, `spec.c4`).
   describes no live element; one stale line-number citation into the deleted job was
   re-anchored to content.
 
+## Carried-forward requirements for the #6730 birth path (MUST)
+
+Deleting `web_2_recreate` removed assertions that were **never web-2-specific** and that
+nothing re-implements today. They are recorded here as binding acceptance criteria for the
+digest-pinned web-1 birth path #6730 builds. Until that path exists, the operator
+pinned-image chain in the `host_creates` HALT carries them as explicit manual steps.
+
+| # | Requirement | Why it is not optional |
+|---|---|---|
+| R1 | `SENTRY_DSN` MUST be non-empty in Doppler `prd_terraform` **before** any host is created. | The pre-extraction boot stages read ONLY the baked `${sentry_dsn}`; doppler is not installed yet, so its documented fallback is dead code at that point. An empty DSN means the host boots **dark** — a fresh-boot failure emits nothing and pages nobody. This is the exact zero-emit blind spot #6090 closed. |
+| R2 | The birth path MUST surface fresh-host Sentry events after the create. | A green apply is not a green boot. Without the surfacing step a host that died in cloud-init looks identical to one that came up. |
+| R3 | R2's reader MUST query the **EU** host `de.sentry.io`. | The project is EU-resident; a US `sentry.io` query against it returns empty — indistinguishable from "no errors". |
+| R4 | R2's reader MUST filter events client-side via a regex derived from `QUERY`. | The `/projects/../events/` endpoint ignores `message:` search and returns 0 for events that demonstrably exist. Passing `query=` there is a silent false-negative. |
+| R5 | R2's step MUST run `if: always()`. | A success-only surface cannot report the failure it exists to catch. |
+
+Provenance: these were AC14 / AC8 / AC8b / AC13 / AC16 in
+`apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh`, asserted against the
+`web_2_recreate` job. That file records the same loss inline at the deletion site. Re-add
+executable assertions there the moment an automated create path exists — a requirement that
+lives only in prose is one refactor away from being forgotten.
+
 ## References
 
 - Issues #6575 (swept here), #6712 (stays OPEN — cross-commit skew), #6730 (digest-pinned
