@@ -390,7 +390,7 @@ Do **not** triplicate the rationale. Each artifact has one job:
 - **AC3** — No PR C phase body was deleted. The checkbox count under `## PR C` still equals the
   Phase-0.3 baseline:
   `sed -n '/^## PR C/,$p' `knowledge-base/project/specs/feat-one-shot-6617-inngest-liveness-marker-registry-probe/tasks.md` | grep -cE '^\s*- \[[ x~]\]'` **== 46**.
-- **AC4** — **The changed-file set is exactly these six paths.** `git diff --name-only main...HEAD | sort`
+- **AC4** — **The changed-file set is exactly these seven paths.** `git diff --name-only main...HEAD | sort`
   must equal, verbatim:
   ```
   knowledge-base/project/plans/2026-07-20-docs-record-pr-c-cancellation-inngest-liveness-marker-plan.md
@@ -398,16 +398,26 @@ Do **not** triplicate the rationale. Each artifact has one job:
   knowledge-base/project/specs/feat-one-shot-6617-inngest-liveness-marker-registry-probe/decision-challenges.md
   knowledge-base/project/specs/feat-one-shot-6617-inngest-liveness-marker-registry-probe/session-state.md
   knowledge-base/project/specs/feat-one-shot-6617-inngest-liveness-marker-registry-probe/tasks.md
+  knowledge-base/project/specs/feat-one-shot-record-pr-c-cancellation-6617/session-state.md
   knowledge-base/project/specs/feat-one-shot-record-pr-c-cancellation-6617/tasks.md
   ```
+
+  **Amended at /work (2026-07-20), from six paths to seven.** The plan was authored by the
+  planning subagent, which writes only `tasks.md` into this branch's own spec dir; the parent
+  one-shot pipeline additionally writes `session-state.md` there (one-shot Steps 1–2, "write the
+  parsed content to `knowledge-base/project/specs/<exact-branch-name>/session-state.md`"). That
+  file therefore could not exist when the plan was written. Recorded as an amendment rather than
+  silently relaxing the assertion, because AC4 is the load-bearing path-confusion check and a
+  weakened AC4 is worse than a wrong one.
   Two derived assertions, both of which must hold:
   - `git diff --name-only main...HEAD | grep -c 'ADR-100'` **== 0** (ADR-100 untouched).
   - `git diff --name-only main...HEAD | grep -cvE '^knowledge-base/'` **== 0** (nothing outside
     `knowledge-base/`).
 
-  **This is the load-bearing AC.** Note that exactly one of the six paths carries the
-  `feat-one-shot-record-pr-c-cancellation-6617/` segment (this branch's own tasks.md); the three
-  spec files being *edited* all carry `feat-one-shot-6617-inngest-liveness-marker-registry-probe/`.
+  **This is the load-bearing AC.** Note that exactly two of the seven paths carry the
+  `feat-one-shot-record-pr-c-cancellation-6617/` segment (this branch's own tasks.md and
+  session-state.md); the three spec files being *edited* all carry
+  `feat-one-shot-6617-inngest-liveness-marker-registry-probe/`.
   **That asymmetry is the check.** If the edits land in the wrong spec directory, this AC fails and
   every other AC still passes green (Sharp Edge 1).
 - **AC5** — **Pure-append on the two narrative files.** `git diff --numstat` reports **0 deletions**

@@ -145,3 +145,41 @@ UC-1 and UC-2 were both put to the operator before implementation began.
 
 Standing risk carried forward: PR #6348 is draft and MERGEABLE. If it merges before PR C is
 delivered, PR C would be stranded merged-but-undelivered. Unaffected by the A+B scope.
+
+### Follow-on ruling — 2026-07-20: PR C is CANCELLED
+
+The ruling above recorded **"PR C: HELD, not cancelled"**, conditioned on the operator first
+reading PR B's actual probe output (Phase B4.2). **That condition has now been satisfied**, and on
+reading the output the operator has ruled:
+
+**PR C is CANCELLED.** The hold above is superseded. Phases C0–C6 are not to be implemented,
+pushed, or merged — now or later. Their bodies are retained in `tasks.md` as the record of what was
+designed, not as pending work.
+
+**The condition that was satisfied.** `op=doublefire-probe` was dispatched on the post-merge host
+state (run 29748606817, from `main` sha `898de92e4`, after #6748 merged) and returned **ZERO runs**
+on the dedicated host. Combined with the registry probe (`function_count=0`, run 29729509511),
+`backend_is_prod=false`, and the absent `INNGEST_CUTOVER_FLIP` start-block, the diagnostic question
+PR C was built to answer is settled — on four independent measures, none of which required the host
+replace. Phase C6.3's escalation branch fires on `backend_is_prod=yes` **OR** a non-empty doublefire
+result; **neither limb is met.**
+
+**Why cancel rather than continue to hold.** PR C's discriminators exist to distinguish states of a
+**dark** host. After the cutover the dedicated host becomes the live scheduler and that question is
+no longer asked. The instrument's useful life is therefore bounded by the pre-cutover window — and
+it cannot be delivered inside that window at acceptable risk, because its delivery force-replaces
+the sole production Inngest scheduler days before the cutover it was built to instrument. **An
+instrument that cannot be delivered while it still matters is cancelled, not parked.**
+
+**Standing risk dissolved.** The ruling above carried a standing risk that if #6348 merged before
+PR C was delivered, PR C would be stranded merged-but-undelivered. **Cancelling PR C dissolves that
+risk outright** — there is no longer an undelivered PR C to strand.
+
+**What the operator is accepting.** After cancellation the dedicated Inngest host has no continuous
+liveness discriminators; its observability posture is on-demand only, via the two standalone ops PR
+B shipped. That is what makes #6780 (no in-place redelivery channel for the dedicated host) the
+live root debt rather than a filed-and-forgotten follow-up.
+
+**Carry-forwards** (already filed; referenced, not re-filed): #6780, #6781, #6608, #6348.
+
+The tracking issue remains OPEN; its existing follow-through sweeper owns closure.
