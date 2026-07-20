@@ -54,8 +54,10 @@ Lane: `procedural`
       it to both `_has_actor` and `_has_imperative`. Do NOT neutralize inside the predicates —
       that is the measured 32 s → 75 s regression.
 - [ ] 2.4 Amend the module docstring's "Detection is on the RAW line" paragraph to record the
-      one exception (`*.yml`/`*.yaml` filenames are neutralized first, #6771). Inline backticks
-      remain un-stripped.
+      exception AND why it is not a contradiction: a backtick span can contain a command, so
+      stripping it would hide real imperatives; a filename never can — it names automation,
+      it does not instruct (#6771). Follow the `_normalize` shape at `scripts/lint-rule-bodies.py:97`
+      (module-level pure `str -> str` with a one-line docstring).
 - [ ] 2.5 Re-run `bash scripts/lint-infra-no-human-steps.test.sh` — all cases green, `FAIL=0`.
 
 ## Phase 3 — Carve-out sweep

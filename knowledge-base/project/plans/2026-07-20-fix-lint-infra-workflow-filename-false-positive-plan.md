@@ -18,6 +18,35 @@ brand_survival_threshold: none
 
 Closes #6771. Ref #6749.
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-20 · **Reviewers:** correctness (Kieran), simplicity · **Gates:** 4.4-4.9
+
+### Key improvements from review
+
+1. **P0 fixed — AC4's greps were wrong.** `grep -c 'opentofu)..b\.\*?-target'` returns 0 on a
+   *correctly fixed* file (BRE `..b` demands three characters where the text has `\b`), so the
+   AC would have blocked the very fix it verifies. Replaced with `grep -cF` fixed-string forms,
+   both verified pre- and post-fix.
+2. **P1 fixed — a `.yml`-only fast path silently breaks `.yaml`.** Prose and code disagreed;
+   an implementation matching the prose passes all six original fixtures and still flags
+   `reboot-web-hosts.yaml`. Prose corrected and a seventh fixture added to catch it.
+3. **P1 fixed — my own subset claim was false.** 8 + 45 ≠ 49: the two options overlap by 4,
+   so neither set contains the other. Opt1 uniquely removes 3 lines. Corrected, with the
+   three specific files named.
+4. **P1 fixed — absolute timing and hit-count ACs are machine- and corpus-dependent.**
+   Observed baselines span 32-73 s across hosts, and this PR adds its own artifacts to the
+   scanned corpus. Replaced with a relative 1.25× bound and a delta assertion.
+5. **P1 fixed — AC7's subset comparison must run pre-sweep.** Phase 3 removes carve-outs,
+   which legitimately adds hits under the old script and would corrupt the diff.
+6. **P1 fixed — Phase 1's RED count was wrong** (three, not four).
+
+### Open question resolved
+
+Opt2 alone **does** fix the reported repro (verified: exit 0 on the #6749 line). Opt1 is
+therefore supplementary. It is kept on an argued basis, with the dissent recorded in
+§Option evaluation so a reviewer can overrule it cheaply.
+
 ## Overview
 
 `scripts/lint-infra-no-human-steps.py` flags prose as "prescribes a human-run infra
@@ -141,6 +170,54 @@ The four control fixtures and their measured exit codes:
 - Positive control `The operator SSHs into web-1 and reboots it` → **exit 1**.
 <!-- lint-infra-ignore end -->
 
+## Research Insights (deepen pass, 2026-07-20)
+
+### Precedent diff — line-preprocessing in sibling linters
+
+`git grep` over `scripts/lint-*.py` for pre-match text transformation:
+
+| File | Shape | Relation to this plan |
+|---|---|---|
+| `scripts/lint-rule-bodies.py:97` | `def _normalize(line: str) -> str` — module-level pure function, one-line docstring | **Direct precedent.** `_neutralize_filenames(text: str) -> str` mirrors it exactly: same signature shape, same placement, same docstring convention. Adopt verbatim. |
+| `scripts/lint-agents-enforcement-tags.py:132,144` | `PHASE_RE.sub(...)` / `PHASE_PREFIX_RE.sub("", anchor)` on a module-level compiled regex | Precedent for a module-level `*_RE` constant driving a `.sub()`. Note it substitutes the **empty string** — safe there because the result is compared as a whole token, not scanned for adjacent-word patterns. Our case is the opposite and needs `_`. |
+| `scripts/lint-infra-no-human-steps.py:133` | `re.sub(r"^[^A-Za-z]+", "", title)` inside `_is_carve_heading` | Precedent inside the file under repair for stripping decoration before matching. |
+
+No precedent uses a fast-path guard before `.sub()`; that is novel here and justified by the
+measured 2.3× full-scan cost without it. Flagged for reviewer scrutiny.
+
+### The conceptual line this fix draws
+
+The module docstring makes a deliberate commitment: *"Detection is on the RAW line (inline
+backticks are NOT stripped)"* — because a human step hidden behind an inline `` `terraform
+apply` `` span still counts. This fix carves one exception out of that principle, and the
+exception must be justified on principle, not convenience:
+
+- A **backtick span** can contain a command. Stripping it would hide real imperatives. Keep it raw.
+- A **filename** cannot be a command. `apply-web-platform-infra.yml` names automation; it never
+  instructs anyone. Neutralizing it removes zero signal by construction.
+
+That asymmetry is the whole argument for opt1, and it is why the substitution is safe to apply
+to the actor half as well as the imperative half. Phase 2c must record it in the docstring —
+otherwise a future maintainer reads the two statements as contradictory and reverts one.
+
+### Verification sweep (all run at deepen time)
+
+- **Cited rule IDs are active in `AGENTS.md`:** `cq-cite-content-anchor-not-line-number` OK,
+  `wg-when-an-audit-identifies-pre-existing` OK. No retired or fabricated IDs.
+- **Cited references resolve:** #6771 OPEN (this issue), #6749 MERGED (the PR whose carve-out
+  motivated it). Both are issues, not PRs — confirmed via `gh issue view`.
+- **All `knowledge-base/` paths cited in the plan and tasks resolve on disk** — zero broken.
+- **All 7 sweep-target files exist** at the paths given.
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+<!-- lint-infra-ignore start: names the SSH positive-control fixture while explaining why the
+     network-outage gate does not bind. Quoting the fixture is not prescribing it. -->
+- **Network-outage gate (Phase 4.5): does not apply.** The plan matches SSH/handshake keywords
+  6× — every match is inside a quoted **test fixture** (the SSH-and-reboot positive control)
+  rather than a diagnosis. The plan describes no connectivity symptom and changes no network
+  surface, so the L3→L7 checklist has nothing to bind to. Recorded rather than silently
+  skipped, because the keyword match is real and a future reader will re-trip it.
+<!-- lint-infra-ignore end -->
+
 ## Files to Edit
 
 - `scripts/lint-infra-no-human-steps.py` — the two-part fix + module-docstring note.
@@ -242,10 +319,12 @@ imper[i] = _has_imperative(scan)
 Do **not** call `_neutralize_filenames` inside `_has_actor` / `_has_imperative` —
 that doubles the substitution work and is the 32 s → 75 s regression measured above.
 
-**2c. Update the module docstring** — the "Sentinel model" paragraph currently says
-detection is on the RAW line. Amend to note the one exception: `*.yml`/`*.yaml`
-filenames are neutralized first, because a filename names automation rather than
-prescribing a human step (#6771). Inline backticks remain un-stripped.
+**2c. Update the module docstring** — the "Detection is on the RAW line (inline backticks
+are NOT stripped)" paragraph must record the one exception and *why it is not a
+contradiction*: `*.yml`/`*.yaml` filenames are neutralized first because a backtick span
+can contain a command (so stripping it would hide real imperatives) while a filename never
+can — it names automation, it does not instruct anyone (#6771). Without that sentence the
+two statements read as contradictory and a future maintainer reverts one.
 
 ### Phase 3 — Carve-out sweep
 
