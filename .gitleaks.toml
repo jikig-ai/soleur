@@ -285,8 +285,10 @@ description = "Database connection URL with embedded password"
 # last one, so a password containing '@' left the rule matching only a
 # placeholder-looking prefix, which the allowlist below then silenced.
 # `/` stays excluded so a realistic DSN terminates at its `/dbname` path.
-regex = '''postgres(?:ql)?://[^:/\s]+:[^/\s]+@[A-Za-z0-9.\-]+'''
-keywords = ["postgres://", "postgresql://"]
+regex = '''(?i)postgres(?:ql)?(?:\+[a-z0-9_]+)?://[^:/\s]+:[^/\s]+@[A-Za-z0-9.\-]+'''
+# Keyword prefilter runs BEFORE the regex, so it must be at least as permissive:
+# "postgres://" would suppress `postgresql+psycopg2://` however correct the regex.
+keywords = ["postgres"]
 tags = ["url", "database", "credential"]
   # Learnings path added per #3874 — mirrors the `private-key` rule's #3268 carve-out
   # for learnings that document credential-shape symptoms in recovery runbooks
@@ -337,7 +339,7 @@ tags = ["url", "database", "credential"]
   # from the brackets keeps every legitimate placeholder quiet
   # (<user>:<pw>, USER:PASSWORD, user:***, user:password) while closing it.
   # Pinned by plugins/soleur/test/gitleaks-rules.test.sh T7b/T7c/T9.
-  regexes = ['''^postgres(?:ql)?://(?:USER|user|postgres|<[^>@:]+>):(?:PASSWORD|password|secret|<[^>@:]+>|\*+)@[A-Za-z0-9.\-]+$''']
+  regexes = ['''^(?i)postgres(?:ql)?(?:\+[a-z0-9_]+)?://(?:USER|user|postgres|<[^>@:]+>):(?:PASSWORD|password|secret|<[^>@:]+>|\*+)@[A-Za-z0-9.\-]+$''']
 
 # ---------------------------------------------------------------------------
 # 13. VAPID private key (web-push)

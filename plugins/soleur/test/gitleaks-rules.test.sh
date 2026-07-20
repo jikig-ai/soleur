@@ -68,6 +68,11 @@ PG="${PG}://"
 # '@' up to the host. Split for the same reason as the literals above.
 SEC_TAIL="Xq7vNp2"
 SEC_TAIL="${SEC_TAIL}LmWd4"
+# Scheme variants (T7d/T7e), assembled for the same reason as the literals above.
+PG_DRV1="${PGQL%://}"; PG_DRV1="${PG_DRV1}+psycopg2://"
+PG_DRV2="${PGQL%://}"; PG_DRV2="${PG_DRV2}+asyncpg://"
+PG_CAPS="Post"; PG_CAPS="${PG_CAPS}gres://"
+PG_UPPER="POST"; PG_UPPER="${PG_UPPER}GRES://"
 
 # scan_rules <fixture-line> -> newline-separated RuleIDs that fired
 scan_rules() {
@@ -203,6 +208,44 @@ for row in \
   fi
 done
 
+echo "T7d: scheme variants fire (case-insensitive + SQLAlchemy/asyncpg +driver)"
+# Both were measured rc=0 (undetected) before this change. The keyword prefilter
+# is the load-bearing half: it runs BEFORE the regex, so `keywords =
+# ["postgres://"]` suppressed `postgresql+psycopg2://` no matter how correct the
+# regex was — a fix that widened only the regex would have been silently vacuous.
+for row in \
+  "sqlalchemy-driver|${PG_DRV1}svc_prod:${SEC_TAIL}@db.prod.internal/appdb" \
+  "asyncpg-driver|${PG_DRV2}svc_prod:${SEC_TAIL}@db.prod.internal/appdb" \
+  "capitalised-scheme|${PG_CAPS}svc_prod:${SEC_TAIL}@db.prod.internal/appdb" \
+  "upper-scheme|${PG_UPPER}svc_prod:${SEC_TAIL}@db.prod.internal/appdb" \
+  ; do
+  label="${row%%|*}"
+  fixture="${row#*|}"
+  rules=$(scan_rules "$fixture")
+  if grep -qx 'database-url-with-password' <<<"$rules"; then
+    pass "scheme variant fires (${label})"
+  else
+    fail "scheme variant MUST fire (${label}) — check the keywords prefilter, not just the regex"
+  fi
+done
+
+echo "T7e: placeholders stay quiet under the case-insensitive rule"
+# The allowlist is anchored `^...$`; widening the rule with (?i) without
+# mirroring (?i) here would make a capitalised placeholder a finding.
+for row in \
+  "placeholder-capitalised|${PG_CAPS}USER:PASSWORD@host" \
+  "placeholder-driver|${PG_DRV1}user:password@host" \
+  ; do
+  label="${row%%|*}"
+  fixture="${row#*|}"
+  rules=$(scan_rules "$fixture")
+  if grep -qx 'database-url-with-password' <<<"$rules"; then
+    fail "placeholder MUST stay quiet (${label}) — allowlist did not mirror the rule's widening"
+  else
+    pass "placeholder stays quiet (${label})"
+  fi
+done
+
 echo "T7c: bracket-userinfo credentials fire (regression net for the widened class)"
 # These are the reason this PR does NOT ship the fix proposed in #6723's body.
 # Widening the password class to `[^/\s]+` lets '@' and ':' live inside the
@@ -269,7 +312,13 @@ echo "T9: the placeholder allowlist entry stays FULLY ANCHORED and @/:-free"
 # a block-scoped end-anchor check matches THAT and passes even when the regexes
 # entry is unanchored. (Observed: this exact false pass, on the first run of this
 # guard. A guard that matches a sibling line is the defect this PR exists to fix.)
-if grep -qE "^  regexes = \['''\^postgres" <<<"$regexes_line"; then
+# `^` must come FIRST. An inline flag group may follow it: the rule became
+# case-insensitive with the +driver / capitalised-scheme widening (T7d), and the
+# allowlist has to mirror that or a capitalised PLACEHOLDER becomes a finding
+# (T7e). `^` has no case, so anchor-then-flag is equivalent to anchor-only and
+# keeps this guard exactly as strict — the flag cannot be used to smuggle the
+# anchor away.
+if grep -qE "^  regexes = \['''\^(\(\?i\))?postgres" <<<"$regexes_line"; then
   pass "allowlist entry is start-anchored (^)"
 else
   fail "allowlist entry MUST start with ^ — unanchored, a placeholder prefix inside a real credential silences it (#6723)"
