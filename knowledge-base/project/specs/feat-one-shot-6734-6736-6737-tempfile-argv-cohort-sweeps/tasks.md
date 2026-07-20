@@ -137,7 +137,7 @@ Derived from
       secondary lint-enforced cleanup-ownership rules, the class-b accept + upgrade trigger, the
       honest enforcement level, and `## Alternatives Considered` (AGENTS.md rule declined at 100 B
       headroom; shellcheck; converting bounded sites; rule (b)).
-- [ ] 4.2 Full suite: `bash scripts/test-all.sh`; `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
+- [x] 4.2 Full suite: `bash scripts/test-all.sh`; `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
 - [x] 4.3 Verify every `knowledge-base/` path cited in the plan resolves (run from repo root).
 - [ ] 4.4 Confirm `decision-challenges.md` (UC-1/2/3, E1, E2) is carried into the PR body by `/ship`.
 - [ ] 4.5 PR body uses `Closes #6734`, `Closes #6736`, `Closes #6737`.
