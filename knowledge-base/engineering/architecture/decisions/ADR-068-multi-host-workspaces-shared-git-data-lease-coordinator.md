@@ -727,8 +727,19 @@ Phase 4b (continuous checkpoint).
 > laptop-local run and never remote-shells a host. The plan-scoped `reboot_updates=0` destroy-guard
 > runs before the apply so no placement reboot can enter the additive path.
 >
-> **(2) §(c) is a fail-closed, SHAPE-ONLY programmatic check.**
-> `apps/web-platform/infra/lb-weight-gate.sh` verifies the config-shape of BOTH §(c) conditions
+> **(2) §(c) WAS a fail-closed, SHAPE-ONLY programmatic check — the checker is now DELETED.**
+>
+> **CORRECTION 2026-07-20 (#6575).** `apps/web-platform/infra/lb-weight-gate.sh` was deleted with
+> the web-2 dispatch sweep. It was never wired to a required CI context, and after web-2 retired
+> (2026-07-17, #6538) its first assertion — `SOLEUR_HOST_ROSTER` must contain web-2 — could only
+> ever FAIL: a *correct* post-retire roster omitting web-2 trips `A_web2_not_in_roster` forever.
+> A gate that a correct configuration cannot pass is not a guard. It was removed under the
+> retention rule (retain a verifier iff it is named in a procedure an operator can execute today);
+> its design record is preserved in ADR-128. **There is no programmatic §(c) checker today** — the
+> paragraph below describes what it DID, retained because the contract it encoded (especially the
+> `GIT_DATA_LUKS_CUTOVER_AT` soak-marker semantics) still binds any future implementation.
+>
+> As deleted, it verified the config-shape of BOTH §(c) conditions
 > over injected env (owner-side relay: `SOLEUR_PROXY_BIND` + `SOLEUR_PROXY_PEER_ALLOWLIST` +
 > `SOLEUR_HOST_ROSTER` with web-2 in-roster and allowlist ⊆ roster, parser-parity with
 > `parseProxyPeerAllowlist`/`loadHostRoster`; git-data cut-over: `GIT_DATA_STORE_ENABLED=="true"`
@@ -1031,6 +1042,47 @@ Phase 4b (continuous checkpoint).
 > **Status:** AMEND, not a reversal — Option A / Approach A stand; the GA end-state
 > (§8) is unchanged. `Ref #6538`, `Ref #6463`. Plan:
 > `knowledge-base/project/plans/2026-07-16-chore-retire-web-2-fsn1-orphan-plan.md`.
+
+> **Amendment (2026-07-20, #6718 — factual status: both web-2 dispatch jobs are now unrunnable,
+> and the warm-standby apply cannot birth a host).** No decision is reversed here; this records
+> what the 2026-07-17 retirement did to the two dispatch surfaces this ADR introduced.
+>
+> **`warm_standby` (the "autonomous warm-standby apply", 2026-07-04 amendment) is unrunnable to
+> completion.** Three of its six `-target`s name `web-2` addresses, and `var.web_hosts` no longer
+> contains that key. **Measured on Terraform v1.10.5:** a `-target` whose `for_each` instance key
+> is absent is **silently ignored** — exit 0, `No changes`, no error, no mention of the missing
+> key. So those three are no-ops rather than failures, and the job's advertised "additive
+> 6-target set" is really a 3-target set. Tracked in #6575.
+>
+> It does **not**, however, silently succeed: after the (0-change) apply it runs an attach proof
+> requiring `hcloud_volume_attachment.workspaces["web-2"]` and `hcloud_server_network.web["web-2"]`
+> in state, and exits 1 naming both. So the job always **fails loudly**. (An earlier revision of
+> this amendment said "nothing warns an operator who dispatches it" — that described a
+> silent-success failure mode which does not exist; corrected in #6725's review. The
+> `workflow_dispatch` menu description now says UNRUNNABLE rather than DEGRADED, since "degraded"
+> invites an expectation of partial success.)
+>
+> **`web_2_recreate` is unreachable for a stronger reason.** It keys every address off `web-2`
+> *and* its gate requires `web2_server_replaced == 1`, which is unsatisfiable when the instance is
+> absent from state. This is why the #6712 resolver extraction was cut rather than deferred: the
+> extraction's only call site cannot run.
+>
+> **The warm-standby apply can no longer birth a host, by design (#6718).** It reaches
+> `hcloud_server.web["web-1"]` transitively (via the surviving
+> `hcloud_server_network.web["web-1"]` target — `-target` closes over **dependencies**) while
+> passing **no `-var image_name`**, so a birth there would have used the mutable `:latest`
+> default. It now carries a `host_creates > 0` HALT with no `[ack-destroy]` bypass.
+>
+> **Consequence for #6459.** The retirement note above says active-active's hosts "start from a
+> clean single-host `web_hosts` roster". That remains right, but the roster is now the *only*
+> thing that is clean: no automated path can create a **web** host — every route that reaches
+> `hcloud_server.web` HALTs on `host_creates > 0`. Enumerated, because #6725's first revision
+> asserted this without enumerating and was wrong: `apply` (#6416), `warm_standby` (#6718),
+> `apply-deploy-pipeline-fix.yml` (#6718 — a `push:main` workflow that was still unguarded until
+> that review), `web_2_recreate` (gate unsatisfiable), `workspaces_luks_cutover` (gate requires
+> zero actions on the web-1 server). `inngest_host` is out of scope and still births a host.
+> #6459 will need that birth path as a prerequisite, and it is tracked separately in **#6730** so
+> it is not gated behind #6459's own ADR.
 
 ## Consequences
 

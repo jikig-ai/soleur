@@ -28,6 +28,9 @@ env:
   INFRA_DIR: apps/web-platform/infra
   CLOUDFLARED_VERSION: "2026.5.0"
   CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+  # web-1 private IP — single source for BOTH the bridge `server-ip` (NAT redirect
+  # scope) and the probe `WEB_HOST` (dial target); they MUST match.
+  WEB_HOST_PRIVATE_IP: "10.0.1.10"
 
 jobs:
   verify:
@@ -53,19 +56,47 @@ jobs:
           infra-dir: ${{ env.INFRA_DIR }}
           cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
           cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+          # server-ip == WEB_HOST (10.0.1.10): scopes the NAT redirect to the
+          # address the probe SSHes to + enables the WEB_HOST_SSH export. No
+          # infra-state read here. Single-sourced from env.WEB_HOST_PRIVATE_IP.
+          server-ip: ${{ env.WEB_HOST_PRIVATE_IP }}
 
       - name: Re-assert /workspaces LUKS at-rest (read-only)
         env:
-          # The bridge exports WEB_HOST_SSH as the exact ssh invocation (key + ProxyCommand).
-          WEB_HOST: "10.0.1.10"
+          # The bridge exports WEB_HOST_SSH as the exact ssh invocation (key -i <keyfile> + the
+          # iptables NAT redirect scoped to server-ip; no ProxyCommand — the Go/bash client dials
+          # 10.0.1.10:22 which the kernel redirects to the local cloudflared forward).
+          WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
+          # prd_workspaces_luks-scoped boot token — luks-monitor.sh reads WORKSPACES_LUKS_KEY via
+          # `doppler … --config prd_workspaces_luks`, so it needs this token. Delivered via a 0600
+          # stdin .env (same discipline as the cutover), NEVER argv. Published by the DEFAULT apply.
+          WORKSPACES_LUKS_BOOT_TOKEN: ${{ secrets.WORKSPACES_LUKS_BOOT_TOKEN }}
         run: |
           # set +e so a failing probe is captured in probe_rc (and reported) rather than exiting the
           # step at the ssh line under GitHub's inherited `-e` (which `set -uo pipefail` does not clear).
           set +e
           set -uo pipefail
-          # Run the baked daily probe read-only (it mutates nothing) — DP-11 reuse. It emits its
-          # own discriminating Sentry event on any failed assert and exits non-zero.
-          ${WEB_HOST_SSH:-ssh} "$WEB_HOST" 'sudo /usr/local/bin/luks-monitor'
+          # Fail loud if the bridge did not export WEB_HOST_SSH (bare ssh would connect keyless).
+          [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::CF Tunnel SSH bridge did not export WEB_HOST_SSH — cannot reach web-1. Check the bridge step logs."; exit 1; }
+          [[ -n "${WORKSPACES_LUKS_BOOT_TOKEN:-}" ]] || { echo "::error::WORKSPACES_LUKS_BOOT_TOKEN not configured — run the DEFAULT apply of apply-web-platform-infra.yml to publish it (#6649)."; exit 1; }
+          # Ship luks-monitor.sh + its emit sibling to a temp dir on the PERSISTENT STATE_DIR and run
+          # it AS A FILE (read-only; MUTATES NOTHING — it opens no device). This removes the
+          # dependency on a prior cutover having installed /usr/local/bin/luks-monitor AND, unlike the
+          # old `sudo /usr/local/bin/luks-monitor`, delivers the boot token the probe needs (the
+          # installed binary has no EnvironmentFile in this SSH session). No sudo: WEB_HOST_SSH lands
+          # `-l root` (sudo's env_reset would scrub HOME + the sourced .env). Boot token via 0600
+          # stdin .env, shredded on a host-local EXIT trap — same discipline as the cutover.
+          # shellcheck disable=SC2086
+          REMOTE_DIR="$(${WEB_HOST_SSH} "$WEB_HOST" 'mkdir -p /var/lib/workspaces-luks && chmod 700 /var/lib/workspaces-luks && mktemp -d /var/lib/workspaces-luks/wl-verify.XXXXXX')"
+          [[ -n "$REMOTE_DIR" ]] || { echo "::error::failed to create the remote bundle dir on web-1"; exit 1; }
+          echo "REMOTE_DIR=$REMOTE_DIR" >> "$GITHUB_ENV"
+          # shellcheck disable=SC2086
+          tar czf - -C "$INFRA_DIR" luks-monitor.sh workspaces-luks-emit.sh \
+            | ${WEB_HOST_SSH} "$WEB_HOST" "tar xzf - -C '$REMOTE_DIR'"
+          # WEB_HOST_SSH is guaranteed set past the guard above (no :-ssh fallback).
+          # shellcheck disable=SC2086
+          printf 'DOPPLER_TOKEN=%s\n' "$WORKSPACES_LUKS_BOOT_TOKEN" \
+            | ${WEB_HOST_SSH} "$WEB_HOST" "bash -c 'install -m600 /dev/stdin \"$REMOTE_DIR/.env\"; trap \"shred -u \\\"$REMOTE_DIR/.env\\\" 2>/dev/null || rm -f \\\"$REMOTE_DIR/.env\\\"\" EXIT; set -a; . \"$REMOTE_DIR/.env\"; set +a; bash \"$REMOTE_DIR/luks-monitor.sh\"'"
           probe_rc=$?
           echo "luks-monitor probe rc=$probe_rc"
           # App-level workspace read + /api/health, exercising the full HTTPS path.
@@ -80,6 +111,37 @@ jobs:
             exit 1
           fi
           echo "workspaces-luks at-rest re-assert PASSED (blkid=crypto_LUKS, mapper mount, escrow ok, /api/health 200)."
+
+      - name: Remove remote verify bundle
+        if: always()
+        env:
+          WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
+        # Belt-and-suspenders: the .env is shredded by the host-local EXIT trap even on an SSH drop;
+        # this removes the (script-only, non-secret) bundle dir. REMOTE_DIR is exported to GITHUB_ENV
+        # by the Re-assert step; empty if that step never created it.
+        run: |
+          set +e
+          if [[ -n "${WEB_HOST_SSH:-}" && -n "${REMOTE_DIR:-}" ]]; then
+            # shellcheck disable=SC2086
+            ${WEB_HOST_SSH} "$WEB_HOST" "rm -rf '$REMOTE_DIR'" 2>/dev/null || true
+          fi
+
+      - name: Tear down cloudflared SSH bridge
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -n "${SERVER_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT -d "$SERVER_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
+            kill "$CLOUDFLARED_PID" 2>/dev/null || true
+          fi
+          if [[ -n "${CI_SSH_KEYFILE:-}" && -f "$CI_SSH_KEYFILE" ]]; then
+            shred -u "$CI_SSH_KEYFILE" 2>/dev/null || true
+          fi
+          if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi
 
       - name: Verify summary
         if: always()

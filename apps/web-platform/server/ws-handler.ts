@@ -47,6 +47,7 @@ import {
   getActiveTurnConversation,
   setActiveTurnConversation,
   clearActiveTurnConversation,
+  forEachSessionForConversation,
 } from "./agent-session-registry";
 import {
   streamReplayBuffer,
@@ -75,6 +76,8 @@ import {
   releaseSlot,
   touchSlot,
   emitConcurrencyCapHit,
+  SLOT_STALENESS_THRESHOLD_SECONDS,
+  SLOT_HEARTBEAT_INTERVAL_MS,
 } from "./concurrency";
 import {
   parseConversationRouting,
@@ -448,6 +451,27 @@ export function abortActiveSession(userId: string, session: ClientSession): void
  * Exported for tests; call site is the `start_session` cap_hit branch
  * below.
  */
+/**
+ * Is there a LIVE agent loop for this conversation on THIS instance? Reconciles
+ * BOTH process-local loop registries (the dual-lineage invariant at
+ * agent-session-registry.ts): the cc-soleur-go runner (`hasActiveCcQuery`, the
+ * dominant path) OR the legacy `activeSessions` map (any `userId:convId[:leaderId]`
+ * key). Used by the AC14 dead-socket reap so a backgrounded-but-live loop (a
+ * conversation not focused by the current socket, e.g. after crash+reconnect, or
+ * one paused on a review gate) is NEVER reaped — CTO ruling 2026-07-18
+ * (knowledge-base/engineering/architecture/decisions): reap on agent-loop
+ * liveness, not socket focus.
+ */
+function hasLiveAgentLoop(userId: string, conversationId: string): boolean {
+  if (hasActiveCcQuery(conversationId)) return true;
+  let found = false;
+  forEachSessionForConversation(userId, conversationId, () => {
+    found = true;
+    return true; // stop at the first match
+  });
+  return found;
+}
+
 export async function tryLedgerDivergenceRecovery(
   userId: string,
 ): Promise<{ didRecover: boolean }> {
@@ -501,8 +525,9 @@ export async function tryLedgerDivergenceRecovery(
     // Stale-heartbeat detector (May-6 #3354). The orphan check above only
     // catches slots whose conversation is NOT in the visible-active set;
     // it misses the boundary case where a `status='active'` conversation row
-    // IS visible but its slot's `last_heartbeat_at` lapsed past 120 s
-    // between the RPC's lazy sweep and this helper's processing — e.g.
+    // IS visible but its slot's `last_heartbeat_at` lapsed past 240 s
+    // (SLOT_STALENESS_THRESHOLD_SECONDS) between the RPC's lazy sweep and this
+    // helper's processing — e.g.
     // a tab supersession that clears the old WS's `pingInterval` so no
     // refresh fires while the helper runs. Catching it here (vs waiting
     // up to 60 s for the agent-runner reaper) flips the conv row to
@@ -510,8 +535,8 @@ export async function tryLedgerDivergenceRecovery(
     // truths up, and surfaces the divergence to Sentry.
     //
     // WHY THIS BRANCH IS MOSTLY INACTIVE IN STEADY STATE (#3372):
-    // `acquire_conversation_slot` (migration 029 ~line 131) runs the IDENTICAL
-    // lazy-sweep predicate (`last_heartbeat_at < now() - 120 s`) inside its
+    // `acquire_conversation_slot` (migration 133) runs the IDENTICAL
+    // lazy-sweep predicate (`last_heartbeat_at < now() - 240 s`) inside its
     // own transaction BEFORE the count-check. When the RPC returns `cap_hit`,
     // every surviving slot has already been swept clean — so this SELECT finds
     // stale rows only in a narrow boundary race (~50–200 ms between the RPC's
@@ -526,25 +551,25 @@ export async function tryLedgerDivergenceRecovery(
     //   3. Defense-in-depth: if the RPC's lazy sweep is ever refactored away,
     //      this branch becomes the primary stale-slot reaper without any code
     //      change here.
-    // Decision: keep at 120 s (option C). Re-evaluate if any of the four
-    // sibling threshold sites change, the async reaper interval changes, or
-    // Sentry shows staleHeartbeatCount > 1% of cap-hit events at scale (which
-    // would confirm the branch is load-bearing, not just boundary-race defense).
+    // Decision: use the shared SLOT_STALENESS_THRESHOLD_SECONDS (240 s as of the
+    // 2026-07-18 Disk-IO backoff). Re-evaluate if the async reaper interval
+    // changes, or Sentry shows staleHeartbeatCount > 1% of cap-hit events at
+    // scale (which would confirm the branch is load-bearing, not just
+    // boundary-race defense).
     //
-    // THRESHOLD-COUPLING: 120 s here matches the four pre-existing sites:
-    //   (1) migration 029 line ~131 (acquire_conversation_slot lazy sweep)
-    //   (2) migration 029 line ~224 (pg_cron user_concurrency_slots_sweep)
-    //   (3) migration 037 line ~39 (find_stuck_active_conversations default)
-    //   (4) agent-runner.ts STUCK_ACTIVE_THRESHOLD_SECONDS
-    // Changing this constant without updating the four sibling sites
-    // desyncs the sweep mechanisms — one will reap rows the others
-    // consider live. Naming + unit mirror agent-runner.ts so a grep on
-    // `STUCK_ACTIVE_THRESHOLD_SECONDS` surfaces this site too. Index
-    // path: `user_concurrency_slots_user_heartbeat_idx` (migration 029)
-    // on `(user_id, last_heartbeat_at)`.
-    const STALE_HEARTBEAT_THRESHOLD_SECONDS = 120;
+    // THRESHOLD-COUPLING: the 240 s staleness value is the ONE shared const
+    // SLOT_STALENESS_THRESHOLD_SECONDS (server/concurrency.ts), also consumed by
+    // agent-runner.ts (find_stuck_active_conversations arg) and the cap-drift
+    // self-eviction + sibling-snapshot-restore liveCutoff gates below, and
+    // mirrored in SQL by migration 133
+    // (acquire_conversation_slot lazy sweep, user_concurrency_slots_sweep
+    // pg_cron, find_stuck_active_conversations default). Importing the shared
+    // symbol here (rather than a local literal) structurally prevents the
+    // sibling-site drift that historically false-reaped live slots. Index path:
+    // `user_concurrency_slots_user_heartbeat_idx` (migration 029) on
+    // `(user_id, last_heartbeat_at)`.
     const staleCutoff = new Date(
-      Date.now() - STALE_HEARTBEAT_THRESHOLD_SECONDS * 1_000,
+      Date.now() - SLOT_STALENESS_THRESHOLD_SECONDS * 1_000,
     ).toISOString();
     const staleResp = await tenant
       .from("user_concurrency_slots")
@@ -565,9 +590,47 @@ export async function tryLedgerDivergenceRecovery(
         .map((r) => r.conversation_id);
     }
 
-    // Dedup union: one releaseSlot + one finalize per unique conversation_id.
     const orphanSet = new Set<string>(orphans);
-    const reapableSet = new Set<string>([...orphans, ...staleConversationIds]);
+    const staleSet = new Set<string>(staleConversationIds);
+
+    // AC14 (Phase 3e) — THRESHOLD-INDEPENDENT immediate cap-hit reclaim.
+    // Raising the staleness threshold 120→240 s (mig 133) would otherwise lock a
+    // cap-hit user out for up to 240 s: after a socket crash, the crashed
+    // conversation's slot is still visible-active (not an orphan) AND stale
+    // <240 s (not caught by the stale branch above), so starting a NEW
+    // conversation trips CONCURRENCY_CAP until the threshold elapses. Reap the
+    // NEW class the orphan/stale branches miss: a slot whose conversation has NO
+    // live agent loop on this instance (hasLiveAgentLoop = cc + legacy
+    // registries) AND is not the focused socket conversation — restoring the
+    // immediate-free-on-reconnect behavior, independent of the heartbeat
+    // threshold. Computed EXCLUSIVE of orphan/stale (they already reap those) so
+    // it only adds the visible+fresh-heartbeat-but-dead case. Uses only slots
+    // already fetched (no extra query). CTO ruling 2026-07-18: gate on agent-loop
+    // liveness, NOT socket focus (a focus-only reap kills backgrounded-live loops
+    // #5273 and review-gate-paused conversations). CROSS-HOST CAVEAT (ADR-124):
+    // hasLiveAgentLoop is instance-local, so this branch's no-false-reap guarantee
+    // is CONDITIONAL on user-sticky placement (ADR-068 D0 / #5274, replicas=1
+    // today). Any weakening of sticky placement must re-audit this reaper.
+    const focusedSession = sessions.get(userId);
+    const focusedConvIds = new Set<string>(
+      [focusedSession?.conversationId, focusedSession?.pending?.id].filter(
+        (v): v is string => typeof v === "string",
+      ),
+    );
+    const deadSocketConversationIds = slotConversationIds.filter(
+      (cid) =>
+        !orphanSet.has(cid) &&
+        !staleSet.has(cid) &&
+        !focusedConvIds.has(cid) &&
+        !hasLiveAgentLoop(userId, cid),
+    );
+
+    // Dedup union: one releaseSlot + one finalize per unique conversation_id.
+    const reapableSet = new Set<string>([
+      ...orphans,
+      ...staleConversationIds,
+      ...deadSocketConversationIds,
+    ]);
     const reapable = Array.from(reapableSet);
 
     if (reapable.length === 0) {
@@ -605,7 +668,9 @@ export async function tryLedgerDivergenceRecovery(
             feature: "concurrency-ledger-divergence",
             op: orphanSet.has(cid)
               ? "start_session-recovery-finalize-orphan"
-              : "start_session-recovery-finalize-stale-heartbeat",
+              : staleSet.has(cid)
+                ? "start_session-recovery-finalize-stale-heartbeat"
+                : "start_session-recovery-finalize-dead-socket",
             expectMatch: false,
             onlyIfStatusIn: ["active"],
           },
@@ -615,14 +680,16 @@ export async function tryLedgerDivergenceRecovery(
 
     // Single Sentry mirror for the divergence detection itself. AC4
     // excludes the recovered-OK path. `recoveryCause` lets dashboards
-    // segment orphan vs stale-heartbeat without spawning a new feature
-    // key; existing aggregations on `feature` + `op` are preserved.
-    const recoveryCause: "orphan" | "stale-heartbeat" | "orphan-and-stale" =
-      orphans.length > 0 && staleConversationIds.length > 0
-        ? "orphan-and-stale"
-        : orphans.length > 0
-          ? "orphan"
-          : "stale-heartbeat";
+    // segment orphan vs stale-heartbeat vs dead-socket without spawning a new
+    // feature key; existing aggregations on `feature` + `op` are preserved.
+    const recoveryCause =
+      [
+        orphans.length > 0 ? "orphan" : null,
+        staleConversationIds.length > 0 ? "stale-heartbeat" : null,
+        deadSocketConversationIds.length > 0 ? "dead-socket" : null,
+      ]
+        .filter((v): v is string => v !== null)
+        .join("+") || "none";
     reportSilentFallback(new Error("ledger-divergence"), {
       feature: "concurrency-ledger-divergence",
       op: "start_session-recovery",
@@ -632,6 +699,7 @@ export async function tryLedgerDivergenceRecovery(
         slotCount: slotConversationIds.length,
         orphanCount: orphans.length,
         staleHeartbeatCount: staleConversationIds.length,
+        deadSocketCount: deadSocketConversationIds.length,
         reapableCount: reapable.length,
         recoveryCause,
       },
@@ -797,8 +865,13 @@ export async function refreshSubscriptionStatus(
     // sibling slot probes (:526 divergence, :2013 sibling-slot). Load-bearing
     // for the migration-115 throttle (#5738): the slots sweep moved */15 → hourly,
     // so stale rows linger up to ~1h; without this filter a downgraded user with
-    // a stale slot would be falsely evicted on the next refresh tick.
-    const liveCutoff = new Date(Date.now() - 120_000).toISOString();
+    // a stale slot would be falsely evicted on the next refresh tick. Uses the
+    // shared SLOT_STALENESS_THRESHOLD_SECONDS (240 s) so the read-side liveness
+    // window matches the 240 s reaper (mig 133) — leaving it at 120 s would
+    // desync from the widened threshold.
+    const liveCutoff = new Date(
+      Date.now() - SLOT_STALENESS_THRESHOLD_SECONDS * 1_000,
+    ).toISOString();
     const { count, error: countErr } = await tenant
       .from("user_concurrency_slots")
       .select("*", { count: "exact", head: true })
@@ -2054,9 +2127,13 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // the sibling. The clean-tree gate proves "nothing uncommitted to
           // lose" but NOT "this snapshot belongs to this conversation" — the slot
           // probe is what supplies the latter. Liveness-filtered: stale slots are
-          // swept lazily / by pg_cron but NOT on this read path.
+          // swept lazily / by pg_cron but NOT on this read path. Uses the shared
+          // SLOT_STALENESS_THRESHOLD_SECONDS (240 s) so this snapshot-restore gate
+          // reads the same liveness window as the 240 s reaper (mig 133).
           let siblingSlotActive = false;
-          const liveCutoff = new Date(Date.now() - 120_000).toISOString();
+          const liveCutoff = new Date(
+            Date.now() - SLOT_STALENESS_THRESHOLD_SECONDS * 1_000,
+          ).toISOString();
           const { data: siblingSlots, error: slotErr } = await tenantResumeConv
             .from("user_concurrency_slots")
             .select("conversation_id")
@@ -2957,14 +3034,13 @@ export function setupWebSocket(server: HTTPServer) {
 
         // Start heartbeat after auth. In addition to the WebSocket ping, touch
         // user_concurrency_slots.last_heartbeat_at for the active/pending
-        // conversation so the pg_cron sweep (120s threshold) does not reclaim
-        // a still-live session. Uses the dedicated `touch_conversation_slot`
+        // conversation so the pg_cron sweep (240s threshold, mig 133) does not
+        // reclaim a still-live session. Uses the dedicated `touch_conversation_slot`
         // RPC — a single UPDATE, no cap check, no sweep, no lock — so
-        // steady-state heartbeat load is O(N) cheap UPDATEs per 30s rather
-        // than re-running the full acquire path. Matters at scale: at 1k
-        // live sessions, the full-acquire heartbeat cost ~33 writes/s +
-        // 33 per-user advisory locks/s; touchSlot cuts that to 33 cheap
-        // UPDATEs with no lock contention.
+        // steady-state heartbeat load is O(N) cheap UPDATEs per SLOT_HEARTBEAT_INTERVAL_MS
+        // (60s as of the 2026-07-18 Disk-IO backoff — halves this UPDATE's WAL)
+        // rather than re-running the full acquire path. The 240s reaper threshold
+        // is 4× this interval, so missed-beat tolerance is unchanged.
         pingInterval = setInterval(() => {
           if (ws.readyState !== WebSocket.OPEN) return;
           ws.ping();
@@ -2973,7 +3049,7 @@ export function setupWebSocket(server: HTTPServer) {
           if (current && convId) {
             void touchSlot(userId!, convId);
           }
-        }, 30_000);
+        }, SLOT_HEARTBEAT_INTERVAL_MS);
 
         // --- User-sticky session placement (epic #5274 Phase 3, ADR-068 D0 / CTO
         //     ruling b2) -----------------------------------------------------------
@@ -3248,7 +3324,8 @@ export async function attachProxiedSession(
 
   // Heartbeat (mirrors the native path): WS ping + touch the concurrency slot so
   // the pg_cron sweep does not reclaim a still-live proxied session. Cleared on
-  // close. `.unref()` so it never keeps the process alive on its own.
+  // close. `.unref()` so it never keeps the process alive on its own. Same
+  // SLOT_HEARTBEAT_INTERVAL_MS (60s) as the native path — both must move together.
   const pingInterval = setInterval(() => {
     if (ws.readyState !== WebSocket.OPEN) return;
     ws.ping();
@@ -3257,7 +3334,7 @@ export async function attachProxiedSession(
     if (current && convId) {
       void touchSlot(userId, convId);
     }
-  }, 30_000);
+  }, SLOT_HEARTBEAT_INTERVAL_MS);
   pingInterval.unref?.();
 
   // Authenticated frames route straight to handleMessage — no auth branch (the

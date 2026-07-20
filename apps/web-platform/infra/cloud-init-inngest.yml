@@ -89,6 +89,13 @@ write_files:
       Wants=network-online.target
       [Service]
       Type=oneshot
+      # #6617c: without this, systemd tags this unit from the ExecStart basename —
+      # `inngest-nftables.sh`, WITH the .sh — which matches no vector.toml source, so the
+      # script's own "[inngest-nft] nft binary not found" / rule-load failure never leaves
+      # this deny-all-public host. Source 4 is EXACT-VALUE equality: the tag here and the
+      # allowlist entry in vector.toml are one change, asserted on both sides by
+      # journald-config.test.sh.
+      SyslogIdentifier=inngest-nftables
       ExecStart=/usr/local/bin/inngest-nftables.sh
       RemainAfterExit=yes
       [Install]
@@ -233,7 +240,30 @@ runcmd:
     fi
 
   # --- Bake scoped GHCR read-creds (#6179/#6161) --------------------------------------
-  # So the cold-boot soleur-inngest-bootstrap OCI pull + cosign-verify authenticates even
+  # CORRECTED (#6617 / plan CF-2): this comment used to assert that the cold-boot OCI pull was
+  # signature-verified. THERE IS NO SIGNATURE VERIFICATION ON THIS PATH, and there never was.
+  # `grep -n cosign` on this file returned exactly one hit — that sentence, which named a
+  # verification step no line of this file performs. Real verification exists only in
+  # ci-deploy.sh (the app-deploy path); cloud-init-registry.yml only retains the sha256-*
+  # signature tags that verify depends on. build-inngest-bootstrap-image.yml states plainly that
+  # this image is "NOT cosign-signed (no id-token perm) — no sign step", so there is no
+  # signature for a verify to check and adding one would gate the sole scheduler's boot on an
+  # artifact that has never been produced.
+  #
+  # The correction is recorded rather than quietly deleted because a false comment is how this
+  # class propagates: the plan for this very change inherited the claim instead of grepping
+  # the path, and restated it as an acceptance criterion.
+  #
+  # Be precise about what the DIGEST PIN on IREF below does and does not buy, because
+  # overstating it would repeat this same error one layer down. The pin gives INTEGRITY: the
+  # bytes are content-addressed, so a swapped or spoofed payload fails the pull regardless of
+  # transport or which registry served it. It does NOT give PROVENANCE: it proves you got the
+  # bytes someone recorded, never who built them. Provenance here still rests entirely on
+  # GHCR's TLS + authn. Signing the image is a separate change that must land BEFORE any
+  # verify step, not with it — until then this path is integrity-pinned and unsigned, and
+  # that is the honest description of it.
+  #
+  # So the cold-boot soleur-inngest-bootstrap OCI pull authenticates even
   # when Doppler answers empty at the boot instant (else anonymous private pull → 401 →
   # 226/NAMESPACE abort). Same 0600 protection as the token file. Mirrors the web
   # cloud-init's `> /etc/default/soleur-ghcr-read` bake — but the hosts diverge
@@ -338,7 +368,26 @@ runcmd:
   - |
     set -e
     test -f /run/soleur-inngest-doppler.ok || { echo "FATAL: doppler isolation self-check did not pass — refusing to bootstrap inngest" >&2; exit 1; }
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.23
+    # DIGEST-PINNED (plan CF-2). What follows this line is `docker pull` -> `docker create`/`cp`
+    # -> `bash inngest-bootstrap.sh` EXECUTED AS ROOT on the sole scheduler. Until this pin, the
+    # only integrity control on that root-executed payload was GHCR's TLS + authn against a
+    # MUTABLE tag: anything able to re-point :v1.1.24 between the build and a host replace
+    # would have served a different root shell script, and nothing on this path would have
+    # noticed. The comment above the GHCR bake used to claim a signature check covered this; it
+    # did not, and the image is not signed at all (see that correction).
+    #
+    # BOTH halves are load-bearing. The `@sha256:` is the actual control — docker resolves by
+    # digest and ignores the tag, so these are immutable bytes. The `:v1.1.24` is retained
+    # because the pin-drift guard (cloud-init-inngest-bootstrap.test.sh AC6/AC6b) matches
+    # `soleur-inngest-bootstrap:vX.Y.Z` and compares it to the semver-max published
+    # vinngest-v* git tag; dropping the tag would silently disarm that guard, which is the
+    # #6536 failure (a stale pin rebuilding the dark host pre-fix) all over again.
+    #
+    # Digest verified from three independent sources before pinning: `docker buildx imagetools
+    # inspect`, the build-inngest-bootstrap-image.yml push log for run 29694156854, and the
+    # GitHub packages API. Bumping the tag WITHOUT re-resolving this digest gives you a
+    # v1.1.25 tag pinned to v1.1.24's bytes — silently, since the drift guard only reads tags.
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.24@sha256:6cdaa63d1496642e681898a831234b712f75d3b09bd0844bcabec3de74b0a0f8
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     # #6178 boot observability: bracket the OCI pull so a pull hang/401 self-reports the STAGE
     # (pre-oci-pull with no oci-pull-rc-* = hung; oci-pull-rc-N!=0 = failed, with masked tail).
@@ -351,6 +400,14 @@ runcmd:
     pull_tail="$(tail -n 8 /var/log/inngest-oci-pull.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
     /usr/local/bin/inngest-boot-phone-home.sh oci-pull-rc-$pull_rc "$pull_tail"
     [ "$pull_rc" -eq 0 ] || { echo "FATAL: OCI pull failed rc=$pull_rc" >&2; exit "$pull_rc"; }
+    # #6617a: record WHICH image produced this host, for the liveness probe's image_ref field.
+    # Named image_REF on the probe side because this writes the FULL $IREF — registry, repo,
+    # tag AND digest — not a bare sha256. A consumer keying on `image_sha=sha256:` never matched.
+    # CF-3's lesson is that inngest-bootstrap.sh and vector.toml reach the host ONLY through
+    # this image, so "the fix is on main" never implies "the fix is on the host" — #6539
+    # measured two published releases containing none of the fix they were dispatched for.
+    # $IREF is digest-pinned above, so this records the exact bytes, not a mutable tag.
+    printf 'INNGEST_BOOTSTRAP_IMAGE=%s\n' "$IREF" > /etc/default/soleur-inngest-image
     EXTRACT_DIR=$(mktemp -d)
     cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }
     trap cleanup EXIT

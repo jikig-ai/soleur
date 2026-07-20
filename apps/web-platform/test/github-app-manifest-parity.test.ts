@@ -63,6 +63,11 @@ const EXPECTED_TF_SECRETS = [
 // SHARED App — every re-consenting installation grants packages:read, so a private-key
 // leak reads every consenting tenant's packages (documented in ADR-088 Consequences;
 // requires_cpo_signoff). Plane-c activation needs org-owner re-consent (AC10).
+// #6657: `pages: write` added so cron-gh-pages-cert-reissue can PUT /repos/{owner}/
+// {repo}/pages (the custom-domain cname toggle that re-orders the bad_authz cert).
+// live-fire proved `administration:write` alone 403s "Resource not accessible by
+// integration" on that endpoint — the Pages permission is required. Needs org-owner
+// re-consent on the live App before the reissue's pages:write-scoped mint succeeds.
 const EXPECTED_PERMISSION_KEYS = [
   "actions",
   "administration",
@@ -72,6 +77,7 @@ const EXPECTED_PERMISSION_KEYS = [
   "members",
   "metadata",
   "packages",
+  "pages",
   "pull_requests",
   "repository_advisories",
   "secret_scanning_alerts",
@@ -144,6 +150,17 @@ describe("github-app-manifest.json symbol parity", () => {
     // publish/delete packages) fails CI, not review.
     const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as Manifest;
     expect(m.default_permissions?.packages).toBe("read");
+  });
+
+  test("default_permissions.pages === 'write' (cert-reissue cname toggle needs it)", () => {
+    // #6657: cron-gh-pages-cert-reissue PUTs /repos/{owner}/{repo}/pages to toggle
+    // the custom domain and re-order a bad_authz cert. live-fire proved
+    // administration:write 403s that endpoint — pages:write is required. The
+    // exact-key-set test only checks keys, not values, so lock the value here so a
+    // regress to read fails CI (the reissue would 403 in production, silently
+    // leaving the cert broken).
+    const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as Manifest;
+    expect(m.default_permissions?.pages).toBe("write");
   });
 
   test("public === false", () => {

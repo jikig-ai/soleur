@@ -121,18 +121,26 @@ if parse_err != null {
 # cutover-flip), not continuous request-per-line firehoses — projected
 # tens-to-low-hundreds of rows/day, well within the ~20% headroom under 25k/day.
 #
-# `inngest-heartbeat` (#6536) is the ONE exception and was accepted deliberately: it is
-# timer-driven at 60s, so its dark-arm row costs ~1,440 rows/day on the dedicated host
-# (the co-located web host renders no dark arm and emits NO success-path row, so it adds
-# ~0). Steady-state delta is roughly NEUTRAL, not a saving: the pre-fix `Failed to start`
-# storm it replaces was itself shipping ~1,240 rows/day — though via a mechanism this file
-# does not explain (a live row carries SYSLOG_IDENTIFIER=systemd, which NO source here
-# admits; tracked separately). What the ~1,440 buys is best-effort dark-host evidence the
-# host never had — best-effort because the script exits 0 regardless of whether `logger`
-# succeeds, so ABSENCE of the row proves nothing (journald down looks like a healthy dark
-# host). Presence proves the script ran; that is the whole claim. Deliberately NO success-path row on the
-# URL-present path: at 60s that would add ~2,880/day to duplicate what the Better Stack
-# heartbeat monitor already asserts.
+# `inngest-heartbeat` (#6536) is the ONE exception. The unit still FIRES every 60s, but as
+# of #6617b its dark-arm row is rate-limited to one per hour (`dark_arm_emit_due` in
+# inngest-bootstrap.sh), so it costs ~24 rows/day on the dedicated host — NOT the ~1,440
+# this comment claimed before that change. See the Source 4 note below, which states the
+# same ~24 figure; the two must not drift apart again. (The co-located web host renders no
+# dark arm and emits NO success-path row, so it adds ~0.)
+#
+# Steady-state delta is now a real SAVING, where pre-#6617b it was roughly neutral: the
+# `Failed to start` storm this replaced was itself shipping ~1,240 rows/day — though via a
+# mechanism this file does not explain (a live row carries SYSLOG_IDENTIFIER=systemd, which
+# NO source here admits; tracked separately).
+#
+# Rate-limited, NOT transition-only: what the ~24 buys is best-effort dark-host evidence the
+# host never had, and "emit once" or "emit on transition" would make a DEAD pusher and a
+# healthy deliberately-dark one produce the identical observation — nothing. Best-effort
+# because the script exits 0 regardless of whether `logger` succeeds, so ABSENCE of the row
+# proves nothing (journald down looks like a healthy dark host). Presence proves the script
+# ran; that is the whole claim. Deliberately NO success-path row on the URL-present path: at
+# 60s that would add ~2,880/day to duplicate what the Better Stack heartbeat monitor already
+# asserts.
 #
 # Adding a tag here is a quota decision; keep the list to genuinely-diagnostic
 # host scripts, and treat any further timer-driven tag as a fresh quota decision.
@@ -182,6 +190,36 @@ include_matches.SYSLOG_IDENTIFIER = [
   # (workspaces-luks-soak-6604.sh) has no channel to read — a dead probe would look identical to a
   # healthy silent one. Exact-value match: the units set SyslogIdentifier=luks-monitor / logger -t.
   "luks-monitor",
+  # #6438 §1/§3 + #6548: the three web-host consumer/guard oneshot probes (web-*.service,
+  # for_each var.web_hosts). Each declares SyslogIdentifier= (retagging the ExecStart basename
+  # `bash`) so its fault-CLASSIFICATION stderr reaches Better Stack off-box, not SSH-only: the
+  # heartbeat only says "suppressed", the journal line says WHY (zot 401 vs 404 vs 000; git-data
+  # unreachable; NIC-guard "SOLEUR_PRIVATE_NIC direct-curl egress FAILED"). Same #6556 lesson as
+  # inngest-heartbeat above. Exact-value match: the units set these SyslogIdentifier= tags.
+  "web-zot-consumer-probe",
+  "web-git-data-probe",
+  "web-nic-guard",
+  # #6617 (a/c): the dedicated inngest host's three remaining dark channels. Each entry here
+  # is HALF a change — Source 4 is sd_journal_add_match EXACT-VALUE equality, so an entry
+  # whose unit does not set that literal SyslogIdentifier= is a permanently-dead no-op that
+  # reads like coverage. Two of these three were exactly that until #6617c set the tag:
+  #   inngest-redis     — the unit set NO SyslogIdentifier=, so journald tagged it from the
+  #                       ExecStart basename `doppler` (inngest-redis.service now sets it).
+  #   inngest-nftables  — same, tagged `inngest-nftables.sh` WITH the .sh
+  #                       (cloud-init-inngest.yml's unit now sets it).
+  #   inngest-server-probe — new #6617a unit; declares the tag from birth.
+  # journald-config.test.sh asserts each literal on BOTH sides. Quota: the two service
+  # channels are event-driven (a boot + failures); the probe is HOURLY by design (~24 rows/
+  # day) and lands in the SAME change that takes inngest-heartbeat's dark arm from ~1,440
+  # rows/day to ~24 (#6617b), so this trio is a large net saving, not a new cost.
+  #
+  # DELIBERATELY ABSENT: `inngest-boot-phone-home`. It is a pure curl POST to the Better
+  # Stack HTTP ingest and never calls `logger` — it has NO journald channel at all, so an
+  # entry for it could never match anything. It already ships direct; the tag would buy a
+  # dead line in an allowlist that is read as an inventory of live channels.
+  "inngest-redis",
+  "inngest-nftables",
+  "inngest-server-probe",
 ]
 journal_directory = "/var/log/journal"
 batch_size = 16
@@ -343,6 +381,21 @@ if contains(tag, "structured") {
   msg = replace(msg, r'\b[\w.+\-]+@[\w\-]+\.[\w.\-]+\b', "[email]")
   msg = replace(msg, r'(?i)(authorization:\s*)bearer\s+\S+', "$${1}Bearer [redacted]")
   msg = replace(msg, r'(?i)(authorization:\s*)basic\s+\S+', "$${1}Basic [redacted]")
+  # Source 4 now allowlists `inngest-redis`, which routes that unit's RAW STDERR here — and
+  # raw stderr is not JSON, so pii_scrub_structured skips it and this is the ONLY scrubber it
+  # meets. redis-server echoes an offending directive VERBATIM on any config parse failure
+  # (`>>> 'requirepass "<value>"'`) and the unit's ExecStart passes the live prd password as
+  # exactly that directive, so without this rule a malformed inngest-redis.conf ships the
+  # password to Better Stack. Value-shaped, not key=value: redis prints it as a bare
+  # space-separated directive, which none of the rules above match.
+  msg = replace(msg, r'(?i)requirepass\s+\S+', "requirepass [redacted]")
+  # Same channel, same reason: INNGEST_POSTGRES_URI is a postgres://<user>:<pw>@host DSN in the
+  # same unit's env, and DSNs surface in connection-failure diagnostics verbatim. Anchored on
+  # the CREDENTIAL shape (`scheme://<user>:<pw>@`), never on `://` — this host legitimately logs
+  # credential-less internal URLs (http://10.0.1.40:8288/) that must pass through intact, and
+  # a `://` ban would either mangle those or get muted. Scheme-agnostic so redis://, amqp://
+  # and https:// DSNs are covered by the same rule.
+  msg = replace(msg, r'([a-z][a-z0-9+.-]*://)[^:/@\s]+:[^@/\s]+@', "$${1}[redacted]@")
   msg = replace(msg, r'[\x00-\x1f\x7f\u{2028}\u{2029}]', "")
   .message = msg
   .pii_scrub_applied = tag + "+string"

@@ -14,6 +14,34 @@
 # here: the environment is not a second reviewer on an already-reviewed PR, it is the sole gate on an
 # irreversible freeze. The environment MUST have a NON-EMPTY required-reviewer set (a zero-reviewer
 # environment auto-approves — DP-11 F8). The typed `confirm` token is a typo-guard, NOT the authorization.
+#
+# #6649 — the gate is applied to the IRREVERSIBLE arms ONLY. A `dry_run=true` rehearsal performs NO
+# irreversible operation (freeze/repoint are behind `DRY_RUN != 1` in workspaces-cutover.sh; the wipe is
+# a separate CONFIRM_WIPE dispatch), so gating it behind a human made every escrow rehearsal wait on an
+# approval — defeating autonomy for a reversible probe. The C19/AC20b human authorization on the
+# irreversible operation is fully preserved; only the reversible rehearsal is ungated. The reviewer set
+# MUST stay non-empty for every gated arm.
+#
+# #6588 — `dry_run` is NO LONGER a valid proxy for "which mode", and reading it as one left a live hole.
+# `rollback` force-sets `DRY_RUN=0` inside the script, and `dry_run` DEFAULTS TO TRUE — so the original
+# `!inputs.dry_run` expression sent `rollback=true` (dry_run untouched) down the UNGATED branch while it
+# performed a REAL umount/cryptsetup-close/restart of web-1's live volume, behind nothing but a typo-guard
+# token. Every destructive mode now contributes its own operand to the `environment:` expression, and the
+# ungated branch is reachable ONLY for `dry_run=true ∧ clean_stray=false ∧ rollback=false`.
+#
+# #6588 — TWO JOBS. `preflight` is UNGATED and mutation-free; `cutover` carries the environment gate.
+# The split exists because a job's `environment:` gate blocks the job BEFORE its first step, so mode
+# validation and operator-legibility placed in the gated job could only ever run AFTER a reviewer was
+# paged. preflight rejects impossible mode combinations before waking anyone, and on a `clean_stray`
+# dispatch writes the AP-009 deviation banner + the deletion's magnitude to the step summary so the
+# approver — who IS the authorization — can read what they are approving before approving it.
+#
+# #6588 — a STRUCTURAL loopback-validation gate sits on the `dry_run=false` arm (see the step below).
+# "Do not freeze until the LUKS mkfs/staging path is validated on a loopback device" was, until that
+# step existed, enforced only in PR prose — and prose that has merged can never fire on a dispatch.
+# 87692a0d9 is exactly that failure class: a staging mount that failed silently and put the entire
+# copy on the ROOT DISK. The gate now lives on the arm that can lose data. It only ever makes the
+# irreversible arm HARDER to reach; the reversible rehearsal arm is untouched.
 
 name: workspaces-luks cutover freeze (#6604 / ADR-119)
 
@@ -25,12 +53,17 @@ on:
         required: true
         type: string
       dry_run:
-        description: "If true: L3 gates + escrow + bulk rsync + verify only; NO freeze, NO repoint. Leave true until rehearsed."
+        description: "Rehearsal. COVERS: L3 gates; fresh-device selection + blkid discriminator; aws/lsof install; R2 escrow reachability probe (PUT/read-back/delete + the negative tfstate-denial probe); G2 manifest; advisory holder probe. Does NOT cover: no luksFormat/luksOpen/staging mount, no luksOpen --test-passphrase escrow proof, no header backup/upload, no rollback rehearsal, no bulk rsync, no freeze, no delta rsync, no C1 verify, no repoint, no canary, no wipe. A green rehearsal is NOT evidence the copy/verify path works. NOTE: clean_stray is REFUSED in this arm (a deletion has no rehearsal) — untick dry_run to run it."
         required: false
         type: boolean
         default: true
       rollback:
         description: "Recovery: remount the retained plaintext at /mnt/data + restart. Use if a cutover left web-1 unhealthy."
+        required: false
+        type: boolean
+        default: false
+      clean_stray:
+        description: "DELETES USER DATA. Removes the stray plaintext copy at /mnt/data-luks left on web-1's ROOT DISK by the 2026-07-19 run. This is a documented AP-009 (Never delete user data) DEVIATION — see ADR-119 'Addendum (2026-07-19): the stray-copy carve-out'. The canonical copy at /mnt/data is retained untouched. REQUIRES dry_run=false (there is no rehearsal for a deletion) and confirm=DELETE-STRAY-USER-DATA-AP-009. Mutually exclusive with rollback."
         required: false
         type: boolean
         default: false
@@ -48,28 +81,271 @@ env:
   INFRA_DIR: apps/web-platform/infra
   CLOUDFLARED_VERSION: "2026.5.0"
   CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+  # web-1 private IP — single source for BOTH the bridge `server-ip` (NAT redirect
+  # scope) and the Run step `WEB_HOST` (dial target). They MUST match or the
+  # redirect misses the SSH; defining once removes that drift foot-gun.
+  WEB_HOST_PRIVATE_IP: "10.0.1.10"
 
 jobs:
-  cutover:
+  # ── UNGATED PREFLIGHT (#6588) ───────────────────────────────────────────────────────────────────
+  # Two jobs exist for ONE structural reason: a job's `environment:` gate blocks the job BEFORE any
+  # of its steps run. So validation and operator-legibility placed inside the gated job cannot, by
+  # construction, happen "before the reviewer is paged" — the reviewer is paged first and always.
+  #
+  # This job therefore carries NO `environment:` key and performs NO mutation. It:
+  #   (1) rejects impossible mode combinations before a human is woken for a run that cannot proceed;
+  #   (2) validates the mode-appropriate confirm token (a typo-guard, never the authorization);
+  #   (3) on a clean_stray dispatch ONLY, reaches web-1 READ-ONLY and writes the AP-009 deviation
+  #       banner + the deletion's MAGNITUDE to the step summary — so the approver, who is the actual
+  #       authorization, can read what they are approving BEFORE approving it. GitHub's approval UI
+  #       shows workflow/actor/ref and NOT the dispatch inputs, so without this a routine cutover and
+  #       a user-data deletion are indistinguishable at the gate.
+  # It receives strictly LESS credential than the cutover job: no WORKSPACES_LUKS_BOOT_TOKEN, so it
+  # cannot read the passphrase or the escrow creds. It issues no rm.
+  preflight:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    # The sole human authorization on a sole-copy-data freeze (C19). MUST carry a non-empty
-    # required-reviewer set in repo settings (DP-11 F8 — a zero-reviewer environment auto-approves).
-    environment: workspaces-luks-cutover
+    timeout-minutes: 15
     steps:
-      - name: Validate confirm token
+      - name: Validate dispatch mode + confirm token
         env:
+          # Untrusted input via env, compared as literals — never interpolated into the condition.
           CONFIRM: ${{ inputs.confirm }}
-        # Untrusted input via env, compared as a literal — never interpolated into the condition.
+          DRY: ${{ inputs.dry_run }}
+          ROLLBACK_IN: ${{ inputs.rollback }}
+          CLEAN_STRAY_IN: ${{ inputs.clean_stray }}
         run: |
           set -euo pipefail
-          if [[ "$CONFIRM" != "CUTOVER-WORKSPACES-LUKS" ]]; then
-            echo "::error::confirm token mismatch — type exactly CUTOVER-WORKSPACES-LUKS to authorize."
+
+          # clean_stray deletes user data and has no rehearsal — there is nothing it could safely
+          # simulate. dry_run DEFAULTS TO TRUE, so "tick clean_stray, change nothing else" lands
+          # here: name the remedy rather than just refusing.
+          if [[ "$CLEAN_STRAY_IN" == "true" && "$DRY" == "true" ]]; then
+            echo "::error::clean_stray=true requires dry_run=false. A deletion has no rehearsal arm. dry_run defaults to TRUE, so untick it explicitly and re-dispatch."
             exit 1
           fi
-          echo "confirm token accepted (the environment reviewer is the authorization; this is the typo-guard)."
+
+          # Mode mutual exclusion, mirrored from assert_mode_exclusive() in workspaces-cutover.sh.
+          # The script's ROLLBACK block ends `exit 0`, so without this a both-ticked dispatch would
+          # perform a rollback (a gratuitous outage on an unfrozen host), exit green, and leave the
+          # stray in place while the operator believed a deletion succeeded.
+          if [[ "$CLEAN_STRAY_IN" == "true" && "$ROLLBACK_IN" == "true" ]]; then
+            echo "::error::clean_stray and rollback are mutually exclusive — they are different recovery verbs and rollback would silently win. Re-dispatch with exactly ONE ticked."
+            exit 1
+          fi
+
+          # A DISTINCT token per destructive verb: the operator must physically type "user data" and
+          # the principle ID, so a pasted/muscle-memory cutover token can never reach a deletion.
+          if [[ "$CLEAN_STRAY_IN" == "true" ]]; then
+            EXPECT="DELETE-STRAY-USER-DATA-AP-009"
+          else
+            EXPECT="CUTOVER-WORKSPACES-LUKS"
+          fi
+          if [[ "$CONFIRM" != "$EXPECT" ]]; then
+            echo "::error::confirm token mismatch — type exactly ${EXPECT} to authorize this mode."
+            exit 1
+          fi
+          echo "mode validated; confirm token accepted (the environment reviewer is the authorization; this is the typo-guard)."
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        if: ${{ inputs.clean_stray }}
+
+      - name: Install Doppler CLI
+        if: ${{ inputs.clean_stray }}
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: CF Tunnel SSH bridge (read-only probe)
+        if: ${{ inputs.clean_stray }}
+        uses: ./.github/actions/cf-tunnel-ssh-bridge
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          infra-dir: ${{ env.INFRA_DIR }}
+          cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
+          cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+          server-ip: ${{ env.WEB_HOST_PRIVATE_IP }}
+
+      # The approval-legibility surface. READ-ONLY: du / find / mountpoint / test only, no rm.
+      # Magnitude is reported TOP-LEVEL ONLY — a recursive listing would publish workspace structure
+      # (repo names, branch names) into the Actions log, a wider audience than the data itself.
+      - name: AP-009 deletion probe (read-only magnitude for the approver)
+        if: ${{ inputs.clean_stray }}
+        env:
+          WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
+          STAGING_PATH: /mnt/data-luks
+          MOUNT_PATH: /mnt/data
+        run: |
+          set -uo pipefail
+          [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::CF Tunnel SSH bridge did not export WEB_HOST_SSH — cannot reach web-1."; exit 1; }
+          # The remote body runs under `set -e` so a mid-sequence failure aborts rather than
+          # emitting a TRUNCATED banner, which is indistinguishable from a clean result.
+          # `unique_count` is computed to the SAME depth the script's subset check uses (2): at
+          # depth 1 the entries are infrastructure directories (`workspaces`, `plugins`, `redis`)
+          # that the stray necessarily mirrors, so a depth-1 comparison is always empty and tells
+          # the approver nothing. Only the COUNT is published — the names at depth 2 are per-user
+          # workspace ids, and this job is UNGATED, so publishing them would put user identifiers
+          # in the run log of a job any actor with dispatch access can trigger.
+          # shellcheck disable=SC2086
+          rc=0
+          PROBE="$(${WEB_HOST_SSH} "$WEB_HOST" "set -e; S='$STAGING_PATH'; M='$MOUNT_PATH'; \
+            if mountpoint -q \"\$S\"; then echo 'state=MOUNTPOINT'; exit 0; fi; \
+            if [ -z \"\$(ls -A \"\$S\" 2>/dev/null)\" ]; then echo 'state=EMPTY'; exit 0; fi; \
+            echo \"state=STRAY bytes=\$(du -s --block-size=1 \"\$S\" 2>/dev/null | cut -f1) entries=\$(find \"\$S\" -mindepth 1 -maxdepth 1 -printf '.' | wc -c)\"; \
+            u=0; while IFS= read -r -d '' e; do [ -e \"\$M/\$e\" ] || u=\$((u+1)); done < <(find \"\$S\" -mindepth 1 -maxdepth 2 -printf '%P\0'); \
+            echo \"unique_to_stray_count=\$u\"")" || rc=$?
+
+          # FAIL CLOSED. A silently-empty banner under a heading that reads "What will be deleted"
+          # is worse than no banner: the approver reads absence as "nothing unique, safe to
+          # approve". This job's ONLY purpose is that the approver can see what they authorize, so
+          # an unreadable probe must block rather than degrade to a green step with an empty block.
+          if [[ $rc -ne 0 || -z "$PROBE" || "$PROBE" != state=* ]]; then
+            {
+              echo "## PROBE FAILED — DO NOT APPROVE"
+              echo ""
+              echo "Could not read \`${STAGING_PATH}\` on web-1 (rc=${rc}). The deletion's magnitude is **unknown**,"
+              echo "so there is nothing here for an approver to evaluate. Re-dispatch once web-1 is reachable."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::AP-009 probe failed (rc=${rc}) — refusing to page an approver for a user-data deletion with no magnitude shown."
+            exit 1
+          fi
+
+          {
+            echo "## AP-009 DEVIATION — pending approval will DELETE USER DATA"
+            echo ""
+            echo "Approving this run removes the stray plaintext copy at \`${STAGING_PATH}\` on web-1's **root disk**."
+            echo "That directory holds **workspace source code**. Deleting it is a documented deviation from"
+            echo "**AP-009 (Never delete user data)** — see ADR-119 *Addendum (2026-07-19): the stray-copy carve-out*."
+            echo ""
+            echo "It is sound only because provenance establishes the copy is a **duplicate**: nothing ever wrote"
+            echo "to \`${STAGING_PATH}\` except the misdirected rsync of \`${MOUNT_PATH}\`. The canonical copy at"
+            echo "\`${MOUNT_PATH}\` is retained and is **not** touched."
+            echo ""
+            echo "### Magnitude"
+            echo ""
+            echo '```'
+            echo "${PROBE}"
+            echo '```'
+            echo ""
+            echo "**If \`unique_to_stray_count\` is anything other than 0, do NOT approve** — the duplicate premise"
+            echo "is falsified (something other than the misdirected rsync wrote there) and the run will refuse"
+            echo "anyway. If \`state=MOUNTPOINT\` or \`state=EMPTY\`, there is nothing to delete and the run will"
+            echo "refuse or no-op. Entry names are deliberately withheld here: at the depth that discriminates,"
+            echo "they are per-user workspace identifiers and this job is ungated."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Tear down cloudflared SSH bridge
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -n "${SERVER_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT -d "$SERVER_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${CLOUDFLARED_PID:-}" ]]; then kill "$CLOUDFLARED_PID" 2>/dev/null || true; fi
+          if [[ -n "${CI_SSH_KEYFILE:-}" && -f "$CI_SSH_KEYFILE" ]]; then shred -u "$CI_SSH_KEYFILE" 2>/dev/null || true; fi
+          # The composite action's caller-side teardown contract ends with this tail. Without it a
+          # bridge flake on the probe path is undiagnosable: the probe reports rc but not WHY, and
+          # SSH is not an available recovery path (hr-no-ssh-fallback-in-runbooks).
+          if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi
+
+  cutover:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    # 30 → 45 (#6588): the loopback-validation gate below runs a real losetup/cryptsetup/mkfs suite
+    # on the freeze arm before the bridge is raised. Left at 30 it would eat the freeze's own
+    # headroom and a real cutover could be KILLED MID-RUN — a new risk introduced by the gate.
+    # The budget is raised so the gate is additive; the ≤20 min freeze window (ADR-119 §(c)) and the
+    # ≤2h hard abort are unchanged.
+    timeout-minutes: 45
+    # The sole human authorization on a sole-copy-data freeze (C19). Applied to the REAL freeze arm
+    # ONLY (`dry_run=false`) — a reversible dry-run rehearsal runs ungated for autonomy (#6649). The
+    # expression is FAIL-CLOSED: `!inputs.dry_run && 'workspaces-luks-cutover'` yields the gated env
+    # whenever dry_run is false (the freeze-reachable case), and the empty-string branch (ungated)
+    # ONLY when dry_run is exactly true. The environment MUST carry a non-empty required-reviewer set
+    # in repo settings (DP-11 F8 — a zero-reviewer environment auto-approves). Never invert the
+    # operands: `inputs.dry_run && '' || 'X'` gates ALWAYS ('' is falsy), the opposite of intent.
+    #
+    # #6588 — `dry_run` was serving as a PROXY for "which mode", and that synonymy is now false.
+    # Keyed on dry_run alone this expression left a LIVE HOLE on `main`: dry_run DEFAULTS TO TRUE and
+    # the script's ROLLBACK block force-sets `DRY_RUN=0`, so `rollback=true` with dry_run left at its
+    # default resolved to the UNGATED branch and performed a REAL umount/close/restart of web-1's live
+    # volume behind nothing but a typo-guard token. Every destructive mode must contribute its own
+    # operand. The ungated branch is now reachable ONLY for
+    # `dry_run=true ∧ clean_stray=false ∧ rollback=false` — a genuinely reversible rehearsal.
+    # (Inputs are `type: boolean` and read via `inputs.*`, so these are real booleans; the
+    # `github.event.inputs.*` form yields the STRINGS "true"/"false" and would make `!inputs.dry_run`
+    # always false. A non-workflow_dispatch context yields null → `!null` is true → gated.)
+    environment: ${{ (!inputs.dry_run || inputs.clean_stray || inputs.rollback) && 'workspaces-luks-cutover' || '' }}
+    steps:
+      # NOTE: the confirm-token + mode validation deliberately does NOT live here. It runs in the
+      # ungated `preflight` job, because an `environment:` gate blocks a job BEFORE its first step —
+      # so a check placed here could only ever run AFTER a human had already been paged.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # ── #6588 STRUCTURAL DISPATCH GATE — the irreversible arm ONLY ──────────────────────────────
+      # Hard-fails a `dry_run=false` dispatch unless the LUKS mkfs/staging path is validated on THIS
+      # commit. It EXECUTES the loopback suite here rather than looking for evidence of a past run:
+      # infra-validation.yml has no `push:` trigger, so after a squash-merge there is NO run at
+      # main's SHA to find — a `head_sha` evidence check would either fail forever or have to be
+      # loosened into a vacuous ancestor match. Running the suite cannot pass vacuously.
+      #
+      # It runs BEFORE the SSH bridge and BEFORE any host contact, so a failure costs nothing and
+      # touches nothing on web-1. `dry_run=true` is deliberately NOT gated: the rehearsal is
+      # reversible (ADR-119, the 2026-07-18 authorization addendum) and gating it would re-break the
+      # autonomy that addendum bought. This step makes ONLY the irreversible arm harder to reach —
+      # it does not touch the `environment:` reviewer gate, `can_admins_bypass`, or the confirm token.
+      # #6588 — scoped to the FREEZE arm specifically, not merely to "not dry_run". The gate
+      # validates the LUKS mkfs/staging path, which neither `rollback` nor `clean_stray` uses or can
+      # reach. Left keyed on `!dry_run` alone, a clean_stray dispatch would run a multi-minute
+      # apt-get + losetup/cryptsetup/mkfs suite it does not need — and a red result in that unrelated
+      # suite would block the stray deletion PERMANENTLY, wedging the very remediation that unwedges
+      # the cutover. The same defect already applied to `rollback`: an emergency recovery gated
+      # behind a validation of a path rollback never touches.
+      - name: Loopback validation gate (real freeze arm only)
+        if: ${{ !inputs.dry_run && !inputs.rollback && !inputs.clean_stray }}
+        env:
+          # Static literals, never event-controlled input.
+          LOOPBACK_SUITE: apps/web-platform/infra/workspaces-luks-loopback.test.sh
+          INFRA_VALIDATION_WF: .github/workflows/infra-validation.yml
+        run: |
+          set -euo pipefail
+
+          # (1) The suite must EXIST and be executable. `[[ -x ]]` on a missing path is false, so an
+          # absent suite fails HERE rather than silently proving nothing.
+          if [[ ! -x "$LOOPBACK_SUITE" ]]; then
+            echo "::error::${LOOPBACK_SUITE} is missing or not executable — the LUKS mkfs/staging path is unvalidated. Refusing a dry_run=false freeze."
+            exit 1
+          fi
+
+          # (2) It must ALSO be wired into CI on a non-comment line, and the step invoking it must
+          # not carry continue-on-error (which reports conclusion=success over outcome=failure —
+          # exactly how a gate goes quiet). Parsed as YAML, never grepped: a bare grep for the path
+          # would match the path inside a comment and pass vacuously.
+          python3 -c 'import yaml' 2>/dev/null || pip3 install --quiet pyyaml
+          python3 - <<'PY'
+          import os, sys, yaml
+          suite = os.environ["LOOPBACK_SUITE"]
+          wf = yaml.safe_load(open(os.environ["INFRA_VALIDATION_WF"]))
+          hits = []
+          for job in (wf.get("jobs") or {}).values():
+              for step in (job.get("steps") or []):
+                  body = " ".join(str(step.get(k, "")) for k in ("run", "uses"))
+                  body += " " + " ".join(str(v) for v in (step.get("with") or {}).values())
+                  if suite in body:
+                      hits.append(step)
+          if not hits:
+              sys.exit(f"::error::{suite} is invoked by NO step in infra-validation.yml — the loopback suite would never run in CI. Refusing a dry_run=false freeze.")
+          soft = [s.get("name", "<unnamed>") for s in hits if s.get("continue-on-error")]
+          if soft:
+              sys.exit(f"::error::infra-validation.yml invokes {suite} under continue-on-error ({soft}) — a soft-failing gate proves nothing. Refusing a dry_run=false freeze.")
+          print(f"wired into infra-validation.yml by {len(hits)} step(s), none soft-failing")
+          PY
+
+          # (3) Run it, on this commit, on this runner. If cryptsetup/losetup cannot be provisioned
+          # the suite fails and so does the freeze — the correct direction for a fail-closed gate.
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cryptsetup-bin
+          sudo -E bash "$LOOPBACK_SUITE"
+          echo "loopback validation PASSED on ${GITHUB_SHA} — freeze arm may proceed to the environment reviewer gate."
 
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
@@ -82,54 +358,182 @@ jobs:
           [[ -n "$DOPPLER_TOKEN_CHECK" ]] || { echo "::error::DOPPLER_TOKEN not configured."; exit 1; }
 
       - name: CF Tunnel SSH bridge
-        # Needed for any host-touching run: a real cutover OR a rollback recovery.
-        if: ${{ !inputs.dry_run || inputs.rollback }}
+        # Needed on EVERY invocation (dry-run, real cutover, rollback): the next step ALWAYS pipes
+        # workspaces-cutover.sh to web-1 (private 10.0.1.10) over SSH, and the escrow probe runs
+        # host-side in the dry-run arm too — before the DRY_RUN freeze gate — so a GREEN escrow
+        # signal lands during the rehearsal. A dry_run guard here left the bridge un-set on the
+        # rehearsal path, so the SSH timed out before the probe could run (ref run 29644526137).
         uses: ./.github/actions/cf-tunnel-ssh-bridge
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN }}
           infra-dir: ${{ env.INFRA_DIR }}
           cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
           cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+          # server-ip == WEB_HOST (web-1 private IP, single-sourced from
+          # env.WEB_HOST_PRIVATE_IP): scopes the NAT redirect to the same address
+          # the Run step SSHes to, and enables the keyfile + WEB_HOST_SSH export
+          # the Run step consumes. No infra-state read here — the tunnel ingress
+          # (tunnel.tf) always lands on web-1.
+          server-ip: ${{ env.WEB_HOST_PRIVATE_IP }}
 
       - name: Run workspaces-luks cutover
         env:
+          # prd_terraform-scoped runner token — reads HCLOUD_TOKEN (volume-id lookup) on the RUNNER.
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # prd_workspaces_luks-scoped boot token — the ONLY credential that can read
+          # WORKSPACES_LUKS_KEY + the R2 escrow creds host-side. Delivered to web-1 via a 0600 stdin
+          # .env (never argv). Published by the DEFAULT apply of apply-web-platform-infra.yml (#6649).
+          WORKSPACES_LUKS_BOOT_TOKEN: ${{ secrets.WORKSPACES_LUKS_BOOT_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           ROLLBACK: ${{ inputs.rollback && '1' || '0' }}
-          WEB_HOST: "10.0.1.10"
-        # The cutover body runs ON web-1 (DP-6 host-side trap): copy it over the bridge and execute
-        # it there so `trap cleanup EXIT` survives an SSH drop. The script reads the passphrase via
-        # the host's pinned prd_workspaces_luks token path; no cloud-admin creds touch the host.
+          CLEAN_STRAY: ${{ inputs.clean_stray && '1' || '0' }}
+          WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
+        # The cutover body runs ON web-1 (DP-6 host-side trap): ship the script + its siblings over the
+        # bridge and execute it there AS A FILE so `trap cleanup EXIT` survives an SSH drop AND the
+        # emit sibling is sourced (${BASH_SOURCE[0]} resolves — the pre-#6649 stdin-pipe darkened it).
+        # The script reads the passphrase via the host's pinned prd_workspaces_luks token path
+        # (delivered as $DOPPLER_TOKEN in the 0600 .env); no cloud-admin creds touch the host.
         run: |
           # set +e so the `rc=$?` + ::error:: diagnostic runs — GitHub's inherited `-e` (which
           # `set -uo pipefail` does not clear) would otherwise exit the step on the ssh failure
           # before the guidance prints.
           set +e
           set -uo pipefail
+          # Fail loud if the bridge did not export WEB_HOST_SSH — a bare `ssh`
+          # fallback would connect keyless as the runner user and time out /
+          # auth-fail confusingly. The bridge sets WEB_HOST_SSH when server-ip
+          # is passed (it is, above).
+          [[ -n "${WEB_HOST_SSH:-}" ]] || { echo "::error::CF Tunnel SSH bridge did not export WEB_HOST_SSH — cannot reach web-1. Check the bridge step logs."; exit 1; }
+          # The host cannot read prd_workspaces_luks without the boot token — fail loud here rather
+          # than let read_key/load_escrow_creds die mid-run with a confusing empty-secret error.
+          [[ -n "${WORKSPACES_LUKS_BOOT_TOKEN:-}" ]] || { echo "::error::WORKSPACES_LUKS_BOOT_TOKEN not configured — run the DEFAULT apply of apply-web-platform-infra.yml to publish it (#6649)."; exit 1; }
+
+          # BLOCKER 5 — resolve the fresh LUKS volume's stable by-id device path. DOPPLER_TOKEN is
+          # prd_terraform-scoped, so it reads HCLOUD_TOKEN here on the runner (never on the host).
+          #
+          # SKIPPED on the clean_stray arm (#6588): clean_stray() runs ABOVE FRESH_DEV/read_key and
+          # needs no device at all, while this lookup HARD-FAILS unless exactly one
+          # soleur-web-platform-data-luks volume exists. Post-incident that volume may legitimately
+          # be detached or absent — which would make the cleanup path unreachable for a reason
+          # entirely unrelated to the cleanup. WORKSPACES_LUKS_DEV is still WRITTEN to the .env on
+          # that arm (the printf format is unconditional) but carries an EMPTY value, which is
+          # harmless: clean_stray() exits well above the `[ -n "$FRESH_DEV" ]` assertion that would
+          # otherwise reject it. Do not move that assertion earlier without revisiting this.
+          LUKS_DEV=""
+          if [[ "$CLEAN_STRAY" != "1" ]]; then
+            HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN --plain -p soleur -c prd_terraform)"
+            VOL_JSON="$(curl -fsS --max-time 15 -H "Authorization: Bearer $HCLOUD_TOKEN" \
+              'https://api.hetzner.cloud/v1/volumes?name=soleur-web-platform-data-luks')"
+            # Assert EXACTLY ONE volume matched before taking [0] — an ambiguous/zero match must NOT
+            # silently pick a wrong device (the real arm luksFormats WORKSPACES_LUKS_DEV; a wrong id is
+            # data-destructive on that device). Belt for the blkid-signature backstop in prepare_luks_target.
+            VCOUNT="$(jq -r '.volumes | length' <<<"$VOL_JSON")"
+            [[ "$VCOUNT" == "1" ]] || { echo "::error::expected exactly 1 soleur-web-platform-data-luks volume from the Hetzner API, got ${VCOUNT:-<none>} — refusing to guess the fresh device"; exit 1; }
+            VID="$(jq -r '.volumes[0].id' <<<"$VOL_JSON")"
+            [[ "$VID" =~ ^[0-9]+$ ]] || { echo "::error::could not resolve the soleur-web-platform-data-luks volume id from the Hetzner API (got: '${VID:-<empty>}')"; exit 1; }
+            LUKS_DEV="/dev/disk/by-id/scsi-0HC_Volume_${VID}"
+          fi
+
+          # BLOCKER 3 — content-carrier: ship the script + siblings to a temp dir on the PERSISTENT
+          # STATE_DIR (NOT tmpfs /tmp — a tmpfs .env makes the boot-token shred a no-op against the raw
+          # device, the F7 anti-pattern the header backup already fixes) and run it AS A FILE. No sudo:
+          # WEB_HOST_SSH lands `-l root`, and sudo's env_reset would scrub HOME + the sourced .env.
           # shellcheck disable=SC2086
-          ${WEB_HOST_SSH:-ssh} "$WEB_HOST" "sudo DRY_RUN='${DRY_RUN}' ROLLBACK='${ROLLBACK}' bash -s" \
-            < "${INFRA_DIR}/workspaces-cutover.sh"
+          REMOTE_DIR="$(${WEB_HOST_SSH} "$WEB_HOST" 'mkdir -p /var/lib/workspaces-luks && chmod 700 /var/lib/workspaces-luks && mktemp -d /var/lib/workspaces-luks/wl-cutover.XXXXXX')"
+          [[ -n "$REMOTE_DIR" ]] || { echo "::error::failed to create the remote bundle dir on web-1"; exit 1; }
+          echo "REMOTE_DIR=$REMOTE_DIR" >> "$GITHUB_ENV"
+          # shellcheck disable=SC2086
+          tar czf - -C "$INFRA_DIR" workspaces-cutover.sh workspaces-luks-emit.sh luks-monitor.sh luks-monitor.service luks-monitor.timer \
+            | ${WEB_HOST_SSH} "$WEB_HOST" "tar xzf - -C '$REMOTE_DIR'"
+
+          # BLOCKER 4 — deliver the boot token (+ device + flags) via a mode-0600 root .env written
+          # over STDIN (never `sudo VAR=val` argv — that leaks the full-prd-capable token into the host
+          # process list). Write .env, arm the host-local shred trap, source it, and run the script AS A
+          # FILE — ALL in ONE remote bash -c so the trap covers the .env's entire lifetime (no
+          # un-trapped window). Fields are metacharacter-free (dp.st token / by-id path / 0|1) so
+          # `set -a; . .env` is injection-safe.
+          # shellcheck disable=SC2086
+          printf 'DOPPLER_TOKEN=%s\nWORKSPACES_LUKS_DEV=%s\nDRY_RUN=%s\nROLLBACK=%s\nCLEAN_STRAY=%s\n' \
+            "$WORKSPACES_LUKS_BOOT_TOKEN" "$LUKS_DEV" "$DRY_RUN" "$ROLLBACK" "$CLEAN_STRAY" \
+            | ${WEB_HOST_SSH} "$WEB_HOST" "bash -c 'install -m600 /dev/stdin \"$REMOTE_DIR/.env\"; trap \"shred -u \\\"$REMOTE_DIR/.env\\\" 2>/dev/null || rm -f \\\"$REMOTE_DIR/.env\\\"\" EXIT; set -a; . \"$REMOTE_DIR/.env\"; set +a; bash \"$REMOTE_DIR/workspaces-cutover.sh\"'"
           rc=$?
           if [[ $rc -ne 0 ]]; then
-            echo "::error::workspaces-luks cutover exited $rc — the host-side EXIT trap auto-rolled-back to the plaintext mount (DP-6). See the emitted Sentry event (feature=workspaces-luks op=workspaces-luks-drift)."
+            # The DP-6 EXIT trap rolls back to the plaintext mount ONLY for a PRE-canary failure; a
+            # failure AFTER the host canary (e.g. monitor-timer arm) leaves the LUKS mount LIVE and
+            # retained (cleanup() no-ops once CANARY_OK=1). Not every failure emits a Sentry event —
+            # the at-rest asserts do; the timer-arm die now does too. Read the streamed die() message
+            # in this run log first, then the Sentry channel (feature=workspaces-luks op=workspaces-luks-drift).
+            echo "::error::workspaces-luks cutover exited $rc — see the streamed die() message above. Pre-canary failures auto-rolled-back to the plaintext mount (DP-6); a post-canary failure left the LUKS mount live. Check the run log + any emitted Sentry event (feature=workspaces-luks op=workspaces-luks-drift)."
             exit $rc
           fi
+
+      - name: Remove remote cutover bundle
+        if: always()
+        env:
+          WEB_HOST: ${{ env.WEB_HOST_PRIVATE_IP }}
+        # Belt-and-suspenders: the .env is shredded by the host-local EXIT trap even on an SSH drop;
+        # this removes the (script-only, non-secret) bundle dir. REMOTE_DIR is exported to GITHUB_ENV
+        # by the Run step; empty if that step never created it.
+        run: |
+          set +e
+          if [[ -n "${WEB_HOST_SSH:-}" && -n "${REMOTE_DIR:-}" ]]; then
+            # shellcheck disable=SC2086
+            ${WEB_HOST_SSH} "$WEB_HOST" "rm -rf '$REMOTE_DIR'" 2>/dev/null || true
+          fi
+
+      - name: Tear down cloudflared SSH bridge
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -n "${SERVER_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT -d "$SERVER_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
+            kill "$CLOUDFLARED_PID" 2>/dev/null || true
+          fi
+          if [[ -n "${CI_SSH_KEYFILE:-}" && -f "$CI_SSH_KEYFILE" ]]; then
+            shred -u "$CI_SSH_KEYFILE" 2>/dev/null || true
+          fi
+          if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi
 
       - name: Cutover summary
         if: always()
         env:
           ACTOR: ${{ github.actor }}
           DRY: ${{ inputs.dry_run }}
+          ROLLBACK_IN: ${{ inputs.rollback }}
+          CLEAN_STRAY_IN: ${{ inputs.clean_stray }}
           JOB_STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # Reports the MODE, not just `Dry run:` (#6588). Two ways the old single-field summary
+        # misled on the permanent record: a deletion read "Dry run: false" and nothing else, and a
+        # rollback dispatched with dry_run left at its TRUE default read "Dry run: true" on a run
+        # that performed a REAL rollback (the script force-sets DRY_RUN=0 in that block).
         run: |
+          set -euo pipefail
+          if [[ "$CLEAN_STRAY_IN" == "true" ]]; then
+            MODE="CLEAN_STRAY — deleted the stray plaintext copy (AP-009 documented deviation, ADR-119 addendum)"
+          elif [[ "$ROLLBACK_IN" == "true" ]]; then
+            MODE="ROLLBACK — remounted the retained plaintext at /mnt/data (runs for real regardless of dry_run)"
+          elif [[ "$DRY" == "true" ]]; then
+            MODE="REHEARSAL (dry_run) — no irreversible operation"
+          else
+            MODE="REAL FREEZE — irreversible"
+          fi
           {
             echo "## workspaces-luks cutover freeze (#6604 / ADR-119)"
             echo ""
             echo "**Actor:** ${ACTOR}"
-            echo "**Dry run:** ${DRY}"
+            echo "**Mode:** ${MODE}"
+            echo "**Inputs:** dry_run=${DRY} rollback=${ROLLBACK_IN} clean_stray=${CLEAN_STRAY_IN}"
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
             echo ""
+            if [[ "$CLEAN_STRAY_IN" == "true" ]]; then
+              echo "Magnitude and the pre-deletion AP-009 banner were written to this run's summary by the ungated \`preflight\` job BEFORE the approval gate; the per-outcome receipt is on the \`SOLEUR_WORKSPACES_LUKS_CLEAN_STRAY\` marker in the run log and web-1 syslog."
+              echo ""
+            fi
             echo "The wipe + convergence + ADR flip + PR 3 ride a SEPARATE environment-gated dispatch after the 7d soak passes (DP-4)."
           } >> "$GITHUB_STEP_SUMMARY"

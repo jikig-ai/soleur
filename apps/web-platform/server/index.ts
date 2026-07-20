@@ -156,8 +156,9 @@ app.prepare().then(() => {
   // Start periodic inactivity check (24h timeout, hourly checks)
   startInactivityTimer();
 
-  // Start periodic stuck-active reaper (60s cadence, 120s slot-heartbeat
-  // staleness threshold). Defense-in-depth against the AC1 try/catch wrap:
+  // Start periodic stuck-active reaper (300s poll cadence, 240s slot-heartbeat
+  // staleness threshold — SLOT_STALENESS_THRESHOLD_SECONDS, mig 133).
+  // Defense-in-depth against the AC1 try/catch wrap:
   // catches process-killed-mid-stream + future regressions that strand
   // conversations at status='active'. See agent-runner.ts for the full
   // contract. Capture the timer so SIGTERM can stop it explicitly —
@@ -306,7 +307,7 @@ app.prepare().then(() => {
 
     // #5274 PR B — gracefully release every worktree write-lease this host
     // holds so a surviving host reclaims immediately rather than waiting out the
-    // 120s heartbeat expiry. Best-effort + bounded (allSettled, never throws);
+    // 240s heartbeat expiry. Best-effort + bounded (allSettled, never throws);
     // a lease that fails to release simply expires. Inert when the lease path is
     // gated off (the registry is empty) — no git-data dependency at flag-off.
     await releaseAllHeldLeases();

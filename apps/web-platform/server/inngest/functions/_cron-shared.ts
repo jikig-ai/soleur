@@ -10,6 +10,7 @@ import {
 } from "@/server/observability";
 import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
 import { emitClaudeCostMarker } from "@/server/claude-cost-marker";
+import { emitCronTier2Deferred } from "@/server/cron-liveness-marker";
 import type { SpawnResult } from "./_cron-claude-eval-substrate";
 import type { Octokit } from "@octokit/core";
 
@@ -443,6 +444,24 @@ export async function finalizeOutputAwareHeartbeat(args: {
   cronName: string;
   logger: HandlerArgs["logger"];
   onBeforeHeartbeat?: () => Promise<void>;
+  /**
+   * Can a REPLAY plausibly recover this failure? (#6714, ADR-126.)
+   *
+   * This helper conflated two independent questions: "what colour do we post"
+   * and "is a retry capable of fixing it". For a producer whose ephemeral
+   * workspace is destroyed in its own `finally`, the second answer is always
+   * NO — `setup-workspace` is memoized, so a replay reads back a path that has
+   * already been `rm -rf`'d and `safeCommitAndPr` hits its `workspace-lost`
+   * guard unconditionally. That guard is not silent: it comments "PR withheld:
+   * safe-commit failed at stage `workspace-lost`" onto the operator's issue
+   * with a runbook pointer, so a guaranteed-useless replay actively misleads a
+   * non-technical operator.
+   *
+   * Passing `false` lets such a caller report an honest RED colour without
+   * buying a replay that cannot succeed. OMITTED (undefined) preserves the
+   * existing behavior exactly, so the other 7 cohort callers are unchanged.
+   */
+  retryEligible?: boolean;
 }): Promise<{ retry: boolean }> {
   const {
     step,
@@ -454,6 +473,7 @@ export async function finalizeOutputAwareHeartbeat(args: {
     cronName,
     logger,
     onBeforeHeartbeat,
+    retryEligible,
   } = args;
   // retries:1 → 2 attempts (index 0 and 1); final attempt is index 1. Callers
   // passing neither read attempt=0/maxAttempts=1 → isFinalAttempt=true (legacy
@@ -461,7 +481,9 @@ export async function finalizeOutputAwareHeartbeat(args: {
   // value collapses to always-final → every failed attempt posts error: degrades
   // to OVER-paging (the original bug), never to masking a failure with false ok.
   const isFinalAttempt = (attempt ?? 0) >= ((maxAttempts ?? 1) - 1);
-  const failed = threw && !heartbeatOk;
+  // `retryEligible !== false` (not a truthiness test) so OMITTING the field is
+  // indistinguishable from today's behavior for the 7 callers that do not pass it.
+  const failed = threw && !heartbeatOk && retryEligible !== false;
   if (failed && !isFinalAttempt) {
     logger.warn(
       { fn: cronName, attempt: attempt ?? 0, isFinalAttempt },
@@ -749,6 +771,11 @@ export async function deferIfTier2Cron(args: {
       `constructs; restoration needs per-construct allowlist refinement or non-GitHub ` +
       `egress coverage (see TIER2_DEFERRED_CRONS). Skipping claude spawn this run.`,
   );
+  // #6714 marker 4 — this branch posts a GREEN check-in and skips the spawn, so
+  // in Sentry it is INDISTINGUISHABLE from a healthy run. That blind spot hid 4
+  // of the 41 gap days (2026-06-09 → 06-12). Emitted before the heartbeat so the
+  // defer is on the record even if the check-in POST itself fails.
+  emitCronTier2Deferred({ cron: cronName });
   await step.run("tier2-deferred-heartbeat", async () => {
     await postSentryHeartbeat({ ok: true, sentryMonitorSlug, cronName, logger });
   });
@@ -936,6 +963,54 @@ export function isRealScheduledDigest(
   // Audit fallback files the BYTE-IDENTICAL title → exclude it by body.
   if ((issue.body ?? "").startsWith(AUDIT_SELF_REPORT_BODY_PREFIX)) return false;
   return true;
+}
+
+/**
+ * Is `path` present on the repo's DEFAULT BRANCH? (#6714 Phase 3.4.)
+ *
+ * The date-dedup above asserts only that a labelled *issue* exists — which is
+ * exactly the wrong artifact. Observed failure shape: run 1 files a genuine
+ * digest issue but never lands the commit; run 2 dedups on that issue and posts
+ * GREEN with no artifact. This is the cheap contents read that lets the caller
+ * tell the two apart before short-circuiting.
+ *
+ * FAIL-CLOSED-FOR-DEDUP, deliberately: any error (including the 404 that means
+ * "not committed") returns `false`, i.e. "not proven committed", so the caller
+ * spawns. That matches the sibling dedup read's fail-open-to-spawning stance —
+ * a duplicate digest is a paper cut, a missing digest is the bug this closes.
+ */
+export async function digestCommittedOnDefaultBranch(args: {
+  path: string;
+  cronName: string;
+  octokit?: Awaited<ReturnType<typeof createProbeOctokit>>;
+}): Promise<boolean> {
+  const { path, cronName, octokit } = args;
+  try {
+    const client = octokit ?? (await createProbeOctokit());
+    await client.request("GET /repos/{owner}/{repo}/contents/{path}", {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      path,
+      ref: "main",
+      headers: { "X-GitHub-Api-Version": "2022-11-28" },
+    });
+    return true;
+  } catch (err) {
+    // A 404 is the EXPECTED negative (no digest committed) and must stay quiet —
+    // mirroring it to Sentry would page daily on the healthy first-run path. Any
+    // other status is a genuine read fault; it is reported, and it also returns
+    // false, so the run spawns rather than silently deduping on an unknown.
+    const status = (err as { status?: number }).status;
+    if (status !== 404) {
+      reportSilentFallback(err, {
+        feature: cronName,
+        op: "digest-commit-read-failed",
+        message: `Could not read ${path} on the default branch (treating as NOT committed → will spawn)`,
+        extra: { fn: cronName, path },
+      });
+    }
+    return false;
+  }
 }
 
 export async function digestIssueExistsForDate(args: {

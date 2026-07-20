@@ -1523,10 +1523,30 @@ resource "sentry_issue_alert" "zot_mirror_fallback_rate" {
 
 # web-host terminal serving-block boot FATAL (#6396). The cloud-init terminal `docker run` block
 # emits `soleur-boot-emit <stage> fatal` (tags.stage ∈ {terminal_preamble, hostscripts_incomplete,
-# doppler_download, docker_run}) on a no-SSH boot abort. This is the SOLE PAGE for a dead web-2
-# WARM STANDBY: web-2 takes no app.soleur.ai traffic, so `betteruptime_monitor.app` (LB surface,
-# A-record → web-1) stays GREEN on a dead standby, and the #5933 per-host origin uptime probe was
-# RETIRED (dns.tf) — no other signal fires. Pages on the FIRST occurrence (a serving-host boot
+# doppler_download, docker_run}) on a no-SSH boot abort.
+#
+# HOST-GENERIC — DO NOT DELETE AS "web-2 surface" (#6575). This alert filters on `stage` and NEVER
+# on host, so it was never web-2-specific; the original comment here said it was "the SOLE PAGE for
+# a dead web-2 WARM STANDBY", which was already the wrong framing and became a live falsehood when
+# web-2 was retired 2026-07-17 (#6538/#6463). Post-retire this is **web-1's sole no-SSH boot page**:
+# a web-1 that aborts its cloud-init runcmd at stage=verify never binds :80/:3000, and `runcmd` is
+# once-per-instance so no reboot repairs it. The #5933 per-host origin uptime probe was RETIRED
+# (dns.tf), and `betteruptime_monitor.app` probes the app.soleur.ai A-record — which is web-1
+# itself, so on a dead web-1 it goes red only after the host is already dark.
+#
+# SCOPE — READ BEFORE RELYING ON THIS (corrected at review, #6575). This alert does NOT detect
+# the ADR-128 cross-commit skew mode (#6712). That failure aborts cloud-init at `stage=verify`,
+# and `verify` is NOT among the four stages in `filters_v2` below (`terminal_preamble`,
+# `hostscripts_incomplete`, `doppler_download`, `docker_run`). The whole `runcmd` stage set —
+# verify/extract/pull/ghcr_login/runcmd_early/apt_install/doppler_dl/docker_apt/docker_restart —
+# emits `fatal` to Sentry via the baked DSN and matches NO alert rule, so those events are
+# write-only today. Detection for the skew mode is therefore ABSENT; the mitigation is
+# PREVENTION (the coherence preflight, run per runbooks/web-host-birth.md step 2).
+# Widening this rule to the runcmd stages is the obvious fix and is deliberately NOT bundled
+# into a deletion PR — it changes live paging behaviour and wants its own change. Do not read
+# the paragraph above as "boot failures page"; only these four stages do.
+#
+# Pages on the FIRST occurrence (a serving-host boot
 # failure is high-severity), NOT a rate. The four stage tags are emitted ONLY at fatal level by the
 # terminal-block EXIT trap + the explicit hostscripts_incomplete emit, so the stage filter alone
 # selects fatal terminal-block failures (no separate level filter needed).
@@ -1590,6 +1610,75 @@ resource "sentry_issue_alert" "web_terminal_boot_fatal" {
   # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no ownership rule
   # on this project → falls through to ActiveMembers, paging the solo founder. Events carry only
   # stage/host_id/region — no cross-tenant content.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# #6441 — the first-boot private-NIC gate's non-ready outcomes (ADR-114 I1).
+#
+# WHY A SEPARATE RULE rather than two more stages on web_terminal_boot_fatal above: these are
+# NOT terminal. soleur-wait-nic is fail-OPEN by contract — it defers and lets the boot continue,
+# so folding them into a rule named "terminal-boot-fatal" would page a deferral as a boot
+# failure and, worse, train the reader to discount that rule.
+#
+# WHY THE RULE IS LOAD-BEARING: the gate's entire value is converting a pathological case from
+# SILENT to OBSERVED, and review established that without this the two stages matched no
+# tagged_event filter anywhere in this file. They would also not raise a NEW-issue notification,
+# because soleur-boot-emit sends one shared message ("soleur-cloud-init boot stage") for every
+# stage, so all boot events land in a single perpetually-active issue group. Emitting into a
+# bucket nobody reads is not observability — it is the silence the gate was built to end.
+#
+# Fires rarely by construction: runcmd is once-per-instance, so at most one event per fresh
+# connector-host boot. Any occurrence means either the NIC never converged within 60 s
+# (private_nic_timeout) or the probe could not measure at all (private_nic_probe_fault) — both
+# worth a look, neither an emergency, since cloudflared dials its origin per connection and
+# self-heals when the attach lands.
+resource "sentry_issue_alert" "web_private_nic_boot_gate" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "web-host-private-nic-boot-gate"
+  action_match = "all"
+  filter_match = "any"
+  frequency    = 24
+
+  conditions_v2 = [
+    {
+      event_frequency = {
+        comparison_type = "count"
+        value           = 1
+        interval        = "1h"
+      }
+    },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "private_nic_timeout"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "private_nic_probe_fault"
+      }
+    },
+  ]
+  # N=1 accepted risk, mirroring every sibling apply-created rule: IssueOwners has no ownership
+  # rule on this project → falls through to ActiveMembers, paging the solo founder. Events carry
+  # only stage/host_id/region — no cross-tenant content, and never the expected IP.
   actions_v2 = [
     {
       notify_email = {
@@ -1779,6 +1868,61 @@ resource "sentry_issue_alert" "seccomp_remediation_failed" {
   # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no ownership rule
   # on this project → falls through to ActiveMembers, paging the solo founder. Events carry only the
   # failure detail — no cross-tenant content.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# #6657 / ADR-125 — GitHub Pages cert-reissue failure pager.
+# cron-gh-pages-cert-reissue is event-triggered (no Sentry cron monitor), so its
+# only paging surface is the reportSilentFallback events it emits on a genuine
+# remediation failure: poll_timeout / reissue_failed / proxy_restore_failed /
+# precondition_blocked (CAA appeared, TXT missing, carve-out regressed) /
+# reissue_incomplete_restore_ok (a retries-exhausted body throw whose restore
+# still succeeded). Benign outcomes are deliberately NOT emitted to Sentry
+# (logger only): issued, not_stuck, and config_missing (the DNS-edit token IaC
+# not yet applied — see cron-gh-pages-cert-reissue.ts BENIGN_OUTCOMES). So every
+# event carrying feature=cron-gh-pages-cert-reissue is by construction a failed
+# remediation — page the founder. The highest-severity arm (proxy_restore_failed:
+# origin IPs exposed AND/OR custom domain unset) is included by the feature filter.
+resource "sentry_issue_alert" "gh_pages_cert_reissue_failed" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "gh-pages-cert-reissue-failed"
+  action_match = "all"
+  filter_match = "all"
+  frequency    = 63
+
+  conditions_v2 = [
+    {
+      event_frequency = {
+        comparison_type = "count"
+        value           = 0
+        interval        = "1h"
+      }
+    },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "feature"
+        match = "EQUAL"
+        value = "cron-gh-pages-cert-reissue"
+      }
+    },
+  ]
+  # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no ownership rule
+  # on this project → falls through to ActiveMembers, paging the solo founder. Events carry only the
+  # reissue outcome + infra fields — no user PII / cross-tenant content.
   actions_v2 = [
     {
       notify_email = {

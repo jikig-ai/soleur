@@ -20,17 +20,38 @@ command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
 
 # Build a minimal work repo with review evidence so we get past the
 # review-evidence gate and reach the detached-HEAD warn at line 110.
+#
+# Since #6724 the todos/ signal is scoped to `origin/main..HEAD`, so this needs
+# a real origin and the evidence must live on a commit that is NOT already on
+# origin/main. The previous shape committed todos/ directly onto main and then
+# detached there, which under branch scoping is correctly read as "no evidence
+# unique to this branch" — the gate would deny and the detached-HEAD warn under
+# test would never be reached.
 make_repo() {
-  local work="$1"
-  mkdir -p "$work/todos"
-  echo "code-review" > "$work/todos/sample.md"
+  local work="$1" origin="$2"
   git -C "$work" init -q
   git -C "$work" symbolic-ref HEAD refs/heads/main
   git -C "$work" config user.email t@t
   git -C "$work" config user.name t
   git -C "$work" config commit.gpgsign false
+  echo base > "$work/base.txt"
+  git -C "$work" add base.txt
+  git -C "$work" commit -q -m base
+
+  # Local bare origin: the hook fetches origin/main, and a local remote keeps
+  # that offline-safe.
+  git init -q --bare -b main "$origin"
+  git -C "$work" remote add origin "$origin"
+  git -C "$work" push -q origin main
+  git -C "$work" fetch -q origin
+
+  # Review evidence on a commit ahead of origin/main.
+  git -C "$work" checkout -q -b feat-headless
+  mkdir -p "$work/todos"
+  echo "code-review" > "$work/todos/sample.md"
   git -C "$work" add todos/sample.md
-  git -C "$work" commit -q -m seed
+  git -C "$work" commit -q -m "review findings"
+
   # Detach HEAD so the line-110 warn fires.
   git -C "$work" checkout -q --detach
 }
@@ -50,7 +71,7 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 WORK="$TMP/work"
 INCIDENTS="$TMP/incidents"
 mkdir -p "$WORK" "$INCIDENTS"
-make_repo "$WORK"
+make_repo "$WORK" "$TMP/origin.git"
 
 STDERR_OUT="$TMP/stderr.out"
 STDOUT_OUT="$TMP/stdout.out"
@@ -65,9 +86,21 @@ export INCIDENTS_REPO_ROOT="$INCIDENTS"
 merge_payload "$WORK" | "$HOOK" >"$STDOUT_OUT" 2>"$STDERR_OUT" || true
 unset CLAUDECODE SOLEUR_SESSION_STATE_ROOT INCIDENTS_REPO_ROOT
 
+# Collected into a variable rather than piped into `grep -q .`, for two reasons
+# under this file's `set -uo pipefail`:
+#   * `grep -q` closes the pipe on its FIRST match, so the upstream `xargs`/`grep`
+#     takes SIGPIPE (141) and pipefail propagates that non-zero — the assertion
+#     then reads as "no match" precisely when the match came early. A latent
+#     false-negative that only shows up once a log grows.
+#   * `-print0`/`-0` keeps filenames with spaces or newlines intact (SC2038);
+#     `-r` stops grep reading stdin when find returns nothing, which would
+#     otherwise hang.
+DETACHED_HITS=$(find "$LOG_ROOT/logs" -name '*.log' -print0 2>/dev/null \
+  | xargs -0 -r grep -l "Detached HEAD" 2>/dev/null || true)
+
 if [[ -s "$STDERR_OUT" ]]; then
   fail "T1: stderr non-empty under headless (got: $(cat "$STDERR_OUT"))"
-elif ! find "$LOG_ROOT/logs" -name '*.log' 2>/dev/null | xargs grep -l "Detached HEAD" 2>/dev/null | grep -q .; then
+elif [[ -z "$DETACHED_HITS" ]]; then
   fail "T1: log file does not mention 'Detached HEAD' (logs: $(ls -la "$LOG_ROOT/logs" 2>/dev/null))"
 else
   pass "T1: headless captured to log, stderr silent"

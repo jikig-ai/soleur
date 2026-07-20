@@ -33,9 +33,17 @@
 # because `change.actions = ["forget"]` is excluded only from resource_deletes
 # (the `index("delete")` check) but `before.rules` is populated while `after`
 # is null → positive count. Currently no `removed` blocks in
-# apps/web-platform/infra/; if you add one, acknowledge with `[ack-destroy]`
-# (operator intent matches) or widen the nested-clause guard to
-# `index("delete") + index("forget")`.
+# apps/web-platform/infra/; if you add one, the remedy DEPENDS ON THE CONSUMER:
+#   - `apply` job only — acknowledge with `[ack-destroy]` (operator intent matches).
+#   - apply-deploy-pipeline-fix — `[ack-destroy]` is UNAVAILABLE there (a push
+#     path with no ack token to type past), so the
+#     only remedy is widening the nested-clause guard to
+#     `index("delete") + index("forget")`.
+# Prefer the widening: it is the one fix that works for every consumer. Note also
+# that `["forget"]` is counted by NO host_creates arm on any path — a state-drop
+# of hcloud_server/hcloud_volume passes every gate and silently strands the
+# volume (the hazard T49 guards on the retire path). Pre-existing, no `removed`
+# blocks exist today; recorded here so the next author does not rediscover it.
 #
 # PROVIDER PIN: cloudflare/cloudflare ~> 4.0 (currently 4.52.7). Two of
 # the five clauses are at risk on a v5 upgrade
@@ -53,14 +61,18 @@
 #
 # Input: `terraform show -json <plan>` document.
 # Output: {resource_deletes: int, nested_deletes: int, reboot_updates: int,
-#          web2_out_of_scope_changes: int, web2_server_replaced: int,
 #          host_creates: int}.
 # Every key past the first three is ADDITIVE; the first three are byte-unchanged
-# so the apply / warm_standby / manual-rerun consumers that read only them keep
-# working. Only the web_2_recreate job's sourced gate
-# (tests/scripts/lib/web2-recreate-gate.sh) reads the web2_* keys. Only the
-# `apply` job reads host_creates (#6416) — and evaluates it OUTSIDE the
-# destroy_count sum, so `[ack-destroy]` cannot bypass it.
+# so the manual-rerun consumer that reads only them keeps working. host_creates
+# has TWO workflow readers: the `apply` job (#6416) and apply-deploy-pipeline-fix.yml
+# (#6718) — plus tests/scripts/lib/web2-retire-gate.sh, which is test-only
+# (sourced by the counter suite, never by a workflow). Both workflow readers
+# evaluate it OUTSIDE any destroy_count sum, so `[ack-destroy]` cannot bypass
+# either; deploy-pipeline-fix has no ack path at all.
+#
+# The web2_out_of_scope_changes / web2_server_replaced keys were removed with the
+# web-2 dispatch sweep (#6575, 2026-07-20) along with their sole reader, the
+# web_2_recreate job's sourced gate. The retire keys below are unaffected.
 #
 # Each `_count($side)` helper uses `$side` value-binding (jq 1.7+; safe on
 # jq 1.8.x). NOT the call-by-name filter-arg shape that crashed v1 of
@@ -85,28 +97,19 @@ def cf_notif_email_integration_count($side):
 def cf_access_policy_include_count($side):
   ($side // {}) | [.include[]?] | length;
 
-# --- web-2-recreate scoped guard (apply_target=web-2-recreate) -------------
-# The EXACT allow-set for the scoped `-replace='hcloud_server.web["web-2"]'`:
-# the web-2 server + its two id-referencing dependents. A -replace of the
-# server shows actions ⊇ {delete,create}; its dependents (network attach,
-# volume attachment) replace because they reference the NEW server id.
-# hcloud_volume.workspaces["web-2"] is DELIBERATELY ABSENT — the 20 GB data
-# volume must be preserved, so ANY change to it must trip
-# web2_out_of_scope_changes.
-def web2_allow: [
-  "hcloud_server.web[\"web-2\"]",
-  "hcloud_server_network.web[\"web-2\"]",
-  "hcloud_volume_attachment.workspaces[\"web-2\"]"
-];
-
-# web-2 RETIRE allow-set (#6538). FIVE addresses. This is NOT web2_allow + extras
-# — the two sets are OPPOSITES on the data volume, and copy-pasting either into
-# the other's gate silently grades a plan against the wrong contract:
-#   web2_allow (recreate): hcloud_volume.workspaces["web-2"] DELIBERATELY ABSENT
-#                          — the data volume must SURVIVE the replace.
-#   web2_retire_allow    : hcloud_volume.workspaces["web-2"] REQUIRED — destroying
-#                          the data volume IS the retirement. Leaving it behind is
-#                          the stranding hazard (20 GB billing, nothing attached).
+# --- web-2 retire scoped guard (#6538) -------------------------------------
+# web-2 RETIRE allow-set (#6538). FIVE addresses.
+#
+# hcloud_volume.workspaces["web-2"] is REQUIRED here — destroying the data volume
+# IS the retirement. Leaving it behind is the stranding hazard (20 GB billing,
+# nothing attached). This is the OPPOSITE of the contract a scoped host -replace
+# needs, where the data volume must SURVIVE and any change to it must abort. The
+# sibling recreate allow-set that encoded that opposite contract was removed with
+# the web-2 dispatch sweep (#6575, 2026-07-20). The warning it carried still binds
+# any future host gate: an allow-set is specific to ONE operation's contract, and
+# copy-pasting one into another operation's gate silently grades a plan against the
+# wrong contract. Derive a new set from the operation's own semantics; never reuse
+# this one for a replace.
 # hcloud_firewall_attachment.web is the measured "1 to change": the attachment
 # UPDATES to drop web-2 from server_ids. It must never DELETE (that strips web-1's
 # firewall) — see retire_firewall_attachment_deletes.
@@ -204,43 +207,6 @@ def destroyed_at($addr):
             or .change.before.server_type       != .change.after.server_type) ]
     | length
   ),
-  # POSITIVE-SCOPE web-2-recreate guard (spec-flow P0-2). Count EVERY
-  # resource_change carrying a create/update/delete action whose address is NOT
-  # in web2_allow. STRICTLY STRONGER than a delete-only counter: it also catches
-  # a web-1 in-place UPDATE that reboots via an attribute OTHER than
-  # placement_group_id/server_type (reboot_updates is KNOWN-UNCOVERED for those;
-  # see its header), and any stray create. Blocks web-1 delete/replace/reboot-
-  # via-any-attr, a web-2 VOLUME change, and anything else outside the 3 allowed
-  # replaces. EXACT-EQUALITY membership via IN(.address; web2_allow[]) — NOT
-  # `inside`/array-`contains` (which do SUBSTRING matching, a false-match hazard
-  # on similar addresses such as a bare `hcloud_server.web`). Verified on jq 1.8.1.
-  # ["forget"] semantics: a Terraform 1.7+ `removed{}` state-drop serializes as
-  # actions==["forget"] (drops the resource from state WITHOUT destroying the real
-  # infra). It is COUNTED here (the any(...) form includes "forget"), so a
-  # `removed{}` on any out-of-allow-set address — e.g. dropping web-1 or the web-2
-  # data volume from Terraform management — trips web2_out_of_scope_changes and
-  # ABORTS the recreate. (No `removed{}` blocks exist in apps/web-platform/infra/
-  # today; this closes the theoretical state-drift hole pre-emptively. The
-  # allow-set's 3 addresses never emit "forget" on a scoped recreate — they
-  # replace via delete+create — so this adds no false-positive.)
-  # BACKWARD-COMPAT: additive key; the apply / warm_standby / manual-rerun
-  # consumers read only resource_deletes/nested_deletes/reboot_updates (unchanged).
-  web2_out_of_scope_changes: (
-    [ .resource_changes[]?
-      | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
-      | select(IN(.address; web2_allow[]) | not) ]
-    | length
-  ),
-  # Prove the recreate actually happens (guard against a silent no-op plan): 1 iff
-  # hcloud_server.web["web-2"] carries BOTH delete and create (a -replace). The
-  # recreate gate requires web2_server_replaced==1, so a drift-only / no-op plan
-  # (replaced==0) FAILS — the dispatch must be a real, scoped recreate.
-  web2_server_replaced: (
-    [ .resource_changes[]?
-      | select(.address == "hcloud_server.web[\"web-2\"]")
-      | select((.change.actions? | index("delete")) and (.change.actions? | index("create"))) ]
-    | length
-  ),
   # 7th surface (#6416): a pure `+ create` of a host/volume on the per-PR apply
   # path. INVISIBLE to every counter above — no delete (resource_deletes=0), no
   # nested-block shrinkage (nested_deletes=0), and not an ["update"]
@@ -295,13 +261,16 @@ def destroyed_at($addr):
   # #6416, but detaching a live host's private NIC would pass. That is the I1
   # runtime-precondition gap tracked in #6441, not a counter this filter can add.
   #
-  # BACKWARD-COMPAT: additive key. The apply / warm_standby / manual-rerun
-  # consumers that read only resource_deletes/nested_deletes/reboot_updates stay
-  # byte-unchanged. Only the `apply` job reads host_creates, and it evaluates the
-  # HALT OUTSIDE the destroy_count sum — there is deliberately NO [ack-destroy]
-  # bypass (a host create is never the right thing to type past on an unattended
-  # per-PR apply; the dispatch jobs that legitimately create/replace are separate
-  # jobs and do not read this key).
+  # BACKWARD-COMPAT: additive key. The manual-rerun consumer that reads only
+  # resource_deletes/nested_deletes/reboot_updates stays byte-unchanged.
+  # host_creates is read by BOTH the `apply` job (#6416) and
+  # apply-deploy-pipeline-fix.yml (#6718), and each evaluates its HALT OUTSIDE
+  # the destroy_count sum — there is deliberately NO [ack-destroy] bypass on
+  # either (a host create is never the right thing to type past on an unattended
+  # per-PR apply, nor on a push path that passes no -var image_name; the dispatch
+  # jobs that legitimately create/replace are separate jobs and do not read this
+  # key). web-1 itself still has NO automated birth path — every route that could
+  # reach hcloud_server.web HALTs here; building one is tracked by #6730.
   host_creates: (
     [ .resource_changes[]?
       | select(.type == "hcloud_server" or .type == "hcloud_volume")
@@ -312,9 +281,9 @@ def destroyed_at($addr):
   # --- web-2 RETIRE counters (#6538) -------------------------------------
   # Read ONLY by web2_retire_gate (tests/scripts/lib/web2-retire-gate.sh) against
   # the B6.2 operator-local 5-target plan. BACKWARD-COMPAT: additive keys; the
-  # apply / warm_standby / manual-rerun / web-2-recreate consumers are unchanged.
+  # apply / manual-rerun consumers are unchanged.
   #
-  # Same exact-equality membership (IN(...)) as web2_out_of_scope_changes — NOT
+  # EXACT-EQUALITY membership via IN(...) — NOT
   # `inside`/array-`contains`, which do SUBSTRING matching and would false-match
   # a bare `hcloud_server.web`. "forget" IS counted here: a `removed{}` state-drop
   # on any out-of-set address is an out-of-scope change.
