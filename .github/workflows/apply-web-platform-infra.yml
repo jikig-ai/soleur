@@ -89,7 +89,7 @@ on:
       # prod-write authored by a non-technical user — `hr-menu-option-ack-not-prod-write-auth`):
       #   gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby -f reason='...'
       apply_target:
-        description: "Which apply path? manual-rerun (default, allow-list re-run) | warm-standby (ADR-068 additive 6-target apply + web-2 deploy fan-out) | web-2-recreate (scoped -replace of web-2 to re-run first-boot cloud-init and bind :9000) | inngest-host (additive net-new inngest host + secrets) | inngest-host-replace (scoped -replace of the inngest host to re-run cloud-init; preserves the Redis AOF volume) | registry-host-replace (scoped -replace of the registry host to re-run cloud-init + apply any pending volume resize; preserves the zot storage volume) | registry-region-migrate (#6288: move the registry to var.registry_location + recreate the store volume in the new region — the store is a disposable GHCR mirror that re-fills from GHCR; scoped, guarded, no out-of-scope destroys) | git-data-host-replace (scoped -replace of the git-data host to re-run cloud-init; preserves BOTH data volumes + the LUKS passphrase; #6242) | workspaces-luks-cutover (#6604: FIRST-PROVISION +create of the five workspaces_luks resources — the encrypted volume + attachment + passphrase/secret/token — gate-guarded so it touches NEITHER the live plaintext /mnt/data volume/attachment NOR the web-1 server; the freeze/rsync/repoint runs from the separate environment-gated workspaces-luks-cutover.yml)"
+        description: "Which apply path? manual-rerun (default, allow-list re-run) | warm-standby (ADR-068 additive apply — UNRUNNABLE TO COMPLETION, do not dispatch: 3 of its 6 -targets name web-2, RETIRED 2026-07-17 #6538, and terraform silently ignores a -target whose for_each key is absent, so those 3 are no-ops and no web-2 deploy fan-out remains; the post-apply attach proof then requires those same web-2 addresses in state and exits 1, so the job always FAILS rather than partially succeeding. Also cannot birth a host — host_creates HALT, #6718. Dead-surface sweep tracked in #6575) | web-2-recreate (scoped -replace of web-2 to re-run first-boot cloud-init and bind :9000) | inngest-host (additive net-new inngest host + secrets) | inngest-host-replace (scoped -replace of the inngest host to re-run cloud-init; preserves the Redis AOF volume) | registry-host-replace (scoped -replace of the registry host to re-run cloud-init + apply any pending volume resize; preserves the zot storage volume) | registry-region-migrate (#6288: move the registry to var.registry_location + recreate the store volume in the new region — the store is a disposable GHCR mirror that re-fills from GHCR; scoped, guarded, no out-of-scope destroys) | git-data-host-replace (scoped -replace of the git-data host to re-run cloud-init; preserves BOTH data volumes + the LUKS passphrase; #6242) | workspaces-luks-cutover (#6604: FIRST-PROVISION +create of the five workspaces_luks resources — the encrypted volume + attachment + passphrase/secret/token — gate-guarded so it touches NEITHER the live plaintext /mnt/data volume/attachment NOR the web-1 server; the freeze/rsync/repoint runs from the separate environment-gated workspaces-luks-cutover.yml)"
         required: false
         default: manual-rerun
         type: choice
@@ -463,10 +463,11 @@ jobs:
           if [[ "$host_creates" -gt 0 ]]; then
             echo "::error::terraform plan would CREATE ${host_creates} hcloud_server/hcloud_volume resource(s) on the per-PR apply path. This path must never birth a host: the server is target-reachable but its hcloud_server_network attachment is not, so the host would come up with no private-net IP (and, transiently, no firewall) — the #6416 failure mode."
             echo "::error::Remediation depends on WHICH host is being created (see the plan output above):"
-            echo "::error::  • hcloud_server.web[\"web-2\"] / its volume → dispatch 'gh workflow run apply-web-platform-infra.yml -f apply_target=warm-standby -f reason=...' (it targets the network attach + volume, and pulls the server transitively)."
+            echo "::error::  • ANY hcloud_server.web[*] / its volume → there is NO automated path. Every route that could reach hcloud_server.web now HALTs: this job (#6416), warm-standby (#6718 — and its -targets name web-2, RETIRED 2026-07-17 #6538, so they resolve to nothing), apply-deploy-pipeline-fix.yml (#6718), web-2-recreate (gate needs web2_server_replaced==1, unsatisfiable with the instance absent) and workspaces-luks-cutover (gate requires zero actions on the web-1 server). Use the operator-local full apply below."
+            echo "::error::    This no-automated-web-host-birth state violates hr-fresh-host-provisioning-reachable-from-terraform-apply and is tracked by #6730 — that issue owns closing it. Scope: WEB hosts only (inngest-host below does birth a host, and the registry/git-data paths are scoped -replace)."
             echo "::error::  • hcloud_server.inngest → dispatch '-f apply_target=inngest-host'."
             echo "::error::  • hcloud_server.registry → NO dispatch creates it (registry-host-replace and registry-region-migrate are both scoped -replace and need the resource already in state). Run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) BEFORE merging."
-            echo "::error::  • a legitimate new host (e.g. web-3 added to var.web_hosts) → NO dispatch creates it either (warm-standby's targets are hardcoded to web-2). It needs an operator-local full apply BEFORE the code merges, or EVERY subsequent merge HALTs here — not just this PR's."
+            echo "::error::  • a legitimate new host (e.g. web-3 added to var.web_hosts) → NO dispatch creates it either. The durable reason is the host_creates HALT on every web-reaching path (above), NOT warm-standby's hardcoded web-2 targets — those could be re-pointed tomorrow and the guarantee would still hold. It needs an operator-local full apply BEFORE the code merges, or EVERY subsequent merge HALTs here — not just this PR's."
             echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. That is the only bypass — [ack-destroy] deliberately does NOT reach this HALT. Use it to unblock merges while the correct dispatch/apply above is arranged; it skips the apply, it does not perform it."
             grep -E 'will be created|Plan:' tfplan.txt | head -20 >&2
             exit 1
@@ -987,8 +988,37 @@ jobs:
           resource_deletes=$(echo "$counts" | jq -r '.resource_deletes')
           nested_deletes=$(echo "$counts" | jq -r '.nested_deletes')
           reboot_updates=$(echo "$counts" | jq -r '.reboot_updates')
-          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}')."
+          # host_creates (#6718): this job -targets hcloud_server_network.web["web-1"],
+          # and `-target` is TRANSITIVE at the resource level, so hcloud_server.web
+          # ["web-1"] is in this plan's graph. This job passes NO -var image_name, so a
+          # transitive web-1 birth here would boot against the MUTABLE
+          # ghcr.io/...:latest default (variables.tf's image_name default). Only
+          # web_2_recreate pins a digest; `apply` is unpinned too and is held by its
+          # own #6416 HALT, not by pinning — so the mutable-tag exposure is a property
+          # of this WORKFLOW, not of this one dispatch. web-1 is the sole web host
+          # (web-2 retired 2026-07-17, #6538) and cloud-init re-verifies
+          # host_scripts_content_hash at boot under `set -e`, so an incoherent image
+          # aborts the ENTIRE runcmd at stage=verify — once per instance, unrepairable
+          # by reboot. Reachable countable set: hcloud_server.web["web-1"] +
+          # hcloud_volume.workspaces["web-1"] (via server.tf's workspaces_volume_id).
+          # Source of truth: tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+          host_creates=$(echo "$counts" | jq -r '.host_creates')
+          # The ^[0-9]+$ validation is LOAD-BEARING, not hygiene: `jq -r` on a missing
+          # key yields the STRING "null", and [[ "null" -gt 0 ]] resolves an unset name
+          # to 0 and PASSES. Without host_creates in this line the guard fails OPEN.
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]] || [[ ! "$host_creates" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}', host_creates='${host_creates}')."
+            echo "::error::ROUTING — a non-numeric counter means the shared jq filter (tests/scripts/lib/destroy-guard-filter-web-platform.jq) did not emit that key. The guard CANNOT evaluate, so this dispatch is aborting fail-CLOSED. Do NOT re-dispatch: fix the filter or its consumer first (a 'null' here is the #6718 fail-open shape)."
+            exit 1
+          fi
+          # HALT on a host create. Ordered to mirror `apply` for PARITY, not severity —
+          # on the sole live origin a reboot is the more severe finding, and both arms
+          # exit 1 before any write, so the ordering is cosmetic.
+          if [[ "$host_creates" -gt 0 ]]; then
+            echo "::error::warm-standby plan would CREATE ${host_creates} hcloud_server/hcloud_volume resource(s). This dispatch must never birth a host: it passes no -var image_name, so the host would boot against the mutable ':latest' tag while cloud-init re-verifies host_scripts_content_hash under 'set -e' — a hash mismatch aborts the entire runcmd at stage=verify (no cloudflared, no webhook, no monitors, no egress firewall), once per instance and unrepairable by reboot."
+            echo "::error::ROUTING — do NOT retry this dispatch. A legitimate web-host birth needs an image pinned to a repo@sha256 digest, which no dispatch on this workflow performs: run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) with -var image_name=<pinned digest>. NOTE that procedure is currently PROSE-ONLY — there is no script or runbook for it yet, and #6730 owns building one; you are not doing anything wrong by finding no command to run. For a NON-web host: hcloud_server.inngest → '-f apply_target=inngest-host'."
+            echo "::error::NO BYPASS on this dispatch. '[skip-web-platform-apply]' and '[ack-destroy]' are merge-commit mechanisms (scanned in the preflight job and the apply job respectively); a workflow_dispatch run has no merge commit to annotate, and this job reads neither token, so neither can reach this HALT. This is a deliberate dead end — see #6718."
+            grep -E 'will be created|Plan:' tfplan.txt | head -20 >&2 || true
             exit 1
           fi
           if [[ "$reboot_updates" -gt 0 ]]; then
@@ -1001,7 +1031,11 @@ jobs:
             grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
             exit 1
           fi
-          echo "warm-standby plan is additive (0 destroy, 0 reboot). Plan summary:"
+          # Attest every arm that ran. Without naming host_creates here, a green run
+          # is indistinguishable from one where the host_creates arm was silently
+          # removed — and that is the one arm the structural greps cannot catch,
+          # since they assert the guard's PRESENCE, never that it EVALUATED (#6725).
+          echo "warm-standby plan is additive (0 destroy, 0 reboot, 0 host/volume create). Plan summary:"
           grep -E '^Plan:' tfplan.txt || true
 
       - name: Terraform apply (warm-standby) — attach proof
