@@ -58,12 +58,18 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
-  kind:            # OPTIONAL, INDENTED. live-probe (default when omitted) | run-log.
-                   # live-probe: preflight Check 10 executes `command` and matches its output.
-                   # run-log: the evidence lives in a CI run log that does not exist yet at
-                   # preflight time; Check 10 records the marker and SKIPs instead of false-FAILing.
-                   # An unrecognised value FAILS — it never falls back to live-probe.
-  marker:          # REQUIRED under `kind: run-log`, FORBIDDEN otherwise. ^[A-Za-z0-9_]+$.
+  # kind: run-log  # OPTIONAL, INDENTED. Both keys are COMMENTED OUT on purpose —
+                   # uncomment only if you actually declare run-log. An EMPTY `kind:`
+                   # is a declared-but-unparseable value and Check 10 FAILS on it
+                   # (guardrails 2+6), so a live placeholder would make the canonical
+                   # template fail the moment it is copied. Omit both keys entirely
+                   # for the default.
+                   # live-probe (the default when omitted): Check 10 executes `command`
+                   # and matches its output.
+                   # run-log: the evidence lives in a CI run log that does not exist yet
+                   # at preflight time; Check 10 records the marker and SKIPs instead of
+                   # false-FAILing. An unrecognised value FAILS — it never falls back.
+  # marker: NAME   # REQUIRED under run-log, FORBIDDEN otherwise. ^[A-Za-z0-9_]+$.
                    # An emitter for it must already exist in the tree outside
                    # knowledge-base/project/{plans,specs}, and `command` must contain it.
   command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
@@ -194,12 +200,18 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
-  kind:            # OPTIONAL, INDENTED. live-probe (default when omitted) | run-log.
-                   # live-probe: preflight Check 10 executes `command` and matches its output.
-                   # run-log: the evidence lives in a CI run log that does not exist yet at
-                   # preflight time; Check 10 records the marker and SKIPs instead of false-FAILing.
-                   # An unrecognised value FAILS — it never falls back to live-probe.
-  marker:          # REQUIRED under `kind: run-log`, FORBIDDEN otherwise. ^[A-Za-z0-9_]+$.
+  # kind: run-log  # OPTIONAL, INDENTED. Both keys are COMMENTED OUT on purpose —
+                   # uncomment only if you actually declare run-log. An EMPTY `kind:`
+                   # is a declared-but-unparseable value and Check 10 FAILS on it
+                   # (guardrails 2+6), so a live placeholder would make the canonical
+                   # template fail the moment it is copied. Omit both keys entirely
+                   # for the default.
+                   # live-probe (the default when omitted): Check 10 executes `command`
+                   # and matches its output.
+                   # run-log: the evidence lives in a CI run log that does not exist yet
+                   # at preflight time; Check 10 records the marker and SKIPs instead of
+                   # false-FAILing. An unrecognised value FAILS — it never falls back.
+  # marker: NAME   # REQUIRED under run-log, FORBIDDEN otherwise. ^[A-Za-z0-9_]+$.
                    # An emitter for it must already exist in the tree outside
                    # knowledge-base/project/{plans,specs}, and `command` must contain it.
   command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
@@ -344,12 +356,18 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
-  kind:            # OPTIONAL, INDENTED. live-probe (default when omitted) | run-log.
-                   # live-probe: preflight Check 10 executes `command` and matches its output.
-                   # run-log: the evidence lives in a CI run log that does not exist yet at
-                   # preflight time; Check 10 records the marker and SKIPs instead of false-FAILing.
-                   # An unrecognised value FAILS — it never falls back to live-probe.
-  marker:          # REQUIRED under `kind: run-log`, FORBIDDEN otherwise. ^[A-Za-z0-9_]+$.
+  # kind: run-log  # OPTIONAL, INDENTED. Both keys are COMMENTED OUT on purpose —
+                   # uncomment only if you actually declare run-log. An EMPTY `kind:`
+                   # is a declared-but-unparseable value and Check 10 FAILS on it
+                   # (guardrails 2+6), so a live placeholder would make the canonical
+                   # template fail the moment it is copied. Omit both keys entirely
+                   # for the default.
+                   # live-probe (the default when omitted): Check 10 executes `command`
+                   # and matches its output.
+                   # run-log: the evidence lives in a CI run log that does not exist yet
+                   # at preflight time; Check 10 records the marker and SKIPs instead of
+                   # false-FAILing. An unrecognised value FAILS — it never falls back.
+  # marker: NAME   # REQUIRED under run-log, FORBIDDEN otherwise. ^[A-Za-z0-9_]+$.
                    # An emitter for it must already exist in the tree outside
                    # knowledge-base/project/{plans,specs}, and `command` must contain it.
   command:         # one command an operator can run LOCALLY (no ssh) to read the observability state

@@ -503,13 +503,13 @@ checks on this plan.
 
 ```yaml
 liveness_signal:
-  what: "GitHub Actions `infra-validation` workflow run on every push to main (new in Phase 3.1) plus the `infra-validate-required` required-status-check context on every PR (PR B)"
+  what: "GitHub Actions `infra-validation` workflow run on every push to main (new in Phase 3.1), whose failure opens/comments a P1 `ci/main-broken` issue via the `notify-main-red` job, plus the `infra-validate-required` context on every PR (required only from PR B)"
   cadence: "per-PR and per-push-to-main"
-  alert_target: "operator — a red required check blocks merge; a red main run appears in the Actions tab and on the commit status"
-  configured_in: ".github/workflows/infra-validation.yml (on: push/pull_request/merge_group) and infra/github/ruleset-ci-required.tf (required_check block)"
+  alert_target: "operator — a red required check blocks merge; a red main run FILES AN ISSUE (the Actions tab alone is not a signal, see failure_modes below)"
+  configured_in: ".github/workflows/infra-validation.yml (on: push/pull_request/merge_group; notify-main-red job) and infra/github/ruleset-ci-required.tf (required_check block, PR B)"
 
 error_reporting:
-  destination: "GitHub Actions job logs and the PR checks UI; no Sentry surface (CI-plane change, no runtime code)"
+  destination: "GitHub Actions job logs and the PR checks UI; plus a P1 `ci/main-broken` + `priority/p1-high` issue on a red push-to-main run, reusing main-health-monitor.yml's issue identity so it inherits that lifecycle's dedupe and auto-close. No Sentry surface (CI-plane change, no runtime code)"
   fail_loud: "scripts/infra-validate-gate-verdict.sh exits non-zero and prints the specific unenumerated or failing state (e.g. `deploy-script-tests=failure while suite_relevant=true`)"
 
 failure_modes:
@@ -531,6 +531,12 @@ failure_modes:
   - mode: "The *-required suffix convention drifts again (a new -required job added without a ruleset entry, or added inside a path-filtered workflow)"
     detection: "required-job-suffix-parity.test.ts asserts membership AND postability with a non-vacuity floor of 3 jobs"
     alert_route: "CI red on the bun shard"
+  - mode: "THE MODE THIS PLAN ORIGINALLY MISSED — the push-to-main arm goes red and nobody notices. Adding the trigger makes the run HAPPEN; it does not make anyone READ it. Verified by exhaustion at review: no workflow_run+failure consumer for this workflow (post-merge-monitor.yml is scoped to workflow 'CI' AND [bot-fix] commits), no `gh run list --status failure` poller, no Inngest/Sentry/Better Stack CI monitor, operator-digest never reads workflow runs, and main-health-monitor.yml re-runs test-all.sh rather than observing run conclusions — while test-all.sh states outright that ci-deploy.test.sh runs in infra-validation.yml, so this workflow's heavy jobs are NOT covered by it. Without a consumer this is #6766's own silence relocated one level up, inside the fix for #6766."
+    detection: "the notify-main-red job (if: failure() && github.event_name == 'push') opens/comments the P1 ci/main-broken issue"
+    alert_route: "operator, via the existing ci/main-broken issue lifecycle (dedupe + auto-close inherited from main-health-monitor.yml)"
+  - mode: "A burst of merges cancels each main run before it completes, delaying (not losing) detection"
+    detection: "measured at review: 26% of inter-merge gaps under 15 min, longest chain 7 merges over ~66 min. Bounded because the push arm enumerates ALL infra roots rather than diffing github.event.before, so the burst-terminating run re-tests the identical surface. Worst case ~1h delayed detection, not a permanent hole."
+    alert_route: "same as above, delayed. NOTE: this bound is load-bearing on the enumerate-all choice — if the push arm is ever changed to diff github.event.before, cancel-in-progress must flip to false or superseded verdicts are dropped permanently."
 
 logs:
   where: "GitHub Actions run logs for the `infra-validation` and `apply-github-infra` workflows"
@@ -538,9 +544,32 @@ logs:
 
 discoverability_test:
   kind: live-probe
-  command: gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '[.rules[].parameters.required_status_checks[].context] '
-  expected_output: "a JSON array of 21 context strings that includes infra-validate-required"
+  command: bash scripts/infra-validate-gate-verdict.sh success skipped skipped '[]' false
+  expected_output: "infra-validate gate: PASS"
 ```
+
+> **This block was rewritten at review — the original would have been FAILED by the very
+> gate this PR ships.** It read:
+>
+> ```yaml
+> kind: live-probe
+> command: gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '[.rules[].parameters.required_status_checks[].context] '
+> expected_output: "a JSON array of 21 context strings that includes infra-validate-required"
+> ```
+>
+> Three independent defects. (1) It is **PR B's** verification step shipping in **PR A** —
+> the ruleset today has 20 contexts and does not contain `infra-validate-required`, so the
+> assertion is false at this merge. (2) `expected_output` is *prose*, and `live-probe`
+> **executes** the command and substring-matches its stdout — prose can never match a JSON
+> array, so it fails even once PR B lands. (3) `.github/workflows/infra-validation.yml`
+> matches `SENSITIVE_PATH_RE`, so Check 10 is **armed on this very diff** — this plan would
+> have failed preflight on the PR that fixes preflight.
+>
+> The replacement probes PR A's actual deliverable: the extracted verdict script, invoked
+> locally with the "nothing in scope" row. It is runnable **now** (no post-merge dependency),
+> carries no shell-active token, contains no `ssh`, and its stdout literally contains the
+> expected substring — verified by running it. The 21-context ruleset assertion lives where
+> it belongs, in PR B's post-merge **AC26**.
 
 ## Domain Review
 
