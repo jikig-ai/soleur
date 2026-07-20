@@ -62,6 +62,17 @@ no() { FAIL=$((FAIL + 1)); echo "FAIL: $1" >&2; }
 
 [[ -f "$TARGET" ]] || { echo "FATAL: $TARGET not found" >&2; exit 1; }
 
+# This harness allocates case directories with `mktemp -d`. Each case removes its own
+# directory on the happy path, but a mid-run abort (a failed assertion under `set -e`, a
+# signal) would leak them -- the very class this suite exists to guard. One owning trap,
+# registered in the PARENT scope, per the rule content-publisher.sh now follows.
+_CASE_DIRS=()
+trap '((${#_CASE_DIRS[@]} > 0)) && rm -rf "${_CASE_DIRS[@]}"' EXIT
+
+new_case_dir() {
+  mktemp -d
+}
+
 # The residue probe. R0 proves it can count.
 residue_count() { find "$1" -mindepth 1 2>/dev/null | wc -l | tr -d '[:space:]'; }
 residue_names() { find "$1" -mindepth 1 -printf '%f ' 2>/dev/null || true; }
@@ -126,7 +137,8 @@ CHILD
 # ---------------------------------------------------------------------------
 # R0 -- POSITIVE CONTROL. "0 residue" is evidence only if the counter can count.
 # ---------------------------------------------------------------------------
-r0=$(mktemp -d)
+r0=$(new_case_dir)
+_CASE_DIRS+=("$r0")
 : > "$r0/planted-residue"
 r0_seen=$(residue_count "$r0")
 if [[ "$r0_seen" == "1" ]]; then
@@ -140,7 +152,8 @@ rm -rf "$r0"
 # R1 -- a clean run leaves ZERO residue. REGRESSION GUARD, NOT THE DISCRIMINATOR:
 # the site's own `rm -f` satisfies this with or without the trap fix.
 # ---------------------------------------------------------------------------
-r1=$(mktemp -d)
+r1=$(new_case_dir)
+_CASE_DIRS+=("$r1")
 make_case "$r1" clean
 r1_rc=0
 TMPDIR="$r1/tmp" WINDOW_SIGNAL="$r1/window" bash "$r1/child.sh" >/dev/null 2>&1 || r1_rc=$?
@@ -162,7 +175,8 @@ rm -rf "$r1"
 # R2 -- THE DISCRIMINATOR. A forced abort strictly inside the live window.
 # Unfixed: the trap owns nothing, the tempfile survives. Fixed: the trap removes it.
 # ---------------------------------------------------------------------------
-r2=$(mktemp -d)
+r2=$(new_case_dir)
+_CASE_DIRS+=("$r2")
 make_case "$r2" hold
 
 # setsid: the child gets its own process group, so the abort reaches the blocking stub
