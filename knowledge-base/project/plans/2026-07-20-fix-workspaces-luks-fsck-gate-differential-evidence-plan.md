@@ -458,7 +458,8 @@ Classification — evaluated **in this order**, and the order is load-bearing:
 | # | Condition | `classification` | Abort? |
 |---|---|---|---|
 | 1 | `.git` absent / worktree pointer / alternates escape | `skipped` (+ `reason=`) | no (counted) |
-| 2 | either side `rc = 128`, or a `fatal:` line on either side | `probe_failed` | **yes** |
+| 2 | a **setup** `fatal:` on either side (`_FSCK_SETUP_FATAL_RE`) | `probe_failed` | **yes** |
+| 2b | a `fatal:` matching neither the setup nor the content taxonomy | `unclassified` | **yes** |
 | 3 | either side `rc != 0` **and** that side's normalized set is **empty** | `unclassified` | **yes** |
 | 4 | src workspace directory absent at gate time | `probe_failed` (`reason=src_absent`) | **yes** |
 | 5 | dst set ⊄ src set (≥1 dst-only line) | `copy_corruption` | **yes** |
@@ -467,8 +468,22 @@ Classification — evaluated **in this order**, and the order is load-bearing:
 | 8 | both sets empty **and** both rc 0 | `ok` | no |
 | 9 | **anything else** | `unclassified` | **yes** |
 
-Four changes from v1, each closing a measured hole:
+Five changes, each closing a measured hole. **The first was measured at /work time and falsifies the
+deepen pass's own row 2** — recorded here because the plan is authoritative for intent, never for a
+literal that measurement contradicts:
 
+- **Row 2 may NOT key on `rc == 128` or on "has a `fatal:` line".** Measured (git 2.53.0): a corrupt
+  loose object exits **rc 128** with
+  `fatal: loose object <sha> (stored in .git/objects/xx/…) is corrupt`, which is indistinguishable by
+  rc, and by the presence of a `fatal:`, from the setup failure
+  `fatal: bad config line 1 in file .git/config`. The deepen-pass discriminator is therefore wrong in
+  **both** directions: it labels genuine corruption "nothing was verified", and — decisively — it
+  makes a corrupt object present on **BOTH** sides classify `probe_failed` and **abort**, which is
+  exactly the false positive this change exists to remove, reintroduced under a new name. Driven
+  locally, the deepen-pass table produced `probe_failed` for the both-sides case; the shipped code
+  produces `preexisting` + rc 0. Discrimination is on the **kind** of fatal (`_FSCK_SETUP_FATAL_RE`
+  vs `_FSCK_CONTENT_FATAL_RE`), with row 2b failing **closed** on any unrecognised fatal so an
+  un-enumerated setup failure can never fall through to the differential and blind the gate.
 - **Row 2 must precede row 5.** Under H1 the `fatal: dubious ownership` line embeds the differing
   path prefix; if the set comparison ran first it would produce a dst-only line on **100%** of
   workspaces → `copy_corruption` on all 8 → the same abort with a wronger label.

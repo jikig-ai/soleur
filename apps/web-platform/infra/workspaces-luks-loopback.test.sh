@@ -67,7 +67,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # --- Binaries ----------------------------------------------------------------
-for b in losetup cryptsetup mkfs.ext4 mount umount findmnt blkid mountpoint rsync du df; do
+for b in losetup cryptsetup mkfs.ext4 mount umount findmnt blkid mountpoint rsync du df git; do
   command -v "$b" >/dev/null 2>&1 || unavailable "required binary '$b' not found on PATH"
 done
 [ -f "$CUTOVER" ] || unavailable "cutover script not found at $CUTOVER"
@@ -466,6 +466,347 @@ else
     no "L5d: mutation did not flip L5c (rc=$MUT_RC) — the positive control assertion may be vacuous"
     note "out: $(tail -n 5 "$MUT_OUT" 2>/dev/null)"
   fi
+fi
+
+# ===========================================================================
+# SESSION D — verify_git_fsck_differential + fsck_advisory_probe (#6733 follow-up)
+# ===========================================================================
+# The gate this session guards replaced an rc-only, evidence-discarding loop
+#   `git -C "$ws" fsck --full >/dev/null 2>&1 || { fsck_fail=…; log "FSCK FAIL: $ws"; }`
+# which aborted real cutover 29725194755 on 8 of 10 workspaces with no way to tell a corrupt object
+# from a benign pre-existing repo condition. Two properties are under test and they pull in OPPOSITE
+# directions, which is exactly why both need cases:
+#   (B) a pre-existing fault present on BOTH sides must NOT abort   (L6c)
+#   (A) a probe that could not INSPECT must abort, never classify `preexisting` (L6e)
+# Without (A), (B) degrades into a permanently blind gate that greens while inspecting zero objects.
+#
+# FIXTURE DISCIPLINE: production workspace repos are owned by uid 1001 (Dockerfile `USER soleur`)
+# and the cutover runs as root, so every fixture repo is chown'd 1001:1001 on BOTH sides. A
+# root-owned fixture would never exercise the per-repo `safe.directory`, and L6a–L6d would go green
+# for a reason that cannot hold in production.
+new_session d
+
+D_SRC="$SRC_DIR"
+D_DST="$STAGING_DIR"
+
+# mk_repo — a real git repo with one commit, then handed to uid 1001 (production ownership).
+mk_repo() {
+  local d="$1"
+  mkdir -p "$d"
+  git init -q "$d" >/dev/null 2>&1
+  printf 'content\n' > "$d/f.txt"
+  git -C "$d" -c user.email=t@t -c user.name=t add -A >/dev/null 2>&1
+  git -C "$d" -c user.email=t@t -c user.name=t commit -q -m init >/dev/null 2>&1
+  chown -R 1001:1001 "$d" 2>/dev/null || true
+}
+
+# corrupt_loose — truncate a loose object into garbage. Measured: yields `error:` on stderr +
+# `missing blob` on stdout at rc 3 (NOT rc 1 — the exit code is a bitmask).
+corrupt_loose() {
+  local repo="$1" f
+  f="$(find "$repo/.git/objects" -type f -regex '.*/[0-9a-f][0-9a-f]/.*' 2>/dev/null | head -n 1)"
+  # Fail LOUD rather than returning a repo that was never corrupted: a silently-uncorrupted fixture
+  # makes L6b/L6d/L6h pass vacuously (they would assert "no dst-only line" against no fault at all).
+  [ -n "$f" ] || { echo "FIXTURE ERROR: no loose object found under $repo" >&2; return 1; }
+  # git writes loose objects 0444. Root can clobber them regardless (CAP_DAC_OVERRIDE), but the
+  # chmod keeps the fixture honest if this ever runs non-root.
+  chmod u+w "$f" 2>/dev/null || true
+  printf 'garbage' > "$f" || { echo "FIXTURE ERROR: could not corrupt $f" >&2; return 1; }
+  chown 1001:1001 "$f" 2>/dev/null || true
+}
+
+# break_alternates — N unresolvable alternates entries. Measured: `error: unable to normalize
+# alternate object path: …` at rc **0**. This is the fixture that proves rc 0 does not short-circuit
+# the set comparison (L6f) and, at volume, drives the truncation case (L6h).
+break_alternates() {
+  local repo="$1" n="${2:-1}" i
+  mkdir -p "$repo/.git/objects/info"
+  : > "$repo/.git/objects/info/alternates"
+  for i in $(seq 1 "$n"); do
+    printf '%s\n' "$repo/.git/nonexistent-alt-$i" >> "$repo/.git/objects/info/alternates"
+  done
+  chown -R 1001:1001 "$repo/.git/objects/info" 2>/dev/null || true
+}
+
+# run_gate — drive the REAL verify_git_fsck_differential with die/logger/emit_drift stubbed, exactly
+# as L3/L3b drive verify_byte_identity. Called directly (never in $(…)) so die's exit reaches us.
+# $1=out-file $2=marker-file $3=src-root $4=dst-root ; remaining env passed through by the caller.
+run_gate() {
+  local out="$1" marker="$2" src="$3" dst="$4"
+  : > "$out"; : > "$marker"
+  MARKER_LOG="$marker" CUTOVER="$CUTOVER" SRC="$src" DST="$dst" \
+  WORKSPACES_MOUNT="$src" WORKSPACES_STAGING="$dst" WORKSPACES_MAPPER_NAME="$MAPPER_NAME" \
+  WORKSPACES_FSCK_MARKER_CAP="${FSCK_MARKER_CAP_OVERRIDE:-40}" \
+  WORKSPACES_FSCK_OUT_CAP="${FSCK_OUT_CAP_OVERRIDE:-256}" \
+  bash -c '
+    source "$CUTOVER"
+    logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+    die()        { echo "DIE: $*"; exit 1; }
+    emit_drift() { echo "EMIT_DRIFT: $1"; }
+    verify_git_fsck_differential "$SRC" "$DST"
+  ' > "$out" 2>&1
+}
+
+# --- L6a: clean repos both sides + one non-repo dir + one linked worktree ------------------------
+# Asserts the happy path AND that the two un-probeable shapes are DISTINGUISHED on the summary row.
+# A linked worktree is not merely unreachable: measured, fsck'ing the COPY follows its absolute
+# `gitdir:` pointer back across the mount and reports the SOURCE filesystem's state.
+rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+mkdir -p "$D_SRC/workspaces"
+mk_repo "$D_SRC/workspaces/aaaaaaaa-0000-0000-0000-000000000001"
+mk_repo "$D_SRC/workspaces/ws with space"
+mkdir -p "$D_SRC/workspaces/not-a-repo"; printf 'plain\n' > "$D_SRC/workspaces/not-a-repo/x.txt"
+mk_repo "$D_SRC/workspaces/wt-parent"
+git -C "$D_SRC/workspaces/wt-parent" -c user.email=t@t -c user.name=t \
+  worktree add -q "$D_SRC/workspaces/linked-wt" -b wtbranch >/dev/null 2>&1
+chown -R 1001:1001 "$D_SRC/workspaces" 2>/dev/null || true
+rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+L6A_OUT="$TMPROOT/l6a.out"; L6A_MARKER="$TMPROOT/l6a.marker"
+run_gate "$L6A_OUT" "$L6A_MARKER" "$D_SRC" "$D_DST"
+L6A_RC=$?
+if [ "$L6A_RC" -eq 0 ] \
+  && grep -qE -- 'classification=ok .*src_rc=0' "$L6A_MARKER" \
+  && grep -qE -- 'reason=worktree_pointer|skipped_worktree=1' "$L6A_MARKER" \
+  && grep -qE -- 'skipped_worktree=1' "$L6A_MARKER" \
+  && grep -qE -- 'phase=gate' "$L6A_MARKER"; then
+  ok "L6a: clean uid-1001 repos both sides pass (rc=0); non-repo and linked worktree are skipped and DISTINGUISHED on the summary row"
+else
+  no "L6a: clean-path gate did not behave (rc=$L6A_RC)"
+  note "marker: $(head -n 4 "$L6A_MARKER" 2>/dev/null)"
+  note "out:    $(tail -n 5 "$L6A_OUT" 2>/dev/null)"
+fi
+
+# --- L6b: copy corruption STILL ABORTS (the property the differential must not weaken) -----------
+rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+mkdir -p "$D_SRC/workspaces"
+mk_repo "$D_SRC/workspaces/bbbbbbbb-0000-0000-0000-000000000002"
+rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+corrupt_loose "$D_DST/workspaces/bbbbbbbb-0000-0000-0000-000000000002"
+L6B_OUT="$TMPROOT/l6b.out"; L6B_MARKER="$TMPROOT/l6b.marker"
+run_gate "$L6B_OUT" "$L6B_MARKER" "$D_SRC" "$D_DST"
+L6B_RC=$?
+if [ "$L6B_RC" -ne 0 ] \
+  && grep -qE -- 'classification=copy_corruption' "$L6B_MARKER" \
+  && grep -qE -- 'first=[^ ]' "$L6B_MARKER" \
+  && grep -qE -- 'regressed on 1 workspace' "$L6B_OUT"; then
+  ok "L6b: an object corrupted ONLY on the LUKS copy still ABORTS, classification=copy_corruption, with the real fsck line in first="
+else
+  no "L6b: copy corruption did NOT abort (rc=$L6B_RC) — the differential has weakened the gate"
+  note "marker: $(grep -m2 SOLEUR "$L6B_MARKER" 2>/dev/null)"
+  note "out:    $(tail -n 5 "$L6B_OUT" 2>/dev/null)"
+fi
+
+# --- L6c: both-fail does NOT abort (the false-positive that aborted run 29725194755) -------------
+rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+mkdir -p "$D_SRC/workspaces"
+mk_repo "$D_SRC/workspaces/cccccccc-0000-0000-0000-000000000003"
+corrupt_loose "$D_SRC/workspaces/cccccccc-0000-0000-0000-000000000003"
+rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+L6C_OUT="$TMPROOT/l6c.out"; L6C_MARKER="$TMPROOT/l6c.marker"
+run_gate "$L6C_OUT" "$L6C_MARKER" "$D_SRC" "$D_DST"
+L6C_RC=$?
+if [ "$L6C_RC" -eq 0 ] && grep -qE -- 'classification=preexisting' "$L6C_MARKER"; then
+  ok "L6c: an identical fault on BOTH sides classifies preexisting and does NOT abort (rc=0)"
+else
+  no "L6c: a pre-existing both-sides fault still aborted (rc=$L6C_RC) — the false positive is not fixed"
+  note "marker: $(grep -m2 SOLEUR "$L6C_MARKER" 2>/dev/null)"
+  note "out:    $(tail -n 5 "$L6C_OUT" 2>/dev/null)"
+fi
+
+# --- L6d: shared fault PLUS a dst-only fault aborts, and path normalization holds ----------------
+# The two roots differ ($D_SRC vs $D_DST), so an un-normalized report would make EVERY line dst-only
+# and this case would pass for the wrong reason. The shared-fault repo must therefore classify
+# preexisting while only the genuinely-new fault drives the abort.
+rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+mkdir -p "$D_SRC/workspaces"
+mk_repo "$D_SRC/workspaces/dddddddd-0000-0000-0000-000000000004"
+mk_repo "$D_SRC/workspaces/dddddddd-0000-0000-0000-000000000005"
+corrupt_loose "$D_SRC/workspaces/dddddddd-0000-0000-0000-000000000004"
+rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+corrupt_loose "$D_DST/workspaces/dddddddd-0000-0000-0000-000000000005"
+L6D_OUT="$TMPROOT/l6d.out"; L6D_MARKER="$TMPROOT/l6d.marker"
+run_gate "$L6D_OUT" "$L6D_MARKER" "$D_SRC" "$D_DST"
+L6D_RC=$?
+if [ "$L6D_RC" -ne 0 ] \
+  && grep -qE -- 'ws=dddddddd-0000-0000-0000-000000000005' "$L6D_MARKER" \
+  && grep -qE -- 'classification=copy_corruption' "$L6D_MARKER" \
+  && grep -qE -- 'classification=preexisting' "$L6D_MARKER" \
+  && grep -qE -- 'copy_corruption=1' "$L6D_MARKER"; then
+  ok "L6d: a dst-only fault aborts while the shared fault stays preexisting — path prefixes normalized, exactly ONE copy_corruption"
+else
+  no "L6d: mixed shared/dst-only faults misclassified (rc=$L6D_RC) — likely a prefix-normalization hole"
+  note "marker: $(grep -c SOLEUR "$L6D_MARKER" 2>/dev/null) rows; $(grep -m3 'classification=' "$L6D_MARKER" 2>/dev/null)"
+  note "out:    $(tail -n 5 "$L6D_OUT" 2>/dev/null)"
+fi
+
+# --- L6e: probe_failed ABORTS — the anti-no-op proof (the H1 trap) -------------------------------
+# ROOT-PROOF MECHANISM: an unterminated section header in .git/config yields
+# `fatal: bad config line 1 in file .git/config` at rc 128 regardless of uid. A foreign-uid fixture
+# would NOT work here (safe.directory is designed to defeat it, so the SUT would correctly pass) and
+# neither would chmod 000 (a no-op under CAP_DAC_OVERRIDE, which this root harness holds).
+rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+mkdir -p "$D_SRC/workspaces"
+mk_repo "$D_SRC/workspaces/eeeeeeee-0000-0000-0000-000000000006"
+rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+printf '[core\n' > "$D_DST/workspaces/eeeeeeee-0000-0000-0000-000000000006/.git/config"
+L6E_OUT="$TMPROOT/l6e.out"; L6E_MARKER="$TMPROOT/l6e.marker"
+run_gate "$L6E_OUT" "$L6E_MARKER" "$D_SRC" "$D_DST"
+L6E_RC=$?
+if [ "$L6E_RC" -ne 0 ] \
+  && grep -qE -- 'classification=probe_failed' "$L6E_MARKER" \
+  && grep -qE -- 'could NOT INSPECT' "$L6E_OUT"; then
+  ok "L6e: a probe that could not INSPECT aborts as probe_failed — NOT silently classified preexisting (the anti-no-op proof)"
+else
+  no "L6e: an un-inspectable repo did not abort (rc=$L6E_RC) — the gate is blind and green"
+  note "marker: $(grep -m2 'classification=' "$L6E_MARKER" 2>/dev/null)"
+  note "out:    $(tail -n 5 "$L6E_OUT" 2>/dev/null)"
+fi
+
+# --- L6f: rc 0 WITH error lines still aborts (measured: broken alternates exit 0) ----------------
+# v1's design short-circuited "both rc 0 -> ok" BEFORE comparing sets, which would have made the new
+# gate weaker than the rc-only one it replaces. This case pins the comparison as unconditional.
+rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+mkdir -p "$D_SRC/workspaces"
+mk_repo "$D_SRC/workspaces/ffffffff-0000-0000-0000-000000000007"
+rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+break_alternates "$D_DST/workspaces/ffffffff-0000-0000-0000-000000000007" 1
+L6F_OUT="$TMPROOT/l6f.out"; L6F_MARKER="$TMPROOT/l6f.marker"
+run_gate "$L6F_OUT" "$L6F_MARKER" "$D_SRC" "$D_DST"
+L6F_RC=$?
+if [ "$L6F_RC" -ne 0 ] \
+  && grep -qE -- 'classification=(copy_corruption|skipped)' "$L6F_MARKER" \
+  && grep -qE -- 'dst_rc=0' "$L6F_MARKER"; then
+  ok "L6f: a dst-only error line emitted at rc 0 still aborts — rc never short-circuits the set comparison"
+else
+  no "L6f: rc-0-with-errors was treated as clean (rc=$L6F_RC) — the new gate is weaker than the old one"
+  note "marker: $(grep -m2 'classification=' "$L6F_MARKER" 2>/dev/null)"
+  note "out:    $(tail -n 5 "$L6F_OUT" 2>/dev/null)"
+fi
+
+# --- L6g: non-zero rc with an EMPTY error set is unclassified and aborts (fail-closed) -----------
+# An OOM-kill / SIGKILL / SIGPIPE'd probe matches no natural row. The natural shell shape
+# (`classification=ok` initialized, overwritten by matching branches) would default it to GREEN.
+# Driven by overriding _fsck_one after `source` — the classifier, not the prober, is under test.
+rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+mkdir -p "$D_SRC/workspaces"
+mk_repo "$D_SRC/workspaces/99999999-0000-0000-0000-000000000008"
+rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+L6G_OUT="$TMPROOT/l6g.out"; L6G_MARKER="$TMPROOT/l6g.marker"
+: > "$L6G_OUT"; : > "$L6G_MARKER"
+MARKER_LOG="$L6G_MARKER" CUTOVER="$CUTOVER" SRC="$D_SRC" DST="$D_DST" \
+WORKSPACES_MOUNT="$D_SRC" WORKSPACES_STAGING="$D_DST" WORKSPACES_MAPPER_NAME="$MAPPER_NAME" \
+bash -c '
+  source "$CUTOVER"
+  logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+  die()        { echo "DIE: $*"; exit 1; }
+  emit_drift() { echo "EMIT_DRIFT: $1"; }
+  # rc 9 with both capture files left EMPTY — the shape a killed probe leaves behind.
+  _fsck_one()  { : > "$2"; : > "$3"; : > "$4"; printf "9" > "$2"; return 0; }
+  verify_git_fsck_differential "$SRC" "$DST"
+' > "$L6G_OUT" 2>&1
+L6G_RC=$?
+if [ "$L6G_RC" -ne 0 ] \
+  && grep -qE -- 'classification=unclassified' "$L6G_MARKER" \
+  && grep -qE -- 'cannot classify' "$L6G_OUT"; then
+  ok "L6g: non-zero rc with empty output classifies unclassified and ABORTS — the classifier is total and fails closed"
+else
+  no "L6g: a killed probe did not fail closed (rc=$L6G_RC) — the classifier has a hole that defaults green"
+  note "marker: $(grep -m2 'classification=' "$L6G_MARKER" 2>/dev/null)"
+  note "out:    $(tail -n 5 "$L6G_OUT" 2>/dev/null)"
+fi
+
+# --- L6h: caps bound EMISSION only — a dst-only line beyond the cap must STILL abort -------------
+# The cap exists to stop a log flood, not to stop the comparison. If comparison consumed the capped
+# capture, a pathological repo could hide the one line that matters behind 40 benign ones.
+rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+mkdir -p "$D_SRC/workspaces"
+mk_repo "$D_SRC/workspaces/77777777-0000-0000-0000-000000000009"
+break_alternates "$D_SRC/workspaces/77777777-0000-0000-0000-000000000009" 30
+rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+corrupt_loose "$D_DST/workspaces/77777777-0000-0000-0000-000000000009"
+L6H_OUT="$TMPROOT/l6h.out"; L6H_MARKER="$TMPROOT/l6h.marker"
+FSCK_MARKER_CAP_OVERRIDE=1 FSCK_OUT_CAP_OVERRIDE=32 \
+  run_gate "$L6H_OUT" "$L6H_MARKER" "$D_SRC" "$D_DST"
+L6H_RC=$?
+L6H_ROWS="$(grep -c 'idx=' "$L6H_MARKER" 2>/dev/null || true)"
+if [ "$L6H_RC" -ne 0 ] \
+  && grep -qE -- 'classification=copy_corruption' "$L6H_MARKER" \
+  && grep -qE -- 'truncated=1' "$L6H_MARKER" \
+  && [ "${L6H_ROWS:-0}" -le 1 ]; then
+  ok "L6h: caps truncate EMISSION (rows=$L6H_ROWS, truncated=1) while the beyond-cap dst-only line still ABORTS"
+else
+  no "L6h: capping changed the verdict (rc=$L6H_RC rows=${L6H_ROWS:-?}) — comparison is consuming the capped capture"
+  note "marker: $(grep -m2 'classification=' "$L6H_MARKER" 2>/dev/null)"
+  note "out:    $(tail -n 5 "$L6H_OUT" 2>/dev/null)"
+fi
+
+# --- L6i: MUTATION CONTROL (L5d discipline) — prove L6b's abort is load-bearing ------------------
+# Without this, L6b's "it aborted" is indistinguishable from a gate that aborts unconditionally.
+L6I_MUT="$TMPROOT/cutover-l6i-mutated.sh"
+sed 's/^\([[:space:]]*\)abort_fsck=1/\1abort_fsck=0/' "$CUTOVER" > "$L6I_MUT"
+if ! grep -q 'abort_fsck=0' "$L6I_MUT"; then
+  no "L6i: mutation sed did NOT land (no abort_fsck=1 assignment found) — treat as un-run, not as evidence"
+else
+  rm -rf "${D_SRC:?}/workspaces" "${D_DST:?}/workspaces"
+  mkdir -p "$D_SRC/workspaces"
+  mk_repo "$D_SRC/workspaces/11111111-0000-0000-0000-00000000000a"
+  rsync -aHAX --numeric-ids --delete "$D_SRC"/ "$D_DST"/ >/dev/null 2>&1
+  corrupt_loose "$D_DST/workspaces/11111111-0000-0000-0000-00000000000a"
+  L6I_OUT="$TMPROOT/l6i.out"; L6I_MARKER="$TMPROOT/l6i.marker"
+  CUTOVER="$L6I_MUT" run_gate "$L6I_OUT" "$L6I_MARKER" "$D_SRC" "$D_DST"
+  L6I_RC=$?
+  if [ "$L6I_RC" -eq 0 ]; then
+    ok "L6i: mutation (abort predicate made vacuous) flips L6b GREEN — L6b's abort is load-bearing, not decorative"
+  else
+    no "L6i: mutation did NOT flip L6b (rc=$L6I_RC) — L6b's abort assertion may be vacuous"
+    note "out: $(tail -n 5 "$L6I_OUT" 2>/dev/null)"
+  fi
+fi
+
+# --- L6j: the pre-freeze ADVISORY probe ---------------------------------------------------------
+# It runs in BOTH arms and is EVIDENCE, never the gate's comparand. Its one aborting condition is
+# "every probed source repo is un-inspectable" — under H1 that is the whole point: fail BEFORE the
+# freeze rather than after the outage. A partial failure must NOT abort.
+rm -rf "${D_SRC:?}/workspaces"
+mkdir -p "$D_SRC/workspaces"
+mk_repo "$D_SRC/workspaces/22222222-0000-0000-0000-00000000000b"
+mk_repo "$D_SRC/workspaces/33333333-0000-0000-0000-00000000000c"
+printf '[core\n' > "$D_SRC/workspaces/22222222-0000-0000-0000-00000000000b/.git/config"
+L6J_OUT="$TMPROOT/l6j-partial.out"; L6J_MARKER="$TMPROOT/l6j-partial.marker"
+: > "$L6J_OUT"; : > "$L6J_MARKER"
+MARKER_LOG="$L6J_MARKER" CUTOVER="$CUTOVER" SRC="$D_SRC" \
+WORKSPACES_MOUNT="$D_SRC" WORKSPACES_STAGING="$D_DST" WORKSPACES_MAPPER_NAME="$MAPPER_NAME" \
+bash -c '
+  source "$CUTOVER"
+  logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+  die()        { echo "DIE: $*"; exit 1; }
+  emit_drift() { echo "EMIT_DRIFT: $1"; }
+  fsck_advisory_probe "$SRC"
+' > "$L6J_OUT" 2>&1
+L6J_PARTIAL_RC=$?
+# Now make EVERY source repo un-inspectable -> must abort pre-freeze.
+printf '[core\n' > "$D_SRC/workspaces/33333333-0000-0000-0000-00000000000c/.git/config"
+L6J_ALL_OUT="$TMPROOT/l6j-all.out"; L6J_ALL_MARKER="$TMPROOT/l6j-all.marker"
+: > "$L6J_ALL_OUT"; : > "$L6J_ALL_MARKER"
+MARKER_LOG="$L6J_ALL_MARKER" CUTOVER="$CUTOVER" SRC="$D_SRC" \
+WORKSPACES_MOUNT="$D_SRC" WORKSPACES_STAGING="$D_DST" WORKSPACES_MAPPER_NAME="$MAPPER_NAME" \
+bash -c '
+  source "$CUTOVER"
+  logger()     { printf "%s\n" "$*" >> "$MARKER_LOG"; }
+  die()        { echo "DIE: $*"; exit 1; }
+  emit_drift() { echo "EMIT_DRIFT: $1"; }
+  fsck_advisory_probe "$SRC"
+' > "$L6J_ALL_OUT" 2>&1
+L6J_ALL_RC=$?
+if [ "$L6J_PARTIAL_RC" -eq 0 ] && [ "$L6J_ALL_RC" -ne 0 ] \
+  && grep -qE -- 'phase=advisory' "$L6J_MARKER" \
+  && ! grep -qE -- 'phase=gate' "$L6J_MARKER" \
+  && grep -qE -- 'no freeze was held' "$L6J_ALL_OUT"; then
+  ok "L6j: the advisory probe emits phase=advisory rows, tolerates a PARTIAL probe failure, and aborts PRE-FREEZE when every source repo is un-inspectable"
+else
+  no "L6j: advisory probe misbehaved (partial_rc=$L6J_PARTIAL_RC all_rc=$L6J_ALL_RC)"
+  note "partial marker: $(grep -m2 SOLEUR "$L6J_MARKER" 2>/dev/null)"
+  note "all out:        $(tail -n 5 "$L6J_ALL_OUT" 2>/dev/null)"
 fi
 
 # ===========================================================================
