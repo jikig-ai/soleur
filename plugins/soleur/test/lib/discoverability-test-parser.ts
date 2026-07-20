@@ -47,9 +47,12 @@ export type ClassifyInput = {
    * otherwise byte-identical in shape — are distinguishable.
    *
    * The production runtime supplies
-   *   git grep -F -- "$MARKER" -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs'
-   * The exclusions are load-bearing: the plan declaring the marker is itself in
-   * the tree, so without them the check always matches and is vacuous.
+   *   git grep -F -- "$MARKER" -- <EMITTER_ALLOWLIST_PATHSPECS>
+   * i.e. a POSITIVE allowlist of emitter directories, not a blacklist. The
+   * previous two-entry blacklist (`:!knowledge-base/project/{plans,specs}`) was
+   * self-satisfiable: any OTHER author-controlled file counted, so this PR's own
+   * test fixture `09-run-log-pass.md` satisfied its own marker. See
+   * `EMITTER_ALLOWLIST_PATHSPECS` for the list and its `:(top)` rationale.
    *
    * Defaults to fail-closed (`() => false`) — an omitted oracle must never
    * silently satisfy the guardrail.
@@ -57,11 +60,41 @@ export type ClassifyInput = {
   markerLookup?: (marker: string) => boolean;
 };
 
-// Use POSIX [:space:] equivalent (not \s) so the TS reject regex behaves
-// identically to bash's [[:space:]] in C-locale. \s in JS matches Unicode
-// whitespace (U+00A0, U+2028, etc.); bash [[:space:]] in C-locale does not.
-// Keeping the surface narrow avoids cross-runtime drift bypasses.
-const SSH_REJECT_RE = /(^|[\t\n\r \f\v/])ssh([\t\n\r \f\v]|$)/;
+// A NEGATED word-character class, not `\s`/`\b`. Two properties are load-bearing:
+//
+//  1. No JS-`\s`-vs-bash-`[[:space:]]` drift. `\s` in JS matches Unicode
+//     whitespace (U+00A0, U+2028, …) that bash `[[:space:]]` in C-locale does
+//     not, so a `\s`-based reject and its bash mirror would disagree on exotic
+//     separators. `[^A-Za-z0-9_.-]` is expressible IDENTICALLY in JS regex and
+//     bash ERE and therefore cannot drift.
+//  2. Every shell metacharacter is a delimiter. The previous form only accepted
+//     whitespace, `/`, or start-of-string before `ssh`, so `|ssh`, `;ssh`,
+//     `&&ssh` and `"ssh"` all slipped through. On origin/main that gap was
+//     masked because the substitution reject ran unconditionally and tripped on
+//     the `|`/`;`/`&&`; once the substitution reject moved below the run-log
+//     branch the gap became a live bypass of hr-no-ssh-fallback-in-runbooks.
+//
+// Matches:     `ssh h`, `|ssh`, `;ssh`, `&&ssh`, `"ssh"`, `/usr/bin/ssh`, bare `ssh`.
+// Does NOT match: `sshd`, `pushshell`, `SOLEUR_ssh_x`, `ssh.example.com` as a
+// suffix of a longer identifier — `.`, `-` and `_` stay word characters so
+// marker/hostname identifiers containing `ssh` are not false positives.
+const SSH_REJECT_RE = /(^|[^A-Za-z0-9_.-])ssh([^A-Za-z0-9_.-]|$)/;
+
+// The run-log endorsement reject. Nothing is EXECUTED under `kind: run-log`, so
+// these tokens carry no execution risk here — but the SKIP message reads
+// "Verified statically: an emitter exists and the command names it", which
+// ENDORSES the command to a human who may later paste it into a shell. A
+// `$TOKEN`-exfiltrating or command-chaining command must not receive that
+// endorsement.
+//
+// Deliberately NARROWER than SUBST_REJECT_RE: bare `|`, `<` and `>` are ALLOWED
+// because the canonical run-log command is
+// `gh run view <run-id> --log | grep MARKER` — it needs the pipe, and `<`/`>`
+// for the `<run-id>` placeholder. Applying the full live-probe reject here
+// would reject the feature's own canonical shape.
+//
+// Rejected: $( , backtick, <( , >( , ; , && , || , & , $VAR / ${VAR}.
+const RUNLOG_SUBST_REJECT_RE = /(\$\(|`|<\(|>\(|;|&&|\|\||&|\$\{?[A-Za-z_])/;
 
 // Shell-active tokens that route command output / chain commands / spawn
 // subshells / expand vars. The plan author is trust-on-PR-review but the env
@@ -76,11 +109,43 @@ const SUBST_REJECT_RE = /(\$\(|`|<\(|>\(|;|&&|\|\||\||>|<|&|\$\{?[A-Za-z_])/;
 // schema-parity guard walks. `extractObservabilityBlock` below is the
 // first-block-only view the preflight runtime consumes.
 export function extractAllObservabilityBlocks(planBody: string): string[] {
+  return extractBlocksMatching(planBody, /^## Observability(?:\s|$)/);
+}
+
+/**
+ * ‼️ ANCHORED heading match — `/^## Observability$/`, NOT the prefix form.
+ *
+ * The preflight runtime's awk is anchored (`/^## Observability$/`, SKILL.md
+ * Step 10.3, load-bearing per #6698). A prefix match here diverges from the
+ * bash in BOTH directions, measured:
+ *
+ *  - Plan with `## Observability layer citation` before the real section (a
+ *    heading `hr-observability-layer-citation` actively encourages): bash
+ *    extracts the real block and PASSes; the prefix mirror extracted the
+ *    citation and FAILed.
+ *  - Plan whose only such heading is `## Observability / Rollback` (this shape
+ *    exists on disk — see
+ *    knowledge-base/project/plans/2026-04-17-fix-settings-nav-expanded-chevron-alignment-plan.md):
+ *    bash yields 0 bytes and FAILs; the prefix mirror yielded a block and
+ *    parsed on.
+ *
+ * The anchor belongs on THIS single-block runtime view only.
+ * `extractAllObservabilityBlocks` keeps the prefix form for its second
+ * consumer — the schema-parity guard walking `plan-issue-templates.md`'s
+ * per-tier sections (`observability-schema-parity.test.ts`).
+ */
+export function extractObservabilityBlock(planBody: string): string {
+  return extractBlocksMatching(planBody, /^## Observability$/)[0] ?? "";
+}
+
+// Shared walker: body lines after each heading matching `headingRe`, up to the
+// next `^## ` heading.
+function extractBlocksMatching(planBody: string, headingRe: RegExp): string[] {
   const lines = planBody.split(/\r?\n/);
   const blocks: string[] = [];
   let collected: string[] | null = null;
   for (const line of lines) {
-    if (/^## Observability(?:\s|$)/.test(line)) {
+    if (headingRe.test(line)) {
       if (collected) blocks.push(collected.join("\n"));
       collected = [];
       continue;
@@ -94,16 +159,6 @@ export function extractAllObservabilityBlocks(planBody: string): string[] {
   }
   if (collected) blocks.push(collected.join("\n"));
   return blocks;
-}
-
-// First `## Observability` section body — the view the preflight runtime consumes
-// (plan bodies carry a single such section). NOTE: not byte-identical to a hand-
-// written first-only loop for the malformed case of two ADJACENT `## Observability`
-// headings with no intervening `^## ` — the old loop merged their bodies, this
-// returns only the first. That input does not occur in real plans, so preflight
-// behavior is unchanged; the split-then-`[0]` shape is what the parity guard needs.
-export function extractObservabilityBlock(planBody: string): string {
-  return extractAllObservabilityBlocks(planBody)[0] ?? "";
 }
 
 export function parseCommand(observabilityBlock: string): string {
@@ -227,12 +282,15 @@ export function substRejectReason(cmd: string): string | null {
 }
 
 /**
- * Back-compat wrapper preserving the original fused order for any caller that
- * still wants "reject for either reason". `classifyDiscoverabilityResult` no
- * longer uses it — it calls the two halves at their correct positions.
+ * The run-log endorsement reject — see `RUNLOG_SUBST_REJECT_RE`. Applies to
+ * `kind: run-log` ONLY, and allows bare `|`, `<`, `>` (which the canonical
+ * `gh run view <run-id> --log | grep MARKER` shape requires).
  */
-export function rejectReason(cmd: string): string | null {
-  return sshRejectReason(cmd) ?? substRejectReason(cmd);
+export function runLogSubstRejectReason(cmd: string): string | null {
+  if (RUNLOG_SUBST_REJECT_RE.test(cmd)) {
+    return "discoverability_test.command declares `kind: run-log` but contains a chaining/substitution token (;, &&, ||, &, $var, $(, `, <(, >() — refusing to endorse it. A run-log SKIP tells a human the command is statically verified; that endorsement must never cover a command that chains or expands variables. Bare `|`, `<` and `>` are allowed (the `gh run view <run-id> --log | grep MARKER` shape needs them).";
+  }
+  return null;
 }
 
 // `kind`/`marker` are Form-A-only sub-fields of `discoverability_test` and MUST
@@ -242,8 +300,14 @@ export function rejectReason(cmd: string): string | null {
 // parsers below require leading whitespace, and the loose token detectors
 // deliberately DO match a column-0 or prose form so it FAILs loudly (guardrail 6)
 // rather than being silently ignored.
-const KIND_STRICT_RE = /^[ \t]+kind:[ \t]*["']?(live-probe|run-log)["']?[ \t]*$/m;
-const MARKER_STRICT_RE = /^[ \t]+marker:[ \t]*["']?([^\s"']*)["']?[ \t]*$/m;
+// Quote handling accepts ONLY `"?`, never `['"]?`. YAML treats 'x' and "x"
+// identically, but the bash runtime (SKILL.md Step 10.4b) greps `"?` alone —
+// so `kind: 'run-log'` FAILs there (guardrails 2 + 6). Bash is the SSOT: if the
+// mirror accepted single quotes it would report SKIP for a plan that gets a red
+// preflight, i.e. a green suite certifying a broken plan. Widening this to also
+// accept `'` is a runtime change and must start in the bash.
+const KIND_STRICT_RE = /^[ \t]+kind:[ \t]*"?(live-probe|run-log)"?[ \t]*$/m;
+const MARKER_STRICT_RE = /^[ \t]+marker:[ \t]*"?([^\s"]*)"?[ \t]*$/m;
 
 // "a line whose first meaningful token is a `kind`/`marker` key", tolerating
 // list bullets, blockquotes and bold decoration. Narrow enough not to fire on
@@ -280,6 +344,39 @@ export function hasMarkerToken(observabilityBlock: string): boolean {
 }
 
 const MARKER_CHARSET_RE = /^[A-Za-z0-9_]+$/;
+
+/**
+ * Guardrail 4's emitter-directory ALLOWLIST — the pathspecs the runtime's
+ * `git grep` is restricted to. Mirrored verbatim in SKILL.md Step 10.4b.
+ *
+ * Why an allowlist and not the old `:!knowledge-base/project/{plans,specs}`
+ * blacklist: a two-entry blacklist admits every other author-controlled file in
+ * the repo, so a plan author could satisfy guardrail 4 by writing the marker
+ * into a doc, a fixture, or a second plan-adjacent file. It was demonstrably
+ * self-satisfiable — this suite's own fixture `09-run-log-pass.md` matched its
+ * own marker. An allowlist inverts the burden: the marker must appear on a
+ * surface that actually EXECUTES and can emit into a run log.
+ *
+ * `:(top)` makes every pathspec repo-root-relative. Without it a pathspec is
+ * resolved against the CWD, so running the check from a subdirectory silently
+ * changes which paths it covers. Preflight runs at the repo root today, so this
+ * is latent — but a latent cwd dependency in a security guard is exactly the
+ * "cannot fail" class this PR exists to remove.
+ *
+ * Fail-closed by construction: an emitter in a directory outside this list
+ * produces a FAIL naming the allowlist, which an author can read and act on.
+ * Widening the list is a deliberate, reviewable edit — in BOTH copies.
+ */
+export const EMITTER_ALLOWLIST_PATHSPECS = [
+  ":(top)apps/",
+  ":(top).github/",
+  ":(top)infra/",
+  ":(top)scripts/",
+  ":(top)bin/",
+  ":(top)tools/",
+  ":(top)plugins/soleur/skills/",
+  ":(top)plugins/soleur/hooks/",
+] as const;
 
 export async function classifyDiscoverabilityResult(
   input: ClassifyInput,
@@ -357,6 +454,14 @@ export async function classifyDiscoverabilityResult(
   }
 
   if (kind === "run-log") {
+    // Guardrail 8: the endorsement reject. Runs FIRST inside the branch so a
+    // chaining/exfiltrating command is refused before the emitter lookup, and
+    // before any SKIP prose vouches for it. See RUNLOG_SUBST_REJECT_RE.
+    const runLogRejected = runLogSubstRejectReason(cmd);
+    if (runLogRejected !== null) {
+      return { result: "FAIL", reason: runLogRejected };
+    }
+
     const marker = parseMarker(block);
 
     // Guardrail 3: run-log without a well-formed marker records nothing, so
@@ -368,22 +473,27 @@ export async function classifyDiscoverabilityResult(
       };
     }
 
-    // Guardrail 4: the marker must have a REAL emitter in the tree, outside
-    // planning artifacts. Without the plans/specs exclusion this check is
-    // vacuous — the plan declaring the marker is itself in the tree.
+    // Guardrail 4: the marker must have a REAL emitter on an EXECUTING surface.
+    // The oracle is an allowlist of emitter directories, not a blacklist of
+    // planning dirs — see EMITTER_ALLOWLIST_PATHSPECS for why.
     if (!markerLookup(marker)) {
       return {
         result: "FAIL",
-        reason: `plan ${planPath} declares \`kind: run-log\` with marker ${marker}, but no emitter for it exists in the tree outside knowledge-base/project/{plans,specs}. A run-log test may only be declared once something actually emits the marker (git grep -F -- "${marker}" -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs').`,
+        reason: `plan ${planPath} declares \`kind: run-log\` with marker ${marker}, but no emitter for it exists on an executing surface. A run-log test may only be declared once something actually emits the marker (git grep -F -- "${marker}" -- ${EMITTER_ALLOWLIST_PATHSPECS.map((p) => `'${p}'`).join(" ")}).`,
       };
     }
 
-    // Guardrail 5: the command must actually name the marker, else run-log
-    // would certify a command with nothing to do with the recorded evidence.
-    if (!cmd.includes(marker)) {
+    // Guardrail 5: the command must actually name the marker IN EXECUTABLE
+    // TEXT, else run-log would certify a command with nothing to do with the
+    // recorded evidence. Shell comments are stripped first: a Form A block
+    // scalar preserves `#` lines verbatim (only Form B's fence reader drops
+    // them), so a bare `cmd.includes(marker)` was satisfiable by
+    // `echo unrelated` + a commented-out `# SOLEUR_M` mention — a
+    // commented-out marker surfaces nothing.
+    if (!stripShellComments(cmd).includes(marker)) {
       return {
         result: "FAIL",
-        reason: `plan ${planPath} declares \`kind: run-log\` with marker ${marker}, but its discoverability_test command does not contain that literal. The command must be the one that surfaces the marker.`,
+        reason: `plan ${planPath} declares \`kind: run-log\` with marker ${marker}, but its discoverability_test command does not contain that literal outside of shell comments. The command must be the one that surfaces the marker.`,
       };
     }
 
@@ -395,7 +505,7 @@ export async function classifyDiscoverabilityResult(
     return {
       result: "SKIP",
       marker,
-      reason: `discoverability_test declares \`kind: run-log\` with marker ${marker}; the evidence lives in a run log that does not exist at preflight time, so the probe is deferred rather than run. Verified statically: an emitter for ${marker} exists in the tree and the command names it.`,
+      reason: `discoverability_test declares \`kind: run-log\` with marker ${marker}; the evidence lives in a run log that does not exist at preflight time, so the probe is deferred rather than run. Verified statically: an emitter for ${marker} exists in the tree and the command names it outside comments, and the command carries no chaining or substitution tokens. The marker is appended to $PREFLIGHT_TMP/preflight-run-log-markers.txt so a post-merge follow-through can read it.`,
     };
   }
 
@@ -444,4 +554,19 @@ export async function classifyDiscoverabilityResult(
 
 function stripQuotes(value: string): string {
   return value.replace(/^["'](.*)["']$/, "$1");
+}
+
+/**
+ * Drop shell comments so guardrail 5 sees only executable text. A `#` starts a
+ * comment at start-of-line or after whitespace; a `#` glued to a preceding
+ * non-space character is a URL fragment or a literal and is preserved.
+ *
+ * Bash mirror (SKILL.md Step 10.4b):
+ *   printf '%s\n' "$CMD" | sed -E 's/(^|[[:space:]])#.*$//'
+ */
+export function stripShellComments(cmd: string): string {
+  return cmd
+    .split(/\r?\n/)
+    .map((line) => line.replace(/(^|\s)#.*$/, ""))
+    .join("\n");
 }
