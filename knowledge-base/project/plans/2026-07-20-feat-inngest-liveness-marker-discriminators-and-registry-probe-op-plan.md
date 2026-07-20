@@ -185,7 +185,7 @@ GitHub Actions run log. `inngest-registry-probe.sh:106-113` extracts `errors[].m
 through `_pf_scrub`, then writes to **both** stdout and stderr. `_pf_scrub` (`:64`) carries two
 `sed -E` rules requiring `://` or `@`; the libpq keyword form has neither.
 
-**Brand-survival threshold:** `single-user incident`
+- **Brand-survival threshold:** `single-user incident`
 
 **Threshold premise, stated explicitly:** the *mechanism* is systemic-shaped — every user of
 the affected path, not one. It lands at `single-user incident` **only because
@@ -579,7 +579,19 @@ logs:
   where: "Better Stack, source soleur-inngest-vector-prd (table soleur_inngest_vector_prd_3)"
   retention: "hot window ~40 min via remote(); full span via the s3 archive arm — queries MUST include the archive arm"
 
+# PR A+B contract (CURRENT — this is the block preflight Check 10 parses).
+# A+B ship the standalone read-only ops; they do NOT ship the marker fields.
+# The post-C command below would return ZERO rows today by construction — the
+# plan's own Premise Validation is that the marker is inert on the host — so
+# using it as the live test would fail Check 10 for the whole A+B window.
 discoverability_test:
+  command: "gh run list --workflow cutover-inngest.yml --status success --limit 1 --json conclusion --jq .[0].conclusion"
+  expected_output: "success"
+
+# Post-C contract (PR C is HELD per the 2026-07-20 operator ruling — retained
+# verbatim so C does not have to re-derive it; promote it into the block above
+# when C ships and the marker fields actually emit).
+discoverability_test_after_c:
   command: "doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 6h --grep SOLEUR_INNGEST_SERVER_PROBE --limit 5"
   expected_output: "at least one row containing sdk_url=, backend_is_prod= in {yes,no}, registry_count=, and image_ref matching the pinned IREF"
 ```
