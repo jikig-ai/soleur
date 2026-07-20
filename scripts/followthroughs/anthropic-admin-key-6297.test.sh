@@ -10,6 +10,27 @@
 # require the corresponding fixture to flip, so neither arm is vacuous.
 set -uo pipefail
 
+# Single owning trap (ADR-129 / #6734). This suite allocates a sandbox dir plus a
+# fixture file PER TEST — the set is built dynamically, so the trap owns an
+# accumulator rather than a fixed list of names. Without it a mid-suite abort
+# (a failing assertion under `set -e` in a future edit, or an operator ^C) leaks
+# ~20 sandbox trees per run into TMPDIR.
+#
+# `rm -rf` is correct here and not over-broad: every registered path came from
+# `mktemp`/`mktemp -d`, so each is a fresh private path this script created.
+TMP_PATHS=()
+cleanup_tmp() {
+  local p
+  for p in "${TMP_PATHS[@]:-}"; do
+    [[ -n "$p" ]] && rm -rf -- "$p" 2>/dev/null
+  done
+}
+trap cleanup_tmp EXIT INT TERM
+
+# Allocate + register in one step. Every mktemp in this file goes through these.
+mktmp()  { local p; p=$(mktemp "$@");    TMP_PATHS+=("$p"); printf '%s' "$p"; }
+mktmpd() { local p; p=$(mktemp -d "$@"); TMP_PATHS+=("$p"); printf '%s' "$p"; }
+
 PROBE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/anthropic-admin-key-6297.sh"
 fails=0
 pass() { echo "  PASS: $1"; }
@@ -27,7 +48,7 @@ check() { # check <actual> <expected> <label>
 make_sandbox() {
   local fixture="$1" probe="${2:-$PROBE_SRC}"
   local d
-  d=$(mktemp -d -t ft6297.XXXXXXXX)
+  d=$(mktmpd -t ft6297.XXXXXXXX)
   git -C "$d" init -q 2>/dev/null
   mkdir -p "$d/scripts/followthroughs"
   cp "$probe" "$d/scripts/followthroughs/anthropic-admin-key-6297.sh"
@@ -89,18 +110,18 @@ ECHO_MULTILINE='inngest: unhandled error while logging webhook body
 echo "== #6297 follow-through probe fixtures =="
 
 # 1 — healthy report → PASS
-f=$(mktemp -t ft.XXXXXXXX); envelope "$OK_ROW" > "$f"
+f=$(mktmp -t ft.XXXXXXXX); envelope "$OK_ROW" > "$f"
 d=$(make_sandbox "$f"); rc=$(run_probe "$d")
 check "$rc" 0 "healthy ok row → exit 0"
 
 # 2 — still un-minted → TRANSIENT (never PASS, never FAIL)
-f=$(mktemp -t ft.XXXXXXXX); envelope "$DARK_ROW" > "$f"
+f=$(mktmp -t ft.XXXXXXXX); envelope "$DARK_ROW" > "$f"
 d=$(make_sandbox "$f"); rc=$(run_probe "$d")
 check "$rc" 2 "key-missing only → exit 2"
 
 # 3 — regression: worked, then stopped → FAIL (this is what makes the
 #     sweeper's closed-set reopen path reachable rather than structurally inert)
-f=$(mktemp -t ft.XXXXXXXX); { envelope "$OK_ROW" "$T1"; envelope "$DARK_ROW" "$T2"; } > "$f"
+f=$(mktmp -t ft.XXXXXXXX); { envelope "$OK_ROW" "$T1"; envelope "$DARK_ROW" "$T2"; } > "$f"
 d=$(make_sandbox "$f"); rc=$(run_probe "$d")
 check "$rc" 1 "ok(old) then key-missing(new) → exit 1"
 
@@ -108,49 +129,49 @@ check "$rc" 1 "ok(old) then key-missing(new) → exit 1"
 #      function of `dt`, not of the order the query happened to return. Without
 #      this, `tail -1` silently trusts an upstream ORDER BY that no test pins,
 #      and a flip there would inverts a live revocation into PASS.
-f=$(mktemp -t ft.XXXXXXXX); { envelope "$DARK_ROW" "$T2"; envelope "$OK_ROW" "$T1"; } > "$f"
+f=$(mktmp -t ft.XXXXXXXX); { envelope "$DARK_ROW" "$T2"; envelope "$OK_ROW" "$T1"; } > "$f"
 d=$(make_sandbox "$f"); rc=$(run_probe "$d")
 check "$rc" 1 "same rows emitted newest-first → still exit 1 (order-independent)"
 
 # 4 — producer silent → TRANSIENT (positive-liveness rule: zero rows is never PASS)
-f=$(mktemp -t ft.XXXXXXXX); : > "$f"
+f=$(mktmp -t ft.XXXXXXXX); : > "$f"
 d=$(make_sandbox "$f"); rc=$(run_probe "$d")
 check "$rc" 2 "zero producer rows → exit 2"
 
 # 5 — CONTAMINATION (P0): a webhook echo quoting every literal, including
 #     "status":"ok", must NOT close the issue.
-f=$(mktemp -t ft.XXXXXXXX); envelope "$ECHO_ROW" > "$f"
+f=$(mktmp -t ft.XXXXXXXX); envelope "$ECHO_ROW" > "$f"
 d=$(make_sandbox "$f"); rc=$(run_probe "$d")
 check "$rc" 2 "webhook echo quoting the marker → exit 2 (not closed)"
 
 # 5b — adversarial echo: correct at top level in every field the PASS path
 #      reads, except `component`. Only the structural guard rejects this.
-f=$(mktemp -t ft.XXXXXXXX); envelope "$ECHO_ADVERSARIAL" > "$f"
+f=$(mktmp -t ft.XXXXXXXX); envelope "$ECHO_ADVERSARIAL" > "$f"
 d=$(make_sandbox "$f"); rc=$(run_probe "$d")
 check "$rc" 2 "adversarial echo (wrong component only) → exit 2"
 
 # 5c — MULTI-LINE CONTAMINATION (P1 regression guard). Fails against the
 #      two-stage jq form; passes only with the single-pass filter.
-f=$(mktemp -t ft.XXXXXXXX); envelope "$ECHO_MULTILINE" > "$f"
+f=$(mktmp -t ft.XXXXXXXX); envelope "$ECHO_MULTILINE" > "$f"
 d=$(make_sandbox "$f"); rc=$(run_probe "$d")
 check "$rc" 2 "multi-line raw embedding a forged producer line → exit 2"
 
 # 5d — RECOVERY: dark first, then the key starts working. Must PASS. Without
 #      this, a FAIL predicate like `ROWS > HAS_OK` satisfies every other
 #      fixture while reopening the issue at the moment the key begins working.
-f=$(mktemp -t ft.XXXXXXXX); { envelope "$DARK_ROW" "$T1"; envelope "$OK_ROW" "$T2"; } > "$f"
+f=$(mktmp -t ft.XXXXXXXX); { envelope "$DARK_ROW" "$T1"; envelope "$OK_ROW" "$T2"; } > "$f"
 d=$(make_sandbox "$f"); rc=$(run_probe "$d")
 check "$rc" 0 "key-missing(old) then ok(new) — recovery → exit 0"
 
 # 6 — MUTATION: prove 5b is non-vacuous. Strip the structural component guard;
 #     the adversarial fixture must then wrongly PASS (exit 0). If it still
 #     exits 2, the guard is not what is rejecting it and 5b proves nothing.
-MUT=$(mktemp -t ft-mut.XXXXXXXX.sh)
+MUT=$(mktmp -t ft-mut.XXXXXXXX.sh)
 sed 's/and .component == "claude-cost"//' "$PROBE_SRC" > "$MUT"
 if ! grep -q 'select(.SOLEUR_CLAUDE_COST_DAILY == true )' "$MUT"; then
   fail "mutation did not apply — the jq selector text drifted; 5b is unproven"
 else
-  f=$(mktemp -t ft.XXXXXXXX); envelope "$ECHO_ADVERSARIAL" > "$f"
+  f=$(mktmp -t ft.XXXXXXXX); envelope "$ECHO_ADVERSARIAL" > "$f"
   d=$(make_sandbox "$f" "$MUT"); rc=$(run_probe "$d")
   check "$rc" 0 "mutation makes the adversarial echo PASS (guard is load-bearing)"
 fi
@@ -160,7 +181,7 @@ fi
 #     then wrongly PASS. This pins the tokenization boundary itself, not just
 #     the selector text — test 6's mutation survives a two-stage refactor, so
 #     without this arm the single-pass property has no guard at all.
-MUT2=$(mktemp -t ft-mut2.XXXXXXXX.sh)
+MUT2=$(mktmp -t ft-mut2.XXXXXXXX.sh)
 python3 - "$PROBE_SRC" "$MUT2" <<'PY'
 import re, sys
 src, dst = sys.argv[1], sys.argv[2]
@@ -182,7 +203,7 @@ PY
 if ! grep -q "jq -R -r 'fromjson? | .raw // empty' 2>/dev/null" "$MUT2"; then
   fail "mutation 2 did not apply — the jq filter text drifted; 5c is unproven"
 else
-  f=$(mktemp -t ft.XXXXXXXX); envelope "$ECHO_MULTILINE" > "$f"
+  f=$(mktmp -t ft.XXXXXXXX); envelope "$ECHO_MULTILINE" > "$f"
   d=$(make_sandbox "$f" "$MUT2"); rc=$(run_probe "$d")
   check "$rc" 0 "two-stage mutation makes the multi-line echo PASS (single-pass is load-bearing)"
 fi
@@ -234,7 +255,7 @@ CURL_ZERO='echo "{\"data\":[{\"count()\":0}]}"'
 
 # 8 — Sentry reports events while Better Stack has none: the shipping path is
 #     broken. This is failure mode #5, invisible to the Sentry cron monitor.
-f=$(mktemp -t ft.XXXXXXXX); : > "$f"
+f=$(mktmp -t ft.XXXXXXXX); : > "$f"
 d=$(make_sandbox "$f")
 out=$(run_probe_out "$d" "$GH_ZERO" 'echo "{\"data\":[{\"count()\":42}]}"')
 check_out "$out" "DIVERGENCE: Sentry shows 42 event(s) in 48h" "zero rows + Sentry events → DIVERGENCE reported"
@@ -243,7 +264,7 @@ check_out "$out" "shipping path is dropping rows" "DIVERGENCE names the shipping
 # 9 — Sentry reports zero. Must NOT be stated as evidence the cron is dead:
 #     the tag is emitted only on the dark branch, so 0 is consistent with a
 #     healthy cron whose rows are not shipping.
-f=$(mktemp -t ft.XXXXXXXX); : > "$f"
+f=$(mktmp -t ft.XXXXXXXX); : > "$f"
 d=$(make_sandbox "$f")
 out=$(run_probe_out "$d" "$GH_ZERO" "$CURL_ZERO")
 check_out "$out" "NOT decisive" "zero rows + zero Sentry events → hedged, not concluded"
@@ -258,7 +279,7 @@ check_no_out "$out" "DIVERGENCE" "zero Sentry events does not claim DIVERGENCE"
 #      `exit 22`s passes either way and proves nothing about the flag.
 CURL_401='if [[ " $* " == *" --fail "* ]]; then exit 22; fi
 echo "{\"detail\":\"Invalid token\"}"'
-f=$(mktemp -t ft.XXXXXXXX); : > "$f"
+f=$(mktmp -t ft.XXXXXXXX); : > "$f"
 d=$(make_sandbox "$f")
 out=$(run_probe_out "$d" "$GH_ZERO" "$CURL_401")
 check_out "$out" "Sentry cross-check inconclusive" "Sentry 401 → inconclusive, not a substantive zero"
@@ -266,7 +287,7 @@ check_no_out "$out" "NOT decisive" "a 401 does not render the zero-events verdic
 
 # 11 — the stall bound actually fires. A probe that shrugs identically forever
 #      is the decayed-dark-state defect #6297 exists to remove.
-f=$(mktemp -t ft.XXXXXXXX); : > "$f"
+f=$(mktmp -t ft.XXXXXXXX); : > "$f"
 d=$(make_sandbox "$f")
 out=$(run_probe_out "$d" 'echo 9' "$CURL_ZERO"); rc=$?
 check_out "$out" "STALLED: 9 consecutive sweeps" "9 prior zero-row sweeps → STALLED fires"
@@ -275,14 +296,14 @@ check "$rc" 2 "STALLED still exits 2 (attention, not verdict)"
 
 # 11b — boundary: 6 prior sweeps is below the >=7 bound and must stay silent,
 #       so the threshold is pinned rather than "any positive count fires".
-f=$(mktemp -t ft.XXXXXXXX); : > "$f"
+f=$(mktmp -t ft.XXXXXXXX); : > "$f"
 d=$(make_sandbox "$f")
 out=$(run_probe_out "$d" 'echo 6' "$CURL_ZERO")
 check_no_out "$out" "STALLED" "6 prior sweeps → below the >=7 bound, stays silent"
 
 # 12 — a dead counter must sentinel loudly. `|| echo 0` as the failure path
 #      would make a broken counter look identical to "first sweep" forever.
-f=$(mktemp -t ft.XXXXXXXX); : > "$f"
+f=$(mktmp -t ft.XXXXXXXX); : > "$f"
 d=$(make_sandbox "$f")
 out=$(run_probe_out "$d" 'exit 1' "$CURL_ZERO")
 check_out "$out" "Stall counter query FAILED" "gh failure → loud sentinel, not a silent 0"
