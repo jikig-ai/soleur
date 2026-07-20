@@ -37,7 +37,7 @@ decisive on correctness grounds, not taste.
    No `.tf` asserts it and no AC verifies it.
 
 3. **It would have become a booby trap (decisive).** `FIRST_DARK_FIRE` is a frozen literal. If the
-   key is minted and later unset — which ADR-108 line 36 explicitly anticipates, naming key exposure
+   key is minted and later unset — which ADR-108 `## Consequences` explicitly anticipates, naming key exposure
    a *rotation trigger* — the counter would read ~120 on day one of a fresh, entirely benign gap and
    page immediately at `level=error`. That is the exact failure this PR exists to remove, re-armed in
    the same branch.

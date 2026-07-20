@@ -28,14 +28,61 @@ Two defects:
   only thing that surfaced it was the false page itself.
 
 The fix for D1 is a one-symbol swap to the already-existing `warnSilentFallback`. The fix for D2
-gives the dark window an **age** (carried in the marker) and a **bound** (severity escalates once the
-window is no longer credibly "temporary"), plus a self-closing follow-through tracker.
+gives the dark window an **age** (carried in the marker as inert reporting data) and moves escalation
+into the **backlog channel** — a `follow-through`-labelled, `priority/p2-medium` tracker with a
+self-closing probe — rather than back into the paging channel. A code-level severity escalation was
+proposed and **cut at review**; see `decision-challenges.md` DC-1.
 
 **This PR touches no `.tf` file.** See §Infrastructure (IaC) — that is a load-bearing sequencing
 constraint, not an omission.
 
 > No `spec.md` exists for this branch (one-shot entry, no preceding brainstorm), so the plan lacks a
 > valid `lane:` source and was **defaulted to `cross-domain` (TR2 fail-closed)**.
+
+## Enhancement Summary
+
+**Deepened on:** 2026-07-20
+**Passes run:** plan-review (Kieran / code-simplicity / observability-coverage), then deepen
+(architecture-strategist, spec-flow-analyzer, learnings-researcher, verify-the-negative sweep).
+
+### Key improvements
+
+1. **Phase 3 cut.** A proposed day-31 severity escalation was removed — three independent findings,
+   the decisive one being that `FIRST_DARK_FIRE` is a frozen literal, so a future mint-then-rotate
+   would have paged at `level=error` on day one of a fresh benign gap. Recorded in
+   `decision-challenges.md` DC-1 with the dissenting view.
+2. **P0 — probe echo isolation.** The follow-through probe could have PASSed on the webhook echo of
+   this plan's own prose (`--grep` is an unanchored `raw LIKE`; GitHub webhook bodies ship into the
+   same Better Stack source). Now field-isolated on `"component":"claude-cost"` in both byte-forms,
+   with a contamination fixture arm.
+3. **P0 — two mitigations were unimplementable as first written.** The probe runs under `env -i`
+   with no persistent state, so the "7 consecutive runs" counter and the Sentry cross-check were both
+   unreachable without `GH_TOKEN` and `SENTRY_AUTH_TOKEN` in `secrets=`. Both added; AC14b asserts
+   reachability rather than trusting the prose.
+4. **P0 — the operator handoff was wrong.** Pasting only into `prd_terraform` would never have
+   reached the cron (it reads `prd`), so the promised self-closure could not occur — D2 reconstructed.
+   The operator now writes both configs; `ignore_changes = [value]` lets Terraform adopt the value.
+5. **`exit 1` made reachable** (ok-then-key-missing), so the sweeper's closed-set reopen path is no
+   longer structurally inert.
+6. **AC hygiene.** Several ACs were inverted or vacuous: `grep -c` exits 1 on a zero count (AC6/AC10),
+   AC21 could not distinguish "not error" from "not emitting" (AC22 added as a positive control), and
+   AC6 was scoped to `*.tf` when the auto-apply trigger is the whole `infra/**` tree.
+
+### New considerations discovered
+
+- Better Stack retention on this source is **3 days**, which bounds the probe's query window and was
+  a further argument against a 30-day budget.
+- `ANTHROPIC_ADMIN_KEY` is deliberately **absent** from `verify-required-secrets.sh`; adding it would
+  convert a supported optional-key state into a release-blocking gate.
+- The follow-up IaC PR must carry the `-target=` allow-list line or the resource is declared and
+  never applied.
+- One plan claim was falsified by the verify-the-negative sweep ("19 of 40" banned-form probes →
+  actually **14 of 39** under the plan's own comment-stripping method) and corrected.
+- **Verified non-applicable:** `2026-05-27-sentry-warning-level-still-triggers-alert-rules.md` shows
+  Sentry `EventFrequencyCondition` rules count events regardless of level — so a level downgrade
+  would *not* have helped against a tag-keyed frequency rule. Confirmed no such rule exists here:
+  `issue-alerts.tf` has 27 rules and none match this cron's `feature`/`op`. The fix works because the
+  operator's rule filters on *priority*, which is level-derived.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -60,7 +107,7 @@ direct runtime confirmation. No competing hypothesis survives.
 continues — the operator keeps triaging a non-incident, and alarm fatigue erodes trust in *every*
 Sentry page including real fleet-down ones; or (b) an over-correction silences the branch entirely
 and the `SOLEUR_CLAUDE_COST_DAILY {status:"key-missing"}` row stops shipping, so the cost-report
-surface goes dark with no positive signal — the exact mis-triage ADR-108 §23's "positive
+surface goes dark with no positive signal — the exact mis-triage ADR-108 Decision item 4's "positive
 `capture_status` on every substrate exit" rule exists to prevent.
 
 **If this leaks, the user's data is exposed via:** no new exposure vector. The key-missing branch
@@ -118,13 +165,24 @@ continue to match.
 the concurrency block, or the success path.
 
 **Why `warnSilentFallback` and not "drop the Sentry emission":** dropping it would violate
-`cq-silent-fallback-must-mirror-to-sentry`. ADR-108 §21 names the *only* sanctioned exemption to that
+`cq-silent-fallback-must-mirror-to-sentry`. ADR-108 Decision item 2 ("Dedicated Sentry-mirror-bypassing logger") names the *only* sanctioned exemption to that
 rule as the marker emitter itself (`emitClaudeCost*Marker`), explicitly because it uses a
 Sentry-mirror-bypassing pino instance. The key-missing branch is not covered by that exemption. A
 warn-level mirror keeps the branch queryable in Sentry while dropping it out of the high-priority
 notification band.
 
 ### Phase 2 — D2a: carry the dark-window age in the marker
+
+**2.0 — two guards to record before touching the interface.**
+- **Cross-consumer sweep** (`hr-type-widening-cross-consumer-grep`): `git grep -n "ClaudeCostDailyMarker"`
+  and confirm the consumer set is closed. Verified at plan time: the type definition, the two call
+  sites in `cron-anthropic-cost-report.ts`, and the test mock — no cross-package consumer. Record the
+  sweep output in the PR body rather than asserting it.
+- **ADR-029 marker boundary:** `claude-cost-marker.ts` carries a ‼️ BOUNDARY comment — this dedicated
+  pino instance has **no** `renameUserIdToHash` formatter and **no** `redact` paths, so any field
+  added to these interfaces must stay free of user ids, emails, secrets, and regulated data. An
+  integer day count complies; note the check in the ADR-108 amendment so the guard stays alive for
+  whoever adds the next field.
 
 **2.1** In `apps/web-platform/server/claude-cost-marker.ts`, extend `ClaudeCostDailyMarker` with an
 **optional** field so `status:"ok"` rows are unaffected:
@@ -184,9 +242,18 @@ minted-but-broken key does not close the issue.
 Contract:
 - `exit 0` (PASS → sweeper closes #6297) — a **field-isolated** producer row (see below) with
   `"status":"ok"` within the query window.
-- `exit 1` (FAIL) — reserved for a genuine regression; **not** used for "not yet minted".
-- `exit 2` (TRANSIENT) — still `key-missing`, or query/auth failure, or `betterstack-query.sh`
-  missing/non-executable, or zero producer rows.
+- `exit 1` (FAIL) — a genuine **regression**, defined concretely so this branch is reachable: the
+  window contains a field-isolated `"status":"ok"` row **and** the most recent field-isolated row is
+  `"status":"key-missing"` — i.e. the key worked and then stopped. **Not** used for "not yet minted".
+- `exit 2` (TRANSIENT) — still `key-missing` with no prior `ok` in the window, or query/auth failure,
+  or `betterstack-query.sh` missing/non-executable, or zero producer rows.
+
+> **Exit 1 must be genuinely reachable.** The sweeper's closed-set reopen path acts on **exit 1 only**
+> (`sweep-followthroughs.sh:344-360`); exit 0 and transient are full no-ops there. A probe with no
+> reachable exit-1 condition leaves that path structurally inert — so if #6297 were ever closed
+> prematurely (by a human, or by an echo-PASS slipping past AC12), nothing could reopen it. The
+> ok-then-key-missing predicate above is stateless, computable from a single 48h query, and is a real
+> regression signal (key revoked, rotated away, or IaC reverted).
 
 > **P0 — the probe must not pass on its own echo.** `betterstack-query.sh --grep` compiles to an
 > **unanchored** `raw LIKE '%…%'` over a source that *every* host multiplexes into — and Inngest
@@ -199,10 +266,25 @@ Contract:
 > `cert-reissue-markers-6698.sh:28-32` documents.
 >
 > **The probe MUST field-isolate**, matching the producer's structure rather than a quotable string:
-> require **both** `raw LIKE '%"SOLEUR_CLAUDE_COST_DAILY":true%'` (the boolean *key*, as
-> `emitClaudeCostDailyMarker` writes it) **and** `raw LIKE '%"component":"claude-cost"%'` — the base
-> field stamped by the dedicated pino instance at `claude-cost-marker.ts:32`, which no webhook
-> payload carries. Prose that merely *quotes* the marker name cannot satisfy both.
+> require **both** the marker key `"SOLEUR_CLAUDE_COST_DAILY":true` **and** `"component":"claude-cost"`
+> — the base field stamped by the dedicated pino instance at `claude-cost-marker.ts:32`, which no
+> webhook payload carries. Prose that merely *quotes* the marker name cannot satisfy both.
+>
+> **Match in BOTH byte-forms** — they differ by context, and checking only one silently false-FAILs
+> against live prod (`2026-07-18-betterstack-followthrough-probe-must-field-isolate-syslog-identifier.md`):
+> - **Server-side** (`betterstack-query.sh --grep`, which becomes `raw LIKE '%…%'` against the
+>   *unescaped* ClickHouse column): `"component":"claude-cost"`
+> - **Client-side** (`grep -F` over the JSONEachRow stdout, where inner quotes are
+>   backslash-escaped): `\"component\":\"claude-cost\"`
+>
+> *(That learning isolates on `SYSLOG_IDENTIFIER` because its producer rides Vector Source 4,
+> `host_scripts_journald`. This marker rides **Source 3**, `app_container_journald`, which matches on
+> `CONTAINER_NAME` and carries no `SYSLOG_IDENTIFIER` discriminator — so the pino `component` base
+> field is the correct analogue here. The two-byte-form requirement transfers unchanged.)*
+>
+> **Fixtures must include a contamination arm:** a webhook-shaped row embedding both marker strings in
+> its payload must **not** satisfy the PASS condition. Mutation-prove it (flip the guard, confirm the
+> fixture flips) so the arm is not vacuous.
 
 **Query window:** pin to `--since 48h`. Better Stack retention on this source is **3 days**
 (`betterstack-log-query.md:85`), so any window > 72h reads empty regardless of producer health, and
@@ -233,10 +315,30 @@ not be allowed to shrug indefinitely:
   producer is alive and the *shipping path* is broken — a real regression. Emit that distinction in
   the probe's stdout (the sweeper posts it as the issue comment) so one shared-mode failure cannot
   hide both signals.
-- Escalate a persistent stall rather than repeating an identical TRANSIENT: after **7 consecutive**
-  zero-row runs, print an explicit `STALLED:` line naming the elapsed span. Keep the exit code at
-  `2` — FAIL (exit 1) would reopen/annotate on a shipping-path fault the operator cannot fix by
-  minting a key, and the convention reserves exit 1 for "this should NOT close."
+- Escalate a persistent stall rather than repeating an identical TRANSIENT: once the issue already
+  carries **7 or more** prior sweeper comments reporting zero producer rows, print an explicit
+  `STALLED:` line naming the elapsed span. Keep the exit code at `2` — FAIL (exit 1) would reopen or
+  annotate on a shipping-path fault the operator cannot fix by minting a key, and the convention
+  reserves exit 1 for "this should NOT close."
+
+> **Both mitigations above require secrets the naive `secrets=` clause omits — this was a real defect
+> caught at deepen-review.** The sweeper runs every probe under
+> `env -i PATH=… HOME=…` plus *only* the names listed in the directive's `secrets=`
+> (`sweep-followthroughs.sh:318`), and the probe gets a fresh checkout with no persistent state —
+> `sweep-followthroughs.sh:101` states it outright: *"the script is stateless and runs its
+> verification under `env -i`, so an in-process counter cannot survive between sweeps. GitHub's own
+> comment history is the state."*
+>
+> Therefore:
+> - **`GH_TOKEN` is mandatory** — without it the probe cannot read its own comment history, and
+>   "7 consecutive runs" is **unknowable inside the probe**. The counter must be derived from prior
+>   comments via `gh issue view`, not from an in-process variable. `followthrough-convention.md:66-73`
+>   already states `secrets=GH_TOKEN` is mandatory for any `gh`-using probe.
+> - **`SENTRY_AUTH_TOKEN` is mandatory** for the cross-check. It exists in the sweeper's `env:` block
+>   (`scheduled-followthrough-sweeper.yml:62`) but is stripped by `env -i` unless named.
+>
+> Omitting either does not fail loudly — it silently makes the mitigation unreachable while every AC
+> still passes. AC14 must therefore assert all five names, not just the Better Stack three.
 
 **4.2** Update issue #6297:
 - relabel: remove `priority/p3-low`, add `priority/p2-medium` + `follow-through`;
@@ -249,15 +351,23 @@ not be allowed to shrug indefinitely:
 <!-- soleur:followthrough
   script=scripts/followthroughs/anthropic-admin-key-6297.sh
   earliest=2026-07-20T00:00:00Z
-  secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD
+  secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD,SENTRY_AUTH_TOKEN,GH_TOKEN
 -->
 ```
+
+All five names are verified present in the sweeper's `env:` block
+(`scheduled-followthrough-sweeper.yml`: `GH_TOKEN` at :56, `SENTRY_AUTH_TOKEN` at :62, the three
+`BETTERSTACK_QUERY_*` at :72-74). Note the sweeper **fails safe but silently** on a missing name —
+`sweep-followthroughs.sh:328` logs *"required secret … not set in workflow env — leaving issue open"*
+and returns 0 **without posting a comment**, so a typo'd or unprovisioned name makes the tracker go
+quiet rather than erroring. Since the sweeper comment is the *only* push signal for the dark state
+(see §Observability), each name must be checked against that block rather than assumed.
 
 **4.3** Rewrite the issue body's operator section in plain language — see §Operator Action.
 
 ### Phase 5 — Records
 
-**5.1** Amend **ADR-108** (do not author a new ADR). Phase 1 restores compliance with what ADR-108 §24
+**5.1** Amend **ADR-108** (do not author a new ADR). Phase 1 restores compliance with what ADR-108 Decision item 5 ("Daily Admin cost-report cron")
 already decided ("self-reports `{status:"key-missing"}` benignly … no page") — that is a bug fix, not
 a new decision. The one genuinely new item is the `days_since_first_dark` marker field, which belongs
 in the ADR because the marker convention is ADR-108's subject. Add it to `## Decision`; note in
@@ -265,9 +375,14 @@ in the ADR because the marker convention is ADR-108's subject. Add it to `## Dec
 reset across a mint-then-rotate cycle.
 
 **5.2** Update `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` §"Querying
-Anthropic cost markers" to document `days_since_first_dark` **and** the field-isolation requirement —
-that a trustworthy producer row must match `"component":"claude-cost"` as well as the marker key,
-since the marker name alone is quotable in any issue/PR body that webhooks into the same source.
+Anthropic cost markers" to document three things:
+- `days_since_first_dark` and its first-observed (non-resetting) semantics;
+- the field-isolation requirement — a trustworthy producer row must match `"component":"claude-cost"`
+  as well as the marker key, in **both** byte-forms, since the marker name alone is quotable in any
+  issue/PR body that webhooks into the same source;
+- **the absent-vs-zero trap:** because the field is omitted on `status:"ok"` rows,
+  `JSONExtractInt(raw,'days_since_first_dark')` returns **0** for both "ok row, field absent" and a
+  genuine day-0 key-missing row. Any panel or query must filter `status='key-missing'` *first*.
 
 ## Architecture Decision (ADR/C4)
 
@@ -350,7 +465,7 @@ Layer citations use the canonical vocabulary from
 `plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md`: **`vector`** (Layer 3)
 for the marker, **`Sentry monitor`** for run liveness. Layer 2 (pino→Sentry breadcrumb) is
 deliberately **not** available for the marker itself — `claude-cost-marker.ts` uses a dedicated pino
-instance with no `mirrorToSentry` hook (ADR-108 §21). The `warnSilentFallback` line *does* route
+instance with no `mirrorToSentry` hook (ADR-108 Decision item 2). The `warnSilentFallback` line *does* route
 through the shared logger and so retains Layer 2.
 
 ### Soak Follow-Through Enrollment
@@ -380,9 +495,23 @@ Worked precedent: `RESEND_RECEIVING_API_KEY` → split to #5480.
 ### Apply path
 N/A for this PR (no infra surface). The IaC half is a **follow-up PR**, gated on the mint:
 1. operator (or Playwright — see §Operator Action) mints the key in the Console;
-2. `TF_VAR_anthropic_admin_key` lands in Doppler `prd_terraform`;
-3. *then* a follow-up PR adds the `doppler_secret` resource, mirroring the existing
-   `inngest-betterstack-token.tf` no-default-var precedent that ADR-108 already cites.
+2. `TF_VAR_anthropic_admin_key` lands in Doppler `prd_terraform` (and the runtime value in `prd` —
+   see §Operator Action);
+3. *then* a follow-up PR lands **three** things together, mirroring `inngest-betterstack-token.tf`:
+   - the no-default sensitive `variable "anthropic_admin_key"` in `variables.tf`;
+   - the `doppler_secret` resource writing `ANTHROPIC_ADMIN_KEY` into `soleur/prd`, with
+     `lifecycle { ignore_changes = [value] }` so Terraform **adopts** the operator's hand-written
+     value rather than fighting it;
+   - **the matching `-target=` line in `apply-web-platform-infra.yml`.**
+
+> **The `-target=` line is not optional and is the easiest of the three to forget.** ADR-065's
+> Decision enumerates the IaC half as *"the `variable` + the `doppler_secret` + the
+> `apply-web-platform-infra.yml` `-target` line"*, and that workflow's own ALLOW-LIST MAINTENANCE note
+> states a new resource without a matching `-target=` entry is **never applied** — the merge is green,
+> the apply is green, and the secret silently does not exist, with only the 12h
+> `scheduled-terraform-drift.yml` cron as backstop. This is the declared-but-never-applied failure
+> class the C4 model already records for the Sentry root. Recorded here because this plan is the
+> handoff document for that follow-up.
 
 **Answer to the plan question "can the IaC half be fully prepared in advance?"** — the resource *body*
 can be written in advance, but it **must not merge** in advance, for the auto-apply reason above. So
@@ -425,11 +554,47 @@ If (and only if) the attempt proves a human gate, #6297's body gets this, in pla
 > 2. Open **Settings → API keys**.
 > 3. Click **Create key**. Choose the **Admin** key type. Name it `soleur-cost-report-readonly`.
 > 4. Copy the key — it starts with `sk-ant-admin01-` and is shown **only once**.
-> 5. Paste it into Doppler: project `soleur`, config `prd_terraform`, name it
->    `TF_VAR_ANTHROPIC_ADMIN_KEY`. Do not paste it into chat, a commit, or an issue comment.
+> 5. Paste it into Doppler **twice — same key, two places**. Project `soleur` both times:
+>    - config **`prd`**, name it `ANTHROPIC_ADMIN_KEY` — this is the one the daily report reads.
+>    - config **`prd_terraform`**, name it `TF_VAR_ANTHROPIC_ADMIN_KEY` — this is the one the
+>      infrastructure code reads.
 >
-> That is the whole job. Everything else is automated: within 24 hours the cost-report cron picks the
-> key up, the daily report starts working, and this issue closes itself.
+>    Do not paste it into chat, a commit, or an issue comment.
+> 6. Post a comment on this issue saying you've done it.
+>
+> That is your whole job. The report starts working within 24 hours and this issue closes itself.
+
+**The two-config paste is load-bearing — an earlier draft of this plan got it wrong, and the error is
+worth recording so /work does not re-introduce it.** `prd_terraform` supplies Terraform's *input
+variable*; it does **not** put `ANTHROPIC_ADMIN_KEY` into the app container's environment. The cron
+reads `process.env.ANTHROPIC_ADMIN_KEY`, sourced from Doppler config **`prd`**. The precedent states
+the split explicitly — `resend.tf`: *"set as TF_VAR_resend_receiving_api_key in Doppler
+prd_terraform; **this resource publishes it to the `prd` Doppler config** where the Next.js app reads
+it at runtime"*. A `prd_terraform`-only paste therefore leaves the cron on its `key-missing` branch
+**indefinitely**, the probe returning exit 2 forever — D2 reconstructed exactly, with the operator
+told to expect a self-closure that cannot occur.
+
+Having the operator write `prd` directly decouples the fix from the IaC follow-up. `ignore_changes =
+[value]` on the `doppler_secret` (the precedent's own shape) means Terraform **adopts** the
+hand-written value rather than fighting it, so there is no drift and no ordering hazard.
+
+Full chain, with the actor for each link:
+
+| # | Step | Actor |
+|---|---|---|
+| 1 | Mint the Admin key in the Console | operator (pending the Playwright attempt above) |
+| 2a | Paste as `ANTHROPIC_ADMIN_KEY` into Doppler `soleur/prd` — **this is what makes the cron work** | operator |
+| 2b | Paste as `TF_VAR_ANTHROPIC_ADMIN_KEY` into Doppler `soleur/prd_terraform` — Terraform's input | operator |
+| 3 | Container picks up the new `prd` value on its next restart (any merge touching `apps/web-platform/**` triggers `web-platform-release.yml`) | automated |
+| 4 | Next 06:17 UTC fire reads the key → `status:"ok"` marker | automated |
+| 5 | Probe passes → #6297 auto-closes | automated |
+| 6 | IaC follow-up PR lands `doppler_secret.anthropic_admin_key` (+ its `-target=` line), adopting the existing value | **agent/pipeline** — no longer on the critical path |
+
+**Container env is a deploy-time snapshot.** `cloud-init.yml` runs `doppler secrets download --config
+prd` into a tmp env-file consumed by `docker run --env-file`; there is no in-process Doppler client,
+so a running container will not see the new secret until it restarts. If no deploy happens on its own,
+step 3 can be forced by any merge to `apps/web-platform/**` — the IaC follow-up (step 6) is one such
+merge, which is why the ordering is convenient but not required.
 
 ## Acceptance Criteria
 
@@ -449,10 +614,15 @@ If (and only if) the attempt proves a human gate, #6297's body gets this, in pla
       git diff origin/main...HEAD -- apps/web-platform/server/inngest/functions/cron-anthropic-cost-report.ts \
         | grep -E '^[-+]' | grep -E '17 6 \* \* \*|concurrency|retries:|isFinalAttempt'
       ```
-- [ ] **AC6** No `.tf` file in the diff. **Use an `if`, not `grep -c`** — `grep -c` exits **1** when
-      the count is `0`, so a "returns 0" phrasing inverts under `set -e`:
+- [ ] **AC6** No file under the auto-applied infra root in the diff. **Scope to the whole
+      `infra/` tree, not just `*.tf`** — `apply-web-platform-infra.yml`'s `paths:` filter is
+      `apps/web-platform/infra/**`, which also covers ~20 `.sh`/`.service`/`.md` files, so a
+      `.tf$`-only check would report clean while an `infra/*.sh` edit still triggers a full apply.
+      **Use an `if`, not `grep -c`** — `grep -c` exits **1** on a zero count, inverting the gate:
       ```bash
-      if git diff --name-only origin/main...HEAD | grep -q '\.tf$'; then echo "FAIL: .tf in diff"; exit 1; fi
+      if git diff --name-only origin/main...HEAD | grep -qE '^apps/web-platform/infra/'; then
+        echo "FAIL: auto-applied infra path in diff"; exit 1
+      fi
       ```
 - [ ] **AC7** `emitClaudeCostDailyMarker` is still called on the key-missing path with
       `status: "key-missing"` (pre-existing assertion at `cron-anthropic-cost-report.test.ts:135`;
@@ -474,8 +644,9 @@ If (and only if) the attempt proves a human gate, #6297's body gets this, in pla
       dirty script and failed the clean one. (ii) **Under-match** — `${VAR?msg}` (no colon) has
       identical abort-with-status-1 semantics and is invisible to a `:?` pattern; the `:?\?` form
       catches both. (iii) **Comment false-FAIL** — Phase 4.1 instructs the author to *document* the
-      banned form, so comment lines are stripped first. Fixtures: known-bad
-      `ghcr-minter-live-6031.sh:28` matches; known-good `cert-reissue-markers-6698.sh` does not.
+      banned form, so comment lines are stripped first; this is not hypothetical, 5 existing probes
+      match only inside such a comment. Fixtures: known-bad `ghcr-minter-live-6031.sh:28` matches;
+      known-good `cert-reissue-markers-6698.sh` does not.
 - [ ] **AC11** The probe contains `exit 2` on the still-`key-missing` path, the zero-producer-rows
       path, and the query/auth-failure path (positive-liveness requirement), and `exit 0` appears on
       exactly one path.
@@ -486,12 +657,23 @@ If (and only if) the attempt proves a human gate, #6297's body gets this, in pla
       Negative control: running the probe against a window whose only matching rows are the webhook
       echo of this PR body must **not** exit 0.
 - [ ] **AC13** The probe pins `--since 48h` (≤ the 3-day retention at `betterstack-log-query.md:85`).
-- [ ] **AC14** `secrets=` in the #6297 directive names only secrets present in the sweeper's `env:`
-      block — scope the check to that block rather than the whole file:
+- [ ] **AC14** `secrets=` in the #6297 directive names **all five** required secrets, and every one is
+      present in the sweeper's `env:` block — scope the check to that block, not the whole file:
       ```bash
       awk '/^ *env:/{f=1;next} f&&/^ *[a-z-]+:$/{f=0} f' .github/workflows/scheduled-followthrough-sweeper.yml \
-        | grep -cE 'BETTERSTACK_QUERY_(HOST|USERNAME|PASSWORD):'   # expect 3
+        | grep -cE '(BETTERSTACK_QUERY_(HOST|USERNAME|PASSWORD)|SENTRY_AUTH_TOKEN|GH_TOKEN):'   # expect 5
       ```
+      **Do not shrink this to the Better Stack three.** `GH_TOKEN` makes the `STALLED:` counter
+      computable (the probe is stateless under `env -i`) and `SENTRY_AUTH_TOKEN` makes the
+      cross-transport check reachable. Omitting either leaves the corresponding Phase 4.1 mitigation
+      silently dead while every other AC still passes.
+- [ ] **AC14b** The two escalation mitigations are **reachable, not prose**: the probe contains a
+      `gh issue view`-derived count of prior zero-row sweeper comments feeding a `STALLED:` branch,
+      and a Sentry query branch guarded by `if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]`. Assert both
+      branches exist and are exercised by a fixture.
+- [ ] **AC14c** The `exit 1` branch is reachable: a fixture where the window contains a `"status":"ok"`
+      row followed by a later `"status":"key-missing"` row makes the probe exit 1. Without this the
+      sweeper's closed-set reopen path is structurally inert.
 - [ ] **AC15** ADR-108 documents the `days_since_first_dark` field; **no** new ADR ordinal is created
       (`git diff --name-only origin/main...HEAD | grep -c 'decisions/ADR-' ` counts only ADR-108).
 - [ ] **AC16** Typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits 0.
@@ -562,14 +744,26 @@ If (and only if) the attempt proves a human gate, #6297's body gets this, in pla
   §Infrastructure). Tracked by #6297 itself; no new deferral issue needed.
 - **#3739** (`reportSilentFallbackWithUser` extraction) — acknowledged, not folded in.
 - **Editing `infra/sentry/issue-alerts.tf`** — no rule matches this cron; the page is priority-derived.
-- **Retrofitting the 19 existing probes that use the banned `${VAR:?}` form** — measured at plan time:
-  19 of the 40 scripts in `scripts/followthroughs/` use the form `followthrough-convention.md:24`
-  bans, so an unprovisioned secret makes them report FAIL (exit 1) rather than TRANSIENT (exit 2),
-  accreting daily false-FAIL comments. The convention is documented but enforced nowhere mechanically.
-  Out of scope here (this plan only guarantees the *new* script is compliant, via AC10). Per
-  `wg-when-an-audit-identifies-pre-existing`, /work should file a tracking issue proposing a CI
-  guard — the exact anchored grep in AC10, run over `scripts/followthroughs/*.sh` — rather than
-  hand-fixing 19 files in this PR.
+- **Adding `ANTHROPIC_ADMIN_KEY` to `apps/web-platform/scripts/verify-required-secrets.sh`** —
+  deliberately *not* done, and the IaC follow-up must not do it either. Verified: the key is absent
+  from that script's `REQUIRED=(` list today, which is correct — "unprovisioned" is a **supported**
+  state of this cron (the whole key-missing branch exists for it). Adding it would turn a benign
+  optional-key state into a hard release-gate failure and block deploys until the mint. The release
+  workflow runs this gate at `web-platform-release.yml:417`.
+- **Retrofitting the existing probes that use the banned `${VAR:?}` form** — measured at plan time
+  with AC10's own comment-stripping method: **14 of the 39** non-test scripts in
+  `scripts/followthroughs/` carry the form `followthrough-convention.md:24` bans on an *executable*
+  line, so an unprovisioned secret makes them report FAIL (exit 1) rather than TRANSIENT (exit 2),
+  accreting daily false-FAIL comments. The convention is documented but enforced nowhere
+  mechanically. Out of scope here (this plan only guarantees the *new* script is compliant, via
+  AC10). Per `wg-when-an-audit-identifies-pre-existing`, /work should file a tracking issue proposing
+  a CI guard — the exact comment-stripped grep from AC10, run over `scripts/followthroughs/*.sh`.
+
+  > *Methodology note, recorded because it bit this plan:* a first pass reported "19 of 40" using the
+  > naive grep. Applying AC10's own comment-stripping rule drops the numerator to 14 (5 files match
+  > only inside a comment *documenting why not to use the form*), and the denominator is 39 non-test
+  > files (42 including `.test.sh`). The AC10 correction and this measurement must use the same
+  > method, or the plan's own guard disagrees with the plan's own prose.
 
 ## Domain Review
 
