@@ -402,6 +402,14 @@ Do **not** triplicate the rationale. Each artifact has one job:
   knowledge-base/project/specs/feat-one-shot-record-pr-c-cancellation-6617/tasks.md
   ```
 
+  **SUPERSEDED at /compound (2026-07-21) — replaced by AC4' below.** The exact-file-census form
+  was run twice and drifted twice: first at /work (the orchestrator writes a `session-state.md`
+  the planning subagent cannot know about), then at /compound (a learning file + a routed
+  `review/SKILL.md` bullet). Both additions were legitimate. A census assertion is structurally
+  incompatible with a pipeline whose later phases add files by design, so it fails for reasons
+  unrelated to the property it guards — and an AC that must be edited every phase teaches the
+  reader to edit it rather than to heed it. The historical amendment note is retained below.
+
   **Amended at /work (2026-07-20), from six paths to seven.** The plan was authored by the
   planning subagent, which writes only `tasks.md` into this branch's own spec dir; the parent
   one-shot pipeline additionally writes `session-state.md` there (one-shot Steps 1–2, "write the
@@ -413,6 +421,29 @@ Do **not** triplicate the rationale. Each artifact has one job:
   - `git diff --name-only main...HEAD | grep -c 'ADR-100'` **== 0** (ADR-100 untouched).
   - `git diff --name-only main...HEAD | grep -cvE '^knowledge-base/'` **== 0** (nothing outside
     `knowledge-base/`).
+
+- **AC4' (replaces AC4)** — **The cancellation content landed in the RIGHT spec directory.**
+  This tests the failure mode directly instead of proxying it through a file census:
+  ```sh
+  # 0 — no cancellation banner may land in THIS branch's own spec dir (the confusion case)
+  git diff --name-only origin/main...HEAD \
+    | grep 'feat-one-shot-record-pr-c-cancellation-6617/' \
+    | xargs -r grep -l 'CANCELLED — 2026-07-20, by operator decision' | wc -l   # == 0
+  # >=1 — the banner IS present in the target spec dir
+  git diff --name-only origin/main...HEAD \
+    | grep 'feat-one-shot-6617-inngest-liveness-marker-registry-probe/' \
+    | xargs -r grep -l 'CANCELLED — 2026-07-20, by operator decision' | wc -l   # >= 1
+  # ADR-100 untouched; nothing outside the two permitted roots
+  git diff --name-only origin/main...HEAD | grep -c 'ADR-100'                    # == 0
+  git diff --name-only origin/main...HEAD \
+    | grep -cvE '^(knowledge-base/|plugins/soleur/skills/review/SKILL\.md$)'      # == 0
+  ```
+  **This is stronger than the census it replaces, not weaker.** The census could pass while the
+  banner sat in the wrong directory (it only counted paths, never content); AC4' asserts the
+  banner's presence in the target dir AND its absence from the decoy dir, which is the actual
+  Sharp-Edge-1 failure. It is also stable under legitimate later-phase additions. The `-r` on
+  `xargs` is load-bearing: without it an empty path list makes `grep` read stdin and hang, and a
+  hung check is not a passing one.
 
   **This is the load-bearing AC.** Note that exactly two of the seven paths carry the
   `feat-one-shot-record-pr-c-cancellation-6617/` segment (this branch's own tasks.md and
@@ -432,16 +463,28 @@ Do **not** triplicate the rationale. Each artifact has one job:
   anywhere in the diff. *(Naming the variable `INNGEST_POSTGRES_URI` is permitted; rendering its
   value is not.)* Three limbs, all **== 0**:
   ```sh
-  # (a) DSN / host forms
-  git diff origin/main...HEAD | grep -ciE 'postgres(ql)?://|\.supabase\.co'
-  # (b) credential shape user:secret@host (a bare '://' over-matches credential-less endpoints)
-  git diff origin/main...HEAD | grep -cE '[A-Za-z0-9._%+-]+:[^[:space:]"@/]+@[A-Za-z0-9.-]+'
+  # Patterns are built by CONCATENATION so this file does not match its own checks.
+  # (a) DSN / vendor-host forms
+  PAT_A='postgres''(ql)?://|\.''supabase''\.co'
+  git diff origin/main...HEAD | grep -ciE "$PAT_A"
+  # (b) credential shape: userinfo, colon, secret, at-sign, host
+  #     (a bare scheme-separator check over-matches credential-less endpoint URLs)
+  PAT_B='[A-Za-z0-9._%+-]+'':''[^[:space:]"@/]+''@''[A-Za-z0-9.-]+'
+  git diff origin/main...HEAD | grep -cE "$PAT_B"
   # (c) the BARE prod ref, sourced from the flip-guard so the literal never enters this doc
   MARKER=$(grep -oE 'INNGEST_PROD_URI_MARKER:-[a-z]+' \
     apps/web-platform/infra/inngest-server-flip-guard.sh | head -1 | cut -d- -f2- | tr -d ':')
   test -n "$MARKER" || { echo "AC7(c) EXTRACTION FAILED — treat as RED, not clean"; exit 1; }
   git diff origin/main...HEAD | grep -cF "$MARKER"
   ```
+  **Self-match note (caught at /compound, 2026-07-21).** AC7 limb (a) went from 0 to 1 purely
+  because this explanatory prose originally spelled out the vendor-host suffix while explaining
+  why limb (a) is insufficient — **the document describing the rule tripped the rule**. It was not
+  a leak. The fix is to reword the prose so the forbidden literal appears only inside the pattern
+  itself, NOT to add a path exemption: an exemption would blind the check on the one file most
+  likely to quote a real credential shape while discussing credentials. Any AC of this kind should
+  be run once on its own PR before being trusted — a self-matching pattern reads as a finding.
+
   **The `test -n` guard is not boilerplate — the first draft of limb (c) was vacuous.** It used
   `sed -n 's/.*PROD_MARKER:-\([a-z]*\)}.*/\1/p'`, whose unescaped `}` after `*` made the
   expression fail to match; the extraction returned the empty string, and `grep -cF ""` matches
@@ -450,7 +493,8 @@ Do **not** triplicate the rationale. Each artifact has one job:
 
   **Limb (c) is the one that matters and the one the original AC7 missed.** `PROD_MARKER` is
   matched in `inngest-server-flip-guard.sh` as a **bare substring** — no scheme, no
-  `.supabase.co` suffix — so the ref can be disclosed in a form that passes limb (a) green. The
+  vendor-host suffix (spelled out in limb (a)'s pattern, deliberately not repeated in this prose —
+  see the self-match note below) — so the ref can be disclosed in a form that passes limb (a). The
   AC would then report clean on precisely the disclosure its own prose forbids: the assertion's
   scope was narrower than the property claimed (the repo's prefix-scoped-purity-test defect
   class). The `test -n "$MARKER"` guard is load-bearing — a failed `sed` yields an empty pattern,
