@@ -34,7 +34,11 @@ deepened: 2026-07-20
 >   2.54.0, but no experiment isolated the version, so that remains a candidate, not a cause). L6k's
 >   arm (i) therefore synthesizes the refusal, and the "`-c safe.directory=` is load-bearing" proof
 >   is explicitly UNPROVEN in CI rather than silently assumed. See L6k-CAP.
-> - **3.1 — the expected case count.** Said `20 passed`; the suite carries **24** cases.
+> - **3.1 — the expected case count.** Said `20 passed`. The suite carried **24** executed cases at
+>   #6745 and carries **25** after #6759 adds L6l. A 26th id, `L6k-CAP`, is CONDITIONAL: it emits
+>   `ok`/`no` only on a host that can produce a real ownership refusal and stays note-only otherwise,
+>   so the runner executes 25 and a capable dev host executes 26. Any future "expected N" here must
+>   name which of the two it means.
 
 ## Phase 0 — Preconditions
 
@@ -125,26 +129,32 @@ deepened: 2026-07-20
 
 ## Phase 3 — Verify
 
-- [ ] 3.1 Loopback suite → `24 passed, 0 failed`, exit 0 (corrected v3 — the stated `20` never
-      matched the suite, which carries **24** cases; #6745 merged at 21/3 and #6759 took it to 23/1
-      then targets 24/0). This is a **CI-only** verification: the suite requires root + loopback +
+- [ ] 3.1 Loopback suite → `25 passed, 0 failed`, exit 0 **on the runner** (26 on a host where
+      L6k-CAP asserts — see the count note above). Corrected v3: the stated `20` never matched the
+      suite. #6745 merged at 21/3; #6759 took it to 23/1, then added L6l and the ANY-vs-ALL
+      two-workspace fixture. This is a **CI-only** verification: the suite requires root + loopback +
       dm-crypt and self-elevates, so `deploy-script-tests` on the PR is the authoritative channel.
       Read its result before merging — #6745 merged while this suite was red for ~15 minutes because
       it is not a required check (tracked in #6766).
 - [x] 3.2 `bash -n` on both edited files.
 - [x] 3.3 `shellcheck` only if `infra-validation.yml` already runs it on these files (verify first).
-- [ ] 3.4 Walk Pre-merge ACs 1–9, recording command + output.
+- [x] 3.4 Walk Pre-merge ACs 1–9, recording command + output.
 
 ## Phase 4 — Learning & ship
 
-- [ ] 4.1 Write `knowledge-base/project/learnings/<topic>.md` — two learnings: (a) the three-instance
+- [x] 4.1 Write `knowledge-base/project/learnings/<topic>.md` — two learnings: (a) the three-instance
       fail-closed-gate-discards-its-evidence pattern; (b) the `git fsck` semantics every integrity
       gate gets wrong (rc is a bitmask, rc 0 ≠ clean, report spans both streams, `--name-objects`
       leaks paths, a linked worktree fsck'd at a copied path reads the **original** filesystem).
       Author picks the date at write time.
-- [ ] 4.2 Measure `B_ALWAYS` before proposing any AGENTS.md rule; if at cap, land it in the
+- [x] 4.2 Measure `B_ALWAYS` before proposing any AGENTS.md rule; if at cap, land it in the
       constitution instead.
-- [ ] 4.3 PR body: `Ref #6733` (never `Closes`); the Measured Semantics transcript flagged as **local**
+      **v3 outcome:** routed by `cq-agents-md-tier-gate`, not by budget. The lesson (threshold
+      coverage; per-case verdicts over pass counts; assert WHICH guard) is **domain-scoped to test
+      design**, so the gate says edit the owning artifact and never AGENTS.md. Landed as a defect
+      class in `plugins/soleur/skills/review/SKILL.md`, alongside every sibling learning it relates
+      to. No AGENTS.md edit proposed, so no B_ALWAYS measurement was required.
+- [x] 4.3 PR body: `Ref #6733` (never `Closes`); the Measured Semantics transcript flagged as **local**
       evidence; the freeze-budget statement (~4.5 min serial-one-side → ~5 min concurrent-two-sides
       against ≤20 min) and why the v1 hoist was rejected as unsound; the advisory probe's ~4.5 min of
       pre-freeze read I/O under `ionice`.
