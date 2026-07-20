@@ -115,7 +115,8 @@ fixtures contain prose closes that would trip the repaired guard against this ve
 ## Verification quick-reference
 
 ```bash
-# AC8  — no paginated label call
+# AC8  — no paginated label call. NOTE: already 0 before the change, so this is a
+#        guard against INTRODUCING `gh issue list`, not a before/after proof.
 grep -c 'gh issue list' .claude/hooks/pre-merge-auto-close-scan.sh          # -> 0
 # AC10 — no slug parsing / --repo
 grep -cE 'remote get-url origin|--repo' .claude/hooks/pre-merge-auto-close-scan.sh  # -> 0

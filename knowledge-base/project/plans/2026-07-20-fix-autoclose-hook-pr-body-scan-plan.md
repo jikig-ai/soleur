@@ -568,10 +568,17 @@ To be filed as tracking issues during `/work`:
   (T13) This is the deny operators will actually hit — 44 open trackers.
 - **AC8** — Label lookup is per-issue: `grep -c 'gh issue list' .claude/hooks/pre-merge-auto-close-scan.sh`
   returns `0`. No paginated call means C2's silent truncation is structurally impossible.
+  **Note (measured): this grep returns `0` today, before any change.** It is therefore a
+  *guard against introducing* the truncating call — the tempting implementation C2
+  rejected — and **not** a before/after discriminator. Do not read a green AC8 as evidence
+  the label gate works; AC2 and AC3 carry that. Flagged explicitly because an AC that
+  passes before and after is the vacuity class AC1 exists to prevent, and it would
+  otherwise read as state-change proof to a reviewer.
 - **AC9** — Extraction is keyword-paired, prefix-stripped, and exact-token: `Refs #A, closes #B`
   allows (T11), and an issue number that is a prefix of a follow-through number allows (T12).
 - **AC10** — No `--repo` and no remote-URL parsing remain in the hook:
   `grep -cE 'remote get-url origin|--repo' .claude/hooks/pre-merge-auto-close-scan.sh` returns `0`.
+  Measured: returns `1` today, so unlike AC8 this *is* a genuine before/after discriminator.
 - **AC11** — Degraded arms emit exactly one stderr line and still allow; **no PR for branch
   emits none** (T14/T15/T16).
 - **AC12** — `bash .claude/hooks/stub-argv-fidelity.test.sh` passes and fails against a
@@ -622,6 +629,45 @@ verified `command -v bats` returns nothing).
 | Two follow-through gates with inverse semantics on `--auto` | Deny messages differentiated (3.5); hatch inventory documented (4.2) |
 | Phase 3.2 couples to `auto-close-scan.sh`'s `N:text` output format | Assert the format in the test so a scanner change fails loudly here rather than failing the gate open |
 | Meta-test surfaces pre-existing sibling gaps | Expected; triage inline per `wg-defer-only-after-inline-triage` |
+
+## Deepen-Plan Verification Record
+
+Deepened 2026-07-20. All mandatory gates ran; none halted.
+
+| Gate | Result |
+|---|---|
+| 4.5 Network-outage deep-dive | **Lexical trigger only.** The word `timeout` appears throughout, but as the `timeout(1)` coreutil bounding a subprocess — not a network-outage symptom. No SSH keyword, no `terraform apply`, no `provisioner`/`connection` block anywhere in scope. Disposed as a false positive rather than skipped silently. |
+| 4.55 Downtime & cutover | Not triggered — no infra reboot/replace, no DDL, no deploy/router change. Two `.sh` files and a `.md`. |
+| 4.6 User-Brand Impact | **PASS** — heading present, 12 non-blank body lines, threshold `none`, and no Files-to-Edit path matches the canonical sensitive-path regex (verified per-path). Scope-out line present anyway. |
+| 4.7 Observability | **PASS** — all 5 fields present, none empty-keyed, none placeholder, `discoverability_test.command` contains no `ssh`. |
+| 4.8 PAT-shaped variable | **PASS** — zero matches across all four patterns. |
+| 4.9 UI-wireframe | Not triggered — 0 UI-surface path hits. |
+
+**Citation verification (all resolved live, none from memory):**
+
+| Citation | Verified |
+|---|---|
+| #6775 | ISSUE OPEN — work target valid, not already closed |
+| #6748 | PR MERGED — the motivating PR |
+| #5969 | PR MERGED — introduced D1 |
+| #6617 | ISSUE OPEN, carries `follow-through` — the tracker that nearly died |
+| #6295 | ISSUE CLOSED, no `follow-through` — the control |
+| #2482 | ISSUE OPEN, `follow-through`, 94 days — invisible to C2's truncated probe |
+| `e7f303917` | Real hash, **ancestor of `origin/main`**, subject matches PR #5969 — attribution correct |
+| `hr-never-git-stash-in-worktrees`, `cq-write-failing-tests-before`, `wg-defer-only-after-inline-triage` | All active `[id: …]` in AGENTS.md — none fabricated or retired |
+| `../learnings/test-failures/2026-07-20-a-fixture-seam-…md` | Resolves on disk |
+| Milestone `Post-MVP / Later` | Exists |
+
+**AC command verification (run as written):** AC10 returns `1` today → `0` after (genuine
+discriminator). **AC8 returns `0` today**, so it is a guard against introducing the
+truncating call, not a state-change proof — annotated inline so no reviewer misreads it.
+Finding this is itself an instance of the plan's own thesis: an assertion that passes
+before and after looks like coverage and is not.
+
+**No further research agents spawned.** Six reviewers had already run against v1/v2 and
+converged; the marginal value was in mechanical verification of every citation and command,
+which is what this pass did. `bats` absent re-confirmed (`command -v bats` empty) — the
+`.test.sh` convention stands.
 
 ## Sharp Edges
 
