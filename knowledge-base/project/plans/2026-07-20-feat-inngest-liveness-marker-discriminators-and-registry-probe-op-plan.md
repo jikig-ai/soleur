@@ -18,6 +18,61 @@ revision: v2
 > cross-host hash read from `/proc/<pid>/environ`) was condemned by four independent P0s and is
 > **gone**. See **Review Reconciliation**.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-20
+**Review panel:** dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer,
+architecture-strategist, spec-flow-analyzer (5-agent escalation for `single-user incident`) +
+cto (devex) + cpo (sign-off)
+
+### Key improvements
+
+1. **The central measurement was wrong and is now right.** v1's `backend_sha8` would have hashed
+   prd and dark to the *same* digest (the project ref lives in the DSN's user field, which the
+   hash excluded, while host and dbname are identical) — producing a **guaranteed false
+   double-scheduler escalation** on the exact question the instrument was built to answer.
+   Replaced by `backend_is_prod`, derived from `inngest-server-flip-guard.sh`, which already
+   computes that boolean inside the Doppler env and already ships to Better Stack.
+2. **A credential-exposure surface was removed rather than added.** v1 required reading
+   `/proc/<pid>/environ` — which this repo documents as *the* confidentiality boundary its
+   secrets design rests on (#5560) and treats as a blocked exfiltration signature in
+   `bash-sandbox.test.ts`. v2 touches no DSN and resolves no pid.
+3. **H4 no longer depends on a production replace.** `inngest-doublefire-probe.sh` already
+   exists and proves *actual cron runs* on the dedicated host. Exposing it as a standalone op
+   (PR B) answers the double-scheduler question with zero outage, turning the replace from a
+   diagnostic into a delivery step.
+4. **The delivery invariant became mechanical.** The image-content check moved from a one-shot
+   manual `grep -c` to a byte-`diff` promoted into CI — the only form that survives a later
+   review commit.
+5. **The pin surface is four sites, not one**, and a tag push reds `main` until the PR merges
+   (git tags are repo-global; the guard asserts the *web* pin against the semver-max tag).
+
+### New considerations discovered
+
+- **#6197 is CLOSED and already rendered** — v1 named it as riding along and encoded that in an AC.
+- **The root debt:** the dedicated host has no in-place redelivery channel, though the web host
+  does (`ci-deploy.sh:2758-2891`). That absence is why every observability change here costs a
+  replace of the sole scheduler. Tracked at C4.6.
+- **"The next drift apply reconciles it" is false** — `scheduled-terraform-drift.yml` is
+  plan-only and the operator full apply is PROSE-ONLY (#6730). Expect a persistent drift exit-2.
+- **The root disk takes the flip-FSM state slot** (`/var/lock/inngest-cutover-flip.state`) and
+  `/var/lib/inngest` — neither was enumerated in v1.
+- **The cron send path has no idempotency guard**, so a double-fire duplicates statutory-deadline
+  notices per tick indefinitely. Companion issue, deliberately not folded in.
+
+### Gates run
+
+| Gate | Result |
+|---|---|
+| 4.4 precedent-diff | Applied — flip-guard `is_prod`, `derive_durability_state()` ExecStart read, `image_ref` state-file pattern all cited as precedent |
+| 4.45 verify-the-negative | Run — both hooks confirmed registered (`hooks.json.tmpl:257/276`, `infra-config-install.sh:73-74`); no new TF variable confirmed |
+| 4.5 network-outage | Not triggered |
+| **4.55 downtime & cutover** | **FIRED** — `## Downtime & Cutover` section added; telemetry emitted |
+| 4.6 user-brand impact | PASS |
+| 4.7 observability | PASS — 5 fields present, no placeholders, no SSH in `discoverability_test` |
+| 4.8 PAT-shaped variable | PASS — no matches |
+| 4.9 UI wireframe | Skipped — no UI surface |
+
 ## Overview
 
 The dedicated Inngest host (`soleur-inngest`, 10.0.1.40) cannot today prove whether it will
@@ -553,6 +608,57 @@ The fields **discriminate all competing hypotheses in one event**:
 
 The Phase-4 7-day soak stays owned by #6178 — no enrollment for it here. The **delivery** gate
 (C4.5) **is** enrolled, because it is this plan's own.
+
+## Downtime & Cutover
+
+> Required by deepen-plan Phase 4.55 — the gate fired on `hcloud_server.inngest` being
+> force-replaced. Zero-downtime is the default and must be evaluated before any outage is
+> accepted.
+
+### The offline-inducing operation
+
+`apply_target=inngest-host-replace` destroys and recreates `hcloud_server.inngest`
+(10.0.1.40). The affected surface is the **dedicated Inngest scheduler** — which, post-cutover,
+is the **sole** scheduler for every production cron (ADR-100: exactly-one-instance is enforced
+by topology, not a runtime role-guard).
+
+### Zero-downtime paths evaluated
+
+| Path | Verdict |
+|---|---|
+| **Blue-green** (provision a second host, drain, cut over, retire) | **Architecturally forbidden.** Two live Inngest hosts on the same backend *is* the double-scheduler condition this entire work exists to detect. OSS Inngest v1.x is single-writer; ADR-100 Context records that two servers on one Postgres double-fire every cron. Blue-green would manufacture the exact harm. |
+| **Rolling** | **Not applicable.** Singleton by design; there is no second replica to roll through. |
+| **In-place redelivery** (the web host's `ci-deploy.sh:2758-2891` docker-cp channel) | **Correct long-term answer, and unavailable today.** The dedicated host was extracted from the web host without carrying that channel. Building it is real work and touches the sole scheduler's boot path during a held cutover. Filed as C4.6; it is what would make this class of change zero-downtime permanently. |
+| **`terraform state mv` / state-only re-address** | **Not applicable.** The change is to the host's *contents* (the bootstrap script baked into its image), not its address. No state-only operation delivers new bytes. |
+| **`lifecycle.ignore_changes = [user_data]` + live patch** | **Rejected.** Would decouple the host from its declared config permanently and defeat the clean replace-to-reprovision path `inngest-host.tf` deliberately preserves — trading a bounded one-time outage for unbounded drift on the sole scheduler. |
+
+### Residual downtime: accepted, and why it is not user-facing
+
+**Downtime accepted:** the dedicated scheduler is offline for one boot cycle.
+
+**Justification — the surface is not serving, and that is proven by measurement, not asserted.**
+The host measured `url_present=no` today (`inngest-heartbeat` dark-arm rows at 08:11:45Z and
+08:12:46Z), meaning `INNGEST_HEARTBEAT_URL` is unprovisioned and the host is pre-arm. Production
+crons are served by the **co-located** scheduler throughout — `CUTOVER_HOSTS: "10.0.1.10"`.
+**Prod cron impact: zero.**
+
+**Bounded window:** one Hetzner server create + cloud-init boot. C4.4 sets the observation
+envelope — first probe row at ~90 s post-boot, absence at T+10 min is a real failure.
+
+**The window is conditional and expiring.** It is free *only* while the host is dark. C4.1
+hard-stops on two signals: `INNGEST_HEARTBEAT_URL` absent (direct) and #6348 unmerged
+(corroborating). #6348 is draft + MERGEABLE — one toggle from landing. If it merges first, this
+stops being a free window and becomes a real maintenance window requiring operator sign-off.
+
+**Structural mitigation:** H4's answer does **not** depend on this replace. PR B answers the
+double-scheduler question with no outage at all. If the window closes before PR C lands, the
+plan's primary question is already settled and only the continuous signal is deferred.
+
+**Rollback:** re-pin to the C0.4 digest and re-dispatch (C4.4).
+
+**Operator sign-off:** not required while the measured dark condition holds — there is no
+serving surface to take offline. Required if C4.1's gate fails, at which point the plan
+re-plans rather than proceeding.
 
 ## Infrastructure (IaC)
 
