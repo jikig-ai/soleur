@@ -277,7 +277,7 @@ resource "hcloud_server" "web" {
   #
   # HARD GATE (ADR-068 §(c), the LB-weight gate) — the deferred cutover orchestrator
   # must NOT remove this entry or shift web-2's Cloudflare LB weight above 0 until the
-  # programmatic gate apps/web-platform/infra/lb-weight-gate.sh exits 0 AND its separate
+  # programmatic gate (DELETED 2026-07-20 with #6575 — see ADR-068 §(c) CORRECTION; nothing checks this today, and it MUST be rebuilt before any second web host is pooled) exits 0 AND its separate
   # runtime-bind probe passes: (1) owner-side relay active (SOLEUR_PROXY_BIND /
   # SOLEUR_PROXY_PEER_ALLOWLIST / SOLEUR_HOST_ROSTER), AND (2) git-data store cut over
   # (GIT_DATA_STORE_ENABLED==true + LUKS soak marker). Pooling web-2 before both = a

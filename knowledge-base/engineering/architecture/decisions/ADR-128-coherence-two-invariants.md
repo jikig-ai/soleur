@@ -51,7 +51,7 @@ scope, and the thing PR #6725's operator decision already deferred.
 
 ### 2. The verifier stays pure, and is retained host-agnostic
 
-`host-scripts-coherence-preflight.sh` (renamed from `web2-recreate-preflight.sh`, comparison
+`host-image-coherence-preflight.sh` (renamed from `web2-recreate-preflight.sh`, comparison
 and validation logic byte-unchanged) accepts **only** a pinned `repo@sha256` ref and `die`s
 on anything else. Its digest-`die` branch must remain reachable — that is what its T3/T4
 cases pin.
@@ -83,8 +83,8 @@ Applied in this sweep:
 
 | Artifact | Verdict | Why |
 |---|---|---|
-| `host-scripts-coherence-preflight.sh` + test | **Retained** | Named in the `host_creates` HALT chain, executable today. |
-| `resolve-web1-known-good-tag.sh` + test | **Retained** | The `-replace` arm of the same chain (for a *running* web-1 its `/health .version` source exists). Note the record correction: it had **two** callers, not one — `apply-web-platform-infra.yml` and `deploy-status-fanout-verify.sh` — both deleted here. |
+| `host-image-coherence-preflight.sh` + test | **Retained** | Named in the `host_creates` HALT chain, executable today. |
+| `resolve-web1-known-good-tag.sh` + test | **Retained** | Both of its former runtime callers (`apply-web-platform-infra.yml`'s recreate job and `deploy-status-fanout-verify.sh`) were deleted here, so at review it was momentarily callerless — which would have FAILED the retention rule below. It is retained because it is now **named in an executable operator procedure**: `runbooks/web-host-birth.md` step 1 uses it to pin web-1's known-good running version instead of mutable `:latest`. Retention rule satisfied by wiring, not by exception. |
 | `deploy-status-fanout-verify.{sh,test.sh}` | **Deleted** | No procedure names it; both callers gone; its `ROSTER_COUNT -ne 2` invariant is falsified by the retire independently. Design record below. |
 | `lb-weight-gate.{sh,test.sh}` | **Deleted** | No procedure names it and its subject — a second origin to weight — no longer exists. Design record below. |
 

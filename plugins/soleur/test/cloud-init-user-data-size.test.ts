@@ -524,27 +524,38 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     );
     if (!copy) throw new Error("host-scripts COPY not found in Dockerfile — parser is stale");
     const tail = dockerfile.slice(copy.index + copy[0].length);
+    // NOTE: this truncates at the next stage, so instructions in an APPENDED stage are NOT
+    // scanned. That is a known limitation, not a safety property — an earlier comment here
+    // claimed the opposite. The appended-stage case is covered by the separate assertion
+    // below that no stage after this COPY re-declares FROM on the runner.
     const nextStage = /^FROM\s/m.exec(tail);
     return nextStage ? tail.slice(0, nextStage.index) : tail;
   }
 
-  // Logical RUN instructions in a Dockerfile region, one per array entry.
+  // Logical mutating instructions (RUN/COPY/ADD) in a Dockerfile region, one per entry.
+  //
+  // COPY and ADD are included, not just RUN: a later `COPY --from=builder <x> /opt/soleur/
+  // host-scripts/<x>` overwrites a baked file just as effectively as a `sed -i`, and is
+  // arguably the likelier way an engineer would patch a script. It is also invisible to the
+  // list-parity test above, because dockerfileBakedSet() matches ONLY the one multi-line
+  // COPY — so the two LISTS still agree perfectly while the CONTENT has diverged. Measured
+  // at review: a RUN-only candidate set let three distinct mutation shapes through green.
   function runInstructions(region: string): string[] {
     const src = region
       .split("\n")
       // Drop full-line `#` comments FIRST. A comment can never be an instruction, and
-      // prose inside one must not be able to satisfy the `^RUN` anchor below.
+      // prose inside one must not be able to satisfy the instruction anchor below.
       .filter((line) => !/^\s*#/.test(line))
       .join("\n");
     // Fold `\` continuations so a multi-line RUN is ONE logical instruction (otherwise a
-    // mutation hidden on a continuation line would never be seen by the `^RUN` anchor).
+    // mutation hidden on a continuation line would never be seen by the anchor).
     return src
       .replace(/\\\n/g, " ")
       .split("\n")
       .map((line) => line.trim())
-      // Anchor on the RUN *instruction keyword at line start* — Dockerfile syntax a
+      // Anchor on the instruction keyword at line start — Dockerfile syntax a
       // comment or a prose mention of the word "RUN" structurally cannot produce.
-      .filter((line) => /^RUN\s/.test(line));
+      .filter((line) => /^(RUN|COPY|ADD)\s/.test(line));
   }
 
   test("both sides list the same files, incl. hooks.json.tmpl + bootstrap + journald", () => {
@@ -584,9 +595,18 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // this assertion silently stops guarding anything.
     expect(runs.length).toBeGreaterThan(0);
 
-    // Candidates: any RUN naming the baked dir, or /opt/soleur which CONTAINS it (a
-    // recursive op on the parent reaches the baked files just as directly).
-    const touching = runs.filter((r) => r.includes("/opt/soleur"));
+    // Candidates: any instruction naming the baked dir, or /opt/soleur which CONTAINS it
+    // (a recursive op on the parent reaches the baked files just as directly).
+    //
+    // TAINT: selecting on the literal path alone is too narrow — `WORKDIR /opt/soleur/
+    // host-scripts` followed by a path-relative `RUN sed -i ... soleur-host-bootstrap.sh`,
+    // or `ENV SD=/opt/soleur` followed by `RUN sed -i ... $SD/host-scripts/...`, mutates
+    // the same bytes without ever spelling the path on the mutating line. Both survived
+    // green when measured at review. So if any WORKDIR/ENV in this region names the baked
+    // path, every following instruction becomes a candidate and must justify itself.
+    const region = dockerfileRunnerTailAfterBakedCopy();
+    const tainted = /^\s*(WORKDIR|ENV)\s+[^\n]*\/opt\/soleur/m.test(region);
+    const touching = tainted ? runs : runs.filter((r) => r.includes("/opt/soleur"));
 
     // ALLOW-LIST — ownership only, and only this exact form. `chown -R 1001:1001
     // /opt/soleur` is safe because it changes the owner uid/gid recorded in the layer's

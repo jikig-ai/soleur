@@ -56,6 +56,19 @@ echo "$PINNED"
 `crane` is not preinstalled: `go install github.com/google/go-containerregistry/cmd/crane@latest`.
 Any OCI digest reader works.
 
+**Rebuilding a host while the current web-1 is still serving?** Prefer its *known-good* running
+version over mutable `:latest` — `:latest` may have advanced past what is proven good in prod:
+
+```bash
+VERSION=$(curl -sS https://app.soleur.ai/health | jq -r .version)
+TAG=$(bash apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh "$VERSION")
+DIGEST=$(crane digest "ghcr.io/jikig-ai/soleur-web-platform:${TAG}")
+PINNED="ghcr.io/jikig-ai/soleur-web-platform@${DIGEST}"
+```
+
+That resolver applies a strict three-part-semver guard and refuses anything else, so a
+`:latest`-shaped or empty `.version` fails loudly rather than pinning garbage.
+
 ### 2. Verify image/apply coherence — MANDATORY
 
 ```bash

@@ -513,7 +513,8 @@ t_host_creates_parse_failure_fails_closed() {
 
 # ---------------------------------------------------------------------------
 # T40-T49 — the web-2 RETIRE gate (#6538). Graded against web2_retire_allow (5
-# addresses), NOT web2_allow (3, the recreate set).
+# addresses). The 3-address recreate allow-set it used to contrast against was
+# deleted with the dispatch sweep (#6575).
 #
 # THE NO-STRAND INVARIANT (T43). B6.2's local plan destroys 4 web-2 resources +
 # updates hcloud_firewall_attachment.web. Terraform applies sequentially and can
@@ -687,7 +688,7 @@ t_web2_retire_volume_forget_aborts() {
   fi
 }
 
-# T50 — SUBSTRING-COLLISION: an otherwise-perfect retire plan that ALSO touches the
+# T57 — SUBSTRING-COLLISION: an otherwise-perfect retire plan that ALSO touches the
 # bare `hcloud_server.web` (no for_each key) must ABORT. This pins the allow-set
 # membership test to EXACT equality via IN(.address; web2_retire_allow[]): an
 # `inside`/array-`contains` form does SUBSTRING matching, so the bare address would
@@ -702,9 +703,9 @@ t_web2_retire_volume_forget_aborts() {
 t_web2_retire_substring_collision_aborts() {
   local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-substring-collision.json")
   if [[ "$out" == "1:1:1:1:1:1:0:1" ]]; then
-    _report "T50 bare hcloud_server.web ABORTS (IN() exact-equality, not substring)" ok
+    _report "T57 bare hcloud_server.web ABORTS (IN() exact-equality, not substring)" ok
   else
-    _report "T50 bare hcloud_server.web ABORTS" fail "got '$out' want '1:1:1:1:1:1:0:1'"
+    _report "T57 bare hcloud_server.web ABORTS" fail "got '$out' want '1:1:1:1:1:1:0:1'"
   fi
 }
 

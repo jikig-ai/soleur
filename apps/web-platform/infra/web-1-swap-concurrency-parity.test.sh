@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 #
-# Drift guard: the FIVE GitHub Actions jobs that MUTATE web-1 (four swap the web-1
+# Drift guard: the THREE GitHub Actions jobs that MUTATE web-1 (two swap the web-1
 # container via `command: deploy web-platform …` → /hooks/deploy → ci-deploy.sh; the
-# fifth, #6604, attaches the encrypted volume to web-1) MUST share ONE job-level
+# third, #6604, attaches the encrypted volume to web-1) MUST share ONE job-level
 # `web-1-swap` concurrency group so GitHub's scheduler serializes them across
 # pipelines — at most one web-1 mutation in flight at a time (#6060 item (c) /
-# FINDING 1 from #6051's review). A SIXTH member — the #6604 freeze workflow — carries
+# FINDING 1 from #6051's review). A FOURTH member — the #6604 freeze workflow — carries
 # the group at WORKFLOW scope (it is a dedicated dispatch, not a job in a shared
 # workflow), asserted separately below.
 #
-# The five job-level members (allow-list — an explicit named list so a DELIBERATE
+# reason: 5 job-level members -> 3. The `warm_standby` and `web_2_recreate` members were
+# DELETED with the web-2 dispatch sweep (#6575, 2026-07-20).
+#
+# The three job-level members (allow-list — an explicit named list so a DELIBERATE
 # future member is a visible allow-list edit, while a silently-dropped copy OR an
 # accidentally-enrolled job both fail loud):
 #   1. web-platform-release.yml        job `deploy`                 (tagged-release deploy)
-#   4. apply-deploy-pipeline-fix.yml   job `apply`                  (POSTs deploy at :607)
-#   5. apply-web-platform-infra.yml    job `workspaces_luks_cutover` (#6604 attaches the LUKS volume to web-1)
+#   2. apply-deploy-pipeline-fix.yml   job `apply`                  (POSTs deploy at :607)
+#   3. apply-web-platform-infra.yml    job `workspaces_luks_cutover` (#6604 attaches the LUKS volume to web-1)
 # Plus the WORKFLOW-level member: workspaces-luks-cutover.yml (#6604 freeze — stops/repoints web-1's /mnt/data).
 #
 # NOT a member (negative assertion): the routine `apply` job in
@@ -26,7 +29,7 @@
 #   - each named member carries a job-level `concurrency.group: web-1-swap` with
 #     `cancel-in-progress: false` (a killed in-progress swap would widen a 521 window);
 #   - the TOTAL count of `group: web-1-swap` across the three workflows == 3
-#     (allow-list length — NOT head -1, NOT >= 4: a dropped OR an unlisted member fails);
+#     (allow-list length — NOT head -1, NOT >= 3: a dropped OR an unlisted member fails);
 #   - the workflow-level `terraform-apply-web-platform-host` R2 serializer literal is
 #     still present in BOTH apply-web-platform-infra.yml AND apply-deploy-pipeline-fix.yml
 #     (job-level web-1-swap coexists with, does not replace, the R2 state serializer);
@@ -94,7 +97,7 @@ assert_member() {
   fi
 }
 
-# --- The four named members (allow-list) ---
+# --- The three named members (allow-list) ---
 assert_member "$RELEASE_WF"      "deploy"                 "release-deploy"
 assert_member "$PIPELINE_FIX_WF" "apply"                  "pipeline-fix-apply"
 assert_member "$APPLY_INFRA_WF"  "workspaces_luks_cutover" "workspaces-luks-cutover"

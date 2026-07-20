@@ -287,7 +287,8 @@ grep -q "no .resource_changes" <<<"$out" && pass || fail "T12b: a non-plan docum
 # T12c — .resource_changes present but NOT an array => jq runtime error (exit 5).
 # A bare `pairs=$(jq …)` + 2>/dev/null swallows that into an empty extraction, which the
 # emptiness branch reads as "nothing to preflight" => rc 0 => the destroy proceeds unguarded.
-# Mirrors the sibling's own guard (web2-recreate-gate.sh:51-54).
+# Mirrors the guard shape the now-deleted web2-recreate-gate.sh used (#6575): assert the
+# jq key parsed as a non-negative integer BEFORE comparing, so a missing key fails CLOSED.
 echo '{"resource_changes":"hello"}' > "$TMP/scalar.json"
 out=$(stock_preflight_gate "$TMP/scalar.json" 2>&1); rc=$?
 [[ "$rc" -eq 1 ]] && pass || fail "T12c: a non-array .resource_changes must fail closed (jq exits 5), got $rc"

@@ -371,7 +371,7 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > **[Scope corrected 2026-07-20, #6575 — the hazard survives; only its scope statement changes.]**
 > This bullet previously said the coherence preflight covered **only** the web-2-recreate dispatch.
 > That scoping is gone with the dispatch job. The verifier is retained, renamed host-agnostic
-> (`host-scripts-coherence-preflight.sh`, comparison logic byte-unchanged), and is reachable by any
+> (`host-image-coherence-preflight.sh`, comparison logic byte-unchanged), and is reachable by any
 > host through a documented operator procedure: the `host_creates` HALT runbook now carries the
 > complete `crane digest` → preflight → `terraform apply -var image_name=<pinned>` chain. So the
 > preflight is no longer web-2-scoped and no longer callerless.

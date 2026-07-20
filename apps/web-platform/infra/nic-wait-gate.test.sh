@@ -366,7 +366,7 @@ assert "the call site hardcodes no 10.0.1.x literal" \
 # exact catastrophe this gate exists to prevent, arriving through the delivery channel
 # rather than the code.
 #
-# The coherence guard (host-scripts-coherence-preflight.sh; renamed from
+# The coherence guard (host-image-coherence-preflight.sh; renamed from
 # web2-recreate-preflight.sh in #6575, comparison logic byte-unchanged) is now HOST-AGNOSTIC and
 # reachable through a documented operator procedure — the host_creates HALT runbook carries the
 # full `crane digest` -> preflight -> `apply -var image_name=<pinned>` chain. What did NOT change
@@ -403,7 +403,7 @@ assert "the call site hardcodes no 10.0.1.x literal" \
 # the deletion having happened.
 #
 # Still not asserted here, for the original reason: this gate does not pin any dispatch job's
-# guard set either way. The surviving HALTs are asserted by T51a-e (structure/order) and T52-T54
+# guard set either way. The surviving HALTs are asserted by T54 (the apply job) and T56 (deploy-pipeline-fix)
 # (BEHAVIOUR — the guard is extracted and executed against real tfplan fixtures,
 # which is what pins `exit 1`, the jq key, and the fail-closed arm) in
 # tests/scripts/test-destroy-guard-counter-web-platform.sh, which lives in the REQUIRED test

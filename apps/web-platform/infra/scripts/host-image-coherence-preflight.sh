@@ -104,7 +104,7 @@ fi
 
 # 5. The load-bearing comparison.
 if [[ "$GOT" != "$WANT" ]]; then
-  die "COHERENCE MISMATCH: the pinned digest ${DIGEST} bakes host-scripts hashing to ${GOT}, but the applied local.host_scripts_content_hash is ${WANT}. Recreating web-2 on this image would RE-ABORT at cloud-init stage=verify. The checkout has drifted from web-1's running image — redeploy web-1 to current main first, then re-dispatch. NOT proceeding to -replace."
+  die "COHERENCE MISMATCH: the pinned digest ${DIGEST} bakes host-scripts hashing to ${GOT}, but the applied local.host_scripts_content_hash is ${WANT}. Creating or replacing a host on this image would RE-ABORT at cloud-init stage=verify, leaving it dark (runcmd is once-per-instance; no reboot repairs it). The checkout has drifted from the pinned image — either pin an older digest whose baked scripts match this tree, or wait for the image rebuild that matches this commit (web-platform-release.yml rebuilds on every merge to main). NOT proceeding."
 fi
 
 echo "host-image-coherence-preflight: COHERENT — pinned ${DIGEST} baked host-scripts hash == applied ${WANT}. Safe to -replace."

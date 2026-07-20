@@ -7,17 +7,23 @@
 # this roster today and this guard covers it:
 #   1. web-platform-release.yml — the tagged-release deploy fan-out (×1).
 #
-# reason: 3 copies -> 1. The two apply-web-platform-infra.yml copies lived in the
-# `warm_standby` and `web_2_recreate` jobs, both DELETED with the web-2 dispatch
-# sweep (#6575, 2026-07-20). The apply-workflow operand is dropped rather than
-# asserted at 0: `check_all_copies "$APPLY_WORKFLOW" ... 0` would pass vacuously
-# whether the copies were deleted or the extractor silently broke.
+# reason: the two apply-web-platform-infra.yml copies lived in the `warm_standby` and
+# `web_2_recreate` jobs, both DELETED with the web-2 dispatch sweep (#6575, 2026-07-20).
+# The operand is KEPT at floor 0 rather than dropped.
 #
-# The multi-copy machinery is RETAINED deliberately. It exists because an earlier
-# version extracted only the FIRST occurrence per file (`head -1`) and would have
-# shipped a second copy un-guarded; that hazard returns the moment any workflow
-# grows a second WEB_HOST_PRIVATE_IPS. Add the operand back — do not re-introduce
-# head -1.
+# Keeping it at 0 was initially rejected as "vacuous", which was wrong and was measured
+# wrong at review: `check_all_copies`'s third argument is a `-lt` FLOOR, not an equality
+# check, and the per-copy content-comparison loop runs regardless of it. So floor 0 costs
+# nothing today and keeps the roster check LIVE over any copy that ever reappears in that
+# file. Measured: adding a job with a wrong roster (10.0.1.10,10.0.1.99) is INVISIBLE with
+# the operand dropped and FAILS LOUD with it at 0.
+#
+# The extractor-break scenario that motivated dropping it is already covered by operand 2
+# (floor 1) — breaking the IP regex fails that operand loudly.
+#
+# The multi-copy machinery is RETAINED deliberately: an earlier version extracted only the
+# FIRST occurrence per file (`head -1`) and would have shipped a second copy un-guarded.
+# Do not re-introduce head -1.
 # Extracts EACH copy by shape and compares its sorted set to var.web_hosts.
 #
 # Run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
@@ -28,6 +34,7 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VARS_TF="${DIR}/variables.tf"
 WORKFLOW="${DIR}/../../../.github/workflows/web-platform-release.yml"
+APPLY_WORKFLOW="${DIR}/../../../.github/workflows/apply-web-platform-infra.yml"
 
 passes=0
 fails=0
@@ -98,6 +105,9 @@ check_all_copies() {
 
 # Operand 2: web-platform-release.yml — 1 copy (the tagged-release deploy fan-out).
 check_all_copies "$WORKFLOW" "release-workflow" 1
+# Operand 3: apply-web-platform-infra.yml — 0 copies today (both deleted with #6575), but the
+# content check stays armed for any copy that reappears. See the reason block in the header.
+check_all_copies "$APPLY_WORKFLOW" "apply-workflow" 0
 
 total=$((passes + fails))
 echo "web-hosts-fanout-parity: ${passes} passed, ${fails} failed (${total} assertions)"

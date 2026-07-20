@@ -412,6 +412,40 @@ function stripJob(workflowText: string, jobId: string): string {
  * still binds: strip EVERY dispatch job at EVERY site that builds the base-address
  * coverage set, and re-check this list whenever a dispatch job is added.
  */
+/**
+ * Every job name stripDispatchJobs() strips MUST exist in the workflow.
+ *
+ * `stripJob` silently no-ops on a job that is not present, so the strip list is unverified
+ * in both directions: a deleted job's strip lingers forever (measured at review — re-adding
+ * the deleted warm_standby/web_2_recreate strips left the suite fully green), and a typo
+ * disables a strip that matters. This pins the list to reality so it cannot accrete dead
+ * entries, which is exactly the drift #6575 had to clean up by hand.
+ */
+describe("stripDispatchJobs list is pinned to real jobs", () => {
+  test("every stripped job name exists as a top-level job in the workflow", () => {
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    // ANCHORED AT COLUMN 0 (`^...` + `m`). Without the anchor this SELF-MATCHES: the first
+    // occurrence of the function name in this file's own source is inside this very regex
+    // literal (indented), so the extraction captured this test's own strings ("utf8", "y",
+    // "m") instead of the job names. The real declaration is the only one at column 0.
+    const fnSrc = /^function stripDispatchJobs[\s\S]*?\n}/m.exec(
+      readFileSync(__filename, "utf8"),
+    );
+    expect(fnSrc).not.toBeNull();
+    // Every quoted job name in the function body. Deliberately NOT a `stripJob(x, "y")`
+    // shape match: the calls nest across lines and the first argument is itself a call
+    // containing commas, so an argument-position regex silently extracts nothing — which
+    // the non-vacuity floor below caught when this test was written.
+    const stripped = [...fnSrc![0].matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]);
+    // Non-vacuity floor: the extraction must actually find the names.
+    expect(stripped.length).toBeGreaterThan(0);
+    const missing = stripped.filter(
+      (job) => !new RegExp(`^  ${job}:`, "m").test(wf),
+    );
+    expect(missing).toEqual([]);
+  });
+});
+
 function stripDispatchJobs(workflowText: string): string {
   // #6178: inngest_host is a dispatch-only job (apply_target=inngest-host) that -targets the
   // net-new singleton host resources — strip it so its -targets do NOT broaden the per-merge
