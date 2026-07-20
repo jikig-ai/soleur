@@ -333,7 +333,7 @@ punishes correct changes — a tracking issue, not a longer instruction manual.
 > **STATUS: CANCELLED — 2026-07-20, by operator decision.** Superseded the earlier HOLD. The
 > authoritative ruling is in
 > `knowledge-base/project/specs/feat-one-shot-6617-inngest-liveness-marker-registry-probe/decision-challenges.md`
-> § "Follow-on ruling — 2026-07-20". The design below is retained as the record of what was
+> § "Follow-on ruling — 2026-07-20: PR C is CANCELLED". The design below is retained as the record of what was
 > designed; it is not live work.
 
 ## C — Files to Edit

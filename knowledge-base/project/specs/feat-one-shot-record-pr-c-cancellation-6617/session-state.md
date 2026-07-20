@@ -9,10 +9,10 @@ None.
 
 ### Decisions
 - **ADR-100 untouched.** Zero hits for `sdk_url` / `backend_is_prod` / `registry_count`, and no forward-looking language tied to the tracking issue. Enforced as a no-op by AC4 rather than left implicit.
-- **Scope grew from 4 targets to 5 files + 2 reconciliations**, each justified: the original plan file asserts `PR C is HELD … when C ships` at `:591–:593` (a now-false instruction), and `tasks.md` B4.2.b/B4.3 plus `session-state.md` § Outstanding contradict the rationale's own evidence.
+- **Scope grew from 4 targets to 5 files + 2 reconciliations**, each justified: the original plan file asserts `PR C is HELD … when C ships` in its `# Post-C contract` comment (a now-false instruction), and `tasks.md` B4.2.b/B4.3 plus `session-state.md` § Outstanding contradict the rationale's own evidence.
 - **Cancellation marked at every phase heading, not just a banner.** C0–C6 each get `— CANCELLED (2026-07-20)` so a reader landing on `### Phase C3` sees it without scrolling. `[~]` was deliberately *not* reused — it already means "partial" in that file.
 - **Single-source rationale.** The ruling lives in `decision-challenges.md`, the narrative in `session-state.md`, short pointers in `tasks.md` and the plan file. No triplication.
-- **AC4 is load-bearing.** Two spec dirs differ only by suffix and both end in `6617`; every other AC passes green against the wrong one. AC4's exact six-path assertion is the only check that catches it.
+- **AC4 is load-bearing.** Two spec dirs differ only by suffix and both end in `6617`; every other AC passes green against the wrong one. AC4's exact seven-path assertion is the only check that catches it.
 - **AC block cut 13 → 10** after the simplicity pass flagged AC ceremony as this change's real failure mode.
 
 ### Corrections to the invoking brief (found during planning)

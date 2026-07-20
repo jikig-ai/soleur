@@ -26,7 +26,7 @@ warrant 40 agents, and the simplicity pass explicitly flagged AC ceremony as the
 
 1. **Closed the Sharp-Edge-1 hole.** Every AC originally referenced a bare `<tasks.md>` placeholder
    that resolves equally well against the *wrong* spec directory — the plan named path-confusion as
-   the top failure mode and then failed to check for it. AC4 (exact six-path changed-file set) now
+   the top failure mode and then failed to check for it. AC4 (exact seven-path changed-file set) now
    catches it, and subsumes the former ADR-100 and outside-`knowledge-base/` ACs.
 2. **Found a second stale claim.** `tasks.md` B4.3 ends *"the doublefire verdict remains unrecorded
    pending B4.2.b"* — falsified by the same run that closes B4.2.b. Now Phase 1.5.
@@ -79,7 +79,7 @@ Every premise cited in the task brief was verified against the repo and GitHub b
 | "PR A and PR B were implemented and **merged**" | **True in substance, misleading in shape.** They did not merge as two PRs — both landed in **one** PR, **#6748**, commit `1d4208f44`, merged 2026-07-20T13:22:59Z. That PR also carried a **third** piece the brief omits: making `op=verify`'s exactly-once check capable of a verdict. #6295 is CLOSED (by #6748). | Write "PR A + PR B merged together as #6748" — never "PR A and PR B were merged", which sends a future reader hunting for two merge commits that do not exist. Note the third piece. |
 | Run `29748606817` = doublefire, ZERO runs | **CONFIRMED**, with a detail that strengthens it: dispatched from **`main`** (sha `898de92e4`) *after* #6748 merged — i.e. against the shipped fix, not the branch. Run `29729509511` (registry) was dispatched pre-merge from the feature branch (sha `883a70e54`). | Record the verbatim annotation and the fact the doublefire read was taken against merged `main`. See Phase 2.2. |
 | doublefire probe returned ZERO runs (run 29748606817) | **Supersedes three places in the artifacts.** `tasks.md` B4.2.b is `[ ]` "blocked until post-merge delivery"; `tasks.md` B4.3 ends "the doublefire verdict **remains unrecorded** pending B4.2.b"; `session-state.md` § Outstanding says the reading "is **not yet taken**". | **Scope addition (required for coherence).** Close out B4.2.b, reconcile B4.3, supersede the Outstanding block. See "Why B4.2.b is in scope" below. |
-| PR C is HELD | The plan file (`…-registry-probe-op-plan.md:591`) asserts `PR C is HELD … promote it into the block above **when C ships**`. | **Fifth target.** Two surgical status corrections. See "Scope note: the plan file is a fifth target". |
+| PR C is HELD | The plan file (`…-registry-probe-op-plan.md`, at the `# Post-C contract` comment) asserts `PR C is HELD … promote it into the block above **when C ships**`. | **Fifth target.** Two surgical status corrections. See "Scope note: the plan file is a fifth target". |
 
 ### Why B4.2.b is in scope
 
@@ -104,11 +104,11 @@ sees a live caveat sitting above a conclusion that appears to have bypassed it.
 ### Scope note: the plan file is a fifth target
 
 The brief enumerates four targets and does not include the plan file. It is added because the plan
-file makes a **live status assertion the cancellation falsifies**: `:591` reads *"PR C is HELD …
+file makes a **live status assertion the cancellation falsifies**: the `# Post-C contract` comment reads *"PR C is HELD …
 promote it into the block above **when C ships**"* — an instruction to a future reader to do
 something that will now never happen.
 
-Two surgical corrections only (a status line at the `# PR C` heading, and the `:591` comment). PR
+Two surgical corrections only (a status line at the `# PR C` heading, and the `# Post-C contract` comment). PR
 C's design body is **not** rewritten or deleted. This corrects a false status; it does not
 re-document the feature.
 
@@ -199,7 +199,7 @@ All paths are relative to the repo root. **Zero files outside `knowledge-base/` 
 | `knowledge-base/project/specs/feat-one-shot-6617-inngest-liveness-marker-registry-probe/tasks.md` | Cancellation banner at `## PR C`; `— CANCELLED (2026-07-20)` on each of the seven `### Phase C0–C6` headings; close out `B4.2` / `B4.2.b` with run `29748606817` |
 | `…/feat-one-shot-6617-inngest-liveness-marker-registry-probe/session-state.md` | Append a closing entry; add a supersede pointer to the `### Outstanding` block |
 | `…/feat-one-shot-6617-inngest-liveness-marker-registry-probe/decision-challenges.md` | **Append** a follow-on ruling under the existing `## Operator Ruling — 2026-07-20`. Do not rewrite the original |
-| `knowledge-base/project/plans/2026-07-20-feat-inngest-liveness-marker-discriminators-and-registry-probe-op-plan.md` | Two surgical status corrections — the `# PR C` heading and the stale `when C ships` comment at `:591` |
+| `knowledge-base/project/plans/2026-07-20-feat-inngest-liveness-marker-discriminators-and-registry-probe-op-plan.md` | Two surgical status corrections — the `# PR C` heading and the stale `when C ships` text in the `# Post-C contract` comment |
 | `knowledge-base/engineering/architecture/decisions/ADR-100-…md` | **NO CHANGE.** Verified: does not reference the three fields. AC7 asserts an empty diff |
 
 **Not to be touched:** `apps/web-platform/infra/**`, `.github/workflows/**`, any `*.tf`, and the
@@ -348,7 +348,7 @@ Do **not** triplicate the rationale. Each artifact has one job:
 
 - [ ] 4.1 Add a one-line status note under `# PR C — marker discriminators + delivery` (`:331`)
       marking it CANCELLED (2026-07-20, operator) with a pointer to `decision-challenges.md`.
-- [ ] 4.2 Correct the stale comment at **`:591–:593`** — it is a **three-line** YAML comment, not one
+- [ ] 4.2 Correct the stale `# Post-C contract` comment — it is a **three-line** YAML comment, not one
       line (verified; the file is 803 lines):
       ```
       # Post-C contract (PR C is HELD per the 2026-07-20 operator ruling — retained
@@ -428,9 +428,39 @@ Do **not** triplicate the rationale. Each artifact has one job:
 - **AC6** — `tasks.md`: `B4.2.b` is `[x]`, the file contains `29748606817`, and `B4.3` no longer
   asserts the doublefire verdict is unrecorded:
   `grep -c 'remains unrecorded pending B4.2.b' `knowledge-base/project/specs/feat-one-shot-6617-inngest-liveness-marker-registry-probe/tasks.md`` **== 0**.
-- **AC7** — **AC-NOBODY preserved.** No rendered connection string or project-ref host anywhere in
-  the diff: `git diff main...HEAD | grep -ciE 'postgres(ql)?://|\.supabase\.co'` **== 0**.
-  *(Naming the variable `INNGEST_POSTGRES_URI` is permitted; rendering its value is not.)*
+- **AC7** — **AC-NOBODY preserved.** No rendered connection string **and no bare project ref**
+  anywhere in the diff. *(Naming the variable `INNGEST_POSTGRES_URI` is permitted; rendering its
+  value is not.)* Three limbs, all **== 0**:
+  ```sh
+  # (a) DSN / host forms
+  git diff origin/main...HEAD | grep -ciE 'postgres(ql)?://|\.supabase\.co'
+  # (b) credential shape user:secret@host (a bare '://' over-matches credential-less endpoints)
+  git diff origin/main...HEAD | grep -cE '[A-Za-z0-9._%+-]+:[^[:space:]"@/]+@[A-Za-z0-9.-]+'
+  # (c) the BARE prod ref, sourced from the flip-guard so the literal never enters this doc
+  MARKER=$(grep -oE 'INNGEST_PROD_URI_MARKER:-[a-z]+' \
+    apps/web-platform/infra/inngest-server-flip-guard.sh | head -1 | cut -d- -f2- | tr -d ':')
+  test -n "$MARKER" || { echo "AC7(c) EXTRACTION FAILED — treat as RED, not clean"; exit 1; }
+  git diff origin/main...HEAD | grep -cF "$MARKER"
+  ```
+  **The `test -n` guard is not boilerplate — the first draft of limb (c) was vacuous.** It used
+  `sed -n 's/.*PROD_MARKER:-\([a-z]*\)}.*/\1/p'`, whose unescaped `}` after `*` made the
+  expression fail to match; the extraction returned the empty string, and `grep -cF ""` matches
+  every line. Caught only by printing the extracted length before trusting the result. Assert the
+  extraction landed; treat an empty marker as RED, never as clean.
+
+  **Limb (c) is the one that matters and the one the original AC7 missed.** `PROD_MARKER` is
+  matched in `inngest-server-flip-guard.sh` as a **bare substring** — no scheme, no
+  `.supabase.co` suffix — so the ref can be disclosed in a form that passes limb (a) green. The
+  AC would then report clean on precisely the disclosure its own prose forbids: the assertion's
+  scope was narrower than the property claimed (the repo's prefix-scoped-purity-test defect
+  class). The `test -n "$MARKER"` guard is load-bearing — a failed `sed` yields an empty pattern,
+  and `grep -cF ""` matches every line, so an unguarded limb (c) fails loudly rather than
+  vacuously passing. Sourcing the marker from the script rather than hardcoding it is also
+  required: writing the literal into this plan would itself violate AC-NOBODY.
+  Note all three limbs use `origin/main...HEAD`, not `main...HEAD` — a stale local `main` silently
+  narrows the compared range, and this check's green result is load-bearing for a security
+  property.
+  *(Found by security-sentinel at review; fixed inline per the cost-of-filing gate.)*
 - **AC8** — **No closing keyword bound to #6617** in commit messages **or** the PR body:
   `git log main..HEAD --format=%B | grep -ciE '(clos(e|es|ed)|fix(e[sd])?|resolv(e|es|ed))[[:space:]]+#6617'`
   **== 0**, and the same regex over the PR body **== 0** before marking ready. `Ref #6617` **is**

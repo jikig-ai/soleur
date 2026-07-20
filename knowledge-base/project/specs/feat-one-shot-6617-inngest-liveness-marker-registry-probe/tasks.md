@@ -108,8 +108,11 @@ Three PRs, ordered A → B → C. Do not bundle.
 > **CANCELLED — 2026-07-20, by operator decision.**
 > PR C is cancelled outright. It was previously HELD by the operator ruling of the same date;
 > that hold is now superseded by cancellation. The authoritative ruling and its full rationale
-> live in `decision-challenges.md` § "Operator Ruling — 2026-07-20"; the session narrative is in
-> `session-state.md`.
+> live in `decision-challenges.md` § "Follow-on ruling — 2026-07-20: PR C is CANCELLED" (the
+> parent § "Operator Ruling — 2026-07-20" above it still reads "PR C: HELD, not cancelled" — that
+> is the superseded text). The session narrative is § "Closing entry (2026-07-20): PR C cancelled"
+> in `knowledge-base/project/specs/feat-one-shot-6617-inngest-liveness-marker-registry-probe/session-state.md`
+> — note the full path: a sibling spec dir whose name also ends in `6617` has a same-named file.
 >
 > In short: PR C's discriminators exist to distinguish states of a **dark** host, so their useful
 > life is bounded by the pre-cutover window — and they cannot be delivered inside that window at
@@ -184,12 +187,12 @@ Three PRs, ordered A → B → C. Do not bundle.
       **and** #6348 unmerged (corroborating). If merged → **STOP**, re-plan
 - [ ] C5.2 Confirm the flip-FSM tolerates a cold state slot
       (`/var/lock/inngest-cutover-flip.state` dies with the root disk)
-- [ ] C5.3 `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason="…"`
+- [ ] C5.3 **CANCELLED — DO NOT DISPATCH.** `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason="…"`
 - [ ] C5.4 Verify `hcloud_volume.inngest_redis` re-attached
 - [ ] C5.5 Verify delivery: probe row expected ~90 s post-boot; **absence at T+10 min is a real
       failure**; query **with the archive arm**; on absence read the Vector-independent
       `inngest-boot-phone-home.sh` channel
-- [ ] C5.6 On failure: re-pin to the C0.4 digest and re-dispatch
+- [ ] C5.6 **CANCELLED — DO NOT DISPATCH.** On failure: re-pin to the C0.4 digest and re-dispatch
 - [ ] C5.7 Enroll the **delivery** gate in `scripts/followthroughs/` + `follow-through` label
 - [ ] C5.8 File the root-debt issue: no in-place redelivery channel for the dedicated host
       (the web host has one via `ci-deploy.sh:2758-2891`)

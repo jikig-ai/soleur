@@ -40,6 +40,14 @@
 
 ## Scope Ruling (operator, 2026-07-20)
 
+> **SUPERSEDED 2026-07-20 — PR C is now CANCELLED, not HELD.** The "separate decision" this block
+> awaits has been made: see § "Closing entry (2026-07-20): PR C cancelled" at the end of this file,
+> and the authoritative § "Follow-on ruling — 2026-07-20: PR C is CANCELLED" in
+> `decision-challenges.md`. Two claims below are no longer live: PR C's **HELD** status (now
+> cancelled outright), and the #6348 stranding race (**dissolved** — cancelling PR C means there is
+> no undelivered PR C to strand). The block is retained verbatim as the record of the ruling as it
+> stood when written.
+
 Operator was presented UC-1 (three-PR split) and UC-2 (priority reorder) and ruled:
 
 **Ship PR A + PR B now. PR C is HELD pending a separate decision.**
@@ -136,7 +144,7 @@ is now settled on four independent measures, **none of which required the host r
 |---|---|---|---|
 | 1 | doublefire probe | **ZERO runs** on the dedicated host | run 29748606817, dispatched from `main` (sha `898de92e4`) after #6748 merged |
 | 2 | registry probe | `registry_empty=true`, `function_count=0` | run 29729509511 |
-| 3 | `backend_is_prod` | **FALSE** — the dedicated host's `INNGEST_POSTGRES_URI` does not contain the prod project ref | evaluated against the `soleur-inngest/prd` Doppler config **without ever rendering the URI** (AC-NOBODY preserved) |
+| 3 | `backend_is_prod` | **no** (i.e. FALSE) — the dedicated host's `INNGEST_POSTGRES_URI` does not contain the prod project ref | evaluated against the `soleur-inngest/prd` Doppler config **without ever rendering the URI** (AC-NOBODY preserved) |
 | 4 | start-blocked | `INNGEST_CUTOVER_FLIP` is **absent** from `soleur-inngest/prd`, so the flip guard refuses any prod-URI start | corroborates #6488 |
 
 Phase C6.3's escalation branch fires on `backend_is_prod=yes` **OR** a non-empty doublefire result.
