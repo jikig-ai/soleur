@@ -346,11 +346,17 @@ call_build_request_body() {
   set +e
   out=$(
     eval "$(sed -n '/^build_request_body() {$/,/^}$/p' "$TARGET")"
-    GQL_QUERY="query { runs { id } }"
-    PAGE_SIZE=100
-    FROM_TS="2026-07-19T00:00:00Z"
-    UNTIL_TS=""
-    FUNCTION_IDS_CSV="$csv"
+    # SC2034: these five ARE consumed — by the eval'd build_request_body body
+    # above, which shellcheck cannot resolve statically. They mirror the
+    # variable set the real script establishes at :58-68.
+    # shellcheck disable=SC2034
+    {
+      GQL_QUERY="query { runs { id } }"
+      PAGE_SIZE=100
+      FROM_TS="2026-07-19T00:00:00Z"
+      UNTIL_TS=""
+      FUNCTION_IDS_CSV="$csv"
+    }
     build_request_body "" 2>&1
   )
   rc=$?
