@@ -136,6 +136,33 @@ IMPERATIVE_RES = tuple(
 # the class so a globbed workflow name (`reboot-*.yml`) is covered too.
 YAML_FILENAME_RE = re.compile(r"\b[\w.*-]+\.ya?ml\b", re.IGNORECASE)
 
+# UNAMBIGUOUS human-agency signals. A line carrying one of these is scanned RAW
+# (no filename neutralization) — otherwise an imperative that lives ONLY inside
+# a workflow filename gets eaten and a genuine human step goes silent:
+#
+#     you ssh into the web host and run the
+#     `cryptsetup-unlock-workspaces.yml` playbook by hand
+#
+# `cryptsetup` is the only imperative there; neutralizing the filename drops it
+# and the line passes. That is the false-NEGATIVE mirror of the #6771 defect,
+# and it lands on runbooks — the artifact class this sentinel exists to police.
+#
+# Bare `operator` / `you` / `founder` are deliberately ABSENT: those are the
+# weak, incidental mentions the filename false positive is actually made of
+# ("the operator's value", "paged by reboot-web-hosts.yml"). Including them
+# would re-open #6771. Measured at production scan scope, this suppression
+# costs ZERO false positives (its one corpus hit is under `/archive/`, which
+# the scanner already excludes).
+STRONG_ACTOR_RE = re.compile(
+    r"\bby hand\b"
+    r"|\bmanually\b"
+    r"|\byourself\b"
+    r"|\byour laptop\b"
+    r"|\bssh(?:\s+into|\s+onto|\s+to|\s+-i)\b"
+    r"|\b(?:founder|operator|admin|maintainer|sysadmin|engineer)\s+runs?\b",
+    re.IGNORECASE,
+)
+
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 # Region markers must be HTML comments (`<!-- lint-infra-ignore start|end … -->`).
@@ -247,7 +274,9 @@ def scan_text(text: str) -> tuple[list[int], list[str]]:
         #    minus any `*.yml`/`*.yaml` filename. Computed ONCE and fed to both
         #    predicates — substituting inside each predicate re-scans the line
         #    per regex and was measured at ~2.3x the full-scan cost.
-        scan = _neutralize_filenames(raw)
+        #    A line with an unambiguous human-agency signal keeps its filenames
+        #    (see STRONG_ACTOR_RE) so a filename can still supply the imperative.
+        scan = raw if STRONG_ACTOR_RE.search(raw) else _neutralize_filenames(raw)
         actor[i] = _has_actor(scan)
         imper[i] = _has_imperative(scan)
 

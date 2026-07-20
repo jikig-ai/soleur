@@ -503,9 +503,100 @@ EOF
 run_case "F9 tool-token-free 'FULL operator apply' STILL FAILS" 1 "$f"
 
 # ---------------------------------------------------------------------------
+# F10-F13 — THE OTHER DIRECTION. Every filename case above (F1/F3/F4/F6/F7/F8)
+# asserts exit 0, so the suite could only see neutralization being too WEAK.
+# A change making it too AGGRESSIVE — a wider char class, eating the whole
+# backtick span, dropping the strong-actor suppression — was invisible to all
+# 39 of them. That is the same monoculture that let the tool anchor through:
+# there, every positive control contained "terraform"; here, no positive
+# control contained a filename at all. Do not add a filename fixture without
+# also asking which direction it pins.
+# ---------------------------------------------------------------------------
+
+# F10 — a genuine human step whose ONLY imperative lives inside the filename.
+# `cryptsetup` is the imperative; neutralizing the filename would eat it and
+# silence a real runbook step. Shaped after
+# knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md.
+f="$(mkcase <<'EOF'
+# Workspaces LUKS cutover — recovery
+
+If the tunnel is down, you ssh into the web host and run the
+`cryptsetup-unlock-workspaces.yml` playbook by hand to reopen the volume.
+EOF
+)"
+run_case "F10 human step whose only imperative is in the filename STILL FAILS" 1 "$f"
+
+# F11 — the imperative sits inside a backtick span that ALSO carries a yaml
+# filename as a flag value. Neutralizing the span (rather than the filename
+# token) would eat `terraform apply`. F2 is nearly this fixture but its span
+# holds no `.yml`, so F2 cannot discriminate. `-var-file=prod.yml` /
+# `-f compose.yml` / `--config ansible.yaml` are ubiquitous in real runbooks.
+f="$(mkcase <<'EOF'
+# Runbook
+
+The operator runs `terraform apply -var-file=prod.yml` by hand on the box.
+EOF
+)"
+run_case "F11 filename as a flag value must not eat the imperative" 1 "$f"
+
+# F12 — MULTIPLICITY. Two workflow filenames on one line: neutralization must
+# replace every match, not just the first. A `count=1` substitution re-creates
+# the exact #6771 false positive and no other case here would notice.
+f="$(mkcase <<'EOF'
+# Plan
+
+The operator is paged by `apply-web-platform-infra.yml` and `reboot-web-hosts.yml` on drain stall.
+EOF
+)"
+run_case "F12 every filename on the line is neutralized, not just the first" 0 "$f"
+
+# F13 — EXTENSION CASE. Every other filename fixture is lowercase, so both
+# `re.IGNORECASE` on the pattern and `.lower()` in the fast path were unpinned.
+f="$(mkcase <<'EOF'
+# Plan
+
+The operator is paged by `REBOOT-WEB-HOSTS.YML` when the drain stalls.
+EOF
+)"
+run_case "F13 uppercase extension is still a filename" 0 "$f"
+
+# F14 — OVER-REACH via the char class. F10/F11 carry a STRONG actor signal, so
+# neutralization is suppressed and the char class never runs on them — they
+# cannot see a class that eats too much. This case has only a WEAK actor
+# (`operator`), so neutralization DOES run, and the imperative (`reboot`) sits
+# outside the filename. Precise neutralization removes just the filename and the
+# line still flags; a class admitting a space swallows the whole clause and the
+# line goes silent.
+#
+# The filename is deliberately UNBACKTICKED: a backtick is outside the char
+# class, so it acts as a natural left anchor and BLOCKS the greedy match. A
+# backticked variant of this fixture stays green under the over-reach mutation
+# and pins nothing.
+f="$(mkcase <<'EOF'
+# Runbook
+
+The operator must reboot web-1 before apply-web-platform-infra.yml can run.
+EOF
+)"
+run_case "F14 neutralization removes the filename and nothing else" 1 "$f"
+
+# F15 — OVER-REACH via the span. Same weak-actor (neutralization-active) path as
+# F14, but here the imperative lives INSIDE a backtick span that also carries a
+# yaml filename as a flag value. Neutralizing the span rather than the filename
+# token eats `terraform apply` and the line goes silent. F11 is the strong-actor
+# twin of this case and cannot pin it, because suppression short-circuits first.
+f="$(mkcase <<'EOF'
+# Plan
+
+Deploys are gated: the operator sees `terraform apply -var-file=prod.yml` in the CI log.
+EOF
+)"
+run_case "F15 filename inside a span is neutralized, the span is not" 1 "$f"
+
+# ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=39
+MIN_CASES=45
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
