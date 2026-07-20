@@ -190,7 +190,8 @@ merge-triggered apply rather than just this resource.
 
 - [x] 5.1 AC6: `git diff --name-only origin/main...HEAD` contains **no**
       `plugins/soleur/docs/robots.txt` — the rejected Option B must not leak back in.
-- [ ] 5.2 PR body uses **`Ref #3379`**, not `Closes`.
+- [x] 5.2 PR body uses **`Ref #3379`**, not `Closes`. Verified 2026-07-20: body line 86 is
+      `Ref #3379`; no `Closes`/`Fixes`/`Resolves` anywhere in the body.
 - [ ] 5.3 Ensure `/ship` surfaces `decision-challenges.md` into the PR body and files the
       `action-required` issue.
 - [ ] 5.4 Post-merge operator steps are AC8–AC12. **AC9 is load-bearing** — it is the only
