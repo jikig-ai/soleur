@@ -5,6 +5,29 @@ auto-applied. `ship` Phase 6 renders this into the PR body and files an `action-
 
 ---
 
+## OPERATOR RESOLUTIONS — 2026-07-20 (interactive, binding on `/work`)
+
+The run was interactive, so UC-1, UC-3 and E1 were put to the operator directly rather than
+deferred into the `action-required` queue. Resolutions:
+
+- **UC-1 — REJECTED (no split).** Ship #6734 + #6736 + #6737 as **one PR**, as originally scoped.
+  The panel's split recommendation is recorded above and not acted on.
+- **UC-2 — moot for scope,** since UC-1 keeps one PR. Still restate `## User-Brand Impact` in
+  **realized** rather than conditional voice — "if this lands broken" is the wrong tense for
+  something that already happened. Do not flip `requires_cpo_signoff`.
+- **UC-3 — ACCEPTED (measure, don't report).** Phase 3.0 becomes measurement + reconciliation.
+  Fire all 8 `MIGRATED_PROMPT` crons via the `soleur:trigger-cron` skill (no SSH), record what
+  each actually produces, and fold the evidence into **#4375**. Do **not** open a 29th
+  `action-required` issue. **AC16 changes** from "an issue exists" to "artifact evidence exists
+  per handler." Operator has given explicit assent for triggering these production crons.
+- **E1 — ACCEPTED, separate PR immediately after this one merges.** Do NOT touch the published
+  comparison pages on this branch. After this PR merges, grep-sweep the stale Polsia figure across
+  all 8 files and ship a standalone correction PR.
+- **E2 — unchanged.** Systemic `action-required` queue failure; worth its own issue, not this
+  plan's problem to solve. It is the reason UC-3 was accepted.
+
+---
+
 ## UC-1 — Split Phase 3 (#6737) into its own PR (User-Challenge)
 
 **Operator's stated direction (the default):** the one-shot pipeline scoped #6734, #6736 and #6737
