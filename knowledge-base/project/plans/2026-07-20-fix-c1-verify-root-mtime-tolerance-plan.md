@@ -97,7 +97,7 @@ depth 2 — per the 2026-07-19 learning's fixture rule):
 | after running the G4 probe **verbatim** | `.d..t...... ./` |
 | after the probe **with root-mtime save/restore** | *(clean)* |
 
-**This explains the operator's decisive observation directly.** The diff appeared identically
+**This explains the decisive observation from run 29706401639 directly.** The diff appeared identically
 on the wrong device and the right device because the probe perturbs `$MOUNT` — the **source**
 side, identical in both runs. The device was never the variable, which is why the diff could
 not discriminate device identity.

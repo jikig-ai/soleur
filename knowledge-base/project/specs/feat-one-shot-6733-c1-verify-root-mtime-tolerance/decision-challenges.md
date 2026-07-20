@@ -41,7 +41,7 @@ change that advances the root's mtime and nothing else. Reproduced verbatim:
 The pre-verify re-assert landed in `ca85c30bc` (2026-07-19 18:25 CEST, #6701) — **before**
 run 29706401639 (22:37Z), the run cited as reproducing the diff on the correct device.
 
-This also explains the operator's key observation directly: the diff appeared identically on
+This also explains the key observation from that run directly: the diff appeared identically on
 the **wrong** device and the **right** device because the probe perturbs `$MOUNT` (the SRC
 side), which is identical in both cases. The device was never the variable.
 
