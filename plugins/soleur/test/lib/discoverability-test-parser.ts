@@ -44,7 +44,13 @@ const SSH_REJECT_RE = /(^|[\t\n\r \f\v/])ssh([\t\n\r \f\v]|$)/;
 // The `/` in the leading class catches `/usr/local/bin/gh`; the trailing
 // boundary keeps `curl https://app.soleur.ai/highlights` runnable.
 const CRED_REJECT_RE =
-  /(^|[\t\n\r \f\v/])(doppler|gh|aws|supabase|stripe)([\t\n\r \f\v]|$)/;
+  /(^|[\t\n\r \f\v/])(doppler|gh|aws|supabase|stripe|hcloud|wrangler|terraform|flyctl|vercel)([\t\n\r \f\v]|$)/;
+
+// Bash resolves `"doppler"`, `\doppler` and `dopp""ler` to the same binary, but the
+// word-boundary anchors above cannot see through the quote characters. Strip them
+// from a COPY before matching — mirrors the `CMD_DEQ` substitution in SKILL.md
+// Step 10.4. Never strip from the string that would be executed.
+const dequote = (cmd: string): string => cmd.replace(/["'\\]/g, "");
 
 // Shell-active tokens that route command output / chain commands / spawn
 // subshells / expand vars. The plan author is trust-on-PR-review but the env
@@ -221,8 +227,8 @@ export function rejectReason(cmd: string): string | null {
   }
   // Ordered to mirror the runtime: Step 10.4's verb rejects run before Step
   // 10.5's shell-active-token reject.
-  if (CRED_REJECT_RE.test(cmd)) {
-    return "discoverability_test.command invokes a credentialed CLI (doppler/gh/aws/supabase/stripe); refusing to run. Check 10 executes with the operator's ambient file-backed CLI auth reachable (env -i does not scrub it — $HOME is preserved). Use an unauthenticated probe instead.";
+  if (CRED_REJECT_RE.test(dequote(cmd))) {
+    return "discoverability_test.command invokes a credentialed CLI; refusing to run. Check 10 executes with the operator's ambient file-backed CLI auth reachable (env -i does NOT scrub it — $HOME is preserved, so ~/.doppler/.doppler.yaml, ~/.ssh/id_ed25519, ~/.netrc, ~/.git-credentials, ~/.aws/credentials, ~/.config/gcloud/credentials.db and ~/.docker/config.json are all readable). Use an unauthenticated probe, or see the Check-10 credentialed-probe design issue if this probe genuinely needs credentials.";
   }
   if (SUBST_REJECT_RE.test(cmd)) {
     return "discoverability_test.command contains shell-active token (;, &&, ||, |, >, <, &, $var, $(, `, <(, >() — refusing to run. Plans must compose single-statement commands without chaining or substitution.";

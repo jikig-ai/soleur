@@ -1025,6 +1025,24 @@ describe("#6772 AC1 — rule order in the production awk", () => {
 describe("#6772 SKILL.md wiring invariants", () => {
   const skill = readFileSync(SKILL_PATH, { encoding: "utf8" });
 
+  // Scope every assertion below to the EXECUTABLE bash fence that owns the gate,
+  // never the whole file. Review proved the whole-file form vacuous: deleting the
+  // real `$'\n'` alternative from the Step 10.5 reject left the suite green,
+  // because the same literal appears in a Sharp Edge *explaining* that reject.
+  // A gate's own documentation must not be able to satisfy the gate's test
+  // (`cq-assert-anchor-not-bare-token`).
+  // Slice a WINDOW around the gate's own `if [[ ... =~` line rather than pairing
+  // ``` fences (inline backticks in prose make fence pairing unreliable) or
+  // grepping the whole file (proved vacuous — see above).
+  const gateWindow = (anchor: RegExp): string => {
+    const lines = skill.split("\n");
+    const idx = lines.findIndex((l) => anchor.test(l) && /^if \[\[ "\$CMD/.test(l));
+    expect(idx).toBeGreaterThan(-1); // anchor must resolve to the executable line
+    return lines.slice(Math.max(0, idx - 6), idx + 4).join("\n");
+  };
+  const credGate = () => gateWindow(/CMD_DEQ/);
+  const shellGate = () => gateWindow(/shell-active|\$'\\n'/);
+
   test("Step 10.4 calls the extracted awk via git rev-parse, not CLAUDE_PLUGIN_ROOT", () => {
     expect(skill).toMatch(
       /FORM_A_AWK="\$\(git rev-parse --show-toplevel\)\/plugins\/soleur\/skills\/preflight\/scripts\/parse-form-a\.awk"/,
@@ -1037,13 +1055,22 @@ describe("#6772 SKILL.md wiring invariants", () => {
   });
 
   test("Step 10.4 carries the credentialed-CLI reject (CPO condition C1)", () => {
-    expect(skill).toMatch(
-      /\(\^\|\[\[:space:\]\]\|\/\)\(doppler\|gh\|aws\|supabase\|stripe\)\(\[\[:space:\]\]\|\$\)/,
-    );
+    const g = credGate();
+    // The verb set, anchored inside the gate fence.
+    expect(g).toMatch(/\(doppler\|gh\|aws\|supabase\|stripe/);
+    // The word boundaries that keep `curl https://host/gh-pages` runnable.
+    expect(g).toMatch(/\(\^\|\[\[:space:\]\]\|\/\)/);
+    // The gate must test the DEQUOTED copy — `"doppler"` / `\doppler` /
+    // `dopp""ler` all resolve to the same binary and bypassed the raw match.
+    expect(g).toMatch(/CMD_DEQ="\$\{CMD\/\//);
+    expect(g).toMatch(/\[\[ "\$CMD_DEQ" =~ /);
   });
 
   test("Step 10.5 reject set includes newline", () => {
-    expect(skill).toMatch(/\$'\\n'/);
+    // Scoped to the gate fence: the whole-file form was satisfied by the Sharp
+    // Edge that documents this very alternative, so deleting the real one stayed
+    // green. Mutation-verified: removing `|$'\n'` from the gate now reddens this.
+    expect(shellGate()).toMatch(/\$'\\n'/);
   });
 
   test("Form A prose names all three scalar shapes", () => {

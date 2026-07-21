@@ -823,11 +823,23 @@ and therefore carries no shell-active token by construction, so Step 10.5's reje
 cannot constrain what a folded command *is* — only the verb rejects here can.
 
 ```bash
-if [[ "$CMD" =~ (^|[[:space:]]|/)(doppler|gh|aws|supabase|stripe)([[:space:]]|$) ]]; then
-  echo "FAIL: discoverability_test.command invokes a credentialed CLI (doppler/gh/aws/supabase/stripe); refusing to run. Check 10 executes with the operator's ambient file-backed CLI auth reachable (env -i does not scrub it — \$HOME is preserved). Use an unauthenticated probe instead."
+# Match against a QUOTE-STRIPPED copy: bash resolves `"doppler"`, `\doppler` and
+# `dopp""ler` to the same binary, but the word-boundary anchors below do not see
+# through the quote characters. Strip them from a COPY only — never from the string
+# that would be executed.
+CMD_DEQ="${CMD//[\"\'\\]/}"
+if [[ "$CMD_DEQ" =~ (^|[[:space:]]|/)(doppler|gh|aws|supabase|stripe|hcloud|wrangler|terraform|flyctl|vercel)([[:space:]]|$) ]]; then
+  echo "FAIL: discoverability_test.command invokes a credentialed CLI; refusing to run. Check 10 executes with the operator's ambient file-backed CLI auth reachable (env -i does NOT scrub it — \$HOME is preserved, so ~/.doppler/.doppler.yaml, ~/.ssh/id_ed25519, ~/.netrc, ~/.git-credentials, ~/.aws/credentials, ~/.config/gcloud/credentials.db and ~/.docker/config.json are all readable). Use an unauthenticated probe, or see the Check-10 credentialed-probe design issue if this probe genuinely needs credentials."
   exit 1
 fi
 ```
+
+**This is a DENYLIST, and a denylist cannot be complete against a preserved `$HOME`.**
+It does NOT catch indirect invocation — `bash scripts/foo.sh` whose body self-wraps
+`doppler run -c prd`, a `curl --data-binary @~/.doppler/.doppler.yaml` exfiltration, or any
+credentialed verb not listed. Those remain reachable and are accepted for now; the durable
+fix is an ALLOWLIST of probe verbs (curl/dig/getent/bun/bash), tracked separately. Do not
+describe this reject as though it closed the class.
 
 The `(^|[[:space:]]|/)` … `([[:space:]]|$)` boundaries are load-bearing: the `/`
 alternative catches `/usr/local/bin/gh`, and the trailing boundary keeps legitimate
