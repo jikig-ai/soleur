@@ -249,11 +249,19 @@ export async function cronEmailIngressProbeHandler({
       // fail-open trigger, a 42P01 during the deploy window, is correlated
       // across every item in the band at once.
       try {
+        // PLAIN insert, no `.select()` — the claimDedupRow idiom
+        // (app/api/webhooks/github/route.ts). Deliberately NOT the
+        // notifyInboxItem shape (`.select("id").single()`): that table has an
+        // `id uuid PRIMARY KEY` to return, this one's PK is the composite
+        // (item_id, tick_key) and it has NO `id` column at all. Asking
+        // PostgREST for a RETURNING clause naming a column that does not exist
+        // fails the whole statement with 42703 — which this guard would read
+        // as a non-23505 error, fail open, and dispatch, forever, while never
+        // writing a single marker. The guard would be inert in production and
+        // green in every test that fakes the response.
         const { error: markerError } = await sb
           .from("statutory_repin_send")
-          .insert({ item_id: row.id, tick_key: tickKey })
-          .select("id")
-          .single();
+          .insert({ item_id: row.id, tick_key: tickKey });
         if (markerError) {
           if (markerError.code === "23505") {
             // Already sent for this logical tick — a double-fire.

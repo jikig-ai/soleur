@@ -139,16 +139,74 @@ function sentProbeSubject(): string | undefined {
   return subjects[subjects.length - 1];
 }
 
+/**
+ * Column sets the REAL tables expose, so `.select()` can be validated the way
+ * PostgREST validates it.
+ *
+ * This exists because of a live defect this file originally shipped green over.
+ * The guard was written as `.insert(...).select("id").single()`, cloned from
+ * `notifyInboxItem` — but `inbox_item` has an `id uuid PRIMARY KEY` and
+ * `statutory_repin_send` does NOT (its PK is the composite `(item_id,
+ * tick_key)`). PostgREST turns `.select("id")` into a RETURNING clause, so the
+ * real statement fails with 42703 "column does not exist", the guard reads a
+ * non-23505 error, fails open, dispatches — and never writes a marker. Inert
+ * in production, 20/20 green here, because the fake happily answered a select
+ * for a column that does not exist.
+ *
+ * A fake that cannot reject is not a test seam, it is a rubber stamp.
+ */
+const TABLE_COLUMNS: Record<string, readonly string[]> = {
+  statutory_repin_send: ["item_id", "tick_key", "created_at"],
+  push_subscriptions: ["id", "endpoint", "p256dh", "auth", "user_id", "last_used_at"],
+  email_triage_items: [
+    "id",
+    "user_id",
+    "received_at",
+    "rule_id",
+    "statutory_class",
+    "status",
+    "mail_class",
+    "subject",
+    "created_at",
+  ],
+  probe_tokens: ["id", "token", "created_at"],
+};
+
+/** Mirrors PostgREST's error for a RETURNING clause naming a missing column. */
+function undefinedColumnError(table: string, column: string) {
+  return {
+    data: null,
+    error: {
+      code: "42703",
+      message: `column ${table}.${column} does not exist`,
+    },
+  };
+}
+
 function makeBuilder(table: string) {
   const eqArgs: Array<[string, unknown]> = [];
   const builder: Record<string, unknown> = {};
   const chain = () => builder;
   let insertPayload: Record<string, unknown> | null = null;
   let deleting = false;
+  let selectError: { data: null; error: { code: string; message: string } } | null = null;
 
-  for (const m of ["select", "not", "gte", "ilike", "like", "limit", "update", "in"]) {
+  for (const m of ["not", "gte", "ilike", "like", "limit", "update", "in"]) {
     builder[m] = vi.fn(chain);
   }
+  builder.select = vi.fn((cols?: string) => {
+    const known = TABLE_COLUMNS[table];
+    if (known && typeof cols === "string" && cols !== "*") {
+      for (const raw of cols.split(",")) {
+        const col = raw.trim();
+        if (col && col !== "*" && !known.includes(col)) {
+          selectError = undefinedColumnError(table, col);
+          break;
+        }
+      }
+    }
+    return builder;
+  });
   builder.eq = vi.fn((col: string, val: unknown) => {
     eqArgs.push([col, val]);
     return builder;
@@ -162,8 +220,8 @@ function makeBuilder(table: string) {
     return builder;
   });
 
-  // `.insert(...).select("id").single()` — the house idiom the guard uses.
   builder.single = async () => {
+    if (selectError) return selectError;
     if (table === "statutory_repin_send" && insertPayload) {
       return resolveMarkerInsert(insertPayload);
     }
@@ -175,7 +233,9 @@ function makeBuilder(table: string) {
     onRejected?: (e: unknown) => unknown,
   ) => {
     let result: unknown;
-    if (table === "statutory_repin_send" && insertPayload) {
+    if (selectError) {
+      return Promise.resolve(selectError).then(onFulfilled, onRejected);
+    } else if (table === "statutory_repin_send" && insertPayload) {
       return Promise.resolve(resolveMarkerInsert(insertPayload)).then(
         onFulfilled,
         onRejected,
@@ -587,6 +647,49 @@ describe("deadline-repin idempotency guard (#6781)", () => {
     expect(warnSilentFallbackSpy).toHaveBeenCalledWith(
       null,
       expect.objectContaining({ op: "statutory-notify-zero-delivery" }),
+    );
+  });
+
+  it("T13: the marker insert requests NO column the table lacks (42703 tripwire)", async () => {
+    // REGRESSION. This file originally shipped 20/20 green over a guard that
+    // could not work in production: it used `.select("id").single()`, cloned
+    // from notifyInboxItem, but statutory_repin_send has no `id` column (its
+    // PK is composite). PostgREST turns that into a RETURNING clause and the
+    // real statement fails 42703 → non-23505 → fail open → dispatch, with no
+    // marker ever written. The guard would have been inert, forever, and this
+    // suite would have kept certifying it.
+    //
+    // The fake now validates selected columns (TABLE_COLUMNS), so re-adding a
+    // bad `.select()` reddens T1/T2/T11 too. This test states the invariant
+    // directly so the NEXT reader sees the reason rather than a mystery.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [statutoryRow()];
+
+    const result = await runHandler();
+
+    // The insert succeeded and suppressed on the second run — i.e. it really
+    // wrote, rather than erroring into the fail-open path.
+    expect(result.repinged).toBe(1);
+    const second = await runHandler();
+    expect(second.repinSuppressed).toBe(1);
+
+    // And no 42703 was surfaced on either run.
+    const marker42703 = warnSilentFallbackSpy.mock.calls.filter(
+      ([err]) => (err as { code?: string } | null)?.code === "42703",
+    );
+    expect(marker42703).toHaveLength(0);
+  });
+
+  it("T13b: the fake itself rejects an unknown column (negative control for T13)", () => {
+    // Without this, T13 could pass against a fake that cannot reject at all.
+    const b = makeBuilder("statutory_repin_send") as Record<string, unknown>;
+    (b.insert as (p: unknown) => unknown)({ item_id: "x", tick_key: "headsup" });
+    (b.select as (c: string) => unknown)("id");
+    return (b.single as () => Promise<{ error: { code: string } | null }>)().then(
+      (res) => {
+        expect(res.error?.code).toBe("42703");
+      },
     );
   });
 

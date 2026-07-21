@@ -158,23 +158,20 @@ function makeBuilder(table: string) {
     inserting = true;
     return builder;
   });
-  // Send-marker insert (#6781) uses `.insert(...).select("id").single()`.
-  // Always a clean insert here: this suite is about step order and the probe
-  // chain, so the repin guard must never suppress. The dedicated
-  // cron-email-ingress-probe-repin-idempotency.test.ts owns 23505 behavior.
-  builder.single = async () => {
-    if (table === "statutory_repin_send") {
-      ioOrder.push("repin-marker-insert");
-      return { data: { id: "marker-1" }, error: null };
-    }
-    return { data: null, error: null };
-  };
   builder.then = (
     onFulfilled: (v: unknown) => unknown,
     onRejected?: (e: unknown) => unknown,
   ) => {
     let result: unknown;
-    if (table === "probe_tokens" && inserting) {
+    if (table === "statutory_repin_send" && inserting) {
+      // Send-marker insert (#6781). The guard uses a PLAIN `.insert()` with no
+      // `.select()` (the table has no `id` column to return), so this lands on
+      // the awaited path, not `.single()`. Always a clean insert here: this
+      // suite covers step order and the probe chain; the dedicated
+      // cron-email-ingress-probe-repin-idempotency.test.ts owns 23505 behavior.
+      ioOrder.push("repin-marker-insert");
+      result = { data: null, error: null };
+    } else if (table === "probe_tokens" && inserting) {
       ioOrder.push("probe-token-insert");
       result = { data: null, error: dbState.tokenInsertError };
     } else if (eqArgs.some(([c, v]) => c === "status" && v === "acknowledged")) {
