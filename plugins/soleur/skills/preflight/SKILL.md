@@ -769,8 +769,12 @@ PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # command. Never fall through.
 FORM_A_AWK="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/parse-form-a.awk"
 test -r "$FORM_A_AWK" || { echo "FAIL: Check 10 parser missing at $FORM_A_AWK"; exit 1; }
-if ! CMD=$(awk -f "$FORM_A_AWK" "$PREFLIGHT_TMP/preflight-observability.txt"); then
-  echo "FAIL: Check 10 Form A parser errored (awk rc=$?); refusing to fall through to Form B."
+CMD=$(awk -f "$FORM_A_AWK" "$PREFLIGHT_TMP/preflight-observability.txt")
+AWK_RC=$?
+if [[ "$AWK_RC" -ne 0 ]]; then
+  # `$?` here would report the `!`-inverted status (always 0) — capture the real
+  # rc from the command substitution before emitting it.
+  echo "FAIL: Check 10 Form A parser errored (awk rc=${AWK_RC:-unknown}); refusing to fall through to Form B."
   exit 1
 fi
 
@@ -918,7 +922,7 @@ On **FAIL**, abort with the diagnostic table (command, exit code, sanitized stdo
 On **FAIL**, present the failure reason + sanitized command + diagnostic and offer **AskUserQuestion**:
 
 1. "Fix the plan's `discoverability_test.command` now" — open the plan file at the line of the `discoverability_test:` key. Re-run Check 10.
-2. "Skip — temporarily defer (logs a trim-tracker issue)" — `gh issue create --label 'priority/p3-low,chore'` with the failure as the body. Continue the preflight run with this check noted as DEFERRED.
+2. "Skip — temporarily defer (logs a trim-tracker issue)" — `gh issue create --label 'priority/p3-low,chore'` with the command, the exit code and the `expected_output` as the body. **Never include `$DT_STDOUT_SAFE` in the issue body.** `sanitize()` strips only C0 controls, not secrets or PII: a probe's stdout routinely carries log rows with user emails, client IPs, and bearer/`dp.ct.*` tokens, and this repository is PUBLIC. The captured stdout stays in the local run output for the operator; it does not get published. Continue the preflight run with this check noted as DEFERRED.
 3. "Abort — fix elsewhere" — stop the pipeline.
 
 **Result:**
