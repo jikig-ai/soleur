@@ -104,7 +104,21 @@ harness_blockdev_other() {
 #                             form) for the unreadable-options refusal.
 #   LSOF_RC=<n>               force the lsof exit status (rc>1 = an outright probe failure)
 #   ACTIVE_UNITS              space-separated units for which `systemctl is-active` succeeds
-#   CURL_CODE / READYZ_BODY   stub curl's /health code and /internal/readyz body
+#   CURL_CODE / READYZ_BODY   stub curl's /health code and /internal/readyz body (single-value,
+#                             legacy form; still honoured when the sequenced knobs are unset)
+#   CURL_CODES="521 521 200"  SEQUENCED /health codes consumed by call index, saturating on the
+#                             LAST value — so "521" alone means a probe that NEVER recovers, while
+#                             "521 521 200" recovers on the third attempt (#6807 retry arms).
+#   READYZ_BODIES="a b c"     SEQUENCED readyz bodies, same saturation. Space-separated, so a body
+#                             may not contain spaces — JSON.stringify output never does.
+#   READYZ_CODES="200 503"    SEQUENCED readyz HTTP statuses. OPTIONAL: when unset the status is
+#                             DERIVED from the body exactly as readiness.ts derives it (200 iff
+#                             ready:true, else 503), so a fixture cannot model a 200+ready:false
+#                             response the real server cannot produce. Pin it explicitly only to
+#                             reach the gate-regression arm (403/404/405).
+#                             All three use the `${X-default}` UNSET form, per the discipline at the
+#                             DU_SRC/DF_AVAIL knobs: an EMPTY value must reach the SUT as empty and
+#                             exercise its own arm, not be silently substituted into the happy path.
 #   MOUNTPOINT_RC=<n>         single global rc for every `mountpoint` call (legacy knob)
 #   MOUNTPOINT_RCS="1 1 0"    SEQUENCED rcs consumed by call index; saturates on the LAST value.
 #                             prepare_staging_target calls `mountpoint -q "$STAGING"` TWICE with
@@ -277,12 +291,84 @@ run_case() {
       hostname() { echo "test-host"; }
       apt-get() { rec "apt-get $*"; return 1; }
       timeout() { shift; "$@"; }
+      # RECORDING no-op sleep (#6807), modelled on nic-wait-gate.test.sh. It records the ARGUMENT,
+      # not merely the call: that gives per-arm attribution AND covers the retry-INTERVAL seam for
+      # free (`has "^sleep 3"`), so the interval knob does not need a separate observation channel.
+      # A no-op is safe here ONLY because the retry loops are bounded by ATTEMPTS, never by wall
+      # clock — a wall-clock deadline under a no-op sleep would spin hot for its whole duration.
+      sleep() { rec "sleep $*"; return 0; }
+      # _seq_pick <index> <space-separated list> — the MOUNTPOINT_RCS saturation semantics, reused.
+      # Saturates on the LAST element, so a single-element list means "always this value"
+      # (CURL_CODES="521" => ALWAYS 521, i.e. a never-recovering probe).
+      _seq_pick() {
+        local i="$1" list="$2"
+        # shellcheck disable=SC2206  # deliberate word-splitting: the knob IS a space-separated list
+        local -a seq=($list)
+        [ "${#seq[@]}" -eq 0 ] && return 1
+        [ "$i" -ge "${#seq[@]}" ] && i=$(( ${#seq[@]} - 1 ))
+        printf "%s" "${seq[$i]}"
+      }
+      # SEPARATE INDEX PER ENDPOINT ARM. The single `case "$*"` below serves BOTH /health and
+      # *readyz*, so ONE shared counter would let readyz retries advance the /health sequence and
+      # silently desynchronise it — a /health assertion could then be satisfied by readyz traffic.
+      # The same reasoning is why the sleep recorder records its argument rather than being counted
+      # globally: sleeps must be attributed per arm, never summed.
+      #
+      # FILE-BACKED, not a shell variable. The SUT reads this stub through a command substitution
+      # (`code="$(curl …)"`), which runs in a SUBSHELL — so a `CURL_I=$((CURL_I+1))` assignment is
+      # discarded the moment curl returns, the index is forever 0, and every sequenced knob silently
+      # degrades to "always the FIRST value". That failure is invisible in the happy direction: a
+      # recovering sequence just never recovers, and the case looks like a real SUT bug. Keying the
+      # counters off $CALLS (already per-case) also resets them per case for free.
+      # NOTE: the legacy MOUNTPOINT_I above can stay a plain variable because `mountpoint -q` is
+      # invoked DIRECTLY, never in a substitution.
+      _seq_next() {
+        local f="$CALLS.seq.$1" i=0
+        [ -f "$f" ] && i="$(cat "$f")"
+        printf "%s" "$((i + 1))" > "$f"
+        printf "%s" "$i"
+      }
       curl() {
         rec "curl $*"
+        local outfile="" prev="" a body code
+        # Emulate `-o <file>`: wl_probe_readyz writes the BODY to a file and reads the CODE from
+        # stdout via -w. The legacy no-`-o` form (body straight to stdout) must keep working too.
+        for a in "$@"; do
+          [ "$prev" = "-o" ] && outfile="$a"
+          prev="$a"
+        done
+        local i
         case "$*" in
-          *readyz*) printf "%s" "${READYZ_BODY-{\"ready\":true\}}" ;;
-          *)        printf "%s" "${CURL_CODE:-200}" ;;
+          *readyz*)
+            i="$(_seq_next readyz)"
+            body="$(_seq_pick "$i" "${READYZ_BODIES-}")" \
+              || body="${READYZ_BODY-{\"ready\":true\}}"
+            # READYZ_CODES is optional: when a case does not pin a status, DERIVE it the way the
+            # real endpoint does (readiness.ts: `res.writeHead(readiness.ready ? 200 : 503)`), so a
+            # fixture cannot accidentally model a 200+ready:false response the server never sends.
+            if ! code="$(_seq_pick "$i" "${READYZ_CODES-}")"; then
+              case "$body" in
+                *'"ready":true'*) code=200 ;;
+                "")               code=000 ;;
+                *)                code=503 ;;
+              esac
+            fi
+            ;;
+          *)
+            i="$(_seq_next health)"
+            body=""
+            code="$(_seq_pick "$i" "${CURL_CODES-}")" || code="${CURL_CODE:-200}"
+            ;;
         esac
+        if [ -n "$outfile" ]; then
+          printf "%s" "$body" > "$outfile"
+          printf "%s" "$code"
+        else
+          case "$*" in
+            *readyz*) printf "%s" "$body" ;;
+            *)        printf "%s" "$code" ;;
+          esac
+        fi
         return 0
       }
       die()     { echo "DIE: $*"; exit 1; }
