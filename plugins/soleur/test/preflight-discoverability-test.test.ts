@@ -861,11 +861,12 @@ describe("#6772 R1-R3 — reject-set coverage for the fail-open transition", () 
     expect(cmd).toBe(
       "doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 90m --grep X",
     );
-    // The shell-active reject provably does NOT cover this command…
-    expect(/(\$\(|`|<\(|>\(|;|&&|\|\||\||>|<|&|\n|\$\{?[A-Za-z_])/.test(cmd)).toBe(
-      false,
-    );
-    // …so the credentialed-CLI reject must.
+    // The credentialed-CLI reject is the ONLY thing stopping this command.
+    // Proven without duplicating SUBST_REJECT_RE here (an inline copy would
+    // silently stop tracking the real reject set): swap the credentialed verb
+    // for an unauthenticated one and the command passes every other gate —
+    // so nothing but the verb reject covers this class.
+    expect(rejectReason(cmd.replace(/^doppler\b/, "curl"))).toBeNull();
     expect(rejectReason(cmd) ?? "").toMatch(/credentialed CLI/i);
   });
 
