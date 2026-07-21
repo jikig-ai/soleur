@@ -478,9 +478,63 @@ awk '/^assert_mount_quiesced\(\)/,/^}/' "$CUTOVER" | grep -vE '^[[:space:]]*#' >
 [ "$(grep -cE 'lsof.*\| *grep' "$G4BODY" || true)" -eq 0 ] \
   && ok "AC5 the G4 body contains no \`lsof … | grep\` pipe (comments stripped first)" \
   || no "AC5 a pipe is back in the G4 predicate — size-dependent SIGPIPE fail-open"
-[ "$(grep -c 'app\.soleur\.ai/api/health' "$CUTOVER" || true)" -eq 0 ] \
-  && ok "AC7 no /api/health reference remains in the cutover script" \
-  || no "AC7 /api/health still referenced"
+# AC7 — WIDENED to both workflows (#6807). The cutover's canary was corrected in #6701 on
+# 2026-07-19, ONE DAY before the cutover, and the sweep never reached the verify workflow — which
+# then sat structurally incapable of passing. A gate scoped to one file is what let that happen.
+#
+# The pattern is now BARE `/api/health` rather than the host-qualified form: only one of the seven
+# sites in the repo carried `app.soleur.ai`, so the qualified pattern would have missed the very
+# regression it exists to catch. `/api/health/team-membership` is a REAL route and is allowlisted.
+#
+# Comment handling differs per file, deliberately. The cutover is comment-STRIPPED, because its
+# comments legitimately discuss the old endpoint to explain why it was wrong. The verify workflow is
+# NOT stripped: its prose is in scope for this sweep, so a stale claim cannot outlive the assertion
+# it describes. (That is why this file's own explanation above says "/api/health" while the workflow
+# spells it "the API-prefixed health path".)
+AC7BODY="$RUN_SCRATCH/ac7body"
+grep -vE '^[[:space:]]*#' "$CUTOVER" > "$AC7BODY" || :
+ac7_cut=$(grep -oE '/api/health[a-z/-]*' "$AC7BODY" | grep -vcF '/api/health/team-membership' || true)
+ac7_wf=$(grep -oE '/api/health[a-z/-]*' "$VERIFY_WF" | grep -vcF '/api/health/team-membership' || true)
+if [ "$ac7_cut" -eq 0 ] && [ "$ac7_wf" -eq 0 ]; then
+  ok "AC7 no /api/health reference remains in the cutover script OR the verify workflow (team-membership allowlisted)"
+else
+  no "AC7 /api/health still referenced (cutover=$ac7_cut verify-workflow=$ac7_wf) — the #6701 sweep gap is open again"
+fi
+# Non-vacuity: the allowlist must not be so broad that it swallows the bare form. If this pattern
+# ever stops matching, the two counts above become structurally 0 and the gate reports clean forever.
+[ "$(printf '%s\n' 'x /api/health y' | grep -coE '/api/health[a-z/-]*' || true)" -eq 1 ] \
+  && ok "AC7b the /api/health detector still matches a bare occurrence (gate is not vacuous)" \
+  || no "AC7b the /api/health detector matches nothing — the gate above cannot fail"
+
+# AC8 — the dead-man margin. The retry budget added by #6807 extends the window in which
+# app_canary can fail WITHOUT rolling back (CANARY_OK=1 is set by the host canary before it) and
+# WITHOUT reaching disarm_dead_man. On 2026-07-20 that window was 27 minutes and the timer won:
+# it remounted the plaintext volume over a healthy LUKS mount and stranded 27 minutes of sole-copy
+# writes (#6812). So the inequality is not decorative — it is the thing that keeps the retry from
+# eating the backstop.
+#
+# Every operand is EXTRACTED BY SHAPE from its own source file. Hardcoding any of them would let a
+# future knob change (attempts 30 -> 300) sail past a guard that still asserts the old arithmetic.
+ac8_attempts=$(grep -oE 'WORKSPACES_CANARY_ATTEMPTS:-[0-9]+' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9]+$' | head -1 || true)
+ac8_interval=$(grep -oE 'WORKSPACES_CANARY_INTERVAL_S:-[0-9]+' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9]+$' | head -1 || true)
+ac8_maxtime=$(grep -oE '\-\-max-time [0-9]+' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9]+$' | head -1 || true)
+ac8_deadman=$(grep -oE 'WORKSPACES_DEAD_MAN_MIN:-[0-9]+' "$CUTOVER" | grep -oE '[0-9]+$' | head -1 || true)
+# MEASURED, not assumed: freeze/arm 22:11:49.09 -> canary 22:14:50.31 on run 29782780158.
+ac8_precanary=181
+if [ -n "$ac8_attempts" ] && [ -n "$ac8_interval" ] && [ -n "$ac8_maxtime" ] && [ -n "$ac8_deadman" ]; then
+  # Worst case per probe: every attempt burns the full curl timeout, plus (attempts-1) intervals
+  # (the loop shape does not sleep after the final attempt). TWO probes: /health and readyz.
+  ac8_per=$(( ac8_attempts * ac8_maxtime + (ac8_attempts - 1) * ac8_interval ))
+  ac8_total=$(( 2 * ac8_per + ac8_precanary ))
+  ac8_budget=$(( ac8_deadman * 60 ))
+  if [ "$ac8_total" -lt "$ac8_budget" ]; then
+    ok "AC8 worst-case canary spend + measured pre-canary elapsed (${ac8_total}s) is inside DEAD_MAN_MIN (${ac8_budget}s)"
+  else
+    no "AC8 the retry budget can now outlive the dead-man (${ac8_total}s >= ${ac8_budget}s) — a canary failure would let the timer remount plaintext over a healthy LUKS mount (#6812)"
+  fi
+else
+  no "AC8 could not extract every operand (attempts=$ac8_attempts interval=$ac8_interval maxtime=$ac8_maxtime deadman=$ac8_deadman) — an unextractable operand makes this guard vacuous"
+fi
 [ "$(grep -c 'no C1 verify' "$WORKFLOW" || true)" -ge 1 ] \
   && ok "AC9 the dry_run description states the rehearsal does not run the C1 verify" \
   || no "AC9 dry_run description still misrepresents what a rehearsal covers"

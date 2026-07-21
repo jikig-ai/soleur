@@ -25,7 +25,13 @@ LOG_TAG="luks-monitor"
 
 MOUNT="${WORKSPACES_MOUNT:-/mnt/data}"
 MAPPER_NAME="${WORKSPACES_MAPPER_NAME:-workspaces}"
-MAPPER="/dev/mapper/${MAPPER_NAME}"
+# Overridable for the same reason WORKSPACES_MOUNT and WORKSPACES_MAPPER_NAME are: the behavioural
+# seam asserts on the READINESS block, which sits behind `[ -e "$MAPPER" ]` — and `[` is a shell
+# BUILTIN, so unlike findmnt/blkid/cryptsetup it cannot be stubbed onto a mock PATH. Without this
+# the whole block is unreachable in a fixture. The DEFAULT is pinned by its own assertion in
+# luks-monitor.test.sh (a test-only seam with no seam-unset companion is a coverage hole wearing a
+# convenience costume), so production behaviour cannot drift behind the override.
+MAPPER="${WORKSPACES_MAPPER_PATH:-/dev/mapper/${MAPPER_NAME}}"
 # #6807 — defaults MUST match workspaces-cutover.sh:44-45; this is where the cutover persists
 # WORKSPACES_COUNT and where the readiness assert reads it back.
 STATE_DIR="${WORKSPACES_STATE_DIR:-/var/lib/workspaces-luks}"

@@ -689,7 +689,7 @@ app_canary() {
     # Structural: the endpoint itself is wrong/regressed. Retrying cannot change the answer, so this
     # arm burns no budget — and it must NOT be reported as a slow boot.
     emit_drift health_probe_structural
-    die "app /health=${WL_PROBE_LAST_CODE} is a STRUCTURAL code (endpoint/routing regression, not a boot race) after restart — failing fast without retrying. This is what an /api/health-style no-route path looks like: it 307s to /login and would never have become 200 (C13)"
+    die "app /health=${WL_PROBE_LAST_CODE} is a STRUCTURAL code (endpoint/routing regression, not a boot race) after restart — failing fast without retrying. This is the shape a no-route health path produces: it falls through to middleware and 307s to /login, and would never have become 200 no matter how long we retried (C13)"
   elif [ "$rc" -ne 0 ]; then
     emit_drift health_probe_deadline
     die "app /health never returned 200 within the retry budget after restart (last=${WL_PROBE_LAST_CODE} attempts=${WL_PROBE_ATTEMPTS} elapsed=${WL_PROBE_ELAPSED_S}s class=${WL_PROBE_CLASS}). class=deadline covers a no-route/DNS failure (curl 000) as well as a slow boot (C13)"
@@ -2241,6 +2241,28 @@ if [ "$DRY_RUN" != "1" ]; then
   [ "$G3_DST_COUNT" = "$G2_COUNT" ] || die "DST workspace count ($G3_DST_COUNT) != G2 ($G2_COUNT) — the data gate (G3), not the canary, is the partial-loss detector (AC24)"
   [ "$G3_DST_REF" = "$G2_REF" ] || die "DST ref count ($G3_DST_REF) != G2 ($G2_REF) — refs dropped in transit (AC24)"
   [ "$G3_DST_CHK" = "$G2_CHK" ] || die "DST refs/checkpoints/* count ($G3_DST_CHK) != G2 ($G2_CHK) — the highest-probability silent loss; aborting (C9/AC24)"
+  # #6807 — persist the workspace INVENTORY baseline, now that G3 has just certified the copy is
+  # complete. This is the operand the off-host verify compares against; without it that comparison
+  # has nothing to fail closed on, which is why the live host needed a one-time manual seed.
+  #
+  # Counted with wl_count_workspace_dirs — the SAME function luks-monitor.sh compares with — and
+  # deliberately NOT with the fsck gate's `total`. `total` counts fsck-PROBEABLE workspaces: it
+  # `continue`s past every skipped one (worktree_pointer / alternates_escape / no_git_dir). The
+  # 2026-07-20 run happened to have skipped=0 so the two coincided, but `skipped` is transient
+  # (#6754 records it moving 1 -> 0 between rehearsals when scheduled-workspace-gc swept a dir).
+  # Storing a value computed by a different rule than the one that reads it would persist a LOW
+  # baseline on any run with a nonzero skip, and a later real shrink down to it would certify green
+  # — relocating the counter-parity bug from the counter to the baseline.
+  if WS_INVENTORY="$(wl_count_workspace_dirs "$STAGING/workspaces" 2>/dev/null)"; then
+    persist_state WORKSPACES_COUNT "$WS_INVENTORY"
+    log "persisted workspace inventory baseline: WORKSPACES_COUNT=$WS_INVENTORY (verify compares against this)"
+  else
+    # Non-fatal: G3 above already gated the copy, so a counter failure must not abort a good
+    # cutover. But it must not be silent either — the next verify would fail closed on a missing
+    # baseline with no explanation of why it is missing.
+    emit_drift workspace_count_persist_failed
+    log "WARN: could not count $STAGING/workspaces — WORKSPACES_COUNT not persisted; the next verify will fail closed on workspace_count_baseline_missing until it is seeded"
+  fi
 fi
 
 step "repoint_luks_mount — mapper -> $MOUNT (backup fstab; findmnt assert)"

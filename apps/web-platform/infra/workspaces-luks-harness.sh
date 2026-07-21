@@ -411,6 +411,135 @@ run_case() {
   CASE_RC=$?
 }
 
+# run_monitor_case <luks-monitor.sh path> [env assignments...]        (#6807)
+#
+# The luks-monitor seam. Unlike run_case (which SOURCES the cutover to obtain functions), this must
+# EXECUTE luks-monitor.sh: the behaviour under test — the readiness/inventory block — lives in the
+# main body, and the sourced-detection guard deliberately returns before it. So the stubs are real
+# executables on a mock PATH, in the shape ci-deploy.test.sh established, rather than shell
+# functions.
+#
+# Sets: MON_RC, MON_OUT, CALLS (argv log), MNT, WSDIR (the workspaces root, pre-created empty).
+#
+# Knobs (all optional):
+#   MON_MOUNT_SRC     findmnt -no SOURCE $MOUNT      (default: the fake mapper path — healthy)
+#   MON_MOUNT_OPTS    findmnt -no OPTIONS $MOUNT     (default: rw,relatime,errors=remount-ro —
+#                     a HEALTHY mount whose options nonetheless CONTAIN the substring "ro", so a
+#                     capacity check that matched "ro" loosely cannot pass this fixture)
+#   MON_MOUNTPOINT_RC mountpoint -q rc               (default 0)
+#   MON_DEV_TYPE      blkid -s TYPE -o value         (default crypto_LUKS)
+#   MON_KEY           doppler WORKSPACES_LUKS_KEY    (default "k"; empty = Doppler unreachable)
+#   MON_ESCROW_RC     cryptsetup luksOpen --test-passphrase rc (default 0)
+#   MON_UUID          cryptsetup luksUUID            (default a fixed uuid; empty = header unreadable)
+#   MON_READYZ_CODE   readyz HTTP status             (default 200)
+#   MON_READYZ_BODY   readyz body                    (default ready:true with both checks true)
+#   MON_DF_USE        df -P use% column              (default 41%)
+# Split into mon_prepare / mon_run so a case can BUILD A FIXTURE (workspace dirs, a seeded baseline)
+# between the two. A single call that creates the case dir and immediately executes cannot express
+# the inventory cases at all — the fixture has to exist in the same dir the run will read.
+# run_monitor_case is the common prepare-then-run shorthand for cases that need no fixture.
+run_monitor_case() { local p="$1"; shift; mon_prepare "$p"; mon_run "$@"; }
+
+mon_prepare() {
+  local probe="$1"
+  MON_PROBE="$probe"
+  CASE_N=$((CASE_N + 1))
+  local d="$RUN_SCRATCH/mon-$CASE_N"; mkdir -p "$d/bin" "$d/state" "$d/mnt/workspaces"
+  MON_DIR="$d"
+  CALLS="$d/calls"; MARKER_LOG="$d/marker"; MNT="$d/mnt"; WSDIR="$d/mnt/workspaces"
+  STATE="$d/state"
+  : > "$CALLS"; : > "$MARKER_LOG"
+  # A regular file standing in for the mapper device node: the SUT only ever tests it with `[ -e ]`
+  # and passes it to stubbed binaries, so it never needs to be a real block device.
+  printf '' > "$d/fake-mapper"
+
+  # Every stub RECORDS to $CALLS and then answers from its knob. `exec` nothing, no PATH recursion:
+  # each is a standalone script whose first act is the record, so an assertion can prove a probe
+  # both DID and DID NOT happen (the flag-unset case needs the negative).
+  cat > "$d/bin/findmnt" <<'STUB'
+#!/usr/bin/env bash
+printf 'findmnt %s\n' "$*" >> "$CALLS"
+case "$*" in
+  *OPTIONS*) printf '%s\n' "${MON_MOUNT_OPTS-rw,relatime,errors=remount-ro}" ;;
+  *)         printf '%s\n' "${MON_MOUNT_SRC-$FAKE_MAPPER}" ;;
+esac
+STUB
+  cat > "$d/bin/mountpoint" <<'STUB'
+#!/usr/bin/env bash
+printf 'mountpoint %s\n' "$*" >> "$CALLS"
+exit "${MON_MOUNTPOINT_RC:-0}"
+STUB
+  cat > "$d/bin/cryptsetup" <<'STUB'
+#!/usr/bin/env bash
+printf 'cryptsetup %s\n' "$*" >> "$CALLS"
+case "$1" in
+  status)  printf '  type:    LUKS2\n  device:  %s\n' "${MON_REAL_DEV-$FAKE_MAPPER}" ;;
+  luksUUID) printf '%s\n' "${MON_UUID-3f07b655-31ab-48b9-b02d-013c6b08feba}" ;;
+  luksOpen) exit "${MON_ESCROW_RC:-0}" ;;
+esac
+exit 0
+STUB
+  cat > "$d/bin/blkid" <<'STUB'
+#!/usr/bin/env bash
+printf 'blkid %s\n' "$*" >> "$CALLS"
+case "$*" in
+  *UUID*) printf '%s\n' "${MON_UUID-3f07b655-31ab-48b9-b02d-013c6b08feba}" ;;
+  *)      printf '%s\n' "${MON_DEV_TYPE-crypto_LUKS}" ;;
+esac
+STUB
+  cat > "$d/bin/doppler" <<'STUB'
+#!/usr/bin/env bash
+printf 'doppler %s\n' "$*" >> "$CALLS"
+case "$*" in
+  *WORKSPACES_LUKS_HEARTBEAT_URL*) printf '%s' "${MON_HB_URL-}" ;;
+  *WORKSPACES_LUKS_KEY*)           printf '%s' "${MON_KEY-k}" ;;
+esac
+STUB
+  # Emulates `-o <file> -w %{http_code}`: body to the file, status to stdout — the shape
+  # wl_probe_readyz reads. The heartbeat push (no -o) just records and succeeds.
+  cat > "$d/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'curl %s\n' "$*" >> "$CALLS"
+outfile=""; prev=""
+for a in "$@"; do [ "$prev" = "-o" ] && outfile="$a"; prev="$a"; done
+case "$*" in
+  *readyz*)
+    body="${MON_READYZ_BODY-{\"ready\":true,\"checks\":{\"workspaces_writable\":true,\"workspaces_populated\":true\}\}}"
+    [ -n "$outfile" ] && printf '%s' "$body" > "$outfile"
+    printf '%s' "${MON_READYZ_CODE:-200}" ;;
+  *) : ;;
+esac
+exit 0
+STUB
+  cat > "$d/bin/logger" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MARKER_LOG"
+STUB
+  cat > "$d/bin/df" <<'STUB'
+#!/usr/bin/env bash
+printf 'df %s\n' "$*" >> "$CALLS"
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 100 41 59 %s /mnt\n' "${MON_DF_USE-41%}"
+STUB
+  chmod +x "$d"/bin/*
+}
+
+# mon_run [env assignments...] — execute the prepared probe. Re-runnable against the same fixture,
+# so a case can assert on a baseline of 2 and then re-run with a baseline of 8 without rebuilding.
+mon_run() {
+  local d="$MON_DIR"
+  MON_OUT="$(
+    env "$@" \
+      PATH="$d/bin:$PATH" CALLS="$CALLS" MARKER_LOG="$MARKER_LOG" FAKE_MAPPER="$d/fake-mapper" \
+      WORKSPACES_MOUNT="$MNT" WORKSPACES_MAPPER_PATH="$d/fake-mapper" \
+      WORKSPACES_STATE_DIR="$STATE" LUKS_MONITOR_WORKSPACES_DIR="$WSDIR" \
+    bash "$MON_PROBE" 2>&1
+  )"
+  MON_RC=$?
+}
+
+monOut()  { [[ "$MON_OUT" == *"$1"* ]]; }
+monRan()  { [ "$MON_RC" -eq 0 ]; }
+
 # --- predicates: file-direct greps and bash matching ONLY, never a pipe ---
 has()     { grep -qE -- "$1" "$CALLS"; }            # a recorded call matches
 hasF()    { grep -qF -- "$1" "$CALLS"; }            # literal
