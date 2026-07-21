@@ -379,10 +379,18 @@ Full suite before ship. `bunfig.toml` sets `pathIgnorePatterns = ["**"]` — vit
 - [x] **AC2** PK is exactly `(item_id, tick_key)`; RLS enabled with zero policies; the FK to
       `email_triage_items` is present; there is **no** `user_id` column.
 - [x] **AC3** No pre-existing function is replaced. Verify:
-      `grep -cE 'purge_email_triage_items|anonymise_email_triage_items' <migration>` returns `0`.
-      *(The earlier `grep -c 'statutory_repin_send' ≥ 2` form was vacuous — the migration
-      creates that table, so it self-matches; empirically `grep -c probe_tokens` on migration
-      102 returns 10.)*
+      `grep -cE 'CREATE OR REPLACE FUNCTION public\.(purge|anonymise)_email_triage_items' <migration>`
+      returns `0`. **Verified: 0.**
+      *(Form corrected twice. The original `grep -c 'statutory_repin_send' ≥ 2` was vacuous —
+      the migration creates that table, so it self-matches. Its replacement, a bare-token
+      `grep -cE 'purge_email_triage_items|anonymise_email_triage_items'`, then returned **1**
+      against a correct migration: the header comment explains at length WHY those two
+      functions are deliberately NOT replaced, and a bare-token grep cannot tell an
+      explanation from a call. That is `cq-assert-anchor-not-bare-token` — anchor on the
+      syntactic construct a comment cannot produce (`CREATE OR REPLACE FUNCTION public.…`),
+      never on a name the file also legitimately discusses. The comment is load-bearing
+      documentation and was kept; the assertion was fixed instead. Test T7 already used the
+      correct anchored form.)*
 - [x] **AC4** `purge_statutory_repin_send()` declares `SECURITY DEFINER`,
       `SET search_path = public, pg_temp`, and the `REVOKE` / `GRANT EXECUTE … TO service_role` pair.
 - [x] **AC5** Suppression occurs **only** on `23505`. Every other outcome — `{error}` return
@@ -392,10 +400,16 @@ Full suite before ship. `bunfig.toml` sets `pathIgnorePatterns = ["**"]` — vit
 - [x] **AC6** T2 passes — the T-7 heads-up sends exactly once across a calendar-day straddle.
 - [x] **AC7** T6 passes — a thrown insert does not kill the run; later items still dispatch.
 - [x] **AC8** T1 passes and asserts marker-before-dispatch ordering.
-- [x] **AC9** The new test never references the notifications module. Verify:
-      `grep -c "@/server/notifications" <new-test-file> || true` returns `0`. *(Bare-name grep,
-      not `vi.mock("…"` — the latter misses multi-line, single-quoted, and `vi.doMock` forms;
-      `|| true` because `grep -c` exits 1 on zero matches and would abort a `set -e` script.)*
+- [x] **AC9** The new test never **mocks** the notifications module. Verify:
+      `grep -cE 'vi\.(do)?mock\([^)]*server/notifications' <new-test-file> || true` returns `0`.
+      **Verified: 0.**
+      *(Form corrected. The original bare-name `grep -c "@/server/notifications"` returned
+      **1** against a correct test file — the header comment states, as the file's central
+      contract, that it deliberately does NOT mock that module. Same trap as AC3: a bare-token
+      grep matches the explanation of the invariant as readily as a violation of it. The
+      widened regex covers the multi-line, single-quoted, and `vi.doMock` forms the original
+      note was rightly worried about, while anchoring on the CALL rather than the name.
+      `|| true` retained because `grep -c` exits 1 on zero matches.)*
 - [x] **AC10** `dsar-allowlist-completeness.test.ts` passes, and T8 asserts the table is
       actually discovered — not merely that the suite is green.
 - [x] **AC11** The four cross-document-gate files are updated; the gate is green.

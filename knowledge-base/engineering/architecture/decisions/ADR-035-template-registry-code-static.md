@@ -84,11 +84,5 @@ This is NOT runtime-mintable. A new template that did not pass code review canno
 - Send route: `apps/web-platform/app/api/dashboard/today/[id]/send/route.ts`
 - Cascade: `apps/web-platform/server/account-delete.ts` step 3.83
 
----
-
-> **See also (2026-07-20, #6781):** the `plain-insert-catch-23505` dedup idiom and its
-> send-boundary extension (branch-derived tick keys, fail-open, the recipient-grain
-> constraint) live in the ADR whose frontmatter is `adr: 035` — the file
-> `ADR-037-messages-source-ref-composite-unique-for-multi-source-dedup.md`, **not** this one.
-> The ordinal collision between that frontmatter value and this file's name is tracked
-> separately; no decision content here is affected.
+> **See also:** the `plain-insert-catch-23505` dedup idiom and its send-boundary extension (#6781) live in ADR-037 (`ADR-037-messages-source-ref-composite-unique-for-multi-source-dedup.md`), whose frontmatter reads `adr: 035` — not this file.
+> That filename/frontmatter ordinal collision with ADR-037 is tracked in #6800; no decision content here is affected.
