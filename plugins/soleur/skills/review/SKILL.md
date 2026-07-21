@@ -493,24 +493,61 @@ equally.
 
 **Cost-of-filing gate (FIRST FILTER — apply BEFORE invoking the CONCUR
 second-reviewer gate AND BEFORE evaluating the four scope-out criteria below):**
-If the fix is ≤30 lines of code AND touches ≤2 files AND no reviewer agent
+If the fix is ≤100 lines of code AND touches ≤4 files AND no reviewer agent
 independently dissents on technical grounds (e.g., contested-design with named
 alternatives), fix inline. The bookkeeping cost of `gh issue create + scope-out
 justification + future triage + closure + follow-up PR` averages ~30 minutes of
-cumulative human attention; a ≤30-line code edit averages ~5 minutes. Filing
-the issue is NET-NEGATIVE work for the team. This gate is load-bearing: a PR
-that opens more issues than it closes is a workflow failure, not a normal
-review outcome.
+cumulative human attention, and that cost is **fixed** — it does not shrink
+with the size of the deferred fix. The edit cost is what scales: a ≤100-line
+edit runs roughly 5–20 minutes. So the two curves cross well above the old
+30-line boundary, and everything below the crossover is NET-NEGATIVE work to
+file.
+
+**Why 100/4 and not 30/2 (raised 2026-07-20).** The old boundary was set when
+filing looked cheap. Measured over the 7 days to 2026-07-20: 269 issues filed
+against 132 merged PRs (2.04 filed per PR) and 125 closed, growing the queue
++144/week — up from +7.2/day over the prior 23 days. A 30-line boundary sends
+most real findings to the queue, and the queue does not drain. Raising to
+≤100 lines AND ≤4 files moves the crossover to where the arithmetic actually
+sits. This threshold is **instrumented**, not guessed: every disposition emits
+a telemetry row (see the auto-flip below), so the next tuning pass reads data
+instead of re-arguing from intuition.
+
+This gate is load-bearing: a PR that opens more issues than it closes is a
+workflow failure, not a normal review outcome. That is now enforced rather
+than asserted — see the blocking net-issue-flow gate in
+[`ship/SKILL.md`](../ship/SKILL.md) and
+[`net-issue-flow.sh`](../ship/scripts/net-issue-flow.sh).
 
 **Mechanical pre-CONCUR auto-flip:**
 
-Before invoking `code-simplicity-reviewer`, self-assess fix size. If ≤30 lines AND ≤2 files, BYPASS the CONCUR gate — the disposition is auto-flipped to fix-inline. Apply the fix; do not file.
+Before invoking `code-simplicity-reviewer`, self-assess fix size. If ≤100 lines AND ≤4 files, BYPASS the CONCUR gate — the disposition is auto-flipped to fix-inline. Apply the fix; do not file.
 
-If the fix size cannot be confidently bounded without writing it, write a 5-minute spike. If the spike exceeds 30 lines, run CONCUR; if it doesn't, commit the spike. Do NOT run CONCUR on a fix you've already written and verified to be small.
+**Instrumentation (REQUIRED, not optional).** Emit one telemetry row per
+finding disposition, so the next threshold tuning reads measured flip-vs-file
+ratios instead of re-arguing from intuition. This is the half of the change
+that makes the *next* change cheap:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh"
+# DISPOSITION is exactly one of: flip-inline | file
+emit_incident "cost-of-filing-${DISPOSITION}" applied \
+  "review disposition: ${DISPOSITION} (${LINES} lines, ${FILES} files)"
+```
+
+The disposition rides in the **`rule_id`** (`cost-of-filing-flip-inline` vs
+`cost-of-filing-file`) and the event stays `applied`. That is not a stylistic
+choice: the `rule-metrics-aggregate.sh` report keys every counter on `rule_id` and
+gates on `event_type ∈ {deny,bypass,applied,warn}` — it **never reads `.kind`**,
+so a `kind`-based scheme would write rows that no report ever surfaces. Read the
+resulting ratio with `bash scripts/rule-metrics-aggregate.sh` and compare the
+two `applied_count` values.
+
+If the fix size cannot be confidently bounded without writing it, write a 5-minute spike. If the spike exceeds 100 lines, run CONCUR; if it doesn't, commit the spike. Do NOT run CONCUR on a fix you've already written and verified to be small.
 
 The gate fails (fix-inline is required) when:
 
-- Fix is ≤30 lines AND ≤2 files, regardless of "feels like a follow-up" framing.
+- Fix is ≤100 lines AND ≤4 files, regardless of "feels like a follow-up" framing.
 - The only objection to fixing inline is bookkeeping/scope discipline (vs. a
     concrete technical contest the agent named).
 - The finding is `pr-introduced` (per Step 1 provenance triage) — these always
@@ -529,7 +566,7 @@ The gate fails (fix-inline is required) when:
 
 The gate may pass (proceed to evaluate the four scope-out criteria) when:
 
-- Fix is >30 lines OR touches >2 files, AND
+- Fix is >100 lines OR touches >4 files, AND
 - The fix demonstrably matches at least one of the four criteria below.
 
 Filing a GitHub issue instead of fixing is allowed ONLY when both the cost-of-
@@ -737,7 +774,7 @@ this really cross-cutting?") for findings the PR itself introduced.
 candidate "Filed as scope-out" list from your synthesis. For each candidate,
 re-apply the cost-of-filing gate from §5:
 
-- Is the fix ≤30 lines AND ≤2 files? → Remove from the scope-out list; fix
+- Is the fix ≤100 lines AND ≤4 files? → Remove from the scope-out list; fix
     inline and add to "Fixed inline" instead.
 - Is the only objection bookkeeping ("feels like a follow-up", "not core to
     this PR") rather than a concrete technical contest? → Remove; fix inline.
@@ -747,7 +784,7 @@ re-apply the cost-of-filing gate from §5:
 
 Only items that survive ALL three checks appear in "Filed as scope-out". This
 loop prevents the failure mode where pipeline mode rationalizes filing
-≤30-line cleanup items because the marker template makes filing look like a
+≤100-line cleanup items because the marker template makes filing look like a
 first-class option. **Target: the marker frequently shows "Filed as scope-out:
 0".** A PR that nets +N issues from review is a workflow failure.
 
@@ -832,7 +869,9 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 2. **Inspect any scope-out issues**: Review findings filed as `deferred-scope-out` with justification.
 
    ```bash
-   gh issue list --label deferred-scope-out --search "Ref #<PR_NUMBER>"
+   # --state open is deliberate (#6786): this previews ship's Phase 5.5 gate, which
+   # blocks on OPEN review-origin issues only, so the states must match.
+   gh issue list --label deferred-scope-out --state open --search "Ref #<PR_NUMBER>"
    ```
 
 3. **Phase 5.5 gate self-check**: `/ship` will run the Review-Findings Exit Gate and block merge on any open review-origin issue cross-referencing the PR without the `deferred-scope-out` label. If the gate blocks, either fix inline and close the issue, or add the `deferred-scope-out` label + `## Scope-Out Justification`.
@@ -990,6 +1029,7 @@ Multi-agent parallel review has been shown to catch bugs in shipped, green-CI co
 
 - **A probe/health-check whose fixture models a convenient EXIT CODE instead of the service's real RESPONSE CONTRACT — and the contract is usually already documented in the same file** — when a PR adds a probe against an external service (a registry `/v2/`, a health endpoint, an auth-gated API) and stubs it in tests, the stub reliably models success as "exit 0" while the real service returns something else, so the suite is structurally incapable of observing the defect and every assertion is green over a probe that can never succeed. The canonical instance: zot auth-gates `/v2/`, so an anonymous probe gets **401**; `curl -f` exits **22** on any >=400, so an `-f` probe treats every healthy response as dead. Reviewer takeaway: for any new probe, the spawn prompt MUST instruct an agent to (a) state what the endpoint returns to an **unauthenticated** request and confirm the probe's success predicate accepts it, and (b) `grep the same file` for an existing probe of the same endpoint — the contract is very often already written down within a screen or two (here, verbatim, ~400 lines below: *"401 unauth IS healthy — reachable, auth-gated"*). Also require the stub to model every flag that changes the exit (`-f`, `-w`, `-m`), not just the URL. **Why:** #6537/PR #6540 — the feeder built to arm a 9-day-inert monitor could never emit a beat; 26 assertions certified it; `security-sentinel` + `observability-coverage-reviewer` converged. See `knowledge-base/project/learnings/2026-07-16-the-fix-for-an-inert-monitor-shipped-a-probe-that-could-never-fire.md`.
 - **A mutation that does not mutate reports a false "the guard works" — assert the mutation LANDED before trusting the run.** A failed `sed` (bad delimiter, drifted anchor, `perl` vs `sed` regex dialect) leaves the SUT pristine, so the suite prints the **baseline** pass-count — which reads exactly like "the guard caught nothing to catch" and is trivially recorded as a passing mutation. It is a *null* result wearing a green result's clothes. Cheapest gate: after applying each mutation, `grep` the mutated token and confirm the file changed (`git diff --quiet <file> && echo "MUTATION DID NOT LAND"`); if a mutation run reports the baseline count, treat it as **un-run**, never as evidence. Applies to the review skill's own mutation-verify guidance above. **Why:** #6537 — an M-B mutation `sed` failed with `unknown option to 's'` and the suite reported 31/0, the exact baseline.
+- **`git diff`-based "did it land?" is too weak, and a red BASELINE voids the whole battery — two more ways to record a result that never happened.** (a) A file-level change check proves *something* changed, not that the *right* thing did: a `perl`/`sed` without `/g` replaces the FIRST occurrence, which for any construct you documented in a nearby comment is the **comment**, three lines above the real call site. The file differs, the landing check passes, and the surviving-mutant verdict is fabricated. Assert the *construct* changed — require the old string to occur exactly once before replacing (`n=s.count(old); assert n==1`), or grep the specific call site after the edit. (b) Run the **un-mutated baseline in the same harness first and require it GREEN**: a sandbox that copies only a subtree commonly breaks path/module resolution, and every mutation "result" measured against an already-red baseline is noise that reads like a kill. Same failure surface as the bullet above, opposite cause — there the edit never happened, here it happened in the wrong place. **Why:** #6786 — a sandbox battery ran against a `0 pass/1 fail` baseline (all results void), and the re-run's glob-narrowing mutation edited a comment and was scored as a survivor.
 - **A PR whose fix completes POST-MERGE must document it in the future/conditional tense** — when the code lands in one PR but the state-change it enables happens after merge (a reprovision, a backfill, an operator/API arming step, a cutover), the ADR/model/README edits reliably assert the end state as accomplished fact. Nothing catches it: static guards compare source to source, and `ignore_changes`/untargeted resources decouple source from live. If the post-merge phase stalls or is skipped, the repo is left asserting a state that does not exist — which, on a monitor/observability PR, is the very defect being fixed. Reviewer takeaway: when the diff's linked issue has an unchecked post-merge phase, grep the doc edits for present-tense state claims ("is armed", "now pages", "is enabled") and require each to be true **at merge** AND true **if the post-merge phase never runs**. **Why:** #6537 — ADR-096 + `model.c4` said the heartbeat "is armed" while the arming phase was unrun and unrunnable pre-merge; `architecture-strategist` caught it.
 
 - **A drift-guard derives its expected set through the WRONG emitter (so removing scaffolding orders the bug's recreation), and a pinned-artifact delivery certifies the rebuild rather than the bytes** — two shapes that both make a mechanism *look* like it guarantees X while it guarantees Y. (a) **Guard channel-coupling:** when a guard derives an expected set from emitters (`logger -t` tags → an allowlist), an item can be justified by channel B (a unit's `SyslogIdentifier=`, which retags everything the unit writes) yet derived only via channel A (a `logger -t` sitting inside a *cutover-scoped* `sed` replacement). While both coexist the guard looks correct; delete the scaffolding channel later and the item silently drops from EXPECTED, the guard fails, and **its failure text — "array != the logger -t scripts" — instructs the engineer to delete the allowlist entry**, re-blinding the channel the guard exists to protect. Reviewer takeaway: ask *what pulls each item into the expected set, and is that the same thing that justifies it?* — if they differ, the guard is coupled to scaffolding's lifetime; derive EVERY channel independently (before any `continue` gate), and read the failure message as an instruction, because that is what it is — it must name the **emitter** as the source of truth. Prefer a new **derivation** over a new **exemption**: an exemption list is for identifiers no source line can yield (a bare binary basename), so when review deadlocks between "fix it there" and "you can't fix it there", the missing move is usually a third channel, not a bypass. (b) **Pinned-artifact delivery:** "the code is on main" and "the artifact the host boots contains the code" are INDEPENDENT facts. `terraform plan -replace=` force-replaces regardless of any `user_data` diff, so a host rebuilt while its cloud-init still pins a stale OCI tag boots **pre-fix bytes** — a silent no-op that succeeds loudly and **consumes its own rollback window**. Pin guards asserting the pin's *format* and IREF/ZIREF *self-consistency* read exactly like content guards and are not: ask *which of {format, self-consistency, content} does this check?* Require one AC — `git show <pin>:<path> | grep <the fix>` non-zero — for any OCI tag / chart version / AMI / vendored blob. **Why:** PR #6539 (#6536) — the drift guard would have recreated the very 60s failure storm it shipped alongside, and the documented merge→dispatch sequence would have rebuilt the dark host from an image measured to contain none of the fix, spending a zero-downtime window that was free only while the host stayed dark. See `knowledge-base/project/learnings/2026-07-16-a-drift-guard-can-recreate-its-own-bug-and-a-forced-replace-from-a-stale-pin-ships-nothing.md`.
@@ -1014,8 +1054,9 @@ Multi-agent parallel review has been shown to catch bugs in shipped, green-CI co
 
 - **A threshold tested with a population of one, and a red test whose FAILURE MODE regressed while the suite total improved.** Two shapes that travel together on any gate whose verdict is a count. (a) **Threshold coverage:** when the SUT elects on `-gt 0` / `-eq total` / N-of-M, a single-item fixture cannot distinguish ANY of them — `1-of-1` is `all-of-1`. Sweep the suite by fixture SIZE (`grep -c mk_repo` per case, or the equivalent constructor) before believing threshold coverage exists; if every fixture is size 1, the threshold has no test regardless of how many cases pass. Restoring a superseded ALL threshold passed every single-workspace case while turning a 1-of-2 abort into `rc 0, no regression`. (b) **Colour is not a verdict:** a case that stays RED while its recorded rc changes is a finding, and the aggregate can move the other way — a suite going 21/3 → 23/1 concealed one case going from aborting-for-an-unrelated-reason to not-aborting-at-all. Diff **per-case verdicts** across runs, never totals, and never treat a pass-count delta as a safety metric. The enabling defect for both: an assertion that checks *that* the guard fired (`[ "$rc" -ne 0 ]`) rather than *which* guard — in a classifier with several aborting outcomes an exit code is a symptom they all share, so pin the classification string. Corollary for any SYNTHESIZED precondition: synthesizing is right for determinism, but the real contract then exists only in a `printf` the test owns, so re-join it with a conditional assertion on hosts that can produce the real thing (vacuous elsewhere, zero flake). **Why:** #6733/PR #6759 — L6k's `probe_failed` threshold was untested behind six single-workspace fixtures, in the GATE path where a false green precedes wiping the plaintext original; the same pass surfaced `cannot chdir` as dead regex (git emits `cannot change to`). See `knowledge-base/project/learnings/2026-07-20-a-red-test-got-more-dangerous-while-the-suite-pass-count-improved.md`.
 
+- **A stale-claim sweep that marked one block and not its structural twin — look for the ASYMMETRY, not for staleness.** Staleness is not greppable; asymmetry is. When a PR supersedes a decision (a cancellation, a reversal, a deprecation), the same claim usually lives in two or more peer blocks — a ruling in `decision-challenges.md` and its restatement in `session-state.md`, an `## Outstanding` block and a `## Scope Ruling` block in one file, a runbook step and its sibling gate. A sweep indexed by FILE cannot see the peer it did not open the file for, and marking one peer while leaving the other is **worse than marking neither**: a reader infers unmarked = still live. The review-spawn prompt MUST instruct an agent to enumerate the PROPOSITIONS the change falsifies (not the files it edits), `grep -rn` each excluding `archive/`, and classify every survivor as historical-and-marked vs live-and-now-false — then flag any file where one block carries a supersede banner and a peer block does not. Companion, same root: a check whose pattern is DERIVED at runtime (`MARKER=$(grep … file)`) must assert the derivation landed — an empty pattern does not fail loudly (`grep -cF ""` matches every line, most other tools match none), and both outcomes read as a result. **Why:** PR #6784 — the PR existed to remove exactly this defect and reproduced it in the artifact it was fixing, one day after the class was documented; and the fix for a too-narrow AC7 shipped a vacuous bare-ref limb whose `sed` matched nothing. See `knowledge-base/project/learnings/2026-07-21-i-marked-one-block-and-not-its-twin-in-the-file-whose-purpose-was-removing-that-defect.md` and `knowledge-base/project/learnings/2026-07-20-i-swept-by-file-when-the-unit-of-truth-was-the-claim.md`.
+- **Fixture DIRECTION is the sibling coverage axis: a suite whose fixtures all point one way cannot see the other way, and every mutation you invent lands in the direction you were already thinking about.** When a diff adds a *transform* — a suppression, neutralization, redaction, allowlist, carve-out — check whether ANY fixture sits on the far side of it. The recurring shape is that all N fixtures for the new behavior assert the same outcome (all expect-clean for a suppressor, all expect-flag for a detector), so the suite is structurally blind to the transform being too aggressive, and a green mutation battery says nothing about it. The review-spawn prompt MUST ask: *"name a mutation that makes this transform MORE aggressive — which fixture goes red?"* Two traps when closing it: (a) a fixture that short-circuits on an earlier guard clause never reaches the code under test and pins nothing about the later branch (check which path each fixture actually executes, not just its verdict); (b) a natural-looking delimiter can silently anchor the mutation away — a backticked filename blocks a greedy char-class widening because the backtick is outside the class, so the "obvious" fixture stays green. Two companions from the same session: **a line-level probe is not a valid measurement for a file-scoped scanner** (extracting one line strips it from its enclosing carve-out/fence and flips the verdict — verify in context), and **every comparison arm must be measured on ONE tree** (a pure-removal transform that appears to ADD hits is proof of a broken measurement, not a finding). **Why:** #6771 — the class recurred THREE times in one PR: the tool anchor had zero tests because every positive control contained the word `terraform`; then every filename fixture asserted exit 0, so filename neutralization silenced a genuine `ssh … by hand` runbook step; then the first two over-reach fixtures short-circuited before the char class ran. Three review agents converged where two self-run batteries reported all-caught. See `knowledge-base/project/learnings/2026-07-21-my-fixture-set-had-a-direction-and-both-batteries-were-blind-to-the-other-one.md`.
 - **A cloned query/insert idiom whose PRECEDENT table provides something the TARGET does not — and a hand-written fake that cannot reject, so the suite certifies an inert control.** When a PR adds a dedup/idempotency guard by mirroring a sibling call site, the transfer is usually made at the SYNTAX level, and the review-spawn prompt must force it back to the GUARANTEE level: *what does the source table provide that makes this idiom valid, and does the target provide it?* The canonical instance is a `.insert(...).select("id").single()` cloned onto a table whose PK is composite and which has **no `id` column** — PostgREST renders that as `RETURNING id`, the statement fails `42703`, and the insert rolls back, so no marker is ever written. Worse, `42703` is a **plan-time** error, so it fires BEFORE the unique check: even a genuine duplicate returns `42703`, never `23505`, and the suppression branch is unreachable *by construction*. The guard is inert in production with the whole suite green. Three things hide it: an untyped supabase client (no `<Database>` generic, so `tsc` is blind); a fake whose `select` is `vi.fn(chain)` and which keys purely off the insert payload, making it structurally incapable of modelling a column-projection error; and a gated live-DB tier that exercises a call shape production never issues (a *bare* insert), so the one test whose entire job is being ground truth for the mock goes green against the broken code. Reviewer takeaway: for any new fake, demand a **negative control proving it can reject** (a per-table column set + an unknown-column error), and check that the live tier issues the SUT's *exact* chain. Companion, same PR: once the defect is fixed, `grep` the plan and `tasks.md` for the construct — a Risks table still listing the broken idiom as a "live mitigation", and a CHECKED task still mandating it, actively instruct the next author to reintroduce what the branch just paid to find. **Why:** #6781 — 20/20 tests, clean `tsc`, and a self-run M1–M8 mutation battery all reported healthy over a guard that could not fire; three agents converged on it independently. See `knowledge-base/project/learnings/2026-07-21-the-guard-i-shipped-could-never-have-fired-and-my-fake-certified-it.md`.
-
 See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` for the full pattern catalogue.
 
 ### Sharp Edges: Review Agent Limitations
@@ -1054,7 +1095,7 @@ Concurrent mutating agents contaminate the shared worktree — `test-design-revi
 
 When a reviewer prescribes adding a PRE-FLIGHT integrity check (a "verify before you mutate" guard) ahead of an operation that REMOVES a redundant/fallback source (a shared override being detached, a dual-write sibling being dropped, a cached value being invalidated), trace which sources satisfy the guard's assertion AT GUARD TIME. If a soon-to-be-removed source is one of them, the pre-flight guard is vacuous — it passes in exactly the dangerous case (it reads through the fallback it is about to delete) and gives false confidence. The load-bearing assertion belongs AFTER the mutation, where only the intended source can satisfy it. Reject the pre-flight suggestion with that rationale and keep the post-mutation eval-verify. **Why:** PR #4619 (#4617) — `flip.sh --detach-shared`; a proposed pre-detach "member enabled=true" check would have passed via the un-removed `org-targeted` override even when `<flag>-orgs` was never provisioned. See `knowledge-base/project/learnings/2026-05-29-pre-flight-integrity-check-through-unremoved-fallback-gives-false-confidence.md`.
 
-When `code-simplifier` returns DISSENT on a bundled scope-out filing, do NOT argue back — read the dissent for the specific finding it cites, flip ONLY that finding inline, and re-run the CONCUR gate on the residual bundle. The gate exists precisely to catch bundling pathology where a single criterion (cross-cutting-refactor, contested-design) gets satisfied by the bundle as a whole while individual items inside it cross the ≤30-line/≤2-file cost-of-filing threshold. Filing the entire bundle inline (out of frustration with the dissent) is also wrong — the residual findings may legitimately scope out. Per-finding triage, not per-bundle. See `knowledge-base/project/learnings/2026-05-11-scope-out-bundling-hides-cheap-inline-fixes.md`.
+When `code-simplifier` returns DISSENT on a bundled scope-out filing, do NOT argue back — read the dissent for the specific finding it cites, flip ONLY that finding inline, and re-run the CONCUR gate on the residual bundle. The gate exists precisely to catch bundling pathology where a single criterion (cross-cutting-refactor, contested-design) gets satisfied by the bundle as a whole while individual items inside it cross the ≤100-line/≤4-file cost-of-filing threshold. Filing the entire bundle inline (out of frustration with the dissent) is also wrong — the residual findings may legitimately scope out. Per-finding triage, not per-bundle. See `knowledge-base/project/learnings/2026-05-11-scope-out-bundling-hides-cheap-inline-fixes.md`.
 
 Before reporting a broken link or missing file, reviewer agents MUST verify via Glob or Read. Unverified "broken link" claims waste reviewer-response cycles — the file may exist at the exact path. **Why:** PR #2226 pattern-recognition-specialist false-positive on a `runtime-errors/2026-02-13-...` learning file that did exist.
 

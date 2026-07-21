@@ -76,7 +76,7 @@ HARD RULE: Immediately after the Session Error Inventory, classify EVERY invento
 For each item, decide:
 
 - **recurring** — the same class will bite again on a future session/PR (a flaky blocking gate, a missing guard, a foot-gun in a shared script, an inaccurate comment that misleads the next reader). Then pick a disposition:
-  - **fix-now-inline** — ≤30 lines AND ≤2 files AND in a subsystem this PR already touches → fold the fix into THIS work. (The first two conjuncts mirror the cost-of-filing gate in `review/SKILL.md` §5; the subsystem clause is the scope-discipline overlay — a different-subsystem defect is file-tracked, never inlined here.)
+  - **fix-now-inline** — ≤100 lines AND ≤4 files AND in a subsystem this PR already touches → fold the fix into THIS work. (The first two conjuncts mirror the cost-of-filing gate in `review/SKILL.md` §5; the subsystem clause is the scope-discipline overlay — a different-subsystem defect is file-tracked, never inlined here.)
   - **file-tracked** — larger, a different subsystem, or security/infra-sensitive → file a `deferred-scope-out` GitHub issue via the `review/SKILL.md` §5 mechanics (cost-of-filing + net-issue-flow: consolidate sibling follow-ups into one tracker; do not net-grow the backlog for trivia). A discovered defect in a DIFFERENT subsystem MUST stay its own issue and PR — never bundle it into an unrelated feature branch (scope discipline).
 - **one-off** — a typo, a transient flake that already self-resolved, or a context-specific misstep with no recurrence vector. Note it in the learning's Session Errors and move on (no fix, no issue).
 
@@ -236,14 +236,14 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    Rule budget:
      index (always-loaded):  B_INDEX bytes
      core (always-loaded):   B_CORE bytes
-     always-loaded total:    B_ALWAYS bytes (warn > 18000 / critical > 22000)
+     always-loaded total:    B_ALWAYS bytes (warn >= 20000 / critical > 23000 — mirrors scripts/lint-agents-rule-budget.py, the authoritative commit gate)
      registry total:         B_TOTAL bytes / A rules (longest rule: L bytes)
      constitution.md:        C rules
    ```
 
    Append warnings:
-   - If `B_ALWAYS > 18000`: `"[WARNING] always-loaded payload (B_ALWAYS/18000) exceeded — apply the placement gate (see Route Learning to Definition) and discoverability litmus (wg-every-session-error-must-produce-either) before adding any new rule; already-enforced and domain-scoped insights MUST route to a skill/agent, NOT AGENTS.core.md; consider retiring an existing rule via scripts/retired-rule-ids.txt."`
-   - If `B_ALWAYS > 22000`: `"[CRITICAL] always-loaded payload exceeds harness performance threshold (22k) — shrink required before next rule; demote wg-* class-specific rules from AGENTS.core.md to AGENTS.rest.md (per CPO sign-off PR #3496, only wg-* may be demoted — never hr-*). When trimming **Why:** lines to fit, preserve per-issue mechanism labels (text after each `#N`); strip redundant prose only. Correct: `**Why:** #2618 per-command-ack; #2880 non-interactive exec.` Over-trimmed: `**Why:** #2618; #2880.` (loses the per-issue mechanism distinction that downstream readers use to map a rule to its triggering incident class). Before demoting any wg-*, verify loader-class fit: `sed -n '88,115p' .claude/hooks/session-rules-loader.sh` — if the rule fires on docs-only sessions but AGENTS.rest.md does not load on docs-only, KEEP in core."`
+   - If `B_ALWAYS >= 20000`: `"[WARNING] always-loaded payload (B_ALWAYS/20000) exceeded — apply the placement gate (see Route Learning to Definition) and discoverability litmus (wg-every-session-error-must-produce-either) before adding any new rule; already-enforced and domain-scoped insights MUST route to a skill/agent, NOT AGENTS.core.md; consider retiring an existing rule via scripts/retired-rule-ids.txt."`
+   - If `B_ALWAYS > 23000`: `"[CRITICAL] always-loaded payload exceeds the commit gate's reject threshold (23k) — shrink required before next rule; demote wg-* class-specific rules from AGENTS.core.md to AGENTS.rest.md (per CPO sign-off PR #3496, only wg-* may be demoted — never hr-*). When trimming **Why:** lines to fit, preserve per-issue mechanism labels (text after each `#N`); strip redundant prose only. Correct: `**Why:** #2618 per-command-ack; #2880 non-interactive exec.` Over-trimmed: `**Why:** #2618; #2880.` (loses the per-issue mechanism distinction that downstream readers use to map a rule to its triggering incident class). Before demoting any wg-*, verify loader-class fit: `sed -n '88,115p' .claude/hooks/session-rules-loader.sh` — if the rule fires on docs-only sessions but AGENTS.rest.md does not load on docs-only, KEEP in core."`
    - If `L > 600`: `"[WARNING] longest rule is L bytes — cap per-rule length at ~600 (see cq-agents-md-why-single-line) by moving context to learning files."`
    - If `A > 115`: `"[ADVISORY] rule count (A/115) — bytes-first policy per cq-agents-md-why-single-line; count is informational."` <!-- rule-threshold: 115 -->
    - If `C > 300`: `"[WARNING] constitution.md is large (C/300) — consider migrating narrow rules to skill/agent instructions."`

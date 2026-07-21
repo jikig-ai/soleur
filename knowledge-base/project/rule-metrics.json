@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-07-20T12:19:16Z",
+  "generated_at": "2026-07-20T15:57:40Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -744,6 +744,32 @@
       "rule_text_prefix": " → core"
     },
     {
+      "id": "hr-weigh-every-decision-against-target-user-impact",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
+      "id": "hr-when-a-command-exits-non-zero-or-prints",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → core"
+    },
+    {
       "id": "hr-when-a-plan-specifies-relative-paths-e-g",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -862,6 +888,19 @@
     },
     {
       "id": "rf-before-spawning-review-agents-push-the",
+      "section": "Review & Feedback",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": " → rest"
+    },
+    {
+      "id": "rf-never-skip-qa-review-before-merging",
       "section": "Review & Feedback",
       "hit_count": 0,
       "bypass_count": 0,
@@ -1275,50 +1314,11 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": " → core"
-    },
-    {
-      "id": "hr-weigh-every-decision-against-target-user-impact",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 1,
-      "warn_count": 0,
-      "fire_count": 1,
-      "prevented_errors": 0,
-      "last_hit": "2026-07-20T08:38:29Z",
-      "first_seen": "2026-07-20T08:38:29Z",
-      "rule_text_prefix": " → core"
-    },
-    {
-      "id": "rf-never-skip-qa-review-before-merging",
-      "section": "Review & Feedback",
-      "hit_count": 2,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 2,
-      "prevented_errors": 2,
-      "last_hit": "2026-07-20T09:04:54Z",
-      "first_seen": "2026-07-20T09:04:49Z",
-      "rule_text_prefix": " → rest"
-    },
-    {
-      "id": "hr-when-a-command-exits-non-zero-or-prints",
-      "section": "Hard Rules",
-      "hit_count": 4,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 4,
-      "prevented_errors": 4,
-      "last_hit": "2026-07-20T09:04:55Z",
-      "first_seen": "2026-07-20T09:04:52Z",
-      "rule_text_prefix": " → core"
     }
   ],
   "summary": {
     "total_rules_tagged": 101,
-    "rules_unused_over_8w": 98,
+    "rules_unused_over_8w": 101,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "drops_jq_fail_count": 0,

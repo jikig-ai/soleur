@@ -29,7 +29,7 @@ gh api "/repos/:owner/:repo/code-scanning/alerts/<N>" --jq '.state'
 ```
 
 If the response is `dismissed` or `fixed`, the finding is an orphan — close it
-with a pointer to the dismissing PR (search via `gh pr list --search "alert #<N>"`)
+with a pointer to the dismissing PR (search via `gh pr list --search "alert #<N>" --state merged` — a *dismissing* PR has merged, and `gh pr list` otherwise defaults to open-only and would never find it, #6786)
 instead of approving for work. The `.github/workflows/codeql-to-issues.yml`
 `close-orphans` job sweeps these automatically once a day, but a triage-time
 check prevents wasted planning when the daily run is hours away. See

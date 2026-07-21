@@ -330,6 +330,12 @@ punishes correct changes — a tracking issue, not a longer instruction manual.
 
 # PR C — marker discriminators + delivery
 
+> **STATUS: CANCELLED — 2026-07-20, by operator decision.** Superseded the earlier HOLD. The
+> authoritative ruling is in
+> `knowledge-base/project/specs/feat-one-shot-6617-inngest-liveness-marker-registry-probe/decision-challenges.md`
+> § "Follow-on ruling — 2026-07-20: PR C is CANCELLED". The design below is retained as the record of what was
+> designed; it is not live work.
+
 ## C — Files to Edit
 
 | File | Change |
@@ -588,9 +594,11 @@ discoverability_test:
   command: "gh run list --workflow cutover-inngest.yml --status success --limit 1 --json conclusion --jq .[0].conclusion"
   expected_output: "success"
 
-# Post-C contract (PR C is HELD per the 2026-07-20 operator ruling — retained
-# verbatim so C does not have to re-derive it; promote it into the block above
-# when C ships and the marker fields actually emit).
+# Post-C contract — HISTORICAL ONLY. PR C was CANCELLED by operator decision on
+# 2026-07-20 (see the spec's decision-challenges.md follow-on ruling), so the
+# marker fields below will never emit and this block must NOT be promoted into
+# the block above. Retained verbatim as the record of the contract that was
+# designed, not as a pending instruction.
 discoverability_test_after_c:
   command: "doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 6h --grep SOLEUR_INNGEST_SERVER_PROBE --limit 5"
   expected_output: "at least one row containing sdk_url=, backend_is_prod= in {yes,no}, registry_count=, and image_ref matching the pinned IREF"
