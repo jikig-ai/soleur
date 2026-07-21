@@ -98,6 +98,11 @@ interface ProbeHandlerArgs {
     sleep(name: string, duration: string): Promise<void>;
   };
   logger: HandlerArgs["logger"];
+  /**
+   * Present only on the manual-trigger event. Carries the operator RELEASE
+   * verb (see `release_item_id` below); absent on the scheduled cron.
+   */
+  event?: { data?: Record<string, unknown> | null } | null;
 }
 
 interface AcknowledgedStatutoryRow {
@@ -118,6 +123,12 @@ interface HandlerResult {
    * non-zero value here is the signal that a second scheduler is live.
    */
   repinSuppressed: number;
+  /**
+   * Set only when the manual-trigger carried `release_item_id`. `cleared` is
+   * the number of markers deleted — 0 means there was nothing to release,
+   * which is itself the answer to "why did nothing re-send?".
+   */
+  released: { itemId: string; cleared: number } | null;
   probeFound: boolean;
 }
 
@@ -128,12 +139,79 @@ interface HandlerResult {
 export async function cronEmailIngressProbeHandler({
   step,
   logger,
+  event,
 }: ProbeHandlerArgs): Promise<HandlerResult> {
+  // ---- (0) operator RELEASE verb (#6781) ------------------------------------
+  // Reachable without SSH and without hand-written prod SQL, per
+  // hr-no-ssh-fallback-in-runbooks / hr-never-label-any-step-as-manual-without:
+  //
+  //   soleur:trigger-cron  →  POST /api/internal/trigger-cron
+  //   { "name": "cron/email-ingress-probe.manual-trigger",
+  //     "data": { "release_item_id": "<uuid>" } }
+  //
+  // Clears that item's send markers so a later tick can re-send, for the case
+  // where a dispatch was marked but demonstrably never delivered (the
+  // `statutory-notify-zero-delivery` alarm is what surfaces that case).
+  //
+  // IMPORTANT — releasing only RE-ARMS; it does not force a send. The repin
+  // predicate fires at exactly T-7, then daily from T-2 through overdue, so
+  // days 6..3 fire nothing and a release inside that dead zone waits until
+  // T-2. `released.rearmsNextTick` reports which case the operator is in.
+  //
+  // Validation mirrors cron-bug-fixer's event.data handling: the route is a
+  // dumb pass-through, so the shape is enforced HERE.
+  const rawRelease = event?.data?.release_item_id;
+  const releaseItemId =
+    typeof rawRelease === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawRelease)
+      ? rawRelease
+      : null;
+  if (rawRelease !== undefined && rawRelease !== null && releaseItemId === null) {
+    warnSilentFallback(null, {
+      feature: "email-triage",
+      op: "statutory-repin-release-invalid-id",
+      message: "release_item_id present but not a uuid; ignoring",
+    });
+  }
+  const released = releaseItemId
+    ? await step.run("statutory-repin-release", async () => {
+        const sb = createServiceClient();
+        const { data, error } = await sb.rpc("purge_statutory_repin_send", {
+          p_item_id: releaseItemId,
+        });
+        if (error) {
+          // Fatal for THIS step only. An operator invoked a recovery action on
+          // a statutory item; silently reporting success would be worse than
+          // failing the run, because they would believe the item is re-armed.
+          throw new Error(
+            `purge_statutory_repin_send(release) failed: ${error.message ?? "unknown"}`,
+          );
+        }
+        const cleared = typeof data === "number" ? data : 0;
+        // WORM-adjacent: the parent ledger is evidence, so deleting send
+        // evidence gets an audit line rather than vanishing.
+        warnSilentFallback(null, {
+          feature: "email-triage",
+          op: "statutory-repin-released",
+          message: "operator cleared statutory repin send-markers",
+          extra: { itemId: releaseItemId, cleared },
+        });
+        return { itemId: releaseItemId, cleared };
+      })
+    : null;
+
   // ---- (1) retention purge FIRST (Art. 5(1)(e)) -----------------------------
-  // No try/catch: a purge failure must fail the whole run loudly. Layer 1
-  // (sentry-correlation middleware) captures the terminal error with the
-  // retention-purge step breadcrumb — disambiguating purge-broken from
-  // ingress-broken without any extra plumbing here.
+  // MIXED failure contract — read this before adding a third RPC here.
+  //   * purge_email_triage_items: FATAL. No try/catch; a failure must fail the
+  //     whole run loudly. Layer 1 (sentry-correlation middleware) captures the
+  //     terminal error with the retention-purge step breadcrumb, disambiguating
+  //     purge-broken from ingress-broken without extra plumbing.
+  //   * purge_statutory_repin_send (#6781): NON-FATAL. A stale marker suppresses
+  //     nothing (the tick_key has already advanced), so failing the run here
+  //     would starve the ingress liveness probe for a retention nicety.
+  // Consequence: a successful step return does NOT mean both sweeps ran. The
+  // marker sweep's outcome is carried in `statutory_repin_markers_purged`
+  // (null = it failed) rather than in the step's success.
   const purged = await step.run("retention-purge", async () => {
     const sb = createServiceClient();
     const { data, error } = await sb.rpc("purge_email_triage_items");
@@ -147,7 +225,7 @@ export async function cronEmailIngressProbeHandler({
     // AP-018 guard tiers are blind to the drop. Retention here MUST be
     // explicit — statutory parent rows are evidence and are never purged, so
     // the marker's ON DELETE CASCADE effectively never fires.
-    const { error: markerPurgeError } = await sb.rpc(
+    const { data: purgedMarkers, error: markerPurgeError } = await sb.rpc(
       "purge_statutory_repin_send",
     );
     if (markerPurgeError) {
@@ -160,7 +238,15 @@ export async function cronEmailIngressProbeHandler({
         message: "statutory repin send-marker retention sweep failed",
       });
     }
-    return data as Record<string, number>;
+    return {
+      ...(data as Record<string, number>),
+      // The RPC returns its delete count; carrying it is the ONLY detection for
+      // "the marker table grows without bound" (the sweep is non-fatal, so a
+      // permanently-failing sweep is otherwise silent). Null when the sweep
+      // errored — distinguishable from a real zero.
+      statutory_repin_markers_purged:
+        typeof purgedMarkers === "number" ? purgedMarkers : null,
+    } as Record<string, number | null>;
   });
 
   // ---- (2) deadline-approach re-pin (T-7d / T-2d) ---------------------------
@@ -183,13 +269,29 @@ export async function cronEmailIngressProbeHandler({
     }
 
     // Computed ONCE, before the loop, and returned from the step so it is
-    // checkpointed (mirrors send-probe's `sentAt`). A per-iteration date would
-    // let a run that straddles UTC midnight key its own tail differently and
-    // re-send those items on the next tick.
+    // checkpointed (mirrors send-probe's `sentAt`): one run is one logical
+    // tick, so it gets one tick identity.
+    //
+    // Be honest about the midnight case rather than claiming it is a win. If a
+    // run straddled UTC midnight, computing once keys the tail as D while the
+    // next 06:00 tick keys D+1, so the tail could receive two sends a few hours
+    // apart; a per-iteration date would key the tail D+1 and suppress it. The
+    // reason to hoist is NOT that it handles the straddle better — it is that a
+    // single run should not fragment into two tick identities, and a daily
+    // 06:00 cron cannot straddle midnight in the first place. T9 pins the
+    // one-identity property.
+    //
+    // Note the daily key's real protection window is the remainder of the UTC
+    // day after the cron hour (~18h at 06:00), NOT 24h. That margin is a
+    // property of the SCHEDULE, not of the guard — moving the cron to late
+    // evening would shrink it toward zero.
     const runDateUtc = new Date().toISOString().slice(0, 10);
 
     let pinged = 0;
     let suppressed = 0;
+    // Fail-open accounting, emitted ONCE after the loop (see M2 note above).
+    let failOpenCount = 0;
+    let failOpenFirstCode: string | undefined;
     // RECIPIENT-GRAIN CONSTRAINT (ADR-035; migration 135 header note 4).
     // statutory_repin_send is keyed (item_id, tick_key) — ITEM grain. That
     // equals RECIPIENT grain only because this loop pings `row.user_id` and
@@ -268,25 +370,21 @@ export async function cronEmailIngressProbeHandler({
             suppressed += 1;
             continue;
           }
-          warnSilentFallback(markerError, {
-            feature: "email-triage",
-            op: "deadline-repin-marker-insert-failed",
-            message:
-              "statutory repin send-marker insert failed; dispatching anyway (fail open)",
-            extra: { itemId: row.id, tickKey, code: markerError.code ?? null },
-          });
+          // Aggregated, not emitted per item — see the sweep-complete emit
+          // below. The likeliest trigger (a 42P01 during the deploy window) is
+          // CORRELATED across every item in the band at once, so a per-item
+          // warn produces one event per statutory row per day. That is the
+          // shape that gets an alert rule muted, and a muted rule here would
+          // hide exactly the class of defect this guard exists to surface.
+          failOpenCount += 1;
+          failOpenFirstCode ??= markerError.code ?? "unknown";
         }
       } catch (err) {
         // A THROWN rejection must not escape the iteration: under `retries: 0`
         // an escape would kill the whole run, taking the ingress liveness
         // probe (steps 3-5) down with it.
-        warnSilentFallback(err, {
-          feature: "email-triage",
-          op: "deadline-repin-marker-insert-failed",
-          message:
-            "statutory repin send-marker insert threw; dispatching anyway (fail open)",
-          extra: { itemId: row.id, tickKey },
-        });
+        failOpenCount += 1;
+        failOpenFirstCode ??= "threw";
       }
 
       // Title carries only the registry-derived due string — never the
@@ -301,13 +399,45 @@ export async function cronEmailIngressProbeHandler({
       pinged += 1;
     }
 
-    // Per-run record via the observability layer, NOT pino stdout: Vector's
-    // allowlist keeps only level_int >= 40, so an info-level stdout line would
-    // never reach Better Stack and this counter would be invisible off-box.
+    // ONE warn for the whole run's fail-open population, at WARN level so it
+    // clears the Vector >= 40 filter and reaches Better Stack as well as
+    // Sentry. `pg_code` is promoted to a searchable tag by the observability
+    // layer, so a 42P01 deploy race stays distinguishable from a real bug.
+    if (failOpenCount > 0) {
+      warnSilentFallback(
+        { code: failOpenFirstCode },
+        {
+          feature: "email-triage",
+          op: "deadline-repin-marker-insert-failed",
+          message:
+            "statutory repin send-marker insert failed; dispatched anyway (fail open)",
+          extra: {
+            failOpenCount,
+            firstCode: failOpenFirstCode ?? null,
+            scanned: (data ?? []).length,
+            runDateUtc,
+          },
+        },
+      );
+    }
+
+    // Per-run record via the observability layer, not a bare pino call. Be
+    // precise about where this lands: Vector's allowlist keeps only
+    // level_int >= 40 (see infra/vector.toml [transforms.app_container_warn_filter]),
+    // and infoSilentFallback still logs at info — so this counter reaches
+    // SENTRY only. Better Stack does not carry it. The WARN-level ops in this
+    // file (marker-insert-failed, marker-purge-failed) clear the filter and do
+    // reach both.
     infoSilentFallback(null, {
       feature: "email-triage",
       op: "deadline-repin-sweep-complete",
       message: "statutory deadline repin sweep finished",
+      // Sentry indexes TAGS, not `extra` — a counter buried in `extra` cannot be
+      // searched or alerted on, and every run groups under one constant message.
+      // `suppressed > 0` is the only signal that a second scheduler is live and
+      // double-firing (the #6781 condition), so it has to be queryable. Boolean,
+      // not the count: tags must stay low-cardinality.
+      tags: { repin_suppressed: suppressed > 0 ? "yes" : "no" },
       extra: {
         pinged,
         suppressed,
@@ -415,6 +545,7 @@ export async function cronEmailIngressProbeHandler({
     purged,
     repinged: repin.pinged,
     repinSuppressed: repin.suppressed,
+    released,
     probeFound: found.found,
   };
 }

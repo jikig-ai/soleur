@@ -117,6 +117,35 @@ A thrown rejection must also not escape the iteration: the enclosing Inngest fun
 under `retries: 0`, so an escape would kill the run and take the ingress liveness probe
 (steps 3–5) down with it.
 
+#### Residual: marker-before-dispatch reopens the asymmetry for one case
+
+The fail-open argument above is not a complete discharge, and presenting it as
+one would be dishonest.
+
+The marker is written immediately **before** dispatch, because sending first
+means a crash in between re-sends forever. But that ordering reintroduces the
+exact outcome the T-7 reasoning calls unacceptable: if the marker insert
+succeeds and the dispatch then fails — a pod kill, an unhandled throw, an
+`await` that never resolves — the `headsup` marker persists, the next tick sees
+`daysUntilDue !== 7`, and the heads-up is **deleted, not delayed**. Under
+`retries: 0` nothing retries it.
+
+The trade is deliberate and the blast radius is one item per crash (the marker
+lands immediately before that item's own dispatch, so at most one item is in
+flight). The daily band self-heals on tomorrow's key; only the one-shot arm
+does not. Two things carry this residual:
+
+- the operator **release verb** (`purge_statutory_repin_send(p_item_id)`),
+  reachable via the manual-trigger event, which re-arms the item — subject to
+  the dead-zone caveat below;
+- `statutory-notify-zero-delivery`, which covers the zero-device case but
+  **not** the crash-after-marker case, which currently emits nothing per-item.
+
+**The release verb re-arms; it does not force a send.** The repin predicate
+fires at exactly T-7, then daily from T-2 through overdue, so days 6..3 fire
+nothing at all. A release inside that dead zone does nothing until T-2 — which
+on a 72-hour `breach-art33` clock is most of the remaining time.
+
 ### 3. Recipient-grain constraint (the 1:N rebuttal)
 
 The "Single-source-ref-per-table" alternative rejected above argued against per-source dedup

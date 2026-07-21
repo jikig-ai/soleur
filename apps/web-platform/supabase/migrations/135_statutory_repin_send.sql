@@ -104,10 +104,12 @@ ALTER TABLE public.statutory_repin_send ENABLE ROW LEVEL SECURITY;
 -- Deliberately ZERO policies. RLS-enabled with no policy denies every
 -- non-service-role read and write outright.
 
-REVOKE SELECT ON TABLE public.statutory_repin_send FROM PUBLIC, anon, authenticated;
-REVOKE INSERT ON TABLE public.statutory_repin_send FROM PUBLIC, anon, authenticated;
-REVOKE UPDATE ON TABLE public.statutory_repin_send FROM PUBLIC, anon, authenticated;
-REVOKE DELETE ON TABLE public.statutory_repin_send FROM PUBLIC, anon, authenticated;
+-- REVOKE ALL, not the four DML verbs: the verb-list form leaves TRIGGER and
+-- REFERENCES granted wherever Supabase's ALTER DEFAULT PRIVILEGES on `public`
+-- hands them out. TRIGGER is the one that matters — a trigger created by
+-- `authenticated` executes under the DML invoker, and the only writer here is
+-- service_role. Precedent: 049_runtime_mint_intent.sql.
+REVOKE ALL ON TABLE public.statutory_repin_send FROM PUBLIC, anon, authenticated;
 
 -- =====================================================================
 -- 2. Retention sweep + operator release verb
@@ -123,8 +125,21 @@ REVOKE DELETE ON TABLE public.statutory_repin_send FROM PUBLIC, anon, authentica
 -- Two modes:
 --   * p_item_id NULL (the cron's call)  → 90-day sweep.
 --   * p_item_id supplied               → targeted delete. This is the operator
---     RELEASE verb: it clears the marker so the next tick re-sends, for the
---     case where a send was marked but demonstrably never delivered.
+--     RELEASE verb, for the case where a send was marked but demonstrably
+--     never delivered.
+--
+--     READ THIS BEFORE RELYING ON IT: clearing a marker does NOT guarantee a
+--     re-send. It only re-arms the item; the next tick still has to WANT to
+--     fire. The repin predicate fires at exactly T-7, then daily from T-2
+--     through overdue — so days 6, 5, 4 and 3 fire NOTHING. Releasing a
+--     `headsup` marker at T-6 re-arms an item that no tick will pick up until
+--     T-2, and the T-7 heads-up is gone for good (`daysUntilDue === 7` never
+--     holds again). On a 72-hour breach-art33 clock that dead zone is most of
+--     the remaining time.
+--
+--     So: releasing inside a fire window re-sends on the next tick; releasing
+--     inside the T-7→T-2 dead zone does not, and the operator needs to know
+--     which case they are in.
 
 CREATE OR REPLACE FUNCTION public.purge_statutory_repin_send(
   p_item_id uuid DEFAULT NULL
@@ -157,5 +172,7 @@ GRANT EXECUTE ON FUNCTION public.purge_statutory_repin_send(uuid)
 COMMENT ON FUNCTION public.purge_statutory_repin_send(uuid) IS
   'SECURITY DEFINER; service_role only. p_item_id NULL sweeps markers older '
   'than 90 days (called from the cron retention-purge step). p_item_id '
-  'supplied is the operator release verb: clears that item''s markers so the '
-  'next tick re-sends.';
+  'supplied is the operator release verb: clears that item''s markers, re-arming '
+  'it. NOTE: re-arming only re-sends if a later tick actually fires — the '
+  'predicate is silent on days 6..3, so a release inside that dead zone does '
+  'nothing until T-2.';

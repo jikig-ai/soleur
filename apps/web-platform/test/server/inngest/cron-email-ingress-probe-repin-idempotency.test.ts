@@ -28,7 +28,10 @@
 //   T9  a run crossing UTC midnight mid-loop     → ONE tick_key
 //   T10 rows hitting a pre-existing guard        → NO marker written
 //   T11 push-subscribed user, double-fire        → exactly one webpush send
+//   T9b a run spanning BOTH cadences             → each keyed by its cadence
+//   T9c an OVERDUE item                          → still pings daily
 //   T12 single-recipient send path               → R7 tripwire (CPO C5)
+//   T13 the marker insert names no absent column → 42703 tripwire
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -60,6 +63,8 @@ const {
     pushSubs: Record<string, Array<Record<string, unknown>>>;
     /** user_id → email address. */
     userEmails: Record<string, string>;
+    /** Owner rows a fan-out implementation would discover (see T12). */
+    workspaceOwners: Array<Record<string, unknown>>;
   } = {
     repinRows: [],
     markers: new Set<string>(),
@@ -68,6 +73,7 @@ const {
     markerThrowOnAttempt: null,
     pushSubs: {},
     userEmails: {},
+    workspaceOwners: [],
   };
   return {
     resendSendSpy: vi.fn(async (..._args: unknown[]) => ({ error: null })),
@@ -240,6 +246,14 @@ function makeBuilder(table: string) {
         onFulfilled,
         onRejected,
       );
+    } else if (table === "workspace_members" || table === "workspace_member") {
+      // Deliberately populated. T12 claims to red on a fan-out, but the most
+      // likely fan-out implementation DISCOVERS co-Owners by querying
+      // membership first — and an unrouted table falls through to `[]`, so the
+      // fan-out would find nobody, send once, and T12 would stay green having
+      // proven nothing. Giving it three Owners to find is what makes the
+      // tripwire able to fire.
+      result = { data: dbState.workspaceOwners, error: null };
     } else if (table === "push_subscriptions" && !deleting) {
       const userId = eqArgs.find(([c]) => c === "user_id")?.[1] as string;
       result = { data: dbState.pushSubs[userId] ?? [], error: null };
@@ -295,10 +309,18 @@ function resolveMarkerInsert(payload: Record<string, unknown>) {
   return { data: { item_id: itemId, tick_key: tickKey }, error: null };
 }
 
-const rpcSpy = vi.fn(async (name: string) => {
+const rpcSpy = vi.fn(async (name: string, args?: Record<string, unknown>) => {
   ioOrder.push(`rpc:${name}`);
   if (name === "purge_email_triage_items") {
     return { data: { probe_deleted: 0 }, error: null };
+  }
+  if (name === "purge_statutory_repin_send" && args?.p_item_id) {
+    // Targeted release: drop that item's markers from the fake's store and
+    // report how many went, mirroring the RPC's ROW_COUNT return.
+    const prefix = `${args.p_item_id as string}::`;
+    const hit = [...dbState.markers].filter((k) => k.startsWith(prefix));
+    hit.forEach((k) => dbState.markers.delete(k));
+    return { data: hit.length, error: null };
   }
   return { data: 0, error: null };
 });
@@ -337,9 +359,9 @@ function makeStep() {
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
-function runHandler() {
+function runHandler(event?: { data?: Record<string, unknown> }) {
   const step = makeStep();
-  return cronEmailIngressProbeHandler({ step, logger } as never);
+  return cronEmailIngressProbeHandler({ step, logger, event } as never);
 }
 
 /**
@@ -399,6 +421,7 @@ beforeEach(() => {
   dbState.markerThrowOnAttempt = null;
   dbState.pushSubs = {};
   dbState.userEmails = {};
+  dbState.workspaceOwners = [];
   vi.stubEnv("VAPID_PUBLIC_KEY", "test-public-key");
   vi.stubEnv("VAPID_PRIVATE_KEY", "test-private-key");
   vi.stubEnv("RESEND_API_KEY", "re_test_key");
@@ -589,8 +612,55 @@ describe("deadline-repin idempotency guard (#6781)", () => {
 
     await runHandler();
 
-    const keys = new Set(dbState.markerAttempts.map((a) => a.tick_key));
-    expect(keys.size).toBe(1);
+    // Restated: the invariant is ONE runDateUtc per run, not one KEY per run.
+    // `keys.size === 1` would be WRONG for a run containing both cadences (a
+    // T-7 item keys 'headsup' while band items key 'daily:...'), and it is also
+    // satisfied by an implementation that hardcodes any constant.
+    const dailyKeys = dbState.markerAttempts
+      .map((a) => a.tick_key)
+      .filter((k) => k.startsWith("daily:"));
+    expect(dailyKeys.length).toBeGreaterThan(0);
+    expect(new Set(dailyKeys)).toEqual(new Set(["daily:2026-03-10"]));
+  });
+
+  it("T9b: a run spanning BOTH cadences keys each by its own cadence", async () => {
+    // The mixed-cadence case T9 cannot cover. Also the only fixture in this
+    // file that instantiates more than one cadence in a single run.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [
+      statutoryRow({ id: "band", user_id: "u-band", received_at: receivedAtForDaysUntilDue(1) }),
+      statutoryRow({
+        id: "heads",
+        user_id: "u-heads",
+        received_at: receivedAtForDaysUntilDue(DEADLINE_REPIN_HEADS_UP_DAY),
+      }),
+    ];
+
+    await runHandler();
+
+    const byItem = Object.fromEntries(
+      dbState.markerAttempts.map((a) => [a.item_id, a.tick_key]),
+    );
+    expect(byItem).toEqual({ band: "daily:2026-03-10", heads: "headsup" });
+  });
+
+  it("T9c: an OVERDUE item still pings daily (the most dangerous bucket)", async () => {
+    // D6 gap: every other fixture in this file uses a non-negative
+    // daysUntilDue, so the overdue path — the one the SUT's own comment calls
+    // "the most dangerous bucket ... must never be silent" — was untested.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [
+      statutoryRow({ id: "overdue", user_id: "u-od", received_at: receivedAtForDaysUntilDue(-5) }),
+    ];
+
+    const result = await runHandler();
+
+    expect(result.repinged).toBe(1);
+    expect(dbState.markerAttempts).toEqual([
+      { item_id: "overdue", tick_key: "daily:2026-03-10" },
+    ]);
   });
 
   it("T10: rows hitting a pre-existing guard write NO marker", async () => {
@@ -602,12 +672,22 @@ describe("deadline-repin idempotency guard (#6781)", () => {
     dbState.repinRows = [
       statutoryRow({ id: "anon", user_id: null }),
       statutoryRow({ id: "unknown-rule", rule_id: "no-such-rule" }),
+      // POSITIVE CONTROL. Without a valid row here, both assertions below are
+      // satisfied by "the loop never ran" — a fixture that drifts out of the
+      // band, a renamed status column, or a routing change in the fake all
+      // produce 0 markers and 0 emails and this test stays green having proven
+      // nothing. T2 already carries this defence; T10 needs it too.
+      statutoryRow({ id: "valid", user_id: "user-valid" }),
     ];
 
     await runHandler();
 
-    expect(dbState.markerAttempts).toHaveLength(0);
-    expect(statutoryEmailCalls()).toHaveLength(0);
+    // The loop DID run and DID reach the marker site — for the valid row only.
+    expect(dbState.markerAttempts).toEqual([
+      { item_id: "valid", tick_key: "daily:2026-03-10" },
+    ]);
+    expect(statutoryEmailCalls()).toHaveLength(1);
+    expect(statutoryEmailCalls()[0].to).toEqual(["user-valid@example.test"]);
   });
 
   it("T11: a push-subscribed user double-firing gets exactly ONE push", async () => {
@@ -693,6 +773,59 @@ describe("deadline-repin idempotency guard (#6781)", () => {
     );
   });
 
+  it("T14: the operator release verb clears markers and re-arms the item", async () => {
+    // The recovery path the plan required and that must not need prod SQL.
+    // Without it, the statutory-notify-zero-delivery alarm names a problem the
+    // operator has no lever to fix.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    const uuid = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
+    dbState.repinRows = [statutoryRow({ id: uuid })];
+
+    await runHandler();
+    const suppressed = await runHandler();
+    expect(suppressed.repinSuppressed).toBe(1);
+    expect(statutoryEmailCalls()).toHaveLength(1);
+
+    // Release, then the SAME tick can send again — proving a real re-arm, not
+    // just a row count.
+    const rel = await runHandler({ data: { release_item_id: uuid } });
+    expect(rel.released).toEqual({ itemId: uuid, cleared: 1 });
+    expect(statutoryEmailCalls()).toHaveLength(2);
+  });
+
+  it("T14b: a non-uuid release_item_id is refused, not passed to the RPC", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [];
+
+    const result = await runHandler({ data: { release_item_id: "'; DROP TABLE --" } });
+
+    expect(result.released).toBeNull();
+    expect(
+      rpcSpy.mock.calls.filter(
+        ([name, args]) =>
+          name === "purge_statutory_repin_send" &&
+          (args as Record<string, unknown> | undefined)?.p_item_id !== undefined,
+      ),
+    ).toHaveLength(0);
+    expect(warnSilentFallbackSpy).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ op: "statutory-repin-release-invalid-id" }),
+    );
+  });
+
+  it("T14c: a scheduled run (no event) performs no release", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [statutoryRow()];
+
+    const result = await runHandler();
+
+    expect(result.released).toBeNull();
+    expect(ioOrder).not.toContain("rpc:purge_statutory_repin_send:targeted");
+  });
+
   it("T12: the send path is SINGLE-RECIPIENT (R7 tripwire — do not delete)", async () => {
     // ─────────────────────────────────────────────────────────────────────
     // CONSTRAINT: statutory_repin_send is keyed (item_id, tick_key) — ITEM
@@ -719,6 +852,12 @@ describe("deadline-repin idempotency guard (#6781)", () => {
       "owner-third": "third@example.test",
     };
     dbState.repinRows = [statutoryRow({ id: "shared-item", user_id: "owner-primary" })];
+    // Discoverable co-Owners: a membership-querying fan-out finds these.
+    dbState.workspaceOwners = [
+      { user_id: "owner-primary", role: "owner" },
+      { user_id: "owner-second", role: "owner" },
+      { user_id: "owner-third", role: "owner" },
+    ];
 
     const result = await runHandler();
 
@@ -734,7 +873,15 @@ describe("deadline-repin idempotency guard (#6781)", () => {
     expect(lookedUp).not.toContain("owner-second");
     expect(lookedUp).not.toContain("owner-third");
 
-    // And exactly one marker, at item grain.
+    // Branch-agnostic: a fan-out that routes to PUSH instead of email would
+    // not move statutoryEmailCalls() at all, so assert the other channel is
+    // silent too. Without this the tripwire only catches an email-shaped
+    // fan-out — the less likely variant.
+    expect(webpushSendSpy).toHaveBeenCalledTimes(0);
+
+    // And exactly one marker, at item grain. NOTE: this assertion alone does
+    // NOT discriminate — one item-grain marker is exactly what the BUGGY
+    // fan-out produces. It is the recipient assertions above that red.
     expect(dbState.markerAttempts).toEqual([
       { item_id: "shared-item", tick_key: "daily:2026-03-10" },
     ]);
@@ -789,7 +936,16 @@ describe("T7: migration 135 DDL pin", () => {
   });
 
   it("pins the SECURITY DEFINER search_path (cq-pg-security-definer-search-path-pin-pg-temp)", () => {
-    expect(up).toMatch(/SET\s+search_path\s*=\s*public,\s*pg_temp/);
+    // Anchored to the FUNCTION BODY, not the bare token. The migration header
+    // says, in prose, "the RPC pins SET search_path = public, pg_temp" — so a
+    // bare-token match passes even if the real SET is deleted from the
+    // function. That is cq-assert-anchor-not-bare-token, and it is the same
+    // trap that bit AC3 and AC9 in this PR's own acceptance criteria.
+    expect(up).toMatch(
+      /CREATE OR REPLACE FUNCTION public\.purge_statutory_repin_send[\s\S]*?SET\s+search_path\s*=\s*public,\s*pg_temp[\s\S]*?AS \$\$/,
+    );
+    // And the SET must be real SQL, never a commented-out line.
+    expect(up).toMatch(/^\s*SET\s+search_path\s*=\s*public,\s*pg_temp/m);
   });
 
   it("does NOT replace either pre-existing email_triage function", () => {
@@ -826,7 +982,15 @@ describe.runIf(process.env.TENANT_INTEGRATION_TEST === "1")(
         .select("id")
         .limit(1)
         .single();
-      if (!item) return; // nothing to key against in this environment
+      // No silent skip: an empty ledger in the target environment must fail as
+      // a FIXTURE error, not report green. This tier exists to be the ground
+      // truth for the mocked suite above; a silent pass reintroduces exactly
+      // the trap tenant-integration.yml was built to close.
+      if (!item) {
+        expect.fail(
+          "fixture precondition: no email_triage_items row to key a marker against",
+        );
+      }
 
       const tickKey = `daily:${new Date().toISOString().slice(0, 10)}`;
       await sb.from("statutory_repin_send").insert({ item_id: item.id, tick_key: tickKey });

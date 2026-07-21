@@ -10,6 +10,13 @@
 --
 -- purge_email_triage_items and anonymise_email_triage_items are NOT touched
 -- here; 135 deliberately never replaced them.
+--
+-- Expect a burst of Sentry warnings during the rollback window. In the normal
+-- order (migrate down, then redeploy) the still-deployed code keeps inserting
+-- into a dropped table, so every item in the band hits 42P01, fails open, and
+-- contributes to one aggregated `deadline-repin-marker-insert-failed` event per
+-- run. That is the guard working as designed — users still get their notices —
+-- but it will read as a second incident stacked on the one being rolled back.
 
 -- 1. Sweep RPC / operator release verb.
 DROP FUNCTION IF EXISTS public.purge_statutory_repin_send(uuid);
