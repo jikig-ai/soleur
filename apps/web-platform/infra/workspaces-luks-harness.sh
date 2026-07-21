@@ -296,6 +296,14 @@ run_case() {
       # free (`has "^sleep 3"`), so the interval knob does not need a separate observation channel.
       # A no-op is safe here ONLY because the retry loops are bounded by ATTEMPTS, never by wall
       # clock — a wall-clock deadline under a no-op sleep would spin hot for its whole duration.
+      #
+      # Relationship to ci-deploy.test.sh's MOCK_SLEEP_NOOP (#6665): NOT a parallel mechanism to be
+      # unified. That one is an opt-in gate on a PATH-mock binary, for a suite whose sleeps are real
+      # wall clock it wants to skip; this is a shell-function stub inside an already-stubbed
+      # subshell, and it RECORDS rather than merely skipping, because the recorded argument is the
+      # only observation channel for the retry-interval seam. Unconditional here is correct: this
+      # harness has no case that wants a real sleep. If #6665 broadens the MOCK_SLEEP_NOOP gate, the
+      # thing to share is the opt-in convention, not this recorder.
       sleep() { rec "sleep $*"; return 0; }
       # _seq_pick <index> <space-separated list> — the MOUNTPOINT_RCS saturation semantics, reused.
       # Saturates on the LAST element, so a single-element list means "always this value"

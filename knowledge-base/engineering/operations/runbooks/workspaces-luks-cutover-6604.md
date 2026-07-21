@@ -48,6 +48,17 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    drop mid-freeze still auto-rolls-back to the plaintext mount, and a host-local dead-man timer
    remounts plaintext if no orchestrator heartbeat lands.
 
+   > **The dead-man can undo a SUCCEEDED cutover, silently.** It is armed at the freeze and cleared
+   > by `disarm_dead_man`, which runs *after* `app_canary`. So any `die` inside the canary leaves the
+   > timer armed — and because `CANARY_OK=1` is already set by the host canary, `cleanup()` correctly
+   > does **not** roll back, meaning nothing else intervenes either. On 2026-07-20 (run
+   > `29782780158`) the cutover landed, served for ~27 minutes, aborted on a Cloudflare 521 boot
+   > race, and the timer then remounted the plaintext volume over a healthy LUKS mount — stranding
+   > those 27 minutes of sole-copy writes on a now-detached volume, with **no** signal on any
+   > channel. See **#6812**. If a cutover run reports failure, establish whether the timer has since
+   > fired before concluding anything about the current mount: a verify run from *before* the
+   > 30-minute mark can legitimately report a healthy LUKS mount that no longer exists.
+
 <!-- lint-infra-ignore start: C15 boot-path re-canary is a deliberately-retained deferred-orchestrator
      operator step — the cutover does NOT auto-reboot (a reboot drops the SSH session mid-run), so the
      one host-reboot is operator-gated by design and cannot be routed through the dispatch. -->
@@ -61,14 +72,62 @@ forever — which the escrow proof + off-host header backup exist to prevent.
 5. **Verify (read-only, no SSH).**
    `gh workflow run workspaces-luks-verify.yml` → conclusion `success` means `blkid`=`crypto_LUKS`,
    `findmnt /mnt/data`=`/dev/mapper/workspaces`, the `cryptsetup status` mapper→device link is
-   present, and `/api/health`=200. The daily `luks-monitor` probe re-asserts this and pushes a
-   Better Stack heartbeat; a missed push pages.
+   present, `/health`=200, `/internal/readyz` reports `ready=true`, **and** the workspace inventory
+   count is at or above the persisted `WORKSPACES_COUNT` baseline. Success is defined by the
+   presence of the verdict line, not by the absence of an error:
+
+   ```
+   [luks-monitor] SOLEUR_WORKSPACES_READYZ ready=true writable=true populated=true workspace_count=8 expected=8 capacity=use=41%,mount=rw
+   ```
+
+   > **This gate was NON-FUNCTIONAL until #6807.** It asserted 200 on the API-prefixed health path,
+   > which has no route and 307s to `/login` — the workflow was structurally incapable of ever
+   > passing, so from the #6701 canary fix (2026-07-19) until #6807 this step could not succeed for
+   > any state of the volume. A `failure` conclusion on a run before that fix says nothing.
+   >
+   > **`ready=true` is a FLOOR, not an inventory.** `readiness.ts:81` is
+   > `countWorkspaceDirsAt(root) > 0`, so a cutover preserving 1 of 8 sole-copy workspaces still
+   > reports ready. The `workspace_count` comparison is what carries the "inventory survived" claim.
+   >
+   > On a host with no baseline (any host cut over before #6807 persisted one), the first run fails
+   > closed with `workspace_count_baseline_missing`. Seed it ONCE with
+   > `-f seed_workspace_count=<n>`, where `<n>` comes from an INDEPENDENT proof of the inventory —
+   > the cutover run's C1 differential `total=` — never from the host's own live count, which would
+   > compare a number to itself.
+
+   ### Verdict → operator action
+
+   | Verdict / reason | What it means | Action |
+   | --- | --- | --- |
+   | `probe rc=0` + verdict line, `workspace_count >= expected` | Healthy and certified | None |
+   | Verdict line **ABSENT**, run otherwise green | The assert never ran (flag lost). Proves **nothing** | Treat as FAILED. Re-dispatch; if it recurs, the flag delivery is broken |
+   | `rc=255` | SSH/CF-tunnel transport failure | **Not** a drift finding. No Sentry event exists. Check the bridge step, re-dispatch |
+   | `rc=1` `mount_not_mapper` / `device_not_luks` | At-rest drift: `/mnt/data` is **not** the LUKS mapper | **Encryption is not in effect.** Do not re-cut before reading §Rollback — a fresh freeze copies whichever volume is live now |
+   | `rc=1` `escrow_passphrase_mismatch` / `header_uuid_unreadable` | Escrow or header problem | Header-recovery path; do **not** wipe the plaintext original |
+   | `rc=2` `readyz_not_ready` + `capacity` shows `use=100%` or `mount=ro` | **CAPACITY fault**, not data loss | Free space / remount rw. **Never** run a data-recovery procedure for this |
+   | `rc=2` `readyz_not_ready` on a healthy `rw` mount with space | The container cannot serve from the mount | Data-recovery incident on sole-copy data — halt and escalate |
+   | `rc=2` `readyz_gate_regression` | 403/404/405 — loopback gate or route regression | Application/routing bug. **Not** data loss, despite the endpoint being about the mount |
+   | `rc=2` `readyz_unparseable` | Proxy error page / truncated body | Transport or proxy fault. Not data loss |
+   | `rc=2` `workspace_count_shortfall` | Fewer workspaces than the baseline | **Data-recovery incident on sole-copy data.** Halt and escalate. Do not wipe anything |
+   | `rc=2` `workspace_count_baseline_missing` | No baseline persisted | Seed it once (above). Fail-closed by design |
+   | `rc=2` `readiness_helper_unavailable` | `workspaces-luks-emit.sh` missing/stale on the host | The assert cannot run; this run proves nothing. Reinstall via the cutover channel |
+   | `health_probe_structural` | `/health` returned 307/401/403/404/405/525/526 | Endpoint/routing regression. Retrying will not help |
+   | `health_probe_deadline` | `/health` never reached 200 within the budget | Slow boot, no route, or DNS. Check the container and CF tunnel |
+
+   The capacity-vs-data-loss split is the one that matters most: `isWorkspacesWritable` fails closed
+   on ENOSPC/EROFS/EACCES/EIO alike, so a full disk and a lost volume produce the *same*
+   `ready=false`. Escalating a full disk to "data-recovery on sole-copy data" is a destructive
+   response to a non-destructive problem.
 
 6. **Soak (7 days).** The retained plaintext volume stays **attached-unmounted, un-wiped** for 7
    days (protected by the cutover gate's `old_volume_touched==0`, NOT `prevent_destroy`). Enrol
    `scripts/followthroughs/workspaces-luks-soak-6604.sh` with a real ISO `earliest=` (canary+7d) and
    the `follow-through` label. It PASSes only on observed completion (drift=0 ∧ heartbeat spanning
    ≥7d ∧ ADR-119 `accepted`).
+
+   > **The soak clock has not started and cannot until #6808 lands.** The heartbeat it gates on is
+   > UNFED (see Failure signals), so no rows accumulate and the ≥7d span can never be satisfied.
+   > #6808 is the critical path to this step, not an optional tidy-up.
 
 7. **Wipe + converge + PR 3 (separate, environment-gated).** After the soak comments "SOAK PASSED —
    wipe authorized", a human authorizes the **separate** environment-gated destructive dispatch:
@@ -91,5 +150,11 @@ T0 remount + replay from LUKS", never a total loss.
   (`device_type`, `mount_source`, `mapper_present`, `luks_open_result`, `header_uuid_match`,
   `cryptsetup_unit_result`, `doppler_reachable`, `mountpoint_ok`, `host`, `reason`) tell the failure
   modes apart in one event.
-- **Better Stack** `betteruptime_heartbeat.workspaces_luks` — a missed daily push = a dead probe.
+- ~~**Better Stack** `betteruptime_heartbeat.workspaces_luks` — a missed daily push = a dead probe.~~
+  **UNFED pending #6808.** The Terraform resource exists, but `WORKSPACES_LUKS_HEARTBEAT_URL` is not
+  wired, so `luks-monitor.sh:116` logs the URL as absent and pushes nothing. This channel pages on
+  **nothing today** — do not count it as a failure signal, and note that the 7-day soak gates on
+  heartbeat rows spanning ≥7d, so that clock has not started.
+  A worked consequence: on 2026-07-20 the daily probe stopped running entirely for ~6 hours and no
+  dead-probe signal fired, because there is no live heartbeat to miss (#6812).
 - **`betteruptime_monitor.app`** — a refused container (failed unlock) is a hard down.

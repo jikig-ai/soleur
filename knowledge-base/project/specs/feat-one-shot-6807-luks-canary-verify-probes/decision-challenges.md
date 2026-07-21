@@ -45,3 +45,72 @@ The strong-model consult recommended making the daily `luks-monitor` readyz asse
 That is sound reasoning from a false premise. `apps/web-platform/infra/luks-monitor.service:5` carries `RequiresMountsFor=/mnt/data`. In the ADR-119:234-240 reboot hazard `/mnt/data` is **not mounted**, so the unit never executes `ExecStart` — a default-ON daily assert would emit nothing in precisely the scenario the argument is about. The verify workflow runs the script as a **bare file** over SSH (`workspaces-luks-verify.yml:98`), with no unit and therefore no `RequiresMountsFor`, so the operator-dispatched path is the only one that can reach the check in that hazard.
 
 Default-OFF stands, now for a stated reason. Captured as Sharp Edge 6 so a future reader does not re-derive the wrong answer from the same plausible premise.
+
+---
+
+# Work-phase divergences (added during `/work`)
+
+Each was verified against code or live evidence rather than assumed, and each is a correctness fix
+small enough to make inline rather than an architecture fork.
+
+## 4. `readyz` answers **503** when not ready, not `200 + ready:false`
+
+**Plan text.** The classifier table and task 1.4 specify `200 + "ready":false ⇒ readyz_not_ready`,
+and place `503` in the generic RETRYABLE set.
+
+**Code.** `server/readiness.ts` — `res.writeHead(readiness.ready ? 200 : 503, …)`. A not-ready host
+answers **503**, so the plan's retryable set contained the exact status carrying the not-ready verdict.
+
+**Why it mattered.** Implemented literally, a genuinely not-ready host would be retried for the whole
+budget and then reported as `readyz_unreachable`/deadline — converting a real sole-copy data-loss
+signal into a timeout. That is the same confidently-wrong verdict class as the 403-is-valid-JSON
+Sharp Edge, one status code over.
+
+**Decision.** readyz retries only while the response is UNCLASSIFIABLE (no response at all). Any
+parseable answer, at either status, is terminal. `wl_http_class`'s generic retryable set is unchanged
+and still correct for `/health`, where a 503 IS a booting container. Pinned by test T24b2.
+
+## 5. The inventory baseline is written by the shared counter, not the fsck gate's `total`
+
+**Plan text.** Task 5.5: `persist_state WORKSPACES_COUNT "$total"` at the C1 gate.
+
+**Code.** `total` counts fsck-PROBEABLE workspaces — the loop `continue`s past every skipped one
+(`worktree_pointer`, `alternates_escape`, `no_git_dir`) before incrementing. 2026-07-20 had
+`skipped=0` so `total=8` coincided with the directory count, but `skipped` is explicitly transient
+(#6754 records it moving 1 → 0 between rehearsals).
+
+**Why it mattered.** The value STORED would be computed by a different rule than the value COMPARED.
+On any future cutover with a nonzero skip the baseline persists LOW, and a later real shrink to that
+low baseline certifies green — relocating the counter-parity bug from the counter to the baseline.
+
+**Decision.** One function, `wl_count_workspace_dirs`, used by both the assertion and the persist.
+
+## 6. `model.c4` / ADR-119 record plaintext-at-rest as CURRENT, not as stale
+
+**Plan text.** Task 7.6: correct `model.c4:186`/`:410`, which "are stale; the cutover landed
+2026-07-20".
+
+**Measured reality.** The cutover landed and was undone ~27 minutes later by its own dead-man timer
+(#6812). `/mnt/data` is mounted from raw `/dev/sdb` as of 2026-07-21.
+
+**Why it mattered.** "Correcting" those descriptions to claim LUKS-encrypted-at-rest would have made
+the architecture model **false about a live security property**, in the same direction as the
+published privacy policy's existing overclaim. Removing a stale-looking claim that has become true
+again is the "removing a false claim can strengthen the false claim" trap.
+
+**Decision.** Both sites updated to state the accurate position — plaintext at rest as of 2026-07-21,
+with the 2026-07-20 landing and its auto-revert recorded so the next reader does not mistake the
+cutover's success for the current state. ADR-119 keeps `status: adopting`, which is correct.
+
+## 7. Cutover sources the SHIPPED emit helper, not the installed one
+
+**Not in the plan at all.** `workspaces-cutover.sh` resolved `EMIT=/usr/local/bin/…` first and the
+shipped copy only as a fallback — the opposite of `luks-monitor.sh:29-30`.
+
+**Why it mattered, specifically for the authorized re-cut.** `app_canary` now calls `wl_probe_http`
+and `wl_probe_readyz`. A pre-#6807 installed copy does not define them, so the cutover would have
+died on `command not found` at its last gate — reproducing the 2026-07-20 shape with a different
+proximate cause. The cutover ships its own code; it must run its own code.
+
+**Decision.** Precedence flipped, with the reasoning recorded at the line.
+
