@@ -123,18 +123,28 @@ wl_probe_http() {
 # parseable answer, at either status, is terminal.
 #
 # Sets WL_READYZ_REASON (empty on success) + WL_READYZ_WRITABLE / _POPULATED. Returns 0 / 1.
+# NO TEMPFILE, deliberately. The obvious shape here is to allocate a scratch file, have curl write
+# the body into it and report the status via -w — but this file is SOURCED into
+# workspaces-cutover.sh, whose
+# `trap cleanup EXIT` IS the rollback mechanism. Registering an owning `trap … EXIT` from a sourced
+# helper would REPLACE it, silently disarming rollback on the one script where that trap protects
+# sole-copy user data. So rather than take lint-trap-tempfile-ownership's escape hatch for an unowned
+# tempfile, the allocation is removed: `-w '\n%{http_code}'` appends the status to stdout after the
+# body, split on the LAST newline (robust even for a multi-line body, though JSON.stringify never
+# emits one).
 wl_probe_readyz() {
-  local url="$1" i code body tmp rc
+  local url="$1" i code body resp rc nl
   _wl_probe_bounds
-  tmp="$(mktemp 2>/dev/null || printf '/tmp/wl-readyz.%s' "$$")"
+  nl=$'\n'
   WL_READYZ_REASON=""; WL_READYZ_WRITABLE=unknown; WL_READYZ_POPULATED=unknown
   WL_PROBE_LAST_CODE=000; WL_PROBE_ATTEMPTS=0
   rc=1
   i=1
   while [ "$i" -le "$WL_ATTEMPTS_N" ]; do
-    : > "$tmp"
-    code="$(curl -sS -o "$tmp" -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo 000)"
-    body="$(cat "$tmp" 2>/dev/null || true)"
+    resp="$(curl -sS -w "\\n%{http_code}" --max-time 5 "$url" 2>/dev/null || printf '\n000')"
+    code="${resp##*"$nl"}"
+    body="${resp%"$nl"*}"
+    [ -n "$code" ] || code=000
     WL_PROBE_LAST_CODE="$code"; WL_PROBE_ATTEMPTS="$i"
     # Sub-signals are read whenever present, so a not-ready emission can say WHICH check failed.
     case "$body" in
@@ -162,7 +172,6 @@ wl_probe_readyz() {
     if [ "$i" -lt "$WL_ATTEMPTS_N" ]; then sleep "$WL_INTERVAL_N"; fi
     i=$((i + 1))
   done
-  rm -f "$tmp" 2>/dev/null || true
   export WL_READYZ_REASON WL_READYZ_WRITABLE WL_READYZ_POPULATED WL_PROBE_LAST_CODE WL_PROBE_ATTEMPTS
   return "$rc"
 }

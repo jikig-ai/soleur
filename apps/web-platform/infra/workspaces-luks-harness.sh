@@ -297,13 +297,14 @@ run_case() {
       # A no-op is safe here ONLY because the retry loops are bounded by ATTEMPTS, never by wall
       # clock — a wall-clock deadline under a no-op sleep would spin hot for its whole duration.
       #
-      # Relationship to ci-deploy.test.sh's MOCK_SLEEP_NOOP (#6665): NOT a parallel mechanism to be
-      # unified. That one is an opt-in gate on a PATH-mock binary, for a suite whose sleeps are real
-      # wall clock it wants to skip; this is a shell-function stub inside an already-stubbed
-      # subshell, and it RECORDS rather than merely skipping, because the recorded argument is the
-      # only observation channel for the retry-interval seam. Unconditional here is correct: this
-      # harness has no case that wants a real sleep. If #6665 broadens the MOCK_SLEEP_NOOP gate, the
-      # thing to share is the opt-in convention, not this recorder.
+      # NOTE: no apostrophes in this block — it lives inside a single-quoted bash -c body.
+      # Relationship to the MOCK_SLEEP_NOOP idiom in ci-deploy.test.sh (#6665): NOT a parallel
+      # mechanism to be unified. That one is an opt-in gate on a PATH-mock binary, for a suite whose
+      # sleeps are real wall clock it wants to skip; this is a shell-function stub inside an
+      # already-stubbed subshell, and it RECORDS rather than merely skipping, because the recorded
+      # argument is the only observation channel for the retry-interval seam. Unconditional here is
+      # correct: this harness has no case that wants a real sleep. If #6665 broadens the
+      # MOCK_SLEEP_NOOP gate, the thing to share is the opt-in convention, not this recorder.
       sleep() { rec "sleep $*"; return 0; }
       # _seq_pick <index> <space-separated list> — the MOUNTPOINT_RCS saturation semantics, reused.
       # Saturates on the LAST element, so a single-element list means "always this value"
@@ -338,11 +339,10 @@ run_case() {
       }
       curl() {
         rec "curl $*"
-        local outfile="" prev="" a body code
-        # Emulate `-o <file>`: wl_probe_readyz writes the BODY to a file and reads the CODE from
-        # stdout via -w. The legacy no-`-o` form (body straight to stdout) must keep working too.
+        local outfile="" wfmt="" prev="" a body code
         for a in "$@"; do
           [ "$prev" = "-o" ] && outfile="$a"
+          [ "$prev" = "-w" ] && wfmt="$a"
           prev="$a"
         done
         local i
@@ -368,9 +368,15 @@ run_case() {
             code="$(_seq_pick "$i" "${CURL_CODES-}")" || code="${CURL_CODE:-200}"
             ;;
         esac
+        # Three real call shapes must be emulated, because the SUT uses all three:
+        #   -o <file> -w %{http_code}   body to the file, status to stdout   (the /health probe)
+        #   -w \n%{http_code}           body, newline, status, all to stdout (the readyz probe)
+        #   (neither)                   body to stdout                       (legacy callers)
         if [ -n "$outfile" ]; then
           printf "%s" "$body" > "$outfile"
           printf "%s" "$code"
+        elif [ -n "$wfmt" ]; then
+          printf "%s\n%s" "$body" "$code"
         else
           case "$*" in
             *readyz*) printf "%s" "$body" ;;
@@ -508,13 +514,22 @@ STUB
   cat > "$d/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf 'curl %s\n' "$*" >> "$CALLS"
-outfile=""; prev=""
-for a in "$@"; do [ "$prev" = "-o" ] && outfile="$a"; prev="$a"; done
+outfile=""; wfmt=""; prev=""
+for a in "$@"; do
+  [ "$prev" = "-o" ] && outfile="$a"
+  [ "$prev" = "-w" ] && wfmt="$a"
+  prev="$a"
+done
 case "$*" in
   *readyz*)
     body="${MON_READYZ_BODY-{\"ready\":true,\"checks\":{\"workspaces_writable\":true,\"workspaces_populated\":true\}\}}"
-    [ -n "$outfile" ] && printf '%s' "$body" > "$outfile"
-    printf '%s' "${MON_READYZ_CODE:-200}" ;;
+    if [ -n "$outfile" ]; then
+      printf '%s' "$body" > "$outfile"; printf '%s' "${MON_READYZ_CODE:-200}"
+    elif [ -n "$wfmt" ]; then
+      printf '%s\n%s' "$body" "${MON_READYZ_CODE:-200}"
+    else
+      printf '%s' "$body"
+    fi ;;
   *) : ;;
 esac
 exit 0
