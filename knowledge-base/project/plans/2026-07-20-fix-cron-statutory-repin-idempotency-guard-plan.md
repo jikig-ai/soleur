@@ -410,8 +410,12 @@ Full suite before ship. `bunfig.toml` sets `pathIgnorePatterns = ["**"]` — vit
       widened regex covers the multi-line, single-quoted, and `vi.doMock` forms the original
       note was rightly worried about, while anchoring on the CALL rather than the name.
       `|| true` retained because `grep -c` exits 1 on zero matches.)*
-- [x] **AC10** `dsar-allowlist-completeness.test.ts` passes, and T8 asserts the table is
-      actually discovered — not merely that the suite is green.
+- [x] **AC10** `dsar-allowlist-completeness.test.ts` passes. *(Corrected at review: this
+      AC previously claimed "T8 asserts the table is actually discovered". It does not —
+      T8 is the fake-uniqueness negative control, and `statutory_repin_send` appears
+      nowhere in that suite. The exclusion entry is covered by the completeness lint
+      passing, which is weaker than the AC claimed. Do not re-assert the stronger claim
+      without adding the assertion that would back it.)*
 - [x] **AC11** The four cross-document-gate files are updated; the gate is green.
 - [x] **AC12** Art. 30 PA-27 limbs (c)/(f)/(g) amended; no new PA row.
 - [x] **AC13** The ADR file with frontmatter `adr: 035`
@@ -617,7 +621,7 @@ Sign-off was **GRANTED WITH CONDITIONS** on the design. Dispositions:
 | --- | --- |
 | **Over-suppression silences a statutory deadline** (brand-survival) | Branch-derived `tick_key`; fail-open on every non-23505 outcome including throws; T2/T3/T4 cover each cadence |
 | A thrown insert kills the run and stops the ingress probe | Unconditional `try/catch`; T6 |
-| Existing cron test exercises the guard but verifies nothing | Its fake accepts **any** table and returns `{data:[],error:null}` — it does **not** throw (an earlier draft of this plan claimed otherwise). Mandating `.insert(…).select("id").single()` in Phase 2 makes it fail loudly, because the fake's chain has no `single` |
+| Existing cron test exercises the guard but verifies nothing | Its fake accepts **any** table and returns `{data:[],error:null}` — it does **not** throw (an earlier draft of this plan claimed otherwise). SUPERSEDED at review (see the Phase 2 note). That mitigation was itself the defect: `.select("id")` on a table with no `id` column fails 42703 BEFORE the unique check, so the guard could never suppress and no marker was ever written. Replaced by fake-side column validation (`TABLE_COLUMNS`) plus tripwires T13/T13b, which red if the select is reintroduced|
 | In-memory fake drifts from the real constraint | T7 pins the PK from the migration SQL |
 | Guard is a no-op and the suite still green | Phase 3 mutation-control step |
 | DSAR table silently not discovered (`parseTables` regex) | T8 asserts membership in `discoverUserFkTables` output |

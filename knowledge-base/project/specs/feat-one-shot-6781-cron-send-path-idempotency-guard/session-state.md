@@ -15,7 +15,7 @@ Review caught seven author errors in the planning subagent's own drafts; all cor
 - Wrong verification form — AC13 used a two-dot diff and asserted filename-absence for a file the plan permits touching.
 - Wrong justification — item-grain was claimed to be recipient-grain structurally; migration 111 makes items visible to every workspace Owner, so that holds only while the send path is single-recipient.
 
-**Outstanding gate:** the CPO ruling on conditions C2 and C5 had not returned. Both are author-disposed on a plan whose frontmatter declares `requires_cpo_signoff: true`. The plan blocks PR-ready on this.
+**CPO gate: RETURNED 2026-07-20.** C2 UPHELD (no code change), C5 AMENDED (T12 tripwire added, which blocks PR-ready). See the plan's CPO conditions table.
 
 ### Decisions
 - Tick identity is branch-derived, not a single value. The repin has two cadences (one-shot T-7, daily band). `daysUntilDue` produces a same-day duplicate; a bare calendar date fixes the band but leaves the T-7 duplicate live, because `daysUntilDue === 7` spans a 24h window straddling two dates under ~5 min of jitter. Key is `'headsup'` (constant) or `'daily:YYYY-MM-DD'`.
@@ -28,4 +28,12 @@ Review caught seven author errors in the planning subagent's own drafts; all cor
 `soleur:plan` · `soleur:plan-review` · `soleur:deepen-plan` · `soleur:gdpr-gate` · agents: `cto`, `clo`, `cpo`, `dhh-rails-reviewer`, `kieran-rails-reviewer`, `code-simplicity-reviewer`, `architecture-strategist`, `spec-flow-analyzer`, `data-integrity-guardian`, `observability-coverage-reviewer`, `test-design-reviewer`, `user-impact-reviewer`, `Explore` ×2
 
 ## Work Phase
-- Status: starting
+- Status: complete. Migration 135 + guard + tests + compliance surfaces landed.
+
+## Review Phase
+- Status: complete. Nine agents. One P1 found and fixed: the marker insert used
+  `.select("id")` on a table with no `id` column, which would have made the guard
+  permanently inert in production while 20/20 tests passed. Three agents converged on it
+  independently. A second plan requirement — the operator release verb — was found to have
+  been LOST in the Phase-4 renumbering rather than deferred, and was recovered.
+  All findings were pr-introduced and fixed inline; zero filed as scope-out.

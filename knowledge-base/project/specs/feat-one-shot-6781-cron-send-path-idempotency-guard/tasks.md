@@ -53,9 +53,15 @@ File: `server/inngest/functions/cron-email-ingress-probe.ts`, step `deadline-rep
       so it is checkpointed (mirror `send-probe`'s `sentAt`).
 - [x] 2.2 Derive `tickKey`: `daysUntilDue === DEADLINE_REPIN_HEADS_UP_DAY` → `'headsup'`;
       otherwise `'daily:' + runDateUtc`.
-- [x] 2.3 Insert `{ item_id, tick_key }` via `.insert({…}).select("id").single()` (house idiom;
-      also makes the existing cron test's fake fail loudly). **Placement: after EVERY
-      pre-existing `continue` guard** (`!row.user_id`, unknown `rule_id`) and immediately
+- [x] 2.3 Insert `{ item_id, tick_key }` via a PLAIN `.insert({…})` — **NOT**
+      `.select("id").single()`, which this task originally specified and which review proved
+      would make the guard permanently inert. `statutory_repin_send` has no `id` column (its PK
+      is composite), so PostgREST renders that select as `RETURNING id` and the statement fails
+      42703 — a plan-time error, so it fires BEFORE the unique check and even a genuine
+      duplicate never returns 23505. The correct precedent is `claimDedupRow`
+      (`app/api/webhooks/github/route.ts`), not `notifyInboxItem` (whose table DOES have an
+      `id`). The fake now validates selected columns; T13/T13b are the tripwires.
+      **Placement: after EVERY pre-existing `continue` guard** (`!row.user_id`, unknown `rule_id`) and immediately
       before dispatch — a marker before those guards permanently suppresses the row.
 - [x] 2.3b Zero-delivery signal: have `sendPushNotifications` return a delivery tally; emit
       `warnSilentFallback` op `statutory-notify-zero-delivery` from `notifyOfflineUser` when
