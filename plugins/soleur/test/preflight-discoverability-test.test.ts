@@ -501,6 +501,20 @@ const reg = (id: string, surface: Surface, block: string): string => {
   return block;
 };
 
+/**
+ * Assert a `surface: both` row on BOTH surfaces.
+ *
+ * Asserting only parseCommand() would leave every awk-side mutation invisible
+ * to the named test — it would redden P1 alone, which reports as a parity
+ * failure rather than as the behaviour the row exists to pin. Verified via the
+ * sandbox mutation protocol: with a TS-only assertion, the I1/N3/B2/E1/F5
+ * mutations all left their named test green.
+ */
+function expectBoth(block: string, expected: string): void {
+  expect(parseCommand(block)).toBe(expected);
+  expect(runAwk(block)).toBe(expected);
+}
+
 /** Run the production awk over an Observability block; strip ONE trailing \n. */
 function runAwk(block: string): string {
   const proc = Bun.spawnSync({
@@ -541,7 +555,7 @@ describe("#6772 F1-F5 — folded scalars parse (permissive)", () => {
         ),
       );
       test(`${id} parses to the space-joined line, not the literal indicator`, () => {
-        expect(parseCommand(block)).toBe(EXPECTED_F);
+        expectBoth(block, EXPECTED_F);
         expect(parseCommand(block)).not.toBe(`${ind}`);
       });
     }
@@ -561,7 +575,7 @@ describe("#6772 F1-F5 — folded scalars parse (permissive)", () => {
   );
   test("F4 single continuation has no leading or trailing space", () => {
     const got = parseCommand(f4);
-    expect(got).toBe("curl -fsS https://app.soleur.ai/health");
+    expectBoth(f4, "curl -fsS https://app.soleur.ai/health");
     expect(got).not.toMatch(/^\s/);
     expect(got).not.toMatch(/\s$/);
   });
@@ -582,7 +596,7 @@ describe("#6772 F1-F5 — folded scalars parse (permissive)", () => {
     ),
   );
   test("F5 fold + trailing backslash yields the documented escaped-space form", () => {
-    expect(parseCommand(f5)).toBe("curl -fsS \\ https://app.soleur.ai/health");
+    expectBoth(f5, "curl -fsS \\ https://app.soleur.ai/health");
   });
 });
 
@@ -617,7 +631,7 @@ describe("#6772 N1-N6/S1 — folded scalars do NOT over-consume (restrictive)", 
     ),
   );
   test("N1b stops at a LESS-indented parent key (the `<` half of `<=`)", () => {
-    expect(parseCommand(n1b)).toBe("curl -fsS https://app.soleur.ai/health");
+    expectBoth(n1b, "curl -fsS https://app.soleur.ai/health");
     expect(parseCommand(n1b)).not.toMatch(/parent_key/);
   });
 
@@ -661,7 +675,7 @@ describe("#6772 N1-N6/S1 — folded scalars do NOT over-consume (restrictive)", 
   );
   test("S1 does NOT consume a less-indented non-key line (reviewer/executor differential)", () => {
     const got = parseCommand(s1);
-    expect(got).toBe("curl -fsS https://app.soleur.ai/health");
+    expectBoth(s1, "curl -fsS https://app.soleur.ai/health");
     expect(got).not.toMatch(/touch/);
   });
 
@@ -681,7 +695,7 @@ describe("#6772 N1-N6/S1 — folded scalars do NOT over-consume (restrictive)", 
     ),
   );
   test("N3 stops at a column-0 dedent even when indented content resumes after", () => {
-    expect(parseCommand(n3)).toBe("curl -fsS https://app.soleur.ai/health");
+    expectBoth(n3, "curl -fsS https://app.soleur.ai/health");
     expect(parseCommand(n3)).not.toMatch(/resumed_indented_content/);
   });
 
@@ -713,12 +727,10 @@ describe("#6772 N1-N6/S1 — folded scalars do NOT over-consume (restrictive)", 
     ),
   );
   test("N6 blank line inside a fold is skipped, scalar continues", () => {
-    expect(parseCommand(n6fold)).toBe("curl -fsS https://app.soleur.ai/health");
+    expectBoth(n6fold, "curl -fsS https://app.soleur.ai/health");
   });
   test("N6 blank line inside a block is skipped, scalar continues", () => {
-    expect(parseCommand(n6block)).toBe(
-      "curl -fsS\nhttps://app.soleur.ai/health",
-    );
+    expectBoth(n6block, "curl -fsS\nhttps://app.soleur.ai/health");
   });
 });
 
@@ -737,7 +749,7 @@ describe("#6772 I1/B1-B3/E1 — existing forms stay green (non-shadowing)", () =
     ),
   );
   test("I1 inline command is unchanged", () => {
-    expect(parseCommand(i1)).toBe("curl -fsS https://app.soleur.ai/health");
+    expectBoth(i1, "curl -fsS https://app.soleur.ai/health");
   });
 
   // B1 [both] — DEFECT 2 PIN. The block branch had no terminator, so the
@@ -754,7 +766,7 @@ describe("#6772 I1/B1-B3/E1 — existing forms stay green (non-shadowing)", () =
     ),
   );
   test("B1 `command: |` no longer swallows the sibling expected_output key", () => {
-    expect(parseCommand(b1)).toBe("curl -fsS https://app.soleur.ai/health");
+    expectBoth(b1, "curl -fsS https://app.soleur.ai/health");
     expect(parseCommand(b1)).not.toMatch(/expected_output/);
   });
 
@@ -771,7 +783,8 @@ describe("#6772 I1/B1-B3/E1 — existing forms stay green (non-shadowing)", () =
     ),
   );
   test("B2 block joins with newline, not a space, and dedents", () => {
-    expect(parseCommand(b2)).toBe(
+    expectBoth(
+      b2,
       "curl -fsS https://app.soleur.ai/health\ncurl -fsS https://app.soleur.ai/api/inngest",
     );
   });
@@ -791,7 +804,7 @@ describe("#6772 I1/B1-B3/E1 — existing forms stay green (non-shadowing)", () =
     ),
   );
   test("B3 `command: |-` enters block mode on both surfaces", () => {
-    expect(parseCommand(b3)).toBe("curl -fsS https://app.soleur.ai/health");
+    expectBoth(b3, "curl -fsS https://app.soleur.ai/health");
     expect(parseCommand(b3)).not.toBe("|-");
   });
 
@@ -807,7 +820,7 @@ describe("#6772 I1/B1-B3/E1 — existing forms stay green (non-shadowing)", () =
     ),
   );
   test("E1 fold header with no continuations returns empty, not the indicator", () => {
-    expect(parseCommand(e1)).toBe("");
+    expectBoth(e1, "");
     expect(parseCommand(e1)).not.toBe(">-");
   });
 });
