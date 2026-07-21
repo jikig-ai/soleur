@@ -83,3 +83,6 @@ This is NOT runtime-mintable. A new template that did not pass code review canno
 - Migration: `apps/web-platform/supabase/migrations/053_template_authorizations.sql`
 - Send route: `apps/web-platform/app/api/dashboard/today/[id]/send/route.ts`
 - Cascade: `apps/web-platform/server/account-delete.ts` step 3.83
+
+> **See also:** the `plain-insert-catch-23505` dedup idiom and its send-boundary extension (#6781) live in ADR-037 (`ADR-037-messages-source-ref-composite-unique-for-multi-source-dedup.md`), whose frontmatter reads `adr: 035` — not this file.
+> That filename/frontmatter ordinal collision with ADR-037 is tracked in #6800; no decision content here is affected.
