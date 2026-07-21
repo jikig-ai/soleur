@@ -71,6 +71,18 @@ File: `server/inngest/functions/cron-email-ingress-probe.ts`, step `deadline-rep
 - [x] 2.9 Add the recipient-grain constraint comment on the loop (item-grain suffices only
       while the send path is single-recipient).
 - [x] 2.10 Call `purge_statutory_repin_send()` from the existing `retention-purge` step.
+- [x] 2.11 **Expose the operator RELEASE verb without SSH or prod SQL.** Recovered at review
+      time — the plan required this (§Phase 4 step 5, citing
+      `hr-no-ssh-fallback-in-runbooks` + `hr-never-label-any-step-as-manual-without`) and the
+      Phase-4 renumbering into legal-doc tasks silently dropped it. It was NOT deferred; it was
+      lost. Without it the `statutory-notify-zero-delivery` alarm names a problem the operator
+      has no lever to fix.
+      Wired through the cron's EXISTING manual-trigger event, since
+      `/api/internal/trigger-cron` already forwards `event.data`:
+      `{"name":"cron/email-ingress-probe.manual-trigger","data":{"release_item_id":"<uuid>"}}`.
+      UUID-validated at the handler (the route is a dumb pass-through), audit-logged, and it
+      returns `{ itemId, cleared }` so a 0 answers "why did nothing re-send?".
+      Covered by T14 / T14b / T14c.
 
 ## Phase 3 — Tests (RED first)
 
@@ -105,6 +117,12 @@ New file: `test/server/inngest/cron-email-ingress-probe-repin-idempotency.test.t
 - [x] 3.12b T9 — single run crossing UTC midnight mid-loop yields ONE tick_key.
 - [x] 3.12c T10 — rows hitting `!row.user_id` / unknown-rule guards write NO marker.
 - [x] 3.12d T11 — push-subscribed user, double-fire: exactly one `webpush.sendNotification`.
+- [x] 3.15 T13/T13b — the marker insert names no column the table lacks (42703 tripwire), with
+      the fake's column-validation as its negative control.
+- [x] 3.16 T14/T14b/T14c — operator release verb: clears + re-arms, refuses a non-uuid, and is
+      absent on a scheduled run.
+- [x] 3.17 T9b/T9c — mixed-cadence run and the OVERDUE bucket, neither of which any fixture
+      instantiated (the overdue path is the one the SUT calls "must never be silent").
 - [x] 3.12e T12 — **single-recipient send path (R7 tripwire)**. Required by CPO ruling
       2026-07-20 (condition C5, AMENDED); blocks PR-ready. One repin iteration over one item
       dispatches to **exactly one** recipient, and that recipient is `row.user_id`. Construct the
