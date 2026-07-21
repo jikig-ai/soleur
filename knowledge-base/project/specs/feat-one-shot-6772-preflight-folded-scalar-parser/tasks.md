@@ -79,7 +79,7 @@ are prerequisites to starting work and are already reflected below.
 
 ## 6. GREEN + verification
 
-- [ ] 6.1 `bash scripts/test-all.sh` from the worktree root (AC10). Not a bare `bun test`.
+- [x] 6.1 `bash scripts/test-all.sh` from the worktree root (AC10). Not a bare `bun test`.
 - [x] 6.2 Sandbox mutation protocol for the eight already-green pins (I1, N3, B2, B3, E1, F5,
       P2, P3), including **step 4 — prove the mutation is reachable** (output differs from
       baseline). Step 3 alone cannot catch a dead mutation; the draft had two.
