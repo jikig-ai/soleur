@@ -70,11 +70,9 @@ The feature description matches SSH/timeout keywords, but this is NOT a connecti
 ## Implementation Phases
 
 ### Phase 0 — Preconditions (grep/verify, no code)
-<!-- lint-infra-ignore start (Phase 0 preconditions describe the automated CF-tunnel SSH bridge format + CI -target set — not human-run steps) -->
 - Confirm `WEB_HOST_SSH` format is `ssh -i <keyfile> -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -l root` (`.github/actions/cf-tunnel-ssh-bridge/action.yml`) — lands as root, pipes tar + stdin.
 - Confirm the scoped cutover `-target` set (`apply-web-platform-infra.yml:2660-2664`) is EXACTLY the five workspaces_luks resources — the new `github_actions_secret` must NOT be added there (the sourced `workspaces_luks_cutover_gate` would abort it as `out_of_scope`).
 - Verify (WebFetch GitHub Actions docs) that a job `environment:` evaluating to an EMPTY string runs with no environment gate. If NOT confirmed, use the split-job fallback (`## Architecture Decision`).
-<!-- lint-infra-ignore end -->
 
 ### Phase 1 — BLOCKER 3: content-carrier → file execution (RED test first)
 1. Harden `workspaces-cutover.sh`: replace every `${BASH_SOURCE[0]}` with `${BASH_SOURCE[0]:-}` (`:63`, `:475`, `:477`, `:478`) and, where a bare-empty dirname would resolve to `.`, anchor on `SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"` computed once near the top so file-execution is unambiguous. (`luks-monitor.sh:29` is NOT hardened — code-simplicity: it is always run as a file, so `${BASH_SOURCE[0]}` is never unbound; dropped from scope to keep the change minimal.)

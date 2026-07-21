@@ -40,6 +40,14 @@
 
 ## Scope Ruling (operator, 2026-07-20)
 
+> **SUPERSEDED 2026-07-20 — PR C is now CANCELLED, not HELD.** The "separate decision" this block
+> awaits has been made: see § "Closing entry (2026-07-20): PR C cancelled" at the end of this file,
+> and the authoritative § "Follow-on ruling — 2026-07-20: PR C is CANCELLED" in
+> `decision-challenges.md`. Two claims below are no longer live: PR C's **HELD** status (now
+> cancelled outright), and the #6348 stranding race (**dissolved** — cancelling PR C means there is
+> no undelivered PR C to strand). The block is retained verbatim as the record of the ruling as it
+> stood when written.
+
 Operator was presented UC-1 (three-PR split) and UC-2 (priority reorder) and ruled:
 
 **Ship PR A + PR B now. PR C is HELD pending a separate decision.**
@@ -99,6 +107,11 @@ test bypassed it, because the fixture seam returns before that function is reach
 
 ### Outstanding
 
+> **SUPERSEDED 2026-07-20 — see § "Closing entry (2026-07-20): PR C cancelled" at the end of this
+> file.** The doublefire reading described below HAS since been taken: run 29748606817 returned
+> ZERO runs on the dedicated host, and the registry-alone caveat below is thereby **discharged**.
+> The block is retained verbatim as the record of what was outstanding when it was written.
+
 The doublefire reading itself is **not yet taken**. The host runs the deployed copy of
 `inngest-doublefire-probe.sh`; the fix reaches it via the post-merge infra-config push. Re-dispatch
 `op=doublefire-probe` after this merges and delivery lands, and record the run count there.
@@ -106,3 +119,96 @@ The doublefire reading itself is **not yet taken**. The host runs the deployed c
 **Do not read the registry result alone as "no double-scheduler."** An empty registry means
 nothing has registered *now*; it is not proof that nothing executed earlier. The doublefire
 probe is the instrument that proves the harm, and it has not yet run successfully.
+
+---
+
+## Closing entry (2026-07-20): PR C cancelled
+
+**Decision: the operator cancelled PR C.** It was previously HELD by the operator ruling recorded
+in `decision-challenges.md`; that hold is now superseded by outright cancellation. The
+authoritative ruling is the follow-on entry appended to that file. This entry is the session
+narrative: what was measured, what was decided, what carries forward.
+
+### What shipped, and in what shape
+
+PR A + PR B **merged together as #6748** (commit `1d4208f44`, 2026-07-20) — one PR, not two.
+That PR also carried a third piece: making `op=verify`'s exactly-once check capable of returning a
+verdict. #6295 closed with it.
+
+### The four measures
+
+The diagnostic question PR C existed to answer — what state is the dark dedicated Inngest host in —
+is now settled on four independent measures, **none of which required the host replace**:
+
+| # | Measure | Reading | Source |
+|---|---|---|---|
+| 1 | doublefire probe | **ZERO runs** on the dedicated host | run 29748606817, dispatched from `main` (sha `898de92e4`) after #6748 merged |
+| 2 | registry probe | `registry_empty=true`, `function_count=0` | run 29729509511 |
+| 3 | `backend_is_prod` | **no** (i.e. FALSE) — the dedicated host's `INNGEST_POSTGRES_URI` does not contain the prod project ref | evaluated against the `soleur-inngest/prd` Doppler config **without ever rendering the URI** (AC-NOBODY preserved) |
+| 4 | start-blocked | `INNGEST_CUTOVER_FLIP` is **absent** from `soleur-inngest/prd`, so the flip guard refuses any prod-URI start | corroborates #6488 |
+
+Phase C6.3's escalation branch fires on `backend_is_prod=yes` **OR** a non-empty doublefire result.
+**Neither limb is met.**
+
+### The registry-alone caveat is discharged, not bypassed
+
+The § Outstanding block above warns that an empty registry proves nothing has registered *now*, not
+that nothing executed earlier. That caveat was written when the doublefire probe had not yet run
+successfully. It is now **discharged** by run 29748606817 — the instrument that proves the harm
+itself has run and returned empty. Verbatim annotations:
+
+```
+doublefire-probe: 0 run(s) in window; bucketing by (functionID, floor(startedAt / 3600s))
+doublefire-probe: ZERO runs on the dedicated host — its scheduler has executed nothing in the window.
+```
+
+This read was taken from `main` **after** #6748 merged, so it exercised the shipped
+`build_request_body` fix rather than the branch copy. That is precisely what made B4.2.b
+answerable: its blocker was that the host ran the unfixed deployed copy.
+
+Scope caveat carried forward from the probe's own output: this reads ONLY the dedicated host's run
+history. It is not a web-2 double-fire detector, and the operator's web-2 quiesce remains the
+control against that failure mode.
+
+### Why CANCEL rather than continue to HOLD
+
+> PR C's discriminators exist to distinguish states of a **dark** host. After the cutover the
+> dedicated host becomes the live scheduler and that question is no longer asked. The instrument's
+> useful life is therefore **bounded by the pre-cutover window** — and it cannot be delivered
+> inside that window at acceptable risk, because its delivery force-replaces the sole production
+> Inngest scheduler days before the cutover it was built to instrument.
+>
+> **An instrument that cannot be delivered while it still matters is cancelled, not parked.**
+
+The reason delivery costs a full host replace is #6780: the dedicated host has no in-place
+redelivery channel. That root debt is what makes "park it and deliver later" not actually
+recoverable.
+
+### The `sdk_url` note
+
+`sdk_url` was the one discriminator with **no off-host channel**. It is read from the unit's
+ExecStart argv (`systemctl show -p ExecStart`), which reads configuration and therefore works while
+the host is dark — that is what made it viable as a marker, and also what makes it the field that
+dies with the cancellation. It is **not decision-relevant while `backend_is_prod` is false**: a host
+not wired to prod Postgres cannot corrupt prod state regardless of which SDK URL it would poll.
+
+### Consequence the operator is accepting
+
+After cancellation the dedicated Inngest host has **no continuous liveness discriminators**. Its
+observability posture is on-demand only, via the two standalone ops PR B shipped
+(`op=registry-probe`, `op=doublefire-probe`). This is what makes #6780 the live root debt rather
+than a filed-and-forgotten follow-up.
+
+### Carry-forward items (already filed — referenced, not re-filed)
+
+- **#6780** — C5.8 root debt: the dedicated host has no in-place redelivery channel.
+- **#6781** — C6.7 / T-4: the cron send-path has no idempotency guard.
+- **#6608** — was C6.6 ("rides along, closed post-replace"); being re-homed in a separate session.
+- **#6348** — the draft `INNGEST_BASE_URL` repoint PR. The original operator ruling recorded a
+  standing risk that if it merged before PR C was delivered, PR C would be stranded
+  merged-but-undelivered. **Cancelling PR C dissolves that risk.**
+
+### Tracking issue
+
+#6617 remains **OPEN** and its state was not altered by this change. Its existing follow-through
+sweeper owns closure.
