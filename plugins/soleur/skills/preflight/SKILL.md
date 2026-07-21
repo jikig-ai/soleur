@@ -737,7 +737,7 @@ Form A accepts all three YAML scalar shapes for `command:`:
 Block and folded headers may carry a trailing `# comment`. Scalar extent follows YAML
 indent semantics: a continuation is any non-empty line indented **more** than the
 `command:` key, and the first line indented **≤** the key ends the scalar. The parser is
-[`scripts/parse-form-a.awk`](./scripts/parse-form-a.awk) — a real file rather than an
+[`./scripts/parse-form-a.awk`](./scripts/parse-form-a.awk) — a real file rather than an
 inlined program, so the awk/TS parity harness executes the production runtime directly
 instead of regex-scraping this prose. That file is authoritative; the TypeScript mirror in
 `plugins/soleur/test/lib/discoverability-test-parser.ts` is non-authoritative.
@@ -851,7 +851,7 @@ is trust-on-PR-review. See [`2026-05-20-preflight-check-10-discoverability-test-
 #
 # SCOPE OF THE NEWLINE REJECT: it closes BLOCK-mode command chaining only. A block
 # scalar joins continuations with \n, which `bash -c` runs as separate statements —
-# verified before this was added: a second line `touch /tmp/PWNED` executed.
+# verified before this was added: a second `touch` line in a block scalar executed.
 # It contributes ZERO coverage to folded scalars, which join with a SPACE and carry no
 # shell-active token; those are covered by Step 10.4's credentialed-CLI reject. Do not
 # cite this reject as a mitigation for the folded-command class.
