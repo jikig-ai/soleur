@@ -726,6 +726,37 @@ describe("#6772 N1-N6/S1 — folded scalars do NOT over-consume (restrictive)", 
       '  expected_output: "200"',
     ),
   );
+  // N7 [both] — the `!mode` guard on the awk's header + inline rules.
+  //
+  // The header and inline rules match on a KEY NAME. Without `!mode` they
+  // re-fire on a continuation that happens to begin `command:`, and the inline
+  // rule then TRUNCATES the scalar there AND concatenates its value onto the
+  // accumulated fold with no separator (printf had not yet emitted a newline).
+  // Verified divergence before the fix:
+  //   awk => "curl -fsS https://app.soleur.ai/apibar"      (truncated + welded)
+  //   TS  => "curl -fsS https://app.soleur.ai/api command: bar"
+  // Production would have silently executed the corrupted string. The TS mirror
+  // was already correct (all three rules sit behind `if (mode === null)`), so
+  // this is the awk-side half of the parity contract.
+  const n7 = reg(
+    "N7",
+    "both",
+    obs(
+      "discoverability_test:",
+      "  command: >",
+      "    curl -fsS https://app.soleur.ai/api",
+      "    command: bar",
+      '  expected_output: "200"',
+    ),
+  );
+  test("N7 a continuation beginning `command:` is CONTENT, not a re-triggered key", () => {
+    expectBoth(n7, "curl -fsS https://app.soleur.ai/api command: bar");
+    // The two halves of the defect, pinned separately so a partial regression
+    // (guard on the headers but not the inline rule) still reddens.
+    expect(runAwk(n7)).not.toMatch(/apibar/); // welded
+    expect(runAwk(n7)).toMatch(/bar$/); // truncated
+  });
+
   test("N6 blank line inside a fold is skipped, scalar continues", () => {
     expectBoth(n6fold, "curl -fsS https://app.soleur.ai/health");
   });

@@ -9,9 +9,17 @@
 #
 # Scalar extent follows YAML: a continuation is any non-empty line indented MORE than the
 # `command:` key; the first line indented <= the key ends the scalar. No key-name matching
-# is used — a key regex both truncates legitimate content (a jq object filter's
-# `host_present:`) and leaves a differential where a LESS-indented non-key line is still
-# consumed, which a PR reviewer reads as outside the command but the shell executes.
+# is used INSIDE a scalar — a key regex both truncates legitimate content (a jq object
+# filter's `host_present:`) and leaves a differential where a LESS-indented non-key line is
+# still consumed, which a PR reviewer reads as outside the command but the shell executes.
+#
+# The `!mode` guard on the three `command:` rules below is what makes that claim true. The
+# header and inline rules match on a KEY NAME, so without the guard they re-fire on a
+# continuation line that happens to begin `command:` — the inline rule then truncates the
+# scalar at that line AND concatenates its value onto the accumulated fold (no separator,
+# because `printf` had not yet emitted a newline). Verified: a fold whose continuation is
+# `    command: bar` yielded `…/apibar` instead of `…/api command: bar`, and production
+# would have silently executed the corrupted string.
 #
 # Chomping indicators (-/+) are accepted but not modelled: the value goes to `bash -c` and
 # $(…) strips trailing newlines regardless.
@@ -29,11 +37,11 @@ function indent(s,   t) { t = s; sub(/[^[:space:]].*$/, "", t); return length(t)
 # against Step 10.5's shell-active `>` branch (#6772). The `(#.*)?$` tail is load-bearing —
 # anchoring to a bare `$` makes `command: >- # note` fall through to inline and reproduce
 # #6772 exactly.
-/^[[:space:]]*command:[[:space:]]*>[-+]?[[:space:]]*(#.*)?$/  { mode = "fold";  key = indent($0); next }
-/^[[:space:]]*command:[[:space:]]*\|[-+]?[[:space:]]*(#.*)?$/ { mode = "block"; key = indent($0); next }
+!mode && /^[[:space:]]*command:[[:space:]]*>[-+]?[[:space:]]*(#.*)?$/  { mode = "fold";  key = indent($0); next }
+!mode && /^[[:space:]]*command:[[:space:]]*\|[-+]?[[:space:]]*(#.*)?$/ { mode = "block"; key = indent($0); next }
 
-# Inline.
-/^[[:space:]]*command:/ { sub(/^[[:space:]]*command:[[:space:]]*/, ""); print; exit }
+# Inline. `!mode` keeps this OUTSIDE a scalar only — see the header note.
+!mode && /^[[:space:]]*command:/ { sub(/^[[:space:]]*command:[[:space:]]*/, ""); print; exit }
 
 # Blank lines are legal inside a scalar and carry no indentation — skip before the
 # terminator, or indent()==0 would end every scalar at the first blank line.
