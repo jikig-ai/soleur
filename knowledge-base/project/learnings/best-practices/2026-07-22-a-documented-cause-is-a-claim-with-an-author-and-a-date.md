@@ -72,3 +72,37 @@ as to the bug.
 
 See [[2026-07-19-my-own-mutation-battery-was-the-false-confidence]] for the
 sibling lesson about a passing test battery that proved nothing.
+
+## Session Errors
+
+- **A green self-run mutation battery does not mean the tests are complete.**
+  Every arm I authored passed and every mutation I wrote was caught, yet the
+  6-agent review found **three P1-class defects the battery structurally could
+  not see**: the reaper's liveness gate checked cwd but not open file
+  descriptors (a live-but-idle process holding an mmap into a stale scratch
+  tree would lose it), the nested-cwd→top-level mapping was untested because the
+  fixture pointed cwd *at* the top-level entry (where the strip is a no-op), and
+  the `rm -rf` delete idiom violated the constitution's `block-recursive-delete`
+  rule that the incumbent `cleanup_stale_sandbox_tmp` honours with `find
+  -delete`. **Prevention:** this is another instance of
+  [[2026-07-16-a-mutation-battery-only-covers-what-you-mutate]] — a battery
+  measures the mutations you imagined, so pair it with adversarial review that
+  is told to *find the vacuity the battery missed* and to enumerate every state
+  a delete path can reach, not re-run the author's mutations.
+- **A test-harness probe repeated the exact confound the SUT's own Sharp Edge
+  recorded.** The plan documented that `flock -c 'sleep N'` leaves a child
+  holding the inherited fd (so a `kill` of the flock process does not release
+  the lock); my first AC5b arm used that shape anyway and read BLOCKED after
+  SIGKILL. **Prevention:** `exec sleep` so the killed pid *is* the fd holder —
+  and read the plan's Sharp Edges as constraints on the test harness, not only
+  on the implementation.
+- **The reaper's first design did not finish inside a 5-minute cron window** — a
+  per-candidate `du` + recursive `find` over 6000+ stale entries timed out.
+  **Prevention:** for a bounded-runtime cron, put the most selective gate first
+  via a single batched pass (here a `du -sm --files0-from` over the whole
+  candidate set), then run the expensive per-item gates only on the survivors.
+- **A documented cause is a claim with an author and a date** (the body above),
+  and the flock probe needing a positive control (forwarded from the plan
+  phase) are the same discipline turned on process, not just prose: any probe
+  whose negative result changes a decision must carry a control that fails when
+  the probe itself is broken.
