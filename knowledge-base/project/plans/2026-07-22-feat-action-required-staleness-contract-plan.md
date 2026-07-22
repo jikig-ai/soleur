@@ -185,6 +185,19 @@ knob and the fail-safe allowlist exist to prevent).
 **Brand-survival threshold:** single-user incident. CPO sign-off carried forward from
 brainstorm (CPO lens applied); `user-impact-reviewer` invoked at review time.
 
+**Acknowledged residual (review — user-impact Finding 3):** the digest failed-run self-report
+files via the same `gh`/token path that may itself be the failure cause, so a whole-job auth/OIDC
+failure (or a never-started/cancelled run) leaves no self-report — a detector-of-detector gap.
+Disposition: **acknowledged, not separately tracked.** (a) It *narrows* a pre-existing
+100%-silent-digest-failure gap rather than adding exposure; the self-report catches the common
+step-failure case. (b) The SLA lifecycle cron is an **independent second surfacing path** (a
+separate workflow in a separate failure domain) that escalates aging `action-required` asks
+regardless of digest health — so an operator misses an escalation only if the digest AND the SLA
+cron fail in the same window. A dedicated external digest-liveness watchdog (a Sentry cron monitor
+on the Fri digest cadence, or an absence-check for a fresh `Digest:` issue) is reasonable future
+hardening but is a cross-repo subsystem (needs the App on `operator-digest` + its own monitor),
+out of scope here.
+
 ## Domain Review
 **Domains relevant:** Engineering, Product, Operations (carried forward from brainstorm `## Domain Assessments`).
 
