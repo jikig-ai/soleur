@@ -140,7 +140,10 @@ export async function slaIssueProcessHandler({
       feature: SENTRY_MONITOR_SLUG,
       op: "action-required-sla",
       message: `SLA ${action} on #${issueNumber}`,
-      tags: { sla_action: action },
+      // `human_engaged` is a TAG (not just extra) so the Sentry alert can filter on the
+      // FEARED case: an expire that slipped past the veto (human_engaged=true → the veto
+      // failed, an invariant violation). Sentry alert filters match tags, never extra.
+      tags: { sla_action: action, human_engaged: String(Boolean(extra.humanEngaged)) },
       extra: { issue: issueNumber, ...extra },
     });
 
