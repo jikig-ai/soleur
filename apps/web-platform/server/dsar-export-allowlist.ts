@@ -353,6 +353,22 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
  * a reason per excluded table — empty string is rejected by the lint.
  */
 export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
+  // #6781. Send-marker for the statutory-deadline repin cron: one row per
+  // (item_id, tick_key) recording that a notification was dispatched. It
+  // carries NO user_id and no personal data — only a foreign key to
+  // email_triage_items (itself exported under Art. 15) and a synthetic tick
+  // label. The subject-identifying content lives entirely on the parent row,
+  // so exporting this table would add a row-count and two opaque keys while
+  // duplicating nothing the subject cannot already see.
+  //
+  // EXCLUSION, not allowlist: `joinVia` is not data-driven, so an allowlist
+  // entry here would export nothing AND hard-fail
+  // test/dsar-worker-per-row-where.test.ts.
+  statutory_repin_send:
+    "Dispatch marker with no user_id and no personal data; FKs to " +
+    "email_triage_items, which is itself exported under Art. 15. Retention " +
+    "is a 90-day sweep (purge_statutory_repin_send), not the Art. 17 " +
+    "cascade — statutory parent rows are evidence and are never purged.",
   // DSAR meta — including would be recursive (a bundle containing
   // metadata about prior bundles' issuance). PII is in
   // dsar_export_audit_pii which is handled by the Art. 17 cascade,
