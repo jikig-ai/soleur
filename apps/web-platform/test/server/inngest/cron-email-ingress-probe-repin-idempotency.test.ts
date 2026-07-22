@@ -65,6 +65,8 @@ const {
     markerErrorOnAttempt: number | null;
     /** Force a THROW on the Nth attempt (1-based). */
     markerThrowOnAttempt: number | null;
+    /** Force the #6801 excluded-count query to return an error (T16c). */
+    excludedQueryError: boolean;
     /** user_id → push subscription rows. */
     pushSubs: Record<string, Array<Record<string, unknown>>>;
     /** user_id → email address. */
@@ -78,6 +80,7 @@ const {
     markerAttempts: [],
     markerErrorOnAttempt: null,
     markerThrowOnAttempt: null,
+    excludedQueryError: false,
     pushSubs: {},
     userEmails: {},
     workspaceOwners: [],
@@ -175,6 +178,7 @@ const TABLE_COLUMNS: Record<string, readonly string[]> = {
     "id",
     "user_id",
     "received_at",
+    "acknowledged_at",
     "rule_id",
     "statutory_class",
     "status",
@@ -203,11 +207,24 @@ function makeBuilder(table: string) {
   let insertPayload: Record<string, unknown> | null = null;
   let deleting = false;
   let selectError: { data: null; error: { code: string; message: string } } | null = null;
+  // Range constraints the scan / excluded-count queries apply (#6801).
+  const gteArgs: Array<[string, string]> = [];
+  const ltArgs: Array<[string, string]> = [];
+  let isCountHead = false;
 
-  for (const m of ["not", "gte", "ilike", "like", "limit", "update", "in"]) {
+  for (const m of ["not", "ilike", "like", "limit", "update", "in"]) {
     builder[m] = vi.fn(chain);
   }
-  builder.select = vi.fn((cols?: string) => {
+  builder.gte = vi.fn((col: string, val: string) => {
+    gteArgs.push([col, val]);
+    return builder;
+  });
+  builder.lt = vi.fn((col: string, val: string) => {
+    ltArgs.push([col, val]);
+    return builder;
+  });
+  builder.select = vi.fn((cols?: string, opts?: { head?: boolean; count?: string }) => {
+    if (opts?.head) isCountHead = true;
     const known = TABLE_COLUMNS[table];
     if (known && typeof cols === "string" && cols !== "*") {
       for (const raw of cols.split(",")) {
@@ -285,9 +302,39 @@ function makeBuilder(table: string) {
       result = { data: dbState.pushSubs[userId] ?? [], error: null };
     } else if (
       table === "email_triage_items" &&
+      isCountHead &&
       eqArgs.some(([c, v]) => c === "status" && v === "acknowledged")
     ) {
-      result = { data: dbState.repinRows, error: null };
+      // #6801 excluded-count query: `.select("id",{count,head}).lt("acknowledged_at",floor)`.
+      // Either honor an explicitly forced error (T16c) or count repinRows whose
+      // acknowledged_at is BELOW the lt floor (rows the scan excludes).
+      if (dbState.excludedQueryError) {
+        result = { data: null, count: null, error: { code: "XX000", message: "count failed" } };
+      } else {
+        const ltFloor = ltArgs.find(([c]) => c === "acknowledged_at")?.[1];
+        const count = ltFloor
+          ? dbState.repinRows.filter(
+              (r) =>
+                typeof r.acknowledged_at === "string" &&
+                (r.acknowledged_at as string) < ltFloor,
+            ).length
+          : 0;
+        result = { data: null, count, error: null };
+      }
+    } else if (
+      table === "email_triage_items" &&
+      eqArgs.some(([c, v]) => c === "status" && v === "acknowledged")
+    ) {
+      // Scan query: apply the actual `.gte(col, floor)` bound to repinRows, so a
+      // row outside the window is genuinely NOT scanned (makes the received_at →
+      // acknowledged_at re-anchor test non-vacuous — RED on the old bound).
+      const rows = dbState.repinRows.filter((r) =>
+        gteArgs.every(
+          ([col, floor]) =>
+            typeof r[col] === "string" && (r[col] as string) >= floor,
+        ),
+      );
+      result = { data: rows, error: null };
     } else if (
       table === "email_triage_items" &&
       eqArgs.some(([c, v]) => c === "mail_class" && v === "probe")
@@ -435,6 +482,10 @@ function statutoryRow(overrides: Record<string, unknown> = {}) {
     id: "item-1",
     user_id: "user-1",
     received_at: receivedAtForDaysUntilDue(1),
+    // #6801: the scan now bounds on `acknowledged_at`; default it to "now"
+    // (under the fake clock) so it is inside the 60-day window unless a test
+    // overrides it to probe the re-anchor / excluded-count behavior.
+    acknowledged_at: new Date().toISOString(),
     rule_id: "dsar-art15",
     statutory_class: "dsar",
     ...overrides,
@@ -463,6 +514,7 @@ beforeEach(() => {
   dbState.markerAttempts = [];
   dbState.markerErrorOnAttempt = null;
   dbState.markerThrowOnAttempt = null;
+  dbState.excludedQueryError = false;
   dbState.pushSubs = {};
   dbState.userEmails = {};
   dbState.workspaceOwners = [];
@@ -659,6 +711,83 @@ describe("deadline-repin idempotency guard (#6781)", () => {
       const maxScannable = Math.floor((hours * 3_600_000 - 1) / DAY);
       expect(maxScannable).toBeLessThanOrEqual(DEADLINE_REPIN_DANGER_THRESHOLD_DAYS);
     }
+  });
+
+  // #6801 (AC10/D3b): a row received 90 days ago but acknowledged yesterday IS
+  // scanned and pinged. On the OLD `received_at` bound it was silently excluded.
+  it("scan re-anchor: received 90d ago but acknowledged yesterday IS scanned + pinged", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [
+      statutoryRow({
+        received_at: "2025-12-10T06:00:00.000Z", // 90d ago — OUTSIDE a received_at window
+        acknowledged_at: "2026-03-09T06:00:00.000Z", // yesterday — INSIDE the ack window
+        // due date is computed from received_at; force an in-band due via a
+        // recent-enough received? No — received is 90d ago so it is long overdue,
+        // which still pings daily (the most dangerous bucket).
+      }),
+    ];
+    const result = await runHandler();
+    expect(result.repinged).toBe(1);
+    expect(statutoryEmailCalls()).toHaveLength(1);
+  });
+
+  // #6801 (AC11/D3a): a row acknowledged 90 days ago is EXCLUDED from the scan
+  // and counted; the sweep-complete emit carries a non-zero `excluded`.
+  it("excluded count: a row acknowledged 90d ago is excluded and counted (excluded >= 1)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [
+      statutoryRow({
+        id: "long-tail-1",
+        received_at: "2025-12-10T06:00:00.000Z",
+        acknowledged_at: "2025-12-10T07:00:00.000Z", // 90d ago — outside 60d window
+      }),
+    ];
+    await runHandler();
+    // Not scanned → not pinged.
+    expect(statutoryEmailCalls()).toHaveLength(0);
+    // But counted in the sweep-complete emit.
+    expect(sweepExtraSum("excluded")).toBe(1);
+  });
+
+  // #6801 (AC/D3a): `excluded` is MONOTONIC, so it must NOT escalate the emit to
+  // warn (that would page forever). A run with excluded>0 and no double-fire
+  // stays on infoSilentFallback.
+  it("excluded>0 alone does NOT escalate the sweep emit to warn", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [
+      statutoryRow({
+        id: "long-tail-2",
+        acknowledged_at: "2025-12-10T07:00:00.000Z",
+      }),
+    ];
+    await runHandler();
+    const infoEmits = infoSilentFallbackSpy.mock.calls.filter(
+      (c) => (c[1] as { op?: string })?.op === "deadline-repin-sweep-complete",
+    );
+    const warnEmits = warnSilentFallbackSpy.mock.calls.filter(
+      (c) => (c[1] as { op?: string })?.op === "deadline-repin-sweep-complete",
+    );
+    expect(infoEmits).toHaveLength(1);
+    expect(warnEmits).toHaveLength(0);
+  });
+
+  // #6801 (D3a): the excluded-count query failing must NOT fail the run;
+  // `excluded` becomes null and the sweep still completes.
+  it("excluded count query error → excluded:null, run still completes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.excludedQueryError = true;
+    dbState.repinRows = [statutoryRow()];
+    const result = await runHandler();
+    expect(result.ok).toBe(true);
+    expect(result.repinged).toBe(1);
+    const emit = infoSilentFallbackSpy.mock.calls
+      .concat(warnSilentFallbackSpy.mock.calls)
+      .find((c) => (c[1] as { op?: string })?.op === "deadline-repin-sweep-complete");
+    expect((emit?.[1] as { extra?: { excluded?: unknown } })?.extra?.excluded).toBeNull();
   });
 
   it.each([

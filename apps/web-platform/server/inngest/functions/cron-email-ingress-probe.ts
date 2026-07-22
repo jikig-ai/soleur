@@ -76,10 +76,14 @@ export const DEADLINE_REPIN_HEADS_UP_DAY = 7;
 export const DEADLINE_REPIN_DANGER_THRESHOLD_DAYS = 2;
 
 /**
- * Repin scan bound: only rows received within the last 60 days. Covers
- * every registry rule's due window (max: one calendar month ≈ 31 days)
- * plus a full month of overdue-daily-ping margin — and keeps the scan from
- * growing without bound as the table accretes acknowledged history.
+ * Repin scan bound: only rows ACKNOWLEDGED within the last 60 days (#6801/D3b —
+ * the anchor moved from `received_at` to `acknowledged_at`, since acknowledgement
+ * is what confers eligibility; an item is pingable for 60 days AFTER it becomes
+ * pingable). This is a PING-LIFETIME bound, not a scan-cost bound — the real cap
+ * on the scanned population is the 365-day statutory retention (mig 102
+ * `purge_email_triage_items`), and no index names `acknowledged_at` (the scan is
+ * already a filtered scan either way). Rows acknowledged longer ago than this
+ * window are deliberately dropped and counted as `excluded` in the sweep emit.
  */
 export const DEADLINE_REPIN_SCAN_WINDOW_DAYS = 60;
 
@@ -109,6 +113,7 @@ interface AcknowledgedStatutoryRow {
   id: string;
   user_id: string | null;
   received_at: string;
+  acknowledged_at: string | null;
   rule_id: string | null;
   statutory_class: string;
 }
@@ -118,9 +123,13 @@ interface HandlerResult {
   purged: unknown;
   repinged: number;
   /**
-   * Dispatches skipped because a send-marker for this (item, tick) already
-   * existed — i.e. a double-fire that did NOT reach the user (#6781). A
-   * non-zero value here is the signal that a second scheduler is live.
+   * GENUINE same-tick double-fires only: a 23505 on a `daily:<date>` key (same
+   * day by construction) or a `headsup` key whose existing marker was written
+   * TODAY (#6799/M11). A non-zero value is the signal that a second scheduler is
+   * live. The EXPECTED heads-up-band re-hits (a `headsup` 23505 from an earlier
+   * day) are counted separately as `headsUpAlreadySent` and are NOT in this
+   * number or the `repin_suppressed` tag — so the double-fire detector survives
+   * the band widening.
    */
   repinSuppressed: number;
   /**
@@ -257,11 +266,16 @@ export async function cronEmailIngressProbeHandler({
     ).toISOString();
     const { data, error } = await sb
       .from("email_triage_items")
-      .select("id, user_id, received_at, rule_id, statutory_class")
+      .select("id, user_id, received_at, acknowledged_at, rule_id, statutory_class")
       .eq("status", "acknowledged")
       .not("statutory_class", "is", null)
-      // Bounded scan — see DEADLINE_REPIN_SCAN_WINDOW_DAYS for why 60.
-      .gte("received_at", scanFloor);
+      // #6801 (D3b): the bound is on `acknowledged_at`, NOT `received_at`. What
+      // makes a row eligible is `status = 'acknowledged'`, so the window should
+      // be anchored on WHEN it became eligible — an item is pingable for 60 days
+      // AFTER it becomes pingable. `acknowledged_at` is WORM (mig 102) and is
+      // always set on the acknowledge transition (Phase 0.1), so it can never be
+      // NULL for an acknowledged row and the anchor cannot be gamed.
+      .gte("acknowledged_at", scanFloor);
     if (error) {
       throw new Error(
         `deadline-repin select failed: ${error.code ?? "unknown"}`,
@@ -475,29 +489,58 @@ export async function cronEmailIngressProbeHandler({
       );
     }
 
-    // Per-run record via the observability layer, not a bare pino call. Be
-    // precise about where this lands: Vector's allowlist keeps only
-    // level_int >= 40 (see infra/vector.toml [transforms.app_container_warn_filter]),
-    // and infoSilentFallback still logs at info — so this counter reaches
-    // SENTRY only. Better Stack does not carry it. The WARN-level ops in this
-    // file (marker-insert-failed, marker-purge-failed) clear the filter and do
-    // reach both.
-    infoSilentFallback(null, {
+    // #6801 (D3a): the residue of the acknowledged-window cliff — rows
+    // acknowledged more than the window ago that are therefore no longer scanned.
+    // `head: true` transfers NO rows: one index-friendly count per daily run
+    // against a single-digit population. On query error, emit `excluded: null`
+    // (distinguishable from a real zero) and NEVER fail the run — an
+    // observability query must not take down the retention purge or ingress probe.
+    let excluded: number | null = null;
+    try {
+      const { count, error: exclErr } = await sb
+        .from("email_triage_items")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "acknowledged")
+        .not("statutory_class", "is", null)
+        .lt("acknowledged_at", scanFloor);
+      excluded = exclErr ? null : (count ?? 0);
+    } catch {
+      excluded = null;
+    }
+
+    // Per-run record via the observability layer, not a bare pino call.
+    //
+    // #6801 (D3a/M9/M10): the emit LEVEL-ESCALATES to warn when an ANOMALY
+    // counter is non-zero. `excluded` is deliberately NOT an anomaly: it is
+    // MONOTONIC (acknowledged is terminal, statutory rows live 365 days), so
+    // escalating on it would page every run forever — the exact alert-fatigue
+    // #6813 fixes. `headsUpAlreadySent` is expected steady state, also excluded.
+    // `excluded` stays a structured field AND a low-cardinality tag, so it is
+    // queryable from Sentry (reachable = the real #6801 requirement) without
+    // being a page. Vector keeps level_int >= 40, so only a warn reaches
+    // Better Stack (infra/vector.toml [transforms.app_container_warn_filter]).
+    const anomalyCount = suppressed; // Phase 4 adds undelivered + markerRollbackFailed
+    const emit = anomalyCount > 0 ? warnSilentFallback : infoSilentFallback;
+    emit(null, {
       feature: "email-triage",
       op: "deadline-repin-sweep-complete",
       message: "statutory deadline repin sweep finished",
-      // Sentry indexes TAGS, not `extra` — a counter buried in `extra` cannot be
-      // searched or alerted on, and every run groups under one constant message.
       // `suppressed > 0` is the only signal that a second scheduler is live and
-      // double-firing (the #6781 condition), so it has to be queryable. Boolean,
-      // not the count: tags must stay low-cardinality.
-      tags: { repin_suppressed: suppressed > 0 ? "yes" : "no" },
+      // double-firing (#6781), so it has to be queryable. Boolean, low-cardinality.
+      // `repin_excluded` surfaces the #6801 cliff residue as a queryable tag
+      // WITHOUT gating escalation (see above).
+      tags: {
+        repin_suppressed: suppressed > 0 ? "yes" : "no",
+        repin_excluded: excluded && excluded > 0 ? "yes" : "no",
+      },
       extra: {
         pinged,
         suppressed,
         // Expected steady state under the heads-up band (D2a/M11) — NOT a
-        // double-fire signal, so it never gates the `repin_suppressed` tag.
+        // double-fire signal, so it never gates the `repin_suppressed` tag or
+        // escalation.
         headsUpAlreadySent,
+        excluded,
         scanned: (data ?? []).length,
         runDateUtc,
       },
@@ -507,6 +550,7 @@ export async function cronEmailIngressProbeHandler({
       pinged,
       suppressed,
       headsUpAlreadySent,
+      excluded,
       scanned: (data ?? []).length,
       runDateUtc,
     };
