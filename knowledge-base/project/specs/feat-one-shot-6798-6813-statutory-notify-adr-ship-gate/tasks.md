@@ -26,16 +26,16 @@ Test-runner forms (do not substitute):
 
 ## Phase 0 — Preconditions (blocking; no code written)
 
-- [ ] **0.1** Prove `acknowledged_at` is non-NULL for every `status='acknowledged'` row.
-  - [ ] 0.1.1 Read `apps/web-platform/server/email-triage/email-triage-status-handler.ts` and trace to the status RPC.
-  - [ ] 0.1.2 Read the RPC bodies in `apps/web-platform/supabase/migrations/102_email_triage_items.sql` and `111_email_triage_items_workspace_shared.sql`; confirm `acknowledged_at = CASE WHEN p_status = 'acknowledged' THEN now() … END`.
-  - [ ] 0.1.3 `git grep -n "status.*acknowledged" apps/web-platform/server apps/web-platform/app` — confirm no non-RPC writer.
-  - [ ] 0.1.4 Record the verdict. **If NULL is reachable**, switch to the `.or("received_at.gte.<floor>,acknowledged_at.gte.<floor>")` branch and first confirm the vitest Supabase fake in `apps/web-platform/test/server/inngest/cron-email-ingress-probe-repin-idempotency.test.ts` implements `.or()`; extend the fake if not.
-- [ ] **0.2** Read `.github/actions/dev-migration-drift-probe/action.yml`; determine whether a `content_sha` mismatch **fails the job** or only reports. Record. If report-only → drop the plan's D6.5 carve-out and edit migration citations in place (and update AC29 accordingly).
-- [ ] **0.3** `git grep -rn "^adr:" scripts/ plugins/ apps/ .github/` plus a scan of any frontmatter parser — confirm zero consumers of the `adr:` key. If a consumer exists, switch D6.2 to normalize-to-filename and record.
-- [ ] **0.4** Confirm the runner forms above: read `apps/web-platform/vitest.config.ts` `include:` globs (must cover `test/server/inngest/**` and `test/*.test.ts`) and check `apps/web-platform/bunfig.toml` for `[test] pathIgnorePatterns`.
-- [ ] **0.5** Next free ADR ordinal: `ls knowledge-base/engineering/architecture/decisions/ | grep -oE '^ADR-[0-9]{3}' | sort -u | tail -1` against `origin/main`. If the adopted ordinal is not `133`, sweep **the plan file, this tasks.md, and AC18** in the same edit.
-- [ ] **0.6** Build the ADR-citation adjudication table. Run
+- [x] **0.1** Prove `acknowledged_at` is non-NULL for every `status='acknowledged'` row.
+  - [x] 0.1.1 Read `apps/web-platform/server/email-triage/email-triage-status-handler.ts` and trace to the status RPC.
+  - [x] 0.1.2 Read the RPC bodies in `apps/web-platform/supabase/migrations/102_email_triage_items.sql` and `111_email_triage_items_workspace_shared.sql`; confirm `acknowledged_at = CASE WHEN p_status = 'acknowledged' THEN now() … END`.
+  - [x] 0.1.3 `git grep -n "status.*acknowledged" apps/web-platform/server apps/web-platform/app` — confirm no non-RPC writer.
+  - [x] 0.1.4 Record the verdict. **If NULL is reachable**, switch to the `.or("received_at.gte.<floor>,acknowledged_at.gte.<floor>")` branch and first confirm the vitest Supabase fake in `apps/web-platform/test/server/inngest/cron-email-ingress-probe-repin-idempotency.test.ts` implements `.or()`; extend the fake if not.
+- [x] **0.2** Read `.github/actions/dev-migration-drift-probe/action.yml`; determine whether a `content_sha` mismatch **fails the job** or only reports. Record. If report-only → drop the plan's D6.5 carve-out and edit migration citations in place (and update AC29 accordingly).
+- [x] **0.3** `git grep -rn "^adr:" scripts/ plugins/ apps/ .github/` plus a scan of any frontmatter parser — confirm zero consumers of the `adr:` key. If a consumer exists, switch D6.2 to normalize-to-filename and record.
+- [x] **0.4** Confirm the runner forms above: read `apps/web-platform/vitest.config.ts` `include:` globs (must cover `test/server/inngest/**` and `test/*.test.ts`) and check `apps/web-platform/bunfig.toml` for `[test] pathIgnorePatterns`.
+- [x] **0.5** Next free ADR ordinal: `ls knowledge-base/engineering/architecture/decisions/ | grep -oE '^ADR-[0-9]{3}' | sort -u | tail -1` against `origin/main`. If the adopted ordinal is not `133`, sweep **the plan file, this tasks.md, and AC18** in the same edit.
+- [x] **0.6** Build the ADR-citation adjudication table. Run
       `grep -rn --include='*.md' --include='*.ts' --include='*.tsx' --include='*.sql' --include='*.sh' --include='*.yml' -E '\bADR-03[45]\b' . | grep -v '^\./\.git/' | grep -v '/archive/'`
       and append a table to this file with columns `file:line | quoted context | means (dedup / template-registry / action-class) | action (repoint→ADR-037 / leave / frozen-migration)`. Exclude `knowledge-base/project/{plans,specs,brainstorms,learnings}/**`.
 - [ ] **0.7** Capture the pre-fix #6813 baseline: extract the current `OUTAGE_RE`/`PROD_RE` from `plugins/soleur/skills/ship/SKILL.md` and run them against all five fixtures. Record which fire. The three no-signal fixtures MUST fire now (otherwise they do not reproduce the bug). Paste the result into the PR body for AC24.
@@ -195,8 +195,96 @@ Test-runner forms (do not substitute):
 
 ---
 
-## ADR-citation adjudication table (filled at Phase 0.6)
+## Phase 0 results (recorded 2026-07-22)
+
+### 0.1 — `acknowledged_at` non-nullability: **PROVEN. Take the `.gte()` branch; no `.or()` fallback.**
+
+Chain of evidence:
+
+1. `102_email_triage_items.sql` — `status text NOT NULL DEFAULT 'new' CHECK (status IN ('new','acknowledged','archived'))`. A row cannot be born `acknowledged`.
+2. Same file — `REVOKE INSERT ON TABLE public.email_triage_items FROM PUBLIC, anon, authenticated`. Writes are service-role pipeline + SECURITY DEFINER RPCs only.
+3. The **single** non-test INSERT site is `server/inngest/functions/email-on-received.ts` §`.insert({ user_id, workspace_id, claim_key, message_id, resend_email_id, sender, subject, received_at, received_at_source, summary: null, mail_class: null, statutory_class: null, rule_id: null })` — it does **not** set `status`, so it takes the `'new'` default.
+4. `102` §`email_triage_items_no_mutate()` — any UPDATE changing `status` / `status_changed_at` / `acknowledged_at` raises `P0001` unless `current_setting('app.email_triage_status_in_progress')` is `'on'`, a GUC only `set_email_triage_status` sets → **RPC-only transitions**.
+5. `102` §`set_email_triage_status` (and the `111` re-definition) sets `acknowledged_at = CASE WHEN p_status = 'acknowledged' THEN now() ELSE acknowledged_at END` in the same UPDATE as the status flip.
+
+∴ every `status='acknowledged'` row has `acknowledged_at` set in the same statement that set the status. `.gte("acknowledged_at", scanFloor)` drops no eligible row.
+
+### 0.2 — dev-migration-drift-probe severity: **REPORT-ONLY — but the D6.5 carve-out is KEPT.**
+
+`.github/actions/dev-migration-drift-probe/action.yml` header: *"Emits `::warning::` annotations (NOT `::error::`)… Severity is `::warning::` by design."* The content-drift branch emits four `::warning::` lines and no `exit 1`; the action's only `exit 1` belongs to the **byok RPC body-marker** probe, gated behind `fail-on-rpc-body-drift` (default `false` on PR CI).
+
+**Decision: still do NOT edit migrations 122/135.** The AC29 conditional ("in which case their citations are corrected") was written before the answer was known. Report-only removes the *blocking* risk, not the *cost*: the probe compares dev-Supabase's recorded `content_sha` against `origin/main`'s blob, and an applied migration is never re-applied — so a comment-only edit emits a `::warning::` on **every future CI run, permanently**. Trading four stale comment citations for a permanent un-clearable warning is precisely the cry-wolf alert erosion #6813 exists to stop; introducing it in this PR would be self-contradictory. The `ADR-037` "Historical citations" note (D6.5) carries the correction instead. **AC29 is updated to record this finding and this disposition.**
+
+### 0.3 — `adr:` frontmatter consumers: **zero consumers, but ONE PRODUCER (not in the plan).**
+
+`git grep -rn "^adr:" -- scripts/ plugins/ apps/ .github/` returns exactly one hit, and it is not a parser:
+
+- `plugins/soleur/skills/architecture/references/adr-template.md:9` — `adr: ADR-NNN`
+
+That is the **template every new ADR is scaffolded from**. Removing the key from the corpus without removing it from the template means the very next `/soleur:architecture` invocation re-introduces it and **fails the new layer-4 gate**. Added as task **6.1b**. No frontmatter parser reads `adr:` (`scripts/`'s only frontmatter tooling is `frontmatter-strip` and `lint-agents-rule-budget.py`, neither of which references the key), so D6.2 (remove, don't normalize) stands.
+
+### 0.4 — runner forms confirmed
+
+- `apps/web-platform/vitest.config.ts` — node project `include: ["test/**/*.test.ts", "lib/**/*.test.ts"]` (covers `test/server/inngest/**`), happy-dom project `include: ["test/**/*.test.tsx"]`.
+- `apps/web-platform/bunfig.toml` — `[test] pathIgnorePatterns = ["**"]`, blocking all bun-test discovery by design (#1469). **Never `bun test` in web-platform.**
+
+### 0.5 — ADR ordinal: **`ADR-133` is free.** Highest on freshly-fetched `origin/main` is `ADR-132`. Plan's provisional ordinal holds; **no sweep required**.
+
+### 0.6 — ADR-citation adjudication (grep-enumerated, per-citation)
+
+Corpus: `git grep -nE '\bADR-03[45]\b' -- '*.md' '*.ts' '*.tsx' '*.sql' '*.sh' '*.yml'`, minus `/archive/` and `knowledge-base/project/**`.
+
+**Ground truth.** `ADR-037-…-multi-source-dedup.md` §Decision owns the `plain-insert` + catch-`23505` idiom (explicitly: *"Webhook + Inngest + KB-drift ingest all INSERT without `ON CONFLICT`; supabase-js `error.code === 23505` → 200 duplicate"*). `ADR-035-template-registry-code-static.md` §Decision owns `TEMPLATE_IDS` / `getTemplateHash`. `ADR-034` owns `ACTION_CLASSES`. Any citation meaning *dedup / 23505 / send-boundary* meant the **ADR-037 file** via its retired `adr: 035` frontmatter.
 
 | file:line | quoted context | means | action |
 | --- | --- | --- | --- |
-| _(populate at Phase 0.6 — do not edit any citation before this table exists)_ | | | |
+| `server/notifications.ts:733` | "Idempotent (ADR-035): plain-insert + catch 23505 rather than `ON CONFLICT DO NOTHING`" | dedup | **re-point → ADR-037** |
+| `server/notifications.ts:754` | "Idempotency key (ADR-035). … the dedup index is `(workspace_id, dedup_key)`" | dedup | **re-point → ADR-037** |
+| `server/inngest/functions/cron-email-ingress-probe.ts:295` | "RECIPIENT-GRAIN CONSTRAINT (ADR-035; migration 135 header note 4)" | dedup / send-boundary | **re-point → ADR-037** *(not named in the plan — found by enumeration)* |
+| `test/migration-122-inbox-item.test.ts:107` | "dedup: workspace-scoped partial-unique index (ADR-035)" | dedup | **re-point → ADR-037** *(not named in the plan)* |
+| `test/server/inngest/cron-email-ingress-probe-repin-idempotency.test.ts:839` | "see migration 135 header note 4 and the ADR-035" | dedup / send-boundary | **re-point → ADR-037** *(not named in the plan)* |
+| `knowledge-base/engineering/architecture/domain-model.md:59` | BR-NOTIFY-1 sources: "migration 135_statutory_repin_send.sql; ADR-035; GDPR Art. 32(1)(b)" | dedup / send-boundary | **re-point → ADR-037** *(not named in the plan)* |
+| `supabase/migrations/122_inbox_item.sql` (×2) | dedup index rationale | dedup | **FROZEN** — covered by the ADR-037 Historical-citations note (0.2) |
+| `supabase/migrations/135_statutory_repin_send.sql` (×2) | send-marker rationale | dedup | **FROZEN** — same |
+| `server/templates/template-registry.ts:4,35,36` | "ADR-035 §Decision (1)… mirroring ADR-034's ACTION_CLASSES pattern" | template registry | leave |
+| `server/action-sends/write-action-send.ts:128` | "canonical template hash … code-static template registry … See ADR-035" | template registry | leave |
+| `app/api/dashboard/today/[id]/send/route.ts:184` | "Plan §Phase 4 §4 + Sharp Edges + ADR-035" (at `tierRequiresTemplateAuth`) | template registry | leave |
+| `app/api/dashboard/today/[id]/send/route.ts:329` | "action-class typed-literal lint (PR-H ADR-034 §1)" | action-class registry | leave |
+| `docs/legal/data-protection-disclosure.md:119`, `docs/legal/gdpr-policy.md:295`, `plugins/soleur/docs/pages/legal/data-protection-disclosure.md:126` | "See also ADR-035 … for the code-static template registry decision" | template registry | leave |
+| `knowledge-base/legal/article-30-register.md:315,317,323,325,335,343,345`, `knowledge-base/legal/compliance-posture.md:163`, `knowledge-base/INDEX.md:46` | PA-16/PA-18 registry prose | action-class / template registry | leave |
+| `apps/web-platform/lib/auth/csrf-coverage.test.ts:19`, `server/inngest/model-tiers.ts:7`, `server/scope-grants/action-class-map.ts:4,6`, `test/lint/action-class-typed-literals.test.ts:16,121,183`, `test/server/scope-grants/action-class-exhaustive.test.ts:15,80,88`, `supabase/migrations/051_*.sql`, `053_*.sql`, `app/api/webhooks/github/route.ts:276` | `ACTION_CLASSES` / template-auth prose | action-class / template registry | leave |
+
+**Net: 6 re-points, 4 frozen, everything else left.** The plan predicted 2 re-points (`notifications.ts` only); enumeration found **4 more**. This is exactly the "grep-enumerated, not intuited" requirement.
+
+### 0.6b — **H1 headings disagree too (scope extension, not in the plan)**
+
+Removing the `adr:` frontmatter key alone does **not** discharge #6800: the ADR-037 file's own H1 reads `# ADR-035: messages.source_ref composite-unique for multi-source dedup`, so `ADR-035` would still resolve to two documents — one by filename, one by H1. A corpus sweep found the mismatch set is **exactly the same two files**, and every one of the 138 ADRs carries an H1 ordinal (zero exceptions):
+
+| file | H1 says | action |
+| --- | --- | --- |
+| `ADR-036-github-app-webhook-as-second-multi-source-ingress.md` | `# ADR-034:` | rewrite H1 → `ADR-036` |
+| `ADR-037-messages-source-ref-composite-unique-for-multi-source-dedup.md` | `# ADR-035:` | rewrite H1 → `ADR-037` |
+
+Both files also carry a "Note on numbering" paragraph narrating the adoption of the now-retired ordinal; both are rewritten to state that the **filename is authoritative**. Added as task **6.1c** and **AC25b**.
+
+### 0.7 — #6813 pre-fix baseline
+
+Gate lives at `plugins/soleur/skills/ship/SKILL.md` §"Incident-PIR Gate" trigger 3 (the `OUTAGE_RE=` / `PROD_RE=` / `grep -qiE` lines). Baseline captured; the three no-signal fixtures MUST fire against this pre-fix pair — recorded in Phase 5.
+
+### 0.8 — scanned-population size
+
+Recorded in Phase 3 (evidence for the no-index decision in plan §D3b reason 2).
+
+### 0.9 — `/soleur:plan-review`
+
+Run at Phase 0 exit; findings recorded below.
+
+---
+
+## Added tasks (from Phase 0 findings)
+
+- [ ] **6.1b** Remove the `adr: ADR-NNN` line from `plugins/soleur/skills/architecture/references/adr-template.md` — otherwise the next scaffolded ADR re-introduces the key and fails the new layer-4 gate (**Phase 0.3**).
+- [ ] **6.1c** Rewrite the H1 ordinal in `ADR-036-*.md` (`ADR-034`→`ADR-036`) and `ADR-037-*.md` (`ADR-035`→`ADR-037`), and rewrite both "Note on numbering" paragraphs to state that the filename is authoritative (**Phase 0.6b**).
+- [ ] **6.2e** Re-point the four additional dedup citations found by enumeration: `cron-email-ingress-probe.ts:295`, `test/migration-122-inbox-item.test.ts:107`, `test/server/inngest/cron-email-ingress-probe-repin-idempotency.test.ts:839`, `knowledge-base/engineering/architecture/domain-model.md:59` (**Phase 0.6**).
+- [ ] **AC25b** `for f in ADR-*.md; do` H1 ordinal `==` filename ordinal `; done` — zero mismatches.
+- [ ] **AC29 (revised)** Migrations `122_inbox_item.sql` and `135_statutory_repin_send.sql` are unchanged. Phase 0.2 proved the drift probe is **report-only**, and the PR body records that finding **and** the reason the carve-out is kept anyway (a permanent un-clearable `::warning::` on every future CI run).
