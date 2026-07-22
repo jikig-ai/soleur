@@ -39,6 +39,8 @@ Test-runner forms (do not substitute):
       `grep -rn --include='*.md' --include='*.ts' --include='*.tsx' --include='*.sql' --include='*.sh' --include='*.yml' -E '\bADR-03[45]\b' . | grep -v '^\./\.git/' | grep -v '/archive/'`
       and append a table to this file with columns `file:line | quoted context | means (dedup / template-registry / action-class) | action (repoint→ADR-037 / leave / frozen-migration)`. Exclude `knowledge-base/project/{plans,specs,brainstorms,learnings}/**`.
 - [ ] **0.7** Capture the pre-fix #6813 baseline: extract the current `OUTAGE_RE`/`PROD_RE` from `plugins/soleur/skills/ship/SKILL.md` and run them against all five fixtures. Record which fire. The three no-signal fixtures MUST fire now (otherwise they do not reproduce the bug). Paste the result into the PR body for AC24.
+- [ ] **0.8** *(added at deepen-plan)* Record the live scanned-population size as evidence for the no-index decision in plan §D3b reason 2: count rows where `status = 'acknowledged' AND statutory_class IS NOT NULL` (read-only, via the Supabase MCP against **dev**, never prd write). If the count exceeds ~5,000, file a follow-up for the partial index `(acknowledged_at) WHERE status = 'acknowledged' AND statutory_class IS NOT NULL` — do **not** add a migration to this PR.
+- [ ] **0.9** *(added at deepen-plan)* Run `/soleur:plan-review` on the plan file. It could not run during planning (no `Task` tool in the planning subagent) and is **not optional** at `brand_survival_threshold: single-user incident` — the panel escalates to `+architecture-strategist +spec-flow-analyzer`, which are the lenses that cover D2a (detector split) and D4c (marker rollback). Apply mechanical findings; surface taste/user-challenge findings to `specs/<branch>/decision-challenges.md`.
 
 ---
 
@@ -93,7 +95,7 @@ Test-runner forms (do not substitute):
 - [ ] **3.5 GREEN** `apps/web-platform/server/observability.ts` — add the `extraTags` merge to `infoSilentFallback`, mirroring `reportSilentFallback`/`warnSilentFallback` exactly (`if (extraTags) Object.assign(tags, extraTags);`).
 - [ ] **3.6 GREEN** `cron-email-ingress-probe.ts`:
   - [ ] 3.6.1 Swap `.gte("received_at", scanFloor)` → `.gte("acknowledged_at", scanFloor)` (or the `.or()` branch from 0.1.4).
-  - [ ] 3.6.2 Add the bounded excluded-count query (`.select("id", { count: "exact", head: true })` + `.lt("acknowledged_at", scanFloor)`), wrapped so an error yields `excluded: null` and never fails the run.
+  - [ ] 3.6.2 Add the bounded excluded-count query (`.select("id", { count: "exact", head: true })` + `.lt("acknowledged_at", scanFloor)`), wrapped so an error yields `excluded: null` and never fails the run. *(deepen-plan precedent note: the four repo precedents for `count: "exact", head: true` are all in `app/(dashboard)/**` route handlers — this is the first use inside an Inngest cron, so confirm the vitest Supabase fake returns a `{ count }` shape for the `head:true` form and extend the fake if not.)*
   - [ ] 3.6.3 Level-escalate the sweep-complete emit: `warnSilentFallback` when `excluded > 0 || suppressed > 0 || undelivered > 0 || markerRollbackFailed > 0`, else `infoSilentFallback`. **Same op slug** `deadline-repin-sweep-complete`, same tags contract.
   - [ ] 3.6.4 Rewrite the `DEADLINE_REPIN_SCAN_WINDOW_DAYS` doc comment — it currently justifies 60 days in `received_at` terms and would become false.
 
@@ -116,6 +118,7 @@ Test-runner forms (do not substitute):
 - [ ] **4.7 GREEN** `cron-email-ingress-probe.ts`:
   - [ ] 4.7.1 Capture the `NotifyOutcome` from `notifyOfflineUser`.
   - [ ] 4.7.2 On `!outcome.delivered`: `DELETE FROM statutory_repin_send WHERE item_id = <row.id> AND tick_key = <tickKey>`; increment `undelivered`; do **not** increment `pinged`.
+    - **Novel pattern — no repo precedent** (deepen-plan 4.4). `statutory_repin_send` has exactly one non-test write site today (the insert) plus the 90-day sweep RPC. The DELETE MUST match on the **composite key** `.eq("item_id", …).eq("tick_key", …)` and MUST NOT chain `.select()` — the table has **no `id` column** (mig 135), so a RETURNING clause naming one fails the whole statement with `42703`, the same trap documented at the insert site.
   - [ ] 4.7.3 On a failed rollback DELETE: increment `markerRollbackFailed` (non-fatal, folded into the same emit).
   - [ ] 4.7.4 Extend the sweep-complete `extra` with `undelivered` and `markerRollbackFailed`; extend `HandlerResult` correspondingly.
 - [ ] **4.8** Cross-consumer sweep: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`; then confirm the 5 external `notifyOfflineUser` call sites (`agent-runner.ts`, `cc-dispatcher.ts`, `agent-on-spawn-requested.ts`, `email-on-received.ts`, `cron-email-ingress-probe.ts`) compile unchanged and the two "never throws" comments remain true.
@@ -133,7 +136,8 @@ Test-runner forms (do not substitute):
 - [ ] **5.2 RED** `plugins/soleur/test/ship-incident-pir-gate.test.ts`:
   - [ ] 5.2.1 **Extract** the `OUTAGE_RE='…'` and `PROD_RE='…'` literals from `plugins/soleur/skills/ship/SKILL.md` (do not re-declare a JS port — AC19).
   - [ ] 5.2.2 Execute the real haystack pre-strip + `grep -qiE` pipeline against each fixture.
-  - [ ] 5.2.3 Assert 3 no-signal + 2 signal. Confirm RED on `main`.
+  - [ ] 5.2.3 **`set -e` trap (measured at deepen-plan).** The gate's `A && B && echo SIGNAL` chain **exits 1 in the no-signal case**. Wrap it in `if …; then signal=yes; else signal=no; fi` (or `set +e` + capture `rc`) — a harness that lets `set -euo pipefail` see the non-zero exit reports "infrastructure failure" for every *correct* no-signal fixture, inverting exactly the three assertions #6813 cares about.
+  - [ ] 5.2.4 Assert 3 no-signal + 2 signal. Confirm RED on `main`.
 - [ ] **5.3 GREEN** `plugins/soleur/skills/ship/SKILL.md` §"Incident-PIR Gate" trigger 3:
   - [ ] 5.3.1 Add the haystack pre-strip: drop lines matching `^brand_survival_threshold:` and `\*\*Brand-survival threshold:\*\*`.
   - [ ] 5.3.2 Add the hypothetical-framing strip: drop `**If this lands broken,`, `**If this leaks,`, and lines containing `if this lands` / `would break` / `could break`.

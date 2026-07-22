@@ -14,6 +14,23 @@ pr: 6834
 
 > Spec lacks valid `lane:` (no `spec.md` on this branch at plan time) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-22 · **Gates run:** 4.4, 4.5, 4.55, 4.6, 4.7, 4.8, 4.9 (all pass or N/A) · Full log in [§Research Insights](#research-insights-deepen-plan-2026-07-22).
+
+**Corrections applied to the plan body:**
+
+1. **§D3b reason 2 was wrong.** The draft claimed `acknowledged_at` is "indexed-eligible". `email_triage_items` has four indexes and **none names `acknowledged_at`** — nor can a bare `received_at` predicate use the existing ones (it is always the second column). Rewritten: the real bound is the **365-day statutory retention**, not an index. Re-evaluation trigger + a Phase 0.8 row-count task added rather than a speculative migration.
+2. **The dropped-`tags` blast radius is now measured, not open-ended.** Census run: **exactly one** affected site. The only other non-test `infoSilentFallback` caller (`cron-workspace-gc.ts`) passes no `tags`.
+3. **A latent trap in the #6813 test harness, measured in a shell.** The gate's `A && B && echo SIGNAL` chain **exits 1 when there is no signal**. A harness that lets `set -euo pipefail` see it inverts the three no-signal assertions into infrastructure failures. Recorded as a Sharp Edge and as tasks.md step 5.2.3.
+
+**New considerations discovered:**
+
+- The `.delete()` marker rollback (§D4c) has **no repo precedent** — flagged for reviewer scrutiny, with the composite-key / no-`.select()` `42703` trap named in tasks.md 4.7.2.
+- The `head:true` count query has four precedents, **all in dashboard route handlers** — this is its first use inside an Inngest cron, so the test fake may need extending.
+- The conditional warn-vs-info escalation **diverges** from the `cron-workspace-gc.ts` precedent (which splits into two ops). The divergence is required by #6801's "not a separate emit" constraint and is now recorded rather than left to be discovered at review.
+- **`/soleur:plan-review` did not run** (no `Task` tool in the planning subagent) and is mandatory at this threshold — added as blocking task **0.9**.
+
 ## Overview
 
 Six OPEN issues, all deliberately deferred from #6781 (merged as PR #6782) per
@@ -244,9 +261,27 @@ Reasoning:
    thing that makes a row eligible is `status = 'acknowledged'`. Those are
    independent." Re-anchoring makes them dependent by construction — an item
    is pingable for 60 days *after it becomes pingable*.
-2. **The scan stays bounded.** `acknowledged_at` is indexed-eligible and
-   monotonically bounded; the scan cannot grow without bound as history
-   accretes. The legitimate reason the bound exists is preserved.
+2. **The scan stays bounded — but by row retention, not by an index.**
+   *(Corrected at deepen-plan; the first draft claimed `acknowledged_at` was
+   "indexed-eligible". It is not.)* `email_triage_items` carries four indexes
+   (mig 102 §`email_triage_items_user_received_idx`, `…_llm_ceiling_idx`,
+   `…_archived_idx`; mig 111 §`…_workspace_received_idx`) and **none of them
+   names `acknowledged_at`** — nor can a bare `received_at >= X` predicate use
+   the existing ones, since `received_at` is only ever the *second* column
+   behind `user_id`/`workspace_id`. So today's scan is already a filtered scan,
+   and re-anchoring does not make it worse. The real bound is the **365-day
+   statutory retention** in mig 102 §`purge_email_triage_items`
+   (`received_at < now() - interval '365 days'` for statutory rows, 7 days for
+   the rest), which caps the `status='acknowledged' AND statutory_class IS NOT
+   NULL` population regardless of which timestamp the window anchors on. For a
+   single-operator product that population is small; the 60-day window is a
+   *ping-lifetime* bound, not a *scan-cost* bound, and the plan says so rather
+   than claiming an index that does not exist.
+   **Re-evaluation trigger:** Phase 0.8 records the live row count. If the
+   acknowledged+statutory population ever exceeds ~5,000 rows, add a partial
+   index `(acknowledged_at) WHERE status = 'acknowledged' AND statutory_class
+   IS NOT NULL` in a follow-up — deliberately not in this PR, which ships no
+   migration.
 3. **The overdue-ping ceiling is preserved, and becomes intentional.** Today the
    `received_at` bound *incidentally* terminates daily overdue pings ~30 days
    past due. Under the new anchor the terminator is "60 days after
@@ -1060,8 +1095,176 @@ No other open code-review issue names
 
 - **A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6.** This plan's section is filled with a concrete artifact, a concrete vector, and a threshold.
 - **This plan is itself a #6813 fixture.** Phase 5.4's iteration must re-check `this-plan.md` after every regex tweak. If the fixed gate fires on this plan, the fix is not done — this document is the densest possible false-positive input (it says `prod`, `incident`, `outage`, `broken`, and `single-user incident` many times, while describing zero production incidents).
-- **`infoSilentFallback` silently drops `tags`.** Any existing code passing `tags:` to it has a dead observability claim. After AC12 lands, re-grep for other `infoSilentFallback(..., { tags: ... })` call sites whose tags were also being dropped.
+- **`infoSilentFallback` silently drops `tags`.** Any code passing `tags:` to it has a dead observability claim. **Census run at deepen-plan: exactly one affected site** — the repin `deadline-repin-sweep-complete` emit. The only other non-test caller, `apps/web-platform/server/inngest/functions/cron-workspace-gc.ts` §`op: "workspace-gc-sweep-complete"`, passes `feature`/`op`/`message`/`extra` and **no** `tags`, so it is unaffected. Re-run the census after AC12 lands in case a new caller appeared mid-pipeline.
 - **Do not use `bun test` for `apps/web-platform`.** It is a vitest package; `apps/web-platform/bunfig.toml` may carry `[test] pathIgnorePatterns` and `npm run -w` fails (the repo root declares no `workspaces` field). Use `./node_modules/.bin/vitest run <path>` there and `bun test` only under `plugins/soleur/test/`.
 - **The ADR ordinal chosen here (133) is provisional.** A sibling PR can claim it mid-pipeline; `/ship` Phase 5.5's collision gate re-verifies against `origin/main` and re-runs after every Phase 7 sync. A renumber must sweep this plan, `tasks.md`, and AC18 in the same edit — the recurring failure is an AC left asserting a filename that no longer exists.
 - **Migration files are content-hashed after apply.** `run-migrations.sh` writes `git hash-object` into `_schema_migrations.content_sha`; a comment-only edit to an applied migration is a drift-probe trip, not a free change.
 - **The recipient-grain constraint is untouched and must stay untouched.** Mig 135 note 4 + the cron's loop comment + test T12 pin that the send path is single-recipient. The email fallback in D4a sends to `auth.users.email` for the **same** `row.user_id` — it does not fan out to workspace Owners. Any future fan-out still requires re-keying the marker table first.
+- **The `ship` gate's `A && B && echo` chain returns 1 when there is no signal.** The `#6813` fixture test must not run it as a bare statement under `set -euo pipefail` — wrap it in `if …; then` or capture `rc=$?` explicitly. Measured, not assumed (see §Research Insights).
+
+---
+
+## Research Insights (deepen-plan, 2026-07-22)
+
+> **Method note.** `deepen-plan` normally fans out research/review subagents via
+> the `Task` tool. This pass ran inside a one-shot subagent with no `Task` tool,
+> so every check below was executed directly and its output is quoted. Nothing
+> here is asserted from memory. `/soleur:plan-review`'s agent panel could not be
+> spawned for the same reason — it should run at `/work` entry, where `Task` is
+> available.
+
+### Gate results
+
+| Gate | Result |
+| --- | --- |
+| **4.4 Precedent-diff** | PASS — see below. |
+| **4.4 Scheduled-work** | N/A — no new scheduled job; the change lives inside the existing `cron-email-ingress-probe` Inngest function (ADR-033 path already). |
+| **4.5 Network-outage deep-dive** | Triggered, adjudicated non-applicable — see below. |
+| **4.55 Downtime & cutover** | N/A — no infra reboot/replace, no lock-taking DDL (no migration at all), no router/tunnel restructure. The one deploy effect is the routine container swap `web-platform-release.yml` already performs on every `apps/web-platform/**` merge. |
+| **4.6 User-Brand Impact halt** | PASS — heading present, body concrete, threshold `single-user incident` (valid enum). |
+| **4.7 Observability halt** | PASS — all five fields present with child content; no placeholder values; `discoverability_test.command` contains no `ssh` (measured: 0 matches for `(^\|\s\|/)ssh(\s\|$)`). |
+| **4.8 PAT-shaped variable halt** | PASS — the four-pattern sweep returns zero matches. |
+| **4.9 UI-wireframe halt** | N/A — no `Files to Edit`/`Files to Create` path matches the UI-surface glob superset. |
+
+### 4.5 Network-Outage Deep-Dive — triggered, non-applicable (adjudicated)
+
+`plugins/soleur/skills/plan/references/plan-network-outage-checklist.md` was
+read in full. The keyword scan matched on three tokens, none of which is a live
+connectivity symptom:
+
+| Match | Context | Verdict |
+| --- | --- | --- |
+| `unreachable` | "`=== 7` is unreachable" — describing an unsatisfiable integer equality | false positive |
+| `504` | matched *inside* the issue reference `#5046` | false positive |
+| `firewall` | "the egress firewall's deliberate WNS DROP (#5046 PR-2)" — a **cited historical cause**, already diagnosed and closed | not a live symptom |
+
+`#5046` verified live: `ISSUE CLOSED — Tier-2: cron egress firewall +
+least-priv token → restore paused crons`. The firewall DROP is *by design*
+(WNS is a deliberate allowlist exclusion) and is confirmed in code at
+`apps/web-platform/server/notifications.ts` §`// Bounded: the egress firewall
+(#5046 PR-2) DROPs (not rejects)`. This plan proposes **no** connectivity fix
+and **no** service-layer hypothesis — it makes the application resilient to a
+DROP that will remain in place. The checklist's L3→L7 ordering exists to stop
+sshd/fail2ban fixes that skip the firewall check; there is no such inversion
+here. **No `## Hypotheses` section is required.**
+
+### 4.4 Precedent-diff (pattern-bound behaviors)
+
+| Pattern this plan prescribes | Precedent found | Verdict |
+| --- | --- | --- |
+| Bounded count query `.select("id", { count: "exact", head: true })` | `app/(dashboard)/dashboard/page.tsx`, `…/settings/billing/page.tsx` (×2), `…/settings/scope-grants/page.tsx` | **Matches precedent.** Caveat: all four precedents are in dashboard route handlers, none in `server/inngest/functions/` — same supabase-js API, first use in a cron. Verify the vitest Supabase fake supports the `head:true` shape (Phase 3 RED will catch it). |
+| Conditional `warn` vs `info` on the same logical event | `server/inngest/functions/cron-workspace-gc.ts` emits `info` for the every-run throughput record and a *separate* `warn` for the actionable low-disk condition, with an explicit comment on why the levels differ | **Partial divergence, deliberate.** The precedent splits into **two ops**; this plan level-escalates **one op**. Justified by #6801's explicit "deliberately *not* a separate emit" constraint. The plan diverges knowingly, and the divergence is recorded here rather than discovered at review. |
+| `.delete().eq()` rollback on the marker table | No precedent — `statutory_repin_send` has exactly one non-test write site today (the insert at `cron-email-ingress-probe.ts` §`.from("statutory_repin_send")`), plus the 90-day sweep RPC | **Pattern is novel.** Flagged for reviewer scrutiny per the gate. The rollback must use the composite key `(item_id, tick_key)` — the table has no `id` column (mig 135), the same fact that motivated the plain-insert-no-`.select()` idiom. A `.delete()` with a `.select()` would fail 42703 identically. |
+| Registry field widening (`clockOrigin`) on a code-static registry | `lib/email-triage/statutory-rules.ts` is already the pure/code-static registry with a required `dueRule` per rule | **Matches precedent.** Making `clockOrigin` required mirrors `dueRule` and gives AC1 its `tsc`-level enforcement for free. |
+
+### Verified-live claims (nothing cited from memory)
+
+```
+gh issue view 6798..6802,6813  →  all OPEN
+gh pr view 6782                →  MERGED  "fix(notifications): guard the statutory-deadline
+                                            cron send-path against double-fire"
+gh issue view 6781             →  CLOSED  (predecessor; the one-shot collision gate already
+                                            cleared this as a cited-predecessor false positive)
+gh issue view 5046             →  CLOSED  "Tier-2: cron egress firewall + least-priv token"
+gh issue view 3739             →  OPEN    (code-review overlap, acknowledged)
+gh issue view 3593             →  OPEN    (code-review overlap, false-positive path match)
+```
+
+**Attribution probes against `origin/main`** (state ≠ attribution — both checked):
+
+```
+git log --oneline --grep=6781 -- apps/web-platform/server/notifications.ts
+  → a04d95c17 fix(notifications): guard the statutory-deadline cron send-path
+              against double-fire (#6782)
+git show origin/main:apps/web-platform/server/notifications.ts \
+  | grep -c 'PushDeliveryTally\|statutory-notify-zero-delivery'   → 3
+```
+
+So both #6802's premises ("`sendPushNotifications` already returns a
+`PushDeliveryTally` as of #6781"; "`notifyOfflineUser` now emits
+`statutory-notify-zero-delivery`") are on `main`, authored by the commit the
+issue credits. **Attribution confirmed, not merely existence.**
+
+**ADR ordinal, derived from a freshly-fetched `origin/main`** (not the branch base):
+
+```
+git fetch origin main
+git ls-tree -r --name-only origin/main knowledge-base/engineering/architecture/decisions/ \
+  | grep -oE 'ADR-[0-9]{3}' | sort -u | tail -1     → ADR-132
+```
+
+`ADR-133` is free on live `origin/main`. Still provisional — `/ship` Phase 5.5
+re-verifies at merge.
+
+**AGENTS rule IDs cited in the plan + tasks.md** — all five resolve to an
+active `[id: …]` in `AGENTS.md`; none appears in `scripts/retired-rule-ids.txt`:
+`hr-gdpr-gate-on-regulated-data-surfaces`, `hr-observability-as-plan-quality-gate`,
+`hr-type-widening-cross-consumer-grep`, `wg-use-closes-n-in-pr-body-not-title-to`,
+`wg-when-deferring-a-capability-create-a`.
+
+**Labels prescribed in ACs:** none — this plan creates no GitHub issues, so the
+label-existence check is vacuous. (The D6.6 scope-out is tracked by the existing
+`ALLOWED_COLLISIONS` allowlist, not by a new issue.)
+
+**Path citations:** every `knowledge-base/`, `apps/`, `plugins/`, `scripts/`,
+and `.github/` path in the plan body was resolved with a filesystem check. The
+only non-existent paths are exactly the `## Files to Create` set — verified by
+diffing the two lists.
+
+### Measured shell semantics — the `#6813` test harness (do not assume)
+
+The gate's snippet is an AND-list whose final element is the `echo`:
+
+```bash
+$ bash -c 'set -euo pipefail; H="nothing here"
+           echo "$H" | grep -qiE "outage" && echo "$H" | grep -qiE "prod" && echo SIGNAL
+           echo "survived rc=$?"'
+survived rc=1          # did NOT abort mid-script, but the list evaluates to 1
+
+$ bash -c 'set -euo pipefail; H="nothing here"; echo "$H" | grep -qiE "outage" && echo SIGNAL'
+$ echo $?
+1                      # as the LAST command, the no-signal case exits the script 1
+```
+
+Two consequences, both actionable:
+
+1. **The fixture test must not treat a non-zero exit as an error.** Wrap the
+   pipeline in `if …; then signal=yes; else signal=no; fi`, or run it with
+   `set +e` around the call and capture `rc`. A harness that lets `set -e`
+   propagate will report "test infrastructure failure" for every correct
+   no-signal fixture — i.e. it inverts exactly the three assertions #6813 cares
+   most about.
+2. **Same trap for an agent pasting the snippet into a `set -e` step.** Worth a
+   one-line note beside the snippet in `ship/SKILL.md` when Phase 5.3 edits it:
+   *"no-signal exits 1 — branch on it, do not let `set -e` see it."*
+
+### Constraint confirmations (claims the plan depends on)
+
+- **No migration is required for D2.** Mig 135 line 92:
+  `CHECK (tick_key = 'headsup' OR tick_key ~ '^daily:\d{4}-\d{2}-\d{2}$')` — the
+  widened band still emits only these two shapes. Verified by reading the CHECK,
+  not by inference from the header comment.
+- **No index on `acknowledged_at`.** Corrected inline in §D3b reason 2. The four
+  existing indexes are `(user_id, received_at DESC) WHERE status <> 'archived'`,
+  `(created_at) WHERE summary IS NOT NULL`, `(user_id, received_at DESC) WHERE
+  status = 'archived'`, and `(workspace_id, received_at DESC) WHERE status <>
+  'archived'`.
+- **Retention horizon.** Mig 102 §`purge_email_triage_items`: statutory rows are
+  kept **365 days**, non-statutory **7 days**. This is the real bound on the
+  scanned population.
+- **Only one `infoSilentFallback` site is affected by the dropped-`tags` bug.**
+  Census quoted in §Sharp Edges.
+- **Op-slug literals are internally consistent.** Every slug the plan names
+  (`deadline-repin-sweep-complete`, `statutory-notify-zero-delivery`,
+  `webpush-send-failed`, `deadline-repin-marker-insert-failed`) exists verbatim
+  on `main` under `apps/web-platform/server/` and appears with one canonical
+  spelling throughout the plan — no drift between the Decisions, Observability,
+  AC, and Test-Scenario sections.
+
+### Deferred to `/work` (needs a tool this subagent lacks)
+
+| Item | Why deferred | Where it runs |
+| --- | --- | --- |
+| `soleur:legal:clo` copy review | needs `Task` | **Phase 1.4 — blocking gate** (already an in-scope task, per #6798 AC) |
+| `/soleur:gdpr-gate` on the diff | needs `Task`/skill nesting | Phase 1.4, alongside the CLO review. An inline GDPR assessment is recorded in §Domain Review → Legal; the gate confirms it against the real diff. |
+| `/soleur:plan-review` agent panel (DHH / Kieran / code-simplicity, escalated to +architecture-strategist +spec-flow-analyzer at `single-user incident`) | needs `Task` | **Run at `/work` entry, before Phase 1.** At this threshold the panel is not optional: `2026-05-22-plan-review-and-deepen-plan-catch-different-issue-classes` records that style/scope review and architectural review catch disjoint issue classes, and this plan's highest-risk decisions (D2a's detector split, D4c's marker rollback) are architectural. |
