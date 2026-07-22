@@ -29,6 +29,7 @@ import {
   type ActivityEvent,
   type Assignee,
   type SlaAction,
+  type SlaClass,
 } from "./action-required-sla-policy";
 
 export const PROCESS_ISSUE_EVENT = "cron/action-required-sla.process-issue";
@@ -121,10 +122,69 @@ async function sentinelAlreadyPosted(
   return res.data.some((c) => hasSentinel(c.body ?? "", action, threshold));
 }
 
+interface Assessment {
+  /** The issue's updatedAt drifted from the dispatcher's list snapshot (TOCTOU). */
+  drifted: boolean;
+  action: SlaAction;
+  targetPriority?: string;
+  cls: SlaClass;
+  ageDays: number;
+  inactiveDays: number;
+  /** The INDEPENDENT veto result (isHumanEngaged over fresh assignees + recent non-bot events). */
+  humanEngaged: boolean;
+  currentPriority: string | null;
+}
+
+/**
+ * Fetch the issue FRESH and compute the full decision. Called at assess time AND again inside the
+ * destructive expire step, so the close re-verifies over live state (TOCTOU + independent veto)
+ * rather than acting on a memoized, possibly-stale assessment.
+ */
+async function assessFreshIssue(
+  client: Octokit,
+  issueNumber: number,
+  listedUpdatedAt: string | undefined,
+  runStartedMs: number,
+): Promise<Assessment> {
+  const fresh = await fetchFreshIssue(client, issueNumber);
+  const drifted = Boolean(listedUpdatedAt && fresh.updatedAt !== listedUpdatedAt);
+  const cls = classifyIssue(fresh.labels);
+  const createdMs = Date.parse(fresh.createdAt);
+  const lastNonBot = lastNonBotActivityMs(fresh.events) ?? createdMs;
+  const ageDays = Math.floor((runStartedMs - createdMs) / DAY_MS);
+  const inactiveDays = Math.floor((runStartedMs - lastNonBot) / DAY_MS);
+  // Veto: a non-bot assignee (standing ownership) OR a RECENT (<expiry window) non-bot touch —
+  // a day-29 "still broken" comment must block the day-30 close (D1). Old non-bot touches only
+  // set the inactivity clock; they do not veto.
+  const recentEvents = fresh.events.filter(
+    (e) => Date.parse(e.at) >= runStartedMs - EXPIRE_INACTIVE_DAYS * DAY_MS,
+  );
+  const humanEngaged = isHumanEngaged({ assignees: fresh.assignees, events: recentEvents });
+  const currentPriority = highestPriorityLabel(fresh.labels);
+  const d = decideAction({
+    cls,
+    ageDays,
+    inactiveDays,
+    humanEngaged,
+    currentPriority,
+    labels: fresh.labels,
+    closed: fresh.state === "closed",
+  });
+  return {
+    drifted,
+    action: d.action,
+    targetPriority: d.targetPriority,
+    cls,
+    ageDays,
+    inactiveDays,
+    humanEngaged,
+    currentPriority,
+  };
+}
+
 export async function slaIssueProcessHandler({
   event,
   step,
-  logger,
 }: HandlerArgs): Promise<{ ok: boolean; action: string }> {
   const data = (event?.data ?? {}) as {
     issueNumber?: number;
@@ -150,54 +210,28 @@ export async function slaIssueProcessHandler({
     });
 
   try {
+    // Least-privilege (security review): a leaked token from the function that holds AUTO-CLOSE
+    // authority must not be able to push to the auto-deploying `soleur` repo. `issues:write`
+    // covers comments, labels, and state:closed.
     const token = await step.run(`mint-token-${issueNumber}`, async () =>
-      mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS }),
+      mintInstallationToken({
+        tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+        permissions: { issues: "write" },
+        repositories: [REPO_NAME],
+      }),
     );
 
     const decision = await step.run(`assess-${issueNumber}`, async () => {
       const { Octokit } = await import("@octokit/core");
       const client = new Octokit({ auth: token }) as unknown as Octokit;
-      const fresh = await fetchFreshIssue(client, issueNumber);
-
+      const a = await assessFreshIssue(client, issueNumber, listedUpdatedAt, runStartedMs);
       // TOCTOU (D2): the issue changed between the dispatcher's list snapshot and now — an
       // operator may have relabeled/commented/reopened. Abort; the next run re-evaluates.
-      if (listedUpdatedAt && fresh.updatedAt !== listedUpdatedAt) {
-        emit("toctou-abort", { listedUpdatedAt, freshUpdatedAt: fresh.updatedAt });
-        return { action: "skip" as SlaAction, reason: "toctou", cls: "ops", humanEngaged: false };
+      if (a.drifted) {
+        emit("toctou-abort", { listedUpdatedAt, freshAction: a.action });
+        return { ...a, action: "skip" as SlaAction };
       }
-
-      const cls = classifyIssue(fresh.labels);
-      const createdMs = Date.parse(fresh.createdAt);
-      const lastNonBot = lastNonBotActivityMs(fresh.events) ?? createdMs;
-      const ageDays = Math.floor((runStartedMs - createdMs) / DAY_MS);
-      const inactiveDays = Math.floor((runStartedMs - lastNonBot) / DAY_MS);
-      // Veto: a non-bot assignee (standing ownership) OR a RECENT (<expiry window) non-bot
-      // touch — a day-29 "still broken" comment must block the day-30 close (D1). Old non-bot
-      // touches only set the inactivity clock; they do not veto.
-      const recentEvents = fresh.events.filter(
-        (e) => Date.parse(e.at) >= runStartedMs - EXPIRE_INACTIVE_DAYS * DAY_MS,
-      );
-      const humanEngaged = isHumanEngaged({ assignees: fresh.assignees, events: recentEvents });
-
-      const d = decideAction({
-        cls,
-        ageDays,
-        inactiveDays,
-        humanEngaged,
-        currentPriority: highestPriorityLabel(fresh.labels),
-        labels: fresh.labels,
-        closed: fresh.state === "closed",
-      });
-      return {
-        action: d.action,
-        targetPriority: d.targetPriority,
-        reason: d.reason,
-        cls,
-        ageDays,
-        inactiveDays,
-        humanEngaged,
-        currentPriority: highestPriorityLabel(fresh.labels),
-      };
+      return a;
     });
 
     if (decision.action === "escalate" && decision.targetPriority) {
@@ -236,27 +270,48 @@ export async function slaIssueProcessHandler({
       await step.run(`expire-${issueNumber}`, async () => {
         const { Octokit } = await import("@octokit/core");
         const client = new Octokit({ auth: token }) as unknown as Octokit;
+
+        // RE-ASSERT over FRESH state before the destructive close (data-integrity + veto-bypass
+        // review). The assess-time decision is memoized and may be stale: an operator can engage
+        // in the gap, or a future decideAction regression could route an engaged issue here. This
+        // re-fetch + INDEPENDENT veto recheck is the load-bearing last line before an irreversible
+        // close — and it is what makes the veto-bypass Sentry alert a LIVE tripwire rather than a
+        // tautologically-false one (human_engaged can now actually be true when we reach expire).
+        const re = await assessFreshIssue(client, issueNumber, listedUpdatedAt, runStartedMs);
+        if (re.drifted) {
+          emit("toctou-abort", { reason: "updatedAt-drift-at-close" });
+          return;
+        }
+        if (re.humanEngaged) {
+          // A human is engaged per the independent recheck, yet we reached the expire path — a
+          // late engagement (race) or a veto regression. Do NOT close; emit the FEARED case so the
+          // `sla_action=expire AND human_engaged=true` Sentry alert fires and the operator sees it.
+          emit("expire", { class: re.cls, inactiveDays: re.inactiveDays, humanEngaged: true, closed: false });
+          return;
+        }
+        if (re.action !== "expire") {
+          // No longer expirable for a benign reason (state changed, already handled).
+          emit("toctou-abort", { reason: "no-longer-expire", freshAction: re.action });
+          return;
+        }
+
         if (!(await sentinelAlreadyPosted(client, issueNumber, "expire", "stale"))) {
           await client.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
             owner: REPO_OWNER,
             repo: REPO_NAME,
             issue_number: issueNumber,
             body:
-              `Auto-closing: no owner activity for ${decision.inactiveDays} days. ` +
-              (decision.cls === "dead-content"
+              `Auto-closing: no owner activity for ${re.inactiveDays} days. ` +
+              (re.cls === "dead-content"
                 ? "The distribution gap is tracked by the standing `content-starvation` signal."
                 : "This decision-challenge's reversal window elapsed unreviewed.") +
               ` Reopen if you still need it.\n\n${buildSentinelMarker("expire", "stale")}`,
             headers: { "X-GitHub-Api-Version": "2022-11-28" },
           });
         }
-        await client.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
-          owner: REPO_OWNER,
-          repo: REPO_NAME,
-          issue_number: issueNumber,
-          labels: [WONTFIX_STALE_LABEL],
-          headers: { "X-GitHub-Api-Version": "2022-11-28" },
-        });
+        // Close FIRST, THEN label — so a partial failure never leaves an OPEN issue carrying
+        // `wontfix-stale` (which would short-circuit the next run's retry via the `closed`/stale
+        // guard). A closed-but-unlabeled issue is correctly skipped next run via the `closed` guard.
         await client.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
           owner: REPO_OWNER,
           repo: REPO_NAME,
@@ -265,11 +320,18 @@ export async function slaIssueProcessHandler({
           state_reason: "not_planned",
           headers: { "X-GitHub-Api-Version": "2022-11-28" },
         });
+        await client.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
+          owner: REPO_OWNER,
+          repo: REPO_NAME,
+          issue_number: issueNumber,
+          labels: [WONTFIX_STALE_LABEL],
+          headers: { "X-GitHub-Api-Version": "2022-11-28" },
+        });
         emit("expire", {
-          class: decision.cls,
-          ageDays: decision.ageDays,
-          inactiveDays: decision.inactiveDays,
-          humanEngaged: decision.humanEngaged,
+          class: re.cls,
+          ageDays: re.ageDays,
+          inactiveDays: re.inactiveDays,
+          humanEngaged: false,
         });
       });
     }

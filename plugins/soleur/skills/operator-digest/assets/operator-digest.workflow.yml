@@ -68,7 +68,7 @@ jobs:
             --allowedTools Write,Read,Glob,Grep,Bash(date:*),Bash(ls:*),Bash(gh pr list:*),Bash(gh issue list:*),Bash(git log:*)
           prompt: |
             Run /soleur:operator-digest on the checked-out jikig-ai/soleur repository.
-            Read the four sources, synthesize the four plain-language sections, and write the
+            Read the five sources, synthesize the five plain-language sections, and write the
             digest to $GITHUB_WORKSPACE/digest.md. STOP after writing the file — do not post,
             open, or create any issue. The workflow's post-step owns publishing.
 

@@ -24,10 +24,14 @@ export const DECISION_CHALLENGE_LABEL = "decision-challenge";
 /** Applied by the cron when it auto-closes a structurally-dead issue. */
 export const WONTFIX_STALE_LABEL = "wontfix-stale";
 
-/** Labels the digest §4 action list de-pollutes (kept in sync with operator-digest/SKILL.md §4). */
+/**
+ * Labels the digest §4 action list de-pollutes (kept in sync with operator-digest/SKILL.md §4).
+ * Keyed on the AGENT-owned `content-publisher`, NOT the broad human-attachable `content` — mirroring
+ * `classifyIssue`'s D1 rule. Excluding bare `content` would drop a genuine ops emergency that a human
+ * tagged `content` from the operator's ONLY comprehension surface while the cron escalates it to p0.
+ */
 export const ACTION_LIST_EXCLUDED_LABELS = [
   DECISION_CHALLENGE_LABEL,
-  "content",
   CONTENT_PUBLISHER_LABEL,
 ] as const;
 

@@ -6,7 +6,11 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 
 const state = vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
-  return { fixture: null as unknown as Record<string, unknown>, calls: [] as Array<{ route: string; params: Record<string, unknown> }> };
+  return {
+    fixture: null as unknown as Record<string, unknown>,
+    calls: [] as Array<{ route: string; params: Record<string, unknown> }>,
+    timelineCalls: 0,
+  };
 });
 
 vi.mock("@/server/observability", () => ({
@@ -24,7 +28,13 @@ vi.mock("@octokit/core", () => ({
       state.calls.push({ route, params });
       const f = state.fixture as Record<string, unknown>;
       if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}") return { data: f.issue };
-      if (route.includes("/timeline")) return { data: f.timeline ?? [] };
+      if (route.includes("/timeline")) {
+        state.timelineCalls += 1;
+        // `lateTimeline` models a human engaging BETWEEN the assess fetch and the expire-step
+        // re-fetch (the 2nd timeline GET) — exercising the independent veto re-check tripwire.
+        if (f.lateTimeline && state.timelineCalls >= 2) return { data: f.lateTimeline };
+        return { data: f.timeline ?? [] };
+      }
       if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments") return { data: f.comments ?? [] };
       return { data: {} }; // POST comment / POST labels / PATCH close
     }
@@ -56,6 +66,7 @@ const comments = () => state.calls.filter((c) => c.route === "POST /repos/{owner
 beforeEach(() => {
   state.calls.length = 0;
   state.fixture = {};
+  state.timelineCalls = 0;
 });
 
 describe("SLA worker orchestration", () => {
@@ -107,14 +118,73 @@ describe("SLA worker orchestration", () => {
     expect(state.calls.some((c) => c.route.endsWith("/labels") && ((c.params as { labels: string[] }).labels ?? []).includes("wontfix-stale"))).toBe(true);
   });
 
-  it("human-engagement veto: a recently-commented stale dead-content issue is NOT closed", async () => {
+  it("recent human activity keeps an issue non-stale (skip, not closed)", async () => {
     state.fixture = {
       issue: { state: "open", updated_at: daysAgo(1), created_at: daysAgo(60), labels: ["action-required", "content-publisher"], assignees: [] },
-      timeline: [{ actor: { login: "deruelle", type: "User" }, created_at: daysAgo(1) }], // human comment yesterday
+      timeline: [{ actor: { login: "deruelle", type: "User" }, created_at: daysAgo(1) }],
       comments: [],
     };
     const res = (await run(5, daysAgo(1))) as { action: string };
     expect(res.action).toBe("skip");
+    expect(closes()).toHaveLength(0);
+  });
+
+  // The following are the ADVERSARIAL fixtures (test-design review): each is constructed so that
+  // removing the specific guard under test flips the outcome — i.e. the assertion is load-bearing.
+
+  it("assignee veto: a 60d-inactive dead-content issue with a non-bot assignee is SKIPPED at assess (kills a delete-veto mutation)", async () => {
+    // No timeline activity → 60d inactive; without the veto this WOULD expire. The assignee is the
+    // only non-redundant veto path. Asserting res.action==="skip" pins the decideAction veto itself
+    // (a delete-veto mutation makes assess return "expire", which the expire-step tripwire still
+    // blocks — closes()===0 — but res.action would then be "expire", failing this assertion).
+    state.fixture = {
+      issue: { state: "open", updated_at: daysAgo(40), created_at: daysAgo(60), labels: ["action-required", "content-publisher"], assignees: [{ login: "deruelle", type: "User" }] },
+      timeline: [],
+      comments: [],
+    };
+    const res = (await run(6, daysAgo(40))) as { action: string };
+    expect(res.action).toBe("skip");
+    expect(closes()).toHaveLength(0);
+  });
+
+  it("non-bot clock (D3): a bot-commented-yesterday but human-inactive-60d dead-content issue STILL expires (kills a raw-updatedAt mutation)", async () => {
+    // updated_at is 1d (bot noise), but the last NON-BOT activity is 60d. A raw-updatedAt clock
+    // would read 1d → skip; the non-bot clock reads 60d → expire. This fixture separates them.
+    state.fixture = {
+      issue: { state: "open", updated_at: daysAgo(1), created_at: daysAgo(70), labels: ["action-required", "content-publisher"], assignees: [] },
+      timeline: [
+        { actor: { login: "deruelle", type: "User" }, created_at: daysAgo(60) },
+        { actor: { login: "github-actions[bot]", type: "Bot" }, created_at: daysAgo(1) },
+      ],
+      comments: [],
+    };
+    const res = (await run(7, daysAgo(1))) as { action: string };
+    expect(res.action).toBe("expire");
+    expect(closes()).toHaveLength(1);
+  });
+
+  it("D1 through the worker: an ops emergency carrying the broad `content` label is NEVER closed (kills a classify-on-content mutation)", async () => {
+    state.fixture = {
+      issue: { state: "open", updated_at: daysAgo(70), created_at: daysAgo(70), labels: ["action-required", "content", "priority/p0-critical"], assignees: [] },
+      timeline: [],
+      comments: [],
+    };
+    await run(8, daysAgo(70));
+    expect(closes()).toHaveLength(0); // classifies OPS (not content-publisher) → escalate-only, never expire
+  });
+
+  it("late-engagement tripwire: a human engaging between assess and the close is caught by the expire-step re-check (no close)", async () => {
+    // assess sees an empty timeline → decides expire; the expire-step re-fetch sees a fresh human
+    // comment (lateTimeline on the 2nd timeline GET) → independent veto blocks the destructive close
+    // and emits the feared case (human_engaged=true) for the Sentry alert. updated_at is held static
+    // so this isolates the veto re-check (not the TOCTOU-drift path).
+    state.fixture = {
+      issue: { state: "open", updated_at: daysAgo(40), created_at: daysAgo(70), labels: ["action-required", "content-publisher"], assignees: [] },
+      timeline: [],
+      lateTimeline: [{ actor: { login: "deruelle", type: "User" }, created_at: daysAgo(0) }],
+      comments: [],
+    };
+    await run(9, daysAgo(40));
     expect(closes()).toHaveLength(0);
   });
 });

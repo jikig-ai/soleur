@@ -169,10 +169,14 @@ gh issue list -R jikig-ai/soleur --label action-required --state open \
 ```
 
 **Build the action list (de-pollute).** From the result, **EXCLUDE** any issue whose `labels`
-include `decision-challenge`, `content`, or `content-publisher` — these are informational or
-structurally-dead chores that drown the genuine asks. **KEEP** `content-starvation` (a real
-standing "distribution pipeline empty" signal). The survivors are the true "only you can do this"
-asks (expiring tokens, saturating disks, TLS/cert state, infra capacity, stale CLA).
+include `decision-challenge` or `content-publisher` — these are informational or structurally-dead
+per-piece chores that drown the genuine asks. **Do NOT exclude the bare `content` label** — a human
+(or another workflow) can attach `content` to a genuine ops emergency (e.g. a content-*pipeline*
+outage), and excluding it would hide that emergency from your only comprehension surface while the
+SLA cron correctly keeps it open and escalates it (it classifies bare `content` as an ops ask, never
+a dead chore). **KEEP** `content-starvation` (a real standing "distribution pipeline empty" signal).
+The survivors are the true "only you can do this" asks (expiring tokens, saturating disks, TLS/cert
+state, infra capacity, stale CLA).
 
 **Sort and surface age.** Sort survivors by priority (`priority/p0-critical` > `priority/p1-high` >
 `priority/p2-medium` > `priority/p3-low` > none), then oldest-first. Compute each issue's **age in

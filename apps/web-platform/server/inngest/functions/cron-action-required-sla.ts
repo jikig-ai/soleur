@@ -71,8 +71,14 @@ export async function cronActionRequiredSlaHandler({
     // Memoized run anchor — the worker computes age/inactivity against this single clock (D3).
     const runStartedAt = await step.run("run-started-at", async () => new Date().toISOString());
 
+    // Least-privilege: the dispatcher only READS the backlog (issues:read); it holds no mutation
+    // or close authority (that lives in the worker). Scoped to the soleur repo.
     const token = await step.run("mint-installation-token", async () =>
-      mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS }),
+      mintInstallationToken({
+        tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+        permissions: { issues: "read" },
+        repositories: [REPO_NAME],
+      }),
     );
 
     const backlog = await step.run("read-backlog", async () => {
