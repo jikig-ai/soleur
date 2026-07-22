@@ -288,7 +288,18 @@ export async function cronEmailIngressProbeHandler({
     const runDateUtc = new Date().toISOString().slice(0, 10);
 
     let pinged = 0;
+    // `suppressed` counts a GENUINE same-tick double-fire (a 23505 on a
+    // `daily:<date>` key — same day by construction — or a `headsup` key whose
+    // existing marker was written TODAY). It stays the sole signal that a second
+    // scheduler is live, and remains the `repin_suppressed` tag input (#6781).
     let suppressed = 0;
+    // #6799 (D2a/M11): a 23505 on the `headsup` key whose existing marker was
+    // written on an EARLIER day is the EXPECTED steady state under the band (an
+    // item pinged at T-7 re-hits the same constant key at T-6..T-3). Counting it
+    // as `suppressed` would make `suppressed > 0` fire every run and destroy the
+    // double-fire detector; it is disambiguated by the marker's `created_at` and
+    // counted separately, never in the tag.
+    let headsUpAlreadySent = 0;
     // Fail-open accounting, emitted ONCE after the loop (see M2 note above).
     let failOpenCount = 0;
     let failOpenFirstCode: string | undefined;
@@ -318,25 +329,30 @@ export async function cronEmailIngressProbeHandler({
       }
       const due = computeDueDate(row.received_at, rule.dueRule);
       const daysUntilDue = Math.floor((due.getTime() - Date.now()) / DAY_MS);
-      // Fire at exactly T-7 (heads-up), then DAILY from T-2 through overdue
-      // — never silent in the most dangerous bucket (see constants above).
-      if (
-        daysUntilDue !== DEADLINE_REPIN_HEADS_UP_DAY &&
-        daysUntilDue > DEADLINE_REPIN_DANGER_THRESHOLD_DAYS
-      ) {
-        continue;
-      }
+      // #6799 (D2/M6): the heads-up is a BAND (T-7 through T-3), not an exact
+      // equality. `daysUntilDue` is floor((due - now)/day) evaluated at the cron
+      // instant, so an exact `=== 7` could be stepped OVER by ordinary scheduler
+      // jitter (8 one day, 6 the next) and the heads-up would silently never
+      // fire. 8+ is "not yet"; T-2-through-overdue is the daily danger band.
+      //
+      // `breach-art33` (72h dueRule) never enters this band by design: a scanned
+      // (acknowledged) item always has now > received_at, so its daysUntilDue is
+      // <= 2 = DANGER_THRESHOLD, never > it. A "7-day heads-up" on a 72-hour
+      // clock is incoherent — the item is in the danger band from acknowledgement.
+      // The generic property test pins this so a future longer hours-rule can't
+      // silently start writing headsup markers (see the repin idempotency suite).
+      if (daysUntilDue > DEADLINE_REPIN_HEADS_UP_DAY) continue; // 8+ → not yet
+      const inHeadsUpBand = daysUntilDue > DEADLINE_REPIN_DANGER_THRESHOLD_DAYS; // 3..7
 
       // ---- idempotency guard (#6781) ------------------------------------
-      // The tick identity is BRANCH-DERIVED because the repin has two
-      // cadences. `daysUntilDue === 7` is a one-shot heads-up that spans a 24h
-      // window (so a calendar date would let jitter produce two T-7 emails),
-      // while the T-2-through-overdue band is genuinely daily (so a constant
-      // would silence it after day 1). See migration 135 header note 3.
-      const tickKey =
-        daysUntilDue === DEADLINE_REPIN_HEADS_UP_DAY
-          ? "headsup"
-          : `daily:${runDateUtc}`;
+      // The tick identity is BRANCH-DERIVED because the repin has two cadences.
+      // The heads-up band keys the CONSTANT `headsup` (so a calendar date would
+      // let jitter produce two heads-ups across the band — the constant collapses
+      // the whole T-7..T-3 window to one), while the T-2-through-overdue band is
+      // genuinely daily (so a constant would silence it after day 1). See
+      // migration 135 header note 3 — the CHECK still permits exactly these two
+      // shapes, so no migration is required.
+      const tickKey = inHeadsUpBand ? "headsup" : `daily:${runDateUtc}`;
 
       // Marker BEFORE dispatch: the insert is the durable record that this
       // send is claimed. Sending first would mean a crash in between re-sends
@@ -366,8 +382,33 @@ export async function cronEmailIngressProbeHandler({
           .insert({ item_id: row.id, tick_key: tickKey });
         if (markerError) {
           if (markerError.code === "23505") {
-            // Already sent for this logical tick — a double-fire.
-            suppressed += 1;
+            // Already a marker for this (item, tick). For the daily band the key
+            // encodes the date, so a 23505 is unambiguously a same-day
+            // double-fire. For the constant `headsup` key it could be EITHER a
+            // genuine same-day double-fire OR the expected band re-hit on a later
+            // day — disambiguate by the existing marker's `created_at` (which the
+            // table carries), same UTC date => double-fire, earlier => band re-hit.
+            if (inHeadsUpBand) {
+              const { data: existing } = await sb
+                .from("statutory_repin_send")
+                .select("created_at")
+                .eq("item_id", row.id)
+                .eq("tick_key", "headsup")
+                .maybeSingle();
+              const createdDate =
+                existing && typeof existing.created_at === "string"
+                  ? existing.created_at.slice(0, 10)
+                  : null;
+              if (createdDate && createdDate !== runDateUtc) {
+                headsUpAlreadySent += 1;
+              } else {
+                // Same day, or created_at unreadable — treat as a genuine
+                // double-fire (fail toward the louder, safer signal).
+                suppressed += 1;
+              }
+            } else {
+              suppressed += 1;
+            }
             continue;
           }
           // Aggregated, not emitted per item — see the sweep-complete emit
@@ -454,12 +495,21 @@ export async function cronEmailIngressProbeHandler({
       extra: {
         pinged,
         suppressed,
+        // Expected steady state under the heads-up band (D2a/M11) — NOT a
+        // double-fire signal, so it never gates the `repin_suppressed` tag.
+        headsUpAlreadySent,
         scanned: (data ?? []).length,
         runDateUtc,
       },
     });
 
-    return { pinged, suppressed, scanned: (data ?? []).length, runDateUtc };
+    return {
+      pinged,
+      suppressed,
+      headsUpAlreadySent,
+      scanned: (data ?? []).length,
+      runDateUtc,
+    };
   });
 
   // ---- (3) send probe -------------------------------------------------------

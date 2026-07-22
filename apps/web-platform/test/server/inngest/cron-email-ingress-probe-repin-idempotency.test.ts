@@ -53,6 +53,12 @@ const {
     repinRows: Array<Record<string, unknown>>;
     /** Rows the fake has already accepted, as `${item_id}::${tick_key}`. */
     markers: Set<string>;
+    /**
+     * created_at (ISO) recorded per marker at insert time, so the M11
+     * `.select("created_at")` disambiguation on a `headsup` 23505 can read it.
+     * Populated from the fake clock (`new Date()` under `vi.setSystemTime`).
+     */
+    markerCreatedAt: Map<string, string>;
     /** Every marker insert attempted, in order (incl. rejected ones). */
     markerAttempts: Array<{ item_id: string; tick_key: string }>;
     /** Force a non-23505 `{error}` return on the Nth attempt (1-based). */
@@ -68,6 +74,7 @@ const {
   } = {
     repinRows: [],
     markers: new Set<string>(),
+    markerCreatedAt: new Map<string, string>(),
     markerAttempts: [],
     markerErrorOnAttempt: null,
     markerThrowOnAttempt: null,
@@ -234,6 +241,25 @@ function makeBuilder(table: string) {
     return { data: null, error: null };
   };
 
+  // M11: the disambiguation read `.select("created_at").eq().eq().maybeSingle()`
+  // on a `headsup` 23505. Returns the stored created_at for the (item, tick).
+  builder.maybeSingle = async () => {
+    if (selectError) return selectError;
+    if (table === "statutory_repin_send" && !insertPayload && !deleting) {
+      const itemId = eqArgs.find(([c]) => c === "item_id")?.[1] as
+        | string
+        | undefined;
+      const tickKey = eqArgs.find(([c]) => c === "tick_key")?.[1] as
+        | string
+        | undefined;
+      if (itemId && tickKey) {
+        const created = dbState.markerCreatedAt.get(markerKey(itemId, tickKey));
+        return { data: created ? { created_at: created } : null, error: null };
+      }
+    }
+    return { data: null, error: null };
+  };
+
   builder.then = (
     onFulfilled: (v: unknown) => unknown,
     onRejected?: (e: unknown) => unknown,
@@ -306,6 +332,9 @@ function resolveMarkerInsert(payload: Record<string, unknown>) {
     };
   }
   dbState.markers.add(key);
+  // Record created_at from the fake clock so the M11 disambiguation read can
+  // tell a same-day double-fire from an earlier-day band re-hit.
+  dbState.markerCreatedAt.set(key, new Date().toISOString());
   return { data: { item_id: itemId, tick_key: tickKey }, error: null };
 }
 
@@ -341,7 +370,21 @@ vi.mock("@/lib/supabase/service", () => ({
 import {
   cronEmailIngressProbeHandler,
   DEADLINE_REPIN_HEADS_UP_DAY,
+  DEADLINE_REPIN_DANGER_THRESHOLD_DAYS,
 } from "@/server/inngest/functions/cron-email-ingress-probe";
+import { STATUTORY_RULES } from "@/lib/email-triage/statutory-rules";
+
+/** Sum a field across every `deadline-repin-sweep-complete` emit so far. */
+function sweepExtraSum(field: string): number {
+  return infoSilentFallbackSpy.mock.calls
+    .concat(warnSilentFallbackSpy.mock.calls)
+    .filter((c) => (c[1] as { op?: string })?.op === "deadline-repin-sweep-complete")
+    .reduce(
+      (acc, c) =>
+        acc + Number(((c[1] as { extra?: Record<string, number> }).extra ?? {})[field] ?? 0),
+      0,
+    );
+}
 
 // --- Helpers ------------------------------------------------------------------
 
@@ -416,6 +459,7 @@ beforeEach(() => {
   ioOrder.length = 0;
   dbState.repinRows = [];
   dbState.markers = new Set();
+  dbState.markerCreatedAt = new Map();
   dbState.markerAttempts = [];
   dbState.markerErrorOnAttempt = null;
   dbState.markerThrowOnAttempt = null;
@@ -510,6 +554,111 @@ describe("deadline-repin idempotency guard (#6781)", () => {
     expect(statutoryEmailCalls()).toHaveLength(2);
     const keys = dbState.markerAttempts.map((a) => a.tick_key);
     expect(keys).toEqual(["daily:2026-03-10", "daily:2026-03-11"]);
+  });
+
+  // #6799 (AC6/D2/M6): the heads-up is a BAND, so jitter cannot step over it.
+  it("heads-up band: two jittered runs straddling T-7 send exactly ONE heads-up (was ZERO on main)", async () => {
+    // due = 2026-03-18T06:00Z, received one calendar month earlier.
+    //   run A @ 2026-03-10T05:59:50Z → 8d 00h00m10s → floor 8 → not yet
+    //   run B @ 2026-03-11T06:00:10Z → 6d 23h59m50s → floor 6 → in band → send
+    // Under the OLD exact `=== 7`, run A (8) and run B (6) BOTH miss → ZERO
+    // heads-ups. Under the band, run B sends exactly one.
+    const received = "2026-02-18T06:00:00.000Z";
+    vi.useFakeTimers();
+
+    vi.setSystemTime(new Date("2026-03-10T05:59:50Z"));
+    dbState.repinRows = [statutoryRow({ received_at: received })];
+    await runHandler();
+
+    vi.setSystemTime(new Date("2026-03-11T06:00:10Z"));
+    dbState.repinRows = [statutoryRow({ received_at: received })];
+    await runHandler();
+
+    expect(statutoryEmailCalls()).toHaveLength(1);
+    const keys = dbState.markerAttempts.map((a) => a.tick_key);
+    expect(keys).toEqual(["headsup"]);
+  });
+
+  // #6799 (AC7/D2a/M11): five consecutive in-band days send ONE heads-up; the
+  // re-hits count as `headsUpAlreadySent`, NOT `suppressed` — so the #6781
+  // double-fire detector (repin_suppressed) survives the band.
+  it("heads-up band: five consecutive in-band days → one email, suppressed 0, headsUpAlreadySent 4", async () => {
+    // received 2026-02-15T12:00Z → due 2026-03-15T12:00Z (calendar month).
+    // clock 03-08..03-12 → daysUntilDue 7,6,5,4,3 — all in the heads-up band.
+    const received = "2026-02-15T12:00:00.000Z";
+    const days = [
+      "2026-03-08T12:00:00Z",
+      "2026-03-09T12:00:00Z",
+      "2026-03-10T12:00:00Z",
+      "2026-03-11T12:00:00Z",
+      "2026-03-12T12:00:00Z",
+    ];
+    vi.useFakeTimers();
+    for (const t of days) {
+      vi.setSystemTime(new Date(t));
+      dbState.repinRows = [statutoryRow({ received_at: received })];
+      await runHandler();
+    }
+
+    expect(statutoryEmailCalls()).toHaveLength(1);
+    expect(dbState.markerAttempts.every((a) => a.tick_key === "headsup")).toBe(true);
+    // suppressed stays 0 — a run in steady band state must NOT read as a live
+    // second scheduler; the four re-hits land in headsUpAlreadySent.
+    expect(sweepExtraSum("suppressed")).toBe(0);
+    expect(sweepExtraSum("headsUpAlreadySent")).toBe(4);
+  });
+
+  // #6799 (AC8/D2b/M11): a genuine same-day double-fire on the heads-up key IS
+  // still a `suppressed` (the detector must keep firing on the real condition).
+  it("heads-up band: a SAME-day double-fire on the heads-up key counts as suppressed", async () => {
+    const received = "2026-02-15T12:00:00.000Z"; // due 03-15, in-band on 03-10
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [statutoryRow({ received_at: received })];
+    await runHandler(); // inserts headsup, created_at = 03-10
+    dbState.repinRows = [statutoryRow({ received_at: received })];
+    await runHandler(); // 23505 headsup, created_at 03-10 === runDateUtc → suppressed
+
+    expect(statutoryEmailCalls()).toHaveLength(1);
+    expect(sweepExtraSum("suppressed")).toBe(1);
+    expect(sweepExtraSum("headsUpAlreadySent")).toBe(0);
+  });
+
+  // #6799 (AC8/D2b): breach-art33 never enters the heads-up band — its 72h clock
+  // caps daysUntilDue at DANGER_THRESHOLD for any scanned (post-receipt) item.
+  it("breach-art33: never writes a headsup marker, goes straight to the daily band", async () => {
+    // received 03-10T00:00Z → due +72h = 03-13T00:00Z.
+    const breachRow = statutoryRow({
+      rule_id: "breach-art33",
+      statutory_class: "breach",
+      received_at: "2026-03-10T00:00:00.000Z",
+    });
+    vi.useFakeTimers();
+    for (const t of ["2026-03-11T00:00:00Z", "2026-03-12T00:00:00Z"]) {
+      vi.setSystemTime(new Date(t));
+      dbState.repinRows = [{ ...breachRow }];
+      await runHandler();
+    }
+    const keys = dbState.markerAttempts.map((a) => a.tick_key);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.some((k) => k === "headsup")).toBe(false);
+    expect(keys.every((k) => k.startsWith("daily:"))).toBe(true);
+  });
+
+  // #6799 (M12): GENERIC guard — do not pin today's registry. Every hours-kind
+  // rule whose entire post-receipt life is <= DANGER_THRESHOLD can never enter
+  // the heads-up band. A future longer hours-rule (e.g. 96h → max 3) fails this
+  // and forces a conscious decision instead of silently writing headsup markers.
+  it("every hours-kind statutory rule stays within the daily band (no accidental heads-up)", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const hoursRules = STATUTORY_RULES.filter((r) => r.dueRule.kind === "hours");
+    expect(hoursRules.length).toBeGreaterThan(0); // non-vacuous
+    for (const rule of hoursRules) {
+      // Max daysUntilDue one ms after receipt (the earliest a scan can see it).
+      const hours = (rule.dueRule as { hours: number }).hours;
+      const maxScannable = Math.floor((hours * 3_600_000 - 1) / DAY);
+      expect(maxScannable).toBeLessThanOrEqual(DEADLINE_REPIN_DANGER_THRESHOLD_DAYS);
+    }
   });
 
   it.each([
