@@ -26,7 +26,8 @@
 #   no arg      -> scans <repo-root>/scripts/followthroughs (production run; ≥10-file floor)
 #   TARGET_DIR  -> scans that dir verbatim (how the .test.sh points it at a mktemp sandbox)
 #
-# Exit: 0 = no violations; 1 = one or more violations; 2 = internal error (dir absent).
+# Exit: 0 = no violations; 1 = one or more violations; 2 = internal error (dir absent, or a
+#       production run whose probe count falls below the min-cardinality floor -> broken glob).
 
 set -uo pipefail
 
@@ -68,7 +69,11 @@ done
 
 # Minimum-cardinality floor (production run only): a broken glob yielding 0 files must not
 # pass vacuously. Skipped for an explicit sandbox dir (the .test.sh fixtures are few).
-if [[ "$is_production_run" == "yes" ]] && (( scanned < 10 )); then
+# VARQ_BAN_MIN_PROBES is a TEST-ONLY override so the .test.sh can force a floor breach on the
+# real tree (set it above the probe count) and prove exit 2 fires; production CI never sets it
+# and gets the default 10.
+MIN_PROBES="${VARQ_BAN_MIN_PROBES:-10}"
+if [[ "$is_production_run" == "yes" ]] && (( scanned < MIN_PROBES )); then
   echo "ERROR: only $scanned non-test probe(s) scanned in $TARGET_DIR -- expected the full set; the glob or path is broken" >&2
   exit 2
 fi
