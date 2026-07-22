@@ -58,7 +58,37 @@ const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 
 const WEEK_CAP_DEFAULT = 2;
 export const MAX_DIFF_BYTES = 16384;
-const MAX_ALWAYS_LOADED_BYTES = 18000;
+
+// Always-loaded (AGENTS.md + AGENTS.core.md) byte budgets.
+//
+// Source of truth: scripts/lint-agents-rule-budget.py (B_ALWAYS_REJECT /
+// B_ALWAYS_WARN). Agreement across every restatement site is enforced by
+// scripts/lint-agents-compound-sync.sh — change a value here without changing
+// the linter (or vice versa) and that guard fails the build. Do not edit either
+// side alone; that de-sync is what issue #6461 was filed for.
+//
+// UNIT SKEW (deliberate, fail-safe direction): the linter's thresholds are
+// defined over FRONTMATTER-STRIPPED bytes, while the measurements below are RAW
+// file lengths (`(await readFile(p)).length`, no strip). Raw is structurally >=
+// stripped, so comparing raw against a stripped-basis threshold refuses no LATER
+// than the commit gate would. That is the safe direction and is accepted
+// knowingly. (The exact gap is the current frontmatter size and drifts — the
+// direction is the invariant.) Porting the frontmatter strip here so the
+// comparison is unit-exact is tracked as a follow-up.
+//
+// Hard ceiling for the POST-APPLY gate: mirrors the commit gate exactly, so an
+// applied diff that would be rejected at commit time is reverted here instead.
+// Per ADR-092 / AP-017 this byte cap is the only VOLUMETRIC brake on the
+// additive envelope of the harness self-edit path, so it must track the real
+// ceiling rather than sit at an arbitrary lower value.
+const MAX_ALWAYS_LOADED_BYTES = 23000;
+
+// Budget the clustering LLM is told to propose against. Deliberately the WARN
+// floor, not the reject ceiling: the promoter's job is not "propose anything the
+// gate would not reject" — it is "propose something that leaves headroom" for the
+// next promotion and for hand-authored rules. Binding this to the reject ceiling
+// would let a cluster land at exactly the cap and pin the registry there.
+const PROPOSE_ALWAYS_LOADED_BUDGET = 20000;
 
 export const TARGET_ALLOW_RE =
   /^(AGENTS\.core\.md|plugins\/soleur\/skills\/[A-Za-z0-9_-]+\/SKILL\.md)$/;
@@ -430,7 +460,7 @@ export async function cronCompoundPromoteHandler({
         `You are a clustering agent. Cluster the following learnings by problem/root-cause similarity. Return up to ${weekCapResult.remaining} qualifying clusters (each with >=5 source learnings).`,
         `Schema: {clusters:[{cluster_hash:'', tier:'skill'|'agents-core', target_path:string, source_learnings:[paths], proposed_diff_unified:string, rationale:string, byte_impact:{before:int,after:int,delta:int}}]}.`,
         `Apply AGENTS.md cq-agents-md-tier-gate: already-enforced -> skip; domain-scoped -> skill; cross-cutting -> agents-core targeting AGENTS.core.md.`,
-        `Current always-loaded payload (AGENTS.md + AGENTS.core.md) is ${alwaysLoadedNow} bytes; the warn cap is ${MAX_ALWAYS_LOADED_BYTES} bytes.`,
+        `Current always-loaded payload (AGENTS.md + AGENTS.core.md) is ${alwaysLoadedNow} bytes; propose against a budget of ${PROPOSE_ALWAYS_LOADED_BUDGET} bytes (the warn floor — leave headroom, do not aim for the hard ceiling).`,
         `target_path MUST be one of: AGENTS.core.md, plugins/soleur/skills/<skill-name>/SKILL.md. The workflow refuses any other path. cluster_hash is ignored (the workflow computes it).`,
         `Output ONLY a JSON object with a "clusters" key, nothing else.`,
       ].join("\n");

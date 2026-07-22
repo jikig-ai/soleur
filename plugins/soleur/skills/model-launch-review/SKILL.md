@@ -32,7 +32,7 @@ step), not a PR.
 | 2 | **claude-code-action pin freshness** | flag-only | `.github/workflows/*.yml` pins; auto-bump ONLY when coupled to a `--model` swap in the same workflow (#2540 invariant) |
 | 3 | **Thinking-API shape** | flag-only (no-op v1) | carried by the claude-code-action pin's embedded SDK; no `thinking`/`output_config` params in config today |
 | 4 | **Pricing-table drift** | flag-only | `agent-on-spawn-requested.ts` `MODEL_PRICING` (billing constant — never auto-edit); compare vs the `claude-api` source-of-truth |
-| 5 | **Tier-map re-evaluation** | flag-only | cron model literals + ADR-053 / `plugins/soleur/AGENTS.md` policy vs new pricing; `workflow-model-pins.test.ts` `PIN_ALLOWLIST` is a don't-mutate invariant; also run `gh issue list --state open --search "deferred model OR pricing"` for dormant work |
+| 5 | **Tier-map re-evaluation** | flag-only | cron model literals + ADR-053 / `plugins/soleur/AGENTS.md` policy vs new pricing; `workflow-model-pins.test.ts` `PIN_ALLOWLIST` is a don't-mutate invariant; also run `gh issue list --state open -L 200 --search "deferred model OR pricing"` for dormant work |
 
 Only item 1 is auto-applied. Items 2–5 are reported in the PR body for human sign-off.
 

@@ -160,6 +160,28 @@ absent, docker auto-creates an empty bind source and a cutover serving zero user
 `app_canary` therefore also asserts `/internal/readyz` (`workspaces_writable` + `workspaces_populated`),
 and runs **before** `disarm_dead_man` so an app-level failure still has the unattended backstop.
 
+**`readyz` proves a FLOOR, not an INVENTORY (#6807).** `readiness.ts:81` is
+`countWorkspaceDirsAt(root) > 0`, and `isWorkspacesWritable` write+unlinks **one** probe file at the
+root. A cutover that preserved **1 of 8** sole-copy workspaces therefore returns `ready=true`.
+Certifying a cutover needs a **separate inventory count** compared against a persisted baseline —
+which is why `luks-monitor.sh` now carries a host-side count (exclusions mirrored from
+`session-metrics.ts`) that fails **closed** when the baseline is absent, and why the cutover persists
+`WORKSPACES_COUNT` at the G3 data gate. Never let prose imply `ready=true` means the inventory survived.
+
+**This reasoning binds the OFF-HOST VERIFY surface too, and did not (#6807).** The same argument was
+implemented in the cutover's canary and never swept into `workspaces-luks-verify.yml`, which asserted
+200 on a no-route health path and was structurally incapable of passing — so the runbook §5 gate was
+dead. Both probes are now retry-bounded (the mapper mounts and `docker start` returns before Node
+listens, so a single-shot probe races container boot), and both live in one shared helper.
+
+**The 2026-07-20 cutover is the worked example of why the canary must not abort silently.** It
+landed, ran ~27 minutes, aborted at `app_canary` on a Cloudflare 521 — *before* `disarm_dead_man` —
+and the dead-man then remounted the retained plaintext over a healthy LUKS mount, stranding those 27
+minutes of sole-copy writes. Nothing paged: the `/health` arm called a bare `die` and emitted
+nothing, a *successful* dead-man remount emits no marker, and the dead-man's own restart chain
+failed, leaving the daily monitor unarmed. See **#6812**. The `status: adopting` above is therefore
+still accurate — at-rest encryption is **not** in effect on web-1 as of 2026-07-21.
+
 ### (b) Rollback is the retained plaintext volume — and the "one-way door" framing is wrong
 
 No flag-flip analogue exists (`/workspaces` has no `GIT_DATA_STORE_ENABLED` equivalent) and GitHub is
@@ -234,8 +256,11 @@ web-1 is false until the cutover runs.
 **Reboot is the sharper edge.** `docker run --restart unless-stopped` means `dockerd` resurrects the
 container on reboot **without ever executing `docker run`** — so a pre-`docker run` gate catches
 nothing on that path, and the `-v /mnt/data/workspaces` bind mount silently resolves to a **root-disk
-dir Docker creates**. Result: container healthy, `/api/health` 200, **user source code written in
-plaintext to the root disk**. The gate must therefore be structural, not procedural: a systemd unit
+dir Docker creates**. Result: container healthy, `/health` 200, **user source code written in
+plaintext to the root disk**. (This narrative said `/api/health` until #6807; that path has no route
+and 307s to `/login`, so it could never have been the 200 being described. `/health` is the custom
+server's path — and note that its 200 is exactly the *unconditional* liveness signal this paragraph
+is warning about, which is why the mount claim needs `/internal/readyz`, not either health path.) The gate must therefore be structural, not procedural: a systemd unit
 with `RequiresMountsFor=/mnt/data` ordered after the mapper-open, so *container running ⇒ mount
 correct* holds **by construction**, plus `chattr +i` on the root-disk `/mnt/data` inode so Docker's
 implicit `mkdir` returns EPERM.

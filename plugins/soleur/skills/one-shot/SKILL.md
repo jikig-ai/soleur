@@ -177,7 +177,7 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 5. **Resolve ALL review findings (P1, P2, and P3).** Technical debt compounds — fix everything now, not later. List open GitHub issues from this review session:
 
    ```bash
-   gh issue list --label code-review --state open --search "PR #<current_pr_number>" --json number,title,body,labels
+   gh issue list --label code-review --state open -L 200 --search "PR #<current_pr_number>" --json number,title,body,labels
    ```
 
    The `--search` flag scopes results to issues from this review session (the review skill's issue template includes `PR #<number>` in the body). If zero issues match, proceed immediately to Step 5.5.

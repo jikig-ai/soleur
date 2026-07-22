@@ -210,9 +210,9 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
 7. **Feed into Constitution Promotion.** Present each deviation to the user via the existing Accept/Skip/Edit gate in the Constitution Promotion section below. Accepted hook proposals should be manually copied to `.claude/hooks/` after testing — never auto-install.
 
-8. **Rule budget count.** After deviation analysis, measure both rule count and byte size of always-loaded `AGENTS.md`:
+8. **Rule budget count.** After deviation analysis, get the always-loaded verdict from the linter, then measure the registry statistics the linter does not compute.
 
-   **Commit-gate:** [lint-agents-rule-budget.py](../../../../scripts/lint-agents-rule-budget.py) is the authoritative pre-commit reject (warns at B_ALWAYS ≥ 20000, rejects at > 22000, rejects any rule body > 600 B); the step 8 output below is advisory-only.
+   **[lint-agents-rule-budget.py](../../../../scripts/lint-agents-rule-budget.py) is the authority and the pre-commit reject. This step does NOT restate its thresholds — it runs it and quotes the verdict.** Restating the numbers here is exactly how they went stale (issue #6461: this rubric claimed a reject value the linter had not used for months, and the wrong measurement method besides). If a threshold matters, read it from the linter. Agreement across every restatement site is enforced by [lint-agents-compound-sync.sh](../../../../scripts/lint-agents-compound-sync.sh).
 
    Emit rule-application telemetry (records that the byte-cap / why-single-line policy ran — see AGENTS.md `cq-agents-md-why-single-line`):
 
@@ -222,10 +222,37 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
      'AGENTS.md rules cap at ~600 bytes; `**Why:**` is o'
    ```
 
-   - Per-file bytes:
-     - `B_INDEX=$(wc -c < AGENTS.md)` — index, loaded every turn via `@AGENTS.md`
-     - `B_CORE=$(wc -c < AGENTS.core.md 2>/dev/null || echo 0)` — sidecar injected on every SessionStart
-   - `B_ALWAYS=$((B_INDEX + B_CORE))` — always-loaded payload
+   **Always-loaded verdict — run the linter and capture its exit code:**
+
+   ```bash
+   cd "$(git rev-parse --show-toplevel)" && \
+     python3 scripts/lint-agents-rule-budget.py \
+       AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>&1
+   echo "linter exit=$?"
+   ```
+
+   Two things about this invocation are load-bearing:
+
+   - **The `2>&1` is not cosmetic.** `[WARN]` and `[REJECT]` print to **stderr**; only `[OK]` goes to stdout. The repo routinely sits in the WARN tier, where stdout is empty and the exit code is 0 — so without the redirect you capture nothing and report "no signal" when there is one.
+   - **Do not hand-roll the byte math.** The thresholds are defined over **frontmatter-stripped** bytes; a `wc -c` sum overstates the payload by the frontmatter size and misreports headroom in precisely the near-cap regime where the number decides whether a rule can land.
+
+   Read the result off **both** the exit code and the output — the exit code is the source of truth for "is the commit blocked", the verdict line only reports the always-loaded tier:
+
+   | Exit | Output | Report |
+   |---|---|---|
+   | 0 | an `[OK]` / `[WARN]` verdict line | quote that line verbatim into the template's `always-loaded:` slot |
+   | non-zero | a verdict line **is** present (`[OK]` / `[WARN]` / `[REJECT]`) | the commit is **blocked**. Quote the verdict line **and** every `ERROR:` line. A `[REJECT] B_ALWAYS>…` means the payload is over budget → apply the shrink ladder below. An `ERROR: rule body exceeds …` alongside an `[OK]` verdict means the always-loaded payload is fine but one rule body is too large → the fix is trimming that **one named rule**, not the payload. Do not quote the `[OK]` alone and call it healthy — the non-zero exit means something is blocking the commit. |
+   | non-zero | **no** verdict line at all | the linter errored before emitting a verdict — a missing always-loaded file (exit 2) or malformed frontmatter (exit 1). Report `always-loaded: linter errored — <first ERROR: line>`; never infer a tier from silence. |
+
+   **Consumer-repo degrade.** This skill is distributed and also runs against repos that have no rule-budget linter. Pre-check before invoking:
+
+   | Condition | Detect | Report |
+   |---|---|---|
+   | Linter not present | `[ -f scripts/lint-agents-rule-budget.py ]` false | `always-loaded: not measured (no rule-budget linter in this repo)` |
+   | `python3` not on PATH | `command -v python3` empty | `always-loaded: not measured (python3 unavailable)` |
+
+   Registry statistics the linter does not compute:
+
    - `B_TOTAL=$(cat AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>/dev/null | wc -c)` — full registry (informational)
    - Rules: `A=$(grep -h '^- ' AGENTS*.md 2>/dev/null | wc -l)`
    - Longest: `L=$(grep -h '^- ' AGENTS*.md 2>/dev/null | awk '{print length}' | sort -n | tail -1)`
@@ -234,21 +261,25 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    Output:
    ```
    Rule budget:
-     index (always-loaded):  B_INDEX bytes
-     core (always-loaded):   B_CORE bytes
-     always-loaded total:    B_ALWAYS bytes (warn >= 20000 / critical > 23000 — mirrors scripts/lint-agents-rule-budget.py, the authoritative commit gate)
+     always-loaded:          <the linter's verdict line, verbatim>
      registry total:         B_TOTAL bytes / A rules (longest rule: L bytes)
      constitution.md:        C rules
    ```
 
    Append warnings:
-   - If `B_ALWAYS >= 20000`: `"[WARNING] always-loaded payload (B_ALWAYS/20000) exceeded — apply the placement gate (see Route Learning to Definition) and discoverability litmus (wg-every-session-error-must-produce-either) before adding any new rule; already-enforced and domain-scoped insights MUST route to a skill/agent, NOT AGENTS.core.md; consider retiring an existing rule via scripts/retired-rule-ids.txt."`
-   - If `B_ALWAYS > 23000`: `"[CRITICAL] always-loaded payload exceeds the commit gate's reject threshold (23k) — shrink required before next rule; demote wg-* class-specific rules from AGENTS.core.md to AGENTS.rest.md (per CPO sign-off PR #3496, only wg-* may be demoted — never hr-*). When trimming **Why:** lines to fit, preserve per-issue mechanism labels (text after each `#N`); strip redundant prose only. Correct: `**Why:** #2618 per-command-ack; #2880 non-interactive exec.` Over-trimmed: `**Why:** #2618; #2880.` (loses the per-issue mechanism distinction that downstream readers use to map a rule to its triggering incident class). Before demoting any wg-*, verify loader-class fit: `sed -n '88,115p' .claude/hooks/session-rules-loader.sh` — if the rule fires on docs-only sessions but AGENTS.rest.md does not load on docs-only, KEEP in core."`
+   - If the linter reported **`[WARN]`** — the payload is approaching the ceiling, and this is the tier where remediation still has room to work, so act on it now rather than waiting for the reject:
+     - Apply the placement gate (see Route Learning to Definition) and the discoverability litmus (`wg-every-session-error-must-produce-either`) **before adding any new rule**. Already-enforced and domain-scoped insights MUST route to a skill/agent, NOT `AGENTS.core.md`.
+     - Retire an existing rule via [retired-rule-ids.txt](../../../../scripts/retired-rule-ids.txt) (rule IDs are immutable — retire, never renumber or reuse).
+     - Demote `wg-*` class-specific rules from `AGENTS.core.md` to `AGENTS.rest.md`. Per CPO sign-off PR #3496, **only `wg-*` may be demoted — never `hr-*`**. Before demoting any `wg-*`, verify loader-class fit: `grep -n 'DOCS_RE=' -A 25 .claude/hooks/session-rules-loader.sh` — if the rule fires on docs-only sessions but `AGENTS.rest.md` does not load on docs-only, KEEP it in core.
+     - When trimming `**Why:**` lines to fit, preserve per-issue mechanism labels (the text after each `#N`); strip redundant prose only. Correct: `**Why:** #2618 per-command-ack; #2880 non-interactive exec.` Over-trimmed: `**Why:** #2618; #2880.` (loses the per-issue mechanism distinction downstream readers use to map a rule to its triggering incident class).
+   - If the linter **exited non-zero** — the commit is already blocked, and the fix depends on *why*:
+     - a `[REJECT] B_ALWAYS>…` verdict means the always-loaded payload is over budget → shrink is mandatory before anything else lands; apply the same remediation ladder above, and do not attempt to add a rule first.
+     - an `ERROR: rule body exceeds …` (which can appear alongside an `[OK]` always-loaded verdict) means one rule body is over the per-rule cap → trim that **single named rule** by moving its context to a learning file; the payload-shrink ladder does not address it.
    - If `L > 600`: `"[WARNING] longest rule is L bytes — cap per-rule length at ~600 (see cq-agents-md-why-single-line) by moving context to learning files."`
    - If `A > 115`: `"[ADVISORY] rule count (A/115) — bytes-first policy per cq-agents-md-why-single-line; count is informational."` <!-- rule-threshold: 115 -->
    - If `C > 300`: `"[WARNING] constitution.md is large (C/300) — consider migrating narrow rules to skill/agent instructions."`
 
-   B_TOTAL is informational only — the per-turn cost is B_INDEX, the per-session-first-turn cost is B_ALWAYS; cross-class sidecars (docs / rest) add to first-turn cost when their class fires but do not load every turn.
+   B_TOTAL is informational only — the per-turn cost is `AGENTS.md`, the per-session-first-turn cost is the always-loaded payload the linter reports; cross-class sidecars (docs / rest) add to first-turn cost when their class fires but do not load every turn.
 
    Additionally, if the repo has a rule-metrics aggregator at `./scripts/rule-metrics-aggregate.sh`, run it **for real** — compound is the authoritative local producer of `knowledge-base/project/rule-metrics.json` (ADR-091): it runs on the operator's machine where `.claude/.rule-incidents.jsonl` actually exists, so it, not a fresh-checkout CI cron, generates the metric. Stage the aggregate **only if it changed** (`git diff --quiet -- <OUT> || git add <OUT>`) so it lands in this session's compound commit; then parse `summary.rules_unused_over_8w` for the pruning hint. Only the redaction-safe aggregate (rule_id + counts + a 50-char public prefix) is committed — never the raw `command_snippet` log. On zero rule-carrying lines the aggregator no-ops (issue #6042), leaving the committed file untouched. Do not fail the phase if the aggregator is missing or errors, but do NOT silently swallow a crash — a stderr line tells the reader why the write/hint is absent:
 

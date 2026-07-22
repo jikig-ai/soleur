@@ -987,7 +987,7 @@ inngest send '{"name":"cron/bug-fixer.manual-trigger","data":{"issue_number":438
 ### How to observe results
 
 1. **Sentry cron monitor:** `scheduled-bug-fixer` — shows `ok` / `error` heartbeat status per run.
-2. **GitHub PRs:** Filter by `bot-fix/*` branch prefix — `gh pr list --search "head:bot-fix/"`.
+2. **GitHub PRs:** Filter by `bot-fix/*` branch prefix — `gh pr list --state all -L 200 --search "head:bot-fix/"`.
 3. **Inngest dashboard:** Run history for `cron-bug-fixer` shows step-by-step execution (mint-installation-token → precreate-labels → select-issue → setup-workspace → claude-eval → detect-pr → auto-merge-gate → notify-ops-email → sentry-heartbeat).
 
 ### Common failure modes

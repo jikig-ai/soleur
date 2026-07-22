@@ -87,7 +87,12 @@ END {
   printf "  docs-only %5d bytes / %2d rules\n", totals["docs-only"]+0, counts["docs-only"]+0
   printf "  rest      %5d bytes / %2d rules\n", totals["rest"]+0,      counts["rest"]+0
   printf "  TOTAL     %5d bytes / %2d rules\n", grand_total+0,          grand_count+0
-  printf "\n=== Self-consistency gate ===\n"
+  # HISTORICAL: the budgets below are the #3493 migration point-in-time targets,
+  # not current thresholds. This is a one-shot tool that has already run and is
+  # wired into no gate. The live authority is scripts/lint-agents-rule-budget.py,
+  # enforced across consumers by scripts/lint-agents-compound-sync.sh -- do NOT
+  # "sync" these numbers to it, and do not read them as drift (#6461).
+  printf "\n=== Self-consistency gate (migration-time targets) ===\n"
   core_ok      = (totals["core"]+0      <= 18000) ? "PASS" : "FAIL"
   docs_rest_ok = ((totals["docs-only"]+0 + totals["rest"]+0) <= 12000) ? "PASS" : "FAIL"
   total_ok     = (grand_total+0 >= 22000 && grand_total+0 <= 28000) ? "PASS" : "FAIL"
