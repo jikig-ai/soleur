@@ -100,6 +100,8 @@ _tc_stat_field() {
 _tc_starttime_ticks() { _tc_stat_field "$1" 20; }
 # Overall field 4 (ppid) => field 2 after the comm strip.
 _tc_ppid() { _tc_stat_field "$1" 2; }
+# Overall field 5 (pgrp) => field 3 after the comm strip.
+_tc_pgrp() { _tc_stat_field "$1" 3; }
 
 # Self plus every ancestor pid.
 #
@@ -140,11 +142,27 @@ tc_siblings() {
   local excluded
   excluded=" $(_tc_self_and_ancestors)"
 
-  local d pid cwd starttime elapsed
+  # Own process GROUP. The `&`-backgrounding shells and command-substitution
+  # subshells of THIS very test-all.sh invocation share its pgid but are NOT in
+  # the preamble's ancestor chain, so ancestor-exclusion alone lets a run flag a
+  # transient fork of ITSELF as a concurrent sibling (observed: a "running 0s"
+  # self-phantom at startup). A genuinely separate run — another worktree,
+  # another terminal — has a DIFFERENT pgid, so pgid is the exact discriminator.
+  # Empty when self has no readable stat (the synthetic-self test path), which
+  # correctly disables this extra exclusion there.
+  local self_pgrp
+  self_pgrp=$(_tc_pgrp "$proc/$TC_SELF_PID/stat" 2>/dev/null) || self_pgrp=""
+  [[ "$self_pgrp" =~ ^[0-9]+$ ]] || self_pgrp=""
+
+  local d pid cwd starttime elapsed pgrp
   for d in "$proc"/[0-9]*; do
     [[ -d "$d" ]] || continue
     pid="${d##*/}"
     [[ "$excluded" == *" $pid "* ]] && continue
+    if [[ -n "$self_pgrp" ]]; then
+      pgrp=$(_tc_pgrp "$d/stat") || pgrp=""
+      [[ "$pgrp" == "$self_pgrp" ]] && continue
+    fi
     [[ -r "$d/cmdline" ]] || continue
 
     # Match on ARGV POSITION, never on the substring anywhere in the joined

@@ -204,6 +204,43 @@ else
   fail "token anchoring rejected a real invocation; got: $out"
 fi
 
+# --- Arm 3d: same process-GROUP subshells are excluded, not just ancestors --
+# The `&`-backgrounding + command-substitution subshells of THIS invocation
+# share its pgid but are NOT ancestors of the preamble's $$, so they would be
+# flagged as concurrent siblings without a pgid exclusion (observed: a
+# "running 0s" self-phantom). A genuinely separate run has a different pgid.
+# rest-field layout after the comm strip: 1=state 2=ppid 3=pgrp ... 20=starttime.
+PG_PROC="$TESTROOT/proc-pg"
+mkdir -p "$PG_PROC" "$TESTROOT/pg-wt"
+printf '100000 0.00\n' > "$PG_PROC/uptime"
+_pg_st="$(( (100000 - 5) * CLK_TCK ))"
+mk_pg_proc() {  # pid, pgrp
+  local pid="$1" pg="$2"
+  local d="$PG_PROC/$pid"
+  mkdir -p "$d"
+  printf 'bash\0scripts/test-all.sh\0scripts\0' > "$d/cmdline"
+  # filler fields 1..19: state, ppid=1, pgrp=$pg, then zeros to field 19.
+  local f="S 1 $pg" i
+  for (( i = 4; i <= 19; i++ )); do f+=" 0"; done
+  printf '%s (x) %s %s 0 0\n' "$pid" "$f" "$_pg_st" > "$d/stat"
+  ln -sfn "$TESTROOT/pg-wt" "$d/cwd"
+}
+mk_pg_proc 666002 42   # self
+mk_pg_proc 666003 42   # same group, ppid=1 (NOT an ancestor) -> must be excluded
+mk_pg_proc 666004 99   # different group -> must be reported
+out="$(tc_env env TC_PROC_ROOT="$PG_PROC" TC_SELF_PID=666002 \
+  bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+if [[ "$(grep -cE '^666003	' <<<"$out" || true)" -eq 0 ]]; then
+  pass "a same-process-group non-ancestor subshell is excluded (self-fork phantom)"
+else
+  fail "a same-pgid subshell was flagged as a sibling; got: $out"
+fi
+if [[ "$(grep -cE '^666004	' <<<"$out" || true)" -ge 1 ]]; then
+  pass "a DIFFERENT-process-group test-all.sh run is still reported (not over-excluded)"
+else
+  fail "pgid exclusion suppressed a genuinely separate run; got: $out"
+fi
+
 # --- Arm 4: a non-test-all.sh process is not a sibling ---------------------
 out="$(tc_env env TC_PROC_ROOT="$OTHER_PROC" bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
 if [[ -z "${out//[[:space:]]/}" ]]; then
@@ -415,8 +452,8 @@ fi
 # --- Minimum-cardinality guard ---------------------------------------------
 # A silently-empty run exits 0 with zero coverage, which reads exactly like
 # success. This is the guard for that.
-if [[ "$pass_n" -lt 28 ]]; then
-  fail "cardinality guard: only $pass_n assertions ran (expected >= 28)"
+if [[ "$pass_n" -lt 30 ]]; then
+  fail "cardinality guard: only $pass_n assertions ran (expected >= 30)"
 fi
 
 echo "=== test-contention: $pass_n passed, $fails failed ==="
