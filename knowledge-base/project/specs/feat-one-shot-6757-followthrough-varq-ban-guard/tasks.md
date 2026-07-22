@@ -9,7 +9,7 @@ Lane: single-domain. Threshold: aggregate pattern. One PR (guard + conversions t
 
 ## Phase 1 — Guard script (NEW: `scripts/lint-followthrough-varq-ban.sh`)
 - [ ] 1.1 Parameterized census: `TARGET_DIR="${1:-scripts/followthroughs}"`; default resolves via `git rev-parse --show-toplevel`.
-- [ ] 1.2 Per non-`.test.sh` `*.sh`: `grep -vE '^[[:space:]]*#' | grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?'`; print `<file>:<line>` per hit. Regex byte-identical to canonical census.
+- [ ] 1.2 Per non-`.test.sh` `*.sh`: `grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?' "$f" | grep -vE '^[0-9]+:[[:space:]]*#'`; print `<file>:<line>` per surviving line. **`grep -n` on RAW file FIRST**, then drop full-line-comment hits — piping `grep -v '^#' | grep -n` re-indexes line numbers wrong (deepen-plan finding). Detection identical to canonical census.
 - [ ] 1.3 Exit 1 on any violation, 0 on none, 2 on internal error.
 - [ ] 1.4 Min-cardinality floor (≥10) ONLY when `$1` unset (production run); skip for explicit sandbox dir.
 - [ ] 1.5 `chmod +x` (100755).

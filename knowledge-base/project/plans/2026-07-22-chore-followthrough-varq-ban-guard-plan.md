@@ -10,6 +10,29 @@ brand_survival_threshold: aggregate pattern
 
 # 🐛→🔒 Fix #6757 — CI guard for the `${VAR:?}` / `${VAR?}` ban in follow-through probes + convert the 14 offenders
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-22
+**Sections enhanced:** Phase 1 (census), Acceptance Criteria (AC7), Observability (5-field schema), Sharp Edges (+3)
+**Review agents used:** code-simplicity-reviewer, Explore (bash non-vacuity)
+
+### Key Improvements
+1. **Line-number correctness (both reviewers, independently):** the guard census must run `grep -n` on the RAW file FIRST, then filter full-line comments — piping `grep -v '^#' | grep -n` re-indexes line numbers against the stripped stream and mis-cites every offender. Phase 1.2 corrected.
+2. **AC7 de-fanged:** removed a raw `grep ':?}'` that legitimately matches the 3 comment-only files' documentation (would read as a false failure). AC5's comment-stripped canonical census is the real gate.
+3. **Observability** brought to the strict 5-field schema (passes deepen-plan Phase 4.7).
+
+### New Considerations Discovered
+- Regex is named-var only; positional-param `${1:?}` is uncaught (no live gap — all secrets named). Kept byte-faithful to the documented census; broadening path noted.
+- Min-cardinality floor should key on resolved-target-dir, not `$1`-presence.
+- A single self-contained `.test.sh` (exec-bit style) is an acceptable simpler equivalent to the two-file shape.
+
+### Mandatory deepen-plan gates
+- Phase 4.6 (User-Brand Impact): PASS — section present, threshold `aggregate pattern`.
+- Phase 4.7 (Observability): PASS after 5-field schema fix.
+- Phase 4.8 (PAT-shaped variable): PASS — `GH_TOKEN` is a follow-through secret name, not a `var.*_token`/`TF_VAR_*` shape; no match.
+- Phase 4.9 (UI wireframe): N/A — no UI surface.
+- Phase 4.4 (precedent-diff): guard mirrors `scripts/followthrough-exec-bit.test.sh` (cited throughout).
+
 ## Overview
 
 `knowledge-base/engineering/operations/runbooks/followthrough-convention.md:24` bans the
@@ -106,10 +129,18 @@ re-implementation):
   repo-root `cd`); an explicit arg → operate on that dir verbatim (this is how the `.test.sh`
   points it at a sandbox).
 - For each `"$TARGET_DIR"/*.sh` where the basename does **not** end in `.test.sh`:
-  census = `grep -vE '^[[:space:]]*#' "$f" | grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?'`. Any
-  hit is a violation; print `<file>:<line>` for each.
-- **Keep the regex byte-identical to the canonical census** (`:?\?` = optional colon then
-  literal `?`, catching both `${VAR:?}` and `${VAR?}`). The guard IS the documented census.
+  census = `grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?' "$f" | grep -vE '^[0-9]+:[[:space:]]*#'`.
+  Any surviving line is a violation; print `<file>:<line>` for each.
+  - **Line-numbering order is load-bearing (deepen-plan finding):** run `grep -n` on the RAW
+    file FIRST, then drop full-line-comment hits with `grep -vE '^[0-9]+:[[:space:]]*#'`. Piping
+    `grep -vE '^\s*#' | grep -n …` (the canonical *boolean* census order) re-indexes `-n` against
+    the comment-stripped stream, so every reported line number is wrong (e.g. ghcr-minter-live's
+    real line 28 prints as 4). Detection is identical either way; only the diagnostic `file:line`
+    differs, and the guard's whole value is naming the offender accurately.
+- **Detection semantics are identical to the canonical census**: `:?\?` = optional colon then
+  literal `?`, catching both `${VAR:?}` and `${VAR?}`; the `^[0-9]+:[[:space:]]*#` filter strips
+  both column-0 and indented full-line comments (verified against all 6 comment-only files). The
+  guard remains a faithful executable form of the documented census.
 - Exit **1** if any violation; exit **0** if none; exit **2** on internal error (e.g. dir absent).
 - **Minimum-cardinality floor (production run only):** when `$1` is unset (default dir), require
   ≥10 non-test probes scanned, else fail — a broken glob must not pass vacuously (copy the
@@ -202,8 +233,11 @@ cites its mechanical gate.
    workspaces-luks-soak-6604, zot-mirror-connector-6416, zot-soak-6122 remain untouched and pass).
 7. **Semantics preserved:** each of the 14 now guards its secret(s) with
    `if [[ -z "${VAR:-}" ]]; then echo "TRANSIENT…" >&2; exit 2; fi`; multi-secret files convert
-   all lines; no `: "${VAR:?}"` remains (`grep -rn ':?}' scripts/followthroughs/*.sh` excluding
-   `.test.sh` and full-line comments → empty).
+   all lines. No banned form remains on any **executable** line — verified by AC5's canonical
+   census returning empty. (Do NOT assert a raw `grep ':?}' scripts/followthroughs/*.sh` is empty:
+   3 of the 6 comment-only files — autovacuum-thrash-6168, inngest-rls-drop-6488,
+   workspaces-luks-soak-6604 — carry the literal `${VAR:?}` in a full-line *comment* that
+   legitimately survives a raw grep; the comment-stripped census is the correct gate.)
 8. **Whole-suite exit gate:** `bash scripts/test-all.sh scripts` exits 0.
 9. **No fixture leakage:** the guard's fixtures live under `mktemp` (never `scripts/followthroughs/`);
    `git status` shows no new tracked file under `scripts/followthroughs/`.
@@ -211,16 +245,37 @@ cites its mechanical gate.
 
 ## Observability
 
-This is a CI-gate change (repo-root `scripts/`, not a 2.9-trigger surface — no `apps/*/server`,
-`apps/*/infra`, `plugins/*/scripts`, no new infra), so the formal 5-field schema is not mandated.
-Lightweight declaration for completeness:
-- **liveness_signal:** the guard runs in the `test-scripts` CI shard on every PR + merge; a
-  regression (banned form reintroduced, or guard broken) reddens the synthetic `test` check —
-  fail-loud, no dashboard.
-- **discoverability_test:** `bash scripts/test-all.sh scripts 2>&1 | grep followthrough-varq-ban`
-  (NO ssh) → both labels `[ok]`.
-- **failure_modes:** (a) banned form reintroduced → `-live` run exits 1 → shard red;
-  (b) guard logic breaks → `.test.sh` mutation assertions fail → shard red.
+This is a CI-gate change (repo-root `scripts/`, outside the plan Phase 2.9 code/infra trigger set
+— no `apps/*/server`, `apps/*/infra`, `plugins/*/scripts`, no new runtime infra). The 5-field
+schema is declared for completeness; the guard's liveness is its CI run, fail-loud with no
+dashboard and no SSH.
+
+```yaml
+liveness_signal:
+  what: two run_suite lines execute the guard (live tree) + its mutation test on every CI run
+  cadence: every PR push and every merge to main (ci.yml test-scripts job, line 522)
+  alert_target: the synthetic `test` required check (needs test-scripts) reddens on failure
+  configured_in: scripts/test-all.sh want_scripts block + .github/workflows/ci.yml:522/576
+error_reporting:
+  destination: GitHub Actions job log for the test-scripts shard (non-zero exit + [FAIL] line)
+  fail_loud: yes — guard exits 1 on violation; test exits non-zero on any assertion failure; no swallow
+failure_modes:
+  - mode: banned ${VAR:?}/${VAR?} form reintroduced in a follow-through probe
+    detection: scripts/lint-followthrough-varq-ban.sh (-live run) exits 1, naming file:line
+    alert_route: test-scripts shard red → synthetic `test` check red → merge blocked
+  - mode: guard logic regresses (regex narrows, comment-strip breaks)
+    detection: scripts/lint-followthrough-varq-ban.test.sh mutation assertions fail
+    alert_route: test-scripts shard red → merge blocked
+  - mode: a new scripts/*.test.sh is left unregistered (orphan-suite class)
+    detection: scripts/lint-orphan-test-suites.sh exits 1
+    alert_route: test-scripts shard red → merge blocked
+logs:
+  where: GitHub Actions run logs for the test-scripts job (run_suite label + [ok]/[FAIL] lines)
+  retention: GitHub Actions default (90 days)
+discoverability_test:
+  command: bash scripts/test-all.sh scripts 2>&1 | grep -E 'scripts/followthrough-varq-ban(-live)?'
+  expected_output: two labels "--- scripts/followthrough-varq-ban-live ---" and "--- scripts/followthrough-varq-ban ---", each followed by an [ok] line
+```
 
 ## Domain Review
 
@@ -267,6 +322,22 @@ this ships. (Checked: no external actor/system/data-store/access-relationship in
 - **Multi-secret probes convert every line.** canary-promotion-5875 (3), the two zot-login-gate
   probes (3 each) — a per-file single-line edit would leave a live `${VAR:?}` and keep the
   `-live` run red.
+- **Regex is named-var only (deepen-plan finding; no live gap).** `\$\{[A-Za-z_][A-Za-z0-9_]*:?\?`
+  requires the parameter name to start with a letter/underscore, so a positional-param assertion
+  `: "${1:?}"` / `${9:?}` (same abort-status-1 semantics) is NOT caught. All 14 offenders and every
+  probe secret are **named** vars, so there is no live gap — the regex is kept byte-faithful to the
+  documented canonical census deliberately. If a future probe ever guards a positional param,
+  broaden the first char class to `[A-Za-z0-9_]` (safe: still won't match `${VAR:-}`).
+- **Min-cardinality floor keys on the resolved target dir, not arg presence (deepen-plan finding).**
+  Gate the ≥10 floor on "resolved TARGET_DIR == default `scripts/followthroughs`", NOT on `$1`
+  being unset — otherwise a future caller passing the real dir explicitly
+  (`lint-followthrough-varq-ban.sh scripts/followthroughs`) silently bypasses the vacuity floor.
+- **Two-file vs self-contained is acceptable either way.** The plan prescribes guard `.sh` +
+  companion `.test.sh` (the task's stated shape). A single self-contained `.test.sh` with an
+  internal census *function* driven over both the mktemp fixtures (both-directions RED) and the
+  live tree (the gate) — mirroring `followthrough-exec-bit.test.sh` — is an equally valid,
+  slightly simpler alternative; /work may collapse to it PROVIDED it keeps (a) the both-directions
+  mutation proof and (b) a live-tree assertion, and registers the `.test.sh` via `run_suite`.
 
 ## Risks & Mitigations
 
