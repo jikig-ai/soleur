@@ -1,5 +1,4 @@
 ---
-adr: 035
 title: messages.source_ref composite-unique for multi-source dedup
 status: accepted
 date: 2026-05-19
@@ -10,9 +9,9 @@ related_plans:
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-035: messages.source_ref composite-unique for multi-source dedup
+# ADR-037: messages.source_ref composite-unique for multi-source dedup
 
-> Note on numbering: the plan provisionally named this ADR-032 to pair with ADR-031. Between plan-time and /work, ADR-031 / ADR-032 / ADR-033 slots were consumed by unrelated PRs. This ADR adopts the next free number (035) after ADR-034.
+> Note on numbering: the **filename ordinal is authoritative** (#6800). The plan provisionally named this ADR-032; between plan-time and /work the 031–033 slots were consumed by unrelated PRs, so the file was created as `ADR-037-*` while an earlier draft frontmatter/heading read `035`. That disagreeing ordinal has been reconciled to the filename — `ADR-035` unambiguously refers to the template-registry ADR, and this decision (the `plain-insert`/catch-`23505` dedup idiom and its #6781 send-boundary extension) is `ADR-037`.
 
 ## Status
 

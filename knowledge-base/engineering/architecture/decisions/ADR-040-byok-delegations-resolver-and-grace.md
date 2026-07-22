@@ -1,5 +1,4 @@
 ---
-adr: 040
 title: BYOK delegations — per-workspace grantor-funded runs (resolver + WORM ledger + atomic cap RPC)
 status: accepted
 date: 2026-05-22

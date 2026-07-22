@@ -818,7 +818,7 @@ async function sendInboxItemEmailNotification(
  * Insert an inbox_item row, then dispatch the push/email nudge. Fire-and-forget
  * (never throws) — callers must not await it.
  *
- * Idempotent (ADR-035): plain-insert + catch 23505 rather than
+ * Idempotent (ADR-037): plain-insert + catch 23505 rather than
  * `ON CONFLICT DO NOTHING` (unreliable under supabase-js — returns data:null).
  * A push is dispatched ONLY when a row was actually inserted, so an emit retry
  * (same dedup_key) never re-pushes. Targeted rows (user_id set) dispatch to that
@@ -839,7 +839,7 @@ export async function notifyInboxItem(opts: {
   /** ids only (e.g. { conversationId }). The deep link is built from these. */
   sourceRef?: Record<string, string> | null;
   /**
-   * Idempotency key (ADR-035). Omit for naturally-once emits. NOTE the dedup
+   * Idempotency key (ADR-037). Omit for naturally-once emits. NOTE the dedup
    * index is `(workspace_id, dedup_key)` — workspace-scoped, NOT per-recipient.
    * A future TARGETED emitter that fans one event out to multiple recipients
    * with a SHARED dedup_key would suppress all but the first recipient's row

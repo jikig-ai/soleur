@@ -1,5 +1,4 @@
 ---
-adr: ADR-021
 title: KB binary-serving pattern — point-of-use re-validation and extension-fork routing
 status: active
 date: 2026-04-18

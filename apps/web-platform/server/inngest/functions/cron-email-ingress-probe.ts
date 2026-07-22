@@ -64,7 +64,8 @@ export const SENTRY_MONITOR_SLUG = "cron-email-ingress-probe";
 /** Ingress SLA: the probe row must land within this window of the send. */
 export const PROBE_AWAIT_INGRESS_DURATION = "15m";
 
-/** One-shot heads-up ping at exactly T-7 days (floor). */
+/** Upper edge of the heads-up BAND (#6799): items at T-7 through T-3 (floor)
+ * get the constant `headsup` tick; the exact-T-7 equality was jitter-fragile. */
 export const DEADLINE_REPIN_HEADS_UP_DAY = 7;
 
 /**
@@ -325,7 +326,7 @@ export async function cronEmailIngressProbeHandler({
     // Fail-open accounting, emitted ONCE after the loop (see M2 note above).
     let failOpenCount = 0;
     let failOpenFirstCode: string | undefined;
-    // RECIPIENT-GRAIN CONSTRAINT (ADR-035; migration 135 header note 4).
+    // RECIPIENT-GRAIN CONSTRAINT (ADR-037; migration 135 header note 4).
     // statutory_repin_send is keyed (item_id, tick_key) — ITEM grain. That
     // equals RECIPIENT grain only because this loop pings `row.user_id` and
     // nobody else. Migration 111 already makes an item visible to every
