@@ -22,12 +22,18 @@
 # stub BODY is parsed, never the whole test file — a file-wide grep for `$1`
 # false-positives on surrounding helper functions and would pass a blind stub.
 #
-# Known detector blind spots: a stub written via `printf`/`tee`/`install`, or to
-# a variable path (`cat > "$STUB" <<…`). These are NOT silently tolerated — the
-# pinned cardinality below turns any such miss into a loud failure, because a
-# stub that drifts into an undetected shape drops the checked count. That pin is
-# the general defense; the parser only has to be good enough to find the stubs
-# that exist. Extending the parser is preferable to bumping the pin downward.
+# Detector scope and its honest limits. This finds heredoc-written stubs at a
+# literal `<dir>/<cmd>` path. Two things it does NOT see: a stub written via
+# `printf`/`tee`/`install`, and one written to a VARIABLE path (`cat > "$STUB"`).
+# The pinned cardinality below catches these ONLY when an already-detected stub
+# DRIFTS into an undetected shape (checked drops 4→3, pin fails). It does NOT
+# catch a brand-NEW blind stub written in an undetected shape — that keeps the
+# count at 4 and ships. So the guarantee is: "every heredoc-written CLI stub
+# references argv, and no detected stub may silently convert away." A new stub
+# added the normal way (heredoc) bumps the count and forces the author to look;
+# adding one via printf/variable-path bypasses the check, which is a known
+# residual, not a covered case. Extend the parser before relying on the pin for
+# a new writer shape.
 #
 # Scope of the assertion: the stub body must REFERENCE argv. That is a
 # necessary, not sufficient, condition for dispatching on it — a stub could log

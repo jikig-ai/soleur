@@ -100,10 +100,12 @@ set -uo pipefail
 STUB_DIR="$(cd "$(dirname "$0")" && pwd)"
 MODE="$(cat "$STUB_DIR/gh-mode" 2>/dev/null || echo ok)"
 
-# Reject a malformed --repo exactly as real gh does. The slug the hook used to
-# build kept the trailing ".git" on SSH remotes, so gh answered with a GraphQL
-# error, the non-zero exit was swallowed, and the body was never scanned.
-_repo=""; _prev=""
+# Reject a malformed repo identity exactly as real gh does — whether it arrives
+# via --repo OR the GH_REPO env var. The original #6775 slug kept the trailing
+# ".git" on SSH remotes; validating BOTH channels means any slug-construction
+# method that reintroduces it fails here, not just the flag form (a GH_REPO
+# reintroduction would otherwise walk past a --repo-only check).
+_repo="${GH_REPO:-}"; _prev=""
 for _a in "$@"; do
   [[ "$_prev" == "--repo" ]] && _repo="$_a"
   _prev="$_a"
@@ -267,10 +269,15 @@ OPT_ACK=1 OPT_SYSMSG="BOTH checks disarmed by SOLEUR_ACK_AUTOCLOSE=1" \
 run_case "T9 broad ack env overrides → allow, announced" allow \
   "gh pr merge 1 --squash" $'fix: thing\n\nsweeper closes #5887' ""
 
-# T8 — `gh pr merge` documented inside a commit -m string is NOT a merge.
-# (The embedded close IS in the body: if strip_command_bodies fails, this denies.)
+# T8 — `gh pr merge` documented inside a commit -m string is NOT a merge. The
+# quoted body carries a command SEPARATOR (`;`) before `gh pr merge`, so if
+# strip_command_bodies were a no-op the merge-detect anchor `(…|;|…)gh pr merge`
+# WOULD fire, scan the commit body, find `sweeper closes #5887`, and DENY. Real
+# stripping blanks the quoted body first → not detected → allow. Without the
+# separator the anchor never matches regardless, so the test could not tell
+# working stripping from broken stripping (it would allow either way).
 run_case "T8 gh pr merge in quoted string → allow" allow \
-  "git commit -m 'do not hand-roll gh pr merge here'" $'base\n\nsweeper closes #5887' ""
+  "git commit -m 'do not; gh pr merge here'" $'base\n\nsweeper closes #5887' ""
 
 # ---------------------------------------------------------------------------
 # follow-through label gate (D2). A standalone `Closes #N` is allowed BY DESIGN
@@ -310,6 +317,34 @@ run_case "T6 standalone Closes on non-follow-through → allow" allow \
 OPT_FT="6617" OPT_REASON="follow-through" \
 run_case "GH-N form on follow-through → deny" deny \
   "gh pr merge 1 --squash" $'fix: thing\n\nCloses GH-6617' ""
+
+# GH-N allow-twin: a non-follow-through GH-N standalone close still merges, so
+# the GH- extraction branch is asserted in BOTH directions, not just deny.
+run_case "GH-N form on non-follow-through → allow" allow \
+  "gh pr merge 1 --squash" $'fix: thing\n\nCloses GH-6295' ""
+
+# Keyword-branch coverage. The close vocabulary is a 9-member set spanning three
+# alternation branches (close[sd]?, fix(es|ed)?, resolve[sd]?). Exercising only
+# `Closes` leaves the fix/resolve branches — and `closed`/`fixed`/`resolved` —
+# behaviorally untested, so a mutation that drops one branch from the label-arm
+# extraction flips a real tracker close from deny to allow with every shipped
+# test still green. One deny (follow-through) + one allow (standalone
+# non-follow-through) per remaining branch. GH's parser is case-insensitive, so
+# the scanner and the hook both lowercase; mixed case here also guards that.
+OPT_FT="6617" OPT_REASON="follow-through" \
+run_case "K1 Fixed #N on follow-through → deny" deny \
+  "gh pr merge 1 --squash" $'fix: thing\n\nFixed #6617' ""
+OPT_FT="6617" OPT_REASON="follow-through" \
+run_case "K2 Resolves #N on follow-through → deny" deny \
+  "gh pr merge 1 --squash" $'fix: thing\n\nResolves #6617' ""
+OPT_FT="6617" OPT_REASON="follow-through" \
+run_case "K3 closed #N on follow-through → deny" deny \
+  "gh pr merge 1 --squash" $'fix: thing\n\nthis closed #6617 already, closing' ""
+run_case "K4 Resolved #N standalone non-follow-through → allow" allow \
+  "gh pr merge 1 --squash" $'fix: thing\n\nResolved #6295' ""
+OPT_FT="6617" OPT_REASON="prose-embedded" \
+run_case "K5 prose-embedded resolves on follow-through → deny (prose arm)" deny \
+  "gh pr merge 1 --squash" $'fix: thing\n\nthe sweeper resolves #6617 on merge' ""
 
 # T10 — the SCOPED hatch must NOT disarm the prose arm. (The broad hatch sits
 # above corpus construction; the scoped one is checked at the gate.)
@@ -469,24 +504,36 @@ HOOK_CODE="$(grep -vE '^[[:space:]]*#' "$HOOK")"
 # fail in OPPOSITE directions — the prose arm denies legitimate merges (loud),
 # and the label arm silently stops protecting trackers for the new keyword.
 #
-# Anchor on the GROUP-CLOSING form `resolve[sd]?)`, not the bare group: a
-# widening appends `|<kw>` AFTER `resolve[sd]?`, so a plain substring check for
-# the group still matches (the appended keyword sits inside it) and misses the
-# drift. `resolve[sd]?)` (closer immediately after resolve) disappears the
-# moment any keyword is appended. The contract: exactly one closer in the
-# scanner, exactly two in the hook (DIRECTIVE + extraction). Adding a GitHub
-# keyword means updating all three AND bumping these counts — which is the
-# point.
+# EXTRACT the alternation from all three sites and assert STRING EQUALITY — a
+# count of a fixed closer misses a keyword inserted MID-alternation
+# (`close[sd]?|complete[sd]?|fix…`), which is real drift the count cannot see.
+# The alternation is `(close[sd]?…resolve[sd]?)` closed by a space class: the
+# scanner and DIRECTIVE close with `)[[:space:]]`, the awk extraction with
+# `)[ \t]`. Each of those closers occurs exactly once per line, so a greedy
+# `(close[sd]?.*)<closer>` capture stops at the group closer (the `)` inside
+# `fix(es|ed)?` is followed by `?`, never a space class). `|| true` on every
+# grep: a no-match must yield "" and a clean FAIL, never abort the suite — a
+# bare `x=$(grep …)` that fails aborts under `set -e`.
+extract_between() {   # <file> <closer-ere> -> alternation text, or ""
+  grep -oE "\(close\[sd\]\?.*\)$2" "$1" 2>/dev/null | head -1 \
+    | sed -E "s/^\(//; s/\)${2}.*$//" || true
+}
 TOTAL=$((TOTAL+1))
-canon_closers=$(grep -cF -- 'resolve[sd]?)' "$SCANNER" || true)
-hook_closers=$(printf '%s\n' "$HOOK_CODE" | grep -cF -- 'resolve[sd]?)' || true)
-if [[ "$canon_closers" -eq 1 && "$hook_closers" -eq 2 ]]; then
-  PASS=$((PASS+1)); echo "PASS: keyword-set parity (scanner group closed after resolve, both hook copies match)"
+hook_tmp=$(mktemp); printf '%s\n' "$HOOK_CODE" > "$hook_tmp"
+canon_kw=$(extract_between "$SCANNER"  '\[\[:space:\]\]')
+hook_kw1=$(extract_between "$hook_tmp" '\[\[:space:\]\]')   # DIRECTIVE copy
+hook_kw2=$(extract_between "$hook_tmp" '\[ \\t\]')          # awk extraction copy
+rm -f "$hook_tmp"
+if [[ -n "$canon_kw" && -n "$hook_kw1" && -n "$hook_kw2" \
+      && "$canon_kw" == "$hook_kw1" && "$canon_kw" == "$hook_kw2" ]]; then
+  PASS=$((PASS+1)); echo "PASS: keyword-set parity (scanner == DIRECTIVE == extraction: '$canon_kw')"
 else
   FAIL=$((FAIL+1))
-  echo "FAIL: keyword-set parity — 'resolve[sd]?)' closers: scanner $canon_closers (want 1), hook $hook_closers (want 2)."
-  echo "      The close-keyword set drifted between the canonical scanner and the hook's two copies."
-  echo "      If GitHub added a keyword, update the scanner AND both hook regexes AND these counts."
+  echo "FAIL: keyword-set parity — the close-keyword alternation drifted across the three copies:"
+  echo "      scanner:    '$canon_kw'"
+  echo "      DIRECTIVE:  '$hook_kw1'"
+  echo "      extraction: '$hook_kw2'"
+  echo "      Keep all three byte-identical; if GitHub added a keyword, update all three together."
 fi
 
 static_case() {   # <name> <expected-count> <extended-regex>
@@ -501,9 +548,12 @@ static_case() {   # <name> <expected-count> <extended-regex>
 }
 
 # AC10 — gh must resolve the repo from the working directory. Hand-building the
-# slug is what made the PR-body arm dead code. Genuine before/after
-# discriminator: this returns 1 against main.
-static_case "AC10 no --repo or hand-built slug in hook code" 0 'remote get-url origin|--repo'
+# slug (by any means: --repo, GH_REPO, or parsing remote.origin.url) is what made
+# the PR-body arm dead code. Genuine before/after discriminator: `--repo` returns
+# 1 against main. The GH_REPO / remote.origin.url alternatives are guarded here
+# statically AND behaviorally — the gh stub validates GH_REPO too, so a slug
+# reintroduced via that channel also fails T1/T18 (body/title not fetched).
+static_case "AC10 no --repo or hand-built slug in hook code" 0 'remote get-url origin|remote\.origin\.url|--repo|GH_REPO='
 
 # AC8 — label lookup must stay per-issue. `gh issue list` paginates at 30 by
 # default and a full page is indistinguishable from a truncated one, which would
