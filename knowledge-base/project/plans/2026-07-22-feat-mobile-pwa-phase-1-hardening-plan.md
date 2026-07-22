@@ -10,6 +10,22 @@ status: draft
 
 # ✨ feat: Mobile + PWA revision — Phase 1 (installable dashboard + pervasive mobile hardening)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-22 · **Gates cleared:** User-Brand Impact (4.6, threshold `aggregate pattern`), Observability (4.7, existing-signals schema — no new surface), PAT-shaped-variable (4.8, none), UI-Wireframe (4.9, `.pen` produced — see below). Verify-the-negative pass ran against every `NEVER`/`does-not`/`untouched` claim in the body; all confirmed against code (`/manifest.webmanifest` ∈ `PUBLIC_PATHS` `lib/routes.ts:48`; `--soleur-bg-base: #0a0a0a` unchanged; `NoFoucScript` + `x-nonce` + `await headers()` intact in `app/layout.tsx`; no `apple-icon`/`sitemap` route added).
+
+**Key deepen changes (folded into the phases above):**
+1. Chat height → **`h-full`** (not `calc(100dvh-3.5rem)`): Kieran verified the `calc` regresses on notched devices because this PR's own `viewportFit:cover` makes the bar's `.safe-top` inset non-zero; the flex chain resolves `h-full` cleanly.
+2. **CSS-layer placement made explicit** (Kieran P2a/P2b): 16px floor in `@layer base`; cmdk desktop override + reduced-motion rule **unlayered** — else dead CSS.
+3. **Chat scroll-guard hardened** (spec-flow G1–G7): `nearBottomRef` (live, not state), init `true`, pill on the non-scrolling parent, `streamState !== "idle"`, `behavior:"auto"` always, resize recompute.
+4. **iOS keyboard avoidance added** (spec-flow G8): `interactiveWidget` is Chromium-only; a `visualViewport` offset lifts the composer above the iOS keyboard.
+5. **Skip-link scoped to the dashboard layout** (spec-flow G10/G11/G12): a root-`<body>` link was a dead control off-dashboard, a no-op into `inert` `<main>`, and needs an explicit Safari focus move.
+6. Stop-button `min-w` replace-not-stack (Kieran P2c); dropped `PluggableList` annotation (Kieran P2d); one uniform 5c hit-area mechanism (code-simplicity).
+
+**Three scope challenges** (would alter the operator's explicit audit change-list) are recorded in `knowledge-base/project/specs/feat-one-shot-mobile-pwa-phase-1/decision-challenges.md` for `ship` to render + file as an `action-required` issue: (1) split Phase 5b to a follow-up PR, (2) drop the redundant 16px-only rows, (3) **`scope:"/"` vs `"/dashboard"`** (the latter ejects users to the system browser on session-expiry — highest-signal). None applied silently.
+
+**Framework grounding (Context7, Next.js App Router):** `Viewport`/`Metadata`/`MetadataRoute.Manifest` shapes for the `viewport`/`appleWebApp`/`shortcuts`/`scope`/`id` additions confirmed against current docs and cross-checked against the installed Next 15.5 types (Kieran).
+
 ## Overview
 
 Phase 1 of the mobile + PWA revision of `apps/web-platform`. Two cohesive goals in one PR:
@@ -294,13 +310,14 @@ Pre-merge (all checkable post-conditions):
 
 ### Product/UX Gate
 
-**Tier:** advisory
-**Decision:** auto-accepted (pipeline)
-**Agents invoked:** spec-flow-analyzer (Phase 3 flow validation of the chat-surface height/scroll changes)
-**Skipped specialists:** ux-design-lead (N/A — no new user-facing surface; see rationale), cpo (no product-strategy decision), copywriter (no new copy)
-**Pencil available:** N/A (no UI surface to wireframe)
+**Tier:** advisory (mechanically forced to run via the UI-surface glob; no new page/flow → not BLOCKing)
+**Decision:** reviewed (pipeline) — wireframe produced, ready for async operator review
+**Agents invoked:** spec-flow-analyzer (chat-surface flow), ux-design-lead (wireframe)
+**Skipped specialists:** cpo (no product-strategy decision — but see the `scope:"/"` challenge in decision-challenges.md), copywriter (no new copy)
+**Pencil available:** yes
+**Wireframe artifact (committed):** `knowledge-base/product/design/mobile-pwa/mobile-chat-surface-phase-1.pen` (Frame 1 default/scrolled-up + Frame 2 keyboard-open; 44px targets, safe-area top/bottom bands, and "above the fold" annotated). Screenshots under `knowledge-base/product/design/mobile-pwa/screenshots/`.
 
-**Rationale for ADVISORY (not BLOCKING):** This PR modifies **existing** user-facing surfaces and adds **zero** new pages, flows, or interactive surfaces — `## Files to Create` is empty; there is no `components/**/*.tsx`, `app/**/page.tsx`, or `app/**/layout.tsx` **creation** (the mechanical CREATE-based escalation does not fire). The changes are mechanical accessibility/PWA hardening from a formal audit with an exact prescribed change-list (44px hit areas, safe-area padding, viewport-fit, 16px input floor, a smaller highlight payload). There is no new visual design content to wireframe or review; generating speculative `.pen` wireframes for "make the button 44px" would be low-value ceremony. The "Jump to latest" affordance is the only net-new UI element and is a standard chat pattern styled with existing brand tokens. Per the ADVISORY-in-pipeline path, this auto-accepts; `spec-flow-analyzer` still runs on the chat-surface flow to catch dead-ends in the scroll-guard/jump-to-latest logic.
+**Note on scope:** this PR modifies **existing** surfaces and creates **zero** new pages/flows (`## Files to Create` is empty; the CREATE-based escalation did not fire). The UI-surface glob still forces the wireframe gate, so ux-design-lead produced a wireframe of the primary changed surface (the mobile chat view — where the safe-area, 44px hit targets, composer-above-fold, and the one net-new "Jump to latest" affordance land). The pipeline halts after deepen-plan, so the operator reviews the wireframe before any implementation.
 
 #### Findings
 
@@ -320,7 +337,34 @@ Pre-merge (all checkable post-conditions):
 
 ## Observability
 
-**Skip — not applicable.** No Files-to-Edit fall under `apps/web-platform/server/`, `apps/web-platform/src/` (does not exist), `apps/web-platform/infra/`, or `plugins/*/scripts/`; the change adds no new error path, log call, failure mode, cron, or infra surface. All edits are presentation-layer (`app/**` render config, `components/**`, `app/globals.css`, `app/manifest.ts`). Confirmed against the canonical sensitive-path regex: zero matches.
+This is a presentation-layer change with **no new server code, error path, log call, cron, or infra surface** (no Files-to-Edit under `server/`, `supabase/`, `app/api/`, `infra/`, or `plugins/*/scripts/`; zero matches against the canonical sensitive-path regex). The 5-field schema below is filled with the **existing** signals that already cover this surface — no new observability wiring is introduced, and none of the failure modes are on a blind execution surface (§2.9.2 does not apply — this is not a sandbox/container/cron).
+
+```yaml
+liveness_signal:
+  what: existing web-platform HTTP health check (unauth → 307 /login) + client Sentry init on app/layout tree
+  cadence: continuous (per request / per page load)
+  alert_target: existing web-platform Sentry project + Better Stack uptime (unchanged by this PR)
+  configured_in: pre-existing (apps/web-platform/infra/sentry/*, deploy pipeline) — not modified here
+error_reporting:
+  destination: existing client-side Sentry (already initialized in the app/layout provider tree)
+  fail_loud: N/A — this PR adds no new throw/catch sites; it is CSS/className/manifest/viewport config
+failure_modes:
+  - mode: chat composer renders below the fold on mobile first paint (5a regression)
+    detection: mobile visual QA at 390×844 + optional Playwright viewport smoke (composer in initial viewport)
+    alert_route: none (presentation regression — caught pre-merge by QA/tsc/vitest, not a runtime signal)
+  - mode: input focus zooms the viewport on iOS (16px floor regression)
+    detection: mobile visual QA on iOS Safari
+    alert_route: none (presentation)
+  - mode: code fences stop highlighting (rehype-highlight languages subset wrong)
+    detection: visual QA of a ```ts/```bash block in a chat message
+    alert_route: none (presentation)
+logs:
+  where: N/A — no new server logs; client console only (unchanged)
+  retention: N/A
+discoverability_test:
+  command: "cd apps/web-platform && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/vitest run"
+  expected_output: "tsc exits 0 (no type errors); vitest suite green incl. github-app-manifest-parity + middleware* + theme-no-fouc-script"
+```
 
 ## Open Code-Review Overlap
 
