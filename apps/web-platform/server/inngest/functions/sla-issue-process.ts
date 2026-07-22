@@ -14,7 +14,6 @@ import {
   REPO_OWNER,
   REPO_NAME,
   mintInstallationToken,
-  postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -33,7 +32,10 @@ import {
 } from "./action-required-sla-policy";
 
 export const PROCESS_ISSUE_EVENT = "cron/action-required-sla.process-issue";
-const SENTRY_MONITOR_SLUG = "sla-issue-process";
+// Event-fired worker (no schedule) — deliberately declares NO SENTRY_MONITOR_SLUG /
+// sentry_cron_monitor (a crontab monitor would page MISSED forever on a fn that has no
+// cadence). Failure observability is `reportSilentFallback` (the emit() error path, D6).
+const SLA_FEATURE = "sla-issue-process";
 const TOKEN_MIN_LIFETIME_MS = 15 * 60 * 1000;
 const DAY_MS = 86_400_000;
 
@@ -137,7 +139,7 @@ export async function slaIssueProcessHandler({
 
   const emit = (action: SlaAction | "toctou-abort" | "error", extra: Record<string, unknown>) =>
     reportSilentFallback(new Error(`action-required-sla ${action} #${issueNumber}`), {
-      feature: SENTRY_MONITOR_SLUG,
+      feature: SLA_FEATURE,
       op: "action-required-sla",
       message: `SLA ${action} on #${issueNumber}`,
       // `human_engaged` is a TAG (not just extra) so the Sentry alert can filter on the
@@ -272,17 +274,11 @@ export async function slaIssueProcessHandler({
       });
     }
 
-    await step.run(`heartbeat-${issueNumber}`, () =>
-      postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: SENTRY_MONITOR_SLUG, logger }),
-    );
     return { ok: true, action: decision.action };
   } catch (err) {
+    // Event worker: no cron heartbeat. The error is durably captured via emit() →
+    // reportSilentFallback → Sentry (D6 failure observability).
     emit("error", { message: (err as Error).message });
-    try {
-      await postSentryHeartbeat({ ok: false, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: SENTRY_MONITOR_SLUG, logger });
-    } catch {
-      // best-effort
-    }
     return { ok: false, action: "error" };
   }
 }

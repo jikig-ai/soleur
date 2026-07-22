@@ -80,6 +80,22 @@
 # (which widened 180 -> 480 to absorb the jitter this PR removes at its source).
 # The dispatcher's OWN liveness is covered by cron-inngest-cron-watchdog (the
 # parity-guarded EXPECTED_CRON_FUNCTIONS manifest), not a second monitor.
+# Executor liveness for the weekly action-required SLA staleness cron (#6836). The
+# DISPATCHER (cron-action-required-sla.ts) heartbeats this slug; the event-fired WORKER
+# (sla-issue-process.ts) has NO monitor by design (no cadence → a crontab monitor would
+# page MISSED forever). Weekly Fri 12:00 UTC; 60-min margin per the Inngest-dispatch cohort.
+resource "sentry_cron_monitor" "cron_action_required_sla" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "cron-action-required-sla"
+  schedule                = { crontab = "0 12 * * 5" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 15
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 resource "sentry_cron_monitor" "scheduled_terraform_drift" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
