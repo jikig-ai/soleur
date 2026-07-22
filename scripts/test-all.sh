@@ -301,6 +301,13 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-counter-github" bash tests/scripts/test-destroy-guard-counter.sh
   run_suite "tests/scripts/destroy-guard-counter-sentry" bash tests/scripts/test-destroy-guard-counter-sentry.sh
   run_suite "tests/scripts/destroy-guard-counter-web-platform" bash tests/scripts/test-destroy-guard-counter-web-platform.sh
+  # Pre-apply entrypoint gate (#6767 / ADR-133). Registered HERE for the same
+  # reason as the destroy-guard trio above: nothing auto-discovers tests/scripts/
+  # (the bash *.test.sh glob further down covers only scripts/lib/*.test.sh etc.,
+  # NOT tests/scripts/test-*.sh), so an unregistered suite is an ORPHAN that gates
+  # nothing. This suite proves the fail-closed gate that stands between a
+  # whole-list ruleset create and a clobbered live dashboard entrypoint.
+  run_suite "tests/scripts/preapply-entrypoint-gate" bash tests/scripts/test-preapply-entrypoint-gate.sh
   # host image/apply coherence preflight (AC10b) — drives the standalone preflight
   # via its test seams (no docker/network/prod write). Registered here alongside
   # the destroy-guard trio: it is the host-agnostic coherence verifier the

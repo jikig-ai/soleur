@@ -106,6 +106,11 @@ on:
           - registry-region-migrate
           - git-data-host-replace
           - workspaces-luks-cutover
+          # #6767: read-only retrospective drift audit of every declared ruleset's
+          # LIVE phase entrypoint (no terraform apply; own concurrency group;
+          # issues:write App auth; posts findings to #6767). See the
+          # entrypoint_audit job below.
+          - entrypoint-audit
 
 concurrency:
   # LOAD-BEARING shared group (#4844): this MUST be the IDENTICAL literal string
@@ -426,8 +431,13 @@ jobs:
           # access_policy.include). Source of truth:
           # tests/scripts/lib/destroy-guard-filter-web-platform.jq (also
           # exercised by tests/scripts/test-destroy-guard-counter-web-platform.sh).
-          counts=$(terraform show -json tfplan | \
-            jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq")
+          # Capture the structured plan to tfplan.json ONCE (Kieran L4 /
+          # code-simplicity): the destroy-guard jq below reads it, AND the #6767
+          # "Pre-apply entrypoint gate" step reads the same file — no second
+          # `terraform show`. Written into INFRA_DIR (this step's
+          # working-directory) so the gate step gets a bare relative path.
+          terraform show -json tfplan > tfplan.json
+          counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" < tfplan.json)
           resource_deletes=$(echo "$counts" | jq -r '.resource_deletes')
           nested_deletes=$(echo "$counts" | jq -r '.nested_deletes')
           # reboot_updates (#5911): reboot-forcing in-place update on
@@ -531,6 +541,52 @@ jobs:
             grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
             exit 1
           fi
+
+      # --- #6767: fail-closed PRE-APPLY ENTRYPOINT GATE ---------------------------
+      # A `kind = "zone"` / `kind = "root"` cloudflare_ruleset OWNS its phase
+      # entrypoint as a WHOLE-LIST replacement. `terraform plan` reports "1 to
+      # add" for a create-from-absent-state ruleset — and that line is correct —
+      # but plan never calls the Cloudflare API, so it cannot see that the LIVE
+      # entrypoint already holds dashboard-created rules. A clean plan is thus
+      # fully compatible with a DESTRUCTIVE first apply that whole-list-PUTs the
+      # config's rules over the live list (the #6746 "Flexible SSL for web
+      # platform" app.soleur.ai outage class).
+      #
+      # The destroy-guard step above CANNOT catch this: on a create, before.rules
+      # is null, so its before−after delta is negative and filtered by
+      # select(. > 0), and resource_deletes is 0 — no [ack-destroy] fires. A
+      # plan-derived guard inherits plan's blind spot. This gate asserts on plan
+      # SHAPE (a whole-list resource planned as a pure create from absent state)
+      # and then QUERIES THE LIVE CLOUDFLARE API to decide. DEFAULT-DENY: it
+      # passes only on a proven-empty entrypoint (200-empty or 404) and
+      # fail-closes on every ambiguity.
+      #
+      # Positioned AFTER "Terraform plan" (which wrote tfplan.json) and BEFORE the
+      # MAIN "Terraform apply", OUTSIDE any [ack-destroy] bypass — a whole-list
+      # clobber is never something to type past (mirrors the host_creates
+      # tripwire). Source of truth + full decision table:
+      # tests/scripts/lib/preapply-entrypoint-gate.sh (ADR-133). curl --max-time
+      # inside the gate bounds a CF hang so it cannot hold the sole apply
+      # concurrency serializer.
+      - name: Pre-apply entrypoint gate
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          # Read the ruleset-scoped CF token + the zone id from Doppler and pass
+          # them to the gate via pinned env vars. CF_API_TOKEN_RULESETS carries
+          # Zone+Account Rulesets:Edit (ADR-130/#5092); the gate only READS. A
+          # `|| true` on the reads lets the gate itself emit the DISTINCT
+          # "CF token empty/unreadable" fail-closed message rather than dying here
+          # with a generic non-zero.
+          PREAPPLY_CF_TOKEN=$(doppler secrets get CF_API_TOKEN_RULESETS --plain 2>/dev/null || true)
+          PREAPPLY_CF_ZONE_ID=$(doppler secrets get CF_ZONE_ID --plain 2>/dev/null || true)
+          export PREAPPLY_CF_TOKEN PREAPPLY_CF_ZONE_ID
+          # The plan step wrote tfplan.json into INFRA_DIR (this working-directory).
+          bash "${GITHUB_WORKSPACE}/tests/scripts/lib/preapply-entrypoint-gate.sh" --gate tfplan.json
 
       - name: Terraform apply
         working-directory: ${{ env.INFRA_DIR }}
@@ -2028,3 +2084,119 @@ jobs:
             echo ""
             echo "Additive +create of the encrypted volume (zero downtime). The freeze/rsync/repoint/canary is the SEPARATE environment-gated workspaces-luks-cutover.yml dispatch."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # --- #6767: read-only retrospective entrypoint drift AUDIT --------------------
+  # The retrospective half of #6767 (the prospective half is the "Pre-apply
+  # entrypoint gate" STEP in the `apply` job above). This job enumerates every
+  # declared cloudflare_ruleset's LIVE phase entrypoint and reports rule counts,
+  # so a rule already lost (historical clobber) or drifted is surfaced ONCE to
+  # #6767 as the system-of-record (hr-no-dashboard-eyeball-pull-data-yourself).
+  #
+  # STRICTLY READ-ONLY. There is NO `terraform apply` in this job (asserted by
+  # tests/scripts/test-preapply-entrypoint-gate.sh D2). It runs
+  # preapply-entrypoint-gate.sh --audit --live (GETs only) and posts a comment.
+  #
+  # Its `if:` is mutually exclusive with the `apply` job's guard (the apply job
+  # runs only on push OR apply_target==manual-rerun), and it uses its OWN
+  # concurrency group — NOT `terraform-apply-web-platform-host` — so an audit
+  # never serializes behind / delays a real apply.
+  #
+  # issues:write via a GitHub App installation token (hr-github-app-auth-not-pat;
+  # the default job token is contents:read only, so `gh issue comment` would
+  # silently fail without the elevated permission + App auth).
+  entrypoint_audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'entrypoint-audit'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: entrypoint-audit-${{ github.run_id }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+    env:
+      # soleur-ai App org installation (learning 2026-05-25-app-jwt-inline-mint).
+      INSTALLATION_ID: "122213433"
+      AUDIT_ISSUE: "6767"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Run entrypoint drift audit (read-only) and post findings to #6767
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          # Read-only CF creds for the live entrypoint enumeration.
+          PREAPPLY_CF_TOKEN=$(doppler secrets get CF_API_TOKEN_RULESETS --plain 2>/dev/null || true)
+          PREAPPLY_CF_ZONE_ID=$(doppler secrets get CF_ZONE_ID --plain 2>/dev/null || true)
+          PREAPPLY_CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID --plain 2>/dev/null || true)
+          export PREAPPLY_CF_TOKEN PREAPPLY_CF_ZONE_ID PREAPPLY_CF_ACCOUNT_ID
+          # Static table + LIVE enumeration (GETs only — no import, no apply).
+          AUDIT_OUT=$(bash "${GITHUB_WORKSPACE}/tests/scripts/lib/preapply-entrypoint-gate.sh" --audit --live 2>&1) || true
+          {
+            echo "## Whole-list entrypoint drift audit (#6767)"
+            echo ""
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo ""
+            echo '```'
+            printf '%s\n' "$AUDIT_OUT"
+            echo '```'
+          } > /tmp/audit-body.md
+          cat /tmp/audit-body.md >> "$GITHUB_STEP_SUMMARY"
+
+          # Mint a short-lived GitHub App installation token (issues:write) to
+          # post the findings to #6767. Inline JWT mint mirrors
+          # board-status-sync.yml (learning 2026-05-25-app-jwt-inline-mint).
+          APP_ID=$(doppler secrets get GITHUB_APP_ID --plain 2>/dev/null) || {
+            echo "::error::GITHUB_APP_ID not found in Doppler prd_terraform."; exit 1; }
+          PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain 2>/dev/null) || {
+            echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$APP_ID" || -z "$PEM" ]]; then
+            echo "::error::GitHub App credentials empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$APP_ID"
+          while IFS= read -r pem_line; do
+            [[ -n "$pem_line" ]] && printf '::add-mask::%s\n' "$pem_line"
+          done <<< "$PEM"
+          umask 077
+          APP_PEM_FILE=$(mktemp -p "$RUNNER_TEMP" soleur-ai-app-pem.XXXXXX)
+          printf '%s\n' "$PEM" > "$APP_PEM_FILE"
+          chmod 600 "$APP_PEM_FILE"
+          trap 'rm -f "${APP_PEM_FILE:-}" 2>/dev/null || true' EXIT
+          if ! openssl rsa -in "$APP_PEM_FILE" -check -noout 2>/dev/null; then
+            echo "::error::GITHUB_APP_PRIVATE_KEY in Doppler is not a valid RSA PEM."; exit 1; fi
+          b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\n'; }
+          now=$(date +%s)
+          header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
+          payload=$(jq -nc --argjson iss "$APP_ID" --argjson iat "$((now - 60))" \
+            --argjson exp "$((now + 540))" '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
+          unsigned="${header}.${payload}"
+          signature=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$APP_PEM_FILE" -binary | b64url)
+          JWT="${unsigned}.${signature}"
+          [[ -n "$JWT" ]] || { echo "::error::App-JWT mint produced empty output."; exit 1; }
+          echo "::add-mask::$JWT"
+          INSTALL_TOKEN=$(curl -sS -X POST \
+            -H "Authorization: Bearer $JWT" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
+            | jq -r '.token // empty')
+          [[ -n "$INSTALL_TOKEN" ]] || {
+            echo "::error::Installation-token exchange returned empty token."; exit 1; }
+          echo "::add-mask::$INSTALL_TOKEN"
+          GH_TOKEN="$INSTALL_TOKEN" gh issue comment "$AUDIT_ISSUE" --body-file /tmp/audit-body.md
+          echo "Posted entrypoint drift audit findings to #${AUDIT_ISSUE}."

@@ -180,8 +180,12 @@
 # STATE — verified via `terraform state list` — so `plan` refreshes their
 # entrypoints and would surface a dashboard-added rule as drift. Their exposure
 # is RETROSPECTIVE (anything added before their own first apply is already
-# gone), not the prospective hazard this file hit. #6767 is therefore a
-# drift-audit, not a pre-apply gate.
+# gone), not the prospective hazard this file hit. #6767 SHIPPED both halves
+# (ADR-133): the prospective PRE-APPLY GATE — tests/scripts/lib/preapply-entrypoint-gate.sh,
+# wired as the "Pre-apply entrypoint gate" step in apply-web-platform-infra.yml,
+# which fail-closes any FUTURE whole-list ruleset create-from-absent whose live
+# entrypoint is non-empty — AND the retrospective drift-audit (the same script's
+# --audit mode, run via the guarded entrypoint-audit dispatch).
 #
 # See:
 #   - knowledge-base/project/plans/2026-07-20-fix-gsc-404-cdn-cgi-email-protection-plan.md
