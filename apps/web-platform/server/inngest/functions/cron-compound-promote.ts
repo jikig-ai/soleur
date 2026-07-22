@@ -46,6 +46,10 @@ import {
 } from "./_cron-shared";
 import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
+// #6794: third byte-identical impl of the frontmatter-strip contract (SPEC.md /
+// #5999 / ADR-094). Imported here so the always-loaded byte budget is measured
+// on the SAME frontmatter-stripped basis the commit gate uses.
+import { stripFrontmatter } from "../../../../../scripts/lib/frontmatter-strip/strip";
 
 // =============================================================================
 // Constants
@@ -67,14 +71,15 @@ export const MAX_DIFF_BYTES = 16384;
 // the linter (or vice versa) and that guard fails the build. Do not edit either
 // side alone; that de-sync is what issue #6461 was filed for.
 //
-// UNIT SKEW (deliberate, fail-safe direction): the linter's thresholds are
-// defined over FRONTMATTER-STRIPPED bytes, while the measurements below are RAW
-// file lengths (`(await readFile(p)).length`, no strip). Raw is structurally >=
-// stripped, so comparing raw against a stripped-basis threshold refuses no LATER
-// than the commit gate would. That is the safe direction and is accepted
-// knowingly. (The exact gap is the current frontmatter size and drifts — the
-// direction is the invariant.) Porting the frontmatter strip here so the
-// comparison is unit-exact is tracked as a follow-up.
+// UNIT (unit-exact, #6794): both measurement sites below run through
+// measureAlwaysLoadedBytes, which measures on the FRONTMATTER-STRIPPED basis —
+// the SAME basis the linter's thresholds are defined over
+// (scripts/lint-agents-rule-budget.py: b_index raw + b_core stripped). The
+// previously-documented raw-vs-stripped skew (~73 B, the frontmatter block on
+// AGENTS.core.md) is closed; the comparison is exact, not merely fail-safe. The
+// over-strip guard inside the helper keeps the DANGEROUS (falsely-smaller)
+// direction fail-safe by falling back to RAW bytes if a malformed strip drops a
+// rule line.
 //
 // Hard ceiling for the POST-APPLY gate: mirrors the commit gate exactly, so an
 // applied diff that would be rejected at commit time is reverted here instead.
@@ -89,6 +94,63 @@ const MAX_ALWAYS_LOADED_BYTES = 23000;
 // next promotion and for hand-authored rules. Binding this to the reject ceiling
 // would let a cluster land at exactly the cap and pin the registry there.
 const PROPOSE_ALWAYS_LOADED_BUDGET = 20000;
+
+// #6794: measure the always-loaded (AGENTS.md + AGENTS.core.md) payload on the
+// FRONTMATTER-STRIPPED basis, matching the commit gate's authority
+// (scripts/lint-agents-rule-budget.py: b_index raw + b_core stripped). The strip
+// is a no-op on AGENTS.md (no leading `---`), so applying it uniformly to both
+// files reproduces the authority exactly. Extracted + exported so the
+// promoter-vs-B_ALWAYS invariant is unit-testable without invoking the handler.
+//
+// OVER-STRIP GUARD (the DANGEROUS direction): a malformed/unterminated `---`
+// consumes AGENTS.core.md to EMPTY → a falsely-SMALLER byte count that could
+// falsely PASS the cap. Mirrors the linter's guard: if the strip drops any
+// `- …[id: …]` rule line, fall back to RAW bytes (fail-safe) + emit a distinct
+// Sentry signal. The anchored regex matches lint-agents-rule-budget.py's
+// `_RULE_LINE_RE = ^- .*\[id: ` line-for-line.
+const RULE_LINE_RE = /^- .*\[id: /;
+
+function ruleLineCount(text: string): number {
+  let n = 0;
+  for (const line of text.split("\n")) {
+    if (RULE_LINE_RE.test(line)) n++;
+  }
+  return n;
+}
+
+function measureFileStrippedBytes(text: string, file: string): number {
+  const stripped = stripFrontmatter(text);
+  if (ruleLineCount(stripped) < ruleLineCount(text)) {
+    // Over-strip: malformed frontmatter consumed rule bodies. Never trust the
+    // (smaller) stripped count — it could pass an oversized payload. Fall back
+    // to raw and page.
+    reportSilentFallback(
+      new Error("frontmatter over-strip dropped rule lines"),
+      {
+        feature: "cron-compound-promote",
+        op: "frontmatter-overstrip-fallback",
+        extra: { file },
+      },
+    );
+    return Buffer.byteLength(text, "utf8");
+  }
+  return Buffer.byteLength(stripped, "utf8");
+}
+
+/**
+ * Always-loaded byte total on the frontmatter-stripped basis (#6794). Pass the
+ * raw UTF-8 text of AGENTS.md and AGENTS.core.md; a missing file is passed as
+ * "" (→ 0 bytes), preserving the prior existsSync-guarded behavior.
+ */
+export function measureAlwaysLoadedBytes(
+  indexText: string,
+  coreText: string,
+): number {
+  return (
+    measureFileStrippedBytes(indexText, "AGENTS.md") +
+    measureFileStrippedBytes(coreText, "AGENTS.core.md")
+  );
+}
 
 export const TARGET_ALLOW_RE =
   /^(AGENTS\.core\.md|plugins\/soleur\/skills\/[A-Za-z0-9_-]+\/SKILL\.md)$/;
@@ -452,9 +514,13 @@ export async function cronCompoundPromoteHandler({
 
       const agentsPath = join(repoRoot, "AGENTS.md");
       const agentsCorePath = join(repoRoot, "AGENTS.core.md");
-      let alwaysLoadedNow = 0;
-      if (existsSync(agentsPath)) alwaysLoadedNow += (await readFile(agentsPath)).length;
-      if (existsSync(agentsCorePath)) alwaysLoadedNow += (await readFile(agentsCorePath)).length;
+      const indexText = existsSync(agentsPath)
+        ? await readFile(agentsPath, "utf8")
+        : "";
+      const coreText = existsSync(agentsCorePath)
+        ? await readFile(agentsCorePath, "utf8")
+        : "";
+      const alwaysLoadedNow = measureAlwaysLoadedBytes(indexText, coreText);
 
       const prompt = [
         `You are a clustering agent. Cluster the following learnings by problem/root-cause similarity. Return up to ${weekCapResult.remaining} qualifying clusters (each with >=5 source learnings).`,
@@ -601,12 +667,17 @@ export async function cronCompoundPromoteHandler({
           return;
         }
 
-        // Post-apply byte budget check
+        // Post-apply byte budget check (frontmatter-stripped basis, #6794 —
+        // mirrors the commit gate exactly).
         const agMd = join(repoRoot, "AGENTS.md");
         const agCore = join(repoRoot, "AGENTS.core.md");
-        let postBytes = 0;
-        if (existsSync(agMd)) postBytes += (await readFile(agMd)).length;
-        if (existsSync(agCore)) postBytes += (await readFile(agCore)).length;
+        const postIndexText = existsSync(agMd)
+          ? await readFile(agMd, "utf8")
+          : "";
+        const postCoreText = existsSync(agCore)
+          ? await readFile(agCore, "utf8")
+          : "";
+        const postBytes = measureAlwaysLoadedBytes(postIndexText, postCoreText);
         if (postBytes > MAX_ALWAYS_LOADED_BYTES) {
           logger.warn({ fn: "cron-compound-promote", bytes: postBytes }, "byte-budget-overflow");
           reportSilentFallback(new Error("Post-apply byte budget exceeded"), {
