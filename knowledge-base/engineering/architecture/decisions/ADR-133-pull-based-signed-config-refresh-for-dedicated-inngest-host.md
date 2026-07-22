@@ -133,25 +133,39 @@ Actions via `scripts/betterstack-query.sh` — they are deliberately NOT on the 
 (the same reason `cron-terraform-drift` is dispatch-hybrid: parking cloud-admin creds on the prod
 host is a security regression). So the comparator is a **dispatch-hybrid**: an Inngest
 `cron-inngest-config-drift.ts` is the SCHEDULER (ADR-033, jitter-free) that dispatches a
-`scheduled-inngest-config-drift.yml` EXECUTOR which owns the Better Stack query + comparison. This
+`inngest-config-drift.yml` EXECUTOR which owns the Better Stack query + comparison. This
 is the working shape for a credential-heavy infra cron, not a `.github/workflows/scheduled-*.yml`
 on a GHA `schedule:` trigger.
 
 ## Consequences
 
-**Easier.** A host-script fix ships in-place: edit the `*.sh` → CI signs + dual-publishes → a
-Terraform `apply` promotes the pointer → the host timer pulls, verifies, and swaps atomically →
-the change is confirmed off-box via `SOLEUR_INFRA_PULL_APPLIED` in Better Stack, no SSH, no host
-replace, zero downtime. Future host-script changes never again replace the sole scheduler.
+**Easier** (once the host-side consumer lands at the #6178 cutover — see the status banner; the
+verbs below are the target steady state, not merged behavior). A host-script fix will ship
+in-place: edit the `*.sh` → CI signs + publishes → a Terraform `apply` promotes the pointer → the
+host timer will pull, verify, and swap atomically → the change is confirmed off-box via
+`SOLEUR_INFRA_PULL_APPLIED` in Better Stack, no SSH, no host replace, zero downtime. Future
+host-script changes never again replace the sole scheduler.
 
 **Harder.** The channel installs only through the replace it eliminates (bootstrap paradox): the
 host-side machinery rides the #6178 cutover and cannot be exercised before it. The isolation
 self-check on the isolated `soleur-inngest/prd` is **exact-set** (`n_total -ne n_inngest`), so the
 pointer secret and the regex/floor must move together at the cutover or the host fail-closes on
 boot — a partial edit bricks the box. CI-workflow compromise remains the top residual RCE path,
-mitigated (not eliminated) by the required-reviewer environment gate on the signer. Static keys
-have no revocation, so the Option-B fallback carries a leak → emergency-replace residual documented
-in the runbook.
+mitigated (not eliminated) by the required-reviewer environment gate on the signer — which is only
+real once `inngest-config-signing.tf` is applied (wired into the `apply-web-platform-infra.yml`
+`-target=` allow-list; an unapplied environment is auto-created by GitHub WITHOUT reviewers on
+first dispatch). Static keys have no revocation, so the Option-B fallback carries a leak →
+emergency-replace residual documented in the runbook.
+
+**Observability trust residual (fail-open direction).** The off-box drift comparator treats the
+`SOLEUR_INFRA_PULL_APPLIED` marker as *observability, not authority for the digest* — a compromised
+host (or anything able to inject a journald/Vector line) can emit a forged marker naming the
+*public* promoted pointer digest and mask a stuck/hostile scheduler as `OK`. This is inherent to
+off-box monitoring and is an accepted tradeoff: the marker never grants trust — integrity comes
+from the host-side signed-bundle verify + monotonic-version gate (HARD-2/HARD-10), which the marker
+only *reports on*. The comparator's non-adversarial paths are all fail-closed (empty/unparseable
+marker → DIVERGED; query outage → QUERY_UNAVAILABLE). Named here and in the runbook so a future
+reader does not mistake a green comparator for cryptographic proof of a current host.
 
 **Scope guard.** The config bundle is a distinct artifact from the bootstrap image; the four image
 pin sites and the `vinngest-v*` semver-max guard are Non-Goals here. The shared `DEST_SPEC` widening
@@ -171,9 +185,10 @@ at apply). Reference `knowledge-base/operations/expenses.md` — no line moves.
 - **NFR-026 (Encryption In-Transit): Aligned** — GHCR pull is HTTPS; the zot leg is plain-HTTP on
   the private net with integrity supplied by cosign digest-pinning, not TLS (the established
   ADR-096 posture).
-- **NFR-001 / NFR-033 (Logging / Unified Format): Improved** — every timer run emits a structured
-  off-box marker (`SOLEUR_INFRA_PULL_APPLIED` / `…_VERIFY_FAIL`) to the shared Logs source; the
-  drift comparator makes staleness observable without host login (`hr-no-dashboard-eyeball-pull-data-yourself`).
+- **NFR-001 / NFR-033 (Logging / Unified Format): Improved** (at the cutover) — every timer run
+  will emit a structured off-box marker (`SOLEUR_INFRA_PULL_APPLIED` / `…_VERIFY_FAIL`) to the
+  shared Logs source; the drift comparator (shipped now, dormant) makes staleness observable
+  without host login (`hr-no-dashboard-eyeball-pull-data-yourself`).
 - **NFR-014 (Access Control): Aligned** — no new inbound rule; the timer is outbound-only; the
   verifier runs `root`-owned outside any deploy-writable `$PATH`; promotion and signing are split
   principals.

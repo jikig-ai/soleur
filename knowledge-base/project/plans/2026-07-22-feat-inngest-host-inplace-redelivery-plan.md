@@ -22,7 +22,7 @@ Build a **pull-based signed config-refresh channel** so a change to a host-execu
 (`soleur-inngest-prd`, 10.0.1.40, deny-all-public) **without** an
 `apply_target=inngest-host-replace` of the sole production scheduler. A systemd timer on
 the host resolves a **promoted digest pointer** (`INNGEST_CONFIG_DIGEST` in Doppler
-`soleur-inngest/prd`), pulls a **cosign-static-key-signed OCI bundle** of the refresh-set,
+`soleur-inngest/prd`), pulls a **keyless-cosign-signed OCI bundle** (DEEPEN-CORRECTION-1) of the refresh-set,
 verifies (signature + per-file sha256 manifest + monotonic version gate), applies
 **atomically/fail-closed** through the existing `infra-config-install.sh` STDIN root helper,
 and reports **off-box** to Better Stack via the baked `inngest-boot-phone-home.sh`, paired
@@ -31,9 +31,12 @@ with an absence-heartbeat monitor. The host-side machinery is baked into
 paradox: the channel installs only through the replace it eliminates); the CI
 build/sign/promote workflow and future bundle edits then flow through the channel itself.
 
-Design is settled from the brainstorm (11 decisions). This plan is the HOW. Keyless cosign is
-ruled out (ADR-052 blocks Fulcio/Rekor egress); signing is a **static key** extending ADR-087
-(air-gapped verify) + ADR-128 (digest-pinned coherence) + ADR-096 (zot-first/GHCR-fallback).
+Design is settled from the brainstorm (11 decisions). This plan is the HOW. **Signing is air-gapped
+keyless cosign** (chosen — see DEEPEN-CORRECTION-1 below + ADR-133 Option A; the earlier "keyless
+ruled out (ADR-052)" framing was imprecise — ADR-052 blocks *host* egress, and keyless *verify* is
+offline against the baked trusted root). Static-key is the **documented fallback** (Option B), not
+the primary. Extends ADR-087 (air-gapped verify) + ADR-128 (digest-pinned coherence) + ADR-096
+(zot-first/GHCR-fallback).
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -89,7 +92,7 @@ These are load-bearing constraints the implementation MUST satisfy; each maps to
 - **HARD-4 (run as root — P1).** The verify+apply `.service` runs `User=root` (baked, root-owned); it invokes `infra-config-install` directly (no deploy→sudoers grant). Keep the deploy sudoers grant to the existing webhook path only. The verifier must not execute in a deploy-writable `$PATH`/tempdir.
 - **HARD-5 (set-atomic apply — P1).** `infra-config-install.sh` is **per-file** atomic, not set-atomic. Stage+verify ALL files, then swap all; advance `applied.version` **only after the last file lands**; on mid-set failure, re-apply next tick (do not latch a torn mixed-version set). Add a generation marker crons can read to refuse a mixed set.
 - **HARD-6 (promotion credential — P1).** Promotion writes `INNGEST_CONFIG_DIGEST` via **`terraform apply` of the `doppler_secret`** (no standing CI write-token into the isolated `soleur-inngest/prd`), OR the write-token surface is explicitly justified in ADR-133. The signing principal and the promotion principal SHOULD be distinct (no single job both signs and promotes).
-- **HARD-7 (CI = total-compromise root — P1).** ADR-133 names CI-workflow compromise as the top residual RCE path (whoever compromises the release workflow can sign + promote a fresh bundle; the monotonic gate does nothing against a *fresh* forgery). Gate the cosign private key behind a GitHub **environment with a non-empty required-reviewer set**, OIDC-scoped, protected branch. Name the cosign key distinctly (`COSIGN_CONFIG_SIGNING_KEY`), in the CI/`soleur/prd` project only — NEVER the isolated project.
+- **HARD-7 (CI = total-compromise root — P1).** ADR-133 names CI-workflow compromise as the top residual RCE path (whoever compromises the release workflow can sign + promote a fresh bundle; the monotonic gate does nothing against a *fresh* forgery). **As-shipped (keyless):** gate the signing **job** behind a GitHub **environment with a non-empty required-reviewer set** (`inngest-config-signing`, `inngest-config-signing.tf`, wired into the `apply-web-platform-infra.yml` `-target=` allow-list so the reviewer rule actually exists before any dispatch — an unapplied environment is auto-created WITHOUT reviewers on first use), OIDC-scoped (`id-token: write` on that job only). Keyless dissolves the "cosign private key custody" line entirely (there is no key to name/store). **Fallback (Option B, static key):** name the cosign key distinctly (`COSIGN_CONFIG_SIGNING_KEY`), in the CI/`soleur/prd` project only — NEVER the isolated project.
 - **HARD-8 (drift comparator is a deliverable — P1).** The absence-heartbeat only catches a *dead* timer, and the baked floor's own boot marker can *satisfy* it while the delta never pulled. Ship a concrete off-box comparator (a CI/cron job reads the Doppler pointer + queries Better Stack for the latest `APPLIED` marker, alarms on `applied_digest ≠ pointer` beyond N windows). The boot-floor marker MUST be distinguishable (`version=floor`) so it does not mask a stuck delta.
 - **HARD-9 (pointer-below-floor inversion — P1).** If a cutover bakes a floor whose version exceeds the last-promoted pointer, the first pull is rejected forever → silent stale. Gate promotion to require `pointer.version > baked-floor.version`, AND emit an explicit alarm when a pull is rejected as ≤ current (rejection-as-signal, not silent no-op).
 - **HARD-10 (fail-closed arms — P1).** The verify+apply script MUST NOT inherit the bootstrap's ambient `set +e` / `|| true`. Each gate is explicit fail-closed: `cosign verify-blob` rc≠0, `sha256sum -c` rc≠0, a **missing/non-integer** `applied.version` (fail-closed to a hard floor, never parse-to-0-accept-all), `infra-config-install` `rc=3`. Logging/phone-home may `|| true`; a *decision* behind `|| true` may not.
@@ -156,12 +159,15 @@ retains it (HARD-3/HARD-5).
   **zot/GHCR registry** edge to the inngest host if not modeled, and the config-refresh relationship
   (CI → registry → host). Run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 
-**Phase 2 — CI build + cosign-static-key sign + publish (producer contract).**
-- Provision a **cosign static keypair**: private key → Doppler `prd` (CI-only, `TF_VAR`/CI secret);
-  **public verify key committed** for baking. Rotation recipe mirrors ADR-087 trusted-root re-capture
-  (accept both public keys during overlap → cut CI → drop old) — OQ4.
-- New workflow (`.github/workflows/*.yml`): package refresh-set + per-file sha256 **manifest** + a
-  **monotonic version** into a bundle; `cosign sign-blob` with the static key; publish the OCI artifact to
+**Phase 2 — CI build + keyless-cosign sign + publish (producer contract). [As-shipped: keyless per DEEPEN-CORRECTION-1 — the static-keypair provisioning below is the Option-B fallback, NOT what shipped.]**
+- ~~Provision a cosign static keypair~~ **(fallback only).** As-shipped there is **no keypair to mint**:
+  keyless sign uses the CI OIDC id-token; verify uses the already-committed `cosign-trusted-root.json`
+  + a config-workflow identity regexp (rotation = edit the regexp / re-capture the trusted root per
+  ADR-087, no overlap dance). The static-key path (private key → Doppler `prd`, public key committed +
+  baked, accept-both-during-overlap) is retained only as the documented fallback if the host-side
+  offline `verify-blob` proves impractical at the cutover Phase-0 probe.
+- New workflow (`.github/workflows/build-inngest-config-bundle.yml`): package refresh-set + per-file sha256 **manifest** + a
+  **monotonic version** into a bundle; `cosign sign-blob` **keyless**; publish the OCI artifact to
   **both zot and GHCR**. (`workflow_dispatch` for a new workflow cannot be verified from a feature branch —
   wire the build as a job in an existing `pull_request` workflow OR test the packaging logic as a
   locally-runnable script; do NOT plan a temporary `workflow_dispatch` test workflow.)
@@ -256,7 +262,7 @@ logs:
   where: journald → vector → Better Stack; host state file /var/lib/inngest-config/
   retention: Better Stack default
 discoverability_test:
-  command: bash scripts/betterstack-query.sh --grep SOLEUR_INFRA_PULL_APPLIED
+  command: doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --grep SOLEUR_INFRA_PULL_APPLIED
   expected_output: a marker line with version= and sha256= within the last timer window (no host login required)
 ```
 
@@ -290,7 +296,7 @@ discoverability_test:
 - [ ] AC2: The host verify+apply script (a) `cosign verify-blob --key`s before apply, (b) rejects version ≤ last-applied, (c) verifies per-file sha256 vs manifest, (d) applies only via `infra-config-install.sh` (no arbitrary dest). `.test.sh` asserts each arm.
 - [ ] AC3: A bundle failing verify/version/manifest leaves live scripts untouched AND emits `SOLEUR_INFRA_PULL_VERIFY_FAIL` (test asserts fail-closed).
 - [ ] AC4: No new inbound rule added to the inngest host nftables (grep the nft set; deny-all-public preserved).
-- [ ] AC5: The CI workflow signs with the static key and publishes to **both** zot and GHCR; the public verify key is committed and baked.
+- [ ] AC5 (keyless — DEEPEN-CORRECTION-1 supersedes "static key"; workflow present, runtime-unverifiable on a feature branch): The CI workflow **keyless**-signs the bundle manifest (`cosign sign-blob`, OIDC id-token) and publishes to **both** zot (best-effort) and GHCR (authoritative); the verify anchor is the already-committed `cosign-trusted-root.json` + a config-workflow identity regexp (no static keypair minted, no separate pubkey committed). The deterministic packaging core (HARD-2) is tested; the sign+publish steps mirror `reusable-release.yml` and run first at the #6178 cutover.
 - [ ] AC6: `INNGEST_CONFIG_DIGEST` `doppler_secret` + monitor `terraform plan` shows only the intended adds (no create of `hcloud_server`/host, no destroy).
 - [x] AC7: ADR-133 exists with the four required headings; C4 tests green; `.c4` renders the new signer/registry/host edges.
 - [ ] AC8: `PR body uses Ref #6780` (NOT Closes — the channel is only proven after it rides the #6178 cutover provision; close #6780 post-cutover with off-box marker evidence).
@@ -301,7 +307,7 @@ discoverability_test:
 - [ ] AC14 (HARD-5): a test asserts a mid-set apply failure leaves NO torn mixed-version set (stage-all-then-swap-all; `applied.version` advances only after the last file).
 - [ ] AC15 (HARD-10, replaces flat AC3): per-arm fail-closed tests — unsigned, wrong-key, sha-mismatch, lower-version, corrupt/empty `applied.version`, empty/truncated bundle — each keeps last-known-good AND emits `SOLEUR_INFRA_PULL_VERIFY_FAIL`.
 - [ ] AC16 (HARD-4): the verify+apply `.service` runs `User=root`, no deploy→sudoers grant for this unit.
-- [ ] AC17 (AC5 round-trip, spec-flow #3): a test signs with the CI static key and verifies with the committed/baked pubkey in the same test (catches key-A-sign / key-B-bake mismatch).
+- [ ] AC17 (keyless — supersedes the "static key round-trip"): keyless has no key-A-sign/key-B-bake mismatch class (there is no minted keypair; trust is the committed `cosign-trusted-root.json` + identity regexp, staleness-gated by `cosign-trusted-root-staleness.test.sh`). The hermetic round-trip that remains is the deterministic packager (`inngest-config-bundle-pack.test.sh`, HARD-2 VERSION-in-signed-bytes); the keyless sign/verify-blob round-trip is exercised at the #6178 cutover Phase-0 probe (offline verify against the baked root).
 - [ ] AC18 (spec-flow #13): a test asserts every refresh-set dest resolves in BOTH `DEST_SPEC` and `FILE_MAP` with matching mode/owner (lockstep).
 - [x] AC19 (HARD-8): the off-box drift comparator exists (reads pointer + latest `APPLIED` marker, alarms on divergence); the boot-floor marker is distinguishable (`version=floor`).
 

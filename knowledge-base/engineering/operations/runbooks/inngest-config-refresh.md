@@ -92,3 +92,13 @@ with a freshly baked public key. That residual does not apply to the chosen keyl
 | manifest sha mismatch | per-file sha256 compare fail | `SOLEUR_INFRA_PULL_VERIFY_FAIL` |
 | dead timer (silent) | Better Stack absence-heartbeat (no APPLIED marker in window) | absence alarm |
 | stale re-baked floor (#6594) | `inngest-config-drift` comparator: applied digest ≠ promoted pointer; the boot-floor marker is distinguishable (`version=floor`) so it cannot mask a stuck delta | drift alarm |
+| Better Stack query outage | `inngest-config-drift` executor distinguishes a query failure from a dead timer | `QUERY_UNAVAILABLE` (attributed to the instrument, not the host) |
+
+**Trust residual (fail-open direction).** The drift comparator treats the `SOLEUR_INFRA_PULL_APPLIED`
+marker as **observability, not authority for the digest**. The promoted pointer digest is public, so a
+compromised host — or anything able to inject a journald/Vector log line — can emit a forged
+`SOLEUR_INFRA_PULL_APPLIED … sha256=<current-public-pointer>` and mask a stuck/hostile scheduler as
+`OK`. This is inherent to off-box monitoring: a green comparator is **not** cryptographic proof of a
+current host. Integrity comes from the host-side signed-bundle `cosign verify-blob` + monotonic-version
+gate (which the marker only reports on), never from the marker. All non-adversarial paths fail closed
+(empty/unparseable marker → drift alarm; query outage → `QUERY_UNAVAILABLE`).

@@ -77,10 +77,13 @@ does not, and that channel is **inbound**, so it cannot be reused on a deny-all-
 - TR1: **Zot pull path for the dedicated host is net-new** — the host pulls its image from
   GHCR-direct today with no zot branch. Wire + verify Zot (`10.0.1.30:5000`, private subnet) egress
   and pull for this host; GHCR digest-pinned fallback. *(open question OQ1)*
-- TR2: **cosign static-key custody + rotation** — public verify key baked in cloud-init (non-secret,
-  committed, reachable from `terraform apply` per `hr-fresh-host-provisioning-reachable`); private
-  key CI/Doppler prd only. Rotation recipe mirrors the ADR-087 trusted-root re-capture (accept both
-  public keys during overlap → cut CI → drop old).
+- TR2: **cosign signing custody + rotation.** *As-implemented: KEYLESS* (ADR-133 Option A / plan
+  DEEPEN-CORRECTION-1) — no key custody: CI keyless-signs (OIDC id-token), the host verifies offline
+  against the already-committed `cosign-trusted-root.json` + a config-workflow identity regexp;
+  rotation = edit the regexp / re-capture the trusted root (ADR-087), no overlap dance. *Fallback
+  (static key):* public verify key baked in cloud-init (non-secret, committed, reachable from
+  `terraform apply` per `hr-fresh-host-provisioning-reachable`); private key CI/Doppler prd only;
+  rotation mirrors the ADR-087 re-capture (accept both keys during overlap → cut CI → drop old).
 - TR3: **ADR** capturing the new trust boundary + pull control channel (carves the `*.sh`-only
   exception to the image-replace-only rule; extends ADR-087 verify + ADR-128 digest coherence).
 - TR4: Reuse existing patterns verbatim where they exist: `infra-config-install.sh` (apply),
@@ -105,4 +108,4 @@ does not, and that channel is **inbound**, so it cannot be reused on a deny-all-
 1. OQ1 — wire + verify the Zot pull path for the dedicated host (net-new; TR1).
 2. OQ2 — enumerate the exact host-executed `*.sh` refresh-set boundary.
 3. OQ3 — timer cadence + promotion mechanism (CI gate vs soak window).
-4. OQ4 — cosign static-key custody + rotation recipe details.
+4. OQ4 — cosign custody + rotation recipe details. **Resolved: keyless (no key custody)** per DEEPEN-CORRECTION-1; static-key custody applies only to the documented fallback.
