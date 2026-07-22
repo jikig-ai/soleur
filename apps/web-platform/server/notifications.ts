@@ -16,6 +16,7 @@ import {
   warnSilentFallback,
 } from "@/server/observability";
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
+import { NOT_LEGAL_ADVICE_NOTICE } from "@/lib/email-triage/statutory-rules";
 import type { InboxItemSeverity } from "@/lib/inbox-severity";
 
 const log = createChildLogger("notifications");
@@ -89,6 +90,13 @@ export interface EmailTriageNotificationPayload {
   /** Attacker-controlled (email subject). Sanitized + escaped at each sink. */
   title: string;
   isStatutory: boolean;
+  /**
+   * #6798: the statutory rule's own clock-origin prose (`StatutoryRule.catalogExcerpt`),
+   * threaded from the cron so the email can render the rule-accurate caveat next
+   * to the computed date. Server-authored, code-static — never third-party
+   * content. Absent for non-statutory items and legacy callers.
+   */
+  statutoryExcerpt?: string;
 }
 
 // InboxItemSeverity is imported at the top from lib/inbox-severity (canonical).
@@ -607,6 +615,18 @@ async function sendEmailTriageEmailNotification(
     ? "Statutory item needs your attention"
     : "New item in your Soleur inbox";
 
+  // #6798 (M1): render the not-legal-advice framing + the rule's own
+  // clock-origin excerpt in the email body (the surface with room to read it),
+  // so a computed backstop date is not presented as THE deadline. Both strings
+  // are server-authored + code-static; escapeHtml at the sink is defense-in-depth.
+  const statutoryCaveatHtml = payload.isStatutory
+    ? `<p style="font-size:13px;color:#6b7280;margin-top:16px">` +
+      (payload.statutoryExcerpt
+        ? `${escapeHtml(payload.statutoryExcerpt)}<br/><br/>`
+        : "") +
+      `${escapeHtml(NOT_LEGAL_ADVICE_NOTICE)}</p>`
+    : "";
+
   const { error } = await resend.emails.send({
     from: "Soleur <notifications@soleur.ai>",
     to: [email],
@@ -616,7 +636,7 @@ async function sendEmailTriageEmailNotification(
       : "New item in your Soleur inbox — Soleur",
     html: renderBrandedNotificationEmail({
       heading,
-      bodyHtml: escapeHtml(safeTitle),
+      bodyHtml: escapeHtml(safeTitle) + statutoryCaveatHtml,
       ctaLabel: "Open inbox item",
       deepLink,
       footnoteHtml:

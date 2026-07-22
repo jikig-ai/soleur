@@ -398,10 +398,14 @@ describe("cron-email-ingress-probe — deadline re-pin (acknowledge ≠ legal re
     expect(notifySpy).toHaveBeenCalledWith("owner-user-1", {
       type: "email_triage",
       emailId: "due-in-7",
+      // #6798 (M2): the verb is now state-accurate ("(computed) approaching"
+      // for a future due date), and the rule's clock-origin excerpt rides in
+      // `statutoryExcerpt` for the email body.
       title: expect.stringMatching(
-        /^Statutory deadline approaching — due 19 Jun 2026/,
+        /^Statutory deadline \(computed\) approaching — due 19 Jun 2026/,
       ),
       isStatutory: true,
+      statutoryExcerpt: expect.stringContaining("one calendar month of receipt"),
     });
   });
 });

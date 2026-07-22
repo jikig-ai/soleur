@@ -390,11 +390,24 @@ export async function cronEmailIngressProbeHandler({
       // Title carries only the registry-derived due string — never the
       // third-party subject (TR3 hygiene is moot for this synthetic title,
       // but keeping email content out of the ping keeps the surface uniform).
+      //
+      // #6798 (M2): the verb must be state-accurate. "approaching" on an item
+      // that is already past due is exactly the over-claim #6798 is about, and
+      // the date is COMPUTED from received_at (a best-effort backstop), so the
+      // framing says so. The full not-legal-advice + clock-origin caveat rides
+      // in the email body via `statutoryExcerpt` (D1/M1); the push stays a short
+      // imperative pointer (its copy is CLO-adjudicated at ship, #6798 AC3).
+      const dueStr = formatDueDate(row.received_at, rule.dueRule);
+      const title =
+        daysUntilDue >= 0
+          ? `Statutory deadline (computed) approaching — ${dueStr}`
+          : `Statutory deadline (computed) OVERDUE — ${dueStr}`;
       await notifyOfflineUser(row.user_id, {
         type: "email_triage",
         emailId: row.id,
-        title: `Statutory deadline approaching — ${formatDueDate(row.received_at, rule.dueRule)}`,
+        title,
         isStatutory: true,
+        statutoryExcerpt: rule.catalogExcerpt,
       });
       pinged += 1;
     }

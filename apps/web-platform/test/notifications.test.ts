@@ -400,6 +400,41 @@ describe("notifications", () => {
       expect(call.html).toContain("&amp; more");
     });
 
+    // #6798 (M1): the statutory EMAIL carries the standing not-legal-advice
+    // framing AND the rule's own clock-origin excerpt, so the operator does not
+    // treat the computed date as THE authoritative deadline.
+    test("email(statutory): carries not-legal-advice framing + the rule excerpt", async () => {
+      mockResendSend.mockResolvedValue({ data: { id: "msg-1" }, error: null });
+
+      await sendEmailNotification("test@example.com", {
+        type: "email_triage",
+        emailId: "item-uuid-stat",
+        title: "Data breach notification",
+        isStatutory: true,
+        statutoryExcerpt:
+          "A personal data breach must be notified ... within 72 hours of becoming aware of it (GDPR Art. 33).",
+      });
+
+      const call = mockResendSend.mock.calls[0][0];
+      expect(call.html).toContain("not legal advice");
+      // The rule's own clock-origin prose is rendered (awareness-clock case).
+      expect(call.html).toContain("becoming aware of it");
+    });
+
+    test("email(NON-statutory): does NOT carry the not-legal-advice framing", async () => {
+      mockResendSend.mockResolvedValue({ data: { id: "msg-1" }, error: null });
+
+      await sendEmailNotification("test@example.com", {
+        type: "email_triage",
+        emailId: "item-uuid-non",
+        title: "Newsletter",
+        isStatutory: false,
+      });
+
+      const call = mockResendSend.mock.calls[0][0];
+      expect(call.html).not.toContain("not legal advice");
+    });
+
     test("statutory notify failure mirrors to Sentry.captureException", async () => {
       mockFrom.mockImplementation(() => {
         throw new Error("db down");
