@@ -165,7 +165,7 @@ run_gate() {
   #    the gate environment is invalid (token scope / URL scheme / network) —
   #    fail-closed with a DISTINCT message so a subsequent target 404 provably
   #    means "empty phase", not "mis-constructed URL / bad token".
-  local control_zone control_out control_code
+  local control_zone control_out control_code control_body control_rulecount
   control_zone="${PREAPPLY_CF_ZONE_ID:-}"
   if ! _present "$control_zone"; then
     _err "gate environment invalid: PREAPPLY_CF_ZONE_ID is empty — cannot run the control probe. NOT a target finding."
@@ -180,12 +180,32 @@ run_gate() {
     _err "gate environment invalid: control probe on known-populated phase '${CONTROL_PHASE}' returned HTTP '${control_code}' (expected 200) — token scope / URL scheme / network problem, NOT a target finding. Refusing to trust any target 404 as 'empty'."
     return 1
   fi
+  # A 200 on the KNOWN-populated control phase MUST carry a non-empty rules
+  # array. A 200 whose body is degraded (result null, success:false, no `rules`
+  # key, or 0 rules on a phase that is definitionally populated) proves the read
+  # path returns junk-with-a-200 — so a subsequent target "200-empty" or "404"
+  # cannot be trusted as "empty". Assert the shape AND a positive count here so
+  # "empty means empty" is trustworthy downstream. NOT a target finding.
+  control_body=$(tail -n +2 <<<"$control_out")
+  if ! control_rulecount=$(jq -e '.result.rules | if type=="array" then length else error("rules not an array") end' <<<"$control_body" 2>/dev/null); then
+    _err "gate environment invalid: control probe on known-populated phase '${CONTROL_PHASE}' returned 200 but .result.rules is not an array (degraded/error body, not a populated phase) — NOT a target finding. Refusing to trust any target read as 'empty'."
+    return 1
+  fi
+  if [[ "$control_rulecount" -le 0 ]]; then
+    _err "gate environment invalid: control probe on known-populated phase '${CONTROL_PHASE}' returned 200 with 0 rules — a KNOWN-populated phase must return rules, so this is a degraded body, not an empty phase. NOT a target finding. Refusing to trust any target 404/200-empty as 'empty'."
+    return 1
+  fi
 
   # 5-6. Per matched row: build the endpoint URL (kind allowlist), probe it,
   #      apply DEFAULT-DENY HTTP handling. Aggregate a `fail` sentinel across
   #      ALL rows (never early-exit on the first clobber — a later row could
   #      also clobber and its remedy must be printed too).
   local fail=0 processed=0
+  # Memo of the ACCOUNT-surface control probe, keyed by account_id, so it runs
+  # at most once per distinct account_id: "ok" (a 200 LIST proved account scope)
+  # or "fail" (non-200 → the accounts/ surface is invalid; every kind=root row
+  # on it fail-closes). P1-A.
+  local -A acct_control_memo=()
   local row addr kind phase zone_id account_id url out code body
   while IFS= read -r row; do
     [[ -z "$row" ]] && continue
@@ -218,6 +238,36 @@ run_gate() {
           _err "row '${addr}': kind=root but account_id is null/empty/unknown-after-apply — cannot build the entrypoint URL. Fail-closed."
           continue
         fi
+        # ACCOUNT-surface control probe (P1-A). The zone control probe above
+        # proves NOTHING about the accounts/ surface, so a kind=root target 404
+        # cannot be trusted as "empty phase" until we prove the account path /
+        # token account-scope / account_id are valid. GET the account ruleset
+        # LIST endpoint (always 200 with account read scope; needs no populated
+        # phase) and require exactly 200. Memoized per distinct account_id so it
+        # runs at most once. Only after a 200 here may a kind=root 404 PASS.
+        local acct_state acc_out acc_code
+        acct_state="${acct_control_memo[$account_id]:-}"
+        if [[ "$acct_state" == "fail" ]]; then
+          fail=1
+          _err "row '${addr}': account control probe non-200 — token account-scope / account_id / URL scheme invalid; NOT a target finding (accounts/${account_id}/rulesets already probed this run). Fail-closed."
+          continue
+        fi
+        if [[ "$acct_state" != "ok" ]]; then
+          if ! acc_out=$("$fetch" "accounts/${account_id}/rulesets" 2>/dev/null); then
+            acct_control_memo["$account_id"]="fail"
+            fail=1
+            _err "row '${addr}': account control probe fetch failed to execute (accounts/${account_id}/rulesets) — token account-scope / account_id / URL scheme invalid; NOT a target finding. Fail-closed."
+            continue
+          fi
+          acc_code=$(head -n1 <<<"$acc_out")
+          if [[ "$acc_code" != "200" ]]; then
+            acct_control_memo["$account_id"]="fail"
+            fail=1
+            _err "row '${addr}': account control probe non-200 — token account-scope / account_id / URL scheme invalid; NOT a target finding (accounts/${account_id}/rulesets returned HTTP '${acc_code}'). Refusing to trust any kind=root 404 as 'empty'. Fail-closed."
+            continue
+          fi
+          acct_control_memo["$account_id"]="ok"
+        fi
         url="accounts/${account_id}/rulesets/phases/${phase}/entrypoint"
         ;;
       *)
@@ -238,9 +288,15 @@ run_gate() {
     # DEFAULT-DENY HTTP handling. PASS only on proven-empty; else fail-closed.
     if [[ "$code" == "200" ]]; then
       local rulecount live_id live_rules import_id
-      if ! rulecount=$(jq -e '.result.rules | length' <<<"$body" 2>/dev/null); then
+      # Assert the SHAPE is an array BEFORE trusting the count. `jq -e
+      # '.result.rules | length'` returns 0 for a degraded body — result:null,
+      # success:false, or no `rules` key all yield jq null|length==0, and `jq -e`
+      # exits 0 on a numeric 0 — so a 200 with an error/degraded body would
+      # PASS-as-empty (fail-open). Requiring type=="array" routes every null /
+      # missing / non-array `rules` to this fail-closed branch. P1-B.
+      if ! rulecount=$(jq -e '.result.rules | if type=="array" then length else error("rules not an array") end' <<<"$body" 2>/dev/null); then
         fail=1
-        _err "row '${addr}': entrypoint returned 200 but .result.rules is unparseable — refusing to read as 'empty'. Fail-closed."
+        _err "row '${addr}': entrypoint returned 200 but .result.rules is unparseable / not an array (degraded or error body) — refusing to read as 'empty'. Fail-closed."
         continue
       fi
       if [[ "$rulecount" -gt 0 ]]; then
@@ -365,12 +421,24 @@ run_audit() {
     _err "audit --live: PREAPPLY_CF_ZONE_ID empty. Fail-closed."
     return 1
   fi
-  local cout ccode
+  local cout ccode cbody ccount
   cout=$("$fetch" "zones/${zone}/rulesets/phases/${CONTROL_PHASE}/entrypoint" 2>/dev/null) || {
     _err "audit --live: control probe failed to execute. Fail-closed."; return 1; }
   ccode=$(head -n1 <<<"$cout")
   if [[ "$ccode" != "200" ]]; then
     _err "audit --live: control probe returned HTTP '${ccode}' (expected 200). Fail-closed."
+    return 1
+  fi
+  # Same degraded-200 defense as the gate (P1-B): a 200 on the KNOWN-populated
+  # control phase MUST carry a non-empty rules array, else the read path is
+  # returning junk-with-a-200 and no live count below can be trusted.
+  cbody=$(tail -n +2 <<<"$cout")
+  if ! ccount=$(jq -e '.result.rules | if type=="array" then length else error("rules not an array") end' <<<"$cbody" 2>/dev/null); then
+    _err "audit --live: control probe on known-populated phase '${CONTROL_PHASE}' returned 200 but .result.rules is not an array (degraded/error body). Fail-closed."
+    return 1
+  fi
+  if [[ "$ccount" -le 0 ]]; then
+    _err "audit --live: control probe on known-populated phase '${CONTROL_PHASE}' returned 200 with 0 rules — degraded body, not an empty phase. Fail-closed."
     return 1
   fi
   echo "control probe (${CONTROL_PHASE}) → 200 OK"
@@ -392,7 +460,10 @@ run_audit() {
     out=$("$fetch" "$url" 2>/dev/null) || { echo "| ${name} | ${kind} | ${phase} | fetch-failed | — |"; continue; }
     code=$(head -n1 <<<"$out"); body=$(tail -n +2 <<<"$out")
     if [[ "$code" == "200" ]]; then
-      cnt=$(jq -r '.result.rules | length' <<<"$body" 2>/dev/null || echo "unparseable")
+      # Array-shape assertion (P1-B): a degraded 200 (result null / no `rules`
+      # key / non-array) must read as "unparseable", never as 0 rules.
+      cnt=$(jq -e '.result.rules | if type=="array" then length else error("rules not an array") end' <<<"$body" 2>/dev/null) \
+        || cnt="unparseable (degraded 200 body)"
     elif [[ "$code" == "404" ]]; then
       cnt="0 (404 empty phase)"
     else
