@@ -1,159 +1,106 @@
 ---
-feature: seo-refresh-queue producer/consumer contract + competitor-claim substantiation
+feature: competitor-claim figure corrections + Cofounder takeaway substantiation (docs-only PR)
 issue: 6827
 branch: feat-6827-seo-queue-consumer-tier3-positioning
 pr: 6830
 plan: knowledge-base/project/plans/2026-07-22-feat-seo-queue-contract-and-competitor-claim-substantiation-plan.md
+decision_challenges: knowledge-base/project/specs/feat-6827-seo-queue-consumer-tier3-positioning/decision-challenges.md
 lane: cross-domain
 brand_survival_threshold: single-user incident
 date: 2026-07-22
 ---
 
-# Tasks — SEO Queue Contract + Competitor-Claim Substantiation
+# Tasks — Competitor-Claim Figure Corrections (docs-only)
 
-Derived from the finalized plan. **Phase order is load-bearing**: the contract change (Phase 2)
-precedes its consumers (Phase 3), and 3.1 + 3.2 are ONE commit (AC9).
+**Scope narrowed by plan-review (2026-07-22).** This PR ships only the low-risk factual
+corrections (FR1/FR2 + FR7). The pipeline mechanism (FR3/FR4/FR5) was split to **#6850** after
+six reviewers found the planned substring predicate would make the live cron worse (decoy
+attractor — see `decision-challenges.md`). FR6 and FR8 were cut. The battlecard `30,000+`
+correction is **#6851**. All are `Ref #6827`, which stays open.
 
-## Phase 0 — Preconditions
+**No product code, no cron edits, no test changes** — this is a documentation/marketing-copy diff.
 
-- [ ] **0.1** Capture artifact-age baseline: `bash scripts/cron-artifact-age.sh --all; echo "rc=$?"`
-- [ ] **0.2** Confirm cron tests green **before** editing:
-      `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-content-generator.test.ts`
-      (vitest — NOT `bun test`; `bunfig.toml` blocks bun discovery)
-- [ ] **0.3** Record the FR6 baseline metric:
-      `grep -c 'generated_date' knowledge-base/marketing/seo-refresh-queue.md` — write the number
-      into the PR body; AC10 and AC16 both compare against it
-- [ ] **0.4** Confirm ADR ordinal still free:
-      `ls knowledge-base/engineering/architecture/decisions/ | grep -c ADR-133` → `0`
-- [ ] **0.5** Re-run the FR2 sweep and diff against the plan's §FR2 Sweep Result table; report any
-      delta (the plan's table is the expected result, not a method to re-derive)
+## Phase 0 — Baseline
 
-## Phase 1 — FR1 + FR2: correction sweep
+- [ ] **0.1** Re-run the repo-wide claim-family sweep and confirm the write-site inventory below is
+      still complete (a parallel edit could have moved a site):
+      `grep -rniE '14\.6k|14,600|14600' --include='*.md' --include='*.njk' knowledge-base plugins apps`
+- [ ] **0.2** Note the blog twin's canonical register verbatim
+      (`plugins/soleur/docs/blog/2026-03-31-soleur-vs-paperclip.md:15,17`): "has passed 74,000
+      GitHub stars", "above 74,000 (verified against the GitHub API for `paperclipai/paperclip`)".
+      Match this wording; do NOT invent a new phrasing.
 
-**Method is claim-family-first** — grep the *claim*, not the twin. The twin-diff is the narrower
-second pass and is structurally blind to task 1.4.
+## Phase 1 — FR1 + FR2: correction sweep (claim-family-first)
+
+**Method: grep the claim, not the twin.** The twin-diff method is structurally blind to sites
+1.3 and 1.4 (no blog twin), which is the failure class this cycle exists to close.
 
 - [ ] **1.1** Correct all **seven** stale figures in
       `knowledge-base/marketing/distribution-content/2026-04-15-soleur-vs-paperclip.md`
-      (`:13`, `:25`, `:45`, **`:53`**, `:76`, `:98`, `:136`) to the `74,000+` soft-floor form.
-      `:53` is the `14,600+` comma form the spec's six-line list missed.
-- [ ] **1.2** Preserve each sentence's surrounding clause — do not re-point a dependent clause onto
-      the new figure (the `#6538` additive class, `review/SKILL.md:1055`)
-- [ ] **1.3** Add a dated correction note mirroring the blog twin's `:17` disclosure pattern
-      (`**Updated 2026-07-22:**` + figure + verification source)
-- [ ] **1.4** **(deepen-plan finding)** Correct `knowledge-base/marketing/content-strategy.md:154`
-      (`Paperclip (14.6k GitHub stars, MIT-licensed)` → `74,000+`) and bump its
-      `last_updated` / `last_reviewed`. Live weekly-reviewed CMO doc with **no blog twin** —
-      FR2's twin-diff cannot reach it
-- [ ] **1.5** **DO NOT edit `knowledge-base/marketing/audits/`** — the 4 hits there
-      (`2026-03-25-growth-audit.md:52,178`, `2026-03-30:77`, `2026-04-13-content-audit.md:309`)
-      are dated point-in-time records; rewriting them falsifies the record
-- [ ] **1.6** Verify AC1:
-      `grep -rniE '14\.6k|14,600|14600' knowledge-base/marketing/ --exclude-dir=audits` → **zero**
-- [ ] **1.7** Verify AC1b:
-      `grep -rniE '14\.6k|14,600|14600' knowledge-base/marketing/audits/ | wc -l` → **4**
-      (proves the carve-out was deliberate, not an oversight)
+      (`:13`, `:25`, `:45`, `:53`, `:76`, `:98`, `:136`) to the `74,000+` soft-floor form.
+      `:53` is the `14,600+` comma form.
+- [ ] **1.2** **(CMO H1)** `:25` reads "Paperclip **hit** 14.6k GitHub stars" — a bare token swap
+      to "hit 74,000+" is unidiomatic (reads as a milestone crossed at exactly the floor). Change
+      the verb to match the blog twin's register: "**has passed** 74,000 GitHub stars". The other
+      six sites are appositive/parenthetical and take the token swap cleanly.
+- [ ] **1.3** Preserve each sentence's surrounding clause — do not re-point a dependent clause onto
+      the new figure. A 5x scale change can invalidate the argument built around it; re-read each
+      site and confirm no sentence now over/under-claims (CMO confirmed framing survives — verify).
+- [ ] **1.4** **(CMO H2)** The dated correction disclosure does NOT go in post body copy (every
+      line under a `##` here is pasted to Discord/X/Bluesky/LinkedIn). Put it in **frontmatter**
+      (add a `corrections:` key) or an HTML comment **above the first `##`**:
+      `Updated 2026-07-22: Paperclip star count 14,600+ → 74,000+ (GitHub API, paperclipai/paperclip).`
+- [ ] **1.5** **(CMO M2)** Add `(verified 2026-07-20)` substantiation at the two long-form sites
+      only (`:53`, `:76`); do NOT add citation apparatus to the short social fragments.
+- [ ] **1.6** Correct `knowledge-base/marketing/content-strategy.md:154`
+      (`Paperclip (14.6k GitHub stars, MIT-licensed)` → `74,000+`) and bump its `last_updated` /
+      `last_reviewed`. Live weekly-reviewed CMO doc, **no blog twin**.
+- [ ] **1.7** Correct `knowledge-base/product/business-validation.md:84`
+      ("14.6k GitHub stars in 10 days" → the soft-floor form; drop or re-verify the "in 10 days"
+      framing, which the blog twin abandoned). **Numeric-claim correction only — no positioning
+      edit** (NG2 boundary; spec-flow guard).
 
-## Phase 2 — FR3: producer write-target (contract side FIRST)
+## Phase 2 — FR7: substantiate Cofounder takeaway #7
 
-- [ ] **2.1** Edit the Cascade Delegation Table row in
-      `plugins/soleur/agents/product/competitive-intelligence.md:54`: replace
-      `Append stale pages list to …` with an in-place §2.1/§2.2 row-update instruction
-      (set `Status` to `Stale — Update` / `Create`, clear `generated_date`, add a new §2.1 row when
-      none matches)
-- [ ] **2.2** Add an explicit prohibition on appending a new
-      `## Stale Comparison Pages Flagged for Regeneration (…)` block below `## Refresh Schedule`
-- [ ] **2.3** Add a one-line ADR-133 pointer for rationale
+- [ ] **2.1** Rewrite `knowledge-base/product/competitive-intelligence.md` Tier-3 takeaway #7 (`:120`)
+      splitting **verified** (HITL approval gates — "nothing ships without your approval"; 11-domain
+      breadth — both confirmed live 2026-07-22) from **unsubstantiated** (pricing, revenue-share,
+      memory architecture, data ownership / "graduation" — none stated on cofounder.co), with the
+      literal tag `Retrieved 2026-07-22 from cofounder.co`.
+- [ ] **2.2** Keep the `$8.7M seed / USV` funding claim (verifiable third-party signal — Built In
+      NYC / Forbes / TradedVC, Dec 2025; cite it). This affects **NG2 scoping only** — do NOT
+      rewrite any published comparison page.
+- [ ] **2.3** Add a one-line pointer to the corrected takeaway from the Tier-3 table row so the
+      next positioning cycle starts from the substantiated version.
 
-## Phase 3 — FR4 + FR5: consumer predicate + backfill — **ONE ATOMIC COMMIT**
+## Phase 3 — Verification + PR
 
-- [ ] **3.1** (FR4) In `apps/web-platform/server/inngest/functions/cron-content-generator.ts`,
-      replace the STEP 1 selection sentence with the positive predicate: `Status` contains `Stale`
-      or `Create` **AND** no `generated_date`, drawn from §2.1/§2.2 only, with §1.1–§1.7 explicitly
-      never selectable
-- [ ] **3.2** (FR4) Keep the `Priority 1 first, then Priority 2 pillar, then Priority 2 comparison`
-      ordering clause verbatim; touch **none** of the ten asserted anchors
-- [ ] **3.3** (FR4) Mark the `// Verbatim prompt extracted from .github/workflows/…` comment
-      `[superseded]` — the workflow was deleted in #4483; the TS file is now the sole source
-- [ ] **3.4** (FR5) Backfill `knowledge-base/marketing/seo-refresh-queue.md` per the plan's Phase 3
-      disposition table:
-      - [ ] Polsia + Paperclip → update `generated_date` to `2026-07-20` (drained, not eligible)
-      - [ ] Notion, Cursor, Best-Plugins → `Stale — Update`, clear `generated_date` (**eligible ×3**)
-      - [ ] NanoCorp, OpenAI Codex, Replit Agent → **new** §2.1 rows, `Won't do (2026-07-22)` + reason
-      - [ ] Tanka, CrewAI → `Won't do (2026-07-22)` + reason in `Status`, retain `generated_date`
-- [ ] **3.5** (FR5) Annotate BOTH dated blocks
-      `[SUPERSEDED — migrated to §2.1/§2.2 on 2026-07-22; retained as audit trail]`; do **not** delete
-- [ ] **3.6** (FR5) Bump `last_updated` / `last_reviewed` to `2026-07-22`
-- [ ] **3.7** **TR5 guard** — do not touch `## Priority 1: Stale Pages (Update Immediately)` or any
-      `### 1.x` heading (`cron-growth-execution` binds to them)
-- [ ] **3.8** Commit 3.1–3.7 together. Verify AC9 per-commit (NOT `git log -- A B`, a union filter):
-      `git rev-list origin/main..HEAD -- <paths>` then `git show $sha --name-only` for each
+- [ ] **3.1** **AC1 (repo-wide, named carve-outs)** — the claim family returns zero OUTSIDE the
+      asserted exclusion set:
+      `grep -rniE '14\.6k|14,600|14600' --include='*.md' --include='*.njk' knowledge-base plugins apps`
+      then subtract the named carve-outs below. No survivor outside them.
+- [ ] **3.2** **AC1b (carve-outs are deliberate, not misses)** — assert each named survivor class:
+      - `knowledge-base/marketing/audits/*` → 4 (dated point-in-time records)
+      - `knowledge-base/support/community/2026-04-16-digest.md` → 1 (dated digest)
+      - `knowledge-base/sales/battlecards/tier-3-paperclip.md` → the `30,000+` variant, **routed to
+        #6851** (different value + trigger narrative; not this PR)
+      - `**/archive/**`, `knowledge-base/project/{learnings,plans,brainstorms,specs}/` → own records
+- [ ] **3.3** **AC-positive** — the correction actually landed:
+      `grep -c '74,000+' knowledge-base/marketing/distribution-content/2026-04-15-soleur-vs-paperclip.md`
+      = 7 (or 6 + the reworded `:25`); `= 1` in `content-strategy.md`; `= 1` in `business-validation.md`.
+- [ ] **3.4** **AC7** — takeaway #7 contains both a "verified"/"unsubstantiated" split and the
+      literal `Retrieved 2026-07-22`.
+- [ ] **3.5** Markdown-lint / build-safety: confirm no table column-count drift in edited tables
+      (`business-validation.md:84`, `content-strategy.md`), and no broken frontmatter.
+- [ ] **3.6** PR body: the FR2 sweep result table (every file checked, divergence or not),
+      **both named carve-out sets**, the three follow-ups (#6850 pipeline, #6851 battlecard, #6838
+      twin-drift-gate absorbing the claim-keyed-enumeration gap), and **`Ref #6827`** (NOT `Closes`
+      — #6827 stays open for the two deferred checklist items). Note the already-distributed social
+      posts are deliberately left (CMO: 3 months old, ephemeral, point at the now-correct blog URL).
 
-## Phase 4 — FR6: artifact-delta observability
+## Out of scope (do not touch)
 
-- [ ] **4.1** Create `scripts/seo-queue-drain-delta.sh`: walk default-branch commits matching
-      `^feat\(content\): auto-generate article`; per commit compute
-      `git show <sha>:knowledge-base/marketing/seo-refresh-queue.md | grep -c generated_date`;
-      STALE when no increase across the last N, threshold derived from `0 10 * * 2,4` (never a flat
-      constant); exit 0 PASS / 1 STALE; `--report` mode for the discoverability test.
-      **Adopt `scripts/cron-artifact-age.sh`'s shape verbatim** (precedent, Phase 4.4):
-      `set -euo pipefail`, pipe-delimited table, per-cron threshold derivation, `--all`/`--help`
-- [ ] **4.1a** **Strict-mode guard (deepen-plan finding):** `grep -c` on a commit where the queue
-      file does not exist yields **empty, not `0`**, and `[[ $n -gt $m ]]` then ABORTS the script
-      under `set -euo pipefail`. Default (`n=${n:-0}`) and regex-check
-      (`[[ "$n" =~ ^[0-9]+$ ]]`) before every numeric comparison
-- [ ] **4.2** Create `scripts/seo-queue-drain-delta.test.sh` mirroring
-      `scripts/cron-artifact-age.test.sh` structure; include a fixture for the
-      "committed but drained zero rows" case — that is the defect the detector exists to catch
-- [ ] **4.3** Register **by name** in `scripts/test-all.sh`
-      (`run_suite "scripts/seo-queue-drain-delta" bash scripts/seo-queue-drain-delta.test.sh`) —
-      no glob covers `scripts/*.test.sh` (`test-all.sh:141-144`)
-- [ ] **4.4** Add the detector as a **second step** in the existing
-      `.github/workflows/scheduled-cron-artifact-age.yml` job; leave the existing step's `rc`
-      capture and report gating untouched
-- [ ] **4.5** Create `scripts/followthroughs/seo-queue-drain-6827.sh` (soak probe; sample window
-      pinned strictly after the merge commit; exit 1 = still soaking, NOT failure)
-- [ ] **4.6** Add the follow-through directive + `follow-through` label to #6827:
-      `<!-- soleur:followthrough script=scripts/followthroughs/seo-queue-drain-6827.sh earliest=<merge+8d> -->`
-- [ ] **4.7** Regression-check the shared detector: `bash scripts/cron-artifact-age.test.sh`
-
-## Phase 5 — FR8 + contract guards
-
-- [ ] **5.1** Add a conditional-agent path-trigger block to `plugins/soleur/skills/review/SKILL.md`,
-      mirroring the `#5871` / anti-slop block form (`:274`, `:284`), keyed on
-      `(^|/)plugins/soleur/docs/blog/.*vs-.*\.md$` and
-      `(^|/)knowledge-base/marketing/distribution-content/.*vs-.*\.md$`
-- [ ] **5.2** The block **cites** `review/SKILL.md:1055` + `brand-guide.md:97` — does not restate
-      them (restating creates the replicated-literal drift class `:965` warns about)
-- [ ] **5.3** Add STEP 1 block-scoped tests to `cron-content-generator.test.ts` using
-      `SUT_SOURCE.match(/STEP 1 —[\s\S]*?\nSTEP 2 —/)`: positive tokens present, §1.x exclusion
-      present, `without a "generated_date" annotation` absent
-- [ ] **5.4** Add a cascade-table guard test asserting
-      `plugins/soleur/agents/product/competitive-intelligence.md` no longer contains
-      `Append stale pages list`
-
-## Phase 6 — FR7: substantiate takeaway #7
-
-- [ ] **6.1** Rewrite `knowledge-base/product/competitive-intelligence.md` takeaway #7 (`:120`)
-      splitting **verified** (HITL approval gates — "nothing ships without your approval";
-      11-domain breadth) from **unsubstantiated** (pricing, revenue-share, memory architecture,
-      data ownership / "graduation"), with `Retrieved 2026-07-22 from cofounder.co`
-- [ ] **6.2** Keep the `$8.7M seed / USV` funding claim (verifiable third-party signal, cited);
-      flag `Pro $20/mo` as unsubstantiated per TR4
-- [ ] **6.3** **Anti-half-sweep:** add one-line pointers to takeaway #7 from
-      `knowledge-base/product/business-validation.md:83` and the Tier-3 table row at `:100`
-
-## Phase 7 — ADR + verification
-
-- [ ] **7.1** Write `ADR-133-seo-refresh-queue-canonical-section-and-positive-predicate.md` with
-      `## Decision` + `## Alternatives Considered` (record the rejected "new machine-readable
-      section" option). Cite ADR-126 for the FR6 extension. Ordinal is **provisional** — re-verify
-      against `origin/main` and sweep `grep -rn 'ADR-133' knowledge-base/project/{plans,specs}/feat-6827-*/`
-      if renumbered
-- [ ] **7.2** `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/`
-- [ ] **7.3** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
-      (NOT `npm run -w …` — repo root declares no `workspaces` field)
-- [ ] **7.4** `bash scripts/test-all.sh` (exit gate)
-- [ ] **7.5** Walk AC1, AC1b, AC2–AC15; record each verdict
-- [ ] **7.6** PR body: FR2 sweep table + both scope-outs + FR6 layer name + **`Ref #6827`**
-      (NOT `Closes` — the issue stays open for the two deferred checklist items)
+Pipeline FR3/FR4/FR5 (#6850), FR6, FR8, the `soleur-vs-cofounder` page (NG1), any published-page
+Tier-3 rewrite (NG2), the 7 content-row drains (NG3), dark-cron liveness (#4375/NG4), the
+non-affiliation disclaimer (#6837/NG5), `product-roadmap validate` (NG6), one-issue-per-page (NG7),
+the battlecard (#6851), and ADR-133 (moves to #6850 with the pipeline change).
