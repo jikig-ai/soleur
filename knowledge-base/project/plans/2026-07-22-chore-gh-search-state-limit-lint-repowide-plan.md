@@ -284,8 +284,10 @@ represented" test does), never on the post-exemption offender set.
 
 ### Phase 2 — Bring genuine violations into compliance (GREEN)
 1. Apply D4 fixes to the re-derived executable sites (add explicit `--state` / `-L`).
-2. Confirm the D2(b) `linked:issue #<N>` exemption keeps line 55 unflagged — verify
-   `git diff --exit-code -- plugins/soleur/skills/one-shot/SKILL.md` shows **no change**.
+2. Confirm the D2(b) `linked:issue #<N>` exemption keeps line 55 unflagged — verify the fixture
+   LINE is byte-identical (`diff` of `sed -n '55p'` from origin/main vs HEAD is empty). Do NOT
+   assert a whole-file `git diff --exit-code`: the repo-wide `-L` sweep legitimately fixes a
+   *different* enumerating probe at `one-shot/SKILL.md:180`, so the file as a whole changes.
 3. Run the mutation battery (see Test Scenarios) to prove each new assertion has real
    discriminating power, then confirm the un-mutated suite is GREEN.
 
@@ -383,10 +385,14 @@ planned file path (`components.test.ts`, `rule-prune.sh`, `inngest-server.md`, `
       even when a trailing `.[0]`/`// empty` is present** (the D2-soundness fix); accepts a pure
       existence drill (no narrowing), `--limit 1`, an explicit `-L`, and the `linked:issue #<N>`
       bounded shape.
-- [ ] The `linked:issue #<N>` probe at `one-shot/SKILL.md:55` is **byte-identical**:
-      `git diff --exit-code -- plugins/soleur/skills/one-shot/SKILL.md` shows no change, and the
-      un-mutated suite is GREEN. (Mechanism — bounded-shape exemption vs anything else — is an
-      implementation choice, not part of this criterion.)
+- [x] The `linked:issue #<N>` probe **line** at `one-shot/SKILL.md:55` is **byte-identical**
+      (`diff <(git show origin/main:…one-shot/SKILL.md | sed -n '55p') <(sed -n '55p' …)` empty),
+      and the un-mutated suite is GREEN. (Mechanism — bounded-shape exemption vs anything else — is
+      an implementation choice, not part of this criterion.) **/work reconciliation:** the
+      constraint is scoped to the fixture LINE, not the whole file — `one-shot/SKILL.md:180` carries
+      a *different* probe (`--label code-review … --search "PR #<n>"`, a genuine enumeration, not a
+      `linked:issue` shape) that the repo-wide `-L` sweep correctly flagged and fixed. A whole-file
+      `git diff --exit-code` therefore intentionally shows that one-line change; line 55 is untouched.
 - [ ] Every executable-surface `gh (pr|issue) list --search` probe re-derived at /work is
       compliant (explicit `--state`, and explicit `-L`/`--limit` unless it is a pure existence
       drill with no post-search narrowing OR the `linked:issue #N` bounded shape).

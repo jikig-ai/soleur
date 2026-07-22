@@ -236,7 +236,7 @@ while IFS=$'\t' read -r id section first_seen prefix; do
   # --json title forces JSON output; without it, `gh` emits a TSV table
   # that jq would silently error on via the `|| echo "0"` tail (working
   # by accident — we'd re-file every time gh's default format changed).
-  existing=$(gh issue list --state all -L 200 --search "$title in:title" --json title 2>/dev/null \
+  existing=$(gh issue list --state open -L 200 --search "$title in:title" --json title 2>/dev/null \
     | jq --arg t "$title" '[.[] | select(.title == $t)] | length' 2>/dev/null \
     || echo "0")
   if [[ "${existing:-0}" -gt 0 ]]; then

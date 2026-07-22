@@ -414,6 +414,8 @@ const EXEC_SURFACE_GLOBS = [
   "plugins/soleur/agents/**/*.md",
   "scripts/**/*.sh",
   "plugins/soleur/skills/**/scripts/*.sh",
+  "apps/**/scripts/*.sh",
+  "tools/**/*.sh",
   ".claude/hooks/**/*.sh",
   ".openhands/hooks/**/*.sh",
   ".github/workflows/**/*.yml",
@@ -436,7 +438,12 @@ function execSurfaceFiles(): { file: string; raw: string; surface: Surface }[] {
   const seen = new Set<string>();
   const out: { file: string; raw: string; surface: Surface }[] = [];
   for (const glob of EXEC_SURFACE_GLOBS) {
-    for (const rel of new Glob(glob).scanSync(REPO_ROOT)) {
+    // `dot: true` is load-bearing — Bun's Glob defaults to dot:false, which
+    // silently skips EVERY dot-directory, so `.github/workflows`, `.github/
+    // actions`, `.claude/hooks`, and `.openhands/hooks` (the highest-value CI +
+    // hook surface this lint claims to cover) would match ZERO files and the
+    // offender assertions would pass vacuously against an absent surface class.
+    for (const rel of new Glob(glob).scanSync({ cwd: REPO_ROOT, dot: true })) {
       // Test fixtures deliberately encode the broken form; never admit them,
       // even a future scripts/foo.test.sh landing under an included glob.
       if (rel.endsWith(".test.sh")) continue;
@@ -452,37 +459,21 @@ function execSurfaceFiles(): { file: string; raw: string; surface: Surface }[] {
   return out;
 }
 
-// Join explicit shell/YAML-block line continuations (a physical line ending in
-// `\`) into ONE logical line, so a multi-line `gh … list` is captured whole —
-// its --limit or jq drill routinely lives on a continuation line, and a
-// line-bounded capture would both MISS that drill (false negative on the
-// select-after-truncation class) and FALSE-POSITIVE on a correct probe whose
-// --limit is one line down. This does NOT reintroduce the launder-by-neighbor
-// bug (#6786): only backslash-continued lines are joined — they are
-// unambiguously ONE command — and GH_LIST_CMD stays newline-bounded, so an
-// UNcontinued neighbour on the next line is never swallowed.
-function joinContinuations(raw: string): string[] {
-  const out: string[] = [];
-  let buf: string | null = null;
-  for (const line of raw.split("\n")) {
-    const cont = /\\\s*$/.test(line);
-    const body = cont ? line.replace(/\\\s*$/, "") : line;
-    buf = buf === null ? body : `${buf} ${body.replace(/^\s+/, "")}`;
-    if (!cont) {
-      out.push(buf);
-      buf = null;
-    }
-  }
-  if (buf !== null) out.push(buf);
-  return out;
-}
-
 interface Probe {
   file: string;
   cmd: string;
   /** True when the command sits inside a fenced code block rather than an inline span. */
   fenced: boolean;
 }
+
+// Shell statement separators. A backslash-continued logical line can chain
+// MULTIPLE commands with `&&`/`||`/`;`, and `GH_LIST_CMD` is greedy through
+// everything but backtick/newline — so without splitting, two chained probes
+// collapse into ONE capture and the SECOND command's --state/-L launders the
+// FIRST (the #6786 launder class, reintroduced across a continuation). Split on
+// these BUT NOT on a single `|` pipe: a `| jq 'select(…)'` drill is part of the
+// SAME command and the narrowing/existence detectors must still see it.
+const STATEMENT_SEP = /&&|\|\||;/;
 
 /** Every `gh pr|issue list` command carrying `--search`, one entry per command. */
 export function extractSearchProbes(
@@ -492,19 +483,45 @@ export function extractSearchProbes(
     .flatMap(({ file, raw, surface = "md" }) => {
       const found: Probe[] = [];
       let fenced = false;
-      for (const line of joinContinuations(raw)) {
+      // A `\`-continued command accumulates here across physical lines, so a
+      // multi-line `gh … list` is captured whole — its --limit / jq drill
+      // routinely lives on a continuation line, and a line-bounded capture would
+      // both MISS that drill (false negative on the select-after-truncation
+      // class) and FALSE-POSITIVE on a correct probe whose --limit is one line
+      // down. GH_LIST_CMD stays newline-bounded and we split on STATEMENT_SEP, so
+      // an UNcontinued neighbour never launders (#6786).
+      let buf: string | null = null;
+      const flush = () => {
+        if (buf === null) return;
+        for (const stmt of buf.split(STATEMENT_SEP)) {
+          for (const m of stmt.matchAll(GH_LIST_CMD)) {
+            found.push({ file, cmd: m[0].trim(), fenced });
+          }
+        }
+        buf = null;
+      };
+      for (const line of raw.split("\n")) {
+        // Fence delimiters and shell/YAML comments are ALWAYS their own physical
+        // line and never part of a command, so they terminate any pending
+        // continuation and are handled BEFORE continuation-joining. This ordering
+        // is load-bearing: joining a comment line that ends in `\` would
+        // otherwise swallow the real probe on the next line into a comment that
+        // is then skipped whole (a `.sh`/`.yaml` false negative).
         if (surface === "md" && /^\s*```/.test(line)) {
+          flush();
           fenced = !fenced;
           continue;
         }
-        // Shell/YAML comment lines are the prose surface — they DESCRIBE a
-        // command, they do not run it. Markdown has no comment convention here;
-        // its prose-vs-command boundary is the fence/backtick handled above.
-        if (surface !== "md" && /^\s*#/.test(line)) continue;
-        for (const m of line.matchAll(GH_LIST_CMD)) {
-          found.push({ file, cmd: m[0].trim(), fenced });
+        if (surface !== "md" && /^\s*#/.test(line)) {
+          flush();
+          continue;
         }
+        const cont = /\\\s*$/.test(line);
+        const body = cont ? line.replace(/\\\s*$/, "") : line;
+        buf = buf === null ? body : `${buf} ${body.replace(/^\s+/, "")}`;
+        if (!cont) flush();
       }
+      flush(); // trailing unterminated continuation
       return found;
     })
     .filter(({ cmd }) => /--search\b/.test(cmd));
@@ -528,17 +545,25 @@ export function findContradictingStateProbes(
 
 // -- #6793 truncation detector -------------------------------------------------
 // An explicit result cap. `-L N`, `-L=N`, or `--limit N`. Anchored on a leading
-// boundary so it cannot match inside `--label`.
+// boundary so it cannot match inside `--label`. Only the space/`=`-separated
+// form is recognized — an attached `-L100` would NOT match and the probe would
+// be flagged (fail-CLOSED: a false red-line forcing a reformat, never a silent
+// pass), so the strict form is a safe authoring contract.
 const HAS_LIMIT = /(?:^|\s)(?:-L|--limit)(?:[=\s]|$)/;
 // A pure existence drill: reduce the result to "does ≥1 row exist?". Safe at the
 // 30-row cap — if >30 rows match, ≥1 certainly does.
 const EXISTENCE_DRILL = /\.\[0\]|\/\/\s*empty|first\s*\(/;
-// A result-set narrowing that runs AFTER the search, so it operates on the
-// already-truncated 30 rows: an exact-match select, or a count. When present,
-// the existence drill is NOT truncation-safe — the row the decision needs can
-// sit past row 30 and be evicted before the narrowing sees it (the
-// content-publisher.sh select-after-search fail-open the #6793 deepen surfaced).
-const POST_SEARCH_NARROWING = /select\s*\(|\blength\b/;
+// A result-set operation that runs AFTER the search, so it operates on the
+// already-truncated 30 rows and its result depends on the FULL match set: an
+// exact-match select, a count, or a REORDER (sort/min/max/group). When present,
+// a following existence drill is NOT truncation-safe — the row the decision
+// needs (the exact match; the true min/max; the oldest) can sit past row 30 and
+// be evicted before the operation sees it. `select(`/`length` were the #6793
+// deepen's examples (content-publisher.sh select-after-search); the real
+// invariant is "any post-search op whose answer depends on the whole set", so a
+// `sort_by(.createdAt) | .[0]` extreme-picker is the same fail-open class.
+const POST_SEARCH_NARROWING =
+  /select\s*\(|\b(?:sort|min|max|group)_by\s*\(|\bsort\b|\blast\b|\blength\b/;
 // A single issue's FORMALLY-linked PR set is bounded by domain semantics well
 // under 30, so a `linked:issue #N` probe never needs an explicit cap (D2b). The
 // `#` anchor keeps this from exempting an unrelated string containing
@@ -749,6 +774,87 @@ describe("collision-gate probes carry an explicit --state", () => {
     ).toHaveLength(0);
   });
 
+  test("a chained `&&`/`;` command cannot launder an earlier stateless/limitless probe", () => {
+    // Both commands share ONE backslash-continued logical line; without the
+    // statement-split the greedy capture would swallow the second command's
+    // --state/--limit and hide the first (the #6786 launder class).
+    const raw =
+      'X=$(gh issue list --search "label:x" --json number && \\\n' +
+      '  gh pr list --search "label:y" --state all --limit 50 --json number)';
+    expect(findStatelessProbes([{ file: "f.sh", surface: "sh", raw }])).toHaveLength(1);
+    expect(findUnlimitedProbes([{ file: "f.sh", surface: "sh", raw }])).toHaveLength(1);
+  });
+
+  test("a comment line ending in `\\` does not swallow the real probe on the next line", () => {
+    // A shell/YAML `#` comment does NOT honour line continuation; joining it
+    // would hide the following command inside a skipped comment.
+    const raw = '# see the dedup note \\\ngh issue list --search "x in:title" --json number';
+    expect(findStatelessProbes([{ file: "f.sh", surface: "sh", raw }])).toHaveLength(1);
+    expect(findUnlimitedProbes([{ file: "f.sh", surface: "sh", raw }])).toHaveLength(1);
+  });
+
+  test("unlimited detector flags a reorder-after-search extreme-picker (sort_by | .[0])", () => {
+    // The exact row (oldest/min/max) can be evicted past the 30-row cap before
+    // the reorder runs — same fail-open class as select-after-search.
+    expect(
+      findUnlimitedProbes([
+        {
+          file: "f",
+          raw: '`gh issue list --state all --search "label:x" --json number,createdAt --jq \'sort_by(.createdAt) | .[0].number\'`',
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("unlimited detector flags a count-after-search even with a trailing existence token", () => {
+    // Pins the `length` alternative of POST_SEARCH_NARROWING: a `.[0]`/`// empty`
+    // token must NOT exempt a completeness-consuming count.
+    expect(
+      findUnlimitedProbes([
+        {
+          file: "f",
+          raw: '`gh issue list --state all --search "x" --json number --jq \'.[0].total // empty | length\'`',
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("unlimited detector does NOT exempt a bare `linked:issue` without #N", () => {
+    // Pins the `#` anchor: a bare `linked:issue` (every PR linked to ANY issue)
+    // is unbounded and must be flagged.
+    expect(
+      findUnlimitedProbes([
+        {
+          file: "f",
+          raw: '`gh pr list --state all --search "linked:issue in:title" --json number --jq \'.[].number\'`',
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("unlimited detector still flags a --label-bearing enumerating probe", () => {
+    // Pins that HAS_LIMIT does not match inside `--label` and wrongly exempt.
+    expect(
+      findUnlimitedProbes([
+        {
+          file: "f",
+          raw: '`gh issue list --label foo --state all --search "x" --json number --jq \'.[].number\'`',
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("unlimited detector exempts each existence-drill token independently", () => {
+    // Pins the `first(` and standalone `// empty` alternatives of EXISTENCE_DRILL
+    // (fail-closed, but each alternative gets its own control).
+    expect(
+      findUnlimitedProbes([
+        { file: "a", raw: '`gh pr list --state all --search "x" --json number --jq \'first(.[]).number\'`' },
+        { file: "b", raw: '`gh pr list --state all --search "x" --json number --jq \'.total // empty\'`' },
+      ]),
+    ).toHaveLength(0);
+  });
+
   // `skills/**/*.md` under PLUGIN_ROOT — the #6786 plugin-local surface, kept for
   // the inline-vs-fenced class assertion and the "wider than SKILL.md" widening
   // pin. #6793's offender assertions run over the repo-wide `corpus` below.
@@ -762,6 +868,26 @@ describe("collision-gate probes carry an explicit --state", () => {
   // run over THIS, so a stateless/truncatable probe anywhere an agent or CI runs
   // `gh` — not just under plugins/soleur/skills — red-lines here.
   const corpus = execSurfaceFiles();
+
+  // Each declared surface CLASS must be non-empty in the live corpus, so a
+  // silent per-surface drop (the Bun `dot:false` default that skipped the entire
+  // .github/.claude/.openhands surface, or a future glob regression) red-lines
+  // here instead of letting the offender assertions pass vacuously against an
+  // absent class. The dot-directory anchor pins the CI + hook surface directly.
+  test("every executable-surface class is represented in the corpus", () => {
+    const has = {
+      md: corpus.some((f) => f.surface === "md"),
+      sh: corpus.some((f) => f.surface === "sh"),
+      yaml: corpus.some((f) => f.surface === "yaml"),
+      dotDir: corpus.some((f) => f.file.startsWith(".github/") || f.file.startsWith(".claude/")),
+    };
+    expect(
+      has,
+      `corpus surface coverage ${JSON.stringify(has)} across ${corpus.length} files — a false ` +
+        "here means an entire surface class (markdown docs / shell scripts / CI+hook YAML / " +
+        "dot-directories) is silently absent from the scan, so its offender checks are vacuous",
+    ).toEqual({ md: true, sh: true, yaml: true, dotDir: true });
+  });
 
   // Anti-vacuity. A bare `length > 0` floor is too weak: narrowing the regex so it can
   // no longer see fenced probes leaves the inline ones behind, keeps the population
