@@ -59,3 +59,14 @@ The plan's FR3/FR4/FR5 as written would make the **live** `cron-content-generato
 - **STEP 5 annotate hop** (spec-flow #4): STEP 5 names no row/section, so under a positive
   predicate a misplaced annotation regenerates the same row every fire → carried into the pipeline
   redesign issue.
+
+## Correction logged during /work (2026-07-22) — FR7 premise was wrong
+
+The brainstorm/CMO premise "pricing, revenue-share, memory, data ownership NOT stated on
+cofounder.co" came from a single **landing-page** WebFetch. During implementation the cited
+subpages were checked: pricing + ownership-graduation are stated verbatim on `cofounder.co/pricing`,
+and the three-tier / sleep-time-compute memory system on the cited GIC post. So nearly all
+convergence claims ARE substantiated; only "no revenue share" remains an inference. Takeaway #7 was
+written to the CORRECTED split, not the original premise. This is itself an instance of the issue's
+own defect class — asserting a claim's status without checking every cited source — so it is carried
+into the deferred #6850/#6827 positioning work as an explicit caution.
