@@ -272,6 +272,19 @@ discoverability_test:
 
 ## Acceptance Criteria
 
+> **Scope split (PR #6839).** This PR ships the **un-gated foundations** — ADR-133 + C4, the CI
+> keyless-sign/dual-publish producer (workflow + tested packager), the `INNGEST_CONFIG_DIGEST`
+> `doppler_secret` (authored; applied at the cutover), and the dormant drift comparator (Inngest
+> dispatcher + GHA executor + tested core). The **host-side consumer** — the verify+apply script,
+> the systemd timer/service, the baked cosign material, the isolation self-check regex+floor edit,
+> and the `DEST_SPEC`/`FILE_MAP` additions — is baked into `cloud-init-inngest.yml` and **rides the
+> #6178 cutover** (PR #6348). So AC1/AC2/AC3/AC10/AC12–AC18 (host verify+apply arms, DEST_SPEC) land
+> with that cutover, not here. **Signing reconciliation (DEEPEN-CORRECTION-1):** AC5/AC17 are
+> satisfied via **keyless** cosign (no static key minted; the committed `cosign-trusted-root.json` +
+> a config-workflow identity regexp are the verify anchor), which also means no operator secret-mint
+> step. **DEC-FLOOR / D-ZOT:** dark-present pointer + GHCR-direct host pull (v1) — both host-side, so
+> their AC1/floor + zot-pull assertions ride the cutover.
+
 ### Pre-merge (PR)
 - [ ] AC1: `cloud-init-inngest.yml` isolation self-check includes `INNGEST_CONFIG_DIGEST` in the regex AND floor `-lt 6` (grep-assert both).
 - [ ] AC2: The host verify+apply script (a) `cosign verify-blob --key`s before apply, (b) rejects version ≤ last-applied, (c) verifies per-file sha256 vs manifest, (d) applies only via `infra-config-install.sh` (no arbitrary dest). `.test.sh` asserts each arm.
@@ -279,7 +292,7 @@ discoverability_test:
 - [ ] AC4: No new inbound rule added to the inngest host nftables (grep the nft set; deny-all-public preserved).
 - [ ] AC5: The CI workflow signs with the static key and publishes to **both** zot and GHCR; the public verify key is committed and baked.
 - [ ] AC6: `INNGEST_CONFIG_DIGEST` `doppler_secret` + monitor `terraform plan` shows only the intended adds (no create of `hcloud_server`/host, no destroy).
-- [ ] AC7: ADR-133 exists with the four required headings; C4 tests green; `.c4` renders the new signer/registry/host edges.
+- [x] AC7: ADR-133 exists with the four required headings; C4 tests green; `.c4` renders the new signer/registry/host edges.
 - [ ] AC8: `PR body uses Ref #6780` (NOT Closes — the channel is only proven after it rides the #6178 cutover provision; close #6780 post-cutover with off-box marker evidence).
 - [ ] AC10 (HARD-1): a test asserts the engine paths (`inngest-config-refresh.sh`, cosign binary, pubkey, `.timer`/`.service`, `applied.version`) are NOT in `DEST_SPEC`/`FILE_MAP`.
 - [ ] AC11 (HARD-2): a test asserts an old-signed bundle re-published under a higher pointer/annotation version is REJECTED (version read only from the verified signed bytes).
@@ -290,7 +303,7 @@ discoverability_test:
 - [ ] AC16 (HARD-4): the verify+apply `.service` runs `User=root`, no deploy→sudoers grant for this unit.
 - [ ] AC17 (AC5 round-trip, spec-flow #3): a test signs with the CI static key and verifies with the committed/baked pubkey in the same test (catches key-A-sign / key-B-bake mismatch).
 - [ ] AC18 (spec-flow #13): a test asserts every refresh-set dest resolves in BOTH `DEST_SPEC` and `FILE_MAP` with matching mode/owner (lockstep).
-- [ ] AC19 (HARD-8): the off-box drift comparator exists (reads pointer + latest `APPLIED` marker, alarms on divergence); the boot-floor marker is distinguishable (`version=floor`).
+- [x] AC19 (HARD-8): the off-box drift comparator exists (reads pointer + latest `APPLIED` marker, alarms on divergence); the boot-floor marker is distinguishable (`version=floor`).
 
 ### Post-merge (operator / follow-through)
 - [ ] AC9 ⏳: after the #6178 cutover provision bakes the channel, a host-script edit → CI sign+publish → pointer promote → timer applies, verified by `SOLEUR_INFRA_PULL_APPLIED` reaching Better Stack (off-box). Enroll as a **follow-through** (soak) with a verification script under `scripts/followthroughs/` — `/ship` Phase 5.5 gate.
