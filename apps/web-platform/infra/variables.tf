@@ -409,6 +409,12 @@ variable "betterstack_logs_token" {
   sensitive   = true
 }
 
+variable "inngest_config_digest" {
+  description = "Promoted digest pointer (INNGEST_CONFIG_DIGEST) for the ADR-133 pull-based config-refresh channel (#6780). The IMMUTABLE @sha256 digest of the currently-promoted, keyless-signed config bundle. Provisioned into the ISOLATED soleur-inngest/prd project by inngest-config-digest.tf; the host timer resolves it, pulls the bundle @sha256 GHCR-direct, and cosign-verify-blobs offline before applying. Published to Doppler soleur/prd_terraform as TF_VAR_inngest_config_digest (--name-transformer tf-var). NO default (hr-tf-variable-no-operator-mint-default) — the value is a promotion output, set on each `terraform apply`-driven promotion (HARD-6: Terraform is the writer, no standing CI write-token into the isolated project). Unlike the sibling secrets this is NOT rotation-at-source: promotion CHANGES the value, so the resource does NOT ignore_changes=[value]."
+  type        = string
+  sensitive   = true
+}
+
 # --- PR-H (#3244) — GitHub App + KB-drift -----------------------------------
 # Post-#4150: client_id / client_secret / github_actions_token /
 # doppler_token_kb_drift variables were deleted. See plan
