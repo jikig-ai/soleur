@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-07-20T15:57:40Z",
+  "generated_at": "2026-07-22T07:29:18Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -43,19 +43,6 @@
     },
     {
       "id": "cq-agents-md-tier-gate",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": " → docs-only"
-    },
-    {
-      "id": "cq-agents-md-why-single-line",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -744,19 +731,6 @@
       "rule_text_prefix": " → core"
     },
     {
-      "id": "hr-weigh-every-decision-against-target-user-impact",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": " → core"
-    },
-    {
       "id": "hr-when-a-command-exits-non-zero-or-prints",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -1314,11 +1288,37 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": " → core"
+    },
+    {
+      "id": "cq-agents-md-why-single-line",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 1,
+      "warn_count": 0,
+      "fire_count": 1,
+      "prevented_errors": 0,
+      "last_hit": "2026-07-22T07:29:15Z",
+      "first_seen": "2026-07-22T07:29:15Z",
+      "rule_text_prefix": " → docs-only"
+    },
+    {
+      "id": "hr-weigh-every-decision-against-target-user-impact",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 1,
+      "warn_count": 0,
+      "fire_count": 1,
+      "prevented_errors": 0,
+      "last_hit": "2026-07-22T07:16:37Z",
+      "first_seen": "2026-07-22T07:16:37Z",
+      "rule_text_prefix": " → core"
     }
   ],
   "summary": {
     "total_rules_tagged": 101,
-    "rules_unused_over_8w": 101,
+    "rules_unused_over_8w": 99,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "drops_jq_fail_count": 0,
