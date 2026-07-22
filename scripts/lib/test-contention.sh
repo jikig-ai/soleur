@@ -41,6 +41,15 @@ TC_SELF_PID="${TC_SELF_PID:-$$}"
 TC_MIN_AVAIL_MB="${TC_MIN_AVAIL_MB:-1024}"
 _TC_CLK_TCK="$(getconf CLK_TCK 2>/dev/null || echo 100)"
 
+# session-state.sh supplies the advisory lock (Phase 3). Resolved relative to
+# this lib so it works from any CWD; overridable for tests.
+_tc_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+TC_SESSION_STATE="${TC_SESSION_STATE:-$_tc_lib_dir/../../.claude/hooks/lib/session-state.sh}"
+# A test-all.sh run is minutes, not seconds. with_lock's 30s default would fire
+# the advisory path on essentially every genuine overlap, so size the wait to a
+# full suite.
+TC_LOCK_TIMEOUT="${TC_LOCK_TIMEOUT:-900}"
+
 # --- Capacity probes -------------------------------------------------------
 # `df -P` pins POSIX single-line output so a long device name cannot wrap and
 # shift the awk field indices.
@@ -262,6 +271,64 @@ tc_preamble() {
 # per-suite delta (appended to TEST_TIMING_LOG by run_suite) attributes it to
 # a named suite. That per-suite attribution is the probe for hypothesis H4 —
 # a shared derived tempfile path in some suite reached by the runner.
+
+# --- Advisory queue (Phase 3) ----------------------------------------------
+#
+# Replaces the manual `ps -ef | grep test-all` ritual with a git-common-dir
+# advisory lock (session-state.sh's acquire_lock, so all worktrees of one repo
+# share one lock). It is ADVISORY — the load-bearing safety property: on
+# timeout it PROCEEDS with a named banner, NEVER aborts. Aborting would turn
+# today's silent 10-minute wait into a hard failure, strictly worse than the
+# status quo; proceeding-with-announcement preserves today's worst case (an
+# interleaved run) while making it attributable, which is the actual defect.
+# Because it never blocks, no failure mode of the lock can wedge a session.
+#
+# Emits exactly one named status line so the reason is never inferred:
+#   LOCK_SKIPPED_DISABLED / LOCK_SKIPPED_CI / LOCK_UNAVAILABLE /
+#   LOCK_ACQUIRED / LOCK_CONTENDED_PROCEEDING
+#
+# Deliberately NO stale-holder detection (Phase 3.6): flock is kernel-managed
+# and inode-bound, released automatically once the last fd holder dies (proven
+# by AC5b). A "dead pid still holds the lock" state is unreachable with real
+# flock, so code defending it would be dead code.
+tc_acquire() {
+  local name="$1"
+  local timeout_s="${2:-$TC_LOCK_TIMEOUT}"
+
+  # Kill switch — honoured before anything else so an operator can always
+  # disable the layer in an emergency.
+  if [[ "${SOLEUR_DISABLE_SESSION_STATE:-}" == "1" ]]; then
+    echo "[contention] LOCK_SKIPPED_DISABLED: SOLEUR_DISABLE_SESSION_STATE=1; not serializing." >&2
+    return 0
+  fi
+
+  # CI exemption. Matrix shards run one job per runner, so a lock buys nothing
+  # and risks wedging a matrix.
+  if [[ -n "${CI:-}" ]]; then
+    echo "[contention] LOCK_SKIPPED_CI: CI is set; matrix shards are already isolated." >&2
+    return 0
+  fi
+
+  if [[ ! -f "$TC_SESSION_STATE" ]]; then
+    echo "[contention] LOCK_UNAVAILABLE: session-state.sh not found at $TC_SESSION_STATE; proceeding without serialization." >&2
+    return 0
+  fi
+  # shellcheck source=/dev/null
+  source "$TC_SESSION_STATE" 2>/dev/null || true
+  if ! declare -F acquire_lock >/dev/null 2>&1; then
+    echo "[contention] LOCK_UNAVAILABLE: acquire_lock not defined after sourcing; proceeding." >&2
+    return 0
+  fi
+
+  if acquire_lock "$name" "$timeout_s"; then
+    echo "[contention] LOCK_ACQUIRED: '$name' (worktrees of this repo serialize on it)." >&2
+    return 0
+  fi
+
+  # Advisory: proceed, never abort.
+  echo "[contention] LOCK_CONTENDED_PROCEEDING: '$name' still held after ${timeout_s}s; proceeding anyway (advisory). A failure now may be interleaving — re-run the failing suite in isolation before diagnosing." >&2
+  return 0
+}
 
 tc_epilogue() {
   local start_count="${1:-0}"

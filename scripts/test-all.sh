@@ -60,6 +60,7 @@ if ! declare -F tc_preamble >/dev/null 2>&1; then
   tc_preamble() { :; }
   tc_epilogue() { :; }
   tc_tmp_entry_count() { printf '0\n'; }
+  tc_acquire() { :; }
 fi
 
 # --- Test group selector ---
@@ -147,6 +148,12 @@ run_suite() {
 # as a regression (AC1/AC2).
 tc_preamble
 _TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
+
+# Advisory, self-announcing queue (#6789). Acquired INTERNALLY (not by a caller
+# wrapping the script) so no invocation can forget it. It NEVER aborts — on
+# timeout it proceeds with a named banner, so it cannot wedge a run. CI and the
+# SOLEUR_DISABLE_SESSION_STATE kill switch are honoured inside tc_acquire.
+tc_acquire "test-all"
 
 # Pre-suite bash/python tests — scripts shard.
 if want_scripts; then

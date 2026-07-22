@@ -302,11 +302,121 @@ else
   fail "module mutated TC_TMPDIR: $before_n -> $after_n"
 fi
 
+echo "=== Phase 3: advisory queue ==="
+
+SS_ROOT="$TESTROOT/session-state"
+mkdir -p "$SS_ROOT/locks"
+# All lock arms point at the REAL session-state.sh (the primitive under test is
+# reused, not re-implemented) but anchor its state root into TESTROOT.
+lock_env() {
+  env SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" \
+      TC_PROC_ROOT="$FAKE_PROC" TC_TMPDIR="$FAKE_TMP" TC_XDG_DIR="" \
+      "$@"
+}
+
+# --- Arm 10: POSITIVE CONTROL — a free lock is acquirable -------------------
+# Without this control, a broken probe reads as "blocked" and would justify
+# building the stale-holder detection Phase 3.6 proves is dead code (the
+# three-attempt trap in the plan's Sharp Edges).
+out="$(lock_env bash -c "source '$LIB'; tc_acquire 6789-free 3; echo RC=\$?" 2>&1 || true)"
+if [[ "$(grep -cE 'LOCK_ACQUIRED' <<<"$out" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'RC=0' <<<"$out" || true)" -ge 1 ]]; then
+  pass "POSITIVE CONTROL: a free lock is acquired (probe is valid)"
+else
+  fail "positive control failed — later lock arms are meaningless: $out"
+fi
+
+# --- Arm 11: advisory timeout PROCEEDS, never aborts (AC4) ------------------
+# A live holder is synthesized by a background shell holding the same flock.
+HELD="$SS_ROOT/locks/6789-testall.lock"
+: > "$HELD"
+flock -x "$HELD" -c 'sleep 12' &
+HOLDER=$!
+sleep 1
+lock_env bash -c "source '$LIB'; tc_acquire 6789-testall 2; echo RC=\$?" \
+  > "$TESTROOT/timeout.txt" 2>&1 || true
+if [[ "$(grep -cE 'RC=0' "$TESTROOT/timeout.txt" || true)" -ge 1 ]]; then
+  pass "AC4: a lock held past the timeout still returns success (advisory)"
+else
+  fail "AC4: contended acquire did not return success; got: $(cat "$TESTROOT/timeout.txt")"
+fi
+if [[ "$(grep -cE 'LOCK_CONTENDED_PROCEEDING' "$TESTROOT/timeout.txt" || true)" -ge 1 ]]; then
+  pass "AC4: the advisory banner names LOCK_CONTENDED_PROCEEDING"
+else
+  fail "AC4: no advisory banner; got: $(cat "$TESTROOT/timeout.txt")"
+fi
+kill "$HOLDER" 2>/dev/null || true
+wait "$HOLDER" 2>/dev/null || true
+
+# --- Arm 12: kill switch (AC3) ---------------------------------------------
+out="$(lock_env env SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash -c "source '$LIB'; tc_acquire 6789-ks 2; echo RC=\$?" 2>&1 || true)"
+if [[ "$(grep -cE 'RC=0' <<<"$out" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'LOCK_SKIPPED_DISABLED' <<<"$out" || true)" -ge 1 ]]; then
+  pass "AC3: SOLEUR_DISABLE_SESSION_STATE=1 skips acquisition and says so"
+else
+  fail "AC3: kill switch not honoured; got: $out"
+fi
+
+# --- Arm 13: CI exemption (AC5) --------------------------------------------
+out="$(lock_env env CI=true \
+  bash -c "source '$LIB'; tc_acquire 6789-ci 2; echo RC=\$?" 2>&1 || true)"
+if [[ "$(grep -cE 'RC=0' <<<"$out" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'LOCK_SKIPPED_CI' <<<"$out" || true)" -ge 1 ]]; then
+  pass "AC5: CI set skips acquisition and says so"
+else
+  fail "AC5: CI exemption not honoured; got: $out"
+fi
+# MUTATION CONTROL: without CI, the CI-skip path must NOT fire — otherwise a lib
+# that always skips passes arm 13 while locking nothing, ever.
+out="$(lock_env bash -c "source '$LIB'; tc_acquire 6789-noci 2" 2>&1 || true)"
+if [[ "$(grep -cE 'LOCK_SKIPPED_CI' <<<"$out" || true)" -eq 0 ]]; then
+  pass "CI-skip does not fire when CI is unset"
+else
+  fail "CI-skip fired with CI unset; got: $out"
+fi
+
+# --- Arm 14: kernel releases the lock on SIGKILL (AC5b) --------------------
+# Asserts the property Phase 3.6 relies on, so a future refactor to a
+# hand-rolled PID-file scheme reddens HERE instead of silently reintroducing a
+# hang. Includes a positive control (BLOCKED while alive) so a broken probe
+# cannot pass as "released".
+K="$SS_ROOT/locks/6789-kill.lock"
+: > "$K"
+# The holder must be the process we SIGKILL, with no surviving child holding
+# the fd. `flock -c 'sleep 30'` runs sleep as flock's CHILD, which inherits the
+# locked fd and outlives the kill — the exact confound the plan's Sharp Edges
+# records as attempt 2. Instead open the fd in a shell, lock it, then `exec`
+# sleep so sleep REPLACES the shell at the same pid and IS the sole fd holder.
+bash -c 'exec 9>"'"$K"'"; flock -x 9; exec sleep 30' &
+KPID=$!
+sleep 1
+blocked="$(flock -w 1 -x "$K" -c true 2>&1 && echo FREE || echo BLOCKED)"
+kill -9 "$KPID" 2>/dev/null || true
+wait "$KPID" 2>/dev/null || true
+sleep 1
+after="$(flock -w 2 -x "$K" -c true 2>&1 && echo FREE || echo BLOCKED)"
+if [[ "$blocked" == "BLOCKED" && "$after" == "FREE" ]]; then
+  pass "AC5b: flock is kernel-released after SIGKILL (no stale detection needed)"
+else
+  fail "AC5b: expected BLOCKED then FREE, got '$blocked' then '$after'"
+fi
+
+# --- Arm 15: no stale-holder detection code exists (Phase 3.6) -------------
+# Anchored on the syntactic shapes a hand-rolled scheme needs, over CODE only
+# (this suite's own prose names them). A match means dead code crept in.
+lib_code="$(grep -vE '^[[:space:]]*#' "$LIB")"
+if [[ "$(grep -cE 'kill -0|/proc/[^/]*holder|stale_pid|holder_pid' <<<"$lib_code" || true)" -eq 0 ]]; then
+  pass "Phase 3.6: the lib contains no stale-holder detection path"
+else
+  fail "the lib appears to implement stale-holder detection (dead code per AC5b)"
+fi
+
 # --- Minimum-cardinality guard ---------------------------------------------
 # A silently-empty run exits 0 with zero coverage, which reads exactly like
 # success. This is the guard for that.
-if [[ "$pass_n" -lt 21 ]]; then
-  fail "cardinality guard: only $pass_n assertions ran (expected >= 21)"
+if [[ "$pass_n" -lt 28 ]]; then
+  fail "cardinality guard: only $pass_n assertions ran (expected >= 28)"
 fi
 
 echo "=== test-contention: $pass_n passed, $fails failed ==="
