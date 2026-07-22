@@ -161,11 +161,16 @@ export const STATUTORY_RULES: readonly StatutoryRule[] = [
 // second, drift-prone clock-origin field.
 //
 // Final wording is CLO-reviewed before ship (#6798 acceptance bullet 3).
+// Final sentence states the DIRECTION of the Art. 33 risk (the real deadline
+// may be SOONER, not merely "different") per the blocking CLO review of #6798 —
+// see knowledge-base/project/specs/<branch>/clo-copy-review.md.
 export const NOT_LEGAL_ADVICE_NOTICE =
   "This is an automated reminder, not legal advice. The date shown is computed " +
   "from when this item was received and is a best-effort backstop — you remain " +
-  "responsible for confirming the real deadline. Some clocks (for example a data " +
-  "breach) run from a different starting point than the one used here.";
+  "responsible for confirming the real deadline. Some clocks start earlier than " +
+  "the date used here — a data breach deadline, for example, runs from when you " +
+  "first became aware of it, so the real deadline may be sooner than shown and " +
+  "may already have passed.";
 
 export const PROBE_MARKER_PREFIX = "SOLEUR-PROBE-";
 
