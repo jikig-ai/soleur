@@ -21,15 +21,33 @@
 # Scope: heredoc-written stubs for the CLIs hooks actually shell out to. The
 # stub BODY is parsed, never the whole test file — a file-wide grep for `$1`
 # false-positives on surrounding helper functions and would pass a blind stub.
+#
+# Known detector blind spots: a stub written via `printf`/`tee`/`install`, or to
+# a variable path (`cat > "$STUB" <<…`). These are NOT silently tolerated — the
+# pinned cardinality below turns any such miss into a loud failure, because a
+# stub that drifts into an undetected shape drops the checked count. That pin is
+# the general defense; the parser only has to be good enough to find the stubs
+# that exist. Extending the parser is preferable to bumping the pin downward.
+#
+# Scope of the assertion: the stub body must REFERENCE argv. That is a
+# necessary, not sufficient, condition for dispatching on it — a stub could log
+# "$@" and still answer constantly. It is the cheap structural check; the
+# semantic one belongs in the suite that owns the stub.
 
 set -uo pipefail
 
 HOOK_DIR="${STUB_ARGV_FIDELITY_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 SELF="$(basename "${BASH_SOURCE[0]}")"
 
-# CLIs whose stubs must dispatch on argv. Widening this list is a one-line
-# change; every stub in the tree already complies.
-STUB_CMDS="gh|jq|git|doppler|curl"
+# CLIs whose stubs must reference argv — the ones hooks in this directory
+# actually shell out to. Widening this list is a one-line change.
+STUB_CMDS="gh|jq|git"
+
+# Expected number of stubs in the tree. Pinned, NOT a floor: a floor of 1 lets
+# coverage silently collapse from N to 1 and still report PASS — a false-green
+# guard against false greens. Bumping this is the intended edit when a stub is
+# added; a DROP means the detector went blind and must be fixed, not lowered.
+EXPECTED_STUBS="${STUB_ARGV_FIDELITY_EXPECTED:-4}"
 
 fail=0
 checked=0
@@ -42,7 +60,15 @@ extract_stubs() {
     !inbody {
       if ($0 ~ ("cat[[:space:]]*>[[:space:]]*\"?[^\"[:space:]]*/(" cmds ")\"?[[:space:]]*<<")) {
         name = $0; sub(/.*\//, "", name); sub(/".*/, "", name); sub(/[[:space:]].*/, "", name)
-        delim = $0; sub(/.*<<-?/, "", delim); gsub(/['"'"'"]/, "", delim); sub(/[[:space:]].*/, "", delim)
+        # Strip LEADING whitespace before trimming at the first space. Without
+        # it, `cat > "$B/gh" << '"'"'EOF'"'"'` (a space after `<<`, which is legal)
+        # yields a delimiter of " EOF" -> the trailing-token sub deletes
+        # everything -> delim becomes empty -> the close test never matches ->
+        # the "body" runs to EOF and swallows every later stub. Measured: two
+        # argv-blind stubs in one file reported PASS.
+        delim = $0; sub(/.*<<-?/, "", delim); gsub(/['"'"'"]/, "", delim)
+        sub(/^[[:space:]]+/, "", delim); sub(/[[:space:]].*/, "", delim)
+        if (delim == "") next
         inbody = 1; argv = 0; start = NR
       }
       next
@@ -84,18 +110,25 @@ for t in "$HOOK_DIR"/*.test.sh; do
   done < <(extract_stubs "$t")
 done
 
-# Minimum-cardinality guard. A sweep whose data source silently yields nothing
-# exits 0 with ZERO coverage and reads as a pass — the same false-green shape
-# this test exists to catch, so it must not be reachable here.
-if [[ "$checked" -lt 1 ]]; then
-  echo "FAIL: no CLI stubs found under $HOOK_DIR — the detector matched nothing."
-  echo "      Either the heredoc pattern drifted or the directory is wrong;"
-  echo "      a sweep that inspects zero stubs is not a passing sweep."
+# Cardinality pin. A sweep whose data source silently yields fewer members than
+# it should still reports PASS on the ones it saw — the same false-green shape
+# this test exists to catch. Pinning the count makes every detector blind spot
+# loud instead of silent.
+if [[ "$checked" -ne "$EXPECTED_STUBS" ]]; then
+  echo "FAIL: inspected $checked CLI stub(s) under $HOOK_DIR, expected $EXPECTED_STUBS."
+  if [[ "$checked" -lt "$EXPECTED_STUBS" ]]; then
+    echo "      Coverage DROPPED. Either a stub was removed (lower the pin) or it"
+    echo "      drifted into a shape the detector cannot see (fix the parser —"
+    echo "      known blind spots: printf/tee/install writers, variable paths)."
+    echo "      Do NOT lower the pin to make this pass without checking which."
+  else
+    echo "      A stub was added. Bump EXPECTED_STUBS to $checked."
+  fi
   fail=1
 fi
 
 if [[ "$fail" -eq 0 ]]; then
-  echo "PASS: all $checked hook-test CLI stub(s) dispatch on argv."
+  echo "PASS: all $checked hook-test CLI stub(s) reference argv."
 fi
 
 exit "$fail"

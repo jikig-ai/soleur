@@ -43,9 +43,13 @@ command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
 OPT_ACK=""        # non-empty -> SOLEUR_ACK_AUTOCLOSE=1 (broad hatch)
 OPT_FTACK=""      # non-empty -> SOLEUR_ACK_FOLLOWTHROUGH_CLOSE=1 (scoped hatch)
 OPT_MODE="ok"     # ok | ghfail (auth/network) | nopr (no PR for branch)
-OPT_FT=""         # newline/space separated issue numbers carrying `follow-through`
+OPT_FT=""         # space separated issue numbers carrying `follow-through`
+OPT_TITLE=""      # PR title served by the stub (GitHub closes on this too)
+OPT_CLOSED=""     # space separated issue numbers whose state is CLOSED
 OPT_SUBDIR=""     # non-empty -> run the hook with cwd set to a subdirectory
 OPT_NOSCANNER=""  # non-empty -> do not install the scanner in the tmp repo
+OPT_SYSMSG=""     # substring the allow-path systemMessage must contain
+OPT_EXPECT_REF="" # the PR ref (number/branch) the hook must ask gh about
 OPT_NOTICES=""    # expected count of stderr notice lines ("" = do not assert)
 OPT_REASON=""     # newline-separated substrings the deny reason must ALL contain
                   # ("" = do not assert). This is the discriminator for WHICH
@@ -74,11 +78,14 @@ make_work_dir() {
 
   # Fixture payloads live in files, not interpolated into the stub source, so a
   # quote or `$` in a fixture cannot corrupt the stub.
-  printf '%s\n' "$pr_body"  > "$tmp/.binstub/pr-body.txt"
-  printf '%s'   "$OPT_MODE" > "$tmp/.binstub/gh-mode"
+  printf '%s\n' "$pr_body"   > "$tmp/.binstub/pr-body.txt"
+  printf '%s\n' "$OPT_TITLE" > "$tmp/.binstub/pr-title.txt"
+  printf '%s'   "$OPT_MODE"  > "$tmp/.binstub/gh-mode"
   : > "$tmp/.binstub/follow-through.txt"
+  : > "$tmp/.binstub/closed.txt"
   local n
   for n in $OPT_FT; do printf '%s\n' "$n" >> "$tmp/.binstub/follow-through.txt"; done
+  for n in $OPT_CLOSED; do printf '%s\n' "$n" >> "$tmp/.binstub/closed.txt"; done
 
   cat > "$tmp/.binstub/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -108,24 +115,39 @@ fi
 
 case "${1:-}:${2:-}" in
   pr:view)
+    # Record which ref the hook resolved ($3), so a test can assert the hook
+    # scans the PR named in the command rather than always the current branch.
+    printf '%s' "${3:-}" > "$STUB_DIR/pr-view-ref.txt" 2>/dev/null || true
     if [[ "$MODE" == "ghfail" ]]; then
       echo "error connecting to api.github.com" >&2; exit 1
     fi
     if [[ "$MODE" == "nopr" ]]; then
       echo 'no pull requests found for branch "feat-x"' >&2; exit 1
     fi
-    cat "$STUB_DIR/pr-body.txt" 2>/dev/null || true
+    # Honor the requested --json fields. gh emits one line per field in the
+    # order the --jq expression lists them, so a hook that stops asking for
+    # `title` genuinely loses the title line — the stub MUST reproduce that, or
+    # dropping the title surface is invisible to the suite (the #6775 class).
+    _fields=""
+    _prev=""
+    for _a in "$@"; do [[ "$_prev" == "--json" ]] && _fields="$_a"; _prev="$_a"; done
+    [[ ",$_fields," == *",title,"* ]] && { cat "$STUB_DIR/pr-title.txt" 2>/dev/null || true; }
+    [[ ",$_fields," == *",body,"* ]]  && { cat "$STUB_DIR/pr-body.txt" 2>/dev/null || true; }
     ;;
   issue:view)
     if [[ "$MODE" == "ghfail" ]]; then
       echo "error connecting to api.github.com" >&2; exit 1
     fi
-    # $3 is the issue number the hook resolved. Emitting labels for the WRONG
-    # number is how an extraction bug would surface here.
-    if [[ -n "${3:-}" ]] && grep -qxF "${3:-}" "$STUB_DIR/follow-through.txt" 2>/dev/null; then
-      printf 'follow-through,observability\n'
+    # $3 is the issue number the hook resolved. Emitting metadata for the WRONG
+    # number is how an extraction bug would surface here. Shape mirrors the
+    # hook's `--jq '.state + "|" + ([.labels[].name]|join(","))'`.
+    _num="${3:-}"
+    _state=OPEN
+    grep -qxF "$_num" "$STUB_DIR/closed.txt" 2>/dev/null && _state=CLOSED
+    if [[ -n "$_num" ]] && grep -qxF "$_num" "$STUB_DIR/follow-through.txt" 2>/dev/null; then
+      printf '%s|follow-through,observability\n' "$_state"
     else
-      printf 'type/bug,priority/p2-medium\n'
+      printf '%s|type/bug,priority/p2-medium\n' "$_state"
     fi
     ;;
   *) : ;;
@@ -161,12 +183,23 @@ run_case() {
   decision="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)"
   [[ -n "$decision" ]] || decision="allow"   # empty hook output = allow
   reason="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null || true)"
+  # On the allow path the operator-visible notice rides in the top-level
+  # systemMessage (stderr is discarded by the harness on exit 0).
+  sysmsg="$(printf '%s' "$out" | jq -r '.systemMessage // ""' 2>/dev/null || true)"
   notices="$(grep -c '^pre-merge-auto-close-scan: ' "$errf" || true)"
+  # The ref the hook actually asked gh about (the stub records $3 of `pr view`).
+  seen_ref="$(cat "$wd/.binstub/pr-view-ref.txt" 2>/dev/null || true)"
   rm -rf "$wd" "$errf"
 
   [[ "$decision" == "$expect" ]] || { ok=0; detail="expected $expect, got $decision"; }
   if [[ -n "$OPT_NOTICES" && "$notices" != "$OPT_NOTICES" ]]; then
     ok=0; detail="${detail:+$detail; }expected $OPT_NOTICES notice(s), got $notices"
+  fi
+  if [[ -n "$OPT_SYSMSG" ]] && ! grep -qF -- "$OPT_SYSMSG" <<<"$sysmsg"; then
+    ok=0; detail="${detail:+$detail; }systemMessage lacks '$OPT_SYSMSG'"
+  fi
+  if [[ -n "$OPT_EXPECT_REF" && "$seen_ref" != "$OPT_EXPECT_REF" ]]; then
+    ok=0; detail="${detail:+$detail; }hook asked gh about '$seen_ref', expected '$OPT_EXPECT_REF'"
   fi
   if [[ -n "$OPT_REASON" ]]; then
     local want
@@ -181,8 +214,9 @@ run_case() {
     done <<< "$OPT_REASON"
   fi
 
-  OPT_ACK=""; OPT_FTACK=""; OPT_MODE="ok"; OPT_FT=""
+  OPT_ACK=""; OPT_FTACK=""; OPT_MODE="ok"; OPT_FT=""; OPT_TITLE=""; OPT_CLOSED=""
   OPT_SUBDIR=""; OPT_NOSCANNER=""; OPT_NOTICES=""; OPT_REASON=""
+  OPT_SYSMSG=""; OPT_EXPECT_REF=""
 
   if [[ "$ok" == 1 ]]; then
     PASS=$((PASS+1)); echo "PASS: $name ($decision)"
@@ -196,8 +230,11 @@ run_case() {
 # labelled or not (plan 3.7).
 # ---------------------------------------------------------------------------
 
-# T2 — prose-embedded close in the COMMIT body → DENY (the #5887 vector).
-OPT_REASON="prose-embedded" \
+# T2 — prose-embedded close in the COMMIT body → DENY (the #5887 vector). The
+# reason must name the surface via the ATTRIBUTION line (`a commit message: …`),
+# not the bare phrase — the deny template's boilerplate mentions every surface,
+# so a bare `a commit message` check would pass even if attribution were dropped.
+OPT_REASON=$'prose-embedded\na commit message: the follow-through sweeper closes' \
 run_case "T2 commit prose-embedded closes → deny" deny \
   "gh pr merge 1 --squash --auto" $'fix: thing\n\nthe follow-through sweeper closes #5887 post-merge.' ""
 
@@ -205,7 +242,7 @@ run_case "T2 commit prose-embedded closes → deny" deny \
 # RED before the D1 repair: the stub rejects the malformed --repo, so the body
 # never reaches the corpus. The T2 case above must stay green in the same run —
 # a body-only failure is also what a broken stub produces.
-OPT_REASON="prose-embedded" \
+OPT_REASON=$'prose-embedded\nthe PR body: I\'ll close #5955' \
 run_case "T1 PR-body prose-embedded close → deny" deny \
   "gh pr merge 1 --squash" "fix: thing" "I'll close #5955 after the pipeline confirms green."
 
@@ -224,9 +261,10 @@ run_case "Ref only → allow" allow \
 run_case "T7 non-merge command → allow" allow \
   "git status --short" $'fix: thing\n\nsweeper closes #5887' ""
 
-# T9 — broad hatch disarms the prose arm.
-OPT_ACK=1 \
-run_case "T9 broad ack env overrides → allow" allow \
+# T9 — broad hatch disarms the prose arm, AND announces that it did so (an
+# unannounced disarm is how a guard goes dark from an inherited env var).
+OPT_ACK=1 OPT_SYSMSG="BOTH checks disarmed by SOLEUR_ACK_AUTOCLOSE=1" \
+run_case "T9 broad ack env overrides → allow, announced" allow \
   "gh pr merge 1 --squash" $'fix: thing\n\nsweeper closes #5887' ""
 
 # T8 — `gh pr merge` documented inside a commit -m string is NOT a merge.
@@ -253,7 +291,7 @@ run_case "T3 PR-body standalone Closes on follow-through → deny" deny \
 # T4 — same, carried by the COMMIT message. Same fixture, different surface:
 # together these two pin the attribution in BOTH directions, so an
 # implementation that hardcodes either label fails one of them.
-OPT_FT="6617" OPT_REASON=$'follow-through\n#6617 — referenced from the commit message' \
+OPT_FT="6617" OPT_REASON=$'follow-through\n#6617 — referenced from a commit message' \
 run_case "T4 commit standalone Closes on follow-through → deny" deny \
   "gh pr merge 1 --squash" $'fix: thing\n\nCloses #6617' ""
 
@@ -312,6 +350,78 @@ run_case "T11b Refs #A, closes #B on one line → deny via prose arm" deny \
 OPT_FT="6617" \
 run_case "T12 issue number prefixing a follow-through number → allow" allow \
   "gh pr merge 1 --squash" $'fix: thing\n\nCloses #661' ""
+
+# T17 — word boundary. The line is a LINE-LEADING `Closes #99` (so the canonical
+# scanner admits it AND the prose arm correctly ignores it — a standalone close),
+# followed by the substring `fixes #4242` hiding inside `prefixes`. #4242 is the
+# follow-through tracker; #99 is not. WITH the boundary the label arm extracts
+# only #99 → allow. WITHOUT it, `fixes #4242` matches inside the word → the
+# tracker is implicated → deny. Two things make this non-vacuous: the real close
+# is what gets the line past the scanner (an unpaired line is rejected upstream),
+# and it is line-leading so the deny under mutation comes from the label arm
+# being fooled, not from the prose arm firing on the #99.
+OPT_FT="4242" \
+run_case "T17 keyword inside a longer word is not a close → allow" allow \
+  "gh pr merge 1 --squash" $'fix: thing\n\nCloses #99 after reworking the prefixes #4242 path' ""
+
+# ---------------------------------------------------------------------------
+# Surfaces. GitHub pre-fills the squash commit SUBJECT from the PR title, so the
+# title is a third closing surface — and #6775's whole lesson is that the deny
+# has to say WHICH text to scrub.
+# ---------------------------------------------------------------------------
+
+# T18 — a close carried only by the PR TITLE. Assert the ATTRIBUTION line, not
+# the bare "the PR title" phrase (which the deny boilerplate always contains).
+OPT_FT="6617" OPT_TITLE="fix(x): rework the thing (Closes #6617)" \
+OPT_REASON=$'follow-through\n#6617 — referenced from the PR title' \
+run_case "T18 PR-title close on follow-through → deny naming the title" deny \
+  "gh pr merge 1 --squash" "fix: thing" "Summary with no refs."
+
+# T19 — the SAME tracker closed from two surfaces at once. This is the exact
+# shape #6775 was filed about (the keyword had to be scrubbed in two places), so
+# the deny must name BOTH attribution lines; naming one sends the operator to
+# scrub half of it, re-merge, and destroy the tracker anyway. Both are full
+# `#N — referenced from <surface>` lines, so a sort-collapse that keeps one
+# surface fails this — a bare-phrase check would pass on the boilerplate.
+OPT_FT="6617" \
+OPT_REASON="#6617 — referenced from a commit message, the PR body" \
+run_case "T19 dual-surface close → deny naming both surfaces" deny \
+  "gh pr merge 1 --squash" $'fix: thing\n\nCloses #6617' $'Summary.\n\nCloses #6617'
+
+# T23 — the hook must scan the PR named in the command, not always the current
+# branch: `gh pr merge 4321` from feat-x would otherwise scan feat-x's body and
+# apply that verdict to #4321.
+OPT_EXPECT_REF="4321" \
+run_case "T23 explicit PR number is the ref gh is asked about → allow" allow \
+  "gh pr merge 4321 --squash" "fix: thing" "clean body"
+
+# ---------------------------------------------------------------------------
+# Gate scoping.
+# ---------------------------------------------------------------------------
+
+# T20 — a CLOSED tracker cannot be closed again by this merge, and the harm the
+# gate prevents is already realised. Denying there is a pure false positive that
+# wedges a legitimate merge behind the hatch.
+OPT_FT="6617" OPT_CLOSED="6617" \
+run_case "T20 already-CLOSED follow-through tracker → allow" allow \
+  "gh pr merge 1 --squash" $'fix: thing\n\nCloses #6617' ""
+
+# T21 — bulk-close PR. An all-or-nothing cap fails open on exactly the shape the
+# drain skills produce, which are the PRs most likely to sweep up a tracker.
+# Note the lookup iterates LEXICALLY sorted issue numbers (`sort -u` on text),
+# not document order — so where the tracker sits in the PR is not what decides
+# whether it is reached, and a low cap checks an arbitrary subset.
+OPT_FT="6617" \
+run_case "T21 bulk close, tracker inside the fan-out bound → deny" deny \
+  "gh pr merge 1 --squash" $'drain\n\nCloses #6617\nCloses #1\nCloses #2\nCloses #3' ""
+
+# T22 — past the bound the gate genuinely cannot vouch for the remainder. That
+# is a fail-open, so it must SAY so rather than allowing in silence. 21 refs, of
+# which 6617 sorts 18th lexically (1,10,11,…,19,2,20,3,4,5,6,6617,…), putting it
+# outside the cap of 10.
+OPT_FT="6617" OPT_NOTICES=1 \
+run_case "T22 tracker beyond the fan-out bound → allow, but announced" allow \
+  "gh pr merge 1 --squash" "$(printf 'drain\n\n'; for i in $(seq 1 20); do printf 'Closes #%s\n' "$i"; done; printf 'Closes #6617\n')" ""
 
 # ---------------------------------------------------------------------------
 # Degraded arms (AC11). Fail-open for the merge DECISION, loud for DIAGNOSIS —

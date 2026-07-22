@@ -365,34 +365,44 @@ of `ship-operator-step-gate.sh`. Wired in the PreToolUse(Bash) chain after
 
 ## Merge-boundary auto-close guard (`pre-merge-auto-close-scan.sh`)
 
-A PreToolUse(Bash) hook on plain `gh pr merge`. GitHub's issue-closing parser
-reads **both** the squash commit body and the PR body, so a closing keyword in
-either surface auto-closes on merge. Two checks, evaluated in this order:
+A PreToolUse(Bash) hook on `gh pr merge`. GitHub's issue-closing parser reads the
+**PR title, the PR body and the squash commit body**, so a closing keyword in any
+of the three auto-closes on merge. Two checks, evaluated in this order:
 
 1. **follow-through label gate** — denies a close of any form (standalone or
-   prose-embedded) when the target issue carries `follow-through`. Closing such a
-   tracker makes the daily sweeper skip it — it evaluates only OPEN issues — so
-   the soak verification it exists to enforce silently never runs.
+   prose-embedded) when the target issue is **OPEN** and carries
+   `follow-through`. Closing such a tracker makes the daily sweeper skip it — it
+   evaluates only OPEN issues — so the soak verification it exists to enforce
+   silently never runs. A closed tracker is exempt: the harm is already done and
+   denying would be a pure false positive.
 2. **prose-embedded arm** — denies a close-keyword appearing after prose on its
    line, for any issue. A standalone `Closes #N` stays allowed; that is the form
    every ordinary fix-PR uses.
 
-The deny names the issue **and the surface** (commit message vs PR body), because
-the keyword often has to be scrubbed in both.
+The deny names the issue **and every surface it was found in**, because the
+keyword often has to be scrubbed in more than one.
 
 Inverse of `ship-soak-followthrough-gate.sh` above: that one denies when a
 tracker is *missing* enrollment, this one when an issue *has* the label. Both can
 fire on a single `--auto` merge, so each deny names itself and its own override.
 
-- **Fail-open** for the decision, **loud** for diagnosis: a failed `gh pr view`,
-  an unresolvable scanner, a failed label lookup, or a fan-out above 3 issues each
-  print one `pre-merge-auto-close-scan:` stderr line and allow. The no-PR-found
-  case is deliberately silent so pre-PR merge attempts do not cry wolf.
-- **Best-effort, not a boundary.** Bypassed by merging from `main`, the web UI, an
-  admin merge, a CI-queued `--auto` merge (body and labels can change in the
-  queue window), and the OpenHands harness. `main` has no branch protection, so
-  nothing backstops these server-side; `follow-through-closure-guard.yml`
-  (`on: issues.closed`) is the path-independent reversal layer.
+- **Fail-open** for the decision, **reported** for diagnosis. A failed
+  `gh pr view`, an unresolvable scanner, a failed label lookup, or issues beyond
+  the fan-out bound each emit a `systemMessage` (the operator-visible channel on
+  an exit-0 hook — plain stderr is discarded there) plus a `rule-incidents.jsonl`
+  row for the CI aggregator. The no-PR-found case is deliberately silent so
+  pre-PR merge attempts do not cry wolf.
+- **Best-effort, not a boundary.** Bypassed by merging from `main`, the web UI,
+  an admin merge, a CI-queued `--auto` merge (title, body and labels can all
+  change in the queue window — and `--auto` is the workflow's *mandated* merge
+  form, so this is the common case), the OpenHands harness, and the
+  `OWNER/REPO#N` / full-issue-URL reference forms the canonical scanner does not
+  recognise. `main` **does** carry server-side rulesets with required status
+  checks, so a durable backstop can be added there; none covers this class today.
+  `follow-through-closure-guard.yml` (`on: issues.closed`) is *structurally* the
+  right reversal layer but is currently scoped by its `if:` to the callback-URL
+  class, so it does **not** yet back up this gate — widening it is tracked in
+  #6791.
 - **Why:** #6775 — the PR-body arm was dead code for 17 days. The hook built its
   own repo slug with a `sed` that leaves `.git` on SSH remotes, `gh` errored, and
   `|| true` swallowed it. Its test's `gh` stub ignored `argv`, so the body-path
@@ -401,9 +411,9 @@ fire on a single `--auto` merge, so each deny names itself and its own override.
 
 ## Escape-hatch inventory
 
-Every hook override env in this directory. Each disarms exactly one check —
-none is a global bypass, and reaching for a broad one to silence a narrow
-false positive is how a guard goes quietly dark.
+Every **denial override** for the merge/ship gates in this directory. Each
+disarms exactly one check — none is a global bypass, and reaching for a broad one
+to silence a narrow false positive is how a guard goes quietly dark.
 
 | Env | Hook | Disarms |
 |---|---|---|
@@ -412,8 +422,10 @@ false positive is how a guard goes quietly dark.
 | `SOLEUR_SKIP_SOAK_FOLLOWTHROUGH_GATE=1` | `ship-soak-followthrough-gate.sh` | The soak-enrollment deny on `gh pr ready` / `gh pr merge --auto`. |
 | `SOLEUR_SKIP_OPERATOR_STEP_GATE=1` | `ship-operator-step-gate.sh` | The undeferred-operator-step deny. Reserved for the rare attestation case (`wg-block-pr-ready-on-undeferred-operator-steps`). |
 | `SOLEUR_SKIP_RUNBOOK_SSH_GATE=1` | `ship-runbook-ssh-gate.sh` | The `hr-no-ssh-fallback-in-runbooks` deny on runbook edits. |
+| `CLAUDE_HOOK_BYPASS=1` (+ `_REASON`) | `prod-write-defer-gate.sh` | The prod-write defer. Requires a reason and is audit-logged — see the F2 section above. |
 
-`SOLEUR_DISABLE_AGENT_TOKEN_TEE=1` and `SOLEUR_DEFER_DRYRUN` are documented in
-the roster and F2 sections above; they are telemetry/mode switches, not denial
-overrides.
+Not denial overrides, documented elsewhere in this file: `SOLEUR_DEFER_DRYRUN`
+(F2 mode switch), `SOLEUR_DISABLE_AGENT_TOKEN_TEE`, `SOLEUR_DISABLE_SKILL_LOGGER`,
+`SOLEUR_DISABLE_CONTEXT_QUERIES`, `SOLEUR_DISABLE_PHASE_HINT` (telemetry
+kill-switches), `SOLEUR_DEFER_TARGETS_OVERRIDE` (F2 manifest override).
 
