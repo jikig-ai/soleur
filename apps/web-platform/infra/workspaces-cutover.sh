@@ -704,6 +704,14 @@ app_canary() {
   # The reason code comes from the helper's four-arm classifier, which reads HTTP STATUS BEFORE BODY
   # SHAPE — a loopback-gate regression answers 403 with valid JSON, and classifying that as
   # not-ready would page a sole-copy data-loss verdict for a routing bug.
+  #
+  # Populate WL_READYZ_CAPACITY BEFORE the probe, so a readyz_not_ready emission from THIS path
+  # carries the same capacity discriminator the daily monitor emits. Without it the field defaults
+  # to `unknown`, which matches neither capacity row in the runbook triage table, and a full disk
+  # mid-cutover falls through to "data-recovery incident on sole-copy data" — a destructive operator
+  # response to a non-destructive fault, against the retained plaintext while the LUKS mount holds
+  # newer writes.
+  WL_READYZ_CAPACITY="$(wl_capacity_of "$MOUNT")"; export WL_READYZ_CAPACITY
   if ! wl_probe_readyz "http://127.0.0.1:3000/internal/readyz"; then
     emit_drift "${WL_READYZ_REASON:-readyz_unreachable}"
     die "/internal/readyz did not certify the repointed volume after restart (reason=${WL_READYZ_REASON:-readyz_unreachable} code=${WL_PROBE_LAST_CODE} writable=${WL_READYZ_WRITABLE} populated=${WL_READYZ_POPULATED}) — cannot confirm the container is serving user data from \$MOUNT. /health alone is a 200-always liveness probe and CANNOT fail on an empty or unmounted \$MOUNT (C13)"
@@ -802,12 +810,22 @@ arm_dead_man() {
     `# at-rest exposure #6588 exists to close, reached by a different door. The next run's stray` \
     `# guard does NOT surface it either (it is a mountpoint, so that guard is skipped). The close` \
     `# keeps its own error visible on the journal rather than 2>/dev/null.` \
-    /bin/sh -c "${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; systemctl start inngest-server.service 2>/dev/null; ${tstarts} fi" \
+    `# #6807/#6812 OBSERVABILITY: the FIRE itself must emit. On 2026-07-20 this timer remounted the` \
+    `# plaintext over a healthy LUKS mount and NOTHING paged for ~6h, because a SUCCESSFUL remount` \
+    `# emitted no marker on any channel (only the close-EBUSY branch did). It fires at the TOP (the` \
+    `# event is "the backstop engaged" regardless of outcome), on the remount-failed else (the host` \
+    `# is now serving a bare mountpoint), and on success. logger -t luks-monitor is Vector-allowlisted.` \
+    /bin/sh -c "logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'; ${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; systemctl start inngest-server.service 2>/dev/null; ${tstarts} logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=ok reason=plaintext_remounted'; else logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=remount_failed'; fi" \
     2>/dev/null || true
+  # ARM marker: the timer is now set. Pairs with the disarm marker so a cutover that armed but never
+  # disarmed (the 2026-07-20 shape — abort at app_canary before disarm_dead_man) is visible as an
+  # arm-without-disarm on the log timeline rather than inferred from an adjacent banner.
+  logger -t "$LUKS_LOG_TAG" -- "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=armed reason=freeze_engaged deadline_min=${DEAD_MAN_MIN}" 2>/dev/null || true
 }
 disarm_dead_man() {
   systemctl stop workspaces-luks-deadman.timer 2>/dev/null || true
   systemctl reset-failed workspaces-luks-deadman 2>/dev/null || true
+  logger -t "${LUKS_LOG_TAG:-luks-monitor}" -- "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=disarmed reason=canary_passed" 2>/dev/null || true
 }
 
 # ============================================================================

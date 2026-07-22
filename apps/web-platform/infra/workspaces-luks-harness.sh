@@ -553,7 +553,7 @@ mon_run() {
   MON_OUT="$(
     env "$@" \
       PATH="$d/bin:$PATH" CALLS="$CALLS" MARKER_LOG="$MARKER_LOG" FAKE_MAPPER="$d/fake-mapper" \
-      WORKSPACES_MOUNT="$MNT" WORKSPACES_MAPPER_PATH="$d/fake-mapper" \
+      WORKSPACES_MOUNT="$MNT" WORKSPACES_MAPPER_PATH="$d/fake-mapper" LUKS_MONITOR_TEST_SEAM=1 \
       WORKSPACES_STATE_DIR="$STATE" LUKS_MONITOR_WORKSPACES_DIR="$WSDIR" \
     bash "$MON_PROBE" 2>&1
   )"

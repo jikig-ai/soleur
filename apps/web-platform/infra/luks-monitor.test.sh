@@ -235,21 +235,21 @@ mon_run LUKS_MONITOR_ASSERT_READYZ=1
 monRan && ok "count ABOVE the baseline passes (growth is not a shortfall)" \
        || no "a grown inventory was reported as drift (rc=$MON_RC): ${MON_OUT:0:200}"
 
-# (q) SHORTFALL => exit 2 (readiness class), distinct from at-rest drift's exit 1.
+# (q) SHORTFALL => exit 3 (readiness class), distinct from at-rest drift's exit 1.
 seed_count 8
 mon_run LUKS_MONITOR_ASSERT_READYZ=1
-if [ "$MON_RC" -eq 2 ] && monOut 'workspace_count_shortfall'; then
-  ok "count < expected exits 2 with workspace_count_shortfall (readiness class, not at-rest drift)"
+if [ "$MON_RC" -eq 3 ] && monOut 'workspace_count_shortfall'; then
+  ok "count < expected exits 3 with workspace_count_shortfall (readiness class, not at-rest drift)"
 else
-  no "an inventory shrink did not produce exit 2 + workspace_count_shortfall (rc=$MON_RC): ${MON_OUT:0:300}"
+  no "an inventory shrink did not produce exit 3 + workspace_count_shortfall (rc=$MON_RC): ${MON_OUT:0:300}"
 fi
 
-# (s) READINESS FAILURE => exit 2, and it happens BEFORE the heartbeat push, so a host that cannot
+# (s) READINESS FAILURE => exit 3, and it happens BEFORE the heartbeat push, so a host that cannot
 # serve never pushes a healthy beat.
 run_monitor_case "$PROBE" LUKS_MONITOR_ASSERT_READYZ=1 \
   MON_READYZ_CODE=503 MON_READYZ_BODY='{"ready":false,"checks":{"workspaces_writable":false,"workspaces_populated":true}}'
-if [ "$MON_RC" -eq 2 ] && monOut 'readyz_not_ready' && nhas 'curl .*HEARTBEAT|curl -gfsS'; then
-  ok "readyz ready=false exits 2 and no heartbeat is pushed (assert ordered before the beat)"
+if [ "$MON_RC" -eq 3 ] && monOut 'readyz_not_ready' && nhas 'curl .*HEARTBEAT|curl -gfsS'; then
+  ok "readyz ready=false exits 3 and no heartbeat is pushed (assert ordered before the beat)"
 else
   no "not-ready arm wrong or a healthy beat was pushed anyway (rc=$MON_RC): ${MON_OUT:0:300}"
 fi
@@ -259,11 +259,104 @@ fi
 # (luks-monitor.service reads that file with EnvironmentFile=-), changing the daily unit's
 # behaviour and its time-to-page without anyone deciding to.
 CUT="$DIR/workspaces-cutover.sh"
-if grep -qE 'LUKS_MONITOR_ASSERT_READYZ' "$CUT"; then
-  no "workspaces-cutover.sh writes LUKS_MONITOR_ASSERT_READYZ — the daily timer would inherit the verify-only flag"
+# Anchor on the WRITE construct, not the bare token: a future comment in the cutover that merely
+# NAMES the flag ("we deliberately never write LUKS_MONITOR_ASSERT_READYZ here") would flip this
+# negative guard to a false FAIL. A write is `>>`/`tee`/`printf … EnvironmentFile` carrying the token.
+if grep -qE 'LUKS_MONITOR_ASSERT_READYZ[^=]*=[^=].*(>>|tee|/etc/default/luks-monitor)|(>>|tee).*LUKS_MONITOR_ASSERT_READYZ' "$CUT"; then
+  no "workspaces-cutover.sh WRITES LUKS_MONITOR_ASSERT_READYZ to host state — the daily timer would inherit the verify-only flag"
 else
   ok "the cutover channel never writes LUKS_MONITOR_ASSERT_READYZ into /etc/default/luks-monitor"
 fi
+
+# (u) ZERO baseline is rejected as missing. `0` is digits, so a naive `''|*[!0-9]*` guard admits it —
+# and `count -lt 0` is false for EVERY count, an absorbing green a total wipe would pass.
+mon_prepare "$PROBE"
+mkdir -p "$WSDIR/ws-a"
+seed_count 0
+mon_run LUKS_MONITOR_ASSERT_READYZ=1
+if [ "$MON_RC" -eq 3 ] && monOut 'workspace_count_baseline_missing'; then
+  ok "a zero baseline is rejected as missing (not an unfailable floor)"
+else
+  no "WORKSPACES_COUNT=0 was accepted as a real baseline (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+# (v) INCOHERENT mapper-path override is refused (the #5274 re-open guard). The seam flag is what
+# separates the harness's legitimate fixture path from a stray host env var.
+mon_prepare "$PROBE"
+mkdir -p "$WSDIR/ws-a"; seed_count 1
+# Point the override at a path that is NOT /dev/mapper/$MAPPER_NAME, WITHOUT the test-seam flag.
+MON_OUT="$(
+  env LUKS_MONITOR_ASSERT_READYZ=1 \
+    PATH="$MON_DIR/bin:$PATH" CALLS="$CALLS" MARKER_LOG="$MARKER_LOG" FAKE_MAPPER="$MON_DIR/fake-mapper" \
+    WORKSPACES_MOUNT="$MNT" WORKSPACES_MAPPER_PATH="$MON_DIR/fake-mapper" \
+    WORKSPACES_STATE_DIR="$STATE" LUKS_MONITOR_WORKSPACES_DIR="$WSDIR" \
+  bash "$PROBE" 2>&1
+)"; MON_RC=$?
+if [ "$MON_RC" -ne 0 ] && monOut 'mapper_path_override_refused'; then
+  ok "an incoherent WORKSPACES_MAPPER_PATH override without the test seam is refused (#5274 re-open guard)"
+else
+  no "a stray mapper-path override was accepted, splitting the mount-identity gate from the escrow assert (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+# ---------------------------------------------------------------------------
+# (w) wl_count_workspace_dirs — DIRECT unit tests. It is the parity twin of countWorkspaceDirsAt and
+# the sole operand proving the inventory survived, yet it was reachable only through app_canary —
+# function coverage zero. Source the shared leaf directly (its direct-exec guard does not fire under
+# `source`) and drive it against roots the integration fixtures cannot construct.
+# ---------------------------------------------------------------------------
+# shellcheck source=apps/web-platform/infra/workspaces-luks-emit.sh
+. "$EMIT"
+wc_root="$(mktemp -d)"
+# empty root => 0, rc 0
+out="$(wl_count_workspace_dirs "$wc_root")"; rc=$?
+[ "$out" = "0" ] && [ "$rc" -eq 0 ] && ok "wl_count_workspace_dirs: empty root => 0 rc0" \
+  || no "wl_count_workspace_dirs empty root wrong (out=$out rc=$rc)"
+# missing root => rc!=0 (caller fails closed)
+wl_count_workspace_dirs "$wc_root/nope" >/dev/null; rc=$?
+[ "$rc" -ne 0 ] && ok "wl_count_workspace_dirs: missing root fails closed (rc=$rc)" \
+  || no "wl_count_workspace_dirs missing root returned success"
+# UNREADABLE root (exists, mode 000) => rc!=0. THE DI-F1 catastrophic path: a rc0+count0 here would
+# persist an absorbing-zero baseline. Skip only if running as root (mode 000 is not enforced for uid 0).
+mkdir -p "$wc_root/unread/ws-a"; chmod 000 "$wc_root/unread"
+if [ "$(id -u)" -ne 0 ]; then
+  wl_count_workspace_dirs "$wc_root/unread" >/dev/null 2>&1; rc=$?
+  [ "$rc" -ne 0 ] && ok "wl_count_workspace_dirs: unreadable root fails closed (rc=$rc) — no absorbing-zero baseline" \
+    || no "wl_count_workspace_dirs unreadable root returned SUCCESS — DI-F1 catastrophic path is open (rc=$rc)"
+else
+  ok "wl_count_workspace_dirs: unreadable-root case skipped (running as root; mode 000 not enforced)"
+fi
+chmod 755 "$wc_root/unread"
+# exclusions + dotglob invariance. Under dotglob, `*/` also matches hidden dirs; the count MUST be
+# identical with and without it (else a shopt set in one caller's process inflates one operand).
+mkdir -p "$wc_root/pop/ws-a" "$wc_root/pop/.hidden-real" "$wc_root/pop/lost+found" "$wc_root/pop/.cron" "$wc_root/pop/.orphaned-x"
+touch "$wc_root/pop/stray-file"
+c_plain="$(wl_count_workspace_dirs "$wc_root/pop")"
+c_dot="$(shopt -s dotglob; wl_count_workspace_dirs "$wc_root/pop")"
+if [ "$c_plain" = "2" ] && [ "$c_dot" = "2" ]; then
+  ok "wl_count_workspace_dirs: exclusions honored AND dotglob-invariant (ws-a + .hidden-real = 2 either way)"
+else
+  no "wl_count_workspace_dirs count/dotglob wrong (plain=$c_plain dot=$c_dot want 2/2)"
+fi
+# The function must not LEAK dotglob back to the caller (it restores what it found).
+shopt -u dotglob; wl_count_workspace_dirs "$wc_root/pop" >/dev/null
+shopt -q dotglob && no "wl_count_workspace_dirs leaked dotglob=on to the caller" \
+  || ok "wl_count_workspace_dirs restores the caller's glob state"
+rm -rf "$wc_root"
+
+# (x) DEAD-MAN OBSERVABILITY (#6812). A successful remount silently undid the 2026-07-20 cutover;
+# the fire, the arm, the disarm, and both remount outcomes must now each emit a marker.
+for pat in \
+  "result=fired reason=timer_elapsed" \
+  "result=armed reason=freeze_engaged" \
+  "result=disarmed reason=canary_passed" \
+  "result=ok reason=plaintext_remounted" \
+  "result=fail reason=remount_failed"; do
+  if grep -qF "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman $pat" "$CUT"; then
+    ok "dead-man emits marker: $pat"
+  else
+    no "dead-man MISSING marker ($pat) — the #6812 blind spot is not closed"
+  fi
+done
 
 echo ""
 echo "=== luks-monitor.test.sh: ${passes} passed, ${fails} failed ==="

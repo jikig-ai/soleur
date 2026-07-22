@@ -141,6 +141,13 @@ wl_probe_readyz() {
   rc=1
   i=1
   while [ "$i" -le "$WL_ATTEMPTS_N" ]; do
+    # Reset the per-attempt sub-signals INSIDE the loop. app_canary runs wl_probe_http first, which
+    # leaves WL_PROBE_CLASS=success behind; without this reset a fatal readyz emission ships
+    # `probe_class=success` next to its own failure reason — a mixed-provenance envelope that reads
+    # on the paging event as though the probe had succeeded. Same for a writable=false scraped on an
+    # early attempt persisting into a later unreachable verdict.
+    WL_READYZ_WRITABLE=unknown; WL_READYZ_POPULATED=unknown
+    WL_PROBE_CLASS=readyz; WL_PROBE_ELAPSED_S=0
     resp="$(curl -sS -w "\\n%{http_code}" --max-time 5 "$url" 2>/dev/null || printf '\n000')"
     code="${resp##*"$nl"}"
     body="${resp%"$nl"*}"
@@ -156,7 +163,13 @@ wl_probe_readyz() {
       *'"workspaces_populated":false'*) WL_READYZ_POPULATED=false ;;
     esac
     case "$code" in
-      403|404|405)
+      # 307/401 belong here for the SAME reason 403/404/405 do, and their absence was #6807's own
+      # defect one endpoint over: /internal/readyz is served by the custom server BEFORE Next.js
+      # routing, so if that handler is removed or its pathname drifts the request falls through to
+      # middleware and 307s to /login. Left in the retryable `*)` arm it burns the full budget and
+      # then reports `readyz_unreachable` ("still booting, wait") for a route that is simply gone,
+      # also eating ~237s of dead-man budget.
+      307|401|403|404|405)
         WL_READYZ_REASON=readyz_gate_regression; rc=1; break ;;
       200|503)
         case "$body" in
@@ -176,6 +189,24 @@ wl_probe_readyz() {
   return "$rc"
 }
 
+# wl_capacity_of <mount> — the capacity discriminator, as a scrub-safe `use=NN%,mount=rw|ro` string.
+#
+# Lives HERE, not inline in luks-monitor.sh, because BOTH emitters of a `readyz_not_ready` verdict
+# need it: the daily/verify path AND workspaces-cutover.sh's app_canary. Without it on the cutover
+# path the field defaults to `unknown`, which matches NEITHER capacity row in the runbook triage
+# table — so a full disk mid-cutover falls through to the residual row, "data-recovery incident on
+# sole-copy data", and the operator runs a destructive recovery against the retained plaintext while
+# the LUKS mount holds newer writes. Non-destructive fault, destructive response.
+wl_capacity_of() {
+  local mount="${1:-}" use opts rw
+  use="$(df -P "$mount" 2>/dev/null | awk 'NR==2 {print $5}' 2>/dev/null || true)"
+  opts="$(findmnt -no OPTIONS "$mount" 2>/dev/null || true)"
+  # Comma-DELIMITED, never a bare substring: the kernel sets `errors=remount-ro` on a perfectly
+  # healthy ext4 mount, so `*ro*` reports every healthy mount read-only.
+  case ",$opts," in *,ro,*) rw=ro ;; *) rw=rw ;; esac
+  printf 'use=%s,mount=%s' "${use:-unknown}" "$rw"
+}
+
 # wl_count_workspace_dirs <root> — the host-side workspace INVENTORY count.
 #
 # PARITY IS LOAD-BEARING. server/session-metrics.ts:19-41 (countWorkspaceDirsAt) excludes FOUR
@@ -189,17 +220,37 @@ wl_probe_readyz() {
 # Prints an integer on stdout and NOTHING else; returns non-zero if the root is unreadable, so the
 # caller can fail closed rather than treating an error as a count of zero.
 wl_count_workspace_dirs() {
-  local root="${1:-}" name n=0
-  [ -n "$root" ] && [ -d "$root" ] || return 1
+  local root="${1:-}" name n=0 _dg=0 _fg=0
+  # UNREADABLE IS NOT EMPTY. `-d` alone succeeds on a root that exists but cannot be LISTED (it needs
+  # only search permission on the PARENT), and both globs below then fail to expand, stay literal,
+  # and yield 0 — a count indistinguishable from a genuinely empty volume. That zero is absorbing:
+  # the cutover persists it as the baseline and `count -lt 0` is false for EVERY count, so a total
+  # wipe of every sole-copy workspace certifies green forever. Require read AND search.
+  [ -n "$root" ] && [ -d "$root" ] && [ -r "$root" ] && [ -x "$root" ] || return 1
+  # PIN THE GLOB STATE. This is a SOURCED library function, and its two callers run in DIFFERENT
+  # processes — workspaces-cutover.sh computes the baseline, luks-monitor.sh compares against it.
+  # Under `dotglob`, `*/` also matches hidden dirs, so every hidden dir is counted twice; set in
+  # only one of the two processes, that inflates only ONE operand — exactly the certify-a-shrink-green
+  # direction this counter exists to prevent. `failglob` would abort the caller on an empty root.
+  shopt -q dotglob && _dg=1
+  shopt -q failglob && _fg=1
+  shopt -u dotglob failglob
   for name in "$root"/*/ "$root"/.*/; do
     [ -d "$name" ] || continue
-    name="$(basename "${name%/}")"
+    # Parameter expansion, NOT `basename`: basename is an external process invoked with the full
+    # workspace path as argv. The callers' "emits nothing on stderr" claim rested on their own
+    # 2>/dev/null, not on this function; a future call site dropping the redirect would leak
+    # user-identifying directory names into the Actions log. This makes the property true.
+    name="${name%/}"; name="${name##*/}"
     case "$name" in
       .|..|.cron|lost+found) continue ;;
       .orphaned-*)           continue ;;
     esac
     n=$((n + 1))
   done
+  # `if`, not `[ … ] && shopt` — a trailing false test would become the function's exit status.
+  if [ "$_dg" = 1 ]; then shopt -s dotglob; fi
+  if [ "$_fg" = 1 ]; then shopt -s failglob; fi
   printf '%s' "$n"
 }
 

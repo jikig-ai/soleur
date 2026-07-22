@@ -25,12 +25,16 @@ LOG_TAG="luks-monitor"
 
 MOUNT="${WORKSPACES_MOUNT:-/mnt/data}"
 MAPPER_NAME="${WORKSPACES_MAPPER_NAME:-workspaces}"
-# Overridable for the same reason WORKSPACES_MOUNT and WORKSPACES_MAPPER_NAME are: the behavioural
-# seam asserts on the READINESS block, which sits behind `[ -e "$MAPPER" ]` — and `[` is a shell
-# BUILTIN, so unlike findmnt/blkid/cryptsetup it cannot be stubbed onto a mock PATH. Without this
-# the whole block is unreachable in a fixture. The DEFAULT is pinned by its own assertion in
-# luks-monitor.test.sh (a test-only seam with no seam-unset companion is a coverage hole wearing a
-# convenience costume), so production behaviour cannot drift behind the override.
+# Overridable so the behavioural seam can reach the READINESS block, which sits behind
+# `[ -e "$MAPPER" ]` — and `[` is a shell BUILTIN, unstubbable on a mock PATH. But UNLIKE
+# WORKSPACES_MAPPER_NAME, this override DECOUPLES two operands that were previously derived from one:
+# `[ "$mnt_src" = "$MAPPER" ]` / `[ -e "$MAPPER" ]` use $MAPPER, while the escrow + header asserts
+# (steps 2-5) use `cryptsetup status "$MAPPER_NAME"`. A lone stray WORKSPACES_MAPPER_PATH in the
+# host env (the verify path `set -a`-sources /etc/default/luks-monitor) pointed at the raw plaintext
+# device would then let /mnt/data=plaintext satisfy the mount-identity gate while steps 2-5 certify
+# some OTHER still-open mapper — reopening the #5274 silent-plaintext mode this probe exists to catch.
+# So an override that does NOT equal the derived path is REFUSED with its own reason code unless the
+# explicit test-seam flag is also set (the harness sets both; nothing in prod sets either).
 MAPPER="${WORKSPACES_MAPPER_PATH:-/dev/mapper/${MAPPER_NAME}}"
 # #6807 — defaults MUST match workspaces-cutover.sh:44-45; this is where the cutover persists
 # WORKSPACES_COUNT and where the readiness assert reads it back.
@@ -79,12 +83,19 @@ emit_and_die() {
 
 # #6807 — the READINESS/INVENTORY failure exit, DISTINCT from emit_and_die's LUKS-drift exit.
 #
-# Exit 1 = at-rest LUKS drift. Exit 2 = the volume is a correct LUKS mapper but the APPLICATION
+# Exit 1 = at-rest LUKS drift. Exit 3 = the volume is a correct LUKS mapper but the APPLICATION
 # cannot serve from it (not ready) or the inventory shrank. Collapsing both into `exit 1` made
 # probe_rc a three-way ambiguity (drift / readiness / SSH transport 255) behind one hardcoded
 # at-rest ::error:: message, which is why the workflow told the operator to read a Sentry event that
 # was never emitted. The Sentry `op` stays workspaces-luks-drift either way (see the emit header) —
 # de-conflation lives here, in `reason`, and in the workflow's per-arm ::error:: text.
+#
+# `3`, NOT `2`: bash exits 2 on a SYNTAX ERROR or builtin misuse, and this script parses (and would
+# fail-to-parse as) a unit before any logic runs. If exit 2 meant "readiness failure", a typo in
+# this file — or in the helper it sources — would be reported to the operator as a data-loss verdict
+# routing to the §5 halt-and-escalate table: the exact confidently-wrong-verdict class this change
+# removes, one layer down. 3 has no reserved meaning. (127 = bundle/command not found is handled by
+# the workflow's own arm.)
 emit_readiness_and_die() {
   WL_REASON="$1"
   export WL_READYZ_WRITABLE WL_READYZ_POPULATED WL_READYZ_CAPACITY \
@@ -96,7 +107,7 @@ emit_readiness_and_die() {
   else
     log "WARN: workspaces-luks-emit.sh unavailable — readiness failure ($WL_REASON) NOT emitted to Sentry. Reinstall $EMIT."
   fi
-  exit 2
+  exit 3
 }
 
 # Mirrors workspaces-cutover.sh:171 read_state. `|| true` because `grep` exits 1 on no match and
@@ -106,12 +117,26 @@ read_ws_state() {
   (grep -E "^$1=" "$STATE_FILE" | tail -1 | cut -d= -f2-) 2>/dev/null || true
 }
 
-# Sourced-detection guard — mirrors workspaces-cutover.sh:1896. When this file is `source`d (the
-# workspaces-luks-harness.sh execution seam obtains the functions above without running the probe),
-# return HERE: after every definition, before the main body. Without it, `source luks-monitor.sh`
-# runs the entire probe from the next line and the harness's stubs can never take effect — the test
-# seam is not merely awkward but IMPOSSIBLE. An executed run (BASH_SOURCE[0] == $0) is a no-op here.
+# Sourced-detection guard — mirrors workspaces-cutover.sh:1896. Returns HERE when this file is
+# `source`d, after every definition and before the main body.
+#
+# NOTE the asymmetry with the cutover, which the earlier draft of this comment got backwards: the
+# harness EXECUTES luks-monitor.sh (`mon_run` runs `bash "$MON_PROBE"`), because the readiness/
+# inventory logic under test lives in the MAIN BODY, not in a function. It reaches that body under
+# stubbed PATH binaries, NOT by sourcing. So unlike the cutover's guard — which run_case DOES rely on
+# to source workspaces-cutover.sh and reach app_canary — this guard's only in-repo consumer is the
+# one test that asserts sourcing does nothing (luks-monitor.test.sh, case (k)). It is kept because
+# (a) it makes that assertion true and cheap, (b) a future extraction of the block into a function
+# would immediately need it, and (c) it fails toward RUNNING (an executed run has BASH_SOURCE[0]==$0),
+# so it can never silently no-op the production probe. An executed run is a no-op here.
 if [ "${BASH_SOURCE[0]:-$0}" != "$0" ]; then return 0 2>/dev/null || true; fi
+
+# REFUSE an incoherent mapper-path override (see the MAPPER assignment above). A $MAPPER that does
+# not equal the path DERIVED from $MAPPER_NAME splits the mount-identity gate from the escrow/header
+# asserts; allow it only when the explicit test seam is ALSO set. Fail closed with its own reason.
+if [ "$MAPPER" != "/dev/mapper/${MAPPER_NAME}" ] && [ "${LUKS_MONITOR_TEST_SEAM:-0}" != "1" ]; then
+  WL_MOUNT_SOURCE="override"; emit_and_die mapper_path_override_refused
+fi
 
 # 1. The mount MUST resolve to the LUKS mapper (not the raw device — the #5274 silent-plaintext mode).
 mnt_src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
@@ -186,12 +211,8 @@ if [ "${LUKS_MONITOR_ASSERT_READYZ:-0}" = "1" ]; then
   # full or read-only mount makes isWorkspacesWritable fail closed (readiness.ts:54-60 catches
   # ENOSPC/EROFS/EACCES/EIO alike), and escalating a full disk to "data-recovery incident on
   # sole-copy data" is a destructive operator response to a non-destructive problem.
-  _cap_use="$(df -P "$MOUNT" 2>/dev/null | awk 'NR==2 {print $5}' 2>/dev/null || true)"
-  _cap_opts="$(findmnt -no OPTIONS "$MOUNT" 2>/dev/null || true)"
-  # Comma-DELIMITED match, never a bare substring: the kernel really sets `errors=remount-ro` on a
-  # perfectly healthy ext4 mount, so `case $opts in *ro*)` reports every healthy mount read-only.
-  case ",$_cap_opts," in *,ro,*) _cap_rw=ro ;; *) _cap_rw=rw ;; esac
-  WL_READYZ_CAPACITY="use=${_cap_use:-unknown},mount=${_cap_rw}"
+  # Shared with app_canary via the helper — both emitters of a not-ready verdict must populate it.
+  WL_READYZ_CAPACITY="$(wl_capacity_of "$MOUNT")"
   export WL_READYZ_CAPACITY
 
   if ! wl_probe_readyz "$READYZ_URL"; then
@@ -206,9 +227,9 @@ if [ "${LUKS_MONITOR_ASSERT_READYZ:-0}" = "1" ]; then
   # as on =8), it can FAIL CLOSED on a missing baseline, it keeps any error text off the SSH
   # boundary, and emit_drift/workspaces_luks_emit is a host-side function the workflow cannot call.
   #
-  # wl_count_workspace_dirs is pure shell (globs + basename), so unlike a `find`/`ls` pipeline it
-  # emits NOTHING on stderr — a permission or symlink error cannot carry a user-identifying
-  # workspace path across the SSH boundary into the Actions run log.
+  # wl_count_workspace_dirs is pure shell (globs + parameter expansion, no basename subprocess), so
+  # unlike a `find`/`ls` pipeline it emits NOTHING on stderr — a permission or symlink error cannot
+  # carry a user-identifying workspace path across the SSH boundary into the Actions run log.
   if ! WL_WORKSPACE_COUNT="$(wl_count_workspace_dirs "$WORKSPACES_DIR" 2>/dev/null)"; then
     WL_WORKSPACE_COUNT=unknown; export WL_WORKSPACE_COUNT
     emit_readiness_and_die workspace_count_unreadable
@@ -218,8 +239,19 @@ if [ "${LUKS_MONITOR_ASSERT_READYZ:-0}" = "1" ]; then
   export WL_WORKSPACE_COUNT_EXPECTED
   # FAIL CLOSED. A missing operand must never become a SKIPPED comparison — that is the same
   # "green probe that cannot fail on the condition it names" defect this whole change exists to fix.
+  # `0` is rejected as missing: a zero baseline makes `count -lt 0` false for EVERY count, so it is a
+  # missing baseline wearing a number — an absorbing green a total wipe would pass. A real host never
+  # has zero workspaces at a cutover, and wl_count_workspace_dirs already refuses to persist 0.
   case "${WL_WORKSPACE_COUNT_EXPECTED:-}" in
-    ''|*[!0-9]*) emit_readiness_and_die workspace_count_baseline_missing ;;
+    ''|0|*[!0-9]*) emit_readiness_and_die workspace_count_baseline_missing ;;
+  esac
+  # BOTH operands guarded. The baseline is validated above; validate the OBSERVED count too, because
+  # `[ <non-numeric> -lt N ]` exits 2 ("integer expected") and — inside an `if` under `set -uo
+  # pipefail` with no `-e` — is read as "not less than", SILENTLY SKIPPING the comparison and falling
+  # through to the green verdict. A fail-OPEN shape next to a fail-CLOSED one on the same assertion is
+  # exactly the asymmetry this change removes. Latent today (the counter always prints an integer).
+  case "${WL_WORKSPACE_COUNT:-}" in
+    ''|*[!0-9]*) emit_readiness_and_die workspace_count_unreadable ;;
   esac
   # `-lt`, not `-ne`: users create workspaces between cutovers, so a GROWN inventory is healthy.
   # Only a SHRINK is the sole-copy data-loss signal.
