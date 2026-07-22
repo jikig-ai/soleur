@@ -389,6 +389,45 @@ else
   no "T24d a loopback-gate regression was classified as data loss — the confidently-wrong verdict (rc=$CASE_RC) ${CASE_OUT:0:200}"
 fi
 
+# T24e — the gate-regression set is {307,401,403,404,405} and only 403 was ever a fixture. Dropping
+# 404|405 (or 307|401) from wl_probe_readyz reclassifies them as data-loss/unreachable and SURVIVES
+# a 403-only suite. Iterate EVERY member so the set is proven, not sampled. (503 is NOT here — it is
+# the determinate not-ready status; 200 is success.)
+for gr in 307 401 404 405; do
+  run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=200 \
+    READYZ_CODES="$gr" READYZ_BODIES='{"error":"blocked"}'
+  if died && outF 'EMIT_DRIFT: readyz_gate_regression'; then
+    ok "T24e readyz $gr => readyz_gate_regression (structural, never data-loss)"
+  else
+    no "T24e readyz $gr misclassified — a de-routed readyz would page data-loss or burn the budget (rc=$CASE_RC) ${CASE_OUT:0:200}"
+  fi
+done
+
+# T23g — the /health STRUCTURAL set is {307,401,403,404,405,525,526} and only 307 was ever a fixture.
+# Dropping 525|526 reclassifies them retryable → a determinate CF-edge structural fault burns the
+# full ~237s budget (and dead-man margin) instead of failing fast. Iterate every member.
+for st in 401 403 404 405 525 526; do
+  run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODES="$st"
+  if died && [ "$(sleeps_before_readyz)" = "0" ] && outF 'EMIT_DRIFT: health_probe_structural'; then
+    ok "T23g /health $st fails fast (structural, zero sleeps)"
+  else
+    no "T23g /health $st is not fail-fast structural (sleeps=$(sleeps_before_readyz) rc=$CASE_RC) — budget-burn on a determinate fault ${CASE_OUT:0:160}"
+  fi
+done
+
+# T23h — the INTERVAL floor's untested twin. T23e only asserts the DEFAULT 3; nothing pins the
+# `-ge 0` clamp on a bad interval, so removing it survives. A negative/non-numeric interval must
+# fall back to 3, not to `sleep -1` (error) or `sleep abc` (error → hot loop under a real sleep).
+for badint in -1 abc; do
+  run_case "$CUTOVER" 'app_canary' 'app_canary' \
+    WORKSPACES_CANARY_INTERVAL_S="$badint" CURL_CODES="530"
+  if died && [ "$(bad_sleep_args 3)" = "0" ] && [ "$(sleeps_before_readyz)" -gt 0 ]; then
+    ok "T23h WORKSPACES_CANARY_INTERVAL_S=$badint clamps to the literal 3 (interval floor holds)"
+  else
+    no "T23h bad interval $badint was not clamped (non-3 args=$(bad_sleep_args 3) sleeps=$(sleeps_before_readyz))"
+  fi
+done
+
 # T25 — ORDERING. app_canary must precede disarm_dead_man. CANARY_OK=1 is set by the HOST canary
 # before this point, so cleanup() will not roll back; if the dead-man were disarmed FIRST, an
 # app-level failure would have zero automated recovery on the one gate that proves user-facing
@@ -413,6 +452,24 @@ if [ -n "$t25_canary" ] && [ -n "$t25_disarm" ] && [ "$t25_canary" -lt "$t25_dis
   ok "T25 app_canary is invoked BEFORE disarm_dead_man (the unattended backstop spans the canary)"
 else
   no "T25 canary/disarm ordering wrong or unfindable (canary=$t25_canary disarm=$t25_disarm)"
+fi
+# T25b — PLACEMENT is not EXECUTION. T25's ordering grep passes even when the call is neutered
+# (`if [ false ]; then app_canary; fi` gates it OFF while keeping the token) — the exact 2026-07-20
+# failure class. The main-body app_canary is an UNCONDITIONAL sibling of resume_writers /
+# disarm_dead_man inside the one `if [ "$DRY_RUN" != "1" ]` block, so its leading whitespace must
+# EQUAL its siblings'. A wrapping conditional deepens the indent; an inline `; app_canary;` fails the
+# own-line anchor. Compare the exact indent string, not just "present".
+t25b_canary_ws="$(grep -nE '^[[:space:]]*app_canary[[:space:]]*$' "$T25BODY.main" 2>/dev/null | head -1 | sed -E 's/^[0-9]+:([[:space:]]*)app_canary.*/\1/' | cat -A | sed 's/\$$//')"
+t25b_disarm_ws="$(grep -nE '^[[:space:]]*disarm_dead_man[[:space:]]*$' "$T25BODY.main" 2>/dev/null | head -1 | sed -E 's/^[0-9]+:([[:space:]]*)disarm_dead_man.*/\1/' | cat -A | sed 's/\$$//')"
+# Also assert app_canary never appears at a DEEPER indent than the sibling in the main body (a
+# nested guard). Count main-body app_canary lines whose indent is strictly longer than the sibling.
+t25b_deeper="$(awk -v sib="$t25b_disarm_ws" '
+  /^[[:space:]]*app_canary[[:space:]]*$/ { match($0,/^[[:space:]]*/); if (RLENGTH > length(sib)) n++ }
+  END { print n+0 }' "$T25BODY.main" 2>/dev/null)"
+if [ -n "$t25b_canary_ws" ] && [ "$t25b_canary_ws" = "$t25b_disarm_ws" ] && [ "${t25b_deeper:-0}" -eq 0 ]; then
+  ok "T25b app_canary is an UNCONDITIONAL sibling (indent matches disarm_dead_man; never nested deeper) — a neutered canary is caught, not just a moved one"
+else
+  no "T25b app_canary indent [$t25b_canary_ws] != sibling [$t25b_disarm_ws] or a deeper-nested occurrence exists (deeper=$t25b_deeper) — it may be gated behind an extra conditional (neutered canary)"
 fi
 # T11b/T11c — the gate strength itself: exactly 200, not any 2xx.
 run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=307
