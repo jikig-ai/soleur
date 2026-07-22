@@ -1,0 +1,30 @@
+# Refresh-set for the ADR-133 pull-based signed config-refresh channel (#6780).
+#
+# One repo-relative path per line (blank lines and #-comments ignored). These are the
+# host-executed *.sh scripts the CI producer (build-inngest-config-bundle.yml →
+# inngest-config-bundle-pack.sh) packages, keyless-signs, and dual-publishes; the host timer
+# pulls, verifies, and applies them IN-PLACE via infra-config-install.sh — no host replace.
+#
+# MEMBERSHIP RULES (binding):
+#   • HARD-1 — the channel ENGINE is NEVER a member: inngest-config-refresh.sh (the verify+apply
+#     script, Phase 4), the cosign binary, the baked verify anchor, the .timer/.service units, and
+#     /var/lib/inngest-config/applied.version. Otherwise one signed bundle could replace the
+#     verifier with an accept-all shim (signed-once → bypass-forever). These are NOT in DEST_SPEC.
+#   • Every member MUST already be an inngest-host dest in infra-config-install.sh DEST_SPEC (and
+#     its FILE_MAP lockstep) — the channel reuses that root helper, it does not widen the dest set.
+#     The DEST_SPEC/FILE_MAP additions + the membership↔DEST_SPEC lockstep assertion (AC18) land
+#     with the host-side bake that RIDES the #6178 cutover (PR #6348). Until then this list is the
+#     PRODUCER contract; final membership is validated against DEST_SPEC at the cutover.
+#
+# The initial members below are the inngest-host operational scripts already delivered through
+# infra-config-install.sh's DEST_SPEC (the /usr/local/bin/inngest-*, cat-inngest-*, and the
+# git-lock sweep). Seeded conservatively; extend at the cutover once DEST_SPEC lockstep is wired.
+
+apps/web-platform/infra/inngest-inventory.sh
+apps/web-platform/infra/inngest-enumerate-reminders.sh
+apps/web-platform/infra/inngest-rearm-reminders.sh
+apps/web-platform/infra/inngest-wiped-volume-verify.sh
+apps/web-platform/infra/inngest-registry-probe.sh
+apps/web-platform/infra/inngest-doublefire-probe.sh
+apps/web-platform/infra/cat-inngest-verify-state.sh
+apps/web-platform/infra/git-lock-chardevice-sweep.sh
