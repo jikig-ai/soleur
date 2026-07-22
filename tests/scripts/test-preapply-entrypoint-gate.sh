@@ -52,18 +52,28 @@ fi
 # --- Fetch stub --------------------------------------------------------------
 # A process-safe stub (external command, so it crosses the `bash "$GATE"`
 # boundary the injection seam names). Logs every call to $STUB_CALLLOG and
-# branches on the phase segment of the URL. The control phase is answered from
-# STUB_CONTROL_CODE; targets from a per-phase file under STUB_RESPONSE_DIR if
-# present, else the global STUB_TARGET_CODE/STUB_TARGET_BODY.
+# branches on the URL. Answering, in order:
+#   - the ACCOUNT-surface control LIST (accounts/<id>/rulesets, NO /phases/) from
+#     STUB_ACCT_CONTROL_CODE (default 200) — the P1-A account-scope proof a
+#     kind=root 404 requires before it may PASS;
+#   - the ZONE control phase from STUB_CONTROL_CODE + STUB_CONTROL_BODY (default
+#     a populated 1-rule body — a degraded/empty control body exercises P1-B);
+#   - targets from a per-phase file under STUB_RESPONSE_DIR if present, else the
+#     global STUB_TARGET_CODE/STUB_TARGET_BODY.
 STUB="$(mktemp)"
 cat > "$STUB" <<'STUB_EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 path="$1"
 [[ -n "${STUB_CALLLOG:-}" ]] && printf '%s\n' "$path" >> "$STUB_CALLLOG"
+if [[ "$path" == accounts/*/rulesets && "$path" != *phases* ]]; then
+  printf '%s\n%s\n' "${STUB_ACCT_CONTROL_CODE:-200}" '{"result":[{"id":"r1"}]}'
+  exit 0
+fi
 phase="${path##*phases/}"; phase="${phase%%/entrypoint}"
 if [[ "$phase" == "http_request_dynamic_redirect" ]]; then
-  printf '%s\n%s\n' "${STUB_CONTROL_CODE:-200}" '{"result":{"id":"ctrlid","rules":[{"ref":"c"}]}}'
+  cbody='{"result":{"id":"ctrlid","rules":[{"ref":"c"}]}}'
+  printf '%s\n%s\n' "${STUB_CONTROL_CODE:-200}" "${STUB_CONTROL_BODY:-$cbody}"
   exit 0
 fi
 if [[ -n "${STUB_RESPONSE_DIR:-}" && -f "$STUB_RESPONSE_DIR/$phase" ]]; then
@@ -218,22 +228,36 @@ t_unclassified_kind_fails_closed() {
 
 # G14: replace (["delete","create"], before != null) → PASS, does NOT fire,
 #      ZERO API calls (no match → no control probe). Locks spec-flow D1.
+#      SCOPE (relabel, P2-D): this fixture is blocked by TWO discriminator
+#      guards at once — the exact `actions == ["create"]` (["delete","create"]
+#      != ["create"]) AND `before == null` (a replace has before != null). So it
+#      does NOT ISOLATE either guard: neutering just one leaves the other
+#      blocking. The single-guard isolators are G24 (before==null) and G25
+#      (importing==null). Exactness (`==["create"]` vs `index("create")`) has no
+#      single-mutation isolator because every real multi-action-containing-create
+#      plan also carries before != null — the two guards are defence-in-depth,
+#      intentionally redundant on real plan shapes.
 t_replace_does_not_fire() {
   _gate "$FIXTURES/tfplan-ruleset-replace.json" 200 200 "$POPULATED_BODY"
   local calls; calls=$(_calls)
   if [[ "$RC" -eq 0 ]] && [[ "$calls" -eq 0 ]]; then
-    _report "G14 replace (delete,create) does NOT fire — 0 API calls (exact ==[\"create\"])" ok
+    _report "G14 replace (delete,create; before present) does NOT fire — 0 API calls (double-blocked: exactness + before==null; isolators are G24/G25)" ok
   else
     _report "G14 replace does NOT fire" fail "RC=$RC calls=$calls OUT=$(tr '\n' '|' <<<"$OUT")"
   fi
 }
 
-# G15: import (importing present) → PASS, ZERO API calls (exempt).
+# G15: import via an `["update"]` action carrying `importing` → PASS, ZERO API
+#      calls. SCOPE (relabel, P2-D): this fixture is ALSO multiply-blocked — its
+#      action is ["update"] (fails exactness) AND before != null AND importing
+#      present — so it does not isolate the importing guard either. The
+#      single-guard importing isolator is G25 (a bare ["create"], before null,
+#      importing present).
 t_import_exempt() {
   _gate "$FIXTURES/tfplan-ruleset-import.json" 200 200 "$POPULATED_BODY"
   local calls; calls=$(_calls)
   if [[ "$RC" -eq 0 ]] && [[ "$calls" -eq 0 ]]; then
-    _report "G15 import shape exempt — 0 API calls" ok
+    _report "G15 import (update+importing; multiply-blocked) exempt — 0 API calls (importing isolator is G25)" ok
   else
     _report "G15 import shape exempt" fail "RC=$RC calls=$calls OUT=$(tr '\n' '|' <<<"$OUT")"
   fi
@@ -291,6 +315,139 @@ t_zero_match_zero_calls() {
     _report "G19 zero-match plan: 0 API calls + explicit notice (normal-merge no-op)" ok
   else
     _report "G19 zero-match plan makes 0 API calls" fail "RC=$RC calls=$calls OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+}
+
+# G20: kind=zone create with null zone_id (zone created in the SAME apply →
+#      zone_id serializes as null / known-after-apply) → fail-closed. P1-C.
+t_null_zone_id_fails_closed() {
+  _gate "$FIXTURES/tfplan-ruleset-create-null-zone.json" 200 404 ""
+  if [[ "$RC" -ne 0 ]] && grep -Eq 'kind=zone but zone_id is null' <<<"$OUT"; then
+    _report "G20 kind=zone null zone_id fails closed (create-from-absent zone)" ok
+  else
+    _report "G20 null zone_id fails closed" fail "RC=$RC OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+}
+
+# G21: kind=root create with null account_id → fail-closed. P1-C.
+t_null_account_id_fails_closed() {
+  _gate "$FIXTURES/tfplan-ruleset-create-null-account.json" 200 404 ""
+  if [[ "$RC" -ne 0 ]] && grep -Eq 'kind=root but account_id is null' <<<"$OUT"; then
+    _report "G21 kind=root null account_id fails closed (create-from-absent account)" ok
+  else
+    _report "G21 null account_id fails closed" fail "RC=$RC OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+}
+
+# G22: create with null phase (phase known-after-apply) → fail-closed. P1-C.
+t_null_phase_fails_closed() {
+  _gate "$FIXTURES/tfplan-ruleset-create-null-phase.json" 200 404 ""
+  if [[ "$RC" -ne 0 ]] && grep -Eq 'phase is null/empty/unknown-after-apply' <<<"$OUT"; then
+    _report "G22 null phase fails closed (cannot enumerate entrypoint)" ok
+  else
+    _report "G22 null phase fails closed" fail "RC=$RC OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+}
+
+# G23: target returns HTTP 200 with a DEGRADED body ({"result":null}) →
+#      fail-closed (never PASS-as-empty). Pins the array-shape assertion that a
+#      bare `.result.rules | length` would fail-open on (null|length==0). P1-B.
+t_degraded_200_body_fails_closed() {
+  _gate "$FIXTURES/tfplan-ruleset-create.json" 200 200 '{"result":null}'
+  if [[ "$RC" -ne 0 ]] && grep -Eq 'unparseable / not an array' <<<"$OUT"; then
+    _report "G23 degraded 200 body (result:null) fails closed — not PASS-as-empty" ok
+  else
+    _report "G23 degraded 200 body fails closed" fail "RC=$RC OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+}
+
+# G24: create with `before` PRESENT (non-null) → EXEMPT, 0 API calls. Single-
+#      guard isolator for `select(.change.before == null)`: actions are exactly
+#      ["create"] (passes exactness) and importing is null, so ONLY the
+#      before==null guard filters it — neuter that guard and this row matches →
+#      probes fire → this assertion (0 calls) goes RED. P2-D.
+t_create_before_present_exempt() {
+  _gate "$FIXTURES/tfplan-ruleset-create-before-present.json" 200 200 "$POPULATED_BODY"
+  local calls; calls=$(_calls)
+  if [[ "$RC" -eq 0 ]] && [[ "$calls" -eq 0 ]]; then
+    _report "G24 create with before present → exempt, 0 API calls (isolates before==null)" ok
+  else
+    _report "G24 create-before-present exempt" fail "RC=$RC calls=$calls OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+}
+
+# G25: create with `importing` PRESENT (before null, actions ["create"]) →
+#      EXEMPT, 0 API calls. Single-guard isolator for
+#      `select(.change.importing == null)`: exactness passes and before is null,
+#      so ONLY the importing guard filters it. P2-D.
+t_create_importing_exempt() {
+  _gate "$FIXTURES/tfplan-ruleset-create-importing.json" 200 200 "$POPULATED_BODY"
+  local calls; calls=$(_calls)
+  if [[ "$RC" -eq 0 ]] && [[ "$calls" -eq 0 ]]; then
+    _report "G25 create with importing → exempt, 0 API calls (isolates importing==null)" ok
+  else
+    _report "G25 create-importing exempt" fail "RC=$RC calls=$calls OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+}
+
+# G26: kind=root 404 with an ACCOUNT control probe that returns non-200 →
+#      fail-closed with the DISTINCT account-control message. A zone control 200
+#      proves nothing about the accounts/ surface, so a kind=root 404 must NOT
+#      be trusted as "empty" until accounts/<id>/rulesets returns 200. P1-A.
+t_account_control_non200_fails_closed() {
+  : > "$CALLLOG"
+  OUT="$(
+    PREAPPLY_CF_TOKEN="dummy" PREAPPLY_CF_ZONE_ID="test-zone" \
+    PREAPPLY_ENTRYPOINT_FETCH="$STUB" STUB_CALLLOG="$CALLLOG" \
+    STUB_CONTROL_CODE="200" STUB_ACCT_CONTROL_CODE="403" \
+    STUB_TARGET_CODE="404" \
+    bash "$GATE" --gate "$FIXTURES/tfplan-ruleset-create-account.json" 2>&1
+  )" && RC=0 || RC=$?
+  if [[ "$RC" -ne 0 ]] && grep -Eq 'account control probe non-200' <<<"$OUT" \
+     && grep -Eq 'NOT a target finding' <<<"$OUT"; then
+    _report "G26 kind=root 404 behind a non-200 account control probe fails closed (distinct msg)" ok
+  else
+    _report "G26 account control non-200 fails closed" fail "RC=$RC OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+}
+
+# G27: ZONE control probe returns 200 but with a DEGRADED body (0 rules on the
+#      KNOWN-populated control phase) → fail-closed. A 200-with-0-rules on a
+#      definitionally-populated phase proves a degraded read path, so no target
+#      "empty" can be trusted. P1-B (control strengthening).
+t_control_degraded_body_fails_closed() {
+  : > "$CALLLOG"
+  OUT="$(
+    PREAPPLY_CF_TOKEN="dummy" PREAPPLY_CF_ZONE_ID="test-zone" \
+    PREAPPLY_ENTRYPOINT_FETCH="$STUB" STUB_CALLLOG="$CALLLOG" \
+    STUB_CONTROL_CODE="200" STUB_CONTROL_BODY='{"result":{"id":"ctrlid","rules":[]}}' \
+    STUB_TARGET_CODE="404" \
+    bash "$GATE" --gate "$FIXTURES/tfplan-ruleset-create.json" 2>&1
+  )" && RC=0 || RC=$?
+  if [[ "$RC" -ne 0 ]] && grep -Eq "control probe on known-populated phase .* returned 200 with 0 rules" <<<"$OUT"; then
+    _report "G27 control probe 200-with-0-rules (degraded body) fails closed" ok
+  else
+    _report "G27 control degraded body fails closed" fail "RC=$RC OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+}
+
+# G28: PREAPPLY_CF_ZONE_ID empty on a MATCHED plan → fail-closed with the
+#      distinct "zone id empty" message and ZERO API calls (the guard runs after
+#      the match count but before the control probe). Pins the control-zone-empty
+#      guard so deleting it turns this RED. P3.
+t_control_zone_empty_fails_closed() {
+  : > "$CALLLOG"
+  OUT="$(
+    PREAPPLY_CF_TOKEN="dummy" PREAPPLY_CF_ZONE_ID="" \
+    PREAPPLY_ENTRYPOINT_FETCH="$STUB" STUB_CALLLOG="$CALLLOG" \
+    bash "$GATE" --gate "$FIXTURES/tfplan-ruleset-create.json" 2>&1
+  )" && RC=0 || RC=$?
+  local calls; calls=$(_calls)
+  if [[ "$RC" -ne 0 ]] && [[ "$calls" -eq 0 ]] \
+     && grep -Eq 'PREAPPLY_CF_ZONE_ID is empty' <<<"$OUT"; then
+    _report "G28 empty PREAPPLY_CF_ZONE_ID on a matched plan fails closed, 0 API calls" ok
+  else
+    _report "G28 control-zone-empty fails closed" fail "RC=$RC calls=$calls OUT=$(tr '\n' '|' <<<"$OUT")"
   fi
 }
 
@@ -475,29 +632,49 @@ t_parity_adr_lists_out_set() {
   fi
 }
 
-# P3: every apply-*.yml job whose -target set includes a cloudflare_ruleset MUST
-#     also invoke the gate. Today exactly one job (apply-web-platform-infra.yml's
-#     `apply`) targets rulesets; if a NEW job/root gains a ruleset -target
-#     without the gate, this FAILs.
+# P3: every apply-*.yml JOB whose -target set includes a cloudflare_ruleset MUST
+#     invoke the gate IN THAT SAME JOB. Job-granular, not file-granular (P2-A):
+#     each dispatch job runs its OWN `terraform apply`, so a NEW job that
+#     -targets a ruleset without its own gate step is ungated even if a SIBLING
+#     job in the same file has the gate. Parse per-top-level-job blocks (2-space
+#     indent under `jobs:`) and require both the ruleset -target and the gate
+#     script to appear in the SAME block. Mutation-proof: a rogue dispatch job
+#     with `-target=cloudflare_ruleset.x` and no gate step MUST make this FAIL.
 t_parity_ruleset_targets_are_gated() {
-  local wf files=() ungated=()
+  local wf ungated=() jobcount=0
   for wf in "$REPO_ROOT"/.github/workflows/apply-*.yml; do
     [[ -f "$wf" ]] || continue
-    if grep -qE '\-target=cloudflare_ruleset\.' "$wf"; then
-      files+=("$wf")
-      grep -q 'preapply-entrypoint-gate\.sh' "$wf" || ungated+=("$(basename "$wf")")
-    fi
+    # awk emits one line per top-level 2-space block: "<name>\t<hasgate>\t<hasruleset>".
+    # A block starts at a 2-space-indented `name:` line and runs until the next
+    # such line or a column-0 top-level key. `on:`/`env:` pseudo-blocks never
+    # carry a ruleset -target, so they are inert (hasruleset stays 0).
+    while IFS=$'\t' read -r job hasgate hasruleset; do
+      [[ -z "$job" ]] && continue
+      if [[ "$hasruleset" == "1" ]]; then
+        jobcount=$((jobcount + 1))
+        [[ "$hasgate" == "1" ]] || ungated+=("$(basename "$wf"):${job}")
+      fi
+    done < <(awk '
+      /^  [A-Za-z_][A-Za-z0-9_-]*:[[:space:]]*$/ {
+        if (job != "") print job "\t" gate "\t" rs
+        job=$0; sub(/^  /, "", job); sub(/:.*/, "", job); gate=0; rs=0; next
+      }
+      /^[A-Za-z]/ { if (job != "") { print job "\t" gate "\t" rs; job="" } }
+      job != "" && /-target=cloudflare_ruleset\./   { rs=1 }
+      job != "" && /preapply-entrypoint-gate\.sh/   { gate=1 }
+      END { if (job != "") print job "\t" gate "\t" rs }
+    ' "$wf")
   done
-  # Minimum-cardinality guard: at least the known workflow must match, else the
-  # glob/grep silently found nothing and the test is vacuous.
-  if [[ "${#files[@]}" -lt 1 ]]; then
-    _report "P3 ruleset -target sets are gated" fail "0 apply-*.yml matched -target=cloudflare_ruleset — grep/glob broke (expected ≥1)"
+  # Minimum-cardinality guard: at least the known apply job must match, else the
+  # glob/grep/awk silently found nothing and the test is vacuous.
+  if [[ "$jobcount" -lt 1 ]]; then
+    _report "P3 ruleset -target sets are gated" fail "0 JOBS matched -target=cloudflare_ruleset — grep/glob/awk broke (expected ≥1)"
     return
   fi
   if [[ "${#ungated[@]}" -eq 0 ]]; then
-    _report "P3 every apply-*.yml with a cloudflare_ruleset -target invokes the gate [${#files[@]} file(s)]" ok
+    _report "P3 every apply-*.yml JOB with a cloudflare_ruleset -target invokes the gate in-job [${jobcount} job(s)]" ok
   else
-    _report "P3 ruleset -target sets are gated" fail "these target a ruleset WITHOUT the gate: ${ungated[*]}"
+    _report "P3 ruleset -target sets are gated" fail "these JOBS target a ruleset WITHOUT the gate in the same job: ${ungated[*]}"
   fi
 }
 
@@ -554,6 +731,103 @@ t_audit_job_shape() {
   fi
 }
 
+# P3x: every cloudflare_* class enumerated in the destroy-guard class table
+#      (the numbered list in destroy-guard-filter-web-platform.jq) MUST be
+#      adjudicated by the gate (IN gate-covered OR OUT in ADR-133). Turns the
+#      ADR's "cross-referenced so they cannot drift" prose into an assertion: a
+#      class added to the destroy-guard table but never adjudicated here FAILs.
+t_parity_destroy_guard_classes_adjudicated() {
+  local jq_file="$REPO_ROOT/tests/scripts/lib/destroy-guard-filter-web-platform.jq"
+  if [[ ! -f "$jq_file" ]]; then
+    _report "P3x destroy-guard class table cross-ref" fail "missing $jq_file"
+    return
+  fi
+  # Numbered class list only: lines like `#   1. cloudflare_ruleset.*  .rules`.
+  local types t missing=() n=0
+  types=$(grep -E '^#[[:space:]]+[0-9]+\.[[:space:]]+cloudflare_' "$jq_file" \
+          | grep -oE 'cloudflare_[a-z_]+' | sort -u)
+  n=$(grep -c '' <<<"$types")
+  # Minimum-cardinality guard: the numbered table lists ≥4 cloudflare classes.
+  if [[ "$n" -lt 4 ]]; then
+    _report "P3x destroy-guard class table cross-ref" fail "only $n cloudflare_ class(es) parsed from the jq numbered list — extractor broke (expected ≥4)"
+    return
+  fi
+  while IFS= read -r t; do
+    [[ -z "$t" ]] && continue
+    _in_list "$t" "${GATE_COVERED[@]}" || _in_list "$t" "${ADJUDICATED_OUT[@]}" || missing+=("$t")
+  done <<<"$types"
+  if [[ "${#missing[@]}" -eq 0 ]]; then
+    _report "P3x every cloudflare_* class in the destroy-guard table is adjudicated by the gate (IN or OUT) [$n class(es)]" ok
+  else
+    _report "P3x destroy-guard class table cross-ref" fail "in destroy-guard jq but NEITHER gate-covered NOR adjudicated-OUT: ${missing[*]}"
+  fi
+}
+
+# P3x: tunnel-config import forcing function. ADR-133 marks
+#      cloudflare_zero_trust_tunnel_cloudflared_config OUT with the caveat "IN
+#      the day a tunnel is imported" — an import block adopts a LIVE tunnel whose
+#      config[].ingress_rule is a whole-list the gate does NOT cover. FAIL if an
+#      import targeting the tunnel type(s) appears while they remain adjudicated
+#      OUT, forcing conscious re-adjudication (move IN + gate) at import time.
+t_parity_tunnel_import_forcing_function() {
+  local tunnel_out=0
+  _in_list "cloudflare_zero_trust_tunnel_cloudflared_config" "${ADJUDICATED_OUT[@]}" && tunnel_out=1
+  _in_list "cloudflare_zero_trust_tunnel_cloudflared" "${ADJUDICATED_OUT[@]}" && tunnel_out=1
+  # Import blocks in the infra whose `to =` targets a tunnel type. Portable awk:
+  # track an `import {` block and look for the tunnel target inside it.
+  local hits n=0
+  hits=$(awk '
+    /^[[:space:]]*import[[:space:]]*\{/ { inb=1 }
+    inb && /to[[:space:]]*=[[:space:]]*cloudflare_zero_trust_tunnel_cloudflared/ { print FILENAME ": " $0 }
+    inb && /^[[:space:]]*\}/ { inb=0 }
+  ' "$REPO_ROOT"/apps/web-platform/infra/*.tf 2>/dev/null || true)
+  [[ -n "$hits" ]] && n=$(grep -c '' <<<"$hits")
+  if [[ "$tunnel_out" -eq 1 && "$n" -gt 0 ]]; then
+    _report "P3x tunnel import forcing function" fail "import targets cloudflare_zero_trust_tunnel_cloudflared* while adjudicated OUT — config[].ingress_rule is now a whole-list clobber surface. Re-adjudicate IN (ADR-133) + gate it: ${hits}"
+  else
+    _report "P3x no tunnel-config import while adjudicated OUT (whole-list adopt hazard stays closed) [${n} import(s), tunnel_out=${tunnel_out}]" ok
+  fi
+}
+
+# AL1: --audit --live, stub-backed (NO network). Populated arm: control 200 +
+#      every target a 1-rule 200 body → rc=0, LIVE header + control-OK line + a
+#      live rule count of 1 in the table. Fail-closed arm: a non-200 control
+#      probe → rc!=0 with the distinct message. Closes the --live zero-coverage gap.
+t_audit_live_stub() {
+  local out rc=0
+  out="$(
+    PREAPPLY_CF_TOKEN="dummy" PREAPPLY_CF_ZONE_ID="test-zone" \
+    PREAPPLY_CF_ACCOUNT_ID="test-acct" \
+    PREAPPLY_ENTRYPOINT_FETCH="$STUB" \
+    STUB_CONTROL_CODE="200" STUB_TARGET_CODE="200" STUB_TARGET_BODY="$POPULATED_BODY" \
+    bash "$GATE" --audit --live 2>&1
+  )" || rc=$?
+  local ok1=0
+  if [[ "$rc" -eq 0 ]] \
+     && grep -Eq 'PREAPPLY-AUDIT-LIVE' <<<"$out" \
+     && grep -Eq 'control probe .* 200 OK' <<<"$out" \
+     && grep -Eq '\| 200 \| 1 \|' <<<"$out"; then
+    ok1=1
+  fi
+  local out2 rc2=0
+  out2="$(
+    PREAPPLY_CF_TOKEN="dummy" PREAPPLY_CF_ZONE_ID="test-zone" \
+    PREAPPLY_CF_ACCOUNT_ID="test-acct" \
+    PREAPPLY_ENTRYPOINT_FETCH="$STUB" \
+    STUB_CONTROL_CODE="500" STUB_TARGET_CODE="200" STUB_TARGET_BODY="$POPULATED_BODY" \
+    bash "$GATE" --audit --live 2>&1
+  )" || rc2=$?
+  local ok2=0
+  if [[ "$rc2" -ne 0 ]] && grep -Eq "control probe returned HTTP '500'" <<<"$out2"; then
+    ok2=1
+  fi
+  if [[ "$ok1" -eq 1 && "$ok2" -eq 1 ]]; then
+    _report "AL1 --audit --live (stub): populated arm shows rule count 1 + control-OK; non-200 control arm fails closed" ok
+  else
+    _report "AL1 --audit --live stub" fail "ok1=$ok1 rc=$rc ok2=$ok2 rc2=$rc2 out=$(tr '\n' '|' <<<"$out")"
+  fi
+}
+
 # --- Run all -----------------------------------------------------------------
 t_clobber_blocks
 t_empty_404_passes
@@ -571,7 +845,17 @@ t_steady_state_exempt
 t_untargeted_create_fires
 t_multirow_aggregates
 t_zero_match_zero_calls
+t_null_zone_id_fails_closed
+t_null_account_id_fails_closed
+t_null_phase_fails_closed
+t_degraded_200_body_fails_closed
+t_create_before_present_exempt
+t_create_importing_exempt
+t_account_control_non200_fails_closed
+t_control_degraded_body_fails_closed
+t_control_zone_empty_fails_closed
 t_audit_static_table
+t_audit_live_stub
 t_plan_step_captures_json_once
 t_gate_invocation_present
 t_gate_step_env
@@ -580,6 +864,8 @@ t_gate_step_no_ack_bypass
 t_parity_all_types_adjudicated
 t_parity_adr_lists_out_set
 t_parity_ruleset_targets_are_gated
+t_parity_destroy_guard_classes_adjudicated
+t_parity_tunnel_import_forcing_function
 t_audit_dispatch_value_present
 t_audit_job_shape
 
