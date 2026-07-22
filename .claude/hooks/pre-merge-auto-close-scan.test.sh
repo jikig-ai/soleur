@@ -462,6 +462,33 @@ run_case "T16 no PR for branch → allow, no notice" allow \
 
 HOOK_CODE="$(grep -vE '^[[:space:]]*#' "$HOOK")"
 
+# Keyword-set parity. The hook DELEGATES matching to the canonical scanner
+# (RAW = scanner output), but its DIRECTIVE filter and its label-arm extraction
+# each re-spell the close-keyword alternation. If the scanner's keyword set is
+# ever widened (GitHub adds a keyword) and these copies are not, the two arms
+# fail in OPPOSITE directions — the prose arm denies legitimate merges (loud),
+# and the label arm silently stops protecting trackers for the new keyword.
+#
+# Anchor on the GROUP-CLOSING form `resolve[sd]?)`, not the bare group: a
+# widening appends `|<kw>` AFTER `resolve[sd]?`, so a plain substring check for
+# the group still matches (the appended keyword sits inside it) and misses the
+# drift. `resolve[sd]?)` (closer immediately after resolve) disappears the
+# moment any keyword is appended. The contract: exactly one closer in the
+# scanner, exactly two in the hook (DIRECTIVE + extraction). Adding a GitHub
+# keyword means updating all three AND bumping these counts — which is the
+# point.
+TOTAL=$((TOTAL+1))
+canon_closers=$(grep -cF -- 'resolve[sd]?)' "$SCANNER" || true)
+hook_closers=$(printf '%s\n' "$HOOK_CODE" | grep -cF -- 'resolve[sd]?)' || true)
+if [[ "$canon_closers" -eq 1 && "$hook_closers" -eq 2 ]]; then
+  PASS=$((PASS+1)); echo "PASS: keyword-set parity (scanner group closed after resolve, both hook copies match)"
+else
+  FAIL=$((FAIL+1))
+  echo "FAIL: keyword-set parity — 'resolve[sd]?)' closers: scanner $canon_closers (want 1), hook $hook_closers (want 2)."
+  echo "      The close-keyword set drifted between the canonical scanner and the hook's two copies."
+  echo "      If GitHub added a keyword, update the scanner AND both hook regexes AND these counts."
+fi
+
 static_case() {   # <name> <expected-count> <extended-regex>
   local name="$1" expect="$2" pattern="$3" n
   TOTAL=$((TOTAL+1))

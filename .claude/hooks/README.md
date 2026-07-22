@@ -382,9 +382,23 @@ of the three auto-closes on merge. Two checks, evaluated in this order:
 The deny names the issue **and every surface it was found in**, because the
 keyword often has to be scrubbed in more than one.
 
-Inverse of `ship-soak-followthrough-gate.sh` above: that one denies when a
-tracker is *missing* enrollment, this one when an issue *has* the label. Both can
-fire on a single `--auto` merge, so each deny names itself and its own override.
+### The five follow-through / auto-close surfaces
+
+The hook header points here for the authoritative map. In lifecycle order:
+
+| Surface | Trigger | Role |
+|---|---|---|
+| `follow-through-directive-gate.sh` | `gh issue create --label follow-through` | denies **creating** a tracker without a valid sweeper directive |
+| `/ship` Phase 6 | pre-`gh pr create` | blocks any auto-close match whose issue is outside the PR's intended set — **broader** than this hook's prose arm (it flags standalone closes too) |
+| `pr-auto-close-scanner.yml` | `pull_request` events | **observational only** (always exits 0; its header says so) |
+| `ship-soak-followthrough-gate.sh` | `gh pr ready` / `merge --auto` | denies when a referenced tracker is **missing** sweeper enrollment |
+| **this hook** | plain `gh pr merge` | denies when a referenced issue **has** the `follow-through` label |
+
+The last two read the same label with **inverse** intent and can both fire on
+one `--auto` merge, so each deny names itself and its own override. No single
+surface is authoritative for every bypass — `/ship` Phase 6 is the earliest and
+broadest for the agent-driven path, but only an `on: issues.closed` reversal
+layer covers the merges no PreToolUse hook sees (web UI, admin, CI-queued).
 
 - **Fail-open** for the decision, **reported** for diagnosis. A failed
   `gh pr view`, an unresolvable scanner, a failed label lookup, or issues beyond
