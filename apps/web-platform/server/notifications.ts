@@ -10,7 +10,11 @@ import { Resend } from "resend";
 import * as Sentry from "@sentry/nextjs";
 import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "@/server/logger";
-import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
+import {
+  APP_URL_FALLBACK,
+  reportSilentFallback,
+  warnSilentFallback,
+} from "@/server/observability";
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
 import type { InboxItemSeverity } from "@/lib/inbox-severity";
 
@@ -290,7 +294,21 @@ export async function notifyOfflineUser(
     }
 
     if (subscriptions && subscriptions.length > 0) {
-      await sendPushNotifications(subscriptions, payload);
+      const tally = await sendPushNotifications(subscriptions, payload);
+      // Zero-delivery on a statutory item is the dangerous quadrant: with the
+      // #6781 send-marker already written, nothing will retry this tick, so
+      // the user gets NOTHING on a running legal clock while the caller counts
+      // the ping as sent. Surface it — a 410 prunes and self-heals, but any
+      // other failure mode does not.
+      if (tally.delivered === 0 && payload.type === "email_triage" && payload.isStatutory) {
+        warnSilentFallback(null, {
+          feature: "notifications",
+          op: "statutory-notify-zero-delivery",
+          message:
+            "statutory notification reached zero devices; no retry will occur (send-marker already written)",
+          extra: { userId, attempted: tally.attempted, emailId: payload.emailId },
+        });
+      }
     } else {
       // Fallback: send email
       const { data: userData, error: userError } = await supabase.auth.admin.getUserById(userId);
@@ -384,14 +402,27 @@ function costBreakerCopy(payload: CostBreakerNotificationPayload): CostBreakerCo
   }
 }
 
+/** How many of the attempted pushes actually landed. */
+export interface PushDeliveryTally {
+  delivered: number;
+  attempted: number;
+}
+
 /**
  * Send Web Push notifications to all registered devices.
  * On HTTP 410 Gone, deletes the dead subscription immediately.
+ *
+ * Returns a delivery tally so callers can distinguish "we had subscriptions
+ * and they all failed" from "we delivered". That distinction became
+ * load-bearing with the statutory repin send-marker (#6781): before the guard,
+ * a failed push left the row un-pruned and the next tick retried, an accidental
+ * two-run self-heal. With a marker written the retry no longer happens, so a
+ * silent all-fail would be PERMANENT silence on a statutory deadline.
  */
 export async function sendPushNotifications(
   subscriptions: PushSubscriptionRow[],
   payload: NotificationPayload,
-): Promise<void> {
+): Promise<PushDeliveryTally> {
   ensureVapid();
 
   let body: string;
@@ -508,6 +539,8 @@ export async function sendPushNotifications(
       .update({ last_used_at: new Date().toISOString() })
       .in("id", deliveredIds);
   }
+
+  return { delivered: deliveredIds.length, attempted: subscriptions.length };
 }
 
 /**

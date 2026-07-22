@@ -99,7 +99,6 @@ Issue: #6297 · Branch: `feat-one-shot-6297-anthropic-key-missing-false-page` ·
       actually reads) and `prd_terraform` as `TF_VAR_ANTHROPIC_ADMIN_KEY` (Terraform's input). A
       `prd_terraform`-only paste never reaches the cron and would leave the tracker TRANSIENT
       forever. Use the 6-row actor table in §Operator Action.
-<!-- lint-infra-ignore start -->
 <!--
   Deferred-orchestrator prose. This describes the CONTENTS of a FUTURE IaC PR that
   is deliberately not opened: it cannot merge before the key exists (a no-default
@@ -118,10 +117,11 @@ Issue: #6297 · Branch: `feat-one-shot-6297-anthropic-key-missing-false-page` ·
   matching the CI workflow FILENAME `apply-web-platform-infra.yml` — i.e. the sentinel
   matched the name of the very automation that makes this non-human.
 
-  REMOVE THIS REGION once #6771 lands (it narrows the imperative so a workflow
-  filename cannot satisfy it). A carve-out that outlives its cause is a permanent
-  blind spot in a P0 gate — this one exists only because the sentinel is currently
-  unable to tell a filename from a command.
+  RESOLVED: #6771 landed and the region was removed. The sentinel now neutralizes
+  `*.yml`/`*.yaml` filenames before scanning, so a workflow name can no longer supply
+  an actor or an imperative. (It does this by blanking the filename, not by narrowing
+  the imperative — the imperative-narrowing approach was measured and reverted; see
+  ADR-132.) This comment is retained as provenance for why the carve-out existed.
 -->
 - [x] 4.11 File the IaC follow-up issue/PR stub (do **not** open it for merge). It must carry **three**
       things together: the no-default sensitive `variable`, the `doppler_secret` with
@@ -131,7 +131,6 @@ Issue: #6297 · Branch: `feat-one-shot-6297-anthropic-key-missing-false-page` ·
       **Filed as #6765**, carrying all three elements plus the ADR-065 merge-order gate
       (secret-in-`prd_terraform`-first, IaC-second) and the `anthropic-admin-key-6297.sh`
       close criterion.
-<!-- lint-infra-ignore end -->
 
 ## Phase 5 — Records
 

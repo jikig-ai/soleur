@@ -308,9 +308,9 @@ bounded prefix of fsck output. fsck output is object-id-shaped by default; `--na
 **path-bearing** (measured: `(:clients/acme-corp/salary-2024.csv)`). Forbidden by AC2; every field
 `_vscrub`'d; `first=` truncated to `FSCK_OUT_CAP`.
 
-**Brand-survival threshold:** `single-user incident` — one user with an unreadable repo and no
-plaintext fallback is a brand-ending event. CPO sign-off required at plan time; `user-impact-reviewer`
-runs at review time.
+- **Brand-survival threshold:** `single-user incident` — one user with an unreadable repo and no
+  plaintext fallback is a brand-ending event. CPO sign-off required at plan time;
+  `user-impact-reviewer` runs at review time.
 
 ## Implementation Phases
 
