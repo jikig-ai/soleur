@@ -66,8 +66,11 @@ The #6746 hazard is precisely: *a create silently **adopts** and **whole-replace
 a server-side singleton addressed by a **natural / composite key** that can
 pre-exist outside Terraform (e.g. created directly in the CF dashboard).*
 Adjudicating every `cloudflare_*` class declared in `apps/web-platform/infra/`
-against that principle (cross-referenced to the destroy-guard class table at
-`destroy-guard-filter-web-platform.jq:5-16` so the two cannot drift):
+against that principle (cross-referenced to the **numbered resource-class list**
+in the header comment of `destroy-guard-filter-web-platform.jq` — the entries
+`1. cloudflare_ruleset.* … 5. cloudflare_zero_trust_access_policy.*` — so the two
+cannot drift; the parity test `t_parity_destroy_guard_classes_adjudicated` asserts
+every `cloudflare_*` class in that list is adjudicated here):
 
 | Class | Key | Silent-adopt on create? | Verdict |
 |---|---|---|---|
@@ -92,12 +95,42 @@ test in `tests/scripts/test-preapply-entrypoint-gate.sh` FAILs if a dispatch
 `cloudflare_*` type appears that is neither gate-covered nor adjudicated-OUT
 here — making the coupling *tested*, not prose someone must remember to update.
 
+**Tunnel-config caveat + its forcing function.** `cloudflare_zero_trust_tunnel_cloudflared_config`
+is adjudicated OUT *only while its tunnel is TF-born in the same apply* — the day
+a **live** tunnel is imported, its `config[0].ingress_rule` becomes exactly the
+whole-list adopt-and-replace surface this gate exists to guard, and the class must
+move IN (add a gate probe). That day is not left to memory: the parity test
+`t_parity_tunnel_import_forcing_function` FAILs if any `import {}` block (or an
+`importing` target) references `cloudflare_zero_trust_tunnel_cloudflared*` while
+those types remain in the adjudicated-OUT set, forcing conscious re-adjudication
+at import time.
+
+**Tunnel-config import caveat + its forcing function.**
+`cloudflare_zero_trust_tunnel_cloudflared_config` is OUT *only because* it always
+attaches to a tunnel TF creates in the same apply (fresh → nothing to adopt). The
+day someone `import {}`s a **live** tunnel, its `config[0].ingress_rule` becomes a
+whole-list the gate does NOT cover — the exact #6746 shape, one class over. That
+latent hazard is closed by a forcing function, not vigilance: the parity test
+`t_parity_tunnel_import_forcing_function` FAILs if an `import` block (or an
+`importing` target) points at `cloudflare_zero_trust_tunnel_cloudflared*` while
+that type remains adjudicated-OUT here — forcing a conscious re-adjudication (move
+IN + extend the gate to the tunnel-config whole-list) at import time.
+
 ### Dispatch-job / sibling-workflow boundary
 
 The `workflow_dispatch` jobs and the sibling `apply-deploy-pipeline-fix.yml`
 `-target` only `hcloud_*`/`doppler_*`/`random_*`/`terraform_data.*` resources.
 Because `-target` transitivity flows toward *dependencies*, not dependents, none
-can pull in a ruleset create. The parity test backs this as a tested invariant.
+can pull in a ruleset create. Two distinct guarantees back this, and it is worth
+being precise about which the parity test covers: the test
+(`t_parity_ruleset_targets_are_gated`) is **job-granular** — it asserts that *any*
+apply job whose block contains a `-target=cloudflare_ruleset.` invokes the gate in
+that SAME job, so a future dispatch job that pulls in a ruleset create cannot be
+ungated (a rogue `-target=cloudflare_ruleset.x` job with no gate step FAILs it).
+The *current* absence of any such dispatch target, by contrast, rests on
+enumeration + `-target` dependency-transitivity (the reasoning above), not on a
+per-run assertion. So the invariant that is directly **tested** is "a ruleset
+`-target` ⇒ an in-job gate", which is what makes the boundary safe under change.
 
 ## Alternatives Considered
 
