@@ -159,6 +159,13 @@ if want_scripts; then
   run_suite "scripts/review-reminder-liveness" bash scripts/review-reminder-liveness.test.sh
   run_suite "scripts/zot-restart-loop-alarm" bash scripts/zot-restart-loop-alarm.test.sh
   run_suite "scripts/followthrough-exec-bit" bash scripts/followthrough-exec-bit.test.sh
+  # #6757: enforce the ${VAR:?}/${VAR?} ban in follow-through probes. Two explicit run_suite
+  # lines because scripts/*.test.sh is NOT auto-globbed here — an unregistered suite is an
+  # ORPHAN that gates nothing (#5417/#6734 class; lint-orphan-test-suites.sh FAILs on it).
+  # -live runs the guard over the REAL tree (the actual gate); the .test.sh is the mutation
+  # proof (both RED directions) that the guard can catch the banned form.
+  run_suite "scripts/followthrough-varq-ban-live" bash scripts/lint-followthrough-varq-ban.sh
+  run_suite "scripts/followthrough-varq-ban" bash scripts/lint-followthrough-varq-ban.test.sh
   # Was an ORPHAN until #6698 — the suite existed and passed locally but was
   # registered in no runner, so it gated nothing (exactly the class the comment
   # above warns about). It covers the sweeper's path-traversal/symlink rejection
