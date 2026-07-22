@@ -910,7 +910,7 @@ jobs:
           MERGE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          issues=$(gh issue list --label "infra-drift" --state open \
+          issues=$(gh issue list --label "infra-drift" --state open -L 200 \
             --search "infra: drift detected in web-platform in:title" \
             --json number --jq '.[].number')
           for n in $issues; do
