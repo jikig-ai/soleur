@@ -408,7 +408,7 @@ make_gh_stub() {
 #!/usr/bin/env bash
 printf '%s\n' "gh \$*" >> "$root/gh-calls.log"
 case "\$*" in
-  *"state:closed"*)          printf '%s' '$closed_json' ;;
+  *"--state closed"*)        printf '%s' '$closed_json' ;;
   *"issue list"*)            printf '%s' '$open_json' ;;
   *"--json comments"*)       printf '%s' '$comments_json' ;;
   *"issue comment"*)         cat >/dev/null ;;
@@ -655,7 +655,7 @@ EOF
   local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
 
   assert_contains     "T16 queries the closed set by label+state+recency" \
-                      "label:follow-through state:closed closed:>=" "$calls"
+                      "--state closed --search label:follow-through closed:>=" "$calls"
   assert_contains     "T16 honors CLOSED_LIMIT on the closed query" \
                       "--limit 30" "$calls"
   assert_contains     "T16 reopens the COMPLETED candidate" \

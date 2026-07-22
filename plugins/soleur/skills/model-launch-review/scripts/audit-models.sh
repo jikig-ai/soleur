@@ -159,7 +159,7 @@ echo "  - pricing: compare apps/web-platform/server/inngest/functions/agent-on-s
 echo "    MODEL_PRICING rows against the claude-api source-of-truth; never auto-edit (billing constant)."
 echo "  - tier-map: re-check cron model literals + ADR-053 / plugins/soleur/AGENTS.md policy vs new pricing."
 echo "    (workflow-model-pins.test.ts PIN_ALLOWLIST is a don't-mutate invariant, not a pricing surface.)"
-echo "  - dormant: gh issue list --state open --search 'deferred model OR pricing'"
+echo "  - dormant: gh issue list --state open -L 200 --search 'deferred model OR pricing'"
 echo "  - thinking-API shape: carried by the claude-code-action pin's SDK; no config params today (no-op)."
 echo
 echo "== end audit =="

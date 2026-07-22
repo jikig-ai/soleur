@@ -135,8 +135,8 @@ inngest send cron/kb-template-health.manual-trigger --data '{}'
 Then confirm the tracking issue auto-closed:
 
 ```bash
-gh issue list --repo jikig-ai/soleur \
-  --search 'in:title "kb-template health" is:open' --json number,title
+gh issue list --repo jikig-ai/soleur --state open -L 200 \
+  --search 'in:title "kb-template health"' --json number,title
 ```
 
 An empty list confirms recovery.
