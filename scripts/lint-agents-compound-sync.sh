@@ -137,9 +137,19 @@ SITES=(
   "plugins/soleur/skills/plan/SKILL.md|([0-9]+)-byte critical cap|REJECT"
   "plugins/soleur/skills/plan/SKILL.md|per-rule ([0-9]+)-byte cap|PER_RULE_CAP"
   "plugins/soleur/skills/compound/SKILL.md|cap per-rule length at ~([0-9]+)|PER_RULE_CAP"
+  "plugins/soleur/scripts/grok-fidelity-gate.sh|B_ALWAYS <= ([0-9]+)|REJECT"
+  "knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md|B_ALWAYS >= ([0-9]+)|WARN"
+  "knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md|reject above .([0-9]+).|REJECT"
 )
 
-UNIT_NOTE="thresholds are defined over frontmatter-stripped bytes; some consumers measure raw file length (~73 B higher)"
+# The linter measures FRONTMATTER-STRIPPED bytes; some consumers (the cron,
+# compound-promote.sh) measure RAW file length, which is structurally >= stripped.
+# So a raw-vs-stripped comparison refuses slightly EARLIER than the commit gate --
+# the fail-safe direction. This guard asserts CONSTANT equality, not
+# measurement-basis equality, so the diagnostic names the unit rather than
+# implying the two bases agree. (No magnitude here: the exact gap is the current
+# frontmatter size and drifts; the DIRECTION is the invariant.)
+UNIT_NOTE="raw file length is structurally >= the linter's frontmatter-stripped basis, so a raw consumer refuses no later than the gate"
 
 if [[ -n "$EXPECT_WARN" && -n "$EXPECT_REJECT" && -n "$EXPECT_CAP" ]]; then
   for spec in "${SITES[@]}"; do
@@ -210,13 +220,23 @@ if [[ -f "$COMPOUND_ABS" ]]; then
   #      NOT whole-file: the retained emit_incident snippet legitimately
   #      contains "~600 bytes", and a whole-file negative would false-fail a
   #      correct implementation.
-  #      The pattern covers prose forms (22k, 21,949), not just bare digits --
-  #      a digit-only pattern passes while the file is still wrong.
+  #
+  #      The pattern matches any byte-budget-SHAPED literal (a bare 5-digit run,
+  #      an `NN,NNN` prose form, or an `NNk` form) rather than an enumerated set
+  #      of today's values. An enumerated `(18|20|22|23)000` set would go VACUOUS
+  #      the moment B_ALWAYS_REJECT is bumped: re-adding `critical > 22000` after
+  #      a bump to 25000 would pass the guard -- the exact drift this check
+  #      exists to survive. The one legitimate 5-digit collision is a future
+  #      issue ref (`#12345`) in the remediation prose, so the leading
+  #      `(^|[^#0-9])` excludes a `#`-prefixed number; 3-digit legitimates in the
+  #      region (115 rule-threshold, 300 constitution cap, 600 per-rule cap) are
+  #      below the 5-digit floor. Verified to catch `rejects at > 22000`, `22k`,
+  #      `21,949`, and a post-bump stale `25000` while ignoring `#12345`.
   region=$(awk '/^8\. \*\*Rule budget count\.\*\*/,/^   B_TOTAL is informational only/' "$COMPOUND_ABS")
   if [[ -z "$region" ]]; then
     err "$COMPOUND_REL: could not locate step 8's tier-decision region -- the anchor moved; fix this guard rather than dropping the check"
   else
-    hits=$(printf '%s\n' "$region" | grep -nE '(18|20|22|23)000|\b(18|20|22|23)k\b|\b2[0-9],[0-9]{3}\b' || true)
+    hits=$(printf '%s\n' "$region" | grep -nE '(^|[^#0-9])[0-9]{2},?[0-9]{3}\b|\b[0-9]{2,3}k\b' || true)
     if [[ -n "$hits" ]]; then
       err "$COMPOUND_REL: step 8's tier-decision region restates a threshold literal -- delegate to $LINTER_REL instead. Offending: ${hits//$'\n'/ | }"
     fi

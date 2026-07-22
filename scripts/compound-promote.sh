@@ -162,9 +162,10 @@ ALWAYS_LOADED_NOW=0
 # is what issue #6461 was filed for.
 #
 # UNIT SKEW (deliberate, fail-safe): the linter's thresholds are defined over
-# FRONTMATTER-STRIPPED bytes; the `wc -c` measurements above are RAW. Raw runs
-# ~73 B above stripped, so this comparison refuses slightly earlier than the
-# commit gate would — the safe direction, accepted knowingly.
+# FRONTMATTER-STRIPPED bytes; the `wc -c` measurements above are RAW. Raw is
+# structurally >= stripped, so this comparison refuses no later than the commit
+# gate would — the safe direction, accepted knowingly. (The exact gap drifts with
+# frontmatter size; the direction is the invariant.)
 #
 # Hard ceiling, mirroring the commit gate (post-apply enforcement).
 ALWAYS_LOADED_CAP=23000

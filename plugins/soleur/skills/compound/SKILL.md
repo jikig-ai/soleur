@@ -222,12 +222,13 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
      'AGENTS.md rules cap at ~600 bytes; `**Why:**` is o'
    ```
 
-   **Always-loaded verdict — run the linter:**
+   **Always-loaded verdict — run the linter and capture its exit code:**
 
    ```bash
    cd "$(git rev-parse --show-toplevel)" && \
      python3 scripts/lint-agents-rule-budget.py \
        AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>&1
+   echo "linter exit=$?"
    ```
 
    Two things about this invocation are load-bearing:
@@ -235,18 +236,20 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    - **The `2>&1` is not cosmetic.** `[WARN]` and `[REJECT]` print to **stderr**; only `[OK]` goes to stdout. The repo routinely sits in the WARN tier, where stdout is empty and the exit code is 0 — so without the redirect you capture nothing and report "no signal" when there is one.
    - **Do not hand-roll the byte math.** The thresholds are defined over **frontmatter-stripped** bytes; a `wc -c` sum overstates the payload by the frontmatter size and misreports headroom in precisely the near-cap regime where the number decides whether a rule can land.
 
-   Quote the linter's verdict line verbatim. Do not paraphrase it into a number of your own.
+   Read the result off **both** the exit code and the output — the exit code is the source of truth for "is the commit blocked", the verdict line only reports the always-loaded tier:
 
-   **Degrade path.** This skill also runs against consumer repos, where the linter, `python3`, or the four-file `AGENTS.*` split may all be absent. Do not fail the phase — report which of these happened and continue:
+   | Exit | Output | Report |
+   |---|---|---|
+   | 0 | an `[OK]` / `[WARN]` verdict line | quote that line verbatim into the template's `always-loaded:` slot |
+   | non-zero | a verdict line **is** present (`[OK]` / `[WARN]` / `[REJECT]`) | the commit is **blocked**. Quote the verdict line **and** every `ERROR:` line. A `[REJECT] B_ALWAYS>…` means the payload is over budget → apply the shrink ladder below. An `ERROR: rule body exceeds …` alongside an `[OK]` verdict means the always-loaded payload is fine but one rule body is too large → the fix is trimming that **one named rule**, not the payload. Do not quote the `[OK]` alone and call it healthy — the non-zero exit means something is blocking the commit. |
+   | non-zero | **no** verdict line at all | the linter errored before emitting a verdict — a missing always-loaded file (exit 2) or malformed frontmatter (exit 1). Report `always-loaded: linter errored — <first ERROR: line>`; never infer a tier from silence. |
+
+   **Consumer-repo degrade.** This skill is distributed and also runs against repos that have no rule-budget linter. Pre-check before invoking:
 
    | Condition | Detect | Report |
    |---|---|---|
    | Linter not present | `[ -f scripts/lint-agents-rule-budget.py ]` false | `always-loaded: not measured (no rule-budget linter in this repo)` |
    | `python3` not on PATH | `command -v python3` empty | `always-loaded: not measured (python3 unavailable)` |
-   | Exit 2 — `AGENTS.md` missing | exit code `2` | `always-loaded: not measured (no AGENTS.md)` |
-   | Exit 1 with no verdict line | no `[OK]`/`[WARN]`/`[REJECT]` in output | `always-loaded: linter errored — <first line of output>` |
-
-   The last two matter because a malformed-frontmatter or missing-file error emits **no** verdict line at all. If you see no `[OK]`/`[WARN]`/`[REJECT]`, say the linter errored and paste its first output line — never infer a tier from silence.
 
    Registry statistics the linter does not compute:
 
@@ -269,7 +272,9 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
      - Retire an existing rule via [retired-rule-ids.txt](../../../../scripts/retired-rule-ids.txt) (rule IDs are immutable — retire, never renumber or reuse).
      - Demote `wg-*` class-specific rules from `AGENTS.core.md` to `AGENTS.rest.md`. Per CPO sign-off PR #3496, **only `wg-*` may be demoted — never `hr-*`**. Before demoting any `wg-*`, verify loader-class fit: `grep -n 'DOCS_RE=' -A 25 .claude/hooks/session-rules-loader.sh` — if the rule fires on docs-only sessions but `AGENTS.rest.md` does not load on docs-only, KEEP it in core.
      - When trimming `**Why:**` lines to fit, preserve per-issue mechanism labels (the text after each `#N`); strip redundant prose only. Correct: `**Why:** #2618 per-command-ack; #2880 non-interactive exec.` Over-trimmed: `**Why:** #2618; #2880.` (loses the per-issue mechanism distinction downstream readers use to map a rule to its triggering incident class).
-   - If the linter reported **`[REJECT]`** — the commit is already blocked. Shrink is mandatory before anything else lands; apply the same remediation ladder above, and do not attempt to add a rule first.
+   - If the linter **exited non-zero** — the commit is already blocked, and the fix depends on *why*:
+     - a `[REJECT] B_ALWAYS>…` verdict means the always-loaded payload is over budget → shrink is mandatory before anything else lands; apply the same remediation ladder above, and do not attempt to add a rule first.
+     - an `ERROR: rule body exceeds …` (which can appear alongside an `[OK]` always-loaded verdict) means one rule body is over the per-rule cap → trim that **single named rule** by moving its context to a learning file; the payload-shrink ladder does not address it.
    - If `L > 600`: `"[WARNING] longest rule is L bytes — cap per-rule length at ~600 (see cq-agents-md-why-single-line) by moving context to learning files."`
    - If `A > 115`: `"[ADVISORY] rule count (A/115) — bytes-first policy per cq-agents-md-why-single-line; count is informational."` <!-- rule-threshold: 115 -->
    - If `C > 300`: `"[WARNING] constitution.md is large (C/300) — consider migrating narrow rules to skill/agent instructions."`

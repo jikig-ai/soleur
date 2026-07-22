@@ -143,9 +143,8 @@ the linter rejects any future reintroduction of the retired ID.
 - **Always-loaded payload is already tight.** Do not trust a figure quoted
   here — run `python3 scripts/lint-agents-rule-budget.py AGENTS.md
   AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>&1` for the current number
-  and tier. As of 2026-07-20 it reports `B_ALWAYS=22900` against a reject
-  ceiling of `23000`, i.e. the payload sits in the WARN tier with roughly
-  27 bytes of raw headroom against the promoter's cap. Expect essentially
+  and tier. As of 2026-07-20 it reports `B_ALWAYS=22900` in the WARN tier,
+  roughly two dozen bytes of raw headroom below the reject ceiling. Expect essentially
   every `agents-core` proposal to be refused until a trim lands — that is the
   budget genuinely being exhausted, not a stale constant. Retire stale rules
   first to create headroom.

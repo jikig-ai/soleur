@@ -107,7 +107,9 @@ make_fixture_tree() {
   mkdir -p "$root/scripts" \
            "$root/apps/web-platform/server/inngest/functions" \
            "$root/plugins/soleur/skills/plan" \
-           "$root/plugins/soleur/skills/compound"
+           "$root/plugins/soleur/skills/compound" \
+           "$root/plugins/soleur/scripts" \
+           "$root/knowledge-base/engineering/operations/runbooks"
 
   cat > "$root/scripts/lint-agents-rule-budget.py" <<EOF
 #!/usr/bin/env python3
@@ -137,6 +139,17 @@ EOF
 # plan
 
 Measure against the ${FIX_REJECT}-byte critical cap, in addition to the per-rule ${FIX_CAP}-byte cap.
+EOF
+
+  cat > "$root/plugins/soleur/scripts/grok-fidelity-gate.sh" <<EOF
+#!/usr/bin/env bash
+echo "==> AGENTS rule-budget lint (B_ALWAYS <= ${FIX_REJECT})"
+EOF
+
+  cat > "$root/knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md" <<EOF
+# runbook
+
+warn at \`B_ALWAYS >= ${FIX_WARN}\`, reject above \`${FIX_REJECT}\`.
 EOF
 
   make_compound_skill "$root"
@@ -187,10 +200,12 @@ t1_in_sync_passes() {
   make_fixture_tree "$root"
   run_guard "$root"
   assert_exit "T1 in-sync fixture exits 0" "0" "$GUARD_RC"
-  # Pin the table size. Coverage is asserted per-symbol by T2/T8/T9, but a count
-  # pin additionally catches a row being SWAPPED rather than dropped (which
-  # per-symbol coverage alone would not notice).
-  assert_contains "T1 reports the expected site count" "10 sites" "$GUARD_OUT"
+  # No site-COUNT pin here. It cannot catch a row being SWAPPED (one removed, one
+  # added leaves the count unchanged), and a dropped row is already caught by
+  # T2/T8/T9, which name every file per authority symbol -- a dropped row means
+  # its file stops appearing in the bump output. A bare count pin would only add
+  # a maintenance tax that reds on every legitimate row addition while asserting
+  # a "catches swaps" property it does not have (this PR's own defect class).
   rm -rf "$root"
 }
 
@@ -215,6 +230,10 @@ t2_linter_only_bump_names_every_site() {
     "AGENTS.docs.md" "$GUARD_OUT"
   assert_contains "T2 names the plan/SKILL.md site" \
     "plan/SKILL.md" "$GUARD_OUT"
+  assert_contains "T2 names the grok-fidelity-gate.sh site" \
+    "grok-fidelity-gate.sh" "$GUARD_OUT"
+  assert_contains "T2 names the runbook site" \
+    "compound-promote-runbook.md" "$GUARD_OUT"
   assert_contains "T2 reports the expected value" "99000" "$GUARD_OUT"
   rm -rf "$root"
 }
@@ -396,6 +415,8 @@ t9_warn_covers_every_site() {
   assert_contains "T9 covers the compound-promote.sh propose site" \
     "compound-promote.sh" "$GUARD_OUT"
   assert_contains "T9 covers AGENTS.docs.md warn" "AGENTS.docs.md" "$GUARD_OUT"
+  assert_contains "T9 covers the runbook warn site" \
+    "compound-promote-runbook.md" "$GUARD_OUT"
   rm -rf "$root"
 }
 
@@ -411,10 +432,13 @@ t6b_dropped_stderr_redirect_is_caught
 t6c_readded_threshold_literal_is_caught
 t7_sentinel_desync_still_caught
 
-# Minimum-cardinality guard: if a refactor silently drops case invocations, an
-# empty run must not report success.
-if (( TOTAL < 36 )); then
-  echo "FAIL: suite ran only $TOTAL assertions -- expected >= 36 (cases dropped?)"
+# Catastrophic-drop backstop: if a refactor silently drops the case invocations
+# at the bottom of this file, an empty/near-empty run must not report success.
+# Deliberately a loose FLOOR, not the exact count -- an exact pin would just be a
+# maintenance tax that reds on every legitimately-added assertion. The real
+# per-case coverage lives in T1-T9; this only catches a wholesale drop.
+if (( TOTAL < 30 )); then
+  echo "FAIL: suite ran only $TOTAL assertions -- expected a floor of 30 (cases dropped?)"
   exit 1
 fi
 

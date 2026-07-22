@@ -69,11 +69,12 @@ export const MAX_DIFF_BYTES = 16384;
 //
 // UNIT SKEW (deliberate, fail-safe direction): the linter's thresholds are
 // defined over FRONTMATTER-STRIPPED bytes, while the measurements below are RAW
-// file lengths (`(await readFile(p)).length`, no strip). Raw currently runs ~73 B
-// above stripped, so comparing raw against a stripped-basis threshold refuses
-// slightly EARLIER than the commit gate would. That is the safe direction and is
-// accepted knowingly rather than by accident. Porting the frontmatter strip here
-// so the comparison is unit-exact is tracked as a follow-up.
+// file lengths (`(await readFile(p)).length`, no strip). Raw is structurally >=
+// stripped, so comparing raw against a stripped-basis threshold refuses no LATER
+// than the commit gate would. That is the safe direction and is accepted
+// knowingly. (The exact gap is the current frontmatter size and drifts — the
+// direction is the invariant.) Porting the frontmatter strip here so the
+// comparison is unit-exact is tracked as a follow-up.
 //
 // Hard ceiling for the POST-APPLY gate: mirrors the commit gate exactly, so an
 // applied diff that would be rejected at commit time is reverted here instead.
