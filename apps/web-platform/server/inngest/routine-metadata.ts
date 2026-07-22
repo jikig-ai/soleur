@@ -43,6 +43,7 @@ export interface RoutineMeta {
 }
 
 export const ROUTINE_METADATA: Record<string, RoutineMeta> = {
+  "cron-action-required-sla": { description: "Weekly staleness contract for the action-required queue: escalates aging ops asks and auto-expires dead chores (fail-safe, never closes an ops ask).", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Weekly · Fri 12:00 UTC", manualTrigger: "allowed" },
   "cron-agent-native-audit": { description: "Audits the codebase for agent-native architecture violations and files scored findings as GitHub issues.", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Monthly · 15th 09:00 UTC", manualTrigger: "allowed" },
   "cron-anthropic-cost-report": { description: "Daily pull of the Anthropic Admin cost & usage API; emits an authoritative per-model + org-total spend marker to Better Stack.", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Daily (06:17 UTC)", manualTrigger: "allowed" },
   "cron-anthropic-credit-probe": { description: "Hourly 1-token canary on the operator Anthropic API key; pages Sentry when credit is exhausted or the key is invalid.", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Hourly (:47)", manualTrigger: "allowed" },

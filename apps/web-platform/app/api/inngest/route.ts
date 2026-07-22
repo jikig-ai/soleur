@@ -19,7 +19,9 @@ import { serve } from "inngest/next";
 import { inngest } from "@/server/inngest/client";
 import { agentOnSpawnRequested } from "@/server/inngest/functions/agent-on-spawn-requested";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
+import { cronActionRequiredSla } from "@/server/inngest/functions/cron-action-required-sla";
 import { cronAgentNativeAudit } from "@/server/inngest/functions/cron-agent-native-audit";
+import { slaIssueProcess } from "@/server/inngest/functions/sla-issue-process";
 import { cronAnthropicCostReport } from "@/server/inngest/functions/cron-anthropic-cost-report";
 import { cronAnthropicCreditProbe } from "@/server/inngest/functions/cron-anthropic-credit-probe";
 import { cronArchitectureDiagramSync } from "@/server/inngest/functions/cron-architecture-diagram-sync";
@@ -124,6 +126,8 @@ export const { GET, POST, PUT } = serve({
   functions: [
     agentOnSpawnRequested,
     cfoOnPaymentFailed,
+    cronActionRequiredSla,
+    slaIssueProcess,
     cronAgentNativeAudit,
     cronAnthropicCostReport,
     cronAnthropicCreditProbe,
