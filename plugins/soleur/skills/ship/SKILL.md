@@ -948,13 +948,17 @@ Enforces the operator's standing rule — **every detected incident gets a post-
    PR_TEXT=$(gh pr view --json title,body --jq '.title + "\n" + .body' 2>/dev/null || true)
    PLAN_PATH=$(printf '%s' "$PR_TEXT" | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+' | head -n1 || true)
    PLAN_TEXT=""; [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]] && PLAN_TEXT=$(cat "$PLAN_PATH")
-   HAYSTACK=$(printf '%s\n%s' "$PR_TEXT" "$PLAN_TEXT")
-   OUTAGE_RE='(outage|incident|broke[n]?|down for|silently (broken|failing)|regression in prod|users? (cannot|could not|can.?t)|unable to (send|use|log ?in)|production .*(broken|down|failing)|Sentry .*(error|alert).*(prod|production|user))'
-   PROD_RE='(prod|production|deployed|live|app\.soleur\.ai|tenant-zero|customer)'
-   echo "$HAYSTACK" | grep -qiE "$OUTAGE_RE" && echo "$HAYSTACK" | grep -qiE "$PROD_RE" && echo "INCIDENT-SIGNAL: yes"
+   # The gate owns the regexes + strips (scripts/ship-incident-pir-gate.sh, #6813);
+   # branch on its exit — 0 = signal (prints "INCIDENT-SIGNAL: yes"), 1 = no signal.
+   # Do NOT let `set -e` see the exit: a clean no-signal is exit 1, not a failure.
+   if printf '%s\n%s' "$PR_TEXT" "$PLAN_TEXT" | bash "${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/ship-incident-pir-gate.sh"; then
+     echo "gate: incident signal — a PIR is required (see below)."
+   else
+     echo "gate: no incident signal."
+   fi
    ```
 
-   A greenfield-feature PR (no production-failure framing) does NOT trigger — the signals require BOTH an outage verb AND a production context. When uncertain, the gate fires (fail-toward-PIR for ambiguous prod-fix PRs); over-producing a short PIR is cheaper than losing an incident's learning.
+   The scan strips the `brand_survival_threshold:` label and the `## User-Brand Impact` hypothetical framing before matching, and matches only PAST-TENSE outage vocabulary (never bare `incident`, which trips on the threshold literal and inside `incidental` — the #6813 false positive). A greenfield-feature PR (no production-failure framing) does NOT trigger — the signals require BOTH a past-tense outage verb AND a production context. When uncertain, the gate fires (fail-toward-PIR for ambiguous prod-fix PRs); over-producing a short PIR is cheaper than losing an incident's learning. **Why:** #6813 — the old inline regex fired on essentially every `single-user incident` plan (incl. the preventive-hardening PR #6782), training the operator to dismiss it. The gate now lives in a tested script (`plugins/soleur/test/ship-incident-pir-gate.test.ts` runs it against both-direction fixtures).
 
 **If triggered — require a PIR on the branch:**
 
