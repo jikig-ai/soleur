@@ -474,41 +474,41 @@ The ADR ships with the gate in this PR — not deferred.
 ### Pre-merge (PR)
 
 #### Functional Requirements
-- [ ] Gate exits non-zero for a `cloudflare_ruleset` planned as `== ["create"]`
+- [x] Gate exits non-zero for a `cloudflare_ruleset` planned as `== ["create"]`
   with `before == null` whose (stubbed) live entrypoint returns 200 with ≥1 rule;
   exits 0 for 404 (empty) and for the import + steady-state shapes.
-- [ ] Gate is **default-deny**: control-probe non-200, empty token, malformed
+- [x] Gate is **default-deny**: control-probe non-200, empty token, malformed
   plan JSON, unclassified `kind`, and every non-200/404 HTTP code (000/401/403/429/5xx/
   non-numeric) each yield a non-zero exit with a distinct message (one fixture per branch).
-- [ ] Gate does NOT fire on a `-replace` (`["delete","create"]`, `before != null`)
+- [x] Gate does NOT fire on a `-replace` (`["delete","create"]`, `before != null`)
   (fixture `tfplan-ruleset-replace.json`).
-- [ ] Gate iterates the full `resource_changes[]` array (untargeted-create
+- [x] Gate iterates the full `resource_changes[]` array (untargeted-create
   fixture fires) and aggregates across multiple matched rows (PASS+FAIL → non-zero).
-- [ ] Gate makes **zero** live API calls when no create-from-absent whole-list
+- [x] Gate makes **zero** live API calls when no create-from-absent whole-list
   resource is present (assert stub call-count 0 on import/steady-state/normal fixtures).
-- [ ] Gate handles both `zone_id` and `account_id` rulesets; the `::error::` on a
+- [x] Gate handles both `zone_id` and `account_id` rulesets; the `::error::` on a
   clobber carries a copy-pasteable **singular** `zone/<zone>/<ruleset_id>` import
   block + the live rules to reproduce.
-- [ ] `apply-web-platform-infra.yml` invokes the gate as a separate step AFTER
+- [x] `apply-web-platform-infra.yml` invokes the gate as a separate step AFTER
   the "Terraform plan" step and BEFORE the **main** "Terraform apply" step, with
   `working-directory: INFRA_DIR`, `env: DOPPLER_TOKEN`, and NO `[ack-destroy]`
   bypass (wiring pinned by whitespace-normalized / independent-token greps).
-- [ ] Parity test FAILs if any dispatch `-target` set gains a `cloudflare_ruleset`
+- [x] Parity test FAILs if any dispatch `-target` set gains a `cloudflare_ruleset`
   without a gate, or if a new `cloudflare_*` type appears un-adjudicated.
-- [ ] `--audit` static mode emits the parity table; the audit job runs read-only
+- [x] `--audit` static mode emits the parity table; the audit job runs read-only
   (no `terraform apply` — asserted), on its own concurrency group + dispatch
   value, with `issues: write` GitHub App auth.
-- [ ] `test/seo-config-rules.test.ts` two-rule + adopted-rule pin still passes
+- [x] `test/seo-config-rules.test.ts` two-rule + adopted-rule pin still passes
   (adoption NOT modified).
 
 #### Quality
-- [ ] New script + tests follow cap-coupling (dedicated files + CODEOWNERS +
+- [x] New script + tests follow cap-coupling (dedicated files + CODEOWNERS +
   parity test) and are wired into the `tests/scripts/test-*.sh` harness.
-- [ ] `bash tests/scripts/test-preapply-entrypoint-gate.sh` passes locally.
-- [ ] ADR-133 created (thin, references plan Alternatives); ADR-130 cross-note
+- [x] `bash tests/scripts/test-preapply-entrypoint-gate.sh` passes locally.
+- [x] ADR-133 created (thin, references plan Alternatives); ADR-130 cross-note
   added; C4 enumeration cited across all three `.c4` files; c4 tests pass.
-- [ ] plan/SKILL.md Sharp Edge + `seo-config-rules.tf` comment updated.
-- [ ] Fixtures synthesized (no live prod plan pasted).
+- [x] plan/SKILL.md Sharp Edge + `seo-config-rules.tf` comment updated.
+- [x] Fixtures synthesized (no live prod plan pasted).
 
 ### Post-merge (CI — automated, NOT dashboard eyeball)
 - [ ] First merge exercises the gate on the apply run (expected no-op: no
