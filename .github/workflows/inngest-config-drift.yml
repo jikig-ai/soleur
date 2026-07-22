@@ -1,0 +1,89 @@
+# Off-box drift comparator EXECUTOR for the ADR-133 config-refresh channel (#6780, HARD-8 / AC19).
+#
+# Dispatched by the Inngest cron cron-inngest-config-drift.ts (dispatch-hybrid — the Better Stack
+# ClickHouse query creds live in Doppler soleur/prd_terraform, deliberately NOT on the app server).
+# It reads the LATEST SOLEUR_INFRA_PULL_APPLIED marker from Better Stack and the promoted
+# INNGEST_CONFIG_DIGEST pointer, then runs the tested comparator core
+# (apps/web-platform/infra/inngest-config-drift-compare.sh) to decide OK / PENDING / DIVERGED.
+#
+# NOT a GitHub Actions schedule-triggered cron: it runs only on workflow_dispatch, and Inngest is
+# the single scheduling substrate (ADR-033), exactly like scheduled-terraform-drift. Named without
+# the "scheduled-" prefix precisely because it carries no schedule trigger of its own.
+#
+# CHANNEL-LIVE GATE (HARD-11): DORMANT until the host-side bake rides the #6178 cutover. Pre-cutover
+# the pointer TF is unapplied (no INNGEST_CONFIG_DIGEST) and no APPLIED marker flows, so the
+# comparator returns PENDING and this job exits 0 — no false alarm (the #6536 class the channel
+# exists to kill). At the cutover the Inngest cron gains its recurring trigger, the isolated
+# pointer-read token is wired (INNGEST_CONFIG_DIGEST below), an inngest-config-drift Sentry monitor
+# is added, and an N-consecutive-windows debounce is layered before alarming.
+#
+# To test manually: gh workflow run inngest-config-drift.yml
+name: inngest-config-drift
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inngest-config-drift
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Compare applied config digest vs promoted pointer
+        env:
+          # prd_terraform-scoped token — the config that holds BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+          # (scripts/betterstack-query.sh). Mirrors scheduled-terraform-drift.yml.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # The promoted pointer. EMPTY pre-cutover (the isolated soleur-inngest/prd read token +
+          # INNGEST_CONFIG_DIGEST injection are wired at the #6178 cutover). Empty => PENDING.
+          INNGEST_CONFIG_DIGEST: ${{ secrets.INNGEST_CONFIG_DIGEST_READONLY }}
+        run: |
+          set -euo pipefail
+
+          # Latest SOLEUR_INFRA_PULL_APPLIED marker from Better Stack (last 24h, most recent line).
+          # betterstack-query.sh reads its ClickHouse creds from the prd_terraform config; a query
+          # failure or an empty result yields an empty marker (channel-live gate handles it).
+          MARKER=""
+          if raw="$(doppler run -p soleur -c prd_terraform -- \
+                     bash scripts/betterstack-query.sh --since 24h --grep SOLEUR_INFRA_PULL_APPLIED --limit 1 2>/dev/null)"; then
+            MARKER="$(printf '%s\n' "$raw" | grep -F 'SOLEUR_INFRA_PULL_APPLIED' | tail -1 || true)"
+          else
+            echo "note: Better Stack query unavailable (pre-cutover or transient) — treating as no marker"
+          fi
+
+          echo "pointer: ${INNGEST_CONFIG_DIGEST:+<set>}${INNGEST_CONFIG_DIGEST:-<empty>}"
+          echo "marker : ${MARKER:-<none>}"
+
+          set +e
+          VERDICT="$(bash apps/web-platform/infra/inngest-config-drift-compare.sh \
+                       --pointer "${INNGEST_CONFIG_DIGEST:-}" --marker "${MARKER}")"
+          rc=$?
+          set -e
+          echo "verdict: ${VERDICT}"
+
+          {
+            echo "## Inngest config drift comparison"
+            echo ""
+            echo "- verdict: \`${VERDICT}\`"
+            echo "- marker: \`${MARKER:-<none>}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ $rc -eq 0 ]]; then
+            echo "OK/PENDING — no divergence (rc=0)"
+            exit 0
+          fi
+          # DIVERGED (rc=2): the host's applied config digest does not match the promoted pointer.
+          # Fail the run so the divergence is visible (post-cutover this becomes a Sentry-monitored,
+          # N-windows-debounced alarm — the dormancy note above).
+          echo "::error::config-refresh DRIFT — ${VERDICT}"
+          exit 1

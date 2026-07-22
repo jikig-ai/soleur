@@ -372,6 +372,9 @@ jobs:
       - name: Run inngest config-refresh bundle packager guard (#6780 ADR-133 HARD-2 + fail-closed)
         run: bash apps/web-platform/infra/inngest-config-bundle-pack.test.sh
 
+      - name: Run inngest config-refresh drift comparator guard (#6780 ADR-133 HARD-8 + channel-live)
+        run: bash apps/web-platform/infra/inngest-config-drift-compare.test.sh
+
       - name: Run cloud-init GHCR seed-login regression guard (#6005 private-pull fix)
         run: bash apps/web-platform/infra/cloud-init-ghcr-seed-login.test.sh
 
