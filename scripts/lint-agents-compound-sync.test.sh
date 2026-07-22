@@ -361,6 +361,25 @@ t6c_readded_threshold_literal_is_caught() {
   rm -rf "$root"
 }
 
+# T6d -- the 2b(ii) shape pattern must catch a threshold re-added in ANY
+# plausible notation, not just the bare-5-digit form T6c uses. Review found `23K`
+# (uppercase) and `23 000` (spaced) evading a lowercase-comma-only pattern; this
+# case pins that the widened pattern catches each. Proving BREADTH is what the
+# suite previously only CLAIMED in a comment (the claimed-but-unasserted-coverage
+# anti-pattern -- the same defect class this guard exists to prevent).
+t6d_readded_literal_any_notation_is_caught() {
+  local notation
+  for notation in '23K' '18k' '23 000' '23_000' '23,000'; do
+    local root; root="$(new_root)"
+    make_fixture_tree "$root"
+    sed -i "s|B_TOTAL is informational only -- end of region.|reject above ${notation}|" \
+      "$root/plugins/soleur/skills/compound/SKILL.md"
+    run_guard "$root"
+    assert_exit "T6d re-added literal '${notation}' exits non-zero" "1" "$GUARD_RC"
+    rm -rf "$root"
+  done
+}
+
 # -----------------------------------------------------------------------------
 # T7 -- pre-existing behaviour pin: the rule-threshold sentinel must stay in
 # sync between the AGENTS sidecar and compound/SKILL.md. Extending the guard
@@ -375,6 +394,48 @@ t7_sentinel_desync_still_caught() {
 
   assert_exit "T7 sentinel de-sync exits non-zero" "1" "$GUARD_RC"
   assert_contains "T7 reports the sentinel mismatch" "rule-threshold" "$GUARD_OUT"
+  rm -rf "$root"
+}
+
+# -----------------------------------------------------------------------------
+# T10 / T11 -- AUTHORITY fail-closed. T4/T5 pin the fail-closed behaviour for the
+# SITE files, but the guard's single most important input -- the authority
+# lint-agents-rule-budget.py, from which every expected value is extracted -- was
+# unpinned. If the authority is missing or its constants are renamed, EXPECT_* go
+# empty, the SITES loop is SKIPPED, and zero sites are checked. Only the err()
+# calls at the authority branch (plus the CHECKED backstop) keep that fail-closed;
+# these cases prove a fail-open there is loud, so a future refactor that neuters
+# either guard reds the suite.
+# -----------------------------------------------------------------------------
+t10_missing_authority_fails_closed() {
+  local root; root="$(new_root)"
+  make_fixture_tree "$root"
+  rm -f "$root/scripts/lint-agents-rule-budget.py"
+  run_guard "$root"
+
+  assert_exit "T10 missing authority exits non-zero" "1" "$GUARD_RC"
+  assert_contains "T10 names the authority" "byte-budget authority" "$GUARD_OUT"
+  # The success line must NOT print with zero sites verified (P3 hardening).
+  assert_not_contains "T10 does not falsely report OK" \
+    "sync: OK" "$GUARD_OUT"
+  rm -rf "$root"
+}
+
+t11_vacuous_authority_extraction_fails_closed() {
+  local root; root="$(new_root)"
+  make_fixture_tree "$root"
+  # Rename the authority constants so extraction goes vacuous while the file
+  # still exists -- the harder half of the fail-closed contract.
+  sed -i 's/^B_ALWAYS_WARN =/B_ALWAYS_WARN_RENAMED =/;
+          s/^B_ALWAYS_REJECT =/B_ALWAYS_REJECT_RENAMED =/;
+          s/^PER_RULE_CAP =/PER_RULE_CAP_RENAMED =/' \
+    "$root/scripts/lint-agents-rule-budget.py"
+  run_guard "$root"
+
+  assert_exit "T11 vacuous authority extraction exits non-zero" "1" "$GUARD_RC"
+  assert_contains "T11 says the extraction was vacuous" "vacuous" "$GUARD_OUT"
+  assert_not_contains "T11 does not falsely report OK" \
+    "sync: OK" "$GUARD_OUT"
   rm -rf "$root"
 }
 
@@ -430,7 +491,10 @@ t5_missing_file_fails_closed
 t6a_deleted_invocation_is_caught
 t6b_dropped_stderr_redirect_is_caught
 t6c_readded_threshold_literal_is_caught
+t6d_readded_literal_any_notation_is_caught
 t7_sentinel_desync_still_caught
+t10_missing_authority_fails_closed
+t11_vacuous_authority_extraction_fails_closed
 
 # Catastrophic-drop backstop: if a refactor silently drops the case invocations
 # at the bottom of this file, an empty/near-empty run must not report success.

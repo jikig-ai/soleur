@@ -45,6 +45,7 @@ ROOT="${LINT_AGENTS_SYNC_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pw
 
 ERRORS=()
 err() { ERRORS+=("$1"); }
+CHECKED=0   # sites actually read + compared; a final backstop refuses OK if != ${#SITES[@]}
 
 LINTER_REL="scripts/lint-agents-rule-budget.py"
 
@@ -174,8 +175,23 @@ if [[ -n "$EXPECT_WARN" && -n "$EXPECT_REJECT" && -n "$EXPECT_CAP" ]]; then
       err "$rel: no match for /$re/ (expected $sym_name=$expected) -- extraction is vacuous, refusing to pass"
     elif [[ "$found" != "$expected" ]]; then
       err "$rel: expected $sym_name=$expected but found $found [unit: $UNIT_NOTE]"
+      CHECKED=$((CHECKED + 1))   # a mismatch IS a completed check -- the site was read and compared
+    else
+      CHECKED=$((CHECKED + 1))
     fi
   done
+fi
+
+# Backstop for the authority-extraction branch (P2 hardening). The per-site loop
+# above only runs when EXPECT_* are all non-empty; if the authority is missing or
+# its constants were renamed, the loop is SKIPPED and zero sites are verified.
+# The err() calls at the authority branch are what keep that fail-closed today,
+# but they are a single point of failure -- neuter them and the guard would print
+# "OK ... N sites" having checked nothing. This independent tally refuses to
+# report OK unless every site was actually read and compared, so a fail-open
+# requires defeating TWO guards, not one.
+if (( CHECKED != ${#SITES[@]} )); then
+  err "only $CHECKED of ${#SITES[@]} sites were verified -- authority constants unresolved (missing/renamed linter?) or sites unreadable; refusing to report OK"
 fi
 
 # -----------------------------------------------------------------------------
@@ -221,22 +237,27 @@ if [[ -f "$COMPOUND_ABS" ]]; then
   #      contains "~600 bytes", and a whole-file negative would false-fail a
   #      correct implementation.
   #
-  #      The pattern matches any byte-budget-SHAPED literal (a bare 5-digit run,
-  #      an `NN,NNN` prose form, or an `NNk` form) rather than an enumerated set
-  #      of today's values. An enumerated `(18|20|22|23)000` set would go VACUOUS
-  #      the moment B_ALWAYS_REJECT is bumped: re-adding `critical > 22000` after
-  #      a bump to 25000 would pass the guard -- the exact drift this check
-  #      exists to survive. The one legitimate 5-digit collision is a future
-  #      issue ref (`#12345`) in the remediation prose, so the leading
+  #      The pattern matches any byte-budget-SHAPED literal rather than an
+  #      enumerated set of today's values. An enumerated `(18|20|22|23)000` set
+  #      would go VACUOUS the moment B_ALWAYS_REJECT is bumped: re-adding
+  #      `critical > 22000` after a bump to 25000 would pass the guard -- the
+  #      exact drift this check exists to survive. The shape covers a 5-digit run
+  #      with an optional thousands separator (`23000`, `23,000`, `23 000`,
+  #      `23_000`, `23.000`) OR a `k`/`K` suffix form (`22k`, `23K`) -- the K case
+  #      and the space/underscore/dot separators were added after review found
+  #      `23K` and `23 000` evading a lowercase-comma-only pattern. The one
+  #      legitimate 5-digit collision is a future issue ref, so the leading
   #      `(^|[^#0-9])` excludes a `#`-prefixed number; 3-digit legitimates in the
   #      region (115 rule-threshold, 300 constitution cap, 600 per-rule cap) are
-  #      below the 5-digit floor. Verified to catch `rejects at > 22000`, `22k`,
-  #      `21,949`, and a post-bump stale `25000` while ignoring `#12345`.
+  #      below the 5-digit floor. Known accepted limitation: a BARE, non-`#`
+  #      5-digit issue ref (`PR 12345`, once issue numbers cross 10000) would
+  #      false-fail -- but that is LOUD (a clear CI error) and trivially fixed by
+  #      `#`-prefixing the ref, which is this repo's universal convention anyway.
   region=$(awk '/^8\. \*\*Rule budget count\.\*\*/,/^   B_TOTAL is informational only/' "$COMPOUND_ABS")
   if [[ -z "$region" ]]; then
     err "$COMPOUND_REL: could not locate step 8's tier-decision region -- the anchor moved; fix this guard rather than dropping the check"
   else
-    hits=$(printf '%s\n' "$region" | grep -nE '(^|[^#0-9])[0-9]{2},?[0-9]{3}\b|\b[0-9]{2,3}k\b' || true)
+    hits=$(printf '%s\n' "$region" | grep -nE '(^|[^#0-9])[0-9]{2}[ ,_.]?[0-9]{3}\b|\b[0-9]{2,3}[kK]\b' || true)
     if [[ -n "$hits" ]]; then
       err "$COMPOUND_REL: step 8's tier-decision region restates a threshold literal -- delegate to $LINTER_REL instead. Offending: ${hits//$'\n'/ | }"
     fi
