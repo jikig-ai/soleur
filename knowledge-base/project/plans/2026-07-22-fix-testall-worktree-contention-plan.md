@@ -178,7 +178,7 @@ Replaces the manual `ps -ef | grep test-all` ritual. Its value does not depend o
 
 **No C4 impact.** Per the completeness mandate, this conclusion is supported by an enumeration against all three model files (`model.c4`, `views.c4`, `spec.c4`), not by a keyword grep:
 
-- **External human actors:** none added. The only actor is the operator running tests on their own laptop — already outside the modelled product boundary, and not a data subject of any modelled store.
+- **External human actors:** none added. The only human is a developer running the local suite on their own laptop — already outside the modelled product boundary, and not a data subject of any modelled store.
 - **External systems / vendors:** none. No inbound webhook, outbound API, or third-party store is introduced. `flock` is a kernel primitive; `tmpfs` is a local mount.
 - **Containers / data stores:** none. The `/tmp` tmpfs is a developer-machine resource, not a product container. The C4 model scopes the product runtime (web hosts, workspaces volume, Postgres stores, agent surfaces) — local developer tooling is deliberately not modelled, and adding it would misrepresent the boundary.
 - **Actor↔surface access relationships:** none change. No ownership, tenancy, or trust boundary is touched.

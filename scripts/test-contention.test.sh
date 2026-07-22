@@ -407,8 +407,16 @@ SS_ROOT="$TESTROOT/session-state"
 mkdir -p "$SS_ROOT/locks"
 # All lock arms point at the REAL session-state.sh (the primitive under test is
 # reused, not re-implemented) but anchor its state root into TESTROOT.
+#
+# `env -u CI` is LOAD-BEARING: GitHub Actions injects CI=true, and tc_acquire is
+# CI-exempt (it skips the lock and emits LOCK_SKIPPED_CI). Without scrubbing CI
+# here, every arm that expects the lock to ACTUALLY engage — the positive
+# control, the advisory-timeout arm, and the "CI-skip does not fire when CI is
+# unset" mutation control — takes the exempt path and fails, but ONLY under CI
+# (green locally, red in CI: the vitest-unstub-can't-clear-inherited-env class
+# from work/SKILL.md). The CI-exemption arm below re-sets CI=true explicitly.
 lock_env() {
-  env SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" \
+  env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" \
       TC_PROC_ROOT="$FAKE_PROC" TC_TMPDIR="$FAKE_TMP" TC_XDG_DIR="" \
       "$@"
 }
