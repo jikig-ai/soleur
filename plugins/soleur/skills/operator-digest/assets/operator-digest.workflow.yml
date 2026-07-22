@@ -76,6 +76,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_RUN_ID: ${{ github.run_id }}
+          OPERATOR_GH_LOGIN: ${{ vars.OPERATOR_GH_LOGIN }}
         run: |
           set -uo pipefail
           DIGEST="$GITHUB_WORKSPACE/digest.md"
@@ -87,15 +88,38 @@ jobs:
             exit 1
           fi
 
+          # Delivery, not production, was the failure mode. This workflow ran
+          # correctly for months (active cron, 7/8 successful runs, correct
+          # query, the action-required backlog surfaced >=5 consecutive weeks)
+          # and nobody saw it: the digest posts to a PRIVATE repo with ZERO
+          # subscribers, so an issue create notifies no one. That is why 130
+          # days of action-required accumulation never surfaced through the
+          # very section built to surface it.
+          #
+          # --assignee is the fix: assignment notifies unconditionally and does
+          # not depend on watch state. The repo-subscription API is NOT used —
+          # this token lacks the `notifications` scope (measured, not assumed).
+          #
+          # Fail LOUD if the variable is unset. A digest that silently posts to
+          # nobody is the exact defect being repaired; degrading quietly back
+          # into it would make this change a no-op that looks like a fix.
+          if [[ -z "${OPERATOR_GH_LOGIN:-}" ]]; then
+            echo "OPERATOR_GH_LOGIN repo variable is unset — the digest would post to nobody." >&2
+            echo "Set it with: gh variable set OPERATOR_GH_LOGIN -R jikig-ai/operator-digest --body '<login>'" >&2
+            exit 1
+          fi
+
           # The scrub is a deterministic post-step OUTSIDE the action. A non-zero exit means a
           # secret / foreign email / grep error was found: post a CONTENT-FREE withheld notice
           # (zero source-derived content) so the withhold is operator-visible, not silent.
           if bash "$SCRUB" "$DIGEST"; then
             gh issue create -R jikig-ai/operator-digest \
+              --assignee "${OPERATOR_GH_LOGIN}" \
               --title "Digest: ${ISO_WEEK}" \
               --body-file "$DIGEST"
           else
             gh issue create -R jikig-ai/operator-digest \
+              --assignee "${OPERATOR_GH_LOGIN}" \
               --title "Digest withheld: ${ISO_WEEK}" \
               --body "This week's digest was withheld by the safety scrub; a value matched a safety pattern (a secret, a foreign email, or a scan error). No data is shown. See run ${GH_RUN_ID}."
           fi

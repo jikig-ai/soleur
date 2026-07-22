@@ -311,6 +311,7 @@ jobs:
               -target=cloudflare_bot_management.soleur_ai \
               -target=cloudflare_ruleset.seo_page_redirects \
               -target=cloudflare_ruleset.seo_response_headers \
+              -target=cloudflare_ruleset.seo_config_settings \
               -target=cloudflare_list.legal_redirects \
               -target=cloudflare_ruleset.bulk_redirects \
               -target=random_id.tunnel_secret \

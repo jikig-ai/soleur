@@ -1359,7 +1359,29 @@ FSCK_OUT_CAP="${WORKSPACES_FSCK_OUT_CAP:-256}"
 # verified, so this ABORTS as probe_failed and must never be read as a finding about the data. The
 # first alternative is H1, the leading hypothesis for run 29725194755's 8-of-10 failure (cutover runs
 # as root; container repos are uid 1001 per the Dockerfile's `USER soleur`).
-_FSCK_SETUP_FATAL_RE='^fatal: (detected dubious ownership|bad config|not a git repository|cannot chdir|unable to access|could not open|unable to read config)'
+#
+# MEASURED PER ALTERNATIVE (git 2.53.0), to the same standard _FSCK_CONTENT_FATAL_RE below already
+# holds itself to — an unmeasured alternative is dead regex implying coverage that does not exist,
+# which is this file's whole defect class. Reproduce with `git fsck --full` against each fixture:
+#   detected dubious ownership  MEASURED. Foreign-owned repo, no safe.directory. rc 128.
+#   bad config                  MEASURED. `printf '[core\n' > .git/config`. rc 128. (L6e's fixture.)
+#   not a git repository        MEASURED. Also emitted for a repo whose .git/objects or .git/HEAD
+#                               was removed — both reach here, since _fsck_probeable only filters a
+#                               MISSING .git, so this alternative is live, not dead-by-construction.
+#   cannot change to            MEASURED. Was `cannot chdir` until #6759 and NEVER MATCHED: git
+#                               emits `fatal: cannot change to '<path>': No such file or directory`.
+#                               A vanished repo therefore fell through to (2b) and aborted as
+#                               `unclassified` — fail-CLOSED, so no cutover was ever mis-certified,
+#                               but the alternative asserted a precision it did not have.
+#   unable to access            UNMEASURED as a fatal. `chmod 000 .git/config` emits it as
+#                               `warning:`, which this `^fatal: `-anchored regex cannot match. Kept
+#                               deliberately: (2b) fails closed either way, and dropping it would
+#                               narrow the allowlist on a guess rather than a measurement.
+#   could not open              UNMEASURED.
+#   unable to read config       UNMEASURED.
+# The three UNMEASURED alternatives cost nothing: an unrecognised `fatal:` still aborts via (2b).
+# They are listed as candidates, and this comment is the record that they are candidates.
+_FSCK_SETUP_FATAL_RE='^fatal: (detected dubious ownership|bad config|not a git repository|cannot change to|unable to access|could not open|unable to read config)'
 # _FSCK_CONTENT_FATAL_RE — a genuine FINDING about the objects. Goes through the differential like
 # any other error line, so the same finding on both sides is `preexisting`, not an abort.
 # MEASURED, so the list stays honest: `missing blob` is emitted on STDOUT with no `fatal: ` prefix
@@ -1615,7 +1637,7 @@ _fsck_classify() {
 # exists to remove. (Observed during implementation, not theorised.)
 _fsck_emit_and_verdict() {
   local phase="$1" work="$2" src_root="$3" dst_root="$4" verdict_file="$5"
-  local ws base skip src_rc dst_rc verdict cls first reason src_objs dst_objs k=0 total=0 truncated=0 more=0
+  local ws base skip src_rc dst_rc verdict cls first reason _first_field src_objs dst_objs k=0 total=0 truncated=0 more=0
   local n_ok=0 n_pre=0 n_srconly=0 n_corrupt=0 n_probefail=0 n_unclass=0
   local n_skip=0 n_skip_wt=0 n_skip_alt=0 n_skip_nogit=0 n_src_missing=0 summary row abort_cls=""
   local _prio rows_file="$work/rows"; : > "$rows_file"
@@ -1714,8 +1736,14 @@ _fsck_emit_and_verdict() {
     # row count the advisory abort's equality test depends on.
     _prio=1
     case "$cls" in copy_corruption|probe_failed|unclassified) _prio=0 ;; esac
+    # Computed into a variable so the `-` placeholder can be applied to the RESULT: scrubbing an
+    # empty `first` still yields empty, so `${first:--}` inline would have placeheld the raw value
+    # and not the scrubbed one. This is the field the comment above is about — `first` is empty for
+    # every `ok` row (_fsck_classify returns "ok|"), and it is the only field whose emptiness was
+    # unguarded. Caught by L6a in CI, on main.
+    _first_field="$(_fsck_scrub_first "$(_vscrub "${first:0:$FSCK_OUT_CAP}")")"
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$_prio" "$cls" "$reason" "$src_rc" "$dst_rc" \
-      "$(_fsck_scrub_first "$(_vscrub "${first:0:$FSCK_OUT_CAP}")")" "$(_vscrub "$base")" \
+      "${_first_field:--}" "$(_vscrub "$base")" \
       >> "$rows_file"
   done
   # Instrument failure, not emptiness: an enumeration that returns nothing while G2 observed
@@ -1831,10 +1859,20 @@ fsck_advisory_probe() {
   # equality the pre-freeze abort depends on.
   probed="$(awk -F'\t' '$1 ~ /^[01]$/ { n++ } END { print n + 0 }' "$work/rows" 2>/dev/null || echo 0)"
   probe_failed_n="$(awk -F'\t' '$2 == "probe_failed" { n++ } END { print n + 0 }' "$work/rows" 2>/dev/null || echo 0)"
-  # Abort ONLY when EVERY probed source repo is un-inspectable. A partial failure is evidence, not a
-  # verdict — some repos genuinely differ. This runs BEFORE `FREEZE_HELD=1; arm_dead_man`, so die()
-  # reaches cleanup() with both flags 0 and NO rollback runs. That is correct; do not "fix" it into a
-  # rollback. Language mirrors the script's other pre-freeze dies.
+  # Runs BEFORE `FREEZE_HELD=1; arm_dead_man`, so die() reaches cleanup() with both flags 0 and NO
+  # rollback runs. That is correct; do not "fix" it into a rollback. Language mirrors the script's
+  # other pre-freeze dies.
+  #
+  # (Until #6759 this block ALSO carried a paragraph reading "abort ONLY when EVERY probed source
+  # repo is un-inspectable; a partial failure is evidence, not a verdict" — directly above the
+  # opposite rule. Both shipped in the SAME commit, #6745: `git show aaabd8c12` adds the ALL
+  # paragraph, the ANY paragraph and `-gt 0` together, and the function did not exist before it. So
+  # this was never a stale comment that drifted; the contradiction was born whole, when the F4
+  # review finding moved the code to abort-on-ANY mid-review and the ALL paragraph was not updated
+  # before merge. The distinction matters: `git log` shows no revision where the ALL rule was true,
+  # so a reader trying to date the supersession finds nothing. Removed; the rule below is the only
+  # one.)
+  #
   # ANY un-inspectable source repo aborts pre-freeze — not just the all-of-them case. The original
   # all-or-nothing threshold did not cover the incident this probe was built for: run 29725194755
   # failed on 8 of 10, so an ALL threshold would have gone green, held the freeze, taken the outage,
