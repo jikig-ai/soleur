@@ -585,6 +585,10 @@ jobs:
           # with a generic non-zero.
           PREAPPLY_CF_TOKEN=$(doppler secrets get CF_API_TOKEN_RULESETS --plain 2>/dev/null || true)
           PREAPPLY_CF_ZONE_ID=$(doppler secrets get CF_ZONE_ID --plain 2>/dev/null || true)
+          # `--plain` reads are NOT a secrets.* context, so GitHub does not
+          # auto-mask them. Mask the CF token before export so a gate ::error::
+          # (or set -x) can never leak it into the log (mirrors KEY_ID/PEM above).
+          [[ -n "$PREAPPLY_CF_TOKEN" ]] && printf '::add-mask::%s\n' "$PREAPPLY_CF_TOKEN"
           export PREAPPLY_CF_TOKEN PREAPPLY_CF_ZONE_ID
           # The plan step wrote tfplan.json into INFRA_DIR (this working-directory).
           bash "${GITHUB_WORKSPACE}/tests/scripts/lib/preapply-entrypoint-gate.sh" --gate tfplan.json
@@ -2146,9 +2150,19 @@ jobs:
           PREAPPLY_CF_TOKEN=$(doppler secrets get CF_API_TOKEN_RULESETS --plain 2>/dev/null || true)
           PREAPPLY_CF_ZONE_ID=$(doppler secrets get CF_ZONE_ID --plain 2>/dev/null || true)
           PREAPPLY_CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID --plain 2>/dev/null || true)
+          # `--plain` reads are NOT a secrets.* context, so GitHub does not
+          # auto-mask them. Mask the CF token before export so an audit ::error::
+          # (or set -x) can never leak it into the log (mirrors KEY_ID/PEM above).
+          [[ -n "$PREAPPLY_CF_TOKEN" ]] && printf '::add-mask::%s\n' "$PREAPPLY_CF_TOKEN"
           export PREAPPLY_CF_TOKEN PREAPPLY_CF_ZONE_ID PREAPPLY_CF_ACCOUNT_ID
           # Static table + LIVE enumeration (GETs only — no import, no apply).
-          AUDIT_OUT=$(bash "${GITHUB_WORKSPACE}/tests/scripts/lib/preapply-entrypoint-gate.sh" --audit --live 2>&1) || true
+          # Capture the rc: the script is FAIL-CLOSED, and `2>&1`-into-a-variable
+          # hides its ::error:: annotations while a bare `|| true` would discard
+          # the exit code — a fail-closed audit would then exit 0 and `gh run
+          # watch` would show a false success. Keep the comment/system-of-record
+          # path alive on failure (post below), then re-raise the rc at the end.
+          rc=0
+          AUDIT_OUT=$(bash "${GITHUB_WORKSPACE}/tests/scripts/lib/preapply-entrypoint-gate.sh" --audit --live 2>&1) || rc=$?
           {
             echo "## Whole-list entrypoint drift audit (#6767)"
             echo ""
@@ -2201,3 +2215,13 @@ jobs:
           echo "::add-mask::$INSTALL_TOKEN"
           GH_TOKEN="$INSTALL_TOKEN" gh issue comment "$AUDIT_ISSUE" --body-file /tmp/audit-body.md
           echo "Posted entrypoint drift audit findings to #${AUDIT_ISSUE}."
+
+          # P2-B: the comment (system-of-record) is now posted; make the RUN
+          # STATUS honest. The captured 2>&1 swallowed the script's own
+          # ::error:: lines, so re-emit a top-level annotation OUTSIDE the
+          # subshell and propagate the fail-closed exit code — otherwise a
+          # fail-closed live audit would report green.
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::entrypoint drift audit (--audit --live) exited ${rc} — fail-closed; see the posted #${AUDIT_ISSUE} comment / step summary for the finding."
+            exit "$rc"
+          fi
