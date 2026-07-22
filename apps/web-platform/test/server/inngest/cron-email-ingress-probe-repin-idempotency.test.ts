@@ -927,6 +927,31 @@ describe("deadline-repin idempotency guard (#6781)", () => {
     expect(dbState.markers.has("item-1::headsup")).toBe(true);
   });
 
+  // #6802 (M5): on a FAIL-OPEN dispatch (a non-23505 marker error → no marker
+  // claimed here) that then fails to deliver, the rollback must NOT fire — an
+  // unconditional DELETE would remove a marker a CONCURRENT run wrote, reopening
+  // the #6781 window. Pins the `markerClaimedHere &&` guard (review): dropping
+  // it would issue a spurious delete and this test goes RED.
+  it("delivery contract: a fail-open (unclaimed) heads-up item does NOT roll back on non-delivery", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [statutoryRow({ received_at: "2026-02-15T12:00:00.000Z" })]; // heads-up band
+    dbState.pushSubs = {};
+    dbState.markerErrorOnAttempt = 1; // non-23505 → fail-open, markerClaimedHere=false
+    resendSendSpy.mockImplementation(async (arg) => {
+      const a = arg as { subject?: string };
+      if (a?.subject?.startsWith("Statutory item")) return { error: { message: "down" } };
+      return { error: null };
+    });
+
+    const result = await runHandler();
+    // Dispatched (fail-open) and undelivered, but NO marker was claimed here, so
+    // no rollback DELETE may be issued.
+    expect(dbState.markerDeletes).toHaveLength(0);
+    expect(sweepExtraSum("undelivered")).toBe(1);
+    expect(result.ok).toBe(true);
+  });
+
   // #6802 (M7): a THROWN rollback DELETE must not escape the loop (retries:0
   // would kill the ingress probe). Counted as markerRollbackFailed; run survives.
   it("delivery contract: a THROWN rollback DELETE is caught, run still completes", async () => {

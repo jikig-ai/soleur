@@ -113,6 +113,18 @@ channel onto the **existing** Resend email channel for the **same** recipient
 recipient, no new data category, no new processor. The one new *content* element
 is a static, server-authored disclaimer — no third-party or personal data.
 
+**If this over-notifies, the user experiences (added at review):** alarm fatigue.
+Because `status` is a one-way `new → acknowledged` terminal matrix (no `resolved`
+state) and D3b anchors the 60-day window on `acknowledged_at`, a statutory item the
+founder already handled keeps generating daily "(computed) OVERDUE" pings for up to
+~60 days after acknowledgement — desensitizing the founder to the exact notification
+class this feature protects. This is the fatigue direction of the same harm #6798
+addresses via reliance. It is **out of scope** for the six issues (it needs a
+`resolved` state + a founder-facing digest) and is tracked in
+`decision-challenges.md` C3 (consolidated flow-gaps follow-up); named here so the
+gate section reflects both the under-notify (silence) and over-notify (fatigue)
+directions, not only silence.
+
 **Brand-survival threshold:** `single-user incident`
 
 Justification: a single operator receiving zero statutory notices for the life
@@ -1061,7 +1073,7 @@ No other open code-review issue names
 | --- | --- |
 | **The band destroys the #6781 double-fire detector.** | D2a counter split; AC7 pins `suppressed === 0` / `headsUpAlreadySent === 4` in steady state. Residual (≤5-day detection delay in the heads-up arm) named in the ADR-037 amendment. |
 | **`acknowledged_at` is NULL on some acknowledged row → those rows silently disappear from the scan.** This would *create* the exact cliff the issue is about, in a new place. | Blocking Phase 0.1 precondition + named `.or()` fallback. T16 fails loudly if the anchor drops eligible rows. |
-| **Email fallback doubles notification volume** if a push tally is wrong. | AC15/T18 pins the no-double-notify direction. Fallback fires only on `delivered === 0`, which `sendPushNotifications` computes from `Promise.allSettled` fulfilment — not an inference. |
+| **Email fallback doubles notification volume** on partial delivery. | **Corrected at review (M18 supersedes this row):** the fallback fires on `delivered < attempted`, NOT only `delivered === 0` — a stale device that still 201s must not mask a dead one and leave the founder on the road with nothing. So a founder with one live + one dead device gets BOTH a push and an email on a statutory tick. This is an **accepted, intentional** belt-and-suspenders trade-off for the legal-clock class (recorded in ADR-133), not a defect. T18 pins the FULL-delivery no-double-notify direction; T18b pins that partial delivery still emails; `delivered` is computed from `Promise.allSettled` fulfilment, not inferred. |
 | **Marker rollback reintroduces the #6781 duplicate-send defect.** | It cannot: rollback fires **only** when the outcome is provably undelivered. A delivered send keeps its marker. T19 + the pre-existing T1/T2/T3 suite pin both directions. |
 | **`sendEmailNotification` return-type widening breaks a caller.** | Cross-consumer grep run at plan time: zero external callers (`notifications.ts` internal + tests only); `void` → `boolean` is additive. AC30 (`tsc --noEmit`) is the mechanical backstop. |
 | **The #6813 regex over-tightens and misses a real incident.** | Two independent genuine-incident fixtures (AC22), and the gate keeps its fail-toward-PIR posture (Phase 5.4: when in doubt, fire). |

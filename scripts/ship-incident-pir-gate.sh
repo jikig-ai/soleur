@@ -25,10 +25,24 @@ set -uo pipefail
 OUTAGE_RE='(incident report|post-?incident|post-?mortem|outage|went down|was down|took down|brought down|stopped working|silently (broke|broken|failing)|regression in prod|users? (could not|were unable to)|shipped broken|ran broken|failed in prod(uction)?|broke prod(uction)?)'
 PROD_RE='(prod|production|deployed|live|app\.soleur\.ai|tenant-zero|customer)'
 
-# Strip the threshold declaration (frontmatter key + the bold User-Brand-Impact
-# label) and the hypothetical/conditional framing lines, so trigger 3 does not
-# read a plan's own metadata or its "if this lands broken" section as an incident.
-haystack="$(cat | grep -vaiE '^brand_survival_threshold:|Brand-survival threshold:|If this lands broken|If this leaks|if this lands|would break|could break')"
+# Strip, in order:
+#   1. fenced code blocks (``` … ```) — regexes/config/SQL quoted in a plan are
+#      DATA, not an incident report (a plan that documents this very gate quotes
+#      `OUTAGE_RE='(outage|incident|…)'`);
+#   2. inline `code` spans — same reason, for backticked tokens;
+#   3. the threshold declaration (frontmatter key + the bold User-Brand-Impact
+#      label) and the hypothetical/conditional framing lines, so trigger 3 does
+#      not read a plan's own metadata or its "if this lands broken" section as
+#      an incident.
+# Residual (accepted): a plan whose SUBJECT is incident detection still discusses
+# outages in prose and may signal — that is fail-toward-PIR over-production the
+# operator hand-adjudicates, not the #6813 false-positive class (which was every
+# ordinary `single-user incident` plan tripping on the threshold label alone).
+# shellcheck disable=SC2016  # the sed backticks are literal (inline-code strip), no expansion wanted
+haystack="$(cat \
+  | awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' \
+  | sed 's/`[^`]*`//g' \
+  | grep -vaiE '^brand_survival_threshold:|Brand-survival threshold:|If this lands broken|If this leaks|if this lands|would break|could break')"
 
 # Herestrings (no pipe) — a piped `grep -q` under pipefail can SIGPIPE on an
 # early match and invert the result; a herestring cannot.

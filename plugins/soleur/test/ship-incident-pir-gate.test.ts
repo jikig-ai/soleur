@@ -59,6 +59,20 @@ describe("ship Incident-PIR gate (#6813)", () => {
     expect(signals("second-known-incident.md")).toBe(true);
   });
 
+  // Pins the PROD_RE conjunct (review): outage vocabulary with NO production
+  // token must NOT signal — else deleting `&& grep PROD_RE` stays green while
+  // the gate fires on any local/dev outage postmortem.
+  test("outage vocabulary with no production token does NOT signal", () => {
+    expect(signals("outage-no-prod-token.md")).toBe(false);
+  });
+
+  // Pins the hypothetical strip (review): outage tokens living only inside a
+  // hypothetical `If this lands broken:` line must NOT signal — else removing
+  // the strip stays green while a plan's User-Brand-Impact section trips the gate.
+  test("outage tokens confined to a hypothetical line do NOT signal", () => {
+    expect(signals("hypothetical-only-outage.md")).toBe(false);
+  });
+
   // The gate must own its own exit semantics: a no-signal run exits 1 cleanly,
   // never crashes, so a `set -euo pipefail` caller cannot misread it as an
   // infrastructure failure (the foot-gun the old inline `A && B && echo` chain had).

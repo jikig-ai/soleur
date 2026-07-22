@@ -134,6 +134,14 @@ interface HandlerResult {
    */
   repinSuppressed: number;
   /**
+   * #6802: a dispatch that reached no channel (`undelivered`) and a rollback
+   * DELETE that itself failed (`markerRollbackFailed`) — the founder-facing
+   * delivery-failure counters, surfaced on the run output alongside
+   * `repinSuppressed` (both also escalate the sweep emit to warn).
+   */
+  repinUndelivered: number;
+  repinMarkerRollbackFailed: number;
+  /**
    * Set only when the manual-trigger carried `release_item_id`. `cleared` is
    * the number of markers deleted — 0 means there was nothing to release,
    * which is itself the answer to "why did nothing re-send?".
@@ -163,10 +171,11 @@ export async function cronEmailIngressProbeHandler({
   // where a dispatch was marked but demonstrably never delivered (the
   // `statutory-notify-zero-delivery` alarm is what surfaces that case).
   //
-  // IMPORTANT — releasing only RE-ARMS; it does not force a send. The repin
-  // predicate fires at exactly T-7, then daily from T-2 through overdue, so
-  // days 6..3 fire nothing and a release inside that dead zone waits until
-  // T-2. `released.rearmsNextTick` reports which case the operator is in.
+  // IMPORTANT — releasing only RE-ARMS; it does not force a send. Since #6799
+  // the heads-up is a BAND (T-7 through T-3, keyed `headsup`), then daily from
+  // T-2 through overdue — there is no dead zone, so a release anywhere from T-7
+  // onward re-sends on the next tick. `released.cleared` reports how many
+  // markers were removed (0 = nothing to release).
   //
   // Validation mirrors cron-bug-fixer's event.data handling: the route is a
   // dumb pass-through, so the shape is enforced HERE.
@@ -597,6 +606,9 @@ export async function cronEmailIngressProbeHandler({
         repin_suppressed: suppressed > 0 ? "yes" : "no",
         repin_excluded: excluded && excluded > 0 ? "yes" : "no",
         repin_undelivered: undelivered > 0 ? "yes" : "no",
+        // A rollback that itself failed leaves an undelivered send certified —
+        // queryable by tag for symmetry with the other anomaly counters.
+        repin_rollback_failed: markerRollbackFailed > 0 ? "yes" : "no",
       },
       extra: {
         pinged,
@@ -721,6 +733,8 @@ export async function cronEmailIngressProbeHandler({
     purged,
     repinged: repin.pinged,
     repinSuppressed: repin.suppressed,
+    repinUndelivered: repin.undelivered,
+    repinMarkerRollbackFailed: repin.markerRollbackFailed,
     released,
     probeFound: found.found,
   };

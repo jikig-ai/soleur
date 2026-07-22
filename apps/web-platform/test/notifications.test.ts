@@ -207,6 +207,15 @@ describe("notifications", () => {
 
       expect(mockResendSend).toHaveBeenCalledTimes(1); // partial → email fires
       expect(delivered).toBe(true);
+      // The zero-delivery INCIDENT signal must NOT fire on a partial delivery
+      // (only on true zero) — otherwise dropping the `delivered === 0` conjunct
+      // would page on every partial delivery and stay green (review finding).
+      expect(mockCaptureMessage).not.toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          tags: expect.objectContaining({ op: "statutory-notify-zero-delivery" }),
+        }),
+      );
     });
 
     test("T21: a review_gate payload with zero delivery does NOT fall back (class scope)", async () => {
