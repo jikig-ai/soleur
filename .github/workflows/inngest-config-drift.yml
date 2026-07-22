@@ -51,18 +51,40 @@ jobs:
           set -euo pipefail
 
           # Latest SOLEUR_INFRA_PULL_APPLIED marker from Better Stack (last 24h, most recent line).
-          # betterstack-query.sh reads its ClickHouse creds from the prd_terraform config; a query
-          # failure or an empty result yields an empty marker (channel-live gate handles it).
+          # betterstack-query.sh reads its ClickHouse creds from the prd_terraform config. Track the
+          # query outcome distinctly (QUERY_OK) and PRESERVE the failure reason (stderr) so a query
+          # OUTAGE is never silently mis-attributed to a host failure (a "could not measure" is its
+          # own class, evaluated before the comparison).
           MARKER=""
+          QUERY_OK=1
+          QUERY_ERR=""
           if raw="$(doppler run -p soleur -c prd_terraform -- \
-                     bash scripts/betterstack-query.sh --since 24h --grep SOLEUR_INFRA_PULL_APPLIED --limit 1 2>/dev/null)"; then
+                     bash scripts/betterstack-query.sh --since 24h --grep SOLEUR_INFRA_PULL_APPLIED --limit 1 2>"$RUNNER_TEMP/bsq.err")"; then
             MARKER="$(printf '%s\n' "$raw" | grep -F 'SOLEUR_INFRA_PULL_APPLIED' | tail -1 || true)"
           else
-            echo "note: Better Stack query unavailable (pre-cutover or transient) — treating as no marker"
+            QUERY_OK=0
+            QUERY_ERR="$(tail -3 "$RUNNER_TEMP/bsq.err" 2>/dev/null || true)"
+            echo "note: Better Stack query FAILED — reason: ${QUERY_ERR:-<none>}"
           fi
 
-          echo "pointer: ${INNGEST_CONFIG_DIGEST:+<set>}${INNGEST_CONFIG_DIGEST:-<empty>}"
+          if [[ -n "$INNGEST_CONFIG_DIGEST" ]]; then echo "pointer: <set>"; else echo "pointer: <empty>"; fi
           echo "marker : ${MARKER:-<none>}"
+
+          # COULD-NOT-MEASURE class (HARD-8, observability review #6839): a Better Stack query outage
+          # WITH a promoted pointer must NOT collapse into the dead-timer DIVERGED verdict — that
+          # would send the operator to investigate 10.0.1.40 when the instrument, not the host, is
+          # down. Fail CLOSED (we cannot confirm the host is current) but attribute to the query.
+          # Pre-cutover (empty pointer) a query failure is benign → fall through to PENDING.
+          if [[ "$QUERY_OK" -eq 0 && -n "$INNGEST_CONFIG_DIGEST" ]]; then
+            {
+              echo "## Inngest config drift comparison"
+              echo ""
+              echo "- verdict: \`QUERY_UNAVAILABLE\` (Better Stack query failed; applied digest could not be read — instrument outage, NOT a host failure)"
+              echo "- query error: \`${QUERY_ERR:-<none>}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::config-refresh drift check could NOT run — Better Stack query unavailable (instrument outage, NOT a host failure): ${QUERY_ERR:-<none>}"
+            exit 1
+          fi
 
           set +e
           VERDICT="$(bash apps/web-platform/infra/inngest-config-drift-compare.sh \

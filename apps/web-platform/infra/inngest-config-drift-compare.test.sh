@@ -74,5 +74,27 @@ case "$out" in
   *) fail "FLOOR-STUCK verdict must name floor-only-stuck-delta (HARD-8 distinguishability) — got: $out" ;;
 esac
 
+# INVERSE (the other half of HARD-8 distinguishability): a plain applied≠pointer mismatch at a REAL
+# version must say `applied!=pointer` and must NOT be mislabeled floor-only-stuck-delta. Without this
+# a mutant that routes every mismatch through the floor branch stays green while mis-diagnosing a
+# real wrong-digest event as "only the baked floor booted".
+out="$("$CMP" --pointer "$DIGEST_A" --marker "SOLEUR_INFRA_PULL_APPLIED version=6 sha256=${DIGEST_B} verify=ok" 2>&1)"
+case "$out" in
+  *floor-only-stuck-delta*) fail "MISMATCH must NOT be mislabeled floor-only-stuck-delta — got: $out" ;;
+  *applied!=pointer*) pass ;;
+  *) fail "MISMATCH verdict must name applied!=pointer — got: $out" ;;
+esac
+
+# UNKNOWN-ARG → fail-closed exit 64 (a change to fail-open exit 0 must red).
+"$CMP" --bogus x >/dev/null 2>&1; rc=$?
+[[ $rc -eq 64 ]] && pass || fail "unknown-arg must fail-closed exit 64 (got rc=$rc)"
+
+# sha256:-PREFIXED MARKER shape (the marker-side prefix strip, not just the pointer NORMALIZE case).
+run_case OK 0 -- --pointer "$DIGEST_A" --marker "SOLEUR_INFRA_PULL_APPLIED version=7 sha256=sha256:${DIGEST_A} verify=ok"
+
+# PRESENT-BUT-UNPARSEABLE MARKER (no sha256= field) → DIVERGED — a distinct shape reaching the
+# no-applied-marker branch that the empty-marker DEAD-TIMER case does not exercise.
+run_case DIVERGED 2 -- --pointer "$DIGEST_A" --marker "SOLEUR_INFRA_PULL_APPLIED version=7 verify=ok"
+
 echo "inngest-config-drift-compare.test.sh: ${passes} passed, ${fails} failed"
 [[ $fails -eq 0 ]] || exit 1

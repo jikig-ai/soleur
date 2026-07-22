@@ -3,7 +3,7 @@
 # inngest-config-drift-compare.sh — the off-box drift comparator core for the ADR-133
 # config-refresh channel (#6780, HARD-8 / AC19). Single-shot verdict: given the promoted
 # INNGEST_CONFIG_DIGEST pointer and the LATEST off-box `SOLEUR_INFRA_PULL_APPLIED` marker
-# (queried from Better Stack by the scheduled-inngest-config-drift.yml executor), decide whether
+# (queried from Better Stack by the inngest-config-drift.yml executor), decide whether
 # the host's applied digest matches the promoted pointer.
 #
 # This is the tested, hermetic CORE; the GHA executor wires Better Stack + the Doppler pointer to

@@ -64,6 +64,30 @@ bodies="$(tail -n +2 "$OUT1/manifest.txt" | awk '{print $2}')"
 expected_order=$'alpha.sh\nmike.sh\nzulu.sh'
 [[ "$bodies" == "$expected_order" ]] && pass || fail "SORT: manifest body sorted by basename (got: $(echo "$bodies" | tr '\n' ' '))"
 
+# SORT-BASENAME coincidence-breaker: the three fixtures above pass a sort-by-BASENAME assertion
+# only because their sha-order happens to equal their basename-order. Here we FORCE the two to be
+# OPPOSITE — assign the alphabetically-FIRST basename (aaa.sh) to whichever content hashes LARGER —
+# so a whole-line (sha-first) sort would invert the basename order and fail. This pins `sort -k2`.
+mkdir -p "${WORK}/coin"
+printf 'echo one\n' > "${WORK}/coin/c1"
+printf 'echo two\n' > "${WORK}/coin/c2"
+s1="$(sha256sum "${WORK}/coin/c1" | cut -d' ' -f1)"
+s2="$(sha256sum "${WORK}/coin/c2" | cut -d' ' -f1)"
+if [[ "$s1" > "$s2" ]]; then bigger="${WORK}/coin/c1"; smaller="${WORK}/coin/c2"; else bigger="${WORK}/coin/c2"; smaller="${WORK}/coin/c1"; fi
+cp "$bigger"  "${WORK}/coin/aaa.sh"   # alphabetically FIRST basename  ← LARGER sha
+cp "$smaller" "${WORK}/coin/zzz.sh"   # alphabetically LAST  basename  ← smaller sha
+OUTC="${WORK}/outc"
+bash "$PACK" 3 "$OUTC" "${WORK}/coin/zzz.sh" "${WORK}/coin/aaa.sh" >/dev/null
+coin_order="$(tail -n +2 "$OUTC/manifest.txt" | awk '{print $2}')"
+[[ "$coin_order" == $'aaa.sh\nzzz.sh' ]] && pass || fail "SORT-BASENAME: manifest must sort by basename not sha (got: $(echo "$coin_order" | tr '\n' ' '))"
+
+# SYMLINK refresh-set member → rejected (real in-repo files only).
+ln -s "${WORK}/src/alpha.sh" "${WORK}/coin/link.sh"
+o="${WORK}/symlink-$RANDOM"
+bash "$PACK" 4 "$o" "${WORK}/coin/link.sh" >/dev/null 2>&1
+rc=$?
+[[ $rc -ne 0 && ! -f "$o/manifest.txt" ]] && pass || fail "FC-symlink: a symlink member must reject (rc=$rc)"
+
 # staged files copied alongside the manifest
 [[ -f "$OUT1/zulu.sh" && -f "$OUT1/alpha.sh" && -f "$OUT1/mike.sh" ]] && pass || fail "staged refresh-set files copied to out dir"
 

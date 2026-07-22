@@ -54,6 +54,13 @@ mkdir -p "$OUT_DIR"
 declare -A seen_basename=()
 manifest_lines=()
 for f in "$@"; do
+  # Reject symlink members — the refresh-set is real in-repo files only. cp/sha256sum would follow
+  # a symlink and sign the TARGET's content under the member's basename (a content-substitution
+  # surface even though the result stays signature-bound).
+  if [[ -L "$f" ]]; then
+    echo "pack: refresh-set member is a symlink (real in-repo files only): ${f}" >&2
+    exit 1
+  fi
   if [[ ! -f "$f" || ! -r "$f" ]]; then
     echo "pack: refresh-set file missing or unreadable: ${f}" >&2
     exit 1
@@ -74,8 +81,10 @@ MANIFEST="${OUT_DIR}/manifest.txt"
   # VERSION is line 1 of the signed blob (HARD-2). The host greps `^VERSION=` from the
   # verified manifest only.
   echo "VERSION=${VERSION}"
-  # LC_ALL=C stable sort by the whole line (sha then basename) → reproducible ordering.
-  printf '%s\n' "${manifest_lines[@]}" | LC_ALL=C sort
+  # LC_ALL=C sort by BASENAME (field 2) → reproducible ordering that is also STABLE under
+  # file-content edits: only a rename reorders the manifest, whereas a content change (which shifts
+  # a sha256) would reorder a whole-line sort. Basenames are unique (dup rejected above) → no ties.
+  printf '%s\n' "${manifest_lines[@]}" | LC_ALL=C sort -k2
 } > "$MANIFEST"
 
 echo "$MANIFEST"
