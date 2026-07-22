@@ -469,7 +469,7 @@ jobs:
                  parallel CC sessions don't queue concurrent auto-merges
                  (the `--` separator terminates `with_lock`'s positional
                  args; required):
-                 `bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- gh pr merge --squash --auto "$PR_URL" 2>/tmp/merge.err`.
+                 `bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- gh pr merge --squash --auto "$PR_URL" 2>"$(mktemp -t merge.XXXXXXXX.err)"`.
                  If the wrapper returns rc=99 (`>600s` contention), the
                  merge was NOT queued — surface to the operator and retry
                  rather than treating the auto-merge as successful.

@@ -122,6 +122,25 @@ resource "doppler_service_token" "workspaces_luks" {
   access  = "read"
 }
 
+# #6649 — publish the boot token to a repo-level GitHub Actions secret so the cutover/verify
+# workflows can deliver it host-side (the ONLY credential that reads prd_workspaces_luks; web-1's
+# baked DOPPLER_TOKEN is prd-root-scoped and cannot). Mirrors github_actions_secret.doppler_token_inngest_arm
+# (inngest-arm-write-token.tf) exactly: a repo secret, no lifecycle.ignore_changes — a `-replace`
+# rotation of the token propagates the new key here in the same apply.
+#
+# This reclassifies the token from operator-applied-host-token to CI-PUBLISHED token, so
+# apply-web-platform-infra.yml's DEFAULT allow-list explicitly targets BOTH this resource AND
+# doppler_service_token.workspaces_luks, and terraform-target-parity.test.ts REMOVES the token from
+# OPERATOR_APPLIED_TOKEN_EXCLUSIONS (the #5566 "a token feeding a github_actions_secret MUST be
+# targeted, never excluded" rule). It rides the DEFAULT apply, NOT the scoped
+# apply_target=workspaces-luks-cutover job (whose gate asserts EXACTLY the five volume/attachment/
+# passphrase/secret/token creates and would abort on a sixth resource).
+resource "github_actions_secret" "workspaces_luks_boot_token" {
+  repository      = "soleur"
+  secret_name     = "WORKSPACES_LUKS_BOOT_TOKEN"
+  plaintext_value = doppler_service_token.workspaces_luks.key
+}
+
 # --- The encrypted volume -----------------------------------------------------
 # DELIBERATELY NO `format` ATTRIBUTE. This is the single most important line in the
 # file — and it is a line that is NOT here.
@@ -189,12 +208,15 @@ resource "hcloud_volume_attachment" "workspaces_luks" {
 
 # GitHub Environment with a required-reviewer protection rule — the SOLE human
 # authorization on the irreversible /workspaces LUKS freeze (C19 / AC20b; DP-11 F8).
-# The freeze job in .github/workflows/workspaces-luks-cutover.yml declares
-# `environment: workspaces-luks-cutover`, so the run is held in "Waiting" for reviewer
-# approval BEFORE any step executes — that approval IS the human ack. A zero-reviewer
-# environment auto-approves, so reviewers.users MUST stay non-empty. reviewers.users
-# takes numeric GitHub user IDs — 54279 = @deruelle (the operator/founder). Mirrors
-# github_repository_environment.inngest_cutover (inngest-arm-write-token.tf).
+# The cutover job in .github/workflows/workspaces-luks-cutover.yml declares
+# `environment: ${{ !inputs.dry_run && 'workspaces-luks-cutover' || '' }}` (#6649), so the
+# REAL freeze arm (`dry_run=false`) is held in "Waiting" for reviewer approval BEFORE any
+# step executes — that approval IS the human ack — while a reversible `dry_run=true` rehearsal
+# resolves to an empty (ungated) environment and runs unattended (autonomy). The expression is
+# fail-closed: the same `!inputs.dry_run` operand gates the freeze, so any freeze-reachable run
+# is gated. A zero-reviewer environment auto-approves, so reviewers.users MUST stay non-empty for
+# the freeze arm. reviewers.users takes numeric GitHub user IDs — 54279 = @deruelle (the
+# operator/founder). Mirrors github_repository_environment.inngest_cutover (inngest-arm-write-token.tf).
 #
 # Provisioned by the DEFAULT allow-list apply (apply-web-platform-infra.yml push /
 # apply_target=manual-rerun), NOT the scoped apply_target=workspaces-luks-cutover job:

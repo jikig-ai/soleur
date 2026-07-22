@@ -1,0 +1,94 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "hcloud_server.web[\"web-2\"]",
+      "type": "hcloud_server",
+      "name": "web",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {},
+        "after": null
+      }
+    },
+    {
+      "address": "hcloud_server_network.web[\"web-2\"]",
+      "type": "hcloud_server_network",
+      "name": "web",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {},
+        "after": null
+      }
+    },
+    {
+      "address": "hcloud_volume_attachment.workspaces[\"web-2\"]",
+      "type": "hcloud_volume_attachment",
+      "name": "workspaces",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {},
+        "after": null
+      }
+    },
+    {
+      "address": "hcloud_volume.workspaces[\"web-2\"]",
+      "type": "hcloud_volume",
+      "name": "workspaces",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {},
+        "after": null
+      }
+    },
+    {
+      "address": "hcloud_firewall_attachment.web",
+      "type": "hcloud_firewall_attachment",
+      "name": "web",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {},
+        "after": {}
+      }
+    },
+    {
+      "address": "hcloud_server.web",
+      "type": "hcloud_server",
+      "name": "web",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "id": "99999999",
+          "server_type": "cx33",
+          "location": "hel1",
+          "placement_group_id": 987654,
+          "labels": {
+            "x": "1"
+          }
+        },
+        "after": {
+          "id": "99999999",
+          "server_type": "cx33",
+          "location": "hel1",
+          "placement_group_id": 987654,
+          "labels": {
+            "x": "2"
+          }
+        }
+      }
+    }
+  ]
+}

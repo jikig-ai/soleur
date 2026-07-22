@@ -1,0 +1,28 @@
+[Unit]
+Description=git-data consumer-perspective reachability probe (web host, #6548)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# HOME=/root: the ExecStart runs `doppler run` as ROOT (no User=). The Doppler CLI's
+# os.UserHomeDir() init dies "Doppler Error: $HOME is not defined" for a root systemd service
+# (which gets no $HOME) BEFORE it can exec the probe — the reason every working root-doppler unit
+# on the fleet (container-restart-monitor, cron-egress-*, inngest-cutover-flip) sets this. With
+# HOME=/root doppler uses /root/.doppler; the prd DOPPLER_TOKEN arrives via the EnvironmentFile
+# below (written by the *_install provisioner from doppler_service_token.web_probes). No
+# DOPPLER_CONFIG_DIR → never /tmp/.doppler (the #6536 clash surface). #6438/#6548.
+Environment=HOME=/root
+# SyslogIdentifier retags the unit's journal output away from the ExecStart basename `bash`
+# (systemd default) to a diagnostic-critical identifier shipped by vector.toml Source 4
+# (host_scripts_journald) — so the probe's fault-classification stderr ("SUPPRESS ping: UNREACHABLE
+# over the private net", "heartbeat ping FAILED") reaches Better Stack off-box, not SSH-only
+# (hr-no-ssh-fallback-in-runbooks; the #6556 inngest-heartbeat lesson). Mirrored in vector.toml.
+SyslogIdentifier=web-git-data-probe
+# /etc/default/web-git-data-probe (baked per-host) carries GIT_DATA_ENDPOINT + GIT_DATA_HEARTBEAT_URL_KEY
+# (the Doppler var name for this host's git_data_prd URL; git-data uses ONE shared beat today —
+# single-host makes masking moot, C3). doppler run injects GIT_DATA_HEARTBEAT_URL; bash indirect
+# expansion resolves it under the generic name the script reads. Shipped as a FILE (nested doppler
+# quotes; container-restart-monitor precedent).
+EnvironmentFile=/etc/default/web-git-data-probe
+ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\''export GIT_DATA_HEARTBEAT_URL="$${!GIT_DATA_HEARTBEAT_URL_KEY}"; exec /usr/local/bin/web-git-data-probe.sh'\'''

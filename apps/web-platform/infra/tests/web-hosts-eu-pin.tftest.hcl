@@ -24,7 +24,21 @@ mock_provider "tls" {}
 # None of these are used by the validation under test; they only satisfy the
 # required-variable check. web_hosts is overridden per run block below.
 variables {
-  admin_ips                    = ["203.0.113.1"]
+  admin_ips = ["203.0.113.1"]
+
+  # Opt this credential-free test OUT of the seo_config_settings entrypoint
+  # adoption. `mock_provider` does NOT mock `import` blocks — Terraform performs
+  # the import read against the REAL provider even under `terraform test`, so
+  # leaving this at its production default (`true`) fails the whole file with
+  # `error reading ruleset ID ... Authentication error (10000)` before any
+  # var.web_hosts validation runs. That is a credential error in a job whose
+  # entire premise is running without credentials.
+  #
+  # The default stays `true` so production adopts rather than clobbers; only
+  # this test opts out. seo-config-rules.tf explains what the adoption is for,
+  # and test/seo-config-rules.test.ts pins that the default is `true` — because
+  # flipping it to `false` silently restores the whole-list clobber (#6767).
+  adopt_seo_config_entrypoint  = false
   betterstack_api_token        = "dummy"
   betterstack_logs_token       = "dummy"
   cf_access_client_id          = "0123456789012345678901234567890123456789.access"
@@ -32,6 +46,8 @@ variables {
   cf_account_id                = "0123456789abcdef0123456789abcdef"
   cf_api_token                 = "0123456789012345678901234567890123456789"
   cf_api_token_bot_management  = "0123456789012345678901234567890123456789"
+  cf_api_token_dns_edit        = "0123456789012345678901234567890123456789"
+  cf_api_token_r2              = "0123456789012345678901234567890123456789"
   cf_api_token_rulesets        = "0123456789012345678901234567890123456789"
   cf_api_token_zone_settings   = "0123456789012345678901234567890123456789"
   cf_notification_email        = "ops@example.com"

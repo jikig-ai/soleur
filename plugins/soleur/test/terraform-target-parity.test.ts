@@ -399,16 +399,53 @@ function stripJob(workflowText: string, jobId: string): string {
 }
 
 /**
- * Strip ALL dispatch-only jobs (warm_standby + web_2_recreate) from the workflow
- * before the #5566/#5887 coverage+moved guards build `allTargets`. BOTH are
- * additive/scoped `-target` writers whose targets are OPERATOR_APPLIED_EXCLUSIONS,
- * so folding them into `allTargets` would WEAKEN the moved-block anchor. CTO
- * must-fix 2: web_2_recreate carries `-target='hcloud_server.web["web-2"]'`, whose
- * base `hcloud_server.web` is a MOVED_OPERATOR_CONSUMED endpoint — if it leaked
- * into `allTargets`, dropping `hcloud_server.web` from MOVED_OPERATOR_CONSUMED
- * would no longer turn the moved guard red (masking a dropped moved-base). Strip
- * both dispatch jobs at EVERY site that builds the base-address coverage set.
+ * Strip ALL dispatch-only jobs from the workflow before the #5566/#5887
+ * coverage+moved guards build `allTargets`. Each is an additive/scoped `-target`
+ * writer whose targets are OPERATOR_APPLIED_EXCLUSIONS, so folding them into
+ * `allTargets` would WEAKEN the moved-block anchor.
+ *
+ * The original CTO must-fix 2 concerned web_2_recreate, which carried
+ * `-target='hcloud_server.web["web-2"]'` — a MOVED_OPERATOR_CONSUMED base that,
+ * if leaked into `allTargets`, would stop the moved guard going red on a dropped
+ * moved-base. That job (and warm_standby) were deleted with the web-2 dispatch
+ * sweep (#6575, 2026-07-20), so their strips are gone. The rule they established
+ * still binds: strip EVERY dispatch job at EVERY site that builds the base-address
+ * coverage set, and re-check this list whenever a dispatch job is added.
  */
+/**
+ * Every job name stripDispatchJobs() strips MUST exist in the workflow.
+ *
+ * `stripJob` silently no-ops on a job that is not present, so the strip list is unverified
+ * in both directions: a deleted job's strip lingers forever (measured at review — re-adding
+ * the deleted warm_standby/web_2_recreate strips left the suite fully green), and a typo
+ * disables a strip that matters. This pins the list to reality so it cannot accrete dead
+ * entries, which is exactly the drift #6575 had to clean up by hand.
+ */
+describe("stripDispatchJobs list is pinned to real jobs", () => {
+  test("every stripped job name exists as a top-level job in the workflow", () => {
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    // ANCHORED AT COLUMN 0 (`^...` + `m`). Without the anchor this SELF-MATCHES: the first
+    // occurrence of the function name in this file's own source is inside this very regex
+    // literal (indented), so the extraction captured this test's own strings ("utf8", "y",
+    // "m") instead of the job names. The real declaration is the only one at column 0.
+    const fnSrc = /^function stripDispatchJobs[\s\S]*?\n}/m.exec(
+      readFileSync(__filename, "utf8"),
+    );
+    expect(fnSrc).not.toBeNull();
+    // Every quoted job name in the function body. Deliberately NOT a `stripJob(x, "y")`
+    // shape match: the calls nest across lines and the first argument is itself a call
+    // containing commas, so an argument-position regex silently extracts nothing — which
+    // the non-vacuity floor below caught when this test was written.
+    const stripped = [...fnSrc![0].matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]);
+    // Non-vacuity floor: the extraction must actually find the names.
+    expect(stripped.length).toBeGreaterThan(0);
+    const missing = stripped.filter(
+      (job) => !new RegExp(`^  ${job}:`, "m").test(wf),
+    );
+    expect(missing).toEqual([]);
+  });
+});
+
 function stripDispatchJobs(workflowText: string): string {
   // #6178: inngest_host is a dispatch-only job (apply_target=inngest-host) that -targets the
   // net-new singleton host resources — strip it so its -targets do NOT broaden the per-merge
@@ -434,10 +471,7 @@ function stripDispatchJobs(workflowText: string): string {
   return stripJob(
     stripJob(
       stripJob(
-        stripJob(
-          stripJob(stripJob(workflowText, "warm_standby"), "web_2_recreate"),
-          "inngest_host",
-        ),
+        stripJob(workflowText, "inngest_host"),
         "registry_host_replace",
       ),
       "registry_region_migrate",
@@ -531,6 +565,18 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "tls_self_signed_cert.proxy_server",
   "doppler_secret.proxy_tls_key",
   "doppler_secret.proxy_tls_cert",
+  // #6657 (ADR-125 / AP-019) — the DNS-edit-only Cloudflare token for the GitHub
+  // Pages cert-reissue routine + its prd doppler_secret. Minting a
+  // cloudflare_api_token requires "User API Tokens: Edit", which the per-PR CI
+  // runner's cf_api_token lacks; auto-targeting the mint on every infra/*.tf push
+  // would 403 and wedge the whole apply (the #5566-inverse footgun). So both ride
+  // an operator JIT / maintenance-window apply (documented in
+  // infra/cf-cert-reissue-token.tf), NOT the #5566 per-PR-CI silent-un-applied
+  // class — same class as the git-data doppler_secrets above (doppler_secret, not
+  // the CI-published doppler_service_token/github_actions_secret types this test
+  // forces).
+  "cloudflare_api_token.gh_pages_cert_reissue_dns_edit",
+  "doppler_secret.cf_api_token_dns_edit",
   // #5274 Sub-PR 3.D (ADR-068) — the fresh LUKS git-data volume + its at-rest key +
   // its scoped read-only token ALL ride the operator's MAINTENANCE-WINDOW cutover apply
   // (the volume attaches to the RUNNING git-data host; guest-side cryptsetup unlocks it
@@ -558,18 +604,19 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   //   hcloud_volume and is evaluated BEFORE the destroy_count sum, so `[ack-destroy]`
   //   deliberately cannot reach it. A net-new hcloud_volume that CI could plan would HALT
   //   the per-PR apply path.
-  //   `doppler_service_token.workspaces_luks` is an OPERATOR-APPLIED token exception (see
-  //   OPERATOR_APPLIED_TOKEN_EXCLUSIONS below), same class as doppler_service_token.git_data:
-  //   it is minted into the operator-created `prd_workspaces_luks` Doppler config and read by
-  //   the web-1 HOST at unlock time — never published into a paired github_actions_secret. The
-  //   config does not exist until the operator creates it (runbook precondition), so CI cannot
-  //   apply it. The dedicated config is what keeps the key OUT of the `--config prd` download
-  //   that feeds `docker run --env-file` (CWE-522 — see workspaces-luks.tf).
+  //   NOTE (#6649): `doppler_service_token.workspaces_luks` is DELIBERATELY NOT excluded here.
+  //   #6649 publishes its `.key` into `github_actions_secret.workspaces_luks_boot_token`
+  //   (workspaces-luks.tf) and adds an explicit `-target` for BOTH to the DEFAULT allow-list, so it
+  //   is now a CI-PUBLISHED token (the #5566 rule: a token feeding a github_actions_secret MUST be
+  //   targeted, never excluded — mirroring inngest_arm_write, which is in neither exclusion set).
+  //   Excluding it would desensitize the default-apply coverage assertion for its `-target` line. The
+  //   web-1 host ALSO reads it directly from `prd_workspaces_luks` at unlock time; publishing does not
+  //   change the CWE-522 container-boundary rationale (see workspaces-luks.tf + OPERATOR_APPLIED_TOKEN_EXCLUSIONS).
+  //   The four resources below ride ONLY the scoped operator cutover apply, so they stay excluded.
   "random_password.workspaces_luks",
   "doppler_secret.workspaces_luks_key",
   "hcloud_volume.workspaces_luks",
   "hcloud_volume_attachment.workspaces_luks",
-  "doppler_service_token.workspaces_luks",
   // #6604 — the daily luks-monitor probe's Better Stack heartbeat + its Doppler URL secret. Same
   // class as betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd
   // (both excluded, applied together by the operator apply; the heartbeat is paused until the
@@ -612,7 +659,10 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "doppler_secret.zot_push_token",
   "betteruptime_heartbeat.registry_prd",
   "betteruptime_heartbeat.registry_disk_prd",
-  "doppler_secret.zot_heartbeat_url_prd",
+  // doppler_secret.zot_heartbeat_url_prd removed (#6438 B3): it was a reserved-but-inert secret for
+  // a never-built off-host probe; the web-host consumer probe now mints its own per-host heartbeat +
+  // URL secret (betteruptime_heartbeat.web_zot_consumer / doppler_secret.web_zot_consumer_url, which
+  // DO ride the per-PR -target list), so this exclusion is obsolete.
   "doppler_service_token.registry",
   // #6122 (ADR-096) — the CI-push ingress (CTO ruling 2026-07-06): CI reaches the private-net
   // zot host via the EXISTING `web` Cloudflare Tunnel + a NEW dedicated CF Access service token,
@@ -673,18 +723,14 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
 // a github_actions_secret — that is the #5566 silent-un-applied class and MUST be targeted.
 const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
   "doppler_service_token.git_data",
-  // #6588 (ADR-119) — minted into the operator-created `prd_workspaces_luks` config and read by
-  // the web-1 host at LUKS-unlock time (NOT published to a CI github_actions_secret). CI cannot
-  // apply it — the config does not exist until the operator creates it. Same class as
-  // doppler_service_token.git_data. The dedicated config is a SECURITY boundary, not hygiene:
-  // web-1's cloud-init runs `doppler secrets download --config prd` into the TMPENV that feeds
-  // `docker run --env-file`, so a key in shared `prd` would be readable via /proc/self/environ
-  // by the agent container whose own data it encrypts (CWE-522). The mechanism is inheritance
-  // DIRECTIONALITY (root → branch), NOT scope reduction: this token still resolves the full prd
-  // set, exactly like the "leaky prd_registry branch config" named below — see #6167 and
-  // learnings/security-issues/2026-07-07-doppler-branch-config-does-not-isolate-secrets.md.
-  // It is free here because web-1 already carries a full-prd DOPPLER_TOKEN.
-  "doppler_service_token.workspaces_luks",
+  // #6649 (ADR-119) — doppler_service_token.workspaces_luks is DELIBERATELY NOT excluded here.
+  // It was an operator-applied-host-token (same class as git_data), but #6649 publishes its `.key`
+  // into github_actions_secret.workspaces_luks_boot_token (workspaces-luks.tf) so the cutover/verify
+  // workflows can deliver it host-side over the SSH bridge. Per the #5566 rule below, a token that
+  // feeds a github_actions_secret MUST be CI-targeted, never excluded — so it is now explicitly
+  // `-target`ed in apply-web-platform-infra.yml's DEFAULT allow-list (mirroring the inngest_arm_write
+  // precedent). web-1 still ALSO reads prd_workspaces_luks directly via the same token at unlock
+  // time; publishing it does not change the CWE-522 container-boundary rationale in workspaces-luks.tf.
   // #6122 (ADR-096) — minted into the ISOLATED `soleur-registry` project's `prd` root config
   // (TF-created via doppler_project.registry in the operator full apply; its own root holds ONLY
   // the two ZOT tokens — true cross-project isolation, NOT the leaky `prd_registry` branch config
@@ -722,7 +768,7 @@ describe("terraform -target parity — ALL managed resources are reachable (non-
       extractAllResources(stripComments(readFileSync(f, "utf8"))),
     );
     allTargets = new Set<string>([
-      // JOB-AWARE: exclude the dispatch-only jobs (warm_standby + web_2_recreate)
+      // JOB-AWARE: exclude the dispatch-only jobs
       // — their additive/scoped for_each targets are OPERATOR_APPLIED_EXCLUSIONS
       // and must not broaden this coverage set (see stripDispatchJobs).
       ...extractAllTargets(
@@ -1006,113 +1052,6 @@ moved {
   });
 });
 
-// ─── ADR-068 warm-standby dispatch -target guard (this PR) ───────────────────
-// The `apply_target=warm-standby` dispatch job (`warm_standby` in
-// apply-web-platform-infra.yml) runs an ADDITIVE 6-target plan+apply through the
-// shared R2 concurrency serializer, then triggers the host-side deploy fan-out to
-// web-2. This guard pins the target set to EXACTLY the 6 additive resources and
-// proves it can never carry web-1's placement-group reboot into the dispatch plan
-// (no hcloud_server.* target ⇒ the destroy-guard-filter-web-platform.jq
-// `reboot_updates` counter is 0 by construction). It also asserts the parity
-// guards above stay JOB-AWARE (the warm-standby targets are NOT folded into
-// `allTargets`), without weakening the moved-block boundary.
-const WARM_STANDBY_TARGETS = [
-  "hcloud_network.private",
-  "hcloud_network_subnet.private",
-  'hcloud_server_network.web["web-1"]',
-  'hcloud_server_network.web["web-2"]',
-  'hcloud_volume.workspaces["web-2"]',
-  'hcloud_volume_attachment.workspaces["web-2"]',
-];
-
-describe("ADR-068 warm-standby dispatch -target set (additive; reboot_updates=0)", () => {
-  let warmTargets: string[];
-  let warmJobBlock: string;
-  let fullBaseTargets: Set<string>;
-  let strippedBaseTargets: Set<string>;
-
-  beforeAll(() => {
-    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
-    warmJobBlock = extractJobBlock(wf, "warm_standby");
-    warmTargets = extractTargetsWithKeys(warmJobBlock);
-    fullBaseTargets = extractAllTargets(wf);
-    // Strip BOTH dispatch jobs: web_2_recreate ALSO -targets
-    // hcloud_server_network.web["web-2"], so stripping only warm_standby would
-    // leave the base in strippedBaseTargets and break the boundary assertion below.
-    strippedBaseTargets = extractAllTargets(stripDispatchJobs(wf));
-  });
-
-  test("the warm_standby job -targets EXACTLY the 6 additive resources", () => {
-    expect([...warmTargets].sort()).toEqual([...WARM_STANDBY_TARGETS].sort());
-  });
-
-  test("warm_standby REUSES the shared extracted poll, not an inline copy (AC8, #6040 migration lock)", () => {
-    // #6040: warm_standby was migrated off its ~94-line inline baseline/trigger/
-    // verify copy onto the shared deploy-status-fanout-verify.sh (the SAME poll the
-    // web_2_recreate job runs). Lock the migration in so a future revert fails CI.
-    expect(warmJobBlock).toContain("deploy-status-fanout-verify.sh");
-    // Proof the inline verify-poll copy is GONE: its terminal-timeout sentinel now
-    // lives ONLY in the shared script (+ that string never appeared elsewhere in the
-    // warm_standby block). A revert that reinstates the inline poll turns this red.
-    expect(warmJobBlock).not.toContain("did not report a fresh completion");
-    // The former cross-step outputs the inline copy published are gone: the summary
-    // step must read the shared verify step's deployed_tag, and no dangling
-    // steps.trigger.outputs.* / steps.baseline.outputs.* reference may remain.
-    expect(warmJobBlock).toContain("steps.verify.outputs.deployed_tag");
-    expect(warmJobBlock).not.toContain("steps.trigger.outputs");
-    expect(warmJobBlock).not.toContain("steps.baseline.outputs");
-  });
-
-  test("warm-standby targets NO hcloud_server.* — reboot_updates=0 by construction", () => {
-    // reboot_updates only counts placement_group_id/server_type in-place updates
-    // on hcloud_server.* (destroy-guard-filter-web-platform.jq:135). The warm-standby
-    // set attaches the private network (hcloud_server_network — a DIFFERENT type) +
-    // the web-2 volume; it never targets hcloud_server.web, so web-1's placement
-    // reboot cannot enter the dispatch plan and the plan-scoped guard's
-    // reboot_updates is 0. `\.` after hcloud_server is load-bearing: it must NOT
-    // match hcloud_server_network.
-    const serverTargets = warmTargets.filter((t) => /^hcloud_server\./.test(t));
-    expect(serverTargets).toEqual([]);
-    // non-vacuity: the network attach IS present (the filter above is not empty
-    // merely because the whole set is empty).
-    expect(
-      warmTargets.some((t) => t.startsWith("hcloud_server_network.web")),
-    ).toBe(true);
-  });
-
-  test("every warm-standby target's base address is an OPERATOR_APPLIED_EXCLUSION", () => {
-    // The 6 additive resources are excluded from BOTH auto-apply target sets
-    // (P0.4) — the dispatch is the ONLY path that applies them. If a future edit
-    // pointed the warm-standby job at a non-excluded resource this turns red.
-    for (const t of warmTargets) {
-      const base = t.replace(/\[.*$/, "");
-      expect(OPERATOR_APPLIED_EXCLUSIONS.has(base)).toBe(true);
-    }
-  });
-
-  test("the warm_standby job still RUNS the reboot_updates destroy-guard before apply (runtime-guard anchor)", () => {
-    // Defense-in-depth (optional, this PR): the static "no hcloud_server.* target"
-    // reasoning above wouldn't notice if the RUNTIME destroy-guard check were
-    // deleted from the plan step. `-target` still pulls hcloud_server.web into the
-    // plan graph transitively, so the runtime reboot_updates=0 gate is the real
-    // backstop. Anchor its presence so a future edit that drops it turns this red.
-    expect(warmJobBlock).toContain("destroy-guard-filter-web-platform.jq");
-    expect(warmJobBlock).toContain("reboot_updates");
-    // The gate must ABORT on a reboot (rc-bearing check), not merely compute the
-    // counter — pin the `reboot_updates -gt 0` guard expression itself.
-    expect(warmJobBlock).toMatch(/reboot_updates"?\s*-gt\s*0/);
-  });
-
-  test("the parity guards stay JOB-AWARE: warm-standby targets are NOT in the stripped allTargets", () => {
-    // Load-bearing boundary (P0.4): with extractAllTargets now quote-tolerant, a
-    // WHOLE-file scan DOES see the warm-standby base hcloud_server_network.web;
-    // once stripJob removes the dispatch job it is GONE. The #5566/#5887 guards use
-    // the stripped form, so the moved-block regression anchor keeps its teeth.
-    expect(fullBaseTargets.has("hcloud_server_network.web")).toBe(true);
-    expect(strippedBaseTargets.has("hcloud_server_network.web")).toBe(false);
-  });
-});
-
 describe("hcloud_server.web reboot deferral — placement_group_id stays in ignore_changes (#5887 zero-downtime CI unwedge)", () => {
   // Removing `placement_group_id` from hcloud_server.web's lifecycle.ignore_changes
   // re-introduces the pending web-1 placement-group attach (0 -> web_spread) into
@@ -1157,21 +1096,14 @@ describe("hcloud_server.web reboot deferral — placement_group_id stays in igno
   });
 });
 
-// ─── web-2-recreate dispatch -target/-replace guard (this PR, AC7/AC10c) ─────
-// The `apply_target=web-2-recreate` dispatch job (`web_2_recreate`) runs a SCOPED,
-// GUARDED `terraform apply -replace='hcloud_server.web["web-2"]'` + the 3 web-2
-// `-target`s to re-run web-2's first-boot cloud-init and bind :9000. This guard
-// pins the target/replace set to EXACTLY the web-2 addresses and proves it can
-// never carry a web-1 address (the sole live origin) into the plan. The DATA
-// volume (hcloud_volume.workspaces["web-2"]) must NOT be in the set (0-destroy).
-const WEB2_RECREATE_TARGETS = [
-  'hcloud_server.web["web-2"]',
-  'hcloud_server_network.web["web-2"]',
-  'hcloud_volume_attachment.workspaces["web-2"]',
-];
-const WEB2_RECREATE_REPLACE = 'hcloud_server.web["web-2"]';
-
-/** Every `-replace=<addr>` value (quoted or bare) in a workflow-job block. */
+/**
+ * Every `-replace=<addr>` value (quoted or bare) in a workflow-job block.
+ *
+ * Defined at module scope. It previously lived inside the web-2-recreate block
+ * that #6575 deleted, but it is SHARED by the registry-host-replace and
+ * git-data-host-replace describes below — deleting its home block took the
+ * binding with it and broke both (caught by the suite, not by tsc).
+ */
 function extractReplaceAddrs(text: string): string[] {
   const out: string[] = [];
   for (const m of stripComments(text).matchAll(
@@ -1181,87 +1113,6 @@ function extractReplaceAddrs(text: string): string[] {
   }
   return out;
 }
-
-describe("web-2-recreate dispatch -target/-replace set (scoped; web-1 never targeted)", () => {
-  let recreateTargets: string[];
-  let recreateJobBlock: string;
-  let replaceAddrs: string[];
-
-  beforeAll(() => {
-    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
-    recreateJobBlock = extractJobBlock(wf, "web_2_recreate");
-    recreateTargets = extractTargetsWithKeys(recreateJobBlock);
-    replaceAddrs = extractReplaceAddrs(recreateJobBlock);
-  });
-
-  test("the web_2_recreate job -targets EXACTLY the 3 web-2 resources", () => {
-    expect([...recreateTargets].sort()).toEqual([...WEB2_RECREATE_TARGETS].sort());
-  });
-
-  test("every web-2-recreate target's base address is an OPERATOR_APPLIED_EXCLUSION", () => {
-    for (const t of recreateTargets) {
-      const base = t.replace(/\[.*$/, "");
-      expect(OPERATOR_APPLIED_EXCLUSIONS.has(base)).toBe(true);
-    }
-  });
-
-  test('hcloud_volume.workspaces["web-2"] (the DATA volume) is NOT in the recreate set', () => {
-    expect(recreateTargets).not.toContain('hcloud_volume.workspaces["web-2"]');
-    // base form absent too — the volume must be 0-destroy (AC3 / AC15).
-    expect(recreateTargets.map((t) => t.replace(/\[.*$/, ""))).not.toContain(
-      "hcloud_volume.workspaces",
-    );
-  });
-
-  test("the -replace address is EXACTLY the web-2 server (never web-1)", () => {
-    expect(replaceAddrs).toEqual([WEB2_RECREATE_REPLACE]);
-  });
-
-  test("NO web-1 address appears in the recreate job's -target/-replace set (blast-radius guard)", () => {
-    const all = [...recreateTargets, ...replaceAddrs];
-    const web1 = all.filter((a) => a.includes('"web-1"'));
-    expect(web1).toEqual([]);
-    // non-vacuity: the set is non-empty and DOES carry web-2 addresses.
-    expect(all.some((a) => a.includes('"web-2"'))).toBe(true);
-  });
-
-  test("guard would FAIL if a web-1 address were added to the recreate set (non-vacuity)", () => {
-    // Prove the "no web-1" filter above bites: a poisoned set with a web-1 target
-    // is flagged. Guards against the filter silently matching nothing.
-    const poisoned = [...WEB2_RECREATE_TARGETS, 'hcloud_server.web["web-1"]'];
-    const web1 = poisoned.filter((a) => a.includes('"web-1"'));
-    expect(web1).toEqual(['hcloud_server.web["web-1"]']);
-  });
-
-  test("the recreate job runs the sourced web2_recreate_gate + coherence preflight before apply", () => {
-    expect(recreateJobBlock).toContain("web2-recreate-gate.sh");
-    expect(recreateJobBlock).toContain("web2_recreate_gate");
-    // The LOAD-BEARING coherence preflight runs BEFORE any -replace.
-    expect(recreateJobBlock).toContain("web2-recreate-preflight.sh");
-  });
-
-  test("verify REUSES the shared extracted poll, not a re-derived copy (AC10c)", () => {
-    // The new job invokes the shared script rather than inlining the poll body.
-    expect(recreateJobBlock).toContain("deploy-status-fanout-verify.sh");
-    // Proof it did NOT copy-paste the warm_standby poll: the poll-loop timeout
-    // sentinel ("did not report a fresh completion") lives only in the shared
-    // script + warm_standby's inline copy, never in this job block.
-    expect(recreateJobBlock).not.toContain(
-      "did not report a fresh completion",
-    );
-    // The shared script carries the load-bearing invariants (single-peer guard +
-    // terminal exit 1 on timeout — no green-on-timeout).
-    const shared = readFileSync(
-      resolve(INFRA_DIR, "scripts/deploy-status-fanout-verify.sh"),
-      "utf8",
-    );
-    expect(shared).toContain("ROSTER_COUNT");
-    expect(shared).toMatch(/ROSTER_COUNT"?\s*-ne\s*2/);
-    expect(shared).toMatch(
-      /did not report a fresh completion[\s\S]*?exit 1/,
-    );
-  });
-});
 
 // ─── registry-host-replace dispatch -target/-replace guard (ADR-096) ─────────
 // The `apply_target=registry-host-replace` dispatch job (`registry_host_replace`) runs a

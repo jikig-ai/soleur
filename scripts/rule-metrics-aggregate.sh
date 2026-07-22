@@ -198,22 +198,49 @@ fi
 #   Stage A (_parse_rules) — raw TSV → $rules array
 #   Stage B (_enrich)      — $rules + $counts → $enriched
 #   Stage C (_summarize)   — $enriched → final top-level object
+#
+# ARGV CEILING (#6736). Every inter-stage payload below is spooled to a file in
+# $_tmpdir and bound with `--rawfile … | fromjson`, NOT `--argjson`. A shell
+# variable bound via --argjson becomes ONE argv argument, and the kernel caps a
+# SINGLE argv argument at MAX_ARG_STRLEN = 131,072 B — verified by bisect on this
+# host: 131,071 B passes, 131,072 B fails E2BIG. This is NOT `getconf ARG_MAX`
+# (2,097,152 B, the argv+envp total); a payload at 6% of ARG_MAX still dies.
+#
+# Measured pre-fix at 101 tagged rules: stage_rules 13,063 B and stage_enriched
+# 31,445 B with counts empty — 35,081 B once last_hit/first_seen timestamps are
+# populated, i.e. 27% of the ceiling at ~347 B/rule. That collides at ~378 rules,
+# and AGENTS.md gains rules every compound cycle, so the old form was on a timer.
+# file I/O has no per-argument limit, so the ceiling is gone.
+#
+# Lifts the in-file precedent one screen up: `--rawfile rules_tsv "$rules_tsv_file"`.
+# (--slurpfile was rejected for the JSON payloads: each is a single top-level
+# array, so it would bind as [[…]] and yield a SILENT `| length == 1` undercount
+# rather than an error. `--rawfile … | fromjson` binds the value itself.)
 GENERATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-stage_rules=$(jq -n \
+# $jq_counts is keyed by rule_id — it grows with the rule set AND with orphan
+# rule_ids from the incident log, so it is spooled too, not just $enriched.
+counts_file="$_tmpdir/stage-counts.json"
+printf '%s' "$jq_counts" > "$counts_file"
+
+stage_rules_file="$_tmpdir/stage-rules.json"
+jq -n \
   --rawfile rules_tsv "$rules_tsv_file" '
     $rules_tsv
     | split("\n")
     | map(select(length > 0))
     | map(split("\t"))
     | map({id: .[0], section: .[1], rule_text_prefix: .[2]})
-  ')
-echo "$stage_rules" | jq empty >/dev/null 2>&1 || { echo "ERROR: stage A (rules parse) malformed" >&2; exit 4; }
+  ' > "$stage_rules_file"
+jq empty < "$stage_rules_file" >/dev/null 2>&1 || { echo "ERROR: stage A (rules parse) malformed" >&2; exit 4; }
 
-stage_enriched=$(jq -n \
-  --argjson rules "$stage_rules" \
-  --argjson counts "$jq_counts" '
-    $rules
+stage_enriched_file="$_tmpdir/stage-enriched.json"
+jq -n \
+  --rawfile rules_json "$stage_rules_file" \
+  --rawfile counts_json "$counts_file" '
+    ($rules_json | fromjson) as $rules
+    | ($counts_json | fromjson) as $counts
+    | $rules
     | map(
         . as $r
         | ($counts[$r.id] // {hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, last_hit:null, first_seen:null}) as $c
@@ -232,20 +259,25 @@ stage_enriched=$(jq -n \
           }
       )
     | sort_by(.fire_count, .id)
-  ')
-echo "$stage_enriched" | jq empty >/dev/null 2>&1 || { echo "ERROR: stage B (enrich) malformed" >&2; exit 4; }
+  ' > "$stage_enriched_file"
+jq empty < "$stage_enriched_file" >/dev/null 2>&1 || { echo "ERROR: stage B (enrich) malformed" >&2; exit 4; }
 
+# $drops and $cutoff and $schema stay on argv: drops is keyed by a closed error
+# enum (a handful of keys) and the other two are scalars — none can approach
+# MAX_ARG_STRLEN. $enriched and $counts are the ones that scale with the rule set.
 report=$(jq -n \
   --argjson schema "$SCHEMA_VERSION" \
   --arg generated_at "$GENERATED_AT" \
-  --argjson enriched "$stage_enriched" \
-  --argjson counts "$jq_counts" \
+  --rawfile enriched_json "$stage_enriched_file" \
+  --rawfile counts_json "$counts_file" \
   --argjson drops "$drops_counts_json" \
   --argjson cutoff "$UNUSED_CUTOFF_EPOCH" '
+    ($enriched_json | fromjson) as $enriched
+    | ($counts_json | fromjson) as $counts
     # Orphan events: rule_ids in the jsonl that don'"'"'t match any AGENTS.md id.
     # Surfacing these prevents silent data loss when a hook emits a rule_id
     # that was renamed / removed / never tagged (e.g., historical sentinel names).
-    ($enriched | map(.id)) as $known_ids
+    | ($enriched | map(.id)) as $known_ids
     | ($counts | keys
         | map(select(. as $id | ($known_ids | index($id)) | not))
         # LOAD-BEARING: te-* prefix reserved for token-efficiency telemetry
@@ -274,7 +306,18 @@ report=$(jq -n \
         # pencil-collapse-guard.sh) are emitted by their hooks by design.
         | map(select(
             . != "cq-before-calling-mcp-pencil-open-document"
-            and . != "cq-pencil-collapse-auto-recover"))) as $orphan_ids
+            and . != "cq-pencil-collapse-auto-recover"))
+        # net-issue-flow* reserved for the blocking net-issue-flow gate
+        # (ship/scripts/net-issue-flow.sh + .claude/hooks/ship-net-issue-flow-gate.sh,
+        # issue #6769). Same tier-gate rationale as context-reviewed-*: the rule
+        # body lives in the gate script header + ship/SKILL.md, and the
+        # always-loaded B_ALWAYS budget has no room for a new core tag.
+        # cost-of-filing-* is the review-disposition telemetry from
+        # review/SKILL.md; the disposition rides in the rule_id
+        # (cost-of-filing-flip-inline / cost-of-filing-file) because this
+        # aggregator keys every counter on rule_id and never reads .kind.
+        | map(select(startswith("net-issue-flow") | not))
+        | map(select(startswith("cost-of-filing-") | not))) as $orphan_ids
     | {
         schema: $schema,
         generated_at: $generated_at,

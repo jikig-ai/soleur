@@ -595,6 +595,7 @@ runcmd:
   # The token encodes tunnel configuration managed remotely via Terraform.
   # #6425: gated to the ingress host (rationale: server.tf web_tunnel_connector; ADR-114).
 %{ if web_tunnel_connector ~}
+  - soleur-wait-nic ${private_ip}
   - cloudflared service install ${tunnel_token}
 
   # #6090 H4: baked readiness poll (enable returns 0 before connect).
@@ -695,13 +696,13 @@ runcmd:
   # fresh hosts.
   - |
     set -e
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.23
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.24
     # #6122/ADR-096: prefer zot (dark; host already logged in by soleur-host-bootstrap.sh);
     # all 3 refs follow IREF, zot miss ⇒ GHCR fallback; soleur-boot-emit records the registry.
     ZURL=$(timeout 15 doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/dev/null || true)
     # ADR-096 5.3 tripwire (#6285): read ci-deploy.sh RETIREMENT TRIPWIRE before deleting this.
     if [ -n "$ZURL" ] && curl -s -o /dev/null --max-time 3 "http://$ZURL/v2/"; then
-      ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.23"
+      ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.24"
       if docker pull "$ZIREF"; then IREF="$ZIREF"; soleur-boot-emit inngest_zot info; else soleur-boot-emit inngest_ghcr_fallback warning; fi
     fi
     docker pull "$IREF"

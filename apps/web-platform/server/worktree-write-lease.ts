@@ -11,7 +11,7 @@ import { reportSilentFallback } from "./observability";
  * `host_id` is passed in by the caller — a host-STABLE infra identity (the
  * Hetzner server id injected at cloud-init), NEVER the per-container hostname
  * and NEVER an auth.uid(). Resolving that stable source + wiring acquire/touch/
- * release into the write path (SIGTERM-release, ≤30s heartbeat, fail-loud on a
+ * release into the write path (SIGTERM-release, ≤50s heartbeat, fail-loud on a
  * touch-0, and the `git push --push-option=lease-gen=<N>` fence wrapper) is
  * PR B; this module provides only the lease primitives.
  */
@@ -72,11 +72,15 @@ export interface WorktreeLease {
 }
 
 /** Liveness window for a read-only holder lookup (session routing). Mirrors the
- *  migration-116 lease expiry: a lease whose `heartbeat_at` is older than this is
- *  reclaimable (acquire bumps gen past 120s of silence) and is NOT a live owner —
+ *  migration-116/133 lease expiry: a lease whose `heartbeat_at` is older than this
+ *  is reclaimable (acquire bumps gen past 240s of silence) and is NOT a live owner —
  *  a `release` tombstones by ageing the heartbeat out, so an expired/tombstoned
- *  row reads as "no live holder" (cold → the placing host acquires). */
-export const LEASE_LIVENESS_WINDOW_MS = 120_000;
+ *  row reads as "no live holder" (cold → the placing host acquires).
+ *  Raised 120s→240s (Disk-IO write reduction, 2026-07-18) IN LOCKSTEP with the
+ *  SQL takeover predicate (migration 133, acquire_worktree_lease) and the 25s→50s
+ *  WORKTREE_LEASE_HEARTBEAT_MS below — the TS window and the SQL predicate MUST
+ *  move together or a live lease-holder is stolen after only 120s of silence. */
+export const LEASE_LIVENESS_WINDOW_MS = 240_000;
 
 /** The LIVE holder of a `(workspaceId, worktreeId)` lease, as read by the session
  *  router to place an inbound session. */
@@ -298,7 +302,7 @@ export async function releaseWorktreeLease(
 // --- Held-lease registry (SIGTERM drain) ------------------------------------
 // Process-local record of the leases this host currently holds, so the SIGTERM
 // handler can release them before exit (a graceful release lets a surviving host
-// reclaim immediately rather than waiting out the 120s heartbeat expiry). Mirrors
+// reclaim immediately rather than waiting out the 240s heartbeat expiry). Mirrors
 // the module-level Map pattern in agent-session-registry.ts, collocated here so
 // the lease concern owns its own lifecycle state.
 
@@ -346,7 +350,7 @@ export function unregisterHeldLease(token: HeldLeaseToken): void {
 /** #5817 F5 — per-release timeout for the SIGTERM drain. Without it, a single
  *  black-holed Postgres connection (release_worktree_lease never returns) could
  *  consume the whole graceful-shutdown budget before `Sentry.flush()` runs. Each
- *  release is raced against this bound; a timed-out lease simply expires at 120s
+ *  release is raced against this bound; a timed-out lease simply expires at 240s
  *  and a surviving host reclaims it (the fence still guards a late write). */
 export const WORKTREE_LEASE_RELEASE_TIMEOUT_MS = 2_000;
 
@@ -387,14 +391,16 @@ export async function releaseAllHeldLeases(): Promise<void> {
 
 // --- Session-lifetime lease handle (acquire + heartbeat + release) ----------
 
-/** Heartbeat cadence — refresh well inside the 120s lease expiry (migration
- *  116). Mirrors the `touchSlot` ≤30s ping in ws-handler.ts:2946. */
-export const WORKTREE_LEASE_HEARTBEAT_MS = 25_000;
+/** Heartbeat cadence — refresh well inside the 240s lease expiry (migration
+ *  116/133). Mirrors the `touchSlot` ≤60s ping in ws-handler.ts. Raised 25s→50s
+ *  (Disk-IO write reduction, 2026-07-18) in lockstep with LEASE_LIVENESS_WINDOW_MS
+ *  240s so missed-beat tolerance (≈4.8 beats) is unchanged. */
+export const WORKTREE_LEASE_HEARTBEAT_MS = 50_000;
 
 /** Consecutive failed touches before declaring the lease lost. >1 so a single
  *  transient Postgres error (which `touchWorktreeLease` maps to `false`, same as
- *  a real reclaim) does not abort a valid session; 2 beats (~50s) stays well
- *  inside the 120s expiry. */
+ *  a real reclaim) does not abort a valid session; 2 beats (~100s) stays well
+ *  inside the 240s expiry. */
 export const MAX_CONSECUTIVE_TOUCH_MISSES = 2;
 
 /** A held lease's lifetime handle: the fencing generation to present on the
@@ -407,7 +413,7 @@ export interface WorktreeLeaseHandle {
 
 /**
  * Acquire a write lease and hold it for the session lifetime: register it for
- * the SIGTERM drain and start a ≤25s heartbeat. Returns `null` when the lease is
+ * the SIGTERM drain and start a ≤50s heartbeat. Returns `null` when the lease is
  * held live by ANOTHER host — the caller LOST and MUST NOT write (fail-closed).
  *
  * On heartbeat loss the heartbeat stops, the registry entry is dropped, and
@@ -418,8 +424,8 @@ export interface WorktreeLeaseHandle {
  * Loss requires `MAX_CONSECUTIVE_TOUCH_MISSES` CONSECUTIVE failed touches, not
  * one: `touchWorktreeLease` maps a transient Postgres error to the same `false`
  * as a real reclaim, and a single DB blip should not abort an otherwise-valid
- * session. The 120s lease expiry affords ~4 missed 25s beats of slack, so two
- * consecutive misses (~50s) still declares a genuine reclaim well inside expiry
+ * session. The 240s lease expiry affords ~4.8 missed 50s beats of slack, so two
+ * consecutive misses (~100s) still declares a genuine reclaim well inside expiry
  * while tolerating one transient blip. A real reclaim returns `false` every
  * beat, so it still trips; the git-data fence is the ultimate guard against a
  * write by a host that has actually lost the row, so the slack cannot double-write.

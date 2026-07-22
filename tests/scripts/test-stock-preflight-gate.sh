@@ -114,17 +114,22 @@ FETCH_MODE=ok
 if stock_preflight beta22 eu-b >/dev/null 2>&1; then pass; else fail "T1: beta22@eu-b is available; expected rc=0"; fi
 
 # ---------------------------------------------------------------------------
-# T2 — NOT orderable here, orderable elsewhere in EU => rc 1 + the three tines.
-# This is the live #6463 shape. The abort MUST name warm-standby: hcloud_server_network.web
-# is a separate for_each'd ADDITIVE attach (network.tf:9-13), so a NIC/volume repair needs
-# no recreate and no stock. Omitting the tine funnels a free repair into a #6463 escalation.
+# T2 — NOT orderable here, orderable elsewhere in EU => rc 1 + the remediation menu.
+# This is the live #6463 shape. REWRITTEN 2026-07-20 (#6575): this test previously asserted the
+# abort MUST name warm-standby (the free additive NIC//workspaces-volume repair on web-2). That
+# contract was falsified by the web-2 retire (#6538) and the deletion of the warm_standby job —
+# no additive dispatch exists to name. The surviving contract is the web-1-shaped menu: wait for
+# stock first, change server_type second, and never treat a relocation as a stock workaround.
 # ---------------------------------------------------------------------------
 FETCH_MODE=ok
 out=$(stock_preflight alpha33 eu-b 2>&1); rc=$?
 [[ "$rc" -eq 1 ]] && pass || fail "T2: expected rc=1 for alpha33@eu-b, got $rc"
 grep -q "NOT orderable in 'eu-b'" <<<"$out" && pass || fail "T2: abort must name the location"
-grep -q "warm-standby" <<<"$out" && pass || fail "T2: abort MUST offer the additive warm-standby tine (the free repair path)"
+grep -q "PRIMARY: wait and re-dispatch" <<<"$out" && pass || fail "T2: the cheapest correct action (wait for stock) MUST be offered FIRST, before any cost/HA escalation"
+grep -q "IF THIS HOST IS web-1" <<<"$out" && pass || fail "T2: an addressless probe must carry the CONDITIONALLY-WORDED web-1 clause (it cannot know the host)"
+grep -q "workspaces" <<<"$out" && pass || fail "T2: the web-1 clause must state that relocating strands/recreates the location-bound workspaces volume — a data-migration decision, not a stock workaround"
 grep -q "#6463" <<<"$out" && pass || fail "T2: abort must point at #6463 for a genuine rebirth"
+grep -q "warm-standby" <<<"$out" && fail "T2: warm-standby was deleted with web-2 (#6575/#6538); offering it points the operator at a dispatch that does not exist" || pass
 grep -q "DESTROYS before it creates" <<<"$out" && pass || fail "T2: abort must state why a failed create is unrecoverable"
 # The fabricated option the first draft shipped: workflow_dispatch has NO location input
 # (apply-web-platform-infra.yml:76-104), so "re-dispatch against another location" is not
@@ -223,28 +228,33 @@ out=$(stock_preflight_gate "$p" 2>&1); rc=$?
 [[ "$rc" -eq 0 ]] && pass || fail "T10: a no-op host must NOT be preflighted (unfiltered gate would abort). rc=$rc out=$out"
 
 # ---------------------------------------------------------------------------
-# T10b — the warm-standby tine is WEB-2-SPECIFIC and must not be offered elsewhere.
-# apply_target=warm-standby targets ONLY hcloud_server_network.web["web-2"],
-# hcloud_volume.workspaces["web-2"] and hcloud_volume_attachment.workspaces["web-2"]
-# (apply-web-platform-infra.yml:791-796). Suggesting it on an inngest/registry/git-data
-# abort points the operator at a dispatch that does nothing for their host — misdirection
-# in the one message they read while a prod recreate is blocked. The #6463 tine, by
-# contrast, is generic and MUST survive on every path.
+# T10b — NON-MISDIRECTION on the four surviving production paths. RETARGETED 2026-07-20
+# (#6575): the warm-standby half of this test is vacuous now that no such dispatch exists, but
+# the invariant it protected is MORE live, not less. After the web-2 retire, every production
+# caller of stock_preflight_gate is a NON-WEB host (inngest-host-replace, registry-host-replace,
+# registry-region-migrate, git-data-host-replace), while the surviving menu carries a web-1
+# clause. So the risk inverted: the thing that must not leak onto a registry abort is now the
+# web-1 text. Assert the generic menu survives and the web-1 specifics stay suppressed.
 # ---------------------------------------------------------------------------
 FETCH_MODE=ok
 p=$(plan_with 'hcloud_server.registry' '["delete","create"]' alpha33 eu-b)
 out=$(stock_preflight_gate "$p" 2>&1); rc=$?
 [[ "$rc" -eq 1 ]] && pass || fail "T10b: an unorderable registry recreate must abort, got $rc"
-grep -q "warm-standby" <<<"$out" && fail "T10b: warm-standby is web-2-only; offering it on the registry path misdirects the operator" || pass
-grep -q "#6463" <<<"$out" && pass || fail "T10b: the generic #6463 tine must survive on non-web-2 paths"
+grep -q "warm-standby" <<<"$out" && fail "T10b: warm-standby was deleted with web-2 (#6575); it must never be offered on any path" || pass
+grep -q "#6463" <<<"$out" && pass || fail "T10b: the generic #6463 tine must survive on every path"
+grep -q "PRIMARY: wait and re-dispatch" <<<"$out" && pass || fail "T10b: the wait-for-stock primary must survive on non-web paths"
 grep -q "NOT orderable in 'eu-b'" <<<"$out" && pass || fail "T10b: the stock-miss abort itself must still fire"
 
-# T10c — web-2 KEEPS the tine when routed through the gate (guards over-suppression:
-# a fix that drops the tine everywhere would satisfy T10b while breaking T2's contract).
-p=$(plan_with 'hcloud_server.web["web-2"]' '["delete","create"]' alpha33 eu-b)
+# T10c — REPLACES the former over-suppression guard (which asserted web-2 KEPT the warm-standby
+# tine through the gate path). This PR is legitimately the "fix that drops the tine everywhere"
+# that guard existed to catch, so the old assertion had to go — but the invariant must outlive
+# it. A stock abort that emits ZERO remediation lines is a dead end for the operator, so assert
+# the floor directly: >= 1 remediation line, whatever its wording.
+p=$(plan_with 'hcloud_server.git_data' '["delete","create"]' alpha33 eu-b)
 out=$(stock_preflight_gate "$p" 2>&1); rc=$?
-[[ "$rc" -eq 1 ]] && pass || fail "T10c: an unorderable web-2 recreate must abort, got $rc"
-grep -q "warm-standby" <<<"$out" && pass || fail "T10c: web-2 MUST still get the free-repair tine through the gate path"
+[[ "$rc" -eq 1 ]] && pass || fail "T10c: an unorderable git-data recreate must abort, got $rc"
+tines=$(grep -c '^::error::  - ' <<<"$out" || true)
+[[ "$tines" -ge 1 ]] && pass || fail "T10c: a stock abort MUST emit at least one remediation line; got ${tines}. A future edit must not be able to strip every tine silently. out=$out"
 
 # ---------------------------------------------------------------------------
 # T11 — no server create planned => rc 0 (out of scope, not fail-closed)
@@ -277,7 +287,8 @@ grep -q "no .resource_changes" <<<"$out" && pass || fail "T12b: a non-plan docum
 # T12c — .resource_changes present but NOT an array => jq runtime error (exit 5).
 # A bare `pairs=$(jq …)` + 2>/dev/null swallows that into an empty extraction, which the
 # emptiness branch reads as "nothing to preflight" => rc 0 => the destroy proceeds unguarded.
-# Mirrors the sibling's own guard (web2-recreate-gate.sh:51-54).
+# Mirrors the guard shape the now-deleted web2-recreate-gate.sh used (#6575): assert the
+# jq key parsed as a non-negative integer BEFORE comparing, so a missing key fails CLOSED.
 echo '{"resource_changes":"hello"}' > "$TMP/scalar.json"
 out=$(stock_preflight_gate "$TMP/scalar.json" 2>&1); rc=$?
 [[ "$rc" -eq 1 ]] && pass || fail "T12c: a non-array .resource_changes must fail closed (jq exits 5), got $rc"
@@ -313,15 +324,20 @@ grep -q "carries no server_type/location" <<<"$out" && pass || fail "T13: must n
 
 # ---------------------------------------------------------------------------
 # T13b — git-data plans a plain CREATE (a -replace on an address NOT in state exits 0 and
-# plans a create). This is the headline justification for gating the 5th path — it was
-# argued in prose and encoded nowhere. Assert the gate actually catches that shape.
+# plans a create). This is the headline justification for gating that path — it was argued in
+# prose and encoded nowhere. Assert the gate actually catches that shape.
+#
+# The trailing "warm-standby is not offered here" assertion was DELETED 2026-07-20 (#6575):
+# with the dispatch and its subject both gone, no code path can emit that string, so the
+# assertion was vacuous — it would pass over a suite that had lost the abort entirely. The
+# non-vacuous half (an unorderable plain-create on a LIVE production path must abort) is
+# retained in full; git-data-host-replace is one of the four surviving callers.
 # ---------------------------------------------------------------------------
 FETCH_MODE=ok
 p=$(plan_with 'hcloud_server.git_data' '["create"]' arm11 eu-a)
 out=$(stock_preflight_gate "$p" 2>&1); rc=$?
 [[ "$rc" -eq 1 ]] && pass || fail "T13b: an unorderable git-data plain-create must abort, got $rc"
 grep -q "NOT orderable in 'eu-a'" <<<"$out" && pass || fail "T13b: must fire the stock-miss abort. out=$out"
-grep -q "warm-standby" <<<"$out" && fail "T13b: warm-standby is web-2-only; it must not be offered on the git-data path" || pass
 
 # ---------------------------------------------------------------------------
 # T14 — NON-VACUITY: prove the suite reads .available and not .supported.
@@ -339,7 +355,7 @@ avl=$(fixture_dcs | jq -r '[.datacenters[] | select(.name=="eu-a-dc1") | .server
 # `fails -eq 0` proves nothing was WRONG; it cannot prove anything RAN. The `.ts` sibling
 # already carries MIN_APPLY_TARGET_OPTIONS / MIN_GATED_TARGETS sentinels for exactly this;
 # the asymmetry was the tell. `-lt` (not `-ne`) so adding cases never trips it.
-MIN_ASSERTIONS=50
+MIN_ASSERTIONS=53
 if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
   echo "stock-preflight-gate: FAIL — only $passes assertion(s) ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "  The suite did not run to completion (truncation / early exit / removed block)." >&2

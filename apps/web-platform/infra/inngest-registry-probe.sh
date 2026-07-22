@@ -62,10 +62,20 @@ _pf_sanitize() {
 # FATAL/ERROR diagnostic lines emit it to journald (→ Better Stack) or stdout (→ the
 # Actions run log). A DSN can appear in a DB errors[].message. stdin→stdout.
 _pf_scrub() {
-  LC_ALL=C tr -d '\000-\037\177' \
-    | sed $'s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g' \
+  # Control chars are translated to SPACE, not deleted. Deleting them WELDS
+  # adjacent tokens (`host=db.X` + newline + `password=Y` -> one token), which
+  # defeats every separator-based rule below. Translating preserves the
+  # log-injection guarantee (no raw newline reaches journald) AND keeps tokens
+  # separated. (#6617)
+  LC_ALL=C tr '\000-\037\177' '[ *]' \
+    | sed $'s/\xc2\x85/ /g; s/\xe2\x80\xa8/ /g; s/\xe2\x80\xa9/ /g' \
     | sed -E -e 's#[a-zA-Z][a-zA-Z0-9+.-]*://[^[:space:]"]*#<uri-redacted>#g' \
-             -e 's#[A-Za-z0-9._%+-]+:[^[:space:]"@/]*@[A-Za-z0-9.-]+#<cred-redacted>#g'
+             -e 's#[A-Za-z0-9._%+-]+:[^[:space:]"@/]*@[A-Za-z0-9.-]+#<cred-redacted>#g' \
+             -e 's#[A-Za-z0-9-]*\.?[a-z0-9]{16,}\.supabase\.co#<db-host-redacted>#g' \
+             -e 's#(password|pgpassword)[[:space:]]*=[[:space:]]*\\*"[^"\\]*\\*"#\1=<redacted>#gI' \
+             -e 's#(password|pgpassword)[[:space:]]*=[[:space:]]*'"'"'[^'"'"']*'"'"'#\1=<redacted>#gI' \
+             -e 's#(password|pgpassword)[[:space:]]*=[^[:space:]",;\\]*#\1=<redacted>#gI' \
+             -e 's#(^|[[:space:]])(host|hostaddr|port|dbname|user|password|sslmode|sslrootcert|connect_timeout|application_name|target_session_attrs)=[^[:space:]"]*(([[:space:]]|\\[nrt])+(host|hostaddr|port|dbname|user|password|sslmode|sslrootcert|connect_timeout|application_name|target_session_attrs)=[^[:space:]"]*)+#\1<dsn-redacted>#g'
 }
 _pf_marker() {
   logger -t "$LOG_TAG" "$(_pf_sanitize "$1")" 2>/dev/null || true

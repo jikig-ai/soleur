@@ -76,17 +76,15 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FILTER="$REPO_ROOT/tests/scripts/lib/destroy-guard-filter-web-platform.jq"
 FIXTURES="$REPO_ROOT/tests/scripts/fixtures"
-# The web-2-recreate gate is an EXTRACTED, SOURCED shell function (AC5/AC6) — this
-# test calls it DIRECTLY (not a re-derived inline copy), so the bytes the workflow
-# runs are the bytes under test.
-WEB2_GATE_LIB="$REPO_ROOT/tests/scripts/lib/web2-recreate-gate.sh"
-# shellcheck source=tests/scripts/lib/web2-recreate-gate.sh
-source "$WEB2_GATE_LIB"
-# The web-2 RETIRE gate (#6538) is a SEPARATE sourced function graded against a
-# SEPARATE allow-set. It is NOT web2-recreate with an extra address: the recreate
-# set deliberately EXCLUDES hcloud_volume.workspaces["web-2"] (preserve the data),
-# while the retire set REQUIRES it (destroy the data). Grading a retire plan against
-# web2_allow would abort on the volume destroy that IS the retirement.
+# The web-2 RETIRE gate (#6538) is an EXTRACTED, SOURCED shell function (AC5/AC6) —
+# this test calls it DIRECTLY (not a re-derived inline copy), so the bytes the
+# operator runs are the bytes under test.
+#
+# It is graded against web2_retire_allow, which REQUIRES hcloud_volume.workspaces
+# ["web-2"] because destroying the data volume IS the retirement. An allow-set is
+# specific to ONE operation's contract; the sibling recreate gate that encoded the
+# opposite contract (preserve the volume) was deleted with the dispatch sweep
+# (#6575, 2026-07-20). Never grade one operation's plan against another's set.
 WEB2_RETIRE_GATE_LIB="$REPO_ROOT/tests/scripts/lib/web2-retire-gate.sh"
 # shellcheck source=tests/scripts/lib/web2-retire-gate.sh
 source "$WEB2_RETIRE_GATE_LIB"
@@ -411,154 +409,6 @@ t_hcloud_reboot_ack_allows() {
 }
 
 # ---------------------------------------------------------------------------
-# web-2-recreate scoped guard (apply_target=web-2-recreate). PERMITS EXACTLY the
-# scoped -replace of hcloud_server.web["web-2"] + its 2 id-referencing dependents;
-# ABORTS on any web-1 touch, any web-2 DATA-VOLUME destroy, a web-2 reboot, a
-# no-op, or anything else outside the 3-address allow-set. The gate is the SOURCED
-# web2_recreate_gate function (no [ack-destroy] bypass). Fixtures are synthesized
-# (cq-test-fixtures-synthesized-only).
-# ---------------------------------------------------------------------------
-
-# Returns "oos:ndel:rupd:replaced:rc" — the four web-2 counters (proof the filter
-# computed them) PLUS the sourced gate's rc (proof of the decision). Non-vacuous:
-# a delete-only or reboot-only guard would mis-decide the P0-2 / substring cases
-# below, and the counter columns make the difference visible.
-_run_web2_gate() {
-  local fixture="$1" path counts oos ndel rupd replaced rc
-  path="$FIXTURES/$fixture"
-  counts=$(jq -f "$FILTER" < "$path")
-  oos=$(echo "$counts" | jq -r '.web2_out_of_scope_changes')
-  ndel=$(echo "$counts" | jq -r '.nested_deletes')
-  rupd=$(echo "$counts" | jq -r '.reboot_updates')
-  replaced=$(echo "$counts" | jq -r '.web2_server_replaced')
-  web2_recreate_gate "$path" >/dev/null 2>&1 && rc=0 || rc=$?
-  # Column order is LOAD-BEARING — every T20-T28 assertion pins this exact tuple.
-  # Legend: web2_out_of_scope_changes : nested_deletes : reboot_updates :
-  #         web2_server_replaced : gate_rc. Do NOT transpose without updating all.
-  echo "$oos:$ndel:$rupd:$replaced:$rc"
-}
-
-# T20: the scoped web-2 replace (server + network attach + volume attachment all
-# ["delete","create"]; DATA volume absent) PASSES — the only permitted plan.
-t_web2_scoped_replace_passes() {
-  local out; out=$(_run_web2_gate "tfplan-web2-recreate-scoped.json")
-  if [[ "$out" == "0:0:0:1:0" ]]; then
-    _report "T20 web-2 scoped replace PASSES (oos=0 ndel=0 rupd=0 replaced=1 rc=0)" ok
-  else
-    _report "T20 web-2 scoped replace PASSES" fail "got '$out' want '0:0:0:1:0'"
-  fi
-}
-
-# T21: scoped + a hcloud_server.web["web-1"] REPLACE → out-of-scope → ABORT. The
-# sole-live-origin protection: a web-1 delete/replace can never ride the recreate.
-t_web2_web1_replace_aborts() {
-  local out; out=$(_run_web2_gate "tfplan-web2-recreate-web1-replace.json")
-  if [[ "$out" == "1:0:0:1:1" ]]; then
-    _report "T21 web-1 replace in the recreate plan ABORTS (oos=1 rc=1)" ok
-  else
-    _report "T21 web-1 replace in the recreate plan ABORTS" fail "got '$out' want '1:0:0:1:1'"
-  fi
-}
-
-# T22: scoped + a hcloud_volume.workspaces["web-2"] destroy → out-of-scope → ABORT.
-# The 20 GB data volume is DELIBERATELY absent from web2_allow, so any destroy trips.
-t_web2_volume_destroy_aborts() {
-  local out; out=$(_run_web2_gate "tfplan-web2-recreate-volume-destroy.json")
-  if [[ "$out" == "1:0:0:1:1" ]]; then
-    _report "T22 web-2 DATA-volume destroy ABORTS (oos=1 rc=1)" ok
-  else
-    _report "T22 web-2 DATA-volume destroy ABORTS" fail "got '$out' want '1:0:0:1:1'"
-  fi
-}
-
-# T23: web-2 server in-place reboot (actions==["update"], placement diff) → NOT a
-# replace (replaced=0) AND reboot_updates=1 → ABORT on both counts.
-t_web2_reboot_aborts() {
-  local out; out=$(_run_web2_gate "tfplan-web2-recreate-web2-reboot.json")
-  if [[ "$out" == "0:0:1:0:1" ]]; then
-    _report "T23 web-2 in-place reboot ABORTS (rupd=1 replaced=0 rc=1)" ok
-  else
-    _report "T23 web-2 in-place reboot ABORTS" fail "got '$out' want '0:0:1:0:1'"
-  fi
-}
-
-# T24: no-op / drift-only plan → web2_server_replaced=0 → ABORT (a dispatch must be
-# a REAL scoped recreate, never a silent no-op).
-t_web2_noop_aborts() {
-  local out; out=$(_run_web2_gate "tfplan-web2-recreate-noop.json")
-  if [[ "$out" == "0:0:0:0:1" ]]; then
-    _report "T24 no-op plan ABORTS (replaced=0 rc=1)" ok
-  else
-    _report "T24 no-op plan ABORTS" fail "got '$out' want '0:0:0:0:1'"
-  fi
-}
-
-# T25 (P0-2, NON-VACUOUS): scoped + a hcloud_server.web["web-1"] in-place UPDATE on
-# a NON-placement/server_type attr (labels). reboot_updates=0 here — a reboot-only
-# counter would MISS this web-1 reboot-via-any-attr — but web2_out_of_scope_changes
-# =1 catches it → ABORT. This is the exact hole the positive-scope counter closes.
-t_web2_web1_inplace_nonplacement_aborts() {
-  local out; out=$(_run_web2_gate "tfplan-web2-recreate-web1-inplace-nonplacement.json")
-  if [[ "$out" == "1:0:0:1:1" ]]; then
-    _report "T25 web-1 non-placement in-place UPDATE ABORTS (oos=1 rupd=0 — P0-2 hole closed)" ok
-  else
-    _report "T25 web-1 non-placement in-place UPDATE ABORTS" fail "got '$out' want '1:0:0:1:1' (rupd MUST be 0 to prove non-vacuity)"
-  fi
-}
-
-# T26: scoped + a bare `hcloud_server.web` (no for_each key) update — an address
-# that CONTAINS the allow-set substrings but is NOT exactly-equal to any entry.
-# Exact-equality IN() membership counts it out-of-scope (a substring `inside`
-# match would have FALSELY allowed it) → ABORT.
-t_web2_substring_collision_aborts() {
-  local out; out=$(_run_web2_gate "tfplan-web2-recreate-substring-collision.json")
-  if [[ "$out" == "1:0:0:1:1" ]]; then
-    _report "T26 substring-collision address (bare hcloud_server.web) ABORTS (oos=1 rc=1)" ok
-  else
-    _report "T26 substring-collision address ABORTS" fail "got '$out' want '1:0:0:1:1'"
-  fi
-}
-
-# T27 (AC5/AC6 no-bypass): the sourced gate has NO [ack-destroy] path — a commit
-# trailer cannot authorize a destructive web-1 touch. Prove BOTH: (a) the gate
-# still ABORTS on the web-1-replace fixture (rc=1), and (b) the gate lib source
-# carries no ack token to bypass with.
-t_web2_no_ack_destroy_bypass() {
-  local rc=0
-  web2_recreate_gate "$FIXTURES/tfplan-web2-recreate-web1-replace.json" >/dev/null 2>&1 || rc=$?
-  if [[ "$rc" -ne 1 ]]; then
-    _report "T27 recreate gate has no [ack-destroy] bypass" fail "gate rc=$rc on web-1-replace, want 1"
-    return
-  fi
-  if grep -qi 'ack-destroy' "$WEB2_GATE_LIB"; then
-    # A match is only a violation if it's an actual bypass, not the doc line that
-    # documents the ABSENCE of one. Fail closed: any ack-destroy TOKEN in an
-    # executable-looking line is suspect.
-    if grep -vE '^\s*#' "$WEB2_GATE_LIB" | grep -qi 'ack-destroy'; then
-      _report "T27 recreate gate has no [ack-destroy] bypass" fail "gate lib references ack-destroy in a non-comment line"
-      return
-    fi
-  fi
-  _report "T27 recreate gate has no [ack-destroy] bypass (rc=1 on web-1-replace; no ack path in lib)" ok
-}
-
-# T28 (forget hole closed): scoped + a hcloud_volume.workspaces["web-2"] STATE-DROP
-# (actions==["forget"], a Terraform `removed{}` block). `forget` drops the resource
-# from state without destroying the physical volume, so a delete-only predicate
-# would MISS it (oos=0 → gate PASSES → the data volume is silently orphaned from
-# Terraform management). The web2_out_of_scope_changes predicate counts "forget"
-# on any out-of-allow-set address → oos=1 → ABORT. RED-tested: drop "forget" from
-# the jq any(...) and this case flips to 0:0:0:1:0 (a false PASS).
-t_web2_volume_forget_aborts() {
-  local out; out=$(_run_web2_gate "tfplan-web2-recreate-volume-forget.json")
-  if [[ "$out" == "1:0:0:1:1" ]]; then
-    _report "T28 web-2 DATA-volume state-drop (forget) ABORTS (oos=1 rc=1 — forget hole closed)" ok
-  else
-    _report "T28 web-2 DATA-volume state-drop (forget) ABORTS" fail "got '$out' want '1:0:0:1:1'"
-  fi
-}
-
-# ---------------------------------------------------------------------------
 # 7th surface (#6416): `host_creates` — a pure `+ create` of an hcloud_server /
 # hcloud_volume on the per-PR apply path.
 #
@@ -663,7 +513,8 @@ t_host_creates_parse_failure_fails_closed() {
 
 # ---------------------------------------------------------------------------
 # T40-T49 — the web-2 RETIRE gate (#6538). Graded against web2_retire_allow (5
-# addresses), NOT web2_allow (3, the recreate set).
+# addresses). The 3-address recreate allow-set it used to contrast against was
+# deleted with the dispatch sweep (#6575).
 #
 # THE NO-STRAND INVARIANT (T43). B6.2's local plan destroys 4 web-2 resources +
 # updates hcloud_firewall_attachment.web. Terraform applies sequentially and can
@@ -837,6 +688,197 @@ t_web2_retire_volume_forget_aborts() {
   fi
 }
 
+# T57 — SUBSTRING-COLLISION: an otherwise-perfect retire plan that ALSO touches the
+# bare `hcloud_server.web` (no for_each key) must ABORT. This pins the allow-set
+# membership test to EXACT equality via IN(.address; web2_retire_allow[]): an
+# `inside`/array-`contains` form does SUBSTRING matching, so the bare address would
+# false-match `hcloud_server.web["web-2"]` and sail through while a real change to
+# the whole for_each map went ungated.
+#
+# RETARGETED from the web-2-recreate gate (#6575, 2026-07-20). The recreate gate and
+# its fixtures were deleted with the dispatch sweep, but this was the ONLY direct test
+# of the exact-equality mechanism, and the retire gate uses the same construct — so the
+# fixture was re-derived against web2_retire_allow rather than dropped. Deleting it
+# would have lowered coverage of a live gate to zero for the sake of removing a dead one.
+t_web2_retire_substring_collision_aborts() {
+  local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-substring-collision.json")
+  if [[ "$out" == "1:1:1:1:1:1:0:1" ]]; then
+    _report "T57 bare hcloud_server.web ABORTS (IN() exact-equality, not substring)" ok
+  else
+    _report "T57 bare hcloud_server.web ABORTS" fail "got '$out' want '1:1:1:1:1:1:0:1'"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# STRUCTURAL host_creates HALT proofs (#6718) — the grep-over-YAML technique.
+#
+# The warm_standby job that originally motivated this block was deleted with the
+# web-2 dispatch sweep (#6575, 2026-07-20). The technique and its four sharp edges
+# still bind the SURVIVING proofs below: T54 (`apply`) and T56 (deploy-pipeline-fix).
+#
+# WHY A GREP OVER THE YAML AND NOT A COUNTS FIXTURE. `_run_host_creates_gate`
+# above is a hand-maintained bash MIRROR of the workflow block (its own header
+# says so; nothing enforces the mirror). A fixture therefore proves the MIRROR,
+# never the workflow — it would stay green if the real YAML lost the guard
+# tomorrow. Only a grep over the workflow can prove the job's own regex. T32 already covers the mirror's parse-failure arm, so this adds the one
+# proof that was missing rather than a second copy of one that exists.
+#
+# WHY THESE JOBS NEED IT. Each -targets a resource referencing hcloud_server.web
+# ["web-1"], and `-target` is TRANSITIVE at the resource level, so the server sits
+# in the plan graph. Neither passes -var image_name, so a transitive web-1 birth
+# would use the mutable :latest default — and web-1 is the sole web host since
+# web-2 retired 2026-07-17 (#6538). No automated path may birth it (#6730). Reason about THIS tripwire, never about -target
+# membership: "web-1 appears in no -target=" is a recorded invalid inference
+# (ADR-114 2026-07-19 amendment item 5).
+#
+# SHARP EDGES THIS TEST IS BUILT AROUND:
+#   SE-1  The block MUST be extracted with flag-based awk. A range address
+#         (`awk '/^  <job>:/,/^  [a-z-]+:/'`) SELF-MATCHES: the end
+#         pattern is satisfied by the start line, so it yields the heading alone
+#         and every `grep -c` over it reads 0 — assertions that pass on an empty
+#         body. Non-emptiness is therefore asserted FIRST.
+#   SE-2  Never `printf "$block" | grep -q`. Under `set -o pipefail` a matching
+#         `grep -q` closes the pipe, the producer takes SIGPIPE (141), and the
+#         pipeline exits non-zero DESPITE the match. Here-strings throughout.
+#   SE-4  `[[ "null" -gt 0 ]]` is TRUE-shaped and evaluates FALSE: `jq -r` on a
+#         missing key yields the string "null", which `[[ ]]` resolves as an
+#         unset name to 0. So the ^[0-9]+$ VALIDATION line — not the comparison
+#         — is the load-bearing assert. Without it the guard fails OPEN.
+#
+# Comments are stripped before asserting: a body-grep sees comment prose too,
+# and every token below also appears in the explanatory comments around it, so
+# an unstripped block would false-PASS on its own documentation.
+# ---------------------------------------------------------------------------
+
+WORKFLOW_YML="${REPO_ROOT}/.github/workflows/apply-web-platform-infra.yml"
+
+_job_block() {
+  local file="$1" job="$2"
+  awk -v job="$job" '
+    $0 ~ "^  " job ":([[:space:]]|$)" { inblock = 1; print; next }
+    inblock && /^  [A-Za-z_]/ { inblock = 0 }
+    inblock && /^[A-Za-z]/    { inblock = 0 }
+    inblock { print }
+  ' "$file"
+}
+
+# ── T56 — the SECOND workflow that reaches hcloud_server.web. ────────────────
+#
+# apply-deploy-pipeline-fix.yml fires on push:main AND workflow_dispatch and
+# runs `terraform apply -auto-approve` over four terraform_data targets that each
+# reference hcloud_server.web["web-1"] (server_id / connection host), so -target
+# transitivity puts the server in its plan graph, and it passes no -var
+# image_name either.
+#
+# It was UNGUARDED and unenumerated until #6725's review: that PR asserted "no
+# automated path can birth a web host" without walking the workflow list. The
+# assertion was false. This assert exists so the claim stays checkable rather
+# than re-asserted — if someone strips the guard, the enumeration in the sibling
+# HALT texts, both ADRs and #6730 all become false again, silently.
+t_deploy_pipeline_fix_carries_host_creates_halt() {
+  local wf code validation
+  wf="${REPO_ROOT}/.github/workflows/apply-deploy-pipeline-fix.yml"
+  if [[ ! -f "$wf" ]]; then
+    _report "T56 apply-deploy-pipeline-fix carries the host_creates HALT" fail "missing $wf"
+    return
+  fi
+  code="$(grep -vE '^[[:space:]]*#' "$wf" || true)"
+
+  if grep -qE "host_creates=\\\$\\(echo \"\\\$counts\" \| jq -r '\.host_creates'" <<<"$code"; then
+    _report "T56a deploy-pipeline-fix parses the .host_creates key" ok
+  else
+    _report "T56a deploy-pipeline-fix parses the .host_creates key" fail \
+      "no exact \`jq -r '.host_creates'\` — this push:main workflow reaches hcloud_server.web[\"web-1\"] transitively"
+  fi
+
+  validation="$(grep -E '\[\[ ! "\$host_creates" =~ \^\[0-9\]\+\$ \]\]' <<<"$code" | head -1 || true)"
+  if [[ -n "$validation" ]]; then
+    _report "T56b deploy-pipeline-fix's host_creates is numerically validated (fail-CLOSED)" ok
+  else
+    _report "T56b deploy-pipeline-fix validates host_creates" fail \
+      "missing the ^[0-9]+\$ guard: jq -r on an absent key yields \"null\" and [[ \"null\" -gt 0 ]] PASSES"
+  fi
+
+  if grep -qF '[[ "$host_creates" -gt 0 ]]' <<<"$code"; then
+    _report "T56c deploy-pipeline-fix HALTs on host_creates > 0" ok
+  else
+    _report "T56c deploy-pipeline-fix HALTs on host_creates > 0" fail "no -gt 0 comparison"
+  fi
+
+  # The plan must SAVE a plan for the guard to read; without -out the guard reads
+  # a stale/absent tfplan and the whole block is decorative.
+  if grep -qF '\-out=tfplan' <<<"$code" || grep -qF -- '-out=tfplan' <<<"$code"; then
+    _report "T56d deploy-pipeline-fix saves the plan (-out=tfplan) the guard reads" ok
+  else
+    _report "T56d deploy-pipeline-fix saves the plan the guard reads" fail \
+      "no -out=tfplan — \`terraform show -json tfplan\` would have nothing to read"
+  fi
+}
+
+# ── T55 — the HALT's scope precondition, re-checked on every run. ────────────
+#
+# The host_creates counter counts hcloud_server AND hcloud_volume creates, but
+# every rationale in the shipped HALT text (no -var image_name, mutable :latest,
+# cloud-init stage=verify) applies to hcloud_server ONLY. That is sound while
+# var.web_hosts holds exactly one key: an additive apply set then
+# creates nothing, so host_creates == 0 on every legitimate run.
+#
+# Add a second key and a job's OWN legitimate volume create trips a HALT
+# whose text says "there is NO automated path" — a false dead end on a valid
+# dispatch. A tripwire that fires on normal operation is the failure mode that
+# gets the tripwire deleted, which is strictly worse than the accident it guards.
+#
+# The plan caught this as a Phase-0 hard STOP, but that was a PLAN-TIME check
+# with nothing re-firing it. This is the same precondition, re-evaluated on
+# every CI run (#6725 review, user-impact finding 2).
+t_web_hosts_single_key_keeps_halt_scoped() {
+  local vars_tf keys
+  vars_tf="${REPO_ROOT}/apps/web-platform/infra/variables.tf"
+  if [[ ! -f "$vars_tf" ]]; then
+    _report "T55 var.web_hosts is single-key (keeps the volume arm sound)" fail "missing $vars_tf"
+    return
+  fi
+  # Count quoted keys inside variable "web_hosts" { … default = { … } }.
+  keys="$(awk '/^variable "web_hosts"/{v=1} v&&/default = \{/{d=1;next} d&&/^  \}/{exit} d&&/^ *"[a-z0-9-]+" *=/{n++} END{print n+0}' "$vars_tf")"
+  if [[ "$keys" == 1 ]]; then
+    _report "T55 var.web_hosts holds exactly 1 key — host_creates may count hcloud_volume safely" ok
+  else
+    _report "T55 var.web_hosts holds exactly 1 key" fail \
+      "found $keys keys. The host_creates HALT counts hcloud_volume creates, but its remediation text is written for hcloud_server only — with >1 web host, a job's OWN legitimate volume create now trips a HALT saying 'there is NO automated path'. RE-SCOPE the surviving host_creates HALTs (apply, deploy-pipeline-fix) to .type == \"hcloud_server\" before adding a web host."
+  fi
+}
+
+t_apply_job_host_creates_halt_job_scoped() {
+  local block code validation
+  block="$(_job_block "$WORKFLOW_YML" "apply")"
+  if [[ -z "$block" ]]; then
+    _report "T54 apply block extracts non-empty" fail "empty block — extractor broken"
+    return
+  fi
+  code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
+
+  if grep -qE "host_creates=\\\$\\(echo \"\\\$counts\" \| jq -r '\.host_creates'" <<<"$code"; then
+    _report "T54a apply parses host_creates from the .host_creates key (job-scoped)" ok
+  else
+    _report "T54a apply parses the .host_creates key" fail \
+      "no exact \`jq -r '.host_creates'\` in the apply block — a renamed key would go undetected"
+  fi
+
+  validation="$(grep -E '\[\[ ! "\$[a-z_]+" =~ \^\[0-9\]\+\$ \]\]' <<<"$code" | head -1 || true)"
+  if [[ -n "$validation" ]] && grep -qE '! "\$host_creates" =~' <<<"$validation"; then
+    _report "T54b apply's ^[0-9]+\$ validation covers host_creates (job-scoped, fail-CLOSED)" ok
+  else
+    _report "T54b apply's validation covers host_creates" fail \
+      "apply would fail OPEN. line='${validation}'"
+  fi
+
+  if grep -qF '[[ "$host_creates" -gt 0 ]]' <<<"$code"; then
+    _report "T54c apply HALTs on host_creates > 0 (job-scoped)" ok
+  else
+    _report "T54c apply HALTs on host_creates > 0" fail "no -gt 0 comparison in the apply block"
+  fi
+}
+
 t_ruleset_rule_removal_trips
 t_tunnel_ingress_removal_trips
 t_zone_settings_header_removal_trips
@@ -856,15 +898,6 @@ t_hcloud_location_replace_no_double_count
 t_hcloud_noop_attr_update_passes
 t_hcloud_create_is_not_a_reboot
 t_hcloud_reboot_ack_allows
-t_web2_scoped_replace_passes
-t_web2_web1_replace_aborts
-t_web2_volume_destroy_aborts
-t_web2_reboot_aborts
-t_web2_noop_aborts
-t_web2_web1_inplace_nonplacement_aborts
-t_web2_substring_collision_aborts
-t_web2_no_ack_destroy_bypass
-t_web2_volume_forget_aborts
 t_host_create_halts
 t_host_create_no_ack_bypass
 t_host_replace_halts
@@ -880,7 +913,11 @@ t_web2_retire_firewall_delete_aborts
 t_web2_retire_proxy_tls_birth_aborts
 t_web2_retire_noop_aborts
 t_web2_retire_volume_forget_aborts
+t_web2_retire_substring_collision_aborts
 t_web2_retire_server_replace_aborts
+t_apply_job_host_creates_halt_job_scoped
+t_web_hosts_single_key_keeps_halt_scoped
+t_deploy_pipeline_fix_carries_host_creates_halt
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

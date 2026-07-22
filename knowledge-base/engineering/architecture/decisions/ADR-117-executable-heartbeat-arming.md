@@ -189,6 +189,52 @@ live-reconcile is the only layer that can see live state.
 ADR-117 is **amended, not superseded**: the manifest remains the source-of-truth substrate the
 reconcile reads.
 
+### Amendment (2026-07-18, #6438/#6548): the measure-then-arm PATCH is AUTOMATED into the apply workflow
+
+This amendment records **only an automation delta**. The *decision* is unchanged: the
+measure-then-arm sequence is exactly the one already in this ADR's **"Corrected 2026-07-16"**
+section (`PATCH {"paused": false}` → poll `status` → roll back to `paused:true` on no `up` within
+`period + grace − 10s`, fail-loud). #6438/#6548 do not add a new arming decision; they move that
+existing decision from a hand-run procedure into
+`.github/workflows/apply-web-platform-infra.yml`, so the new web-host consumer probes
+(`web_zot_consumer`, `web_nic_guard`, and the newly-fed `git_data_prd`) arm without an operator
+carrying the sequence out from memory — the same class of gap (an arming instruction nothing
+executes) this ADR exists to condemn.
+
+Three properties of the automation, and nothing beyond them:
+
+1. **Op/state-gated, not every-apply.** The arm step runs the measure→PATCH cycle **only** when
+   the target monitor is live-`paused==true` (`GET /api/v2/heartbeats/<id>`) **OR** its feeder
+   `terraform_data` provisioner was replaced this apply (`triggers_replace`). A routine re-apply
+   where the monitor is already `up` is a true no-op — it does not re-PATCH, and does not flake on
+   a transient Better Stack blip. This is the gate that keeps the "Corrected 2026-07-16" procedure
+   from becoming a per-apply liability.
+2. **A dedicated Doppler-scoped write token, not the read path.** The PATCH authenticates with a
+   `doppler_service_token.web_arm_write` exposed to CI as the `github_actions_secret`
+   `DOPPLER_TOKEN_WEB_ARM`, over the **existing account-wide Better Stack provider token** (no new
+   operator-mint variable — `hr-tf-variable-no-operator-mint-default`; mirrors the
+   `inngest-arm-write-token.tf` precedent). The apply workflow's existing read-only "Best-effort
+   heartbeat status" steps are **not** reused for the write — they swallow errors and return
+   "unavailable", which is correct for an informational read and disqualifying for a gating write.
+3. **Fail-loud, rollback held for the whole window.** On no fresh `up` beat within the deadline the
+   step re-PATCHes `paused:true` immediately and **fails the apply** — it never leaves an unfed
+   monitor armed (#6210's incident shape) and never continues green on "unavailable".
+
+**Risk note — the write token's blast radius is account-wide, recorded honestly.** Better Stack
+API tokens have **no per-monitor and no read/write scoping** — a token that can `PATCH` one
+heartbeat can read and write **every** monitor, heartbeat, and on-call resource in the account.
+The `web_arm_write` token is therefore **not** least-privilege at the Better Stack layer; the
+**only** axis on which it is scoped is Doppler — it lives in a dedicated service token / config so
+that *which CI jobs can read it* is controlled, even though *what it can do once read* is
+unbounded. This is the same account-wide-R+W property ADR-115's arm path already carries; naming
+it here keeps the arm-gate's true blast radius on the record rather than implying a monitor-scoped
+credential that the vendor does not offer. Narrowing it further would require a per-resource
+scoping axis Better Stack does not expose; if that changes, revisit.
+
+The invariant is untouched: **no static check can prove a monitor is armed; it can only prove a
+feeder exists.** Arming is still verified by a measured beat — the beat is now measured by the
+apply workflow's op/state-gated step instead of by a human running the sequence by hand.
+
 ## Consequences
 
 - `registry_prd` reclassifies `web-host-cron` → `dedicated-host-boot`, so ADR-103's `replace_target`

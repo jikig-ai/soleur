@@ -103,6 +103,10 @@ vi.mock("../server/observability", () => ({
 }));
 
 vi.mock("../server/concurrency", () => ({
+  // ws-handler/agent-runner import these liveness consts from ./concurrency;
+  // a wholesale mock must re-export them or accessing the binding throws.
+  SLOT_STALENESS_THRESHOLD_SECONDS: 240,
+  SLOT_HEARTBEAT_INTERVAL_MS: 60_000,
   releaseSlot: mockReleaseSlot,
   acquireSlot: vi.fn(),
   touchSlot: vi.fn(),

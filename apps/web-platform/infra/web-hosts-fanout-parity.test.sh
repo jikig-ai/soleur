@@ -2,17 +2,28 @@
 #
 # Drift guard: EVERY workflow copy of the WEB_HOST_PRIVATE_IPS fan-out peer list
 # (#5274 Phase 3 / ADR-068) MUST equal the set of private_ips in var.web_hosts
-# (variables.tf). A drift means a deploy fans out to the wrong peers (or misses
-# web-2 entirely) → web-2 silently ships stale code (single-user incident). There
-# are THREE in-repo copies of this roster today and this guard covers EVERY one:
+# (variables.tf). A drift means a deploy fans out to the wrong peers → a host
+# silently ships stale code (single-user incident). There is ONE in-repo copy of
+# this roster today and this guard covers it:
 #   1. web-platform-release.yml — the tagged-release deploy fan-out (×1).
-#   2. apply-web-platform-infra.yml `warm_standby` job — the ADR-068 warm-standby
-#      dispatch re-uses the SAME literal to fan a current-version redeploy out to
-#      web-2 (env WEB_HOST_PRIVATE_IPS).
-#   3. apply-web-platform-infra.yml `web_2_recreate` job (#6030) — the same env,
-#      a 2nd copy in the apply workflow. Previously this guard extracted only the
-#      FIRST occurrence per file (`head -1`), so this copy would have shipped
-#      un-guarded; it now validates EACH copy independently.
+#
+# reason: the two apply-web-platform-infra.yml copies lived in the `warm_standby` and
+# `web_2_recreate` jobs, both DELETED with the web-2 dispatch sweep (#6575, 2026-07-20).
+# The operand is KEPT at floor 0 rather than dropped.
+#
+# Keeping it at 0 was initially rejected as "vacuous", which was wrong and was measured
+# wrong at review: `check_all_copies`'s third argument is a `-lt` FLOOR, not an equality
+# check, and the per-copy content-comparison loop runs regardless of it. So floor 0 costs
+# nothing today and keeps the roster check LIVE over any copy that ever reappears in that
+# file. Measured: adding a job with a wrong roster (10.0.1.10,10.0.1.99) is INVISIBLE with
+# the operand dropped and FAILS LOUD with it at 0.
+#
+# The extractor-break scenario that motivated dropping it is already covered by operand 2
+# (floor 1) — breaking the IP regex fails that operand loudly.
+#
+# The multi-copy machinery is RETAINED deliberately: an earlier version extracted only the
+# FIRST occurrence per file (`head -1`) and would have shipped a second copy un-guarded.
+# Do not re-introduce head -1.
 # Extracts EACH copy by shape and compares its sorted set to var.web_hosts.
 #
 # Run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
@@ -32,7 +43,6 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 
 [ -f "$VARS_TF" ] || { echo "FAIL: variables.tf not found at $VARS_TF" >&2; exit 1; }
 [ -f "$WORKFLOW" ] || { echo "FAIL: workflow not found at $WORKFLOW" >&2; exit 1; }
-[ -f "$APPLY_WORKFLOW" ] || { echo "FAIL: apply workflow not found at $APPLY_WORKFLOW" >&2; exit 1; }
 
 # --- Operand 1: private_ips declared in var.web_hosts (variables.tf) ---
 # Match `private_ip = "10.0.1.NN"` — the only shape these lines take. Sorted,
@@ -95,8 +105,9 @@ check_all_copies() {
 
 # Operand 2: web-platform-release.yml — 1 copy (the tagged-release deploy fan-out).
 check_all_copies "$WORKFLOW" "release-workflow" 1
-# Operand 3: apply-web-platform-infra.yml — 2 copies (warm_standby + web_2_recreate, #6030).
-check_all_copies "$APPLY_WORKFLOW" "apply-workflow" 2
+# Operand 3: apply-web-platform-infra.yml — 0 copies today (both deleted with #6575), but the
+# content check stays armed for any copy that reappears. See the reason block in the header.
+check_all_copies "$APPLY_WORKFLOW" "apply-workflow" 0
 
 total=$((passes + fails))
 echo "web-hosts-fanout-parity: ${passes} passed, ${fails} failed (${total} assertions)"

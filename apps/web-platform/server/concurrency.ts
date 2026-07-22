@@ -6,6 +6,30 @@ import type { PlanTier } from "@/lib/types";
 
 const log = createChildLogger("concurrency");
 
+// ---------------------------------------------------------------------------
+// Concurrency-slot liveness constants — SINGLE SOURCE OF TRUTH.
+//
+// The slot heartbeat cadence and the staleness threshold that decides "this
+// slot is dead, reap it" are cross-layer coupled. THRESHOLD-COUPLING: the 240 s
+// staleness value appears at these sites and MUST stay in sync (a divergence
+// silently false-reaps a live agent session — see learning
+// bug-fixes/2026-05-05-cc-stuck-active-conversation-leaks-slot.md):
+//   TS  : SLOT_STALENESS_THRESHOLD_SECONDS (below) — imported by ws-handler.ts
+//         (ledger-divergence recovery + the cap-drift self-eviction + the
+//          sibling-snapshot-restore liveCutoff gates)
+//         and agent-runner.ts (find_stuck_active_conversations threshold arg).
+//   SQL : migration 133 — acquire_conversation_slot lazy sweep,
+//         user_concurrency_slots_sweep pg_cron body (mig 115 cadence),
+//         find_stuck_active_conversations default.
+//
+// The interval was raised 30 s → 60 s and the threshold 120 s → 240 s (Disk-IO
+// write reduction, 2026-07-18) IN LOCKSTEP: threshold = 4 × interval keeps the
+// exact missed-beat tolerance (4 missed 30 s beats before, 4 missed 60 s beats
+// now). Migration 133 applies before the container restart, so the 240 s
+// threshold is live before the 60 s heartbeat ships (the safe direction).
+export const SLOT_HEARTBEAT_INTERVAL_MS = 60_000;
+export const SLOT_STALENESS_THRESHOLD_SECONDS = 240;
+
 /** Five fields per plan FR9 (original spec). The 6 CFO-memo additions are
  *  deferred to #2626 and intentionally omitted. */
 export interface ConcurrencyCapHitEvent {

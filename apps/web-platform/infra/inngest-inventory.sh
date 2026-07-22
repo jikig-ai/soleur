@@ -204,10 +204,20 @@ _pf_sanitize() {
 # targets; the SOLEUR_* markers enum-map it, the FATAL/ERROR diagnostics scrub it.
 # Reads stdin, writes stdout.
 _pf_scrub() {
-  LC_ALL=C tr -d '\000-\037\177' \
-    | sed $'s/\xc2\x85//g; s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g' \
+  # Control chars are translated to SPACE, not deleted. Deleting them WELDS
+  # adjacent tokens (`host=db.X` + newline + `password=Y` -> one token), which
+  # defeats every separator-based rule below. Translating preserves the
+  # log-injection guarantee (no raw newline reaches journald) AND keeps tokens
+  # separated. (#6617)
+  LC_ALL=C tr '\000-\037\177' '[ *]' \
+    | sed $'s/\xc2\x85/ /g; s/\xe2\x80\xa8/ /g; s/\xe2\x80\xa9/ /g' \
     | sed -E -e 's#[a-zA-Z][a-zA-Z0-9+.-]*://[^[:space:]"]*#<uri-redacted>#g' \
-             -e 's#[A-Za-z0-9._%+-]+:[^[:space:]"@/]*@[A-Za-z0-9.-]+#<cred-redacted>#g'
+             -e 's#[A-Za-z0-9._%+-]+:[^[:space:]"@/]*@[A-Za-z0-9.-]+#<cred-redacted>#g' \
+             -e 's#[A-Za-z0-9-]*\.?[a-z0-9]{16,}\.supabase\.co#<db-host-redacted>#g' \
+             -e 's#(password|pgpassword)[[:space:]]*=[[:space:]]*\\*"[^"\\]*\\*"#\1=<redacted>#gI' \
+             -e 's#(password|pgpassword)[[:space:]]*=[[:space:]]*'"'"'[^'"'"']*'"'"'#\1=<redacted>#gI' \
+             -e 's#(password|pgpassword)[[:space:]]*=[^[:space:]",;\\]*#\1=<redacted>#gI' \
+             -e 's#(^|[[:space:]])(host|hostaddr|port|dbname|user|password|sslmode|sslrootcert|connect_timeout|application_name|target_session_attrs)=[^[:space:]"]*(([[:space:]]|\\[nrt])+(host|hostaddr|port|dbname|user|password|sslmode|sslrootcert|connect_timeout|application_name|target_session_attrs)=[^[:space:]"]*)+#\1<dsn-redacted>#g'
 }
 _pf_marker() {
   logger -t "$LOG_TAG" "$(_pf_sanitize "$1")" 2>/dev/null || true
@@ -357,16 +367,20 @@ run_events_scan() {
 
 # armed_reminders projection (future fire `raw.ts > now` AND no terminal run) — identical
 # to inngest-enumerate-reminders.sh so the inventory's armed set and the cutover's re-arm
-# set agree. $1 = a flat eventsV2-edges JSON array.
+# set agree. $1 = PATH to a file holding a flat eventsV2-edges JSON array.
+#
+# Takes a PATH, not the JSON text (#6736). The edge array is the output of a lossless
+# all-events scan and is unbounded by construction; `cat`-ing it into a shell variable
+# to pass here undid the spool the scan just wrote. jq reads the file directly.
 derive_armed() {
-  echo "$1" | jq -c --argjson now "$NOW_MS" '
+  jq -c --argjson now "$NOW_MS" '
     [ .[]
       | select(.node.name == "reminder.scheduled")
       | (.node.raw | fromjson) as $env
       | select(($env.ts // 0) > $now)
       | select( any(.node.runs[]?; .status as $s | (["COMPLETED","CANCELLED","FAILED","SKIPPED"] | index($s)) != null) | not )
       | { reminder_id: $env.data.reminder_id, fire_at: $env.data.fire_at, actor: $env.data.actor, action: $env.data.action }
-    ]'
+    ]' "$1"
 }
 
 # Fetch the registered-function list via /v0/gql (fixture or loopback). Echoes the raw
@@ -512,21 +526,31 @@ run_inventory() {
   # event_names: the all-events distinct scan (NO eventNames filter, includeInternalEvents
   # :true → captures cron/* ticks). Lossless via the raised PAGE_SIZE; aborts LOUD if it
   # exceeds the budget (never truncates — the #6258 completeness invariant).
-  local all_edges event_names
+  #
+  # ARGV CEILING (#6736). $all_edges is gone: it used to `cat` the whole spooled edge
+  # array into a shell variable one line after run_events_scan wrote it to disk — the
+  # #5523 spool defeated by the very next statement. Everything below is file-in /
+  # file-out, and the final emit binds with `--rawfile … | fromjson`, never `--argjson`.
+  # A shell variable bound via --argjson is ONE argv argument, and the kernel caps a
+  # SINGLE argv argument at MAX_ARG_STRLEN = 131,072 B — verified by bisect on this
+  # host: 131,071 B passes, 131,072 B fails E2BIG. That is NOT `getconf ARG_MAX`
+  # (2,097,152 B, the argv+envp total); a payload at 6% of ARG_MAX still dies.
+  local event_names_file="$pf_tmp/event_names.json"
+  local armed_file="$pf_tmp/armed.json"
+  local functions_file="$pf_tmp/functions.json"
+  printf '%s' "$functions" > "$functions_file"
   run_events_scan "$FIXTURE_DIR" "null" "true" "$pf_tmp/all_edges.json"
-  all_edges=$(cat "$pf_tmp/all_edges.json")
-  event_names=$(echo "$all_edges" | jq -c '[ .[].node.name ] | unique')
+  jq -c '[ .[].node.name ] | unique' "$pf_tmp/all_edges.json" > "$event_names_file"
 
   # armed_reminders — completeness BY CONSTRUCTION (#6258 Deepen Finding 3): a DEDICATED
   # eventNames:["reminder.scheduled"] full-window scan (small, page-ceiling-immune, zero
   # receivedAt narrowing). In fixture mode WITHOUT a reminder-fixture dir we derive the armed
   # set from the all-events edges instead (back-compat with the pre-#6258 unit fixtures).
-  local armed
   if [[ -n "$FIXTURE_DIR" && -z "$REMINDER_FIXTURE_DIR" ]]; then
-    armed=$(derive_armed "$all_edges")
+    derive_armed "$pf_tmp/all_edges.json" > "$armed_file"
   else
     run_events_scan "$REMINDER_FIXTURE_DIR" '["reminder.scheduled"]' "false" "$pf_tmp/rem_edges.json"
-    armed=$(derive_armed "$(cat "$pf_tmp/rem_edges.json")")
+    derive_armed "$pf_tmp/rem_edges.json" > "$armed_file"
   fi
 
   # --- durability_state: no-SSH continuous-durability surface (#5553) ---
@@ -537,16 +561,23 @@ run_inventory() {
   # --- Observability summary (counts + reminder_ids + durability ENUM ONLY, never
   #     bodies or connection strings) → journald only (#5503) ---
   local fn_count ev_count armed_count armed_ids
-  fn_count=$(echo "$functions" | jq 'length')
-  ev_count=$(echo "$event_names" | jq 'length')
-  armed_count=$(echo "$armed" | jq 'length')
-  armed_ids=$(echo "$armed" | jq -r '[.[].reminder_id] | join(",")')
+  fn_count=$(jq 'length' "$functions_file")
+  ev_count=$(jq 'length' "$event_names_file")
+  armed_count=$(jq 'length' "$armed_file")
+  armed_ids=$(jq -r '[.[].reminder_id] | join(",")' "$armed_file")
   logger -t "$LOG_TAG" "inventory: functions=$fn_count event_names=$ev_count armed=$armed_count armed_ids=[$armed_ids] durability=$durability_state" 2>/dev/null || true
   _pf_done_marker
 
   # Single pure-JSON object on stdout (the webhook body the workflow jq-parses).
-  jq -nc --argjson f "$functions" --argjson e "$event_names" --argjson r "$armed" --arg d "$durability_state" --arg hid "$HOST_ID" \
-    '{functions:$f, event_names:$e, armed_reminders:$r, durability_state:$d, host_id:$hid}'
+  # $armed is the unbounded one — one object per armed reminder, from a dedicated
+  # full-window reminder.scheduled scan with no page-ceiling narrowing. $event_names
+  # and $functions are weakly bounded (distinct names / registered functions) but are
+  # spooled too: they share the SAME argv argument budget, so bounding one of three
+  # bounds nothing. $durability_state and $host_id are enums and stay on argv.
+  jq -nc --rawfile f "$functions_file" --rawfile e "$event_names_file" \
+    --rawfile r "$armed_file" --arg d "$durability_state" --arg hid "$HOST_ID" \
+    '{functions:($f|fromjson), event_names:($e|fromjson), armed_reminders:($r|fromjson),
+      durability_state:$d, host_id:$hid}'
 }
 
 # Run only when executed directly — sourcing (the unit test) must NOT hit the network.

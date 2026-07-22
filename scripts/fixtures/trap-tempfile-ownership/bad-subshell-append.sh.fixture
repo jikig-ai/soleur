@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+_TMPFILES=()
+trap 'rm -f "${_TMPFILES[@]}"' EXIT
+make_tmp() {
+  local f
+  f=$(mktemp)
+  _TMPFILES+=("$f")
+  echo "$f"
+}
+out=$(make_tmp)
+echo hi > "$out"

@@ -294,6 +294,191 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > (application-level replication), and it does not close the transport-layer determinism gap I2
 > exists to name.
 
+> **Amendment (2026-07-19, #6441 — I1's runtime gate SHIPS for first boot; the three prior
+> status statements are reconciled; the blast-radius claim is corrected).**
+>
+> **1 — Reconciling the three statements about I1's status.** This ADR has said three
+> different things, each true of a different thing, which is why they read as contradictory:
+>
+> | Statement | Where | Verdict |
+> |---|---|---|
+> | *"Not shipped in #6416"* | original text, above | **True and unchanged.** #6416 shipped no I1 enforcement. |
+> | *"I1 is now ENFORCED via the single-connector gate"* | 2026-07-15, #6425 | **Overstated.** #6425 gated *which host may register* — it reduced the POPULATION that can violate I1. It never added the NIC wait, so a gated-in host still registered NIC-less. |
+> | *"I1 is inert on the running fleet"* | 2026-07-17, #6594 | **True, and still true after this PR.** `ignore_changes = [user_data]` means cloud-init never re-runs on a booted host. |
+>
+> The reconciliation: I1 has two halves. **Which host** may register (shipped #6425) and
+> **when** it may register (shipped here). Neither is retroactive to a running host.
+>
+> **2 — What #6441 ships: a first-boot NIC gate.** A baked `soleur-wait-nic` helper, invoked
+> bare in `runcmd` immediately before `cloudflared service install`, inside the existing
+> `web_tunnel_connector` block. It waits up to 60 s for the host's expected private address
+> (single-sourced from `var.web_hosts`), then **defers and continues** — it never aborts and
+> never reboots. Three mutually-exclusive arms emit exactly one Sentry boot-stage event:
+> `private_nic_ready` / `private_nic_timeout` / `private_nic_probe_fault`. The third exists
+> because an unresolvable `ip` binary is *zero evidence*, and must never be recorded as
+> evidence of absence (the #6415 mislabel).
+>
+> This is a **first-boot** gate, not the runtime precondition I1 is worded as. That gap is
+> deliberate and is item 4 below.
+>
+> **3 — The blast-radius claim in this ADR's own trade analysis is STALE.** The inherited
+> framing held that a NIC-less connector breaks only the `registry.` route while `deploy.`
+> and `ssh.` stay up. Post-#6594 that is false: item 3 of the 2026-07-17 amendment repointed
+> **all three** ingress services to private-net literals (`tunnel.tf` — `deploy.` →
+> `http://10.0.1.10:9000`, `ssh.` → `ssh://10.0.1.10:22`, `registry.` → `tcp://10.0.1.30:5000`).
+> A connector without its private NIC therefore serves **nothing**, not one route. The fix
+> that discharged I2 widened I1's blast radius — worth stating plainly, because it means the
+> two invariants are more coupled than either amendment implied.
+>
+> **4 — The runtime arm (`ExecStartPre`) is REJECTED for now, not tracked as an open item.**
+> `ExecStartPre` is the shape that best matches I1's runtime wording, and is the long-term
+> preference on record from engineering review. It is rejected here on three grounds:
+> - **It puts the wait inside systemd's start timeout.** `TimeoutStartSec` (default 90 s) spans
+>   `ExecStartPre` **plus** `ExecStart` combined, so a 60 s NIC wait leaves ~30 s for the rest of
+>   activation, and any later increase to the wait silently converts this gate into a
+>   `systemctl start` failure. The runcmd shape has no such ceiling.
+>
+>   > **[Corrected at review.]** This bullet originally argued that an `ExecStartPre` would
+>   > consume the downstream `cloudflared_ready` gate's ~60 s budget and detonate its live
+>   > `|| exit 1`, because the unit sits in `activating` and `systemctl is-active --quiet`
+>   > returns false throughout. The premise is true; **the conclusion does not follow.**
+>   > `cloudflared service install` runs `systemctl start`, which blocks on the job by default,
+>   > so a long `ExecStartPre` delays the *install command itself* — `soleur-wait-ready` does
+>   > not begin polling until activation has already resolved, and gets its full budget. The two
+>   > budgets are sequential under either shape. The rejection stands on the two grounds below,
+>   > each independently sufficient, plus the `TimeoutStartSec` ceiling above, which is the
+>   > argument the original bullet should have made. Recorded rather than silently rewritten
+>   > because the wrong version was load-bearing in a commit message and a code comment.
+> - **Making it safe means re-tuning a fail-closed gate** currently pinned by an exact-string
+>   test assertion — coupling a low-risk fix to a change that can dark the sole origin.
+> - **Its value is smaller than assumed.** cloudflared dials its ingress origin **per
+>   connection**, not at process start, so a connector that registered NIC-less begins serving
+>   the instant the attach lands. A NIC-less connector is a *converging* state, not a stuck
+>   one. The already-running case is separately covered by `web-private-nic-guard.timer`.
+>
+> Because the state converges on its own, this is a rejection rather than a deferral — the ADR
+> cannot call the state self-healing and simultaneously hold an open item to fix it. **Revival
+> condition:** evidence that per-connection origin resolution is false, or an owner for the
+> `cloudflared_ready` budget. If revived, an `ExecStartPre=-` (leading dash), a wait bound
+> under 45 s, and an explicit `TimeoutStartSec=` pin are mandatory.
+>
+> **5 — A delivery-channel hazard, recorded because it is not obvious from the code.**
+> `soleur-host-bootstrap.sh` feeds `local.host_scripts_content_hash`, which is injected into
+> `user_data` and re-verified at boot under `set -e`. So editing the bootstrap script couples
+> the change to image-bake sequencing: a host created after the apply but before `:latest`
+> carries the matching bootstrap aborts its entire runcmd at `stage=verify`.
+>
+> **[Scope corrected 2026-07-20, #6575 — the hazard survives; only its scope statement changes.]**
+> This bullet previously said the coherence preflight covered **only** the web-2-recreate dispatch.
+> That scoping is gone with the dispatch job. The verifier is retained, renamed host-agnostic
+> (`host-image-coherence-preflight.sh`, comparison logic byte-unchanged), and is reachable by any
+> host through a documented operator procedure: the `host_creates` HALT runbook now carries the
+> complete `crane digest` → preflight → `terraform apply -var image_name=<pinned>` chain. So the
+> preflight is no longer web-2-scoped and no longer callerless.
+>
+> **What did not change is the hazard itself.** The verifier still requires a pinned `@sha256` ref
+> while the default `var.image_name` is the mutable `:latest`, so the routine merge apply is still
+> not coherence-verified. ADR-128 names this the **cross-commit skew** invariant and records that no
+> build-time artifact can observe it; it is open under **#6712** and closable only by **#6730**'s
+> digest-pinned birth path. The separable half — that the image's baked host-scripts match the tree
+> it was built from — is *build-integrity*, and is statically enforced in
+> `cloud-init-user-data-size.test.ts`.
+>
+> For the routine merge apply this is a non-issue, but **not** for the reason an earlier draft
+> of this amendment gave. That draft argued: *"`hcloud_server.web["web-1"]` appears in no
+> `-target=`, so the workflow cannot create or replace it."* **The inference is invalid.**
+> `-target` is transitive at the resource level — the workflow states this in its own comments —
+> so `cloudflare_record.app` and `hcloud_firewall_attachment.web` each pull the whole
+> `hcloud_server.web` for_each map into the plan graph. web-1 **is** target-reachable there.
+>
+> What actually prevents a birth is the **`host_creates > 0` HALT tripwire** in the `apply` job,
+> added by #6416 — whose error text reads *"the host would come up with no private-net IP … the
+> #6416 failure mode"*, i.e. precisely the condition this NIC gate mitigates. The two facts now
+> pinned by test are therefore: `hcloud_server.web` carries `ignore_changes = [user_data, …]`
+> (the edit is inert for the running host), and that tripwire exists and parses its counter from
+> the plan. The superseded assertion would have stayed green with the tripwire deleted.
+>
+> **A pre-existing gap this surfaced, not closed here:** the `warm_standby` job `-target`s
+> `hcloud_server_network.web["web-1"]` — transitively reaching `hcloud_server.web` — while its
+> guard set is `resource_deletes` / `nested_deletes` / `reboot_updates` with **no**
+> `host_creates` check. That path could birth a host on a new bootstrap hash with no coherence
+> preflight. It belongs to the apply workflow's guard set rather than to this gate, and is
+> tracked in #6718. Reachability is narrow — web-1 normally exists in state, so targeting its
+> network attachment does not create it — so this is a defence-in-depth gap rather than a live
+> outage. The reason to close it is that the sibling `apply` job already decided this class of
+> accident warrants a hard HALT.
+>
+> The residual exposure remains an operator-driven fresh create or `-replace` of web-1, which
+> has no preflight; closing it needs a preflight that works against a mutable tag, tracked in
+> #6712.
+>
+> **Related follow-ups filed with this amendment:** #6710 (whether a never-ready cloudflared
+> should abort the boot at all — the adjacent `cloudflared_ready` fail-closed gate, grandfathered
+> here rather than endorsed) and #6711 (private-NIC health splits across Sentry and Better Stack
+> with no shared join key).
+
+> **Amendment (2026-07-20, #6718 — the `warm_standby` gap above is CLOSED; #6712 is PREVENTED,
+> not VERIFIED).** Factual status note on the two items the 2026-07-19 amendment left open.
+>
+> **Closed.** The `warm_standby` job now carries the same `host_creates > 0` HALT as the sibling
+> `apply` job. It is unbypassable for a *stronger* reason than the sibling: `apply` evaluates its
+> HALT **outside** the `destroy_count` sum so `[ack-destroy]` cannot reach it, whereas
+> `warm_standby` has **no `destroy_count` sum and no ack path at all** — it is `workflow_dispatch`
+> -only and never reads a commit message. (An earlier revision of this amendment imported the
+> sibling's rationale verbatim and misdescribed the mechanism it was documenting; caught in
+> #6725's review.)
+> The load-bearing edit was extending that job's `^[0-9]+$` validation to cover `host_creates`:
+> `jq -r` on a missing key yields the string `null`, and `[[ "null" -gt 0 ]]` passes — without it
+> the guard would have been present, green, and fail-**open**.
+>
+> **The 2026-07-19 assessment of reachability was correct but incomplete.** It reasoned that
+> web-1 normally exists in state, so targeting its network attachment does not create it — hence
+> "defence-in-depth". The composition it did not state: `warm_standby` passes **no
+> `-var image_name`** (only `web_2_recreate` pins — `apply` is unpinned too and is held by its own
+> #6416 HALT rather than by pinning, so the mutable-tag exposure is a property of the WORKFLOW,
+> not of one dispatch; this makes the HALT more justified, not less), so a transitive birth would
+> use the mutable `:latest` default. That is #6712's failure mode reached through #6718's hole,
+> which is why the two were closed as one defect.
+>
+> **Measured while closing it (Terraform v1.10.5):** a `-target` naming an unresolvable `for_each`
+> instance key **warns and is silently ignored** — exit 0, `No changes` — it does **not** error.
+> This mattered: had it errored, the plan step would have died before the guard block and the new
+> HALT would have been present but unreachable. It also means `warm_standby`'s three `web-2`
+> `-target`s have been no-ops since #6538 (tracked in #6575).
+>
+> **#6712 is PREVENTED, not VERIFIED, and stays open.** No preflight was added and no resolver
+> shipped — the resolver extraction was cut because its only call site (`web_2_recreate`) is
+> unreachable after the web-2 retirement. The birth is now *blocked* rather than *validated*.
+>
+> **A second unguarded path existed and was closed here too.** The first revision of this PR
+> asserted "no automated path can birth a web host" **without enumerating the workflows** — and
+> the assertion was false: `apply-deploy-pipeline-fix.yml` fires on `push:main` *and*
+> `workflow_dispatch`, runs `terraform apply -auto-approve` over four `terraform_data` targets
+> that each reference `hcloud_server.web["web-1"]`, and carried no counter, no HALT and no
+> `-var image_name` — the identical composition. #6725's review caught it; the same shared-filter
+> HALT now guards it. **The enumeration is the deliverable, not the claim**: apply (#6416),
+> warm_standby (#6718), apply-deploy-pipeline-fix (#6718), web_2_recreate (gate unsatisfiable),
+> workspaces_luks_cutover (gate requires zero actions on the web-1 server).
+>
+> **The residual inverted into a capability gap.** The 2026-07-19 residual — an operator-driven
+> fresh create/`-replace` of web-1 with no preflight — is now the *only* remaining route, because
+> every automated route that can reach `hcloud_server.web` HALTs (scope: **web** hosts;
+> `inngest_host` legitimately births a host). That violates
+> `hr-fresh-host-provisioning-reachable-from-terraform-apply` and is tracked in **#6730**. Do not
+> resolve it by weakening either HALT: the correct fix is a pinned, attachment-complete birth path
+> that the tripwire can distinguish from an accidental create.
+>
+> **[Enumeration correction, 2026-07-20, #6575.]** Two entries in the five-path enumeration above
+> are no longer *guarded paths* — they are **deleted paths**. `warm_standby` and `web_2_recreate`
+> were removed with the rest of the web-2 dispatch surface, so the surviving enumeration is: apply
+> (#6416 HALT), apply-deploy-pipeline-fix (#6718 HALT), workspaces_luks_cutover (gate requires zero
+> actions on the web-1 server). Read as-written, "warm_standby (#6718)" now credits a HALT to a job
+> that does not exist, which overstates the guarded surface by two. The **conclusion is unchanged
+> and if anything stronger** — every *remaining* automated route to `hcloud_server.web` still HALTs,
+> and two routes that could reach it no longer exist at all. Also measured-and-now-moot: the note
+> that `warm_standby`'s three `web-2` `-target`s had been no-ops since #6538 was the tracking item
+> #6575 closed by deleting them.
+
 ### Candidate implementations for I2 — assessed in #6441 (SUPERSEDED — see the amendment above; (b) shipped in #6425)
 
 Two shapes are on the table: **(a)** per-host private-net-relative ingress (`ssh-web-1.` →

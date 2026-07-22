@@ -319,6 +319,103 @@ soleur-boot-emit "$STAGE" info
 WAITEOF
 chmod 0755 /usr/local/bin/soleur-wait-ready
 
+# Bounded private-NIC wait (#6441, ADR-114 I1) — baked (0 user_data; the call site is the
+# only inline cost). DELIBERATELY fail-OPEN, unlike its fail-CLOSED neighbour
+# soleur-wait-ready directly above — the two gate the same cloudflared step a few lines
+# apart, so the asymmetry needs stating or it reads as an inconsistency:
+#
+#   - soleur-wait-ready runs AFTER the unit exists. A never-ready cloudflared is a TERMINAL
+#     condition, so its `|| exit 1` caller contract is defensible.
+#   - soleur-wait-nic runs BEFORE the unit exists, on a condition that provably SELF-HEALS:
+#     cloudflared dials its ingress origin per CONNECTION, not at process start, so a
+#     connector that registered NIC-less begins serving the instant the attach lands — no
+#     restart, no operator action. Aborting here would destroy the recovery channel to
+#     prevent a condition that resolves itself.
+#
+# And aborting is not a small cost: runcmd is ONE /bin/sh and is once-per-instance, so an
+# `exit 1` does not skip a step — it terminates cloudflared install, the webhook binary, the
+# :9000 readiness gate, the disk/resource monitors and the container egress firewall, for the
+# life of that instance (CF-5). A NIC that converges at minute 11 would then be irrelevant.
+# No reboot either: web-1 is the SOLE live origin, and ADR-115's converge-by-reboot grant is
+# registry-host-scoped by explicit normative blocker, not class-wide (CF-6).
+STAGE=wait_nic; FAILED_FILE=soleur-wait-nic
+cat > /usr/local/bin/soleur-wait-nic <<'NICEOF'
+#!/bin/sh
+# usage: soleur-wait-nic <expected-ip>
+# ALWAYS exits 0. Emits EXACTLY ONE event, from three mutually-exclusive arms. Never aborts
+# the boot, never reboots. The emit is the ONLY evidence this gate ran: a fresh cloud-init
+# boot is a blind surface (no SSH, no shell), so an arm that emitted nothing would be
+# indistinguishable from a gate that never shipped.
+EXPECTED="$1"
+# (0) ARGUMENT GUARD — load-bearing, and the direction that matters. `grep -qwF -- ""` matches
+# EVERY line, so an empty argument would make the first probe succeed and emit
+# private_nic_ready: positive evidence that a check passed which was never performed. That is
+# strictly worse than the fail-open this helper is designed for, and it inverts the #6415
+# doctrine below (asserting PRESENCE on zero evidence). var.web_hosts validates private_ip
+# against ^10\.0\.1\.[0-9]{1,3}$, but that defence lives in another file behind a templatefile
+# map — "works today, fails silently on a future host" is the shape this repo keeps getting
+# bitten by, so the helper defends itself. Mirrors web-private-nic-guard.sh's own EXPECTED_IP
+# check, which is terminal there; here it takes the probe-fault arm to preserve exit 0.
+[ -n "$EXPECTED" ] || { soleur-boot-emit private_nic_probe_fault warning; exit 0; }
+# (1) PROBE RESOLUTION FIRST, and short-circuit before the wait. An unresolvable probe is ZERO
+# EVIDENCE — it must never be conflated with "the address is absent" (#6415), hence a THIRD arm
+# rather than folding probe-fault into the timeout arm. Short-circuiting also avoids spending
+# the full 60 s budget on a missing binary. `ip` is the one that actually motivates this (it
+# lives in /usr/sbin, absent from some minimal PATHs) but grep is checked too: without it the
+# match can never succeed, and reporting THAT as "the address is absent" is the same mislabel.
+IP_BIN=$(command -v ip 2>/dev/null || true)
+GREP_BIN=$(command -v grep 2>/dev/null || true)
+PROBE_OK=true
+[ -n "$IP_BIN" ] && [ -x "$IP_BIN" ] || PROBE_OK=false
+[ -n "$GREP_BIN" ] && [ -x "$GREP_BIN" ] || PROBE_OK=false
+if [ "$PROBE_OK" != true ]; then
+  soleur-boot-emit private_nic_probe_fault warning
+  exit 0
+fi
+# (2) Probe. The probe's EXIT is captured separately from the match result, because a pipeline
+# reports only grep's status: `ip … 2>/dev/null | grep -qwF` makes an `ip` that RUNS AND FAILS
+# (netlink denied, truncated image) indistinguishable from one that ran and found nothing —
+# reporting "could not measure" as "absent", the #6415 mislabel arriving through a second door.
+# probe_ran records whether the instrument EVER worked; the fault arm fires only if it never did
+# (so a transient failure that later recovers is not misreported).
+# -w + -F + --: exact word, fixed string, end-of-options — so 10.0.1.1 can never match inside
+# 10.0.1.10 and the dots are not regex wildcards. Mirrors web-private-nic-guard.sh.
+# (No pipefail is set in this helper, so grep's exit governs the match.)
+nic_ok=false
+probe_ran=false
+if OUT=$("$IP_BIN" -4 -o addr show 2>/dev/null); then
+  probe_ran=true
+  printf '%s\n' "$OUT" | grep -qwF -- "$EXPECTED" && nic_ok=true
+fi
+# (3) Bounded wait — 30 x 2 s = 60 s. Spent BEFORE `cloudflared service install`, so this budget
+# is SEQUENTIAL with the downstream cloudflared_ready gate's own ~60 s budget rather than nested
+# inside it. A POSIX counter rather than `for i in $(seq 1 30)`: an unresolvable `seq` yields an
+# EMPTY word list, so the loop body would run ZERO times and the helper would report a 60 s
+# timeout it never waited — a no-op that looks like it ran. One fewer binary to depend on, and
+# the loop variable was unused anyway.
+if [ "$nic_ok" = false ]; then
+  n=0
+  while [ "$n" -lt 30 ]; do
+    n=$((n + 1))
+    sleep 2
+    if OUT=$("$IP_BIN" -4 -o addr show 2>/dev/null); then
+      probe_ran=true
+      printf '%s\n' "$OUT" | grep -qwF -- "$EXPECTED" && { nic_ok=true; break; }
+    fi
+  done
+fi
+# (4) Exactly one event, mutually exclusive and total.
+if [ "$nic_ok" = true ]; then
+  soleur-boot-emit private_nic_ready info
+elif [ "$probe_ran" = false ]; then
+  soleur-boot-emit private_nic_probe_fault warning
+else
+  soleur-boot-emit private_nic_timeout warning
+fi
+exit 0
+NICEOF
+chmod 0755 /usr/local/bin/soleur-wait-nic
+
 # Completion breadcrumb (#6090): the SINGLE signal distinguishing "died IN bootstrap"
 # (emit_fail names a bootstrap stage) from "bootstrap COMPLETED, died downstream" (this
 # breadcrumb present + a later cloud-init stage fatal). Fail-open via _sentry_emit.

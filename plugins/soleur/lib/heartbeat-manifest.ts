@@ -145,16 +145,60 @@ export const MANIFEST: ManifestEntry[] = [
     name: "git_data_prd",
     arming: "web-host-cron",
     paused: true,
-    // The sibling never-unpaused monitor: its web-host probe cron is genuinely unbuilt, and the
-    // guard proves it against BOTH delivery routes. When #5274 PR C ships that probe by either
-    // route, this row goes RED and must be reconciled — the forcing function #6537 lacked.
+    // #5274 PR C (#6548) SHIPPED the web-host probe — so this row is FLIPPED from the former
+    // {kind:"none", tracking_issue:6548} to a fed timer. The forcing function #6537 lacked fired
+    // exactly as designed: shipping web-git-data-probe.sh (which dereferences GIT_DATA_HEARTBEAT_URL)
+    // reddened the "still unfed by BOTH routes" tripwire, forcing this reconciliation. The feeder is
+    // the SSH-provisioner-delivered timer (terraform_data.git_data_probe_install in server.tf).
     feeder: {
-      kind: "none",
-      url_secret: "GIT_DATA_HEARTBEAT_URL",
-      tracking_issue: 6548,
+      kind: "timer",
+      evidence: {
+        file: "apps/web-platform/infra/server.tf",
+        pattern: "systemctl enable --now web-git-data-probe.timer",
+      },
     },
     exempt_reason:
-      "PUSH heartbeat to be armed by an (unshipped, #5274 PR C) WEB-HOST probe cron over the private net — NOT a git-data cloud-init cron. Reprovisioning git-data would not arm it, so its remediation is web-host ci-deploy. (git-data-host-replace exists for immutable-redeploy compliance, not to arm this heartbeat.)",
+      "web-host-resident feeder (web-git-data-probe.timer on web-1), delivered by the SSH terraform_data provisioner — NOT a git-data cloud-init cron. Reprovisioning git-data would not arm it; its remediation is web-host ci-deploy/provision. (git-data-host-replace exists for immutable-redeploy compliance, not to arm this heartbeat.)",
+  },
+  {
+    name: "web_zot_consumer",
+    // #6438 §1 — the zot CONSUMER-perspective serviceability probe. web-host-cron (NOT dedicated-
+    // host-boot): web-1 is cx33-unrebuildable and never re-runs cloud-init, so the feeder is
+    // delivered by an SSH terraform_data provisioner — there is NO <host>-host-replace path, and
+    // ADR-103's replace_target requirement correctly does not fire (mirrors workspaces_luks/
+    // git_data_prd). for_each var.web_hosts, so the discovered resource name is web_zot_consumer.
+    arming: "web-host-cron",
+    // paused in source (ignore_changes=[paused]); the apply-workflow arm gate PATCHes it live after
+    // a measured beat (ADR-117 automated). Source stays paused, so this stays true (mirrors
+    // inngest_prd/registry_prd: source paused, live unpaused after a one-time measured PATCH).
+    paused: true,
+    feeder: {
+      kind: "timer",
+      evidence: {
+        file: "apps/web-platform/infra/server.tf",
+        pattern: "systemctl enable --now web-zot-consumer-probe.timer",
+      },
+    },
+    exempt_reason:
+      "web-host-resident feeder (web-zot-consumer-probe.timer on web-1) delivered by the SSH terraform_data provisioner (terraform_data.zot_consumer_probe_install), NOT web-1 cloud-init boot — web-1 is cx33-unrebuildable and never re-runs cloud-init, so there is NO <host>-host-replace path. Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+  },
+  {
+    name: "web_nic_guard",
+    // #6438 §3 — the private-NIC self-report's dedicated liveness beat (pinged every healthy guard
+    // run so the SOLEUR_PRIVATE_NIC emitter is observable-when-healthy). Same web-host-cron/SSH-
+    // provisioner delivery + arming shape as web_zot_consumer above; PERMANENT and independent of
+    // the zot beat (distinct failure domain — folding would re-introduce OR-masking).
+    arming: "web-host-cron",
+    paused: true,
+    feeder: {
+      kind: "timer",
+      evidence: {
+        file: "apps/web-platform/infra/server.tf",
+        pattern: "systemctl enable --now web-private-nic-guard.timer",
+      },
+    },
+    exempt_reason:
+      "web-host-resident feeder (web-private-nic-guard.timer on web-1) delivered by the SSH terraform_data provisioner (terraform_data.private_nic_guard_install), NOT web-1 cloud-init boot — web-1 is cx33-unrebuildable. No <host>-host-replace path, so ADR-103's replace_target requirement correctly does not fire.",
   },
   {
     name: "inngest_prd",

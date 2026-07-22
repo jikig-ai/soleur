@@ -6,12 +6,23 @@
 // Stack without the Anthropic Console. Attribution only — this does NOT add the
 // pre-exhaustion spend-vs-budget alert (still the other half of #5674).
 //
-// Reads a READ-ONLY org-billing key `ANTHROPIC_ADMIN_KEY` (sk-ant-admin01-…). It
-// cannot spend or read conversations; the real blast-radius control is its
-// read-only scope, not env isolation (plan R-E). While the key is unprovisioned
-// (the code merges before the mint), the cron self-reports `key-missing`
-// BENIGNLY — a positive `SOLEUR_CLAUDE_COST_DAILY {status:"key-missing"}` marker
-// (obs P4), NOT a fleet-down page.
+// Reads an org-billing key `ANTHROPIC_ADMIN_KEY` (sk-ant-admin01-…). This cron
+// only ever GETs, and the key cannot spend or read conversations.
+//
+// ‼️ CORRECTION (#6297, verified 2026-07-20 in the Console): the key is NOT
+// scope-limited. Console Admin keys carry **no selectable scopes** — every one
+// grants full Admin-API access. An earlier version of this comment claimed
+// "the real blast-radius control is its read-only scope"; that was false, and
+// no such control exists. Read-only is a property of THIS CALLER's usage, not
+// of the credential, so treat the key as full-Admin-API-privileged wherever it
+// is stored or handled. (Same correction applied to ADR-108.)
+//
+// While the key is unprovisioned the cron self-reports `key-missing` BENIGNLY —
+// a positive `SOLEUR_CLAUDE_COST_DAILY {status:"key-missing"}` marker (obs P4),
+// NOT a fleet-down page. That state is currently indefinite, not a short mint
+// window: the Admin API is unavailable to individual accounts and this org is
+// one, so the key is un-mintable until the org converts to a team organization
+// (an operator decision — see #6297).
 //
 // Classify-fatal (mirrors the credit-probe):
 //   - 401 / 403 (bad/revoked admin key) → RED heartbeat (fatal).
@@ -20,7 +31,7 @@
 //   - success                           → GREEN heartbeat + the daily marker.
 
 import { inngest } from "@/server/inngest/client";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import {
   postSentryHeartbeat,
   getAnthropicAdminReport,
@@ -40,6 +51,22 @@ const ADMIN_REPORT_TIMEOUT_MS = 30_000;
 // -----------------------------------------------------------------------------
 // Pure parse helpers (unit-tested against synthesized fixtures — AC6/AC6b).
 // -----------------------------------------------------------------------------
+
+// First observed dark fire (Sentry e0e6f356764b4bb6be8b0a8e74898e9f, release
+// web-platform@0.208.0). A frozen historical date, NOT a window start — see the
+// field comment on `days_since_first_dark` in claude-cost-marker.ts. Measured
+// from here rather than process start so a container restart never resets it.
+const FIRST_DARK_FIRE = "2026-07-10";
+
+// Whole UTC days elapsed since FIRST_DARK_FIRE, floored at 0. Pure and
+// inert — nothing branches on the result; it is reporting data only, so a
+// stale reading can never page. Floored so clock skew or a backfill cannot
+// produce a negative count.
+export function daysSinceFirstDark(now: Date = new Date()): number {
+  const first = Date.parse(`${FIRST_DARK_FIRE}T00:00:00Z`);
+  const days = Math.floor((now.getTime() - first) / 86_400_000);
+  return days > 0 ? days : 0;
+}
 
 // `YYYY-MM-DD` for the prior UTC day (the bucket the daily report covers).
 export function priorUtcDay(now: Date = new Date()): string {
@@ -157,18 +184,36 @@ export async function cronAnthropicCostReportHandler({
     // a POSITIVE dark marker so the daily Better Stack surface is positively
     // dark, not absent (obs P4 — an absent row is mis-triageable during the
     // code-merges-first → mint window).
-    reportSilentFallback(null, {
+    const daysDark = daysSinceFirstDark();
+    // WARNING, not ERROR. Sentry derives issue priority from level, and the
+    // operator's "high priority issues" notification rule fires on the derived
+    // priority — so an `error`-level emit here paged daily for a state this
+    // function's own header calls BENIGN (#6297).
+    //
+    // Two INDEPENDENT emissions leave this branch; do not conflate them:
+    //   1. this `warnSilentFallback` — the diagnostic line. Rides the SHARED
+    //      logger at pino 40 (≥ Vector's `app_container_warn_filter` cut) and
+    //      raises a Sentry `captureMessage` at level=warning. Dropping it to
+    //      `info` would silence THIS line in both Better Stack and Sentry.
+    //   2. `emitClaudeCostDailyMarker` below — the SOLEUR_CLAUDE_COST_DAILY
+    //      row. Ships from claude-cost-marker.ts's own dedicated pino instance
+    //      at a hard-coded `log.warn`, with no Sentry mirror (ADR-108 item 2).
+    //      Its delivery does NOT depend on the level chosen here.
+    // Keeping the Sentry mirror at all is required by
+    // cq-silent-fallback-must-mirror-to-sentry.
+    warnSilentFallback(null, {
       feature: CRON_NAME,
       op: "anthropic-admin-key-missing",
       message:
         "ANTHROPIC_ADMIN_KEY unset — daily cost report is dark until the key is provisioned (expected during the mint window)",
-      extra: { fn: CRON_NAME },
+      extra: { fn: CRON_NAME, days_since_first_dark: daysDark },
     });
     emitClaudeCostDailyMarker({
       status: "key-missing",
       date: priorUtcDay(),
       cost_usd: null,
       models: [],
+      days_since_first_dark: daysDark,
     });
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({

@@ -27,6 +27,19 @@ vi.mock("@/server/observability", () => ({
   warnSilentFallback: warnSilentFallbackMock,
 }));
 
+// #6714 — marker 1 (SOLEUR_CRON_PERSIST_RESULT) is emitted on ALL THREE terminal
+// paths. Spying here lets each site be asserted at its OWN site (AC25) rather
+// than by a repo-wide grep, which a comment would satisfy.
+const { persistResultMock } = vi.hoisted(() => ({ persistResultMock: vi.fn() }));
+
+vi.mock("@/server/cron-liveness-marker", () => ({
+  emitCronPersistResult: persistResultMock,
+  emitCronPersistSkipped: vi.fn(),
+  emitCommunityDigestFile: vi.fn(),
+  emitCronTier2Deferred: vi.fn(),
+  emitCronDedupSkip: vi.fn(),
+}));
+
 import {
   DEFAULT_MAX_DELETIONS,
   SYNTHETIC_CHECK_NAMES,
@@ -224,6 +237,18 @@ describe("safeCommitAndPr — structural exclusion + allowlist (AC4a)", () => {
       (c) => c[1]?.op === "safe-commit-paths-dropped",
     );
     expect(dropCalls).toHaveLength(0);
+    // #6714 R21/AC15 — `paths` is populated FROM the allowlist-matched scan, so
+    // it must equal what actually entered the commit. Cross-checked against
+    // `git show --name-only` (above) rather than a hand-written literal: that is
+    // what makes this behavioral and not a restatement of the test's own input.
+    if (result.status === "committed") {
+      expect(result.paths?.slice().sort()).toEqual(files);
+      expect(result.resumed).toBeUndefined(); // a real scan, not a resume
+    }
+    // marker 1, site 3 — the committed arm.
+    expect(persistResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "committed", files: 2, stage: null }),
+    );
   });
 
   it("warns to Sentry when non-structural paths are dropped by the allowlist filter", async () => {
@@ -497,6 +522,67 @@ describe("safeCommitAndPr — replay resume (AC4g)", () => {
     // Exactly one commit beyond origin/main — no duplicate commit was created.
     const count = await tgit(f.repo, "rev-list", "origin/main..HEAD", "--count");
     expect(count).toBe("1");
+
+    // #6714 R21/AC15 — the two arms of the `paths` contract, from ONE run pair.
+    if (first.status === "committed") {
+      expect(first.paths).toContain("knowledge-base/marketing/file-8.md");
+      expect(first.resumed).toBeUndefined();
+    }
+    if (second.status === "committed") {
+      // The replay branch skips the allowlist scan entirely, so there is nothing
+      // to report. `resumed` is what licenses a liveness check to stay GREEN on
+      // an UNDETERMINED `paths` — the artifact above demonstrably landed (same
+      // sha, one commit), so reading undefined as "nothing committed" would
+      // false-RED a healthy run.
+      expect(second.resumed).toBe(true);
+      expect(second.paths).toBeUndefined();
+    }
+  });
+});
+
+describe("safeCommitAndPr — persist-result marker sites (#6714 AC25)", () => {
+  it("emits the no-changes arm at its own site when nothing is committable", async () => {
+    const f = await makeFixture();
+    // No writes at all — the working tree is clean, so the scan finds nothing.
+    const result = await safeCommitAndPr(baseConfig(f, makeOctokitStub()));
+
+    expect(result.status).toBe("no-changes");
+    // marker 1, site 2. `files: 0` and `pr: null` are what distinguish this from
+    // a healthy commit in Better Stack — before the marker, "no-changes" and
+    // "committed" were indistinguishable on every operator-reachable surface.
+    expect(persistResultMock).toHaveBeenCalledWith({
+      cron: "cron-test-fixture",
+      status: "no-changes",
+      files: 0,
+      pr: null,
+      stage: null,
+    });
+  });
+
+  it("emits the failed arm at its own site, carrying the failing stage", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-9.md"), "change\n");
+    const octokit = makeOctokitStub({
+      prCreate: async () => {
+        throw new Error("boom");
+      },
+    });
+
+    const result = await safeCommitAndPr(baseConfig(f, octokit));
+
+    expect(result.status).toBe("failed");
+    // marker 1, site 1. `stage` is the field that makes a failure triageable
+    // without Inngest step history (which ADR-030 binds to 127.0.0.1:8288).
+    const failedCalls = persistResultMock.mock.calls.filter(
+      (c) => c[0]?.status === "failed",
+    );
+    expect(failedCalls).toHaveLength(1);
+    expect(failedCalls[0][0]).toMatchObject({
+      status: "failed",
+      files: 0,
+      pr: null,
+      stage: "pr-create",
+    });
   });
 });
 

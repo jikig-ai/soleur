@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# lint-trap-ownership: ok single-shot CI step, runner teardown reclaims the file
+work=$(mktemp)
+echo scratch > "$work"

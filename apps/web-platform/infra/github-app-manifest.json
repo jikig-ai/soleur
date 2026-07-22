@@ -24,6 +24,7 @@
     "members": "read",
     "metadata": "read",
     "packages": "read",
+    "pages": "write",
     "pull_requests": "write",
     "repository_advisories": "read",
     "secret_scanning_alerts": "read",

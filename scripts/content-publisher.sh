@@ -66,14 +66,29 @@ SKIP_REASON=""
 # --- Temp File Cleanup ---
 # Track all temp files and clean up on any exit (normal, error, or signal).
 # Prevents temp file leaks under set -e when a command fails between mktemp and rm.
+#
+# OWNERSHIP RULE (#6734) -- read before editing any make_tmp call site.
+#
+# `make_tmp` deliberately does NOT append to _TMPFILES. Every call site uses the
+# command-substitution form `f=$(make_tmp)`, and command substitution runs the function
+# in a SUBSHELL. An `_TMPFILES+=("$f")` executed inside `make_tmp` would therefore mutate
+# the SUBSHELL's copy of the array and vanish when the subshell exits -- the parent's
+# array stays empty, the trap below expands to `rm -f ""`, and cleanup removes NOTHING on
+# EVERY run (not merely on abort). That was the original defect: since #4483 retired
+# scheduled-content-publisher.yml this script runs as an Inngest cron on a long-lived
+# host, so there is no runner teardown to mask the leak (cf. #6713: 9,470 files / 1.9 GB).
+#
+# So: allocate with `f=$(make_tmp)`, then register with `_TMPFILES+=("$f")` in the PARENT
+# scope, on the next line. scripts/content-publisher.test.sh (R1/R2) is the behavioural
+# guard, and scripts/lint-trap-tempfile-ownership.py rule (a) is the static one.
 _TMPFILES=()
-trap 'rm -f "${_TMPFILES[@]}"' EXIT
+# The `((${#_TMPFILES[@]} > 0))` guard is load-bearing, not defensive noise: under
+# `set -u`, expanding an EMPTY array as "${_TMPFILES[@]}" is an unbound-variable error on
+# bash < 4.4, which would turn a clean no-allocation run into a nonzero exit from the trap.
+trap '((${#_TMPFILES[@]} > 0)) && rm -f "${_TMPFILES[@]}"' EXIT
 
 make_tmp() {
-  local f
-  f=$(mktemp)
-  _TMPFILES+=("$f")
-  echo "$f"
+  mktemp
 }
 
 # --- Frontmatter Parsing ---
@@ -329,6 +344,7 @@ post_discord() {
 
   local stderr_file http_code response_body
   stderr_file=$(make_tmp)
+  _TMPFILES+=("$stderr_file")  # parent-scope register (#6734)
   http_code=$(curl -s -w "%{http_code}" -o "$stderr_file" \
     -H "Content-Type: application/json" \
     -d "$payload" \
@@ -452,6 +468,7 @@ post_x_thread() {
   local hook_result hook_id hook_stderr
   local prev_id reply_result reply_id reply_stderr i
   hook_stderr=$(make_tmp)
+  _TMPFILES+=("$hook_stderr")  # parent-scope register (#6734)
   hook_result=$(bash "$X_SCRIPT" post-tweet "${tweets[0]}" 2>"$hook_stderr") || {
     local exit_code=$?
     local err_text
@@ -479,6 +496,7 @@ post_x_thread() {
   # Chain body tweets -- each reply references the immediately preceding tweet
   prev_id="$hook_id"
   reply_stderr=$(make_tmp)
+  _TMPFILES+=("$reply_stderr")  # parent-scope register (#6734)
   for (( i = 1; i < ${#tweets[@]}; i++ )); do
     sleep 2  # Rate-limit guard: pause between thread tweets to avoid X API 429s
     reply_result=$(bash "$X_SCRIPT" post-tweet "${tweets[$i]}" --reply-to "$prev_id" 2>"$reply_stderr") || {
@@ -625,6 +643,7 @@ post_linkedin() {
 
   local stderr_file
   stderr_file=$(make_tmp)
+  _TMPFILES+=("$stderr_file")  # parent-scope register (#6734)
   if ! bash "$LINKEDIN_SCRIPT" post-content --text "$content" 2>"$stderr_file"; then
     local error_reason
     error_reason=$(head -c 1000 "$stderr_file")
@@ -672,6 +691,7 @@ post_linkedin_company() {
 
   local stderr_file
   stderr_file=$(make_tmp)
+  _TMPFILES+=("$stderr_file")  # parent-scope register (#6734)
   if ! bash "$LINKEDIN_SCRIPT" post-content --text "$content" --author "urn:li:organization:${LINKEDIN_ORG_ID}" 2>"$stderr_file"; then
     local error_reason
     error_reason=$(head -c 1000 "$stderr_file")
@@ -739,6 +759,7 @@ post_bluesky() {
 
   local stderr_file
   stderr_file=$(make_tmp)
+  _TMPFILES+=("$stderr_file")  # parent-scope register (#6734)
   if ! bash "$BSKY_SCRIPT" post "$content" 2>"$stderr_file"; then
     local error_reason
     error_reason=$(head -c 1000 "$stderr_file")

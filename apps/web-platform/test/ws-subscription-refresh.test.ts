@@ -222,7 +222,7 @@ describe("ws-handler subscription refresh timer", () => {
 
   test("cap-drift count freshness-filters stale slots via .gte(last_heartbeat_at)", async () => {
     // The cap-drift evict count must EXCLUDE crashed-but-unreaped slots
-    // (last_heartbeat_at older than the 120 s threshold), mirroring the sibling
+    // (last_heartbeat_at older than the 240 s threshold), mirroring the sibling
     // slot probes (ws-handler.ts:526, :2013) and the acquire RPC self-reap
     // (093:79-81). Without it, a downgraded user whose stale slots linger longer
     // under the throttled hourly sweep (migration 115, #5738) is falsely evicted.
@@ -238,12 +238,13 @@ describe("ws-handler subscription refresh timer", () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(mockGte).toHaveBeenCalledWith("last_heartbeat_at", expect.any(String));
-    // The cutoff must be ~120 s in the past (matches the acquire RPC threshold),
-    // not an arbitrary timestamp — proves the filter uses the right window.
+    // The cutoff must be ~240 s in the past (SLOT_STALENESS_THRESHOLD_SECONDS,
+    // raised 120→240 in the 2026-07-18 Disk-IO backoff to match the acquire RPC
+    // threshold), not an arbitrary timestamp — proves the filter uses the right window.
     const [, cutoffIso] = mockGte.mock.calls[0] as [string, string];
     const ageMs = Date.now() - Date.parse(cutoffIso);
-    expect(ageMs).toBeGreaterThanOrEqual(110_000);
-    expect(ageMs).toBeLessThanOrEqual(130_000);
+    expect(ageMs).toBeGreaterThanOrEqual(230_000);
+    expect(ageMs).toBeLessThanOrEqual(250_000);
 
     if (session.subscriptionRefreshTimer) clearInterval(session.subscriptionRefreshTimer);
   });

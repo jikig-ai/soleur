@@ -183,6 +183,34 @@ doppler run -p soleur -c prd_terraform -- \
   array. A `{status:"key-missing"}` row is the correct **dark** signal while
   `ANTHROPIC_ADMIN_KEY` is unprovisioned (do NOT triage its absence as a
   regression during the mint window).
+  - **`days_since_first_dark`** — whole UTC days since the *first observed* dark
+    fire (2026-07-10), present on `key-missing` rows only. It is **not** the age
+    of the current dark window: it never resets, so after a mint-then-rotate it
+    reads the full elapsed span on day one of a benign gap. Read it as "how long
+    has this surface been unprovisioned at least once", never as "how long has it
+    been broken right now". Nothing branches on it.
+  - **Absent-vs-zero trap.** The field is *omitted* on `status:"ok"` rows, and
+    `JSONExtractInt(raw,'days_since_first_dark')` returns **0** for a missing key.
+    So a healthy `ok` row and a genuine day-0 dark row are indistinguishable by
+    that extract alone. Any panel or query MUST filter `status='key-missing'`
+    **first**.
+  - **Field-isolate before trusting a match.** `--grep` is an unanchored
+    `raw LIKE '%…%'` over the single Better Stack source every host multiplexes
+    into, and GitHub webhook payloads (issue and PR bodies) reach that source —
+    so any issue/PR text quoting the marker name will match. A structural check
+    is used rather than a `source_kind` filter because it holds regardless of
+    which Vector source an echo arrives on. A trustworthy producer row has `component` =
+    `claude-cost` (the pino base field from `claude-cost-marker.ts`) as a
+    **top-level key** of the decoded `raw`, not as nested string content. Match
+    structurally (decode `raw`, then check top-level keys) rather than by
+    substring; `scripts/followthroughs/anthropic-admin-key-6297.sh` is the
+    worked example, and its fixture suite mutation-proves the guard.
+  - **Expect a permanently-dark surface until an account-tier decision is made.**
+    The Admin API is unavailable to individual accounts, and the operator's org is
+    one — `platform.claude.com/settings/admin-keys` returns "Page not found".
+    Until the org is converted to a team organization, `key-missing` is the
+    steady state, not a transient mint window. See ADR-108 §Consequences and
+    issue #6297.
 
 Ranked SQL (run against `remote(t520508_..._logs)`):
 

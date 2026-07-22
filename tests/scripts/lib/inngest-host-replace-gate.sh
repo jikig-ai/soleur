@@ -2,7 +2,7 @@
 # Sourced destroy-guard gate for the inngest-host-replace scoped -replace
 # (apply_target=inngest-host-replace in .github/workflows/apply-web-platform-infra.yml).
 #
-# EXTRACTED + SOURCED (mirrors web2-recreate-gate.sh): both the workflow's
+# EXTRACTED + SOURCED (mirrors registry-host-replace-gate.sh): both the workflow's
 # inngest_host_replace plan step AND tests/scripts/test-inngest-host-replace-gate.sh
 # source this file and call inngest_host_replace_gate directly, so the CI decision
 # logic is the SAME bytes the test exercises (no re-derived inline copy to drift).
@@ -15,13 +15,16 @@
 # dependents that terraform replaces because they interpolate the NEW server id:
 #   - hcloud_server_network.inngest        (network.tf; server_id is ForceNew -> replace)
 #   - hcloud_volume_attachment.inngest_redis (inngest-host.tf; server_id is ForceNew -> replace)
-# Verified against the web-2 precedent's golden fixture (tfplan-web2-recreate-scoped.json):
-# a scoped `-replace=hcloud_server.web["web-2"]` touches EXACTLY server + server_network +
-# volume_attachment — hcloud_firewall_attachment.* (server_ids, non-ForceNew) does NOT change,
-# so it is DELIBERATELY absent from the allow-set (same as web2 omits hcloud_firewall_attachment.web).
+# This allow-set was DERIVED (2026-06, #6178) from the then-current web-2-recreate golden
+# fixture, which showed that a scoped `-replace` of an hcloud server touches EXACTLY
+# server + server_network + volume_attachment — hcloud_firewall_attachment.* (server_ids,
+# non-ForceNew) does NOT change, so it is DELIBERATELY absent from the allow-set.
+# That fixture was removed with the web-2 dispatch sweep (#6575, 2026-07-20); the derivation
+# it justified is unchanged and is now pinned by this gate's OWN tests, which are the live
+# guarantee. Do not re-add a pointer to a deleted fixture.
 #
 # hcloud_volume.inngest_redis (the durable Redis AOF store) is DELIBERATELY ABSENT — the
-# volume MUST be preserved across the replace (exactly how web2-recreate-gate.sh preserves
+# volume MUST be preserved across the replace (exactly how web2-retire-gate.sh preserves
 # hcloud_volume.workspaces), so ANY change to it trips inngest_out_of_scope_changes AND the
 # explicit redis_volume_destroyed backstop below.
 #

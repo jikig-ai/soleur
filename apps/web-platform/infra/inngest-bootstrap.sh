@@ -179,6 +179,51 @@ cat > "$HEARTBEAT_SCRIPT" <<'HEARTBEATSCRIPTEOF'
 # loop and yield NO tag -- hard-failing that fixture's exact-set equality.
 LOG_TAG="inngest-heartbeat"
 #
+# --- #6617b: dark-arm rate limiter ---------------------------------------------------------
+# Reachable ONLY from the dark arm rendered below (the live co-located host's render deletes
+# that arm entirely, so on that host this function is defined and never called). It exists as a
+# function rather than inline in the sed replacement because the replacement is a single
+# `s|...|...|` expression with \n escapes -- readable logic does not survive in there.
+#
+# WHY rate-limit rather than emit once: the dark arm fires every 60s and each fire ships a row
+# through Source 4 (no PRIORITY filter) -- ~1,440 rows/day of an unchanging message, against a
+# ~25k/day quota. But "emit once per boot" or "emit only on transition" would make a DEAD
+# pusher and a healthy deliberately-dark one produce the identical observation: nothing. That
+# is the #6617 failure exactly, and ADR-117 names it -- a monitor that "goes silent exactly
+# when someone ships a probe". Hourly keeps the positive control at ~1.7% of the row cost.
+#
+# FAILS OPEN, deliberately: if the stamp cannot be read or written (RuntimeDirectory missing,
+# disk full) this returns 0 and the marker still ships. The degraded mode is then today's row
+# volume -- loud and visible -- rather than a silently disarmed liveness signal. Quota is
+# recoverable; a blind host is what this whole change exists to end.
+#
+# That guarantee needed one more case to actually hold. A FUTURE-DATED stamp is not a read or
+# write failure, so none of the guards below caught it, and it failed CLOSED: boot before NTP
+# writes `now+skew`; timesyncd then steps the clock BACK; `_now - _last` goes NEGATIVE, never
+# reaches `>= _interval`, and the marker is suppressed for the whole skew duration. On a host
+# whose liveness signal IS this marker, a clock correction would read as a dead pusher --
+# ADR-117's "goes silent exactly when someone ships a probe", reintroduced through the stamp.
+# `_last` is now clamped to `_now`, so a future stamp reads as "never emitted" and emits.
+dark_arm_emit_due() {
+  # Override exists for the test harness, which must supply a writable stamp path; production
+  # takes the default, which inngest-heartbeat.service provisions via RuntimeDirectory=.
+  _stamp="${INNGEST_HEARTBEAT_DARK_STAMP:-/run/inngest-heartbeat/dark.stamp}"
+  _interval=${INNGEST_HEARTBEAT_DARK_INTERVAL:-3600}
+  _now="$(date +%s 2>/dev/null || true)"
+  # No usable clock -> emit. Never let a broken read suppress the marker.
+  case "$_now" in '' | *[!0-9]*) return 0 ;; esac
+  _last="$(cat "$_stamp" 2>/dev/null || true)"
+  # A truncated/garbage stamp reads as "never emitted", not as "emitted just now".
+  case "$_last" in '' | *[!0-9]*) _last=0 ;; esac
+  # A stamp in the FUTURE (boot-before-NTP wrote now+skew, then timesyncd stepped back) reads
+  # as "never emitted" too. Without this the subtraction goes negative and suppresses the
+  # marker for the entire skew -- the one path where this function failed CLOSED.
+  [ "$_last" -le "$_now" ] || _last=0
+  [ "$(( _now - _last ))" -ge "$_interval" ] || return 1
+  printf '%s' "$_now" > "$_stamp" 2>/dev/null || true
+  return 0
+}
+#
 # @@DARK_ARM@@ -- substituted at RENDER time by inngest-bootstrap.sh (see the render block
 # just below): the skip branch on the dedicated host, EMPTY on the co-located web host.
 #
@@ -225,8 +270,12 @@ chmod 0755 "$HEARTBEAT_SCRIPT"
 # also rewrites the sentinel's own mention inside the comment above, corrupting the script --
 # caught by the sh -n leg of the render test.
 if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
-  sed -i 's|^@@DARK_ARM@@$|if [ -z "$INNGEST_HEARTBEAT_URL" ]; then\n  logger -t "$LOG_TAG" "url_present=no — no heartbeat URL provisioned; skipping ping"\n  exit 0\nfi|' "$HEARTBEAT_SCRIPT"
-  log "inngest-heartbeat: dark arm RENDERED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — an absent URL skips the ping and logs why"
+  # #6617b: the logger call is now gated on dark_arm_emit_due (hourly), NOT on any state
+  # transition -- see that function. `exit 0` stays OUTSIDE the gate: the storm fix from #6536
+  # is that an absent URL must never reach curl, and that is independent of whether this
+  # particular fire is the one that logs.
+  sed -i 's|^@@DARK_ARM@@$|if [ -z "$INNGEST_HEARTBEAT_URL" ]; then\n  if dark_arm_emit_due; then\n    logger -t "$LOG_TAG" "url_present=no — no heartbeat URL provisioned; skipping ping (hourly rate-limited, #6617b)"\n  fi\n  exit 0\nfi|' "$HEARTBEAT_SCRIPT"
+  log "inngest-heartbeat: dark arm RENDERED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — an absent URL skips the ping and logs why, hourly"
 else
   sed -i '/^@@DARK_ARM@@$/d' "$HEARTBEAT_SCRIPT"
   log "inngest-heartbeat: dark arm OMITTED (DOPPLER_PROJECT=$DOPPLER_PROJECT) — live pusher; an absent URL stays loud (curl rc=2)"
@@ -286,6 +335,17 @@ EnvironmentFile=/etc/default/inngest-server
 # the host's boot, not a deploy): this unit has failed since its very first fire.
 # Do NOT remove without moving DOPPLER_CONFIG_DIR off the shared /tmp.
 PrivateTmp=true
+# #6617b: the dark arm's hourly rate limiter keeps its last-emit stamp at
+# /run/inngest-heartbeat/dark.stamp. This unit runs User=deploy and /run is root-owned 0755,
+# so deploy cannot create anything there directly -- without RuntimeDirectory= the stamp write
+# fails on every fire, the limiter never engages, and the quota fix is a silent no-op.
+# PrivateTmp=true above does NOT cover /run, so this is the right mechanism (and /tmp is
+# already spoken for by the DOPPLER_CONFIG_DIR collision documented above).
+# RuntimeDirectoryPreserve=yes is equally load-bearing: this is a Type=oneshot, so systemd
+# tears the directory down the moment ExecStart returns -- taking the stamp with it and
+# restoring the 60s storm this rate limit removes.
+RuntimeDirectory=inngest-heartbeat
+RuntimeDirectoryPreserve=yes
 # #6536: WITHOUT this, systemd derives SYSLOG_IDENTIFIER from the ExecStart basename ->
 # "doppler", which matches ZERO vector.toml sources. The unit's own stderr (doppler's AND
 # curl's) then never leaves the host: the issue's _SYSTEMD_UNIT='inngest-heartbeat.service'
@@ -353,6 +413,144 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 TIMEREOF
+
+# --- #6617a (A4): POSITIVE liveness marker for inngest-server -------------------------
+# The dedicated host is deny-all-public with no SSH: the ONLY evidence that inngest-server
+# is actually serving is what it ships off-box. Every existing signal is an ABSENCE signal
+# (no heartbeat push, no journal line), and #6617 is the lesson that absence is not
+# evidence — a dead probe and a healthy quiet host are the same row count: zero.
+#
+# TWO properties are load-bearing, and each one is a defect this repo has already paid for:
+#
+# 1. EMITTED UNCONDITIONALLY, BEFORE ANY CLASSIFICATION (ADR-117 / #6537). There is no `if`
+#    in front of the `logger` call below and there must never be one. The tempting shape —
+#    "only log when something is wrong" — is precisely what ADR-117 describes as a monitor
+#    that "goes silent exactly when someone ships a probe": it deletes the positive control,
+#    after which silence means either health or death and nothing can tell them apart.
+#
+# 2. DISCRIMINATING FIELDS, IN ONE EVENT. A boolean/OK-vs-not marker reproduces #6617 one
+#    layer up: you would learn the probe ran and still not know WHY the server was down.
+#    The fields are gathered first and shipped in a SINGLE logger call so one row is
+#    self-sufficient — no correlating across rows that Better Stack may interleave or drop:
+#      http_code    — including the literal 000 (curl could not connect at all), which is
+#                     the single most diagnostic value here and the one a naive
+#                     `curl -f && logger` shape silently discards
+#      vector_active/redis_active — is the SHIPPER dead, or the SERVER? #6536 burned 3 days
+#                     on exactly this ambiguity
+#      uptime_s     — discriminates "never came up after boot" from "died later"
+#      boot_id      — ties rows to one boot; a host replace re-rolls it, so it is how you
+#                     tell a fresh host's first probe from the previous host's last one
+#      image_ref    — WHICH bootstrap image produced this host (CF-3: vector.toml and this
+#                     very script are OCI-baked, so "the fix is on main" never implied "the
+#                     fix is on the host"; #6539 measured two releases that carried none of
+#                     the fix they were dispatched for)
+#
+# Runs as root but wraps NO doppler: it needs no secrets (a bare `logger` + `curl` to
+# loopback), so it inherits neither the $HOME-is-not-defined trap nor the
+# DOPPLER_CONFIG_DIR/PrivateTmp collision that cost #6536 three days. If a future edit adds
+# `doppler run` here, it MUST also set Environment=HOME=/root.
+readonly PROBE_SCRIPT="/usr/local/bin/inngest-server-probe.sh"
+readonly PROBE_UNIT="/etc/systemd/system/inngest-server-probe.service"
+readonly PROBE_TIMER="/etc/systemd/system/inngest-server-probe.timer"
+
+# Quoted delimiter: the body is fully literal. Unquoting it would expand $http_code et al at
+# BOOTSTRAP time (yielding an empty-field marker that always reads healthy) and would break
+# curl's `%{http_code}` writeout — the same quoted-heredoc discipline as the heartbeat script.
+cat > "$PROBE_SCRIPT" <<'PROBESCRIPTEOF'
+#!/bin/sh
+# Positive liveness marker for inngest-server (#6617a). Fired by inngest-server-probe.timer.
+#
+# LOG_TAG is a REAL assignment, never an inline literal in the logger call — same drift-fixture
+# contract as inngest-heartbeat.sh. The matching Source 4 allowlist entry is in vector.toml;
+# journald-config.test.sh asserts BOTH sides, because Source 4 is exact-value equality and a
+# one-sided change is a silent no-op.
+LOG_TAG="inngest-server-probe"
+
+# --- gather (never branch on the results before the emit below) ---
+# `|| true` on every capture: this probe must ALWAYS reach its logger call. A non-zero curl
+# under a future `set -e`, or a missing systemctl, must degrade a FIELD, never the event.
+http_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8288/health 2>/dev/null || true)"
+# curl writes 000 for "no HTTP response at all" but prints nothing when it cannot even start;
+# normalize both to the literal 000 so "could not connect" is a VALUE, not an empty field that
+# reads as missing data.
+[ -n "$http_code" ] || http_code=000
+vector_active="$(systemctl is-active vector.service 2>/dev/null || true)"
+redis_active="$(systemctl is-active inngest-redis.service 2>/dev/null || true)"
+server_active="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+[ -n "$vector_active" ] || vector_active=unknown
+[ -n "$redis_active" ] || redis_active=unknown
+[ -n "$server_active" ] || server_active=unknown
+uptime_s="$(cut -d. -f1 /proc/uptime 2>/dev/null || true)"
+[ -n "$uptime_s" ] || uptime_s=unknown
+boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+[ -n "$boot_id" ] || boot_id=unknown
+# Written by cloud-init-inngest.yml immediately after the OCI pull, from the SAME digest-pinned
+# $IREF the bootstrap was extracted from. Absent on the co-located web host (whose IREF is
+# reassigned at runtime by the zot arm) -> `unknown`, which is honest rather than wrong.
+#
+# Named image_REF, not image_sha: cloud-init-inngest.yml writes INNGEST_BOOTSTRAP_IMAGE=$IREF,
+# and $IREF is the FULL reference -- `ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.24@sha256:
+# 6cdaa63...` -- not a bare digest. A Better Stack consumer keying on `image_sha=sha256:` would
+# match nothing forever, which is the silent-gap class this probe exists to close. The full ref
+# is also the MORE useful value (registry + tag + digest in one field); only the name was wrong.
+image_ref="$(sed -n 's/^INNGEST_BOOTSTRAP_IMAGE=//p' /etc/default/soleur-inngest-image 2>/dev/null | head -1 || true)"
+[ -n "$image_ref" ] || image_ref=unknown
+
+# --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
+logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref"
+
+# --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
+# vector_active is the ONE field whose only off-box path is Vector itself: this marker reaches
+# Better Stack via journald -> Vector Source 4. So `vector_active=inactive` is unobservable by
+# construction -- exactly when the field carries information, the shipper that would carry it
+# is the thing that is down, and the row never leaves the host. The result is indistinguishable
+# from a dead host, which is the ambiguity #6536 burned three days on.
+#
+# inngest-boot-phone-home.sh is a direct curl to the Better Stack HTTP ingest (see
+# cloud-init-inngest.yml), independent of Vector entirely, and it lands in the SAME source
+# table. Firing it only on the non-active branch keeps the steady-state row cost at zero.
+#
+# This `if` is placed AFTER the emit and gates only the SECOND channel -- ADR-117 forbids
+# branching BEFORE the unconditional emit, not after it. Fail-open: the emitter exits 0 on any
+# error and is absent on the co-located web host, so `[ -x ]` guards it.
+if [ "$vector_active" != "active" ] && [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
+  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref" || true
+fi
+exit 0
+PROBESCRIPTEOF
+chmod 0755 "$PROBE_SCRIPT"
+
+cat > "$PROBE_UNIT" <<'PROBEUNITEOF'
+[Unit]
+Description=Inngest server positive liveness marker (#6617a)
+
+[Service]
+Type=oneshot
+# WITHOUT this, systemd derives SYSLOG_IDENTIFIER from the ExecStart basename, which matches
+# ZERO vector.toml sources and the marker never leaves the host — the #6536 defect exactly.
+# Source 4 (vector.toml host_scripts_journald) carries the matching exact-value entry.
+SyslogIdentifier=inngest-server-probe
+ExecStart=/usr/local/bin/inngest-server-probe.sh
+PROBEUNITEOF
+
+# Hourly, not per-minute. Source 4 applies NO PRIORITY filter, so every fire ships a row: at
+# 60s this marker alone would cost ~1,440 rows/day against the ~25k/day Better Stack quota —
+# the very cost #6617b is removing from the heartbeat in this same change. Hourly is ~24
+# rows/day, which preserves the positive control at ~1.7% of the cost. OnBootSec is short
+# because the highest-value probe is the one right after a replace (did the new image's
+# server actually bind :8288?).
+cat > "$PROBE_TIMER" <<'PROBETIMEREOF'
+[Unit]
+Description=Run the Inngest server liveness probe hourly (#6617a)
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=1h
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+PROBETIMEREOF
 
 # Materialize Doppler token + CLI config dir env file. The unit's `User=deploy`
 # combined with `ProtectHome=read-only` blocks Doppler CLI's default fallback
@@ -689,6 +887,13 @@ systemctl enable --now inngest-heartbeat.timer
 # Oneshot in `failed` state: restart re-runs ExecStart with the new unit.
 systemctl restart inngest-heartbeat.service || log "warn: heartbeat oneshot non-zero (timer will retry in 60s)"
 
+# #6617a: arm the positive liveness marker. `enable --now` starts the TIMER; the immediate
+# `start` below fires the oneshot once so a fresh replace ships its first marker in seconds
+# rather than at OnBootSec — the replace is exactly when someone is watching. `|| log` keeps
+# a probe failure from failing the whole bootstrap: this is observability, never a gate.
+systemctl enable --now inngest-server-probe.timer
+systemctl start inngest-server-probe.service || log "warn: server-probe oneshot non-zero (timer will retry hourly)"
+
 # #6178: enable the cutover flip poll timer (dedicated host only; daemon-reload above
 # already picked up the new units). It SHIPS ENABLED and is NEVER disabled for the host's
 # whole life (P0-1) — the FSM flag on soleur-inngest/prd is the sole gate, and keeping the
@@ -834,6 +1039,32 @@ VECTOREOF
       # also settles the deferred arm64-Vector concern: when the dedicated host later sets
       # VECTOR_CLI_*, the unit resolves soleur-inngest from the env-file + scoped token, never a
       # hardcoded `--project soleur`.
+
+      # All four vector.toml journald sources hardcode `journal_directory = "/var/log/journal"`
+      # (a PERSISTENT journal). On web-1 that directory is created by
+      # terraform_data.journald_persistent's remote-exec — but that provisioner targets
+      # `hcloud_server.web["web-1"]` ONLY. The inngest host has no such provisioner and gets a
+      # persistent /var/log/journal purely by OS-image accident. If a future image ships
+      # Storage=volatile, every journald source here silently reads nothing and the host goes
+      # dark through the exact channel this bootstrap spent #6617a wiring up — including the new
+      # liveness probe. Create it here rather than inherit the accident. Same two idempotent
+      # steps journald_persistent uses (mkdir first so tmpfiles has a dir to fix ownership/ACLs
+      # on), then assert, so a failure is loud at boot instead of silent forever.
+      mkdir -p /var/log/journal
+      systemd-tmpfiles --create --prefix /var/log/journal 2>/dev/null || true
+      if [ -d /var/log/journal ]; then
+        # Migrate anything still volatile in /run, so rows written before this point are not
+        # stranded outside the directory Vector is about to read.
+        systemctl restart systemd-journald 2>/dev/null || true
+        journalctl --flush 2>/dev/null || true
+        log "journald: /var/log/journal present (Vector's journal_directory); flushed"
+      else
+        # Fail LOUD, not closed: Vector still starts (some sources may work), but this warning
+        # ships via the phone-home path and names the exact cause.
+        log "warn: /var/log/journal ABSENT after mkdir — vector.toml journald sources will read nothing"
+        [ -x /usr/local/bin/inngest-boot-phone-home.sh ] \
+          && /usr/local/bin/inngest-boot-phone-home.sh journal-dir-MISSING "vector journal_directory /var/log/journal could not be created" || true
+      fi
 
       systemctl daemon-reload
       # `enable --now` is a no-op when the unit is already running; the

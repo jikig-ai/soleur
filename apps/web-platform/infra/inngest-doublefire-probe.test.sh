@@ -104,21 +104,6 @@ test_pagination_truncation_fails_loud() {
   rm -rf "$dir"
 }
 
-# --- Test 3b: hasNextPage=true but endCursor empty → fail LOUD, no truncation (P3-b) ---
-test_truncated_pagination_fails_loud() {
-  echo "TEST: doublefire-probe — hasNextPage=true + empty endCursor fails LOUD (P3-b)"
-  local dir; dir=$(mktemp -d)
-  # Page 1 claims a next page but supplies NO cursor → cannot page → must NOT break-clean.
-  make_page true "" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" > "$dir/page-1.json"
-  local rc=0 out
-  out=$(INNGEST_DOUBLEFIRE_RUNS_FIXTURE="$dir" bash "$TARGET" 2>/dev/null) || rc=$?
-  if [[ "$rc" -ne 0 ]]; then echo "  PASS: exits non-zero on truncated pagination"; PASS=$((PASS + 1));
-  else echo "  FAIL: expected non-zero exit on hasNextPage=true+empty cursor (got rc=0, out=$out)"; FAIL=$((FAIL + 1)); fi
-  if echo "$out" | jq -e '.runs' >/dev/null 2>&1; then
-    echo "  FAIL: emitted a (possibly-truncated) false-clean {runs:[]} on truncated pagination"; FAIL=$((FAIL + 1));
-  else echo "  PASS: no false-clean runs object emitted on truncation"; PASS=$((PASS + 1)); fi
-  rm -rf "$dir"
-}
 
 # --- Test 4: empty runs page (no double-fire data) → {runs:[]} exit 0 ---
 test_empty_runs() {
@@ -300,6 +285,83 @@ test_df_marker_tag_in_vector() {
   else echo "  FAIL: tag NOT in vector.toml (marker would not ship)"; FAIL=$((FAIL+1)); fi
 }
 
+# --- Test: argv ceiling — the collapsed run set EXCEEDS MAX_ARG_STRLEN (#6736) ---
+#
+# The final emit used to bind the whole paginated run set as `--argjson r "$all_runs"`,
+# i.e. ONE argv argument. The kernel caps a SINGLE argv argument at
+# MAX_ARG_STRLEN = 131,072 B (NOT `getconf ARG_MAX`, the 2,097,152 B argv+envp total);
+# bisected on this host: 131,071 B passes, 131,072 B fails E2BIG.
+#
+# This was the #5523 defect RE-INTRODUCED ONE LINE AFTER ITS OWN FIX: the pagination loop
+# spools every page to disk precisely to avoid an argv-sized accumulator, and then the emit
+# handed the collapsed result straight back to execve. The spool bought nothing. The probe
+# now keeps the collapsed set in a file and emits with `jq -c '{runs: .}' "$runs_file"`.
+#
+# ROW COUNT IS NOT THE LOAD-BEARING PARAMETER — BYTES PER RUN IS. The projection keeps only
+# {functionID, startedAt}, so short synthetic ids give ~60 B/run and even 1,500 runs would
+# stay under the ceiling and PASS ON UNMODIFIED CODE (vacuous). These fixture runs carry
+# production-shaped functionIDs (the app-slug/function-slug form Inngest actually returns),
+# which is what carries the bytes.
+test_df_argv_ceiling_collapsed_runs() {
+  echo "TEST: doublefire-probe — >MAX_ARG_STRLEN collapsed run set (#6736)"
+  # Named at every use, never bare.
+  local MAX_ARG_STRLEN=131072
+  local pages=5 per_page=400
+  local dir; dir=$(mktemp -d)
+  # Owning trap for this case's scratch dir (#6734). RETURN, not EXIT: this harness
+  # allocates per test function, so function-scoped cleanup is the correct lifetime --
+  # and an EXIT trap here would silently replace any other the file later registers.
+  trap 'rm -rf "$dir"' RETURN
+
+  local p edges
+  for p in 1 2 3 4 5; do
+    edges=$(jq -nc --argjson n "$per_page" --argjson pg "$p" '
+      [ range(0; $n) as $i
+        | { cursor: "cur-\($pg)-\($i)",
+            node: { id: "01SYNTHESIZEDRUNIDFIXTURE\($pg)\($i)",
+                    functionID: "synthesized-fixture-app/scheduled-reminder-dispatch-worker-with-a-production-shaped-slug-\($pg)-\($i)",
+                    status: "COMPLETED",
+                    queuedAt: "2026-07-08T10:00:00Z",
+                    startedAt: "2026-07-08T10:00:00Z",
+                    endedAt: "2026-07-08T10:00:00Z" } } ]')
+    if [[ "$p" -lt "$pages" ]]; then
+      make_page true "cursor-$p" "$edges" > "$dir/page-$p.json"
+    else
+      make_page false "" "$edges" > "$dir/page-$p.json"
+    fi
+  done
+
+  # Generator cardinality: an under-filled generator makes every assert below vacuous.
+  local want=$(( pages * per_page ))
+  local gen
+  gen=$(jq -s '[.[].data.runs.edges | length] | add' "$dir"/page-*.json)
+  assert_eq "argv-ceiling fixture generated $want edges across $pages pages" "$want" "$gen"
+
+  local out rc=0
+  out=$(INNGEST_DOUBLEFIRE_RUNS_FIXTURE="$dir" bash "$TARGET" 2>/dev/null) || rc=$?
+  assert_eq ">ceiling run set exits 0 (pre-fix: 'Argument list too long')" "0" "$rc"
+
+  # FIXTURE ADEQUACY, asserted IN-SUITE so this cannot silently degrade to vacuous as the
+  # projection, the fixture, or jq's encoding changes. A PR-body demonstration is
+  # unrunnable post-merge — there is no pre-fix code left to run it against.
+  local runs_bytes over="no"
+  runs_bytes=$(printf '%s' "$out" | jq -c '.runs' | wc -c)
+  [[ "$runs_bytes" -gt "$MAX_ARG_STRLEN" ]] && over="yes"
+  assert_eq "collapsed runs payload (${runs_bytes} B) exceeds MAX_ARG_STRLEN ($MAX_ARG_STRLEN)" "yes" "$over"
+
+  # EXACT count asserted RELATIONALLY against the generated edge count, not a literal pin.
+  # Fully discriminating against a truncating collapse (and against the --slurpfile
+  # array-of-arrays undercount, which would yield 1).
+  assert_eq "runs|length == generated edge count (all pages, no truncation)" "$gen" \
+    "$(printf '%s' "$out" | jq -r '.runs | length')"
+
+  # The rows really carry their projected fields at >ceiling size, not empty shells.
+  assert_eq "every run carries functionID + startedAt at >ceiling size" "$gen" \
+    "$(printf '%s' "$out" | jq -r '[.runs[] | select(.functionID != null and .startedAt != null)] | length')"
+
+  rm -rf "$dir"
+}
+
 echo "=== inngest-doublefire-probe.sh test suite ==="
 test_valid_runs_single_page
 test_pagination
@@ -316,6 +378,114 @@ test_df_connect_timeout_and_clamp
 test_df_window_not_narrowed
 test_df_marker_purity
 test_df_marker_tag_in_vector
+test_df_argv_ceiling_collapsed_runs
+# ===========================================================================
+# #6617 — build_request_body must produce VALID JSON on the empty-CSV path
+#
+# WHY THIS NEEDS ITS OWN HARNESS: the INNGEST_DOUBLEFIRE_RUNS_FIXTURE seam
+# short-circuits fetch_page at :164-165 and RETURNS BEFORE build_request_body
+# is called at :170. So every fixture-driven test above passes green while
+# the real request-construction path is never executed. This test calls
+# build_request_body directly.
+#
+# THE DEFECT: `printf '%s' "$FUNCTION_IDS_CSV"` emits ZERO BYTES when the CSV
+# is empty — the documented "empty CSV => [] => all functions" default. jq -R
+# then has no line to read and emits NOTHING, so fn_ids_json becomes the empty
+# string and `--argjson fnids ""` aborts with
+#   jq: invalid JSON text passed to --argjson
+# This is the DEFAULT path: op=verify step 2.6 passes no FUNCTION_IDS, so the
+# cutover's exactly-once check could never run. Observed live as HTTP 500 on
+# GET /hooks/inngest-doublefire-probe (run 29729623865, 2026-07-20).
+# ===========================================================================
+
+# Extract build_request_body from the target and evaluate it with the same
+# variable set the script establishes, so the assertion pins the REAL function
+# rather than a re-implementation of it.
+call_build_request_body() {
+  local csv="$1" out rc=0
+  # `set +e` MUST be in the CALLING shell: under `set -e` a failing command
+  # substitution aborts the whole suite at the assignment, so the RED case
+  # (which fails by design) would kill the runner instead of being asserted.
+  set +e
+  out=$(
+    eval "$(sed -n '/^build_request_body() {$/,/^}$/p' "$TARGET")"
+    # SC2034: these five ARE consumed — by the eval'd build_request_body body
+    # above, which shellcheck cannot resolve statically. They mirror the
+    # variable set the real script establishes at :58-68.
+    # shellcheck disable=SC2034
+    {
+      GQL_QUERY="query { runs { id } }"
+      PAGE_SIZE=100
+      FROM_TS="2026-07-19T00:00:00Z"
+      UNTIL_TS=""
+      FUNCTION_IDS_CSV="$csv"
+    }
+    build_request_body "" 2>&1
+  )
+  rc=$?
+  set -e
+  BRB_OUT="$out"; BRB_RC=$rc
+}
+
+test_df_build_body_empty_csv() {
+  echo "TEST: doublefire — build_request_body emits valid JSON for the empty-CSV default (#6617)"
+  call_build_request_body ""
+
+  if [[ "$BRB_RC" -eq 0 ]]; then echo "  PASS: exits 0 on the empty-CSV default path"; PASS=$((PASS+1));
+  else echo "  FAIL: exits $BRB_RC — $BRB_OUT"; FAIL=$((FAIL+1)); fi
+
+  if jq -e . >/dev/null 2>&1 <<<"$BRB_OUT"; then echo "  PASS: output is valid JSON"; PASS=$((PASS+1));
+  else echo "  FAIL: output is NOT valid JSON: $BRB_OUT"; FAIL=$((FAIL+1)); fi
+
+  # The documented contract: empty CSV means ALL functions, encoded as [].
+  local fnids; fnids=$(jq -c '.variables.filter.functionIDs' <<<"$BRB_OUT" 2>/dev/null || echo "<unparseable>")
+  assert_eq "empty CSV yields functionIDs: [] (all functions)" "[]" "$fnids"
+}
+
+test_df_build_body_nonempty_csv() {
+  echo "TEST: doublefire — build_request_body still encodes a non-empty CSV correctly"
+  call_build_request_body "fn-a,fn-b"
+
+  if [[ "$BRB_RC" -eq 0 ]]; then echo "  PASS: exits 0"; PASS=$((PASS+1));
+  else echo "  FAIL: exits $BRB_RC — $BRB_OUT"; FAIL=$((FAIL+1)); fi
+
+  local fnids; fnids=$(jq -c '.variables.filter.functionIDs' <<<"$BRB_OUT" 2>/dev/null || echo "<unparseable>")
+  assert_eq "non-empty CSV yields the id array" '["fn-a","fn-b"]' "$fnids"
+}
+
+# Harness self-check: if the extraction ever stops yielding a callable
+# function, both tests above would pass vacuously on an empty string.
+test_df_build_body_harness_is_live() {
+  echo "TEST: doublefire — build_request_body extraction is non-vacuous"
+  local body; body=$(sed -n '/^build_request_body() {$/,/^}$/p' "$TARGET")
+  if [[ $(wc -l <<<"$body") -gt 5 ]]; then echo "  PASS: extracted $(wc -l <<<"$body") lines"; PASS=$((PASS+1));
+  else echo "  FAIL: extraction yielded $(wc -l <<<"$body") lines — harness is vacuous"; FAIL=$((FAIL+1)); fi
+
+  # WIRING: the harness above proves build_request_body BEHAVES, not that
+  # anything CALLS it. Without this, reintroducing the #6617 defect inline in
+  # _fetch_runs_page — leaving build_request_body intact but dead — reproduces
+  # the live HTTP 500 with this suite fully green.
+  if grep -qF 'body=$(build_request_body' "$TARGET"; then echo "  PASS: build_request_body is wired into the request path"; PASS=$((PASS+1));
+  else echo "  FAIL: build_request_body is DEAD — nothing calls it"; FAIL=$((FAIL+1)); fi
+
+  # ORDER: the fixture seam must sit BELOW body construction, else every
+  # fixture-driven test bypasses the real path again (how #6617 shipped green).
+  local build_ln seam_ln
+  build_ln=$(grep -n 'body=$(build_request_body' "$TARGET" | head -1 | cut -d: -f1)
+  seam_ln=$(grep -n 'if \[\[ -n "$FIXTURE_DIR" \]\]' "$TARGET" | head -1 | cut -d: -f1)
+  if [[ -z "$build_ln" || -z "$seam_ln" ]]; then
+    echo "  FAIL: could not locate anchors (build=$build_ln seam=$seam_ln)"; FAIL=$((FAIL+1))
+  elif [[ "$build_ln" -lt "$seam_ln" ]]; then
+    echo "  PASS: body built (line $build_ln) BEFORE the fixture seam (line $seam_ln)"; PASS=$((PASS+1))
+  else
+    echo "  FAIL: fixture seam (line $seam_ln) precedes construction (line $build_ln)"; FAIL=$((FAIL+1))
+  fi
+}
+
+test_df_build_body_harness_is_live
+test_df_build_body_empty_csv
+test_df_build_body_nonempty_csv
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

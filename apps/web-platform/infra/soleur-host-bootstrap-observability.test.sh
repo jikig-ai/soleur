@@ -28,7 +28,6 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOOT="$DIR/soleur-host-bootstrap.sh"
 CI="$DIR/cloud-init.yml"
-WF="$DIR/../../../.github/workflows/apply-web-platform-infra.yml"
 
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
@@ -204,60 +203,27 @@ else
   ok "AC7: cloud-init.yml carries only soleur-boot-emit CALL sites (no duplicated body)"
 fi
 
-# ── AC8 (lockstep, byte-equality): every emit message is a substring of the WF QUERY ──
-QUERY_LINE=$(grep -nE "^\s*QUERY='" "$WF" | head -1 | cut -d: -f1 || true)
-if [ -z "$QUERY_LINE" ]; then
-  no "AC8: could not locate the QUERY line in $WF"
-else
-  QUERY=$(sed -n "${QUERY_LINE}p" "$WF")
-  # The four canonical emit messages the query must surface (boot-death path).
-  for msg in \
-    "soleur-hostscript-seed failed" \
-    "soleur-host-bootstrap failed" \
-    "soleur-host-bootstrap complete" \
-    "soleur-cloud-init boot stage"; do
-    if printf '%s' "$QUERY" | grep -qF -- "$msg"; then
-      ok "AC8: QUERY includes message \"$msg\""
-    else
-      no "AC8: workflow QUERY missing message \"$msg\" (lockstep drift re-opens the blind spot)"
-    fi
-  done
-  # Bidirectional lockstep: each of the FOUR query literals must actually be emitted at its
-  # source site (a rename of ANY emit — new OR legacy — would leave the QUERY listing a dead
-  # string that matches nothing → dark query, uncaught). Covers both new and pre-existing.
-  for pair in \
-    "soleur-hostscript-seed failed:$CI" \
-    "soleur-host-bootstrap failed:$BOOT" \
-    "soleur-host-bootstrap complete:$BOOT" \
-    "soleur-cloud-init boot stage:$BOOT"; do
-    msg="${pair%%:*}"; src="${pair##*:}"
-    if grep -qF -- "$msg" "$src"; then
-      ok "AC8: message \"$msg\" is emitted in $(basename "$src")"
-    else
-      no "AC8: message \"$msg\" not found in $(basename "$src") (query would match nothing)"
-    fi
-  done
-fi
-
-# ── AC8b (EU data plane + always-run breadcrumb surface) ──
-# The auto Sentry-read must hit the EU host (project is jikigai-eu / de.sentry.io);
-# a US sentry.io query against an EU project returns empty.
-if grep -qE 'https://de\.sentry\.io/api/0/projects/' "$WF"; then
-  ok "AC8b: recreate workflow queries the EU Sentry host (de.sentry.io)"
-else
-  no "AC8b: workflow Sentry endpoint must be de.sentry.io (EU) — a US host returns empty"
-fi
-if grep -qE 'https://sentry\.io/api/0/projects/' "$WF"; then
-  no "AC8b: workflow must NOT query the US sentry.io host (EU-resident project)"
-else
-  ok "AC8b: no US sentry.io endpoint remains"
-fi
-# The breadcrumb-trail surface must run on success too (green boot must show the probe fired).
-if awk '/Surface fresh-host Sentry/{f=1} f&&/if: always\(\)/{print "y"; exit}' "$WF" | grep -q y; then
-  ok "AC8b: fresh-host Sentry surface runs if: always() (green boot shows the probe fired)"
-else
-  no "AC8b: the Sentry surface step must be if: always() (spec-flow F4)"
-fi
+# ── CAPABILITY LOST 2026-07-20 (#6575) — carried forward, not dropped ──────────
+# AC8 / AC8b / AC13 / AC14 / AC16 asserted against the `web_2_recreate` job in
+# apply-web-platform-infra.yml. That job was deleted with the web-2 dispatch sweep,
+# and it was the ONLY consumer of $WF in this file — so those five assertions had no
+# subject left and were removed rather than left to pass vacuously.
+#
+# What they enforced was NEVER web-2-specific, and is NOT re-implemented anywhere yet:
+#   AC14  `SENTRY_DSN` must be non-empty in Doppler prd_terraform BEFORE a host is
+#         created. The pre-extraction boot stages depend SOLELY on the baked
+#         ${sentry_dsn} (doppler is not installed yet, so its fallback is dead), so an
+#         empty DSN means a fresh host boots DARK — no telemetry, no page, no signal.
+#   AC8/AC8b/AC13/AC16  the fresh-host Sentry surfacing step: EU host (de.sentry.io),
+#         `if: always()`, token from Doppler, client-side regex filter (the events
+#         endpoint ignores `message:` queries and returns 0).
+#
+# There is no surviving automated host-create path to move them to — every route
+# HALTs, and building one is #6730's scope. So the requirement is carried in two
+# places instead: the operator pinned-image chain in the host_creates HALT, and
+# ADR-128, which makes both a MUST for #6730's birth path. Re-add assertions here
+# the moment that path exists.
+# ------------------------------------------------------------------------------
 
 # ── AC8c (transport parity for the BAKED emitter) ──
 # The DSN-parse + store-endpoint transport now exists in THREE copies inside bootstrap.sh:
@@ -338,24 +304,6 @@ for st in doppler_dl docker_apt docker_restart; do
   fi
 done
 
-# ── AC13 (#6090 follow-up): the recreate auto-read sources its Sentry token from Doppler ──
-# The GitHub repo secret SENTRY_AUTH_TOKEN is unset, so the surface step self-skipped. It must
-# now fetch the token (+org+project) from Doppler prd_terraform like every other step in the job.
-if grep -qE 'doppler secrets get SENTRY_AUTH_TOKEN .*-c prd_terraform' "$WF"; then
-  ok "AC13: surface step resolves SENTRY_AUTH_TOKEN from Doppler prd_terraform (not the unset repo secret)"
-else
-  no "AC13: the fresh-host Sentry surface step must fetch SENTRY_AUTH_TOKEN via doppler -c prd_terraform"
-fi
-
-# ── AC14 (#6090 P2-1): the recreate asserts the baked DSN is non-empty before -replace ──
-# The pre-extraction fresh-boot stages depend SOLELY on the baked ${sentry_dsn} (doppler isn't
-# installed yet, so its fallback is dead). An empty SENTRY_DSN (var.sentry_dsn's TF default) would
-# silently re-open the zero-emit blind spot. The recreate must fail loudly, not boot dark.
-if grep -qE 'SENTRY_DSN is empty in Doppler prd_terraform' "$WF"; then
-  ok "AC14: web-2-recreate asserts baked SENTRY_DSN non-empty before -replace (pre-extraction can't go dark)"
-else
-  no "AC14: the recreate must assert SENTRY_DSN is non-empty before -replace (empty baked DSN = silent pre-extraction blind spot)"
-fi
 
 # ── AC15 (#6090): earliest bootcmd beacon + runcmd_start breadcrumb bracket a pre-runcmd death ──
 # recreate 28812931362 (on the merged pre-extraction fix) was STILL fully dark — web-2 emits
@@ -380,20 +328,6 @@ else
   no "AC15: _emit must be defined exactly once in cloud-init runcmd (found $n_emit_def)"
 fi
 
-# ── AC16 (#6090): the auto-read must NOT use the broken message: query ──
-# The /projects/../events/ endpoint ignores `message:"x"` search (returns 0 for events that exist).
-# The surface step must derive a client-side regex from QUERY and filter fetched events, NOT pass
-# `query=${QUERY}` to the endpoint.
-if grep -qF 'query=${QUERY}' "$WF"; then
-  no "AC16: surface step still passes the broken message: query to the events endpoint (returns 0)"
-else
-  ok "AC16: surface step no longer passes the broken message: query to the endpoint"
-fi
-if grep -qF 'MSG_RE=' "$WF" && grep -qF 'test($re)' "$WF"; then
-  ok "AC16: surface step filters recent events client-side via a regex derived from QUERY"
-else
-  no "AC16: surface step must derive MSG_RE from QUERY and filter events client-side (test(\$re))"
-fi
 
 # ── AC17 (#6090): package install moved from the opaque config phase into instrumented runcmd ──
 # recreate 28819237402 localized web-2's death to the packages:/config phase (bootcmd_start fired,

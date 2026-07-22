@@ -3,6 +3,10 @@ name: qa
 description: "This skill should be used when running functional QA before merge."
 ---
 
+<!-- lifecycle-handoff-protocol:start -->
+**Lifecycle handoff (standalone `/qa`):** When no parent orchestrator (`one-shot`, `work`) owns the pipeline, invoke `/compound` then `/ship` after the QA report — do not end at the report. A PASS is a checkpoint, not completion. If a recorded operator ruling already authorizes shipping (a scope ruling in `session-state.md`, an explicit instruction), proceed under `wg-verified-work-ships-without-asking` rather than pausing to re-confirm — held scope that was never implemented has no files to carry along and is not a reason to halt.
+<!-- lifecycle-handoff-protocol:end -->
+
 # Functional QA
 
 Verify that features actually work before merge -- not just that pages render, but that forms submit correctly, external services receive the right data, and data integrity holds across system boundaries.
@@ -43,11 +47,11 @@ Before executing any browser scenarios, check whether the dev server is reachabl
 
 2. **Detect the dev command:** Read `apps/web-platform/package.json` and extract the `scripts.dev` field. If no `dev` script exists, warn: "No dev script found in package.json — cannot auto-start server. Skipping browser scenarios." Continue to API verification steps (do not block the pipeline).
 
-3. **Start the server:** Change to the `apps/web-platform/` directory first (the dev command must run from the app root). Check if Doppler is available (`command -v doppler`). If available, start via `doppler run -p soleur -c dev -- <dev-command> > /tmp/qa-dev-server.log 2>&1 &`. If Doppler is unavailable, start via `<dev-command> > /tmp/qa-dev-server.log 2>&1 &`. Record the background PID.
+3. **Start the server:** Change to the `apps/web-platform/` directory first (the dev command must run from the app root). Check if Doppler is available (`command -v doppler`). If available, start via `doppler run -p soleur -c dev -- <dev-command> > "$QA_LOG" 2>&1 &` (after `QA_LOG=$(mktemp -t qa-dev-server.XXXXXXXX.log)`). If Doppler is unavailable, start via `<dev-command> > "$QA_LOG" 2>&1 &`. Record the background PID **and echo `QA_LOG=$QA_LOG`** — a later Bash call does not inherit the variable, so the path must be recoverable from the transcript. A fixed name would collide with any concurrent QA session.
 
 4. **Poll for readiness (30s timeout):** Poll `http://localhost:3000/` until it responds or 30 seconds have elapsed, whichever comes first. If the server responds, proceed to Step 2. If the timeout elapses:
    - Kill the background process by PID
-   - Include the last 20 lines of `/tmp/qa-dev-server.log` in the failure report
+   - Include the last 20 lines of `"$QA_LOG"` in the failure report
    - Report: "Dev server failed to start within 30s. See server output above."
    - Continue to API verification steps (do not block the pipeline)
 
@@ -79,7 +83,7 @@ This is the gate's semantic home. Run it when the diff (`git diff --name-only or
 
 ```bash
 cd apps/web-platform
-npx playwright install chromium >/tmp/qa-pw-install.log 2>&1 \
+npx playwright install chromium >"$(mktemp -t qa-pw-install.XXXXXXXX.log)" 2>&1 \
   || PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 npx playwright install chromium
 ```
 
@@ -158,7 +162,7 @@ After outputting the result (pass or fail), always proceed to Step 5.5 for clean
 
 ### Step 5.5: Cleanup Dev Server
 
-If the dev server was started in Step 1.5 (a background PID was recorded), kill the process by PID, remove `/tmp/qa-dev-server.log`, and report: "Stopped auto-started dev server (PID <pid>)." If the server was already running before QA (no PID recorded), do nothing.
+If the dev server was started in Step 1.5 (a background PID was recorded), kill the process by PID, remove `$QA_LOG` (the path echoed when the server started), and report: "Stopped auto-started dev server (PID <pid>)." If the server was already running before QA (no PID recorded), do nothing.
 
 This step runs regardless of whether scenarios passed or failed.
 

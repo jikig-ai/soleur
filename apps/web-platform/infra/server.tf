@@ -246,6 +246,17 @@ resource "hcloud_server" "web" {
     # predicate binds to the wrong one. Same by-id + nofail shape as cloud-init-git-data.yml,
     # cloud-init-inngest.yml, cloud-init-registry.yml (web-platform was the lone glob holdout).
     workspaces_volume_id = hcloud_volume.workspaces[each.key].id
+    # #6441 — the address the first-boot NIC gate waits on, before `cloudflared service
+    # install` registers this host as the tunnel's sole connector (ADR-114 I1). Single-sourced
+    # from var.web_hosts per ADR-115's single-definition doctrine: a hardcoded literal in
+    # cloud-init.yml would drift silently from variables.tf on a subnet renumber, and the gate
+    # would then wait out its whole budget on an address that will never appear.
+    #
+    # NOT sourced from /etc/default/web-private-nic-guard: that file is written by an SSH
+    # provisioner (below) which reaches RUNNING hosts only, so on the fresh boot this gate
+    # exists for it does not yet exist. Reusing it would work on web-1 today and fail silently
+    # on any future host — the worst failure shape.
+    private_ip = each.value.private_ip
   }))
 
   # cloud-init and ssh_keys are create-time attributes. After import,
@@ -266,7 +277,7 @@ resource "hcloud_server" "web" {
   #
   # HARD GATE (ADR-068 §(c), the LB-weight gate) — the deferred cutover orchestrator
   # must NOT remove this entry or shift web-2's Cloudflare LB weight above 0 until the
-  # programmatic gate apps/web-platform/infra/lb-weight-gate.sh exits 0 AND its separate
+  # programmatic gate (DELETED 2026-07-20 with #6575 — see ADR-068 §(c) CORRECTION; nothing checks this today, and it MUST be rebuilt before any second web host is pooled) exits 0 AND its separate
   # runtime-bind probe passes: (1) owner-side relay active (SOLEUR_PROXY_BIND /
   # SOLEUR_PROXY_PEER_ALLOWLIST / SOLEUR_HOST_ROSTER), AND (2) git-data store cut over
   # (GIT_DATA_STORE_ENABLED==true + LUKS soak marker). Pooling web-2 before both = a
@@ -413,6 +424,195 @@ resource "terraform_data" "container_restart_monitor_install" {
   }
 }
 
+# --- #6438/#6548: web-host private-net consumer-probe + §3 NIC-guard delivery (web-1) ----------
+# TERMINOLOGY (#6538 reconciliation, CPO C3): "unrebuildable" below means web-1 cannot be rebuilt
+# by any AUTOMATED path. It does NOT contradict #6538, whose table lists
+# `soleur-web-platform / cx33 / hel1 / rebuildable_in_place_today: YES` — that column is about the
+# host's LOCATION being viable (web-2 was NO only because it sat in fsn1), not about a CI route
+# existing. Both are true: an operator-local full `terraform apply` would succeed, and no
+# CI/dispatch route reaches it. As of #6718 every automated route that can reach
+# hcloud_server.web HALTs on host_creates > 0 — enumerated: apply-web-platform-infra.yml's
+# `apply` (#6416), workspaces_luks_cutover (gate requires zero actions on the web-1
+# server), and apply-deploy-pipeline-fix.yml (#6718). The warm_standby and
+# web_2_recreate routes were REMOVED with the web-2 dispatch sweep (#6575,
+# 2026-07-20), so the enumeration is three, not five. Scope: WEB hosts — inngest_host legitimately births a
+# host and is unaffected. The gap is tracked by #6730 (it violates
+# hr-fresh-host-provisioning-reachable-from-terraform-apply).
+#
+# The SSH terraform_data provisioner is the SOLE path that arms web-1 (see the terminology note
+# above — "unrebuildable" here means no AUTOMATED path, not a stock constraint):
+# ignore_changes=[user_data] (above) means cloud-init changes never reach it, and ci-deploy.sh
+# re-seed installs NO host systemd units (verified :2331-2355). cloud-init.yml bakes the SAME
+# scripts+units for FUTURE fresh hosts (#6459, A5). All three mirror disk_monitor_install (same
+# connection + trigger-hash shape); units ship as FILES because their doppler-wrapped ExecStart's
+# nested single-quotes do not survive a terraform inline heredoc (container_restart_monitor
+# precedent, :357). Shows "will be created" in CI drift reports — expected (#1409-class).
+#
+# The `systemctl enable --now web-*.timer` lines below are the ARMING CONSTRUCTS that
+# heartbeat-manifest.ts cites as executable feeder evidence (the parity guard greps them here).
+
+# §3 private-NIC self-report (detect+emit+alarm, NO reboot). Its liveness beat (web_nic_guard) is
+# pinged every healthy run so the SOLEUR_PRIVATE_NIC emitter is observable-when-healthy.
+resource "terraform_data" "private_nic_guard_install" {
+  # Reload Vector (Source 4 live on web-1) BEFORE (re)enabling the probe timers, so the first post-fix
+  # FATAL/canary line ships instead of waiting a timer tick (probe-first intent; #6438/#6548 review).
+  depends_on = [terraform_data.journald_persistent]
+
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/web-private-nic-guard.sh"),
+    file("${path.module}/web-private-nic-guard.service"),
+    file("${path.module}/web-private-nic-guard.timer"),
+    var.web_hosts["web-1"].private_ip,
+    local.betterstack_logs_ingest_url,
+    # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery of the new key
+    # into /etc/default/web-private-nic-guard. nonsensitive() on a one-way digest of the token
+    # reveals nothing while keeping triggers_replace readable in plan output (#6438/#6548).
+    nonsensitive(sha256(doppler_service_token.web_probes.key)),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/web-private-nic-guard.sh"
+    destination = "/usr/local/bin/web-private-nic-guard.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-private-nic-guard.service"
+    destination = "/etc/systemd/system/web-private-nic-guard.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-private-nic-guard.timer"
+    destination = "/etc/systemd/system/web-private-nic-guard.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/web-private-nic-guard.sh",
+      # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit are the two-fold fix for the
+      # unit-start failure: the root `doppler run` needs both to authenticate. No DOPPLER_CONFIG_DIR
+      # (root uses /root/.doppler, never /tmp/.doppler — the #6536 clash surface). VERSION_CHECK off
+      # matches every fleet doppler env file (avoids a per-fire egress version-check warning shipping
+      # to Source 4 as noise). #6438 §3.
+      # umask 0137 so the file is NEVER created world/group-readable — the env file now holds a live
+      # prd read token (before this fix it held only URL key-names). Closes the sub-ms TOCTOU window
+      # between create-at-default-umask and chmod (security review; precedent cloud-init-inngest.yml).
+      "( umask 0137 && printf 'EXPECTED_IP=%s\\nBETTERSTACK_INGEST_URL=%s\\nWEB_NIC_GUARD_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${var.web_hosts["web-1"].private_ip}' '${local.betterstack_logs_ingest_url}' 'WEB_NIC_GUARD_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-private-nic-guard )",
+      "chmod 600 /etc/default/web-private-nic-guard",
+      "systemctl daemon-reload",
+      "systemctl enable --now web-private-nic-guard.timer",
+      "systemctl list-timers web-private-nic-guard.timer --no-pager",
+    ]
+  }
+}
+
+# §1 zot consumer serviceability probe.
+resource "terraform_data" "zot_consumer_probe_install" {
+  # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first ordering).
+  depends_on = [terraform_data.journald_persistent]
+
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/web-zot-consumer-probe.sh"),
+    file("${path.module}/web-zot-consumer-probe.service"),
+    file("${path.module}/web-zot-consumer-probe.timer"),
+    local.registry_endpoint,
+    local.zot_probe_repo,
+    # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
+    nonsensitive(sha256(doppler_service_token.web_probes.key)),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/web-zot-consumer-probe.sh"
+    destination = "/usr/local/bin/web-zot-consumer-probe.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-zot-consumer-probe.service"
+    destination = "/etc/systemd/system/web-zot-consumer-probe.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-zot-consumer-probe.timer"
+    destination = "/etc/systemd/system/web-zot-consumer-probe.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/web-zot-consumer-probe.sh",
+      # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit are the two-fold unit-start
+      # fix — see the web-private-nic-guard install above. #6438 §1.
+      # umask 0137: never world/group-readable — the env file now holds a live prd read token (see nic-guard install).
+      "( umask 0137 && printf 'ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${local.registry_endpoint}' '${local.zot_probe_repo}' 'WEB_ZOT_CONSUMER_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-zot-consumer-probe )",
+      "chmod 600 /etc/default/web-zot-consumer-probe",
+      "systemctl daemon-reload",
+      "systemctl enable --now web-zot-consumer-probe.timer",
+      "systemctl list-timers web-zot-consumer-probe.timer --no-pager",
+    ]
+  }
+}
+
+# #6548 git-data reachability probe (fail-soft; arms the existing git_data_prd).
+resource "terraform_data" "git_data_probe_install" {
+  # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first ordering).
+  depends_on = [terraform_data.journald_persistent]
+
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/web-git-data-probe.sh"),
+    file("${path.module}/web-git-data-probe.service"),
+    file("${path.module}/web-git-data-probe.timer"),
+    # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
+    nonsensitive(sha256(doppler_service_token.web_probes.key)),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/web-git-data-probe.sh"
+    destination = "/usr/local/bin/web-git-data-probe.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-git-data-probe.service"
+    destination = "/etc/systemd/system/web-git-data-probe.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-git-data-probe.timer"
+    destination = "/etc/systemd/system/web-git-data-probe.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/web-git-data-probe.sh",
+      # GIT_DATA_ENDPOINT mirrors the git-data SSH transport (git-data.tf); the script also defaults
+      # to it. GIT_DATA_HEARTBEAT_URL is a SINGLE (non-for_each) secret, so the KEY is unsuffixed.
+      # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit are the two-fold unit-start
+      # fix — see the web-private-nic-guard install above. #6548.
+      # umask 0137: never world/group-readable — the env file now holds a live prd read token (see nic-guard install).
+      "( umask 0137 && printf 'GIT_DATA_ENDPOINT=%s\\nGIT_DATA_HEARTBEAT_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '10.0.1.20:22' 'GIT_DATA_HEARTBEAT_URL' '${doppler_service_token.web_probes.key}' > /etc/default/web-git-data-probe )",
+      "chmod 600 /etc/default/web-git-data-probe",
+      "systemctl daemon-reload",
+      "systemctl enable --now web-git-data-probe.timer",
+      "systemctl list-timers web-git-data-probe.timer --no-pager",
+    ]
+  }
+}
+
 # Deploy fail2ban sshd tuning drop-in to the existing server (issue #2654).
 # Caps bantime.increment recidivism at 1h so an operator typo against
 # AllowUsers does not snowball into a multi-hour (or multi-day) SSH lockout.
@@ -524,7 +724,15 @@ resource "terraform_data" "fail2ban_tuning" {
 # `connection reset by peer` here is admin-IP drift (fix: /soleur:admin-ip-refresh,
 # runbook admin-ip-drift.md), NOT an sshd/journald fault — per hr-ssh-diagnosis-verify-firewall.
 resource "terraform_data" "journald_persistent" {
-  triggers_replace = sha256(file("${path.module}/journald-soleur.conf"))
+  # Also hashes vector.toml so an edit to the Vector config (e.g. adding the web-host probe
+  # SyslogIdentifiers to Source 4) re-fires this provisioner and re-delivers + reloads Vector on
+  # the running web-1. web-1 installs Vector ONLY at cloud-init boot and never re-runs cloud-init
+  # (ignore_changes=[user_data]), so without this fold a vector.toml change is file-only, never live
+  # on the host — the exact gap that kept the 3 probe units' FATAL stderr off Better Stack. #6438/#6548.
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/journald-soleur.conf"),
+    file("${path.module}/vector.toml"),
+  ]))
 
   connection {
     type        = "ssh"
@@ -551,6 +759,14 @@ resource "terraform_data" "journald_persistent" {
   provisioner "file" {
     source      = "${path.module}/journald-soleur.conf"
     destination = "/etc/systemd/journald.conf.d/00-soleur.conf"
+  }
+
+  # #6438/#6548: stage the shared vector.toml (with the @@HOST_NAME@@ sentinel) so the remote-exec
+  # below can render THIS host's Better Stack host_name and re-deliver it to the running Vector
+  # agent. Same live-prod-only apply path as the journald drop-in above.
+  provisioner "file" {
+    source      = "${path.module}/vector.toml"
+    destination = "/tmp/soleur-vector.toml.staged"
   }
 
   provisioner "remote-exec" {
@@ -584,6 +800,34 @@ resource "terraform_data" "journald_persistent" {
       # has files under /var/log/journal. Volatile-only journals list /run paths.
       "journalctl --header | grep -q '/var/log/journal'",
       "test \"$(systemctl is-active systemd-journald)\" = 'active'",
+      # --- #6438/#6548: re-deliver vector.toml + reload the Vector agent on the running web-1 ------
+      # Render the @@HOST_NAME@@ sentinel to THIS host's TF-derived Better Stack host_name (the SAME
+      # value cloud-init passes as SOLEUR_HOST_NAME → soleur-host-bootstrap.sh; server.tf:237), write
+      # it to /etc/vector/vector.toml, and restart the agent so Source 4's new probe SyslogIdentifiers
+      # (web-zot-consumer-probe / web-git-data-probe / web-nic-guard) go live. Vector's journald
+      # sources read by sd_journal cursor and resume after a sub-second restart with no gap. The
+      # positive assertions below fail the apply loud if the probe tags did not land or the agent did
+      # not come back — never ship dead config (the fail2ban_tuning/journald positive-assert pattern).
+      "install -d -m 0755 /etc/vector /opt/soleur",
+      "sed 's|@@HOST_NAME@@|${hcloud_server.web["web-1"].name}|g' /tmp/soleur-vector.toml.staged > /opt/soleur/vector.toml",
+      # Render-sanity gate BEFORE we touch the live agent: a botched render (empty sed output,
+      # unsubstituted sentinel, missing sink) must fail the apply while the RUNNING vector stays up —
+      # a dead vector on web-1 darkens ALL host observability, a far bigger blast than the 3 probes.
+      # (A full `vector validate` is not used here: it would false-fail on the unset
+      # ${BETTERSTACK_LOGS_TOKEN} env interpolation — vector.service injects it via doppler run, this
+      # remote-exec has no such env. The committed vector.toml is already CI-validated TOML, and the
+      # only runtime transform is the @@HOST_NAME@@ string substitution.) #6438/#6548 review.
+      "test -s /opt/soleur/vector.toml",
+      "! grep -q '@@HOST_NAME@@' /opt/soleur/vector.toml",
+      "grep -q '\\[sinks.betterstack\\]' /opt/soleur/vector.toml",
+      "grep -q 'web-zot-consumer-probe' /opt/soleur/vector.toml",
+      "install -m 0644 /opt/soleur/vector.toml /etc/vector/vector.toml",
+      "rm -f /tmp/soleur-vector.toml.staged",
+      "systemctl restart vector.service",
+      "grep -q 'web-zot-consumer-probe' /etc/vector/vector.toml",
+      "grep -q 'web-git-data-probe' /etc/vector/vector.toml",
+      "grep -q 'web-nic-guard' /etc/vector/vector.toml",
+      "test \"$(systemctl is-active vector.service)\" = 'active'",
     ]
   }
 }

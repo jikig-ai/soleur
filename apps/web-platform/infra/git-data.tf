@@ -241,9 +241,13 @@ resource "hcloud_firewall_attachment" "git_data" {
 # expecting a ping within `grace`) and the first ping would fire a false alert.
 # Unpause via the Better Stack UI (or flip in a follow-up) once the probe ships.
 resource "betteruptime_heartbeat" "git_data_prd" {
-  name      = "soleur-git-data-prd"
-  period    = 60
-  grace     = 30
+  name   = "soleur-git-data-prd"
+  period = 60
+  # grace relaxed 30 → 180 (#6548 / #5274 PR C): git-data is fail-soft ("an OVERLAY, not a hard
+  # dependency", ensure-workspace-repo.ts:332), so a single transient reachability blip must NOT
+  # page. The web-host probe (web-git-data-probe.sh) pings on every reachable run; 180s of grace
+  # means paging fires only on a SUSTAINED (multi-window) break, not a one-off.
+  grace     = 180
   call      = false
   sms       = false
   email     = true

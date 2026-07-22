@@ -51,6 +51,11 @@ else
   gh auth status >/dev/null 2>&1 || { echo "ERROR: gh is not authenticated (run 'gh auth login')." >&2; exit 1; }
   # Two-stage gh --json | jq (never `gh --jq` with --arg — learning
   # 2026-04-15-gh-jq-does-not-forward-arg-to-jq).
+  #
+  # `--limit 200` is a LOAD-BEARING BOUND (#6736), not just a paging preference. It is
+  # the only cap on $PR_JSON, and $PR_JSON is by far the largest payload in this script:
+  # `statusCheckRollup` alone carries one object per check run per PR. Measured on this
+  # repo: 392,170 B at 20 open PRs, i.e. ~19.6 KB per PR.
   PR_JSON="$(gh pr list --state open --limit 200 \
     --json number,title,headRefName,isDraft,mergeable,reviewDecision,labels,author,createdAt,statusCheckRollup)"
 fi
@@ -59,6 +64,30 @@ fi
 # Emits a flat array of {number,title,author,mergeable,tier}. Failing/pending
 # check counts are derived from statusCheckRollup (conclusion for check-runs,
 # state for legacy statuses).
+#
+# ══ THE `<<<"$PR_JSON"` HERESTRING IS A LOAD-BEARING INVARIANT (#6736) ══
+#
+# $PR_JSON MUST reach jq via this herestring (or a pipe / file), and MUST NEVER be
+# bound as `--argjson pr_json "$PR_JSON"`. A herestring is delivered on jq's STDIN
+# through a pipe/tempfile and has no size limit; an --argjson binding makes it ONE argv
+# argument, and the kernel caps a SINGLE argv argument at MAX_ARG_STRLEN = 131,072 B —
+# verified by bisect on this host: 131,071 B passes, 131,072 B fails E2BIG. That is NOT
+# `getconf ARG_MAX` (2,097,152 B here); a payload at 6% of ARG_MAX still dies.
+#
+# This is NOT a bound that is eroding toward a future failure — it is ALREADY 3× over.
+# Measured on this repo: $PR_JSON is 392,170 B at 20 open PRs, 2.99 × MAX_ARG_STRLEN.
+# Converting this herestring to --argjson does not degrade drain-prs at some later PR
+# count; it breaks it on the next run, today, with `Argument list too long`. Even a
+# single mid-size PR would exceed the ceiling on its own at ~19.6 KB/PR by PR #7.
+#
+# The `--argjson prs "$CLASSIFIED"` binding further down is SAFE and deliberately left
+# alone: the projection above discards statusCheckRollup and keeps ~174 B/PR, measured
+# 3,484 B at 20 PRs (2.7% of the ceiling). $CLASSIFIED is the collapse; $PR_JSON is the
+# raw fan-out. Do not generalize from one to the other.
+#
+# Guarded by the argv-ceiling regression test in ../test/ — it drives this script with a
+# synthesized >MAX_ARG_STRLEN fixture and asserts the fixture really exceeds the ceiling,
+# so the test cannot silently degrade to vacuous.
 CLASSIFIED="$(jq '
   def fails: [ .statusCheckRollup[]? | (.conclusion // .state)
                | select(. == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT") ] | length;

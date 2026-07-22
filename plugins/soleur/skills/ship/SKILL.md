@@ -52,12 +52,31 @@ pwd
 **Trailer-parse verification gate (defense-in-depth for [hr-always-read-a-file-before-editing-it]).** For every commit on this branch since `origin/main`, parse any `Key: value`-shaped lines in the body and confirm `git interpret-trailers` recognises each as a trailer. The modal failure is a blank line between an `Allowlist-Widened-By:`/`Reviewed-by:`/`Signed-off-by:` line and `Co-Authored-By:`, which silently demotes the upstream trailer into body prose and breaks downstream consumers parsing via `git log --format='%(trailers:key=NAME,valueonly)'`:
 
 ```bash
+# Scan the WHOLE body, but only for KNOWN trailer keys.
+#
+# Two wrong ways to scope this, both tried:
+#   * Any `^Word: ` anywhere — flags ordinary prose ("Suites: 18/18",
+#     "Note: …", "Runbook: …"), so the gate fails on almost every
+#     well-written commit message. A gate that cannot pass gets routinely
+#     ignored, which is worse than no gate: it trains the reader to walk
+#     past red. Measured on PR #6727: 6 hits, all prose, while every
+#     intended trailer parsed fine.
+#   * Final paragraph only — VACUOUS for the exact class this gate exists
+#     to catch. The modal failure is a blank line BEFORE `Co-Authored-By:`,
+#     which leaves the orphaned trailer in the second-to-last paragraph
+#     while the final paragraph stays a clean parseable block. Verified
+#     vacuous against a synthetic demotion.
+#
+# The real signal is neither position nor shape: it is whether the key is
+# one a downstream consumer actually reads. Prose keys are not. Extend this
+# list when a new machine-read trailer is introduced.
+KNOWN_TRAILER_KEYS='Co-Authored-By|Signed-off-by|Allowlist-Widened-By|Reviewed-by|Reviewed-By-Soleur|Acked-by|Tested-by|Cc'
 RC=0
 for sha in $(git rev-list origin/main..HEAD); do
   BODY=$(git log -1 --format=%B "$sha")
   declare -a CANDIDATES=()
   while IFS= read -r line; do
-    [[ "$line" =~ ^([A-Z][A-Za-z-]+):[[:space:]] ]] && CANDIDATES+=("${BASH_REMATCH[1]}")
+    [[ "$line" =~ ^(${KNOWN_TRAILER_KEYS}):[[:space:]] ]] && CANDIDATES+=("${BASH_REMATCH[1]}")
   done <<< "$BODY"
   for key in "${CANDIDATES[@]}"; do
     val=$(git log -1 --format="%(trailers:key=${key},valueonly)" "$sha")
@@ -115,11 +134,38 @@ Check for evidence that `/review` ran on the current branch. This is defense-in-
 
 **Step 1: Check for review artifacts (legacy).**
 
-Search for todo files tagged as code-review findings:
+Search for todo files tagged as code-review findings **that this branch
+introduced** — refresh `origin/main` first, since the scoping is only as
+accurate as the cached ref:
 
 ```bash
-grep -rl "code-review" todos/ 2>/dev/null | head -1 || true
+if ! git fetch origin main >/dev/null 2>&1; then
+  echo "origin/main is stale — Signals 1-2 are unreliable; use Signal 3 only" >&2
+else
+  git log origin/main..HEAD -G'code-review' --name-only --format= -- todos/ 2>/dev/null \
+    | sort -u | while read -r f; do
+        git show "HEAD:$f" 2>/dev/null | grep -q "code-review" && echo "$f"
+      done | head -1
+fi
 ```
+
+This was a repo-global `grep -rl "code-review" todos/`, which made the signal
+structurally unfailable (#6724): `todos/` is a tracked directory on main, so a
+single long-lived review todo anywhere in it satisfied Step 1 for every branch
+forever — including branches where review never ran.
+
+Three details are load-bearing, each closing a narrower version of the same
+vacuity (all verified during #6727's review):
+
+- **Do not `|| true` the fetch.** A stale `origin/main` widens
+  `origin/main..HEAD` to include commits already on main, so main's review
+  history counts as this branch's. The hooks discard both local signals in that
+  case; do the same here rather than proceeding on a stale ref.
+- **`-G'code-review'` matches the DIFF, not the working tree.** Listing paths
+  and grepping them reads whatever the current checkout contains, so a branch
+  that merely touches a pre-existing main-side todo inherits main's tag.
+- **The `git show HEAD:` check.** `-G` matches added *or removed* lines, so
+  deleting a completed todo would otherwise count as evidence.
 
 **Step 2: Check commit history for review evidence.**
 
@@ -130,6 +176,19 @@ git log origin/main..HEAD --oneline | grep -E "(refactor: add code review findin
 ```
 
 The `^[a-f0-9]+ review:` alternative matches the new convention — `review: <summary> (P<N>)` commits produced when findings are fixed inline per `rf-review-finding-default-fix-inline`.
+
+If that returns nothing, check for the durable review trailer:
+
+```bash
+git log origin/main..HEAD --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' | grep '[^[:space:]]' || true
+```
+
+`Reviewed-By-Soleur:` is emitted by
+`plugins/soleur/skills/review/scripts/emit-review-trailer.sh` and is the **only**
+signal a zero-finding review can produce: review's own step 2 skips the artifact
+commit when there are no local changes, so a clean branch generates no todos and
+no `review:` commit. Before the trailer existed, the gate denied precisely those
+branches with no escape hatch (#6724).
 
 **Step 3: Check for GitHub issues with `code-review` label (current).**
 
@@ -150,16 +209,16 @@ gh pr list --head <branch-name> --state open --json number --jq '.[0].number // 
 Step 3c — if Step 3b returned a PR number, search for code-review issues referencing it:
 
 ```bash
-gh issue list --label code-review --search "PR #<number>" --limit 1 --json number --jq '.[0].number // empty'
+gh issue list --label code-review --state all --search "\"PR #<number>\"" --limit 1 --json number --jq '.[0].number // empty'
 ```
 
 If `gh` fails or is unavailable, treat as no output (fail open on Signal 3).
 
 **Note:** Three signals are checked, any one suffices:
 
-- Signal 1 (`todos/` grep): coupled to legacy review workflow (pre-#1329)
-- Signal 2 (commit message grep): matches legacy `refactor: add code review findings` OR new `review: <summary>` fix-inline commits (post-#2374)
-- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`). Expected to be empty under the new fix-inline default unless findings were scoped out — Signal 2 is the primary signal post-#2374.
+- Signal 1 (`todos/` grep, **branch-scoped**): coupled to legacy review workflow (pre-#1329). Scoped to paths this branch touched — the previous repo-global form could not fail (#6724)
+- Signal 2 (commit message grep **or `Reviewed-By-Soleur:` trailer**): matches legacy `refactor: add code review findings` OR `review: <summary>` fix-inline commits (post-#2374), OR the trailer emitted by `emit-review-trailer.sh`. The trailer is the primary signal post-#6724 and the only one a zero-finding review can produce
+- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`). Expected to be empty under the new fix-inline default unless findings were scoped out. **`--state all` + the quoted phrase are both deliberate (#6786), and this now matches `.claude/hooks/pre-merge-rebase.sh` exactly** — the hook is the fail-closed gate, and the two had silently disagreed. `--state all`: `gh issue list` defaults to open-only, but a review-origin issue filed and then RESOLVED (the fix-inline default closes them) is still valid evidence `/review` ran, so open-only discarded exactly the healthy case. The escaped quotes: without them `#123` tokenizes loosely and matches issues that never mentioned 123 (soleur/#2186) — and widening to `--state all` grows the candidate pool to the whole closed history, so the loose form would degrade toward always matching something. Note the gate attests review ran on **PR #N**, not on the current commits; a force-push after the fact still satisfies it (Signal 2's `Reviewed-By-Soleur:` trailer is the commit-scoped one).
 
 **If any step produced output:** Review evidence found. Continue to Phase 2.
 
@@ -324,7 +383,7 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 
 Defense-in-depth check that review ran before shipping. Phase 1.5 catches this earlier, but if context compaction erased Phase 1.5's check or the skill was invoked mid-flow, this gate is the second net.
 
-**Detection:** Check for review evidence using the same three signals described in Phase 1.5 (Signal 1: `todos/` grep, Signal 2: commit message grep, Signal 3: GitHub issues with `code-review` label). Run the same commands in the same order. See Phase 1.5 for full details and coupling notes.
+**Detection:** Check for review evidence using the same three signals described in Phase 1.5 (Signal 1: **branch-scoped** `todos/` grep, Signal 2: commit message grep **or the `Reviewed-By-Soleur:` trailer**, Signal 3: GitHub issues with `code-review` label). Run the same commands in the same order — including the `git fetch origin main` that precedes Signal 1, since both local signals are scoped to `origin/main..HEAD` and are only as accurate as the cached ref. See Phase 1.5 for full details and coupling notes.
 
 **If review evidence is found:** Pass silently.
 
@@ -415,79 +474,85 @@ findings were filed but never resolved before ship. This gate enforces the
 fix-inline default at the merge boundary. See rule
 `rf-review-finding-default-fix-inline`.
 
-### Net-Issue-Flow Surfacing (advisory)
+### Net-Issue-Flow Gate (blocking)
 
-Before queueing auto-merge, compute and display the per-PR net-issue-flow:
-how many issues this PR **closes** vs. how many `deferred-scope-out` issues
-it **files**. The display is advisory — it does NOT block merge — but it
-makes the backlog math visible at the last moment when the operator can
-still pivot a filed issue back to inline.
+Before queueing auto-merge, compute the per-PR net-issue-flow: how many issues
+this PR **closes** vs. how many issues it **files**. **`NET > 0` blocks
+PR-ready and merge.** Every PR must close at least as many issues as it files.
 
-**Why this surface exists.** PR #4452 introduced the cost-of-filing
-auto-flip and concrete-trigger rules; this metric is the observability
-layer that catches regressions in those rules. PRs #4418 and #4440 were on
-track to file 6 deferred-scope-out issues combined; the operator manually
-walked them back to 1 — but only because the math was visible during
-synthesis. Once outside review synthesis, the per-PR delta becomes
-invisible and the backlog accretes silently.
+**Why this gate exists.** PR #4452 introduced the cost-of-filing auto-flip and
+concrete-trigger rules; this metric was added as the observability layer that
+catches regressions in them. It ran **advisory for three months and did not
+work** — advisory output is trivially skipped, and it was skipped. Measured
+over the 7 days to 2026-07-20: 269 issues filed against 132 merged PRs (2.04
+per PR) and 125 closed, growing the queue +144/week to 1,024 open, with 63% of
+open issues older than 30 days. Shipping better does not help and shipping more
+makes it worse, because the dominant issue *source* is the self-checking
+apparatus itself — every gate, linter, probe and cron is software whose job is
+finding defects and which has defects of its own. Filing is free; closing is
+expensive. A surface that only *displays* that asymmetry does not correct it.
 
-**Detection:**
+**Threshold: `NET > 0`, not `NET > +1`.** At ~132 merged PRs/week a `+1`
+per-PR allowance authorizes +132 issues/week against the observed +144/week —
+roughly an 8% reduction, wearing the authority of a passing gate. `NET > 0` is
+the only threshold that flattens the queue.
+
+**Detection:** run the script — do not re-implement it inline.
 
 ```bash
-PR_NUMBER=$(gh pr view --json number --jq .number)
-[[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "Error: PR_NUMBER is not a positive integer: $PR_NUMBER"; exit 1; }
-
-# N: issues this PR closes via `Closes #X` / `Fixes #X` / `Resolves #X`.
-# Body-keyword detection matches /ship Phase 6 issue detection conventions.
-PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body)
-CLOSING=$(printf '%s\n' "$PR_BODY" \
-  | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' \
-  | grep -oE '#[0-9]+' \
-  | sort -u \
-  | wc -l)
-
-# M: deferred-scope-out issues opened AFTER the PR was created that cross-reference
-# this PR via `Ref|Closes|Fixes #<N>` in the body. The `created:>=<PR-opened-date>`
-# filter scopes the count to issues filed during THIS PR cycle (not pre-existing
-# scope-outs that merely cross-reference the PR for context). Matches Phase 5.5
-# detection regex.
-PR_CREATED_AT=$(gh pr view "$PR_NUMBER" --json createdAt --jq .createdAt | cut -c1-10)
-FILED=$(gh issue list \
-  --label deferred-scope-out \
-  --state open \
-  --search "created:>=${PR_CREATED_AT}" \
-  --json number,body \
-  --jq '[.[] | select((.body // "") | test("(^|\\s)(Ref|Closes|Fixes) #'"$PR_NUMBER"'(\\s|$|[^0-9])"))] | length')
-
-NET=$(( FILED - CLOSING ))
+bash plugins/soleur/skills/ship/scripts/net-issue-flow.sh "$PR_NUMBER"
 ```
 
-**Display (always emit, never block):**
+[`net-issue-flow.sh`](./scripts/net-issue-flow.sh) emits the
+CLOSING / FILED / NET block (enumerating the actual issue numbers behind each
+count), exits **1** when `NET > 0` with no override, and **0** otherwise.
+
+The FILED query deliberately does **not** use `--search`, does **not** filter by
+`--label deferred-scope-out`, uses `--state all`, passes `--limit 500`, and
+matches a bare `#N` with a numeric boundary. Each of those was independently
+measured: `--search` returns empty cross-repo under a GitHub App/action token;
+`gh issue list` defaults to 30 (measured 30 returned vs 271 real); the
+`(Ref|Closes|Fixes)` keyword form covers ~40% of real filings; the
+`deferred-scope-out` label covers ~8%. **Any one of them left in place makes a
+blocking gate silently always-pass** — strictly worse than the advisory surface
+it replaces, because it also carries the authority of having passed. Do not
+"simplify" the query without re-running
+[`plugins/soleur/test/net-issue-flow.test.sh`](../../test/net-issue-flow.test.sh);
+its 18 assertions pin all four, and the mutation battery in
+`specs/<branch>/mutation-evidence.md` proves each can fail.
+
+**Override (deliberate, not default).** Legitimate architectural-pivot
+deferrals can be net-positive and correct. To proceed net-positive, add to the
+PR body:
 
 ```text
-PR net-issue-flow:
-  Closing: <CLOSING> (extracted from `Closes #X` keywords in body)
-  Filing:  <FILED> (count of deferred-scope-out issues created during this PR cycle that Ref #<PR>)
-  Net:     <signed NET> (positive = backlog growth)
+<!-- gate-override: net-issue-flow -->
 ```
 
-**If `NET > 0`** (net-positive backlog growth), print a warning ABOVE the
-PR body in the ship checklist:
+plus **a one-line justification per filed issue**, or run with
+`SOLEUR_SKIP_NET_ISSUE_FLOW_GATE=1`. Both paths are announced in the output and
+recorded as telemetry — an override is a decision on the record, not a silent
+bypass.
 
-```text
-⚠ Net-positive backlog flow: this PR adds +<NET> issues to the deferred-scope-out queue.
-  Before merging, consider whether any of the <FILED> filed issues could be done inline instead.
-  Cost-of-filing gate: ≤30 lines AND ≤2 files → auto-flip to fix-inline (see
-  plugins/soleur/skills/review/SKILL.md "Mechanical pre-CONCUR auto-flip").
-```
+**Fail-open, not fail-silent.** A `gh`/API error exits 0 so an outage cannot
+wedge every merge, but each fail-open emits an `emit_incident … transient` row.
+A gate that fails open silently is indistinguishable from one that passes.
 
-The warning is advisory — it does NOT block auto-merge. The pipeline
-continues into Phase 6 immediately after emitting the warning. The point
-is to surface the math at the moment when the operator can still pivot,
-not to add a new merge-blocker (the Review-Findings Exit Gate above
-already covers the "unjustified filing" case).
+**Reachability (stated honestly).** The blocking enforcement is a PreToolUse
+hook on `gh pr ready` / `gh pr merge`. It therefore covers agent-driven merges
+only. It does **not** cover:
 
-**Why advisory (not blocking).** Advisory only — legitimate architectural-pivot deferrals can be net-positive and correct.
+| Merge surface | Covered? |
+|---|---|
+| `gh pr ready` / `gh pr merge` from an agent session | yes |
+| GitHub web UI merge button | no |
+| GitHub native auto-merge (queued before the gate runs) | no |
+| CI-driven merges (merge queue, bot merges) | no |
+
+Closing those would require a **required status check**, which is deliberately
+out of scope here: proposing a new CI gate inside the same change that drafts a
+gate-moratorium ADR would be self-undermining. The hook covers the dominant
+path; the residue is named rather than papered over.
 
 ### Pre-Ship Domain Review (conditional)
 
@@ -1202,7 +1267,8 @@ The PR body of THIS Soleur PR will typically contain `Closes #N` lines that ARE 
 **Grok Build pre-push gate (mandatory before `git push`).** When the harness is Grok (`GROK_HOME` / `GROK_AGENT`), run from repo root and inspect exit code explicitly (do not pipe through `tail`):
 
 ```bash
-bash plugins/soleur/scripts/grok-pre-push-gate.sh > /tmp/grok-pre-push-gate.log 2>&1; rc=$?; echo "EXIT=$rc"
+log=$(mktemp -t grok-pre-push-gate.XXXXXXXX.log)
+bash plugins/soleur/scripts/grok-pre-push-gate.sh > "$log" 2>&1; rc=$?; echo "EXIT=$rc LOG=$log"
 ```
 
 Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Pushing without it wastes CI cycles. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run this gate here even if Phase 4 test-all.sh already ran (Phase 4 is mid-pipeline; this gate is the push-time recheck).
@@ -1877,10 +1943,10 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    4. Paste run-URL + byte count + verbatim URLs into the closing comment
    ```
 
-   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `{ echo "..."; } > /tmp/follow-through-body.md`), then create the issue:
+   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `body=$(mktemp -t follow-through-body.XXXXXXXX.md); { echo "..."; } > "$body"`, then `echo "BODY=$body"` so the path survives into the later `--body-file` and precondition-gate calls — a separate Bash call does not inherit `$body`), then create the issue:
 
    ```bash
-   gh issue create --title "follow-through: <ITEM_DESCRIPTION>" --label "follow-through" --milestone "<MILESTONE>" --body-file /tmp/follow-through-body.md
+   gh issue create --title "follow-through: <ITEM_DESCRIPTION>" --label "follow-through" --milestone "<MILESTONE>" --body-file "$body"
    ```
 
    Replace `<ITEM_DESCRIPTION>` with the text after the ⏳ emoji (trimmed). Replace `<MILESTONE>` with the value from the roadmap or "Post-MVP / Later".
@@ -1969,7 +2035,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
          if ($i ~ /^secrets=/)  { sub(/^secrets=/, "", $i);  print "secrets "  $i }
        }
      }
-   ' /tmp/follow-through-body.md
+   ' "$body"
    ```
 
    Assert that:

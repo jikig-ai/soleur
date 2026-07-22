@@ -247,7 +247,19 @@ beforeEach(() => {
   fakeRequest.mockClear();
   setupWorkspaceSpy.mockResolvedValue({ ephemeralRoot: "/tmp/x", spawnCwd: "/tmp/x/repo" });
   resolveOutputAwareOkSpy.mockResolvedValue(true);
-  safeCommitAndPrSpy.mockResolvedValue({ ok: true });
+  // #6714 — union-valid SafeCommitResult. None of the 7 cohort handlers consume
+  // this return value today (only cron-community-monitor does, via its own
+  // suite), so `paths` is omitted: on this arm that reads as "not determined",
+  // which is exactly right for a cron with no artifact assertion. A bare
+  // `{ ok: true }` was never a member of the union and would silently read as
+  // `status !== "committed"` the moment any of these handlers starts checking.
+  safeCommitAndPrSpy.mockResolvedValue({
+    status: "committed" as const,
+    prNumber: 4242,
+    branch: "cron/cohort",
+    fileCount: 1,
+    deletionCount: 0,
+  });
   teardownSpy.mockResolvedValue(undefined);
   ensureAuditIssueSpy.mockResolvedValue(undefined);
   vi.stubEnv("SENTRY_INGEST_DOMAIN", "o4509.ingest.sentry.io");

@@ -138,10 +138,27 @@ if want_scripts; then
   run_suite "scripts/expenses-verify-by-check" bash scripts/expenses-verify-by-check.test.sh
   run_suite "scripts/sentry-issue" bash scripts/sentry-issue.test.sh
   run_suite "scripts/content-publisher" bash scripts/test-content-publisher.sh
+  # Registered by #6734. scripts/*.test.sh is NOT covered by any glob here (only
+  # scripts/lib/*.test.sh is), so each one must be named explicitly. The first four below
+  # had silently never run in any CI job; scripts/lint-orphan-test-suites.sh now fails
+  # when a scripts/*.test.sh is missing from this list.
+  # NOTE: "scripts/content-publisher" above is the LEGACY test-content-publisher.sh suite;
+  # the residue harness below is a different file (content-publisher.test.sh). Both run.
+  run_suite "scripts/content-publisher-residue" bash scripts/content-publisher.test.sh
+  run_suite "scripts/skill-freshness-aggregate" bash scripts/skill-freshness-aggregate.test.sh
+  run_suite "scripts/compound-promote" bash scripts/compound-promote.test.sh
+  run_suite "scripts/lint-trap-tempfile-ownership" bash scripts/lint-trap-tempfile-ownership.test.sh
+  run_suite "scripts/lint-orphan-test-suites" bash scripts/lint-orphan-test-suites.sh
+  run_suite "scripts/cron-artifact-age" bash scripts/cron-artifact-age.test.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
   run_suite "scripts/review-reminder-liveness" bash scripts/review-reminder-liveness.test.sh
   run_suite "scripts/zot-restart-loop-alarm" bash scripts/zot-restart-loop-alarm.test.sh
   run_suite "scripts/followthrough-exec-bit" bash scripts/followthrough-exec-bit.test.sh
+  # Was an ORPHAN until #6698 — the suite existed and passed locally but was
+  # registered in no runner, so it gated nothing (exactly the class the comment
+  # above warns about). It covers the sweeper's path-traversal/symlink rejection
+  # AND the closed-set reopen path.
+  run_suite "scripts/sweep-followthroughs" bash scripts/sweep-followthroughs.test.sh
   # #6462: exit-code harness for the zot soak's decision arms. Registered explicitly because
   # this runner enumerates suites by hand — an unregistered .test.sh is an ORPHAN that never
   # gates (the #5417 class). The soak authorizes an irreversible PAT revoke, so its arms
@@ -156,6 +173,13 @@ if want_scripts; then
   # #6475, and the probe's whole purpose is to be the fail-loud alarm, so a vacuous PASS (or a
   # false FAIL that pages a green codebase) must redden CI here.
   run_suite "scripts/ci-deploy-sentry-post-fail-6475" bash scripts/followthroughs/ci-deploy-sentry-post-fail-6475.test.sh
+  # #6297: exit-code harness for the Anthropic admin-key follow-through. Registered explicitly
+  # (orphan-suite class above). Its load-bearing arm is CONTAMINATION: GitHub webhook payloads
+  # ship into the same Better Stack source from the same app container, so a substring-matching
+  # probe could PASS on an echo of the PR/issue body that merely QUOTES the marker and auto-close
+  # #6297 while the key is still unminted. The suite mutation-proves that guard, so a regression
+  # to structural matching must redden CI rather than silently false-close a tracker.
+  run_suite "scripts/anthropic-admin-key-6297" bash scripts/followthroughs/anthropic-admin-key-6297.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
@@ -207,11 +231,13 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-counter-github" bash tests/scripts/test-destroy-guard-counter.sh
   run_suite "tests/scripts/destroy-guard-counter-sentry" bash tests/scripts/test-destroy-guard-counter-sentry.sh
   run_suite "tests/scripts/destroy-guard-counter-web-platform" bash tests/scripts/test-destroy-guard-counter-web-platform.sh
-  # web-2-recreate coherence preflight (AC10b) — drives the standalone preflight
+  # host image/apply coherence preflight (AC10b) — drives the standalone preflight
   # via its test seams (no docker/network/prod write). Registered here alongside
-  # the destroy-guard trio since it gates the same web-2-recreate dispatch.
-  run_suite "tests/scripts/web2-recreate-preflight" bash tests/scripts/test-web2-recreate-preflight.sh
-  # #6197: inngest-host-replace scoped-recreate destroy-guard (mirrors the web2-recreate gate).
+  # the destroy-guard trio: it is the host-agnostic coherence verifier the
+  # host_creates HALT's pinned-image chain names (#6575).
+  run_suite "tests/scripts/host-image-coherence-preflight" bash tests/scripts/test-host-image-coherence-preflight.sh
+  # #6197: inngest-host-replace scoped-recreate destroy-guard (same sourced-gate shape the
+  # web2-recreate gate used before #6575 deleted it).
   run_suite "tests/scripts/inngest-host-replace-gate" bash tests/scripts/test-inngest-host-replace-gate.sh
   # registry-host-replace scoped-recreate destroy-guard (5-target; preserves the zot store volume).
   run_suite "tests/scripts/registry-host-replace-gate" bash tests/scripts/test-registry-host-replace-gate.sh

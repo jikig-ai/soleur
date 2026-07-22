@@ -410,22 +410,32 @@ describe("feeder manifest — every arming claim is executable (#6537)", () => {
     expect(e.exempt_reason).toBeUndefined();
   });
 
-  test("git_data_prd is still unfed by BOTH delivery routes — the tripwire is live, not theoretical", () => {
-    // The sibling never-unpaused monitor. Passes today because the probe is genuinely unbuilt;
-    // when #5274 PR C ships it by EITHER route, this reds — on purpose.
-    for (const probe of feederDeliveryProbes("git_data_prd", "GIT_DATA_HEARTBEAT_URL")) {
-      expect(gitGrepCount(probe)).toBe(0);
+  test("git_data_prd is now FED by the web-host probe timer — the tripwire fired and was reconciled (#6548)", () => {
+    // Was the "still unfed by BOTH routes" tripwire. #5274 PR C (#6548) shipped web-git-data-probe.sh,
+    // which dereferences GIT_DATA_HEARTBEAT_URL — so the deref route now matches, EXACTLY the forcing
+    // function #6537 designed firing. The row is reconciled from {kind:"none"} to a timer feeder;
+    // assert the flip landed AND the deref route is genuinely live (the tripwire's inverse).
+    const e = MANIFEST.find((m) => m.name === "git_data_prd")!;
+    expect(e.feeder.kind).toBe("timer");
+    if (e.feeder.kind === "timer") {
+      expect(e.feeder.evidence.file).toBe("apps/web-platform/infra/server.tf");
+      expect(e.feeder.evidence.pattern).toBe("systemctl enable --now web-git-data-probe.timer");
     }
+    expect(gitGrepCount(/\$\{?GIT_DATA_HEARTBEAT_URL\}?/)).toBeGreaterThan(0);
   });
 
   test("the guard is DEREFERENCE- and BAKE-anchored, not name-anchored (the traps it replaces)", () => {
     // Trap 1 — name-anchored counting. A bare-name grep for GIT_DATA_HEARTBEAT_URL matches the
-    // secret's own `name =` definition and operator prose in a heredoc; NEITHER is a feeder. So a
-    // name-anchored guard reports a feeder that does not exist — the fiction being replaced.
-    // Assert the discriminator directly: bare name matches, dereference does not.
-    expect(gitGrepCount(/GIT_DATA_HEARTBEAT_URL/)).toBeGreaterThan(0);
-    expect(gitGrepCount(/\$\{?GIT_DATA_HEARTBEAT_URL\}?/)).toBe(0);
-    // Positive control: the one heartbeat that IS armed dereferences its URL for real.
+    // secret's own `name =` definition, the WEB_*_KEY indirection var names, and operator prose —
+    // none of which is a feeder. The deref grep matches only the real read. #5274 PR C (#6548)
+    // shipped the probe, so git_data is now FED: BOTH counts are > 0, but the bare-name count
+    // STRICTLY EXCEEDS the deref count — the extra hits are definitions/prose, exactly the
+    // over-counting a name-anchored guard would have mistaken for feeders.
+    const gitDataBareName = gitGrepCount(/GIT_DATA_HEARTBEAT_URL/);
+    const gitDataDeref = gitGrepCount(/\$\{?GIT_DATA_HEARTBEAT_URL\}?/);
+    expect(gitDataDeref).toBeGreaterThan(0); // the probe now dereferences it for real (#6548)
+    expect(gitDataBareName).toBeGreaterThan(gitDataDeref); // bare-name over-counts defs + prose
+    // Positive control: inngest also dereferences its URL for real.
     expect(gitGrepCount(/\$\{?INNGEST_HEARTBEAT_URL\}?/)).toBeGreaterThan(0);
 
     // Trap 2 — deref-only blindness. registry_prd's feeder BAKES its URL via templatefile and

@@ -17,6 +17,7 @@ import { Inngest } from "inngest";
 
 import { sentryCorrelationMiddleware } from "@/server/inngest/middleware/sentry-correlation";
 import { runLogMiddleware } from "@/server/inngest/middleware/run-log";
+import { boundLoggerMiddleware } from "@/server/inngest/middleware/bound-logger";
 
 const SIGNING_KEY = process.env.INNGEST_SIGNING_KEY;
 const EVENT_KEY = process.env.INNGEST_EVENT_KEY;
@@ -71,6 +72,18 @@ export const inngest = new Inngest({
   // EXPECTED_CRON_FUNCTIONS run to public.routine_runs (final-attempt-gated,
   // fail-soft). Ordered after sentry-correlation so a run-log write failure
   // still inherits the tagged Sentry scope.
-  middleware: [sentryCorrelationMiddleware, runLogMiddleware],
+  // bound-ctx-logger middleware (#6703) binds every function-valued property
+  // of ctx.logger so a detached reference (`const f = logger.info`) can never
+  // lose its receiver and throw `Cannot read properties of undefined (reading
+  // 'enabled')`. Registered LAST so it wraps the ctx the earlier middlewares
+  // have already finished composing. Deliberately NOT accompanied by a
+  // `logger:` option — inngest wraps whatever you pass in ProxyLogger
+  // regardless (Inngest.js:673), so wiring one would not fix the receiver loss,
+  // and it would turn INFO ctx-logs into JSON that vector.toml then drops.
+  middleware: [
+    sentryCorrelationMiddleware,
+    runLogMiddleware,
+    boundLoggerMiddleware,
+  ],
   ...(BASE_URL ? { baseUrl: BASE_URL } : {}),
 });

@@ -1,0 +1,29 @@
+[Unit]
+Description=Web-host private-NIC self-report (detect+emit+alarm, NO reboot; #6438 §3)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# HOME=/root: the ExecStart runs `doppler run` as ROOT (no User=). The Doppler CLI's
+# os.UserHomeDir() init dies "Doppler Error: $HOME is not defined" for a root systemd service
+# (which gets no $HOME) BEFORE it can exec the guard — the reason every working root-doppler unit
+# on the fleet (container-restart-monitor, cron-egress-*, inngest-cutover-flip) sets this. With
+# HOME=/root doppler uses /root/.doppler; the prd DOPPLER_TOKEN arrives via the EnvironmentFile
+# below (written by the *_install provisioner from doppler_service_token.web_probes). No
+# DOPPLER_CONFIG_DIR → never /tmp/.doppler (the #6536 clash surface). #6438/#6548.
+Environment=HOME=/root
+# SyslogIdentifier retags the unit's journal output away from the ExecStart basename `bash`
+# (systemd default) to a diagnostic-critical identifier shipped by vector.toml Source 4
+# (host_scripts_journald) — so the guard's fallback stderr (most importantly "SOLEUR_PRIVATE_NIC
+# egress to Better Stack Logs FAILED", the "the primary direct-curl channel is down" signal, plus
+# token/EXPECTED_IP-unset FATALs) reaches Better Stack off-box, not SSH-only
+# (hr-no-ssh-fallback-in-runbooks; the #6556 inngest-heartbeat lesson). Mirrored in vector.toml.
+SyslogIdentifier=web-nic-guard
+# /etc/default/web-private-nic-guard (baked per-host) carries EXPECTED_IP (the host's own private
+# address, never a literal — from var.web_hosts[each.key].private_ip), BETTERSTACK_INGEST_URL, and
+# WEB_NIC_GUARD_URL_KEY (the per-host Doppler var name). doppler run injects BETTERSTACK_LOGS_TOKEN
+# + WEB_NIC_GUARD_URL_<host>; bash indirect expansion resolves the host's liveness-beat URL under
+# the generic name the (host-agnostic) script reads. Shipped as a FILE (nested doppler quotes).
+EnvironmentFile=/etc/default/web-private-nic-guard
+ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\''export WEB_NIC_GUARD_URL="$${!WEB_NIC_GUARD_URL_KEY}"; exec /usr/local/bin/web-private-nic-guard.sh'\'''

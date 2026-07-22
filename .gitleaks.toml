@@ -280,19 +280,66 @@ tags = ["webhook", "slack"]
 [[rules]]
 id = "database-url-with-password"
 description = "Database connection URL with embedded password"
-regex = '''postgres(?:ql)?://[^:/\s]+:[^@/\s]+@[A-Za-z0-9.\-]+'''
-keywords = ["postgres://", "postgresql://"]
+# The password class spans to the LAST '@' (#6723). It was `[^@/\s]+`, which
+# stopped at the FIRST '@' — but every real URL parser takes userinfo to the
+# last one, so a password containing '@' left the rule matching only a
+# placeholder-looking prefix, which the allowlist below then silenced.
+# `/` stays excluded so a realistic DSN terminates at its `/dbname` path.
+regex = '''(?i)postgres(?:ql)?(?:\+[a-z0-9_]+)?://[^:/\s]+:[^/\s]+@[A-Za-z0-9.\-]+'''
+# Keyword prefilter runs BEFORE the regex, so it must be at least as permissive:
+# "postgres://" would suppress `postgresql+psycopg2://` however correct the regex.
+keywords = ["postgres"]
 tags = ["url", "database", "credential"]
   # Learnings path added per #3874 — mirrors the `private-key` rule's #3268 carve-out
   # for learnings that document credential-shape symptoms in recovery runbooks
   # (e.g., asterisk-redacted Doppler pooler URLs pasted from `doppler run` output).
   [[rules.allowlists]]
-  description = "Synthesized fixtures, test files, plan/spec/skill-reference docs, learning files (database-url-with-password only — see issue:#3874; mirrors private-key:#3268)"
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/lib/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/project/learnings/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''', '''plugins/soleur/skills/.*/test/fixtures/.*\.md$''']
+  description = "Synthesized fixtures, test files, plan/spec/skill-reference docs, learning files (database-url-with-password only — see issue:#3874; mirrors private-key:#3268). Plus the review SKILL.md carve-out — see issue:#6723."
+  # `^plugins/soleur/skills/review/SKILL\.md$` (#6723): that file documents this
+  # very bypass in prose (`<scheme>://user:pass@<realsecret>@host` — scheme
+  # elided so this comment is not itself a finding), so widening
+  # the rule to span to the last '@' made the file's own example a finding — on
+  # commit 48b8bc4a5, already on main. A line-level `# gitleaks:allow` CANNOT
+  # clear it: history scans read the old blob, which carries no waiver, so the
+  # only alternatives were a history rewrite or this path predicate (path
+  # predicates match identically across history). Verified: with this entry the
+  # full main-ancestry scan returns rc=0.
+  #
+  # The leading ^ and trailing $ are LOAD-BEARING. gitleaks matches path entries
+  # as a SEARCH against the scan-root-relative path, so unanchored, any parent
+  # directory launders a real DSN — measured: `evil/plugins/soleur/skills/review/
+  # SKILL.md` carrying a real credential was SILENCED without the anchor and is
+  # DETECTED with it.
+  #
+  # Scope cost, stated honestly: this blinds exactly ONE file to exactly ONE
+  # rule, and there is NO compensating control for a real DSN in that file.
+  # Checked rather than assumed: lint-fixture-content's file-set regex in
+  # secret-scan.yml does not match this path; CODEOWNERS is a `* @deruelle`
+  # catch-all, so the /.gitleaks.toml line adds nothing for this file's
+  # CONTENT; and "every other rule still applies" is true but vacuous, since
+  # no other rule matches a bare postgres DSN — which is why this rule exists.
+  # The blind spot is unmitigated, not mitigated-in-depth. Accepted because the
+  # finding is frozen in history and a path predicate is the only remedy (see
+  # above), and the file is skill prose. Pinned by T10.
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/lib/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/project/learnings/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''', '''plugins/soleur/skills/.*/test/fixtures/.*\.md$''', '''^plugins/soleur/skills/review/SKILL\.md$''']
   # Allow placeholder URLs (USER:PASSWORD shapes) AND asterisk-redacted shapes
   # (postgres://user:***@HOST) — `\*+` branch per #3877 recognizes the canonical
   # Doppler/psql/pooler-output redaction convention.
-  regexes = ['''postgres(?:ql)?://(?:USER|user|postgres|<[^>]+>):(?:PASSWORD|password|secret|<[^>]+>|\*+)@''']
+  #
+  # FULLY ANCHORED (^...$) per #6723. Allowlist `regexes` match the SECRET, and
+  # with no secretGroup the Secret is the whole rule match — so an unanchored
+  # entry is a SEARCH, and a placeholder prefix appearing ANYWHERE inside a real
+  # credential silenced the finding. The anchors make this entry mean "the WHOLE
+  # match is a placeholder" instead of "the match CONTAINS a placeholder".
+  #
+  # The bracket branches are `<[^>@:]+>`, NOT `<[^>]+>`. Now that the rule's
+  # password class permits '@' and ':', a bare `<[^>]+>` would let an entire real
+  # credential masquerade as a placeholder — measured: three shapes detected
+  # under the old config would be SILENCED by that form. Excluding '@' and ':'
+  # from the brackets keeps every legitimate placeholder quiet
+  # (<user>:<pw>, USER:PASSWORD, user:***, user:password) while closing it.
+  # Pinned by plugins/soleur/test/gitleaks-rules.test.sh T7b/T7c/T9.
+  regexes = ['''^(?i)postgres(?:ql)?(?:\+[a-z0-9_]+)?://(?:USER|user|postgres|<[^>@:]+>):(?:PASSWORD|password|secret|<[^>@:]+>|\*+)@[A-Za-z0-9.\-]+$''']
 
 # ---------------------------------------------------------------------------
 # 13. VAPID private key (web-push)

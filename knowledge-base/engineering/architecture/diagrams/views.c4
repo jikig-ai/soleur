@@ -11,7 +11,7 @@ views {
     include
       founder, emailSender, betaContact, contributor,
       platform, platform.webapp, platform.engine, platform.infra.supabase,
-      anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, ghcr, zotRegistry, betterstack, sentry, sigstore
+      anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, ghcr, zotRegistry, betterstack, sentry, sigstore, letsencrypt, publicResolvers
 
     style element.tag == #external {
       color muted

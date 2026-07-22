@@ -95,7 +95,7 @@ import { extractPdfText } from "./pdf-text-extract";
 import { FULL_TEXT_CAP_BYTES } from "./kb-document-resolver";
 import { applyPrefillGuard } from "./agent-prefill-guard";
 import { updateConversationFor } from "./conversation-writer";
-import { releaseSlot } from "./concurrency";
+import { releaseSlot, SLOT_STALENESS_THRESHOLD_SECONDS } from "./concurrency";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
   READ_TOOL_PDF_CAPABILITY_DIRECTIVE,
@@ -754,14 +754,15 @@ export function startInactivityTimer(): void {
  * — `last_active` is updated only by status writes, so a long tool-heavy
  * turn streaming partials without status writes would have stale
  * `last_active` and be falsely reaped. Slot heartbeats are refreshed every
- * 30 s by `ws-handler.ts` for the active conversation; their staleness is
- * the authoritative liveness signal.
+ * SLOT_HEARTBEAT_INTERVAL_MS (60 s as of the 2026-07-18 Disk-IO backoff) by
+ * `ws-handler.ts` for the active conversation; their staleness is the
+ * authoritative liveness signal.
  *
- * The 120 s staleness threshold matches the existing pg_cron sweep
- * (migration 029 line 219-225) so the two sweep mechanisms agree on a
- * single liveness threshold. The poll cadence (300 s as of the 2026-06-02
- * disk-IO remediation) is INTENTIONALLY decoupled from that threshold and
- * from the pg_cron sweep cadence — see STUCK_ACTIVE_CHECK_INTERVAL_MS below.
+ * The 240 s staleness threshold matches the pg_cron sweep (migration 133) so
+ * the sweep mechanisms agree on a single liveness threshold. The poll cadence
+ * (300 s as of the 2026-06-02 disk-IO remediation) is INTENTIONALLY decoupled
+ * from that threshold and from the pg_cron sweep cadence — see
+ * STUCK_ACTIVE_CHECK_INTERVAL_MS below.
  *
  * Per-row order: status flip → releaseSlot → abortSession.
  *   - Status flip first means the abort-branch in `startAgentSession`'s
@@ -778,22 +779,22 @@ export function startInactivityTimer(): void {
  * Returns the timer so callers can clear it (used by tests; production
  * server keeps the reference live for the lifetime of the process).
  */
-// THRESHOLD-COUPLING: 120 s appears in four places — keep them in sync.
-//   (1) migration 029 line ~131 (acquire_conversation_slot lazy sweep)
-//   (2) migration 029 line ~224 (pg_cron user_concurrency_slots_sweep)
-//   (3) migration 037 line ~39 (find_stuck_active_conversations default)
-//   (4) ws-handler.ts STALE_HEARTBEAT_THRESHOLD_SECONDS in
-//       tryLedgerDivergenceRecovery (May-6 #3354)
-// Changing this constant without updating those sites desyncs the sweep
-// mechanisms — one will reap rows the others consider live.
-const STUCK_ACTIVE_THRESHOLD_SECONDS = 120;
-// Widened 60s → 300s (2026-06-02 disk-IO remediation): this drives the
-// setInterval that calls `find_stuck_active_conversations` every tick — the #2
-// prod Supabase Disk-IO write consumer (760k ms / 38k calls over a 27-day
-// window). 300s cuts that RPC volume 5×. The 120s STUCK_ACTIVE_THRESHOLD_SECONDS
-// staleness window above is INDEPENDENT of poll cadence (it stays 120s on all
-// four co-locked sources listed above); worst-case reap latency rises 180s →
-// 420s, still far under any user expectation for this rare recovery path. See
+// THRESHOLD-COUPLING: the staleness threshold is the ONE shared const
+// SLOT_STALENESS_THRESHOLD_SECONDS (240 s, server/concurrency.ts), also consumed
+// by ws-handler.ts (ledger-divergence recovery + the cap-drift self-eviction +
+// sibling-snapshot-restore liveCutoff
+// gates) and mirrored in SQL by migration 133 (acquire_conversation_slot lazy
+// sweep, user_concurrency_slots_sweep pg_cron, find_stuck_active_conversations
+// default). Importing the shared symbol (rather than a local literal)
+// structurally prevents the sibling-site drift that historically false-reaped
+// live slots.
+// Widened 60s → 300s (2026-06-02 disk-IO remediation): STUCK_ACTIVE_CHECK_INTERVAL_MS
+// drives the setInterval that calls `find_stuck_active_conversations` every tick
+// — the #2 prod Supabase Disk-IO write consumer (760k ms / 38k calls over a
+// 27-day window). 300s cuts that RPC volume 5×. The staleness window
+// (SLOT_STALENESS_THRESHOLD_SECONDS) is INDEPENDENT of poll cadence; worst-case
+// reap latency rises with the widened threshold but stays far under any user
+// expectation for this rare recovery path. See
 // plan 2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 1.
 const STUCK_ACTIVE_CHECK_INTERVAL_MS = 300 * 1_000;
 
@@ -803,7 +804,7 @@ export function startStuckActiveReaper(): NodeJS.Timeout {
     try {
       const { data, error } = await supabase().rpc(
         "find_stuck_active_conversations",
-        { p_threshold_seconds: STUCK_ACTIVE_THRESHOLD_SECONDS },
+        { p_threshold_seconds: SLOT_STALENESS_THRESHOLD_SECONDS },
       );
       if (error) {
         log.error({ err: error }, "Stuck-active reaper RPC error");

@@ -154,6 +154,14 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-expenses-verify-by")).toBe(false);
   });
 
+  // #6657: cron-gh-pages-cert-reissue is an event-triggered live-infra
+  // remediation (no schedule, no git, no PR) — never Tier-2 deferred. Asserted
+  // here so the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS
+  // grows with a new event-triggered cron.
+  it("gh-pages-cert-reissue (#6657, event-triggered) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-gh-pages-cert-reissue")).toBe(false);
+  });
+
   // #5046 PR-2 Phase 2.C (AC-P2.12): the hook's relax-minimal (Task/Skill
   // allow) unblocks the two audit crons whose only denied construct was the
   // Task catch-all.

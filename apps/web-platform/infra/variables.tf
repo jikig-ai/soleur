@@ -221,13 +221,71 @@ variable "cf_api_token_zone_settings" {
 }
 
 variable "cf_api_token_rulesets" {
-  description = "Cloudflare API token narrowed to Cache Rules:Edit + Zone WAF:Edit + Single Redirect Rules:Edit + Transform Rules:Edit on soleur.ai, PLUS (post-#5092 widen) account-level Account Rulesets:Edit + Account Filter Lists:Edit for Bulk Redirects (cloudflare_ruleset/cloudflare_list resources across http_request_cache_settings, http_request_firewall_custom, http_request_dynamic_redirect, http_response_headers_transform, and account http_request_redirect phases; see cache.tf, bot-allowlist.tf, seo-rulesets.tf, and seo-bulk-redirects.tf)"
+  description = "Cloudflare API token narrowed to Cache Rules:Edit + Zone WAF:Edit + Single Redirect Rules:Edit + Transform Rules:Edit + Config Rules:Edit on soleur.ai, PLUS (post-#5092 widen) account-level Account Rulesets:Edit + Account Filter Lists:Edit for Bulk Redirects (cloudflare_ruleset/cloudflare_list resources across http_request_cache_settings, http_request_firewall_custom, http_request_dynamic_redirect, http_response_headers_transform, http_config_settings, and account http_request_redirect phases; see cache.tf, bot-allowlist.tf, seo-rulesets.tf, seo-bulk-redirects.tf, and seo-config-rules.tf). THIS DESCRIPTION IS THE SCOPE LEDGER — a new ruleset phase needs a matching permission here AND on the live token, or the apply 403s. Config Rules:Edit was APPENDED 2026-07-20 (#6755) and is live: the http_config_settings entrypoint probe went 403 -> 200 and the three retained-scope controls (dynamic_redirect, cache_settings, account rulesets) stayed 200, so nothing was replaced. The Cloudflare UI spells that permission `Config Rules`, NOT `Configuration Rules`. Verify any re-scope by live probe, never by the permission label — see ADR-130 for the four-probe set and for the widen-vs-mint decision test."
   type        = string
   sensitive   = true
 }
 
+# Gates the `import` block in seo-config-rules.tf. Production default is `true`.
+#
+# It exists solely because `mock_provider` does NOT mock `import` blocks —
+# Terraform performs the import read against the REAL provider even under
+# `terraform test`, so the credential-free leg in infra-validation.yml dies with
+# `Authentication error (10000)` before any of its own assertions run.
+# tests/web-hosts-eu-pin.tftest.hcl sets this `false` for that reason alone.
+#
+# At `false` the import block disappears and Terraform plans a CREATE against a
+# live, populated entrypoint. Because seo-config-rules.tf reproduces the adopted
+# rule verbatim, that create converges on the same two-rule end state rather
+# than dropping a rule — so this is a DRIFT-OVERWRITE hazard (any dashboard edit
+# diverging from the reproduction is silently overwritten), not the outage the
+# single-rule version of this resource would have caused. It is still wrong, and
+# it is invisible: the destroy-guard cannot see it either, because on a create
+# `change.before` is null so its `before.rules - after.rules` count goes
+# negative and is filtered out.
+#
+# Two things hold the line, neither of them this default alone:
+#   - test/seo-config-rules.test.ts pins the default AND pins that the import
+#     block's `for_each` actually consumes this variable (pinning only the
+#     default was insufficient: `for_each = toset([])` left the whole suite
+#     green while silently disabling the import);
+#   - the adopted rule is reproduced in config and pinned by two tests, which is
+#     what downgrades a flip from rule-loss to drift-overwrite.
+#
+# Not covered: `-var`, `*.auto.tfvars`, or `TF_VAR_adopt_seo_config_entrypoint`
+# — and the apply runs under `doppler run --name-transformer tf-var`, so a
+# Doppler secret named ADOPT_SEO_CONFIG_ENTRYPOINT would override this silently.
+# No such secret exists; recorded because it is the fail-open shape, not a live
+# misconfiguration.
+variable "adopt_seo_config_entrypoint" {
+  type    = bool
+  default = true
+}
+
 variable "cf_api_token_bot_management" {
   description = "Cloudflare API token narrowed to Bot Management:Edit on soleur.ai (cloudflare_bot_management resource; see bot-management.tf)"
+  type        = string
+  sensitive   = true
+}
+
+# No default: an unprovisioned no-default var fails the WHOLE merge-triggered apply (Terraform
+# resolves all root vars before -target pruning), so CF_API_TOKEN_R2 MUST be provisioned into
+# Doppler prd_terraform BEFORE this merges (ADR-065 sequencing). Scope: Workers R2 Storage:Edit
+# only (no API Tokens:Edit — no cloudflare_api_token resource is minted; the S3 creds are a
+# separately-minted R2 API Token written to prd_workspaces_luks). See workspaces-luks-header.tf.
+variable "cf_api_token_r2" {
+  description = "Cloudflare API token narrowed to Workers R2 Storage:Edit (cloudflare_r2_bucket.workspaces_luks_header; see workspaces-luks-header.tf and main.tf provider alias cloudflare.r2) — #6649/#6604"
+  type        = string
+  sensitive   = true
+}
+
+# No default: an unprovisioned no-default var fails the WHOLE merge-triggered apply
+# (Terraform resolves all root vars before -target pruning), so CF_API_TOKEN_DNS_EDIT MUST
+# be present in Doppler prd_terraform BEFORE this merges (ADR-065 sequencing — it already is).
+# Operator-minted, NOT a cloudflare_api_token resource: var.cf_api_token lacks "User API
+# Tokens: Edit" so a mint 403s (CF error 9109). See cf-cert-reissue-token.tf header.
+variable "cf_api_token_dns_edit" {
+  description = "Cloudflare API token narrowed to Zone.DNS:Edit on soleur.ai ONLY — read by the cron-gh-pages-cert-reissue runtime as CF_API_TOKEN_DNS_EDIT to flip apex+www proxied for GH Pages cert validation (#6657). Operator-minted in the CF dashboard (named 'Edit zone DNS'); value from Doppler prd_terraform via TF_VAR_cf_api_token_dns_edit, republished to prd by doppler_secret.cf_api_token_dns_edit. No default (hr-tf-variable-no-operator-mint-default)."
   type        = string
   sensitive   = true
 }
@@ -293,7 +351,7 @@ variable "doppler_token" {
 }
 
 variable "sentry_dsn" {
-  description = "Sentry DSN baked into cloud-init so the fresh-boot fatal emit fires WITHOUT depending on doppler (which may itself be the broken stage). Semi-public (already in the client bundle). Injected via TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN; empty default keeps bare `terraform validate` working. NOTE: the doppler fallback only applies AFTER doppler is installed — the pre-extraction fresh-boot stages (pkg_audit/doppler_dl, #6090) depend SOLELY on this baked value, so an empty DSN there silently reverts to a zero-emit abort. The web-2-recreate job's 'Extract backend credentials' step asserts this is non-empty before -replace so that coverage cannot regress unnoticed."
+  description = "Sentry DSN baked into cloud-init so the fresh-boot fatal emit fires WITHOUT depending on doppler (which may itself be the broken stage). Semi-public (already in the client bundle). Injected via TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN; empty default keeps bare `terraform validate` working. NOTE: the doppler fallback only applies AFTER doppler is installed — the pre-extraction fresh-boot stages (pkg_audit/doppler_dl, #6090) depend SOLELY on this baked value, so an empty DSN there silently reverts to a zero-emit abort. NOTHING ENFORCES THIS TODAY (#6575, 2026-07-20): the web-2-recreate job's 'Extract backend credentials' step used to assert non-empty before -replace, and it was deleted with the web-2 dispatch sweep. The operator pinned-image chain in the host_creates HALT now carries the check as an explicit step, and ADR-128 makes it a MUST for the #6730 birth path. Until that path exists, an empty DSN here means a fresh host boots dark."
   type        = string
   default     = ""
   sensitive   = true
@@ -397,8 +455,38 @@ variable "ghcr_read_token" {
 # operand — the string "false" coerces to boolean false, so the rollback route
 # `TF_VAR_web_colocate_inngest="false"` gates OFF correctly (and a non-bool string fails
 # closed at plan time). Pinning `type = bool` keeps the variable-boundary contract explicit.
+#
+# SOLEUR-DEBT: turning this back on RE-ARMS AN UNPINNED, ROOT-EXECUTED OCI PULL.
+#   what: cloud-init.yml's inngest runcmd execs the pulled payload as root, and its zot arm
+#         fetches over plain HTTP. Unlike the dedicated host (cloud-init-inngest.yml:390) its
+#         $IREF is TAG-pinned only — no @sha256 digest — so a mutated tag is a root RCE on the
+#         sole live web origin. This was found by the #6617 security review and DECLINED, not
+#         missed.
+#   why:  no user_data budget. Re-measured 2026-07-19 at branch HEAD with the model in
+#         plugins/soleur/test/cloud-init-user-data-size.test.ts (gzip -9 + base64 of the
+#         rendered template — the test's own model, explicitly NOT byte-exact vs terraform's
+#         Go zlib; #5887's terraform plan is the byte-exact truth):
+#           origin/main, as-is .......................... 22,372 B (78 B under the 22,450 cap)
+#           + 2 @sha256 digest pins, no added comment ... 22,456 B (6 B OVER — FAILS)
+#         So the pin does not fit, but by 6 B, not the 14 B recorded in 761243954, and main's
+#         headroom is 78 B, not the ~11 B that commit reported. Do not re-cite 761243954's
+#         absolute figures; its baseline no longer reproduces. Its VERDICT (pin does not fit)
+#         is confirmed. Entropy is the dominant term and the reason this is so tight: the same
+#         two pins with a low-entropy placeholder digest measure 22,404 B (PASSES) — a 52 B
+#         swing from digest randomness alone, so any budget experiment MUST use a real-entropy
+#         sha256 or it will falsely conclude the pin fits.
+#         The trade was: the arm is DORMANT (this variable defaults false post-ADR-100), so it
+#         is a non-exposure today, while user_data is a hard 32 KB Hetzner cap on the live web
+#         host's boot path. Spending a scarce hard resource to pin dead code is the wrong side
+#         of that trade — but ONLY while it stays dead.
+#   trigger: flipping this to true. Do NOT do so without first digest-pinning cloud-init.yml's
+#         $IREF, which means first freeing user_data budget (bake the logic into the OCI image
+#         per the #5921 pattern rather than raising the cap — see
+#         plugins/soleur/test/cloud-init-user-data-size.test.ts).
+#   rationale: git show 761243954 (original measurement table; absolutes superseded above).
+#
 variable "web_colocate_inngest" {
-  description = "When true, a freshly-created web host bootstraps + enables the co-located inngest-server.service (pre-cutover). Default false: scheduling lives on the dedicated soleur-inngest host (10.0.1.40, ADR-100, #6178). Recreate is the quiesce mechanism (hr-prod-host-config-change-immutable-redeploy)."
+  description = "When true, a freshly-created web host bootstraps + enables the co-located inngest-server.service (pre-cutover). Default false: scheduling lives on the dedicated soleur-inngest host (10.0.1.40, ADR-100, #6178). Recreate is the quiesce mechanism (hr-prod-host-config-change-immutable-redeploy). SOLEUR-DEBT: enabling this re-arms an unpinned root-executed OCI pull — see the comment above."
   type        = bool
   default     = false
 }

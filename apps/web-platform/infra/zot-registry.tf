@@ -495,26 +495,13 @@ resource "betteruptime_heartbeat" "registry_prd" {
   }
 }
 
-# Heartbeat URL → Doppler prd. Mirrors doppler_secret.git_data_heartbeat_url_prd.
-#
-# #6537: this previously claimed the URL was here "so the (Phase-3/soak) web-host probe cron can
-# read it" — the second false forward reference to a cron that was never written, on the same
-# resource as the first.
-#
-# It has ZERO consumers today, and that is expected rather than dead code: the on-host feeder that
-# actually arms registry_prd bakes the URL through `templatefile` (liveness_heartbeat_url), the same
-# way disk_heartbeat_url is delivered — no Doppler read, so no empty-variable failure mode (#4116).
-#
-# This secret is reserved for the OFF-HOST consumer-perspective probe (#6438 §1), which would run on
-# the web host and therefore cannot read the registry's user_data. If #6438 is resolved without one,
-# delete this secret rather than leaving it to accumulate another false forward reference.
-resource "doppler_secret" "zot_heartbeat_url_prd" {
-  project    = "soleur"
-  config     = "prd"
-  name       = "ZOT_HEARTBEAT_URL"
-  value      = betteruptime_heartbeat.registry_prd.url
-  visibility = "masked"
-}
+# NOTE (#6438 B3): doppler_secret.zot_heartbeat_url_prd (ZOT_HEARTBEAT_URL) was DELETED here. It was
+# a reservation for the OFF-HOST consumer-perspective probe (#6438 §1) that never existed, and its
+# own comment prescribed deleting it once #6438 resolved. #6438 is now resolved by the WEB-HOST
+# consumer probe, which mints its OWN per-host heartbeat + URL secret (betteruptime_heartbeat.
+# web_zot_consumer / doppler_secret.web_zot_consumer_url in web-probe.tf) — the registry's own
+# registry_prd beat is the registry's self-view, not the consumer's. Removing the reserved secret is
+# the single expected `-target`ed destroy on this apply (AC5).
 
 # --- Disk-capacity guard (#6122 follow-up) --------------------------------------------------
 # A SECOND heartbeat, distinct from the liveness beat above: the registry host's cron pings it

@@ -108,8 +108,12 @@ jobs:
       # exports the ssh invocation into the environment; the cutover script reads
       # it via GIT_DATA_SSH / WEB_HOST_SSH and holds no key material itself.
       - name: CF Tunnel SSH bridge
-        # Needed for any host-touching run: a real cutover OR a rollback recovery.
-        if: ${{ !inputs.dry_run || inputs.rollback }}
+        # Needed on EVERY invocation (dry-run, real cutover, rollback): main() runs
+        # prepare_luks_target + preconditions + bulk_rsync — all of which SSH to the
+        # git-data/web hosts — BEFORE the first DRY_RUN gate (acquire_freeze), so a
+        # dry-run rehearsal is host-touching and needs the bridge. A dry_run guard here
+        # (mis-copied from an assumption that dry-run is host-free) would leave the bridge
+        # un-set on the rehearsal path → SSH timeout (sibling of workspaces-luks run 29644526137).
         uses: ./.github/actions/cf-tunnel-ssh-bridge
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN }}

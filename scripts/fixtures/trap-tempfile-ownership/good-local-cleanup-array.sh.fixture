@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+_TMPFILES=()
+trap '((${#_TMPFILES[@]} > 0)) && rm -f "${_TMPFILES[@]}"' EXIT
+scratch_run() {
+  local _TMPFILES=()
+  local f
+  f=$(mktemp)
+  _TMPFILES+=("$f")
+  rm -f "${_TMPFILES[@]}"
+}
+out=$(scratch_run)
+echo "$out"

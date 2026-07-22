@@ -160,6 +160,53 @@ _rm_errno() {
   esac
 }
 
+# classify_lock_node <path> — prints "<type> <is_mp>" for <path> to stdout, where
+# <type> is symlink/chardevice/mount/dir/regular/other, and returns 0; or returns
+# 1 with no output if <path> is absent. Single source of truth for the type-precedence
+# check (symlink FIRST because -e/-f/-d all dereference symlinks; char-device
+# BEFORE mountpoint BEFORE dir BEFORE regular — a bound /dev/null is BOTH -c and
+# a mountpoint, and a mountpoint is also a dir) shared by BOTH
+# sweep_stale_git_locks and _config_lock_wedged (#6186 — the two used to run
+# independent, disagreeing checks: a bind-mounted REGULAR config.lock passes
+# _config_lock_wedged's own `-f` test as "regular"/not-wedged, while the sweep's
+# mountpoint check classified the SAME node "mount"/non-regular-lock).
+#
+# Output contract: ONE line, two space-separated fields — `<type> <is_mp>` where
+# <is_mp> is "true"/"false" — so a caller needing the mountpoint flag (the
+# sweep's `mount=` attribute) doesn't recompute `stat -c%m`. The flag is part of
+# STDOUT, deliberately NOT a global: every call site is a command substitution
+# (`ftype=$(classify_lock_node …)`), which runs the function in a SUBSHELL, so a
+# global assignment here is discarded on subshell exit and the parent reads it
+# unset — fatal under this script's `set -u`. Callers split with `read -r`.
+# GNU-only stat, consistent with the rest of this file.
+classify_lock_node() {
+  local path="$1" rp is_mp=false
+  if [[ -L "$path" ]]; then
+    echo "symlink $is_mp"
+    return 0
+  fi
+  [[ -e "$path" ]] || return 1
+  # `stat -c%m` prints the file's mount root; == its own realpath iff the path
+  # IS a mountpoint. (Do NOT use bare `findmnt -T`: it exits 0 + prints the
+  # containing-fs SOURCE for every existing path and never yields "none".)
+  rp=$(realpath -- "$path" 2>/dev/null) || rp=""
+  if [[ -n "$rp" && "$(stat -c%m -- "$rp" 2>/dev/null)" == "$rp" ]]; then
+    is_mp=true
+  fi
+  if [[ -c "$path" ]]; then
+    echo "chardevice $is_mp"
+  elif [[ "$is_mp" == true ]]; then
+    echo "mount $is_mp"
+  elif [[ -d "$path" ]]; then
+    echo "dir $is_mp"
+  elif [[ -f "$path" ]]; then
+    echo "regular $is_mp"
+  else
+    echo "other $is_mp"
+  fi
+  return 0
+}
+
 # Instrument + self-heal the stale git config-write locks that wedge worktree
 # creation (e.g., the 2026-07-01 seccomp outage killed git under `unshare` EPERM,
 # leaving `.git/config.lock` on the mounted volume; every later `git config` write
@@ -191,7 +238,7 @@ sweep_stale_git_locks() {
   local threshold="${2:-60}"   # seconds
   [[ -d "$git_dir" ]] || return 0
   local now lock path mtime age swept=0 unremovable=0
-  local ftype owner perms mount rp rm_err rm_rc rdev whiteout is_mp
+  local ftype owner perms mount rm_err rm_rc rdev whiteout is_mp classify_out
   now=$(date +%s)
   # Scope: ONLY the config-write locks (`config.lock`, `config.worktree.lock`) —
   # the confirmed EEXIST wedge that blocks ensure_bare_config's writes below.
@@ -203,42 +250,14 @@ sweep_stale_git_locks() {
   # different failure class (a wedged checkout/rebase) with a larger blast radius.
   for lock in config.lock config.worktree.lock; do
     path="$git_dir/$lock"
-    is_mp=false   # reset at loop scope beside rdev/mount/whiteout — never let a
-                  # prior iteration's mountpoint verdict leak into this one.
-    # Type precedence is load-bearing: -L (symlink) FIRST because -e/-f/-d all
-    # dereference symlinks; mountpoint BEFORE -d because a mountpoint is also a dir.
-    if [[ -L "$path" ]]; then
-      ftype=symlink
-    elif [[ -e "$path" ]]; then
-      rp=$(realpath -- "$path" 2>/dev/null) || rp=""
-      # `stat -c%m` prints the file's mount root; == its own realpath iff the path
-      # IS a mountpoint. (Do NOT use bare `findmnt -T`: it exits 0 + prints the
-      # containing-fs SOURCE for every existing path and never yields "none".)
-      # Computed ONCE here (is_mp was reset at loop scope above) and reused for both
-      # the `mount` classification and the char-device `mount=` attribute (a bound
-      # /dev/null is BOTH -c and a mountpoint).
-      if [[ -n "$rp" && "$(stat -c%m -- "$rp" 2>/dev/null)" == "$rp" ]]; then is_mp=true; fi
-      # Character-device FIRST — the confirmed #5934 substrate wedge signature. A
-      # masked config.lock is a char-special inode: either a bound /dev/null (rdev
-      # 1:3, ALSO a mountpoint) or a real mknod/overlay-whiteout node (whiteout ⇒
-      # rdev 0:0). git's open(O_CREAT|O_EXCL) EEXISTs against ANY pre-existing inode.
-      # Typed `chardevice` (NOT `mount`) so the rdev discriminator stays on the DIAG
-      # line; is_mp is preserved in `mount=` so the privileged Phase-2 sweep knows
-      # whether it must umount before rm.
-      if [[ -c "$path" ]]; then
-        ftype=chardevice
-      elif [[ "$is_mp" == true ]]; then
-        ftype=mount
-      elif [[ -d "$path" ]]; then
-        ftype=dir
-      elif [[ -f "$path" ]]; then
-        ftype=regular
-      else
-        ftype=other
-      fi
-    else
+    # Node classification is unified in classify_lock_node() (#6186, shared with
+    # _config_lock_wedged) so both detectors agree on every node type. It emits
+    # "<type> <is_mp>" on one line; split both fields out of the SAME call so the
+    # mountpoint flag survives the command substitution's subshell.
+    if ! classify_out=$(classify_lock_node "$path"); then
       continue   # missing: nothing present to diagnose
     fi
+    read -r ftype is_mp <<<"$classify_out"
 
     owner=$(stat -c '%u:%g' -- "$path" 2>/dev/null) || owner=unknown
     perms=$(stat -c '%a' -- "$path" 2>/dev/null) || perms=unknown
@@ -333,14 +352,17 @@ sweep_stale_git_locks() {
 # non-regular lock is never a legitimate in-flight writer and blocks every native
 # `git config` write with EEXIST. An ABSENT or REGULAR lock is NOT wedged (rc 1):
 # git's native writer either succeeds or legitimately blocks on a real concurrent
-# writer. Mirrors the type precedence in sweep_stale_git_locks (symlink first —
-# -e/-f dereference symlinks).
+# writer. Delegates to classify_lock_node() (#6186) — the SAME precedence
+# sweep_stale_git_locks uses — so a bind-mounted REGULAR lock (a mountpoint that
+# also passes a bare `-f` test) is classified `mount`, not `regular`, in BOTH
+# detectors; before this unification a duplicated `-f`-only check here read that
+# node as regular/not-wedged while the sweep flagged it non-regular-lock.
 _config_lock_wedged() {
-  local lock="$1.lock"
-  if [[ -L "$lock" ]]; then return 0; fi     # symlink -> non-regular -> wedged
-  if [[ ! -e "$lock" ]]; then return 1; fi   # absent -> not wedged
-  if [[ -f "$lock" ]]; then return 1; fi     # regular -> real/handled, not the wedge
-  return 0                                    # dir / mount / char-device / other -> wedged
+  local lock="$1.lock" classify_out ftype
+  classify_out=$(classify_lock_node "$lock") || return 1  # absent -> not wedged
+  read -r ftype _ <<<"$classify_out"                      # field 2 (is_mp) unused here
+  [[ "$ftype" == "regular" ]] && return 1                 # regular -> real/handled, not the wedge
+  return 0                                                # symlink/chardevice/mount/dir/other -> wedged
 }
 
 # _config_target_masked <path> — rc 0 (MASKED) iff the RENAME TARGET itself is a

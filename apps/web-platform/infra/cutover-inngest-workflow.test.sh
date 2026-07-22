@@ -421,7 +421,79 @@ assert "#6552 delete is UNCONDITIONAL — NOT nested in the armed|flipping|flush
 assert "#6552 after-inner-esac tail is non-vacuous" "[[ '$TAIL_N' -gt 3 ]]"
 assert "#6552 delete runs in the unconditional Half-B tail (after inner esac) — reached for aborted/unset/re-dispatch" "grep -qE 'doppler secrets delete INNGEST_HEARTBEAT_URL' '$TAIL_FILE'"
 
-rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE"
+# ===========================================================================
+# #6617 — standalone read-only probe ops (registry-probe, doublefire-probe)
+#
+# These exist so double-scheduler state is provable BEFORE the maintenance
+# window. Previously the only route to the registry signal was op=execute,
+# which then proceeds to capture + quiesce.
+#
+# Anchoring is LOAD-BEARING: `registry-probe` already appears many times as
+# the hook NAME `inngest-registry-probe`, so an unanchored grep false-passes
+# against a file where the op was never added. Every assertion below anchors
+# on the enum-item shape (`^  - <op>$`) or the case-arm shape (`^  <op>)`),
+# neither of which the hook name can produce.
+# ===========================================================================
+PROBE_ARMS_FILE="$(mktemp)"
+awk '/^[[:space:]]+registry-probe\)$/,/^[[:space:]]+rearm\)$/' "$WF" > "$PROBE_ARMS_FILE"
+PROBE_ARMS_N=$(wc -l < "$PROBE_ARMS_FILE" | tr -d '[:space:]')
+
+assert "#6617 choice includes registry-probe" "grep -qE '^[[:space:]]+-[[:space:]]*registry-probe\$' '$WF'"
+assert "#6617 choice includes doublefire-probe" "grep -qE '^[[:space:]]+-[[:space:]]*doublefire-probe\$' '$WF'"
+assert "#6617 registry-probe case arm exists" "grep -qE '^[[:space:]]+registry-probe\)' '$WF'"
+assert "#6617 doublefire-probe case arm exists" "grep -qE '^[[:space:]]+doublefire-probe\)' '$WF'"
+assert "#6617 probe-arm extraction is non-vacuous" "[[ '$PROBE_ARMS_N' -gt 20 ]]"
+
+# --- Read-only contract, expressed as EFFECTS not curl SPELLING (B-AC5) ---
+#
+# An earlier revision asserted absence of specific TOKENS. Each pinned one
+# spelling, so all of these survived with the suite fully green:
+#   wget --post-data=...          (a different tool entirely)
+#   doppler --project X ...       (an interposed flag breaks the token adjacency)
+#   while [ $n -lt 3 ]            (a different loop keyword)
+#   PAYLOAD=<the JSON capture form the workflow ACTUALLY uses> — the bare
+#     mode=capture token occurs ONLY in comments, so that assertion could never
+#     have fired: vacuous by construction.
+# The contract is "these arms cause no side effects", so assert that directly —
+# a WHITELIST of permitted network calls, plus denials of egress tools and of
+# any request-body flag.
+
+# 1. Exactly two network calls, both bounded GET curls. Counting the whitelist
+#    AND the total tool invocations together means an added call of ANY shape
+#    fails one of them: not-a-bounded-GET, or an extra tool.
+assert "#6617 probe arms make exactly 2 network/tool calls" "[[ \"\$(grep -cE '(^|[^a-z-])(curl|wget|nc|ncat|socat|python3?|perl|gh|aws|doppler|hcloud)[[:space:]]' '$PROBE_ARMS_FILE')\" == '2' ]]"
+assert "#6617 both are curl -X GET" "[[ \"\$(grep -c -- '-X GET' '$PROBE_ARMS_FILE')\" == '2' ]]"
+assert "#6617 both are bounded (--max-time)" "[[ \"\$(grep -c -- '--max-time' '$PROBE_ARMS_FILE')\" == '2' ]]"
+
+# 2. No request body, by any tool or flag spelling.
+assert "#6617 probe arms send NO request body" "! grep -qE '(^|[[:space:]])(-d|--data|--data-binary|--data-raw|--data-urlencode|--post-data|--post-file|-T|--upload-file)([[:space:]]|=)' '$PROBE_ARMS_FILE'"
+assert "#6617 probe arms use NO non-GET method flag" "! grep -qE '(-X|--request)[[:space:]]*(POST|PUT|PATCH|DELETE)' '$PROBE_ARMS_FILE'"
+
+# 3. No mutating tool present at all, whatever its flag order.
+assert "#6617 probe arms invoke NO doppler at all" "! grep -qE '(^|[^a-z-])doppler([[:space:]]|\$)' '$PROBE_ARMS_FILE'"
+assert "#6617 probe arms invoke NO wget/nc/socat egress" "! grep -qE '(^|[^a-z-])(wget|ncat|socat)([[:space:]]|\$)' '$PROBE_ARMS_FILE'"
+
+# 4. No cutover-state transition — matching the JSON form the workflow uses,
+#    not the bare token that only ever appears in prose.
+assert "#6617 probe arms perform NO reminder capture" "! grep -qE '\"mode\"[[:space:]]*:[[:space:]]*\"capture\"|mode=capture' '$PROBE_ARMS_FILE'"
+assert "#6617 probe arms perform NO deploy-hook write" "! grep -qE 'hooks/deploy' '$PROBE_ARMS_FILE'"
+assert "#6617 probe arms touch NO flip/quiesce/rearm hook" "! grep -qE 'inngest-(arm|flip|quiesce|rearm|wiped)' '$PROBE_ARMS_FILE'"
+
+# --- Single-shot: no retry loop, whatever the keyword (B-AC4) ---
+# Anchored at LINE START: a loop keyword only ever begins a statement there.
+# The unanchored form matched the word "for" inside this arm's own comments —
+# the same comment-vs-code collision cq-assert-anchor-not-bare-token warns about.
+assert "#6617 probe arms add NO retry loop" "! grep -qE '^[[:space:]]*(for|while|until)[[:space:]]' '$PROBE_ARMS_FILE'"
+
+# --- No reviewer-gate widening (B-AC3). The environment: expression must stay
+# byte-identical; both new ops fall through to '' (no approval gate). ---
+assert "#6617 environment: expression unchanged (no gate widening)" "grep -qFx \"    environment: \\\${{ (inputs.op == 'arm' || inputs.op == 'rollback') && 'inngest-cutover' || '' }}\" '$WF'"
+assert "#6617 neither probe op appears in the environment: expression" "! grep -E '^[[:space:]]+environment:' '$WF' | grep -qE 'registry-probe|doublefire-probe'"
+
+# --- Scope caveat carried verbatim from op=verify 2.6 (B-AC7) ---
+assert "#6617 doublefire-probe carries the 2.6 scope caveat" "grep -qF 'NOT a web-2 double-fire detector' '$PROBE_ARMS_FILE'"
+
+rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" "$PROBE_ARMS_FILE"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

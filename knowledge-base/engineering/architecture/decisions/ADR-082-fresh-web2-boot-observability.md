@@ -1,6 +1,55 @@
+---
+adr: ADR-082
+title: Fresh web-2 boot observability + supply-chain hardening contract
+status: superseded-in-part
+date: 2026-07-03
+superseded_by: [ADR-128]
+---
+
 # ADR-082: Fresh web-2 boot observability + supply-chain hardening contract
 
-- **Status:** Adopting
+> **Status: superseded-in-part by [ADR-128](./ADR-128-coherence-two-invariants.md) (2026-07-20, #6575).**
+> This ADR's entire subject is **web-2**, which was retired 2026-07-17 (#6538/#6463). `var.web_hosts`
+> is single-host; every "fresh web-2 boot" premise below is historical. What is superseded is the
+> **web-2 scoping**, not the controls — three of the five items have a live disposition:
+>
+> **Remains IN FORCE.** *Item 3* (fresh-host post-container egress-enforcement probe) — shipped, baked,
+> host-generic, and it executes at boot on **any** fresh web host. *Item 5* (web-host Vector log
+> shipping + terminal-block boot-emit trap + `pull_failure` `host_id`) — the terminal-block trap is
+> now web-1's **sole no-SSH boot page**, retained deliberately (ADR-128 §Consequences).
+>
+> **Remains IN FORCE but UNMET — owned by #6730.** *Item 4* (image digest pin + signature
+> verification). The **running-host** half shipped (`ci-deploy.sh` cosign verify, WARN). The
+> **fresh-host** half did **not**: nothing pins `var.image_name`, which still defaults to the mutable
+> `ghcr.io/jikig-ai/soleur-web-platform:latest`, and the boot path performs **no** signature
+> verification — `server.tf`'s own threat-model comment says so. **Do not record Item 4 as
+> discharged.** It is the enforcement arm of ADR-128's *cross-commit skew* invariant, and #6730's
+> digest-pinned birth path is what would meet it.
+>
+> **Dies with the retire.** *Item 1* (per-host uptime absence detector) — its subject host is gone and
+> the #5933 per-host probe was already retired; the app.soleur.ai probe fully covers the single-host
+> fleet. *Item 2* (A-record drain on boot failure) — there is no second origin to drain to; a
+> round-robin/LB drain rides #6459, not this ADR. *Item 5's web-2-specific clauses* — see the two
+> corrections below.
+>
+> **Two claims below are FALSIFIED by the retire and are corrected here rather than edited away:**
+>
+> 1. **`:52-53`** — *"the SOLE page for a dead web-2 warm standby"*. The alert
+>    (`sentry_issue_alert.web_terminal_boot_fatal`) filters on `stage` and **never on host**, so it
+>    was never web-2-specific. Post-retire it is the sole no-SSH boot page for **web-1**. The same
+>    false framing was encoded in that resource's Terraform comment and is corrected there in the
+>    same change. The alert itself is host-generic and survives unchanged — deleting it as "web-2
+>    surface" would have removed live coverage for the only web host.
+> 2. **`:45-46`** — Item 5's Vector log shipping described as *"Half-met at ship (web-2 only)"*. With
+>    web-2 retired the only host that ever met it no longer exists, so post-retire Item 5's log-shipping
+>    clause is **0%-met**: web-1 still ships `host_name=soleur-inngest-prd` and gets correct per-host
+>    attribution only at its next recreate (#6616). "Half-met" now reads as more coverage than exists.
+>
+> Read the web-2 provisioning framing below as historical. For the coherence invariants that replaced
+> Item 4's framing, and for the retention rule governing which verifiers survived the sweep, see
+> ADR-128.
+
+- **Status:** superseded-in-part (was: Adopting)
 - **Date:** 2026-07-03
 - **Deciders:** one-shot pipeline (plan + work), CPO threshold carried from ADR-080 (single-user-incident substrate)
 - **Relates to:** #5933 (this contract); #5921 / ADR-080 (fresh-host bake-and-extract boot path — the surface these controls observe); **#5274 Phase 3.D** (the operator web-2 provisioning cutover these are prerequisites of — `dns.tf:4`); #5887 (a `moved`-block CI fix that RED-blocked the auto-apply; **now CLOSED/merged** — Item 1's original deferral reason, see amendment below); #5046 (container egress firewall — the enforcement Item 3 proves); ADR-068 (multi-host web cluster); **ADR-100 / #6396** (Item 5 — the inngest cutover defaulted `web_colocate_inngest=false`, dropping the co-located web-host Vector path; #6396 re-adds it independently + the terminal-block trap + pull-failure host_id)

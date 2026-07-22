@@ -97,6 +97,15 @@ const READ_ONLY_PROBES = [
 // the cron-tier2-parity sibling-set sweep sees this dependent acknowledged when
 // EXPECTED_CRON_FUNCTIONS grows with a new dispatch-hybrid cron.
 
+// #6657: cron-gh-pages-cert-reissue is a fifth class — an EVENT-TRIGGERED
+// live-infra remediation. It flips CF DNS proxy state + re-orders the GitHub
+// Pages cert via the App token and files/comments issues via the poll cron, but
+// it holds NO git and opens NO PR (no safeCommitAndPr path). Like the read-only
+// probes + dispatch-hybrids, the safe-commit invariant does not apply — it needs
+// no MIGRATED/EXEMPT entry and is covered by invariant 1's directory walk.
+// Acknowledged here so the cron-tier2-parity sibling-set sweep sees this
+// dependent when EXPECTED_CRON_FUNCTIONS grows with a new event-triggered cron.
+
 const cronFiles = readdirSync(FUNCTIONS_DIR).filter((f) =>
   /^(cron|event)-.*\.ts$/.test(f),
 );

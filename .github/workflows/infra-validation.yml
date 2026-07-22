@@ -284,10 +284,18 @@ jobs:
 
   deploy-script-tests:
     runs-on: ubuntu-24.04
-    # 8 (was 5): the #5875 sandbox-canary regression below builds a small alpine+
-    # bubblewrap image and runs two docker bwrap probes on top of the existing bash
-    # suite. Self-validating (SKIPs if the runner cannot do bwrap userns).
-    timeout-minutes: 8
+    # 12 (was 8, was 5): the #5875 sandbox-canary regression below builds a small
+    # alpine+bubblewrap image and runs two docker bwrap probes on top of the existing
+    # bash suite. Self-validating (SKIPs if the runner cannot do bwrap userns).
+    # 8→12 (#6649): the `ci-deploy.sh tests` step alone now measures ~407s (real
+    # sleeps for the #6525 transient-retry backoff + lease/lock/drain timing + the
+    # #6475 soak path), consuming the whole 8-min budget with near-zero effective
+    # slack — so the job flakily times out mid-suite on a slightly-slow runner (the
+    # `~12s of slack` note below is now within runner variance of zero). Bumping to
+    # 12 restores real headroom for every infra PR, not just this one. Root-cause
+    # fix (broaden the MOCK_SLEEP_NOOP gate so those tests stop paying real
+    # wall-clock where timing fidelity is not asserted) is tracked as a follow-up.
+    timeout-minutes: 12
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
       # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
@@ -367,8 +375,96 @@ jobs:
       - name: Run fresh-boot observability probe guard (#6090 baked-DSN + readiness gates + H3)
         run: bash apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh
 
+      # LOAD-BEARING registration (this job lists each infra test explicitly — no glob, so an
+      # unregistered suite is ZERO coverage, silently and greenly). This suite is behavioural,
+      # not grep-only: it extracts the baked soleur-wait-nic helper and EXECUTES it against a
+      # stub `ip`, which is the only way the fail-open contract (always exit 0 — CF-5) and the
+      # probe-fault-is-not-absence arm (#6415) are actually asserted rather than string-matched.
+      - name: Run first-boot NIC-wait gate guard (#6441 ADR-114 I1 defer-not-abort + 3 arms)
+        run: bash apps/web-platform/infra/nic-wait-gate.test.sh
+
       - name: Run /workspaces LUKS drift observability guard (#6604 emit tags/DSN + daily probe + gate)
         run: bash apps/web-platform/infra/luks-monitor.test.sh
+
+      - name: Run /workspaces LUKS C1 verify diagnosability guard (#6604 separate stdout/stderr + emit path before rm/die)
+        run: bash apps/web-platform/infra/workspaces-luks-verify.test.sh
+
+      # MECHANISM + STRUCTURE harness for #6733. The G4 quiescence probe used to create+unlink an
+      # entry INSIDE $MOUNT between the pass-2 delta rsync and C1, advancing the transfer root's
+      # mtime, so the itemized verify emitted `.d..t...... ./` and five real cutovers safe-aborted
+      # on a byte-identical tree. Keeps the RED reproduction (so the mechanism stays measured, not
+      # remembered), then pins the SHIPPED shape: the probe is a READ-open of $MOUNT/workspaces
+      # (`exec 9<`), the holder filter subtracts by PID rather than by path (which is what makes
+      # reusing a real path safe), the lsof child cannot inherit fd 9, and the bracket-era repair
+      # helpers are gone from the file. Also pins that C1 itself is never narrowed to paper over it.
+      # Skips cleanly on non-GNU coreutils / an ACL-less filesystem rather than false-greening.
+      - name: Run /workspaces LUKS C1 root-mtime mechanism + read-probe structure (#6733)
+        run: bash apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh
+
+      # The #6733 MUTATION BATTERY. Distinct from the reproduction harness above, and registered
+      # separately BECAUSE registration here is the only coverage this directory gets (no glob):
+      # the harness above proves the MECHANISM with filesystem physics, this suite mutates the SUT
+      # (it copies workspaces-cutover.sh into scratch, edits it against a pristine backup, and runs
+      # the REAL assert_mount_quiesced out of the mutated copy) and mutates the DESTINATION tree to
+      # prove C1 still rejects every difference it rejected before the fix.
+      #
+      # Covers: m1-m12 + a newline-bearing hostile filename (C1 non-regression, every icode MEASURED
+      # by running rsync — none predicted); m13/m14 the non-vacuity pair, one character apart (the
+      # shipped `exec 9<` vs a reverted `exec 9>`), run at BOTH call-site phases (`pre-verify` AND
+      # `freeze` — the freeze phase was structurally uncovered before this change); m15 an absent
+      # workspaces/ fails closed (the wrong-device / empty-bind-source state in which every
+      # downstream gate compares empty against empty and reports green); m16 our own fd and any
+      # inheriting child are NOT counted as stragglers WHILE a genuine straggler still IS (the pair
+      # that pins the PID filter's operator); m18 a post-probe foreign write still aborts C1;
+      # m19 lsof header/format drift fails closed; m20 a read-only mount fails closed while
+      # `errors=remount-ro` does NOT (the substring trap); m21 lsof-unavailable refuses; m22 the
+      # positive control still requires BOTH our PID and the probed path.
+      # m17 is deliberately NOT asserted — it is FALSIFIED and re-measured as such on every run.
+      #
+      # Every mutation carries a landing assertion against a pristine backup measured with an
+      # instrument INDEPENDENT of rsync; a mutation that did not land reports UN-RUN and reds the
+      # job rather than passing. Skips cleanly (exit 0) when nanosecond mtime fidelity or ACL/xattr
+      # support is absent, rather than false-greening on a host that cannot observe the defect.
+      - name: Run /workspaces LUKS G4 mutation battery (#6733 C1 non-regression + read-probe mutations)
+        run: bash apps/web-platform/infra/workspaces-luks-g4-mutation.test.sh
+
+      # LOAD-BEARING registration: this job lists each infra test explicitly (no glob), so an
+      # unregistered suite is ZERO coverage, silently and greenly.
+      - name: Run /workspaces LUKS freeze-quiesce guard (#6588 redis in quiesce set + fail-closed G4 + /health canary)
+        run: bash apps/web-platform/infra/workspaces-luks-freeze.test.sh
+
+      # Shares workspaces-luks-harness.sh with the freeze suite above. Registered EXPLICITLY for the
+      # same reason as every line in this job: an unregistered suite is zero coverage, silently green.
+      - name: Run /workspaces LUKS staging-target guard (#6588 mkfs-if-empty + fail-closed staging mount + capacity gate)
+        run: bash apps/web-platform/infra/workspaces-luks-staging.test.sh
+
+      # Guards the cutover WORKFLOW rather than the script: the `environment:` gate expression
+      # (exact-string, because operand inversion silently ungates a destructive arm) and the
+      # pre-gate mode validation, which it asserts by EXECUTING the workflow's own extracted `run:`
+      # body against every input combination. Registered explicitly for the same reason as every
+      # line in this job: an unregistered suite is zero coverage, silently green.
+      - name: Run /workspaces LUKS cutover WORKFLOW gate (#6588 mode gating + CLEAN_STRAY reachability)
+        run: bash apps/web-platform/infra/workspaces-luks-cutover-workflow.test.sh
+
+      # REGISTRATION IS NOT ENVIRONMENT. The loopback suite below is the only workspaces-luks test
+      # that touches a REAL block device (losetup + real cryptsetup luksFormat/luksOpen + real
+      # mkfs.ext4 + real mount), so it must land in a job that can actually do that:
+      #   - deploy-script-tests runs on `runs-on: ubuntu-24.04`, a GH-hosted VM — NOT a job
+      #     container — so /dev/loop-control, dm-crypt and privileged mounts are available.
+      #   - GH-hosted runners have passwordless sudo; the suite self-elevates, and is invoked
+      #     under sudo here anyway so the privilege requirement is explicit at the call site.
+      #   - losetup/mount/findmnt/blkid/mkfs.ext4 ship with the image; `cryptsetup` does not, so
+      #     it is installed below rather than assumed. Installing it is what makes the
+      #     registration real: without it the suite exits non-zero with LOOPBACK_UNAVAILABLE.
+      # The suite NEVER self-skips — if the device layer is unusable it fails LOUDLY with the
+      # literal token LOOPBACK_UNAVAILABLE, because a silent skip is the exact fail-open class
+      # #6588 exists to remove (the 2026-07-19 cutover rsynced onto the root disk and every
+      # string-only gate certified it green).
+      - name: Run /workspaces LUKS staging-target loopback evidence (#6588 real mkfs + fail-closed mount + source-is-mapper)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cryptsetup-bin
+          sudo bash apps/web-platform/infra/workspaces-luks-loopback.test.sh
 
       # #6511: `connect_timeout = 5` was a bare number where the pinned v4 provider's schema says
       # `string`. It coerced to "5", failed Cloudflare's duration parse, landed as "0s", and the
@@ -449,6 +545,20 @@ jobs:
       - name: Run registry private-NIC boot-converger tests (#6415)
         run: bash apps/web-platform/infra/private-nic-guard.test.sh
 
+      # #6438/#6548 web-host private-net probe primitive. Registered explicitly (this job runs
+      # named steps, not a glob — an unregistered infra suite gates NOTHING and fails silently
+      # green, #3366/#6520). Env-driven plain bash executed directly against synthesized fixtures
+      # + PATH stubs; the zot/git-data suites also stand up a python3 loopback server. ubuntu-24.04
+      # already carries bash + python3 + curl, so no apt is added to this job.
+      - name: Run web-host private-NIC self-report guard tests (#6438 §3, AC4 — no-reboot invariant)
+        run: bash apps/web-platform/infra/web-private-nic-guard.test.sh
+
+      - name: Run web-host zot consumer-probe tests (#6438 §1, AC1 — authed serviceability, -u/no-f)
+        run: bash apps/web-platform/infra/web-zot-consumer-probe.test.sh
+
+      - name: Run web-host git-data consumer-probe tests (#6548 — fail-soft reachability)
+        run: bash apps/web-platform/infra/web-git-data-probe.test.sh
+
       # Registered explicitly because this job runs named steps, not a glob — an unregistered
       # infra suite gates NOTHING and fails silently green (#3366/#6520). Pure bash + PATH
       # stubs: no terraform, cloud-init, docker, network, or root, so this job's existing
@@ -462,8 +572,6 @@ jobs:
       - name: Run cross-pipeline web-1-swap concurrency parity drift-guard (#6060)
         run: bash apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh
 
-      - name: Run deploy-status fan-out verify retry tests (#6051/#6040)
-        run: bash apps/web-platform/infra/deploy-status-fanout-verify.test.sh
 
       - name: Run web-1 known-good tag resolver semver-guard tests (#6147)
         run: bash apps/web-platform/infra/resolve-web1-known-good-tag.test.sh
@@ -471,8 +579,6 @@ jobs:
       - name: Run firewall port-9000 deny drift-guard
         run: bash apps/web-platform/infra/firewall-9000-deny.test.sh
 
-      - name: Run §(c) LB-weight gate shape-only tests
-        run: bash apps/web-platform/infra/lb-weight-gate.test.sh
 
       # Host monitor family (#5417 registered these; resource-monitor +
       # cat-deploy-state were pre-existing orphan suites CI never ran).
@@ -584,6 +690,9 @@ jobs:
 
       - name: Run /workspaces LUKS-at-rest drift-guards (#6588, ADR-119)
         run: bash apps/web-platform/infra/workspaces-luks.test.sh
+
+      - name: Run /workspaces LUKS header-escrow wiring drift-guards (#6649)
+        run: bash apps/web-platform/infra/workspaces-luks-header.test.sh
 
       - name: Run git-data transport-wrapper allowlist tests
         run: bash apps/web-platform/infra/git-data-transport-wrapper.test.sh

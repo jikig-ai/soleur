@@ -56,7 +56,12 @@ terraform {
       version = "~> 4.0"
     }
   }
-  required_version = ">= 1.6"
+  # >= 1.7, not 1.6: seo-config-rules.tf uses `for_each` inside an `import` block,
+  # which landed in Terraform 1.7.0 ("import: for_each can now be used to expand the
+  # import block", v1.7.0 CHANGELOG). Plain `import` is 1.5. CI pins 1.10.5 so CI
+  # never exercised the floor; an operator on 1.6.x hit a parse error the constraint
+  # promised would not happen.
+  required_version = ">= 1.7"
 }
 
 provider "doppler" {
@@ -101,11 +106,14 @@ provider "cloudflare" {
   api_token = var.cf_api_token_zone_settings
 }
 
-# Separate provider for Cloudflare Rulesets APIs (cache rules, firewall
-# custom rules, dynamic redirects). The default cf_api_token lacks
-# Cache Rules:Edit, Zone WAF:Edit, Single Redirect Rules:Edit, and
-# Transform Rules:Edit; this alias uses a narrow token scoped to all on
-# soleur.ai. Current consumers:
+# Separate provider for Cloudflare Rulesets APIs. The default cf_api_token
+# holds none of the ruleset permissions; this alias uses a token scoped to
+# them on soleur.ai.
+#
+# The AUTHORITATIVE permission set is the `cf_api_token_rulesets` description
+# in variables.tf (the scope ledger) — do not maintain a second enumeration
+# here; this list had already drifted two phases behind it. What follows is
+# only the phase-to-file consumer mapping. Current consumers:
 #   - cache.tf                    (http_request_cache_settings)  — #2542
 #   - bot-allowlist.tf            (http_request_firewall_custom) — #2662
 #   - seo-rulesets.tf             (http_request_dynamic_redirect; absorbed the
@@ -113,6 +121,17 @@ provider "cloudflare" {
 #   - seo-bulk-redirects.tf       (ACCOUNT-level http_request_redirect +
 #     redirect list — needs Account Rulesets:Edit + Account Filter Lists:Edit,
 #     the widen tracked in #5092) — #3367
+#   - seo-config-rules.tf         (http_config_settings — Email Obfuscation off
+#     on the marketing hosts; needed a Config Rules:Edit widen, 2026-07-20 GSC
+#     "Not found (404)" on /cdn-cgi/l/email-protection)
+#
+# Decision rule for the next phase added here: ADR-130. Summary — a permission
+# in the SAME API family (the zone/account rulesets endpoints) widens THIS
+# token; a distinct API surface (R2 object storage, zone settings) mints a
+# narrow alias. The ADR weighs both axes (least-privilege AND the Terraform
+# root-var hazard) and records #5092 honestly as a scope ESCALATION to
+# account-level rather than as clean supporting precedent. Read it before
+# minting or widening — the rule is not "always widen".
 provider "cloudflare" {
   alias     = "rulesets"
   api_token = var.cf_api_token_rulesets
@@ -128,4 +147,14 @@ provider "cloudflare" {
 provider "cloudflare" {
   alias     = "bot_management"
   api_token = var.cf_api_token_bot_management
+}
+
+# Separate provider for Cloudflare R2 (object storage). The default cf_api_token is scoped
+# "Tunnel, Access, DNS, Notifications" and lacks Workers R2 Storage:Edit (verified 2026-07-18
+# by a live 403 on GET /accounts/<id>/r2/buckets). This alias uses a narrow token scoped to
+# Workers R2 Storage:Edit only. Current consumer:
+#   - workspaces-luks-header.tf (cloudflare_r2_bucket.workspaces_luks_header) — #6649 / #6604
+provider "cloudflare" {
+  alias     = "r2"
+  api_token = var.cf_api_token_r2
 }

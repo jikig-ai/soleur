@@ -31,13 +31,181 @@ Two enforcement layers, one source of truth.
 |---|---|---|---|---|
 | **Lefthook `gitleaks-staged`** | local pre-commit | every `git commit` | yes (`--no-verify`, hook removal) | fast feedback before a leak hits the local index |
 | **Lefthook `lint-fixture-content`** | local pre-commit | every `git commit` | yes | catches semi-sensitive shapes (real emails, prod-shape UUIDs, Supabase project refs) gitleaks misses |
-| **CI `secret-scan` workflow** | GitHub Actions | PR + push:main + weekly cron | no (CODEOWNERS-protected) | load-bearing enforcer; the rule's `[hook-enforced: ...]` tag points here |
+| **CI `secret-scan` workflow** | GitHub Actions | PR + merge_group + push:main + weekly cron | no (CODEOWNERS-protected) | load-bearing enforcer; the rule's `[hook-enforced: ...]` tag points here |
+
+Each trigger scans a **different set of commits** — see
+[Ref scope per event](#ref-scope-per-event-which-commits-each-trigger-actually-scans)
+below. That distinction is load-bearing: it is what determines whether a finding
+on an in-flight branch can redden `main`'s gate.
 
 The local hook is a **fast-feedback courtesy**, not a safety floor. The CI
 workflow is what stops a secret from reaching `main`. Operators MUST NOT
 disable the CI job to "unblock" a PR; if a finding is a false positive, add
 a per-rule `[[rules.allowlists]]` block in `.gitleaks.toml` or a `# gitleaks:allow`
 waiver in the source file.
+
+## Ref scope per event: which commits each trigger actually scans
+
+`gitleaks git` scans a **commit range**, not the working tree. Fixing a file in a
+later commit does not clear a finding introduced by an earlier one — which is why
+a red gate is sometimes unfixable by editing the file it names.
+
+| Event | Range scanned | Invocation |
+|---|---|---|
+| `pull_request` | the PR diff, `base..head` | `--log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}"` |
+| `pull_request` — **full tree** | the checked-out worktree | `gitleaks dir .` |
+| `merge_group` | the merge-queue candidate diff, `base..head` | `--log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}"` |
+| `merge_group` — **full tree** | the checked-out worktree | `gitleaks dir .` |
+| `push` (main) — **blocking** | **main's ancestry only** | `--log-opts="--no-merges HEAD"` |
+| `push` (main) — **full tree** | the checked-out worktree | `gitleaks dir .` |
+| `push` (main) — **advisory** | **every fetched ref, merge commits included** | `-v --log-opts="-m --all"`, `\|\| echo ::warning` — never fails the job |
+| `schedule` (weekly) | **every fetched ref, merge commits included** | `--log-opts="-m --all"`, plus `-v` |
+| `schedule` (weekly) — **full tree** | the checked-out worktree | `gitleaks dir .` |
+
+The `gitleaks dir` rows are the remedy for merge-commit-exclusive content on the
+PR side (see the next section). They scan the **tree**, not a commit range, so
+they catch anything still present in the checkout regardless of which commit
+introduced it — and, unlike a range scan, a fix at the tip genuinely clears them.
+
+`-m` is carried by the two **non-blocking** range scans — the weekly cron and the
+push:main advisory sweep — and by no blocking one. That split is deliberate; see
+"Why no BLOCKING range scan gets `-m`" below.
+
+`push:main` runs **three** invocations on purpose (blocking ancestry, full tree, advisory sweep). Blocking *verdict* scope and scan
+*breadth* are independent axes: the first decides whether `main`'s required check
+goes red (main's ancestry only — the #6706 fix), the second keeps full all-refs
+visibility as a `::warning` so a finding on a pushed branch that never opened a PR
+still surfaces within minutes. The advisory step ends in `|| echo`, so it cannot
+fail and cannot redden `main` no matter what it finds.
+
+**Why `push:main` is explicitly scoped ([#6706](https://github.com/jikig-ai/soleur/issues/6706)).**
+Bare `gitleaks git` defaults to walking every ref the checkout fetched, and
+`actions/checkout` runs with `fetch-depth: 0` — which fetches *all* remote
+branches. So before this was scoped, a finding on an unmerged in-flight branch
+turned `main`'s required check red for a commit that had never merged, and the
+output named no branch.
+
+Reproduce the difference on any checkout that has an off-main ref present (exact
+totals grow with `main`, so compare the two runs against each other, not against
+a remembered number):
+
+```bash
+gitleaks git --redact --no-banner --exit-code 1                            # walks ALL refs
+gitleaks git --redact --no-banner --exit-code 1 --log-opts="--no-merges HEAD"  # main only
+```
+
+The bare form scans strictly more commits — the ones reachable only from unmerged
+remote-tracking branches — and it is exactly those extra commits that could redden
+`main`. Compare the two runs against each other rather than against a remembered
+number: the totals track `main`'s growth and go stale within days.
+
+**Triaging a red weekly cron.** The cron keeps all-refs breadth on purpose — it
+is the retroactive net that re-scans history against the *current* rule pack. `-v`
+makes that breadth diagnosable, printing per finding:
+
+```
+RuleID:      <rule>
+File:        <path>
+Line:        <n>
+Commit:      <full sha>
+Fingerprint: <sha>:<file>:<rule>:<line>
+```
+
+Resolve the owning branch from the SHA:
+
+```bash
+git branch -r --contains <Commit>
+```
+
+If the answer is an unmerged feature branch, the finding is **not** on `main` — fix
+it on that branch (or delete the branch); do not treat it as a `main` incident.
+
+**Do this resolution step BEFORE the `## When an alert fires` decision tree below.**
+That tree routes the `push:main / weekly cron` column straight to *ROTATE NOW /
+assume exfil*, which is correct only once you know the finding is actually in
+`main`'s ancestry. The all-refs surfaces (the advisory sweep and the cron) can both
+report a commit that never merged. Resolve the owning ref first, then enter the
+tree. (A secret pushed to any branch of a public repo still warrants rotation — but
+"rotate" and "treat as a `main` incident" are different responses.)
+
+**Un-PR'd branches: reduced, not removed.** A branch pushed to `origin` with no PR
+opened is invisible to the `pull_request` job, and since #6706 it no longer
+contributes to `main`'s **blocking** verdict. It is still swept on every push to
+`main` by the advisory step above, which emits a `::warning` naming the commit —
+so the practical detection window is minutes, not the weekly cron. What is
+genuinely given up is *enforcement*: nothing blocks on such a finding, and if the
+branch is deleted before anyone reads the warning it goes unnoticed. That is the
+deliberate trade: `main`'s required check answers "is `main` clean?", and a branch
+that never merged cannot make it red.
+
+Note this is a detection question, not a `main`-integrity one — on a public repo a
+secret pushed to any branch is already exposed at push time, so rotation is the
+remedy regardless of which gate reports it.
+
+**Blind spot: merge-commit-exclusive content.** `gitleaks git` drives `git log -p`
+without `-m`/`--cc`, so a merge commit contributes **no** patch content to any
+scan. Measured on `cbd6c948d`:
+
+```bash
+# patch portion only — everything from the first `diff --git` onward
+git log -p -1 cbd6c948d          | sed -n '/^diff --git/,$p' | wc -c   # -> 0
+git log -p -1 cbd6c948d^         | sed -n '/^diff --git/,$p' | wc -c   # -> 10901
+```
+
+(Note the total output for the merge is 302 bytes, not 0 — that is the commit
+header alone, with zero diff beneath it. Measure the patch portion, or the
+result looks like a contradiction.) Content introduced *only* by a merge commit's own tree — the
+plausible shape being a hand-resolved conflict — was therefore invisible to **every**
+job, including the weekly cron. `--no-merges` removes nothing that was ever
+scanned. This is pre-existing and not a consequence of the #6706 scoping; it
+matters because `main` genuinely carries merge commits (`allow_merge_commit` is
+enabled).
+
+**CLOSED by [#6721](https://github.com/jikig-ai/soleur/issues/6721).** The weekly
+cron now walks `--log-opts="-m --all"`, and every job gained a `gitleaks dir .`
+full-tree step. Measured on a purpose-built fixture (a genuine 2-parent merge
+whose secret is in neither parent), pinned by
+`plugins/soleur/test/gitleaks-merge-commit.test.sh`:
+
+| walk | rc | detects merge-exclusive secret? |
+|---|---|---|
+| `--no-merges HEAD` (the old shape) | 0 | no |
+| bare `HEAD` | 0 | no |
+| `-m` | 1 | **yes** |
+| `-m --first-parent` | 1 | yes |
+| `--cc` | 0 | **no — see the trap below** |
+| `gitleaks dir .` | 1 | yes (content still on the tree) |
+
+**TRAP: `--cc` is NOT an equivalent of `-m`.** It looks like one, and it is a
+silent no-op. On the same fixture it emits 195 bytes of patch content that
+visibly contain the secret, and gitleaks detects **nothing** (rc=0) — its diff
+parser does not consume combined-diff `@@@` format. Byte volume is not
+detection. Shipping `--cc` as a cheaper `-m` would install a fresh gate that
+cannot fail, which is the exact defect class this section documents. The test
+asserts both halves (bytes > 0 **and** rc == 0) so the trap cannot be re-read as
+"`--cc` simply sees nothing".
+
+**Why only the cron gets `-m`.** `-m` is the wrong remedy for the PR and
+merge_group jobs, because GitHub sets `BASE_SHA` to
+`pull_request.base.sha` — main's **tip** at PR-event time, not the merge-base. A
+routine "merge main into my branch" therefore puts main's own commits inside
+`BASE..HEAD`. Without `-m` the merge commit contributes no patch and they stay
+invisible; with `-m` the merge is diffed against each parent, and the
+merge-vs-feature diff replays everything main brought in. Measured on a clean
+main-sync fixture with no conflict anywhere:
+
+| arm | log-opts | rc |
+|---|---|---|
+| shipped | `--no-merges BASE..HEAD` | 0 — main's secret not attributed to the PR |
+| candidate | `-m BASE..HEAD` | 1 — main's secret counts against the PR |
+
+So `-m` on the PR range would make every branch that syncs main inherit main's
+findings as its own. The PR side gets `gitleaks dir` instead: an understood
+failure mode (it scans the tree, so it misses content that was removed before
+the tip) rather than a false-positive generator. Pinned by T7 of the same suite,
+including preconditions — an earlier attempt at this measurement returned rc=0
+on both arms because the fixture never reached the state under test, and a
+silent rc=0/rc=0 reads exactly like "no coupling".
 
 ## Rule pack
 
@@ -96,6 +264,37 @@ real auth-test fixture that interacts with a live Supabase test project; if
 it ever needs a synthesized token, the file should move under
 `apps/web-platform/test/__synthesized__/`.
 
+**Path carve-out: `^plugins/soleur/skills/review/SKILL\.md$`**
+([#6723](https://github.com/jikig-ai/soleur/issues/6723)), on
+`database-url-with-password` only.
+
+That file documents the DSN allowlist bypass in prose, using a
+credential-shaped example. Widening the rule to span to the last `@` (the #6723
+fix) turned its own example into a finding — on commit `48b8bc4a5`, which is
+already on `main`. A line-level `# gitleaks:allow` **cannot** clear it: history
+scans read the old blob, and the old blob carries no waiver. The only
+alternatives were rewriting history or a path predicate, since path predicates
+match identically across every commit.
+
+The `^` and `$` are load-bearing. gitleaks matches `paths` entries as a
+**search** against the scan-root-relative path, so unanchored, any parent
+directory launders a real DSN — measured: `evil/plugins/soleur/skills/review/SKILL.md`
+carrying a real credential was silenced without the anchors and is detected with
+them.
+
+Scope cost: exactly one file, blinded to exactly one rule. That file is skill
+prose and never a credential carrier, and every other rule still applies to it,
+alongside lint-fixture-content, GitHub push protection, and CODEOWNERS on
+`.gitleaks.toml`. Pinned by T10 in `plugins/soleur/test/gitleaks-rules.test.sh`,
+which asserts both the entry count and that the carve-out stays anchored.
+
+The alternative — a finding-scoped `.gitleaksignore` entry — is a live open
+question rather than a settled rejection; see the PR's decision-challenges
+record. It was inherited from #6706's rejection ("the fingerprint embeds the
+commit SHA, so survival is merge-strategy-dependent"), a premise that does not
+hold here because `48b8bc4a5` is already an ancestor of `main` and its SHA is
+frozen. It remains unmeasured, and the anchored path entry is what ships.
+
 ### Placeholder-regex allowlist — `database-url-with-password`
 
 Orthogonal to the path carve-out above, the `database-url-with-password` rule
@@ -110,6 +309,54 @@ allowlist covers:
   literal asterisks) — added via
   [#3877](https://github.com/jikig-ai/soleur/issues/3877) to recognize the
   canonical Doppler/`psql`/pooler-output redaction convention.
+
+**CLOSED — a real password containing `@` used to be silenced.**
+[#6723](https://github.com/jikig-ai/soleur/issues/6723). The rule's password class
+was `[^@/\s]+`, which stops at the FIRST `@`, while every real URL parser takes
+userinfo to the LAST one. Because the allowlist entry was an unanchored *search*
+against the rule's match, a credential like
+`<scheme>://user:password@<realsecret>@<host>` contained the substring
+`<scheme>://user:password@` and allowlisted itself.
+
+Two changes were needed, and shipping either alone would have left the gate
+broken:
+
+1. **The password class spans to the last `@`** — `[^/\s]+`. `/` stays excluded
+   so a realistic DSN still terminates at its `/dbname` path.
+2. **The allowlist entry is fully anchored** — `^...$`. Allowlist `regexes` match
+   the Secret, and with no `secretGroup` the Secret is the whole rule match, so
+   an unanchored entry means "the match CONTAINS a placeholder" when the only
+   safe reading is "the match IS a placeholder".
+
+**The obvious fix would have made things worse.** #6723's body proposed keeping
+an `<[^>]+>` bracket branch. Once the password class permits `@` and `:`, that
+branch lets an entire real credential masquerade as a placeholder:
+`<scheme>://user:<admin:R3alPassw0rd@prod.db.internal>@x.com`. Measured: three
+such shapes are detected under the *old* config and would have been **silenced**
+by the proposed one — the same defect class that got #6706's widening reverted,
+re-entering through a different branch. The shipped form hardens both branches to
+`<[^>@:]+>`, which keeps every legitimate placeholder quiet (`<user>:<pw>`,
+`USER:PASSWORD`, `user:***`, `user:password`) while closing that door.
+
+This is also why the placeholder alternation is **deliberately not widened** with
+short tokens. #6706 proposed adding `pass`/`passwd`/`pw` and the change was
+reverted on measurement: those prefixes are far likelier to head a real password.
+
+If you need to document a DSN shape in a comment, use the angle-bracket form
+`<scheme>://<user>:<pw>@host` — that is what `apps/web-platform/infra/vector.toml`
+does. **Elide the scheme in prose examples.** The rule is keyword-gated on the
+literal `postgres://`, so writing it out makes the comment itself a finding; that
+is not hypothetical, it happened twice in this very PR, in the comments
+explaining these examples, and only the working-tree diff caught it.
+
+`plugins/soleur/test/gitleaks-rules.test.sh` T6–T10 pin this rule's behaviour:
+T6 that documentation shapes stay quiet, T7 that real credentials still fire (one
+varied dimension per row), T7b the multi-`@` bypass, T7c the bracket-userinfo
+regression net that keeps the rejected candidate from re-entering, T8 that the
+allowlist stays a single entry, T9 that both anchors survive and no bare
+`<[^>]+>` branch returns, T10 that the `paths` list keeps its exact arity and the
+review carve-out stays anchored. T7 is also T6's positive control: T6 alone passes
+vacuously if the scanner is degraded. Extend them together if you touch the rule.
 
 The placeholder regex covers ONLY the canonical shapes. Prose-style redactions
 that extend beyond placeholder form (e.g., a Supabase pooler URL like
@@ -396,6 +643,50 @@ that disables `--redact` would leak via the artifact. The forensics path is:
 
 Pitfalls discovered while authoring the rule pack and CI workflow during
 PR1 of #3121. Read before adding a new custom rule or smoke-test fixture.
+
+### A line waiver cannot clear a history finding
+
+`# gitleaks:allow` is evaluated against the blob being scanned. A range scan
+reads the blob **as it was in the commit that introduced it**, and that blob does
+not contain the waiver you just added. So for anything already committed — and
+especially anything already on `main` — a line waiver is inert. The real options
+are a path predicate in `.gitleaks.toml` (path matching is commit-independent), a
+`.gitleaksignore` fingerprint, or a history rewrite. Fixing the file at the tip
+clears only the `gitleaks dir` full-tree steps, never the range scans.
+
+The corollary catches authors constantly: **fixing the file the red gate names
+does not turn the gate green.** See "Ref scope per event" for why.
+
+### `--cc` looks like `-m` and detects nothing
+
+If you are tempted to "simplify" a `-m` walk to `--cc`, don't. `--cc` emits patch
+bytes that visibly contain the secret and gitleaks detects **none** of it — its
+diff parser does not consume combined-diff `@@@` format. It is a gate that cannot
+fail, which is worse than no gate because it reads as coverage. Measured and
+pinned in `plugins/soleur/test/gitleaks-merge-commit.test.sh` T2, which also
+asserts that no step ships `--cc` as a `log-opts` value. The workflow itself
+only documents the trap in a comment — the assertion lives in the test.
+
+### The comment explaining a rule is itself scanned
+
+Writing a credential-shaped example into a comment — in `.gitleaks.toml`, in a
+test file, in a workflow — makes that comment a finding, because the scanner has
+no notion of "this is documentation". Elide the part the rule is keyword-gated on
+(`<scheme>://` rather than the literal `postgres://`), or assemble the example at
+runtime the way the test suites do.
+
+This is not a hypothetical: it happened twice while fixing #6723, in the very
+comments that explained the bypass, and neither the 29/29 test suite nor review
+caught it. Only a working-tree finding comparison did — baseline config vs
+shipped config against the same tree. Run that comparison whenever you change a
+rule:
+
+```bash
+git show origin/main:.gitleaks.toml > /tmp/baseline.toml
+gitleaks dir . --config /tmp/baseline.toml --report-format json --report-path /tmp/base.json --exit-code 0
+gitleaks dir . --config .gitleaks.toml   --report-format json --report-path /tmp/ship.json --exit-code 0
+# anything only in ship.json is a finding YOUR change introduced
+```
 
 ### Always use non-capturing groups in custom rule regexes
 

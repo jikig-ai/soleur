@@ -142,12 +142,35 @@ redact_pii() {
   '
 }
 
-findings_summary='{}'
+# ARGV CEILING (#6736). Both the per-category body and the accumulated summary are
+# kept in FILES and bound with `--rawfile … | fromjson`, never `--argjson`. A shell
+# variable bound via --argjson is ONE argv argument, and the kernel caps a SINGLE argv
+# argument at MAX_ARG_STRLEN = 131,072 B — verified by bisect on this host: 131,071 B
+# passes, 131,072 B fails E2BIG. This is NOT `getconf ARG_MAX` (2,097,152 B, the
+# argv+envp total); a payload at 6% of ARG_MAX still dies.
+#
+# Nothing bounds this: snippets are capped at 200 chars by apply_yaml_rules, but the
+# FINDING COUNT is uncapped (one grep hit per matching line), and $findings_summary is
+# the sum over all five categories — so it crosses the ceiling before any single
+# category does. Pre-fix this died with `Argument list too long` mid-scan, after the
+# per-category checks had already succeeded.
+#
+# The scratch files live in "$results_dir/.agg" rather than "$results_dir" itself:
+# the markdown-table loop below re-globs "$results_dir"/*.json, and a summary file
+# sitting there would be read back as a sixth bogus category row. A dot-prefixed
+# subdirectory is invisible to that glob and is still cleaned by the existing
+# `rm -rf "$results_dir"` EXIT trap, so this adds no new cleanup obligation.
+agg_dir="$results_dir/.agg"
+mkdir -p "$agg_dir"
+summary_file="$agg_dir/findings-summary.json"
+body_file="$agg_dir/body-redacted.json"
+echo '{}' > "$summary_file"
 for f in "$results_dir"/*.json; do
   cat="$(jq -r '.category' "$f")"
-  body="$(jq '{verdict, findings}' "$f")"
-  body_redacted="$(echo "$body" | redact_pii)"
-  findings_summary="$(echo "$findings_summary" | jq --arg c "$cat" --argjson b "$body_redacted" '. + {($c): $b}')"
+  jq '{verdict, findings}' "$f" | redact_pii > "$body_file"
+  jq --arg c "$cat" --rawfile b "$body_file" '. + {($c): ($b | fromjson)}' \
+    "$summary_file" > "$summary_file.next"
+  mv "$summary_file.next" "$summary_file"
 done
 
 # Write .scan-meta.json next to input (or to runtime dir for stdin).
@@ -162,8 +185,8 @@ jq -n \
   --arg sha "$rule_pack_sha" \
   --arg v "$agg_verdict" \
   --arg ts "$ts" \
-  --argjson fs "$findings_summary" \
-  '{scanner_version: $sv, rule_pack_version: $rpv, rule_pack_sha256: $sha, verdict: $v, timestamp: $ts, findings_summary: $fs}' \
+  --rawfile fs "$summary_file" \
+  '{scanner_version: $sv, rule_pack_version: $rpv, rule_pack_sha256: $sha, verdict: $v, timestamp: $ts, findings_summary: ($fs | fromjson)}' \
   > "$meta_path"
 
 # Emit markdown findings table + mandatory disclaimer.

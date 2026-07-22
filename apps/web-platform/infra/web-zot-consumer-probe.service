@@ -1,0 +1,29 @@
+[Unit]
+Description=zot consumer-perspective serviceability probe (web host, #6438 §1)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# HOME=/root: the ExecStart runs `doppler run` as ROOT (no User=). The Doppler CLI's
+# os.UserHomeDir() init dies "Doppler Error: $HOME is not defined" for a root systemd service
+# (which gets no $HOME) BEFORE it can exec the probe — the reason every working root-doppler unit
+# on the fleet (container-restart-monitor, cron-egress-*, inngest-cutover-flip) sets this. With
+# HOME=/root doppler uses /root/.doppler; the prd DOPPLER_TOKEN arrives via the EnvironmentFile
+# below (written by the *_install provisioner from doppler_service_token.web_probes). No
+# DOPPLER_CONFIG_DIR → never /tmp/.doppler (the #6536 clash surface). #6438/#6548.
+Environment=HOME=/root
+# SyslogIdentifier retags the unit's journal output away from the ExecStart basename `bash`
+# (systemd default) to a diagnostic-critical identifier shipped by vector.toml Source 4
+# (host_scripts_journald) — so the fault-classification stderr ("SUPPRESS ping: 401 auth broke",
+# "000 UNREACHABLE private net", "404 empty store") reaches Better Stack off-box, not SSH-only
+# (hr-no-ssh-fallback-in-runbooks; the #6556 inngest-heartbeat lesson). Mirrored in vector.toml.
+SyslogIdentifier=web-zot-consumer-probe
+# /etc/default/web-zot-consumer-probe (baked per-host) carries ZOT_ENDPOINT, ZOT_PROBE_REPO, and
+# WEB_ZOT_CONSUMER_URL_KEY (the per-host Doppler var name, e.g. WEB_ZOT_CONSUMER_URL_WEB_1). doppler
+# run injects that var + ZOT_PULL_USER/ZOT_PULL_TOKEN; bash indirect expansion (${!KEY}) resolves
+# the host's own heartbeat URL under the generic name the (host-agnostic) script reads. Shipping
+# the unit as a FILE (not a heredoc) keeps this nested-quoted doppler ExecStart intact — the
+# container-restart-monitor precedent (server.tf).
+EnvironmentFile=/etc/default/web-zot-consumer-probe
+ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\''export WEB_ZOT_CONSUMER_URL="$${!WEB_ZOT_CONSUMER_URL_KEY}"; exec /usr/local/bin/web-zot-consumer-probe.sh'\'''

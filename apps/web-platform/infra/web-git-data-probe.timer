@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the git-data consumer-perspective reachability probe every 60s (#6548)
+
+[Timer]
+OnBootSec=100s
+OnUnitActiveSec=60s
+AccuracySec=1s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
