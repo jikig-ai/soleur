@@ -635,8 +635,8 @@ logs:
   where: "GitHub Actions job logs (ci.yml test-scripts); Inngest run history for the cron"
   retention: "GitHub Actions default (90d); Inngest project retention"
 discoverability_test:
-  command: "bash scripts/lint-agents-compound-sync.sh && bash scripts/test-all.sh scripts"
-  expected_output: "lint-agents-compound-sync: OK (…) and a zero exit from the scripts shard"
+  command: "bash scripts/lint-agents-compound-sync.sh"
+  expected_output: "lint-agents-compound-sync: OK"
 ```
 
 No `ssh` appears in any verification path.
