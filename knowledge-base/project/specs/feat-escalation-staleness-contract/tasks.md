@@ -29,15 +29,18 @@ plan: knowledge-base/project/plans/2026-07-22-feat-action-required-staleness-con
 - [ ] 2.5 Update `plugins/soleur/test/operator-digest-skill.test.sh` for the new §4 contract; run `components.test.ts` if the description line changed.
 
 ## Phase 3 — Layer 4: SLA lifecycle cron (fail-safe close authority)
-- [ ] 3.1 Create `apps/web-platform/server/inngest/functions/cron-action-required-sla.ts`.
-- [ ] 3.2 Classify by agent-owned allowlist: OPS (default, never close); DEAD-CONTENT = `content-publisher` AND NOT `content-starvation` (NOT broad `content`); DECISION-CHALLENGE = `decision-challenge`; unclassified → OPS.
-- [ ] 3.3 Human-engagement veto: abort close on non-bot assignee / human comment / human-set priority.
-- [ ] 3.4 OPS escalation ladder (age from `createdAt`): 14d→≥p2; 30d→p1+comment; 60d→p0+comment. Idempotent via durable threshold marker.
-- [ ] 3.5 Expiry (last-activity `updatedAt` ≥30d inactive): close `not planned` + `wontfix-stale` + reason comment.
-- [ ] 3.6 TOCTOU: re-fetch + re-classify + re-veto immediately before each close; abort if `updatedAt` changed since snapshot.
-- [ ] 3.7 Emit `op:"action-required-sla"` per action with `{issue, ageDays, inactiveDays, class, action, priorityBefore, priorityAfter, humanEngaged}`.
-- [ ] 3.8 Register in Inngest client + cron manifest.
-- [ ] 3.9 Tests `cron-action-required-sla.test.ts`: OPS@999d never closed; `content`-tagged ops → OPS; DEAD-CONTENT@30d-inactive closed not @29d; DECISION-CHALLENGE@30d-inactive; human-veto (assignee/comment/priority); last-activity clock (40d old but recent comment → not expired); TOCTOU abort; idempotent bump; single comment per threshold.
+> Architecture = dispatcher/worker fan-out (see plan `## Deepening` D1–D6). Read cron-content-publisher.ts first as the precedent.
+- [ ] 3.1 **Dispatcher** `cron-action-required-sla.ts`: (a) read + **paginate to exhaustion** the open `action-required` backlog (Octokit `.paginate`, or oldest-N cursor) — NOT a single `per_page` page (D2/fatal); (b) `step.sendEvent` one `sla/issue.process` per issue with idempotency key `sla-${n}-${action}-${threshold}` (D1); (c) own Sentry heartbeat.
+- [ ] 3.2 **Worker** `sla-issue-process.ts` (`inngest.createFunction` on `sla/issue.process`): process ONE issue; own Sentry monitor slug + top-level `reportSilentFallback` (D6). Each side-effecting write in its OWN `step.run` with deterministic id `escalate-${n}-${threshold}`/`expire-${n}`; comment split into its own step (D2).
+- [ ] 3.3 Classify by agent-owned allowlist: OPS (default, never close); DEAD-CONTENT = `content-publisher` AND NOT `content-starvation` (NOT broad `content`); DECISION-CHALLENGE = `decision-challenge`; unclassified → OPS.
+- [ ] 3.4 Human-engagement veto: abort close on non-bot assignee / non-bot comment/reaction / human-set priority (attribute the `labeled` actor via events/timeline API — D5; else gate on assignee + non-bot-comment only).
+- [ ] 3.5 OPS escalation ladder (age from memoized `runStartedAt` vs `createdAt`): 14d→≥p2; 30d→p1+comment; 60d→p0+comment. Idempotent: bump upward only; **sentinel `<!-- sla:escalate:${threshold} -->` in the comment body**, GET-guarded (D2), NOT a trailing label.
+- [ ] 3.6 Expiry (DEAD-CONTENT/DECISION-CHALLENGE): inactivity from **last NON-BOT timeline event** (same predicate as the veto), NOT raw `updatedAt` (D3/fatal). ≥30d non-bot-inactive → close `not planned` + `wontfix-stale` + reason comment. Skip if already closed / already `wontfix-stale`.
+- [ ] 3.7 TOCTOU: before each close re-fetch + re-classify + re-veto; abort if raw ISO `updatedAt` string changed since snapshot (not a re-parsed Date — D2).
+- [ ] 3.8 Reopen guard (D4): on reopen strip `wontfix-stale` + reset activity; require ≥1 fresh non-bot signal before re-closing a `wontfix-stale`-bearing issue.
+- [ ] 3.9 Emit `op:"action-required-sla"` per action (from the WORKER) with `{issue, ageDays, inactiveDays, class, action, priorityBefore, priorityAfter, humanEngaged}`.
+- [ ] 3.10 Register BOTH functions at the `serve()`/`functions: [...]` site (grep where cron-content-publisher registers).
+- [ ] 3.11 Tests (dispatcher + worker): OPS@999d never closed; `content`-tagged ops → OPS; DEAD-CONTENT@30d-non-bot-inactive closed not @29d; bot-commented-every-7d issue still expires (D3); DECISION-CHALLENGE@30d; human-veto (assignee/comment/priority); pagination >1 page drops nothing (D2); sentinel dedup posts no 2nd comment; reopen guard (D4); TOCTOU abort; idempotent bump.
 
 ## Phase 4 — Observability, ADR, backfill
 - [ ] 4.1 Add Sentry rule (`apps/web-platform/infra/sentry/issue-alerts.tf`) on `op:"action-required-sla"` action:"expire" where `humanEngaged:true`/TOCTOU-changed, and on action:"error".

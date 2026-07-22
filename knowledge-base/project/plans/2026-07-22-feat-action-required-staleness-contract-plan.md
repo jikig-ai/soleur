@@ -63,6 +63,11 @@ Rewrite `plugins/soleur/skills/operator-digest/SKILL.md` §4:
 5. Update `plugins/soleur/test/operator-digest-skill.test.sh` (and `components.test.ts` word-budget if the description line changes — it should not) for the new §4 contract.
 
 ### Phase 3 — Layer 4: SLA lifecycle cron (fail-safe close authority)
+> **The classification/threshold/veto policy in steps 1–8 below is correct and stands.**
+> **The cron ARCHITECTURE is superseded by `## Deepening (2026-07-22)` — a dispatcher/worker
+> fan-out with live-state idempotency markers and a non-bot activity clock. Implement the
+> Deepening architecture; read steps 1–8 for the policy it executes.**
+
 Create `apps/web-platform/server/inngest/functions/cron-action-required-sla.ts` (structural mirror of `cron-content-publisher.ts`):
 1. List all open `action-required` issues (labels + createdAt).
 2. **Classify by ALLOWLIST (fail-safe, TR3) — key on AGENT-OWNED labels only:**
@@ -81,16 +86,93 @@ Create `apps/web-platform/server/inngest/functions/cron-action-required-sla.ts` 
 1. **Backfill = first cron run** (idempotent): after deploy, the cron closes the 6 dead content chores and the render change drops the 13 decision-challenges from the action list; the ~11 genuine ops asks remain. Verify the next digest's action list is clean (no content/decision-challenge items; per-item age shown). No separate script.
 2. **ADR** `/soleur:architecture` — new ADR recording the **close-authority trust boundary**: "an automated lifecycle cron may auto-close ONLY allowlisted structurally-dead action-required classes; ops/infra escalations are escalate-only and never auto-closed." Alternatives considered: aggressive SLA auto-close (rejected — risks closing a live emergency), nag-only (rejected — dead chores never drain).
 
+## Deepening (2026-07-22) — Phase 3 cron architecture (data-integrity + architecture review)
+
+Two focused substance-level reviews (data-integrity-guardian + architecture-strategist) against
+the `cron-content-publisher.ts` precedent surfaced two correctness-**fatal** defects and a
+required structural change. This block supersedes the Phase 3 *architecture* (the policy in Phase
+3 steps 1–8 is unchanged).
+
+### D1 — Dispatcher/worker fan-out (NOT an in-line loop)
+The precedent processes ONE issue; this cron iterates a backlog of side-effecting GitHub mutations,
+which breaks the single-function loop on three axes (failure isolation, the 10-min
+`MAX_RUN_DURATION_MS` wall clock under `concurrency fn:1` per ADR-033 I3, and step-id stability).
+Structure it as **two Inngest functions**:
+- **Dispatcher** `cron-action-required-sla.ts`: (step 1) read + **paginate to exhaustion** the open
+  `action-required` backlog (Octokit `.paginate`, or hard-cap the oldest-N with a cursor and drain
+  the rest next run — `per_page:10` from the precedent is a single-issue dedup read, NOT a backlog
+  iterator); (step 2) one `step.sendEvent` per issue emitting `sla/issue.process` with **event
+  idempotency key** `id: \`sla-${number}-${action}-${threshold}\`` (dedups a dispatcher replay).
+- **Worker** `sla-issue-process.ts` (`inngest.createFunction` on `sla/issue.process`): process ONE
+  issue → classify, veto, escalate-or-expire. Per-issue failure isolation + its own retry budget;
+  parent stays ~2 steps regardless of backlog size.
+
+### D2 — Idempotency against LIVE GitHub state (step memoization is insufficient)
+`step.run` memoization dedups only within one run's replays — NOT an incomplete step's own retry,
+NOT tomorrow's fresh cron. So:
+- **Each side-effecting write in its own `step.run` with a deterministic id** keyed on issue+action+
+  threshold (`escalate-${n}-${threshold}`, `expire-${n}`). A loop with positional/auto-indexed ids
+  misattributes memoized results when the candidate list reorders between attempts (D-guardian 1a).
+- **Never bundle `comment` (POST, non-idempotent) after `close`/`relabel` in one step** — a throw on
+  the second call re-runs the step and re-posts the comment (D-guardian 1b; `retries:1` guarantees
+  it). Split the comment into its own step.
+- **The "one comment/action per threshold" marker MUST be a sentinel embedded in the comment body**
+  (`<!-- sla:${action}:${threshold} -->`), and the guard MUST GET existing comments and skip if the
+  sentinel is present — cross-run dedup is not covered by memoization, and a trailing *label* set
+  after the comment is non-atomic (a failure between POST and label → next-day re-comment)
+  (D-guardian 1c). Likewise skip EXPIRE if the issue is already closed / already carries
+  `wontfix-stale`.
+
+### D3 — Activity clock: last NON-BOT event, not the `updatedAt` scalar (FATAL if missed)
+`updatedAt` is bumped by ANY write, including this cron's own escalation comments AND sibling crons
+(e.g. inngest-health comments on these issues). Measuring inactivity from raw `updatedAt` means a
+neglected DEAD-CONTENT issue that attracts routine bot noise **never** reaches 30d-inactive →
+expiry is dead code for exactly the backlog it targets. **Compute inactivity from the last non-bot
+timeline event, using the SAME non-bot predicate as the human-engagement veto** — the veto clock and
+the inactivity clock must share one definition of "activity" (D-guardian 3). Anchor all age/inactivity
+math to a single **memoized `runStartedAt`** (not per-step `new Date()`, which reads a new wall clock
+on retry), and make the TOCTOU compare on the **raw ISO `updatedAt` string** (not a re-parsed `Date`,
+which can spuriously abort every close via precision round-trips) (D-guardian 2).
+
+### D4 — Reopen-loop guard (reintroduced by the D3 fix)
+With the non-bot inactivity clock, a *bot/producer* reopen no longer resets the clock → a refiled
+`content-publisher` (non-starvation) issue gets re-closed on the next run → 30-day close/refile
+oscillation. On reopen: strip `wontfix-stale`, treat the reopen as an activity reset, and require ≥1
+fresh **non-bot** signal before an issue bearing `wontfix-stale` may be re-closed (D-guardian 5).
+(`content-starvation` itself is excluded from DEAD-CONTENT → OPS → never closed, so it can't loop.)
+
+### D5 — "human-set priority" needs actor attribution
+The veto's "human-set priority" clause cannot be a bare "p1 label present" check — that can't
+distinguish the cron's own escalation label from a human's. Use the issue events/timeline API to
+attribute the `labeled` event actor; if attribution is unavailable, gate the veto on
+assignee + non-bot-comment only (do not treat priority-label presence as human engagement).
+
+### D6 — Fan-out observability
+Fan-out moves failures off the dispatcher: the **worker needs its own Sentry monitor slug + top-level
+`reportSilentFallback`** — a per-issue failure must not degrade silently while the dispatcher reports
+`ok:true`. The `op:"action-required-sla"` event is emitted by the WORKER, per issue.
+
+### Precedent adoption (verbatim where applicable)
+From `cron-content-publisher.ts`: Octokit calls inside `step.run` (I1 replay memoization);
+`reportSilentFallback(err, {op})` for error emit; `resolveCronWorkspaceRoot` for any ephemeral
+workspace; `postSentryHeartbeat` + a monitor slug. Sentry alert (`issue-alerts.tf`): a
+`sentry_issue_alert` with `filter_match = "all"` on the op + the feared-case fields — model on
+`byok_cap_exceeded`/`byok_art_33_breach` (op + boolean-tag dedup-TTL shape). **Inngest registration:**
+grep the site that registers `cron-content-publisher` (the `functions: [...]` array passed to
+`serve()`) at /work and register BOTH new functions there.
+
 ## Files to Edit
 - `plugins/soleur/skills/operator-digest/SKILL.md` — §4 rewrite (Layer 2)
 - `plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml` — `if: failure()` self-report (Layer 1)
 - `plugins/soleur/test/operator-digest-skill.test.sh` — §4 contract test
-- `apps/web-platform/server/inngest/client.ts` (+ cron manifest) — register the new function
+- the Inngest `serve()`/`functions: [...]` registration site (grep where `cron-content-publisher` registers) — register BOTH new functions (dispatcher + worker)
 - `knowledge-base/engineering/architecture/decisions/` — new ADR
 
 ## Files to Create
-- `apps/web-platform/server/inngest/functions/cron-action-required-sla.ts` — Layer 4 cron
-- `apps/web-platform/test/server/inngest/cron-action-required-sla.test.ts` — unit tests
+- `apps/web-platform/server/inngest/functions/cron-action-required-sla.ts` — Layer 4 **dispatcher** (paginate + fan-out)
+- `apps/web-platform/server/inngest/functions/sla-issue-process.ts` — Layer 4 **worker** (per-issue classify/veto/act)
+- `apps/web-platform/test/server/inngest/cron-action-required-sla.test.ts` — dispatcher tests (pagination-to-exhaustion; one event per issue; idempotency key shape)
+- `apps/web-platform/test/server/inngest/sla-issue-process.test.ts` — worker tests (classify, veto, non-bot clock, sentinel-marker dedup, reopen guard)
 
 ## User-Brand Impact
 **If this lands broken, the user experiences:** a genuine only-you-can-fix emergency
@@ -162,6 +244,12 @@ discoverability_test:
 - [ ] Human-engagement veto: assignee / human comment / human-set priority each block the close — unit-tested (review finding #1).
 - [ ] Expiry clock is last-activity (`updatedAt`), not `createdAt`: a 40d-old but recently-commented issue does NOT expire — unit-tested (review finding #2).
 - [ ] TOCTOU: `updatedAt` changed between list snapshot and close → close aborts — unit-tested (review finding #3).
+- [ ] **Non-bot activity clock (D3, fatal):** inactivity measured from last non-bot timeline event, NOT raw `updatedAt`; a DEAD-CONTENT issue bot-commented every 7d still expires at 30d-non-bot-inactive — unit-tested.
+- [ ] **Pagination to exhaustion (D4, fatal):** dispatcher processes the FULL backlog (test with a backlog spanning >1 page; the oldest item is escalated/expired, not dropped).
+- [ ] **Live-state sentinel dedup (D2):** re-running the worker on the same issue+threshold posts NO second comment (sentinel `<!-- sla:action:threshold -->` GET-guard); comment is its own `step.run`.
+- [ ] **Reopen guard (D4):** a reopened `wontfix-stale` issue is not re-closed until ≥1 fresh non-bot signal; `wontfix-stale` stripped on reopen — unit-tested.
+- [ ] **Fan-out architecture (D1):** dispatcher emits one `sla/issue.process` event per issue with idempotency key `sla-${n}-${action}-${threshold}`; worker is a separate function with its own Sentry monitor slug + top-level `reportSilentFallback`.
+- [ ] Age/inactivity anchored to a single memoized `runStartedAt`; TOCTOU compares raw ISO `updatedAt` string (not re-parsed Date).
 - [ ] Escalation is idempotent (priority only bumps upward; one comment per threshold via durable marker) — unit-tested.
 - [ ] `if: failure()` self-report step added to the digest workflow asset + re-provision path documented.
 - [ ] Observability block satisfied: `op:"action-required-sla"` event with the discriminating `class`/`action` fields; Sentry rule added.
