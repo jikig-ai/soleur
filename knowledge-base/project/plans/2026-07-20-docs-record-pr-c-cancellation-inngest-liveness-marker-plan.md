@@ -73,7 +73,7 @@ Every premise cited in the task brief was verified against the repo and GitHub b
 | ADR-100 references `sdk_url` / `backend_is_prod` / `registry_count` as forthcoming | **False.** `grep` for all three field names in ADR-100 returns **zero**. A second sweep for forward-looking language (`will emit`, `forthcoming`, `planned`, `discriminator`, `#6617`) returns only unrelated hits (`host_name` create-time-render caveat, #6396/#6616). | **No change to ADR-100.** Per the brief: "If it does not, change nothing there." Recorded as **AC4** (the exact changed-file set must not contain ADR-100). |
 | #6780 open (C5.8 root debt) | OPEN — "dedicated Inngest host has no in-place redelivery channel … (deferred C5.8)" | Reference only. Do not re-file. |
 | #6781 open (C6.7 / T-4) | OPEN — "cron send-path has no idempotency guard … (deferred C6.7 / T-4)" | Reference only. Do not re-file. |
-| #6608 open (was C6.6) | OPEN — "inngest-host nftables allowlist keeps 10.0.1.11 after web-2 retires" | Reference only; note it is being re-homed in a separate session. |
+| #6608 open (was C6.6) | OPEN — "inngest-host nftables allowlist keeps 10.0.1.11 after web-2 retires" | Reference only. *(Corrected 2026-07-22: the code fix landed via #6664 on 2026-07-18, inert; it re-renders at the Phase-2 cutover host replace — not re-homed in a separate session.)* |
 | #6348 draft + MERGEABLE (stranding risk) | OPEN, `MERGEABLE`, titled `[HOLD — merge at cutover flip-step 2.4]` | Record that cancelling PR C **dissolves** the stranding risk. |
 | #6617 is the tracking issue | OPEN | Must **remain** open. `Ref #6617`, never a closing keyword. |
 | "PR A and PR B were implemented and **merged**" | **True in substance, misleading in shape.** They did not merge as two PRs — both landed in **one** PR, **#6748**, commit `1d4208f44`, merged 2026-07-20T13:22:59Z. That PR also carried a **third** piece the brief omits: making `op=verify`'s exactly-once check capable of a verdict. #6295 is CLOSED (by #6748). | Write "PR A + PR B merged together as #6748" — never "PR A and PR B were merged", which sends a future reader hunting for two merge commits that do not exist. Note the third piece. |
@@ -254,7 +254,9 @@ All four are already filed and verified OPEN. **No new issues may be created by 
 
 - **#6780** — C5.8 root debt: the dedicated host has no in-place redelivery channel.
 - **#6781** — C6.7 / T-4: the cron send-path has no idempotency guard.
-- **#6608** — was C6.6 ("rides along, closed post-replace"); being re-homed in a separate session.
+- **#6608** — was C6.6 ("rides along, closed post-replace"). *(Corrected 2026-07-22: code fix
+  landed via #6664 2026-07-18, inert; renders at the Phase-2 cutover replace — not re-homed in a
+  separate session; does NOT depend on #6780.)*
 - **#6348** — the draft `INNGEST_BASE_URL` repoint PR. The operator ruling recorded a standing risk
   that if it merged before PR C was delivered, PR C would be stranded merged-but-undelivered.
   **Cancelling PR C dissolves that risk** — record this explicitly.
