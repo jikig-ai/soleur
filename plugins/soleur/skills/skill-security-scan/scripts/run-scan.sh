@@ -189,8 +189,19 @@ meta_base="${SKILL_SCAN_META_BASE:-${XDG_RUNTIME_DIR:-/tmp}}"
 # candidate here, so the artifact this run writes always survives this run.
 # Age-only is the correct sole dimension: these dirs are per-pid and single-use,
 # so an OLD one is definitionally abandoned (unlike the /tmp scratch reaper,
-# where age alone is unsafe). SKILL_SCAN_META_REAP_MIN defaults to 24h.
-_reap_min="${SKILL_SCAN_META_REAP_MIN:-1440}"
+# where age alone is unsafe).
+#
+# The floor defaults to 7 DAYS, not 24h: .scan-meta.json is Art. 32 evidence an
+# operator may reference when building an override artifact, and that can happen
+# a day or more after the scan. A generous floor keeps a still-referenceable
+# evidence dir alive across a realistic operator gap while still bounding the
+# leak — these dirs are tiny (one JSON file) and live in the runtime tmpfs,
+# which is near-empty, so the leak's cost is inode COUNT, not bytes, and a 7-day
+# window caps that at a manageable steady state. A longer-lived reference is the
+# same pre-existing fragility the override mechanism already carries
+# ($XDG_RUNTIME_DIR is cleared on logout regardless), out of scope here.
+# SKILL_SCAN_META_REAP_MIN overrides the floor (minutes).
+_reap_min="${SKILL_SCAN_META_REAP_MIN:-10080}"
 if [ -d "$meta_base" ]; then
   # -maxdepth 1 -type d, older than the floor, own the current uid. `-mmin` on
   # each dir is safe here: the dir is written once at creation and never touched

@@ -286,6 +286,22 @@ else
   fail "sibling count is not worktree-distinct; got: $(grep siblings "$TESTROOT/preamble-anc.txt" || true)"
 fi
 
+# --- Arm 6c: the count reaches 2 for TWO distinct worktrees -----------------
+# Arm 6b samples the distinct-worktree dedup only at "collapses to 1"; without a
+# genuine N=2 case, a mutation capping the count at 1 (`sort -u | head -1`)
+# survives. Two test-all.sh runs in DIFFERENT worktrees must report siblings: 2.
+TWO_PROC="$TESTROOT/proc-two"
+mkdir -p "$TESTROOT/wt-a" "$TESTROOT/wt-b"
+make_fake_proc "$TWO_PROC" 606001 "$TESTROOT/wt-a" 100 "scripts/test-all.sh"
+make_fake_proc "$TWO_PROC" 606002 "$TESTROOT/wt-b" 200 "scripts/test-all.sh"
+tc_env env TC_PROC_ROOT="$TWO_PROC" TC_SELF_PID=999999 \
+  bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/preamble-two.txt" 2>&1 || true
+if [[ "$(grep -cE 'siblings: 2 ' "$TESTROOT/preamble-two.txt" || true)" -ge 1 ]]; then
+  pass "sibling count reaches 2 for two DISTINCT worktrees (dedup not capped at 1)"
+else
+  fail "sibling count did not reach 2; got: $(grep siblings "$TESTROOT/preamble-two.txt" || true)"
+fi
+
 # --- Arm 7: banners NAME WHICH condition fired (1.3) -----------------------
 # Forced by raising the floor above available space, so the arm needs no df
 # stub and holds on any host regardless of real /tmp occupancy.
@@ -309,6 +325,52 @@ if [[ "$(grep -cE 'LOW_TMP_HEADROOM|SIBLING_RUN_DETECTED' "$TESTROOT/banner-none
   pass "no banner fires when headroom is ample and no sibling runs"
 else
   fail "a banner fired unconditionally; got: $(cat "$TESTROOT/banner-none.txt")"
+fi
+
+# --- Arm 7b: LOW_TMP_HEADROOM is pinned to HEADROOM, not to the sibling ------
+# Arm 7 forces low headroom with a huge floor, but that fixture ALSO has a
+# sibling — so a mutation that fires LOW_TMP_HEADROOM on `sib_count > 0`
+# (decoupled from headroom entirely) passes it. These arms de-correlate the two
+# conditions with a df SEAM that pins a KNOWN avail/used, so the headroom
+# banner's own condition is what is tested.
+DF_STUB="$TESTROOT/df-stub.sh"
+cat > "$DF_STUB" <<'DFEOF'
+#!/usr/bin/env bash
+# Emit a df -P -k shape: header + one data row. TC_DF_AVAIL_KB / TC_DF_USED_PCT
+# pin the values the lib parses (field 4 = avail KB, field 5 = used%).
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted\n'
+printf 'tmpfs 4194304 3500000 %s %s%% /tmp\n' "${TC_DF_AVAIL_KB:-3000000}" "${TC_DF_USED_PCT:-16}"
+DFEOF
+chmod +x "$DF_STUB"
+
+# Low headroom (100 MB avail = 102400 KB, below the default 1024 MB floor) AND
+# NO sibling → LOW_TMP_HEADROOM MUST fire, SIBLING_RUN_DETECTED must NOT.
+tc_env env TC_PROC_ROOT="$OTHER_PROC" TC_DF_CMD="$DF_STUB" \
+  TC_DF_AVAIL_KB=102400 TC_DF_USED_PCT=97 \
+  bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/df-low.txt" 2>&1 || true
+if [[ "$(grep -cE 'LOW_TMP_HEADROOM' "$TESTROOT/df-low.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_RUN_DETECTED' "$TESTROOT/df-low.txt" || true)" -eq 0 ]]; then
+  pass "LOW_TMP_HEADROOM fires on low headroom with NO sibling (pinned df)"
+else
+  fail "headroom banner not isolated from sibling; got: $(cat "$TESTROOT/df-low.txt")"
+fi
+# The pinned avail/used values must actually render (tc_avail_mb / tc_used_pct
+# are now on the LEFT of a call, not just 'some digit is present').
+if [[ "$(grep -cE '100MB avail' "$TESTROOT/df-low.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE '97% used' "$TESTROOT/df-low.txt" || true)" -ge 1 ]]; then
+  pass "preamble renders the pinned df avail (100MB) and used% (97%)"
+else
+  fail "pinned df values not rendered; got: $(grep contention "$TESTROOT/df-low.txt" | head -2)"
+fi
+# Ample headroom (3 GB avail) WITH a sibling → LOW must be ABSENT, SIBLING present.
+# This is the arm that catches the `avail_mb < FLOOR` → `sib_count > 0` mutation.
+tc_env env TC_DF_CMD="$DF_STUB" TC_DF_AVAIL_KB=3000000 TC_DF_USED_PCT=16 \
+  bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/df-ample.txt" 2>&1 || true
+if [[ "$(grep -cE 'LOW_TMP_HEADROOM' "$TESTROOT/df-ample.txt" || true)" -eq 0 ]] \
+   && [[ "$(grep -cE 'SIBLING_RUN_DETECTED' "$TESTROOT/df-ample.txt" || true)" -ge 1 ]]; then
+  pass "LOW_TMP_HEADROOM is ABSENT under ample headroom even WITH a sibling"
+else
+  fail "LOW fired under ample headroom (decoupled from its condition); got: $(cat "$TESTROOT/df-ample.txt")"
 fi
 
 # --- Arm 8: epilogue reports a real delta ----------------------------------
@@ -448,12 +510,21 @@ if [[ "$(grep -cE 'kill -0|/proc/[^/]*holder|stale_pid|holder_pid' <<<"$lib_code
 else
   fail "the lib appears to implement stale-holder detection (dead code per AC5b)"
 fi
+# POSITIVE CONTROL for the negative grep above: the SAME extraction+pattern must
+# be able to MATCH when the shape IS present, or a typo'd regex reads "clean
+# forever". Feed the extractor a line that contains one of the forbidden tokens.
+_probe_code="$(printf 'if kill -0 "$stale_pid"; then :; fi\n')"
+if [[ "$(grep -cE 'kill -0|/proc/[^/]*holder|stale_pid|holder_pid' <<<"$_probe_code" || true)" -ge 1 ]]; then
+  pass "the stale-holder pattern is live (matches when the shape is present)"
+else
+  fail "the stale-holder detection regex matches nothing — the negative arm is vacuous"
+fi
 
 # --- Minimum-cardinality guard ---------------------------------------------
 # A silently-empty run exits 0 with zero coverage, which reads exactly like
 # success. This is the guard for that.
-if [[ "$pass_n" -lt 30 ]]; then
-  fail "cardinality guard: only $pass_n assertions ran (expected >= 30)"
+if [[ "$pass_n" -lt 40 ]]; then
+  fail "cardinality guard: only $pass_n assertions ran (expected >= 40)"
 fi
 
 echo "=== test-contention: $pass_n passed, $fails failed ==="

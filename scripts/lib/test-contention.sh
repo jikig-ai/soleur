@@ -52,7 +52,10 @@ TC_LOCK_TIMEOUT="${TC_LOCK_TIMEOUT:-900}"
 
 # --- Capacity probes -------------------------------------------------------
 # `df -P` pins POSIX single-line output so a long device name cannot wrap and
-# shift the awk field indices.
+# shift the awk field indices. TC_DF_CMD is a test seam so a suite can pin a
+# KNOWN avail/used% (the real `df` cannot be fixtured); it defaults to the real
+# binary and every caller invokes it exactly as `df` would be.
+TC_DF_CMD="${TC_DF_CMD:-df}"
 
 tc_tmp_entry_count() {
   local d="${1:-$TC_TMPDIR}"
@@ -64,14 +67,14 @@ tc_tmp_entry_count() {
 
 tc_avail_mb() {
   local d="${1:-$TC_TMPDIR}" kb
-  kb=$(df -P -k "$d" 2>/dev/null | awk 'NR==2 {print $4}') || kb=""
+  kb=$("$TC_DF_CMD" -P -k "$d" 2>/dev/null | awk 'NR==2 {print $4}') || kb=""
   [[ "$kb" =~ ^[0-9]+$ ]] || { printf '0\n'; return 0; }
   printf '%s\n' $(( kb / 1024 ))
 }
 
 tc_used_pct() {
   local d="${1:-$TC_TMPDIR}" p
-  p=$(df -P -k "$d" 2>/dev/null | awk 'NR==2 {gsub(/%/,"",$5); print $5}') || p=""
+  p=$("$TC_DF_CMD" -P -k "$d" 2>/dev/null | awk 'NR==2 {gsub(/%/,"",$5); print $5}') || p=""
   [[ "$p" =~ ^[0-9]+$ ]] || { printf '0\n'; return 0; }
   printf '%s\n' "$p"
 }
@@ -211,12 +214,6 @@ tc_siblings() {
     printf '%s\t%s\t%s\n' "$pid" "$cwd" "$elapsed"
   done
   return 0
-}
-
-_tc_line_count() {
-  local s="$1"
-  [[ -n "${s//[[:space:]]/}" ]] || { printf '0\n'; return 0; }
-  printf '%s\n' "$(grep -c . <<<"$s" || true)"
 }
 
 # --- Preamble --------------------------------------------------------------

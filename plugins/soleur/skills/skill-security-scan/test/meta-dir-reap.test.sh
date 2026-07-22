@@ -101,11 +101,19 @@ fi
 # `trap 'rm -rf "$meta_dir"' EXIT` shape to explain why it is forbidden, and so
 # does run-scan.sh's, so a raw grep matches the explanation, not the code (the
 # grep-matches-own-comment trap from work/SKILL.md).
+TRAP_RE="trap.*rm.*(meta_dir|meta_path).*(EXIT|RETURN)"
 code_only="$(grep -vE '^[[:space:]]*#' "$SCRIPT_DIR/../scripts/run-scan.sh")"
-if grep -qE "trap.*rm.*(meta_dir|meta_path).*(EXIT|RETURN)" <<<"$code_only"; then
+if grep -qE "$TRAP_RE" <<<"$code_only"; then
   bad "run-scan.sh traps rm on the meta_dir/meta_path — the R1 regression"
 else
   ok "no EXIT/RETURN trap deletes the meta_dir (R1 respected)"
+fi
+# POSITIVE CONTROL: the SAME regex must MATCH when the forbidden shape is present,
+# or a typo'd pattern reads "clean forever" and the negative arm is vacuous.
+if grep -qE "$TRAP_RE" <<<"trap 'rm -rf \"\$meta_dir\"' EXIT"; then
+  ok "the EXIT-trap regex is live (matches the forbidden shape)"
+else
+  bad "the EXIT-trap regex matches nothing — the negative arm is vacuous"
 fi
 
 # --- Arm 6: a NON-matching old dir is never reaped (name filter holds) ------

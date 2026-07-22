@@ -124,6 +124,56 @@ else
   fail "in-use gate never releases; got: $out"
 fi
 
+# --- Arm 4b: IN-USE gate — a NESTED cwd (the real case) is honoured ---------
+# A real process's cwd is NEVER the scratch dir itself — it is a checkout DEEP
+# inside it (/tmp/tmp.X/repo/sub). Arm 4 points cwd directly AT the top-level
+# entry, where the `${rest%%/*}` top-level strip is a no-op, so it cannot
+# distinguish exact-cwd from nested-cwd handling: a mutation recognising only
+# the exact cwd passes Arm 4 while reaping every real nested-cwd tree. This arm
+# forces the nesting so that mapping is actually tested.
+reset_fixtures
+mkdir -p "$FAKE_TMP/tmp.nestcwd/repo/sub"
+dd if=/dev/zero of="$FAKE_TMP/tmp.nestcwd/repo/sub/blob" bs=1M count=20 status=none 2>/dev/null
+find "$FAKE_TMP/tmp.nestcwd" -exec touch -d "-120 minutes" {} + 2>/dev/null || true
+touch -d "-120 minutes" "$FAKE_TMP/tmp.nestcwd"
+mkdir -p "$FAKE_PROC/4243"
+ln -sfn "$FAKE_TMP/tmp.nestcwd/repo/sub" "$FAKE_PROC/4243/cwd"
+out="$(reap)"
+if [[ -e "$FAKE_TMP/tmp.nestcwd" ]]; then
+  pass "IN-USE gate: a NESTED process cwd marks the top-level tree in use"
+else
+  fail "reaped a tree a live process is nested inside (R3 catastrophe); got: $out"
+fi
+
+# --- Arm 4c: IN-USE gate — an OPEN FILE DESCRIPTOR (cwd elsewhere) survives --
+# The SAFETY header promises "no open file handle". A process can mmap/hold-open
+# a file inside a scratch tree while its cwd is elsewhere and nothing in the
+# tree has a recent mtime; cwd-only liveness would reap the live data. This arm
+# simulates /proc/<pid>/fd/<n> pointing into a candidate, cwd unset.
+reset_fixtures
+mkdir -p "$FAKE_TMP/tmp.openfd/data"
+dd if=/dev/zero of="$FAKE_TMP/tmp.openfd/data/blob" bs=1M count=20 status=none 2>/dev/null
+find "$FAKE_TMP/tmp.openfd" -exec touch -d "-120 minutes" {} + 2>/dev/null || true
+touch -d "-120 minutes" "$FAKE_TMP/tmp.openfd"
+mkdir -p "$FAKE_PROC/4244/fd"
+ln -sfn "$FAKE_TMP/tmp.openfd/data/blob" "$FAKE_PROC/4244/fd/3"
+# no cwd symlink → liveness must come from the fd scan alone
+out="$(reap)"
+if [[ -e "$FAKE_TMP/tmp.openfd" ]]; then
+  pass "IN-USE gate: an OPEN FD into the tree marks it in use (cwd elsewhere)"
+else
+  fail "reaped a tree with a live open fd inside it — data loss; got: $out"
+fi
+# MUTATION CONTROL: with the fd gone, the same tree IS reaped, so the arm above
+# cannot pass by never reaping.
+rm -rf "$FAKE_PROC/4244"
+out="$(reap)"
+if [[ ! -e "$FAKE_TMP/tmp.openfd" ]]; then
+  pass "the same tree IS reaped once no fd points into it"
+else
+  fail "fd liveness never releases; got: $out"
+fi
+
 # --- Arm 5: PROTECTED paths — claude session dirs are never touched --------
 # worktree-manager.sh's cleanup_claude_tmp owns that boundary; duplicating or
 # contradicting it here would race a different owner.
@@ -134,6 +184,18 @@ if [[ -e "$FAKE_TMP/claude-$UID_NOW" ]]; then
   pass "PROTECTED: /tmp/claude-<uid> is never reaped (owned by worktree-manager)"
 else
   fail "reaped a claude session dir — contradicts cleanup_claude_tmp; got: $out"
+fi
+
+# --- Arm 5b: PROTECTED — node-compile-cache is a reusable cache, not a leak --
+# worktree-manager.sh's cleanup_stale_sandbox_tmp spares it; this reaper must
+# too, or a stale >=100MB V8 cache gets destroyed.
+reset_fixtures
+mk_dir "node-compile-cache" 20 120
+out="$(reap)"
+if [[ -e "$FAKE_TMP/node-compile-cache" ]]; then
+  pass "PROTECTED: node-compile-cache is never reaped (reusable V8 cache)"
+else
+  fail "reaped node-compile-cache — contradicts cleanup_stale_sandbox_tmp; got: $out"
 fi
 
 # --- Arm 6: recursive age — old dir with a FRESH file inside survives ------
@@ -212,8 +274,8 @@ else
 fi
 
 # --- Minimum-cardinality guard ---------------------------------------------
-if [[ "$pass_n" -lt 12 ]]; then
-  fail "cardinality guard: only $pass_n assertions ran (expected >= 12)"
+if [[ "$pass_n" -lt 16 ]]; then
+  fail "cardinality guard: only $pass_n assertions ran (expected >= 16)"
 fi
 
 echo "=== tmpfs-guard: $pass_n passed, $fails failed ==="

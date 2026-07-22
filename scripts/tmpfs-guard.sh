@@ -60,26 +60,46 @@ tmpfs_usage_pct() {
 }
 
 # Populate _INUSE_TOP with the top-level $TMP_ROOT entry of every live process
-# cwd, in a SINGLE /proc pass. A cwd of /tmp/tmp.ABC/repo/x marks /tmp/tmp.ABC
-# in use. Built once per run rather than rescanned per candidate — the naive
-# per-candidate scan is O(candidates × pids) and on a full /tmp (6000+ stale
-# entries, 600+ pids) that is millions of readlinks, far too slow for a
-# 5-minute cron. Directories cannot be probed with `fuser` the way files can,
-# and a cwd is exactly how an abandoned scratch tree differs from an active one.
+# that has EITHER its cwd OR an open file descriptor under $TMP_ROOT, in a
+# SINGLE /proc pass. A cwd or fd target of /tmp/tmp.ABC/repo/x marks
+# /tmp/tmp.ABC in use. Built once per run rather than rescanned per candidate —
+# the naive per-candidate scan is O(candidates × pids) and on a full /tmp
+# (6000+ stale entries, 600+ pids) that is millions of readlinks, far too slow
+# for a 5-minute cron.
+#
+# BOTH cwd AND fds are load-bearing (the SAFETY header's "no open file handle"
+# claim): a process can hold an OPEN FD to a file inside a scratch tree — an
+# mmap'd dataset, a held-open DB, a downloaded artifact being served — while
+# its cwd is elsewhere and nothing in the tree has a recent mtime. cwd alone
+# would miss it and `rm` the live data out from under the reader. `fuser` below
+# covers only top-level *file* candidates; this fd scan is what covers the
+# common *directory* case (a scratch tree with a live open handle inside).
 declare -A _INUSE_TOP
+# Map an absolute path to its top-level $TMP_ROOT entry and mark it in use.
+_mark_inuse() {
+  local target="$1" rest top
+  case "$target" in
+    "$TMP_ROOT"/*)
+      rest="${target#"$TMP_ROOT"/}"
+      top="${rest%%/*}"
+      [[ -n "$top" ]] && _INUSE_TOP["$TMP_ROOT/$top"]=1
+      ;;
+  esac
+}
 _build_inuse_top() {
   _INUSE_TOP=()
-  local p target rest top
+  local p fd target
   for p in "$PROC_ROOT"/[0-9]*; do
-    [[ -e "$p/cwd" ]] || continue
-    target=$(readlink "$p/cwd" 2>/dev/null) || continue
-    case "$target" in
-      "$TMP_ROOT"/*)
-        rest="${target#"$TMP_ROOT"/}"
-        top="${rest%%/*}"
-        [[ -n "$top" ]] && _INUSE_TOP["$TMP_ROOT/$top"]=1
-        ;;
-    esac
+    if [[ -e "$p/cwd" ]]; then
+      target=$(readlink "$p/cwd" 2>/dev/null) && _mark_inuse "$target"
+    fi
+    # Open file descriptors (skips a process whose /proc/<pid>/fd we cannot read
+    # — a foreign-owned process; those never hold OUR uid-scoped candidates).
+    [[ -d "$p/fd" ]] || continue
+    for fd in "$p"/fd/*; do
+      [[ -e "$fd" || -L "$fd" ]] || continue
+      target=$(readlink "$fd" 2>/dev/null) && _mark_inuse "$target"
+    done
   done
 }
 
@@ -140,14 +160,13 @@ reap_scratch_entries() {
   trap "rm -f '$cand_file' '$sized_file'" RETURN
 
   find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -user "$uid" -mmin "+${SCRATCH_AGE_MIN}" -print0 \
-    2>/dev/null > "$cand_file"
-  # `du -m` gives per-entry MB; keep only those at or above the floor. `du`
-  # exits non-zero on a vanished entry (a concurrent reap elsewhere) — tolerate
-  # it, the survivors it did size are still valid.
-  # `du -sm` emits ONE "<size>\t<path>" summary line per candidate (`-s` is
+    2>/dev/null > "$cand_file" || true
+  # `du -sm` emits ONE "<size>\t<path>" summary line per candidate. `-s` is
   # load-bearing — without it du descends and prints every subdirectory, which
-  # would enqueue non-top-level paths for reaping). Keep only rows at or above
-  # the floor; the size↔path tab is preserved verbatim for the read loop below.
+  # would enqueue non-top-level paths for reaping. `du` exits non-zero on a
+  # vanished entry (a concurrent reap elsewhere) — tolerate it, the survivors it
+  # did size are still valid. Keep only rows at or above the floor; the size↔path
+  # tab is preserved verbatim for the read loop below.
   du -sm --files0-from="$cand_file" 2>/dev/null \
     | awk -F'\t' -v floor="$SCRATCH_MIN_MB" '$1 ~ /^[0-9]+$/ && $1 >= floor' \
     > "$sized_file" || true
@@ -157,10 +176,15 @@ reap_scratch_entries() {
     [[ "$size_mb" =~ ^[0-9]+$ ]] || continue
     base="${e##*/}"
 
-    # Protected paths. These have other owners; reaping them here would race a
-    # different cleanup path rather than cooperate with it.
+    # Protected paths. These have other owners or are deliberately reused; reaping
+    # them here would race a different cleanup path or destroy a live cache.
+    # `node-compile-cache` is a reusable Node V8 cache, not a leak — spared here
+    # for the same reason worktree-manager.sh's cleanup_stale_sandbox_tmp spares
+    # it (that function owns the signature-gated sandbox-copy class; this reaper
+    # additionally covers the dotted `tmp.XXXXXX` mkdtemp trees its 15+-char
+    # regex excludes, so the two cooperate — see the delete-idiom note below).
     case "$base" in
-      claude-*|soleur-session-state*|.X11-unix|.ICE-unix|.font-unix|.XIM-unix|.Test-unix|systemd-*|snap*)
+      claude-*|soleur-session-state*|node-compile-cache|.X11-unix|.ICE-unix|.font-unix|.XIM-unix|.Test-unix|systemd-*|snap*)
         continue ;;
     esac
 
@@ -185,7 +209,15 @@ reap_scratch_entries() {
       continue
     fi
     echo "tmpfs-guard: reaping $e (${size_mb} MB)"
-    rm -rf -- "$e"
+    # `find … -delete`, NEVER `rm -rf` — a size-survivor can be an abandoned repo
+    # clone (a `.git`-bearing checkout), and the constitution's
+    # guardrails:block-recursive-delete rule forbids `rm -rf` on such a target.
+    # worktree-manager.sh's cleanup_stale_sandbox_tmp uses the same find-delete
+    # idiom for the same reason; the cron context here means the PreToolUse hook
+    # would not fire, so honouring the idiom (not relying on the hook) is what
+    # keeps this inside the guardrail. `-delete` implies depth-first and never
+    # follows symlinks. Tolerate partial failure (a vanished/permission entry).
+    find "$e" -delete 2>/dev/null || true
     reaped=$(( reaped + 1 ))
     reaped_mb=$(( reaped_mb + size_mb ))
   done < "$sized_file"

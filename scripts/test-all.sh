@@ -55,7 +55,13 @@ if [[ -f "$_TC_LIB" ]]; then
   # shellcheck source=scripts/lib/test-contention.sh
   source "$_TC_LIB" || true
 fi
-if ! declare -F tc_preamble >/dev/null 2>&1; then
+# Guard on tc_acquire (the LAST-defined function in the lib): bash parses a
+# sourced file all-or-nothing, so a file truncated at an exact function boundary
+# is the only state where an earlier function exists but a later one does not —
+# checking the last one closes even that edge. If the lib is absent or failed to
+# parse, install no-op stubs for every call site so a broken/missing lib degrades
+# to a normal run rather than aborting the suite.
+if ! declare -F tc_acquire >/dev/null 2>&1; then
   echo "WARNING: contention instrumentation unavailable ($_TC_LIB); continuing without it." >&2
   tc_preamble() { :; }
   tc_epilogue() { :; }
