@@ -18,12 +18,13 @@ Lane: cross-domain · Threshold: none · ADR-094 (amend)
 - [ ] 2.2 Register the parity test in `scripts/test-all.sh` `want_bun` block. (No `ci.yml` edit — bun job already runs `test-all.sh bun`.)
 
 ## Phase 3 — Wire promoters (riskiest)
-- [ ] 3.1 `cron-compound-promote.ts` — strip both `alwaysLoadedNow` and `postBytes` via `Buffer.byteLength(stripFrontmatter(text),"utf8")`; over-strip guard → RAW fallback + `op="frontmatter-overstrip-fallback"`; update UNIT-SKEW comment; literals unchanged.
-- [ ] 3.1a HARD GATE: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes AND Next production build bundles the import; else add `externalDir`/`outputFileTracingIncludes` to `next.config.ts`.
-- [ ] 3.2 `scripts/compound-promote.sh` — source `strip.sh`; `strip_frontmatter < file | wc -c` for both files; over-strip → RAW fallback + `::warning::`; update UNIT-SKEW comment; literals unchanged.
+- [ ] 3.1 `cron-compound-promote.ts` — extract `export function measureAlwaysLoadedBytes(indexText, coreText)` (strip both + over-strip guard using anchored `^- .*\[id: `; RAW fallback + `op="frontmatter-overstrip-fallback"`); call at both sites (L456-457, L608-609); update UNIT-SKEW comment; literals unchanged.
+- [ ] 3.1t Add tests to `apps/web-platform/test/server/inngest/cron-compound-promote.test.ts`: (a) helper total == `byteLength(index)+byteLength(strip(core))` + cross-check vs `strip.py` byte count; (b) unterminated-`---` core → RAW fallback + fallback flag.
+- [ ] 3.1a HARD GATE: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes AND `npm run build` (`next build`/webpack — the actual cron bundler via app/api/inngest/route.ts) succeeds with the cross-root import resolved. If webpack rejects it, add `experimental.externalDir: true` to `next.config.ts` (NOT outputFileTracingIncludes; NOT esbuild). In-app shim does not avoid the boundary.
+- [ ] 3.2 `scripts/compound-promote.sh` — source `strip.sh`; `strip_frontmatter < file | wc -c` for both files; update UNIT-SKEW comment; literals unchanged. NO over-strip guard here (advisory hand-testing path).
 
 ## Phase 4 — Sync guard + ADR
-- [ ] 4.1 `scripts/lint-agents-compound-sync.sh` — tighten `UNIT_NOTE` + top comment (all measurement consumers now stripped-basis; unit-exact); constants unchanged; guard still `OK`.
+- [ ] 4.1 `scripts/lint-agents-compound-sync.sh` — tighten the diagnostic at ALL THREE skew sites: top comment (~L26-32), mid-file block (~L146-152), `UNIT_NOTE` (~L153); constants unchanged; guard still `OK`.
 - [ ] 4.2 Amend `ADR-094` — third impl + promoter unit-exactness + CI-enforced parity.
 - [ ] 4.3 If present, update raw-vs-stripped skew prose in `compound-promote-runbook.md` (literals unchanged).
 
@@ -31,7 +32,8 @@ Lane: cross-domain · Threshold: none · ADR-094 (amend)
 - [ ] 5.1 Locate `.claude/.rule-incidents.jsonl` + archives across worktrees (never the bare mirror); count valid rule-carrying lines + timestamp span.
 - [ ] 5.2 Compute events/week; classify telemetry-absence vs credible-unused.
 - [ ] 5.3 Re-derive 101/98 by two independent methods; confirm 202 = 2×101 double-count.
-- [ ] 5.4 Record decision in `knowledge-base/project/learnings/<topic>.md` (date at write time): finding + "do not prune now" + re-eval trigger; tick #6794 boxes in PR body.
+- [ ] 5.4 Record decision in `knowledge-base/project/learnings/<topic>.md` (date at write time): finding + "do not prune now" + re-eval trigger.
+- [ ] 5.5 Add a one-line breadcrumb comment in `scripts/rule-metrics-aggregate.sh` near `rules_unused_over_8w` → the learning note (so closing #6794 doesn't de-surface the caution). Then `Closes #6794` + tick all 4 boxes in PR body.
 
 ## Verification / Ship
 - [ ] `bash scripts/lib/frontmatter-strip.test.sh` → Fail: 0.
