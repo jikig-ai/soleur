@@ -29,7 +29,7 @@ like real regressions rather than a missing-file error.
 
 # Affected sites (swept, not assumed)
 
-`git grep -n "NOT persist" -- plugins/ .claude/` and `git grep -n "persist CWD"`
+`git grep -n "NOT persist" -- plugins/ .claude/` and `git grep -n "persist CWD" -- plugins/ .claude/`
 return exactly two in-scope sites (a third `NOT persist` hit in
 `data-protection-disclosure.md` is unrelated legal prose about data retention —
 out of scope):
