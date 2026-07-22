@@ -159,16 +159,33 @@ title** (`title`, `date`, `status`). Emit one plain line per incident: what brok
 
 ### 4. Action needed from you
 
-Source: open issues labelled `action-required`.
+Source: open issues labelled `action-required` — but **triaged and de-polluted**, not a flat dump.
+A flat list makes a 131-day chore look identical to a P0, and buries the genuine asks under
+informational noise (#6836). Fetch age + labels so both become signals:
 
 ```bash
 gh issue list -R jikig-ai/soleur --label action-required --state open \
-  --json title,url --limit 100
+  --json number,title,url,createdAt,labels --limit 100
 ```
 
-These are genuine owner-action signals (expiring tokens, saturating disks, TLS/cert state, overdue
-content, stale CLA). Recap each as a plain "what needs you to act" line with its link. This is a
-read-only recap — do **not** mutate, close, or comment on any issue.
+**Build the action list (de-pollute).** From the result, **EXCLUDE** any issue whose `labels`
+include `decision-challenge`, `content`, or `content-publisher` — these are informational or
+structurally-dead chores that drown the genuine asks. **KEEP** `content-starvation` (a real
+standing "distribution pipeline empty" signal). The survivors are the true "only you can do this"
+asks (expiring tokens, saturating disks, TLS/cert state, infra capacity, stale CLA).
+
+**Sort and surface age.** Sort survivors by priority (`priority/p0-critical` > `priority/p1-high` >
+`priority/p2-medium` > `priority/p3-low` > none), then oldest-first. Compute each issue's **age in
+days** from `createdAt`. Lead with a bold "🔴 Open longest / needs your attention" line naming the
+1–3 oldest survivors with their age (e.g. "#4375 — 58 days"). Then recap each remaining survivor as
+a plain "what needs you to act" line with its age and link. **Cap the action list at 8**; if more
+remain, end with "+N more open — see the `action-required` label." Read-only recap — do **not**
+mutate, close, or comment on any issue.
+
+**Decisions flagged for your awareness (separate block, not the action list).** SEPARATELY, list
+open issues labelled `decision-challenge` under a distinct sub-heading **"Decisions flagged for
+your awareness (informational, not blocking)"** — capped at 5 with "+N more" — so they stay visible
+without diluting the action list above.
 
 ### 5. What got smarter this week
 

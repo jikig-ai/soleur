@@ -126,3 +126,50 @@ jobs:
 
           # No durable plaintext copy: remove the file regardless of which branch posted.
           rm -f "$DIGEST"
+
+      # A SUCCESSFUL run auto-resolves any standing "digest FAILED" self-report (below),
+      # mirroring the content-starvation auto-file/auto-close pattern.
+      - name: Resolve prior failure self-report on success
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          FAIL_TITLE="⚠️ Weekly digest run FAILED — you did not get a digest this week"
+          EXISTING="$(gh issue list -R jikig-ai/operator-digest --state open \
+            --json number,title --limit 30 \
+            --jq "[.[] | select(.title == \"${FAIL_TITLE}\")][0].number // empty")"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue close "$EXISTING" -R jikig-ai/operator-digest \
+              --comment "The weekly digest ran successfully again — auto-resolving this failure notice."
+          fi
+
+      # A FAILED run is itself a SILENT ABSENCE: the operator simply gets no digest that week
+      # and never learns the pipeline broke (the 2026-06-26 and 2026-07-20 runs failed with
+      # nobody notified). Self-report — loud, assigned — so a broken digest is visible, exactly
+      # like the delivery fix above. Idempotent: one standing open issue, commented on re-fail.
+      - name: Self-report on digest failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          OPERATOR_GH_LOGIN: ${{ vars.OPERATOR_GH_LOGIN }}
+        run: |
+          set -uo pipefail
+          FAIL_TITLE="⚠️ Weekly digest run FAILED — you did not get a digest this week"
+          EXISTING="$(gh issue list -R jikig-ai/operator-digest --state open \
+            --json number,title --limit 30 \
+            --jq "[.[] | select(.title == \"${FAIL_TITLE}\")][0].number // empty")"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" -R jikig-ai/operator-digest \
+              --body "The weekly digest run FAILED again — still no digest this week. Run: ${GH_RUN_URL}"
+          else
+            # Tolerate an unset OPERATOR_GH_LOGIN here: filing UNASSIGNED still beats a silent
+            # absence (the whole point of this step). Assign when the variable is present.
+            ASSIGN=()
+            [[ -n "${OPERATOR_GH_LOGIN:-}" ]] && ASSIGN=(--assignee "${OPERATOR_GH_LOGIN}")
+            gh issue create -R jikig-ai/operator-digest \
+              "${ASSIGN[@]}" \
+              --title "$FAIL_TITLE" \
+              --body "The Operator weekly digest workflow FAILED — no digest was produced or posted this week. This is a self-report so the failure is not a silent absence. See run ${GH_RUN_URL}. Auto-resolves on the next successful run."
+          fi
