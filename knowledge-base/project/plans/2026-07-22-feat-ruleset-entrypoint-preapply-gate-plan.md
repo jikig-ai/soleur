@@ -596,6 +596,92 @@ escalated per the `single-user incident` threshold; findings folded in above.
 - **Audit recording depends on `issues: write` + GitHub App auth** — the default
   job perms (`contents: read`) make `gh issue comment` fail silently.
 
+## Research Insights (deepen-plan)
+
+### Precedent-diff — this gate vs. the destroy-guard (Phase 4.4)
+
+The gate is a bash CI guard with a **canonical sibling precedent in the same
+workflow**: the destroy-guard (`tests/scripts/lib/destroy-guard-filter-web-platform.jq`
++ `tests/scripts/test-destroy-guard-counter-web-platform.sh` + the apply job's
+guard block). Adopt its shape verbatim; diverge only where the gate's different
+job demands it.
+
+| Concern | Destroy-guard precedent | This gate (same, unless noted) |
+|---|---|---|
+| Fail-closed numeric parse | `^[0-9]+$` validation on every count; empty → exit 1 (`2026-05-16` empty-string-bypass) | Same discipline; plus `jq -e '.resource_changes\|type==array'` input guard |
+| `set -e` handling | `-e` off only during `rc=$?` capture, re-enabled after | Same |
+| Decision source | jq counts over plan JSON (plan-derived) | **Diverges — MUST query live API** (a plan-derived guard inherits plan's blind spot; the whole point of #6767) |
+| Ack bypass | `host_creates` tripwire evaluated OUTSIDE the `destroy_count` sum, no `[ack-destroy]` | Same — no ack bypass (a clobber is never something to type past) |
+| Cap-coupling | dedicated filter + dedicated `test-*` + CODEOWNERS rows + parity test | Same (Phase 4) |
+| Class table | 5 CF nested-block surfaces enumerated in the jq header | Cross-referenced; the gate's Inclusion-Principle table adjudicates the same classes and lands only `cloudflare_ruleset` IN |
+
+No novel pattern is introduced — the gate is the destroy-guard's discipline with
+a live-API decision instead of a jq count. That single divergence is the feature.
+
+### Deepen-plan gate + quality-check results (2026-07-22)
+
+- **4.6 User-Brand Impact** — PASS (threshold `single-user incident`, non-empty,
+  `requires_cpo_signoff: true`).
+- **4.7 Observability** — PASS (all 5 fields present, non-placeholder,
+  `discoverability_test.command` is ssh-free).
+- **4.8 PAT-shaped variable** — PASS (no PAT-shaped var/literal; the audit job
+  uses GitHub App auth per `hr-github-app-auth-not-pat`).
+- **4.9 UI-wireframe** — N/A (no UI surface).
+- **4.55 Downtime & Cutover** — no trigger: the change adds a read-only CI gate
+  step; it reboots/replaces no serving host, runs no lock-taking DDL, and
+  restructures no router. A false positive fails the apply job *before* `apply`
+  (zero prod mutation), which is availability-neutral for serving surfaces.
+- **4.5 Network-outage** — no substantive trigger: the two `ssh` matches are the
+  existing SSH-provisioned apply step (positioning reference) and the "no ssh"
+  discoverability note; the gate itself issues a read-only `curl`, not an
+  SSH-provisioner apply.
+- **Cited rule IDs** — all active, none retired
+  (`hr-no-dashboard-eyeball-pull-data-yourself`, `hr-tf-variable-no-operator-mint-default`,
+  `hr-github-app-auth-not-pat`, `wg-block-pr-ready-on-undeferred-operator-steps`,
+  `cq-test-fixtures-synthesized-only`).
+- **ADR-133 ordinal** — re-derived from freshly-fetched `origin/main`: highest is
+  ADR-132, so ADR-133 is next-free (still provisional; ship re-verifies).
+- **`terraform show -json` import shape** — HashiCorp docs (via Context7)
+  corroborate the *import-stub-state* concept (an imported resource simulates a
+  prior-run create); the exact `change.importing` field name + `change.actions`
+  value on TF 1.10.5 / provider 4.52.7 **stays a P0.1 verification against a real
+  `terraform show -json`** before the discriminator is written. Do not hardcode
+  the field from memory.
+
+## Enhancement Summary
+
+**Deepened on:** 2026-07-22
+**Review depth:** 6-agent plan-review panel (DHH, Kieran, code-simplicity,
+architecture-strategist, spec-flow-analyzer, cto) + deepen-plan gate/quality
+checks + precedent-diff.
+
+### Key improvements folded in from review
+1. **Default-deny HTTP handling** (spec-flow A1 / Kieran L2) — PASS only on
+   proven-empty (404 or 200-empty); every other code → one fail-closed catch-all.
+2. **Known-phase control probe** (code-simplicity 404-seam + Kieran H1) — proves
+   token+URL-scheme+network before trusting a target 404; unifies three fail-open
+   seams into one distinct "gate environment invalid" branch.
+3. **Exact `["create"] && before==null && importing==null` discriminator**
+   (spec-flow D1 / Kieran M1) — replaces the house `index("create")` idiom that
+   false-positives on `-replace`/CBD.
+4. **Inclusion Principle + parity test** (architecture B + CTO F1) — the
+   "extensible registry" collapses to one principled member (`cloudflare_ruleset`)
+   plus a forcing-function parity test, killing "someone must remember" one level up.
+5. **Structural workflow-wiring fixes** (Kieran H1/H2/H3) — `DOPPLER_TOKEN` env +
+   token-empty guard; separate step (not a mid-`run`-block splice) with
+   `working-directory`; anchored before the *main* apply; whitespace-normalized
+   wiring greps.
+6. **Bounded `curl --max-time`** (CTO F4) — a CF-API hang converts to fail-closed
+   instead of holding the sole apply concurrency serializer.
+7. **Audit hardened** (spec-flow C1/C4, CTO F2/F5) — dedicated guarded
+   `entrypoint-audit` dispatch + own concurrency group + `issues: write` App auth;
+   single #6767 system-of-record; ship runs it in-session and blocks PR-ready.
+
+### Carried as a User-Challenge (operator to adjudicate)
+- DHH + code-simplicity: the retrospective audit may be redundant with
+  `terraform plan` + the infra-drift detector for the in-state siblings. Kept
+  (explicit #6767 deliverable), leaned down; recorded in `decision-challenges.md`.
+
 ## Test Scenarios
 
 See the fixture-by-fixture list in Phase 4. Every branch of the gate's decision
