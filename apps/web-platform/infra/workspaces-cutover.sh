@@ -68,7 +68,7 @@ CONFIRM_WIPE="${CONFIRM_WIPE:-0}"
 # keeps it defined under `set -u` even if the body ever arrives on stdin (`bash -s`), where
 # BASH_SOURCE is empty — the pre-#6649 failure that darkened the emit channel + killed the run.
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-# SHIPPED COPY FIRST, installed copy only as a fallback — the same precedence luks-monitor.sh:29-30
+# SHIPPED COPY FIRST, installed copy only as a fallback — the same precedence luks-monitor.sh (its own EMIT resolution)
 # uses, and the opposite of what this line said before #6807.
 #
 # This run tars and ships the REPO copy of the infra scripts and executes from that bundle dir. The

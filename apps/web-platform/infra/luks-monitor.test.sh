@@ -306,7 +306,9 @@ fi
 # ---------------------------------------------------------------------------
 # shellcheck source=apps/web-platform/infra/workspaces-luks-emit.sh
 . "$EMIT"
-wc_root="$(mktemp -d)"
+# Under the harness's already-trapped RUN_SCRATCH (cleanup_scratch on EXIT/INT/TERM/HUP) rather than
+# a fresh untrapped mktemp — no new class-b tempfile-ownership debt.
+wc_root="$RUN_SCRATCH/wc-unit"; mkdir -p "$wc_root"
 # empty root => 0, rc 0
 out="$(wl_count_workspace_dirs "$wc_root")"; rc=$?
 [ "$out" = "0" ] && [ "$rc" -eq 0 ] && ok "wl_count_workspace_dirs: empty root => 0 rc0" \
@@ -357,6 +359,22 @@ for pat in \
     no "dead-man MISSING marker ($pat) — the #6812 blind spot is not closed"
   fi
 done
+
+# (y) VERDICT-LINE ANCHOR PARITY. The verify workflow's positive control greps the probe output with
+# `^\[luks-monitor\] SOLEUR_WORKSPACES_READYZ ready=true `. That anchor depends on log()'s
+# `[luks-monitor] ` prefix and the exact field order. If the emitted line and the workflow anchor
+# drift, the workflow fails CLOSED on EVERY run (the opposite failure, but still wrong). Extract the
+# literal grep pattern from the workflow and run it against a real success emission — producer and
+# consumer pinned to each other, not both to a hand-copied string.
+VERIFY_WF="$DIR/../../../.github/workflows/workspaces-luks-verify.yml"
+wf_anchor="$(grep -oE "grep -cE '\^\\\\\[luks-monitor\\\\\] SOLEUR_WORKSPACES_READYZ ready=true '" "$VERIFY_WF" | head -1 | sed -E "s/^grep -cE '//; s/'$//")"
+mon_prepare "$PROBE"; mkdir -p "$WSDIR/ws-a"; seed_count 1
+mon_run LUKS_MONITOR_ASSERT_READYZ=1
+if [ -n "$wf_anchor" ] && printf '%s\n' "$MON_OUT" | grep -qE "$wf_anchor"; then
+  ok "the verify workflow's verdict-line anchor matches the emitted line (producer/consumer pinned)"
+else
+  no "the workflow's positive-control anchor [$wf_anchor] does NOT match the emitted verdict line — the workflow would fail closed on every run: ${MON_OUT:0:200}"
+fi
 
 echo ""
 echo "=== luks-monitor.test.sh: ${passes} passed, ${fails} failed ==="

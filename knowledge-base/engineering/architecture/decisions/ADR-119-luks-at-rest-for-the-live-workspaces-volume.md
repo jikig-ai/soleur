@@ -166,7 +166,7 @@ root. A cutover that preserved **1 of 8** sole-copy workspaces therefore returns
 Certifying a cutover needs a **separate inventory count** compared against a persisted baseline —
 which is why `luks-monitor.sh` now carries a host-side count (exclusions mirrored from
 `session-metrics.ts`) that fails **closed** when the baseline is absent, and why the cutover persists
-`WORKSPACES_COUNT` at the C1 gate. Never let prose imply `ready=true` means the inventory survived.
+`WORKSPACES_COUNT` at the G3 data gate. Never let prose imply `ready=true` means the inventory survived.
 
 **This reasoning binds the OFF-HOST VERIFY surface too, and did not (#6807).** The same argument was
 implemented in the cutover's canary and never swept into `workspaces-luks-verify.yml`, which asserted

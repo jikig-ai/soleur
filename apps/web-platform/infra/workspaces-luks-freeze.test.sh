@@ -576,7 +576,13 @@ ac8_attempts=$(grep -oE 'WORKSPACES_CANARY_ATTEMPTS:-[0-9]+' "$SCRIPT_DIR/worksp
 ac8_interval=$(grep -oE 'WORKSPACES_CANARY_INTERVAL_S:-[0-9]+' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9]+$' | head -1 || true)
 ac8_maxtime=$(grep -oE '\-\-max-time [0-9]+' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9]+$' | head -1 || true)
 ac8_deadman=$(grep -oE 'WORKSPACES_DEAD_MAN_MIN:-[0-9]+' "$CUTOVER" | grep -oE '[0-9]+$' | head -1 || true)
-# MEASURED, not assumed: freeze/arm 22:11:49.09 -> canary 22:14:50.31 on run 29782780158.
+# MEASURED, not assumed: freeze/arm 22:11:49.09 -> canary 22:14:50.31 on run 29782780158. This is
+# the ONE hardcoded operand (nothing in-repo to extract it from), and it is a LOWER BOUND: the
+# arm->canary span contains the freeze + full rsync + G3 gate, which scale with total workspace
+# bytes, so real pre-canary elapsed rises with the user base while this constant does not. The ~19min
+# margin absorbs a lot, but a RUNTIME budget check in app_canary (read the arm timestamp, shrink the
+# attempt count if the remaining budget is thin) is the durable fix — deliberately NOT built here
+# (the plan chose a static AC), tracked with the dead-man's own failure modes on #6812.
 ac8_precanary=181
 if [ -n "$ac8_attempts" ] && [ -n "$ac8_interval" ] && [ -n "$ac8_maxtime" ] && [ -n "$ac8_deadman" ]; then
   # Worst case per probe: every attempt burns the full curl timeout, plus (attempts-1) intervals
@@ -592,6 +598,21 @@ if [ -n "$ac8_attempts" ] && [ -n "$ac8_interval" ] && [ -n "$ac8_maxtime" ] && 
 else
   no "AC8 could not extract every operand (attempts=$ac8_attempts interval=$ac8_interval maxtime=$ac8_maxtime deadman=$ac8_deadman) — an unextractable operand makes this guard vacuous"
 fi
+# AC10 — RUNNER/HELPER structural-set parity. The verify workflow's runner-side /health loop cannot
+# source the host helper (it runs on the GH runner), so it re-encodes wl_http_class's structural set
+# by hand. That duplication is the #6807 drift class: adding 521 to the helper's structural set, or
+# dropping 525 from the runner, silently reintroduces Bug B in one of the two copies. The workflow
+# COMMENT claims this equality is enforced "by grep" — so it must actually be. Extract the sorted
+# structural code list from each file's case-arm and assert byte-equality. The bound (10 vs 30) is
+# deliberately NOT compared (see the workflow comment).
+ac10_helper="$(grep -oE '^[[:space:]]*307\|[0-9|]+\)[[:space:]]*printf' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9|]+' | tr '|' '\n' | grep -E '^[0-9]+$' | sort -u | tr '\n' ' ')"
+ac10_runner="$(grep -oE '^[[:space:]]*307\|[0-9|]+\)' "$VERIFY_WF" | grep -oE '[0-9|]+' | tr '|' '\n' | grep -E '^[0-9]+$' | sort -u | tr '\n' ' ')"
+if [ -n "$ac10_helper" ] && [ "$ac10_helper" = "$ac10_runner" ]; then
+  ok "AC10 runner /health structural set == wl_http_class structural set ([$ac10_helper])"
+else
+  no "AC10 structural-set DRIFT between the runner loop and wl_http_class (helper=[$ac10_helper] runner=[$ac10_runner]) — Bug B reintroduced in one copy"
+fi
+
 [ "$(grep -c 'no C1 verify' "$WORKFLOW" || true)" -ge 1 ] \
   && ok "AC9 the dry_run description states the rehearsal does not run the C1 verify" \
   || no "AC9 dry_run description still misrepresents what a rehearsal covers"
