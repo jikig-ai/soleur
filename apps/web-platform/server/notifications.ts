@@ -196,6 +196,24 @@ export type NotificationPayload =
  *     Observability block pages on `op=notify-cost-breaker`.
  * No-op for review_gate and non-statutory email_triage (existing behavior).
  */
+/**
+ * The three notification classes for which a missed send is a real harm and the
+ * email fallback must fire even on a partial/zero push delivery (#6802/D4a):
+ *   - statutory email_triage: a missed ping runs an Art. 12/33 clock unattended.
+ *   - cost_breaker_tripped: a missed halt notice IS the failure the feature
+ *     exists to prevent (#5767).
+ *   - action_required inbox_item: a decision that needs the founder, silently.
+ * Single source of truth — `mirrorNotifyFailure` and `notifyOfflineUser` both
+ * consume it, so the class set can never drift between the two.
+ */
+export function mustNotFailSilently(payload: NotificationPayload): boolean {
+  return (
+    payload.type === "cost_breaker_tripped" ||
+    (payload.type === "email_triage" && payload.isStatutory) ||
+    (payload.type === "inbox_item" && payload.severity === "action_required")
+  );
+}
+
 function mirrorNotifyFailure(payload: NotificationPayload, err: unknown): void {
   const isCostBreaker = payload.type === "cost_breaker_tripped";
   const isStatutoryTriage =
@@ -205,7 +223,7 @@ function mirrorNotifyFailure(payload: NotificationPayload, err: unknown): void {
   // silent (plan Observability: op=notify-inbox-action-required).
   const isActionRequiredInbox =
     payload.type === "inbox_item" && payload.severity === "action_required";
-  if (!isCostBreaker && !isStatutoryTriage && !isActionRequiredInbox) return;
+  if (!mustNotFailSilently(payload)) return;
   const tags = isCostBreaker
     ? { feature: "cost-breaker", op: "notify-cost-breaker" }
     : isStatutoryTriage
@@ -280,14 +298,40 @@ function appUrl(): string {
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Look up the user's email and send the fallback. Returns whether it landed. */
+async function emailFallback(
+  supabase: ReturnType<typeof createServiceClient>,
+  userId: string,
+  payload: NotificationPayload,
+): Promise<boolean> {
+  const { data: userData, error: userError } =
+    await supabase.auth.admin.getUserById(userId);
+  if (userError || !userData?.user?.email) {
+    log.error(
+      { userId, err: userError?.message },
+      "Failed to look up user email for notification",
+    );
+    mirrorNotifyFailure(payload, userError?.message ?? "user email missing");
+    return false;
+  }
+  return sendEmailNotification(userData.user.email, payload);
+}
+
 /**
  * Orchestrator: query push subscriptions for userId, push or email.
  * Designed to be called fire-and-forget (no await needed by caller).
+ *
+ * #6802 (D4/M3): returns whether the notification was DELIVERED on at least one
+ * channel — the marker in the statutory cron is rolled back on `false` so the
+ * next tick retries, instead of certifying a non-send as sent. "Delivered" is
+ * transport acceptance (a push service 201 / a Resend 200), not receipt; the
+ * ADR names the crash and bounce residuals. Never throws (the outer catch
+ * returns false), preserving the documented contract two call sites rely on.
  */
 export async function notifyOfflineUser(
   userId: string,
   payload: NotificationPayload,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const supabase = createServiceClient();
     const { data: subscriptions, error } = await supabase
@@ -298,38 +342,61 @@ export async function notifyOfflineUser(
     if (error) {
       log.error({ userId, err: error.message }, "Failed to query push subscriptions");
       mirrorNotifyFailure(payload, error.message);
-      return;
+      return false;
     }
 
     if (subscriptions && subscriptions.length > 0) {
       const tally = await sendPushNotifications(subscriptions, payload);
-      // Zero-delivery on a statutory item is the dangerous quadrant: with the
-      // #6781 send-marker already written, nothing will retry this tick, so
-      // the user gets NOTHING on a running legal clock while the caller counts
-      // the ping as sent. Surface it — a 410 prunes and self-heals, but any
-      // other failure mode does not.
-      if (tally.delivered === 0 && payload.type === "email_triage" && payload.isStatutory) {
-        warnSilentFallback(null, {
-          feature: "notifications",
-          op: "statutory-notify-zero-delivery",
-          message:
-            "statutory notification reached zero devices; no retry will occur (send-marker already written)",
-          extra: { userId, attempted: tally.attempted, emailId: payload.emailId },
-        });
+
+      // Full delivery on every registered device → done, no email (no
+      // double-notify).
+      if (tally.delivered > 0 && tally.delivered >= tally.attempted) {
+        return true;
       }
-    } else {
-      // Fallback: send email
-      const { data: userData, error: userError } = await supabase.auth.admin.getUserById(userId);
-      if (userError || !userData?.user?.email) {
-        log.error({ userId, err: userError?.message }, "Failed to look up user email for notification");
-        mirrorNotifyFailure(payload, userError?.message ?? "user email missing");
-        return;
+
+      // #6802 (D4a/M18): partial OR zero delivery on a must-not-fail-silently
+      // class falls through to email. `delivered < attempted` (not `=== 0`) is
+      // load-bearing: a stale device that still 201s must not mask a dead one
+      // and leave the founder on the road with nothing on a legal clock.
+      if (mustNotFailSilently(payload)) {
+        const emailed = await emailFallback(supabase, userId, payload);
+        // The #6802 incident signal fires on TRUE zero push delivery (the
+        // egress-DROP case): total push silence with a marker already written.
+        // Op slug unchanged so any keyed Sentry/Better Stack rule keeps firing.
+        if (
+          tally.delivered === 0 &&
+          payload.type === "email_triage" &&
+          payload.isStatutory
+        ) {
+          warnSilentFallback(null, {
+            feature: "notifications",
+            op: "statutory-notify-zero-delivery",
+            message:
+              "statutory push reached zero devices; fell back to email (no push retry — send-marker already written)",
+            extra: {
+              userId,
+              attempted: tally.attempted,
+              delivered: tally.delivered,
+              channel: emailed ? "email" : "none",
+              fallbackDelivered: emailed,
+              emailId: payload.emailId,
+            },
+          });
+        }
+        return tally.delivered > 0 || emailed;
       }
-      await sendEmailNotification(userData.user.email, payload);
+
+      // Non-must-not-fail class (review_gate, non-statutory email_triage): the
+      // push tally is the outcome, as before.
+      return tally.delivered > 0;
     }
+
+    // No subscriptions → email is the only channel.
+    return emailFallback(supabase, userId, payload);
   } catch (err) {
     log.error({ userId, err }, "notifyOfflineUser failed");
     mirrorNotifyFailure(payload, err);
+    return false;
   }
 }
 
@@ -558,18 +625,15 @@ export async function sendPushNotifications(
 export async function sendEmailNotification(
   email: string,
   payload: NotificationPayload,
-): Promise<void> {
+): Promise<boolean> {
   if (payload.type === "email_triage") {
-    await sendEmailTriageEmailNotification(email, payload);
-    return;
+    return sendEmailTriageEmailNotification(email, payload);
   }
   if (payload.type === "cost_breaker_tripped") {
-    await sendCostBreakerEmailNotification(email, payload);
-    return;
+    return sendCostBreakerEmailNotification(email, payload);
   }
   if (payload.type === "inbox_item") {
-    await sendInboxItemEmailNotification(email, payload);
-    return;
+    return sendInboxItemEmailNotification(email, payload);
   }
   const resend = getResend();
   const deepLink = `${appUrl()}/dashboard/chat/${payload.conversationId}`;
@@ -590,9 +654,10 @@ export async function sendEmailNotification(
 
   if (error) {
     log.error({ email, err: error }, "Failed to send email notification");
-  } else {
-    log.info({ email, conversationId: payload.conversationId }, "Email notification sent");
+    return false;
   }
+  log.info({ email, conversationId: payload.conversationId }, "Email notification sent");
+  return true;
 }
 
 /**
@@ -606,7 +671,7 @@ export async function sendEmailNotification(
 async function sendEmailTriageEmailNotification(
   email: string,
   payload: EmailTriageNotificationPayload,
-): Promise<void> {
+): Promise<boolean> {
   const resend = getResend();
   // DB uuid only — never an email-derived value (lands inside href).
   const deepLink = `${appUrl()}/dashboard/inbox/email/${payload.emailId}`;
@@ -647,9 +712,10 @@ async function sendEmailTriageEmailNotification(
   if (error) {
     log.error({ email, emailId: payload.emailId, err: error }, "Failed to send triage email notification");
     mirrorNotifyFailure(payload, error);
-  } else {
-    log.info({ email, emailId: payload.emailId }, "Triage email notification sent");
+    return false;
   }
+  log.info({ email, emailId: payload.emailId }, "Triage email notification sent");
+  return true;
 }
 
 /**
@@ -661,7 +727,7 @@ async function sendEmailTriageEmailNotification(
 async function sendCostBreakerEmailNotification(
   email: string,
   payload: CostBreakerNotificationPayload,
-): Promise<void> {
+): Promise<boolean> {
   const resend = getResend();
   const copy = costBreakerCopy(payload);
   const deepLink = `${appUrl()}/dashboard`;
@@ -693,9 +759,10 @@ async function sendCostBreakerEmailNotification(
     // A missed halt notification is the exact failure this feature prevents —
     // mirror to Sentry (op=notify-cost-breaker) so it never fails silently.
     mirrorNotifyFailure(payload, error);
-  } else {
-    log.info({ email, reason: payload.reason }, "Cost-breaker email notification sent");
+    return false;
   }
+  log.info({ email, reason: payload.reason }, "Cost-breaker email notification sent");
+  return true;
 }
 
 /**
@@ -706,7 +773,7 @@ async function sendCostBreakerEmailNotification(
 async function sendInboxItemEmailNotification(
   email: string,
   payload: InboxItemNotificationPayload,
-): Promise<void> {
+): Promise<boolean> {
   const resend = getResend();
   const deepLink = `${appUrl()}${payload.deepLinkPath}`;
   const safeTitle = sanitizeDisplayString(payload.title);
@@ -737,9 +804,10 @@ async function sendInboxItemEmailNotification(
       "Failed to send inbox-item email notification",
     );
     mirrorNotifyFailure(payload, error);
-  } else {
-    log.info({ email, inboxItemId: payload.inboxItemId }, "Inbox-item email notification sent");
+    return false;
   }
+  log.info({ email, inboxItemId: payload.inboxItemId }, "Inbox-item email notification sent");
+  return true;
 }
 
 // ---------------------------------------------------------------------------

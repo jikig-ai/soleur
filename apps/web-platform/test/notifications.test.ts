@@ -135,6 +135,94 @@ describe("notifications", () => {
       expect(emailCall.to).toContain("test@example.com");
       expect(emailCall.html).toContain("/dashboard/chat/conv-1");
     });
+
+    // #6802 delivery contract (D4/M3/M18). notifyOfflineUser returns whether the
+    // notification was delivered, and a partial/zero push on a must-not-fail
+    // class falls back to email.
+    const statPayload = {
+      type: "email_triage" as const,
+      emailId: "stat-1",
+      title: "Statutory deadline (computed) approaching",
+      isStatutory: true,
+      statutoryExcerpt: "within one calendar month of receipt (GDPR Art. 12(3)).",
+    };
+
+    function twoSubsThenUser() {
+      mockFrom.mockReturnValue({
+        select: () => ({
+          eq: () => ({
+            data: [
+              { id: "sub-1", endpoint: "https://p/1", p256dh: "k1", auth: "a1" },
+              { id: "sub-2", endpoint: "https://p/2", p256dh: "k2", auth: "a2" },
+            ],
+            error: null,
+          }),
+        }),
+        update: () => ({ in: () => ({ error: null }) }),
+        delete: () => ({ eq: () => ({ error: null }) }),
+      });
+      mockAdminGetUserById.mockResolvedValue({
+        data: { user: { email: "founder@example.com" } },
+        error: null,
+      });
+      mockResendSend.mockResolvedValue({ data: { id: "msg-1" }, error: null });
+    }
+
+    test("T17: a non-410 push rejection (zero delivery) on a statutory item falls back to email + returns true", async () => {
+      twoSubsThenUser();
+      // Both pushes reject with a non-410 (the egress-DROP shape).
+      mockSendNotification.mockRejectedValue({ statusCode: 500 });
+
+      const delivered = await notifyOfflineUser("user-1", statPayload);
+
+      expect(mockResendSend).toHaveBeenCalledTimes(1); // email fallback fired
+      expect(delivered).toBe(true); // email landed
+      // Zero-delivery incident signal fired.
+      expect(mockCaptureMessage).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          tags: expect.objectContaining({ op: "statutory-notify-zero-delivery" }),
+        }),
+      );
+    });
+
+    test("T18: full push delivery on a statutory item sends NO email (no double-notify)", async () => {
+      twoSubsThenUser();
+      mockSendNotification.mockResolvedValue({}); // both fulfil
+
+      const delivered = await notifyOfflineUser("user-1", statPayload);
+
+      expect(mockResendSend).not.toHaveBeenCalled();
+      expect(delivered).toBe(true);
+    });
+
+    test("T18b: PARTIAL push delivery on a statutory item STILL falls back to email (M18)", async () => {
+      twoSubsThenUser();
+      // sub-1 fulfils, sub-2 rejects → delivered 1 of 2.
+      mockSendNotification
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce({ statusCode: 500 });
+
+      const delivered = await notifyOfflineUser("user-1", statPayload);
+
+      expect(mockResendSend).toHaveBeenCalledTimes(1); // partial → email fires
+      expect(delivered).toBe(true);
+    });
+
+    test("T21: a review_gate payload with zero delivery does NOT fall back (class scope)", async () => {
+      twoSubsThenUser();
+      mockSendNotification.mockRejectedValue({ statusCode: 500 });
+
+      const delivered = await notifyOfflineUser("user-1", {
+        type: "review_gate",
+        conversationId: "conv-1",
+        agentName: "CEO",
+        question: "Approve budget?",
+      });
+
+      expect(mockResendSend).not.toHaveBeenCalled(); // out of the must-not-fail class
+      expect(delivered).toBe(false);
+    });
   });
 
   describe("sendPushNotifications", () => {

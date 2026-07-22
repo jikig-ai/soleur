@@ -314,6 +314,14 @@ export async function cronEmailIngressProbeHandler({
     // double-fire detector; it is disambiguated by the marker's `created_at` and
     // counted separately, never in the tag.
     let headsUpAlreadySent = 0;
+    // #6802 (D4c): a dispatch that reached NO channel. `pinged` now means
+    // "delivered on at least one channel"; `undelivered` is its complement, a
+    // real founder-facing failure (the marker is rolled back so the next tick
+    // retries where that helps — see below). An anomaly counter → escalates.
+    let undelivered = 0;
+    // A rollback DELETE that itself failed: an undelivered send stays certified.
+    // Over-suppression is the strictly worse outcome, so this arm is loud.
+    let markerRollbackFailed = 0;
     // Fail-open accounting, emitted ONCE after the loop (see M2 note above).
     let failOpenCount = 0;
     let failOpenFirstCode: string | undefined;
@@ -380,6 +388,11 @@ export async function cronEmailIngressProbeHandler({
       // it (the next tick no longer satisfies the equality). And the likeliest
       // fail-open trigger, a 42P01 during the deploy window, is correlated
       // across every item in the band at once.
+      // #6802 (D4c/M5): the rollback below may ONLY delete a marker THIS
+      // iteration claimed. On a fail-open (a non-23505 error or a throw) we
+      // dispatch WITHOUT having written a marker, so a rollback there would
+      // delete a marker a concurrent run wrote — reopening the #6781 window.
+      let markerClaimedHere = false;
       try {
         // PLAIN insert, no `.select()` — the claimDedupRow idiom
         // (app/api/webhooks/github/route.ts). Deliberately NOT the
@@ -394,6 +407,9 @@ export async function cronEmailIngressProbeHandler({
         const { error: markerError } = await sb
           .from("statutory_repin_send")
           .insert({ item_id: row.id, tick_key: tickKey });
+        if (!markerError) {
+          markerClaimedHere = true;
+        }
         if (markerError) {
           if (markerError.code === "23505") {
             // Already a marker for this (item, tick). For the daily band the key
@@ -457,14 +473,58 @@ export async function cronEmailIngressProbeHandler({
         daysUntilDue >= 0
           ? `Statutory deadline (computed) approaching — ${dueStr}`
           : `Statutory deadline (computed) OVERDUE — ${dueStr}`;
-      await notifyOfflineUser(row.user_id, {
+      const delivered = await notifyOfflineUser(row.user_id, {
         type: "email_triage",
         emailId: row.id,
         title,
         isStatutory: true,
         statutoryExcerpt: rule.catalogExcerpt,
       });
-      pinged += 1;
+
+      if (delivered) {
+        pinged += 1;
+        continue;
+      }
+
+      // #6802 (D4c): the send reached NO channel. The marker must not certify a
+      // dispatch that delivered nothing. Roll it back so the next tick retries —
+      // a designed restoration of the pre-#6781 self-heal, NOT the #6781 defect
+      // (a DELIVERED send keeps its marker, so a double-fire is still
+      // suppressed; only a provably-undelivered send is retried).
+      undelivered += 1;
+      // M6: rollback is scoped to the `headsup` key. The `daily:<date>` key
+      // rotates every day, so the next tick re-arms the daily arm for free
+      // whether or not this marker exists — deleting it there buys nothing and
+      // only reopens the same-day double-fire window. All rollback VALUE lives on
+      // the constant `headsup` key, whose re-send depends on the marker being
+      // gone. (M5: only a marker THIS iteration claimed may be deleted.)
+      if (markerClaimedHere && tickKey === "headsup") {
+        try {
+          const { error: delErr } = await sb
+            .from("statutory_repin_send")
+            .delete()
+            .eq("item_id", row.id)
+            .eq("tick_key", tickKey);
+          if (delErr) {
+            markerRollbackFailed += 1;
+          } else {
+            // Bypasses the audited purge_statutory_repin_send RPC boundary, so
+            // emit its own audit line (mig 135 routes deletions through an
+            // audited path; this raw delete needs an equivalent trail).
+            infoSilentFallback(null, {
+              feature: "email-triage",
+              op: "statutory-repin-marker-rolled-back",
+              message:
+                "rolled back an undelivered statutory heads-up marker so the next tick retries",
+              extra: { itemId: row.id, tickKey, runDateUtc },
+            });
+          }
+        } catch {
+          // M7: a THROWN rejection under `retries: 0` must not escape the loop
+          // (it would kill the ingress liveness probe). Count and continue.
+          markerRollbackFailed += 1;
+        }
+      }
     }
 
     // ONE warn for the whole run's fail-open population, at WARN level so it
@@ -519,7 +579,9 @@ export async function cronEmailIngressProbeHandler({
     // queryable from Sentry (reachable = the real #6801 requirement) without
     // being a page. Vector keeps level_int >= 40, so only a warn reaches
     // Better Stack (infra/vector.toml [transforms.app_container_warn_filter]).
-    const anomalyCount = suppressed; // Phase 4 adds undelivered + markerRollbackFailed
+    // ANOMALY counters gate escalation. `excluded` (monotonic) and
+    // `headsUpAlreadySent` (expected steady state) are deliberately excluded.
+    const anomalyCount = suppressed + undelivered + markerRollbackFailed;
     const emit = anomalyCount > 0 ? warnSilentFallback : infoSilentFallback;
     emit(null, {
       feature: "email-triage",
@@ -528,10 +590,12 @@ export async function cronEmailIngressProbeHandler({
       // `suppressed > 0` is the only signal that a second scheduler is live and
       // double-firing (#6781), so it has to be queryable. Boolean, low-cardinality.
       // `repin_excluded` surfaces the #6801 cliff residue as a queryable tag
-      // WITHOUT gating escalation (see above).
+      // WITHOUT gating escalation (see above); `repin_undelivered` is the #6802
+      // total-silence signal.
       tags: {
         repin_suppressed: suppressed > 0 ? "yes" : "no",
         repin_excluded: excluded && excluded > 0 ? "yes" : "no",
+        repin_undelivered: undelivered > 0 ? "yes" : "no",
       },
       extra: {
         pinged,
@@ -540,6 +604,8 @@ export async function cronEmailIngressProbeHandler({
         // double-fire signal, so it never gates the `repin_suppressed` tag or
         // escalation.
         headsUpAlreadySent,
+        undelivered,
+        markerRollbackFailed,
         excluded,
         scanned: (data ?? []).length,
         runDateUtc,
@@ -550,6 +616,8 @@ export async function cronEmailIngressProbeHandler({
       pinged,
       suppressed,
       headsUpAlreadySent,
+      undelivered,
+      markerRollbackFailed,
       excluded,
       scanned: (data ?? []).length,
       runDateUtc,

@@ -58,7 +58,9 @@ const {
   };
   return {
     rpcSpy: vi.fn(),
-    notifySpy: vi.fn(async (..._args: unknown[]) => undefined),
+    // #6802: notifyOfflineUser now returns whether the notification was
+    // delivered — default true (delivered) so pinged counts normally.
+    notifySpy: vi.fn(async (..._args: unknown[]) => true),
     resendSendSpy: vi.fn(),
     heartbeatSpy: vi.fn(async (..._args: unknown[]) => undefined),
     warnSilentFallbackSpy: vi.fn(),

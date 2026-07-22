@@ -67,6 +67,12 @@ const {
     markerThrowOnAttempt: number | null;
     /** Force the #6801 excluded-count query to return an error (T16c). */
     excludedQueryError: boolean;
+    /** Rollback DELETEs issued against statutory_repin_send (#6802 D4c). */
+    markerDeletes: Array<{ item_id: string; tick_key: string }>;
+    /** Force the rollback DELETE to THROW (T-rollback-throws, M7). */
+    markerDeleteThrows: boolean;
+    /** Force the rollback DELETE to return an error (markerRollbackFailed). */
+    markerDeleteError: boolean;
     /** user_id → push subscription rows. */
     pushSubs: Record<string, Array<Record<string, unknown>>>;
     /** user_id → email address. */
@@ -81,12 +87,19 @@ const {
     markerErrorOnAttempt: null,
     markerThrowOnAttempt: null,
     excludedQueryError: false,
+    markerDeletes: [],
+    markerDeleteThrows: false,
+    markerDeleteError: false,
     pushSubs: {},
     userEmails: {},
     workspaceOwners: [],
   };
   return {
-    resendSendSpy: vi.fn(async (..._args: unknown[]) => ({ error: null })),
+    resendSendSpy: vi.fn(
+      async (..._args: unknown[]): Promise<{ error: { message: string } | null }> => ({
+        error: null,
+      }),
+    ),
     webpushSendSpy: vi.fn(async (..._args: unknown[]) => ({ statusCode: 201 })),
     warnSilentFallbackSpy: vi.fn(),
     reportSilentFallbackSpy: vi.fn(),
@@ -289,6 +302,28 @@ function makeBuilder(table: string) {
         onFulfilled,
         onRejected,
       );
+    } else if (table === "statutory_repin_send" && deleting) {
+      // #6802 rollback DELETE: honor forced throw/error, otherwise actually
+      // remove the (item_id, tick_key) marker so a subsequent tick re-sends.
+      const itemId = eqArgs.find(([c]) => c === "item_id")?.[1] as string;
+      const tickKey = eqArgs.find(([c]) => c === "tick_key")?.[1] as string;
+      dbState.markerDeletes.push({ item_id: itemId, tick_key: tickKey });
+      if (dbState.markerDeleteThrows) {
+        return Promise.reject(new Error("simulated rollback DELETE throw")).then(
+          onFulfilled,
+          onRejected,
+        );
+      }
+      if (dbState.markerDeleteError) {
+        return Promise.resolve({ data: null, error: { code: "XX000", message: "delete failed" } }).then(
+          onFulfilled,
+          onRejected,
+        );
+      }
+      const key = markerKey(itemId, tickKey);
+      dbState.markers.delete(key);
+      dbState.markerCreatedAt.delete(key);
+      return Promise.resolve({ data: null, error: null }).then(onFulfilled, onRejected);
     } else if (table === "workspace_members" || table === "workspace_member") {
       // Deliberately populated. T12 claims to red on a fan-out, but the most
       // likely fan-out implementation DISCOVERS co-Owners by querying
@@ -515,6 +550,9 @@ beforeEach(() => {
   dbState.markerErrorOnAttempt = null;
   dbState.markerThrowOnAttempt = null;
   dbState.excludedQueryError = false;
+  dbState.markerDeletes = [];
+  dbState.markerDeleteThrows = false;
+  dbState.markerDeleteError = false;
   dbState.pushSubs = {};
   dbState.userEmails = {};
   dbState.workspaceOwners = [];
@@ -788,6 +826,126 @@ describe("deadline-repin idempotency guard (#6781)", () => {
       .concat(warnSilentFallbackSpy.mock.calls)
       .find((c) => (c[1] as { op?: string })?.op === "deadline-repin-sweep-complete");
     expect((emit?.[1] as { extra?: { excluded?: unknown } })?.extra?.excluded).toBeNull();
+  });
+
+  // #6802 (AC16/D4c): push AND email both fail on a heads-up-band item → the
+  // (item_id, tick_key) marker is rolled back, `pinged` is NOT incremented,
+  // `undelivered === 1`. The rollback restores the pre-#6781 self-heal.
+  it("delivery contract: total failure on a heads-up item rolls back the marker, does not count pinged", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    // received 2026-02-15T12:00Z → due 2026-03-15 → daysUntilDue 5 → heads-up band.
+    const received = "2026-02-15T12:00:00.000Z";
+    dbState.repinRows = [statutoryRow({ received_at: received })];
+    dbState.pushSubs = {}; // no push → email path
+    resendSendSpy.mockImplementation(async (arg) => {
+      const a = arg as { subject?: string };
+      // Fail ONLY the statutory notification email; the ingress
+      // probe send (SOLEUR-PROBE-*) must still succeed.
+      if (a?.subject?.startsWith("Statutory item")) return { error: { message: "resend down" } };
+      return { error: null };
+    });
+
+    const result = await runHandler();
+
+    expect(result.repinged).toBe(0); // NOT counted as pinged
+    // The heads-up marker was rolled back.
+    expect(dbState.markerDeletes).toEqual([{ item_id: "item-1", tick_key: "headsup" }]);
+    expect(dbState.markers.has("item-1::headsup")).toBe(false);
+    // undelivered surfaced in the sweep emit at WARN level.
+    expect(sweepExtraSum("undelivered")).toBe(1);
+    const warnEmits = warnSilentFallbackSpy.mock.calls.filter(
+      (c) => (c[1] as { op?: string })?.op === "deadline-repin-sweep-complete",
+    );
+    expect(warnEmits).toHaveLength(1);
+  });
+
+  // #6802 (D4c/M6): the DAILY arm does NOT roll back — the key rotates daily so
+  // the next tick re-arms for free; deleting there would only reopen the
+  // same-day double-fire window. undelivered is still counted.
+  it("delivery contract: total failure on a DAILY item does NOT roll back (key rotates)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    // daysUntilDue 1 → daily band.
+    dbState.repinRows = [statutoryRow({ received_at: receivedAtForDaysUntilDue(1) })];
+    dbState.pushSubs = {};
+    resendSendSpy.mockImplementation(async (arg) => {
+      const a = arg as { subject?: string };
+      // Fail ONLY the statutory notification email; the ingress
+      // probe send (SOLEUR-PROBE-*) must still succeed.
+      if (a?.subject?.startsWith("Statutory item")) return { error: { message: "resend down" } };
+      return { error: null };
+    });
+
+    const result = await runHandler();
+
+    expect(result.repinged).toBe(0);
+    expect(dbState.markerDeletes).toHaveLength(0); // NO rollback on the daily arm
+    expect(sweepExtraSum("undelivered")).toBe(1);
+  });
+
+  // #6802 (D4c/M11): a DELIVERED send keeps its marker (does NOT reintroduce the
+  // #6781 defect). Rollback fires ONLY on provably-undelivered.
+  it("delivery contract: a delivered send keeps its marker (no rollback)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [statutoryRow({ received_at: "2026-02-15T12:00:00.000Z" })];
+    dbState.pushSubs = {};
+    resendSendSpy.mockImplementation(async () => ({ error: null })); // email lands
+
+    const result = await runHandler();
+    expect(result.repinged).toBe(1);
+    expect(dbState.markerDeletes).toHaveLength(0);
+    expect(dbState.markers.has("item-1::headsup")).toBe(true);
+    expect(sweepExtraSum("undelivered")).toBe(0);
+  });
+
+  // #6802 (M6/self-heal): after a rollback, the SAME-day retry re-sends (the
+  // marker is gone), and a delivered retry keeps the fresh marker.
+  it("delivery contract: a rolled-back heads-up RE-SENDS on the next tick", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    const received = "2026-02-15T12:00:00.000Z";
+    dbState.pushSubs = {};
+    // Run 1: email fails → rollback.
+    dbState.repinRows = [statutoryRow({ received_at: received })];
+    resendSendSpy.mockImplementation(async (arg) => {
+      const a = arg as { subject?: string };
+      // Fail ONLY the statutory notification email; the ingress
+      // probe send (SOLEUR-PROBE-*) must still succeed.
+      if (a?.subject?.startsWith("Statutory item")) return { error: { message: "resend down" } };
+      return { error: null };
+    });
+    await runHandler();
+    expect(dbState.markers.has("item-1::headsup")).toBe(false);
+
+    // Run 2 (same day): email now lands → re-sends and keeps the marker.
+    dbState.repinRows = [statutoryRow({ received_at: received })];
+    resendSendSpy.mockImplementation(async () => ({ error: null }));
+    const r2 = await runHandler();
+    expect(r2.repinged).toBe(1); // re-sent
+    expect(dbState.markers.has("item-1::headsup")).toBe(true);
+  });
+
+  // #6802 (M7): a THROWN rollback DELETE must not escape the loop (retries:0
+  // would kill the ingress probe). Counted as markerRollbackFailed; run survives.
+  it("delivery contract: a THROWN rollback DELETE is caught, run still completes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [statutoryRow({ received_at: "2026-02-15T12:00:00.000Z" })];
+    dbState.pushSubs = {};
+    dbState.markerDeleteThrows = true;
+    resendSendSpy.mockImplementation(async (arg) => {
+      const a = arg as { subject?: string };
+      // Fail ONLY the statutory notification email; the ingress
+      // probe send (SOLEUR-PROBE-*) must still succeed.
+      if (a?.subject?.startsWith("Statutory item")) return { error: { message: "resend down" } };
+      return { error: null };
+    });
+
+    const result = await runHandler();
+    expect(result.ok).toBe(true); // probe survived
+    expect(sweepExtraSum("markerRollbackFailed")).toBe(1);
   });
 
   it.each([
