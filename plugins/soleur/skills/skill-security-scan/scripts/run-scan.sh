@@ -176,8 +176,33 @@ done
 # Write .scan-meta.json next to input (or to runtime dir for stdin).
 # umask 077 ensures persisted findings are not world-readable on shared hosts.
 ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-(umask 077; mkdir -p "${XDG_RUNTIME_DIR:-/tmp}/skill-security-scan-$$")
-meta_dir="${XDG_RUNTIME_DIR:-/tmp}/skill-security-scan-$$"
+meta_base="${SKILL_SCAN_META_BASE:-${XDG_RUNTIME_DIR:-/tmp}}"
+
+# Bound the per-invocation meta_dir leak (#6789). Each run creates
+# skill-security-scan-<pid>/ and NOTHING removes it: measured 12,889 leaked
+# dirs. The fix is a STARTUP age-reap of OLDER siblings — deliberately NOT a
+# `trap 'rm -rf "$meta_dir"' EXIT`. `.scan-meta.json` is GDPR Art. 32 evidence:
+# override-mechanism.md instructs the operator to reference this path in an
+# override artifact AFTER the scan exits (see the "written to:" line below), so
+# a naive EXIT trap would delete the very artifact the override flow needs (R1).
+# The current process's own dir is created after this reap and is never a
+# candidate here, so the artifact this run writes always survives this run.
+# Age-only is the correct sole dimension: these dirs are per-pid and single-use,
+# so an OLD one is definitionally abandoned (unlike the /tmp scratch reaper,
+# where age alone is unsafe). SKILL_SCAN_META_REAP_MIN defaults to 24h.
+_reap_min="${SKILL_SCAN_META_REAP_MIN:-1440}"
+if [ -d "$meta_base" ]; then
+  # -maxdepth 1 -type d, older than the floor, own the current uid. `-mmin` on
+  # each dir is safe here: the dir is written once at creation and never touched
+  # again, so its own mtime IS the run's age. rm failures (a sibling reaping the
+  # same dir) are tolerated.
+  find "$meta_base" -mindepth 1 -maxdepth 1 -type d \
+    -name 'skill-security-scan-*' -user "$(id -u)" -mmin "+${_reap_min}" \
+    -exec rm -rf {} + 2>/dev/null || true
+fi
+
+(umask 077; mkdir -p "$meta_base/skill-security-scan-$$")
+meta_dir="$meta_base/skill-security-scan-$$"
 meta_path="$meta_dir/.scan-meta.json"
 jq -n \
   --arg sv "$SCANNER_VERSION" \
