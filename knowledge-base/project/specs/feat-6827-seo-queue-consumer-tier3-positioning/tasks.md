@@ -30,6 +30,9 @@ precedes its consumers (Phase 3), and 3.1 + 3.2 are ONE commit (AC9).
 
 ## Phase 1 — FR1 + FR2: correction sweep
 
+**Method is claim-family-first** — grep the *claim*, not the twin. The twin-diff is the narrower
+second pass and is structurally blind to task 1.4.
+
 - [ ] **1.1** Correct all **seven** stale figures in
       `knowledge-base/marketing/distribution-content/2026-04-15-soleur-vs-paperclip.md`
       (`:13`, `:25`, `:45`, **`:53`**, `:76`, `:98`, `:136`) to the `74,000+` soft-floor form.
@@ -38,7 +41,18 @@ precedes its consumers (Phase 3), and 3.1 + 3.2 are ONE commit (AC9).
       the new figure (the `#6538` additive class, `review/SKILL.md:1055`)
 - [ ] **1.3** Add a dated correction note mirroring the blog twin's `:17` disclosure pattern
       (`**Updated 2026-07-22:**` + figure + verification source)
-- [ ] **1.4** Verify AC1: `grep -rniE '14\.6k|14,600|14600' knowledge-base/marketing/` → zero
+- [ ] **1.4** **(deepen-plan finding)** Correct `knowledge-base/marketing/content-strategy.md:154`
+      (`Paperclip (14.6k GitHub stars, MIT-licensed)` → `74,000+`) and bump its
+      `last_updated` / `last_reviewed`. Live weekly-reviewed CMO doc with **no blog twin** —
+      FR2's twin-diff cannot reach it
+- [ ] **1.5** **DO NOT edit `knowledge-base/marketing/audits/`** — the 4 hits there
+      (`2026-03-25-growth-audit.md:52,178`, `2026-03-30:77`, `2026-04-13-content-audit.md:309`)
+      are dated point-in-time records; rewriting them falsifies the record
+- [ ] **1.6** Verify AC1:
+      `grep -rniE '14\.6k|14,600|14600' knowledge-base/marketing/ --exclude-dir=audits` → **zero**
+- [ ] **1.7** Verify AC1b:
+      `grep -rniE '14\.6k|14,600|14600' knowledge-base/marketing/audits/ | wc -l` → **4**
+      (proves the carve-out was deliberate, not an oversight)
 
 ## Phase 2 — FR3: producer write-target (contract side FIRST)
 
@@ -81,7 +95,13 @@ precedes its consumers (Phase 3), and 3.1 + 3.2 are ONE commit (AC9).
       `^feat\(content\): auto-generate article`; per commit compute
       `git show <sha>:knowledge-base/marketing/seo-refresh-queue.md | grep -c generated_date`;
       STALE when no increase across the last N, threshold derived from `0 10 * * 2,4` (never a flat
-      constant); exit 0 PASS / 1 STALE; `--report` mode for the discoverability test
+      constant); exit 0 PASS / 1 STALE; `--report` mode for the discoverability test.
+      **Adopt `scripts/cron-artifact-age.sh`'s shape verbatim** (precedent, Phase 4.4):
+      `set -euo pipefail`, pipe-delimited table, per-cron threshold derivation, `--all`/`--help`
+- [ ] **4.1a** **Strict-mode guard (deepen-plan finding):** `grep -c` on a commit where the queue
+      file does not exist yields **empty, not `0`**, and `[[ $n -gt $m ]]` then ABORTS the script
+      under `set -euo pipefail`. Default (`n=${n:-0}`) and regex-check
+      (`[[ "$n" =~ ^[0-9]+$ ]]`) before every numeric comparison
 - [ ] **4.2** Create `scripts/seo-queue-drain-delta.test.sh` mirroring
       `scripts/cron-artifact-age.test.sh` structure; include a fixture for the
       "committed but drained zero rows" case — that is the defect the detector exists to catch
@@ -134,6 +154,6 @@ precedes its consumers (Phase 3), and 3.1 + 3.2 are ONE commit (AC9).
 - [ ] **7.3** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`
       (NOT `npm run -w …` — repo root declares no `workspaces` field)
 - [ ] **7.4** `bash scripts/test-all.sh` (exit gate)
-- [ ] **7.5** Walk AC1–AC15; record each verdict
+- [ ] **7.5** Walk AC1, AC1b, AC2–AC15; record each verdict
 - [ ] **7.6** PR body: FR2 sweep table + both scope-outs + FR6 layer name + **`Ref #6827`**
       (NOT `Closes` — the issue stays open for the two deferred checklist items)

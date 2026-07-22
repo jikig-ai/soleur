@@ -45,7 +45,9 @@ write-sites. None of these were catchable from the spec text alone.
 | **TR1/TR2** — "Both prompts are anchor-tested … editing one side alone breaks the parity test" | **Half true.** The tests are NOT cross-artifact parity tests — they `readFileSync` the TS source and assert anchor substrings (`cron-content-generator.test.ts:54-60, 76-115`). No YAML is read. The consumer's asserted anchors are `seo-refresh-queue`, `content-writer`, `social-distribute`, `validate-blog-links`, `PERSISTENCE: Do NOT run git add`, `Do NOT push directly to main`, `opens a PR for your changes`, `scheduled-content-generator`, `MILESTONE RULE:`, `@11ty/eleventy`. **None sits on the STEP 1 predicate line.** | **TR2 survives and is honoured.** FR4's edit is confined to the STEP 1 sentence and touches no asserted anchor. A **new** anchor test is added for the positive predicate so the fix itself becomes regression-guarded. |
 | **FR3** — "amend the producer prompt in `cron-competitive-analysis.ts` (`:166`)" | **Wrong file.** `COMPETITIVE_ANALYSIS_PROMPT` (`:137-152`) contains **no** queue-write instruction at all — it only runs `/soleur:competitive-analysis --tiers 0,3` and lists persistence paths. `:166` is a line inside the `COMPETITIVE_ANALYSIS_ALLOWED_PATHS` const. The append-format instruction lives in the **Cascade Delegation Table** at `plugins/soleur/agents/product/competitive-intelligence.md:54` — *"Append stale pages list to knowledge-base/marketing/seo-refresh-queue.md"*. | **FR3 re-targets** to the cascade table (the sole write-format instruction). `programmatic-seo-specialist.md` carries no queue instruction — it receives its write target from that table's column at spawn time, so editing the table is sufficient **and** necessary. `cron-competitive-analysis.ts` is **not** edited. |
 | **FR1** — "all six stale star-count occurrences (`:13, :25, :45, :76, :98, :136`)" | **Seven, not six.** Line **53** carries `14,600+ GitHub stars` — the comma form, which the six-line enumeration misses. | **FR1 is corrected to seven sites**, `:13, :25, :45, :53, :76, :98, :136`. |
-| **AC1** — `grep -rn "14\.6k" knowledge-base/marketing/` returns zero | **Structurally cannot catch `:53`.** `14,600+` does not match `14\.6k`. A green AC1 would certify a still-stale file. | **AC1 is widened** to `14\.6k\|14,600\|14600`, i.e. the claim family, not one spelling. |
+| **AC1** — `grep -rn "14\.6k" knowledge-base/marketing/` returns zero | **Structurally cannot catch `:53`.** `14,600+` does not match `14\.6k`. A green AC1 would certify a still-stale file. **Also unachievable as scoped** — see the two rows below. | **AC1 is widened** to `14\.6k\|14,600\|14600` (the claim family, not one spelling) **and carved out** to exclude dated audit records. |
+| *(deepen-plan finding)* FR1/FR2 reach every stale write-site | **FALSE — an eighth live site exists.** `knowledge-base/marketing/content-strategy.md:154` says `Paperclip (14.6k GitHub stars, MIT-licensed)`. It is a **live** doc (`review_cadence: weekly`, `owner: CMO`), not an archive — and it has **no `docs/blog` twin**, so FR2's twin-diff method **structurally cannot reach it**. | **Folded in.** `content-strategy.md` is added to Files to Edit and to Phase 1. The sweep method is corrected to **claim-family-first** (grep the *claim*), with twin-diff as the narrower second pass — exactly the learning file's prescription: *"enumerate write-sites by grepping for the claim, never by grepping for the rendered page."* |
+| *(deepen-plan finding)* AC1's scope is clean | **FALSE — 4 legitimate hits under `knowledge-base/marketing/audits/`** (`2026-03-25-growth-audit.md:52,178`, `2026-03-30-growth-audit.md:77`, `2026-04-13-content-audit.md:309`). These are **dated point-in-time audit records** that correctly state the figure as of their own date. | **AC1 carves out `knowledge-base/marketing/audits/`** — the same carve-out class as `**/archive/**` and a feature's own planning artifacts. Rewriting a dated audit would falsify the record, not fix it. |
 | **TR5** — `cron-growth-execution.ts:126` reads a third predicate | **Confirmed.** The prompt reads `Priority 1 ("Update immediately") stale pages`, which binds to the literal heading `## Priority 1: Stale Pages (Update Immediately)` (`seo-refresh-queue.md:21`). | **TR5 honoured** — §1's heading and §1.1–§1.7 subsection structure are **not** touched. Guarded by a new AC. |
 | **TR3 / FR6** — "must not reuse the issue-gated heartbeat" | **Confirmed, and a better layer already exists.** `scripts/cron-artifact-age.sh` + `.github/workflows/scheduled-cron-artifact-age.yml` (ADR-126, #6737) is an **external** detector — GitHub-scheduled, reads default-branch git history, shares no process/host/queue with Inngest. Its deliberate design constraint is *"the reporter must not be the subject."* | **FR6 extends that layer** rather than inventing one. See §Observability for why age alone is insufficient and a delta probe is required. |
 | Brainstorm OQ4 — "repo research found `founder-in-the-loop` only in polsia + paperclip" | **Falsified by direct grep.** See §Open Question (c). | Resolved; affects **NG2 scoping only**. No page is rewritten. |
@@ -220,6 +222,7 @@ No open scope-out touches `cron-content-generator`, `cron-competitive-analysis`,
 | File | FR | Change |
 |---|---|---|
 | `knowledge-base/marketing/distribution-content/2026-04-15-soleur-vs-paperclip.md` | FR1 | 7 sites → `74,000+` soft-floor form (`:13,:25,:45,:53,:76,:98,:136`) |
+| `knowledge-base/marketing/content-strategy.md` | FR1/FR2 | **(deepen-plan finding)** `:154` `14.6k GitHub stars` → `74,000+`. Live weekly-reviewed CMO doc with **no blog twin** — reachable only by the claim-family sweep |
 | `knowledge-base/marketing/seo-refresh-queue.md` | FR5 | Backfill §2.1/§2.2; annotate both dated blocks superseded; refresh frontmatter dates |
 | `apps/web-platform/server/inngest/functions/cron-content-generator.ts` | FR4 | STEP 1 predicate → positive; `[superseded]` note on the dead YAML-provenance comment |
 | `apps/web-platform/test/server/inngest/cron-content-generator.test.ts` | TR2 | **Add** positive-predicate anchor test + §1.x-exclusion assertion |
@@ -267,14 +270,27 @@ and FR4+FR5 are a single atomic commit for the reason given in Open Question (a)
 
 ### Phase 1 — FR1 + FR2: correction sweep (docs-only, no behavioural risk)
 
-1. Replace all **seven** paperclip sites with the soft-floor form. Match the blog twin's exact
-   register: `74,000+ GitHub stars` where the twin says `74,000+`, and preserve each sentence's
-   surrounding clause — **do not** re-point a dependent clause onto a new head (the `#6538`
-   additive class called out at `review/SKILL.md:1055`).
-2. Add a correction note to the file mirroring the blog twin's `:17` `**Updated 2026-07-20:**`
-   disclosure pattern, dated 2026-07-22, naming the figure and the verification source. This
-   satisfies FR8's own criterion on the very diff FR8 governs.
-3. **Record the completed FR2 sweep in the PR body.** The sweep was executed at plan time; the
+**Sweep method is claim-family-first.** Grep the *claim* (`14\.6k|14,600|14600`), not the rendered
+page and not the twin — the twin-diff is the narrower second pass. The eighth site
+(`content-strategy.md:154`) has no blog twin and is reachable **only** this way; a twin-diff-only
+sweep would repeat the exact miss this cycle exists to close
+(`hr-write-boundary-sentinel-sweep-all-write-sites`).
+
+1. Replace all **seven** paperclip sites in the distribution twin with the soft-floor form. Match
+   the blog twin's register: `74,000+ GitHub stars`, and preserve each sentence's surrounding
+   clause — **do not** re-point a dependent clause onto a new head (the `#6538` additive class
+   called out at `review/SKILL.md:1055`).
+2. **(deepen-plan finding)** Correct `knowledge-base/marketing/content-strategy.md:154`
+   (`Paperclip (14.6k GitHub stars, MIT-licensed)` → `74,000+`). Live doc, `review_cadence: weekly`,
+   `owner: CMO`. Bump its `last_updated` / `last_reviewed`.
+3. **Do NOT edit `knowledge-base/marketing/audits/`.** The four hits there
+   (`2026-03-25-growth-audit.md:52,178`, `2026-03-30-growth-audit.md:77`,
+   `2026-04-13-content-audit.md:309`) are dated point-in-time audit records; rewriting them would
+   falsify the record rather than fix it. AC1 carves this directory out.
+4. Add a correction note to the distribution twin mirroring the blog twin's `:17`
+   `**Updated 2026-07-20:**` disclosure pattern, dated 2026-07-22, naming the figure and the
+   verification source. This satisfies FR8's own criterion on the very diff FR8 governs.
+5. **Record the completed FR2 sweep in the PR body.** The sweep was executed at plan time; the
    result table is in §FR2 Sweep Result below. `/work` re-runs the same commands and reports any
    delta — it does not re-derive the method.
 
@@ -597,11 +613,16 @@ does not fire).
 
 ### Pre-merge (PR)
 
-- **AC1** — `grep -rniE '14\.6k|14,600|14600' knowledge-base/marketing/` returns **zero**.
-  *(Widened from the spec's `14\.6k`-only form, which cannot see `:53`.)*
+- **AC1** — `grep -rniE '14\.6k|14,600|14600' knowledge-base/marketing/ --exclude-dir=audits`
+  returns **zero**. *(Widened from the spec's `14\.6k`-only form, which cannot see `:53`; carved
+  out for `audits/`, whose four hits are dated point-in-time records that must NOT be rewritten.)*
+- **AC1b** — `grep -rniE '14\.6k|14,600|14600' knowledge-base/marketing/audits/ | wc -l` returns
+  **4** — i.e. the historical audit records were left intact, not silently swept.
+  *(A carve-out that is never asserted is indistinguishable from an oversight.)*
 - **AC2** — Every `distribution-content/` file agrees with its `docs/blog/` twin on numeric
   competitor claims; the full sweep table (including no-divergence files and the two explicit
-  scope-outs) appears in the PR body.
+  scope-outs) appears in the PR body. **The sweep is claim-family-first**: the PR body states that
+  `content-strategy.md:154` was found by the claim grep and is invisible to twin-diff.
 - **AC3** — `cron-content-generator.test.ts` asserts the **STEP 1 block** (bounded
   `/STEP 1 —[\s\S]*?\nSTEP 2 —/`) contains `Stale`, `Create`, and a §1.x exclusion, and does **not**
   contain the phrase `without a "generated_date" annotation`.
@@ -683,6 +704,64 @@ page-set finding is appended to the existing NG2 follow-up rather than becoming 
 
 ---
 
+## Research Insights (deepen-plan, 2026-07-22)
+
+Deepen ran without the Task tool available in this agent context, so the fan-out research agents
+and the `plan-review` panel could not be spawned. The pass was executed instead as the **full
+verification checklist**, run directly. That checklist is the part that catches the defects this
+repo's learnings actually record, and it produced two material corrections.
+
+### Gate results
+
+| Gate | Result |
+|---|---|
+| 4.5 Network-outage deep-dive | **Skip** — the two keyword hits are *negative assertions* ("No SSH…", "no firewall rule"), not a connectivity diagnosis. |
+| 4.55 Downtime & cutover | **Skip** — no reboot/replace, no lock-taking DDL, no deploy-router restructure. |
+| 4.6 User-Brand Impact halt | **PASS** — section present, 14 non-blank lines, threshold `single-user incident`. |
+| 4.7 Observability halt | **PASS** — all 5 fields present with children, no placeholder values, `discoverability_test.command` contains no remote-shell verb. |
+| 4.8 PAT-shaped variable halt | **PASS** — zero matches. |
+| 4.9 UI-wireframe halt | **Skip** — 0 UI-surface paths in Files to Edit/Create. |
+
+### Verification checklist — findings
+
+1. **Eighth live write-site found (material).** `knowledge-base/marketing/content-strategy.md:154`
+   carries `14.6k GitHub stars`. It has **no `docs/blog` twin**, so FR2's twin-diff method could
+   never reach it. Folded into Files to Edit + Phase 1; the sweep method is corrected to
+   claim-family-first. This is the same defect class as the original incident.
+2. **AC1 was unachievable (material).** Four legitimate hits live under
+   `knowledge-base/marketing/audits/` in dated audit records. AC1 now carves that directory out,
+   and **AC1b asserts the carve-out held** — an unasserted carve-out reads identically to an
+   oversight.
+3. **FR4 has zero test blast radius.** `grep -rn 'highest-priority item\|generated_date" annotation'`
+   over `apps/web-platform/test/`, `.github/`, and `plugins/` returns **nothing**. No existing test
+   pins the negative predicate, confirming the TR2 analysis: the STEP 1 edit breaks no assertion.
+4. **Citations resolved live.** #4483 / #4443 MERGED — `git log --diff-filter=D` confirms they are
+   the commits that deleted the two workflow mirrors, so the TR1 falsification rests on attribution,
+   not inference. #6737, #6768, #5871, #6538 all resolve as CLOSED issues. #6827, #6818, #4375,
+   #6837, #6838, #6840 all OPEN. #3649 OPEN (the one review overlap).
+5. **All 5 AGENTS.md rule IDs cited in the plan are ACTIVE** — verified against `[id: …]` in
+   `AGENTS.md`. No retired or fabricated IDs.
+6. **ADR-133 re-derived from freshly-fetched `origin/main`** (`git fetch origin main` first, then
+   `git ls-tree origin/main`): highest is **ADR-132**, so 133 is free. Still provisional.
+7. **`follow-through` label exists** (`External dependency awaiting verification`) — the
+   enrollment directive will not fail on a missing label.
+8. **Precedent-diff (Phase 4.4).** The new bash detector has a direct sibling precedent —
+   `scripts/cron-artifact-age.sh` (197 lines) + `scripts/cron-artifact-age.test.sh` (211 lines).
+   Adopt its shape verbatim: `set -euo pipefail`, a pipe-delimited producer table, thresholds
+   derived per-cron from the cron's own schedule, `--all`/`--help` flags, exit 0/1 as a verdict.
+   **No new scheduled job is introduced**, so the ADR-033 Inngest-vs-GH-Actions check does not
+   fire; the existing workflow's `gate-override: new-scheduled-cron-prefer-inngest` header already
+   justifies why this detector class lives on GitHub Actions.
+
+### Bash strict-mode note for the detector
+
+`scripts/seo-queue-drain-delta.sh` compares `generated_date` counts numerically. Under
+`set -euo pipefail`, `[[ $a -gt $b ]]` **crashes** rather than returning false when either side is
+non-numeric — and `grep -c` on a path missing from an old commit yields empty, not `0`. Guard both:
+default the count (`n=${n:-0}`) and regex-check (`[[ "$n" =~ ^[0-9]+$ ]]`) before any comparison.
+
+---
+
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder
@@ -700,3 +779,13 @@ page-set finding is appended to the existing NG2 follow-up rather than becoming 
 - **An absence-grep must cover the claim family, not one spelling.** `grep "14\.6k"` returns clean
   on a file that still says `14,600+`. This is how FR1 lost a site, and it is the same class as
   the write-site sweep the learning file records.
+- **A write-site sweep keyed on the TWIN cannot find a site that has no twin.** `content-strategy.md`
+  carried the stale figure and has no `docs/blog/` counterpart, so the twin-diff FR2 prescribes is
+  structurally blind to it. Grep the **claim**; use twin-diff only as the narrower second pass.
+- **A carve-out that is never asserted is indistinguishable from an oversight.** AC1 excludes
+  `knowledge-base/marketing/audits/`; AC1b asserts the 4 hits are still there. Without AC1b, a
+  reviewer cannot tell "deliberately preserved historical record" from "missed four sites".
+- **Bash numeric comparison crashes under `set -euo pipefail` on non-numeric input.** The detector
+  reads `grep -c` output from historical commits where the queue file may not exist — that yields
+  empty, not `0`, and `[[ $n -gt $m ]]` then aborts the whole script. Default (`${n:-0}`) and
+  regex-guard (`[[ "$n" =~ ^[0-9]+$ ]]`) before comparing.
