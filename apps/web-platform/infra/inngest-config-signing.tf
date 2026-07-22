@@ -12,8 +12,14 @@
 # The required-reviewer HUMAN-ACK is enforced purely by the JOB declaring this environment.
 #
 # reviewers.users takes numeric GitHub user IDs — 54279 = @deruelle (the operator/founder).
-# Applies via the normal apply-web-platform-infra.yml path (a GitHub resource, host-independent —
-# it does NOT touch the isolated soleur-inngest/prd self-check and does not ride the #6178 cutover).
+#
+# APPLIES NOW (host-independent GitHub resource; does NOT touch the isolated soleur-inngest/prd
+# self-check and does not ride the #6178 cutover). The producer workflow lands in this same PR, so
+# this gate MUST exist before any dispatch — otherwise GitHub auto-creates the referenced
+# `environment: inngest-config-signing` WITHOUT protection on first use and the HARD-7 human-ack is
+# silently absent. apply-web-platform-infra.yml uses a `-target=`-scoped allow-list (NOT a full-root
+# apply), so this resource is wired in there as `-target=github_repository_environment.inngest_config_signing`
+# alongside inngest_cutover — a bare *.tf file is pruned by the target filter and never created.
 
 resource "github_repository_environment" "inngest_config_signing" {
   repository  = "soleur"
