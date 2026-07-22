@@ -15,16 +15,17 @@ plan: knowledge-base/project/plans/2026-07-22-feat-inngest-host-inplace-redelive
 - [ ] 0.1 Enumerate the exact host-executed `*.sh` refresh-set on 10.0.1.40 vs web-host-only (OQ2).
 - [ ] 0.2 Record host egress evidence: boot self-check already runs `doppler run --project soleur-inngest --config prd` → api.doppler.com + GHCR proven.
 - [ ] 0.3 (HARD-12) Verify baked GHCR creds can pull the **config-bundle OCI repo** specifically (not just the bootstrap-image repo).
+- [ ] 0.5 (DEEPEN-CORRECTION-1) Probe `cosign verify-blob` **keyless-offline** against the baked `/etc/soleur/cosign-trusted-root.json` on the pinned cosign image — confirm before choosing keyless over static-key (static-key is the documented fallback).
 - [ ] 0.4 Audit `DEST_SPEC`/`FILE_MAP` gap in `infra-config-install.sh` for the refresh-set dests; note it's NOT baked in `cloud-init-inngest.yml` today.
 
 ## Phase 1 — ADR-133 + C4
 - [ ] 1.1 Author `ADR-133-*.md` via `/soleur:architecture` (decision + alternatives + D-ZOT divergence + HARD-7 CI-compromise threat model + replace-only-TCB + isolated-project write-path). Re-verify next-free ordinal at ship.
 - [ ] 1.2 Edit `.c4` (model/views/spec): CI signer (`#external`), config-artifact registry→host edge, refresh relationship. Run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 
-## Phase 2 — CI build + cosign-static-key sign + publish (producer contract)
-- [ ] 2.1 Provision cosign static keypair: private → `soleur/prd` as `COSIGN_CONFIG_SIGNING_KEY` (CI-only, HARD-7); public verify key committed for baking (HARD-2/AC17).
-- [ ] 2.2 Workflow (or job in an existing `pull_request` workflow — NOT a temporary `workflow_dispatch`): package refresh-set + per-file sha256 manifest + a **signed** monotonic `VERSION` (HARD-2); `cosign sign-blob`; publish OCI artifact to **both zot + GHCR**.
-- [ ] 2.3 Cosign private key behind a GitHub environment with a **non-empty required-reviewer set**, OIDC-scoped, protected branch (HARD-7).
+## Phase 2 — CI build + cosign sign + publish (producer contract)
+- [ ] 2.1 (DEEPEN-CORRECTION-1, keyless preferred) CI signs the bundle **keyless** (`cosign sign-blob`, Fulcio/Rekor at sign-time — CI has egress); the host verifies offline via `verify-blob --certificate-identity-regexp <config-workflow> --certificate-oidc-issuer … --trusted-root /etc/soleur/cosign-trusted-root.json` (baked). No static private key. **Fallback (only if 0.5 fails):** static keypair, private → `soleur/prd` as `COSIGN_CONFIG_SIGNING_KEY` (CI-only), public committed.
+- [ ] 2.2 Workflow (or job in an existing `pull_request` workflow — NOT a temporary `workflow_dispatch`): package refresh-set + per-file sha256 manifest + a **signed** monotonic `VERSION` (HARD-2); sign; publish OCI artifact to **both zot + GHCR**.
+- [ ] 2.3 The signing job behind a GitHub environment with a **non-empty required-reviewer set**, OIDC-scoped, protected branch (HARD-7); the config-signing workflow identity is pinned by the host's `COSIGN_IDENTITY_REGEXP`.
 
 ## Phase 3 — Promoted digest pointer + isolation self-check (contract)
 - [ ] 3.1 `inngest-config-digest.tf` — `doppler_secret INNGEST_CONFIG_DIGEST` in `soleur-inngest/prd` (mirror `inngest-betterstack-token.tf`: copy into `soleur/prd_terraform` → verify read-only → apply).
@@ -43,7 +44,7 @@ plan: knowledge-base/project/plans/2026-07-22-feat-inngest-host-inplace-redelive
 ## Phase 5 — Off-box observability
 - [ ] 5.1 Marker verbs via `inngest-boot-phone-home.sh`: `SOLEUR_INFRA_PULL_APPLIED version=… sha256= verify=ok`; `SOLEUR_INFRA_PULL_VERIFY_FAIL …`. Boot-floor marker distinguishable (`version=floor`, HARD-8).
 - [ ] 5.2 Terraform: Better Stack **absence-heartbeat** monitor (grace window = OQ3 cadence); `OnFailure=` Sentry-Crons/Resend (mirror `cron-egress-alarm.sh`).
-- [ ] 5.3 (HARD-8) Off-box **drift comparator** (CI/cron: pointer vs latest APPLIED marker → alarm on divergence beyond N windows).
+- [ ] 5.3 (HARD-8 + DEEPEN-CORRECTION-2) Off-box **drift comparator** as an **Inngest `cron-inngest-config-drift.ts`** (ADR-033, beside the 51 existing cron functions — reads Doppler pointer + latest Better Stack APPLIED marker → alarm on divergence beyond N windows). NOT a GH Actions cron.
 - [ ] 5.4 Host state file `{applied_version, bundle_sha256, signer_keyid, per_file_sha256[], applied_ts, verify_result}` + `cat-…-state.sh`-style reader.
 
 ## Phase 6 — Tests + runbook

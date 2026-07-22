@@ -96,6 +96,46 @@ These are load-bearing constraints the implementation MUST satisfy; each maps to
 - **HARD-11 (runbook channel-live precondition — P1).** The runbook is INVALID pre-cutover (promoting a pointer no host reads = believing a fix shipped when it silently didn't). Gate it on a "channel-live" assertion (a fresh `SOLEUR_INFRA_PULL_APPLIED` marker exists post-cutover) and add the #6178-scheduled linkage or a loud "channel not yet live" state.
 - **HARD-12 (Phase-0 evidence — P2→gates P1s).** Verify the baked GHCR creds can pull the **config-bundle OCI repo** specifically (not just the bootstrap-image repo) — a repo-scope mismatch 401s every pull → permanent fail-closed. `infra-config-install.sh` is NOT currently baked in `cloud-init-inngest.yml`; it must be newly baked, root-invoked-only, WITHOUT importing the web-host webhook/sudoers apparatus. Note the shared-`DEST_SPEC` cross-host widening (every refresh-set dest becomes grantable on web hosts too).
 
+## Deepen-Plan Enhancements (2026-07-22)
+
+Precedent-diff (Phase 4.4) + halt gates run against the real infra. Corrections below; each
+either changes a prior decision (surface at confirmation) or hardens a phase.
+
+### Precedent-diff (verified against `feat-6780…` worktree)
+| Plan element | Established precedent | Adopt |
+|---|---|---|
+| cosign verify on host | `ci-deploy.sh:43-99` (ADR-087): **air-gapped KEYLESS** — `COSIGN_TRUSTED_ROOT_HOST=/etc/soleur/cosign-trusted-root.json` (baked) + `COSIGN_IDENTITY_REGEXP` (pins the CI workflow) + `COSIGN_OIDC_ISSUER`, pinned `COSIGN_IMAGE@sha256` v3.1.1, no live Fulcio/Rekor at verify | See **DEEPEN-CORRECTION-1**: reuse this pattern via `cosign verify-blob` — dissolves the static-key custody problem (OQ4). |
+| zot-first/GHCR-fallback | `cloud-init.yml:505-525` (ADR-096): `ZOT_REGISTRY_URL/ZOT_PULL_USER/ZOT_PULL_TOKEN` from Doppler `soleur/prd` → `docker login` → resolve effective REF (`/v2/` reachable ? zot : GHCR), "Dark-safe: unset/unreachable zot ⇒ GHCR" | **D-ZOT confirmed**: zot-first on the isolated host needs those **3** secrets in `soleur-inngest/prd` → isolation floor 6→**9**. GHCR-direct v1 stands. |
+| `doppler_secret` pointer | `inngest-betterstack-token.tf` | mirror (copy into `prd_terraform` → verify read-only → apply). |
+| systemd timer/service | `.timer` units exist in `cloud-init-registry.yml`, `cloud-init.yml` | NOT novel — mirror an existing unit shape. |
+| scheduled drift comparator | 51 Inngest `cron-*.ts` functions (ADR-033) | See **DEEPEN-CORRECTION-2**: the HARD-8 comparator is an Inngest `cron-*.ts`, not a GH Actions cron (it reads app secrets + Better Stack). The CI **build/sign/publish** workflow stays GH Actions (git/CI-scoped artifact production). |
+
+### DEEPEN-CORRECTION-1 (signing — supersedes D4/OQ4; surface at confirmation)
+Adopt **air-gapped keyless cosign** (the `ci-deploy.sh`/ADR-087 host precedent) rather than a bespoke
+static key: **CI signs the bundle keyless** (`cosign sign-blob`, Fulcio/Rekor at sign-time — CI has egress);
+**the host verifies offline** (`cosign verify-blob --certificate-identity-regexp <config-workflow> --certificate-oidc-issuer … --trusted-root /etc/soleur/cosign-trusted-root.json`) against the **already-baked trusted root** — no host egress to Fulcio/Rekor, no private key to custody. This **dissolves OQ4** (rotation = edit the identity regexp; no key overlap dance) and removes HARD-7's "cosign private key" custody line (the residual root shrinks to "who can run the signing workflow"). The prior "ADR-052 blocks keyless" framing was imprecise — ADR-052 blocks *host* egress; air-gapped keyless *verify* needs none. **Phase-0 probe (HARD-12 addendum):** confirm `cosign verify-blob` keyless-offline succeeds against the baked trusted root on the pinned cosign image before committing to this path; **static-key remains the documented fallback** if the offline blob-verify proves impractical. HARD-2 (version is a *signed field*) is unchanged and applies to either signer.
+
+### DEEPEN-CORRECTION-2 (drift comparator substrate)
+The HARD-8 off-box drift comparator is a new scheduled job that reads Doppler + Better Stack → **Inngest
+`cron-inngest-config-drift.ts`** (ADR-033), NOT a `.github/workflows/scheduled-*.yml`. Wire it beside the
+existing 51 cron functions; it alarms when `applied_digest ≠ promoted pointer` beyond N windows.
+
+## Downtime & Cutover
+
+**The channel IS the zero-downtime mechanism** — its entire purpose is to deliver host-script changes
+*in-place* (systemd timer, atomic swap) so future changes never replace the sole scheduler. Ongoing
+refreshes incur **zero downtime**.
+
+The **one-time install** of the channel (timer + verify script + baked cosign material + isolation
+self-check edit) is baked into `cloud-init-inngest.yml` and therefore **rides the #6178 cutover's
+already-planned `inngest-host-replace`** — it adds **no downtime beyond what the #6178 cutover already
+incurs** (that replace is #6178's cost, gated by its own maintenance window and Redis-AOF-volume
+re-attach). This feature introduces **no new independent replace**. Non-host Terraform (the
+`doppler_secret`, the Better Stack monitor, the Inngest drift-comparator function) applies via the
+normal path with no downtime. Residual-downtime justification: none added by this feature; the install
+piggybacks the #6178 window. Rollback: the baked floor is the last-known-good; a failed first pull
+retains it (HARD-3/HARD-5).
+
 ## Implementation Phases (contract-first ordering)
 
 **Phase 0 — Preconditions & enumeration (verify, no code).**
@@ -216,8 +256,8 @@ logs:
   where: journald → vector → Better Stack; host state file /var/lib/inngest-config/
   retention: Better Stack default
 discoverability_test:
-  command: bash scripts/betterstack-query.sh --grep SOLEUR_INFRA_PULL_APPLIED   # NO ssh
-  expected_output: a marker line with version= and sha256= within the last timer window
+  command: bash scripts/betterstack-query.sh --grep SOLEUR_INFRA_PULL_APPLIED
+  expected_output: a marker line with version= and sha256= within the last timer window (no host login required)
 ```
 
 ## Architecture Decision (ADR/C4)
