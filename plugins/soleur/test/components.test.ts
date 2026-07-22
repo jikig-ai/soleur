@@ -368,7 +368,14 @@ describe("invoice skill credential boundary (ADR-107)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// gh --search probes must pin --state explicitly (#6786)
+// gh --search probes must pin --state explicitly (#6786) AND cap their result
+// set with -L/--limit unless they are a pure existence drill or a bounded
+// linked:issue shape (#6793). Both detectors guard the SAME silent-open class:
+// a probe whose omitted filter (the appended default `--state open`, or the
+// default 30-row cap) silently drops the records the decision depends on, so an
+// empty/short result reads identically to "no match". #6793 widens the scan
+// from plugins/soleur/skills/** to a repo-wide allowlist of EXECUTABLE-
+// instruction surfaces and adds the -L/--limit truncation detector.
 // ---------------------------------------------------------------------------
 
 // Captures one `gh pr|issue list …` command, from the point the binary is named to
@@ -389,6 +396,87 @@ const GH_LIST_CMD = /\bgh (?:pr|issue) list\b[^`\n]*/g;
 // filter ANDed against `is:merged` matches nothing), so pin state in ONE place only.
 const IN_QUERY_STATE = /--search\s+(["'])[^"']*(?:\bis:(?:merged|closed|open)\b|\bstate:)[^"']*\1/;
 
+// The repo root, two levels above PLUGIN_ROOT (plugins/soleur). #6786 scanned
+// only plugins/soleur/skills/**; #6793 widens to a repo-wide allowlist of files
+// that carry EXECUTABLE INSTRUCTIONS an agent or CI actually runs `gh` from —
+// chosen by "which surfaces run commands", not by where a grep found an
+// offender (defect-class indexing, 2026-07-20 learning).
+const REPO_ROOT = resolve(PLUGIN_ROOT, "../..");
+
+// INCLUDE globs. Prose/record surfaces are excluded by OMISSION here:
+// knowledge-base/project/** (learnings/plans/specs) and **/archive/** are never
+// globbed; **/*.test.sh fixtures are filtered below; all .ts/.py are excluded by
+// never being globbed (this also drops THIS file's own intentional broken-form
+// fixtures — scanning .ts would false-positive on every one of them).
+const EXEC_SURFACE_GLOBS = [
+  "plugins/soleur/skills/**/*.md",
+  "plugins/soleur/commands/**/*.md",
+  "plugins/soleur/agents/**/*.md",
+  "scripts/**/*.sh",
+  "plugins/soleur/skills/**/scripts/*.sh",
+  ".claude/hooks/**/*.sh",
+  ".openhands/hooks/**/*.sh",
+  ".github/workflows/**/*.yml",
+  ".github/workflows/**/*.yaml",
+  ".github/actions/**/*.yml",
+  ".github/actions/**/*.yaml",
+  "knowledge-base/engineering/operations/runbooks/**/*.md",
+];
+
+type Surface = "md" | "sh" | "yaml";
+
+function surfaceOf(path: string): Surface {
+  if (path.endsWith(".sh")) return "sh";
+  if (path.endsWith(".yml") || path.endsWith(".yaml")) return "yaml";
+  return "md";
+}
+
+/** The repo-wide executable-surface corpus (deduped; *.test.sh excluded). */
+function execSurfaceFiles(): { file: string; raw: string; surface: Surface }[] {
+  const seen = new Set<string>();
+  const out: { file: string; raw: string; surface: Surface }[] = [];
+  for (const glob of EXEC_SURFACE_GLOBS) {
+    for (const rel of new Glob(glob).scanSync(REPO_ROOT)) {
+      // Test fixtures deliberately encode the broken form; never admit them,
+      // even a future scripts/foo.test.sh landing under an included glob.
+      if (rel.endsWith(".test.sh")) continue;
+      if (seen.has(rel)) continue;
+      seen.add(rel);
+      out.push({
+        file: rel,
+        raw: readFileSync(resolve(REPO_ROOT, rel), "utf-8"),
+        surface: surfaceOf(rel),
+      });
+    }
+  }
+  return out;
+}
+
+// Join explicit shell/YAML-block line continuations (a physical line ending in
+// `\`) into ONE logical line, so a multi-line `gh … list` is captured whole —
+// its --limit or jq drill routinely lives on a continuation line, and a
+// line-bounded capture would both MISS that drill (false negative on the
+// select-after-truncation class) and FALSE-POSITIVE on a correct probe whose
+// --limit is one line down. This does NOT reintroduce the launder-by-neighbor
+// bug (#6786): only backslash-continued lines are joined — they are
+// unambiguously ONE command — and GH_LIST_CMD stays newline-bounded, so an
+// UNcontinued neighbour on the next line is never swallowed.
+function joinContinuations(raw: string): string[] {
+  const out: string[] = [];
+  let buf: string | null = null;
+  for (const line of raw.split("\n")) {
+    const cont = /\\\s*$/.test(line);
+    const body = cont ? line.replace(/\\\s*$/, "") : line;
+    buf = buf === null ? body : `${buf} ${body.replace(/^\s+/, "")}`;
+    if (!cont) {
+      out.push(buf);
+      buf = null;
+    }
+  }
+  if (buf !== null) out.push(buf);
+  return out;
+}
+
 interface Probe {
   file: string;
   cmd: string;
@@ -397,16 +485,22 @@ interface Probe {
 }
 
 /** Every `gh pr|issue list` command carrying `--search`, one entry per command. */
-export function extractSearchProbes(files: { file: string; raw: string }[]): Probe[] {
+export function extractSearchProbes(
+  files: { file: string; raw: string; surface?: Surface }[],
+): Probe[] {
   return files
-    .flatMap(({ file, raw }) => {
+    .flatMap(({ file, raw, surface = "md" }) => {
       const found: Probe[] = [];
       let fenced = false;
-      for (const line of raw.split("\n")) {
-        if (/^\s*```/.test(line)) {
+      for (const line of joinContinuations(raw)) {
+        if (surface === "md" && /^\s*```/.test(line)) {
           fenced = !fenced;
           continue;
         }
+        // Shell/YAML comment lines are the prose surface — they DESCRIBE a
+        // command, they do not run it. Markdown has no comment convention here;
+        // its prose-vs-command boundary is the fence/backtick handled above.
+        if (surface !== "md" && /^\s*#/.test(line)) continue;
         for (const m of line.matchAll(GH_LIST_CMD)) {
           found.push({ file, cmd: m[0].trim(), fenced });
         }
@@ -417,17 +511,55 @@ export function extractSearchProbes(files: { file: string; raw: string }[]): Pro
 }
 
 /** Search probes that omit an explicit `--state` — the #6786 silent-open defect class. */
-export function findStatelessProbes(files: { file: string; raw: string }[]): Probe[] {
+export function findStatelessProbes(
+  files: { file: string; raw: string; surface?: Surface }[],
+): Probe[] {
   return extractSearchProbes(files).filter(({ cmd }) => !/--state\b/.test(cmd));
 }
 
 /** Search probes that pin state in BOTH the query and a flag — #6786's literal shape. */
 export function findContradictingStateProbes(
-  files: { file: string; raw: string }[],
+  files: { file: string; raw: string; surface?: Surface }[],
 ): Probe[] {
   return extractSearchProbes(files).filter(
     ({ cmd }) => /--state\b/.test(cmd) && IN_QUERY_STATE.test(cmd),
   );
+}
+
+// -- #6793 truncation detector -------------------------------------------------
+// An explicit result cap. `-L N`, `-L=N`, or `--limit N`. Anchored on a leading
+// boundary so it cannot match inside `--label`.
+const HAS_LIMIT = /(?:^|\s)(?:-L|--limit)(?:[=\s]|$)/;
+// A pure existence drill: reduce the result to "does ≥1 row exist?". Safe at the
+// 30-row cap — if >30 rows match, ≥1 certainly does.
+const EXISTENCE_DRILL = /\.\[0\]|\/\/\s*empty|first\s*\(/;
+// A result-set narrowing that runs AFTER the search, so it operates on the
+// already-truncated 30 rows: an exact-match select, or a count. When present,
+// the existence drill is NOT truncation-safe — the row the decision needs can
+// sit past row 30 and be evicted before the narrowing sees it (the
+// content-publisher.sh select-after-search fail-open the #6793 deepen surfaced).
+const POST_SEARCH_NARROWING = /select\s*\(|\blength\b/;
+// A single issue's FORMALLY-linked PR set is bounded by domain semantics well
+// under 30, so a `linked:issue #N` probe never needs an explicit cap (D2b). The
+// `#` anchor keeps this from exempting an unrelated string containing
+// "linked:issue". This is what keeps one-shot/SKILL.md:55 byte-identical.
+const BOUNDED_LINKED_ISSUE = /linked:issue\s+#/;
+
+/**
+ * Search probes that neither cap the result set (`-L`/`--limit`) nor qualify for
+ * a principled exemption — the #6793 silent-truncation defect class. Exemptions:
+ *   (a) a pure existence drill with NO post-search narrowing, or
+ *   (b) the bounded `linked:issue #N` query shape.
+ */
+export function findUnlimitedProbes(
+  files: { file: string; raw: string; surface?: Surface }[],
+): Probe[] {
+  return extractSearchProbes(files).filter(({ cmd }) => {
+    if (HAS_LIMIT.test(cmd)) return false;
+    if (BOUNDED_LINKED_ISSUE.test(cmd)) return false;
+    if (EXISTENCE_DRILL.test(cmd) && !POST_SEARCH_NARROWING.test(cmd)) return false;
+    return true;
+  });
 }
 
 describe("collision-gate probes carry an explicit --state", () => {
@@ -524,13 +656,112 @@ describe("collision-gate probes carry an explicit --state", () => {
     ).toHaveLength(0);
   });
 
-  // `skills/**/*.md` — deliberately wider than discoverSkills()'s `skills/*/SKILL.md`.
-  // The dedupe probe in review/references/review-todo-structure.md is one directory
-  // deeper and carried the identical defect; scoping to SKILL.md missed it (#6786 review).
+  // -- #6793 truncation-detector controls -------------------------------------
+  // Synthesized negative controls (cq-test-fixtures-synthesized-only). These are
+  // the truncation detector's discriminating power independent of the live
+  // corpus, so the offender assertion below can never go vacuously green.
+
+  test("unlimited detector flags an enumerating probe with no -L/--limit", () => {
+    expect(
+      findUnlimitedProbes([
+        { file: "f", raw: '`gh pr list --search "topic" --state all --json number`' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("unlimited detector accepts a pure existence drill (no narrowing)", () => {
+    expect(
+      findUnlimitedProbes([
+        {
+          file: "f",
+          raw: '`gh issue list --state all --search "t in:title" --json number --jq \'.[0].number // empty\'`',
+        },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("unlimited detector accepts an explicit -L and --limit 1", () => {
+    expect(
+      findUnlimitedProbes([
+        { file: "f", raw: '`gh pr list --search "topic" --state all -L 100 --json number`' },
+        { file: "g", raw: '`gh pr list --search "topic" --state all --limit 1 --json number`' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  // The D2-soundness fix: a `.[0]`/`// empty` drill is NOT truncation-safe when a
+  // `select(` narrows AFTER the search — the exact row can sit past the 30-row
+  // cap and be evicted before the select sees it (content-publisher.sh:785).
+  test("unlimited detector flags a select-after-search probe even with a trailing .[0]", () => {
+    expect(
+      findUnlimitedProbes([
+        {
+          file: "f",
+          raw: '`gh issue list --state open --search "in:title \\"$t\\"" --json number,title --jq "[.[] | select(.title == \\"$t\\")] | .[0].number // empty"`',
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("unlimited detector exempts the bounded linked:issue #N shape but not an unbounded query", () => {
+    expect(
+      findUnlimitedProbes([
+        {
+          file: "f",
+          raw: '`gh pr list --search "linked:issue #5" --state all --json number --jq \'.[] | .number\'`',
+        },
+      ]),
+    ).toHaveLength(0);
+    expect(
+      findUnlimitedProbes([
+        {
+          file: "f",
+          raw: '`gh pr list --search "author:me #5" --state all --json number --jq \'.[] | .number\'`',
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("a backslash-continued probe is captured whole, so a continuation-line --limit exempts it", () => {
+    // Line-bounded capture would false-positive here (line 1 has no -L); joining
+    // the `\`-continuation sees the --limit on line 2.
+    expect(
+      findUnlimitedProbes([
+        {
+          file: "f.sh",
+          surface: "sh",
+          raw: 'EXISTING=$(gh issue list --state all --search "PR #1" \\\n  --limit 1 --json number --jq \'.[0].number // empty\')',
+        },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("a .sh/.yml comment line describing a probe is not treated as a command", () => {
+    expect(
+      findStatelessProbes([
+        { file: "f.sh", surface: "sh", raw: '  # dedup via `gh issue list --search "x"`' },
+      ]),
+    ).toHaveLength(0);
+    expect(
+      findUnlimitedProbes([
+        { file: "f.yml", surface: "yaml", raw: '  # gh issue list --search "x" enumerates' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  // `skills/**/*.md` under PLUGIN_ROOT — the #6786 plugin-local surface, kept for
+  // the inline-vs-fenced class assertion and the "wider than SKILL.md" widening
+  // pin. #6793's offender assertions run over the repo-wide `corpus` below.
   const files = [...new Glob("skills/**/*.md").scanSync(PLUGIN_ROOT)].map((f) => ({
     file: f,
     raw: readFileSync(resolve(PLUGIN_ROOT, f), "utf-8"),
   }));
+
+  // The #6793 repo-wide executable-surface corpus (skills/commands/agents docs,
+  // shell scripts, hooks, CI workflows, ops runbooks). All offender assertions
+  // run over THIS, so a stateless/truncatable probe anywhere an agent or CI runs
+  // `gh` — not just under plugins/soleur/skills — red-lines here.
+  const corpus = execSurfaceFiles();
 
   // Anti-vacuity. A bare `length > 0` floor is too weak: narrowing the regex so it can
   // no longer see fenced probes leaves the inline ones behind, keeps the population
@@ -560,21 +791,45 @@ describe("collision-gate probes carry an explicit --state", () => {
     ).toBeGreaterThan(discoverSkills().length);
   });
 
-  test("no skill probe omits --state", () => {
+  // Pins the #6793 repo-wide widening the same way: the executable-surface corpus
+  // must stay strictly wider than the plugin-local markdown surface, so narrowing
+  // the allowlist back to plugins/soleur/skills/** red-lines here instead of going
+  // vacuously green (the offender checks would then miss scripts/hooks/CI/runbooks).
+  test("the executable-surface corpus is wider than the plugin-local surface", () => {
     expect(
-      findStatelessProbes(files).map((o) => `${o.file}: ${o.cmd.slice(0, 90)}`),
+      corpus.length,
+      `scanned ${corpus.length} executable-surface files vs ${files.length} plugin-local ` +
+        "markdown files — the repo-wide allowlist must admit scripts, hooks, CI workflows, " +
+        "and runbooks; narrowing it back to skills/** re-blinds the lint to those surfaces",
+    ).toBeGreaterThan(files.length);
+  });
+
+  test("no executable-surface probe omits --state", () => {
+    expect(
+      findStatelessProbes(corpus).map((o) => `${o.file}: ${o.cmd.slice(0, 90)}`),
       "`gh pr list --search` defaults to --state open and appends that filter unless it " +
         "detects an in-query state qualifier, so a probe without an explicit --state " +
         "silently misses MERGED/CLOSED records and the gate fails open. See #6786.",
     ).toEqual([]);
   });
 
-  test("no skill probe pins state in both the query and a flag", () => {
+  test("no executable-surface probe pins state in both the query and a flag", () => {
     expect(
-      findContradictingStateProbes(files).map((o) => `${o.file}: ${o.cmd.slice(0, 90)}`),
+      findContradictingStateProbes(corpus).map((o) => `${o.file}: ${o.cmd.slice(0, 90)}`),
       "this probe pins state twice (an `is:`/`state:` qualifier inside --search AND an " +
         "explicit --state). That is #6786's literal shape: the two are ANDed, so a " +
         "disagreement matches nothing and reads as a clean result. Pin state in one place.",
+    ).toEqual([]);
+  });
+
+  test("no executable-surface probe omits -L/--limit without a principled exemption", () => {
+    expect(
+      findUnlimitedProbes(corpus).map((o) => `${o.file}: ${o.cmd.slice(0, 90)}`),
+      "`gh pr list --search` caps its result set at 30 rows unless `-L`/`--limit` is given, " +
+        "so an enumerating or completeness-consuming probe silently truncates and the gate " +
+        "fails open. Add a generous explicit `-L` (free per the perf note) unless the probe " +
+        "is a pure existence drill with no post-search narrowing OR the bounded `linked:issue " +
+        "#N` shape. See #6793.",
     ).toEqual([]);
   });
 });

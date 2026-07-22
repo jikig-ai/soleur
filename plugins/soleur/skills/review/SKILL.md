@@ -871,7 +871,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    ```bash
    # --state open is deliberate (#6786): this previews ship's Phase 5.5 gate, which
    # blocks on OPEN review-origin issues only, so the states must match.
-   gh issue list --label deferred-scope-out --state open --search "Ref #<PR_NUMBER>"
+   gh issue list --label deferred-scope-out --state open -L 200 --search "Ref #<PR_NUMBER>"
    ```
 
 3. **Phase 5.5 gate self-check**: `/ship` will run the Review-Findings Exit Gate and block merge on any open review-origin issue cross-referencing the PR without the `deferred-scope-out` label. If the gate blocks, either fix inline and close the issue, or add the `deferred-scope-out` label + `## Scope-Out Justification`.
