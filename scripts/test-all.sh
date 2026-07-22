@@ -45,6 +45,23 @@ if git rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
   exit 1
 fi
 
+# --- Contention instrumentation (#6789) ---
+# Observe-only: /tmp headroom, sibling test-all.sh runs resolved to their
+# worktrees, and machine pressure. Sourced defensively — a missing or broken
+# lib must degrade to a normal run, never block tests. The no-op fallbacks
+# below keep every call site total.
+_TC_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-contention.sh"
+if [[ -f "$_TC_LIB" ]]; then
+  # shellcheck source=scripts/lib/test-contention.sh
+  source "$_TC_LIB" || true
+fi
+if ! declare -F tc_preamble >/dev/null 2>&1; then
+  echo "WARNING: contention instrumentation unavailable ($_TC_LIB); continuing without it." >&2
+  tc_preamble() { :; }
+  tc_epilogue() { :; }
+  tc_tmp_entry_count() { printf '0\n'; }
+fi
+
 # --- Test group selector ---
 # TEST_GROUP partitions the suite list across CI matrix shards. Env var wins
 # over positional ($1) so GitHub Actions `env:` blocks and `gh workflow run`
@@ -81,6 +98,13 @@ suites=0
 run_suite() {
   local label="$1"; shift
   suites=$((suites + 1))
+  # Per-suite tempfile delta (#6789, probe for hypothesis H4: a shared derived
+  # tempfile path in some suite reached by this runner). Gated on
+  # TEST_TIMING_LOG so the `find` costs nothing on a default local run.
+  local tmp_before=""
+  if [[ -n "${TEST_TIMING_LOG:-}" ]]; then
+    tmp_before=$(tc_tmp_entry_count)
+  fi
   local start="$EPOCHREALTIME"
   echo "--- $label ---"
   local status="ok"
@@ -102,14 +126,27 @@ run_suite() {
     local end_us=$(( ${end%.*} * 1000000 + 10#${end#*.} ))
     elapsed_ms=$(( (end_us - start_us) / 1000 ))
   fi
+  # Appended as a LABELED trailing field (`tmp_delta=<N>`), never as a bare
+  # positional one: field 3 already carries the `FAIL` marker, so an unlabeled
+  # append would be positionally ambiguous between the ok and FAIL shapes.
+  local tmp_field=""
+  if [[ -n "${TEST_TIMING_LOG:-}" && -n "$tmp_before" ]]; then
+    tmp_field=$'\t'"tmp_delta=$(( $(tc_tmp_entry_count) - tmp_before ))"
+  fi
   if [[ "$status" == "ok" ]]; then
     echo "[ok] $label (${elapsed_ms}ms)"
-    printf '%s\t%d\n' "$label" "$elapsed_ms" >> "${TEST_TIMING_LOG:-/dev/null}"
+    printf '%s\t%d%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
   else
     echo "[FAIL] $label (${elapsed_ms}ms)" >&2
-    printf '%s\t%d\tFAIL\n' "$label" "$elapsed_ms" >> "${TEST_TIMING_LOG:-/dev/null}"
+    printf '%s\t%d\tFAIL%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
   fi
 }
+
+# Contention preamble — emitted before the first `--- <suite> ---` line so a
+# contended run is self-identifying and a false RED is never again diagnosed
+# as a regression (AC1/AC2).
+tc_preamble
+_TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
 
 # Pre-suite bash/python tests — scripts shard.
 if want_scripts; then
@@ -148,6 +185,11 @@ if want_scripts; then
   run_suite "scripts/skill-freshness-aggregate" bash scripts/skill-freshness-aggregate.test.sh
   run_suite "scripts/compound-promote" bash scripts/compound-promote.test.sh
   run_suite "scripts/lint-trap-tempfile-ownership" bash scripts/lint-trap-tempfile-ownership.test.sh
+  # #6789: arms for the contention instrumentation + advisory queue that this
+  # runner itself now uses. Registered explicitly — scripts/*.test.sh is NOT in
+  # the auto-glob below, so an unregistered suite is an ORPHAN that gates
+  # nothing (the #5417 class). lint-orphan-test-suites.sh enforces this line.
+  run_suite "scripts/test-contention" bash scripts/test-contention.test.sh
   run_suite "scripts/lint-orphan-test-suites" bash scripts/lint-orphan-test-suites.sh
   run_suite "scripts/cron-artifact-age" bash scripts/cron-artifact-age.test.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
@@ -318,6 +360,8 @@ if want_scripts; then
     run_suite "$f" bash "$f"
   done
 fi
+
+tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 
 echo "=== $((suites - failed))/$suites suites passed ==="
 if [[ "$failed" -gt 0 ]]; then

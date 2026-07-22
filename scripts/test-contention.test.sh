@@ -1,0 +1,313 @@
+#!/usr/bin/env bash
+# test-contention.test.sh — arms for scripts/lib/test-contention.sh (#6789).
+#
+# Phase 1 (instrumentation): headroom probes, sibling scan, named banners.
+# The Phase 3 advisory-queue arms land with the lock itself.
+#
+# AUTHORING CONSTRAINTS (from work/SKILL.md, learned the hard way in #6588):
+#   - Never `producer | grep -q` under `set -o pipefail`: an EARLY match makes
+#     grep close the pipe, the producer takes SIGPIPE (141), and pipefail turns
+#     a genuine MATCH into a non-zero pipeline — so every NEGATIVE assertion
+#     fails OPEN. Grep a FILE, or use `grep -c` on a herestring.
+#   - A deliberately-nonzero command inside `$(...)` aborts under `set -e`
+#     before fail() can print — suffix `|| true` inside the substitution.
+#   - Every arm carries a mutation control: an arm that passes against a gutted
+#     implementation asserts nothing.
+#   - Minimum-cardinality guard: a loop over an empty data source exits 0 with
+#     ZERO coverage, which reads exactly like success.
+#
+# Fixtures are synthesized (cq-test-fixtures-synthesized-only): a fake procfs,
+# fake worktree dirs, and nothing written outside TESTROOT.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LIB="$REPO_ROOT/scripts/lib/test-contention.sh"
+
+pass_n=0
+fails=0
+pass() { pass_n=$((pass_n + 1)); echo "  [ok] $1"; }
+fail() { fails=$((fails + 1)); echo "  [FAIL] $1" >&2; }
+
+TESTROOT="$(mktemp -d -t test-contention.XXXXXXXX)"
+cleanup() { rm -rf "$TESTROOT"; }
+trap cleanup EXIT
+
+if [[ ! -f "$LIB" ]]; then
+  echo "ERROR: $LIB does not exist" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Fixture: a synthetic procfs containing one "sibling" test-all.sh process.
+#
+# /proc/<pid>/stat layout: field 1 = pid, field 2 = comm (parenthesized),
+# field 3 = state, ... field 22 = starttime. After stripping through the LAST
+# ') ', starttime is field 20. The filler is built programmatically so the
+# index cannot drift from a hand-counted literal — a miscount here would move
+# starttime and silently turn the elapsed assertion into a constant check.
+#
+# comm is deliberately "(te) st)" — it contains BOTH a space and an INNER
+# close-paren, so a parser that splits on whitespace, or strips through the
+# FIRST ') ' rather than the last, mis-indexes and reddens. A comm with a space
+# but no inner ')' does NOT discriminate first-vs-last and lets that mutation
+# survive; the mutation battery caught exactly that gap in this fixture.
+# ---------------------------------------------------------------------------
+CLK_TCK="$(getconf CLK_TCK 2>/dev/null || echo 100)"
+make_fake_proc() {
+  local root="$1" pid="$2" cwd="$3" elapsed_s="$4" cmd="$5"
+  local uptime=100000
+  local starttime=$(( (uptime - elapsed_s) * CLK_TCK ))
+  mkdir -p "$root/$pid"
+  printf '%s 0.00\n' "$uptime" > "$root/uptime"
+  # NUL-separated argv, exactly as the kernel presents it.
+  printf 'bash\0%s\0' "$cmd" > "$root/$pid/cmdline"
+  # 19 filler fields (state .. itrealvalue), so starttime lands at field 20.
+  local filler="S" i
+  for (( i = 2; i <= 19; i++ )); do filler+=" 0"; done
+  printf '%s (te) st) %s %s 0 0\n' "$pid" "$filler" "$starttime" > "$root/$pid/stat"
+  ln -sfn "$cwd" "$root/$pid/cwd"
+  printf 'MemAvailable:    7000000 kB\n' > "$root/meminfo"
+  printf '3.96 9.72 14.60 2/2934 572235\n' > "$root/loadavg"
+}
+
+SIB_WT="$TESTROOT/worktrees/feat-sibling-branch"
+mkdir -p "$SIB_WT"
+FAKE_PROC="$TESTROOT/proc"
+make_fake_proc "$FAKE_PROC" 424242 "$SIB_WT" 620 "scripts/test-all.sh"
+
+OTHER_PROC="$TESTROOT/proc-other"
+mkdir -p "$TESTROOT/other-wt"
+make_fake_proc "$OTHER_PROC" 313131 "$TESTROOT/other-wt" 30 "scripts/some-other-script.sh"
+
+FAKE_TMP="$TESTROOT/tmp"
+mkdir -p "$FAKE_TMP"
+touch "$FAKE_TMP/a" "$FAKE_TMP/b" "$FAKE_TMP/c"
+
+tc_env() {
+  env TC_PROC_ROOT="$FAKE_PROC" \
+      TC_TMPDIR="$FAKE_TMP" \
+      TC_SELF_PID=999999 \
+      TC_XDG_DIR="" \
+      TC_NPROC=16 \
+      "$@"
+}
+
+echo "=== Phase 1: instrumentation ==="
+
+# --- Arm 1: entry count ----------------------------------------------------
+out="$(tc_env bash -c "source '$LIB'; tc_tmp_entry_count" 2>&1 || true)"
+if [[ "$out" == "3" ]]; then
+  pass "tc_tmp_entry_count counts entries in TC_TMPDIR"
+else
+  fail "tc_tmp_entry_count expected 3, got: $out"
+fi
+
+# --- Arm 2: sibling scan ---------------------------------------------------
+tc_env bash -c "source '$LIB'; tc_siblings" > "$TESTROOT/siblings.txt" 2>&1 || true
+S="$TESTROOT/siblings.txt"
+if [[ "$(grep -cE '^424242	' "$S" || true)" -ge 1 ]]; then
+  pass "tc_siblings emits the sibling pid"
+else
+  fail "tc_siblings did not emit pid 424242; got: $(cat "$S")"
+fi
+if [[ "$(grep -cF -- "$SIB_WT" "$S" || true)" -ge 1 ]]; then
+  pass "tc_siblings resolves the sibling worktree via /proc/<pid>/cwd"
+else
+  fail "tc_siblings did not resolve cwd $SIB_WT; got: $(cat "$S")"
+fi
+# Elapsed must be DERIVED from starttime+uptime, not a constant. 620s synthesized.
+if [[ "$(grep -cE '	62[0-9]$' "$S" || true)" -ge 1 ]]; then
+  pass "tc_siblings derives elapsed seconds from stat starttime + uptime"
+else
+  fail "tc_siblings elapsed not ~620s; got: $(cat "$S")"
+fi
+
+# --- Arm 3: self-exclusion (mutation control for arm 2) --------------------
+# Same fixture, but the scanner is told the sibling IS itself. A scanner that
+# ignores TC_SELF_PID passes arm 2 and fails here; that asymmetry is the point.
+out="$(tc_env env TC_SELF_PID=424242 bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+if [[ -z "${out//[[:space:]]/}" ]]; then
+  pass "tc_siblings excludes its own pid"
+else
+  fail "tc_siblings should have excluded self pid 424242; got: $out"
+fi
+
+# --- Arm 3b: ANCESTOR exclusion, not merely self-exclusion -----------------
+# The runner is normally launched through a wrapper shell whose own cmdline
+# contains "test-all.sh". Excluding only $$ reports the caller's OWN
+# invocation as a concurrent sibling on every run. Observed live: a clean solo
+# run reported 2 phantom siblings, both in its own ancestor chain.
+#
+# Fixture: pid 555001 (the wrapper) is the PARENT of pid 555002 (the script).
+# Scanning as 555002 must yield ZERO siblings.
+ANC_PROC="$TESTROOT/proc-anc"
+mkdir -p "$TESTROOT/anc-wt"
+make_fake_proc "$ANC_PROC" 555001 "$TESTROOT/anc-wt" 90 "scripts/test-all.sh"
+make_fake_proc "$ANC_PROC" 555002 "$TESTROOT/anc-wt" 88 "scripts/test-all.sh"
+# Re-stamp 555002's ppid to 555001 (field 4 overall => field 2 after comm).
+anc_filler="S 555001"
+for (( i = 4; i <= 19; i++ )); do anc_filler+=" 0"; done
+printf '555002 (te) st) %s %s 0 0\n' "$anc_filler" "$(( (100000 - 88) * CLK_TCK ))" \
+  > "$ANC_PROC/555002/stat"
+out="$(tc_env env TC_PROC_ROOT="$ANC_PROC" TC_SELF_PID=555002 \
+  bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+if [[ -z "${out//[[:space:]]/}" ]]; then
+  pass "tc_siblings excludes the whole ancestor chain, not just its own pid"
+else
+  fail "tc_siblings reported its own wrapper as a sibling; got: $out"
+fi
+# MUTATION CONTROL: an unrelated pid in the same fixture IS still reported, so
+# the arm above cannot pass by simply returning nothing.
+out="$(tc_env env TC_PROC_ROOT="$ANC_PROC" TC_SELF_PID=999999 \
+  bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+if [[ "$(grep -cE '^555001	' <<<"$out" || true)" -ge 1 ]]; then
+  pass "tc_siblings still reports non-ancestor test-all.sh processes"
+else
+  fail "ancestor exclusion suppressed an unrelated sibling; got: $out"
+fi
+
+# --- Arm 3c: MENTIONING the runner is not RUNNING it -----------------------
+# A substring match over the joined cmdline reports every process that merely
+# names test-all.sh: `grep test-all`, an editor with the file open, or a
+# `bash -c` whose command string contains it — including inside a comment.
+# Observed live: a probe whose own trailing comment read "# scripts/test-all.sh"
+# matched itself as a concurrent run. The matcher must anchor on an ARGV TOKEN
+# whose basename is exactly test-all.sh.
+MENTION_PROC="$TESTROOT/proc-mention"
+mkdir -p "$TESTROOT/mention-wt"
+make_fake_proc "$MENTION_PROC" 777001 "$TESTROOT/mention-wt" 10 "x"
+# Single argv token that CONTAINS the name but is not a path to it.
+printf 'bash\0-c\0cd /x && echo hi # scripts/test-all.sh\0' \
+  > "$MENTION_PROC/777001/cmdline"
+out="$(tc_env env TC_PROC_ROOT="$MENTION_PROC" bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+if [[ -z "${out//[[:space:]]/}" ]]; then
+  pass "a process that only MENTIONS test-all.sh is not counted as a run"
+else
+  fail "substring match counted a mere mention as a sibling; got: $out"
+fi
+# A `grep test-all` process must not match either.
+printf 'grep\0-rn\0test-all.sh\0scripts/\0' > "$MENTION_PROC/777001/cmdline"
+out="$(tc_env env TC_PROC_ROOT="$MENTION_PROC" bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+if [[ -z "${out//[[:space:]]/}" ]]; then
+  pass "a grep for test-all.sh is not counted as a run"
+else
+  fail "a grep argument was counted as a sibling; got: $out"
+fi
+# MUTATION CONTROL: a REAL invocation in the same fixture still matches, so the
+# two arms above cannot pass by matching nothing at all.
+printf 'bash\0scripts/test-all.sh\0scripts\0' > "$MENTION_PROC/777001/cmdline"
+out="$(tc_env env TC_PROC_ROOT="$MENTION_PROC" bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+if [[ "$(grep -cE '^777001	' <<<"$out" || true)" -ge 1 ]]; then
+  pass "a real 'bash scripts/test-all.sh' invocation still matches"
+else
+  fail "token anchoring rejected a real invocation; got: $out"
+fi
+
+# --- Arm 4: a non-test-all.sh process is not a sibling ---------------------
+out="$(tc_env env TC_PROC_ROOT="$OTHER_PROC" bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+if [[ -z "${out//[[:space:]]/}" ]]; then
+  pass "tc_siblings ignores processes that are not test-all.sh"
+else
+  fail "tc_siblings matched a non-test-all.sh process; got: $out"
+fi
+
+# --- Arm 5: preamble names avail, used%, siblings, load, cores (AC1) ------
+tc_env bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/preamble.txt" 2>&1 || true
+P="$TESTROOT/preamble.txt"
+for token in 'avail' 'used' 'siblings' 'load' 'cores'; do
+  if [[ "$(grep -cEi -- "$token" "$P" || true)" -ge 1 ]]; then
+    pass "preamble names '$token'"
+  else
+    fail "preamble missing '$token'; got: $(cat "$P")"
+  fi
+done
+# A percentage must actually be rendered, not merely labelled.
+if [[ "$(grep -cE '[0-9]+% used' "$P" || true)" -ge 1 ]]; then
+  pass "preamble renders a real used-percentage value"
+else
+  fail "preamble has no 'NN% used' value; got: $(cat "$P")"
+fi
+
+# --- Arm 6: preamble names the sibling's WORKTREE PATH and PID (AC2) -------
+# AC2 is explicit that "a sibling is running" is insufficient.
+if [[ "$(grep -cF -- "$SIB_WT" "$P" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE '424242' "$P" || true)" -ge 1 ]]; then
+  pass "preamble names the sibling worktree path AND pid (AC2)"
+else
+  fail "preamble lacks sibling worktree path or pid; got: $(cat "$P")"
+fi
+
+# --- Arm 6b: the sibling COUNT is distinct worktrees, not raw pids ---------
+# Two pids in ONE worktree are one logical run competing for the tmpfs; a raw
+# pid count overstates the contention and makes the banner's number wrong.
+tc_env env TC_PROC_ROOT="$ANC_PROC" TC_SELF_PID=999999 \
+  bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/preamble-anc.txt" 2>&1 || true
+if [[ "$(grep -cE 'siblings: 1 ' "$TESTROOT/preamble-anc.txt" || true)" -ge 1 ]]; then
+  pass "sibling count counts distinct worktrees (2 pids in 1 worktree => 1)"
+else
+  fail "sibling count is not worktree-distinct; got: $(grep siblings "$TESTROOT/preamble-anc.txt" || true)"
+fi
+
+# --- Arm 7: banners NAME WHICH condition fired (1.3) -----------------------
+# Forced by raising the floor above available space, so the arm needs no df
+# stub and holds on any host regardless of real /tmp occupancy.
+tc_env env TC_MIN_AVAIL_MB=99999999 bash -c "source '$LIB'; tc_preamble" \
+  > "$TESTROOT/banner-low.txt" 2>&1 || true
+if [[ "$(grep -cE 'LOW_TMP_HEADROOM' "$TESTROOT/banner-low.txt" || true)" -ge 1 ]]; then
+  pass "low-headroom banner names the LOW_TMP_HEADROOM condition"
+else
+  fail "no LOW_TMP_HEADROOM banner; got: $(cat "$TESTROOT/banner-low.txt")"
+fi
+if [[ "$(grep -cE 'SIBLING_RUN_DETECTED' "$P" || true)" -ge 1 ]]; then
+  pass "sibling banner names the SIBLING_RUN_DETECTED condition"
+else
+  fail "no SIBLING_RUN_DETECTED banner; got: $(cat "$P")"
+fi
+# MUTATION CONTROL: with no sibling and ample headroom, NEITHER banner fires.
+# Without this, a lib that unconditionally prints both banners passes above.
+tc_env env TC_PROC_ROOT="$OTHER_PROC" TC_MIN_AVAIL_MB=0 \
+  bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/banner-none.txt" 2>&1 || true
+if [[ "$(grep -cE 'LOW_TMP_HEADROOM|SIBLING_RUN_DETECTED' "$TESTROOT/banner-none.txt" || true)" -eq 0 ]]; then
+  pass "no banner fires when headroom is ample and no sibling runs"
+else
+  fail "a banner fired unconditionally; got: $(cat "$TESTROOT/banner-none.txt")"
+fi
+
+# --- Arm 8: epilogue reports a real delta ----------------------------------
+touch "$FAKE_TMP/d" "$FAKE_TMP/e"
+tc_env bash -c "source '$LIB'; tc_epilogue 3" > "$TESTROOT/epilogue.txt" 2>&1 || true
+if [[ "$(grep -cE 'delta 2' "$TESTROOT/epilogue.txt" || true)" -ge 1 ]]; then
+  pass "tc_epilogue reports the +2 entry delta"
+else
+  fail "tc_epilogue did not report delta 2; got: $(cat "$TESTROOT/epilogue.txt")"
+fi
+# MUTATION CONTROL: an epilogue hardcoding "delta 2" would pass above.
+tc_env bash -c "source '$LIB'; tc_epilogue 5" > "$TESTROOT/epilogue0.txt" 2>&1 || true
+if [[ "$(grep -cE 'delta 0' "$TESTROOT/epilogue0.txt" || true)" -ge 1 ]]; then
+  pass "tc_epilogue computes the delta rather than hardcoding it"
+else
+  fail "tc_epilogue delta is not computed; got: $(cat "$TESTROOT/epilogue0.txt")"
+fi
+
+# --- Arm 9: the module observes only — it must not mutate anything ---------
+# The whole premise is that instrumentation ships ahead of every fix; a probe
+# that creates or deletes files would destroy the conditions it exists to see.
+before_n="$(find "$FAKE_TMP" -mindepth 1 -maxdepth 1 | wc -l)"
+tc_env bash -c "source '$LIB'; tc_preamble; tc_epilogue 0" >/dev/null 2>&1 || true
+after_n="$(find "$FAKE_TMP" -mindepth 1 -maxdepth 1 | wc -l)"
+if [[ "$before_n" == "$after_n" ]]; then
+  pass "the module creates and deletes nothing (observe-only)"
+else
+  fail "module mutated TC_TMPDIR: $before_n -> $after_n"
+fi
+
+# --- Minimum-cardinality guard ---------------------------------------------
+# A silently-empty run exits 0 with zero coverage, which reads exactly like
+# success. This is the guard for that.
+if [[ "$pass_n" -lt 21 ]]; then
+  fail "cardinality guard: only $pass_n assertions ran (expected >= 21)"
+fi
+
+echo "=== test-contention: $pass_n passed, $fails failed ==="
+[[ "$fails" -eq 0 ]] || exit 1
