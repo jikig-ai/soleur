@@ -190,6 +190,9 @@ if want_scripts; then
   # the auto-glob below, so an unregistered suite is an ORPHAN that gates
   # nothing (the #5417 class). lint-orphan-test-suites.sh enforces this line.
   run_suite "scripts/test-contention" bash scripts/test-contention.test.sh
+  # #6789: arms for the tmpfs scratch reaper. It DELETES files, so every gate
+  # (age/size/ownership/liveness/protected-path) is asserted in both directions.
+  run_suite "scripts/tmpfs-guard" bash scripts/tmpfs-guard.test.sh
   run_suite "scripts/lint-orphan-test-suites" bash scripts/lint-orphan-test-suites.sh
   run_suite "scripts/cron-artifact-age" bash scripts/cron-artifact-age.test.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
