@@ -45,6 +45,7 @@ import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-
 import { cronGithubCidrRefresh } from "@/server/inngest/functions/cron-github-cidr-refresh";
 import { cronGrowthAudit } from "@/server/inngest/functions/cron-growth-audit";
 import { cronGrowthExecution } from "@/server/inngest/functions/cron-growth-execution";
+import { cronInngestConfigDrift } from "@/server/inngest/functions/cron-inngest-config-drift";
 import { cronInngestCronWatchdog } from "@/server/inngest/functions/cron-inngest-cron-watchdog";
 import { cronKbTemplateHealth } from "@/server/inngest/functions/cron-kb-template-health";
 import { cronLegalAudit } from "@/server/inngest/functions/cron-legal-audit";
@@ -150,6 +151,7 @@ export const { GET, POST, PUT } = serve({
     cronGithubCidrRefresh,
     cronGrowthAudit,
     cronGrowthExecution,
+    cronInngestConfigDrift,
     cronInngestCronWatchdog,
     cronKbTemplateHealth,
     cronLegalAudit,

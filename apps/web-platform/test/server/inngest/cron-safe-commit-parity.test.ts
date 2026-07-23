@@ -87,8 +87,9 @@ const READ_ONLY_PROBES = [
 ];
 
 // Dispatch-hybrid crons (#5872 acknowledgment) — a fourth implicit class beyond
-// MIGRATED/EXEMPT/READ_ONLY_PROBES. `cron-dev-migration-drift`, `cron-terraform-drift`
-// and `cron-domain-model-drift` are SCHEDULERS ONLY: the dispatcher mints a
+// MIGRATED/EXEMPT/READ_ONLY_PROBES. `cron-dev-migration-drift`, `cron-terraform-drift`,
+// `cron-domain-model-drift` and `cron-inngest-config-drift` (#6780, event-only/dormant)
+// are SCHEDULERS ONLY: the dispatcher mints a
 // short-lived installation token and POSTs a `workflow_dispatch`, holding no git
 // and opening no PR (the git-touching / issue-filing work runs in the ephemeral
 // GHA executor, not the Node dispatcher). Like READ_ONLY_PROBES the safe-commit

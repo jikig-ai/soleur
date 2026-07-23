@@ -482,6 +482,27 @@ describe("infoSilentFallback — every-run info-level emit (#4897)", () => {
     expect(mockLoggerError).not.toHaveBeenCalled();
   });
 
+  // #6801 (AC12/M17): sibling-parity bugfix — `info` used to silently DROP the
+  // caller `tags` (unlike report/warn), so a `tags:` passed here never reached
+  // Sentry. It must now merge them into captureMessage's tags.
+  it("passes caller `tags` through to captureMessage (sibling parity with report/warn)", () => {
+    infoSilentFallback(null, {
+      feature: "email-triage",
+      op: "deadline-repin-sweep-complete",
+      message: "sweep",
+      tags: { repin_suppressed: "no", repin_excluded: "yes" },
+      extra: { pinged: 0 },
+    });
+
+    const [, payload] = mockCaptureMessage.mock.calls[0];
+    expect(payload.tags).toMatchObject({
+      feature: "email-triage",
+      op: "deadline-repin-sweep-complete",
+      repin_suppressed: "no",
+      repin_excluded: "yes",
+    });
+  });
+
   it("routes userId → userIdHash through the same hashExtraUserId boundary", () => {
     infoSilentFallback(null, {
       feature: "some-feature",

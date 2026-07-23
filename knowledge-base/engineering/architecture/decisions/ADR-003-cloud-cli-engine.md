@@ -1,5 +1,4 @@
 ---
-adr: ADR-003
 title: Cloud CLI Engine
 status: active
 date: 2026-03-27

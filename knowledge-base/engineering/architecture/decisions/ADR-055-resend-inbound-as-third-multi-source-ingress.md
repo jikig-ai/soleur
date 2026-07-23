@@ -1,5 +1,4 @@
 ---
-adr: ADR-055
 title: "Inbound email ingress: Proton Sieve auto-forward → Resend Inbound — third multi-source ingress"
 status: accepted
 date: 2026-06-11

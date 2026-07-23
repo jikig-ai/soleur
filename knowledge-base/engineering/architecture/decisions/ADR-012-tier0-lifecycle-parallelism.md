@@ -1,5 +1,4 @@
 ---
-adr: ADR-012
 title: Tier-0 Lifecycle Parallelism
 status: active
 date: 2026-03-27

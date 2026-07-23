@@ -1,5 +1,4 @@
 ---
-adr: ADR-033
 title: Runtime JWT signing substrate
 status: Accepted
 date: 2026-05-18

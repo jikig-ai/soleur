@@ -3,3 +3,7 @@ terraform.tfstate
 terraform.tfstate.backup
 terraform.tfvars
 *.tfvars
+# Pre-apply gate/plan artifacts (#6767): the binary plan and its JSON render are
+# written into this dir by the apply workflow — never commit them (defence-in-depth).
+tfplan
+tfplan.json
