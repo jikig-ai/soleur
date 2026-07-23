@@ -85,7 +85,7 @@ SERVER_IP=$(AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain -p
 ssh -o ConnectTimeout=5 -o BatchMode=yes root@"$SERVER_IP" 'echo "SSH OK"'
 ```
 
-If SSH fails, check: (1) local SSH key exists at `~/.ssh/id_ed25519`, (2) server firewall allows the current IP in `admin_ips`, (3) server is running (`hcloud server list`).
+If SSH fails, check: (1) local SSH key exists at `~/.ssh/id_<key>`, (2) server firewall allows the current IP in `admin_ips`, (3) server is running (`hcloud server list`).
 
 ### Phase 1: Apply Terraform
 
@@ -100,7 +100,7 @@ doppler run -p soleur -c prd_terraform -- \
     -p soleur -c prd_terraform --name-transformer tf-var -- \
   terraform apply \
     -var="ssh_key_path=$HOME/.ssh/id_ed25519.pub" \
-    -var="ssh_private_key_path=$HOME/.ssh/id_ed25519" \
+    -var="ssh_private_key_path=$HOME/.ssh/id_<key>" \
     -target=terraform_data.doppler_install
 ```
 
@@ -115,7 +115,7 @@ doppler run -p soleur -c prd_terraform -- \
     -p soleur -c prd_terraform --name-transformer tf-var -- \
   terraform plan -detailed-exitcode -no-color -input=false \
     -var="ssh_key_path=$HOME/.ssh/id_ed25519.pub" \
-    -var="ssh_private_key_path=$HOME/.ssh/id_ed25519"
+    -var="ssh_private_key_path=$HOME/.ssh/id_<key>"
 ```
 
 ### Phase 3: Verify Doppler on Server

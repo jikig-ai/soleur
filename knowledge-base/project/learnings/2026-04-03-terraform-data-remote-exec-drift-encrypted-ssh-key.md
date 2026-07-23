@@ -19,7 +19,7 @@ severity: medium
 
 PR #1496 added a `terraform_data.doppler_install` resource with a `remote-exec` provisioner to install Doppler CLI on the Hetzner server. The PR was merged but `terraform apply` was never run post-merge. The drift detection workflow (#1505) flagged the unapplied resource.
 
-When attempting to apply, `terraform apply` failed with `ssh: parse error in message type 0` because the local SSH key (`~/.ssh/id_ed25519`) is passphrase-encrypted. Terraform's `file()` function reads raw bytes and cannot use the SSH agent for decryption.
+When attempting to apply, `terraform apply` failed with `ssh: parse error in message type 0` because the local SSH key (`~/.ssh/id_<key>`) is passphrase-encrypted. Terraform's `file()` function reads raw bytes and cannot use the SSH agent for decryption.
 
 ## Root Cause
 
@@ -56,7 +56,7 @@ Two compounding failures:
 
 ### 3. Passphrase-encrypted SSH key incompatible with Terraform file()
 
-**What happened:** `terraform apply` failed with `Failed to parse ssh private key: ssh: parse error in message type 0`. The error is opaque -- it does not mention encryption or passphrases. The root cause is that `private_key = file("~/.ssh/id_ed25519")` reads the encrypted PEM bytes, and Terraform's SSH library cannot decrypt them.
+**What happened:** `terraform apply` failed with `Failed to parse ssh private key: ssh: parse error in message type 0`. The error is opaque -- it does not mention encryption or passphrases. The root cause is that `private_key = file("~/.ssh/id_<key>")` reads the encrypted PEM bytes, and Terraform's SSH library cannot decrypt them.
 
 **Prevention:** Document this as a known constraint for `terraform_data` with `remote-exec` provisioners. Options:
 

@@ -171,7 +171,7 @@ line. **But it is also the source of the fail-open transition below.**
 | # | Severity | Finding | Disposition |
 | --- | --- | --- | --- |
 | F4 | MED-HIGH | Continuation rules consumed **less**-indented lines → reviewer/executor differential, verified exploitable | **Fixed inline** — `indent > key` |
-| F2/F3 | HIGH | Fixing defect 2 flips **4 corpus plans REJECT → EXEC**; all 4 run `doppler run -p soleur -c prd_terraform`. `env -i` does **not** scrub this credential: the Doppler CLI reads a live `dp.ct.*` token from `~/.doppler/.doppler.yaml`, and Step 10.5 preserves `HOME="$HOME"` | **Fixed inline** — credentialed-CLI reject added to Step 10.4 alongside the existing `ssh` reject (CPO condition C1). Threshold raised; AC11 gates on the reject-verdict delta as the residual control |
+| F2/F3 | HIGH | Fixing defect 2 flips **4 corpus plans REJECT → EXEC**; all 4 run `doppler run -p soleur -c prd_terraform`. `env -i` does **not** scrub this credential: the Doppler CLI reads a live `dp.ct.*` token from `~/.doppler/`, and Step 10.5 preserves `HOME="$HOME"` | **Fixed inline** — credentialed-CLI reject added to Step 10.4 alongside the existing `ssh` reject (CPO condition C1). Threshold raised; AC11 gates on the reject-verdict delta as the residual control |
 | F1 | HIGH (pre-existing) | Newline is **not** in the Step 10.5 reject set, so block mode is an unguarded command-chaining primitive (verified: a second line `touch /tmp/PWNED` executed) | **Fixed inline** — add `\n` to the reject set. **Scope note (CPO condition C2): this closes block-mode chaining ONLY and contributes ZERO coverage to the 4 folded flips**, which join with a space and contain no shell-active token. Verified: both flip commands pass the reject even with `\n` in the set |
 | F5 | MED | `awk -f <missing>` → rc=2 + empty stdout; `set -uo pipefail` does not abort (command-substitution rc is discarded), so `$CMD` is empty and Form B silently parses a **different** command. `CLAUDE_PLUGIN_ROOT` is **unset** in a plain session | **Fixed inline** — resolve via `git rev-parse --show-toplevel`; hard-fail on awk rc≠0 instead of falling through |
 | F6 | LOW-MED | Fold + trailing `\` mangles the command (`\` + injected space = escaped space). Two corpus plans use trailing `\` | Fixture + `.awk` header note |
@@ -681,7 +681,7 @@ avoids a plan that can only be validated by the fix it proposes. The `what:` fie
   blank-line skip rule must stay **above** the terminator or every scalar ends at its first
   blank line (N6).
 - **`env -i` does not scrub file-backed CLI auth.** Step 10.5 preserves `HOME`, so the
-  Doppler CLI's `~/.doppler/.doppler.yaml` token remains reachable by any command Check 10
+  Doppler CLI's `~/.doppler/` token remains reachable by any command Check 10
   executes. Do not cite `env -i` as a mitigation for credential-bearing commands.
 - **The shell-active reject does not bound a space-joined fold.** Folding produces a single
   line with no `;`/`|`/`$()`, so a folded scalar passes the Step 10.5 reject by
