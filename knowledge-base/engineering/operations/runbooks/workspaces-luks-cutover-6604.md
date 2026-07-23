@@ -31,7 +31,25 @@ forever — which the escrow proof + off-host header backup exist to prevent.
 
 ## Sequence
 
-1. **Provision the encrypted volume (additive, zero downtime).**
+0. **RECOVERY-ONLY — re-cut after a dead-man-orphaned LUKS volume (#6812 / #6855).** Skip this on a
+   first-time cutover. Run it ONLY when a prior cutover landed and was then undone by its dead-man
+   timer, leaving `hcloud_volume.workspaces_luks` **in state and already `crypto_LUKS`** (holding a
+   discarded write window) while `/mnt/data` is back on plaintext `/dev/sdb`. In that state a plain
+   re-cut does **NOT** re-format: `workspaces-cutover.sh`'s device guard treats an already-`crypto_LUKS`
+   device as an idempotent no-op, so it re-opens the OLD header and serves stale data — it does **not**
+   `luksFormat`. Make the volume genuinely fresh first (this **destroys** the orphaned volume — an
+   irreversible, operator-accepted discard of the stranded window):
+   `gh workflow run apply-web-platform-infra.yml -f apply_target=workspaces-luks-recut -f confirm=RECUT-WORKSPACES-LUKS -f reason='#6812 re-cut fresh target'`
+   The `workspaces-luks-cutover` **environment reviewer must approve** (the sole authorization; the
+   typed `confirm` is only a typo-guard). The sourced `workspaces_luks_recut_gate` aborts unless the
+   plan is exactly `{volume REPLACE + attachment CREATE}` with the live plaintext volume/attachment +
+   web-1 + the passphrase all untouched (the passphrase is **reused**, never re-minted). No
+   `[ack-destroy]` bypass. After it runs, the volume is a raw replacement with the same name, so Step 2
+   onward proceeds normally — the cutover resolves it by name and hits the raw→`luksFormat` arm. Zero
+   downtime (the live plaintext keeps serving throughout).
+
+1. **Provision the encrypted volume (additive, zero downtime).** *(FIRST cutover only — skip if you
+   ran Step 0, which already leaves the five resources in state.)*
    `gh workflow run apply-web-platform-infra.yml -f apply_target=workspaces-luks-cutover -f reason='#6604 cutover volume'`
    The sourced `workspaces_luks_cutover_gate` aborts unless the plan is exactly the five-resource
    `+create` with the live plaintext volume/attachment + web-1 untouched. No `[ack-destroy]` bypass.
@@ -118,7 +136,7 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    | --- | --- | --- |
    | `rc=255` | SSH/CF-tunnel transport failure | **Not** a finding. No Sentry event exists. Check the bridge step, re-dispatch |
    | `rc=127` | tar bundle failed to land / script not found on web-1 | **Not** a finding. Check the bundle-ship step, re-dispatch |
-   | `rc=1` `mount_not_mapper` / `device_not_luks` | At-rest drift: `/mnt/data` is **not** the LUKS mapper | **Encryption is not in effect.** Do not re-cut before reading §Rollback — a fresh freeze copies whichever volume is live now |
+   | `rc=1` `mount_not_mapper` / `device_not_luks` | At-rest drift: `/mnt/data` is **not** the LUKS mapper | **Encryption is not in effect.** Do not re-cut before reading §Rollback — a fresh freeze copies whichever volume is live now. **If a prior cutover was undone by the dead-man** (the LUKS volume is still in state + `crypto_LUKS`), a plain re-cut re-opens the stale header instead of re-formatting — run **Sequence Step 0** (`apply_target=workspaces-luks-recut`) first to make the target genuinely raw |
    | `rc=1` `escrow_passphrase_mismatch` / `header_uuid_unreadable` | Escrow or header problem | Header-recovery path; do **not** wipe the plaintext original |
    | `rc=1` `mapper_path_override_refused` | A `WORKSPACES_MAPPER_PATH` env override on the host | **Config fault, not data loss.** Remove the stray env var; it is a test-only seam |
    | `rc=3` `readyz_not_ready` + `capacity` `use=100%` or `mount=ro` | **CAPACITY fault**, not data loss | Free space / remount rw. **Never** run a data-recovery procedure for this |
