@@ -417,7 +417,9 @@ export function ChatSurface({
       if (vv && isCoarse) {
         // Height the keyboard covers = layout viewport − visual viewport − any
         // upward offset. 0 on platforms that already reflow (Android/desktop).
-        const covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+        // Rounded so React's Object.is bail collapses the redundant sub-pixel
+        // renders the iOS keyboard show/hide animation would otherwise emit.
+        const covered = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
         setKeyboardInset(covered);
       }
       recomputeNearBottom();
@@ -1171,24 +1173,25 @@ export function ChatSurface({
         </div>
       )}
 
-      {/* Jump-to-latest — mounted on the non-scrolling root (NOT inside the
-          messages scroll div, where it would scroll away exactly when the user
-          is scrolled up). Lifts with the composer when the iOS keyboard is up.
-          ≥44px coarse hit area. */}
-      {showJumpButton && (
-        <button
-          type="button"
-          onClick={handleJumpToLatest}
-          aria-label="Jump to latest"
-          style={{ bottom: `calc(6rem + ${keyboardInset}px)` }}
-          className="absolute left-1/2 z-10 flex min-h-11 -translate-x-1/2 items-center gap-1.5 rounded-full border border-soleur-border-default bg-soleur-bg-surface-2 px-4 text-sm text-soleur-text-primary shadow-lg hover:bg-soleur-bg-surface-3"
-        >
-          Jump to latest
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
-        </button>
-      )}
+      {/* Composer + Jump-to-latest share a `relative` shell so the pill anchors
+          to the composer's actual top edge (bottom-full), never overlapping a
+          grown multi-line composer, and rides up with the keyboard via the
+          composer's own marginBottom. The pill is NOT inside the messages scroll
+          div (it would scroll away exactly when the user is scrolled up). */}
+      <div className="relative shrink-0">
+        {showJumpButton && (
+          <button
+            type="button"
+            onClick={handleJumpToLatest}
+            aria-label="Jump to latest"
+            className="absolute bottom-full left-1/2 z-10 mb-2 flex min-h-11 -translate-x-1/2 items-center gap-1.5 rounded-full border border-soleur-border-default bg-soleur-bg-surface-2 px-4 text-sm text-soleur-text-primary shadow-lg hover:bg-soleur-bg-surface-3"
+          >
+            Jump to latest
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+        )}
 
       <div
         data-tour-id={isFull ? "action:conversation-composer" : undefined}
@@ -1256,6 +1259,7 @@ export function ChatSurface({
             </span>
           </div>
         )}
+      </div>
       </div>
     </div>
   );

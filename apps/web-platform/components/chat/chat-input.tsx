@@ -693,7 +693,7 @@ export function ChatInput({
             rows={1}
             enterKeyHint="send"
             data-quote-flashing={flashQuote ? "true" : undefined}
-            className="w-full resize-none border-none bg-transparent px-1 py-2 pr-8 text-base text-soleur-text-primary placeholder:text-soleur-text-muted focus:outline-none focus-visible:shadow-none disabled:opacity-50 min-h-[36px] max-h-[140px] overflow-y-auto md:text-sm"
+            className="w-full resize-none border-none bg-transparent px-1 py-2 pr-11 text-base text-soleur-text-primary placeholder:text-soleur-text-muted focus:outline-none focus-visible:shadow-none disabled:opacity-50 min-h-[36px] max-h-[140px] overflow-y-auto md:pr-8 md:text-sm"
           />
           {/* Mobile @ button */}
           <button

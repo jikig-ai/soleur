@@ -20,8 +20,7 @@ import markdown from "highlight.js/lib/languages/markdown";
 import yaml from "highlight.js/lib/languages/yaml";
 import css from "highlight.js/lib/languages/css";
 import xml from "highlight.js/lib/languages/xml";
-import type { Components } from "react-markdown";
-import type { PluggableList } from "unified";
+import type { Components, Options } from "react-markdown";
 import { C4_DIAGRAMS_DIR, LIKEC4_VIEW_LANG } from "@/lib/c4-constants";
 
 // Interactive C4 visualizer is browser-only (canvas/xyflow) and heavy — load it
@@ -150,11 +149,12 @@ function buildComponents({ linkRel, preWrap, enableC4, c4DirPath }: BuildOptions
 
 const REMARK_PLUGINS = [remarkGfm];
 const DISALLOWED_ELEMENTS = ["script", "iframe", "form", "object", "embed", "style", "link"];
-// Annotated `: PluggableList` (imported from "unified", the same type
-// react-markdown's rehypePlugins prop uses) so the [plugin, options] tuple gets
-// contextual typing — without it TS widens the inner array to a union and
-// rejects it. (The plan's "keep untyped" note was wrong; tsc verified.)
-const REHYPE_PLUGINS: PluggableList = [
+// Typed as react-markdown's own `rehypePlugins` prop type so the [plugin,
+// options] tuple gets contextual typing — without it TS widens the inner array
+// to a union and rejects it. Derived from the already-declared `react-markdown`
+// dependency rather than importing PluggableList from the (undeclared,
+// transitive-only) "unified" package.
+const REHYPE_PLUGINS: NonNullable<Options["rehypePlugins"]> = [
   [
     rehypeHighlight,
     {
