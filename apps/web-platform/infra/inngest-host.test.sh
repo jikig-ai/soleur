@@ -177,6 +177,16 @@ else
   pass
 fi
 
+# 9b. (#6178) The isolation self-check MUST admit INNGEST_CUTOVER_FLIP. op=arm writes that
+#     secret to soleur-inngest/prd, so omitting it from the allowlist makes the arm step
+#     boot-brick its own host: every subsequent boot sees n_total != n_inngest → FATAL →
+#     no Vector, no inngest-server, no flip timer, so the flip can never run and the failure
+#     is invisible off-box. It is a legitimate member — inngest-cutover-flip.service reads it
+#     via `doppler run --config prd`. Nested inside the INNGEST_ group (a top-level member
+#     would fail to match the real INNGEST_-prefixed name).
+grep -qF 'POSTGRES_URI|CUTOVER_FLIP|HEARTBEAT_URL)' "$CLOUD_INIT" \
+  && pass || fail "isolation self-check must admit INNGEST_CUTOVER_FLIP inside the INNGEST_ group (op=arm writes it; omitting it boot-bricks the dedicated host — #6178)"
+
 # 10. (#6536, AC6) The dark-host heartbeat prose must NOT re-assert the false "curl no-ops"
 #     claim. `curl -fsS --max-time 10 ""` exits 2 ("blank argument where content is
 #     expected" — measured), it does NOT no-op. That false comment is what authorized the

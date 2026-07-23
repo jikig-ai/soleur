@@ -303,8 +303,17 @@ runcmd:
   # `INNGEST_`-prefixed name: BETTERSTACK_LOGS_TOKEN is admitted because vector.service
   # reads it, even though it carries no INNGEST_ prefix) AND cardinality (>=5 — the 3
   # TF-owned signing/event/redis keys + the out-of-band INNGEST_POSTGRES_URI + the isolated
-  # BETTERSTACK_LOGS_TOKEN, all present at dark boot; INNGEST_HEARTBEAT_URL is out-of-band and
-  # set only AT cutover, so the count is 5 dark / 6 live).
+  # BETTERSTACK_LOGS_TOKEN, all present at dark boot; INNGEST_HEARTBEAT_URL and
+  # INNGEST_CUTOVER_FLIP are out-of-band and written only AT cutover (both by op=arm), so the
+  # count is 5 dark / 7 live).
+  # NOTE (#6178): INNGEST_CUTOVER_FLIP MUST stay admitted — inngest-cutover-flip.service reads
+  # it via `doppler run --config prd`, so it is a name this host's runtime consumes. Omitting it
+  # made op=arm's own write boot-brick the host: from the moment the flip was armed, every
+  # subsequent boot saw n_total(7) != n_inngest(6) → FATAL → no Vector, no inngest-server, and
+  # no flip timer, so the flip could never run AND the failure was invisible off-box (the
+  # component that ships logs is the one that never installed). Only the
+  # SOLEUR_INNGEST_BOOT_STAGE phone-home (#6702), which curls Better Stack independently of
+  # Vector, surfaced it.
   # An over-scoped `prd`-branch token would see ~116 foreign secrets → n_total != n_inngest →
   # refuse. On pass, drop the sentinel the bootstrap block gates on; on fail, no sentinel → the
   # next block aborts (fail-closed).
@@ -318,7 +327,7 @@ runcmd:
     set -euo pipefail
     names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
     n_total="$(printf '%s\n' "$names" | grep -c . || true)"
-    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
+    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
     if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 5 ]; then
       echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
     fi
