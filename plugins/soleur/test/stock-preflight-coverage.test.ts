@@ -83,11 +83,20 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
     // failed create leaves the fleet intact (recoverable, not a strand). Same class as inngest-host.
     "additive volume create (no server → stock-preflight is a no-op); its own gate forbids any destroy, so a miss is recoverable, not a strand",
   ],
+  [
+    "entrypoint-audit",
+    // #6767 read-only Cloudflare-rulesets drift audit (job `entrypoint_audit`). It runs
+    // NO `terraform apply` — only HTTP GETs to the Cloudflare rulesets API + a `gh issue
+    // comment`. It creates and destroys nothing (its job body is asserted apply-free by
+    // the preapply-entrypoint-gate suite), so stock-preflight-gate.sh (which selects
+    // hcloud_server) is out-of-scope and there is no destroy-then-fail surface to guard.
+    "read-only CF-rulesets audit; no terraform apply (GETs + issue comment only), so nothing is created or destroyed and stock-preflight is out-of-scope",
+  ],
 ]);
 
-// Sentinel: 7 options today (manual-rerun, inngest-host, inngest-host-replace,
+// Sentinel: 8 options today (manual-rerun, inngest-host, inngest-host-replace,
 // registry-host-replace, registry-region-migrate, git-data-host-replace,
-// workspaces-luks-cutover).
+// workspaces-luks-cutover, entrypoint-audit).
 // reason: 9 -> 7. warm-standby and web-2-recreate were REMOVED with the web-2
 // dispatch sweep (#6575, 2026-07-20) after web-2 retired; both hard--targeted
 // addresses that no longer exist. This floor is lowered to match a real deletion,
