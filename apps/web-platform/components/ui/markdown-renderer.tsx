@@ -5,6 +5,21 @@ import dynamic from "next/dynamic";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+// Explicit grammar subset — see REHYPE_PLUGINS below. Importing only these from
+// the already-installed highlight.js keeps the chat critical-path bundle small
+// instead of shipping lowlight's ~35-language `common` set. `typescript` covers
+// ts/tsx; `xml` covers html — highlight.js has no separate tsx/html module.
+import javascript from "highlight.js/lib/languages/javascript";
+import typescript from "highlight.js/lib/languages/typescript";
+import bash from "highlight.js/lib/languages/bash";
+import json from "highlight.js/lib/languages/json";
+import python from "highlight.js/lib/languages/python";
+import sql from "highlight.js/lib/languages/sql";
+import diff from "highlight.js/lib/languages/diff";
+import markdown from "highlight.js/lib/languages/markdown";
+import yaml from "highlight.js/lib/languages/yaml";
+import css from "highlight.js/lib/languages/css";
+import xml from "highlight.js/lib/languages/xml";
 import type { Components } from "react-markdown";
 import { C4_DIAGRAMS_DIR, LIKEC4_VIEW_LANG } from "@/lib/c4-constants";
 
@@ -134,7 +149,38 @@ function buildComponents({ linkRel, preWrap, enableC4, c4DirPath }: BuildOptions
 
 const REMARK_PLUGINS = [remarkGfm];
 const DISALLOWED_ELEMENTS = ["script", "iframe", "form", "object", "embed", "style", "link"];
-const REHYPE_PLUGINS = [rehypeHighlight];
+// Keep this untyped (no `: PluggableList`) — that type isn't imported here and
+// adding it would need `import type { PluggableList } from "unified"`.
+const REHYPE_PLUGINS = [
+  [
+    rehypeHighlight,
+    {
+      detect: false,
+      languages: {
+        javascript,
+        js: javascript,
+        jsx: javascript,
+        typescript,
+        ts: typescript,
+        tsx: typescript,
+        bash,
+        sh: bash,
+        json,
+        python,
+        py: python,
+        sql,
+        diff,
+        markdown,
+        md: markdown,
+        yaml,
+        yml: yaml,
+        css,
+        html: xml,
+        xml,
+      },
+    },
+  ],
+];
 
 interface MarkdownRendererProps {
   content: string;

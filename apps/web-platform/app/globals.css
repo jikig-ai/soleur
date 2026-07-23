@@ -164,10 +164,35 @@
 }
 
 @layer base {
+  html {
+    /* Block bounce/rubber-band on the document and stop pull-to-refresh from
+       hijacking vertical drags inside scroll containers. */
+    overscroll-behavior: none;
+    /* Kill the grey tap flash on interactive elements (mobile Safari/Chrome). */
+    -webkit-tap-highlight-color: transparent;
+    /* Prevent mobile browsers from auto-inflating font sizes on orientation
+       change; keep our own type scale authoritative. */
+    text-size-adjust: 100%;
+    -webkit-text-size-adjust: 100%;
+  }
   body {
     background-color: var(--soleur-bg-base);
     color: var(--soleur-text-primary);
     font-family: var(--font-sans);
+    /* Body only — never clip legitimate horizontal-scroll containers (tables,
+       code blocks). Prevents a stray wide child from side-scrolling the page. */
+    overflow-x: hidden;
+  }
+  /* iOS Safari zooms the viewport when focusing an input whose font-size is
+     below 16px. Floor every text control to 16px on phones; the per-input
+     `text-base md:text-sm` utilities restore 14px on desktop (utilities beat
+     @layer base, so desktop is unaffected). */
+  @media (max-width: 767px) {
+    input,
+    textarea,
+    select {
+      font-size: 16px;
+    }
   }
   :where(a, button, input, select, textarea, [tabindex]:not([tabindex="-1"])):focus-visible {
     outline: none;
@@ -195,6 +220,14 @@
   }
   50% {
     border-color: oklch(0.666 0.16 55 / 0.3);
+  }
+}
+
+/* Honor reduced-motion for the active-message pulse. Unlayered so it beats the
+   @layer components rule that sets the infinite animation. */
+@media (prefers-reduced-motion: reduce) {
+  .message-bubble-active {
+    animation: none;
   }
 }
 
@@ -274,9 +307,17 @@
   border-bottom: 1px solid var(--soleur-border-default, #2a2a2a);
   background: transparent;
   padding: 0.875rem 1rem;
-  font-size: 0.9rem;
+  /* 1rem (16px) floors iOS auto-zoom on the ⌘K palette input; desktop restores
+     the tighter 0.9rem below. This rule is unlayered, so the override must be
+     unlayered too — a @layer-wrapped override would lose the cascade. */
+  font-size: 1rem;
   color: var(--soleur-text-primary, #ededed);
   outline: none;
+}
+@media (min-width: 768px) {
+  [cmdk-input] {
+    font-size: 0.9rem;
+  }
 }
 [cmdk-list] {
   max-height: 22rem;
