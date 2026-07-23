@@ -247,8 +247,8 @@ logs:
   where: GitHub Actions run logs + GITHUB_STEP_SUMMARY; the subsequent cutover's Better Stack SOLEUR_WORKSPACES_* markers verify at-rest state post-freeze
   retention: GitHub Actions default (90d)
 discoverability_test:
-  command: gh run list --workflow=apply-web-platform-infra.yml --event=workflow_dispatch --json databaseId,conclusion,displayTitle
-  expected_output: the recut dispatch run with conclusion success/failure — NO ssh
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/health
+  expected_output: "200" — the recut is zero-downtime; /health must stay 200 (serving is unaffected by the volume replace). The dispatch run's own conclusion + GITHUB_STEP_SUMMARY are the mechanism-level signal, visible in the Actions UI without SSH.
 ```
 
 ## Architecture Decision (ADR/C4)
