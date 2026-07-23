@@ -183,6 +183,7 @@ if want_scripts; then
   run_suite "scripts/lint-agents-compound-sync-live" bash scripts/lint-agents-compound-sync.sh
   run_suite "scripts/lint-agents-compound-sync-unit" bash scripts/lint-agents-compound-sync.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
+  run_suite "scripts/lint-credential-path-literals" bash scripts/lint-credential-path-literals.test.sh
   run_suite "scripts/extract-api-spend" bash scripts/extract-api-spend.test.sh
   run_suite "scripts/domain-model-drift" bash scripts/domain-model-drift.test.sh
   # #6602: exit-code harness for the expenses verify_by expiry gate. Registered

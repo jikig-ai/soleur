@@ -106,6 +106,20 @@ jobs:
           else
             python3 scripts/lint-infra-no-human-steps.py --changed
           fi
+      # Regression teeth for the credential auto-attach class: fail a tracked
+      # doc that writes a home-relative RESOLVABLE path to a real credential file
+      # (Claude Code's harness auto-attaches such a file into model context when
+      # the doc loads — the vector that leaked a live Doppler token via
+      # preflight/SKILL.md). Changed-files mode grandfathers pre-existing docs.
+      - name: Lint resolvable credential-file paths in docs (changed vs base)
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            python3 scripts/lint-credential-path-literals.py --changed --base "origin/$BASE_REF"
+          else
+            python3 scripts/lint-credential-path-literals.py --changed
+          fi
       # #6734 tempfile-cleanup ownership. Rule (a) subshell-append runs repo-wide;
       # rule (c) mktemp-with-no-owning-trap is new-entrant-scoped, because the existing
       # class-b population is an accepted, ratcheted debt (ADR-129).
