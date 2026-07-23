@@ -59,6 +59,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("WorkstreamBoard", () => {
@@ -567,5 +568,31 @@ describe("WorkstreamBoard", () => {
       name: /new issue/i,
     }) as HTMLButtonElement;
     expect(newIssueBtn.disabled).toBe(true);
+  });
+
+  // The board renders EXACTLY ONE tree, gated by viewport (not a CSS
+  // `hidden md:flex` / `md:hidden` pair that would mount both). On a narrow
+  // viewport the mobile status-selector board renders and the 7-column desktop
+  // heading grid does not — so cards are not duplicated in the DOM.
+  it("renders the mobile status-selector board (not the 7 columns) on a narrow viewport", async () => {
+    const mql = {
+      matches: false, // (min-width: 768px) does NOT match → mobile
+      media: "(min-width: 768px)",
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    vi.stubGlobal("matchMedia", () => mql);
+
+    global.fetch = mockFetchOnce([
+      issue({ id: "SOLAA-1", title: "Card one", status: "backlog" }),
+    ]) as unknown as typeof fetch;
+
+    render(<Wrapped />);
+
+    // Mobile board = a status tablist; the card renders exactly once.
+    await waitFor(() => expect(screen.getByRole("tablist")).toBeTruthy());
+    expect(screen.getAllByText("Card one")).toHaveLength(1);
+    // The desktop column headings are absent (MobileBoard uses tabs, not headings).
+    expect(screen.queryByRole("heading", { name: "In Progress" })).toBeNull();
   });
 });
