@@ -358,16 +358,18 @@ echo ""
 # SCAN_DIRS is NON-empty, so deleting the preflight would fabricate a pass over
 # a reachable surface. This test is the enforcement teeth for that invariant.
 #
-# Anchors are syntactic (`^\s*run:\s*python3 …`), never a bare script name — the
+# Anchors are syntactic (`^\s*if ! python3 …`), never a bare script name — the
 # action.yml comment block names the script too, and a mention-grep would pass
-# against a deleted preflight.
+# against a deleted preflight. The reproduction lives INLINE in the same Phase-4
+# `run:` block as the gitleaks / lint-fixture-content arms, matching their
+# `if ! <cmd>; then ::error::; exit 1; fi` shape.
 
 echo "Test 8: action.yml EARNS the credential-path green (#6882 / ADR-139)"
 # `|| true` is load-bearing: this file runs under `set -euo pipefail`, so a
 # no-match grep inside a command substitution aborts the WHOLE suite before the
 # FAIL branch can print (and an early `head -1` close can SIGPIPE grep to 141).
 # The RED state must report a clean failure, not kill the runner.
-preflight_line=$(grep -nE '^[[:space:]]*run:[[:space:]]*python3[[:space:]]+scripts/lint-credential-path-literals\.py[[:space:]]+"\$\{PATHS\[@\]\}"' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
+preflight_line=$(grep -nE '^[[:space:]]*if ! python3 scripts/lint-credential-path-literals\.py "\$\{PATHS\[@\]\}"; then' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
 postrun_line=$(grep -nE '^[[:space:]]*gh api "repos/\$\{REPO\}/check-runs"' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
 
 if [[ -n "$preflight_line" ]]; then
