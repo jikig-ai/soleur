@@ -249,6 +249,19 @@ describe("handler-side persistence (#5111)", () => {
     // The private staging pipeline must not return.
     expect(SUT_SOURCE).not.toContain("spawnGitChecked");
   });
+
+  it("inlines stripFrontmatter — does NOT cross-root-import repo-root scripts/ (#6794/#6860)", () => {
+    // The Next.js Docker build context copies only apps/web-platform/ (+ the
+    // vendored plugin), NOT repo-root scripts/. A `../../../../../scripts/…`
+    // import compiles under a local `next build` (full repo present) but FAILS
+    // the containerized build with "Module not found: …/scripts/…" (release run
+    // 29994907565, step 19). The frontmatter strip is therefore INLINED here,
+    // contract-pinned to scripts/lib/frontmatter-strip/SPEC.md. Guard the
+    // regression. (Non-vacuous: the pre-fix source matched via its 5-`../`
+    // import; #6852 shipped it and broke the release.)
+    expect(SUT_SOURCE).not.toMatch(/from\s+["'](\.\.\/){3,}scripts\//);
+    expect(SUT_SOURCE).toContain("function stripFrontmatter(");
+  });
 });
 
 // =============================================================================

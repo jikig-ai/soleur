@@ -817,7 +817,7 @@ fi
 Check 10 executes `$CMD` with the operator's ambient **file-backed** CLI auth reachable.
 `env -i` in Step 10.5 scrubs environment variables but **not** credentials on disk,
 because `HOME` is deliberately preserved — the Doppler CLI reads a live `dp.ct.*` token
-from `~/.doppler/.doppler.yaml`. Do not cite `env -i` as a mitigation for a
+from its on-disk config in the home Doppler directory (`~/.doppler/`). Do not cite `env -i` as a mitigation for a
 credential-bearing command.
 
 This reject is required because fixing the folded-scalar parser (#6772) is a **fail-open
@@ -833,14 +833,14 @@ cannot constrain what a folded command *is* — only the verb rejects here can.
 # that would be executed.
 CMD_DEQ="${CMD//[\"\'\\]/}"
 if [[ "$CMD_DEQ" =~ (^|[[:space:]]|/)(doppler|gh|aws|supabase|stripe|hcloud|wrangler|terraform|flyctl|vercel)([[:space:]]|$) ]]; then
-  echo "FAIL: discoverability_test.command invokes a credentialed CLI; refusing to run. Check 10 executes with the operator's ambient file-backed CLI auth reachable (env -i does NOT scrub it — \$HOME is preserved, so ~/.doppler/.doppler.yaml, ~/.ssh/id_ed25519, ~/.netrc, ~/.git-credentials, ~/.aws/credentials, ~/.config/gcloud/credentials.db and ~/.docker/config.json are all readable). Use an unauthenticated probe, or see the Check-10 credentialed-probe design issue if this probe genuinely needs credentials."
+  echo "FAIL: discoverability_test.command invokes a credentialed CLI; refusing to run. Check 10 executes with the operator's ambient file-backed CLI auth reachable (env -i does NOT scrub it — \$HOME is preserved, so the Doppler CLI token, SSH private keys, netrc, git credentials, AWS credentials, the gcloud credentials database, and the Docker config are all readable). Use an unauthenticated probe, or see the Check-10 credentialed-probe design issue if this probe genuinely needs credentials."
   exit 1
 fi
 ```
 
 **This is a DENYLIST, and a denylist cannot be complete against a preserved `$HOME`.**
 It does NOT catch indirect invocation — `bash scripts/foo.sh` whose body self-wraps
-`doppler run -c prd`, a `curl --data-binary @<doppler-config-file>` exfiltration, or any
+`doppler run -c prd`, a `curl --data-binary @<doppler-config>` exfiltration, or any
 credentialed verb not listed. Those remain reachable and are accepted for now; the durable
 fix is an ALLOWLIST of probe verbs (curl/dig/getent/bun/bash), tracked separately. Do not
 describe this reject as though it closed the class.
@@ -1081,7 +1081,7 @@ Preflight validation passed. Return control to the calling orchestrator.
 - **Rule order in `parse-form-a.awk` IS the bug (#6772).** The inline rule `/^[[:space:]]*command:/` matches EVERY `command:` line, including `command: >-` and `command: |`. If it is ever moved ahead of the fold/block header rules it returns the literal indicator, which then self-rejects against Step 10.5's shell-active `>` branch — a check that cannot parse its input, reporting a shell injection the plan does not have. AC1 and fixtures F1–F3 are the pins; do not drop them when refactoring.
 - **Anchoring the header regex is a bug generator.** A bare `$` anchor made `command: >- # note` fall through to inline and reproduce #6772 exactly. Any future tightening of the header must keep the comment-tolerant `(#.*)?$` tail and re-run the F1–F3 comment column.
 - **`indent()` returns 0 on a blank line**, which is `<= key` for every scalar. The blank-line skip rule MUST stay above the indent terminator or every scalar ends at its first blank line (fixture N6).
-- **`env -i` does not scrub file-backed CLI auth.** Step 10.5 preserves `HOME`, so the Doppler CLI's `~/.doppler/.doppler.yaml` token stays reachable by any command Check 10 executes. Never cite `env -i` as a mitigation for a credential-bearing command — Step 10.4's verb rejects are what cover that class.
+- **`env -i` does not scrub file-backed CLI auth.** Step 10.5 preserves `HOME`, so the Doppler CLI's on-disk token stays reachable by any command Check 10 executes. Never cite `env -i` as a mitigation for a credential-bearing command — Step 10.4's verb rejects are what cover that class.
 - **The shell-active reject does not bound a folded command.** Folding joins with a space, so a folded scalar has no `;`/`|`/`$()` by construction and passes Step 10.5 automatically — it can append *arguments* but never chain a command. That makes fold safer than block for injection, but it also means no token in the Step 10.5 set constrains what a folded command *is*. Reasoning "the reject will catch it" about a folded command is reasoning about the wrong gate.
 - **`bash -c "$CMD"` stdout always ends in `\n`.** The matcher MUST normalize trailing newlines (via `sanitize()` or `${var%$'\n'}`) before substring comparison, or `expected_output: 200` fails when production correctly emits `200\n`.
 - **The `\b` word-boundary trap.** Bash `[[ $x =~ \bssh \b ]]` matches `ssh ` only when whitespace is on BOTH sides; trailing-EOF or trailing-newline `ssh ` does NOT match. Always use `(^|[[:space:]])ssh([[:space:]]|$)` — the canonical Check 10 reject form — when checking for `ssh ` in operator-facing prose.
