@@ -566,7 +566,7 @@ jobs:
       # MAIN "Terraform apply", OUTSIDE any [ack-destroy] bypass — a whole-list
       # clobber is never something to type past (mirrors the host_creates
       # tripwire). Source of truth + full decision table:
-      # tests/scripts/lib/preapply-entrypoint-gate.sh (ADR-133). curl --max-time
+      # tests/scripts/lib/preapply-entrypoint-gate.sh (ADR-135). curl --max-time
       # inside the gate bounds a CF hang so it cannot hold the sole apply
       # concurrency serializer.
       - name: Pre-apply entrypoint gate

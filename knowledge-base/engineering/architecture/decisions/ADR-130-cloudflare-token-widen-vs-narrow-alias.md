@@ -153,10 +153,10 @@ counts `before.rules − after.rules` and keeps only positive results. On a crea
 `before` is null, so the difference is negative and filtered out — no
 `[ack-destroy]` prompt fires. A plan-derived guard inherits plan's blind spot,
 which is precisely why the pre-apply enumeration above is a *probe* and not a
-CI gate. **Making it a gate: DONE — see ADR-133** (#6767 shipped the standing
+CI gate. **Making it a gate: DONE — see ADR-135** (#6767 shipped the standing
 fail-closed pre-apply entrypoint-enumeration gate + a retrospective drift
 audit). This ADR's manual enumeration remains the `/work`-time pre-*write* check
-when authoring a new phase; ADR-133 is the pre-*apply* automated control.
+when authoring a new phase; ADR-135 is the pre-*apply* automated control.
 
 **`variables.tf` descriptions are the scope ledger.** The whole gap existed
 because the ledger was accurate and nothing read it against the new phase. A new

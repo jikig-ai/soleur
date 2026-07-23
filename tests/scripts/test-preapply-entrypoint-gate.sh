@@ -17,7 +17,7 @@
 #   3. PARITY                  — the forcing function: FAIL if a dispatch -target
 #                               set gains a cloudflare_ruleset without a gate, or
 #                               if a new cloudflare_* type appears un-adjudicated
-#                               vs the ADR-133 / destroy-guard class table.
+#                               vs the ADR-135 / destroy-guard class table.
 #
 # AUTHORING FOOT-GUNS (per AGENTS + the plan): never `grep -q` on a pipe under
 # pipefail (SIGPIPE 141 false-negative) — here-strings / file-arg greps only;
@@ -32,7 +32,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GATE="$REPO_ROOT/tests/scripts/lib/preapply-entrypoint-gate.sh"
 FIXTURES="$REPO_ROOT/tests/scripts/fixtures"
 WORKFLOW="$REPO_ROOT/.github/workflows/apply-web-platform-infra.yml"
-ADR133="$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-133-preapply-entrypoint-enumeration-gate.md"
+ADR133="$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-135-preapply-entrypoint-enumeration-gate.md"
 
 pass=0; fail=0
 _report() {
@@ -568,7 +568,7 @@ t_gate_step_no_ack_bypass() {
 # The forcing function. Two invariants keep the class registry from silently
 # going stale.
 
-# The gate's covered set and ADR-133's adjudicated-OUT set. Every cloudflare_*
+# The gate's covered set and ADR-135's adjudicated-OUT set. Every cloudflare_*
 # type in the infra MUST be in exactly one of these two — a new un-adjudicated
 # type FAILs, forcing conscious classification (cross-ref the destroy-guard
 # class table in destroy-guard-filter-web-platform.jq).
@@ -608,17 +608,17 @@ t_parity_all_types_adjudicated() {
     fi
   done <<<"$types"
   if [[ "${#missing[@]}" -eq 0 ]]; then
-    _report "P1 every cloudflare_* type in infra is adjudicated (IN gate-covered or OUT in ADR-133) [$n types]" ok
+    _report "P1 every cloudflare_* type in infra is adjudicated (IN gate-covered or OUT in ADR-135) [$n types]" ok
   else
-    _report "P1 un-adjudicated cloudflare_* type(s)" fail "ADJUDICATE in ADR-133 + this test + the destroy-guard class table: ${missing[*]}"
+    _report "P1 un-adjudicated cloudflare_* type(s)" fail "ADJUDICATE in ADR-135 + this test + the destroy-guard class table: ${missing[*]}"
   fi
 }
 
-# P2: ADR-133 names every adjudicated-OUT type — so the ADR and this test cannot
+# P2: ADR-135 names every adjudicated-OUT type — so the ADR and this test cannot
 #     drift (the coupling the plan requires).
 t_parity_adr_lists_out_set() {
   if [[ ! -f "$ADR133" ]]; then
-    _report "P2 ADR-133 lists the adjudicated-OUT set" fail "missing $ADR133"
+    _report "P2 ADR-135 lists the adjudicated-OUT set" fail "missing $ADR133"
     return
   fi
   local t missing=()
@@ -626,9 +626,9 @@ t_parity_adr_lists_out_set() {
     grep -Fq "$t" "$ADR133" || missing+=("$t")
   done
   if [[ "${#missing[@]}" -eq 0 ]]; then
-    _report "P2 ADR-133 names every adjudicated-OUT type (ADR↔test coupling)" ok
+    _report "P2 ADR-135 names every adjudicated-OUT type (ADR↔test coupling)" ok
   else
-    _report "P2 ADR-133 lists the adjudicated-OUT set" fail "absent from ADR-133: ${missing[*]}"
+    _report "P2 ADR-135 lists the adjudicated-OUT set" fail "absent from ADR-135: ${missing[*]}"
   fi
 }
 
@@ -733,7 +733,7 @@ t_audit_job_shape() {
 
 # P3x: every cloudflare_* class enumerated in the destroy-guard class table
 #      (the numbered list in destroy-guard-filter-web-platform.jq) MUST be
-#      adjudicated by the gate (IN gate-covered OR OUT in ADR-133). Turns the
+#      adjudicated by the gate (IN gate-covered OR OUT in ADR-135). Turns the
 #      ADR's "cross-referenced so they cannot drift" prose into an assertion: a
 #      class added to the destroy-guard table but never adjudicated here FAILs.
 t_parity_destroy_guard_classes_adjudicated() {
@@ -763,7 +763,7 @@ t_parity_destroy_guard_classes_adjudicated() {
   fi
 }
 
-# P3x: tunnel-config import forcing function. ADR-133 marks
+# P3x: tunnel-config import forcing function. ADR-135 marks
 #      cloudflare_zero_trust_tunnel_cloudflared_config OUT with the caveat "IN
 #      the day a tunnel is imported" — an import block adopts a LIVE tunnel whose
 #      config[].ingress_rule is a whole-list the gate does NOT cover. FAIL if an
@@ -783,7 +783,7 @@ t_parity_tunnel_import_forcing_function() {
   ' "$REPO_ROOT"/apps/web-platform/infra/*.tf 2>/dev/null || true)
   [[ -n "$hits" ]] && n=$(grep -c '' <<<"$hits")
   if [[ "$tunnel_out" -eq 1 && "$n" -gt 0 ]]; then
-    _report "P3x tunnel import forcing function" fail "import targets cloudflare_zero_trust_tunnel_cloudflared* while adjudicated OUT — config[].ingress_rule is now a whole-list clobber surface. Re-adjudicate IN (ADR-133) + gate it: ${hits}"
+    _report "P3x tunnel import forcing function" fail "import targets cloudflare_zero_trust_tunnel_cloudflared* while adjudicated OUT — config[].ingress_rule is now a whole-list clobber surface. Re-adjudicate IN (ADR-135) + gate it: ${hits}"
   else
     _report "P3x no tunnel-config import while adjudicated OUT (whole-list adopt hazard stays closed) [${n} import(s), tunnel_out=${tunnel_out}]" ok
   fi
