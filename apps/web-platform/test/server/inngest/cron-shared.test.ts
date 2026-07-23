@@ -232,6 +232,17 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     // participating in the watchdog purview immediately.
     expect(TIER2_DEFERRED_CRONS.has("cron-ghcr-token-minter")).toBe(false);
   });
+
+  it("cron-action-required-sla is live — not Tier-2 deferred (#6836)", () => {
+    // The action-required SLA lifecycle cron is a dispatch-hybrid: it enumerates
+    // the action-required backlog and fans out `sla/issue.process` events to a
+    // worker (which mutates issue labels/state via the GitHub API), holding no
+    // git and opening no PR — so it needs no CRON_BASH_ALLOWLISTS entry and is
+    // not a deferred Tier-2 cron. Added to EXPECTED_CRON_FUNCTIONS in #6831;
+    // asserted here so the sibling-set sweep sees this dependent updated in
+    // lockstep with the cron-manifest change.
+    expect(TIER2_DEFERRED_CRONS.has("cron-action-required-sla")).toBe(false);
+  });
 });
 
 describe("verifyScheduledIssueCreated", () => {
