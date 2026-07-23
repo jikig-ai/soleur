@@ -80,6 +80,36 @@ jobs:
             printf 'docs=false\n' >> "$GITHUB_OUTPUT"
           fi
 
+  # BLOCKING required check (#6882). Registered in scripts/required-checks.txt,
+  # scripts/ci-required-ruleset-canonical-required-status-checks.json, and
+  # infra/github/ruleset-ci-required.tf — the job NAME is public ABI across all
+  # three (ADR-032 Sharp Edge 1): renaming it here silently un-requires the gate
+  # until those files are updated in the SAME PR.
+  #
+  # Regression teeth for the credential auto-attach class: fail a tracked doc
+  # that writes a home-relative RESOLVABLE path to a real credential file. Claude
+  # Code's harness auto-attaches such a file into model context when the doc
+  # loads — the vector that read a live Doppler token into session transcripts
+  # via preflight/SKILL.md.
+  #
+  # FULL SCAN, not --changed: #6880 drained the grandfathered backlog to zero, so
+  # a green here asserts "the repository contains none", not merely "this diff
+  # introduced none". That also drops the merge-base dependency — deliberately no
+  # `fetch-depth: 0` (a shallow checkout suffices) and no `github.base_ref` read,
+  # which is empty on merge_group.
+  #
+  # Deliberately NO `if:` on github.event_name — a required context that does not
+  # report on merge_group leaves the queue entry pending forever (see the header
+  # note on this workflow's merge_group trigger).
+  credential-path-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Lint resolvable credential-file paths in docs (full scan)
+        run: python3 scripts/lint-credential-path-literals.py
+
+  # ADVISORY job — absent from scripts/required-checks.txt and the ruleset, so a
+  # PR can merge with it red. See the #6882 note inside for what moved out.
   lint-bot-statuses:
     runs-on: ubuntu-latest
     steps:
@@ -106,20 +136,15 @@ jobs:
           else
             python3 scripts/lint-infra-no-human-steps.py --changed
           fi
-      # Regression teeth for the credential auto-attach class: fail a tracked
-      # doc that writes a home-relative RESOLVABLE path to a real credential file
-      # (Claude Code's harness auto-attaches such a file into model context when
-      # the doc loads — the vector that leaked a live Doppler token via
-      # preflight/SKILL.md). Changed-files mode grandfathers pre-existing docs.
-      - name: Lint resolvable credential-file paths in docs (changed vs base)
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          if [ -n "$BASE_REF" ]; then
-            python3 scripts/lint-credential-path-literals.py --changed --base "origin/$BASE_REF"
-          else
-            python3 scripts/lint-credential-path-literals.py --changed
-          fi
+      # NOTE (#6882): the resolvable-credential-path guard used to live here. It
+      # was extracted to the `credential-path-guard` job below and promoted to a
+      # BLOCKING required check. Every step remaining in THIS job is ADVISORY —
+      # `lint-bot-statuses` is absent from BOTH scripts/required-checks.txt and
+      # the Terraform ruleset, so a PR can still merge with it red. Promoting any
+      # of them is a deliberate follow-up (see the #6734/ADR-129 note below),
+      # not a side effect: it means adding this job to required-checks.txt AND
+      # the ruleset together, and re-deriving the ALLOWED_PATHS ∩ SCAN_DIRS test
+      # (ADR-139) for each content-scoped step first.
       # #6734 tempfile-cleanup ownership. Rule (a) subshell-append runs repo-wide;
       # rule (c) mktemp-with-no-owning-trap is new-entrant-scoped, because the existing
       # class-b population is an accepted, ratcheted debt (ADR-129).
