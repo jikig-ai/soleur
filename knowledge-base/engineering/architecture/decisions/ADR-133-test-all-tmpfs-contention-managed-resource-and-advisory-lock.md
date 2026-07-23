@@ -1,5 +1,4 @@
 ---
-adr: ADR-133
 title: The local test runner treats the shared tmpfs as a managed resource and serialises worktrees via an advisory lock
 status: active
 date: 2026-07-22

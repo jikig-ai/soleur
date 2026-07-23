@@ -1,5 +1,4 @@
 ---
-adr: ADR-004
 title: BYOK Encryption Model
 status: active
 date: 2026-03-27

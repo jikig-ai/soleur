@@ -1,5 +1,4 @@
 ---
-adr: ADR-020
 title: Exact Version Pinning for Agent SDK
 status: active
 date: 2026-03-27

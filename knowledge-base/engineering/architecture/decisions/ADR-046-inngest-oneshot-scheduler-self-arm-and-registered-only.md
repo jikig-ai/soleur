@@ -1,5 +1,4 @@
 ---
-adr: ADR-046
 title: Inngest one-time scheduler — registered-functions-only + self-arm-in-code
 status: active
 date: 2026-05-30

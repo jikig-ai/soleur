@@ -53,12 +53,26 @@ const {
     repinRows: Array<Record<string, unknown>>;
     /** Rows the fake has already accepted, as `${item_id}::${tick_key}`. */
     markers: Set<string>;
+    /**
+     * created_at (ISO) recorded per marker at insert time, so the M11
+     * `.select("created_at")` disambiguation on a `headsup` 23505 can read it.
+     * Populated from the fake clock (`new Date()` under `vi.setSystemTime`).
+     */
+    markerCreatedAt: Map<string, string>;
     /** Every marker insert attempted, in order (incl. rejected ones). */
     markerAttempts: Array<{ item_id: string; tick_key: string }>;
     /** Force a non-23505 `{error}` return on the Nth attempt (1-based). */
     markerErrorOnAttempt: number | null;
     /** Force a THROW on the Nth attempt (1-based). */
     markerThrowOnAttempt: number | null;
+    /** Force the #6801 excluded-count query to return an error (T16c). */
+    excludedQueryError: boolean;
+    /** Rollback DELETEs issued against statutory_repin_send (#6802 D4c). */
+    markerDeletes: Array<{ item_id: string; tick_key: string }>;
+    /** Force the rollback DELETE to THROW (T-rollback-throws, M7). */
+    markerDeleteThrows: boolean;
+    /** Force the rollback DELETE to return an error (markerRollbackFailed). */
+    markerDeleteError: boolean;
     /** user_id → push subscription rows. */
     pushSubs: Record<string, Array<Record<string, unknown>>>;
     /** user_id → email address. */
@@ -68,15 +82,24 @@ const {
   } = {
     repinRows: [],
     markers: new Set<string>(),
+    markerCreatedAt: new Map<string, string>(),
     markerAttempts: [],
     markerErrorOnAttempt: null,
     markerThrowOnAttempt: null,
+    excludedQueryError: false,
+    markerDeletes: [],
+    markerDeleteThrows: false,
+    markerDeleteError: false,
     pushSubs: {},
     userEmails: {},
     workspaceOwners: [],
   };
   return {
-    resendSendSpy: vi.fn(async (..._args: unknown[]) => ({ error: null })),
+    resendSendSpy: vi.fn(
+      async (..._args: unknown[]): Promise<{ error: { message: string } | null }> => ({
+        error: null,
+      }),
+    ),
     webpushSendSpy: vi.fn(async (..._args: unknown[]) => ({ statusCode: 201 })),
     warnSilentFallbackSpy: vi.fn(),
     reportSilentFallbackSpy: vi.fn(),
@@ -168,6 +191,7 @@ const TABLE_COLUMNS: Record<string, readonly string[]> = {
     "id",
     "user_id",
     "received_at",
+    "acknowledged_at",
     "rule_id",
     "statutory_class",
     "status",
@@ -196,11 +220,24 @@ function makeBuilder(table: string) {
   let insertPayload: Record<string, unknown> | null = null;
   let deleting = false;
   let selectError: { data: null; error: { code: string; message: string } } | null = null;
+  // Range constraints the scan / excluded-count queries apply (#6801).
+  const gteArgs: Array<[string, string]> = [];
+  const ltArgs: Array<[string, string]> = [];
+  let isCountHead = false;
 
-  for (const m of ["not", "gte", "ilike", "like", "limit", "update", "in"]) {
+  for (const m of ["not", "ilike", "like", "limit", "update", "in"]) {
     builder[m] = vi.fn(chain);
   }
-  builder.select = vi.fn((cols?: string) => {
+  builder.gte = vi.fn((col: string, val: string) => {
+    gteArgs.push([col, val]);
+    return builder;
+  });
+  builder.lt = vi.fn((col: string, val: string) => {
+    ltArgs.push([col, val]);
+    return builder;
+  });
+  builder.select = vi.fn((cols?: string, opts?: { head?: boolean; count?: string }) => {
+    if (opts?.head) isCountHead = true;
     const known = TABLE_COLUMNS[table];
     if (known && typeof cols === "string" && cols !== "*") {
       for (const raw of cols.split(",")) {
@@ -234,6 +271,25 @@ function makeBuilder(table: string) {
     return { data: null, error: null };
   };
 
+  // M11: the disambiguation read `.select("created_at").eq().eq().maybeSingle()`
+  // on a `headsup` 23505. Returns the stored created_at for the (item, tick).
+  builder.maybeSingle = async () => {
+    if (selectError) return selectError;
+    if (table === "statutory_repin_send" && !insertPayload && !deleting) {
+      const itemId = eqArgs.find(([c]) => c === "item_id")?.[1] as
+        | string
+        | undefined;
+      const tickKey = eqArgs.find(([c]) => c === "tick_key")?.[1] as
+        | string
+        | undefined;
+      if (itemId && tickKey) {
+        const created = dbState.markerCreatedAt.get(markerKey(itemId, tickKey));
+        return { data: created ? { created_at: created } : null, error: null };
+      }
+    }
+    return { data: null, error: null };
+  };
+
   builder.then = (
     onFulfilled: (v: unknown) => unknown,
     onRejected?: (e: unknown) => unknown,
@@ -246,6 +302,28 @@ function makeBuilder(table: string) {
         onFulfilled,
         onRejected,
       );
+    } else if (table === "statutory_repin_send" && deleting) {
+      // #6802 rollback DELETE: honor forced throw/error, otherwise actually
+      // remove the (item_id, tick_key) marker so a subsequent tick re-sends.
+      const itemId = eqArgs.find(([c]) => c === "item_id")?.[1] as string;
+      const tickKey = eqArgs.find(([c]) => c === "tick_key")?.[1] as string;
+      dbState.markerDeletes.push({ item_id: itemId, tick_key: tickKey });
+      if (dbState.markerDeleteThrows) {
+        return Promise.reject(new Error("simulated rollback DELETE throw")).then(
+          onFulfilled,
+          onRejected,
+        );
+      }
+      if (dbState.markerDeleteError) {
+        return Promise.resolve({ data: null, error: { code: "XX000", message: "delete failed" } }).then(
+          onFulfilled,
+          onRejected,
+        );
+      }
+      const key = markerKey(itemId, tickKey);
+      dbState.markers.delete(key);
+      dbState.markerCreatedAt.delete(key);
+      return Promise.resolve({ data: null, error: null }).then(onFulfilled, onRejected);
     } else if (table === "workspace_members" || table === "workspace_member") {
       // Deliberately populated. T12 claims to red on a fan-out, but the most
       // likely fan-out implementation DISCOVERS co-Owners by querying
@@ -259,9 +337,39 @@ function makeBuilder(table: string) {
       result = { data: dbState.pushSubs[userId] ?? [], error: null };
     } else if (
       table === "email_triage_items" &&
+      isCountHead &&
       eqArgs.some(([c, v]) => c === "status" && v === "acknowledged")
     ) {
-      result = { data: dbState.repinRows, error: null };
+      // #6801 excluded-count query: `.select("id",{count,head}).lt("acknowledged_at",floor)`.
+      // Either honor an explicitly forced error (T16c) or count repinRows whose
+      // acknowledged_at is BELOW the lt floor (rows the scan excludes).
+      if (dbState.excludedQueryError) {
+        result = { data: null, count: null, error: { code: "XX000", message: "count failed" } };
+      } else {
+        const ltFloor = ltArgs.find(([c]) => c === "acknowledged_at")?.[1];
+        const count = ltFloor
+          ? dbState.repinRows.filter(
+              (r) =>
+                typeof r.acknowledged_at === "string" &&
+                (r.acknowledged_at as string) < ltFloor,
+            ).length
+          : 0;
+        result = { data: null, count, error: null };
+      }
+    } else if (
+      table === "email_triage_items" &&
+      eqArgs.some(([c, v]) => c === "status" && v === "acknowledged")
+    ) {
+      // Scan query: apply the actual `.gte(col, floor)` bound to repinRows, so a
+      // row outside the window is genuinely NOT scanned (makes the received_at →
+      // acknowledged_at re-anchor test non-vacuous — RED on the old bound).
+      const rows = dbState.repinRows.filter((r) =>
+        gteArgs.every(
+          ([col, floor]) =>
+            typeof r[col] === "string" && (r[col] as string) >= floor,
+        ),
+      );
+      result = { data: rows, error: null };
     } else if (
       table === "email_triage_items" &&
       eqArgs.some(([c, v]) => c === "mail_class" && v === "probe")
@@ -306,6 +414,9 @@ function resolveMarkerInsert(payload: Record<string, unknown>) {
     };
   }
   dbState.markers.add(key);
+  // Record created_at from the fake clock so the M11 disambiguation read can
+  // tell a same-day double-fire from an earlier-day band re-hit.
+  dbState.markerCreatedAt.set(key, new Date().toISOString());
   return { data: { item_id: itemId, tick_key: tickKey }, error: null };
 }
 
@@ -341,7 +452,21 @@ vi.mock("@/lib/supabase/service", () => ({
 import {
   cronEmailIngressProbeHandler,
   DEADLINE_REPIN_HEADS_UP_DAY,
+  DEADLINE_REPIN_DANGER_THRESHOLD_DAYS,
 } from "@/server/inngest/functions/cron-email-ingress-probe";
+import { STATUTORY_RULES } from "@/lib/email-triage/statutory-rules";
+
+/** Sum a field across every `deadline-repin-sweep-complete` emit so far. */
+function sweepExtraSum(field: string): number {
+  return infoSilentFallbackSpy.mock.calls
+    .concat(warnSilentFallbackSpy.mock.calls)
+    .filter((c) => (c[1] as { op?: string })?.op === "deadline-repin-sweep-complete")
+    .reduce(
+      (acc, c) =>
+        acc + Number(((c[1] as { extra?: Record<string, number> }).extra ?? {})[field] ?? 0),
+      0,
+    );
+}
 
 // --- Helpers ------------------------------------------------------------------
 
@@ -392,6 +517,10 @@ function statutoryRow(overrides: Record<string, unknown> = {}) {
     id: "item-1",
     user_id: "user-1",
     received_at: receivedAtForDaysUntilDue(1),
+    // #6801: the scan now bounds on `acknowledged_at`; default it to "now"
+    // (under the fake clock) so it is inside the 60-day window unless a test
+    // overrides it to probe the re-anchor / excluded-count behavior.
+    acknowledged_at: new Date().toISOString(),
     rule_id: "dsar-art15",
     statutory_class: "dsar",
     ...overrides,
@@ -416,9 +545,14 @@ beforeEach(() => {
   ioOrder.length = 0;
   dbState.repinRows = [];
   dbState.markers = new Set();
+  dbState.markerCreatedAt = new Map();
   dbState.markerAttempts = [];
   dbState.markerErrorOnAttempt = null;
   dbState.markerThrowOnAttempt = null;
+  dbState.excludedQueryError = false;
+  dbState.markerDeletes = [];
+  dbState.markerDeleteThrows = false;
+  dbState.markerDeleteError = false;
   dbState.pushSubs = {};
   dbState.userEmails = {};
   dbState.workspaceOwners = [];
@@ -510,6 +644,333 @@ describe("deadline-repin idempotency guard (#6781)", () => {
     expect(statutoryEmailCalls()).toHaveLength(2);
     const keys = dbState.markerAttempts.map((a) => a.tick_key);
     expect(keys).toEqual(["daily:2026-03-10", "daily:2026-03-11"]);
+  });
+
+  // #6799 (AC6/D2/M6): the heads-up is a BAND, so jitter cannot step over it.
+  it("heads-up band: two jittered runs straddling T-7 send exactly ONE heads-up (was ZERO on main)", async () => {
+    // due = 2026-03-18T06:00Z, received one calendar month earlier.
+    //   run A @ 2026-03-10T05:59:50Z → 8d 00h00m10s → floor 8 → not yet
+    //   run B @ 2026-03-11T06:00:10Z → 6d 23h59m50s → floor 6 → in band → send
+    // Under the OLD exact `=== 7`, run A (8) and run B (6) BOTH miss → ZERO
+    // heads-ups. Under the band, run B sends exactly one.
+    const received = "2026-02-18T06:00:00.000Z";
+    vi.useFakeTimers();
+
+    vi.setSystemTime(new Date("2026-03-10T05:59:50Z"));
+    dbState.repinRows = [statutoryRow({ received_at: received })];
+    await runHandler();
+
+    vi.setSystemTime(new Date("2026-03-11T06:00:10Z"));
+    dbState.repinRows = [statutoryRow({ received_at: received })];
+    await runHandler();
+
+    expect(statutoryEmailCalls()).toHaveLength(1);
+    const keys = dbState.markerAttempts.map((a) => a.tick_key);
+    expect(keys).toEqual(["headsup"]);
+  });
+
+  // #6799 (AC7/D2a/M11): five consecutive in-band days send ONE heads-up; the
+  // re-hits count as `headsUpAlreadySent`, NOT `suppressed` — so the #6781
+  // double-fire detector (repin_suppressed) survives the band.
+  it("heads-up band: five consecutive in-band days → one email, suppressed 0, headsUpAlreadySent 4", async () => {
+    // received 2026-02-15T12:00Z → due 2026-03-15T12:00Z (calendar month).
+    // clock 03-08..03-12 → daysUntilDue 7,6,5,4,3 — all in the heads-up band.
+    const received = "2026-02-15T12:00:00.000Z";
+    const days = [
+      "2026-03-08T12:00:00Z",
+      "2026-03-09T12:00:00Z",
+      "2026-03-10T12:00:00Z",
+      "2026-03-11T12:00:00Z",
+      "2026-03-12T12:00:00Z",
+    ];
+    vi.useFakeTimers();
+    for (const t of days) {
+      vi.setSystemTime(new Date(t));
+      dbState.repinRows = [statutoryRow({ received_at: received })];
+      await runHandler();
+    }
+
+    expect(statutoryEmailCalls()).toHaveLength(1);
+    expect(dbState.markerAttempts.every((a) => a.tick_key === "headsup")).toBe(true);
+    // suppressed stays 0 — a run in steady band state must NOT read as a live
+    // second scheduler; the four re-hits land in headsUpAlreadySent.
+    expect(sweepExtraSum("suppressed")).toBe(0);
+    expect(sweepExtraSum("headsUpAlreadySent")).toBe(4);
+  });
+
+  // #6799 (AC8/D2b/M11): a genuine same-day double-fire on the heads-up key IS
+  // still a `suppressed` (the detector must keep firing on the real condition).
+  it("heads-up band: a SAME-day double-fire on the heads-up key counts as suppressed", async () => {
+    const received = "2026-02-15T12:00:00.000Z"; // due 03-15, in-band on 03-10
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [statutoryRow({ received_at: received })];
+    await runHandler(); // inserts headsup, created_at = 03-10
+    dbState.repinRows = [statutoryRow({ received_at: received })];
+    await runHandler(); // 23505 headsup, created_at 03-10 === runDateUtc → suppressed
+
+    expect(statutoryEmailCalls()).toHaveLength(1);
+    expect(sweepExtraSum("suppressed")).toBe(1);
+    expect(sweepExtraSum("headsUpAlreadySent")).toBe(0);
+  });
+
+  // #6799 (AC8/D2b): breach-art33 never enters the heads-up band — its 72h clock
+  // caps daysUntilDue at DANGER_THRESHOLD for any scanned (post-receipt) item.
+  it("breach-art33: never writes a headsup marker, goes straight to the daily band", async () => {
+    // received 03-10T00:00Z → due +72h = 03-13T00:00Z.
+    const breachRow = statutoryRow({
+      rule_id: "breach-art33",
+      statutory_class: "breach",
+      received_at: "2026-03-10T00:00:00.000Z",
+    });
+    vi.useFakeTimers();
+    for (const t of ["2026-03-11T00:00:00Z", "2026-03-12T00:00:00Z"]) {
+      vi.setSystemTime(new Date(t));
+      dbState.repinRows = [{ ...breachRow }];
+      await runHandler();
+    }
+    const keys = dbState.markerAttempts.map((a) => a.tick_key);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.some((k) => k === "headsup")).toBe(false);
+    expect(keys.every((k) => k.startsWith("daily:"))).toBe(true);
+  });
+
+  // #6799 (M12): GENERIC guard — do not pin today's registry. Every hours-kind
+  // rule whose entire post-receipt life is <= DANGER_THRESHOLD can never enter
+  // the heads-up band. A future longer hours-rule (e.g. 96h → max 3) fails this
+  // and forces a conscious decision instead of silently writing headsup markers.
+  it("every hours-kind statutory rule stays within the daily band (no accidental heads-up)", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const hoursRules = STATUTORY_RULES.filter((r) => r.dueRule.kind === "hours");
+    expect(hoursRules.length).toBeGreaterThan(0); // non-vacuous
+    for (const rule of hoursRules) {
+      // Max daysUntilDue one ms after receipt (the earliest a scan can see it).
+      const hours = (rule.dueRule as { hours: number }).hours;
+      const maxScannable = Math.floor((hours * 3_600_000 - 1) / DAY);
+      expect(maxScannable).toBeLessThanOrEqual(DEADLINE_REPIN_DANGER_THRESHOLD_DAYS);
+    }
+  });
+
+  // #6801 (AC10/D3b): a row received 90 days ago but acknowledged yesterday IS
+  // scanned and pinged. On the OLD `received_at` bound it was silently excluded.
+  it("scan re-anchor: received 90d ago but acknowledged yesterday IS scanned + pinged", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [
+      statutoryRow({
+        received_at: "2025-12-10T06:00:00.000Z", // 90d ago — OUTSIDE a received_at window
+        acknowledged_at: "2026-03-09T06:00:00.000Z", // yesterday — INSIDE the ack window
+        // due date is computed from received_at; force an in-band due via a
+        // recent-enough received? No — received is 90d ago so it is long overdue,
+        // which still pings daily (the most dangerous bucket).
+      }),
+    ];
+    const result = await runHandler();
+    expect(result.repinged).toBe(1);
+    expect(statutoryEmailCalls()).toHaveLength(1);
+  });
+
+  // #6801 (AC11/D3a): a row acknowledged 90 days ago is EXCLUDED from the scan
+  // and counted; the sweep-complete emit carries a non-zero `excluded`.
+  it("excluded count: a row acknowledged 90d ago is excluded and counted (excluded >= 1)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [
+      statutoryRow({
+        id: "long-tail-1",
+        received_at: "2025-12-10T06:00:00.000Z",
+        acknowledged_at: "2025-12-10T07:00:00.000Z", // 90d ago — outside 60d window
+      }),
+    ];
+    await runHandler();
+    // Not scanned → not pinged.
+    expect(statutoryEmailCalls()).toHaveLength(0);
+    // But counted in the sweep-complete emit.
+    expect(sweepExtraSum("excluded")).toBe(1);
+  });
+
+  // #6801 (AC/D3a): `excluded` is MONOTONIC, so it must NOT escalate the emit to
+  // warn (that would page forever). A run with excluded>0 and no double-fire
+  // stays on infoSilentFallback.
+  it("excluded>0 alone does NOT escalate the sweep emit to warn", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [
+      statutoryRow({
+        id: "long-tail-2",
+        acknowledged_at: "2025-12-10T07:00:00.000Z",
+      }),
+    ];
+    await runHandler();
+    const infoEmits = infoSilentFallbackSpy.mock.calls.filter(
+      (c) => (c[1] as { op?: string })?.op === "deadline-repin-sweep-complete",
+    );
+    const warnEmits = warnSilentFallbackSpy.mock.calls.filter(
+      (c) => (c[1] as { op?: string })?.op === "deadline-repin-sweep-complete",
+    );
+    expect(infoEmits).toHaveLength(1);
+    expect(warnEmits).toHaveLength(0);
+  });
+
+  // #6801 (D3a): the excluded-count query failing must NOT fail the run;
+  // `excluded` becomes null and the sweep still completes.
+  it("excluded count query error → excluded:null, run still completes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.excludedQueryError = true;
+    dbState.repinRows = [statutoryRow()];
+    const result = await runHandler();
+    expect(result.ok).toBe(true);
+    expect(result.repinged).toBe(1);
+    const emit = infoSilentFallbackSpy.mock.calls
+      .concat(warnSilentFallbackSpy.mock.calls)
+      .find((c) => (c[1] as { op?: string })?.op === "deadline-repin-sweep-complete");
+    expect((emit?.[1] as { extra?: { excluded?: unknown } })?.extra?.excluded).toBeNull();
+  });
+
+  // #6802 (AC16/D4c): push AND email both fail on a heads-up-band item → the
+  // (item_id, tick_key) marker is rolled back, `pinged` is NOT incremented,
+  // `undelivered === 1`. The rollback restores the pre-#6781 self-heal.
+  it("delivery contract: total failure on a heads-up item rolls back the marker, does not count pinged", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    // received 2026-02-15T12:00Z → due 2026-03-15 → daysUntilDue 5 → heads-up band.
+    const received = "2026-02-15T12:00:00.000Z";
+    dbState.repinRows = [statutoryRow({ received_at: received })];
+    dbState.pushSubs = {}; // no push → email path
+    resendSendSpy.mockImplementation(async (arg) => {
+      const a = arg as { subject?: string };
+      // Fail ONLY the statutory notification email; the ingress
+      // probe send (SOLEUR-PROBE-*) must still succeed.
+      if (a?.subject?.startsWith("Statutory item")) return { error: { message: "resend down" } };
+      return { error: null };
+    });
+
+    const result = await runHandler();
+
+    expect(result.repinged).toBe(0); // NOT counted as pinged
+    // The heads-up marker was rolled back.
+    expect(dbState.markerDeletes).toEqual([{ item_id: "item-1", tick_key: "headsup" }]);
+    expect(dbState.markers.has("item-1::headsup")).toBe(false);
+    // undelivered surfaced in the sweep emit at WARN level.
+    expect(sweepExtraSum("undelivered")).toBe(1);
+    const warnEmits = warnSilentFallbackSpy.mock.calls.filter(
+      (c) => (c[1] as { op?: string })?.op === "deadline-repin-sweep-complete",
+    );
+    expect(warnEmits).toHaveLength(1);
+  });
+
+  // #6802 (D4c/M6): the DAILY arm does NOT roll back — the key rotates daily so
+  // the next tick re-arms for free; deleting there would only reopen the
+  // same-day double-fire window. undelivered is still counted.
+  it("delivery contract: total failure on a DAILY item does NOT roll back (key rotates)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    // daysUntilDue 1 → daily band.
+    dbState.repinRows = [statutoryRow({ received_at: receivedAtForDaysUntilDue(1) })];
+    dbState.pushSubs = {};
+    resendSendSpy.mockImplementation(async (arg) => {
+      const a = arg as { subject?: string };
+      // Fail ONLY the statutory notification email; the ingress
+      // probe send (SOLEUR-PROBE-*) must still succeed.
+      if (a?.subject?.startsWith("Statutory item")) return { error: { message: "resend down" } };
+      return { error: null };
+    });
+
+    const result = await runHandler();
+
+    expect(result.repinged).toBe(0);
+    expect(dbState.markerDeletes).toHaveLength(0); // NO rollback on the daily arm
+    expect(sweepExtraSum("undelivered")).toBe(1);
+  });
+
+  // #6802 (D4c/M11): a DELIVERED send keeps its marker (does NOT reintroduce the
+  // #6781 defect). Rollback fires ONLY on provably-undelivered.
+  it("delivery contract: a delivered send keeps its marker (no rollback)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [statutoryRow({ received_at: "2026-02-15T12:00:00.000Z" })];
+    dbState.pushSubs = {};
+    resendSendSpy.mockImplementation(async () => ({ error: null })); // email lands
+
+    const result = await runHandler();
+    expect(result.repinged).toBe(1);
+    expect(dbState.markerDeletes).toHaveLength(0);
+    expect(dbState.markers.has("item-1::headsup")).toBe(true);
+    expect(sweepExtraSum("undelivered")).toBe(0);
+  });
+
+  // #6802 (M6/self-heal): after a rollback, the SAME-day retry re-sends (the
+  // marker is gone), and a delivered retry keeps the fresh marker.
+  it("delivery contract: a rolled-back heads-up RE-SENDS on the next tick", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    const received = "2026-02-15T12:00:00.000Z";
+    dbState.pushSubs = {};
+    // Run 1: email fails → rollback.
+    dbState.repinRows = [statutoryRow({ received_at: received })];
+    resendSendSpy.mockImplementation(async (arg) => {
+      const a = arg as { subject?: string };
+      // Fail ONLY the statutory notification email; the ingress
+      // probe send (SOLEUR-PROBE-*) must still succeed.
+      if (a?.subject?.startsWith("Statutory item")) return { error: { message: "resend down" } };
+      return { error: null };
+    });
+    await runHandler();
+    expect(dbState.markers.has("item-1::headsup")).toBe(false);
+
+    // Run 2 (same day): email now lands → re-sends and keeps the marker.
+    dbState.repinRows = [statutoryRow({ received_at: received })];
+    resendSendSpy.mockImplementation(async () => ({ error: null }));
+    const r2 = await runHandler();
+    expect(r2.repinged).toBe(1); // re-sent
+    expect(dbState.markers.has("item-1::headsup")).toBe(true);
+  });
+
+  // #6802 (M5): on a FAIL-OPEN dispatch (a non-23505 marker error → no marker
+  // claimed here) that then fails to deliver, the rollback must NOT fire — an
+  // unconditional DELETE would remove a marker a CONCURRENT run wrote, reopening
+  // the #6781 window. Pins the `markerClaimedHere &&` guard (review): dropping
+  // it would issue a spurious delete and this test goes RED.
+  it("delivery contract: a fail-open (unclaimed) heads-up item does NOT roll back on non-delivery", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [statutoryRow({ received_at: "2026-02-15T12:00:00.000Z" })]; // heads-up band
+    dbState.pushSubs = {};
+    dbState.markerErrorOnAttempt = 1; // non-23505 → fail-open, markerClaimedHere=false
+    resendSendSpy.mockImplementation(async (arg) => {
+      const a = arg as { subject?: string };
+      if (a?.subject?.startsWith("Statutory item")) return { error: { message: "down" } };
+      return { error: null };
+    });
+
+    const result = await runHandler();
+    // Dispatched (fail-open) and undelivered, but NO marker was claimed here, so
+    // no rollback DELETE may be issued.
+    expect(dbState.markerDeletes).toHaveLength(0);
+    expect(sweepExtraSum("undelivered")).toBe(1);
+    expect(result.ok).toBe(true);
+  });
+
+  // #6802 (M7): a THROWN rollback DELETE must not escape the loop (retries:0
+  // would kill the ingress probe). Counted as markerRollbackFailed; run survives.
+  it("delivery contract: a THROWN rollback DELETE is caught, run still completes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-10T06:00:00Z"));
+    dbState.repinRows = [statutoryRow({ received_at: "2026-02-15T12:00:00.000Z" })];
+    dbState.pushSubs = {};
+    dbState.markerDeleteThrows = true;
+    resendSendSpy.mockImplementation(async (arg) => {
+      const a = arg as { subject?: string };
+      // Fail ONLY the statutory notification email; the ingress
+      // probe send (SOLEUR-PROBE-*) must still succeed.
+      if (a?.subject?.startsWith("Statutory item")) return { error: { message: "resend down" } };
+      return { error: null };
+    });
+
+    const result = await runHandler();
+    expect(result.ok).toBe(true); // probe survived
+    expect(sweepExtraSum("markerRollbackFailed")).toBe(1);
   });
 
   it.each([

@@ -1,5 +1,4 @@
 ---
-adr: ADR-034
 title: Action-class registry — code-static literals + enum-absence for per-command-ack class
 status: accepted
 date: 2026-05-19
