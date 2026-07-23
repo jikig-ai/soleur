@@ -47,7 +47,7 @@ export function SupportLauncher() {
           type="button"
           onClick={() => setOpen(true)}
           aria-label="Open support"
-          className="fixed bottom-5 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-soleur-accent-gold-fill text-soleur-text-on-accent shadow-lg transition-opacity hover:opacity-90"
+          className="fixed bottom-[calc(1.25rem+env(safe-area-inset-bottom))] right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-soleur-accent-gold-fill text-soleur-text-on-accent shadow-lg transition-opacity hover:opacity-90"
         >
           <svg
             viewBox="0 0 24 24"

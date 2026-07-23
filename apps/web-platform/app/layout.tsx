@@ -25,6 +25,14 @@ export const metadata: Metadata = {
   icons: {
     apple: "/icons/apple-touch-icon.png",
   },
+  // iOS standalone web-app chrome: run full-screen when launched from the Home
+  // Screen, with a translucent status bar so the safe-area padding (activated
+  // by viewportFit:"cover" below) draws under the notch/status bar.
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Soleur",
+  },
 };
 
 // Static fallback covers the pre-hydration window. Once <ThemeProvider> +
@@ -32,6 +40,14 @@ export const metadata: Metadata = {
 // theme. Forge dark is the default to avoid a light flash for dark-mode users.
 export const viewport: Viewport = {
   themeColor: "#0a0a0a",
+  // Draw into the display cutout region so the app's own .safe-top/.safe-bottom
+  // env() padding (globals.css) becomes non-zero and lays out under the notch
+  // and home indicator instead of the browser letterboxing them.
+  viewportFit: "cover",
+  // Chromium/Android: reflow layout above the on-screen keyboard rather than
+  // overlaying it. iOS Safari ignores this — the chat composer's visualViewport
+  // handler covers that cohort (see chat-surface.tsx).
+  interactiveWidget: "resizes-content",
 };
 
 export default async function RootLayout({

@@ -117,7 +117,7 @@ export function NewIssueDialog({
             placeholder="Issue title"
             aria-required="true"
             disabled={submitting}
-            className="mb-4 w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-tertiary focus:outline-none disabled:opacity-60"
+            className="mb-4 w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-base text-soleur-text-primary placeholder:text-soleur-text-tertiary focus:outline-none disabled:opacity-60 md:text-sm"
           />
 
           <label
@@ -133,7 +133,7 @@ export function NewIssueDialog({
             rows={3}
             placeholder="Optional"
             disabled={submitting}
-            className="mb-3 w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-tertiary focus:outline-none disabled:opacity-60"
+            className="mb-3 w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-base text-soleur-text-primary placeholder:text-soleur-text-tertiary focus:outline-none disabled:opacity-60 md:text-sm"
           />
 
           <p className="mb-4 text-xs text-soleur-text-tertiary">
@@ -169,7 +169,7 @@ export function NewIssueDialog({
               rows={2}
               placeholder="e.g. We need a way for users to export their data…"
               aria-label="Describe the issue for Concierge"
-              className="mb-2 w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-tertiary disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none"
+              className="mb-2 w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2 text-base text-soleur-text-primary placeholder:text-soleur-text-tertiary disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none md:text-sm"
             />
             <button
               type="button"
