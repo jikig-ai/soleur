@@ -685,7 +685,7 @@ async function sendEmailTriageEmailNotification(
   // so a computed backstop date is not presented as THE deadline. Both strings
   // are server-authored + code-static; escapeHtml at the sink is defense-in-depth.
   const statutoryCaveatHtml = payload.isStatutory
-    ? `<p style="font-size:13px;color:#6b7280;margin-top:16px">` +
+    ? `<p style="font-size:13px;color:${BRAND_EMAIL_COLORS.textFootnote};margin-top:16px">` +
       (payload.statutoryExcerpt
         ? `${escapeHtml(payload.statutoryExcerpt)}<br/><br/>`
         : "") +

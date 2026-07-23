@@ -363,6 +363,7 @@ jobs:
               -target=github_actions_secret.doppler_token_write \
               -target=doppler_service_token.inngest_arm_write \
               -target=github_repository_environment.inngest_cutover \
+              -target=github_repository_environment.inngest_config_signing \
               -target=github_repository_environment.workspaces_luks_cutover \
               -target=cloudflare_r2_bucket.workspaces_luks_header \
               -target=doppler_secret.workspaces_luks_header_bucket \
