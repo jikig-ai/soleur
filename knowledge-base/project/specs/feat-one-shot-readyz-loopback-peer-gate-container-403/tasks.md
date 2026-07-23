@@ -16,6 +16,7 @@ brand_survival_threshold: single-user incident
 - [ ] 1.3 `workspaces-luks-emit.sh` `wl_probe_readyz` (line ~151): change the readyz curl to `docker exec "$WL_READYZ_CONTAINER" curl -sS -w "\n%{http_code}" --max-time 5 "$url"`, keeping the `|| printf '\n000'` fail-closed tail.
 - [ ] 1.4 Update the `wl_probe_readyz` header comment to record the docker-exec transport + bridge-topology reason.
 - [ ] 1.5 `luks-monitor.sh:43-45`: correct the stale "reachable from the host" comment to the measured reality (host curl → 403; docker exec → genuine loopback).
+- [ ] 1.6 Precondition (verified, no new work): all three paths run as root, so `docker exec` host-access holds (cutover sudo; daily timer root; verify remote root ops). Keep the `docker exec … curl` wrapper unconditional (no URL-shape branch).
 
 ## Phase 2 — Gate rationale comments (no logic change)
 - [ ] 2.1 `readiness.ts:92-100`: clarify "on-host consumers run on loopback" = inside the container (docker exec); add the "do NOT widen the peer gate to the bridge gateway (userland-proxy)" note at the gate.

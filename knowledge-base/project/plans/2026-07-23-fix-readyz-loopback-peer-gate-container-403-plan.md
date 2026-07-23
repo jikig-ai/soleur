@@ -11,6 +11,22 @@ issue: none (standalone bug-fix; unblocks the 2026-07-20 cutover incident #6812 
 
 # 🐛 Fix /internal/readyz loopback peer-gate 403 to host-side probes
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-23 (headless one-shot; no Task fan-out available — deepening done directly against the code by the planning agent).
+
+**Deepen-plan gates:** 4.6 User-Brand Impact PASS · 4.7 Observability (5-field, no-ssh) PASS · 4.8 PAT-shaped PASS · 4.9 UI-wireframe SKIP (no UI surface) · 4.55 Downtime/Cutover SKIP (no offline-inducing op — probe-transport change only) · 4.5 Network-outage trigger fires *incidentally* on the substrings `503`/`unreachable`/`timeout` (readyz reason vocabulary, NOT a connectivity outage); the fix touches no L3 firewall/DNS/sshd surface, so no deep-dive is warranted.
+
+**Key deepening findings (all verified against code):**
+1. **Precedent confirmed** — `docker exec soleur-web-platform <cmd>` is already an established pattern on the PROD container (`ci-deploy.sh:413` `docker exec soleur-web-platform pgrep …`; canary variants at :1714/:2551 use `node`/`bwrap`). The fix adopts the canonical form; it is not novel.
+2. **Both callers pass loopback URLs** — `workspaces-cutover.sh:715` (literal `http://127.0.0.1:3000/internal/readyz`) and `luks-monitor.sh:218` (`$READYZ_URL`, defaults to the same). So `docker exec …-into-container` is correct for both; the verify workflow inherits it (runs `luks-monitor.sh` on-host over SSH).
+3. **Harness feasibility confirmed** — `mon_run` prepends `$d/bin` to PATH (`workspaces-luks-harness.sh:555`), so the new `$d/bin/docker` PATH stub's `exec "$@"` resolves the sibling `$d/bin/curl` stub. The first harness's `docker()` shell-function stub already exists (line 173) and needs only the `exec <c> curl` delegation branch.
+4. **Verify-the-negative** — the plan's negative security claims ("off-host caller still gets 403", "trust boundary unchanged") were re-checked against `readiness.ts:112-114` + `loopback.ts:30-36`: the fix edits **no** gate logic, and there is no `NEXT_PUBLIC_*`/client-exposure surface (server-only endpoint). Claims confirmed, not contradicted.
+
+**New considerations discovered (folded into Sharp Edges / tasks):**
+- **Docker permission precondition:** `docker exec` requires the caller to be in the docker group / root. All three paths already run as root — cutover under `sudo`; daily `luks-monitor` under a root systemd timer; the verify workflow's remote commands do root-level `install -m600`/`mkdir /var/lib/…`. No new privilege is introduced, but the fix now hard-depends on host docker access (previously the host curl needed none).
+- **`LUKS_MONITOR_READYZ_URL` override seam:** `luks-monitor.sh:46` allows overriding the URL. `docker exec … curl <url>` wraps whatever URL is passed; for the loopback default it is correct. Keep the wrapper unconditional (do NOT branch on URL shape — gold-plating); document that a non-loopback override would probe from inside the container's netns.
+
 ## Overview
 
 `GET /internal/readyz` (`apps/web-platform/server/readiness.ts:112-114`, `handleReadyzRequest`)
@@ -314,6 +330,14 @@ gate skipped.
 - **curl MUST exist in the image** — verified at Dockerfile:89. If a future image change drops curl, the
   probe 000-loops (fail-closed, but blocks cutover forever). If that ever happens, switch the in-container
   probe to `node -e` (node is always present) rather than reverting to a host curl.
+- **`docker exec` requires host docker access (root/docker-group).** All three probe paths already run as
+  root (cutover under `sudo`; daily `luks-monitor` under a root systemd timer; the verify workflow's remote
+  commands do root-level `install`/`mkdir`), so no new privilege is added — but the probe now hard-depends
+  on host docker access where the old host curl needed none. A caller that lost docker access would see
+  `docker exec` fail → 000 → `readyz_unreachable` (fail-closed).
+- **Keep the `docker exec … curl` wrapper unconditional** — do NOT branch on whether `$url` is loopback
+  (`LUKS_MONITOR_READYZ_URL` can override it). Branching is gold-plating; the default URL is loopback and a
+  non-loopback override simply probes from inside the container's netns.
 - **Do NOT tighten the published port to `127.0.0.1:3000:3000` or add `--network host` as a "simpler
   fix"** — the port is also consumed by `resource-monitor.sh` (host curl of `/internal/metrics`) and by
   cloudflared→origin; both changes have wider blast radius than the probe transport (see Alternatives).
