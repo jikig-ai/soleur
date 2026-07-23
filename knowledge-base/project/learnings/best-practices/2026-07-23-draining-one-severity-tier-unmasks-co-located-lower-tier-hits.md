@@ -8,11 +8,11 @@ advisory check for that line never runs). Issue #6868's drain plan asserted
 `AC3: advisory count stays 15` while neutralizing the 30 hard-fail lines.
 
 Three lines in `2026-07-17-fix-web-platform-docker-login-erofs-cred-path-plan.md`
-(15, 40, 63) each carried BOTH a `$HOME/.docker/config.json` hard-fail AND a
-`/home/deploy/` or `/root/` `.docker/config.json` advisory on the **same physical
-line**. The advisory was always present but **masked** by the hard-fail. Draining
-the hard-fail surfaced it → advisory line-count rose **15 → 18**, so the
-plan-quoted AC3 invariant was wrong.
+(15, 40, 63) each carried BOTH a `$HOME/`-prefixed Docker-config hard-fail AND a
+`/home/deploy/` or `/root/` remote-host advisory on the **same physical line**.
+The advisory was always present but **masked** by the hard-fail. Draining the
+hard-fail surfaced it → advisory line-count rose **15 → 18**, so the plan-quoted
+AC3 invariant was wrong.
 
 ## Solution
 
