@@ -30,6 +30,7 @@ import {
   type WorkstreamStatus,
 } from "@/lib/workstream";
 import { jsonFetcher, swrKeys } from "@/lib/swr-config";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { ErrorCard } from "@/components/ui/error-card";
 import { GoldButton } from "@/components/ui/gold-button";
 import { RefreshIcon, SearchIcon, SpinnerIcon } from "@/components/icons";
@@ -103,6 +104,16 @@ export function WorkstreamBoard() {
     window.addEventListener(NEW_ISSUE_DIALOG_EVENT, onTourToggle);
     return () => window.removeEventListener(NEW_ISSUE_DIALOG_EVENT, onTourToggle);
   }, []);
+
+  // Render exactly ONE board tree, not both. The board is reached only AFTER
+  // the client-side SWR fetch resolves (server + first client paint render the
+  // BoardSkeleton, since SWR has no fallbackData) — so this client-only read of
+  // the viewport is hydration-safe AND flash-free (the initializer reads the
+  // real width on the first render that actually shows the board). Gating with
+  // JS (not a `hidden md:flex` / `md:hidden` CSS pair) avoids mounting BOTH
+  // trees: a CSS dual-render would duplicate every IssueCard in the DOM and run
+  // MobileBoard's sessionStorage effect even on desktop.
+  const isDesktop = useMediaQuery("(min-width: 768px)");
 
   const [activeId, setActiveId] = useState<string | null>(() =>
     searchParams.get("issue"),
@@ -582,12 +593,12 @@ export function WorkstreamBoard() {
       ) : filtered.length === 0 ? (
         <NoResults onReset={resetFilters} />
       ) : (
-        <>
-          {/* Desktop: the 7-column horizontal board. Mobile (below md): a
-              status-selector + single full-width column (MobileBoard). Both
-              consume the same `filtered` array + `openIssue`, so filters/search,
-              ?issue URL sync, and write handling are shared. */}
-          <div className="hidden gap-3 overflow-x-auto pb-4 md:flex">
+        // Desktop (md+): the 7-column horizontal board. Mobile: a
+        // status-selector + single full-width column (MobileBoard). Exactly one
+        // renders — both consume the same `filtered` array + `openIssue`, so
+        // filters/search, ?issue URL sync, and write handling are shared.
+        isDesktop ? (
+          <div className="flex gap-3 overflow-x-auto pb-4">
             {COLUMNS.map((column) => (
               <IssueColumn
                 key={column.status}
@@ -599,8 +610,9 @@ export function WorkstreamBoard() {
               />
             ))}
           </div>
-          <MobileBoard issues={filtered} onOpen={openIssue} className="md:hidden" />
-        </>
+        ) : (
+          <MobileBoard issues={filtered} onOpen={openIssue} />
+        )
       )}
 
       <IssueDetailSheet
