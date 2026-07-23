@@ -15,17 +15,15 @@ different reason than #6461's originating issue assumed. Re-evaluation trigger:
 
 ## What #6461 / #6794 asked
 
-`knowledge-base/project/rule-metrics.json` reports (regenerated 2026-07-20):
-
-```json
-{ "total_rules_tagged": 101, "rules_unused_over_8w": 101, "rules_bypassed_over_baseline": 0 }
-```
-
-(The #6794 body quoted `98`; the aggregate has since regenerated to `101`. Both
-are ~97–100% "unused".) #6461's originating issue read an earlier figure as "98
-of **198**", a category error. #6794 asked two questions before acting: (1) is
-the denominator right, and (2) is the "unused" signal real or a telemetry
-artifact?
+`knowledge-base/project/rule-metrics.json`'s `.summary.rules_unused_over_8w`
+field is **volatile across regenerations** — observed at `98` (the #6794 body),
+`101`, and `94` on successive machine-local aggregate runs within days, against a
+stable `total_rules_tagged: 101`. That the committed figure swings ~93–100%
+between runs, with no rule set change, is itself the first evidence that it is
+not measuring a stable "dead-weight" property. #6461's originating issue read an
+earlier figure as "98 of **198**", a category error. #6794 asked two questions
+before acting: (1) is the denominator right, and (2) is the "unused" signal real
+or a telemetry artifact?
 
 ## Finding 1 — the denominator is 101, and `202` is a 2×101 double-count
 

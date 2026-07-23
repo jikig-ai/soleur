@@ -72,12 +72,12 @@ export const MAX_DIFF_BYTES = 16384;
 // side alone; that de-sync is what issue #6461 was filed for.
 //
 // UNIT (unit-exact, #6794): both measurement sites below run through
-// measureAlwaysLoadedBytes, which measures on the FRONTMATTER-STRIPPED basis —
-// the SAME basis the linter's thresholds are defined over
-// (scripts/lint-agents-rule-budget.py: b_index raw + b_core stripped). The
-// previously-documented raw-vs-stripped skew (~73 B, the frontmatter block on
-// AGENTS.core.md) is closed; the comparison is exact, not merely fail-safe. The
-// over-strip guard inside the helper keeps the DANGEROUS (falsely-smaller)
+// measureAlwaysLoadedBytes, which measures on the SAME basis the linter's
+// thresholds are defined over (scripts/lint-agents-rule-budget.py: b_index RAW +
+// b_core FRONTMATTER-STRIPPED). The previously-documented raw-vs-stripped skew
+// (~73 B, the frontmatter block on AGENTS.core.md — the only always-loaded file
+// with frontmatter) is closed; the comparison is exact, not merely fail-safe.
+// The over-strip guard inside the helper keeps the DANGEROUS (falsely-smaller)
 // direction fail-safe by falling back to RAW bytes if a malformed strip drops a
 // rule line.
 //
@@ -96,18 +96,20 @@ const MAX_ALWAYS_LOADED_BYTES = 23000;
 const PROPOSE_ALWAYS_LOADED_BUDGET = 20000;
 
 // #6794: measure the always-loaded (AGENTS.md + AGENTS.core.md) payload on the
-// FRONTMATTER-STRIPPED basis, matching the commit gate's authority
-// (scripts/lint-agents-rule-budget.py: b_index raw + b_core stripped). The strip
-// is a no-op on AGENTS.md (no leading `---`), so applying it uniformly to both
-// files reproduces the authority exactly. Extracted + exported so the
-// promoter-vs-B_ALWAYS invariant is unit-testable without invoking the handler.
+// SAME basis as the commit gate's authority (scripts/lint-agents-rule-budget.py):
+// b_index RAW (`file_bytes`, no strip) + b_core FRONTMATTER-STRIPPED.
+// measureAlwaysLoadedBytes mirrors that split exactly — stripping only the core,
+// which is the only always-loaded file that carries frontmatter. Extracted +
+// exported so the promoter-vs-B_ALWAYS invariant is unit-testable without
+// invoking the handler.
 //
 // OVER-STRIP GUARD (the DANGEROUS direction): a malformed/unterminated `---`
 // consumes AGENTS.core.md to EMPTY → a falsely-SMALLER byte count that could
 // falsely PASS the cap. Mirrors the linter's guard: if the strip drops any
 // `- …[id: …]` rule line, fall back to RAW bytes (fail-safe) + emit a distinct
 // Sentry signal. The anchored regex matches lint-agents-rule-budget.py's
-// `_RULE_LINE_RE = ^- .*\[id: ` line-for-line.
+// `_RULE_LINE_RE = ^- .*\[id: ` line-for-line (pinned by
+// scripts/lib/rule-line-regex-parity.test.sh).
 const RULE_LINE_RE = /^- .*\[id: /;
 
 function ruleLineCount(text: string): number {
@@ -138,16 +140,23 @@ function measureFileStrippedBytes(text: string, file: string): number {
 }
 
 /**
- * Always-loaded byte total on the frontmatter-stripped basis (#6794). Pass the
- * raw UTF-8 text of AGENTS.md and AGENTS.core.md; a missing file is passed as
- * "" (→ 0 bytes), preserving the prior existsSync-guarded behavior.
+ * Always-loaded byte total, byte-exact with the commit-gate authority (#6794).
+ * The index (AGENTS.md) is measured RAW and only the core (AGENTS.core.md) is
+ * frontmatter-stripped — exactly `lint-agents-rule-budget.py`'s
+ * `b_index = file_bytes(index)` + `b_core = len(strip(core))`. This is faithful
+ * in ALL cases, not just while AGENTS.md happens to carry no frontmatter: were a
+ * `---` block ever added to the index, uniformly stripping it would UNDER-count
+ * vs the authority (the dangerous direction) and the over-strip guard could not
+ * catch it (an index over-strip drops no `[id:]` pointer line). Pass the raw
+ * UTF-8 text of both files; a missing file is passed as "" (→ 0 bytes),
+ * preserving the prior existsSync-guarded behavior.
  */
 export function measureAlwaysLoadedBytes(
   indexText: string,
   coreText: string,
 ): number {
   return (
-    measureFileStrippedBytes(indexText, "AGENTS.md") +
+    Buffer.byteLength(indexText, "utf8") +
     measureFileStrippedBytes(coreText, "AGENTS.core.md")
   );
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -269,6 +269,14 @@ describe("measureAlwaysLoadedBytes (#6794 — stripped-basis measurement)", () =
     "strip.py",
   );
 
+  // Order-independence: this describe block is the only one that asserts on the
+  // reportSilentFallback spy, and vitest.config sets no clearMocks. Clear per
+  // test so the `.not.toHaveBeenCalled()` case does not depend on declaration
+  // order (fail-safe today — leaked state can only false-RED — but explicit).
+  beforeEach(() => {
+    vi.mocked(reportSilentFallback).mockClear();
+  });
+
   it("measures index raw + core stripped, matching the linter's B_ALWAYS basis", () => {
     // AGENTS.md has no leading frontmatter → strip is a no-op (raw bytes).
     const indexText = "# AGENTS — index\n\n- [id: hr-alpha] → core\n";
@@ -298,7 +306,6 @@ describe("measureAlwaysLoadedBytes (#6794 — stripped-basis measurement)", () =
   });
 
   it("falls back to RAW bytes + signals when the core over-strips (unterminated ---)", () => {
-    vi.mocked(reportSilentFallback).mockClear();
     const indexText = "# AGENTS — index\n";
     // Opening `---` with NO closing `---` line: strip consumes the whole file
     // to empty, dropping the two `[id: …]` rule lines — the dangerous
