@@ -304,6 +304,19 @@ operator reviews it before implementation**. A textual wireframe spec is below;
 a `.pen` wireframe + operator sign-off is a **pre-`/work` gate** (do not
 implement Phase 3 UI before the operator approves the chrome).
 
+**OPERATOR OVERRIDE (2026-07-23): `.pen` wireframe WAIVED for this minor
+chrome.** The operator reviewed the textual UX spec below and approved building
+directly, explicitly waiving the Pencil wireframe for these three
+progressive-enhancement surfaces: (1) the "Update available — Reload" pill in
+`components/pwa/pwa-controls.tsx`, (2) the "Install app" button in the same
+component, and (3) the iOS "Add to Home Screen" guidance card in the same
+component. All three are null-in-standalone, composer-anchored, dismissible
+affordances — no new page or multi-step flow. This override satisfies the
+`wg-ui-feature-requires-pen-wireframe` UX-skip-on-UI-plan gate for
+`components/pwa/pwa-controls.tsx`. `ux-design-lead` remains recorded as skipped
+(Task/Pencil unavailable in the pipeline subagent) with this operator override
+as the sign-off of record.
+
 Textual wireframe (non-intrusive, bottom-anchored, respects safe-area insets):
 
 - **Update pill** — small rounded pill, bottom-center above the composer safe
