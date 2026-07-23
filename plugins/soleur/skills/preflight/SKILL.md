@@ -840,10 +840,17 @@ fi
 
 **This is a DENYLIST, and a denylist cannot be complete against a preserved `$HOME`.**
 It does NOT catch indirect invocation — `bash scripts/foo.sh` whose body self-wraps
-`doppler run -c prd`, a `curl --data-binary @~/.doppler/.doppler.yaml` exfiltration, or any
+`doppler run -c prd`, a `curl --data-binary` upload of the `~/.doppler/.doppler.yaml` token file (the curl `@file` form), or any
 credentialed verb not listed. Those remain reachable and are accepted for now; the durable
 fix is an ALLOWLIST of probe verbs (curl/dig/getent/bun/bash), tracked separately. Do not
 describe this reject as though it closed the class.
+
+> **Do not write a literal `@` immediately before a real home/absolute path** (e.g. the curl
+> `@file` upload form pointing at a `~/`-anchored secret) anywhere in a skill/agent/command
+> body. When the body loads it is delivered as user-turn content, and Claude Code's `@file`
+> mention auto-attach resolves that `@`-path and reads the real local file into model context.
+> The `lint-at-mention-secret-paths.sh` guard enforces this; keep the path in a plain code-span
+> with the `@` detached (as above).
 
 The `(^|[[:space:]]|/)` … `([[:space:]]|$)` boundaries are load-bearing: the `/`
 alternative catches `/usr/local/bin/gh`, and the trailing boundary keeps legitimate
