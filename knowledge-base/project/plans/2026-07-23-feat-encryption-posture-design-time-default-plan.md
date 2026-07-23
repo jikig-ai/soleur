@@ -11,6 +11,26 @@ adr: ADR-139 (provisional ordinal — re-verify against origin/main at /ship)
 
 # feat: Encryption-at-rest + in-transit as a design-time DEFAULT
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-23
+**Gates run:** 4.4 (precedent-diff + scheduled-work), 4.45 (verify-the-negative), 4.55 (downtime — does not fire), 4.6 (user-brand — PASS), 4.7 (observability — PASS, all 5 fields non-placeholder, no `ssh`), 4.8 (PAT-shaped — PASS), 4.9 (UI wireframe — does not fire)
+**Execution constraint:** the `Task` tool was unavailable in this context, so the per-section research and review fan-outs (Phases 2, 3, 5) could **not** be spawned. Every gate and quality check that is mechanically runnable was run directly; the agent-panel passes were **not** performed and must be supplied by `/plan-review` before `/work`. This is recorded rather than silently skipped.
+
+### Key improvements
+
+1. **D8 added — Layer B scheduler placement was wrong by the canonical pattern.** Phase 4.4's scheduled-work check found 53 Inngest cron functions vs 10 GH Actions crons (ADR-033 makes Inngest canonical) **and** a PreToolUse hook (`.claude/hooks/new-scheduled-cron-prefer-inngest.sh`) that will **DENY** the Write at `/work` time. The plan now argues the two-part exemption explicitly, adds the decisive circularity argument (an encryption verifier must not run on a substrate it audits), and declares the hook's documented override hatch plus a mandatory in-file justification — instead of leaving `/work` to hit the deny and override it silently.
+2. **The `hcloud_volume` negative claim is now version-scoped.** "There is no `encrypted` attribute" is pinned to `hetznercloud/hcloud` **v1.63.0** from `.terraform.lock.hcl`, not inferred from two in-repo comments that merely restate each other.
+3. **Precedent diff produced for all three pattern-bound behaviors**, with the one deliberate divergence named (this gate is *required* where its lint-script precedent is deliberately *advisory*), and the observation that the two genuinely-LUKS volumes double as the detector's calibration fixture.
+4. **A fabricated-looking rule-ID citation was neutralized.** The rejected-alternatives table named a *hypothetical* `hr-*` id for the rule this plan deliberately does not create; it did not resolve against `AGENTS.md` and was structurally indistinguishable from a real citation. Rewritten to `an AGENTS.md hr-* hard rule (no id — the rule is not created)`, so the whole plan now passes the rule-ID resolution sweep with zero unresolved tokens.
+5. **AC19's verification command was broken** (`grep -lc` — mutually exclusive flags) and is fixed.
+6. **All external citations re-verified live** — 9 issue/PR states, 5 labels, 10 AGENTS rule IDs, and the ADR ordinal derived from a freshly fetched `origin/main`.
+
+### New considerations discovered
+
+- The plan's own detector must certify `git-data-luks.tf` and `workspaces-luks.tf` on day one; if it cannot, it is miscalibrated. This is a stronger day-one signal than any synthetic fixture.
+- `hcloud_volume.inngest_redis` being (apparently) plaintext is not just an audit finding — it is the reason Layer B cannot live on Inngest.
+
 ## Overview
 
 Make **"encrypted at rest + encrypted in transit"** the enforced default across the Soleur
@@ -176,6 +196,40 @@ gate is not a weak gate, it is no gate*
 Promotion requires **three** coupled edits in the same PR: the `ci.yml` job, `scripts/required-checks.txt`,
 and `infra/github/ruleset-ci-required.tf`. All three are in `## Files to Edit`; an AC asserts the
 three-way coupling.
+
+### Decision D8 — Layer B stays a GitHub Actions cron, with the ADR-033 exemption argued and the hook override declared
+
+*(Added by deepen-plan Phase 4.4 — Scheduled-work pattern check.)*
+
+Measured this session: **53** Inngest cron functions (`apps/web-platform/server/inngest/functions/cron-*.ts`) vs **10** `.github/workflows/scheduled-*.yml`. Inngest is the canonical path (ADR-033), and
+`.claude/hooks/new-scheduled-cron-prefer-inngest.sh` is a **PreToolUse hook that will DENY** the
+Write of a new `scheduled-*.yml` containing a `schedule:`/`cron:` directive. `/work` **will** hit
+this. It is decided here rather than left to be discovered and silently overridden.
+
+The gate's two-part exemption test, answered:
+
+- **(a) Is the work purely git/repo-scoped — no app context, no app secrets, no Sentry integration?**
+  Yes. Layer B reads the committed ledger, calls provider APIs (Hetzner, Cloudflare, Supabase) and
+  the Better Stack Logs API using **infra** credentials from Doppler `prd_terraform`. It uses no app
+  secret, no app database session, and no Sentry DSN. Its siblings are
+  `scheduled-followthrough-sweeper.yml` and the infra-drift cron, not the app crons.
+- **(b) Could it benefit from `step.run` memoization / Inngest replay?** No — and it would be
+  actively harmful. A security verdict must be computed whole from current state; a partially
+  replayed sweep would report a stale-mixed posture that is neither the old nor the new truth,
+  which is the "clean verdict is byte-identical to inspected-nothing" failure the positive-work
+  floor exists to prevent.
+
+**The decisive third argument (circularity).** Inngest's durable queue and run-state live on the AOF
+at `hcloud_volume.inngest_redis` — a store this very audit covers and which the code enumeration
+suggests is plaintext. Hosting the encryption-posture verifier on the substrate it audits means the
+verifier goes dark exactly when that substrate is the problem, and cannot run at all when the app is
+down. An infra-integrity gate must not depend on the infra it certifies.
+
+**Implementation obligation:** the emitted workflow carries the hook's documented override hatch —
+the literal HTML comment `<!-- gate-override: new-scheduled-cron-prefer-inngest -->` near the top of
+the YAML — **plus** a comment block restating this three-part justification in the file itself, so a
+future reader sees the reasoning at the override site and not only in this plan. Using the hatch
+without the in-file justification is a review-blocking defect.
 
 ## The `## Encryption Posture` section schema
 
@@ -382,7 +436,8 @@ an undefined element fails there, not at `tsc`.
 
 | Alternative | Why rejected |
 |---|---|
-| **An `AGENTS.md` hard rule (`hr-encryption-posture-default`)** | Two measured blockers: `B_ALWAYS = 22900/23000` leaves ≈40 bytes after the pointer, and the rule's trigger spans `infra` + `docs-only` loader classes so it would need `core`, which has zero room. In `rest` it would be a **silent no-op on its own docs-only trigger**. (D4) |
+| **An `AGENTS.md` `hr-*` hard rule** (no id — the rule is not created) | Two measured blockers: `B_ALWAYS = 22900/23000` leaves ≈40 bytes after the pointer, and the rule's trigger spans `infra` + `docs-only` loader classes so it would need `core`, which has zero room. In `rest` it would be a **silent no-op on its own docs-only trigger**. (D4) |
+| **Layer B as an Inngest cron function** (the ADR-033 canonical path) | Rejected with an explicit two-part exemption test — see **D8**. The decisive argument is circularity: an encryption-posture verifier running on the Inngest substrate depends on `hcloud_volume.inngest_redis`, one of the very stores it audits, and cannot run when the app is down. |
 | **A declaration-only gate (plan + deepen-plan + a ledger, no live probe)** | Reproduces `#6588` exactly: the legal docs *declared* LUKS while the volume was ext4. Explicitly rejected by the design principle. Layer B is mandatory. |
 | **An attribute-presence detector (`encrypted = true`)** | Structurally impossible for the stack in use — `hcloud_volume` has no `encrypted` attribute (`workspaces-luks.tf` §SHARP EDGE). Would be unpassable, or satisfiable by a comment. (D2) |
 | **A new sibling skill (`encryption-scaffold`)** | Skill-description budget is **2366/2366, zero headroom**. Extending `constraint-scaffold` costs zero words and reuses the runner, the fail-closed contract, and the ADR-074 recovery dispatcher. (D5) |
@@ -562,7 +617,7 @@ an undefined element fails there, not at `tsc`.
 **Generation side**
 
 - [ ] AC18 — `terraform-architect.md` states that `hcloud_volume` has no encryption attribute, names the four-part guest-side LUKS apparatus, and reproduces the live-volume guard-inversion data-loss trap.
-- [ ] AC19 — All four `provision-*/SKILL.md` files contain an "Encryption posture" step. Verify: `grep -lc 'Encryption posture' plugins/soleur/skills/provision-*/SKILL.md | wc -l` == `4`.
+- [ ] AC19 — All four `provision-*/SKILL.md` files contain an "Encryption posture" step. Verify: `grep -l 'Encryption posture' plugins/soleur/skills/provision-*/SKILL.md | wc -l` == `4`. (`-l` and `-c` are mutually exclusive in GNU grep — use `-l` alone and count lines.)
 - [ ] AC20 — `constraint-scaffold.sh` emits both new templates into a fixture Next.js tree; `test/encryption-posture.test.sh` proves non-vacuity (plaintext bucket FAILs, encrypted PASSes, `rejectUnauthorized: false` FAILs); `test/parity.test.sh` covers the new templates.
 - [ ] AC21 — `constraint-scaffold`'s `description:` is **unchanged**, OR — if changed — the PR body pins the re-measured budget and the exact sibling trim (`cq-skill-description-budget-headroom`).
 
@@ -580,6 +635,8 @@ an undefined element fails there, not at `tsc`.
 - [ ] AC28 — `bash scripts/lint-orphan-test-suites.sh` passes (both new `.test.sh` suites registered in `scripts/test-all.sh`).
 - [ ] AC29 — ADR-139 exists; `c4-code-syntax.test.ts` + `c4-render.test.ts` pass; `model.c4`'s `workspacesVolume` description no longer asserts plaintext and cites verify run `30040444418`; `views.c4` includes `platform.infra.workspacesVolume`.
 - [ ] AC30 — `bash scripts/test-all.sh` full-suite exit gate green.
+- [ ] AC32 — **(D8)** `.github/workflows/scheduled-encryption-posture-reconcile.yml` contains **both** the literal override comment `<!-- gate-override: new-scheduled-cron-prefer-inngest -->` **and** an in-file comment block restating the three-part ADR-033 exemption justification. The override without the justification is a review-blocking defect. Verify both with two separate greps against the workflow file.
+- [ ] AC33 — The detector certifies the repo's two genuinely-encrypted volumes on day one: `python3 scripts/lint-encryption-posture.py --repo-sweep --report` reports `hcloud_volume.git_data_luks` and `hcloud_volume.workspaces_luks` as `mechanism: luks` with all citations resolved. A detector that cannot certify these two is miscalibrated regardless of how many synthetic fixtures pass.
 
 ### Post-merge (operator)
 
@@ -801,6 +858,46 @@ infrastructure/tooling change with no user-facing surface. No wireframe required
 | **The audit's "provider-managed" rows become the new false assurance.** | `does_not_defend` is mandatory and rejected when empty or a restatement (TS-12); attestations need a name, URL, and retrieval date. |
 | **Scope** — 19 edited + 14 created files at a `single-user incident` threshold. | No safe split exists (see CTO assessment). Mitigated by the 5-agent `/plan-review` panel and `user-impact-reviewer` at review, both mandated by the threshold. |
 | **ADR-139 ordinal collision** during the pipeline. | `/ship`'s collision gate; and if renumbered, the same-edit sweep of this plan + `tasks.md` + ACs. |
+| **The `prefer-inngest` PreToolUse hook DENIES the Layer B workflow Write at `/work` time**, and the implementer overrides it reflexively without recording why. | D8 decides the placement in advance with the two-part exemption answered; the override hatch is declared **together with** a mandatory in-file justification block. AC32 asserts both are present. |
+| **`/plan-review` and the deepen-plan agent panels never ran** (Task tool unavailable this session), so the plan has had no adversarial multi-agent read. At `single-user incident` threshold that is a material gap. | `/plan-review` MUST run with agents available before `/work`, at the 5-agent escalated panel the threshold mandates. Recorded in the Enhancement Summary rather than silently omitted. |
+
+## Research Insights (deepen-plan pass, 2026-07-23)
+
+### Precedent diff (Phase 4.4 — pattern-bound behaviors)
+
+Three patterns in this plan have canonical sibling precedents in this repo. Each is adopted rather
+than reinvented; divergences are named.
+
+| Pattern | Precedent (`git grep`-located) | This plan | Divergence |
+|---|---|---|---|
+| **Repo-wide lint script + `.test.sh` + CI job** | `scripts/lint-trap-tempfile-ownership.py` + `.test.sh`, registered in `scripts/test-all.sh`, run from `.github/workflows/ci.yml:134` | `scripts/lint-encryption-posture.py` + `.test.sh`, same registration path | **Deliberate divergence:** the precedent is *advisory* by design (ADR-129, and its docstring says so). This gate is **required** (D7). The divergence is the point, not an oversight. |
+| **Fail-closed pre-apply/live gate** | `tests/scripts/lib/preapply-entrypoint-gate.sh` (ADR-136) — default-deny, one catch-all for every ambiguity, a control probe, `--gate`/`--audit` mode split | `tests/scripts/lib/encryption-posture-reconcile.sh` — same shape, `--audit`/`--live` split | **Adopted verbatim in shape.** Adds a *positive-work floor* the precedent does not have, because a posture sweep (unlike an entrypoint probe) has no natural per-item output to count. |
+| **Guest-side LUKS apparatus** | `apps/web-platform/infra/git-data-luks.tf` (`random_password` → dedicated Doppler config → `doppler_secret` → `cryptsetup luksOpen --key-file -` in `git-data-bootstrap.sh:91` → `/dev/mapper/git-data`) and `workspaces-luks.tf` | The detector's four-part citation chain for `mechanism: luks` | **Adopted as the detector's contract.** The detector is written *against* these two files, so both must pass on day one — which is also the calibration fixture (a detector that cannot certify the repo's two genuinely-encrypted volumes is miscalibrated). |
+
+**Scheduled-work precedent:** see **D8** — divergence from the ADR-033 canonical Inngest path, argued.
+
+### Verify-the-negative pass (Phase 4.45)
+
+Every negative/absolute claim in this plan was probed against the code rather than asserted.
+
+| Claim | Probe | Verdict |
+|---|---|---|
+| "There is **no** `encrypted` attribute on `hcloud_volume`." | `grep -A3 'hetznercloud/hcloud' apps/web-platform/infra/.terraform.lock.hcl` → **v1.63.0** (constraint `~> 1.49`); `grep -rn 'encrypted' --include=*.tf apps/web-platform/infra/ \| grep -i volume` → only two comments *asserting the absence*, zero usages. | **CONFIRMED, version-scoped to `hetznercloud/hcloud` v1.63.0.** The claim is pinned to the installed provider, not to memory. If the provider ever adds the attribute, the detector's store-class table is the single place to change. |
+| "`sslmode=require` encrypts but does **not** verify the certificate." | libpq documented semantics: `require` = encrypt only; `verify-ca` = verify chain; `verify-full` = verify chain **and** hostname. Cited so a future reader does not "fix" the ban-list. | **CONFIRMED** — and this is why `require` is banned, which is counterintuitive enough to be a Sharp Edge. |
+| "`plan`/`review`/`preflight` are **not** eval-gated." | Read `plugins/soleur/skills/eval-harness/gated-skills.json` in full — 4 entries, none of them. | **CONFIRMED** — no eval arm required. |
+| "The repo **already** exercises the `betteruptime_*` and `github_repository_ruleset` API surfaces." | `grep -rln 'betteruptime_' --include=*.tf apps/` → 5 files; `infra/github/ruleset-ci-required.tf` exists with 15+ `required_check` blocks. | **CONFIRMED** — no new API surface, so the ADR-130 new-surface credential probe does not fire. (Stated as verified, not assumed — `hr-verify-repo-capability-claim-before-assert`.) |
+| "This PR remediates **nothing**." | Enforced as AC25 with a concrete `git diff` predicate rather than left as an intention. | **ENFORCED**, not merely claimed. |
+| "There is **no bypass** in the detector." | Deliberately **not** verified by grepping the script for the absence of a flag — that is a vacuous sweep for a semantic property. Verified behaviourally by the AC10 matrix. | **CONVERTED** from an absence-grep to a behavioural assertion. |
+
+### Citation verification (deepen-plan quality checks)
+
+Run live this session; all clean:
+
+- **Issues/PRs** — `#6588` OPEN, `#6604` CLOSED, `#6733` OPEN, `#6808` OPEN, `#6814` OPEN, `#6138` OPEN, `#4133` OPEN, `#6049` CLOSED, `#6103` CLOSED. The `#6049` attribution was checked against the artifact, not just the issue: `scripts/required-checks.txt` carries the literal header `⚠ AUTO-FABRICATION GUARD (#6049)`.
+- **Labels** — `type/security`, `domain/engineering`, `priority/p1-high`, `follow-through`, `code-review` all exist (`gh label list`).
+- **AGENTS rule IDs** — all 10 cited IDs resolve to active `[id: …]` entries in `AGENTS.md`; none appear in `scripts/retired-rule-ids.txt`. The one id-shaped token that did **not** resolve (`hr-encryption-posture-default`) was a *hypothetical* name in the rejected-alternatives table and has been rewritten so it no longer reads as a citation.
+- **ADR ordinal** — derived from a **freshly fetched** `origin/main` (`git fetch origin main` then `git ls-tree --name-only origin/main …decisions/`) → max is **ADR-138**, so **139** is correct as of this session. Still provisional.
+- **`knowledge-base/` paths** — every `.md` citation in this plan resolves on disk except the four this plan creates.
 
 ## References & Research
 

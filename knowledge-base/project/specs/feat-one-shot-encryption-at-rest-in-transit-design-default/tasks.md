@@ -38,6 +38,7 @@ precedes its required-check promotion.
 - [ ] 2.4 Implement the in-transit require-list / ban-list, with `sslmode=require` in the **ban**-list.
 - [ ] 2.5 Implement unknown-store-class fail-closed.
 - [ ] 2.6 GREEN: all TS cases pass.
+- [ ] 2.6b **Calibration against the real repo (AC33):** the detector must certify `hcloud_volume.git_data_luks` and `hcloud_volume.workspaces_luks` as `mechanism: luks` with all citations resolved. These two files are the detector's contract; a detector that cannot certify them is miscalibrated no matter how many synthetic fixtures pass.
 - [ ] 2.7 Register `scripts/lint-encryption-posture.test.sh` in `scripts/test-all.sh`; confirm `bash scripts/lint-orphan-test-suites.sh` passes.
 - [ ] 2.8 Run the mutation battery MB-1..MB-7. Diff **per-case verdicts**, not suite pass-counts. Every mutation must red.
 - [ ] 2.9 Verify non-vacuity under `git clone --depth 1` — same verdict and store count as the full clone.
@@ -57,6 +58,7 @@ precedes its required-check promotion.
 - [ ] 4.2 Make could-not-measure its own **aborting** class evaluated **before** the comparison; make it distinguishable in output from a clean pass.
 - [ ] 4.3 Write `tests/scripts/test-encryption-posture-reconcile.sh` incl. the could-not-measure matrix (empty credential, HTTP 000, degraded 200 with empty body, zero-row log query). Register in `scripts/test-all.sh`.
 - [ ] 4.4 Add `.github/workflows/scheduled-encryption-posture-reconcile.yml` (daily); auto-files an issue on divergence; emits the heartbeat only on a positive-work clean pass.
+  - **The `.claude/hooks/new-scheduled-cron-prefer-inngest.sh` PreToolUse hook WILL DENY this Write** (ADR-033 makes Inngest canonical: 53 Inngest crons vs 10 GH Actions crons). This is expected and pre-decided in plan **D8**. The workflow MUST carry BOTH the literal override comment `<!-- gate-override: new-scheduled-cron-prefer-inngest -->` near the top AND an in-file comment block restating the three-part exemption (infra-scoped credentials only / replay is harmful for a security verdict / **circularity** — the verifier must not run on `hcloud_volume.inngest_redis`, a store it audits). Override without the justification block = review-blocking defect (AC32).
 - [ ] 4.5 Add the heartbeat to `apps/web-platform/infra/uptime-alerts.tf`, **count-gated behind the ADR-117 measure-then-arm gate**; `terraform plan` shows no create of an armed beat.
 - [ ] 4.6 Write `scripts/followthroughs/encryption-posture-reconcile-soak-<issue>.sh` (3 consecutive green runs, `start=` pinned strictly after the deploy) + the tracker directive + the `follow-through` label; wire `secrets=` into `.github/workflows/scheduled-followthrough-sweeper.yml` if needed.
 
@@ -92,5 +94,6 @@ precedes its required-check promotion.
 ## Phase 8 — Exit gate
 
 - [ ] 8.1 `bash scripts/test-all.sh` — full-suite green.
-- [ ] 8.2 Walk every AC1..AC30; record the verification command and its output.
+- [ ] 8.2 Walk every AC1..AC33; record the verification command and its output.
+- [ ] 8.2b **Run `/soleur:plan-review` with agents available BEFORE starting Phase 1.** The deepen-plan pass ran with the `Task` tool unavailable, so the plan has had no adversarial multi-agent read. At `single-user incident` threshold the escalated 5-agent panel (+`architecture-strategist` +`spec-flow-analyzer`) is mandatory, not optional.
 - [ ] 8.3 Confirm the PR body has no `Closes #6588`, lists audit findings as `Ref #N`, and pins both budget measurements.
