@@ -879,7 +879,7 @@ describe("#6772 R1-R3 — reject-set coverage for the fail-open transition", () 
   // shell-active token, so the Step 10.5 reject does NOT cover them — the
   // credentialed-CLI reject at Step 10.4 is the load-bearing control.
   // `env -i` does not scrub the Doppler token: $HOME is preserved and the CLI
-  // reads a live dp.ct.* credential from ~/.doppler/.doppler.yaml.
+  // reads a live dp.ct.* credential from its on-disk config under ~/.doppler/.
   test("R2 folded doppler prd_terraform command is rejected as a credentialed CLI", () => {
     const block = obs(
       "discoverability_test:",
