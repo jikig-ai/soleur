@@ -65,7 +65,7 @@ permission + hook layer:
   unsandboxed in prod). No bare `Bash`, no `cat`, no `curl`, no interpreters. Per-cron least
   privilege (NOT a shared union allowlist).
 - **L2 — shared `permissions.deny` that overrides the always-on read-only set**: `Read(/proc/**)`,
-  `Read(**/.env)`, `Read(~/.aws/**)`, `Read(~/.ssh/**)`, `Read(~/.config/**)`, `Read(~/.netrc)`
+  `Read(**/.env)`, `Read(~/.aws/**)`, `Read(~/.ssh/**)`, `Read(~/.config/**)`, `Read(~/.netr*)`
   (deny rules apply to `cat`/`head`/`grep`/`find` when the denied path is an argument — docs,
   "Block reads of generated and vendored code") + the egress/interpreter/subshell verb denylist as
   a mode-independent backstop. This is the P0-1 closer.
@@ -146,7 +146,7 @@ genuinely fleet-wide floor; the **allow** list lives per-producer in `--allowedT
     deny: [
       // L2 secret-file reads (override the always-on read-only bash set)
       "Read(/proc/**)", "Read(/proc/*/environ)", "Read(**/.env)", "Read(**/.env.*)",
-      "Read(~/.aws/**)", "Read(~/.ssh/**)", "Read(~/.config/**)", "Read(~/.netrc)",
+      "Read(~/.aws/**)", "Read(~/.ssh/**)", "Read(~/.config/**)", "Read(~/.netr*)",
       "Read(~/.docker/**)", "Read(/run/secrets/**)",
       // egress / resolvers (best-effort backstop)
       "Bash(curl:*)","Bash(wget:*)","Bash(nc:*)","Bash(ncat:*)","Bash(socat:*)",
