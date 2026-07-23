@@ -181,7 +181,7 @@
 # entrypoints and would surface a dashboard-added rule as drift. Their exposure
 # is RETROSPECTIVE (anything added before their own first apply is already
 # gone), not the prospective hazard this file hit. #6767 SHIPPED both halves
-# (ADR-133): the prospective PRE-APPLY GATE — tests/scripts/lib/preapply-entrypoint-gate.sh,
+# (ADR-135): the prospective PRE-APPLY GATE — tests/scripts/lib/preapply-entrypoint-gate.sh,
 # wired as the "Pre-apply entrypoint gate" step in apply-web-platform-infra.yml,
 # which fail-closes any FUTURE whole-list ruleset create-from-absent whose live
 # entrypoint is non-empty — AND the retrospective drift-audit (the same script's

@@ -18,9 +18,9 @@
 # → filtered out by `select(. > 0)`, and resource_deletes is 0 too, so no
 # [ack-destroy] fires. A plan-derived guard INHERITS plan's blind spot. This gate
 # asserts on plan SHAPE (a whole-list resource planned as a pure create from
-# absent state) and then QUERIES THE LIVE CLOUDFLARE API to decide. See ADR-133.
+# absent state) and then QUERIES THE LIVE CLOUDFLARE API to decide. See ADR-135.
 #
-# INCLUSION PRINCIPLE (what the gate guards — ADR-133 class table). The hazard is
+# INCLUSION PRINCIPLE (what the gate guards — ADR-135 class table). The hazard is
 # precisely "a create silently ADOPTS and WHOLE-REPLACES a server-side singleton
 # addressed by a natural/composite key that can pre-exist outside Terraform".
 # Adjudicated over every cloudflare_* class in this root, exactly ONE lands IN:
@@ -272,7 +272,7 @@ run_gate() {
         ;;
       *)
         fail=1
-        _err "row '${addr}': unclassified ruleset kind '${kind}' — not in the {zone,root} allowlist. Enumerate this entrypoint by hand and adjudicate the class in ADR-133 before applying. Fail-closed."
+        _err "row '${addr}': unclassified ruleset kind '${kind}' — not in the {zone,root} allowlist. Enumerate this entrypoint by hand and adjudicate the class in ADR-135 before applying. Fail-closed."
         continue
         ;;
     esac

@@ -1,11 +1,10 @@
 ---
-adr: ADR-133
 title: Pre-apply entrypoint-enumeration gate for whole-list Cloudflare rulesets
 status: active
 date: 2026-07-22
 ---
 
-# ADR-133: Pre-apply entrypoint-enumeration gate for whole-list Cloudflare rulesets
+# ADR-135: Pre-apply entrypoint-enumeration gate for whole-list Cloudflare rulesets
 
 ## Context
 
