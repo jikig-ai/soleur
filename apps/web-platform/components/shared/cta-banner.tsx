@@ -96,7 +96,7 @@ export function CtaBanner() {
   }
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-soleur-border-default bg-soleur-bg-surface-1/95 px-4 py-3 backdrop-blur-sm">
+    <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-soleur-border-default bg-soleur-bg-surface-1/95 px-4 py-3 safe-bottom backdrop-blur-sm">
       <div className="mx-auto flex max-w-3xl flex-col gap-2">
         {/* Persistent header row — message + the single rotating-arrow toggle. */}
         <div className="flex items-start justify-between gap-4">

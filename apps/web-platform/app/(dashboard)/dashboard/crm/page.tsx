@@ -19,7 +19,7 @@ export default async function CrmPage() {
   if (!user) redirect("/login");
 
   return (
-    <main className="px-6 py-8">
+    <main className="px-4 py-8 sm:px-6">
       <Suspense
         fallback={
           <p className="py-8 text-sm text-soleur-text-secondary">Loading…</p>

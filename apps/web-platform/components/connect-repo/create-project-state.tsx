@@ -61,7 +61,10 @@ export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps
             value={projectName}
             onChange={(e) => setProjectName(e.target.value)}
             placeholder="my-startup"
-            className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm placeholder:text-soleur-text-muted focus:border-soleur-text-muted focus:outline-none"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-base placeholder:text-soleur-text-muted focus:border-soleur-text-muted focus:outline-none md:text-sm"
           />
           {slug && (
             <p className="text-xs text-soleur-text-muted">
