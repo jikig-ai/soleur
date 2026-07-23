@@ -1,4 +1,4 @@
-# Refresh-set for the ADR-134 pull-based signed config-refresh channel (#6780).
+# Refresh-set for the ADR-135 pull-based signed config-refresh channel (#6780).
 #
 # One repo-relative path per line (blank lines and #-comments ignored). These are the
 # host-executed *.sh scripts the CI producer (build-inngest-config-bundle.yml →

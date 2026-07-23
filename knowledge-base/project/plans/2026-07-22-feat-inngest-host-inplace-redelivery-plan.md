@@ -10,7 +10,7 @@ branch: feat-6780-inngest-inplace-redelivery
 pr: 6839
 spec: knowledge-base/project/specs/feat-6780-inngest-inplace-redelivery/spec.md
 brainstorm: knowledge-base/project/brainstorms/2026-07-22-inngest-host-inplace-redelivery-brainstorm.md
-adr: ADR-134 (provisional — re-verify next-free ordinal at ship per the ADR-Ordinal Collision Gate)
+adr: ADR-135 (provisional — re-verify next-free ordinal at ship per the ADR-Ordinal Collision Gate)
 ---
 
 # Plan: in-place signed redelivery channel for the dedicated Inngest host (#6780)
@@ -32,7 +32,7 @@ paradox: the channel installs only through the replace it eliminates); the CI
 build/sign/promote workflow and future bundle edits then flow through the channel itself.
 
 Design is settled from the brainstorm (11 decisions). This plan is the HOW. **Signing is air-gapped
-keyless cosign** (chosen — see DEEPEN-CORRECTION-1 below + ADR-134 Option A; the earlier "keyless
+keyless cosign** (chosen — see DEEPEN-CORRECTION-1 below + ADR-135 Option A; the earlier "keyless
 ruled out (ADR-052)" framing was imprecise — ADR-052 blocks *host* egress, and keyless *verify* is
 offline against the baked trusted root). Static-key is the **documented fallback** (Option B), not
 the primary. Extends ADR-087 (air-gapped verify) + ADR-128 (digest-pinned coherence) + ADR-096
@@ -91,8 +91,8 @@ These are load-bearing constraints the implementation MUST satisfy; each maps to
 - **HARD-3 (`applied.version` seed + ownership — P1).** cloud-init MUST seed `applied.version` to the baked floor's version at bake time (shared numbering space with the bundle), and create `/var/lib/inngest-config` + the version file **`root:root`** (NOT under the deploy-writable `/var/lib/inngest` which is `deploy:deploy`). Absent seeding → downgrade below the running floor; deploy-writable → a deploy-user (the identity inngest runs as) resets the floor and forces a downgrade. Test ownership/mode + fresh-host first-pull.
 - **HARD-4 (run as root — P1).** The verify+apply `.service` runs `User=root` (baked, root-owned); it invokes `infra-config-install` directly (no deploy→sudoers grant). Keep the deploy sudoers grant to the existing webhook path only. The verifier must not execute in a deploy-writable `$PATH`/tempdir.
 - **HARD-5 (set-atomic apply — P1).** `infra-config-install.sh` is **per-file** atomic, not set-atomic. Stage+verify ALL files, then swap all; advance `applied.version` **only after the last file lands**; on mid-set failure, re-apply next tick (do not latch a torn mixed-version set). Add a generation marker crons can read to refuse a mixed set.
-- **HARD-6 (promotion credential — P1).** Promotion writes `INNGEST_CONFIG_DIGEST` via **`terraform apply` of the `doppler_secret`** (no standing CI write-token into the isolated `soleur-inngest/prd`), OR the write-token surface is explicitly justified in ADR-134. The signing principal and the promotion principal SHOULD be distinct (no single job both signs and promotes).
-- **HARD-7 (CI = total-compromise root — P1).** ADR-134 names CI-workflow compromise as the top residual RCE path (whoever compromises the release workflow can sign + promote a fresh bundle; the monotonic gate does nothing against a *fresh* forgery). **As-shipped (keyless):** gate the signing **job** behind a GitHub **environment with a non-empty required-reviewer set** (`inngest-config-signing`, `inngest-config-signing.tf`, wired into the `apply-web-platform-infra.yml` `-target=` allow-list so the reviewer rule actually exists before any dispatch — an unapplied environment is auto-created WITHOUT reviewers on first use), OIDC-scoped (`id-token: write` on that job only). Keyless dissolves the "cosign private key custody" line entirely (there is no key to name/store). **Fallback (Option B, static key):** name the cosign key distinctly (`COSIGN_CONFIG_SIGNING_KEY`), in the CI/`soleur/prd` project only — NEVER the isolated project.
+- **HARD-6 (promotion credential — P1).** Promotion writes `INNGEST_CONFIG_DIGEST` via **`terraform apply` of the `doppler_secret`** (no standing CI write-token into the isolated `soleur-inngest/prd`), OR the write-token surface is explicitly justified in ADR-135. The signing principal and the promotion principal SHOULD be distinct (no single job both signs and promotes).
+- **HARD-7 (CI = total-compromise root — P1).** ADR-135 names CI-workflow compromise as the top residual RCE path (whoever compromises the release workflow can sign + promote a fresh bundle; the monotonic gate does nothing against a *fresh* forgery). **As-shipped (keyless):** gate the signing **job** behind a GitHub **environment with a non-empty required-reviewer set** (`inngest-config-signing`, `inngest-config-signing.tf`, wired into the `apply-web-platform-infra.yml` `-target=` allow-list so the reviewer rule actually exists before any dispatch — an unapplied environment is auto-created WITHOUT reviewers on first use), OIDC-scoped (`id-token: write` on that job only). Keyless dissolves the "cosign private key custody" line entirely (there is no key to name/store). **Fallback (Option B, static key):** name the cosign key distinctly (`COSIGN_CONFIG_SIGNING_KEY`), in the CI/`soleur/prd` project only — NEVER the isolated project.
 - **HARD-8 (drift comparator is a deliverable — P1).** The absence-heartbeat only catches a *dead* timer, and the baked floor's own boot marker can *satisfy* it while the delta never pulled. Ship a concrete off-box comparator (a CI/cron job reads the Doppler pointer + queries Better Stack for the latest `APPLIED` marker, alarms on `applied_digest ≠ pointer` beyond N windows). The boot-floor marker MUST be distinguishable (`version=floor`) so it does not mask a stuck delta.
 - **HARD-9 (pointer-below-floor inversion — P1).** If a cutover bakes a floor whose version exceeds the last-promoted pointer, the first pull is rejected forever → silent stale. Gate promotion to require `pointer.version > baked-floor.version`, AND emit an explicit alarm when a pull is rejected as ≤ current (rejection-as-signal, not silent no-op).
 - **HARD-10 (fail-closed arms — P1).** The verify+apply script MUST NOT inherit the bootstrap's ambient `set +e` / `|| true`. Each gate is explicit fail-closed: `cosign verify-blob` rc≠0, `sha256sum -c` rc≠0, a **missing/non-integer** `applied.version` (fail-closed to a hard floor, never parse-to-0-accept-all), `infra-config-install` `rc=3`. Logging/phone-home may `|| true`; a *decision* behind `|| true` may not.
@@ -150,8 +150,8 @@ retains it (HARD-3/HARD-5).
   are proven; record the evidence in the plan.
 - Audit the `DEST_SPEC`/`FILE_MAP` gap in `infra-config-install.sh` for the refresh-set dests.
 
-**Phase 1 — ADR-134 + C4 (architectural decision is a deliverable).**
-- Author `ADR-134-pull-based-signed-config-refresh-for-dedicated-inngest-host.md` via `/soleur:architecture`:
+**Phase 1 — ADR-135 + C4 (architectural decision is a deliverable).**
+- Author `ADR-135-pull-based-signed-config-refresh-for-dedicated-inngest-host.md` via `/soleur:architecture`:
   the new trust boundary + pull control channel; carves the `*.sh`-only exception to the image-replace-only
   rule; extends ADR-087 (verify), ADR-128 (digest coherence), ADR-096 (zot). Status: `adopting` (true after
   the cutover provision lands). Re-verify the next-free ordinal at ship (Collision Gate).
@@ -213,7 +213,7 @@ retains it (HARD-3/HARD-5).
 - `apps/web-platform/infra/inngest-config-pubkey.pem` (or embedded in cloud-init) — cosign public verify key.
 - `apps/web-platform/infra/inngest-config-digest.tf` — `doppler_secret` for `INNGEST_CONFIG_DIGEST` (mirror `inngest-betterstack-token.tf`).
 - `apps/web-platform/infra/inngest-config-refresh.test.sh` — host-side tests.
-- `knowledge-base/engineering/architecture/decisions/ADR-134-*.md`.
+- `knowledge-base/engineering/architecture/decisions/ADR-135-*.md`.
 - Runbook under `knowledge-base/engineering/operations/runbooks/`.
 
 ## Files to Edit
@@ -268,7 +268,7 @@ discoverability_test:
 
 ## Architecture Decision (ADR/C4)
 ### ADR
-- **Create ADR-134** (provisional) — pull-based signed config-refresh for the dedicated Inngest host.
+- **Create ADR-135** (provisional) — pull-based signed config-refresh for the dedicated Inngest host.
   Extends ADR-087 / ADR-128 / ADR-096; carves the `*.sh`-only in-place exception to image-replace-only.
 ### C4 views
 - Container/Component: add the CI **signer** (`#external`), the **config artifact** flow through
@@ -278,7 +278,7 @@ discoverability_test:
 
 ## Acceptance Criteria
 
-> **Scope split (PR #6839).** This PR ships the **un-gated foundations** — ADR-134 + C4, the CI
+> **Scope split (PR #6839).** This PR ships the **un-gated foundations** — ADR-135 + C4, the CI
 > keyless-sign/dual-publish producer (workflow + tested packager), the `INNGEST_CONFIG_DIGEST`
 > `doppler_secret` (authored; applied at the cutover), and the dormant drift comparator (Inngest
 > dispatcher + GHA executor + tested core). The **host-side consumer** — the verify+apply script,
@@ -298,7 +298,7 @@ discoverability_test:
 - [ ] AC4: No new inbound rule added to the inngest host nftables (grep the nft set; deny-all-public preserved).
 - [ ] AC5 (keyless — DEEPEN-CORRECTION-1 supersedes "static key"; workflow present, runtime-unverifiable on a feature branch): The CI workflow **keyless**-signs the bundle manifest (`cosign sign-blob`, OIDC id-token) and publishes to **both** zot (best-effort) and GHCR (authoritative); the verify anchor is the already-committed `cosign-trusted-root.json` + a config-workflow identity regexp (no static keypair minted, no separate pubkey committed). The deterministic packaging core (HARD-2) is tested; the sign+publish steps mirror `reusable-release.yml` and run first at the #6178 cutover.
 - [ ] AC6: `INNGEST_CONFIG_DIGEST` `doppler_secret` + monitor `terraform plan` shows only the intended adds (no create of `hcloud_server`/host, no destroy).
-- [x] AC7: ADR-134 exists with the four required headings; C4 tests green; `.c4` renders the new signer/registry/host edges.
+- [x] AC7: ADR-135 exists with the four required headings; C4 tests green; `.c4` renders the new signer/registry/host edges.
 - [ ] AC8: `PR body uses Ref #6780` (NOT Closes — the channel is only proven after it rides the #6178 cutover provision; close #6780 post-cutover with off-box marker evidence).
 - [ ] AC10 (HARD-1): a test asserts the engine paths (`inngest-config-refresh.sh`, cosign binary, pubkey, `.timer`/`.service`, `applied.version`) are NOT in `DEST_SPEC`/`FILE_MAP`.
 - [ ] AC11 (HARD-2): a test asserts an old-signed bundle re-published under a higher pointer/annotation version is REJECTED (version read only from the verified signed bytes).

@@ -18,8 +18,8 @@ plan: knowledge-base/project/plans/2026-07-22-feat-inngest-host-inplace-redelive
 - [ ] 0.5 (DEEPEN-CORRECTION-1) Probe `cosign verify-blob` **keyless-offline** against the baked `/etc/soleur/cosign-trusted-root.json` on the pinned cosign image — confirm before choosing keyless over static-key (static-key is the documented fallback).
 - [ ] 0.4 Audit `DEST_SPEC`/`FILE_MAP` gap in `infra-config-install.sh` for the refresh-set dests; note it's NOT baked in `cloud-init-inngest.yml` today.
 
-## Phase 1 — ADR-134 + C4
-- [ ] 1.1 Author `ADR-134-*.md` via `/soleur:architecture` (decision + alternatives + D-ZOT divergence + HARD-7 CI-compromise threat model + replace-only-TCB + isolated-project write-path). Re-verify next-free ordinal at ship.
+## Phase 1 — ADR-135 + C4
+- [ ] 1.1 Author `ADR-135-*.md` via `/soleur:architecture` (decision + alternatives + D-ZOT divergence + HARD-7 CI-compromise threat model + replace-only-TCB + isolated-project write-path). Re-verify next-free ordinal at ship.
 - [ ] 1.2 Edit `.c4` (model/views/spec): CI signer (`#external`), config-artifact registry→host edge, refresh relationship. Run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 
 ## Phase 2 — CI build + cosign sign + publish (producer contract)

@@ -5,7 +5,7 @@
 workflow (keyless-signs + dual-publishes, emits `IMAGE@DIGEST`) → promote the digest through
 Terraform → the host's config-refresh timer pulls, verifies, and applies it in-place. Confirm
 off-box with [`scripts/betterstack-query.sh`](../../../../../scripts/betterstack-query.sh). No host
-login, no host replace (ADR-134, #6780).
+login, no host replace (ADR-135, #6780).
 
 ## ⚠️ CHANNEL-LIVE PRECONDITION (HARD-11) — check this FIRST
 
@@ -71,14 +71,14 @@ per-file sha256 manifest, and the monotonic version bound its authority, so a mi
 (rejected, not silently applied). Keep the absence-heartbeat grace window ≥ the timer cadence so a
 skipped promotion does not read as a dead timer.
 
-## Signing rotation (keyless — ADR-134 / ADR-087)
+## Signing rotation (keyless — ADR-135 / ADR-087)
 
 Signing is air-gapped keyless cosign: there is no private key to custody. To rotate the trust anchor,
 follow the ADR-087 trusted-root re-capture recipe (re-capture `cosign-trusted-root.json` under the
 pinned verifier container; the staleness gate `cosign-trusted-root-staleness.test.sh` tracks it), and
 update the host verify identity regexp to the config-bundle workflow. There is no key-overlap dance.
 
-**Static-key fallback residual (Option B, ADR-134):** if the host offline `verify-blob` proves
+**Static-key fallback residual (Option B, ADR-135):** if the host offline `verify-blob` proves
 impractical at the cutover Phase-0 probe and the static-key fallback is adopted instead, note that
 static keys have no revocation — a leaked signing key requires an emergency `inngest-host-replace`
 with a freshly baked public key. That residual does not apply to the chosen keyless path.

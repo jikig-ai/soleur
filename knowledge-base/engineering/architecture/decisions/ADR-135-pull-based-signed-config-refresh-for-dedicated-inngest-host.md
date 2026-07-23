@@ -1,11 +1,10 @@
 ---
-adr: ADR-134
 title: Pull-based signed config-refresh channel for the dedicated Inngest host
 status: adopting
 date: 2026-07-22
 ---
 
-# ADR-134: Pull-based signed config-refresh channel for the dedicated Inngest host
+# ADR-135: Pull-based signed config-refresh channel for the dedicated Inngest host
 
 > Status `adopting`: the CI producer, the promoted digest pointer, and the off-box
 > drift comparator land in this PR (#6839, `Ref #6780`). The host-side consumer —

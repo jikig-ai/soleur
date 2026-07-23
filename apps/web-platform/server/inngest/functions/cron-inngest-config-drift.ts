@@ -1,6 +1,6 @@
 /**
  * cron-inngest-config-drift — Inngest-dispatched trigger for the config-refresh drift
- * comparator (ADR-134, #6780, HARD-8). The off-box comparator that alarms when the dedicated
+ * comparator (ADR-135, #6780, HARD-8). The off-box comparator that alarms when the dedicated
  * Inngest host's APPLIED config digest diverges from the promoted INNGEST_CONFIG_DIGEST pointer.
  *
  * DISPATCH HYBRID (same shape as cron-terraform-drift): this function is the SCHEDULER only. It

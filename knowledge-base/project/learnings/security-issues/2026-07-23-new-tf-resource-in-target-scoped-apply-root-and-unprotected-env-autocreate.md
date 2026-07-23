@@ -12,7 +12,7 @@ date: 2026-07-23
 
 ## Problem
 
-PR #6839 (ADR-134 config-refresh channel foundations) added a HARD-7 human-ack gate: a
+PR #6839 (ADR-135 config-refresh channel foundations) added a HARD-7 human-ack gate: a
 `github_repository_environment.inngest_config_signing` with `reviewers.users = [54279]`, referenced
 by the signing workflow as `environment: inngest-config-signing`. The intent — a compromised/rogue
 CI actor who dispatches the keyless-signing workflow is held in "Waiting" for operator approval

@@ -1,4 +1,4 @@
-# GitHub Environment with a required-reviewer protection rule for the ADR-134 config-bundle
+# GitHub Environment with a required-reviewer protection rule for the ADR-135 config-bundle
 # signing workflow (#6780, HARD-7). The build-sign-publish job in
 # .github/workflows/build-inngest-config-bundle.yml declares `environment: inngest-config-signing`,
 # which holds each dispatch in "Waiting" for reviewer approval BEFORE any step runs — the human
