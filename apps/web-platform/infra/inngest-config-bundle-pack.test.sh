@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Tests for inngest-config-bundle-pack.sh — the ADR-133 config-refresh bundle packager (#6780).
+# Tests for inngest-config-bundle-pack.sh — the ADR-134 config-refresh bundle packager (#6780).
 # Deterministic, hermetic (synthesized fixtures only, cq-test-fixtures-synthesized-only; no live
 # prod writes, no network, no LLM). Registered in .github/workflows/infra-validation.yml.
 #

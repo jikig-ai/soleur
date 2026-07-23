@@ -77,7 +77,7 @@ does not, and that channel is **inbound**, so it cannot be reused on a deny-all-
 - TR1: **Zot pull path for the dedicated host is net-new** — the host pulls its image from
   GHCR-direct today with no zot branch. Wire + verify Zot (`10.0.1.30:5000`, private subnet) egress
   and pull for this host; GHCR digest-pinned fallback. *(open question OQ1)*
-- TR2: **cosign signing custody + rotation.** *As-implemented: KEYLESS* (ADR-133 Option A / plan
+- TR2: **cosign signing custody + rotation.** *As-implemented: KEYLESS* (ADR-134 Option A / plan
   DEEPEN-CORRECTION-1) — no key custody: CI keyless-signs (OIDC id-token), the host verifies offline
   against the already-committed `cosign-trusted-root.json` + a config-workflow identity regexp;
   rotation = edit the regexp / re-capture the trusted root (ADR-087), no overlap dance. *Fallback

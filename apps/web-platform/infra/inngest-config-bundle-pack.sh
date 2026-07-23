@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# inngest-config-bundle-pack.sh — deterministic packager for the ADR-133 pull-based
+# inngest-config-bundle-pack.sh — deterministic packager for the ADR-134 pull-based
 # signed config-refresh channel (#6780). CI-side PRODUCER; runs in the ephemeral GitHub
 # Actions runner (build-inngest-config-bundle.yml), never on the host.
 #

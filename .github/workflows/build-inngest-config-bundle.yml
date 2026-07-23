@@ -1,4 +1,4 @@
-# Build + keyless-sign + dual-publish the ADR-133 config-refresh bundle for the dedicated
+# Build + keyless-sign + dual-publish the ADR-134 config-refresh bundle for the dedicated
 # Inngest host (#6780). PRODUCER half of the pull-based in-place refresh channel.
 #
 # WHY workflow_dispatch (not push/PR): this is the PROMOTION-adjacent artifact producer, run
@@ -7,7 +7,7 @@
 # pre-cutover), so it is intentionally not on a PR trigger. The deterministic packaging LOGIC it
 # depends on is unit-tested off the critical path (inngest-config-bundle-pack.test.sh).
 #
-# TRUST MODEL (ADR-133):
+# TRUST MODEL (ADR-134):
 #   • Keyless cosign sign-blob over the manifest → the monotonic VERSION is a SIGNED field
 #     (HARD-2). The host reads VERSION only from the verified manifest, never from an OCI
 #     tag/annotation or the Doppler pointer.

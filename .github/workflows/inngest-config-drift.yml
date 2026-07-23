@@ -1,4 +1,4 @@
-# Off-box drift comparator EXECUTOR for the ADR-133 config-refresh channel (#6780, HARD-8 / AC19).
+# Off-box drift comparator EXECUTOR for the ADR-134 config-refresh channel (#6780, HARD-8 / AC19).
 #
 # Dispatched by the Inngest cron cron-inngest-config-drift.ts (dispatch-hybrid — the Better Stack
 # ClickHouse query creds live in Doppler soleur/prd_terraform, deliberately NOT on the app server).

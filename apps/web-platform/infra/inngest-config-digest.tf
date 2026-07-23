@@ -1,10 +1,10 @@
-# Promoted digest pointer for the ADR-133 pull-based signed config-refresh channel (#6780).
+# Promoted digest pointer for the ADR-134 pull-based signed config-refresh channel (#6780).
 #
 # INNGEST_CONFIG_DIGEST is the IMMUTABLE @sha256 digest of the currently-promoted,
 # keyless-signed config bundle. The dedicated Inngest host's config-refresh timer resolves
 # this pointer, pulls the bundle @sha256 GHCR-direct, cosign-verify-blobs it OFFLINE against
 # the baked trusted root, checks the per-file sha256 manifest + a monotonic VERSION read only
-# from the signed bytes, and applies atomically via infra-config-install.sh (ADR-133).
+# from the signed bytes, and applies atomically via infra-config-install.sh (ADR-134).
 #
 # This mirrors inngest-betterstack-token.tf (Approach B): a `doppler_secret` whose value comes
 # from a sensitive, no-default var sourced from Doppler soleur/prd_terraform — only the one
@@ -21,7 +21,7 @@
 # in the cloud-init consumer bake, which RIDES the #6178 cutover provision (PR #6348). Applying
 # THIS secret before that regex edit lands would brick the dedicated scheduler at its next
 # boot/replace. Therefore:
-#   • This file is COMMITTED now (ADR-133 producer/pointer foundation, this PR) but the resource
+#   • This file is COMMITTED now (ADR-134 producer/pointer foundation, this PR) but the resource
 #     is APPLIED at the #6178 cutover, ATOMICALLY with the cloud-init regex+floor edit that admits
 #     it (DEC-FLOOR: dark-present so the timer is armed from first boot).
 #   • Provisioning ORDER at cutover (do NOT skip): set the first-promoted digest in

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Tests for inngest-config-drift-compare.sh — the ADR-133 off-box drift comparator core
+# Tests for inngest-config-drift-compare.sh — the ADR-134 off-box drift comparator core
 # (#6780, HARD-8 / AC19). Hermetic; no network, no LLM, no prod writes. Registered in
 # .github/workflows/infra-validation.yml.
 #
