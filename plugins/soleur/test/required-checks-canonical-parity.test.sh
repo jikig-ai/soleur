@@ -342,4 +342,60 @@ else
 fi
 echo ""
 
+# --- Test 8: credential-path green is EARNED, not fabricated (#6882/ADR-139) --
+#
+# `credential-path-guard` is a required 15368 context, so the composite action
+# posts an unconditional green synthetic check-run for it on every bot PR. That
+# is sound ONLY because the action reproduces the scan over its own staged paths
+# first (the same earned-green pattern as the real gitleaks run).
+#
+# It canNOT rely on the FABRICATED-NOT-EARNED / unreachability argument used by
+# `rule-body-lint` (#6103) and `sentry-destroy-required` (#6589): those guard
+# surfaces sit OUTSIDE the action's ALLOWED_PATHS, whereas
+# lint-credential-path-literals.py scans tracked *.md under plugins/ and
+# knowledge-base/ — which INCLUDES knowledge-base/project/weakness-digest.md,
+# one of exactly two paths the action is allowed to write. ALLOWED_PATHS ∩
+# SCAN_DIRS is NON-empty, so deleting the preflight would fabricate a pass over
+# a reachable surface. This test is the enforcement teeth for that invariant.
+#
+# Anchors are syntactic (`^\s*run:\s*python3 …`), never a bare script name — the
+# action.yml comment block names the script too, and a mention-grep would pass
+# against a deleted preflight.
+
+echo "Test 8: action.yml EARNS the credential-path green (#6882 / ADR-139)"
+# `|| true` is load-bearing: this file runs under `set -euo pipefail`, so a
+# no-match grep inside a command substitution aborts the WHOLE suite before the
+# FAIL branch can print (and an early `head -1` close can SIGPIPE grep to 141).
+# The RED state must report a clean failure, not kill the runner.
+preflight_line=$(grep -nE '^[[:space:]]*run:[[:space:]]*python3[[:space:]]+scripts/lint-credential-path-literals\.py[[:space:]]+"\$\{PATHS\[@\]\}"' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
+postrun_line=$(grep -nE '^[[:space:]]*gh api "repos/\$\{REPO\}/check-runs"' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
+
+if [[ -n "$preflight_line" ]]; then
+  echo "  PASS: (8a) action.yml runs lint-credential-path-literals.py over \"\${PATHS[@]}\" (line $preflight_line)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (8a) action.yml does NOT reproduce the credential-path scan over its staged paths."
+  echo "        Without it the synthetic green for 'credential-path-guard' is FABRICATED over a"
+  echo "        REACHABLE surface (weakness-digest.md). See ADR-139 + scripts/required-checks.txt."
+  FAIL=$((FAIL + 1))
+fi
+
+# Non-vacuity: (8b) is meaningless if the check-run POST anchor stops resolving.
+if [[ -n "$postrun_line" ]]; then
+  echo "  PASS: (8c) non-vacuous — check-run POST anchor resolves (line $postrun_line)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (8c) could not locate the check-run POST — (8b) ordering check would be vacuous"
+  FAIL=$((FAIL + 1))
+fi
+
+if [[ -n "$preflight_line" && -n "$postrun_line" && "$preflight_line" -lt "$postrun_line" ]]; then
+  echo "  PASS: (8b) preflight runs BEFORE the synthetic check-run is posted ($preflight_line < $postrun_line)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (8b) preflight does not precede the synthetic check-run POST (preflight=$preflight_line post=$postrun_line)"
+  FAIL=$((FAIL + 1))
+fi
+echo ""
+
 print_results
