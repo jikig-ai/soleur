@@ -10,8 +10,15 @@
       "Bash(gh pr merge:*)"
     ],
     "deny": [
+      "Read(**/.aws/**)",
+      "Read(**/.config/gcloud/**)",
+      "Read(**/.docker/config.json)",
+      "Read(**/.doppler/**)",
       "Read(**/.env)",
       "Read(**/.env.*)",
+      "Read(**/.git-credentials)",
+      "Read(**/.netrc)",
+      "Read(**/.ssh/**)",
       "Read(**/lib/stripe.ts)"
     ]
   },

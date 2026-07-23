@@ -840,10 +840,19 @@ fi
 
 **This is a DENYLIST, and a denylist cannot be complete against a preserved `$HOME`.**
 It does NOT catch indirect invocation — `bash scripts/foo.sh` whose body self-wraps
-`doppler run -c prd`, a `curl --data-binary @~/.doppler/.doppler.yaml` exfiltration, or any
+`doppler run -c prd`, a `curl --data-binary @<doppler-config-file>` exfiltration, or any
 credentialed verb not listed. Those remain reachable and are accepted for now; the durable
 fix is an ALLOWLIST of probe verbs (curl/dig/getent/bun/bash), tracked separately. Do not
 describe this reject as though it closed the class.
+<!-- SECURITY (at-mention auto-attach footgun): the exfil example above uses the
+     PLACEHOLDER `<doppler-config-file>`, NOT a real resolvable path. Never write an
+     at-sign immediately followed by a real home/absolute path (tilde-slash,
+     dollar-HOME-slash, or a `/home` `/Users` `/root` `/etc` absolute) in ANY
+     skill/agent/doc that loads into agent context: Claude Code's @-mention auto-attach
+     resolves such a token to the real on-disk file and attaches its CONTENTS to the
+     transcript. Observed 2026-07-22 during PR #6830's ship — the prior literal here
+     resolved to the operator's live Doppler root token and auto-attached it. The guard
+     .github/scripts/test/test-no-at-mention-credfile-footgun.sh enforces this repo-wide. -->>
 
 The `(^|[[:space:]]|/)` … `([[:space:]]|$)` boundaries are load-bearing: the `/`
 alternative catches `/usr/local/bin/gh`, and the trailing boundary keeps legitimate
