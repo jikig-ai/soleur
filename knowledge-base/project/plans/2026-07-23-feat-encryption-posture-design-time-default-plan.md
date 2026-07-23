@@ -135,7 +135,7 @@ established form):
 Two independent blockers, both measured this session:
 
 1. **Budget.** `B_ALWAYS = 22900 / 23000` (≈100 bytes headroom). An index pointer line
-   (`- [id: hr-encryption-posture-default] → rest`) costs ≈50-60 bytes, leaving ≈40. `lint_union`
+   (a hypothetical `- [id: hr-<name>] → rest` line — illustrative shape, not a citation) costs ≈50-60 bytes, leaving ≈40. `lint_union`
    couples pointer↔body 1:1, so even a `rest`-class body still charges the always-loaded index.
    Landing at 40 bytes of slack means the next sibling PR trips `[REJECT]` and blocks every commit
    (the #5349 / #6138 failure mode).
@@ -895,7 +895,7 @@ Run live this session; all clean:
 
 - **Issues/PRs** — `#6588` OPEN, `#6604` CLOSED, `#6733` OPEN, `#6808` OPEN, `#6814` OPEN, `#6138` OPEN, `#4133` OPEN, `#6049` CLOSED, `#6103` CLOSED. The `#6049` attribution was checked against the artifact, not just the issue: `scripts/required-checks.txt` carries the literal header `⚠ AUTO-FABRICATION GUARD (#6049)`.
 - **Labels** — `type/security`, `domain/engineering`, `priority/p1-high`, `follow-through`, `code-review` all exist (`gh label list`).
-- **AGENTS rule IDs** — all 10 cited IDs resolve to active `[id: …]` entries in `AGENTS.md`; none appear in `scripts/retired-rule-ids.txt`. The one id-shaped token that did **not** resolve (`hr-encryption-posture-default`) was a *hypothetical* name in the rejected-alternatives table and has been rewritten so it no longer reads as a citation.
+- **AGENTS rule IDs** — all 10 cited IDs resolve to active `[id: …]` entries in `AGENTS.md`; none appear in `scripts/retired-rule-ids.txt`. The two id-shaped tokens that did **not** resolve were both *hypothetical* names for the rule this plan deliberately does not create (one in the rejected-alternatives table, one in the D4 byte-cost illustration); both were rewritten to a placeholder shape, so the plan now passes the sweep with zero unresolved tokens.
 - **ADR ordinal** — derived from a **freshly fetched** `origin/main` (`git fetch origin main` then `git ls-tree --name-only origin/main …decisions/`) → max is **ADR-138**, so **139** is correct as of this session. Still provisional.
 - **`knowledge-base/` paths** — every `.md` citation in this plan resolves on disk except the four this plan creates.
 
