@@ -27,6 +27,7 @@
 // event-only carve-out in hasCronTrigger first (else it would auto-fire this
 // human-gated routine).
 export const EXPECTED_CRON_FUNCTIONS: string[] = [
+  "cron-action-required-sla",
   "cron-agent-native-audit",
   "cron-anthropic-cost-report",
   "cron-anthropic-credit-probe",
