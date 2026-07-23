@@ -10,6 +10,22 @@ requires_cpo_signoff: false
 
 > Spec lacks valid `lane:` (no spec.md for this branch) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-23 · **Scope:** doc-only, single learning file (lean pass — no 40-agent fan-out, which would be over-process for a one-file doc capture).
+
+**Deepen-plan halt gates — all pass:**
+- 4.6 User-Brand Impact: present, threshold `none` + scope-out reason. Files touch no sensitive path.
+- 4.7 Observability: pure-docs (all Files under `knowledge-base/`) → skip.
+- 4.8 PAT-shaped variable: none. 4.9 UI-wireframe / 4.5 network / 4.55 downtime: no triggers.
+
+**Live-verified citations (deepen quality checks):**
+- Sibling learning `2026-07-20-terraform-plan-cannot-see-what-a-whole-list-resource-destroys.md` — confirmed present at repo root.
+- `ship/SKILL.md` Phase 6.5 "'No failures' and 'the checks ran' are different claims" — confirmed.
+- Learnings-corpus frontmatter shape — cross-checked against recent root learnings.
+
+**Load-bearing finding carried into the learning (see Research Reconciliation):** the source framing that ship/postmerge poll loops "already carry the `--limit`/floor-guard mitigation" is imprecise. Verified: no `KNOWN_TOTAL`/floor guard exists anywhere in `ship` or `postmerge`; the poll loops are immune because they poll **by run-ID / `headSha`-identity**, not by counting a capped list. Ship Phase 7 Step 2's completion-**count** is a latent same-class instance (documented as an out-of-scope follow-up candidate). The learning encodes the verified statement, not the original phrasing.
+
 ## Overview
 
 Issue #6796 asks to land a single learning file capturing a completion-monitor
