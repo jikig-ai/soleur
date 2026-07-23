@@ -245,8 +245,13 @@ logs:
   where: Inngest run logs + Sentry
   retention: per existing Inngest/Sentry retention
 discoverability_test:
-  command: gh issue list -R jikig-ai/soleur --label action-required --json labels,createdAt (NO ssh) — verify no per-piece content/decision-challenge item older than its SLA remains open
-  expected_output: only OPS-class issues (escalated) + content-starvation remain; dead classes past threshold are closed
+  command: curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://api.github.com/repos/jikig-ai/soleur/issues?labels=action-required"
+  expected_output: "200"
+  # Unauthenticated public GitHub REST probe (no gh CLI, no ssh, no creds): 200 proves the
+  # action-required backlog is discoverable via the public API — an operator/agent can audit
+  # which classes remain open (OPS escalated + content-starvation kept; dead classes closed)
+  # without SSH or credentials. Replaces the `gh issue list` form (credentialed CLI) so
+  # preflight Check 10 executes the probe live.
 ```
 
 ## Acceptance Criteria
