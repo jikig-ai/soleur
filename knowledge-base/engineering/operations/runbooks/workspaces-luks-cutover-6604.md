@@ -39,14 +39,21 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    device as an idempotent no-op, so it re-opens the OLD header and serves stale data — it does **not**
    `luksFormat`. Make the volume genuinely fresh first (this **destroys** the orphaned volume — an
    irreversible, operator-accepted discard of the stranded window):
-   `gh workflow run apply-web-platform-infra.yml -f apply_target=workspaces-luks-recut -f confirm=RECUT-WORKSPACES-LUKS -f reason='#6812 re-cut fresh target'`
+   First read the orphaned volume's Hetzner id from the latest `terraform-drift` run's
+   `hcloud_volume.workspaces_luks: Refreshing state... [id=<ID>]` line (e.g. `106406962`). Then:
+   `gh workflow run apply-web-platform-infra.yml -f apply_target=workspaces-luks-recut -f confirm=RECUT-WORKSPACES-LUKS -f expected_luks_volume_id=<ID> -f reason='#6812 re-cut fresh target'`
    The `workspaces-luks-cutover` **environment reviewer must approve** (the sole authorization; the
-   typed `confirm` is only a typo-guard). The sourced `workspaces_luks_recut_gate` aborts unless the
-   plan is exactly `{volume REPLACE + attachment CREATE}` with the live plaintext volume/attachment +
-   web-1 + the passphrase all untouched (the passphrase is **reused**, never re-minted). No
-   `[ack-destroy]` bypass. After it runs, the volume is a raw replacement with the same name, so Step 2
-   onward proceeds normally — the cutover resolves it by name and hits the raw→`luksFormat` arm. Zero
-   downtime (the live plaintext keeps serving throughout).
+   typed `confirm` and `expected_luks_volume_id` are typo/id guards, not the authorization). The
+   sourced `workspaces_luks_recut_gate` aborts unless the plan is exactly `{volume REPLACE + attachment
+   CREATE}` with the live plaintext volume/attachment + web-1 + the passphrase all untouched (the
+   passphrase is **reused**, never re-minted) **and the replaced volume's id equals `<ID>`** — a
+   `luks_id_mismatch=1` means the `workspaces_luks` address resolves to a DIFFERENT physical volume than
+   you named (state corruption); STOP and reconcile state. No `[ack-destroy]` bypass. After it runs, the
+   volume is a raw replacement with the same name, so Step 2 onward proceeds normally — the cutover
+   resolves it by name and hits the raw→`luksFormat` arm. Zero downtime (the live plaintext keeps
+   serving throughout). **If the apply fails mid-replace** (destroy-before-create leaves the volume out
+   of state), just re-dispatch with the same inputs — the gate's recovery arm accepts the bare create
+   that a re-dispatch then plans, completing the raw-volume create.
 
 1. **Provision the encrypted volume (additive, zero downtime).** *(FIRST cutover only — skip if you
    ran Step 0, which already leaves the five resources in state.)*

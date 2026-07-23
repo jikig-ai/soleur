@@ -703,8 +703,18 @@ the raw→`luksFormat` arm, `mkfs`, and copies from the authoritative live plain
 operation.
 
 **Invariants (enforced by `tests/scripts/lib/workspaces-luks-recut-gate.sh`, mutation-tested):**
-- The plan is EXACTLY `{volume REPLACE (delete AND create) + attachment CREATE}` — a bare create or
-  bare delete/forget aborts.
+- The plan is EXACTLY `{volume REPLACE (delete AND create) + attachment CREATE}` — a bare
+  delete/forget or an update-in-place aborts.
+- **Recovery arm (arch review P2):** because the volume has no `create_before_destroy`, a `-replace`
+  is destroy-before-create, so an apply that fails between the delete and the create strands the
+  volume out of state. A re-dispatch then plans a bare create (`before == null`); the gate accepts
+  that recovery shape (a fresh empty volume touches no live data), so the operator auto-recovers by
+  re-dispatching rather than hand-editing terraform state (`hr-exhaust-all-automated-options`).
+- **Id-pin (user-impact review P2):** the operator supplies `expected_luks_volume_id` (the orphaned
+  volume's Hetzner id); the gate asserts the *replaced* volume's `before.id` equals it, so a state
+  corruption that mapped the `workspaces_luks` ADDRESS onto the LIVE volume's physical id cannot
+  silently destroy live data even though every address-based counter reads 0. Skipped for the
+  recovery bare create (`before == null` — nothing to destroy).
 - The LIVE plaintext volume (`hcloud_volume.workspaces["web-1"]`, id `105149570`), its attachment,
   and the web-1 server carry **zero** actions.
 - **The passphrase is REUSED, never re-minted** — any create/update/delete/forget on
