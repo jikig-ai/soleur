@@ -302,6 +302,13 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-counter-github" bash tests/scripts/test-destroy-guard-counter.sh
   run_suite "tests/scripts/destroy-guard-counter-sentry" bash tests/scripts/test-destroy-guard-counter-sentry.sh
   run_suite "tests/scripts/destroy-guard-counter-web-platform" bash tests/scripts/test-destroy-guard-counter-web-platform.sh
+  # Pre-apply entrypoint gate (#6767 / ADR-136). Registered HERE for the same
+  # reason as the destroy-guard trio above: nothing auto-discovers tests/scripts/
+  # (the bash *.test.sh glob further down covers only scripts/lib/*.test.sh etc.,
+  # NOT tests/scripts/test-*.sh), so an unregistered suite is an ORPHAN that gates
+  # nothing. This suite proves the fail-closed gate that stands between a
+  # whole-list ruleset create and a clobbered live dashboard entrypoint.
+  run_suite "tests/scripts/preapply-entrypoint-gate" bash tests/scripts/test-preapply-entrypoint-gate.sh
   # host image/apply coherence preflight (AC10b) — drives the standalone preflight
   # via its test seams (no docker/network/prod write). Registered here alongside
   # the destroy-guard trio: it is the host-agnostic coherence verifier the
@@ -321,6 +328,7 @@ if want_scripts; then
   # /mnt/data volume/attachment or the web-1 server, any passphrase re-mint, any destroy/forget,
   # or anything out of scope. Registered HERE — nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/workspaces-luks-cutover-gate" bash tests/scripts/test-workspaces-luks-cutover-gate.sh
+  run_suite "tests/scripts/workspaces-luks-recut-gate" bash tests/scripts/test-workspaces-luks-recut-gate.sh
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
@@ -378,6 +386,11 @@ fi
 if want_bun; then
   run_suite "plugins/soleur" bun test plugins/soleur/
   run_suite "blog-link-validation" bash scripts/validate-blog-links.sh
+  # frontmatter-strip three-way parity (#6794). The suite ALSO matches the
+  # scripts-shard `scripts/lib/*.test.sh` glob below, but that shard has no bun,
+  # so its strip.ts arm skip-gates there. Registering it here (bun guaranteed)
+  # is what actually exercises strip.ts == strip.py == strip.sh in CI.
+  run_suite "scripts/frontmatter-strip-parity" bash scripts/lib/frontmatter-strip.test.sh
 fi
 
 # Bash *.test.sh glob — scripts shard. (ci-deploy.test.sh runs in infra-validation.yml.)

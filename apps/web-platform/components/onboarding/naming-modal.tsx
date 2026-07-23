@@ -54,7 +54,7 @@ export function NamingOnboardingModal({
                 onChange={(e) => handleChange(leader.id, e.target.value)}
                 placeholder="Enter a name..."
                 maxLength={30}
-                className="w-40 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2/50 px-3 py-2 text-sm text-soleur-text-primary placeholder-soleur-text-muted outline-none transition-colors focus:border-soleur-border-emphasized"
+                className="w-40 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2/50 px-3 py-2 text-base text-soleur-text-primary placeholder-soleur-text-muted outline-none transition-colors focus:border-soleur-border-emphasized md:text-sm"
               />
             </div>
           ))}

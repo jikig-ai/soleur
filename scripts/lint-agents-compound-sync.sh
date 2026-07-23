@@ -24,12 +24,13 @@
 #    asserting agreement will drift; this loop is what makes the drift loud.
 #
 #    UNIT (load-bearing -- do not drop from the diagnostics): the linter's
-#    thresholds are defined over FRONTMATTER-STRIPPED bytes. Some consumers
-#    measure RAW file length instead, which currently runs ~73 B higher. This
-#    guard asserts CONSTANT equality, not MEASUREMENT-BASIS equality, so the
-#    diagnostics name the unit explicitly. A green guard that stays silent about
-#    the unit would quietly certify a comparison performed in the wrong basis --
-#    worse than no guard, because it retires the suspicion that would catch it.
+#    thresholds are defined over FRONTMATTER-STRIPPED bytes, and every
+#    measurement consumer (the cron, compound-promote.sh) now measures on that
+#    SAME stripped basis too (#6794 — via the strip.ts / strip.sh contract). The
+#    previously-documented raw-vs-stripped skew is CLOSED; the comparison is
+#    unit-exact. This guard still asserts CONSTANT equality (not measurement
+#    basis), so the diagnostics name the unit to keep the basis explicit rather
+#    than implied.
 #
 # Symbol-anchored, never line-anchored, per `cq-cite-content-anchor-not-line-number`.
 #
@@ -143,14 +144,13 @@ SITES=(
   "knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md|reject above .([0-9]+).|REJECT"
 )
 
-# The linter measures FRONTMATTER-STRIPPED bytes; some consumers (the cron,
-# compound-promote.sh) measure RAW file length, which is structurally >= stripped.
-# So a raw-vs-stripped comparison refuses slightly EARLIER than the commit gate --
-# the fail-safe direction. This guard asserts CONSTANT equality, not
-# measurement-basis equality, so the diagnostic names the unit rather than
-# implying the two bases agree. (No magnitude here: the exact gap is the current
-# frontmatter size and drifts; the DIRECTION is the invariant.)
-UNIT_NOTE="raw file length is structurally >= the linter's frontmatter-stripped basis, so a raw consumer refuses no later than the gate"
+# The linter measures FRONTMATTER-STRIPPED bytes, and both measurement consumers
+# (the cron, compound-promote.sh) now measure on that SAME stripped basis (#6794
+# — via the strip.ts / strip.sh frontmatter-strip contract). The comparison is
+# unit-exact; the previously-documented raw-vs-stripped skew is closed. This
+# guard asserts CONSTANT equality (not measurement basis), so the diagnostic
+# names the unit to keep the basis explicit.
+UNIT_NOTE="all measurement consumers measure on the linter's frontmatter-stripped basis (#6794) — unit-exact, no skew"
 
 if [[ -n "$EXPECT_WARN" && -n "$EXPECT_REJECT" && -n "$EXPECT_CAP" ]]; then
   for spec in "${SITES[@]}"; do

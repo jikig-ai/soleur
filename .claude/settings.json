@@ -12,7 +12,14 @@
     "deny": [
       "Read(**/.env)",
       "Read(**/.env.*)",
-      "Read(**/lib/stripe.ts)"
+      "Read(**/lib/stripe.ts)",
+      "Read(~/.aws/**)",
+      "Read(~/.config/gcloud/**)",
+      "Read(~/.docker/config.json)",
+      "Read(~/.doppler/**)",
+      "Read(~/.git-credentials)",
+      "Read(~/.netrc)",
+      "Read(~/.ssh/**)"
     ]
   },
   "env": {
