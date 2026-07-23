@@ -170,7 +170,14 @@ run_case() {
         if [ "${1:-}" = "show" ]; then printf "%s\n" "${STOP_RESULT:-success}"; fi
         return 0
       }
-      docker()  { rec "docker $*"; return 0; }
+      docker()  {
+        rec "docker $*"
+        # readyz now probes via `docker exec <container> curl ...` (bridge-topology
+        # peer-gate fix). Delegate that shape to the curl() stub so the readyz body/
+        # code fixtures still drive; every other docker call records + no-ops.
+        if [ "${1:-}" = exec ] && [ "${3:-}" = curl ]; then shift 2; "$@"; return; fi
+        return 0
+      }
       mount()   { rec "mount $*"; return "${MOUNT_RC:-0}"; }
       umount()  {
         rec "umount $*"
@@ -532,6 +539,18 @@ case "$*" in
     fi ;;
   *) : ;;
 esac
+exit 0
+STUB
+  # readyz now probes via `docker exec <container> curl ...` (bridge-topology peer-gate
+  # fix). Record the docker call and, for the exec-curl shape, delegate to the sibling
+  # $d/bin/curl PATH stub (mon_run puts $d/bin first on PATH) so the readyz fixtures drive.
+  cat > "$d/bin/docker" <<'STUB'
+#!/usr/bin/env bash
+printf 'docker %s\n' "$*" >> "$CALLS"
+if [ "${1:-}" = exec ] && [ "${3:-}" = curl ]; then
+  shift 2
+  exec "$@"
+fi
 exit 0
 STUB
   cat > "$d/bin/logger" <<'STUB'
