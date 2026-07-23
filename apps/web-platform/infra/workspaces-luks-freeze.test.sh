@@ -261,7 +261,10 @@ hasF '/internal/readyz' \
 # curl of the bridge-published port reaches the app with the docker bridge gateway as its peer → 403
 # (readyz_gate_regression) → app_canary can never pass. Anchor on the FULL transport, per
 # cq-assert-anchor-not-bare-token: a silent revert to a bare host curl (which still probes readyz and
-# would satisfy T22) must red HERE.
+# would satisfy T22) must red HERE. The container literal `soleur-web-platform` is asserted
+# DELIBERATELY (not wildcarded) — it locks that the probe targets the RIGHT container and reds on an
+# incomplete rename. SIBLING: luks-monitor.test.sh (n2) covers the OTHER consumer (daily monitor)
+# through the OTHER docker stub (the $d/bin/docker PATH-stub form).
 hasF 'docker exec soleur-web-platform curl' \
   && ok "T22d app_canary probes readyz via docker exec into the container (genuine-loopback peer, not the bridge gateway)" \
   || no "T22d app_canary readyz probe is a bare host curl — in prod the bridge-gateway peer gets 403 and the cutover can never certify"

@@ -97,8 +97,14 @@ the host over the CF-tunnel bridge and runs `luks-monitor.sh`. So the fix is **c
 blocked → their source code (sole-copy, no durable second copy — model.c4:186) remains **PLAINTEXT at
 rest** while the published privacy policy claims LUKS, and the daily/verify **encryption-at-rest
 certification cannot pass** (no ground-truth that the live volume is a LUKS mapper serving user data).
-A subtly-wrong fix (wrong container name, curl-absent path) fails **closed** — the probe 000-loops and
-blocks the cutover, keeping plaintext-at-rest, rather than certifying green falsely.
+A subtly-wrong fix fails **closed** rather than certifying green falsely: a container-name that
+resolves to NO container, a down container, or a curl-absent image all make `docker exec` exit
+non-zero → code 000 → `readyz_unreachable` → the probe deadlines and blocks the cutover, keeping
+plaintext-at-rest. The one branch that is NOT 000-fail-closed by itself — a name resolving to a
+DIFFERENT running container that answers `ready:true` — is closed in prod by the **pinned constant**
+(`WL_READYZ_CONTAINER:=soleur-web-platform`, matching `ci-deploy.sh --name`, not runtime-derived) AND
+the `-canary` container being torn down before `app_canary` probes, so the probe can only ever reach
+the one container serving the mount under certification.
 
 **If this leaks, the user's workspace confidentiality is exposed via:** `/internal/readyz` returns host
 **mount/topology state** (`workspaces_writable`, `workspaces_populated`, cluster-shape) that is

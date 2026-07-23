@@ -207,6 +207,11 @@ fi
 # host-side curl of the bridge-published port reaches the app with the docker bridge gateway as its
 # peer → 403 (readyz_gate_regression). Anchor on the FULL transport (cq-assert-anchor-not-bare-token):
 # a revert to bare host curl still satisfies (n) above but must red here.
+# The container literal `soleur-web-platform` is asserted DELIBERATELY, not wildcarded: it locks that
+# the probe targets the RIGHT container (a wrong-but-running container answering ready:true is a
+# false-green vector — see the pinned-constant mitigation), and reds loudly on an incomplete rename.
+# SIBLING: workspaces-luks-freeze.test.sh T22d covers the OTHER consumer (cutover app_canary) through
+# the OTHER docker stub (the docker() shell-function form) — both delegations need independent cover.
 if has 'docker exec soleur-web-platform curl'; then
   ok "flag set: readyz is probed via docker exec into the container (genuine-loopback peer, not the bridge gateway)"
 else

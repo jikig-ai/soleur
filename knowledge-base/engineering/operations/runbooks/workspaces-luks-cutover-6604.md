@@ -151,7 +151,7 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    | `rc=3` `readyz_not_ready`, healthy `rw` mount, space free, `writable=true`, `populated=false` | The mount is writable but empty | Data-recovery incident on sole-copy data — halt and escalate |
    | `rc=3` `readyz_gate_regression` | 307/401/403/404/405 — loopback gate or route regression | **Probe-integrity/routing bug. NOT data loss**, despite the endpoint being about the mount |
    | `rc=3` `readyz_unparseable` | Proxy error page / truncated body | Transport or proxy fault. Not data loss |
-   | `rc=3` `readyz_unreachable` | `/internal/readyz` gave no response for the whole budget | Container still coming up, or the port moved. Not (yet) a data finding — re-dispatch |
+   | `rc=3` `readyz_unreachable` | `/internal/readyz` gave no response for the whole budget | Container still coming up, or the port moved. Since the probe runs as `docker exec soleur-web-platform curl …` (#6812 — bridge-gateway peer 403 fix), this ALSO covers the transport failing: container not running, wrong `WL_READYZ_CONTAINER`, or `curl` absent from the image (each → code 000, fail-closed). Not (yet) a data finding — re-dispatch |
    | `rc=3` `workspace_count_shortfall` | Fewer workspaces than the baseline | **Data-recovery incident on sole-copy data.** Halt and escalate. Do not wipe anything |
    | `rc=3` `workspace_count_baseline_missing` | No baseline persisted (or a `0`/non-numeric one) | Seed it once (above). Fail-closed by design |
    | `rc=3` `workspace_count_unreadable` | The workspaces root could not be listed | Permission/IO fault on the root. Not a shrink; fix perms and re-dispatch |
