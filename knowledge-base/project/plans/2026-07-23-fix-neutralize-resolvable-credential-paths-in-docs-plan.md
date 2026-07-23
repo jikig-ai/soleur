@@ -12,6 +12,21 @@ lane: cross-domain
 
 > **Self-referential hygiene note (load-bearing):** this plan, its spec, and its tasks are themselves tracked docs that load during `/work`. They therefore contain **no** home-relative-resolvable credential-file path and **never** the bare Doppler config filename. Credential files are named descriptively or via a directory-only form (e.g. `~/.doppler/`, which is a directory, not a resolvable file). Do not "helpfully" expand any of these to a full path while editing — that reintroduces the exact trigger this plan removes.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-23 (headless one-shot pipeline; gate-verification + realism passes + architecture/spec-flow/simplicity review lenses applied directly — no sub-agent fan-out available in this context).
+
+**Mandatory deepen-plan gates:** 4.6 User-Brand Impact ✅ (`single-user incident`), 4.7 Observability ✅ (5 fields, no-ssh discoverability), 4.8 PAT-shaped-var ✅ (none), 4.9 UI-wireframe — skipped (non-UI), 4.5 Network-Outage — skipped (no SSH trigger in Overview/Problem/Hypotheses; the incidental "SSH private keys" mention is in Implementation Phases only), 4.55 Downtime — skipped (no serving-surface offline op).
+
+**Key improvements from the deepen pass:**
+1. **Precedent-diff confirmed exactly** — `scripts/lint-infra-no-human-steps.py` already implements the full-scan-default + `--changed`/`--base` merge-base grandfathering + `*.md`-under-SCAN_DIRS-minus-archive shape the guard needs (verified: its `--changed`/`--base` argparse + `SCAN_DIRS` rglob at lines 51-52, 378-398, 405-441). The guard is a near-clone with a different regex table — low novelty, high confidence.
+2. **Scope-completeness closed for the Doppler class** — the only carriers of the Doppler credential path under `plugins/`+`knowledge-base/` are `preflight/SKILL.md` (Phase 1) and the two `.ts` files (Phase 2, manual). After this PR, zero carriers remain in the touched surface; the `.md`-scoped guard prevents reintroduction and the existing preflight mirror-test keeps the two `.ts` strings honest. So the `.md`-only scope does not leave a Doppler-class gap.
+3. **Simplicity finding folded** — the advisory (`/home/<user>/`, `/root/`) tier is explicitly optional for v1 (see Phase 3). The load-bearing MVP is the single hard-fail tier over home-relative + bare-Doppler-config forms; shipping advisory-tier is a documented enhancement, not a v1 requirement.
+
+**New considerations discovered:**
+- **Residual non-`.md` surface:** the guard scans `.md` only. `.yml`/`.sh`/`.njk` under `plugins/`+`knowledge-base/` are not scanned; today none carry a home-relative Doppler cred path (verified), but a future one could. Documented as a known limitation + optional guard extension.
+- **Bare-Doppler-config false-positive risk:** flagging the bare Doppler config filename may catch a legitimate reference to the root project-pointer config; those get neutralized to prose ("the root Doppler project-pointer"). Low volume, acceptable.
+
 ## Overview
 
 Claude Code's harness auto-attaches a file into model context when a **locally-resolvable filesystem path to an existing file** appears in loaded skill/doc prose (rendered to the model as a "Read tool result"). `plugins/soleur/skills/preflight/SKILL.md` Check 10 — the credentialed-CLI reject prose — writes the literal home-relative path to the operator's live Doppler CLI config at four sites. Because the preflight skill loads **on every ship**, the harness resolved that path and read the operator's real `dp.ct.*` Doppler token into 9 separate session transcripts. This is not an external attacker and not a rogue hook/MCP — the skill's own security prose (warning that commands must not read credential files) is what caused the credential file to be read. The token has already been rotated by the operator.
@@ -74,7 +89,7 @@ Model on `scripts/lint-infra-no-human-steps.py` (structure, arg surface, `--chan
   - **netrc / git-credentials:** `~/` + the netrc / git-credentials home-dotfile names.
   - **AWS / gcloud / Docker:** the credential filename **only under its credential dir** (`~/.aws/`, `~/.config/gcloud/`, `~/.docker/`) — because those filenames (`credentials`, `credentials.db`, `config.json`) are generic and must never match bare.
   - Same set under the `$HOME/` prefix.
-- **Advisory class (report-only, not a hard fail):** the identical credential filenames under a hardcoded `/home/<user>/` or `/root/` prefix — surfaced in output but not gating, because these are overwhelmingly remote-host runbook documentation, not a local-load trigger. (Deepen-plan/review may promote to hard-fail if the false-positive population is empty.)
+- **Advisory class (report-only — OPTIONAL for v1):** the identical credential filenames under a hardcoded `/home/<user>/` or `/root/` prefix — surfaced in output but not gating, because these are overwhelmingly remote-host runbook documentation, not a local-load trigger. **The load-bearing MVP is the single hard-fail tier above** (home-relative + bare Doppler config); the advisory tier may be deferred to keep v1 simple (a single-tier guard is easier to reason about and cannot false-fail). If shipped, it is strictly report-only.
 - **Modes:** repo-wide (default; used by the unit test + manual runs) and `--changed --base <ref>` (used by CI — grandfathers untouched historical docs, exactly like `lint-infra-no-human-steps`).
 - **Output on a hard-fail match:** file, line, the matched literal, and the neutralization recipe ("describe the file without a resolvable path, e.g. `the Doppler CLI config under ~/.doppler/`"); exit non-zero.
 
@@ -178,6 +193,29 @@ discoverability_test:
   command: "bash scripts/lint-credential-path-literals.test.sh"
   expected_output: "all fixtures pass (positive fixture exits non-zero; neutralized fixtures exit zero); suite reports OK"
 ```
+
+## Risks & Mitigations (deepen synthesis)
+
+**Precedent diff (4.4 — pattern-bound behavior):** the guard is modeled on `scripts/lint-infra-no-human-steps.py`, which establishes the canonical shape for a Python doc-scanner gate in this repo:
+
+| Dimension | `lint-infra-no-human-steps.py` (precedent) | `lint-credential-path-literals.py` (this plan) |
+|---|---|---|
+| Scan target | `*.md` under `SCAN_DIRS`, minus `**/archive/**` | same (`plugins/**` + `knowledge-base/**`) |
+| Full-scan default | yes | yes (used by unit test + manual) |
+| `--changed --base` grandfathering | yes (merge-base diff) | yes (identical CLI + CI wiring) |
+| CI wiring | step in `lint-bot-statuses` job (`fetch-depth: 0`) | same job, adjacent step |
+| Match engine | regex table over doc lines | regex table over doc lines (credential-path class) |
+
+No novel mechanism is introduced — only the regex table differs. `lint-trap-tempfile-ownership.py` supplies the secondary precedent for a security-hygiene ratchet, if a highwater baseline is ever preferred over changed-files grandfathering (not needed here).
+
+**Review-lens findings (architecture / spec-flow / simplicity, applied directly):**
+- **Architecture (scope precision):** the home-relative-hard-fail vs remote-host-advisory split is the correct expression of the root cause (local resolvability), not an arbitrary cut. Residual risk: the `.md`-only scope; mitigated because the only current non-`.md` carriers are the two `.ts` files handled in Phase 2, and the existing preflight mirror-test keeps them honest.
+- **Spec-flow (proxy-vs-invariant):** the CI invariant ("no resolvable path in touched docs") is a *proxy* for the true goal ("no future auto-attach"), which is harness behavior CI cannot exercise — this is stated honestly in Verification Limitation. The invariant is non-vacuous by the positive-fixture AC. The `.md`-scope→Doppler-outcome gap is closed (verified: zero non-`.md` `.md`-scope-invisible Doppler carriers remain after Phase 2).
+- **Simplicity (YAGNI):** the advisory tier is marked optional for v1 (Phase 3); the hard-fail home-relative + bare tier is the MVP. Runtime-synthesized fixtures (Phase 4) avoid committing a trigger literal.
+
+**Scoped-out (with rationale):**
+- Extending the guard to `.yml`/`.sh`/`.njk` source string-literals — deferred; today none carry a home-relative Doppler cred path (verified), and code legitimately references paths (false-positive risk). Revisit if a non-`.md` carrier appears.
+- Sweeping the ~26 grandfathered historical docs in this PR — deferred to the Phase-6 consolidated follow-up per the "sweep-if-cheap-else-follow-up" mandate; the changed-files guard forces neutralization on next edit of any of them.
 
 ## Sharp Edges
 
