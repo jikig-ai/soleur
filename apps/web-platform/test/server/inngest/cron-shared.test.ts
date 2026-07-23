@@ -215,6 +215,16 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-domain-model-drift")).toBe(false);
   });
 
+  it("cron-inngest-config-drift is live — not Tier-2 deferred (#6780)", () => {
+    // New dispatch-hybrid drift cron (ADR-135, event-only/dormant) added to
+    // EXPECTED_CRON_FUNCTIONS in #6839; it is not a deferred Tier-2 cron (the
+    // set is retired/empty). Asserted here so the sibling-set sweep sees this
+    // dependent was updated in lockstep with the cron-manifest change — the
+    // assertion that landed on the branch as c67751de5 but missed the #6839
+    // squash-merge (non-required sweep check).
+    expect(TIER2_DEFERRED_CRONS.has("cron-inngest-config-drift")).toBe(false);
+  });
+
   it("cron-ghcr-token-minter is live — not Tier-2 deferred (#6031)", () => {
     // The GHCR installation-token minter does NO git operations (it mints a
     // token and writes to Doppler), so it needs no CRON_BASH_ALLOWLISTS entry and
