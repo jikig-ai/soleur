@@ -46,10 +46,6 @@ import {
 } from "./_cron-shared";
 import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
-// #6794: third byte-identical impl of the frontmatter-strip contract (SPEC.md /
-// #5999 / ADR-094). Imported here so the always-loaded byte budget is measured
-// on the SAME frontmatter-stripped basis the commit gate uses.
-import { stripFrontmatter } from "../../../../../scripts/lib/frontmatter-strip/strip";
 
 // =============================================================================
 // Constants
@@ -94,6 +90,29 @@ const MAX_ALWAYS_LOADED_BYTES = 23000;
 // next promotion and for hand-authored rules. Binding this to the reject ceiling
 // would let a cluster land at exactly the cap and pin the registry there.
 const PROPOSE_ALWAYS_LOADED_BUDGET = 20000;
+
+// #6794 (inlined per #6860): the frontmatter-strip contract
+// (scripts/lib/frontmatter-strip/SPEC.md; parity-pinned across strip.sh/py/ts by
+// scripts/lib/frontmatter-strip.test.sh). Inlined here rather than imported from
+// repo-root scripts/ because the Next.js Docker build context copies only
+// apps/web-platform/ (+ the vendored plugin), NOT repo-root scripts/ — a
+// cross-root import compiles under a local `next build` (full repo present) but
+// fails the containerized build with "Module not found: ../../../../../scripts/…".
+// This body is byte-identical in behavior to strip.py/strip.ts; keep it in
+// lockstep with SPEC.md (a ~6-line startsWith/split, near-zero drift surface).
+function stripFrontmatter(text: string): string {
+  if (!text.startsWith("---\n")) {
+    return text;
+  }
+  const lines = text.split("\n");
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i] === "---") {
+      return lines.slice(i + 1).join("\n");
+    }
+  }
+  // Opening delimiter with no close — malformed; consume everything (over-strip).
+  return "";
+}
 
 // #6794: measure the always-loaded (AGENTS.md + AGENTS.core.md) payload on the
 // SAME basis as the commit gate's authority (scripts/lint-agents-rule-budget.py):
