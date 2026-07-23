@@ -43,6 +43,7 @@ export function PwaControls() {
       if (!dismissed) setShowIosCard(true);
     }
 
+    let cancelled = false;
     const cleanups: Array<() => void> = [];
 
     // Update lifecycle: watch for a waiting worker + reload once when it takes
@@ -51,7 +52,12 @@ export function PwaControls() {
       cleanups.push(reloadOnControllerChange());
       navigator.serviceWorker.ready
         .then((registration) => {
-          cleanups.push(watchForUpdate(registration, (worker) => setWaiting(worker)));
+          // If the effect already cleaned up before `ready` resolved, do not
+          // register a listener whose unsubscribe would be orphaned — tear it
+          // down immediately instead.
+          const unsub = watchForUpdate(registration, (worker) => setWaiting(worker));
+          if (cancelled) unsub();
+          else cleanups.push(unsub);
         })
         .catch(() => {
           // Non-fatal: no SW → no update affordance.
@@ -66,15 +72,16 @@ export function PwaControls() {
       ),
     );
 
-    return () => cleanups.forEach((fn) => fn());
+    return () => {
+      cancelled = true;
+      cleanups.forEach((fn) => fn());
+    };
   }, []);
 
   if (standalone) return null;
 
   const showUpdate = waiting !== null && !updateDismissed;
   const showInstall = installPrompt !== null;
-
-  if (!showUpdate && !showInstall && !showIosCard) return null;
 
   async function handleInstall() {
     if (!installPrompt) return;
@@ -97,14 +104,17 @@ export function PwaControls() {
   }
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40 flex flex-col items-center gap-2 px-4">
+    <div
+      aria-live="polite"
+      className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40 flex flex-col items-center gap-2 px-4"
+    >
       {showUpdate && (
         <div className="pointer-events-auto flex items-center gap-3 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-4 py-2 shadow-lg">
           <span className="text-sm text-soleur-text-primary">Update available</span>
           <button
             type="button"
             onClick={handleReload}
-            className="min-h-8 rounded-md bg-soleur-accent-gold-fill px-3 py-1 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
+            className="min-h-11 rounded-md bg-soleur-accent-gold-fill px-3 py-1 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
           >
             Reload
           </button>
@@ -112,7 +122,7 @@ export function PwaControls() {
             type="button"
             aria-label="Dismiss update notice"
             onClick={() => setUpdateDismissed(true)}
-            className="flex min-h-8 min-w-8 items-center justify-center rounded-md text-soleur-text-muted hover:text-soleur-text-primary"
+            className="flex min-h-11 min-w-11 items-center justify-center rounded-md text-soleur-text-muted hover:text-soleur-text-primary"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M18 6 6 18M6 6l12 12" />
@@ -144,7 +154,7 @@ export function PwaControls() {
             type="button"
             aria-label="Dismiss install guidance"
             onClick={dismissIosCard}
-            className="flex min-h-8 min-w-8 shrink-0 items-center justify-center rounded-md text-soleur-text-muted hover:text-soleur-text-primary"
+            className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-soleur-text-muted hover:text-soleur-text-primary"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M18 6 6 18M6 6l12 12" />

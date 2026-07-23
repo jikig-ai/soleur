@@ -74,6 +74,16 @@ describe("isIos / isIosSafari", () => {
     expect(isIos()).toBe(false);
     expect(isIosSafari()).toBe(false);
   });
+
+  test("iOS in-app webview (Safari token but no Version/) is iOS but NOT iOS Safari (no Share→A2HS)", () => {
+    // WKWebView in-app browsers (LinkedIn, Line, etc.) carry the "Safari" token
+    // but OMIT the `Version/<n>` token that real iOS Safari always includes.
+    const IOS_INAPP_WEBVIEW =
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Safari/604.1 LinkedInApp";
+    setUserAgent(IOS_INAPP_WEBVIEW);
+    expect(isIos()).toBe(true);
+    expect(isIosSafari()).toBe(false);
+  });
 });
 
 describe("watchInstallPrompt", () => {

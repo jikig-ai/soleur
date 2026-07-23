@@ -15,6 +15,9 @@ function makeWorker(state = "installed") {
     addEventListener: (type: string, cb: () => void) => {
       (listeners[type] ??= []).push(cb);
     },
+    removeEventListener: (type: string, cb: () => void) => {
+      listeners[type] = (listeners[type] ?? []).filter((x) => x !== cb);
+    },
     fire: (type: string) => (listeners[type] ?? []).forEach((cb) => cb()),
     setState(next: string) {
       this.state = next;
@@ -110,6 +113,22 @@ describe("watchForUpdate", () => {
 
     expect(onUpdate).not.toHaveBeenCalled();
   });
+
+  test("unsubscribe also detaches the statechange listener on the installing worker", () => {
+    const reg = makeRegistration();
+    const installing = makeWorker("installing");
+    reg.installing = installing as never;
+    const onUpdate = vi.fn();
+
+    const unsub = watchForUpdate(reg as never, onUpdate);
+    reg.fire("updatefound"); // wires the statechange listener
+    unsub(); // must detach it
+    installing.setState("installed");
+    reg.waiting = installing as never;
+    installing.fire("statechange"); // should be a no-op now
+
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
 });
 
 describe("postSkipWaiting", () => {
@@ -121,9 +140,10 @@ describe("postSkipWaiting", () => {
 });
 
 describe("reloadOnControllerChange", () => {
-  function makeContainer() {
+  function makeContainer(controller: unknown = {}) {
     const listeners: Record<string, Array<() => void>> = {};
     return {
+      controller,
       addEventListener: (t: string, cb: () => void) => {
         (listeners[t] ??= []).push(cb);
       },
@@ -134,8 +154,8 @@ describe("reloadOnControllerChange", () => {
     };
   }
 
-  test("reloads exactly once even if controllerchange fires multiple times", () => {
-    const container = makeContainer();
+  test("reloads exactly once on an UPDATE (a controller already existed) even if controllerchange fires multiple times", () => {
+    const container = makeContainer({}); // a controller was present → genuine update
     const reload = vi.fn();
 
     reloadOnControllerChange(container as never, reload);
@@ -146,8 +166,18 @@ describe("reloadOnControllerChange", () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
+  test("does NOT reload on a FIRST visit (no controller at start; the initial clients.claim() must not trigger a reload)", () => {
+    const container = makeContainer(null); // uncontrolled first visit
+    const reload = vi.fn();
+
+    reloadOnControllerChange(container as never, reload);
+    container.fire("controllerchange"); // this is the initial claim, not an update
+
+    expect(reload).not.toHaveBeenCalled();
+  });
+
   test("unsubscribe detaches the handler so no reload fires", () => {
-    const container = makeContainer();
+    const container = makeContainer({});
     const reload = vi.fn();
 
     const unsub = reloadOnControllerChange(container as never, reload);

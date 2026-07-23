@@ -97,8 +97,10 @@ exposure.
 **Brand-survival threshold:** `single-user incident` — a sticky bad worker can
 render the installed app unusable for a user until they clear storage, and
 per-user recovery is hard. This mandates: the `navigate` branch stays a
-transparent network passthrough with catch-only fallback; a self-unregistering
-recovery worker remains available as a kill switch; `user-impact-reviewer` runs
+transparent network passthrough with catch-only fallback; a client-side kill
+switch (`?sw-reset` in `lib/pwa/sw-reset.ts`, wired into `<SwRegister/>`)
+unregisters every worker + clears all caches and reloads clean, as the
+brick-recovery escape hatch (implemented in this PR); `user-impact-reviewer` runs
 at review time; CPO sign-off before `/work` (see frontmatter
 `requires_cpo_signoff: true`).
 
@@ -438,8 +440,9 @@ this repo but not novel to the platform.
 - **Sticky-SW brick (highest risk).** A bad `navigate` `respondWith` can make
   the installed app fail every navigation, and a SW persists across reloads.
   *Mitigation:* keep the branch a transparent network passthrough with
-  **catch-only** fallback; unit-test both arms; retain a self-unregistering
-  recovery worker as a kill switch; `updateViaCache:"none"` already ensures the
+  **catch-only** fallback; unit-test both arms; ship the `?sw-reset` client-side
+  kill switch (`lib/pwa/sw-reset.ts` → `<SwRegister/>`) that unregisters all
+  workers + clears caches and reloads clean; `updateViaCache:"none"` already ensures the
   SW script is re-fetched fresh so a fixed worker can supersede a bad one.
 - **Offline page must be script-free** — `script-src … 'strict-dynamic'` blocks
   non-nonce inline scripts, and a cache-served page cannot rely on a fresh

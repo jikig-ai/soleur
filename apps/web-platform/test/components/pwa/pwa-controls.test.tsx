@@ -60,9 +60,13 @@ describe("PwaControls", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  test("renders nothing when not standalone and nothing is offerable", () => {
-    const { container } = render(<PwaControls />);
-    expect(container).toBeEmptyDOMElement();
+  test("shows no affordances when not standalone and nothing is offerable", () => {
+    // The aria-live wrapper stays mounted (a stable live region), but it holds
+    // no interactive affordances until an update/install becomes available.
+    render(<PwaControls />);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByText("Update available")).toBeNull();
+    expect(screen.queryByText(/install app/i)).toBeNull();
   });
 
   test("shows the update pill when a worker is waiting; Reload posts SKIP_WAITING", async () => {
@@ -116,8 +120,9 @@ describe("PwaControls", () => {
   test("does NOT show the iOS card if already dismissed this session", async () => {
     h.isIosSafari = true;
     sessionStorage.setItem("soleur:pwa-ios-card-dismissed", "1");
-    const { container } = render(<PwaControls />);
-    // Nothing else offerable → empty.
-    await waitFor(() => expect(container).toBeEmptyDOMElement());
+    render(<PwaControls />);
+    // Nothing offerable → no card, no buttons (the aria-live wrapper stays mounted).
+    await waitFor(() => expect(screen.queryByText(/Add to Home Screen/i)).toBeNull());
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });

@@ -38,7 +38,16 @@ export function isIos(): boolean {
 export function isIosSafari(): boolean {
   if (!isIos()) return false;
   const ua = window.navigator.userAgent;
-  return /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|GSA/.test(ua);
+  // Real iOS Safari UAs carry a `Version/<n>` token. iOS in-app WKWebViews
+  // (Facebook FBAN/FBAV, Instagram, LinkedInApp, Line, TikTok, Snapchat, …) put
+  // "Safari" in the UA but OMIT `Version/` and have no Share→Add-to-Home-Screen
+  // affordance — showing them the guidance card would be a dead end. Require the
+  // positive `Version/` marker AND exclude the dedicated third-party iOS browsers.
+  return (
+    /Version\/\d/.test(ua) &&
+    /Safari/.test(ua) &&
+    !/CriOS|FxiOS|EdgiOS|GSA/.test(ua)
+  );
 }
 
 /**

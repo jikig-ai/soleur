@@ -25,19 +25,31 @@ export function watchForUpdate(
     onUpdate(registration.waiting);
   }
 
+  // Track the installing worker + its statechange handler so the unsubscribe can
+  // detach BOTH listeners (the returned cleanup must honor "detaches everything").
+  let installingWorker: ServiceWorker | null = null;
+  let onStateChange: (() => void) | null = null;
+
   const onUpdateFound = () => {
     const installing = registration.installing;
     if (!installing) return;
-    installing.addEventListener("statechange", () => {
+    installingWorker = installing;
+    onStateChange = () => {
       if (installing.state === "installed" && navigator.serviceWorker.controller) {
         // registration.waiting is the newly-installed worker at this point.
         onUpdate(registration.waiting ?? installing);
       }
-    });
+    };
+    installing.addEventListener("statechange", onStateChange);
   };
 
   registration.addEventListener("updatefound", onUpdateFound);
-  return () => registration.removeEventListener("updatefound", onUpdateFound);
+  return () => {
+    registration.removeEventListener("updatefound", onUpdateFound);
+    if (installingWorker && onStateChange) {
+      installingWorker.removeEventListener("statechange", onStateChange);
+    }
+  };
 }
 
 /** Ask the waiting worker to activate (it calls self.skipWaiting()). */
@@ -57,10 +69,16 @@ export function reloadOnControllerChange(
   reload: () => void = () => window.location.reload(),
 ): () => void {
   let reloaded = false;
+  // On a FIRST, uncontrolled visit the initial activate → clients.claim() fires
+  // a `controllerchange` on this page. That is NOT an update taking over — it's
+  // the initial claim — and must be consumed WITHOUT reloading, or every new
+  // visitor gets a spurious full-page reload on first load. Only reload when a
+  // controller already existed when we started watching (a genuine update).
+  const hadController = Boolean(container.controller);
   const handler = () => {
     if (reloaded) return;
     reloaded = true;
-    reload();
+    if (hadController) reload();
   };
   container.addEventListener("controllerchange", handler);
   return () => container.removeEventListener("controllerchange", handler);
