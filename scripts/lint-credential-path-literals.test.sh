@@ -10,6 +10,12 @@
 #
 # Exit contract: 0 clean (or advisory-only), 1 hard-fail violation(s), 2 arg/git.
 
+# Fixtures deliberately embed LITERAL credential-path strings (`~/…`, `$HOME/…`,
+# `${HOME}/…`) inside single-quoted `printf` formats — the guard matches the raw
+# text, so tilde/`$` MUST stay unexpanded. SC2088 (tilde in quotes) and SC2016
+# ($ in single quotes) are the intended behavior here, not defects.
+# shellcheck disable=SC2088,SC2016
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -75,7 +81,6 @@ TILDE_DOPPLER_DIR='~/.doppler'
 DOPPLER_CFG_NAME=".$(printf 'doppler').yaml"
 DOPPLER_HOME_PATH="${TILDE_DOPPLER_DIR}/${DOPPLER_CFG_NAME}"     # ~/.doppler/.doppler.yaml
 SSH_KEY_PATH='~/.ssh/id_ed25519'
-DOCKER_HOME_PATH='~/.docker/config.json'
 
 # ---------------------------------------------------------------------------
 # Positive (non-vacuity — REQUIRED). A resolvable home-relative credential path
