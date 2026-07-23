@@ -68,8 +68,19 @@ CONFIRM_WIPE="${CONFIRM_WIPE:-0}"
 # keeps it defined under `set -u` even if the body ever arrives on stdin (`bash -s`), where
 # BASH_SOURCE is empty — the pre-#6649 failure that darkened the emit channel + killed the run.
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-EMIT="/usr/local/bin/workspaces-luks-emit.sh"
-[ -f "$EMIT" ] || EMIT="${SELF_DIR}/workspaces-luks-emit.sh"
+# SHIPPED COPY FIRST, installed copy only as a fallback — the same precedence luks-monitor.sh (its own EMIT resolution)
+# uses, and the opposite of what this line said before #6807.
+#
+# This run tars and ships the REPO copy of the infra scripts and executes from that bundle dir. The
+# /usr/local/bin copy is whatever the LAST cutover installed (`install -D` at the end of the flip
+# step), so it is stale by construction whenever this script has gained anything since — and
+# preferring it meant a cutover could source an emit helper OLDER than itself. After #6807 that is
+# no longer merely stale: app_canary now calls wl_probe_http/wl_probe_readyz, which a pre-#6807
+# installed copy does not define, so the canary would die on `command not found` at the last gate of
+# an otherwise-successful cutover. The installed copy exists for the DAILY monitor, not for this
+# script; this script must run the code it shipped with.
+EMIT="${SELF_DIR}/workspaces-luks-emit.sh"
+[ -f "$EMIT" ] || EMIT="/usr/local/bin/workspaces-luks-emit.sh"
 # shellcheck source=apps/web-platform/infra/workspaces-luks-emit.sh
 [ -f "$EMIT" ] && . "$EMIT"
 
@@ -658,18 +669,54 @@ resume_writers() {
 #    comes up with an empty /workspaces, /health returns 200, and the cutover is declared green with
 #    every user's source code missing. /internal/readyz asserts workspaces_writable AND
 #    workspaces_populated. It is loopback-gated, hence the localhost probe.
+# #6807 — BOTH probes are RETRY-BOUNDED, and both now emit to Sentry on failure.
+#
+# The 2026-07-20 cutover (run 29782780158) proved why. This probe fired ~590ms after `docker start`
+# and took Cloudflare's instant 521, aborting a cutover that had SUCCEEDED. `--max-time 20` was no
+# defence — a 521 is a FAST response, not a hang, so the timeout budget is never consumed. Worse,
+# the /health arm called a bare `die` and emitted NOTHING, so the abort was invisible on every
+# channel; the dead-man then fired 27 minutes later and silently remounted the plaintext volume
+# (#6812). Both halves of that — the race and the silence — are fixed here.
+#
+# Retry bounds live in the shared helper (workspaces-luks-emit.sh) so this probe and the daily
+# monitor cannot drift apart. Worst case ~237s per probe (30 attempts x 5s max-time + 29 x 3s), so
+# ~474s for both; against DEAD_MAN_MIN=30min with ~181s of measured pre-canary elapsed, that leaves
+# roughly 19 minutes of margin. AC8 pins the inequality so a future knob change cannot quietly eat it.
 app_canary() {
-  local health ready
-  health="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://app.soleur.ai/health || echo 000)"
-  [ "$health" = "200" ] || die "app /health=$health (expected 200) after restart"
-  ready="$(curl -sS --max-time 20 http://127.0.0.1:3000/internal/readyz 2>/dev/null || echo '')"
-  case "$ready" in
-    *'"ready":true'*) log "app canary PASSED — /health 200 and /internal/readyz ready=true (workspaces writable + populated)" ;;
-    '') emit_drift readyz_unreachable
-        die "/internal/readyz returned nothing after restart — cannot certify the repointed volume is actually serving user data. /health alone is a 200-always liveness probe and CANNOT fail on an empty or unmounted \$MOUNT (C13)" ;;
-    *)  emit_drift readyz_not_ready
-        die "/internal/readyz did not report ready=true after restart — the repointed \$MOUNT is not writable/populated, i.e. the container is serving an EMPTY /workspaces. Response: $(_vscrub "$ready") (C13)" ;;
-  esac
+  local rc
+  wl_probe_http "https://app.soleur.ai/health"; rc=$?
+  if [ "$rc" -eq 1 ]; then
+    # Structural: the endpoint itself is wrong/regressed. Retrying cannot change the answer, so this
+    # arm burns no budget — and it must NOT be reported as a slow boot.
+    emit_drift health_probe_structural
+    die "app /health=${WL_PROBE_LAST_CODE} is a STRUCTURAL code (endpoint/routing regression, not a boot race) after restart — failing fast without retrying. This is the shape a no-route health path produces: it falls through to middleware and 307s to /login, and would never have become 200 no matter how long we retried (C13)"
+  elif [ "$rc" -ne 0 ]; then
+    emit_drift health_probe_deadline
+    die "app /health never returned 200 within the retry budget after restart (last=${WL_PROBE_LAST_CODE} attempts=${WL_PROBE_ATTEMPTS} elapsed=${WL_PROBE_ELAPSED_S}s class=${WL_PROBE_CLASS}). class=deadline covers a no-route/DNS failure (curl 000) as well as a slow boot (C13)"
+  fi
+  # /internal/readyz is the check that actually certifies THIS cutover. /health returns 200
+  # UNCONDITIONALLY ("Always return 200 for load balancer probes" — server/index.ts) and never
+  # touches $MOUNT, so it is the one endpoint GUARANTEED not to reflect the volume just repointed:
+  # if the mapper mounts but $MOUNT/workspaces is absent, docker auto-creates an empty bind source,
+  # the container comes up with an empty /workspaces, /health returns 200, and the cutover is
+  # declared green with every user's source code missing. Loopback-gated, hence the localhost probe.
+  #
+  # The reason code comes from the helper's four-arm classifier, which reads HTTP STATUS BEFORE BODY
+  # SHAPE — a loopback-gate regression answers 403 with valid JSON, and classifying that as
+  # not-ready would page a sole-copy data-loss verdict for a routing bug.
+  #
+  # Populate WL_READYZ_CAPACITY BEFORE the probe, so a readyz_not_ready emission from THIS path
+  # carries the same capacity discriminator the daily monitor emits. Without it the field defaults
+  # to `unknown`, which matches neither capacity row in the runbook triage table, and a full disk
+  # mid-cutover falls through to "data-recovery incident on sole-copy data" — a destructive operator
+  # response to a non-destructive fault, against the retained plaintext while the LUKS mount holds
+  # newer writes.
+  WL_READYZ_CAPACITY="$(wl_capacity_of "$MOUNT")"; export WL_READYZ_CAPACITY
+  if ! wl_probe_readyz "http://127.0.0.1:3000/internal/readyz"; then
+    emit_drift "${WL_READYZ_REASON:-readyz_unreachable}"
+    die "/internal/readyz did not certify the repointed volume after restart (reason=${WL_READYZ_REASON:-readyz_unreachable} code=${WL_PROBE_LAST_CODE} writable=${WL_READYZ_WRITABLE} populated=${WL_READYZ_POPULATED}) — cannot confirm the container is serving user data from \$MOUNT. /health alone is a 200-always liveness probe and CANNOT fail on an empty or unmounted \$MOUNT (C13)"
+  fi
+  log "app canary PASSED — /health 200 and /internal/readyz ready=true (workspaces writable + populated)"
 }
 
 # Host-local rollback: unmount the mapper, remount the RETAINED plaintext volume at $MOUNT, restart.
@@ -763,12 +810,22 @@ arm_dead_man() {
     `# at-rest exposure #6588 exists to close, reached by a different door. The next run's stray` \
     `# guard does NOT surface it either (it is a mountpoint, so that guard is skipped). The close` \
     `# keeps its own error visible on the journal rather than 2>/dev/null.` \
-    /bin/sh -c "${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; systemctl start inngest-server.service 2>/dev/null; ${tstarts} fi" \
+    `# #6807/#6812 OBSERVABILITY: the FIRE itself must emit. On 2026-07-20 this timer remounted the` \
+    `# plaintext over a healthy LUKS mount and NOTHING paged for ~6h, because a SUCCESSFUL remount` \
+    `# emitted no marker on any channel (only the close-EBUSY branch did). It fires at the TOP (the` \
+    `# event is "the backstop engaged" regardless of outcome), on the remount-failed else (the host` \
+    `# is now serving a bare mountpoint), and on success. logger -t luks-monitor is Vector-allowlisted.` \
+    /bin/sh -c "logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'; ${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; systemctl start inngest-server.service 2>/dev/null; ${tstarts} logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=ok reason=plaintext_remounted'; else logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=remount_failed'; fi" \
     2>/dev/null || true
+  # ARM marker: the timer is now set. Pairs with the disarm marker so a cutover that armed but never
+  # disarmed (the 2026-07-20 shape — abort at app_canary before disarm_dead_man) is visible as an
+  # arm-without-disarm on the log timeline rather than inferred from an adjacent banner.
+  logger -t "$LUKS_LOG_TAG" -- "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=armed reason=freeze_engaged deadline_min=${DEAD_MAN_MIN}" 2>/dev/null || true
 }
 disarm_dead_man() {
   systemctl stop workspaces-luks-deadman.timer 2>/dev/null || true
   systemctl reset-failed workspaces-luks-deadman 2>/dev/null || true
+  logger -t "${LUKS_LOG_TAG:-luks-monitor}" -- "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=disarmed reason=canary_passed" 2>/dev/null || true
 }
 
 # ============================================================================
@@ -2202,6 +2259,28 @@ if [ "$DRY_RUN" != "1" ]; then
   [ "$G3_DST_COUNT" = "$G2_COUNT" ] || die "DST workspace count ($G3_DST_COUNT) != G2 ($G2_COUNT) — the data gate (G3), not the canary, is the partial-loss detector (AC24)"
   [ "$G3_DST_REF" = "$G2_REF" ] || die "DST ref count ($G3_DST_REF) != G2 ($G2_REF) — refs dropped in transit (AC24)"
   [ "$G3_DST_CHK" = "$G2_CHK" ] || die "DST refs/checkpoints/* count ($G3_DST_CHK) != G2 ($G2_CHK) — the highest-probability silent loss; aborting (C9/AC24)"
+  # #6807 — persist the workspace INVENTORY baseline, now that G3 has just certified the copy is
+  # complete. This is the operand the off-host verify compares against; without it that comparison
+  # has nothing to fail closed on, which is why the live host needed a one-time manual seed.
+  #
+  # Counted with wl_count_workspace_dirs — the SAME function luks-monitor.sh compares with — and
+  # deliberately NOT with the fsck gate's `total`. `total` counts fsck-PROBEABLE workspaces: it
+  # `continue`s past every skipped one (worktree_pointer / alternates_escape / no_git_dir). The
+  # 2026-07-20 run happened to have skipped=0 so the two coincided, but `skipped` is transient
+  # (#6754 records it moving 1 -> 0 between rehearsals when scheduled-workspace-gc swept a dir).
+  # Storing a value computed by a different rule than the one that reads it would persist a LOW
+  # baseline on any run with a nonzero skip, and a later real shrink down to it would certify green
+  # — relocating the counter-parity bug from the counter to the baseline.
+  if WS_INVENTORY="$(wl_count_workspace_dirs "$STAGING/workspaces" 2>/dev/null)"; then
+    persist_state WORKSPACES_COUNT "$WS_INVENTORY"
+    log "persisted workspace inventory baseline: WORKSPACES_COUNT=$WS_INVENTORY (verify compares against this)"
+  else
+    # Non-fatal: G3 above already gated the copy, so a counter failure must not abort a good
+    # cutover. But it must not be silent either — the next verify would fail closed on a missing
+    # baseline with no explanation of why it is missing.
+    emit_drift workspace_count_persist_failed
+    log "WARN: could not count $STAGING/workspaces — WORKSPACES_COUNT not persisted; the next verify will fail closed on workspace_count_baseline_missing until it is seeded"
+  fi
 fi
 
 step "repoint_luks_mount — mapper -> $MOUNT (backup fstab; findmnt assert)"

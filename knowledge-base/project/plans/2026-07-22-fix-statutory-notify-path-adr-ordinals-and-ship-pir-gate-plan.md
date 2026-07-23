@@ -530,7 +530,7 @@ semantics of an existing decision's tick_key and scan bound.
 
 ### ADR
 
-**Create `ADR-133-statutory-send-markers-certify-delivery-not-dispatch.md`**
+**Create `ADR-134-statutory-send-markers-certify-delivery-not-dispatch.md`**
 (provisional ordinal — highest on `origin/main` at plan time is `ADR-132`;
 `ship` Phase 5.5's ADR-Ordinal Collision Gate re-verifies against `origin/main`
 before merge, and **any renumber must sweep this plan, `tasks.md`, and every AC
@@ -879,7 +879,7 @@ No other open code-review issue names
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-133-statutory-send-markers-certify-delivery-not-dispatch.md` *(ordinal provisional)*
+- `knowledge-base/engineering/architecture/decisions/ADR-134-statutory-send-markers-certify-delivery-not-dispatch.md` *(ordinal provisional)*
 - `plugins/soleur/test/ship-incident-pir-gate.test.ts`
 - `plugins/soleur/test/fixtures/ship-incident-pir-gate/preventive-hardening-single-user-incident.md`
 - `plugins/soleur/test/fixtures/ship-incident-pir-gate/this-plan.md`
@@ -958,7 +958,7 @@ No other open code-review issue names
 
 ### Phase 7 — ADR + C4 deliverables
 
-7.1 Author `ADR-133` (provisional ordinal) via `/soleur:architecture`.
+7.1 Author `ADR-134` (provisional ordinal) via `/soleur:architecture`.
 7.2 Amend `ADR-037` (D2/D3 semantics + Historical citations note).
 7.3 Edit `model.c4` (`pushService` + edges + `resend` description) and `views.c4` (`include` in both views).
 7.4 Run `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts`.
@@ -1005,7 +1005,7 @@ No other open code-review issue names
 - **AC15** Test T18: a successful push results in **zero** `resend` sends for the same tick.
 - **AC16** Test T19: push **and** email both fail → the `(item_id, tick_key)` marker is deleted, `pinged` is not incremented, `undelivered === 1`.
 - **AC17** `git grep -n "statutory-notify-zero-delivery" apps/web-platform/` still returns the op slug (unchanged), and its `extra` payload carries `{attempted, delivered, channel, fallbackDelivered}`.
-- **AC18** `ADR-133` (or the Phase 0.5 ordinal actually adopted) exists, is non-empty, carries `## Status`/`## Context`/`## Decision`/`## Consequences`, and its `## Alternatives Considered` names the prune-on-repeated-failure option and why it was rejected.
+- **AC18** `ADR-134` (or the Phase 0.5 ordinal actually adopted) exists, is non-empty, carries `## Status`/`## Context`/`## Decision`/`## Consequences`, and its `## Alternatives Considered` names the prune-on-repeated-failure option and why it was rejected.
 
 **#6813**
 
@@ -1073,7 +1073,7 @@ No other open code-review issue names
 | --- | --- |
 | **The band destroys the #6781 double-fire detector.** | D2a counter split; AC7 pins `suppressed === 0` / `headsUpAlreadySent === 4` in steady state. Residual (≤5-day detection delay in the heads-up arm) named in the ADR-037 amendment. |
 | **`acknowledged_at` is NULL on some acknowledged row → those rows silently disappear from the scan.** This would *create* the exact cliff the issue is about, in a new place. | Blocking Phase 0.1 precondition + named `.or()` fallback. T16 fails loudly if the anchor drops eligible rows. |
-| **Email fallback doubles notification volume** on partial delivery. | **Corrected at review (M18 supersedes this row):** the fallback fires on `delivered < attempted`, NOT only `delivered === 0` — a stale device that still 201s must not mask a dead one and leave the founder on the road with nothing. So a founder with one live + one dead device gets BOTH a push and an email on a statutory tick. This is an **accepted, intentional** belt-and-suspenders trade-off for the legal-clock class (recorded in ADR-133), not a defect. T18 pins the FULL-delivery no-double-notify direction; T18b pins that partial delivery still emails; `delivered` is computed from `Promise.allSettled` fulfilment, not inferred. |
+| **Email fallback doubles notification volume** on partial delivery. | **Corrected at review (M18 supersedes this row):** the fallback fires on `delivered < attempted`, NOT only `delivered === 0` — a stale device that still 201s must not mask a dead one and leave the founder on the road with nothing. So a founder with one live + one dead device gets BOTH a push and an email on a statutory tick. This is an **accepted, intentional** belt-and-suspenders trade-off for the legal-clock class (recorded in ADR-134), not a defect. T18 pins the FULL-delivery no-double-notify direction; T18b pins that partial delivery still emails; `delivered` is computed from `Promise.allSettled` fulfilment, not inferred. |
 | **Marker rollback reintroduces the #6781 duplicate-send defect.** | It cannot: rollback fires **only** when the outcome is provably undelivered. A delivered send keeps its marker. T19 + the pre-existing T1/T2/T3 suite pin both directions. |
 | **`sendEmailNotification` return-type widening breaks a caller.** | Cross-consumer grep run at plan time: zero external callers (`notifications.ts` internal + tests only); `void` → `boolean` is additive. AC30 (`tsc --noEmit`) is the mechanical backstop. |
 | **The #6813 regex over-tightens and misses a real incident.** | Two independent genuine-incident fixtures (AC22), and the gate keeps its fail-toward-PIR posture (Phase 5.4: when in doubt, fire). |
@@ -1093,7 +1093,7 @@ No other open code-review issue names
 | **#6801:** widen the window to 120/180 days | Moves the cliff without removing it, and grows the scan for no principled reason. The anchor, not the width, is the defect. |
 | **#6801:** accept the cliff, ship only the counter | The issue permits it ("or it is accepted in writing"), but a statutory item acknowledged and then never pinged is the same harm class as #6802, at `single-user incident` threshold. The re-anchor costs one changed predicate and no migration. |
 | **#6801:** a second `warnSilentFallback` emit for the excluded count | Explicitly rejected by the issue ("Deliberately *not* a separate emit"). Level-escalating the single emit achieves Better Stack reachability without a second op slug. |
-| **#6802:** prune subscriptions after N consecutive non-410 failures | Destructive on a signal we cannot distinguish from transient. The firewall DROP case would permanently delete a device that works again the moment the allowlist changes. Recorded as an explicit non-decision in ADR-133. |
+| **#6802:** prune subscriptions after N consecutive non-410 failures | Destructive on a signal we cannot distinguish from transient. The firewall DROP case would permanently delete a device that works again the moment the allowlist changes. Recorded as an explicit non-decision in ADR-134. |
 | **#6802:** make `notifyOfflineUser` throw on total failure | Breaks the documented "never throws" contract two call sites rely on (`agent-on-spawn-requested.ts`, `email-on-received.ts`), and under `retries: 0` a throw inside the cron loop would kill the ingress liveness probe. |
 | **#6800:** rename `ADR-036`/`ADR-037` files to match their frontmatter | Inverts authority against every existing tool (`check-adr-ordinals.sh`, `ship` Phase 5.5, `grok-pre-push-gate.sh` all key on filenames) and would break every existing filename citation. |
 | **#6800:** normalize frontmatter to `adr: ADR-NNN` everywhere | Larger diff (~75 files gain a line vs ~57 losing one) and leaves the disagreement *possible* forever. Removal makes it structurally impossible. |
@@ -1205,7 +1205,7 @@ git ls-tree -r --name-only origin/main knowledge-base/engineering/architecture/d
   | grep -oE 'ADR-[0-9]{3}' | sort -u | tail -1     → ADR-132
 ```
 
-`ADR-133` is free on live `origin/main`. Still provisional — `/ship` Phase 5.5
+`ADR-134` is free on live `origin/main`. Still provisional — `/ship` Phase 5.5
 re-verifies at merge.
 
 **AGENTS rule IDs cited in the plan + tasks.md** — all five resolve to an

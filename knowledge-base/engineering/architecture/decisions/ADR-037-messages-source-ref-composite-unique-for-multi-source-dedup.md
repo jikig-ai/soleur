@@ -235,7 +235,7 @@ tick-key semantics and the scan the guard runs over.
   clock is incoherent. A generic property test asserts this for every hours-kind
   rule, so a future longer hours-rule cannot silently start writing `headsup`
   markers.
-- **The ADR-133 marker rollback self-heals ONLY while this predicate is a
+- **The ADR-134 marker rollback self-heals ONLY while this predicate is a
   multi-day band.** A rolled-back `headsup` marker re-sends because a later tick in
   the band re-enters the same key. If the band were narrowed back toward an
   equality, that dependency would break (permanent silence on a rolled-back

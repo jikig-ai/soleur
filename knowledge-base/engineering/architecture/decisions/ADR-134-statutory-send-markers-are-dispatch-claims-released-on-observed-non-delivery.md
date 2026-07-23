@@ -7,7 +7,7 @@ related_adrs: [ADR-037]
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-133: Statutory send-markers are dispatch claims, released on observed non-delivery
+# ADR-134: Statutory send-markers are dispatch claims, released on observed non-delivery
 
 ## Status
 

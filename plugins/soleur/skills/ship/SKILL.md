@@ -419,7 +419,7 @@ unrelated SHAs, timestamps, and inline numbers).
 PR_NUMBER=$(gh pr view --json number --jq .number)
 [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "Error: PR_NUMBER is not a positive integer: $PR_NUMBER"; exit 1; }
 UNRESOLVED=$(gh issue list \
-  --state open \
+  --state open -L 200 \
   --search "-label:deferred-scope-out -label:synthetic-test" \
   --json number,title,body \
   --jq '[.[]
@@ -1306,7 +1306,7 @@ Replace `BRANCH_NAME` with the actual branch name.
 
 1. The PR was likely created as a draft earlier in the workflow.
 2. **Headless mode:** Auto-accept the generated PR title/body from diff analysis. **Interactive mode:** Confirm the PR title and body with the user before editing.
-2.5. **Decision-challenges render (ADR-084).** If `knowledge-base/project/specs/<branch>/decision-challenges.md` exists and is non-empty, an earlier headless phase (`plan`/`work`) recorded auto-decided dissents against the operator's stated direction — the operator has not seen them. Since Phase 6 **full-replaces** the body, fold the artifact's content into the generated body under a `## Model Dissents (informational)` heading (this name is deliberately outside the `ship-operator-step-gate` deny set `Operator`/`Post-merge`/`Follow-up`; use informational statements, never operator-action bullets). THEN open one idempotent issue — check `gh issue list --search "decision-challenge <branch>" --state open` first — via `gh issue create --label action-required --label decision-challenge --milestone "Post-MVP / Later"` with a plain-language title linking the PR, because `operator-digest` Section 4 harvests `action-required` issues, not PR bodies. See [decision-principles.md](../brainstorm-techniques/references/decision-principles.md).
+2.5. **Decision-challenges render (ADR-084).** If `knowledge-base/project/specs/<branch>/decision-challenges.md` exists and is non-empty, an earlier headless phase (`plan`/`work`) recorded auto-decided dissents against the operator's stated direction — the operator has not seen them. Since Phase 6 **full-replaces** the body, fold the artifact's content into the generated body under a `## Model Dissents (informational)` heading (this name is deliberately outside the `ship-operator-step-gate` deny set `Operator`/`Post-merge`/`Follow-up`; use informational statements, never operator-action bullets). THEN open one idempotent issue — check `gh issue list --search "decision-challenge <branch>" --state open -L 200` first — via `gh issue create --label action-required --label decision-challenge --milestone "Post-MVP / Later"` with a plain-language title linking the PR, because `operator-digest` Section 4 harvests `action-required` issues, not PR bodies. See [decision-principles.md](../brainstorm-techniques/references/decision-principles.md).
 3. Update the PR. Pass the body as a multi-line string (no `$()` needed):
 
    ```bash
@@ -1906,7 +1906,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    Before creating each follow-through issue, check for duplicates:
 
    ```bash
-   gh issue list --label follow-through --state open --search "Source PR: #<PR_NUMBER>" --json title --jq '.[].title'
+   gh issue list --label follow-through --state open -L 200 --search "Source PR: #<PR_NUMBER>" --json title --jq '.[].title'
    ```
 
    If an issue with a matching title prefix already exists, skip creation and note "Dedup: skipped [title] -- existing issue found."

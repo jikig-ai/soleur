@@ -100,6 +100,6 @@ comments contradict the shipped code on a `single-user incident`-threshold contr
 correct home for the corrected invariant at the contract's own surface. It is **deferred to a
 follow-up** to preserve this PR's deliberate migration-free property (adding it would pull migration
 apply + verify + Doppler-pooler operations into an otherwise code-only pipeline). Meanwhile the
-corrected invariant lands in-repo via the ADR-037/ADR-133 amendments **and** a code comment at the
+corrected invariant lands in-repo via the ADR-037/ADR-134 amendments **and** a code comment at the
 cron loop, so no in-repo reader is misled; only the live-DB `COMMENT` strings lag until 136 ships.
 Filed on the consolidated tracker from C3.

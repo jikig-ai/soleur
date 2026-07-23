@@ -325,7 +325,7 @@ jobs:
           N=$(gh issue list \
             --repo "$REPO_FULL" \
             --label cla-evidence,timestamp-failure \
-            --state open \
+            --state open -L 200 \
             --search "\"$title\" in:title" \
             --json number,title,createdAt \
             | jq -r --arg t "$title" '.[] | select(.title == $t) | "\(.number) \(.createdAt)"' \

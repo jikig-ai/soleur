@@ -43,7 +43,7 @@ surfaced merged PR #6782 identically — adjudicated a **cited-predecessor false
 - **#6802 makes the send-marker mean *delivered*.** Zero-delivery falls through to email,
   `notifyOfflineUser` returns a `NotifyOutcome`, and the cron **rolls the marker back** when
   nothing landed — restoring the pre-#6781 self-heal as a designed rollback. Non-410 pruning
-  explicitly rejected in writing. New **ADR-133** (verified free against freshly-fetched
+  explicitly rejected in writing. New **ADR-134** (verified free against freshly-fetched
   `origin/main`; highest is ADR-132) plus an **ADR-037 amendment**; `pushService` added to the C4
   model, which had no Web Push external system at all.
 - **#6800 takes zero renames.** Filename is authoritative; the disagreeing frontmatter ordinal is

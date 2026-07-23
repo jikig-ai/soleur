@@ -203,7 +203,14 @@ than a filed-and-forgotten follow-up.
 
 - **#6780** — C5.8 root debt: the dedicated host has no in-place redelivery channel.
 - **#6781** — C6.7 / T-4: the cron send-path has no idempotency guard.
-- **#6608** — was C6.6 ("rides along, closed post-replace"); being re-homed in a separate session.
+- **#6608** — was C6.6 ("rides along, closed post-replace"). *(Status corrected 2026-07-22:
+  not re-homed in a separate session — no such session materialized. The code fix landed via
+  #6664 on 2026-07-18 and is inert by design (`hcloud_server.inngest` is excluded from the
+  per-merge `-target`); the corrected nftables allowlist re-renders when the dedicated host is
+  re-provisioned. With PR C cancelled there is no pre-cutover replace, so #6608 now waits for the
+  actual Phase-2 cutover — it waits longer, not orphaned. Close after that apply confirms the
+  rendered `ip saddr` set no longer contains `.11`. It does NOT depend on #6780: that is an
+  in-place *script* delivery gap; #6608 is terraform-rendered host config that a replace covers.)*
 - **#6348** — the draft `INNGEST_BASE_URL` repoint PR. The original operator ruling recorded a
   standing risk that if it merged before PR C was delivered, PR C would be stranded
   merged-but-undelivered. **Cancelling PR C dissolves that risk.**
