@@ -55,8 +55,10 @@ SCAN_DIRS = ("plugins", "knowledge-base")
 #
 # A home prefix that resolves for any loader. The Doppler bare-filename arm is
 # the exception: it needs no prefix (the root project-pointer of the same name
-# resolves it), so it is a separate pattern below.
-_HOME = r"(?:~|\$HOME)/"
+# resolves it), so it is a separate pattern below. `${HOME}` (brace form) resolves
+# identically to `$HOME` — cover it so a brace-form SSH/aws/etc. path (which has
+# no bare-filename arm to fall back on) cannot escape the hard-fail tier.
+_HOME = r"(?:~|\$HOME|\$\{HOME\})/"
 
 # Trailing boundary: the match may not be followed by another filename char
 # (word char or dot). This blocks `.bak`-suffixed / longer sibling names

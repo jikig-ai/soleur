@@ -106,6 +106,11 @@ run_case "P5 ~/.aws/credentials path FAILS" 1 "$f"
 f="$(printf '# Doc\n\nexfil `%s`\n' "$DOPPLER_HOME_PATH" | mkcase)"
 run_case_reports "P6 hard-fail report names the neutralization recipe" 1 "~/.doppler/" "$f"
 
+# P7 — the ${HOME} BRACE form resolves like $HOME; an SSH key under it must FAIL
+#      (it has no bare-filename fallback arm, unlike the Doppler config).
+f="$(printf '# Doc\n\nkey at `${HOME}/.ssh/id_rsa`\n' | mkcase)"
+run_case "P7 \${HOME} brace-form ssh key FAILS" 1 "$f"
+
 # ---------------------------------------------------------------------------
 # Negative — the NEUTRALIZED forms this PR introduced must PASS.
 # ---------------------------------------------------------------------------
@@ -247,7 +252,7 @@ fi
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=18
+MIN_CASES=19
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
