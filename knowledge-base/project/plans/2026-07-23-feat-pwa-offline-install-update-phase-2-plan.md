@@ -13,6 +13,23 @@ requires_cpo_signoff: true
 
 # ✨ PWA Phase 2 — offline fallback + update/install UX
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-23
+**Sections enhanced:** Architecture rationale, SW fetch handler, client update/install, offline page, Risks.
+**Gates run (all pass):** 4.6 User-Brand Impact (threshold `single-user incident`, valid); 4.7 Observability (5 fields, non-placeholder, no-ssh); 4.8 PAT-shaped halt (no match); 4.4 precedent-diff (no offline-fallback precedent — novel branch, flagged); 4.45 verify-the-negative (all negative claims confirmed against `public/sw.js`).
+
+### Key improvements
+
+1. **Verified the network-only-HTML claim against the live worker** — today `public/sw.js` has exactly one `respondWith` (line 63, the static-asset branch); HTML has none, so network-only HTML is confirmed, and the new `navigate` branch is the *only* HTML interception (passthrough + catch-only). `skipWaiting` is at line 21 (install chain, to remove); `clients.claim` is at line 36 (activate, to keep).
+2. **Confirmed CSP shape makes the offline page constraint concrete** — `script-src … 'strict-dynamic'` means a cache-served page cannot run inline scripts (stale/absent nonce); `style-src 'self' 'unsafe-inline'` allows inline `<style>`. Offline page = zero `<script>`, inline styles, `<a href>` retry.
+3. **Confirmed `/offline.html` reaches middleware** — matcher (`middleware.ts:424`) excludes `sw\.js` and image extensions but NOT `.html`, so the PUBLIC_PATHS entry is load-bearing for correct precache (else `cache.addAll` captures a 307→/login).
+
+### New considerations discovered
+
+- **Sticky-SW recovery is the top risk** — added a kill-switch (self-unregistering recovery worker) note; the `navigate` branch must be catch-only so an online fetch that *resolves with a 4xx/5xx* still returns the network response (only a thrown/rejected fetch → offline shell). Do NOT branch on `response.ok`.
+- **`beforeinstallprompt` requires `preventDefault()` synchronously** or Chromium shows its own mini-infobar; the deferred event is single-use (re-fires only on a later eligibility change).
+
 ## Overview
 
 Builds on PWA Phase 1 (PR #6849, merged 2026-07-23), which shipped a correct
@@ -357,6 +374,51 @@ discoverability_test:
    renders `null`.
 7. **iOS path** — iOS-Safari UA, not standalone → guidance card, no install
    button (no `beforeinstallprompt`).
+
+## Research Insights
+
+**Precedent-diff (Phase 4.4):** the only in-repo SW precedent is the existing
+handwritten `public/sw.js` (push/notification handlers + cache-first static).
+There is **no offline-fallback precedent** — the `navigate`-mode
+`respondWith(fetch().catch(...))` branch is **novel** for this codebase;
+reviewers should scrutinize its redirect/credential handling and the
+catch-only (never `response.ok`) semantics. The update-lifecycle
+(`skipWaiting` via `postMessage` + `controllerchange` reload) and
+`beforeinstallprompt` capture are standard web-platform patterns (MDN /
+web.dev "app-update-notification" and "customize-install"); they are new to
+this repo but not novel to the platform.
+
+**Best practices (grounded):**
+- Update prompt: keep the new worker in `waiting`; only `skipWaiting()` on
+  explicit user action, then reload once on `controllerchange` (guard the
+  reload with a module flag to avoid a loop). This is exactly the mid-session
+  asset-swap fix the ARGUMENTS ask for.
+- Offline navigation: branch on `event.request.mode === "navigate"` (not on
+  `Accept: text/html` sniffing) — it is the canonical navigation predicate and
+  avoids matching `fetch()`/XHR HTML sub-requests.
+- iOS: `beforeinstallprompt` never fires on iOS Safari; detect
+  `display-mode: standalone` / `navigator.standalone` to suppress, and gate the
+  Add-to-Home-Screen card on iOS-Safari UA. Do not show install chrome in an
+  in-app browser (no A2HS support).
+- Offline page a11y: `<html lang="en">`, a visible heading, sufficient
+  contrast in both `prefers-color-scheme` modes, and a real focusable
+  `<a href>` retry (keyboard-reachable, no JS).
+
+**Edge cases:**
+- A navigation that resolves with an HTTP error (500/maintenance page) must
+  return that network response, NOT the offline shell — catch only rejects.
+- First install (no existing controller): a worker with no `skipWaiting` still
+  activates immediately (waiting only occurs when a controller exists), so the
+  update affordance never shows on first install — correct.
+- `CACHE_NAME` bump to `v10` purges old caches on `activate`; with the waiting
+  model that purge now runs only after the user accepts the update — acceptable
+  and safer than mid-session purge.
+
+**References:**
+- <https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Offline_and_background_operation>
+- <https://web.dev/articles/app-update-notification>
+- <https://web.dev/articles/customize-install>
+- <https://developer.mozilla.org/en-US/docs/Web/API/BeforeInstallPromptEvent>
 
 ## Risks & Mitigations / Sharp Edges
 
