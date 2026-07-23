@@ -79,7 +79,10 @@ export function MobileBoard({
   const overCap = columnIssues.length > COLUMN_RENDER_CAP;
 
   // Hand-rolled horizontal swipe on the card panel to advance status (no dep).
-  const touchStartX = useRef<number | null>(null);
+  // The panel is a VERTICAL scroll region, so a swipe only counts when it is
+  // horizontally dominant (|dx| > |dy|) — otherwise a thumb scroll that drifts
+  // sideways would silently switch the status column mid-scroll.
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
   function advance(delta: number) {
     const idx = STATUS_ORDER.indexOf(selectedStatus);
     if (idx === -1) return;
@@ -99,17 +102,26 @@ export function MobileBoard({
         id="workstream-mobile-panel"
         role="tabpanel"
         aria-labelledby={`workstream-tab-${selectedStatus}`}
+        // APG: a tabpanel with no focusable child (the empty state) gets
+        // tabIndex=0 so keyboard users can move focus into it; when cards are
+        // present they are the focusable descendants, so no panel tabIndex.
+        tabIndex={columnIssues.length === 0 ? 0 : undefined}
         className="mt-3 flex flex-col gap-3 safe-bottom"
         onTouchStart={(e) => {
-          touchStartX.current = e.touches[0]?.clientX ?? null;
+          const t = e.touches[0];
+          touchStart.current = t ? { x: t.clientX, y: t.clientY } : null;
         }}
         onTouchEnd={(e) => {
-          const start = touchStartX.current;
-          touchStartX.current = null;
+          const start = touchStart.current;
+          touchStart.current = null;
           if (start == null) return;
-          const dx = (e.changedTouches[0]?.clientX ?? start) - start;
-          // Only treat a decisive horizontal swipe as a status change.
-          if (Math.abs(dx) < 48) return;
+          const end = e.changedTouches[0];
+          if (!end) return;
+          const dx = end.clientX - start.x;
+          const dy = end.clientY - start.y;
+          // Only a decisive, horizontally-dominant swipe changes status —
+          // vertical/diagonal scroll gestures are ignored.
+          if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy)) return;
           advance(dx < 0 ? 1 : -1);
         }}
       >

@@ -6,7 +6,7 @@
 // a11y model (role=tablist/tab, roving tabIndex, Left/Right arrow moves
 // selection) — see components/crm/crm-surface.tsx for the simpler precedent.
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { ColumnConfig, WorkstreamStatus } from "@/lib/workstream";
 
 export function MobileStatusSelector({
@@ -22,14 +22,24 @@ export function MobileStatusSelector({
 }) {
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
+  // Keep the selected tab in view even when selection changes via a card-panel
+  // swipe (not just keyboard), so the active tab never sits off-screen.
+  useEffect(() => {
+    tabRefs.current[selected]?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [selected]);
+
+  function selectByIndex(idx: number) {
+    const next = columns[idx];
+    if (!next) return;
+    onSelect(next.status);
+    tabRefs.current[next.status]?.focus();
+    tabRefs.current[next.status]?.scrollIntoView({ block: "nearest", inline: "center" });
+  }
+
   function moveSelection(delta: number) {
     const idx = columns.findIndex((c) => c.status === selected);
     if (idx === -1) return;
-    const next = columns[(idx + delta + columns.length) % columns.length];
-    onSelect(next.status);
-    // Move focus + scroll the newly selected tab into view.
-    tabRefs.current[next.status]?.focus();
-    tabRefs.current[next.status]?.scrollIntoView({ block: "nearest", inline: "center" });
+    selectByIndex((idx + delta + columns.length) % columns.length);
   }
 
   return (
@@ -45,6 +55,12 @@ export function MobileStatusSelector({
         } else if (e.key === "ArrowLeft") {
           e.preventDefault();
           moveSelection(-1);
+        } else if (e.key === "Home") {
+          e.preventDefault();
+          selectByIndex(0);
+        } else if (e.key === "End") {
+          e.preventDefault();
+          selectByIndex(columns.length - 1);
         }
       }}
     >
@@ -61,6 +77,9 @@ export function MobileStatusSelector({
             id={`workstream-tab-${column.status}`}
             aria-selected={isSelected}
             aria-controls="workstream-mobile-panel"
+            // Explicit name: the visible count pill is a bare trailing number
+            // ("In Progress 5") — spell it out for AT.
+            aria-label={`${column.label}, ${counts[column.status]} issues`}
             tabIndex={isSelected ? 0 : -1}
             onClick={() => onSelect(column.status)}
             className={`flex min-h-11 shrink-0 items-center gap-2 rounded-full border px-4 text-sm font-medium transition-colors ${

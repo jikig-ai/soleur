@@ -102,6 +102,38 @@ describe("MobileBoard", () => {
     expect(screen.getByRole("tab", { name: /Ready/ }).getAttribute("aria-selected")).toBe("true");
   });
 
+  test("Home/End jump to the first/last status", () => {
+    render(<MobileBoard issues={ISSUES} onOpen={vi.fn()} />);
+    const tablist = screen.getByRole("tablist");
+    fireEvent.keyDown(tablist, { key: "End" });
+    expect(screen.getByRole("tab", { name: /Done/ }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(tablist, { key: "Home" });
+    expect(screen.getByRole("tab", { name: /Backlog/ }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  test("a horizontally-dominant swipe changes status; a mostly-vertical scroll does NOT", () => {
+    render(<MobileBoard issues={ISSUES} onOpen={vi.fn()} />);
+    const panel = screen.getByRole("tabpanel");
+    // Mostly-vertical drag with sideways drift > 48px must NOT switch status.
+    fireEvent.touchStart(panel, { touches: [{ clientX: 200, clientY: 100 }] });
+    fireEvent.touchEnd(panel, { changedTouches: [{ clientX: 140, clientY: 400 }] });
+    expect(screen.getByRole("tab", { name: /Backlog/ }).getAttribute("aria-selected")).toBe("true");
+
+    // Decisive horizontal left-swipe advances to the next status (ready).
+    fireEvent.touchStart(panel, { touches: [{ clientX: 300, clientY: 100 }] });
+    fireEvent.touchEnd(panel, { changedTouches: [{ clientX: 100, clientY: 110 }] });
+    expect(screen.getByRole("tab", { name: /Ready/ }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  test("the empty-state tabpanel is focusable (tabIndex=0); a non-empty one is not", () => {
+    render(<MobileBoard issues={ISSUES} onOpen={vi.fn()} />);
+    // Default backlog is non-empty → no panel tabIndex.
+    expect(screen.getByRole("tabpanel").getAttribute("tabindex")).toBeNull();
+    // Switch to an empty status (done) → panel becomes focusable.
+    fireEvent.click(screen.getByRole("tab", { name: /Done/ }));
+    expect(screen.getByRole("tabpanel").getAttribute("tabindex")).toBe("0");
+  });
+
   test("tabs are >=44px touch targets (min-h-11)", () => {
     render(<MobileBoard issues={ISSUES} onOpen={vi.fn()} />);
     for (const tab of screen.getAllByRole("tab")) {
