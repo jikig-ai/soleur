@@ -1,5 +1,4 @@
 ---
-adr: 100
 title: Inngest as a dedicated single-host singleton control plane
 status: adopting
 date: 2026-07-07

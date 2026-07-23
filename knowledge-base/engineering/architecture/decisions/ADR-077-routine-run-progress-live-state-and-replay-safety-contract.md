@@ -1,5 +1,4 @@
 ---
-adr: 077
 title: routine_run_progress live-state table + replay-safety contract for heavy crons
 status: accepted
 date: 2026-07-01

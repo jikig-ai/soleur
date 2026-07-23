@@ -1,5 +1,4 @@
 ---
-adr: ADR-132
 title: Infra sentinel — neutralize filenames, never anchor imperatives on tool adjacency
 status: active
 date: 2026-07-21

@@ -328,6 +328,12 @@ report=$(jq -n \
           # or a malformed timestamp string (crash-mid-write). try/catch
           # treats parse failure as epoch 0 — pushes the rule into "unused"
           # which matches intent: we can'"'"'t prove recent activity.
+          # NB (#6794): a HIGH unused rate here is more likely a telemetry-
+          # FRAGMENTATION artifact than dead weight — this aggregate reads only
+          # ONE per-checkout .claude/.rule-incidents.jsonl, but events are split
+          # across many worktrees. Do NOT treat this as a pruning mandate; read
+          # knowledge-base/project/learnings/2026-07-22-rule-metrics-denominator-investigation.md
+          # (union the logs + observe a real ≥8w window first) before any bulk prune.
           rules_unused_over_8w: ($enriched
             | map(select(.fire_count == 0
                 and (.first_seen == null

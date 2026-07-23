@@ -1,5 +1,4 @@
 ---
-adr: ADR-057
 title: "Operator-private weekly digest: two-repo, privilege-separated pipeline"
 status: accepted
 date: 2026-06-12

@@ -1,0 +1,50 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "cloudflare_ruleset.row_empty_phase",
+      "mode": "managed",
+      "type": "cloudflare_ruleset",
+      "name": "row_empty_phase",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "kind": "zone",
+          "name": "row into empty phase",
+          "phase": "http_ratelimit",
+          "zone_id": "zone000000000000000000000000000f",
+          "account_id": null
+        },
+        "after_unknown": {"id": true, "rules": true},
+        "before_sensitive": false,
+        "after_sensitive": {},
+        "importing": null
+      }
+    },
+    {
+      "address": "cloudflare_ruleset.row_populated_phase",
+      "mode": "managed",
+      "type": "cloudflare_ruleset",
+      "name": "row_populated_phase",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "kind": "zone",
+          "name": "row into populated phase",
+          "phase": "http_config_settings",
+          "zone_id": "zone000000000000000000000000000f",
+          "account_id": null
+        },
+        "after_unknown": {"id": true, "rules": true},
+        "before_sensitive": false,
+        "after_sensitive": {},
+        "importing": null
+      }
+    }
+  ]
+}

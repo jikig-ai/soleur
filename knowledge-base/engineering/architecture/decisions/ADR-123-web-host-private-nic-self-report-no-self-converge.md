@@ -1,5 +1,4 @@
 ---
-adr: 123
 title: Web hosts self-report their private NIC but do NOT self-converge (detect + emit + alarm, no reboot)
 status: accepted
 date: 2026-07-18

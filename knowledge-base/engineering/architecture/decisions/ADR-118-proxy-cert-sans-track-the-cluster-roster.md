@@ -1,5 +1,4 @@
 ---
-adr: 118
 title: A shared cert's SANs are the cluster roster — re-mint on membership change, never pin
 status: accepted
 date: 2026-07-17

@@ -1,5 +1,4 @@
 ---
-adr: ADR-048
 title: Operator Claude Code subscription credential — selection by consumer class + structural REST/SDK boundary
 status: accepted
 date: 2026-06-02

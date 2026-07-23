@@ -1,5 +1,4 @@
 ---
-adr: 042
 title: Anthropic SDK inside Inngest function bodies — leader-loop topology
 status: accepted
 date: 2026-05-25

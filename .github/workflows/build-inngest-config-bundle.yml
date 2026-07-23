@@ -1,0 +1,177 @@
+# Build + keyless-sign + dual-publish the ADR-135 config-refresh bundle for the dedicated
+# Inngest host (#6780). PRODUCER half of the pull-based in-place refresh channel.
+#
+# WHY workflow_dispatch (not push/PR): this is the PROMOTION-adjacent artifact producer, run
+# deliberately by an operator when a host-script change is ready to ship. It cannot be exercised
+# until the host-side consumer bake rides the #6178 cutover (HARD-11 — the channel is not live
+# pre-cutover), so it is intentionally not on a PR trigger. The deterministic packaging LOGIC it
+# depends on is unit-tested off the critical path (inngest-config-bundle-pack.test.sh).
+#
+# TRUST MODEL (ADR-135):
+#   • Keyless cosign sign-blob over the manifest → the monotonic VERSION is a SIGNED field
+#     (HARD-2). The host reads VERSION only from the verified manifest, never from an OCI
+#     tag/annotation or the Doppler pointer.
+#   • The signing job is gated on `environment: inngest-config-signing`, whose required-reviewer
+#     rule (github_repository_environment, inngest-config-signing.tf) holds the run in "Waiting"
+#     before any step executes — the human gate on CI-workflow compromise, the named top residual
+#     RCE path (HARD-7). id-token:write is scoped to this job only (least privilege).
+#   • Promotion is SEPARATE (HARD-6): this workflow does NOT write INNGEST_CONFIG_DIGEST. It emits
+#     the published IMAGE@DIGEST; an operator promotes by setting TF_VAR_inngest_config_digest and
+#     running `terraform apply` of inngest-config-digest.tf (no standing CI write-token into the
+#     isolated soleur-inngest/prd).
+name: build-inngest-config-bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Monotonic bundle version (positive integer; MUST exceed the current applied.version / baked floor — HARD-9)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inngest-config-bundle
+  cancel-in-progress: false
+
+jobs:
+  build-sign-publish:
+    runs-on: ubuntu-latest
+    # HARD-7: required-reviewer gate on the signing job (inngest-config-signing.tf).
+    environment: inngest-config-signing
+    permissions:
+      contents: read
+      packages: write # GHCR push
+      id-token: write # OIDC token for cosign keyless sign-blob
+    env:
+      IMAGE: ghcr.io/jikig-ai/soleur-inngest-config
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Validate version + assemble refresh-set
+        id: pack
+        run: |
+          set -euo pipefail
+          # Version is validated again inside the pack script; fail fast here for a clear message.
+          if [[ ! "$VERSION" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::version must be a positive integer (got '${VERSION}')"
+            exit 1
+          fi
+          # Read the committed refresh-set list (skip #-comments and blank lines). Each path is
+          # verified to exist by the pack script; a missing member is a hard fail-closed exit.
+          mapfile -t FILES < <(grep -vE '^\s*(#|$)' apps/web-platform/infra/inngest-config-refresh-set.txt)
+          if [[ "${#FILES[@]}" -eq 0 ]]; then
+            echo "::error::refresh-set is empty — membership is finalized at the #6178 cutover; nothing to publish yet"
+            exit 1
+          fi
+          echo "Packing ${#FILES[@]} refresh-set files at VERSION=${VERSION}"
+          bash apps/web-platform/infra/inngest-config-bundle-pack.sh "$VERSION" "$RUNNER_TEMP/bundle" "${FILES[@]}"
+          echo "manifest=$RUNNER_TEMP/bundle/manifest.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign (SHA-pinned, v3.1.1 — matches the host verify container)
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.1
+
+      - name: Keyless sign-blob the manifest (HARD-2 — VERSION is inside the signed bytes)
+        env:
+          MANIFEST: ${{ steps.pack.outputs.manifest }}
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --output-signature "${MANIFEST}.sig" \
+            --output-certificate "${MANIFEST}.cert" \
+            "${MANIFEST}"
+          # The .sig + .cert travel INSIDE the bundle so the host verify-blob is fully offline
+          # (cosign verify-blob --certificate <cert> --trusted-root <baked> --certificate-identity-regexp …).
+          echo "Signed ${MANIFEST}: wrote ${MANIFEST}.sig + ${MANIFEST}.cert"
+
+      - name: Assemble bundle tarball + minimal OCI context
+        run: |
+          set -euo pipefail
+          tar -C "$RUNNER_TEMP/bundle" -czf "$RUNNER_TEMP/bundle.tar.gz" .
+          mkdir -p "$RUNNER_TEMP/oci"
+          mv "$RUNNER_TEMP/bundle.tar.gz" "$RUNNER_TEMP/oci/bundle.tar.gz"
+          printf 'FROM scratch\nCOPY bundle.tar.gz /bundle.tar.gz\n' > "$RUNNER_TEMP/oci/Dockerfile"
+
+      - name: Docker login (GHCR)
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build + push bundle image (GHCR)
+        id: docker_build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ${{ runner.temp }}/oci
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.IMAGE }}:v${{ env.VERSION }}
+
+      - name: Bridge to zot registry (CF Tunnel)
+        id: zot_bridge
+        if: steps.docker_build.outcome == 'success'
+        continue-on-error: true
+        uses: ./.github/actions/cf-tunnel-registry-bridge
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          cloudflared-version: "2026.5.0"
+          cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+
+      - name: Mirror bundle GHCR->zot (crane, digest-preserving)
+        if: steps.zot_bridge.outcome == 'success'
+        continue-on-error: true
+        env:
+          DIGEST: ${{ steps.docker_build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          retry() { local n=0; until "$@"; do n=$((n + 1)); [[ $n -ge 3 ]] && return 1; sleep $((n * 3)); done; }
+          # Install crane (SHA-pinned; supply-chain discipline, matches reusable-release.yml).
+          CRANE_VERSION="v0.20.2"
+          CRANE_SHA256="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
+          curl -fsSL -o /tmp/crane.tgz \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+          echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/crane.tgz -C /usr/local/bin crane
+          rm -f /tmp/crane.tgz
+          REPO="${IMAGE#ghcr.io/}"
+          ZOT="127.0.0.1:5000/${REPO}"
+          # crane copy preserves the digest → the same @sha256 the pointer names resolves on both
+          # registries. GHCR is authoritative for the v1 GHCR-direct host pull (D-ZOT); the zot
+          # copy is a dark-safe convenience, so this step is continue-on-error.
+          retry crane copy "${IMAGE}:v${VERSION}" "${ZOT}:v${VERSION}"
+
+      - name: Tear down cloudflared registry bridge
+        if: always()
+        run: |
+          set +e
+          docker logout 127.0.0.1:5000 >/dev/null 2>&1 || true
+          if [[ -n "${REGISTRY_BRIDGE_PID:-}" ]]; then kill "$REGISTRY_BRIDGE_PID" >/dev/null 2>&1 || true; fi
+
+      - name: Emit published digest for promotion (HARD-6)
+        env:
+          DIGEST: ${{ steps.docker_build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Inngest config bundle published"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| version | \`${VERSION}\` |"
+            echo "| image | \`${IMAGE}@${DIGEST}\` |"
+            echo ""
+            echo "**To promote** (HARD-6, separate principal): set \`TF_VAR_inngest_config_digest=${DIGEST}\`"
+            echo "in Doppler \`soleur/prd_terraform\`, verify read-only, then \`terraform apply\` of"
+            echo "\`inngest-config-digest.tf\`. The pointer version MUST exceed the baked floor (HARD-9)."
+          } >> "$GITHUB_STEP_SUMMARY"
