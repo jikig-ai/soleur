@@ -99,7 +99,7 @@ doppler run -p soleur -c prd_terraform -- \
   doppler run --token "$(doppler configure get token --plain)" \
     -p soleur -c prd_terraform --name-transformer tf-var -- \
   terraform apply \
-    -var="ssh_key_path=$HOME/.ssh/id_ed25519.pub" \
+    -var="ssh_key_path=$HOME/.ssh/id_<key>.pub" \
     -var="ssh_private_key_path=$HOME/.ssh/id_<key>" \
     -target=terraform_data.doppler_install
 ```
@@ -114,7 +114,7 @@ doppler run -p soleur -c prd_terraform -- \
   doppler run --token "$(doppler configure get token --plain)" \
     -p soleur -c prd_terraform --name-transformer tf-var -- \
   terraform plan -detailed-exitcode -no-color -input=false \
-    -var="ssh_key_path=$HOME/.ssh/id_ed25519.pub" \
+    -var="ssh_key_path=$HOME/.ssh/id_<key>.pub" \
     -var="ssh_private_key_path=$HOME/.ssh/id_<key>"
 ```
 
