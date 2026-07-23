@@ -58,7 +58,12 @@ a pass on exactly the PRs the gate cannot inspect.
   this branch: `OK: no resolvable credential-file path literals in 7450 scanned file(s)`, exit 0.
 - **FR3.** `lint-bot-statuses` retains its remaining six steps unchanged and remains advisory
   (absent from the SSOT and the ruleset).
-- **FR4.** Add a Phase-4 "Secret-safety ceiling" step to
+- **FR4.** *(shape corrected at /work 2026-07-23: implemented **inline** in the existing Phase-4
+  `run:` block using the sibling `if ! <cmd>; then echo "::error::…"; exit 1; fi` form, not as a
+  separate YAML step as originally written — the spec is authoritative for intent, not literal
+  shape, per `hr-when-a-plan-specifies-relative-paths-e-g`. Parity Test 8 anchors on
+  `^\s*if ! python3 …` accordingly.)*
+  Add a Phase-4 "Secret-safety ceiling" step to
   `.github/actions/bot-pr-with-synthetic-checks/action.yml` that runs the credential linter over
   the staged paths before the PR is opened, and fails loud on a non-zero exit — no branch pushed,
   no PR, no synthetics. Mirror the existing earned-green `gitleaks` / `lint-fixture-content` steps.
