@@ -79,6 +79,24 @@ on:
         description: "Why are you applying? (e.g. transient retry, or the dispatch reason)"
         required: true
         type: string
+      # Typo-guard for the destructive `workspaces-luks-recut` path ONLY (ignored by every other
+      # target). NOT the authorization — the `environment: workspaces-luks-cutover` reviewer gate on
+      # that job is the sole human authorization (DP-11 F8). Mirrors workspaces-luks-cutover.yml's
+      # `confirm` typo-guard.
+      confirm:
+        description: "For apply_target=workspaces-luks-recut ONLY: type RECUT-WORKSPACES-LUKS to authorize the destructive volume replace (typo-guard, NOT the authorization)."
+        required: false
+        type: string
+      # For apply_target=workspaces-luks-recut ONLY. The Hetzner id of the ORPHANED LUKS volume the
+      # operator intends to destroy (read it from the incident / the latest terraform-drift run's
+      # `hcloud_volume.workspaces_luks: Refreshing state... [id=...]` line). The recut gate PINS the
+      # replaced volume's before.id to this value, so a state-corruption that mapped the
+      # workspaces_luks ADDRESS onto the LIVE volume's physical id cannot silently destroy live data
+      # (user-impact-reviewer P2, #6855). Ignored by every other target.
+      expected_luks_volume_id:
+        description: "For apply_target=workspaces-luks-recut ONLY: the numeric Hetzner id of the orphaned LUKS volume to destroy (id-pin — the gate refuses to replace a different physical volume)."
+        required: false
+        type: string
       # `manual-rerun` (default) preserves the historical escape-hatch behavior EXACTLY
       # — the `apply` job's allow-list re-run. Every other value selects a dedicated,
       # MUTUALLY-EXCLUSIVE dispatch job (see each job's `if:`), so a dispatch runs
@@ -94,7 +112,7 @@ on:
       # knowledge-base/engineering/operations/runbooks/ -- see web-host-birth.md). web-1 still has no
       # automated birth path — that HALT is tracked by #6730, not by these targets.
       apply_target:
-        description: "Which apply path? manual-rerun (default, allow-list re-run) | inngest-host (additive net-new inngest host + secrets) | inngest-host-replace (scoped -replace of the inngest host to re-run cloud-init; preserves the Redis AOF volume) | registry-host-replace (scoped -replace of the registry host to re-run cloud-init + apply any pending volume resize; preserves the zot storage volume) | registry-region-migrate (#6288: move the registry to var.registry_location + recreate the store volume in the new region — the store is a disposable GHCR mirror that re-fills from GHCR; scoped, guarded, no out-of-scope destroys) | git-data-host-replace (scoped -replace of the git-data host to re-run cloud-init; preserves BOTH data volumes + the LUKS passphrase; #6242) | workspaces-luks-cutover (#6604: FIRST-PROVISION +create of the five workspaces_luks resources — the encrypted volume + attachment + passphrase/secret/token — gate-guarded so it touches NEITHER the live plaintext /mnt/data volume/attachment NOR the web-1 server; the freeze/rsync/repoint runs from the separate environment-gated workspaces-luks-cutover.yml)"
+        description: "Which apply path? manual-rerun (default, allow-list re-run) | inngest-host (additive net-new inngest host + secrets) | inngest-host-replace (scoped -replace of the inngest host to re-run cloud-init; preserves the Redis AOF volume) | registry-host-replace (scoped -replace of the registry host to re-run cloud-init + apply any pending volume resize; preserves the zot storage volume) | registry-region-migrate (#6288: move the registry to var.registry_location + recreate the store volume in the new region — the store is a disposable GHCR mirror that re-fills from GHCR; scoped, guarded, no out-of-scope destroys) | git-data-host-replace (scoped -replace of the git-data host to re-run cloud-init; preserves BOTH data volumes + the LUKS passphrase; #6242) | workspaces-luks-cutover (#6604: FIRST-PROVISION +create of the five workspaces_luks resources — the encrypted volume + attachment + passphrase/secret/token — gate-guarded so it touches NEITHER the live plaintext /mnt/data volume/attachment NOR the web-1 server; the freeze/rsync/repoint runs from the separate environment-gated workspaces-luks-cutover.yml) | workspaces-luks-recut (#6855/#6812: scoped -replace of hcloud_volume.workspaces_luks + its attachment to DESTROY the dead-man-orphaned LUKS volume [discarding the operator-accepted 27-min window] and create a FRESH RAW replacement so the cutover luksFormats it; environment-gated + typed confirm=RECUT-WORKSPACES-LUKS; gate-guarded so it touches NEITHER the live plaintext volume/attachment NOR web-1, and reuses the passphrase)"
         required: false
         default: manual-rerun
         type: choice
@@ -106,6 +124,7 @@ on:
           - registry-region-migrate
           - git-data-host-replace
           - workspaces-luks-cutover
+          - workspaces-luks-recut
           # #6767: read-only retrospective drift audit of every declared ruleset's
           # LIVE phase entrypoint (no terraform apply; own concurrency group;
           # issues:write App auth; posts findings to #6767). See the
@@ -2088,6 +2107,203 @@ jobs:
             echo "**Run:** ${RUN_URL}"
             echo ""
             echo "Additive +create of the encrypted volume (zero downtime). The freeze/rsync/repoint/canary is the SEPARATE environment-gated workspaces-luks-cutover.yml dispatch."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Selected by `-f apply_target=workspaces-luks-recut` (#6855, #6812). A scoped `terraform
+  # -replace=hcloud_volume.workspaces_luks` (+ its attachment) that DESTROYS the dead-man-orphaned
+  # LUKS volume (Hetzner id 106406962, already crypto_LUKS, holding the operator-ACCEPTED-discarded
+  # 2026-07-20 27-min window) and creates a genuinely RAW replacement with the SAME name — so the
+  # existing cutover resolves the new device by name (workspaces-luks-cutover.yml queries the Hetzner
+  # API `?name=soleur-web-platform-data-luks`), hits the raw→luksFormat arm, and copies from the live
+  # plaintext /mnt/data. UNLIKE workspaces-luks-cutover (an ADDITIVE first provision, un-gated), THIS
+  # is DESTRUCTIVE on sole-copy data, so it carries an `environment:` reviewer gate — the sole human
+  # authorization (DP-11 F8) — plus a typed confirm token. The passphrase is REUSED (never re-minted);
+  # the sourced workspaces_luks_recut_gate ABORTS unless the plan is EXACTLY {volume REPLACE +
+  # attachment CREATE} with the live plaintext volume/attachment + web-1 + passphrase all untouched.
+  # NO [ack-destroy] bypass. Zero downtime: /mnt/data serves from the untouched live /dev/sdb
+  # throughout; attach/detach is a hot Hetzner-API operation.
+  workspaces_luks_recut:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'workspaces-luks-recut'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # SOLE human authorization on the destructive replace (C19 / DP-11 F8). Reuses the existing
+    # github_repository_environment.workspaces_luks_cutover (reviewers.users = [54279], already
+    # non-empty + provisioned) — same human, same LUKS-cutover lifecycle, same sole-copy volume. The
+    # whole job is held in "Waiting" for @deruelle before ANY step (incl. the plan) runs; the
+    # destroy-guard then re-asserts the exact shape post-approval, pre-apply.
+    environment: workspaces-luks-cutover
+    # Job-level web-1-swap mutex (DP-3): this job replaces a volume attached to web-1, so it shares
+    # the cross-pipeline `web-1-swap` group with the release deploy, apply-deploy-pipeline-fix.yml,
+    # workspaces-luks-cutover.yml and the workspaces_luks_cutover job above.
+    concurrency:
+      group: web-1-swap
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Validate confirm token + expected volume id (typo-guards, NOT the authorization)
+        env:
+          # workflow_dispatch inputs — operator-controlled, NOT attacker-controlled; still passed via
+          # env: (never inline `${{ }}` in run:) per the workflow-injection convention.
+          CONFIRM: ${{ inputs.confirm }}
+          EXPECTED_LUKS_ID: ${{ inputs.expected_luks_volume_id }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM" != "RECUT-WORKSPACES-LUKS" ]]; then
+            echo "::error::workspaces-luks-recut requires confirm=RECUT-WORKSPACES-LUKS (typo-guard). The environment reviewer approval is the authorization; this token only guards a mis-dispatch."
+            exit 1
+          fi
+          # The id-pin (user-impact-reviewer P2, #6855) requires the operator to name the physical
+          # volume being destroyed. Enforce a numeric id here so the gate's before.id comparison is
+          # well-formed; the gate then refuses to replace any OTHER physical volume.
+          if [[ ! "$EXPECTED_LUKS_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::workspaces-luks-recut requires expected_luks_volume_id=<numeric Hetzner id of the orphaned LUKS volume> (read it from the latest terraform-drift run's 'hcloud_volume.workspaces_luks: Refreshing state... [id=...]' line). The gate PINS the replaced volume's id to this value so a state-corruption cannot destroy the live volume."
+            exit 1
+          fi
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
+        # satisfies var.ssh_key_path (never consumed by the scoped volume replace).
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Terraform plan (workspaces-luks recut -replace) + destroy-guard
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # The operator-confirmed physical id of the orphaned volume (validated numeric in the
+          # preflight step). Passed to the gate as the id-pin so the plan's replaced-volume before.id
+          # must match it (user-impact-reviewer P2, #6855).
+          EXPECTED_LUKS_ID: ${{ inputs.expected_luks_volume_id }}
+        # Scoped `-replace` of the orphaned LUKS volume + its attachment. The passphrase / secret /
+        # token are PRESERVED BY OMISSION (not -targeted → cannot be planned for a re-mint). The
+        # sourced workspaces_luks_recut_gate reads the STRUCTURED plan JSON and ABORTS unless the plan
+        # is EXACTLY {volume REPLACE (or recovery bare create) + attachment CREATE} with the live
+        # volume/attachment + web-1 + passphrase untouched AND the replaced-volume id == EXPECTED_LUKS_ID.
+        run: |
+          # set +e so the `rc=$?` diagnostic runs — GitHub runs `run:` under an inherited `-e`.
+          set +e
+          set -uo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -replace='hcloud_volume.workspaces_luks' \
+              -target='hcloud_volume.workspaces_luks' \
+              -target='hcloud_volume_attachment.workspaces_luks' \
+              -var="ssh_key_path=${CI_SSH_PUB}"
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (workspaces-luks-recut) failed (exit $rc)."
+            exit $rc
+          fi
+          set -e
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
+          # Sourced gate — the SAME bytes tests/scripts/test-workspaces-luks-recut-gate.sh exercises.
+          # shellcheck source=tests/scripts/lib/workspaces-luks-recut-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/workspaces-luks-recut-gate.sh"
+          if ! workspaces_luks_recut_gate tfplan.json "$EXPECTED_LUKS_ID"; then
+            echo "::error::workspaces-luks-recut destroy-guard ABORTED: the plan is not the exact scoped recut. Verify the LUKS volume (hcloud_volume.workspaces_luks) shows a genuine REPLACE (delete AND create) OR a recovery bare create (before null), the attachment shows a create, the replaced-volume id matches expected_luks_volume_id=${EXPECTED_LUKS_ID}, the LIVE plaintext /mnt/data volume (hcloud_volume.workspaces[\"web-1\"]) + its attachment + the web-1 server are UNTOUCHED, and the passphrase (random_password.workspaces_luks + doppler_secret.workspaces_luks_key) is NOT re-minted. A gate result of luks_id_mismatch=1 means the workspaces_luks ADDRESS resolves to a DIFFERENT physical volume than the id you supplied — STOP and reconcile terraform state before proceeding. NO [ack-destroy] bypass on this path."
+            grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
+            exit 1
+          fi
+          echo "workspaces-luks-recut plan is the exact scoped recut. Plan summary:"
+          grep -E '^Plan:' tfplan.txt || true
+
+      - name: Terraform apply (workspaces-luks recut) — live-volume-preserved + replace assert
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Apply the saved, guarded plan. Post-apply jq backstops from the SAVED plan (belt-and-
+        # suspenders to the gate): the live plaintext volume/attachment + web-1 carry ZERO actions;
+        # the LUKS volume shows BOTH a delete AND a create (replace); the attachment shows a create.
+        run: |
+          set -euo pipefail
+          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false tfplan; then
+            echo "::error::terraform apply (workspaces-luks-recut) failed — the orphaned volume may be destroyed with the raw replacement not yet created (destroy-before-create; the volume then leaves state). The LIVE plaintext /mnt/data is UNTOUCHED (different volume) so serving is unaffected. RECOVERY: re-dispatch workspaces-luks-recut with the SAME confirm + expected_luks_volume_id — a re-dispatch plans a bare create which the gate's recovery arm accepts (before==null → id-pin is a no-op), completing the raw-volume + attachment create."
+            exit 1
+          fi
+          for ADDR in 'hcloud_volume.workspaces["web-1"]' 'hcloud_volume_attachment.workspaces["web-1"]' 'hcloud_server.web["web-1"]'; do
+            TOUCHED=$(jq --arg a "$ADDR" '[.resource_changes[]?
+              | select(.address == $a)
+              | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"))] | length' tfplan.json)
+            if [[ "$TOUCHED" != "0" ]]; then
+              echo "::error::${ADDR} shows ${TOUCHED} action(s) in the applied plan — the LIVE plaintext store / web-1 must be preserved. This should have been caught by the guard; failing hard."
+              exit 1
+            fi
+          done
+          # Accept a genuine replace (delete+create) OR the recovery bare create (before null) —
+          # mirrors the gate's luks_volume_provisioned so a legitimate recovery apply is not rejected.
+          VOL_PROVISIONED=$(jq '[.resource_changes[]?
+            | select(.address == "hcloud_volume.workspaces_luks")
+            | select(((.change.actions? | index("delete")) and (.change.actions? | index("create")))
+                     or ((.change.actions? == ["create"]) and (.change.before == null)))] | length' tfplan.json)
+          ATT_CREATES=$(jq '[.resource_changes[]?
+            | select(.address == "hcloud_volume_attachment.workspaces_luks")
+            | select(.change.actions? | index("create"))] | length' tfplan.json)
+          if [[ "$VOL_PROVISIONED" == "0" || "$ATT_CREATES" == "0" ]]; then
+            echo "::error::the LUKS volume did not show a replace (delete+create) or recovery create, or the attachment no create, in the applied plan — the recut did not produce a fresh raw target. Failing hard."
+            exit 1
+          fi
+          echo "live plaintext volume/attachment + web-1 untouched (0 actions); orphaned LUKS volume REPLACED (delete+create) + attachment re-created. Zero downtime. Next: dispatch workspaces-luks-cutover.yml (environment-gated, dry_run then freeze) against the fresh raw target."
+
+      - name: Dispatch summary
+        if: always()
+        env:
+          REASON: ${{ inputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## workspaces-luks-recut (fresh-target replace, #6855 / #6812)"
+            echo ""
+            echo "**Dispatch reason:** ${REASON:-n/a}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Run:** ${RUN_URL}"
+            echo ""
+            echo "Replaced the dead-man-orphaned LUKS volume with a FRESH RAW target (discarding the operator-accepted 27-min window; passphrase reused). Zero downtime. Next: the environment-gated workspaces-luks-cutover.yml dispatch (dry_run → freeze) luksFormats the fresh target and copies from live plaintext."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --- #6767: read-only retrospective entrypoint drift AUDIT --------------------

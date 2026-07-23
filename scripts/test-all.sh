@@ -327,6 +327,7 @@ if want_scripts; then
   # /mnt/data volume/attachment or the web-1 server, any passphrase re-mint, any destroy/forget,
   # or anything out of scope. Registered HERE — nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/workspaces-luks-cutover-gate" bash tests/scripts/test-workspaces-luks-cutover-gate.sh
+  run_suite "tests/scripts/workspaces-luks-recut-gate" bash tests/scripts/test-workspaces-luks-recut-gate.sh
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh

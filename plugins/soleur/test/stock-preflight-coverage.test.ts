@@ -84,6 +84,19 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
     "additive volume create (no server → stock-preflight is a no-op); its own gate forbids any destroy, so a miss is recoverable, not a strand",
   ],
   [
+    "workspaces-luks-recut",
+    // #6855/#6812 scoped -replace of the orphaned LUKS volume (job `workspaces_luks_recut`). It
+    // `-replace`s a VOLUME + `-target`s the volume + its attachment — NO hcloud_server — so
+    // stock-preflight-gate.sh (which `select(.type == "hcloud_server")`) hits its legitimate-empty
+    // out-of-scope branch and cannot fire. Its OWN gate (workspaces_luks_recut_gate) asserts
+    // web1_server_touched==0 + old_volume_touched==0 + a scoped resource_deletes==0, and the LIVE
+    // plaintext /mnt/data serves throughout (a different volume), so a failed replace leaves the
+    // fleet + serving intact (recoverable, not a strand). Same class as workspaces-luks-cutover —
+    // but note it IS destructive on the orphaned volume, which is why it carries an environment
+    // reviewer gate; that authorization is orthogonal to the stock-preflight (server-stock) concern.
+    "volume replace (no server → stock-preflight is a no-op); its own gate forbids touching the live volume/web-1, and /mnt/data serves from a different volume, so a miss is recoverable, not a strand",
+  ],
+  [
     "entrypoint-audit",
     // #6767 read-only Cloudflare-rulesets drift audit (job `entrypoint_audit`). It runs
     // NO `terraform apply` — only HTTP GETs to the Cloudflare rulesets API + a `gh issue
@@ -94,9 +107,9 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
   ],
 ]);
 
-// Sentinel: 8 options today (manual-rerun, inngest-host, inngest-host-replace,
+// Sentinel: 9 options today (manual-rerun, inngest-host, inngest-host-replace,
 // registry-host-replace, registry-region-migrate, git-data-host-replace,
-// workspaces-luks-cutover, entrypoint-audit).
+// workspaces-luks-cutover, workspaces-luks-recut, entrypoint-audit).
 // reason: 9 -> 7. warm-standby and web-2-recreate were REMOVED with the web-2
 // dispatch sweep (#6575, 2026-07-20) after web-2 retired; both hard--targeted
 // addresses that no longer exist. This floor is lowered to match a real deletion,
