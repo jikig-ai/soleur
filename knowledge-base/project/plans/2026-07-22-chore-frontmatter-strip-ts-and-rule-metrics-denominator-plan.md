@@ -167,8 +167,13 @@ logs:
   where: Sentry + Inngest structured logger (logger.warn/info from within the cron step)
   retention: Sentry project default
 discoverability_test:
-  command: bash scripts/lib/frontmatter-strip.test.sh && bash scripts/lint-agents-compound-sync.sh && (cd apps/web-platform && ./node_modules/.bin/tsc --noEmit)
-  expected_output: parity test "Fail: 0"; sync guard "OK"; tsc clean — NO ssh
+  command: bash scripts/lint-agents-compound-sync.sh
+  expected_output: "OK"
+  # Single runnable probe (no ssh, no creds, no chaining — the contract is ONE
+  # local command). The sync guard asserts the measurement-basis agreement this
+  # change delivers. Fuller local verification (three-way parity + tsc + next
+  # build) is documented in Acceptance Criteria; those are multi-command and not
+  # the discoverability single-probe.
 ```
 
 ## Architecture Decision (ADR/C4)
