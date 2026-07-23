@@ -182,7 +182,7 @@ unattended (exactly #4375: 1 cron → 8 over 57 days).
 **If this leaks / mis-fires:** the SLA cron auto-closes a genuine unresolved
 emergency the operator hasn't gotten to (the auto-close risk the "dead classes only"
 knob and the fail-safe allowlist exist to prevent).
-**Brand-survival threshold:** single-user incident. CPO sign-off carried forward from
+- **Brand-survival threshold:** single-user incident. CPO sign-off carried forward from
 brainstorm (CPO lens applied); `user-impact-reviewer` invoked at review time.
 
 **Acknowledged residual (review — user-impact Finding 3):** the digest failed-run self-report
