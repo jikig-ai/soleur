@@ -43,5 +43,5 @@ descriptive names) — this file is itself in the linter's scan scope.
 
 ## Phase 4 — Promotion decision (record + defer)
 
-- [ ] 4.1 File follow-up issue for the `lint-bot-statuses` required-check promotion (deferred).
-- [ ] 4.2 Reference the follow-up number in the PR body; `Closes #6868`.
+- [x] 4.1 Filed follow-up issue #6882 for the `lint-bot-statuses` required-check promotion (deferred).
+- [ ] 4.2 Reference #6882 in the PR body; `Closes #6868` (handled at ship).
