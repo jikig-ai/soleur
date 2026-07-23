@@ -125,19 +125,19 @@ File ONE issue enumerating the grandfathered home-relative credential-path docs 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] The four Doppler-config-path literals are gone from `preflight/SKILL.md`: a grep for the resolvable home-relative Doppler config literal (and its `@`-prefixed exfil form) returns **0** lines. (/work constructs the grep from the in-file literal; the AC does not embed it.)
-- [ ] `grep -c 'credentialed CLI' plugins/soleur/skills/preflight/SKILL.md` is unchanged (≥1) — the reject message still exists, only its path list changed.
-- [ ] The verb denylist regex line is byte-identical to `origin/main`: `git diff origin/main -- plugins/soleur/skills/preflight/SKILL.md` shows no change to the `(doppler|gh|aws|supabase|stripe|hcloud|wrangler|terraform|flyctl|vercel)` line.
-- [ ] `discoverability-test-parser.ts:231` return string and the SKILL.md reject echo carry the same neutralized text (mirror preserved); a grep for the Doppler config filename in `discoverability-test-parser.ts` returns 0.
-- [ ] `bun test plugins/soleur/test/preflight-discoverability-test.test.ts` passes.
-- [ ] `bash scripts/lint-credential-path-literals.test.sh` passes, with ≥1 positive fixture proving non-vacuity (guard exits non-zero on a resolvable home-relative Doppler config path) and neutralized-form fixtures passing.
-- [ ] `python3 scripts/lint-credential-path-literals.py --changed --base origin/main` exits 0 (this PR's touched docs — SKILL.md + own plan/spec/tasks — carry no resolvable credential path).
-- [ ] `python3 scripts/lint-credential-path-literals.py <this plan> <spec> <tasks>` exits 0 — the planning artifacts do not reintroduce the trigger they fix.
-- [ ] `bash scripts/lint-orphan-test-suites.sh` passes (new `.test.sh` is registered in `test-all.sh`).
-- [ ] `grep -q lint-credential-path-literals scripts/test-all.sh` (new suite is wired into the aggregate runner).
+- [x] The four Doppler-config-path literals are gone from `preflight/SKILL.md`: a grep for the resolvable home-relative Doppler config literal (and its `@`-prefixed exfil form) returns **0** lines. (/work constructs the grep from the in-file literal; the AC does not embed it.)
+- [x] `grep -c 'credentialed CLI' plugins/soleur/skills/preflight/SKILL.md` is unchanged (≥1) — the reject message still exists, only its path list changed.
+- [x] The verb denylist regex line is byte-identical to `origin/main`: `git diff origin/main -- plugins/soleur/skills/preflight/SKILL.md` shows no change to the `(doppler|gh|aws|supabase|stripe|hcloud|wrangler|terraform|flyctl|vercel)` line.
+- [x] `discoverability-test-parser.ts:231` return string and the SKILL.md reject echo carry the same neutralized text (mirror preserved); a grep for the Doppler config filename in `discoverability-test-parser.ts` returns 0.
+- [x] `bun test plugins/soleur/test/preflight-discoverability-test.test.ts` passes.
+- [x] `bash scripts/lint-credential-path-literals.test.sh` passes, with ≥1 positive fixture proving non-vacuity (guard exits non-zero on a resolvable home-relative Doppler config path) and neutralized-form fixtures passing.
+- [x] `python3 scripts/lint-credential-path-literals.py --changed --base origin/main` exits 0 (this PR's touched docs — SKILL.md + own plan/spec/tasks — carry no resolvable credential path).
+- [x] `python3 scripts/lint-credential-path-literals.py <this plan> <spec> <tasks>` exits 0 — the planning artifacts do not reintroduce the trigger they fix.
+- [x] `bash scripts/lint-orphan-test-suites.sh` passes (new `.test.sh` is registered in `test-all.sh`).
+- [x] `grep -q lint-credential-path-literals scripts/test-all.sh` (new suite is wired into the aggregate runner).
 
 ### Post-merge (operator)
-- [ ] None require the operator. The consolidated follow-up (Phase 6) is filed via `gh issue create` (automatable, in `/ship`). The real-world confirmation of the fix (no future auto-attach) is a **harness behavior** the test suite cannot exercise (see Verification Limitation).
+- [x] None require the operator. The consolidated follow-up (Phase 6) is filed via `gh issue create` (automatable, in `/ship`). The real-world confirmation of the fix (no future auto-attach) is a **harness behavior** the test suite cannot exercise (see Verification Limitation).
 
 ## Verification Limitation (recorded honestly)
 
