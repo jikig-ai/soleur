@@ -385,6 +385,11 @@ fi
 if want_bun; then
   run_suite "plugins/soleur" bun test plugins/soleur/
   run_suite "blog-link-validation" bash scripts/validate-blog-links.sh
+  # frontmatter-strip three-way parity (#6794). The suite ALSO matches the
+  # scripts-shard `scripts/lib/*.test.sh` glob below, but that shard has no bun,
+  # so its strip.ts arm skip-gates there. Registering it here (bun guaranteed)
+  # is what actually exercises strip.ts == strip.py == strip.sh in CI.
+  run_suite "scripts/frontmatter-strip-parity" bash scripts/lib/frontmatter-strip.test.sh
 fi
 
 # Bash *.test.sh glob — scripts shard. (ci-deploy.test.sh runs in infra-validation.yml.)

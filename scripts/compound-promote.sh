@@ -34,6 +34,14 @@
 set -euo pipefail
 
 REPO_ROOT="${COMPOUND_PROMOTE_FIXTURE_ROOT:-$(git rev-parse --show-toplevel)}"
+# #6794: frontmatter-strip contract (defines strip_frontmatter). Sourced so the
+# always-loaded byte measurement below runs on the same stripped basis as the
+# commit gate. strip.sh is a CODE dependency colocated in this script's own tree,
+# so resolve it from the script dir — NOT $REPO_ROOT, which the test harness
+# repoints to a minimal fixture tree via COMPOUND_PROMOTE_FIXTURE_ROOT. Sourcing
+# (not executing) only defines the function.
+_CP_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$_CP_SCRIPT_DIR/lib/frontmatter-strip/strip.sh"
 CONFIG="$REPO_ROOT/knowledge-base/project/promotion-config.yml"
 LEARNINGS_DIR="$REPO_ROOT/knowledge-base/project/learnings"
 RETIRED_FILE="$REPO_ROOT/scripts/retired-rule-ids.txt"
@@ -154,18 +162,22 @@ done
 AGENTS_INDEX="$REPO_ROOT/AGENTS.md"
 AGENTS_CORE="$REPO_ROOT/AGENTS.core.md"
 ALWAYS_LOADED_NOW=0
-[[ -f "$AGENTS_INDEX" ]] && ALWAYS_LOADED_NOW=$(( ALWAYS_LOADED_NOW + $(wc -c < "$AGENTS_INDEX") ))
-[[ -f "$AGENTS_CORE"  ]] && ALWAYS_LOADED_NOW=$(( ALWAYS_LOADED_NOW + $(wc -c < "$AGENTS_CORE")  ))
+# Measure on the FRONTMATTER-STRIPPED basis (#6794) — strip is a no-op on
+# AGENTS.md (no leading `---`), so this matches the linter's authority
+# (b_index raw + b_core stripped) exactly.
+[[ -f "$AGENTS_INDEX" ]] && ALWAYS_LOADED_NOW=$(( ALWAYS_LOADED_NOW + $(strip_frontmatter < "$AGENTS_INDEX" | wc -c) ))
+[[ -f "$AGENTS_CORE"  ]] && ALWAYS_LOADED_NOW=$(( ALWAYS_LOADED_NOW + $(strip_frontmatter < "$AGENTS_CORE"  | wc -c) ))
 # Always-loaded byte budgets. Source of truth: scripts/lint-agents-rule-budget.py
 # (B_ALWAYS_REJECT / B_ALWAYS_WARN); agreement is enforced by
 # scripts/lint-agents-compound-sync.sh. Do not edit one side alone — that de-sync
 # is what issue #6461 was filed for.
 #
-# UNIT SKEW (deliberate, fail-safe): the linter's thresholds are defined over
-# FRONTMATTER-STRIPPED bytes; the `wc -c` measurements above are RAW. Raw is
-# structurally >= stripped, so this comparison refuses no later than the commit
-# gate would — the safe direction, accepted knowingly. (The exact gap drifts with
-# frontmatter size; the direction is the invariant.)
+# UNIT (unit-exact, #6794): the measurements above strip frontmatter before
+# `wc -c`, so they use the SAME basis as the linter's thresholds
+# (b_index raw + b_core stripped). The previously-documented ~73 B raw-vs-stripped
+# skew is closed; the comparison is exact. (This operator-local hand-testing
+# script emits advisory prompt text, not a gate, so the runtime's over-strip
+# guard lives only in cron-compound-promote.ts, not here.)
 #
 # Hard ceiling, mirroring the commit gate (post-apply enforcement).
 ALWAYS_LOADED_CAP=23000
