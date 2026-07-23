@@ -35,6 +35,7 @@ import { GoldButton } from "@/components/ui/gold-button";
 import { RefreshIcon, SearchIcon, SpinnerIcon } from "@/components/icons";
 import { FilterBar } from "./filter-bar";
 import { IssueColumn } from "./issue-column";
+import { MobileBoard } from "./mobile-board";
 import { IssueDetailSheet } from "./issue-detail-sheet";
 import { NewIssueDialog } from "./new-issue-dialog";
 import {
@@ -581,18 +582,25 @@ export function WorkstreamBoard() {
       ) : filtered.length === 0 ? (
         <NoResults onReset={resetFilters} />
       ) : (
-        <div className="flex gap-3 overflow-x-auto pb-4">
-          {COLUMNS.map((column) => (
-            <IssueColumn
-              key={column.status}
-              column={column}
-              issues={filtered.filter((i) => i.status === column.status)}
-              onOpen={openIssue}
-              collapsed={collapsed.has(column.status)}
-              onToggleCollapse={toggleCollapse}
-            />
-          ))}
-        </div>
+        <>
+          {/* Desktop: the 7-column horizontal board. Mobile (below md): a
+              status-selector + single full-width column (MobileBoard). Both
+              consume the same `filtered` array + `openIssue`, so filters/search,
+              ?issue URL sync, and write handling are shared. */}
+          <div className="hidden gap-3 overflow-x-auto pb-4 md:flex">
+            {COLUMNS.map((column) => (
+              <IssueColumn
+                key={column.status}
+                column={column}
+                issues={filtered.filter((i) => i.status === column.status)}
+                onOpen={openIssue}
+                collapsed={collapsed.has(column.status)}
+                onToggleCollapse={toggleCollapse}
+              />
+            ))}
+          </div>
+          <MobileBoard issues={filtered} onOpen={openIssue} className="md:hidden" />
+        </>
       )}
 
       <IssueDetailSheet
