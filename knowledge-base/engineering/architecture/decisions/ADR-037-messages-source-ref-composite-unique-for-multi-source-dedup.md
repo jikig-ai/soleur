@@ -1,5 +1,4 @@
 ---
-adr: 035
 title: messages.source_ref composite-unique for multi-source dedup
 status: accepted
 date: 2026-05-19
@@ -10,9 +9,9 @@ related_plans:
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-035: messages.source_ref composite-unique for multi-source dedup
+# ADR-037: messages.source_ref composite-unique for multi-source dedup
 
-> Note on numbering: the plan provisionally named this ADR-032 to pair with ADR-031. Between plan-time and /work, ADR-031 / ADR-032 / ADR-033 slots were consumed by unrelated PRs. This ADR adopts the next free number (035) after ADR-034.
+> Note on numbering: the **filename ordinal is authoritative** (#6800). The plan provisionally named this ADR-032; between plan-time and /work the 031–033 slots were consumed by unrelated PRs, so the file was created as `ADR-037-*` while an earlier draft frontmatter/heading read `035`. That disagreeing ordinal has been reconciled to the filename — `ADR-035` unambiguously refers to the template-registry ADR, and this decision (the `plain-insert`/catch-`23505` dedup idiom and its #6781 send-boundary extension) is `ADR-037`.
 
 ## Status
 
@@ -195,3 +194,73 @@ is ever actually deleted, not merely against whether a cascade is declared.
   never delivered.
 - No pre-existing function was `CREATE OR REPLACE`d. Security attributes do not survive a
   replace and both AP-018 guard tiers are blind to the drop.
+
+---
+
+## Amendment (2026-07-22, #6799 / #6801) — the heads-up band, the scan anchor, and breach-art33
+
+The #6781 send-boundary extension made three assumptions that #6799/#6801 revised.
+The `plain-insert`/catch-`23505` idiom itself is unchanged; what changed is the
+tick-key semantics and the scan the guard runs over.
+
+- **`headsup` now keys a BAND (T-7 through T-3), not an exact day.** The original
+  `daysUntilDue === 7` equality was jitter-fragile: `daysUntilDue` is
+  `floor((due - now)/day)` at the cron instant, so ordinary scheduler jitter could
+  step 8 → 6 across two runs and the heads-up would silently never fire (#6799).
+  The predicate is now `daysUntilDue <= 7` above the danger threshold. The
+  migration-135 `tick_key` CHECK already permits exactly `headsup` and
+  `daily:YYYY-MM-DD`, so **no migration is required**.
+- **A `23505` on the `headsup` key is EXPECTED steady state and is counted
+  separately from the double-fire signal.** Under the band, an item pinged at T-7
+  re-hits the same constant key at T-6..T-3. The 23505 is disambiguated by the
+  existing marker's `created_at`: same UTC date as the run → a genuine same-day
+  double-fire (`suppressed`, the `repin_suppressed` tag input, the sole signal a
+  second scheduler is live); an earlier date → the expected band re-hit
+  (`headsUpAlreadySent`, never in the tag or the escalation). This keeps the #6781
+  double-fire detector fully intact — exactly, with no detection-delay residual.
+- **The repin scan is anchored on `acknowledged_at`, not `received_at` (#6801).**
+  What confers eligibility is `status = 'acknowledged'`, so the 60-day window is
+  anchored on when the item became eligible — an item is pingable for 60 days after
+  it becomes pingable. `acknowledged_at` is WORM (mig 102) and always set on the
+  acknowledge transition, so it is never NULL for an acknowledged row. **Recorded
+  residual:** items acknowledged more than 60 days ago are deliberately dropped and
+  now VISIBLY dropped — counted as `excluded` in the `deadline-repin-sweep-complete`
+  emit (a queryable Sentry tag/field). `excluded` is monotonic and does NOT gate
+  escalation (it would page forever); the follow-on flow gaps — a `resolved` state,
+  scanning `new` items, and a founder-facing digest for abandoned items — are
+  tracked as a separate follow-up, out of #6801's scope.
+- **`breach-art33` never enters the heads-up band, by design.** Its 72h `dueRule`
+  caps `daysUntilDue` at the danger threshold for any scanned (post-receipt) item,
+  so it goes straight to the daily danger cadence — a "7-day heads-up" on a 72-hour
+  clock is incoherent. A generic property test asserts this for every hours-kind
+  rule, so a future longer hours-rule cannot silently start writing `headsup`
+  markers.
+- **The ADR-134 marker rollback self-heals ONLY while this predicate is a
+  multi-day band.** A rolled-back `headsup` marker re-sends because a later tick in
+  the band re-enters the same key. If the band were narrowed back toward an
+  equality, that dependency would break (permanent silence on a rolled-back
+  heads-up). Named here as the load-bearing invariant, pinned by a re-send test.
+
+### Historical citations (frozen artifacts)
+
+Applied migrations `122_inbox_item.sql` and `135_statutory_repin_send.sql` cite
+this decision by its **retired frontmatter ordinal** (`035`). They are content-hashed
+after apply (`run-migrations.sh` → `_schema_migrations.content_sha`), so a comment-only
+edit would trip `dev-migration-drift-probe` on every future CI run — a permanent
+un-clearable warning that is not worth correcting four stale in-file comments. Those
+citations are therefore left as-is; this note is the authoritative correction: **the
+`plain-insert`/catch-`23505` dedup idiom and its send-boundary extension are ADR-037**
+(the filename), regardless of any `035` an applied migration's comment carries.
+
+### Rejected alternatives (this amendment)
+
+- **#6799: keep the equality, add a "traversed-unpinged" counter.** Makes the
+  silence visible without ending it — #6799 requires that an item cannot pass the
+  window unpinged, which a counter does not satisfy.
+- **#6799: per-day heads-up keys (`headsup:<date>`).** Would send a heads-up every
+  day of the band (5 emails where 1 is wanted) and violate the mig-135 `tick_key`
+  CHECK, forcing a migration.
+- **#6801: widen the window to 120/180 days, or a second `warnSilentFallback` emit
+  for the excluded count.** The anchor, not the width, is the defect; and the issue
+  explicitly rejects a second emit — level-escalating the single emit achieves
+  reachability without a second op slug.

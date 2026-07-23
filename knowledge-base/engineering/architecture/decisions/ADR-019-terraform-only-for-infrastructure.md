@@ -1,5 +1,4 @@
 ---
-adr: ADR-019
 title: Terraform Only for Infrastructure
 status: active
 date: 2026-03-27

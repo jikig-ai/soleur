@@ -1,5 +1,4 @@
 ---
-adr: 119
 title: Encrypt the live /workspaces volume additively — never replace the host that cannot be rebuilt
 status: adopting
 date: 2026-07-17

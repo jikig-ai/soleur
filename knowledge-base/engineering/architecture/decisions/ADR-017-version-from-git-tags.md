@@ -1,5 +1,4 @@
 ---
-adr: ADR-017
 title: Version From Git Tags
 status: active
 date: 2026-03-27

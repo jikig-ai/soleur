@@ -1,5 +1,4 @@
 ---
-adr: ADR-074
 title: "fix-constraints recovery: two-stage pull_request→workflow_run privileged split"
 status: accepted
 date: 2026-07-01

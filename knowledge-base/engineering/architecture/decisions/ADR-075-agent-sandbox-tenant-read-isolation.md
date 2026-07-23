@@ -1,5 +1,4 @@
 ---
-adr: ADR-075
 title: "Agent bwrap tenant read-isolation: per-sibling deny now, SDK bwrap-arg reorder as durable fix"
 status: accepted
 date: 2026-07-01

@@ -1,5 +1,4 @@
 ---
-adr: 107
 title: Stripe MCP OAuth plane vs product billing key for /soleur:invoice; credential boundary is defense-in-depth, not a tool sandbox
 status: adopting
 date: 2026-07-09

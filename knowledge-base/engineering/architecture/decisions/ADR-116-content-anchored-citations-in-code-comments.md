@@ -1,5 +1,4 @@
 ---
-adr: ADR-116
 title: Content-anchored citations in code comments — convention now, born-blocking gate only when it measures clean
 status: accepted
 date: 2026-07-16

@@ -1,5 +1,4 @@
 ---
-adr: 029
 title: Rename-at-boundary userId pseudonymisation
 status: accepted
 date: 2026-05-12
