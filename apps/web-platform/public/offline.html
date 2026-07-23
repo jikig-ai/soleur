@@ -1,0 +1,110 @@
+<!doctype html>
+<!--
+  Static, script-free offline fallback served by the service worker's navigate
+  branch (public/sw.js) when the network is unavailable.
+
+  INVARIANTS (do not regress):
+  - NO <script> of any kind. The app's CSP is `script-src 'strict-dynamic'`
+    (lib/csp.ts) — a non-nonce inline script is blocked, and this page is served
+    from the SW cache so it can never carry a per-request nonce. Keep it inert.
+  - Inline <style> only — `style-src 'self' 'unsafe-inline'` allows it.
+  - Must be in PUBLIC_PATHS (lib/routes.ts) so precaching this route fetches the
+    real HTML, not a 307→/login redirect body.
+  - Theme-aware via prefers-color-scheme so it matches the app in both modes
+    without reading localStorage (no script). Colors mirror the brand tokens in
+    app/globals.css (--soleur-bg-base #0a0a0a, gold #c9a962).
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Offline — Soleur</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --surface: #f5f5f4;
+        --text: #1c1917;
+        --muted: #78716c;
+        --border: #e7e5e4;
+        --gold: #a07d2c;
+        --on-gold: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0a0a0a;
+          --surface: #141414;
+          --text: #ededed;
+          --muted: #a3a3a3;
+          --border: #2a2a2a;
+          --gold: #c9a962;
+          --on-gold: #0a0a0a;
+        }
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100dvh;
+        padding: calc(1.5rem + env(safe-area-inset-top)) 1.5rem calc(1.5rem + env(safe-area-inset-bottom));
+        background-color: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+      .card {
+        width: 100%;
+        max-width: 24rem;
+        text-align: center;
+      }
+      .glyph {
+        width: 3rem;
+        height: 3rem;
+        margin: 0 auto 1.25rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 9999px;
+        background-color: var(--surface);
+        border: 1px solid var(--border);
+      }
+      .glyph svg { width: 1.5rem; height: 1.5rem; stroke: var(--muted); }
+      h1 { margin: 0 0 0.5rem; font-size: 1.25rem; font-weight: 600; }
+      p { margin: 0 0 1.5rem; color: var(--muted); font-size: 0.95rem; }
+      a.retry {
+        display: inline-block;
+        padding: 0.625rem 1.25rem;
+        min-height: 44px;
+        line-height: 1.5;
+        border-radius: 0.5rem;
+        background-color: var(--gold);
+        color: var(--on-gold);
+        font-size: 0.95rem;
+        font-weight: 500;
+        text-decoration: none;
+      }
+      a.retry:hover { opacity: 0.9; }
+      a.retry:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <div class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M1 1l22 22" />
+          <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55" />
+          <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39" />
+          <path d="M10.71 5.05A16 16 0 0 1 22.58 9" />
+          <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88" />
+          <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
+          <line x1="12" y1="20" x2="12.01" y2="20" />
+        </svg>
+      </div>
+      <h1>You're offline</h1>
+      <p>Soleur can't reach the network right now. Check your connection and try again — your work is safe.</p>
+      <a class="retry" href="/dashboard">Try again</a>
+    </main>
+  </body>
+</html>

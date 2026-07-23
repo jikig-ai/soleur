@@ -20,6 +20,7 @@ import { useNavResume } from "@/hooks/use-nav-resume";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
+import { PwaControls } from "@/components/pwa/pwa-controls";
 import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "@/components/command-palette/nav-items";
 import { InboxNavBadge } from "@/components/dashboard/inbox-nav-badge";
 import { ConversationsNavBadge } from "@/components/dashboard/conversations-nav-badge";
@@ -669,6 +670,10 @@ export default function DashboardLayout({
       {/* AC-FLOW2: terminal overlay rendered when ws.close(4012) fires. Mount
           once at the dashboard root so it survives across route changes. */}
       <MembershipRevokedScreen />
+
+      {/* PWA progressive-enhancement chrome: update pill / install button / iOS
+          A2HS card. Renders null when standalone or when nothing is offerable. */}
+      <PwaControls />
     </div>
     {/* Command layer (feat-web-app-shortcuts) — portal-rendered (Radix), so
         placement inside the provider is positional only. Both no-op when the
