@@ -76,7 +76,7 @@ The #6746 hazard is **narrower** than "whole-list-owning". It is precisely:
 > (e.g. created directly in the CF dashboard).*
 
 Adjudicating every whole-list-shaped Cloudflare class in this root against that
-principle (recorded in ADR-135 + the gate script header, cross-referenced to the
+principle (recorded in ADR-136 + the gate script header, cross-referenced to the
 destroy-guard class table `destroy-guard-filter-web-platform.jq:5-16` so the two
 cannot drift):
 
@@ -99,7 +99,7 @@ failure this issue exists to kill, one level up.
 | (1) ADOPTION "both halves required" — add the Flexible SSL rule + `import` so state matches live | **Already shipped and merged via #6746** (`e567792fa`). `seo-config-rules.tf` carries the `import` block + the adopted rule verbatim (`ssl = "flexible"`, `ref = "dcb85b…"`). `test/seo-config-rules.test.ts` pins exactly-two-rules + the adopted rule's expression/param/ref + the singular `zone/` import ID. Plan verified `1 to import, 0 to add, 1 to change, 0 to destroy`. | **Do NOT re-implement.** Adoption is complete. This plan keeps the two-rule pin intact; it touches `seo-config-rules.tf` only for a one-line comment update. |
 | "Every other `kind = "zone"` ruleset has the same exposure and was never enumerated" | **Overstated (corrected by issue author).** `terraform state list` shows all siblings already in state. In-state resources refresh their entrypoint on every `plan`, so a dashboard-added rule shows as ordinary drift. Exposure is **retrospective**, not prospective. | Scope split: **gate = prospective** (future whole-list resources), **audit = retrospective** (confirm nothing already lost + no current drift). |
 | "`bulk_redirects` … same zone exposure" | `bulk_redirects` is `kind = "root"` with `account_id` (seo-bulk-redirects.tf) — **account-level**. Entrypoint endpoint is `accounts/$ACCT/rulesets/phases/<phase>/entrypoint`. | Gate handles both `zone_id` and `account_id` (branch on kind). |
-| ADR-130 defines the entrypoint probe as a manual `/work` step; "Making it a gate is open in #6767" (ADR-130:156) | Confirmed. Prose, not enforced. | ADR-135 (new) makes it a standing automated gate; ADR-130 gets a "see ADR-135" cross-note. |
+| ADR-130 defines the entrypoint probe as a manual `/work` step; "Making it a gate is open in #6767" (ADR-130:156) | Confirmed. Prose, not enforced. | ADR-136 (new) makes it a standing automated gate; ADR-130 gets a "see ADR-136" cross-note. |
 | Predecessor is #6746 | `git log` confirms sole commit `e567792fa (#6746)`, MERGED, does not close #6767 (still OPEN). | Premise holds; genuine follow-up. |
 
 **Premise Validation note:** Checked #6746 (MERGED, does not close #6767), #6767
@@ -335,7 +335,7 @@ all live inside the **single** "Terraform plan" run block. So:
     (or any other `apply-*.yml` root) gains a `cloudflare_ruleset` address while
     that job has no gate step.
   - FAIL if a `cloudflare_*` resource *type* appears in `apps/web-platform/infra/*.tf`
-    that is neither in the gate's covered set NOR in the ADR-135 adjudicated-OUT
+    that is neither in the gate's covered set NOR in the ADR-136 adjudicated-OUT
     list (forces conscious classification of any new whole-list-shaped class,
     cross-referenced to the destroy-guard class table).
 - **Fixtures** (`tests/scripts/fixtures/`, synthesized —
@@ -348,16 +348,16 @@ all live inside the **single** "Terraform plan" run block. So:
   (confirm: `scripts/test-all.sh` — per the CTO's grounding — and/or
   infra-validation.yml) so it is not an orphan suite.
 
-### Phase 5 — ADR-135 + ADR-130 cross-note + C4 + docs
+### Phase 5 — ADR-136 + ADR-130 cross-note + C4 + docs
 
-- **ADR-135** (provisional; re-verify next-free ordinal at ship — highest live is
+- **ADR-136** (provisional; re-verify next-free ordinal at ship — highest live is
   ADR-132). Keep it **thin** (DHH): state the Decision (standing fail-closed
   gate), the **Inclusion Principle** + the class adjudication table above, the
   `["create"] && before==null && importing==null` discriminator, the
   control-probe + the 404 residual-seam it closes, the iterate-all-`resource_changes`
   invariant, and the sibling/dispatch-job boundary. **Reference this plan's
   Alternative Approaches table rather than re-typing it.** Cross-note ADR-130's
-  entrypoint Consequence with "see ADR-135".
+  entrypoint Consequence with "see ADR-136".
 - **C4 (completeness mandate — read all three `.c4`, do not grep the feature
   noun):** external human actor — none new; external system — Cloudflare rulesets
   API, already modeled as `cloudflare` (model.c4:234); container/store — none
@@ -454,7 +454,7 @@ entrypoint is a PASS (phase exists, no ruleset) — validated by the control pro
 ## Architecture Decision (ADR/C4)
 
 ### ADR
-Create **ADR-135** (provisional; re-verify next-free at ship — highest live is
+Create **ADR-136** (provisional; re-verify next-free at ship — highest live is
 ADR-132), thin, per Phase 5. Extends ADR-130's manual probe into a standing
 fail-closed control; adds the Inclusion Principle + class adjudication + the
 discriminator + control-probe + iterate-all invariant; references this plan's
@@ -505,7 +505,7 @@ The ADR ships with the gate in this PR — not deferred.
 - [x] New script + tests follow cap-coupling (dedicated files + CODEOWNERS +
   parity test) and are wired into the `tests/scripts/test-*.sh` harness.
 - [x] `bash tests/scripts/test-preapply-entrypoint-gate.sh` passes locally.
-- [x] ADR-135 created (thin, references plan Alternatives); ADR-130 cross-note
+- [x] ADR-136 created (thin, references plan Alternatives); ADR-130 cross-note
   added; C4 enumeration cited across all three `.c4` files; c4 tests pass.
 - [x] plan/SKILL.md Sharp Edge + `seo-config-rules.tf` comment updated.
 - [x] Fixtures synthesized (no live prod plan pasted).
@@ -530,7 +530,7 @@ The ADR ships with the gate in this PR — not deferred.
 - `plugins/soleur/skills/plan/SKILL.md` — entrypoint-enumeration Sharp Edge (prose → gate).
 - `apps/web-platform/infra/seo-config-rules.tf` — one-line comment update.
 - `knowledge-base/engineering/architecture/decisions/ADR-130-cloudflare-token-widen-vs-narrow-alias.md`
-  — "see ADR-135" cross-note.
+  — "see ADR-136" cross-note.
 - `knowledge-base/engineering/architecture/diagrams/{model,views,spec}.c4` — read
   all three; add the CI→cloudflare read edge only if the enumeration finds it absent.
 - `scripts/test-all.sh` (and/or `.github/workflows/infra-validation.yml`) — wire
@@ -548,7 +548,7 @@ The ADR ships with the gate in this PR — not deferred.
 - `tests/scripts/fixtures/tfplan-ruleset-import.json`
 - `tests/scripts/fixtures/tfplan-ruleset-steady-state.json`
 - `tests/scripts/fixtures/tfplan-ruleset-replace.json`
-- `knowledge-base/engineering/architecture/decisions/ADR-135-preapply-entrypoint-enumeration-gate.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-136-preapply-entrypoint-enumeration-gate.md`
 - `knowledge-base/engineering/operations/runbooks/cloudflare-whole-list-entrypoint-audit.md`
 
 ## Open Code-Review Overlap
@@ -588,7 +588,7 @@ escalated per the `single-user incident` threshold; findings folded in above.
   the `::error::` remedy + ADR must print the singular form.
 - **Orphan test suite.** Wire the test + parity test into `scripts/test-all.sh`
   or it silently rots.
-- **ADR ordinal collision.** ADR-135 provisional; re-verify next-free at ship;
+- **ADR ordinal collision.** ADR-136 provisional; re-verify next-free at ship;
   sweep this plan + tasks.md if renumbered.
 - **The audit's `## Results` cannot be pre-filled at `/work`** (no live creds);
   ship dispatches the audit job in-session and blocks PR-ready on the #6767
@@ -639,8 +639,8 @@ a live-API decision instead of a jq count. That single divergence is the feature
   (`hr-no-dashboard-eyeball-pull-data-yourself`, `hr-tf-variable-no-operator-mint-default`,
   `hr-github-app-auth-not-pat`, `wg-block-pr-ready-on-undeferred-operator-steps`,
   `cq-test-fixtures-synthesized-only`).
-- **ADR-135 ordinal** — re-derived from freshly-fetched `origin/main`: highest is
-  ADR-132, so ADR-135 is next-free (still provisional; ship re-verifies).
+- **ADR-136 ordinal** — re-derived from freshly-fetched `origin/main`: highest is
+  ADR-132, so ADR-136 is next-free (still provisional; ship re-verifies).
 - **`terraform show -json` import shape** — HashiCorp docs (via Context7)
   corroborate the *import-stub-state* concept (an imported resource simulates a
   prior-run create); the exact `change.importing` field name + `change.actions`

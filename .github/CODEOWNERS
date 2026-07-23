@@ -106,7 +106,7 @@
 /tests/scripts/test-destroy-guard-regex-parity.sh        @deruelle
 /tests/scripts/test-destroy-guard-sentry-scope-guard.sh  @deruelle
 
-# Pre-apply entrypoint gate (#6767 / ADR-135). Same review scope as the
+# Pre-apply entrypoint gate (#6767 / ADR-136). Same review scope as the
 # destroy-guard trio above: mutating these silently neutralises the fail-closed
 # gate that stops a whole-list ruleset create from clobbering a live
 # dashboard-created entrypoint on apply-web-platform-infra.yml.

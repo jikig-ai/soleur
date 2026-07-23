@@ -58,10 +58,10 @@ Derived from the post-plan-review plan (6-agent panel applied). ADOPTION
 - [x] 4.4 Synthesized fixtures: create (zone+account rows), create-untargeted, import, steady-state, replace.
 - [x] 4.5 CODEOWNERS rows; wire test into `scripts/test-all.sh` (and/or infra-validation.yml).
 
-## Phase 5 — ADR-135 + ADR-130 cross-note + C4 + docs
+## Phase 5 — ADR-136 + ADR-130 cross-note + C4 + docs
 
-- [x] 5.1 ADR-135 (thin; re-verify ordinal at ship): Decision + Inclusion Principle + class-adjudication table + discriminator + control-probe/404-seam + iterate-all invariant + dispatch-job boundary; reference plan Alternatives (do not re-type).
-- [x] 5.2 ADR-130 "see ADR-135" cross-note.
+- [x] 5.1 ADR-136 (thin; re-verify ordinal at ship): Decision + Inclusion Principle + class-adjudication table + discriminator + control-probe/404-seam + iterate-all invariant + dispatch-job boundary; reference plan Alternatives (do not re-type).
+- [x] 5.2 ADR-130 "see ADR-136" cross-note.
 - [x] 5.3 C4: read all three `.c4`; confirm/add CI→cloudflare read edge; run c4 tests; cite the enumeration.
 - [x] 5.4 Docs: plan/SKILL.md Sharp Edge (prose → gate); `seo-config-rules.tf` comment update.
 

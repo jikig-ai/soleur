@@ -4,7 +4,7 @@ status: active
 date: 2026-07-22
 ---
 
-# ADR-135: Pre-apply entrypoint-enumeration gate for whole-list Cloudflare rulesets
+# ADR-136: Pre-apply entrypoint-enumeration gate for whole-list Cloudflare rulesets
 
 ## Context
 

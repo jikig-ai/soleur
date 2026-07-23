@@ -8,7 +8,7 @@
 None. Two non-fatal detours resolved in-session: (1) iac-plan-write-guard.sh PreToolUse hook blocked on the phrase `out-of-band` — neutralized to `outside Terraform` + reviewed ack comment; (2) confirmed the ack escape works and only the project hook is registered.
 
 ### Decisions
-- Premise correction (major): Deliverable (1) ADOPTION already merged via #6746 (e567792fa) — import block, adopted Flexible SSL rule, and two-rule test pin all shipped. Plan builds only the pre-apply gate + retrospective audit + ADR-135/C4.
+- Premise correction (major): Deliverable (1) ADOPTION already merged via #6746 (e567792fa) — import block, adopted Flexible SSL rule, and two-rule test pin all shipped. Plan builds only the pre-apply gate + retrospective audit + ADR-136/C4.
 - Gate must query the live Cloudflare API, not count plan deltas — the destroy-guard jq structurally cannot see a create-clobber (create → before=null → negative delta → filtered; resource_deletes=0).
 - Inclusion Principle: hazard is a create that silently adopts+whole-replaces a natural-key server-side singleton. Only cloudflare_ruleset (zone+account phase entrypoint) qualifies; other 4 destroy-guard CF classes + tunnel-config + DNS adjudicated OUT. Parity test makes coverage a tested coupling.
 - Default-deny + exact ["create"] && before==null && importing==null discriminator + known-phase control probe close every fail-open seam the panel surfaced.

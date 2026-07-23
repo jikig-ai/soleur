@@ -253,11 +253,11 @@ model {
   }
   resend = system "Resend" {
     #external
-    description "Inbound email ingress (operator-inbox webhook, svix-verified) + transactional outbound (statutory triage notifications). Also the PUSH-FAILURE FALLBACK channel: a statutory push that reaches fewer than all devices falls back to Resend email (ADR-135, #6802). ADR-066."
+    description "Inbound email ingress (operator-inbox webhook, svix-verified) + transactional outbound (statutory triage notifications). Also the PUSH-FAILURE FALLBACK channel: a statutory push that reaches fewer than all devices falls back to Resend email (ADR-136, #6802). ADR-066."
   }
   pushService = system "Web Push Services" {
     #external
-    description "FCM / APNs / WNS — the endpoint host each push_subscriptions.endpoint resolves to. Web Push delivery is transport-accepted (a 201), NOT proof of receipt (ADR-135). Non-410 failures do not prune the subscription and fall back to Resend email; the egress firewall's deliberate WNS DROP (#5046 PR-2) is the known trigger."
+    description "FCM / APNs / WNS — the endpoint host each push_subscriptions.endpoint resolves to. Web Push delivery is transport-accepted (a 201), NOT proof of receipt (ADR-136). Non-410 failures do not prune the subscription and fall back to Resend email; the egress firewall's deliberate WNS DROP (#5046 PR-2) is the known trigger."
   }
   ghcr = system "GitHub Container Registry" {
     #external
@@ -338,7 +338,7 @@ model {
   stripe -> webapp "Payment webhooks" { technology "HTTPS" }
   emailSender -> resend "Sends email to the operator address" { technology "SMTP" }
   resend -> webapp "Inbound email webhook (operator inbox ingress)" { technology "HTTPS webhook (svix)" }
-  webapp -> resend "Statutory triage notifications (outbound email), incl. the push-failure fallback (ADR-135)" { technology "HTTPS (Resend API)" }
+  webapp -> resend "Statutory triage notifications (outbound email), incl. the push-failure fallback (ADR-136)" { technology "HTTPS (Resend API)" }
   webapp -> pushService "Web Push delivery (VAPID); non-410 failures fall back to Resend email — the WNS egress DROP (#5046 PR-2) is the known trigger" { technology "HTTPS (Web Push / VAPID)" }
 
   // ---- Operational inbox (severity-ranked attention queue, ADR-085 / #6007) --
@@ -421,12 +421,12 @@ model {
   claude -> stripe "invoice skill: create/finalize/send/chase via hosted Stripe MCP — OAuth, operator's OWN account; distinct credential plane from the webapp -> stripe billing edge; test-mode only in v1 (ADR-107)" { technology "MCP tool → mcp.stripe.com (HTTPS)" }
   api -> github "Workstream tab: reads connected-repo issues (REST) + Project v2 board Status (GraphQL); AND writes issues — create / title / label-driven status / close-reopen — via the audited GitHub App-token client (ADR-109). The board is the canonical Status store (ADR-097); a status write is a label mutation that the board-status-sync workflow (github-internal) mirrors. owner/repo/installation resolve from the active workspace (ADR-044), never request input. ALSO Pages cert admin: the cron-gh-pages-cert-reissue routine (served by this container, event-triggered) does PUT /pages cname-toggle to re-order a bad_authz TLS cert via a least-privilege App token holding BOTH administration:write AND pages:write — PUT /pages requires both, proven empirically (pages-only 403, admin-only 403, both 204); GitHub's REST docs do not state it (ADR-125, #6698)." { technology "HTTPS (REST + GraphQL)" }
   api -> cloudflare "cron-gh-pages-cert-reissue (ADR-125, AP-019): transiently PATCHes the apex+www dns_records proxied flag false→true to open a DNS-only window so GitHub/LE can validate the Pages cert origin, then restores proxied=true. A distinct Zone.DNS:Edit-only token (CF_API_TOKEN_DNS_EDIT), separate from the broad cf_api_token. This is the sanctioned narrow AP-001 exception — transient, self-reverting, single-attempt, human-gated (v1)." { technology "HTTPS (CF API v4 dns_records PATCH)" }
-  github -> cloudflare "apply-web-platform-infra.yml issues READ-ONLY GETs to the Cloudflare rulesets API (ADR-135, #6767): the pre-apply entrypoint gate (a step AFTER `terraform plan` and BEFORE the main `terraform apply`) and the guarded entrypoint-audit dispatch both enumerate a `kind=zone`/`kind=root` ruleset's phase entrypoint via CF_API_TOKEN_RULESETS and FAIL-CLOSED if a whole-list create-from-absent would clobber live dashboard-created rules. GETs only — no writes ride this edge; the ruleset APPLY itself goes through Terraform's cloudflare provider. Distinct from the api -> cloudflare DNS-edit edge (different token, different concern)." { technology "HTTPS (CF API v4 rulesets phase entrypoint GET, curl --max-time)" }
+  github -> cloudflare "apply-web-platform-infra.yml issues READ-ONLY GETs to the Cloudflare rulesets API (ADR-136, #6767): the pre-apply entrypoint gate (a step AFTER `terraform plan` and BEFORE the main `terraform apply`) and the guarded entrypoint-audit dispatch both enumerate a `kind=zone`/`kind=root` ruleset's phase entrypoint via CF_API_TOKEN_RULESETS and FAIL-CLOSED if a whole-list create-from-absent would clobber live dashboard-created rules. GETs only — no writes ride this edge; the ruleset APPLY itself goes through Terraform's cloudflare provider. Distinct from the api -> cloudflare DNS-edit edge (different token, different concern)." { technology "HTTPS (CF API v4 rulesets phase entrypoint GET, curl --max-time)" }
   dashboard -> plausible "Page view events" { technology "JS snippet" }
   api -> inngest "Sends events; serves functions" { technology "HTTP private-net :8288" }
   resend -> api "Inbound email webhook (svix-verified) → email-triage ingress" { technology "HTTPS" }
-  api -> resend "Statutory triage notifications (single configured recipient; reads are Owner-shared per ADR-066). Also the push-failure fallback: the cron falls back here when a statutory push reaches fewer than all devices (ADR-135)" { technology "HTTPS" }
-  api -> pushService "Web Push delivery (VAPID) for statutory deadline reminders; transport-accepted, not receipt (ADR-135)" { technology "HTTPS (Web Push / VAPID)" }
+  api -> resend "Statutory triage notifications (single configured recipient; reads are Owner-shared per ADR-066). Also the push-failure fallback: the cron falls back here when a statutory push reaches fewer than all devices (ADR-136)" { technology "HTTPS" }
+  api -> pushService "Web Push delivery (VAPID) for statutory deadline reminders; transport-accepted, not receipt (ADR-136)" { technology "HTTPS (Web Push / VAPID)" }
   inngest -> supabase "Email-triage claim/finalize writes (email-on-received)" { technology "PostgreSQL" }
   inngest -> inngestPostgres "Config + run history" { technology "PostgreSQL session pooler :5432" }
   inngest -> inngestRedis "Durable queue + run-state" { technology "Redis (AOF)" }
@@ -458,15 +458,15 @@ model {
   hetzner -> betterstack "Ships SOLEUR_PRIVATE_NIC from web-1 (the §3 private-NIC guard, #6438 §3/ADR-123) to the shared Logs source 2457081 — detect + emit + alarm, NO reboot (unlike the registry's self-converging guard). ALSO pings the web_nic_guard liveness heartbeat every healthy run so the fault-emitter is observable-when-healthy (a SOLEUR_PRIVATE_NIC that never fires is indistinguishable from a dead guard). Distinct from the Vector journald edge above" { technology "curl → Better Stack Logs + heartbeat (HTTPS)" }
   betterstack -> hetzner "Origin uptime probe at the LB-fronted app.soleur.ai surface (betteruptime_monitor.app/soleur_apex) — covers web-1 (the app A-record → web-1, dns.tf); the #5933 per-host web-<n> probe was RETIRED (CF 521, no per-host origin vhost). web-2 (the fsn1 warm standby) was retired 2026-07-17 (#6538/#6463) — the fleet is single-host, fully covered by the app.soleur.ai probe; no second host needs separate uptime coverage" { technology "HTTPS via CF edge" }
   github -> sigstore "Keyless-signs the released app image digest (cosign, OIDC→Fulcio→Rekor) (#5933 Item 4)" { technology "HTTPS (cosign)" }
-  // ADR-135 / #6780 — the config-refresh channel for the dedicated Inngest host. CI ALSO
+  // ADR-136 / #6780 — the config-refresh channel for the dedicated Inngest host. CI ALSO
   // keyless-signs a SECOND artifact (the config bundle's manifest blob), dual-pushes it to
   // GHCR + zot, and the inngest host pulls+verifies+applies it in-place. Distinct from the
   // app-image edges above: a different OCI repo, a `sign-blob`/`verify-blob` shape (not image
   // sign), and a monotonic VERSION carried INSIDE the signed bytes (HARD-2). The host-side pull
   // edge is `adopting` — it activates when the consumer bake rides the #6178 cutover (PR #6348).
-  github -> sigstore "Keyless-signs the config-refresh bundle manifest (cosign sign-blob, OIDC→Fulcio→Rekor) — the *.sh in-place refresh channel for the sole Inngest scheduler (ADR-135, #6780)" { technology "HTTPS (cosign sign-blob)" }
-  github -> ghcr "Publishes the keyless-signed config-refresh bundle (host-executed *.sh set + per-file sha256 manifest + signed monotonic VERSION) to GHCR (authoritative) + a best-effort zot mirror (continue-on-error, GHCR-direct host pull in v1); a Terraform-promoted INNGEST_CONFIG_DIGEST pointer in soleur-inngest/prd names the digest (ADR-135/ADR-128/ADR-096, #6780)" { technology "docker buildx push (GHCR) + crane copy (zot mirror, best-effort)" }
-  inngest -> ghcr "ADOPTING (rides #6178 cutover, PR #6348): the config-refresh timer resolves INNGEST_CONFIG_DIGEST, pulls the signed bundle @sha256 GHCR-direct, cosign-verify-blob OFFLINE against the baked trusted root + config-workflow identity regexp (ADR-087), checks per-file sha256 + monotonic VERSION, and applies atomically via infra-config-install.sh — no host replace, outbound-only, no new inbound (ADR-135, #6780)" { technology "Docker/GHCR pull + cosign verify-blob (offline)" }
+  github -> sigstore "Keyless-signs the config-refresh bundle manifest (cosign sign-blob, OIDC→Fulcio→Rekor) — the *.sh in-place refresh channel for the sole Inngest scheduler (ADR-136, #6780)" { technology "HTTPS (cosign sign-blob)" }
+  github -> ghcr "Publishes the keyless-signed config-refresh bundle (host-executed *.sh set + per-file sha256 manifest + signed monotonic VERSION) to GHCR (authoritative) + a best-effort zot mirror (continue-on-error, GHCR-direct host pull in v1); a Terraform-promoted INNGEST_CONFIG_DIGEST pointer in soleur-inngest/prd names the digest (ADR-136/ADR-128/ADR-096, #6780)" { technology "docker buildx push (GHCR) + crane copy (zot mirror, best-effort)" }
+  inngest -> ghcr "ADOPTING (rides #6178 cutover, PR #6348): the config-refresh timer resolves INNGEST_CONFIG_DIGEST, pulls the signed bundle @sha256 GHCR-direct, cosign-verify-blob OFFLINE against the baked trusted root + config-workflow identity regexp (ADR-087), checks per-file sha256 + monotonic VERSION, and applies atomically via infra-config-install.sh — no host replace, outbound-only, no new inbound (ADR-136, #6780)" { technology "Docker/GHCR pull + cosign verify-blob (offline)" }
   // NOTE: the former `hetzner -> sigstore` verify edge was REMOVED (#6005/ADR-087) — it was
   // falsified: with a pinned local trusted_root.json + offline verify the host makes NO live
   // sigstore call at verify time. The signature bundle is fetched from `ghcr` (edge above).

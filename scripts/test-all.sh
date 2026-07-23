@@ -301,7 +301,7 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-counter-github" bash tests/scripts/test-destroy-guard-counter.sh
   run_suite "tests/scripts/destroy-guard-counter-sentry" bash tests/scripts/test-destroy-guard-counter-sentry.sh
   run_suite "tests/scripts/destroy-guard-counter-web-platform" bash tests/scripts/test-destroy-guard-counter-web-platform.sh
-  # Pre-apply entrypoint gate (#6767 / ADR-135). Registered HERE for the same
+  # Pre-apply entrypoint gate (#6767 / ADR-136). Registered HERE for the same
   # reason as the destroy-guard trio above: nothing auto-discovers tests/scripts/
   # (the bash *.test.sh glob further down covers only scripts/lib/*.test.sh etc.,
   # NOT tests/scripts/test-*.sh), so an unregistered suite is an ORPHAN that gates
