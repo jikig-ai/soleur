@@ -87,4 +87,15 @@ for required in ADR-042 ADR-041; do
   done
 done
 
+# (4) No frontmatter ordinal key (#6800). The FILENAME is the sole authoritative
+# ordinal; a frontmatter `adr:` key can disagree with it (ADR-037's read `035`),
+# making an `ADR-NNN` reference resolve to two documents. Removing the key makes
+# that disagreement structurally impossible rather than merely currently-absent.
+adr_key_files=$(grep -lE '^adr:' "$ADR_DIR"/ADR-*.md 2>/dev/null || true)
+if [ -n "$adr_key_files" ]; then
+  echo "ADR frontmatter ordinal key found — remove the 'adr:' key (the filename is authoritative, #6800):" >&2
+  echo "$adr_key_files" >&2
+  exit 1
+fi
+
 echo "ADR ordinal + content checks passed."

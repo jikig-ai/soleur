@@ -253,7 +253,11 @@ model {
   }
   resend = system "Resend" {
     #external
-    description "Inbound email ingress (operator-inbox webhook, svix-verified) + transactional outbound (statutory triage notifications). ADR-066."
+    description "Inbound email ingress (operator-inbox webhook, svix-verified) + transactional outbound (statutory triage notifications). Also the PUSH-FAILURE FALLBACK channel: a statutory push that reaches fewer than all devices falls back to Resend email (ADR-134, #6802). ADR-066."
+  }
+  pushService = system "Web Push Services" {
+    #external
+    description "FCM / APNs / WNS — the endpoint host each push_subscriptions.endpoint resolves to. Web Push delivery is transport-accepted (a 201), NOT proof of receipt (ADR-134). Non-410 failures do not prune the subscription and fall back to Resend email; the egress firewall's deliberate WNS DROP (#5046 PR-2) is the known trigger."
   }
   ghcr = system "GitHub Container Registry" {
     #external
@@ -334,7 +338,8 @@ model {
   stripe -> webapp "Payment webhooks" { technology "HTTPS" }
   emailSender -> resend "Sends email to the operator address" { technology "SMTP" }
   resend -> webapp "Inbound email webhook (operator inbox ingress)" { technology "HTTPS webhook (svix)" }
-  webapp -> resend "Statutory triage notifications (outbound email)" { technology "HTTPS (Resend API)" }
+  webapp -> resend "Statutory triage notifications (outbound email), incl. the push-failure fallback (ADR-134)" { technology "HTTPS (Resend API)" }
+  webapp -> pushService "Web Push delivery (VAPID); non-410 failures fall back to Resend email — the WNS egress DROP (#5046 PR-2) is the known trigger" { technology "HTTPS (Web Push / VAPID)" }
 
   // ---- Operational inbox (severity-ranked attention queue, ADR-085 / #6007) --
   // notifyInboxItem inserts the durable row (service role) then dispatches the
@@ -419,7 +424,8 @@ model {
   dashboard -> plausible "Page view events" { technology "JS snippet" }
   api -> inngest "Sends events; serves functions" { technology "HTTP private-net :8288" }
   resend -> api "Inbound email webhook (svix-verified) → email-triage ingress" { technology "HTTPS" }
-  api -> resend "Statutory triage notifications (single configured recipient; reads are Owner-shared per ADR-066)" { technology "HTTPS" }
+  api -> resend "Statutory triage notifications (single configured recipient; reads are Owner-shared per ADR-066). Also the push-failure fallback: the cron falls back here when a statutory push reaches fewer than all devices (ADR-134)" { technology "HTTPS" }
+  api -> pushService "Web Push delivery (VAPID) for statutory deadline reminders; transport-accepted, not receipt (ADR-134)" { technology "HTTPS (Web Push / VAPID)" }
   inngest -> supabase "Email-triage claim/finalize writes (email-on-received)" { technology "PostgreSQL" }
   inngest -> inngestPostgres "Config + run history" { technology "PostgreSQL session pooler :5432" }
   inngest -> inngestRedis "Durable queue + run-state" { technology "Redis (AOF)" }

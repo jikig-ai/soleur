@@ -1,5 +1,4 @@
 ---
-adr: 038
 title: Feature flags via Flagsmith SaaS with per-role targeting (Claude-operated)
 status: accepted
 date: 2026-05-22

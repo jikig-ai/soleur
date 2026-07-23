@@ -1,5 +1,4 @@
 ---
-adr: ADR-026
 title: PII gate as plan/work-phase skill with diff hook
 status: active
 date: 2026-05-09

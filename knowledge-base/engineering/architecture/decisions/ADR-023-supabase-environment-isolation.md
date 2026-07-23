@@ -1,5 +1,4 @@
 ---
-adr: ADR-023
 title: Supabase Environment Isolation (dev / prd Separate Projects)
 status: active
 date: 2026-04-27
