@@ -306,6 +306,53 @@ export function ChatSurface({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const insertRef = useRef<((text: string, replaceFrom: number) => void) | null>(null);
 
+  // ── Near-bottom scroll guard + Jump-to-latest ──────────────────────────────
+  // Auto-scroll only follows the stream when the user is already near the
+  // bottom; scrolling up to read history must not be yanked back down. The gate
+  // is a LIVE ref (not a state snapshot) so a fast token stream reads the
+  // user's latest intent, not the value captured at effect-creation time.
+  const messagesScrollRef = useRef<HTMLDivElement>(null);
+  const nearBottomRef = useRef(true);
+  const programmaticScrollRef = useRef(false);
+  const [showJumpButton, setShowJumpButton] = useState(false);
+  // iOS Safari overlays the on-screen keyboard without reflowing dvh
+  // (interactiveWidget is Chromium-only), so lift the composer by the covered
+  // height. Stays 0 on Android/desktop where the layout already reflows.
+  const [keyboardInset, setKeyboardInset] = useState(0);
+
+  const NEAR_BOTTOM_PX = 80;
+  const recomputeNearBottom = useCallback(() => {
+    // Skip while our own auto-scroll is in flight — its intermediate onScroll
+    // events would otherwise flash the pill / flip the gate.
+    if (programmaticScrollRef.current) return;
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // A non-scrollable container (empty state, short/resumed history) fires no
+    // onScroll before first paint — treat it as near-bottom so auto-scroll runs
+    // and the pill stays hidden.
+    const scrollable = el.scrollHeight - el.clientHeight > NEAR_BOTTOM_PX;
+    const near = !scrollable || distance <= NEAR_BOTTOM_PX;
+    nearBottomRef.current = near;
+    setShowJumpButton(!near);
+  }, []);
+
+  const scrollToLatest = useCallback((behavior: ScrollBehavior) => {
+    programmaticScrollRef.current = true;
+    messagesEndRef.current?.scrollIntoView({ behavior });
+    requestAnimationFrame(() => {
+      programmaticScrollRef.current = false;
+    });
+  }, []);
+
+  const handleJumpToLatest = useCallback(() => {
+    // Set the ref synchronously (not just setState) so a still-streaming turn
+    // resumes following immediately, before the next render commits.
+    nearBottomRef.current = true;
+    setShowJumpButton(false);
+    scrollToLatest("auto");
+  }, [scrollToLatest]);
+
   const handleReviewGateResponse = useCallback(
     (gateId: string, selection: string) => {
       sendReviewGateResponse(gateId, selection);
@@ -350,8 +397,48 @@ export function ChatSurface({
   );
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    // Only follow the stream to the bottom when the user is already there.
+    // Always "auto" (never "smooth"): per-token smooth-scroll is the jank
+    // source, and its intermediate positions flash the Jump-to-latest pill.
+    if (!nearBottomRef.current) return;
+    scrollToLatest("auto");
+  }, [messages, scrollToLatest]);
+
+  // Recompute the near-bottom gate on viewport changes that emit no onScroll:
+  // the iOS keyboard opening (visualViewport shrinks) and any container resize.
+  // The same visualViewport subscription drives the composer keyboard-lift.
+  useEffect(() => {
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    const isCoarse =
+      typeof window !== "undefined" &&
+      (window.matchMedia?.("(pointer: coarse)").matches ?? false);
+
+    const onViewportChange = () => {
+      if (vv && isCoarse) {
+        // Height the keyboard covers = layout viewport − visual viewport − any
+        // upward offset. 0 on platforms that already reflow (Android/desktop).
+        const covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+        setKeyboardInset(covered);
+      }
+      recomputeNearBottom();
+    };
+
+    vv?.addEventListener("resize", onViewportChange);
+    vv?.addEventListener("scroll", onViewportChange);
+
+    let ro: ResizeObserver | undefined;
+    const el = messagesScrollRef.current;
+    if (el && typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => recomputeNearBottom());
+      ro.observe(el);
+    }
+
+    return () => {
+      vv?.removeEventListener("resize", onViewportChange);
+      vv?.removeEventListener("scroll", onViewportChange);
+      ro?.disconnect();
+    };
+  }, [recomputeNearBottom]);
 
   useEffect(() => {
     if (status !== "connected" || sessionStarted || contextPending) return;
@@ -637,7 +724,14 @@ export function ChatSurface({
   }
 
   const isFull = variant === "full";
-  const rootClass = isFull ? "flex h-[100dvh] flex-col md:h-full" : "flex h-full min-w-0 flex-col";
+  // h-full (NOT h-[100dvh] / calc): the <main> slot is already a bounded flex
+  // item, so h-full fills it exactly. h-[100dvh] overflowed the slot by the top
+  // bar's height and pushed the composer below the fold; a calc(100dvh-bar)
+  // regresses on notched devices because this PR's viewportFit:cover makes the
+  // bar's safe-top inset non-zero. `relative` anchors the Jump-to-latest pill.
+  const rootClass = isFull
+    ? "relative flex h-full flex-col md:h-full"
+    : "relative flex h-full min-w-0 flex-col";
   const widthWrapper = isFull ? "mx-auto max-w-3xl" : "max-w-none";
   const inputPadX = isFull ? "px-4 md:px-6" : "px-4";
 
@@ -768,7 +862,11 @@ export function ChatSurface({
         onStartNewConversation={() => router.push("/dashboard")}
       />
 
-      <div className={`min-w-0 flex-1 overflow-y-auto px-4 py-4 ${isFull ? "md:px-6" : ""}`}>
+      <div
+        ref={messagesScrollRef}
+        onScroll={recomputeNearBottom}
+        className={`min-w-0 flex-1 overflow-y-auto px-4 py-4 ${isFull ? "md:px-6" : ""}`}
+      >
         {lastError && activeErrorKey !== dismissedErrorKey && (
           // `data-rate-limit-exceeded` is a load-bearing canary attribute —
           // see e2e/cc-soleur-go-security.e2e.ts FR3.4 (Stage 6 PR-C #2939).
@@ -1073,8 +1171,28 @@ export function ChatSurface({
         </div>
       )}
 
+      {/* Jump-to-latest — mounted on the non-scrolling root (NOT inside the
+          messages scroll div, where it would scroll away exactly when the user
+          is scrolled up). Lifts with the composer when the iOS keyboard is up.
+          ≥44px coarse hit area. */}
+      {showJumpButton && (
+        <button
+          type="button"
+          onClick={handleJumpToLatest}
+          aria-label="Jump to latest"
+          style={{ bottom: `calc(6rem + ${keyboardInset}px)` }}
+          className="absolute left-1/2 z-10 flex min-h-11 -translate-x-1/2 items-center gap-1.5 rounded-full border border-soleur-border-default bg-soleur-bg-surface-2 px-4 text-sm text-soleur-text-primary shadow-lg hover:bg-soleur-bg-surface-3"
+        >
+          Jump to latest
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+      )}
+
       <div
         data-tour-id={isFull ? "action:conversation-composer" : undefined}
+        style={keyboardInset > 0 ? { marginBottom: keyboardInset } : undefined}
         className={`shrink-0 border-t border-soleur-border-default bg-soleur-bg-base py-3 ${inputPadX} ${isFull ? "safe-bottom md:px-6" : ""}`}
       >
         <div className={`relative min-w-0 ${widthWrapper}`}>
