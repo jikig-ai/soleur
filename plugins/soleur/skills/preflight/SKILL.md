@@ -852,7 +852,7 @@ describe this reject as though it closed the class.
      resolves such a token to the real on-disk file and attaches its CONTENTS to the
      transcript. Observed 2026-07-22 during PR #6830's ship — the prior literal here
      resolved to the operator's live Doppler root token and auto-attached it. The guard
-     .github/scripts/test/test-no-at-mention-credfile-footgun.sh enforces this repo-wide. -->>
+     .github/scripts/test/test-no-at-mention-credfile-footgun.sh enforces this repo-wide. -->
 
 The `(^|[[:space:]]|/)` … `([[:space:]]|$)` boundaries are load-bearing: the `/`
 alternative catches `/usr/local/bin/gh`, and the trailing boundary keeps legitimate

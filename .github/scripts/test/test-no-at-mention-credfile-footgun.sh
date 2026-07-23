@@ -10,9 +10,11 @@
 # documentation example in preflight/SKILL.md that wrote such a token pointing at the
 # Doppler CLI config caused the operator's live root token to be auto-attached.
 #
-# This guard forbids that token shape in the AUTO-LOADED content surface (skills,
-# agents, commands, plugin docs, AGENTS*.md, .claude hooks) — the content the harness
-# injects into agent context. Historical, read-on-demand artifacts under
+# This guard forbids that token shape in the AUTO-LOADED content surface — the content
+# the harness injects into agent context: skills, agents, commands, plugin docs, every
+# AGENTS.md / CLAUDE.md (root AND plugin-level, since CLAUDE.md `@AGENTS.md`-imports the
+# plugin instruction body), and every hook dir whose stdout is injected (.claude/hooks
+# AND plugins/soleur/hooks). Historical, read-on-demand artifacts under
 # knowledge-base/project/{plans,brainstorms,learnings,specs} are intentionally out of
 # scope (lower-frequency vector; would otherwise require editing archived records).
 #
@@ -56,7 +58,9 @@ SELF="${BASH_SOURCE[0]##*/}"
 # git ls-files → committed files only; glob-expanded by git (no eval).
 mapfile -t FILES < <(cd "$ROOT" && git ls-files \
   'plugins/soleur/skills/**' 'plugins/soleur/agents/**' 'plugins/soleur/commands/**' \
-  'plugins/soleur/docs/**' 'AGENTS.md' 'AGENTS.*.md' '.claude/hooks/**' 2>/dev/null)
+  'plugins/soleur/docs/**' 'plugins/soleur/hooks/**' '.claude/hooks/**' \
+  'AGENTS.md' 'AGENTS.*.md' 'CLAUDE.md' \
+  'plugins/**/AGENTS.md' 'plugins/**/AGENTS.*.md' 'plugins/**/CLAUDE.md' 2>/dev/null)
 hits=0
 for f in "${FILES[@]}"; do
   [[ "$f" == *"$SELF" ]] && continue          # never scan this guard itself
