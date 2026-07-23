@@ -132,6 +132,18 @@ wl_probe_http() {
 # tempfile, the allocation is removed: `-w '\n%{http_code}'` appends the status to stdout after the
 # body, split on the LAST newline (robust even for a multi-line body, though JSON.stringify never
 # emits one).
+#
+# TRANSPORT — `docker exec <container> curl`, NOT a bare host curl. /internal/readyz is peer-gated
+# (readiness.ts requires a loopback socket peer AND a loopback Host). The prod app container runs on
+# the DEFAULT docker bridge with `-p 0.0.0.0:3000:3000` (ci-deploy.sh — NOT `--network host`), so a
+# host-side `curl 127.0.0.1:3000` reaches the app with the docker BRIDGE GATEWAY (e.g. 172.17.0.1) as
+# its peer — never loopback — and readyz answers 403 (`readyz_gate_regression`). Running the probe
+# INSIDE the container gives a genuine 127.0.0.1 peer, so both gates pass without relaxing either. All
+# three on-host consumers (cutover app_canary, the daily luks-monitor, the verify workflow's on-host
+# run) inherit this via the shared helper. Fail-closed is preserved: if the container is down or curl
+# is absent, `docker exec` fails and the `|| printf '\n000'` path yields 000 → readyz_unreachable →
+# retries then deadlines (never a false green). Container name is overridable for tests.
+: "${WL_READYZ_CONTAINER:=soleur-web-platform}"
 wl_probe_readyz() {
   local url="$1" i code body resp rc nl
   _wl_probe_bounds
@@ -148,7 +160,7 @@ wl_probe_readyz() {
     # early attempt persisting into a later unreachable verdict.
     WL_READYZ_WRITABLE=unknown; WL_READYZ_POPULATED=unknown
     WL_PROBE_CLASS=readyz; WL_PROBE_ELAPSED_S=0
-    resp="$(curl -sS -w "\\n%{http_code}" --max-time 5 "$url" 2>/dev/null || printf '\n000')"
+    resp="$(docker exec "$WL_READYZ_CONTAINER" curl -sS -w "\\n%{http_code}" --max-time 5 "$url" 2>/dev/null || printf '\n000')"
     code="${resp##*"$nl"}"
     body="${resp%"$nl"*}"
     [ -n "$code" ] || code=000

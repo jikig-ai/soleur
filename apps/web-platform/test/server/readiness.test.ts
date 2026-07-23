@@ -178,6 +178,33 @@ describe("handleReadyzRequest", () => {
     expect(writeHead).toHaveBeenCalledWith(403, expect.any(Object));
   });
 
+  // Container-networking regression lock (readyz peer-gate 403 fix). A host-side
+  // `curl 127.0.0.1:3000` reaches the bridge-networked prod container with the
+  // docker bridge gateway (172.17.0.1) as the socket peer — NOT loopback — so it
+  // MUST 403. The fix is to run the probe INSIDE the container (docker exec), where
+  // the peer is a genuine 127.0.0.1; it does NOT widen isLoopbackPeer to the
+  // gateway. These cases fail if a future editor "simplifies" by accepting the
+  // bridge gateway, which under docker userland-proxy is indistinguishable from
+  // off-host traffic and would collapse the boundary to the attacker-set Host header.
+  it("docker bridge gateway peer (172.17.0.1) + loopback Host → 403 (do NOT widen the peer gate)", async () => {
+    process.env.WORKSPACES_ROOT = tmpRoot;
+    populate(tmpRoot, 5);
+    const { handleReadyzRequest } = await import("../../server/readiness");
+    const { req, res, writeHead, end } = mockReqRes("172.17.0.1", "127.0.0.1:3000");
+    handleReadyzRequest(req, res);
+    expect(writeHead).toHaveBeenCalledWith(403, expect.any(Object));
+    expect(end).not.toHaveBeenCalledWith(expect.stringContaining("workspaces_"));
+  });
+
+  it("IPv4-mapped bridge gateway peer (::ffff:172.17.0.1) + loopback Host → 403", async () => {
+    process.env.WORKSPACES_ROOT = tmpRoot;
+    populate(tmpRoot, 5);
+    const { handleReadyzRequest } = await import("../../server/readiness");
+    const { req, res, writeHead } = mockReqRes("::ffff:172.17.0.1", "127.0.0.1:3000");
+    handleReadyzRequest(req, res);
+    expect(writeHead).toHaveBeenCalledWith(403, expect.any(Object));
+  });
+
   it("route try/catch → 503 (never propagates a throw to the crash handlers)", async () => {
     const { handleReadyzRequest } = await import("../../server/readiness");
     const { req, res, writeHead, end } = mockReqRes("127.0.0.1", "127.0.0.1");

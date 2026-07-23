@@ -203,6 +203,16 @@ else
   no "flag set but readyz was never probed — the assert silently did not run: ${MON_OUT:0:200}"
 fi
 
+# (n2) FLAG SET => readyz is probed INSIDE the container (docker exec), not a bare host curl. A
+# host-side curl of the bridge-published port reaches the app with the docker bridge gateway as its
+# peer → 403 (readyz_gate_regression). Anchor on the FULL transport (cq-assert-anchor-not-bare-token):
+# a revert to bare host curl still satisfies (n) above but must red here.
+if has 'docker exec soleur-web-platform curl'; then
+  ok "flag set: readyz is probed via docker exec into the container (genuine-loopback peer, not the bridge gateway)"
+else
+  no "flag set but readyz probe is a bare host curl — the bridge-gateway peer gets 403 in prod: ${MON_OUT:0:200}"
+fi
+
 # (o) FAIL CLOSED on a missing baseline. A missing operand must never become a SKIPPED comparison —
 # that is the same green-probe-that-cannot-fail defect #6807 exists to remove.
 run_monitor_case "$PROBE" LUKS_MONITOR_ASSERT_READYZ=1

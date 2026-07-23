@@ -40,9 +40,13 @@ MAPPER="${WORKSPACES_MAPPER_PATH:-/dev/mapper/${MAPPER_NAME}}"
 # WORKSPACES_COUNT and where the readiness assert reads it back.
 STATE_DIR="${WORKSPACES_STATE_DIR:-/var/lib/workspaces-luks}"
 STATE_FILE="${STATE_DIR}/state"
-# The container publishes the app on host loopback; /internal/readyz is loopback-GATED
-# (readiness.ts:113 requires both a loopback peer AND a loopback Host header), so it is reachable
-# from the host and from nowhere else.
+# /internal/readyz is loopback-GATED (readiness.ts requires BOTH a loopback socket peer AND a
+# loopback Host header). The container runs on the default docker bridge (`-p 0.0.0.0:3000:3000`),
+# so a bare HOST curl of this URL reaches the app with the docker bridge gateway (e.g. 172.17.0.1)
+# as its peer → 403 (readyz_gate_regression). On-host consumers therefore reach readyz ONLY from
+# INSIDE the container — wl_probe_readyz (workspaces-luks-emit.sh) wraps this URL in
+# `docker exec soleur-web-platform curl ...` so the peer is a genuine 127.0.0.1. (Contrast:
+# /internal/metrics is Host-only-gated, so resource-monitor.sh's bare host curl of it works.)
 READYZ_URL="${LUKS_MONITOR_READYZ_URL:-http://127.0.0.1:3000/internal/readyz}"
 # The host-side path that the container sees as /workspaces (a docker -v bind of $MOUNT/workspaces).
 WORKSPACES_DIR="${LUKS_MONITOR_WORKSPACES_DIR:-$MOUNT/workspaces}"

@@ -17,6 +17,14 @@
 // peer (isLoopbackPeer) additionally constrains direct off-host TCP to the port,
 // which the host firewall should already block. Port suffix is optional so e2e
 // tests that hit a non-3000 port still match.
+//
+// Reachability differs by endpoint on the bridge-networked prod container
+// (`-p 0.0.0.0:3000:3000`, default bridge): /internal/metrics gates on
+// isLoopbackHost ONLY, so resource-monitor.sh's bare HOST `curl 127.0.0.1:3000`
+// works (Host: 127.0.0.1 passes). /internal/readyz ALSO gates on isLoopbackPeer,
+// and a host-published-port curl presents the docker bridge gateway as its peer
+// (not loopback) → 403; its on-host consumers therefore probe from INSIDE the
+// container via `docker exec` (workspaces-luks-emit.sh:wl_probe_readyz).
 export function isLoopbackHost(hostHeader: string | undefined): boolean {
   if (!hostHeader) return false;
   const host = hostHeader.split(":")[0];
