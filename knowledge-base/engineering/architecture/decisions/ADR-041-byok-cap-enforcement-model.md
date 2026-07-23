@@ -1,5 +1,4 @@
 ---
-adr: 041
 title: BYOK cap enforcement model for autonomous-AI leader loops
 status: accepted
 date: 2026-05-25

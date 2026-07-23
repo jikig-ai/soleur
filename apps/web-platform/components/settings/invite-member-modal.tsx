@@ -204,7 +204,12 @@ export function InviteMemberModal({
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="colleague@company.com"
-            className="w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2/50 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted outline-none focus:border-soleur-border-emphasized"
+            autoComplete="email"
+            inputMode="email"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            className="w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-2/50 px-3 py-2 text-base text-soleur-text-primary placeholder:text-soleur-text-muted outline-none focus:border-soleur-border-emphasized md:text-sm"
           />
         </label>
 

@@ -6,7 +6,7 @@ issue: 6836
 supersedes: null
 ---
 
-# ADR-133: Close-authority boundary for the action-required SLA lifecycle cron
+# ADR-138: Close-authority boundary for the action-required SLA lifecycle cron
 
 ## Context
 

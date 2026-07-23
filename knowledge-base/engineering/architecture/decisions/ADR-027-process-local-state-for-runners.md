@@ -1,5 +1,4 @@
 ---
-adr: ADR-027
 title: Process-local state for runner sessions
 status: superseded
 superseded-by: ADR-068

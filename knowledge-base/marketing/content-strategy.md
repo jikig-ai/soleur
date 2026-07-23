@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-06-08
+last_updated: 2026-07-22
 last_reviewed: 2026-06-08
 review_cadence: weekly
 owner: CMO
@@ -151,7 +151,7 @@ Zero existing content on model-tier economics despite BYOK cost being a live buy
 
 ### Gap 8: Paperclip Orchestration Layer Differentiation (Medium) [NEW 2026-03-12]
 
-**What is missing:** Paperclip (14.6k GitHub stars, MIT-licensed) provides open-source orchestration for zero-human companies: org charts, budgets, governance, heartbeat scheduling, multi-company support. It is infrastructure-layer and agent-runtime-agnostic (supports Claude, Cursor, Codex, etc.). The upcoming Clipmart feature (pre-built company templates) could lower the barrier to "zero-human company" creation. No content explains Soleur's relationship to Paperclip (complementary layers: orchestration vs. domain intelligence).
+**What is missing:** Paperclip (74,000+ GitHub stars verified 2026-07-20, MIT-licensed) provides open-source orchestration for zero-human companies: org charts, budgets, governance, heartbeat scheduling, multi-company support. It is infrastructure-layer and agent-runtime-agnostic (supports Claude, Cursor, Codex, etc.). The upcoming Clipmart feature (pre-built company templates) could lower the barrier to "zero-human company" creation. No content explains Soleur's relationship to Paperclip (complementary layers: orchestration vs. domain intelligence).
 
 **Why it matters:** Developers discovering Paperclip will ask whether it replaces Soleur. The answer is no -- Paperclip provides the organizational scaffolding, Soleur provides the domain-specific agents, skills, and compounding knowledge. Articulating this complementary positioning could turn Paperclip's distribution into a channel for Soleur.
 

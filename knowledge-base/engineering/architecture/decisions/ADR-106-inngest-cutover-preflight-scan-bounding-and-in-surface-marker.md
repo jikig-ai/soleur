@@ -1,5 +1,4 @@
 ---
-adr: 106
 title: Inngest cutover pre-flight scans — bound duration + abandon-safety + in-surface marker (amends ADR-105)
 status: adopting
 date: 2026-07-09

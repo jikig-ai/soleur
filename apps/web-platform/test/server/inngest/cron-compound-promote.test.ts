@@ -1,10 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
 vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
 });
+// Partial mock — keep every real export (default logger, etc.) and only spy on
+// reportSilentFallback so the over-strip fallback path is observable. A
+// wholesale factory would drop siblings the cron's import graph needs.
+vi.mock("@/server/observability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/observability")>()),
+  reportSilentFallback: vi.fn(),
+}));
+import { reportSilentFallback } from "@/server/observability";
+import { stripFrontmatter } from "../../../../../scripts/lib/frontmatter-strip/strip";
 import {
   ANTHROPIC_MAX_TOKENS,
   ANTHROPIC_MODEL,
@@ -13,6 +23,7 @@ import {
   TARGET_ALLOW_RE,
   diffRemovesHardRule,
   extractEnabledFlag,
+  measureAlwaysLoadedBytes,
 } from "@/server/inngest/functions/cron-compound-promote";
 // #5111: consolidated into the safe-commit helper (was a per-cron copy).
 import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-commit";
@@ -237,5 +248,81 @@ describe("handler-side persistence (#5111)", () => {
     expect(SUT_SOURCE).toContain("commitBody: trailer");
     // The private staging pipeline must not return.
     expect(SUT_SOURCE).not.toContain("spawnGitChecked");
+  });
+});
+
+// =============================================================================
+// #6794: always-loaded byte measurement on the frontmatter-stripped basis
+// =============================================================================
+
+describe("measureAlwaysLoadedBytes (#6794 — stripped-basis measurement)", () => {
+  const STRIP_PY = join(
+    __dirname,
+    "..",
+    "..",
+    "..",
+    "..",
+    "..",
+    "scripts",
+    "lib",
+    "frontmatter-strip",
+    "strip.py",
+  );
+
+  // Order-independence: this describe block is the only one that asserts on the
+  // reportSilentFallback spy, and vitest.config sets no clearMocks. Clear per
+  // test so the `.not.toHaveBeenCalled()` case does not depend on declaration
+  // order (fail-safe today — leaked state can only false-RED — but explicit).
+  beforeEach(() => {
+    vi.mocked(reportSilentFallback).mockClear();
+  });
+
+  it("measures index raw + core stripped, matching the linter's B_ALWAYS basis", () => {
+    // AGENTS.md has no leading frontmatter → strip is a no-op (raw bytes).
+    const indexText = "# AGENTS — index\n\n- [id: hr-alpha] → core\n";
+    // AGENTS.core.md carries a frontmatter block the strip must remove.
+    const coreText =
+      "---\nlast_reviewed: 2026-07-05\nowner: founder\n---\n\n- body [id: hr-alpha]\n- body [id: hr-beta]\n";
+
+    const expected =
+      Buffer.byteLength(indexText, "utf8") +
+      Buffer.byteLength(stripFrontmatter(coreText), "utf8");
+
+    // Invariant, not a shape check: a helper that sums the wrong files or
+    // double-counts fails this.
+    expect(measureAlwaysLoadedBytes(indexText, coreText)).toBe(expected);
+
+    // Cross-language sanity: the TS-stripped core byte count equals the
+    // canonical strip.py byte count (same authority the commit gate uses).
+    const pyStrippedBytes = execFileSync("python3", [STRIP_PY], {
+      input: coreText,
+    }).length;
+    expect(Buffer.byteLength(stripFrontmatter(coreText), "utf8")).toBe(
+      pyStrippedBytes,
+    );
+
+    // No over-strip on well-formed input → no fallback signal.
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("falls back to RAW bytes + signals when the core over-strips (unterminated ---)", () => {
+    const indexText = "# AGENTS — index\n";
+    // Opening `---` with NO closing `---` line: strip consumes the whole file
+    // to empty, dropping the two `[id: …]` rule lines — the dangerous
+    // (falsely-smaller) direction the guard exists to catch.
+    const coreOverStrip =
+      "---\nlast_reviewed: 2026-07-05\n- body [id: hr-alpha]\n- body [id: hr-beta]\n";
+
+    // Guard fires → RAW measurement (NOT the empty-strip 0-byte count).
+    const result = measureAlwaysLoadedBytes(indexText, coreOverStrip);
+    expect(result).toBe(
+      Buffer.byteLength(indexText, "utf8") +
+        Buffer.byteLength(coreOverStrip, "utf8"),
+    );
+
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "frontmatter-overstrip-fallback" }),
+    );
   });
 });

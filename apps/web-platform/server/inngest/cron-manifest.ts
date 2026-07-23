@@ -54,6 +54,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-github-cidr-refresh",
   "cron-growth-audit",
   "cron-growth-execution",
+  "cron-inngest-config-drift",
   "cron-inngest-cron-watchdog",
   "cron-kb-template-health",
   "cron-legal-audit",
