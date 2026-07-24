@@ -395,6 +395,16 @@ jobs:
       - name: Run fresh-boot parity guard (#6459 Phase 2.2 baked==SSH-heredoc + wiring)
         run: bash apps/web-platform/infra/fresh-boot-parity.test.sh
 
+      # LOAD-BEARING registration (explicit, no glob — an unregistered suite is silent ZERO
+      # coverage; this is exactly the "gate that looks present but does nothing" class #6575
+      # deleted). Rebuilt ADR-068 §(c) / ADR-141 D3 anti-pooling gate: fail-closed serving-weight
+      # top-guard (web-2 weight==0 standby PASSES; weight>0 pre-flip with unmet flip-shape FAILS,
+      # AC7) + the WORKSPACES_LUKS precondition (coupling #2 — a plaintext web-2 cannot be pooled)
+      # + Condition C static committed-HCL assertions (dns.tf web-1-only, connector excludes web-2,
+      # no LB pools web-2). Guards the "workspace-gone" single-user incident (#6459/#6575).
+      - name: Run anti-pooling LB-weight gate guard (#6575 rebuild / ADR-141 D3 — web-2 not pooled pre-flip)
+        run: bash apps/web-platform/infra/lb-weight-gate.test.sh
+
       # LOAD-BEARING registration (this job lists each infra test explicitly — no glob, so an
       # unregistered suite is ZERO coverage, silently and greenly). This suite is behavioural,
       # not grep-only: it extracts the baked soleur-wait-nic helper and EXECUTES it against a

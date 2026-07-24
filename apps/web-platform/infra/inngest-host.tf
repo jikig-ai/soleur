@@ -7,8 +7,10 @@
 # host so exactly-one-instance is enforced by TOPOLOGY, not a runtime role-guard:
 # OSS Inngest v1.x is single-writer and two servers on the same prod Postgres
 # double-fire every cron (ADR-100 Context). This host is the prerequisite that
-# unblocks active-active web (HA deferred to active-active-N, #6459; web-2 was retired
-# 2026-07-17, #6538 — do NOT re-add a web-2 key).
+# unblocks active-active web. web-2 was RE-ADDED 2026-07-24 as a fresh cattle out-of-band
+# standby (ADR-141, #6459) — a different host from the fsn1 .11 retired 2026-07-17 (#6538). Its
+# private IP is in this host's :8288/:8289 allowlist (web_host_private_ips below), propagated to
+# the running host via the `inngest-host-replace` dispatch (#6608 window), NOT the merge-apply.
 #
 # STRUCTURAL PRECEDENT: zot-registry.tf (ADR-096) / git-data.tf (ADR-068), NOT the
 # co-located inngest.tf. inngest.tf provisions keys/secrets for the ON-web-host
@@ -39,12 +41,18 @@ locals {
   # :8288/v0/gql trigger control plane without the signing key (SEC-H2). Comma-joined
   # for the nft `ip saddr { ... }` set rendered into inngest-nftables.sh.
   #
-  # SINGLE-HOST (#6608): web-2 (the retired .11 host) was destroyed 2026-07-17 (#6538), so the
-  # roster is web-1 only. This literal is DRIFT-GUARDED against var.web_hosts by
-  # inngest-host.test.sh §6b (the allowlist IP set must byte-equal the var.web_hosts
-  # private_ip set) — that guard is the edge to var.web_hosts the roster previously lacked,
-  # so a stale .11 (or a future roster change) red-lines CI instead of silently re-granting.
-  web_host_private_ips = "10.0.1.10"
+  # TWO-HOST (#6608/#6459): web-2 (10.0.1.11) RE-ADDED 2026-07-24 as a fresh cattle out-of-band
+  # standby (ADR-141) — a different host from the retired fsn1 .11 (#6538). This literal is
+  # DRIFT-GUARDED against var.web_hosts by inngest-host.test.sh §6b (the allowlist IP set must
+  # byte-equal the var.web_hosts private_ip set), so a roster change red-lines CI until this follows.
+  #
+  # AC6 / SEQUENCING (ADR-141 3.3 / #6608): this config change is SAFE on the merge-apply — the
+  # default push apply of apply-web-platform-infra.yml is an explicit `-target=` allow-list that does
+  # NOT include hcloud_server.inngest, so updating this local (which feeds inngest user_data →
+  # ForceNew) does NOT replace the prod Inngest host at merge. The nftables allowlist reaches the
+  # RUNNING inngest host only via the separate `inngest-host-replace` dispatch (#6608 maintenance
+  # window), which must land BEFORE the Phase-4 web-2 soak so the soak validates a fully-integrated host.
+  web_host_private_ips = "10.0.1.10,10.0.1.11"
 
   # Arch DERIVED from var.inngest_server_type (mirrors zot-registry.tf local.registry_arch):
   # `cax*` (Ampere) → arm64, anything else (`cpx*`/`cx*`) → amd64. Lets the dedicated Inngest

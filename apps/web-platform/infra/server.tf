@@ -326,16 +326,21 @@ resource "hcloud_server" "web" {
   # Guarded by plugins/soleur/test/terraform-target-parity.test.ts so it is not
   # dropped silently.
   #
-  # HARD GATE (ADR-068 §(c), the LB-weight gate) — the deferred cutover orchestrator
-  # must NOT remove this entry or shift web-2's Cloudflare LB weight above 0 until the
-  # programmatic gate (DELETED 2026-07-20 with #6575 — see ADR-068 §(c) CORRECTION; nothing checks this today, and it MUST be rebuilt before any second web host is pooled) exits 0 AND its separate
-  # runtime-bind probe passes: (1) owner-side relay active (SOLEUR_PROXY_BIND /
-  # SOLEUR_PROXY_PEER_ALLOWLIST / SOLEUR_HOST_ROSTER), AND (2) git-data store cut over
-  # (GIT_DATA_STORE_ENABLED==true + LUKS soak marker). Pooling web-2 before both = a
-  # request lands on a host without that user's /workspaces → empty workspace →
-  # "workspace-gone" single-user incident. The gate is SHAPE-ONLY (prints
-  # requires_runtime_bind_probe=true) so exit 0 alone is NOT weight-flip authorization.
-  # See the ADR §(c) amendment + runbook moved-block-wedge-cutover-5887.md §Scope B.
+  # HARD GATE (ADR-068 §(c) / ADR-141 D3, the anti-pooling LB-weight gate) — the deferred cutover
+  # orchestrator must NOT remove this entry or shift web-2's Cloudflare LB weight above 0 until the
+  # programmatic gate (REBUILT 2026-07-24 with ADR-141 D3 / #6459 as `lb-weight-gate.sh`, after
+  # #6575 deleted the original 2026-07-20 — see ADR-068 §(c) CORRECTION + ADR-141) exits 0 AND its
+  # separate runtime-bind probe passes. The rebuilt gate is a fail-closed serving-weight TOP-GUARD:
+  # web-2 weight==0/not-in-rotation PASSES (the standby state a correct pre-flip config is in — the
+  # #6575 polarity flaw is fixed); web-2 weight>0 pre-flip runs the flip-authorization shape and
+  # FAILS unless (1) owner-side relay active (SOLEUR_PROXY_BIND / SOLEUR_PROXY_PEER_ALLOWLIST /
+  # SOLEUR_HOST_ROSTER), (2) git-data store cut over (GIT_DATA_STORE_ENABLED==true + GIT_DATA_LUKS
+  # soak marker), AND (3) web-2 /workspaces LUKS-backed (WORKSPACES_LUKS soak marker — ADR-141 D3
+  # coupling #2, so a plaintext web-2 cannot be pooled). Pooling web-2 before all three = a request
+  # lands on a host without that user's /workspaces → empty workspace → "workspace-gone" single-user
+  # incident. SHAPE-ONLY (prints requires_runtime_bind_probe=true) so exit 0 is NOT weight authorization.
+  # Committed-config anti-pooling (dns.tf web-1-only, connector excludes web-2, no LB pools web-2) is
+  # Condition C in lb-weight-gate.test.sh. See ADR-068 §(c) + ADR-141 + moved-block-wedge-cutover-5887.md §Scope B.
   lifecycle {
     ignore_changes = [user_data, ssh_keys, image, placement_group_id]
   }
@@ -693,9 +698,11 @@ resource "terraform_data" "git_data_probe_install" {
 # internet (firewall.tf admits only 22/80/443/icmp on the public interface), and its only members
 # are our own hosts.
 #
-# SCOPE: this grant exists because a peer connector proxies to web-1. It is web-2-lifetime-scoped
-# — #6538 (retire the fsn1 orphan) removes the only peer, after which the 10.0.1.0/24 clause is
-# vestigial and should be re-evaluated rather than inherited.
+# SCOPE: this grant exists because a peer connector proxies to web-1. It is web-2-lifetime-scoped.
+# #6538 retired the fsn1 .11 orphan (removing the only peer, making the clause momentarily
+# vestigial), but web-2 was RE-ADDED 2026-07-24 (ADR-141, #6459) as a fresh cattle standby at
+# 10.0.1.11 — so the 10.0.1.0/24 grant is LIVE again (a peer connector from web-2 must not be
+# fail2ban-banned). Re-evaluate only if web-2 is ever removed.
 resource "terraform_data" "fail2ban_tuning" {
   triggers_replace = sha256(file("${path.module}/fail2ban-sshd.local"))
 
