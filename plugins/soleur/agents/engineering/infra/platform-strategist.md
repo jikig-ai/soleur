@@ -47,7 +47,7 @@ a provider-managed store does not).
 
 This axis is enforced downstream by the design-time gate (`plan` §2.11 / `deepen-plan` §4.10)
 and the encryption-posture ledger (`scripts/encryption-posture-ledger.json`); see
-[ADR-139](../../../../../knowledge-base/engineering/architecture/decisions/ADR-139-encryption-posture-as-a-design-time-default.md)
+[ADR-140](../../../../../knowledge-base/engineering/architecture/decisions/ADR-140-encryption-posture-as-a-design-time-default.md)
 for the full three-layer model. Skipping this step here does not skip the gate downstream — it
 only means the choice gets made later, under less context, by whoever hits the halt.
 

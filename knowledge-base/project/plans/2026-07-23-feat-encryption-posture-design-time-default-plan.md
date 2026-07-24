@@ -6,7 +6,7 @@ branch: feat-one-shot-encryption-at-rest-in-transit-design-default
 lane: cross-domain
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
-adr: ADR-139 (provisional ordinal — re-verify against origin/main at /ship)
+adr: ADR-140 (provisional ordinal — re-verify against origin/main at /ship)
 ---
 
 # feat: Encryption-at-rest + in-transit as a design-time DEFAULT
@@ -108,7 +108,7 @@ exact volume this feature exists to catch. **No string-similarity join is permit
   directive and therefore **never fires** — so **the override marker, the in-file justification block,
   and AC32 are all deleted.** The circularity argument was unsound (a plaintext AOF does not crash
   Inngest — correlation ≈ 0, not 1); the real residual is Inngest-trigger *availability*, already
-  covered by `scheduled-inngest-health.yml`. Record that one-line residual in ADR-139.
+  covered by `scheduled-inngest-health.yml`. Record that one-line residual in ADR-140.
 - **Heartbeat moves to the Sentry plane (arch F8).** All 10 `scheduled-*.yml` use Sentry check-ins;
   `sentry-monitor-iac-parity.test.ts` FAILS a workflow heartbeat with no `sentry_cron_monitor`
   (the `#6374` shape — a workflow ran 14h unseen). Emit a Sentry heartbeat slug
@@ -200,7 +200,7 @@ type DOES. This makes AC7 testable as stated.
 `*.tf` anchor** — deleting their rows silently lowers the floor and the sweep still passes. Compute
 the floor from a repo scan + a committed expected-count constant and an explicit `non_iac_stores`
 list, not from the ledger; FAIL when actual < expected. AC6 becomes `== 13 stores, == 8 connections`.
-Add MB-12 (delete a non-IaC row → must red). **State the hermeticity invariant in ADR-139 and assert
+Add MB-12 (delete a non-IaC row → must red). **State the hermeticity invariant in ADR-140 and assert
 it:** Layer A is offline and credential-free (no `gh api`, tempting because Layer B does it); run the
 sweep with no network and require an identical verdict.
 
@@ -379,7 +379,7 @@ Two independent blockers, both measured this session:
 
 The insight is domain-scoped — it can only fire on an infra/data-design turn, never an arbitrary
 one — so it routes to the owning skills and agents, which is where a domain-scoped rule belongs.
-The principle is recorded in **ADR-139** and in `knowledge-base/project/constitution.md`.
+The principle is recorded in **ADR-140** and in `knowledge-base/project/constitution.md`.
 
 ### Decision D5 — **Extend** `constraint-scaffold`; do **not** add a sibling skill
 
@@ -633,9 +633,9 @@ registry-disk, and per-host web beats). No new tier gate needed.
 
 ### ADR
 
-**Create ADR-139 — "Encryption posture is a design-time default, enforced by a resolvable-evidence
+**Create ADR-140 — "Encryption posture is a design-time default, enforced by a resolvable-evidence
 ledger."** (Provisional ordinal — 138 is the current maximum; `/ship`'s ADR-Ordinal Collision Gate
-re-verifies against `origin/main`. **If renumbered, sweep `grep -rn 'ADR-139' knowledge-base/project/{plans,specs}/feat-one-shot-encryption-at-rest-in-transit-design-default/` in the same edit** — a renumber that misses the plan/tasks/ACs leaves an AC verifying a nonexistent file.)
+re-verifies against `origin/main`. **If renumbered, sweep `grep -rn 'ADR-140' knowledge-base/project/{plans,specs}/feat-one-shot-encryption-at-rest-in-transit-design-default/` in the same edit** — a renumber that misses the plan/tasks/ACs leaves an AC verifying a nonexistent file.)
 
 The Decision records: the three-layer model; that a declaration-only gate is rejected because it
 reproduces `#6588`; that evidence must be mechanically resolvable rather than asserted; that the
@@ -814,7 +814,7 @@ an undefined element fails there, not at `tsc`.
 
 ### Phase 7 — ADR, C4, docs
 
-7.1 Write ADR-139.
+7.1 Write ADR-140.
 7.2 C4 edits per `### C4 views`; run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 7.3 Record the design-time-default principle in `knowledge-base/project/constitution.md`
     (the placement D4 chose in lieu of an AGENTS rule).
@@ -874,7 +874,7 @@ an undefined element fails there, not at `tsc`.
 - [ ] AC26 — `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>&1` reports `B_ALWAYS` **unchanged at 22900** — no AGENTS pointer was added.
 - [ ] AC27 — `bun test plugins/soleur/test/components.test.ts` passes; the cumulative description budget is unchanged at `2366/2366`.
 - [ ] AC28 — `bash scripts/lint-orphan-test-suites.sh` passes (both new `.test.sh` suites registered in `scripts/test-all.sh`).
-- [ ] AC29 — ADR-139 exists; `c4-code-syntax.test.ts` + `c4-render.test.ts` pass; `model.c4`'s `workspacesVolume` description no longer asserts plaintext and cites verify run `30040444418`; `views.c4` includes `platform.infra.workspacesVolume`.
+- [ ] AC29 — ADR-140 exists; `c4-code-syntax.test.ts` + `c4-render.test.ts` pass; `model.c4`'s `workspacesVolume` description no longer asserts plaintext and cites verify run `30040444418`; `views.c4` includes `platform.infra.workspacesVolume`.
 - [ ] AC30 — `bash scripts/test-all.sh` full-suite exit gate green.
 - [ ] AC32 — **(D8)** `.github/workflows/scheduled-encryption-posture-reconcile.yml` contains **both** the literal override comment `<!-- gate-override: new-scheduled-cron-prefer-inngest -->` **and** an in-file comment block restating the three-part ADR-033 exemption justification. The override without the justification is a review-blocking defect. Verify both with two separate greps against the workflow file.
 - [ ] AC33 — The detector certifies the repo's two genuinely-encrypted volumes on day one: `python3 scripts/lint-encryption-posture.py --repo-sweep --report` reports `hcloud_volume.git_data_luks` and `hcloud_volume.workspaces_luks` as `mechanism: luks` with all citations resolved. A detector that cannot certify these two is miscalibrated regardless of how many synthetic fixtures pass.
@@ -1056,7 +1056,7 @@ infrastructure/tooling change with no user-facing surface. No wireframe required
 | ~~`plugins/soleur/skills/constraint-scaffold/references/encryption-posture-gate.template`~~ | **R0: MOVED to the constraint-scaffold follow-up PR — not in this PR** |
 | ~~`plugins/soleur/skills/constraint-scaffold/references/encryption-posture-scan.template`~~ | **R0: MOVED to follow-up PR** |
 | ~~`plugins/soleur/skills/constraint-scaffold/test/encryption-posture.test.sh`~~ | **R0: MOVED to follow-up PR** |
-| `knowledge-base/engineering/architecture/decisions/ADR-139-encryption-posture-as-a-design-time-default.md` | ADR |
+| `knowledge-base/engineering/architecture/decisions/ADR-140-encryption-posture-as-a-design-time-default.md` | ADR |
 | `knowledge-base/engineering/architecture/encryption-posture-audit-2026-07-23.md` | Audit report (deliverable 8) |
 | `knowledge-base/project/specs/feat-one-shot-encryption-at-rest-in-transit-design-default/tasks.md` | Task breakdown |
 
@@ -1101,7 +1101,7 @@ infrastructure/tooling change with no user-facing surface. No wireframe required
 | **Required-check promotion partially lands** (job renamed, ruleset stale) — the `#6103` class. | AC13 asserts byte-identity across all three artifacts. |
 | **The audit's "provider-managed" rows become the new false assurance.** | `does_not_defend` is mandatory and rejected when empty or a restatement (TS-12); attestations need a name, URL, and retrieval date. |
 | **Scope** — 19 edited + 14 created files at a `single-user incident` threshold. | No safe split exists (see CTO assessment). Mitigated by the 5-agent `/plan-review` panel and `user-impact-reviewer` at review, both mandated by the threshold. |
-| **ADR-139 ordinal collision** during the pipeline. | `/ship`'s collision gate; and if renumbered, the same-edit sweep of this plan + `tasks.md` + ACs. |
+| **ADR-140 ordinal collision** during the pipeline. | `/ship`'s collision gate; and if renumbered, the same-edit sweep of this plan + `tasks.md` + ACs. |
 | **The `prefer-inngest` PreToolUse hook DENIES the Layer B workflow Write at `/work` time**, and the implementer overrides it reflexively without recording why. | D8 decides the placement in advance with the two-part exemption answered; the override hatch is declared **together with** a mandatory in-file justification block. AC32 asserts both are present. |
 | **`/plan-review` and the deepen-plan agent panels never ran** (Task tool unavailable this session), so the plan has had no adversarial multi-agent read. At `single-user incident` threshold that is a material gap. | `/plan-review` MUST run with agents available before `/work`, at the 5-agent escalated panel the threshold mandates. Recorded in the Enhancement Summary rather than silently omitted. |
 

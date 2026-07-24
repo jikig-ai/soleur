@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for scripts/lint-encryption-posture.py (the Layer A encryption-posture
-# detector, ADR-139). This is a SECURITY GATE: the whole point is that a ledger
+# detector, ADR-140). This is a SECURITY GATE: the whole point is that a ledger
 # row cannot false-PASS by citing a sibling volume's LUKS apparatus (the #6588
 # class — see R1 in knowledge-base/project/plans/
 # 2026-07-23-feat-encryption-posture-design-time-default-plan.md). Every fixture

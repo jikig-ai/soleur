@@ -107,7 +107,7 @@ precedes its required-check promotion.
 
 ## Completion status (2026-07-24)
 
-**Shipped in this PR (#6885):** Phase 0 (preconditions verified) · Phase 1 (ledger schema + code-sourced audit + seeded ledger, 14 stores/3 connections, sweep green; findings filed #6893-#6897) · Phase 2 (Layer A detector, 35/35 + MB-1..12, independently re-verified) · Phase 3 partial (detector wired as an ADVISORY ci.yml step) · Phase 5 (design-time gates) · Phase 6 (generation-side, R0-narrowed to hetzner/cloudflare + R6 Semgrep) · Phase 7 (ADR-139, C4, constitution pointer).
+**Shipped in this PR (#6885):** Phase 0 (preconditions verified) · Phase 1 (ledger schema + code-sourced audit + seeded ledger, 14 stores/3 connections, sweep green; findings filed #6893-#6897) · Phase 2 (Layer A detector, 35/35 + MB-1..12, independently re-verified) · Phase 3 partial (detector wired as an ADVISORY ci.yml step) · Phase 5 (design-time gates) · Phase 6 (generation-side, R0-narrowed to hetzner/cloudflare + R6 Semgrep) · Phase 7 (ADR-140, C4, constitution pointer).
 
 **Deferred to tracked follow-ups (reviewer-endorsed splits):**
 - Required-check PROMOTION (the 5-site coupling, D7/R4) -> **#6901** (measure-then-arm per arch F4; detector runs advisory now).

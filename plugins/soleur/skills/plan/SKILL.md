@@ -587,7 +587,7 @@ exception:        # present ONLY when mechanism is plaintext-exception OR cert_v
 
 **Skip silently** when the plan introduces no persistent store and no new cross-component connection — pure UI/docs/dependency-bump plans, or a change confined to an already-provisioned surface.
 
-**Why:** ADR-139 and `knowledge-base/project/plans/2026-07-23-feat-encryption-posture-design-time-default-plan.md` (Plan Review Revisions R1-R11) — a new store or connection shipped with no declared encryption posture is undetectable at review time by name-similarity alone (a plaintext `hcloud_volume.workspaces` reads identically to its LUKS-backed sibling `hcloud_volume.workspaces_luks` until the device-binding chain is actually walked). Codifying the posture as a plan deliverable, resolved against real code by `lint-encryption-posture.py` (repo-root `scripts/`), closes the gap at design time instead of at incident time.
+**Why:** ADR-140 and `knowledge-base/project/plans/2026-07-23-feat-encryption-posture-design-time-default-plan.md` (Plan Review Revisions R1-R11) — a new store or connection shipped with no declared encryption posture is undetectable at review time by name-similarity alone (a plaintext `hcloud_volume.workspaces` reads identically to its LUKS-backed sibling `hcloud_volume.workspaces_luks` until the device-binding chain is actually walked). Codifying the posture as a plan deliverable, resolved against real code by `lint-encryption-posture.py` (repo-root `scripts/`), closes the gap at design time instead of at incident time.
 
 ### 3. SpecFlow Analysis
 

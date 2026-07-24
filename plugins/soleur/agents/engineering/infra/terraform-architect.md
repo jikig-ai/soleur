@@ -93,7 +93,7 @@ nothing.
 - Cross-reference `scripts/encryption-posture-ledger.json` (the SSOT for every persistent
   store's declared posture -- owned by the encryption-posture Layer A/B detector, do not edit
   directly when merely generating HCL; file a row alongside the resource) and
-  [ADR-139](../../../../../knowledge-base/engineering/architecture/decisions/ADR-139-encryption-posture-as-a-design-time-default.md)
+  [ADR-140](../../../../../knowledge-base/engineering/architecture/decisions/ADR-140-encryption-posture-as-a-design-time-default.md)
   for the full three-layer model (design gate / static resolvable-evidence / live reconcile).
 
 ## Review Protocol

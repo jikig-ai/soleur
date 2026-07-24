@@ -7,7 +7,7 @@ related_adrs: [ADR-033-inngest-cron-functions-invoke-claude-code-via-child-proce
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-139: Encryption posture is a design-time default, enforced by a resolvable-evidence ledger
+# ADR-140: Encryption posture is a design-time default, enforced by a resolvable-evidence ledger
 
 ## Context
 

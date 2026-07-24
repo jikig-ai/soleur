@@ -133,7 +133,7 @@ rules:
       or verify=False). Encryption in transit without certificate verification lets
       an attacker on the network path present their own certificate undetected --
       "TLS is on" is not "TLS is verified". See the encryption-posture ledger
-      (scripts/encryption-posture-ledger.json) and ADR-139: the connection's
+      (scripts/encryption-posture-ledger.json) and ADR-140: the connection's
       in_transit.cert_verification must be "on" with a resolvable anchor, or the
       row is an exception with a named justification and tracking_issue. Known
       dev-only exceptions (e.g. the byok-*.tenant-isolation.test.ts fixtures) are
@@ -164,7 +164,7 @@ rules:
       self-signed-chain exception (sslmode=require against the connection pooler)
       is recorded in scripts/encryption-posture-ledger.json with its own
       tracking_issue -- do not treat this WARNING as blocking without checking the
-      ledger first. See ADR-139.
+      ledger first. See ADR-140.
     severity: WARNING
     languages: [typescript, javascript, bash, python]
     metadata:

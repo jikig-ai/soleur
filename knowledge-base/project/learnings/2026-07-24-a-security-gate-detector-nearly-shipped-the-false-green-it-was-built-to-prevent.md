@@ -9,7 +9,7 @@ pr: 6885
 
 # A security-gate detector nearly shipped the false-green it was built to prevent
 
-Building the encryption-posture Layer A detector (`scripts/lint-encryption-posture.py`, ADR-139) —
+Building the encryption-posture Layer A detector (`scripts/lint-encryption-posture.py`, ADR-140) —
 the mechanical check meant to stop a store being provisioned plaintext while docs claim encryption —
 the detector itself reproduced the **claim-vs-reality false-green** it exists to catch, in three
 distinct ways. Each was invisible to the obvious verification and caught only by a stricter one.

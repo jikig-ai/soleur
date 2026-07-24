@@ -574,7 +574,7 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 
 **Step 5 — Pass-through.** If the section is present, all required fields exist with non-boilerplate values, `does_not_defend` is non-empty, and every `exception` block carries both `tracking_issue` and `expires_on`, deepen-plan proceeds normally. No telemetry on pass.
 
-**Why:** ADR-139 and `knowledge-base/project/plans/2026-07-23-feat-encryption-posture-design-time-default-plan.md` (Plan Review Revisions R1-R11). A declaration-only gate without Layer A (`lint-encryption-posture.py`, repo-root `scripts/`, resolving every citation against real code) and Layer B (live provider/host reconciliation) reproduces #6588 exactly — legal docs declared LUKS while the volume was plaintext ext4. This deepen-plan halt is the design-time half; it stops an underspecified or boilerplate posture from ever reaching `/work`.
+**Why:** ADR-140 and `knowledge-base/project/plans/2026-07-23-feat-encryption-posture-design-time-default-plan.md` (Plan Review Revisions R1-R11). A declaration-only gate without Layer A (`lint-encryption-posture.py`, repo-root `scripts/`, resolving every citation against real code) and Layer B (live provider/host reconciliation) reproduces #6588 exactly — legal docs declared LUKS while the volume was plaintext ext4. This deepen-plan halt is the design-time half; it stops an underspecified or boilerplate posture from ever reaching `/work`.
 
 **Step 5 — Pass-through.** Non-UI plan, or a committed `.pen` present → proceed normally. No telemetry on pass.
 

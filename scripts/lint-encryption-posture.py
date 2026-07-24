@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Layer A encryption-posture detector (ADR-139).
+"""Layer A encryption-posture detector (ADR-140).
 
 Loads `scripts/encryption-posture-ledger.json` (schema:
 `scripts/encryption-posture-ledger.schema.json`) and mechanically resolves every
@@ -9,7 +9,7 @@ lint: the headline failure mode it exists to catch is a ledger row asserting
 volume's LUKS apparatus by name-similarity (the `#6588` class — `hcloud_volume.
 workspaces` sits beside `hcloud_volume.workspaces_luks`, and any name/mount-path
 join lets the plaintext row cite the encrypted sibling's evidence and PASS).
-See ADR-139 and `knowledge-base/project/plans/
+See ADR-140 and `knowledge-base/project/plans/
 2026-07-23-feat-encryption-posture-design-time-default-plan.md` (Plan Review
 Revisions R1-R11) for the full design rationale.
 

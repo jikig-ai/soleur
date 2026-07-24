@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "encryption-posture-ledger.schema.json",
   "title": "Encryption Posture Ledger",
-  "description": "SSOT for every persistent store and cross-component connection Soleur operates. Layer A (scripts/lint-encryption-posture.py) resolves every citation in this file against real code on every CI run; Layer B reconciles the live_verification: available rows against actual provider/host state. See ADR-139 and knowledge-base/project/plans/2026-07-23-feat-encryption-posture-design-time-default-plan.md (Plan Review Revisions R1-R11).",
+  "description": "SSOT for every persistent store and cross-component connection Soleur operates. Layer A (scripts/lint-encryption-posture.py) resolves every citation in this file against real code on every CI run; Layer B reconciles the live_verification: available rows against actual provider/host state. See ADR-140 and knowledge-base/project/plans/2026-07-23-feat-encryption-posture-design-time-default-plan.md (Plan Review Revisions R1-R11).",
   "type": "object",
   "required": ["schema_version", "store_classes", "non_store_types", "non_iac_stores", "stores", "connections"],
   "additionalProperties": false,

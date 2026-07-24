@@ -1033,7 +1033,7 @@ breaks the numeric test).
 
 ### Check 12: Encryption Posture
 
-Enforces the encryption-posture ledger's maintenance contract (ADR-139): every persistent
+Enforces the encryption-posture ledger's maintenance contract (ADR-140): every persistent
 store and cross-component connection Soleur operates must carry a ledger row whose cited
 evidence resolves to real code, and any accepted plaintext/unverified-TLS exception must carry
 an open, unexpired tracking issue. Consumes the deterministic analyzer
