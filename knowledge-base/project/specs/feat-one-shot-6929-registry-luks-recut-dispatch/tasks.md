@@ -7,7 +7,7 @@ plan: knowledge-base/project/plans/2026-07-24-feat-registry-luks-recut-dispatch-
 
 # Tasks — guarded `registry-luks-recut` `workflow_dispatch`
 
-Derived from the **post-review (v2)** plan. Design-decision IDs (D1-D15) and acceptance-criteria IDs (AC1-AC23) refer to that document. Taste/User-Challenge splits are in `decision-challenges.md` (DC-1 … DC-6) — read them before starting, since DC-2 (a `.tf` scope addition) and DC-5 (is a recut actually scheduled?) may change scope.
+Derived from the **post-review (v2)** plan. Design-decision IDs (D1-D15) and acceptance-criteria IDs (AC1-AC23) refer to that document. Taste/User-Challenge splits are in `decision-challenges.md` (DC-1 … DC-6). **Both open items were answered by the operator on 2026-07-25 and are already applied here:** DC-2 (the `.tf` scope addition) is **cut** → tracked in **#6943**, so this PR edits no `.tf` at all; DC-5 (no recut scheduled) **ships cold** with the mandatory five-step pre-first-fire re-verification trigger, new **AC24**. Do not re-open either without checking `decision-challenges.md`.
 
 ## Phase 0 — Preconditions (premise-falsifying reads only; record each answer for AC22)
 
@@ -45,10 +45,11 @@ Derived from the **post-review (v2)** plan. Design-decision IDs (D1-D15) and acc
 
 ## Phase 4 — Terraform + docs
 
-- [ ] 4.1 **DC-2 gate:** add `lifecycle { prevent_destroy = true }` to `hcloud_volume.workspaces` in `apps/web-platform/infra/server.tf` (D13). `terraform validate`; confirm no dispatch path's plan changes.
+- [x] 4.1 ~~**DC-2 gate:** add `lifecycle { prevent_destroy = true }` to `hcloud_volume.workspaces`~~ — **CUT by operator 2026-07-25**, tracked standalone in **#6943**. No `.tf` edit in this PR; §Infrastructure is "Terraform changes: **None**". Do NOT touch `apps/web-platform/infra/server.tf`.
 - [ ] 4.2 Amend ADR-096's 2026-07-24 amendment: shipped vehicle + confirm token + id-pin provenance, and record the empty-store/paging window, the corrected HALT invariant, the two ordering windows, and the `registry_region_migrate` residual. Sweep the `lint-infra-ignore` comment body too. FOOTGUN paragraph byte-unchanged.
 - [ ] 4.3 File the DC-3 tracking issue (the weaker sibling gate) and the CPO-R2 issue (ledger `at_rest.mechanism` vs. its downstream renderers).
-- [ ] 4.4 Write `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` covering **every row** of the plan's §Operator flow: the bounded one-command Hetzner id lookup, each abort's exit, the D11 `registry-host-replace`-vs-full-recut decision rule, the empty-store force command, and the do-not-use warning **scoped to the plaintext case**. No SSH.
+- [ ] 4.4 Write `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` covering **every row** of the plan's §Operator flow: the bounded one-command Hetzner id lookup, each abort's exit, the D11 `registry-host-replace`-vs-full-recut decision rule, the empty-store force command, and the do-not-use warning **scoped to the plaintext case**. No SSH. **Plus the five-step cold-vehicle re-verification trigger (DC-5/AC24) as a blocking pre-flight section** — this vehicle ships unfired.
+- [ ] 4.6 **DC-5 record:** the same five-step cold-vehicle re-verification also lands in the ADR-096 amendment (4.2). AC24 requires it in **both** durable artifacts, not the plan alone.
 - [ ] 4.5 Correct the posture-audit row (drop `**plaintext ext4**` and the `format = "ext4"` fragment; content anchor instead of `:407`) and the `model.c4` registry description — both phrased **code-declared / live-pending**, never live-verified. Then `bash scripts/regenerate-c4-model.sh`.
 
 ## Phase 5 — Verification
@@ -59,8 +60,9 @@ Derived from the **post-review (v2)** plan. Design-decision IDs (D1-D15) and acc
 - [ ] 5.4 `bun test plugins/soleur/test/terraform-target-parity.test.ts` → green (per the Phase 0.5 answer).
 - [ ] 5.5 `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts` → green.
 - [ ] 5.6 `python3 scripts/lint-encryption-posture.py --repo-sweep` → exit 0.
-- [ ] 5.7 `actionlint` + `shellcheck` + `terraform validate` clean.
+- [ ] 5.7 `actionlint` + `shellcheck` clean. (`terraform validate` no longer applicable — no `.tf` edit; see 4.1.)
 - [ ] 5.8 Full `bash scripts/test-all.sh` → exit 0.
-- [ ] 5.9 PR body: `Closes #6929` plus the AC22 record (from-empty closure re-verification, D10 positive-control result, disposability answer, worktree-runner answer, name-uniqueness citation).
+- [ ] 5.9 PR body: `Closes #6929` plus the AC22 record (from-empty closure re-verification, D10 positive-control result, disposability answer, worktree-runner answer, name-uniqueness citation) **and the two 2026-07-25 operator dispositions: DC-2 cut to #6943, DC-5 ships cold with the AC24 re-verification trigger**.
+- [ ] 5.10 **AC24 assert:** `grep` the cold-vehicle re-verification heading in BOTH the runbook and the ADR-096 amendment. A plan-only record fails this check.
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->

@@ -34,7 +34,7 @@ plan_review: "v2 — 7-agent panel applied (dhh, kieran, code-simplicity, archit
 ### New considerations discovered
 
 - The empty-store window after a recut is a **paging** window (`zot_mirror_fallback_rate`), not a quiet one, and nothing the operator controls bounds it — so the runbook now carries a one-command force.
-- `hcloud_volume.workspaces` — the sole copy of `/mnt/data` — has **no** declarative destroy protection anywhere in the root. Adding `prevent_destroy` is a scope addition beyond #6929 and is surfaced as **DC-2**, not assumed.
+- `hcloud_volume.workspaces` — the sole copy of `/mnt/data` — has **no** declarative destroy protection anywhere in the root. Adding `prevent_destroy` was surfaced as **DC-2**, not assumed, and the operator **cut it from this PR** on 2026-07-25: it is now tracked standalone in **#6943**. This plan's Terraform changes are **None**.
 - `registry_region_migrate` already accepts the same bare creates with no confirm token, no id-pin and no opt-in, so this gate's strictness is locally sound but globally partial (**DC-3**).
 - The `host_creates` HALT message is **already false** today; it is corrected rather than extended.
 - Two ordering windows (firewall-naked on boot; NIC-guard reboot during `luksFormat`) are now recorded as accepted in the ADR rather than left implicit.
@@ -63,7 +63,7 @@ terraform plan -out=tfplan \
 
 A fresh **raw** volume ⇒ cloud-init's `blkid` **empty** arm ⇒ `luksFormat` ⇒ the store re-mirrors from GHCR on the next CI dual-push (**not** an automatic pull-through — see §Research Reconciliation). The apply is fenced by, in order: a pre-destroy **pull-path health** check, the sourced **destroy-guard**, a **live Hetzner existence probe** that admits the resume arm, `stock_preflight_gate`, a **pre-apply** web-1/workspaces zero-touch assert, and a post-apply **liveness poll**.
 
-**Adding the job is CODE-ONLY for the registry.** Every `zot-registry.tf` resource is an `OPERATOR_APPLIED_EXCLUSION`, so merging applies nothing there. The one exception is deliberate: this PR also adds `lifecycle { prevent_destroy = true }` to `hcloud_volume.workspaces` (see D13 — surfaced as **DC-2** in `decision-challenges.md`, not assumed).
+**Adding the job is CODE-ONLY, with no exceptions.** Every `zot-registry.tf` resource is an `OPERATOR_APPLIED_EXCLUSION`, so merging applies nothing there, and this PR carries **no** `.tf` edit at all (the one candidate, D13, was cut to #6943 — see DC-2). Merging this PR mutates no live infrastructure; firing the dispatch is the gated operator step.
 
 ### Why it matters — the footgun this removes
 
@@ -89,7 +89,7 @@ The operator must **NOT** use `registry-host-replace` for the recut. That dispat
 
 **If this lands broken, the user experiences** one of two directions:
 
-- *Guard too loose* — a mis-scoped destroy-guard PASSes a plan it should ABORT. The blast radius is not the registry (a disposable GHCR mirror with an atomic fallback) but what an un-caught `out_of_scope` could reach through the shared, **lock-less** (`use_lockfile = false`) `terraform-apply-web-platform-host` state: `hcloud_server.web["web-1"]` (unrebuildable `cx33`, no automated birth path — #6730) or `hcloud_volume.workspaces` (sole-copy `/mnt/data`). **Tail severity is `aggregate pattern`-shaped** — destroying that volume takes every workspace on the host, not one — while the declared threshold covers the expected case. D13 adds the declarative brake this direction has never had.
+- *Guard too loose* — a mis-scoped destroy-guard PASSes a plan it should ABORT. The blast radius is not the registry (a disposable GHCR mirror with an atomic fallback) but what an un-caught `out_of_scope` could reach through the shared, **lock-less** (`use_lockfile = false`) `terraform-apply-web-platform-host` state: `hcloud_server.web["web-1"]` (unrebuildable `cx33`, no automated birth path — #6730) or `hcloud_volume.workspaces` (sole-copy `/mnt/data`). **Tail severity is `aggregate pattern`-shaped** — destroying that volume takes every workspace on the host, not one — while the declared threshold covers the expected case. The declarative brake this direction has never had (`prevent_destroy`, D13) is **not** in this PR: it was cut to **#6943** (DC-2), so this PR's protection for that address remains the jq `out_of_scope` invariant, exactly as for the five existing gates. Landing #6943 is what closes this direction structurally.
 - *Guard too strict / vehicle never fireable* — the recut cannot run, `hcloud_volume.registry` stays physically plaintext indefinitely, and the ledger + corrected prose describe an encryption posture the live device does not have. This is why every ABORT path in §Operator flow has a named exit, and why AC19 enumerates transitions rather than topics.
 
 **If this leaks:** no new secret material and no new data surface. The recut *reduces* exposure. `REGISTRY_LUKS_KEY` is read at boot from the isolated `soleur-registry/prd` Doppler config; never in `user_data`, never an argv positional; this plan adds no read site. Separately and deliberately: this repo is **public**, so the PR publishes the destroy recipe — resource addresses, the confirm literal, the dispatch line. That is acceptable because authorization is GitHub Actions write access plus a `CODEOWNERS`-gated workflow file, not obscurity; stating it beats asserting "no new data surface".
@@ -112,7 +112,7 @@ The operator must **NOT** use `registry-host-replace` for the recut. That dispat
 | D10 | **Pre-destroy pull-path health gate, zero-tolerance threshold**: `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep ghcr-fallback --grep local-cache --limit 20`; **≥1 row ⇒ ABORT**. Fail-closed if the query cannot run. **Phase 0.2 positive control**: prove the query returns rows on a known-degraded historical window; if it cannot be shown to ever go red, the step ships as a `::warning::`, not a gate, and that is recorded. | A healthy fleet emits **only** `registry=zot` (`apps/web-platform/infra/ci-deploy.sh:642-643`), so zero-tolerance has no false-abort surface and is a real number rather than v1's undefined "sustained hits". The precedent (`scheduled-zot-restart-loop.yml:229`) is a human-read issue body, so this is the first automated use — hence the positive control. Named remedy: the degradation must clear before re-firing; if the degradation *is* the reason to recut, that is an incident path, not a recut. |
 | D11 | **Post-apply liveness assert, built as a tested script.** `scripts/registry-heartbeat-poll.sh`: resolve the heartbeat id from **tfstate** (`betteruptime_heartbeat.registry_prd`), never a name filter; read `BETTERSTACK_API_TOKEN` (a *different* secret from `betterstack-query.sh`'s `BETTERSTACK_QUERY_*`) and mask it; wait out `period + grace` = **90 s** or observe a non-`up` sample **before** the `up` window opens; then poll ≤ 8 min for `up`; treat `paused` as a **distinct** failure; fail-closed on an unreadable token. | The store is destroyed at apply-return, so there is no rollback target. But v1's naive poll could read the **dead host's residual `up`** (period 60 + grace 30) and go green over a registry that never came up — and a heartbeat exposes **no `last_ping_at`** (`apply-web-platform-infra.yml:801-804`), so `up` alone is never evidence of a *new* beat. `arm_one` (defined `:852`, called `:893-895`) in this same workflow is the precedent that heartbeat gating is legitimate *when it requires a transition* — which also answers the recorded "non-gating" note on the best-effort status step. |
 | D12 | **No in-job backfill.** State the empty-store window, its **paging** consequence, and give the operator the one-command force (`gh workflow run web-platform-release.yml -f bump_type=patch`) plus "fire the recut immediately before a planned release". | The sibling's gate header already documents the mechanism correctly, so this is the shipped, precedented posture — not an open question. Phase 0.3 still verifies the *disposability premise itself* (CPO C3). |
-| D13 | **Add `lifecycle { prevent_destroy = true }` to `hcloud_volume.workspaces`** (`server.tf`). | The sole copy of `/mnt/data` has **no** declarative protection; the only barrier is a hand-maintained jq invariant now in its sixth copy. Verified compatible: no dispatch path plans a destroy of it (`workspaces-luks-recut` targets `hcloud_volume.workspaces_luks`, a different resource; `workspaces-luks-cutover` is `+create` only). Provider-enforced at **plan** time, defends against all six gates and every future one. **Scope addition — surfaced as DC-2, not assumed.** |
+| D13 | *(cut from this PR — deferred to **#6943**.)* `lifecycle { prevent_destroy = true }` on `hcloud_volume.workspaces` (`server.tf`) remains the right brake, and the analysis behind it stands: the sole copy of `/mnt/data` has **no** declarative protection, the only barrier is a hand-maintained jq invariant now in its sixth copy, and it is provider-enforced at **plan** time so it defends against all six gates and every future one. But it is a scope addition beyond #6929 that would flip §Infrastructure from "Terraform changes: None" to a real `.tf` edit. Surfaced as **DC-2**; operator cut it on 2026-07-25 so a prod-safety change to sole-copy `/mnt/data` is reviewed on its own merits rather than as a rider on a workflow PR. | |
 | D14 | **Correct the `host_creates` HALT claim; do not extend it.** True invariant: *no dispatch creates the registry host from an empty **root**; two dispatches (region-migrate, luks-recut resume arm) re-create a host absent from state, gated by `out_of_scope` on the from-empty closure.* | The current message (`:504`) is already false — `registry_region_migrate` permits a pure create. |
 | D15 | `timeout-minutes: 30` on the job. | It holds the **fleet-wide** apply mutex with `cancel-in-progress: false`. No declaration ⇒ GitHub's 360-minute default ⇒ a hung poll blocks every merge-apply for six hours. The D11 bound must be strictly less so its diagnostic wins over an opaque cancellation. |
 
@@ -124,7 +124,6 @@ The operator must **NOT** use `registry-host-replace` for the recut. That dispat
   - `apply_target`: add `registry-luks-recut` to `options:`. Convert `description:` to a **block scalar** (`>-`) and shorten it to a pointer at the runbooks — it is already **1574 chars on one physical line**, is rendered as the field label above the dropdown a non-technical operator reads before firing a destructive apply, and every edit produces an unreviewable whole-line diff. (Its existing `registry-region-migrate` clause carries the "re-fills from GHCR" wording this PR is correcting elsewhere — evidence that nothing in that blob gets read.)
   - New job `registry_luks_recut` after `registry_region_migrate`.
   - Correct the `host_creates` HALT `hcloud_server.registry` line per D14. Anchor: `::error::  • hcloud_server.registry → NO dispatch creates it`.
-- **`apps/web-platform/infra/server.tf`** — D13: `lifecycle { prevent_destroy = true }` on `resource "hcloud_volume" "workspaces"`.
 - **`scripts/test-all.sh`** — one `run_suite "tests/scripts/registry-luks-recut-gate" …` line beside the `workspaces-luks-recut-gate` entry.
 - **`plugins/soleur/test/terraform-target-parity.test.ts`** — five additions:
   1. `"registry_luks_recut"` in `stripDispatchJobs()` (`:449`) **and** its pin (`:424`). Not cosmetic: without it the new `-target`s fold into the per-PR coverage anchor.
@@ -266,8 +265,8 @@ Contract before consumer; test before lib.
 
 ### Phase 4 — Terraform + docs
 
-4.1. D13 `prevent_destroy` on `hcloud_volume.workspaces`; confirm `terraform validate` and that no dispatch path's plan is affected.
-4.2. ADR-096 amendment incl. all four records (D12/D14/ordering windows/DC-3 residual) + the `lint-infra-ignore` comment sweep. File the DC-3 tracking issue.
+4.1. *(cut — D13 `prevent_destroy` deferred to #6943 per DC-2. No `.tf` edit in this PR; no `terraform validate` step needed.)*
+4.2. ADR-096 amendment incl. all four records (D12/D14/ordering windows/DC-3 residual) + the `lint-infra-ignore` comment sweep. File the DC-3 tracking issue. **Also record the DC-5 cold-vehicle disposition** (see §Cold-vehicle re-verification trigger): the dispatch ships unfired, and the ADR names the mandatory pre-first-fire re-verification.
 4.3. The runbook, covering every row of §Operator flow. No SSH.
 4.4. Audit-row + `model.c4` corrections + `regenerate-c4-model.sh`.
 
@@ -287,9 +286,9 @@ Contract before consumer; test before lib.
 
 ### Terraform changes
 
-**One, deliberate (D13):** `lifecycle { prevent_destroy = true }` on `resource "hcloud_volume" "workspaces"` in `apps/web-platform/infra/server.tf`. No new resource, provider or variable. This is a scope addition beyond #6929 and is surfaced as **DC-2**.
+**None.** No `.tf` file is edited by this PR — no new resource, provider, variable or lifecycle block. The one candidate (D13, `prevent_destroy` on `hcloud_volume.workspaces`) was surfaced as **DC-2** and **cut by the operator on 2026-07-25**; it is tracked standalone in **#6943**.
 
-Note the merge-apply consequence: `hcloud_volume.workspaces` is already excluded from the per-PR `apply` job's `-target` set (managed by initial-apply + the drift detector), so adding the lifecycle block changes no merge-triggered plan. The registry resources remain `OPERATOR_APPLIED_EXCLUSION`s, so the dispatch job itself applies nothing on merge.
+The registry resources remain `OPERATOR_APPLIED_EXCLUSION`s, so the new dispatch job applies nothing on merge. Merging this PR therefore mutates no live infrastructure whatsoever.
 
 ### Apply path
 
@@ -299,11 +298,29 @@ Note the merge-apply consequence: `hcloud_volume.workspaces` is already excluded
 
 ### Distinctness / drift safeguards
 
-`out_of_scope == 0` bounds the dispatch; D13 adds the provider-enforced brake underneath it. The workflow-level concurrency group is the sole serializer for the lock-less R2 backend (verified complete — D5) and is inherited unchanged. No new secret value enters state beyond what #6926 already put there.
+`out_of_scope == 0` bounds the dispatch. The provider-enforced brake that would sit underneath it (D13) is **not** in this PR — cut to #6943 per DC-2 — so `out_of_scope` is the sole barrier here, as it already is for the five existing gates. The workflow-level concurrency group is the sole serializer for the lock-less R2 backend (verified complete — D5) and is inherited unchanged. No new secret value enters state beyond what the 2026-07-24 guest-side-LUKS PR already put there.
 
 ### Vendor-tier reality check
 
 N/A — no new vendor resource. Hetzner **stock** (not quota) is the constraint, covered by `stock_preflight_gate`; `-replace` is net-zero on caps.
+
+## Cold-vehicle re-verification trigger (DC-5)
+
+**Operator answer, 2026-07-25: no registry LUKS recut is currently scheduled. This ships cold — deliberately, with the risk recorded rather than left silent.**
+
+#6929's own re-evaluation criteria said "add it when the first live recut is scheduled." Neither that trigger nor the second-region trigger is asserted, so this PR builds the vehicle before the trip has a date. The consequence is real and must not be soft-pedalled: **the dispatch merges with zero live executions**, and every gate in it — the D10 pull-path check, the destroy-guard, the D4 Hetzner existence probe, `stock_preflight_gate`, the D11 heartbeat transition poll — will first meet production at the single highest-stakes moment, an irreversible destroy of the store volume.
+
+What makes shipping cold defensible rather than reckless is that the *guard logic* is not cold: the gate lib is exercised by ~22 synthesized fixtures in `tests/scripts/test-registry-luks-recut-gate.sh` (including the exact `registry-host-replace` footgun case), the heartbeat poller is a tested script rather than an inline poll, and the cross-gate divergence + allow-set⇄`-target` parity tests fail loudly if the two inverse registry gates are ever harmonised. What is genuinely untested is the *live-API* surface — the two Hetzner probes and the Better Stack query — none of which can be exercised without either firing the dispatch or reaching prod.
+
+**Mandatory pre-first-fire re-verification.** This is a gate on the first live fire, not a suggestion, and it belongs in the runbook (Phase 4.3) and the ADR amendment (Phase 4.2). Before the first-ever `-f apply_target=registry-luks-recut`:
+
+1. **Re-run the D10 positive control.** Confirm `betterstack-query.sh --since 24h --grep ghcr-fallback --grep local-cache` still returns rows on a known-degraded historical window. A silently-renamed marker or a rotated `BETTERSTACK_QUERY_*` credential turns a zero-tolerance gate into a gate that can never go red — indistinguishable from a healthy fleet at the moment it matters.
+2. **Dry-run the two Hetzner probes by hand** (`GET /v1/volumes?name=soleur-registry-store`, `GET /v1/servers?name=soleur-registry`) and confirm both return the shape D4/D9 parse. An API version bump or a resource rename makes the id-pin's provenance step fail *after* the operator has already typed the confirm token.
+3. **Confirm the heartbeat id still resolves from tfstate** (`betteruptime_heartbeat.registry_prd`) and that `period + grace` is still 90 s — D11's transition window is derived from those numbers, and a Better Stack config change silently shortens or lengthens the window it waits out.
+4. **Re-read the ADR-096 amendment's ordering-window records.** They were accepted against the infra as of 2026-07-24; if `zot-registry.tf` or `cloud-init-registry.yml` changed since, the accepted windows may no longer be the actual ones.
+5. **Fire immediately before a planned release** (D12/DC-6), so the empty-store paging window is bounded by a dual-push the operator controls rather than by whenever CI next happens to run.
+
+If step 1 or 2 fails, the correct move is to fix the probe and re-verify — **not** to proceed with a degraded gate. A gate that cannot fail is worse than no gate, because it is read as evidence.
 
 ## Downtime & Cutover
 
@@ -447,11 +464,12 @@ No soak-gated close criterion ⇒ §2.9.1 does not fire. No blind execution surf
 - **AC19** — the runbook exists and documents **every row of §Operator flow** (each abort's exit, the D11 decision rule, the empty-store force command, the new-id emission), gives the bounded one-command Hetzner id lookup, and carries the do-not-use-`registry-host-replace` warning **scoped to the plaintext case**. SSH assertion is anchored, not a bare token: `grep -nEi '(^|[^a-z])(ssh|scp|rsync)[[:space:]:]'` returns only lines that are explicit no-SSH statements.
 - **AC20** — the dispatch summary emits the post-apply `hcloud_volume.registry` id.
 - **AC21** — `bash scripts/test-all.sh` (full) exits 0.
-- **AC22** — the PR body carries `Closes #6929` and records the Phase 0 determinations: the from-empty closure re-verification, the **D10 positive-control result** (gate or warning), the **disposability answer** (0.3), the worktree runner answer (0.5), and the name-uniqueness citation (0.6).
+- **AC22** — the PR body carries `Closes #6929` and records the Phase 0 determinations: the from-empty closure re-verification, the **D10 positive-control result** (gate or warning), the **disposability answer** (0.3), the worktree runner answer (0.5), and the name-uniqueness citation (0.6). It also records the two operator dispositions of 2026-07-25: **DC-2 cut to #6943** (so Terraform changes are None) and **DC-5 ships cold**.
+- **AC24** — the **cold-vehicle re-verification trigger** (§Cold-vehicle re-verification trigger, DC-5) appears in **both** durable artifacts, not just this plan: the operator runbook (Phase 4.3) and the ADR-096 amendment (Phase 4.2), each carrying all five numbered pre-first-fire checks. A grep for the runbook's heading must resolve; a plan-only record does not satisfy this criterion, because the plan is not what the operator reads before firing.
 
 ### Post-merge (operator)
 
-- **AC23** — *(gated operator step — deliberately NOT performed by this PR.)* Firing the recut. **Automation status: automated** — pre-flight, guard, live probe, stock check, apply and post-apply verification are all this dispatch; the id is one bounded command. What remains operator-owned is the *decision to fire* and the choice of window, which is scheduling judgement. No credential mint, no dashboard click, no SSH.
+- **AC23** — *(gated operator step — deliberately NOT performed by this PR.)* Firing the recut, **preceded by the five-step cold-vehicle re-verification** (AC24) since this vehicle ships unfired. **Automation status: automated** — pre-flight, guard, live probe, stock check, apply and post-apply verification are all this dispatch; the id is one bounded command. What remains operator-owned is the *decision to fire* and the choice of window, which is scheduling judgement. No credential mint, no dashboard click, no SSH.
 
 ## Risks & Mitigations
 

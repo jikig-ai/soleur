@@ -25,6 +25,10 @@ Recorded headless by `plan-review` (7-agent panel: dhh, kieran, code-simplicity,
 
 This **changes the operator's stated scope** — #6929 asked for a dispatch, and this flips §Infrastructure from "Terraform changes: **None**" to a real `.tf` edit. It was applied because it is provider-enforced at *plan* time and defends against all six existing gates plus every future one, which no jq counter can. **Surfaced rather than assumed: say the word and it comes out.**
 
+### ✅ RESOLVED 2026-07-25 — operator chose: **cut it, file a separate issue** → **#6943**
+
+The analysis stands unchallenged; the objection was to the *vehicle*, not the change. A prod-safety guard on the sole copy of `/mnt/data` gets reviewed on its own merits rather than riding along in a workflow PR. Applied to the plan: D13 marked cut, `server.tf` removed from §Files to Edit, Phase 4.1 struck, §Infrastructure restored to "Terraform changes: **None**", and the §User-Brand Impact "guard too loose" direction now states plainly that `out_of_scope` remains the sole barrier for that address in this PR — landing #6943 is what closes it structurally.
+
 ---
 
 ## DC-3 (Taste) — the weaker sibling makes the new gate's strictness locally sound but globally partial
@@ -48,6 +52,14 @@ This **changes the operator's stated scope** — #6929 asked for a dispatch, and
 `cpo` R3/R4 + #6929's own re-evaluation criteria ("add it when the first live recut is scheduled, OR sooner if another volume-preserving dispatch increases the footgun surface"). Neither trigger is asserted anywhere, and AC22 leaves the recut unscheduled. So this spends a medium (days) budget on a Phase-4 milestone with recruitment-shaped exit criteria, to build a vehicle for a trip with no date — and ships it **cold**, with zero live executions, deferring all validation to the highest-stakes possible moment.
 
 **Question for the operator: is a registry LUKS recut being scheduled?** If yes, name the window and the cold-vehicle risk dissolves. If no, the honest options are (a) ship it cold and record a re-verification trigger before first fire, or (b) pause this until the recut is on the calendar. The plan currently assumes (a).
+
+### ✅ RESOLVED 2026-07-25 — operator chose: **(a) ship cold, record a re-verification trigger**
+
+No recut is on the calendar. The vehicle merges with **zero live executions**, and that is now written into the plan as a first-class section (§Cold-vehicle re-verification trigger) rather than left as an unstated assumption.
+
+What is *not* cold: the guard logic, covered by ~22 synthesized gate fixtures (including the exact `registry-host-replace` footgun case), a tested heartbeat poller, and the cross-gate divergence + allow-set⇄`-target` parity tests. What *is* genuinely untested is the live-API surface — the two Hetzner probes and the Better Stack query — which cannot be exercised without either firing the dispatch or reaching prod.
+
+The mitigation is a **five-step mandatory pre-first-fire re-verification** (D10 positive control re-run, both Hetzner probes hand-dry-run, heartbeat id + `period + grace` re-confirmed from tfstate, ADR ordering-window records re-read, and fire immediately before a planned release). New **AC24** requires it to land in *both* durable artifacts — the operator runbook and the ADR-096 amendment — because the plan is not what the operator reads before firing. Tasks 4.4/4.6 write it; task 5.10 greps for it.
 
 ---
 
