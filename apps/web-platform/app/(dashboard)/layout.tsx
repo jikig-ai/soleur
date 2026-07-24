@@ -591,6 +591,7 @@ export default function DashboardLayout({
                 navigates to /dashboard, which auto-closes the drawer. */}
             <Link
               href="/dashboard"
+              data-testid="drawer-back-to-menu"
               className="mx-3 mt-3 flex min-h-[44px] shrink-0 items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary md:hidden"
             >
               <svg

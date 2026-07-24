@@ -251,7 +251,10 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
     expect(within(rail).getByTestId("nav-back-chevron")).toBeInTheDocument();
   });
 
-  it("KB landing (not doc view): the mobile band STILL shows 'Back to menu' (it is the only back there)", () => {
+  it("KB landing: mobile band back is suppressed — 'Back to menu' moved into the hamburger drawer", () => {
+    // The mobile band no longer renders its own back in any drilled state; the
+    // drilled drawer branch owns a single mobile-only "Back to menu" link, and
+    // the desktop rail band keeps its back affordance.
     mockPathname = "/dashboard/kb";
     render(
       <Wrap>
@@ -260,10 +263,13 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
         </DashboardLayout>
       </Wrap>,
     );
-    const { mobile } = bandsByVariant();
+    const { mobile, rail } = bandsByVariant();
     expect(
-      within(mobile).getByTestId("nav-back-chevron"),
-    ).toBeInTheDocument();
+      within(mobile).queryByTestId("nav-back-chevron"),
+    ).not.toBeInTheDocument();
+    expect(within(rail).getByTestId("nav-back-chevron")).toBeInTheDocument();
+    // The drilled drawer branch owns a mobile-only "Back to menu" link.
+    expect(screen.getByTestId("drawer-back-to-menu")).toBeInTheDocument();
   });
 
   // Phase 4 (#4915): on mobile KB the page body owns the "Knowledge Base" title,
