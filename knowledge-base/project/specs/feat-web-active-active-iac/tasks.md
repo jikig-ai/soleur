@@ -49,9 +49,10 @@ date: 2026-07-24
 
 ## PR-1 — Phase 4: Disposability proof (volume-preserving reprovision, non-prod data)
 
-- [ ] 4.1 Rebuild a host with a POPULATED LUKS volume: detach → recreate host (same key) → reattach → `luksOpen` (never `luksFormat`) guarded by LUKS-header-presence check → data intact.
-- [ ] 4.2 `prevent_destroy` on `hcloud_volume.workspaces`; off-host snapshot taken + restore-tested before any reprovision.
-- [ ] 4.3 Enroll the web-2 out-of-band soak (N=7d): `scripts/followthroughs/web2-standby-soak-6459.sh` + directive + `follow-through` label on #6459 + wire secrets into `scheduled-followthrough-sweeper.yml`.
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+- [~] 4.1 **DEFERRED to the Phase-4 disposability-proof PR (#6931)** per ADR-141 R3 (CTO). The populated-LUKS-volume reprovision proof (detach → recreate → reattach → `luksOpen`-never-`luksFormat` via `blkid -o value -s TYPE` discriminator → data intact) IS the guest-side fresh-boot LUKS path the CTO deferred — it is only exercised on POPULATED data in the de-pet rebuild, and touching the sole-copy boot path in this PR (already carrying the gate + cattle-parity) is the highest blast radius. #6931 also owns the two-mechanism topology reconciliation (additive singleton vs fresh-boot for_each). The defer is fail-CLOSED: the anti-pooling gate's WORKSPACES_LUKS precondition (coupling #2) blocks any flip to a not-yet-LUKS'd web-2.
+- [x] 4.2 `prevent_destroy = true` on `hcloud_volume.workspaces` (per-host block volumes — pure safety, not in the push-apply `-target` allow-list, does not touch the boot path). **Sole-copy `hcloud_volume.workspaces_luks` prevent_destroy + the off-host snapshot/restore-test DEFERRED to #6931**: prevent_destroy on the LUKS singleton collides with the `apply_target=workspaces-luks-recut` `-replace` escape hatch, and the snapshot is part of the disposability-proof reprovision flow (topology-split-dependent).
+- [x] 4.3 Enrolled the web-2 out-of-band soak (N=7d): `scripts/followthroughs/web2-standby-soak-6459.sh` (self-checking Better Stack heartbeats API — reads web-2's 2 per-host beats; PASS=both `up`, FAIL=dark #6538, TRANSIENT=not-yet-born; mirrors `l3-probe-armed-6438.sh`) + `<!-- soleur:followthrough … earliest=2026-08-14 secrets=BETTERSTACK_API_TOKEN -->` directive + `follow-through` label on #6459. `BETTERSTACK_API_TOKEN` was ALREADY wired into `scheduled-followthrough-sweeper.yml` (shared with l3-probe-armed).
 
 ## PR-1 — Ship
 
