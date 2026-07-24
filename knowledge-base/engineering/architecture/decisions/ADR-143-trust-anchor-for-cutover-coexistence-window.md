@@ -38,7 +38,7 @@ The scan window opened at `cutover − 200 d`. Measurement (Phase 0, run `301216
 | Implied 200-day total | ~**145,600** runs ≈ **1,456 pages** |
 | Affordable within the 90 s budget | ~18 pages ≈ **~1,800 runs ≈ ~2.5 days** |
 
-The probe is **fail-loud on non-exhaustion** — `_pf_abort` exits 1 and emits *nothing* — so a
+The probe is **fail-loud on non-exhaustion** — `_pf_abort` exits 1 and emits **no run set** (it does emit a TIMEOUT marker) — so a
 window it cannot exhaust yields no verdict at all, at any run count. The deadline lever is
 dead: the SUM bound `DEADLINE + PAGE_MIN ≤ outer_curl` caps `PREFLIGHT_DEADLINE_S` at 112 s,
 buying ~14 pages against the ~1,456 needed. **The operative variables are window width vs.
@@ -66,7 +66,8 @@ Two candidate anchors were rejected on evidence:
 when no anchor is derivable.**
 
 ```
-anchor  = earliest flip-FSM TRANSITION row            # anchor_source=fsm
+anchor  = CUTOVER_ANCHOR_FROM (operator override)    # anchor_source=override
+        | earliest flip-FSM TRANSITION row            # anchor_source=fsm
         | CUTOVER_WINDOW_FROM                          # anchor_source=var
         | (none) -> FAIL CLOSED, do not scan
 
@@ -92,7 +93,7 @@ The emitter's `reason` vocabulary splits cleanly (`inngest-cutover-flip.sh`, `em
 
 | Class | Reasons |
 |---|---|
-| **Transition** (a real state change) | `flip-complete`, `flushed-resume-no-reflush`, `rolled-back`, `dbsize-nonzero`, `flushall-failed`, `refuse-rearm-after-done` |
+| **Transition** (a real state change) | `flip-complete`, `flushed-resume-no-reflush`, **`unexpected-exit(from=…)`**, `rolled-back`, `dbsize-nonzero`, `flushall-failed`, `refuse-rearm-after-done` |
 | **Idempotent no-op** (every 30 s tick) | `noop-done`, `noop-rolled-back`, `noop-aborted`, `noop-unset` |
 
 Measured against production: exactly **one** transition row exists
@@ -101,7 +102,20 @@ Measured against production: exactly **one** transition row exists
 Reasons are matched in their **quoted** form (`"reason":"rolled-back"`) because
 `noop-rolled-back` *contains* the substring `rolled-back` — a bare substring grep would
 re-admit the entire heartbeat firehose and silently reinstate the defect this section
-describes.
+describes. `unexpected-exit` is matched with a deliberately **unterminated** quote, since the
+reason interpolates a `(from=…)` suffix.
+
+`unexpected-exit` is the load-bearing member and was omitted from the first implementation of
+this ADR: it is the ERR-trap terminal transition, and the **only** row emitted on the path where
+`start_server` SUCCEEDS — coexistence begins — but the following `flag_set` (a Doppler network
+write) fails. Skipping it returns a LATER row, i.e. a window narrower than the coexistence
+region. Its interpolated suffix is what hid it from the original reason-vocabulary grep.
+
+Because `earliest(A ∪ B) ≤ earliest(A)`, adding a reason can only move the anchor EARLIER —
+a superset is always the safe direction. The abort reasons are therefore kept even though they
+fire on flips where `start_server` never ran. A cross-file **emitter-parity test** derives the
+expected set from `inngest-cutover-flip.sh` so a reason added there fails in CI here; a
+per-reason spot-check cannot detect a MISSING member, which is how the omission happened.
 
 ### 2. Why this instant is trustworthy
 
@@ -112,7 +126,15 @@ operator-skew class entirely rather than bounding it.
 ### 3. `min()` is a skew clamp, not a safety net
 
 An operator-supplied anchor can only ever **widen** the window, never narrow it below
-`now − FALLBACK_DAYS`.
+`now − FALLBACK_DAYS` — the floor is the narrowest window reachable by any anchor value,
+including a skewed or malicious one.
+
+Note this is a bound relative to the **floor**, not to the fsm anchor: `CUTOVER_ANCHOR_FROM`
+deliberately narrows relative to the *derived* anchor (that is its purpose — it is the lever the
+page-1 feasibility gate names when a 40-day coexistence window cannot be scanned). What the floor
+guarantees is that no anchor can shrink the window below one day. Because narrowing relative to
+the coexistence start can under-cover, an override-sourced verdict is reported as
+`exactly-once VERIFIED (QUALIFIED)` and does not satisfy AC-V4 on its own.
 
 `FALLBACK_DAYS = 1`, **not** 7. A 7-day floor is ~5,100 runs ≈ 51 pages ≈ 214 s — not
 exhaustible. Safety (a wide floor) and liveness (a window that finishes) are in direct
@@ -125,7 +147,8 @@ is straggler margin.
 
 ### 4. There is no safe wide fallback — an underivable anchor FAILS CLOSED
 
-If neither the FSM row nor `CUTOVER_WINDOW_FROM` yields an instant, the arm refuses to scan.
+If none of `CUTOVER_ANCHOR_FROM`, the FSM row, or `CUTOVER_WINDOW_FROM` yields an instant, the
+arm refuses to scan.
 Falling back to `now − 7d` would trade a deadline abort for a deadline abort **while looking
 safer** — the probe emits nothing either way, so the operator learns strictly less.
 
@@ -146,12 +169,26 @@ one.
 
 ### 7. `anchor_source` is part of the verdict, not decoration
 
-`anchor_source ∈ {fsm, var, floor, wide}` is emitted to the run log and the probe's markers.
+`anchor_source ∈ {fsm, var, override, wide}`, optionally wrapped as `floor(<src>)` when the
+fallback floor won the `min()`, is emitted to the **GitHub Actions run log** (`::notice::`). It is
+**not** carried in the probe's journald markers: `anchor_source` is a workflow-side fact and the
+probe never receives it. The probe's markers carry `total_count` and `scanned`. Both surfaces are
+off-box and SSH-free; they simply have different retentions.
+
+The `floor(<src>)` wrapping matters: with a 1-day fallback the floor wins on every dispatch within
+~24 h of the cutover — the intended usage — so a bare `floor` would erase whether an fsm anchor was
+derivable at all, which is exactly the fact AC-V3 asks the operator to demonstrate.
 A clean verdict over a `var`-sourced or `floor`-clamped window is a materially weaker claim
 than one over an `fsm`-anchored window; without the field that difference is invisible on an
 otherwise-green run. It is a required input to AC-V3 (non-vacuity).
 
 ### 8. Companion: `totalCount` + a page-1 feasibility gate
+
+> **Delivery ordering.** `inngest-doublefire-probe.sh` is a WEB-host script delivered in place by
+> `apply-deploy-pipeline-fix` on merge, so everything described in this section is inert until that
+> run succeeds (AC-V1). Until then an over-wide window still aborts with `reason=deadline`, not
+> `reason=window_too_wide`. The workflow-side changes (anchor derivation, `anchor_source`, the
+> non-vacuity gate, null-safe bucketing) are live at merge.
 
 The GraphQL query had **always** requested `totalCount`; nothing parsed it. The scan fetched
 its own scale on every page and discarded it, which made "how many runs are in this window"
@@ -166,7 +203,8 @@ exists to refuse.
 
 ## Consequences
 
-**Positive.** `op=verify` can reach a verdict. Window width is now anchored on a measured,
+**Positive.** `op=verify` is expected to reach a verdict once the probe is delivered — AC-V4 is
+what tests that, and this ADR does not assert it as already achieved. Window width is now anchored on a measured,
 same-clock instant. Every abort names an actionable, computed remediation. `anchor_source` +
 `total_count` discriminate "window too wide" from "budget too small" from "anchored on the
 wrong instant" in a single off-box event.
@@ -185,6 +223,8 @@ wrong instant" in a single off-box event.
   if `op=verify` runs within 7 days of the cutover. **This ADR does not claim to discharge it.**
 
 ## Deferred
+
+All three are tracked by **#6940**; the missed-tick defect found alongside them is **#6939**.
 
 1. **Registry-sourced missed-tick discovery.** After computing `registry_ids − observed`,
    issue a **second** doublefire-probe call scoped `function_ids=<zero-run set>` over a

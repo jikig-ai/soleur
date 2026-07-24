@@ -75,8 +75,10 @@ The cutover pre-flight hooks MUST bound scan **duration/cost** (in addition to A
    non-zero exit maps to a webhook non-200 (`hooks.json.tmpl` `include-command-output-in-response-on-error`),
    so the workflow's `CODE!=200` cause-branch surfaces the real timeout cause. `exit 1` fires the EXIT
    trap → the `mktemp` spool is cleaned; halting the loop releases the inngest→Postgres connections.
-4. **Cost reduction — completeness BY CONSTRUCTION.** The window is **never narrowed** (the `from`
-   filter bounds `receivedAt`, not fire-time, so narrowing silently drops far-future armed reminders).
+4. **Cost reduction — completeness BY CONSTRUCTION.** The window is **never narrowed for the
+   `receivedAt`-filtered inventory scans** (`armed_reminders` / `event_names`): that `from` filter
+   bounds `receivedAt`, not fire-time, so narrowing there silently drops far-future armed reminders.
+   The **doublefire** runs scan is the exception — see the ADR-143 amendment below.
    - **armed_reminders** is enumerated by a DEDICATED `eventNames:["reminder.scheduled"]` full-window
      query (small, page-ceiling-immune; precedent `inngest-enumerate-reminders.sh:82`).
    - **event_names** keeps the all-events distinct scan; the ONLY cost lever is raising `PAGE_SIZE`
@@ -99,7 +101,8 @@ The cutover pre-flight hooks MUST bound scan **duration/cost** (in addition to A
    >    #6178 anchoring satisfies this exactly and no more.
    > 2. **`2×max_cron_period` (≈182 d) was the FUNCTION-DISCOVERY term, not the double-fire term.**
    >    The missed-tick loop enumerates `[.runs[].functionID] | unique`, so a window that wide
-   >    guaranteed even a quarterly cron appeared at least once. Discovery is deferred to a
+   >    guaranteed even a quarterly cron appeared at least once. In other words that term bought
+   >    function discovery, not double-fire coverage. Discovery is deferred to a
    >    follow-up (ADR-143 § Deferred), and **until it lands, slow-cron missed-tick recall is
    >    reduced** — a recorded trade, not a silent one. The double-fire verdict itself is unaffected:
    >    a function that never ran in the window cannot have double-fired in it.

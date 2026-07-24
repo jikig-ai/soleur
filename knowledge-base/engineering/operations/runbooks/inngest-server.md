@@ -149,9 +149,19 @@ orphaning the scan). Triage off-box (no SSH):
    Read the discriminator fields on the `START` / `TIMEOUT` line for the run:
    - **No `SOLEUR_INNGEST_PREFLIGHT_START` for the run** → transport/host-down (the hook never
      executed) — check the Cloudflare tunnel + `webhook.service`, not the scan.
-   - `TIMEOUT reason=deadline` with a progressing `pages=N`, `last_curl_exit=0` → a legitimately
-     slow scan hit the wall-clock budget. Raise `PREFLIGHT_DEADLINE_S` (and the outer curl
-     `--max-time`, keeping the sum bound) or the `INNGEST_MAX_PAGES` ceiling; do NOT narrow the window.
+   - `TIMEOUT reason=deadline` with a progressing `pages=N`, `last_curl_exit=0` → the scan could
+     not exhaust its window. **The deadline is NOT the lever (#6178).** The SUM bound
+     `DEADLINE + PAGE_MIN ≤ outer_curl` caps `PREFLIGHT_DEADLINE_S` at 112 s, buying ~14 pages —
+     against a 200-day window that needs ~1,456. Eleven op=verify dispatches emitted exactly this
+     marker and none produced a verdict. Narrow the **window** (`CUTOVER_ANCHOR_FROM`) or scope the
+     **population** (`CUTOVER_DOUBLEFIRE_FUNCTION_IDS`); see § Scan window + trust anchor below.
+     *(This bullet previously advised enlarging the in-script deadline and explicitly forbade
+     narrowing — the inverse of the correct action. Measurement retired it: ~728 runs/day.)*
+   - `TIMEOUT reason=window_too_wide` → the page-1 feasibility gate refused the scan in ~2 s
+     because the server's own `totalCount` exceeds what the budget can read. The message carries a
+     **computed** latest-viable anchor; set `CUTOVER_ANCHOR_FROM` to it and re-dispatch. Narrowing
+     yields a **window-limited** verdict, so prefer scoping the population when the full
+     coexistence window must be covered.
    - `TIMEOUT` with `last_curl_exit=28` / `pages_timed_out>0` → a **pool-pressure STALL** (the
      `HTTP 000` shape), NOT a slow scan — triage as `[ci/inngest-pool]` above (the durable fix is
      #6178, gated by #6230). `reason=gql_error` with `last_curl_exit=28` is the same stall surfacing
@@ -163,7 +173,7 @@ orphaning the scan). Triage off-box (no SSH):
 3. **`op=verify` verdict ≠ transport-200.** A green op=verify sub-probe **transport** (no 000/500 on
    registry-probe / doublefire) is the ADR-106 success signal. The op=verify **JOB** still
    legitimately halts at its `registry_empty` precondition on the dark pre-cutover host
-   (`cutover-inngest.yml:628-631`) — that is a verdict, not a transport hang, and a green op=verify
+   (the `registry_empty` precondition check in the `verify)` arm of `cutover-inngest.yml`) — that is a verdict, not a transport hang, and a green op=verify
    job is a post-#6178 concern. Do NOT read a `registry_empty` halt as a pre-flight hang.
 
 ### Last-resort (host login)
@@ -851,17 +861,28 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    verdict is only meaningful over a window that actually covered the coexistence region:
 
    - `anchor_source=fsm` — strongest. Anchor and run timestamps share a clock.
-   - `anchor_source=var` — Better Stack retention missed the transition row; the window rests on
-     an operator-typed value on a *different* clock. Confirm it covers the quiesce instant.
-   - `anchor_source=floor` — the 1-day floor won the `min()`. Fine when `op=verify` runs promptly
-     after the cutover; confirm the floor covers the quiesce instant before trusting a clean result.
-   - `total_count=0` with a clean verdict — **vacuous**. Nothing was looked at.
+   - `anchor_source=floor(fsm)` — an fsm anchor WAS derivable, and the 1-day floor was the earlier
+     (wider) bound, so it won the `min()`. This is the normal shape within ~24 h of the cutover.
+     Confirm the floor covers the quiesce instant before trusting a clean result.
+   - `anchor_source=var` / `floor(var)` — no transition row was derivable; the window rests on an
+     operator-typed value on a *different* clock. Confirm it covers the quiesce instant.
+   - `anchor_source=override` / `floor(override)` — you set `CUTOVER_ANCHOR_FROM`, so the window was
+     deliberately NARROWED and may not cover the whole coexistence region. `op=verify` reports
+     `exactly-once VERIFIED (QUALIFIED)` here; it is **not** a full exactly-once proof.
+   - `anchor_source=wide` — the pre-cutover `op=doublefire-probe` arm only. Never `op=verify`.
+   - `total_count=0` with a clean verdict — **vacuous**, and since #6178 `op=verify` HARD-FAILS on
+     it rather than reporting a verdict. If you see one, the gate was bypassed; do not close #6178.
 
    **If the run aborts with `reason=window_too_wide`**, the message names a *computed* latest-viable
-   anchor. Set it and re-dispatch:
+   anchor. Set `CUTOVER_ANCHOR_FROM` — **not** `CUTOVER_WINDOW_FROM`, which is consulted only when
+   no anchor is derivable and is therefore inert whenever the flip-FSM row resolves — and
+   re-dispatch. Narrowing produces a **window-limited** verdict, which `op=verify` labels
+   `exactly-once VERIFIED (QUALIFIED)`; to keep the full window instead, scope the population via
+   `CUTOVER_DOUBLEFIRE_FUNCTION_IDS` (but confirm the scope still contains the destructive crons —
+   `cron-workspace-gc`, `cron-rule-prune`, `cron-action-required-sla`):
 
    ```bash
-   gh variable set CUTOVER_WINDOW_FROM --body '<the ISO instant from the abort message>'
+   gh variable set CUTOVER_ANCHOR_FROM --body '<the ISO instant from the abort message>'
    gh workflow run cutover-inngest.yml --field op=verify --field cron_period_seconds=1200
    ```
 
@@ -877,7 +898,16 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    ```
 
    `total_count` + `anchor_source` are the discriminating fields: they separate "window too wide"
-   from "budget too small" from "anchored on the wrong instant" in a single event.
+   (large measured `total_count`, or `reason=window_too_wide`) from "budget too small" (small
+   `total_count` that still hit `reason=deadline`) from "anchored on the wrong instant"
+   (`anchor_source` weaker than `fsm`). `total_count=unknown` means page 1 never parsed — the scan
+   never learned its own scale.
+
+   **Anchor retention bound.** `_flip_transition_dt` queries the last **30 days**
+   (`FSM_ANCHOR_SINCE` in `cutover-inngest.yml`). That literal — not vendor retention — is the hard
+   limit on how long after a cutover an `fsm` anchor can be derived at all. Past it, `op=verify`
+   degrades to `var` and then fails closed. It is deliberately a named variable so the bound is
+   greppable rather than implicit.
 
 ### 2.0 registry-non-empty remediation (P1-6)
 

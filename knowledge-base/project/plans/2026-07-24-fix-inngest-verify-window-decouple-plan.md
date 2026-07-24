@@ -25,8 +25,8 @@ revision: 2
 `op=verify` is the last open gate on the #6178 cutover and has never produced a verdict.
 
 **Root cause (corrected in v2).** `inngest-doublefire-probe.sh` scans a window opened at
-`cutover − 200d`. That window holds more runs than the ~11-page budget can exhaust
-(`PREFLIGHT_DEADLINE_S=90` at a measured ~7.7 s/page, `PAGE_SIZE=100`), and the probe is
+`cutover − 200d`. That window holds more runs than the ~18-page budget can exhaust
+(`PREFLIGHT_DEADLINE_S=90` at ~5 s/page as shipped, `PAGE_SIZE=100`), and the probe is
 **fail-loud on non-exhaustion** — `_pf_abort` exits 1 and emits *nothing*. So the run dies with
 `reason=deadline` and no verdict.
 
@@ -66,7 +66,7 @@ count re-verified at **0**.
 | Scan wall-clock | **34 s**, no deadline abort | A 1-day window **is** exhaustible — mechanism confirmed |
 | Implied page rate | ~8 pages / 34 s ≈ **4.2 s/page** | Faster than the 7.7 s/page seen on the wide window |
 | Implied 200-day total | ~**145,600** runs ≈ **1,456 pages** | v1's "~540 pages" extrapolation **understated it ~2.7×** |
-| Affordable at 90 s | ~21 pages ≈ **~2,100 runs ≈ ~2.9 days** | The exhaustible window is **days, not weeks** |
+| Affordable at 90 s | ~18 pages ≈ **~1,800 runs ≈ ~2.5 days** (the shipped divisor rounds 4.2 up to 5 for headroom) | The exhaustible window is **days, not weeks** |
 
 **This falsifies the fallback width in this plan's own first draft of Phase 2.** A 7-day floor is
 ~5,100 runs ≈ 51 pages ≈ 214 s — **not exhaustible**. Safety (a wide floor so an operator anchor
@@ -172,7 +172,7 @@ CPO. Findings applied:
 
 1. **Wrong test path.** v1 named `tests/scripts/infra/cutover-inngest-workflow.test.sh`. It does
    not exist. Real: `apps/web-platform/infra/cutover-inngest-workflow.test.sh`, registered at
-   `.github/workflows/infra-validation.yml:650`. `scripts/lint-orphan-test-suites.sh` scans only
+   `.github/workflows/infra-validation.yml:656`. `scripts/lint-orphan-test-suites.sh` scans only
    `scripts/*.test.sh`, so the orphan would never have been caught — every new assertion would
    have been self-certified locally while CI stayed green.
 2. **v1's fail-closed coverage assertion could not fire.** `DF_FROM = FROM − 2×CRON_PERIOD` with
@@ -309,7 +309,7 @@ Moving the safety bound from an operator-typed repo variable to the Better Stack
 **source-of-truth change**, not a restatement: it introduces a new trust boundary and a new
 failure mode (retention miss). ADR-106 is scoped to scan bounding + abandon-safety + markers;
 grafting trust-anchor semantics into item 4 would make it canonical for two unrelated concerns.
-Ordinal 142 is **provisional** — `/ship`'s ADR-Ordinal Collision Gate re-verifies against
+Ordinal 143 is **provisional** — `/ship`'s ADR-Ordinal Collision Gate re-verifies against
 `origin/main`, and a renumber must sweep this plan, `tasks.md`, and every AC naming the ordinal.
 
 **ADR-100 needs no amendment.** Its Decision 7 fixes the filter shape and bucketing rule, not a
@@ -330,7 +330,7 @@ queries*. `grep -c 'doublefire\|cutover'` is 0 in `views.c4` and `spec.c4`; the 
 
 ```yaml
 liveness_signal:
-  what: SOLEUR_INNGEST_PREFLIGHT_TIMEOUT / _DONE op=verify-doublefire ... total_count=<N|unknown> scanned=<M> anchor_source=<fsm|var|floor>
+  what: SOLEUR_INNGEST_PREFLIGHT_TIMEOUT / _DONE op=verify-doublefire ... total_count=<N|unknown> scanned=<M>  (anchor_source is workflow-side: a ::notice:: in the Actions run log, NOT a probe marker -- the probe never receives it)
   cadence: per op=verify / op=doublefire-probe dispatch (operator-triggered)
   alert_target: Better Stack Logs source 2457081 (journald -> Vector), via scripts/betterstack-query.sh
   configured_in: apps/web-platform/infra/inngest-doublefire-probe.sh (_pf_marker) + apps/web-platform/infra/vector.toml (already allowlists "inngest-doublefire-probe")
@@ -349,9 +349,11 @@ failure_modes:
   - mode: anchor present but WRONG (operator clock skew / stale repo var)
     detection: min() floor — the operator value can only widen, never narrow below now-FALLBACK; and anchor_source= names which source won
     alert_route: bounded by construction; anchor_source in the marker makes a var-sourced anchor visible off-box
-  - mode: Better Stack retention miss on the FSM row
-    detection: derive returns empty -> fall through to the WIDEST window, never to a narrower one
-    alert_route: ::warning:: naming anchor_source=floor
+  - mode: Better Stack retention miss on the FSM row (or a failed/truncated derive query)
+    detection: _flip_transition_dt returns non-zero and emits a per-branch ::warning:: naming the
+      branch (query-failed / no-transition-row / truncated / dt-malformed); the caller falls through
+      to CUTOVER_WINDOW_FROM (anchor_source=var) and then FAILS CLOSED -- never to a wide window
+    alert_route: ::warning:: per branch, then ::error:: + exit 1 in the GitHub Actions run log
 
 logs:
   where: journald on web-1 (tag inngest-doublefire-probe) -> Vector -> Better Stack source 2457081
@@ -359,7 +361,7 @@ logs:
 
 discoverability_test:
   command: doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep SOLEUR_INNGEST_PREFLIGHT --limit 20
-  expected_output: a SOLEUR_INNGEST_PREFLIGHT_DONE op=verify-doublefire line carrying total_count= and anchor_source=
+  expected_output: a SOLEUR_INNGEST_PREFLIGHT_DONE op=verify-doublefire line carrying total_count= and scanned=; anchor_source= is read from the Actions run log
 ```
 
 No `ssh`. Per §2.9.2 this is a partially blind surface; `total_count` + `anchor_source` are the
@@ -370,10 +372,10 @@ wrong instant" in a single event.
 
 - `apps/web-platform/infra/inngest-doublefire-probe.sh` — parse `totalCount`; page-1 feasibility
   gate; corrected FATAL remediation strings; header-comment restatement.
-- `apps/web-platform/infra/inngest-doublefire-probe.test.sh` *(CI: `infra-validation.yml:635`)*
+- `apps/web-platform/infra/inngest-doublefire-probe.test.sh` *(CI: `infra-validation.yml:641`)*
 - `.github/workflows/cutover-inngest.yml` — `doublefire_from()` rewrite (anchor derivation, min()
   floor, per-arm fallback); fail-closed DF_FROM assertion.
-- `apps/web-platform/infra/cutover-inngest-workflow.test.sh` *(CI: `infra-validation.yml:650`)* —
+- `apps/web-platform/infra/cutover-inngest-workflow.test.sh` *(CI: `infra-validation.yml:656`)* —
   **corrected path**; add the `doublefire_from()` execution harness.
 - `knowledge-base/engineering/architecture/decisions/ADR-106-inngest-cutover-preflight-scan-bounding-and-in-surface-marker.md`
 - `knowledge-base/engineering/operations/runbooks/inngest-server.md`
@@ -568,9 +570,13 @@ Every criterion carries its **measured baseline on `main`**, so none can pass on
   > (1200 s, live in `cron-manifest.ts`), so the 3600 default would collapse three legitimate runs
   > into one bucket and report a **phantom** double-fire.
 
-- **AC-V3 (non-vacuity)** The run's markers show `total_count` > 0, a non-`floor` `anchor_source`
-  **or** a floor window demonstrably covering the quiesce instant, and `RUN_COUNT` > 0. A clean
-  verdict over an empty or under-covering scan proves nothing and **does not** satisfy AC-V4.
+- **AC-V3 (non-vacuity)** Enforced IN CODE since review: `op=verify` hard-fails when
+  `total_count` is `0`/`unknown`/`absent` or `RUN_COUNT == 0`, and downgrades a clean result to
+  `exactly-once VERIFIED (QUALIFIED)` when the population was scoped, the window was overridden, or
+  the anchor was weaker than `fsm`. Operator check: the probe's **markers** (Better Stack) carry
+  `total_count`/`scanned`; the **Actions run log** carries `anchor_source`. A `floor(fsm)` source is
+  the normal shape within ~24 h of the cutover — confirm the floor covers the quiesce instant. A
+  QUALIFIED verdict **does not** satisfy AC-V4.
 - **AC-V4 (verdict, split from v1's conflated AC15)**
 
   | Outcome | Plan status | #6178 | Snapshot 411798619 |

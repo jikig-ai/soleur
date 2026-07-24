@@ -14,8 +14,8 @@ revision: 2
 > follow-up (operator-confirmed). Do NOT close #6178 and do NOT delete Hetzner image 411798619.
 >
 > **Correct test paths** (v1 named a nonexistent directory):
-> - `apps/web-platform/infra/inngest-doublefire-probe.test.sh` — CI `infra-validation.yml:635`
-> - `apps/web-platform/infra/cutover-inngest-workflow.test.sh` — CI `infra-validation.yml:650`
+> - `apps/web-platform/infra/inngest-doublefire-probe.test.sh` — CI `infra-validation.yml:641`
+> - `apps/web-platform/infra/cutover-inngest-workflow.test.sh` — CI `infra-validation.yml:656`
 > Do NOT create files under `tests/scripts/infra/` — nothing runs them.
 
 ## Phase 0 — Measure before coding (STOP gate) — ✅ DONE 2026-07-24, run 30121678305
@@ -28,8 +28,8 @@ revision: 2
       `from` + `function_ids`. Record as unmeasured with the reason, or thread the env.
 
 **Two findings that change Phases 1–2 (do not skip):**
-- **Density: ~728 runs/day.** 200 d ≈ 145,600 runs ≈ 1,456 pages. Affordable at 90 s ≈ 21 pages
-  ≈ ~2.9 days. **A 7-day fallback is NOT exhaustible** — the floor is `1 d`, and an underivable
+- **Density: ~728 runs/day.** 200 d ≈ 145,600 runs ≈ 1,456 pages. Affordable at 90 s ≈ 18 pages
+  ≈ ~2.5 days (shipped divisor 5 s/page, 4.2 rounded up for headroom). **A 7-day fallback is NOT exhaustible** — the floor is `1 d`, and an underivable
   anchor must FAIL CLOSED rather than scan a window that cannot finish.
 - **Second defect, blocks the fix:** the bucketing `jq` dies on a null `startedAt`
   (`fromdateiso8601` → `strptime/1 requires string inputs`, exit 5). Reproduced. Narrowing the
@@ -61,7 +61,7 @@ revision: 2
 - [x] 2.4 GREEN: anchor precedence `fsm | var | floor`; emit `anchor_source=` for off-box visibility.
 - [x] 2.5 GREEN: FSM derivation via the existing `confirm_flip_state()` plumbing. Extract ONLY the
       `dt` field (the function's contract is "NEVER echoes a raw row") + add a purity test.
-      Retention miss ⇒ fall through to the WIDEST window, never narrower.
+      Retention miss ⇒ per-branch ::warning::, fall through to CUTOVER_WINDOW_FROM, then FAIL CLOSED (never a wide window).
 - [x] 2.6 GREEN: per-arm fallback passed as `$1` — `op=doublefire-probe` (`:292`) keeps 200 d;
       only `op=verify` (`:1198`) narrows. Assert both in the test.
 - [x] 2.7 GREEN: read `${CUTOVER_CRON_PERIOD_SECONDS:-3600}` directly, not the caller-local

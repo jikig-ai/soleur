@@ -485,6 +485,10 @@ test_df_argv_ceiling_collapsed_runs() {
 test_df_total_count_emitted() {
   echo "TEST: doublefire-probe — total_count parsed from page 1 → object + DONE marker (#6178)"
   local dir; dir=$(mktemp -d)
+  # Owning trap (#6734 precedent above): RETURN, not EXIT -- this harness allocates per
+  # test function, so function-scoped cleanup is the correct lifetime and an EXIT trap
+  # here would silently replace any other the file registers.
+  trap 'rm -rf "$dir"' RETURN
   # totalCount (7) deliberately EXCEEDS this page's edge count (1): it is the server's
   # count across all pages. A build that re-derives it from the page would report 1.
   make_page false "" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" 7 > "$dir/page-1.json"
@@ -509,6 +513,10 @@ test_df_total_count_emitted() {
 test_df_total_count_unknown_before_page1() {
   echo "TEST: doublefire-probe — pre-page-1 abort emits total_count=unknown (never 0/empty) (#6178)"
   local dir; dir=$(mktemp -d)
+  # Owning trap (#6734 precedent above): RETURN, not EXIT -- this harness allocates per
+  # test function, so function-scoped cleanup is the correct lifetime and an EXIT trap
+  # here would silently replace any other the file registers.
+  trap 'rm -rf "$dir"' RETURN
   make_page true "CUR1" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" 999 > "$dir/page-1.json"
   # DEADLINE=0 aborts at the top of the loop, before any page is fetched or parsed.
   run_probe_logcap "$dir" PREFLIGHT_DEADLINE_S=0
@@ -527,6 +535,10 @@ test_df_total_count_unknown_before_page1() {
 test_df_page1_feasibility_gate() {
   echo "TEST: doublefire-probe — totalCount over budget aborts on page 1 with a computed anchor (#6178)"
   local dir; dir=$(mktemp -d)
+  # Owning trap (#6734 precedent above): RETURN, not EXIT -- this harness allocates per
+  # test function, so function-scoped cleanup is the correct lifetime and an EXIT trap
+  # here would silently replace any other the file registers.
+  trap 'rm -rf "$dir"' RETURN
   # The measured 200-day reality: ~145,600 runs. Affordable at the defaults is
   # DEADLINE(90)/SEC_PER_PAGE(5) = 18 pages x PAGE_SIZE(100) = 1,800 runs.
   #
@@ -570,6 +582,10 @@ test_df_page1_feasibility_gate() {
 test_df_page1_gate_allows_feasible_window() {
   echo "TEST: doublefire-probe — a within-budget totalCount is NOT gated (#6178)"
   local dir; dir=$(mktemp -d)
+  # Owning trap (#6734 precedent above): RETURN, not EXIT -- this harness allocates per
+  # test function, so function-scoped cleanup is the correct lifetime and an EXIT trap
+  # here would silently replace any other the file registers.
+  trap 'rm -rf "$dir"' RETURN
   # 728 runs = the measured 1-day density, comfortably under the 1,800 affordable.
   make_page false "" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" 728 > "$dir/page-1.json"
   run_probe_logcap "$dir"
