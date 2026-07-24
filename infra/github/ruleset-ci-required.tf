@@ -15,7 +15,7 @@
 #
 # Strict policy preserved (strict_required_status_checks_policy = true).
 #
-# Job-name contract: the 19 `context` strings below are public ABI for the
+# Job-name contract: the 20 `context` strings below are public ABI for the
 # branch-protection gate. A workflow job rename (`lint fixture content` ->
 # `lint-fixture-content`) silently un-requires the check until this resource
 # is updated in the same PR. See ADR-032 Sharp Edges.
@@ -32,6 +32,15 @@
 # action's ALLOWED_PATHS excludes AGENTS.{core,docs,rest}.md; #6038 must reproduce
 # it in the action's Phase-4 ceiling before extending ALLOWED_PATHS. See the
 # CODEOWNERS-gated note in scripts/required-checks.txt + ADR-092.
+#
+# #6882 adds `credential-path-guard` (20th, ADR-139) — the always-run ci.yml
+# full-scan job that blocks a tracked doc from reintroducing a resolvable
+# credential-file path. First apply (this PR's merge via apply-github-infra.yml)
+# makes it LIVE-required. Content-scoped, but its bot-PR synthetic is EARNED (the
+# composite action reproduces the scan over its staged paths) rather than sound-
+# by-unreachability like rule-body-lint above — because this scanner's SCAN_DIRS
+# DOES intersect the action's ALLOWED_PATHS at weakness-digest.md. The
+# ALLOWED_PATHS ∩ SCAN_DIRS test must be re-derived per gate, never inherited.
 #
 # #5780 briefly added a second rule sibling — a `merge_queue` block adopting a
 # GitHub merge queue for `main` to fix the strict-up-to-date BEHIND starvation.
@@ -209,6 +218,24 @@ resource "github_repository_ruleset" "ci_required" {
       # exact #6074 end state the gate exists to prevent.
       required_check {
         context        = "sentry-destroy-required"
+        integration_id = var.actions_integration_id
+      }
+
+      # #6882 (ADR-139) adds `credential-path-guard` (20th) — the ci.yml
+      # always-run FULL-SCAN job that fails any tracked doc reintroducing a
+      # home-relative resolvable path to a real credential file (the vector that
+      # read a live Doppler token into model context via preflight/SKILL.md).
+      # Promoted advisory -> blocking after #6880 drained the grandfathered
+      # backlog to zero. Advisory would not do: the guard already ran and a red
+      # -but-mergeable check restores the leak vector on the next ignored merge.
+      #
+      # Content-scoped, and UNLIKE rule-body-lint / sentry-destroy-required its
+      # bot-PR green is EARNED, not fabricated-but-unreachable: the scanner's
+      # SCAN_DIRS intersects the composite action's ALLOWED_PATHS at
+      # weakness-digest.md, so the action reproduces the scan in its Phase-4
+      # ceiling before posting any synthetic. See ADR-139 + required-checks.txt.
+      required_check {
+        context        = "credential-path-guard"
         integration_id = var.actions_integration_id
       }
     }

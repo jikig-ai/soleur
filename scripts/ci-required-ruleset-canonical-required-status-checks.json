@@ -78,5 +78,9 @@
   {
     "context": "sentry-destroy-required",
     "integration_id": 15368
+  },
+  {
+    "context": "credential-path-guard",
+    "integration_id": 15368
   }
 ]
