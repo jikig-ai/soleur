@@ -56,6 +56,11 @@ infra/
 !infra/vector.toml
 !infra/seccomp-bwrap.json
 !infra/apparmor-soleur-bwrap.profile
+!infra/orphan-reaper.sh
+!infra/orphan-reaper.service
+!infra/orphan-reaper.timer
+!infra/99-bwrap-userns.conf
+!infra/bwrap-userns-sysctl.service
 scripts/
 # Allow the post-build dev-signin grep gate (R3 / feat-dev-signin-bypass).
 # The Dockerfile builder stage runs `bash scripts/assert-dev-signin-eliminated.sh`

@@ -389,6 +389,12 @@ jobs:
       - name: Run fresh-boot readiness marker guard (#6459/#6538 SOLEUR_FRESH_BOOT_READY dark-host)
         run: bash apps/web-platform/infra/fresh-boot-ready.test.sh
 
+      # LOAD-BEARING registration (explicit list, no glob). Byte-identity + wiring guard for the
+      # Phase-2.2 fresh-boot parity bakes (orphan-reaper + bwrap-userns sysctl). Pins the baked unit
+      # bodies to their retained SSH-heredoc twins so the two delivery paths cannot silently drift.
+      - name: Run fresh-boot parity guard (#6459 Phase 2.2 baked==SSH-heredoc + wiring)
+        run: bash apps/web-platform/infra/fresh-boot-parity.test.sh
+
       # LOAD-BEARING registration (this job lists each infra test explicitly — no glob, so an
       # unregistered suite is ZERO coverage, silently and greenly). This suite is behavioural,
       # not grep-only: it extracts the baked soleur-wait-nic helper and EXECUTES it against a

@@ -205,6 +205,11 @@ COPY --from=builder \
   /app/infra/vector.toml \
   /app/infra/seccomp-bwrap.json \
   /app/infra/apparmor-soleur-bwrap.profile \
+  /app/infra/orphan-reaper.sh \
+  /app/infra/orphan-reaper.service \
+  /app/infra/orphan-reaper.timer \
+  /app/infra/99-bwrap-userns.conf \
+  /app/infra/bwrap-userns-sysctl.service \
   /opt/soleur/host-scripts/
 RUN chown -R 1001:1001 /opt/soleur
 
