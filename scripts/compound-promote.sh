@@ -34,6 +34,14 @@
 set -euo pipefail
 
 REPO_ROOT="${COMPOUND_PROMOTE_FIXTURE_ROOT:-$(git rev-parse --show-toplevel)}"
+# #6794: frontmatter-strip contract (defines strip_frontmatter). Sourced so the
+# always-loaded byte measurement below runs on the same stripped basis as the
+# commit gate. strip.sh is a CODE dependency colocated in this script's own tree,
+# so resolve it from the script dir — NOT $REPO_ROOT, which the test harness
+# repoints to a minimal fixture tree via COMPOUND_PROMOTE_FIXTURE_ROOT. Sourcing
+# (not executing) only defines the function.
+_CP_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$_CP_SCRIPT_DIR/lib/frontmatter-strip/strip.sh"
 CONFIG="$REPO_ROOT/knowledge-base/project/promotion-config.yml"
 LEARNINGS_DIR="$REPO_ROOT/knowledge-base/project/learnings"
 RETIRED_FILE="$REPO_ROOT/scripts/retired-rule-ids.txt"
@@ -154,9 +162,28 @@ done
 AGENTS_INDEX="$REPO_ROOT/AGENTS.md"
 AGENTS_CORE="$REPO_ROOT/AGENTS.core.md"
 ALWAYS_LOADED_NOW=0
-[[ -f "$AGENTS_INDEX" ]] && ALWAYS_LOADED_NOW=$(( ALWAYS_LOADED_NOW + $(wc -c < "$AGENTS_INDEX") ))
-[[ -f "$AGENTS_CORE"  ]] && ALWAYS_LOADED_NOW=$(( ALWAYS_LOADED_NOW + $(wc -c < "$AGENTS_CORE")  ))
-ALWAYS_LOADED_CAP=18000
+# Measure on the FRONTMATTER-STRIPPED basis (#6794) — strip is a no-op on
+# AGENTS.md (no leading `---`), so this matches the linter's authority
+# (b_index raw + b_core stripped) exactly.
+[[ -f "$AGENTS_INDEX" ]] && ALWAYS_LOADED_NOW=$(( ALWAYS_LOADED_NOW + $(strip_frontmatter < "$AGENTS_INDEX" | wc -c) ))
+[[ -f "$AGENTS_CORE"  ]] && ALWAYS_LOADED_NOW=$(( ALWAYS_LOADED_NOW + $(strip_frontmatter < "$AGENTS_CORE"  | wc -c) ))
+# Always-loaded byte budgets. Source of truth: scripts/lint-agents-rule-budget.py
+# (B_ALWAYS_REJECT / B_ALWAYS_WARN); agreement is enforced by
+# scripts/lint-agents-compound-sync.sh. Do not edit one side alone — that de-sync
+# is what issue #6461 was filed for.
+#
+# UNIT (unit-exact, #6794): the measurements above strip frontmatter before
+# `wc -c`, so they use the SAME basis as the linter's thresholds
+# (b_index raw + b_core stripped). The previously-documented ~73 B raw-vs-stripped
+# skew is closed; the comparison is exact. (This operator-local hand-testing
+# script emits advisory prompt text, not a gate, so the runtime's over-strip
+# guard lives only in cron-compound-promote.ts, not here.)
+#
+# Hard ceiling, mirroring the commit gate (post-apply enforcement).
+ALWAYS_LOADED_CAP=23000
+# Budget the LLM proposes against: the WARN floor, deliberately below the hard
+# ceiling so a cluster cannot pin the registry at the cap with zero headroom.
+PROPOSE_ALWAYS_LOADED_BUDGET=20000
 
 # Clustering prompt: tier='skill'|'agents-core' (post AGENTS.md split per PR #3496).
 # - agents-core targets AGENTS.core.md and is gated on the live always-loaded
@@ -171,7 +198,7 @@ PROMPT=$(cat <<EOF
 You are a clustering agent. Cluster the following learnings by problem/root-cause similarity. Return up to ${REMAINING} qualifying clusters (each with >=5 source learnings) as a JSON array.
 Schema: [{cluster_hash:'', tier:'skill'|'agents-core', target_path:string, source_learnings:[paths], proposed_diff_unified:string, rationale:string, byte_impact:{before:int,after:int,delta:int}}].
 Apply AGENTS.md cq-agents-md-tier-gate: already-enforced -> skip; domain-scoped -> skill; cross-cutting -> agents-core targeting AGENTS.core.md. Per PR #3496 sidecar split, AGENTS.md (index) + AGENTS.core.md are always-loaded; conditional sidecars (AGENTS.docs.md, AGENTS.rest.md) are deferred to v2.
-Current always-loaded payload (AGENTS.md + AGENTS.core.md) is ${ALWAYS_LOADED_NOW} bytes; the warn cap is ${ALWAYS_LOADED_CAP} bytes. For agents-core targets, REFUSE the cluster if ${ALWAYS_LOADED_NOW} + your byte_impact.delta exceeds ${ALWAYS_LOADED_CAP} — emit fewer/smaller clusters instead.
+Current always-loaded payload (AGENTS.md + AGENTS.core.md) is ${ALWAYS_LOADED_NOW} bytes; propose against a budget of ${PROPOSE_ALWAYS_LOADED_BUDGET} bytes (the warn floor — leave headroom, do not aim for the hard ceiling). For agents-core targets, REFUSE the cluster if ${ALWAYS_LOADED_NOW} + your byte_impact.delta exceeds ${PROPOSE_ALWAYS_LOADED_BUDGET} — emit fewer/smaller clusters instead.
 target_path MUST be one of: AGENTS.core.md, plugins/soleur/skills/<skill-name>/SKILL.md. The workflow refuses any other path. cluster_hash is ignored (the workflow computes it).
 Output ONLY the JSON array, nothing else.
 EOF

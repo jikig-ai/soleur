@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import type { GrantorDelegation } from "@/server/byok-delegation-ui-resolver";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 
 interface DelegationFundedPaneProps {
   workspaceId: string;
@@ -14,7 +15,18 @@ export function DelegationFundedPane({ workspaceId, flagEnabled }: DelegationFun
   return <FundedPaneInner workspaceId={workspaceId} />;
 }
 
+function formatUsd(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+function formatLastRun(lastInvocationAt: GrantorDelegation["lastInvocationAt"]): string {
+  return lastInvocationAt
+    ? new Date(lastInvocationAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "—";
+}
+
 function FundedPaneInner({ workspaceId }: { workspaceId: string }) {
+  const isMobile = useIsMobile();
   const [delegations, setDelegations] = useState<GrantorDelegation[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -53,45 +65,96 @@ function FundedPaneInner({ workspaceId }: { workspaceId: string }) {
           Members running on your API key via BYOK delegation.
         </p>
       </div>
-      <div className="divide-y divide-soleur-border-default">
-        <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 px-6 py-2 text-xs font-medium uppercase tracking-wider text-soleur-text-muted">
-          <span>Member</span>
-          <span>Today</span>
-          <span>MTD</span>
-          <span>Cap Left</span>
-          <span>Last Run</span>
-          <span className="w-16" />
-        </div>
-        {delegations.map((d) => (
-          <div
-            key={d.id}
-            className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 px-6 py-3"
-          >
-            <span className="truncate text-sm text-soleur-text-primary">{d.granteeDisplayName}</span>
-            <span className="text-xs text-soleur-text-secondary">
-              ${(d.todaySpentCents / 100).toFixed(2)}
-            </span>
-            <span className="text-xs text-soleur-text-secondary">
-              ${(d.mtdSpentCents / 100).toFixed(2)}
-            </span>
-            <span className="text-xs text-soleur-text-secondary">
-              ${(d.capRemainingCents / 100).toFixed(2)}
-            </span>
-            <span className="text-xs text-soleur-text-muted">
-              {d.lastInvocationAt
-                ? new Date(d.lastInvocationAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                : "—"}
-            </span>
-            <button
-              type="button"
-              onClick={() => handleRevoke(d.id)}
-              className="rounded px-2 py-1 text-xs text-red-400 hover:bg-soleur-bg-surface-2"
+      {isMobile ? (
+        <div className="space-y-3 p-3">
+          {delegations.map((d) => (
+            <div
+              key={d.id}
+              className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-3"
             >
-              Revoke
-            </button>
+              <div className="min-w-0">
+                <p className="min-w-0 truncate font-medium text-soleur-text-primary">
+                  {d.granteeDisplayName}
+                </p>
+                <p className="mt-0.5 text-xs text-soleur-text-muted">
+                  Running on your API key · BYOK delegation
+                </p>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 p-2">
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-soleur-text-muted">
+                    Today
+                  </p>
+                  <p className="mt-0.5 text-sm font-semibold text-soleur-text-primary">
+                    {formatUsd(d.todaySpentCents)}
+                  </p>
+                </div>
+                <div className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 p-2">
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-soleur-text-muted">
+                    MTD
+                  </p>
+                  <p className="mt-0.5 text-sm font-semibold text-soleur-text-primary">
+                    {formatUsd(d.mtdSpentCents)}
+                  </p>
+                </div>
+                <div className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 p-2">
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-soleur-text-muted">
+                    Cap Left
+                  </p>
+                  <p className="mt-0.5 text-sm font-semibold text-soleur-accent-gold-text">
+                    {formatUsd(d.capRemainingCents)}
+                  </p>
+                </div>
+                <div className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-2 p-2">
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-soleur-text-muted">
+                    Last Run
+                  </p>
+                  <p className="mt-0.5 text-sm font-semibold text-soleur-text-secondary">
+                    {formatLastRun(d.lastInvocationAt)}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleRevoke(d.id)}
+                className="mt-3 flex min-h-11 w-full items-center justify-center rounded-md border border-red-400/40 text-sm font-medium text-red-400 hover:bg-soleur-bg-surface-2"
+              >
+                Revoke delegation
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="divide-y divide-soleur-border-default">
+          <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 px-6 py-2 text-xs font-medium uppercase tracking-wider text-soleur-text-muted">
+            <span>Member</span>
+            <span>Today</span>
+            <span>MTD</span>
+            <span>Cap Left</span>
+            <span>Last Run</span>
+            <span className="w-16" />
           </div>
-        ))}
-      </div>
+          {delegations.map((d) => (
+            <div
+              key={d.id}
+              className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-4 px-6 py-3"
+            >
+              <span className="truncate text-sm text-soleur-text-primary">{d.granteeDisplayName}</span>
+              <span className="text-xs text-soleur-text-secondary">{formatUsd(d.todaySpentCents)}</span>
+              <span className="text-xs text-soleur-text-secondary">{formatUsd(d.mtdSpentCents)}</span>
+              <span className="text-xs text-soleur-text-secondary">{formatUsd(d.capRemainingCents)}</span>
+              <span className="text-xs text-soleur-text-muted">{formatLastRun(d.lastInvocationAt)}</span>
+              <button
+                type="button"
+                onClick={() => handleRevoke(d.id)}
+                className="rounded px-2 py-1 text-xs text-red-400 hover:bg-soleur-bg-surface-2"
+              >
+                Revoke
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

@@ -63,11 +63,14 @@ export function SearchOverlay() {
           <path d="m21 21-4.3-4.3" strokeLinecap="round" />
         </svg>
         <input
-          type="text"
+          type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search files..."
-          className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 py-2 pl-9 pr-3 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted outline-none transition-colors focus:border-soleur-border-emphasized"
+          enterKeyHint="search"
+          autoCapitalize="none"
+          spellCheck={false}
+          className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 py-2 pl-9 pr-3 text-base text-soleur-text-primary placeholder:text-soleur-text-muted outline-none transition-colors focus:border-soleur-border-emphasized md:text-sm"
         />
       </div>
 

@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # #6604 — SSH-free discriminating Sentry emit for the /workspaces LUKS at-rest drift class.
 #
+# #6807 — this file is now the SHARED LEAF HELPER for the whole workspaces-luks feature, not solely
+# the emitter. It additionally carries the bounded/classifying HTTP probe, the readyz classifier and
+# the workspace-inventory counter, because it is already sourced by BOTH consumers
+# (luks-monitor.sh:31, workspaces-cutover.sh) and is already in BOTH tar lists
+# (workspaces-luks-verify.yml:94, workspaces-luks-cutover.yml:446). A new sibling script would add a
+# second two-list sync obligation — the exact cross-file drift class that produced #6807.
+#
 # Mirrors cron-egress-enforce-probe.sh's emit boundary, with TWO deliberate #6604 corrections:
 #
 #  DP-9 (baked-DSN-first): cron-egress-enforce-probe.sh resolves the DSN via
@@ -32,6 +39,233 @@
 # shellcheck disable=SC1003  # '"\\' deletes " and \ (JSON-structural) — matches cron-egress-enforce-probe.sh
 _wl_scrub() { printf '%s' "${1:-}" | tr -d '"\\' | tr -cd '[:print:]'; }
 
+# ===========================================================================
+# #6807 — shared bounded HTTP probe, readyz classifier, workspace counter
+# ===========================================================================
+
+# _wl_probe_bounds — resolve the retry knobs. Read at CALL time, not source time, so a harness can
+# flip them between cases without re-sourcing the file.
+#
+# BOUNDED BY ATTEMPTS, NEVER BY WALL CLOCK. Under a stubbed no-op `sleep` (which is how these loops
+# are tested) a wall-clock deadline spins hot for its entire duration; an attempt bound is
+# deterministic in both worlds.
+_wl_probe_bounds() {
+  WL_ATTEMPTS_N="${WORKSPACES_CANARY_ATTEMPTS:-30}"
+  WL_INTERVAL_N="${WORKSPACES_CANARY_INTERVAL_S:-3}"
+  # `:-` substitutes only for UNSET-or-EMPTY. The real silent-disable hazards are `=0` (a
+  # zero-iteration loop passes trivially — a canary that cannot fail) and a NON-NUMERIC value
+  # (`[ abc -le n ]` errors and the loop never runs). `:-` catches neither, hence the explicit floor.
+  [ "$WL_ATTEMPTS_N" -ge 1 ] 2>/dev/null || WL_ATTEMPTS_N=1
+  [ "$WL_INTERVAL_N" -ge 0 ] 2>/dev/null || WL_INTERVAL_N=3
+}
+
+# wl_http_class <code> — three-way classification.
+#
+# The STRUCTURAL set is ENUMERATED and everything else is retryable, deliberately inverted from the
+# obvious "enumerate the transient codes" shape. This path traverses the Cloudflare edge, so the
+# unknown-code population is dominated by CF-origin codes; failing SAFE on an unknown means retrying
+# it. Classifying `530` (CF 1033, "tunnel connector not connected" — the code this stack most likely
+# emits during a container restart window) as structural would reintroduce #6807's Bug B in a new coat.
+wl_http_class() {
+  case "${1:-}" in
+    200)                         printf 'success' ;;
+    307|401|403|404|405|525|526) printf 'structural' ;;
+    *)                           printf 'retryable' ;;
+  esac
+}
+
+# wl_probe_http <url> — retry a liveness probe to an attempt bound.
+#
+# LOOP SHAPE IS PINNED (plan task 5.1): NO sleep after the FINAL attempt. A trailing sleep buys
+# nothing (no probe follows it), costs one interval of dead-man budget, and would make the observed
+# sleep count equal the attempt count instead of attempts-1 — the ACs derive from this choice.
+#
+# Sets WL_PROBE_LAST_CODE / _ATTEMPTS / _ELAPSED_S / _CLASS (exported for the emit envelope).
+# Returns 0 on 200, 1 on a structural code (immediately, no retry burn), 2 on budget exhaustion.
+wl_probe_http() {
+  local url="$1" i code cls started now
+  _wl_probe_bounds
+  started="$(date +%s 2>/dev/null || echo 0)"
+  WL_PROBE_LAST_CODE=000; WL_PROBE_ATTEMPTS=0; WL_PROBE_ELAPSED_S=0; WL_PROBE_CLASS=unknown
+  i=1
+  while [ "$i" -le "$WL_ATTEMPTS_N" ]; do
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo 000)"
+    cls="$(wl_http_class "$code")"
+    now="$(date +%s 2>/dev/null || echo 0)"
+    WL_PROBE_LAST_CODE="$code"; WL_PROBE_ATTEMPTS="$i"; WL_PROBE_CLASS="$cls"
+    WL_PROBE_ELAPSED_S="$((now - started))"
+    export WL_PROBE_LAST_CODE WL_PROBE_ATTEMPTS WL_PROBE_ELAPSED_S WL_PROBE_CLASS
+    if [ "$cls" = "success" ]; then return 0; fi
+    if [ "$cls" = "structural" ]; then return 1; fi
+    echo "[workspaces-luks] $url -> $code (attempt $i/$WL_ATTEMPTS_N)" >&2
+    if [ "$i" -lt "$WL_ATTEMPTS_N" ]; then sleep "$WL_INTERVAL_N"; fi
+    i=$((i + 1))
+  done
+  WL_PROBE_CLASS=deadline; export WL_PROBE_CLASS
+  return 2
+}
+
+# wl_probe_readyz <url> — probe /internal/readyz and classify into ONE reason code.
+#
+# HTTP STATUS IS CLASSIFIED BEFORE BODY SHAPE. A loopback-gate regression answers
+# `403 {"error":"forbidden"}` — valid JSON that simply is not `"ready":true`. Body-first
+# classification lands it in the not-ready arm, which pages "the container is serving an EMPTY
+# /workspaces": a confidently-wrong sole-copy DATA-LOSS verdict for what is actually a routing bug.
+#
+# #6807 CORRECTION vs the plan's classifier table, verified against server/readiness.ts:119
+# (`res.writeHead(readiness.ready ? 200 : 503)`): a NOT-ready host answers **503**, not
+# `200 + ready:false`. 503 sits in wl_http_class's generic retryable set — correct for /health (a
+# booting container) and WRONG here, because for readyz it is a DETERMINATE answer. Retrying it
+# would burn the entire budget and then report `readyz_unreachable`/deadline for a host that told us
+# plainly it is not ready — converting a real data-loss signal into a timeout, which is the same
+# class of confidently-wrong verdict this function exists to prevent. So readyz retries ONLY while
+# the response is UNCLASSIFIABLE (no response at all — the container is still coming up); any
+# parseable answer, at either status, is terminal.
+#
+# Sets WL_READYZ_REASON (empty on success) + WL_READYZ_WRITABLE / _POPULATED. Returns 0 / 1.
+# NO TEMPFILE, deliberately. The obvious shape here is to allocate a scratch file, have curl write
+# the body into it and report the status via -w — but this file is SOURCED into
+# workspaces-cutover.sh, whose
+# `trap cleanup EXIT` IS the rollback mechanism. Registering an owning `trap … EXIT` from a sourced
+# helper would REPLACE it, silently disarming rollback on the one script where that trap protects
+# sole-copy user data. So rather than take lint-trap-tempfile-ownership's escape hatch for an unowned
+# tempfile, the allocation is removed: `-w '\n%{http_code}'` appends the status to stdout after the
+# body, split on the LAST newline (robust even for a multi-line body, though JSON.stringify never
+# emits one).
+#
+# TRANSPORT — `docker exec <container> curl`, NOT a bare host curl. /internal/readyz is peer-gated
+# (readiness.ts requires a loopback socket peer AND a loopback Host). The prod app container runs on
+# the DEFAULT docker bridge with `-p 0.0.0.0:3000:3000` (ci-deploy.sh — NOT `--network host`), so a
+# host-side `curl 127.0.0.1:3000` reaches the app with the docker BRIDGE GATEWAY (e.g. 172.17.0.1) as
+# its peer — never loopback — and readyz answers 403 (`readyz_gate_regression`). Running the probe
+# INSIDE the container gives a genuine 127.0.0.1 peer, so both gates pass without relaxing either. All
+# three on-host consumers (cutover app_canary, the daily luks-monitor, the verify workflow's on-host
+# run) inherit this via the shared helper. Fail-closed is preserved: if the container is down or curl
+# is absent, `docker exec` fails and the `|| printf '\n000'` path yields 000 → readyz_unreachable →
+# retries then deadlines (never a false green). Container name is overridable for tests.
+: "${WL_READYZ_CONTAINER:=soleur-web-platform}"
+wl_probe_readyz() {
+  local url="$1" i code body resp rc nl
+  _wl_probe_bounds
+  nl=$'\n'
+  WL_READYZ_REASON=""; WL_READYZ_WRITABLE=unknown; WL_READYZ_POPULATED=unknown
+  WL_PROBE_LAST_CODE=000; WL_PROBE_ATTEMPTS=0
+  rc=1
+  i=1
+  while [ "$i" -le "$WL_ATTEMPTS_N" ]; do
+    # Reset the per-attempt sub-signals INSIDE the loop. app_canary runs wl_probe_http first, which
+    # leaves WL_PROBE_CLASS=success behind; without this reset a fatal readyz emission ships
+    # `probe_class=success` next to its own failure reason — a mixed-provenance envelope that reads
+    # on the paging event as though the probe had succeeded. Same for a writable=false scraped on an
+    # early attempt persisting into a later unreachable verdict.
+    WL_READYZ_WRITABLE=unknown; WL_READYZ_POPULATED=unknown
+    WL_PROBE_CLASS=readyz; WL_PROBE_ELAPSED_S=0
+    resp="$(docker exec "$WL_READYZ_CONTAINER" curl -sS -w "\\n%{http_code}" --max-time 5 "$url" 2>/dev/null || printf '\n000')"
+    code="${resp##*"$nl"}"
+    body="${resp%"$nl"*}"
+    [ -n "$code" ] || code=000
+    WL_PROBE_LAST_CODE="$code"; WL_PROBE_ATTEMPTS="$i"
+    # Sub-signals are read whenever present, so a not-ready emission can say WHICH check failed.
+    case "$body" in
+      *'"workspaces_writable":true'*)  WL_READYZ_WRITABLE=true ;;
+      *'"workspaces_writable":false'*) WL_READYZ_WRITABLE=false ;;
+    esac
+    case "$body" in
+      *'"workspaces_populated":true'*)  WL_READYZ_POPULATED=true ;;
+      *'"workspaces_populated":false'*) WL_READYZ_POPULATED=false ;;
+    esac
+    case "$code" in
+      # 307/401 belong here for the SAME reason 403/404/405 do, and their absence was #6807's own
+      # defect one endpoint over: /internal/readyz is served by the custom server BEFORE Next.js
+      # routing, so if that handler is removed or its pathname drifts the request falls through to
+      # middleware and 307s to /login. Left in the retryable `*)` arm it burns the full budget and
+      # then reports `readyz_unreachable` ("still booting, wait") for a route that is simply gone,
+      # also eating ~237s of dead-man budget.
+      307|401|403|404|405)
+        WL_READYZ_REASON=readyz_gate_regression; rc=1; break ;;
+      200|503)
+        case "$body" in
+          *'"ready":true'*)  WL_READYZ_REASON=""; rc=0 ;;
+          *'"ready":false'*) WL_READYZ_REASON=readyz_not_ready; rc=1 ;;
+          *)                 WL_READYZ_REASON=readyz_unparseable; rc=1 ;;
+        esac
+        break ;;
+      *)
+        WL_READYZ_REASON=readyz_unreachable; rc=1 ;;
+    esac
+    echo "[workspaces-luks] readyz -> $code (attempt $i/$WL_ATTEMPTS_N)" >&2
+    if [ "$i" -lt "$WL_ATTEMPTS_N" ]; then sleep "$WL_INTERVAL_N"; fi
+    i=$((i + 1))
+  done
+  export WL_READYZ_REASON WL_READYZ_WRITABLE WL_READYZ_POPULATED WL_PROBE_LAST_CODE WL_PROBE_ATTEMPTS
+  return "$rc"
+}
+
+# wl_capacity_of <mount> — the capacity discriminator, as a scrub-safe `use=NN%,mount=rw|ro` string.
+#
+# Lives HERE, not inline in luks-monitor.sh, because BOTH emitters of a `readyz_not_ready` verdict
+# need it: the daily/verify path AND workspaces-cutover.sh's app_canary. Without it on the cutover
+# path the field defaults to `unknown`, which matches NEITHER capacity row in the runbook triage
+# table — so a full disk mid-cutover falls through to the residual row, "data-recovery incident on
+# sole-copy data", and the operator runs a destructive recovery against the retained plaintext while
+# the LUKS mount holds newer writes. Non-destructive fault, destructive response.
+wl_capacity_of() {
+  local mount="${1:-}" use opts rw
+  use="$(df -P "$mount" 2>/dev/null | awk 'NR==2 {print $5}' 2>/dev/null || true)"
+  opts="$(findmnt -no OPTIONS "$mount" 2>/dev/null || true)"
+  # Comma-DELIMITED, never a bare substring: the kernel sets `errors=remount-ro` on a perfectly
+  # healthy ext4 mount, so `*ro*` reports every healthy mount read-only.
+  case ",$opts," in *,ro,*) rw=ro ;; *) rw=rw ;; esac
+  printf 'use=%s,mount=%s' "${use:-unknown}" "$rw"
+}
+
+# wl_count_workspace_dirs <root> — the host-side workspace INVENTORY count.
+#
+# PARITY IS LOAD-BEARING. server/session-metrics.ts:19-41 (countWorkspaceDirsAt) excludes FOUR
+# things: `.orphaned-*` prefixes, the `.cron` ephemeral clone subdir, `lost+found`, and any
+# non-directory. An unfiltered shell count INFLATES — 7 surviving workspaces plus `lost+found` and
+# `.cron` reads as 9 >= 8 and certifies a real shrink green, which is precisely the class of
+# green-probe-that-cannot-fail #6807 is about. Keep these four in lockstep with session-metrics.ts.
+#
+# ONE function, used by BOTH the assertion (luks-monitor.sh) and the baseline persist
+# (workspaces-cutover.sh), so the compared value and the stored value cannot be computed differently.
+# Prints an integer on stdout and NOTHING else; returns non-zero if the root is unreadable, so the
+# caller can fail closed rather than treating an error as a count of zero.
+wl_count_workspace_dirs() {
+  local root="${1:-}" name n=0 _dg=0 _fg=0
+  # UNREADABLE IS NOT EMPTY. `-d` alone succeeds on a root that exists but cannot be LISTED (it needs
+  # only search permission on the PARENT), and both globs below then fail to expand, stay literal,
+  # and yield 0 — a count indistinguishable from a genuinely empty volume. That zero is absorbing:
+  # the cutover persists it as the baseline and `count -lt 0` is false for EVERY count, so a total
+  # wipe of every sole-copy workspace certifies green forever. Require read AND search.
+  [ -n "$root" ] && [ -d "$root" ] && [ -r "$root" ] && [ -x "$root" ] || return 1
+  # PIN THE GLOB STATE. This is a SOURCED library function, and its two callers run in DIFFERENT
+  # processes — workspaces-cutover.sh computes the baseline, luks-monitor.sh compares against it.
+  # Under `dotglob`, `*/` also matches hidden dirs, so every hidden dir is counted twice; set in
+  # only one of the two processes, that inflates only ONE operand — exactly the certify-a-shrink-green
+  # direction this counter exists to prevent. `failglob` would abort the caller on an empty root.
+  shopt -q dotglob && _dg=1
+  shopt -q failglob && _fg=1
+  shopt -u dotglob failglob
+  for name in "$root"/*/ "$root"/.*/; do
+    [ -d "$name" ] || continue
+    # Parameter expansion, NOT `basename`: basename is an external process invoked with the full
+    # workspace path as argv. The callers' "emits nothing on stderr" claim rested on their own
+    # 2>/dev/null, not on this function; a future call site dropping the redirect would leak
+    # user-identifying directory names into the Actions log. This makes the property true.
+    name="${name%/}"; name="${name##*/}"
+    case "$name" in
+      .|..|.cron|lost+found) continue ;;
+      .orphaned-*)           continue ;;
+    esac
+    n=$((n + 1))
+  done
+  # `if`, not `[ … ] && shopt` — a trailing false test would become the function's exit status.
+  if [ "$_dg" = 1 ]; then shopt -s dotglob; fi
+  if [ "$_fg" = 1 ]; then shopt -s failglob; fi
+  printf '%s' "$n"
+}
+
 workspaces_luks_emit() {
   ( set +e
     local level dsn key shost proj host body
@@ -59,7 +293,15 @@ workspaces_luks_emit() {
 
     # feature/op are the sentry_issue_alert filter keys (DP-8). The nine fields discriminate the
     # failure modes; every value is scrubbed of JSON-structural bytes.
-    body=$(printf '{"message":"workspaces LUKS at-rest drift","level":"%s","logger":"luks-monitor","tags":{"feature":"workspaces-luks","op":"workspaces-luks-drift","device_type":"%s","mount_source":"%s","mapper_present":"%s","luks_open_result":"%s","header_uuid_match":"%s","cryptsetup_unit_result":"%s","doppler_reachable":"%s","mountpoint_ok":"%s","host":"%s","reason":"%s"}}' \
+    # #6807 adds nine READINESS/PROBE fields after the original nine. Additive and defaulted, so an
+    # existing caller that sets none of them emits `unknown` and its envelope shape is unchanged.
+    # The `op` is NOT parameterized: sentry_issue_alert.workspaces_luks_drift
+    # (issue-alerts.tf:1704-1740) matches `filter_match="all"` on op EQUAL workspaces-luks-drift and
+    # is the SOLE PAGING op of the nine this feature emits. A distinct readiness op would page
+    # nobody and would be invisible to the wipe gate (workspaces-luks-soak-6604.sh). De-conflation
+    # lives in `reason` + these fields + the exit code, never in a new op.
+    # Integers only for the counts — workspace directory NAMES are user-identifying.
+    body=$(printf '{"message":"workspaces LUKS at-rest drift","level":"%s","logger":"luks-monitor","tags":{"feature":"workspaces-luks","op":"workspaces-luks-drift","device_type":"%s","mount_source":"%s","mapper_present":"%s","luks_open_result":"%s","header_uuid_match":"%s","cryptsetup_unit_result":"%s","doppler_reachable":"%s","mountpoint_ok":"%s","host":"%s","reason":"%s","readyz_writable":"%s","readyz_populated":"%s","readyz_capacity":"%s","workspace_count":"%s","workspace_count_expected":"%s","probe_last_code":"%s","probe_attempts":"%s","probe_elapsed_s":"%s","probe_class":"%s"}}' \
       "$level" \
       "$(_wl_scrub "${WL_DEVICE_TYPE:-unknown}")" \
       "$(_wl_scrub "${WL_MOUNT_SOURCE:-unknown}")" \
@@ -70,7 +312,16 @@ workspaces_luks_emit() {
       "$(_wl_scrub "${WL_DOPPLER_REACHABLE:-unknown}")" \
       "$(_wl_scrub "${WL_MOUNTPOINT_OK:-unknown}")" \
       "$host" \
-      "$(_wl_scrub "${WL_REASON:-unspecified}")")
+      "$(_wl_scrub "${WL_REASON:-unspecified}")" \
+      "$(_wl_scrub "${WL_READYZ_WRITABLE:-unknown}")" \
+      "$(_wl_scrub "${WL_READYZ_POPULATED:-unknown}")" \
+      "$(_wl_scrub "${WL_READYZ_CAPACITY:-unknown}")" \
+      "$(_wl_scrub "${WL_WORKSPACE_COUNT:-unknown}")" \
+      "$(_wl_scrub "${WL_WORKSPACE_COUNT_EXPECTED:-unknown}")" \
+      "$(_wl_scrub "${WL_PROBE_LAST_CODE:-unknown}")" \
+      "$(_wl_scrub "${WL_PROBE_ATTEMPTS:-unknown}")" \
+      "$(_wl_scrub "${WL_PROBE_ELAPSED_S:-unknown}")" \
+      "$(_wl_scrub "${WL_PROBE_CLASS:-unknown}")")
 
     curl -m 10 --retry 3 -sf -X POST "https://$shost/api/$proj/store/" \
       -H 'Content-Type: application/json' \

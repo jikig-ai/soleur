@@ -206,9 +206,10 @@ runcmd:
       || /usr/local/bin/inngest-boot-phone-home.sh doppler-cli-install-FAILED
   # Restricted (0600 root) env file with the scoped Doppler service token — NOT world-
   # readable /etc/environment (mirrors registry's /etc/default/registry-doppler). The token
-  # is scoped to the ISOLATED `soleur-inngest` project's `prd` root config (a SEPARATE
-  # project — NO inheritance path to soleur/prd), so a host compromise reads ONLY the
-  # inngest secret set.
+  # is read/write on the ISOLATED `soleur-inngest` project's `prd` root config (the flip FSM
+  # writes INNGEST_CUTOVER_FLIP under it, #6178) — a SEPARATE project with NO inheritance path
+  # to soleur/prd, so a host compromise reaches ONLY this host's own isolated secret set,
+  # never a foreign project.
   # HOME is REQUIRED (#6122 boot fix — the actual dark-host boot bug, found via the #6178 boot
   # probe): cloud-init runcmd runs with NO $HOME, and the Doppler CLI aborts with
   # "Doppler Error: $HOME is not defined" even when DOPPLER_CONFIG_DIR is set. Without it the
@@ -303,8 +304,32 @@ runcmd:
   # `INNGEST_`-prefixed name: BETTERSTACK_LOGS_TOKEN is admitted because vector.service
   # reads it, even though it carries no INNGEST_ prefix) AND cardinality (>=5 — the 3
   # TF-owned signing/event/redis keys + the out-of-band INNGEST_POSTGRES_URI + the isolated
-  # BETTERSTACK_LOGS_TOKEN, all present at dark boot; INNGEST_HEARTBEAT_URL is out-of-band and
-  # set only AT cutover, so the count is 5 dark / 6 live).
+  # BETTERSTACK_LOGS_TOKEN, all present at dark boot; INNGEST_HEARTBEAT_URL and
+  # INNGEST_CUTOVER_FLIP are out-of-band and written only AT cutover (both by op=arm), so the
+  # count is 5 dark / 7 live).
+  # NOTE (#6178): INNGEST_CUTOVER_FLIP MUST stay admitted — inngest-cutover-flip.service reads
+  # it via `doppler run --config prd`, so it is a name this host's runtime consumes. Omitting it
+  # made op=arm's own write boot-brick the host: from the moment the flip was armed, every
+  # subsequent PROVISION/REPLACE saw n_total(7) != n_inngest(6) → FATAL → no Vector, no
+  # inngest-server, and no flip timer, so the flip could never run AND the failure was
+  # invisible off-box (the component that ships logs is the one that never installed). Only the
+  # SOLEUR_INNGEST_BOOT_STAGE phone-home (#6702), which curls Better Stack independently of
+  # Vector, surfaced it.
+  # Scope is deliberate: this check lives in `runcmd` (cloud-init scripts-user = once-per-
+  # instance), so a plain REBOOT of an already-bootstrapped host does NOT re-run it and does
+  # NOT brick — the units are enabled and persist. It is re-provision/`-replace` that re-runs
+  # it, which is exactly what `hcloud_server.inngest` does on any user_data edit (it carries
+  # no lifecycle.ignore_changes=[user_data]).
+  # INNGEST_CONFIG_DIGEST is admitted AHEAD of its terraform apply, deliberately.
+  # inngest-config-digest.tf declares a doppler_secret of that name into THIS project and its
+  # header requires the admitting regex to land atomically with the apply — admitting an
+  # absent name is a no-op for the subset test (n_total and n_inngest both exclude it), so
+  # landing it early is free and removes the ordering hazard entirely.
+  # The floor stays 5 ON PURPOSE. That .tf's DEC-FLOOR note calls the digest dark-present and
+  # implies a 5->6 bump, but the bump is only safe ONCE the secret exists: raising it while the
+  # digest is unapplied makes a 5-name dark boot FATAL — re-bricking the host this very change
+  # exists to unbrick. Bump the floor (here and in inngest-host.test.sh) in the SAME change
+  # that applies inngest-config-digest.tf, never before.
   # An over-scoped `prd`-branch token would see ~116 foreign secrets → n_total != n_inngest →
   # refuse. On pass, drop the sentinel the bootstrap block gates on; on fail, no sentinel → the
   # next block aborts (fail-closed).
@@ -318,7 +343,7 @@ runcmd:
     set -euo pipefail
     names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
     n_total="$(printf '%s\n' "$names" | grep -c . || true)"
-    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
+    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|CONFIG_DIGEST|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
     if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 5 ]; then
       echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
     fi
@@ -427,6 +452,28 @@ runcmd:
     # in web cloud-init.yml) so the bootstrap writes the vector.service unit; pass
     # the arm64 Vector env (non-empty VERSION + arm64 SHA override + VECTOR_CLI_ARCH) below.
     docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
+    # #6178: stage the cutover flip trio + arm-atomicity guard from the OCI image to /tmp so
+    # inngest-bootstrap.sh's flip-install block (which gates on `-f /tmp/inngest-cutover-flip.*`,
+    # inngest-bootstrap.sh:664) can install + `systemctl enable --now inngest-cutover-flip.timer`.
+    # These docker-cp lines were MISSING — the build baked the assets into the image (Dockerfile
+    # COPY /inngest-cutover-flip.*) and bootstrap looked for them at /tmp, but nothing copied
+    # image:/ -> /tmp, so DEDICATED_FLIP stayed 0 and the flip timer NEVER installed on any
+    # dedicated host. The flip FSM therefore never ran end-to-end (masked because every flip test
+    # drives the CUTOVER_FLAG_SET_CMD fixture seam, bypassing this real install path).
+    docker cp soleur-inngest-bootstrap-extract:/inngest-cutover-flip.sh /tmp/inngest-cutover-flip.sh 2>/dev/null || true
+    docker cp soleur-inngest-bootstrap-extract:/inngest-server-flip-guard.sh /tmp/inngest-server-flip-guard.sh 2>/dev/null || true
+    docker cp soleur-inngest-bootstrap-extract:/inngest-cutover-flip.service /tmp/inngest-cutover-flip.service 2>/dev/null || true
+    docker cp soleur-inngest-bootstrap-extract:/inngest-cutover-flip.timer /tmp/inngest-cutover-flip.timer 2>/dev/null || true
+    docker cp soleur-inngest-bootstrap-extract:/cat-inngest-cutover-state.sh /tmp/cat-inngest-cutover-state.sh 2>/dev/null || true
+    # Make the staging outcome VISIBLE off-box (curl-direct phone-home, Vector-independent):
+    # the silent absence of these files is exactly what hid the missing-timer bug for a full
+    # cutover attempt. Report staged vs MISSING so the next occurrence self-diagnoses.
+    if [ -f /tmp/inngest-cutover-flip.sh ] && [ -f /tmp/inngest-cutover-flip.timer ] \
+       && [ -f /tmp/inngest-server-flip-guard.sh ] && [ -f /tmp/inngest-cutover-flip.service ]; then
+      /usr/local/bin/inngest-boot-phone-home.sh flip-assets-staged 2>/dev/null || true
+    else
+      /usr/local/bin/inngest-boot-phone-home.sh flip-assets-MISSING "the inngest-cutover-flip.timer will NOT install (DEDICATED_FLIP=0)" 2>/dev/null || true
+    fi
     chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
     image_env=$(docker inspect "$IREF" -f '{{range .Config.Env}}{{println .}}{{end}}')
     chmod +x "$EXTRACT_DIR/inngest-bootstrap.sh"
@@ -442,8 +489,8 @@ runcmd:
     # because this host downloads the arch-matched tarball — a wrong-arch SHA would fail verify.
     VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | head -1 | cut -d= -f2- || true)
     # DOPPLER_PROJECT=soleur-inngest routes every doppler-wrapped unit (server/heartbeat/redis/
-    # vector) at THIS host's ISOLATED project (AC3) — the scoped boot token can read only
-    # soleur-inngest. VECTOR_CLI_ARCH (=${inngest_cli_arch}) selects the matching triple in the bootstrap map.
+    # vector) at THIS host's ISOLATED project (AC3) — the scoped boot token reaches only
+    # soleur-inngest (read/write, #6178). VECTOR_CLI_ARCH (=${inngest_cli_arch}) selects the matching triple in the bootstrap map.
     # #6178 boot observability: capture the bootstrap's combined output to a file and self-report
     # its exit code + a masked tail. The bootstrap's own log() goes to journald->Vector, which is
     # DOWN until the bootstrap installs+starts Vector near its end — so a mid-bootstrap failure is
@@ -473,7 +520,11 @@ runcmd:
     # (Vector journald shipping is separately unreliable on this host, so this is the visibility).
     set +e
     sleep 8
-    svc="$(systemctl is-active inngest-server.service inngest-redis.service vector.service 2>&1 | tr '\n' ',')"
+    # #6178: inngest-cutover-flip.timer is included so the OUTCOME (the flip poll timer actually
+    # installed + active = DEDICATED_FLIP reached 1) self-reports off-box, not just the
+    # flip-assets-staged precondition. This is precisely the state #6178 silently failed at (the
+    # timer never installed); a non-'active' 4th field surfaces it in the same curl-direct marker.
+    svc="$(systemctl is-active inngest-server.service inngest-redis.service vector.service inngest-cutover-flip.timer 2>&1 | tr '\n' ',')"
     lo="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://127.0.0.1:8288/ 2>&1)"
     jl="$(journalctl -u inngest-server.service --no-pager -n 15 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' | head -c 400)"
     /usr/local/bin/inngest-boot-phone-home.sh post-boot-health "svc=[$svc] lo8288=$lo jl=[$jl]"

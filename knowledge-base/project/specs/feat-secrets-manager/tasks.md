@@ -24,7 +24,7 @@
 
 - [ ] 1.1 Install Doppler CLI locally (`curl -Ls https://cli.doppler.com/install.sh | sh`)
 - [ ] 1.2 Authenticate and setup (`doppler login && doppler setup`)
-- [ ] 1.3 Commit `.doppler.yaml` to repo root (tracked file — worktrees get it automatically)
+- [ ] 1.3 Commit the Doppler project-pointer file to repo root (tracked file — worktrees get it automatically)
 - [ ] 1.4 Validate: `doppler run -- env | grep DISCORD` shows expected vars
 - [ ] 1.5 Validate: `doppler run -- bun run dev` starts dev server
 

@@ -1,5 +1,4 @@
 ---
-adr: ADR-001
 title: PWA-First Platform Architecture
 status: active
 date: 2026-03-27

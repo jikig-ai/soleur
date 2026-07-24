@@ -178,14 +178,14 @@ doppler login
 doppler setup  # Select project: soleur, config: dev
 ```
 
-This creates `.doppler.yaml` in the repo root.
+This creates the Doppler project-pointer file in the repo root.
 
-**1.2 Add `.doppler.yaml` to version control**
+**1.2 Add the Doppler project-pointer file to version control**
 
-- [ ] Commit `.doppler.yaml` to repo root (contains project/config pointer, no secrets)
-- [ ] `.doppler.yaml` is a tracked file — git worktrees will include it automatically (no worktree manager changes needed)
+- [ ] Commit the Doppler project-pointer file to repo root (contains project/config pointer, no secrets)
+- [ ] The Doppler project-pointer file is a tracked file — git worktrees will include it automatically (no worktree manager changes needed)
 
-### .doppler.yaml
+### Doppler project-pointer file
 
 ```yaml
 setup:
@@ -198,7 +198,7 @@ setup:
 - `doppler run -- env | grep DISCORD` shows expected vars
 - `doppler run -- bun run dev` starts the dev server
 
-**Rollback:** Keep `.env` file intact throughout. Delete `.doppler.yaml` to revert.
+**Rollback:** Keep `.env` file intact throughout. Delete the Doppler project-pointer file to revert.
 
 ### Phase 2: CI Migration (Low Risk — Sync Approach)
 

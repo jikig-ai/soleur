@@ -1,5 +1,4 @@
 ---
-adr: ADR-008
 title: Cloudflare Tunnel Deployment
 status: superseded-in-part
 date: 2026-03-27

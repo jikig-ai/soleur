@@ -1,0 +1,307 @@
+{
+  "schema_version": 1,
+  "store_classes": {
+    "hcloud_volume": { "kind": "guest-luks-volume", "mechanisms": ["luks", "plaintext-exception"] },
+    "cloudflare_r2_bucket": { "kind": "provider-bucket", "mechanisms": ["provider-managed", "plaintext-exception"] }
+  },
+  "non_store_types": [
+    "betteruptime_heartbeat", "betteruptime_monitor", "betteruptime_policy", "betteruptime_team_member",
+    "cloudflare_api_token", "cloudflare_bot_management", "cloudflare_list", "cloudflare_notification_policy",
+    "cloudflare_record", "cloudflare_ruleset", "cloudflare_zero_trust_access_application",
+    "cloudflare_zero_trust_access_policy", "cloudflare_zero_trust_access_service_token",
+    "cloudflare_zero_trust_tunnel_cloudflared", "cloudflare_zero_trust_tunnel_cloudflared_config",
+    "cloudflare_zone_dnssec", "cloudflare_zone_settings_override", "doppler_environment", "doppler_project",
+    "doppler_secret", "doppler_service_token", "github_actions_secret", "github_repository_environment",
+    "github_repository_ruleset", "hcloud_firewall", "hcloud_firewall_attachment", "hcloud_network",
+    "hcloud_network_subnet", "hcloud_placement_group", "hcloud_server", "hcloud_server_network",
+    "hcloud_ssh_key", "hcloud_volume_attachment", "null_resource", "random_id", "random_password",
+    "sentry_cron_monitor", "sentry_issue_alert", "sentry_uptime_monitor", "terraform_data",
+    "tls_private_key", "tls_self_signed_cert"
+  ],
+  "non_iac_stores": [
+    "supabase.prd", "supabase.inngest", "doppler.secrets", "betterstack.logs",
+    "r2.terraform_state_backend", "redis.session_store"
+  ],
+  "stores": [
+    {
+      "store": "hcloud_volume.workspaces_luks",
+      "kind": "guest-luks-volume",
+      "device_binding": {
+        "volume": "hcloud_volume.workspaces_luks",
+        "attachment": "hcloud_volume_attachment.workspaces_luks",
+        "mapper": "workspaces"
+      },
+      "at_rest": {
+        "mechanism": "luks",
+        "evidence": "apps/web-platform/infra/workspaces-cutover.sh:2030,2041 (cryptsetup luksFormat/luksOpen, MAPPER_NAME=${WORKSPACES_MAPPER_NAME:-workspaces}); key: random_password.workspaces_luks + doppler_secret.workspaces_luks_key (workspaces-luks.tf); mount gate: soleur-host-bootstrap.sh:564-565",
+        "defends_against": "a seized/RMA'd or snapshot-imaged Hetzner block volume: contents are unreadable without the Doppler-held LUKS passphrase",
+        "does_not_defend": "a leaked service-role credential, an RLS bypass, an SSRF reaching the store, or any read on the live host where the mapper is already unlocked",
+        "disclosed_as": "docs/legal/privacy-policy.md:519",
+        "live_verification": "available"
+      }
+    },
+    {
+      "store": "hcloud_volume.git_data_luks",
+      "kind": "guest-luks-volume",
+      "device_binding": {
+        "volume": "hcloud_volume.git_data_luks",
+        "attachment": "hcloud_volume_attachment.git_data_luks",
+        "mapper": "git-data"
+      },
+      "at_rest": {
+        "mechanism": "luks",
+        "evidence": "apps/web-platform/infra/cloud-init-git-data.yml:160,163 (cryptsetup luksFormat/luksOpen git-data); key: random_password.git_data_luks + doppler_secret.git_data_luks_key (git-data-luks.tf); fstab: cloud-init-git-data.yml:170",
+        "defends_against": "a seized/RMA'd or snapshot-imaged git-data block volume: unreadable without the Doppler-held passphrase",
+        "does_not_defend": "a leaked credential, an app-layer read on the unlocked host, or exfiltration via a compromised git-data process",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:no per-volume host posture probe on the git-data host yet; tracked #6897"
+      }
+    },
+    {
+      "store": "hcloud_volume.workspaces",
+      "kind": "guest-luks-volume",
+      "device_binding": {
+        "volume": "hcloud_volume.workspaces",
+        "attachment": "hcloud_volume_attachment.workspaces",
+        "mapper": "workspaces-plain"
+      },
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "apps/web-platform/infra/server.tf:1569 (format = \"ext4\", no LUKS apparatus)",
+        "defends_against": "nothing at the volume layer; superseded on web-1 by hcloud_volume.workspaces_luks (cutover certified 2026-07-23, verify run 30040444418)",
+        "does_not_defend": "a seized/snapshot disk exposes any workspace data still resident on this volume",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:host attachment state not pulled in the code-sourced audit; tracked #6897",
+        "exception": {
+          "justification": "superseded plaintext resource retained as the pre-cutover rollback backstop; web-1 /mnt/data now runs on the LUKS workspaces_luks mapper",
+          "tracking_issue": "#6897",
+          "reevaluate_when": "the workspaces_luks cutover is confirmed irreversible and the plaintext volume can be detached and destroyed",
+          "expires_on": "2026-10-22"
+        }
+      }
+    },
+    {
+      "store": "hcloud_volume.git_data",
+      "kind": "guest-luks-volume",
+      "device_binding": {
+        "volume": "hcloud_volume.git_data",
+        "attachment": "hcloud_volume_attachment.git_data",
+        "mapper": "git-data-plain"
+      },
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "apps/web-platform/infra/git-data.tf:196 (format = \"ext4\", no LUKS apparatus)",
+        "defends_against": "nothing at the volume layer; the pre-cutover rollback backstop pending the DL-2 wipe",
+        "does_not_defend": "a seized/snapshot disk exposes any git data still resident on this volume",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:host attachment state not pulled in the code-sourced audit; tracked #6897",
+        "exception": {
+          "justification": "plaintext rollback backstop for the git-data LUKS cutover, pending the DL-2 destructive wipe",
+          "tracking_issue": "#6897",
+          "reevaluate_when": "the git_data_luks cutover is confirmed and the DL-2 wipe of the plaintext volume runs",
+          "expires_on": "2026-10-22"
+        }
+      }
+    },
+    {
+      "store": "hcloud_volume.inngest_redis",
+      "kind": "guest-luks-volume",
+      "device_binding": {
+        "volume": "hcloud_volume.inngest_redis",
+        "attachment": "hcloud_volume_attachment.inngest_redis",
+        "mapper": "inngest-redis-plain"
+      },
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "apps/web-platform/infra/inngest-host.tf:288 (format = \"ext4\", no LUKS apparatus)",
+        "defends_against": "nothing at the volume layer",
+        "does_not_defend": "a seized/snapshot disk exposes the Inngest queue + run-state AOF, i.e. in-flight job payloads (user prompts and agent output)",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:the Hetzner API is blind to guest-side LUKS and no inngest-host posture probe exists; tracked #6894",
+        "exception": {
+          "justification": "highest-sensitivity plaintext store; encryption is a guest-side LUKS cutover with its own drain/freeze/blast-radius analysis, out of scope for the audit PR",
+          "tracking_issue": "#6894",
+          "reevaluate_when": "the inngest_redis LUKS cutover lands",
+          "expires_on": "2026-10-22"
+        }
+      }
+    },
+    {
+      "store": "hcloud_volume.registry",
+      "kind": "guest-luks-volume",
+      "device_binding": {
+        "volume": "hcloud_volume.registry",
+        "attachment": "hcloud_volume_attachment.registry",
+        "mapper": "registry-plain"
+      },
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "apps/web-platform/infra/zot-registry.tf:407 (format = \"ext4\", no LUKS apparatus)",
+        "defends_against": "nothing at the volume layer; integrity of the mirror comes from cosign digest-pinning, not at-rest encryption",
+        "does_not_defend": "a seized/snapshot disk exposes OCI blobs + cosign signatures (a disposable GHCR mirror; low sensitivity)",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:no zot-host posture probe; tracked #6895",
+        "exception": {
+          "justification": "disposable GHCR mirror; low sensitivity; destroy+recreate as a LUKS volume is cheap but not urgent",
+          "tracking_issue": "#6895",
+          "reevaluate_when": "the registry volume is recreated with guest-side LUKS",
+          "expires_on": "2026-10-22"
+        }
+      }
+    },
+    {
+      "store": "cloudflare_r2_bucket.cla_evidence",
+      "kind": "provider-bucket",
+      "at_rest": {
+        "mechanism": "provider-managed:cloudflare-r2-default-aes256",
+        "evidence": "Cloudflare R2 encrypts all objects at rest with AES-256 by default (Cloudflare data-security documentation)",
+        "attestation_url": "https://developers.cloudflare.com/r2/reference/data-security/",
+        "retrieved_on": "2026-07-24",
+        "defends_against": "Cloudflare-managed at-rest encryption of stored objects against physical-media compromise in Cloudflare's infrastructure",
+        "does_not_defend": "a leaked R2 API token, an application-layer read, or any access via the credentials that legitimately reach the bucket; a provider-managed key is not a customer-held key",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:attestation formalization (SOC 2 name + retrieval evidence) pending; tracked #6896"
+      }
+    },
+    {
+      "store": "cloudflare_r2_bucket.workspaces_luks_header",
+      "kind": "provider-bucket",
+      "at_rest": {
+        "mechanism": "provider-managed:cloudflare-r2-default-aes256",
+        "evidence": "Cloudflare R2 default AES-256 at-rest encryption (Cloudflare data-security documentation); holds LUKS-header escrow, itself useless without the separately-held passphrase",
+        "attestation_url": "https://developers.cloudflare.com/r2/reference/data-security/",
+        "retrieved_on": "2026-07-24",
+        "defends_against": "physical-media compromise of the escrowed LUKS headers in Cloudflare's infrastructure",
+        "does_not_defend": "a leaked R2 token; note a LUKS header alone cannot decrypt a volume without the passphrase held in a separate Doppler config",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:attestation formalization pending; tracked #6896"
+      }
+    },
+    {
+      "store": "supabase.prd",
+      "kind": "provider-db",
+      "at_rest": {
+        "mechanism": "provider-managed:supabase-postgres-aes256",
+        "evidence": "Supabase encrypts Postgres data at rest with AES-256 (Supabase security documentation)",
+        "attestation_url": "https://supabase.com/docs/guides/security",
+        "retrieved_on": "2026-07-24",
+        "defends_against": "physical-media compromise of the managed Postgres storage",
+        "does_not_defend": "a leaked service-role key, an RLS bypass, or any query via a legitimate connection; the encryption key is provider-managed",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:attestation formalization pending; tracked #6896"
+      }
+    },
+    {
+      "store": "supabase.inngest",
+      "kind": "provider-db",
+      "at_rest": {
+        "mechanism": "provider-managed:supabase-postgres-aes256",
+        "evidence": "Supabase Postgres AES-256 at-rest encryption (Supabase security documentation); the Inngest metadata Postgres project",
+        "attestation_url": "https://supabase.com/docs/guides/security",
+        "retrieved_on": "2026-07-24",
+        "defends_against": "physical-media compromise of the managed Postgres storage",
+        "does_not_defend": "a leaked credential or an application-layer read",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:attestation formalization pending; tracked #6896"
+      }
+    },
+    {
+      "store": "doppler.secrets",
+      "kind": "secret-store",
+      "at_rest": {
+        "mechanism": "provider-managed:doppler-aes256-gcm",
+        "evidence": "Doppler encrypts secrets at rest with AES-256-GCM (Doppler security documentation)",
+        "attestation_url": "https://www.doppler.com/security",
+        "retrieved_on": "2026-07-24",
+        "defends_against": "physical-media compromise of Doppler's secret storage",
+        "does_not_defend": "a leaked Doppler service token or a compromised host with a live token; the LUKS passphrases themselves live here, so a Doppler compromise is a key-custody compromise",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:attestation formalization pending; tracked #6896"
+      }
+    },
+    {
+      "store": "betterstack.logs",
+      "kind": "log-sink",
+      "at_rest": {
+        "mechanism": "provider-managed:betterstack-encrypted-at-rest",
+        "evidence": "Better Stack Logs encrypts stored log data at rest (Better Stack security documentation); source 2457081",
+        "attestation_url": "https://betterstack.com/security",
+        "retrieved_on": "2026-07-24",
+        "defends_against": "physical-media compromise of the log store",
+        "does_not_defend": "a leaked Better Stack API token; note log sanitization at the emitter is the primary control against sensitive data reaching the sink",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:attestation formalization pending; tracked #6896"
+      }
+    },
+    {
+      "store": "r2.terraform_state_backend",
+      "kind": "provider-bucket",
+      "at_rest": {
+        "mechanism": "provider-managed:cloudflare-r2-default-aes256",
+        "evidence": "the R2-backed Terraform state bucket; Cloudflare R2 default AES-256 at-rest encryption (in-repo comments in doppler-write-token.tf:23 / ghcr-minter-doppler-token.tf:36 previously asserted 'encrypted' with no attestation — now substantiated)",
+        "attestation_url": "https://developers.cloudflare.com/r2/reference/data-security/",
+        "retrieved_on": "2026-07-24",
+        "defends_against": "physical-media compromise of the Terraform state store",
+        "does_not_defend": "a leaked R2 token; Terraform state contains resource metadata and any non-sensitive-marked values",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:attestation formalization pending; tracked #6896"
+      }
+    },
+    {
+      "store": "redis.session_store",
+      "kind": "provider-db",
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "model.c4:218 models sessionStore as 'TLS, requirepass, EU (Phase 4a)'; at-rest posture unstated in code",
+        "defends_against": "nothing asserted at the at-rest layer pending confirmation",
+        "does_not_defend": "a seized/snapshot disk may expose session state until the at-rest posture is confirmed or LUKS is applied",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:session-store host posture not pulled in the code-sourced audit; tracked #6897",
+        "exception": {
+          "justification": "at-rest posture unconfirmed from code alone; recorded as an exception rather than asserted, pending a live pull",
+          "tracking_issue": "#6897",
+          "reevaluate_when": "the session-store host at-rest posture is measured (or LUKS applied)",
+          "expires_on": "2026-10-22"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "connection": "web-platform server -> Supabase Postgres/PostgREST",
+      "enforced_at": "apps/web-platform/lib/supabase/{client,server,service,tenant}.ts",
+      "in_transit": {
+        "tls": "https (Supabase REST) / TLS 1.2+",
+        "cert_verification": "on",
+        "does_not_defend": "a leaked anon/service key; TLS protects the channel, not the credential",
+        "disclosed_as": "docs/legal/data-protection-disclosure.md:316"
+      }
+    },
+    {
+      "connection": "web hosts -> zot registry (10.0.1.30:5000)",
+      "enforced_at": "apps/web-platform/infra/zot-registry.tf / model.c4:268",
+      "in_transit": {
+        "tls": "none (plain HTTP on the private network by design)",
+        "cert_verification": "off",
+        "does_not_defend": "a passive on-net attacker could read pulled image bytes; integrity (not confidentiality) is provided by cosign digest-pinning",
+        "disclosed_as": "not-publicly-claimed",
+        "exception": {
+          "justification": "private-network-only registry link; integrity comes from cosign digest-pinning, not TLS; image bytes are public OCI layers",
+          "tracking_issue": "#6897",
+          "reevaluate_when": "the registry is exposed beyond the private network, or TLS is added to the link",
+          "expires_on": "2026-10-22"
+        }
+      }
+    },
+    {
+      "connection": "hosts -> Better Stack (heartbeats + Logs API)",
+      "enforced_at": "apps/web-platform/infra/luks-monitor.sh + the heartbeat curls",
+      "in_transit": {
+        "tls": "https / TLS 1.2+",
+        "cert_verification": "on",
+        "does_not_defend": "a leaked Better Stack token",
+        "disclosed_as": "not-publicly-claimed"
+      }
+    }
+  ]
+}

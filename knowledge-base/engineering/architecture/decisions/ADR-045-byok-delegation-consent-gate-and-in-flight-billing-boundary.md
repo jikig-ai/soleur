@@ -1,5 +1,4 @@
 ---
-adr: ADR-045
 title: BYOK delegation consent gate (gate-in-SQL) + the in-flight billing boundary on consent withdrawal
 status: accepted
 date: 2026-05-29

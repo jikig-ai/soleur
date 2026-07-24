@@ -43,6 +43,7 @@ export interface RoutineMeta {
 }
 
 export const ROUTINE_METADATA: Record<string, RoutineMeta> = {
+  "cron-action-required-sla": { description: "Weekly staleness contract for the action-required queue: escalates aging ops asks and auto-expires dead chores (fail-safe, never closes an ops ask).", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Weekly · Fri 12:00 UTC", manualTrigger: "allowed" },
   "cron-agent-native-audit": { description: "Audits the codebase for agent-native architecture violations and files scored findings as GitHub issues.", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Monthly · 15th 09:00 UTC", manualTrigger: "allowed" },
   "cron-anthropic-cost-report": { description: "Daily pull of the Anthropic Admin cost & usage API; emits an authoritative per-model + org-total spend marker to Better Stack.", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Daily (06:17 UTC)", manualTrigger: "allowed" },
   "cron-anthropic-credit-probe": { description: "Hourly 1-token canary on the operator Anthropic API key; pages Sentry when credit is exhausted or the key is invalid.", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Hourly (:47)", manualTrigger: "allowed" },
@@ -69,6 +70,7 @@ export const ROUTINE_METADATA: Record<string, RoutineMeta> = {
   "cron-github-cidr-refresh": { description: "Refreshes the GitHub egress IP allowlist from /meta daily and self-heals the firewall on rotation.", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Daily 06:41 UTC", manualTrigger: "allowed" },
   "cron-growth-audit": { description: "Weekly audit of website content quality, AEO and technical SEO; files an action plan and issues.", domain: "Marketing", ownerRole: "CMO", scheduleLabel: "Weekly · Mon 07:00 UTC", manualTrigger: "allowed" },
   "cron-growth-execution": { description: "Applies queued keyword optimizations to stale priority pages twice a month.", domain: "Marketing", ownerRole: "CMO", scheduleLabel: "1st & 15th 10:00 UTC", manualTrigger: "confirm" },
+  "cron-inngest-config-drift": { description: "Compares the Inngest host's applied config digest vs the promoted pointer and alarms on drift (ADR-135); dormant until the #6178 cutover.", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Dormant until #6178 cutover (event-only)", manualTrigger: "confirm" },
   "cron-inngest-cron-watchdog": { description: "Liveness beacon every 4 hours — its own check-in proves the Inngest cron scheduler is alive.", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Every 4h", manualTrigger: "allowed" },
   "cron-kb-template-health": { description: "Hourly health probe of the knowledge-base template endpoint; files a P1 ops issue on drift.", domain: "Engineering", ownerRole: "CTO", scheduleLabel: "Hourly", manualTrigger: "allowed" },
   "cron-legal-audit": { description: "Quarterly legal/compliance audit of the codebase and site content; files findings as GitHub issues.", domain: "Legal", ownerRole: "CLO", scheduleLabel: "Quarterly · 1st 11:00 UTC", manualTrigger: "confirm" },

@@ -15,6 +15,15 @@
 # dependents that terraform replaces because they interpolate the NEW server id:
 #   - hcloud_server_network.inngest        (network.tf; server_id is ForceNew -> replace)
 #   - hcloud_volume_attachment.inngest_redis (inngest-host.tf; server_id is ForceNew -> replace)
+#   - doppler_service_token.inngest        (#6178: an UPSTREAM ForceNew that CAUSES the
+#     recreate. `access` is immutable on a Doppler service token, so an access change (e.g.
+#     the read->read/write flip #6889 needs for the on-host cutover FSM) destroys+recreates
+#     the token -> new `.key` -> user_data changes (no ignore_changes=[user_data]) -> host
+#     replace. Admitting it lets that token-rotation-driven recreate flow through THIS gated,
+#     AOF-preserving path instead of an ungated direct `terraform apply`. It is in-scope by
+#     nature: the plan is STILL required to replace hcloud_server.inngest AND preserve the
+#     Redis volume, so admitting the token cannot let a destructive plan through — a token
+#     rotation that did NOT cascade to a host replace would fail inngest_server_replaced==1.)
 # This allow-set was DERIVED (2026-06, #6178) from the then-current web-2-recreate golden
 # fixture, which showed that a scoped `-replace` of an hcloud server touches EXACTLY
 # server + server_network + volume_attachment — hcloud_firewall_attachment.* (server_ids,
@@ -55,7 +64,8 @@ inngest_host_replace_gate() {
       def allow: [
         "hcloud_server.inngest",
         "hcloud_server_network.inngest",
-        "hcloud_volume_attachment.inngest_redis"
+        "hcloud_volume_attachment.inngest_redis",
+        "doppler_service_token.inngest"
       ];
       $p[0] as $plan
       | {

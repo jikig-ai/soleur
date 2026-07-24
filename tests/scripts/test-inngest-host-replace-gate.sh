@@ -30,19 +30,43 @@ trap 'rm -rf "$TMP"' EXIT
 # A resource_change object with the given address + actions array.
 rc_obj() { printf '{"address":"%s","change":{"actions":[%s]}}' "$1" "$2"; }
 
-# The 3 allowed replaces (server + 2 id-referencing dependents), each delete+create.
+# The 4 allowed replaces (server + 2 id-referencing dependents + the token whose ForceNew
+# access change CAUSES the recreate, #6178), each delete+create.
 SERVER_REPLACE="$(rc_obj 'hcloud_server.inngest' '"delete","create"')"
 NET_REPLACE="$(rc_obj 'hcloud_server_network.inngest' '"delete","create"')"
 VA_REPLACE="$(rc_obj 'hcloud_volume_attachment.inngest_redis' '"delete","create"')"
+TOKEN_REPLACE="$(rc_obj 'doppler_service_token.inngest' '"delete","create"')"
 
 write_plan() { printf '{"resource_changes":[%s]}' "$1" > "$TMP/plan.json"; }
 
-# --- Test 1: PASS — the exact scoped recreate (3 replaces, volume preserved) ---
+# --- Test 1: PASS — the exact scoped recreate (server + 2 deps + token, volume preserved) ---
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${TOKEN_REPLACE}"
+if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  pass
+else
+  fail "T1: exact scoped inngest recreate (incl. token ForceNew) should PASS (rc=0)"
+fi
+
+# --- Test 1b: PASS — server + deps WITHOUT the token (a cloud-init-only recreate, e.g. the
+#     #6887 allowlist edit) is still exactly scoped. Admitting the token did not make it
+#     MANDATORY — it is permitted, not required. ---
 write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE}"
 if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
   pass
 else
-  fail "T1: exact scoped inngest recreate should PASS (rc=0)"
+  fail "T1b: a cloud-init-only recreate (no token change) should still PASS (rc=0)"
+fi
+
+# --- Test 1c: FAIL (non-vacuity for the allow-set widening) — a DIFFERENT doppler token must
+#     still ABORT. Proves the allow-set is EXACT-equality, not a substring/prefix match on
+#     'doppler_service_token' that would admit any token (e.g. the read/write arm-write token,
+#     which must NEVER ride a host replace). ---
+OTHER_TOKEN="$(rc_obj 'doppler_service_token.inngest_arm_write' '"delete","create"')"
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${OTHER_TOKEN}"
+if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T1c: a non-inngest doppler_service_token change must ABORT (rc=1) — allow-set is exact-equality"
+else
+  pass
 fi
 
 # --- Test 2: FAIL — Redis AOF volume destroyed (the preservation invariant) ---

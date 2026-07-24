@@ -54,6 +54,7 @@ If the command fails (e.g., offline, no remote), every path-gated check falls ba
 | 9 (Node-only encodings) | Always runs (uses `git ls-files`, full-universe scan — does NOT use the cached path-set; see Sharp Edges). |
 | 10 (Discoverability test) | Zero matches for the canonical sensitive-path regex (re-use Check 6 SSOT). |
 | 11 (Register drift) | Zero matches for `(^\|/)apps/web-platform/supabase/migrations/.*\.sql$`, `(^\|/)apps/web-platform/server/workspace-resolver\.ts$`, or `(^\|/)knowledge-base/engineering/architecture/domain-model\.md$` (empty/missing cache → run, never SKIP). |
+| 12 (Encryption posture) | Zero matches for `\.tf$`, `supabase/migrations/.*\.sql$`, `cloud-init.*\.ya?ml$`, `docker-compose.*\.ya?ml$` (empty/missing cache → run, never SKIP). |
 | Not-Bare-Repo | Always runs. |
 
 For PR #3488-class diffs (lockfile bumps + orphan-cleanup deletions), Checks 1, 2, 5, 6, 7, 8 fast-skip → Checks 3 (lockfile fires), 4 (env isolation always), 9 (always), Not-Bare-Repo (always) execute. Of those four, only Check 3 and Check 9 do "real work" against the diff; Check 4 and Not-Bare-Repo are constant-cost.
@@ -817,7 +818,7 @@ fi
 Check 10 executes `$CMD` with the operator's ambient **file-backed** CLI auth reachable.
 `env -i` in Step 10.5 scrubs environment variables but **not** credentials on disk,
 because `HOME` is deliberately preserved — the Doppler CLI reads a live `dp.ct.*` token
-from `~/.doppler/.doppler.yaml`. Do not cite `env -i` as a mitigation for a
+from its on-disk config in the home Doppler directory (`~/.doppler/`). Do not cite `env -i` as a mitigation for a
 credential-bearing command.
 
 This reject is required because fixing the folded-scalar parser (#6772) is a **fail-open
@@ -833,17 +834,26 @@ cannot constrain what a folded command *is* — only the verb rejects here can.
 # that would be executed.
 CMD_DEQ="${CMD//[\"\'\\]/}"
 if [[ "$CMD_DEQ" =~ (^|[[:space:]]|/)(doppler|gh|aws|supabase|stripe|hcloud|wrangler|terraform|flyctl|vercel)([[:space:]]|$) ]]; then
-  echo "FAIL: discoverability_test.command invokes a credentialed CLI; refusing to run. Check 10 executes with the operator's ambient file-backed CLI auth reachable (env -i does NOT scrub it — \$HOME is preserved, so ~/.doppler/.doppler.yaml, ~/.ssh/id_ed25519, ~/.netrc, ~/.git-credentials, ~/.aws/credentials, ~/.config/gcloud/credentials.db and ~/.docker/config.json are all readable). Use an unauthenticated probe, or see the Check-10 credentialed-probe design issue if this probe genuinely needs credentials."
+  echo "FAIL: discoverability_test.command invokes a credentialed CLI; refusing to run. Check 10 executes with the operator's ambient file-backed CLI auth reachable (env -i does NOT scrub it — \$HOME is preserved, so the Doppler CLI token, SSH private keys, netrc, git credentials, AWS credentials, the gcloud credentials database, and the Docker config are all readable). Use an unauthenticated probe, or see the Check-10 credentialed-probe design issue if this probe genuinely needs credentials."
   exit 1
 fi
 ```
 
 **This is a DENYLIST, and a denylist cannot be complete against a preserved `$HOME`.**
 It does NOT catch indirect invocation — `bash scripts/foo.sh` whose body self-wraps
-`doppler run -c prd`, a `curl --data-binary @~/.doppler/.doppler.yaml` exfiltration, or any
+`doppler run -c prd`, a `curl --data-binary @<doppler-config>` exfiltration, or any
 credentialed verb not listed. Those remain reachable and are accepted for now; the durable
 fix is an ALLOWLIST of probe verbs (curl/dig/getent/bun/bash), tracked separately. Do not
 describe this reject as though it closed the class.
+<!-- SECURITY (at-mention auto-attach footgun): the exfil example above uses the
+     PLACEHOLDER `<doppler-config-file>`, NOT a real resolvable path. Never write an
+     at-sign immediately followed by a real home/absolute path (tilde-slash,
+     dollar-HOME-slash, or a `/home` `/Users` `/root` `/etc` absolute) in ANY
+     skill/agent/doc that loads into agent context: Claude Code's @-mention auto-attach
+     resolves such a token to the real on-disk file and attaches its CONTENTS to the
+     transcript. Observed 2026-07-22 during PR #6830's ship — the prior literal here
+     resolved to the operator's live Doppler root token and auto-attached it. The guard
+     .github/scripts/test/test-no-at-mention-credfile-footgun.sh enforces this repo-wide. -->
 
 The `(^|[[:space:]]|/)` … `([[:space:]]|$)` boundaries are load-bearing: the `/`
 alternative catches `/usr/local/bin/gh`, and the trailing boundary keeps legitimate
@@ -1021,6 +1031,46 @@ breaks the numeric test).
   newest `apps/web-platform/supabase/migrations/*.sql`."
 - **SKIP** — no business-rule surface (or the register) in the diff.
 
+### Check 12: Encryption Posture
+
+Enforces the encryption-posture ledger's maintenance contract (ADR-140): every persistent
+store and cross-component connection Soleur operates must carry a ledger row whose cited
+evidence resolves to real code, and any accepted plaintext/unverified-TLS exception must carry
+an open, unexpired tracking issue. Consumes the deterministic analyzer
+`lint-encryption-posture.py` (repo-root `scripts/`) — this check does NOT reimplement its PASS/FAIL logic in
+prose; it shells out and relays the exit code.
+
+**Step 12.1 — diff-scope (fast-path SKIP).** SKIP unless the cached path-set
+(`"$PREFLIGHT_TMP/preflight-diff-files.txt"`) matches a store-class or connection-class surface:
+
+```bash
+DIFF="$PREFLIGHT_TMP/preflight-diff-files.txt"
+# Fail-safe: never SKIP on a missing/empty cache — recompute inline, then run if still empty.
+if [[ ! -s "$DIFF" ]]; then git diff --name-only origin/main...HEAD > "$DIFF" 2>/dev/null || true; fi
+if [[ -s "$DIFF" ]] && ! grep -qE '\.tf$|supabase/migrations/.*\.sql$|cloud-init.*\.ya?ml$|docker-compose.*\.ya?ml$' "$DIFF"; then
+  echo "SKIP — no store-class or connection-class surface (*.tf / migration / cloud-init / docker-compose) in diff"; exit 0
+fi
+```
+
+This mirrors "I do not apply", never "I cannot prove it" (`2026-04-27-preflight-security-gates-skip-vs-fail-defaults.md`) — an empty/missing diff cache falls through to run, it never SKIPs by default.
+
+**Step 12.2 — run the Layer A sweep:**
+
+```bash
+python3 scripts/lint-encryption-posture.py --repo-sweep > "$PREFLIGHT_TMP/encryption-posture.txt" 2>&1; rc=$?
+```
+
+**Result:**
+
+- **PASS** — `rc == 0`. Every store/connection in the repo has a ledger row whose cited evidence
+  resolves to real code, and every accepted exception carries an open, unexpired tracking issue.
+- **FAIL** — `rc != 0`: relay the script's own output (`cat "$PREFLIGHT_TMP/encryption-posture.txt"`)
+  verbatim — the classes it can report include an unledgered store, an unresolvable citation, an
+  expired or untracked exception, or a store/connection disclosed as encrypted while its ledger row
+  says otherwise. Do not re-derive the verdict from this SKILL.md — the script is the single source
+  of truth for the pass/fail decision.
+- **SKIP** — the cached path-set contains zero `.tf` / store-class / connection-class paths.
+
 ## Phase 2: Aggregate Go/No-Go Report
 
 After all checks complete, aggregate results into a structured report:
@@ -1072,7 +1122,7 @@ Preflight validation passed. Return control to the calling orchestrator.
 - **Rule order in `parse-form-a.awk` IS the bug (#6772).** The inline rule `/^[[:space:]]*command:/` matches EVERY `command:` line, including `command: >-` and `command: |`. If it is ever moved ahead of the fold/block header rules it returns the literal indicator, which then self-rejects against Step 10.5's shell-active `>` branch — a check that cannot parse its input, reporting a shell injection the plan does not have. AC1 and fixtures F1–F3 are the pins; do not drop them when refactoring.
 - **Anchoring the header regex is a bug generator.** A bare `$` anchor made `command: >- # note` fall through to inline and reproduce #6772 exactly. Any future tightening of the header must keep the comment-tolerant `(#.*)?$` tail and re-run the F1–F3 comment column.
 - **`indent()` returns 0 on a blank line**, which is `<= key` for every scalar. The blank-line skip rule MUST stay above the indent terminator or every scalar ends at its first blank line (fixture N6).
-- **`env -i` does not scrub file-backed CLI auth.** Step 10.5 preserves `HOME`, so the Doppler CLI's `~/.doppler/.doppler.yaml` token stays reachable by any command Check 10 executes. Never cite `env -i` as a mitigation for a credential-bearing command — Step 10.4's verb rejects are what cover that class.
+- **`env -i` does not scrub file-backed CLI auth.** Step 10.5 preserves `HOME`, so the Doppler CLI's on-disk token stays reachable by any command Check 10 executes. Never cite `env -i` as a mitigation for a credential-bearing command — Step 10.4's verb rejects are what cover that class.
 - **The shell-active reject does not bound a folded command.** Folding joins with a space, so a folded scalar has no `;`/`|`/`$()` by construction and passes Step 10.5 automatically — it can append *arguments* but never chain a command. That makes fold safer than block for injection, but it also means no token in the Step 10.5 set constrains what a folded command *is*. Reasoning "the reject will catch it" about a folded command is reasoning about the wrong gate.
 - **`bash -c "$CMD"` stdout always ends in `\n`.** The matcher MUST normalize trailing newlines (via `sanitize()` or `${var%$'\n'}`) before substring comparison, or `expected_output: 200` fails when production correctly emits `200\n`.
 - **The `\b` word-boundary trap.** Bash `[[ $x =~ \bssh \b ]]` matches `ssh ` only when whitespace is on BOTH sides; trailing-EOF or trailing-newline `ssh ` does NOT match. Always use `(^|[[:space:]])ssh([[:space:]]|$)` — the canonical Check 10 reject form — when checking for `ssh ` in operator-facing prose.

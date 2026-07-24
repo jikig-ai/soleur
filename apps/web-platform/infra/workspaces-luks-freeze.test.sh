@@ -23,6 +23,23 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CUTOVER="$SCRIPT_DIR/workspaces-cutover.sh"
 WORKFLOW="$SCRIPT_DIR/../../../.github/workflows/workspaces-luks-cutover.yml"
+# #6807 — the VERIFY workflow. Named here because the /api/health gate below must cover BOTH
+# workflows: the cutover's canary was corrected in #6701 but the sweep never reached the verify
+# workflow, which then sat structurally incapable of passing until #6807. (Note that
+# workspaces-luks-verify.test.sh does NOT cover this file — despite the name it covers
+# verify_byte_identity.)
+VERIFY_WF="$SCRIPT_DIR/../../../.github/workflows/workspaces-luks-verify.yml"
+
+# --- #6807 per-arm probe accounting -----------------------------------------
+# Sleeps MUST be attributed per endpoint arm, never summed: the curl stub serves both /health and
+# readyz through one `case`, so a global total lets readyz retries satisfy a /health assertion.
+# awk, not `head | grep -c`: no pipe, per the harness no-pipe rule.
+sleeps_before_readyz() { awk '/^curl .*readyz/{exit} /^sleep /{n++} END{print n+0}' "$CALLS"; }
+health_probe_count()   { awk '/^curl .*readyz/{exit} /^curl /{n++} END{print n+0}' "$CALLS"; }
+readyz_probe_count()   { awk '/^curl .*readyz/{n++} END{print n+0}' "$CALLS"; }
+# Any sleep whose ARGUMENT is not the expected interval. Recording the argument (not just the call)
+# is what makes the INTERVAL seam observable without a second channel.
+bad_sleep_args()       { awk -v want="$1" '/^sleep /{if ($2 != want) n++} END{print n+0}' "$CALLS"; }
 
 # shellcheck source=apps/web-platform/infra/workspaces-luks-harness.sh
 . "$SCRIPT_DIR/workspaces-luks-harness.sh"
@@ -240,12 +257,231 @@ nhas 'app\.soleur\.ai/api/health' \
 hasF '/internal/readyz' \
   && ok "T22 app_canary also asserts /internal/readyz (mount-coupled readiness)" \
   || no "T22 app_canary relies on /health alone — a 200-always probe that cannot fail on an empty \$MOUNT"
+# T22d — the readyz probe runs INSIDE the container (docker exec), not a bare host curl. A host-side
+# curl of the bridge-published port reaches the app with the docker bridge gateway as its peer → 403
+# (readyz_gate_regression) → app_canary can never pass. Anchor on the FULL transport, per
+# cq-assert-anchor-not-bare-token: a silent revert to a bare host curl (which still probes readyz and
+# would satisfy T22) must red HERE. The container literal `soleur-web-platform` is asserted
+# DELIBERATELY (not wildcarded) — it locks that the probe targets the RIGHT container and reds on an
+# incomplete rename. SIBLING: luks-monitor.test.sh (n2) covers the OTHER consumer (daily monitor)
+# through the OTHER docker stub (the $d/bin/docker PATH-stub form).
+hasF 'docker exec soleur-web-platform curl' \
+  && ok "T22d app_canary probes readyz via docker exec into the container (genuine-loopback peer, not the bridge gateway)" \
+  || no "T22d app_canary readyz probe is a bare host curl — in prod the bridge-gateway peer gets 403 and the cutover can never certify"
 run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=200 READYZ_BODY='{"ready":false,"checks":{"workspaces_populated":false}}'
 died && ok "T22b app_canary FAILS when readyz reports ready=false (empty /workspaces)" \
      || no "T22b a cutover serving an EMPTY /workspaces was declared green"
 run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=200 READYZ_BODY=''
 died && ok "T22c app_canary fails closed when readyz is unreachable" \
      || no "T22c an unreachable readyz was treated as success"
+
+# ---------------------------------------------------------------------------
+# T23/T24 — #6807 bounded, classifying canary retry.
+#
+# On 2026-07-20 the real cutover (run 29782780158) probed /health ~590ms after `docker start`, took
+# Cloudflare's instant 521, and aborted a cutover that had in fact SUCCEEDED. `--max-time 20` was no
+# defence: a 521 is a FAST response, not a hang, so the timeout budget is never consumed.
+#
+# Every case pins a REASON CODE via outF 'EMIT_DRIFT: <reason>' (the harness stub echoes it at
+# harness:289). `died()` alone cannot distinguish a structural abort from a deadline abort — both
+# exit non-zero — and the two demand opposite operator responses.
+# ---------------------------------------------------------------------------
+
+# T23a — recovers THROUGH the loop. The retry is load-bearing: without it this case is the exact
+# 2026-07-20 abort. Exactly 2 sleeps, both before readyz is ever reached.
+run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODES="521 521 200"
+if ran && [ "$(sleeps_before_readyz)" = "2" ]; then
+  ok "T23a app_canary recovers through a 521,521,200 sequence with exactly 2 /health-arm sleeps"
+else
+  no "T23a app_canary did not recover through the boot race (rc=$CASE_RC sleeps=$(sleeps_before_readyz) want ran+2) ${CASE_OUT:0:200}"
+fi
+
+# T23b — STRUCTURAL codes fail fast. A 307 is the /api/health regression itself: retrying it would
+# burn the whole budget (and, during a real cutover, dead-man margin) on an answer that will never
+# change. ZERO sleeps is the assertion that proves fail-fast, not merely that it failed.
+run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODES="307"
+if died && [ "$(sleeps_before_readyz)" = "0" ] && outF 'EMIT_DRIFT: health_probe_structural'; then
+  ok "T23b a structural 307 aborts on the FIRST attempt, zero sleeps, reason health_probe_structural"
+else
+  no "T23b structural 307 mishandled (rc=$CASE_RC sleeps=$(sleeps_before_readyz)) ${CASE_OUT:0:200}"
+fi
+
+# T23c — an unknown/retryable code fails SAFE: it burns the full budget, then aborts with a
+# DIFFERENT reason than T23b. 530 is CF 1033 ("tunnel connector not connected"), the code this stack
+# most likely emits during a restart window; classifying it structural would re-create the 2026-07-20
+# bug in a new coat. Sleeps == ATTEMPTS-1 (29), because the loop shape is pinned to NOT sleep after
+# the final attempt — a trailing sleep buys no probe and costs a whole interval of dead-man budget.
+run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODES="530"
+if died && [ "$(sleeps_before_readyz)" = "29" ] && outF 'EMIT_DRIFT: health_probe_deadline'; then
+  ok "T23c a saturating retryable 530 burns the full bound (29 sleeps) then aborts health_probe_deadline"
+else
+  no "T23c retryable-unknown mishandled (rc=$CASE_RC sleeps=$(sleeps_before_readyz) want 29) ${CASE_OUT:0:200}"
+fi
+
+# T23d/T23e — THE SEAM-UNSET CASE. Every case above drives the knobs, so all of them would pass
+# against a build whose PRODUCTION defaults were broken (or absent). `env -u` genuinely UNSETS the
+# knobs, sealing the subshell against inherited env — run_case's `env "$@"` has no -i, so without
+# this an exported knob in the operator's shell would silently rewrite the assertion.
+# The expected 30 is HARDCODED on purpose: deriving it from the source would make the test agree
+# with whatever the source says, which is not a test.
+run_case "$CUTOVER" 'app_canary' 'app_canary' \
+  -u WORKSPACES_CANARY_ATTEMPTS -u WORKSPACES_CANARY_INTERVAL_S CURL_CODES="530"
+if died && [ "$(health_probe_count)" = "30" ]; then
+  ok "T23d with the knobs UNSET the canary probes exactly the literal production count (30)"
+else
+  no "T23d production default drifted or the env seal leaked (probes=$(health_probe_count) want 30) ${CASE_OUT:0:200}"
+fi
+if [ "$(bad_sleep_args 3)" = "0" ] && [ "$(sleeps_before_readyz)" -gt 0 ]; then
+  ok "T23e with the knobs UNSET every recorded sleep argument is the literal production interval (3)"
+else
+  no "T23e sleep interval drifted (non-3 args=$(bad_sleep_args 3) sleeps=$(sleeps_before_readyz))"
+fi
+
+# T23f — THE FLOOR. `:-` substitutes only for unset-or-empty, so it catches NEITHER of the two real
+# silent-disable hazards: =0 makes the loop zero-iteration (a canary that cannot fail — it would
+# have certified 2026-07-20 green) and a non-numeric value makes `[ abc -le n ]` error. Both must
+# still probe at least once.
+for bad in 0 abc; do
+  run_case "$CUTOVER" 'app_canary' 'app_canary' WORKSPACES_CANARY_ATTEMPTS="$bad" CURL_CODES="530"
+  # EXACTLY 1, not >=1: `>=1` is satisfied by a single-shot probe, so it would pass identically
+  # against a build with no floor at all. Pinning 1 asserts the clamp actually took the value to 1
+  # rather than the loop happening to run.
+  if died && [ "$(health_probe_count)" = "1" ]; then
+    ok "T23f WORKSPACES_CANARY_ATTEMPTS=$bad clamps to exactly 1 probe (the floor holds)"
+  else
+    no "T23f WORKSPACES_CANARY_ATTEMPTS=$bad produced a canary that cannot fail (probes=$(health_probe_count) want 1, rc=$CASE_RC)"
+  fi
+done
+
+# T24 — readyz classification, four arms, one reason code each.
+#
+# The arm that matters most is the gate regression: readiness.ts:113 answers a non-loopback request
+# with `403 {"error":"forbidden"}` — VALID JSON that simply is not ready:true. Classified body-first
+# it lands in the not-ready arm and pages "the container is serving an EMPTY /workspaces": a
+# confidently-wrong sole-copy DATA-LOSS verdict for what is really a routing bug. Status before body.
+run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=200 \
+  READYZ_CODES="000 200" READYZ_BODIES='{"ready":true} {"ready":true}'
+# The probe COUNT is the load-bearing half. `ran` alone passes against a single-shot probe that
+# happened to get ready:true on its only attempt — it would not prove a retry occurred at all.
+if ran && [ "$(readyz_probe_count)" = "2" ]; then
+  ok "T24a readyz retries an unreachable first attempt and succeeds on the second (2 probes)"
+else
+  no "T24a readyz did not retry a transport failure (probes=$(readyz_probe_count) want 2, rc=$CASE_RC) ${CASE_OUT:0:200}"
+fi
+
+run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=200 \
+  READYZ_BODIES='{"ready":false,"checks":{"workspaces_writable":true,"workspaces_populated":false}}'
+if died && outF 'EMIT_DRIFT: readyz_not_ready'; then
+  ok "T24b a saturating ready:false aborts readyz_not_ready"
+else
+  no "T24b ready:false mishandled (rc=$CASE_RC) ${CASE_OUT:0:200}"
+fi
+# ready:false is answered with 503, not 200 (readiness.ts:119). A 503 sits in the generic RETRYABLE
+# set — correct for /health, fatal here: retrying a DETERMINATE not-ready answer would burn the
+# budget and report a timeout for a host that plainly said it is not ready, converting a real
+# data-loss signal into a deadline. Terminal on the first answer, hence exactly one probe.
+[ "$(readyz_probe_count)" = "1" ] \
+  && ok "T24b2 a determinate 503 ready:false is TERMINAL — not retried into a false deadline verdict" \
+  || no "T24b2 readyz retried a determinate not-ready answer (probes=$(readyz_probe_count) want 1)"
+
+run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=200 \
+  READYZ_CODES="200" READYZ_BODIES='<html>502-from-a-proxy</html>'
+if died && outF 'EMIT_DRIFT: readyz_unparseable'; then
+  ok "T24c an unparseable 200 body aborts readyz_unparseable — a proxy fault is never reported as data loss"
+else
+  no "T24c unparseable body mishandled (rc=$CASE_RC) ${CASE_OUT:0:200}"
+fi
+
+run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=200 \
+  READYZ_CODES="403" READYZ_BODIES='{"error":"forbidden"}'
+if died && outF 'EMIT_DRIFT: readyz_gate_regression'; then
+  ok "T24d a 403 gate regression aborts readyz_gate_regression, NOT readyz_not_ready (status before body)"
+else
+  no "T24d a loopback-gate regression was classified as data loss — the confidently-wrong verdict (rc=$CASE_RC) ${CASE_OUT:0:200}"
+fi
+
+# T24e — the gate-regression set is {307,401,403,404,405} and only 403 was ever a fixture. Dropping
+# 404|405 (or 307|401) from wl_probe_readyz reclassifies them as data-loss/unreachable and SURVIVES
+# a 403-only suite. Iterate EVERY member so the set is proven, not sampled. (503 is NOT here — it is
+# the determinate not-ready status; 200 is success.)
+for gr in 307 401 404 405; do
+  run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=200 \
+    READYZ_CODES="$gr" READYZ_BODIES='{"error":"blocked"}'
+  if died && outF 'EMIT_DRIFT: readyz_gate_regression'; then
+    ok "T24e readyz $gr => readyz_gate_regression (structural, never data-loss)"
+  else
+    no "T24e readyz $gr misclassified — a de-routed readyz would page data-loss or burn the budget (rc=$CASE_RC) ${CASE_OUT:0:200}"
+  fi
+done
+
+# T23g — the /health STRUCTURAL set is {307,401,403,404,405,525,526} and only 307 was ever a fixture.
+# Dropping 525|526 reclassifies them retryable → a determinate CF-edge structural fault burns the
+# full ~237s budget (and dead-man margin) instead of failing fast. Iterate every member.
+for st in 401 403 404 405 525 526; do
+  run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODES="$st"
+  if died && [ "$(sleeps_before_readyz)" = "0" ] && outF 'EMIT_DRIFT: health_probe_structural'; then
+    ok "T23g /health $st fails fast (structural, zero sleeps)"
+  else
+    no "T23g /health $st is not fail-fast structural (sleeps=$(sleeps_before_readyz) rc=$CASE_RC) — budget-burn on a determinate fault ${CASE_OUT:0:160}"
+  fi
+done
+
+# T23h — the INTERVAL floor's untested twin. T23e only asserts the DEFAULT 3; nothing pins the
+# `-ge 0` clamp on a bad interval, so removing it survives. A negative/non-numeric interval must
+# fall back to 3, not to `sleep -1` (error) or `sleep abc` (error → hot loop under a real sleep).
+for badint in -1 abc; do
+  run_case "$CUTOVER" 'app_canary' 'app_canary' \
+    WORKSPACES_CANARY_INTERVAL_S="$badint" CURL_CODES="530"
+  if died && [ "$(bad_sleep_args 3)" = "0" ] && [ "$(sleeps_before_readyz)" -gt 0 ]; then
+    ok "T23h WORKSPACES_CANARY_INTERVAL_S=$badint clamps to the literal 3 (interval floor holds)"
+  else
+    no "T23h bad interval $badint was not clamped (non-3 args=$(bad_sleep_args 3) sleeps=$(sleeps_before_readyz))"
+  fi
+done
+
+# T25 — ORDERING. app_canary must precede disarm_dead_man. CANARY_OK=1 is set by the HOST canary
+# before this point, so cleanup() will not roll back; if the dead-man were disarmed FIRST, an
+# app-level failure would have zero automated recovery on the one gate that proves user-facing
+# health. Comments stripped first: this file discusses the ordering in prose right above the code.
+#
+# SCOPED TO THE MAIN BODY. rollback() also calls disarm_dead_man on its own line, and it is defined
+# far ABOVE the main body — so an unscoped `head -1` picks the rollback call and compares two lines
+# that have no ordering relationship, failing (or passing) for a reason unrelated to the property.
+# The sourced-detection guard is the boundary between definitions and the main body.
+T25BODY="$RUN_SCRATCH/t25body"
+grep -vE '^[[:space:]]*#' "$CUTOVER" > "$T25BODY" || :
+t25_guard=$(grep -nE 'BASH_SOURCE\[0\]:-\$0.*!=' "$T25BODY" | head -1 | cut -d: -f1 || true)
+if [ -z "$t25_guard" ]; then
+  no "T25 could not locate the sourced-detection guard — the main-body boundary is unfindable, so the ordering assertion would be scoped to the wrong region"
+  t25_canary=""; t25_disarm=""
+else
+  awk -v g="$t25_guard" 'NR>g' "$T25BODY" > "$T25BODY.main"
+  t25_canary=$(grep -nE '^[[:space:]]*app_canary[[:space:]]*$' "$T25BODY.main" | head -1 | cut -d: -f1 || true)
+  t25_disarm=$(grep -nE '^[[:space:]]*disarm_dead_man[[:space:]]*$' "$T25BODY.main" | head -1 | cut -d: -f1 || true)
+fi
+if [ -n "$t25_canary" ] && [ -n "$t25_disarm" ] && [ "$t25_canary" -lt "$t25_disarm" ]; then
+  ok "T25 app_canary is invoked BEFORE disarm_dead_man (the unattended backstop spans the canary)"
+else
+  no "T25 canary/disarm ordering wrong or unfindable (canary=$t25_canary disarm=$t25_disarm)"
+fi
+# T25b — PLACEMENT is not EXECUTION. T25's ordering grep passes even when the call is neutered
+# (`if [ false ]; then app_canary; fi` gates it OFF while keeping the token) — the exact 2026-07-20
+# failure class. The main-body app_canary is an UNCONDITIONAL sibling of resume_writers /
+# disarm_dead_man inside the one `if [ "$DRY_RUN" != "1" ]` block, so its leading whitespace must
+# EQUAL its siblings'. A wrapping conditional deepens the indent; an inline `; app_canary;` fails the
+# own-line anchor. Compare the exact indent string, not just "present".
+t25b_canary_ws="$(grep -nE '^[[:space:]]*app_canary[[:space:]]*$' "$T25BODY.main" 2>/dev/null | head -1 | sed -E 's/^[0-9]+:([[:space:]]*)app_canary.*/\1/' | cat -A | sed 's/\$$//')"
+t25b_disarm_ws="$(grep -nE '^[[:space:]]*disarm_dead_man[[:space:]]*$' "$T25BODY.main" 2>/dev/null | head -1 | sed -E 's/^[0-9]+:([[:space:]]*)disarm_dead_man.*/\1/' | cat -A | sed 's/\$$//')"
+# Also assert app_canary never appears at a DEEPER indent than the sibling in the main body (a
+# nested guard). Count main-body app_canary lines whose indent is strictly longer than the sibling.
+t25b_deeper="$(awk -v sib="$t25b_disarm_ws" '
+  /^[[:space:]]*app_canary[[:space:]]*$/ { match($0,/^[[:space:]]*/); if (RLENGTH > length(sib)) n++ }
+  END { print n+0 }' "$T25BODY.main" 2>/dev/null)"
+if [ -n "$t25b_canary_ws" ] && [ "$t25b_canary_ws" = "$t25b_disarm_ws" ] && [ "${t25b_deeper:-0}" -eq 0 ]; then
+  ok "T25b app_canary is an UNCONDITIONAL sibling (indent matches disarm_dead_man; never nested deeper) — a neutered canary is caught, not just a moved one"
+else
+  no "T25b app_canary indent [$t25b_canary_ws] != sibling [$t25b_disarm_ws] or a deeper-nested occurrence exists (deeper=$t25b_deeper) — it may be gated behind an extra conditional (neutered canary)"
+fi
 # T11b/T11c — the gate strength itself: exactly 200, not any 2xx.
 run_case "$CUTOVER" 'app_canary' 'app_canary' CURL_CODE=307
 died && ok "T11b app_canary fails closed on a 307" || no "T11b app_canary accepted a 307"
@@ -310,9 +546,84 @@ awk '/^assert_mount_quiesced\(\)/,/^}/' "$CUTOVER" | grep -vE '^[[:space:]]*#' >
 [ "$(grep -cE 'lsof.*\| *grep' "$G4BODY" || true)" -eq 0 ] \
   && ok "AC5 the G4 body contains no \`lsof … | grep\` pipe (comments stripped first)" \
   || no "AC5 a pipe is back in the G4 predicate — size-dependent SIGPIPE fail-open"
-[ "$(grep -c 'app\.soleur\.ai/api/health' "$CUTOVER" || true)" -eq 0 ] \
-  && ok "AC7 no /api/health reference remains in the cutover script" \
-  || no "AC7 /api/health still referenced"
+# AC7 — WIDENED to both workflows (#6807). The cutover's canary was corrected in #6701 on
+# 2026-07-19, ONE DAY before the cutover, and the sweep never reached the verify workflow — which
+# then sat structurally incapable of passing. A gate scoped to one file is what let that happen.
+#
+# The pattern is now BARE `/api/health` rather than the host-qualified form: only one of the seven
+# sites in the repo carried `app.soleur.ai`, so the qualified pattern would have missed the very
+# regression it exists to catch. `/api/health/team-membership` is a REAL route and is allowlisted.
+#
+# Comment handling differs per file, deliberately. The cutover is comment-STRIPPED, because its
+# comments legitimately discuss the old endpoint to explain why it was wrong. The verify workflow is
+# NOT stripped: its prose is in scope for this sweep, so a stale claim cannot outlive the assertion
+# it describes. (That is why this file's own explanation above says "/api/health" while the workflow
+# spells it "the API-prefixed health path".)
+AC7BODY="$RUN_SCRATCH/ac7body"
+grep -vE '^[[:space:]]*#' "$CUTOVER" > "$AC7BODY" || :
+ac7_cut=$(grep -oE '/api/health[a-z/-]*' "$AC7BODY" | grep -vcF '/api/health/team-membership' || true)
+ac7_wf=$(grep -oE '/api/health[a-z/-]*' "$VERIFY_WF" | grep -vcF '/api/health/team-membership' || true)
+if [ "$ac7_cut" -eq 0 ] && [ "$ac7_wf" -eq 0 ]; then
+  ok "AC7 no /api/health reference remains in the cutover script OR the verify workflow (team-membership allowlisted)"
+else
+  no "AC7 /api/health still referenced (cutover=$ac7_cut verify-workflow=$ac7_wf) — the #6701 sweep gap is open again"
+fi
+# Non-vacuity: the allowlist must not be so broad that it swallows the bare form. If this pattern
+# ever stops matching, the two counts above become structurally 0 and the gate reports clean forever.
+[ "$(printf '%s\n' 'x /api/health y' | grep -coE '/api/health[a-z/-]*' || true)" -eq 1 ] \
+  && ok "AC7b the /api/health detector still matches a bare occurrence (gate is not vacuous)" \
+  || no "AC7b the /api/health detector matches nothing — the gate above cannot fail"
+
+# AC8 — the dead-man margin. The retry budget added by #6807 extends the window in which
+# app_canary can fail WITHOUT rolling back (CANARY_OK=1 is set by the host canary before it) and
+# WITHOUT reaching disarm_dead_man. On 2026-07-20 that window was 27 minutes and the timer won:
+# it remounted the plaintext volume over a healthy LUKS mount and stranded 27 minutes of sole-copy
+# writes (#6812). So the inequality is not decorative — it is the thing that keeps the retry from
+# eating the backstop.
+#
+# Every operand is EXTRACTED BY SHAPE from its own source file. Hardcoding any of them would let a
+# future knob change (attempts 30 -> 300) sail past a guard that still asserts the old arithmetic.
+ac8_attempts=$(grep -oE 'WORKSPACES_CANARY_ATTEMPTS:-[0-9]+' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9]+$' | head -1 || true)
+ac8_interval=$(grep -oE 'WORKSPACES_CANARY_INTERVAL_S:-[0-9]+' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9]+$' | head -1 || true)
+ac8_maxtime=$(grep -oE '\-\-max-time [0-9]+' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9]+$' | head -1 || true)
+ac8_deadman=$(grep -oE 'WORKSPACES_DEAD_MAN_MIN:-[0-9]+' "$CUTOVER" | grep -oE '[0-9]+$' | head -1 || true)
+# MEASURED, not assumed: freeze/arm 22:11:49.09 -> canary 22:14:50.31 on run 29782780158. This is
+# the ONE hardcoded operand (nothing in-repo to extract it from), and it is a LOWER BOUND: the
+# arm->canary span contains the freeze + full rsync + G3 gate, which scale with total workspace
+# bytes, so real pre-canary elapsed rises with the user base while this constant does not. The ~19min
+# margin absorbs a lot, but a RUNTIME budget check in app_canary (read the arm timestamp, shrink the
+# attempt count if the remaining budget is thin) is the durable fix — deliberately NOT built here
+# (the plan chose a static AC), tracked with the dead-man's own failure modes on #6812.
+ac8_precanary=181
+if [ -n "$ac8_attempts" ] && [ -n "$ac8_interval" ] && [ -n "$ac8_maxtime" ] && [ -n "$ac8_deadman" ]; then
+  # Worst case per probe: every attempt burns the full curl timeout, plus (attempts-1) intervals
+  # (the loop shape does not sleep after the final attempt). TWO probes: /health and readyz.
+  ac8_per=$(( ac8_attempts * ac8_maxtime + (ac8_attempts - 1) * ac8_interval ))
+  ac8_total=$(( 2 * ac8_per + ac8_precanary ))
+  ac8_budget=$(( ac8_deadman * 60 ))
+  if [ "$ac8_total" -lt "$ac8_budget" ]; then
+    ok "AC8 worst-case canary spend + measured pre-canary elapsed (${ac8_total}s) is inside DEAD_MAN_MIN (${ac8_budget}s)"
+  else
+    no "AC8 the retry budget can now outlive the dead-man (${ac8_total}s >= ${ac8_budget}s) — a canary failure would let the timer remount plaintext over a healthy LUKS mount (#6812)"
+  fi
+else
+  no "AC8 could not extract every operand (attempts=$ac8_attempts interval=$ac8_interval maxtime=$ac8_maxtime deadman=$ac8_deadman) — an unextractable operand makes this guard vacuous"
+fi
+# AC10 — RUNNER/HELPER structural-set parity. The verify workflow's runner-side /health loop cannot
+# source the host helper (it runs on the GH runner), so it re-encodes wl_http_class's structural set
+# by hand. That duplication is the #6807 drift class: adding 521 to the helper's structural set, or
+# dropping 525 from the runner, silently reintroduces Bug B in one of the two copies. The workflow
+# COMMENT claims this equality is enforced "by grep" — so it must actually be. Extract the sorted
+# structural code list from each file's case-arm and assert byte-equality. The bound (10 vs 30) is
+# deliberately NOT compared (see the workflow comment).
+ac10_helper="$(grep -oE '^[[:space:]]*307\|[0-9|]+\)[[:space:]]*printf' "$SCRIPT_DIR/workspaces-luks-emit.sh" | grep -oE '[0-9|]+' | tr '|' '\n' | grep -E '^[0-9]+$' | sort -u | tr '\n' ' ')"
+ac10_runner="$(grep -oE '^[[:space:]]*307\|[0-9|]+\)' "$VERIFY_WF" | grep -oE '[0-9|]+' | tr '|' '\n' | grep -E '^[0-9]+$' | sort -u | tr '\n' ' ')"
+if [ -n "$ac10_helper" ] && [ "$ac10_helper" = "$ac10_runner" ]; then
+  ok "AC10 runner /health structural set == wl_http_class structural set ([$ac10_helper])"
+else
+  no "AC10 structural-set DRIFT between the runner loop and wl_http_class (helper=[$ac10_helper] runner=[$ac10_runner]) — Bug B reintroduced in one copy"
+fi
+
 [ "$(grep -c 'no C1 verify' "$WORKFLOW" || true)" -ge 1 ] \
   && ok "AC9 the dry_run description states the rehearsal does not run the C1 verify" \
   || no "AC9 dry_run description still misrepresents what a rehearsal covers"

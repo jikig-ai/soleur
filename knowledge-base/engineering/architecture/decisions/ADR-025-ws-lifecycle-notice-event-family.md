@@ -1,5 +1,4 @@
 ---
-adr: ADR-025
 title: WS lifecycle-notice event family
 status: active
 date: 2026-05-07

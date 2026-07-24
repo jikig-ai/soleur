@@ -45,6 +45,30 @@ if git rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
   exit 1
 fi
 
+# --- Contention instrumentation (#6789) ---
+# Observe-only: /tmp headroom, sibling test-all.sh runs resolved to their
+# worktrees, and machine pressure. Sourced defensively — a missing or broken
+# lib must degrade to a normal run, never block tests. The no-op fallbacks
+# below keep every call site total.
+_TC_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-contention.sh"
+if [[ -f "$_TC_LIB" ]]; then
+  # shellcheck source=scripts/lib/test-contention.sh
+  source "$_TC_LIB" || true
+fi
+# Guard on tc_acquire (the LAST-defined function in the lib): bash parses a
+# sourced file all-or-nothing, so a file truncated at an exact function boundary
+# is the only state where an earlier function exists but a later one does not —
+# checking the last one closes even that edge. If the lib is absent or failed to
+# parse, install no-op stubs for every call site so a broken/missing lib degrades
+# to a normal run rather than aborting the suite.
+if ! declare -F tc_acquire >/dev/null 2>&1; then
+  echo "WARNING: contention instrumentation unavailable ($_TC_LIB); continuing without it." >&2
+  tc_preamble() { :; }
+  tc_epilogue() { :; }
+  tc_tmp_entry_count() { printf '0\n'; }
+  tc_acquire() { :; }
+fi
+
 # --- Test group selector ---
 # TEST_GROUP partitions the suite list across CI matrix shards. Env var wins
 # over positional ($1) so GitHub Actions `env:` blocks and `gh workflow run`
@@ -81,6 +105,13 @@ suites=0
 run_suite() {
   local label="$1"; shift
   suites=$((suites + 1))
+  # Per-suite tempfile delta (#6789, probe for hypothesis H4: a shared derived
+  # tempfile path in some suite reached by this runner). Gated on
+  # TEST_TIMING_LOG so the `find` costs nothing on a default local run.
+  local tmp_before=""
+  if [[ -n "${TEST_TIMING_LOG:-}" ]]; then
+    tmp_before=$(tc_tmp_entry_count)
+  fi
   local start="$EPOCHREALTIME"
   echo "--- $label ---"
   local status="ok"
@@ -102,14 +133,33 @@ run_suite() {
     local end_us=$(( ${end%.*} * 1000000 + 10#${end#*.} ))
     elapsed_ms=$(( (end_us - start_us) / 1000 ))
   fi
+  # Appended as a LABELED trailing field (`tmp_delta=<N>`), never as a bare
+  # positional one: field 3 already carries the `FAIL` marker, so an unlabeled
+  # append would be positionally ambiguous between the ok and FAIL shapes.
+  local tmp_field=""
+  if [[ -n "${TEST_TIMING_LOG:-}" && -n "$tmp_before" ]]; then
+    tmp_field=$'\t'"tmp_delta=$(( $(tc_tmp_entry_count) - tmp_before ))"
+  fi
   if [[ "$status" == "ok" ]]; then
     echo "[ok] $label (${elapsed_ms}ms)"
-    printf '%s\t%d\n' "$label" "$elapsed_ms" >> "${TEST_TIMING_LOG:-/dev/null}"
+    printf '%s\t%d%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
   else
     echo "[FAIL] $label (${elapsed_ms}ms)" >&2
-    printf '%s\t%d\tFAIL\n' "$label" "$elapsed_ms" >> "${TEST_TIMING_LOG:-/dev/null}"
+    printf '%s\t%d\tFAIL%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
   fi
 }
+
+# Contention preamble — emitted before the first `--- <suite> ---` line so a
+# contended run is self-identifying and a false RED is never again diagnosed
+# as a regression (AC1/AC2).
+tc_preamble
+_TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
+
+# Advisory, self-announcing queue (#6789). Acquired INTERNALLY (not by a caller
+# wrapping the script) so no invocation can forget it. It NEVER aborts — on
+# timeout it proceeds with a named banner, so it cannot wedge a run. CI and the
+# SOLEUR_DISABLE_SESSION_STATE kill switch are honoured inside tc_acquire.
+tc_acquire "test-all"
 
 # Pre-suite bash/python tests — scripts shard.
 if want_scripts; then
@@ -127,7 +177,17 @@ if want_scripts; then
   # AGENTS B_ALWAYS rule-budget gate — CI-wired in #4599 (was lefthook pre-commit only).
   run_suite "scripts/lint-agents-rule-budget-live" python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
   run_suite "scripts/lint-agents-rule-budget-unit" bash scripts/lint-agents-rule-budget.test.sh
+  # The sync guard was lefthook-only, so a --no-verify commit bypassed it and
+  # the byte-budget constant drifted across five artifacts unnoticed (#6461).
+  # -live asserts the tree is in sync; -unit asserts the guard can still fail.
+  run_suite "scripts/lint-agents-compound-sync-live" bash scripts/lint-agents-compound-sync.sh
+  run_suite "scripts/lint-agents-compound-sync-unit" bash scripts/lint-agents-compound-sync.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
+  run_suite "scripts/lint-credential-path-literals" bash scripts/lint-credential-path-literals.test.sh
+  # ADR-140: Layer A encryption-posture detector (the mechanical resolver behind
+  # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
+  # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
+  run_suite "scripts/lint-encryption-posture" bash scripts/lint-encryption-posture.test.sh
   run_suite "scripts/extract-api-spend" bash scripts/extract-api-spend.test.sh
   run_suite "scripts/domain-model-drift" bash scripts/domain-model-drift.test.sh
   # #6602: exit-code harness for the expenses verify_by expiry gate. Registered
@@ -148,12 +208,27 @@ if want_scripts; then
   run_suite "scripts/skill-freshness-aggregate" bash scripts/skill-freshness-aggregate.test.sh
   run_suite "scripts/compound-promote" bash scripts/compound-promote.test.sh
   run_suite "scripts/lint-trap-tempfile-ownership" bash scripts/lint-trap-tempfile-ownership.test.sh
+  # #6789: arms for the contention instrumentation + advisory queue that this
+  # runner itself now uses. Registered explicitly — scripts/*.test.sh is NOT in
+  # the auto-glob below, so an unregistered suite is an ORPHAN that gates
+  # nothing (the #5417 class). lint-orphan-test-suites.sh enforces this line.
+  run_suite "scripts/test-contention" bash scripts/test-contention.test.sh
+  # #6789: arms for the tmpfs scratch reaper. It DELETES files, so every gate
+  # (age/size/ownership/liveness/protected-path) is asserted in both directions.
+  run_suite "scripts/tmpfs-guard" bash scripts/tmpfs-guard.test.sh
   run_suite "scripts/lint-orphan-test-suites" bash scripts/lint-orphan-test-suites.sh
   run_suite "scripts/cron-artifact-age" bash scripts/cron-artifact-age.test.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
   run_suite "scripts/review-reminder-liveness" bash scripts/review-reminder-liveness.test.sh
   run_suite "scripts/zot-restart-loop-alarm" bash scripts/zot-restart-loop-alarm.test.sh
   run_suite "scripts/followthrough-exec-bit" bash scripts/followthrough-exec-bit.test.sh
+  # #6757: enforce the ${VAR:?}/${VAR?} ban in follow-through probes. Two explicit run_suite
+  # lines because scripts/*.test.sh is NOT auto-globbed here — an unregistered suite is an
+  # ORPHAN that gates nothing (#5417/#6734 class; lint-orphan-test-suites.sh FAILs on it).
+  # -live runs the guard over the REAL tree (the actual gate); the .test.sh is the mutation
+  # proof (both RED directions) that the guard can catch the banned form.
+  run_suite "scripts/followthrough-varq-ban-live" bash scripts/lint-followthrough-varq-ban.sh
+  run_suite "scripts/followthrough-varq-ban" bash scripts/lint-followthrough-varq-ban.test.sh
   # Was an ORPHAN until #6698 — the suite existed and passed locally but was
   # registered in no runner, so it gated nothing (exactly the class the comment
   # above warns about). It covers the sweeper's path-traversal/symlink rejection
@@ -231,6 +306,13 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-counter-github" bash tests/scripts/test-destroy-guard-counter.sh
   run_suite "tests/scripts/destroy-guard-counter-sentry" bash tests/scripts/test-destroy-guard-counter-sentry.sh
   run_suite "tests/scripts/destroy-guard-counter-web-platform" bash tests/scripts/test-destroy-guard-counter-web-platform.sh
+  # Pre-apply entrypoint gate (#6767 / ADR-136). Registered HERE for the same
+  # reason as the destroy-guard trio above: nothing auto-discovers tests/scripts/
+  # (the bash *.test.sh glob further down covers only scripts/lib/*.test.sh etc.,
+  # NOT tests/scripts/test-*.sh), so an unregistered suite is an ORPHAN that gates
+  # nothing. This suite proves the fail-closed gate that stands between a
+  # whole-list ruleset create and a clobbered live dashboard entrypoint.
+  run_suite "tests/scripts/preapply-entrypoint-gate" bash tests/scripts/test-preapply-entrypoint-gate.sh
   # host image/apply coherence preflight (AC10b) — drives the standalone preflight
   # via its test seams (no docker/network/prod write). Registered here alongside
   # the destroy-guard trio: it is the host-agnostic coherence verifier the
@@ -250,6 +332,7 @@ if want_scripts; then
   # /mnt/data volume/attachment or the web-1 server, any passphrase re-mint, any destroy/forget,
   # or anything out of scope. Registered HERE — nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/workspaces-luks-cutover-gate" bash tests/scripts/test-workspaces-luks-cutover-gate.sh
+  run_suite "tests/scripts/workspaces-luks-recut-gate" bash tests/scripts/test-workspaces-luks-recut-gate.sh
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
@@ -307,6 +390,11 @@ fi
 if want_bun; then
   run_suite "plugins/soleur" bun test plugins/soleur/
   run_suite "blog-link-validation" bash scripts/validate-blog-links.sh
+  # frontmatter-strip three-way parity (#6794). The suite ALSO matches the
+  # scripts-shard `scripts/lib/*.test.sh` glob below, but that shard has no bun,
+  # so its strip.ts arm skip-gates there. Registering it here (bun guaranteed)
+  # is what actually exercises strip.ts == strip.py == strip.sh in CI.
+  run_suite "scripts/frontmatter-strip-parity" bash scripts/lib/frontmatter-strip.test.sh
 fi
 
 # Bash *.test.sh glob — scripts shard. (ci-deploy.test.sh runs in infra-validation.yml.)
@@ -318,6 +406,8 @@ if want_scripts; then
     run_suite "$f" bash "$f"
   done
 fi
+
+tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 
 echo "=== $((suites - failed))/$suites suites passed ==="
 if [[ "$failed" -gt 0 ]]; then

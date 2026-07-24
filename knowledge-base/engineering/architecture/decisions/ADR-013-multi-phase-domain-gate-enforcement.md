@@ -1,5 +1,4 @@
 ---
-adr: ADR-013
 title: Multi-Phase Domain Gate Enforcement
 status: active
 date: 2026-03-27

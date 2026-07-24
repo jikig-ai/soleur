@@ -104,3 +104,71 @@ rules:
       cwe: "CWE-20: Improper Input Validation"
       mirrors: "CodeQL: js/incomplete-url-substring-sanitization"
       soleur-origin: "PR #4573"
+
+  # In-transit half of the encryption-posture ledger (R6): moved here from the
+  # hand-rolled lint-encryption-posture.py detector rather than a bespoke
+  # connection-surface recognizer, because CodeQL/Semgrep already cover this shape
+  # and a fail-closed-on-indeterminate branch in the Python detector would fire on
+  # the whole connection surface (52+ sites source their DSN from Doppler at
+  # runtime with no scheme string in the code at all).
+  - id: soleur.tls-cert-verification-defeated
+    patterns:
+      - pattern-either:
+          # AST patterns (TS/JS): both key orders of the object-literal defeat.
+          - pattern: $OPTS.rejectUnauthorized = false
+          - pattern: |
+              {rejectUnauthorized: false, ...}
+          - pattern: |
+              {..., rejectUnauthorized: false, ...}
+          # Text patterns (cross-language: bash/python/env/CLI shapes that are
+          # not valid TS/JS AST and would otherwise fail --validate).
+          - pattern-regex: 'NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*.?0'
+          - pattern-regex: '(^|\s)curl\s[^\n]*(-k\b|--insecure\b)'
+          - pattern-regex: '--no-check-certificate\b'
+          - pattern-regex: 'verify\s*=\s*False\b'
+          - pattern-regex: 'InsecureSkipVerify\s*:\s*true'
+    message: |
+      This defeats TLS certificate verification (rejectUnauthorized: false,
+      NODE_TLS_REJECT_UNAUTHORIZED=0, --no-check-certificate, curl -k/--insecure,
+      or verify=False). Encryption in transit without certificate verification lets
+      an attacker on the network path present their own certificate undetected --
+      "TLS is on" is not "TLS is verified". See the encryption-posture ledger
+      (scripts/encryption-posture-ledger.json) and ADR-140: the connection's
+      in_transit.cert_verification must be "on" with a resolvable anchor, or the
+      row is an exception with a named justification and tracking_issue. Known
+      dev-only exceptions (e.g. the byok-*.tenant-isolation.test.ts fixtures) are
+      test-path-excluded, not silenced here.
+    severity: ERROR
+    languages: [typescript, javascript, bash, python]
+    metadata:
+      category: security
+      cwe: "CWE-295: Improper Certificate Validation"
+      mirrors: "encryption-posture ledger R6 (in-transit)"
+      soleur-origin: "feat-one-shot-encryption-at-rest-in-transit-design-default"
+
+  # Postgres sslmode: `require`/`allow`/`prefer` encrypt the connection but do NOT
+  # verify the presented certificate; `disable` skips TLS entirely. This is the
+  # in-transit analogue of the hcloud_volume attribute trap -- the thing that
+  # *looks* like the check is not the check. Advisory (WARNING) because the
+  # Supabase-pooler self-signed-chain exception (sslmode=require against the
+  # pooler) is a known, ledgered exception -- do not try to encode it here.
+  - id: soleur.postgres-sslmode-unverified
+    patterns:
+      - pattern-either:
+          - pattern-regex: 'sslmode=(require|allow|prefer|disable)\b'
+    message: |
+      This Postgres connection string uses sslmode=require/allow/prefer/disable,
+      which encrypts-without-verifying (require/allow/prefer) or does not encrypt
+      at all (disable). Use sslmode=verify-full so the presented certificate is
+      checked against a trusted CA and the hostname. The known Supabase-pooler
+      self-signed-chain exception (sslmode=require against the connection pooler)
+      is recorded in scripts/encryption-posture-ledger.json with its own
+      tracking_issue -- do not treat this WARNING as blocking without checking the
+      ledger first. See ADR-140.
+    severity: WARNING
+    languages: [typescript, javascript, bash, python]
+    metadata:
+      category: security
+      cwe: "CWE-295: Improper Certificate Validation"
+      mirrors: "encryption-posture ledger R6 (in-transit)"
+      soleur-origin: "feat-one-shot-encryption-at-rest-in-transit-design-default"

@@ -11,7 +11,7 @@ views {
     include
       founder, emailSender, betaContact, contributor,
       platform, platform.webapp, platform.engine, platform.infra.supabase,
-      anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, ghcr, zotRegistry, betterstack, sentry, sigstore, letsencrypt, publicResolvers
+      anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, pushService, ghcr, zotRegistry, betterstack, sentry, sigstore, letsencrypt, publicResolvers
 
     style element.tag == #external {
       color muted
@@ -32,8 +32,8 @@ views {
       platform.infra.supabase, platform.infra.operationalInbox, platform.infra.crmStore, platform.infra.tunnel, platform.infra.hetzner,
       platform.infra.inngest, platform.infra.inngestPostgres, platform.infra.inngestRedis,
       platform.infra.coordinator, platform.infra.scheduler,
-      platform.infra.gitDataStore, platform.infra.sessionStore,
-      anthropic, github, cloudflare, doppler, stripe, plausible, resend, ghcr, zotRegistry, betterstack, sentry,
+      platform.infra.gitDataStore, platform.infra.sessionStore, platform.infra.workspacesVolume,
+      anthropic, github, cloudflare, doppler, stripe, plausible, resend, pushService, ghcr, zotRegistry, betterstack, sentry,
       connectedRepoPlugin
 
     style element.tag == #external {

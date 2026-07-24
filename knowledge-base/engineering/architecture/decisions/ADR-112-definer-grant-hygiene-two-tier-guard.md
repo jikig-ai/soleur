@@ -1,5 +1,4 @@
 ---
-adr: 112
 title: Two-tier SECURITY DEFINER grant-hygiene guard (runtime AC8 authoritative, static lint subordinate)
 status: accepted
 date: 2026-07-11

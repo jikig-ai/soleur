@@ -5,12 +5,16 @@ on:
     branches: [main]
   pull_request:
   # Merge queue (#5780). The queue dispatches `merge_group` against the
-  # gh-readonly-queue/main/* temp ref; every required-context producer here —
-  # `test`, `e2e`, `lockfile-sync`, `service-role-allowlist-gate`,
-  # `tc-document-sha-guard` (FIVE; do NOT add an `event_name == 'pull_request'`
-  # gate to any of them or that required context never reports → the queue
-  # entry stalls pending forever) — must run on `merge_group`. None gate on the
-  # event, so they run unconditionally. `tc-document-sha-guard` additionally
+  # gh-readonly-queue/main/* temp ref. INVARIANT: EVERY job that produces a
+  # required status context (the full set is scripts/required-checks.txt minus
+  # the CLA + CodeQL rows — e.g. `test`, `e2e`, `lockfile-sync`,
+  # `service-role-allowlist-gate`, `tc-document-sha-guard`, `adr-ordinals`,
+  # `rule-body-lint`, `grok-fidelity`, `credential-path-guard`) must run on
+  # `merge_group` — do NOT add an `event_name == 'pull_request'` gate to any of
+  # them or that required context never reports → the queue entry stalls pending
+  # forever. None gate on the event today, so they run unconditionally. This is a
+  # non-exhaustive example list, not the authority; required-checks.txt is.
+  # `tc-document-sha-guard` additionally
   # receives `MERGE_GROUP_BASE_SHA` so its T&C TC_VERSION-bump bypass still works
   # on the candidate (github.base_ref is empty on merge_group). `detect-changes`
   # short-circuits non-PR events to docs=true (critical-css-gate runs — extra,
@@ -80,6 +84,41 @@ jobs:
             printf 'docs=false\n' >> "$GITHUB_OUTPUT"
           fi
 
+  # BLOCKING required check (#6882). Registered in scripts/required-checks.txt,
+  # scripts/ci-required-ruleset-canonical-required-status-checks.json, and
+  # infra/github/ruleset-ci-required.tf — the job NAME is public ABI across all
+  # three (ADR-032 Sharp Edge 1): renaming it here silently un-requires the gate
+  # until those files are updated in the SAME PR.
+  #
+  # Regression teeth for the credential auto-attach class: fail a tracked doc
+  # that writes a home-relative RESOLVABLE path to a real credential file. Claude
+  # Code's harness auto-attaches such a file into model context when the doc
+  # loads — the vector that read a live Doppler token into session transcripts
+  # via preflight/SKILL.md.
+  #
+  # FULL SCAN, not --changed: #6880 drained the grandfathered backlog to zero, so
+  # a green here asserts "the repository contains none", not merely "this diff
+  # introduced none". That also drops the merge-base dependency — deliberately no
+  # `fetch-depth: 0` (a shallow checkout suffices) and no `github.base_ref` read,
+  # which is empty on merge_group.
+  #
+  # Deliberately NO `if:` on github.event_name — a required context that does not
+  # report on merge_group leaves the queue entry pending forever (see the header
+  # note on this workflow's merge_group trigger).
+  credential-path-guard:
+    runs-on: ubuntu-latest
+    steps:
+      # Do NOT add sparse-checkout or a paths filter here. The linter exits 0
+      # over an empty scan set ("OK: 0 scanned file(s)"), so any checkout that
+      # excludes plugins/ or knowledge-base/ would silently turn this required
+      # gate fail-OPEN — the exact fabrication class this job exists to block.
+      # A full checkout (the default) is load-bearing.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Lint resolvable credential-file paths in docs (full scan)
+        run: python3 scripts/lint-credential-path-literals.py
+
+  # ADVISORY job — absent from scripts/required-checks.txt and the ruleset, so a
+  # PR can merge with it red. See the #6882 note inside for what moved out.
   lint-bot-statuses:
     runs-on: ubuntu-latest
     steps:
@@ -106,6 +145,15 @@ jobs:
           else
             python3 scripts/lint-infra-no-human-steps.py --changed
           fi
+      # NOTE (#6882): the resolvable-credential-path guard used to live here. It
+      # was extracted to the `credential-path-guard` job below and promoted to a
+      # BLOCKING required check. Every step remaining in THIS job is ADVISORY —
+      # `lint-bot-statuses` is absent from BOTH scripts/required-checks.txt and
+      # the Terraform ruleset, so a PR can still merge with it red. Promoting any
+      # of them is a deliberate follow-up (see the #6734/ADR-129 note below),
+      # not a side effect: it means adding this job to required-checks.txt AND
+      # the ruleset together, and re-deriving the ALLOWED_PATHS ∩ SCAN_DIRS test
+      # (ADR-139) for each content-scoped step first.
       # #6734 tempfile-cleanup ownership. Rule (a) subshell-append runs repo-wide;
       # rule (c) mktemp-with-no-owning-trap is new-entrant-scoped, because the existing
       # class-b population is an accepted, ratcheted debt (ADR-129).
@@ -122,6 +170,20 @@ jobs:
         run: python3 scripts/lint-trap-tempfile-ownership.py --check-highwater
       - name: Lint orphan test suites (scripts/*.test.sh must be registered)
         run: bash scripts/lint-orphan-test-suites.sh
+      # Encryption-posture Layer A repo-sweep (ADR-140). Asserts every persistent store
+      # and cross-component connection in scripts/encryption-posture-ledger.json resolves
+      # to real code (device_binding for LUKS — never name similarity), and every
+      # plaintext/cert-off exception carries a live tracking issue + unexpired expires_on.
+      #
+      # ADVISORY, NOT BLOCKING — same posture as lint-trap-tempfile-ownership above and for
+      # the same reason (ADR-129, arch-review F4 measure-then-arm): this job is absent from
+      # BOTH scripts/required-checks.txt and the CI-Required ruleset, so a PR can merge with
+      # it red while it soaks. Promotion to a required check is a deliberate follow-up
+      # (the five-site coupling: ci.yml + required-checks.txt + ruleset-ci-required.tf +
+      # ci-required-ruleset-canonical-required-status-checks.json + the #6049 bot-synthetic
+      # adjudication) tracked separately, applied only after N green runs.
+      - name: Encryption posture — Layer A repo-sweep (ADR-140)
+        run: python3 scripts/lint-encryption-posture.py --repo-sweep
 
   lint-conversations-update-callsites:
     runs-on: ubuntu-latest

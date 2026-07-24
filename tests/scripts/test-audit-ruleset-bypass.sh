@@ -615,13 +615,18 @@ t_rsc_order_insensitive() {
   rm -rf "$tmp"
 }
 
-# T-rsc-7: real canonical RSC has 20 entries with CodeQL pinned to 57789.
+# T-rsc-7: real canonical RSC has 21 entries with CodeQL pinned to 57789.
 # Reconciled from the stale 5-check baseline to the Terraform-managed live set
 # (#4397); bumped 16->17 by #6049 (adr-ordinals reconciled from live); bumped
 # 17->18 by #6103 (rule-body-lint, ADR-091); bumped 18->19 by #6325
 # (grok-fidelity, Phase F); bumped 19->20 by #6589 (sentry-destroy-required —
 # the always-run aggregator that makes an unacknowledged Sentry destroy
-# unmergeable rather than merely visible). The exact count is kept in lockstep
+# unmergeable rather than merely visible); bumped 20->21 by #6882
+# (credential-path-guard, ADR-139 — the always-run full-scan job that blocks a
+# tracked doc from reintroducing a resolvable credential-file path; its bot-PR
+# synthetic is EARNED in the composite action's Phase-4 ceiling, not
+# fabricated-but-unreachable, because its SCAN_DIRS intersects ALLOWED_PATHS).
+# The exact count is kept in lockstep
 # with infra/github/ruleset-ci-required.tf by T-rsc-9 below.
 #
 # The literal is deliberate and must stay a literal: deriving it from the file
@@ -639,10 +644,10 @@ t_rsc_real_canonical_shape() {
   # Every non-CodeQL check is a GitHub Actions context (15368). A flattened
   # CodeQL integration_id would let github-actions[bot] spoof the GHAS gate.
   non_codeql_apps=$(jq -r '[.[] | select(.context!="CodeQL") | .integration_id] | unique | join(",")' < "$real")
-  if [[ "$n" == "20" && "$codeql_app" == "57789" && "$non_codeql_apps" == "15368" ]]; then
-    _report "T-rsc-7 real canonical RSC: 20 entries, CodeQL=57789, rest=15368" ok
+  if [[ "$n" == "21" && "$codeql_app" == "57789" && "$non_codeql_apps" == "15368" ]]; then
+    _report "T-rsc-7 real canonical RSC: 21 entries, CodeQL=57789, rest=15368" ok
   else
-    _report "T-rsc-7 real canonical RSC: 20 entries, CodeQL=57789, rest=15368" fail "n=$n codeql_app=$codeql_app non_codeql=$non_codeql_apps"
+    _report "T-rsc-7 real canonical RSC: 21 entries, CodeQL=57789, rest=15368" fail "n=$n codeql_app=$codeql_app non_codeql=$non_codeql_apps"
   fi
 }
 
