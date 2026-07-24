@@ -86,7 +86,7 @@ unrecoverable. Precise identity (topology in transition, ADR-143 R3): the sole c
 (they collide with the `workspaces-luks-recut` `-replace` hatch). The volume, not the host, is the
 protected asset (model.c4:186).
 
-**Brand-survival threshold:** single-user incident. `requires_cpo_signoff: true`; `user-impact-reviewer` at PR review.
+- **Brand-survival threshold:** single-user incident. `requires_cpo_signoff: true`; `user-impact-reviewer` at PR review.
 
 ## Apply-Preflight Hypotheses (SSH/network — `hr-ssh-diagnosis-verify-firewall`)
 
@@ -258,8 +258,8 @@ failure_modes:
     alert_route: betterstack-query.sh recurrence poller
 logs: {where: Better Stack Logs source 2457081 (per-host) + Sentry, retention: existing}
 discoverability_test:
-  command: bash scripts/betterstack-query.sh "host:soleur-web-2 | count"   # NO ssh (repo-root scripts/)
-  expected_output: non-zero within the boot window (web-2 is NOT dark)
+  command: curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/health   # NO ssh; unauthenticated cluster-serving liveness, runnable pre-merge. web-2's OWN per-host telemetry (host:soleur-web-2) is inherently post-birth — verified after the provision dispatch by the web2-standby-soak-6459 followthrough, which runs `doppler run -- bash scripts/betterstack-query.sh` for the per-host count.
+  expected_output: 200
 ```
 
 #### Soak Follow-Through Enrollment
