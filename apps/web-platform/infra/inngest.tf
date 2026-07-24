@@ -66,6 +66,18 @@ resource "random_id" "inngest_manual_trigger_secret_dev" {
 
 # ---------------- Doppler secrets (per-env) ----------------
 
+# SHARED-CHANNEL CONTRACT (#6178 durability; ADR-100 §4 Amendment). INNGEST_EVENT_KEY +
+# INNGEST_SIGNING_KEY here (soleur/prd) are the APP's copy of a SHARED app<->host channel
+# auth token — NOT an isolation-sensitive per-host secret. Post-cutover their VALUES MUST
+# EQUAL the dedicated host's keys (random_id.inngest_{event,signing}_key_dedicated →
+# doppler_secret.inngest_{event,signing}_key_dedicated on soleur-inngest/prd, inngest-host.tf),
+# or every app inngest.send() to 10.0.1.40:8288 is rejected (the #6178 op=rearm HTTP 502).
+# ignore_changes=[value] below means a naive `terraform apply` does NOT propagate a host-key
+# change here — reconcile out-of-band (the cutover workflow op=arm G3.5 parity gate refuses to
+# arm on divergence; copy the host value in via `doppler secrets set … -p soleur -c prd`, which
+# ignore_changes explicitly supports, then redeploy). See the runbook §2.4 (key-reconcile) +
+# ADR-100 §4 Amendment. The isolation-sensitive secrets that STAY separate per host are
+# INNGEST_POSTGRES_URI + SUPABASE_SERVICE_ROLE — never these channel keys.
 resource "doppler_secret" "inngest_signing_key_prd" {
   project    = "soleur"
   config     = "prd"
