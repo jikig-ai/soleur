@@ -81,7 +81,7 @@ export function NewIssueDialog({
       onClose={() => {
         if (!inFlight.current) onClose();
       }}
-      closeOnBackdrop={false}
+      closeOnBackdrop={true}
       desktopMaxWidth="max-w-md"
       aria-label="New issue"
     >

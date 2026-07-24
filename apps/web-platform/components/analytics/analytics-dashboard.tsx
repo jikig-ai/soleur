@@ -146,9 +146,12 @@ function FunnelSection({ funnel }: { funnel: FunnelResult }) {
               <div className="w-24 shrink-0 text-sm text-soleur-text-secondary flex items-center gap-1.5 sm:w-36">
                 {stage.label}
                 {isActivated && (
+                  // Hidden on mobile: the narrow label column can't fit the
+                  // badge without overlapping the funnel bar. The gold bar + the
+                  // activation-definition text below already convey it.
                   <span
                     title={funnel.activationDef}
-                    className="text-[10px] font-semibold text-soleur-accent-gold-fg border border-soleur-accent-gold-fg/50 rounded px-1 cursor-help"
+                    className="hidden text-[10px] font-semibold text-soleur-accent-gold-fg border border-soleur-accent-gold-fg/50 rounded px-1 cursor-help sm:inline"
                   >
                     SUCCESS METRIC
                   </span>
