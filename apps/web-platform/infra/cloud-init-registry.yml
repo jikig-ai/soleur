@@ -20,6 +20,7 @@ packages:
   - jq # parse `doppler secrets --only-names --json` for the boot-time isolation self-check (runcmd)
   - e2fsprogs # resize2fs — grow the ext4 fs to fill the 60 GB volume (#6240/#6247). The packages: stage
     # is NON-FATAL (failures logged, boot continues), so a runcmd dpkg-guard re-ensures it below.
+  - cryptsetup # #6895 — guest-side LUKS-at-rest for the raw registry store volume (luksFormat/luksOpen).
 
 groups:
   - docker
@@ -409,6 +410,76 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # --- #6895 (D2): idempotent boot-time LUKS open of the registry store mapper ------------
+  # runcmd is PER-INSTANCE and does NOT re-run on reboot — and THIS host self-reboots as a
+  # convergence primitive (soleur-private-nic-guard.sh calls `reboot`, see the NIC-guard block
+  # below). Without a boot-time reopen the /dev/mapper/registry mapper stays CLOSED after a
+  # reboot, the nofail fstab line cannot mount, the NIC guard's `mount -a` self-heal fails, and
+  # zot binds an empty root-disk dir and 404s every image while nic_ok=true. This oneshot reopens
+  # the mapper (if closed) after network-online (Doppler egress) and BEFORE docker + cron, so the
+  # fstab mount / the NIC-guard `mount -a` self-heal remount /dev/mapper/registry. Reject
+  # /etc/crypttab-with-keyfile: it would write the passphrase in cleartext on the host disk,
+  # defeating the Doppler-only custody property. Reads REGISTRY_LUKS_KEY via the persisted
+  # /etc/default/registry-doppler (survives reboot on the root disk) under the scoped
+  # soleur-registry/prd token. `${registry_volume_id}` is terraform-interpolated; $REGISTRY_LUKS_KEY
+  # / $DEV (no braces) stay literal for the doppler shell.
+  - path: /usr/local/bin/registry-luks-open.sh
+    content: |
+      #!/usr/bin/env bash
+      set -uo pipefail
+      DEV=/dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id}
+      # Already open? just ensure the mount is present (idempotent) and exit.
+      if [ -e /dev/mapper/registry ]; then
+        mountpoint -q /var/lib/zot || mount /dev/mapper/registry /var/lib/zot || true
+        exit 0
+      fi
+      # Device-wait: on a reboot the volume node can reattach AFTER this oneshot fires — mirror the
+      # provision block's own wait (~30 x 2s) so a slow reattach is not misread as a genuinely-absent
+      # device. If the device is still absent after the wait, no-op (exit 0) like the provision block's
+      # device-absent path: fresh-provision formatting is the mount block's job, not this reopen path.
+      for i in $(seq 1 30); do [ -b "$DEV" ] && break; sleep 2; done
+      [ -b "$DEV" ] || { echo "[zot] registry-luks-open: $DEV absent after 60s wait — cannot open mapper" >&2; exit 0; }
+      # Only reopen a device that is actually LUKS. First-provision (blkid TYPE empty) is the LUKS
+      # mount block's job (it luksFormats), not this reopen path — refuse anything not crypto_LUKS.
+      BLKTYPE=$(blkid -o value -s TYPE "$DEV" 2>/dev/null || true)
+      if [ "$BLKTYPE" != crypto_LUKS ]; then
+        echo "[zot] registry-luks-open: $DEV TYPE=$BLKTYPE not crypto_LUKS — first-provision handles luksFormat; not reopening" >&2
+        exit 0
+      fi
+      set -a
+      . /etc/default/registry-doppler
+      set +a
+      doppler run --project soleur-registry --config prd -- bash -s <<'REGOPENEOF'
+      set -uo pipefail
+      DEV=/dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id}
+      [ -n "$REGISTRY_LUKS_KEY" ] || { echo "[zot] registry-luks-open FATAL: REGISTRY_LUKS_KEY empty — cannot open mapper" >&2; exit 1; }
+      [ -e /dev/mapper/registry ] || printf '%s' "$REGISTRY_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" registry
+      mountpoint -q /var/lib/zot || mount /dev/mapper/registry /var/lib/zot || true
+      REGOPENEOF
+    owner: root:root
+    permissions: '0755'
+
+  # The oneshot that runs the reopen on EVERY boot (unlike per-instance runcmd). Ordered after
+  # network-online (Doppler egress) and BEFORE docker.service + cron.service, so the mapper is
+  # open before zot launches and before the NIC-guard self-heal's `mount -a` fires (D2).
+  - path: /etc/systemd/system/registry-luks-open.service
+    content: |
+      [Unit]
+      Description=Reopen the registry LUKS store mapper on boot (#6895, D2) — before docker + the NIC-guard self-heal
+      After=network-online.target
+      Wants=network-online.target
+      Before=docker.service cron.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/bin/registry-luks-open.sh
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
   # --- #6415 / ADR-115: private-NIC boot converger ----------------------------------------
   # Root cause of the 2026-07-14 outage (#6400). hcloud_server_network is an ADDITIVE ONLINE
   # ATTACH (network.tf:9-13) — it needs a created server, and a created server is already
@@ -493,6 +564,12 @@ write_files:
       if mountpoint -q /var/lib/zot 2>/dev/null; then
         ZOT_STORE_MOUNTED=true
       else
+        # #6895 D2: the store is /dev/mapper/registry, and a reboot (incl. THIS guard's own self-
+        # reboot) leaves the mapper CLOSED — so `mount -a` on the nofail fstab line would fail with
+        # nothing to remount. Re-open it FIRST (idempotent: registry-luks-open.sh no-ops if the
+        # mapper is already open), so the 5-min cron self-heals a closed mapper instead of waiting
+        # for the next reboot's registry-luks-open.service.
+        /usr/local/bin/registry-luks-open.sh >/dev/null 2>&1 || true
         mount -a >/dev/null 2>&1 || true
         if mountpoint -q /var/lib/zot 2>/dev/null; then
           # The mount landed — but zot is STILL bound to the old (empty) dir: bind mounts are
@@ -639,54 +716,15 @@ runcmd:
   # Apply SSH hardening immediately.
   - systemctl restart sshd
 
-  # Mount + grow the zot storage volume, FAIL-LOUD (#6240). The old `mount ... || true` +
-  # `resize2fs ... || true` SILENTLY SWALLOWED failure: the ext4 fs on the 30 GB block device
-  # never grew past its original size, filled, and zot 500'd every blob push with ENOSPC while
-  # the disk heartbeat (which pings only <85%) never fired — and the volume API reported the
-  # BLOCK-device size (30 GB), never the FILESYSTEM size, so the blind spot survived a fresh
-  # host on the preserved volume. This block: (1) waits for the volume device node (attach
-  # race the bare `mount` hid); (2) re-ensures e2fsprogs (packages: stage is non-fatal); (3)
-  # asserts the ext4-on-raw-device (no-partition) invariant so `resize2fs <device>` is correct
-  # and growpart is NOT used; (4) PERSISTS the boot resize record to /var/lib/zot/.resize-result —
-  # the Phase-1 SOLEUR_ZOT_DISK reporter reads resize_ok + block_size_gb from it (fs_size_gb it
-  # recomputes live; df_before_gb/df_after_gb are an on-host forensic breadcrumb, not shipped); (5)
-  # is LOUD in telemetry on failure (resize_ok=false) but does NOT wedge the boot — zot still
-  # launches on the existing fs so the host stays reachable to self-report (fail-loud, NOT
-  # fail-dark). A persistent fs_size_gb << block_size_gb is the #6240 smoking gun.
-  - mkdir -p /var/lib/zot
-  - |
-    DEV=/dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id}
-    # Device-wait: the volume attach can land AFTER cloud-init's disk stage (~30 x 2s).
-    for i in $(seq 1 30); do [ -b "$DEV" ] && break; sleep 2; done
-    RESIZE_OK=false; BLK_GB=0; DF_BEFORE=0; DF_AFTER=0
-    if [ ! -b "$DEV" ]; then
-      echo "[zot] SOLEUR_ZOT_DISK resize_ok=false reason=device-absent dev=$DEV — volume node never appeared after 60s; launching zot on whatever /var/lib/zot resolves to" >&2
-    elif lsblk -no TYPE "$DEV" 2>/dev/null | grep -q '^part$'; then
-      # ext4-on-raw-device invariant broken: a partition unexpectedly appeared. Refuse to
-      # resize the wrong node (growpart would be needed) — fail LOUD, do not guess.
-      echo "[zot] SOLEUR_ZOT_DISK resize_ok=false reason=unexpected-partition dev=$DEV — expected raw ext4 (Hetzner format=ext4), refusing to resize a partitioned device" >&2
-    else
-      dpkg -s e2fsprogs >/dev/null 2>&1 || apt-get install -y e2fsprogs || echo "[zot] WARN: e2fsprogs install failed — resize2fs may be missing" >&2
-      mount "$DEV" /var/lib/zot || echo "[zot] WARN: mount $DEV /var/lib/zot failed (may already be mounted)" >&2
-      DF_BEFORE=$(df -B1G --output=size /var/lib/zot 2>/dev/null | tail -1 | tr -dc '0-9'); [ -n "$DF_BEFORE" ] || DF_BEFORE=0
-      # NO `|| true` here — the resize2fs exit code is CAPTURED (not swallowed) and shipped.
-      if resize2fs "$DEV"; then
-        RESIZE_OK=true
-      else
-        echo "[zot] SOLEUR_ZOT_DISK resize_ok=false reason=resize2fs-failed dev=$DEV — ext4 not grown; launching zot on the existing fs (telemetry stays loud)" >&2
-      fi
-      DF_AFTER=$(df -B1G --output=size /var/lib/zot 2>/dev/null | tail -1 | tr -dc '0-9'); [ -n "$DF_AFTER" ] || DF_AFTER=0
-    fi
-    BLK_GB=$(lsblk -bno SIZE "$DEV" 2>/dev/null | head -1 | awk '{printf "%d", $1/1024/1024/1024}'); [ -n "$BLK_GB" ] || BLK_GB=0
-    printf 'resize_ok=%s\nfs_size_gb=%s\nblock_size_gb=%s\ndf_before_gb=%s\ndf_after_gb=%s\n' \
-      "$RESIZE_OK" "$DF_AFTER" "$BLK_GB" "$DF_BEFORE" "$DF_AFTER" > /var/lib/zot/.resize-result
-    # Assert the fs reached ~ the block device (within 2 GB). Loud WARN only — never wedge boot.
-    if [ "$BLK_GB" -gt 0 ] && [ "$DF_AFTER" -gt 0 ] && [ "$(( BLK_GB - DF_AFTER ))" -gt 2 ]; then
-      echo "[zot] SOLEUR_ZOT_DISK resize_ok=$RESIZE_OK WARN fs_size_gb=$DF_AFTER lags block_size_gb=$BLK_GB — ext4 did not fill the device (#6240 hypothesis a)" >&2
-    fi
-  - echo '/dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id} /var/lib/zot ext4 defaults,nofail 0 2' >> /etc/fstab
+  # #6895: the zot store volume mount + resize is now the guest-side LUKS block, and it needs the
+  # Doppler CLI + /etc/default/registry-doppler in place to read REGISTRY_LUKS_KEY (P1-B). So the
+  # Doppler CLI install + env-file write below run FIRST, and the LUKS format/open/mount/resize
+  # block runs right after them (before `systemctl enable --now docker`). The plaintext by-id
+  # `mount $DEV /var/lib/zot` + its by-id fstab line are DELETED — the store is mounted from
+  # /dev/mapper/registry only (a stale by-id fstab line would reboot-double-mount /var/lib/zot and
+  # attempt a raw-ext4 mount of a now-crypto_LUKS device).
 
-  # --- Doppler CLI (${doppler_arch}) — the ONLY channel for the ZOT_* tokens ------------
+  # --- Doppler CLI (${doppler_arch}) — the ONLY channel for the ZOT_* tokens + LUKS key --
   # The tokens are NEVER baked into user_data (retrievable via the hcloud metadata API). They
   # arrive ONLY as the Doppler-injected env at boot. Arch (arm64/amd64) + its checksum are
   # terraform-interpolated from local.registry_arch (derived from registry_server_type), so the
@@ -710,6 +748,73 @@ runcmd:
   - printf 'HOME=/root\nDOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/registry-doppler
   - chmod 600 /etc/default/registry-doppler
 
+  # --- #6895: guest-side LUKS-at-rest mount + resize of the zot store volume ------------
+  # Replaces the old plaintext `mount $DEV /var/lib/zot`. The volume is a RAW block device
+  # (zot-registry.tf hcloud_volume.registry has no `format`); cryptsetup luksFormats it luks2 in
+  # the guest, unlocked by REGISTRY_LUKS_KEY delivered ONLY as the Doppler-injected env (never an
+  # argv positional, never baked into user_data). Runs UNDER `doppler run` scoped to the isolated
+  # soleur-registry/prd config. D1/Option B `blkid TYPE` discriminator: "" (fresh) -> luksFormat;
+  # crypto_LUKS -> reuse (idempotent re-provision); ANY OTHER TYPE (e.g. a populated plaintext
+  # ext4 the registry-host-replace preserve-path kept) -> FATAL refuse, NEVER a silent wipe
+  # (ADR-096 footgun). FAIL LOUD on an empty key — never an unencrypted fallback. Resize targets
+  # the MAPPER (cryptsetup resize + resize2fs /dev/mapper/registry), not the raw device, and
+  # PERSISTS /var/lib/zot/.resize-result for the SOLEUR_ZOT_DISK reporter (fail-loud, not
+  # fail-dark: resize2fs's exit code is captured, not swallowed). `${registry_volume_id}` is
+  # terraform-interpolated; $REGISTRY_LUKS_KEY / $DEV (no braces) stay literal for the doppler shell.
+  - mkdir -p /var/lib/zot
+  - |
+    set -a
+    . /etc/default/registry-doppler
+    set +a
+    doppler run --project soleur-registry --config prd -- bash -s <<'REGLUKSEOF'
+    set -uo pipefail
+    DEV=/dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id}
+    [ -n "$REGISTRY_LUKS_KEY" ] || { echo "[zot] FATAL: REGISTRY_LUKS_KEY empty — refusing unencrypted registry mount" >&2; exit 1; }
+    # Device-wait: the volume attach can land AFTER cloud-init's disk stage (~30 x 2s).
+    for i in $(seq 1 30); do [ -b "$DEV" ] && break; sleep 2; done
+    RESIZE_OK=false; BLK_GB=0; DF_BEFORE=0; DF_AFTER=0
+    if [ ! -b "$DEV" ]; then
+      echo "[zot] SOLEUR_ZOT_DISK resize_ok=false reason=device-absent dev=$DEV — volume node never appeared after 60s; refusing to luksFormat/mount a missing device" >&2
+    else
+      # D1/Option B — blkid TYPE discriminator on the RAW device (replaces the old lsblk ^part
+      # ext4-on-raw invariant). Only "" (fresh) or crypto_LUKS (already-LUKS) are admitted; any
+      # other TYPE FATALs (a plaintext volume must be RECUT, not wiped — ADR-096 footgun).
+      TYPE=$(blkid -o value -s TYPE "$DEV" 2>/dev/null || true)
+      case "$TYPE" in
+        "")          printf '%s' "$REGISTRY_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" ;;
+        crypto_LUKS) : ;; # already LUKS — skip format (idempotent re-provision), luksOpen below
+        *)           echo "[zot] SOLEUR_ZOT_DISK resize_ok=false reason=refusing-non-luks-device dev=$DEV TYPE=$TYPE — expected empty (fresh raw) or crypto_LUKS; a plaintext volume must be recut, not wiped (ADR-096)" >&2; exit 1 ;;
+      esac
+      # Open the mapper if closed, then lay/reuse the ext4 fs INSIDE it.
+      [ -e /dev/mapper/registry ] || printf '%s' "$REGISTRY_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" registry
+      blkid /dev/mapper/registry >/dev/null 2>&1 || mkfs.ext4 -q /dev/mapper/registry
+      dpkg -s e2fsprogs >/dev/null 2>&1 || apt-get install -y e2fsprogs || echo "[zot] WARN: e2fsprogs install failed — resize2fs may be missing" >&2
+      mountpoint -q /var/lib/zot || mount /dev/mapper/registry /var/lib/zot || echo "[zot] WARN: mount /dev/mapper/registry /var/lib/zot failed (may already be mounted)" >&2
+      DF_BEFORE=$(df -B1G --output=size /var/lib/zot 2>/dev/null | tail -1 | tr -dc '0-9'); [ -n "$DF_BEFORE" ] || DF_BEFORE=0
+      # Grow the LUKS mapper to fill a grown underlying volume FIRST, then the ext4 inside it.
+      # resize2fs targets the MAPPER, not the raw $DEV (a raw resize2fs would hit the LUKS header).
+      cryptsetup resize registry || echo "[zot] WARN: cryptsetup resize registry failed — mapper not grown" >&2
+      # NO `|| true` here — the resize2fs exit code is CAPTURED (not swallowed) and shipped.
+      if resize2fs /dev/mapper/registry; then
+        RESIZE_OK=true
+      else
+        echo "[zot] SOLEUR_ZOT_DISK resize_ok=false reason=resize2fs-failed dev=/dev/mapper/registry — ext4 not grown; launching zot on the existing fs (telemetry stays loud)" >&2
+      fi
+      DF_AFTER=$(df -B1G --output=size /var/lib/zot 2>/dev/null | tail -1 | tr -dc '0-9'); [ -n "$DF_AFTER" ] || DF_AFTER=0
+    fi
+    BLK_GB=$(lsblk -bno SIZE /dev/mapper/registry 2>/dev/null | head -1 | awk '{printf "%d", $1/1024/1024/1024}'); [ -n "$BLK_GB" ] || BLK_GB=0
+    printf 'resize_ok=%s\nfs_size_gb=%s\nblock_size_gb=%s\ndf_before_gb=%s\ndf_after_gb=%s\n' \
+      "$RESIZE_OK" "$DF_AFTER" "$BLK_GB" "$DF_BEFORE" "$DF_AFTER" > /var/lib/zot/.resize-result
+    # Assert the fs reached ~ the mapper size (within 2 GB). Loud WARN only — never wedge boot.
+    if [ "$BLK_GB" -gt 0 ] && [ "$DF_AFTER" -gt 0 ] && [ "$(( BLK_GB - DF_AFTER ))" -gt 2 ]; then
+      echo "[zot] SOLEUR_ZOT_DISK resize_ok=$RESIZE_OK WARN fs_size_gb=$DF_AFTER lags block_size_gb=$BLK_GB — ext4 did not fill the mapper (#6240 hypothesis a)" >&2
+    fi
+    # fstab: mount the MAPPER (NOT the raw by-id device). nofail so a volume hiccup never wedges
+    # boot; the D2 boot-open oneshot (registry-luks-open.service) reopens the mapper on reboot so
+    # this line can remount /dev/mapper/registry. Append-if-absent (idempotent re-provision).
+    grep -q '/dev/mapper/registry' /etc/fstab || echo '/dev/mapper/registry /var/lib/zot ext4 defaults,nofail 0 2' >> /etc/fstab
+    REGLUKSEOF
+
   # Ensure docker is up before the container launch.
   - systemctl enable --now docker
 
@@ -726,23 +831,26 @@ runcmd:
     doppler run --project soleur-registry --config prd -- bash -s <<'ZOTEOF'
     set -euo pipefail
     # Isolation self-check — the load-bearing, fail-CLOSED defense, run under the host's OWN
-    # shipped boot token: the credential MUST resolve EXACTLY the THREE admitted secrets
-    # {ZOT_PULL_TOKEN, ZOT_PUSH_TOKEN, BETTERSTACK_LOGS_TOKEN}. Every other boot signal (the
-    # empty-token guard below, the heartbeat, `terraform apply`) fails OPEN on an over-scoped
-    # credential — a 116-secret token still populates the ZOT tokens non-empty. This asserts
-    # cardinality (==3) AND identity (the exact admitted set), on the shipped token, before any
-    # docker run. `grep -v '^DOPPLER_'` strips the DOPPLER_PROJECT/CONFIG/ENVIRONMENT built-ins.
+    # shipped boot token: the credential MUST resolve EXACTLY the FOUR admitted secrets
+    # {ZOT_PULL_TOKEN, ZOT_PUSH_TOKEN, BETTERSTACK_LOGS_TOKEN, REGISTRY_LUKS_KEY}. Every other boot
+    # signal (the empty-token guard below, the heartbeat, `terraform apply`) fails OPEN on an
+    # over-scoped credential — a 116-secret token still populates the ZOT tokens non-empty. This
+    # asserts cardinality (==4) AND identity (the exact admitted set), on the shipped token, before
+    # any docker run. `grep -v '^DOPPLER_'` strips the DOPPLER_PROJECT/CONFIG/ENVIRONMENT built-ins.
     # BETTERSTACK_LOGS_TOKEN is admitted BY NAME (#6244): the disk-report reporter ships
     # SOLEUR_ZOT_DISK under `doppler run` from this same isolated config, mirroring the
-    # cloud-init-inngest.yml precedent (ADR-100). DELETING it post-cutover FATALs the bootstrap
-    # (loud fail > silent observability blind spot); the check keys on the NAME, so a value
-    # rotation is safe. The secret MUST be applied (doppler_secret.registry_betterstack_logs_token)
-    # in the SAME registry-host-replace dispatch as the host replace — a 2-secret config now FATALs.
+    # cloud-init-inngest.yml precedent (ADR-100). REGISTRY_LUKS_KEY is admitted BY NAME (#6895): it
+    # is the guest-side LUKS passphrase this same isolated config now holds (doppler_secret.
+    # registry_luks_key) and the LUKS mount block above reads it under `doppler run`; it is a
+    # registry-scoped secret, so the #6122 isolation property is preserved. DELETING either admitted
+    # secret post-cutover FATALs the bootstrap (loud fail > silent observability/at-rest blind spot);
+    # the check keys on the NAME, so a value rotation is safe. All four MUST be applied in the SAME
+    # apply as the host — a 3-secret config now FATALs.
     names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
     n_total="$(printf '%s\n' "$names" | grep -c . || true)"
-    n_admitted="$(printf '%s\n' "$names" | grep -Ec '^(ZOT_(PULL|PUSH)_TOKEN|BETTERSTACK_LOGS_TOKEN)$' || true)"
-    if [ "$n_total" -ne 3 ] || [ "$n_admitted" -ne 3 ]; then
-      echo "[zot] FATAL: boot credential is not isolated (sees $n_total non-DOPPLER secrets, $n_admitted admitted {ZOT_PULL_TOKEN,ZOT_PUSH_TOKEN,BETTERSTACK_LOGS_TOKEN}) — refusing to launch"; exit 1
+    n_admitted="$(printf '%s\n' "$names" | grep -Ec '^(ZOT_(PULL|PUSH)_TOKEN|BETTERSTACK_LOGS_TOKEN|REGISTRY_LUKS_KEY)$' || true)"
+    if [ "$n_total" -ne 4 ] || [ "$n_admitted" -ne 4 ]; then
+      echo "[zot] FATAL: boot credential is not isolated (sees $n_total non-DOPPLER secrets, $n_admitted admitted {ZOT_PULL_TOKEN,ZOT_PUSH_TOKEN,BETTERSTACK_LOGS_TOKEN,REGISTRY_LUKS_KEY}) — refusing to launch"; exit 1
     fi
     [ -n "$ZOT_PULL_TOKEN" ] || { echo "[zot] FATAL: ZOT_PULL_TOKEN empty — refusing to build htpasswd"; exit 1; }
     [ -n "$ZOT_PUSH_TOKEN" ] || { echo "[zot] FATAL: ZOT_PUSH_TOKEN empty — refusing to build htpasswd"; exit 1; }
@@ -764,6 +872,13 @@ runcmd:
     # Node zombie-reaping idiom buys nothing here. Env-overridable const (mirrors PROD_MEMORY_CAP);
     # the template-derived value is the default, so an operator override still wins for a one-off.
     ZOT_MEMORY_CAP="$${ZOT_MEMORY_CAP:-${zot_memory_cap_mb}m}"
+    # #6895 P1: GATE the launch on the LUKS mount. The LUKS mount block and this zot launch are
+    # SEPARATE runcmd entries and cloud-init continues past a failed entry — so on ANY LUKS failure
+    # (empty key, wrong-TYPE FATAL refuse, closed mapper) /var/lib/zot would stay an empty root-disk
+    # dir and zot would serve an empty/unencrypted store that answers 401, keeping the liveness
+    # heartbeat GREEN with no alert. Refuse unless /var/lib/zot is backed by /dev/mapper/registry:
+    # fail-loud here => zot never starts => the liveness-absence alarm fires (git-data's precedent).
+    findmnt -no SOURCE /var/lib/zot | grep -qx /dev/mapper/registry || { echo "[zot] FATAL: /var/lib/zot not backed by /dev/mapper/registry — refusing to serve an empty/unencrypted store" >&2; exit 1; }
     docker run -d --name zot --restart unless-stopped \
       --log-driver journald \
       --memory "$ZOT_MEMORY_CAP" --memory-swap "$ZOT_MEMORY_CAP" \
@@ -811,3 +926,8 @@ runcmd:
   # passing silently. This is the one place where fail-open and fail-loud agree.
   - systemctl daemon-reload || true
   - systemctl enable --now zot-liveness-heartbeat.timer || true
+  # #6895 (D2): ARM the boot-time LUKS reopen so a reboot (the NIC guard self-`reboot`s the host)
+  # reopens /dev/mapper/registry before docker + the self-heal. `enable` persists it for the next
+  # boot; the mapper is already open+mounted on THIS provision boot (the LUKS mount block above),
+  # so `--now` is an idempotent no-op that also validates the unit loudly at provision time.
+  - systemctl enable --now registry-luks-open.service || true
