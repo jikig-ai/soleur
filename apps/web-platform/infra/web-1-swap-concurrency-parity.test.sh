@@ -98,9 +98,13 @@ assert_member() {
 }
 
 # --- The three named members (allow-list) ---
-assert_member "$RELEASE_WF"      "deploy"                 "release-deploy"
-assert_member "$PIPELINE_FIX_WF" "apply"                  "pipeline-fix-apply"
+assert_member "$RELEASE_WF"      "deploy"                  "release-deploy"
+assert_member "$PIPELINE_FIX_WF" "apply"                   "pipeline-fix-apply"
 assert_member "$APPLY_INFRA_WF"  "workspaces_luks_cutover" "workspaces-luks-cutover"
+# #6854: the gated workspaces-luks-recut job also mutates web-1's /mnt/data (destroys +
+# recreates the LUKS volume), so it legitimately shares the web-1-swap group. It was added
+# without enrolling here — the drift this member closes.
+assert_member "$APPLY_INFRA_WF"  "workspaces_luks_recut"   "workspaces-luks-recut"
 
 # --- The #6604 freeze workflow (workspaces-luks-cutover.yml) carries web-1-swap at
 # WORKFLOW scope (it is a dedicated dispatch, not a job in a shared workflow), so it
@@ -118,19 +122,19 @@ else
 fi
 
 # --- Total count of job-level `group: web-1-swap` across the three shared workflows
-# == 3. reason: 5 -> 3. The warm_standby and web_2_recreate members were DELETED with
-# the web-2 dispatch sweep (#6575, 2026-07-20); the remaining members are the release
-# deploy, pipeline-fix apply, and the #6604 volume-attach job. A silently-dropped member
-# drops below 3; an accidentally-enrolled or duplicated job pushes above 3.
-# NOTE the pre-existing header above said 4 while the real count was 5 — that stale
-# figure is corrected to 3 here rather than carried forward. Either fails loud. The
-# freeze workflow's workflow-level group is asserted above and NOT part of this count. ---
+# == 4. History: 5 -> 3 (warm_standby + web_2_recreate DELETED with the web-2 dispatch
+# sweep #6575, 2026-07-20) -> 4 (the #6854 workspaces-luks-recut job added a legitimate
+# member; apply-web-platform-infra.yml now carries TWO: workspaces_luks_cutover +
+# workspaces_luks_recut). The four members are the release deploy, pipeline-fix apply, and
+# the #6604 volume-attach + #6854 volume-recut jobs. A silently-dropped member drops below
+# 4; an accidentally-enrolled or duplicated job pushes above 4. The freeze workflow's
+# workflow-level group is asserted above and NOT part of this count. ---
 web1_count=$(grep -rhE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' \
   "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" | grep -c .)
-if [ "$web1_count" -eq 3 ]; then
+if [ "$web1_count" -eq 4 ]; then
   pass
 else
-  fail "expected exactly 3 'group: web-1-swap' occurrences (allow-list length), found $web1_count"
+  fail "expected exactly 4 'group: web-1-swap' occurrences (allow-list length), found $web1_count"
 fi
 
 # --- Workflow-level R2 serializer preserved in BOTH apply workflows (coexists
