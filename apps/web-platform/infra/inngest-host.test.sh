@@ -326,18 +326,26 @@ grep -qE '^[[:space:]]*IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.
 #     flip FSM could not run. Derive the required set from the CONSUMER (bootstrap's install
 #     lines), so adding a new flip asset to bootstrap without staging it in cloud-init red-lines.
 #     The four hard-required files are those in bootstrap's install-gate condition (:664).
-FLIP_REQUIRED=(inngest-cutover-flip.sh inngest-server-flip-guard.sh inngest-cutover-flip.service inngest-cutover-flip.timer)
+# DERIVE the required set from bootstrap's OWN install-gate condition (the `-f /tmp/...` tests
+# whose failure keeps DEDICATED_FLIP=0), NOT a hardcoded list — so a NEW required asset added
+# to bootstrap's gate without a matching cloud-init cp red-lines (the new-asset-drift case a
+# static allowlist misses). The gate block runs from `DEDICATED_FLIP=0` to its `then`.
+# Anchor on the INNER flip-gate `if [[ -f /tmp/inngest-cutover-flip.sh ...` (NOT the outer
+# DOPPLER_PROJECT `if`, whose `then` would end the capture before the -f tests).
+GATE_BLOCK="$(awk '/if \[\[ -f \/tmp\/inngest-cutover-flip\.sh/{i=1} i{print} i&&/then$/{exit}' "$BOOTSTRAP")"
+mapfile -t FLIP_REQUIRED < <(printf '%s\n' "$GATE_BLOCK" | grep -oE '/tmp/inngest-[a-z-]+\.[a-z]+' | sed 's#^/tmp/##' | sort -u)
+[[ "${#FLIP_REQUIRED[@]}" -ge 4 ]] \
+  && pass || fail "could not derive the flip install-gate asset set from inngest-bootstrap.sh (got ${#FLIP_REQUIRED[@]}; expected >=4) — the parity check below would be vacuous"
 for asset in "${FLIP_REQUIRED[@]}"; do
-  # bootstrap must actually install it from /tmp (consumer side)...
-  if ! grep -qE "install -m [0-7]+ /tmp/${asset//./\\.} " "$BOOTSTRAP"; then
-    fail "inngest-bootstrap.sh must install /tmp/${asset} (consumer side of the staging parity)"
-    continue
-  fi
-  # ...and cloud-init must docker-cp it from the image to that /tmp path (producer side).
-  if grep -qE "docker cp [^ ]*:/${asset//./\\.} /tmp/${asset//./\\.}" "$CLOUD_INIT"; then
+  # cloud-init must docker-cp it from the PINNED extract container to that exact /tmp path.
+  # The container name (soleur-inngest-bootstrap-extract) is pinned deliberately: a typo in the
+  # SOURCE container (`docker cp WRONGNAME:/asset ...`) fails at runtime, is swallowed by
+  # `2>/dev/null || true`, and silently skips staging — the exact silent-skip class this fix
+  # exists to prevent. A `[^ ]*:/asset` match would pass on the typo'd container.
+  if grep -qE "docker cp soleur-inngest-bootstrap-extract:/${asset//./\\.} /tmp/${asset//./\\.}" "$CLOUD_INIT"; then
     pass
   else
-    fail "cloud-init-inngest.yml must 'docker cp ...:/${asset} /tmp/${asset}' — bootstrap installs it from /tmp; without the cp DEDICATED_FLIP=0 and the flip timer never installs (#6178)"
+    fail "cloud-init-inngest.yml must 'docker cp soleur-inngest-bootstrap-extract:/${asset} /tmp/${asset}' — bootstrap's install-gate requires it at /tmp; without the cp DEDICATED_FLIP=0 and the flip timer never installs (#6178)"
   fi
 done
 # The staging outcome must self-report off-box (the silent absence hid the bug for a full

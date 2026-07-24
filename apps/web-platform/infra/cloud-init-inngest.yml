@@ -520,7 +520,11 @@ runcmd:
     # (Vector journald shipping is separately unreliable on this host, so this is the visibility).
     set +e
     sleep 8
-    svc="$(systemctl is-active inngest-server.service inngest-redis.service vector.service 2>&1 | tr '\n' ',')"
+    # #6178: inngest-cutover-flip.timer is included so the OUTCOME (the flip poll timer actually
+    # installed + active = DEDICATED_FLIP reached 1) self-reports off-box, not just the
+    # flip-assets-staged precondition. This is precisely the state #6178 silently failed at (the
+    # timer never installed); a non-'active' 4th field surfaces it in the same curl-direct marker.
+    svc="$(systemctl is-active inngest-server.service inngest-redis.service vector.service inngest-cutover-flip.timer 2>&1 | tr '\n' ',')"
     lo="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://127.0.0.1:8288/ 2>&1)"
     jl="$(journalctl -u inngest-server.service --no-pager -n 15 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' | head -c 400)"
     /usr/local/bin/inngest-boot-phone-home.sh post-boot-health "svc=[$svc] lo8288=$lo jl=[$jl]"
