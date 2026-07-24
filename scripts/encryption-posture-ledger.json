@@ -153,28 +153,28 @@
       "store": "cloudflare_r2_bucket.cla_evidence",
       "kind": "provider-bucket",
       "at_rest": {
-        "mechanism": "provider-managed:cloudflare-r2-default-aes256",
-        "evidence": "Cloudflare R2 encrypts all objects at rest with AES-256 by default (Cloudflare data-security documentation)",
-        "attestation_url": "https://developers.cloudflare.com/r2/reference/data-security/",
+        "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; holds CLA (Contributor License Agreement) signing evidence records.",
+        "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
         "retrieved_on": "2026-07-24",
         "defends_against": "Cloudflare-managed at-rest encryption of stored objects against physical-media compromise in Cloudflare's infrastructure",
         "does_not_defend": "a leaked R2 API token, an application-layer read, or any access via the credentials that legitimately reach the bucket; a provider-managed key is not a customer-held key",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:attestation formalization (SOC 2 name + retrieval evidence) pending; tracked #6896"
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
       }
     },
     {
       "store": "cloudflare_r2_bucket.workspaces_luks_header",
       "kind": "provider-bucket",
       "at_rest": {
-        "mechanism": "provider-managed:cloudflare-r2-default-aes256",
-        "evidence": "Cloudflare R2 default AES-256 at-rest encryption (Cloudflare data-security documentation); holds LUKS-header escrow, itself useless without the separately-held passphrase",
-        "attestation_url": "https://developers.cloudflare.com/r2/reference/data-security/",
+        "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; holds LUKS-header escrow, itself useless without the separately-held passphrase",
+        "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
         "retrieved_on": "2026-07-24",
         "defends_against": "physical-media compromise of the escrowed LUKS headers in Cloudflare's infrastructure",
         "does_not_defend": "a leaked R2 token; note a LUKS header alone cannot decrypt a volume without the passphrase held in a separate Doppler config",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:attestation formalization pending; tracked #6896"
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
       }
     },
     {
@@ -188,7 +188,7 @@
         "defends_against": "physical-media compromise of the managed Postgres storage",
         "does_not_defend": "a leaked service-role key, an RLS bypass, or any query via a legitimate connection; the encryption key is provider-managed",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:attestation formalization pending; tracked #6896"
+        "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
       }
     },
     {
@@ -202,7 +202,7 @@
         "defends_against": "physical-media compromise of the managed Postgres storage",
         "does_not_defend": "a leaked credential or an application-layer read",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:attestation formalization pending; tracked #6896"
+        "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
       }
     },
     {
@@ -216,7 +216,7 @@
         "defends_against": "physical-media compromise of Doppler's secret storage",
         "does_not_defend": "a leaked Doppler service token or a compromised host with a live token; the LUKS passphrases themselves live here, so a Doppler compromise is a key-custody compromise",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:attestation formalization pending; tracked #6896"
+        "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
       }
     },
     {
@@ -230,21 +230,21 @@
         "defends_against": "physical-media compromise of the log store",
         "does_not_defend": "a leaked Better Stack API token; note log sanitization at the emitter is the primary control against sensitive data reaching the sink",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:attestation formalization pending; tracked #6896"
+        "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
       }
     },
     {
       "store": "r2.terraform_state_backend",
       "kind": "provider-bucket",
       "at_rest": {
-        "mechanism": "provider-managed:cloudflare-r2-default-aes256",
-        "evidence": "the R2-backed Terraform state bucket; Cloudflare R2 default AES-256 at-rest encryption (in-repo comments in doppler-write-token.tf:23 / ghcr-minter-doppler-token.tf:36 previously asserted 'encrypted' with no attestation — now substantiated)",
-        "attestation_url": "https://developers.cloudflare.com/r2/reference/data-security/",
+        "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; the R2-backed Terraform state bucket (soleur-terraform-state, main.tf:2-6) — in-repo comments in doppler-write-token.tf:23 / ghcr-minter-doppler-token.tf:36 previously asserted 'encrypted' with no attestation, now substantiated",
+        "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
         "retrieved_on": "2026-07-24",
         "defends_against": "physical-media compromise of the Terraform state store",
         "does_not_defend": "a leaked R2 token; Terraform state contains resource metadata and any non-sensitive-marked values",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:attestation formalization pending; tracked #6896"
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
       }
     },
     {
