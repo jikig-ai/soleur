@@ -62,6 +62,34 @@ discoverability_test:
   expected_output: # canonical "everything OK" output
 ```
 
+## Encryption Posture
+
+```yaml
+# Required when the plan introduces a persistent data store (volume, database, bucket, queue,
+# cache, backup target, log sink) OR a new cross-component/network connection. Pure UI/docs/dep-bump
+# plans skip. NEVER "the provider handles it"; NEVER merely "the provider supports TLS".
+at_rest:
+  - store:            # resource address / logical name (hcloud_volume.x / cloudflare_r2_bucket.y / supabase.prd)
+    mechanism:        # luks | provider-managed:<named attestation> | app-layer-envelope:<scheme> | plaintext-exception
+    evidence:         # mechanically-resolvable citation (file:anchor for envelope; attestation name+URL+retrieved_on for provider-managed; implied by device_binding for luks)
+    defends_against:  # concretely what this stops (e.g. "a seized/RMA'd disk; a raw volume snapshot")
+    does_not_defend:  # concretely what it does NOT stop (REQUIRED — a leaked credential / RLS bypass / SSRF / unlocked host)
+    disclosed_as:     # the docs/legal/** file:anchor claiming a posture for this store, or the literal not-publicly-claimed
+    live_verification: # available | unavailable:<reason>
+in_transit:
+  - connection:        # from -> to
+    enforced_at:       # file:anchor of the CONNECTING code that sets the requirement
+    tls:               # scheme + minimum version
+    cert_verification: # on | off  (sslmode=require is OFF — encrypts without verifying)
+    does_not_defend:   #
+    disclosed_as:      #
+exception:            # present ONLY when mechanism is plaintext-exception OR cert_verification is off
+  justification:      # named, one sentence, why accepted
+  tracking_issue:     # #N — REQUIRED. Never silence.
+  reevaluate_when:    # the concrete condition that reopens the decision
+  expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
+```
+
 ## Acceptance Criteria
 
 - [ ] Core requirement 1
@@ -188,6 +216,34 @@ logs:
 discoverability_test:
   command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
   expected_output: # canonical "everything OK" output
+```
+
+## Encryption Posture
+
+```yaml
+# Required when the plan introduces a persistent data store (volume, database, bucket, queue,
+# cache, backup target, log sink) OR a new cross-component/network connection. Pure UI/docs/dep-bump
+# plans skip. NEVER "the provider handles it"; NEVER merely "the provider supports TLS".
+at_rest:
+  - store:            # resource address / logical name (hcloud_volume.x / cloudflare_r2_bucket.y / supabase.prd)
+    mechanism:        # luks | provider-managed:<named attestation> | app-layer-envelope:<scheme> | plaintext-exception
+    evidence:         # mechanically-resolvable citation (file:anchor for envelope; attestation name+URL+retrieved_on for provider-managed; implied by device_binding for luks)
+    defends_against:  # concretely what this stops (e.g. "a seized/RMA'd disk; a raw volume snapshot")
+    does_not_defend:  # concretely what it does NOT stop (REQUIRED — a leaked credential / RLS bypass / SSRF / unlocked host)
+    disclosed_as:     # the docs/legal/** file:anchor claiming a posture for this store, or the literal not-publicly-claimed
+    live_verification: # available | unavailable:<reason>
+in_transit:
+  - connection:        # from -> to
+    enforced_at:       # file:anchor of the CONNECTING code that sets the requirement
+    tls:               # scheme + minimum version
+    cert_verification: # on | off  (sslmode=require is OFF — encrypts without verifying)
+    does_not_defend:   #
+    disclosed_as:      #
+exception:            # present ONLY when mechanism is plaintext-exception OR cert_verification is off
+  justification:      # named, one sentence, why accepted
+  tracking_issue:     # #N — REQUIRED. Never silence.
+  reevaluate_when:    # the concrete condition that reopens the decision
+  expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
 ```
 
 ## Acceptance Criteria
@@ -330,6 +386,34 @@ logs:
 discoverability_test:
   command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
   expected_output: # canonical "everything OK" output
+```
+
+## Encryption Posture
+
+```yaml
+# Required when the plan introduces a persistent data store (volume, database, bucket, queue,
+# cache, backup target, log sink) OR a new cross-component/network connection. Pure UI/docs/dep-bump
+# plans skip. NEVER "the provider handles it"; NEVER merely "the provider supports TLS".
+at_rest:
+  - store:            # resource address / logical name (hcloud_volume.x / cloudflare_r2_bucket.y / supabase.prd)
+    mechanism:        # luks | provider-managed:<named attestation> | app-layer-envelope:<scheme> | plaintext-exception
+    evidence:         # mechanically-resolvable citation (file:anchor for envelope; attestation name+URL+retrieved_on for provider-managed; implied by device_binding for luks)
+    defends_against:  # concretely what this stops (e.g. "a seized/RMA'd disk; a raw volume snapshot")
+    does_not_defend:  # concretely what it does NOT stop (REQUIRED — a leaked credential / RLS bypass / SSRF / unlocked host)
+    disclosed_as:     # the docs/legal/** file:anchor claiming a posture for this store, or the literal not-publicly-claimed
+    live_verification: # available | unavailable:<reason>
+in_transit:
+  - connection:        # from -> to
+    enforced_at:       # file:anchor of the CONNECTING code that sets the requirement
+    tls:               # scheme + minimum version
+    cert_verification: # on | off  (sslmode=require is OFF — encrypts without verifying)
+    does_not_defend:   #
+    disclosed_as:      #
+exception:            # present ONLY when mechanism is plaintext-exception OR cert_verification is off
+  justification:      # named, one sentence, why accepted
+  tracking_issue:     # #N — REQUIRED. Never silence.
+  reevaluate_when:    # the concrete condition that reopens the decision
+  expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
 ```
 
 ## Acceptance Criteria

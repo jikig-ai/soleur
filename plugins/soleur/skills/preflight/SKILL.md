@@ -54,6 +54,7 @@ If the command fails (e.g., offline, no remote), every path-gated check falls ba
 | 9 (Node-only encodings) | Always runs (uses `git ls-files`, full-universe scan — does NOT use the cached path-set; see Sharp Edges). |
 | 10 (Discoverability test) | Zero matches for the canonical sensitive-path regex (re-use Check 6 SSOT). |
 | 11 (Register drift) | Zero matches for `(^\|/)apps/web-platform/supabase/migrations/.*\.sql$`, `(^\|/)apps/web-platform/server/workspace-resolver\.ts$`, or `(^\|/)knowledge-base/engineering/architecture/domain-model\.md$` (empty/missing cache → run, never SKIP). |
+| 12 (Encryption posture) | Zero matches for `\.tf$`, `supabase/migrations/.*\.sql$`, `cloud-init.*\.ya?ml$`, `docker-compose.*\.ya?ml$` (empty/missing cache → run, never SKIP). |
 | Not-Bare-Repo | Always runs. |
 
 For PR #3488-class diffs (lockfile bumps + orphan-cleanup deletions), Checks 1, 2, 5, 6, 7, 8 fast-skip → Checks 3 (lockfile fires), 4 (env isolation always), 9 (always), Not-Bare-Repo (always) execute. Of those four, only Check 3 and Check 9 do "real work" against the diff; Check 4 and Not-Bare-Repo are constant-cost.
@@ -1029,6 +1030,46 @@ breaks the numeric test).
   matching `sk_test`/`ghp_`/`AKIA…`/`-----BEGIN` (a benign column name can false-positive). Inspect the
   newest `apps/web-platform/supabase/migrations/*.sql`."
 - **SKIP** — no business-rule surface (or the register) in the diff.
+
+### Check 12: Encryption Posture
+
+Enforces the encryption-posture ledger's maintenance contract (ADR-140): every persistent
+store and cross-component connection Soleur operates must carry a ledger row whose cited
+evidence resolves to real code, and any accepted plaintext/unverified-TLS exception must carry
+an open, unexpired tracking issue. Consumes the deterministic analyzer
+`lint-encryption-posture.py` (repo-root `scripts/`) — this check does NOT reimplement its PASS/FAIL logic in
+prose; it shells out and relays the exit code.
+
+**Step 12.1 — diff-scope (fast-path SKIP).** SKIP unless the cached path-set
+(`"$PREFLIGHT_TMP/preflight-diff-files.txt"`) matches a store-class or connection-class surface:
+
+```bash
+DIFF="$PREFLIGHT_TMP/preflight-diff-files.txt"
+# Fail-safe: never SKIP on a missing/empty cache — recompute inline, then run if still empty.
+if [[ ! -s "$DIFF" ]]; then git diff --name-only origin/main...HEAD > "$DIFF" 2>/dev/null || true; fi
+if [[ -s "$DIFF" ]] && ! grep -qE '\.tf$|supabase/migrations/.*\.sql$|cloud-init.*\.ya?ml$|docker-compose.*\.ya?ml$' "$DIFF"; then
+  echo "SKIP — no store-class or connection-class surface (*.tf / migration / cloud-init / docker-compose) in diff"; exit 0
+fi
+```
+
+This mirrors "I do not apply", never "I cannot prove it" (`2026-04-27-preflight-security-gates-skip-vs-fail-defaults.md`) — an empty/missing diff cache falls through to run, it never SKIPs by default.
+
+**Step 12.2 — run the Layer A sweep:**
+
+```bash
+python3 scripts/lint-encryption-posture.py --repo-sweep > "$PREFLIGHT_TMP/encryption-posture.txt" 2>&1; rc=$?
+```
+
+**Result:**
+
+- **PASS** — `rc == 0`. Every store/connection in the repo has a ledger row whose cited evidence
+  resolves to real code, and every accepted exception carries an open, unexpired tracking issue.
+- **FAIL** — `rc != 0`: relay the script's own output (`cat "$PREFLIGHT_TMP/encryption-posture.txt"`)
+  verbatim — the classes it can report include an unledgered store, an unresolvable citation, an
+  expired or untracked exception, or a store/connection disclosed as encrypted while its ledger row
+  says otherwise. Do not re-derive the verdict from this SKILL.md — the script is the single source
+  of truth for the pass/fail decision.
+- **SKIP** — the cached path-set contains zero `.tf` / store-class / connection-class paths.
 
 ## Phase 2: Aggregate Go/No-Go Report
 
