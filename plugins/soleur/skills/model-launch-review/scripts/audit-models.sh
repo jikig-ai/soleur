@@ -40,8 +40,9 @@ ROOT="${ROOT%/}"   # normalize: trailing slash breaks rel() prefix-strip
 # Older families (claude-3, dated 2025 ids) stay flag-only (too old for a blind
 # swap). Source of truth for current ids: the claude-api skill table + docs.
 AUTOFIX_PAIRS=(
-  "claude-opus-4-7=claude-opus-4-8"
-  "claude-opus-4-6=claude-opus-4-8"
+  "claude-opus-4-8=claude-opus-5"
+  "claude-opus-4-7=claude-opus-5"
+  "claude-opus-4-6=claude-opus-5"
   "claude-sonnet-4-6=claude-sonnet-5"
   "claude-sonnet-4-5=claude-sonnet-5"
 )

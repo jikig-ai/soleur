@@ -19,7 +19,7 @@ const AUDIT_SH = resolve(SKILL_DIR, "scripts/audit-models.sh");
 // Current model landscape (2026-06). The auditor flags anything NOT in this set
 // that lives in a config-class path. Source of truth: claude-api skill table.
 const CURRENT_IDS = [
-  "claude-opus-4-8",
+  "claude-opus-5",
   "claude-sonnet-5",
   "claude-haiku-4-5-20251001",
   "claude-fable-5",
@@ -159,7 +159,7 @@ describe("model-launch-review auto-fix safety (AC5, AC6)", () => {
       join(root, "apps/web-platform/server/inngest/functions/cron-fake-audit.ts"),
       "utf8",
     );
-    expect(config).toContain("claude-opus-4-8");
+    expect(config).toContain("claude-opus-5");
     expect(config).not.toContain("claude-opus-4-7");
     // excluded classes untouched
     const fixture = readFileSync(
@@ -214,8 +214,8 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     writeFileSync(join(dir, "cron-a.ts"), `export const M = "claude-opus-4-7";\n`);
     writeFileSync(join(dir, "cron-b.ts"), `export const M = "claude-sonnet-4-6";\n`);
     expect(run(["--fix"], root).status).toBe(0);
-    // Per-tier map: opus → opus-4-8, sonnet → sonnet-5 (not a single global target).
-    expect(readFileSync(join(dir, "cron-a.ts"), "utf8")).toContain("claude-opus-4-8");
+    // Per-tier map: opus → opus-5, sonnet → sonnet-5 (not a single global target).
+    expect(readFileSync(join(dir, "cron-a.ts"), "utf8")).toContain("claude-opus-5");
     expect(readFileSync(join(dir, "cron-b.ts"), "utf8")).toContain("claude-sonnet-5");
     rmSync(root, { recursive: true, force: true });
   });

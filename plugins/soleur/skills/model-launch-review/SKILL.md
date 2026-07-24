@@ -63,7 +63,10 @@ Only item 1 is auto-applied. Items 2–5 are reported in the PR body for human s
 
    ```bash
    gh api repos/anthropics/claude-code-action/releases --jq '.[0] | "\(.tag_name) \(.published_at)"'
-   gh api repos/anthropics/claude-code-action/git/commits/<PIN-SHA> --jq '.committer.date'
+   # claude-code-action pins are ANNOTATED TAG objects, not commits: git/commits/<SHA>
+   # returns 404 and commits/<SHA> returns 422. Resolve via git/tags, which yields the
+   # tag name + date in one call (2026-07-24 — the git/commits form never worked here).
+   gh api repos/anthropics/claude-code-action/git/tags/<PIN-SHA> --jq '"\(.tag) \(.tagger.date)"'
    ```
 
    Bump a pin only when a `--model` swap lands in the same workflow (#2540).
