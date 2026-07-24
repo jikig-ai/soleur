@@ -31,6 +31,230 @@ adr: ADR-139 (provisional ordinal — re-verify against origin/main at /ship)
 - The plan's own detector must certify `git-data-luks.tf` and `workspaces-luks.tf` on day one; if it cannot, it is miscalibrated. This is a stronger day-one signal than any synthetic fixture.
 - `hcloud_volume.inngest_redis` being (apparently) plaintext is not just an audit finding — it is the reason Layer B cannot live on Inngest.
 
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+
+## Plan Review Revisions — BINDING (2026-07-24, supersedes conflicting text below)
+
+The 7-agent `/plan-review` panel the `single-user incident` threshold mandates (DHH, Kieran,
+code-simplicity, architecture-strategist, spec-flow-analyzer, cto-devex, cpo) ran out-of-band
+before `/work` (task 8.2b, correctly reordered to run FIRST). Verdict: **unanimous do-not-proceed
+as-written.** The research quality held (≈20 factual claims re-verified), but the two load-bearing
+specs (the Layer A LUKS detector D2, and the required-check promotion D7) each shipped a defect that
+would produce an unbuildable AC or a **false PASS on the exact volume that caused the incident.**
+
+Operator decisions (2026-07-24): **(1) revise in place, narrowed; (2) keep audit-only** — this PR
+remediates nothing, findings become tracked issues with a milestone + a parent claim-unlock issue.
+
+**Where this block conflicts with any Decision, AC, TS, or Phase below, THIS BLOCK WINS.** `/work`
+implements against these corrections.
+
+### R0 — Scope narrowing (operator decision 1)
+
+- **`constraint-scaffold` (deliverable 6) LEAVES this PR.** It ships as its own product-framed
+  follow-up (CPO F6): a founder's repo is a different audience, blast radius, quality bar, and
+  recovery model than Soleur's own CI, and it currently has **no tenant invocation path**
+  (`constraint-scaffold` only ever runs against `apps/web-platform`; ADR-074 lists tenant emission as
+  a future consequence — CPO F4). File the follow-up issue IN this PR's body (Phase 4 milestone,
+  `Ref #6588`) so the split cannot drop it. Remove its rows from `## Files to Create` / `## Files to
+  Edit` (the two `references/*.template`, `test/encryption-posture.test.sh`, the `SKILL.md` +
+  `constraint-scaffold.sh` + `parity.test.sh` edits). Delete Phase 6.4, AC20, AC21. **The follow-up
+  issue MUST record the four unresolved design questions the panel raised** so they are decided in
+  that PR, not rediscovered: additive `--gate <name>` emit (refuse-if-exists is all-or-nothing today,
+  so an already-scaffolded repo exits 66 having emitted nothing — Kieran B5, cto A8); a
+  captured-baseline / grandfather path so a first run on a populated repo is GREEN (spec-flow #8);
+  the emitted gate is **non-blocking** in a founder repo with **founder-readable** failure strings
+  (no `LUKS`/`sslmode`/`luksFormat`/`verify-full` without a plain-language gloss) and a
+  `needs-a-migration` class that is never a red gate (CPO F3/F5, cto A3, spec-flow #10/#11); and a
+  Hetzner-shaped tree must produce a **reachable** verdict, since D2 proves "storage resource lacking
+  an encryption declaration" is structurally unsatisfiable for `hcloud_volume` (spec-flow #9). D7's
+  "advisory is no gate" reasoning is **Soleur-repo-only**; it does not transfer to a founder repo,
+  where a red gate they cannot clear is the brand-survival deadlock `constraint-scaffold` exists to
+  avoid.
+
+### R1 — Layer A detector: volume-identity binding (Kieran B1/B2 — the false-PASS blocker)
+
+The namespace is adversarial: `hcloud_volume.workspaces` (PLAINTEXT, the `#6588` volume) sits beside
+`hcloud_volume.workspaces_luks` (LUKS, mapper `workspaces`); same for `git_data`/`git_data_luks`.
+Under **any** name- or mount-path similarity join, `/dev/mapper/workspaces` matches the plaintext
+`workspaces` at least as well as the encrypted `workspaces_luks`, so a row `store:
+hcloud_volume.workspaces, mechanism: luks` citing its sibling's apparatus PASSES — certifying the
+exact volume this feature exists to catch. **No string-similarity join is permitted.**
+
+- Every `hcloud_volume` ledger row carries `device_binding`: the Terraform resource address of the
+  volume **and** the `hcloud_volume_attachment` that carries it. The detector must reach the LUKS
+  citation chain **from that attachment** (attachment → host cloud-init/bootstrap/cutover for that
+  host → the `cryptsetup` site on that host), never from a name match.
+- **Two-shape LUKS contract** (D2 as written fits only `git_data_luks`, so it FAILS
+  `workspaces_luks`, which AC33 requires it to certify — a direct contradiction). Clause (a) accepts a
+  `cryptsetup luksFormat|luksOpen` site in **any** file under `apps/*/infra/` — cloud-init, bootstrap,
+  **or cutover** — resolving the mapper operand through **at most one** level of `${VAR:-default}`
+  shell expansion assigned in the same file (taking the `:-` default literal). Clause (c) accepts an
+  fstab-write line **or** a `MAPPER=/dev/mapper/<name>` + `MOUNT=<path>` fail-closed gate pair. Mapper
+  equality is asserted AFTER resolution; the resolved expected values are literally `git-data` and
+  `workspaces`.
+- **New fixtures:** TS-15 = row `store: hcloud_volume.workspaces, mechanism: luks` citing the
+  `workspaces_luks` apparatus → **FAIL (citation belongs to a different volume)**. MB-8 = delete the
+  volume-identity binding check → TS-15 must red. Without TS-15/MB-8 the battery does not cover the
+  plan's headline failure mode.
+
+### R2 — Layer B: Inngest-dispatch hybrid, Sentry plane, measurable-only floor
+
+- **D8 is deleted and rewritten (arch F1, DHH S2b, simplicity #3).** ADR-033's own scope note names
+  `scheduled-terraform-drift` as the *correct* shape for a credential-heavy infra cron and warns "Do
+  not mis-cite this rejection as a blanket ban on Inngest→workflow_dispatch." Adopt the hybrid:
+  `apps/web-platform/server/inngest/functions/cron-encryption-posture-reconcile.ts` owns the schedule
+  and `workflow_dispatch`-es `.github/workflows/scheduled-encryption-posture-reconcile.yml` (which
+  keeps `on: workflow_dispatch:` only). The `prefer-inngest` hook keys on a `schedule:`/`cron:`
+  directive and therefore **never fires** — so **the override marker, the in-file justification block,
+  and AC32 are all deleted.** The circularity argument was unsound (a plaintext AOF does not crash
+  Inngest — correlation ≈ 0, not 1); the real residual is Inngest-trigger *availability*, already
+  covered by `scheduled-inngest-health.yml`. Record that one-line residual in ADR-139.
+- **Heartbeat moves to the Sentry plane (arch F8).** All 10 `scheduled-*.yml` use Sentry check-ins;
+  `sentry-monitor-iac-parity.test.ts` FAILS a workflow heartbeat with no `sentry_cron_monitor`
+  (the `#6374` shape — a workflow ran 14h unseen). Emit a Sentry heartbeat slug
+  `scheduled-encryption-posture-reconcile`, add the resource to
+  `apps/web-platform/infra/sentry/cron-monitors.tf` (add to `## Files to Edit`; drop the
+  `uptime-alerts.tf` Better Stack heartbeat). Routing to Better Stack would ALSO diverge from
+  `docs/legal/data-protection-disclosure.md` §(m) — a published legal disclosure, in the PR whose
+  purpose is preventing exactly that divergence. Keep the ADR-117 measure-then-arm count-gate.
+- **Positive-work floor scoped to the measurable set (arch F3, cto A1, simplicity #2).**
+  `luks-monitor.sh` probes ONE volume; the Hetzner API is blind to guest-side LUKS (D2's premise);
+  SSH is forbidden. As written Layer B aborts daily forever and its 3-day soak never greens. Add
+  `live_verification: available | unavailable:<reason>` to the row schema; the floor counts only
+  `available` rows (today: `workspaces_luks`); each `unavailable` row carries its own tracking issue
+  and is itself a finding. Building per-volume posture emitters for the other hosts is explicit
+  **follow-up scope**, not an implicit assumption. Layer B **shells out** to
+  `python3 scripts/lint-encryption-posture.py --report --json` for all ledger parsing (single schema
+  owner — arch "Layer A/B split") and files **find-or-update-by-title**, never a fresh P1 daily
+  (arch F10).
+
+### R3 — Exceptions get a hard clock (spec-flow #4, DHH S6, arch F5)
+
+`reevaluate_when` is inert; Layer B *reds* when a `tracking_issue` is CLOSED, so the system rewards
+leaving tickets open forever and running `drain-labeled-backlog` on the Phase-1 findings would break
+the gate. Add `expires_on: YYYY-MM-DD` (≤90 days from acceptance) enforced by **Layer A** (offline,
+no network, no issue-state dependency); an expired exception FAILs the required check; renewal is a
+dated, reviewable ledger diff. Demote Layer B's `state==CLOSED` check to a **warning**. Add TS-16
+(expired exception → FAIL) + MB-9. **Delete `accepted_by`** — in a one-person shop authored by the
+agent it is a control with one value (DHH S6); the real acceptance signal is the reviewed PR diff.
+
+### R4 — Required-check promotion is FIVE coupled sites, not three (Kieran B3, cto A6)
+
+D7/Phase 3 miss two: (4) `scripts/ci-required-ruleset-canonical-required-status-checks.json` — whose
+`required-checks-canonical-parity.test.sh` asserts set-equality, so adding the name to
+`required-checks.txt` alone turns an EXISTING suite RED and fails AC30 with no explanation; and (5)
+`.github/actions/bot-pr-with-synthetic-checks/action.yml`, conditionally, per the `#6049`
+adjudication. **Arm B is rewritten:** "add to `required-checks.txt`" + "exclude via non-15368
+`integration_id`" are contradictory (the parity test's `comm -23` would flag it). The real arm B is
+CodeQL's shape — **omit** the name from `required-checks.txt` and pin a non-15368 `integration_id` in
+the ruleset + canonical JSON. Add site (4) to `## Files to Edit`; extend AC13 to assert equality
+across sites (1)(2)(3)(4) and that the ruleset ABI-count comment equals the `required_check` block
+count; rewrite AC14. **CI-job non-vacuity (Kieran H2):** add MB-10 — a `continue-on-error: true` or
+trailing `|| true` on the `encryption-posture` job must still leave the known-bad fixture PR's check
+RED; nothing else in the plan proves the job can fail.
+
+### R5 — The ledger↔published-disclosure join (CPO F1 + spec-flow #15 — two lenses, same gap)
+
+Layer A joins ledger↔code; Layer B joins ledger↔infra; **nothing joins ledger↔published legal
+disclosure** — the exact edge that broke `#6588`. Day-one green end state: `inngest_redis` carries a
+`plaintext-exception` row while `privacy-policy.md:519` still asserts LUKS. Add a required
+`disclosed_as` field: the `docs/legal/**` `file:anchor` making a public claim about this store, or the
+literal `not-publicly-claimed`. **Layer A FAILs** when a `plaintext-exception` (or `cert_verification:
+off`) row's `disclosed_as` anchor resolves to text asserting encryption. Add TS-17 + MB-11. This is
+the cheapest change with the most direct line to the incident; without it the plan's own claim ("the
+ledger is the join the incident lacked", D6) is only two-thirds true. Human legal-copy correction
+remains a separate `/soleur:legal-audit` issue (filed from Phase 1.4), but the mechanical join lands
+here.
+
+### R6 — In-transit moves to the existing Semgrep surface (cto A2/A4, simplicity #10)
+
+`plugins/soleur/skills/review/references/semgrep-custom-rules.yaml` already exists (bootstrapped by
+`ensure-semgrep.sh`, driven by the `semgrep-sast` agent); CodeQL already flags `rejectUnauthorized:
+false` for free. D3's fail-closed-on-indeterminate branch would fire on essentially the whole
+connection surface — `run-migrations.sh` uses `sslmode=require` against the self-signed Supabase
+pooler chain, and 52 non-test sites source their DSN from Doppler at runtime with **no scheme string
+in the code at all**. Move the D3 ban-list into `semgrep-custom-rules.yaml` as
+`soleur.tls-cert-verification-defeated` + `soleur.postgres-sslmode-unverified` (single shared
+`references/encryption-posture-banlist.json`, arch F7). **Delete** from
+`lint-encryption-posture.py`: the connection-surface recognizer, the require-list, the
+fail-closed-on-indeterminate branch, TS-9..TS-13, MB-6, MB-7. Keep `sslmode=require`-in-ban-list as
+the Semgrep rule's intent (with the "do not move to allow-list" comment). **Pre-adjudicate** the
+Supabase pooler self-signed-chain exception in the plan with its own tracking issue (the
+`byok-*.tenant-isolation.test.ts` `rejectUnauthorized:false` sites are its known instances —
+test-path-excluded). The hand-rolled detector keeps ONLY the four-part guest-side LUKS resolver + the
+ledger-completeness sweep — the genuinely un-buyable part.
+
+### R7 — Resource-type partition is three-way, not open-ended (arch F6, simplicity #9)
+
+"Unknown type ⇒ FAIL-CLOSED" is undecidable: 44 distinct `resource "…"` types exist, 3 storage-shaped.
+As written it either wedges every unrelated infra PR (a new `cloudflare_record` fails) or is theater
+(a name heuristic false-positives `hcloud_volume_attachment`). Commit an explicit three-way partition
+beside the ledger: `store_classes` (checked), `non_store_types` (seeded from the current 44-type
+inventory, explicitly acknowledged), else ⇒ FAIL "add `<type>` to `store_classes` or
+`non_store_types`". Add a test asserting a `cloudflare_record` does NOT fail and a novel `*_bucket`
+type DOES. This makes AC7 testable as stated.
+
+### R8 — Non-IaC ledger anti-omission + Layer A hermeticity (Kieran B4, arch "hermeticity")
+
+5 of 13 stores (Supabase ×2, Doppler, Better Stack, the R2 state backend, `sessionStore`) have **no
+`*.tf` anchor** — deleting their rows silently lowers the floor and the sweep still passes. Compute
+the floor from a repo scan + a committed expected-count constant and an explicit `non_iac_stores`
+list, not from the ledger; FAIL when actual < expected. AC6 becomes `== 13 stores, == 8 connections`.
+Add MB-12 (delete a non-IaC row → must red). **State the hermeticity invariant in ADR-139 and assert
+it:** Layer A is offline and credential-free (no `gh api`, tempting because Layer B does it); run the
+sweep with no network and require an identical verdict.
+
+### R9 — Attestation staleness (cto A7, spec-flow #17)
+
+7 of ~13 rows are `provider-managed:<attestation>` with a retrieval date nothing re-checks — the
+`#6588` shape reproduced inside the ledger. Add `retrieved_on` with a 365-day max enforced by Layer A
+(offline: date arithmetic only); Layer B (when it can reach the network) re-fetches the attestation
+URL and warns on link-rot. **Before `/work`**, `curl -sI` each of the 7 attestation sources for
+public reachability; any behind a login is a step that must route to a bootstrap script per
+`hr-multi-step-post-merge-bootstrap-script` (never a hand-run operator step) or a named public
+substitute — the blanket "zero operator steps" claim is unverified for these rows.
+
+### R10 — Smaller corrections (apply verbatim)
+
+- **`does_not_defend` restatement rejector (TS-12) is deleted** (DHH S7, simplicity #6): verbatim-only
+  match is defeated by rewording — a vacuous grep for a semantic property, the very anti-pattern the
+  plan cites elsewhere. **Keep the mandatory field**; a reviewer judges semantics, not a regex.
+- **Failure-message contract (spec-flow #1):** the plan defines verdicts but only ONE failure string.
+  Add a section enumerating one operator-facing line per reject branch: `FAIL: <what> → <exact next
+  command / ledger field>` (precedent: `lint-credential-path-literals.py`). Extend TS-2..TS-17 to
+  assert the classification **string**, not just the exit code. Add an AC.
+- **Phase 0.3 numeric-max (Kieran H3, DHH S9):** the file is not in numeric order (Check 7 at line
+  943). Use `grep -oE '^### Check [0-9]+' … | grep -oE '[0-9]+$' | sort -n | tail -1`; same for the
+  `deepen-plan` §4.x probe (guard `4.10` vs `4.1`).
+- **AC26 (Kieran H5):** assert AGENTS.md/AGENTS.core.md are **untouched in the diff**, not an absolute
+  `B_ALWAYS == 22900` (which reds the moment any sibling PR merges).
+- **AC28 (Kieran H1):** add a second assertion — `tests/scripts/test-encryption-posture-reconcile.sh`
+  is registered in `scripts/test-all.sh` (the orphan-linter only scans `scripts/*.test.sh`).
+- **C4 (arch F9):** also correct `model.c4:415` (the `hetzner -> workspacesVolume` relationship still
+  says "plaintext at rest … #6812"); add to Phase 7.2.
+- **AC2/AC3/AC18/AC22 (Kieran H4):** give each a runnable anchored-content predicate (AC4's shape),
+  not a bare-token grep (`cq-assert-anchor-not-bare-token`).
+- **§4.10 template↔validator coupling (Kieran M3, arch F7):** add a `--check-templates` mode to
+  `lint-encryption-posture.py` validating the three `plan-issue-templates.md` blocks against
+  `encryption-posture-ledger.schema.json` — closes the new pair AND is the generic harness `#4133`
+  wants.
+- **Task 7.5 (DHH S8):** dropping the principle into the 78 KB `constitution.md` is filing, not
+  enforcement; the real enforcement is the skill/agent edits that load. Keep it as a one-line pointer
+  only, not as the load-bearing placement.
+- **ADR-033 citation (arch F11):** cite by filename, not the bare ordinal (033 collides across three
+  files).
+
+### R11 — Audit findings: milestone + parent (operator decision 2, spec-flow #16, CPO F2)
+
+Phase 1.4 findings currently get labels but **no milestone**, so `drain-labeled-backlog` (which
+queries `--milestone`) can never see them. Each filed issue MUST carry the Phase 4 milestone and at
+least one `*.tf` path in its body (the drain clusters by body paths). File one **parent** issue —
+"Encryption posture: zero user-data-bearing plaintext exceptions" (Phase 4 milestone, `Ref #6588`) —
+as the **claim-unlock gate**: until it closes, external copy is constrained to the *verifiability*
+claim ("we now know and continuously verify what is and isn't encrypted"), never "encrypted by
+default from day one." `inngest_redis` and `registry` findings are children. **This PR still
+remediates nothing (AC25 stands.)**
+
 ## Overview
 
 Make **"encrypted at rest + encrypted in transit"** the enforced default across the Soleur
@@ -104,9 +328,17 @@ presentation and the PASS/FAIL/SKIP contract, the script owns the decision.
 
 For each store class, the ledger row must name a citation, and the linter must *resolve* it:
 
+> **⚠ SUPERSEDED IN PART by R1 (see the BINDING revisions block above).** The `hcloud_volume` row
+> below is corrected there: the join from `hcloud_volume.<name>` to its apparatus MUST go through an
+> explicit `device_binding` (resource address + `hcloud_volume_attachment`), never string similarity
+> — otherwise a `mechanism: luks` row on the PLAINTEXT `hcloud_volume.workspaces` false-PASSes on its
+> encrypted sibling's citations. Clause (a) accepts a `cryptsetup` site in **any** `apps/*/infra/`
+> file (cloud-init / bootstrap / **cutover**) with one level of `${VAR:-default}` resolution, and (c)
+> accepts an fstab line **or** a `MAPPER=/dev/mapper/<name>`+`MOUNT=` gate pair. R1 wins on conflict.
+
 | Store class | `mechanism` accepted | Evidence the linter **resolves** |
 |---|---|---|
-| `hcloud_volume` | `luks` | (a) a `cryptsetup luksFormat`/`luksOpen` site in a cloud-init/bootstrap file that names this volume's device or mapper; (b) a `random_password` + `doppler_secret` pair delivering the key; (c) a mount whose source is `/dev/mapper/<name>`. All three must exist; the mapper name in (a) and (c) must match. |
+| `hcloud_volume` | `luks` | (a) a `cryptsetup luksFormat`/`luksOpen` site in a cloud-init/bootstrap file that names this volume's device or mapper; (b) a `random_password` + `doppler_secret` pair delivering the key; (c) a mount whose source is `/dev/mapper/<name>`. All three must exist; the mapper name in (a) and (c) must match. **[R1: reach these from `device_binding`, not name match; accept the cutover-script + gate-pair shape too.]** |
 | `cloudflare_r2_bucket` | `provider-managed:<attestation>` | A named attestation with a retrieval date in the ledger row, **plus** the bucket's `location`/jurisdiction field present in `*.tf`. Bare `"the provider handles it"` is a hard FAIL (literal-string reject on `provider handles`, `handled by the provider`, `encrypted by default` with no attestation name). |
 | Supabase Postgres | `provider-managed:<attestation>` | Same, plus the project ref must resolve through the existing `preflight` Check 4 environment-isolation regex (so the row cannot name a project that is not the one in use). |
 | Redis (`inngestRedis`, `sessionStore`) | `luks` \| `provider-managed:…` \| `plaintext-exception` | The AOF/RDB path must resolve to a volume that itself has a ledger row (transitive: a Redis store on a plaintext volume is a plaintext store). |
@@ -197,7 +429,16 @@ Promotion requires **three** coupled edits in the same PR: the `ci.yml` job, `sc
 and `infra/github/ruleset-ci-required.tf`. All three are in `## Files to Edit`; an AC asserts the
 three-way coupling.
 
-### Decision D8 — Layer B stays a GitHub Actions cron, with the ADR-033 exemption argued and the hook override declared
+### Decision D8 — ~~Layer B stays a GitHub Actions cron, with the ADR-033 exemption argued and the hook override declared~~ **SUPERSEDED by R2**
+
+> **⚠ THIS DECISION IS DELETED. See R2 in the BINDING revisions block above.** The circularity
+> argument was unsound (a plaintext AOF does not crash Inngest; correlation ≈ 0). ADR-033's own scope
+> note names `scheduled-terraform-drift` as the *correct* shape for a credential-heavy infra cron and
+> warns against mis-citing it as a blanket ban. Layer B adopts the **Inngest-dispatch hybrid**
+> (`cron-encryption-posture-reconcile.ts` schedules → `scheduled-encryption-posture-reconcile.yml`
+> with `on: workflow_dispatch:` only). The `prefer-inngest` hook never fires, so the override marker,
+> the in-file justification block, and **AC32 are all deleted.** The text below is retained only for
+> provenance; do NOT implement it.
 
 *(Added by deepen-plan Phase 4.4 — Scheduled-work pattern check.)*
 
@@ -809,11 +1050,12 @@ infrastructure/tooling change with no user-facing surface. No wireframe required
 | `scripts/encryption-posture-ledger.schema.json` | Row schema + the extensible `store_classes` table |
 | `tests/scripts/lib/encryption-posture-reconcile.sh` | Layer B live reconciliation (ADR-136 shape) |
 | `tests/scripts/test-encryption-posture-reconcile.sh` | Layer B tests, incl. the could-not-measure matrix |
-| `.github/workflows/scheduled-encryption-posture-reconcile.yml` | Layer B scheduler |
+| `.github/workflows/scheduled-encryption-posture-reconcile.yml` | Layer B scheduler (**R2:** `on: workflow_dispatch:` only) |
+| `apps/web-platform/server/inngest/functions/cron-encryption-posture-reconcile.ts` | **R2:** Inngest scheduler that dispatches the Layer B workflow |
 | `scripts/followthroughs/encryption-posture-reconcile-soak-<issue>.sh` | 3-day soak probe |
-| `plugins/soleur/skills/constraint-scaffold/references/encryption-posture-gate.template` | Emitted CI workflow (deliverable 6) |
-| `plugins/soleur/skills/constraint-scaffold/references/encryption-posture-scan.template` | Emitted scanner (deliverable 6) |
-| `plugins/soleur/skills/constraint-scaffold/test/encryption-posture.test.sh` | Emitted-gate non-vacuity |
+| ~~`plugins/soleur/skills/constraint-scaffold/references/encryption-posture-gate.template`~~ | **R0: MOVED to the constraint-scaffold follow-up PR — not in this PR** |
+| ~~`plugins/soleur/skills/constraint-scaffold/references/encryption-posture-scan.template`~~ | **R0: MOVED to follow-up PR** |
+| ~~`plugins/soleur/skills/constraint-scaffold/test/encryption-posture.test.sh`~~ | **R0: MOVED to follow-up PR** |
 | `knowledge-base/engineering/architecture/decisions/ADR-139-encryption-posture-as-a-design-time-default.md` | ADR |
 | `knowledge-base/engineering/architecture/encryption-posture-audit-2026-07-23.md` | Audit report (deliverable 8) |
 | `knowledge-base/project/specs/feat-one-shot-encryption-at-rest-in-transit-design-default/tasks.md` | Task breakdown |
@@ -833,15 +1075,17 @@ infrastructure/tooling change with no user-facing surface. No wireframe required
 | `plugins/soleur/skills/provision-cloudflare/SKILL.md` | Encryption posture step (deliverable 5) |
 | `plugins/soleur/skills/provision-doppler/SKILL.md` | Encryption posture step (deliverable 5) |
 | `plugins/soleur/skills/provision-github/SKILL.md` | Encryption posture step (deliverable 5) |
-| `plugins/soleur/skills/constraint-scaffold/SKILL.md` | Document the second emitted gate (deliverable 6) |
-| `plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh` | Emit the two new templates (deliverable 6) |
-| `plugins/soleur/skills/constraint-scaffold/test/parity.test.sh` | Cover the new templates |
+| ~~`plugins/soleur/skills/constraint-scaffold/SKILL.md`~~ | **R0: MOVED to follow-up PR** |
+| ~~`plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh`~~ | **R0: MOVED to follow-up PR** |
+| ~~`plugins/soleur/skills/constraint-scaffold/test/parity.test.sh`~~ | **R0: MOVED to follow-up PR** |
 | `.github/workflows/ci.yml` | `encryption-posture` job (D7) |
-| `scripts/required-checks.txt` | Register — **after** adjudicating the #6049 guard (AC14) |
-| `infra/github/ruleset-ci-required.tf` | `required_check` block (D7) |
+| `scripts/required-checks.txt` | **R4:** register per the CodeQL-shape arm B (omit + non-15368 id) |
+| `infra/github/ruleset-ci-required.tf` | `required_check` block + ABI-count comment (D7, **R4**) |
+| `scripts/ci-required-ruleset-canonical-required-status-checks.json` | **R4: the 4th coupled site — parity test asserts set-equality** |
 | `scripts/test-all.sh` | Register both new `.test.sh` suites |
-| `.github/workflows/scheduled-followthrough-sweeper.yml` | `secrets=` for the soak probe, if needed |
-| `apps/web-platform/infra/uptime-alerts.tf` | Layer B heartbeat, ADR-117 count-gated |
+| `.github/workflows/scheduled-followthrough-sweeper.yml` | `secrets=BETTERSTACK_API_TOKEN_READONLY` for the soak probe (**R2/S2c: read-only**), if needed |
+| `apps/web-platform/infra/sentry/cron-monitors.tf` | **R2:** Layer B Sentry heartbeat, ADR-117 count-gated (replaces the `uptime-alerts.tf` Better Stack beat) |
+| ~~`apps/web-platform/infra/uptime-alerts.tf`~~ | **R2: replaced by the Sentry plane — not this file** |
 | `knowledge-base/engineering/architecture/diagrams/model.c4` | Correct `workspacesVolume`; posture clauses on 4 stores |
 | `knowledge-base/engineering/architecture/diagrams/views.c4` | `include platform.infra.workspacesVolume` |
 | `knowledge-base/project/constitution.md` | The design-time-default principle (in lieu of an AGENTS rule, D4) |
