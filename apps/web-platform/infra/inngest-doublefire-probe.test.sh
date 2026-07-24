@@ -23,11 +23,22 @@ assert_eq() {
   else echo "  FAIL: $desc"; echo "    expected: $expected"; echo "    actual:   $actual"; FAIL=$((FAIL + 1)); fi
 }
 
-# Build a v1.19.4-shaped runs page. Args: <hasNextPage> <endCursor> <edges-json>
+# Build a v1.19.4-shaped runs page.
+# Args: <hasNextPage> <endCursor> <edges-json> [<totalCount>]
+#
+# totalCount is the SERVER's count of runs matching the filter across ALL pages — it is
+# NOT the page's edge count. The 4th arg is what makes the #6178 page-1 feasibility gate
+# testable: while totalCount was hardcoded to `$edges|length` it could never EXCEED the
+# page it rode on, so no fixture could express "the server says there are 145,600 matching
+# runs and this page carries 2 of them" — the exact input the gate exists to reject.
+# Omitted ⇒ the edge count (the realistic single-page case), so existing call sites keep
+# their current meaning.
 make_page() {
-  local has_next="$1" end_cursor="$2" edges="$3"
-  jq -nc --argjson hn "$has_next" --arg ec "$end_cursor" --argjson edges "$edges" \
-    '{data:{runs:{totalCount:($edges|length),pageInfo:{hasNextPage:$hn,endCursor:$ec},edges:$edges}}}'
+  local has_next="$1" end_cursor="$2" edges="$3" total="${4:-}"
+  local total_json
+  if [[ -n "$total" ]]; then total_json="$total"; else total_json=$(jq -n --argjson e "$edges" '$e|length'); fi
+  jq -nc --argjson hn "$has_next" --arg ec "$end_cursor" --argjson edges "$edges" --argjson tc "$total_json" \
+    '{data:{runs:{totalCount:$tc,pageInfo:{hasNextPage:$hn,endCursor:$ec},edges:$edges}}}'
 }
 
 # Build one run edge. Args: <run_id> <function_id> <started_at>
@@ -319,9 +330,11 @@ test_df_transport_exhaustion_fails_loud() {
   if echo "$STDOUT_CAP" | grep -q 'malformed runs response'; then
     echo "  FAIL: transient empty mislabeled as 'malformed runs response' (the #6919 bug)"; FAIL=$((FAIL+1));
   else echo "  PASS: transient empty NOT mislabeled 'malformed runs response'"; PASS=$((PASS+1)); fi
-  # and it carries the accurate operator remediation.
-  if echo "$STDOUT_CAP" | grep -q 'increase PREFLIGHT_DEADLINE_S'; then
-    echo "  PASS: accurate remediation (increase PREFLIGHT_DEADLINE_S / scope functionIDs)"; PASS=$((PASS+1));
+  # and it carries an accurate, LIVE operator remediation. (#6178: this used to assert
+  # "increase PREFLIGHT_DEADLINE_S", which the SUM bound caps at 112 s — ~14 pages against
+  # a window needing ~1,456. Asserting dead advice is how the dead advice survived.)
+  if echo "$STDOUT_CAP" | grep -qE 'CUTOVER_WINDOW_FROM|narrow the window'; then
+    echo "  PASS: accurate LIVE remediation (narrow the window / scope functionIDs)"; PASS=$((PASS+1));
   else echo "  FAIL: no accurate remediation in the FATAL message (out=$STDOUT_CAP)"; FAIL=$((FAIL+1)); fi
   rm -rf "$dir"
 }
@@ -452,6 +465,146 @@ test_df_argv_ceiling_collapsed_runs() {
   rm -rf "$dir"
 }
 
+# ===========================================================================
+# #6178 — totalCount parse + the PAGE-1 FEASIBILITY GATE.
+#
+# The probe's GraphQL query has ALWAYS requested `totalCount` and the script has
+# ALWAYS discarded it (the sole occurrence of the token was inside the query
+# string). So the scan fetched its own scale on every page and threw it away,
+# and "how many runs are in this window" read as an inherent unknown rather than
+# a one-line omission. op=verify then died on `reason=deadline` after ~112 s with
+# NO verdict, eleven times, because a 200-day window holds ~145,600 runs
+# (measured: 728 runs/day, Phase 0 run 30121678305) against a ~18-page budget.
+#
+# The gate converts that 112 s silent-failure into a ~2 s abort that NAMES the
+# latest viable anchor, computed from the observed density — so the next
+# narrowing is measured rather than extrapolated.
+# ===========================================================================
+
+# --- #6178 A: happy path carries total_count on the object AND the DONE marker ---
+test_df_total_count_emitted() {
+  echo "TEST: doublefire-probe — total_count parsed from page 1 → object + DONE marker (#6178)"
+  local dir; dir=$(mktemp -d)
+  # totalCount (7) deliberately EXCEEDS this page's edge count (1): it is the server's
+  # count across all pages. A build that re-derives it from the page would report 1.
+  make_page false "" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" 7 > "$dir/page-1.json"
+  run_probe_logcap "$dir"
+  assert_eq "happy path exits 0" "0" "$RC"
+  assert_eq "emitted object carries total_count from the SERVER (7, not the page's 1)" "7" \
+    "$(echo "$STDOUT_CAP" | jq -r '.total_count' 2>/dev/null || echo x)"
+  assert_eq "runs still projected alongside total_count" "1" \
+    "$(echo "$STDOUT_CAP" | jq -r '.runs | length' 2>/dev/null || echo x)"
+  if echo "$MARKERS_CAP" | grep -qE 'SOLEUR_INNGEST_PREFLIGHT_DONE .*total_count=7'; then
+    echo "  PASS: DONE marker carries total_count=7"; PASS=$((PASS+1));
+  else echo "  FAIL: DONE marker lacks total_count=7 (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
+  rm -rf "$dir"
+}
+
+# --- #6178 B: an abort BEFORE page 1 parses emits total_count=unknown, never 0 ---
+#
+# `0` is the dangerous value here: it is indistinguishable from "the window really
+# holds no runs", which is precisely the false-clean shape this gate exists to
+# prevent. An empty field is nearly as bad — it reads as a marker-format bug rather
+# than an unmeasured quantity. The enum `unknown` is the only honest encoding.
+test_df_total_count_unknown_before_page1() {
+  echo "TEST: doublefire-probe — pre-page-1 abort emits total_count=unknown (never 0/empty) (#6178)"
+  local dir; dir=$(mktemp -d)
+  make_page true "CUR1" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" 999 > "$dir/page-1.json"
+  # DEADLINE=0 aborts at the top of the loop, before any page is fetched or parsed.
+  run_probe_logcap "$dir" PREFLIGHT_DEADLINE_S=0
+  assert_eq "pre-page-1 deadline abort exits 1" "1" "$RC"
+  if echo "$MARKERS_CAP" | grep -qE 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*total_count=unknown'; then
+    echo "  PASS: TIMEOUT marker carries total_count=unknown"; PASS=$((PASS+1));
+  else echo "  FAIL: no total_count=unknown in TIMEOUT marker (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
+  # NEGATIVE: it must not read as a measured zero.
+  if echo "$MARKERS_CAP" | grep -qE 'total_count=(0|)( |$)'; then
+    echo "  FAIL: pre-page-1 abort reported total_count as 0/empty (false-clean shape)"; FAIL=$((FAIL+1));
+  else echo "  PASS: never reports a measured 0 before page 1 parses"; PASS=$((PASS+1)); fi
+  rm -rf "$dir"
+}
+
+# --- #6178 C: totalCount over the affordable budget → ~2s page-1 abort + COMPUTED remediation ---
+test_df_page1_feasibility_gate() {
+  echo "TEST: doublefire-probe — totalCount over budget aborts on page 1 with a computed anchor (#6178)"
+  local dir; dir=$(mktemp -d)
+  # The measured 200-day reality: ~145,600 runs. Affordable at the defaults is
+  # DEADLINE(90)/SEC_PER_PAGE(5) = 18 pages x PAGE_SIZE(100) = 1,800 runs.
+  #
+  # NON-VACUITY: the corpus must be COMPLETE (page-2 terminates the walk), so an
+  # implementation WITHOUT the gate paginates to exhaustion and exits 0. An earlier
+  # draft of this fixture claimed hasNextPage=true and supplied no page-2, which made
+  # the probe die on a missing-fixture transport error — so `exit 1` was satisfied
+  # without the gate existing at all. The assertion below only discriminates because
+  # the un-gated path is now a clean success.
+  make_page true "CUR1" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" 145600 > "$dir/page-1.json"
+  make_page false ""     "[$(make_edge run-2 fn-a 2026-07-08T10:01:00Z)]" 145600 > "$dir/page-2.json"
+  run_probe_logcap "$dir" INNGEST_DOUBLEFIRE_FROM=2026-01-05T18:28:08Z
+  assert_eq "over-budget window aborts (exit 1; un-gated corpus would exit 0)" "1" "$RC"
+  # NEVER a false-clean parseable body.
+  if echo "$STDOUT_CAP" | jq -e '.runs' >/dev/null 2>&1; then
+    echo "  FAIL: emitted a false-clean {runs} object on an over-budget window"; FAIL=$((FAIL+1));
+  else echo "  PASS: no false-clean runs object on the feasibility abort"; PASS=$((PASS+1)); fi
+  if echo "$MARKERS_CAP" | grep -qE 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=window_too_wide'; then
+    echo "  PASS: TIMEOUT reason=window_too_wide"; PASS=$((PASS+1));
+  else echo "  FAIL: expected reason=window_too_wide (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
+  # The marker must carry the MEASURED scale, not just the enum.
+  if echo "$MARKERS_CAP" | grep -qE 'total_count=145600'; then
+    echo "  PASS: marker carries the measured total_count=145600"; PASS=$((PASS+1));
+  else echo "  FAIL: marker lacks the measured total_count (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
+  # COMPUTED remediation: an ISO instant the operator can paste, derived from the
+  # observed density — not a static "try a smaller window" platitude.
+  if echo "$STDOUT_CAP" | grep -qE 'CUTOVER_WINDOW_FROM[^0-9]*[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'; then
+    echo "  PASS: remediation names a COMPUTED latest-viable ISO anchor"; PASS=$((PASS+1));
+  else echo "  FAIL: remediation carries no computed ISO anchor (out=$STDOUT_CAP)"; FAIL=$((FAIL+1)); fi
+  # The abort must be fast: it happens on page 1, so it must NOT have paginated.
+  if echo "$MARKERS_CAP" | grep -qE 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*pages=1 '; then
+    echo "  PASS: aborted ON page 1 (no wasted pagination)"; PASS=$((PASS+1));
+  else echo "  FAIL: did not abort on page 1 (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
+  rm -rf "$dir"
+}
+
+# --- #6178 D: a within-budget window is NOT gated (the gate discriminates) ---
+#
+# Without this, the gate above would pass identically against an implementation
+# that aborts on EVERY window — i.e. a probe that can never return a verdict at all.
+test_df_page1_gate_allows_feasible_window() {
+  echo "TEST: doublefire-probe — a within-budget totalCount is NOT gated (#6178)"
+  local dir; dir=$(mktemp -d)
+  # 728 runs = the measured 1-day density, comfortably under the 1,800 affordable.
+  make_page false "" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" 728 > "$dir/page-1.json"
+  run_probe_logcap "$dir"
+  assert_eq "feasible window completes (exit 0)" "0" "$RC"
+  assert_eq "feasible window still emits its runs" "1" \
+    "$(echo "$STDOUT_CAP" | jq -r '.runs | length' 2>/dev/null || echo x)"
+  if echo "$MARKERS_CAP" | grep -q 'reason=window_too_wide'; then
+    echo "  FAIL: the gate fired on a FEASIBLE window (it cannot discriminate)"; FAIL=$((FAIL+1));
+  else echo "  PASS: gate silent on a feasible window"; PASS=$((PASS+1)); fi
+  rm -rf "$dir"
+}
+
+# --- #6178 E: the deadline remediation is DEAD and must not be advertised (AC3) ---
+#
+# "increase PREFLIGHT_DEADLINE_S" was the operator instruction on all three abort
+# surfaces. It is arithmetically dead: the SUM bound `DEADLINE + PAGE_MIN <= outer_curl`
+# caps DEADLINE at 112 s against the 120 s outer curl, buying ~14 pages versus today's
+# 12 — against a window that needs ~1,456. An operator who follows it burns a dispatch
+# cycle to fail identically. The live lever is the WINDOW; the gate above computes it.
+#
+# Anchored on the (verb, token) pair rather than a bare token: `PREFLIGHT_DEADLINE_S`
+# legitimately appears many times as a variable read, and only the imperative phrasings
+# are the dead advice.
+test_df_deadline_remediation_is_not_dead() {
+  echo "TEST: doublefire-probe — no dead 'increase/raise/bump PREFLIGHT_DEADLINE_S' advice (#6178 AC3)"
+  local n; n=$(grep -cE '(increase|raise|bump) PREFLIGHT_DEADLINE_S' "$TARGET" || true)
+  assert_eq "zero dead deadline-raising remediations (baseline on main: 3)" "0" "$n"
+  # POSITIVE half: having removed the dead advice, the abort surfaces must still tell the
+  # operator something ACTIONABLE — else this test would be satisfied by deleting the
+  # remediation entirely, which is a regression wearing the fix's clothes.
+  if grep -qE 'CUTOVER_WINDOW_FROM|narrow the window' "$TARGET"; then
+    echo "  PASS: abort surfaces name the live lever (window narrowing)"; PASS=$((PASS+1));
+  else echo "  FAIL: dead advice removed but nothing actionable replaced it"; FAIL=$((FAIL+1)); fi
+}
+
 echo "=== inngest-doublefire-probe.sh test suite ==="
 test_valid_runs_single_page
 test_pagination
@@ -472,6 +625,11 @@ test_df_nonempty_malformed_still_loud
 test_df_marker_purity
 test_df_marker_tag_in_vector
 test_df_argv_ceiling_collapsed_runs
+test_df_total_count_emitted
+test_df_total_count_unknown_before_page1
+test_df_page1_feasibility_gate
+test_df_page1_gate_allows_feasible_window
+test_df_deadline_remediation_is_not_dead
 # ===========================================================================
 # #6617 — build_request_body must produce VALID JSON on the empty-CSV path
 #
