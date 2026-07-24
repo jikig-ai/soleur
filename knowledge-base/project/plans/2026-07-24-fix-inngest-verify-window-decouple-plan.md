@@ -54,7 +54,62 @@ is measured rather than extrapolated.
 | The cutover was **not** a single forward pass | Seven `op=rearm` dispatches across 07-24 (10:46–15:54) | **HOLDS** — coexistence is not one interval; a single scalar cannot express it |
 | web-2 exists (workflow comment asserts `CUTOVER_HOSTS` MUST include 10.0.1.11) | Hetzner API: one web host (`soleur-web-platform`, 10.0.1.10). `model.c4`: web-2 retired 2026-07-17 (#6538/#6463), `var.web_hosts` single-host | **STALE COMMENT** — web-2 does not exist; the DI-C3 caveat is moot |
 
-### UNKNOWN — still unmeasured, and that is now a deliverable
+### Phase 0 RESULT — measured 2026-07-24, run 30121678305 (the UNKNOWN is now known)
+
+Method: set `CUTOVER_WINDOW_UNTIL = now + 199d` so today's `doublefire_from()` returns
+`≈ now − 1d`; dispatch `op=doublefire-probe`. Variable deleted immediately after; repo variable
+count re-verified at **0**.
+
+| Quantity | Measured | Consequence |
+|---|---|---|
+| Runs in a **1-day** window | **728** | Density is the constraint, as diagnosed |
+| Scan wall-clock | **34 s**, no deadline abort | A 1-day window **is** exhaustible — mechanism confirmed |
+| Implied page rate | ~8 pages / 34 s ≈ **4.2 s/page** | Faster than the 7.7 s/page seen on the wide window |
+| Implied 200-day total | ~**145,600** runs ≈ **1,456 pages** | v1's "~540 pages" extrapolation **understated it ~2.7×** |
+| Affordable at 90 s | ~21 pages ≈ **~2,100 runs ≈ ~2.9 days** | The exhaustible window is **days, not weeks** |
+
+**This falsifies the fallback width in this plan's own first draft of Phase 2.** A 7-day floor is
+~5,100 runs ≈ 51 pages ≈ 214 s — **not exhaustible**. Safety (a wide floor so an operator anchor
+can only widen) and liveness (a window narrow enough to finish) are in direct tension, and the
+tension is resolved only by making the anchor *correct*, not merely bounded:
+
+- The **FSM-derived anchor is load-bearing, not a nicety.** It is the only source that yields a
+  window both correct and exhaustible (coexistence start ≈ 28 h ago ⇒ ~850 runs ≈ 9 pages ≈ 38 s).
+- **There is no safe wide fallback.** If the anchor cannot be derived, the honest behavior is to
+  **fail closed** — "anchor underivable, supply `CUTOVER_WINDOW_FROM`" — not to scan a window that
+  provably cannot complete. A `now − 7d` floor would trade a deadline abort for a deadline abort.
+- The **page-1 feasibility gate** (Phase 1.4) is what makes this safe to operate: it converts
+  "too wide" into a ~2 s abort naming the latest viable anchor.
+
+### Phase 0 SECOND DEFECT — the bucketing jq dies on a null `startedAt` (BLOCKS the fix)
+
+The measurement run reported `728 run(s) in window; bucketing by …` and then **exited 5**. There is
+no `exit 5` in the workflow — that is `jq`'s runtime-error code, propagated by `set -euo pipefail`.
+Reproduced exactly:
+
+```
+$ echo '{"runs":[{"functionID":"a","startedAt":null}]}' \
+    | jq -c '[ .runs[] | { fn: .functionID, bucket: ((.startedAt|fromdateiso8601)/1200|floor) } ]'
+jq: error (at <stdin>:1): strptime/1 requires string inputs and arguments
+jq_rc=5
+```
+
+The probe projects `{functionID, startedAt}` from **every** returned node. A run that is queued,
+running, or cancelled-before-start carries `startedAt: null`, and `fromdateiso8601` throws on it.
+
+**This is a second defect sitting directly behind the first, on the critical path.** Narrowing the
+window alone would have moved the failure from `reason=deadline` to a `jq` crash — and AC-V4 would
+have recorded "plan failed, the fix did not work." It has been invisible until now because the scan
+had never once completed far enough to reach the bucketing step.
+
+Required (added to Phase 2): make the bucketing null-safe in **both** the `op=verify` arm and the
+`op=doublefire-probe` arm. A run with no `startedAt` has not fired and therefore cannot be a
+double-fire, so `select(.startedAt != null)` is semantically right — but it **must not be silent**:
+emit the dropped count as a `::notice::`, because silently discarding runs is exactly the
+false-clean shape this gate exists to prevent. The same null-guard applies to the missed-tick
+`OBSERVED` computation, which uses the identical expression.
+
+### UNKNOWN — resolved by Phase 0 above; kept for the record
 
 The GraphQL query **already requests `totalCount`** and the script **never parses it** (the sole
 occurrence of the token is inside the query string). The scan fetches its own scale on every page
@@ -335,13 +390,18 @@ recurred three times.
 ```
 anchor  = FSM-derived instant (earliest relevant flip row)   # anchor_source=fsm
         | CUTOVER_WINDOW_FROM                                 # anchor_source=var
-        | (none)                                              # anchor_source=floor
+        | (none)  -> FAIL CLOSED, do not scan                 # anchor_source=none
 DF_FROM = min( bucket_floor(anchor) − 2×CRON_PERIOD , now − FALLBACK_DAYS )
+FALLBACK_DAYS = 1        # NOT 7 — see Phase 0 RESULT
 ```
 
-- **`min()` is the P0 remediation.** The operator-supplied value can only ever *widen* the window,
-  never narrow it below the floor, so clock skew and a stale repo variable are both bounded by
-  construction. It also collapses the set/unset branches into one shape.
+- **`min()` is the skew remediation**, bounding an operator anchor so it can only ever *widen*.
+  **But Phase 0 measured that a wide floor is not exhaustible** (7 d ≈ 5,100 runs ≈ 214 s), so the
+  floor is `1 d` and it is a *skew guard*, not a safety net. The real safety comes from the anchor
+  being correct (FSM-derived) plus the page-1 gate catching any residual over-width.
+- **No wide fallback on an underivable anchor.** If neither the FSM row nor `CUTOVER_WINDOW_FROM`
+  yields an instant, **fail closed** with "anchor underivable — supply `CUTOVER_WINDOW_FROM`".
+  Scanning `now − 7d` would trade a deadline abort for a deadline abort while *looking* safer.
 - **`bucket_floor(anchor) = anchor_epoch / CRON_PERIOD * CRON_PERIOD`** — exact, self-documenting,
   and *is* the boundary the downstream `group_by([.fn, .bucket])` uses. Replaces v1's bare magic
   number; the additional `2×CRON_PERIOD` is retained as skew margin.

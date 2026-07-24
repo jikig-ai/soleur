@@ -18,15 +18,22 @@ revision: 2
 > - `apps/web-platform/infra/cutover-inngest-workflow.test.sh` — CI `infra-validation.yml:650`
 > Do NOT create files under `tests/scripts/infra/` — nothing runs them.
 
-## Phase 0 — Measure before coding (STOP gate, no code change)
-- [ ] 0.1 Temporarily `gh variable set CUTOVER_WINDOW_UNTIL` to `now + 200d` so today's
-      `doublefire_from()` returns ≈ `now`; dispatch `op=doublefire-probe`; record run count + s/page.
-- [ ] 0.2 `gh variable delete CUTOVER_WINDOW_UNTIL` immediately after. Leave no repo variable set.
-- [ ] 0.3 Record the measurement in the plan (satisfies AC1).
-- [ ] 0.4 **STOP GATE:** if the probe still deadlines on a minutes-wide window, the diagnosis is
-      wrong — halt and re-diagnose. Do not proceed to Phase 1.
-- [ ] 0.5 Attempt an `INNGEST_GQL_PAGE_SIZE=500` s/page measurement. The hook template plumbs only
-      `from` + `function_ids`, so either thread the env or record it as unmeasured with the reason.
+## Phase 0 — Measure before coding (STOP gate) — ✅ DONE 2026-07-24, run 30121678305
+- [x] 0.1 Set `CUTOVER_WINDOW_UNTIL = now + 199d` → `DF_FROM ≈ now − 1d`; dispatched
+      `op=doublefire-probe`. **Result: 728 runs in a 1-day window, scan completed in 34 s.**
+- [x] 0.2 `gh variable delete CUTOVER_WINDOW_UNTIL`; repo variable count re-verified **0**.
+- [x] 0.3 Measurement recorded in the plan (§ Phase 0 RESULT). Satisfies AC1.
+- [x] 0.4 STOP GATE passed — a narrow window IS exhaustible; diagnosis confirmed.
+- [ ] 0.5 `INNGEST_GQL_PAGE_SIZE=500` s/page — still unmeasured; the hook plumbs only
+      `from` + `function_ids`. Record as unmeasured with the reason, or thread the env.
+
+**Two findings that change Phases 1–2 (do not skip):**
+- **Density: ~728 runs/day.** 200 d ≈ 145,600 runs ≈ 1,456 pages. Affordable at 90 s ≈ 21 pages
+  ≈ ~2.9 days. **A 7-day fallback is NOT exhaustible** — the floor is `1 d`, and an underivable
+  anchor must FAIL CLOSED rather than scan a window that cannot finish.
+- **Second defect, blocks the fix:** the bucketing `jq` dies on a null `startedAt`
+  (`fromdateiso8601` → `strptime/1 requires string inputs`, exit 5). Reproduced. Narrowing the
+  window alone would move the failure from `reason=deadline` to a jq crash.
 
 ## Phase 1 — Probe: `totalCount` + page-1 feasibility gate
 - [ ] 1.1 RED: reshape `make_page` to take an explicit `totalCount` arg (it currently hardcodes
@@ -66,6 +73,13 @@ revision: 2
       Remove v1's tautological "DF_FROM precedes CUTOVER_WINDOW_FROM" comparison.
 - [ ] 2.10 GREEN: assert `DF_URL` carries no `until` parameter + rationale comment (post-repoint and
       post-rollback coexistence regions lie AFTER `CUTOVER_WINDOW_UNTIL`).
+- [ ] 2.11 RED: fixture with a `startedAt: null` run → bucketing must NOT exit 5.
+- [ ] 2.12 GREEN: null-safe bucketing via `select(.startedAt != null)` in **BOTH** the `op=verify`
+      arm and the `op=doublefire-probe` arm, AND in the missed-tick `OBSERVED` expression (same
+      construct). Emit the dropped count as a `::notice::` — a silent drop is the false-clean shape
+      this gate exists to prevent. A run with no `startedAt` has not fired, so it cannot double-fire.
+- [ ] 2.13 GREEN: `FALLBACK_DAYS = 1` (not 7 — Phase 0 measured 7 d as non-exhaustible); an
+      underivable anchor FAILS CLOSED rather than scanning a window that cannot complete.
 
 ## Phase 3 — Docs + deferred work
 - [ ] 3.1 Amend ADR-106 `## Decision` item 4: ⊇ restatement; `2×max_cron_period` was the
