@@ -14,6 +14,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import { humanTitle } from "@/lib/messages/action-class-copy";
 import { RedactedEventSummary } from "./redacted-event-summary";
 
@@ -69,6 +70,7 @@ export function AuditSections(props: Props) {
 }
 
 function ByokSection({ rows }: { rows: ByokRow[] }) {
+  const isMobile = useIsMobile();
   return (
     <section
       aria-labelledby="byok-section-header"
@@ -87,6 +89,39 @@ function ByokSection({ rows }: { rows: ByokRow[] }) {
           No BYOK invocations yet. When Soleur runs an action on your behalf,
           it logs token + cost here.
         </p>
+      ) : isMobile ? (
+        <ul className="space-y-2 p-3">
+          {rows.map((r, i) => (
+            <li
+              key={`${r.ts}-${i}`}
+              className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-3"
+            >
+              <p className="min-w-0 truncate font-medium text-soleur-text-primary">
+                {r.agent_role}
+              </p>
+              <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+                <span className="text-soleur-text-muted">Timestamp</span>
+                <span className="text-soleur-text-secondary">
+                  {new Date(r.ts).toLocaleString()}
+                </span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="rounded-md border border-soleur-border-default/50 px-3 py-2">
+                  <p className="text-xs text-soleur-text-muted">Tokens</p>
+                  <p className="mt-0.5 text-sm text-soleur-text-primary">
+                    {r.token_count.toLocaleString()}
+                  </p>
+                </div>
+                <div className="rounded-md border border-soleur-border-default/50 px-3 py-2">
+                  <p className="text-xs text-soleur-text-muted">Cost (¢)</p>
+                  <p className="mt-0.5 text-sm text-soleur-text-primary">
+                    {r.unit_cost_cents}
+                  </p>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
       ) : (
         <table className="w-full text-sm">
           <thead className="text-left text-xs uppercase text-soleur-text-muted">

@@ -33,6 +33,7 @@ import {
 } from "@/components/command-palette/platform";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { HelpOverlay } from "@/components/command-palette/help-overlay";
+import { MobilePaletteTrigger } from "@/components/command-palette/mobile-palette-trigger";
 import { SupportLauncher } from "@/components/support/support-launcher";
 import { TourProvider } from "@/components/tour/tour-provider";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
@@ -330,6 +331,9 @@ export default function DashboardLayout({
           // section title. Settings/Chat keep theirs (KB-scoped).
           suppressSectionTitle={drill === "kb"}
         />
+        {/* The only non-keyboard way to open the command palette. `ml-auto`
+            pins it to the trailing edge; self-hides when the flag is off. */}
+        <MobilePaletteTrigger />
       </div>
 
       {/* Overlay backdrop — always rendered for fade transition */}

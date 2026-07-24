@@ -4,6 +4,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import type { TeamMembershipRow } from "@/server/team-membership-resolver";
 import { DelegationToggle } from "@/components/settings/delegation-toggle";
 import { TransferOwnershipDialog } from "@/components/settings/transfer-ownership-dialog";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 
 function formatRelative(iso: string): string {
   try {
@@ -47,6 +48,31 @@ export function TeamMembershipList({
   byokDelegationsEnabled: boolean;
   organizationName: string | null;
 }) {
+  const isMobile = useIsMobile();
+
+  // Below `md`, the CSS grid-as-table folds into one card per member (the
+  // operator-approved wireframe: mobile-phase-3/02-table-card-team-membership).
+  // `useIsMobile` seeds desktop-first on SSR + first client render so hydration
+  // always matches the grid, then flips after mount.
+  if (isMobile) {
+    return (
+      <div className="space-y-3 p-3">
+        {members.map((m) => (
+          <MemberRow
+            key={m.userId}
+            variant="card"
+            member={m}
+            isCurrentUser={m.userId === currentUserId}
+            workspaceId={workspaceId}
+            isOwner={isOwner}
+            byokDelegationsEnabled={byokDelegationsEnabled}
+            organizationName={organizationName}
+          />
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className={`grid ${byokDelegationsEnabled ? "grid-cols-[1fr_auto_auto_auto_auto]" : "grid-cols-[1fr_auto_auto_auto]"} items-center gap-4 border-b border-soleur-border-default px-6 py-2 text-xs font-medium uppercase tracking-wider text-soleur-text-muted`}>
@@ -78,6 +104,7 @@ function MemberRow({
   isOwner,
   byokDelegationsEnabled,
   organizationName,
+  variant = "row",
 }: {
   member: TeamMembershipRow;
   isCurrentUser: boolean;
@@ -85,6 +112,8 @@ function MemberRow({
   isOwner: boolean;
   byokDelegationsEnabled: boolean;
   organizationName: string | null;
+  /** "row" = desktop grid `<div>` cells; "card" = mobile record card (below md). */
+  variant?: "row" | "card";
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [transferDialogOpen, setTransferDialogOpen] = useState(false);
@@ -140,6 +169,111 @@ function MemberRow({
     !isCurrentUser &&
     !member.hasEffectiveKey &&
     !member.delegationFromMe;
+
+  // Shared across both variants: the bordered role badge classes (Owner gold /
+  // Member neutral). The row variant additionally prepends `justify-self-center`
+  // to sit under its grid header; the card renders the badge in a flex header
+  // where justify-self is a no-op, so it is omitted there.
+  const roleBadgeClass =
+    member.role === "owner"
+      ? "rounded-md border border-soleur-accent-gold-fg/40 px-2 py-0.5 text-xs font-medium text-soleur-accent-gold-fg"
+      : "rounded-md border border-soleur-border-default px-2 py-0.5 text-xs font-medium text-soleur-text-secondary";
+
+  // MOBILE CARD (below md). Same computed values, handlers, and sub-components
+  // as the desktop row — the per-row kebab menu is promoted to explicit 44px
+  // buttons; the optional Funded row shows only when delegations are enabled
+  // (identical condition to the desktop column). Wireframe:
+  // knowledge-base/product/design/mobile-phase-3/02-table-card-team-membership.
+  if (variant === "card") {
+    return (
+      <div className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="h-9 w-9 shrink-0 rounded-full bg-soleur-bg-surface-2" aria-hidden="true" />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium text-soleur-text-primary">
+                {member.email.split("@")[0]}
+              </div>
+              <div className="truncate text-xs text-soleur-text-muted">{member.email}</div>
+            </div>
+          </div>
+          <span className={roleBadgeClass}>
+            {member.role === "owner" ? "Owner" : "Member"}
+          </span>
+        </div>
+
+        {showShareKeyPrompt && (
+          <p className="mt-2 text-xs text-soleur-text-muted">
+            No API key yet — can view the workspace but can&apos;t run tasks.{" "}
+            <a
+              href="mailto:?subject=Add%20your%20Anthropic%20API%20key%20to%20Soleur"
+              className="underline decoration-dotted underline-offset-2 hover:text-soleur-text-secondary"
+            >
+              or ask them to add their own
+            </a>
+            .
+          </p>
+        )}
+
+        <div className="mt-3 space-y-2 border-t border-soleur-border-default pt-3">
+          {byokDelegationsEnabled && (
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className="text-soleur-text-muted">Funded</span>
+              <DelegationToggle
+                memberUserId={member.userId}
+                memberEmail={member.email}
+                workspaceId={workspaceId}
+                isOwner={isOwner}
+                delegation={member.delegationFromMe}
+                delegationToMe={member.delegationToMe}
+                isSelf={isCurrentUser}
+                flagEnabled={byokDelegationsEnabled}
+                promptShareKey={showShareKeyPrompt}
+              />
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <span className="text-soleur-text-muted">Added</span>
+            <span className="text-soleur-text-secondary">
+              {isCurrentUser ? "— (you)" : formatRelative(member.addedAt)}
+            </span>
+          </div>
+        </div>
+
+        {showActions && (
+          <div className="mt-3 flex gap-2 border-t border-soleur-border-default pt-3">
+            {isOwner && member.role !== "owner" && (
+              <button
+                type="button"
+                onClick={() => setTransferDialogOpen(true)}
+                className="flex min-h-11 flex-1 items-center justify-center rounded-md border border-soleur-border-default text-sm font-medium text-soleur-text-secondary hover:bg-soleur-bg-surface-2"
+              >
+                Transfer ownership
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleRemove}
+              className="flex min-h-11 flex-1 items-center justify-center rounded-md border border-red-400/40 text-sm font-medium text-red-400 hover:bg-soleur-bg-surface-2"
+            >
+              Remove
+            </button>
+          </div>
+        )}
+
+        {transferDialogOpen && (
+          <TransferOwnershipDialog
+            targetEmail={member.email}
+            confirmationTarget={organizationName || member.email}
+            workspaceId={workspaceId}
+            targetUserId={member.userId}
+            onClose={() => setTransferDialogOpen(false)}
+            onSuccess={() => window.location.reload()}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className={`grid ${byokDelegationsEnabled ? "grid-cols-[1fr_auto_auto_auto_auto]" : "grid-cols-[1fr_auto_auto_auto]"} items-center gap-4 border-b border-soleur-border-default px-6 py-4 last:border-b-0`}>

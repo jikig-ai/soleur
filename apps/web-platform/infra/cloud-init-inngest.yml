@@ -452,6 +452,28 @@ runcmd:
     # in web cloud-init.yml) so the bootstrap writes the vector.service unit; pass
     # the arm64 Vector env (non-empty VERSION + arm64 SHA override + VECTOR_CLI_ARCH) below.
     docker cp soleur-inngest-bootstrap-extract:/vector.toml /tmp/vector.toml 2>/dev/null || true
+    # #6178: stage the cutover flip trio + arm-atomicity guard from the OCI image to /tmp so
+    # inngest-bootstrap.sh's flip-install block (which gates on `-f /tmp/inngest-cutover-flip.*`,
+    # inngest-bootstrap.sh:664) can install + `systemctl enable --now inngest-cutover-flip.timer`.
+    # These docker-cp lines were MISSING — the build baked the assets into the image (Dockerfile
+    # COPY /inngest-cutover-flip.*) and bootstrap looked for them at /tmp, but nothing copied
+    # image:/ -> /tmp, so DEDICATED_FLIP stayed 0 and the flip timer NEVER installed on any
+    # dedicated host. The flip FSM therefore never ran end-to-end (masked because every flip test
+    # drives the CUTOVER_FLAG_SET_CMD fixture seam, bypassing this real install path).
+    docker cp soleur-inngest-bootstrap-extract:/inngest-cutover-flip.sh /tmp/inngest-cutover-flip.sh 2>/dev/null || true
+    docker cp soleur-inngest-bootstrap-extract:/inngest-server-flip-guard.sh /tmp/inngest-server-flip-guard.sh 2>/dev/null || true
+    docker cp soleur-inngest-bootstrap-extract:/inngest-cutover-flip.service /tmp/inngest-cutover-flip.service 2>/dev/null || true
+    docker cp soleur-inngest-bootstrap-extract:/inngest-cutover-flip.timer /tmp/inngest-cutover-flip.timer 2>/dev/null || true
+    docker cp soleur-inngest-bootstrap-extract:/cat-inngest-cutover-state.sh /tmp/cat-inngest-cutover-state.sh 2>/dev/null || true
+    # Make the staging outcome VISIBLE off-box (curl-direct phone-home, Vector-independent):
+    # the silent absence of these files is exactly what hid the missing-timer bug for a full
+    # cutover attempt. Report staged vs MISSING so the next occurrence self-diagnoses.
+    if [ -f /tmp/inngest-cutover-flip.sh ] && [ -f /tmp/inngest-cutover-flip.timer ] \
+       && [ -f /tmp/inngest-server-flip-guard.sh ] && [ -f /tmp/inngest-cutover-flip.service ]; then
+      /usr/local/bin/inngest-boot-phone-home.sh flip-assets-staged 2>/dev/null || true
+    else
+      /usr/local/bin/inngest-boot-phone-home.sh flip-assets-MISSING "the inngest-cutover-flip.timer will NOT install (DEDICATED_FLIP=0)" 2>/dev/null || true
+    fi
     chmod +x /tmp/inngest-redis-bootstrap.sh 2>/dev/null || true
     image_env=$(docker inspect "$IREF" -f '{{range .Config.Env}}{{println .}}{{end}}')
     chmod +x "$EXTRACT_DIR/inngest-bootstrap.sh"
@@ -498,7 +520,11 @@ runcmd:
     # (Vector journald shipping is separately unreliable on this host, so this is the visibility).
     set +e
     sleep 8
-    svc="$(systemctl is-active inngest-server.service inngest-redis.service vector.service 2>&1 | tr '\n' ',')"
+    # #6178: inngest-cutover-flip.timer is included so the OUTCOME (the flip poll timer actually
+    # installed + active = DEDICATED_FLIP reached 1) self-reports off-box, not just the
+    # flip-assets-staged precondition. This is precisely the state #6178 silently failed at (the
+    # timer never installed); a non-'active' 4th field surfaces it in the same curl-direct marker.
+    svc="$(systemctl is-active inngest-server.service inngest-redis.service vector.service inngest-cutover-flip.timer 2>&1 | tr '\n' ',')"
     lo="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://127.0.0.1:8288/ 2>&1)"
     jl="$(journalctl -u inngest-server.service --no-pager -n 15 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' | head -c 400)"
     /usr/local/bin/inngest-boot-phone-home.sh post-boot-health "svc=[$svc] lo8288=$lo jl=[$jl]"

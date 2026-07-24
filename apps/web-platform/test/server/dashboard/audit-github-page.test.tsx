@@ -95,9 +95,14 @@ describe("/dashboard/audit/github page", () => {
     const Page = await GitHubAuditPage();
     render(Page);
     expect(screen.queryByTestId("gh-audit-empty")).not.toBeInTheDocument();
-    expect(screen.getByText("jikig-ai/soleur")).toBeInTheDocument();
-    expect(screen.getByText("/repos/{owner}/{repo}/pulls/{pull_number}")).toBeInTheDocument();
-    expect(screen.getByText("200")).toBeInTheDocument();
+    // The page dual-renders below/at md (desktop table + mobile cards, CSS-gated),
+    // so each value appears in BOTH trees in jsdom (which ignores media queries).
+    // getAllByText tolerates the duplication while still asserting presence.
+    expect(screen.getAllByText("jikig-ai/soleur").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("/repos/{owner}/{repo}/pulls/{pull_number}").length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText("200").length).toBeGreaterThan(0);
   });
 
   it("renders em-dash placeholders when repo_full_name or response_status are NULL (post-anonymise)", async () => {

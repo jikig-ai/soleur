@@ -8,9 +8,10 @@
 // at startup). A silent default would expose the runtime trigger surface
 // to forged events.
 //
-// INNGEST_BASE_URL is optional. Self-hosted Hetzner deploys set it to
-// http://127.0.0.1:8288 per ADR-030; Inngest Cloud deploys (rejected,
-// see ADR-030) would omit it.
+// INNGEST_BASE_URL is optional. Self-hosted Hetzner deploys set it to the
+// Inngest server URL — the dedicated soleur-inngest host http://10.0.1.40:8288
+// post-cutover (#6178; formerly the co-located loopback http://127.0.0.1:8288
+// per ADR-030); Inngest Cloud deploys (rejected, see ADR-030) would omit it.
 
 import { Inngest } from "inngest";
 
