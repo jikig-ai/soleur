@@ -325,7 +325,15 @@ jobs:
                 echo "::error::re-arm precondition: registry-probe returned HTTP $RCODE: ${CAUSE:-<empty body>}"; exit 1
               fi
               RCOUNT=$(echo "$RPROBE" | jq -r '.function_count // 0')
-              if [[ "$(echo "$RPROBE" | jq -r '.registry_empty // "true"')" != "false" ]]; then
+              # registry_empty is a BOOLEAN. Do NOT use `.registry_empty // "true"`: jq's `//`
+              # treats boolean `false` as empty and returns the RHS, so `false // "true"` = "true"
+              # — i.e. a HEALTHY non-empty registry (registry_empty:false) reads as EMPTY and this
+              # precondition can never pass against the real post-2.4 backend (#6178). Read the
+              # boolean directly, behind a has() presence guard (fail-closed on a malformed body).
+              # This is the exact shape op=verify already uses (:1062-1063) — the comment there
+              # calls this "mirror of the op=rearm guard"; the two had drifted.
+              if ! echo "$RPROBE" | jq -e 'type=="object" and has("registry_empty")' >/dev/null 2>&1 \
+                 || [[ "$(echo "$RPROBE" | jq -r '.registry_empty')" != "false" ]]; then
                 echo "::error::re-arm precondition FAILED (P1-9/P2-17): dedicated registry is EMPTY (function_count=$RCOUNT). 2.4 app-repoint has not landed — refusing to re-arm against a backend with no registered functions. Complete 2.4 (repoint INNGEST_BASE_URL → 10.0.1.40 + redeploy) then re-run op=rearm."
                 exit 1
               fi
