@@ -513,6 +513,8 @@ fi
 declare -A SYSLOG_TAG_EXCLUSIONS=(
   [sh]="shared /bin/sh wrapper basename (cron-egress-{firewall,resolve}, cron-egress-alarm@, container-restart-monitor). Not a per-unit diagnostic channel — those units' payload scripts log under their own logger -t tags (covered by AC3); the bare /bin/sh wrapper carries nothing to ship."
   [doppler]="doppler-run wrapper basename (inngest-cutover-flip.service, inngest-redis.service). The wrapped binary's real output is captured by Source 1 inngest_journald (include_units) or is non-diagnostic; the bare 'doppler' channel is not a Source 4 log surface."
+  [sysctl]="sysctl(8) wrapper basename (bwrap-userns-sysctl.service, #6459 Phase 2.2). A one-shot that sets kernel.apparmor_restrict_unprivileged_userns=0 and exits — no per-unit diagnostic payload; a set failure surfaces via systemd unit-state, not a log line, so the bare 'sysctl' channel is not a Source 4 log surface."
+  [orphan-reaper.sh]="orphan-workspace reaper basename (orphan-reaper.service/.timer, #6459 Phase 2.2). Its output names /workspaces paths (a potential user-identifier PII surface), so it is DELIBERATELY not shipped to the Better Stack Source 4 log store; reaper malfunction is a timer-liveness/alarm concern (its own emit path), not a log-content one."
 )
 
 SERVICE_BASENAMES=""

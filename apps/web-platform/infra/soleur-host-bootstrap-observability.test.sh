@@ -577,7 +577,7 @@ else
   no "AC22: server.tf templatefile map must inject a per-host host_name var"
 fi
 # (8) delivery lockstep: vector.toml in host_script_files AND baked by the Dockerfile COPY
-if awk '/host_script_files = \[/,/^  \]/' "$TF" | grep -qF -- '"vector.toml"'; then
+if awk '/host_script_files = \[/,/^  \]/' "$TF" | grep -cF -- '"vector.toml"' >/dev/null; then
   ok "AC22: vector.toml is in server.tf host_script_files"
 else
   no "AC22: vector.toml must be in server.tf host_script_files (baked-set membership)"

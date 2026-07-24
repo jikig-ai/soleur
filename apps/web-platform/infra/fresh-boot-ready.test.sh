@@ -164,7 +164,7 @@ fi
 
 run_case() { # run_case <label> <expect-substring> <env-assignments...>
   local label="$1"; local expect="$2"; shift 2
-  local sb; sb="$(mktemp -d -t fbr-case.XXXXXXXX)"
+  local sb; sb="$(mktemp -d -t fbr-case.XXXXXXXX)"  # lint-trap-ownership: ok — per-case scaffold under $TMPDIR, bounded (one small dir per test case; CI runners are ephemeral; ADR-129)
   local cap="$sb/logger.out"
   # stub bin dir on PATH
   mkdir -p "$sb/bin"
