@@ -318,6 +318,33 @@ grep -qE 'NO SIGNATURE VERIFICATION ON THIS PATH' "$CLOUD_INIT" \
 grep -qE '^[[:space:]]*IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$' "$CLOUD_INIT" \
   && pass || fail "IREF must be digest-pinned (repo:vX.Y.Z@sha256:<64-hex>) — CF-2: a mutable tag gates a root-executed payload on nothing but GHCR TLS"
 
+# --- (#6178) Flip-asset staging PARITY: cloud-init must docker-cp every flip asset that
+#     inngest-bootstrap.sh installs from /tmp. The bug this guards: the OCI image baked the
+#     flip trio in (Dockerfile COPY) and bootstrap gated its install on `-f /tmp/inngest-
+#     cutover-flip.*`, but cloud-init NEVER docker-cp'd image:/ -> /tmp, so DEDICATED_FLIP
+#     stayed 0 and the inngest-cutover-flip.timer never installed on any dedicated host — the
+#     flip FSM could not run. Derive the required set from the CONSUMER (bootstrap's install
+#     lines), so adding a new flip asset to bootstrap without staging it in cloud-init red-lines.
+#     The four hard-required files are those in bootstrap's install-gate condition (:664).
+FLIP_REQUIRED=(inngest-cutover-flip.sh inngest-server-flip-guard.sh inngest-cutover-flip.service inngest-cutover-flip.timer)
+for asset in "${FLIP_REQUIRED[@]}"; do
+  # bootstrap must actually install it from /tmp (consumer side)...
+  if ! grep -qE "install -m [0-7]+ /tmp/${asset//./\\.} " "$BOOTSTRAP"; then
+    fail "inngest-bootstrap.sh must install /tmp/${asset} (consumer side of the staging parity)"
+    continue
+  fi
+  # ...and cloud-init must docker-cp it from the image to that /tmp path (producer side).
+  if grep -qE "docker cp [^ ]*:/${asset//./\\.} /tmp/${asset//./\\.}" "$CLOUD_INIT"; then
+    pass
+  else
+    fail "cloud-init-inngest.yml must 'docker cp ...:/${asset} /tmp/${asset}' — bootstrap installs it from /tmp; without the cp DEDICATED_FLIP=0 and the flip timer never installs (#6178)"
+  fi
+done
+# The staging outcome must self-report off-box (the silent absence hid the bug for a full
+# cutover attempt): assert a flip-assets phone-home marker exists.
+grep -qE 'inngest-boot-phone-home\.sh flip-assets-(staged|MISSING)' "$CLOUD_INIT" \
+  && pass || fail "cloud-init-inngest.yml must phone-home the flip-assets staging outcome (flip-assets-staged / flip-assets-MISSING) so a future staging failure self-diagnoses off-box (#6178)"
+
 echo ""
 echo "=== inngest-host.test.sh: ${passes} passed, ${fails} failed ==="
 [ "$fails" -eq 0 ] || exit 1
