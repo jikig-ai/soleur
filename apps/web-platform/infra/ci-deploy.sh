@@ -2415,7 +2415,7 @@ case "$COMPONENT" in
       --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$ENV_FILE" \
       --add-host host.docker.internal:host-gateway \
-      -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
+      -e INNGEST_BASE_URL=http://10.0.1.40:8288 \
       -e CRON_WORKSPACE_ROOT=/workspaces \
       -e SOLEUR_HOST_ID="$HOST_ID" \
       -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
@@ -2648,7 +2648,7 @@ case "$COMPONENT" in
         --tmpfs /tmp:rw,nosuid,nodev,size=256m \
         --env-file "$ENV_FILE" \
         --add-host host.docker.internal:host-gateway \
-        -e INNGEST_BASE_URL=http://host.docker.internal:8288 \
+        -e INNGEST_BASE_URL=http://10.0.1.40:8288 \
         -e CRON_WORKSPACE_ROOT=/workspaces \
         -e SOLEUR_HOST_ID="$HOST_ID" \
         -e NODE_OPTIONS="$PROD_NODE_OPTIONS" \
