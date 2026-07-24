@@ -1577,3 +1577,61 @@ describe("each registry dispatch job sources exactly its own gate lib", () => {
     });
   }
 });
+
+/**
+ * STEP ORDER for registry_luks_recut (#6929).
+ *
+ * Order is a safety property here, not cosmetics:
+ *   - the pull-path health gate and the destroy-guard must precede the APPLY (afterwards there
+ *     is nothing left to protect — the store is already destroyed);
+ *   - the web-1/workspaces zero-touch assert must precede the apply too. In the plan's v1 it ran
+ *     AFTER, reading the same tfplan.json the gate had already read — it therefore added no
+ *     information and could prevent nothing;
+ *   - the liveness poll must follow the apply, since it asserts the NEW host beats.
+ */
+describe("registry_luks_recut step order is a safety property", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  // Step names in declaration order, read from the job block. Anchored on the `- name:` step
+  // key at its exact indent so prose inside a `run:` body cannot be mistaken for a step.
+  const names = [
+    ...extractJobBlock(wf, "registry_luks_recut").matchAll(
+      /^ {6}- name: (.+)$/gm,
+    ),
+  ].map((m) => m[1].trim());
+
+  const idx = (needle: string) => names.findIndex((n) => n.includes(needle));
+
+  test("all ordered steps are present", () => {
+    // Non-vacuity floor: if the extraction found nothing, every findIndex below returns -1 and
+    // the ordering assertions would pass on an all -1 array.
+    expect(names.length).toBeGreaterThanOrEqual(6);
+    for (const needle of [
+      "Validate typed confirm",
+      "Pre-destroy pull-path health gate",
+      "destroy-guard",
+      "Pre-apply zero-touch assert",
+      "Terraform apply",
+      "Post-apply liveness assert",
+    ]) {
+      expect(idx(needle)).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  test("confirm < pull-path < destroy-guard < zero-touch < apply < liveness", () => {
+    const order = [
+      idx("Validate typed confirm"),
+      idx("Pre-destroy pull-path health gate"),
+      idx("destroy-guard"),
+      idx("Pre-apply zero-touch assert"),
+      idx("Terraform apply"),
+      idx("Post-apply liveness assert"),
+    ];
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  test("the zero-touch assert runs BEFORE the apply, not after", () => {
+    // Pinned separately from the chain above because this is the one ordering the plan's v1 got
+    // wrong, and a chain assertion would not name it if it regressed.
+    expect(idx("Pre-apply zero-touch assert")).toBeLessThan(idx("Terraform apply"));
+  });
+});
