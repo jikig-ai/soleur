@@ -32,6 +32,13 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLOUD_INIT="${DIR}/cloud-init-registry.yml"
 LUKS_TF="${DIR}/zot-registry.tf"
 
+# Single owning trap for all mutation-test scratch copies (rule c / ADR-129):
+# assert_mutation allocates each per-mutation temp copy under this dir; the trap
+# removes the whole dir on ANY exit, incl. a die between mktemp and the per-call
+# rm -f, so nothing leaks if a predicate or sed aborts mid-run.
+_MUT_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/regluks-mut.XXXXXX")"
+trap 'rm -rf "$_MUT_TMPDIR"' EXIT INT TERM
+
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); }
@@ -187,7 +194,7 @@ assert_holds() {
 }
 assert_mutation() {
   local name="$1" fn="$2" file="$3" sed_expr="$4" tmp got
-  tmp="$(mktemp "${TMPDIR:-/tmp}/regluks-mut.XXXXXX")"
+  tmp="$(mktemp "$_MUT_TMPDIR/mut.XXXXXX")"
   sed -E "$sed_expr" "$file" > "$tmp"
   got="$($fn "$tmp")"
   if [ "$got" = "0" ]; then pass; else fail "$name: MUTATION did not flip the check to failing (predicate still passed on a broken copy)"; fi
