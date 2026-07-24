@@ -66,8 +66,8 @@ higher-severity direction for a security control.
 ## Session Errors
 
 1. **The credential-path guard caught my own plan document.** /work precondition 0.1 (full-scan
-   green) failed at start because the plan doc I authored quoted the literal `~/.doppler/.doppler.yaml`
-   while documenting the verification. That doc loads during /work, so the harness would auto-attach
+   green) failed at start because the plan doc I authored quoted a literal home-relative path to the
+   Doppler CLI config file while documenting the verification. That doc loads during /work, so the harness would auto-attach
    the operator's real Doppler config — the exact vector the whole PR closes.
    **Prevention:** when writing prose ABOUT a resolvable-credential-path guard, apply the guard's own
    neutralization guidance to the prose — describe the guarded file without a resolvable path
