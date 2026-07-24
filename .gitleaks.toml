@@ -100,17 +100,16 @@ paths = [
   '''apps/web-platform/scripts/rls-parity-check\.ts$''',
   '''\.github/workflows/rls-authz-fuzz\.yml$''',
   '''knowledge-base/engineering/architecture/decisions/ADR-1[0-9][0-9]-runtime-authz-rls-fuzz-harness\.md$''',
-  # encryption-posture ledger (ADR-140): the SSOT registry of every persistent
-  # store, keyed by Terraform resource ADDRESS + evidence CITATIONS + public
-  # attestation URLs + tracking-issue numbers. It contains NO secret values by
-  # design — the whole feature exists because keys live in Doppler, never in-repo.
-  # The default gitleaks `cloudflare-api-key` rule false-positives on the
-  # `non_store_types` resource-type identifiers (e.g. the 40-char
-  # `cloudflare_zero_trust_access_application`), which are snake_case identifiers,
-  # not credentials. Any real secret pasted here would still be caught by the
-  # PEM/token-prefix rules; this exempts only the resource-identifier false match.
-  '''scripts/encryption-posture-ledger\.json$''',
 ]
+# Terraform cloudflare resource-type identifiers (ADR-140, encryption-posture).
+# GLOBAL regex allowlist (applies to all rules incl. the default cloudflare-api-key
+# rule). The default rule false-positives on the 40-char snake_case Terraform
+# resource TYPE `cloudflare_zero_trust_access_application` (and siblings) in
+# scripts/encryption-posture-ledger.json's `non_store_types`. This exempts ONLY
+# the snake_case-identifier SHAPE (a real cloudflare token is never all-lowercase
+# snake_case), so no file is wholesale-exempted and a real secret in the ledger is
+# still caught. Anchored `^…$`. Ack: Allowlist-Widened-By trailer (regexes widening).
+regexes = ['''^cloudflare_[a-z0-9_]{10,}$''']
 
 # ---------------------------------------------------------------------------
 # 1. Soleur BYOK provider key
