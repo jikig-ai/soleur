@@ -95,5 +95,87 @@ else
   no "6: orphan_reaper_install SSH provisioner was removed — that is a Phase-5 change, not Phase 2"
 fi
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# Phase 2.2 PART 2 — the 3 SSH-only probes (#6438/#6548): private-NIC guard, zot-consumer,
+# git-data reachability. Unlike Part 1's orphan-reaper (heredoc units), the probes deliver their
+# .sh + .service + .timer via `provisioner "file"` from the SAME repo files, so the units are
+# byte-identical across both paths BY CONSTRUCTION (no heredoc-drift risk). What DOES diverge is
+# the per-host env file (/etc/default/web-<probe>): the SSH path writes it via a remote-exec
+# `printf`, the fresh-boot path writes it via the baked `web-probe-envwrite.sh` invoked by
+# cloud-init. The env-content parity guard (section 12) pins the KEY SET of the two writers equal.
+PROBE_SCRIPTS="web-private-nic-guard.sh web-zot-consumer-probe.sh web-git-data-probe.sh web-probe-envwrite.sh"
+PROBE_UNITS="web-private-nic-guard.service web-private-nic-guard.timer \
+             web-zot-consumer-probe.service web-zot-consumer-probe.timer \
+             web-git-data-probe.service web-git-data-probe.timer"
+PROBE_DESTS="web-private-nic-guard web-zot-consumer-probe web-git-data-probe"
+
+# ── 7. Repo files exist (3 probe scripts + the new baked env-writer + 6 units) ──
+for f in $PROBE_SCRIPTS $PROBE_UNITS; do
+  if [[ -s "$DIR/$f" ]]; then ok "7: repo file present: $f"; else no "7: missing repo file: $f"; fi
+done
+
+# ── 8. Each baked: in host_script_files (server.tf) AND the Dockerfile COPY set ──
+for f in $PROBE_SCRIPTS $PROBE_UNITS; do
+  if grep -qE "^[[:space:]]*\"$f\",[[:space:]]*\$" "$SRV"; then
+    ok "8a: $f is in server.tf host_script_files"
+  else
+    no "8a: $f missing from server.tf host_script_files"
+  fi
+  if grep -qE "^[[:space:]]*/app/infra/$f \\\\$" "$DOCKERFILE"; then
+    ok "8b: $f is in the Dockerfile baked COPY"
+  else
+    no "8b: $f missing from the Dockerfile baked COPY"
+  fi
+done
+
+# ── 9. Installed by soleur-host-bootstrap.sh (scripts 0755 /usr/local/bin, units 0644 systemd) ──
+for s in $PROBE_SCRIPTS; do
+  if grep -qE "$s" "$BOOT"; then ok "9a: $s installed by bootstrap (script)"; else no "9a: $s not installed by bootstrap"; fi
+done
+for u in $PROBE_UNITS; do
+  if grep -qE "$u" "$BOOT"; then ok "9b: $u installed by bootstrap (systemd unit)"; else no "9b: $u not installed by bootstrap"; fi
+done
+
+# ── 10. cloud-init invokes the baked env-writer BEFORE enabling the probe timers ──
+if grep -qE 'web-probe-envwrite\.sh' "$CI"; then
+  ok "10: cloud-init invokes web-probe-envwrite.sh"
+else
+  no "10: cloud-init does not invoke web-probe-envwrite.sh (env files would be absent on fresh boot)"
+fi
+
+# ── 11. cloud-init enables the 3 probe timers ──
+for d in $PROBE_DESTS; do
+  if grep -qE "systemctl enable --now $d\.timer" "$CI"; then
+    ok "11: cloud-init enables $d.timer"
+  else
+    no "11: cloud-init does not enable $d.timer"
+  fi
+done
+
+# ── 12. ENV-CONTENT PARITY (load-bearing): the baked env-writer emits the SAME key set for each
+#        /etc/default/web-<probe> as the retained SSH remote-exec printf — encoding-agnostic
+#        (server.tf HCL uses `\\n`, the bash env-writer uses `\n`, so compare KEYS not raw bytes). ──
+env_keys_from() { # $1=file  $2=dest-basename → sorted-unique KEY= tokens on the printf line writing that dest
+  grep -F "/etc/default/$2" "$1" | grep -oE "printf '[^']*'" | grep -oE '[A-Z_0-9]+=' | sort -u
+}
+for d in $PROBE_DESTS; do
+  ssh_keys="$(env_keys_from "$SRV" "$d")"
+  bake_keys="$(env_keys_from "$DIR/web-probe-envwrite.sh" "$d")"
+  if [[ -n "$ssh_keys" && "$ssh_keys" == "$bake_keys" ]]; then
+    ok "12: /etc/default/$d key set matches across SSH remote-exec and baked env-writer"
+  else
+    no "12: /etc/default/$d key set DRIFTED (ssh=[$(echo $ssh_keys)] bake=[$(echo $bake_keys)])"
+  fi
+done
+
+# ── 13. The 3 probe SSH provisioners are RETAINED (Phase 2 adds coverage; Phase 5 removes SSH) ──
+for r in private_nic_guard_install zot_consumer_probe_install git_data_probe_install; do
+  if grep -qE "resource \"terraform_data\" \"$r\"" "$SRV"; then
+    ok "13: terraform_data.$r retained (web-1 running-host rotation until Phase 5)"
+  else
+    no "13: $r SSH provisioner was removed — that is a Phase-5 change, not Phase 2"
+  fi
+done
+
 echo "=== fresh-boot-parity: $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

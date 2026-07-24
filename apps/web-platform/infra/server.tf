@@ -85,6 +85,26 @@ locals {
     "orphan-reaper.timer",
     "99-bwrap-userns.conf",
     "bwrap-userns-sysctl.service",
+    # (#6459 Phase 2.2 PART 2) The 3 web-host probes (#6438/#6548): private-NIC guard, zot-consumer,
+    # git-data reachability. Their ONLY prior delivery was the terraform_data.*_probe_install /
+    # private_nic_guard_install SSH provisioners below (web-1 only), so a fresh cattle host (web-2)
+    # came up with NO probe scripts/units and NO /etc/default/web-<probe> env files. Baked here +
+    # installed by soleur-host-bootstrap.sh + env files written by web-probe-envwrite.sh (invoked by
+    # cloud-init with the per-host token/IP/endpoints) + timers enabled by cloud-init. The SSH
+    # provisioners are RETAINED for web-1 running-host rotation until Phase 5. The .service/.timer
+    # bodies are byte-identical across both paths BY CONSTRUCTION (the SSH path delivers the SAME
+    # repo files via `provisioner "file"`); env-file key-set parity is drift-guarded in
+    # fresh-boot-parity.test.sh §12.
+    "web-private-nic-guard.sh",
+    "web-private-nic-guard.service",
+    "web-private-nic-guard.timer",
+    "web-zot-consumer-probe.sh",
+    "web-zot-consumer-probe.service",
+    "web-zot-consumer-probe.timer",
+    "web-git-data-probe.sh",
+    "web-git-data-probe.service",
+    "web-git-data-probe.timer",
+    "web-probe-envwrite.sh",
   ]
 
   # Combined content-hash over the baked set: each file's sha256 hex, sorted, joined
@@ -255,6 +275,22 @@ resource "hcloud_server" "web" {
     # terraform_data.registry_insecure_config delivery. A subnet renumber propagates to both
     # host classes instead of drifting from a hardcoded copy.
     registry_endpoint = local.registry_endpoint
+    # (#6459 Phase 2.2 PART 2) Per-host inputs for web-probe-envwrite.sh, which writes the 3
+    # /etc/default/web-<probe> EnvironmentFiles on a fresh cattle host (the SSH remote-exec path
+    # only reaches web-1). Values single-sourced from the SAME expressions the SSH provisioners use:
+    #   web_probes_token — the read-scoped doppler_service_token.web_probes.key (adds ZERO marginal
+    #     exposure over the full-prd doppler_token already in this map — web-probe-read-token.tf).
+    #   expected_ip      — this host's declared private IP (the nic-guard's EXPECTED baseline; never
+    #     the live NIC, which would defeat the guard). var.web_hosts[each.key].private_ip.
+    #   web_host_key     — each.key ("web-1"/"web-2"); the env-writer upper-cases it to name the
+    #     per-host Better Stack heartbeat URL var (WEB_NIC_GUARD_URL_WEB_2, …), matching the SSH
+    #     provisioner's upper(replace(each.key,"-","_")).
+    #   zot_probe_repo   — local.zot_probe_repo (web-probe.tf:22), the ZOT_PROBE_REPO env value.
+    # betterstack_ingest_url + registry_endpoint are already in this map (reused, not re-added).
+    web_probes_token = doppler_service_token.web_probes.key
+    expected_ip      = var.web_hosts[each.key].private_ip
+    web_host_key     = each.key
+    zot_probe_repo   = local.zot_probe_repo
     # #6604 — pin /mnt/data to THIS host's workspaces volume by stable by-id device
     # (/dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id}), never the scsi-0HC_Volume_*
     # glob: once the LUKS volume attaches, the glob matches TWO devices and the "which is LUKS"

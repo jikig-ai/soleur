@@ -74,7 +74,9 @@ for f in ci-deploy.sh ci-deploy-wrapper.sh cat-deploy-state.sh canary-bundle-cla
          infra-config-apply.sh cat-infra-config-state.sh \
          cron-egress-nftables.sh cron-egress-resolve.sh cron-egress-alarm.sh \
          cron-egress-postapply-assert.sh cron-egress-enforce-probe.sh \
-         orphan-reaper.sh; do
+         orphan-reaper.sh \
+         web-private-nic-guard.sh web-zot-consumer-probe.sh web-git-data-probe.sh \
+         web-probe-envwrite.sh; do
   FAILED_FILE="$f"; install -D -m 0755 -o root -g root "$SEED/$f" "/usr/local/bin/$f"
 done
 # The pinned root-run escalation helper installs WITHOUT the .sh suffix (its sudoers grant +
@@ -84,7 +86,10 @@ install -D -m 0755 -o root -g root "$SEED/infra-config-install.sh" /usr/local/bi
 for f in container-restart-monitor.service container-restart-monitor.timer \
          cron-egress-firewall.service cron-egress-resolve.service cron-egress-resolve.timer \
          cron-egress-alarm@.service \
-         orphan-reaper.service orphan-reaper.timer bwrap-userns-sysctl.service; do
+         orphan-reaper.service orphan-reaper.timer bwrap-userns-sysctl.service \
+         web-private-nic-guard.service web-private-nic-guard.timer \
+         web-zot-consumer-probe.service web-zot-consumer-probe.timer \
+         web-git-data-probe.service web-git-data-probe.timer; do
   FAILED_FILE="$f"; install -D -m 0644 -o root -g root "$SEED/$f" "/etc/systemd/system/$f"
 done
 for f in cron-egress-allowlist.txt cron-egress-allowlist-cidr.txt; do

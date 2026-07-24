@@ -637,6 +637,26 @@ runcmd:
   - systemctl enable --now orphan-reaper.timer
   - systemctl enable --now bwrap-userns-sysctl.service
 
+  # (#6459 Phase 2.2 PART 2) fresh-boot parity for the 3 web-host probes (#6438/#6548). The baked
+  # web-probe-envwrite.sh writes the 3 /etc/default/web-<probe> EnvironmentFiles (per-host token +
+  # EXPECTED_IP + endpoints) that the SSH remote-exec provisioners write only on web-1 — WITHOUT
+  # these a fresh cattle host's probe units fail to start (missing EnvironmentFile). Token is passed
+  # as an env var (same root-only exposure class as the webhook-deploy printf above; the read-scoped
+  # web_probes token adds zero marginal exposure over the full-prd doppler_token already on this host).
+  # MUST run AFTER soleur-host-bootstrap.sh (installs the script + units) and BEFORE the enables.
+  - >-
+    SOLEUR_WEB_PROBES_TOKEN='${web_probes_token}'
+    SOLEUR_EXPECTED_IP='${expected_ip}'
+    SOLEUR_BETTERSTACK_INGEST_URL='${betterstack_ingest_url}'
+    SOLEUR_HOST_KEY='${web_host_key}'
+    SOLEUR_ZOT_ENDPOINT='${registry_endpoint}'
+    SOLEUR_ZOT_PROBE_REPO='${zot_probe_repo}'
+    /usr/local/bin/web-probe-envwrite.sh
+  - systemctl daemon-reload
+  - systemctl enable --now web-private-nic-guard.timer
+  - systemctl enable --now web-zot-consumer-probe.timer
+  - systemctl enable --now web-git-data-probe.timer
+
   # Weekly Docker image cleanup -- keeps only images used by running containers.
   # Prevents disk exhaustion from accumulated deploy images (#967).
   - |
