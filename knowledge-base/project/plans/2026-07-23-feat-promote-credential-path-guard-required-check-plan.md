@@ -180,6 +180,13 @@ This is a **realized-class** vector: `preflight/SKILL.md` Check 10 previously wr
 home-relative path to the operator's live Doppler CLI config and a live `dp.ct.*` token was read into
 transcripts. Non-technical Soleur users cannot read CI, so an advisory gate offers them nothing.
 
+**Known residual (scoped out — pre-existing, not introduced or worsened here):** the scanner is
+`*.md`-only (`SCAN_DIRS` over tracked Markdown minus `**/archive/**`). A resolvable credential path in a
+**non-Markdown** tracked file under `plugins/` or `knowledge-base/` (a skill's `.sh`/`.py`/`.txt`) is not
+detected. This promotion strictly strengthens the `.md` surface (advisory → blocking) and does not touch
+the scanner's detection scope, so the residual is identical before and after merge. Recorded here as a
+decision, not a silent gap; a non-`.md` loaded-artifact vector, if ever realized, is its own issue.
+
 CPO sign-off: carried forward from the brainstorm's Domain Assessments (CPO reviewed; verdict "worth
 doing now, size it as hours"). `user-impact-reviewer` will be invoked at review time.
 

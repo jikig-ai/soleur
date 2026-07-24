@@ -5,12 +5,16 @@ on:
     branches: [main]
   pull_request:
   # Merge queue (#5780). The queue dispatches `merge_group` against the
-  # gh-readonly-queue/main/* temp ref; every required-context producer here —
-  # `test`, `e2e`, `lockfile-sync`, `service-role-allowlist-gate`,
-  # `tc-document-sha-guard` (FIVE; do NOT add an `event_name == 'pull_request'`
-  # gate to any of them or that required context never reports → the queue
-  # entry stalls pending forever) — must run on `merge_group`. None gate on the
-  # event, so they run unconditionally. `tc-document-sha-guard` additionally
+  # gh-readonly-queue/main/* temp ref. INVARIANT: EVERY job that produces a
+  # required status context (the full set is scripts/required-checks.txt minus
+  # the CLA + CodeQL rows — e.g. `test`, `e2e`, `lockfile-sync`,
+  # `service-role-allowlist-gate`, `tc-document-sha-guard`, `adr-ordinals`,
+  # `rule-body-lint`, `grok-fidelity`, `credential-path-guard`) must run on
+  # `merge_group` — do NOT add an `event_name == 'pull_request'` gate to any of
+  # them or that required context never reports → the queue entry stalls pending
+  # forever. None gate on the event today, so they run unconditionally. This is a
+  # non-exhaustive example list, not the authority; required-checks.txt is.
+  # `tc-document-sha-guard` additionally
   # receives `MERGE_GROUP_BASE_SHA` so its T&C TC_VERSION-bump bypass still works
   # on the candidate (github.base_ref is empty on merge_group). `detect-changes`
   # short-circuits non-PR events to docs=true (critical-css-gate runs — extra,
@@ -104,6 +108,11 @@ jobs:
   credential-path-guard:
     runs-on: ubuntu-latest
     steps:
+      # Do NOT add sparse-checkout or a paths filter here. The linter exits 0
+      # over an empty scan set ("OK: 0 scanned file(s)"), so any checkout that
+      # excludes plugins/ or knowledge-base/ would silently turn this required
+      # gate fail-OPEN — the exact fabrication class this job exists to block.
+      # A full checkout (the default) is load-bearing.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Lint resolvable credential-file paths in docs (full scan)
         run: python3 scripts/lint-credential-path-literals.py
