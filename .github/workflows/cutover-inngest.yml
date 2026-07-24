@@ -936,6 +936,41 @@ jobs:
               fi
               echo "::notice::op=arm: G3 positive prod-URI assertion passed (prod != dark, :5432 session pooler, prod project-ref present — all value-silent)"
 
+              # G3.5 — CHANNEL-KEY PARITY HARD GATE (#6178 durability). INNGEST_EVENT_KEY +
+              # INNGEST_SIGNING_KEY are a SHARED app<->host CHANNEL auth token, NOT an
+              # isolation-sensitive per-host secret (ADR-100 §4 Amendment). The app (soleur/prd)
+              # and the dedicated host (soleur-inngest/prd) MUST hold BYTE-IDENTICAL values or
+              # every app-originated inngest.send() to 10.0.1.40:8288 is rejected. The #6178
+              # cutover 502 was exactly this: the host-repoint minted FRESH host keys (Decision 4)
+              # but NEVER reconciled them into soleur/prd, so post-2.4 the app kept sending the
+              # STALE event key -> op=rearm returned HTTP 502. This gate makes the divergence a
+              # HARD PRE-FLIP failure instead of a silent post-cutover 502. The app value is read
+              # read-through from prd_terraform via the read-only DOPPLER_TOKEN (exactly as G2
+              # reads INNGEST_POSTGRES_URI); the host value via the arm token on soleur-inngest/prd.
+              # AC-NOBODY: every value is ::add-mask::'d and compared by sha256 ONLY — never echoed;
+              # only MATCH/MISMATCH per key reaches the log.
+              PARITY_FAIL=0
+              for CK in INNGEST_EVENT_KEY INNGEST_SIGNING_KEY; do
+                APP_CK=$(doppler secrets get "$CK" --plain 2>/dev/null || true)
+                printf '::add-mask::%s\n' "$APP_CK"
+                HOST_CK=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get "$CK" -p soleur-inngest -c prd --plain 2>/dev/null || true)
+                printf '::add-mask::%s\n' "$HOST_CK"
+                if [[ -z "$APP_CK" || -z "$HOST_CK" ]]; then
+                  echo "::error::op=arm: G3.5 channel-key parity FAIL-CLOSED — $CK unreadable (app$([[ -n "$APP_CK" ]] && echo =set || echo =empty) host$([[ -n "$HOST_CK" ]] && echo =set || echo =empty)). Cannot prove app<->host channel parity; refusing to arm (no value echoed)."; PARITY_FAIL=1; continue
+                fi
+                APP_CK_H=$(printf '%s' "$APP_CK" | sha256sum | cut -d' ' -f1)
+                HOST_CK_H=$(printf '%s' "$HOST_CK" | sha256sum | cut -d' ' -f1)
+                if [[ "$APP_CK_H" == "$HOST_CK_H" ]]; then
+                  echo "::notice::op=arm: G3.5 channel-key parity — $CK MATCH (soleur/prd == soleur-inngest/prd, sha256-verified, value-silent)"
+                else
+                  echo "::error::op=arm: G3.5 channel-key parity — $CK MISMATCH: the app (soleur/prd) key differs from the dedicated host (soleur-inngest/prd) key. This is the #6178 cutover-502 condition — post-repoint every app inngest.send() to 10.0.1.40:8288 is rejected (op=rearm 502). RECONCILE the app to the host's SHARED channel key, then redeploy: the host key is TF-owned in soleur-inngest/prd (fresh, no ignore_changes); the app key in soleur/prd carries lifecycle ignore_changes=[value] (inngest.tf), so a naive 'terraform apply' does NOT propagate it. Copy the host value INTO soleur/prd out-of-band (supported by ignore_changes): read it (DOPPLER_TOKEN=\$DOPPLER_TOKEN_INNGEST_ARM doppler secrets get $CK -p soleur-inngest -c prd --plain) and pipe it on STDIN into 'doppler secrets set $CK -p soleur -c prd' (never argv/log), THEN REDEPLOY web-platform (ci-deploy regenerates env each deploy) so the app bakes the shared key. Re-run op=arm. See runbook §2.4 + ADR-100 §4 Amendment. Do NOT SSH the host."; PARITY_FAIL=1
+                fi
+              done
+              if [[ "$PARITY_FAIL" -ne 0 ]]; then
+                echo "::error::op=arm: G3.5 CHANNEL-KEY PARITY GATE FAILED — refusing to arm the flip while the app<->host channel keys diverge (the #6178 durability gate). Reconcile + redeploy per the per-key remediation above, then re-run op=arm. Do NOT SSH the host."; exit 1
+              fi
+              echo "::notice::op=arm: G3.5 channel-key parity gate PASSED — app (soleur/prd) and host (soleur-inngest/prd) share both channel keys (sha256-verified). The post-2.4 app->host channel will authenticate."
+
               # G4 — write the two DATA secrets FIRST, each via stdin (never argv), each exit-gated
               # before the next. Order is a correctness invariant: the URIs must land before `armed`.
               printf '%s' "$PG" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_POSTGRES_URI -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G4 — writing INNGEST_POSTGRES_URI to soleur-inngest/prd FAILED. armed NOT written. Job aborts (no value echoed)."; exit 1; }

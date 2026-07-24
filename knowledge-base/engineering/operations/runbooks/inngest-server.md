@@ -705,6 +705,14 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    - **G3 positive prod-URI assertion (DI-C3):** asserts the value differs from the current dark
      `soleur-inngest/prd` URI, uses the `:5432` session pooler (never `:6543`), and targets the
      prod host — all value-silent.
+   - **G3.5 channel-key parity HARD GATE (#6178 durability):** sha256-compares the app
+     (`soleur/prd`, read-through) vs host (`soleur-inngest/prd`, arm token) `INNGEST_EVENT_KEY`
+     **and** `INNGEST_SIGNING_KEY` — value-silent (AC-NOBODY; only MATCH/MISMATCH reaches the log)
+     — and **refuses to arm** if either diverges. These keys are a **SHARED app↔host channel
+     token** (ADR-100 §4 Amendment), so a mismatch is the exact #6178 cutover-502 (post-repoint
+     every app `inngest.send()` to the host is rejected → `op=rearm` HTTP 502). On MISMATCH,
+     reconcile the app to the host's key + redeploy **before** re-running `op=arm` — see §2.4
+     key-reconcile below.
    - **G4/G5 writes:** `INNGEST_POSTGRES_URI` → `INNGEST_HEARTBEAT_URL` → `INNGEST_CUTOVER_FLIP`
      set to `armed` (last), each via **stdin** (never argv), exit-gated. The enabled 30s poll
      timer then drives the forward FSM **stop → `FLUSHALL` → assert `DBSIZE==0` → start → `done`**.
@@ -755,6 +763,34 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    change (both the canary and prod sites) and redeploy the web app so the functions re-sync
    (register) onto the dedicated host. `op=rearm`/`op=verify` precondition-check that this
    landed (registry-non-empty).
+
+   > **Channel-key reconcile (#6178 durability — do this as part of 2.4, NOT deferred).** The
+   > app and the dedicated host must share the SAME `INNGEST_EVENT_KEY` + `INNGEST_SIGNING_KEY`
+   > (they are a shared app↔host **channel** auth token, ADR-100 §4 Amendment — the isolation
+   > that stays separate is `INNGEST_POSTGRES_URI` + `SUPABASE_SERVICE_ROLE`, never these). The
+   > #6178 cutover repointed the app to the host but never reconciled the keys, so every
+   > app→host `inngest.send()` was rejected → **HTTP 502** (`op=rearm` failed). `op=arm`'s **G3.5
+   > parity HARD GATE** now blocks the flip if they diverge — so reconcile happens BEFORE `op=arm`
+   > passes, but the invariant belongs to this app-repoint step: the app must adopt the host's key.
+   >
+   > **Because `soleur/prd`'s `INNGEST_EVENT_KEY`/`INNGEST_SIGNING_KEY` carry
+   > `lifecycle.ignore_changes = [value]` (inngest.tf), a naive `terraform apply` does NOT
+   > propagate a host-key change** — reconcile is the Doppler copy the `ignore_changes` lifecycle
+   > explicitly supports (or a `-replace` of the host `random_id` + copy), then a **web redeploy**
+   > (ci-deploy regenerates the env each deploy, so the app only bakes the new key on the next
+   > deploy). No secret value is echoed — read on the arm token, pipe on stdin:
+   > ```bash
+   > # Copy each host channel key INTO soleur/prd (value on STDIN, never argv/log):
+   > for K in INNGEST_EVENT_KEY INNGEST_SIGNING_KEY; do
+   >   DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get "$K" -p soleur-inngest -c prd --plain \
+   >     | doppler secrets set "$K" -p soleur -c prd --silent --no-interactive   # DOPPLER_TOKEN_WRITE cannot reach prd root; use a prd-root write token / Doppler console
+   > done
+   > # then redeploy web-platform so the app adopts the shared keys, and re-run op=arm (G3.5 now MATCHes).
+   > ```
+   > (`DOPPLER_TOKEN_WRITE` is scoped to `soleur/prd_terraform` and cannot write the `prd` root
+   > config the app reads; the copy is a `prd`-root write — Doppler console or a prd-root r/w token.
+   > A future full automation would mint a narrow prd-root write token; the G3.5 gate is the
+   > recurrence-prevention that makes the divergence impossible to ship silently.)
 
 5. **`op=rearm`** (re-arm the captured reminders after the flip):
    ```bash
