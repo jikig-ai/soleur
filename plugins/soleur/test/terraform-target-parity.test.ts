@@ -666,6 +666,15 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "doppler_secret.zot_pull_token",
   "doppler_secret.zot_push_user",
   "doppler_secret.zot_push_token",
+  // #6895 (ADR-096 amendment / ADR-119 / ADR-140) — the guest-side LUKS-at-rest apparatus for the
+  // registry (zot) store volume: the at-rest passphrase (random_password) + its masked secret in the
+  // ISOLATED soleur-registry/prd project. Same class as random_password.git_data_luks +
+  // doppler_secret.git_data_luks_key above: they ride the operator's gated registry recut apply (a
+  // scoped -replace of the volume+attachment+host together), NOT the #5566 per-PR-CI class. The
+  // isolated project's existing doppler_service_token.registry (above) already reads the key at boot;
+  // no new CI-published token type this test forces.
+  "random_password.registry_luks",
+  "doppler_secret.registry_luks_key",
   "betteruptime_heartbeat.registry_prd",
   "betteruptime_heartbeat.registry_disk_prd",
   // doppler_secret.zot_heartbeat_url_prd removed (#6438 B3): it was a reserved-but-inert secret for

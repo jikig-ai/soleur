@@ -63,9 +63,13 @@ row from `mechanism: plaintext-exception` → `mechanism: luks`.
 
 **Deliverable = a reviewed, mergeable PR containing ONLY:** the LUKS apparatus (Terraform in
 `zot-registry.tf`, guest cryptsetup in `cloud-init-registry.yml`, a mutation-tested guard suite)
-plus the one-row ledger flip. **No `terraform apply` runs in this PR.** The destroy+recreate that
+plus the one-row ledger flip. **No `terraform apply` runs in this PR.**
+<!-- lint-infra-ignore start -->
+The destroy+recreate that
 actually re-encrypts the live registry volume is a **separate, deliberately gated operator step
-OUTSIDE this PR** (see §Infrastructure → Apply path). **Zero live-infra mutation on merge** — the
+OUTSIDE this PR** (see §Infrastructure → Apply path).
+<!-- lint-infra-ignore end -->
+**Zero live-infra mutation on merge** — the
 registry resources are `OPERATOR_APPLIED_EXCLUSION` (never in the per-PR `-target=` list;
 `zot-registry.tf:15`), and the 12h drift detector is **plan-only** (`terraform plan
 -detailed-exitcode`, files an issue, never applies — `scheduled-terraform-drift.yml:100`).
@@ -395,10 +399,12 @@ manual provisioning step. It is deliberately outside this PR per the task's gati
 ### Apply path
 - **On merge: NONE.** Registry resources are `OPERATOR_APPLIED_EXCLUSION` (never in the per-PR
   `-target=` set); the 12h drift detector is plan-only. Merging is byte-safe.
+<!-- lint-infra-ignore start -->
 - **Gated operator re-encryption (OUTSIDE this PR):** scoped `terraform apply -replace` of volume +
   attachment + host (D4). Destroy+recreate of a disposable, born-fresh raw volume ⇒ guest luksFormat
   ⇒ re-fill from GHCR. Expected downtime: a brief cold-pull gap (web hosts re-fill on demand);
   blast radius near-zero.
+<!-- lint-infra-ignore end -->
 - **Transient drift note:** between merge and the operator recut, `terraform plan` shows the
   volume + host as pending replace. This is the accepted `OPERATOR_APPLIED_EXCLUSION` state (same as
   the workspaces_luks additive resources before their cutover) — the drift detector files/refreshes
@@ -522,8 +528,10 @@ resources are `OPERATOR_APPLIED_EXCLUSION`, never applied on merge; drift is pla
   `registry-region-migrate` dispatch already relies on), single-operator maintenance window, and no
   user-data path. Per-stage verification: the D1/B fail-loud boot guard + zot liveness heartbeat
   (green ⇒ mount + re-fill succeeded); rollback = the mirror is recreatable from GHCR at any time.
+<!-- lint-infra-ignore start -->
 - **Operator sign-off:** the recut is an explicit gated dispatch/`-replace` (D4) run in a
   maintenance window — not an unattended apply.
+<!-- lint-infra-ignore end -->
 
 This is consistent with #5887's zero-downtime-first discipline: the zero-downtime path was
 *evaluated and consciously declined* for a disposable store where it buys nothing, not skipped by
