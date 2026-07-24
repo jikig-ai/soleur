@@ -14,7 +14,7 @@ requires_cpo_signoff: true
 spec: knowledge-base/project/specs/feat-web-active-active-iac/spec.md
 brainstorm: knowledge-base/project/brainstorms/2026-07-24-web-active-active-cluster-iac-brainstorm.md
 approach: "A — phased: cluster-first, flip-last"
-pr_split: "PR-1 = Phases 0-4 (cluster + out-of-band web-2 standby + populated-volume disposability proof + rebuilt anti-pooling gate). PR-2 = Phase 5 (de-pet web-1), gated on the PR-1 soak."
+pr_split: "PR-1 = Phases 0-3 + soak enrollment + prevent_destroy + rebuilt anti-pooling gate (cluster + weight-0 non-serving web-2 standby). The populated-volume disposability proof (4.1) + fresh-boot LUKS path + off-host snapshot are DEFERRED to #6931 (ADR-142 R3, CPO sign-off 2026-07-24). PR-2 = Phase 5 (de-pet web-1), gated on the PR-1 soak AND #6931 landed — the sole-copy web-1 volume must never be rebuilt before the populated-volume luksOpen-not-reformat proof + restore-tested off-host snapshot exist (CPO condition 1)."
 plan_review: "6-agent panel applied 2026-07-24 (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer + fable advisor). See ## Plan Review Reconciliation."
 ---
 
@@ -366,6 +366,31 @@ DRAFTED, NOT-YET-ACTIVE** (no inter-host transfer occurs at `replicas=1` — DHH
 ## Open Code-Review Overlap
 Check at /work once `## Files to Edit` is frozen: `gh issue list --label code-review --state open` against
 the final `apps/web-platform/infra/*.tf` path list (likely infra scope-out overlap).
+
+## CPO Sign-Off Record (requires_cpo_signoff)
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+**CPO sign-off: APPROVED WITH CONDITIONS — 2026-07-24 (PR #6919).** PR-1 (Phases 0–3 + rebuilt
+anti-pooling gate + fresh-boot parity + 7-day soak enrollment) is product-sound to merge: the three
+mid-work reframes (AC5 LUKS defer, AC9 health composite, 4.1 disposability-proof defer to #6931) leave
+no user-facing gap (web-2 serves nothing and holds no user data pre-flip; pooling is physically
+fail-closed by the gate's WORKSPACES_LUKS precondition), decoupling build-from-flip is the correct
+sequencing, and the recurring cpx32 standby is the inverse of the #6538 mistake on all four counts
+(rebuildable / telemetered / in-placement-group / real consumers). **Three merge conditions:**
+1. **PR-2 (de-pet web-1) is gated on the soak AND #6931 landed** — the sole-copy web-1 volume must never
+   be rebuilt before the populated-volume luksOpen-not-reformat proof + restore-tested off-host snapshot
+   exist (encoded in `pr_split` above).
+2. **The recurring cpx32 web-2 expense is recorded in `knowledge-base/operations/expenses.md` before
+   PR-ready** (wg-record-recurring-vendor-expense-before-ready), with a review trigger if the
+   de-pet/Phase-6 program stalls (the standby's Phase-5-de-risk consumer only realises if PR-2/#6931
+   progresses; re-evaluate keep-vs-teardown at soak completion and again if #6570 keeps Phase 6 distant).
+3. **PR-2 planning must define the maintenance-window user-communication + low-traffic timing** before the
+   de-pet ships — at the current founder-evaluation stage a brief data-safe outage during a session is a
+   retention event under the single-user-incident threshold; eng defends data safety, not user-comms
+   timing (route to PR-2 planning; CMO/support for comms, CTO for execution). Planning-level, not a PR-1 block.
+
+Sole-copy durability note: PR-1 holds live-web-1 data risk FLAT (it touches nothing web-1 serves) — it
+does not IMPROVE backup posture; the direct `prevent_destroy` on `workspaces_luks` + the off-host
+snapshot land with #6931. Do not describe PR-1 as improving backup posture.
 
 ## Risks & Mitigations
 - **Request reaches web-2 pre-flip → workspace-gone** → rebuilt anti-pooling gate (3.5); web-2 out of rotation; AC7.
