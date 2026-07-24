@@ -112,7 +112,7 @@ jobs:
           # variables.tf) — incl weight-0 web-2 (10.0.1.11), which self-arms oneshots into
           # its own Redis independent of LB weight (DI-C3). No SSH; the deploy webhook fans
           # out to these private IPs over the private net.
-          CUTOVER_HOSTS: "10.0.1.10"
+          CUTOVER_HOSTS: "10.0.1.10,10.0.1.11"
           # #6617 — bucket width for the exactly-once check, consumed by
           # op=doublefire-probe AND op=verify 2.6. Previously read from a name that
           # was neither a dispatch input nor a step env var, so it was pinned at the

@@ -560,7 +560,11 @@ jobs:
           # MUST equal var.web_hosts private_ips (variables.tf) — pinned by
           # apps/web-platform/infra/web-hosts-fanout-parity.test.sh (single-user
           # incident: a drift means web-2 silently misses deploys).
-          WEB_HOST_PRIVATE_IPS: "10.0.1.10"
+          # web-2 (10.0.1.11) receives the deploy so its app container stays release-current +
+          # health-monitored as an out-of-band standby (ADR-141 #6459). Deploy-membership is NOT
+          # serving-membership: web-2 runs the container but serves no ingress (weight 0, no
+          # DNS/tunnel/LB) — the anti-pooling gate (lb-weight-gate.sh) guards serving, not deploy.
+          WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
         run: |
           PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v%s","peers":"%s"}' "$VERSION" "$WEB_HOST_PRIVATE_IPS")
           SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')

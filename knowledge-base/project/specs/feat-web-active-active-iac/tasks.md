@@ -36,12 +36,16 @@ date: 2026-07-24
 
 ## PR-1 — Phase 3: Birth fresh cattle web-2 (out-of-band standby, weight 0, replicas=1 held)
 
-- [ ] 3.1 Add `web-2` to `var.web_hosts` (orderable type/DC from 0.2); rewrite retirement comments (`variables.tf:100-108`, `server.tf:115`, `inngest-host.tf:11`); confirm for_each fan-out (server/network/web-probe/volume); LUKS-backed volume.
-- [ ] 3.2 Out-of-band `/health` probe (`web-2.app.soleur.ai/health`) asserts app-readiness + Vector-shipping depth (NOT port-open/200-from-proxy).
-- [ ] 3.3 #6608 SEPARATE window: derive `inngest-host.tf` `web_host_private_ips` from `var.web_hosts` via `inngest-host-replace` dispatch; land BEFORE the Phase-4 soak.
-- [ ] 3.4 Populate `WEB_HOST_PRIVATE_IPS` in `web-platform-release.yml`; confirm `fan_out_to_peers` reaches web-2.
-- [ ] 3.5 **Rebuild the deleted #6575 anti-pooling gate** — fail-closed: web-2 serving-weight/rotation membership == 0 until Phase-3 flip. Unit-test the FAIL case.
-- [ ] 3.6 Update the 2 roster-coupled parity guards (`inngest-host.test.sh §6b`, `web-hosts-fanout-parity.test.sh`) → green.
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+<!-- "out-of-band standby" is the ADR-141 architectural term for a weight-0 health-monitored host, NOT
+     manual provisioning. All web-2 birth + inngest allowlist propagation route through gated
+     workflow_dispatch (apply-web-platform-infra.yml / inngest-host-replace), never SSH/dashboard. -->
+- [x] 3.1 Added `web-2` to `var.web_hosts` (`cpx32`/hel1/10.0.1.11 per 0.2); rewrote retirement comments (variables.tf `web_hosts`, server.tf fail2ban-scope + deleted-gate pointer, inngest-host.tf header). for_each fan-out confirmed via `terraform validate` (server/network/web-probe heartbeats+URLs/volume+attachment). **LUKS-backed volume DEFERRED to Phase-4** per ADR-141 R3 (CTO): web-2's for_each volume is plaintext-but-EMPTY pre-flip (holds no user data; the additive LUKS is a web-1 singleton, ADR-119); the fresh-boot LUKS path lands in the Phase-4 disposability-proof PR (#6931), made fail-CLOSED by the gate's WORKSPACES_LUKS precondition (coupling #2). **AC5 REFRAMED**.
+- [x] 3.2 **AC9 REFRAMED (ADR-141 R1, CTO — binding parent ADR-068 §(c)(3)):** NO off-host `web-2.app.soleur.ai/health` monitor (web-2 has zero public ingress; off-host readyz architecturally rejected; a per-host external monitor was already deleted as false-521). Off-ingress health = the composite already in fan-out: 2 outbound heartbeats (`web_nic_guard`/`web_zot_consumer`, absence-alerted) + `SOLEUR_FRESH_BOOT_READY` marker depth fields (volume+luksOpen/vector-installed — app-readiness, not port-open) + Vector log-count>0 via `scripts/betterstack-query.sh`. On-host `/internal/readyz` deferred to the ADR-068 orchestrator.
+- [x] 3.3 `inngest-host.tf` `web_host_private_ips` → `"10.0.1.10,10.0.1.11"` (§6b green). AC6-SAFE: the push-apply's explicit `-target=` allow-list excludes `hcloud_server.inngest`, so this `.tf` change forces no inngest replace at merge; the private-net allowlist reaches the live host through the `inngest-host-replace` gated `workflow_dispatch` (#6608), the IaC-routed path — before the Phase-4 soak.
+- [x] 3.4 `WEB_HOST_PRIVATE_IPS` in `web-platform-release.yml` → `"10.0.1.10,10.0.1.11"` (deploy fan-out reaches web-2 so its container stays release-current + health-monitored — deploy-membership ≠ serving-membership).
+- [x] 3.5 **Rebuilt the #6575 anti-pooling gate** as `lb-weight-gate.sh` + `.test.sh` (ADR-141 R2, CTO). Fail-closed serving-weight TOP-GUARD (weight==0/∉rotation PASSES — fixes the #6575 polarity flaw; weight>0 pre-flip runs Conditions A+B+the new WORKSPACES_LUKS precondition, FAILs = AC7) + static committed-HCL Condition C (dns.tf web-1-only, connector excludes web-2, no LB pools web-2). 100/0, mutation-verified (neutering coupling #2 or the weight guard → RED), registered in `infra-validation.yml`.
+- [x] 3.6 Roster-coupled parity guards GREEN — the plan said "2" but the grep-enumerated work-list is **3**: `inngest-host.test.sh §6b` (41/0), `web-hosts-fanout-parity.test.sh` (1/0), AND `cutover-inngest-workflow.test.sh` H1 (`cutover-inngest.yml CUTOVER_HOSTS`, 227/0 — its comment already anticipated web-2).
 
 ## PR-1 — Phase 4: Disposability proof (volume-preserving reprovision, non-prod data)
 

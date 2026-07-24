@@ -67,6 +67,28 @@ on volume-destroy (snapshot-verified), never on "count un-pushed" (meaningless f
 **True zero-downtime blue-green add/drain/remove is deferred to post-ADR-068-Phase-3** (shared git-data),
 where a second host can serve the same workspaces.
 
+## Implementation Rulings (2026-07-24 CTO consult — 3 binding decisions)
+
+Three mechanism-level questions surfaced at implementation where the plan under-specified against the live code. All three were routed to the `cto` agent (`hr-architectural-fork-decisions-route-to-cto`) and ruled as below.
+
+### R1 — web-2 out-of-band health mechanism (refines D2; binding parent: **ADR-068 §(c)(3)**)
+
+The plan's `web-2.app.soleur.ai/health` off-host probe is architecturally impossible here: web-2 has **zero public ingress** (the CF Tunnel connector is gated `each.key == "web-1"`, `server.tf`), and `uptime-alerts.tf:79-92` already deleted a per-host external monitor because the shared origin false-521s. ADR-068 §(c)(3) explicitly rejects off-host `readyz==200` (loopback-Host-gated → 403 off-host; empty `/workspaces` → 503) and defers the `/internal/readyz` serve-readiness gate to the cutover orchestrator.
+
+**Ruling:** BUILD **no** off-host `/health` monitor. **AC9 is REFRAMED (not descoped)** onto a strictly-deeper composite, all already in the PR's fan-out: (a) the two per-host **outbound** heartbeats `web_nic_guard`/`web_zot_consumer` (`web-probe.tf`, absence-alerted), (b) the `SOLEUR_FRESH_BOOT_READY` marker readiness-DEPTH fields (volume-mounted+luksOpen / vector-installed / token-present — the "app-readiness, not port-open" half), (c) per-host Vector log-count > 0 via `scripts/betterstack-query.sh "host:soleur-web-2 | count"` (the #6538 dark-host detector — the "Vector-shipping depth" half). The tunnel-reachable web-2 signal, when needed pre-flip, is web-1's `/hooks/deploy-status` `.reason` (`ok` vs `ok_peer_fanout_degraded`), which already exists. **DEFER** (ADR-068's, blocked on #6570): the on-host in-container `/internal/readyz` serve-readiness gate.
+
+### R2 — rebuilt #6575 anti-pooling gate (refines D3)
+
+The original `lb-weight-gate.sh` was deleted (#6575) because its first assertion required web-2 in the roster, so a correct post-retire config could only FAIL — "a gate a correct config cannot pass is not a guard."
+
+**Ruling:** REBUILD as `apps/web-platform/infra/lb-weight-gate.sh` + `lb-weight-gate.test.sh` (name preserved for the ADR-068 §(c)/server.tf pointer), re-registered in `infra-validation.yml`. Fix the polarity via a **serving-weight TOP-GUARD**: web-2 `weight==0 && ∉ rotation` short-circuits to PASS (the standby state a correct pre-flip config is in), evaluated FIRST; the original Condition A (relay shape) + Condition B (git-data soak) run **only** when web-2 is being pooled (`weight>0` or in rotation). Fail-closed hardening: absent/non-integer/negative weight → FAIL (never default-0-PASS); unset rotation → FAIL (explicit empty = valid "no rotation"). **Condition C** (static committed-HCL, in the test harness): assert `dns.tf` app record stays web-1-only, the connector predicate excludes web-2, no `cloudflare_load_balancer` pools web-2 — the CI regression guard against an accidental *commit* that pools web-2 (the env-driven test alone cannot). Satisfies AC7 (weight>0 pre-flip → unit-testable FAIL).
+
+### R3 — web-2 /workspaces LUKS mechanism (the most data-sensitive; open architectural question)
+
+`workspaces-luks.tf` implements LUKS as an **additive web-1 singleton** (`hcloud_volume.workspaces_luks`, ADR-119); web-2's `for_each` volume is plaintext, and its old "slated for destruction (#6538)" justification is now FALSE (web-2 is a permanent standby). AC5 requires web-2 LUKS-backed, but the fresh-boot LUKS path does not exist and modifying the sole-copy-volume cloud-init boot path is the highest blast radius in the repo.
+
+**Ruling: DEFER** the guest-side fresh-boot LUKS path to the **Phase-4 disposability-proof PR** (tracking **#6931**), CONDITIONAL on three couplings that make the defer fail-CLOSED (all built in this PR): **(1)** rewrite the void justification in `workspaces-luks.tf:169-179`; **(2)** add a `WORKSPACES_LUKS_CUTOVER_AT` precondition to `lb-weight-gate.sh` Condition B so a plaintext web-2 **cannot be pooled** (a flip reddens unless web-2 `/workspaces` is asserted LUKS-backed — the merge-blocker that makes the defer safe); **(3)** open #6931 + record here. **AC5 is REFRAMED**: LUKS-intent declared in HCL + plaintext-pooling physically gated + tracked for Phase-4. web-2 holds NO user data pre-flip (serves nothing; flip externally blocked on #6570) → no GDPR Art. 32 at-rest exposure. **Corrections the Phase-4 PR MUST inherit:** (i) use the `blkid -o value -s TYPE` discriminator, NEVER `cryptsetup isLuks` (the `cloud-init-git-data.yml:159` pattern is the documented data-destroyer on a populated device — safe there only because that host is single-purpose fresh; the web-host cloud-init is SHARED); (ii) **reconcile the two-mechanism topology split** — decide whether web-1's post-de-pet serving volume is the additive singleton or a fresh-boot `for_each` volume, so web-1/web-2 share ONE topology (cattle parity). **This split is an OPEN architectural question, deferred to Phase-4** (cross-ref ADR-119 additive design + ADR-068 §(c)); "mirror web-1's cutover" is ambiguous today because web-1 serves off the singleton, not off `hcloud_volume.workspaces["web-1"]`.
+
 ## Alternatives Considered
 
 | Alternative | Rejected because |
