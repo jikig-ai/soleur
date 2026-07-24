@@ -76,7 +76,11 @@ export function NewIssueDialog({
   return (
     <ResponsiveModal
       open={open}
-      onClose={onClose}
+      // Preserve the pre-refactor single-flight guard: don't let Escape dismiss
+      // while a create is in flight (backdrop is already disabled below).
+      onClose={() => {
+        if (!inFlight.current) onClose();
+      }}
       closeOnBackdrop={false}
       desktopMaxWidth="max-w-md"
       aria-label="New issue"

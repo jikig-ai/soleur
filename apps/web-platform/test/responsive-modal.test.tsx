@@ -74,6 +74,21 @@ describe("ResponsiveModal", () => {
     expect(screen.getByRole("dialog").className).toContain("max-w-lg");
   });
 
+  it("moves focus into the panel on open (honors aria-modal)", () => {
+    render(
+      <ResponsiveModal open aria-label="Test">
+        <button type="button">First action</button>
+        <button type="button">Second action</button>
+      </ResponsiveModal>,
+    );
+    const dialog = screen.getByRole("dialog");
+    // Focus lands on the first focusable inside the dialog, not the body.
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "First action" }),
+    );
+  });
+
   it("renders the bottom-sheet (drag-handle, no max-width) on narrow viewports", () => {
     stubViewport(false);
     render(

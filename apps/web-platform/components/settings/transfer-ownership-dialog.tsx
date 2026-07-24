@@ -69,8 +69,13 @@ export function TransferOwnershipDialog({
   return (
     <ResponsiveModal
       open={true}
-      onClose={onClose}
-      closeOnBackdrop={true}
+      // Don't let Escape / backdrop dismiss the dialog mid-transfer — the POST
+      // has no AbortController, so dismissing would hide an in-flight
+      // irreversible ownership change. Matches the pre-refactor `!loading` guard.
+      onClose={() => {
+        if (!loading) onClose();
+      }}
+      closeOnBackdrop={!loading}
       desktopMaxWidth="max-w-md"
       aria-labelledby="transfer-ownership-title"
     >
