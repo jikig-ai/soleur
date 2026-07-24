@@ -42,7 +42,7 @@ If this run provisions a persistent volume for the tenant, `hcloud_volume` carri
 `encrypted` attribute -- encryption means the guest-side LUKS apparatus (`random_password` ->
 dedicated Doppler config -> `cryptsetup luksFormat` -> `/dev/mapper/*` mount; see
 terraform-architect's Hetzner/Cloudflare requirements). Do not complete the run without adding a
-row to `scripts/encryption-posture-ledger.json` for the new volume: `at_rest.mechanism`
+row to `encryption-posture-ledger.json` (repo-root `scripts/`) for the new volume: `at_rest.mechanism`
 (`luks` or a named `plaintext-exception` with `tracking_issue` + `expires_on`),
 `at_rest.evidence`, `at_rest.does_not_defend`, `at_rest.disclosed_as`, and
 `at_rest.live_verification`. This run provisions sub-projects and tokens, not volumes, so the
