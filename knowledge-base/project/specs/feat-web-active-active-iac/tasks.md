@@ -20,9 +20,9 @@ date: 2026-07-24
 
 ## PR-1 — Phase 0: ADR + live-stock + data-layer contract
 
-- [ ] 0.1 Author ADR-141 (`/soleur:architecture`) — status `adopting`; decide the /workspaces failover data mechanism (detach-reattach vs replication vs off-host sync); amend `hr-prod-host-config-change-immutable-redeploy` + ADR-103; extend ADR-068. Re-verify next-free ordinal at ship.
-- [ ] 0.2 Live Hetzner stock probe — orderable types in hel1/fsn1/nbg1 for BOTH cx33 (web) and cax11 (git-data #6570); record web-2 server_type/DC verdict in ADR-141.
-- [ ] 0.3 C4 update — `model.c4` (fix single-host notes at :178/:186/:413, NOT :182) + `views.c4`: 2-host cluster, NO load-balancer element; run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
+- [x] 0.1 Author ADR-141 (`adopting`) — decided /workspaces failover mechanism (volume-preserving reprovision, D5); amends `hr-prod-host-config-change-immutable-redeploy` + ADR-103; extends ADR-068. Ordinal re-verified free 2026-07-24.
+- [x] 0.2 Live Hetzner stock probe (2026-07-24) — **cx33 (id-115) and cax11 (id-45, ARM) unorderable in all 3 EU DCs**; **web-2 → cpx32** (4c/8g x86, orderable everywhere). Verdict recorded in ADR-141 §Live stock probe + §D1.
+- [x] 0.3 C4 update — `model.c4` hetzner container carries the ADR-141 note (fleet stays single-host until web-2 born in Phase 3; no LB element); `model.likec4.json` regenerated; `c4-code-syntax.test.ts` + `c4-render.test.ts` green (23/23). NOTE: the full 2-host relabel of :186/:413 lands in **Phase 3** when web-2 is actually provisioned (editing them now would assert a live 2-host fleet that does not yet exist).
 
 ## PR-1 — Phase 1: Fresh-boot readiness gate (#6459 precondition)
 
