@@ -47,7 +47,7 @@ export function MobileStatusSelector({
       role="tablist"
       aria-label="Workstream status"
       aria-orientation="horizontal"
-      className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1"
+      className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [mask-image:linear-gradient(to_right,black_calc(100%_-_28px),transparent)]"
       onKeyDown={(e) => {
         if (e.key === "ArrowRight") {
           e.preventDefault();
