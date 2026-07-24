@@ -100,6 +100,16 @@ paths = [
   '''apps/web-platform/scripts/rls-parity-check\.ts$''',
   '''\.github/workflows/rls-authz-fuzz\.yml$''',
   '''knowledge-base/engineering/architecture/decisions/ADR-1[0-9][0-9]-runtime-authz-rls-fuzz-harness\.md$''',
+  # encryption-posture ledger (ADR-140): the SSOT registry of every persistent
+  # store, keyed by Terraform resource ADDRESS + evidence CITATIONS + public
+  # attestation URLs + tracking-issue numbers. It contains NO secret values by
+  # design — the whole feature exists because keys live in Doppler, never in-repo.
+  # The default gitleaks `cloudflare-api-key` rule false-positives on the
+  # `non_store_types` resource-type identifiers (e.g. the 40-char
+  # `cloudflare_zero_trust_access_application`), which are snake_case identifiers,
+  # not credentials. Any real secret pasted here would still be caught by the
+  # PEM/token-prefix rules; this exempts only the resource-identifier false match.
+  '''scripts/encryption-posture-ledger\.json$''',
 ]
 
 # ---------------------------------------------------------------------------
