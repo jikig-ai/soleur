@@ -208,10 +208,20 @@ resource "doppler_secret" "inngest_redis_password_dedicated" {
 # level: this token still resolves ONLY the isolated `soleur-inngest/prd` set — there is no
 # path to `soleur/prd` or any other project, so a host compromise still cannot read/write
 # foreign secrets. The residual (an inngest-server RCE could now WRITE this host's OWN
-# isolated secrets, not just read them) is tracked for a tighter split — a separate
-# root-only write token used only by the flip oneshot, keeping inngest-server's
-# deploy-readable token read-only — which needs an OCI image change (the flip .service
-# EnvironmentFile is a baked asset), deferred out of the live cutover.
+# isolated secrets, not just read them) is tracked in #6890 for a tighter split — a separate
+# root-only write token used only by the root-run flip oneshot (via a cloud-init systemd
+# drop-in whose EnvironmentFile wins), keeping inngest-server's deploy-readable token
+# read-only. No OCI image change needed; deferred out of the live cutover as hardening.
+#
+# APPLY BEHAVIOR — this is NOT an in-place widen. Doppler service tokens are immutable, so
+# `access` is ForceNew: changing it destroys+recreates the token → new `.key`. That `.key`
+# feeds user_data (below), and hcloud_server.inngest carries NO ignore_changes=[user_data],
+# so `terraform apply` REPLACES the live dedicated host (destroy+recreate, re-run cloud-init,
+# re-bake the new read/write token). The Redis AOF volume survives (separate resource);
+# the flip's /var/lock state slot does not (re-derived from the Doppler flag — DBSIZE==0
+# still guards a spurious re-flush). Delivered via the #6178 apply_target=inngest-host-replace
+# dispatch; confirm `terraform plan` shows `-/+ doppler_service_token.inngest` cascading to
+# the host replacement before applying.
 resource "doppler_service_token" "inngest" {
   project = doppler_project.inngest.name
   config  = doppler_environment.inngest_prd.slug
