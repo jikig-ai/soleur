@@ -937,6 +937,86 @@ run_case_reports "live-coverage floor absent (field omitted) + 0 available -> PA
   "encryption-posture:" \
   --repo-sweep --repo-root "$REPO_LCF" --ledger "$LEDGER_LCF_ABSENT" --today "$TODAY"
 
+# --- Boundary coverage: prove the guard is a FLOOR (`available < floor`), not
+# an equality pin (`!=`), and that it reads the DECLARED value (not a hardcoded
+# 1). Without these, `< floor` -> `!= floor` and `floor -> literal 1` mutants
+# survive (the fixtures above only ever evaluate at (floor,available) in
+# {(1,1),(1,0),(0,0)}, where `<` and `!=` are indistinguishable). Derived DRY
+# from LEDGER_LCF_OK so the store shape stays identical.
+
+# Over-coverage: floor=1 with TWO available stores -> PASS (kills `!= floor`,
+# which would false-FAIL legitimate over-coverage). The 2nd store also lifts the
+# positive-work floor to 2, so it needs a 2nd non_iac_stores catalog entry.
+LEDGER_LCF_OVER="$TMPDIR_TEST/lcf-over-ledger.json"
+python3 - "$LEDGER_LCF_OK" "$LEDGER_LCF_OVER" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["live_coverage_floor"] = 1
+s2 = json.loads(json.dumps(d["stores"][0]))
+s2["store"] = "supabase.dr"
+d["non_iac_stores"] = ["supabase.prd", "supabase.dr"]
+d["stores"] = [d["stores"][0], s2]  # both live_verification: available
+json.dump(d, open(sys.argv[2], "w"))
+PY
+run_case_reports "live-coverage floor: floor=1 with 2 available (over-coverage) -> PASS" 0 \
+  "encryption-posture:" \
+  --repo-sweep --repo-root "$REPO_LCF" --ledger "$LEDGER_LCF_OVER" --today "$TODAY"
+
+# Magnitude: floor=2 with only 1 available -> FAIL (proves the guard reads the
+# declared value, not a hardcoded 1).
+LEDGER_LCF_FLOOR2="$TMPDIR_TEST/lcf-floor2-ledger.json"
+python3 - "$LEDGER_LCF_OK" "$LEDGER_LCF_FLOOR2" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["live_coverage_floor"] = 2   # 1 available store < 2
+json.dump(d, open(sys.argv[2], "w"))
+PY
+run_case_reports "live-coverage floor: floor=2 with 1 available -> FAIL (magnitude)" 1 \
+  "live-coverage floor" \
+  --repo-sweep --repo-root "$REPO_LCF" --ledger "$LEDGER_LCF_FLOOR2" --today "$TODAY"
+
+# --- Validator coverage for the OPTIONAL_TOP type/range gate. Without these,
+# deleting `isinstance(lcf, bool)` (a JSON `true` read as floor 1) or the whole
+# non-negative-integer branch (a negative floor accepted) both survive.
+
+# bool `true` must be rejected (bool is an int subclass; the explicit guard
+# stops it being read as 1).
+LEDGER_LCF_BOOL="$TMPDIR_TEST/lcf-bool-ledger.json"
+python3 - "$LEDGER_LCF_OK" "$LEDGER_LCF_BOOL" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["live_coverage_floor"] = True
+json.dump(d, open(sys.argv[2], "w"))
+PY
+run_case_reports "live-coverage floor: bool true -> FAIL (non-negative integer)" 1 \
+  "non-negative integer" \
+  --repo-sweep --repo-root "$REPO_LCF" --ledger "$LEDGER_LCF_BOOL" --today "$TODAY"
+
+# negative must be rejected.
+LEDGER_LCF_NEG="$TMPDIR_TEST/lcf-neg-ledger.json"
+python3 - "$LEDGER_LCF_OK" "$LEDGER_LCF_NEG" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["live_coverage_floor"] = -1
+json.dump(d, open(sys.argv[2], "w"))
+PY
+run_case_reports "live-coverage floor: -1 -> FAIL (non-negative integer)" 1 \
+  "non-negative integer" \
+  --repo-sweep --repo-root "$REPO_LCF" --ledger "$LEDGER_LCF_NEG" --today "$TODAY"
+
+# floor=0 present-and-valid -> PASS (OPTIONAL_TOP allowance is reachable; 0 is
+# inactive so 0 available is fine).
+LEDGER_LCF_ZERO="$TMPDIR_TEST/lcf-zero-ledger.json"
+python3 - "$LEDGER_LCF_ABSENT" "$LEDGER_LCF_ZERO" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["live_coverage_floor"] = 0   # explicit 0, 0 available -> inactive -> PASS
+json.dump(d, open(sys.argv[2], "w"))
+PY
+run_case_reports "live-coverage floor: explicit 0 + 0 available -> PASS (positive control)" 0 \
+  "encryption-posture:" \
+  --repo-sweep --repo-root "$REPO_LCF" --ledger "$LEDGER_LCF_ZERO" --today "$TODAY"
+
 # ===========================================================================
 # Mode coverage: --check-templates, --json, graceful ledger-absent degrade,
 # explicit --ledger error, hermeticity.

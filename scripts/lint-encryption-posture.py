@@ -484,10 +484,13 @@ def check_live_coverage_floor(ledger: dict, fails: list[str]) -> None:
     the tracking issue's follow-up.
     """
     floor = ledger.get("live_coverage_floor", 0)
+    # validate_ledger (run first in run_sweep, early-returns on any schema error)
+    # guarantees every store carries an at_rest.live_verification, so subscript
+    # directly — matching the sibling floor + the run_sweep loop below.
     available = sum(
         1
         for s in ledger["stores"]
-        if (s.get("at_rest") or {}).get("live_verification") == "available"
+        if s["at_rest"]["live_verification"] == "available"
     )
     # MUTATION-TARGET: MB-13 start (live-coverage floor — the coverage-zeroing guard)
     if available < floor:
