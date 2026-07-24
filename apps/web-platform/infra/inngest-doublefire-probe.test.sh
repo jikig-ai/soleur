@@ -230,13 +230,27 @@ test_df_markers_journald_only() {
 }
 
 # --- #6258 T4: connect-timeout + remaining-budget clamp (sum-bound by construction) ---
+# #6919 — the clamp now FLOORS the per-page budget to PREFLIGHT_PAGE_MIN_S (anti-starvation)
+# and CAPS it at PREFLIGHT_PAGE_MAX_S, on top of the remaining-budget derivation. The floor is
+# the load-bearing fix: without it a drained budget hands late pages ~0s → empty → false
+# "malformed". SUM bound stays airtight: DEADLINE + PAGE_MIN ≤ outer curl.
 test_df_connect_timeout_and_clamp() {
-  echo "TEST: doublefire-probe — --connect-timeout + remaining-budget curl clamp"
+  echo "TEST: doublefire-probe — --connect-timeout + remaining-budget curl clamp (floored, #6919)"
   if grep -qE 'curl[^|]*--connect-timeout' "$TARGET"; then echo "  PASS: --connect-timeout present"; PASS=$((PASS+1));
   else echo "  FAIL: no --connect-timeout"; FAIL=$((FAIL+1)); fi
   if grep -qE 'max-time "\$max_time"' "$TARGET" && grep -qE 'remaining=\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' "$TARGET"; then
     echo "  PASS: per-page curl clamped to remaining budget"; PASS=$((PASS+1));
   else echo "  FAIL: per-page curl not clamped to remaining budget"; FAIL=$((FAIL+1)); fi
+  # #6919 anti-starvation FLOOR: the per-page budget is floored to PREFLIGHT_PAGE_MIN_S.
+  if grep -qE 'max_time < PREFLIGHT_PAGE_MIN_S \)\) && max_time=\$PREFLIGHT_PAGE_MIN_S' "$TARGET"; then
+    echo "  PASS: per-page budget floored to PREFLIGHT_PAGE_MIN_S (anti-starvation)"; PASS=$((PASS+1));
+  else echo "  FAIL: per-page budget NOT floored to PREFLIGHT_PAGE_MIN_S — late pages can starve"; FAIL=$((FAIL+1)); fi
+  # SUM bound must remain airtight: DEADLINE default + PAGE_MIN default < the 120s outer curl.
+  local dl pmin; dl=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$TARGET" | head -1)
+  pmin=$(grep -oP 'PREFLIGHT_PAGE_MIN_S:-\K[0-9]+' "$TARGET" | head -1)
+  if [[ -n "$dl" && -n "$pmin" && $(( dl + pmin )) -lt 120 ]]; then
+    echo "  PASS: SUM bound DEADLINE($dl)+PAGE_MIN($pmin) < 120 outer curl"; PASS=$((PASS+1));
+  else echo "  FAIL: SUM bound violated: DEADLINE($dl)+PAGE_MIN($pmin) not < 120"; FAIL=$((FAIL+1)); fi
 }
 
 # --- #6258 T5: window ⊇ cutover window — the time window is NEVER narrowed (Finding 5) ---
@@ -255,6 +269,82 @@ test_df_window_not_narrowed() {
   # cost lever is functionIDs, not a window narrow: build_request_body carries functionIDs.
   if grep -q 'functionIDs:\$fnids' "$TARGET"; then echo "  PASS: cost cut via functionIDs filter"; PASS=$((PASS+1));
   else echo "  FAIL: no functionIDs filter (cost lever missing)"; FAIL=$((FAIL+1)); fi
+  rm -rf "$dir"
+}
+
+# ===========================================================================
+# #6919 — per-page budget starvation fix: transient-empty (retry) vs
+# genuinely-malformed (fail loud) vs transport exhaustion (accurate, not "malformed").
+# The live op=verify HTTP 500 was a late page starved to ~0s → empty body → the
+# fail-loud guard mislabeled the empty body "malformed runs response on page 6".
+# ===========================================================================
+
+# --- #6919 A: a transient EMPTY page RECOVERS on the retry → probe completes correctly ---
+test_df_transient_page_recovers_on_retry() {
+  echo "TEST: doublefire-probe — a transient EMPTY page RECOVERS on retry (#6919)"
+  local dir; dir=$(mktemp -d)
+  # page-1 is EMPTY on attempt 1 (the starvation/truncation signal) and VALID on the retry
+  # (the _fetch_runs_page retry seam prefers page-N.retry.json on attempt >= 2).
+  : > "$dir/page-1.json"
+  make_page false "" "[$(make_edge run-1 fn-a 2026-07-08T10:00:00Z)]" > "$dir/page-1.retry.json"
+  run_probe_logcap "$dir"
+  if [[ "$RC" -eq 0 ]]; then echo "  PASS: probe completes (exit 0) after the transient page recovers"; PASS=$((PASS+1));
+  else echo "  FAIL: transient-recover rc=$RC (want 0; markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
+  assert_eq "recovered run is reported (1 run)" "1" "$(echo "$STDOUT_CAP" | jq -r '.runs | length' 2>/dev/null || echo x)"
+  assert_eq "recovered run functionID projected" "fn-a" "$(echo "$STDOUT_CAP" | jq -r '.runs[0].functionID' 2>/dev/null || echo x)"
+  # a recovered transient must NOT leave a false malformed/transport marker.
+  if echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT'; then
+    echo "  FAIL: a recovered transient emitted a TIMEOUT abort marker (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1));
+  else echo "  PASS: no abort marker on a recovered transient"; PASS=$((PASS+1)); fi
+  rm -rf "$dir"
+}
+
+# --- #6919 B: a page still EMPTY after the retry → LOUD reason=transport, NOT "malformed" ---
+test_df_transport_exhaustion_fails_loud() {
+  echo "TEST: doublefire-probe — persistent empty page fails LOUD as transport, not 'malformed' (#6919)"
+  local dir; dir=$(mktemp -d)
+  : > "$dir/page-1.json"   # empty on attempt 1 AND the retry (no page-1.retry.json)
+  run_probe_logcap "$dir"
+  if [[ "$RC" -eq 1 ]]; then echo "  PASS: transport exhaustion exits 1"; PASS=$((PASS+1));
+  else echo "  FAIL: transport exhaustion rc=$RC (want 1)"; FAIL=$((FAIL+1)); fi
+  # NEVER a false-clean parseable {runs} object.
+  if echo "$STDOUT_CAP" | jq -e '.runs' >/dev/null 2>&1; then
+    echo "  FAIL: emitted a false-clean {runs} object on transport exhaustion"; FAIL=$((FAIL+1));
+  else echo "  PASS: no false-clean runs object on transport exhaustion"; PASS=$((PASS+1)); fi
+  # ACCURATE marker: reason=transport (NOT gql_error/malformed).
+  if echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=transport'; then
+    echo "  PASS: TIMEOUT reason=transport marker"; PASS=$((PASS+1));
+  else echo "  FAIL: no reason=transport marker (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
+  # the transient empty must NOT be mislabeled as the (misleading) 'malformed runs response'.
+  if echo "$STDOUT_CAP" | grep -q 'malformed runs response'; then
+    echo "  FAIL: transient empty mislabeled as 'malformed runs response' (the #6919 bug)"; FAIL=$((FAIL+1));
+  else echo "  PASS: transient empty NOT mislabeled 'malformed runs response'"; PASS=$((PASS+1)); fi
+  # and it carries the accurate operator remediation.
+  if echo "$STDOUT_CAP" | grep -q 'increase PREFLIGHT_DEADLINE_S'; then
+    echo "  PASS: accurate remediation (increase PREFLIGHT_DEADLINE_S / scope functionIDs)"; PASS=$((PASS+1));
+  else echo "  FAIL: no accurate remediation in the FATAL message (out=$STDOUT_CAP)"; FAIL=$((FAIL+1)); fi
+  rm -rf "$dir"
+}
+
+# --- #6919 C: a NON-EMPTY invalid body still fails loud as 'malformed', NOT transport ---
+test_df_nonempty_malformed_still_loud() {
+  echo "TEST: doublefire-probe — NON-EMPTY invalid body still fails as 'malformed' not transport (#6919)"
+  local dir; dir=$(mktemp -d)
+  # non-empty, valid JSON, but .data.runs.edges is NOT an array → a GENUINE malformed response.
+  echo '{"data":{"runs":{"edges":"not-an-array"}}}' > "$dir/page-1.json"
+  run_probe_logcap "$dir"
+  if [[ "$RC" -eq 1 ]]; then echo "  PASS: malformed non-empty body exits 1"; PASS=$((PASS+1));
+  else echo "  FAIL: malformed non-empty rc=$RC (want 1)"; FAIL=$((FAIL+1)); fi
+  if echo "$STDOUT_CAP" | jq -e '.runs' >/dev/null 2>&1; then
+    echo "  FAIL: emitted a false-clean {runs} object on a malformed body"; FAIL=$((FAIL+1));
+  else echo "  PASS: no false-clean runs object on a malformed body"; PASS=$((PASS+1)); fi
+  # classified as gql_error (genuine malformed), NOT transport — the body was non-empty.
+  if echo "$MARKERS_CAP" | grep -q 'SOLEUR_INNGEST_PREFLIGHT_TIMEOUT .*reason=gql_error'; then
+    echo "  PASS: TIMEOUT reason=gql_error (genuine malformed)"; PASS=$((PASS+1));
+  else echo "  FAIL: expected reason=gql_error (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
+  if echo "$MARKERS_CAP" | grep -q 'reason=transport'; then
+    echo "  FAIL: a NON-EMPTY malformed body was WRONGLY treated as transient/transport"; FAIL=$((FAIL+1));
+  else echo "  PASS: non-empty malformed body NOT treated as transport"; PASS=$((PASS+1)); fi
   rm -rf "$dir"
 }
 
@@ -376,6 +466,9 @@ test_df_page_ceiling_abort
 test_df_markers_journald_only
 test_df_connect_timeout_and_clamp
 test_df_window_not_narrowed
+test_df_transient_page_recovers_on_retry
+test_df_transport_exhaustion_fails_loud
+test_df_nonempty_malformed_still_loud
 test_df_marker_purity
 test_df_marker_tag_in_vector
 test_df_argv_ceiling_collapsed_runs

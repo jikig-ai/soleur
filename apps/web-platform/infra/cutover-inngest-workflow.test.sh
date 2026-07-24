@@ -78,7 +78,10 @@ HOOKS_TMPL="$REPO_ROOT/apps/web-platform/infra/hooks.json.tmpl"
 HOOK_IDS=(inngest-enumerate-reminders inngest-rearm-reminders inngest-wiped-volume-verify inngest-verify-status inngest-inventory inngest-registry-probe inngest-doublefire-probe)
 assert "hook-existence loop has >=1 hook (min-cardinality)" "[[ '${#HOOK_IDS[@]}' -ge 1 ]]"
 for hook in "${HOOK_IDS[@]}"; do
-  assert "workflow targets \$BASE/$hook" "grep -qE 'BASE/$hook\"' '$WF'"
+  # #6919 — the doublefire URL now carries a ?from=&function_ids= query string, so the name may
+  # be followed by `?` (query) OR `"` (bare). The char-class boundary still guards against a
+  # longer hook name false-matching (e.g. a hypothetical inngest-doublefire-probe-2).
+  assert "workflow targets \$BASE/$hook" "grep -qE 'BASE/$hook[?\"]' '$WF'"
   assert "hook id '$hook' exists in hooks.json.tmpl" "grep -qE '\"id\": \"$hook\"' '$HOOKS_TMPL'"
 done
 
@@ -127,7 +130,7 @@ assert "SEAM directs the arm-flip to the no-SSH op=arm dispatch (#6369)" "grep -
 # D.3 / AC-VERIFY — op=verify: precondition registry NON-empty (2.4 landed,
 # P1-9/P2-17), 2.6 via the doublefire hook, RunsFilterV2 + STARTED_AT bucketing,
 # and NO scheduled_tick anywhere in the workflow.
-assert "verify calls the doublefire-probe hook (2.6/P1-12)" "grep -qE 'BASE/inngest-doublefire-probe\"' '$WF'"
+assert "verify calls the doublefire-probe hook (2.6/P1-12)" "grep -qE 'BASE/inngest-doublefire-probe[?\"]' '$WF'"
 assert "verify preconditions on registry NON-empty (P1-9/P2-17)" "grep -qE 'verify precondition' '$WF'"
 assert "verify buckets by floor(startedAt / cron_period) (no scheduled_tick)" "grep -qE 'fromdateiso8601' '$WF'"
 assert "verify auto-emits the missed-tick trigger-cron list (P2-16)" "grep -qE 'soleur:trigger-cron' '$WF'"
@@ -272,12 +275,37 @@ DF_SH="$REPO_ROOT/apps/web-platform/infra/inngest-doublefire-probe.sh"
 INV_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$INV_SH" | head -1)
 DF_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$DF_SH" | head -1)
 assert "inventory in-script deadline (22) < outer curl --max-time 30 (SUM bound)" "[[ -n '$INV_DEADLINE' && '$INV_DEADLINE' -lt 30 ]]"
-assert "doublefire in-script deadline (50) < outer curl --max-time 60 (SUM bound)" "[[ -n '$DF_DEADLINE' && '$DF_DEADLINE' -lt 60 ]]"
+# #6919 — the doublefire budget was raised (deadline 50→90, outer curl 60→120) + a per-page
+# FLOOR added so late pages never starve to ~0s → empty → false "malformed". SUM bound stays
+# airtight: deadline(90) + PAGE_MIN(8) = 98 < the 120s outer curl.
+DF_PAGE_MIN=$(grep -oP 'PREFLIGHT_PAGE_MIN_S:-\K[0-9]+' "$DF_SH" | head -1)
+assert "doublefire in-script deadline (90) < outer curl --max-time 120 (SUM bound, #6919)" "[[ -n '$DF_DEADLINE' && '$DF_DEADLINE' -lt 120 ]]"
+assert "doublefire SUM bound airtight: deadline + PAGE_MIN < 120 (#6919)" "[[ -n '$DF_DEADLINE' && -n '$DF_PAGE_MIN' && \$(( DF_DEADLINE + DF_PAGE_MIN )) -lt 120 ]]"
+assert "doublefire per-page budget is FLOORED to PREFLIGHT_PAGE_MIN_S (anti-starvation, #6919)" "grep -qE 'max_time < PREFLIGHT_PAGE_MIN_S \)\) && max_time=\\\$PREFLIGHT_PAGE_MIN_S' '$DF_SH'"
 assert "inventory clamps per-page curl to the remaining budget (not a fixed const)" "grep -qE 'max-time \"\\\$max_time\"' '$INV_SH' && grep -qE 'remaining=\\\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' '$INV_SH'"
 assert "doublefire clamps per-page curl to the remaining budget" "grep -qE 'max-time \"\\\$max_time\"' '$DF_SH' && grep -qE 'remaining=\\\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' '$DF_SH'"
 # outer curl budgets present (the ceiling the sum must stay under).
 assert "inventory outer curl --max-time 30 present" "grep -qE 'curl -s --max-time 30 -o /tmp/inv-body' '$WF'"
-assert "doublefire outer curl --max-time 60 present" "grep -qE 'curl -s --max-time 60 -o /tmp/verify-runs' '$WF'"
+assert "doublefire outer curl --max-time 120 present (#6919)" "grep -qE 'curl -s --max-time 120 -o /tmp/verify-runs' '$WF'"
+
+# ============================================================================
+# #6919 — the op=verify HTTP 500 fix's plumbing: the doublefire hook reads a
+# ?from= / ?function_ids= query string, and BOTH cutover arms forward a narrower-
+# but-still-⊇-invariant window (cutover − 200d > the 182d floor) as the cost lever
+# so the wide all-function scan completes within the probe's per-page budget.
+# ============================================================================
+# Hook side: the two url params bridge into the probe's env seams.
+assert "#6919 doublefire hook forwards ?from → INNGEST_DOUBLEFIRE_FROM (pass-environment url)" "grep -qF '\"source\": \"url\", \"name\": \"from\", \"envname\": \"INNGEST_DOUBLEFIRE_FROM\"' '$HOOKS_TMPL'"
+assert "#6919 doublefire hook forwards ?function_ids → INNGEST_DOUBLEFIRE_FUNCTION_IDS" "grep -qF '\"name\": \"function_ids\", \"envname\": \"INNGEST_DOUBLEFIRE_FUNCTION_IDS\"' '$HOOKS_TMPL'"
+# Workflow side: a shared doublefire_from() computes the ⊇-invariant lower bound, and BOTH the
+# op=verify (2.6) and standalone op=doublefire-probe arms forward it as ?from=.
+assert "#6919 workflow defines doublefire_from() helper" "grep -qE 'doublefire_from\(\) \{' '$WF'"
+assert "#6919 both doublefire calls forward the ?from= window cost lever (2 sites)" "[[ \"\$(grep -cF 'inngest-doublefire-probe?from=' '$WF')\" -eq 2 ]]"
+assert "#6919 workflow wires the optional functionIDs cost lever (CUTOVER_DOUBLEFIRE_FUNCTION_IDS)" "grep -qF 'CUTOVER_DOUBLEFIRE_FUNCTION_IDS' '$WF'"
+# INVARIANT (negative): the cost lever is functionIDs + a 200d (> the 182d = 2×quarterly floor)
+# window — the TIME window is NEVER narrowed to hours/days (that would surface false missed-ticks
+# at :704-743 → operator re-fire → the exact DOUBLE-FIRE the cutover prevents).
+assert "#6919 doublefire_from is ≥ 200 days (⊇ the 182d invariant, never a day/hour narrow)" "grep -qF '200 * 86400' '$WF' && grep -qF '200 days ago' '$WF'"
 
 # Abort → webhook NON-200 (Deepen Finding 6): a script exit 1 (deadline/ceiling loud-abort)
 # maps to a webhook non-200 ONLY IF the hook has include-command-output-in-response-on-error.
