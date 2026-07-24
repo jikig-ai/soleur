@@ -231,6 +231,42 @@
   }
 }
 
+/* Global reduced-motion sweep (Phase 3). The per-selector reduced-motion rules
+   above/below preserve a *static* in-progress affordance for specific surfaces
+   (the cmdk spinner keeps its gold ring, the refresh shimmer a dim sliver); this
+   catch-all neutralizes every other keyframe/utility animation and transition —
+   the ~60 files of Tailwind `animate-spin`/`animate-pulse`/`transition-*`
+   utilities that would otherwise keep moving for a reduced-motion user. Near-zero
+   (0.01ms) rather than 0 so `animationend`/`transitionend` listeners still fire.
+   Unlayered + `!important` so it beats utility classes; the specific rules that
+   set `animation-name: none` still win for their surfaces (name is untouched
+   here), keeping their static affordance intact. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* KB file-tree touch actions (Phase 3). The per-node rename/delete/upload
+   buttons are `opacity-0` and revealed only via `group-hover:opacity-100`; a
+   touch device has no hover, so those actions are unreachable. On a no-hover
+   (coarse) pointer, reveal the action cluster and clear the timestamp that the
+   hover state would otherwise fade to make room. `!important` beats Tailwind's
+   layered `opacity-0`/`group-hover:opacity-100` utilities regardless of order. */
+@media (hover: none) {
+  .kb-tree-actions {
+    opacity: 1 !important;
+  }
+  .kb-tree-timestamp {
+    opacity: 0 !important;
+  }
+}
+
 /*
  * ADR-067 refresh shimmer. A ~2px gold sliver sweeps left→right across the top
  * edge while a warm SWR cache hit revalidates in the background (RefreshShimmer,
