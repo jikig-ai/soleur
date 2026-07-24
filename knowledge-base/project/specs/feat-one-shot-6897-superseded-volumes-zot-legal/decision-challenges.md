@@ -11,23 +11,17 @@ default direction is retained (operator's stated direction is the default).
 leave #6897 OPEN as the residual-teardown bound, since it already bounds all 8 exceptions. Closing
 it is what forces the re-home + new-issue cost.
 
-**Operator's stated direction (default, retained):** the task explicitly instructs
-*"Close #6897 … Deliverable: reviewed, merged PR that `Closes #6897`."* So #6897 closes; the plan
-sources the close to that directive (previously it asserted the convention without a source — now
-fixed). If the operator prefers to keep #6897 open as the umbrella and skip the new issues, that is
-a one-line change to the plan (drop Phase 1, keep #6897's `tracking_issue` references as-is).
+**RESOLVED (operator, 2026-07-24): KEEP #6897 OPEN — 0 new issues, net-issue-flow = 0.** When the plan
+surfaced that closing #6897 orphans the exceptions and grows the backlog +2 (opposite of "draining"),
+the operator chose to keep #6897 as the umbrella homing these *ongoing* bounded exceptions (they are
+not one-time fixes). Phase 1 (tracker creation) and Phase 2 re-homing are CUT; the ledger/C4 `#6897`
+refs stay. The PR is `Ref #6897` (not Closes) + the legal reconciliation + a read-only ledger
+verification. This supersedes the task's original "`Closes #6897`" framing.
 
-## UC-2 (Taste) — Issue count: 3 consolidated (B, adopted) vs 4 per-item (A) vs re-point-to-parents (C)
+## UC-2 (Taste) — Issue count — MOOT (superseded by UC-1 resolution)
 
-**Adopted default = Option B (3 new issues):** teardown (workspaces+git_data, same remediation
-class), Layer-B posture (session-store + git-data host), zot. Panel consensus: B is minimal-correct;
-C is unsafe (re-pointing narrow triggers at broad parents #6893/#6588 lets the parent close while a
-child trigger is unresolved — the #6897 defect recurred); A (per-item, mirrors #6894/#6895) is
-"acceptable but mildly over-built" for a non-technical operator (+1 standing P3 issue).
-
-**Trade-off the operator may want to override:** A is more faithful to the existing per-volume
-#6894/#6895 pattern and gives workspaces-detach vs git_data-DL-2-wipe their own 1:1 trackers. If
-per-item granularity is preferred, split the teardown issue into two.
+The 3-vs-4-vs-parents question is moot: **0 issues are filed** (UC-1 resolved to keep #6897 open). No
+teardown/posture/zot trackers are created; #6897 continues to bound all residual exceptions.
 
 ## Note — plan-time sign-off is CLO, not CPO (fixed contradiction)
 

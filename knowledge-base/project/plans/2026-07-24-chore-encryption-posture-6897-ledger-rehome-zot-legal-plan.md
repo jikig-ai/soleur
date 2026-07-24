@@ -1,5 +1,5 @@
 ---
-title: "encryption-posture #6897 — re-home residual bounded exceptions + legal-doc reconciliation"
+title: "encryption-posture #6897 — verify ledger current + legal-doc reconciliation (#6897 stays OPEN)"
 date: 2026-07-24
 type: chore
 issue: 6897
@@ -11,7 +11,7 @@ live_infra_mutation: none
 deepened: 2026-07-24
 ---
 
-# encryption-posture #6897 — re-home residual bounded exceptions + legal-doc reconciliation
+# encryption-posture #6897 — verify ledger current + legal-doc reconciliation (#6897 stays OPEN)
 
 ## Enhancement Summary
 
@@ -35,9 +35,11 @@ panel, proportionate to a P3 ledger/docs change at `single-user incident` thresh
 4. **Legal defer→block for a material over-claim (spec-flow MEDIUM).** A published claim the
    measured posture *falsifies* must be corrected **before** `Closes #6897` (it is the #6588 P1
    shape). Only a large **non-falsifying** structural addition may defer.
-5. **Issue count minimized to 3 (Option B; simplicity + arch).** Consolidated the same-class
-   remediations; recorded the A-vs-B taste + the "must #6897 close" user-challenge to
-   `decision-challenges.md`.
+5. **~~Issue count minimized to 3 (Option B)~~ — SUPERSEDED by operator decision (2026-07-24):
+   keep #6897 OPEN, file ZERO trackers, net-issue-flow = 0.** The "must #6897 close at all?"
+   user-challenge was resolved by the operator in favor of keeping the umbrella open (its residual
+   items are ongoing bounded exceptions, not one-time fixes). Phase 1's tracker creation + Phase 2's
+   ref re-homing are CUT; the ledger/C4 `#6897` refs correctly stay.
 6. **Frontmatter contradiction fixed (simplicity).** `requires_cpo_signoff` dropped — Product=NONE;
    the plan-time sign-off is **CLO**, `user-impact-reviewer` runs at review.
 7. **New-issue-body + durable-handoff ACs added (spec-flow LOW).**
@@ -64,21 +66,25 @@ encryption claims are *substantiated*, not asserted.
 
 **Operator safety framing (load-bearing):** zero live-infra mutation. `git_data` is the rollback
 backstop pending the DL-2 wipe and MUST stay; `workspaces` removal is a separate future
-cutover-teardown, out of scope. Deliverable = a reviewed, merged PR that `Closes #6897` — it
-ledgers reality and reconciles legal copy only.
+cutover-teardown, out of scope.
+
+**DISPOSITION (operator-decided 2026-07-24): #6897 STAYS OPEN — net 0, no new trackers.** Deliverable =
+a reviewed, merged PR that **`Ref #6897` (NOT `Closes`)** and reconciles the legal copy. #6897 remains
+the umbrella that homes these *ongoing* bounded exceptions (superseded volumes pending teardown; zot
+HTTP by-design; host-posture measurement) — they are not one-time fixes, so the honest end-state is
+that #6897 stays on the board until they genuinely resolve.
 
 **Central finding.** The ledger rows the issue asks for **already exist and are accurate** (authored
-by PR #6885, merged `51d2646bc`), and every one references `#6897` as its `tracking_issue`. So the
-real gap is not "create rows" but "the exceptions are bounded by the very issue this PR closes."
-Closing #6897 while live artifacts still point at it leaves those exceptions **unbounded** (pointing
-at a closed issue) — defeating the bounded-exception contract. The task's own instruction — *"mirror
-the existing plaintext-exception rows for `inngest_redis` (#6894) / `registry` (#6895)"* — names the
-fix: those point at **dedicated open** trackers. The residual `#6897` references (in the ledger AND
-the C4 model) must be **re-homed to open follow-up issues** (ledger) or **genericized to the ledger
-as SoT** (C4), then #6897 closes honestly.
+by PR #6885, merged `51d2646bc`), and every one references `#6897` as its `tracking_issue`.
+**Because #6897 stays OPEN, those references are correct and are LEFT UNCHANGED** — the bounded-exception
+contract holds (they point at a live tracker). There is NO re-homing, NO ledger `#6897`-ref edit, and
+NO C4 `#6897`-ref edit. The superseded `redis.session_store`/`git_data_luks` Layer-B notes and the C4
+`#6897` pointers likewise stay. This removes the entire re-home/genericize workstream.
 
-**Why #6897 closes (sourced, per review):** the task directs it (*"Closes #6897"*). The bounded
-exceptions survive the close via the open follow-ups (ledger) + the ledger-as-SoT pointer (C4).
+**The actionable deliverable is checkbox 3 — legal-doc reconciliation** — plus a read-only verification
+that the ledger rows (volumes + zot) and Layer A are current. Checkboxes 1 & 2 are already satisfied by
+#6885's ledger rows (verified current here); they get checked off on #6897 via an issue comment while
+#6897 itself stays open for the ongoing exceptions.
 
 This is a **ledger + C4-prose + legal-copy + issue-hygiene** change: no code, no `.tf` edits, no
 migrations, no infra mutation.
@@ -87,9 +93,9 @@ migrations, no infra mutation.
 
 | Artifact | Refs | Class | Disposition |
 |---|---|---|---|
-| `scripts/encryption-posture-ledger.json` | 8 (lines 57,74,77,97,100,259,262,290) | **live SoT** | Re-home each to the new follow-up issue number. |
-| `knowledge-base/engineering/architecture/diagrams/model.c4` | 2 (216 git-data, 220 session-store) | **live diagram source** | Genericize: drop the hardcoded `#6897`, point at the ledger exception row (the SoT for the current tracker). Robust against recurrence. |
-| `…/diagrams/model.likec4.json` | 9 embeds (compiled) | **live compiled** | Mirror the `model.c4` prose edit (regenerate via the repo's likec4 export if one exists; else apply the identical string edit) + run the c4 validation tests. |
+| `scripts/encryption-posture-ledger.json` | 8 (lines 57,74,77,97,100,259,262,290) | **live SoT** | **LEAVE UNCHANGED** — #6897 stays open, so the `tracking_issue: #6897` refs correctly bound the exceptions. Verify each row is current/accurate (read-only); no edit expected. |
+| `knowledge-base/engineering/architecture/diagrams/model.c4` | 2 (216 git-data, 220 session-store) | **live diagram source** | **LEAVE UNCHANGED** — `tracking #6897` correctly points at the open umbrella. No edit. |
+| `…/diagrams/model.likec4.json` | 9 embeds (compiled) | **live compiled** | **LEAVE UNCHANGED** — no `model.c4` edit → no regenerate. |
 | `…/encryption-posture-audit-2026-07-23.md` | 6 | **immutable historical** | Leave untouched — a dated record of what was consolidated under #6897 at audit time (true even after close). Allowlisted in the AC. |
 | `…/plans/2026-07-24-chore-r2-provider-soc2-…-plan.md` | 1 | **historical planning** | Leave untouched (sibling-plan provenance citation). Allowlisted. |
 | `…/specs/feat-one-shot-encryption-at-rest-in-transit-design-default/tasks.md` | 1 | **historical planning** | Leave untouched (PR #6885's own spec). Allowlisted. |
@@ -134,52 +140,29 @@ legal-claims, not product; CPO sign-off would be the wrong lens (fixed per revie
 - Enumerate live refs: `git grep -l '#6897'` → expect the 6 files in the footprint table (assert by content anchor). Ledger has 8 (`grep -n '#6897' scripts/encryption-posture-ledger.json`); model.c4 has 2.
 - Confirm `server.tf:1569` / `git-data.tf:196` volumes + attachments (`server.tf:1581`, `git-data.tf:207`) still declared — READ only, no `terraform`/`hcloud` mutation.
 
-### Phase 1 — Create the follow-up trackers (Option B — 3 issues) + note the class gap on #6893
-Create dedicated **open** GitHub issues so every residual exception is driven independently. Labels
-`type/security`, `domain/engineering`, `priority/p3-low` (all verified to exist). Each body: 1-line
-statement, the ledger row(s) it bounds, the measured posture, **its `reevaluate_when` trigger(s)
-verbatim**, `Ref #6893` (+ `Ref #6588` where user-data), and "split out of #6897". Do NOT `Closes`
-any parent. Capture each number.
+### Phase 1 — (REMOVED per operator disposition) — no trackers, #6897 stays open
+The Option-B 3-tracker creation is **cut**. #6897 stays OPEN as the umbrella; its ledger/C4 `#6897`
+references are correct and stay. No new GitHub issues are filed by this PR (net-issue-flow = 0).
 
-| New issue (title stem) | Homes ledger + C4 ref(s) | reevaluate_when trigger(s) in body |
-|---|---|---|
-| `encryption-posture: superseded plaintext backstop teardown (workspaces detach+destroy; git_data DL-2 wipe)` | ledger 74,77,97,100 + model.c4:216 | (a) workspaces_luks cutover confirmed irreversible → plaintext detached+destroyed; (b) git_data_luks cutover confirmed → git_data plaintext DL-2 wipe runs |
-| `encryption-posture: host at-rest posture measurement — session-store + git-data host (Layer-B probes)` | ledger 57,259,262 + model.c4:220 | (a) session-store host at-rest posture measured (or LUKS applied); (b) a git-data host posture probe exists to confirm the git_data_luks LUKS volume is the live store |
-| `encryption-posture: zot registry link TLS / private-net re-evaluation` | ledger 290 | the registry is exposed beyond the private network, or TLS is added to the link |
+**Class-gap note on #6893 (KEEP — still valuable):** comment on the open parent #6893 that Layer A
+lint validates `tracking_issue` **shape** only (`^#\d+$`), never open/closed state
+(`scripts/lint-encryption-posture.py:530-534`) — so a bounded exception silently unbounds if its
+tracker ever closes. Propose a Layer A/B `expires_on`-staleness or `gh`-open-state check as the durable
+fix (`wg-when-a-workflow-gap-causes-a-mistake-fix`). This is a single advisory comment on an existing
+open issue — NOT a new issue (keeps net-issue-flow at 0). Since #6897 now stays open, the gap is not
+currently triggered, but the note remains a real latent finding worth recording on #6893.
 
-**Class-gap note on #6893** (open parent, no new issue — `wg-when-a-workflow-gap-causes-a-mistake-fix`):
-comment on #6893 that Layer A lint validates `tracking_issue` shape only, not open/closed state, so a
-bounded exception can silently unbound when its tracker closes (the #6897 defect). Propose a Layer
-A/B `expires_on`-staleness or `gh`-open-state check as the durable fix. (Fixing the linter is a
-separate Layer-A enhancement, out of scope for this P3.)
-
-**Durable handoff (spec-flow LOW):** give all three issues a shared discoverability handle — the
-`encryption-posture:` title prefix + `type/security` label — so if the captured numbers are lost
-mid-run, `gh issue list --label type/security --search 'encryption-posture in:title' --state open`
-re-derives them before Phase 2.
-
-> **Decision (recorded to `decision-challenges.md`).** Default = **Option B (3 issues)**, panel
-> consensus minimal-correct. **A** (4 per-item, faithful to #6894/#6895) is acceptable if the
-> operator prefers per-volume granularity. **C** (re-point to parents #6893/#6588) is rejected —
-> a broad parent can close while a narrow child trigger is unresolved, recurring the #6897 defect.
-> The "must #6897 close at all?" user-challenge is also recorded (operator directed the close).
-
-### Phase 2 — Sweep every LIVE artifact
-1. **Ledger** (`scripts/encryption-posture-ledger.json`): re-point all 8 `#6897` refs to the new
-   numbers (Phase 1 table), in both the `live_verification` `tracked #N` suffix AND
-   `exception.tracking_issue` / `exception.reevaluate_when`. Leave `expires_on: 2026-10-22`,
-   evidence, mechanism, defends/does_not_defend, disclosed_as UNCHANGED.
-2. **C4 source** (`model.c4:216,220`): genericize — replace `, tracking #6897)` → `)` so the prose
-   reads "Ledgered exception (encryption-posture-ledger.json), pending …". The ledger is the SoT for
-   the current tracker; the diagram points at it and never restates a specific (soon-stale) number.
-   Prose-only: **no** element / relationship / view / tag change.
-3. **C4 compiled** (`model.likec4.json`): regenerate from `model.c4` via the repo's likec4 export if
-   one exists; otherwise apply the identical `, tracking #6897)` → `)` string edit (9 embeds).
-4. Re-run Layer A lint → `PASS` (0 unledgered, 0 failing). Run the C4 validation tests
-   (`apps/web-platform/test/c4-code-syntax.test.ts`, `c4-render.test.ts`) — a prose-only description
-   edit must keep them green.
-5. **Do NOT touch** the immutable historical trio (audit doc, r2 sibling plan, design-default
-   tasks.md) — their `#6897` is a true point-in-time record.
+### Phase 2 — Verify the ledger + zot rows are current (READ-ONLY; no re-home, no ref edits)
+1. **Ledger** (`scripts/encryption-posture-ledger.json`): confirm the `hcloud_volume.workspaces`,
+   `hcloud_volume.git_data`, and zot-registry-link rows exist and their evidence/mechanism/
+   defends/does_not_defend/`tracking_issue: #6897`/`expires_on` fields are accurate against the code
+   (`server.tf`, `git-data.tf` volume declarations + attachments; the zot `10.0.1.30:5000` link).
+   **Leave every `#6897` reference UNCHANGED.** Only if a field is provably STALE/WRONG (not merely
+   pointing at the still-open #6897) is a correction in scope — otherwise no ledger edit.
+2. **C4 source + compiled:** LEAVE UNCHANGED (no `model.c4` edit → no `model.likec4.json` regenerate).
+3. Re-run Layer A lint → `PASS` (0 unledgered, 0 failing) to confirm the read-only verification did not
+   perturb the ledger.
+4. **Do NOT touch** the immutable historical set (audit doc, r2 sibling plan, design-default tasks.md).
 
 ### Phase 3 — Legal-doc reconciliation (checkbox 3)
 - Run `/soleur:legal-audit` (inline, `wg-plan-prescribed-skills-must-run-inline`;
@@ -194,40 +177,36 @@ re-derives them before Phase 2.
     at-rest encryption in a way the backstops falsify.
 - **Disposition (tightened per spec-flow):**
   - A **material over-claim** — a published claim the measured posture *falsifies* (the #6588 shape)
-    — MUST be **folded (corrected inline)** before `Closes #6897`. It may NOT be deferred; a live
-    false encryption claim at the moment #6897 closes reproduces #6588.
+    — MUST be **folded (corrected inline)** before merge. It may NOT be deferred; a live false
+    encryption claim reproduces #6588 regardless of whether #6897 stays open.
   - Only a **large, non-falsifying structural** need (new disclosure section, reorganization — the
     existing claims are true, more detail is merely desirable) may be **deferred** to a tracked
     follow-up (`Ref #6893`).
 - Record the audit's verdict (substantiated / corrected-inline / follow-up-filed) in the PR body.
 
 ### Phase 4 — Verify + ship
-- Layer A lint `PASS`; C4 tests green.
-- **Repo-scoped bounding check (replaces the ledger-only grep):**
-  `git grep -l '#6897'` returns ONLY the allowlisted historical set — the audit doc, the r2 sibling
-  plan, the design-default `tasks.md`, and this feature's own plan/spec artifacts. Any **live**
-  artifact (ledger, `model.c4`, `model.likec4.json`) still matching `#6897` is a gate failure.
+- Layer A lint `PASS`; if any legal doc was edited, run `legal-doc-consistency.test.ts` +
+  `legal-doc-shas-guard.test.ts` (source↔Eleventy-mirror parity) AFTER the edit.
 - Broken-citation sweep on the plan: `grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.md' <plan> | xargs -I{} bash -c '[[ -f "{}" ]] || echo BROKEN {}'`.
-- PR body: `Closes #6897`; `Ref #6588`; `Ref #6893`; the 3 new issue numbers + the legal-audit
-  verdict + the `decision-challenges.md` render. **No operator/post-merge checklist** — issue
-  creation + edits + legal reconcile all happen in-PR; no `terraform apply`
-  (`hr-ship-message-no-operator-checklist`).
+- **No `#6897`-absent gate** — #6897 stays open, so the ledger/C4 `#6897` refs are EXPECTED to remain.
+- PR body: **`Ref #6897`** (NOT Closes — stays open); `Ref #6588`; `Ref #6893`; the legal-audit verdict
+  + the `decision-challenges.md` render. **No operator/post-merge checklist.** Check off #6897's
+  checkboxes 1 & 2 (ledger current) via an issue comment; box 3 checked iff legal reconciliation lands.
 
 ## Acceptance Criteria
 
-All pre-merge (no post-merge operator step — no `terraform apply`, no migration, no live mutation;
-`Closes #6897` at merge is correct because the merge IS the remediation).
+All pre-merge (no post-merge operator step — no `terraform apply`, no migration, no live mutation).
+**#6897 STAYS OPEN (Ref, not Closes); NO new issues filed (net-issue-flow = 0).**
 
 - [ ] `python3 scripts/lint-encryption-posture.py --repo-sweep` → `... 0 unledgered, 0 failing checks -> PASS`.
-- [ ] `git grep -l '#6897'` returns ONLY the allowlisted historical + own-feature artifacts (audit doc, r2 plan, design-default tasks.md, this plan/spec) — **no** ledger, `model.c4`, or `model.likec4.json` hit.
-- [ ] The C4 validation tests pass (`c4-code-syntax.test.ts`, `c4-render.test.ts`); `model.c4` + `model.likec4.json` no longer contain `#6897`; the edit is prose-only (no element/relationship/view/tag diff — `git diff` shows only description strings).
-- [ ] The 3 new issues exist and each `gh issue view <N> --json state` = `OPEN`; each **body contains its `reevaluate_when` trigger(s) verbatim** (not just an open, contentless issue).
-- [ ] `hcloud_volume.workspaces` + `hcloud_volume.git_data` (ledger) retain shape (`mechanism: plaintext-exception`, evidence, defends/does_not_defend, disclosed_as, `exception{…,expires_on: 2026-10-22}`); only `tracking_issue`/`reevaluate_when` issue-number changed. **`server.tf` / `git-data.tf` UNCHANGED** (no `.tf` in the diff).
-- [ ] zot connection row: `cert_verification: off`, cosign-digest-pinning `does_not_defend`, `exception.tracking_issue` re-homed off `#6897`.
-- [ ] `#6893` carries the class-gap note (Layer A doesn't check tracker open-state).
-- [ ] `git diff --name-only origin/main` touches ONLY: `scripts/encryption-posture-ledger.json`, `model.c4`, `model.likec4.json`, `docs/legal/*.md` (iff Phase 3 folds a correction), `knowledge-base/project/{plans,specs}/…` — **no** `apps/web-platform/infra/*.tf`, no migration, no server/src code.
+- [ ] Ledger `#6897` refs UNCHANGED (`git diff scripts/encryption-posture-ledger.json` shows no `#6897`-ref change); the `workspaces`/`git_data`/zot rows verified current (evidence/mechanism/`tracking_issue: #6897`/`expires_on` accurate against code). Any edit is limited to a provably-stale field, not a ref re-home.
+- [ ] `model.c4` + `model.likec4.json` UNCHANGED (no C4 diff).
+- [ ] `server.tf` / `git-data.tf` UNCHANGED (no `.tf` in the diff); zero live-infra mutation.
+- [ ] `#6893` carries the class-gap note (Layer A doesn't check tracker open-state) — via a single comment on the existing open issue, NOT a new issue.
+- [ ] NO new GitHub issue created by this PR (`net-issue-flow.sh <PR>` → NET ≤ 0).
+- [ ] `git diff --name-only origin/main` touches ONLY: `docs/legal/*.md` + its Eleventy mirror (iff Phase 3 folds a correction), and `knowledge-base/project/{plans,specs}/…` — plus `scripts/encryption-posture-ledger.json` ONLY if a stale field was corrected. **No** `.tf`, no migration, no server/src code, no `model.c4`/`model.likec4.json`.
 - [ ] `/soleur:legal-audit` ran; verdict recorded in PR body. Any **material over-claim was folded inline** (not deferred).
-- [ ] PR body: `Closes #6897`; `Ref #6588`; `Ref #6893`; 3 new numbers; legal verdict; decision-challenges rendered; no operator/post-merge checklist.
+- [ ] PR body: `Ref #6897` (stays open); `Ref #6588`; `Ref #6893`; legal verdict; decision-challenges rendered; no operator/post-merge checklist.
 
 ## Domain Review
 
@@ -253,11 +232,11 @@ Not applicable — Product NONE. No `.pen` required (`wg-ui-feature-requires-pen
 
 **Gate status: satisfied — no new store or connection introduced.** File detection
 (`\.tf$`, `supabase/migrations/.*\.sql$`, `cloud-init.*\.ya?ml$`, `docker-compose.*\.ya?ml$`) does
-not match this PR's Files-to-Edit. The PR ledgers the **current** posture of already-existing stores
-and only re-homes their bounded-exception tracker; it adds no persistent store and no
-cross-component connection. The ledger is the authoritative `## Encryption Posture` artifact and
-stays Layer-A-green (`plaintext-exception` rows keep `exception{justification, tracking_issue,
-reevaluate_when, expires_on}`, now bounded by open issues).
+not match this PR's Files-to-Edit. The PR **verifies** the **current** posture of already-existing
+stores and leaves their bounded-exception tracker (#6897) OPEN and unchanged; it adds no persistent
+store and no cross-component connection. The ledger is the authoritative `## Encryption Posture`
+artifact and stays Layer-A-green (`plaintext-exception` rows keep `exception{justification,
+tracking_issue, reevaluate_when, expires_on}`, bounded by the still-open #6897).
 
 ## Observability
 
