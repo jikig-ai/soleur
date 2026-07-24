@@ -172,10 +172,10 @@ vacuity (all verified during #6727's review):
 If Step 1 found nothing, check for review commit patterns (both legacy and new fix-inline convention from `rf-review-finding-default-fix-inline`):
 
 ```bash
-git log origin/main..HEAD --oneline | grep -E "(refactor: add code review findings|^[a-f0-9]+ review: )" || true
+git log origin/main..HEAD --oneline | grep -E "(refactor: add code review findings|^[a-f0-9]+ review(\([^)]*\))?: )" || true
 ```
 
-The `^[a-f0-9]+ review:` alternative matches the new convention — `review: <summary> (P<N>)` commits produced when findings are fixed inline per `rf-review-finding-default-fix-inline`.
+The `^[a-f0-9]+ review(\(scope\))?:` alternative matches the new convention — `review: <summary> (P<N>)` commits produced when findings are fixed inline per `rf-review-finding-default-fix-inline`. The optional `(scope)` group is load-bearing: this repo writes conventional commits, so review fixes land as `review(6178): …`, which a bare `review: ` regex does NOT match — the signal then reads "review never ran" on a branch where it did. Measured on PR #6933: all three signals were empty after a 7-agent review with four `review(6178):` commits on the branch. The `Reviewed-By-Soleur:` trailer remains the primary signal; this fallback should not false-negative.
 
 If that returns nothing, check for the durable review trailer:
 
