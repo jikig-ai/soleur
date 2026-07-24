@@ -32,7 +32,7 @@ date: 2026-07-24
 ## PR-1 — Phase 2: Complete cattle cloud-init parity artifact (FORWARD of web-2 birth)
 
 - [x] 2.1 Reconciled + pinned: **17 terraform_data siblings** (16 SSH + 1 local-exec); "11/12/7" all stale/partial (target-parity's "7" is a subset, dynamic floor 10, true count 16). **5-item fresh-boot gap**: private_nic_guard, zot_consumer_probe, git_data_probe, orphan_reaper, docker_seccomp_config sysctl-half. Security fork collapsed (scoped probe token adds zero exposure — host user_data already carries full-prd token). Full table + ADR-136 note: [phase-2-provisioner-reconciliation.md](phase-2-provisioner-reconciliation.md).
-- [ ] 2.2 Author the complete cattle cloud-init encoding every reconciled provisioner + Phase-1 readiness assertions — the artifact web-2 is born from AND that rebuilds web-1.
+- [~] 2.2 Cattle cloud-init parity — closing the 5-item gap. **Part 1 DONE (commit 828a27f62):** orphan_reaper + bwrap-userns sysctl baked (image host_script_files + bootstrap install + cloud-init enable), byte-identical to retained SSH heredocs (fresh-boot-parity.test.sh, mutation-verified), baked-set 30→35, .dockerignore + size cap held. **Part 2 REMAINING:** the 3 probes (private_nic_guard, zot_consumer, git_data) — each needs a `/etc/default/web-<probe>` env file at boot (per-host EXPECTED_IP + heartbeat-URL key + read-scoped web_probes token; splice into cloud-init or a baked env-writer). Scripts/units already exist as repo files; the env-file write is the work. Security settled (scoped token = zero marginal exposure).
 
 ## PR-1 — Phase 3: Birth fresh cattle web-2 (out-of-band standby, weight 0, replicas=1 held)
 
