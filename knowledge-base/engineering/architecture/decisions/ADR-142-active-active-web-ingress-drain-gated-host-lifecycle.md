@@ -75,7 +75,7 @@ Three mechanism-level questions surfaced at implementation where the plan under-
 
 The plan's `web-2.app.soleur.ai/health` off-host probe is architecturally impossible here: web-2 has **zero public ingress** (the CF Tunnel connector is gated `each.key == "web-1"`, `server.tf`), and `uptime-alerts.tf:79-92` already deleted a per-host external monitor because the shared origin false-521s. ADR-068 §(c)(3) explicitly rejects off-host `readyz==200` (loopback-Host-gated → 403 off-host; empty `/workspaces` → 503) and defers the `/internal/readyz` serve-readiness gate to the cutover orchestrator.
 
-**Ruling:** BUILD **no** off-host `/health` monitor. **AC9 is REFRAMED (not descoped)** onto a strictly-deeper composite, all already in the PR's fan-out: (a) the two per-host **outbound** heartbeats `web_nic_guard`/`web_zot_consumer` (`web-probe.tf`, absence-alerted), (b) the `SOLEUR_FRESH_BOOT_READY` marker readiness-DEPTH fields (volume-mounted+luksOpen / vector-installed / token-present — the "app-readiness, not port-open" half), (c) per-host Vector log-count > 0 via `scripts/betterstack-query.sh "host:soleur-web-2 | count"` (the #6538 dark-host detector — the "Vector-shipping depth" half). The tunnel-reachable web-2 signal, when needed pre-flip, is web-1's `/hooks/deploy-status` `.reason` (`ok` vs `ok_peer_fanout_degraded`), which already exists. **DEFER** (ADR-068's, blocked on #6570): the on-host in-container `/internal/readyz` serve-readiness gate.
+**Ruling:** BUILD **no** off-host `/health` monitor. **AC9 is REFRAMED (not descoped)** onto a strictly-deeper composite, all already in the PR's fan-out: (a) the two per-host **outbound** heartbeats `web_nic_guard`/`web_zot_consumer` (`web-probe.tf`, absence-alerted), (b) the `SOLEUR_FRESH_BOOT_READY` marker readiness-DEPTH fields (volume-mounted+luksOpen / vector-installed / token-present — **boot-precondition readiness**: deeper than port-open, but a one-shot boot-time snapshot, NOT a served-request `/internal/readyz` assertion, which stays deferred), (c) per-host Vector log-count > 0 via `scripts/betterstack-query.sh "host:soleur-web-2 | count"` (the #6538 dark-host detector — the "Vector-shipping depth" half). The tunnel-reachable web-2 signal, when needed pre-flip, is web-1's `/hooks/deploy-status` `.reason` (`ok` vs `ok_peer_fanout_degraded`), which already exists. **DEFER** (ADR-068's, blocked on #6570): the on-host in-container `/internal/readyz` serve-readiness gate.
 
 ### R2 — rebuilt #6575 anti-pooling gate (refines D3)
 
@@ -103,8 +103,17 @@ The original `lb-weight-gate.sh` was deleted (#6575) because its first assertion
 ## Consequences
 
 - **Positive:** web-2 delivers fresh-boot-readiness proof, a cattle-host template, and proven disposability
-  (volume-preserving reprovision) independent of the blocked ADR-068 Phase-3 chain. The sole-copy volume is
-  hardened (`prevent_destroy` + snapshot + luksOpen-not-reformat).
+  (volume-preserving reprovision) independent of the blocked ADR-068 Phase-3 chain. **Sole-copy protection
+  (precise, PR-1 state):** `prevent_destroy` is on the `for_each` `hcloud_volume.workspaces` (all per-host
+  volumes), which is the live sole copy TODAY (pre-LUKS-cutover) and transitively guards a whole-root
+  `terraform destroy` (it aborts on the first `prevent_destroy` sibling). The **additive LUKS singleton
+  `hcloud_volume.workspaces_luks`** — which BECOMES the sole copy after the ADR-119 rsync cutover — does NOT
+  yet carry `prevent_destroy`: adding it collides with the `apply_target=workspaces-luks-recut` `-replace`
+  escape hatch, so its direct guard + the off-host snapshot are **deferred to #6931** (the two-mechanism
+  topology reconciliation). Interim guards on `workspaces_luks`: absent from the push `-target` allow-list;
+  recut/cutover env-gated + typed-confirm + destroy-guarded. Residual exposure = a *targeted*
+  `destroy`/`-replace` of `workspaces_luks` during the defer window (tracked as a #6931 cutover-PR blocker).
+  luksOpen-not-reformat is likewise the deferred Phase-4 fresh-boot LUKS path (#6931), not present at merge.
 - **Negative / accepted:** No *concurrent* redundancy pre-flip (web-2 is a standby, not a second server of
   the same workspaces). De-petting web-1 incurs a brief maintenance-window outage. A recurring `cpx32`
   standby cost (~similar to the retired web-2's €8.49/mo) — but this time with a consumer (disposability +

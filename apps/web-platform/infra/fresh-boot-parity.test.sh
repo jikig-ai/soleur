@@ -156,7 +156,7 @@ done
 #        /etc/default/web-<probe> as the retained SSH remote-exec printf — encoding-agnostic
 #        (server.tf HCL uses `\\n`, the bash env-writer uses `\n`, so compare KEYS not raw bytes). ──
 env_keys_from() { # $1=file  $2=dest-basename → sorted-unique KEY= tokens on the printf line writing that dest
-  grep -F "/etc/default/$2" "$1" | grep -oE "printf '[^']*'" | grep -oE '[A-Z_0-9]+=' | sort -u
+  grep -F "/etc/default/$2" "$1" | grep -oE "printf '[^']*'" | grep -oE '[A-Za-z_][A-Za-z_0-9]*=' | sort -u
 }
 for d in $PROBE_DESTS; do
   ssh_keys="$(env_keys_from "$SRV" "$d")"

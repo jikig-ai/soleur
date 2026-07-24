@@ -77,8 +77,14 @@ LB, and the DNS multi-host rewire are **out of scope** (Phase 6 / external gates
 **If this lands broken:** a request reaches web-2 before shared git-data exists → **empty workspace**
 ("workspace-gone"); or a host reprovision reformats the LUKS volume → permanent loss.
 
-**If this loses data:** destroying/reformatting `hcloud_volume.workspaces` (the **SOLE COPY**,
-model.c4:186) — permanent, unrecoverable. The volume, not the host, is the protected asset.
+**If this loses data:** destroying/reformatting the **SOLE-COPY /workspaces volume** — permanent,
+unrecoverable. Precise identity (topology in transition, ADR-142 R3): the sole copy is
+`hcloud_volume.workspaces["web-1"]` (plaintext) TODAY, and BECOMES the additive LUKS singleton
+`hcloud_volume.workspaces_luks` after the ADR-119 rsync cutover. `prevent_destroy` (this PR) is on the
+`for_each` `hcloud_volume.workspaces` — correct for the current live volume + a transitive whole-root
+`terraform destroy` guard; the direct guard on `workspaces_luks` + the off-host snapshot defer to #6931
+(they collide with the `workspaces-luks-recut` `-replace` hatch). The volume, not the host, is the
+protected asset (model.c4:186).
 
 **Brand-survival threshold:** single-user incident. `requires_cpo_signoff: true`; `user-impact-reviewer` at PR review.
 

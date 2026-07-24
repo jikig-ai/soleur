@@ -28,10 +28,14 @@
 # Exit semantics (per sweep-followthroughs.sh contract):
 #   0 = PASS       — both web-2 monitors are live `up` (armed + green); the standby is healthy, not
 #                    dark; sweeper closes #6459.
-#   1 = FAIL       — a web-2 monitor EXISTS but is not `up` (paused/down/pending) — web-2 booted or
-#                    drifted DARK (the #6538 regression). A real verdict; comments + leaves open.
-#   2 = TRANSIENT  — token unset, API fault, or a web-2 monitor is ABSENT/not-yet-ingested (web-2 not
-#                    born yet, or ingest lag). Not a data point; sweeper retries. Never a false PASS.
+#   1 = FAIL       — a web-2 monitor EXISTS and is in a genuinely-DOWN status (down / validation-
+#                    failed) — web-2 booted or drifted DARK (the #6538 regression). A real verdict.
+#   2 = TRANSIENT  — token unset, API fault, OR a web-2 monitor is not yet a data point: ABSENT (not
+#                    born / ingest lag / on an unfetched page), OR `paused`/`pending` (BORN but the
+#                    apply arm-gate has not unpaused it yet — for_each creates monitors `paused`, so
+#                    the born-but-arming window reads paused/pending, NEVER ABSENT). Sweeper retries;
+#                    never a false PASS. NOTE: paused/pending is TRANSIENT (not FAIL) precisely so a
+#                    healthy-but-unarmed web-2 is not certified DARK — see the ARMING branch below.
 
 set -uo pipefail
 
@@ -69,6 +73,14 @@ if ! printf '%s' "$BODY" | jq -e 'if (.data | type) == "array" then true else er
   exit 2
 fi
 
+# Pagination guard: this fetches page 1 only. Today the account is well under one page (~50/page), so
+# `.pagination.next` is null. If the monitor count ever crosses a page boundary (active-active-N, more
+# infra beats), a web-2 monitor could land on page 2 → this page reads it ABSENT and a genuinely-DARK
+# web-2 would be mis-read as not-born → TRANSIENT-forever (dark-masking). Fail-safe: if a next page
+# exists AND we do not observe both targets here, hold TRANSIENT with a paginate-me signal rather than
+# concluding ABSENT. (Never a false PASS either way; PASS still requires both monitors present + `up`.)
+NEXT="$(printf '%s' "$BODY" | jq -r '.pagination.next // empty' 2>/dev/null)"
+
 # Look each target up by its exact name. jq emits the status, or the literal ABSENT sentinel when
 # the monitor is not in the payload yet (web-2 not born / ingest lag ⇒ TRANSIENT, not a verdict).
 lookup_status() {
@@ -79,24 +91,42 @@ lookup_status() {
 
 declare -a NOT_UP=()
 declare -a MISSING=()
+declare -a ARMING=()   # paused / pending — born but not yet armed/pinging; TRANSIENT, not DARK
 declare -a REPORT=()
 for name in "${TARGETS[@]}"; do
   st="$(lookup_status "$name")"
   [[ -z "$st" ]] && st="ABSENT"
   REPORT+=("${name}=${st}")
-  if [[ "$st" == "ABSENT" ]]; then
-    MISSING+=("$name")
-  elif [[ "$st" != "up" ]]; then
-    NOT_UP+=("${name}(${st})")
-  fi
+  case "$st" in
+    ABSENT)         MISSING+=("$name") ;;
+    up)             : ;;                              # healthy
+    paused|pending) ARMING+=("${name}(${st})") ;;     # born, not yet armed by the apply arm-gate
+    *)              NOT_UP+=("${name}(${st})") ;;      # down / validation-failed / … → genuinely DARK
+  esac
 done
 
 SUMMARY="${REPORT[*]}"
 
-# Absent ⇒ web-2 has not been born yet (its birth is a post-merge gated dispatch), or ingest lag.
-# Not a data point — never a false FAIL on "not yet". Held as TRANSIENT so the sweeper retries.
+# Absent ⇒ web-2 has not been born yet (its birth is a post-merge gated dispatch), or ingest lag,
+# OR (if a next page exists) the monitor is on a page we did not fetch. Not a data point — never a
+# false FAIL on "not yet". Held as TRANSIENT so the sweeper retries.
 if (( ${#MISSING[@]} > 0 )); then
-  echo "TRANSIENT: ${#MISSING[@]} web-2 monitor(s) not yet present in Better Stack — web-2 has not been born (its birth is a gated workflow_dispatch), or ingest is lagging. [${SUMMARY}]" >&2
+  if [[ -n "$NEXT" ]]; then
+    echo "TRANSIENT: ${#MISSING[@]} web-2 monitor(s) not on heartbeats page 1 AND a next page exists — cannot conclude ABSENT (monitor may be on a later page). PAGINATE this probe before trusting an ABSENT verdict. [${SUMMARY}]" >&2
+  else
+    echo "TRANSIENT: ${#MISSING[@]} web-2 monitor(s) not yet present in Better Stack — web-2 has not been born (its birth is a gated workflow_dispatch), or ingest is lagging. [${SUMMARY}]" >&2
+  fi
+  exit 2
+fi
+
+# paused/pending ⇒ the monitor is born but the apply workflow's arm-gate has not unpaused it yet.
+# web-2's heartbeats are created `paused=true` (web-probe.tf ignore_changes=[paused]); the arm-gate
+# ("Arm web-host probe heartbeats" in apply-web-platform-infra.yml) is the ONLY unpause path. A
+# for_each monitor is created `paused`, NEVER `ABSENT`, so the born-but-arming window reads
+# paused/pending — this is NOT a dark host. Hold TRANSIENT (never a false DARK FAIL) so the sweeper
+# retries until the arm-gate lands. Distinct from ABSENT (not born) and a genuinely-down status (DARK).
+if (( ${#ARMING[@]} > 0 )); then
+  echo "TRANSIENT: ${#ARMING[@]} web-2 monitor(s) present but not yet ARMED — ${ARMING[*]} (created paused; the apply arm-gate unpauses them). Retrying next sweep — NOT a DARK verdict. [${SUMMARY}]" >&2
   exit 2
 fi
 

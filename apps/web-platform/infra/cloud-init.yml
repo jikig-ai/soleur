@@ -651,7 +651,7 @@ runcmd:
     SOLEUR_HOST_KEY='${web_host_key}'
     SOLEUR_ZOT_ENDPOINT='${registry_endpoint}'
     SOLEUR_ZOT_PROBE_REPO='${zot_probe_repo}'
-    /usr/local/bin/web-probe-envwrite.sh
+    /usr/local/bin/web-probe-envwrite.sh || soleur-boot-emit web_probe_envwrite fatal || true
   - systemctl daemon-reload
   - systemctl enable --now web-private-nic-guard.timer
   - systemctl enable --now web-zot-consumer-probe.timer

@@ -16,8 +16,11 @@
 #
 # SECURITY: the read-scoped web_probes token adds ZERO marginal exposure — the host user_data
 # already carries the strictly-stronger full-prd DOPPLER_TOKEN (server.tf:211 / webhook-deploy).
-# umask 0137 closes the sub-ms TOCTOU between create-at-default-umask and chmod 600 (the file holds
-# a live prd read token), mirroring the SSH remote-exec's own `( umask 0137 && printf … )` shape.
+# umask 0137 → mode 0640 at create (owner rw, group r, NO world/other) — so the file is never
+# world-readable even for the sub-ms before the `chmod 600` below removes the group-read bit. The
+# residual create-window is group=root-only (not exploitable; only root can read it), not a full
+# world-readable exposure. Mirrors the SSH remote-exec's own `( umask 0137 && printf … )` shape (the
+# file holds a live prd read token). NOT "closes the TOCTOU" — it narrows it to root-group-only.
 set -euo pipefail
 
 # Fail LOUD on any unset required input — no silent Doppler/env fallback (fresh-boot readiness
@@ -40,7 +43,7 @@ HOST_UPPER="$(printf '%s' "$SOLEUR_HOST_KEY" | tr 'a-z-' 'A-Z_')"
 # endpoint literal mirrors git-data.tf's SSH transport (10.0.1.20:22), matching the SSH remote-exec.
 GIT_DATA_ENDPOINT="10.0.1.20:22"
 
-# Each env file: umask 0137 subshell so it is NEVER created world/group-readable (it holds a live
+# Each env file: umask 0137 subshell → mode 0640 at create (never world-readable; group=root only; it holds a live
 # prd read token), then chmod 600 — byte-key-identical to the retained SSH remote-exec printf.
 ( umask 0137 && printf 'EXPECTED_IP=%s\nBETTERSTACK_INGEST_URL=%s\nWEB_NIC_GUARD_URL_KEY=%s\nDOPPLER_TOKEN=%s\nDOPPLER_ENABLE_VERSION_CHECK=false\n' "$SOLEUR_EXPECTED_IP" "$SOLEUR_BETTERSTACK_INGEST_URL" "WEB_NIC_GUARD_URL_${HOST_UPPER}" "$SOLEUR_WEB_PROBES_TOKEN" > /etc/default/web-private-nic-guard )
 chmod 600 /etc/default/web-private-nic-guard
