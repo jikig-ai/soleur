@@ -302,6 +302,11 @@ assert "#6919 doublefire hook forwards ?function_ids → INNGEST_DOUBLEFIRE_FUNC
 assert "#6919 workflow defines doublefire_from() helper" "grep -qE 'doublefire_from\(\) \{' '$WF'"
 assert "#6919 both doublefire calls forward the ?from= window cost lever (2 sites)" "[[ \"\$(grep -cF 'inngest-doublefire-probe?from=' '$WF')\" -eq 2 ]]"
 assert "#6919 workflow wires the optional functionIDs cost lever (CUTOVER_DOUBLEFIRE_FUNCTION_IDS)" "grep -qF 'CUTOVER_DOUBLEFIRE_FUNCTION_IDS' '$WF'"
+# #6919 review — doublefire_from()'s cutover-instant anchor (and the missed-tick auto-enum) read
+# CUTOVER_WINDOW_UNTIL/FROM, which GitHub does not export to the shell unless the step env MAPS
+# them. Assert the mapping exists so the anchor branch cannot silently go dead again.
+assert "#6919 workflow maps CUTOVER_WINDOW_UNTIL into the step env (doublefire anchor not dead)" "grep -qE 'CUTOVER_WINDOW_UNTIL:\s*\\\$\{\{ vars.CUTOVER_WINDOW_UNTIL \}\}' '$WF'"
+assert "#6919 workflow maps CUTOVER_WINDOW_FROM into the step env (missed-tick auto-enum not dead)" "grep -qE 'CUTOVER_WINDOW_FROM:\s*\\\$\{\{ vars.CUTOVER_WINDOW_FROM \}\}' '$WF'"
 # INVARIANT (negative): the cost lever is functionIDs + a 200d (> the 182d = 2×quarterly floor)
 # window — the TIME window is NEVER narrowed to hours/days (that would surface false missed-ticks
 # at :704-743 → operator re-fire → the exact DOUBLE-FIRE the cutover prevents).

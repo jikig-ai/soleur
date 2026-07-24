@@ -131,6 +131,15 @@ jobs:
           # missed-ticks → re-fire → double-fire). Forwarded to the probe as the function_ids
           # URL query param (read into INNGEST_DOUBLEFIRE_FUNCTION_IDS on-host).
           CUTOVER_DOUBLEFIRE_FUNCTION_IDS: ${{ vars.CUTOVER_DOUBLEFIRE_FUNCTION_IDS }}
+          # #6919 review — the quiesce→register window (ISO-8601), OPTIONAL operator repo/env
+          # vars, mapped here so the shell actually sees them (GitHub does not export repo vars
+          # to the step unless named). When set they (a) anchor doublefire_from() to
+          # cutover_instant−200d instead of now−200d — so a LATE op=verify re-run still keeps the
+          # window ⊇ the superset invariant — and (b) enable the missed-tick auto-enumeration
+          # (P2-16, below). Unset ⇒ doublefire_from() falls back to now−200d (safe when op=verify
+          # runs promptly post-cutover, the intended usage) and missed-tick auto-enum is skipped.
+          CUTOVER_WINDOW_FROM: ${{ vars.CUTOVER_WINDOW_FROM }}
+          CUTOVER_WINDOW_UNTIL: ${{ vars.CUTOVER_WINDOW_UNTIL }}
         run: |
           set -euo pipefail
           BASE="https://deploy.soleur.ai/hooks"
