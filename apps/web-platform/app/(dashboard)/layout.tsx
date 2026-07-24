@@ -245,10 +245,13 @@ export default function DashboardLayout({
   // collapses), so a stray dispatch while expanded is a no-op.
   useEffect(() => {
     function handleExpandRequest() {
-      // An "expand request" must always yield a VISIBLE (expanded) rail. The only
-      // dispatcher today is the KB "Browse files" button; this keeps any future
-      // out-of-aside dispatcher (command palette, deep link) working too.
+      // An "expand request" must always yield a VISIBLE nav surface. On desktop
+      // that means un-collapsing the rail; on mobile the nav is the hamburger
+      // drawer, so also open it (a no-op on desktop, where the aside is the
+      // always-visible rail). The KB mobile empty-state "Browse files" button
+      // relies on the drawer-open half.
       if (collapsed) toggleCollapsed();
+      setDrawerOpen(true);
     }
     window.addEventListener(RAIL_EXPAND_EVENT, handleExpandRequest);
     return () =>
@@ -319,21 +322,9 @@ export default function DashboardLayout({
         >
           <MenuIcon className="h-5 w-5" />
         </button>
-        {/* Mobile band — placed via CSS (this bar is `md:hidden`), NOT a JS
-            viewport gate, so workspace identity + the back chevron paint on the
-            FIRST frame (no SSR/hydration tick where identity is absent). */}
-        <WorkspaceContextBand
-          pathname={pathname}
-          variant="mobile"
-          // On mobile the "Back to menu" affordance lives INSIDE the hamburger
-          // drawer's drilled branch (below), so the band never renders its own —
-          // avoids a redundant top-level chrome row when drilled.
-          suppressBack={drill !== null}
-          // KB owns its "Knowledge Base" title in the page body, and the chat
-          // surface owns its own mobile header (back + Approve/Connected), so
-          // both drop the duplicate band section title (was 3 stacked bars).
-          suppressSectionTitle={drill === "kb" || drill === "chat"}
-        />
+        {/* Workspace identity now lives at the TOP of the hamburger drawer (the
+            switcher belongs in the sidebar), so the top bar stays minimal:
+            hamburger on the left, palette trigger on the right. */}
         {/* The only non-keyboard way to open the command palette. `ml-auto`
             pins it to the trailing edge; self-hides when the flag is off. */}
         <MobilePaletteTrigger />
@@ -397,6 +388,21 @@ export default function DashboardLayout({
           >
             <XIcon className="h-5 w-5" />
           </button>
+        </div>
+
+        {/* Workspace switcher at the top of the mobile drawer. CSS-exclusive
+            with the desktop rail band below (`hidden md:block`), so the
+            OrgSwitcher/LiveRepoBadge single-mount (AC4b) is preserved — exactly
+            one band renders per breakpoint. The drawer owns its own "Back to
+            menu" (drilled branch) and needs no section title, so both are
+            suppressed here. */}
+        <div className="px-3 pb-1 md:hidden">
+          <WorkspaceContextBand
+            pathname={pathname}
+            variant="mobile"
+            suppressBack
+            suppressSectionTitle
+          />
         </div>
 
         {/* Collapse/expand toggle — the floated « chevron. Collapses the rail to

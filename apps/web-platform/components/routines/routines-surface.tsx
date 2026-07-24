@@ -385,7 +385,7 @@ function RoutinesTab() {
             {domain}{" "}
             <span className="ml-1 text-soleur-text-muted/70">{items.length}</span>
           </h2>
-          <ul className="divide-y divide-soleur-border-default rounded-lg border border-soleur-border-default">
+          <ul className="space-y-2 sm:space-y-0 sm:divide-y sm:divide-soleur-border-default sm:rounded-lg sm:border sm:border-soleur-border-default">
             {items.map((item) => (
               <RoutineRow
                 key={item.fnId}
@@ -436,7 +436,7 @@ function RoutineRow({
 }) {
   const last = item.lastRun;
   return (
-    <li className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
+    <li className="flex flex-col gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 sm:flex-row sm:items-center sm:gap-4 sm:rounded-none sm:border-0 sm:bg-transparent">
       <div className="min-w-0 flex-1">
         <button
           type="button"
