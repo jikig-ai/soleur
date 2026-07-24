@@ -35,16 +35,43 @@ ROOT="${ROOT%/}"   # normalize: trailing slash breaks rel() prefix-strip
 
 # --- current landscape — update at each model launch ---
 # Each superseded id maps to the CURRENT same-tier id as "<stale>=<current>".
-# Add a pair when a new model ships in an existing tier (the next Sonnet/Opus);
-# `--fix` rewrites each stale id to ITS OWN target, so multiple tiers coexist.
-# Older families (claude-3, dated 2025 ids) stay flag-only (too old for a blind
-# swap). Source of truth for current ids: the claude-api skill table + docs.
+# At each launch: (1) ADD a pair for the newly-superseded id, AND (2) RETARGET
+# every existing same-tier pair's RHS to the new current id. Step 2 is not
+# optional — `--fix` applies pairs sequentially, so a CHAINED map
+# (4-7=4-8 alongside 4-8=5) is order-dependent and lands on a stale id.
+# The SINGLE-HOP INVARIANT below enforces this mechanically: no target may
+# also appear as a source. Source of truth for current ids: the claude-api
+# skill table + https://platform.claude.com/docs/en/about-claude/models/overview.md
+# (pricing: https://platform.claude.com/docs/en/about-claude/pricing.md).
 AUTOFIX_PAIRS=(
-  "claude-opus-4-7=claude-opus-4-8"
-  "claude-opus-4-6=claude-opus-4-8"
+  "claude-opus-4-8=claude-opus-5"
+  "claude-opus-4-7=claude-opus-5"
+  "claude-opus-4-6=claude-opus-5"
   "claude-sonnet-4-6=claude-sonnet-5"
   "claude-sonnet-4-5=claude-sonnet-5"
 )
+
+# SINGLE-HOP INVARIANT (fail-fast). A convergent map rewrites every stale id
+# in ONE pass; if any RHS is also an LHS, `--fix` leaves files on an
+# intermediate id and `--detect` re-flags them forever (a permanently-red
+# drift cron that auto-files issues it cannot fix). Cheap to assert, so assert
+# it on every invocation rather than trusting the editor to have retargeted.
+assert_single_hop() {
+  local p from to q other
+  for p in "${AUTOFIX_PAIRS[@]}"; do
+    to="${p#*=}"
+    for q in "${AUTOFIX_PAIRS[@]}"; do
+      other="${q%%=*}"
+      if [[ "$to" == "$other" ]]; then
+        from="${p%%=*}"
+        echo "audit-models: NON-CONVERGENT AUTOFIX_PAIRS — '${from}' maps to '${to}', which is itself a source id." >&2
+        echo "  Retarget every same-tier pair directly to the current id (no chaining)." >&2
+        exit 78
+      fi
+    done
+  done
+}
+assert_single_hop
 # The stale ids (LHS of each pair), '|'-joined for grep.
 autofix_from_re() {
   local p out=""
@@ -58,25 +85,52 @@ DELETION_GUARD=20   # abort --fix if any file would lose more than this many lin
 # Path classes excluded from the config (auto-fix) surface. knowledge-base/** is
 # archival/historical prose (learnings, plans, brainstorms) — it never selects a
 # model at runtime, so a stale id there is not operational drift.
-EXCLUDE_RE='(/node_modules/|/\.git/|/\.next/|/test/|/__tests__/|/spike/|/archive/|knowledge-base/|/community/|\.test\.|\.spec\.|/model-launch-review/)'
+# `\.generated\.` keeps the sweeper out of generated artifacts: those have a
+# generator that reads the TS registry (eval-harness/scripts/gen-models.sh), and
+# a blind sed here would make the generator no longer the sole writer — exactly
+# the second-SSOT the generator's own header promises does not exist.
+EXCLUDE_RE='(/node_modules/|/\.git/|/\.next/|/test/|/__tests__/|/spike/|/archive/|knowledge-base/|/community/|\.test\.|\.spec\.|\.generated\.|/model-launch-review/)'
 
 # Collect config-class files containing any auto-fixable stale ID.
+# Returns 2 (and prints to stderr) if the scan itself failed. That distinction
+# is load-bearing: `|| true` alone swallows grep's error exit (>=2: unreadable
+# dir, bad regex) as indistinguishable from its no-match exit (1), so --detect
+# would report a confident "none — config model IDs are current" from a scan
+# that never ran. A detector that cannot tell "clean" from "could not look" is
+# the failure mode #5100 exists to prevent.
 collect_config_hits() {
-  local re
+  local re out rc
   re="$(autofix_from_re)"
-  grep -rEl "$re" "$ROOT" \
+  out="$(grep -rEl "$re" "$ROOT" \
     --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.next \
     --exclude-dir=test --exclude-dir=__tests__ --exclude-dir=spike --exclude-dir=archive \
     --exclude-dir=community \
-    --exclude='*.test.*' --exclude='*.spec.*' 2>/dev/null \
-    | grep -vE "$EXCLUDE_RE" || true
+    --exclude='*.test.*' --exclude='*.spec.*' 2>/dev/null)"
+  rc=$?
+  if (( rc >= 2 )); then
+    echo "audit-models: scan FAILED (grep rc=$rc) under '$ROOT' — refusing to report clean." >&2
+    return 2
+  fi
+  [[ -n "$out" ]] || return 0
+  printf '%s\n' "$out" | grep -vE "$EXCLUDE_RE" || true
 }
 
 rel() { echo "${1#"$ROOT"/}"; }
 
 # ---------------- detect mode (cron) ----------------
 if [[ "$MODE" == "detect" ]]; then
-  mapfile -t hits < <(collect_config_hits)
+  # Capture to a temp file so collect_config_hits' EXIT CODE survives — a
+  # process substitution (`mapfile < <(...)`) discards it, which would let a
+  # failed scan fall through to the clean branch below.
+  _hits_tmp="$(mktemp)"
+  # Single owning trap (ADR-129): the explicit rm below is the happy path, the
+  # trap covers a die between allocation and cleanup.
+  trap 'rm -f "$_hits_tmp"' EXIT
+  if ! collect_config_hits > "$_hits_tmp"; then
+    echo "model-drift: UNKNOWN — scan failed; treat as un-run, not clean."
+    exit 1
+  fi
+  mapfile -t hits < "$_hits_tmp"
   if [[ ${#hits[@]} -gt 0 ]]; then
     echo "model-drift: ${#hits[@]} config file(s) carry a stale model ID (auto-fixable via /soleur:model-launch-review)."
     for f in "${hits[@]}"; do echo "  - $(rel "$f")"; done
@@ -147,10 +201,60 @@ if [[ ${#pins[@]} -gt 0 ]]; then
   for f in "${pins[@]}"; do
     echo "    - $(rel "$f"): $(grep -oE 'claude-code-action@[a-f0-9]+ # v[0-9.]+' "$f" | head -1)"
   done
-  echo "  → resolve tip via: gh api repos/anthropics/claude-code-action/releases --jq '.[0].tag_name'"
+  # Compute the drift rather than telling a human to run a command
+  # (hr-no-dashboard-eyeball-pull-data-yourself). Best-effort: `gh` may be
+  # absent or unauthenticated in a cron sandbox, and that MUST read as
+  # UNKNOWN — never as "the pin is fresh".
+  if command -v gh >/dev/null 2>&1; then
+    _tip="$(gh api repos/anthropics/claude-code-action/releases --jq '.[0].tag_name' 2>/dev/null || true)"
+    _pin_sha="$(grep -ohE 'claude-code-action@[a-f0-9]{40}' "${pins[@]}" 2>/dev/null | head -1 | cut -d@ -f2)"
+    # These pins are annotated TAG objects, so git/tags resolves them. A pin
+    # produced by pin-github-action/Dependabot is a plain COMMIT sha, where
+    # git/tags 404s and commits/<sha> is the correct call — try both.
+    _pin_desc=""
+    if [[ -n "$_pin_sha" ]]; then
+      _pin_desc="$(gh api "repos/anthropics/claude-code-action/git/tags/$_pin_sha" --jq '"\(.tag) \(.tagger.date)"' 2>/dev/null \
+        || gh api "repos/anthropics/claude-code-action/commits/$_pin_sha" --jq '"(commit) \(.commit.committer.date)"' 2>/dev/null \
+        || true)"
+    fi
+    if [[ -n "$_tip" && -n "$_pin_desc" ]]; then
+      echo "    pinned: $_pin_desc    tip: $_tip"
+    else
+      echo "    pin freshness: UNKNOWN (GitHub API unreachable) — NOT a freshness pass."
+    fi
+  else
+    echo "    pin freshness: UNKNOWN (gh not on PATH) — NOT a freshness pass."
+  fi
   echo "    bump a pin ONLY when coupled to a --model swap in the same workflow (#2540 invariant)."
 else
   echo "  no claude-code-action pins under .github (or scanning a test root)."
+fi
+echo
+
+echo "[2b] pinned claude-code CLI knows the tier models (FLAG-ONLY)"
+# The `claude` CLI carries a BUNDLED per-model table. A model ID absent from it
+# is treated exactly like a garbage ID: the CLI silently falls back to HALF the
+# max_tokens (measured 64000 -> 32000, #6934), degrading every cron that passes
+# --model. This is invisible to the model-ID sweep, to tsc, and to the suite —
+# the argv is well-formed and the run succeeds. Grep the installed bundle when
+# present; absence of node_modules is UNKNOWN, never a pass.
+_cli_dir="$ROOT/apps/web-platform/node_modules/@anthropic-ai"
+if [[ -d "$_cli_dir" ]]; then
+  for _m in $(grep -ohE '"claude-(opus|sonnet|haiku)-[0-9a-z-]+"' \
+                "$ROOT/apps/web-platform/server/inngest/model-tiers.ts" \
+                "$ROOT/apps/web-platform/server/inngest/leader-prompts/constants.ts" 2>/dev/null \
+              | tr -d '"' | sort -u); do
+    # -a: the linux-x64 CLI is a compiled binary; a text-mode grep silently
+    # reports zero hits for EVERY id, including known-good ones (a null result
+    # that reads exactly like a real one).
+    if grep -raqF "$_m" "$_cli_dir" 2>/dev/null; then
+      echo "    ok      $_m present in the pinned CLI bundle"
+    else
+      echo "    DRIFT   $_m ABSENT from the pinned CLI bundle — bump @anthropic-ai/claude-code"
+    fi
+  done
+else
+  echo "    UNKNOWN (apps/web-platform/node_modules absent) — NOT a pass; run after install."
 fi
 echo
 
