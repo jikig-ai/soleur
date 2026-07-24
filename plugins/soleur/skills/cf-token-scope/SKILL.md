@@ -62,43 +62,54 @@ token.
    `filename` — see the playbook's leak constraints.
 
 3. **Post-widen verification.** Re-run the probe with
-   `--target-entrypoint <phase>`. Success = the target flipped `403 → authorized`
-   (compared to step 1) AND every retained control stayed authorized AND the
-   account-scheme control is an authorized `200` — exit 0, `PASS: target scope
-   added` + `PASS: no scope dropped`.
+   `--target-entrypoint <phase>`. Success = the target is currently authorized AND
+   every retained control stayed authorized AND the account-scheme control is an
+   authorized `200` — exit 0, `PASS: target scope present` + `PASS: no scope
+   dropped`. A single run cannot observe the `403 → authorized` *transition*, so
+   the tool prints "present", not "added" — confirm the transition against your
+   step-1 baseline.
 
 ## Probe-set contract (three-layer fail-closed classifier)
 
-The four ADR-130 probes span two schemes — three **zone** phases
-(`http_config_settings`, `http_request_dynamic_redirect`,
-`http_request_cache_settings`) and one **account** list
-(`accounts/<acct>/rulesets`). The classifier captures each response **body** (not
-`-o /dev/null`) and decides in three layers:
+The probe set is the ADR-130 four-probe retained set plus Zone WAF — four **zone**
+phases (`http_config_settings`, `http_request_dynamic_redirect`,
+`http_request_cache_settings`, `http_request_firewall_custom`) and one **account**
+list (`accounts/<acct>/rulesets`). The classifier captures each response **body**
+(not `-o /dev/null`) and decides in three layers:
 
-1. **Status** — `403` / `000` / `5xx` / empty / non-numeric = FAIL.
+1. **Status** — `403` / `000` / `5xx` / empty / no-newline / non-numeric = FAIL.
 2. **Body-shape** — a `200` passes only when the body has `success == true` AND
-   `.result` is an array. A degraded `200` (`{"success":false,"result":null}`) is
-   a FAIL. Never key on `.result | length` — jq reads `null` as `0` and would
-   pass.
+   `.result` is an array. A degraded `200` (`{"success":false,...}` OR
+   `{"success":true,"result":null}`) is a FAIL. Never key on `.result | length` —
+   jq reads `null` as `0` and would pass.
 3. **Per-scheme control** — the account list is the account-scheme control and
-   must be an authorized `200` (an account `404` = FAIL). A zone `404`
-   (ADR-130-endorsed "phase exists, empty") is trusted only when the known-granted
-   zone control (`http_request_dynamic_redirect`) is authorized.
+   must be an authorized `200` (an account `404` = FAIL). A zone `404` (ADR-130's
+   "phase exists, empty") is trusted **only** for `http_config_settings` — the one
+   phase whose 403-on-missing-scope semantics ADR-130 empirically verified — and
+   only under an authorized zone control (`http_request_dynamic_redirect`). Every
+   other phase's `404` fails closed: 403-on-missing is unverified there, so a
+   dropped scope that returned `404` must not read as green.
 
 ## Exit codes
 
 - `0` — every retained scope authorized (and the target, if given).
-- `2` — missing prerequisite (`curl` / `doppler` / `jq`) or an absent Doppler secret.
+- `2` — usage error, missing prerequisite (`curl` / `doppler` / `jq`), or an absent Doppler secret.
 - `3` — probe failed: a scope was dropped, degraded, or denied.
 
 ## Sharp Edges
 
-- **The four-probe set is a CANARY for the whole-list REPLACE failure mode, not
+- **The probe set is a CANARY for the whole-list REPLACE failure mode, not
   exhaustive per-permission coverage.** A dashboard save that replaces (not
-  appends) drops *all* scopes at once → all four catch it. It does NOT probe Zone
-  WAF (`firewall_custom`), Transform Rules (`response_headers_transform`), or
-  account Filter Lists — a *surgical* single-permission drop can pass. Extend the
+  appends) drops *all* scopes at once → every probe catches it. Zone WAF
+  (`http_request_firewall_custom`) is now probed, but Transform Rules
+  (`http_response_headers_transform`) and account Filter Lists are not — a
+  *surgical* single-permission drop of one of those can still pass. Extend the
   entrypoint set if a future threat model needs per-permission coverage.
+- **The probe attests read reachability, not `:Edit` retention.** It issues `GET`,
+  so a dashboard REPLACE that re-adds a phase as **Read-only** (a one-click
+  operator error — the CF dropdown lists Read/Edit side-by-side) returns an
+  authorized `200` and reads as green while the write/hijack capability was
+  dropped. Visually confirm the widened permission is `Edit`, not `Read`.
 - **Probe, never trust the Cloudflare UI permission label** — it is named
   inconsistently across surfaces. The target entrypoint returning non-403 is the
   ground truth (ADR-130).

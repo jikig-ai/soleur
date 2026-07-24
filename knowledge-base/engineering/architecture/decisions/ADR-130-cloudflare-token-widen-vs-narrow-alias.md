@@ -237,10 +237,26 @@ token). See `knowledge-base/project/specs/feat-one-shot-cf-token-scope-6755/deci
 `%{http_code}` snippet in § Consequences is illustrative only. The skill hardens
 it into a three-layer fail-closed classifier — status → body-shape
 (`success == true` AND `.result` is an array, so a degraded
-`200 {"success":false,"result":null}` FAILs) → per-scheme control (the account
-list must be an authorized `200`; a zone `404` is trusted only under an authorized
-zone control) — per learning
+`200 {"success":false,...}` or `{"success":true,"result":null}` FAILs) →
+per-scheme control (the account list must be an authorized `200`) — per learning
 `2026-07-23-live-api-fail-closed-guard-counts-degraded-200-as-empty-and-control-probe-must-cover-every-scheme.md`.
-It also records that the canonical four-probe set is a **canary for the whole-list
-REPLACE failure mode**, not exhaustive per-permission coverage (Zone WAF,
-Transform Rules, and account Filter Lists are unprobed).
+It **narrows** this ADR's "404 on an entrypoint is a pass" rule: a `404` is
+trusted as "phase exists, empty" **only** for `http_config_settings` — the one
+phase whose 403-on-missing-scope semantics this ADR empirically verified (§Context
+probe). For every other phase 403-on-missing is unverified, so a `404` fails
+closed (#6892 review: a dropped scope that returned `404` instead of `403` on an
+unverified phase would otherwise read as green). The skill also **extends** the
+canonical four-probe set with Zone WAF (`http_request_firewall_custom`, a
+hijack-class scope per axis 1). The set remains a **canary for the whole-list
+REPLACE failure mode**, not exhaustive per-permission coverage: Transform Rules
+and account Filter Lists stay unprobed, and — because the probe issues `GET` — it
+attests read reachability, not `:Edit` retention.
+
+**3. Relationship to AP-001 (Terraform-only provisioning).** A token *scope*
+change is an off-Terraform live-CF mutation, but it is outside AP-001's
+addressable surface by construction: minting or editing a token requires
+`User API Tokens:Edit`, which no Soleur token holds (§Context), so these
+operator-minted tokens are not `cloudflare_api_token` resources and cannot be
+Terraform-managed at all. This is distinct from the AP-019 carve-out, which
+mutates a genuinely Terraform-declared value (a `proxied` DNS toggle) and
+self-reverts — there is nothing here for Terraform to reconcile.

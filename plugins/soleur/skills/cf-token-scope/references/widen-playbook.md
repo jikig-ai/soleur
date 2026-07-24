@@ -53,14 +53,15 @@ the token being edited. While the browser session is live:
 ## After the widen
 
 1. Run the probe with the new phase as the target:
-   `cf-token-scope.sh --target-entrypoint <phase>`. Success = the target flipped
-   `403 → authorized` AND every retained control stayed authorized AND the
-   account-scheme control is an authorized 200.
-2. `curl -H "Authorization: Bearer $TOK" https://api.cloudflare.com/client/v4/user/tokens/verify`
-   should report `"status":"active"` (the widen did not disable the token).
-3. **Update the scope ledger** — the `variables.tf` description for the widened
-   token (ADR-130's scope ledger) must gain the new permission in the feature PR
-   that consumes the widen. This is a code edit, not this skill's runtime.
+   `cf-token-scope.sh --target-entrypoint <phase>` — see SKILL.md § Execution
+   step 3 (target-present + no-scope-dropped) for the success criteria. Confirm
+   the widened permission is `Edit`, not `Read` (the probe's `GET` attests read
+   reachability, not `:Edit` retention).
+2. Confirm the token is still active (the widen did not disable it):
+   `curl -H @<(printf 'Authorization: Bearer %s' "$TOK") https://api.cloudflare.com/client/v4/user/tokens/verify`
+   should report `"status":"active"`.
+3. Update the `variables.tf` scope ledger in the feature PR — see SKILL.md
+   § Sharp Edges (a code edit, not this skill's runtime).
 
 ## New-phase entrypoint enumeration (only when the widen enables a NEW phase)
 
