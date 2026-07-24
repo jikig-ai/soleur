@@ -14,6 +14,29 @@ status: draft
 
 # chore(encryption-posture): formalize the named Cloudflare SOC 2 Type II at-rest attestation on the three R2 rows
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-24
+**Sections enhanced:** grounded during planning (Layer A script fully read, test fixtures, audit doc, live WebFetch/WebSearch, fable advisor consult) — proportionate deepening for a data-file plan, not a 40-agent fan-out (YAGNI).
+**Deepen-plan mandatory gates:** 4.6 User-Brand Impact ✅, 4.7 Observability ✅, 4.8 PAT-shaped ✅ (none), 4.9 UI-wireframe ✅ (skip, no UI), 4.10 Encryption Posture ✅ — all PASS.
+
+### Key improvements folded in from the fable advisor consult
+1. **Scope authority = issue #6896's BODY** (names the 3 R2 surfaces), not audit-doc line 74's all-7 over-grouping. B2 re-pointing *is* the correction of that doc drift → reframe the PR as "body-scoped close + audit-doc mis-grouping fix" so no reviewer relitigates B1.
+2. **`live_verification` must stay `unavailable:<reason>`, never `"available"`** — a named, NDA-gated SOC 2 report is an *attestation citation*, not a live probe. This is the single highest-leverage correction (overclaim a SOC 2-literate reviewer would catch).
+3. **Verify R2 is in Cloudflare's SOC 2 scope** before asserting `Cloudflare-R2-SOC2-Type-II`; downgrade to company-level `Cloudflare-SOC2-Type-II` if only that is confirmable.
+
+### New considerations discovered
+- Layer A already **PASSES** today (the placeholder is not a gate failure — `live_verification` is only schema-validated). Deliverable is *attestation accuracy*, not un-breaking a red gate.
+- The `tracked #6896` placeholder is on **7** rows (3 R2 + 4 non-R2), not 3 — driving the B2 re-point + new tracking issue.
+- `retrieved_on = today` means Layer A forces an annual re-fetch by design (~1yr FAIL is expected, not a bug — note in PR body).
+
+### Research Insights (grounding evidence)
+- **Layer A mechanics** (`scripts/lint-encryption-posture.py`): `check_provider_managed` requires a non-empty attestation after `provider-managed:`, a non-boilerplate `mechanism+evidence` (ban-list: `encrypted by default` / `provider handles` / `the provider handles it`), a present `attestation_url`, and a `retrieved_on` ≤365d (`STALE_ATTESTATION_DAYS=365`). `live_verification` is validated only by `_validate_store` against `^(available|unavailable:.+)$` — never a sweep FAIL.
+- **Canonical shape from the repo's own test fixtures** (`lint-encryption-posture.test.sh:315` PASS case): `mechanism: "provider-managed:Cloudflare-R2-SOC2-Type-II"`, `attestation_url: "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/"`, and a fully-formalized provider row *still* keeps `live_verification: "unavailable:<reason>"` (fixture TS-5). Directly corroborates advisor point 2.
+- **Attestation URLs verified live (2026-07-24):** the public SOC 2 page (`cloudflare.com/trust-hub/compliance-resources/soc-2/`) names AICPA SOC 2 Type II (Security/Confidentiality/Availability, report under NDA); R2 AES-256-GCM at rest is documented at `developers.cloudflare.com/r2/reference/data-security/`. /work re-confirms + pins the retrieval date.
+- **No test regression risk:** no test asserts the *real* ledger content (fixtures are self-contained; `lint-encryption-posture.py` is unchanged). Changing the R2 mechanism strings to the `Cloudflare-R2-SOC2-Type-II` shape aligns with the existing PASS fixtures.
+- **Live citations re-verified:** #6896, #6893, #6588 all OPEN; labels `priority/p3-low`, `domain/engineering`, `type/security` all exist.
+
 ## Overview
 
 The audit PR (#6885) seeded the encryption-posture ledger (`scripts/encryption-posture-ledger.json`)
@@ -201,7 +224,7 @@ failure_modes:
   - mode=schema break (missing required at_rest field / bad live_verification) / detection=validate_ledger / alert_route=CI red
 logs:              where=CI job output / retention=per CI retention policy
 discoverability_test:
-  command: python3 scripts/lint-encryption-posture.py --repo-sweep    # NO ssh
+  command: python3 scripts/lint-encryption-posture.py --repo-sweep    # runs locally / in CI, no remote shell needed
   expected_output: "encryption-posture: 14 stores, 3 connections, 0 unledgered, 0 failing checks -> PASS"
 ```
 
