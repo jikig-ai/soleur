@@ -57,15 +57,19 @@ cat >"$MOCKBIN/curl" <<'EOF'
 [[ -n "${MOCK_CURL_MARKER:-}" ]] && printf 'called\n' >>"$MOCK_CURL_MARKER"
 url=""
 for a in "$@"; do url="$a"; done
-AUTH='200:{"success":true,"result":[]}'
+# Real CF shapes: a zone .../entrypoint returns a single ruleset OBJECT; the
+# account /rulesets list returns an ARRAY. The mock must mirror this so the
+# per-scheme body-shape check is exercised against the true contract (#6892 QA).
+ZONE_AUTH='200:{"success":true,"result":{"id":"r","kind":"zone","phase":"p","rules":[]}}'
+ACCT_AUTH='200:{"success":true,"result":[]}'
 case "$url" in
-  *http_config_settings*)          spec="${MOCK_CONFIG:-$AUTH}" ;;
-  *http_request_dynamic_redirect*) spec="${MOCK_DYNREDIR:-$AUTH}" ;;
-  *http_request_cache_settings*)   spec="${MOCK_CACHE:-$AUTH}" ;;
-  *http_request_firewall_custom*)  spec="${MOCK_WAF:-$AUTH}" ;;
-  *http_request_transform*)        spec="${MOCK_TARGET:-$AUTH}" ;;
-  */rulesets)                      spec="${MOCK_ACCT:-$AUTH}" ;;
-  *)                               spec="${MOCK_OTHER:-$AUTH}" ;;
+  *http_config_settings*)          spec="${MOCK_CONFIG:-$ZONE_AUTH}" ;;
+  *http_request_dynamic_redirect*) spec="${MOCK_DYNREDIR:-$ZONE_AUTH}" ;;
+  *http_request_cache_settings*)   spec="${MOCK_CACHE:-$ZONE_AUTH}" ;;
+  *http_request_firewall_custom*)  spec="${MOCK_WAF:-$ZONE_AUTH}" ;;
+  *http_request_transform*)        spec="${MOCK_TARGET:-$ZONE_AUTH}" ;;
+  */rulesets)                      spec="${MOCK_ACCT:-$ACCT_AUTH}" ;;
+  *)                               spec="${MOCK_OTHER:-$ZONE_AUTH}" ;;
 esac
 [[ "$spec" == "NONE" ]] && exit 0   # no output at all
 code="${spec%%:*}"
@@ -119,10 +123,22 @@ MOCK_CACHE='200:{"success":false,"result":null}' run "$MOCKPATH"
 assert_rc 3 "C3 degraded 200 (both false) -> exit 3"
 lacks "PASS: no scope dropped" "C3 omits 'no scope dropped'"
 
-# --- C3a: {"success":true,"result":null} -> exit 3 (pins the .result-array half;
+# --- C3a: {"success":true,"result":null} -> exit 3 (pins the .result-type half;
 #          this is the exact fail-open CF degraded shape the SUT exists to catch) ---
 MOCK_CACHE='200:{"success":true,"result":null}' run "$MOCKPATH"
 assert_rc 3 "C3a degraded 200 (result null, success true) -> exit 3"
+
+# --- C3c: a ZONE entrypoint returning an ARRAY result -> exit 3. Zone entrypoints
+#          return a single ruleset OBJECT; an array is the wrong per-scheme shape.
+#          (Regression for the #6892 QA bug: the classifier once required an array
+#          for ALL probes, which rejected every real authorized zone 200.) ---
+MOCK_CACHE='200:{"success":true,"result":[]}' run "$MOCKPATH"
+assert_rc 3 "C3c zone 200 with array result (wrong scheme shape) -> exit 3"
+
+# --- C3d: the ACCOUNT list returning an OBJECT result -> exit 3 (account expects
+#          an array; the per-scheme type must hold in the account direction too) ---
+MOCK_ACCT='200:{"success":true,"result":{"id":"x"}}' run "$MOCKPATH"
+assert_rc 3 "C3d account 200 with object result (wrong scheme shape) -> exit 3"
 
 # --- C3b: {"success":false,"result":[]} -> exit 3 (pins the success==true half) ---
 MOCK_CACHE='200:{"success":false,"result":[]}' run "$MOCKPATH"

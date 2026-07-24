@@ -132,8 +132,14 @@ ACCT="$(get_secret "$ACCT_SECRET")"
 cleanup() { unset TOK ZONE ACCT; }
 trap cleanup EXIT
 
-# Body-shape layer: a 200 is authorized ONLY with success==true AND an array .result.
-authorized_body() { printf '%s' "$1" | jq -e '.success == true and (.result | type == "array")' >/dev/null 2>&1; }
+# Body-shape layer: a 200 is authorized ONLY with success==true AND .result of the
+# type the endpoint's scheme returns — a zone .../entrypoint returns a single
+# ruleset OBJECT; the account /rulesets list returns an ARRAY. A degraded 200
+# ({"success":false,...} or {"success":true,"result":null}) fails either way (null
+# is neither object nor array). $2 is the expected type: object (zone) | array (account).
+authorized_body() {
+  printf '%s' "$1" | jq -e --arg t "$2" '.success == true and (.result | type == $t)' >/dev/null 2>&1
+}
 
 ZONE_CONTROL_OK=0
 
@@ -142,7 +148,8 @@ ZONE_CONTROL_OK=0
 # The Authorization header is passed from a private fd so the token never lands
 # in the process argv (readable via ps / /proc/<pid>/cmdline).
 check() {
-  local url="$1" scheme="$2" trust404="${3:-0}" resp code body
+  local url="$1" scheme="$2" trust404="${3:-0}" resp code body want_type
+  want_type="object"; [[ "$scheme" == "account" ]] && want_type="array"
   resp="$(curl -sS --max-time 15 -w '\n%{http_code}' \
     -H @<(printf 'Authorization: Bearer %s' "$TOK") "$url" 2>/dev/null || true)"
   if [[ "$resp" != *$'\n'* ]]; then VERDICT="empty (no response)"; return 1; fi
@@ -150,8 +157,8 @@ check() {
   body="${resp%$'\n'*}"
   if [[ ! "$code" =~ ^[0-9]+$ ]]; then VERDICT="empty (non-numeric status)"; return 1; fi
   if [[ "$code" == "200" ]]; then
-    if authorized_body "$body"; then VERDICT="authorized (200)"; return 0; fi
-    VERDICT="degraded (200 body not success/array)"; return 1
+    if authorized_body "$body" "$want_type"; then VERDICT="authorized (200)"; return 0; fi
+    VERDICT="degraded (200 body not success/$want_type)"; return 1
   fi
   # A 404 is trusted as "phase exists, empty" ONLY for an entrypoint whose
   # 403-on-missing semantics are verified (trust404=1) AND under an authorized
