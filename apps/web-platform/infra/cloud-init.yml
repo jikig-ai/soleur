@@ -800,8 +800,12 @@ runcmd:
     # #6090: reached serving host (poweroff → Better Stack).
     soleur-boot-emit cloud_init_complete info
 
-  # #6396: ungated Vector install — LAST runcmd item, AFTER the app binds :80/:3000. Fail-open +
+  # #6396: ungated Vector install — penultimate runcmd item, AFTER the app binds :80/:3000. Fail-open +
   # wall-clock-bounded (`timeout 180` > the helper's inner `curl --max-time 120`; `sh -c` subshell
   # + `|| true` contain any exit + the leaked plugin-seed `set -e`). Decoupled from
   # web_colocate_inngest (the helper skips an inngest-owned unit). Rationale: ADR-082 Item 5.
   - timeout 180 sh -c 'soleur-vector-install' || true
+
+  # #6459: fresh-boot readiness marker (baked helper, 0 user_data; token fetched inside it) — REAL
+  # last item, AFTER Vector so vector= is truthful. Observability `|| true`, never a gate (#6538).
+  - BETTERSTACK_INGEST_URL='${betterstack_ingest_url}' soleur-fresh-boot-ready || true

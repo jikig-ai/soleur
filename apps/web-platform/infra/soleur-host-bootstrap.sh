@@ -587,6 +587,75 @@ systemctl daemon-reload 2>/dev/null || true
 LUKSGATEEOF
 chmod 0755 /usr/local/bin/soleur-luks-structural-gate
 
+# ── Fresh-boot readiness marker (#6459 / #6538 dark-host fix) ──────────────────────────────────
+# Author /usr/local/bin/soleur-fresh-boot-ready: a one-shot, Vector-INDEPENDENT readiness marker
+# invoked as the LAST first-boot cloud-init item (AFTER the app binds and soleur-vector-install).
+# Baked here → 0 user_data cost. Its ABSENCE past its own boot-window = the host booted dark.
+STAGE=fresh_boot_ready_author; FAILED_FILE=soleur-fresh-boot-ready
+cat > /usr/local/bin/soleur-fresh-boot-ready <<'FRESHREADYEOF'
+#!/bin/sh
+# SOLEUR_FRESH_BOOT_READY — one-shot fresh-boot readiness marker (#6459 / #6538 dark-host fix).
+# Runs as the LAST first-boot cloud-init item, AFTER the app binds :80/:3000 and soleur-vector-install.
+# Dual-channel + Vector-INDEPENDENT so absence/not-ready stays observable when Vector is the thing
+# that broke (a marker shipped THROUGH Vector would vanish exactly when a dark Vector is the fault):
+#   1. curl            → Better Stack Logs (direct, best-effort; the discoverability-test read path)
+#   2. soleur-boot-emit → baked-DSN Sentry (always available)
+#   3. logger -t       → local journald breadcrumb (on-host `journalctl -t SOLEUR_FRESH_BOOT_READY`)
+# OBSERVABILITY marker, NOT a gate: always exits 0 (the app is already up; a poweroff here is worse
+# than a loud ready=0). Absence past SOLEUR_FRESH_BOOT_WINDOW_SECONDS = the host booted dark.
+set -u
+# Absence-detection deadline (seconds). Derivation — worst-case bounded first-boot span:
+# soleur-wait-ready x2 (webhook :9000 + cloudflared) 120s + soleur-wait-nic <=120s + `timeout 180`
+# vector install 180s + image-pull budget (web+app+plugin-seed) ~300s + apt/docker install ~120s +
+# Hetzner create->runcmd overhead ~60s ~= 900s. The Phase-3 Better Stack absence alert
+# (web-probe.tf) uses this as its grace window — keep the emit and any alert period in lockstep.
+SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900
+# Path seams (defaults = the real host paths; overridable so the unit test can drive each branch).
+WEBHOOK_ENV_FILE="${WEBHOOK_ENV_FILE:-/etc/default/webhook-deploy}"
+WORKSPACES_MOUNT="${WORKSPACES_MOUNT:-/mnt/data}"
+LUKS_MAPPER="${LUKS_MAPPER:-/dev/mapper/workspaces}"
+# token: the Doppler token actually reached the host — fail LOUD (reason=token), never a silent env
+# fallback (2026-04-03 doppler-not-installed-env-fallback-outage).
+if [ -s "$WEBHOOK_ENV_FILE" ] && grep -q '^DOPPLER_TOKEN=..*' "$WEBHOOK_ENV_FILE" 2>/dev/null; then T=1; else T=0; fi
+# vector: the ungated Vector installed AND its unit is active — vector=0 IS the #6538 dark signal.
+if command -v vector >/dev/null 2>&1 && systemctl is-active --quiet vector 2>/dev/null; then V=1; else V=0; fi
+# volume: the workspace volume is mounted; luks=1 iff the LUKS mapper backs it (web-1 is plaintext
+# until its per-host cutover -> luks=0 REPORTED not required; web-2 is LUKS-from-birth and Phase 3
+# tightens luks=1 in its own gate).
+if mountpoint -q "$WORKSPACES_MOUNT" 2>/dev/null; then VOL=1; else VOL=0; fi
+if [ -e "$LUKS_MAPPER" ]; then LUKS=1; else LUKS=0; fi
+READY=0; REASON=none
+if [ "$T" = 1 ] && [ "$V" = 1 ] && [ "$VOL" = 1 ]; then
+  READY=1
+elif [ "$T" != 1 ]; then REASON=token
+elif [ "$V" != 1 ]; then REASON=vector
+else REASON=volume
+fi
+LINE="SOLEUR_FRESH_BOOT_READY ready=$READY stage=cloud_init_complete token=$T vector=$V volume=$VOL luks=$LUKS reason=$REASON boot_window_s=$SOLEUR_FRESH_BOOT_WINDOW_SECONDS"
+# (3) local journald breadcrumb — free, no Better Stack quota (deliberately NOT in the Vector
+# SYSLOG_IDENTIFIER allowlist; Better Stack delivery is the direct curl below, not via Vector).
+logger -t SOLEUR_FRESH_BOOT_READY "$LINE" 2>/dev/null || true
+# (1) Better Stack Logs direct-curl — best-effort, gated on BOTH creds (an unprovisioned host
+# degrades to Sentry-only, never aborts). Double-post mirrors web-private-nic-guard.
+# Token: prefer an injected env var, else fetch from Doppler HERE (baked -> 0 user_data; mirrors the
+# soleur-boot-emit baked-DSN + doppler-fallback shape). `|| true` so a doppler hiccup never aborts.
+TOKEN="${BETTERSTACK_LOGS_TOKEN:-}"
+[ -n "$TOKEN" ] || TOKEN=$(doppler secrets get BETTERSTACK_LOGS_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
+INGEST_URL="${BETTERSTACK_INGEST_URL:-}"
+if [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ]; then
+  post() { curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
+  post || post || echo "[fresh-boot-ready] Better Stack egress FAILED: $LINE" >&2
+fi
+# (2) Sentry — always. ready -> info breadcrumb; not-ready -> fatal (the stage names the unmet field).
+if [ "$READY" = 1 ]; then
+  soleur-boot-emit fresh_boot_ready info
+else
+  soleur-boot-emit "fresh_boot_not_ready_$REASON" fatal
+fi
+exit 0
+FRESHREADYEOF
+chmod 0755 /usr/local/bin/soleur-fresh-boot-ready
+
 # Sentinel LAST: extraction + install proven complete. The terminal `docker run` block gates
 # on this file; without it the host poweroffs (fail-closed) instead of serving with an
 # unconfigured egress firewall / missing deploy scripts.
