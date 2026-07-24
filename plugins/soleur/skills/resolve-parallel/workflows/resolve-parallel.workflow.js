@@ -220,7 +220,7 @@ Steps (do them exactly; do NOT \`git stash\`, do NOT amend existing history):
 2. Stage the resolved files. Prefer staging the specific paths that changed (the resolvers reported these files): ${fileList.length ? fileList.join(', ') : '(none reported — fall back to `git add -u` for tracked modifications only)'}. Do NOT \`git add -A\` blindly.
 3. If the current branch is the default branch (main/master), create a working branch first: \`git switch -c chore/resolve-todos\`. Otherwise commit on the current branch.
 4. Commit with a message summarizing the swept TODOs, e.g. "chore: resolve ${resolved.length} TODO comment(s) via parallel sweep". End the commit message body with the trailer:
-   Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+   Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 5. ${doPush ? 'Push to remote: `git push -u origin HEAD`.' : 'Do NOT push (push disabled for this run); set pushed=false.'}
 6. Report: committed, pushed, branch, sha (short), note.`
 }

@@ -96,7 +96,8 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // --allowedTools consumes the prompt as a tool name without the end-of-
 // options marker). The prompt is the SOLE positional argument after `--`.
 //
-// Mirrors .github/workflows/scheduled-legal-audit.yml `claude_args`:
+// HISTORICAL GHA contract (scheduled-legal-audit.yml, removed by the TR9
+// Inngest migration — this file is now authoritative, there is no mirror):
 //   --model claude-opus-5
 //   --max-turns 60
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep,Task

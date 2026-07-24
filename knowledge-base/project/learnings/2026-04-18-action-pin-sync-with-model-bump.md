@@ -65,8 +65,15 @@ Audit command:
 # Current tip
 gh api repos/anthropics/claude-code-action/releases --jq '.[0] | "\(.tag_name) \(.published_at)"'
 
-# Resolve your pin to a commit date
-gh api repos/anthropics/claude-code-action/git/commits/<PIN-SHA> --jq '.committer.date'
+# Resolve your pin's date.
+# claude-code-action pins are ANNOTATED TAG objects, so git/commits/<SHA>
+# returns 404 and commits/<SHA> returns 422 — the git/commits form printed here
+# until 2026-07-24 never worked. A pin produced by pin-github-action/Dependabot
+# IS a plain commit SHA, where git/tags 404s instead; try both, the 404 is the
+# discriminator.
+gh api repos/anthropics/claude-code-action/git/tags/<PIN-SHA> --jq '"\(.tag) \(.tagger.date)"' \
+  || gh api repos/anthropics/claude-code-action/commits/<PIN-SHA> --jq '.commit.committer.date'
+# → v1.0.161 2026-06-30T17:58:29Z
 ```
 
 If the pin is more than ~3 weeks older than current tip AND the PR bumps a

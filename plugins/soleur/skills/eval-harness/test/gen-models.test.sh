@@ -24,12 +24,28 @@ for v in "$SONNET" "$HAIKU" "$OPUS"; do
   if [[ -z "$v" ]]; then echo "FAIL: could not read a model ID from the registry"; exit 1; fi
 done
 
-# Run the generator.
+# COMMITTED-ARTIFACT PARITY. Running the generator in place and then asserting
+# against what it just wrote can only prove the generator is self-consistent —
+# it silently CLOBBERS a hand-edit instead of reporting it, so the checked-in
+# file could drift from the registry indefinitely with this test green. Snapshot
+# first, regenerate, and diff: the committed file must already be correct.
+if [[ ! -f "$OUT" ]]; then
+  echo "FAIL: $OUT is missing from the repo"; exit 1
+fi
+_committed="$(mktemp)"
+cp "$OUT" "$_committed"
+
 bash "$GEN"
 
-if [[ ! -f "$OUT" ]]; then
-  echo "FAIL: $OUT was not produced"; exit 1
+if ! diff -q "$_committed" "$OUT" >/dev/null 2>&1; then
+  echo "FAIL: $OUT is STALE — it differs from what gen-models.sh produces."
+  echo "      Run: bash $GEN   (and commit the result)"
+  diff -u "$_committed" "$OUT" || true
+  rm -f "$_committed"
+  exit 1
 fi
+echo "ok   committed artifact matches the generator (no drift)"
+rm -f "$_committed"
 
 check() {
   local needle="anthropic:messages:$1"

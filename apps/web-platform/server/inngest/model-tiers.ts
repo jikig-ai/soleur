@@ -2,7 +2,8 @@
 //
 // Single source of truth for the Anthropic model IDs the scheduled crons
 // and ship-merge event hand to the `claude` CLI via argv. Centralizes the
-// ~17 inline sonnet / opus-4-7 model-ID literals that were
+// ~17 inline sonnet / opus-4-7 model-ID literals (the pre-#5106 landscape —
+// HISTORICAL, do not re-pin at a model launch) that were
 // scattered across `functions/*.ts` (#5106; consolidation point named by
 // ADR-053 line 38). Registry shape follows ADR-034 (frozen `as const`).
 //
@@ -13,8 +14,8 @@
 //     multi-step reasoning (agent-native-audit, competitive-analysis,
 //     growth-audit, legal-audit, ux-audit).
 //
-// PURE SSOT EXTRACTION — no model assignment changes. Every cron keeps the
-// model it has today. Per ADR-053, re-tiering a cron (e.g. moving an
+// PURE SSOT EXTRACTION (as of #5106) — that PR changed no model assignment;
+// every cron kept the model it had. Same-tier re-pins land here since. Per ADR-053, re-tiering a cron (e.g. moving an
 // execution cron up to the audit tier, or a cron down to haiku) is a separate
 // clo-attestation-class model-bump PR (with action-pin sync per learning
 // 2026-04-18) and is explicitly out of scope here. `cron-weekly-release-

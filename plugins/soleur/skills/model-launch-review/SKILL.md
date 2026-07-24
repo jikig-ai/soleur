@@ -24,13 +24,14 @@ token. A bot-token PR does not trigger CI or CLA checks, defeating the "CI-gated
 Run this skill interactively. Headless/cron contexts must file an **issue** (the detection
 step), not a PR.
 
-## Checklist (5 items) — auto-fix-vs-flag matrix
+## Checklist (6 items) — auto-fix-vs-flag matrix
 
 | # | Item | Disposition | Surface |
 |---|------|-------------|---------|
 | 1 | **Model-ID swaps** | **AUTO-FIX** | config-class files (server SDK call sites, Inngest `cron-*.ts`, `leader-prompts/constants.ts`, workflow `--model`, skill reference docs) — never test fixtures, archives, `knowledge-base/**`, or community digests |
 | 2 | **claude-code-action pin freshness** | flag-only | `.github/workflows/*.yml` pins; auto-bump ONLY when coupled to a `--model` swap in the same workflow (#2540 invariant) |
-| 3 | **Thinking-API shape** | flag-only (no-op v1) | carried by the claude-code-action pin's embedded SDK; no `thinking`/`output_config` params in config today |
+| 2b | **Pinned `claude-code` CLI knows the new model** | flag-only (**blocks the swap**) | `apps/web-platform/package.json` + `Dockerfile`. The CLI carries a BUNDLED per-model table; an absent ID is treated as a garbage ID and silently gets **half** the `max_tokens` (measured 64000 → 32000, #6934). Invisible to the ID sweep, `tsc`, and the suite — argv is well-formed and the run succeeds |
+| 3 | **Thinking-API shape** | flag-only | Config sets no `thinking`/`output_config`, but the **CLI injects both itself** off its bundled table (measured: `thinking:{type:"adaptive"}`, `effort:"high"`). So "no params in config" is NOT "defaults apply" — item 2b is what actually moves this |
 | 4 | **Pricing-table drift** | flag-only | `agent-on-spawn-requested.ts` `MODEL_PRICING` (billing constant — never auto-edit); compare vs the `claude-api` source-of-truth |
 | 5 | **Tier-map re-evaluation** | flag-only | cron model literals + ADR-053 / `plugins/soleur/AGENTS.md` policy vs new pricing; `workflow-model-pins.test.ts` `PIN_ALLOWLIST` is a don't-mutate invariant; also run `gh issue list --state open -L 200 --search "deferred model OR pricing"` for dormant work |
 
@@ -45,10 +46,26 @@ Only item 1 is auto-applied. Items 2–5 are reported in the PR body for human s
    ```
 
 2. **Resolve the current landscape from authoritative sources** — never memory. Read the
-   `claude-api` skill model table + the official Anthropic models docs. If a new model
-   shipped in an existing tier (the next Sonnet/Opus/etc.), add a
-   `"<superseded-id>=<current-id>"` entry to the `AUTOFIX_PAIRS` array in `audit-models.sh`
-   (each stale id maps to its OWN same-tier target, so tiers coexist).
+   `claude-api` skill model table plus the official docs (the `claude-api` skill is bundled,
+   not vendored, so cite the URLs directly — models:
+   `https://platform.claude.com/docs/en/about-claude/models/overview.md`, pricing:
+   `https://platform.claude.com/docs/en/about-claude/pricing.md`). If a new model shipped in
+   an existing tier, do BOTH:
+   - **add** a `"<superseded-id>=<current-id>"` entry to `AUTOFIX_PAIRS` in `audit-models.sh`, and
+   - **retarget** every existing same-tier pair's RHS to the new current id.
+
+   The second step is not optional. `--fix` applies pairs sequentially, so a CHAINED map
+   (`4-7=4-8` left in place alongside `4-8=5`) is order-dependent and lands files on an
+   intermediate id, which `--detect` then re-flags forever — a permanently-red drift cron
+   auto-filing issues it cannot fix. `assert_single_hop` enforces this (exit 78) and
+   `model-launch-review.test.ts` pins it, so a chained table fails fast rather than silently.
+
+   Then verify item 2b: the new ID must appear in the **pinned** `@anthropic-ai/claude-code`
+   bundle (`[2b]` in the audit output). If it reports DRIFT, bump the pin in
+   `apps/web-platform/package.json` AND the `Dockerfile` global, regenerate **both**
+   lockfiles (see the bun.lock sharp edge below), and re-run. Grep the bundle with `grep -a`
+   — the linux-x64 CLI is a compiled binary and a text-mode grep reports zero hits for
+   EVERY id, a null result that reads exactly like a real one.
 
 3. **Auto-fix** model-ID swaps (mechanical; allowlist + deletion guard; never `git add -A`):
 
@@ -63,11 +80,21 @@ Only item 1 is auto-applied. Items 2–5 are reported in the PR body for human s
 
    ```bash
    gh api repos/anthropics/claude-code-action/releases --jq '.[0] | "\(.tag_name) \(.published_at)"'
-   # claude-code-action pins are ANNOTATED TAG objects, not commits: git/commits/<SHA>
-   # returns 404 and commits/<SHA> returns 422. Resolve via git/tags, which yields the
-   # tag name + date in one call (2026-07-24 — the git/commits form never worked here).
-   gh api repos/anthropics/claude-code-action/git/tags/<PIN-SHA> --jq '"\(.tag) \(.tagger.date)"'
+   # TODAY's pins are ANNOTATED TAG objects: git/commits/<SHA> returns 404 and
+   # commits/<SHA> returns 422, so git/tags is the resolver (the git/commits form
+   # printed here until 2026-07-24 never worked). This is a property of how that repo
+   # cuts releases, NOT of pinning in general — a pin produced by pin-github-action or
+   # Dependabot is a plain COMMIT sha, where git/tags 404s instead. Try both; the 404
+   # is the discriminator. `.tagger.date` is the TAG date (correct for freshness), not
+   # the underlying commit's date — do not "correct" it to the latter.
+   gh api repos/anthropics/claude-code-action/git/tags/<PIN-SHA> --jq '"\(.tag) \(.tagger.date)"' \
+     || gh api repos/anthropics/claude-code-action/commits/<PIN-SHA> --jq '.commit.committer.date'
+   # → v1.0.161 2026-06-30T17:58:29Z
    ```
+
+   `audit-models.sh` now computes this itself (`[2]` in the audit output) and prints an
+   explicit `UNKNOWN` when `gh` is missing or unauthenticated — an unreachable API is
+   never a freshness pass.
 
    Bump a pin only when a `--model` swap lands in the same workflow (#2540).
 
