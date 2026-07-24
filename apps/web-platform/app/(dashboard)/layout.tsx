@@ -246,12 +246,16 @@ export default function DashboardLayout({
   useEffect(() => {
     function handleExpandRequest() {
       // An "expand request" must always yield a VISIBLE nav surface. On desktop
-      // that means un-collapsing the rail; on mobile the nav is the hamburger
-      // drawer, so also open it (a no-op on desktop, where the aside is the
-      // always-visible rail). The KB mobile empty-state "Browse files" button
-      // relies on the drawer-open half.
+      // that means un-collapsing the rail. On mobile the nav is the hamburger
+      // drawer, so open it too. Guard the open to mobile: `drawerOpen` also
+      // drives `<main inert>` + body scroll-lock (both viewport-independent), and
+      // this event has desktop dispatchers (the guided tour's startTour, the
+      // desktop collapsed-rail "Browse files" button) — opening the drawer on
+      // desktop would freeze the content pane until the next route change.
       if (collapsed) toggleCollapsed();
-      setDrawerOpen(true);
+      if (!window.matchMedia("(min-width: 768px)").matches) {
+        setDrawerOpen(true);
+      }
     }
     window.addEventListener(RAIL_EXPAND_EVENT, handleExpandRequest);
     return () =>
