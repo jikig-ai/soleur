@@ -535,14 +535,24 @@ pre-commit banner (with its head relabelled to `Previous:`) against the post-com
 > the next editor does not "fix" it by accident. If the operator wants it tracked, it is a
 > one-line issue; net-flow discipline argues against filing it unprompted.
 
-**Open style decision for /work** (do not guess — reconcile and record):
-`2026-05-12-public-legal-doc-annotations-no-pr-numbers.md` says use section refs (`§N.M`), not
-issue numbers, in public legal-doc annotations. But the **immediately preceding** July 16 head
-entry uses `Ref #6538`, and body prose at `gdpr-policy.md:44` uses `Ref #6538`. Neither is
-CI-enforced. Recommend **matching the adjacent precedent** (`Ref #6588`) for within-banner
-consistency, and noting the learning as superseded-in-practice — or follow the learning and
-drop the numbers. Pick one, apply it uniformly across all 9 date sites, and say which in the
-PR body.
+**Style decision — RESOLVED by history, not left open.** Use **`Ref #6588`**.
+
+The question was whether `2026-05-12-public-legal-doc-annotations-no-pr-numbers.md` (which
+prescribes section refs `§N.M`, not issue numbers) still governs. History settles it:
+
+| Date | Convention in banner summaries |
+|---|---|
+| pre-2026-06-10 | `PR #5124 (#4046)`, `PR #5014 (#5005)` — the form the learning objected to |
+| **2026-06-10 onward** | **`Ref #NNNN (<branch-slug>)`** — e.g. `Ref #6538 (chore-retire-web-2-fsn1-orphan)`, `Ref #6007 (feat-severity-ranked-inbox)`, `Ref #5325 (feat-agent-native-outbound-email)` |
+
+The `Ref #NNNN` convention was **adopted on 2026-06-10 — a month AFTER the 2026-05-12 learning**,
+and has held unbroken since. It is not drift *from* the learning; it post-dates and supersedes it.
+The learning's concern (a bare `PR #N` means nothing to an external reader) is answered by the
+`(<branch-slug>)` suffix the current form carries. Match the adjacent entry.
+
+**Apply uniformly** to the new banner head and to any body-prose `Ref` this PR adds. Record in the
+PR body that the May-12 learning is superseded-in-practice from 2026-06-10, so the next editor does
+not re-open this.
 
 ### 4d. Internal registers — SAME PR (CLO B2)
 
