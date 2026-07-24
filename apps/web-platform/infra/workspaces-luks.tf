@@ -166,17 +166,35 @@ resource "github_actions_secret" "workspaces_luks_boot_token" {
 # PLAINTEXT VOLUME. Asserted by workspaces-luks.test.sh A4 (mutation: appending a
 # `format` line ⇒ RED — this is the issue's "a plaintext volume must go RED").
 #
-# SINGLETON, not `for_each = var.web_hosts` (C18). Three reasons:
+# SINGLETON, not `for_each = var.web_hosts` (C18). Reasons #1-#2 still hold; reason #3 was
+# INVALIDATED 2026-07-24 by ADR-142 (#6459) and is rewritten below:
 #   1. A for_each'd attachment lands outside `web2_allow` in
 #      destroy-guard-filter-web-platform.jq:96-100 and would PERMANENTLY BRICK the
 #      web-2-recreate path.
 #   2. `moved` wants a singleton source.
-#   3. web-2 is slated for destruction (#6538), has never served user traffic
-#      (app.soleur.ai is a hard-pinned singleton A record to web-1) and its volume is
-#      empty. Encrypting a volume scheduled for deletion is waste.
+#   3. (ADR-142 #6459 — SUPERSEDES the old "web-2 slated for destruction #6538" rationale, now
+#      FALSE.) web-2 is RE-ADDED as a PERMANENT out-of-band standby (var.web_hosts, ADR-142 D2),
+#      so "encrypting a volume scheduled for deletion is waste" no longer applies. web-2's for_each
+#      volume is KNOWINGLY plaintext-but-EMPTY pre-flip: it holds NO user data (web-2 serves nothing
+#      — weight 0, no ingress, connector gated to web-1; the sole copy is web-1's data on THIS
+#      additive LUKS singleton). The guest-side fresh-boot LUKS path that would encrypt web-2's
+#      volume is DEFERRED to the Phase-4 disposability-proof PR (ADR-142 D3; tracking #6931), where
+#      it is exercised on a POPULATED volume (the de-pet web-1 rebuild) and the two-mechanism
+#      topology split (this additive singleton vs a fresh-boot for_each volume) is reconciled.
 #
-# web-2's volume is therefore KNOWINGLY left plaintext — a recorded deviation from
-# #6588's "every var.web_hosts member" AC, tracked by #6538. See ADR-119.
+# THE DEFER IS FAIL-CLOSED, NOT FAIL-OPEN: no user data can EVER reach web-2's plaintext volume,
+# because a flip that would route users to web-2 is blocked by lb-weight-gate.sh's WORKSPACES_LUKS
+# precondition (ADR-142 D3 coupling #2) — the gate reddens unless web-2 /workspaces is asserted
+# LUKS-backed. So web-2's volume stays plaintext ONLY while it is empty and unreachable.
+#
+# NOTE for the Phase-4 implementer (ADR-142 D3): the fresh-boot LUKS path MUST use the
+# `blkid -o value -s TYPE` discriminator (raw ""→luksFormat; crypto_LUKS→no-op; anything else→FATAL),
+# NEVER `cryptsetup isLuks` (cloud-init-git-data.yml:159) — that pattern is the documented
+# data-destroyer on a populated device (lines 144-167 above), safe on git-data only because its host
+# is single-purpose fresh; the web-host cloud-init is SHARED across web-1 (populated) and web-2.
+#
+# web-2's volume is therefore KNOWINGLY left plaintext-but-empty pre-flip — a recorded, gate-enforced
+# deviation from #6588's "every var.web_hosts member" AC, tracked by #6931. See ADR-119 + ADR-142.
 #
 # Size and location track web-1's live volume exactly: `var.volume_size` is the same
 # input `hcloud_volume.workspaces` uses, so the target can never be born smaller than

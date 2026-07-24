@@ -73,7 +73,10 @@ for f in ci-deploy.sh ci-deploy-wrapper.sh cat-deploy-state.sh canary-bundle-cla
          disk-monitor.sh resource-monitor.sh container-restart-monitor.sh \
          infra-config-apply.sh cat-infra-config-state.sh \
          cron-egress-nftables.sh cron-egress-resolve.sh cron-egress-alarm.sh \
-         cron-egress-postapply-assert.sh cron-egress-enforce-probe.sh; do
+         cron-egress-postapply-assert.sh cron-egress-enforce-probe.sh \
+         orphan-reaper.sh \
+         web-private-nic-guard.sh web-zot-consumer-probe.sh web-git-data-probe.sh \
+         web-probe-envwrite.sh; do
   FAILED_FILE="$f"; install -D -m 0755 -o root -g root "$SEED/$f" "/usr/local/bin/$f"
 done
 # The pinned root-run escalation helper installs WITHOUT the .sh suffix (its sudoers grant +
@@ -82,7 +85,11 @@ FAILED_FILE=infra-config-install
 install -D -m 0755 -o root -g root "$SEED/infra-config-install.sh" /usr/local/bin/infra-config-install
 for f in container-restart-monitor.service container-restart-monitor.timer \
          cron-egress-firewall.service cron-egress-resolve.service cron-egress-resolve.timer \
-         cron-egress-alarm@.service; do
+         cron-egress-alarm@.service \
+         orphan-reaper.service orphan-reaper.timer bwrap-userns-sysctl.service \
+         web-private-nic-guard.service web-private-nic-guard.timer \
+         web-zot-consumer-probe.service web-zot-consumer-probe.timer \
+         web-git-data-probe.service web-git-data-probe.timer; do
   FAILED_FILE="$f"; install -D -m 0644 -o root -g root "$SEED/$f" "/etc/systemd/system/$f"
 done
 for f in cron-egress-allowlist.txt cron-egress-allowlist-cidr.txt; do
@@ -117,6 +124,13 @@ FAILED_FILE=apparmor-soleur-bwrap.profile
 install -D -m 0644 -o root -g root "$SEED/apparmor-soleur-bwrap.profile" /etc/apparmor.d/soleur-bwrap
 FAILED_FILE=apparmor-load
 apparmor_parser -r /etc/apparmor.d/soleur-bwrap
+# (#6459 Phase 2.2) bwrap unprivileged-userns sysctl drop-in — the SSH-only half of
+# docker_seccomp_config, now on the fresh-boot path. Install the belt-and-braces drop-in here; the
+# boot-persistent bwrap-userns-sysctl.service (baked unit, enabled `--now` by cloud-init BEFORE the
+# terminal docker run) is the load-bearing re-assert. Without it, bwrap can't mount /proc and every
+# Bash tool call in a cron spawn fails (#1557 / #4927 / #4928).
+FAILED_FILE=99-bwrap-userns.conf
+install -D -m 0644 -o root -g root "$SEED/99-bwrap-userns.conf" /etc/sysctl.d/99-bwrap-userns.conf
 
 # hooks.json: the baked hooks.json.tmpl carries the Terraform token literally; inject the
 # small webhook_deploy_secret at boot (jsonencode-equivalent via python3 json.dumps —
@@ -586,6 +600,75 @@ systemctl daemon-reload 2>/dev/null || true
 : "$MAPPER"  # referenced for documentation; the crypttab name is the load-bearing binding
 LUKSGATEEOF
 chmod 0755 /usr/local/bin/soleur-luks-structural-gate
+
+# ── Fresh-boot readiness marker (#6459 / #6538 dark-host fix) ──────────────────────────────────
+# Author /usr/local/bin/soleur-fresh-boot-ready: a one-shot, Vector-INDEPENDENT readiness marker
+# invoked as the LAST first-boot cloud-init item (AFTER the app binds and soleur-vector-install).
+# Baked here → 0 user_data cost. Its ABSENCE past its own boot-window = the host booted dark.
+STAGE=fresh_boot_ready_author; FAILED_FILE=soleur-fresh-boot-ready
+cat > /usr/local/bin/soleur-fresh-boot-ready <<'FRESHREADYEOF'
+#!/bin/sh
+# SOLEUR_FRESH_BOOT_READY — one-shot fresh-boot readiness marker (#6459 / #6538 dark-host fix).
+# Runs as the LAST first-boot cloud-init item, AFTER the app binds :80/:3000 and soleur-vector-install.
+# Dual-channel + Vector-INDEPENDENT so absence/not-ready stays observable when Vector is the thing
+# that broke (a marker shipped THROUGH Vector would vanish exactly when a dark Vector is the fault):
+#   1. curl            → Better Stack Logs (direct, best-effort; the discoverability-test read path)
+#   2. soleur-boot-emit → baked-DSN Sentry (always available)
+#   3. logger -t       → local journald breadcrumb (on-host `journalctl -t SOLEUR_FRESH_BOOT_READY`)
+# OBSERVABILITY marker, NOT a gate: always exits 0 (the app is already up; a poweroff here is worse
+# than a loud ready=0). Absence past SOLEUR_FRESH_BOOT_WINDOW_SECONDS = the host booted dark.
+set -u
+# Absence-detection deadline (seconds). Derivation — worst-case bounded first-boot span:
+# soleur-wait-ready x2 (webhook :9000 + cloudflared) 120s + soleur-wait-nic <=120s + `timeout 180`
+# vector install 180s + image-pull budget (web+app+plugin-seed) ~300s + apt/docker install ~120s +
+# Hetzner create->runcmd overhead ~60s ~= 900s. The Phase-3 Better Stack absence alert
+# (web-probe.tf) uses this as its grace window — keep the emit and any alert period in lockstep.
+SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900
+# Path seams (defaults = the real host paths; overridable so the unit test can drive each branch).
+WEBHOOK_ENV_FILE="${WEBHOOK_ENV_FILE:-/etc/default/webhook-deploy}"
+WORKSPACES_MOUNT="${WORKSPACES_MOUNT:-/mnt/data}"
+LUKS_MAPPER="${LUKS_MAPPER:-/dev/mapper/workspaces}"
+# token: the Doppler token actually reached the host — fail LOUD (reason=token), never a silent env
+# fallback (2026-04-03 doppler-not-installed-env-fallback-outage).
+if [ -s "$WEBHOOK_ENV_FILE" ] && grep -q '^DOPPLER_TOKEN=..*' "$WEBHOOK_ENV_FILE" 2>/dev/null; then T=1; else T=0; fi
+# vector: the ungated Vector installed AND its unit is active — vector=0 IS the #6538 dark signal.
+if command -v vector >/dev/null 2>&1 && systemctl is-active --quiet vector 2>/dev/null; then V=1; else V=0; fi
+# volume: the workspace volume is mounted; luks=1 iff the LUKS mapper backs it (web-1 is plaintext
+# until its per-host cutover -> luks=0 REPORTED not required; web-2 is LUKS-from-birth and Phase 3
+# tightens luks=1 in its own gate).
+if mountpoint -q "$WORKSPACES_MOUNT" 2>/dev/null; then VOL=1; else VOL=0; fi
+if [ -e "$LUKS_MAPPER" ]; then LUKS=1; else LUKS=0; fi
+READY=0; REASON=none
+if [ "$T" = 1 ] && [ "$V" = 1 ] && [ "$VOL" = 1 ]; then
+  READY=1
+elif [ "$T" != 1 ]; then REASON=token
+elif [ "$V" != 1 ]; then REASON=vector
+else REASON=volume
+fi
+LINE="SOLEUR_FRESH_BOOT_READY ready=$READY stage=cloud_init_complete token=$T vector=$V volume=$VOL luks=$LUKS reason=$REASON boot_window_s=$SOLEUR_FRESH_BOOT_WINDOW_SECONDS"
+# (3) local journald breadcrumb — free, no Better Stack quota (deliberately NOT in the Vector
+# SYSLOG_IDENTIFIER allowlist; Better Stack delivery is the direct curl below, not via Vector).
+logger -t SOLEUR_FRESH_BOOT_READY "$LINE" 2>/dev/null || true
+# (1) Better Stack Logs direct-curl — best-effort, gated on BOTH creds (an unprovisioned host
+# degrades to Sentry-only, never aborts). Double-post mirrors web-private-nic-guard.
+# Token: prefer an injected env var, else fetch from Doppler HERE (baked -> 0 user_data; mirrors the
+# soleur-boot-emit baked-DSN + doppler-fallback shape). `|| true` so a doppler hiccup never aborts.
+TOKEN="${BETTERSTACK_LOGS_TOKEN:-}"
+[ -n "$TOKEN" ] || TOKEN=$(doppler secrets get BETTERSTACK_LOGS_TOKEN --plain --project soleur --config prd 2>/dev/null || true)
+INGEST_URL="${BETTERSTACK_INGEST_URL:-}"
+if [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ]; then
+  post() { curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
+  post || post || echo "[fresh-boot-ready] Better Stack egress FAILED: $LINE" >&2
+fi
+# (2) Sentry — always. ready -> info breadcrumb; not-ready -> fatal (the stage names the unmet field).
+if [ "$READY" = 1 ]; then
+  soleur-boot-emit fresh_boot_ready info
+else
+  soleur-boot-emit "fresh_boot_not_ready_$REASON" fatal
+fi
+exit 0
+FRESHREADYEOF
+chmod 0755 /usr/local/bin/soleur-fresh-boot-ready
 
 # Sentinel LAST: extraction + install proven complete. The terminal `docker run` block gates
 # on this file; without it the host poweroffs (fail-closed) instead of serving with an

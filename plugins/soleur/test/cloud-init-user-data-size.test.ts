@@ -96,7 +96,27 @@ const HETZNER_CAP = 32_768;
 // /etc/default/luks-monitor (the luks-monitor units source it; MUST be written at cloud-init time so
 // a Doppler-down boot still pages — DP-9). Merged render measured ~22,256; 22,450 keeps the KB-scale
 // re-inlining tripwire (a ~1.5 KB blob → ~23.7 KB trips it) and stays ~10.3 KB below HETZNER_CAP.
-const WEB_GZIP_BUDGET = 22_450;
+// #6459: on top of #6604's 22,450 baseline, +~250 B for the fresh-boot readiness marker's
+// irreducibly-inline CALL-SITE. The helper BODY (soleur-fresh-boot-ready, incl. its Doppler token
+// fetch) is baked into soleur-host-bootstrap.sh → 0 user_data (#5921 pattern applied). What CANNOT
+// be baked is the invocation itself: the marker must run as the LAST runcmd item (AFTER Vector, so
+// vector= is truthful) and receives BETTERSTACK_INGEST_URL='${betterstack_ingest_url}' — a
+// templatefile splice evaluated at RENDER time (single source of truth = local.betterstack_logs_ingest_url;
+// baking a hardcoded copy would re-duplicate the URL constant). Comments trimmed first (2 lines).
+// Measured render ~22,564; 22,700 keeps the KB-scale re-inlining tripwire (a ~1.5 KB blob still
+// trips it) and stays ~10 KB below HETZNER_CAP.
+// #6459 Phase 2.2 part 2: on top of the 22,700 baseline, +~470 B for the 3 web-host probes'
+// (#6438/#6548) irreducibly-inline env-writer INVOCATION. The BULK — the env-file-writing logic for
+// all 3 /etc/default/web-<probe> files — is baked into web-probe-envwrite.sh (0 user_data, #5921
+// pattern applied). What CANNOT be baked is the invocation: it splices the per-host read-scoped
+// web_probes token + EXPECTED_IP + endpoints (SOLEUR_WEB_PROBES_TOKEN='${web_probes_token}' …),
+// all templatefile values evaluated at RENDER time — a baked helper cannot carry a per-host TF
+// secret. Same irreducibly-inline class as the ghcr_login baked-cred + webhook-deploy printf above.
+// Measured render ~23,168; 23,700 keeps the KB-scale re-inlining tripwire (a ~1.5 KB blob → ~24.7 KB
+// still trips it) and stays ~9.1 KB below HETZNER_CAP. When this climbs further, prefer a
+// base64gzip-is-already-applied render audit before raising again (headroom to the hard cap is ample;
+// the sub-cap budget is the re-inlining tripwire, not a capacity limit).
+const WEB_GZIP_BUDGET = 23_700;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
@@ -567,7 +587,7 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     expect(tf).toContain("soleur-host-bootstrap.sh");
     expect(tf).toContain("journald-soleur.conf");
   });
-  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml + 2 sandbox profiles", () => {
+  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml + 2 sandbox profiles + 5 Phase-2.2-part-1 + 10 Phase-2.2-part-2 fresh-boot-parity files", () => {
     // +1 vs #5921's 25: cron-egress-enforce-probe.sh (fresh-host post-container egress
     // enforcement probe, #5933 item 3).
     // +1 (=27): cosign-trusted-root.json — pinned public trust material baked into the
@@ -580,7 +600,20 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // security-control profiles baked for FRESH-host boot-time delivery + enforcement (#6629,
     // ADR-122). Previously SSH-provisioner-only, so a fresh host ran the tenant sandbox
     // unenforced. Data files, not scripts.
-    expect(serverTfBakedSet().length).toBe(30);
+    // +5 (=35): orphan-reaper.sh + .service + .timer, 99-bwrap-userns.conf, bwrap-userns-sysctl.service
+    // (#6459 Phase 2.2). The last SSH-provisioner-only host config (terraform_data.orphan_reaper_install
+    // + the sysctl half of docker_seccomp_config), now baked so a fresh cattle host (web-2) self-
+    // configures them. The SSH provisioners are RETAINED for web-1 running-host rotation until Phase 5;
+    // the baked unit bodies are byte-identical to those heredocs (drift-guarded in fresh-boot-parity.test.sh).
+    // +10 (=45): the 3 web-host probes (#6438/#6548 — private-NIC guard, zot-consumer, git-data) —
+    // web-{private-nic-guard,zot-consumer-probe,git-data-probe}.{sh,service,timer} + the baked
+    // web-probe-envwrite.sh that writes their per-host /etc/default/web-<probe> env files on a fresh
+    // cattle host (#6459 Phase 2.2 part 2). Previously SSH-provisioner-only (web-1), so a fresh host
+    // came up with no probe units/scripts and no env files. The SSH provisioners are RETAINED for
+    // web-1 running-host rotation until Phase 5; .service/.timer bodies are byte-identical across
+    // both paths by construction (SSH path delivers the same repo files via `provisioner "file"`),
+    // and env-file key-set parity is drift-guarded in fresh-boot-parity.test.sh §12.
+    expect(serverTfBakedSet().length).toBe(45);
   });
 
   // ASSERTION A (build-integrity). server.tf computes local.host_scripts_content_hash over

@@ -98,16 +98,22 @@ variable "web_hosts" {
     private_ip  = string
     server_type = optional(string, "cx33")
   }))
-  # web-2 (fsn1, 10.0.1.11) RETIRED 2026-07-17 (#6538). It was the ADR-068 Phase 3
-  # warm standby, born in hel1 (#5877) and moved to fsn1 (#6393) for DC-failure
-  # resilience. It never carried user-facing web traffic by design, and the
-  # multi-host DNS rewire that would have made it serve was never built — so it
-  # cost €8.49/mo to stand by for a cutover with no consumer. HA is deferred to
-  # active-active-N (#6459), whose hosts must be born in hel1 inside the
-  # location-scoped web_spread placement group; git-data (#6570) gates that work.
-  # Do NOT re-add a key here to restore standby: see ADR-068's amendment.
+  # web-2 RE-ADDED 2026-07-24 as a FRESH cattle out-of-band standby (ADR-142, #6459) — a
+  # different host from the fsn1/10.0.1.11 warm standby RETIRED 2026-07-17 (#6538, which cost
+  # €8.49/mo standing by for a cutover with no consumer). This web-2 has a CONSUMER: it proves
+  # fresh-boot readiness (#6459), is the cattle-host template Phase 4's disposability proof
+  # rebuilds, and de-risks the Phase-5 web-1 de-pet. Born in hel1 (inside the location-scoped
+  # web_spread placement group, server.tf:134) on cpx32 — cx33 is unorderable in all 3 EU DCs
+  # (ADR-142 live stock probe 2026-07-24), cpx32 is the orderable 4c/8g x86 successor. It reuses
+  # the freed 10.0.1.11 address. web-2 is OUT-OF-BAND (serving-weight 0, ADR-142 D2): NOT in the
+  # ingress rotation (dns.tf app record stays web-1-only; the single tunnel connector stays
+  # web-1-gated) until the ADR-068 Phase-3 GA flip — the rebuilt #6575 anti-pooling gate
+  # (lb-weight-gate.sh) fail-closes any attempt to pool it before then. A request to web-2
+  # pre-flip hits the empty /workspaces (the sole copy is web-1's volume) = workspace-gone.
+  # Keys are IMMUTABLE (moved-block for_each; never rename web-1 — 29 refs / 6 files, ADR-142 D4).
   default = {
     "web-1" = { location = "hel1", private_ip = "10.0.1.10" }
+    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx32" }
   }
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : contains(["nbg1", "fsn1", "hel1"], h.location)])

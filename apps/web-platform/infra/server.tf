@@ -74,6 +74,37 @@ locals {
     # (hr-fresh-host-provisioning-reachable-from-terraform-apply). See ADR-122.
     "seccomp-bwrap.json",
     "apparmor-soleur-bwrap.profile",
+    # (#6459 Phase 2.2) Fresh-boot parity for the last SSH-only host provisioners. A fresh cattle
+    # host (web-2) never receives web-1's SSH provisioners, so these came up absent — the #6459
+    # silent-boot gap. Baked here + installed by soleur-host-bootstrap.sh + enabled by cloud-init;
+    # the SSH provisioners (terraform_data.orphan_reaper_install / the sysctl half of
+    # docker_seccomp_config) are RETAINED for running-host rotation on the pet web-1 until Phase 5.
+    # The unit bodies are byte-identical to those SSH heredocs (dual-delivery parity, drift-guarded).
+    "orphan-reaper.sh",
+    "orphan-reaper.service",
+    "orphan-reaper.timer",
+    "99-bwrap-userns.conf",
+    "bwrap-userns-sysctl.service",
+    # (#6459 Phase 2.2 PART 2) The 3 web-host probes (#6438/#6548): private-NIC guard, zot-consumer,
+    # git-data reachability. Their ONLY prior delivery was the terraform_data.*_probe_install /
+    # private_nic_guard_install SSH provisioners below (web-1 only), so a fresh cattle host (web-2)
+    # came up with NO probe scripts/units and NO /etc/default/web-<probe> env files. Baked here +
+    # installed by soleur-host-bootstrap.sh + env files written by web-probe-envwrite.sh (invoked by
+    # cloud-init with the per-host token/IP/endpoints) + timers enabled by cloud-init. The SSH
+    # provisioners are RETAINED for web-1 running-host rotation until Phase 5. The .service/.timer
+    # bodies are byte-identical across both paths BY CONSTRUCTION (the SSH path delivers the SAME
+    # repo files via `provisioner "file"`); env-file key-set parity is drift-guarded in
+    # fresh-boot-parity.test.sh §12.
+    "web-private-nic-guard.sh",
+    "web-private-nic-guard.service",
+    "web-private-nic-guard.timer",
+    "web-zot-consumer-probe.sh",
+    "web-zot-consumer-probe.service",
+    "web-zot-consumer-probe.timer",
+    "web-git-data-probe.sh",
+    "web-git-data-probe.service",
+    "web-git-data-probe.timer",
+    "web-probe-envwrite.sh",
   ]
 
   # Combined content-hash over the baked set: each file's sha256 hex, sorted, joined
@@ -209,6 +240,10 @@ resource "hcloud_server" "web" {
     # secret is injected at boot into the extracted hooks.json.tmpl (small, ~64 B).
     webhook_deploy_secret = var.webhook_deploy_secret
     doppler_token         = var.doppler_token
+    # #6459: Better Stack Logs ingest URL for the fresh-boot readiness marker's direct-curl channel
+    # (the token is sourced from Doppler at boot; this URL is the same public endpoint the nic-guard
+    # env file and the Vector sink use — local.betterstack_logs_ingest_url, single source of truth).
+    betterstack_ingest_url = local.betterstack_logs_ingest_url
     # Baked so the fresh-boot fatal Sentry emit does not depend on doppler (which may be the
     # broken stage). Semi-public DSN (already in the client bundle). See on_err in cloud-init.yml.
     sentry_dsn     = var.sentry_dsn
@@ -240,6 +275,22 @@ resource "hcloud_server" "web" {
     # terraform_data.registry_insecure_config delivery. A subnet renumber propagates to both
     # host classes instead of drifting from a hardcoded copy.
     registry_endpoint = local.registry_endpoint
+    # (#6459 Phase 2.2 PART 2) Per-host inputs for web-probe-envwrite.sh, which writes the 3
+    # /etc/default/web-<probe> EnvironmentFiles on a fresh cattle host (the SSH remote-exec path
+    # only reaches web-1). Values single-sourced from the SAME expressions the SSH provisioners use:
+    #   web_probes_token — the read-scoped doppler_service_token.web_probes.key (adds ZERO marginal
+    #     exposure over the full-prd doppler_token already in this map — web-probe-read-token.tf).
+    #   expected_ip      — this host's declared private IP (the nic-guard's EXPECTED baseline; never
+    #     the live NIC, which would defeat the guard). var.web_hosts[each.key].private_ip.
+    #   web_host_key     — each.key ("web-1"/"web-2"); the env-writer upper-cases it to name the
+    #     per-host Better Stack heartbeat URL var (WEB_NIC_GUARD_URL_WEB_2, …), matching the SSH
+    #     provisioner's upper(replace(each.key,"-","_")).
+    #   zot_probe_repo   — local.zot_probe_repo (web-probe.tf:22), the ZOT_PROBE_REPO env value.
+    # betterstack_ingest_url + registry_endpoint are already in this map (reused, not re-added).
+    web_probes_token = doppler_service_token.web_probes.key
+    expected_ip      = var.web_hosts[each.key].private_ip
+    web_host_key     = each.key
+    zot_probe_repo   = local.zot_probe_repo
     # #6604 — pin /mnt/data to THIS host's workspaces volume by stable by-id device
     # (/dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id}), never the scsi-0HC_Volume_*
     # glob: once the LUKS volume attaches, the glob matches TWO devices and the "which is LUKS"
@@ -275,16 +326,21 @@ resource "hcloud_server" "web" {
   # Guarded by plugins/soleur/test/terraform-target-parity.test.ts so it is not
   # dropped silently.
   #
-  # HARD GATE (ADR-068 §(c), the LB-weight gate) — the deferred cutover orchestrator
-  # must NOT remove this entry or shift web-2's Cloudflare LB weight above 0 until the
-  # programmatic gate (DELETED 2026-07-20 with #6575 — see ADR-068 §(c) CORRECTION; nothing checks this today, and it MUST be rebuilt before any second web host is pooled) exits 0 AND its separate
-  # runtime-bind probe passes: (1) owner-side relay active (SOLEUR_PROXY_BIND /
-  # SOLEUR_PROXY_PEER_ALLOWLIST / SOLEUR_HOST_ROSTER), AND (2) git-data store cut over
-  # (GIT_DATA_STORE_ENABLED==true + LUKS soak marker). Pooling web-2 before both = a
-  # request lands on a host without that user's /workspaces → empty workspace →
-  # "workspace-gone" single-user incident. The gate is SHAPE-ONLY (prints
-  # requires_runtime_bind_probe=true) so exit 0 alone is NOT weight-flip authorization.
-  # See the ADR §(c) amendment + runbook moved-block-wedge-cutover-5887.md §Scope B.
+  # HARD GATE (ADR-068 §(c) / ADR-142 D3, the anti-pooling LB-weight gate) — the deferred cutover
+  # orchestrator must NOT remove this entry or shift web-2's Cloudflare LB weight above 0 until the
+  # programmatic gate (REBUILT 2026-07-24 with ADR-142 D3 / #6459 as `lb-weight-gate.sh`, after
+  # #6575 deleted the original 2026-07-20 — see ADR-068 §(c) CORRECTION + ADR-142) exits 0 AND its
+  # separate runtime-bind probe passes. The rebuilt gate is a fail-closed serving-weight TOP-GUARD:
+  # web-2 weight==0/not-in-rotation PASSES (the standby state a correct pre-flip config is in — the
+  # #6575 polarity flaw is fixed); web-2 weight>0 pre-flip runs the flip-authorization shape and
+  # FAILS unless (1) owner-side relay active (SOLEUR_PROXY_BIND / SOLEUR_PROXY_PEER_ALLOWLIST /
+  # SOLEUR_HOST_ROSTER), (2) git-data store cut over (GIT_DATA_STORE_ENABLED==true + GIT_DATA_LUKS
+  # soak marker), AND (3) web-2 /workspaces LUKS-backed (WORKSPACES_LUKS soak marker — ADR-142 D3
+  # coupling #2, so a plaintext web-2 cannot be pooled). Pooling web-2 before all three = a request
+  # lands on a host without that user's /workspaces → empty workspace → "workspace-gone" single-user
+  # incident. SHAPE-ONLY (prints requires_runtime_bind_probe=true) so exit 0 is NOT weight authorization.
+  # Committed-config anti-pooling (dns.tf web-1-only, connector excludes web-2, no LB pools web-2) is
+  # Condition C in lb-weight-gate.test.sh. See ADR-068 §(c) + ADR-142 + moved-block-wedge-cutover-5887.md §Scope B.
   lifecycle {
     ignore_changes = [user_data, ssh_keys, image, placement_group_id]
   }
@@ -642,9 +698,11 @@ resource "terraform_data" "git_data_probe_install" {
 # internet (firewall.tf admits only 22/80/443/icmp on the public interface), and its only members
 # are our own hosts.
 #
-# SCOPE: this grant exists because a peer connector proxies to web-1. It is web-2-lifetime-scoped
-# — #6538 (retire the fsn1 orphan) removes the only peer, after which the 10.0.1.0/24 clause is
-# vestigial and should be re-evaluated rather than inherited.
+# SCOPE: this grant exists because a peer connector proxies to web-1. It is web-2-lifetime-scoped.
+# #6538 retired the fsn1 .11 orphan (removing the only peer, making the clause momentarily
+# vestigial), but web-2 was RE-ADDED 2026-07-24 (ADR-142, #6459) as a fresh cattle standby at
+# 10.0.1.11 — so the 10.0.1.0/24 grant is LIVE again (a peer connector from web-2 must not be
+# fail2ban-banned). Re-evaluate only if web-2 is ever removed.
 resource "terraform_data" "fail2ban_tuning" {
   triggers_replace = sha256(file("${path.module}/fail2ban-sshd.local"))
 
@@ -1575,6 +1633,18 @@ resource "hcloud_volume" "workspaces" {
 
   labels = {
     app = "soleur-web-platform"
+  }
+
+  # (ADR-142 Phase 4.2 / #6459) prevent_destroy on the per-host /workspaces block volumes so a
+  # stray `terraform destroy` / for_each key churn cannot silently drop a volume. This is the
+  # per-host plaintext volume; the LIVE sole-copy data is on the additive LUKS singleton
+  # hcloud_volume.workspaces_luks (workspaces-luks.tf, ADR-119) — its own prevent_destroy is
+  # DEFERRED to the Phase-4 disposability-proof PR (#6931) because it collides with the
+  # `apply_target=workspaces-luks-recut` `-replace` escape hatch (prevent_destroy errors on -replace)
+  # and its correct placement depends on the two-mechanism topology reconciliation ADR-142 R3 defers.
+  # Not in the push-apply `-target` allow-list, so this adds no merge-apply behavior.
+  lifecycle {
+    prevent_destroy = true
   }
 }
 
