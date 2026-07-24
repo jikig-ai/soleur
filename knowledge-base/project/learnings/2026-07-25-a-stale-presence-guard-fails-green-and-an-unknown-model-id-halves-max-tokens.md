@@ -97,6 +97,8 @@ Six production audit crons pass `--model` via argv against `--max-turns` budgets
 
 **Fix:** bump `@anthropic-ai/claude-code` (2.1.197 → 2.1.219) and the `Dockerfile` global; `model-launch-review` grew **item 2b** asserting each tier model appears in the pinned bundle.
 
+**The sharper instance, found while fixing it:** the `Dockerfile` global was pinned at **2.1.79** — 118 patch versions behind `package.json`'s 2.1.197 — under a comment that said `KEEP IN SYNC`. So the container had been running a *differently* stale model table than the host all along, independent of any model launch. A "keep in sync" comment is not a sync mechanism; the two pins now carry a comment naming the max_tokens consequence, and item 2b greps the installed bundle rather than trusting either pin.
+
 Two corrections worth recording:
 
 - **A hypothesis that was wrong.** I expected Opus 5's thinking-on-by-default to inflate token spend. It does not — Claude Code sets `thinking: {type:"adaptive"}` and `effort: "high"` **explicitly** on both models, so the API-side default never applies. The checklist's item 3 ("no `thinking`/`output_config` params in config today") was true of *config* and false of *runtime*.
@@ -141,7 +143,9 @@ grep -rEl "$re" "$ROOT" ... 2>/dev/null | grep -vE "$EXCLUDE_RE" || true
 
 `grep` exits **1** on no-match and **≥2** on error (unreadable dir, bad regex). `|| true` made them identical, so `--detect` would print `model-drift: none (config model IDs current)` and exit **0** from a scan that never ran — from a detector whose entire job is noticing drift.
 
-Fixed by capturing `rc`, returning 2 on `rc >= 2`, and having `--detect` report `UNKNOWN` + exit 1. Note the second trap: `mapfile -t hits < <(collect_config_hits)` **discards** the function's exit code, so the capture had to go through a tempfile for the failure to be visible at all.
+Fixed by capturing `rc`, returning 2 on `rc >= 2`, and reporting `UNKNOWN` + exit 1. Note the second trap: `mapfile -t hits < <(collect_config_hits)` **discards** the function's exit code, so the capture had to go through a tempfile for the failure to be visible at all.
+
+**The first fix was incomplete, in the same shape as the bug.** It routed only `--detect` through the tempfile; `--fix` and the default audit mode kept `mapfile < <(...)`, so a failed scan still silently reported clean in two of three modes — a partial fix to a fail-open defect reads exactly like a complete one, because the mode you tested is green either way. Caught by a review agent fact-checking *this learning* against the merged code. All three modes now share one `load_hits` helper; verified by forcing a scan failure (`--root /nonexistent`) and confirming **every** mode exits 1 with `scan FAILED … refusing to report clean`. When you fix a fail-open, enumerate every call site of the thing you fixed — not just the one that motivated it.
 
 ### (b) Fail-closed — `sdk-bump-sandbox-gate.sh`
 
@@ -208,4 +212,4 @@ Fixed with `fetch-depth: 0` on `lockfile-sync`, dropping `--depth=1` from all fo
 - [2026-07-19-a-self-graded-mutation-battery-went-vacuous-twice-in-one-pr-and-the-two-producer-count-that-fixed-it.md](./2026-07-19-a-self-graded-mutation-battery-went-vacuous-twice-in-one-pr-and-the-two-producer-count-that-fixed-it.md) — the mutation-side twin of L3
 - [2026-07-16-the-fix-for-an-inert-monitor-shipped-a-probe-that-could-never-fire.md](./2026-07-16-the-fix-for-an-inert-monitor-shipped-a-probe-that-could-never-fire.md) — same family as L4: a check that cannot succeed reads like one that passes
 
-Follow-ups filed: #6942 (dated sonnet intro-pricing expiry, 2026-09-01), #6945 (BYOK cap sums cents×tokens against a cents budget; sub-cent turns quantize to 0).
+Follow-ups filed: #6942 (sonnet intro pricing ends **2026-08-31**; the committed post-intro rates become correct 2026-09-01), #6945 (BYOK cap sums cents×tokens against a cents budget; sub-cent turns quantize to 0).
