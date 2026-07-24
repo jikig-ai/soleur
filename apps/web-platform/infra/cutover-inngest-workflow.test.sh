@@ -493,6 +493,24 @@ assert "#6617 neither probe op appears in the environment: expression" "! grep -
 # --- Scope caveat carried verbatim from op=verify 2.6 (B-AC7) ---
 assert "#6617 doublefire-probe carries the 2.6 scope caveat" "grep -qF 'NOT a web-2 double-fire detector' '$PROBE_ARMS_FILE'"
 
+# --- (#6178) registry_empty is a BOOLEAN — never read it with jq `//`. `false // "true"` = "true"
+# in jq (it treats boolean false as empty), so `.registry_empty // "<default>"` makes a HEALTHY
+# non-empty registry (registry_empty:false) read as EMPTY, and the op=rearm/op=verify
+# precondition can NEVER pass against the real post-2.4 backend. The correct shape reads the
+# boolean directly behind a has() guard. Assert the anti-pattern is absent anywhere in the WF. ---
+# Strip shell-comment lines first — the fix's own explanatory comment quotes the anti-pattern
+# as the thing NOT to do (cq-assert-anchor-not-bare-token), so a raw file-wide grep false-matches
+# the documentation. Then match `.registry_empty` immediately followed by jq `//` ANYWHERE on a
+# real line — quote-style-agnostic and leading-whitespace-tolerant (a narrower `jq...'` anchor is
+# evaded by ` .registry_empty`, a double-quoted program, or a pipe prefix). No legitimate line
+# reads this boolean with `//`; the only correct read is bare `.registry_empty`. (Single-line
+# only — a jq program split across lines is an accepted residual gap, not a realistic hand-edit.)
+assert "no jq '//'-on-boolean read of registry_empty (false // x == x bug, #6178)" \
+  "! grep -vE '^[[:space:]]*#' '$WF' | grep -qE '\.registry_empty[[:space:]]*//'"
+# And assert BOTH consumer preconditions read the boolean directly (parity — they had drifted).
+assert "registry_empty read directly (bare, no //) at least twice (op=rearm + op=verify)" \
+  "[[ \"\$(grep -cE \"jq -r '\.registry_empty'\" '$WF')\" -ge 2 ]]"
+
 rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" "$PROBE_ARMS_FILE"
 
 echo ""
