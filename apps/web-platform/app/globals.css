@@ -252,6 +252,21 @@
   }
 }
 
+/* KB file-tree touch actions (Phase 3). The per-node rename/delete/upload
+   buttons are `opacity-0` and revealed only via `group-hover:opacity-100`; a
+   touch device has no hover, so those actions are unreachable. On a no-hover
+   (coarse) pointer, reveal the action cluster and clear the timestamp that the
+   hover state would otherwise fade to make room. `!important` beats Tailwind's
+   layered `opacity-0`/`group-hover:opacity-100` utilities regardless of order. */
+@media (hover: none) {
+  .kb-tree-actions {
+    opacity: 1 !important;
+  }
+  .kb-tree-timestamp {
+    opacity: 0 !important;
+  }
+}
+
 /*
  * ADR-067 refresh shimmer. A ~2px gold sliver sweeps left→right across the top
  * edge while a warm SWR cache hit revalidates in the background (RefreshShimmer,
