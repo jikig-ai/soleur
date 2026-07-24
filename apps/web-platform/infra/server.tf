@@ -1634,6 +1634,18 @@ resource "hcloud_volume" "workspaces" {
   labels = {
     app = "soleur-web-platform"
   }
+
+  # (ADR-141 Phase 4.2 / #6459) prevent_destroy on the per-host /workspaces block volumes so a
+  # stray `terraform destroy` / for_each key churn cannot silently drop a volume. This is the
+  # per-host plaintext volume; the LIVE sole-copy data is on the additive LUKS singleton
+  # hcloud_volume.workspaces_luks (workspaces-luks.tf, ADR-119) — its own prevent_destroy is
+  # DEFERRED to the Phase-4 disposability-proof PR (#6931) because it collides with the
+  # `apply_target=workspaces-luks-recut` `-replace` escape hatch (prevent_destroy errors on -replace)
+  # and its correct placement depends on the two-mechanism topology reconciliation ADR-141 R3 defers.
+  # Not in the push-apply `-target` allow-list, so this adds no merge-apply behavior.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "hcloud_volume_attachment" "workspaces" {
