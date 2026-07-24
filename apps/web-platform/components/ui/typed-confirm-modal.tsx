@@ -27,6 +27,8 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 
+import { ResponsiveModal } from "@/components/ui/responsive-modal";
+
 export interface TypedConfirmModalProps {
   open: boolean;
   // Payload fields rendered to the founder before they type SEND.
@@ -62,7 +64,6 @@ export function TypedConfirmModal({
   onConfirm,
 }: TypedConfirmModalProps) {
   const [value, setValue] = useState("");
-  const dialogRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const titleId = useId();
   const descId = useId();
@@ -77,21 +78,6 @@ export function TypedConfirmModal({
     }
   }, [open]);
 
-  // Esc closes without confirming.
-  useEffect(() => {
-    if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onCancel();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onCancel]);
-
-  if (!open) return null;
-
   // No .trim() / .normalize() per Kieran P2-7 — case-sensitive exact
   // match. ZWS, lowercase, trailing-space all fail the gate.
   const canSubmit = value === REQUIRED_PHRASE;
@@ -103,21 +89,17 @@ export function TypedConfirmModal({
   }
 
   return (
-    <div
-      // Backdrop. Click-to-cancel is intentionally NOT wired — typed-
-      // confirm should be exited explicitly via Esc or the Cancel button
-      // so a stray mousedown doesn't drop progress.
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      role="presentation"
+    // Click-to-cancel is intentionally NOT wired (closeOnBackdrop={false}) —
+    // typed-confirm should be exited explicitly via Esc or the Cancel button
+    // so a stray mousedown doesn't drop progress. Escape → onClose={onCancel}.
+    <ResponsiveModal
+      open={open}
+      onClose={onCancel}
+      closeOnBackdrop={false}
+      desktopMaxWidth="max-w-md"
+      aria-labelledby={titleId}
+      aria-describedby={descId}
     >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-describedby={descId}
-        className="w-full max-w-md rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-6 shadow-xl"
-      >
         <h2
           id={titleId}
           className="mb-2 text-lg font-semibold text-soleur-text-primary"
@@ -193,7 +175,6 @@ export function TypedConfirmModal({
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </ResponsiveModal>
   );
 }

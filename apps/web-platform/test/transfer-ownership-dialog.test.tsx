@@ -113,7 +113,9 @@ describe("TransferOwnershipDialog", () => {
 
   it("calls onClose on backdrop click", () => {
     render(<TransferOwnershipDialog {...PROPS} />);
-    const backdrop = screen.getByRole("dialog");
+    // The ResponsiveModal shell renders role="dialog" on the panel and wraps it
+    // in a backdrop element; clicking the backdrop (the panel's parent) closes.
+    const backdrop = screen.getByRole("dialog").parentElement as HTMLElement;
     fireEvent.click(backdrop);
     expect(PROPS.onClose).toHaveBeenCalled();
   });

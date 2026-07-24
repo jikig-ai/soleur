@@ -15,6 +15,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { GoldButton } from "@/components/ui/gold-button";
+import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { CONCIERGE_ONLINE } from "./concierge-flag";
 import type { CreateIssueBody } from "./workstream-writes";
 
@@ -47,20 +48,6 @@ export function NewIssueDialog({
     }
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        if (!inFlight.current) onClose();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
-
   const canSubmit = title.trim().length > 0 && !submitting;
 
   async function handleSubmit(e?: React.FormEvent) {
@@ -87,19 +74,16 @@ export function NewIssueDialog({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      role="presentation"
+    <ResponsiveModal
+      open={open}
+      onClose={onClose}
+      closeOnBackdrop={false}
+      desktopMaxWidth="max-w-md"
+      aria-label="New issue"
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="New issue"
-        className="w-full max-w-md rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-6 shadow-xl"
-      >
-        <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">
-          New issue
-        </h2>
+      <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">
+        New issue
+      </h2>
         <form onSubmit={handleSubmit}>
           <label
             htmlFor="new-issue-title"
@@ -203,8 +187,7 @@ export function NewIssueDialog({
               {submitting ? "Creating…" : "Create issue"}
             </GoldButton>
           </div>
-        </form>
-      </div>
-    </div>
+      </form>
+    </ResponsiveModal>
   );
 }
