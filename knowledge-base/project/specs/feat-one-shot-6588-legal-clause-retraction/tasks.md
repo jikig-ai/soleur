@@ -147,17 +147,17 @@ scope-to-live (*"stored **live** workspace git data …"*) qualifier — that wa
 
 ## Phase 6 — Verification
 
-- [ ] 6.1 `bash apps/web-platform/scripts/check-tc-document-sha.sh`
-- [ ] 6.2 `cd apps/web-platform && ./node_modules/.bin/vitest run test/legal-doc-consistency.test.ts test/legal-doc-shas-guard.test.ts`
-- [ ] 6.3 `python3 scripts/lint-encryption-posture.py --repo-sweep`
-- [ ] 6.4 `bun test plugins/soleur/test/marketing-content-drift.test.ts`
-- [ ] 6.5 `./node_modules/.bin/eleventy --dry-run` (repo-root pinned binary, **never `npx`**)
-- [ ] 6.6 Full suite (`bash scripts/test-all.sh`); **grep the log for `FAIL` / `× `** — do not trust
+- [x] 6.1 `bash apps/web-platform/scripts/check-tc-document-sha.sh`
+- [x] 6.2 `cd apps/web-platform && ./node_modules/.bin/vitest run test/legal-doc-consistency.test.ts test/legal-doc-shas-guard.test.ts`
+- [x] 6.3 `python3 scripts/lint-encryption-posture.py --repo-sweep`
+- [x] 6.4 `bun test plugins/soleur/test/marketing-content-drift.test.ts`
+- [x] 6.5 `./node_modules/.bin/eleventy --dry-run` (repo-root pinned binary, **never `npx`**)
+- [x] 6.6 Full suite (`bash scripts/test-all.sh`); **grep the log for `FAIL` / `× `** — do not trust
       a background runner's exit code.
-- [ ] 6.7 **AC4 gate — the hold held.** Across the 6 published files,
+- [x] 6.7 **AC4 gate — the hold held.** Across the 6 published files,
       `grep -nEi "rollback backstop|pre-cutover|plaintext volume|unencrypted volume|superseded .{0,30}volume|stored \*\*live\*\* workspace|older, unencrypted"`
       returns **0**, and `git diff origin/main -- <6 files>` adds no line matching it.
-- [ ] 6.8 Walk **AC1–AC15** and tick each with its evidence (AC15 = the #6808 escalation).
+- [x] 6.8 Walk **AC1–AC15** and tick each with its evidence (AC15 = the #6808 escalation).
 
 ---
 
@@ -188,6 +188,11 @@ measured, not toggled in bulk.
 | AC13 `Ref` not `Closes` #6897 | commit bodies clean | close-keyword scan over `origin/main..HEAD` returned empty |
 | AC14 live verification | run **30130277489** (2026-07-24T22:13Z) | `crypto_LUKS` · `/dev/mapper/workspaces` · escrow ok · header readable · 8/8 |
 | AC15 #6808 escalated | labels + comment | `priority/p1-high` + `type/security`, `p2-medium` removed; comment names #6588, PR #6938, the reaffirmed hold, the over-claim framing |
+
+**Full-suite exit gate:** `bash scripts/test-all.sh` -> **222/222 suites passed**, rc=0
+(log grepped for `FAIL`/`x ` rather than trusting the exit code; the apparent hits are
+`PASS: ... FAILS` assertions and `_fail sentinel` lines). Ran under a `SIBLING_RUN_DETECTED`
+banner (2 concurrent worktree runs) and still came back clean.
 
 **Gates run:** `check-tc-document-sha.sh` (exit 0, and **mutation-tested** — zeroing one pinned
 SHA turns it RED, restoring returns it to green, so the green is not vacuous) ·
