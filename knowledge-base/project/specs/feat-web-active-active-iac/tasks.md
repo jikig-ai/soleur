@@ -26,8 +26,8 @@ date: 2026-07-24
 
 ## PR-1 — Phase 1: Fresh-boot readiness gate (#6459 precondition)
 
-- [ ] 1.1 Fresh-boot readiness assertions (cloud-init `runcmd` full-bootstrap; no Doppler/systemd-env silent fallback; user_data cap on gzipped render). Extend the `feat-one-shot-6712-...` coherence-preflight work.
-- [ ] 1.2 In-surface `SOLEUR_FRESH_BOOT_READY` marker (cloud-init stage / Vector / token / volume+luksOpen) to Better Stack; quantify the boot-window timeout; discoverability test has NO ssh.
+- [x] 1.1 Fresh-boot readiness assertions — folded into the marker's `token` field (fail-loud, no silent Doppler/env fallback) + its behavioral test; user_data cap held via re-baseline (helper body baked, 0 user_data). Built against `main` baseline (the `feat-one-shot-6712-...` coherence-preflight is unmerged/unpushed — stayed architecturally compatible, no hard dep).
+- [x] 1.2 `SOLEUR_FRESH_BOOT_READY` marker (`soleur-fresh-boot-ready`, baked) emitted as the LAST cloud-init item AFTER Vector; fields ready/stage/token/vector/volume/luks/reason; **900s** quantified boot-window (derivation in-helper); dual-channel Vector-INDEPENDENT (direct-curl Better Stack + Sentry); discoverability via `betterstack-query.sh` (NO ssh). Hybrid guard `fresh-boot-ready.test.sh` (structural + behavioral-extraction per reason branch), registered in `infra-validation.yml`. Commit 38b9bfe3c.
 
 ## PR-1 — Phase 2: Complete cattle cloud-init parity artifact (FORWARD of web-2 birth)
 
