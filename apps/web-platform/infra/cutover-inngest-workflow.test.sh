@@ -78,7 +78,10 @@ HOOKS_TMPL="$REPO_ROOT/apps/web-platform/infra/hooks.json.tmpl"
 HOOK_IDS=(inngest-enumerate-reminders inngest-rearm-reminders inngest-wiped-volume-verify inngest-verify-status inngest-inventory inngest-registry-probe inngest-doublefire-probe)
 assert "hook-existence loop has >=1 hook (min-cardinality)" "[[ '${#HOOK_IDS[@]}' -ge 1 ]]"
 for hook in "${HOOK_IDS[@]}"; do
-  assert "workflow targets \$BASE/$hook" "grep -qE 'BASE/$hook\"' '$WF'"
+  # #6919 — the doublefire URL now carries a ?from=&function_ids= query string, so the name may
+  # be followed by `?` (query) OR `"` (bare). The char-class boundary still guards against a
+  # longer hook name false-matching (e.g. a hypothetical inngest-doublefire-probe-2).
+  assert "workflow targets \$BASE/$hook" "grep -qE 'BASE/$hook[?\"]' '$WF'"
   assert "hook id '$hook' exists in hooks.json.tmpl" "grep -qE '\"id\": \"$hook\"' '$HOOKS_TMPL'"
 done
 
@@ -127,7 +130,7 @@ assert "SEAM directs the arm-flip to the no-SSH op=arm dispatch (#6369)" "grep -
 # D.3 / AC-VERIFY — op=verify: precondition registry NON-empty (2.4 landed,
 # P1-9/P2-17), 2.6 via the doublefire hook, RunsFilterV2 + STARTED_AT bucketing,
 # and NO scheduled_tick anywhere in the workflow.
-assert "verify calls the doublefire-probe hook (2.6/P1-12)" "grep -qE 'BASE/inngest-doublefire-probe\"' '$WF'"
+assert "verify calls the doublefire-probe hook (2.6/P1-12)" "grep -qE 'BASE/inngest-doublefire-probe[?\"]' '$WF'"
 assert "verify preconditions on registry NON-empty (P1-9/P2-17)" "grep -qE 'verify precondition' '$WF'"
 assert "verify buckets by floor(startedAt / cron_period) (no scheduled_tick)" "grep -qE 'fromdateiso8601' '$WF'"
 assert "verify auto-emits the missed-tick trigger-cron list (P2-16)" "grep -qE 'soleur:trigger-cron' '$WF'"
@@ -272,12 +275,42 @@ DF_SH="$REPO_ROOT/apps/web-platform/infra/inngest-doublefire-probe.sh"
 INV_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$INV_SH" | head -1)
 DF_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$DF_SH" | head -1)
 assert "inventory in-script deadline (22) < outer curl --max-time 30 (SUM bound)" "[[ -n '$INV_DEADLINE' && '$INV_DEADLINE' -lt 30 ]]"
-assert "doublefire in-script deadline (50) < outer curl --max-time 60 (SUM bound)" "[[ -n '$DF_DEADLINE' && '$DF_DEADLINE' -lt 60 ]]"
+# #6919 — the doublefire budget was raised (deadline 50→90, outer curl 60→120) + a per-page
+# FLOOR added so late pages never starve to ~0s → empty → false "malformed". SUM bound stays
+# airtight: deadline(90) + PAGE_MIN(8) = 98 < the 120s outer curl.
+DF_PAGE_MIN=$(grep -oP 'PREFLIGHT_PAGE_MIN_S:-\K[0-9]+' "$DF_SH" | head -1)
+assert "doublefire in-script deadline (90) < outer curl --max-time 120 (SUM bound, #6919)" "[[ -n '$DF_DEADLINE' && '$DF_DEADLINE' -lt 120 ]]"
+assert "doublefire SUM bound airtight: deadline + PAGE_MIN < 120 (#6919)" "[[ -n '$DF_DEADLINE' && -n '$DF_PAGE_MIN' && \$(( DF_DEADLINE + DF_PAGE_MIN )) -lt 120 ]]"
+assert "doublefire per-page budget is FLOORED to PREFLIGHT_PAGE_MIN_S (anti-starvation, #6919)" "grep -qE 'max_time < PREFLIGHT_PAGE_MIN_S \)\) && max_time=\\\$PREFLIGHT_PAGE_MIN_S' '$DF_SH'"
 assert "inventory clamps per-page curl to the remaining budget (not a fixed const)" "grep -qE 'max-time \"\\\$max_time\"' '$INV_SH' && grep -qE 'remaining=\\\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' '$INV_SH'"
 assert "doublefire clamps per-page curl to the remaining budget" "grep -qE 'max-time \"\\\$max_time\"' '$DF_SH' && grep -qE 'remaining=\\\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' '$DF_SH'"
 # outer curl budgets present (the ceiling the sum must stay under).
 assert "inventory outer curl --max-time 30 present" "grep -qE 'curl -s --max-time 30 -o /tmp/inv-body' '$WF'"
-assert "doublefire outer curl --max-time 60 present" "grep -qE 'curl -s --max-time 60 -o /tmp/verify-runs' '$WF'"
+assert "doublefire outer curl --max-time 120 present (#6919)" "grep -qE 'curl -s --max-time 120 -o /tmp/verify-runs' '$WF'"
+
+# ============================================================================
+# #6919 — the op=verify HTTP 500 fix's plumbing: the doublefire hook reads a
+# ?from= / ?function_ids= query string, and BOTH cutover arms forward a narrower-
+# but-still-⊇-invariant window (cutover − 200d > the 182d floor) as the cost lever
+# so the wide all-function scan completes within the probe's per-page budget.
+# ============================================================================
+# Hook side: the two url params bridge into the probe's env seams.
+assert "#6919 doublefire hook forwards ?from → INNGEST_DOUBLEFIRE_FROM (pass-environment url)" "grep -qF '\"source\": \"url\", \"name\": \"from\", \"envname\": \"INNGEST_DOUBLEFIRE_FROM\"' '$HOOKS_TMPL'"
+assert "#6919 doublefire hook forwards ?function_ids → INNGEST_DOUBLEFIRE_FUNCTION_IDS" "grep -qF '\"name\": \"function_ids\", \"envname\": \"INNGEST_DOUBLEFIRE_FUNCTION_IDS\"' '$HOOKS_TMPL'"
+# Workflow side: a shared doublefire_from() computes the ⊇-invariant lower bound, and BOTH the
+# op=verify (2.6) and standalone op=doublefire-probe arms forward it as ?from=.
+assert "#6919 workflow defines doublefire_from() helper" "grep -qE 'doublefire_from\(\) \{' '$WF'"
+assert "#6919 both doublefire calls forward the ?from= window cost lever (2 sites)" "[[ \"\$(grep -cF 'inngest-doublefire-probe?from=' '$WF')\" -eq 2 ]]"
+assert "#6919 workflow wires the optional functionIDs cost lever (CUTOVER_DOUBLEFIRE_FUNCTION_IDS)" "grep -qF 'CUTOVER_DOUBLEFIRE_FUNCTION_IDS' '$WF'"
+# #6919 review — doublefire_from()'s cutover-instant anchor (and the missed-tick auto-enum) read
+# CUTOVER_WINDOW_UNTIL/FROM, which GitHub does not export to the shell unless the step env MAPS
+# them. Assert the mapping exists so the anchor branch cannot silently go dead again.
+assert "#6919 workflow maps CUTOVER_WINDOW_UNTIL into the step env (doublefire anchor not dead)" "grep -qE 'CUTOVER_WINDOW_UNTIL:\s*\\\$\{\{ vars.CUTOVER_WINDOW_UNTIL \}\}' '$WF'"
+assert "#6919 workflow maps CUTOVER_WINDOW_FROM into the step env (missed-tick auto-enum not dead)" "grep -qE 'CUTOVER_WINDOW_FROM:\s*\\\$\{\{ vars.CUTOVER_WINDOW_FROM \}\}' '$WF'"
+# INVARIANT (negative): the cost lever is functionIDs + a 200d (> the 182d = 2×quarterly floor)
+# window — the TIME window is NEVER narrowed to hours/days (that would surface false missed-ticks
+# at :704-743 → operator re-fire → the exact DOUBLE-FIRE the cutover prevents).
+assert "#6919 doublefire_from is ≥ 200 days (⊇ the 182d invariant, never a day/hour narrow)" "grep -qF '200 * 86400' '$WF' && grep -qF '200 days ago' '$WF'"
 
 # Abort → webhook NON-200 (Deepen Finding 6): a script exit 1 (deadline/ceiling loud-abort)
 # maps to a webhook non-200 ONLY IF the hook has include-command-output-in-response-on-error.
@@ -384,6 +417,32 @@ assert "arm) adds NO deploy-status poll (Better Stack read only — QMAX/RMAX un
 
 # AC13 no ssh in the arm block.
 assert "arm) contains no ssh (AC-NOSSH/AC13)" "! grep -qE '(^|[^[:alnum:]])ssh[[:space:]]' '$ARM_FILE'"
+
+# ============================================================================
+# #6178 durability — G3.5 CHANNEL-KEY PARITY HARD GATE. INNGEST_EVENT_KEY +
+# INNGEST_SIGNING_KEY are a SHARED app<->host channel token (ADR-100 §4 Amendment),
+# NOT isolation-sensitive; op=arm must REFUSE the flip if the app (soleur/prd) and
+# host (soleur-inngest/prd) copies diverge — the exact #6178 cutover-502. AC-NOBODY:
+# the gate compares via sha256 and NEVER echoes a key value. Asserted against the
+# extracted arm) case body (ARM_FILE) so the gate can only pass by living in op=arm.
+# ============================================================================
+assert "arm) has a G3.5 channel-key parity gate (#6178 durability)" "grep -qF 'G3.5 channel-key parity' '$ARM_FILE'"
+assert "arm) G3.5 checks BOTH channel keys (event + signing)" "grep -qE 'for CK in INNGEST_EVENT_KEY INNGEST_SIGNING_KEY' '$ARM_FILE'"
+assert "arm) G3.5 compares by sha256 (never by echoing the value — AC-NOBODY)" "grep -qF 'sha256sum' '$ARM_FILE'"
+assert "arm) G3.5 reads the HOST key from soleur-inngest/prd via the arm token" "grep -qE 'DOPPLER_TOKEN=\"\\\$DOPPLER_TOKEN_INNGEST_ARM\" doppler secrets get \"\\\$CK\" -p soleur-inngest -c prd --plain' '$ARM_FILE'"
+assert "arm) G3.5 reads the APP key read-through from prd_terraform (no -p/-c on the app get)" "grep -qE 'APP_CK=\\\$\(doppler secrets get \"\\\$CK\" --plain' '$ARM_FILE'"
+# Value-silent: both copies masked; NEITHER raw value is ever echoed.
+ARM_CK_MASK_N=$(grep -cE '::add-mask::.*(APP_CK|HOST_CK)' "$ARM_FILE" || true)
+assert "arm) G3.5 masks BOTH the app + host key values (>=2 ::add-mask::)" "[[ '$ARM_CK_MASK_N' -ge 2 ]]"
+assert "arm) G3.5 NEVER echoes a raw channel-key value (no echo of \$APP_CK/\$HOST_CK — AC-NOBODY)" "! grep -qE 'echo[^\"]*\\\$\\{?(APP_CK|HOST_CK)([^_H]|\$)' '$ARM_FILE'"
+# The gate is HARD: a mismatch (or unreadable key) fails op=arm closed.
+assert "arm) G3.5 is a HARD GATE — a divergence exits op=arm non-zero (PARITY_FAIL)" "grep -qE 'PARITY_FAIL' '$ARM_FILE' && grep -qF 'CHANNEL-KEY PARITY GATE FAILED' '$ARM_FILE'"
+assert "arm) G3.5 cites the #6178 cutover-502 condition in its remediation" "grep -qF 'cutover-502' '$ARM_FILE'"
+# The parity gate runs BEFORE the arm writes (G4/G5) — a divergent channel must
+# block the flip, never be written past.
+PARITY_LN=$(grep -nF 'G3.5 CHANNEL-KEY PARITY GATE FAILED' "$ARM_FILE" | head -1 | cut -d: -f1)
+G4_WRITE_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
+assert "arm) G3.5 parity gate precedes the G4 POSTGRES_URI write (blocks before arming)" "[[ -n '$PARITY_LN' && -n '$G4_WRITE_LN' && '$PARITY_LN' -lt '$G4_WRITE_LN' ]]"
 
 # D5/C4 environment required-reviewer gate + C5 conditional token env (repo-level, not in the case body).
 assert "job gates op=arm/op=rollback on the inngest-cutover environment (D5/C4)" "grep -qE \"environment: .*inputs.op == 'arm'.*inputs.op == 'rollback'.*inngest-cutover\" '$WF'"
