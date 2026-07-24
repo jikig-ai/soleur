@@ -421,6 +421,12 @@ No new vendor, no free-tier gate (Hetzner volumes + Doppler secrets are already 
 liveness_signal:
   what: zot answers on its private IP (existing SOLEUR liveness heartbeat) — gated on a successful
         LUKS mount of /var/lib/zot; a failed luksOpen/mount => zot never starts => heartbeat stops.
+        ENFORCED by the zot-launch mount-gate (`findmnt -no SOURCE /var/lib/zot | grep -qx
+        /dev/mapper/registry || exit 1`, immediately before `docker run … zot`): the mount and the
+        launch are separate runcmd entries and cloud-init continues past a failed one, so without
+        this gate a failed LUKS mount would still launch zot on an empty root-disk dir answering 401
+        (heartbeat green, no alert). The gate makes "fail-loud => zot never starts => liveness
+        absence" TRUE rather than aspirational.
   cadence: existing zot-liveness-heartbeat cron cadence (betteruptime_heartbeat.registry_prd)
   alert_target: Better Stack absence alert (betteruptime_heartbeat.registry_prd)
   configured_in: apps/web-platform/infra/zot-registry.tf (betteruptime_heartbeat.registry_prd) + cloud-init-registry.yml
@@ -448,7 +454,10 @@ discoverability_test:
 **Blind-surface note (Phase 2.9.2):** the cloud-init cryptsetup block is a blind execution surface.
 Its in-surface probe is the **fail-loud boot guard** (a FATAL that discriminates empty-key vs
 wrong-TYPE-device vs closed-mapper in one stderr marker) surfaced off-box via the liveness-absence
-heartbeat — no SSH needed. Layer B live-reconcile (ADR-141, deferred) is the eventual per-volume
+heartbeat — no SSH needed. The liveness-absence route is only load-bearing because the **zot-launch
+mount-gate** (`findmnt … /dev/mapper/registry` before `docker run … zot`) refuses to start zot on
+an unmounted store: without it a failed mount would launch an empty-store zot that answers 401 and
+keeps the heartbeat green, so the gate is what turns any LUKS failure into an observable absence. Layer B live-reconcile (ADR-141, deferred) is the eventual per-volume
 posture probe (`live_verification` stays `unavailable:...#6895` until then).
 
 ## Architecture Decision (ADR/C4)

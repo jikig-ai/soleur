@@ -99,6 +99,7 @@ echo "--- structural: SOLEUR_ZOT_DISK self-report (#6244) ---"
 assert "SOLEUR_ZOT_DISK marker line emitted" "grep -qF 'SOLEUR_ZOT_DISK pcent=' '$CI'"
 # Tie each field to the LINE="SOLEUR_ZOT_DISK assignment ITSELF, not anywhere-in-file (Kieran P2:
 # the old anywhere grep false-passes a field named only in a comment). LINE= is one physical line.
+# shellcheck disable=SC2034  # used inside the eval'd `assert` condition strings below (shellcheck can't see it)
 LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$CI" | head -1)"
 assert "LINE=\"SOLEUR_ZOT_DISK assignment found" "[ -n \"\$LINE_ASSIGN\" ]"
 for f in pcent= fs_size_gb= block_size_gb= resize_ok= zot_restarts= ping_rc= \
@@ -115,6 +116,7 @@ done
 # rescue it: an expansion error is not a command failure. Since this heartbeat's ABSENCE is
 # itself an alarm, that failure pages "host down" when only the probe broke. This shipped in
 # #6497's first draft and was caught at review — pin it so it cannot come back.
+# shellcheck disable=SC2034  # used inside the eval'd `assert` condition strings below (shellcheck can't see it)
 PROBE_BLOCK="$(awk '/_htp_verify\(\) \{/,/^      fi$/' "$CI")"
 assert "htpasswd probe block found" "[ -n \"\$PROBE_BLOCK\" ]"
 assert "probe never expands a token BARE (set -u would kill the whole heartbeat)" \

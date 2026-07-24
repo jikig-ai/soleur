@@ -92,7 +92,8 @@ locals {
   # new source is provisioned. NON-secret host routing (like disk_heartbeat_url) → baked into
   # user_data via templatefile; the token is the only secret and stays in the isolated Doppler
   # config. (#6895) The boot isolation self-check cardinality is now 4 — 2 ZOT tokens + this logs
-  # token + REGISTRY_LUKS_KEY (the guest-LUKS passphrase) — see the self-check at :741-746.
+  # token + REGISTRY_LUKS_KEY (the guest-LUKS passphrase) — see the boot isolation self-check
+  # (`n_admitted=…REGISTRY_LUKS_KEY…`, cardinality 4) in cloud-init-registry.yml.
   # keep in sync with vector.toml [sinks.betterstack].uri (same source 2457081 / eu-fsn-3 endpoint).
   betterstack_logs_ingest_url = "https://s2457081.eu-fsn-3.betterstackdata.com/"
 }
@@ -228,8 +229,9 @@ resource "doppler_secret" "zot_push_token_registry" {
 # root config the host already reads at boot (doppler_service_token.registry). Mirrors
 # doppler_secret.git_data_luks_key — no NEW service token is provisioned; the existing scoped
 # read token resolves it alongside the two ZOT tokens + the logs token. This is the FOURTH
-# secret in the isolated config, so the boot isolation self-check cardinality moves 3->4
-# (cloud-init-registry.yml :741-746, P1-A) and REGISTRY_LUKS_KEY is admitted BY NAME. It is a
+# secret in the isolated config, so the boot isolation self-check cardinality moves 3->4 (the
+# `n_admitted=…REGISTRY_LUKS_KEY…`, cardinality 4 self-check in cloud-init-registry.yml, P1-A) and
+# REGISTRY_LUKS_KEY is admitted BY NAME. It is a
 # registry-scoped secret, so the #6122 isolation property is preserved (no soleur/prd path).
 resource "doppler_secret" "registry_luks_key" {
   project    = doppler_project.registry.name

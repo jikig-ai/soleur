@@ -43,11 +43,13 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 # --- Predicates (each takes a file, echoes "1" if the property holds, else "0") ---
 
 # D1/B blkid TYPE discriminator: reads TYPE off the RAW device, has a crypto_LUKS reuse arm, and
-# an else->FATAL refuse arm (the plaintext-volume footgun). All three must be present.
+# an else->FATAL refuse arm (the plaintext-volume footgun). The refuse arm must not merely PRINT the
+# reason — it must HALT (`exit 1` co-located on the refuse line), else a wrong-TYPE device would log
+# and then fall through to luksOpen/mount. Require reason + `exit 1` on the SAME line.
 p_discriminator() {
   if grep -qE 'blkid -o value -s TYPE "\$DEV"' "$1" \
     && grep -qE 'crypto_LUKS\)' "$1" \
-    && grep -qF 'refusing-non-luks-device' "$1"; then echo 1; else echo 0; fi
+    && grep -qE 'refusing-non-luks-device.*exit 1' "$1"; then echo 1; else echo 0; fi
 }
 
 # Every luksFormat/luksOpen line pipes the key via `--key-file -` (stdin) AND carries NO
@@ -81,9 +83,12 @@ p_fstab_mapper() {
   if grep -Eq "echo '/dev/mapper/registry /var/lib/zot ext4 defaults,nofail 0 2' >> /etc/fstab" "$1"; then echo 1; else echo 0; fi
 }
 
-# Fail-loud on empty key (no unencrypted fallback).
+# Fail-loud on empty key (no unencrypted fallback). Asserting the guard EXISTS is not enough — the
+# `||` branch must actually HALT the mount block (`exit 1`), else an empty key would log and then
+# fall through to luksFormat/mount an unencrypted store. Scope to the mount-block guard by its
+# message ("refusing unencrypted registry mount") so it pins THAT line's exit 1, not any sibling.
 p_fail_loud() {
-  if grep -Eq '\[ -n "\$REGISTRY_LUKS_KEY" \]' "$1"; then echo 1; else echo 0; fi
+  if grep -Eq '\[ -n "\$REGISTRY_LUKS_KEY" \][[:space:]]*\|\|.*refusing unencrypted registry mount.*exit 1' "$1"; then echo 1; else echo 0; fi
 }
 
 # Key sourced from the Doppler-injected env, scoped to the isolated soleur-registry/prd config.
@@ -92,28 +97,42 @@ p_doppler_run() {
 }
 
 # The passphrase is generated (random_password) and pushed to Doppler — NEVER a literal in the .tf.
+# Assert the "no literal passphrase" half the comment claims: the doppler_secret's value is the
+# GENERATED result (random_password.registry_luks.result), not an inline string.
 p_tf_random() {
   if grep -Eq 'resource "random_password" "registry_luks"' "$1" \
-    && grep -Eq 'name[[:space:]]*=[[:space:]]*"REGISTRY_LUKS_KEY"' "$1"; then echo 1; else echo 0; fi
+    && grep -Eq 'name[[:space:]]*=[[:space:]]*"REGISTRY_LUKS_KEY"' "$1" \
+    && grep -Eq 'value[[:space:]]*=[[:space:]]*random_password\.registry_luks\.result' "$1"; then echo 1; else echo 0; fi
 }
 
-# D1/B: the registry volume is a RAW device — NO format="ext4" (guest luksFormats it).
+# D1/B: the registry volume is a RAW device — NO format="ext4" (guest luksFormats it). Scope the
+# negative to the hcloud_volume.registry block so an unrelated ext4 elsewhere in the .tf cannot
+# false-fail it, and so the block-local mutation (inserting format="ext4") genuinely flips it red.
 p_no_format_ext4() {
-  if ! grep -Eq 'format[[:space:]]*=[[:space:]]*"ext4"' "$1"; then echo 1; else echo 0; fi
+  local blk
+  blk="$(awk '/resource "hcloud_volume" "registry" \{/,/^}/' "$1")"
+  if ! grep -Eq 'format[[:space:]]*=[[:space:]]*"ext4"' <<<"$blk"; then echo 1; else echo 0; fi
 }
 
-# The attachment binds the real registry volume (linter attachment_binds_volume).
+# The attachment binds the real registry volume (linter attachment_binds_volume). Anchor at line
+# start so the `registry_volume_id = …` templatefile arg cannot satisfy this as a substring — only
+# the hcloud_volume_attachment's own `volume_id = …` key counts.
 p_attach_binds() {
-  if grep -Eq 'volume_id[[:space:]]*=[[:space:]]*hcloud_volume\.registry\.id' "$1"; then echo 1; else echo 0; fi
+  if grep -Eq '^[[:space:]]*volume_id[[:space:]]*=[[:space:]]*hcloud_volume\.registry\.id' "$1"; then echo 1; else echo 0; fi
 }
 
 # D2 (REQUIRED): boot-time luksOpen oneshot, ordered after network-online and BEFORE docker + cron
-# (the host self-reboots, so the mapper must reopen before the self-heal / zot launch).
+# (the host self-reboots, so the mapper must reopen before the self-heal / zot launch). Scope the
+# unit greps to the registry-luks-open.service write_files block (awk block-extract, mirroring
+# registry-boot-guard.test.sh) so `After=network-online.target` is asserted on THIS unit, not
+# satisfied file-globally by the sibling zot-liveness-heartbeat.service.
 p_d2_bootopen() {
-  if grep -qF 'Reopen the registry LUKS store mapper on boot' "$1" \
-    && grep -qF '/usr/local/bin/registry-luks-open.sh' "$1" \
-    && grep -qE 'After=network-online.target' "$1" \
-    && grep -qF 'Before=docker.service cron.service' "$1"; then echo 1; else echo 0; fi
+  local blk
+  blk="$(awk '/- path: \/etc\/systemd\/system\/registry-luks-open.service/,/owner: root:root/' "$1")"
+  if grep -qF 'Reopen the registry LUKS store mapper on boot' <<<"$blk" \
+    && grep -qF '/usr/local/bin/registry-luks-open.sh' <<<"$blk" \
+    && grep -qE 'After=network-online.target' <<<"$blk" \
+    && grep -qF 'Before=docker.service cron.service' <<<"$blk"; then echo 1; else echo 0; fi
 }
 
 # P1-A: the boot isolation self-check admits REGISTRY_LUKS_KEY AND its cardinality is 4 (was 3).
@@ -137,9 +156,24 @@ p_no_stale_byid_fstab() {
 }
 
 # The resize path targets the MAPPER, never the raw $DEV (a raw resize2fs hits the LUKS header).
+# Anchor on the EXECUTABLE form (`if resize2fs /dev/mapper/registry; then`) — the bare token also
+# appears in a narrative comment ("cryptsetup resize + resize2fs /dev/mapper/registry"), which the
+# old grep false-matched.
 p_resize_mapper() {
-  if grep -Eq 'resize2fs /dev/mapper/registry' "$1" \
+  if grep -Eq 'if resize2fs /dev/mapper/registry; then' "$1" \
     && ! grep -Eq 'resize2fs "\$DEV"' "$1"; then echo 1; else echo 0; fi
+}
+
+# FIX 1 (#6895 P1): the zot launch is GATED on the LUKS mount. The mount block and the zot launch
+# are separate runcmd entries and cloud-init continues past a failed one, so without this gate a
+# failed LUKS mount would still launch zot on an empty root-disk dir (401 → heartbeat green, no
+# alert). Assert the `findmnt … /dev/mapper/registry` gate exists AND precedes the `docker run … zot`
+# (line order), so fail-loud => zot never starts => liveness absence.
+p_zot_mount_gate() {
+  local f="$1" gate_ln run_ln
+  gate_ln="$(grep -nE 'findmnt -no SOURCE /var/lib/zot \| grep -qx /dev/mapper/registry' "$f" | head -1 | cut -d: -f1)"
+  run_ln="$(grep -nE 'docker run -d --name zot' "$f" | head -1 | cut -d: -f1)"
+  if [ -n "$gate_ln" ] && [ -n "$run_ln" ] && [ "$gate_ln" -lt "$run_ln" ]; then echo 1; else echo 0; fi
 }
 
 # --- Assertion + mutation harness ---
@@ -163,6 +197,10 @@ assert_mutation() {
 # A1: blkid TYPE discriminator (fresh/crypto_LUKS/else-FATAL).
 assert_holds    "A1 discriminator" p_discriminator "$CLOUD_INIT"
 assert_mutation "A1 discriminator" p_discriminator "$CLOUD_INIT" 's/crypto_LUKS\)/NOTLUKS)/'
+# A1b: strip the `; exit 1` HALT from the refuse (`*)`) arm — the reason still prints but the arm no
+# longer halts. The tightened predicate (reason + exit 1 co-located) must flip RED.
+assert_mutation "A1b discriminator-refuse-halts" p_discriminator "$CLOUD_INIT" \
+  's/(refusing-non-luks-device.*); exit 1/\1/'
 
 # A2: key via --key-file - stdin, never argv.
 assert_holds    "A2 key-file-stdin" p_keyfile_stdin "$CLOUD_INIT"
@@ -184,6 +222,10 @@ assert_mutation "A5 fstab-mapper" p_fstab_mapper "$CLOUD_INIT" 's#/dev/mapper/re
 # A6: fail-loud on empty key.
 assert_holds    "A6 fail-loud" p_fail_loud "$CLOUD_INIT"
 assert_mutation "A6 fail-loud" p_fail_loud "$CLOUD_INIT" 's/\[ -n "\$REGISTRY_LUKS_KEY" \]/true/g'
+# A6b: flip the mount-block empty-key guard's halt `exit 1` -> `exit 0` — the guard still runs but no
+# longer refuses. The tightened predicate (guard || … exit 1) must flip RED.
+assert_mutation "A6b fail-loud-halts" p_fail_loud "$CLOUD_INIT" \
+  's/(refusing unencrypted registry mount.*)exit 1/\1exit 0/'
 
 # A7: doppler run (scoped soleur-registry/prd) wraps the setup.
 assert_holds    "A7 doppler-run" p_doppler_run "$CLOUD_INIT"
@@ -223,10 +265,16 @@ assert_mutation "A14 no-stale-byid-fstab" p_no_stale_byid_fstab "$CLOUD_INIT" 's
 assert_holds    "A15 resize-mapper" p_resize_mapper "$CLOUD_INIT"
 assert_mutation "A15 resize-mapper" p_resize_mapper "$CLOUD_INIT" 's#resize2fs /dev/mapper/registry#resize2fs "$DEV"#g'
 
+# A16 (FIX 1 / #6895 P1): the zot launch is gated on the LUKS mount (findmnt gate BEFORE docker run).
+assert_holds    "A16 zot-mount-gate" p_zot_mount_gate "$CLOUD_INIT"
+# Mutation: delete the findmnt mount-gate line -> zot would launch on an unmounted (empty) store.
+assert_mutation "A16 zot-mount-gate" p_zot_mount_gate "$CLOUD_INIT" '/findmnt -no SOURCE \/var\/lib\/zot \| grep -qx \/dev\/mapper\/registry/d'
+
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
+# Floor = 34: 16 assert_holds + 18 assert_mutation (A1 and A6 each carry 2 mutations; A16 added).
 total=$((passes + fails))
-if [ "$total" -lt 30 ]; then
-  echo "FAIL: ran only ${total} assertions (<30) — suite did not execute fully" >&2
+if [ "$total" -lt 34 ]; then
+  echo "FAIL: ran only ${total} assertions (<34) — suite did not execute fully" >&2
   exit 1
 fi
 

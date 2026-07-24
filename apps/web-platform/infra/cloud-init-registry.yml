@@ -433,7 +433,12 @@ write_files:
         mountpoint -q /var/lib/zot || mount /dev/mapper/registry /var/lib/zot || true
         exit 0
       fi
-      [ -b "$DEV" ] || { echo "[zot] registry-luks-open: $DEV absent — cannot open mapper" >&2; exit 0; }
+      # Device-wait: on a reboot the volume node can reattach AFTER this oneshot fires — mirror the
+      # provision block's own wait (~30 x 2s) so a slow reattach is not misread as a genuinely-absent
+      # device. If the device is still absent after the wait, no-op (exit 0) like the provision block's
+      # device-absent path: fresh-provision formatting is the mount block's job, not this reopen path.
+      for i in $(seq 1 30); do [ -b "$DEV" ] && break; sleep 2; done
+      [ -b "$DEV" ] || { echo "[zot] registry-luks-open: $DEV absent after 60s wait — cannot open mapper" >&2; exit 0; }
       # Only reopen a device that is actually LUKS. First-provision (blkid TYPE empty) is the LUKS
       # mount block's job (it luksFormats), not this reopen path — refuse anything not crypto_LUKS.
       BLKTYPE=$(blkid -o value -s TYPE "$DEV" 2>/dev/null || true)
@@ -559,6 +564,12 @@ write_files:
       if mountpoint -q /var/lib/zot 2>/dev/null; then
         ZOT_STORE_MOUNTED=true
       else
+        # #6895 D2: the store is /dev/mapper/registry, and a reboot (incl. THIS guard's own self-
+        # reboot) leaves the mapper CLOSED — so `mount -a` on the nofail fstab line would fail with
+        # nothing to remount. Re-open it FIRST (idempotent: registry-luks-open.sh no-ops if the
+        # mapper is already open), so the 5-min cron self-heals a closed mapper instead of waiting
+        # for the next reboot's registry-luks-open.service.
+        /usr/local/bin/registry-luks-open.sh >/dev/null 2>&1 || true
         mount -a >/dev/null 2>&1 || true
         if mountpoint -q /var/lib/zot 2>/dev/null; then
           # The mount landed — but zot is STILL bound to the old (empty) dir: bind mounts are
@@ -758,7 +769,7 @@ runcmd:
     doppler run --project soleur-registry --config prd -- bash -s <<'REGLUKSEOF'
     set -uo pipefail
     DEV=/dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id}
-    [ -n "$REGISTRY_LUKS_KEY" ] || { echo "[zot] FATAL: REGISTRY_LUKS_KEY empty — refusing unencrypted registry mount"; exit 1; }
+    [ -n "$REGISTRY_LUKS_KEY" ] || { echo "[zot] FATAL: REGISTRY_LUKS_KEY empty — refusing unencrypted registry mount" >&2; exit 1; }
     # Device-wait: the volume attach can land AFTER cloud-init's disk stage (~30 x 2s).
     for i in $(seq 1 30); do [ -b "$DEV" ] && break; sleep 2; done
     RESIZE_OK=false; BLK_GB=0; DF_BEFORE=0; DF_AFTER=0
@@ -861,6 +872,13 @@ runcmd:
     # Node zombie-reaping idiom buys nothing here. Env-overridable const (mirrors PROD_MEMORY_CAP);
     # the template-derived value is the default, so an operator override still wins for a one-off.
     ZOT_MEMORY_CAP="$${ZOT_MEMORY_CAP:-${zot_memory_cap_mb}m}"
+    # #6895 P1: GATE the launch on the LUKS mount. The LUKS mount block and this zot launch are
+    # SEPARATE runcmd entries and cloud-init continues past a failed entry — so on ANY LUKS failure
+    # (empty key, wrong-TYPE FATAL refuse, closed mapper) /var/lib/zot would stay an empty root-disk
+    # dir and zot would serve an empty/unencrypted store that answers 401, keeping the liveness
+    # heartbeat GREEN with no alert. Refuse unless /var/lib/zot is backed by /dev/mapper/registry:
+    # fail-loud here => zot never starts => the liveness-absence alarm fires (git-data's precedent).
+    findmnt -no SOURCE /var/lib/zot | grep -qx /dev/mapper/registry || { echo "[zot] FATAL: /var/lib/zot not backed by /dev/mapper/registry — refusing to serve an empty/unencrypted store" >&2; exit 1; }
     docker run -d --name zot --restart unless-stopped \
       --log-driver journald \
       --memory "$ZOT_MEMORY_CAP" --memory-swap "$ZOT_MEMORY_CAP" \
