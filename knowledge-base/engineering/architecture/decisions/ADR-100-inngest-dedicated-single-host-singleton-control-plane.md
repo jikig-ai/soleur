@@ -404,13 +404,28 @@ project + host-local Redis).
   a sensitive no-default `var.betterstack_logs_token` from `prd_terraform`, so only the one 24-char
   token enters shared tfstate, NOT the full `soleur/prd` map). The boot isolation self-check
   (`cloud-init-inngest.yml`) now admits `BETTERSTACK_LOGS_TOKEN` as a TOP-LEVEL allowlist member
-  (dark-boot secret count 4→5, live 5→6); its admission criterion is "names this host's runtime
+  (dark-boot secret count 4→5, live 5→6; live is now 7 — see below); its admission criterion is "names this host's runtime
   consumes" (not `INNGEST_`-prefixed). During the dark window the host still does not push the prod
   heartbeat (out-of-band `INNGEST_HEARTBEAT_URL` set only at cutover, to avoid dual-pusher masking of
   the still-serving co-located scheduler — review #6180), so a DARK, inert host that boot-bricks or
   errors is surfaced at the Phase-2 pre-flight registry-empty check + the in-surface bootstrap-stderr
   lines (deploy-status endpoint), not by continuous monitoring. The shipper is wired ahead of the
   Phase-2 cutover (when this becomes the live scheduler) — the alignment claim above holds from cutover.
+- **Amendment (#6178, 2026-07-23) — the allowlist must admit the CONTROL-PLANE names too, and the
+  boot-brick is NOT loud.** `op=arm` writes `INNGEST_CUTOVER_FLIP` into this same isolated project,
+  so the live count is **7**, not 6 (`INNGEST_CONFIG_DIGEST` makes 8 once `inngest-config-digest.tf`
+  applies). The regex omitted `CUTOVER_FLIP`, so from the moment the cutover was armed every
+  re-provision FATALed the exact-set check — no Vector, no inngest-server, no flip timer. The flip
+  could therefore never run, and because Vector is installed BY the bootstrap the check gates, the
+  failure shipped nothing off-box: it was silent for hours until the `SOLEUR_INNGEST_BOOT_STAGE`
+  phone-home (#6702, curl-direct and Vector-independent) named `isolation-check-FAILED`.
+  Two consequences worth recording against the #6197 reasoning above: (a) "a loud boot-brick beats a
+  silent observability blind spot" does not hold as stated — here the boot-brick *was* the blind spot,
+  because the shipper is downstream of the gate; (b) an exact-set allowlist makes the *safe* operation
+  (adding a legitimate secret) fail closed, and that is precisely what the control plane does at
+  runtime. Follow-ups filed: alarm on `SOLEUR_INNGEST_BOOT_STAGE`; derive the allowlist from the
+  declared writers instead of hand-maintaining it; consider moving FSM/control state out of the
+  secret project entirely.
 - **Apply-path constraint (recorded #6197):** the additive-only `apply_target=inngest-host` dispatch
   CANNOT force-replace the host (its destroy-guard aborts on any delete), so a cloud-init/bootstrap
   change that force-replaces `hcloud_server.inngest` rides a NEW scoped `apply_target=inngest-host-replace`
