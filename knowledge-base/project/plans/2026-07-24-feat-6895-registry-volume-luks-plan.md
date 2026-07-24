@@ -15,6 +15,38 @@ milestone: "Phase 4: Validate + Scale"
 
 > Spec lacks a `lane:` (no `spec.md` for this branch) — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-24. **Agents:** architecture-strategist, code-simplicity-reviewer,
+mechanical verify-the-negative pass. **10/10 load-bearing claims verified against real code**
+(git-data `format=ext4` vs workspaces raw; linter chain resolvable via `zot-registry.tf` co-location;
+existing `doppler_service_token.registry` reads `soleur-registry/prd`; drift detector plan-only;
+`workspaces_luks` is the sole `live_verification: available` row).
+
+### Key improvements folded in from review
+1. **P1-A (P0-at-recut) — boot isolation self-check.** `cloud-init-registry.yml:741-746` FATALs
+   unless the boot token resolves **exactly 3** secrets; `REGISTRY_LUKS_KEY` makes 4 → zot never
+   launches. Added an explicit `3→4` widen step + AC + mutation test.
+2. **P1-B (P0-at-recut) — cloud-init ordering.** The registry installs Doppler + writes the token
+   env-file *after* the mount block; a `doppler run` LUKS block would have neither. Added a required
+   reorder step.
+3. **D2 promoted RECOMMENDED→REQUIRED.** Resolved a reviewer split: the host self-`reboot`s via the
+   NIC guard (`:610`), so a boot-time luksOpen is load-bearing (without it, LUKS ships a known
+   dark-after-reboot regression). Simplicity's "defer D2" premise was falsified by code.
+4. **Stale by-id fstab line must be deleted** (else reboot double-mount / raw-mount vs `crypto_LUKS`).
+5. **D1 rationale re-framed** — from "data loss" to "don't silently touch a volume the
+   `registry-host-replace` preserve-path deliberately keeps"; Option A noted as a leaner valid choice.
+6. **D4 — recommend the guarded `registry-luks-recut` dispatch** + flag the "wrong-dispatch
+   (`registry-host-replace`) = FATAL" footgun (PR body + ADR-096); floor = tracking issue.
+7. **ADR-096 amendment now REQUIRED** (captures the recut vehicle + footgun the ledger row can't).
+8. Added `## Downtime & Cutover` (zero-downtime-first evaluation), exclusion-parity-test +
+   drift-dedup verifications.
+
+### Open decision for plan-review/CTO
+Whether the guarded `registry-luks-recut` dispatch lands **in this PR** (unfired, code-only) or an
+immediate follow-up — the task scopes the PR to "cloud-init + terraform + ledger", but the footgun
+argues for including it. Floor holds either way (tracking issue + PR-body hazard flag).
+
 ## Overview
 
 `hcloud_volume.registry` (`apps/web-platform/infra/zot-registry.tf:407`, `format = "ext4"`) is
@@ -114,41 +146,66 @@ per preflight Check 6. No CPO sign-off required at `none`.)
   disposable mirror, but silent.
 - **Option B (workspaces parity — RECOMMENDED):** remove `format` (raw volume) and use the `blkid
   -o value -s TYPE` discriminator: `""` → `luksFormat`; `crypto_LUKS` → `luksOpen` (no-op format);
-  **any other TYPE (e.g. `ext4`) → FATAL, refuse to touch.** Fail-loud instead of silent-wipe if
-  the apparatus is ever pointed at the old populated plaintext volume (e.g. an accidental
-  `registry-host-replace`, which *preserves* the volume, run before the recut). ADR-140-aligned
-  (the plaintext/LUKS sibling-namespace hazard is the exact false-green this whole feature exists
-  to prevent). Cost: a ForceNew diff on the volume — but drift is plan-only and the resource is
-  operator-excluded, so **no live mutation on merge**; the gated recut provides a fresh raw volume
-  regardless. **Recommend Option B.** (Note: the host `user_data` change already forces a
-  host-replace diff regardless of D1, so D1 does not change the "drift until the operator applies"
-  reality — only the safety guard.)
+  **any other TYPE (e.g. `ext4`) → FATAL, refuse to touch.** **Rationale (re-framed per
+  architecture review — the "data loss" framing overstated it):** both options are
+  *security-equivalent* (neither ever mounts plaintext, so neither can produce a false-green). The
+  real, registry-specific distinguisher is that — unlike git-data — the registry has a
+  `registry-host-replace` dispatch (`zot-registry.tf:23-29`) that `-replace`s the host while
+  **PRESERVING the (plaintext) volume**. Option B means an accidental `registry-host-replace` run
+  before the recut **fails loud and refuses** rather than silently `luksFormat`-wiping a volume the
+  preserve-path was explicitly designed to keep — the operator stays in control of the
+  plaintext→luks transition. Cost is tiny (a few lines + one FATAL arm + one test). Cost of the
+  ForceNew diff: none live — drift is plan-only and the resource is operator-excluded, so **no live
+  mutation on merge**; the gated recut provides a fresh raw volume regardless. **Recommend Option B**
+  — but **Option A (`format=ext4`+`isLuks`) is a leaner, also-valid choice** (on a disposable mirror
+  a silent wipe self-heals to an *encrypted* volume, the desired end state); the resize + raw-device
+  rework in Phase 2 is required under BOTH options, so A saves less than it first appears. (Note: the
+  host `user_data` change already forces a host-replace diff regardless of D1, so D1 does not change
+  the "drift until applied" reality — only the safety guard.)
 
-### D2 — Reboot survivability (RECOMMENDED: add a boot-time idempotent luksOpen)
-Unlike git-data (never rebooted, only replaced), the registry host has an **existing reboot
-self-heal** (`cloud-init-registry.yml:484-506`) that runs `mount -a` + `docker restart zot`.
-With LUKS, fstab points at `/dev/mapper/registry`, which is **closed after a reboot** (no
-`/etc/crypttab`, matching git-data) — so `mount -a` fails and zot stays dark until re-provision.
-**Recommend** a lean idempotent boot-time luksOpen (a `bootcmd`/systemd-oneshot ordered before the
-self-heal / zot start) that reads `REGISTRY_LUKS_KEY` via the existing scoped
-`doppler_service_token.registry` and opens the mapper — so a routine reboot remounts cleanly. This
-is the one place the registry apparatus should exceed bare git-data parity, because the registry
-host's self-heal assumes the mount returns. If judged out-of-scope, defer with a tracking issue
-(re-eval: "does a registry-host reboot recur outside a full re-provision?").
+### D2 — Reboot survivability (REQUIRED — a boot-time idempotent luksOpen)
+**Elevated from "recommended, defer-able" to REQUIRED by architecture review, on decisive code
+evidence.** `runcmd` is per-instance and does NOT re-run on reboot (`cloud-init-registry.yml:486-488`),
+so after a reboot the mapper stays **closed**; fstab points at `/dev/mapper/registry`; the reboot
+self-heal's `mount -a` (`:496`) fails; zot binds an empty dir and 404s. **Critically, this host
+reboots ITSELF:** the private-NIC guard calls `reboot` as a convergence primitive
+(`cloud-init-registry.yml:610`). So the re-eval question ("does a registry reboot recur outside a
+full re-provision?") has a definite answer — **yes, by design** — which means shipping LUKS without
+D2 ships a *known* dark-after-reboot regression triggered by normal NIC convergence, not a rare
+event. **A reviewer disagreement is resolved here:** the simplicity reviewer recommended deferring
+D2 on the premise that reboot recurrence was unproven; the architecture reviewer falsified that
+premise with `:610`. D2 stays in scope.
+
+**Implementation:** a lean idempotent boot-time luksOpen — a `bootcmd`/systemd-oneshot ordered
+**after** `network-online` (Doppler egress) and before the self-heal / zot start — that reads
+`REGISTRY_LUKS_KEY` via the existing scoped `doppler_service_token.registry` (from the persisted
+`/etc/default/registry-doppler`, which survives reboot on the root disk) and luksOpens the mapper if
+closed. **Reject `/etc/crypttab`-with-keyfile** (it would write the passphrase in cleartext on the
+host disk, defeating the "key lives only in Doppler" custody property).
 
 ### D3 — No escrow, no separate at-rest monitor (RECOMMENDED, matches git-data)
 git-data has neither; the registry is disposable, so neither is warranted. Confirmed.
 
-### D4 — Recut vehicle for the operator step (OUTSIDE this PR)
-The sanctioned operator apply is a scoped `terraform apply -replace` of the volume + attachment +
-host (fresh raw volume ⇒ cloud-init luksFormats it ⇒ zot re-fills from GHCR). Two vehicles exist
-or could: (i) the operator's untargeted full apply / a local `-replace` (already the sanctioned
-`OPERATOR_APPLIED_EXCLUSION` path per `zot-registry.tf:15`); (ii) a lean, destroy-guarded,
-typed-confirm `registry-luks-recut` `workflow_dispatch` target mirroring the existing
-`registry-region-migrate` / `workspaces-luks-recut` guards. **This PR does NOT add or fire (ii)** —
-it is documented as the recommended operator vehicle and deferred to the gated step (file a
-follow-up if a dispatch target is wanted). Keeps the PR to "cloud-init + terraform + ledger" per
-the task scope.
+### D4 — Recut vehicle for the operator step (OUTSIDE this PR) — RECOMMEND the guarded dispatch
+The re-encryption apply is a scoped `terraform apply -replace` of the volume + attachment + host
+(fresh raw volume ⇒ cloud-init luksFormats it ⇒ zot re-fills from GHCR). **Architecture review adds
+a load-bearing footgun the plan must not leave to the operator:** the operator must **NOT** use the
+existing `registry-host-replace` dispatch — it *preserves* the volume, so with Option B it boots the
+still-plaintext ext4 volume straight into the FATAL refuse arm (registry darks). The *only* correct
+apply `-replace`s volume + attachment + host **together**; forgetting the volume darks the registry.
+That is exactly the kind of manual, error-prone step Soleur's non-technical-operator principle
+(`feedback_never_defer_operator_actions`) says to encode, not defer.
+- **(ii) RECOMMENDED:** a lean, destroy-guarded, typed-confirm `registry-luks-recut`
+  `workflow_dispatch` target mirroring the existing `registry-region-migrate` / `workspaces-luks-recut`
+  guards, which `-replace`s the three resources atomically. Adding the job is code-only (unfired → no
+  live mutation); firing it is the gated step OUTSIDE this PR. **Scope call for plan-review/CTO:**
+  include the guarded dispatch in THIS PR (it removes the footgun and is unfired) vs. an immediate
+  follow-up PR. **Floor (required regardless):** file the D4(ii) tracking issue with re-eval criteria
+  + milestone, and flag the **"wrong-dispatch (`registry-host-replace`) = FATAL"** hazard prominently
+  in the PR body **and** the ADR-096 amendment. Do NOT leave the operator a bare `-replace` recipe as
+  the only path.
+- **(i) fallback:** the sanctioned `OPERATOR_APPLIED_EXCLUSION` `-replace` path (`zot-registry.tf:15`)
+  remains valid, but only with all three resources targeted together (the footgun above).
 
 ## Implementation Phases
 
@@ -187,11 +244,20 @@ attachment from its secret pair). Add:
    which satisfies `attachment_binds_volume`).
 
 ### Phase 2 — Guest cryptsetup in `cloud-init-registry.yml`
+> **P1-B (ordering — load-bearing, from architecture review):** the registry cloud-init currently
+> installs the Doppler CLI (`~695-702`) and writes the token env-file `/etc/default/registry-doppler`
+> (`~710-711`) **AFTER** the mount block (`656-687`). git-data does the reverse (Doppler at `~126-140`,
+> BEFORE its LUKS block `~151-171`). A `doppler run` LUKS block dropped in at `~657` would have
+> **neither the CLI nor the token yet** and fail on first boot. **Fix:** move the Doppler CLI install
+> + env-file write ahead of the LUKS mount block (or relocate the LUKS block to after `:711`). This
+> reorder is a REQUIRED part of Phase 2, not optional.
+
 1. `packages:` — add `cryptsetup` (keep `e2fsprogs`).
-2. Pass `REGISTRY_LUKS_KEY` to the guest via the EXISTING scoped Doppler path (the host already
-   writes a 0600 root env file with `doppler_service_token.registry.key` and runs `doppler run` at
-   boot). Read the key with `doppler run --project soleur-registry --config prd -- ...` (or
-   `doppler secrets get REGISTRY_LUKS_KEY --plain`), never argv, never baked into `user_data`.
+2. **Reorder (P1-B):** ensure the Doppler CLI install + `/etc/default/registry-doppler` write precede
+   the LUKS mount block. Then pass `REGISTRY_LUKS_KEY` to the guest via that EXISTING scoped Doppler
+   path (0600 root env file with `doppler_service_token.registry.key` + `doppler run` at boot). Read
+   the key with `doppler run --project soleur-registry --config prd -- ...` (or `doppler secrets get
+   REGISTRY_LUKS_KEY --plain`), never argv, never baked into `user_data`.
 3. Replace the plaintext mount runcmd (`656-687`) with the git-data-shaped block, keyed off
    `DEV=/dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id}`:
    - Fail-loud: `[ -n "$REGISTRY_LUKS_KEY" ] || { echo "FATAL ... refusing unencrypted mount"; exit 1; }`
@@ -202,16 +268,30 @@ attachment from its secret pair). Add:
    - `blkid /dev/mapper/registry >/dev/null 2>&1 || mkfs.ext4 -q /dev/mapper/registry`
    - `mountpoint -q /var/lib/zot || mount /dev/mapper/registry /var/lib/zot`
    - fstab: `/dev/mapper/registry /var/lib/zot ext4 defaults,nofail 0 2` (append-if-absent; no crypttab).
+   - **DELETE the stale by-id fstab line (`:687`)** `/dev/disk/by-id/scsi-0HC_Volume_${registry_volume_id}
+     /var/lib/zot ext4 ...` when adding the mapper line. Leaving it causes a reboot double-mount of
+     `/var/lib/zot` and a raw-ext4 mount attempt against a now-`crypto_LUKS` device (fails). Hard
+     requirement (architecture review; adjacent to SE5).
    - **resize path (`642-682`):** `resize2fs` must target `/dev/mapper/registry` (and `cryptsetup
      resize registry` first if the underlying volume grew) — NOT the raw `$DEV`. Update the
      `.resize-result` record accordingly.
    - **raw-device invariant (`664`, `lsblk TYPE ... part`)**: rework — the LUKS device presents
      `crypto_LUKS`, the mapper presents `ext4`; the no-partition assert moves to `$DEV` being
      `crypto_LUKS` (or empty pre-format), not `ext4`-on-raw.
-4. **D2 boot-time luksOpen:** add an idempotent boot step (bootcmd/oneshot) ordered before the
-   self-heal (`484-506`) that reads `REGISTRY_LUKS_KEY` (scoped doppler) and luksOpens the mapper if
+4. **D2 boot-time luksOpen (REQUIRED):** add an idempotent boot step (bootcmd/oneshot) ordered
+   **after** `network-online` and **before** the self-heal (`484-506`) that reads `REGISTRY_LUKS_KEY`
+   (scoped doppler, from persisted `/etc/default/registry-doppler`) and luksOpens the mapper if
    closed, so `mount -a`/`docker restart zot` on reboot remounts `/dev/mapper/registry`. Keep the
-   self-heal's `mountpoint -q /var/lib/zot` short-circuit.
+   self-heal's `mountpoint -q /var/lib/zot` short-circuit. Load-bearing because the NIC guard
+   self-`reboot`s the host (`cloud-init-registry.yml:610`) — see D2.
+5. **P1-A — widen the boot isolation self-check (REQUIRED, from architecture review).** The fail-closed
+   isolation self-check at `cloud-init-registry.yml:741-746` asserts the boot token resolves **exactly
+   three** secrets (`^(ZOT_(PULL|PUSH)_TOKEN|BETTERSTACK_LOGS_TOKEN)$`, `n_total -ne 3` → FATAL). Adding
+   `REGISTRY_LUKS_KEY` to `soleur-registry/prd` makes it **4** → the guard FATALs and **zot never
+   launches** on the recut boot. Edit: bump `-ne 3` → `-ne 4`, extend the admitted-names regex to
+   include `REGISTRY_LUKS_KEY`, and fix the "THREE admitted" / "a 2-secret config now FATALs" comments
+   at `:730,:740`. This is the enforcement mechanism, not the #6122 isolation property (which is
+   preserved — `REGISTRY_LUKS_KEY` is a registry-scoped secret). Mutation-tested in Phase 3.
 
 ### Phase 3 — Mutation-tested guard suite `registry-luks.test.sh`
 Mirror `git-data-luks.test.sh` (each assertion paired with a mutation that must flip it to RED;
@@ -225,7 +305,11 @@ Assertions:
 - doppler read (scoped `soleur-registry`/`prd`) wraps the setup.
 - TF: `resource "random_password" "registry_luks"` + `name = "REGISTRY_LUKS_KEY"` present;
   `hcloud_volume.registry` has **no** `format = "ext4"` (D1/B); attachment binds `hcloud_volume.registry.id`.
-- (if D2) boot-time luksOpen present & ordered before the self-heal.
+- **D2 (unconditional):** boot-time luksOpen present & ordered before the reboot self-heal.
+- **P1-A:** the isolation self-check admits `REGISTRY_LUKS_KEY` and the cardinality is `4` (mutation:
+  delete `REGISTRY_LUKS_KEY` from the admitted set, or leave the count at `3`, ⇒ RED).
+- **P1-B:** the Doppler CLI install + `/etc/default/registry-doppler` write precede the LUKS mount block.
+- the stale by-id fstab line for `/var/lib/zot` is **absent** (only `/dev/mapper/registry` remains).
 - resize path targets `/dev/mapper/registry`, not the raw `$DEV`.
 
 ### Phase 4 — Ledger flip (`scripts/encryption-posture-ledger.json`, the `hcloud_volume.registry` row)
@@ -253,6 +337,14 @@ Verify `python3 scripts/lint-encryption-posture.py --repo-sweep` resolves the ch
   `cloud-init-ghcr-seed-login.test.sh` (grep them for hard-coded `mount $DEV /var/lib/zot` / raw-device
   assumptions that the LUKS change breaks; update in-scope if the change falsifies them).
 - `git grep -n 'format *= *"ext4"' apps/web-platform/infra/zot-registry.tf` → **no hit** (D1/B).
+- **Exclusion parity test (architecture Q5):** `zot-registry.tf:16` references an
+  `OPERATOR_APPLIED_EXCLUSION` parity test. Determine whether it *enumerates* expected-excluded
+  resources; if so, register the two NEW resources (`random_password.registry_luks`,
+  `doppler_secret.registry_luks_key`) so the parity guard does not FAIL CI. Grep
+  `apps/web-platform/infra/*parity*.test.sh` + the workflow `-target=` allow-list.
+- **Drift-issue dedup:** confirm `scheduled-terraform-drift.yml` dedups (refreshes one advisory issue)
+  rather than filing a fresh issue every 12h for the perpetual pending-replace (workspaces_luks
+  additive-resource precedent suggests it tolerates this — confirm).
 
 ## Acceptance Criteria
 
@@ -261,8 +353,11 @@ Verify `python3 scripts/lint-encryption-posture.py --repo-sweep` resolves the ch
 - [ ] `zot-registry.tf` declares `random_password.registry_luks` (length 40, special=false) and `doppler_secret.registry_luks_key` (`project = "soleur-registry"`, `name = "REGISTRY_LUKS_KEY"`), co-located with `hcloud_volume_attachment.registry`.
 - [ ] `hcloud_server.registry.depends_on` includes `doppler_secret.registry_luks_key`; `registry_luks` is **absent** from `lifecycle.replace_triggered_by`.
 - [ ] `cloud-init-registry.yml` `packages:` includes `cryptsetup`; the mount runcmd does `cryptsetup luksFormat --type luks2 --key-file -` + `luksOpen --key-file - "$DEV" registry` + `mount /dev/mapper/registry /var/lib/zot`; the key is piped from `printf '%s' "$REGISTRY_LUKS_KEY"` (stdin) and never appears as a bare argv token; fail-loud empty-key guard present; else-TYPE→FATAL refuse arm present.
-- [ ] fstab line `/dev/mapper/registry /var/lib/zot ext4 defaults,nofail 0 2` present; resize path targets `/dev/mapper/registry`.
-- [ ] (D2, if adopted) an idempotent boot-time luksOpen is ordered before the reboot self-heal.
+- [ ] fstab line `/dev/mapper/registry /var/lib/zot ext4 defaults,nofail 0 2` present; the **stale by-id fstab line** for `/var/lib/zot` is **removed** (P1); resize path targets `/dev/mapper/registry`.
+- [ ] **(D2, REQUIRED)** an idempotent boot-time luksOpen is ordered after `network-online` and before the reboot self-heal (host self-`reboot`s via NIC guard `cloud-init-registry.yml:610`).
+- [ ] **(P1-A)** the boot isolation self-check (`cloud-init-registry.yml:741-746`) admits `REGISTRY_LUKS_KEY` and its cardinality is `4` (was `3`); the "THREE admitted" comments are updated. Mutation: count left at `3` ⇒ RED.
+- [ ] **(P1-B)** the Doppler CLI install + `/etc/default/registry-doppler` write precede the LUKS mount block in `cloud-init-registry.yml`.
+- [ ] **(architecture Q5)** the `OPERATOR_APPLIED_EXCLUSION` parity test (if resource-enumerated) registers `random_password.registry_luks` + `doppler_secret.registry_luks_key`; the parity/exclusion suites are green.
 - [ ] `registry-luks.test.sh` passes, meets its mutation-cardinality floor, and every assertion has a paired mutation proven to flip it RED.
 - [ ] Ledger row `hcloud_volume.registry`: `at_rest.mechanism == "luks"`, **no `exception` key**, `device_binding.mapper == "registry"`, `does_not_defend` non-empty (≥8 chars), `live_verification` matches `^(available|unavailable:.+)$`.
 - [ ] `python3 scripts/lint-encryption-posture.py --repo-sweep` exits 0 (device-binding chain resolves to real code; positive-work floor + `live_coverage_floor: 1` still satisfied).
@@ -271,7 +366,8 @@ Verify `python3 scripts/lint-encryption-posture.py --repo-sweep` resolves the ch
 - [ ] PR body uses `Closes #6895` (title uses no `#`); references #6893/#6588 as `Ref` only.
 
 ### Post-merge (operator, OUTSIDE this PR — the gated re-encryption)
-- [ ] `Automation: sanctioned OPERATOR_APPLIED_EXCLUSION apply path` (per `zot-registry.tf:15` CTO ruling). The operator runs a scoped `terraform apply -replace='hcloud_volume.registry' -replace='hcloud_volume_attachment.registry' -replace='hcloud_server.registry'` (fresh raw volume ⇒ cloud-init luksFormats ⇒ zot re-fills from GHCR), OR a `registry-luks-recut` dispatch if D4(ii) is later added. Not `Closes`-linked (the fix runs post-merge). Blast radius near-zero (disposable mirror; brief cold-pull gap while it re-fills).
+- [ ] `Automation: sanctioned OPERATOR_APPLIED_EXCLUSION apply path` (per `zot-registry.tf:15` CTO ruling). The gated apply is a scoped `terraform apply -replace='hcloud_volume.registry' -replace='hcloud_volume_attachment.registry' -replace='hcloud_server.registry'` (fresh raw volume ⇒ cloud-init luksFormats ⇒ zot re-fills from GHCR) — **all three `-replace` together** — preferably via the recommended guarded `registry-luks-recut` dispatch (D4(ii)). Not `Closes`-linked. Blast radius near-zero (disposable mirror; brief cold-pull gap).
+- [ ] **FOOTGUN (must be in PR body + ADR-096 amendment):** do **NOT** use the existing `registry-host-replace` dispatch for the recut — it *preserves* the plaintext volume, so with D1/B it boots into the FATAL refuse arm and darks the registry. Forgetting the `-replace` on the volume has the same effect.
 - [ ] After the recut: zot liveness + disk heartbeats green; `web-zot-consumer-probe` green; the volume's device is `/dev/mapper/registry` (LUKS-backed).
 
 ## Infrastructure (IaC)
@@ -363,10 +459,15 @@ volume; the **ledger row flip IS the recorded decision**. No new cross-cutting i
 or trust boundary is introduced.
 
 ### ADR
-- **No new ADR.** Recommend a lean **amendment to ADR-096** (the zot-registry ADR) recording: the
-  registry store volume flips plaintext->guest-side-LUKS; the recut (D4) is the sanctioned
-  re-encryption vehicle; escrow is intentionally omitted (disposable). deepen-plan/CTO to confirm
-  whether the amendment is warranted or the ledger row + this plan suffice.
+- **No new ADR; a lean ADR-096 amendment is REQUIRED (not optional).** Deepen-plan resolved a
+  reviewer split here: the simplicity reviewer wanted to drop the amendment to a pointer (the ledger
+  row is the record); the architecture reviewer showed the ledger row alone does **not** capture two
+  operator-facing facts that need a decision record per `wg-architecture-decision-is-a-plan-deliverable` —
+  (a) the D4 recut vehicle (`registry-luks-recut` / three-`-replace` apply), and (b) the
+  **"wrong-dispatch (`registry-host-replace`) = FATAL" footgun** (D4). The architecture position wins:
+  land a lean amendment to ADR-096 recording the plaintext→guest-LUKS flip, the recut vehicle, the
+  footgun, and the deliberate escrow omission (disposable). Keep it short; do NOT gate PR-ready on
+  prose length, but the amendment itself is in-scope for this PR.
 
 ### C4 views
 - **Reviewer MUST read all three model files** (`knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}`)
@@ -385,6 +486,39 @@ The ledger row's `mechanism: luks` describes the **target** state; it becomes *l
 operator recut. Because Layer A resolves the row against the **apparatus code** (not live state),
 the row PASSES the sweep the moment the apparatus lands — no `status: adopting` sequencing gap for
 the ledger. Live truth is Layer B's job (deferred, ADR-141).
+
+## Downtime & Cutover
+
+<!-- iac-routing-ack: plan-phase-2-8-reviewed -->
+
+**Offline-inducing operation:** the gated re-encryption (D4, OUTSIDE this PR) is a
+`terraform apply -replace` of `hcloud_volume.registry` + `hcloud_volume_attachment.registry` +
+`hcloud_server.registry` — a destroy+recreate of the sole registry host and its store volume.
+Surface affected: the private-net zot pull endpoint (`10.0.1.30:5000`) that web hosts + CI pull our
+two platform images from. **This PR itself induces zero downtime** (code-only; the registry
+resources are `OPERATOR_APPLIED_EXCLUSION`, never applied on merge; drift is plan-only).
+
+**Zero-downtime evaluation (default-to-zero-downtime):**
+- A **blue-green** cutover (provision a fresh registry host+LUKS volume alongside, drain, cut the
+  private-net endpoint over, retire the old) is *possible* but **not warranted** here: the store is
+  a **disposable GHCR mirror** — a fresh volume is born empty and re-fills from GHCR on demand, so
+  there is no data to migrate and no rollback backstop to preserve (unlike the workspaces/git-data
+  sole-copy cutovers). The engineering cost of a blue-green registry (a second host, endpoint
+  failover, a second placement-group slot) exceeds the benefit for a mirror whose consumers already
+  tolerate a cold-pull miss.
+- **Chosen path (accepted bounded downtime):** a maintenance-window `-replace`. Residual downtime =
+  the cold-pull gap between the old host's destroy and the new host's zot coming up + first re-fill
+  from GHCR. Justification: near-zero blast radius (disposable mirror; web hosts fall back to
+  re-pulling from GHCR/upstream during the gap — the exact re-fill semantics the existing
+  `registry-region-migrate` dispatch already relies on), single-operator maintenance window, and no
+  user-data path. Per-stage verification: the D1/B fail-loud boot guard + zot liveness heartbeat
+  (green ⇒ mount + re-fill succeeded); rollback = the mirror is recreatable from GHCR at any time.
+- **Operator sign-off:** the recut is an explicit gated dispatch/`-replace` (D4) run in a
+  maintenance window — not an unattended apply.
+
+This is consistent with #5887's zero-downtime-first discipline: the zero-downtime path was
+*evaluated and consciously declined* for a disposable store where it buys nothing, not skipped by
+default.
 
 ## Encryption Posture
 
@@ -422,9 +556,9 @@ explicit decisions above and routed to the plan-review CTO lens + deepen-plan pr
 
 ## Files to Edit
 - `apps/web-platform/infra/zot-registry.tf` — add `random_password.registry_luks` + `doppler_secret.registry_luks_key`; remove `format` from `hcloud_volume.registry`; extend `hcloud_server.registry.depends_on`.
-- `apps/web-platform/infra/cloud-init-registry.yml` — add `cryptsetup` package; replace plaintext mount with LUKS format/open/mount; fix resize + raw-device invariant; add D2 boot-open.
+- `apps/web-platform/infra/cloud-init-registry.yml` — add `cryptsetup` package; **reorder Doppler CLI install + env-file write ahead of the mount block (P1-B)**; replace plaintext mount with LUKS format/open/mount; **delete the stale by-id fstab line (P1)**; fix resize + raw-device invariant; **widen the isolation self-check `:741-746` cardinality 3→4 + admit `REGISTRY_LUKS_KEY` (P1-A)**; add the required D2 boot-open.
 - `scripts/encryption-posture-ledger.json` — flip the `hcloud_volume.registry` row to `mechanism: luks` (remove exception; retarget mapper; update evidence/verification fields).
-- (possibly) `knowledge-base/engineering/architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md` — lean amendment (D-decision; confirm at deepen-plan).
+- `knowledge-base/engineering/architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md` — **required** lean amendment (plaintext→guest-LUKS flip, D4 recut vehicle, `registry-host-replace`=FATAL footgun, escrow omission).
 - (possibly, if any existing registry test hard-codes the plaintext mount) `apps/web-platform/infra/registry-boot-guard.test.sh` / `registry-insecure-config.test.sh` / `zot-liveness-heartbeat.test.sh` — update in-scope only if the LUKS change falsifies an existing assertion (verify via grep in Phase 5).
 
 ## Files to Create
