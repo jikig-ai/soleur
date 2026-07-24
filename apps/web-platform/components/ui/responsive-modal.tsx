@@ -125,7 +125,7 @@ export function ResponsiveModal({
 
   const panelClasses = isDesktop
     ? `w-full ${desktopMaxWidth} rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-6 shadow-xl`
-    : "max-h-[90vh] w-full overflow-y-auto rounded-t-2xl border-t border-soleur-border-default bg-soleur-bg-surface-1 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl";
+    : "relative max-h-[90vh] w-full overflow-y-auto rounded-t-2xl border-t border-soleur-border-default bg-soleur-bg-surface-1 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl";
 
   const node = (
     <div
@@ -151,10 +151,39 @@ export function ResponsiveModal({
         className={`${panelClasses} ${panelClassName} focus:outline-none`.trim()}
       >
         {!isDesktop && (
-          <div
-            aria-hidden="true"
-            className="mx-auto mb-3 h-1.5 w-10 shrink-0 rounded-full bg-soleur-bg-surface-2"
-          />
+          // Sticky sheet header: drag-handle affordance + an always-reachable
+          // Close button (pinned as the sheet scrolls). Without this a sheet
+          // with `closeOnBackdrop={false}` and no in-body X (e.g. new-issue) is
+          // undismissable on touch.
+          <div className="sticky top-0 z-10 -mx-5 mb-2 flex items-center justify-center bg-soleur-bg-surface-1 px-5 pb-2 pt-1">
+            <div
+              aria-hidden="true"
+              className="h-1.5 w-10 rounded-full bg-soleur-bg-surface-2"
+            />
+            {onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close"
+                className="absolute right-1 top-0 inline-flex h-11 w-11 items-center justify-center rounded-full text-soleur-text-muted transition-colors hover:text-soleur-text-primary"
+              >
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            )}
+          </div>
         )}
         {children}
       </div>

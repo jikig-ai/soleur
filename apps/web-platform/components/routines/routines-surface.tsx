@@ -244,7 +244,7 @@ function DraftRoutineTab() {
           it, and shows you the result — then opens a PR you approve. It can also
           run and verify routines you already have.
         </p>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <div className="mt-3 hidden gap-3 sm:grid sm:grid-cols-2">
           <div className="rounded border border-soleur-border-default bg-soleur-bg-surface-1 p-3">
             <div className="text-xs font-medium text-soleur-text-primary">
               Draft a new routine
@@ -274,7 +274,7 @@ function DraftRoutineTab() {
             </span>
           ))}
         </div>
-        <p className="mt-2 text-[11px] text-soleur-text-muted">
+        <p className="mt-2 hidden text-[11px] text-soleur-text-muted sm:block">
           New routines ship as code — the Concierge drafts and tests; you approve
           the PR; it goes live on merge + deploy.
         </p>
@@ -284,6 +284,7 @@ function DraftRoutineTab() {
           variant="sidebar"
           conversationId="new"
           initialContext={{ type: "routine-authoring" }}
+          sidebarProps={{ placeholder: "Describe a routine…" }}
         />
       </div>
     </div>
@@ -435,7 +436,7 @@ function RoutineRow({
 }) {
   const last = item.lastRun;
   return (
-    <li className="flex items-center gap-4 px-4 py-3">
+    <li className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
       <div className="min-w-0 flex-1">
         <button
           type="button"
@@ -463,7 +464,7 @@ function RoutineRow({
           )}
         </div>
       </div>
-      <div className="w-40 text-right text-xs">
+      <div className="w-full text-left text-xs sm:w-40 sm:text-right">
         {last ? (
           <>
             <StatusPill status={last.status} />

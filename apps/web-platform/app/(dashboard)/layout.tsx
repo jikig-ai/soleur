@@ -325,11 +325,14 @@ export default function DashboardLayout({
         <WorkspaceContextBand
           pathname={pathname}
           variant="mobile"
-          suppressBack={inKbDocView}
-          // KB owns its "Knowledge Base" title in the page body on mobile
-          // (kb/layout fullWidth header), so the mobile band drops the duplicate
-          // section title. Settings/Chat keep theirs (KB-scoped).
-          suppressSectionTitle={drill === "kb"}
+          // On mobile the "Back to menu" affordance lives INSIDE the hamburger
+          // drawer's drilled branch (below), so the band never renders its own —
+          // avoids a redundant top-level chrome row when drilled.
+          suppressBack={drill !== null}
+          // KB owns its "Knowledge Base" title in the page body, and the chat
+          // surface owns its own mobile header (back + Approve/Connected), so
+          // both drop the duplicate band section title (was 3 stacked bars).
+          suppressSectionTitle={drill === "kb" || drill === "chat"}
         />
         {/* The only non-keyboard way to open the command palette. `ml-auto`
             pins it to the trailing edge; self-hides when the flag is off. */}
@@ -581,11 +584,37 @@ export default function DashboardLayout({
             </div>
           </>
         ) : (
-          <div
-            ref={setRailSlotEl}
-            data-testid="rail-secondary-slot"
-            className="flex min-h-0 flex-1 flex-col overflow-y-auto"
-          />
+          <>
+            {/* Mobile-only "Back to menu": the mobile band suppresses its own
+                back when drilled, so the drawer owns it here. Hidden on desktop
+                (the desktop rail band renders the back affordance). Tapping it
+                navigates to /dashboard, which auto-closes the drawer. */}
+            <Link
+              href="/dashboard"
+              className="mx-3 mt-3 flex min-h-[44px] shrink-0 items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary md:hidden"
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                className="shrink-0"
+              >
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+              Back to menu
+            </Link>
+            <div
+              ref={setRailSlotEl}
+              data-testid="rail-secondary-slot"
+              className="flex min-h-0 flex-1 flex-col overflow-y-auto"
+            />
+          </>
         )}
 
         {/* Widenable rail: a right-edge drag handle rendered in EVERY state —
