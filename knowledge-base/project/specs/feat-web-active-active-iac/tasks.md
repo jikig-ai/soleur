@@ -31,7 +31,7 @@ date: 2026-07-24
 
 ## PR-1 — Phase 2: Complete cattle cloud-init parity artifact (FORWARD of web-2 birth)
 
-- [ ] 2.1 Reconcile the exact provisioner set via grep (prose "11" vs model.c4:413 "12" vs target-parity "7 siblings"); pin the enumeration; gate on ADR-136 preapply-entrypoint-enumeration.
+- [x] 2.1 Reconciled + pinned: **17 terraform_data siblings** (16 SSH + 1 local-exec); "11/12/7" all stale/partial (target-parity's "7" is a subset, dynamic floor 10, true count 16). **5-item fresh-boot gap**: private_nic_guard, zot_consumer_probe, git_data_probe, orphan_reaper, docker_seccomp_config sysctl-half. Security fork collapsed (scoped probe token adds zero exposure — host user_data already carries full-prd token). Full table + ADR-136 note: [phase-2-provisioner-reconciliation.md](phase-2-provisioner-reconciliation.md).
 - [ ] 2.2 Author the complete cattle cloud-init encoding every reconciled provisioner + Phase-1 readiness assertions — the artifact web-2 is born from AND that rebuilds web-1.
 
 ## PR-1 — Phase 3: Birth fresh cattle web-2 (out-of-band standby, weight 0, replicas=1 held)
