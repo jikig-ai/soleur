@@ -720,13 +720,67 @@ assert "#6178 _flip_transition_dt greps TRANSITION reasons, not the noop-* heart
   "grep -qF 'flip-complete' '$DF_HARNESS_SRC' && ! grep -qE '\"reason\":\"noop' '$DF_HARNESS_SRC'"
 assert "#6178 _flip_transition_dt uses the QUOTED reason form (noop-rolled-back contains rolled-back)" \
   "grep -qF '\"reason\":\"rolled-back\"' '$DF_HARNESS_SRC'"
-assert "#6178 _flip_transition_dt guards against --limit truncation (newest-N could hide the earliest)" \
-  "grep -qE 'limit' '$DF_HARNESS_SRC'"
+# --- _flip_transition_dt EXECUTED against a stubbed row source. A static grep for "limit"
+# survived a mutation that DELETED the truncation guard outright, which is the whole reason
+# this runs the function instead of reading it. `doppler` is stubbed on PATH, so the real
+# parsing, the truncation guard and the shape guard all execute with no network. ---
+FTD_OUT=""; FTD_RC=0
+call_flip_transition_dt() {  # $1 = number of rows the stubbed query returns
+  local nrows="$1" bindir; bindir=$(mktemp -d)
+  cat > "$bindir/doppler" <<STUB
+#!/usr/bin/env bash
+for ((i=0; i<$nrows; i++)); do
+  printf '{"dt":"2026-01-15 12:%02d:56.000000","raw":"{\\\\"message\\\\":{\\\\"flag\\\\":\\\\"done\\\\",\\\\"reason\\\\":\\\\"flip-complete\\\\"}}"}\n' "\$i"
+done
+STUB
+  chmod +x "$bindir/doppler"
+  set +e
+  FTD_OUT=$(PATH="$bindir:$PATH" bash -c "eval \"\$(cat '$DF_HARNESS_SRC')\"; _flip_transition_dt" 2>&1)
+  FTD_RC=$?
+  set -e
+  rm -rf "$bindir"
+}
+
+call_flip_transition_dt 1
+df_eq "_flip_transition_dt returns the EARLIEST transition dt" "2026-01-15 12:00:56.000000" "$FTD_OUT"
+assert "#6178 _flip_transition_dt exits 0 on a derivable anchor" "[[ '$FTD_RC' -eq 0 ]]"
+
+call_flip_transition_dt 3
+df_eq "_flip_transition_dt picks the earliest of several transitions (ascending dt)" "2026-01-15 12:00:56.000000" "$FTD_OUT"
+
+call_flip_transition_dt 0
+assert "#6178 _flip_transition_dt fails (no row) when the query returns nothing — caller widens" "[[ '$FTD_RC' -ne 0 ]]"
+
+# TRUNCATION: a FULL page means betterstack-query.sh's newest-N LIMIT may have hidden the
+# earliest transition, so the row we would pick is LATER than truth — a NARROWER window,
+# the unsafe direction. It must refuse rather than derive an under-covering anchor.
+call_flip_transition_dt 50
+assert "#6178 _flip_transition_dt REFUSES a full page (truncation could hide the earliest transition)" "[[ '$FTD_RC' -ne 0 ]]"
+assert "#6178 a truncated page yields NO anchor (never an under-covering one)" "! grep -qE '^2026-' <<<\"\$(cat <<'EOF'
+$FTD_OUT
+EOF
+)\""
+
+# PURITY: only the dt escapes — never any part of the raw Better Stack row.
+call_flip_transition_dt 1
+assert "#6178 _flip_transition_dt NEVER echoes a raw row (no reason/flag/message text)" "! grep -qE 'flip-complete|\"flag\"|message' <<<\"\$(cat <<'EOF'
+$FTD_OUT
+EOF
+)\""
 
 # --- Wiring: the harness proves the function BEHAVES, not that anything CALLS it correctly.
 # Both arms must pass their fallback EXPLICITLY as $1 (never read an ambient global). ---
 assert "#6178 op=verify calls doublefire_from with the 1-day fallback in fsm mode" "grep -qE 'doublefire_from 1 fsm' '$WF'"
 assert "#6178 op=doublefire-probe calls doublefire_from with the 200-day fallback in wide mode" "grep -qE 'doublefire_from 200 wide' '$WF'"
+# BOTH arms must fail closed on a malformed lower bound. This is the REACHABLE failure the
+# previous revision left open: doublefire_from used to end `|| true`, so an empty DF_FROM
+# built `?from=` and the probe fell back to its OWN 365-day default — silently restoring the
+# unscannable window. `date -u -d ''` SUCCEEDS (today's midnight), so emptiness is not
+# self-announcing and a `2>/dev/null` is not a guard.
+assert "#6178 BOTH arms carry the fail-closed DF_FROM shape guard (2 sites)" \
+  "[[ \"\$(grep -cE 'DF_FROM\" =~ \\^\\[0-9\\]\\{4\\}-\\[0-9\\]\\{2\\}-\\[0-9\\]\\{2\\}T' '$WF')\" -eq 2 ]]"
+assert "#6178 BOTH arms abort (exit 1) rather than scanning on a malformed bound" \
+  "[[ \"\$(grep -cE 'computed window lower bound is malformed' '$WF')\" -eq 2 ]]"
 
 # --- AC7: the 200-day literal must NOT live in the function body -- it is now a per-arm
 # CALLER argument. A file-scoped grep is vacuous here (CUTOVER_WINDOW_FROM alone appears 4x). ---
