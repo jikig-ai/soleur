@@ -168,27 +168,27 @@ posture, not a per-user breach. Nothing here performs or gates the at-rest encry
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** ADR-141 exists at `knowledge-base/engineering/architecture/decisions/ADR-141-*.md`
+- [x] **AC1** ADR-141 exists at `knowledge-base/engineering/architecture/decisions/ADR-141-*.md`
   (ordinal re-verified against a freshly-fetched `origin/main` per the ADR-Ordinal Collision Gate),
   `status: adopting`, recording: the measure-then-scope DEFER verdict; the
   host-probe-vs-runner-reconcile distinction; the `--json`-is-design-time (static-file) analysis; the
   overlap with luks-monitor.sh + terraform-drift; the arm trigger (#6894/#6895/#6897); and the
   ADR-033 substrate note (ride the existing job if/when built). Any plan/AC reference to the ordinal is
   swept if it renumbers.
-- [ ] **AC2** `scripts/lint-encryption-posture.py` gains a positive-work-floor assertion: with a
+- [x] **AC2** `scripts/lint-encryption-posture.py` gains a positive-work-floor assertion: with a
   **synthesized** fixture ledger whose stores are ALL `unavailable:*`, `--repo-sweep` FAILS with a
   `FAIL: ... at least one live_verification:available store required ...` line and non-zero exit.
-- [ ] **AC3** With a synthesized fixture containing ≥ 1 `available` row (and any number of
+- [x] **AC3** With a synthesized fixture containing ≥ 1 `available` row (and any number of
   `unavailable` rows), the new assertion PASSES — it is a floor (count ≥ 1), not an identity pin, so it
   does not false-fail on individual honest regressions.
-- [ ] **AC4** The new assertion is **hermetic** (no network / no `gh` / no host read) — it reads only
+- [x] **AC4** The new assertion is **hermetic** (no network / no `gh` / no host read) — it reads only
   the committed ledger via the existing loader, preserving the script's stated hermeticity (`:54`).
-- [ ] **AC5** `python3 scripts/lint-encryption-posture.py --repo-sweep` PASSES against the **real**
+- [x] **AC5** `python3 scripts/lint-encryption-posture.py --repo-sweep` PASSES against the **real**
   committed ledger (which has 1 available row) — the assertion does not regress current CI.
-- [ ] **AC6** The Layer A test battery (`scripts/lint-encryption-posture.test.sh` or the repo's runner
+- [x] **AC6** The Layer A test battery (`scripts/lint-encryption-posture.test.sh` or the repo's runner
   for it) covers the new floor with the two synthesized fixtures (all-unavailable → FAIL; ≥1 available
   → PASS). Verify the test path/runner at /work.
-- [ ] **AC7** No `.tf`, no workflow, no cron, no Inngest fn, no `sentry_cron_monitor` is added
+- [x] **AC7** No `.tf`, no workflow, no cron, no Inngest fn, no `sentry_cron_monitor` is added
   (assert the diff introduces none — this is the near-total DEFER).
 
 ### Deferred (Layer B tracking issue, not this PR)
