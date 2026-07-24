@@ -109,6 +109,49 @@ emit the dropped count as a `::notice::`, because silently discarding runs is ex
 false-clean shape this gate exists to prevent. The same null-guard applies to the missed-tick
 `OBSERVED` computation, which uses the identical expression.
 
+### Phase 2 IMPLEMENTATION CORRECTION — "earliest relevant flip row" was the wrong predicate
+
+Phase 2.5 as written says the FSM derivation anchors on the *"earliest relevant flip row"*. Measured
+against production at implementation time, **that predicate would have produced a window narrower
+than the coexistence region** — the unsafe direction, and precisely the vacuous clean verdict AC-V3
+exists to reject.
+
+`inngest-cutover-flip` runs on a **~30-second on-host timer** and re-emits
+`flag:"done" reason:"noop-done"` on **every tick** — ~2,880 rows/day. Measured 2026-07-24: a
+400-row query over a 5-day `--since` spanned only **four hours** and was **100% `noop-done`**. And
+`betterstack-query.sh`'s `--limit` takes the **newest** N rows, so "earliest row returned" resolves
+to a few hours ago regardless of how far back the query reaches.
+
+The correct predicate is the earliest **transition** row — `reason` outside the `noop-*` family.
+The emitter's vocabulary splits cleanly (`inngest-cutover-flip.sh` `emit_state`): transitions are
+`flip-complete` / `flushed-resume-no-reflush` / `rolled-back` / `dbsize-nonzero` / `flushall-failed` /
+`refuse-rearm-after-done`. Production holds exactly **one** (`done/flip-complete` @
+`2026-07-24 10:20:51Z`) against thousands of heartbeats.
+
+Two sharp edges the correction carries:
+
+- **`noop-rolled-back` CONTAINS the substring `rolled-back`.** The reasons must be matched in their
+  quoted form (`"reason":"rolled-back"`), or a bare grep re-admits the whole heartbeat firehose.
+- **A full `--limit` page is a truncation signal**, and truncation biases the anchor *later*
+  (narrower). The deriver refuses on a full page so the caller falls through to a **wider** source.
+
+Fixed inline rather than routed as an architecture fork: the plan's *intent* — anchor on the instant
+stamped by 10.0.1.40's clock — is preserved exactly; only its literal row-selection predicate was
+wrong, because the plan's author did not know the emitter is a heartbeat. Recorded in ADR-143 § 1.
+
+### Phase 0.5 DISPOSITION — `INNGEST_GQL_PAGE_SIZE=500` stays unmeasured, with the reason
+
+Not measured, per this plan's own sanctioned alternative ("must be deferred with the number recorded
+as unknown"). The doublefire hook plumbs only `from` and `function_ids`, so measuring it requires
+threading a **new hook parameter** into `hooks.json.tmpl` and redeploying the host hook config — a
+production infra deploy on the critical path.
+
+It changes **no decision in this PR**: the fsm-anchored window fits comfortably at `PAGE_SIZE=100`
+(the measured coexistence start is ~10.7 h before the measurement, ≈ 343 runs ≈ 4 pages ≈ 17 s; the
+1-day floor is 728 runs ≈ 8 pages ≈ 34 s). It would only widen headroom — and headroom only matters
+in the branch where the anchor is underivable, which this design **fails closed** on by choice.
+Carried as ADR-143 § Deferred 4.
+
 ### UNKNOWN — resolved by Phase 0 above; kept for the record
 
 The GraphQL query **already requests `totalCount`** and the script **never parses it** (the sole
@@ -261,7 +304,7 @@ forward fix. Delete trigger: AC-V4 satisfied (`exactly-once VERIFIED`, non-vacuo
 - Note it does not disturb the `## Considered Options` "narrow the eventsV2 window" rejection,
   which concerns the *inventory* scan, not the *runs* scan.
 
-**New `ADR-142` (`amends: ADR-106`)** — *Trust anchor for the cutover coexistence window*.
+**New `ADR-143` (`amends: ADR-106`)** — *Trust anchor for the cutover coexistence window*.
 Moving the safety bound from an operator-typed repo variable to the Better Stack flip-FSM row is a
 **source-of-truth change**, not a restatement: it introduces a new trust boundary and a new
 failure mode (retention miss). ADR-106 is scoped to scan bounding + abandon-safety + markers;
@@ -337,7 +380,7 @@ wrong instant" in a single event.
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-142-trust-anchor-for-cutover-coexistence-window.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-143-trust-anchor-for-cutover-coexistence-window.md`
 
 ## Implementation Phases
 
@@ -427,11 +470,30 @@ naming why (the post-repoint and post-rollback regions lie after `CUTOVER_WINDOW
 
 ### Phase 3 — Docs + deferred work
 
-3.1 Amend ADR-106 item 4; author ADR-142 (§ Architecture Decision).
+3.1 Amend ADR-106 item 4; author ADR-143 (§ Architecture Decision).
 3.2 Runbook §2.6: the two windows, the anchor sources, and `cron_period_seconds=1200`.
 3.3 File the deferred issues (§ Deferred work).
 
-## Deferred work (tracking issues, filed in Phase 3.3)
+## Deferred work (tracking issues — FILED)
+
+**Filed 2026-07-24.** Item 2 (the missed-tick defect) is filed **separately** as a bug because it
+is a discovered defect whose failure mode is the exact harm this cutover prevents — burying a
+possible-P1 in a consolidated tracker is how it gets missed. Items 1, 3 and the `PAGE_SIZE`
+measurement are deferred *scope*, so they consolidate into one tracker.
+
+| Item | Issue | Priority |
+|---|---|---|
+| Missed-tick emits a nonexistent command + re-fire lines for never-due crons | **#6939** | `p1-high`, Phase 4 |
+| Registry-sourced discovery · `CUTOVER_*` env mapping · `PAGE_SIZE=500` measurement | **#6940** | `p2-medium`, Post-MVP |
+| #6178 triage was stale (`p2-medium` / Post-MVP predates the cutover running in production) | fixed **inline** → `p1-high`, Phase 4 | — |
+
+**Net issue flow: closing 0, filing 2, net +2.** This PR closes nothing by design — #6178 is gated
+on AC-V4 and `Ref`, not `Closes`. #6939 could not be inlined (it needs per-function trigger type
+from `inngest-registry-probe.sh`, a separate work-stream) and must not be consolidated (it is a
+defect, not deferred scope). #6940 consolidates three deferrals that would otherwise have been
+three issues.
+
+### Item detail (as specified pre-filing)
 
 1. **Registry-sourced missed-tick discovery** — operator-confirmed cut. Prescribed design
    (architecture, built on ADR-106's own `armed_reminders` precedent): after computing
@@ -487,7 +549,7 @@ Every criterion carries its **measured baseline on `main`**, so none can pass on
   `grep -c 'function discovery' ADR-106-*.md` ≥ 1 — **and** the preservation check
   `grep -c 'SEPARATE invariant'` ≥ 1 still holds. *(Baselines: 0 and 1. v1 asserted only the
   preservation half, which passes on an untouched file.)*
-- **AC10** `ADR-142-*.md` exists and `grep -c 'amends: ADR-106'` ≥ 1. *(Baseline: file absent.)*
+- **AC10** `ADR-143-*.md` exists and `grep -c 'amends: ADR-106'` ≥ 1. *(Baseline: file absent.)*
 - **AC11** PR body uses `Ref #6178`, not `Closes` — the probe is delivered *by* the merge, so the
   verifying run cannot precede it.
 
@@ -547,7 +609,7 @@ persistent store and no new cross-component connection.
 | FSM row unavailable (Better Stack retention) | Fall through to the **widest** window, never narrower; `::warning::` names `anchor_source=floor`. |
 | Narrowed window still not exhaustible | Phase 0 measures before merging; page-1 gate aborts in ~2 s with computed remediation. |
 | `DF_FROM` empty → silent 365-day probe default | Fail-closed regex assertion (Phase 2.3) — the reachable failure v1 left open. |
-| Fallback stops covering as the cutover ages (window is open-topped, cost grows with wall-clock) | Recorded as a known property; FSM anchor is age-independent. Named in ADR-142. |
+| Fallback stops covering as the cutover ages (window is open-topped, cost grows with wall-clock) | Recorded as a known property; FSM anchor is age-independent. Named in ADR-143. |
 | Dark-host detector silently narrowed | Per-arm fallback: `op=doublefire-probe` keeps 200 d, asserted in the workflow test. |
 | Guard/harness vacuous | AC6 requires demonstrating the harness **fails** on a mutated function. |
 

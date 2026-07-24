@@ -802,8 +802,12 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
 
 6. **`op=verify`** (exactly-once):
    ```bash
-   gh workflow run cutover-inngest.yml --field op=verify
+   gh workflow run cutover-inngest.yml --field op=verify --field cron_period_seconds=1200
    ```
+
+   > **Pass `cron_period_seconds=1200`.** `cron-ghcr-token-minter` runs `*/20 * * * *` (1200 s,
+   > live in `cron-manifest.ts`), so the 3600 default collapses three legitimate runs into one
+   > bucket and reports a **phantom** double-fire.
    It reaches the dedicated GQL over the private net via `/hooks/inngest-doublefire-probe`
    (P1-12 — the runner cannot curl `10.0.1.40` directly), buckets every run by
    `(functionID, floor(startedAt / cron_period))`, and fails if any bucket has >1 run
@@ -826,6 +830,54 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    >   **started**. Set `CUTOVER_REGISTRY_BASELINE` to the pre-cutover `op=inventory` `functions`
    >   count so `op=rearm`/`op=verify` enforce `function_count ≥ baseline` (a half-sync otherwise
    >   passes); without it, confirm the count matches the pre-cutover inventory manually.
+
+   #### Scan window + trust anchor (#6178, ADR-143)
+
+   There are **two** windows, and they are deliberately different:
+
+   | Arm | Window | `anchor_source` |
+   |---|---|---|
+   | `op=verify` (2.6) | `min( bucket_floor(anchor) − 2×cron_period , now − 1d )`, open-topped | `fsm` \| `var` \| `floor` |
+   | `op=doublefire-probe` (pre-cutover dark-host detector) | `now − 200d`, open-topped | `wide` |
+
+   The anchor is resolved in order: the **on-host flip-FSM transition row** (`fsm` — read from
+   Better Stack, stamped on `10.0.1.40`'s journald, the *same clock* that stamps `startedAt`),
+   then the `CUTOVER_WINDOW_FROM` repo variable (`var`), then **fail closed**. There is no wide
+   fallback: at ~728 runs/day a 7-day window is ~5,100 runs ≈ 214 s and cannot be exhausted, and
+   the probe emits nothing on a non-exhausted scan — so scanning it would only *look* safer.
+
+   **Reading a verdict — check `anchor_source` before believing it.** Every dispatch logs
+   `anchor_source=` alongside `from=`, and the probe's markers carry `total_count=`. A clean
+   verdict is only meaningful over a window that actually covered the coexistence region:
+
+   - `anchor_source=fsm` — strongest. Anchor and run timestamps share a clock.
+   - `anchor_source=var` — Better Stack retention missed the transition row; the window rests on
+     an operator-typed value on a *different* clock. Confirm it covers the quiesce instant.
+   - `anchor_source=floor` — the 1-day floor won the `min()`. Fine when `op=verify` runs promptly
+     after the cutover; confirm the floor covers the quiesce instant before trusting a clean result.
+   - `total_count=0` with a clean verdict — **vacuous**. Nothing was looked at.
+
+   **If the run aborts with `reason=window_too_wide`**, the message names a *computed* latest-viable
+   anchor. Set it and re-dispatch:
+
+   ```bash
+   gh variable set CUTOVER_WINDOW_FROM --body '<the ISO instant from the abort message>'
+   gh workflow run cutover-inngest.yml --field op=verify --field cron_period_seconds=1200
+   ```
+
+   Do **not** reach for `PREFLIGHT_DEADLINE_S` — the SUM bound `DEADLINE + PAGE_MIN ≤ outer_curl`
+   caps it at 112 s (~14 pages), which is why that remediation was removed. The live lever is the
+   window.
+
+   **Query the markers off-box** (no SSH):
+
+   ```bash
+   doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+     --since 1h --grep SOLEUR_INNGEST_PREFLIGHT --limit 20
+   ```
+
+   `total_count` + `anchor_source` are the discriminating fields: they separate "window too wide"
+   from "budget too small" from "anchored on the wrong instant" in a single event.
 
 ### 2.0 registry-non-empty remediation (P1-6)
 
