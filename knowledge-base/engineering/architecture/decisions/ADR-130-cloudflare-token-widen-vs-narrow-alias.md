@@ -164,14 +164,16 @@ ruleset phase needs a matching permission in the ledger AND on the live token.
 Do not maintain a competing enumeration elsewhere — `main.tf`'s alias comment
 had already drifted two phases behind, and now points at the ledger instead.
 
-**Capability gap (not closed by this ADR).** There is no first-party skill for
-Cloudflare token scope changes. `soleur:provision-cloudflare` mints *tenant*
-tokens via the `cloudflare_api_token` resource, which itself requires
-`User API Tokens:Edit` — a permission no Soleur token holds. So every
-first-party scope change is an ad-hoc dashboard trip; this is the third on
-record (#6657 DNS, #6649 R2, #6755 Config Rules). A Playwright-driven
-`soleur:cf-token-scope` skill that performs the widen and runs the probe set
-above would turn this class into a two-minute automated step.
+**Capability gap — CLOSED by `soleur:cf-token-scope` (see Amendment #6755).**
+There was no first-party skill for Cloudflare token scope changes.
+`soleur:provision-cloudflare` mints *tenant* tokens via the `cloudflare_api_token`
+resource, which itself requires `User API Tokens:Edit` — a permission no Soleur
+token holds. So every first-party scope change was an ad-hoc dashboard trip; this
+was the third on record (#6657 DNS, #6649 R2, #6755 Config Rules). The
+Playwright-driven `soleur:cf-token-scope` skill (#6755) now performs the widen and
+runs the probe set above, turning this class into an automated step. See the
+Amendment below for the mechanism decision and how the skill strengthens the
+probe.
 
 ## Alternatives considered
 
@@ -203,3 +205,42 @@ Rejected: 70 email addresses across 8 legal markdown files plus two `.njk`
 pages, and every future address silently regresses the bug. A per-occurrence fix
 with a permanent regression footgun, maintained by a solo non-technical
 operator, is worse than one host-scoped rule.
+
+## Amendment (#6755) — `soleur:cf-token-scope` closes the capability gap
+
+The capability gap this ADR left open is now closed by the first-party
+`soleur:cf-token-scope` skill (`plugins/soleur/skills/cf-token-scope/`). Two
+decisions are recorded here; the ADR stays `accepted` (amended, not superseded).
+
+**1. The widen is driven via Playwright MCP dashboard automation.** A standing
+`User API Tokens:Edit` token is **rejected** — it is Global-API-Key-equivalent
+power the account deliberately lacks (axis 1), can mint/edit/delete any token,
+and on leak is a full-account compromise. Playwright MCP (`mcp__playwright__*`) is
+a distinct, more robust surface than the `soleur:agent-browser` CLI daemon (the
+surface that wedged when #6755 was filed) and is the documented house path for CF
+token-permission edits (learning
+`2026-03-21-cloudflare-api-token-permission-editing.md`, #992). Editing
+permissions does not rotate the token value, so no Doppler write follows.
+
+**Honest note — not strictly least-privilege.** The Playwright path still transits
+a full-power CF dashboard session (the session cookie is an account-wide bearer,
+strictly broader than the token being edited). The invariant it keeps is narrower
+and cleaner: *no omnipotent token ever exists*, even transiently. The skill
+mitigates the session's leak surface (no `browser_network_requests` /
+`browser_console_messages` file dumps, edit-control-scoped screenshots,
+snapshot-only navigation). An *ephemeral* mint→use→revoke `User API Tokens:Edit`
+token is arguably security-optimal for the automation phase but is documented as a
+future opt-in, not adopted (an orphaned revoke would leave a standing omnipotent
+token). See `knowledge-base/project/specs/feat-one-shot-cf-token-scope-6755/decision-challenges.md`.
+
+**2. The skill strengthens this ADR's illustrative probe.** The `-o /dev/null` +
+`%{http_code}` snippet in § Consequences is illustrative only. The skill hardens
+it into a three-layer fail-closed classifier — status → body-shape
+(`success == true` AND `.result` is an array, so a degraded
+`200 {"success":false,"result":null}` FAILs) → per-scheme control (the account
+list must be an authorized `200`; a zone `404` is trusted only under an authorized
+zone control) — per learning
+`2026-07-23-live-api-fail-closed-guard-counts-degraded-200-as-empty-and-control-probe-must-cover-every-scheme.md`.
+It also records that the canonical four-probe set is a **canary for the whole-list
+REPLACE failure mode**, not exhaustive per-permission coverage (Zone WAF,
+Transform Rules, and account Filter Lists are unprobed).
