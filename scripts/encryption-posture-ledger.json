@@ -154,7 +154,7 @@
       "kind": "provider-bucket",
       "at_rest": {
         "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
-        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public.",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; holds CLA (Contributor License Agreement) signing evidence records.",
         "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
         "retrieved_on": "2026-07-24",
         "defends_against": "Cloudflare-managed at-rest encryption of stored objects against physical-media compromise in Cloudflare's infrastructure",
