@@ -74,6 +74,17 @@ locals {
     # (hr-fresh-host-provisioning-reachable-from-terraform-apply). See ADR-122.
     "seccomp-bwrap.json",
     "apparmor-soleur-bwrap.profile",
+    # (#6459 Phase 2.2) Fresh-boot parity for the last SSH-only host provisioners. A fresh cattle
+    # host (web-2) never receives web-1's SSH provisioners, so these came up absent — the #6459
+    # silent-boot gap. Baked here + installed by soleur-host-bootstrap.sh + enabled by cloud-init;
+    # the SSH provisioners (terraform_data.orphan_reaper_install / the sysctl half of
+    # docker_seccomp_config) are RETAINED for running-host rotation on the pet web-1 until Phase 5.
+    # The unit bodies are byte-identical to those SSH heredocs (dual-delivery parity, drift-guarded).
+    "orphan-reaper.sh",
+    "orphan-reaper.service",
+    "orphan-reaper.timer",
+    "99-bwrap-userns.conf",
+    "bwrap-userns-sysctl.service",
   ]
 
   # Combined content-hash over the baked set: each file's sha256 hex, sorted, joined

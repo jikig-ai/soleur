@@ -633,6 +633,10 @@ runcmd:
   - systemctl enable --now cron-egress-firewall.service
   - systemctl enable --now cron-egress-resolve.timer
 
+  # (#6459 Phase 2.2) fresh-boot parity: orphan-workspace reaper + bwrap userns sysctl (baked units).
+  - systemctl enable --now orphan-reaper.timer
+  - systemctl enable --now bwrap-userns-sysctl.service
+
   # Weekly Docker image cleanup -- keeps only images used by running containers.
   # Prevents disk exhaustion from accumulated deploy images (#967).
   - |

@@ -576,7 +576,7 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     expect(tf).toContain("soleur-host-bootstrap.sh");
     expect(tf).toContain("journald-soleur.conf");
   });
-  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml + 2 sandbox profiles", () => {
+  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml + 2 sandbox profiles + 5 Phase-2.2 fresh-boot-parity files", () => {
     // +1 vs #5921's 25: cron-egress-enforce-probe.sh (fresh-host post-container egress
     // enforcement probe, #5933 item 3).
     // +1 (=27): cosign-trusted-root.json — pinned public trust material baked into the
@@ -589,7 +589,12 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // security-control profiles baked for FRESH-host boot-time delivery + enforcement (#6629,
     // ADR-122). Previously SSH-provisioner-only, so a fresh host ran the tenant sandbox
     // unenforced. Data files, not scripts.
-    expect(serverTfBakedSet().length).toBe(30);
+    // +5 (=35): orphan-reaper.sh + .service + .timer, 99-bwrap-userns.conf, bwrap-userns-sysctl.service
+    // (#6459 Phase 2.2). The last SSH-provisioner-only host config (terraform_data.orphan_reaper_install
+    // + the sysctl half of docker_seccomp_config), now baked so a fresh cattle host (web-2) self-
+    // configures them. The SSH provisioners are RETAINED for web-1 running-host rotation until Phase 5;
+    // the baked unit bodies are byte-identical to those heredocs (drift-guarded in fresh-boot-parity.test.sh).
+    expect(serverTfBakedSet().length).toBe(35);
   });
 
   // ASSERTION A (build-integrity). server.tf computes local.host_scripts_content_hash over
