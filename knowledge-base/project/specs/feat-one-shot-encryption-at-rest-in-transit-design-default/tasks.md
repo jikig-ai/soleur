@@ -104,3 +104,14 @@ precedes its required-check promotion.
 - [ ] 8.2 Walk every AC; record the verification command and its output. **[R0] AC20/AC21/AC32 are deleted; [R1] AC33 verified via the `device_binding` join; new ACs cover TS-15/16/17, MB-8..MB-12, the five-site coupling, the Sentry parity test, and the hermeticity invariant.**
 - [x] 8.2b **DONE — moved to task 0.0** (plan-review ran with the full escalated panel before Phase 1).
 - [ ] 8.3 Confirm the PR body has no `Closes #6588`, lists audit findings as `Ref #N`, pins both budget measurements, **and links the constraint-scaffold follow-up issue + the parent claim-unlock issue [R0/R11]**.
+
+## Completion status (2026-07-24)
+
+**Shipped in this PR (#6885):** Phase 0 (preconditions verified) · Phase 1 (ledger schema + code-sourced audit + seeded ledger, 14 stores/3 connections, sweep green; findings filed #6893-#6897) · Phase 2 (Layer A detector, 35/35 + MB-1..12, independently re-verified) · Phase 3 partial (detector wired as an ADVISORY ci.yml step) · Phase 5 (design-time gates) · Phase 6 (generation-side, R0-narrowed to hetzner/cloudflare + R6 Semgrep) · Phase 7 (ADR-139, C4, constitution pointer).
+
+**Deferred to tracked follow-ups (reviewer-endorsed splits):**
+- Required-check PROMOTION (the 5-site coupling, D7/R4) -> **#6901** (measure-then-arm per arch F4; detector runs advisory now).
+- Layer B live reconcile (Phase 4, R2) -> **#6902** (Inngest-dispatch + Sentry; needs per-volume probes first — measures only 1 of 6 volumes today).
+- constraint-scaffold user-facing gate (deliverable 6, R0) -> its own product-framed PR (CPO F3/F5, spec-flow #8-#14).
+
+**Exit gate:** `bash scripts/test-all.sh scripts` -> 213/213 pass. components.test.ts 1289 pass. c4 23/23 + freshness. Semgrep validated.
