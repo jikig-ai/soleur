@@ -48,6 +48,26 @@ else
   fail "dedicated secrets reference the dedicated keys, not the co-located _prd keys"
 fi
 
+# 1b. (#6178) The host-boot token MUST be read/write, NOT read-only. The cutover flip FSM
+#     (inngest-cutover-flip.sh:flag_set) advances INNGEST_CUTOVER_FLIP on soleur-inngest/prd
+#     via `doppler secrets set` under this token; a read-only token fails that write at the
+#     FIRST transition (flag_set flipping), so the dedicated scheduler can never complete the
+#     flip. Extract the access value from the token resource block specifically (not a bare
+#     file-wide grep that a comment could satisfy), so a silent revert to "read" red-lines CI.
+TOKEN_ACCESS="$(awk '
+  /resource "doppler_service_token" "inngest"/ { inblk=1 }
+  inblk && /access[[:space:]]*=/ { gsub(/[",]/,""); print $NF; exit }
+  inblk && /^}/ { exit }
+' "$HOST_TF")"
+[[ "$TOKEN_ACCESS" == "read/write" ]] \
+  && pass || fail "doppler_service_token.inngest access must be 'read/write' so the flip FSM can write INNGEST_CUTOVER_FLIP (got '${TOKEN_ACCESS:-<none>}'); a read-only token boot-fails the flip at its first transition (#6178)"
+# Cross-check: the flip script's flag_set genuinely writes under the ambient (boot-token) env —
+# if flag_set ever grows an explicit --token, this test's premise (boot token authorizes the
+# write) must be re-derived rather than trusted.
+grep -qE 'doppler secrets set INNGEST_CUTOVER_FLIP' "${DIR}/inngest-cutover-flip.sh" \
+  && ! grep -qE 'doppler secrets set INNGEST_CUTOVER_FLIP.*--token' "${DIR}/inngest-cutover-flip.sh" \
+  && pass || fail "flip flag_set must write INNGEST_CUTOVER_FLIP under the ambient boot token (no explicit --token) — else the read/write requirement above is testing the wrong credential"
+
 # 2. Separate Doppler PROJECT (AC3), not a prd branch config.
 grep -qE 'resource "doppler_project" "inngest"' "$HOST_TF" \
   && grep -qE 'name[[:space:]]*=[[:space:]]*"soleur-inngest"' "$HOST_TF" \

@@ -206,9 +206,10 @@ runcmd:
       || /usr/local/bin/inngest-boot-phone-home.sh doppler-cli-install-FAILED
   # Restricted (0600 root) env file with the scoped Doppler service token — NOT world-
   # readable /etc/environment (mirrors registry's /etc/default/registry-doppler). The token
-  # is scoped to the ISOLATED `soleur-inngest` project's `prd` root config (a SEPARATE
-  # project — NO inheritance path to soleur/prd), so a host compromise reads ONLY the
-  # inngest secret set.
+  # is read/write on the ISOLATED `soleur-inngest` project's `prd` root config (the flip FSM
+  # writes INNGEST_CUTOVER_FLIP under it, #6178) — a SEPARATE project with NO inheritance path
+  # to soleur/prd, so a host compromise reaches ONLY this host's own isolated secret set,
+  # never a foreign project.
   # HOME is REQUIRED (#6122 boot fix — the actual dark-host boot bug, found via the #6178 boot
   # probe): cloud-init runcmd runs with NO $HOME, and the Doppler CLI aborts with
   # "Doppler Error: $HOME is not defined" even when DOPPLER_CONFIG_DIR is set. Without it the
@@ -466,8 +467,8 @@ runcmd:
     # because this host downloads the arch-matched tarball — a wrong-arch SHA would fail verify.
     VECTOR_CLI_VERSION=$(printf '%s\n' "$image_env" | grep '^VECTOR_CLI_VERSION=' | head -1 | cut -d= -f2- || true)
     # DOPPLER_PROJECT=soleur-inngest routes every doppler-wrapped unit (server/heartbeat/redis/
-    # vector) at THIS host's ISOLATED project (AC3) — the scoped boot token can read only
-    # soleur-inngest. VECTOR_CLI_ARCH (=${inngest_cli_arch}) selects the matching triple in the bootstrap map.
+    # vector) at THIS host's ISOLATED project (AC3) — the scoped boot token reaches only
+    # soleur-inngest (read/write, #6178). VECTOR_CLI_ARCH (=${inngest_cli_arch}) selects the matching triple in the bootstrap map.
     # #6178 boot observability: capture the bootstrap's combined output to a file and self-report
     # its exit code + a masked tail. The bootstrap's own log() goes to journald->Vector, which is
     # DOWN until the bootstrap installs+starts Vector near its end — so a mid-bootstrap failure is

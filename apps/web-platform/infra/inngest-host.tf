@@ -193,15 +193,30 @@ resource "doppler_secret" "inngest_redis_password_dedicated" {
 # → re-set INNGEST_POSTGRES_URI in the soleur-inngest prd config.
 # ---------------------------------------------------------------------------------------
 
-# Read-only service token scoped to the isolated `soleur-inngest` project's `prd` ROOT
-# config. Handed to the inngest host cloud-init in place of the full-prd var.doppler_token.
+# Service token scoped to the isolated `soleur-inngest` project's `prd` ROOT config. Handed
+# to the inngest host cloud-init in place of the full-prd var.doppler_token.
 # `.key` is Computed/write-once (same handling as doppler_service_token.registry); rotate
 # via `terraform apply -replace=doppler_service_token.inngest`.
+#
+# access = "read/write" (was "read" — #6178). The cutover flip FSM
+# (inngest-cutover-flip.sh:flag_set) advances INNGEST_CUTOVER_FLIP on soleur-inngest/prd
+# (armed→flipping→flushed→done, or →aborted/→rolled-back) via `doppler secrets set` under
+# THIS token; the flip script comment (:78) already documented that the boot token
+# "authorizes the write". Minting it read-only was the mismatch — the flip failed loud at its
+# FIRST transition (flag_set flipping, before any Redis/systemctl action), so the dedicated
+# scheduler could never complete the flip. Blast radius is UNCHANGED at the cross-project
+# level: this token still resolves ONLY the isolated `soleur-inngest/prd` set — there is no
+# path to `soleur/prd` or any other project, so a host compromise still cannot read/write
+# foreign secrets. The residual (an inngest-server RCE could now WRITE this host's OWN
+# isolated secrets, not just read them) is tracked for a tighter split — a separate
+# root-only write token used only by the flip oneshot, keeping inngest-server's
+# deploy-readable token read-only — which needs an OCI image change (the flip .service
+# EnvironmentFile is a baked asset), deferred out of the live cutover.
 resource "doppler_service_token" "inngest" {
   project = doppler_project.inngest.name
   config  = doppler_environment.inngest_prd.slug
   name    = "inngest-boot"
-  access  = "read"
+  access  = "read/write"
 }
 
 # ---------------- The dedicated Inngest host ----------------
@@ -229,11 +244,12 @@ resource "hcloud_server" "inngest" {
     # Mount the Redis AOF volume by its specific id (by-id pattern). Known at plan time;
     # the attachment is a separate resource.
     inngest_volume_id = hcloud_volume.inngest_redis.id
-    # Scoped read-only Doppler token → 0600 root env file. The token is scoped to the
-    # ISOLATED `soleur-inngest` project's `prd` root config (a SEPARATE project — NO
-    # inheritance path to soleur/prd), so a host compromise reads ONLY the inngest secret
-    # set. NEVER baked into user_data directly beyond this scoped token (which is itself
-    # minimal-blast-radius by construction).
+    # Scoped Doppler token → 0600 root env file. read/write on the ISOLATED `soleur-inngest`
+    # project's `prd` root config (the flip FSM writes INNGEST_CUTOVER_FLIP under it — see the
+    # doppler_service_token.inngest note above, #6178). It is a SEPARATE project — NO
+    # inheritance path to soleur/prd — so a host compromise still reaches ONLY this host's own
+    # isolated secret set, never a foreign project. NEVER baked into user_data directly beyond
+    # this scoped token (which is itself minimal-blast-radius by construction).
     doppler_token = doppler_service_token.inngest.key
     # Single stable --sdk-url to the ACTIVE web backend's private interface (10.0.1.10).
     # The degenerate no-flap case of the route-once mechanism (ADR-100 Decision 1); migrate
