@@ -88,8 +88,13 @@ assert "journald drop-in is NOT an inline cloud-init write_files entry anymore" 
   "! grep -qE '^[[:space:]]+- path: /etc/systemd/journald\.conf\.d/00-soleur\.conf' '$CLOUD_INIT'"
 assert "journald_soleur_conf_b64 is NOT re-inlined in cloud-init" \
   "! grep -qE 'content: \\\$\{journald_soleur_conf_b64\}' '$CLOUD_INIT'"
+# grep -cE (reads ALL input) not grep -qE (closes the pipe on first match): the awk range now
+# streams ~90 lines and "journald-soleur.conf" matches EARLY (line ~34), so grep -q would SIGPIPE
+# the still-streaming awk and — under this file's `set -o pipefail` — flake the pipeline non-zero
+# even on a match (2026-07-18-pipefail-grep-q-early-match-sigpipe-flakes-drift-guards; #6459 P2.2
+# widened the baked set past the match, tipping this latent flake). `>/dev/null` drops -c's count.
 assert "journald-soleur.conf is in server.tf host_script_files (baked set)" \
-  "awk '/host_script_files = \[/,/^  \]/' '$SERVER_TF' | grep -qE '\"journald-soleur\.conf\"'"
+  "awk '/host_script_files = \[/,/^  \]/' '$SERVER_TF' | grep -cE '\"journald-soleur\.conf\"' >/dev/null"
 assert "Dockerfile bakes journald-soleur.conf into /opt/soleur/host-scripts/" \
   "grep -qE '/app/infra/journald-soleur\.conf' '$SCRIPT_DIR/../Dockerfile'"
 assert "bootstrap installs the drop-in to /etc/systemd/journald.conf.d/00-soleur.conf" \
@@ -102,8 +107,13 @@ echo ""
 echo "--- AC3: server.tf provisioner wiring (running-host path) ---"
 # #5921: journald_soleur_conf_b64 was REMOVED from the cloud-init templatefile map (baked
 # instead); the running-host delivery via terraform_data.journald_persistent is unchanged.
+# grep -cE not grep -qE (same SIGPIPE-under-pipefail class as above): this NEGATIVE assert would
+# fail OPEN if the b64 arg were ever re-inlined — grep -q matches early, SIGPIPEs the streaming awk,
+# the pipeline flakes non-zero, and `!` inverts that into a spurious PASS, masking the regression.
+# grep -c reads all input (no early close) so the `!` reflects the real match state. `>/dev/null`
+# drops the count so the `!` sees only the exit code.
 assert "journald_soleur_conf_b64 is NOT passed to the cloud-init templatefile" \
-  "! awk '/user_data = templatefile\(\"\\\$\{path.module\}\/cloud-init.yml\"/,/^  \}\)/' '$SERVER_TF' | grep -qE 'journald_soleur_conf_b64'"
+  "! { awk '/user_data = templatefile\(\"\\\$\{path.module\}\/cloud-init.yml\"/,/^  \}\)/' '$SERVER_TF' | grep -cE 'journald_soleur_conf_b64' >/dev/null; }"
 assert "terraform_data.journald_persistent resource declared" \
   "grep -qE 'resource \"terraform_data\" \"journald_persistent\"' '$SERVER_TF'"
 

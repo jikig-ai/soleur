@@ -61,6 +61,16 @@ infra/
 !infra/orphan-reaper.timer
 !infra/99-bwrap-userns.conf
 !infra/bwrap-userns-sysctl.service
+!infra/web-private-nic-guard.sh
+!infra/web-private-nic-guard.service
+!infra/web-private-nic-guard.timer
+!infra/web-zot-consumer-probe.sh
+!infra/web-zot-consumer-probe.service
+!infra/web-zot-consumer-probe.timer
+!infra/web-git-data-probe.sh
+!infra/web-git-data-probe.service
+!infra/web-git-data-probe.timer
+!infra/web-probe-envwrite.sh
 scripts/
 # Allow the post-build dev-signin grep gate (R3 / feat-dev-signin-bypass).
 # The Dockerfile builder stage runs `bash scripts/assert-dev-signin-eliminated.sh`
