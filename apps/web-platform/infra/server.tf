@@ -209,6 +209,10 @@ resource "hcloud_server" "web" {
     # secret is injected at boot into the extracted hooks.json.tmpl (small, ~64 B).
     webhook_deploy_secret = var.webhook_deploy_secret
     doppler_token         = var.doppler_token
+    # #6459: Better Stack Logs ingest URL for the fresh-boot readiness marker's direct-curl channel
+    # (the token is sourced from Doppler at boot; this URL is the same public endpoint the nic-guard
+    # env file and the Vector sink use — local.betterstack_logs_ingest_url, single source of truth).
+    betterstack_ingest_url = local.betterstack_logs_ingest_url
     # Baked so the fresh-boot fatal Sentry emit does not depend on doppler (which may be the
     # broken stage). Semi-public DSN (already in the client bundle). See on_err in cloud-init.yml.
     sentry_dsn     = var.sentry_dsn

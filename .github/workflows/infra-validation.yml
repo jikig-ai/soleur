@@ -382,6 +382,14 @@ jobs:
         run: bash apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh
 
       # LOAD-BEARING registration (this job lists each infra test explicitly — no glob, so an
+      # unregistered suite is ZERO coverage, silently and greenly). This suite is hybrid: static
+      # drift-guards over the authored marker + a BEHAVIORAL extraction that runs the baked
+      # soleur-fresh-boot-ready helper against stubbed commands + path seams, asserting the
+      # ready=/reason= decision per unmet field (the fixture-cardinality rule, not string-matching).
+      - name: Run fresh-boot readiness marker guard (#6459/#6538 SOLEUR_FRESH_BOOT_READY dark-host)
+        run: bash apps/web-platform/infra/fresh-boot-ready.test.sh
+
+      # LOAD-BEARING registration (this job lists each infra test explicitly — no glob, so an
       # unregistered suite is ZERO coverage, silently and greenly). This suite is behavioural,
       # not grep-only: it extracts the baked soleur-wait-nic helper and EXECUTES it against a
       # stub `ip`, which is the only way the fail-open contract (always exit 0 — CF-5) and the

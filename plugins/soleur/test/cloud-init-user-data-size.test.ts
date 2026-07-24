@@ -96,7 +96,16 @@ const HETZNER_CAP = 32_768;
 // /etc/default/luks-monitor (the luks-monitor units source it; MUST be written at cloud-init time so
 // a Doppler-down boot still pages — DP-9). Merged render measured ~22,256; 22,450 keeps the KB-scale
 // re-inlining tripwire (a ~1.5 KB blob → ~23.7 KB trips it) and stays ~10.3 KB below HETZNER_CAP.
-const WEB_GZIP_BUDGET = 22_450;
+// #6459: on top of #6604's 22,450 baseline, +~250 B for the fresh-boot readiness marker's
+// irreducibly-inline CALL-SITE. The helper BODY (soleur-fresh-boot-ready, incl. its Doppler token
+// fetch) is baked into soleur-host-bootstrap.sh → 0 user_data (#5921 pattern applied). What CANNOT
+// be baked is the invocation itself: the marker must run as the LAST runcmd item (AFTER Vector, so
+// vector= is truthful) and receives BETTERSTACK_INGEST_URL='${betterstack_ingest_url}' — a
+// templatefile splice evaluated at RENDER time (single source of truth = local.betterstack_logs_ingest_url;
+// baking a hardcoded copy would re-duplicate the URL constant). Comments trimmed first (2 lines).
+// Measured render ~22,564; 22,700 keeps the KB-scale re-inlining tripwire (a ~1.5 KB blob still
+// trips it) and stays ~10 KB below HETZNER_CAP.
+const WEB_GZIP_BUDGET = 22_700;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
