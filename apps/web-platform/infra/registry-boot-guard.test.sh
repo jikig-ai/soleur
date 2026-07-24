@@ -3,13 +3,14 @@
 # hardening added in #6240/#6244 (cloud-init-registry.yml).
 #
 # TWO layers:
-#   1. BEHAVIORAL (the load-bearing part): the boot isolation self-check now expects THREE
-#      admitted secrets {ZOT_PULL_TOKEN, ZOT_PUSH_TOKEN, BETTERSTACK_LOGS_TOKEN}. This test
-#      EXTRACTS the admit-regex + the cardinality integer FROM cloud-init-registry.yml (so the
-#      decision logic under test is the SAME bytes the host boots with — no re-derived copy to
-#      drift) and evaluates the guard's exact predicate against synthesized name-sets. The
-#      2-secret set (the OLD cardinality) must now FATAL — that is the RED→GREEN behavioral
-#      change this fix ships. Fixtures are SYNTHESIZED (cq-test-fixtures-synthesized-only).
+#   1. BEHAVIORAL (the load-bearing part): the boot isolation self-check now expects FOUR
+#      admitted secrets {ZOT_PULL_TOKEN, ZOT_PUSH_TOKEN, BETTERSTACK_LOGS_TOKEN, REGISTRY_LUKS_KEY}
+#      (#6895 added the guest-LUKS passphrase to the isolated config). This test EXTRACTS the
+#      admit-regex + the cardinality integer FROM cloud-init-registry.yml (so the decision logic
+#      under test is the SAME bytes the host boots with — no re-derived copy to drift) and
+#      evaluates the guard's exact predicate against synthesized name-sets. The 3-secret set (the
+#      OLD cardinality) must now FATAL — that is the RED→GREEN behavioral change this fix ships.
+#      Fixtures are SYNTHESIZED (cq-test-fixtures-synthesized-only).
 #   2. STRUCTURAL grep assertions: resize2fs fail-loud (no `|| true`), device-wait, e2fsprogs,
 #      .resize-result persistence, the SOLEUR_ZOT_DISK field set, the `doppler run` cron wrap,
 #      and the tightened gc/retention values.
@@ -40,8 +41,9 @@ GUARD_RE="$(grep -F 'n_admitted=' "$CI" | grep -oE "grep -Ec '[^']*'" | sed "s/g
 CARD="$(grep -oE '\[ "\$n_total" -ne [0-9]+ \]' "$CI" | grep -oE '[0-9]+' | head -1)"
 echo "--- extracted: admit-regex='${GUARD_RE}' cardinality='${CARD}' ---"
 assert "admit-regex was extracted" "[[ -n '$GUARD_RE' ]]"
-assert "cardinality extracted and == 3" "[[ '$CARD' == '3' ]]"
+assert "cardinality extracted and == 4" "[[ '$CARD' == '4' ]]"
 assert "admit-regex names BETTERSTACK_LOGS_TOKEN" "grep -q 'BETTERSTACK_LOGS_TOKEN' <<<'$GUARD_RE'"
+assert "admit-regex names REGISTRY_LUKS_KEY (#6895)" "grep -q 'REGISTRY_LUKS_KEY' <<<'$GUARD_RE'"
 
 # guard_decision: replays the file's exact predicate (strip DOPPLER_ builtins, count total +
 # admitted, FATAL unless both == CARD). Prints PASS/FATAL; returns 0 on PASS.
@@ -55,25 +57,27 @@ guard_decision() {
 }
 
 echo "--- behavioral: boot isolation self-check decision ---"
-# The exact isolated 3-secret set → PASS.
-assert "the 3 admitted secrets PASS the guard" \
-  "[[ \"\$(guard_decision ZOT_PULL_TOKEN ZOT_PUSH_TOKEN BETTERSTACK_LOGS_TOKEN)\" == PASS ]]"
-# The OLD 2-secret set is now rejected (the RED→GREEN behavioral change).
-assert "the OLD 2-secret set now FATALs (cardinality raised 2->3)" \
-  "[[ \"\$(guard_decision ZOT_PULL_TOKEN ZOT_PUSH_TOKEN)\" == FATAL ]]"
-# An over-scoped credential leaks a foreign secret → n_total=4 → FATAL (fail-closed).
-assert "an over-scoped 4th (foreign) secret FATALs" \
-  "[[ \"\$(guard_decision ZOT_PULL_TOKEN ZOT_PUSH_TOKEN BETTERSTACK_LOGS_TOKEN SUPABASE_SERVICE_ROLE_KEY)\" == FATAL ]]"
-# Right count (3) but wrong identity (a non-admitted name) → FATAL (identity, not just cardinality).
-assert "3 names but wrong identity FATALs (identity assert)" \
-  "[[ \"\$(guard_decision ZOT_PULL_TOKEN ZOT_PUSH_TOKEN FOO_TOKEN)\" == FATAL ]]"
+# The exact isolated 4-secret set → PASS (#6895 added REGISTRY_LUKS_KEY).
+assert "the 4 admitted secrets PASS the guard" \
+  "[[ \"\$(guard_decision ZOT_PULL_TOKEN ZOT_PUSH_TOKEN BETTERSTACK_LOGS_TOKEN REGISTRY_LUKS_KEY)\" == PASS ]]"
+# The OLD 3-secret set is now rejected (the RED→GREEN behavioral change: cardinality raised 3->4).
+assert "the OLD 3-secret set now FATALs (cardinality raised 3->4)" \
+  "[[ \"\$(guard_decision ZOT_PULL_TOKEN ZOT_PUSH_TOKEN BETTERSTACK_LOGS_TOKEN)\" == FATAL ]]"
+# An over-scoped credential leaks a foreign secret → n_total=5 → FATAL (fail-closed).
+assert "an over-scoped 5th (foreign) secret FATALs" \
+  "[[ \"\$(guard_decision ZOT_PULL_TOKEN ZOT_PUSH_TOKEN BETTERSTACK_LOGS_TOKEN REGISTRY_LUKS_KEY SUPABASE_SERVICE_ROLE_KEY)\" == FATAL ]]"
+# Right count (4) but wrong identity (a non-admitted name) → FATAL (identity, not just cardinality).
+assert "4 names but wrong identity FATALs (identity assert)" \
+  "[[ \"\$(guard_decision ZOT_PULL_TOKEN ZOT_PUSH_TOKEN BETTERSTACK_LOGS_TOKEN FOO_TOKEN)\" == FATAL ]]"
 # DOPPLER_* builtins are stripped before counting (so they do not inflate n_total).
 assert "DOPPLER_* builtins are stripped before counting" \
-  "[[ \"\$(guard_decision ZOT_PULL_TOKEN ZOT_PUSH_TOKEN BETTERSTACK_LOGS_TOKEN DOPPLER_PROJECT DOPPLER_CONFIG)\" == PASS ]]"
+  "[[ \"\$(guard_decision ZOT_PULL_TOKEN ZOT_PUSH_TOKEN BETTERSTACK_LOGS_TOKEN REGISTRY_LUKS_KEY DOPPLER_PROJECT DOPPLER_CONFIG)\" == PASS ]]"
 
 echo "--- structural: resize2fs fail-loud (#6240) ---"
-assert "resize2fs is invoked in an if (exit code captured, not swallowed)" \
-  "grep -qE 'if resize2fs \"\\\$DEV\"; then' '$CI'"
+# #6895: resize2fs now targets the LUKS MAPPER (/dev/mapper/registry), not the raw $DEV — a raw
+# resize2fs would hit the LUKS header. The exit code is still captured in an `if` (not swallowed).
+assert "resize2fs is invoked in an if targeting the mapper (exit code captured, not swallowed)" \
+  "grep -qE 'if resize2fs /dev/mapper/registry; then' '$CI'"
 # The silent-swallow was `resize2fs ... || true` on a COMMAND line; the historical comment that
 # documents the old bug legitimately still contains that string, so exclude comment lines first.
 assert "no 'resize2fs ... || true' silent-swallow on any command line" \
@@ -83,8 +87,11 @@ assert "device-wait loop precedes mount (attach race)" \
 assert "e2fsprogs is in packages:" "grep -qE '^[[:space:]]*-[[:space:]]*e2fsprogs' '$CI'"
 assert "e2fsprogs runcmd dpkg re-ensure guard present (packages: stage non-fatal)" \
   "grep -qE 'dpkg -s e2fsprogs' '$CI'"
-assert "ext4-on-raw-device (no-partition) invariant asserted" \
-  "grep -qE 'lsblk -no TYPE .*grep -q .\\^part' '$CI'"
+# #6895: the old ext4-on-raw lsblk `^part` invariant is REPLACED by the D1/Option B blkid TYPE
+# discriminator — the raw device must be "" (fresh, -> luksFormat) or crypto_LUKS (reuse); any
+# other TYPE FATALs (refuse to wipe a plaintext volume the host-replace preserve-path kept).
+assert "raw-device blkid TYPE discriminator present (fresh/crypto_LUKS/else-FATAL)" \
+  "grep -qE 'blkid -o value -s TYPE \"\\\$DEV\"' '$CI' && grep -qE 'crypto_LUKS\\)' '$CI' && grep -qF 'refusing-non-luks-device' '$CI'"
 assert ".resize-result is persisted for the reporter" \
   "grep -qF '/var/lib/zot/.resize-result' '$CI'"
 
