@@ -475,6 +475,49 @@ email-acceptable surface.
 The restart-loop alarm is fully automated post-merge: `apply-sentry-infra.yml` auto-applies the new
 `sentry_cron_monitor` on merge, and the workflow schedule fires the first run — no operator step.
 
+### Guest-side LUKS at-rest for the store volume (amendment 2026-07-24, #6895)
+
+`hcloud_volume.registry` was a **plaintext ext4** block volume (ADR-140 recorded it as a
+`plaintext-exception` row in the encryption-posture ledger). It now carries **guest-side LUKS**,
+mirroring the `git_data_luks` apparatus (there is no hcloud `encrypted` volume attribute — ADR-140):
+the volume is a **raw** device (no `format`), cryptsetup luksFormats/luksOpens it in the guest at
+cloud-init (`cloud-init-registry.yml`) unlocked by `REGISTRY_LUKS_KEY`, a `random_password` published
+to the isolated `soleur-registry/prd` Doppler config and read at boot via the existing scoped service
+token (no new token). The store mounts from `/dev/mapper/registry` at `/var/lib/zot`; a boot-time
+oneshot (`registry-luks-open.service`) reopens the mapper after a reboot (the host self-`reboot`s via
+the private-NIC guard). The ledger row flips `plaintext-exception → luks`. This is **defense-in-depth
+on a disposable mirror** — the store holds only OCI blobs + cosign signatures (our own images),
+re-fills from GHCR, and carries no user/repo data.
+
+<!-- lint-infra-ignore start -->
+<!-- Deferred-orchestrator prose: this describes a SANCTIONED, gated operator recut that runs OUTSIDE
+     any per-PR apply (an OPERATOR_APPLIED_EXCLUSION `-replace` / the deferred guarded dispatch #6929),
+     not a human-run step prescribed inside a runbook this PR executes. Grandfathered per the lint's
+     own escape hatch; the recommended fully-automated vehicle is the guarded dispatch (#6929). -->
+
+**Recut vehicle (the operator step, OUTSIDE the landing PR).** Encrypting the *live* volume is a
+destroy+recreate: a scoped **`terraform apply -replace` of the volume + its attachment + the host,
+all three together** (a fresh raw volume ⇒ cloud-init luksFormats it ⇒ zot re-fills from GHCR). The
+recommended vehicle is a guarded, typed-confirm `registry-luks-recut` `workflow_dispatch` mirroring
+`workspaces-luks-recut`/`registry-region-migrate`; that guarded dispatch is **deferred to a follow-up**
+(#6929; the landing PR is cloud-init + Terraform + ledger only) — until it ships, the sanctioned
+`OPERATOR_APPLIED_EXCLUSION` `-replace` path is the vehicle, with all three resources targeted together.
+
+**FOOTGUN — do NOT use `registry-host-replace` for the recut.** That existing dispatch **preserves**
+the volume, so it boots cloud-init against the still-**plaintext** ext4 volume, which hits the D1/B
+`blkid TYPE` discriminator's **else → FATAL refuse** arm (a plaintext volume must be recut, never
+silently wiped) and **darks the registry**. Forgetting the `-replace` on the volume has the same
+effect. The refuse is the *safe* failure (it never mounts plaintext / never certifies a false-green
+posture), but it takes zot down — the only correct first apply is the three-way recut on a fresh volume.
+
+**Escrow deliberately omitted.** Unlike `workspaces_luks` (#6649 R2 LUKS-header escrow), there is **no**
+header escrow and **no** dedicated at-rest monitor here: passphrase loss ⇒ recreate + re-fill from
+GHCR, so escrow buys nothing for a disposable, born-fresh store (matches `git_data_luks`). Rotation is
+therefore a volume **recut**, not a bare host replace (`random_password.registry_luks` is deliberately
+absent from the host's `replace_triggered_by`, or cloud-init would luksOpen the old-key volume with the
+new key and FATAL).
+<!-- lint-infra-ignore end -->
+
 ## Alternatives Considered
 
 The 7 registry-choice options are tabled above. The **apply-path** alternatives (per-PR `-target`

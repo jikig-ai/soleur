@@ -548,6 +548,12 @@ jobs:
       - name: Run registry boot-guard + disk-observability tests (#6240/#6244)
         run: bash apps/web-platform/infra/registry-boot-guard.test.sh
 
+      # #6895 registry guest-side LUKS-at-rest guard suite (mutation-tested). Registered explicitly
+      # (this job runs named steps, not a glob — an unregistered infra suite gates NOTHING and fails
+      # silently green, #3366/#6520).
+      - name: Run registry LUKS-at-rest guard suite (#6895)
+        run: bash apps/web-platform/infra/registry-luks.test.sh
+
       - name: Run registry private-NIC boot-converger tests (#6415)
         run: bash apps/web-platform/infra/private-nic-guard.test.sh
 

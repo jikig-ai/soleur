@@ -133,21 +133,15 @@
       "device_binding": {
         "volume": "hcloud_volume.registry",
         "attachment": "hcloud_volume_attachment.registry",
-        "mapper": "registry-plain"
+        "mapper": "registry"
       },
       "at_rest": {
-        "mechanism": "plaintext-exception",
-        "evidence": "apps/web-platform/infra/zot-registry.tf:407 (format = \"ext4\", no LUKS apparatus)",
-        "defends_against": "nothing at the volume layer; integrity of the mirror comes from cosign digest-pinning, not at-rest encryption",
-        "does_not_defend": "a seized/snapshot disk exposes OCI blobs + cosign signatures (a disposable GHCR mirror; low sensitivity)",
+        "mechanism": "luks",
+        "evidence": "apps/web-platform/infra/cloud-init-registry.yml:773,778 (cryptsetup luksFormat/luksOpen registry); key: random_password.registry_luks + doppler_secret.registry_luks_key (zot-registry.tf); fstab: cloud-init-registry.yml:804",
+        "defends_against": "a seized/RMA'd or snapshot-imaged Hetzner block volume: OCI blobs + cosign signatures are unreadable without the Doppler-held LUKS passphrase",
+        "does_not_defend": "a leaked credential, an app-layer read on the unlocked live registry host, or exfiltration via a compromised zot process",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:no zot-host posture probe; tracked #6895",
-        "exception": {
-          "justification": "disposable GHCR mirror; low sensitivity; destroy+recreate as a LUKS volume is cheap but not urgent",
-          "tracking_issue": "#6895",
-          "reevaluate_when": "the registry volume is recreated with guest-side LUKS",
-          "expires_on": "2026-10-22"
-        }
+        "live_verification": "unavailable:no zot-host at-rest posture probe yet; tracked #6895"
       }
     },
     {
