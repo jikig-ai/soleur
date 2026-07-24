@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import { DEFAULT_ORG_NAME, WORKSPACE_NAME_MAX } from "@/lib/workspace-name";
 
 const ATTESTATION_TEXT =
@@ -133,19 +134,15 @@ export function InviteMemberModal({
     ],
   );
 
-  if (!open) return null;
-
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
+    <ResponsiveModal
+      open={open}
+      onClose={onClose}
+      closeOnBackdrop={false}
+      desktopMaxWidth="max-w-md"
       aria-labelledby="invite-modal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
     >
-      <form
-        onSubmit={handleSubmit}
-        className="w-full max-w-md rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-6"
-      >
+      <form onSubmit={handleSubmit}>
         <div className="mb-4 flex items-start justify-between">
           <div>
             <h2
@@ -307,6 +304,6 @@ export function InviteMemberModal({
           </button>
         </div>
       </form>
-    </div>
+    </ResponsiveModal>
   );
 }

@@ -537,6 +537,45 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
   "UI feature must ship a committed .pen wireframe, never skipped"
 ```
 
+### 4.10. Encryption Posture Halt (Conditional)
+
+Symmetric to Phase 4.7 above; this gate is what makes plan Phase 2.11 load-bearing. Fires only when the plan introduces a persistent data store or a new cross-component/network connection.
+
+**Step 1 — Trigger.** Fires when the plan's `## Files to Edit` / `## Files to Create` match one of `\.tf$`, `supabase/migrations/.*\.sql$`, `cloud-init.*\.ya?ml$`, `docker-compose.*\.ya?ml$`, OR the plan prose names a store class (volume, database, bucket, queue, cache, backup target, log sink) or a new cross-component connection. No match on any of the above → skip silently (pass-through).
+
+**Step 2 — Locate the section.** Grep the target plan file:
+
+```bash
+grep -q '^## Encryption Posture' <plan-file>
+```
+
+If absent, HALT with:
+
+> Error: Plan introduces a persistent store or cross-component connection but is missing `## Encryption Posture` section.
+> See `plugins/soleur/skills/plan/references/plan-issue-templates.md` for the schema.
+> Every new store or connection must declare a design-time encryption posture before deepen-plan proceeds.
+
+**Step 3 — Validate field values.** Extract the section body (between `^## Encryption Posture` and the next `^## ` heading). For each `at_rest` entry (`mechanism`, `evidence`, `defends_against`, `does_not_defend`, `disclosed_as`, `live_verification`) and each `in_transit` entry (`tls`, `cert_verification`, `does_not_defend`, `disclosed_as`), reject if ANY of:
+
+- **Field key absent or empty** — the field is required by the schema (`encryption-posture-ledger.schema.json`, repo-root `scripts/`) and either has no key or matches `^\s*<field>:\s*(TODO|TBD|N/A|placeholder)\s*$`.
+- **`mechanism` (or `at_rest` prose) matches the boilerplate ban-list** — case-insensitive: `provider handles`, `handled by the provider`, `encrypted by default` with no named attestation, `supports TLS`. These describe the absence of a posture, not a posture.
+- **`does_not_defend` is empty, `none`, or `n/a`.** The field is mandatory — a reviewer judges the semantic content, not a regex; do NOT reject on wording similarity to `defends_against` (a verbatim-restatement check was considered and deleted — a vacuous grep for a semantic property).
+- **An `exception` block is present but missing `tracking_issue` or `expires_on`.** An `exception` is required whenever `mechanism` is `plaintext-exception` or `cert_verification` is `off`; its absence in that case is itself a reject (folds into the field-key-absent case above).
+
+On rejection, HALT with a message naming the specific field and its failure mode (e.g., `"Phase 4.10 reject: at_rest[0].does_not_defend is empty"`).
+
+**Step 4 — Emit telemetry.** When the halt fires (Step 2 OR Step 3), emit:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident encryption-posture-design-time-default applied \
+  "Every new store/connection MUST declare a verified encryption posture at plan time"
+```
+
+**Step 5 — Pass-through.** If the section is present, all required fields exist with non-boilerplate values, `does_not_defend` is non-empty, and every `exception` block carries both `tracking_issue` and `expires_on`, deepen-plan proceeds normally. No telemetry on pass.
+
+**Why:** ADR-140 and `knowledge-base/project/plans/2026-07-23-feat-encryption-posture-design-time-default-plan.md` (Plan Review Revisions R1-R11). A declaration-only gate without Layer A (`lint-encryption-posture.py`, repo-root `scripts/`, resolving every citation against real code) and Layer B (live provider/host reconciliation) reproduces #6588 exactly — legal docs declared LUKS while the volume was plaintext ext4. This deepen-plan halt is the design-time half; it stops an underspecified or boilerplate posture from ever reaching `/work`.
+
 **Step 5 — Pass-through.** Non-UI plan, or a committed `.pen` present → proceed normally. No telemetry on pass.
 
 **Why:** #4819 — the one-shot path skips brainstorm, so plan Phase 2.5 is the sole producer; this halt is the independent verifier that a UI feature did not reach implementation with zero wireframes (the silent-skip class the feature kills).

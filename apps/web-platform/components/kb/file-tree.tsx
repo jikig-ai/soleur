@@ -223,7 +223,7 @@ function TreeItem({
           <FolderIcon />
           <span className="truncate font-medium">{node.name}</span>
           {node.modifiedAt && !isBusy && (
-            <span className="ml-auto shrink-0 text-xs text-soleur-text-muted group-hover:opacity-0 transition-opacity">
+            <span className="kb-tree-timestamp ml-auto shrink-0 text-xs text-soleur-text-muted group-hover:opacity-0 group-focus-within:opacity-0 transition-opacity">
               {formatRelativeTime(node.modifiedAt)}
             </span>
           )}
@@ -234,7 +234,7 @@ function TreeItem({
               e.stopPropagation();
               fileInputRef.current?.click();
             }}
-            className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-soleur-text-muted opacity-0 transition-opacity hover:bg-soleur-bg-surface-2 hover:text-soleur-text-secondary group-hover:opacity-100"
+            className="kb-tree-actions absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-soleur-text-muted opacity-0 transition-opacity hover:bg-soleur-bg-surface-2 hover:text-soleur-text-secondary group-hover:opacity-100 group-focus-within:opacity-100"
             title="Upload file"
             aria-label={`Upload file to ${node.name}`}
           >
@@ -438,7 +438,7 @@ function FileNode({
             <FileTypeIcon extension={node.extension} />
             <span className="truncate">{node.name}</span>
             {node.modifiedAt && !isDeleting && !isRenaming && (
-              <span className={`ml-auto shrink-0 text-xs text-soleur-text-muted${isAttachment ? " group-hover:opacity-0 transition-opacity" : ""}`}>
+              <span className={`ml-auto shrink-0 text-xs text-soleur-text-muted${isAttachment ? " kb-tree-timestamp group-hover:opacity-0 group-focus-within:opacity-0 transition-opacity" : ""}`}>
                 {formatRelativeTime(node.modifiedAt)}
               </span>
             )}
@@ -455,7 +455,7 @@ function FileNode({
           </Link>
         )}
         {isAttachment && deleteState.status === "idle" && renameState.status === "idle" && (
-          <div className="absolute right-1 top-1/2 flex -translate-y-1/2 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+          <div className="kb-tree-actions absolute right-1 top-1/2 flex -translate-y-1/2 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
             <button
               onClick={(e) => {
                 e.preventDefault();
