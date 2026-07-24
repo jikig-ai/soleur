@@ -84,9 +84,11 @@ run() {
   RC=$?
 }
 
-assert_rc() { [[ "$RC" == "$1" ]] && ok "$2" || no "$2 (want rc=$1 got $RC)"; }
-has() { grep -qF -- "$1" "$OUTFILE" && ok "$2" || no "$2 (missing: $1)"; }
-lacks() { grep -qF -- "$1" "$OUTFILE" && no "$2 (present: $1)" || ok "$2"; }
+assert_rc() { if [[ "$RC" == "$1" ]]; then ok "$2"; else no "$2 (want rc=$1 got $RC)"; fi; }
+has() { if grep -qF -- "$1" "$OUTFILE"; then ok "$2"; else no "$2 (missing: $1)"; fi; }
+lacks() { if grep -qF -- "$1" "$OUTFILE"; then no "$2 (present: $1)"; else ok "$2"; fi; }
+# refute a literal token in the SUT source (grep on a FILE, never a pipe).
+src_lacks() { if grep -qE "$1" "$SUT"; then no "$2"; else ok "$2"; fi; }
 
 # --- C1: all authorized + target authorized -> exit 0, both PASS lines ---
 run "$MOCKPATH" --target-entrypoint http_request_transform
@@ -127,9 +129,10 @@ assert_rc 3 "C6b http 500 -> exit 3"
 MARKER="$WORK/curl-called"
 MOCK_CURL_MARKER="$MARKER" run "$MOCKPATH" --dry-run
 assert_rc 0 "C7 --dry-run -> exit 0"
+# shellcheck disable=SC2016  # the literal, unexpanded '$TOK' is exactly the assertion
 has 'Bearer $TOK' "C7 prints literal 'Bearer \$TOK' (unexpanded)"
 lacks "fake-secret-abc123xyz" "C7 dry-run leaks no token value"
-[[ ! -e "$MARKER" ]] && ok "C7 dry-run never invoked curl" || no "C7 dry-run invoked curl"
+if [[ ! -e "$MARKER" ]]; then ok "C7 dry-run never invoked curl"; else no "C7 dry-run invoked curl"; fi
 
 # --- C8: a real run never echoes the token value (combined 2>&1) ---
 run "$MOCKPATH"
@@ -137,10 +140,9 @@ assert_rc 0 "C8 baseline authorized run -> exit 0"
 lacks "fake-secret-abc123xyz" "C8 no Bearer token value in combined output"
 
 # --- C9: source grep-guards (negatives enforced, not just prose) ---
-grep -qE 'set +-x' "$SUT" && no "C9 no 'set -x' in source" || ok "C9 no 'set -x' in source"
-grep -qE 'doppler[[:space:]]+(secrets[[:space:]]+)?(set|upload|delete)\b' "$SUT" \
-  && no "C9 no Doppler write verb in source" || ok "C9 no Doppler write verb in source"
-grep -qE '\bterraform\b' "$SUT" && no "C9 no 'terraform' in source" || ok "C9 no 'terraform' in source"
+src_lacks 'set +-x' "C9 no 'set -x' in source"
+src_lacks 'doppler[[:space:]]+(secrets[[:space:]]+)?(set|upload|delete)\b' "C9 no Doppler write verb in source"
+src_lacks '\bterraform\b' "C9 no 'terraform' in source"
 
 # --- C10: missing Doppler secret -> exit 2 ---
 MOCK_TOKEN='' run "$MOCKPATH"

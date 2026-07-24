@@ -109,6 +109,7 @@ get_secret() {
 TOK="$(get_secret "$TOKEN_SECRET")"
 ZONE="$(get_secret "$ZONE_SECRET")"
 ACCT="$(get_secret "$ACCT_SECRET")"
+# shellcheck disable=SC2317  # invoked indirectly via the EXIT trap
 cleanup() { unset TOK ZONE ACCT; }
 trap cleanup EXIT
 
@@ -165,9 +166,8 @@ check "$API/accounts/$ACCT/rulesets" account || FAILED=1
 report "accounts/<acct>/rulesets" "$VERDICT"
 
 # 4. Target entrypoint (the newly-widened scope), if given.
-TARGET_OK=1
 if [[ -n "$TARGET" ]]; then
-  check "$API/zones/$ZONE/rulesets/phases/$TARGET/entrypoint" zone || { TARGET_OK=0; FAILED=1; }
+  check "$API/zones/$ZONE/rulesets/phases/$TARGET/entrypoint" zone || FAILED=1
   report "target: $TARGET" "$VERDICT"
 fi
 
