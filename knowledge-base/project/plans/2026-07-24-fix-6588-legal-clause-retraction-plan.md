@@ -1,5 +1,5 @@
 ---
-title: "fix(legal): retract the three unachievable multi-host clauses, re-scope the LUKS clause to the live single-host topology, and disclose the retained plaintext backstop (#6588 legal half)"
+title: "fix(legal): retract the three unachievable multi-host clauses, re-scope the LUKS clause to the live single-host topology, and reaffirm the retained-plaintext HOLD while escalating its blocker #6808 (#6588 legal half)"
 date: 2026-07-24
 type: fix
 issue: 6588
@@ -12,13 +12,23 @@ live_infra_mutation: none
 runtime_deploy_risk: none
 adr_refs: [ADR-119, ADR-140, ADR-141, ADR-084]
 deepened: 2026-07-24
+amended: 2026-07-24   # D3 replaced: operator reaffirmed the UC-3 hold; escalate #6808 instead
 ---
 
-# fix(legal): #6588 legal half — retract, re-scope, disclose
+# fix(legal): #6588 legal half — retract, re-scope, escalate
+
+> **AMENDED 2026-07-24 (operator decision).** Deliverable 3 originally recommended adding an
+> affirmative disclosure sentence about the retained pre-cutover plaintext volume to all five
+> published LUKS sites, reversing the operator's same-day HOLD (UC-3, PR #6918). The question was
+> re-raised with the full revisit-trigger analysis and **the operator reaffirmed the hold.**
+> **No published legal text in this PR gains a sentence about the retained plaintext copy.**
+> Deliverable 3 is now *reaffirm the hold and escalate the blocker* (#6808). Deliverables 1, 2 and
+> 4 are unchanged. Every section below reflects the amendment.
 
 ## Enhancement Summary
 
 **Deepened:** 2026-07-24
+**Amended:** 2026-07-24 (D3 replaced — see the note above)
 **Review panel:** `architecture-strategist`, `spec-flow-analyzer`, `code-simplicity-reviewer`
 (escalated per `single-user incident`), plus the `clo` legal domain review invoked at plan time,
 a verify-the-negative sweep, and a banner-precedent history check.
@@ -46,12 +56,16 @@ a verify-the-negative sweep, and a banner-precedent history check.
    obligation than the TOM prose it did cover.
 5. **A conditional branch that would have silently reclassified the PR was removed.** An earlier
    §4f fallback authorized editing `scripts/lint-encryption-posture.py` plus tests inside a PR
-   declaring `runtime_deploy_risk: none`. Pre-decided to the free fallback; the linter blind spot
-   is filed against #6893 instead.
+   declaring `runtime_deploy_risk: none`. Removed; the linter blind spot is filed against #6893
+   instead. *(Post-amendment the branch is doubly moot — the `hcloud_volume.workspaces` row is not
+   edited at all — but the #6893 filing stands on its own; see §4f.)*
 6. **Phase 0's RED path was a dead end** ("stop", then "retraction becomes correct") with no
    downstream AC re-scoped. Now a defined DEGRADED-SCOPE branch.
-7. **The audit trail moved ahead of the change it audits** (new Phase 1.5) — an abort between the
-   old Phase 2 and Phase 5 would have left a same-day operator reversal applied with no record.
+7. **The audit trail is written first (Phase 1.5), not last.** Post-amendment it records a
+   challenge **raised and resolved in favour of the operator's original position**, so there is no
+   reversal for it to guard. It stays in Phase 1.5 because Phase 5's escalation comment and the
+   CLO attestation both cite it, and because the record of a *retained* live over-claim is the
+   more important artifact, not the less.
 8. **Scope cuts:** the #3723 Art. 17 note (an *addition*, not a correction → posted to #3723
    instead), an `nfr-register:521` no-op row, AC2's un-artifacted ritual, and three-quarters of
    AC13. `## Observability` and `## Encryption Posture` were converted from non-compliant skip
@@ -68,9 +82,12 @@ a verify-the-negative sweep, and a banner-precedent history check.
 - **The ledger's `privacy-policy.md:519` anchor is dead, not merely decorative** — the file
   contains zero occurrences of the literal `519`, and the resolver's unresolvable branch is marked
   `# Fail CLOSED`, so it becomes a hard CI failure the moment that row's mechanism changes.
-- **The disclosure may concern one backstop or two.** `hcloud_volume.git_data` is ledgered as a
-  backstop for a cutover that never happened (the host was never born, #6570 OPEN) — its contents
-  must be established before the sentence is written, in either direction.
+- **The retained-plaintext residual may concern one backstop or two.** `hcloud_volume.git_data` is
+  ledgered as a backstop for a cutover that never happened (the host was never born, #6570 OPEN) —
+  its contents are genuinely unestablished. **Moot for this PR** post-amendment (no sentence is
+  written), but it is a live precondition for the *deferred* Path-2 wording: whoever writes it
+  must first establish whether that volume holds any user data. Carried into the #6808 escalation
+  comment (§Deliverable 3) so the question is not lost with the hold.
 - **10 of 10 negative claims verified**, zero contradictions (see §Research Insights).
 
 ## Overview
@@ -86,9 +103,17 @@ Four deliverables, one PR:
    re-verification across hosts; the dedicated per-workspace git-data host).
 2. **RE-SCOPE** the LUKS clause so it is true as written on the actual single-host topology
    (its current "Where the Web Platform spans more than one Hetzner host" premise is dead).
-3. **DISCLOSE** the retained pre-cutover plaintext volume honestly.
+3. **REAFFIRM + ESCALATE** — record that the retained-plaintext disclosure question was re-raised
+   with its revisit-trigger analysis and that the operator **reaffirmed the HOLD**; then escalate
+   **#6808**, the blocker that gates the cure, recording that it now gates a *live published
+   over-claim*. **No published legal text gains a plaintext-disclosure sentence in this PR.**
 4. **MECHANICS** — re-pin `legal-doc-shas.ts`, close DC-1, append+annotate the provenance
    banner, correct the internal registers, reconcile with #6897.
+
+> **The residual is not hidden — it is unpublished.** It stays recorded internally in
+> `scripts/encryption-posture-ledger.json` (`hcloud_volume.workspaces`, `mechanism:
+> plaintext-exception`, `tracking_issue: #6897`) and, per §4d, in `article-30-register.md`. What
+> the operator held is the *public* sentence, not the internal record.
 
 The governing principle, from the learning this issue produced
 (`2026-07-16-removing-a-false-claim-can-strengthen-the-false-claim-that-leaned-on-it.md`):
@@ -109,12 +134,12 @@ reading, not by assuming. Two of them moved.
 |---|---|---|---|
 | P1 | #6588 OPEN, P0-critical | **HOLDS.** `state: OPEN`, labels `priority/p0-critical`, `domain/engineering`, `type/security` | Plan against it |
 | P2 | Encryption half certified 2026-07-23, run 30040444418 | **HOLDS.** `conclusion: success`, `createdAt: 2026-07-23T20:02:33Z`. Note the 4 prior runs all `failure` — this is the first green | Re-verify live at /work (Phase 0) |
-| P3 | #6808 OPEN, blocks soak + Phase-5 wipe | **HOLDS.** Body confirms `WORKSPACES_LUKS_HEARTBEAT_URL absent — heartbeat not pushed`. `workspaces-luks-soak-6604.sh` gates on the heartbeat being **present** and rows spanning **≥7d**, so the soak clock has not started | Material — see §Deliverable 3 |
+| P3 | #6808 OPEN, blocks soak + Phase-5 wipe | **HOLDS.** Body confirms `WORKSPACES_LUKS_HEARTBEAT_URL absent — heartbeat not pushed`. `workspaces-luks-soak-6604.sh` gates on the heartbeat being **present** and rows spanning **≥7d**, so the soak clock has not started | Material — this is both the revisit-trigger analysis put to the operator and the **escalation target**; see §Deliverable 3 |
 | P4 | git-data host "never born" | **HOLDS.** #6570 still OPEN: *"git-data is pinned to cax11 — orderable in 0 of 3 EU DCs, so it can never be born"* | Retract clause (c) |
 | P5 | No load balancer; `app.soleur.ai` singleton to web-1 | **HOLDS.** `tunnel.tf:54` pins ingress to `var.web_hosts["web-1"].private_ip`; `model.c4:413` records single connector post-#6538 | Retract clause (b) |
 | P6 | Clauses live in privacy-policy + DPD + 2 mirrors (**4 files**) | **STALE — UNDERCOUNT.** The claim family also lives in **`gdpr-policy.md`** and its mirror. **6 files**, not 4. Corroborated independently by #6897's own scope (`docs/legal/{privacy-policy,gdpr-policy,data-protection-disclosure}.md`) and by DC-1's own "all 6 files" | Scope = 6 files |
 | P7 | Clauses at "roughly lines 298 and 519" | **STALE — UNDERCOUNT.** **8 canonical body sites + 3 banner headers, ×2 = 22 sites** (see §Site Matrix). Three sites (`privacy-policy.md:489`, `gdpr-policy.md:318`, `data-protection-disclosure.md:318`) carry a claim with **no `LUKS` token at all** | Union-anchor sweep; **never** `grep LUKS` |
-| P8 | #6897 owns a "legal-doc reconciliation" bullet | **HOLDS, and it already RAN.** PR **#6918** merged 2026-07-24 17:55 CEST; the operator **HELD** the copy fix (UC-3) | See §Deliverable 3 + §Issue Reconciliation |
+| P8 | #6897 owns a "legal-doc reconciliation" bullet | **HOLDS, and it already RAN.** PR **#6918** merged 2026-07-24 17:55 CEST; the operator **HELD** the copy fix (UC-3), and **REAFFIRMED that hold on 2026-07-24** when this plan re-raised it | See §Deliverable 3 + §Issue Reconciliation |
 | P9 | *(implicit)* users are exposed today | **ZERO arms-length data subjects.** #3723 OPEN; the volume holds the operator's own dogfooding workspaces | Makes the correction **cheap now**; see §User-Brand Impact |
 
 **P7 is the load-bearing correction.** A literal-phrase sweep is the documented failure mode
@@ -130,7 +155,7 @@ The prior #6588 plan had already recorded this trap; this plan inherits its unio
 | Task statement | Repo reality | Plan response |
 |---|---|---|
 | "docs/legal/privacy-policy.md ... plus data-protection-disclosure.md plus BOTH Eleventy mirrors" | `gdpr-policy.md` + its mirror carry the same family. **6 files** | Scope widened to 6; AC1 asserts residual-zero across all 6 |
-| "roughly lines 298 and 519" | 7 canonical body sites; 2 have no `LUKS` token | Union-anchor grep (§Phase 1), content anchors not line numbers (`cq-cite-content-anchor-not-line-number`) |
+| "roughly lines 298 and 519" | **8** canonical body sites (§Site Matrix); **3** carry a claim with no `LUKS` token | Union-anchor grep (§Phase 1), content anchors not line numbers (`cq-cite-content-anchor-not-line-number`) |
 | "re-pin legal-doc-shas.ts ... very likely a CI gate" | **Confirmed.** `tc-document-sha-guard` (required check, ADR-032-pinned name) via `check-tc-document-sha.sh`. Raw-byte `sha256sum`, **no bypass** for non-T&C docs | Phase 4; 3 SHAs |
 | "possibly a cross-document consistency gate" | **Confirmed, and it is stricter than expected.** `legal-doc-consistency.test.ts` asserts (a) `##`/`###` heading-sequence parity canonical↔mirror, (b) **Last-Updated date byte-identical in 3 places per mirror** (canonical body, mirror body, mirror hero `<p>`) | Phase 3 + AC5; **9 date strings** total |
 | "Follow the repo's ... 'Last Updated' provenance banner" convention | It is a **single line of 27,358 characters / 27,492 bytes** (UTF-8 multibyte — quote the unit), prepend-style: `**Last Updated:** <new> (...). Previous: <old> (...)` | Phase 3; §Banner Handling |
@@ -261,134 +286,162 @@ Rewrite so the surviving claim stands on the **actual single-host topology**, un
 
 ---
 
-## Deliverable 3 — Disclose the retained plaintext original
+## Deliverable 3 — Reaffirm the hold and escalate the blocker
 
-### The decision, and its justification
+**Ruling: NO affirmative plaintext-disclosure sentence ships in this PR. The operator's UC-3 hold
+STANDS, reaffirmed 2026-07-24. In its place, this PR escalates #6808.**
 
-**Ruling: an affirmative disclosure sentence is REQUIRED.** Not immaterial.
+This deliverable produces **two artifacts and no published prose**: (1) a User-Challenge record of
+the re-raise and its outcome, and (2) an escalation on #6808. Both are verifiable after the fact
+(AC11, AC15).
 
-This is a User-Challenge under ADR-084 and must be handled as one, because the operator took a
-contrary decision **on this same day**. The full reasoning:
+### 3a. What was put to the operator, and what the operator decided
 
 **The facts.** `hcloud_volume.workspaces` (plain ext4, `server.tf:1569`) holds a full copy of
 every workspace as of the 2026-07-23 cutover. It is ATTACHED-UNMOUNTED and UN-WIPED, retained
 as the ADR-119 rollback backstop. The ledger's own words:
 `does_not_defend: "a seized/snapshot disk exposes any workspace data still resident on this volume."`
 
-**The prior decision.** PR #6918 (merged today) ran `/soleur:legal-audit`, which found exactly
-this as a **material over-claim of the #6588 class**. The operator **HELD** the copy fix (UC-3),
-on the reasoning that *Path 1 (infra teardown) will cure it and is already tracked*. The
-auditor's Path-2 wording was preserved verbatim for later. That decision was legitimate and is
-recorded in `2026-07-24-holding-a-live-overclaim-pending-infra-teardown-and-drain-can-mean-keep-open.md`.
+**The prior decision.** PR #6918 (merged 2026-07-24 17:55 CEST) ran `/soleur:legal-audit`, which
+found exactly this as a **material over-claim of the #6588 class**. The operator **HELD** the copy
+fix (UC-3), on the reasoning that *Path 1 (infra teardown) will cure it and is already tracked*.
+The auditor's Path-2 wording was preserved verbatim for later. That decision is recorded in
+`2026-07-24-holding-a-live-overclaim-pending-infra-teardown-and-drain-can-mean-keep-open.md`.
 
-**Why it should now be folded in — two independent reasons.**
+**The revisit-trigger analysis put to the operator (2026-07-24).** UC-3 states its own trigger:
+*"If the teardown slips materially, revisit Path 2."* Measured this session:
 
-1. **The HOLD's own revisit trigger has fired.** UC-3 states: *"If the teardown slips
-   materially, revisit Path 2."* The teardown is blocked on **#6808** (OPEN). The soak probe
-   `workspaces-luks-soak-6604.sh` requires the luks-monitor heartbeat to be **present** and its
-   rows to **span ≥7 days**; with `WORKSPACES_LUKS_HEARTBEAT_URL` unwired, the clock has **not
-   started**. Earliest cure is therefore *#6808 fix + 7 days*, with no committed date. That is a
-   material slip, and it is knowable **today** — this is not overriding the operator, it is the
-   condition the operator themselves named.
-2. **The HOLD's cost rationale collapses.** The hold traded off "a doc edit we are not otherwise
-   making." **This PR is already rewriting those exact sentences.** The marginal cost of accuracy
-   is one clause. Shipping a re-scoped clause (d) that is literally true but leaves its plain
-   reading false — inside the PR whose entire purpose is retracting over-claims — reproduces
-   #6588's error class within #6588's own fix.
+- The teardown is blocked on **#6808** (OPEN — `WORKSPACES_LUKS_HEARTBEAT_URL` unwired).
+- The soak probe `workspaces-luks-soak-6604.sh` requires the luks-monitor heartbeat to be
+  **present** and its rows to **span ≥7 days**. With the URL unwired, the probe runs, succeeds,
+  and pushes nothing — **the soak clock has not started.**
+- Earliest cure is therefore **"#6808 fix + 7 days"**, with **no committed date** for either leg.
+- Secondary point put alongside it: this PR is already rewriting those exact sentences, so the
+  marginal cost of the wording is one clause rather than a fresh legal-doc edit.
 
-**Against the legal standard.** The CLO domain review (invoked this session) reached the same
-conclusion independently and **BLOCKS** on shipping without it (B1). Its reasoning:
+**The operator's decision: KEEP THE HOLD.** Presented with the above, the operator reaffirmed the
+UC-3 hold and directed that the blocker be escalated instead. Consequences, recorded plainly:
 
-- **Arts. 13/14** are *not* the source of the duty — TOMs are not an enumerated limb, and a
-  transient storage-media state is operational detail outside them. Correctly disposed of.
-- **Art. 32(1)** is substantive, not publicational; it creates no disclosure duty.
-- **Art. 5(2)** is already discharged internally by the ledger row. On its own this lands at
-  *immaterial*.
-- **What decides it is the #6588 over-claim standard itself.** *"Stored workspace git data sits
-  on a LUKS-encrypted volume"* is read by any user as a statement about **their data**, not about
-  **one volume**. A full un-wiped copy on a seizable disk defeats precisely the threat the
-  sentence advertises — and Soleur has that admission in writing in its own ledger. Publishing
-  the unqualified sentence while holding that admission is the same failure mode as (a)(b)(c):
-  **a safeguard asserted more broadly than it is earned. That is the exposed direction.**
+- **A live published over-claim is knowingly retained.** The re-scoped clause (d) will read, to
+  any ordinary user, as a statement about *their* data rather than about *one volume*, while a
+  full un-wiped copy sits on a seizable disk. That gap is now an **accepted, undisclosed
+  residual** (§Risks R4), not an unnoticed one.
+- **This makes the audit trail more important, not less.** A reversal would have needed a record
+  so the change could be traced. A *retention* needs a record so the accepted exposure can be
+  traced — to a decision, a date, and a tracking issue. Phase 1.5 writes it before anything else.
+- **The escalation is the substitute remedy.** The operator did not decline the finding; they
+  chose Path 1 (cure the reality) over Path 2 (qualify the words). Path 1 is only credible if its
+  blocker is actually prioritised — hence §3c.
 
-**Instrument.** Adopt the *shape* of the PR #4455 temporal-qualifier precedent (bounded
-condition + `Ref #N`), but **do not cite Art. 13(3)** as authority. The #6588 plan's own premise
-table (P7) already recorded that the Art. 13(3) anchor is wrong for this class — CLO ruled the
-correct anchors are **Art. 12(1) + 5(1)(a)**, and #4455 disclosed something *forthcoming*
-whereas this is a *residual* being retired. Do not propagate the loose citation.
+### 3b. Preserve the Path-2 wording verbatim (do not lose it)
 
-### Where the disclosure goes — all five LUKS sites, two registers
-
-The LUKS claim is made at **five canonical body sites** (×2 with mirrors): `privacy-policy.md:298`
-and `:519`; `data-protection-disclosure.md:189` (processor table) and `:276`; `gdpr-policy.md:44`.
-Putting the disclosure in `privacy-policy.md` alone would leave **DPD and GDPR Policy each still
-carrying an unqualified completeness claim** — CLO's B1 reasoning applies to every unqualified
-instance, not just the most prominent one. Two-part treatment:
-
-| Site | Treatment |
-|---|---|
-| `privacy-policy.md:519` (§11 Security) | **Full disclosure sentence.** Natural home — this is the Art. 32 TOM section. |
-| `privacy-policy.md:298`, `data-protection-disclosure.md:189` + `:276`, `gdpr-policy.md:44` | **Scope-to-live qualifier.** Adopt the preserved Path-2 construction — *"stored **live** workspace git data sits on a LUKS-encrypted volume (encryption at rest)"* — so no instance reads as an unqualified all-copies claim, without repeating the full sentence five times. |
-| All six mirrors | Lockstep with their canonical. |
-| `article-30-register.md` TOM items | The register's TOM description must match: the volume-layer measure is scoped to the live store, with the retained backstop named as a residual. |
-
-**Source of the wording.** PR #6918 preserved the auditor's Path-2 text verbatim, precisely so
-that "if wording is chosen later" it is one edit away. Use it as the base rather than re-drafting:
+The wording remains preserved for whoever writes it after #6808 clears. It is **not** used in this
+PR. Recorded here so a second hold does not have to re-derive it:
 
 > *"stored **live** workspace git data sits on a LUKS-encrypted volume (encryption at rest) (a
 > superseded pre-cutover plaintext volume is retained only as a rollback backstop pending secure
 > teardown)"*
 > — `specs/feat-one-shot-6897-superseded-volumes-zot-legal/decision-challenges.md` UC-3, Path 2
 
-**Pinned §11 sentence (privacy-policy, full form).** CLO supplied this plain-language rendering,
-date-free per B4. Ship this text unless /work finds a factual defect in it:
+Two constraints that survive with it, for that future edit:
 
-> **Encrypted, access-controlled workspace storage:** Stored workspace git data sits on a
-> **LUKS-encrypted volume (encryption at rest)** on the Hetzner host that serves the Web Platform,
-> and each workspace's git data is **access-controlled per workspace** so that only that
-> workspace's members can retrieve it. A copy of workspace git data as it stood on 23 July 2026
-> also remains on the older, unencrypted volume it replaced; that copy is kept only as a rollback
-> safeguard, is not mounted or served, and is erased once the change is confirmed final.
+1. **No published wipe date while #6808 is open** (CLO B4). A missed public deadline is a new
+   over-claim of the same family. Use a condition, never a date. The ledger's
+   `expires_on: 2026-10-22` is an **internal** commitment, not an achieved schedule.
+2. **One backstop or two — establish it before writing.** The auditor named two attached plaintext
+   volumes: `hcloud_volume.workspaces` (`server.tf:1569`) and `hcloud_volume.git_data`
+   (`git-data.tf:196`). The second is ledgered as the backstop for a git-data LUKS cutover that
+   **never happened** (the host was never born, #6570 OPEN), so it may hold nothing. Naming one of
+   two would be a partial correction; asserting it holds data without evidence would be an
+   over-claim in the other direction.
 
-**Pinned short form** (for `pp:298`, `dpd:189` table cell, `dpd:276`, `gdpr:44`): the preserved
-Path-2 construction above — *"stored **live** workspace git data … (a superseded pre-cutover
-plaintext volume is retained only as a rollback backstop pending secure teardown)"*.
+### 3c. The escalation — #6808 (this is a deliverable, not a note)
 
-> **`Ref` anchor.** The preserved Path-2 wording carries none, and §Instrument requires one. Add
-> `(Ref #6588)` — subject to the §4c style decision, which must be applied consistently to body
-> prose and banner alike. Note the "23 July 2026" above is a **historical fact** (when the copy was
-> taken), not a wipe deadline — it does not breach B4. Do not add a *future* date.
+**What changed about #6808.** It was filed and triaged as a *monitoring gap* — a dead probe that
+cannot page (`priority/p2-medium`, `type/bug`). As of this decision it is also the **gate on a
+live published over-claim** in `docs/legal/*`: it blocks the soak, the soak blocks the Phase-5
+plaintext wipe, and the wipe is the operator-chosen cure (Path 1) for the residual this PR
+knowingly leaves undisclosed. That is a different severity class from "the probe is dark", and
+#6808's labels must say so.
 
-**One backstop or two? — verify, do not assume.** The auditor's finding named **two** attached
-plaintext volumes: `hcloud_volume.workspaces` (`server.tf:1569`) and `hcloud_volume.git_data`
-(`git-data.tf:196`). This plan's D3 reasoning, and AC4, speak of one (singular). Disclosing one of
-two would reproduce the partial-correction defect inside the PR that exists to fix partial
-corrections.
+**Before mutating: re-verify state** (`hr-before-asserting-github-issue-status`) — do not assume
+the labels below are still current:
 
-**Resolution at /work — a factual question with a decisive answer, so answer it rather than
-hedging.** `hcloud_volume.workspaces` demonstrably holds user source code (it is the pre-cutover
-copy of `/mnt/data`). `hcloud_volume.git_data`'s status is genuinely uncertain: its ledger row calls
-it *"the pre-cutover rollback backstop"* for a **git-data LUKS cutover that never happened**,
-because the git-data host was never born (#6570 OPEN). A volume attached to a host that does not
-exist may hold nothing. **Determine whether `hcloud_volume.git_data` holds any user data before
-writing the sentence** — then either name both, or name one and record why the other is empty.
-**Do not assert "a volume" (singular) without having checked**; and do not assert it holds data
-without evidence, which would be an over-claim in the opposite direction.
+```bash
+gh issue view 6808 --json number,state,labels,title
+```
 
-### Hard constraint on the wording
+**Step 1 — post the escalation comment.** It must name #6588, this PR, and the reaffirmed hold, so
+that AC15 is checkable by anyone reading the issue:
 
-**No published wipe date while #6808 is open** (CLO B4). A missed public deadline is a new
-over-claim of the same family. Use a condition (*"once the change is confirmed final"*), never
-a date. The ledger's `expires_on: 2026-10-22` is an **internal** commitment, not an achieved
-schedule, and must not be published as one.
+```bash
+gh issue comment 6808 --body "$(cat <<'EOF'
+## Escalation — this now gates a live published over-claim (not only a monitoring gap)
 
-### Recording the challenge
+Raised from #6588 (legal half) — PR <PR_URL>.
 
-Because this reverses a same-day operator decision, /work MUST append a `DC` entry to
+**What changed.** On 2026-07-24 the retained-plaintext disclosure question (UC-3, PR #6918) was
+re-raised with the revisit-trigger analysis below. **The operator reaffirmed the HOLD**: no
+affirmative disclosure sentence about the retained pre-cutover plaintext volume ships in
+#6588's legal-half PR. The cure is Path 1 — tear down and wipe the plaintext volume — not
+Path 2 (qualify the published wording).
+
+**Why that lands on this issue.** Path 1 runs through this issue:
+
+- `WORKSPACES_LUKS_HEARTBEAT_URL` is unwired, so `luks-monitor.sh` succeeds and pushes nothing.
+- `workspaces-luks-soak-6604.sh` gates on the heartbeat being **present** with rows spanning
+  **>= 7 days** — so the ADR-119 soak clock **has not started**.
+- No soak means no Phase-5 plaintext wipe, which means the residual stays live.
+- Earliest possible cure is therefore **"#6808 fix + 7 days"**, with no committed date for
+  either leg.
+
+**Consequence.** Until this is wired, `docs/legal/{privacy-policy,gdpr-policy,data-protection-disclosure}.md`
+publish a LUKS-at-rest claim whose plain reading is broader than the infrastructure earns, with a
+full un-wiped plaintext copy of every workspace on an attached Hetzner volume
+(`hcloud_volume.workspaces`, ledgered `plaintext-exception`, `tracking_issue: #6897`). That
+residual is **accepted and tracked here** — it is not unknown, and it is not disclosed.
+
+**Open precondition carried over** (needed by whoever eventually writes the Path-2 wording, if the
+teardown slips again): establish whether `hcloud_volume.git_data` holds any user data. It is
+ledgered as the backstop for a git-data cutover that never happened (#6570 OPEN, host never born),
+so it may hold nothing — but that must be measured, not assumed.
+
+Refs: #6588, #6897, #6604, #6570. Prior decision: #6918 (UC-3).
+EOF
+)"
+```
+
+**Step 2 — re-prioritize.** Label taxonomy checked with `gh label list` this session; the
+priority scale is `priority/p0-critical` | `p1-high` | `p2-medium` | `p3-low`, and `type/security`
+exists (*"Security vulnerability, hardening, or audit finding"*).
+
+```bash
+gh issue edit 6808 \
+  --add-label "priority/p1-high" \
+  --add-label "type/security" \
+  --remove-label "priority/p2-medium"
+```
+
+**Why `p1-high` and not `p0-critical`.** #6588 itself carries `priority/p0-critical`, and the
+temptation is to mirror it. Rejected, deliberately: `p0-critical` reads *"drop everything"*, which
+is the opposite of what the operator just decided — they chose to hold and proceed. It is also not
+earned on the facts: there are **zero arms-length data subjects** today (#3723 OPEN; the volume
+holds the operator's own dogfooding workspaces), so no data subject is presently misled.
+`p1-high` — *"degraded functionality, no workaround"* — is exact: there is no workaround for a
+soak clock that cannot start. **If #3723 onboards a first arms-length user while #6808 is still
+open, this becomes p0** — record that trigger in the comment thread at that time.
+
+### 3d. Recording the challenge
+
+/work MUST create
 `knowledge-base/project/specs/feat-one-shot-6588-legal-clause-retraction/decision-challenges.md`
-stating: the UC-3 hold, the revisit trigger that fired, the collapsed cost rationale, and the
-CLO block. `ship` renders it into the PR body and files it as `action-required`. **Do not
-silently apply and do not silently skip.**
+in **Phase 1.5** (before any edit), recording: the UC-3 hold, the revisit-trigger analysis as put
+to the operator, the operator's **reaffirmation**, the CLO's contrary recommendation and its
+override, and the accepted residual with **#6808** as its tracking issue.
+
+This is a challenge **raised and resolved in favour of the operator's original position** — not a
+reversal. `ship` renders it into the PR body. **Do not silently apply and do not silently skip:**
+the failure mode this guards is not an unrecorded change, it is an unrecorded *acceptance*.
 
 ---
 
@@ -423,8 +476,9 @@ Paste each **full 64-char** value (per `2026-05-16-sha-pin-prefix-match-false-po
 three are notice/disclosure documents with no version constant and no re-acceptance gate. Per
 `tc-version-bump-policy.md` the edit must still be **classified Tier 1/2/3 in the PR body**
 (process requirement, not machine-enforced). **Classification: Tier 1 (material)** — retraction
-of published Art. 32 TOM claims plus a new affirmative disclosure. Tier 1 also triggers the
-register update, which this PR carries.
+of published Art. 32 TOM claims and re-scoping of a surviving one. (The tier does **not** rest on
+a new affirmative disclosure; none ships — see §Deliverable 3.) Tier 1 also triggers the register
+update, which this PR carries.
 
 ### 4b. DC-1 closure
 
@@ -502,9 +556,11 @@ pre-commit banner (with its head relabelled to `Previous:`) against the post-com
 - **(A) leave untouched is insufficient.** The banner is one unbroken line of prose; a
   present-tense sentence (*"now sits on a LUKS-encrypted volume"*) reads as a live claim to a
   user whose eye lands on it, regardless of its position in a changelog.
-- **(C) annotate** preserves the record verbatim *and* kills the live-claim reading. Insert a
-  bracketed retraction marker **inside** the July 2 entry without altering one word of its
-  original text, plus a new head entry. Annotation is additive, so append-only holds.
+- **(C) annotate** preserves the record verbatim *and* kills the live-claim reading. Append a
+  bracketed retraction marker **at the END of** the July 2 entry (immediately before
+  `Previous: June 30, 2026`) without altering one word of its original text, plus a new head
+  entry. Annotation is additive, so append-only holds. *(Wording aligned with the Terminology fix
+  above — "inside" is retired; only the end-append satisfies AC7.)*
 
 > **SHARP EDGE — the mirror banners are NOT byte-identical to the canonicals. Do not "sync" them.**
 > Measured 2026-07-24:
@@ -632,9 +688,11 @@ tests, no deploy risk.
   > accurate and leave if so"* — a Files-to-Edit row whose instruction is to produce no diff.
   > Removed.
 
-### 4f. Ledger coupling — both directions
+### 4f. Ledger coupling — two dead anchors to fix, one row that stays put
 
-`scripts/encryption-posture-ledger.json`. Baseline **PASSES**
+`scripts/encryption-posture-ledger.json`. **Two `disclosed_as` edits, not three** (the third,
+`hcloud_volume.workspaces`, was only in scope because of the retracted Deliverable 3 — see item 2).
+Baseline **PASSES**
 (`14 stores, 3 connections, 0 unledgered, 0 failing checks -> PASS`).
 
 1. **`workspaces_luks` row → `disclosed_as: "docs/legal/privacy-policy.md:519"`.** This cites
@@ -649,35 +707,42 @@ tests, no deploy risk.
    explicitly marked `# Fail CLOSED` — so **the instant that row's mechanism ever changes, the dead
    anchor becomes a hard CI failure.** Fixing it now is cheap insurance, not just rule compliance.
 
-2. **`hcloud_volume.workspaces` row → `disclosed_as: "not-publicly-claimed"`.** This becomes
-   **false** the instant Deliverable 3's sentence lands.
+2. **`hcloud_volume.workspaces` row → `disclosed_as: "not-publicly-claimed"` — NO CHANGE.**
+   Post-amendment this is **trivially correct and stays exactly as committed**: with the hold
+   reaffirmed, no published document makes any claim about this store, so the field is accurate on
+   its face. `exception.justification`, `tracking_issue: "#6897"`, `reevaluate_when` and
+   `expires_on` are likewise untouched.
 
-   > **SHARP EDGE — flipping it to a real anchor will turn CI RED.** That row's
-   > `mechanism` is `plaintext-exception`, so `check_disclosed_as_not_encrypted()` **does** run,
-   > and it FAILs when the resolved ±300-char region matches `/LUKS|encrypt/i`. Our disclosure
-   > sentence sits *inside the encryption paragraph* — the window will contain "encrypted" with
-   > near-certainty. R5 exists to catch **over**-claims; an honest **under**-claim trips it
-   > spuriously.
+   Earlier drafts of this plan carried an R5 sharp-edge analysis here — that flipping this field to
+   a real anchor would turn CI red, because `mechanism: plaintext-exception` makes
+   `check_disclosed_as_not_encrypted()` run and it FAILs when the resolved ±300-char window matches
+   `/LUKS|encrypt/i`. **That analysis is retired: the flip is not happening, so the CI failure it
+   warned about cannot occur in this PR.** Do not reinstate it, and do not "pre-empt" it by editing
+   the row.
 
-   **Resolution — PRE-DECIDED, do not re-open at /work.** Retain
-   `disclosed_as: "not-publicly-claimed"` and record the new published sentence in the row's
-   **`exception.justification`** instead. Rationale: the field's semantics are "what public claim
-   is made *about this store*"; the new sentence discloses the store's *existence as a residual*,
-   it does not claim a safeguard for it — so `not-publicly-claimed` remains defensible, and the
-   justification field carries the cross-reference.
+   > **One genuinely independent observation survives, and it is now MORE relevant, not less.**
+   > `check_disclosed_as_not_encrypted()` cannot distinguish an honest **under**-claim from an
+   > **over**-claim: it is built to catch a plaintext store being described in encryption language,
+   > and it fires identically when a plaintext store is *honestly disclosed as a residual* inside a
+   > security section. This does not depend on anything in this PR — it is a standing property of
+   > the linter, and it is a **latent blocker on the deferred Path-2 wording**: the moment #6808
+   > clears and someone writes that sentence, this check is in their way. **File it as a one-line
+   > issue against #6893** (which already tracks a sibling class gap: Layer A validates
+   > `tracking_issue` *shape* but never open/closed *state*). **Do not edit
+   > `scripts/lint-encryption-posture.py` in this PR** — it declares `runtime_deploy_risk: none`
+   > and its only non-prose file is `legal-doc-shas.ts`; touching a Python linter plus its tests
+   > would silently change the PR's change-class.
 
-   > **A previous draft of this plan offered a second option — "a minimal, tested extension to
-   > `check_disclosed_as_not_encrypted`" — and that option is now REMOVED.** Plan-review caught
-   > that it authorizes editing `scripts/lint-encryption-posture.py` (a Python linter, plus tests)
-   > inside a PR that declares `runtime_deploy_risk: none` and states in writing that its only
-   > non-prose file is `legal-doc-shas.ts`. That file is not in Files to Edit. Taking option (ii)
-   > would silently change the PR's change-class and falsify three of this plan's own sections.
-   > The linter's inability to distinguish an honest under-claim from an over-claim is a **real
-   > blind spot** — file it as a one-line issue against **#6893** (which already tracks a sibling
-   > class gap: Layer A validates `tracking_issue` *shape* but never open/closed *state*). Do not
-   > fix it here.
+3. **`connections[0]` (`web-platform server -> Supabase Postgres/PostgREST`) →
+   `disclosed_as: "docs/legal/data-protection-disclosure.md:316"`.** The same
+   `cq-cite-content-anchor-not-line-number` defect, in a file this PR edits. Convert to a content
+   anchor. It is not evaluated today (`cert_verification: "on"` short-circuits the whole
+   `disclosed_as` block in `check_connection`) and it *does* currently resolve
+   (`grep -c "316"` → 4) — but leaving one line-number citation while fixing the others is the
+   weaker option. Independent of Deliverable 3; unaffected by the amendment. Gated by AC8.
 
-   Re-run `python3 scripts/lint-encryption-posture.py --repo-sweep` after; expect PASS unchanged.
+   Re-run `python3 scripts/lint-encryption-posture.py --repo-sweep` after items 1 and 3; expect
+   PASS unchanged.
 
 ---
 
@@ -692,13 +757,18 @@ tests, no deploy risk.
 | `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` | Body `:186`, `:261`, **`:301`**; banner `:21`; hero date `:11` |
 | `plugins/soleur/docs/pages/legal/gdpr-policy.md` | Body `:53`, `:306`; banner `:22`; hero date `:11` |
 | `apps/web-platform/lib/legal/legal-doc-shas.ts` | Re-pin 3 SHAs (full 64-char) |
-| `knowledge-base/legal/article-30-register.md` | TOM items 13–16 and 17–20 across two PAs |
-| `knowledge-base/legal/compliance-posture.md` | `:80` DPA scope; add #3723 Art. 17 gate |
-| `knowledge-base/engineering/architecture/nfr-register.md` | `:522` (+ confirm `:521`) |
-| `scripts/encryption-posture-ledger.json` | `disclosed_as` **×3** — `stores[0]`, `stores[2]`, `connections[0]` (see §4f) |
+| `knowledge-base/legal/article-30-register.md` | **6 cells** (§4d): `(g)` TOMs `:50` + `:68`, `(d)` Recipients `:47`, `(e)` Transfers `:48` + `:163`, Vendor mapping `:426` |
+| `knowledge-base/legal/compliance-posture.md` | `:80` DPA scope (drop `git-data host CAX11`) + `web-2`/`fsn1` present-tense sweep. **No #3723 Art. 17 gate** — cut at plan-review; posted as a comment on #3723 instead (Phase 5.6) |
+| `knowledge-base/engineering/architecture/nfr-register.md` | `:522` only (the `:521` "confirm and leave" row was cut at plan-review — it produced no diff) |
+| `scripts/encryption-posture-ledger.json` | `disclosed_as` **×2** — `stores[0]` and `connections[0]` (see §4f). **`stores[2]` (`hcloud_volume.workspaces`) is NOT edited** — it was only in scope for the retracted Deliverable 3 |
 | `knowledge-base/project/specs/feat-6538-web2-fsn1-orphan/decision-challenges.md` | DC-1 → RESOLVED |
-| `knowledge-base/project/specs/feat-one-shot-6588-legal-clause-retraction/decision-challenges.md` | **Create** — the UC record for Deliverable 3 |
+| `knowledge-base/project/specs/feat-one-shot-6588-legal-clause-retraction/decision-challenges.md` | **Create** — the UC record for Deliverable 3 (hold **reaffirmed**, residual accepted, tracked #6808) |
 | `knowledge-base/legal/audits/2026-07-counsel-review-6588.md` | **Create** — CLO Phase 5.5 attestation |
+
+**The five LUKS sites are still edited** — by Deliverables 1 and 2 (retract (a)(b)(c) + web-2;
+drop the multi-host conditional). What they do **not** receive is any plaintext-disclosure
+sentence or scope-to-live qualifier. There is no file in this table that exists solely to host the
+retracted Deliverable 3.
 
 **Line numbers above are navigational only.** All edits and all ACs bind to **content
 anchors** (`cq-cite-content-anchor-not-line-number`); mirror offsets differ per file and drift
@@ -707,9 +777,10 @@ as soon as the first edit lands.
 ## Files to Create
 
 - `knowledge-base/project/specs/feat-one-shot-6588-legal-clause-retraction/decision-challenges.md`
-  — the Deliverable-3 User-Challenge record. **Written in Phase 1.5, BEFORE the D3 edit is
-  applied** (see Phase ordering note), so an abort mid-run cannot leave a same-day operator
-  reversal applied with no audit trail.
+  — the Deliverable-3 User-Challenge record: challenge raised, operator **reaffirmed the hold**,
+  residual accepted and tracked via #6808. **Written in Phase 1.5, first**, because Phase 5's
+  escalation comment and the CLO attestation both cite it, and because an abort mid-run must not
+  leave a knowingly-retained live over-claim with no record of who accepted it or why.
 - `knowledge-base/project/specs/feat-one-shot-6588-legal-clause-retraction/site-dispositions.md`
   — the 16-row per-site disposition table AC2 gates on.
 - `knowledge-base/legal/audits/2026-07-counsel-review-6588.md` — CLO attestation. Follows the
@@ -743,8 +814,12 @@ against a day-old certification.
    > 1. **Do not abort the PR.** Deliverables 1 and 4 remain valid and urgent — the three
    >    unachievable clauses are false regardless of the LUKS state.
    > 2. **Retract clause (d) instead of re-scoping it.** Drop the LUKS claim from all 5 sites
-   >    rather than asserting it. Deliverable 3's disclosure becomes moot (nothing to qualify).
-   > 3. **AC3 and AC4 are struck**; AC1 widens to include `LUKS` in the retraction anchor.
+   >    rather than asserting it.
+   > 3. **AC3 is struck**; AC1 widens to include `LUKS` in the retraction anchor. **AC4 and AC15
+   >    stand** — Deliverable 3 is unaffected in kind: no plaintext-disclosure sentence ships
+   >    (there would be no LUKS claim left to qualify), and the #6808 escalation becomes *more*
+   >    urgent, not less, because the certified cure has itself regressed. Say so in the escalation
+   >    comment.
    > 4. **DC-1 stays OPEN** (§4b is predicated on certification holding) and the PR body uses
    >    `Ref #6588`, **not** `Closes` — the encryption half would no longer be done.
    > 5. **File a P0 incident** against #6588 / #6812 and flip the ledger's `workspaces_luks` row,
@@ -774,25 +849,33 @@ Then apply the **claim-family litmus** per site: after removing X from *"…A, B
 Q, R."*, ask *what does "does P" now attach to?* If the answer changed, a claim was rewritten
 unintentionally.
 
-### Phase 1.5 — Write the audit trail BEFORE applying the change it audits
+### Phase 1.5 — Write the audit trail first
 
 Create `specs/feat-one-shot-6588-legal-clause-retraction/decision-challenges.md` with the
-Deliverable-3 User-Challenge record **now**, not in Phase 5.
+Deliverable-3 User-Challenge record **now**, not in Phase 5. Content per §3d: the UC-3 hold, the
+revisit-trigger analysis as put to the operator, the operator's **reaffirmation**, the CLO's
+contrary recommendation and its override, and the accepted residual tracked by **#6808**.
 
-> Deliverable 3's content lands in Phase 2 while an earlier draft filed its DC record in Phase 5.
-> For a gate whose stated purpose is *"do not silently apply and do not silently skip"*, an abort
-> between those phases leaves a same-day operator reversal applied with **no trail** — the exact
-> failure the record exists to prevent. Write it first.
+> **Ordering rationale (simplified post-amendment).** There is no reversal here to guard against —
+> the challenge resolved in favour of the operator's existing position, and nothing in the
+> published documents changes as a result of it. It is written first for two plainer reasons:
+> Phase 5's escalation comment quotes it, and the CLO attestation (ship Phase 5.5) cites it. An abort
+> mid-run should not leave a knowingly-accepted live over-claim with no record of who accepted it.
 
 Also create `site-dispositions.md` (16 rows, from the Site Matrix) — it is Phase 2's worklist and
 AC2's artifact.
 
 ### Phase 2 — Canonical body edits
 
-Deliverables 1 + 2 + 3 across the three canonicals, one claim family at a time (not one file at
+Deliverables **1 + 2** across the three canonicals, one claim family at a time (not one file at
 a time) so no site is half-edited. Highest-grade item first: the **DPD processor table**
 (`:189`) — Art. 13(1)(e) / Art. 30(1)(d) recipients territory, a stronger obligation than the
 volunteered TOM paragraph (CLO Risk 1).
+
+> **Deliverable 3 contributes NOTHING to this phase.** No site receives a plaintext-disclosure
+> sentence, and no site receives a scope-to-live (*"stored **live** workspace git data …"*)
+> qualifier. If a stale draft or a reviewer suggests adding one, that is the retracted D3 — AC4
+> asserts its absence.
 
 ### Phase 3 — Mirrors + banner + dates
 
@@ -806,19 +889,24 @@ volunteered TOM paragraph (CLO Risk 1).
 
 ### Phase 4 — Mechanical pins
 
-Ledger `disclosed_as` ×3 (§4f) → re-run the posture linter → **THEN** SHA re-pin ×3 → re-run
-`check-tc-document-sha.sh`.
+Ledger `disclosed_as` ×2 (§4f — `stores[0]`, `connections[0]`; **`stores[2]` untouched**) →
+re-run the posture linter → **THEN** SHA re-pin ×3 → re-run `check-tc-document-sha.sh`.
 
-> **Invariant: the SHA pin must be the LAST mutation touching `docs/legal/**`.** §4f instructs
-> measuring a ±300-char window and, if unclean, choosing a fallback — a plausible /work move is to
-> *reword the disclosure sentence* to obtain a clean window. Doing that after pinning silently
-> stales all three SHAs. Ordering the ledger work first removes the hazard; if any
-> `docs/legal/**` byte changes after the pin for any reason, **re-run the pin and re-verify**.
+> **Invariant: the SHA pin must be the LAST mutation touching `docs/legal/**`.** The pin is a
+> raw-byte `sha256sum`, so *any* later byte change in those three files silently stales all three
+> values, and `tc-document-sha-guard` is a required check with no bypass for non-T&C docs.
+> Late-arriving wording tweaks (a reviewer's phrasing note on a retracted clause, a banner summary
+> reword) are the realistic trigger. Ordering the ledger work first removes one hazard; if any
+> `docs/legal/**` byte changes after the pin **for any reason**, re-run the pin and re-verify.
 
-### Phase 5 — Registers, DC-1, attestation
+### Phase 5 — Registers, DC-1, escalation, attestation
 
-Art. 30 register → compliance-posture (`:80` + #3723 gate) → nfr-register → DC-1 RESOLVED →
-new `decision-challenges.md` UC entry → CLO writes the audit to `knowledge-base/legal/audits/`.
+Art. 30 register (6 cells, §4d) → compliance-posture `:80` → nfr-register `:522` → DC-1 RESOLVED →
+**#6808 escalation (§3c: `gh issue comment` + `gh issue edit` re-prioritize)** → Art. 17 note
+posted as a comment on #3723 → CLO writes the audit to `knowledge-base/legal/audits/`.
+
+> The `decision-challenges.md` UC entry is **not** written here — it was written in Phase 1.5. The
+> escalation comment quotes it, which is why the ordering matters.
 
 ### Phase 6 — Verification
 
@@ -882,16 +970,59 @@ independent, and passing one does not imply the other.
 
       > An earlier draft asked for a "claim-family litmus applied and **recorded** per site" with
       > no named artifact — unverifiable at review. Naming the file makes it a post-condition.
-- [ ] **AC3 — LUKS clause re-scoped.** No instance of the LUKS claim is conditioned on a
-      multi-host premise; none widens to "all data at rest"; the #6893 verifiability bound holds.
-- [ ] **AC4 — plaintext disclosed, at every unqualified site.** (a) The full disclosure sentence
-      appears in `privacy-policy.md` §11 + its mirror. (b) **No LUKS claim site anywhere in the 6
-      files reads as an unqualified all-copies claim** — each of the other four canonical sites
-      (+ mirrors) carries the scope-to-live qualifier. (c) **No published wipe date** in any of
-      them (CLO B4) — assert mechanically:
-      `grep -nE 'LUKS|encryption at rest' <6 files> | grep -viE '\blive\b|rollback backstop'`
-      returns only sites already covered by (a). (d) No date-shaped token appears within the
-      disclosure sentence.
+- [ ] **AC3 — LUKS clause re-scoped: not widened, and not deleted.** Two mechanical limbs, each
+      able to fail:
+
+      **(a) No widening** (#6893 claim-unlock bound). Across the 6 published files:
+
+      ```bash
+      grep -nEi "all (user |customer |workspace )?data at rest|encrypted by default|all .{0,25}data is encrypted" <6 files>
+      ```
+
+      returns **0**. Baseline on `origin/main` is also 0 — measure it; a non-zero baseline means
+      `main` moved and this AC must be re-derived before use.
+
+      **(b) No deletion.** The LUKS claim still stands at all **5 canonical + 5 mirror** sites the
+      Site Matrix names (`pp:298`, `pp:519`, `dpd:189`, `dpd:276`, `gdpr:44` + mirrors), verified
+      **per site against `site-dispositions.md`** — not by a repo-wide count, which cannot tell
+      which site lost it.
+
+      > The multi-host-premise removal is **not** restated here — **AC1 measures it**, because its
+      > anchor already carries `spans more than one` and `across more than one host` and both are
+      > non-zero pre-change. Limb (b) is a deliberate preservation check: the failure it catches is
+      > an implementer deleting an *earned, true* safeguard claim while retracting the false ones
+      > around it — "removed whole or not at all" applied in the other direction.
+- [ ] **AC4 — the HOLD held: NO plaintext disclosure was added (Deliverable 3).** The operator
+      reaffirmed the UC-3 hold, so **no published legal text may gain a sentence, clause, or
+      qualifier about the retained pre-cutover plaintext volume.** Three limbs:
+
+      **(a) Absence, absolute.** Across the 6 published files:
+
+      ```bash
+      grep -nEi "rollback backstop|pre-cutover|plaintext volume|unencrypted volume|superseded .{0,30}volume|stored \*\*live\*\* workspace|older, unencrypted" <6 files>
+      ```
+
+      returns **0**. Measure the same anchor on `origin/main` first: it is **also 0** today. If it
+      is not, `main` moved — stop and reconcile.
+
+      **(b) Nothing added by this diff.** `git diff origin/main -- <6 files>` contains **no added
+      line** matching the limb-(a) anchor. This is the limb that catches the specific regression
+      risk: an implementer or reviewer working from a stale draft of Deliverable 3, or from PR
+      #6918's preserved Path-2 wording, adding it back.
+
+      > **The banner counts.** Per AC7's note, *any* banner edit renders as a full-line delete +
+      > add, so the whole 27k-character banner is an "added line" for limb (b). The new head
+      > summary and the July-2 retraction marker must therefore avoid these tokens too — describe
+      > what was **retracted**, never the retained plaintext volume.
+
+      **(c) CLO B4 — no published wipe date.** Trivially satisfied (there is no disclosure
+      sentence to attach one to), guarded anyway: no added line in that diff matches
+      `/(erased|wiped|destroyed|securely deleted).{0,40}\b(by|before|on)\b/i`.
+
+      > **This is a preservation AC, like AC7 — deliberately, not by oversight.** Limb (a) reads
+      > the same value before and after; that is the point, and it is stated with its measured
+      > baseline so no future reader mistakes it for the inert-AC failure mode the deepen pass
+      > removed. Limb (b) is direction-sensitive and is what actually detects a violation.
 - [ ] **AC5 — date parity, by site extraction (NOT by count).** Extract the three date captures per
       document pair using the **exact regexes the gate itself uses**
       (`apps/web-platform/test/legal-doc-consistency.test.ts`) and assert all **9** captures equal
@@ -960,17 +1091,23 @@ independent, and passing one does not imply the other.
       > the END of the July-2 segment** (immediately before `Previous: June 30, 2026`). Verified
       > empirically — an end-append passes the substring check; a mid-segment insertion **fails**
       > it, which is exactly the destructive edit CLO's B3 blocks.
-- [ ] **AC8 — posture linter.** `lint-encryption-posture.py --repo-sweep` PASSES, and **all three**
-      bare line-number `disclosed_as` citations are content anchors:
-      `stores[0]` → `privacy-policy.md:519`, `stores[2]` (`hcloud_volume.workspaces`) per §4f, and
-      **`connections[0]` (`web-platform server -> Supabase Postgres/PostgREST`) →
-      `data-protection-disclosure.md:316`**.
+- [ ] **AC8 — posture linter.** `lint-encryption-posture.py --repo-sweep` PASSES, and **both**
+      bare line-number `disclosed_as` citations are now content anchors:
+      `stores[0]` (was `privacy-policy.md:519` — a **dead** anchor: `grep -c "519"` → 0) and
+      **`connections[0]` (`web-platform server -> Supabase Postgres/PostgREST`, was
+      `data-protection-disclosure.md:316`)**. Assert `git diff` on
+      `scripts/encryption-posture-ledger.json` touches **exactly those two strings**.
 
-      > The third citation was missed by the plan's first draft and independently flagged by two
+      > `connections[0]` was missed by the plan's first draft and independently flagged by two
       > reviewers. It points into a file this PR edits. It is not evaluated today
       > (`cert_verification: "on"` short-circuits the whole `disclosed_as` block in
       > `check_connection`), and it *does* resolve (`grep -c "316"` → 4) — but asserting "there are
-      > none" while leaving one is the weaker option. Fix all three; it is three JSON strings.
+      > none" while leaving one is the weaker option.
+
+      > **`stores[2]` (`hcloud_volume.workspaces`) must be BYTE-UNCHANGED.** It carried
+      > `disclosed_as: "not-publicly-claimed"` only as a Deliverable-3 dependency; with the hold
+      > reaffirmed that value is trivially correct and the row is out of scope. Any diff hunk
+      > touching it — including its `exception.justification` — fails this AC.
 - [ ] **AC9 — registers (CLO-blocking).** (a) `article-30-register.md` **residual-zero under the
       Phase-1 union anchor** — not merely items 13–16 / 17–20, but every cell: `(g)` TOMs at `:50`
       and `:68`, **`(d)` Recipients at `:47`, `(e)` Transfers at `:48` and `:163`, and the
@@ -988,10 +1125,21 @@ independent, and passing one does not imply the other.
       > direction). A snag here must not read as a CLO block.
 - [ ] **AC10 — DC-1.** Status is no longer `OPEN — remediation tracked, exposure accepted`;
       records the 2026-07-23 certification, this PR's retraction, and the lapsed reopen trigger.
-- [ ] **AC11 — challenge recorded.** `specs/feat-one-shot-6588-legal-clause-retraction/decision-challenges.md`
-      contains the Deliverable-3 UC entry (UC-3 hold, revisit trigger fired, CLO B1).
+- [ ] **AC11 — challenge recorded, with its outcome.**
+      `specs/feat-one-shot-6588-legal-clause-retraction/decision-challenges.md` exists and its
+      Deliverable-3 entry names all five of: (i) the #6918 UC-3 hold, (ii) the revisit-trigger
+      analysis as put to the operator (*"if the teardown slips materially, revisit Path 2"*; #6808
+      OPEN ⇒ soak clock not started ⇒ earliest cure "#6808 fix + 7 days", no committed date),
+      (iii) the operator's **REAFFIRMATION** of the hold on 2026-07-24, (iv) the CLO's contrary
+      recommendation recorded as **overridden**, not deleted, and (v) the accepted residual with
+      **#6808** named as its tracking issue.
+
+      > Checkable by reading the file for those five elements. It is not a reversal record — it is
+      > an *acceptance* record, which is the harder one to reconstruct later if it is missing.
 - [ ] **AC12 — CLO attestation.** `knowledge-base/legal/audits/2026-07-counsel-review-6588.md`
-      exists, written by the CLO agent (not routed to the operator).
+      exists, written by the CLO agent (not routed to the operator), **and it records the
+      disclosure recommendation as made, overridden, and residually accepted** — with #6808 as the
+      tracker. An attestation that silently omits its own overridden block fails this AC.
 - [ ] **AC13 — `Ref #6897`, never `Closes #6897`.** Closing it would orphan the ledger's
       `tracking_issue: "#6897"` rows and the `model.c4:216,220` refs, leaving live exceptions
       pointing at a closed issue.
@@ -1002,26 +1150,60 @@ independent, and passing one does not imply the other.
       > the only load-bearing one, because getting it wrong is silent and destructive.
 - [ ] **AC14 — live verification.** The Phase-0 verify run id and its discriminating fields are
       pasted into the PR body, dated the day of the PR.
+- [ ] **AC15 — #6808 ESCALATED (Deliverable 3's shipped half).** Verifiable from the issue itself,
+      by anyone, after the fact:
+
+      ```bash
+      gh issue view 6808 --json labels --jq '[.labels[].name]'
+      gh issue view 6808 --comments --json comments \
+        --jq '.comments[-3:] | .[] | .createdAt + " :: " + .body'
+      ```
+
+      (a) Labels contain **`priority/p1-high`** and **`type/security`**, and **no longer** contain
+      `priority/p2-medium` (pre-state measured this session: `priority/p2-medium`, `type/bug`,
+      `domain/engineering` — a real delta, not a no-op).
+      (b) A comment exists, dated the day of the PR, that names **`#6588`**, **this PR** (number or
+      URL), and states in terms that #6808 now gates a **live published over-claim** rather than
+      only a monitoring gap.
+      (c) That comment records the reaffirmed hold and names #6808 as the residual's tracking
+      issue, so the issue thread is self-contained for a reader who never sees this plan.
+
+      > This is the deliverable, not a courtesy note. The operator chose Path 1 (cure the reality)
+      > over Path 2 (qualify the words); Path 1 is only credible if its blocker is actually
+      > prioritised. If AC15 does not hold, Deliverable 3 shipped **nothing at all** — the hold
+      > would then be a silent acceptance, which is the one outcome §3d exists to prevent.
 
 ### Post-merge (operator)
 
 *None.* Every step is automatable in-session — `gh workflow run` for verification, `gh issue
-view` for state, local test binaries for the gates. There is no vendor dashboard, no
-`terraform apply`, no migration, and no credential mint in this PR.
+view` for state, `gh issue comment` + `gh issue edit` for the #6808 escalation, local test
+binaries for the gates. There is no vendor dashboard, no `terraform apply`, no migration, and no
+credential mint in this PR.
+
+**In particular, the #6808 escalation is NOT an operator step** (`wg-block-pr-ready-on-undeferred-operator-steps`).
+It is two `gh` commands run in-session and asserted by AC15.
 
 ---
 
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** a published privacy policy at soleur.ai that
-either (i) still asserts an Art. 32 safeguard that does not exist — cross-host TLS, membership
-re-verification on proxied sessions, a dedicated git-data host — or (ii) newly asserts that
-their source code is encrypted at rest without disclosing that a full un-encrypted copy of it
-sits on an attached, un-wiped disk. Both are the same defect: a security promise the
-infrastructure does not keep. For a product whose entire proposition is that a non-technical
+still asserts an Art. 32 safeguard that does not exist — cross-host TLS, membership
+re-verification on proxied sessions, a dedicated git-data host — or that loses the one safeguard
+claim that *is* now earned (see AC3(b)). Either is the same defect: the published document and
+the infrastructure disagree. For a product whose entire proposition is that a non-technical
 founder can trust an autonomous agent with their codebase, a demonstrably false security claim
 in the published policy is not a docs bug — it is the trust proposition failing in the one
 artifact a prospective user reads *before* deciding to trust it.
+
+**What this PR knowingly does NOT fix — stated plainly.** The re-scoped LUKS clause reads, to an
+ordinary user, as a statement about *their* data. A full un-wiped plaintext copy of every
+workspace remains on `hcloud_volume.workspaces`. That reading gap is **not closed by this PR** and
+is **not disclosed to users**: the operator reaffirmed the UC-3 hold on 2026-07-24, choosing to
+cure the reality (wipe the volume) rather than qualify the words. It is an **accepted,
+undisclosed residual**, recorded in `decision-challenges.md` (AC11), carried as **R4** in §Risks,
+and tracked on **#6808** (AC15). It is narrower than the pre-PR state — (a), (b) and (c) are
+false claims being deleted outright — but it is not zero, and this plan does not pretend it is.
 
 **If this leaks, the user's source code is exposed via:** the retained plaintext
 `hcloud_volume.workspaces` — a Hetzner block volume seizure, RMA, snapshot image, or
@@ -1044,8 +1226,11 @@ whose `requires_cpo_signoff: true` was found to contradict Product = NONE.
 
 **Mitigating fact, recorded not relied upon:** there are **zero arms-length data subjects**
 today (#3723 OPEN; the volume holds the operator's own dogfooding workspaces). No data subject
-has yet been misled. This makes the correction **cheap now** and is the strongest argument for
-doing it completely rather than partially — the cost of full correction only rises from here.
+has yet been misled. This makes the retraction **cheap now**, and it is what bounds the accepted
+residual to a survivable size — it is the reason `p1-high` rather than `p0-critical` is the right
+escalation on #6808 (§3c). It is **time-limited**: the cost of the remaining correction only rises
+from here, which is why the p0 trigger is written into §3c and R4 — first arms-length onboarding
+(#3723) while #6808 is open flips this assessment.
 
 ---
 
@@ -1087,7 +1272,9 @@ liveness_signal:
                  should page. KNOWN-BROKEN: WORKSPACES_LUKS_HEARTBEAT_URL is unwired, so the
                  probe runs, succeeds, and pushes nothing. Tracked #6808 (OPEN). This PR does
                  NOT close it and does not depend on it for merge — but it is precisely why
-                 Deliverable 3 discloses rather than waits."
+                 Deliverable 3 ESCALATES it: #6808 blocks the soak, the soak blocks the
+                 plaintext wipe, and the wipe is the operator-chosen cure for the residual
+                 this PR leaves undisclosed."
   configured_in: "apps/web-platform/infra/luks-monitor.sh; .github/workflows/workspaces-luks-verify.yml"
 
 error_reporting:
@@ -1104,16 +1291,23 @@ failure_modes:
   - mode: "Canonical and Eleventy mirror drift (heading sequence or Last-Updated date)"
     detection: "legal-doc-consistency.test.ts — heading-sequence parity + 9-site date equality"
     alert_route: "vitest failure in CI → PR blocked"
-  - mode: "Ledger disclosed_as anchor rots or resolves into an encryption claim (R5)"
+  - mode: "Ledger disclosed_as content anchor rots (the cited prose is later reworded away)"
     detection: "lint-encryption-posture.py --repo-sweep (hermetic; fails CLOSED on an
                 unresolvable anchor)"
     alert_route: "Encryption posture Layer A CI job → PR blocked"
+  - mode: "The accepted undisclosed residual outlives its cure path — #6808 stays open, the
+           ADR-119 soak never starts, and the plaintext volume is never wiped"
+    detection: "#6808 open-state; ledger exception expires_on 2026-10-22 on
+                hcloud_volume.workspaces (internal commitment, never published)"
+    alert_route: "#6808 (escalated to priority/p1-high by this PR, AC15) + the #6897 umbrella;
+                  Layer A flags an expired exception on sweep"
   - mode: "THE SUBSTANTIVE ONE — the LUKS claim silently becomes false again post-merge
            (precedent: #6812, crypto_LUKS held ~27 min then a dead-man timer reverted it)"
     detection: "luks-monitor.sh daily probe emits discriminating Sentry on mapper/escrow/header
                 drift; workspaces-luks-verify.yml re-asserts on demand"
-    alert_route: "Sentry (live today) + Better Stack heartbeat (DARK until #6808 — this is the
-                  residual risk, disclosed rather than hidden)"
+    alert_route: "Sentry (live today) + Better Stack heartbeat (DARK until #6808 — a real
+                  detection gap on the very claim this PR re-scopes, which is a second reason
+                  Deliverable 3 escalates #6808 rather than merely noting it)"
 
 logs:
   where: "GitHub Actions run logs (CI gates); Better Stack Logs source 2457081 for host-side
@@ -1137,8 +1331,10 @@ never SSHes a host to check whether it worked — the verdict is read from the w
 This PR **introduces no store and no connection** — the path detector (`\.tf$`,
 `supabase/migrations/*.sql`, `cloud-init*`, `docker-compose*`) does not fire. But it **edits
 `scripts/encryption-posture-ledger.json`** and its whole subject matter is what is publicly
-claimed about at-rest posture, so the schema is filled for the three rows it touches rather than
-skipped. **No measured posture changes here — only what is claimed about it.**
+claimed about at-rest posture, so the schema is filled for the three rows in scope — **two edited
+(`workspaces_luks`, the Supabase connection) and one deliberately left untouched
+(`hcloud_volume.workspaces`)** — rather than skipped. **No measured posture changes here — only
+what is claimed about it, and for the plaintext row not even that.**
 
 Values are transcribed from the committed ledger (verified this session; linter baseline
 `14 stores, 3 connections, 0 unledgered, 0 failing checks -> PASS`).
@@ -1160,24 +1356,19 @@ at_rest:
                    grep -c '519' returns 0)"
     live_verification: available   # luks-monitor.sh + workspaces-luks-verify.yml
 
-  - store: hcloud_volume.workspaces               # the RETAINED PLAINTEXT ORIGINAL — Deliverable 3
+  - store: hcloud_volume.workspaces               # the RETAINED PLAINTEXT ORIGINAL — row UNCHANGED by this PR
     mechanism: plaintext-exception
     evidence: "apps/web-platform/infra/server.tf:1569 (format = \"ext4\", no LUKS apparatus)"
     defends_against: "nothing at the volume layer; superseded on web-1 by
                       hcloud_volume.workspaces_luks (cutover certified 2026-07-23, run 30040444418)"
     does_not_defend: "a seized/snapshot disk exposes any workspace data still resident on this
-                      volume — this sentence, in Soleur's own ledger, is why Deliverable 3
-                      discloses rather than stays silent"
-    disclosed_as: "not-publicly-claimed (RETAINED — see §4f). The new sentence discloses the
-                   volume's EXISTENCE as a residual; it claims no safeguard FOR it. Flipping this
-                   to a real anchor would trip R5, which FAILs when the ±300-char window matches
-                   /LUKS|encrypt/i — an honest under-claim caught by a check built for over-claims."
+                      volume"
+    disclosed_as: "not-publicly-claimed"
     live_verification: "unavailable:host attachment state not pulled in the code-sourced audit;
                         tracked #6897"
     exception:
       justification: "superseded plaintext resource retained as the pre-cutover rollback backstop;
-                      web-1 /mnt/data now runs on the LUKS workspaces_luks mapper. THIS PR ADDS:
-                      the retention is now affirmatively disclosed in the published privacy policy."
+                      web-1 /mnt/data now runs on the LUKS workspaces_luks mapper"
       tracking_issue: "#6897"
       reevaluate_when: "the workspaces_luks cutover is confirmed irreversible and the plaintext
                         volume can be detached and destroyed"
@@ -1196,9 +1387,15 @@ in_transit:
 **No `exception` block is required for the `in_transit` row** (`cert_verification: on`). The
 `at_rest` plaintext row carries one, with both `tracking_issue` and `expires_on` present.
 
+> **The `hcloud_volume.workspaces` row above is transcribed VERBATIM from the committed ledger and
+> this PR does not modify one byte of it.** It was in scope only for the retracted Deliverable 3
+> (see §4f item 2, AC8). Its `disclosed_as: "not-publicly-claimed"` is accurate precisely *because*
+> the hold was reaffirmed — no published document claims anything about this store. This row is
+> where the accepted residual lives on the record; do not "tidy" it.
+
 > **The `expires_on: 2026-10-22` is an INTERNAL commitment, not an achieved schedule** — the cure
 > path (#6808 fix + a 7-day soak that has not started) has no committed start date. It must never
-> be published as a deadline (CLO B4).
+> be published as a deadline (CLO B4). Post-amendment nothing about it is published at all.
 
 ---
 
@@ -1228,8 +1425,8 @@ read rather than keyword-grepped, and each category enumerated:
 element and `:449` describes a consumer probe to `10.0.1.20:22` feeding `git_data_prd`, while
 #6570 (OPEN) holds that the host *cannot be born*. That is an internal engineering-diagram
 tension, not a published-claim defect, and it belongs to #6570/#6897 — not to a legal-accuracy
-PR. Folding it in would mix an infra-modeling question into a disclosure correction. **Recorded
-here so it is not silently ignored.**
+PR. Folding it in would mix an infra-modeling question into a published-claim correction.
+**Recorded here so it is not silently ignored.**
 
 ---
 
@@ -1241,28 +1438,51 @@ surface; the mechanical UI-surface override did not fire (no path in Files to Ed
 
 ### Legal (CLO) — `soleur:legal:clo`
 
-**Status:** reviewed (invoked this session, blocking).
+**Status:** reviewed (invoked this session, blocking). **B1 was overridden by operator decision on
+2026-07-24**; B2–B4 stand. The override is a recorded exception, not a re-ruling — the CLO's
+position below is unamended.
 
-**Assessment.** Ruled on all three referred questions. Q1: affirmative disclosure **required**
-(reasoning folded into Deliverable 3). Q2: **annotate** the historical banner entry — reject
+**Assessment.** Ruled on all three referred questions. Q1: affirmative disclosure **recommended**,
+and the CLO would have blocked without it. Q2: **annotate** the historical banner entry — reject
 in-place amendment. Q3: Art. 30 register corrections ship **in the same PR** — not sequenceable.
+
+**Q1 — RECOMMENDED, OVERRIDDEN, RESIDUAL ACCEPTED. Recorded, not erased.**
+
+The CLO's reasoning is preserved in full because an accepted residual must remain visible:
+
+- **Arts. 13/14** are *not* the source of the duty — TOMs are not an enumerated limb, and a
+  transient storage-media state is operational detail outside them. Correctly disposed of.
+- **Art. 32(1)** is substantive, not publicational; it creates no disclosure duty.
+- **Art. 5(2)** is already discharged internally by the ledger row and the Art. 30 register.
+- **What decided it for the CLO was the #6588 over-claim standard itself.** *"Stored workspace git
+  data sits on a LUKS-encrypted volume"* is read by any user as a statement about **their data**,
+  not about **one volume**. A full un-wiped copy on a seizable disk defeats precisely the threat
+  the sentence advertises, and Soleur has that admission in writing in its own ledger.
+
+**Disposition:** the CLO **recommended disclosure; the operator reaffirmed the hold on 2026-07-24
+after being shown the revisit-trigger analysis; the residual is accepted and tracked via #6808.**
+The CLO position is recorded rather than deleted — the correct anchors, per that review, are
+**Art. 12(1) + 5(1)(a)** (not Art. 13(3), which the #6588 premise table already found wrong for
+this class); noted here so the deferred Path-2 edit does not propagate a loose citation.
 
 **Blocks carried into the ACs:**
 
-| Block | Where enforced |
-|---|---|
-| B1 — no re-scoped clause (d) without the retained-plaintext sentence | AC4 |
-| B2 — no public retraction without the register + `compliance-posture.md:80` corrections | AC9 |
-| B3 — no in-place edit of the `Previous: July 2, 2026` wording; annotate only | AC7 |
-| B4 — no published wipe date while #6808 is open | AC4 |
+| Block | Status | Where enforced |
+|---|---|---|
+| B1 — no re-scoped clause (d) without the retained-plaintext sentence | **OVERRIDDEN by the operator** (hold reaffirmed 2026-07-24). Residual accepted, tracked #6808 | AC11 (record) + AC12 (attestation) + AC15 (escalation); AC4 asserts no sentence shipped |
+| B2 — no public retraction without the register + `compliance-posture.md:80` corrections | **STANDS** | AC9 |
+| B3 — no in-place edit of the `Previous: July 2, 2026` wording; annotate only | **STANDS** | AC7 |
+| B4 — no published wipe date while #6808 is open | **STANDS** (trivially satisfied — nothing about the volume is published) | AC4(c) |
 
 **Additional findings folded in:** DPD processor table outranks the TOM prose (Phase 2 ordering);
-ledger coupling in both directions (§4f); line-number citations violate
+ledger content anchors (§4f); line-number citations violate
 `cq-cite-content-anchor-not-line-number` (§4f, AC8); Art. 17 erasure reachability gates #3723
-(§Risks R1); the "7-day soak" is not actually running (Deliverable 3); six files not three (P6).
+(§Risks R1); the "7-day soak" is not actually running (Deliverable 3 — now the escalation's
+central fact); six files not three (P6).
 
 **Phase 5.5 attestation:** the CLO agent performs the per-artifact review and writes
-`knowledge-base/legal/audits/2026-07-counsel-review-6588.md` **at PR time**. It is explicitly
+`knowledge-base/legal/audits/2026-07-counsel-review-6588.md` **at PR time**, and that audit must
+itself record B1 as recommended-and-overridden with its accepted residual (AC12). It is explicitly
 **not** an operator task. All output is draft material requiring professional legal review.
 
 ### Engineering (advisory)
@@ -1285,10 +1505,15 @@ brand-survival threshold is `single-user incident`.
 
 The gate's function here is **discharged by the CLO domain review above**, which is the
 higher-authority instrument for published legal copy (it is the artifact under review, not a
-diff to be scanned). Findings are folded inline as blocks B1–B4 rather than filed. No new
-`compliance/critical` issue is filed — the findings are *cured by this PR*, and the residual
-(the plaintext volume's Art. 17 reachability) is recorded against the existing **#3723** and
-**#6897** rather than growing the backlog.
+diff to be scanned). Findings are folded inline as blocks B1–B4 rather than filed.
+
+**Not all of them are cured by this PR — say which.** B2, B3 and B4 are cured in the diff. **B1 is
+not:** it was recommended, overridden by the operator, and its residual accepted. No new
+`compliance/critical` issue is filed for it, because filing a fresh issue for a residual that
+already has a blocker would split the tracking; instead the existing **#6808** is escalated to
+carry it (§3c, AC15), with **#6897** as the umbrella and **#3723** holding the Art. 17
+reachability gate. Net issue flow **for this gate**: 0 new, 1 re-prioritised. (The separate
+one-line #6893 filing in §4f is an engineering linter gap, not a GDPR finding.)
 
 ---
 
@@ -1305,9 +1530,17 @@ found the material over-claim; the operator **HELD** the copy fix (UC-3) and pre
 auditor's Path-2 wording verbatim. #6897 **stays OPEN** by explicit operator decision (net-issue-flow 0;
 its residuals are ongoing bounded exceptions that need an umbrella to home them).
 
+**And the hold was re-raised and REAFFIRMED on 2026-07-24** (§Deliverable 3). That is the fact
+that governs this reconciliation.
+
 **Therefore:**
 
-- This PR **executes the held Path-2** and so **substantially satisfies** that bullet.
+- This PR **does NOT execute the held Path-2.** It **partially** satisfies that bullet: the
+  encryption claims that were *unachievable* are retracted and the surviving LUKS claim is
+  re-scoped to the real topology, so those are substantiated rather than asserted. The
+  **retained-plaintext limb remains open** — held by the operator, undisclosed, with the cure
+  path escalated onto **#6808**. An implementer must not read this section as "the bullet is
+  done."
 - **Use `Ref #6897`, never `Closes #6897`.** Closing it would orphan the 8 ledger
   `tracking_issue: #6897` references and the C4 refs at `model.c4:216,220`, leaving live
   exceptions pointing at a closed issue — the exact failure PR #6918 was written to avoid.
@@ -1323,14 +1556,16 @@ its residuals are ongoing bounded exceptions that need an umbrella to home them)
 
 | # | Risk | Mitigation |
 |---|---|---|
-| **R1** | **Art. 17 erasure reachability (the sleeper).** Workspace git data on the retained plaintext volume is outside the account-deletion path; an erasure request today would not reach it. | No live exposure at tenant-zero (#3723 OPEN, zero arms-length subjects) so it does **not** block this PR. It **hard-blocks #3723**: the volume must be wiped, or erasure extended to it, before first arms-length onboarding. Recorded as a gating condition in `compliance-posture.md` (AC9). |
-| **R2** | Literal-phrase sweep misses variant phrasings and silently false-passes. | Union-anchor grep (Phase 1) with an asserted count of 20; **never** `grep LUKS`. This already bit once (P7). |
+| **R1** | **Art. 17 erasure reachability (the sleeper).** Workspace git data on the retained plaintext volume is outside the account-deletion path; an erasure request today would not reach it. | No live exposure at tenant-zero (#3723 OPEN, zero arms-length subjects) so it does **not** block this PR. It **hard-blocks #3723**: the volume must be wiped, or erasure extended to it, before first arms-length onboarding. **Posted as a comment on #3723** (Phase 5.6) — the diff-side addition was cut at plan-review (§4d), so this is *not* enforced by AC9. |
+| **R2** | Literal-phrase sweep misses variant phrasings and silently false-passes. | Union-anchor grep (Phase 1) with an asserted count of **22** (8 canonical body sites + 3 banner headers, ×2 — see §Site Matrix); **never** `grep LUKS`. This already bit once (P7). |
 | **R3** | Removing a clause leaves a dependent clause dangling and *stronger* — the exact #6588 defect. | Claim-family litmus per site (Phase 1, AC2); family removed whole. |
-| **R4** | Ledger `disclosed_as` flip turns CI RED via the R5 check (§4f). | Measure the ±300-char window **before** choosing; two named fallbacks; AC8 gates. |
+| **R4** | **ACCEPTED, UNDISCLOSED RESIDUAL (the one this PR knowingly leaves).** The re-scoped LUKS clause ships while a full un-wiped plaintext copy of every workspace remains on `hcloud_volume.workspaces`. Its plain reading is broader than the infrastructure earns, and users are not told. Operator-accepted (UC-3 hold reaffirmed 2026-07-24) — accepted, not unnoticed. | **Tracking issue: #6808** — escalated to `priority/p1-high` + `type/security` with a comment recording that it now gates a live published over-claim (§3c, **AC15**). Recorded in `decision-challenges.md` (**AC11**) and in the CLO attestation (**AC12**). Bounded by the facts that make it survivable *today*: zero arms-length data subjects (#3723 OPEN), the residual is ledgered (`plaintext-exception`, `#6897`, `expires_on: 2026-10-22`) and named in the Art. 30 register (§4d). **Escalation trigger: if #3723 onboards a first arms-length user while #6808 is open, this becomes p0 and the hold must be re-raised.** |
+| **R4b** | The linter cannot distinguish an honest under-claim from an over-claim (`check_disclosed_as_not_encrypted` FAILs on `/LUKS\|encrypt/i` in the ±300-char window), so it will obstruct the *deferred* Path-2 wording when #6808 finally clears. | Not exercised by this PR (no `disclosed_as` flip). Filed as a one-line issue against **#6893** (Phase 4.6). **Do not edit `lint-encryption-posture.py` here** — it would change the PR's declared change-class. |
 | **R5** | Mirror drift — 6 files hand-maintained, no generator. | Edit canonical-then-mirror per claim family, not per file; `legal-doc-consistency.test.ts` (heading + 9-date parity) is the mechanical gate. |
 | **R6** | Trusting the 2026-07-23 certification when the live state has since reverted (#6812 precedent: crypto_LUKS held ~27 min then silently reverted). | Phase 0 dispatches a **fresh** verify run; AC14 pastes its id + fields, dated the day of the PR. |
 | **R7** | Banner annotation accidentally alters the preserved historical text (Session Error #4: a sync script silently dropped a `Previous:` label). | AC7 asserts insertion-only on that segment and an unchanged-plus-one `Previous:` count. |
-| **R8** | Reversing a same-day operator decision without an audit trail. | Deliverable 3 is recorded as a User-Challenge in `decision-challenges.md` (AC11); `ship` renders it into the PR body and files `action-required`. Framed as the HOLD's **own** revisit trigger firing, not as an override. |
+| **R8** | **Re-raising an operator decision and leaving no record of the outcome.** The challenge resolved *for* the operator, and the failure mode of a resolved-in-favour challenge is that nobody writes it down — leaving a knowingly-retained live over-claim indistinguishable from one nobody noticed. | Deliverable 3 is recorded as a User-Challenge in `decision-challenges.md` (AC11) with all five required elements including the overridden CLO position; the escalation on #6808 (AC15) makes the acceptance legible from outside this repo's planning artifacts; `ship` renders the DC record into the PR body. |
+| **R9** | An implementer, reviewer, or later agent works from a stale draft of Deliverable 3 (or from #6918's preserved Path-2 wording) and adds the disclosure sentence back. | **AC4(b)** — the 6-file diff must contain no added line matching the disclosure anchor. The Phase-2 note and the amendment banner at the top of this plan state it in prose; AC4 makes it mechanical. |
 
 ---
 
@@ -1340,11 +1575,13 @@ its residuals are ongoing bounded exceptions that need an umbrella to home them)
 |---|---|
 | **Past-tense the three clauses** instead of retracting | (a) and (b) were never true *at any moment* — there was never a cross-host session or cross-host git traffic. Past tense would assert a false historical fact. (c) describes a host that never existed. The banner carries the history instead. |
 | **Retract the LUKS clause too**, publishing no encryption claim | Worse for users and worse for posture: the claim is now **true** of the live store. Deleting an earned safeguard claim under-informs data subjects. CLO concurred. |
-| **Hold the plaintext disclosure** (status quo per UC-3) | The hold's own revisit trigger has fired (#6808 blocks the soak indefinitely) and its cost rationale collapses because this PR already rewrites those sentences. CLO blocks (B1). |
+| **Add the affirmative plaintext disclosure in this PR** (the original Deliverable 3; CLO's B1) | **CHOSEN AGAINST — by the operator, 2026-07-24.** The question was re-raised with the full revisit-trigger analysis (#6808 OPEN ⇒ soak clock not started ⇒ earliest cure "#6808 fix + 7 days", no committed date) and with the cost argument (this PR already rewrites those exact sentences). The operator **reaffirmed the UC-3 hold**, choosing Path 1 — cure the reality by wiping the volume — over Path 2 — qualify the published wording. Residual accepted and tracked via **#6808** (§Risks R4). Recorded, not erased: §Domain Review keeps the CLO's reasoning in full. |
+| **Escalate #6808 to `priority/p0-critical`** to mirror #6588 | `p0-critical` means *"drop everything"*, which contradicts the decision the operator just made (hold and proceed), and it is not earned: zero arms-length data subjects today (#3723 OPEN). `p1-high` — *"degraded functionality, no workaround"* — is exact for a soak clock that cannot start. The p0 trigger is written into §3c instead. |
+| **File a new `compliance/critical` issue for the accepted residual** | Splits tracking across two issues for one condition. #6808 already *is* the blocker; escalating it keeps the residual and its cure on the same thread (§GDPR Gate). |
 | **Sequence the Art. 30 register into a follow-up** | Produces a state strictly worse than today — a timestamped public retraction beside an internal register still asserting the retracted TOMs. Art. 30(1)(g) + Art. 5(2). CLO blocks (B2). |
 | **Amend the historical banner entry in place** | Destroys the Art. 5(2) audit trail the append-with-history banner exists to provide. CLO blocks (B3). Annotate instead. |
-| **Fix the `model.c4` gitDataStore/#6570 tension here** | Mixes an infra-modeling question into a disclosure correction. Belongs to #6570/#6897. Recorded, not folded (§Architecture Decision). |
-| **Fix #6808 / run the soak / wipe the plaintext volume** | Explicitly out of scope per the task; separately tracked. This PR discloses the state honestly rather than changing it. |
+| **Fix the `model.c4` gitDataStore/#6570 tension here** | Mixes an infra-modeling question into a published-claim correction. Belongs to #6570/#6897. Recorded, not folded (§Architecture Decision). |
+| **Fix #6808 / run the soak / wipe the plaintext volume in this PR** | Explicitly out of scope per the task; it is infra work in a docs-class PR declaring `runtime_deploy_risk: none`. This PR neither changes the state nor publishes it — it **escalates the blocker** so the operator-chosen cure actually moves (§3c, AC15). |
 
 ---
 
@@ -1381,15 +1618,26 @@ and claim 2 is what makes the pin non-negotiable. Both are now cited, not assume
 
 ## Sharp Edges
 
-- **Never `grep LUKS` to find this claim family.** Two of the seven canonical body sites carry it
-  with no `LUKS` token. Use the union anchor.
+- **Never `grep LUKS` to find this claim family.** Three of the **eight** canonical body sites
+  (`pp:489`, `gdpr:318`, `dpd:318`) carry a claim with no `LUKS` token at all. Use the union
+  anchor.
 - **`gdpr-policy.md` phrases the git-data-host clause with different word order** (*"a dedicated
   host for per-workspace git data"*). A find-and-replace tuned to the DPD's phrasing misses it.
 - **The `disclosed_as` "anchor" is a substring search, not a line lookup.** `resolve_disclosed_as`
-  does `text.find(anchor)`, so `"519"` matches the first literal `519` anywhere in the file. It is
-  additionally **never evaluated** for a `mechanism: luks` row (early return). Do not assume the
-  existing citation is meaningful, and do not assume changing it is safe — the plaintext row's
-  citation **is** evaluated, and R5 will FAIL on an honest under-claim.
+  does `text.find(anchor)`, so `"519"` matches the first literal `519` anywhere in the file — and
+  `privacy-policy.md` contains **zero** occurrences of it, so that citation is **dead**, not merely
+  decorative. It is additionally **never evaluated** for a `mechanism: luks` row (early return),
+  which is the only reason a dead anchor has not already failed CI. Do not assume the existing
+  citation is meaningful.
+- **Do NOT touch the `hcloud_volume.workspaces` ledger row.** It looks adjacent to this PR's
+  subject matter and it is not: its `disclosed_as: "not-publicly-claimed"` is correct *because*
+  the disclosure was held. Flipping it to a real anchor would run
+  `check_disclosed_as_not_encrypted()`, which FAILs when the ±300-char window matches
+  `/LUKS|encrypt/i` — an honest under-claim caught by a check built for over-claims. That trap is
+  latent, filed against #6893 (§Risks R4b), and reached only by an edit this PR must not make.
+- **No published legal text gains a plaintext-disclosure sentence.** The operator reaffirmed the
+  UC-3 hold on 2026-07-24. PR #6918's preserved Path-2 wording is quoted in §3b **for the future
+  edit only**; pasting it into a legal document in this PR violates AC4.
 - **Nine date strings, not three.** Mirrors carry the date twice (hero `<p>` + body).
 - **Use the repo-root pinned `./node_modules/.bin/eleventy`**, never `npx` — a cached wrong
   version and a CWD trap have both bitten on this exact surface.
