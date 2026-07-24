@@ -349,21 +349,21 @@ Verify `python3 scripts/lint-encryption-posture.py --repo-sweep` resolves the ch
 ## Acceptance Criteria
 
 ### Pre-merge (this PR)
-- [ ] `hcloud_volume.registry` in `zot-registry.tf` has **no** `format` attribute (D1/B); `grep -c 'format' <the-registry-volume-block>` = 0.
-- [ ] `zot-registry.tf` declares `random_password.registry_luks` (length 40, special=false) and `doppler_secret.registry_luks_key` (`project = "soleur-registry"`, `name = "REGISTRY_LUKS_KEY"`), co-located with `hcloud_volume_attachment.registry`.
-- [ ] `hcloud_server.registry.depends_on` includes `doppler_secret.registry_luks_key`; `registry_luks` is **absent** from `lifecycle.replace_triggered_by`.
-- [ ] `cloud-init-registry.yml` `packages:` includes `cryptsetup`; the mount runcmd does `cryptsetup luksFormat --type luks2 --key-file -` + `luksOpen --key-file - "$DEV" registry` + `mount /dev/mapper/registry /var/lib/zot`; the key is piped from `printf '%s' "$REGISTRY_LUKS_KEY"` (stdin) and never appears as a bare argv token; fail-loud empty-key guard present; else-TYPE→FATAL refuse arm present.
-- [ ] fstab line `/dev/mapper/registry /var/lib/zot ext4 defaults,nofail 0 2` present; the **stale by-id fstab line** for `/var/lib/zot` is **removed** (P1); resize path targets `/dev/mapper/registry`.
-- [ ] **(D2, REQUIRED)** an idempotent boot-time luksOpen is ordered after `network-online` and before the reboot self-heal (host self-`reboot`s via NIC guard `cloud-init-registry.yml:610`).
-- [ ] **(P1-A)** the boot isolation self-check (`cloud-init-registry.yml:741-746`) admits `REGISTRY_LUKS_KEY` and its cardinality is `4` (was `3`); the "THREE admitted" comments are updated. Mutation: count left at `3` ⇒ RED.
-- [ ] **(P1-B)** the Doppler CLI install + `/etc/default/registry-doppler` write precede the LUKS mount block in `cloud-init-registry.yml`.
-- [ ] **(architecture Q5)** the `OPERATOR_APPLIED_EXCLUSION` parity test (if resource-enumerated) registers `random_password.registry_luks` + `doppler_secret.registry_luks_key`; the parity/exclusion suites are green.
-- [ ] `registry-luks.test.sh` passes, meets its mutation-cardinality floor, and every assertion has a paired mutation proven to flip it RED.
-- [ ] Ledger row `hcloud_volume.registry`: `at_rest.mechanism == "luks"`, **no `exception` key**, `device_binding.mapper == "registry"`, `does_not_defend` non-empty (≥8 chars), `live_verification` matches `^(available|unavailable:.+)$`.
-- [ ] `python3 scripts/lint-encryption-posture.py --repo-sweep` exits 0 (device-binding chain resolves to real code; positive-work floor + `live_coverage_floor: 1` still satisfied).
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is unaffected (no TS touched) — sanity only; the TS gate is not the target here.
-- [ ] No `terraform apply` was run; `git status` shows only the intended files changed; #6893 and #6588 remain OPEN (do not reference them with `Closes`).
-- [ ] PR body uses `Closes #6895` (title uses no `#`); references #6893/#6588 as `Ref` only.
+- [x] `hcloud_volume.registry` in `zot-registry.tf` has **no** `format` attribute (D1/B); `grep -c 'format' <the-registry-volume-block>` = 0.
+- [x] `zot-registry.tf` declares `random_password.registry_luks` (length 40, special=false) and `doppler_secret.registry_luks_key` (`project = "soleur-registry"`, `name = "REGISTRY_LUKS_KEY"`), co-located with `hcloud_volume_attachment.registry`.
+- [x] `hcloud_server.registry.depends_on` includes `doppler_secret.registry_luks_key`; `registry_luks` is **absent** from `lifecycle.replace_triggered_by`.
+- [x] `cloud-init-registry.yml` `packages:` includes `cryptsetup`; the mount runcmd does `cryptsetup luksFormat --type luks2 --key-file -` + `luksOpen --key-file - "$DEV" registry` + `mount /dev/mapper/registry /var/lib/zot`; the key is piped from `printf '%s' "$REGISTRY_LUKS_KEY"` (stdin) and never appears as a bare argv token; fail-loud empty-key guard present; else-TYPE→FATAL refuse arm present.
+- [x] fstab line `/dev/mapper/registry /var/lib/zot ext4 defaults,nofail 0 2` present; the **stale by-id fstab line** for `/var/lib/zot` is **removed** (P1); resize path targets `/dev/mapper/registry`.
+- [x] **(D2, REQUIRED)** an idempotent boot-time luksOpen is ordered after `network-online` and before the reboot self-heal (host self-`reboot`s via NIC guard `cloud-init-registry.yml:610`).
+- [x] **(P1-A)** the boot isolation self-check (`cloud-init-registry.yml:741-746`) admits `REGISTRY_LUKS_KEY` and its cardinality is `4` (was `3`); the "THREE admitted" comments are updated. Mutation: count left at `3` ⇒ RED.
+- [x] **(P1-B)** the Doppler CLI install + `/etc/default/registry-doppler` write precede the LUKS mount block in `cloud-init-registry.yml`.
+- [x] **(architecture Q5)** the `OPERATOR_APPLIED_EXCLUSION` parity test (if resource-enumerated) registers `random_password.registry_luks` + `doppler_secret.registry_luks_key`; the parity/exclusion suites are green.
+- [x] `registry-luks.test.sh` passes, meets its mutation-cardinality floor, and every assertion has a paired mutation proven to flip it RED.
+- [x] Ledger row `hcloud_volume.registry`: `at_rest.mechanism == "luks"`, **no `exception` key**, `device_binding.mapper == "registry"`, `does_not_defend` non-empty (≥8 chars), `live_verification` matches `^(available|unavailable:.+)$`.
+- [x] `python3 scripts/lint-encryption-posture.py --repo-sweep` exits 0 (device-binding chain resolves to real code; positive-work floor + `live_coverage_floor: 1` still satisfied).
+- [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is unaffected (no TS touched) — sanity only; the TS gate is not the target here.
+- [x] No `terraform apply` was run; `git status` shows only the intended files changed; #6893 and #6588 remain OPEN (do not reference them with `Closes`).
+- [x] PR body uses `Closes #6895` (title uses no `#`); references #6893/#6588 as `Ref` only.
 
 ### Post-merge (operator, OUTSIDE this PR — the gated re-encryption)
 - [ ] `Automation: sanctioned OPERATOR_APPLIED_EXCLUSION apply path` (per `zot-registry.tf:15` CTO ruling). The gated apply is a scoped `terraform apply -replace='hcloud_volume.registry' -replace='hcloud_volume_attachment.registry' -replace='hcloud_server.registry'` (fresh raw volume ⇒ cloud-init luksFormats ⇒ zot re-fills from GHCR) — **all three `-replace` together** — preferably via the recommended guarded `registry-luks-recut` dispatch (D4(ii)). Not `Closes`-linked. Blast radius near-zero (disposable mirror; brief cold-pull gap).
