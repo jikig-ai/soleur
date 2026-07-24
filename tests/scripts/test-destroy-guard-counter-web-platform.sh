@@ -837,7 +837,7 @@ t_deploy_pipeline_fix_carries_host_creates_halt() {
 # hcloud_volume. Fixture is synthesized inline (hand-authored minimal plan shape),
 # never captured — cq-test-fixtures-synthesized-only.
 t_volume_create_does_not_trip_host_birth_halt() {
-  local tmp; tmp=$(mktemp)
+  local tmp; tmp=$(mktemp)  # lint-trap-ownership: ok — rm -f inline below every call; single tmp, no exit between alloc and cleanup; bounded (matches T32's pattern, #6734)
   printf '%s' '{"resource_changes":[{"type":"hcloud_volume","address":"hcloud_volume.workspaces[\"web-2\"]","change":{"actions":["create"],"before":null,"after":{"size":20}}}]}' > "$tmp"
   local out; out=$(_run_host_creates_gate "$tmp")
   rm -f "$tmp"
