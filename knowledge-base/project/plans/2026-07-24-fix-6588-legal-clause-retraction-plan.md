@@ -11,9 +11,67 @@ requires_cpo_signoff: false
 live_infra_mutation: none
 runtime_deploy_risk: none
 adr_refs: [ADR-119, ADR-140, ADR-141, ADR-084]
+deepened: 2026-07-24
 ---
 
 # fix(legal): #6588 legal half — retract, re-scope, disclose
+
+## Enhancement Summary
+
+**Deepened:** 2026-07-24
+**Review panel:** `architecture-strategist`, `spec-flow-analyzer`, `code-simplicity-reviewer`
+(escalated per `single-user incident`), plus the `clo` legal domain review invoked at plan time,
+a verify-the-negative sweep, and a banner-precedent history check.
+
+### Key improvements folded from review
+
+1. **A `## Site Matrix` now supersedes every prose site list (P0, all three reviewers).** The
+   three panels returned **conflicting** inventories, so every site was re-measured directly. The
+   matrix corrected the plan in *both* directions: `dpd:276` **does** carry the LUKS claim
+   (spec-flow said it does not) and `gdpr:318` **does not** (this plan's first draft said it did —
+   following it would have *added* a LUKS claim to a document that publishes none, inside a
+   retraction PR). It also surfaced `pp:298`, which carries the entire claim family and had **no
+   disposition in any deliverable**, and added `dpd:318`.
+2. **AC1 and AC7 were mutually unsatisfiable.** AC7 requires the July-2 banner segment to survive
+   byte-identical; that segment *contains* the phrases AC1 demanded reach zero. AC1 is now scoped
+   to body prose with the banner line excluded.
+3. **Three ACs were measuring nothing.** `grep -c 'Previous:'` returns **1** on a single-line
+   banner (18/17/17 real occurrences) — the count check was inert. `grep -c '<date>'` returns
+   **2**, not 1, in `pp` and `gdpr` (banner + in-prose annotation), so AC5's premise was already
+   false. AC7 now uses substring-preservation (empirically validated to pass an end-append and
+   **fail** a mid-segment insertion), and AC5 uses the gate's own extraction regexes.
+4. **The Art. 30 fold-in was under-scoped in exactly the way it warned against.** It covered only
+   the `(g)` TOM cells while `(d) Recipients`, `(e) Transfers` (×2) and the vendor mapping still
+   assert a destroyed host and an unborn CAX11 — **Art. 30(1)(d)/(f)** limbs, a *stronger*
+   obligation than the TOM prose it did cover.
+5. **A conditional branch that would have silently reclassified the PR was removed.** An earlier
+   §4f fallback authorized editing `scripts/lint-encryption-posture.py` plus tests inside a PR
+   declaring `runtime_deploy_risk: none`. Pre-decided to the free fallback; the linter blind spot
+   is filed against #6893 instead.
+6. **Phase 0's RED path was a dead end** ("stop", then "retraction becomes correct") with no
+   downstream AC re-scoped. Now a defined DEGRADED-SCOPE branch.
+7. **The audit trail moved ahead of the change it audits** (new Phase 1.5) — an abort between the
+   old Phase 2 and Phase 5 would have left a same-day operator reversal applied with no record.
+8. **Scope cuts:** the #3723 Art. 17 note (an *addition*, not a correction → posted to #3723
+   instead), an `nfr-register:521` no-op row, AC2's un-artifacted ritual, and three-quarters of
+   AC13. `## Observability` and `## Encryption Posture` were converted from non-compliant skip
+   notes to real schemas — the gate applies here (`legal-doc-shas.ts` + the ledger are not docs).
+
+### New considerations discovered
+
+- **The mirror banners carry truncated history** (12/13/11 `Previous:` occurrences vs 18/17/17
+  canonical). Pre-existing, passes CI, and **"fixing" it would append multi-KB of historical text
+  to published legal documents.** Acknowledged, not folded in.
+- **A `Falkenstein` sweep must carve out `eu-fsn-3`** — Better Stack's region is *genuinely*
+  Falkenstein. Scrubbing it would delete a true sub-processor disclosure and later redden
+  `validate-vector-config.yml`.
+- **The ledger's `privacy-policy.md:519` anchor is dead, not merely decorative** — the file
+  contains zero occurrences of the literal `519`, and the resolver's unresolvable branch is marked
+  `# Fail CLOSED`, so it becomes a hard CI failure the moment that row's mechanism changes.
+- **The disclosure may concern one backstop or two.** `hcloud_volume.git_data` is ledgered as a
+  backstop for a cutover that never happened (the host was never born, #6570 OPEN) — its contents
+  must be established before the sentence is written, in either direction.
+- **10 of 10 negative claims verified**, zero contradictions (see §Research Insights).
 
 ## Overview
 
@@ -55,14 +113,14 @@ reading, not by assuming. Two of them moved.
 | P4 | git-data host "never born" | **HOLDS.** #6570 still OPEN: *"git-data is pinned to cax11 — orderable in 0 of 3 EU DCs, so it can never be born"* | Retract clause (c) |
 | P5 | No load balancer; `app.soleur.ai` singleton to web-1 | **HOLDS.** `tunnel.tf:54` pins ingress to `var.web_hosts["web-1"].private_ip`; `model.c4:413` records single connector post-#6538 | Retract clause (b) |
 | P6 | Clauses live in privacy-policy + DPD + 2 mirrors (**4 files**) | **STALE — UNDERCOUNT.** The claim family also lives in **`gdpr-policy.md`** and its mirror. **6 files**, not 4. Corroborated independently by #6897's own scope (`docs/legal/{privacy-policy,gdpr-policy,data-protection-disclosure}.md`) and by DC-1's own "all 6 files" | Scope = 6 files |
-| P7 | Clauses at "roughly lines 298 and 519" | **STALE — UNDERCOUNT.** **7 canonical body sites + 3 banner headers, ×2 = 20 sites.** Two sites (`privacy-policy.md:488`, `gdpr-policy.md:318`) carry the claim with **no `LUKS` token at all** | Union-anchor sweep; **never** `grep LUKS` |
+| P7 | Clauses at "roughly lines 298 and 519" | **STALE — UNDERCOUNT.** **8 canonical body sites + 3 banner headers, ×2 = 22 sites** (see §Site Matrix). Three sites (`privacy-policy.md:489`, `gdpr-policy.md:318`, `data-protection-disclosure.md:318`) carry a claim with **no `LUKS` token at all** | Union-anchor sweep; **never** `grep LUKS` |
 | P8 | #6897 owns a "legal-doc reconciliation" bullet | **HOLDS, and it already RAN.** PR **#6918** merged 2026-07-24 17:55 CEST; the operator **HELD** the copy fix (UC-3) | See §Deliverable 3 + §Issue Reconciliation |
 | P9 | *(implicit)* users are exposed today | **ZERO arms-length data subjects.** #3723 OPEN; the volume holds the operator's own dogfooding workspaces | Makes the correction **cheap now**; see §User-Brand Impact |
 
 **P7 is the load-bearing correction.** A literal-phrase sweep is the documented failure mode
 here (Session Error #2 of the #6588 learning: *"sweep the semantic quantity, not its
 formatting"*). My own first-pass grep for `"across hosts"` + `"spans more than one"` **missed**
-`privacy-policy.md:488` and `gdpr-policy.md:318`, which phrase it `"across more than one host"`.
+`privacy-policy.md:489` and `gdpr-policy.md:318`, which phrase it `"across more than one host"`.
 The prior #6588 plan had already recorded this trap; this plan inherits its union anchor.
 
 ---
@@ -75,7 +133,7 @@ The prior #6588 plan had already recorded this trap; this plan inherits its unio
 | "roughly lines 298 and 519" | 7 canonical body sites; 2 have no `LUKS` token | Union-anchor grep (§Phase 1), content anchors not line numbers (`cq-cite-content-anchor-not-line-number`) |
 | "re-pin legal-doc-shas.ts ... very likely a CI gate" | **Confirmed.** `tc-document-sha-guard` (required check, ADR-032-pinned name) via `check-tc-document-sha.sh`. Raw-byte `sha256sum`, **no bypass** for non-T&C docs | Phase 4; 3 SHAs |
 | "possibly a cross-document consistency gate" | **Confirmed, and it is stricter than expected.** `legal-doc-consistency.test.ts` asserts (a) `##`/`###` heading-sequence parity canonical↔mirror, (b) **Last-Updated date byte-identical in 3 places per mirror** (canonical body, mirror body, mirror hero `<p>`) | Phase 3 + AC5; **9 date strings** total |
-| "Follow the repo's ... 'Last Updated' provenance banner" convention | It is a **single 27,358-char line**, prepend-style: `**Last Updated:** <new> (...). Previous: <old> (...)` | Phase 3; §Banner Handling |
+| "Follow the repo's ... 'Last Updated' provenance banner" convention | It is a **single line of 27,358 characters / 27,492 bytes** (UTF-8 multibyte — quote the unit), prepend-style: `**Last Updated:** <new> (...). Previous: <old> (...)` | Phase 3; §Banner Handling |
 | "Close DC-1 ... Status is 'OPEN — remediation tracked, exposure accepted'" | **Confirmed verbatim** at `specs/feat-6538-web2-fsn1-orphan/decision-challenges.md` | Phase 5 |
 | "Check whether #6897 ... would be partly or fully satisfied" | #6897 **stays OPEN by operator decision**; its legal bullet already ran and **held** the fix | §Issue Reconciliation — `Ref`, never `Closes` |
 | *(not in task)* Art. 30 register carries the same 4 claims | `article-30-register.md` restates them as Art. 32 TOM items **13–16 and 17–20** across two PAs | **Folded in** (CLO B2) |
@@ -153,7 +211,7 @@ find-and-replace on either string misses the other. Both must be enumerated expl
 
 ### The fourth, adjacent stale claim — FOLD IN
 
-`privacy-policy.md:488` and `gdpr-policy.md:318` (+ mirrors) state, in present tense:
+`privacy-policy.md:489` and `gdpr-policy.md:318` (+ mirrors) state, in present tense:
 
 > a second web host (web-2, never user-serving) **is** in Falkenstein, Germany (`fsn1`)
 
@@ -404,6 +462,35 @@ sits under the historical **`Previous: July 2, 2026`** entry. But offset-mapping
 
 Operations 2 and 3 are what make the `Previous:` occurrence count go +1 (AC7).
 
+**Precedent-diff (deepen Phase 4.4) — measured, not assumed.** Every commit in the last 12 that
+touched `docs/legal/privacy-policy.md`'s banner was replayed and classified by comparing the
+pre-commit banner (with its head relabelled to `Previous:`) against the post-commit banner:
+
+| Commit | Verdict |
+|---|---|
+| `cb93c2948` (locative fix, #6568) | PREPEND-ONLY — history verbatim |
+| `d4c18790f` (severity-ranked inbox) | PREPEND-ONLY — history verbatim |
+| `2d0cc9c26` (multi-host 3.D — the commit that *introduced* these claims) | PREPEND-ONLY — history verbatim |
+| `0e3a46d4f` (worktree-lease) | PREPEND-ONLY — history verbatim |
+| `c0276e8e4` (routines UI) | PREPEND-ONLY — history verbatim |
+| `a04d95c17`, `31cb69935`, `ee58951b9` | banner untouched (N/A) |
+
+**Findings:**
+
+- **Operations 2 + 3 (demote + prepend) have unanimous precedent — 5 of 5.** The exact
+  transformation is `**Last Updated:** ` → `Previous: ` on the old head, with every prior byte
+  preserved. Follow it literally.
+- **Operation 1 (annotating a historical segment) has NO PRECEDENT — the pattern is NOVEL.**
+  In the entire history of this banner, no commit has ever modified text inside an existing
+  `Previous:` entry. Recorded here per the precedent-diff gate so reviewers scrutinise it rather
+  than pattern-matching it to the routine prepend.
+
+  This is *why* AC7 exists in its substring-preservation form: with no precedent to imitate, the
+  guard has to be mechanical. It is also why CLO's B3 (annotate, never amend) is the binding
+  constraint — the novelty is confined to **adding** bytes at a segment boundary, which keeps the
+  append-only property the 5 precedent commits establish. An implementer who "improves" on this by
+  editing the historical wording would be both breaking B3 and departing from 5-of-5 precedent.
+
 > **Terminology fix.** An earlier draft said "insert a marker **inside** the July 2 entry" (§4c)
 > while AC7 said "**appended**". Those imply different insertion offsets and therefore different
 > AC7 outcomes. **"Appended at the end of the segment" is correct**; "inside" is retired.
@@ -424,7 +511,7 @@ Operations 2 and 3 are what make the `Previous:` occurrence count go +1 (AC7).
 >
 > | Doc | Canonical banner | Mirror banner | Mirror is missing |
 > |---|---|---|---|
-> | `privacy-policy` | 27,358 chars / **12** entries | 18,409 chars / **9** entries | `May 25`, `May 22`, one `June 15` |
+> | `privacy-policy` | 27,358 chars (27,492 B) / **12** entries | 18,409 chars / **9** entries | `May 25`, `May 22`, one `June 15` |
 > | `data-protection-disclosure` | 28,271 chars / **12** entries | 21,693 chars / **9** entries | same three |
 > | `gdpr-policy` | 23,883 chars / **11** entries | 16,523 chars / **8** entries | same three |
 >
@@ -670,7 +757,7 @@ grep -nE "LUKS|encrypted in transit with TLS|TLS-encrypted \(in transit\)|across
   plugins/soleur/docs/pages/legal/{privacy-policy,data-protection-disclosure,gdpr-policy}.md
 ```
 
-Assert the inventory equals **7 canonical body sites + 3 banner headers, ×2 = 20**. A different
+Assert the inventory matches the **§Site Matrix** (8 canonical body sites + 3 banner headers, ×2 = **22**). A different
 count means the union anchor is wrong or `main` moved — reconcile before editing.
 
 Then apply the **claim-family litmus** per site: after removing X from *"…A, B, and X. X does P,
@@ -833,7 +920,7 @@ independent, and passing one does not imply the other.
       > | mirror `gdpr-policy.md` | 1 | **11** | 12 |
 
       > **Do NOT express this as a `git diff` assertion.** The banner is a single
-      > 27,358-character line, so *any* edit renders in `git diff` as a full-line delete + add
+      > 27,358-character (27,492-byte) line, so *any* edit renders in `git diff` as a full-line delete + add
       > (empirically confirmed: 1 `<` + 1 `>`). "Insertion only, no deletion" is therefore
       > **unverifiable** by diff and would false-fail a correct edit. Use the substring form:
       >
@@ -973,29 +1060,135 @@ doing it completely rather than partially — the cost of full correction only r
 
 ## Observability
 
-**Skipped — justified.** The Phase-2.9 trigger requires a Files-to-Edit entry under
-`apps/*/server/`, `apps/*/src/`, `apps/*/infra/`, or `plugins/*/scripts/`, or a new
-infrastructure surface. This PR's only non-prose file is `apps/web-platform/lib/legal/legal-doc-shas.ts`
-— `lib/`, not a listed path — and it introduces no runtime code, no error path, and no failure
-mode. There is no new execution surface to instrument.
+**The gate applies** (Files to Edit carries `apps/web-platform/lib/legal/legal-doc-shas.ts` and
+`scripts/encryption-posture-ledger.json` — not pure-docs), so this is the full 5-field schema, not
+a skip note. An earlier draft filed a skip justification here; that was non-compliant.
 
-The relevant *existing* observability is unchanged and remains the gate for the encryption claim
-this PR describes: `luks-monitor.sh` (daily; mount→mapper, `cryptsetup status`, `blkid`
-crypto_LUKS, Doppler escrow re-test, header UUID) + the `workspaces-luks-verify` dispatch used
-in Phase 0. Its alerting path is **known-broken** and tracked at **#6808** — which is a load-bearing
-input to Deliverable 3, not a gap this PR introduces or closes.
+The observable surface of a published-claim PR is **claim-vs-reality divergence**: the ways this
+PR's assertions can silently become false after merge.
+
+```yaml
+liveness_signal:
+  what: "luks-monitor.sh daily probe on web-1 — mount→mapper resolution, `cryptsetup status`,
+         `blkid` device_type=crypto_LUKS, Doppler escrow re-test, LUKS header UUID readback.
+         This is the signal that keeps the re-scoped clause (d) TRUE after merge."
+  cadence: "daily (host timer), plus on-demand via `workspaces-luks-verify.yml` workflow_dispatch"
+  alert_target: "betteruptime_heartbeat.workspaces_luks (Better Stack) — a missed daily push
+                 should page. KNOWN-BROKEN: WORKSPACES_LUKS_HEARTBEAT_URL is unwired, so the
+                 probe runs, succeeds, and pushes nothing. Tracked #6808 (OPEN). This PR does
+                 NOT close it and does not depend on it for merge — but it is precisely why
+                 Deliverable 3 discloses rather than waits."
+  configured_in: "apps/web-platform/infra/luks-monitor.sh; .github/workflows/workspaces-luks-verify.yml"
+
+error_reporting:
+  destination: "GitHub Actions check failure on the PR (tc-document-sha-guard — a required check,
+                name-pinned by infra/github/ruleset-ci-required.tf per ADR-032); vitest failure
+                for legal-doc-consistency; non-zero exit for lint-encryption-posture.py.
+                Post-merge divergence: discriminating Sentry event from luks-monitor drift."
+  fail_loud: true   # every gate is blocking; none is advisory, none is continue-on-error
+
+failure_modes:
+  - mode: "SHA pin goes stale (a docs/legal byte changes after Phase 4 pins)"
+    detection: "check-tc-document-sha.sh raw-byte sha256 mismatch"
+    alert_route: "tc-document-sha-guard required check → PR blocked (cannot merge)"
+  - mode: "Canonical and Eleventy mirror drift (heading sequence or Last-Updated date)"
+    detection: "legal-doc-consistency.test.ts — heading-sequence parity + 9-site date equality"
+    alert_route: "vitest failure in CI → PR blocked"
+  - mode: "Ledger disclosed_as anchor rots or resolves into an encryption claim (R5)"
+    detection: "lint-encryption-posture.py --repo-sweep (hermetic; fails CLOSED on an
+                unresolvable anchor)"
+    alert_route: "Encryption posture Layer A CI job → PR blocked"
+  - mode: "THE SUBSTANTIVE ONE — the LUKS claim silently becomes false again post-merge
+           (precedent: #6812, crypto_LUKS held ~27 min then a dead-man timer reverted it)"
+    detection: "luks-monitor.sh daily probe emits discriminating Sentry on mapper/escrow/header
+                drift; workspaces-luks-verify.yml re-asserts on demand"
+    alert_route: "Sentry (live today) + Better Stack heartbeat (DARK until #6808 — this is the
+                  residual risk, disclosed rather than hidden)"
+
+logs:
+  where: "GitHub Actions run logs (CI gates); Better Stack Logs source 2457081 for host-side
+          luks-monitor self-reports; Sentry for drift events"
+  retention: "Actions logs 90d (GitHub default); Better Stack per plan retention; Sentry per
+              project retention"
+
+discoverability_test:
+  command: "gh workflow run workspaces-luks-verify.yml && gh run list --workflow=workspaces-luks-verify.yml --limit 1 --json databaseId,conclusion"
+  expected_output: "conclusion=success with SOLEUR_WORKSPACES_READYZ ready=true writable=true populated=true workspace_count=8 expected=8 against /dev/mapper/workspaces"
+```
+
+**No SSH anywhere in the discoverability path** (`hr-no-ssh-fallback-in-runbooks`). The verify
+workflow reaches web-1 over the CF Tunnel SSH *bridge* as a transport, but the operator/agent
+never SSHes a host to check whether it worked — the verdict is read from the workflow run.
 
 ---
 
 ## Encryption Posture
 
-**Skipped as a schema deliverable — justified.** The Phase-2.11 detector fires on
-`\.tf$`, `supabase/migrations/.*\.sql$`, `cloud-init.*\.ya?ml$`, `docker-compose.*\.ya?ml$`.
-This PR touches none, introduces no persistent store, and creates no cross-component connection.
+This PR **introduces no store and no connection** — the path detector (`\.tf$`,
+`supabase/migrations/*.sql`, `cloud-init*`, `docker-compose*`) does not fire. But it **edits
+`scripts/encryption-posture-ledger.json`** and its whole subject matter is what is publicly
+claimed about at-rest posture, so the schema is filled for the three rows it touches rather than
+skipped. **No measured posture changes here — only what is claimed about it.**
 
-It nonetheless **edits the ledger** (`disclosed_as` ×2, §4f), which is why the linter is a
-Phase-0 baseline and a Phase-4 re-run, and why AC8 is a gate. The measured postures themselves
-are unchanged by this PR — it changes only what is *claimed about* them.
+Values are transcribed from the committed ledger (verified this session; linter baseline
+`14 stores, 3 connections, 0 unledgered, 0 failing checks -> PASS`).
+
+```yaml
+at_rest:
+  - store: hcloud_volume.workspaces_luks          # the LIVE serving volume — clause (d)'s subject
+    mechanism: luks
+    evidence: "workspaces-cutover.sh:2030,2041 (cryptsetup luksFormat/luksOpen,
+               MAPPER_NAME=${WORKSPACES_MAPPER_NAME:-workspaces}); key: random_password.workspaces_luks
+               + doppler_secret.workspaces_luks_key (workspaces-luks.tf); mount gate:
+               soleur-host-bootstrap.sh:564-565"
+    defends_against: "a seized/RMA'd or snapshot-imaged Hetzner block volume: contents are
+                      unreadable without the Doppler-held LUKS passphrase"
+    does_not_defend: "a leaked service-role credential, an RLS bypass, an SSRF reaching the store,
+                      or any read on the live host where the mapper is already unlocked"
+    disclosed_as: "docs/legal/privacy-policy.md — §11 Security bullet (CONTENT ANCHOR; this PR
+                   replaces the dead line-number citation `:519`, which resolves to nothing:
+                   grep -c '519' returns 0)"
+    live_verification: available   # luks-monitor.sh + workspaces-luks-verify.yml
+
+  - store: hcloud_volume.workspaces               # the RETAINED PLAINTEXT ORIGINAL — Deliverable 3
+    mechanism: plaintext-exception
+    evidence: "apps/web-platform/infra/server.tf:1569 (format = \"ext4\", no LUKS apparatus)"
+    defends_against: "nothing at the volume layer; superseded on web-1 by
+                      hcloud_volume.workspaces_luks (cutover certified 2026-07-23, run 30040444418)"
+    does_not_defend: "a seized/snapshot disk exposes any workspace data still resident on this
+                      volume — this sentence, in Soleur's own ledger, is why Deliverable 3
+                      discloses rather than stays silent"
+    disclosed_as: "not-publicly-claimed (RETAINED — see §4f). The new sentence discloses the
+                   volume's EXISTENCE as a residual; it claims no safeguard FOR it. Flipping this
+                   to a real anchor would trip R5, which FAILs when the ±300-char window matches
+                   /LUKS|encrypt/i — an honest under-claim caught by a check built for over-claims."
+    live_verification: "unavailable:host attachment state not pulled in the code-sourced audit;
+                        tracked #6897"
+    exception:
+      justification: "superseded plaintext resource retained as the pre-cutover rollback backstop;
+                      web-1 /mnt/data now runs on the LUKS workspaces_luks mapper. THIS PR ADDS:
+                      the retention is now affirmatively disclosed in the published privacy policy."
+      tracking_issue: "#6897"
+      reevaluate_when: "the workspaces_luks cutover is confirmed irreversible and the plaintext
+                        volume can be detached and destroyed"
+      expires_on: "2026-10-22"
+
+in_transit:
+  - connection: "web-platform server -> Supabase Postgres/PostgREST"
+    tls: "https (Supabase REST) / TLS 1.2+"
+    cert_verification: on
+    does_not_defend: "a leaked anon/service key; TLS protects the channel, not the credential"
+    disclosed_as: "docs/legal/data-protection-disclosure.md — CONTENT ANCHOR (this PR replaces the
+                   bare line-number citation `:316`; not evaluated today because
+                   cert_verification: on short-circuits check_connection's disclosed_as block)"
+```
+
+**No `exception` block is required for the `in_transit` row** (`cert_verification: on`). The
+`at_rest` plaintext row carries one, with both `tracking_issue` and `expires_on` present.
+
+> **The `expires_on: 2026-10-22` is an INTERNAL commitment, not an achieved schedule** — the cure
+> path (#6808 fix + a 7-day soak that has not started) has no committed start date. It must never
+> be published as a deadline (CLO B4).
 
 ---
 
@@ -1144,6 +1337,28 @@ its residuals are ongoing bounded exceptions that need an umbrella to home them)
 | **Fix #6808 / run the soak / wipe the plaintext volume** | Explicitly out of scope per the task; separately tracked. This PR discloses the state honestly rather than changing it. |
 
 ---
+
+## Research Insights — verify-the-negative sweep (deepen Phase 4.45)
+
+Every load-bearing **negative** claim in this plan was independently grepped against the named
+artifact. **10 of 10 CONFIRM; zero contradictions.** Citations are the authority — if a claim in
+the prose above drifts from this table, this table wins.
+
+| # | Claim | Verdict | Citation |
+|---|---|---|---|
+| 1 | No mirror body-equivalence check runs for our 3 docs | **CONFIRMS** | `check-tc-document-sha.sh:177` — `BODY_EQUIVALENCE_DOCS=("terms-and-conditions")`; comment at `:14-17` explicitly defers the other 8 |
+| 2 | No SHA bypass exists for non-T&C docs | **CONFIRMS** | `check-tc-document-sha.sh:240` gates the bypass on `[ "$doc" = "terms-and-conditions" ]`; the `else` at `:271` has no bypass path |
+| 3 | `tc-document-sha-guard` is a pinned required check | **CONFIRMS** | `infra/github/ruleset-ci-required.tf:152` |
+| 4 | Mirrors are hand-maintained; no generator | **CONFIRMS** | Repo-wide grep for `pages/legal` hits only the guard script + 2 vitest tests. **No writer.** |
+| 5 | Consistency test asserts heading parity + 3 date sites | **CONFIRMS** | `legal-doc-consistency.test.ts:106-113` (headings), `:161/:162/:163` (the 3 date extractions), asserted equal at `:177,:179` |
+| 6 | Our 3 docs are not T&C-coupled — no `TC_VERSION` bump | **CONFIRMS** | `tc-version.ts:14,34-35` reference only `terms-and-conditions.md` |
+| 7 | `deploy-docs.yml` fires on `plugins/soleur/docs/**` | **CONFIRMS** | `deploy-docs.yml:11` |
+| 8 | `workspaces-luks-verify.yml` is `workflow_dispatch`-ONLY | **CONFIRMS** | `:41-59` — no `schedule:`, no `push:`. **Phase 0 must dispatch it explicitly; nothing fires it for us.** |
+| 9 | `lint-encryption-posture.py` is hermetic | **CONFIRMS** | Only `os/json/re/pathlib/argparse/datetime` imported; zero network call sites |
+| 10 | Editing `knowledge-base/legal/**` or the ledger cannot stale the 3 SHAs | **CONFIRMS** | `check-tc-document-sha.sh:37,55-57` — `CANONICAL_DIR=docs/legal`, glob-scoped |
+
+**Consequence for Phase 4 ordering:** claim 10 is what makes the ledger-before-SHA sequencing safe,
+and claim 2 is what makes the pin non-negotiable. Both are now cited, not assumed.
 
 ## Open Code-Review Overlap
 
