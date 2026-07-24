@@ -51,8 +51,8 @@
 # TRANSIENT vs MALFORMED (#6919). A curl NON-ZERO exit OR an EMPTY/whitespace body is a
 # TRANSIENT transport failure (timeout / truncation), NOT a GraphQL error: the page is
 # retried ONCE with a fresh per-page budget; a second transient → LOUD `reason=transport`
-# abort (accurate remediation: narrow the window via CUTOVER_WINDOW_FROM, or scope
-# functionIDs — NOT the deadline, which the SUM bound caps at 112 s), NEVER the
+# abort (accurate remediation: narrow the anchor, or scope functionIDs — NOT the deadline,
+# which the SUM bound caps at 112 s), NEVER the
 # "malformed" verdict. A NON-EMPTY body whose `.data.runs.edges` is not an array is
 # GENUINELY malformed → the fail-loud `reason=gql_error` path (never masked as clean).
 #
@@ -108,7 +108,9 @@ FIXTURE_DIR="${INNGEST_DOUBLEFIRE_RUNS_FIXTURE:-}"
 
 # STARTED_AT lower bound. Same 365-day clamp + BusyBox-safe fallback as the sibling
 # inngest scripts (the epoch is rejected by v1.19.4 as an out-of-range Time bound).
-# NEVER narrowed for cost (Finding 5) — keep the window ⊇ the operator cutover window.
+# This is only the DEFAULT used when no caller supplies ?from=; the cutover workflow always
+# supplies an anchored bound (see WINDOW POLICY above, which retired the former
+# "never narrowed" rule for this scan).
 _default_from=$(date -u -d '365 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
   || date -u +%Y-%m-%dT%H:%M:%SZ)
 FROM_TS="${INNGEST_DOUBLEFIRE_FROM:-$_default_from}"
@@ -211,7 +213,7 @@ _pf_abort() {  # $1=reason $2=pages $3=pages_timed_out $4=last_curl_exit
   # (Phrased WITHOUT the imperative+token literal on purpose: the AC3 guard greps this file's
   # body, comments included, so quoting the dead advice here would keep the guard red forever —
   # the comment-vs-assertion collision in cq-assert-anchor-not-bare-token.)
-  echo "inngest-doublefire-probe: FATAL preflight scan aborted reason=$1 pages_scanned=$2 (deadline_s=$PREFLIGHT_DEADLINE_S page_ceiling=$MAX_PAGES from=$FROM_TS total_count=$_pf_total_count) — narrow the window (set the CUTOVER_WINDOW_FROM repo variable to a later instant) or scope INNGEST_DOUBLEFIRE_FUNCTION_IDS; refusing to emit a truncated (false-clean) run set"
+  echo "inngest-doublefire-probe: FATAL preflight scan aborted reason=$1 pages_scanned=$2 (deadline_s=$PREFLIGHT_DEADLINE_S page_ceiling=$MAX_PAGES from=$FROM_TS total_count=$_pf_total_count) — narrow the window (set the CUTOVER_ANCHOR_FROM repo variable, which overrides the flip-FSM anchor) or scope the population or scope INNGEST_DOUBLEFIRE_FUNCTION_IDS; refusing to emit a truncated (false-clean) run set"
   echo "ERROR: preflight scan aborted reason=$1 pages_scanned=$2" >&2
   exit 1
 }
@@ -219,10 +221,10 @@ _pf_abort() {  # $1=reason $2=pages $3=pages_timed_out $4=last_curl_exit
 # inline and a COMPUTED latest-viable anchor derived from the observed density — so the next
 # narrowing is measured rather than extrapolated (v1 of this plan extrapolated "~540 pages"
 # from counting cron schedules in source and understated reality by ~2.7x).
-#   $1=total_count $2=affordable_runs $3=latest_viable_from(ISO)
+#   $1=total_count $2=affordable_runs $3=latest_viable_from(ISO) $4=sec_per_page(as applied)
 _pf_abort_window_too_wide() {
   _pf_timeout_marker window_too_wide 1 0 "$_last_curl_exit"
-  echo "inngest-doublefire-probe: FATAL window too wide to exhaust — the server reports total_count=$1 run(s) matching from=$FROM_TS, but this budget can scan at most ~$2 (deadline_s=$PREFLIGHT_DEADLINE_S / ~${PREFLIGHT_SEC_PER_PAGE}s per page x page_size=$PAGE_SIZE). Scanning would burn the full deadline and emit NOTHING. Remediation: set the CUTOVER_WINDOW_FROM repo variable to $3 or later (computed from the observed density), or scope INNGEST_DOUBLEFIRE_FUNCTION_IDS; refusing to emit a truncated (false-clean) run set"
+  echo "inngest-doublefire-probe: FATAL window too wide to exhaust — the server reports total_count=$1 run(s) matching from=$FROM_TS, but this budget can scan at most ~$2 (deadline_s=$PREFLIGHT_DEADLINE_S / ~$4s per page x page_size=$PAGE_SIZE). Scanning would burn the full deadline and emit NOTHING. Remediation: set the CUTOVER_ANCHOR_FROM repo variable to $3 or later (computed from the observed density; it OVERRIDES the flip-FSM anchor, unlike CUTOVER_WINDOW_FROM which is consulted only when no anchor is derivable). NOTE: narrowing yields a WINDOW-LIMITED verdict, not a full exactly-once proof — to keep the full window instead, scope the population via CUTOVER_DOUBLEFIRE_FUNCTION_IDS, or scope INNGEST_DOUBLEFIRE_FUNCTION_IDS; refusing to emit a truncated (false-clean) run set"
   echo "ERROR: window too wide: total_count=$1 affordable=$2 latest_viable_from=$3" >&2
   exit 1
 }
@@ -233,7 +235,7 @@ _pf_abort_window_too_wide() {
 _pf_abort_transport() {  # $1=page $2=pages_timed_out $3=last_curl_exit
   _pf_timeout_marker transport "$1" "$2" "$3"
   logger -t "$LOG_TAG" "ERROR: transport exhaustion on page $1 after retry: empty/failed body (last_curl_exit=$3)" 2>/dev/null || true
-  echo "inngest-doublefire-probe: FATAL empty/truncated runs response on page $1 after 1 retry (last_curl_exit=$3, from=$FROM_TS, total_count=$_pf_total_count) — transient transport failure or preflight budget exhaustion, NOT a malformed GraphQL response; narrow the window (set the CUTOVER_WINDOW_FROM repo variable to a later instant) or scope INNGEST_DOUBLEFIRE_FUNCTION_IDS — refusing to emit a truncated (false-clean) run set"
+  echo "inngest-doublefire-probe: FATAL empty/truncated runs response on page $1 after 1 retry (last_curl_exit=$3, from=$FROM_TS, total_count=$_pf_total_count) — transient transport failure or preflight budget exhaustion, NOT a malformed GraphQL response; narrow the window (set the CUTOVER_ANCHOR_FROM repo variable, which overrides the flip-FSM anchor) or scope the population or scope INNGEST_DOUBLEFIRE_FUNCTION_IDS — refusing to emit a truncated (false-clean) run set"
   echo "ERROR: transport/budget exhaustion on page $1 after retry (last_curl_exit=$3)" >&2
   exit 1
 }
@@ -383,6 +385,12 @@ run_probe() {
     if (( page == 1 )); then
       local tc afford_pages affordable_runs
       tc=$(echo "$resp" | jq -r '.data.runs.totalCount // empty' 2>/dev/null || echo "")
+      if ! [[ "$tc" =~ ^[0-9]+$ ]]; then
+        # The gate cannot run without a usable count. Skipping is fail-closed on its own (the
+        # scan then burns the deadline and aborts), but "the gate did not run" must be visible
+        # off-box rather than inferred from a later abort.
+        _pf_marker "SOLEUR_INNGEST_PREFLIGHT_GATE op=$PREFLIGHT_OP feasibility_gate=skipped reason=totalcount_unparseable"
+      fi
       if [[ "$tc" =~ ^[0-9]+$ ]]; then
         _pf_total_count="$tc"
         # Affordability in RUNS, from the measured per-page rate. Both operands are clamped
@@ -411,7 +419,7 @@ run_probe() {
                 || echo "<unknown — supply a later CUTOVER_WINDOW_FROM>")
             fi
           fi
-          _pf_abort_window_too_wide "$tc" "$affordable_runs" "$latest_viable"
+          _pf_abort_window_too_wide "$tc" "$affordable_runs" "$latest_viable" "$sec_per_page"
         fi
       fi
     fi

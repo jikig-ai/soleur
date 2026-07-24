@@ -124,20 +124,33 @@ jobs:
           CUTOVER_CRON_PERIOD_SECONDS: ${{ inputs.cron_period_seconds }}
           # #6919 — OPTIONAL functionIDs scope for the exactly-once doublefire probe
           # (op=verify 2.6 + op=doublefire-probe). Comma-separated cron fn UUIDs; empty ⇒ ALL
-          # functions (the default). This is the design's hard cost lever: the wide default
-          # 365-day scan over all 68 functions can exhaust the probe's per-page budget, so an
-          # operator can set the repo/env var CUTOVER_DOUBLEFIRE_FUNCTION_IDS to scope it. It is
-          # a COST lever ONLY — it never narrows the TIME window (which would surface false
-          # missed-ticks → re-fire → double-fire). Forwarded to the probe as the function_ids
-          # URL query param (read into INNGEST_DOUBLEFIRE_FUNCTION_IDS on-host).
+          # functions (the default). A COST lever: it shrinks the scanned POPULATION without
+          # touching the time window. Forwarded to the probe as the function_ids URL query param
+          # (read into INNGEST_DOUBLEFIRE_FUNCTION_IDS on-host).
+          #
+          # #6178 — SCOPING IT WEAKENS THE VERDICT. A scoped scan can report "exactly-once
+          # VERIFIED" over a population that excludes the destructive crons (cron-workspace-gc,
+          # cron-rule-prune, cron-action-required-sla). The verify arm therefore warns when it is
+          # non-empty, and the scope is carried into the run log so a scoped clean is never read
+          # as a full one.
           CUTOVER_DOUBLEFIRE_FUNCTION_IDS: ${{ vars.CUTOVER_DOUBLEFIRE_FUNCTION_IDS }}
-          # #6919 review — the quiesce→register window (ISO-8601), OPTIONAL operator repo/env
-          # vars, mapped here so the shell actually sees them (GitHub does not export repo vars
-          # to the step unless named). When set they (a) anchor doublefire_from() to
-          # cutover_instant−200d instead of now−200d — so a LATE op=verify re-run still keeps the
-          # window ⊇ the superset invariant — and (b) enable the missed-tick auto-enumeration
-          # (P2-16, below). Unset ⇒ doublefire_from() falls back to now−200d (safe when op=verify
-          # runs promptly post-cutover, the intended usage) and missed-tick auto-enum is skipped.
+          # #6178 — the doublefire scan-window ANCHOR override (ISO-8601). This is the operator's
+          # NARROWING lever, and doublefire_from() gives it precedence over the flip-FSM row so it
+          # actually takes effect (the page-1 feasibility gate names it in its remediation).
+          # Because it narrows, a verdict derived from it is window-limited, not a full
+          # exactly-once proof — the verify arm labels it as such.
+          #
+          # Deliberately DISTINCT from CUTOVER_WINDOW_FROM below: that variable also means "the
+          # quiesce→register gap START" to the missed-tick auto-enumeration, and quiesce precedes
+          # the cutover. Overloading one variable with both meanings would silently re-base the
+          # expected-tick window so the gap ticks stop being enumerated.
+          CUTOVER_ANCHOR_FROM: ${{ vars.CUTOVER_ANCHOR_FROM }}
+          # The quiesce→register window (ISO-8601), OPTIONAL operator repo/env vars, mapped here
+          # so the shell actually sees them (GitHub does not export repo vars to the step unless
+          # named). CUTOVER_WINDOW_FROM/UNTIL drive the missed-tick auto-enumeration (P2-16,
+          # below); CUTOVER_WINDOW_FROM additionally serves as doublefire_from()'s LAST-RESORT
+          # anchor source (after the override and the flip-FSM row), never as a wide fallback —
+          # with all three unset, op=verify FAILS CLOSED rather than scanning an unanchored window.
           CUTOVER_WINDOW_FROM: ${{ vars.CUTOVER_WINDOW_FROM }}
           CUTOVER_WINDOW_UNTIL: ${{ vars.CUTOVER_WINDOW_UNTIL }}
         run: |
@@ -201,29 +214,74 @@ jobs:
           #
           # PURITY: extracts ONLY `dt`. The standing contract of the Better Stack readers in this
           # step is that they NEVER echo a raw row (a value could ride along).
+          # ANCHOR RETENTION BOUND. This literal — not vendor retention — is the operative limit
+          # on how long after a cutover an `fsm` anchor can be derived at all. Past it, op=verify
+          # degrades to `var` and then fails closed.
+          FSM_ANCHOR_SINCE="${FSM_ANCHOR_SINCE:-30d}"
+          # Set by _flip_transition_dt on failure so the caller's fail-closed message can name
+          # what actually happened instead of asserting a cause it never established.
+          FSM_FAIL_REASON=""
           _flip_transition_dt() {
-            local limit=50 rows n dt
+            local limit=50 rows n dt rc=0
+            FSM_FAIL_REASON=""
+            # TRANSITION REASONS. Derived from inngest-cutover-flip.sh `emit_state` — EVERY reason
+            # that is not a `noop-*` heartbeat. `unexpected-exit` is the ERR-trap terminal
+            # transition and is load-bearing: it is the ONLY row emitted on the path where
+            # `start_server` SUCCEEDS (coexistence begins) but the subsequent `flag_set` — a
+            # Doppler network write — fails. Omitting it would skip that row and return a LATER
+            # one, i.e. a window NARROWER than the coexistence region: the exact unsafe direction
+            # this anchor exists to prevent. Its `--grep` is deliberately UNTERMINATED because the
+            # reason interpolates a `(from=…)` suffix.
+            #
+            # Including a reason can only ever move the anchor EARLIER — earliest(A ∪ B) ≤
+            # earliest(A) — so a SUPERSET is always the safe direction. The abort reasons are kept
+            # for that reason even though they fire on flips where `start_server` never ran.
+            # A cross-file parity test pins this set against the emitter.
             rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
-              --since 30d \
+              --since "$FSM_ANCHOR_SINCE" \
               --grep '"reason":"flip-complete"' \
               --grep '"reason":"flushed-resume-no-reflush"' \
+              --grep '"reason":"unexpected-exit' \
               --grep '"reason":"rolled-back"' \
               --grep '"reason":"dbsize-nonzero"' \
               --grep '"reason":"flushall-failed"' \
               --grep '"reason":"refuse-rearm-after-done"' \
-              --limit "$limit" 2>/dev/null) || return 1
+              --limit "$limit") || rc=$?
+            if [[ "$rc" -ne 0 ]]; then
+              FSM_FAIL_REASON="query-failed rc=$rc"
+              echo "::warning::anchor-derive: betterstack-query.sh returned $rc (the DERIVE PATH failed, NOT the on-host FSM) — verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform" >&2
+              return 1
+            fi
             n=$(printf '%s\n' "$rows" | grep -c '^{' || true)
-            [[ "$n" -eq 0 ]] && return 1
+            if [[ "$n" -eq 0 ]]; then
+              FSM_FAIL_REASON="no-transition-row within $FSM_ANCHOR_SINCE"
+              echo "::warning::anchor-derive: no flip-FSM transition row within $FSM_ANCHOR_SINCE" >&2
+              return 1
+            fi
             # TRUNCATION GUARD. betterstack-query.sh's LIMIT takes the NEWEST N rows (inner
             # ORDER BY dt DESC) before re-sorting ascending, so a FULL page means the earliest
             # transition may lie beyond it and the row we would pick is LATER than the true
             # anchor — a narrower window. Refuse rather than derive an under-covering anchor;
             # the caller then falls through to a WIDER source, never a narrower one.
-            [[ "$n" -ge "$limit" ]] && return 1
-            dt=$(printf '%s\n' "$rows" | jq -r 'select(type == "object") | .dt' 2>/dev/null | head -1)
+            if [[ "$n" -ge "$limit" ]]; then
+              FSM_FAIL_REASON="truncated n=$n limit=$limit (transitions EXIST but the earliest may be hidden)"
+              echo "::warning::anchor-derive: response filled the page (n=$n limit=$limit) — the earliest transition may be truncated away; refusing a possibly-narrower anchor" >&2
+              return 1
+            fi
+            # `sort` makes earliest-selection independent of betterstack-query.sh's outer
+            # ORDER BY: a future edit there (or a second consumer wanting newest-first) would
+            # otherwise silently flip this to the LATEST transition and narrow the window, with
+            # both suites green. ISO-ish `dt` sorts lexicographically == chronologically.
+            # `|| true` on the pipeline: `head -1` closing the pipe early SIGPIPEs the producer,
+            # which `pipefail` would surface as a spurious failure.
+            dt=$( { printf '%s\n' "$rows" | jq -r 'select(type == "object") | .dt' | sort | head -1; } 2>/dev/null || true)
             # Shape-guard before the value reaches `date -d`: both a parse guard and an
             # injection guard on externally-sourced text.
-            [[ "$dt" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]][0-9]{2}:[0-9]{2}:[0-9]{2} ]] || return 1
+            if ! [[ "$dt" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]][0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+              FSM_FAIL_REASON="dt-malformed"
+              echo "::warning::anchor-derive: transition row carried no parseable dt" >&2
+              return 1
+            fi
             printf '%s\n' "$dt"
           }
 
@@ -253,26 +311,55 @@ jobs:
           # abort for a deadline abort while LOOKING safer, and this probe is fail-loud on
           # non-exhaustion (it emits nothing), so the operator would learn nothing either way.
           doublefire_from() {
-            local fallback_days="${1:-}" mode="${2:-wide}"
+            local fallback_days="${1:-}" mode="${2:-}"
             local period="${CUTOVER_CRON_PERIOD_SECONDS:-3600}"
             [[ "$period" =~ ^[1-9][0-9]*$ ]] || period=3600
             if ! [[ "$fallback_days" =~ ^[1-9][0-9]*$ ]]; then
               echo "doublefire_from: fallback days must be a positive integer (got '$fallback_days')" >&2
               return 1
             fi
+            # FAIL CLOSED on an unrecognized mode. A `${2:-wide}` default plus a `!= fsm` test
+            # would silently route a typo (or a future third caller) onto the UNANCHORED wide
+            # path — fail-open on the safety-relevant argument, while `fallback_days` right above
+            # fails closed on the same class of error.
+            case "$mode" in
+              fsm|wide) ;;
+              *) echo "doublefire_from: mode must be 'fsm' or 'wide' (got '$mode')" >&2; return 1 ;;
+            esac
             local now_e floor_e
             now_e=$(date -u +%s)
             floor_e=$(( now_e - fallback_days * 86400 ))
 
             # PRE-cutover dark-host detector: there is no coexistence instant to anchor on yet,
             # so it keeps its wide window and makes no Better Stack call at all.
-            if [[ "$mode" != "fsm" ]]; then
+            if [[ "$mode" == "wide" ]]; then
               printf '%s wide\n' "$(date -u -d "@$floor_e" +%Y-%m-%dT%H:%M:%SZ)"
               return 0
             fi
 
             local anchor_e="" src="" dt=""
-            if dt=$(_flip_transition_dt); then
+            # PRECEDENCE: override > fsm > var > fail closed.
+            #
+            # CUTOVER_ANCHOR_FROM is the operator's NARROWING lever, and it must outrank the FSM
+            # row or it cannot do its job. This is the fix for a dead-remediation defect: the
+            # page-1 feasibility gate tells the operator to move the window later, but the only
+            # variable it used to name (CUTOVER_WINDOW_FROM) is consulted ONLY when the fsm anchor
+            # is absent — so on the normal path, following the remediation changed DF_FROM by
+            # exactly nothing and the next dispatch aborted identically. That is the same
+            # dead-advice class this change removed from the deadline surfaces, relocated.
+            #
+            # It is a SEPARATE variable from CUTOVER_WINDOW_FROM on purpose: that one is also
+            # consumed by the missed-tick auto-enumeration as the quiesce→register gap START, and
+            # quiesce PRECEDES the cutover. Overloading it would silently re-base the expected-tick
+            # window so the gap ticks stop being enumerated — the omission half.
+            #
+            # An override NARROWS by construction, so it yields a window-limited verdict; the
+            # verify arm downgrades VERIFIED accordingly.
+            if [[ -n "${CUTOVER_ANCHOR_FROM:-}" ]]; then
+              anchor_e=$(date -u -d "${CUTOVER_ANCHOR_FROM}" +%s 2>/dev/null || echo "")
+              if [[ "$anchor_e" =~ ^[0-9]+$ ]]; then src=override; else anchor_e=""; fi
+            fi
+            if [[ -z "$anchor_e" ]] && dt=$(_flip_transition_dt); then
               anchor_e=$(date -u -d "$dt UTC" +%s 2>/dev/null || echo "")
               if [[ "$anchor_e" =~ ^[0-9]+$ ]]; then src=fsm; else anchor_e=""; fi
             fi
@@ -281,13 +368,18 @@ jobs:
               if [[ "$anchor_e" =~ ^[0-9]+$ ]]; then src=var; else anchor_e=""; fi
             fi
             if [[ -z "$anchor_e" ]]; then
-              echo "doublefire_from: coexistence anchor underivable — no flip-FSM transition row within Better Stack retention, and the CUTOVER_WINDOW_FROM repo variable is unset or unparseable. Set CUTOVER_WINDOW_FROM to the cutover instant (ISO-8601) and re-dispatch. Refusing to scan an unanchored window." >&2
+              echo "doublefire_from: coexistence anchor underivable (${FSM_FAIL_REASON:-fsm-derive not attempted}); CUTOVER_ANCHOR_FROM and CUTOVER_WINDOW_FROM are both unset or unparseable. Set CUTOVER_ANCHOR_FROM to the quiesce instant (ISO-8601, at or before the cutover) and re-dispatch. Refusing to scan an unanchored window." >&2
               return 1
             fi
 
             local anchor_from=$(( anchor_e / period * period - 2 * period ))
             local from_e="$anchor_from"
-            if (( floor_e < anchor_from )); then from_e="$floor_e"; src=floor; fi
+            # The floor can only WIDEN (min picks the earlier bound). Record it as floor(<src>)
+            # rather than plain `floor`: with a 1-day fallback, the floor wins on every dispatch
+            # within ~24h of the cutover — i.e. the intended usage — so a bare `floor` would
+            # discard whether an fsm anchor was derivable at all, which is exactly the fact AC-V3
+            # asks the operator to demonstrate.
+            if (( floor_e < anchor_from )); then from_e="$floor_e"; src="floor(${src})"; fi
             printf '%s %s\n' "$(date -u -d "@$from_e" +%Y-%m-%dT%H:%M:%SZ)" "$src"
           }
 
@@ -381,8 +473,8 @@ jobs:
               fi
               echo "::warning::doublefire-probe CRON_PERIOD=${CRON_PERIOD}s is applied to ALL functions (P2-c). The verdict is SOUND ONLY IF every registered cron period ≥ ${CRON_PERIOD}s AND hour-aligned. If any cron fires faster, re-dispatch with CUTOVER_CRON_PERIOD_SECONDS set to the SHORTEST registered period before trusting the result."
               SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-              # #6919 — forward the ⊇-invariant window lower bound + optional functionIDs scope as
-              # URL query params (HMAC is over the empty GET body, so params don't affect the sig).
+              # Forward the window lower bound + optional functionIDs scope as URL query params
+              # (HMAC is over the empty GET body, so params don't affect the sig).
               # #6178 — PER-ARM fallback. This is the PRE-cutover dark-host detector: it runs
               # BEFORE any flip, so no coexistence instant exists to anchor on, and it keeps the
               # wide 200-day window (mode=wide makes no Better Stack call — this arm is read-only
@@ -392,7 +484,7 @@ jobs:
                 echo "::error::doublefire-probe: could not compute the scan window lower bound — refusing to scan"; exit 1
               fi
               read -r DF_FROM DF_ANCHOR_SOURCE <<< "$DF_RAW"
-              if ! [[ "$DF_FROM" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+              if ! [[ "$DF_FROM" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
                 echo "::error::doublefire-probe: computed window lower bound is malformed ('$DF_FROM') — refusing to scan"; exit 1
               fi
               DF_FNIDS="${CUTOVER_DOUBLEFIRE_FUNCTION_IDS:-}"
@@ -432,7 +524,16 @@ jobs:
               if [[ "$NO_START" -gt 0 ]]; then
                 echo "::notice::doublefire-probe: $NO_START run(s) carry no startedAt (queued/running/cancelled-before-start) and are excluded from bucketing — they have not fired, so they cannot be a double-fire."
               fi
-              echo "::notice::doublefire-probe: $RUN_COUNT run(s) in window; bucketing by (functionID, floor(startedAt / ${CRON_PERIOD}s))"
+              # #6178 — surface the server's own scan scale. Unlike op=verify (where an empty
+              # scan is a VACUOUS verdict and hard-fails), ZERO runs here is the EXPECTED clean
+              # state for a dark host, so this is a warning rather than a gate. It still matters:
+              # a clean dark-host result over a scan whose scale was never measured is a weaker
+              # statement than one over a measured scan.
+              TOTAL_COUNT=$(echo "$BODY" | jq -r '.total_count // "absent"')
+              if [[ "$TOTAL_COUNT" == "unknown" || "$TOTAL_COUNT" == "absent" ]]; then
+                echo "::warning::doublefire-probe: the server did not report a usable totalCount (total_count=$TOTAL_COUNT) — the page-1 feasibility gate did not run and the scan's scale is unmeasured."
+              fi
+              echo "::notice::doublefire-probe: $RUN_COUNT run(s) in window (server total_count=$TOTAL_COUNT, anchor_source=$DF_ANCHOR_SOURCE, from=$DF_FROM); bucketing by (functionID, floor(startedAt / ${CRON_PERIOD}s))"
               DUPES=$(echo "$BODY" | jq -c --argjson period "$CRON_PERIOD" '
                 [ .runs[] | select(.startedAt != null) | { fn: .functionID, bucket: ((.startedAt | fromdateiso8601) / $period | floor) } ]
                 | group_by([.fn, .bucket])
@@ -1316,9 +1417,8 @@ jobs:
                 echo "::error::2.6 CRON_PERIOD invalid ('$CRON_PERIOD') — set CUTOVER_CRON_PERIOD_SECONDS to a positive integer ≤ the SHORTEST registered cron period (hour-aligned)."; exit 1
               fi
               echo "::warning::2.6 CRON_PERIOD=${CRON_PERIOD}s is applied to ALL functions (P2-c). The exactly-once verdict is SOUND ONLY IF every registered cron period ≥ ${CRON_PERIOD}s AND hour-aligned. If any cron fires faster than ${CRON_PERIOD}s, re-run op=verify with CUTOVER_CRON_PERIOD_SECONDS set to the SHORTEST registered cron period before trusting the result."
-              # #6919 — forward the ⊇-invariant window lower bound (cost lever) + optional
-              # functionIDs scope as URL query params so the wide default scan completes within the
-              # probe's per-page budget. HMAC is over the empty GET body, so params don't alter it.
+              # Forward the window lower bound + optional functionIDs scope as URL query params.
+              # HMAC is over the empty GET body, so params don't alter it.
               # #6178 — anchor the scan window on the flip-FSM transition instant (fsm), else the
               # operator variable (var), else FAIL CLOSED. The 1-day floor is a SKEW CLAMP, not a
               # safety net: at the measured 728 runs/day a 7-day floor would be ~5,100 runs
@@ -1332,7 +1432,7 @@ jobs:
               # midnight — so `2>/dev/null` is not a guard on its own. An empty DF_FROM would build
               # `?from=` and the probe would silently fall back to its OWN 365-day default,
               # restoring the exact unscannable window this change exists to remove.
-              if ! [[ "$DF_FROM" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+              if ! [[ "$DF_FROM" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
                 echo "::error::2.6 doublefire-probe: computed window lower bound is malformed ('$DF_FROM') — refusing to scan"; exit 1
               fi
               DF_FNIDS="${CUTOVER_DOUBLEFIRE_FUNCTION_IDS:-}"
@@ -1376,7 +1476,26 @@ jobs:
               if [[ "$NO_START" -gt 0 ]]; then
                 echo "::notice::2.6 doublefire-probe: $NO_START run(s) carry no startedAt (queued/running/cancelled-before-start) and are excluded from bucketing — they have not fired, so they cannot be a double-fire."
               fi
-              echo "::notice::2.6 doublefire-probe: $RUN_COUNT run(s) in window; bucketing by (functionID, floor(startedAt / ${CRON_PERIOD}s))"
+              # #6178 — NON-VACUITY HARD GATE (AC-V3), enforced HERE rather than left to an
+              # operator reading markers after a green run.
+              #
+              # "No duplicates found" and "nothing was looked at" produce the SAME verdict string
+              # and are opposite facts. The probe reports the server's own totalCount precisely so
+              # this arm can tell them apart — but a verdict that depends on a human noticing
+              # `total_count=0` in Better Stack is operator diligence, and this plan's own
+              # User-Brand Impact section requires non-vacuity BY CONSTRUCTION. A green op=verify
+              # authorizes closing #6178 and DELETING the rollback snapshot, so the empty-scan
+              # case must be loud and red.
+              #
+              # Two real inputs reach {runs:[]} on an HTTP 200: a mis-scoped
+              # CUTOVER_DOUBLEFIRE_FUNCTION_IDS whose UUIDs no longer resolve post-repoint, and a
+              # partial GraphQL error that nulls totalCount while leaving edges an empty array.
+              TOTAL_COUNT=$(echo "$BODY" | jq -r '.total_count // "absent"')
+              if [[ "$TOTAL_COUNT" == "0" || "$TOTAL_COUNT" == "unknown" || "$TOTAL_COUNT" == "absent" || "$RUN_COUNT" -eq 0 ]]; then
+                echo "::error::2.6 VACUOUS SCAN — refusing to report a verdict. total_count=$TOTAL_COUNT run_count=$RUN_COUNT anchor_source=$DF_ANCHOR_SOURCE from=$DF_FROM. 'No duplicates' over a scan that examined nothing is not an exactly-once proof, and must not close #6178 or release the rollback snapshot. Check the function_ids scope and the anchor, then re-dispatch."
+                exit 1
+              fi
+              echo "::notice::2.6 doublefire-probe: $RUN_COUNT run(s) in window (server total_count=$TOTAL_COUNT); bucketing by (functionID, floor(startedAt / ${CRON_PERIOD}s))"
               # Any (functionID, floor(startedAt/period)) group with >1 run is a double-fire.
               DUPES=$(echo "$BODY" | jq -c --argjson period "$CRON_PERIOD" '
                 [ .runs[] | select(.startedAt != null) | { fn: .functionID, bucket: ((.startedAt | fromdateiso8601) / $period | floor) } ]
@@ -1389,7 +1508,24 @@ jobs:
                 echo "$DUPES" | jq -c '.[]'
                 exit 1
               fi
-              echo "::notice::2.6 exactly-once VERIFIED: every (functionID, tick-bucket) has exactly one run (no double-fire) — SOUND ONLY IF every registered cron period ≥ ${CRON_PERIOD}s and hour-aligned (see the CRON_PERIOD caveat above; P2-c)"
+              # #6178 — QUALIFY the verdict rather than printing one string for materially
+              # different claims. A clean result over a scoped population, a narrowed override
+              # window, or an unverified operator-typed anchor is a WEAKER claim than one over an
+              # fsm-anchored full-population scan, and AC-V4 keys on this distinction.
+              VERDICT_QUALIFIERS=""
+              if [[ -n "$DF_FNIDS" ]]; then
+                VERDICT_QUALIFIERS="${VERDICT_QUALIFIERS}population scoped to function_ids=[$DF_FNIDS] (the destructive crons may be excluded); "
+              fi
+              case "$DF_ANCHOR_SOURCE" in
+                override*|floor\(override\)) VERDICT_QUALIFIERS="${VERDICT_QUALIFIERS}window NARROWED by the CUTOVER_ANCHOR_FROM override, so it may not cover the whole coexistence region; " ;;
+                var|floor\(var\)) VERDICT_QUALIFIERS="${VERDICT_QUALIFIERS}anchor came from an operator-typed variable on a different clock, not the on-host flip-FSM row; " ;;
+                floor\(\)) VERDICT_QUALIFIERS="${VERDICT_QUALIFIERS}no anchor was derivable; the window is the bare fallback floor; " ;;
+              esac
+              if [[ -n "$VERDICT_QUALIFIERS" ]]; then
+                echo "::warning::2.6 exactly-once VERIFIED (QUALIFIED) — no double-fire found, but this is NOT a full exactly-once proof: ${VERDICT_QUALIFIERS%%; }. Do not treat a qualified verdict as satisfying AC-V3/AC-V4 without demonstrating the scanned window covers the quiesce instant."
+              else
+                echo "::notice::2.6 exactly-once VERIFIED: every (functionID, tick-bucket) has exactly one run (no double-fire), over $RUN_COUNT run(s) anchored on the flip-FSM transition (anchor_source=$DF_ANCHOR_SOURCE, from=$DF_FROM) — SOUND ONLY IF every registered cron period ≥ ${CRON_PERIOD}s and hour-aligned (see the CRON_PERIOD caveat above; P2-c)"
+              fi
               echo "::notice::2.6 SCOPE CAVEAT (P2-a / DI-C3): the doublefire-probe reads ONLY the dedicated host's (10.0.1.40) run history. It is NOT a web-2 double-fire detector — a surviving weight-0 web-2 scheduler fires against prod Postgres via its OWN loopback backend PRE-repoint, whose runs never appear on the dedicated host. The operator's MANDATORY web-2 quiesce (op=execute SEAM, web-2 freeze/recreate) is the control against a web-2 double-fire — op=verify cannot substitute for it."
 
               # ---- Missed-tick auto-enumeration (P2-16): ticks that fell in the

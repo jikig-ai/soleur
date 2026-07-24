@@ -333,8 +333,21 @@ assert "#6919 workflow maps CUTOVER_WINDOW_FROM into the step env (missed-tick a
 #     window ⊇ [coexistence_start − 2×cron_period , now]
 # which the transition-row anchor satisfies exactly. The per-arm split below is what keeps the
 # PRE-cutover dark-host detector wide while letting op=verify narrow.
-assert "#6178 op=verify narrows (1-day floor, fsm-anchored) — the 200d default is retired there" "grep -qE 'doublefire_from 1 fsm' '$WF'"
-assert "#6178 op=doublefire-probe (pre-cutover dark-host detector) KEEPS the 200-day window" "grep -qE 'doublefire_from 200 wide' '$WF'"
+# ARM-SCOPED, COMMENT-STRIPPED. A file-scoped `grep -q 'doublefire_from 1 fsm'` cannot tell a
+# CALL from a COMMENT: reverting op=verify to `doublefire_from 200 wide` while leaving a comment
+# that quotes the old call keeps the whole suite green — i.e. the defect this PR exists to remove
+# could be reinstated at 291/291. This file is dense with comments quoting these exact call forms,
+# so the collision is not hypothetical. Extract each arm, strip comments, assert exact counts.
+VERIFY_ARM_FILE="$(mktemp)"; SCRATCH+=("$VERIFY_ARM_FILE")
+DFPROBE_ARM_FILE="$(mktemp)"; SCRATCH+=("$DFPROBE_ARM_FILE")
+awk '/^            verify\)$/,/^              ;;$/' "$WF" | grep -vE '^[[:space:]]*#' > "$VERIFY_ARM_FILE"
+awk '/^            doublefire-probe\)$/,/^              ;;$/' "$WF" | grep -vE '^[[:space:]]*#' > "$DFPROBE_ARM_FILE"
+assert "#6178 verify) arm extraction is non-vacuous" "[[ \"\$(wc -l < '$VERIFY_ARM_FILE')\" -gt 40 ]]"
+assert "#6178 doublefire-probe) arm extraction is non-vacuous" "[[ \"\$(wc -l < '$DFPROBE_ARM_FILE')\" -gt 20 ]]"
+assert "#6178 op=verify calls doublefire_from 1 fsm EXACTLY once (non-comment)" "[[ \"\$(grep -cF 'doublefire_from 1 fsm' '$VERIFY_ARM_FILE')\" -eq 1 ]]"
+assert "#6178 op=verify NEVER calls the wide 200d form" "! grep -qF 'doublefire_from 200 wide' '$VERIFY_ARM_FILE'"
+assert "#6178 op=doublefire-probe calls doublefire_from 200 wide EXACTLY once (non-comment)" "[[ \"\$(grep -cF 'doublefire_from 200 wide' '$DFPROBE_ARM_FILE')\" -eq 1 ]]"
+assert "#6178 op=doublefire-probe NEVER calls the narrowed fsm form" "! grep -qF 'doublefire_from 1 fsm' '$DFPROBE_ARM_FILE'"
 
 # Abort → webhook NON-200 (Deepen Finding 6): a script exit 1 (deadline/ceiling loud-abort)
 # maps to a webhook non-200 ONLY IF the hook has include-command-output-in-response-on-error.
@@ -640,8 +653,11 @@ df_near() {  # $1=desc $2=actual_iso $3=expected_epoch $4=tol_s
 
 # $1=fallback_days $2=mode $3=CRON_PERIOD $4=CUTOVER_WINDOW_FROM $5=stub FSM dt ("" => no row)
 DF_OUT=""; DF_RC=0
+# $6 = CUTOVER_ANCHOR_FROM override. It is an explicit PARAMETER, not a `VAR=x call_...`
+# prefix: bash persists assignment prefixes across FUNCTION calls (unlike external commands),
+# so the prefix form would leak the override into every later case in this file.
 call_doublefire_from() {
-  local fb="$1" mode="$2" period="$3" winfrom="$4" stubdt="$5"
+  local fb="$1" mode="$2" period="$3" winfrom="$4" stubdt="$5" anchorfrom="${6:-}"
   # `set +e` must be in the CALLING shell: under `set -e` a failing command substitution
   # aborts the suite at the assignment, so the fail-closed cases (which fail BY DESIGN)
   # would kill the runner instead of being asserted.
@@ -656,6 +672,7 @@ call_doublefire_from() {
     }
     export CUTOVER_CRON_PERIOD_SECONDS="$period"
     export CUTOVER_WINDOW_FROM="$winfrom"
+    export CUTOVER_ANCHOR_FROM="$anchorfrom"
     doublefire_from "$fb" "$mode" 2>&1
   )
   DF_RC=$?
@@ -709,8 +726,29 @@ assert "#6178 malformed CUTOVER_WINDOW_FROM -> FAILS CLOSED (never a silent 365d
 # the window, never narrow it below now - FALLBACK. ---
 NOW_E=$(date -u +%s)
 call_doublefire_from 1 fsm 1200 "" "$(date -u -d '+2 days' '+%Y-%m-%d %H:%M:%S')"
-df_eq "future (skewed) anchor clamps to the floor, source=floor" "floor" "${DF_OUT##* }"
+# The floor must RECORD which source it clamped, not overwrite it. With a 1-day fallback the
+# floor wins on every dispatch within ~24h of the cutover — the intended usage — so a bare
+# `floor` would make "was an fsm anchor derivable at all?" unanswerable in exactly the regime
+# AC-V3 asks the operator to demonstrate it in.
+df_eq "future (skewed) anchor clamps to the floor, provenance PRESERVED" "floor(fsm)" "${DF_OUT##* }"
 df_near "future-anchor clamp lands at now - 1d" "${DF_OUT%% *}" "$(( NOW_E - 86400 ))" 120
+call_doublefire_from 1 fsm 1200 "$(date -u -d '+2 days' '+%Y-%m-%dT%H:%M:%SZ')" ""
+df_eq "floor clamp records a var-sourced anchor distinctly" "floor(var)" "${DF_OUT##* }"
+
+# --- CUTOVER_ANCHOR_FROM is the operator's NARROWING lever and must OUTRANK the fsm row.
+# Without precedence it is inert on the normal path, which made the page-1 gate's remediation
+# dead advice — the same defect class this change removed from the deadline surfaces. ---
+call_doublefire_from 1 fsm 1200 "2026-02-20T08:05:00Z" "2026-01-15 12:34:56.123456" "2026-03-10T04:00:00Z"
+df_eq "CUTOVER_ANCHOR_FROM overrides BOTH the fsm row and CUTOVER_WINDOW_FROM" "2026-03-10T03:20:00Z override" "$DF_OUT"
+call_doublefire_from 1 fsm 1200 "" "2026-01-15 12:34:56.123456" "not-a-timestamp"
+df_eq "an unparseable override falls through to the fsm row (never silently wide)" "2026-01-15T11:40:00Z fsm" "$DF_OUT"
+
+# --- mode fails CLOSED on an unrecognized value (fail-open on the safety-relevant arg would
+# route a typo onto the UNANCHORED wide path). ---
+call_doublefire_from 1 "" 1200 "" "2026-01-15 12:34:56.123456"
+assert "#6178 empty mode FAILS CLOSED (no silent wide default)" "[[ '$DF_RC' -ne 0 ]]"
+call_doublefire_from 1 FSM 1200 "" "2026-01-15 12:34:56.123456"
+assert "#6178 a typo'd mode FAILS CLOSED rather than selecting the wide path" "[[ '$DF_RC' -ne 0 ]]"
 
 # --- per-arm fallback: the pre-cutover dark-host detector keeps its wide window. There is
 # no coexistence anchor to derive BEFORE the cutover, so mode=wide must not attempt one
@@ -726,12 +764,57 @@ assert "#6178 missing fallback_days -> non-zero (arg is REQUIRED, not an ambient
 
 # --- PURITY (the function's standing contract is 'NEVER echoes a raw Better Stack row').
 # _flip_transition_dt must surface ONLY the dt field. ---
-assert "#6178 _flip_transition_dt extracts ONLY .dt (never .raw)" \
-  "grep -qE '\\.dt' '$DF_HARNESS_SRC' && ! grep -qE 'jq[^|]*\\.raw' '$DF_HARNESS_SRC'"
+# The negative must NOT be `jq[^|]*\.raw` — `[^|]` cannot cross a pipe, and the live
+# expression IS piped (`jq -r 'select(type=="object") | .dt'`), so mutating .dt -> .raw
+# left that guard green. Any `.raw` at all is a purity violation here.
+assert "#6178 _flip_transition_dt extracts ONLY .dt (never .raw, pipe-crossing safe)" \
+  "grep -qE '\\.dt' '$DF_HARNESS_SRC' && ! grep -qE '\\.raw' '$DF_HARNESS_SRC'"
 assert "#6178 _flip_transition_dt greps TRANSITION reasons, not the noop-* heartbeat" \
   "grep -qF 'flip-complete' '$DF_HARNESS_SRC' && ! grep -qE '\"reason\":\"noop' '$DF_HARNESS_SRC'"
 assert "#6178 _flip_transition_dt uses the QUOTED reason form (noop-rolled-back contains rolled-back)" \
   "grep -qF '\"reason\":\"rolled-back\"' '$DF_HARNESS_SRC'"
+
+# --- EMITTER PARITY (cross-file). ------------------------------------------------------------
+# The deriver's reason set is a COPY of a vocabulary owned by inngest-cutover-flip.sh. Spot-checks
+# for individual reasons ("does it grep flip-complete?") cannot detect a MISSING member — which is
+# exactly how `unexpected-exit` was omitted. That one matters most: it is the ERR-trap terminal
+# transition, and the ONLY row emitted on the path where `start_server` SUCCEEDS (coexistence
+# begins) but the following `flag_set` — a Doppler network write — fails. Skipping it makes the
+# deriver return a LATER row, i.e. a window NARROWER than the coexistence region: the unsafe
+# direction, and precisely the vacuous clean AC-V3 exists to reject.
+#
+# Including a reason can only move the anchor EARLIER (earliest(A ∪ B) ≤ earliest(A)), so a
+# SUPERSET is always safe — hence the assertion is one-directional: emitter ⊆ grep set.
+# Precedent: the "Emitter parity" assert already used for confirm_flip_state's FLAG keys.
+EMITTER_SH="$REPO_ROOT/apps/web-platform/infra/inngest-cutover-flip.sh"
+assert "#6178 the flip emitter exists (parity source)" "[[ -f '$EMITTER_SH' ]]"
+EMIT_REASONS_FILE="$(mktemp)"; SCRATCH+=("$EMIT_REASONS_FILE")
+# emit_state <exit_code> <dbsize> <reason> <flag> — take the 3rd positional, strip the
+# interpolated `(from=…)` suffix, drop the noop-* heartbeats.
+grep -oE 'emit_state [^ ]+ [^ ]+ "[^"]*"' "$EMITTER_SH" \
+  | grep -oE '"[^"]*"$' | tr -d '"' | sed 's/(from=.*//' \
+  | grep -vE '^noop-' | grep -vE '^$' | sort -u > "$EMIT_REASONS_FILE"
+EMIT_REASON_N=$(wc -l < "$EMIT_REASONS_FILE" | tr -d '[:space:]')
+# Min-cardinality: an extraction that silently yields nothing would make the parity loop vacuous.
+assert "#6178 emitter-reason extraction is non-vacuous (>=6 non-noop reasons, found $EMIT_REASON_N)" "[[ '$EMIT_REASON_N' -ge 6 ]]"
+MISSING_REASONS=""
+while IFS= read -r _reason; do
+  [[ -z "$_reason" ]] && continue
+  grep -qF -- "\"reason\":\"$_reason" "$DF_HARNESS_SRC" || MISSING_REASONS="$MISSING_REASONS $_reason"
+done < "$EMIT_REASONS_FILE"
+assert "#6178 EMITTER PARITY: every non-noop emit_state reason is anchored (missing:${MISSING_REASONS:- none})" \
+  "[[ -z '$MISSING_REASONS' ]]"
+# Named explicitly as well, so the regression that motivated the parity gate is self-documenting.
+# Anchored on the QUOTED grep form, not the bare token: the function's own explanatory comment
+# names `unexpected-exit`, so a bare-token check is satisfied by the prose that describes the
+# fix even after the fix itself is deleted (measured: deleting the --grep left a bare-token
+# assert green while only the parity loop went red).
+assert "#6178 the ERR-trap terminal transition (unexpected-exit) is anchored as a GREP, not just named in prose" \
+  "grep -qF -- '--grep '\\''\"reason\":\"unexpected-exit'\\''' '$DF_HARNESS_SRC'"
+# NEGATIVE control: the parity loop must be able to FAIL. A reason the emitter does not emit
+# must not be found in the grep set by accident, proving the loop compares real strings.
+assert "#6178 parity loop is discriminating (a non-existent reason is NOT anchored)" \
+  "! grep -qF '\"reason\":\"this-reason-does-not-exist' '$DF_HARNESS_SRC'"
 # --- _flip_transition_dt EXECUTED against a stubbed row source. A static grep for "limit"
 # survived a mutation that DELETED the truncation guard outright, which is the whole reason
 # this runs the function instead of reading it. `doppler` is stubbed on PATH, so the real
@@ -782,8 +865,11 @@ EOF
 
 # --- Wiring: the harness proves the function BEHAVES, not that anything CALLS it correctly.
 # Both arms must pass their fallback EXPLICITLY as $1 (never read an ambient global). ---
-assert "#6178 op=verify calls doublefire_from with the 1-day fallback in fsm mode" "grep -qE 'doublefire_from 1 fsm' '$WF'"
-assert "#6178 op=doublefire-probe calls doublefire_from with the 200-day fallback in wide mode" "grep -qE 'doublefire_from 200 wide' '$WF'"
+# The field split must be CONSUMED, not merely emitted. `DF_FROM="$DF_RAW"` (dropping
+# DF_ANCHOR_SOURCE) is invisible to the executed harness, and the shape guard below is what
+# makes it fail closed.
+assert "#6178 both arms split the two-field emission via read -r (2 sites)" \
+  "[[ \"\$(grep -cE 'read -r DF_FROM DF_ANCHOR_SOURCE' '$WF')\" -eq 2 ]]"
 # BOTH arms must fail closed on a malformed lower bound. This is the REACHABLE failure the
 # previous revision left open: doublefire_from used to end `|| true`, so an empty DF_FROM
 # built `?from=` and the probe fell back to its OWN 365-day default — silently restoring the
@@ -803,11 +889,12 @@ assert "#6178 AC7: doublefire_from BODY carries no 200-day literal (baseline on 
 # removes the highest-risk region (post-repoint + post-rollback lie AFTER the recorded
 # CUTOVER_WINDOW_UNTIL). Do not "tidy" it. ---
 assert "#6178 AC8: DF_URL carries no until= parameter (open-topped invariant)" "! grep -qE 'inngest-doublefire-probe\?[^\"]*until=' '$WF'"
-assert "#6178 AC8: the open-topped invariant is documented at the call site" "grep -qE 'open-topped|OPEN-TOPPED' '$WF'"
+assert "#6178 AC8: the open-topped invariant is documented at BOTH call sites" "[[ \"\$(grep -ciE 'open-topped' '$WF')\" -ge 2 ]]"
 
 # --- anchor_source reaches the run log, so a var-sourced or floor-clamped window is
 # visible off-box rather than being an invisible property of a green run. ---
-assert "#6178 both arms surface anchor_source= in the run log" "[[ \"\$(grep -cF 'anchor_source=' '$WF')\" -ge 2 ]]"
+assert "#6178 op=verify surfaces anchor_source= (arm-scoped, non-comment)" "grep -qF 'anchor_source=' '$VERIFY_ARM_FILE'"
+assert "#6178 op=doublefire-probe surfaces anchor_source= (arm-scoped, non-comment)" "grep -qF 'anchor_source=' '$DFPROBE_ARM_FILE'"
 
 # ===========================================================================
 # #6178 SECOND DEFECT — the bucketing jq dies on a null startedAt.
@@ -833,7 +920,7 @@ BUCKET_PROGS_DIR="$(mktemp -d)"; SCRATCH+=("$BUCKET_PROGS_DIR")
 cat > "$BUCKET_PROGS_DIR/extract.pl" <<'PERL'
 local $/; my $s = <>;
 my $i = 0;
-while ($s =~ /jq -c --argjson period "\$CRON_PERIOD"\s*\\?\s*'([^']*)'/gs) {
+while ($s =~ /jq[^']{0,160}'([^']*fromdateiso8601[^']*)'/gs) {
   $i++;
   open(my $fh, '>', "$ENV{OUTDIR}/prog-$i.jq") or die $!;
   print $fh $1;
@@ -846,7 +933,12 @@ BUCKET_PROG_N=$(find "$BUCKET_PROGS_DIR" -name 'prog-*.jq' | wc -l | tr -d '[:sp
 echo "--- #6178 null-startedAt bucketing (all $BUCKET_PROG_N sites) ---"
 # Min-cardinality: an extraction that silently yields zero programs would make every
 # assertion below pass without executing anything.
-assert "#6178 extracted >=3 fromdateiso8601 bucketing programs (2 arms + missed-tick OBSERVED)" "[[ '$BUCKET_PROG_N' -ge 3 ]]"
+# EXACT, derived from the SUT rather than a magic 3: a fourth bucketing site written with a
+# reordered flag (`jq --argjson period ... -c`) would leave a `-ge 3` green while its
+# null-startedAt crash went untested. Comment lines mentioning the token are excluded.
+BUCKET_SITE_N=$(grep -vE '^[[:space:]]*#' "$WF" | grep -c 'fromdateiso8601' || true)
+assert "#6178 every fromdateiso8601 site was extracted (expected $BUCKET_SITE_N)" "[[ '$BUCKET_PROG_N' -eq '$BUCKET_SITE_N' ]]"
+assert "#6178 at least 3 bucketing sites exist (2 arms + missed-tick OBSERVED)" "[[ '$BUCKET_PROG_N' -ge 3 ]]"
 
 # A run with no startedAt has NOT fired, so it cannot be a double-fire -- but it must be
 # dropped DELIBERATELY, not by dying, and the drop must be counted (a silent discard is
@@ -865,7 +957,15 @@ EOF
 done
 
 # The drop must be VISIBLE: both probe arms emit the dropped count as a ::notice::.
-assert "#6178 dropped no-startedAt runs are surfaced (not silently discarded)" "[[ \"\$(grep -cE 'no startedAt|NO_START' '$WF')\" -ge 2 ]]"
+# Anchored on the syntactic construct, per-arm. The former file-global `grep -cE 'no
+# startedAt|NO_START' -ge 2` was satisfied by the two explanatory COMMENT lines alone: deleting
+# every NO_START computation and emission from BOTH arms left it green.
+assert "#6178 each arm COMPUTES the dropped-run count (2 sites, syntactic)" \
+  "[[ \"\$(grep -cE '^[[:space:]]*NO_START=\\\$\\(echo \"\\\$BODY\" \\| jq' '$WF')\" -eq 2 ]]"
+assert "#6178 each arm EMITS the dropped-run count (2 sites)" \
+  "[[ \"\$(grep -cF 'run(s) carry no startedAt' '$WF')\" -eq 2 ]]"
+assert "#6178 op=verify arm surfaces the dropped count (arm-scoped)" "grep -qF 'run(s) carry no startedAt' '$VERIFY_ARM_FILE'"
+assert "#6178 op=doublefire-probe arm surfaces the dropped count (arm-scoped)" "grep -qF 'run(s) carry no startedAt' '$DFPROBE_ARM_FILE'"
 
 rm -rf "$BUCKET_PROGS_DIR"
 rm -f "$DF_HARNESS_SRC"
