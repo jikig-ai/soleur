@@ -103,8 +103,13 @@ variable "web_hosts" {
   # €8.49/mo standing by for a cutover with no consumer). This web-2 has a CONSUMER: it proves
   # fresh-boot readiness (#6459), is the cattle-host template Phase 4's disposability proof
   # rebuilds, and de-risks the Phase-5 web-1 de-pet. Born in hel1 (inside the location-scoped
-  # web_spread placement group, server.tf:134) on cpx32 — cx33 is unorderable in all 3 EU DCs
-  # (ADR-143 live stock probe 2026-07-24), cpx32 is the orderable 4c/8g x86 successor. It reuses
+  # web_spread placement group, server.tf:134) on cx23 (2c/4g x86, ~€5.49/mo) — SIZED TO MEASURED
+  # web-1 usage, not web-1's over-provisioned cx33 shape: 30-day Better Stack host_metrics show
+  # web-1 peaks ~1.5 GB RAM / 0.48 load15 (ADR-143 D1), so 4 GB / 2 vCPU is ample. web-1's own
+  # cx33 (8g) is unorderable in all 3 EU DCs (ADR-143 live stock probe 2026-07-25); cx23 is the
+  # cheapest orderable 4g x86 in hel1 (the registry runs it there), even cheaper than web-1's
+  # cx33. Resize to a serving shape at the GA flip only if web-2's OWN metrics warrant (a
+  # server_type change is a reboot-forcing in-place update — reboot_updates guard). It reuses
   # the freed 10.0.1.11 address. web-2 is OUT-OF-BAND (serving-weight 0, ADR-143 D2): NOT in the
   # ingress rotation (dns.tf app record stays web-1-only; the single tunnel connector stays
   # web-1-gated) until the ADR-068 Phase-3 GA flip — the rebuilt #6575 anti-pooling gate
@@ -113,7 +118,7 @@ variable "web_hosts" {
   # Keys are IMMUTABLE (moved-block for_each; never rename web-1 — 29 refs / 6 files, ADR-143 D4).
   default = {
     "web-1" = { location = "hel1", private_ip = "10.0.1.10" }
-    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx32" }
+    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cx23" }
   }
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : contains(["nbg1", "fsn1", "hel1"], h.location)])

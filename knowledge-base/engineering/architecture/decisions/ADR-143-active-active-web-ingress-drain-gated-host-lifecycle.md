@@ -26,21 +26,48 @@ destroying and IaC-rebuilding a host. Three repo facts constrain the design:
 
 Read-only query of `/v1/datacenters` (available server types) + `/v1/server_types`:
 
-| Server type | id | Spec | Orderable in hel1/fsn1/nbg1 |
+| Server type | Spec | Net €/mo (hel1) | Orderable in hel1 (live 2026-07-25) |
 |---|---|---|---|
-| `cx33` (Intel; web-1's current type) | 115 | 4c/8g x86 | **NO — none of the 3 EU DCs** |
-| `cax11` (ARM; git-data's type, #6570) | 45 | 2c/4g arm | **NO — ARM entirely unavailable in EU DCs** |
-| **`cpx32`** (AMD) | 110 | **4c/8g x86** | **YES — all 3 EU DCs (incl. hel1)** |
+| `cx33` (Intel; web-1's current type) | 4c/8g x86 | 8.49 | **NO — out of stock (also all EU DCs)** |
+| `cax11` (ARM; git-data's type, #6570) | 2c/4g arm | 5.99 | **NO — ARM unavailable in EU DCs** |
+| `cx22` (Intel) | 2c/4g x86 | ~4.59 | **NO — out of stock** |
+| `cpx32` (AMD) | 4c/8g x86 | 35.49 | YES |
+| `cpx22` (AMD) | 2c/4g x86 | 19.49 | YES |
+| **`cx23`** (Intel; the registry's type) | **2c/4g x86** | **5.49** | **YES — in stock (registry runs it in hel1)** |
 
 This confirms model.c4:182 against live data: `cx33` cannot be recreated, so a rebuilt `web-1` cannot come
 back as `cx33`. It also confirms #6570's root-blocker framing: `cax11` (ARM) is unorderable.
 
+## Sizing input (30-day Better Stack host_metrics, measured 2026-07-25 — the decided input for D1)
+
+web-1's real utilization was pulled from Better Stack (`host_metrics` memory/load, `tags.host=soleur-web-platform`,
+1,732 samples over 30 days) rather than assumed from its 8 GB shape:
+
+| Signal | Value | Fit on a 4 GB / 2 vCPU box |
+|---|---|---|
+| Memory: min available (peak usage) | 5.91 GB avail of 7.39 → **~1.5 GB peak used** | ~37% of 4 GB |
+| Memory: p50 / avg used | ~1.0–1.1 GB | ~26% |
+| CPU: max load15 (sustained) | **0.48** (avg 0.13; brief load1 spike 1.9) | well under 2 cores |
+
+web-1 is ~5× over-provisioned on memory and barely touches CPU. A 4 GB / 2 vCPU host is amply sufficient for
+the measured workload, with the "resize at flip if web-2's own metrics warrant" safety net (a `server_type`
+change is a reboot-forcing in-place update, covered by the `reboot_updates` destroy-guard).
+
 ## Decision
 
-**D1 — web-2 server type = `cpx32` (4c/8g x86/AMD), born in hel1.** The direct successor to `cx33`
-(same 4c/8g shape), orderable in all EU DCs, and hel1 keeps it inside the location-scoped `web_spread`
-placement group (`server.tf:134`). Arch changes Intel→AMD (both x86 — the web container is x86, so ARM is
-excluded regardless). web-1's eventual rebuild also targets `cpx32`.
+**D1 — web-2 server type = `cx23` (2c/4g x86/Intel), born in hel1.** Sized to web-1's MEASURED usage
+(Sizing input above: ~1.5 GB peak RAM, 0.48 max load15), not web-1's over-provisioned 8 GB shape. `cx23` is
+the cheapest orderable 4 GB x86 in hel1 (live probe; the registry runs it there) — at ~€5.49/mo it is
+actually *cheaper* than web-1's grandfathered `cx33` (~€8.49), and ~6× cheaper than the `cpx32` this ADR
+originally chose. hel1 keeps it inside the location-scoped `web_spread` placement group (`server.tf:134`);
+arch stays Intel x86 (same family as web-1's cx33; the web container is x86, so ARM is excluded regardless).
+Superseded rationale (recorded, not deleted): the original D1 chose `cpx32` (4c/8g) as a like-for-like
+successor to `cx33` before web-1's utilization was measured. With the data in hand, matching the 8 GB shape
+was 5× the memory web-1 has ever used and 6× the cost. **Resize path:** if web-2's own host_metrics (or a
+serving-load projection at the GA flip) ever show 4 GB is tight, bump `server_type` — a reboot-forcing
+in-place update caught by the `reboot_updates` guard, done in a maintenance window. web-1's eventual de-pet
+rebuild targets the same evidence-based `cx23`-class shape (falling back to `cpx22`/`cpx32` only if a
+birth-time stock miss on the Intel line forces it — a clean, recoverable apply failure).
 
 **D2 — web-2 is an OUT-OF-BAND standby (serving-weight 0), not in the ingress rotation, until ADR-068
 Phase-3 GA.** `replicas=1` (single app process) and *ingress/serving membership* are **two independent
@@ -97,7 +124,8 @@ The original `lb-weight-gate.sh` was deleted (#6575) because its first assertion
 | `cloudflare_load_balancer` weighted drain in this increment | Weighted drain only has a use case once hosts serve concurrently (Phase 6). Multi-connector CF Tunnel already gives health-gated failover; the LB is a paid add-on with no pre-flip value. Deferred to Phase 6. |
 | Zero-downtime blue-green add/drain/remove for web-1 pre-Phase-3 | The sole-copy volume can be on one host at a time and web-2 can't serve it without shared git-data (#6570) — so genuine zero-downtime is impossible pre-Phase-3. A maintenance window is the honest mechanism. |
 | Rebuild web-1/web-2 as `cx33` | Unorderable in all EU DCs (live probe). |
-| Cross-DC (fsn1/nbg1) web-2 for DC-outage resilience | Loses the location-scoped `web_spread` placement group; the 2026-07-13 `-replace`-during-shortage wedge (#6393) is the cautionary precedent. `cpx32` is orderable in fsn1 too, so cross-DC remains a future option, but same-DC hel1 is chosen now for placement-group HA + rebuildability. |
+| Match web-1's 8 GB shape (`cpx32`/`cpx22`) as a like-for-like standby | Rejected on MEASURED data (Sizing input): web-1 peaks ~1.5 GB / 0.48 load15, so an 8 GB host is 5× the memory it has ever used and `cpx32` is ~6× the cost of `cx23`. A cx23 standby handles web-1's real load; "warm failover parity" is a real-load property, not a nominal-spec one. The resize-at-flip path covers any future growth. |
+| Cross-DC (fsn1/nbg1) web-2 for DC-outage resilience | Loses the location-scoped `web_spread` placement group; the 2026-07-13 `-replace`-during-shortage wedge (#6393) is the cautionary precedent. Same-DC hel1 is chosen for placement-group HA + rebuildability; cross-DC (where `cpx*` types are also orderable) remains a future option. |
 | "Count un-pushed work" as the pre-destroy safety gate | Meaningless for signup workspaces (no remote — everything is un-pushed, nowhere to push); protects only commits, not committed-but-remoteless state a reformat erases. Replaced by snapshot-verified volume preservation. |
 
 ## Consequences

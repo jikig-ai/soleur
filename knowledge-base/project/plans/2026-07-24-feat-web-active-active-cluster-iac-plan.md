@@ -374,12 +374,12 @@ anti-pooling gate + fresh-boot parity + 7-day soak enrollment) is product-sound 
 mid-work reframes (AC5 LUKS defer, AC9 health composite, 4.1 disposability-proof defer to #6931) leave
 no user-facing gap (web-2 serves nothing and holds no user data pre-flip; pooling is physically
 fail-closed by the gate's WORKSPACES_LUKS precondition), decoupling build-from-flip is the correct
-sequencing, and the recurring cpx32 standby is the inverse of the #6538 mistake on all four counts
+sequencing, and the recurring cx23 standby is the inverse of the #6538 mistake on all four counts
 (rebuildable / telemetered / in-placement-group / real consumers). **Three merge conditions:**
 1. **PR-2 (de-pet web-1) is gated on the soak AND #6931 landed** — the sole-copy web-1 volume must never
    be rebuilt before the populated-volume luksOpen-not-reformat proof + restore-tested off-host snapshot
    exist (encoded in `pr_split` above).
-2. **The recurring cpx32 web-2 expense is recorded in `knowledge-base/operations/expenses.md` before
+2. **The recurring cx23 web-2 expense is recorded in `knowledge-base/operations/expenses.md` before
    PR-ready** (wg-record-recurring-vendor-expense-before-ready), with a review trigger if the
    de-pet/Phase-6 program stalls (the standby's Phase-5-de-risk consumer only realises if PR-2/#6931
    progresses; re-evaluate keep-vs-teardown at soak completion and again if #6570 keeps Phase 6 distant).
