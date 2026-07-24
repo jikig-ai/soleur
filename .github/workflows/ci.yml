@@ -136,6 +136,20 @@ jobs:
         run: python3 scripts/lint-trap-tempfile-ownership.py --check-highwater
       - name: Lint orphan test suites (scripts/*.test.sh must be registered)
         run: bash scripts/lint-orphan-test-suites.sh
+      # Encryption-posture Layer A repo-sweep (ADR-139). Asserts every persistent store
+      # and cross-component connection in scripts/encryption-posture-ledger.json resolves
+      # to real code (device_binding for LUKS — never name similarity), and every
+      # plaintext/cert-off exception carries a live tracking issue + unexpired expires_on.
+      #
+      # ADVISORY, NOT BLOCKING — same posture as lint-trap-tempfile-ownership above and for
+      # the same reason (ADR-129, arch-review F4 measure-then-arm): this job is absent from
+      # BOTH scripts/required-checks.txt and the CI-Required ruleset, so a PR can merge with
+      # it red while it soaks. Promotion to a required check is a deliberate follow-up
+      # (the five-site coupling: ci.yml + required-checks.txt + ruleset-ci-required.tf +
+      # ci-required-ruleset-canonical-required-status-checks.json + the #6049 bot-synthetic
+      # adjudication) tracked separately, applied only after N green runs.
+      - name: Encryption posture — Layer A repo-sweep (ADR-139)
+        run: python3 scripts/lint-encryption-posture.py --repo-sweep
 
   lint-conversations-update-callsites:
     runs-on: ubuntu-latest
