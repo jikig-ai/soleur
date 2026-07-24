@@ -182,10 +182,15 @@ resource "github_actions_secret" "workspaces_luks_boot_token" {
 #      it is exercised on a POPULATED volume (the de-pet web-1 rebuild) and the two-mechanism
 #      topology split (this additive singleton vs a fresh-boot for_each volume) is reconciled.
 #
-# THE DEFER IS FAIL-CLOSED, NOT FAIL-OPEN: no user data can EVER reach web-2's plaintext volume,
-# because a flip that would route users to web-2 is blocked by lb-weight-gate.sh's WORKSPACES_LUKS
-# precondition (ADR-142 D3 coupling #2) — the gate reddens unless web-2 /workspaces is asserted
-# LUKS-backed. So web-2's volume stays plaintext ONLY while it is empty and unreachable.
+# THE DEFER IS FAIL-CLOSED, NOT FAIL-OPEN: no user data can reach web-2's plaintext volume before the
+# flip, because a flip that would route users to web-2 is blocked by lb-weight-gate.sh's WORKSPACES_LUKS
+# precondition (ADR-142 D3 coupling #2) — the gate reddens unless a soaked `WORKSPACES_LUKS_CUTOVER_AT`
+# marker is present. IMPORTANT — the marker is a SHAPE claim, not a proof of encryption: the gate is
+# shape-only (it never inspects web-2's block device), so the marker's integrity rests on the #6931
+# fresh-boot LUKS path being the writer. #6931 MUST derive `WORKSPACES_LUKS_CUTOVER_AT` from a real
+# on-host `blkid -o value -s TYPE == crypto_LUKS` probe (co-located with the gate's separate runtime-
+# bind probe), NOT a hand-written timestamp — else a stray marker write could green-light a plaintext
+# web-2 flip. So web-2's volume stays plaintext ONLY while it is empty and unreachable.
 #
 # NOTE for the Phase-4 implementer (ADR-142 D3): the fresh-boot LUKS path MUST use the
 # `blkid -o value -s TYPE` discriminator (raw ""→luksFormat; crypto_LUKS→no-op; anything else→FATAL),

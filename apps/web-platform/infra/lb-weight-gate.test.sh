@@ -147,6 +147,18 @@ assert_rejects_with "AC7: weight>0 pre-flip, git-data not cut over → FAIL" "B_
 reset_def; DEF[SOLEUR_WEB2_SERVING_WEIGHT]='5'; DEF[SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10"}'; run_with_def
 assert_rejects_with "AC7: weight>0 pre-flip, roster omits web-2 → FAIL" "A_web2_not_in_roster"
 
+# 0i. WEIGHT-TERM ISOLATION (mutation-vacuity fix): the standby short-circuit is `weight==0 &&
+#     web-2∉rotation`. Every §0h/§1-8 pooling case has web-2 IN the rotation, so the WEIGHT half of
+#     the AND was never isolated — dropping it (making the short-circuit `web-2∉rotation` alone)
+#     stayed green while `weight=5, rotation=web-1` passed as "standby" (web-2 pooled at weight 5).
+#     These two cases pin the weight term: web-2 weight>0 but NOT in the rotation set MUST still take
+#     the pooling branch (run A/B), never the standby short-circuit.
+reset_def; DEF[SOLEUR_WEB2_SERVING_WEIGHT]='3'; DEF[SOLEUR_SERVING_ROTATION]='web-1'; DEF[GIT_DATA_STORE_ENABLED]='false'; run_with_def
+assert_rejects_with "0i: weight>0 + web-2 NOT in rotation + unmet A/B → FAIL (weight term isolated)" "B_git_data_store_disabled"
+reset_def; DEF[SOLEUR_WEB2_SERVING_WEIGHT]='3'; DEF[SOLEUR_SERVING_ROTATION]='web-1'; run_with_def
+assert_zero "0i: weight>0 + web-2 NOT in rotation + valid A/B → authorized-flip (NOT standby)"
+assert_stdout_contains "0i: weight>0 path prints requires_runtime_bind_probe (not web2_standby)" "requires_runtime_bind_probe=true"
+
 # =============================================================================
 # §1 — Both conditions hold (web-2 being pooled) → authorized-flip exit 0 + SHAPE-ONLY marker.
 # =============================================================================
@@ -263,7 +275,22 @@ assert_no_grep() { # $1=desc $2=file $3=ERE that must NOT match
 #       reference hcloud_server.web["web-1"] and NOT ["web-2"].
 assert_grep    "C.1a: dns.tf app record content = hcloud_server.web[\"web-1\"]" dns.tf \
   'content[[:space:]]*=[[:space:]]*hcloud_server\.web\["web-1"\]\.ipv4_address'
-assert_no_grep "C.1b: dns.tf app record does NOT reference hcloud_server.web[\"web-2\"]" dns.tf \
+# C.1b (V2 fix): EXACTLY ONE `name = "app"` A-record exists. C.1a alone only proves THE web-1 app
+# record is present; it cannot see a SECOND `app` A-record round-robining ~50% of app.soleur.ai
+# ingress to web-2 by a NON-literal reference (hardcoded IP, var.*, for_each) — that defeats a
+# grep for the known-bad `["web-2"]` literal. Counting the record closes the vacuity.
+TOTAL=$((TOTAL + 1))
+if [[ ! -f "$SCRIPT_DIR/dns.tf" ]]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: C.1b — dns.tf not found (fail-closed)"
+else
+  app_records=$(grep -cE '^[[:space:]]*name[[:space:]]*=[[:space:]]*"app"[[:space:]]*$' "$SCRIPT_DIR/dns.tf")
+  if [[ "$app_records" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: C.1b: exactly one 'name = \"app\"' record in dns.tf (no second pooling record)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: C.1b: found $app_records 'name = \"app\"' records in dns.tf (expected 1 — a second app A-record would pool web-2)"
+  fi
+fi
+assert_no_grep "C.1c: dns.tf does NOT reference hcloud_server.web[\"web-2\"] (literal defense-in-depth)" dns.tf \
   'hcloud_server\.web\["web-2"\]'
 
 # C.2 — the single tunnel connector predicate still gates registration to web-1 (each.key=="web-1"),
@@ -295,7 +322,7 @@ else
 fi
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=70
+MIN_CASES=72
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

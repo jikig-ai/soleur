@@ -25,10 +25,17 @@
 # MUST satisfy a SEPARATE on-host runtime-bind probe (ADR-068 §(c)(3) /internal/readyz) before any
 # weight flip. Exit 0 is NEVER weight-flip authorization by itself.
 #
-# The COMMITTED-CONFIG anti-pooling assertion (dns.tf app record stays web-1-only, the tunnel
-# connector predicate excludes web-2, no cloudflare_load_balancer pools web-2 at weight>0) is
-# Condition C in lb-weight-gate.test.sh — it is the CI-side regression guard over the tree, kept out
-# of this env-driven runtime gate so the two never drift (ADR-142 D3 / CTO ruling 2b).
+# The COMMITTED-CONFIG anti-pooling assertion (dns.tf resolves to exactly one web-1 app record, the
+# tunnel connector predicate excludes web-2, no cloudflare_load_balancer pools web-2 at weight>0) is
+# Condition C in lb-weight-gate.test.sh — the regression guard over the committed tree, kept out of
+# this env-driven runtime gate so the two never drift (ADR-142 D3 / CTO ruling 2b). SCOPE CAVEATS:
+# (1) it covers only LITERAL committed HCL — it cannot observe a manual Cloudflare-dashboard LB-weight
+# change or DNS repoint (runtime state); enforce "web-2 serving weight/DNS managed only via Terraform,
+# drift-detected" once an LB exists (Phase 6). (2) it runs in the `deploy-script-tests` CI job, which
+# is currently ADVISORY (not in ruleset-ci-required.tf — a commit that pools web-2 reddens CI but does
+# not yet BLOCK merge); promote that job to required (tracked #6480) before web-2 is ever poolable so
+# this guard is truly merge-blocking. web-2 is not poolable until Phase 6 (external gate), so the
+# advisory window carries bounded risk today.
 #
 #   Top-guard (ADR-142 D3): SOLEUR_WEB2_SERVING_WEIGHT (explicit integer ≥0; absent/non-int/negative
 #     → FAIL CLOSED) + SOLEUR_SERVING_ROTATION (present, comma-set; absent → FAIL CLOSED). PASS iff
@@ -93,7 +100,10 @@ web2_in_rotation=0
 # circuit FIRST, before ANY Condition A/B evaluation, so a legitimately-absent flip-time roster/relay
 # env can NEVER resurrect a can-only-fail path (CTO ruling 2b R5). A+B run only when pooling.
 if [[ "$WEIGHT" -eq 0 && "$web2_in_rotation" -eq 0 ]]; then
-  echo "web2_standby=true serving_weight=0 not_in_rotation"
+  # Print the REAL parsed weight, never a hardcoded literal — on this branch it is provably 0, but a
+  # hardcoded "serving_weight=0" would misreport if the branch condition is ever loosened (the exact
+  # granularity trap that let a weight-term-dropped mutant read as standby; lb-weight-gate.test.sh 0i).
+  echo "web2_standby=true serving_weight=${WEIGHT} not_in_rotation"
   echo "SHAPE-ONLY — NOT weight-flip authorization"
   exit 0
 fi
