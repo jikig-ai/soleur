@@ -640,6 +640,18 @@ run_case_reports "TS-17 disclosed_as asserts encryption for a plaintext-exceptio
   "asserts encryption" \
   --repo-sweep --repo-root "$REPO_TS17" --ledger "$LEDGER_TS17" --today "$TODAY"
 
+# ---------------------------------------------------------------------------
+# TS-18: plaintext-exception disclosed_as an UNRESOLVABLE docs/legal anchor
+# -> FAIL closed (a moved/bogus disclosure anchor must not pass silently; the
+# review-found fail-open where resolve_disclosed_as()==None short-circuited).
+# ---------------------------------------------------------------------------
+LEDGER_TS18="$TMPDIR_TEST/ts18-ledger.json"
+sed 's#docs/legal/privacy-policy.md:Job Queue Storage#docs/legal/privacy-policy.md:No Such Anchor Xyzzy#' \
+  "$LEDGER_TS17" > "$LEDGER_TS18"
+run_case_reports "TS-18 disclosed_as anchor does not resolve for a plaintext-exception -> FAIL closed" 1 \
+  "does not resolve" \
+  --repo-sweep --repo-root "$REPO_TS17" --ledger "$LEDGER_TS18" --today "$TODAY"
+
 # ===========================================================================
 # Mutation battery — each MB copies the SUT, sed-deletes ONE marked branch,
 # and asserts the paired fixture (already proven FAIL above) flips to PASS.

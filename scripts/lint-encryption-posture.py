@@ -596,7 +596,16 @@ def check_disclosed_as_not_encrypted(
     if not disclosed or disclosed == "not-publicly-claimed":
         return
     region, _cite = resolve_disclosed_as(disclosed, repo_root)
-    if region and re.search(r"LUKS|encrypt", region, re.IGNORECASE):
+    if region is None:
+        # Fail CLOSED: a plaintext-exception naming a disclosure anchor that does
+        # not resolve cannot be verified against reality -- the exact join gap R5
+        # exists to close. A moved/bogus anchor must not pass silently.
+        fails.append(
+            f"FAIL: {store} disclosed_as {disclosed} does not resolve "
+            "(path/anchor not found) -> cannot verify the disclosure claim; "
+            "fix the anchor or set disclosed_as: not-publicly-claimed"
+        )
+    elif re.search(r"LUKS|encrypt", region, re.IGNORECASE):
         fails.append(
             f"FAIL: {store} disclosed_as {disclosed} asserts encryption while "
             "mechanism is plaintext-exception -> correct the disclosure to "
@@ -642,7 +651,13 @@ def check_connection(conn: dict, today: date, repo_root: Path, fails: list[str])
         disclosed = it.get("disclosed_as")
         if disclosed and disclosed != "not-publicly-claimed":
             region, _cite = resolve_disclosed_as(disclosed, repo_root)
-            if region and re.search(r"LUKS|encrypt|TLS|verifi", region, re.IGNORECASE):
+            if region is None:
+                fails.append(
+                    f"FAIL: {label} disclosed_as {disclosed} does not resolve "
+                    "(path/anchor not found) -> cannot verify the disclosure "
+                    "claim; fix the anchor or set disclosed_as: not-publicly-claimed"
+                )
+            elif re.search(r"LUKS|encrypt|TLS|verifi", region, re.IGNORECASE):
                 fails.append(
                     f"FAIL: {label} disclosed_as {disclosed} asserts secure "
                     "transport while cert_verification is off -> correct the "
