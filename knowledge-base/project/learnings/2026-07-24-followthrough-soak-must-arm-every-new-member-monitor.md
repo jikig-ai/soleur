@@ -71,4 +71,4 @@ contract silently does not hold for the born-but-not-yet-enabled window, and the
 - [[2026-06-16-realtime-event-guard-must-equal-fetch-query-scope]] — sibling class (a new for_each
   member needs the consumer-side scope extended, not just the config).
 - `web-probe.tf` (per-host heartbeats, `paused=true` + `ignore_changes=[paused]`).
-- ADR-142 (active-active web cluster).
+- ADR-143 (active-active web cluster).

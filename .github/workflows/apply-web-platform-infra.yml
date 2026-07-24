@@ -892,7 +892,7 @@ jobs:
           # zot 180+60−10, nic-guard 360+120−10, git-data 60+180−10.
           arm_one 'betteruptime_heartbeat.web_zot_consumer["web-1"]' 'web-zot-consumer (web-1)' 230 || rc=1
           arm_one 'betteruptime_heartbeat.web_nic_guard["web-1"]'    'web-nic-guard (web-1)'    470 || rc=1
-          # (#6459/ADR-142) web-2's per-host heartbeats are born `paused` (web-probe.tf
+          # (#6459/ADR-143) web-2's per-host heartbeats are born `paused` (web-probe.tf
           # ignore_changes=[paused]) exactly like web-1's; the ONLY unpause path is this gate, so they
           # MUST be armed here or web2-standby-soak-6459.sh reads them `paused` and false-FAILs a healthy
           # web-2 as a DARK host (#6459 could never close). arm_one no-ops (return 0) when the address

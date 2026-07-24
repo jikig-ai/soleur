@@ -64,7 +64,7 @@ DEDICATED_HOST="soleur-inngest"                  # dedicated node = hcloud_serve
 # DC-1 YAGNI-descoped a generic multi-host detector). Upgrade trigger: web fleet grows past 1,
 # OR a web-1 recreate changes its OS hostname away from soleur-web-platform. Re-sync with
 # server.tf:225 (the parity test asserts this set matches var.web_hosts keys there).
-# web-2 (soleur-web-2) RE-ADDED 2026-07-24 (ADR-142, #6459/#6919) as a fresh cattle out-of-band
+# web-2 (soleur-web-2) RE-ADDED 2026-07-24 (ADR-143, #6459/#6919) as a fresh cattle out-of-band
 # standby — a different host from the fsn1 soleur-web-2 retired 2026-07-17 (#6538). It is a LIVE
 # web-host again, so soleur-web-2 is back in the set (the parity test derives this from server.tf's
 # host_name ternary + var.web_hosts keys = {soleur-web-platform, soleur-web-2}).

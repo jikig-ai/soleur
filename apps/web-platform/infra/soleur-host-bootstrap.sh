@@ -635,7 +635,7 @@ if [ -s "$WEBHOOK_ENV_FILE" ] && grep -q '^DOPPLER_TOKEN=..*' "$WEBHOOK_ENV_FILE
 if command -v vector >/dev/null 2>&1 && systemctl is-active --quiet vector 2>/dev/null; then V=1; else V=0; fi
 # volume: the workspace volume is mounted; luks=1 iff the LUKS mapper backs it. luks= is REPORTED,
 # not gated — both hosts are plaintext today: web-1 until its per-host ADR-119 cutover, and web-2's
-# for_each volume is KNOWINGLY plaintext-but-empty pre-flip (ADR-142 R3 / workspaces-luks.tf:169-197)
+# for_each volume is KNOWINGLY plaintext-but-empty pre-flip (ADR-143 R3 / workspaces-luks.tf:169-197)
 # — its guest-side fresh-boot LUKS path is DEFERRED to #6931, NOT "LUKS-from-birth". A future Phase
 # tightens luks=1 to gated once #6931 lands.
 if mountpoint -q "$WORKSPACES_MOUNT" 2>/dev/null; then VOL=1; else VOL=0; fi

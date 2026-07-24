@@ -96,7 +96,7 @@ EOF
 make_mock "$WORK/fx-empty.json" 0
 run_case "host column all-empty -> TRANSIENT (no vacuous PASS)" 2
 
-# 7. FAIL — web-2 RE-ADDED (ADR-142, #6459/#6919): soleur-web-2 is a LIVE web identity again (a
+# 7. FAIL — web-2 RE-ADDED (ADR-143, #6459/#6919): soleur-web-2 is a LIVE web identity again (a
 #    fresh cattle out-of-band standby, distinct from the fsn1 host retired 2026-07-17 #6538), so a
 #    soleur-web-2 row emitting the dedicated node's host_name (soleur-inngest-prd) IS a live #6616
 #    collision → FAIL (exit 1). This pins that the collision alarm covers the RE-ADDED web-2, not

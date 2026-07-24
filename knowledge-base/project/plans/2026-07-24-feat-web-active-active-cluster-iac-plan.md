@@ -7,14 +7,14 @@ worktree: .worktrees/feat-web-active-active-iac
 pr: 6919
 tracking_issue: 6459
 related_issues: [6608, 6570, 6575, 6441, 6538, 5274]
-adr: ADR-142 (provisional — active-active web ingress + drain-gated blue-green host lifecycle)
+adr: ADR-143 (provisional — active-active web ingress + drain-gated blue-green host lifecycle)
 lane: cross-domain
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 spec: knowledge-base/project/specs/feat-web-active-active-iac/spec.md
 brainstorm: knowledge-base/project/brainstorms/2026-07-24-web-active-active-cluster-iac-brainstorm.md
 approach: "A — phased: cluster-first, flip-last"
-pr_split: "PR-1 = Phases 0-3 + soak enrollment + prevent_destroy + rebuilt anti-pooling gate (cluster + weight-0 non-serving web-2 standby). The populated-volume disposability proof (4.1) + fresh-boot LUKS path + off-host snapshot are DEFERRED to #6931 (ADR-142 R3, CPO sign-off 2026-07-24). PR-2 = Phase 5 (de-pet web-1), gated on the PR-1 soak AND #6931 landed — the sole-copy web-1 volume must never be rebuilt before the populated-volume luksOpen-not-reformat proof + restore-tested off-host snapshot exist (CPO condition 1)."
+pr_split: "PR-1 = Phases 0-3 + soak enrollment + prevent_destroy + rebuilt anti-pooling gate (cluster + weight-0 non-serving web-2 standby). The populated-volume disposability proof (4.1) + fresh-boot LUKS path + off-host snapshot are DEFERRED to #6931 (ADR-143 R3, CPO sign-off 2026-07-24). PR-2 = Phase 5 (de-pet web-1), gated on the PR-1 soak AND #6931 landed — the sole-copy web-1 volume must never be rebuilt before the populated-volume luksOpen-not-reformat proof + restore-tested off-host snapshot exist (CPO condition 1)."
 plan_review: "6-agent panel applied 2026-07-24 (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer + fable advisor). See ## Plan Review Reconciliation."
 ---
 
@@ -78,7 +78,7 @@ LB, and the DNS multi-host rewire are **out of scope** (Phase 6 / external gates
 ("workspace-gone"); or a host reprovision reformats the LUKS volume → permanent loss.
 
 **If this loses data:** destroying/reformatting the **SOLE-COPY /workspaces volume** — permanent,
-unrecoverable. Precise identity (topology in transition, ADR-142 R3): the sole copy is
+unrecoverable. Precise identity (topology in transition, ADR-143 R3): the sole copy is
 `hcloud_volume.workspaces["web-1"]` (plaintext) TODAY, and BECOMES the additive LUKS singleton
 `hcloud_volume.workspaces_luks` after the ADR-119 rsync cutover. `prevent_destroy` (this PR) is on the
 `for_each` `hcloud_volume.workspaces` — correct for the current live volume + a transitive whole-root
@@ -99,14 +99,14 @@ shrinking the surface.
 
 ### Phase 0 — ADR + live-stock decision + data-layer contract (no infra change)
 
-- **0.1 Author ADR-142** ("Active-active web ingress + drain-gated host lifecycle") — status `adopting`.
+- **0.1 Author ADR-143** ("Active-active web ingress + drain-gated host lifecycle") — status `adopting`.
   Amends `hr-prod-host-config-change-immutable-redeploy` + ADR-103; extends ADR-068. **Must decide the
   /workspaces failover data mechanism** (advisor 2a): detach/reattach vs replication vs off-host sync —
   this determines whether an eventual multi-serving topology is even valid, so it is decided before any
   ingress/LB architecture is committed.
 - **0.2 Live Hetzner stock probe** — enumerate currently-orderable types in hel1/fsn1/nbg1 for **both** the
   web host (cx33 unorderable) **and** git-data (`cax11`, orderable 0/3 EU DCs — #6570 root blocker). Record
-  web-2 `server_type`/DC verdict in ADR-142. Same-DC hel1 keeps `web_spread` (`server.tf:134`); cross-DC
+  web-2 `server_type`/DC verdict in ADR-143. Same-DC hel1 keeps `web_spread` (`server.tf:134`); cross-DC
   gets `null` placement. No assumed stock.
 - **0.3 C4 update** (deliverable): edit `model.c4` (single-host reality at **:178, :186, :413** — NOT :182,
   which already says "Cluster") + `views.c4` — `hetzner` becomes a 2-host cluster (1 serving, 1 out-of-band
@@ -271,7 +271,7 @@ label on #6459, and wire secrets into `scheduled-followthrough-sweeper.yml`.
 ## Architecture Decision (ADR/C4)
 
 ### ADR
-**ADR-142** (provisional; re-verify next-free at ship, sweep planning docs if renumbered): "Active-active
+**ADR-143** (provisional; re-verify next-free at ship, sweep planning docs if renumbered): "Active-active
 web ingress + drain-gated host lifecycle." Records the /workspaces failover data mechanism (0.1), the
 anti-pooling invariant (two axes: replicas vs serving-weight), the web-1 key-retention invariant, and the
 volume-preserving reprovision contract. Amends `hr-prod-host-config-change-immutable-redeploy` + ADR-103;
@@ -285,7 +285,7 @@ the single-host notes at **model.c4:178, :186, :413** (NOT :182 — arch L9). **
 member). Run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 
 ### Sequencing
-ADR-142 `adopting` now (target state); flips `accepted` when the cluster + de-pet land. Concurrent serving
+ADR-143 `adopting` now (target state); flips `accepted` when the cluster + de-pet land. Concurrent serving
 + LB element = Phase 6.
 
 ## Encryption Posture
@@ -339,9 +339,9 @@ DRAFTED, NOT-YET-ACTIVE** (no inter-host transfer occurs at `replicas=1` — DHH
 ## Acceptance Criteria
 
 ### Pre-merge (PR-1) — merge-time checkable (gate logic present + unit-tested failing case)
-1. ADR-142 authored (`adopting`, decides failover data mechanism + key-retention + anti-pooling invariants);
+1. ADR-143 authored (`adopting`, decides failover data mechanism + key-retention + anti-pooling invariants);
    C4 `model.c4`+`views.c4` updated (:178/:186/:413, no LB element); `c4-code-syntax`+`c4-render` green.
-2. Live stock probe output for **both** cx33 (web) and cax11 (git-data) + web-2 type/DC verdict recorded in ADR-142.
+2. Live stock probe output for **both** cx33 (web) and cax11 (git-data) + web-2 type/DC verdict recorded in ADR-143.
 3. Fresh-boot readiness assertion **code present** + unit-tested; `SOLEUR_FRESH_BOOT_READY` emit-code present with a quantified boot-window timeout.
 4. Complete cattle cloud-init artifact present; the reconciled provisioner enumeration is pinned (grep-verified count, ADR-136 gated).
 5. web-2 entry added; the **2 roster-coupled** parity guards green (`inngest-host.test.sh §6b`, `web-hosts-fanout-parity`); web-2 volume is LUKS-backed in HCL.
