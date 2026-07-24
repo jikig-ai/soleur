@@ -170,18 +170,35 @@ jobs:
         run: python3 scripts/lint-trap-tempfile-ownership.py --check-highwater
       - name: Lint orphan test suites (scripts/*.test.sh must be registered)
         run: bash scripts/lint-orphan-test-suites.sh
-      # Encryption-posture Layer A repo-sweep (ADR-140). Asserts every persistent store
-      # and cross-component connection in scripts/encryption-posture-ledger.json resolves
-      # to real code (device_binding for LUKS — never name similarity), and every
-      # plaintext/cert-off exception carries a live tracking issue + unexpired expires_on.
-      #
-      # ADVISORY, NOT BLOCKING — same posture as lint-trap-tempfile-ownership above and for
-      # the same reason (ADR-129, arch-review F4 measure-then-arm): this job is absent from
-      # BOTH scripts/required-checks.txt and the CI-Required ruleset, so a PR can merge with
-      # it red while it soaks. Promotion to a required check is a deliberate follow-up
-      # (the five-site coupling: ci.yml + required-checks.txt + ruleset-ci-required.tf +
-      # ci-required-ruleset-canonical-required-status-checks.json + the #6049 bot-synthetic
-      # adjudication) tracked separately, applied only after N green runs.
+      # NOTE (#6901): the Encryption-posture Layer A repo-sweep (ADR-140) used to
+      # run here as a step inside this shared advisory job. It was extracted to the
+      # standalone `encryption-posture` job below so its green/red status is
+      # attributable to the sweep alone (this job's status is polluted by the
+      # tempfile-ownership + orphan-suite siblings) — the prerequisite for a
+      # measure-then-arm soak (ADR-117) before promotion to a required check.
+
+  # Encryption-posture Layer A repo-sweep (ADR-140), extracted from lint-bot-statuses
+  # in #6901. Asserts every persistent store and cross-component connection in
+  # scripts/encryption-posture-ledger.json resolves to real code (device_binding for
+  # LUKS — never name similarity), and every plaintext/cert-off exception carries a
+  # live tracking issue + unexpired expires_on.
+  #
+  # ADVISORY, NOT BLOCKING. This job is absent from scripts/required-checks.txt, the
+  # CI-Required ruleset (infra/github/ruleset-ci-required.tf), the canonical parity
+  # JSON (scripts/ci-required-ruleset-canonical-required-status-checks.json), and the
+  # bot action CHECK_NAMES (.github/actions/bot-pr-with-synthetic-checks/action.yml),
+  # so a PR can merge with it red. It exists to SOAK an attributable green streak
+  # before promotion (#6901; ADR-117 measure-then-arm). The promotion is a five-site
+  # byte-consistent coupling — see the arming tracking issue #6907 and the ADR-140
+  # Amendment (2026-07-24, #6901) for the canonical recipe (15368 integration_id +
+  # add-to-required-checks.txt + sound-by-unreachability fabrication, NOT CodeQL's
+  # non-15368 omit shape, which would wedge every PR at "Expected — Waiting").
+  #
+  # The full checkout (no paths filter) is load-bearing: --repo-sweep is whole-repo.
+  encryption-posture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Encryption posture — Layer A repo-sweep (ADR-140)
         run: python3 scripts/lint-encryption-posture.py --repo-sweep
 

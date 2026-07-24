@@ -121,41 +121,41 @@ concern, not a single-user incident.
 
 ### Phase 0 — Preconditions (verify before editing)
 
-- [ ] 0.1 Re-measure the standalone-context streak: it is 0 until site 1 lands.
+- [x] 0.1 Re-measure the standalone-context streak: it is 0 until site 1 lands.
   Confirm no sibling PR has already split the sweep out of `lint-bot-statuses`
   (`grep -n 'Encryption posture — Layer A repo-sweep' .github/workflows/ci.yml`).
-- [ ] 0.2 `python3 scripts/lint-encryption-posture.py --repo-sweep` exits 0 on
+- [x] 0.2 `python3 scripts/lint-encryption-posture.py --repo-sweep` exits 0 on
   current HEAD (paste the exit code). A red sweep would soak red and never arm.
-- [ ] 0.3 `bash plugins/soleur/test/required-checks-canonical-parity.test.sh`
+- [x] 0.3 `bash plugins/soleur/test/required-checks-canonical-parity.test.sh`
   GREEN on HEAD (baseline — site 1 must not perturb it; a standalone *advisory*
   job touches none of the required-check parity SSOTs).
 
 ### Phase 1 — Site (1): standalone advisory `encryption-posture` job (measurement enablement, NON-arming)
 
-- [ ] 1.1 In `.github/workflows/ci.yml`, **remove** the `Encryption posture —
+- [x] 1.1 In `.github/workflows/ci.yml`, **remove** the `Encryption posture —
   Layer A repo-sweep (ADR-140)` step from the `lint-bot-statuses` job.
-- [ ] 1.2 Add a new **top-level advisory job** `encryption-posture` (stable
+- [x] 1.2 Add a new **top-level advisory job** `encryption-posture` (stable
   check-context name = `encryption-posture`) mirroring the shape of the existing
   advisory job `lint-conversations-update-callsites` (`ci.yml:188` — checkout
   `@34e114876b0b11c390a56381ad16ebd13914f8d5`, no path filter since the sweep is
   whole-repo) and the `credential-path-guard` extraction precedent (`ci.yml:148-156`,
   #6882), running `python3 scripts/lint-encryption-posture.py --repo-sweep`.
-- [ ] 1.3 Carry forward the ADVISORY/NOT-BLOCKING comment block verbatim and add:
+- [x] 1.3 Carry forward the ADVISORY/NOT-BLOCKING comment block verbatim and add:
   "Absent from `scripts/required-checks.txt`, the CI-Required ruleset, the
   canonical JSON, and the bot action `CHECK_NAMES` — a PR can merge with it red.
   It exists to SOAK an attributable green streak before promotion (#6901; ADR-117
   measure-then-arm). Promotion recipe: the arming tracking issue + the ADR-140
   Amendment."
-- [ ] 1.4 **Non-arming invariant (must hold):** `git grep -n 'encryption-posture'
+- [x] 1.4 **Non-arming invariant (must hold):** `git grep -n 'encryption-posture'
   scripts/required-checks.txt scripts/ci-required-ruleset-canonical-required-status-checks.json
   infra/github/ruleset-ci-required.tf .github/actions/bot-pr-with-synthetic-checks/action.yml`
   → **only** comment/pointer hits, never a required entry.
-- [ ] 1.5 Re-run the parity test (Phase 0.3) — must stay GREEN and its 15368 set
+- [x] 1.5 Re-run the parity test (Phase 0.3) — must stay GREEN and its 15368 set
   unchanged (site 1 is provably parity-neutral).
 
 ### Phase 2 — ADR-140 Amendment (authored in THIS PR, not deferred — Phase 2.10)
 
-- [ ] 2.1 Add an `## Amendment (2026-07-24, #6901)` section to
+- [x] 2.1 Add an `## Amendment (2026-07-24, #6901)` section to
   `ADR-140-encryption-posture-as-a-design-time-default.md` recording:
   (a) the promotion is a **five-site** coupling, not three edits — enumerate the
   two omitted sites (canonical JSON + bot action) and the parity test that binds
@@ -165,19 +165,19 @@ concern, not a single-user incident.
   is measure-then-arm — soak the standalone context before arming; the concrete N
   lives in the arming tracking issue, **not** the ADR (a tunable, not a decision
   shape).
-- [ ] 2.2 Update the line-123 alternatives-table cell ("three coupled edits") to
+- [x] 2.2 Update the line-123 alternatives-table cell ("three coupled edits") to
   cross-reference the Amendment.
 
 ### Phase 3 — Arming tracking issue (deferral bookkeeping — `wg-when-deferring-a-capability-create-a`)
 
-- [ ] 3.1 Verify labels exist (`gh label list --limit 200 | grep -E
+- [x] 3.1 Verify labels exist (`gh label list --limit 200 | grep -E
   '^(type/security|domain/engineering|priority/p2-medium)\b'`), then `gh issue
   create` titled `encryption-posture: ARM Layer A repo-sweep as required check
   (post-soak, sites 2–5 + MB-10)`, labels `type/security`, `domain/engineering`,
   `priority/p2-medium`, milestone `Phase 4: Validate + Scale`. **Not** labeled
   `follow-through` — there is no probe (R1); the issue is drained by the normal
   labeled-backlog process.
-- [ ] 3.2 Issue body = the **canonical** arming recipe (sites 2–5 + MB-10, exact
+- [x] 3.2 Issue body = the **canonical** arming recipe (sites 2–5 + MB-10, exact
   bytes, from Phase 5) + the re-eval criterion (Phase 4) + the runnable streak
   one-liner + the R5 residual risk (parity does not validate id-correctness). Use
   `Ref #6901` (not `Closes`) — #6901 closes when this DEFER PR merges; arming is
@@ -185,12 +185,12 @@ concern, not a single-user incident.
 
 ### Phase 4 — Re-eval criterion (no automation — R1/R2)
 
-- [ ] 4.1 The arming issue's re-eval criterion is a **runnable one-liner** the
+- [x] 4.1 The arming issue's re-eval criterion is a **runnable one-liner** the
   drainer executes, not a probe:
   `gh run list --workflow=ci.yml --branch main --json conclusion,databaseId --limit 40`
   then inspect the `encryption-posture` job conclusion per run
   (`gh run view <id> --json jobs`). No follow-through script, no sweeper wiring.
-- [ ] 4.2 **N — directional, not a hard number (R2):** arm once the standalone
+- [x] 4.2 **N — directional, not a hard number (R2):** arm once the standalone
   `encryption-posture` context has been GREEN across a *diverse* set of PRs
   (infra-, migration-, and docs-touching) over roughly **2 weeks**, with **no
   false-positive-attributable red** in the window — a longer soak than ADR-117's
@@ -273,23 +273,23 @@ concern, not a single-user incident.
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — `ci.yml` has a top-level `encryption-posture` job running
+- [x] AC1 — `ci.yml` has a top-level `encryption-posture` job running
   `python3 scripts/lint-encryption-posture.py --repo-sweep`; the step is **gone**
   from `lint-bot-statuses`. Verify: `awk '/^  encryption-posture:/{f=1} f&&/repo-sweep/{print;exit}' .github/workflows/ci.yml` returns the run line.
-- [ ] AC2 — **Non-arming invariant:** `git grep -n 'encryption-posture'
+- [x] AC2 — **Non-arming invariant:** `git grep -n 'encryption-posture'
   scripts/required-checks.txt scripts/ci-required-ruleset-canonical-required-status-checks.json
   infra/github/ruleset-ci-required.tf .github/actions/bot-pr-with-synthetic-checks/action.yml`
   returns **zero** required-entry hits (comment/pointer hits only).
-- [ ] AC3 — `bash plugins/soleur/test/required-checks-canonical-parity.test.sh`
+- [x] AC3 — `bash plugins/soleur/test/required-checks-canonical-parity.test.sh`
   is GREEN and its 15368-context set is **unchanged** from HEAD (site 1 is
   parity-neutral); non-vacuity counts stay ≥ 16.
-- [ ] AC4 — `python3 scripts/lint-encryption-posture.py --repo-sweep` exits 0
+- [x] AC4 — `python3 scripts/lint-encryption-posture.py --repo-sweep` exits 0
   (the standalone job is green on merge — soak starts green).
-- [ ] AC5 — `actionlint .github/workflows/ci.yml` passes; extracted `run:` shell
+- [x] AC5 — `actionlint .github/workflows/ci.yml` passes; extracted `run:` shell
   checked via `bash -c` (NOT `bash -n` on the yml).
-- [ ] AC6 — ADR-140 contains an `## Amendment (2026-07-24, #6901)` section stating
+- [x] AC6 — ADR-140 contains an `## Amendment (2026-07-24, #6901)` section stating
   the 5-site count and the 15368-not-CodeQL shape. Verify: `grep -c 'Amendment (2026-07-24, #6901)' ADR-140*.md` == 1. (The section must NOT hard-code an N — R2.)
-- [ ] AC7 — The arming tracking issue exists (`gh issue list --search
+- [x] AC7 — The arming tracking issue exists (`gh issue list --search
   'encryption-posture ARM'`), body carries the sites-2–5 recipe + the re-eval
   one-liner + the R5 residual, and references `#6901` via `Ref` (not `Closes`).
 
