@@ -11,6 +11,18 @@ WF="$REPO_ROOT/.github/workflows/cutover-inngest.yml"
 
 PASS=0
 FAIL=0
+
+# Owning cleanup trap (ADR-129). This suite allocates eight scratch files/dirs across its
+# sections and, until #6178, owned none of them: the explicit `rm -f` sat at the very END of
+# the file, so any mid-suite death (`set -e`, a helper that exits non-zero) leaked every one.
+# Paths are registered at creation and removed exactly once, here.
+SCRATCH=()
+scratch_cleanup() {
+  (( ${#SCRATCH[@]} )) && rm -rf "${SCRATCH[@]}"
+  return 0
+}
+trap scratch_cleanup EXIT
+
 assert() {
   local desc="$1" cond="$2"
   if eval "$cond"; then echo "  PASS: $desc"; PASS=$((PASS + 1));
@@ -359,7 +371,7 @@ assert "registry_empty verdict is a separate downstream check (not inside the re
 assert "choice includes arm (#6369)" "grep -qE '^[[:space:]]+-[[:space:]]*arm\$' '$WF'"
 assert "case arm: arm)" "grep -qE '^[[:space:]]+arm\\)' '$WF'"
 
-ARM_FILE="$(mktemp)"; ROLLBACK_FILE="$(mktemp)"
+ARM_FILE="$(mktemp)"; ROLLBACK_FILE="$(mktemp)"; SCRATCH+=("$ARM_FILE" "$ROLLBACK_FILE")
 awk '/^            arm\)$/,/^              ;;$/' "$WF" > "$ARM_FILE"
 awk '/^            rollback\)$/,/^              ;;$/' "$WF" > "$ROLLBACK_FILE"
 ARM_N=$(wc -l < "$ARM_FILE"); ROLLBACK_N=$(wc -l < "$ROLLBACK_FILE")
@@ -402,7 +414,7 @@ assert "arm) G1 refuses re-arm over a non-safe FSM state (DI-C2 REFUSING)" "grep
 # flag`) puts the TERMINAL STATE in `flag` (done/aborted/rolled-back) and a CAUSE in `reason` (which
 # NEVER equals done/aborted). A confirm keyed on `"reason":"done"` would match no row â†’ every op=arm
 # times out. This block is the cross-file parity that stops that silent drift.
-CONFIRM_FILE="$(mktemp)"
+CONFIRM_FILE="$(mktemp)"; SCRATCH+=("$CONFIRM_FILE")
 awk '/^          confirm_flip_state\(\) \{$/,/^          \}$/' "$WF" > "$CONFIRM_FILE"
 CONFIRM_N=$(wc -l < "$CONFIRM_FILE")
 assert "confirm_flip_state() is defined + non-empty (F6 non-vacuity)" "[[ '$CONFIRM_N' -gt 5 ]]"
@@ -479,10 +491,10 @@ assert "op=arm is FORWARD-ONLY: the arm block never writes the reverse flip 'rol
 # aborted / partial-arm / re-dispatch states that the forward-state inner case arm skips. This suite
 # is static, so "runs on an aborted-state rollback" is proven structurally: the delete lives in the
 # Half-B tail (after the inner Half-A esac) and NOT inside the armed|flipping|flushed|done) arm.
-FWD_ARM_FILE="$(mktemp)"
+FWD_ARM_FILE="$(mktemp)"; SCRATCH+=("$FWD_ARM_FILE")
 awk '/^[[:space:]]+armed\|flipping\|flushed\|done\)$/,/^[[:space:]]+;;$/' "$WF" > "$FWD_ARM_FILE"
 FWD_ARM_N=$(wc -l < "$FWD_ARM_FILE" | tr -d '[:space:]')
-TAIL_FILE="$(mktemp)"
+TAIL_FILE="$(mktemp)"; SCRATCH+=("$TAIL_FILE")
 awk '/^[[:space:]]*esac$/,0' "$ROLLBACK_FILE" > "$TAIL_FILE"
 TAIL_N=$(wc -l < "$TAIL_FILE" | tr -d '[:space:]')
 assert "#6552 rollback DELETEs INNGEST_HEARTBEAT_URL from soleur-inngest/prd (inverse of arm G4)" "grep -qE 'doppler secrets delete INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd' '$ROLLBACK_FILE'"
@@ -505,7 +517,7 @@ assert "#6552 delete runs in the unconditional Half-B tail (after inner esac) â€
 # on the enum-item shape (`^  - <op>$`) or the case-arm shape (`^  <op>)`),
 # neither of which the hook name can produce.
 # ===========================================================================
-PROBE_ARMS_FILE="$(mktemp)"
+PROBE_ARMS_FILE="$(mktemp)"; SCRATCH+=("$PROBE_ARMS_FILE")
 awk '/^[[:space:]]+registry-probe\)$/,/^[[:space:]]+rearm\)$/' "$WF" > "$PROBE_ARMS_FILE"
 PROBE_ARMS_N=$(wc -l < "$PROBE_ARMS_FILE" | tr -d '[:space:]')
 
@@ -604,7 +616,7 @@ assert "registry_empty read directly (bare, no //) at least twice (op=rearm + op
 # noop-* heartbeat reasons. Measured 2026-07-24: exactly ONE transition row exists
 # (done/flip-complete @ 2026-07-24 10:20:51Z) against thousands of heartbeats.
 # ===========================================================================
-DF_HARNESS_SRC="$(mktemp)"
+DF_HARNESS_SRC="$(mktemp)"; SCRATCH+=("$DF_HARNESS_SRC")
 {
   sed -n '/^          _flip_transition_dt() {$/,/^          }$/p' "$WF"
   sed -n '/^          doublefire_from() {$/,/^          }$/p' "$WF"
@@ -726,7 +738,7 @@ assert "#6178 _flip_transition_dt uses the QUOTED reason form (noop-rolled-back 
 # parsing, the truncation guard and the shape guard all execute with no network. ---
 FTD_OUT=""; FTD_RC=0
 call_flip_transition_dt() {  # $1 = number of rows the stubbed query returns
-  local nrows="$1" bindir; bindir=$(mktemp -d)
+  local nrows="$1" bindir; bindir=$(mktemp -d); SCRATCH+=("$bindir")
   cat > "$bindir/doppler" <<STUB
 #!/usr/bin/env bash
 for ((i=0; i<$nrows; i++)); do
@@ -811,7 +823,7 @@ assert "#6178 both arms surface anchor_source= in the run log" "[[ \"\$(grep -cF
 # Extracted by SHAPE (every single-quoted jq program mentioning fromdateiso8601), so
 # a fourth site added later is covered automatically rather than silently missed.
 # ===========================================================================
-BUCKET_PROGS_DIR="$(mktemp -d)"
+BUCKET_PROGS_DIR="$(mktemp -d)"; SCRATCH+=("$BUCKET_PROGS_DIR")
 # Extraction is anchored on the jq INVOCATION, not on bare single-quote pairing across the
 # whole file. An earlier draft paired quotes globally and silently mis-sliced the moment a
 # nearby comment contained an apostrophe ("jq's runtime error"), yielding programs that
