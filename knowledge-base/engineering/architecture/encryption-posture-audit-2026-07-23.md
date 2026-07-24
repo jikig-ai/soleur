@@ -37,12 +37,12 @@ the mechanism that closes this — and today it can only measure `workspaces_luk
 | `hcloud_volume.git_data` | `git-data.tf:196` | **plaintext ext4** (rollback backstop, pending DL-2 wipe) | `format = "ext4"`, no apparatus | #6897 |
 | `hcloud_volume.inngest_redis` | `inngest-host.tf:288` | **plaintext ext4** — Inngest AOF (in-flight job payloads) | `format = "ext4"`, no apparatus | **#6894 (highest sensitivity)** |
 | `hcloud_volume.registry` | `zot-registry.tf:407` | **plaintext ext4** — GHCR mirror (OCI blobs + cosign sigs) | `format = "ext4"`, no apparatus | #6895 |
-| `cloudflare_r2_bucket.cla_evidence` | `apps/cla-evidence/infra/bucket.tf:1` | provider-managed AES-256 (Cloudflare default) | Cloudflare data-security docs | #6896 (formalize attestation) |
-| `cloudflare_r2_bucket.workspaces_luks_header` | `workspaces-luks-header.tf:40` | provider-managed AES-256 (LUKS-header escrow) | Cloudflare data-security docs | #6896 |
-| R2 Terraform-state backend | `main.tf` backend block | provider-managed AES-256 (in-repo comments asserted "encrypted" with **no attestation** — now substantiated) | Cloudflare data-security docs | #6896 |
-| `supabase.prd` / `supabase.inngest` | non-IaC (Doppler-managed) | provider-managed AES-256 | Supabase security docs | #6896 |
-| `doppler.secrets` | vendor | provider-managed AES-256-GCM (holds the LUKS passphrases) | Doppler security docs | #6896 |
-| `betterstack.logs` (source 2457081) | vendor | provider-managed at-rest | Better Stack security docs | #6896 |
+| `cloudflare_r2_bucket.cla_evidence` | `apps/cla-evidence/infra/bucket.tf:1` | provider-managed AES-256-GCM (Cloudflare default) | Cloudflare Trust Hub SOC 2 Type II | #6896 (SOC 2 Type II named — resolved) |
+| `cloudflare_r2_bucket.workspaces_luks_header` | `workspaces-luks-header.tf:40` | provider-managed AES-256-GCM (LUKS-header escrow) | Cloudflare Trust Hub SOC 2 Type II | #6896 (SOC 2 Type II named — resolved) |
+| R2 Terraform-state backend | `main.tf` backend block | provider-managed AES-256-GCM (in-repo comments asserted "encrypted" with **no attestation** — now substantiated) | Cloudflare Trust Hub SOC 2 Type II | #6896 (SOC 2 Type II named — resolved) |
+| `supabase.prd` / `supabase.inngest` | non-IaC (Doppler-managed) | provider-managed AES-256 | Supabase security docs | #6911 |
+| `doppler.secrets` | vendor | provider-managed AES-256-GCM (holds the LUKS passphrases) | Doppler security docs | #6911 |
+| `betterstack.logs` (source 2457081) | vendor | provider-managed at-rest | Better Stack security docs | #6911 |
 | `redis.session_store` | `model.c4:218` | **at-rest posture unstated in code** — recorded as an exception, not asserted | model.c4 | #6897 |
 
 ## Cross-component connections
@@ -71,6 +71,6 @@ full human legal-copy reconciliation against every measured posture is a separat
 ## Findings summary
 
 Parent claim-unlock gate: **#6893**. Children: **#6894** (inngest_redis, P2), **#6895**
-(registry, P3), **#6896** (provider-managed attestations, P3), **#6897** (superseded plaintext
+(registry, P3), **#6896** (R2 provider-managed attestations, P3 — SOC 2 Type II named) / **#6911** (non-R2 provider attestations, P3), **#6897** (superseded plaintext
 volumes + zot HTTP link + session-store posture + legal reconcile, P3). All `Ref #6588`, never
 `Closes`. The audit PR remediates none of them.
