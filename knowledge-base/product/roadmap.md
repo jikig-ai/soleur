@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-06
+last_updated: 2026-07-23
 last_reviewed: 2026-07-06
 review_cadence: weekly
 owner: CPO
@@ -75,7 +75,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
 | Phase 3 (Make it Sticky) | Complete. Milestone closed. 0 open, 175 closed. QA Gate (#2108) closed 2026-05-26. Agent work visualization (#2004) moved to Phase 4. KB chat sidebar (#2345) shipped PR #2347. |
-| Phase 4 (Validate + Scale) | In progress. 43 open, 160 closed (milestone). Marketing Gate complete: all M1-M63 closed (2026-06-08) — gate cleared. Multi-User Readiness Gate: MU1-MU3 all closed; MU4 (#4229) closed 2026-05-21 (FLAG_TEAM_WORKSPACE_INVITE flag gate pending); MU4.1 PR-A (#4290) and PR-B (#4508) both merged. Remaining open: Phase 4 core validation issues (#1439 recruit founders, #1440 problem interviews, #1441 guided onboarding, #1442 usage tracking, #1443 exit interviews), #673 container isolation/monitoring, #2004 agent work visualization, #2719 skill security scan, plus internal engineering-tooling work. Internal-tooling issues live in Phase 4 milestone for sequencing but are not customer-facing roadmap rows. |
+| Phase 4 (Validate + Scale) | In progress. 56 open, 179 closed (milestone). Marketing Gate complete: all M1-M63 closed (2026-06-08) — gate cleared. Multi-User Readiness Gate: MU1-MU3 all closed; MU4 (#4229) closed 2026-05-21 (FLAG_TEAM_WORKSPACE_INVITE flag gate pending); MU4.1 PR-A (#4290) and PR-B (#4508) both merged. Remaining open: Phase 4 core validation issues (#1439 recruit founders, #1440 problem interviews, #1441 guided onboarding, #1442 usage tracking, #1443 exit interviews), #673 container isolation/monitoring, #2004 agent work visualization, #2719 skill security scan, plus internal engineering-tooling work. Internal-tooling issues live in Phase 4 milestone for sequencing but are not customer-facing roadmap rows. |
 | Phase 5 (Desktop Native App) | Defined. 6 open, 0 closed. Trigger-gated on user demand. All 6 issues (5.1–5.6) in Phase 5 milestone. |
 | Post-MVP / Later | 710 open, 1283 closed. (+5 competitive-parity bets CP1-CP5 vs Viktor, intake 2026-05-30) |
 | Beta users | 0 |

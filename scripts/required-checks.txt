@@ -129,6 +129,33 @@ tenant-integration-required
 # the ADR-031 Amendment (2026-07-17, #6589).
 sentry-destroy-required
 
+# #6882 (ADR-139) — ci.yml `credential-path-guard` job. Always-run FULL-SCAN of
+# scripts/lint-credential-path-literals.py over tracked *.md under plugins/ and
+# knowledge-base/. Promoted advisory → blocking once #6880 drained the
+# grandfathered backlog to zero, so a green asserts the REPOSITORY is clean, not
+# merely this diff.
+#
+# ✅ EARNED, NOT FABRICATED — and this is the entry that breaks the pattern above.
+# `rule-body-lint` and `sentry-destroy-required` are content-scoped gates whose
+# unconditional bot-PR greens are sound by UNREACHABILITY: their guarded surfaces
+# sit outside the composite action's ALLOWED_PATHS. That argument does NOT hold
+# here. This scanner's SCAN_DIRS = (plugins, knowledge-base) over tracked *.md
+# INCLUDES knowledge-base/project/weakness-digest.md — one of exactly two paths
+# the action may write. ALLOWED_PATHS ∩ SCAN_DIRS is NON-EMPTY, so a fabricated
+# green would assert something false over a REACHABLE surface.
+#
+# The action therefore REPRODUCES the scan over its own staged paths in the
+# Phase-4 "Secret-safety ceiling" before opening any PR or posting any synthetic
+# (see .github/actions/bot-pr-with-synthetic-checks/action.yml). Deleting that
+# reproduction is caught by required-checks-canonical-parity.test.sh Test 8.
+#
+# ⚠ The ALLOWED_PATHS ∩ SCAN_DIRS test must be RE-DERIVED per gate, never
+# inherited — and reachability can widen WITHOUT touching ALLOWED_PATHS: a change
+# to a generator's output format (e.g. weakness-miner.sh emitting learning titles
+# instead of bare basenames) moves the other input silently. The existing
+# tripwires above watch only ALLOWED_PATHS. See ADR-139.
+credential-path-guard
+
 # CLA Required ruleset
 cla-check
 cla-evidence
