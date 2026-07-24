@@ -321,6 +321,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # The SDK-bump gate below scans `git log origin/main..HEAD` for the
+          # `sdk-bump-verified:` ack. That range needs a merge base, so BOTH
+          # sides must be non-shallow — the default depth-1 checkout made the
+          # range unreadable (git exits 128) and the gate then reported a
+          # MISSING ack for every SDK bump regardless of what the author wrote.
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -358,7 +365,7 @@ jobs:
       # base comparison needs origin/main; the default checkout is depth-1, so fetch it.
       - name: SDK-bump sandbox gate (lockfile parity + bump ack)
         run: |
-          git fetch --no-tags --depth=1 origin main 2>/dev/null || true
+          git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
           bash apps/web-platform/scripts/sdk-bump-sandbox-gate.sh
 
   # #5913 / ADR-079 deferral B — creds-gated canary CAPTURE gate. DARK-LAUNCH:
@@ -387,7 +394,7 @@ jobs:
       - name: Detect capture-input changes
         id: trigger
         run: |
-          git fetch --no-tags --depth=1 origin main 2>/dev/null || true
+          git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
           CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
           if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
@@ -407,7 +414,7 @@ jobs:
           # --verify runs inside node:22-slim (deploy base) — see helper header.
           SDK_GATE_VERIFY_CMD: bash apps/web-platform/scripts/sandbox-canary-verify-in-image.sh
         run: |
-          git fetch --no-tags --depth=1 origin main 2>/dev/null || true
+          git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
           bash apps/web-platform/scripts/sdk-bump-sandbox-gate.sh
 
   # plugin-root-propagation-verify-in-image.sh — the F2 runtime guarantee
@@ -432,7 +439,7 @@ jobs:
       - name: Detect propagation-input changes
         id: trigger
         run: |
-          git fetch --no-tags --depth=1 origin main 2>/dev/null || true
+          git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
           CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
           # Trigger set = the probe's ACTUAL inputs: it imports buildAgentEnv
           # (agent-env.ts) + buildAgentSandboxConfig (agent-runner-sandbox-config.ts)
