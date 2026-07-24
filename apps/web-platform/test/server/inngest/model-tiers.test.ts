@@ -93,6 +93,35 @@ describe("model-tiers registry — #5106", () => {
     expect(pricingKeys).toEqual(unionMembers);
   });
 
+  // Pricing-drift tripwire. The keys-match test above guards the SHAPE of
+  // MODEL_PRICING but says nothing about its VALUES — which is how the haiku
+  // row carried retired Haiku 3.5 rates ($0.80/$4/$0.08/$1) under the Haiku
+  // 4.5 key for two months, under-attributing 20% into a WORM ledger that
+  // both BYOK cap layers sum. A test cannot know live prices, so this pins
+  // the published rates with their source; a genuine price change must update
+  // it deliberately rather than drifting in unnoticed.
+  //
+  // Source: https://platform.claude.com/docs/en/about-claude/pricing.md (2026-07-24)
+  //   Haiku 4.5     $1 / $5    cache-read $0.10  5m cache-write $1.25
+  //   Sonnet 5      $3 / $15   cache-read $0.30  5m cache-write $3.75  (post-intro;
+  //                 introductory $2/$10 applies through 2026-08-31 — see the
+  //                 comment on MODEL_PRICING for why the post-intro rates are used)
+  it("MODEL_PRICING values match published per-MTok rates", () => {
+    const M = 1_000_000;
+    expect(MODEL_PRICING[HAIKU_MODEL]).toEqual({
+      inputPerToken: 1 / M,
+      outputPerToken: 5 / M,
+      cacheReadPerToken: 0.1 / M,
+      cacheCreatePerToken: 1.25 / M,
+    });
+    expect(MODEL_PRICING[SONNET_MODEL]).toEqual({
+      inputPerToken: 3 / M,
+      outputPerToken: 15 / M,
+      cacheReadPerToken: 0.3 / M,
+      cacheCreatePerToken: 3.75 / M,
+    });
+  });
+
   it("EXECUTION_MODEL is the sonnet SSOT and AUDIT_MODEL is opus-4-8", () => {
     expect(EXECUTION_MODEL).toBe(SONNET_MODEL);
     expect(EXECUTION_MODEL).toBe("claude-sonnet-5");

@@ -83,9 +83,25 @@ function uuidv5(name: string, namespace: string): string {
 }
 
 // Per-model unit pricing in USD per token. Cache-read tokens bill at
-// ~10% of input; cache-creation tokens at ~125% of input. Pulled from
-// Anthropic public pricing pages 2026-05-25; CFO refreshes via cap
-// follow-through.
+// ~10% of input; cache-creation tokens at ~125% of input. Verified against
+// https://platform.claude.com/docs/en/about-claude/pricing.md on 2026-07-24.
+//
+// VERIFY EACH ROW AGAINST ITS KEY, not against the previous row. The haiku
+// entry carried Haiku *3.5*'s retired table ($0.80/$4/$0.08/$1) under the
+// Haiku *4.5* key from 2026-05-25 until 2026-07-24 — a whole wrong model's
+// row, not rounding drift, uniformly under-attributing 20%. These values
+// flow through `write_byok_audit` into `audit_byok_use`, which is WORM
+// (migration 037 raises P0001 on UPDATE/DELETE), so a wrong row is not just
+// wrong going forward: every row already written is permanently
+// uncorrectable, and both BYOK cap layers sum that column.
+//
+// SONNET IS TIME-VARYING: Claude Sonnet 5 bills $2/$10 under introductory
+// pricing through 2026-08-31, then $3/$15 from 2026-09-01. The values below
+// are the POST-INTRO rates — deliberately, since a static constant cannot
+// express the window and over-attribution is the safe direction for a cap
+// (it trips early rather than overshooting). Correct as of 2026-09-01.
+//
+// Values are pinned by model-tiers.test.ts so a drift must be deliberate.
 interface ModelPricing {
   inputPerToken: number;
   outputPerToken: number;
@@ -106,11 +122,12 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     cacheReadPerToken: 0.3 / 1_000_000,
     cacheCreatePerToken: 3.75 / 1_000_000,
   },
+  // Claude Haiku 4.5: $1 input / $5 output / $0.10 cache-read / $1.25 5m cache-write.
   [HAIKU_MODEL]: {
-    inputPerToken: 0.8 / 1_000_000,
-    outputPerToken: 4 / 1_000_000,
-    cacheReadPerToken: 0.08 / 1_000_000,
-    cacheCreatePerToken: 1 / 1_000_000,
+    inputPerToken: 1 / 1_000_000,
+    outputPerToken: 5 / 1_000_000,
+    cacheReadPerToken: 0.1 / 1_000_000,
+    cacheCreatePerToken: 1.25 / 1_000_000,
   },
 };
 
