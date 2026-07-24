@@ -291,7 +291,10 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
     expect(within(rail).getByTestId("nav-section-title")).toBeInTheDocument();
   });
 
-  it("Settings: the mobile band section title is NOT suppressed (KB-scoped)", () => {
+  it("Settings: the mobile band is switcher-only — no section title in any state (page body owns it); rail band keeps it", () => {
+    // The mobile band moved into the hamburger drawer as a workspace-switcher-
+    // only band (suppressBack + suppressSectionTitle), so it no longer carries a
+    // section title for ANY drill; the page body's own title provides context.
     mockPathname = "/dashboard/settings";
     render(
       <Wrap>
@@ -300,10 +303,11 @@ describe("Single nav rail — URL-derived drill swap (AC3/AC4c)", () => {
         </DashboardLayout>
       </Wrap>,
     );
-    const { mobile } = bandsByVariant();
+    const { mobile, rail } = bandsByVariant();
     expect(
-      within(mobile).getByTestId("nav-section-title"),
-    ).toBeInTheDocument();
+      within(mobile).queryByTestId("nav-section-title"),
+    ).not.toBeInTheDocument();
+    expect(within(rail).getByTestId("nav-section-title")).toBeInTheDocument();
   });
 });
 
