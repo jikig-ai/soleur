@@ -37,6 +37,65 @@ When generating Terraform configurations, produce a modular file structure:
 - Use `default_tags` in provider block for consistent tagging
 - Scope security group ingress rules tightly -- avoid `0.0.0.0/0` for SSH, RDP, and database ports
 
+### Hetzner/Cloudflare Encryption Requirements
+
+The AWS attribute pattern above (`storage_encrypted = true`, `encrypted = true`) **does not
+exist on this stack** and generating it is a no-op that reads as compliant while encrypting
+nothing.
+
+- **`hcloud_volume` has no `encrypted` attribute.** Pinned: `hetznercloud/hcloud` v1.63.0
+  (`.terraform.lock.hcl`). An encrypted Hetzner volume means the **four-part guest-side LUKS
+  apparatus**, never a resource argument:
+  1. `random_password` -- Terraform-minted passphrase, never an operator-supplied `TF_VAR`
+     (`hr-tf-variable-no-operator-mint-default`).
+  2. A **dedicated** Doppler config (`prd_<store>`, NOT the shared `prd` config) receiving the
+     passphrase via `doppler_secret`, read by a config-scoped `doppler_service_token` -- never
+     the host's full-prd token, which would hand the key to anything else that reads that
+     config.
+  3. `cryptsetup luksFormat` / `luksOpen` executed **in the guest** at cloud-init, bootstrap, or
+     cutover time -- never as an hcloud-side operation.
+  4. A mount whose source is `/dev/mapper/<name>`, with the mapper name resolved through at most
+     one level of `${VAR:-default}` shell expansion and asserted to match the `luksOpen` operand.
+
+  Generate all four parts by default for any new persistent Hetzner volume. If a volume is
+  deliberately left plaintext, require a named justification and a
+  `scripts/encryption-posture-ledger.json` row (`mechanism: plaintext-exception`, with
+  `tracking_issue` and `expires_on`) in the same PR -- never silence.
+
+  **SHARP EDGE -- the live-volume guard-inversion data-loss trap (reproduced verbatim from
+  `apps/web-platform/infra/workspaces-luks.tf`, "THE ISSUE'S PREMISE WAS WRONG" /
+  "SHARP EDGE" sections):**
+
+  > SHARP EDGE — encryption-at-rest is GUEST-SIDE LUKS, NOT an hcloud_volume attribute.
+  > There is no hcloud `encrypted` flag. `cryptsetup` runs on the host, unlocked by the
+  > Doppler-injected key -- never an argv positional, never baked into user_data.
+  >
+  > THE ISSUE'S PREMISE WAS WRONG, AND THE CORRECTION IS LOAD-BEARING
+  > The REAL data-destroyer is the idempotence guard inverting:
+  > `if ! cryptsetup isLuks "$DEV"; then luksFormat` (cloud-init-git-data.yml) is false
+  > on a POPULATED PLAINTEXT device ⇒ luksFormat ⇒ live user code wiped. The precedent
+  > is safe only because git-data's volume is born fresh. Never point that guard at the
+  > live volume.
+
+  Never generate an `isLuks`-guarded `luksFormat` against a device that may already carry live
+  data. The only sound guard discriminates on the filesystem signature, not on the LUKS state:
+  `blkid -o value -s TYPE "$DEV"` empty ⇒ format (the only formattable state); `crypto_LUKS` ⇒
+  no-op; anything else ⇒ fail closed and refuse to format a populated device. Select the target
+  device by volume ID from Terraform output, never by glob scan.
+
+- **Cloudflare R2 (`cloudflare_r2_bucket`) has no encryption attribute either.** It is
+  provider-managed at rest, but a bare "the provider handles it" is not an acceptable
+  declaration -- it is a hard FAIL in the encryption-posture ledger (literal-string reject on
+  `provider handles`, `handled by the provider`, `encrypted by default` with no attestation
+  name). Require a **named attestation** (attestation name + URL + retrieval date) plus the
+  bucket's `location`/jurisdiction field present in the `.tf`.
+
+- Cross-reference `scripts/encryption-posture-ledger.json` (the SSOT for every persistent
+  store's declared posture -- owned by the encryption-posture Layer A/B detector, do not edit
+  directly when merely generating HCL; file a row alongside the resource) and
+  [ADR-139](../../../../../knowledge-base/engineering/architecture/decisions/ADR-139-encryption-posture-as-a-design-time-default.md)
+  for the full three-layer model (design gate / static resolvable-evidence / live reconcile).
+
 ## Review Protocol
 
 When reviewing existing .tf files, scan for issues and report findings grouped by severity:

@@ -36,6 +36,18 @@ The script:
 5. Trap handler ensures probe server cleanup on EXIT/INT/TERM
 6. Prints teardown commands on any exit
 
+## Encryption Posture
+
+If this run provisions a persistent volume for the tenant, `hcloud_volume` carries no
+`encrypted` attribute -- encryption means the guest-side LUKS apparatus (`random_password` ->
+dedicated Doppler config -> `cryptsetup luksFormat` -> `/dev/mapper/*` mount; see
+terraform-architect's Hetzner/Cloudflare requirements). Do not complete the run without adding a
+row to `scripts/encryption-posture-ledger.json` for the new volume: `at_rest.mechanism`
+(`luks` or a named `plaintext-exception` with `tracking_issue` + `expires_on`),
+`at_rest.evidence`, `at_rest.does_not_defend`, `at_rest.disclosed_as`, and
+`at_rest.live_verification`. This run provisions sub-projects and tokens, not volumes, so the
+step is normally a no-op -- it applies only when a volume enters scope.
+
 ## Sharp Edges
 
 - Hetzner has no TF resource for project creation or token minting (Console-only). This is the one manual step in this skill; it is tracked as an automation gap with revisit criteria in **Tracks #4604** (per `hr-never-label-any-step-as-manual-without`) — do not treat it as permanently-manual.

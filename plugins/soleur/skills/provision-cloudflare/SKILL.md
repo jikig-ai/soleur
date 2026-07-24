@@ -38,6 +38,17 @@ The script:
 5. After operator confirms TF apply, runs token extraction + smoke-test pipeline
 6. Prints teardown commands and bootstrap revocation reminder
 
+## Encryption Posture
+
+If this run provisions a `cloudflare_r2_bucket` for the tenant, R2 has no encryption attribute
+either -- it is provider-managed at rest, and a bare "the provider handles it" is not an
+acceptable declaration. Do not complete the run without adding a row to
+`scripts/encryption-posture-ledger.json`: `at_rest.mechanism: provider-managed:<named
+attestation>`, `at_rest.evidence` (attestation name + URL + retrieval date, plus the bucket's
+`location`/jurisdiction field in the `.tf`), `at_rest.does_not_defend`, `at_rest.disclosed_as`,
+and `at_rest.live_verification`. This run provisions a scoped API token, not a bucket, so the
+step is normally a no-op -- it applies only when a bucket enters scope.
+
 ## Sharp Edges
 
 - R2 backend has no state locking. Single operator at N=2.

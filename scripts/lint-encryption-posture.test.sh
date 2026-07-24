@@ -467,6 +467,98 @@ LEDGER_TS15="$TMPDIR_TEST/ts15-ledger.json"
   echo '}'
 } > "$LEDGER_TS15"
 
+# ---------------------------------------------------------------------------
+# AC33 (real-repo calibration): a synthetic mirror of workspaces-cutover.sh's
+# ACTUAL two-hop shape, found by running the detector against the real seed
+# ledger — TS-15/TS-1 used a literal mapper or a single luksOpen and missed
+# this. The real file has: (1) a `MAPPER_NAME="${WORKSPACES_MAPPER_NAME:-
+# workspaces}"` assignment on its own line, (2) the mapper-bearing luksOpen
+# wrapped with a trailing shell line-continuation backslash, and (3) a SECOND,
+# EARLIER-OR-LATER sibling `luksOpen --test-passphrase` escrow probe with NO
+# mapper operand at all (device-only). A first-match-only scan either locks
+# onto the wrong site or aborts entirely on the continuation backslash.
+# ---------------------------------------------------------------------------
+REPO_AC33="$TMPDIR_TEST/ac33"
+write_file "$REPO_AC33/apps/web-platform/infra/workspaces-luks.tf" <<'EOF'
+resource "random_password" "workspaces_luks" {
+  length  = 40
+  special = false
+}
+
+resource "doppler_secret" "workspaces_luks_key" {
+  project = "soleur"
+  config  = "prd_workspaces_luks"
+  name    = "WORKSPACES_LUKS_KEY"
+  value   = random_password.workspaces_luks.result
+}
+
+resource "hcloud_volume" "workspaces_luks" {
+  name = "soleur-web-platform-data-luks"
+}
+
+resource "hcloud_volume_attachment" "workspaces_luks" {
+  volume_id = hcloud_volume.workspaces_luks.id
+  server_id = hcloud_server.web.id
+}
+EOF
+write_file "$REPO_AC33/apps/web-platform/infra/workspaces-cutover.sh" <<'EOF'
+#!/usr/bin/env bash
+MAPPER_NAME="${WORKSPACES_MAPPER_NAME:-workspaces}"
+MAPPER="/dev/mapper/${MAPPER_NAME}"
+
+prepare_luks_target() {
+  KEY="$(read_key)"
+  [ "$DRY_RUN" = "1" ] || printf '%s' "$KEY" | cryptsetup luksFormat --type luks2 --key-file - "$FRESH_DEV" \
+    || die "luksFormat failed"
+  printf '%s' "$KEY" | cryptsetup luksOpen --key-file - "$FRESH_DEV" "$MAPPER_NAME" \
+    || die "luksOpen failed"
+}
+
+escrow_proof() {
+  # A SIBLING luksOpen with NO mapper operand -- a passphrase test only.
+  if printf '%s' "$KEY" | cryptsetup luksOpen --test-passphrase --key-file - "$FRESH_DEV" >/dev/null 2>&1; then
+    log "escrow proof OK"
+  fi
+}
+EOF
+write_file "$REPO_AC33/apps/web-platform/infra/soleur-host-bootstrap.sh" <<'EOF'
+#!/bin/sh
+MOUNT=/mnt/data
+MAPPER=/dev/mapper/workspaces
+EOF
+LEDGER_AC33="$TMPDIR_TEST/ac33-ledger.json"
+write_file "$LEDGER_AC33" <<'EOF'
+{
+  "schema_version": 1,
+  "store_classes": { "hcloud_volume": { "kind": "guest-luks-volume", "mechanisms": ["luks"] } },
+  "non_store_types": ["hcloud_volume_attachment", "random_password", "doppler_secret"],
+  "non_iac_stores": [],
+  "stores": [
+    {
+      "store": "hcloud_volume.workspaces_luks",
+      "kind": "guest-luks-volume",
+      "device_binding": {
+        "volume": "hcloud_volume.workspaces_luks",
+        "attachment": "hcloud_volume_attachment.workspaces_luks",
+        "mapper": "workspaces"
+      },
+      "at_rest": {
+        "mechanism": "luks",
+        "evidence": "apps/web-platform/infra/workspaces-cutover.sh",
+        "defends_against": "a seized or RMA'd disk; a raw volume snapshot",
+        "does_not_defend": "a leaked service-role credential or a compromised host with the volume already unlocked",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:no host probe in this fixture"
+      }
+    }
+  ],
+  "connections": []
+}
+EOF
+run_case_reports "AC33 real-repo-shaped two-hop mapper (line-continuation + sibling --test-passphrase) certifies" 0 \
+  "encryption-posture:" \
+  --repo-sweep --repo-root "$REPO_AC33" --ledger "$LEDGER_AC33" --today "$TODAY"
+
 run_case_reports "TS-15 plaintext workspaces citing workspaces_luks apparatus -> FAIL (different volume)" 1 \
   "citation belongs to a different volume" \
   --repo-sweep --repo-root "$REPO_TS15" --ledger "$LEDGER_TS15" --today "$TODAY"

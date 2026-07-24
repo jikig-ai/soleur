@@ -221,6 +221,12 @@ def resolve_mapper_operand(file_text: str, raw_token: str) -> str | None:
     assignment, taking the `:-` default literal (R1). Anything requiring a
     second level, or with no assignment found, is unresolved (None)."""
     tok = raw_token.strip()
+    # Defensive: shlex.split (the caller's tokenizer) already strips a
+    # balanced pair of surrounding double-quotes, but strip again here so this
+    # function is correct even if a caller ever hands it a raw, un-tokenized
+    # operand like `"$MAPPER_NAME"`.
+    if len(tok) >= 2 and tok.startswith('"') and tok.endswith('"'):
+        tok = tok[1:-1]
     if not tok.startswith("$"):
         return tok
     varname = tok[1:].strip("{}")
@@ -236,12 +242,52 @@ def resolve_mapper_operand(file_text: str, raw_token: str) -> str | None:
     return None
 
 
+# cryptsetup luksOpen's ONLY value-taking flag in this repo's apparatus files.
+# A trailing bare "-" after it (stdin) is its VALUE, not a positional operand.
+_LUKSOPEN_VALUE_FLAGS = {"--key-file"}
+
+
+def _luksopen_positionals(tail: str) -> list[str]:
+    """Tokenize the text after `luksOpen` on one logical line and return its
+    positional (non-flag) arguments in order. `cryptsetup luksOpen <device>
+    [<name>]` — a real "open and NAME the mapper" call has 2 positionals; a
+    `--test-passphrase` probe (device only, no mapper is opened) has 1 and is
+    correctly excluded by the caller. A trailing shell line-continuation
+    backslash (real cutover scripts wrap the command across lines) is
+    stripped before tokenizing, since it is not itself an operand."""
+    tail = tail.strip()
+    if tail.endswith("\\"):
+        tail = tail[:-1].rstrip()
+    try:
+        tokens = shlex.split(tail)
+    except ValueError:
+        return []
+    positionals: list[str] = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        t = tokens[i]
+        if t in _LUKSOPEN_VALUE_FLAGS:
+            i += 2  # the flag AND its value (often "-" for stdin) — neither is an operand
+            continue
+        if t.startswith("-") and t != "-":
+            i += 1  # a boolean flag (--test-passphrase, --allow-discards, ...)
+            continue
+        positionals.append(t)
+        i += 1
+    return positionals
+
+
 def scan_apparatus(
     infra_files: list[Path], cache: dict[Path, str]
 ) -> dict[str, list[Path]]:
     """resolved_mapper -> [files] having BOTH a `cryptsetup luksFormat` AND a
-    `cryptsetup luksOpen` site, keyed by the luksOpen call's resolved mapper
-    operand (its trailing positional argument)."""
+    `cryptsetup luksOpen ... <device> <mapper>` site, keyed by the resolved
+    mapper. Scans EVERY luksOpen occurrence in the file (re.finditer, not
+    re.search) — a file may carry a second, mapper-less luksOpen (a
+    `--test-passphrase` escrow probe, e.g. workspaces-cutover.sh:2064) ahead of
+    or behind the real one, and a first-match-only scan can lock onto the
+    wrong site or abort the whole file on an unrelated line's syntax."""
     result: dict[str, list[Path]] = {}
     for f in infra_files:
         text = cache.get(f)
@@ -249,19 +295,16 @@ def scan_apparatus(
             text = read_text(f)
             cache[f] = text
         has_format = re.search(r"cryptsetup\s+luksFormat\b", text)
-        m_open = re.search(r"cryptsetup\s+luksOpen\b([^\n]*)", text)
-        if not has_format or not m_open:
+        if not has_format:
             continue
-        try:
-            tokens = shlex.split(m_open.group(1))
-        except ValueError:
-            continue
-        if not tokens:
-            continue
-        mapper = resolve_mapper_operand(text, tokens[-1])
-        if mapper is None:
-            continue
-        result.setdefault(mapper, []).append(f)
+        for m in re.finditer(r"cryptsetup\s+luksOpen\b([^\n]*)", text):
+            positionals = _luksopen_positionals(m.group(1))
+            if len(positionals) < 2:
+                continue  # no mapper operand at this site (e.g. --test-passphrase)
+            mapper = resolve_mapper_operand(text, positionals[-1])
+            if mapper is None:
+                continue
+            result.setdefault(mapper, []).append(f)
     return result
 
 
