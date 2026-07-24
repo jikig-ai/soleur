@@ -370,6 +370,12 @@ echo "Test 8: action.yml EARNS the credential-path green (#6882 / ADR-139)"
 # FAIL branch can print (and an early `head -1` close can SIGPIPE grep to 141).
 # The RED state must report a clean failure, not kill the runner.
 preflight_line=$(grep -nE '^[[:space:]]*if ! python3 scripts/lint-credential-path-literals\.py "\$\{PATHS\[@\]\}"; then' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
+# The EARLIEST outward/irreversible side-effect the preflight must precede is the
+# branch push (the local `git checkout -b` above it is not outward). Anchoring on
+# `git push` rather than the far-downstream check-run POST catches a reorder that
+# pushes the bot branch BEFORE scanning it (test-design review of PR #6883). The
+# check-run POST anchor is retained below as an independent, weaker upper bound.
+sideeffect_line=$(grep -nE '^[[:space:]]*git push ' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
 postrun_line=$(grep -nE '^[[:space:]]*gh api "repos/\$\{REPO\}/check-runs"' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
 
 if [[ -n "$preflight_line" ]]; then
@@ -382,20 +388,56 @@ else
   FAIL=$((FAIL + 1))
 fi
 
-# Non-vacuity: (8b) is meaningless if the check-run POST anchor stops resolving.
-if [[ -n "$postrun_line" ]]; then
-  echo "  PASS: (8c) non-vacuous — check-run POST anchor resolves (line $postrun_line)"
+# (8d) ENFORCEMENT LEG — the then-body must actually fail the step. Presence +
+# ordering of the `if !` line (8a/8b) is satisfied by an INERT guard whose body
+# was neutralized (`exit 1` → `:` / `true`, or the body deleted) — the scan then
+# runs, prints its ::error::, and falls through to push+PR+synthetic anyway. Walk
+# from the `if` line to the FIRST closing `fi` and require a non-zero `exit` in
+# between. Without this, a one-token mutation defangs the gate while 8a/8b stay
+# green (test-design review of PR #6883). `awk` exits 0 regardless; `|| true`
+# keeps the substitution safe under `set -euo pipefail`.
+enforce_exit=""
+if [[ -n "$preflight_line" ]]; then
+  enforce_exit=$(awk -v s="$preflight_line" '
+    NR > s && /^[[:space:]]*fi[[:space:]]*$/ { exit }
+    NR > s && /^[[:space:]]*exit[[:space:]]+[1-9]/ { print "yes"; exit }
+  ' "$ACTION_YML" || true)
+fi
+if [[ "$enforce_exit" == "yes" ]]; then
+  echo "  PASS: (8d) the credential-path then-body exits non-zero (guard is enforcing, not inert)"
   PASS=$((PASS + 1))
 else
-  echo "  FAIL: (8c) could not locate the check-run POST — (8b) ordering check would be vacuous"
+  echo "  FAIL: (8d) the credential-path then-body does NOT exit non-zero before its closing 'fi'."
+  echo "        The scan runs but does not fail the step — a bot PR with a credential path in"
+  echo "        weakness-digest.md would push + post a fabricated green. See ADR-139."
   FAIL=$((FAIL + 1))
 fi
 
-if [[ -n "$preflight_line" && -n "$postrun_line" && "$preflight_line" -lt "$postrun_line" ]]; then
-  echo "  PASS: (8b) preflight runs BEFORE the synthetic check-run is posted ($preflight_line < $postrun_line)"
+# Non-vacuity: (8b) is meaningless if the git-push anchor stops resolving.
+if [[ -n "$sideeffect_line" ]]; then
+  echo "  PASS: (8c) non-vacuous — git-push side-effect anchor resolves (line $sideeffect_line)"
   PASS=$((PASS + 1))
 else
-  echo "  FAIL: (8b) preflight does not precede the synthetic check-run POST (preflight=$preflight_line post=$postrun_line)"
+  echo "  FAIL: (8c) could not locate the branch push — (8b) ordering check would be vacuous"
+  FAIL=$((FAIL + 1))
+fi
+
+if [[ -n "$preflight_line" && -n "$sideeffect_line" && "$preflight_line" -lt "$sideeffect_line" ]]; then
+  echo "  PASS: (8b) preflight runs BEFORE the branch is pushed ($preflight_line < $sideeffect_line)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (8b) preflight does not precede the branch push (preflight=$preflight_line push=$sideeffect_line)"
+  FAIL=$((FAIL + 1))
+fi
+
+# (8e) Defense-in-depth upper bound: preflight also precedes the synthetic
+# check-run POST. Weaker than 8b (a reorder between push and POST still passes)
+# but pins the far end of the ordering invariant independently.
+if [[ -n "$preflight_line" && -n "$postrun_line" && "$preflight_line" -lt "$postrun_line" ]]; then
+  echo "  PASS: (8e) preflight also precedes the synthetic check-run POST ($preflight_line < $postrun_line)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (8e) preflight does not precede the synthetic check-run POST (preflight=$preflight_line post=$postrun_line)"
   FAIL=$((FAIL + 1))
 fi
 echo ""
