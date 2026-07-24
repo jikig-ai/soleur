@@ -123,13 +123,14 @@ if [[ "$MODE" == "detect" ]]; then
   # process substitution (`mapfile < <(...)`) discards it, which would let a
   # failed scan fall through to the clean branch below.
   _hits_tmp="$(mktemp)"
+  # Single owning trap (ADR-129): the explicit rm below is the happy path, the
+  # trap covers a die between allocation and cleanup.
+  trap 'rm -f "$_hits_tmp"' EXIT
   if ! collect_config_hits > "$_hits_tmp"; then
-    rm -f "$_hits_tmp"
     echo "model-drift: UNKNOWN — scan failed; treat as un-run, not clean."
     exit 1
   fi
   mapfile -t hits < "$_hits_tmp"
-  rm -f "$_hits_tmp"
   if [[ ${#hits[@]} -gt 0 ]]; then
     echo "model-drift: ${#hits[@]} config file(s) carry a stale model ID (auto-fixable via /soleur:model-launch-review)."
     for f in "${hits[@]}"; do echo "  - $(rel "$f")"; done

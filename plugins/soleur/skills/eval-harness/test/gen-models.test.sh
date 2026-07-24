@@ -33,6 +33,9 @@ if [[ ! -f "$OUT" ]]; then
   echo "FAIL: $OUT is missing from the repo"; exit 1
 fi
 _committed="$(mktemp)"
+# Single owning trap (ADR-129) — covers every exit path below, including the
+# STALE failure and any unexpected die between allocation and the diff.
+trap 'rm -f "$_committed"' EXIT
 cp "$OUT" "$_committed"
 
 bash "$GEN"
@@ -41,11 +44,9 @@ if ! diff -q "$_committed" "$OUT" >/dev/null 2>&1; then
   echo "FAIL: $OUT is STALE — it differs from what gen-models.sh produces."
   echo "      Run: bash $GEN   (and commit the result)"
   diff -u "$_committed" "$OUT" || true
-  rm -f "$_committed"
   exit 1
 fi
 echo "ok   committed artifact matches the generator (no drift)"
-rm -f "$_committed"
 
 check() {
   local needle="anthropic:messages:$1"
