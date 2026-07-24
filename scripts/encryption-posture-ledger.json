@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "live_coverage_floor": 1,
   "store_classes": {
     "hcloud_volume": { "kind": "guest-luks-volume", "mechanisms": ["luks", "plaintext-exception"] },
     "cloudflare_r2_bucket": { "kind": "provider-bucket", "mechanisms": ["provider-managed", "plaintext-exception"] }

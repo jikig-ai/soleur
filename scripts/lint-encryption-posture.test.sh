@@ -820,6 +820,204 @@ run_case_reports "MB-12: deleting the non-IaC store row -> FAIL positive-work fl
   --repo-sweep --repo-root "$REPO_MB12" --ledger "$LEDGER_MB12_BAD" --today "$TODAY"
 
 # ===========================================================================
+# Live-coverage floor (#6902 / ADR-141): an OPTIONAL top-level
+# `live_coverage_floor` integer. When >= 1, the ledger must retain at least
+# that many stores whose at_rest.live_verification == "available" — the one
+# coverage regression (zeroing out ALL live-measurable at-rest coverage) worth
+# blocking at PR time. It is a COUNT floor keyed on the ledger's own declared
+# value, NOT an identity pin, and it NO-OPs when the field is absent/0 — so
+# every fixture above (which omits the field) is unaffected. Hermetic: reads
+# only the committed ledger. CTO ruling (Option D) recorded in ADR-141.
+# ---------------------------------------------------------------------------
+REPO_LCF="$TMPDIR_TEST/lcf"  # deliberately empty: provider-managed store, no apps/ tree
+mkdir -p "$REPO_LCF"
+
+# AC3 pass-case: live_coverage_floor:1 AND one store with live_verification
+# "available" -> floor satisfied -> PASS. (Mirrors the MB-12 supabase shape,
+# which passes every other check; only live_verification differs.)
+LEDGER_LCF_OK="$TMPDIR_TEST/lcf-ok-ledger.json"
+write_file "$LEDGER_LCF_OK" <<'EOF'
+{
+  "schema_version": 1,
+  "live_coverage_floor": 1,
+  "store_classes": {},
+  "non_store_types": [],
+  "non_iac_stores": ["supabase.prd"],
+  "stores": [
+    {
+      "store": "supabase.prd",
+      "kind": "provider-db",
+      "at_rest": {
+        "mechanism": "provider-managed:Supabase-SOC2-Type-II",
+        "evidence": "Supabase trust center compliance page",
+        "attestation_url": "https://supabase.com/security",
+        "retrieved_on": "2026-06-01",
+        "defends_against": "a seized or decommissioned physical disk at the provider",
+        "does_not_defend": "a leaked service-role key or an RLS bypass",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "available"
+      }
+    }
+  ],
+  "connections": []
+}
+EOF
+run_case_reports "AC3 live-coverage floor: floor=1 with >=1 available -> PASS" 0 "encryption-posture:" \
+  --repo-sweep --repo-root "$REPO_LCF" --ledger "$LEDGER_LCF_OK" --today "$TODAY"
+
+# AC2 fail-case: identical ledger EXCEPT the single available row is flipped to
+# a valid "unavailable:<reason>" form -> 0 available < floor 1 -> FAIL. Because
+# live_verification feeds no other check (only the format validator), this is a
+# SINGLE-CAUSE failure — the exact-needle contract (R10) holds.
+LEDGER_LCF_BAD="$TMPDIR_TEST/lcf-bad-ledger.json"
+write_file "$LEDGER_LCF_BAD" <<'EOF'
+{
+  "schema_version": 1,
+  "live_coverage_floor": 1,
+  "store_classes": {},
+  "non_store_types": [],
+  "non_iac_stores": ["supabase.prd"],
+  "stores": [
+    {
+      "store": "supabase.prd",
+      "kind": "provider-db",
+      "at_rest": {
+        "mechanism": "provider-managed:Supabase-SOC2-Type-II",
+        "evidence": "Supabase trust center compliance page",
+        "attestation_url": "https://supabase.com/security",
+        "retrieved_on": "2026-06-01",
+        "defends_against": "a seized or decommissioned physical disk at the provider",
+        "does_not_defend": "a leaked service-role key or an RLS bypass",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:coverage-regression-fixture"
+      }
+    }
+  ],
+  "connections": []
+}
+EOF
+run_case_reports "AC2 live-coverage floor: floor=1 with 0 available -> FAIL" 1 \
+  "live-coverage floor" \
+  --repo-sweep --repo-root "$REPO_LCF" --ledger "$LEDGER_LCF_BAD" --today "$TODAY"
+
+# MB-13 non-vacuity: deleting the floor's fail branch flips the AC2-bad ledger
+# FAIL->PASS, proving the branch is load-bearing (not a vacuous assertion).
+run_mutation "MB-13" "MB-13" "$REPO_LCF" "$LEDGER_LCF_BAD"
+
+# Floor-absent no-op: a ledger that OMITS live_coverage_floor entirely with 0
+# available rows still PASSES (the field defaults to 0 -> floor inactive). This
+# is why the 7+ existing all-unavailable PASS fixtures are unaffected.
+LEDGER_LCF_ABSENT="$TMPDIR_TEST/lcf-absent-ledger.json"
+write_file "$LEDGER_LCF_ABSENT" <<'EOF'
+{
+  "schema_version": 1,
+  "store_classes": {},
+  "non_store_types": [],
+  "non_iac_stores": ["supabase.prd"],
+  "stores": [
+    {
+      "store": "supabase.prd",
+      "kind": "provider-db",
+      "at_rest": {
+        "mechanism": "provider-managed:Supabase-SOC2-Type-II",
+        "evidence": "Supabase trust center compliance page",
+        "attestation_url": "https://supabase.com/security",
+        "retrieved_on": "2026-06-01",
+        "defends_against": "a seized or decommissioned physical disk at the provider",
+        "does_not_defend": "a leaked service-role key or an RLS bypass",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:no probe in this fixture"
+      }
+    }
+  ],
+  "connections": []
+}
+EOF
+run_case_reports "live-coverage floor absent (field omitted) + 0 available -> PASS (no-op)" 0 \
+  "encryption-posture:" \
+  --repo-sweep --repo-root "$REPO_LCF" --ledger "$LEDGER_LCF_ABSENT" --today "$TODAY"
+
+# --- Boundary coverage: prove the guard is a FLOOR (`available < floor`), not
+# an equality pin (`!=`), and that it reads the DECLARED value (not a hardcoded
+# 1). Without these, `< floor` -> `!= floor` and `floor -> literal 1` mutants
+# survive (the fixtures above only ever evaluate at (floor,available) in
+# {(1,1),(1,0),(0,0)}, where `<` and `!=` are indistinguishable). Derived DRY
+# from LEDGER_LCF_OK so the store shape stays identical.
+
+# Over-coverage: floor=1 with TWO available stores -> PASS (kills `!= floor`,
+# which would false-FAIL legitimate over-coverage). The 2nd store also lifts the
+# positive-work floor to 2, so it needs a 2nd non_iac_stores catalog entry.
+LEDGER_LCF_OVER="$TMPDIR_TEST/lcf-over-ledger.json"
+python3 - "$LEDGER_LCF_OK" "$LEDGER_LCF_OVER" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["live_coverage_floor"] = 1
+s2 = json.loads(json.dumps(d["stores"][0]))
+s2["store"] = "supabase.dr"
+d["non_iac_stores"] = ["supabase.prd", "supabase.dr"]
+d["stores"] = [d["stores"][0], s2]  # both live_verification: available
+json.dump(d, open(sys.argv[2], "w"))
+PY
+run_case_reports "live-coverage floor: floor=1 with 2 available (over-coverage) -> PASS" 0 \
+  "encryption-posture:" \
+  --repo-sweep --repo-root "$REPO_LCF" --ledger "$LEDGER_LCF_OVER" --today "$TODAY"
+
+# Magnitude: floor=2 with only 1 available -> FAIL (proves the guard reads the
+# declared value, not a hardcoded 1).
+LEDGER_LCF_FLOOR2="$TMPDIR_TEST/lcf-floor2-ledger.json"
+python3 - "$LEDGER_LCF_OK" "$LEDGER_LCF_FLOOR2" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["live_coverage_floor"] = 2   # 1 available store < 2
+json.dump(d, open(sys.argv[2], "w"))
+PY
+run_case_reports "live-coverage floor: floor=2 with 1 available -> FAIL (magnitude)" 1 \
+  "live-coverage floor" \
+  --repo-sweep --repo-root "$REPO_LCF" --ledger "$LEDGER_LCF_FLOOR2" --today "$TODAY"
+
+# --- Validator coverage for the OPTIONAL_TOP type/range gate. Without these,
+# deleting `isinstance(lcf, bool)` (a JSON `true` read as floor 1) or the whole
+# non-negative-integer branch (a negative floor accepted) both survive.
+
+# bool `true` must be rejected (bool is an int subclass; the explicit guard
+# stops it being read as 1).
+LEDGER_LCF_BOOL="$TMPDIR_TEST/lcf-bool-ledger.json"
+python3 - "$LEDGER_LCF_OK" "$LEDGER_LCF_BOOL" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["live_coverage_floor"] = True
+json.dump(d, open(sys.argv[2], "w"))
+PY
+run_case_reports "live-coverage floor: bool true -> FAIL (non-negative integer)" 1 \
+  "non-negative integer" \
+  --repo-sweep --repo-root "$REPO_LCF" --ledger "$LEDGER_LCF_BOOL" --today "$TODAY"
+
+# negative must be rejected.
+LEDGER_LCF_NEG="$TMPDIR_TEST/lcf-neg-ledger.json"
+python3 - "$LEDGER_LCF_OK" "$LEDGER_LCF_NEG" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["live_coverage_floor"] = -1
+json.dump(d, open(sys.argv[2], "w"))
+PY
+run_case_reports "live-coverage floor: -1 -> FAIL (non-negative integer)" 1 \
+  "non-negative integer" \
+  --repo-sweep --repo-root "$REPO_LCF" --ledger "$LEDGER_LCF_NEG" --today "$TODAY"
+
+# floor=0 present-and-valid -> PASS (OPTIONAL_TOP allowance is reachable; 0 is
+# inactive so 0 available is fine).
+LEDGER_LCF_ZERO="$TMPDIR_TEST/lcf-zero-ledger.json"
+python3 - "$LEDGER_LCF_ABSENT" "$LEDGER_LCF_ZERO" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["live_coverage_floor"] = 0   # explicit 0, 0 available -> inactive -> PASS
+json.dump(d, open(sys.argv[2], "w"))
+PY
+run_case_reports "live-coverage floor: explicit 0 + 0 available -> PASS (positive control)" 0 \
+  "encryption-posture:" \
+  --repo-sweep --repo-root "$REPO_LCF" --ledger "$LEDGER_LCF_ZERO" --today "$TODAY"
+
+# ===========================================================================
 # Mode coverage: --check-templates, --json, graceful ledger-absent degrade,
 # explicit --ledger error, hermeticity.
 # ===========================================================================

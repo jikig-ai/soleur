@@ -134,6 +134,29 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    `cron-egress-nftables.sh`.
 4. **Fresh signing/event keys (SEC-H3).** `INNGEST_SIGNING_KEY`/`INNGEST_EVENT_KEY` are freshly
    minted for the new boundary, NOT reused from the co-located host. Blast radius documented below.
+
+   > **Amendment (2026-07-24, Ref #6178 cutover-502 — CORRECTS this decision).** Decision 4 was
+   > **wrong** to treat `INNGEST_EVENT_KEY` / `INNGEST_SIGNING_KEY` as isolation-sensitive and mint
+   > them **separately** per host. They are a **SHARED app↔host CHANNEL auth token**: the app
+   > (`inngest.send()` / the `serve()` handler) and the dedicated host authenticate the SAME channel
+   > with them, so they **MUST be common** across `soleur/prd` (the app) and `soleur-inngest/prd`
+   > (the host). The #6178 host-cutover minted fresh host keys per this decision but **never
+   > reconciled** them into `soleur/prd`; after the 2.4 app-repoint (`INNGEST_BASE_URL` →
+   > `http://10.0.1.40:8288`) every app-originated send to the host was rejected against the stale
+   > event key → the app route returned **HTTP 502** (`op=rearm` failed). The live fix copied the
+   > host's event+signing key values into `soleur/prd` (out-of-band, which the `ignore_changes=[value]`
+   > lifecycle on those `doppler_secret`s explicitly supports) and redeployed the web app.
+   >
+   > The isolation that actually matters — and **stays separate per host** — is **`INNGEST_POSTGRES_URI`
+   > + `SUPABASE_SERVICE_ROLE`** (Decision 5, the `soleur-inngest` project boundary): those grant
+   > data-plane access and must never be shared. The channel keys are auth for a shared message
+   > channel and confer no such access, so sharing them across the two projects widens nothing.
+   > **Durability (prevents recurrence):** `op=arm` now carries a **G3.5 channel-key parity HARD GATE**
+   > (cutover-inngest.yml) that sha256-compares the app vs host `INNGEST_EVENT_KEY`/`INNGEST_SIGNING_KEY`
+   > (value-silent, AC-NOBODY) and **refuses to arm the flip** if they diverge, with the reconcile +
+   > redeploy remediation. Because `soleur/prd`'s keys carry `ignore_changes=[value]`, reconcile is via
+   > the Doppler copy (or `terraform apply -replace=random_id.inngest_{event,signing}_key_dedicated`
+   > + copy) + a web redeploy — **not** a naive `terraform apply`. See runbook §2.4.
 5. **Secrets on a SEPARATE Doppler project `soleur-inngest`, not a `prd` branch config.** A branch
    config under `prd` resolves the environment's ROOT config as its base and would inherit all
    ~116 `soleur/prd` secrets incl. `SUPABASE_SERVICE_ROLE_KEY`

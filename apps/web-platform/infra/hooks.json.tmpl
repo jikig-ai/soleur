@@ -273,6 +273,7 @@
     }
   },
   {
+    "__comment": "#6919 — the op=verify HTTP 500 fix. The cutover arms forward the STARTED_AT window lower bound (from) and an optional functionIDs scope (function_ids) as URL query params so the wide default scan can be cost-cut without a code change. Both are read into the probe's env seams (INNGEST_DOUBLEFIRE_FROM / INNGEST_DOUBLEFIRE_FUNCTION_IDS). from MUST respect the window-superset invariant (FROM <= cutover_instant - 2*max_cron_period ~= 182d); the caller passes cutover-200d. HMAC is over the (empty) GET body, so query params do not affect the signature. Values are injection-safe: the script binds from via jq --arg and splits function_ids via jq -R.",
     "id": "inngest-doublefire-probe",
     "execute-command": "/usr/local/bin/inngest-doublefire-probe.sh",
     "command-working-directory": "/",
@@ -280,6 +281,10 @@
     "include-command-output-in-response-on-error": true,
     "http-methods": ["GET"],
     "trigger-rule-mismatch-http-response-code": 403,
+    "pass-environment-to-command": [
+      { "source": "url", "name": "from", "envname": "INNGEST_DOUBLEFIRE_FROM" },
+      { "source": "url", "name": "function_ids", "envname": "INNGEST_DOUBLEFIRE_FUNCTION_IDS" }
+    ],
     "trigger-rule": {
       "match": {
         "type": "payload-hmac-sha256",
