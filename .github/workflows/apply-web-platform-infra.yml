@@ -79,12 +79,22 @@ on:
         description: "Why are you applying? (e.g. transient retry, or the dispatch reason)"
         required: true
         type: string
-      # Typo-guard for the destructive `workspaces-luks-recut` path ONLY (ignored by every other
-      # target). NOT the authorization — the `environment: workspaces-luks-cutover` reviewer gate on
-      # that job is the sole human authorization (DP-11 F8). Mirrors workspaces-luks-cutover.yml's
-      # `confirm` typo-guard.
+      # NOTE on the input budget: `workflow_dispatch` caps at 10 inputs; 5 are used. The next
+      # per-target input pair should split its target into a DEDICATED workflow rather than
+      # spend two more slots here (precedent: workspaces-luks-cutover.yml; the concurrency group
+      # is a shared literal and survives the split).
+      #
+      # Typo-guard for the two destructive recut paths (ignored by every other target). It is NOT
+      # the authorization:
+      #   * workspaces-luks-recut — the `environment: workspaces-luks-cutover` reviewer gate on
+      #     that job is the sole human authorization (DP-11 F8).
+      #   * registry-luks-recut (#6929) — that job has NO `environment:` (like all four
+      #     host-replace/migrate jobs); its authorization is the menu-ack dispatch itself
+      #     (hr-menu-option-ack-not-prod-write-auth), and this token only guards a mis-dispatch.
+      # Each job accepts only its OWN literal, so a token typed for one target cannot authorize
+      # the other.
       confirm:
-        description: "For apply_target=workspaces-luks-recut ONLY: type RECUT-WORKSPACES-LUKS to authorize the destructive volume replace (typo-guard, NOT the authorization)."
+        description: "For the two *-luks-recut targets ONLY: type RECUT-WORKSPACES-LUKS or RECUT-REGISTRY-LUKS to authorize the destructive volume replace (typo-guard, NOT the authorization)."
         required: false
         type: string
       # For apply_target=workspaces-luks-recut ONLY. The Hetzner id of the ORPHANED LUKS volume the
@@ -94,7 +104,23 @@ on:
       # workspaces_luks ADDRESS onto the LIVE volume's physical id cannot silently destroy live data
       # (user-impact-reviewer P2, #6855). Ignored by every other target.
       expected_luks_volume_id:
-        description: "For apply_target=workspaces-luks-recut ONLY: the numeric Hetzner id of the orphaned LUKS volume to destroy (id-pin — the gate refuses to replace a different physical volume)."
+        description: "[workspaces-luks-recut] the numeric Hetzner id of the orphaned WORKSPACES LUKS volume to destroy (id-pin — the gate refuses to replace a different physical volume)."
+        required: false
+        type: string
+      # For apply_target=registry-luks-recut ONLY (#6929). The Hetzner id of the CURRENT zot store
+      # volume the operator intends to destroy. Distinctly named from expected_luks_volume_id
+      # (which is the WORKSPACES volume) — sharing one id input across two targets would make the
+      # wrong-volume mis-dispatch a typo rather than an impossibility.
+      #
+      # PROVENANCE — read it from the Hetzner API, NOT from a drift run's log:
+      #   curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
+      #     'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'
+      # scheduled-terraform-drift.yml captures its plan into a command substitution, so the
+      # `Refreshing state... [id=...]` line NEVER reaches the step log; `gh run view` shows only
+      # the drift verdict. The API read is one bounded command and is independent of the
+      # terraform state the id-pin exists to guard.
+      expected_registry_store_volume_id:
+        description: "[registry-luks-recut] the numeric Hetzner id of the zot store volume to destroy (id-pin — the gate refuses to replace a different physical volume). Read it from the Hetzner API, not from a drift run."
         required: false
         type: string
       # `manual-rerun` (default) preserves the historical escape-hatch behavior EXACTLY
@@ -112,7 +138,21 @@ on:
       # knowledge-base/engineering/operations/runbooks/ -- see web-host-birth.md). web-1 still has no
       # automated birth path — that HALT is tracked by #6730, not by these targets.
       apply_target:
-        description: "Which apply path? manual-rerun (default, allow-list re-run) | inngest-host (additive net-new inngest host + secrets) | inngest-host-replace (scoped -replace of the inngest host to re-run cloud-init; preserves the Redis AOF volume) | registry-host-replace (scoped -replace of the registry host to re-run cloud-init + apply any pending volume resize; preserves the zot storage volume) | registry-region-migrate (#6288: move the registry to var.registry_location + recreate the store volume in the new region — the store is a disposable GHCR mirror that re-fills from GHCR; scoped, guarded, no out-of-scope destroys) | git-data-host-replace (scoped -replace of the git-data host to re-run cloud-init; preserves BOTH data volumes + the LUKS passphrase; #6242) | workspaces-luks-cutover (#6604: FIRST-PROVISION +create of the five workspaces_luks resources — the encrypted volume + attachment + passphrase/secret/token — gate-guarded so it touches NEITHER the live plaintext /mnt/data volume/attachment NOR the web-1 server; the freeze/rsync/repoint runs from the separate environment-gated workspaces-luks-cutover.yml) | workspaces-luks-recut (#6855/#6812: scoped -replace of hcloud_volume.workspaces_luks + its attachment to DESTROY the dead-man-orphaned LUKS volume [discarding the operator-accepted 27-min window] and create a FRESH RAW replacement so the cutover luksFormats it; environment-gated + typed confirm=RECUT-WORKSPACES-LUKS; gate-guarded so it touches NEITHER the live plaintext volume/attachment NOR web-1, and reuses the passphrase)"
+        # Rendered as the FIELD LABEL above the dropdown — the last thing a non-technical operator
+        # reads before firing a destructive apply. Kept as a short pointer at the runbooks: the
+        # previous form was 1574 characters on ONE physical line, which no one reads and whose
+        # every edit produced an unreviewable whole-line diff. (Evidence that it went unread: its
+        # registry-region-migrate clause carried the "re-fills from GHCR" wording corrected
+        # elsewhere in this very change.) Per-target detail now lives in each job's header
+        # comment and in knowledge-base/engineering/operations/runbooks/.
+        description: >-
+          Which apply path? manual-rerun (default) | inngest-host | inngest-host-replace |
+          registry-host-replace | registry-region-migrate | registry-luks-recut |
+          git-data-host-replace | workspaces-luks-cutover | workspaces-luks-recut |
+          registry-ruleset-entrypoint-audit. DESTRUCTIVE targets need `confirm` and an id-pin —
+          see the runbook for the target you are firing. registry-luks-recut DESTROYS the zot
+          store (a disposable GHCR mirror); do NOT use registry-host-replace for that — it
+          preserves the volume and darks the registry.
         required: false
         default: manual-rerun
         type: choice
@@ -122,6 +162,7 @@ on:
           - inngest-host-replace
           - registry-host-replace
           - registry-region-migrate
+          - registry-luks-recut
           - git-data-host-replace
           - workspaces-luks-cutover
           - workspaces-luks-recut
@@ -501,7 +542,7 @@ jobs:
             echo "::error::  • ANY hcloud_server.web[*] / its volume → there is NO automated path. Every route that could reach hcloud_server.web HALTs: this job (#6416), apply-deploy-pipeline-fix.yml (#6718) and workspaces-luks-cutover (gate requires zero actions on the web-1 server). Use the operator-local full apply below, run through the PINNED-IMAGE CHAIN at the end of this message."
             echo "::error::    This no-automated-web-host-birth state violates hr-fresh-host-provisioning-reachable-from-terraform-apply and is tracked by #6730 — that issue owns closing it. Scope: WEB hosts only (inngest-host below does birth a host, and the registry/git-data paths are scoped -replace)."
             echo "::error::  • hcloud_server.inngest → dispatch '-f apply_target=inngest-host'."
-            echo "::error::  • hcloud_server.registry → NO dispatch creates it (registry-host-replace and registry-region-migrate are both scoped -replace and need the resource already in state). Run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) BEFORE merging."
+            echo "::error::  • hcloud_server.registry → no dispatch creates it FROM AN EMPTY ROOT, but two dispatches CAN re-create a registry host that is absent from state: 'registry-region-migrate' (a pure create in the new region) and 'registry-luks-recut' (its resume arm, admitted only by a live Hetzner probe). Both are gated by out_of_scope==0 over the registry's own 6-member allow-set, so neither can birth the fleet's other resources. If the registry host is missing ALONGSIDE out-of-scope resources, that is a from-empty root: run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) BEFORE merging."
             echo "::error::  • a legitimate new host (e.g. web-3 added to var.web_hosts) → NO dispatch creates it either. The reason is the host_creates HALT on each of the three enumerated routes above. That HALT is NOT inherited: it is a separate inline copy per workflow (plus a distinct sourced gate for the luks cutover), and it lives in the apply job, whose if: guard is mutually exclusive with every dispatch job. A NEW dispatch job inherits nothing and MUST add its own guard. It needs an operator-local full apply BEFORE the code merges, or EVERY subsequent merge HALTs here — not just this PR's."
             echo "::error::PINNED-IMAGE CHAIN — run this BEFORE any operator-local apply that CREATES a web host. A create bakes var.image_name into user_data; the mutable ':latest' can resolve to an image whose baked /opt/soleur/host-scripts disagree with this tree, and the new host then aborts cloud-init at STAGE=verify and never serves (ADR-080). Pin a digest and prove coherence first:"
             echo "::error::    DIGEST=\$(crane digest ghcr.io/jikig-ai/soleur-web-platform:latest)   # any OCI digest reader works; crane is not preinstalled — go install github.com/google/go-containerregistry/cmd/crane@latest"
@@ -1700,6 +1741,356 @@ jobs:
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Selected by `-f apply_target=registry-luks-recut` (#6929, ADR-096 amendment 2026-07-24).
+  #
+  # THE SANCTIONED VEHICLE FOR THE GUEST-SIDE-LUKS RECUT, and the removal of a live footgun.
+  # The 2026-07-24 change made hcloud_volume.registry a RAW device: cloud-init discriminates on
+  # `blkid TYPE` — "" (fresh) -> luksFormat; crypto_LUKS -> reuse; ANY OTHER TYPE -> FATAL.
+  # The live volume is still PLAINTEXT ext4, i.e. in that third arm.
+  #
+  # So `registry-host-replace` MUST NOT be used for this: it PRESERVES the volume, so the
+  # replaced host boots against the still-plaintext device, refuses it, and DARKS THE REGISTRY.
+  # Forgetting the `-replace` on the volume does the same. This job performs the recut as ONE
+  # ATOMIC APPLY, `-replace`ing the volume + its attachment + the server TOGETHER, so a fresh raw
+  # volume meets the empty arm and gets luksFormatted; zot then re-fills from GHCR.
+  #
+  # NO `environment:` — like all four host-replace/migrate jobs (only workspaces-luks-recut has
+  # one, because it touches sole-copy /mnt/data). An `environment:` naming an UNPROVISIONED
+  # GitHub environment silently AUTO-APPROVES (DP-11 F8), so declaring one here would add the
+  # APPEARANCE of a reviewer gate without the gate. Authorization is the menu-ack dispatch plus
+  # the typed confirm; CODEOWNERS gates this file.
+  #
+  # NO job-level `concurrency:` — it inherits the workflow-level
+  # `terraform-apply-web-platform-host` group, which is the verified-complete serializer for the
+  # LOCK-LESS R2 backend (`cancel-in-progress: false` also prevents a cancel mid-destroy).
+  #
+  # `timeout-minutes: 30` is load-bearing: this job holds that fleet-wide apply mutex, so
+  # GitHub's 360-minute default would let a hung poll block EVERY merge-apply for six hours.
+  # The D11 poller's own bound (150s + 480s) is strictly below it so its diagnostic wins over an
+  # opaque cancellation.
+  registry_luks_recut:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Validate typed confirm + id-pin
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          EXPECTED_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
+        # Inputs via env:, never inline ${{ }} in run: — an inline expansion is a command
+        # injection surface. Both values are operator-typed.
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM" != "RECUT-REGISTRY-LUKS" ]]; then
+            echo "::error::registry-luks-recut requires confirm=RECUT-REGISTRY-LUKS (typo-guard). This DESTROYS the zot store volume. Note the workspaces recut uses a DIFFERENT literal — a token typed for that target cannot authorize this one."
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_VOLUME_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::registry-luks-recut requires expected_registry_store_volume_id=<numeric Hetzner id of the zot store volume>. The gate PINS the replaced volume's before.id to this value, so a state corruption that mapped this ADDRESS onto a different physical volume cannot silently destroy it."
+            echo "::error::Read it with ONE bounded command (NOT from a drift run — that log never contains the id):"
+            echo "::error::  curl -s -H \"Authorization: Bearer \$HCLOUD_TOKEN\" 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
+            exit 1
+          fi
+          echo "confirm + id-pin accepted (volume id ${EXPECTED_VOLUME_ID})."
+
+      - name: Pre-destroy pull-path health gate (D10)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # The recut destroys the store. That is only acceptable because GHCR covers the
+        # empty-store window — so refuse to destroy it while the covering path is ITSELF
+        # degraded (that would create the #6400 total-deploy outage rather than tolerate a
+        # window). Zero-tolerance: a healthy fleet emits ONLY registry=zot.
+        #
+        # Queries SENTRY, not Better Stack: registry_pull_event emits to the Sentry store API
+        # and to WEB-host journald, and Better Stack's only ingested source here is the INNGEST
+        # vector feed — so the Better Stack query this gate was originally specified as could
+        # never return a row (measured, #6929 Phase 0.2). A gate that can only be green is worse
+        # than no gate, because it is read as evidence.
+        run: |
+          set -euo pipefail
+          SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd_terraform --plain) || SENTRY_AUTH_TOKEN=""
+          if [[ -z "$SENTRY_AUTH_TOKEN" ]]; then
+            echo "::error::registry-luks-recut D10 ABORT: cannot read SENTRY_AUTH_TOKEN from Doppler (prd_terraform) — cannot PROVE the GHCR fallback path is healthy. Fail-closed: an unreadable signal is not evidence of health."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$SENTRY_AUTH_TOKEN"
+          export SENTRY_AUTH_TOKEN
+          bash "${GITHUB_WORKSPACE}/scripts/registry-pull-path-health.sh" --since-hours 24
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
+        # satisfies var.ssh_key_path (never consumed by the scoped registry recut).
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."
+            exit 1
+          }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."
+            exit 1
+          }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Terraform plan (atomic 3-way recut) + destroy-guard
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          EXPECTED_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
+        # THE THREE -replace FLAGS ARE THE POINT. Replacing the volume alone leaves the old host
+        # mounting a device that no longer exists; replacing the host alone preserves the
+        # plaintext volume and hits the blkid FATAL. They move TOGETHER or not at all.
+        run: |
+          set -uo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -replace='hcloud_volume.registry' \
+              -replace='hcloud_volume_attachment.registry' \
+              -replace='hcloud_server.registry' \
+              -target='hcloud_server.registry' \
+              -target='hcloud_server_network.registry' \
+              -target='hcloud_volume_attachment.registry' \
+              -target='hcloud_firewall_attachment.registry' \
+              -target='hcloud_volume.registry' \
+              -target='doppler_secret.registry_betterstack_logs_token' \
+              -var="ssh_key_path=${CI_SSH_PUB}"
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (registry-luks-recut) failed (exit $rc)."
+            exit $rc
+          fi
+          set -e
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
+
+          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gates run
+          # OUTSIDE the `doppler run` wrapper above — without this read they fail-close on EVERY
+          # dispatch (an outage, not a tripwire). Doppler-fetched secrets are NOT auto-masked by
+          # Actions (unlike secrets.*); this one carries destroy authority over the whole fleet.
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::registry-luks-recut ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot run the live existence probe or PROVE stock. Fail-closed."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+
+          # D4 LIVE EXISTENCE PROBE — the resume arm's sole admission evidence.
+          # A mid-apply failure leaves a plan with NO deletes (everything already destroyed),
+          # which by SHAPE is indistinguishable from a from-empty BIRTH. The probe is the one
+          # check whose evidence is INDEPENDENT of the terraform state the gate is guarding:
+          #   200 => the pinned volume still EXISTS => a bare create is wrong; `terraform import`.
+          #   404 => genuinely gone => a resume is legitimate.
+          PROBE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+            -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+            "https://api.hetzner.cloud/v1/volumes/${EXPECTED_VOLUME_ID}" 2>/dev/null) || PROBE_STATUS="000"
+          case "$PROBE_STATUS" in
+            404) PROBE_RESULT="absent" ;;
+            200) PROBE_RESULT="present" ;;
+            *)   PROBE_RESULT="unknown-${PROBE_STATUS}" ;;
+          esac
+          echo "hetzner volume ${EXPECTED_VOLUME_ID} existence probe: HTTP ${PROBE_STATUS} => ${PROBE_RESULT}"
+
+          # Sourced gate — the SAME bytes tests/scripts/test-registry-luks-recut-gate.sh exercises.
+          # shellcheck source=tests/scripts/lib/registry-luks-recut-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/registry-luks-recut-gate.sh"
+          if ! registry_luks_recut_gate tfplan.json "$EXPECTED_VOLUME_ID" "$PROBE_RESULT"; then
+            echo "::error::registry-luks-recut destroy-guard ABORTED. The counter line above names the failing check; each has a named exit in knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md:"
+            echo "::error::  • volume_provisioned=0 → the plan PRESERVES the store volume. That is the registry-host-replace footgun: the host would boot cloud-init against the still-plaintext device and FATAL. Re-dispatch with all three -replace flags (this job supplies them; a 0 here means the resource is absent from the -target set or already replaced)."
+            echo "::error::  • volume_id_mismatch=1 → the address resolves to a DIFFERENT physical volume than you authorized, or the plan carries no before.id. STOP and reconcile terraform state — do not re-fire with a different id until you know why."
+            echo "::error::  • luks_key_touched=1 → the isolated Doppler config lacks the key, so terraform wants to create/update it. Run the operator's untargeted apply per the OPERATOR_APPLIED_EXCLUSIONS contract so the key lands, then re-dispatch."
+            echo "::error::  • logs_secret_destroyed=1 → the fresh host would brick (the 3-secret boot guard FATALs without BETTERSTACK_LOGS_TOKEN). Reconcile the plan."
+            echo "::error::  • out_of_scope>0 → the plan touches a resource outside the registry's own 6. NEVER widen the allow-set (#6497) — reconcile the plan. This is the only barrier protecting web-1 and the sole /mnt/data volume in this lock-less shared state."
+            echo "::error::NO [ack-destroy] bypass on this path."
+            grep -E 'will be destroyed|must be replaced|will be created|Plan:' tfplan.txt | head -40 >&2
+            exit 1
+          fi
+
+          # #6453 STOCK preflight — the guard above proves the plan's SHAPE; it cannot prove the
+          # create is FEASIBLE. Destroy-then-create ordering means no stock => the registry is
+          # destroyed and the new one never lands (#6393 -> ~10h prod deploy freeze, #6400).
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            echo "::error::registry-luks-recut stock-preflight ABORTED: the registry's server_type is not orderable in its location (see the ::error:: lines above). Refusing to apply — NOTHING has been destroyed. Wait for stock and re-fire, or if the type is unavailable in this region generally, use registry-region-migrate. NO [ack-destroy] bypass on this path."
+            exit 1
+          fi
+          echo "registry-luks-recut plan is the exact scoped recut. Plan summary:"
+          grep -E '^Plan:' tfplan.txt || true
+
+      - name: Pre-apply zero-touch assert (web-1 + workspaces)
+        working-directory: ${{ env.INFRA_DIR }}
+        # BEFORE the apply, deliberately. These addresses are the other tenants of the shared,
+        # lock-less state, and an assertion that runs AFTER the mutation — from the same
+        # tfplan.json the gate already read — adds no information and can prevent nothing.
+        run: |
+          set -euo pipefail
+          rc=0
+          for addr in 'hcloud_server.web["web-1"]' 'hcloud_volume.workspaces["web-1"]' 'hcloud_volume_attachment.workspaces["web-1"]'; do
+            n=$(jq --arg a "$addr" '[.resource_changes[]?
+              | select(.address == $a)
+              | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"))] | length' tfplan.json)
+            if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+              echo "::error::zero-touch assert: could not parse an action count for ${addr} — fail-closed."
+              rc=1
+            elif [[ "$n" != "0" ]]; then
+              echo "::error::zero-touch assert FAILED: ${addr} has ${n} positive action(s) in this plan. This dispatch must NEVER touch web-1 or the sole-copy /mnt/data volume. Refusing to apply."
+              rc=1
+            else
+              echo "zero-touch ok: ${addr}"
+            fi
+          done
+          exit "$rc"
+
+      - name: Terraform apply (atomic recut) — completeness backstop
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false tfplan; then
+            echo "::error::terraform apply (registry-luks-recut) failed mid-recut — the registry may be DOWN and the store may already be destroyed. GHCR fallback covers serving. RE-DISPATCH registry-luks-recut with the SAME confirm and the SAME id: the resume arm covers all three mid-apply windows and is admitted by the live Hetzner probe, so no extra flag is needed."
+            exit 1
+          fi
+          # Post-apply completeness, from the SAVED plan (belt-and-suspenders to the guard).
+          SERVER_CREATES=$(jq '[.resource_changes[]? | select(.address == "hcloud_server.registry") | select(.change.actions? | index("create"))] | length' tfplan.json)
+          VOL_CREATES=$(jq '[.resource_changes[]? | select(.address == "hcloud_volume.registry") | select(.change.actions? | index("create"))] | length' tfplan.json)
+          if [[ "$SERVER_CREATES" == "0" || "$VOL_CREATES" == "0" ]]; then
+            echo "::error::applied plan did not CREATE the registry server (${SERVER_CREATES}) + fresh store volume (${VOL_CREATES}). This should have been caught by the guard; failing hard."
+            exit 1
+          fi
+          echo "registry host + FRESH RAW store volume provisioned (server_creates=${SERVER_CREATES} volume_creates=${VOL_CREATES}); cloud-init luksFormats the empty device."
+
+      - name: Post-apply liveness assert (D11)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # The store is destroyed at apply-return, so there is no rollback target — the only thing
+        # left to do is tell the operator the truth. Requires a heartbeat TRANSITION, not a level:
+        # the monitor reports the DEAD host's residual `up` for ~90s and exposes no last_ping_at,
+        # so a naive first-`up`-wins poll would go green over a dark registry every time.
+        run: |
+          set -euo pipefail
+          terraform show -json > /tmp/registry-tfstate.json
+          BETTERSTACK_API_TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN -p soleur -c prd_terraform --plain) || BETTERSTACK_API_TOKEN=""
+          if [[ -z "$BETTERSTACK_API_TOKEN" ]]; then
+            echo "::error::registry-luks-recut D11 ABORT: cannot read BETTERSTACK_API_TOKEN — cannot verify the registry came back. The store is already destroyed; verify by hand before trusting this recut."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$BETTERSTACK_API_TOKEN"
+          export BETTERSTACK_API_TOKEN
+          bash "${GITHUB_WORKSPACE}/scripts/registry-heartbeat-poll.sh" /tmp/registry-tfstate.json
+
+      - name: Best-effort registry disk heartbeat status (non-gating)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # INFORMATIONAL only — swallows every error so a status lookup can never fail a prod
+        # apply. The GATING liveness check is the D11 step above.
+        run: |
+          set +e
+          STATUS="unavailable (lookup failed or not yet ingested)"
+          TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN --plain 2>/dev/null)
+          if [[ -n "$TOKEN" ]]; then
+            printf '::add-mask::%s\n' "$TOKEN"
+            BODY=$(curl -fsS --max-time 10 -H "Authorization: Bearer ${TOKEN}" \
+              https://uptime.betterstack.com/api/v2/heartbeats 2>/dev/null)
+            if [[ -n "$BODY" ]]; then
+              S=$(printf '%s' "$BODY" | jq -r '.data[]? | select(.attributes.name=="soleur-registry-disk-prd") | .attributes.status' 2>/dev/null | head -1)
+              [[ -n "$S" ]] && STATUS="$S"
+            fi
+          fi
+          {
+            echo "## registry disk heartbeat (best-effort, non-gating)"
+            echo ""
+            echo "\`soleur-registry-disk-prd\` status: **${STATUS}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Dispatch summary
+        if: always()
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          REASON: ${{ inputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          OLD_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
+        # Emits the NEW volume id. Read from terraform state, NOT from tfplan.json: a
+        # known-after-apply create has no .after.id in the plan. Without this line the NEXT recut
+        # is blocked until someone re-reads the id from the Hetzner API.
+        run: |
+          set +e
+          NEW_VOLUME_ID="(unavailable)"
+          if terraform show -json > /tmp/registry-tfstate-summary.json 2>/dev/null; then
+            V=$(jq -r '.values.root_module.resources[]? | select(.address=="hcloud_volume.registry") | .values.id' /tmp/registry-tfstate-summary.json 2>/dev/null | head -1)
+            [[ -n "$V" && "$V" != "null" ]] && NEW_VOLUME_ID="$V"
+          fi
+          {
+            echo "## registry-luks-recut (#6929, ADR-096)"
+            echo ""
+            echo "**Dispatch reason:** ${REASON:-n/a}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Run:** ${RUN_URL}"
+            echo ""
+            echo "**Old store volume id (destroyed):** \`${OLD_VOLUME_ID:-n/a}\`"
+            echo "**NEW store volume id:** \`${NEW_VOLUME_ID}\` — record this; any follow-up recut needs it as the id-pin."
+            echo ""
+            echo "### The store is EMPTY, and that PAGES"
+            echo ""
+            echo "The fresh volume is luksFormatted and empty, so pulls fall through to GHCR until the next CI dual-push re-mirrors. Those fallbacks emit \`registry_pull_event registry=ghcr-fallback\` at level=warning, which is wired to the \`zot_mirror_fallback_rate\` Sentry alert — so this window PAGES, and nothing the operator controls bounds it."
+            echo ""
+            echo "Force the re-mirror now:"
+            echo ""
+            echo '```'
+            echo "gh workflow run web-platform-release.yml -f bump_type=patch"
+            echo '```'
+            echo ""
+            echo "_Prefer firing this recut immediately BEFORE a planned release, so the window is bounded by a dual-push you control._"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
 
   # Selected by `-f apply_target=git-data-host-replace` (#6242, ADR-103). git-data.tf +
   # git-data-luks.tf + network.tf resources are OPERATOR_APPLIED_EXCLUSIONS (ADR-068) —

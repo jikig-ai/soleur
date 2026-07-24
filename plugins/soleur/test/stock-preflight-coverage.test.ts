@@ -107,9 +107,13 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
   ],
 ]);
 
-// Sentinel: 9 options today (manual-rerun, inngest-host, inngest-host-replace,
-// registry-host-replace, registry-region-migrate, git-data-host-replace,
-// workspaces-luks-cutover, workspaces-luks-recut, entrypoint-audit).
+// Sentinel: 10 options today (manual-rerun, inngest-host, inngest-host-replace,
+// registry-host-replace, registry-region-migrate, registry-luks-recut,
+// git-data-host-replace, workspaces-luks-cutover, workspaces-luks-recut,
+// entrypoint-audit). registry-luks-recut (#6929) is NOT exempt — it destroys and
+// re-creates hcloud_server.registry, so it runs stock_preflight_gate like its two
+// registry siblings; no stock in the location means the host is destroyed and the
+// replacement never lands.
 // reason: 9 -> 7. warm-standby and web-2-recreate were REMOVED with the web-2
 // dispatch sweep (#6575, 2026-07-20) after web-2 retired; both hard--targeted
 // addresses that no longer exist. This floor is lowered to match a real deletion,
