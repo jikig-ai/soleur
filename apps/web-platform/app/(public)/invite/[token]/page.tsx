@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -64,7 +65,7 @@ export default async function InvitePage({ params }: Props) {
       <div className="w-full max-w-md rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-8">
         <div className="mb-6 text-center">
           <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center overflow-hidden rounded-full">
-            <img
+            <Image
               src="/icons/soleur-logo-mark.png"
               alt="Soleur"
               width={48}
