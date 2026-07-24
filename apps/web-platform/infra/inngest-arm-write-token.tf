@@ -17,11 +17,13 @@
 # (a session-pooler DSN granting direct read/write to the inngest Postgres). It MUST be
 # revoked post-cutover — see the runbook lifecycle step + Rotation below.
 #
-# Distinct from the READ-only host-boot token `doppler_service_token.inngest`
-# ("inngest-boot", inngest-host.tf:173-178): different name ("inngest-cutover-arm"),
-# access (read/write vs read), and consumer (CI vs the host cloud-init). This is the FIRST
-# CI-consumed read/write token into the isolated soleur-inngest project — prior tokens there
-# are read-only host-boot. CI can now WRITE soleur-inngest/prd (ADR-100 Decision 6b).
+# Distinct from the host-boot token `doppler_service_token.inngest` ("inngest-boot"):
+# different name ("inngest-cutover-arm") and consumer (CI vs the host cloud-init). Both are
+# read/write on soleur-inngest/prd as of #6178 — the host-boot token gained write so the
+# flip FSM can advance INNGEST_CUTOVER_FLIP on-host (inngest-cutover-flip.sh:flag_set) — so
+# the tokens no longer differ by ACCESS, only by name+consumer. This is the FIRST CI-consumed
+# read/write token into the isolated soleur-inngest project; the host-boot token is the
+# host-consumed one. CI can now WRITE soleur-inngest/prd (ADR-100 Decision 6b).
 #
 # By-reference project/config (NOT the soleur-inngest / prd string literals): this builds
 # the Terraform dependency edge onto doppler_project.inngest + doppler_environment.inngest_prd,

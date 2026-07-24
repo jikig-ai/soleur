@@ -54,19 +54,28 @@ fi
 #     FIRST transition (flag_set flipping), so the dedicated scheduler can never complete the
 #     flip. Extract the access value from the token resource block specifically (not a bare
 #     file-wide grep that a comment could satisfy), so a silent revert to "read" red-lines CI.
+#     The awk SKIPS in-block comment lines and requires `access` at STATEMENT position
+#     (^[[:space:]]*access) — a bare `access[[:space:]]*=` match plus no comment-skip is
+#     defeated by an in-block decoy comment (`# access = "read/write"`) sitting above the real
+#     read-only attribute (awk matches the comment first, prints read/write, exits green).
 TOKEN_ACCESS="$(awk '
-  /resource "doppler_service_token" "inngest"/ { inblk=1 }
-  inblk && /access[[:space:]]*=/ { gsub(/[",]/,""); print $NF; exit }
+  /resource "doppler_service_token" "inngest"/ { inblk=1; next }
+  inblk && /^[[:space:]]*#/ { next }
+  inblk && /^[[:space:]]*access[[:space:]]*=/ { gsub(/[",]/,""); print $NF; exit }
   inblk && /^}/ { exit }
 ' "$HOST_TF")"
 [[ "$TOKEN_ACCESS" == "read/write" ]] \
   && pass || fail "doppler_service_token.inngest access must be 'read/write' so the flip FSM can write INNGEST_CUTOVER_FLIP (got '${TOKEN_ACCESS:-<none>}'); a read-only token boot-fails the flip at its first transition (#6178)"
 # Cross-check: the flip script's flag_set genuinely writes under the ambient (boot-token) env —
 # if flag_set ever grows an explicit --token, this test's premise (boot token authorizes the
-# write) must be re-derived rather than trusted.
-grep -qE 'doppler secrets set INNGEST_CUTOVER_FLIP' "${DIR}/inngest-cutover-flip.sh" \
-  && ! grep -qE 'doppler secrets set INNGEST_CUTOVER_FLIP.*--token' "${DIR}/inngest-cutover-flip.sh" \
-  && pass || fail "flip flag_set must write INNGEST_CUTOVER_FLIP under the ambient boot token (no explicit --token) — else the read/write requirement above is testing the wrong credential"
+# write) must be re-derived rather than trusted. Scope to the WHOLE flag_set function body
+# (awk between `flag_set() {` and the closing `}`), not a single line — the real write spans
+# two physical lines (`doppler secrets set … \` then `  --project … --silent`), so a --token
+# added on the continuation line would evade a line-scoped grep.
+FLAG_SET_BODY="$(awk '/^flag_set\(\)[[:space:]]*\{/{i=1} i{print} i&&/^\}/{exit}' "${DIR}/inngest-cutover-flip.sh")"
+printf '%s\n' "$FLAG_SET_BODY" | grep -qE 'doppler secrets set INNGEST_CUTOVER_FLIP' \
+  && ! printf '%s\n' "$FLAG_SET_BODY" | grep -qE -- '--token' \
+  && pass || fail "flip flag_set must write INNGEST_CUTOVER_FLIP under the ambient boot token (no explicit --token anywhere in the function body) — else the read/write requirement above is testing the wrong credential"
 
 # 2. Separate Doppler PROJECT (AC3), not a prd branch config.
 grep -qE 'resource "doppler_project" "inngest"' "$HOST_TF" \
