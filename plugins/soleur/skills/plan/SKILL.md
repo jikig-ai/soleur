@@ -562,6 +562,33 @@ If the plan makes or changes an **architectural decision**, the ADR write and th
 
 **Why:** 2026-06-16 ADR-044 workspace-connection brainstorm (#5437) — the always-enforce-workspace decision and its C4 connection-owner edge were initially filed as a *deferred* follow-up issue (#5440) instead of being part of the plan. The operator corrected it: the ADR/C4 update is intrinsic to the architectural change and must ship with it. No prior plan-time gate required producing (vs reading) an ADR. See `knowledge-base/project/learnings/2026-06-16-adr-c4-update-is-a-plan-deliverable-not-a-deferred-issue.md`.
 
+### 2.11. Encryption Posture Gate
+
+[skill-enforced: plan Phase 2.11 + deepen-plan Phase 4.10]
+
+Every plan that introduces a persistent data store (a Hetzner volume, an R2 bucket, a Supabase table, a queue, a cache, a backup target, a log sink) or a new cross-component/network connection MUST emit a `## Encryption Posture` section using the field set below. "The provider handles it" and "the provider supports TLS" are not postures — they are the absence of one.
+
+**Detection** (the plan's Files-to-Create/Edit match, OR the prose names a store class / a new cross-component connection):
+
+- `\.tf$`
+- `supabase/migrations/.*\.sql$`
+- `cloud-init.*\.ya?ml$`
+- `docker-compose.*\.ya?ml$`
+
+**Required schema (verbatim from `plan-issue-templates.md`):**
+
+```yaml
+at_rest:          # per store: mechanism / evidence / defends_against / does_not_defend / disclosed_as / live_verification
+in_transit:       # per connection: tls / cert_verification (on|off) / does_not_defend / disclosed_as
+exception:        # present ONLY when mechanism is plaintext-exception OR cert_verification is off — justification / tracking_issue / reevaluate_when / expires_on
+```
+
+**Reject conditions** (enforced at deepen-plan Phase 4.10 — see `deepen-plan/SKILL.md`): section missing entirely while detection fires; a required field empty or matching the placeholder ban-list; `mechanism` or `at_rest` prose reading "the provider handles it" / "encrypted by default" with no named attestation / "supports TLS"; `does_not_defend` empty or "none"/"n/a"; a `plaintext-exception` or `cert_verification: off` row with no `exception` block, or one missing `tracking_issue` / `expires_on`.
+
+**Skip silently** when the plan introduces no persistent store and no new cross-component connection — pure UI/docs/dependency-bump plans, or a change confined to an already-provisioned surface.
+
+**Why:** ADR-139 and `knowledge-base/project/plans/2026-07-23-feat-encryption-posture-design-time-default-plan.md` (Plan Review Revisions R1-R11) — a new store or connection shipped with no declared encryption posture is undetectable at review time by name-similarity alone (a plaintext `hcloud_volume.workspaces` reads identically to its LUKS-backed sibling `hcloud_volume.workspaces_luks` until the device-binding chain is actually walked). Codifying the posture as a plan deliverable, resolved against real code by `lint-encryption-posture.py` (repo-root `scripts/`), closes the gap at design time instead of at incident time.
+
 ### 3. SpecFlow Analysis
 
 **If spec-flow-analyzer was already invoked in Phase 2.5, skip this phase and proceed to Phase 4.**
