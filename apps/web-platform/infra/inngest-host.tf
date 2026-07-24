@@ -8,7 +8,7 @@
 # OSS Inngest v1.x is single-writer and two servers on the same prod Postgres
 # double-fire every cron (ADR-100 Context). This host is the prerequisite that
 # unblocks active-active web. web-2 was RE-ADDED 2026-07-24 as a fresh cattle out-of-band
-# standby (ADR-141, #6459) — a different host from the fsn1 .11 retired 2026-07-17 (#6538). Its
+# standby (ADR-142, #6459) — a different host from the fsn1 .11 retired 2026-07-17 (#6538). Its
 # private IP is in this host's :8288/:8289 allowlist (web_host_private_ips below), propagated to
 # the running host via the `inngest-host-replace` dispatch (#6608 window), NOT the merge-apply.
 #
@@ -42,11 +42,11 @@ locals {
   # for the nft `ip saddr { ... }` set rendered into inngest-nftables.sh.
   #
   # TWO-HOST (#6608/#6459): web-2 (10.0.1.11) RE-ADDED 2026-07-24 as a fresh cattle out-of-band
-  # standby (ADR-141) — a different host from the retired fsn1 .11 (#6538). This literal is
+  # standby (ADR-142) — a different host from the retired fsn1 .11 (#6538). This literal is
   # DRIFT-GUARDED against var.web_hosts by inngest-host.test.sh §6b (the allowlist IP set must
   # byte-equal the var.web_hosts private_ip set), so a roster change red-lines CI until this follows.
   #
-  # AC6 / SEQUENCING (ADR-141 3.3 / #6608): this config change is SAFE on the merge-apply — the
+  # AC6 / SEQUENCING (ADR-142 3.3 / #6608): this config change is SAFE on the merge-apply — the
   # default push apply of apply-web-platform-infra.yml is an explicit `-target=` allow-list that does
   # NOT include hcloud_server.inngest, so updating this local (which feeds inngest user_data →
   # ForceNew) does NOT replace the prod Inngest host at merge. The nftables allowlist reaches the

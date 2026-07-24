@@ -326,21 +326,21 @@ resource "hcloud_server" "web" {
   # Guarded by plugins/soleur/test/terraform-target-parity.test.ts so it is not
   # dropped silently.
   #
-  # HARD GATE (ADR-068 §(c) / ADR-141 D3, the anti-pooling LB-weight gate) — the deferred cutover
+  # HARD GATE (ADR-068 §(c) / ADR-142 D3, the anti-pooling LB-weight gate) — the deferred cutover
   # orchestrator must NOT remove this entry or shift web-2's Cloudflare LB weight above 0 until the
-  # programmatic gate (REBUILT 2026-07-24 with ADR-141 D3 / #6459 as `lb-weight-gate.sh`, after
-  # #6575 deleted the original 2026-07-20 — see ADR-068 §(c) CORRECTION + ADR-141) exits 0 AND its
+  # programmatic gate (REBUILT 2026-07-24 with ADR-142 D3 / #6459 as `lb-weight-gate.sh`, after
+  # #6575 deleted the original 2026-07-20 — see ADR-068 §(c) CORRECTION + ADR-142) exits 0 AND its
   # separate runtime-bind probe passes. The rebuilt gate is a fail-closed serving-weight TOP-GUARD:
   # web-2 weight==0/not-in-rotation PASSES (the standby state a correct pre-flip config is in — the
   # #6575 polarity flaw is fixed); web-2 weight>0 pre-flip runs the flip-authorization shape and
   # FAILS unless (1) owner-side relay active (SOLEUR_PROXY_BIND / SOLEUR_PROXY_PEER_ALLOWLIST /
   # SOLEUR_HOST_ROSTER), (2) git-data store cut over (GIT_DATA_STORE_ENABLED==true + GIT_DATA_LUKS
-  # soak marker), AND (3) web-2 /workspaces LUKS-backed (WORKSPACES_LUKS soak marker — ADR-141 D3
+  # soak marker), AND (3) web-2 /workspaces LUKS-backed (WORKSPACES_LUKS soak marker — ADR-142 D3
   # coupling #2, so a plaintext web-2 cannot be pooled). Pooling web-2 before all three = a request
   # lands on a host without that user's /workspaces → empty workspace → "workspace-gone" single-user
   # incident. SHAPE-ONLY (prints requires_runtime_bind_probe=true) so exit 0 is NOT weight authorization.
   # Committed-config anti-pooling (dns.tf web-1-only, connector excludes web-2, no LB pools web-2) is
-  # Condition C in lb-weight-gate.test.sh. See ADR-068 §(c) + ADR-141 + moved-block-wedge-cutover-5887.md §Scope B.
+  # Condition C in lb-weight-gate.test.sh. See ADR-068 §(c) + ADR-142 + moved-block-wedge-cutover-5887.md §Scope B.
   lifecycle {
     ignore_changes = [user_data, ssh_keys, image, placement_group_id]
   }
@@ -700,7 +700,7 @@ resource "terraform_data" "git_data_probe_install" {
 #
 # SCOPE: this grant exists because a peer connector proxies to web-1. It is web-2-lifetime-scoped.
 # #6538 retired the fsn1 .11 orphan (removing the only peer, making the clause momentarily
-# vestigial), but web-2 was RE-ADDED 2026-07-24 (ADR-141, #6459) as a fresh cattle standby at
+# vestigial), but web-2 was RE-ADDED 2026-07-24 (ADR-142, #6459) as a fresh cattle standby at
 # 10.0.1.11 — so the 10.0.1.0/24 grant is LIVE again (a peer connector from web-2 must not be
 # fail2ban-banned). Re-evaluate only if web-2 is ever removed.
 resource "terraform_data" "fail2ban_tuning" {
@@ -1635,13 +1635,13 @@ resource "hcloud_volume" "workspaces" {
     app = "soleur-web-platform"
   }
 
-  # (ADR-141 Phase 4.2 / #6459) prevent_destroy on the per-host /workspaces block volumes so a
+  # (ADR-142 Phase 4.2 / #6459) prevent_destroy on the per-host /workspaces block volumes so a
   # stray `terraform destroy` / for_each key churn cannot silently drop a volume. This is the
   # per-host plaintext volume; the LIVE sole-copy data is on the additive LUKS singleton
   # hcloud_volume.workspaces_luks (workspaces-luks.tf, ADR-119) — its own prevent_destroy is
   # DEFERRED to the Phase-4 disposability-proof PR (#6931) because it collides with the
   # `apply_target=workspaces-luks-recut` `-replace` escape hatch (prevent_destroy errors on -replace)
-  # and its correct placement depends on the two-mechanism topology reconciliation ADR-141 R3 defers.
+  # and its correct placement depends on the two-mechanism topology reconciliation ADR-142 R3 defers.
   # Not in the push-apply `-target` allow-list, so this adds no merge-apply behavior.
   lifecycle {
     prevent_destroy = true

@@ -1,4 +1,4 @@
-# ADR-141: Active-active web ingress + drain-gated blue-green host lifecycle
+# ADR-142: Active-active web ingress + drain-gated blue-green host lifecycle
 
 - **Status:** adopting — flips to `accepted` when the cluster (out-of-band cattle web-2) + the de-pet of web-1 land in prod. Concurrent active-active *serving* is out of scope here (see ADR-068 / #6570).
 - **Date:** 2026-07-24

@@ -561,7 +561,7 @@ jobs:
           # apps/web-platform/infra/web-hosts-fanout-parity.test.sh (single-user
           # incident: a drift means web-2 silently misses deploys).
           # web-2 (10.0.1.11) receives the deploy so its app container stays release-current +
-          # health-monitored as an out-of-band standby (ADR-141 #6459). Deploy-membership is NOT
+          # health-monitored as an out-of-band standby (ADR-142 #6459). Deploy-membership is NOT
           # serving-membership: web-2 runs the container but serves no ingress (weight 0, no
           # DNS/tunnel/LB) — the anti-pooling gate (lb-weight-gate.sh) guards serving, not deploy.
           WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"

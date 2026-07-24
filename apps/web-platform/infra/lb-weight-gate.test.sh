@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for lb-weight-gate.sh — the rebuilt fail-closed, SHAPE-ONLY ADR-068 §(c) / ADR-141 D3
+# Tests for lb-weight-gate.sh — the rebuilt fail-closed, SHAPE-ONLY ADR-068 §(c) / ADR-142 D3
 # anti-pooling gate (#6575 rebuild, #6459). Asserts on EXIT CODES **and** the structured
 # `gate_fail sub_condition=…` stderr line (the machine-readable contract a future orchestrator
 # parses), accumulate-then-exit. Asserting the sub_condition — not just a non-zero rc — makes a
@@ -10,7 +10,7 @@
 # date-faked / hard-coded.
 #
 # SECTIONS:
-#   §0 TOP-GUARD (ADR-141 D3): the standby PASS branch (weight==0 & web-2 ∉ rotation) + the
+#   §0 TOP-GUARD (ADR-142 D3): the standby PASS branch (weight==0 & web-2 ∉ rotation) + the
 #      fail-closed weight/rotation cases + AC7 (weight>0 pre-flip with unmet A/B → FAIL).
 #   §1-8 Condition A + B flip-authorization shape (run only when web-2 is being pooled), incl. the
 #      §6459 WORKSPACES_LUKS precondition (coupling #2).
@@ -87,10 +87,10 @@ assert_rejects_with() {
   assert_stderr_contains "$1 [sub_condition]" "$2"
 }
 
-echo "=== lb-weight-gate.sh test suite (rebuilt #6575 / ADR-141 D3) ==="
+echo "=== lb-weight-gate.sh test suite (rebuilt #6575 / ADR-142 D3) ==="
 
 # =============================================================================
-# §0 — TOP-GUARD (ADR-141 D3): the serving-weight polarity fix.
+# §0 — TOP-GUARD (ADR-142 D3): the serving-weight polarity fix.
 # =============================================================================
 
 # 0a. THE #6575-FLAW FIX: the correct out-of-band standby state — web-2 weight==0, NOT in the
@@ -212,7 +212,7 @@ reset_def; DEF[GIT_DATA_LUKS_CUTOVER_AT]="$NOW_CUTOVER"; run_with_def
 assert_rejects_with "git-data soak boundary delta==0 (marker==now)" "B_luks_soak_not_elapsed"
 
 # =============================================================================
-# §6459 — Condition B WORKSPACES_LUKS precondition (ADR-141 D3 coupling #2). A plaintext web-2
+# §6459 — Condition B WORKSPACES_LUKS precondition (ADR-142 D3 coupling #2). A plaintext web-2
 #          cannot be pooled: the flip reddens unless web-2 /workspaces is asserted LUKS-backed.
 # =============================================================================
 reset_def; unset 'DEF[WORKSPACES_LUKS_CUTOVER_AT]'; run_with_def

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Follow-through soak for #6459 (ADR-141): is the fresh cattle web-2 out-of-band standby HEALTHY —
+# Follow-through soak for #6459 (ADR-142): is the fresh cattle web-2 out-of-band standby HEALTHY —
 # not a dark host — after it is born via the gated dispatch? (Phase 4.3 soak; AC14 + AC15.)
 #
 # WHY THIS EXISTS. web-2 is an out-of-band standby (serving-weight 0, no ingress): it serves NO
@@ -12,7 +12,7 @@
 # pull-data, hr-no-ssh-fallback-in-runbooks; mirrors the plan's discoverability_test).
 #
 # web-2's two per-host OUTBOUND heartbeats (web-probe.tf, for_each var.web_hosts) ARE the AC9 /
-# ADR-141 R1 out-of-band health composite: a dark web-2 goes silent → the heartbeat's Better Stack
+# ADR-142 R1 out-of-band health composite: a dark web-2 goes silent → the heartbeat's Better Stack
 # absence alert fires, and this soak reads that same signal to a PASS/FAIL close-criterion.
 #
 # Enrollment (the directive the sweeper discovers — plus the `follow-through` label on #6459):
@@ -107,5 +107,5 @@ if (( ${#NOT_UP[@]} > 0 )); then
   exit 1
 fi
 
-echo "PASS: both web-2 out-of-band heartbeats are armed + green (up): ${SUMMARY}. web-2 has soaked N=7d healthy (not dark) — ADR-141 Phase 4.3 soak-close criterion met (#6459)."
+echo "PASS: both web-2 out-of-band heartbeats are armed + green (up): ${SUMMARY}. web-2 has soaked N=7d healthy (not dark) — ADR-142 Phase 4.3 soak-close criterion met (#6459)."
 exit 0

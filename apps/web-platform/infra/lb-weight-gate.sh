@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# lb-weight-gate.sh — the rebuilt ADR-068 §(c) / ADR-141 D3 anti-pooling gate (#6575 rebuild, #6459).
+# lb-weight-gate.sh — the rebuilt ADR-068 §(c) / ADR-142 D3 anti-pooling gate (#6575 rebuild, #6459).
 #
 # PURE + FAIL-CLOSED + SHAPE-ONLY. Reads ONLY injected env (no Doppler/network calls — the
 # Doppler-sourcing entry point ships with the deferred cutover orchestrator, its only caller).
 #
-# WHY THIS EXISTS. web-2 is an OUT-OF-BAND standby at serving-weight 0 (ADR-141 D2). A request
+# WHY THIS EXISTS. web-2 is an OUT-OF-BAND standby at serving-weight 0 (ADR-142 D2). A request
 # routed to web-2 before the ADR-068 Phase-3 flip hits the empty /workspaces (the sole copy is
 # web-1's volume) = the "workspace-gone" single-user incident. This gate fail-closes any attempt to
 # pool web-2 into serving before the flip preconditions hold.
 #
-# THE #6575 DELETION FLAW, AND THE FIX (ADR-141 D3). The original gate REQUIRED web-2 in the
+# THE #6575 DELETION FLAW, AND THE FIX (ADR-142 D3). The original gate REQUIRED web-2 in the
 # SOLEUR_HOST_ROSTER as its FIRST assertion, so after web-2 retired (#6538) a *correct* config
 # omitting web-2 could only ever FAIL — "a gate a correct configuration cannot pass is not a guard"
 # — and it was deleted (2026-07-20, #6575). The fix is a POLARITY inversion via a serving-weight
@@ -28,16 +28,16 @@
 # The COMMITTED-CONFIG anti-pooling assertion (dns.tf app record stays web-1-only, the tunnel
 # connector predicate excludes web-2, no cloudflare_load_balancer pools web-2 at weight>0) is
 # Condition C in lb-weight-gate.test.sh — it is the CI-side regression guard over the tree, kept out
-# of this env-driven runtime gate so the two never drift (ADR-141 D3 / CTO ruling 2b).
+# of this env-driven runtime gate so the two never drift (ADR-142 D3 / CTO ruling 2b).
 #
-#   Top-guard (ADR-141 D3): SOLEUR_WEB2_SERVING_WEIGHT (explicit integer ≥0; absent/non-int/negative
+#   Top-guard (ADR-142 D3): SOLEUR_WEB2_SERVING_WEIGHT (explicit integer ≥0; absent/non-int/negative
 #     → FAIL CLOSED) + SOLEUR_SERVING_ROTATION (present, comma-set; absent → FAIL CLOSED). PASS iff
 #     weight==0 AND web-2 ∉ rotation. Otherwise → Conditions A + B.
 #   Condition A (owner-side relay config-shape): SOLEUR_PROXY_BIND non-empty; SOLEUR_PROXY_PEER_
 #     ALLOWLIST parses to non-empty set; SOLEUR_HOST_ROSTER JSON object with web-2 present, allowlist
 #     ⊆ roster addrs (outbound dial), web-2 addr ∈ allowlist (inbound accept).
 #   Condition B (cut-over config-shape): GIT_DATA_STORE_ENABLED=="true"; GIT_DATA_LUKS_CUTOVER_AT
-#     AND WORKSPACES_LUKS_CUTOVER_AT (ADR-141 D3 coupling #2) each ISO-8601, parseable, ≥epoch, not
+#     AND WORKSPACES_LUKS_CUTOVER_AT (ADR-142 D3 coupling #2) each ISO-8601, parseable, ≥epoch, not
 #     future, now-marker ≥ <soak>_SOAK_DAYS(3)*86400. The WORKSPACES_LUKS marker is what makes
 #     deferring web-2's fresh-boot LUKS path to Phase-4 fail-CLOSED: a plaintext web-2 cannot be pooled.
 set -euo pipefail
@@ -50,7 +50,7 @@ fail() {
 }
 
 # =============================================================================
-# TOP-GUARD — web-2 serving-weight / rotation membership (ADR-141 D3 polarity fix)
+# TOP-GUARD — web-2 serving-weight / rotation membership (ADR-142 D3 polarity fix)
 # =============================================================================
 
 # Weight: absent/empty → FAIL CLOSED (never default-0-PASS — a broken or renamed injection must not
@@ -219,7 +219,7 @@ delta=$(( now_epoch - marker_epoch ))
 soak_secs=$(( SOAK_DAYS * 86400 ))
 [[ "$delta" -ge "$soak_secs" ]] || fail "B_luks_soak_not_elapsed"
 
-# --- B.6-B.10 — web-2 /workspaces LUKS-backed precondition (ADR-141 D3 coupling #2) -----------
+# --- B.6-B.10 — web-2 /workspaces LUKS-backed precondition (ADR-142 D3 coupling #2) -----------
 # This is what makes deferring web-2's fresh-boot LUKS path (to the Phase-4 disposability-proof PR)
 # FAIL-CLOSED rather than fail-open: a plaintext web-2 can NEVER be pooled, because this branch
 # reddens unless web-2's /workspaces is asserted LUKS-backed. web-2's for_each volume is knowingly
