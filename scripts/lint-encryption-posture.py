@@ -466,6 +466,42 @@ def check_positive_work_floor(
         )
 
 
+def check_live_coverage_floor(ledger: dict, fails: list[str]) -> None:
+    """R8b (#6902 / ADR-141): the ledger must retain at least
+    `live_coverage_floor` stores whose at_rest.live_verification == "available"
+    (Layer A, PR-time, hermetic — reads only the committed ledger). The floor is
+    self-declared and OPTIONAL: absent or 0 => inactive (no-op), so synthesized
+    fixtures that omit it are unaffected. It is a COUNT floor keyed on the
+    ledger's own declared value, NOT an identity pin on any specific store — an
+    honest individual re-ledgering (available -> unavailable, with a tracking
+    issue) does not false-fail; only dropping the available count BELOW the
+    declared floor does, i.e. zeroing out all live-measurable at-rest coverage.
+
+    Known weakness (recorded in ADR-141): unlike check_positive_work_floor, the
+    required count is self-declared, so a commit zeroing coverage can also lower
+    the integer in the same diff. Acceptable for this measure-then-scope DEFER
+    (the change is visible in review); the derive-from-host-probe hardening is
+    the tracking issue's follow-up.
+    """
+    floor = ledger.get("live_coverage_floor", 0)
+    available = sum(
+        1
+        for s in ledger["stores"]
+        if (s.get("at_rest") or {}).get("live_verification") == "available"
+    )
+    # MUTATION-TARGET: MB-13 start (live-coverage floor — the coverage-zeroing guard)
+    if available < floor:
+        fails.append(
+            f"FAIL: live-coverage floor: expected >= {floor} store(s) with "
+            f"at_rest.live_verification 'available' but ledger has {available} "
+            "-> the ledger has lost live-measurable at-rest coverage; restore a "
+            "store's live_verification to 'available' once a host emitter "
+            "re-establishes a runner-reachable signal, or lower "
+            "live_coverage_floor with justification (see ADR-141)"
+        )
+    # MUTATION-TARGET: MB-13 end
+
+
 # --- Shared does_not_defend / provider-managed / exception / disclosed_as ---
 
 
@@ -676,6 +712,11 @@ REQUIRED_TOP = (
     "connections",
 )
 
+# Optional top-level keys (additive; do NOT bump schema_version). #6902/ADR-141:
+# live_coverage_floor is a self-declared integer arming the live-coverage floor
+# (see check_live_coverage_floor). Absent => 0 => floor inactive.
+OPTIONAL_TOP = ("live_coverage_floor",)
+
 
 def _validate_exception(exc: dict, prefix: str) -> list[str]:
     # Deliberately shallow: only the STRUCTURAL "is this an object" shape is a
@@ -762,7 +803,7 @@ def _validate_connection(c: dict, i: int) -> list[str]:
 def validate_ledger(ledger) -> list[str]:
     if not isinstance(ledger, dict):
         return ["ledger root must be an object"]
-    extra = set(ledger.keys()) - set(REQUIRED_TOP)
+    extra = set(ledger.keys()) - set(REQUIRED_TOP) - set(OPTIONAL_TOP)
     errs: list[str] = []
     if extra:
         errs.append(f"unexpected top-level keys: {sorted(extra)}")
@@ -774,6 +815,12 @@ def validate_ledger(ledger) -> list[str]:
 
     if ledger.get("schema_version") != 1:
         errs.append("schema_version must be 1")
+
+    if "live_coverage_floor" in ledger:
+        lcf = ledger["live_coverage_floor"]
+        # bool is an int subclass; reject it explicitly so `true` is not read as 1.
+        if not isinstance(lcf, int) or isinstance(lcf, bool) or lcf < 0:
+            errs.append("live_coverage_floor must be a non-negative integer")
 
     if not isinstance(ledger["store_classes"], dict):
         errs.append("store_classes must be an object")
@@ -852,6 +899,7 @@ def run_sweep(
     tf_inventory = scan_tf_inventory(tf_files, cache)
     tf_store_count = check_resource_partition(ledger, tf_inventory, fails)
     check_positive_work_floor(ledger, tf_store_count, fails)
+    check_live_coverage_floor(ledger, fails)
 
     for row in ledger["stores"]:
         mech = row["at_rest"]["mechanism"]
