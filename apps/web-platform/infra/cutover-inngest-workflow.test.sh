@@ -943,17 +943,64 @@ assert "#6178 at least 3 bucketing sites exist (2 arms + missed-tick OBSERVED)" 
 # A run with no startedAt has NOT fired, so it cannot be a double-fire -- but it must be
 # dropped DELIBERATELY, not by dying, and the drop must be counted (a silent discard is
 # the false-clean shape this gate exists to prevent).
-NULL_FIXTURE='{"runs":[{"functionID":"fn-a","startedAt":null},{"functionID":"fn-a","startedAt":"2026-07-08T10:00:00Z"},{"functionID":"fn-a","startedAt":"2026-07-08T10:02:00Z"}]}'
+# These programs are an EXECUTABLE ORACLE, so assert their OUTPUT VALUE, not merely that they
+# exited 0. Asserting only "didn't crash" leaves the semantics unpinned: replacing
+# `select(.startedAt != null)` with `(.startedAt // "1970-01-01T00:00:00Z")` — which defaults
+# every null into a phantom 1970 bucket, so two QUEUED runs group together and report a FALSE
+# DOUBLE-FIRE — exits 0 and emits no null bucket, and therefore survived. So did
+# `select(length > 1)` → `> 0` and `group_by([.fn,.bucket])` → `group_by([.bucket])`.
+#
+# Two nulls (not one): at cardinality 1 the null axis cannot exhibit the grouping the defaulting
+# mutation creates.
+#   fn-a 10:00 / 10:02 -> SAME 1200s bucket  => exactly one dupe group, count 2
+#   fn-b 10:00         -> different fn, same bucket => must NOT group with fn-a
+#   fn-c 10:00 / 10:40 -> different buckets  => must NOT group
+NULL_FIXTURE='{"runs":[
+  {"functionID":"fn-q","startedAt":null},
+  {"functionID":"fn-q","startedAt":null},
+  {"functionID":"fn-a","startedAt":"2026-07-08T10:00:00Z"},
+  {"functionID":"fn-a","startedAt":"2026-07-08T10:02:00Z"},
+  {"functionID":"fn-b","startedAt":"2026-07-08T10:00:00Z"},
+  {"functionID":"fn-c","startedAt":"2026-07-08T10:00:00Z"},
+  {"functionID":"fn-c","startedAt":"2026-07-08T10:40:00Z"}]}'
+# A fixture with NO duplicate at all — proves the dupe detector can say "clean", so an
+# always-reports-a-dupe mutation cannot pass by satisfying only the positive case.
+CLEAN_FIXTURE='{"runs":[
+  {"functionID":"fn-q","startedAt":null},
+  {"functionID":"fn-a","startedAt":"2026-07-08T10:00:00Z"},
+  {"functionID":"fn-a","startedAt":"2026-07-08T10:40:00Z"},
+  {"functionID":"fn-b","startedAt":"2026-07-08T10:00:00Z"}]}'
 for prog in "$BUCKET_PROGS_DIR"/prog-*.jq; do
   pname=$(basename "$prog")
   prc=0
   pout=$(jq -c --argjson period 1200 -f "$prog" <<<"$NULL_FIXTURE" 2>&1) || prc=$?
   assert "#6178 $pname survives a null startedAt (jq exit 5 was the crash)" "[[ '$prc' -eq 0 ]]"
-  # And the null row must not silently become a phantom bucket member.
   assert "#6178 $pname output contains no null bucket" "! grep -qE '\"bucket\":null|bucket: *null' <<<\"\$(cat <<'EOF'
 $pout
 EOF
 )\""
+  # A null-startedAt run must be ABSENT from the output entirely — not defaulted into a bucket.
+  assert "#6178 $pname drops the queued (null-startedAt) runs rather than defaulting them" \
+    "! grep -qF 'fn-q' <<<\"\$(cat <<'EOF'
+$pout
+EOF
+)\""
+
+  if grep -qF 'group_by' "$prog"; then
+    # DUPE-DETECTOR programs (the two probe arms): assert the exact verdict, both directions.
+    dupe_n=$(jq -c --argjson period 1200 -f "$prog" <<<"$NULL_FIXTURE" 2>/dev/null | jq 'length')
+    assert "#6178 $pname reports EXACTLY one double-fire group on the seeded fixture" "[[ '$dupe_n' -eq 1 ]]"
+    dupe_fn=$(jq -c --argjson period 1200 -f "$prog" <<<"$NULL_FIXTURE" 2>/dev/null | jq -r '.[0].functionID')
+    dupe_ct=$(jq -c --argjson period 1200 -f "$prog" <<<"$NULL_FIXTURE" 2>/dev/null | jq -r '.[0].count')
+    assert "#6178 $pname attributes the double-fire to fn-a (not fn-b sharing the bucket)" "[[ '$dupe_fn' == 'fn-a' ]]"
+    assert "#6178 $pname reports count=2 for the duplicated tick" "[[ '$dupe_ct' -eq 2 ]]"
+    clean_n=$(jq -c --argjson period 1200 -f "$prog" <<<"$CLEAN_FIXTURE" 2>/dev/null | jq 'length')
+    assert "#6178 $pname reports ZERO groups on a genuinely clean fixture (detector can say clean)" "[[ '$clean_n' -eq 0 ]]"
+  else
+    # The missed-tick OBSERVED program: a deduplicated (fn, bucket) set, nulls excluded.
+    obs_n=$(jq -c --argjson period 1200 -f "$prog" <<<"$NULL_FIXTURE" 2>/dev/null | jq 'length')
+    assert "#6178 $pname yields 4 distinct (fn,bucket) pairs, nulls excluded" "[[ '$obs_n' -eq 4 ]]"
+  fi
 done
 
 # The drop must be VISIBLE: both probe arms emit the dropped count as a ::notice::.

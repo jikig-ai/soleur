@@ -553,7 +553,7 @@ test_df_page1_feasibility_gate() {
   else echo "  FAIL: marker lacks the measured total_count (markers=$MARKERS_CAP)"; FAIL=$((FAIL+1)); fi
   # COMPUTED remediation: an ISO instant the operator can paste, derived from the
   # observed density — not a static "try a smaller window" platitude.
-  if echo "$STDOUT_CAP" | grep -qE 'CUTOVER_WINDOW_FROM[^0-9]*[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'; then
+  if echo "$STDOUT_CAP" | grep -qE 'CUTOVER_ANCHOR_FROM[^0-9]*[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'; then
     echo "  PASS: remediation names a COMPUTED latest-viable ISO anchor"; PASS=$((PASS+1));
   else echo "  FAIL: remediation carries no computed ISO anchor (out=$STDOUT_CAP)"; FAIL=$((FAIL+1)); fi
   # The abort must be fast: it happens on page 1, so it must NOT have paginated.
@@ -600,9 +600,19 @@ test_df_deadline_remediation_is_not_dead() {
   # POSITIVE half: having removed the dead advice, the abort surfaces must still tell the
   # operator something ACTIONABLE — else this test would be satisfied by deleting the
   # remediation entirely, which is a regression wearing the fix's clothes.
-  if grep -qE 'CUTOVER_WINDOW_FROM|narrow the window' "$TARGET"; then
-    echo "  PASS: abort surfaces name the live lever (window narrowing)"; PASS=$((PASS+1));
-  else echo "  FAIL: dead advice removed but nothing actionable replaced it"; FAIL=$((FAIL+1)); fi
+  # ANCHORED ON THE ECHO CONSTRUCT, not a file-wide token. The earlier form
+  # (`grep -qE 'CUTOVER_WINDOW_FROM|narrow the window' "$TARGET"`) was satisfied by the header
+  # COMMENTS alone -- stripping the remediation clause from all three FATAL echo surfaces left
+  # it green, so the test's own stated purpose ("else this would be satisfied by deleting the
+  # remediation entirely") was not achieved. Require all three surfaces to carry it.
+  local rem_n
+  rem_n=$(grep -cE '^[[:space:]]*echo "inngest-doublefire-probe: FATAL[^"]*CUTOVER_ANCHOR_FROM' "$TARGET" || true)
+  assert_eq "all 3 FATAL abort surfaces name the LIVE lever (echo-anchored, not comments)" "3" "$rem_n"
+  # And the lever named must be the one that actually takes effect: CUTOVER_WINDOW_FROM is
+  # consulted only when no anchor is derivable, so on the normal fsm path it is inert.
+  if grep -qE '^[[:space:]]*echo "inngest-doublefire-probe: FATAL[^"]*set the CUTOVER_WINDOW_FROM repo variable' "$TARGET"; then
+    echo "  FAIL: an abort surface still names CUTOVER_WINDOW_FROM, which is inert when the fsm anchor resolves"; FAIL=$((FAIL+1));
+  else echo "  PASS: no abort surface names the inert CUTOVER_WINDOW_FROM lever"; PASS=$((PASS+1)); fi
 }
 
 echo "=== inngest-doublefire-probe.sh test suite ==="
