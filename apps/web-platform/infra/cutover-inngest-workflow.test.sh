@@ -849,7 +849,13 @@ assert "#6178 _flip_transition_dt fails (no row) when the query returns nothing 
 # TRUNCATION: a FULL page means betterstack-query.sh's newest-N LIMIT may have hidden the
 # earliest transition, so the row we would pick is LATER than truth — a NARROWER window,
 # the unsafe direction. It must refuse rather than derive an under-covering anchor.
-call_flip_transition_dt 50
+FTD_LIMIT=$(grep -oE 'local limit=[0-9]+' "$DF_HARNESS_SRC" | grep -oE '[0-9]+' | head -1)
+assert "#6178 the truncation limit was extracted from the SUT (not hardcoded here)" "[[ '$FTD_LIMIT' =~ ^[0-9]+$ && '$FTD_LIMIT' -gt 1 ]]"
+# BOUNDARY PAIR, derived: limit-1 must be accepted, limit must be refused. Sampling only
+# {0,1,3,50} left `-ge $limit` indistinguishable from `-ge 4`.
+call_flip_transition_dt "$(( FTD_LIMIT - 1 ))"
+assert "#6178 a page one row BELOW the limit is still trusted (boundary, limit-1)" "[[ '$FTD_RC' -eq 0 ]]"
+call_flip_transition_dt "$FTD_LIMIT"
 assert "#6178 _flip_transition_dt REFUSES a full page (truncation could hide the earliest transition)" "[[ '$FTD_RC' -ne 0 ]]"
 assert "#6178 a truncated page yields NO anchor (never an under-covering one)" "! grep -qE '^2026-' <<<\"\$(cat <<'EOF'
 $FTD_OUT
@@ -1001,6 +1007,31 @@ EOF
     obs_n=$(jq -c --argjson period 1200 -f "$prog" <<<"$NULL_FIXTURE" 2>/dev/null | jq 'length')
     assert "#6178 $pname yields 4 distinct (fn,bucket) pairs, nulls excluded" "[[ '$obs_n' -eq 4 ]]"
   fi
+done
+
+# --- NON-VACUITY HARD GATE (AC-V3), enforced in code rather than by operator diligence. ---
+assert "#6178 op=verify READS the server's total_count (it was emitted and never consumed)" \
+  "grep -qE 'TOTAL_COUNT=.*jq -r .\\.total_count' '$VERIFY_ARM_FILE'"
+assert "#6178 op=verify HARD-FAILS a vacuous scan rather than reporting a verdict" \
+  "grep -qF 'VACUOUS SCAN' '$VERIFY_ARM_FILE'"
+assert "#6178 the vacuity gate covers 0, unknown, absent AND run_count==0" \
+  "grep -qF '\"\$TOTAL_COUNT\" == \"0\"' '$VERIFY_ARM_FILE' && grep -qF '\"\$TOTAL_COUNT\" == \"unknown\"' '$VERIFY_ARM_FILE' && grep -qF '\"\$TOTAL_COUNT\" == \"absent\"' '$VERIFY_ARM_FILE' && grep -qF '\"\$RUN_COUNT\" -eq 0' '$VERIFY_ARM_FILE'"
+assert "#6178 the vacuity gate EXITS (a warning would still let the verdict print)" \
+  "grep -A3 'VACUOUS SCAN' '$VERIFY_ARM_FILE' | grep -qE 'exit 1'"
+assert "#6178 op=verify QUALIFIES a clean verdict when the claim is weaker" \
+  "grep -qF 'VERDICT_QUALIFIERS' '$VERIFY_ARM_FILE' && grep -qF 'exactly-once VERIFIED (QUALIFIED)' '$VERIFY_ARM_FILE'"
+# EXECUTED against the SUT's OWN expression, extracted from the arm -- not a copy retyped
+# here. A hardcoded `jq -r '.total_count // "absent"'` in the test is a tautology: it stays
+# green when the workflow drops the fallback (measured -- that mutation survived until this
+# extraction replaced it). `// "absent"` is load-bearing: a bare .total_count on a body
+# lacking the field yields the string "null", which matches NONE of the gate's literals, so
+# a partial GraphQL error would sail through the vacuity gate.
+TC_EXPR=$(grep -oE "jq -r '\.total_count[^']*'" "$VERIFY_ARM_FILE" | head -1 | sed "s/^jq -r '//; s/'\$//")
+assert "#6178 the total_count extraction expression was found in the verify arm" "[[ -n '$TC_EXPR' ]]"
+for _tc_case in '{}|absent' '{"total_count":0}|0' '{"total_count":"unknown"}|unknown' '{"total_count":728}|728'; do
+  _tc_body="${_tc_case%%|*}"; _tc_want="${_tc_case##*|}"
+  _tc_got=$(jq -r "$TC_EXPR" <<<"$_tc_body" 2>/dev/null || echo "<jq-error>")
+  df_eq "#6178 the arm's OWN total_count expression maps $_tc_body -> $_tc_want" "$_tc_want" "$_tc_got"
 done
 
 # The drop must be VISIBLE: both probe arms emit the dropped count as a ::notice::.
