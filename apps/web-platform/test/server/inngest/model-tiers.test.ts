@@ -2,8 +2,9 @@
 //
 // Guards the SSOT extraction of the per-cron Anthropic model-ID literals
 // into `server/inngest/model-tiers.ts`:
-//   (a) no-raw-literal: zero quoted "claude-sonnet-5" / "claude-opus-4-8"
-//       string literals on NON-comment code lines across functions/*.ts
+//   (a) no-raw-literal: zero quoted EXECUTION_MODEL / AUDIT_MODEL string
+//       literals on NON-comment code lines across functions/*.ts
+//       (the pattern is derived from those constants — see RAW_MODEL_LITERAL)
 //       (the verbatim `--model …` mirrors of GHA `claude_args` live in
 //       comments on purpose and are excluded by comment-stripping).
 //   (b) sanity: the walk found >= 17 cron/event files (an empty walk
@@ -43,7 +44,13 @@ import { MODEL_PRICING } from "@/server/inngest/functions/agent-on-spawn-request
 
 const FUNCTIONS_DIR = join(__dirname, "../../../server/inngest/functions");
 
-const RAW_MODEL_LITERAL = /"claude-sonnet-5"|"claude-opus-4-8"/;
+// DERIVED from the SSOT constants, never restated. A hand-written copy of the
+// model ID here is a second, unsynchronized pin: when the registry moves and
+// this does not, the walk silently scans for a literal that no longer exists
+// and the guard passes vacuously (green, not red — so the "config swaps red
+// the coupled fixtures" heuristic cannot catch it). #6934 shipped exactly that
+// miss. Model IDs are [a-z0-9-] only, so no regex escaping is needed.
+const RAW_MODEL_LITERAL = new RegExp(`"${SONNET_MODEL}"|"${AUDIT_MODEL}"`);
 
 /**
  * Blank out comment lines so the verbatim `--model claude-…` GHA-mirror
@@ -85,6 +92,20 @@ describe("model-tiers registry — #5106", () => {
       });
     }
     expect(offenders).toEqual([]);
+  });
+
+  // Non-vacuity control for the walk above. The offenders-are-empty assertion
+  // is satisfied both by "the guard works" and by "the guard scans for a
+  // literal that cannot occur" — the #6934 failure. Pin that the pattern
+  // actually matches a synthesized positive for BOTH tiers, so a stale or
+  // mis-derived RAW_MODEL_LITERAL fails loudly instead of passing green.
+  it("RAW_MODEL_LITERAL matches a synthesized literal for both tiers", () => {
+    expect(RAW_MODEL_LITERAL.test(`const m = "${AUDIT_MODEL}";`)).toBe(true);
+    expect(RAW_MODEL_LITERAL.test(`const m = "${EXECUTION_MODEL}";`)).toBe(true);
+    // and does not match an unrelated model ID
+    expect(RAW_MODEL_LITERAL.test(`const m = "claude-haiku-4-5-20251001";`)).toBe(
+      false,
+    );
   });
 
   it("MODEL_PRICING keys exactly equal the AnthropicModelId union members", () => {
