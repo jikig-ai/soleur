@@ -122,6 +122,24 @@ jobs:
           # Error direction matters: a period LARGER than the real shortest cron
           # collapses legitimate runs into one bucket and reports a PHANTOM double-fire.
           CUTOVER_CRON_PERIOD_SECONDS: ${{ inputs.cron_period_seconds }}
+          # #6919 — OPTIONAL functionIDs scope for the exactly-once doublefire probe
+          # (op=verify 2.6 + op=doublefire-probe). Comma-separated cron fn UUIDs; empty ⇒ ALL
+          # functions (the default). This is the design's hard cost lever: the wide default
+          # 365-day scan over all 68 functions can exhaust the probe's per-page budget, so an
+          # operator can set the repo/env var CUTOVER_DOUBLEFIRE_FUNCTION_IDS to scope it. It is
+          # a COST lever ONLY — it never narrows the TIME window (which would surface false
+          # missed-ticks → re-fire → double-fire). Forwarded to the probe as the function_ids
+          # URL query param (read into INNGEST_DOUBLEFIRE_FUNCTION_IDS on-host).
+          CUTOVER_DOUBLEFIRE_FUNCTION_IDS: ${{ vars.CUTOVER_DOUBLEFIRE_FUNCTION_IDS }}
+          # #6919 review — the quiesce→register window (ISO-8601), OPTIONAL operator repo/env
+          # vars, mapped here so the shell actually sees them (GitHub does not export repo vars
+          # to the step unless named). When set they (a) anchor doublefire_from() to
+          # cutover_instant−200d instead of now−200d — so a LATE op=verify re-run still keeps the
+          # window ⊇ the superset invariant — and (b) enable the missed-tick auto-enumeration
+          # (P2-16, below). Unset ⇒ doublefire_from() falls back to now−200d (safe when op=verify
+          # runs promptly post-cutover, the intended usage) and missed-tick auto-enum is skipped.
+          CUTOVER_WINDOW_FROM: ${{ vars.CUTOVER_WINDOW_FROM }}
+          CUTOVER_WINDOW_UNTIL: ${{ vars.CUTOVER_WINDOW_UNTIL }}
         run: |
           set -euo pipefail
           BASE="https://deploy.soleur.ai/hooks"
@@ -154,6 +172,29 @@ jobs:
               sleep 15
             done
             echo "timeout"; return 0
+          }
+
+          # #6919 — the doublefire probe STARTED_AT lower bound (from), forwarded to the
+          # /hooks/inngest-doublefire-probe GET as a URL query param. It NARROWS the probe's
+          # wide 365-day default (the cost lever that lets the all-function scan complete within
+          # the per-page budget — the op=verify HTTP 500 root cause) WITHOUT violating the
+          # window-superset invariant: FROM ≤ cutover_instant − 2×max_cron_period. The longest
+          # repo cron is QUARTERLY, so 2×max_cron_period ≈ 182d; we pass cutover − 200d (18d skew
+          # headroom). cutover_instant proxy = the recorded CUTOVER_WINDOW_UNTIL when set, else
+          # `now` (op=verify runs AT/AFTER cutover; the standalone pre-cutover probe has now ≤
+          # cutover, so now−200d is strictly earlier relative to cutover → still ⊇-invariant).
+          # A narrower window can NEVER surface false missed-ticks here because 200d > 182d. Echoes
+          # an ISO-8601 Z timestamp; empty on a date failure (the probe then uses its own safe
+          # 365-day default — the robustness/budget fixes still apply).
+          doublefire_from() {
+            local ref="${CUTOVER_WINDOW_UNTIL:-}" ref_epoch
+            if [[ -n "$ref" ]]; then
+              ref_epoch=$(date -u -d "$ref" +%s 2>/dev/null || echo "")
+              if [[ -n "$ref_epoch" ]]; then
+                date -u -d "@$(( ref_epoch - 200 * 86400 ))" +%Y-%m-%dT%H:%M:%SZ; return 0
+              fi
+            fi
+            date -u -d '200 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true
           }
 
           case "$OP" in
@@ -246,13 +287,18 @@ jobs:
               fi
               echo "::warning::doublefire-probe CRON_PERIOD=${CRON_PERIOD}s is applied to ALL functions (P2-c). The verdict is SOUND ONLY IF every registered cron period ≥ ${CRON_PERIOD}s AND hour-aligned. If any cron fires faster, re-dispatch with CUTOVER_CRON_PERIOD_SECONDS set to the SHORTEST registered period before trusting the result."
               SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+              # #6919 — forward the ⊇-invariant window lower bound + optional functionIDs scope as
+              # URL query params (HMAC is over the empty GET body, so params don't affect the sig).
+              DF_FROM=$(doublefire_from); DF_FNIDS="${CUTOVER_DOUBLEFIRE_FUNCTION_IDS:-}"
+              DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}"
+              echo "::notice::doublefire-probe: scanning from=${DF_FROM:-<probe 365d default>} function_ids=[${DF_FNIDS:-<all>}]"
               rm -f /tmp/doublefire-probe-body
-              CODE=$(curl -s --max-time 60 -o /tmp/doublefire-probe-body -w '%{http_code}' \
+              CODE=$(curl -s --max-time 120 -o /tmp/doublefire-probe-body -w '%{http_code}' \
                 -X GET \
                 -H "X-Signature-256: sha256=$SIG" \
                 -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
                 -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-                "$BASE/inngest-doublefire-probe" || echo "000")
+                "$DF_URL" || echo "000")
               BODY=$(cat /tmp/doublefire-probe-body 2>/dev/null || echo "")
               if [[ "$CODE" != "200" ]]; then
                 CAUSE="${BODY//[$'\n\r']/ }"
@@ -1111,16 +1157,23 @@ jobs:
                 echo "::error::2.6 CRON_PERIOD invalid ('$CRON_PERIOD') — set CUTOVER_CRON_PERIOD_SECONDS to a positive integer ≤ the SHORTEST registered cron period (hour-aligned)."; exit 1
               fi
               echo "::warning::2.6 CRON_PERIOD=${CRON_PERIOD}s is applied to ALL functions (P2-c). The exactly-once verdict is SOUND ONLY IF every registered cron period ≥ ${CRON_PERIOD}s AND hour-aligned. If any cron fires faster than ${CRON_PERIOD}s, re-run op=verify with CUTOVER_CRON_PERIOD_SECONDS set to the SHORTEST registered cron period before trusting the result."
+              # #6919 — forward the ⊇-invariant window lower bound (cost lever) + optional
+              # functionIDs scope as URL query params so the wide default scan completes within the
+              # probe's per-page budget. HMAC is over the empty GET body, so params don't alter it.
+              DF_FROM=$(doublefire_from); DF_FNIDS="${CUTOVER_DOUBLEFIRE_FUNCTION_IDS:-}"
+              DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}"
+              echo "::notice::2.6 doublefire-probe: scanning from=${DF_FROM:-<probe 365d default>} function_ids=[${DF_FNIDS:-<all>}]"
               # #6258 bounded TRANSPORT retry (Finding 11): wraps ONLY the doublefire transport curl.
+              # The 120s outer budget > the probe's 90s in-script deadline + 8s per-page floor (SUM bound).
               CODE=000; BODY=""
               for attempt in 1 2; do
                 rm -f /tmp/verify-runs
-                CODE=$(curl -s --max-time 60 -o /tmp/verify-runs -w '%{http_code}' \
+                CODE=$(curl -s --max-time 120 -o /tmp/verify-runs -w '%{http_code}' \
                   -X GET \
                   -H "X-Signature-256: sha256=$SIG" \
                   -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
                   -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-                  "$BASE/inngest-doublefire-probe" || echo "000")
+                  "$DF_URL" || echo "000")
                 BODY=$(cat /tmp/verify-runs 2>/dev/null || echo "")
                 [[ "$CODE" == "200" ]] && break
                 if [[ "$attempt" -lt 2 ]]; then
