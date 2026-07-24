@@ -106,7 +106,10 @@ describe("model-tiers registry — #5106", () => {
   //   Sonnet 5      $3 / $15   cache-read $0.30  5m cache-write $3.75  (post-intro;
   //                 introductory $2/$10 applies through 2026-08-31 — see the
   //                 comment on MODEL_PRICING for why the post-intro rates are used)
-  it("MODEL_PRICING values match published per-MTok rates", () => {
+  // NB: "as committed" not "as published" — the sonnet row intentionally holds
+  // the POST-INTRO rate while introductory pricing runs to 2026-08-31, so for
+  // sonnet this pins the deliberate choice, not today's published price.
+  it("MODEL_PRICING values match the committed per-MTok rates", () => {
     const M = 1_000_000;
     expect(MODEL_PRICING[HAIKU_MODEL]).toEqual({
       inputPerToken: 1 / M,

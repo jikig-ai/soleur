@@ -82,9 +82,15 @@ function uuidv5(name: string, namespace: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
 }
 
-// Per-model unit pricing in USD per token. Cache-read tokens bill at
-// ~10% of input; cache-creation tokens at ~125% of input. Verified against
-// https://platform.claude.com/docs/en/about-claude/pricing.md on 2026-07-24.
+// Per-model unit pricing in USD per token. Cache-read tokens bill at ~10% of
+// input; cache-creation tokens at 125% of input FOR THE 5-MINUTE TTL used at
+// the call site below — the 1-hour TTL bills at 200% instead. Anthropic's
+// `usage.cache_creation_input_tokens` does not distinguish the two, so if any
+// call here ever passes `cache_control: { ttl: "1h" }` this row silently
+// under-attributes cache writes by 37.5% with the pinning test still green.
+// (Checked: no `ttl` is passed today, so the 5m default applies.)
+// Verified against https://platform.claude.com/docs/en/about-claude/pricing.md
+// on 2026-07-24.
 //
 // VERIFY EACH ROW AGAINST ITS KEY, not against the previous row. The haiku
 // entry carried Haiku *3.5*'s retired table ($0.80/$4/$0.08/$1) under the
@@ -95,11 +101,23 @@ function uuidv5(name: string, namespace: string): string {
 // wrong going forward: every row already written is permanently
 // uncorrectable, and both BYOK cap layers sum that column.
 //
-// SONNET IS TIME-VARYING: Claude Sonnet 5 bills $2/$10 under introductory
-// pricing through 2026-08-31, then $3/$15 from 2026-09-01. The values below
-// are the POST-INTRO rates — deliberately, since a static constant cannot
-// express the window and over-attribution is the safe direction for a cap
-// (it trips early rather than overshooting). Correct as of 2026-09-01.
+// SONNET IS TIME-VARYING, and we deliberately do NOT model the window: Claude
+// Sonnet 5 bills $2/$10 under introductory pricing through 2026-08-31, then
+// $3/$15 from 2026-09-01. The values below are the POST-INTRO rates, so Sonnet
+// is over-attributed by 50% until then (#6942 tracks the expiry).
+//
+// The real justification is NOT "a constant can't express a window" — it
+// trivially could (`Date.now() < Date.parse(...)`). It is that
+// PER_SPAWN_COST_CEILING_CENTS was itself calibrated in $3/$15 space (see its
+// docstring in leader-prompts/constants.ts), so ceiling and attribution share
+// one assumed rate and Layer-2 enforcement stays internally self-consistent;
+// modelling the window would desynchronize them and add a cliff.
+//
+// Be precise about what that buys: over-attribution is conservative for the
+// CAP, but these same cents are written to the WORM `audit_byok_use` ledger
+// and rendered on user-visible cost surfaces (workspace_cost_aggregate, the
+// Today cost route, the audit page) — so the operator sees a permanently
+// inflated Sonnet figure. Safe for enforcement is not the same as correct.
 //
 // Values are pinned by model-tiers.test.ts so a drift must be deliberate.
 interface ModelPricing {
