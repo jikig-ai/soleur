@@ -741,11 +741,11 @@ export function ChatSurface({
     <div className={rootClass}>
       {isFull && (
         <header className="flex shrink-0 items-center justify-between border-b border-soleur-border-default px-4 py-3 md:px-6">
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-3">
             <a
               href="/dashboard"
               aria-label="Back to dashboard"
-              className="flex items-center text-soleur-text-secondary hover:text-soleur-text-primary md:hidden"
+              className="flex shrink-0 items-center text-soleur-text-secondary hover:text-soleur-text-primary md:hidden"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="15 18 9 12 15 6" />
@@ -753,7 +753,7 @@ export function ChatSurface({
             </a>
 
             {activeLeaderIds.length > 0 && (
-              <span className="text-sm text-soleur-text-secondary md:hidden">
+              <span className="min-w-0 truncate text-sm text-soleur-text-secondary md:hidden">
                 {activeLeaderIds.map((id) => getDisplayName(id)).join(", ")} responding
               </span>
             )}
@@ -762,7 +762,7 @@ export function ChatSurface({
               Dashboard
             </span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-3">
             <AutoRunChip autonomous={autonomousPosture} />
             <StatusIndicator status={status} disconnectReason={disconnectReason} />
           </div>

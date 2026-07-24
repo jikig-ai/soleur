@@ -391,7 +391,7 @@ export function IssueDetailSheet({
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
-              <dl className="space-y-3 text-sm">
+              <dl className="space-y-4 text-sm">
                 <Row label="Status">
                   {statusDisabled ? (
                     <span className={statusPillClass(issue.status)}>
@@ -704,7 +704,7 @@ export function IssueDetailSheet({
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-3">
+    <div className="flex items-center justify-between gap-3 py-0.5">
       <dt className="text-soleur-text-tertiary">{label}</dt>
       <dd className="text-right">{children}</dd>
     </div>

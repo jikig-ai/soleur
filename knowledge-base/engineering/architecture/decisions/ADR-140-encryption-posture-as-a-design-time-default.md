@@ -120,7 +120,7 @@ uses for the terraform-drift cron.
 | **Layer B as a bare GitHub Actions cron, with the `prefer-inngest` hook overridden** | The circularity argument for exempting Layer B from Inngest was unsound (see Decision, above) — a plaintext AOF does not crash Inngest. ADR-033's own scope note already names the correct shape (Inngest-dispatch → `workflow_dispatch`-only workflow) for exactly this class of credential-heavy infra cron; using the hook's override hatch here would have been citing a rejection that does not apply. |
 | **Resolving `mechanism: luks` evidence by name/mount-path similarity** | Adversarial by construction: `hcloud_volume.workspaces` (plaintext) and `hcloud_volume.workspaces_luks` (encrypted) share a mapper name (`workspaces`) under any similarity join, so a row on the plaintext volume citing its sibling's apparatus would false-PASS — certifying the exact volume the feature exists to catch. Evidence must be reached via `device_binding` (the volume's own `hcloud_volume_attachment`), never a name match. |
 | **`git merge-base`-scoped lint (new-entrants only)** | Goes vacuous on a `fetch-depth: 1` checkout and again after its own PR merges. The committed ledger provides "don't re-litigate accepted debt" without the history dependency. |
-| **Advisory (non-required) CI job** | At a `single-user incident` brand-survival threshold, an advisory gate is no gate. Layer A is promoted to a required check via three coupled edits (`ci.yml`, `scripts/required-checks.txt`, `infra/github/ruleset-ci-required.tf`) in the same PR. |
+| **Advisory (non-required) CI job** | At a `single-user incident` brand-survival threshold, an advisory gate is no gate. Layer A is promoted to a required check via a byte-consistent coupling of edits in the same PR — see the **#6901 Amendment** below, which corrects this to a **five-site** coupling (not three) and pins the integration_id shape. |
 
 ## Consequences
 
@@ -148,3 +148,37 @@ reflect the 2026-07-23 LUKS cutover rather than the pre-cutover plaintext state 
 model itself would carry the same claim-vs-reality gap this ADR closes. No new container, actor,
 or system is introduced; `inngest` (`model.c4:188`) already models the container Layer B's
 dispatch function runs in.
+
+## Amendment (2026-07-24, #6901)
+
+Promoting the Layer A repo-sweep to a **required** check is a **five-site** byte-consistent
+coupling, not the three coupled edits the alternatives table above states. The two omitted sites
+are part of the #6049 synthetic-check drift-proof chain, bound byte-for-byte to the first three by
+`plugins/soleur/test/required-checks-canonical-parity.test.sh`:
+
+1. `.github/workflows/ci.yml` — the standalone `encryption-posture` job (extracted from
+   `lint-bot-statuses` in #6901; already landed so the context begins to soak).
+2. `scripts/required-checks.txt` — add the `encryption-posture` context.
+3. `infra/github/ruleset-ci-required.tf` — add the `required_check` block and amend the ABI-count
+   comment.
+4. `scripts/ci-required-ruleset-canonical-required-status-checks.json` — the parity SSOT; the
+   parity test asserts set-equality (⊆ and ⊇) with `required-checks.txt`, so 2 and 4 must land
+   byte-consistent or the test reds.
+5. `.github/actions/bot-pr-with-synthetic-checks/action.yml` — the synthetic-check adjudication;
+   `CHECK_NAMES` is derived from `required-checks.txt`, so adding the name there auto-includes it,
+   sound only while the sweep's scan surface (`encryption-posture-ledger.json` + `*.tf`/infra
+   evidence) stays disjoint from the action's `ALLOWED_PATHS`.
+
+**Integration_id shape.** The required-check must pin `integration_id 15368` (the GitHub Actions
+app, which posts the `ci.yml` `run:` job's check-run) **and add** the context name to
+`required-checks.txt` — the sound-by-unreachability fabrication precedent (`rule-body-lint` /
+`sentry-destroy-required`). This is **not** CodeQL's OMIT-name + non-15368 shape: a `required_check`
+pinned to a non-15368 id is never satisfied by a `run:` job's 15368 check-run, so GitHub would hold
+every PR at `Expected — Waiting` forever (the CodeQL match mechanism in reverse).
+
+**Measure-then-arm (ADR-117).** Arm only after the standalone `encryption-posture` context has
+soaked a green streak across diverse PRs; the concrete N is a tunable recorded in the arming
+tracking issue, deliberately **not** in this ADR (an ADR records the decision *shape*, not a
+threshold). Residual risk: the parity test validates that the two files *agree*, not that 15368 is
+the *correct* id — the arming PR must confirm with a live post-apply check that a real PR reaches
+the `encryption-posture` required check as satisfied.

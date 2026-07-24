@@ -133,7 +133,7 @@ function FunnelSection({ funnel }: { funnel: FunnelResult }) {
   const maxCount = Math.max(...funnel.stages.map((s) => s.count), 1);
 
   return (
-    <section className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-6 space-y-3">
+    <section className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-4 space-y-3 sm:p-6">
       <h2 className="text-sm font-medium text-soleur-text-muted uppercase tracking-wider">
         Activation funnel
       </h2>
@@ -143,7 +143,7 @@ function FunnelSection({ funnel }: { funnel: FunnelResult }) {
           const widthPct = Math.round((stage.count / maxCount) * 100);
           return (
             <div key={stage.key} className="flex items-center gap-3">
-              <div className="w-36 shrink-0 text-sm text-soleur-text-secondary flex items-center gap-1.5">
+              <div className="w-24 shrink-0 text-sm text-soleur-text-secondary flex items-center gap-1.5 sm:w-36">
                 {stage.label}
                 {isActivated && (
                   <span
@@ -165,7 +165,7 @@ function FunnelSection({ funnel }: { funnel: FunnelResult }) {
               <div className="w-12 shrink-0 text-right text-sm text-soleur-text-primary tabular-nums">
                 {stage.count}
               </div>
-              <div className="w-16 shrink-0 text-right text-xs text-soleur-text-muted tabular-nums">
+              <div className="w-12 shrink-0 text-right text-xs text-soleur-text-muted tabular-nums sm:w-16">
                 {/* Only a percentage drop gets a leading minus; the zero-prior
                     "—" sentinel and the first stage (null) stand alone. */}
                 {stage.dropoffLabel === null
@@ -307,7 +307,7 @@ export function AnalyticsDashboard({
 
   if (metrics.length === 0) {
     return (
-      <div className="mx-auto max-w-6xl px-6 py-8 space-y-6">
+      <div className="mx-auto max-w-6xl px-4 py-6 space-y-6 sm:px-6 sm:py-8">
         <h1 className="text-2xl font-semibold text-soleur-text-primary">Analytics</h1>
         <FunnelSection funnel={funnel} />
       </div>
@@ -315,7 +315,7 @@ export function AnalyticsDashboard({
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8 space-y-6">
+    <div className="mx-auto max-w-6xl px-4 py-6 space-y-6 sm:px-6 sm:py-8">
       <h1 className="text-2xl font-semibold text-soleur-text-primary">Analytics</h1>
       <p className="text-sm text-soleur-text-muted">
         P4 validation metrics — {metrics.length} user{metrics.length !== 1 ? "s" : ""}
