@@ -307,10 +307,22 @@ assert "#6919 workflow wires the optional functionIDs cost lever (CUTOVER_DOUBLE
 # them. Assert the mapping exists so the anchor branch cannot silently go dead again.
 assert "#6919 workflow maps CUTOVER_WINDOW_UNTIL into the step env (doublefire anchor not dead)" "grep -qE 'CUTOVER_WINDOW_UNTIL:\s*\\\$\{\{ vars.CUTOVER_WINDOW_UNTIL \}\}' '$WF'"
 assert "#6919 workflow maps CUTOVER_WINDOW_FROM into the step env (missed-tick auto-enum not dead)" "grep -qE 'CUTOVER_WINDOW_FROM:\s*\\\$\{\{ vars.CUTOVER_WINDOW_FROM \}\}' '$WF'"
-# INVARIANT (negative): the cost lever is functionIDs + a 200d (> the 182d = 2×quarterly floor)
-# window — the TIME window is NEVER narrowed to hours/days (that would surface false missed-ticks
-# at :704-743 → operator re-fire → the exact DOUBLE-FIRE the cutover prevents).
-assert "#6919 doublefire_from is ≥ 200 days (⊇ the 182d invariant, never a day/hour narrow)" "grep -qF '200 * 86400' '$WF' && grep -qF '200 days ago' '$WF'"
+# INVARIANT (#6178 — RESTATED; this assertion used to require the opposite).
+#
+# It read: "doublefire_from is >= 200 days ... the TIME window is NEVER narrowed", pinned by
+# grepping for the 200-day literals. Measurement retired it: at 728 runs/day a 200-day window
+# is ~145,600 runs ~= 1,456 pages against a ~18-page budget, so op=verify could not exhaust it
+# and — being fail-loud on non-exhaustion — emitted NO verdict at all. A test demanding an
+# unscannable window is a test demanding the bug.
+#
+# The 182d figure was never the double-fire invariant; it was the FUNCTION-DISCOVERY term (wide
+# enough that a quarterly cron appears at least once for the missed-tick loop). Discovery is
+# deferred to ADR-143. The double-fire invariant is only:
+#     window ⊇ [coexistence_start − 2×cron_period , now]
+# which the transition-row anchor satisfies exactly. The per-arm split below is what keeps the
+# PRE-cutover dark-host detector wide while letting op=verify narrow.
+assert "#6178 op=verify narrows (1-day floor, fsm-anchored) — the 200d default is retired there" "grep -qE 'doublefire_from 1 fsm' '$WF'"
+assert "#6178 op=doublefire-probe (pre-cutover dark-host detector) KEEPS the 200-day window" "grep -qE 'doublefire_from 200 wide' '$WF'"
 
 # Abort → webhook NON-200 (Deepen Finding 6): a script exit 1 (deadline/ceiling loud-abort)
 # maps to a webhook non-200 ONLY IF the hook has include-command-output-in-response-on-error.
@@ -570,6 +582,227 @@ assert "no jq '//'-on-boolean read of registry_empty (false // x == x bug, #6178
 assert "registry_empty read directly (bare, no //) at least twice (op=rearm + op=verify)" \
   "[[ \"\$(grep -cE \"jq -r '\.registry_empty'\" '$WF')\" -ge 2 ]]"
 
+# ===========================================================================
+# #6178 — doublefire_from() EXECUTED, not grepped.
+#
+# op=verify has never produced a verdict. The window it scanned (cutover - 200d)
+# holds ~145,600 runs (measured: 728/day) against a ~18-page budget, and the probe
+# is fail-loud on non-exhaustion, so every dispatch died on reason=deadline emitting
+# nothing. The fix narrows the window and anchors it on an instant that is actually
+# trustworthy -- which means the anchor arithmetic is now load-bearing and a static
+# grep is not enough to pin it. This harness EXTRACTS the function and RUNS it,
+# mirroring call_build_request_body in the probe suite.
+#
+# THE ANCHOR IS A TRANSITION ROW, NOT "THE EARLIEST FLIP ROW". inngest-cutover-flip
+# runs on a ~30s on-host timer and emits flag:"done" reason:"noop-done" on EVERY
+# tick (~2,880 rows/day; a 400-row query spans ~4 hours). Anchoring on the earliest
+# row in any practical --limit window would therefore resolve to a few hours ago
+# instead of the coexistence start -- a window NARROWER than truth, which is the
+# unsafe direction and exactly the vacuous-clean AC-V3 exists to prevent. The
+# transition reasons (flip-complete / flushed-resume-no-reflush / rolled-back /
+# dbsize-nonzero / flushall-failed / refuse-rearm-after-done) are disjoint from the
+# noop-* heartbeat reasons. Measured 2026-07-24: exactly ONE transition row exists
+# (done/flip-complete @ 2026-07-24 10:20:51Z) against thousands of heartbeats.
+# ===========================================================================
+DF_HARNESS_SRC="$(mktemp)"
+{
+  sed -n '/^          _flip_transition_dt() {$/,/^          }$/p' "$WF"
+  sed -n '/^          doublefire_from() {$/,/^          }$/p' "$WF"
+} > "$DF_HARNESS_SRC"
+DF_HARNESS_N=$(wc -l < "$DF_HARNESS_SRC" | tr -d '[:space:]')
+
+df_eq() {
+  local desc="$1" expected="$2" actual="$3"
+  if [[ "$expected" == "$actual" ]]; then echo "  PASS: $desc"; PASS=$((PASS + 1));
+  else echo "  FAIL: $desc"; echo "    expected: $expected"; echo "    actual:   $actual"; FAIL=$((FAIL + 1)); fi
+}
+# Tolerance form for the now-relative cases (floor / wide), which cannot be pinned to a
+# literal without re-deriving the implementation inside its own test.
+df_near() {  # $1=desc $2=actual_iso $3=expected_epoch $4=tol_s
+  local a d
+  a=$(date -u -d "$2" +%s 2>/dev/null || echo 0)
+  d=$(( a - $3 )); (( d < 0 )) && d=$(( -d ))
+  if (( d <= $4 )); then echo "  PASS: $1"; PASS=$((PASS + 1));
+  else echo "  FAIL: $1 (actual=$2, delta=${d}s > ${4}s)"; FAIL=$((FAIL + 1)); fi
+}
+
+# $1=fallback_days $2=mode $3=CRON_PERIOD $4=CUTOVER_WINDOW_FROM $5=stub FSM dt ("" => no row)
+DF_OUT=""; DF_RC=0
+call_doublefire_from() {
+  local fb="$1" mode="$2" period="$3" winfrom="$4" stubdt="$5"
+  # `set +e` must be in the CALLING shell: under `set -e` a failing command substitution
+  # aborts the suite at the assignment, so the fail-closed cases (which fail BY DESIGN)
+  # would kill the runner instead of being asserted.
+  set +e
+  DF_OUT=$(
+    eval "$(cat "$DF_HARNESS_SRC")"
+    # Stub the Better Stack read AFTER the eval so it overrides the real definition --
+    # the suite must never touch doppler or the network.
+    _flip_transition_dt() {
+      [[ -n "$stubdt" ]] || return 1
+      printf '%s\n' "$stubdt"
+    }
+    export CUTOVER_CRON_PERIOD_SECONDS="$period"
+    export CUTOVER_WINDOW_FROM="$winfrom"
+    doublefire_from "$fb" "$mode" 2>&1
+  )
+  DF_RC=$?
+  set -e
+}
+
+echo "--- #6178 doublefire_from() executed harness ---"
+
+# Harness self-check FIRST: without it every assertion below could pass vacuously
+# against an empty extraction (the v1 lesson, generalized).
+assert "#6178 doublefire_from harness extraction is non-vacuous (>20 lines)" "[[ '$DF_HARNESS_N' -gt 20 ]]"
+assert "#6178 extraction actually yields a callable doublefire_from" \
+  "bash -c 'eval \"\$(cat \"$DF_HARNESS_SRC\")\"; declare -F doublefire_from >/dev/null'"
+assert "#6178 extraction actually yields a callable _flip_transition_dt" \
+  "bash -c 'eval \"\$(cat \"$DF_HARNESS_SRC\")\"; declare -F _flip_transition_dt >/dev/null'"
+
+# --- FSM-derived anchor x CRON_PERIOD. The anchor is deliberately far in the past so
+# bucket_floor(anchor) - 2*period is strictly earlier than the now-relative floor and
+# therefore WINS the min() -- which makes the expected ISO a deterministic literal
+# rather than a re-derivation of the implementation. ---
+call_doublefire_from 1 fsm 1200 "" "2026-01-15 12:34:56.123456"
+df_eq "fsm anchor, period=1200 -> bucket_floor - 2*period, source=fsm" "2026-01-15T11:40:00Z fsm" "$DF_OUT"
+call_doublefire_from 1 fsm 3600 "" "2026-01-15 12:34:56.123456"
+df_eq "fsm anchor, period=3600 -> bucket_floor - 2*period, source=fsm" "2026-01-15T10:00:00Z fsm" "$DF_OUT"
+
+# --- var-sourced anchor (no FSM row: Better Stack retention miss) ---
+call_doublefire_from 1 fsm 1200 "2026-02-20T08:05:00Z" ""
+df_eq "var anchor, period=1200, source=var" "2026-02-20T07:20:00Z var" "$DF_OUT"
+call_doublefire_from 1 fsm 3600 "2026-02-20T08:05:00Z" ""
+df_eq "var anchor, period=3600, source=var" "2026-02-20T06:00:00Z var" "$DF_OUT"
+
+# --- precedence: the FSM row WINS over the operator variable. The FSM instant is stamped
+# on 10.0.1.40's journald -- the same clock that stamps startedAt -- which collapses the
+# operator-clock-skew class entirely. ---
+call_doublefire_from 1 fsm 1200 "2026-02-20T08:05:00Z" "2026-01-15 12:34:56.123456"
+df_eq "fsm takes precedence over CUTOVER_WINDOW_FROM" "2026-01-15T11:40:00Z fsm" "$DF_OUT"
+
+# --- FAIL CLOSED: no anchor derivable. There is NO safe wide fallback -- a 7-day window is
+# ~5,100 runs ~= 51 pages ~= 214s, so scanning it would trade a deadline abort for a
+# deadline abort while LOOKING safer. ---
+call_doublefire_from 1 fsm 1200 "" ""
+assert "#6178 no anchor at all -> FAILS CLOSED (non-zero)" "[[ '$DF_RC' -ne 0 ]]"
+assert "#6178 fail-closed names the operator remedy (CUTOVER_WINDOW_FROM)" "grep -q 'CUTOVER_WINDOW_FROM' <<<\"\$(cat <<'EOF'
+$DF_OUT
+EOF
+)\""
+call_doublefire_from 1 fsm 1200 "not-a-timestamp" ""
+assert "#6178 malformed CUTOVER_WINDOW_FROM -> FAILS CLOSED (never a silent 365d probe default)" "[[ '$DF_RC' -ne 0 ]]"
+
+# --- min() floor is the SKEW clamp: an operator anchor in the FUTURE can only ever WIDEN
+# the window, never narrow it below now - FALLBACK. ---
+NOW_E=$(date -u +%s)
+call_doublefire_from 1 fsm 1200 "" "$(date -u -d '+2 days' '+%Y-%m-%d %H:%M:%S')"
+df_eq "future (skewed) anchor clamps to the floor, source=floor" "floor" "${DF_OUT##* }"
+df_near "future-anchor clamp lands at now - 1d" "${DF_OUT%% *}" "$(( NOW_E - 86400 ))" 120
+
+# --- per-arm fallback: the pre-cutover dark-host detector keeps its wide window. There is
+# no coexistence anchor to derive BEFORE the cutover, so mode=wide must not attempt one
+# (and must make no doppler call). ---
+call_doublefire_from 200 wide 1200 "" ""
+df_eq "op=doublefire-probe (mode=wide) reports source=wide" "wide" "${DF_OUT##* }"
+df_near "mode=wide keeps the 200-day window" "${DF_OUT%% *}" "$(( NOW_E - 200 * 86400 ))" 120
+assert "#6178 mode=wide exits 0 (never fail-closed -- no anchor exists pre-cutover)" "[[ '$DF_RC' -eq 0 ]]"
+
+# --- invalid fallback_days is a programming error, not an operator input: fail loud. ---
+call_doublefire_from "" fsm 1200 "" "2026-01-15 12:34:56.123456"
+assert "#6178 missing fallback_days -> non-zero (arg is REQUIRED, not an ambient global)" "[[ '$DF_RC' -ne 0 ]]"
+
+# --- PURITY (the function's standing contract is 'NEVER echoes a raw Better Stack row').
+# _flip_transition_dt must surface ONLY the dt field. ---
+assert "#6178 _flip_transition_dt extracts ONLY .dt (never .raw)" \
+  "grep -qE '\\.dt' '$DF_HARNESS_SRC' && ! grep -qE 'jq[^|]*\\.raw' '$DF_HARNESS_SRC'"
+assert "#6178 _flip_transition_dt greps TRANSITION reasons, not the noop-* heartbeat" \
+  "grep -qF 'flip-complete' '$DF_HARNESS_SRC' && ! grep -qE '\"reason\":\"noop' '$DF_HARNESS_SRC'"
+assert "#6178 _flip_transition_dt uses the QUOTED reason form (noop-rolled-back contains rolled-back)" \
+  "grep -qF '\"reason\":\"rolled-back\"' '$DF_HARNESS_SRC'"
+assert "#6178 _flip_transition_dt guards against --limit truncation (newest-N could hide the earliest)" \
+  "grep -qE 'limit' '$DF_HARNESS_SRC'"
+
+# --- Wiring: the harness proves the function BEHAVES, not that anything CALLS it correctly.
+# Both arms must pass their fallback EXPLICITLY as $1 (never read an ambient global). ---
+assert "#6178 op=verify calls doublefire_from with the 1-day fallback in fsm mode" "grep -qE 'doublefire_from 1 fsm' '$WF'"
+assert "#6178 op=doublefire-probe calls doublefire_from with the 200-day fallback in wide mode" "grep -qE 'doublefire_from 200 wide' '$WF'"
+
+# --- AC7: the 200-day literal must NOT live in the function body -- it is now a per-arm
+# CALLER argument. A file-scoped grep is vacuous here (CUTOVER_WINDOW_FROM alone appears 4x). ---
+assert "#6178 AC7: doublefire_from BODY carries no 200-day literal (baseline on main: 2)" \
+  "[[ \"\$(grep -cE '200 \\* 86400|200 days ago' '$DF_HARNESS_SRC')\" -eq 0 ]]"
+
+# --- AC8: the window stays OPEN-TOPPED. Passing until= looks like a free cost saving and
+# removes the highest-risk region (post-repoint + post-rollback lie AFTER the recorded
+# CUTOVER_WINDOW_UNTIL). Do not "tidy" it. ---
+assert "#6178 AC8: DF_URL carries no until= parameter (open-topped invariant)" "! grep -qE 'inngest-doublefire-probe\?[^\"]*until=' '$WF'"
+assert "#6178 AC8: the open-topped invariant is documented at the call site" "grep -qE 'open-topped|OPEN-TOPPED' '$WF'"
+
+# --- anchor_source reaches the run log, so a var-sourced or floor-clamped window is
+# visible off-box rather than being an invisible property of a green run. ---
+assert "#6178 both arms surface anchor_source= in the run log" "[[ \"\$(grep -cF 'anchor_source=' '$WF')\" -ge 2 ]]"
+
+# ===========================================================================
+# #6178 SECOND DEFECT — the bucketing jq dies on a null startedAt.
+#
+# The probe projects {functionID, startedAt} from EVERY returned node. A run that is
+# queued, running, or cancelled-before-start carries startedAt:null, and
+# fromdateiso8601 throws on it ("strptime/1 requires string inputs", jq exit 5).
+# This sat directly behind the window defect on the critical path: narrowing the
+# window alone would have moved the failure from reason=deadline to a jq crash, and
+# AC-V4 would have recorded "the fix did not work". It was invisible until now only
+# because the scan had never once completed far enough to REACH the bucketing step.
+#
+# Extracted by SHAPE (every single-quoted jq program mentioning fromdateiso8601), so
+# a fourth site added later is covered automatically rather than silently missed.
+# ===========================================================================
+BUCKET_PROGS_DIR="$(mktemp -d)"
+# Extraction is anchored on the jq INVOCATION, not on bare single-quote pairing across the
+# whole file. An earlier draft paired quotes globally and silently mis-sliced the moment a
+# nearby comment contained an apostrophe ("jq's runtime error"), yielding programs that
+# failed to COMPILE (jq exit 3) and would have been misread as the runtime crash (exit 5)
+# this block is about. Anchoring on `jq -c --argjson period "$CRON_PERIOD"` cannot drift
+# into prose: a comment cannot produce a jq call.
+cat > "$BUCKET_PROGS_DIR/extract.pl" <<'PERL'
+local $/; my $s = <>;
+my $i = 0;
+while ($s =~ /jq -c --argjson period "\$CRON_PERIOD"\s*\\?\s*'([^']*)'/gs) {
+  $i++;
+  open(my $fh, '>', "$ENV{OUTDIR}/prog-$i.jq") or die $!;
+  print $fh $1;
+  close $fh;
+}
+PERL
+OUTDIR="$BUCKET_PROGS_DIR" perl "$BUCKET_PROGS_DIR/extract.pl" "$WF"
+BUCKET_PROG_N=$(find "$BUCKET_PROGS_DIR" -name 'prog-*.jq' | wc -l | tr -d '[:space:]')
+
+echo "--- #6178 null-startedAt bucketing (all $BUCKET_PROG_N sites) ---"
+# Min-cardinality: an extraction that silently yields zero programs would make every
+# assertion below pass without executing anything.
+assert "#6178 extracted >=3 fromdateiso8601 bucketing programs (2 arms + missed-tick OBSERVED)" "[[ '$BUCKET_PROG_N' -ge 3 ]]"
+
+# A run with no startedAt has NOT fired, so it cannot be a double-fire -- but it must be
+# dropped DELIBERATELY, not by dying, and the drop must be counted (a silent discard is
+# the false-clean shape this gate exists to prevent).
+NULL_FIXTURE='{"runs":[{"functionID":"fn-a","startedAt":null},{"functionID":"fn-a","startedAt":"2026-07-08T10:00:00Z"},{"functionID":"fn-a","startedAt":"2026-07-08T10:02:00Z"}]}'
+for prog in "$BUCKET_PROGS_DIR"/prog-*.jq; do
+  pname=$(basename "$prog")
+  prc=0
+  pout=$(jq -c --argjson period 1200 -f "$prog" <<<"$NULL_FIXTURE" 2>&1) || prc=$?
+  assert "#6178 $pname survives a null startedAt (jq exit 5 was the crash)" "[[ '$prc' -eq 0 ]]"
+  # And the null row must not silently become a phantom bucket member.
+  assert "#6178 $pname output contains no null bucket" "! grep -qE '\"bucket\":null|bucket: *null' <<<\"\$(cat <<'EOF'
+$pout
+EOF
+)\""
+done
+
+# The drop must be VISIBLE: both probe arms emit the dropped count as a ::notice::.
+assert "#6178 dropped no-startedAt runs are surfaced (not silently discarded)" "[[ \"\$(grep -cE 'no startedAt|NO_START' '$WF')\" -ge 2 ]]"
+
+rm -rf "$BUCKET_PROGS_DIR"
+rm -f "$DF_HARNESS_SRC"
 rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" "$PROBE_ARMS_FILE"
 
 echo ""
