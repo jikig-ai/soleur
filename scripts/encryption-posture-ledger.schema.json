@@ -8,6 +8,11 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": { "const": 1 },
+    "live_coverage_floor": {
+      "description": "#6902/ADR-141: optional integer arming the Layer A live-coverage floor. When >= 1, the ledger must retain at least this many stores whose at_rest.live_verification == 'available' (guards against zeroing out all live-measurable at-rest coverage). Absent => 0 => floor inactive.",
+      "type": "integer",
+      "minimum": 0
+    },
     "store_classes": {
       "description": "R7: the CHECKED partition. A Terraform resource type here is treated as a persistent store and MUST carry a ledger row. Extending this is the single place a new store class enters.",
       "type": "object",
