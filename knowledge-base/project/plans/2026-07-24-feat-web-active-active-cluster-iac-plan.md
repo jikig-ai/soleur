@@ -191,7 +191,7 @@ git-data). The **`web-1` `for_each` key is RETAINED** (29 refs across 6 files �
   (volume detached → reattached → `luksOpen`); (c) **then** drop `[user_data]` from `ignore_changes` +
   the provisioners **together** (dropping `user_data` alone force-replaces prematurely — order is
   load-bearing; verified `server.tf:265/289`). Guard on **effect not action** (reboot-forcing in-place
-  `update` → operator maintenance-window apply, not `[ack-destroy]`).
+  `update` → routed to the deferred orchestrator's gated `workflow_dispatch` maintenance-window apply (DP-11 F8 required-reviewer environment, NOT a human SSH/terminal step), not `[ack-destroy]`).
 
 ### Phase 6 — Concurrent active-active serving — NON-GOAL (external gate, documented)
 

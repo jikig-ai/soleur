@@ -65,7 +65,8 @@ every host is disposable cattle, proven by destroying web-1 and rebuilding it pu
 - TR2: Parity guards updated in lockstep: `inngest-host.test.sh §6b`, `web-hosts-fanout-parity.test.sh`,
   `web-1-swap-concurrency-parity.test.sh`, `terraform-target-parity`.
 - TR3: Add `create_before_destroy` where add/drain/remove needs it; guard on **effect not action**
-  (reboot-forcing in-place `update` is destructive — route to operator maintenance-window apply).
+  (reboot-forcing in-place `update` is destructive — route to the deferred orchestrator's gated
+  `workflow_dispatch` maintenance-window apply, NOT a human SSH/terminal step).
 - TR4: `proxy-tls` SAN change regenerates the shared cert — coordinate CA reload.
 - TR5: New ADR amends `hr-prod-host-config-change-immutable-redeploy` + ADR-103; extends ADR-068.
 - TR6: Cross-host replication → add an Art. 30 register entry (CLO); Art. 34 disclosure path if a cutover

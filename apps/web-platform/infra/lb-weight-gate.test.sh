@@ -63,7 +63,7 @@ run_with_def() {
   local k
   for k in "${!DEF[@]}"; do args+=("${k}=${DEF[$k]}"); done
   local out errfile
-  errfile=$(mktemp)
+  errfile=$(mktemp)  # lint-trap-ownership: ok — removed inline (rm -f "$errfile" below) every call; no exit between alloc and cleanup; bounded (ADR-129)
   out=$(env -i PATH="$PATH" "${args[@]}" bash "$GATE" 2>"$errfile") && GATE_RC=0 || GATE_RC=$?
   GATE_OUT="$out"
   GATE_ERR="$(cat "$errfile")"
