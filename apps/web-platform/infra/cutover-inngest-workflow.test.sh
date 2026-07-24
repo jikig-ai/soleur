@@ -500,9 +500,13 @@ assert "#6617 doublefire-probe carries the 2.6 scope caveat" "grep -qF 'NOT a we
 # boolean directly behind a has() guard. Assert the anti-pattern is absent anywhere in the WF. ---
 # Strip shell-comment lines first — the fix's own explanatory comment quotes the anti-pattern
 # as the thing NOT to do (cq-assert-anchor-not-bare-token), so a raw file-wide grep false-matches
-# the documentation. Anchor on the actual `jq ... '.registry_empty //` invocation shape.
+# the documentation. Then match `.registry_empty` immediately followed by jq `//` ANYWHERE on a
+# real line — quote-style-agnostic and leading-whitespace-tolerant (a narrower `jq...'` anchor is
+# evaded by ` .registry_empty`, a double-quoted program, or a pipe prefix). No legitimate line
+# reads this boolean with `//`; the only correct read is bare `.registry_empty`. (Single-line
+# only — a jq program split across lines is an accepted residual gap, not a realistic hand-edit.)
 assert "no jq '//'-on-boolean read of registry_empty (false // x == x bug, #6178)" \
-  "! grep -vE '^[[:space:]]*#' '$WF' | grep -qE \"jq[^']*'\.registry_empty[[:space:]]*//\""
+  "! grep -vE '^[[:space:]]*#' '$WF' | grep -qE '\.registry_empty[[:space:]]*//'"
 # And assert BOTH consumer preconditions read the boolean directly (parity — they had drifted).
 assert "registry_empty read directly (bare, no //) at least twice (op=rearm + op=verify)" \
   "[[ \"\$(grep -cE \"jq -r '\.registry_empty'\" '$WF')\" -ge 2 ]]"
