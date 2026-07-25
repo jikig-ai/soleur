@@ -1804,13 +1804,87 @@ jobs:
           fi
           echo "confirm + id-pin accepted (volume id ${EXPECTED_VOLUME_ID})."
 
+      - name: Resolve recovery posture (D4 live existence probe)
+        id: posture
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          EXPECTED_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
+        # Hoisted AHEAD of the D10 health gate (it used to live inside the plan step) because
+        # two later gates need to know WHICH SITUATION THIS IS, and one of them deadlocks
+        # without it. Two independent questions, both answered here:
+        #
+        #   1. Does the PINNED volume still exist?  GET /v1/volumes/<id>
+        #   2. Does ANY volume by that NAME exist?  GET /v1/volumes?name=soleur-registry-store
+        #
+        # Question 2 is not redundant. Question 1's input is the same operator-typed id the
+        # id-pin exists to protect, and a MISTYPED id 404s exactly like a genuinely-destroyed
+        # one. In the recut arm that is harmless (the gate compares against the plan's
+        # before.id), but the RESUME arm has no before.id to compare — so without a
+        # name-scoped check a single wrong digit would manufacture the "absent" verdict that
+        # admits a bare create, orphaning the real volume (still attached, still billing)
+        # while terraform binds a fresh empty one. A name lookup cannot be forged by a typo.
+        run: |
+          set -euo pipefail
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::registry-luks-recut ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot run the live existence probe. Fail-closed: an unreadable signal is not evidence of absence."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+
+          PROBE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+            -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+            "https://api.hetzner.cloud/v1/volumes/${EXPECTED_VOLUME_ID}" 2>/dev/null) || PROBE_STATUS="000"
+
+          # Name-scoped corroboration. `.volumes | length` over an exact-name query; any
+          # non-numeric result (error envelope, transport failure) is treated as UNKNOWN, never
+          # as zero — a failed lookup must not read as "no volume by that name".
+          NAME_COUNT=$(curl -s --max-time 15 -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+            'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' 2>/dev/null \
+            | jq -r 'if (.volumes | type) == "array" then (.volumes | length) else "unknown" end' 2>/dev/null) || NAME_COUNT="unknown"
+          [[ "$NAME_COUNT" =~ ^[0-9]+$ ]] || NAME_COUNT="unknown"
+
+          case "$PROBE_STATUS" in
+            404) PROBE_RESULT="absent" ;;
+            200) PROBE_RESULT="present" ;;
+            *)   PROBE_RESULT="unknown-${PROBE_STATUS}" ;;
+          esac
+
+          # "absent" requires BOTH signals to agree. A 404 on the pinned id while a volume of
+          # that name still exists means the id is wrong, not that the store is gone.
+          if [[ "$PROBE_RESULT" == "absent" && "$NAME_COUNT" != "0" ]]; then
+            echo "::error::registry-luks-recut ABORT: the pinned volume id ${EXPECTED_VOLUME_ID} returned 404, but a volume named soleur-registry-store still exists (name_count=${NAME_COUNT}). That combination means the ID IS WRONG, not that the store was destroyed. Re-read it: curl -s -H \"Authorization: Bearer \$HCLOUD_TOKEN\" 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
+            exit 1
+          fi
+
+          echo "hetzner probe: id=${EXPECTED_VOLUME_ID} http=${PROBE_STATUS} => ${PROBE_RESULT}; name_count=${NAME_COUNT}"
+          printf 'probe_result=%s\n' "$PROBE_RESULT" >> "$GITHUB_OUTPUT"
+
       - name: Pre-destroy pull-path health gate (D10)
+        # SKIPPED on the resume arm — see below. This is not a convenience: running it there
+        # DEADLOCKS the only documented recovery path.
+        if: steps.posture.outputs.probe_result != 'absent'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         # The recut destroys the store. That is only acceptable because GHCR covers the
         # empty-store window — so refuse to destroy it while the covering path is ITSELF
         # degraded (that would create the #6400 total-deploy outage rather than tolerate a
         # window). Zero-tolerance: a healthy fleet emits ONLY registry=zot.
+        #
+        # WHY IT MUST NOT RUN WHEN THE STORE IS ALREADY GONE. A mid-apply failure leaves the
+        # store destroyed and the registry dark; every deploy in that window then emits
+        # `registry_pull_event registry=ghcr-fallback` — precisely what this gate counts. So on
+        # a re-fire the gate would abort on evidence THE RECUT ITSELF PRODUCED, locking the
+        # operator out of the resume arm that the workflow's own apply-failure message and the
+        # runbook both instruct them to use. The `reason=device-absent` case is worse: the
+        # runbook states it never self-heals and needs a full recut, which is this same
+        # dispatch, blocked identically.
+        #
+        # The gate's purpose is "do not DESTROY the store while its cover is degraded". Once
+        # the store is already destroyed that purpose is spent: the fleet is in the very window
+        # the gate exists to avoid entering, and the only way out is forward. Skipping is
+        # therefore the fail-SAFE direction, and it is keyed on the live Hetzner probe (not an
+        # operator flag), so it cannot be asserted into existence.
         #
         # Queries SENTRY, not Better Stack: registry_pull_event emits to the Sentry store API
         # and to WEB-host journald, and Better Stack's only ingested source here is the INNGEST
@@ -1827,6 +1901,11 @@ jobs:
           printf '::add-mask::%s\n' "$SENTRY_AUTH_TOKEN"
           export SENTRY_AUTH_TOKEN
           bash "${GITHUB_WORKSPACE}/scripts/registry-pull-path-health.sh" --since-hours 24
+
+      - name: Note skipped pull-path gate (resume arm)
+        if: steps.posture.outputs.probe_result == 'absent'
+        run: |
+          echo "::notice::D10 pull-path health gate SKIPPED: the pinned store volume is already absent (corroborated by a name-scoped lookup), so this is a mid-apply RESUME, not a fresh destroy. Running the gate here would abort on ghcr-fallback events the incomplete recut itself produced, blocking the only recovery path."
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
@@ -1879,6 +1958,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           EXPECTED_VOLUME_ID: ${{ inputs.expected_registry_store_volume_id }}
+          POSTURE_PROBE_RESULT: ${{ steps.posture.outputs.probe_result }}
         # THE THREE -replace FLAGS ARE THE POINT. Replacing the volume alone leaves the old host
         # mounting a device that no longer exists; replacing the host alone preserves the
         # plaintext volume and hits the blkid FATAL. They move TOGETHER or not at all.
@@ -1917,21 +1997,24 @@ jobs:
           fi
           export HCLOUD_TOKEN
 
-          # D4 LIVE EXISTENCE PROBE — the resume arm's sole admission evidence.
+          # D4 LIVE EXISTENCE PROBE — the resume arm's sole admission evidence, computed in the
+          # "Resolve recovery posture" step above and consumed here.
+          #
           # A mid-apply failure leaves a plan with NO deletes (everything already destroyed),
           # which by SHAPE is indistinguishable from a from-empty BIRTH. The probe is the one
           # check whose evidence is INDEPENDENT of the terraform state the gate is guarding:
           #   200 => the pinned volume still EXISTS => a bare create is wrong; `terraform import`.
-          #   404 => genuinely gone => a resume is legitimate.
-          PROBE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
-            -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
-            "https://api.hetzner.cloud/v1/volumes/${EXPECTED_VOLUME_ID}" 2>/dev/null) || PROBE_STATUS="000"
-          case "$PROBE_STATUS" in
-            404) PROBE_RESULT="absent" ;;
-            200) PROBE_RESULT="present" ;;
-            *)   PROBE_RESULT="unknown-${PROBE_STATUS}" ;;
-          esac
-          echo "hetzner volume ${EXPECTED_VOLUME_ID} existence probe: HTTP ${PROBE_STATUS} => ${PROBE_RESULT}"
+          #   404 (corroborated by a name-scoped lookup) => genuinely gone => resume is legitimate.
+          #
+          # It is resolved EARLY rather than here because the D10 health gate also needs it: D10
+          # must not run once the store is already destroyed, or it aborts on ghcr-fallback
+          # events the incomplete recut itself produced. Single source, two consumers.
+          PROBE_RESULT="${POSTURE_PROBE_RESULT}"
+          if [[ -z "$PROBE_RESULT" ]]; then
+            echo "::error::registry-luks-recut ABORT: the recovery-posture probe produced no verdict. Fail-closed — the gate's resume arm must never be admitted on a missing probe."
+            exit 1
+          fi
+          echo "hetzner existence probe (from the posture step): ${PROBE_RESULT}"
 
           # Sourced gate — the SAME bytes tests/scripts/test-registry-luks-recut-gate.sh exercises.
           # shellcheck source=tests/scripts/lib/registry-luks-recut-gate.sh
@@ -1967,21 +2050,44 @@ jobs:
         # tfplan.json the gate already read — adds no information and can prevent nothing.
         run: |
           set -euo pipefail
+          # Address list DERIVED from the plan, not hardcoded. All three resources are
+          # `for_each = var.web_hosts`, so a literal ["web-1"] list silently under-covers the
+          # moment a second web host lands (#6459 active-active-N is named in-tree as doing
+          # exactly that) — and it would keep printing "zero-touch ok" for the addresses it
+          # never examined, which is worse than not having the assert.
+          #
+          # PREFIX match on the base address, so every for_each key is covered automatically.
+          # (out_of_scope in the gate is the exact-equality barrier; this is the named,
+          # legible second barrier for the two addresses whose loss is unrecoverable.)
           rc=0
-          for addr in 'hcloud_server.web["web-1"]' 'hcloud_volume.workspaces["web-1"]' 'hcloud_volume_attachment.workspaces["web-1"]'; do
-            n=$(jq --arg a "$addr" '[.resource_changes[]?
-              | select(.address == $a)
-              | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"))] | length' tfplan.json)
+          checked=0
+          while IFS=$'\t' read -r addr n; do
+            [[ -z "$addr" ]] && continue
+            checked=$(( checked + 1 ))
             if [[ ! "$n" =~ ^[0-9]+$ ]]; then
               echo "::error::zero-touch assert: could not parse an action count for ${addr} — fail-closed."
               rc=1
             elif [[ "$n" != "0" ]]; then
-              echo "::error::zero-touch assert FAILED: ${addr} has ${n} positive action(s) in this plan. This dispatch must NEVER touch web-1 or the sole-copy /mnt/data volume. Refusing to apply."
+              echo "::error::zero-touch assert FAILED: ${addr} has ${n} positive action(s) in this plan. This dispatch must NEVER touch a web host, the sole-copy /mnt/data volume, or its attachment. Refusing to apply."
               rc=1
             else
               echo "zero-touch ok: ${addr}"
             fi
-          done
+          done < <(jq -r '
+            [ .resource_changes[]?
+              | select(
+                  (.address | startswith("hcloud_server.web"))
+                  or (.address | startswith("hcloud_volume.workspaces"))
+                  or (.address | startswith("hcloud_volume_attachment.workspaces"))
+                )
+              | { a: .address,
+                  n: ([ .change.actions[]? | select(. == "create" or . == "update" or . == "delete" or . == "forget") ] | length) } ]
+            | .[] | "\(.a)\t\(.n)"' tfplan.json)
+
+          # A plan that mentions NONE of these addresses is the normal case (the -target set
+          # excludes them), so zero rows is legitimate — but say so explicitly rather than
+          # letting an empty loop read as "all clear, N checked".
+          echo "zero-touch assert: ${checked} protected address(es) present in this plan."
           exit "$rc"
 
       - name: Terraform apply (atomic recut) — completeness backstop

@@ -12,27 +12,52 @@
 # are both level=warning precisely because they are never expected. So ">=1 event ⇒ ABORT" has
 # no false-abort surface and is a real number, not a hand-wave like "sustained hits".
 #
-# ── WHY SENTRY AND NOT BETTER STACK (measured, #6929 Phase 0.2) ─────────────────────────────
-# The plan for this gate specified `betterstack-query.sh --grep ghcr-fallback --grep local-cache`.
-# That query CANNOT EVER RETURN A ROW, and a gate that can only ever be green is worse than no
-# gate because it is read as evidence:
+# ── WHY SENTRY (and a CORRECTION to an earlier claim in this file) ──────────────────────────
+# This gate was originally specified against `betterstack-query.sh --grep ghcr-fallback`, and an
+# earlier revision of this header asserted that query "can never return a row" because "there is
+# no web-host table" in Better Stack.
 #
-#   * `registry_pull_event` emits to (a) the Sentry store API and (b) local journald on the WEB
-#     host, via `logger`.
-#   * Better Stack's only ingested source in this repo is the INNGEST vector journald feed
-#     (table t520508_soleur_inngest_vector_prd_3_logs, the default in betterstack-query.sh).
-#     There is no web-host table.
+# THAT ASSERTION WAS FALSE, and the way it was reached is worth recording, because it is the
+# exact failure this gate exists to prevent — reading absence-of-signal as absence-of-channel:
 #
-# So the marker is structurally absent from the queried warehouse. Verified by measurement, not
-# inference: `--since 720h --grep ghcr-fallback` and `--grep registry_pull_event` both returned
-# zero rows while an ungrepped query over the same window returned rows normally.
+#   * `registry_pull_event` (apps/web-platform/infra/ci-deploy.sh) emits the TEXT
+#     `IMAGE_PULL_OK: registry=<r> image=<i> tag=<t>` via `logger -t ci-deploy`. The string
+#     "registry_pull_event" is the shell FUNCTION name and appears in no log line — so grepping
+#     for it returns zero for a reason that has nothing to do with ingestion.
+#   * `apps/web-platform/infra/server.tf` ships the SAME vector.toml to the WEB host, and
+#     `ci-deploy` is in Vector Source 4's SYSLOG_IDENTIFIER allowlist — so web-host journald
+#     lands in the SAME table as the inngest feed. Live-verified 2026-07-25: an
+#     `--since 720h --grep IMAGE_PULL_OK` query returns rows carrying
+#     `"SYSLOG_IDENTIFIER":"ci-deploy","host":"soleur-web-platform"`.
+#   * The `--grep ghcr-fallback` zero was therefore a TRUE zero — a healthy fleet that emitted no
+#     fallbacks in 30 days — not a structural absence.
 #
-# Sentry IS the source of truth for this signal, and scripts/followthroughs/zot-soak-6122.sh
-# already queries exactly these tags with a hardened helper. This script reuses that idiom,
-# including its fail-closed TRANSIENT semantics.
+# Sentry is retained as the query source because it is where the SEVERITY lives (these events are
+# `level: "warning"` there and drive the `zot_mirror_fallback_rate` alert), and because
+# scripts/followthroughs/zot-soak-6122.sh supplies a hardened query helper for exactly these tags.
+# Positive control, live 2026-07-25: `feature:supply-chain op:image-pull registry:"zot"` returns
+# 88 events over 720h, so the tag idiom and the credential both work.
+#
+# KNOWN RESIDUAL: Sentry emission from ci-deploy.sh is FAIL-OPEN (`curl … || logger`), so a Sentry
+# ingest outage drops these events silently. The journald→Vector→Better Stack path does NOT have
+# that property. The DENOMINATOR below is what makes that residual survivable: an outage that
+# suppresses the fallback counters suppresses the zot counter too, and a zero denominator ABORTS.
 #
 # FAIL-CLOSED. An unreachable API, a bad token, or an unexpected payload shape ABORTS. The gate
 # protects an irreversible destroy; "I could not check" must never read as "it is fine".
+#
+# ── THE DENOMINATOR (why zero degraded events is not, by itself, health) ────────────────────
+# `total == 0` is produced by FOUR distinct states and only one of them is health:
+#   1. the fleet deployed and zot served every pull            — healthy;
+#   2. nothing deployed in the window (a quiet weekend)        — no evidence;
+#   3. ZOT_ACTIVE=0 — the zot gate degraded, so ci-deploy skipped zot entirely and emitted
+#      NOTHING while the fleet ran 100% on GHCR                — the exact state this gate exists
+#                                                                to catch, scoring as clean;
+#   4. the web host is Sentry-dark (the emitter's env trio unset) — every event invisible.
+# So a bare "zero bad events" reading is indistinguishable from "we observed nothing at all".
+# This gate therefore requires POSITIVE EVIDENCE that the pull path was exercised at all
+# (registry=zot >= 1) before it will accept a zero. Precedent: zot-soak-6122.sh added the same
+# denominator arm for the same reason ("nothing above proves the fleet was OBSERVED at all").
 #
 # Usage:
 #   scripts/registry-pull-path-health.sh [--since-hours N]
@@ -72,10 +97,20 @@ API="${SENTRY_API_BASE:-https://sentry.io/api/0}"
 declare -A WATCHED=(
   [ghcr-fallback]='feature:supply-chain op:image-pull registry:"ghcr-fallback"'
   [local-cache]='feature:supply-chain op:image-pull registry:"local-cache"'
+  # ZOT_ACTIVE=0 — the zot gate degraded, so ci-deploy never ATTEMPTED zot and emitted no
+  # ghcr-fallback at all while the fleet ran entirely on GHCR. Without this entry that state is
+  # invisible to the two counters above and scores as clean. It is recorded elsewhere in-tree as
+  # the highest-volume degraded signal, so omitting it would blind the gate to its likeliest
+  # real-world trigger.
+  [zot-gate-degraded]='feature:supply-chain op:image-pull registry:"zot-gate-degraded"'
 )
 
-if (( ${#WATCHED[@]} != 2 )); then
-  echo "::error::registry-pull-path-health: WATCHED has ${#WATCHED[@]} entries, expected 2 — refusing to report a verdict on a partial signal set." >&2
+# The DENOMINATOR. Proves the pull path was exercised at all in the window; without it, "no bad
+# events" and "we observed nothing" are the same reading. See the header.
+DENOMINATOR_QUERY='feature:supply-chain op:image-pull registry:"zot"'
+
+if (( ${#WATCHED[@]} != 3 )); then
+  echo "::error::registry-pull-path-health: WATCHED has ${#WATCHED[@]} entries, expected 3 — refusing to report a verdict on a partial signal set." >&2
   exit 1
 fi
 
@@ -83,7 +118,13 @@ if [[ -z "${REGISTRY_PULL_HEALTH_QUERY_CMD:-}" && -z "${SENTRY_AUTH_TOKEN:-}" ]]
   echo "::error::registry-pull-path-health: SENTRY_AUTH_TOKEN unset — cannot verify the GHCR fallback path is healthy. Refusing to authorize a store destroy against an unverifiable pull path." >&2
   exit 1
 fi
-[[ -n "${SENTRY_AUTH_TOKEN:-}" ]] && echo "::add-mask::${SENTRY_AUTH_TOKEN}"
+# ONLY inside Actions. `::add-mask::` is a workflow COMMAND, not a shell builtin — outside a
+# runner it is an ordinary echo that PRINTS THE TOKEN to the terminal and scrollback. The runbook
+# tells the operator to run this script locally, so an unguarded mask emit would leak the live
+# prd credential onto their screen every time.
+if [[ -n "${GITHUB_ACTIONS:-}" && -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
+  echo "::add-mask::${SENTRY_AUTH_TOKEN}"
+fi
 
 START=$(date -u -d "-${SINCE_HOURS} hours" +%Y-%m-%dT%H:%M:%S 2>/dev/null) || {
   echo "::error::registry-pull-path-health: could not compute the window start." >&2; exit 1; }
@@ -124,7 +165,26 @@ for k in $(printf '%s\n' "${!WATCHED[@]}" | sort); do
   total=$(( total + n ))
 done
 
-echo "pull_path ghcr_fallback=${COUNTS[ghcr-fallback]} local_cache=${COUNTS[local-cache]} total=${total} threshold=0"
+n_zot=$(sentry_count "$DENOMINATOR_QUERY")
+if [[ ! "$n_zot" =~ ^[0-9]+$ ]]; then
+  echo "::error::registry-pull-path-health: the denominator query (registry=zot) failed (window ${START}..${END}). FAIL-CLOSED — without it, zero degraded events cannot be distinguished from zero observations." >&2
+  exit 1
+fi
+
+echo "pull_path ghcr_fallback=${COUNTS[ghcr-fallback]} local_cache=${COUNTS[local-cache]} zot_gate_degraded=${COUNTS[zot-gate-degraded]} total=${total} threshold=0 zot_served=${n_zot}"
+
+if (( n_zot == 0 )); then
+  cat >&2 <<EOF
+::error::registry-pull-path-health: ABORT — the pull path is UNOBSERVED in the last ${SINCE_HOURS}h, not proven healthy. Zero degraded events (ghcr-fallback=${COUNTS[ghcr-fallback]} local-cache=${COUNTS[local-cache]} zot-gate-degraded=${COUNTS[zot-gate-degraded]}) is only evidence when SOMETHING was served: registry=zot count is 0, so no deploy exercised the pull path at all — or the emitter is dark.
+
+Refusing to authorize an irreversible store destroy on an absence of data.
+
+EXIT: force a dual-push so the path is exercised, then re-dispatch:
+  gh workflow run web-platform-release.yml -f bump_type=patch
+(or widen the window with a longer --since-hours if you are certain the fleet has been idle.)
+EOF
+  exit 1
+fi
 
 if (( total > 0 )); then
   cat >&2 <<EOF
