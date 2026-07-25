@@ -46,6 +46,24 @@ FOLLOWUP="the ADR-079 deferral-B follow-up (creds-gated real-argv capture)"
 
 SDK_PACKAGES=("@anthropic-ai/claude-agent-sdk" "@anthropic-ai/claude-code")
 
+# Branch commit messages for the ack scan. MUST distinguish "no ack on the
+# branch" from "the range could not be read": the previous
+# `git log … 2>/dev/null || true` conflated them, so a shallow BASE_REF (the
+# workflow fetched origin/main at --depth=1) produced an EMPTY ack_text and the
+# gate reported a missing acknowledgement no matter what the author wrote — the
+# ack was unreachable, not absent. Reproduced: with a depth-1 base, `git log
+# base..HEAD` exits 128 "unknown revision". Fail loudly and name the cause.
+read_branch_messages() {
+  local out rc
+  out="$(git log "${BASE_REF}..HEAD" --format=%B 2>/dev/null)"; rc=$?
+  if (( rc != 0 )); then
+    echo "::error::sdk-bump-gate: could not read the commit range '${BASE_REF}..HEAD' (git exit ${rc})." >&2
+    echo "::error::This is NOT a missing acknowledgement — the range is unreadable, usually because '${BASE_REF}' was fetched shallow so there is no merge base. Deepen the fetch (drop --depth on the 'git fetch origin main'), or pass SDK_GATE_ACK_TEXT." >&2
+    return 1
+  fi
+  printf '%s' "$out"
+}
+
 # Resolved version from a package-lock.json (npm v3 lockfile: packages map keyed by
 # node_modules/<pkg>). Prints "" (never errors) when the package or file is absent.
 pkglock_version() { # $1=lockfile $2=pkg
@@ -125,7 +143,7 @@ if [[ "${#bumped_pkgs[@]}" -gt 0 ]]; then
   if [[ -n "${SDK_GATE_ACK_TEXT+x}" ]]; then
     ack_text="${SDK_GATE_ACK_TEXT}"
   else
-    ack_text="$(git log "${BASE_REF}..HEAD" --format=%B 2>/dev/null || true)"
+    ack_text="$(read_branch_messages)" || exit 1
   fi
   if printf '%s' "$ack_text" | grep -qiE "\b${ACK_TOKEN}\b"; then
     echo "sdk-bump-gate: SDK bump acknowledged (\`${ACK_TOKEN}\` present) — a maintainer attests the committed seccomp profile was validated against the new SDK. Proceeding."
@@ -200,7 +218,7 @@ if [[ "$require_capture_ack" -eq 1 ]]; then
   if [[ -n "${SDK_GATE_ACK_TEXT+x}" ]]; then
     ack_text="${SDK_GATE_ACK_TEXT}"
   else
-    ack_text="$(git log "${BASE_REF}..HEAD" --format=%B 2>/dev/null || true)"
+    ack_text="$(read_branch_messages)" || exit 1
   fi
   if printf '%s' "$ack_text" | grep -qiE "\b${ACK_TOKEN}\b"; then
     echo "sdk-bump-gate: capture-gate ack present (\`${ACK_TOKEN}\`) — proceeding on the maintainer attestation."

@@ -16,14 +16,25 @@ const SKILL_DIR = resolve(REPO_ROOT, "plugins/soleur/skills/model-launch-review"
 const SKILL_MD = resolve(SKILL_DIR, "SKILL.md");
 const AUDIT_SH = resolve(SKILL_DIR, "scripts/audit-models.sh");
 
-// Current model landscape (2026-06). The auditor flags anything NOT in this set
+// Current model landscape (2026-07). The auditor flags anything NOT in this set
 // that lives in a config-class path. Source of truth: claude-api skill table.
 const CURRENT_IDS = [
-  "claude-opus-4-8",
+  "claude-opus-5",
   "claude-sonnet-5",
   "claude-haiku-4-5-20251001",
   "claude-fable-5",
 ];
+
+/** Parse AUTOFIX_PAIRS out of the script so tests are driven BY the table
+ * rather than restating a hand-picked member of it. */
+function parseAutofixPairs(): Array<[string, string]> {
+  const src = readFileSync(AUDIT_SH, "utf8");
+  const block = src.match(/AUTOFIX_PAIRS=\(([\s\S]*?)\)/);
+  if (!block) throw new Error("AUTOFIX_PAIRS block not found in audit-models.sh");
+  return [...block[1].matchAll(/"([^"=]+)=([^"]+)"/g)].map(
+    (m) => [m[1], m[2]] as [string, string],
+  );
+}
 
 function run(args: string[], root: string) {
   return spawnSync("bash", [AUDIT_SH, "--root", root, ...args], {
@@ -127,6 +138,11 @@ describe("model-launch-review no-silent-green (AC3)", () => {
     expect(r.stdout.toLowerCase()).toContain("pin");
     expect(r.stdout.toLowerCase()).toContain("pricing");
     expect(r.stdout.toLowerCase()).toContain("tier-map");
+    // ...and it must actually REPORT clean. The four headings above print
+    // unconditionally, so asserting only their presence passes identically on
+    // a DIRTY root — this test's name was a claim its assertions did not back.
+    // This line is what makes CURRENT_IDS[0] load-bearing.
+    expect(r.stdout).toContain("none — config model IDs are current.");
     rmSync(root, { recursive: true, force: true });
   });
 });
@@ -159,7 +175,7 @@ describe("model-launch-review auto-fix safety (AC5, AC6)", () => {
       join(root, "apps/web-platform/server/inngest/functions/cron-fake-audit.ts"),
       "utf8",
     );
-    expect(config).toContain("claude-opus-4-8");
+    expect(config).toContain("claude-opus-5");
     expect(config).not.toContain("claude-opus-4-7");
     // excluded classes untouched
     const fixture = readFileSync(
@@ -207,6 +223,65 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  test("EVERY declared pair maps its stale id to its own target", () => {
+    // Population-of-one guard. The per-tier test below exercises ONE opus and
+    // ONE sonnet id, so a pair can be deleted from AUTOFIX_PAIRS with the whole
+    // suite green (proven: dropping the opus-4-8 pair — the one #6934 added —
+    // changed nothing). Drive the table itself so adding a pair without
+    // coverage is impossible.
+    const pairs = parseAutofixPairs();
+    expect(pairs.length).toBeGreaterThanOrEqual(5); // non-vacuity floor, not a pin
+
+    const root = mkdtempSync(join(tmpdir(), "mlr-allpairs-"));
+    const dir = join(root, "apps/web-platform/server/inngest/functions");
+    mkdirSync(dir, { recursive: true });
+    for (const [from] of pairs) {
+      writeFileSync(join(dir, `cron-${from}.ts`), `export const M = "${from}";\n`);
+    }
+    expect(run(["--fix"], root).status).toBe(0);
+    for (const [from, to] of pairs) {
+      const got = readFileSync(join(dir, `cron-${from}.ts`), "utf8");
+      expect(got).toContain(to);
+      expect(got).not.toContain(`"${from}"`);
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("AUTOFIX_PAIRS is single-hop and every target is a current id", () => {
+    const pairs = parseAutofixPairs();
+    const sources = new Set(pairs.map(([from]) => from));
+    for (const [from, to] of pairs) {
+      // Chaining (4-7=4-8 alongside 4-8=5) makes --fix order-dependent: files
+      // land on an intermediate id and --detect re-flags them forever.
+      expect(
+        sources.has(to),
+        `pair ${from}=${to} chains: '${to}' is itself a source id`,
+      ).toBe(false);
+      // A target that is not a current id means someone added a pair without
+      // retargeting the tier at launch time.
+      expect(CURRENT_IDS, `target '${to}' is not a current id`).toContain(to);
+    }
+  });
+
+  test("the script itself refuses to run on a non-convergent pair table", () => {
+    // Pin the guard's behavior, not just its presence: mutate a SANDBOX copy
+    // into a chained table and assert it exits 78 rather than silently
+    // producing a one-hop rewrite.
+    const sandbox = mkdtempSync(join(tmpdir(), "mlr-chain-"));
+    const copy = join(sandbox, "audit-models.sh");
+    const src = readFileSync(AUDIT_SH, "utf8").replace(
+      '"claude-opus-4-7=claude-opus-5"',
+      '"claude-opus-4-7=claude-opus-4-8"',
+    );
+    writeFileSync(copy, src);
+    const r = spawnSync("bash", [copy, "--root", sandbox, "--detect"], {
+      encoding: "utf8",
+    });
+    expect(r.status).toBe(78);
+    expect(r.stderr).toContain("NON-CONVERGENT");
+    rmSync(sandbox, { recursive: true, force: true });
+  });
+
   test("Opus and Sonnet stale ids each map to their OWN tier target in one run", () => {
     const root = mkdtempSync(join(tmpdir(), "mlr-multitier-"));
     const dir = join(root, "apps/web-platform/server/inngest/functions");
@@ -214,8 +289,8 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     writeFileSync(join(dir, "cron-a.ts"), `export const M = "claude-opus-4-7";\n`);
     writeFileSync(join(dir, "cron-b.ts"), `export const M = "claude-sonnet-4-6";\n`);
     expect(run(["--fix"], root).status).toBe(0);
-    // Per-tier map: opus → opus-4-8, sonnet → sonnet-5 (not a single global target).
-    expect(readFileSync(join(dir, "cron-a.ts"), "utf8")).toContain("claude-opus-4-8");
+    // Per-tier map: opus → opus-5, sonnet → sonnet-5 (not a single global target).
+    expect(readFileSync(join(dir, "cron-a.ts"), "utf8")).toContain("claude-opus-5");
     expect(readFileSync(join(dir, "cron-b.ts"), "utf8")).toContain("claude-sonnet-5");
     rmSync(root, { recursive: true, force: true });
   });

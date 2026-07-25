@@ -7,7 +7,7 @@ DSPy.rb provides unified support across multiple LLM providers through adapter g
 ### Provider Overview
 
 - **OpenAI**: GPT-4, GPT-4o, GPT-4o-mini, GPT-3.5-turbo
-- **Anthropic**: Claude 4.x family (Opus 4.7, Sonnet 4.6, Haiku 4.5)
+- **Anthropic**: Claude Opus 5, Sonnet 5, Haiku 4.5
 - **Google Gemini**: Gemini 1.5 Pro, Gemini 1.5 Flash, other versions
 - **Ollama**: Local model support via OpenAI compatibility layer
 - **OpenRouter**: Unified multi-provider API for 200+ models
@@ -49,11 +49,11 @@ end
 
 ```ruby
 DSPy.configure do |c|
-  # Claude Opus 4.7 (most intelligent, best for agents and coding)
-  c.lm = DSPy::LM.new('anthropic/claude-opus-4-8',
+  # Claude Opus 5 (most intelligent, best for agents and coding)
+  c.lm = DSPy::LM.new('anthropic/claude-opus-5',
     api_key: ENV['ANTHROPIC_API_KEY'])
 
-  # Claude Sonnet 4.6 (best speed/intelligence balance)
+  # Claude Sonnet 5 (best speed/intelligence balance)
   c.lm = DSPy::LM.new('anthropic/claude-sonnet-5',
     api_key: ENV['ANTHROPIC_API_KEY'])
 
@@ -255,8 +255,8 @@ end
 
 ### Anthropic
 
-- Claude Sonnet 4.6 offers the best speed/intelligence balance
-- Claude Opus 4.7 is the most intelligent for agents and coding
+- Claude Sonnet 5 offers the best speed/intelligence balance
+- Claude Opus 5 is the most intelligent for agents and coding
 - Excellent for complex reasoning and analysis
 - Strong safety features and helpful outputs
 - Requires base64 for images (no URL support)
