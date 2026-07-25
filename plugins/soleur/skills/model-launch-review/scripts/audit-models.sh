@@ -117,20 +117,26 @@ collect_config_hits() {
 
 rel() { echo "${1#"$ROOT"/}"; }
 
-# ---------------- detect mode (cron) ----------------
-if [[ "$MODE" == "detect" ]]; then
-  # Capture to a temp file so collect_config_hits' EXIT CODE survives — a
-  # process substitution (`mapfile < <(...)`) discards it, which would let a
-  # failed scan fall through to the clean branch below.
-  _hits_tmp="$(mktemp)"
-  # Single owning trap (ADR-129): the explicit rm below is the happy path, the
-  # trap covers a die between allocation and cleanup.
-  trap 'rm -f "$_hits_tmp"' EXIT
-  if ! collect_config_hits > "$_hits_tmp"; then
-    echo "model-drift: UNKNOWN — scan failed; treat as un-run, not clean."
+# Shared hits capture. `mapfile -t hits < <(collect_config_hits)` DISCARDS the
+# function's exit code, so a failed scan would fall straight through to the
+# "clean" branch in every mode — the exact absent-vs-could-not-look conflation
+# this script was fixed for. Route the capture through a file so the rc
+# survives, and give EVERY mode the same abort. One owning trap (ADR-129).
+_HITS_TMP="$(mktemp)"
+trap 'rm -f "$_HITS_TMP"' EXIT
+
+# Populates the global `hits` array, or aborts naming the mode that failed.
+load_hits() { # $1 = label for the failure line
+  if ! collect_config_hits > "$_HITS_TMP"; then
+    echo "$1: UNKNOWN — scan failed; treat as un-run, not clean."
     exit 1
   fi
-  mapfile -t hits < "$_hits_tmp"
+  mapfile -t hits < "$_HITS_TMP"
+}
+
+# ---------------- detect mode (cron) ----------------
+if [[ "$MODE" == "detect" ]]; then
+  load_hits "model-drift"
   if [[ ${#hits[@]} -gt 0 ]]; then
     echo "model-drift: ${#hits[@]} config file(s) carry a stale model ID (auto-fixable via /soleur:model-launch-review)."
     for f in "${hits[@]}"; do echo "  - $(rel "$f")"; done
@@ -142,7 +148,7 @@ fi
 
 # ---------------- fix mode (mechanical model-ID swaps only) ----------------
 if [[ "$MODE" == "fix" ]]; then
-  mapfile -t hits < <(collect_config_hits)
+  load_hits "model-fix"
   for f in "${hits[@]}"; do
     before=$(wc -l < "$f")
     tmp="$(mktemp)"
@@ -173,7 +179,7 @@ echo "root: $ROOT"
 echo
 
 echo "[1] model-ID inventory (AUTO-FIX)"
-mapfile -t hits < <(collect_config_hits)
+load_hits "  model-ID inventory"
 if [[ ${#hits[@]} -gt 0 ]]; then
   echo "  stale config model IDs found (mechanical same-tier swap):"
   for f in "${hits[@]}"; do
