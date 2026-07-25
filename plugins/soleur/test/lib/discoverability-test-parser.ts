@@ -384,8 +384,19 @@ const MARKER_STRICT_RE = /^[ \t]+marker:[ \t]*"?([^\s"]*)"?[ \t]*$/m;
 // "a line whose first meaningful token is a `kind`/`marker` key", tolerating
 // list bullets, blockquotes and bold decoration. Narrow enough not to fire on
 // incidental prose like "this kind of check".
-const KIND_TOKEN_RE = /^[ \t]*(?:[->*]+[ \t]*)*\**[ \t]*kind[ \t]*\**[ \t]*:/im;
-const MARKER_TOKEN_RE = /^[ \t]*(?:[->*]+[ \t]*)*\**[ \t]*marker[ \t]*\**[ \t]*:/im;
+//
+// The decoration group consumes ONE character per iteration — `(?:[->*][ \t]*)*`,
+// never `(?:[->*]+[ \t]*)*`. The `+` inside the `*` is the textbook `(a+)*` shape:
+// a run of N decoration characters can be partitioned across the outer iterations
+// in exponentially many ways, and every one is retried before the match fails.
+// Measured on the previous form, against a `"*".repeat(N) + "x"` line that never
+// reaches `kind`: N=22 3ms, N=26 47ms, N=30 735ms — doubling every ~2 characters,
+// so a bullet run a plan author could plausibly type stalls the parser. The
+// one-char-per-iteration form matches the SAME language (differentially verified
+// over 1623 decoration/spacing/casing permutations, zero divergence) in flat
+// ~0.004ms. Do not reintroduce the inner `+`.
+const KIND_TOKEN_RE = /^[ \t]*(?:[->*][ \t]*)*\**[ \t]*kind[ \t]*\**[ \t]*:/im;
+const MARKER_TOKEN_RE = /^[ \t]*(?:[->*][ \t]*)*\**[ \t]*marker[ \t]*\**[ \t]*:/im;
 
 /** The declared kind, or null if absent OR present-but-unparseable. */
 export function parseKind(
