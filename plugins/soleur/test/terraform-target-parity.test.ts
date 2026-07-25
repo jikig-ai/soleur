@@ -1551,6 +1551,20 @@ describe("registry gate allow-sets match their jobs' -target sets", () => {
  * store; luks-recut REPLACES it). A copy-pasted `source` line would silently invert a destroy
  * authorization while every other assertion in this file stays green.
  */
+/**
+ * Escape EVERY regex metacharacter, not just `.`.
+ *
+ * The previous form escaped only the dot, which CodeQL correctly flags as
+ * incomplete escaping (js/incomplete-sanitization, high): a `\` in the input
+ * would survive into the pattern and change its meaning rather than match
+ * itself. Today's inputs are hardcoded filenames from ALL_REGISTRY_LIBS below,
+ * so nothing is exploitable — but a partial escaper in a gate-parity assertion
+ * is a wrong-by-construction helper that the next filename (or the next reader
+ * who copies it) inherits. Escape the whole class instead of the one character
+ * that happened to appear.
+ */
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 describe("each registry dispatch job sources exactly its own gate lib", () => {
   const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
   const ALL_REGISTRY_LIBS = [
@@ -1570,7 +1584,7 @@ describe("each registry dispatch job sources exactly its own gate lib", () => {
       expect(block.length).toBeGreaterThan(0);
       for (const lib of ALL_REGISTRY_LIBS) {
         const sourced = new RegExp(
-          `source\\s+"\\$\\{GITHUB_WORKSPACE\\}/tests/scripts/lib/${lib.replace(/[.]/g, "\\.")}"`,
+          `source\\s+"\\$\\{GITHUB_WORKSPACE\\}/tests/scripts/lib/${escapeRe(lib)}"`,
         ).test(block);
         expect(sourced).toBe(lib === ownLib);
       }

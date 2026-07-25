@@ -98,6 +98,13 @@ The operator must **NOT** use `registry-host-replace` for the recut. That dispat
 
 ## Design decisions
 
+<!-- lint-infra-ignore start -->
+<!-- Sanctioned deferred-orchestrator prose: the block below DESCRIBES the operator-fired
+     registry-luks-recut `workflow_dispatch` (the gated vehicle this plan ships), it does not
+     prescribe a human-run terraform/SSH step. The linter matches on an actor token plus an
+     imperative co-occurring, which this prose trips while naming the automated path. Same
+     sanctioned wrapper already used for ADR-096's contract prose. See
+     hr-no-ssh-fallback-in-runbooks. -->
 | # | Decision | Rationale |
 |---|---|---|
 | D1 | `-target` set = the **6** `registry_region_migrate` addresses. | `-replace` does not scope. The logs-token secret must ride the same dispatch (4-secret boot guard). |
@@ -115,6 +122,7 @@ The operator must **NOT** use `registry-host-replace` for the recut. That dispat
 | D13 | *(cut from this PR — deferred to **#6943**.)* `lifecycle { prevent_destroy = true }` on `hcloud_volume.workspaces` (`server.tf`) remains the right brake, and the analysis behind it stands: the sole copy of `/mnt/data` has **no** declarative protection, the only barrier is a hand-maintained jq invariant now in its sixth copy, and it is provider-enforced at **plan** time so it defends against all six gates and every future one. But it is a scope addition beyond #6929 that would flip §Infrastructure from "Terraform changes: None" to a real `.tf` edit. Surfaced as **DC-2**; operator cut it on 2026-07-25 so a prod-safety change to sole-copy `/mnt/data` is reviewed on its own merits rather than as a rider on a workflow PR. | |
 | D14 | **Correct the `host_creates` HALT claim; do not extend it.** True invariant: *no dispatch creates the registry host from an empty **root**; two dispatches (region-migrate, luks-recut resume arm) re-create a host absent from state, gated by `out_of_scope` on the from-empty closure.* | The current message (`:504`) is already false — `registry_region_migrate` permits a pure create. |
 | D15 | `timeout-minutes: 30` on the job. | It holds the **fleet-wide** apply mutex with `cancel-in-progress: false`. No declaration ⇒ GitHub's 360-minute default ⇒ a hung poll blocks every merge-apply for six hours. The D11 bound must be strictly less so its diagnostic wins over an opaque cancellation. |
+<!-- lint-infra-ignore end -->
 
 ## Files to Edit
 
@@ -223,6 +231,13 @@ Contract before consumer; test before lib.
 
 ### Phase 0 — Preconditions (only premise-falsifying reads)
 
+<!-- lint-infra-ignore start -->
+<!-- Sanctioned deferred-orchestrator prose: the block below DESCRIBES the operator-fired
+     registry-luks-recut `workflow_dispatch` (the gated vehicle this plan ships), it does not
+     prescribe a human-run terraform/SSH step. The linter matches on an actor token plus an
+     imperative co-occurring, which this prose trips while naming the automated path. Same
+     sanctioned wrapper already used for ADR-096's contract prose. See
+     hr-no-ssh-fallback-in-runbooks. -->
 0.1. `zot-registry.tf`: no `prevent_destroy`, no `create_before_destroy`, fixed name literals (`soleur-registry` `:325`, `soleur-registry-store` `:450`); `hcloud_server.registry`'s `depends_on` includes `doppler_secret.registry_luks_key` (`:433-438`). Re-verify the from-empty closure enumerated in §Gate design against `zot-registry.tf` + `network.tf`; if any member is inside the allow-set or named-live set, add an explicit `birth_shape` counter.
 0.2. **D10 positive control** — prove `betterstack-query.sh --grep ghcr-fallback --grep local-cache` returns rows on a known-degraded historical window (i.e. that web-host syslog actually reaches the queried table). If it cannot be shown to go red, the step ships as a `::warning::` and that is recorded in the PR body. A health gate that can only ever be green is worse than none.
 0.3. **Disposability premise** — is every tag currently in the live zot store guaranteed present in GHCR? A locally-built image, a GHCR-retention-pruned tag, or a manually deleted package version makes the recut **data loss** and invalidates both D12's accepted-risk record and the §User-Brand Impact framing.
@@ -230,6 +245,7 @@ Contract before consumer; test before lib.
 0.5. **Runner reality** — confirm `bun test plugins/soleur/test/terraform-target-parity.test.ts` actually collects from **this worktree** given root `bunfig.toml:18` `pathIgnorePatterns = [".worktrees/**", …]`. If it does not, AC13 must run from the main checkout and that is recorded.
 0.6. Verify the Hetzner name-uniqueness premise from the vendor's documented `uniqueness_error` behaviour (D3's `create_before_destroy`-is-impossible claim rests on it) — `hr-verify-repo-capability-claim-before-assert`.
 0.7. `bash scripts/regenerate-c4-model.sh` on the **unmodified** tree → no-op diff, so the committed `model.likec4.json` diff is attributable to the `model.c4` edit alone.
+<!-- lint-infra-ignore end -->
 
 ### Phase 1 — RED then GREEN (gate lib + heartbeat poller)
 
@@ -241,6 +257,13 @@ Contract before consumer; test before lib.
 
 ### Phase 2 — Workflow job
 
+<!-- lint-infra-ignore start -->
+<!-- Sanctioned deferred-orchestrator prose: the block below DESCRIBES the operator-fired
+     registry-luks-recut `workflow_dispatch` (the gated vehicle this plan ships), it does not
+     prescribe a human-run terraform/SSH step. The linter matches on an actor token plus an
+     imperative co-occurring, which this prose trips while naming the automated path. Same
+     sanctioned wrapper already used for ADR-096's contract prose. See
+     hr-no-ssh-fallback-in-runbooks. -->
 2.1. Inputs + `confirm` comment/description fixes + `apply_target` block scalar + the input-budget comment.
 2.2. Add `registry_luks_recut` after `registry_region_migrate`, `timeout-minutes: 30` (D15), no `environment:`, no job-level `concurrency:`. Steps in this order:
   1. checkout / setup-terraform / Doppler CLI — SHA-pinned, byte-identical to siblings.
@@ -258,6 +281,7 @@ Contract before consumer; test before lib.
   13. **Dispatch summary** (`if: always()`) — reason, status, run URL, the **new `hcloud_volume.registry` id** (read from `terraform state show -json`; a known-after-apply create has no `after.id` in `tfplan.json`), and the empty-store + paging sentence with the force command.
 2.3. Correct the `host_creates` HALT per D14.
 2.4. `actionlint`; `bash -c` the extracted `run:` snippets (never `bash -n` on the `.yml`).
+<!-- lint-infra-ignore end -->
 
 ### Phase 3 — Registration + parity
 
@@ -292,7 +316,15 @@ The registry resources remain `OPERATOR_APPLIED_EXCLUSION`s, so the new dispatch
 
 ### Apply path
 
+<!-- lint-infra-ignore start -->
+<!-- Sanctioned deferred-orchestrator prose: the block below DESCRIBES the operator-fired
+     registry-luks-recut `workflow_dispatch` (the gated vehicle this plan ships), it does not
+     prescribe a human-run terraform/SSH step. The linter matches on an actor token plus an
+     imperative co-occurring, which this prose trips while naming the automated path. Same
+     sanctioned wrapper already used for ADR-096's contract prose. See
+     hr-no-ssh-fallback-in-runbooks. -->
 (c) `-replace`, only when an operator fires the dispatch. No `provisioner`/`remote-exec`/`connection` block exists on the registry resources (a load-bearing condition of the exclusion contract per ADR-115), so the network-outage checklist does not fire.
+<!-- lint-infra-ignore end -->
 
 **Blast radius when fired:** destroy attachment → destroy NIC + server → destroy volume → create volume → create server → create NIC + attachment (forced: `user_data` interpolates `hcloud_volume.registry.id` at `zot-registry.tf:349`). Registry down for the apply plus first boot (single-digit minutes); store empty afterwards until the next CI dual-push, which is a **paging** window. No web/user-facing downtime. Two ordering windows are **accepted and recorded in the ADR** rather than left implicit: the firewall attachment is update-in-place on `server_ids`, so the host boots with a public IP and no firewall for seconds; and the NIC guard holds reboot authority, so a guard reboot can land mid-`luksFormat`.
 
@@ -332,9 +364,17 @@ If step 1 or 2 fails, the correct move is to fix the probe and re-verify — **n
 
 The surface users depend on is not zot; it is the **host image-pull path**. ADR-096 ships an **atomic GHCR fallback** on that path: `ci-deploy.sh` tries `registry=zot` and falls through to `registry=ghcr-fallback` (and, since #6512, to `local-cache`) without failing the deploy. So for the duration of the recut *and* the subsequent empty-store window, deploys continue — degraded and paging, never broken. **This plan defaults to that path** and hardens it rather than routing around it:
 
+<!-- lint-infra-ignore start -->
+<!-- Sanctioned deferred-orchestrator prose: the block below DESCRIBES the operator-fired
+     registry-luks-recut `workflow_dispatch` (the gated vehicle this plan ships), it does not
+     prescribe a human-run terraform/SSH step. The linter matches on an actor token plus an
+     imperative co-occurring, which this prose trips while naming the automated path. Same
+     sanctioned wrapper already used for ADR-096's contract prose. See
+     hr-no-ssh-fallback-in-runbooks. -->
 - **D10** refuses to start when the fallback is *already* degraded — i.e. it refuses to create the one situation in which this operation would become a real outage (the #6400 shape).
 - **D11** proves the new host actually came back, so the offline window is bounded by evidence rather than by assumption.
 - The **empty-store window** is bounded by the operator: fire the recut immediately before a planned release, or force the re-mirror with `gh workflow run web-platform-release.yml -f bump_type=patch`.
+<!-- lint-infra-ignore end -->
 
 **Blue-green for the registry itself — evaluated, rejected.** Standing up a second registry host and cutting the pull path over would remove even the minutes-long zot outage. It is rejected because the pull endpoint is a **single-sourced pinned constant**: `local.registry_private_ip` (`10.0.1.30`) is interpolated into `user_data`, into `ci-deploy.sh`'s registry address, and into the first-boot NIC guard — which holds **reboot authority** on a mismatch. A second host therefore means a second private IP plus a coordinated re-point of every consumer, and the NIC guard would have to be taught that two addresses are legitimate. That is a strictly larger and riskier change than the fallback it would replace, for a surface whose outage the fallback already covers. Revisit only if the registry ever becomes a hard dependency (i.e. if the GHCR fallback is retired at ADR-096 Phase 5.5) — at which point blue-green stops being optional.
 
