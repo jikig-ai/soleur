@@ -344,6 +344,12 @@ if want_scripts; then
   # or anything out of scope. Registered HERE — nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/workspaces-luks-cutover-gate" bash tests/scripts/test-workspaces-luks-cutover-gate.sh
   run_suite "tests/scripts/workspaces-luks-recut-gate" bash tests/scripts/test-workspaces-luks-recut-gate.sh
+  # web-host BIRTH gate (#6730) — the INVERSE of web2-retire-gate: requires exactly one
+  # hcloud_server create, matching the dispatched host key, with zero destroys. It is the
+  # only check on the one route granted the host_creates capability (a new dispatch job
+  # inherits nothing from the per-PR apply's inline HALT), so every arm is load-bearing and
+  # the suite mutation-proves each one. Registered HERE — nothing auto-discovers tests/scripts/.
+  run_suite "tests/scripts/web-host-birth-gate" bash tests/scripts/test-web-host-birth-gate.sh
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
