@@ -1,0 +1,11 @@
+[Unit]
+Description=Assert bwrap unprivileged-userns sysctl for the Claude Code Bash sandbox
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+[Install]
+WantedBy=multi-user.target
