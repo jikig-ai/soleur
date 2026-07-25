@@ -91,13 +91,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # GitHub CLI (needed by cron-follow-through-monitor gh label/issue commands
 # and event-ship-merge gh pr checkout). Not in default Debian repos.
+#
+# THE PIN IS PREFERRED, NOT REQUIRED — and that distinction is load-bearing.
+# `cli.github.com/packages` is a ROLLING repo: it carries only recent versions
+# and drops older ones with no deprecation window. An exact `gh=<version>` pin
+# therefore has a silent expiry date, and when it passes, `apt-get install`
+# exits 100, the image build fails, and the release job's `deploy` step is
+# SKIPPED — so production keeps serving the last good image while every merge
+# reports a failed release. Observed 2026-07-25: `gh=2.93.0` aged out (upstream
+# had moved to 2.96.0) and blocked EVERY deploy for ~17 hours. Nothing about
+# that failure names the pin, which is why this comment does.
+#
+# So: try the pin for build reproducibility; if the repo no longer carries it,
+# install the newest available rather than failing the build, and say so LOUDLY
+# in the build log. A silent fallback here would trade a visible outage for an
+# invisible version drift, which is worse — the `::warning::` is the signal that
+# GH_VERSION needs re-pinning, and `SOLEUR_GH_INSTALLED` records what actually
+# landed in the image on every build, pinned or not.
+ARG GH_VERSION=2.96.0
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
        > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update && apt-get install -y --no-install-recommends gh=2.93.0 \
+    && apt-get update \
+    && if apt-get install -y --no-install-recommends "gh=${GH_VERSION}"; then \
+         echo "SOLEUR_GH_PIN_OK requested=${GH_VERSION}"; \
+       else \
+         echo "::warning::SOLEUR_GH_PIN_UNAVAILABLE requested=${GH_VERSION} — the rolling GitHub CLI apt repo no longer carries this version. Installing the newest available so the deploy is not blocked; re-pin ARG GH_VERSION in apps/web-platform/Dockerfile to the version reported below."; \
+         apt-get install -y --no-install-recommends gh; \
+       fi \
+    && echo "SOLEUR_GH_INSTALLED version=$(gh --version | head -1)" \
     && rm -rf /var/lib/apt/lists/*
 
 # Playwright Chromium system deps + browser binary (TR9 PR-11).
