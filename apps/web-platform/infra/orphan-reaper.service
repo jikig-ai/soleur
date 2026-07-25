@@ -1,0 +1,6 @@
+[Unit]
+Description=Orphaned workspace directory reaper
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/orphan-reaper.sh

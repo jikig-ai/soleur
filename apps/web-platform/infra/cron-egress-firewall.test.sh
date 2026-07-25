@@ -540,7 +540,7 @@ for f in cron-egress-nftables.sh cron-egress-resolve.sh cron-egress-alarm.sh \
   # Scope the membership check to the host_script_files array (mirrors journald-config.test.sh)
   # so a `"$f"` appearing only in an SSH-provisioner reference cannot satisfy it.
   assert_cmd "baked set includes $f (host_script_files array)" \
-    bash -c "awk '/host_script_files = \[/,/^  \]/' '$SERVER_TF' | grep -qF -- '\"$f\"'"
+    bash -c "awk '/host_script_files = \[/,/^  \]/' '$SERVER_TF' | grep -cF -- '\"$f\"' >/dev/null"
   assert_grep "Dockerfile bakes $f" "/app/infra/$f" "$DOCKERFILE"
 done
 assert_grep "bootstrap installs cron-egress scripts (0755)" 'cron-egress-nftables\.sh cron-egress-resolve\.sh cron-egress-alarm\.sh' "$BOOTSTRAP"

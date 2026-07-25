@@ -333,3 +333,52 @@ Stack heartbeat API exposes `attributes.status ∈ {paused,pending,up,down}` and
 has **no `last_event_at` field**; only `status == "up"` proves a ping arrived.
 Full write-up:
 [2026-07-08-verify-disk-fullness-write-health-on-deny-all-host-without-ssh.md](../../../project/learnings/2026-07-08-verify-disk-fullness-write-health-on-deny-all-host-without-ssh.md).
+
+## Querying host CPU / memory / load (`host_metrics`) — right-sizing a host WITHOUT SSH
+
+Vector's `host_metrics` source (`vector.toml [sources.host_metrics]`, collectors
+cpu/memory/disk/filesystem/load, 300s scrape) ships each datapoint to this same
+Better Stack Logs table. This is how you read a host's real CPU/RAM utilisation
+over weeks with no SSH — e.g. to right-size `var.web_hosts` (#6459 web-2 → `cx23`
+was decided on 30 days of web-1 memory/load pulled this way).
+
+**GOTCHA that wastes a session (it wasted one — 2026-07-25): metric events ship
+in NATIVE Vector shape, NOT the `tag_metrics`-flattened log shape.** So:
+
+- The host is under **`tags.host`** (e.g. `soleur-web-platform`), NOT the top-level
+  `host` field that log rows use.
+- The metric name is at **top-level `name`** (`memory_available_bytes`,
+  `memory_total_bytes`, `load1/load5/load15`, …), NOT `metric.name`.
+- The value is **`gauge.value`**, NOT `metric.value`.
+- **`source_kind` is unset** on these rows — a filter `source_kind='host_metrics'`
+  returns ZERO and looks like "metrics don't ship." They do; you filtered wrong.
+  (The repo's `tag_metrics` remap that would add those fields is not reflected in
+  shipped data — tracked in #6944 separately; query by `tags.host` + `name` and it just works.)
+
+Memory utilisation distribution for one host over 30 days (min available =
+worst-case peak usage; subtract from total for GB used):
+
+```sql
+SELECT count() AS samples,
+  round(anyIf(v, n='memory_total_bytes')/1073741824,2)                          AS total_gb,
+  round(minIf(v, n='memory_available_bytes')/1073741824,2)                      AS min_avail_gb,
+  round(quantile(0.50)(if(n='memory_available_bytes',v,NULL))/1073741824,2)     AS p50_avail_gb,
+  round(avgIf(v, n='memory_available_bytes')/1073741824,2)                      AS avg_avail_gb
+FROM (
+  SELECT JSONExtractString(raw,'name') AS n, JSONExtractFloat(raw,'gauge','value') AS v
+  FROM ( SELECT raw FROM remote($BS_TABLE)
+           WHERE dt > now() - INTERVAL 30 DAY
+             AND JSONExtractString(raw,'tags','host')='soleur-web-platform'
+             AND JSONExtractString(raw,'name') IN ('memory_available_bytes','memory_total_bytes')
+         UNION ALL
+         SELECT raw FROM s3Cluster(primary, $BS_TABLE_S3)
+           WHERE _row_type=1 AND dt > now() - INTERVAL 30 DAY
+             AND JSONExtractString(raw,'tags','host')='soleur-web-platform'
+             AND JSONExtractString(raw,'name') IN ('memory_available_bytes','memory_total_bytes') )
+) FORMAT JSONEachRow
+```
+
+Swap `load%` for the `name` filter (and `maxIf(v,n='load15')`) to read sustained
+CPU pressure. After web-2 is born, re-run with `tags.host='soleur-web-2'` to
+confirm it emits metrics and to drive the resize-or-keep-`cx23` decision
+(ADR-143 D1). Serves `hr-no-dashboard-eyeball-pull-data-yourself`.

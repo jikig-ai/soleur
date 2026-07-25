@@ -815,36 +815,37 @@ t_deploy_pipeline_fix_carries_host_creates_halt() {
   fi
 }
 
-# ── T55 — the HALT's scope precondition, re-checked on every run. ────────────
+# ── T55 — the host_creates arm is hcloud_server-scoped (#6919). ──────────────
 #
-# The host_creates counter counts hcloud_server AND hcloud_volume creates, but
-# every rationale in the shipped HALT text (no -var image_name, mutable :latest,
-# cloud-init stage=verify) applies to hcloud_server ONLY. That is sound while
-# var.web_hosts holds exactly one key: an additive apply set then
-# creates nothing, so host_creates == 0 on every legitimate run.
+# host_creates counts hcloud_server BIRTHS only. hcloud_volume was DROPPED from
+# the arm (#6919, re-scoped 2026-07-24 to add web-2): once var.web_hosts holds
+# >1 key, a job's OWN legitimate `hcloud_volume.workspaces[<newhost>]` create is
+# a routine for_each fan-out, not a host birth — and every rationale in the
+# shipped HALT text (no -var image_name, mutable :latest, cloud-init
+# stage=verify) applies to hcloud_server ONLY. Counting the volume tripped a
+# HALT whose text says "there is NO automated path" on a VALID dispatch; a
+# tripwire that fires on normal operation is the failure mode that gets the
+# tripwire deleted, strictly worse than the accident it guards. The #6416
+# failure mode is a HOST born unattached; a volume-only create never births a
+# serving host, so this narrowing loses no #6416 coverage — T29/T30 still pin the
+# server-birth HALT, and the retire path keeps its address-pinned volume
+# counters. (Was a var.web_hosts single-key precondition; discharged now that the
+# arm is server-scoped — #6725 review, user-impact finding 2.)
 #
-# Add a second key and a job's OWN legitimate volume create trips a HALT
-# whose text says "there is NO automated path" — a false dead end on a valid
-# dispatch. A tripwire that fires on normal operation is the failure mode that
-# gets the tripwire deleted, which is strictly worse than the accident it guards.
-#
-# The plan caught this as a Phase-0 hard STOP, but that was a PLAN-TIME check
-# with nothing re-firing it. This is the same precondition, re-evaluated on
-# every CI run (#6725 review, user-impact finding 2).
-t_web_hosts_single_key_keeps_halt_scoped() {
-  local vars_tf keys
-  vars_tf="${REPO_ROOT}/apps/web-platform/infra/variables.tf"
-  if [[ ! -f "$vars_tf" ]]; then
-    _report "T55 var.web_hosts is single-key (keeps the volume arm sound)" fail "missing $vars_tf"
-    return
-  fi
-  # Count quoted keys inside variable "web_hosts" { … default = { … } }.
-  keys="$(awk '/^variable "web_hosts"/{v=1} v&&/default = \{/{d=1;next} d&&/^  \}/{exit} d&&/^ *"[a-z0-9-]+" *=/{n++} END{print n+0}' "$vars_tf")"
-  if [[ "$keys" == 1 ]]; then
-    _report "T55 var.web_hosts holds exactly 1 key — host_creates may count hcloud_volume safely" ok
+# The lockstep guard on the narrowing: a synthesized volume-ONLY create plan must
+# yield host_creates=0 (rc=0, no HALT). Goes RED if the arm ever re-adds
+# hcloud_volume. Fixture is synthesized inline (hand-authored minimal plan shape),
+# never captured — cq-test-fixtures-synthesized-only.
+t_volume_create_does_not_trip_host_birth_halt() {
+  local tmp; tmp=$(mktemp)  # lint-trap-ownership: ok — rm -f inline below every call; single tmp, no exit between alloc and cleanup; bounded (matches T32's pattern, #6734)
+  printf '%s' '{"resource_changes":[{"type":"hcloud_volume","address":"hcloud_volume.workspaces[\"web-2\"]","change":{"actions":["create"],"before":null,"after":{"size":20}}}]}' > "$tmp"
+  local out; out=$(_run_host_creates_gate "$tmp")
+  rm -f "$tmp"
+  if [[ "$out" == "0:0" ]]; then
+    _report "T55 a legitimate hcloud_volume create does NOT trip the host-birth HALT (arm re-scoped to hcloud_server, #6919)" ok
   else
-    _report "T55 var.web_hosts holds exactly 1 key" fail \
-      "found $keys keys. The host_creates HALT counts hcloud_volume creates, but its remediation text is written for hcloud_server only — with >1 web host, a job's OWN legitimate volume create now trips a HALT saying 'there is NO automated path'. RE-SCOPE the surviving host_creates HALTs (apply, deploy-pipeline-fix) to .type == \"hcloud_server\" before adding a web host."
+    _report "T55 hcloud_volume create must not trip host-birth HALT" fail \
+      "got '$out' want '0:0' — the host_creates arm still counts hcloud_volume; re-scope it to .type == \"hcloud_server\" (a volume fan-out for a legitimate web host is routine, not a host birth)."
   fi
 }
 
@@ -916,7 +917,7 @@ t_web2_retire_volume_forget_aborts
 t_web2_retire_substring_collision_aborts
 t_web2_retire_server_replace_aborts
 t_apply_job_host_creates_halt_job_scoped
-t_web_hosts_single_key_keeps_halt_scoped
+t_volume_create_does_not_trip_host_birth_halt
 t_deploy_pipeline_fix_carries_host_creates_halt
 
 echo "=== $pass passed, $fail failed ==="
