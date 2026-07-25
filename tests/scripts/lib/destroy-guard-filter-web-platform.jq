@@ -3,7 +3,7 @@
 # or single-block surfaces in the current apply allow-list (verified
 # 2026-05-25 via apps/web-platform/infra/*.tf inspection — closes #4419);
 # a sixth surface (#5911) counts reboot-forcing in-place updates on
-# hcloud_server.*; a seventh (#6416) counts host/volume CREATES:
+# hcloud_server.*; a seventh (#6416) counts hcloud_server CREATES:
 #
 #   1. cloudflare_ruleset.*                              .rules
 #   2. cloudflare_zero_trust_tunnel_cloudflared_config.* .config[0].ingress_rule
@@ -12,8 +12,9 @@
 #   5. cloudflare_zero_trust_access_policy.*             .include
 #   6. hcloud_server.* reboot-forcing in-place update    placement_group_id /
 #                                                        server_type (#5911)
-#   7. hcloud_server.* / hcloud_volume.* host BIRTH  actions incl. "create"
-#                                                        (create OR replace; #6416)
+#   7. hcloud_server.* host BIRTH                       actions incl. "create"
+#                                                        (create OR replace; #6416.
+#                                                        hcloud_volume dropped #6919/T55)
 #
 # The HIGHEST-impact case is (1) — removing the ACME carve-out
 # (cloudflare_ruleset.seo_page_redirects.rules[10] at seo-rulesets.tf)
@@ -207,7 +208,7 @@ def destroyed_at($addr):
             or .change.before.server_type       != .change.after.server_type) ]
     | length
   ),
-  # 7th surface (#6416): a pure `+ create` of a host/volume on the per-PR apply
+  # 7th surface (#6416): a pure `+ create` of an hcloud_server on the per-PR apply
   # path. INVISIBLE to every counter above — no delete (resource_deletes=0), no
   # nested-block shrinkage (nested_deletes=0), and not an ["update"]
   # (reboot_updates=0). Measured against tfplan-hcloud-server-create.json.
@@ -228,9 +229,17 @@ def destroyed_at($addr):
   # (unlike hcloud_server.firewall_ids) does NOT attach before first boot. Tunnel
   # topology + measured failure rates: ADR-114 (do not restate them here).
   #
-  # TYPE-scoped (not address) for the same defense-in-depth reason
-  # reboot_updates is: it covers hcloud_server.git_data / .inngest / .registry
-  # and every hcloud_volume, not just hcloud_server.web.
+  # TYPE-scoped to hcloud_server (not address) for the same defense-in-depth
+  # reason reboot_updates is: it covers hcloud_server.git_data / .inngest /
+  # .registry, not just hcloud_server.web. hcloud_volume was DROPPED from this
+  # arm 2026-07-24 (#6919, T55): once var.web_hosts holds >1 key, a job's OWN
+  # legitimate `hcloud_volume.workspaces[<newhost>]` create is a routine
+  # for_each fan-out, not a host birth — counting it tripped a HALT whose
+  # remediation text ("no -var image_name", ":latest", cloud-init stage=verify)
+  # is written for hcloud_server ONLY. The #6416 failure mode is a HOST born
+  # unattached; a volume-only create never births a serving host, so dropping it
+  # loses no #6416 coverage. The retire path keeps its own ADDRESS-pinned volume
+  # counters (web2_volume_destroyed etc.) below — unaffected by this narrowing.
   #
   # `index("create")`, NOT `== ["create"]`. This counts EVERY action shape that
   # BIRTHS a host: ["create"], ["delete","create"] (a -replace), and
@@ -273,7 +282,7 @@ def destroyed_at($addr):
   # reach hcloud_server.web HALTs here; building one is tracked by #6730.
   host_creates: (
     [ .resource_changes[]?
-      | select(.type == "hcloud_server" or .type == "hcloud_volume")
+      | select(.type == "hcloud_server")
       | select(.change.actions? | index("create")) ]
     | length
   ),

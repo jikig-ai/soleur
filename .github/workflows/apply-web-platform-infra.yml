@@ -507,8 +507,10 @@ jobs:
           # the two counters above). Source of truth:
           # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
           reboot_updates=$(echo "$counts" | jq -r '.reboot_updates')
-          # host_creates (#6416): a pure `+ create` of an hcloud_server /
-          # hcloud_volume. INVISIBLE to all three counters above (no delete, no
+          # host_creates (#6416): a pure `+ create` of an hcloud_server
+          # (hcloud_volume dropped #6919/T55 — a for_each volume fan-out for a
+          # legitimate new web host is not a host birth). INVISIBLE to all three
+          # counters above (no delete, no
           # nested-block shrinkage, not an ["update"]). This apply path must
           # NEVER birth a host: `-target` is transitive at the RESOURCE level, so
           # cloudflare_record.app (dns.tf) and hcloud_firewall_attachment.web
@@ -537,9 +539,9 @@ jobs:
           # This is a TRIPWIRE, not a routine gate: host_creates == 0 on every
           # normal merge, so it is a no-op until the #6416 drift class recurs.
           if [[ "$host_creates" -gt 0 ]]; then
-            echo "::error::terraform plan would CREATE ${host_creates} hcloud_server/hcloud_volume resource(s) on the per-PR apply path. This path must never birth a host: the server is target-reachable but its hcloud_server_network attachment is not, so the host would come up with no private-net IP (and, transiently, no firewall) — the #6416 failure mode."
+            echo "::error::terraform plan would CREATE ${host_creates} hcloud_server resource(s) on the per-PR apply path. This path must never birth a host: the server is target-reachable but its hcloud_server_network attachment is not, so the host would come up with no private-net IP (and, transiently, no firewall) — the #6416 failure mode. (hcloud_volume creates are NOT counted since #6919/T55 — a for_each volume fan-out for a legitimate web host is routine, not a host birth.)"
             echo "::error::Remediation depends on WHICH host is being created (see the plan output above):"
-            echo "::error::  • ANY hcloud_server.web[*] / its volume → there is NO automated path. Every route that could reach hcloud_server.web HALTs: this job (#6416), apply-deploy-pipeline-fix.yml (#6718) and workspaces-luks-cutover (gate requires zero actions on the web-1 server). Use the operator-local full apply below, run through the PINNED-IMAGE CHAIN at the end of this message."
+            echo "::error::  • ANY hcloud_server.web[*] → there is NO automated path. Every route that could reach hcloud_server.web HALTs: this job (#6416), apply-deploy-pipeline-fix.yml (#6718) and workspaces-luks-cutover (gate requires zero actions on the web-1 server). Use the operator-local full apply below, run through the PINNED-IMAGE CHAIN at the end of this message."
             echo "::error::    This no-automated-web-host-birth state violates hr-fresh-host-provisioning-reachable-from-terraform-apply and is tracked by #6730 — that issue owns closing it. Scope: WEB hosts only (inngest-host below does birth a host, and the registry/git-data paths are scoped -replace)."
             echo "::error::  • hcloud_server.inngest → dispatch '-f apply_target=inngest-host'."
             echo "::error::  • hcloud_server.registry → no dispatch creates it FROM AN EMPTY ROOT, but two dispatches CAN re-create a registry host that is absent from state: 'registry-region-migrate' (a pure create in the new region) and 'registry-luks-recut' (its resume arm, admitted only by a live Hetzner probe). Both are gated by out_of_scope==0 over the registry's own 6-member allow-set, so neither can birth the fleet's other resources. If the registry host is missing ALONGSIDE out-of-scope resources, that is a from-empty root: run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) BEFORE merging."
@@ -933,6 +935,13 @@ jobs:
           # zot 180+60−10, nic-guard 360+120−10, git-data 60+180−10.
           arm_one 'betteruptime_heartbeat.web_zot_consumer["web-1"]' 'web-zot-consumer (web-1)' 230 || rc=1
           arm_one 'betteruptime_heartbeat.web_nic_guard["web-1"]'    'web-nic-guard (web-1)'    470 || rc=1
+          # (#6459/ADR-143) web-2's per-host heartbeats are born `paused` (web-probe.tf
+          # ignore_changes=[paused]) exactly like web-1's; the ONLY unpause path is this gate, so they
+          # MUST be armed here or web2-standby-soak-6459.sh reads them `paused` and false-FAILs a healthy
+          # web-2 as a DARK host (#6459 could never close). arm_one no-ops (return 0) when the address
+          # is absent from tfstate, so this is inert on any apply path that has not yet created web-2.
+          arm_one 'betteruptime_heartbeat.web_zot_consumer["web-2"]' 'web-zot-consumer (web-2)' 230 || rc=1
+          arm_one 'betteruptime_heartbeat.web_nic_guard["web-2"]'    'web-nic-guard (web-2)'    470 || rc=1
           arm_one 'betteruptime_heartbeat.git_data_prd'              'git-data-prd'             230 || rc=1
           exit "$rc"
 

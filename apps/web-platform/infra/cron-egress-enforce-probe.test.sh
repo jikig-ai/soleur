@@ -138,7 +138,7 @@ echo "-- delivery lockstep (baked set / Dockerfile / bootstrap) --"
 # Scope to the host_script_files array (mirrors journald-config.test.sh) so an
 # SSH-provisioner reference cannot satisfy it.
 assert_cmd "baked set includes cron-egress-enforce-probe.sh (host_script_files array)" \
-  bash -c "awk '/host_script_files = \[/,/^  \]/' '$SERVER_TF' | grep -qF -- '\"cron-egress-enforce-probe.sh\"'"
+  bash -c "awk '/host_script_files = \[/,/^  \]/' '$SERVER_TF' | grep -cF -- '\"cron-egress-enforce-probe.sh\"' >/dev/null"
 assert_grep "Dockerfile bakes cron-egress-enforce-probe.sh" '/app/infra/cron-egress-enforce-probe\.sh' "$DOCKERFILE"
 # bootstrap installs it at 0755 AND asserts it executable (both loops carry the name).
 INSTALL_HITS="$(grep -c 'cron-egress-enforce-probe\.sh' "$BOOTSTRAP")"
