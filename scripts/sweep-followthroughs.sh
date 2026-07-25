@@ -491,8 +491,8 @@ main() {
   local closed_since
   closed_since=$(date -u -d "${CLOSED_LOOKBACK_DAYS} days ago" +%F 2>/dev/null || date -u +%F)
   local closed_json closed_rc=0
-  closed_json=$(gh issue list --repo "$REPO" \
-    --search "label:follow-through state:closed closed:>=${closed_since}" \
+  closed_json=$(gh issue list --repo "$REPO" --state closed \
+    --search "label:follow-through closed:>=${closed_since}" \
     --limit "$CLOSED_LIMIT" --json number,body,stateReason 2>&1) || closed_rc=$?
   if (( closed_rc != 0 )); then
     # ::error:: not a bare log: `fail` only prints to stderr, so a permanently

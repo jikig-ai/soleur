@@ -4,17 +4,25 @@ Single source of truth for stripping a **leading YAML frontmatter block** from a
 Markdown sidecar before it is measured (byte budget) or injected (session
 context). Issue #5999, ADR-094.
 
-Two byte-identical implementations consume this contract:
+Three byte-identical implementations consume this contract:
 
 - `strip.sh` — sourced by `.claude/hooks/session-rules-loader.sh` (defines
   `strip_frontmatter`, perl-backed).
 - `strip.py` — imported by `scripts/lint-agents-rule-budget.py`
   (`strip_frontmatter(text)`).
+- `strip.ts` — imported by
+  `apps/web-platform/server/inngest/functions/cron-compound-promote.ts`, and
+  used (via `strip.sh`) by `scripts/compound-promote.sh`, so the always-loaded
+  byte budget is measured on the frontmatter-stripped basis — the same basis the
+  commit gate uses (#6794, closing the raw-vs-stripped skew #6461 accepted
+  knowingly).
 
-Parity between the two is enforced mechanically by
+Parity across all three is enforced mechanically by
 `scripts/lib/frontmatter-strip.test.sh`, which feeds every fixture in
-`fixtures/` to both and `diff`s the outputs. This replaces "keep two regexes
-identical by hand."
+`fixtures/` to each and asserts byte-identical output. This replaces "keep the
+regexes identical by hand." (The `strip.ts` arm skip-gates when `bun` is absent,
+so the suite is registered in `scripts/test-all.sh`'s `want_bun` block where bun
+is guaranteed; the sh↔py arms also run in the scripts shard via glob.)
 
 ## Contract
 

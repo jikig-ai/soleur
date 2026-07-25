@@ -75,37 +75,71 @@ export default async function GitHubAuditPage() {
             every API call appends one row here.
           </p>
         ) : (
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase text-soleur-text-muted">
-              <tr>
-                <th className="px-5 py-2 font-medium">Timestamp</th>
-                <th className="px-5 py-2 font-medium">Repository</th>
-                <th className="px-5 py-2 font-medium">Endpoint</th>
-                <th className="px-5 py-2 font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr
-                  key={`${r.ts}-${i}`}
-                  className="border-t border-soleur-border-default/50"
-                >
-                  <td className="px-5 py-2 text-soleur-text-secondary">
-                    {new Date(r.ts).toLocaleString()}
-                  </td>
-                  <td className="px-5 py-2 text-soleur-text-primary">
-                    {r.repo_full_name ?? <span className="text-soleur-text-muted">—</span>}
-                  </td>
-                  <td className="px-5 py-2 font-mono text-xs text-soleur-text-secondary">
-                    {r.endpoint}
-                  </td>
-                  <td className="px-5 py-2 text-soleur-text-secondary">
-                    {r.response_status ?? <span className="text-soleur-text-muted">—</span>}
-                  </td>
+          <>
+            {/* Desktop: table. Mobile (< md): stacked record cards. This page is
+                a server component (no hooks), so the responsive split is pure CSS
+                dual-render — both trees are server-rendered with identical data;
+                `toLocaleString` stays server-side (no hydration drift). Content is
+                cheap (<=50 read-only rows), so double-DOM is negligible. */}
+            <table className="hidden w-full text-sm md:table">
+              <thead className="text-left text-xs uppercase text-soleur-text-muted">
+                <tr>
+                  <th className="px-5 py-2 font-medium">Timestamp</th>
+                  <th className="px-5 py-2 font-medium">Repository</th>
+                  <th className="px-5 py-2 font-medium">Endpoint</th>
+                  <th className="px-5 py-2 font-medium">Status</th>
                 </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr
+                    key={`${r.ts}-${i}`}
+                    className="border-t border-soleur-border-default/50"
+                  >
+                    <td className="px-5 py-2 text-soleur-text-secondary">
+                      {new Date(r.ts).toLocaleString()}
+                    </td>
+                    <td className="px-5 py-2 text-soleur-text-primary">
+                      {r.repo_full_name ?? <span className="text-soleur-text-muted">—</span>}
+                    </td>
+                    <td className="px-5 py-2 font-mono text-xs text-soleur-text-secondary">
+                      {r.endpoint}
+                    </td>
+                    <td className="px-5 py-2 text-soleur-text-secondary">
+                      {r.response_status ?? <span className="text-soleur-text-muted">—</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <div className="divide-y divide-soleur-border-default/50 md:hidden">
+              {rows.map((r, i) => (
+                <div key={`${r.ts}-${i}-card`} className="space-y-1.5 px-5 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate font-medium text-soleur-text-primary">
+                      {r.repo_full_name ?? <span className="text-soleur-text-muted">—</span>}
+                    </span>
+                    <span className="shrink-0 text-xs text-soleur-text-secondary">
+                      {r.response_status ?? <span className="text-soleur-text-muted">—</span>}
+                    </span>
+                  </div>
+                  <div className="flex items-start justify-between gap-3 text-xs">
+                    <span className="shrink-0 text-soleur-text-muted">Endpoint</span>
+                    <span className="min-w-0 break-all text-right font-mono text-soleur-text-secondary">
+                      {r.endpoint}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 text-xs">
+                    <span className="text-soleur-text-muted">Time</span>
+                    <span className="text-soleur-text-secondary">
+                      {new Date(r.ts).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+          </>
         )}
       </section>
 

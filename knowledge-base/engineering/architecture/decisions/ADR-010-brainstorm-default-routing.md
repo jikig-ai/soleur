@@ -1,5 +1,4 @@
 ---
-adr: ADR-010
 title: Brainstorm Default Routing
 status: active
 date: 2026-03-27

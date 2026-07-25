@@ -146,6 +146,32 @@ export const STATUTORY_RULES: readonly StatutoryRule[] = [
   },
 ];
 
+// Standing not-legal-advice framing for statutory reminders (#6798).
+//
+// #6781 made the statutory backstop RELIABLE, and a reliable computed reminder
+// invites the recipient to treat it as authoritative and stop tracking their
+// own clock (detrimental reliance). The reminder is a best-effort backstop
+// computed from `received_at` + the registry `dueRule` — it is NOT the operator's
+// legal deadline of record, and for at least one rule (`breach-art33`, whose 72h
+// runs from AWARENESS, not receipt) the computed date can be LATER than the true
+// statutory deadline. Per #6798, the copy that the operator now depends on must
+// say so. Each rule's `catalogExcerpt` states its own clock origin verbatim
+// (e.g. "within 72 hours of becoming aware of it", "within one calendar month of
+// receipt"); render THAT alongside this standing notice rather than encoding a
+// second, drift-prone clock-origin field.
+//
+// Final wording is CLO-reviewed before ship (#6798 acceptance bullet 3).
+// Final sentence states the DIRECTION of the Art. 33 risk (the real deadline
+// may be SOONER, not merely "different") per the blocking CLO review of #6798 —
+// see knowledge-base/project/specs/<branch>/clo-copy-review.md.
+export const NOT_LEGAL_ADVICE_NOTICE =
+  "This is an automated reminder, not legal advice. The date shown is computed " +
+  "from when this item was received and is a best-effort backstop — you remain " +
+  "responsible for confirming the real deadline. Some clocks start earlier than " +
+  "the date used here — a data breach deadline, for example, runs from when you " +
+  "first became aware of it, so the real deadline may be sooner than shown and " +
+  "may already have passed.";
+
 export const PROBE_MARKER_PREFIX = "SOLEUR-PROBE-";
 
 const PROBE_TOKEN_PATTERN = new RegExp(

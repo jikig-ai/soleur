@@ -33,19 +33,43 @@
 # Bounded (#6258, ADR-106): like the inventory scan, the runs pagination is bounded by a
 # wall-clock DEADLINE (date +%s delta; NEVER SECONDS) and a per-run PAGE CEILING, both
 # abandon-safe (deadline/ceiling → LOUD SOLEUR_INNGEST_PREFLIGHT_TIMEOUT marker + exit 1,
-# NEVER break — a break would emit a truncated HTTP-200 body). Each per-page curl is
-# clamped to the REMAINING budget (--max-time = DEADLINE_S − elapsed, floored ≥1) so the
-# sum bound `deadline + per_page ≤ outer_curl` holds (Deepen Finding 1). The scan cost is
-# cut via a `functionIDs` filter + the page ceiling — the time WINDOW is NEVER narrowed
-# (Finding 5): a probe window narrower than the operator's cutover window would surface
-# false "missed ticks" at cutover-inngest.yml:704-743 → operator re-fire → DOUBLE-FIRE
-# (the exact harm the cutover prevents). Invariant: window ⊇ cutover-relevant period
-# (FROM ≤ cutover_instant − 2×max_cron_period).
+# NEVER break — a break would emit a truncated HTTP-200 body).
+#
+# PER-PAGE BUDGET (#6919 — the op=verify HTTP 500 fix). The per-page curl --max-time is the
+# REMAINING wall-clock budget (`remaining = DEADLINE_S − elapsed`) FLOORED to
+# PREFLIGHT_PAGE_MIN_S and CAPPED at PREFLIGHT_PAGE_MAX_S. The floor is load-bearing: the
+# earlier code clamped purely to `remaining`, so once slow early pages had drained the
+# budget every LATE page got ~0s → curl timed out → EMPTY body → the fail-loud guard
+# mis-read the empty body as a "malformed runs response" and 500'd (deterministic
+# starvation, reproduced on run 29729623865 page 6). The floor guarantees each page a
+# viable timeout; the cap keeps one slow page from hogging the whole budget. SUM bound
+# (Deepen Finding 1): a page is only ISSUED while `elapsed < DEADLINE`, and the near-
+# deadline retry is blocked by a fresh deadline re-check, so the worst-case wall overshoot
+# past DEADLINE is one PAGE_MIN → the airtight bound is `DEADLINE + PAGE_MIN ≤ outer_curl`
+# (default 90 + 8 = 98 < the 120s outer curl at cutover-inngest.yml).
+#
+# TRANSIENT vs MALFORMED (#6919). A curl NON-ZERO exit OR an EMPTY/whitespace body is a
+# TRANSIENT transport failure (timeout / truncation), NOT a GraphQL error: the page is
+# retried ONCE with a fresh per-page budget; a second transient → LOUD `reason=transport`
+# abort (accurate remediation: raise PREFLIGHT_DEADLINE_S or scope functionIDs), NEVER the
+# "malformed" verdict. A NON-EMPTY body whose `.data.runs.edges` is not an array is
+# GENUINELY malformed → the fail-loud `reason=gql_error` path (never masked as clean).
+#
+# The scan cost is cut via a `functionIDs` filter + the page ceiling — the time WINDOW is
+# NEVER narrowed (Finding 5): a probe window narrower than the operator's cutover window
+# would surface false "missed ticks" at cutover-inngest.yml:704-743 → operator re-fire →
+# DOUBLE-FIRE (the exact harm the cutover prevents). Invariant: window ⊇ cutover-relevant
+# period (FROM ≤ cutover_instant − 2×max_cron_period; longest repo cron is QUARTERLY, so
+# 2×max_cron_period ≈ 182d — the 365-day default over-satisfies it). RESIDUAL LIMITATION: a
+# full all-68-function 365/182-day scan can still exhaust the budget without functionIDs
+# scoping; op=verify passes a narrower-but-still-⊇-invariant FROM (cutover − 200d) as the
+# cost lever, and the operator can scope INNGEST_DOUBLEFIRE_FUNCTION_IDS for a hard cut.
 #
 # Inputs (env):
 #   INNGEST_DOUBLEFIRE_FUNCTION_IDS — comma-separated cron fn UUIDs (empty ⇒ all)
 #   INNGEST_DOUBLEFIRE_FROM / INNGEST_DOUBLEFIRE_UNTIL — STARTED_AT window (ISO-8601)
-#   PREFLIGHT_DEADLINE_S / INNGEST_MAX_PAGES — the bounding seams (defaults 50 / 1000)
+#   PREFLIGHT_DEADLINE_S / INNGEST_MAX_PAGES — the bounding seams (defaults 90 / 1000)
+#   PREFLIGHT_PAGE_MIN_S / PREFLIGHT_PAGE_MAX_S — per-page curl floor/cap (defaults 8 / 15)
 # Test seam: INNGEST_DOUBLEFIRE_RUNS_FIXTURE (a dir with page-N.json runs
 # responses) short-circuits the curl.
 set -euo pipefail
@@ -67,10 +91,16 @@ FROM_TS="${INNGEST_DOUBLEFIRE_FROM:-$_default_from}"
 UNTIL_TS="${INNGEST_DOUBLEFIRE_UNTIL:-}"
 FUNCTION_IDS_CSV="${INNGEST_DOUBLEFIRE_FUNCTION_IDS:-}"
 
-# --- Bounding seams (#6258, ADR-106) ---
-# In-script wall-clock deadline. Default 50s < the outer curl 60s (cutover-inngest.yml:673);
-# the remaining-budget per-page clamp makes the SUM bound airtight (Finding 1).
-PREFLIGHT_DEADLINE_S="${PREFLIGHT_DEADLINE_S:-50}"
+# --- Bounding seams (#6258, ADR-106; #6919 per-page floor) ---
+# In-script wall-clock deadline. Default 90s < the outer curl 120s (cutover-inngest.yml); the
+# per-page floor/cap keeps the SUM bound `DEADLINE + PAGE_MIN ≤ outer_curl` airtight (Finding 1).
+PREFLIGHT_DEADLINE_S="${PREFLIGHT_DEADLINE_S:-90}"
+# Per-page curl budget window (#6919). PAGE_MIN is the anti-starvation FLOOR — every page gets
+# at least this many seconds so late pages never get ~0s → empty body → false "malformed".
+# PAGE_MAX caps a single page so it cannot hog the whole deadline. Invariant for the SUM bound:
+# DEADLINE + PAGE_MIN ≤ outer_curl (90 + 8 = 98 < 120). PAGE_MAX < DEADLINE (no single-page hog).
+PREFLIGHT_PAGE_MIN_S="${PREFLIGHT_PAGE_MIN_S:-8}"
+PREFLIGHT_PAGE_MAX_S="${PREFLIGHT_PAGE_MAX_S:-15}"
 MAX_PAGES="${INNGEST_MAX_PAGES:-1000}"
 CONNECT_TIMEOUT="${INNGEST_CONNECT_TIMEOUT:-5}"
 PREFLIGHT_OP="verify-doublefire"
@@ -136,8 +166,19 @@ _pf_timeout_marker() {  # $1=reason(enum) $2=pages $3=pages_timed_out $4=last_cu
 # exit 1 (NEVER break). The EXIT trap fires on exit 1 → spool cleaned; exit 1 → webhook non-200.
 _pf_abort() {  # $1=reason $2=pages $3=pages_timed_out $4=last_curl_exit
   _pf_timeout_marker "$1" "$2" "$3" "$4"
-  echo "inngest-doublefire-probe: FATAL preflight scan aborted reason=$1 pages_scanned=$2 (deadline_s=$PREFLIGHT_DEADLINE_S page_ceiling=$MAX_PAGES from=$FROM_TS) — refusing to emit a truncated (false-clean) run set"
+  echo "inngest-doublefire-probe: FATAL preflight scan aborted reason=$1 pages_scanned=$2 (deadline_s=$PREFLIGHT_DEADLINE_S page_ceiling=$MAX_PAGES from=$FROM_TS) — increase PREFLIGHT_DEADLINE_S or scope INNGEST_DOUBLEFIRE_FUNCTION_IDS; refusing to emit a truncated (false-clean) run set"
   echo "ERROR: preflight scan aborted reason=$1 pages_scanned=$2" >&2
+  exit 1
+}
+# Transient-transport loud abort (#6919): a page that is STILL empty / curl-failed after one
+# retry with a fresh per-page budget. This is a truncation / timeout / budget exhaustion — an
+# ACCURATE, non-"malformed" verdict — so it never masks a real double-fire as clean and never
+# mislabels a transient empty body as a malformed GraphQL response. exit 1 → webhook non-200.
+_pf_abort_transport() {  # $1=page $2=pages_timed_out $3=last_curl_exit
+  _pf_timeout_marker transport "$1" "$2" "$3"
+  logger -t "$LOG_TAG" "ERROR: transport exhaustion on page $1 after retry: empty/failed body (last_curl_exit=$3)" 2>/dev/null || true
+  echo "inngest-doublefire-probe: FATAL empty/truncated runs response on page $1 after 1 retry (last_curl_exit=$3, from=$FROM_TS) — transient transport failure or preflight budget exhaustion, NOT a malformed GraphQL response; increase PREFLIGHT_DEADLINE_S (current ${PREFLIGHT_DEADLINE_S}s) or scope INNGEST_DOUBLEFIRE_FUNCTION_IDS — refusing to emit a truncated (false-clean) run set"
+  echo "ERROR: transport/budget exhaustion on page $1 after retry (last_curl_exit=$3)" >&2
   exit 1
 }
 
@@ -173,9 +214,9 @@ build_request_body() {
 # Fetch one runs page INTO a file (no command-substitution subshell — so the loop can read
 # $_last_curl_exit). A curl failure is swallowed so the caller routes through the loud-abort
 # path (set -e must not kill the script before the marker fires).
-#   $1=out_file $2=after $3=page $4=max_time
+#   $1=out_file $2=after $3=page $4=max_time $5=attempt(1|2, default 1)
 _fetch_runs_page() {
-  local out="$1" after="$2" page_num="$3" max_time="$4"
+  local out="$1" after="$2" page_num="$3" max_time="$4" attempt="${5:-1}"
   # Build the body BEFORE the fixture short-circuit (#6617). The seam used to
   # return above this line, so every fixture-driven test bypassed request
   # construction entirely — which is exactly how the empty-CSV --argjson abort
@@ -184,7 +225,13 @@ _fetch_runs_page() {
   local body
   body=$(build_request_body "$after")
   if [[ -n "$FIXTURE_DIR" ]]; then
-    cat "${FIXTURE_DIR}/page-${page_num}.json" > "$out"
+    # Retry seam (#6919): on a RETRY (attempt >= 2) prefer page-N.retry.json when present, so a
+    # test can model a page that returns a transient EMPTY body on attempt 1 and RECOVERS on 2.
+    local fixture_file="${FIXTURE_DIR}/page-${page_num}.json"
+    if (( attempt >= 2 )) && [[ -f "${FIXTURE_DIR}/page-${page_num}.retry.json" ]]; then
+      fixture_file="${FIXTURE_DIR}/page-${page_num}.retry.json"
+    fi
+    cat "$fixture_file" > "$out"
     _last_curl_exit=0
     return 0
   fi
@@ -213,7 +260,7 @@ run_probe() {
   trap "rm -rf '$pf_tmp'" EXIT
   local spool="$pf_tmp/runs.spool" resp_file="$pf_tmp/runs.resp"
   local after="" page=1 resp has_next end_cursor
-  local timed_out=0 last_curl_exit=0 now elapsed remaining
+  local timed_out=0 last_curl_exit=0 now elapsed remaining max_time
   : > "$spool"
   while :; do
     # --- deadline (SUM bound): abort BEFORE issuing a page that could overshoot ---
@@ -221,14 +268,42 @@ run_probe() {
     if (( elapsed >= PREFLIGHT_DEADLINE_S )); then
       _pf_abort deadline "$(( page - 1 ))" "$timed_out" "$last_curl_exit"
     fi
+    # Per-page curl budget: the REMAINING wall-clock, FLOORED to PAGE_MIN (anti-starvation —
+    # #6919: never hand a late page ~0s → empty body → false "malformed") and CAPPED at PAGE_MAX
+    # (no single page hogs the deadline). The near-deadline floor overshoots DEADLINE by at most
+    # one PAGE_MIN, which the SUM bound `DEADLINE + PAGE_MIN ≤ outer_curl` absorbs.
     remaining=$(( PREFLIGHT_DEADLINE_S - elapsed )); (( remaining < 1 )) && remaining=1
-    _fetch_runs_page "$resp_file" "$after" "$page" "$remaining"
+    max_time=$remaining
+    (( max_time > PREFLIGHT_PAGE_MAX_S )) && max_time=$PREFLIGHT_PAGE_MAX_S
+    (( max_time < PREFLIGHT_PAGE_MIN_S )) && max_time=$PREFLIGHT_PAGE_MIN_S
+    _fetch_runs_page "$resp_file" "$after" "$page" "$max_time" 1
     last_curl_exit=$_last_curl_exit
-    (( _last_curl_exit != 0 )) && timed_out=$(( timed_out + 1 ))
     resp=$(cat "$resp_file")
-    # Fail LOUD on a non-array .data.runs.edges (fetch failure / GraphQL error / unexpected
-    # shape) — never a false-clean {runs:[]}. A curl-timeout empty body surfaces here; the
-    # marker carries last_curl_exit (splits pool-stall from slow scan). exit 1 → webhook non-200.
+    # --- TRANSIENT classification (#6919): a curl NON-ZERO exit OR an EMPTY/whitespace body is a
+    # transport timeout/truncation, NOT a malformed GraphQL response. Retry the page ONCE with a
+    # FRESH per-page budget (if the deadline still allows one); a second transient → LOUD
+    # reason=transport abort. This is what stops budget-starvation from reading as "malformed". ---
+    if (( last_curl_exit != 0 )) || [[ -z "${resp//[[:space:]]/}" ]]; then
+      timed_out=$(( timed_out + 1 ))
+      now=$(date +%s); elapsed=$(( now - PREFLIGHT_START_S ))
+      if (( elapsed >= PREFLIGHT_DEADLINE_S )); then
+        _pf_abort deadline "$(( page - 1 ))" "$timed_out" "$last_curl_exit"
+      fi
+      remaining=$(( PREFLIGHT_DEADLINE_S - elapsed )); (( remaining < 1 )) && remaining=1
+      max_time=$remaining
+      (( max_time > PREFLIGHT_PAGE_MAX_S )) && max_time=$PREFLIGHT_PAGE_MAX_S
+      (( max_time < PREFLIGHT_PAGE_MIN_S )) && max_time=$PREFLIGHT_PAGE_MIN_S
+      _fetch_runs_page "$resp_file" "$after" "$page" "$max_time" 2
+      last_curl_exit=$_last_curl_exit
+      resp=$(cat "$resp_file")
+      if (( last_curl_exit != 0 )) || [[ -z "${resp//[[:space:]]/}" ]]; then
+        timed_out=$(( timed_out + 1 ))
+        _pf_abort_transport "$page" "$timed_out" "$last_curl_exit"
+      fi
+    fi
+    # Fail LOUD on a non-array .data.runs.edges (GraphQL error / unexpected shape) — never a
+    # false-clean {runs:[]}. Reached ONLY with a NON-EMPTY body (transient empties handled
+    # above), so this is a GENUINE malformed response, not a transport timeout. exit 1 → non-200.
     if ! echo "$resp" | jq -e '.data.runs.edges | type == "array"' >/dev/null 2>&1; then
       local err_msgs data_keys gql_msg
       err_msgs=$(echo "$resp" | jq -c '[(.errors // [])[].message]' 2>/dev/null || echo '["<unparseable response>"]')

@@ -1,5 +1,4 @@
 ---
-adr: ADR-006
 title: Terraform Remote Backend on Cloudflare R2
 status: active
 date: 2026-03-27

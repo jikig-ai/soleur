@@ -1,5 +1,4 @@
 ---
-adr: ADR-056
 title: "CI API-spend ledger: per-run artifact capture → monthly rollup, not per-run commit"
 status: accepted
 date: 2026-06-11

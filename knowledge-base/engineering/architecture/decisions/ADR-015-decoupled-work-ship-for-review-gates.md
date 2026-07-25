@@ -1,5 +1,4 @@
 ---
-adr: ADR-015
 title: Decoupled Work/Ship for Review Gates
 status: active
 date: 2026-03-27

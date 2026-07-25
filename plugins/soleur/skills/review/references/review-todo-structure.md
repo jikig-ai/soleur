@@ -83,8 +83,13 @@ gh api repos/:owner/:repo/milestones --jq '[.[] | select(.state=="open") | selec
 Before creating an issue, check if one already exists for this finding from the same PR:
 
 ```bash
-gh issue list --label code-review --search "review: <description>" --json number,title --jq '.[0].number // empty'
+gh issue list --label code-review --state all --search "review: <description>" --json number,title --jq '.[0].number // empty'
 ```
+
+`--state all` is load-bearing (#6786): `gh issue list` defaults to open-only, and under the
+fix-inline default a review issue is filed and then CLOSED once resolved — which is the normal
+resting state. An open-only probe therefore cannot see the duplicate it exists to find, and
+re-files it on every subsequent run.
 
 If a match exists, skip creation and reference the existing issue in the summary.
 

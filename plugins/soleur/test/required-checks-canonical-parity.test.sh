@@ -342,4 +342,104 @@ else
 fi
 echo ""
 
+# --- Test 8: credential-path green is EARNED, not fabricated (#6882/ADR-139) --
+#
+# `credential-path-guard` is a required 15368 context, so the composite action
+# posts an unconditional green synthetic check-run for it on every bot PR. That
+# is sound ONLY because the action reproduces the scan over its own staged paths
+# first (the same earned-green pattern as the real gitleaks run).
+#
+# It canNOT rely on the FABRICATED-NOT-EARNED / unreachability argument used by
+# `rule-body-lint` (#6103) and `sentry-destroy-required` (#6589): those guard
+# surfaces sit OUTSIDE the action's ALLOWED_PATHS, whereas
+# lint-credential-path-literals.py scans tracked *.md under plugins/ and
+# knowledge-base/ — which INCLUDES knowledge-base/project/weakness-digest.md,
+# one of exactly two paths the action is allowed to write. ALLOWED_PATHS ∩
+# SCAN_DIRS is NON-empty, so deleting the preflight would fabricate a pass over
+# a reachable surface. This test is the enforcement teeth for that invariant.
+#
+# Anchors are syntactic (`^\s*if ! python3 …`), never a bare script name — the
+# action.yml comment block names the script too, and a mention-grep would pass
+# against a deleted preflight. The reproduction lives INLINE in the same Phase-4
+# `run:` block as the gitleaks / lint-fixture-content arms, matching their
+# `if ! <cmd>; then ::error::; exit 1; fi` shape.
+
+echo "Test 8: action.yml EARNS the credential-path green (#6882 / ADR-139)"
+# `|| true` is load-bearing: this file runs under `set -euo pipefail`, so a
+# no-match grep inside a command substitution aborts the WHOLE suite before the
+# FAIL branch can print (and an early `head -1` close can SIGPIPE grep to 141).
+# The RED state must report a clean failure, not kill the runner.
+preflight_line=$(grep -nE '^[[:space:]]*if ! python3 scripts/lint-credential-path-literals\.py "\$\{PATHS\[@\]\}"; then' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
+# The EARLIEST outward/irreversible side-effect the preflight must precede is the
+# branch push (the local `git checkout -b` above it is not outward). Anchoring on
+# `git push` rather than the far-downstream check-run POST catches a reorder that
+# pushes the bot branch BEFORE scanning it (test-design review of PR #6883). The
+# check-run POST anchor is retained below as an independent, weaker upper bound.
+sideeffect_line=$(grep -nE '^[[:space:]]*git push ' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
+postrun_line=$(grep -nE '^[[:space:]]*gh api "repos/\$\{REPO\}/check-runs"' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
+
+if [[ -n "$preflight_line" ]]; then
+  echo "  PASS: (8a) action.yml runs lint-credential-path-literals.py over \"\${PATHS[@]}\" (line $preflight_line)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (8a) action.yml does NOT reproduce the credential-path scan over its staged paths."
+  echo "        Without it the synthetic green for 'credential-path-guard' is FABRICATED over a"
+  echo "        REACHABLE surface (weakness-digest.md). See ADR-139 + scripts/required-checks.txt."
+  FAIL=$((FAIL + 1))
+fi
+
+# (8d) ENFORCEMENT LEG — the then-body must actually fail the step. Presence +
+# ordering of the `if !` line (8a/8b) is satisfied by an INERT guard whose body
+# was neutralized (`exit 1` → `:` / `true`, or the body deleted) — the scan then
+# runs, prints its ::error::, and falls through to push+PR+synthetic anyway. Walk
+# from the `if` line to the FIRST closing `fi` and require a non-zero `exit` in
+# between. Without this, a one-token mutation defangs the gate while 8a/8b stay
+# green (test-design review of PR #6883). `awk` exits 0 regardless; `|| true`
+# keeps the substitution safe under `set -euo pipefail`.
+enforce_exit=""
+if [[ -n "$preflight_line" ]]; then
+  enforce_exit=$(awk -v s="$preflight_line" '
+    NR > s && /^[[:space:]]*fi[[:space:]]*$/ { exit }
+    NR > s && /^[[:space:]]*exit[[:space:]]+[1-9]/ { print "yes"; exit }
+  ' "$ACTION_YML" || true)
+fi
+if [[ "$enforce_exit" == "yes" ]]; then
+  echo "  PASS: (8d) the credential-path then-body exits non-zero (guard is enforcing, not inert)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (8d) the credential-path then-body does NOT exit non-zero before its closing 'fi'."
+  echo "        The scan runs but does not fail the step — a bot PR with a credential path in"
+  echo "        weakness-digest.md would push + post a fabricated green. See ADR-139."
+  FAIL=$((FAIL + 1))
+fi
+
+# Non-vacuity: (8b) is meaningless if the git-push anchor stops resolving.
+if [[ -n "$sideeffect_line" ]]; then
+  echo "  PASS: (8c) non-vacuous — git-push side-effect anchor resolves (line $sideeffect_line)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (8c) could not locate the branch push — (8b) ordering check would be vacuous"
+  FAIL=$((FAIL + 1))
+fi
+
+if [[ -n "$preflight_line" && -n "$sideeffect_line" && "$preflight_line" -lt "$sideeffect_line" ]]; then
+  echo "  PASS: (8b) preflight runs BEFORE the branch is pushed ($preflight_line < $sideeffect_line)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (8b) preflight does not precede the branch push (preflight=$preflight_line push=$sideeffect_line)"
+  FAIL=$((FAIL + 1))
+fi
+
+# (8e) Defense-in-depth upper bound: preflight also precedes the synthetic
+# check-run POST. Weaker than 8b (a reorder between push and POST still passes)
+# but pins the far end of the ordering invariant independently.
+if [[ -n "$preflight_line" && -n "$postrun_line" && "$preflight_line" -lt "$postrun_line" ]]; then
+  echo "  PASS: (8e) preflight also precedes the synthetic check-run POST ($preflight_line < $postrun_line)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (8e) preflight does not precede the synthetic check-run POST (preflight=$preflight_line post=$postrun_line)"
+  FAIL=$((FAIL + 1))
+fi
+echo ""
+
 print_results

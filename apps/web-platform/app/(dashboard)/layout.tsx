@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { SWRConfig } from "swr";
@@ -20,6 +20,7 @@ import { useNavResume } from "@/hooks/use-nav-resume";
 import { MembershipRevokedScreen } from "@/components/dashboard/membership-revoked-screen";
 import { NoApiKeyBanner } from "@/components/dashboard/no-api-key-banner";
 import { PendingInviteBannerRecovery } from "@/components/dashboard/pending-invite-banner-recovery";
+import { PwaControls } from "@/components/pwa/pwa-controls";
 import { NAV_ITEMS, ADMIN_NAV_ITEMS } from "@/components/command-palette/nav-items";
 import { InboxNavBadge } from "@/components/dashboard/inbox-nav-badge";
 import { ConversationsNavBadge } from "@/components/dashboard/conversations-nav-badge";
@@ -32,6 +33,7 @@ import {
 } from "@/components/command-palette/platform";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { HelpOverlay } from "@/components/command-palette/help-overlay";
+import { MobilePaletteTrigger } from "@/components/command-palette/mobile-palette-trigger";
 import { SupportLauncher } from "@/components/support/support-launcher";
 import { TourProvider } from "@/components/tour/tour-provider";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
@@ -134,6 +136,9 @@ export default function DashboardLayout({
   const { getKbEntryHref } = useNavResume();
   const kbEntryHref = getKbEntryHref();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Skip-to-content target: the skip link moves focus here explicitly (Safari
+  // does not move focus on a bare href="#id" + tabIndex={-1} fragment jump).
+  const mainRef = useRef<HTMLElement>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
@@ -240,10 +245,17 @@ export default function DashboardLayout({
   // collapses), so a stray dispatch while expanded is a no-op.
   useEffect(() => {
     function handleExpandRequest() {
-      // An "expand request" must always yield a VISIBLE (expanded) rail. The only
-      // dispatcher today is the KB "Browse files" button; this keeps any future
-      // out-of-aside dispatcher (command palette, deep link) working too.
+      // An "expand request" must always yield a VISIBLE nav surface. On desktop
+      // that means un-collapsing the rail. On mobile the nav is the hamburger
+      // drawer, so open it too. Guard the open to mobile: `drawerOpen` also
+      // drives `<main inert>` + body scroll-lock (both viewport-independent), and
+      // this event has desktop dispatchers (the guided tour's startTour, the
+      // desktop collapsed-rail "Browse files" button) — opening the drawer on
+      // desktop would freeze the content pane until the next route change.
       if (collapsed) toggleCollapsed();
+      if (!window.matchMedia("(min-width: 768px)").matches) {
+        setDrawerOpen(true);
+      }
     }
     window.addEventListener(RAIL_EXPAND_EVENT, handleExpandRequest);
     return () =>
@@ -288,6 +300,20 @@ export default function DashboardLayout({
       onEscape={() => setDrawerOpen(false)}
     >
     <div className="flex h-dvh flex-col md:flex-row">
+      {/* Skip-to-content — first focusable child, scoped to the dashboard layout
+          (the #main-content target only exists here, not on /login or marketing
+          routes). Hidden while the drawer is open because <main> is `inert` then
+          and moving focus into an inert element fails silently. The onClick moves
+          focus explicitly because Safari won't on a bare fragment jump. */}
+      {!drawerOpen && (
+        <a
+          href="#main-content"
+          onClick={() => mainRef.current?.focus()}
+          className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-soleur-bg-surface-1 focus:px-4 focus:py-2 focus:text-soleur-text-primary focus:shadow-lg"
+        >
+          Skip to content
+        </a>
+      )}
       {/* Mobile top bar — only visible below md breakpoint. RQ1: the context
           band replaces the bare "Soleur" label so workspace identity is shown
           in EVERY mobile state, OUTSIDE the hamburger drawer. */}
@@ -296,22 +322,16 @@ export default function DashboardLayout({
           onClick={() => setDrawerOpen(true)}
           aria-label="Open navigation"
           aria-expanded={drawerOpen}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
         >
           <MenuIcon className="h-5 w-5" />
         </button>
-        {/* Mobile band — placed via CSS (this bar is `md:hidden`), NOT a JS
-            viewport gate, so workspace identity + the back chevron paint on the
-            FIRST frame (no SSR/hydration tick where identity is absent). */}
-        <WorkspaceContextBand
-          pathname={pathname}
-          variant="mobile"
-          suppressBack={inKbDocView}
-          // KB owns its "Knowledge Base" title in the page body on mobile
-          // (kb/layout fullWidth header), so the mobile band drops the duplicate
-          // section title. Settings/Chat keep theirs (KB-scoped).
-          suppressSectionTitle={drill === "kb"}
-        />
+        {/* Workspace identity now lives at the TOP of the hamburger drawer (the
+            switcher belongs in the sidebar), so the top bar stays minimal:
+            hamburger on the left, palette trigger on the right. */}
+        {/* The only non-keyboard way to open the command palette. `ml-auto`
+            pins it to the trailing edge; self-hides when the flag is off. */}
+        <MobilePaletteTrigger />
       </div>
 
       {/* Overlay backdrop — always rendered for fade transition */}
@@ -368,10 +388,25 @@ export default function DashboardLayout({
           <button
             onClick={() => setDrawerOpen(false)}
             aria-label="Close navigation"
-            className="flex h-10 w-10 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+            className="flex h-11 w-11 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
           >
             <XIcon className="h-5 w-5" />
           </button>
+        </div>
+
+        {/* Workspace switcher at the top of the mobile drawer. CSS-exclusive
+            with the desktop rail band below (`hidden md:block`), so the
+            OrgSwitcher/LiveRepoBadge single-mount (AC4b) is preserved — exactly
+            one band renders per breakpoint. The drawer owns its own "Back to
+            menu" (drilled branch) and needs no section title, so both are
+            suppressed here. */}
+        <div className="px-3 pb-1 md:hidden">
+          <WorkspaceContextBand
+            pathname={pathname}
+            variant="mobile"
+            suppressBack
+            suppressSectionTitle
+          />
         </div>
 
         {/* Collapse/expand toggle — the floated « chevron. Collapses the rail to
@@ -559,11 +594,38 @@ export default function DashboardLayout({
             </div>
           </>
         ) : (
-          <div
-            ref={setRailSlotEl}
-            data-testid="rail-secondary-slot"
-            className="flex min-h-0 flex-1 flex-col overflow-y-auto"
-          />
+          <>
+            {/* Mobile-only "Back to menu": the mobile band suppresses its own
+                back when drilled, so the drawer owns it here. Hidden on desktop
+                (the desktop rail band renders the back affordance). Tapping it
+                navigates to /dashboard, which auto-closes the drawer. */}
+            <Link
+              href="/dashboard"
+              data-testid="drawer-back-to-menu"
+              className="mx-3 mt-3 flex min-h-[44px] shrink-0 items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary md:hidden"
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                className="shrink-0"
+              >
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+              Back to menu
+            </Link>
+            <div
+              ref={setRailSlotEl}
+              data-testid="rail-secondary-slot"
+              className="flex min-h-0 flex-1 flex-col overflow-y-auto"
+            />
+          </>
         )}
 
         {/* Widenable rail: a right-edge drag handle rendered in EVERY state —
@@ -606,6 +668,9 @@ export default function DashboardLayout({
 
       {/* Main content — inert when drawer is open for focus trapping */}
       <main
+        id="main-content"
+        tabIndex={-1}
+        ref={mainRef}
         className="flex-1 overflow-y-auto bg-soleur-bg-base"
         inert={drawerOpen || undefined}
       >
@@ -649,6 +714,10 @@ export default function DashboardLayout({
       {/* AC-FLOW2: terminal overlay rendered when ws.close(4012) fires. Mount
           once at the dashboard root so it survives across route changes. */}
       <MembershipRevokedScreen />
+
+      {/* PWA progressive-enhancement chrome: update pill / install button / iOS
+          A2HS card. Renders null when standalone or when nothing is offerable. */}
+      <PwaControls />
     </div>
     {/* Command layer (feat-web-app-shortcuts) — portal-rendered (Radix), so
         placement inside the provider is positional only. Both no-op when the

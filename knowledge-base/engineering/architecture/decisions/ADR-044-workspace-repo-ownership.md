@@ -1,5 +1,4 @@
 ---
-adr: ADR-044
 title: Relocate repo-connection state from users to workspaces; uniqueness guarantee moves from DB constraint to normalizeRepoUrl contract
 status: accepted
 date: 2026-05-28

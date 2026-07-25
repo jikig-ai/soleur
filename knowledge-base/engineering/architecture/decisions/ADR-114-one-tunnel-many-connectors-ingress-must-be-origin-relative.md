@@ -1,5 +1,4 @@
 ---
-adr: 114
 title: One tunnel, many connectors — tunnel ingress must be origin-relative, not connector-relative
 status: accepted
 date: 2026-07-15

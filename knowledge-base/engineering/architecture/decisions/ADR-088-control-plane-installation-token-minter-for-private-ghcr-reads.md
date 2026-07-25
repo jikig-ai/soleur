@@ -1,5 +1,4 @@
 ---
-adr: ADR-088
 title: "Control-plane installation-token minter for private-GHCR reads (supersedes ADR-087 D1)"
 status: superseded
 superseded_by: "#6122 (migrate off GHCR to self-hosted zot + control-plane-minted OIDC bearer)"

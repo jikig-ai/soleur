@@ -162,7 +162,7 @@ Runs only when `<sync_area>` is literally `rule-prune`. Surfaces AGENTS.md rules
    - Reads `knowledge-base/project/rule-metrics.json`.
    - Filters rules with `hit_count == 0` AND `first_seen` older than the cutoff.
    - Validates every rule_id against `^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,60}$`; malformed ids are skipped with a stderr warning (never filed as issues).
-   - For each candidate, checks via `gh issue list --search "<title> in:title"` whether an open issue already exists (idempotent).
+   - For each candidate, checks via `gh issue list --state open -L 200 --search "<title> in:title"` whether an open issue already exists (idempotent).
    - Files a new issue via `gh issue create --milestone "Post-MVP / Later"` for each new candidate. Issue body contains a `### Verify` block with a paste-ready `jq` query against `rule-metrics.json` plus the `generated_at` timestamp, and explicitly states that filing does NOT authorize removal; a human must edit AGENTS.md.
 4. **Report** the candidate count and list of filed issue URLs. No constitution / learnings promotion paths apply.
 

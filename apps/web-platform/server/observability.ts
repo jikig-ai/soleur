@@ -348,9 +348,13 @@ export function infoSilentFallback(
   err: unknown,
   options: SilentFallbackOptions,
 ): void {
-  const { feature, op, extra, message } = options;
+  const { feature, op, extra, message, tags: extraTags } = options;
   const tags: Record<string, string> = { feature };
   if (op) tags.op = op;
+  // Sibling-parity bugfix (#6801 M17): `report`/`warn` merge caller `tags` but
+  // `info` silently dropped them, so any `tags:` passed to infoSilentFallback
+  // never reached Sentry. Mirror the sibling implementations exactly.
+  if (extraTags) Object.assign(tags, extraTags);
 
   // pg_code surfacing kept for parity (no-op when err is null / non-Postgres).
   const pgCode = sqlStateFromError(err);

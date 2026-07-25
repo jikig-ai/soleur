@@ -1,5 +1,4 @@
 ---
-adr: ADR-047
 title: Workspace context band + switcher render outside the single-rail swap region; secondary navs lift in via a portal slot
 status: active
 date: 2026-06-02

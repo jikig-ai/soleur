@@ -2,6 +2,15 @@
 #
 # Behavioral test for workspaces-cutover.sh :: verify_byte_identity / emit_verify_diff (C1 diagnostic).
 #
+# NAMING TRAP (#6807) — despite the filename, this suite does NOT test
+# `.github/workflows/workspaces-luks-verify.yml`. "verify" here is the C1 BYTE-IDENTITY verify, not
+# the off-host verify workflow. That workflow's assertions are covered in
+# workspaces-luks-freeze.test.sh (which already carries a WORKFLOW= handle and greps YAML); its
+# VERIFY_WF= handle and the AC7 endpoint gate are the coverage. The name misled a reader into
+# believing the verify workflow was already covered while it sat structurally incapable of ever
+# passing — so if you came here looking for that, you want the freeze suite. Renaming this file was
+# considered and rejected as churn disproportionate to a header note.
+#
 # Context: on 2026-07-19 the first real /workspaces LUKS cutover (run 29676994044) safe-aborted on the
 # C1 itemized verify's "1 difference" — but the script discarded the offending path (rm'd the vlog)
 # AND folded rsync's stderr into the diff count (2>&1). This suite pins the fix: stdout/stderr are

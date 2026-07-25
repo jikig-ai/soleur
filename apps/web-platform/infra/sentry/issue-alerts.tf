@@ -335,6 +335,64 @@ resource "sentry_issue_alert" "byok_cap_exceeded" {
   }
 }
 
+# Rule — action-required SLA cron auto-closed an issue an operator had ENGAGED with
+# (#6836). This is the FEARED case, and by construction it should NEVER fire: the worker's
+# human-engagement veto (action-required-sla-policy.ts) blocks any close where a non-bot
+# assignee or a recent non-bot touch exists. If this alert fires, the veto failed — a genuine
+# operator ask may have been silently closed (single-user-incident brand-survival). We
+# deliberately do NOT alert on out-of-allowlist expire: the fail-safe allowlist makes that
+# unreachable, so such a rule could never fire (deepen-plan review finding #3 blind-spot).
+# Filters (filter_match = "all"): op=action-required-sla AND sla_action=expire AND
+# human_engaged=true. The `op`/`sla_action`/`human_engaged` tags are set by the worker's
+# `emit()` via reportSilentFallback (sla-issue-process.ts).
+resource "sentry_issue_alert" "action_required_sla_veto_bypass" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "action-required-sla-veto-bypass"
+  action_match = "all"
+  filter_match = "all"
+  frequency    = 5
+
+  conditions_v2 = [
+    { first_seen_event = {} },
+  ]
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "op"
+        match = "EQUAL"
+        value = "action-required-sla"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "sla_action"
+        match = "EQUAL"
+        value = "expire"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "human_engaged"
+        match = "EQUAL"
+        value = "true"
+      }
+    },
+  ]
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # ── Chat write-absence liveness alert (#4849) — APPLY-CREATED, NOT import-only ─
 # Pages on any interactive-message INSERT failure in `dispatchSoleurGo`. All
 # three insert-blocking ops throw AND carry `feature=cc-dispatcher`

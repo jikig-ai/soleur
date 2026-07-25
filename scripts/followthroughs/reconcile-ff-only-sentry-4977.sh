@@ -30,7 +30,7 @@
 
 set -uo pipefail
 
-: "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
+if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
 
 ORG="jikigai-eu"
 API="https://sentry.io/api/0"

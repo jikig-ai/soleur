@@ -66,11 +66,12 @@ export { EXPECTED_CRON_FUNCTIONS, manualTriggerEventFor };
 
 const SENTRY_MONITOR_SLUG = "scheduled-inngest-cron-watchdog";
 
-// Loopback fallback when INNGEST_BASE_URL is unset. Matches the container's
+// Fallback when INNGEST_BASE_URL is unset. Matches the container's
 // runtime env: the web-platform `docker run` in ci-deploy.sh sets
-// `-e INNGEST_BASE_URL=http://host.docker.internal:8288` (both the canary and
-// production run blocks). Parity-tested in cron-inngest-cron-watchdog.test.ts.
-const INNGEST_HOST_FALLBACK = "http://host.docker.internal:8288";
+// `-e INNGEST_BASE_URL=http://10.0.1.40:8288` (both the canary and
+// production run blocks) — the dedicated soleur-inngest host (epic #6178).
+// Parity-tested in cron-inngest-cron-watchdog.test.ts.
+const INNGEST_HOST_FALLBACK = "http://10.0.1.40:8288";
 
 // Restart cooldown (defense-in-depth on the backstop): must exceed the
 // watchdog cron interval (4h) so two consecutive escalated ticks do not

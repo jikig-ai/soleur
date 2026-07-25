@@ -60,6 +60,13 @@ export const PUBLIC_PATHS = [
   // NARROW exact path — do NOT broaden to /api.
   "/api/waitlist",
   "/invite",
+  // /offline.html: static, script-free PWA offline fallback (public/offline.html)
+  // served by the service worker's navigate branch. The middleware matcher does
+  // NOT exclude .html (only sw.js + image extensions), so without PUBLIC_PATHS
+  // membership Supabase middleware 307→/login and the SW precache would capture
+  // the redirect body instead of the real offline page. Same class as
+  // /manifest.webmanifest (#4587). NARROW exact path.
+  "/offline.html",
 ];
 
 /** Auth required, but T&C check skipped (user must reach these to accept terms) */

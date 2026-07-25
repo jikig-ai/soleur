@@ -19,7 +19,9 @@ import { serve } from "inngest/next";
 import { inngest } from "@/server/inngest/client";
 import { agentOnSpawnRequested } from "@/server/inngest/functions/agent-on-spawn-requested";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
+import { cronActionRequiredSla } from "@/server/inngest/functions/cron-action-required-sla";
 import { cronAgentNativeAudit } from "@/server/inngest/functions/cron-agent-native-audit";
+import { slaIssueProcess } from "@/server/inngest/functions/sla-issue-process";
 import { cronAnthropicCostReport } from "@/server/inngest/functions/cron-anthropic-cost-report";
 import { cronAnthropicCreditProbe } from "@/server/inngest/functions/cron-anthropic-credit-probe";
 import { cronArchitectureDiagramSync } from "@/server/inngest/functions/cron-architecture-diagram-sync";
@@ -45,6 +47,7 @@ import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-
 import { cronGithubCidrRefresh } from "@/server/inngest/functions/cron-github-cidr-refresh";
 import { cronGrowthAudit } from "@/server/inngest/functions/cron-growth-audit";
 import { cronGrowthExecution } from "@/server/inngest/functions/cron-growth-execution";
+import { cronInngestConfigDrift } from "@/server/inngest/functions/cron-inngest-config-drift";
 import { cronInngestCronWatchdog } from "@/server/inngest/functions/cron-inngest-cron-watchdog";
 import { cronKbTemplateHealth } from "@/server/inngest/functions/cron-kb-template-health";
 import { cronLegalAudit } from "@/server/inngest/functions/cron-legal-audit";
@@ -124,6 +127,8 @@ export const { GET, POST, PUT } = serve({
   functions: [
     agentOnSpawnRequested,
     cfoOnPaymentFailed,
+    cronActionRequiredSla,
+    slaIssueProcess,
     cronAgentNativeAudit,
     cronAnthropicCostReport,
     cronAnthropicCreditProbe,
@@ -150,6 +155,7 @@ export const { GET, POST, PUT } = serve({
     cronGithubCidrRefresh,
     cronGrowthAudit,
     cronGrowthExecution,
+    cronInngestConfigDrift,
     cronInngestCronWatchdog,
     cronKbTemplateHealth,
     cronLegalAudit,

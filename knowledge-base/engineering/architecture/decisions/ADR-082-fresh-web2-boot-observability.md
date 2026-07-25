@@ -1,5 +1,4 @@
 ---
-adr: ADR-082
 title: Fresh web-2 boot observability + supply-chain hardening contract
 status: superseded-in-part
 date: 2026-07-03

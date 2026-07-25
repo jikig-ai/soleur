@@ -1,5 +1,4 @@
 ---
-adr: 115
 title: Dedicated hosts self-converge their private NIC at boot and self-report it
 status: accepted
 date: 2026-07-15

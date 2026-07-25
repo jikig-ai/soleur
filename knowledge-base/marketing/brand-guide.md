@@ -94,6 +94,7 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 - Over-explain -- trust the reader's intelligence
 - Use emojis in formal marketing copy (acceptable in Discord)
 - Call it a "plugin" or "tool" in public-facing content -- it is a platform. **Exception:** "plugin" is permitted in literal CLI commands (`claude plugin install`), in legal documents where "Plugin" is a defined term, and in technical documentation describing the installation mechanism
+- Assert a competitor's revenue, ARR, or customer count as fact in published copy [added 2026-07-20, per #6768 -- second stale-figure incident on a published surface]. Cite verifiable signals instead -- funding rounds, headcount, or public pricing. Vendor-reported metrics get explicit attribution ("Polsia reports...", "third-party estimates range from...") or get omitted. This applies to rendered copy **and** to machine-ingested structured data (JSON-LD `acceptedAnswer`, `og:description`), which answer engines quote verbatim with no page context
 
 ### Audience Voice Profiles
 

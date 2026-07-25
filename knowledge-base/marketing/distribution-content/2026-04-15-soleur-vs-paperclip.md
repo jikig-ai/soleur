@@ -4,13 +4,15 @@ type: comparison
 publish_date: "2026-04-15"
 channels: discord, x, bluesky, linkedin-company
 status: published
+corrections:
+  - "2026-07-22: Paperclip GitHub star count 14,600+ → 74,000+ (verified 2026-07-20 against the GitHub API for paperclipai/paperclip, the canonical repository; the prior figure was ~5x stale). Mirrors the correction to the blog twin plugins/soleur/docs/blog/2026-03-31-soleur-vs-paperclip.md."
 ---
 
 ## Discord
 
 Two open-source AI company platforms. Different layers of the stack.
 
-Paperclip: org charts, budget controls, heartbeat scheduling, governance. 14.6k GitHub stars. You bring your own agents.
+Paperclip: org charts, budget controls, heartbeat scheduling, governance. 74,000+ GitHub stars. You bring your own agents.
 
 Soleur: 63 agents, 62 skills, 9 departments, compounding knowledge base. You bring your own orchestration.
 
@@ -22,7 +24,7 @@ https://soleur.ai/blog/soleur-vs-paperclip/?utm_source=discord&utm_medium=commun
 
 ## X/Twitter Thread
 
-Paperclip hit 14.6k GitHub stars building "zero-human company" infrastructure. Soleur runs 63 agents across 9 departments with a compounding knowledge base. Both are open-source. They're solving opposite halves of the same problem.
+Paperclip has passed 74,000 GitHub stars building "zero-human company" infrastructure. Soleur runs 63 agents across 9 departments with a compounding knowledge base. Both are open-source. They're solving opposite halves of the same problem.
 
 2/ Paperclip is governance infrastructure: org charts, heartbeat scheduling, per-agent budget caps, rollback controls. It does not include agents or domain knowledge. You bring your own.
 
@@ -42,7 +44,7 @@ https://soleur.ai/blog/soleur-vs-paperclip/?utm_source=x&utm_medium=social&utm_c
 
 ## IndieHackers
 
-**Title:** Comparing two open-source AI company platforms: Paperclip (14.6k stars, governance infra) vs. Soleur (63 agents, compounding knowledge base)
+**Title:** Comparing two open-source AI company platforms: Paperclip (74,000+ stars, governance infra) vs. Soleur (63 agents, compounding knowledge base)
 
 **Body:**
 
@@ -50,7 +52,7 @@ Building in public, so documenting how Soleur stacks up against Paperclip -- the
 
 The comparison surprised me. They're not direct competitors. They're solving opposite halves of the same problem.
 
-Paperclip is infrastructure: org charts, heartbeat scheduling, per-agent monthly budgets, rollback controls, audit logs. 14,600+ GitHub stars. MIT license. Agent-runtime-agnostic -- you connect Claude, Cursor, OpenCode, Bash, or HTTP webhooks. Upcoming Clipmart feature will add pre-built company templates for marketing, e-commerce, software dev, and sales verticals.
+Paperclip is infrastructure: org charts, heartbeat scheduling, per-agent monthly budgets, rollback controls, audit logs. 74,000+ GitHub stars (verified 2026-07-20). MIT license. Agent-runtime-agnostic -- you connect Claude, Cursor, OpenCode, Bash, or HTTP webhooks. Upcoming Clipmart feature will add pre-built company templates for marketing, e-commerce, software dev, and sales verticals.
 
 What Paperclip does not include: agents. Domain knowledge. Any built-in understanding of what a legal compliance audit should cover or how a competitive intelligence scan should be structured.
 
@@ -73,7 +75,7 @@ Full breakdown here: https://soleur.ai/blog/soleur-vs-paperclip/?utm_source=indi
 
 There are now two serious open-source platforms positioning as AI company infrastructure for solo founders:
 
-**Paperclip** (14.6k GitHub stars, MIT): Org charts with reporting lines, heartbeat scheduling, per-agent monthly budgets with auto-pause, rollback and approval gates, immutable audit logs. Agent-runtime-agnostic -- you connect whatever LLM runtime you want. Upcoming "Clipmart" feature will offer pre-built company templates for marketing/e-commerce/software dev verticals. Does not include agents or domain knowledge -- you supply those.
+**Paperclip** (74,000+ GitHub stars verified 2026-07-20, MIT): Org charts with reporting lines, heartbeat scheduling, per-agent monthly budgets with auto-pause, rollback and approval gates, immutable audit logs. Agent-runtime-agnostic -- you connect whatever LLM runtime you want. Upcoming "Clipmart" feature will offer pre-built company templates for marketing/e-commerce/software dev verticals. Does not include agents or domain knowledge -- you supply those.
 
 **Soleur** (open-source, Apache 2.0): 63 agents across 9 departments including legal, finance, and product strategy. Compounding knowledge base where every session writes back to a shared git-tracked directory. The brand guide the marketing agent creates is what the content agent reads from. Legal agents reference compliance decisions made in prior sessions. No autonomous heartbeat scheduling or per-agent budget controls.
 
@@ -95,7 +97,7 @@ https://soleur.ai/blog/soleur-vs-paperclip/?utm_source=reddit
 
 Two open-source AI company platforms both claim to run a company with minimal humans. I compared them. The conclusion surprised me.
 
-Paperclip (14.6k GitHub stars): org charts, heartbeat scheduling, per-agent budget caps, rollback controls. Governance infrastructure. No agents included -- you bring your own domain logic.
+Paperclip (74,000+ GitHub stars): org charts, heartbeat scheduling, per-agent budget caps, rollback controls. Governance infrastructure. No agents included -- you bring your own domain logic.
 
 Soleur (what I've been building): 63 agents across 9 departments, compounding knowledge base. Every session writes back to a shared knowledge base that every agent reads from. Legal decisions reference prior compliance work. Brand strategy informs content. No autonomous scheduling or budget enforcement.
 
@@ -133,7 +135,7 @@ https://soleur.ai/blog/soleur-vs-paperclip/?utm_source=linkedin-company&utm_medi
 
 ## Bluesky
 
-Paperclip: org charts, budgets, heartbeat scheduling for autonomous agents. 14.6k stars. MIT. You bring your own agents.
+Paperclip: org charts, budgets, heartbeat scheduling for autonomous agents. 74,000+ stars. MIT. You bring your own agents.
 
 Soleur: 63 agents, 9 departments, compounding knowledge base. You bring your own governance.
 

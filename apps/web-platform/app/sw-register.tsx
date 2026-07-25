@@ -2,10 +2,25 @@
 
 import { useEffect } from "react";
 import { subscribeToPush } from "@/lib/push-subscription";
+import {
+  hasSwResetFlag,
+  unregisterAllAndClearCaches,
+  cleanResetUrl,
+} from "@/lib/pwa/sw-reset";
 
 export function SwRegister() {
   useEffect(() => {
     if ("serviceWorker" in navigator) {
+      // Kill switch (ADR-137 brand-survival recovery): if a bad worker bricks the
+      // installed app, `?sw-reset` on any URL wipes all workers + caches and
+      // reloads clean. Runs BEFORE (re)registration so a broken worker is torn
+      // down rather than re-registered.
+      if (hasSwResetFlag()) {
+        unregisterAllAndClearCaches().finally(() => {
+          window.location.replace(cleanResetUrl());
+        });
+        return;
+      }
       navigator.serviceWorker
         .register("/sw.js", { scope: "/", updateViaCache: "none" })
         .then((registration) => {

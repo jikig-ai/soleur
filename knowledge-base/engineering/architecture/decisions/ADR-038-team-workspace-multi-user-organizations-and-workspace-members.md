@@ -1,5 +1,4 @@
 ---
-adr: 038
 title: Introduce organizations + workspace_members; decouple workspace from userId
 status: accepted
 date: 2026-05-21

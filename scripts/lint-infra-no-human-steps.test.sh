@@ -384,9 +384,219 @@ EOF
 run_case "multi-line start comment region PASSES" 0 "$f"
 
 # ---------------------------------------------------------------------------
+# Defect 10 (#6771) — a CI workflow FILENAME must not satisfy the imperative.
+#
+# `apply-web-platform-infra.yml` matched `-target\b.*?\bappl(y|ies|ied)\b`
+# because the `-` after `apply` is a word boundary; `reboot-*.yml` matches the
+# bare `\breboot\b` imperative the same way. A filename NAMES automation — it
+# never instructs — so filenames are neutralized before the actor/imperative
+# scan. See the module docstring in the SUT.
+# ---------------------------------------------------------------------------
+
+# F1 — the live #6749 repro, verbatim. Actor `operator's` on the first line,
+# `-target=` + `apply-...yml` on the second: adjacency, not a human step.
+f="$(mkcase <<'EOF'
+# Plan
+
+`lifecycle { ignore_changes = [value] }` (so TF adopts the operator's value), **and the matching
+`-target=` line in `apply-web-platform-infra.yml`** — without that line the resource is declared
+EOF
+)"
+run_case "F1 workflow filename beside 'operator' PASSES (#6749 repro)" 0 "$f"
+
+# F2 — POSITIVE CONTROL. The fix must not blunt the sentinel: a human
+# personally running terraform apply still FAILS.
+f="$(mkcase <<'EOF'
+# Runbook
+
+The operator runs `terraform apply` from their laptop during the window.
+EOF
+)"
+run_case "F2 human runs terraform apply STILL FAILS" 1 "$f"
+
+# F3 — filename-class breadth: `reboot-*.yml` names a workflow, and `reboot`
+# is a bare imperative, so the neutralization (not the `-target` anchor) is
+# what clears this one.
+f="$(mkcase <<'EOF'
+# Plan
+
+The operator is paged by `reboot-web-hosts.yml` when the drain stalls.
+EOF
+)"
+run_case "F3 reboot-*.yml filename beside 'operator' PASSES" 0 "$f"
+
+# F4 — glob form. `*` is in the filename char class so a globbed workflow
+# name is neutralized too. Uses `reboot-*.yml` rather than the `destroy-*.yml`
+# of plan task 1.5: bare `destroy` is NOT an imperative (it requires a
+# terraform/tofu prefix), so a `destroy-*` fixture cannot distinguish a char
+# class with `*` from one without it — it would pass either way (vacuous).
+f="$(mkcase <<'EOF'
+# Plan
+
+The operator reviews the `reboot-*.yml` workflows before the freeze.
+EOF
+)"
+run_case "F4 globbed workflow filename PASSES" 0 "$f"
+
+# F5 — REGRESSION GUARD for the tool-anchored `-target` imperative: a human
+# hand-running a targeted apply must still FAIL.
+f="$(mkcase <<'EOF'
+# Runbook
+
+The operator runs `terraform -target=doppler_secret.foo apply` by hand.
+EOF
+)"
+run_case "F5 hand-run terraform -target apply STILL FAILS" 1 "$f"
+
+# F6 — ADJACENCY HAZARD. This is the ONLY mechanical detector of an
+# empty-string substitution: deleting the filename span would splice
+# `terraform` against `applies` and CREATE a match that is not in the source.
+# Substituting `_` keeps the tokens apart. Do not drop this case.
+f="$(mkcase <<'EOF'
+# Plan
+
+The operator runs terraform pipeline.yml applies cleanly.
+EOF
+)"
+run_case "F6 filename removal must not splice a new match" 0 "$f"
+
+# F7 — actor-side neutralization: the ACTOR half is scanned on the
+# neutralized text too, so a workflow named `operator-*.yml` does not supply
+# a human actor.
+f="$(mkcase <<'EOF'
+# Plan
+
+The `operator-digest.yml` workflow runs terraform apply on merge.
+EOF
+)"
+run_case "F7 workflow filename does not supply a human actor" 0 "$f"
+
+# F8 — `.yaml` long form. LOAD-BEARING: an implementation whose fast path
+# tests only the literal ".yml" passes every other case here and is still
+# broken for ".yaml".
+f="$(mkcase <<'EOF'
+# Plan
+
+The operator is paged by `reboot-web-hosts.yaml` when the drain stalls.
+EOF
+)"
+run_case "F8 .yaml long-form filename PASSES" 0 "$f"
+
+# F9 — POSITIVE CONTROL WITHOUT THE TOKEN `terraform`. Lifted verbatim from
+# knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md.
+#
+# This is the case whose ABSENCE let a bad fix through: anchoring the `-target`
+# imperative on terraform/tofu/opentofu adjacency was measured to silence 41
+# corpus lines, ~40% of them genuine human steps like this one — and every
+# other positive control here contains the literal word "terraform", so the
+# suite stayed green while the sentinel lost its teeth. A human-run apply is
+# routinely phrased WITHOUT naming the tool. Do not drop this case, and do not
+# add a tool anchor without making it RED first.
+f="$(mkcase <<'EOF'
+# Cutover runbook
+
+This maintenance-window apply is a **FULL operator apply** (not the per-PR CI
+`-target` path), so it ALSO lands the resources the dark-launch merge-apply
+deliberately excludes.
+EOF
+)"
+run_case "F9 tool-token-free 'FULL operator apply' STILL FAILS" 1 "$f"
+
+# ---------------------------------------------------------------------------
+# F10-F13 — THE OTHER DIRECTION. Every filename case above (F1/F3/F4/F6/F7/F8)
+# asserts exit 0, so the suite could only see neutralization being too WEAK.
+# A change making it too AGGRESSIVE — a wider char class, eating the whole
+# backtick span, dropping the strong-actor suppression — was invisible to all
+# 39 of them. That is the same monoculture that let the tool anchor through:
+# there, every positive control contained "terraform"; here, no positive
+# control contained a filename at all. Do not add a filename fixture without
+# also asking which direction it pins.
+# ---------------------------------------------------------------------------
+
+# F10 — a genuine human step whose ONLY imperative lives inside the filename.
+# `cryptsetup` is the imperative; neutralizing the filename would eat it and
+# silence a real runbook step. Shaped after
+# knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md.
+f="$(mkcase <<'EOF'
+# Workspaces LUKS cutover — recovery
+
+If the tunnel is down, you ssh into the web host and run the
+`cryptsetup-unlock-workspaces.yml` playbook by hand to reopen the volume.
+EOF
+)"
+run_case "F10 human step whose only imperative is in the filename STILL FAILS" 1 "$f"
+
+# F11 — the imperative sits inside a backtick span that ALSO carries a yaml
+# filename as a flag value. Neutralizing the span (rather than the filename
+# token) would eat `terraform apply`. F2 is nearly this fixture but its span
+# holds no `.yml`, so F2 cannot discriminate. `-var-file=prod.yml` /
+# `-f compose.yml` / `--config ansible.yaml` are ubiquitous in real runbooks.
+f="$(mkcase <<'EOF'
+# Runbook
+
+The operator runs `terraform apply -var-file=prod.yml` by hand on the box.
+EOF
+)"
+run_case "F11 filename as a flag value must not eat the imperative" 1 "$f"
+
+# F12 — MULTIPLICITY. Two workflow filenames on one line: neutralization must
+# replace every match, not just the first. A `count=1` substitution re-creates
+# the exact #6771 false positive and no other case here would notice.
+f="$(mkcase <<'EOF'
+# Plan
+
+The operator is paged by `apply-web-platform-infra.yml` and `reboot-web-hosts.yml` on drain stall.
+EOF
+)"
+run_case "F12 every filename on the line is neutralized, not just the first" 0 "$f"
+
+# F13 — EXTENSION CASE. Every other filename fixture is lowercase, so both
+# `re.IGNORECASE` on the pattern and `.lower()` in the fast path were unpinned.
+f="$(mkcase <<'EOF'
+# Plan
+
+The operator is paged by `REBOOT-WEB-HOSTS.YML` when the drain stalls.
+EOF
+)"
+run_case "F13 uppercase extension is still a filename" 0 "$f"
+
+# F14 — OVER-REACH via the char class. F10/F11 carry a STRONG actor signal, so
+# neutralization is suppressed and the char class never runs on them — they
+# cannot see a class that eats too much. This case has only a WEAK actor
+# (`operator`), so neutralization DOES run, and the imperative (`reboot`) sits
+# outside the filename. Precise neutralization removes just the filename and the
+# line still flags; a class admitting a space swallows the whole clause and the
+# line goes silent.
+#
+# The filename is deliberately UNBACKTICKED: a backtick is outside the char
+# class, so it acts as a natural left anchor and BLOCKS the greedy match. A
+# backticked variant of this fixture stays green under the over-reach mutation
+# and pins nothing.
+f="$(mkcase <<'EOF'
+# Runbook
+
+The operator must reboot web-1 before apply-web-platform-infra.yml can run.
+EOF
+)"
+run_case "F14 neutralization removes the filename and nothing else" 1 "$f"
+
+# F15 — OVER-REACH via the span. Same weak-actor (neutralization-active) path as
+# F14, but here the imperative lives INSIDE a backtick span that also carries a
+# yaml filename as a flag value. Neutralizing the span rather than the filename
+# token eats `terraform apply` and the line goes silent. F11 is the strong-actor
+# twin of this case and cannot pin it, because suppression short-circuits first.
+f="$(mkcase <<'EOF'
+# Plan
+
+Deploys are gated: the operator sees `terraform apply -var-file=prod.yml` in the CI log.
+EOF
+)"
+run_case "F15 filename inside a span is neutralized, the span is not" 1 "$f"
+
+# ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=30
+MIN_CASES=45
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

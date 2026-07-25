@@ -1,5 +1,4 @@
 ---
-adr: ADR-027
 title: Stateless self-modifying cron — plain Anthropic API, no claude-code-action wrapper
 status: active
 date: 2026-05-11

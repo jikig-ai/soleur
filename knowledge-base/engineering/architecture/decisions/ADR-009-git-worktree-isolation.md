@@ -1,5 +1,4 @@
 ---
-adr: ADR-009
 title: Git Worktree Isolation
 status: active
 date: 2026-03-27

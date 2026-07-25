@@ -74,6 +74,27 @@ set_secret() {
   log "set Actions secret ${SECRET_NAME} on ${REPO} (via stdin)"
 }
 
+# set_operator_login — the digest posts to a PRIVATE repo, and a `gh issue
+# create` into a repo with zero subscribers notifies nobody. That is not
+# hypothetical: the digest ran correctly for months while 130 days of
+# action-required backlog accumulated unseen, because the delivery channel was
+# dead. The workflow assigns each digest to this login so it notifies
+# unconditionally, independent of watch state.
+#
+# Repo VARIABLE, not a secret: a GitHub login is not confidential, and secrets
+# are masked in logs — masking the assignee would make a delivery failure
+# harder to diagnose, which is the failure mode being repaired.
+set_operator_login() {
+  local login="${OPERATOR_GH_LOGIN:-}"
+  if [[ -z "$login" ]]; then
+    login="$(gh api user --jq .login 2>/dev/null || true)"
+  fi
+  [[ -n "$login" ]] || die "could not resolve operator login; set OPERATOR_GH_LOGIN explicitly"
+  gh variable set OPERATOR_GH_LOGIN -R "$REPO" --body "$login" \
+    || die "gh variable set OPERATOR_GH_LOGIN on ${REPO} failed"
+  log "set Actions variable OPERATOR_GH_LOGIN=${login} on ${REPO} (digest assignee)"
+}
+
 # install_workflow — create-or-update the workflow on the default branch via the contents API.
 install_workflow() {
   [[ -r "$WORKFLOW_ASSET" ]] || die "workflow asset not readable at ${WORKFLOW_ASSET}"
@@ -114,6 +135,7 @@ main() {
   fetch_secret          # fail-fast before creating anything
   ensure_repo
   set_secret "$SECRET_VALUE"
+  set_operator_login    # must precede install_workflow: the workflow fails loud without it
   install_workflow
   enable_workflow
   log "done. Trigger a run with: gh workflow run operator-digest.yml -R ${REPO}"

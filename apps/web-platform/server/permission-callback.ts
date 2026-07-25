@@ -166,10 +166,15 @@ export interface CanUseToolDeps {
    */
   resolveAckPosture?: () => number | null;
   sendToClient: (userId: string, payload: WSMessage) => boolean;
+  // #6802 (M4): returns whether the notification was delivered on at least one
+  // channel. permission-callback's 3 call sites are fire-and-forget (they
+  // dispatch tool/review_gate payloads, out of the statutory must-not-fail
+  // fallback class) and ignore the return — but the injected-dependency type
+  // wraps in Promise, so tsc rejects a `Promise<void>` slot for the widened fn.
   notifyOfflineUser: (
     userId: string,
     payload: NotificationPayload,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   updateConversationStatus: (
     conversationId: string,
     status: string,

@@ -164,10 +164,35 @@
 }
 
 @layer base {
+  html {
+    /* Block bounce/rubber-band on the document and stop pull-to-refresh from
+       hijacking vertical drags inside scroll containers. */
+    overscroll-behavior: none;
+    /* Kill the grey tap flash on interactive elements (mobile Safari/Chrome). */
+    -webkit-tap-highlight-color: transparent;
+    /* Prevent mobile browsers from auto-inflating font sizes on orientation
+       change; keep our own type scale authoritative. */
+    text-size-adjust: 100%;
+    -webkit-text-size-adjust: 100%;
+  }
   body {
     background-color: var(--soleur-bg-base);
     color: var(--soleur-text-primary);
     font-family: var(--font-sans);
+    /* Body only — never clip legitimate horizontal-scroll containers (tables,
+       code blocks). Prevents a stray wide child from side-scrolling the page. */
+    overflow-x: hidden;
+  }
+  /* iOS Safari zooms the viewport when focusing an input whose font-size is
+     below 16px. Floor every text control to 16px on phones; the per-input
+     `text-base md:text-sm` utilities restore 14px on desktop (utilities beat
+     @layer base, so desktop is unaffected). */
+  @media (max-width: 767px) {
+    input,
+    textarea,
+    select {
+      font-size: 16px;
+    }
   }
   :where(a, button, input, select, textarea, [tabindex]:not([tabindex="-1"])):focus-visible {
     outline: none;
@@ -195,6 +220,50 @@
   }
   50% {
     border-color: oklch(0.666 0.16 55 / 0.3);
+  }
+}
+
+/* Honor reduced-motion for the active-message pulse. Unlayered so it beats the
+   @layer components rule that sets the infinite animation. */
+@media (prefers-reduced-motion: reduce) {
+  .message-bubble-active {
+    animation: none;
+  }
+}
+
+/* Global reduced-motion sweep (Phase 3). The per-selector reduced-motion rules
+   above/below preserve a *static* in-progress affordance for specific surfaces
+   (the cmdk spinner keeps its gold ring, the refresh shimmer a dim sliver); this
+   catch-all neutralizes every other keyframe/utility animation and transition —
+   the ~60 files of Tailwind `animate-spin`/`animate-pulse`/`transition-*`
+   utilities that would otherwise keep moving for a reduced-motion user. Near-zero
+   (0.01ms) rather than 0 so `animationend`/`transitionend` listeners still fire.
+   Unlayered + `!important` so it beats utility classes; the specific rules that
+   set `animation-name: none` still win for their surfaces (name is untouched
+   here), keeping their static affordance intact. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* KB file-tree touch actions (Phase 3). The per-node rename/delete/upload
+   buttons are `opacity-0` and revealed only via `group-hover:opacity-100`; a
+   touch device has no hover, so those actions are unreachable. On a no-hover
+   (coarse) pointer, reveal the action cluster and clear the timestamp that the
+   hover state would otherwise fade to make room. `!important` beats Tailwind's
+   layered `opacity-0`/`group-hover:opacity-100` utilities regardless of order. */
+@media (hover: none) {
+  .kb-tree-actions {
+    opacity: 1 !important;
+  }
+  .kb-tree-timestamp {
+    opacity: 0 !important;
   }
 }
 
@@ -274,9 +343,17 @@
   border-bottom: 1px solid var(--soleur-border-default, #2a2a2a);
   background: transparent;
   padding: 0.875rem 1rem;
-  font-size: 0.9rem;
+  /* 1rem (16px) floors iOS auto-zoom on the ⌘K palette input; desktop restores
+     the tighter 0.9rem below. This rule is unlayered, so the override must be
+     unlayered too — a @layer-wrapped override would lose the cascade. */
+  font-size: 1rem;
   color: var(--soleur-text-primary, #ededed);
   outline: none;
+}
+@media (min-width: 768px) {
+  [cmdk-input] {
+    font-size: 0.9rem;
+  }
 }
 [cmdk-list] {
   max-height: 22rem;

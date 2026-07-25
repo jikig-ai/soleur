@@ -1,5 +1,4 @@
 ---
-adr: ADR-005
 title: Persistent Session Architecture
 status: active
 date: 2026-03-27

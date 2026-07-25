@@ -87,7 +87,12 @@ if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]]; then
       --head "$CURRENT_BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
   fi
   if [[ -n "$PR_NUMBER" ]]; then
-    REVIEW_ISSUES=$(gh issue list --label code-review --search "PR #${PR_NUMBER}" \
+    # Kept in lockstep with .claude/hooks/pre-merge-rebase.sh. Two load-bearing details:
+    # --state all, because a review issue that was filed and then CLOSED (the fix-inline
+    # default) is still evidence /review ran — open-only discards the healthy case (#6786);
+    # and the literal quotes, so GitHub search treats "PR #N" as an exact phrase (otherwise
+    # `#123` tokenizes loosely and matches unrelated issues — confirmed in soleur/#2186).
+    REVIEW_ISSUES=$(gh issue list --label code-review --state all --search "\"PR #${PR_NUMBER}\"" \
       --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)
   fi
 fi

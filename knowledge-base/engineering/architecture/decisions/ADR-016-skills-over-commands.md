@@ -1,5 +1,4 @@
 ---
-adr: ADR-016
 title: Skills Over Commands
 status: active
 date: 2026-03-27

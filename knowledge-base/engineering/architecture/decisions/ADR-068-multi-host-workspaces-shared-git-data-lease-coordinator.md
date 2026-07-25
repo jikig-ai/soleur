@@ -646,6 +646,17 @@ Phase 4b (continuous checkpoint).
 >   sidecar) hitting `127.0.0.1:3000/internal/readyz` with a loopback Host, or via the private-net
 >   proxy — never as a direct off-host CF-LB monitor. The continuous LB monitor stays
 >   reachability-only on `/health` (b); readyz is the on-host pre-pool check, a distinct consumer.
+>   - **Amendment 2026-07-23 (#6812 fix).** "On-host" is necessary but NOT sufficient: the prod
+>     container runs on the default docker bridge with `-p 0.0.0.0:3000:3000` (not `--network host`),
+>     so a bare host-side `curl 127.0.0.1:3000/internal/readyz` reaches the app with the docker
+>     BRIDGE GATEWAY (e.g. 172.17.0.1) as its socket peer — not loopback — and still gets 403. An
+>     on-host consumer MUST run the probe *inside* the container (`docker exec soleur-web-platform
+>     curl 127.0.0.1:3000/internal/readyz`), the transport now centralized in
+>     `apps/web-platform/infra/workspaces-luks-emit.sh:wl_probe_readyz`, so the peer is a genuine
+>     loopback. (Contrast `/internal/metrics`, Host-only-gated, which IS reachable by a bare host
+>     curl.) Do NOT "fix" this by widening `isLoopbackPeer` to the gateway — under docker's default
+>     userland-proxy the gateway is indistinguishable from off-host traffic through the published
+>     port, which would collapse the boundary to the attacker-set Host header.
 > - **Necessary-but-not-sufficient.** `/internal/readyz` is an ADDITIONAL pre-pool gate layered on
 >   top of the unchanged hard invariant (c) (relay active AND git-data cut over). Shipping it does
 >   NOT relax (c) or by itself unlock pooling. Plan:

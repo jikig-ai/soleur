@@ -1,5 +1,4 @@
 ---
-adr: 119
 title: Encrypt the live /workspaces volume additively — never replace the host that cannot be rebuilt
 status: adopting
 date: 2026-07-17
@@ -160,6 +159,28 @@ absent, docker auto-creates an empty bind source and a cutover serving zero user
 `app_canary` therefore also asserts `/internal/readyz` (`workspaces_writable` + `workspaces_populated`),
 and runs **before** `disarm_dead_man` so an app-level failure still has the unattended backstop.
 
+**`readyz` proves a FLOOR, not an INVENTORY (#6807).** `readiness.ts:81` is
+`countWorkspaceDirsAt(root) > 0`, and `isWorkspacesWritable` write+unlinks **one** probe file at the
+root. A cutover that preserved **1 of 8** sole-copy workspaces therefore returns `ready=true`.
+Certifying a cutover needs a **separate inventory count** compared against a persisted baseline —
+which is why `luks-monitor.sh` now carries a host-side count (exclusions mirrored from
+`session-metrics.ts`) that fails **closed** when the baseline is absent, and why the cutover persists
+`WORKSPACES_COUNT` at the G3 data gate. Never let prose imply `ready=true` means the inventory survived.
+
+**This reasoning binds the OFF-HOST VERIFY surface too, and did not (#6807).** The same argument was
+implemented in the cutover's canary and never swept into `workspaces-luks-verify.yml`, which asserted
+200 on a no-route health path and was structurally incapable of passing — so the runbook §5 gate was
+dead. Both probes are now retry-bounded (the mapper mounts and `docker start` returns before Node
+listens, so a single-shot probe races container boot), and both live in one shared helper.
+
+**The 2026-07-20 cutover is the worked example of why the canary must not abort silently.** It
+landed, ran ~27 minutes, aborted at `app_canary` on a Cloudflare 521 — *before* `disarm_dead_man` —
+and the dead-man then remounted the retained plaintext over a healthy LUKS mount, stranding those 27
+minutes of sole-copy writes. Nothing paged: the `/health` arm called a bare `die` and emitted
+nothing, a *successful* dead-man remount emits no marker, and the dead-man's own restart chain
+failed, leaving the daily monitor unarmed. See **#6812**. The `status: adopting` above is therefore
+still accurate — at-rest encryption is **not** in effect on web-1 as of 2026-07-21.
+
 ### (b) Rollback is the retained plaintext volume — and the "one-way door" framing is wrong
 
 No flag-flip analogue exists (`/workspaces` has no `GIT_DATA_STORE_ENABLED` equivalent) and GitHub is
@@ -234,8 +255,11 @@ web-1 is false until the cutover runs.
 **Reboot is the sharper edge.** `docker run --restart unless-stopped` means `dockerd` resurrects the
 container on reboot **without ever executing `docker run`** — so a pre-`docker run` gate catches
 nothing on that path, and the `-v /mnt/data/workspaces` bind mount silently resolves to a **root-disk
-dir Docker creates**. Result: container healthy, `/api/health` 200, **user source code written in
-plaintext to the root disk**. The gate must therefore be structural, not procedural: a systemd unit
+dir Docker creates**. Result: container healthy, `/health` 200, **user source code written in
+plaintext to the root disk**. (This narrative said `/api/health` until #6807; that path has no route
+and 307s to `/login`, so it could never have been the 200 being described. `/health` is the custom
+server's path — and note that its 200 is exactly the *unconditional* liveness signal this paragraph
+is warning about, which is why the mount claim needs `/internal/readyz`, not either health path.) The gate must therefore be structural, not procedural: a systemd unit
 with `RequiresMountsFor=/mnt/data` ordered after the mapper-open, so *container running ⇒ mount
 correct* holds **by construction**, plus `chattr +i` on the root-disk `/mnt/data` inode so Docker's
 implicit `mkdir` returns EPERM.
@@ -646,6 +670,70 @@ T-series; a user-data deletion must not be indistinguishable from a staging-prep
 operator's only no-SSH channel. Magnitude is reported **top-level only** — a per-path itemization
 would publish workspace structure (repo and branch names) into the Actions log and the Sentry drift
 channel, a wider audience than the data itself.
+
+## Addendum (2026-07-23): the re-cut-after-orphaned-volume path (#6812 / #6855)
+
+The 2026-07-20 cutover (run `29782780158`) landed, served for ~27 minutes, then its host-local
+dead-man timer fired and remounted the plaintext volume — stranding those 27 minutes of sole-copy
+writes on the LUKS volume and leaving `/mnt/data` back on plaintext `/dev/sdb` (**#6812**). The
+operator's recovery decision (2026-07-21, recorded on #6812): **accept the 27-minute loss and
+re-cut**; the live plaintext volume is authoritative, and the stranded window is *deliberately
+discarded*.
+
+**The premise "a re-cut luksFormats that device" does NOT hold against the current on-disk state,
+and that is the gap this addendum closes.** The dead-man is a host-side mount operation — it does
+NOT touch terraform state — so `hcloud_volume.workspaces_luks` (Hetzner id `106406962`) is **still
+in state and still `crypto_LUKS`**, holding the discarded window. `workspaces-cutover.sh`'s device
+guard (§(g)) is three-arm — raw→`luksFormat`, **`crypto_LUKS`→idempotent no-op**, other→abort — so a
+plain re-cut against `106406962` hits the **no-op** arm: it re-opens the OLD header and surfaces the
+stale ext4, never re-formatting. A re-cut now would reuse the orphaned volume + old header, bulk-rsync
+(no `--delete`) live plaintext over the stale ext4, and most likely abort at the C1 `--delete
+--dry-run` verify — not the clean fresh cut that was authorized.
+
+**Mechanism — `apply_target=workspaces-luks-recut` (a scoped `-replace`, environment-gated).** A new
+dispatch job in `apply-web-platform-infra.yml` runs `terraform -replace=hcloud_volume.workspaces_luks`
+(+ `-target` on the volume and its attachment). It **destroys** the orphaned volume `106406962`
+(discarding the accepted window) and creates a genuinely **raw** replacement carrying the *same stable
+name* `soleur-web-platform-data-luks` — because `workspaces-luks.tf` deliberately omits `format`
+(§(g)), the replacement is born raw. The existing cutover then resolves the new device by name
+(`workspaces-luks-cutover.yml` queries the Hetzner API `?name=soleur-web-platform-data-luks`), hits
+the raw→`luksFormat` arm, `mkfs`, and copies from the authoritative live plaintext. Zero downtime:
+`/mnt/data` serves from the untouched live `/dev/sdb` throughout; attach/detach is a hot Hetzner-API
+operation.
+
+**Invariants (enforced by `tests/scripts/lib/workspaces-luks-recut-gate.sh`, mutation-tested):**
+- The plan is EXACTLY `{volume REPLACE (delete AND create) + attachment CREATE}` — a bare
+  delete/forget or an update-in-place aborts.
+- **Recovery arm (arch review P2):** because the volume has no `create_before_destroy`, a `-replace`
+  is destroy-before-create, so an apply that fails between the delete and the create strands the
+  volume out of state. A re-dispatch then plans a bare create (`before == null`); the gate accepts
+  that recovery shape (a fresh empty volume touches no live data), so the operator auto-recovers by
+  re-dispatching rather than hand-editing terraform state (`hr-exhaust-all-automated-options`).
+- **Id-pin (user-impact review P2):** the operator supplies `expected_luks_volume_id` (the orphaned
+  volume's Hetzner id); the gate asserts the *replaced* volume's `before.id` equals it, so a state
+  corruption that mapped the `workspaces_luks` ADDRESS onto the LIVE volume's physical id cannot
+  silently destroy live data even though every address-based counter reads 0. Skipped for the
+  recovery bare create (`before == null` — nothing to destroy).
+- The LIVE plaintext volume (`hcloud_volume.workspaces["web-1"]`, id `105149570`), its attachment,
+  and the web-1 server carry **zero** actions.
+- **The passphrase is REUSED, never re-minted** — any create/update/delete/forget on
+  `random_password.workspaces_luks` / `doppler_secret.workspaces_luks_key` aborts (a re-mint opens a
+  new header and strands at-rest data — the F4 catastrophe). This inverts the cutover gate, where the
+  passphrase's *first* create is legal.
+- **Authorization** is the required-reviewer `environment: workspaces-luks-cutover` gate (reused, with
+  a non-empty reviewer set — DP-11 F8) plus a typed `confirm=RECUT-WORKSPACES-LUKS` typo-guard. Unlike
+  the additive first provision (un-gated), the recut is destructive on sole-copy data, so it carries
+  the same human authorization as the freeze.
+
+**No C4 impact** — checked all three model files (`diagrams/{model.c4,views.c4,spec.c4}`): the recut is
+a lifecycle operation on the already-modeled `/workspaces` LUKS volume, the already-modeled web-1
+host, the already-modeled operator, and the already-used Hetzner API. Actors checked {operator},
+external systems {Hetzner API}, data stores {LUKS volume}, access relationships {operator→recut
+dispatch} — all already modeled; no new element or edge.
+
+**Status unchanged — `adopting`.** This addendum builds the *prerequisite* mechanism only. Executing
+the recut, the freeze, and the verify are the operator's downstream gated dispatches; the
+`adopting → accepted` flip stays downstream (soak-gated, blocked on the unwired heartbeat #6808).
 
 ## References
 

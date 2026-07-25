@@ -21,7 +21,37 @@ For every infrastructure decision, evaluate against these principles in order:
 - **Always IaC** for configuration — cloud-init, Ansible, or Terraform provisioners, not manual SSH
 - Exception: account creation and API token generation (Terraform can't do these)
 
-### 2. Right Tool, Right Place
+### 2. Encryption Posture — Declared Before HCL Exists
+
+Every persistent store (volume, bucket, database, cache) and every cross-component or
+cross-host connection introduced by the decision MUST leave this step with a **declared,
+mechanically-verifiable** at-rest and in-transit posture — never "we'll encrypt it later" and
+never a bare "the provider handles it". This is a **STRATEGY** decision, made and recorded
+*before* terraform-architect is asked to generate HCL, because the posture choice (guest-side
+LUKS vs. provider-managed vs. an accepted plaintext exception) shapes the resource shape itself
+(a LUKS volume needs a `random_password` + dedicated Doppler config + cloud-init apparatus that
+a provider-managed store does not).
+
+- **At rest:** name the mechanism (`luks` | `provider-managed:<named attestation>` |
+  `app-layer-envelope:<scheme>` | `plaintext-exception`) and what it does — and does **not** —
+  defend against. On Hetzner, `hcloud_volume` carries no `encrypted` attribute; "encrypted"
+  means the guest-side LUKS apparatus (see terraform-architect's Hetzner/Cloudflare
+  requirements). On Cloudflare R2, encryption is provider-managed and requires a named
+  attestation, never an unattested claim.
+- **In transit:** name the connection, where TLS is enforced, and whether certificate
+  verification is provably on — `sslmode=require` on Postgres encrypts but does not verify the
+  presented certificate, which is the in-transit analogue of the at-rest attribute trap.
+- **No exception without a tracking issue.** If a store or connection is deliberately left
+  plaintext or unverified, that is a decision recorded here with a named justification and a
+  tracking issue — not a decision deferred to implementation.
+
+This axis is enforced downstream by the design-time gate (`plan` §2.11 / `deepen-plan` §4.10)
+and the encryption-posture ledger (`scripts/encryption-posture-ledger.json`); see
+[ADR-140](../../../../../knowledge-base/engineering/architecture/decisions/ADR-140-encryption-posture-as-a-design-time-default.md)
+for the full three-layer model. Skipping this step here does not skip the gate downstream — it
+only means the choice gets made later, under less context, by whoever hits the halt.
+
+### 3. Right Tool, Right Place
 
 | Task | Wrong Place | Right Place | Why |
 |------|-----------|------------|-----|
@@ -30,7 +60,7 @@ For every infrastructure decision, evaluate against these principles in order:
 | Secret management | `.env` files committed | GitHub Secrets + runtime injection | Secrets rotate; committed secrets don't |
 | Database migrations | Manual SQL editor | Migration files + CI | Reproducible, rollback-safe |
 
-### 3. Cost-Aware Defaults
+### 4. Cost-Aware Defaults
 
 - Start with the **smallest viable instance** — scale up based on metrics, not guesses
 - Check **availability** before selecting instance types — cloud providers deprecate and sell out
@@ -38,7 +68,7 @@ For every infrastructure decision, evaluate against these principles in order:
 - Use **persistent volumes** for data, not root disk — volumes survive server replacement
 - Calculate **monthly cost** and present it before provisioning
 
-### 4. Deployment Topology
+### 5. Deployment Topology
 
 - **Single server + Docker** for MVP (< 50 concurrent users)
 - **Docker Compose** when adding reverse proxy, database, or cache alongside the app

@@ -22,6 +22,14 @@ hidden behind an inline `terraform apply` span, or an actor named as
 `` `operator` ``, still counts. Only *fenced* code blocks (``` / ~~~) are
 skipped wholesale — a runnable multi-line example, never prose.
 
+The one exception is a `*.yml` / `*.yaml` FILENAME, blanked before the scan
+(#6771). This is not a contradiction of "raw line": a backtick span can contain
+a command, so stripping backticks would hide real imperatives — but a filename
+never can. It NAMES automation, it does not instruct. Citing
+`apply-web-platform-infra.yml` is how this repo documents a CI-driven apply, yet
+`apply-` satisfied `\bappl(y|ies|ied)\b` (the `-` is a word boundary), so the
+sentinel flagged the very automation that makes the step non-human.
+
 Carve-outs (a matched line is NOT flagged when):
   * inside a paired `<!-- lint-infra-ignore start -->` … `<!-- lint-infra-ignore
     end -->` region. The markers MUST be HTML comments (a bare `lint-infra-ignore`
@@ -113,8 +121,46 @@ IMPERATIVE_RES = tuple(
         r"\bmount(?:s|ing|ed)?\b",                                    # mount(s|ing|ed)
         r"\battach(?:es|ing|ed)?\s+the\s+volume\b",                   # attach the volume
         r"\bverif(?:y|ies|ied)\b.*?\bprivate\b.*?\bip\b",             # verify … private … IP
-        r"-target\b.*?\bappl(?:y|ies|ied)\b",                         # -target … apply
+        # -target … apply. Deliberately NOT anchored on terraform/tofu/opentofu,
+        # unlike the siblings above (ADR: infra-sentinel detection semantics).
+        # Anchoring was measured to silence 41 corpus lines, ~40% of them GENUINE
+        # human steps — "a FULL operator apply", "the operator applies the new
+        # resource manually" — because the natural phrasing omits the tool name.
+        # False positive = author friction; false negative = a non-technical
+        # operator meets an un-automated infra step. Resolve toward sensitivity.
+        r"-target\b.*?\bappl(?:y|ies|ied)\b",
     )
+)
+
+# A `*.yml` / `*.yaml` filename NAMES automation; it never instructs. `*` is in
+# the class so a globbed workflow name (`reboot-*.yml`) is covered too.
+YAML_FILENAME_RE = re.compile(r"\b[\w.*-]+\.ya?ml\b", re.IGNORECASE)
+
+# UNAMBIGUOUS human-agency signals. A line carrying one of these is scanned RAW
+# (no filename neutralization) — otherwise an imperative that lives ONLY inside
+# a workflow filename gets eaten and a genuine human step goes silent:
+#
+#     you ssh into the web host and run the
+#     `cryptsetup-unlock-workspaces.yml` playbook by hand
+#
+# `cryptsetup` is the only imperative there; neutralizing the filename drops it
+# and the line passes. That is the false-NEGATIVE mirror of the #6771 defect,
+# and it lands on runbooks — the artifact class this sentinel exists to police.
+#
+# Bare `operator` / `you` / `founder` are deliberately ABSENT: those are the
+# weak, incidental mentions the filename false positive is actually made of
+# ("the operator's value", "paged by reboot-web-hosts.yml"). Including them
+# would re-open #6771. Measured at production scan scope, this suppression
+# costs ZERO false positives (its one corpus hit is under `/archive/`, which
+# the scanner already excludes).
+STRONG_ACTOR_RE = re.compile(
+    r"\bby hand\b"
+    r"|\bmanually\b"
+    r"|\byourself\b"
+    r"|\byour laptop\b"
+    r"|\bssh(?:\s+into|\s+onto|\s+to|\s+-i)\b"
+    r"|\b(?:founder|operator|admin|maintainer|sysadmin|engineer)\s+runs?\b",
+    re.IGNORECASE,
 )
 
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
@@ -138,6 +184,23 @@ def _is_carve_heading(title: str) -> bool:
     if re.match(r"Last-resort diagnosis\b", t, re.IGNORECASE):
         return True
     return False
+
+
+def _neutralize_filenames(text: str) -> str:
+    """Blank out `*.yml`/`*.yaml` filenames so a workflow NAME can't match."""
+    # Fast path. These literals are a silent CORRECTNESS PRECONDITION of the
+    # regex below: they must cover every alternation in YAML_FILENAME_RE, or a
+    # match is skipped here and the pattern never runs. Extending the pattern
+    # (e.g. to `\.(ya?ml|tf)\b`) REQUIRES extending this test in the same edit —
+    # otherwise the new extension is dropped silently and the suite stays green.
+    # F8 pins the `.yaml` arm; add a fixture per arm you add.
+    lowered = text.lower()
+    if ".yml" not in lowered and ".yaml" not in lowered:
+        return text
+    # Substitute `_`, never `""` — deleting the span can splice the surrounding
+    # tokens together and CREATE a match absent from the source (e.g.
+    # "terraform pipeline.yml applies" → "terraform  applies").
+    return YAML_FILENAME_RE.sub("_", text)
 
 
 def _has_actor(text: str) -> bool:
@@ -213,9 +276,15 @@ def scan_text(text: str) -> tuple[list[int], list[str]]:
         if carve:
             continue
 
-        # 5. Actor / imperative on the RAW line (inline backticks NOT stripped).
-        actor[i] = _has_actor(raw)
-        imper[i] = _has_imperative(raw)
+        # 5. Actor / imperative on the RAW line (inline backticks NOT stripped),
+        #    minus any `*.yml`/`*.yaml` filename. Computed ONCE and fed to both
+        #    predicates — substituting inside each predicate re-scans the line
+        #    per regex and was measured at ~2.3x the full-scan cost.
+        #    A line with an unambiguous human-agency signal keeps its filenames
+        #    (see STRONG_ACTOR_RE) so a filename can still supply the imperative.
+        scan = raw if STRONG_ACTOR_RE.search(raw) else _neutralize_filenames(raw)
+        actor[i] = _has_actor(scan)
+        imper[i] = _has_imperative(scan)
 
     flagged: set[int] = set()
     # Same-line co-occurrence.

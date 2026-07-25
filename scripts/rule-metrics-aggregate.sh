@@ -306,7 +306,18 @@ report=$(jq -n \
         # pencil-collapse-guard.sh) are emitted by their hooks by design.
         | map(select(
             . != "cq-before-calling-mcp-pencil-open-document"
-            and . != "cq-pencil-collapse-auto-recover"))) as $orphan_ids
+            and . != "cq-pencil-collapse-auto-recover"))
+        # net-issue-flow* reserved for the blocking net-issue-flow gate
+        # (ship/scripts/net-issue-flow.sh + .claude/hooks/ship-net-issue-flow-gate.sh,
+        # issue #6769). Same tier-gate rationale as context-reviewed-*: the rule
+        # body lives in the gate script header + ship/SKILL.md, and the
+        # always-loaded B_ALWAYS budget has no room for a new core tag.
+        # cost-of-filing-* is the review-disposition telemetry from
+        # review/SKILL.md; the disposition rides in the rule_id
+        # (cost-of-filing-flip-inline / cost-of-filing-file) because this
+        # aggregator keys every counter on rule_id and never reads .kind.
+        | map(select(startswith("net-issue-flow") | not))
+        | map(select(startswith("cost-of-filing-") | not))) as $orphan_ids
     | {
         schema: $schema,
         generated_at: $generated_at,
@@ -317,6 +328,12 @@ report=$(jq -n \
           # or a malformed timestamp string (crash-mid-write). try/catch
           # treats parse failure as epoch 0 — pushes the rule into "unused"
           # which matches intent: we can'"'"'t prove recent activity.
+          # NB (#6794): a HIGH unused rate here is more likely a telemetry-
+          # FRAGMENTATION artifact than dead weight — this aggregate reads only
+          # ONE per-checkout .claude/.rule-incidents.jsonl, but events are split
+          # across many worktrees. Do NOT treat this as a pruning mandate; read
+          # knowledge-base/project/learnings/2026-07-22-rule-metrics-denominator-investigation.md
+          # (union the logs + observe a real ≥8w window first) before any bulk prune.
           rules_unused_over_8w: ($enriched
             | map(select(.fire_count == 0
                 and (.first_seen == null

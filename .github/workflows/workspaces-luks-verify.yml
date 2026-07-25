@@ -1,20 +1,62 @@
 # #6604 — the /workspaces LUKS at-rest VERIFY workflow (the no-SSH runbook artifact).
 #
-# READ-ONLY. workflow_dispatch-only. This is the discoverability_test the runbook points at instead
+# NON-DESTRUCTIVE (one OPTIONAL state-file seed — see the seed_workspace_count input; default no
+# write). workflow_dispatch-only. This is the discoverability_test the runbook points at instead
 # of "log in and check" (hr-no-ssh-fallback-in-runbooks): over the CF Tunnel SSH bridge it runs the
 # SAME probe logic as the daily luks-monitor.sh (DP-11 — DRY, not a bespoke reimplementation), plus
-# an app-level workspace read + /api/health, then prints the discriminating fields. It MUTATES
-# NOTHING — no freeze, no flip, no wipe. The destructive cutover is a separate, environment-gated
-# workflow (workspaces-luks-cutover.yml).
+# an app-level liveness probe of /health, the mount-coupled /internal/readyz assert, and the
+# workspace INVENTORY comparison, then prints the discriminating fields.
+#
+# NON-DESTRUCTIVE, but not literally "mutates nothing" (#6807): the readyz assert reaches
+# server/readiness.ts:isWorkspacesWritable, which write+unlinks one 48-bit-random probe FILE at the
+# workspaces root. That is the only way to detect a read-only or failed volume attach from inside
+# the container (the classic st_dev mountpoint check is inert over a docker bind mount), and the
+# probe is a regular file, so countWorkspaceDirsAt's isDirectory() filter excludes it from the
+# inventory even in the window before the unlink. No freeze, no flip, no wipe, no device is opened.
+# The destructive cutover is a separate, environment-gated workflow (workspaces-luks-cutover.yml).
+#
+# #6807 — this workflow was STRUCTURALLY INCAPABLE OF PASSING before that fix: it asserted 200 on
+# the API-PREFIXED health path, which has no route, so it fell through to middleware and 307'd to
+# /login. Observed live as a 307 on run 29783424497, against a cutover (run 29782780158) that had
+# in fact SUCCEEDED. The runbook §5 gate was dead for as long as that assertion stood. /health is
+# the correct endpoint: it is served by the CUSTOM SERVER (server/index.ts), which intercepts
+# before Next.js routing.
+#
+# The literal API-prefixed spelling is deliberately ABSENT from this file, comments included: the
+# workspaces-luks-freeze.test.sh gate greps this workflow WITHOUT stripping comments, precisely so a
+# stale prose claim cannot outlive the assertion it describes.
 #
 # Reach model: the GH runner egress IP is not in var.admin_ips, so it reaches web-1 over the CF
 # Tunnel SSH bridge (.github/actions/cf-tunnel-ssh-bridge) — the same path apply-web-platform-infra
 # and git-data-cutover use. Creds are held here in GitHub secrets; nothing is held on the host.
+#
+# AP-002 (No SSH state mutation) carve-out, recorded rather than silent: the seed_workspace_count
+# input performs ONE bounded state-file append — a single digits-validated integer, rejected when 0
+# and rejected when it would lower an existing baseline — and exists only because there is no
+# operator SSH to seed the baseline by hand (hr-no-ssh-fallback-in-runbooks). Every normal verify
+# writes nothing.
 
-name: workspaces-luks verify (#6604 read-only re-assert)
+name: workspaces-luks verify (#6604 re-assert; optional one-time baseline seed)
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      seed_workspace_count:
+        description: >-
+          ONE-TIME baseline seed. Positive integer (not zero). Writes WORKSPACES_COUNT=<n> to the
+          host state file BEFORE the assert runs. Leave EMPTY for every normal verify. Only needed
+          because the 2026-07-20 cutover predates the persist_state call that now records this
+          automatically (workspaces-cutover.sh, at its G3 data gate), so the live host carries no
+          baseline and the fail-closed comparison has no operand.
+          The value must come from an INDEPENDENT proof of the inventory — the host-side directory
+          count of the copied tree, i.e. what the cutover now auto-persists. For web-1's landed run
+          (29782780158) that was 8 (every workspace dst_rc=0 in the C1 differential, all 8 present).
+          Do NOT use the fsck advisory gate's total= (it skips un-probeable workspaces and can read
+          low), and never the host's own current live count (that would compare a number to itself
+          and certify any shrink green). The seed is refused if it is 0 or below an existing baseline.
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   # Read-only, but serialize dispatches so two verifies do not interleave their SSH sessions.
@@ -71,6 +113,11 @@ jobs:
           # `doppler … --config prd_workspaces_luks`, so it needs this token. Delivered via a 0600
           # stdin .env (same discipline as the cutover), NEVER argv. Published by the DEFAULT apply.
           WORKSPACES_LUKS_BOOT_TOKEN: ${{ secrets.WORKSPACES_LUKS_BOOT_TOKEN }}
+          # Via env:, never inlined into the run: body — a workflow_dispatch input is
+          # attacker-influenceable in the general case and `${{ }}` inside run: is textual
+          # substitution, i.e. shell injection. It is additionally validated digits-only below
+          # before it is ever allowed near the SSH command string.
+          SEED_WORKSPACE_COUNT: ${{ inputs.seed_workspace_count }}
         run: |
           # set +e so a failing probe is captured in probe_rc (and reported) rather than exiting the
           # step at the ssh line under GitHub's inherited `-e` (which `set -uo pipefail` does not clear).
@@ -95,22 +142,126 @@ jobs:
             | ${WEB_HOST_SSH} "$WEB_HOST" "tar xzf - -C '$REMOTE_DIR'"
           # WEB_HOST_SSH is guaranteed set past the guard above (no :-ssh fallback).
           # shellcheck disable=SC2086
-          printf 'DOPPLER_TOKEN=%s\n' "$WORKSPACES_LUKS_BOOT_TOKEN" \
-            | ${WEB_HOST_SSH} "$WEB_HOST" "bash -c 'install -m600 /dev/stdin \"$REMOTE_DIR/.env\"; trap \"shred -u \\\"$REMOTE_DIR/.env\\\" 2>/dev/null || rm -f \\\"$REMOTE_DIR/.env\\\"\" EXIT; set -a; . \"$REMOTE_DIR/.env\"; set +a; bash \"$REMOTE_DIR/luks-monitor.sh\"'"
+          # ONE-TIME baseline seed (see the input's description). Digits-only validation happens
+          # BEFORE the value is allowed anywhere near the SSH command string; a rejected value fails
+          # the run rather than being silently dropped, so a typo cannot look like "no seed
+          # requested". Appended, and read back with `tail -1`, matching persist_state's semantics
+          # in workspaces-cutover.sh:170 — the state file is append-only with last-write-wins.
+          if [[ -n "${SEED_WORKSPACE_COUNT:-}" ]]; then
+            # Digits, and NOT zero. A `0` baseline makes `count -lt 0` false for every count, so it
+            # is an absorbing green a total wipe would pass — a missing baseline wearing a number.
+            case "$SEED_WORKSPACE_COUNT" in
+              ''|*[!0-9]*|0|0[0-9]*)
+                echo "::error::seed_workspace_count must be a positive integer (digits only, not zero). Refusing to write a baseline that cannot fail."
+                exit 1 ;;
+            esac
+            # REFUSE TO LOWER an existing baseline. The operator most likely to reach for this input
+            # is one staring at a `workspace_count_shortfall` FAIL — re-seeding down to the observed
+            # (shrunk) count would convert a real sole-copy data-loss finding into a certified green
+            # in one click. A seed is only sound as a FIRST baseline (or a genuine upward correction),
+            # never as a way past a shortfall; that decision is a data-recovery incident, not a knob.
+            # shellcheck disable=SC2086
+            existing="$(${WEB_HOST_SSH} "$WEB_HOST" "grep -E '^WORKSPACES_COUNT=' /var/lib/workspaces-luks/state 2>/dev/null | tail -1 | cut -d= -f2-" 2>/dev/null || true)"
+            if [[ -n "$existing" && "$existing" =~ ^[0-9]+$ && "$SEED_WORKSPACE_COUNT" -lt "$existing" ]]; then
+              echo "::error::refusing to seed WORKSPACES_COUNT=$SEED_WORKSPACE_COUNT below the existing baseline ($existing). A downward re-seed masks a real shortfall — treat a shortfall as a data-recovery incident (runbook §5), not a seed."
+              exit 1
+            fi
+            # shellcheck disable=SC2086
+            ${WEB_HOST_SSH} "$WEB_HOST" "mkdir -p /var/lib/workspaces-luks && chmod 700 /var/lib/workspaces-luks && printf 'WORKSPACES_COUNT=%s\n' '$SEED_WORKSPACE_COUNT' >> /var/lib/workspaces-luks/state" \
+              || { echo "::error::failed to seed the workspace-inventory baseline on web-1"; exit 1; }
+            echo "::warning::SEEDED the workspace-inventory baseline to WORKSPACES_COUNT=$SEED_WORKSPACE_COUNT on this run. The comparison below is only meaningful because this value comes from an INDEPENDENT proof (a cutover run's own host-side inventory of \$STAGING/workspaces — never the host's current live count). Future cutovers persist it automatically."
+          fi
+
+          # LUKS_MONITOR_ASSERT_READYZ rides the .env that is ALREADY `set -a`-sourced on the host,
+          # NOT the triple-nested quoting of the ssh command string. If the flag were lost in that
+          # nest, luks-monitor.sh would exit 0 having never probed readyz and this workflow would
+          # print PASSED — byte-for-byte the silent-green shape #6807 exists to remove. The verdict
+          # grep below is the positive control that makes a lost flag FAIL rather than pass.
+          probe_log="${RUNNER_TEMP:-/tmp}/luks-monitor-probe.log"
+          printf 'DOPPLER_TOKEN=%s\nLUKS_MONITOR_ASSERT_READYZ=1\n' "$WORKSPACES_LUKS_BOOT_TOKEN" \
+            | ${WEB_HOST_SSH} "$WEB_HOST" "bash -c 'install -m600 /dev/stdin \"$REMOTE_DIR/.env\"; trap \"shred -u \\\"$REMOTE_DIR/.env\\\" 2>/dev/null || rm -f \\\"$REMOTE_DIR/.env\\\"\" EXIT; set -a; . \"$REMOTE_DIR/.env\"; set +a; bash \"$REMOTE_DIR/luks-monitor.sh\"'" \
+            > "$probe_log" 2>&1
           probe_rc=$?
+          cat "$probe_log"
           echo "luks-monitor probe rc=$probe_rc"
-          # App-level workspace read + /api/health, exercising the full HTTPS path.
-          health=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 https://app.soleur.ai/api/health || echo "000")
-          echo "app /api/health=$health"
+
+          # App-level liveness over the full public HTTPS path, RETRIED to an attempt bound.
+          #
+          # This is the one probe in the feature that cannot share the on-host helper
+          # (workspaces-luks-emit.sh :: wl_probe_http) — it runs on the RUNNER, which has no copy of
+          # the host code. The STRUCTURAL code set below is kept identical to wl_http_class and that
+          # equality IS enforced: workspaces-luks-freeze.test.sh (AC10) extracts the case-arm from
+          # both files and fails on drift. The attempt BOUND deliberately differs (runner 10 vs host
+          # 30): this is a secondary liveness check that runs AFTER the on-host readyz assert and is
+          # not gated by the dead-man, so it needs no 30-attempt budget — AC10 does not pin it.
+          #
+          # STRUCTURAL codes fail fast (no retry burn); everything else retries. 521/530 are CF-edge
+          # codes emitted while the tunnel connector reattaches after a container restart, and they
+          # are FAST responses — which is why the old single-shot probe's `--max-time 20` never
+          # helped: the budget is never consumed by an instant 521.
+          health=000
+          for attempt in $(seq 1 10); do
+            health=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 https://app.soleur.ai/health || echo "000")
+            case "$health" in
+              200) break ;;
+              307|401|403|404|405|525|526)
+                echo "::error::app /health returned a STRUCTURAL $health — an endpoint/routing regression, not a boot race. Not retrying."
+                break ;;
+            esac
+            echo "app /health=$health (attempt $attempt/10)"
+            if [[ "$attempt" -lt 10 ]]; then sleep 3; fi
+          done
+          echo "app /health=$health"
+
+          # rc 255 is ssh's OWN transport failure code (bridge down, connection dropped). It is NOT
+          # an at-rest drift verdict, and no Sentry event exists for it — the old single error
+          # message told the operator to go read one that was never emitted.
+          # A transport/tooling failure is NOT a finding about the volume — 255 (ssh dropped) and
+          # 127 (bash: the tar bundle never landed, or the script path resolved to nothing) both
+          # mean the run proved NOTHING, in either direction. No Sentry event exists for either; the
+          # old single message told the operator to go read one that was never emitted.
+          if [[ "$probe_rc" -eq 255 ]]; then
+            echo "::error::SSH transport failure (rc=255) reaching web-1 over the CF Tunnel bridge. REACHABILITY failure, NOT an at-rest finding: nothing has been proven about the volume. Check the bridge step logs and re-dispatch."
+            exit 255
+          fi
+          if [[ "$probe_rc" -eq 127 ]]; then
+            echo "::error::command/bundle not found on web-1 (rc=127) — the tar bundle failed to land or luks-monitor.sh was not where the run expected it. TOOLING failure, NOT an at-rest finding; nothing proven. Check the bundle-ship step and re-dispatch."
+            exit 127
+          fi
+          # rc=3 is emit_readiness_and_die: the volume IS a correct LUKS mapper but readiness/inventory
+          # failed. But five reason codes exit 3, and only a shortfall / genuine not-ready is a
+          # data-loss signal — a gate regression, an unparseable body, a missing baseline, or a missing
+          # helper are PROBE-INTEGRITY failures that prove nothing about the data. Branch the headline
+          # on the reason so the fix in wl_probe_readyz (keeping a 403 out of the data-loss arm) is not
+          # undone one layer up. `sed` reads the reason off the FAIL line the host already emitted.
+          if [[ "$probe_rc" -eq 3 ]]; then
+            reason="$(sed -n 's/^\[luks-monitor\] FAIL (\([a-z_]*\)).*/\1/p' "$probe_log" | tail -1)"
+            case "$reason" in
+              readyz_gate_regression|readyz_unparseable|readyz_unreachable|readiness_helper_unavailable|workspace_count_baseline_missing|workspace_count_unreadable|mapper_path_override_refused)
+                echo "::error::workspaces-luks PROBE-INTEGRITY failure (rc=3, reason=$reason). This run proves NOTHING about the volume — it is a routing/config/tooling fault, NOT data loss. Do NOT run a data-recovery procedure. Sentry: feature=workspaces-luks op=workspaces-luks-drift." ;;
+              *)
+                echo "::error::workspaces-luks READINESS/INVENTORY failure (rc=3, reason=${reason:-unknown}). The volume is a correct LUKS mapper but the app cannot serve from it or the inventory shrank. Follow the verdict triage table in knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md §5 — a capacity fault and a count shortfall have DIFFERENT operator responses. Sentry: feature=workspaces-luks op=workspaces-luks-drift." ;;
+            esac
+            exit 3
+          fi
           if [[ "$probe_rc" -ne 0 ]]; then
-            echo "::error::workspaces-luks at-rest re-assert FAILED (see the emitted Sentry event: feature=workspaces-luks op=workspaces-luks-drift)."
+            echo "::error::workspaces-luks AT-REST re-assert FAILED (rc=$probe_rc) — see the emitted Sentry event: feature=workspaces-luks op=workspaces-luks-drift."
             exit "$probe_rc"
           fi
           if [[ "$health" != "200" ]]; then
-            echo "::error::app /api/health returned $health (expected 200)."
+            echo "::error::app /health returned $health (expected 200) after the full retry budget."
             exit 1
           fi
-          echo "workspaces-luks at-rest re-assert PASSED (blkid=crypto_LUKS, mapper mount, escrow ok, /api/health 200)."
+          # POSITIVE CONTROL — assert the verdict line is PRESENT, not merely that nothing errored.
+          # A silently-skipped assert exits 0, so "no error" is exactly what a lost flag looks like.
+          # `grep -c` on a FILE, never `cmd | grep -q`: under `pipefail` an early match SIGPIPEs the
+          # producer for 141 and the negative arm fails OPEN.
+          if [[ "$(grep -cE '^\[luks-monitor\] SOLEUR_WORKSPACES_READYZ ready=true ' "$probe_log" || true)" -lt 1 ]]; then
+            echo "::error::the readiness/inventory verdict line is ABSENT from the probe output. The assert did not run (LUKS_MONITOR_ASSERT_READYZ was lost before reaching luks-monitor.sh), so this run proves NOTHING about whether the repointed volume is serving user data. Treat as FAILED, not passed."
+            exit 1
+          fi
+          grep -E '^\[luks-monitor\] SOLEUR_WORKSPACES_READYZ ' "$probe_log" || true
+          echo "workspaces-luks re-assert PASSED (blkid=crypto_LUKS, mapper mount, escrow ok, /health 200, readyz ready=true, workspace inventory >= baseline)."
 
       - name: Remove remote verify bundle
         if: always()
@@ -157,5 +308,6 @@ jobs:
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
             echo ""
-            echo "Read-only re-assert of /mnt/data == LUKS mapper + escrow + /api/health. No mutation."
+            echo "Re-assert of /mnt/data == LUKS mapper + escrow + /health + /internal/readyz + workspace inventory."
+            echo "Non-destructive: no freeze, no flip, no wipe. The readyz check write+unlinks one random probe file."
           } >> "$GITHUB_STEP_SUMMARY"

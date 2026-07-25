@@ -100,7 +100,7 @@ Per `hr-no-dashboard-eyeball-pull-data-yourself`: emit concrete queries with det
 |--------|-------------|--------------|
 | Error rate | `curl -sS -H "Authorization: Bearer $SENTRY_TOKEN" "https://sentry.io/api/0/projects/$ORG/$PROJ/stats/?stat=received&since=$(date -u +%s --date='5 minutes ago')&until=$(date -u +%s)&resolution=10s"` divided by request count from Vercel `/v6/deployments/$ID/events?logType=request` | error_rate > 0.01 sustained 5 min |
 | Missing data count | `SELECT COUNT(*) FROM <table> WHERE <new_column> IS NULL AND <old_column> IS NOT NULL` via Supabase Management API `/database/query` | count > 0 |
-| User-impact signal | `gh issue list --label "incident" --search "created:>$(date -u +%Y-%m-%dT%H:%M:%S --date='deploy time')" --json number,title --jq length` | count >= 1 |
+| User-impact signal | `gh issue list --label "incident" --state all -L 200 --search "created:>$(date -u +%Y-%m-%dT%H:%M:%S --date='deploy time')" --json number,title --jq length` | count >= 1 |
 
 Schedule the verdict rules as a `--once` GitHub Actions workflow firing at +1h / +24h via `/soleur:schedule --once`. The workflow runs the queries and either auto-closes the deployment ticket (all FAIL verdicts false) or opens a follow-through issue with the failing query output. **Do not** prescribe operator dashboard-watching.
 

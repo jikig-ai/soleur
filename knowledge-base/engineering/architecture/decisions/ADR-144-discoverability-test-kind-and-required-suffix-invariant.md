@@ -6,7 +6,7 @@ issue: 6774
 supersedes: null
 ---
 
-# ADR-131: `discoverability_test.kind`, and the `*-required` suffix as an enforceable invariant
+# ADR-144: `discoverability_test.kind`, and the `*-required` suffix as an enforceable invariant
 
 ## Context
 

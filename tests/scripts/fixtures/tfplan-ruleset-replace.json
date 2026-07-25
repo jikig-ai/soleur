@@ -1,0 +1,34 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "cloudflare_ruleset.seo_page_redirects",
+      "mode": "managed",
+      "type": "cloudflare_ruleset",
+      "name": "seo_page_redirects",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["delete", "create"],
+        "before": {
+          "id": "rulesetbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "kind": "zone",
+          "name": "SEO page redirects",
+          "phase": "http_request_dynamic_redirect",
+          "zone_id": "zone000000000000000000000000000f",
+          "rules": [{"ref": "existingredirect", "action": "redirect"}]
+        },
+        "after": {
+          "kind": "zone",
+          "name": "SEO page redirects",
+          "phase": "http_request_dynamic_redirect",
+          "zone_id": "zone000000000000000000000000000f"
+        },
+        "after_unknown": {"id": true, "rules": true},
+        "before_sensitive": false,
+        "after_sensitive": {},
+        "importing": null
+      }
+    }
+  ]
+}

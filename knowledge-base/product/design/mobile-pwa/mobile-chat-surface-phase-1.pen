@@ -1,0 +1,1862 @@
+{
+  "version": "2.11",
+  "children": [
+    {
+      "type": "frame",
+      "id": "Z5CIy",
+      "x": 0,
+      "y": 0,
+      "name": "Chat — Default (scrolled up)",
+      "clip": true,
+      "width": 390,
+      "height": 844,
+      "fill": "$bg",
+      "layout": "none",
+      "children": [
+        {
+          "type": "frame",
+          "id": "7ZULi",
+          "x": 0,
+          "y": 0,
+          "name": "Safe-area top inset",
+          "width": 390,
+          "height": 50,
+          "fill": "$safeBand",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "$gold"
+          },
+          "layout": "vertical",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "ZcyyM",
+              "fill": "$gold",
+              "content": "SAFE-AREA · TOP INSET  —  status bar / notch",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 10,
+              "fontWeight": "normal",
+              "letterSpacing": 1
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "MZu81",
+          "x": 0,
+          "y": 50,
+          "name": "Top bar (56px)",
+          "width": 390,
+          "height": 56,
+          "fill": "$surface",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "$border"
+          },
+          "gap": 6,
+          "padding": [
+            0,
+            8
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "qMHHd",
+              "name": "Hamburger — 44x44 tap target",
+              "width": 44,
+              "height": 44,
+              "fill": "#00000000",
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "k87Fu",
+                  "width": 24,
+                  "height": 24,
+                  "iconFontName": "menu",
+                  "iconFontFamily": "lucide",
+                  "fill": "$textPrimary"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "loUtN",
+              "name": "titleWrap",
+              "layout": "vertical",
+              "gap": 1,
+              "justifyContent": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "xFuzW",
+                  "fill": "$textPrimary",
+                  "content": "Ops Agent",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "aCPSR",
+                  "fill": "$textTertiary",
+                  "content": "Workspace · Soleur",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "M7oEr",
+          "x": 0,
+          "y": 106,
+          "name": "Message list area",
+          "clip": true,
+          "width": 390,
+          "height": 640,
+          "fill": "$bg",
+          "layout": "none",
+          "children": [
+            {
+              "type": "frame",
+              "id": "R3wKy",
+              "x": 0,
+              "y": 0,
+              "name": "Message list (fills slot)",
+              "width": 390,
+              "fill": "#00000000",
+              "layout": "vertical",
+              "gap": 14,
+              "padding": [
+                16,
+                12,
+                84,
+                12
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "NpiaA",
+                  "name": "rA1",
+                  "width": "fill_container",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "BICp8",
+                      "name": "bA1",
+                      "width": 300,
+                      "fill": "$surface",
+                      "cornerRadius": [
+                        4,
+                        14,
+                        14,
+                        14
+                      ],
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$border"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "An0kH",
+                          "fill": "$textPrimary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Morning. Overnight deploy of v0.217.2 is still failing the image pull on the registry host.",
+                          "lineHeight": 1.35,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "5t7IT",
+                  "name": "rU1",
+                  "width": "fill_container",
+                  "justifyContent": "end",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "mMV7A",
+                      "name": "bU1",
+                      "width": 250,
+                      "fill": "$safeBand",
+                      "cornerRadius": [
+                        14,
+                        4,
+                        14,
+                        14
+                      ],
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "yQ81d",
+                          "fill": "$textPrimary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "What's the blast radius? Is prod still serving?",
+                          "lineHeight": 1.35,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "IllVY",
+                  "name": "rA2",
+                  "width": "fill_container",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "aVoUa",
+                      "name": "bA2",
+                      "width": 300,
+                      "fill": "$surface",
+                      "cornerRadius": [
+                        4,
+                        14,
+                        14,
+                        14
+                      ],
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$border"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "1jvZY",
+                          "fill": "$textPrimary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Prod is safe — v0.216.3 is live and healthy. Two PRs are stuck undeployed behind it.",
+                          "lineHeight": 1.35,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "n0zAG",
+                  "name": "rU2",
+                  "width": "fill_container",
+                  "justifyContent": "end",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "ga72k",
+                      "name": "bU2",
+                      "width": 250,
+                      "fill": "$safeBand",
+                      "cornerRadius": [
+                        14,
+                        4,
+                        14,
+                        14
+                      ],
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "E6g3I",
+                          "fill": "$textPrimary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Draft the operator step to refresh the host token.",
+                          "lineHeight": 1.35,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "XNFlc",
+                  "name": "rA3",
+                  "width": "fill_container",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "qyJLO",
+                      "name": "bA3",
+                      "width": 300,
+                      "fill": "$surface",
+                      "cornerRadius": [
+                        4,
+                        14,
+                        14,
+                        14
+                      ],
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$border"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "CEN3s",
+                          "fill": "$textPrimary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "On it — prepping the SSH token-refresh runbook and flagging the Terraform apply path.",
+                          "lineHeight": 1.35,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "RNLp7",
+              "x": 222,
+              "y": 578,
+              "name": "Jump to latest pill (on non-scrolling parent, >=44px)",
+              "width": 154,
+              "height": 44,
+              "fill": {
+                "type": "gradient",
+                "gradientType": "linear",
+                "enabled": true,
+                "rotation": 315,
+                "size": {
+                  "height": 1
+                },
+                "colors": [
+                  {
+                    "color": "$goldStart",
+                    "position": 0
+                  },
+                  {
+                    "color": "$goldEnd",
+                    "position": 1
+                  }
+                ]
+              },
+              "cornerRadius": 22,
+              "effect": {
+                "type": "shadow",
+                "shadowType": "outer",
+                "color": "#00000066",
+                "offset": {
+                  "x": 0,
+                  "y": 4
+                },
+                "blur": 16
+              },
+              "gap": 6,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "SbX78",
+                  "fill": "$ink",
+                  "content": "Jump to latest",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "icon_font",
+                  "id": "mhFmw",
+                  "width": 16,
+                  "height": 16,
+                  "iconFontName": "arrow-down",
+                  "iconFontFamily": "lucide",
+                  "fill": "$ink"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "QXtVF",
+          "x": 0,
+          "y": 746,
+          "name": "Composer (pinned bottom)",
+          "width": 390,
+          "height": 64,
+          "fill": "$surface",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "$border"
+          },
+          "gap": 8,
+          "padding": [
+            10,
+            12
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "y9X3R",
+              "name": "Attach — 44x44",
+              "width": 44,
+              "height": 44,
+              "fill": "$surface2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border"
+              },
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "aEIJh",
+                  "width": 22,
+                  "height": 22,
+                  "iconFontName": "paperclip",
+                  "iconFontFamily": "lucide",
+                  "fill": "$gold"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "i0igz",
+              "name": "Text input",
+              "width": "fill_container",
+              "height": 44,
+              "fill": "$surface2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border"
+              },
+              "layout": "vertical",
+              "padding": [
+                0,
+                14
+              ],
+              "justifyContent": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "4dsvJ",
+                  "fill": "$textSecondary",
+                  "content": "Message Ops Agent…",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "KOqJi",
+              "name": "@ mention (mobile-only) — 44x44",
+              "width": 44,
+              "height": 44,
+              "fill": "$surface2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border"
+              },
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "FVXzz",
+                  "width": 22,
+                  "height": 22,
+                  "iconFontName": "at-sign",
+                  "iconFontFamily": "lucide",
+                  "fill": "$gold"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "mdlqm",
+              "name": "Send — 44x44",
+              "width": 44,
+              "height": 44,
+              "fill": {
+                "type": "gradient",
+                "gradientType": "linear",
+                "enabled": true,
+                "rotation": 315,
+                "size": {
+                  "height": 1
+                },
+                "colors": [
+                  {
+                    "color": "$goldStart",
+                    "position": 0
+                  },
+                  {
+                    "color": "$goldEnd",
+                    "position": 1
+                  }
+                ]
+              },
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "px8cx",
+                  "width": 22,
+                  "height": 22,
+                  "iconFontName": "arrow-up",
+                  "iconFontFamily": "lucide",
+                  "fill": "$ink"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "72VoZ",
+          "x": 0,
+          "y": 810,
+          "name": "Safe-area bottom inset",
+          "width": 390,
+          "height": 34,
+          "fill": "$safeBand",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "$gold"
+          },
+          "layout": "vertical",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "Dwjj1",
+              "fill": "$gold",
+              "content": "SAFE-AREA · BOTTOM INSET  —  home indicator",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 10,
+              "fontWeight": "normal",
+              "letterSpacing": 1
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "6Dlba",
+          "x": 0,
+          "y": 0,
+          "name": "Annotations",
+          "width": 390,
+          "height": 844,
+          "fill": "#00000000",
+          "layout": "none",
+          "children": [
+            {
+              "type": "rectangle",
+              "id": "XWWf7",
+              "x": 8,
+              "y": 56,
+              "name": "anno-ham",
+              "fill": "#00000000",
+              "width": 44,
+              "height": 44,
+              "stroke": {
+                "align": "center",
+                "thickness": 1.5,
+                "fill": "$anno"
+              }
+            },
+            {
+              "type": "rectangle",
+              "id": "i9Q6d",
+              "x": 12,
+              "y": 756,
+              "name": "anno-attach",
+              "fill": "#00000000",
+              "width": 44,
+              "height": 44,
+              "stroke": {
+                "align": "center",
+                "thickness": 1.5,
+                "fill": "$anno"
+              }
+            },
+            {
+              "type": "rectangle",
+              "id": "QweFY",
+              "x": 282,
+              "y": 756,
+              "name": "anno-at",
+              "fill": "#00000000",
+              "width": 44,
+              "height": 44,
+              "stroke": {
+                "align": "center",
+                "thickness": 1.5,
+                "fill": "$anno"
+              }
+            },
+            {
+              "type": "rectangle",
+              "id": "Cp1vV",
+              "x": 334,
+              "y": 756,
+              "name": "anno-send",
+              "fill": "#00000000",
+              "width": 44,
+              "height": 44,
+              "stroke": {
+                "align": "center",
+                "thickness": 1.5,
+                "fill": "$anno"
+              }
+            },
+            {
+              "type": "rectangle",
+              "cornerRadius": 23,
+              "id": "xvZ4s",
+              "x": 221,
+              "y": 683,
+              "name": "anno-pill",
+              "fill": "#00000000",
+              "width": 156,
+              "height": 46,
+              "stroke": {
+                "align": "center",
+                "thickness": 1.5,
+                "fill": "$anno"
+              }
+            },
+            {
+              "type": "frame",
+              "id": "TaMMl",
+              "x": 8,
+              "y": 104,
+              "name": "chip-ham",
+              "fill": "#0B0B0BF2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$anno"
+              },
+              "padding": [
+                2,
+                5
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "4trfm",
+                  "fill": "$anno",
+                  "content": "44×44",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "hieVR",
+              "x": 12,
+              "y": 738,
+              "name": "chip-attach",
+              "fill": "#0B0B0BF2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$anno"
+              },
+              "padding": [
+                2,
+                5
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "DvrEq",
+                  "fill": "$anno",
+                  "content": "44px",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "1rZBI",
+              "x": 276,
+              "y": 738,
+              "name": "chip-at",
+              "fill": "#0B0B0BF2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$anno"
+              },
+              "padding": [
+                2,
+                5
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "jKKmV",
+                  "fill": "$anno",
+                  "content": "44px",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "3XNQe",
+              "x": 328,
+              "y": 738,
+              "name": "chip-send",
+              "fill": "#0B0B0BF2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$anno"
+              },
+              "padding": [
+                2,
+                5
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "nawqz",
+                  "fill": "$anno",
+                  "content": "44px",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "NZ5Yi",
+              "x": 150,
+              "y": 660,
+              "name": "chip-pill",
+              "fill": "#0B0B0BF2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$anno"
+              },
+              "padding": [
+                2,
+                5
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "SpurQ",
+                  "fill": "$anno",
+                  "content": "≥44px · state: scrolled up",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "line",
+              "id": "cmlqK",
+              "x": 0,
+              "y": 745,
+              "name": "fold-line",
+              "width": 390,
+              "height": 1,
+              "stroke": {
+                "align": "center",
+                "thickness": 1.5,
+                "fill": "$anno"
+              }
+            },
+            {
+              "type": "frame",
+              "id": "4ZrYC",
+              "x": 12,
+              "y": 722,
+              "name": "chip-fold",
+              "fill": "#0B0B0BF2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$anno"
+              },
+              "padding": [
+                2,
+                6
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "3R6sY",
+                  "fill": "$anno",
+                  "content": "▲ ABOVE THE FOLD — composer on first paint · NO outer scroll",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "yccnx",
+              "x": 12,
+              "y": 430,
+              "name": "chip-fill",
+              "fill": "#0B0B0BF2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$anno"
+              },
+              "padding": [
+                2,
+                6
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Gi22N",
+                  "fill": "$anno",
+                  "content": "Message column sized to exactly fill its slot",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "uu2si",
+      "x": 490,
+      "y": 0,
+      "name": "Chat — Keyboard open (visualViewport)",
+      "clip": true,
+      "width": 390,
+      "height": 844,
+      "fill": "$bg",
+      "layout": "none",
+      "children": [
+        {
+          "type": "frame",
+          "id": "Fb7SL",
+          "x": 0,
+          "y": 0,
+          "name": "Safe-area top inset",
+          "width": 390,
+          "height": 50,
+          "fill": "$safeBand",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "$gold"
+          },
+          "layout": "vertical",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "mYAds",
+              "fill": "$gold",
+              "content": "SAFE-AREA · TOP INSET  —  status bar / notch",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 10,
+              "fontWeight": "normal",
+              "letterSpacing": 1
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "PD4Zk",
+          "x": 0,
+          "y": 50,
+          "name": "Top bar (56px)",
+          "width": 390,
+          "height": 56,
+          "fill": "$surface",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "$border"
+          },
+          "gap": 6,
+          "padding": [
+            0,
+            8
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "DE49n",
+              "name": "Hamburger — 44x44 tap target",
+              "width": 44,
+              "height": 44,
+              "fill": "#00000000",
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "HxKH1",
+                  "width": 24,
+                  "height": 24,
+                  "iconFontName": "menu",
+                  "iconFontFamily": "lucide",
+                  "fill": "$textPrimary"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "S3X1g",
+              "name": "titleWrap",
+              "layout": "vertical",
+              "gap": 1,
+              "justifyContent": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "aSiKf",
+                  "fill": "$textPrimary",
+                  "content": "Ops Agent",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "ACZuL",
+                  "fill": "$textTertiary",
+                  "content": "Workspace · Soleur",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "1Eey0",
+          "x": 0,
+          "y": 106,
+          "name": "Message list area",
+          "clip": true,
+          "width": 390,
+          "height": 374,
+          "fill": "$bg",
+          "layout": "none",
+          "children": [
+            {
+              "type": "frame",
+              "id": "zGtdq",
+              "x": 0,
+              "y": 0,
+              "name": "Message list (fills slot)",
+              "width": 390,
+              "fill": "#00000000",
+              "layout": "vertical",
+              "gap": 14,
+              "padding": [
+                16,
+                12,
+                84,
+                12
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "sduzp",
+                  "name": "rA1",
+                  "width": "fill_container",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "5vAbw",
+                      "name": "bA1",
+                      "width": 300,
+                      "fill": "$surface",
+                      "cornerRadius": [
+                        4,
+                        14,
+                        14,
+                        14
+                      ],
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$border"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "lhDfp",
+                          "fill": "$textPrimary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Morning. Overnight deploy of v0.217.2 is still failing the image pull on the registry host.",
+                          "lineHeight": 1.35,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "zSIHn",
+                  "name": "rU1",
+                  "width": "fill_container",
+                  "justifyContent": "end",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "BC7mk",
+                      "name": "bU1",
+                      "width": 250,
+                      "fill": "$safeBand",
+                      "cornerRadius": [
+                        14,
+                        4,
+                        14,
+                        14
+                      ],
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "gir5H",
+                          "fill": "$textPrimary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "What's the blast radius? Is prod still serving?",
+                          "lineHeight": 1.35,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "XjBme",
+                  "name": "rA2",
+                  "width": "fill_container",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "6zMpd",
+                      "name": "bA2",
+                      "width": 300,
+                      "fill": "$surface",
+                      "cornerRadius": [
+                        4,
+                        14,
+                        14,
+                        14
+                      ],
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$border"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "tPsPl",
+                          "fill": "$textPrimary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Prod is safe — v0.216.3 is live and healthy. Two PRs are stuck undeployed behind it.",
+                          "lineHeight": 1.35,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "ClMm6",
+                  "name": "rU2",
+                  "width": "fill_container",
+                  "justifyContent": "end",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "2qECn",
+                      "name": "bU2",
+                      "width": 250,
+                      "fill": "$safeBand",
+                      "cornerRadius": [
+                        14,
+                        4,
+                        14,
+                        14
+                      ],
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Gd0Yu",
+                          "fill": "$textPrimary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Draft the operator step to refresh the host token.",
+                          "lineHeight": 1.35,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "RWzk7",
+                  "name": "rA3",
+                  "width": "fill_container",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "of5Jy",
+                      "name": "bA3",
+                      "width": 300,
+                      "fill": "$surface",
+                      "cornerRadius": [
+                        4,
+                        14,
+                        14,
+                        14
+                      ],
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$border"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "kXyOp",
+                          "fill": "$textPrimary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "On it — prepping the SSH token-refresh runbook and flagging the Terraform apply path.",
+                          "lineHeight": 1.35,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "9tg6o",
+              "x": 222,
+              "y": 578,
+              "name": "Jump to latest pill (on non-scrolling parent, >=44px)",
+              "enabled": false,
+              "width": 154,
+              "height": 44,
+              "fill": {
+                "type": "gradient",
+                "gradientType": "linear",
+                "enabled": true,
+                "rotation": 315,
+                "size": {
+                  "height": 1
+                },
+                "colors": [
+                  {
+                    "color": "$goldStart",
+                    "position": 0
+                  },
+                  {
+                    "color": "$goldEnd",
+                    "position": 1
+                  }
+                ]
+              },
+              "cornerRadius": 22,
+              "effect": {
+                "type": "shadow",
+                "shadowType": "outer",
+                "color": "#00000066",
+                "offset": {
+                  "x": 0,
+                  "y": 4
+                },
+                "blur": 16
+              },
+              "gap": 6,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "A41cb",
+                  "fill": "$ink",
+                  "content": "Jump to latest",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "icon_font",
+                  "id": "eRSCO",
+                  "width": 16,
+                  "height": 16,
+                  "iconFontName": "arrow-down",
+                  "iconFontFamily": "lucide",
+                  "fill": "$ink"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Hmf9h",
+          "x": 0,
+          "y": 480,
+          "name": "Composer (pinned bottom)",
+          "width": 390,
+          "height": 64,
+          "fill": "$surface",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "$border"
+          },
+          "gap": 8,
+          "padding": [
+            10,
+            12
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "fwoHl",
+              "name": "Attach — 44x44",
+              "width": 44,
+              "height": 44,
+              "fill": "$surface2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border"
+              },
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "Dq0De",
+                  "width": 22,
+                  "height": 22,
+                  "iconFontName": "paperclip",
+                  "iconFontFamily": "lucide",
+                  "fill": "$gold"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "TGnoK",
+              "name": "Text input",
+              "width": "fill_container",
+              "height": 44,
+              "fill": "$surface2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border"
+              },
+              "layout": "vertical",
+              "padding": [
+                0,
+                14
+              ],
+              "justifyContent": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "nEu3y",
+                  "fill": "$textSecondary",
+                  "content": "Message Ops Agent…",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "J356f",
+              "name": "@ mention (mobile-only) — 44x44",
+              "width": 44,
+              "height": 44,
+              "fill": "$surface2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border"
+              },
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "oow4r",
+                  "width": 22,
+                  "height": 22,
+                  "iconFontName": "at-sign",
+                  "iconFontFamily": "lucide",
+                  "fill": "$gold"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "mZPKy",
+              "name": "Send — 44x44",
+              "width": 44,
+              "height": 44,
+              "fill": {
+                "type": "gradient",
+                "gradientType": "linear",
+                "enabled": true,
+                "rotation": 315,
+                "size": {
+                  "height": 1
+                },
+                "colors": [
+                  {
+                    "color": "$goldStart",
+                    "position": 0
+                  },
+                  {
+                    "color": "$goldEnd",
+                    "position": 1
+                  }
+                ]
+              },
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "lfxh8",
+                  "width": 22,
+                  "height": 22,
+                  "iconFontName": "arrow-up",
+                  "iconFontFamily": "lucide",
+                  "fill": "$ink"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "dXDaN",
+          "x": 0,
+          "y": 810,
+          "name": "Safe-area bottom inset",
+          "enabled": false,
+          "width": 390,
+          "height": 34,
+          "fill": "$safeBand",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "$gold"
+          },
+          "layout": "vertical",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "XgAwl",
+              "fill": "$gold",
+              "content": "SAFE-AREA · BOTTOM INSET  —  home indicator",
+              "fontFamily": "JetBrains Mono",
+              "fontSize": 10,
+              "fontWeight": "normal",
+              "letterSpacing": 1
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "SeuvC",
+          "x": 0,
+          "y": 0,
+          "name": "Annotations",
+          "width": 390,
+          "height": 844,
+          "fill": "#00000000",
+          "layout": "none",
+          "children": [
+            {
+              "type": "rectangle",
+              "id": "NvUtk",
+              "x": 8,
+              "y": 56,
+              "name": "anno-ham",
+              "fill": "#00000000",
+              "width": 44,
+              "height": 44,
+              "stroke": {
+                "align": "center",
+                "thickness": 1.5,
+                "fill": "$anno"
+              }
+            },
+            {
+              "type": "rectangle",
+              "id": "grfYm",
+              "x": 12,
+              "y": 490,
+              "name": "anno-attach",
+              "fill": "#00000000",
+              "width": 44,
+              "height": 44,
+              "stroke": {
+                "align": "center",
+                "thickness": 1.5,
+                "fill": "$anno"
+              }
+            },
+            {
+              "type": "rectangle",
+              "id": "8Daxx",
+              "x": 282,
+              "y": 490,
+              "name": "anno-at",
+              "fill": "#00000000",
+              "width": 44,
+              "height": 44,
+              "stroke": {
+                "align": "center",
+                "thickness": 1.5,
+                "fill": "$anno"
+              }
+            },
+            {
+              "type": "rectangle",
+              "id": "ybZoM",
+              "x": 334,
+              "y": 490,
+              "name": "anno-send",
+              "fill": "#00000000",
+              "width": 44,
+              "height": 44,
+              "stroke": {
+                "align": "center",
+                "thickness": 1.5,
+                "fill": "$anno"
+              }
+            },
+            {
+              "type": "rectangle",
+              "cornerRadius": 23,
+              "id": "wJYOc",
+              "x": 221,
+              "y": 683,
+              "name": "anno-pill",
+              "enabled": false,
+              "fill": "#00000000",
+              "width": 156,
+              "height": 46,
+              "stroke": {
+                "align": "center",
+                "thickness": 1.5,
+                "fill": "$anno"
+              }
+            },
+            {
+              "type": "frame",
+              "id": "p6gvh",
+              "x": 8,
+              "y": 104,
+              "name": "chip-ham",
+              "fill": "#0B0B0BF2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$anno"
+              },
+              "padding": [
+                2,
+                5
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "ZxEKs",
+                  "fill": "$anno",
+                  "content": "44×44",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "aGsYR",
+              "x": 12,
+              "y": 472,
+              "name": "chip-attach",
+              "fill": "#0B0B0BF2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$anno"
+              },
+              "padding": [
+                2,
+                5
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "ma0Q5",
+                  "fill": "$anno",
+                  "content": "44px",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "IuJ1k",
+              "x": 276,
+              "y": 472,
+              "name": "chip-at",
+              "fill": "#0B0B0BF2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$anno"
+              },
+              "padding": [
+                2,
+                5
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "KPJnc",
+                  "fill": "$anno",
+                  "content": "44px",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "5bIqd",
+              "x": 328,
+              "y": 472,
+              "name": "chip-send",
+              "fill": "#0B0B0BF2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$anno"
+              },
+              "padding": [
+                2,
+                5
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "AHKcW",
+                  "fill": "$anno",
+                  "content": "44px",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "MvwzT",
+              "x": 150,
+              "y": 660,
+              "name": "chip-pill",
+              "enabled": false,
+              "fill": "#0B0B0BF2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$anno"
+              },
+              "padding": [
+                2,
+                5
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "0Fo6d",
+                  "fill": "$anno",
+                  "content": "≥44px · state: scrolled up",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "line",
+              "id": "qhiPB",
+              "x": 0,
+              "y": 479,
+              "name": "fold-line",
+              "width": 390,
+              "height": 1,
+              "stroke": {
+                "align": "center",
+                "thickness": 1.5,
+                "fill": "$anno"
+              }
+            },
+            {
+              "type": "frame",
+              "id": "rXOZv",
+              "x": 12,
+              "y": 456,
+              "name": "chip-fold",
+              "fill": "#0B0B0BF2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$anno"
+              },
+              "padding": [
+                2,
+                6
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t4TF0",
+                  "fill": "$anno",
+                  "content": "▲ Composer lifted ABOVE keyboard · visualViewport",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "pyF2H",
+              "x": 12,
+              "y": 360,
+              "name": "chip-fill",
+              "fill": "#0B0B0BF2",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$anno"
+              },
+              "padding": [
+                2,
+                6
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "d9J4X",
+                  "fill": "$anno",
+                  "content": "Message list SHORTENED — visualViewport height",
+                  "fontFamily": "JetBrains Mono",
+                  "fontSize": 9,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "script",
+          "id": "1Kuzx",
+          "x": 0,
+          "y": 544,
+          "name": "On-screen keyboard",
+          "clip": true,
+          "width": 390,
+          "height": 300,
+          "scriptUri": "keyboard.js"
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "bg": {
+      "type": "color",
+      "value": "#0A0A0A"
+    },
+    "surface": {
+      "type": "color",
+      "value": "#141414"
+    },
+    "surface2": {
+      "type": "color",
+      "value": "#1C1C1C"
+    },
+    "border": {
+      "type": "color",
+      "value": "#2A2A2A"
+    },
+    "gold": {
+      "type": "color",
+      "value": "#C9A962"
+    },
+    "goldStart": {
+      "type": "color",
+      "value": "#D4B36A"
+    },
+    "goldEnd": {
+      "type": "color",
+      "value": "#B8923E"
+    },
+    "textPrimary": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "textSecondary": {
+      "type": "color",
+      "value": "#848484"
+    },
+    "textTertiary": {
+      "type": "color",
+      "value": "#6A6A6A"
+    },
+    "ink": {
+      "type": "color",
+      "value": "#1A1612"
+    },
+    "anno": {
+      "type": "color",
+      "value": "#6EA8FF"
+    },
+    "annoDim": {
+      "type": "color",
+      "value": "#6EA8FF33"
+    },
+    "safeBand": {
+      "type": "color",
+      "value": "#C9A9621F"
+    },
+    "keyboard": {
+      "type": "color",
+      "value": "#101012"
+    }
+  }
+}

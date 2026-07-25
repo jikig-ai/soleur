@@ -104,7 +104,21 @@ harness_blockdev_other() {
 #                             form) for the unreadable-options refusal.
 #   LSOF_RC=<n>               force the lsof exit status (rc>1 = an outright probe failure)
 #   ACTIVE_UNITS              space-separated units for which `systemctl is-active` succeeds
-#   CURL_CODE / READYZ_BODY   stub curl's /health code and /internal/readyz body
+#   CURL_CODE / READYZ_BODY   stub curl's /health code and /internal/readyz body (single-value,
+#                             legacy form; still honoured when the sequenced knobs are unset)
+#   CURL_CODES="521 521 200"  SEQUENCED /health codes consumed by call index, saturating on the
+#                             LAST value — so "521" alone means a probe that NEVER recovers, while
+#                             "521 521 200" recovers on the third attempt (#6807 retry arms).
+#   READYZ_BODIES="a b c"     SEQUENCED readyz bodies, same saturation. Space-separated, so a body
+#                             may not contain spaces — JSON.stringify output never does.
+#   READYZ_CODES="200 503"    SEQUENCED readyz HTTP statuses. OPTIONAL: when unset the status is
+#                             DERIVED from the body exactly as readiness.ts derives it (200 iff
+#                             ready:true, else 503), so a fixture cannot model a 200+ready:false
+#                             response the real server cannot produce. Pin it explicitly only to
+#                             reach the gate-regression arm (403/404/405).
+#                             All three use the `${X-default}` UNSET form, per the discipline at the
+#                             DU_SRC/DF_AVAIL knobs: an EMPTY value must reach the SUT as empty and
+#                             exercise its own arm, not be silently substituted into the happy path.
 #   MOUNTPOINT_RC=<n>         single global rc for every `mountpoint` call (legacy knob)
 #   MOUNTPOINT_RCS="1 1 0"    SEQUENCED rcs consumed by call index; saturates on the LAST value.
 #                             prepare_staging_target calls `mountpoint -q "$STAGING"` TWICE with
@@ -156,7 +170,14 @@ run_case() {
         if [ "${1:-}" = "show" ]; then printf "%s\n" "${STOP_RESULT:-success}"; fi
         return 0
       }
-      docker()  { rec "docker $*"; return 0; }
+      docker()  {
+        rec "docker $*"
+        # readyz now probes via `docker exec <container> curl ...` (bridge-topology
+        # peer-gate fix). Delegate that shape to the curl() stub so the readyz body/
+        # code fixtures still drive; every other docker call records + no-ops.
+        if [ "${1:-}" = exec ] && [ "${3:-}" = curl ]; then shift 2; "$@"; return; fi
+        return 0
+      }
       mount()   { rec "mount $*"; return "${MOUNT_RC:-0}"; }
       umount()  {
         rec "umount $*"
@@ -277,12 +298,98 @@ run_case() {
       hostname() { echo "test-host"; }
       apt-get() { rec "apt-get $*"; return 1; }
       timeout() { shift; "$@"; }
+      # RECORDING no-op sleep (#6807), modelled on nic-wait-gate.test.sh. It records the ARGUMENT,
+      # not merely the call: that gives per-arm attribution AND covers the retry-INTERVAL seam for
+      # free (`has "^sleep 3"`), so the interval knob does not need a separate observation channel.
+      # A no-op is safe here ONLY because the retry loops are bounded by ATTEMPTS, never by wall
+      # clock — a wall-clock deadline under a no-op sleep would spin hot for its whole duration.
+      #
+      # NOTE: no apostrophes in this block — it lives inside a single-quoted bash -c body.
+      # Relationship to the MOCK_SLEEP_NOOP idiom in ci-deploy.test.sh (#6665): NOT a parallel
+      # mechanism to be unified. That one is an opt-in gate on a PATH-mock binary, for a suite whose
+      # sleeps are real wall clock it wants to skip; this is a shell-function stub inside an
+      # already-stubbed subshell, and it RECORDS rather than merely skipping, because the recorded
+      # argument is the only observation channel for the retry-interval seam. Unconditional here is
+      # correct: this harness has no case that wants a real sleep. If #6665 broadens the
+      # MOCK_SLEEP_NOOP gate, the thing to share is the opt-in convention, not this recorder.
+      sleep() { rec "sleep $*"; return 0; }
+      # _seq_pick <index> <space-separated list> — the MOUNTPOINT_RCS saturation semantics, reused.
+      # Saturates on the LAST element, so a single-element list means "always this value"
+      # (CURL_CODES="521" => ALWAYS 521, i.e. a never-recovering probe).
+      _seq_pick() {
+        local i="$1" list="$2"
+        # shellcheck disable=SC2206  # deliberate word-splitting: the knob IS a space-separated list
+        local -a seq=($list)
+        [ "${#seq[@]}" -eq 0 ] && return 1
+        [ "$i" -ge "${#seq[@]}" ] && i=$(( ${#seq[@]} - 1 ))
+        printf "%s" "${seq[$i]}"
+      }
+      # SEPARATE INDEX PER ENDPOINT ARM. The single `case "$*"` below serves BOTH /health and
+      # *readyz*, so ONE shared counter would let readyz retries advance the /health sequence and
+      # silently desynchronise it — a /health assertion could then be satisfied by readyz traffic.
+      # The same reasoning is why the sleep recorder records its argument rather than being counted
+      # globally: sleeps must be attributed per arm, never summed.
+      #
+      # FILE-BACKED, not a shell variable. The SUT reads this stub through a command substitution
+      # (`code="$(curl …)"`), which runs in a SUBSHELL — so a `CURL_I=$((CURL_I+1))` assignment is
+      # discarded the moment curl returns, the index is forever 0, and every sequenced knob silently
+      # degrades to "always the FIRST value". That failure is invisible in the happy direction: a
+      # recovering sequence just never recovers, and the case looks like a real SUT bug. Keying the
+      # counters off $CALLS (already per-case) also resets them per case for free.
+      # NOTE: the legacy MOUNTPOINT_I above can stay a plain variable because `mountpoint -q` is
+      # invoked DIRECTLY, never in a substitution.
+      _seq_next() {
+        local f="$CALLS.seq.$1" i=0
+        [ -f "$f" ] && i="$(cat "$f")"
+        printf "%s" "$((i + 1))" > "$f"
+        printf "%s" "$i"
+      }
       curl() {
         rec "curl $*"
+        local outfile="" wfmt="" prev="" a body code
+        for a in "$@"; do
+          [ "$prev" = "-o" ] && outfile="$a"
+          [ "$prev" = "-w" ] && wfmt="$a"
+          prev="$a"
+        done
+        local i
         case "$*" in
-          *readyz*) printf "%s" "${READYZ_BODY-{\"ready\":true\}}" ;;
-          *)        printf "%s" "${CURL_CODE:-200}" ;;
+          *readyz*)
+            i="$(_seq_next readyz)"
+            body="$(_seq_pick "$i" "${READYZ_BODIES-}")" \
+              || body="${READYZ_BODY-{\"ready\":true\}}"
+            # READYZ_CODES is optional: when a case does not pin a status, DERIVE it the way the
+            # real endpoint does (readiness.ts: `res.writeHead(readiness.ready ? 200 : 503)`), so a
+            # fixture cannot accidentally model a 200+ready:false response the server never sends.
+            if ! code="$(_seq_pick "$i" "${READYZ_CODES-}")"; then
+              case "$body" in
+                *'"ready":true'*) code=200 ;;
+                "")               code=000 ;;
+                *)                code=503 ;;
+              esac
+            fi
+            ;;
+          *)
+            i="$(_seq_next health)"
+            body=""
+            code="$(_seq_pick "$i" "${CURL_CODES-}")" || code="${CURL_CODE:-200}"
+            ;;
         esac
+        # Three real call shapes must be emulated, because the SUT uses all three:
+        #   -o <file> -w %{http_code}   body to the file, status to stdout   (the /health probe)
+        #   -w \n%{http_code}           body, newline, status, all to stdout (the readyz probe)
+        #   (neither)                   body to stdout                       (legacy callers)
+        if [ -n "$outfile" ]; then
+          printf "%s" "$body" > "$outfile"
+          printf "%s" "$code"
+        elif [ -n "$wfmt" ]; then
+          printf "%s\n%s" "$body" "$code"
+        else
+          case "$*" in
+            *readyz*) printf "%s" "$body" ;;
+            *)        printf "%s" "$code" ;;
+          esac
+        fi
         return 0
       }
       die()     { echo "DIE: $*"; exit 1; }
@@ -324,6 +431,156 @@ run_case() {
   )"
   CASE_RC=$?
 }
+
+# run_monitor_case <luks-monitor.sh path> [env assignments...]        (#6807)
+#
+# The luks-monitor seam. Unlike run_case (which SOURCES the cutover to obtain functions), this must
+# EXECUTE luks-monitor.sh: the behaviour under test — the readiness/inventory block — lives in the
+# main body, and the sourced-detection guard deliberately returns before it. So the stubs are real
+# executables on a mock PATH, in the shape ci-deploy.test.sh established, rather than shell
+# functions.
+#
+# Sets: MON_RC, MON_OUT, CALLS (argv log), MNT, WSDIR (the workspaces root, pre-created empty).
+#
+# Knobs (all optional):
+#   MON_MOUNT_SRC     findmnt -no SOURCE $MOUNT      (default: the fake mapper path — healthy)
+#   MON_MOUNT_OPTS    findmnt -no OPTIONS $MOUNT     (default: rw,relatime,errors=remount-ro —
+#                     a HEALTHY mount whose options nonetheless CONTAIN the substring "ro", so a
+#                     capacity check that matched "ro" loosely cannot pass this fixture)
+#   MON_MOUNTPOINT_RC mountpoint -q rc               (default 0)
+#   MON_DEV_TYPE      blkid -s TYPE -o value         (default crypto_LUKS)
+#   MON_KEY           doppler WORKSPACES_LUKS_KEY    (default "k"; empty = Doppler unreachable)
+#   MON_ESCROW_RC     cryptsetup luksOpen --test-passphrase rc (default 0)
+#   MON_UUID          cryptsetup luksUUID            (default a fixed uuid; empty = header unreadable)
+#   MON_READYZ_CODE   readyz HTTP status             (default 200)
+#   MON_READYZ_BODY   readyz body                    (default ready:true with both checks true)
+#   MON_DF_USE        df -P use% column              (default 41%)
+# Split into mon_prepare / mon_run so a case can BUILD A FIXTURE (workspace dirs, a seeded baseline)
+# between the two. A single call that creates the case dir and immediately executes cannot express
+# the inventory cases at all — the fixture has to exist in the same dir the run will read.
+# run_monitor_case is the common prepare-then-run shorthand for cases that need no fixture.
+run_monitor_case() { local p="$1"; shift; mon_prepare "$p"; mon_run "$@"; }
+
+mon_prepare() {
+  local probe="$1"
+  MON_PROBE="$probe"
+  CASE_N=$((CASE_N + 1))
+  local d="$RUN_SCRATCH/mon-$CASE_N"; mkdir -p "$d/bin" "$d/state" "$d/mnt/workspaces"
+  MON_DIR="$d"
+  CALLS="$d/calls"; MARKER_LOG="$d/marker"; MNT="$d/mnt"; WSDIR="$d/mnt/workspaces"
+  STATE="$d/state"
+  : > "$CALLS"; : > "$MARKER_LOG"
+  # A regular file standing in for the mapper device node: the SUT only ever tests it with `[ -e ]`
+  # and passes it to stubbed binaries, so it never needs to be a real block device.
+  printf '' > "$d/fake-mapper"
+
+  # Every stub RECORDS to $CALLS and then answers from its knob. `exec` nothing, no PATH recursion:
+  # each is a standalone script whose first act is the record, so an assertion can prove a probe
+  # both DID and DID NOT happen (the flag-unset case needs the negative).
+  cat > "$d/bin/findmnt" <<'STUB'
+#!/usr/bin/env bash
+printf 'findmnt %s\n' "$*" >> "$CALLS"
+case "$*" in
+  *OPTIONS*) printf '%s\n' "${MON_MOUNT_OPTS-rw,relatime,errors=remount-ro}" ;;
+  *)         printf '%s\n' "${MON_MOUNT_SRC-$FAKE_MAPPER}" ;;
+esac
+STUB
+  cat > "$d/bin/mountpoint" <<'STUB'
+#!/usr/bin/env bash
+printf 'mountpoint %s\n' "$*" >> "$CALLS"
+exit "${MON_MOUNTPOINT_RC:-0}"
+STUB
+  cat > "$d/bin/cryptsetup" <<'STUB'
+#!/usr/bin/env bash
+printf 'cryptsetup %s\n' "$*" >> "$CALLS"
+case "$1" in
+  status)  printf '  type:    LUKS2\n  device:  %s\n' "${MON_REAL_DEV-$FAKE_MAPPER}" ;;
+  luksUUID) printf '%s\n' "${MON_UUID-3f07b655-31ab-48b9-b02d-013c6b08feba}" ;;
+  luksOpen) exit "${MON_ESCROW_RC:-0}" ;;
+esac
+exit 0
+STUB
+  cat > "$d/bin/blkid" <<'STUB'
+#!/usr/bin/env bash
+printf 'blkid %s\n' "$*" >> "$CALLS"
+case "$*" in
+  *UUID*) printf '%s\n' "${MON_UUID-3f07b655-31ab-48b9-b02d-013c6b08feba}" ;;
+  *)      printf '%s\n' "${MON_DEV_TYPE-crypto_LUKS}" ;;
+esac
+STUB
+  cat > "$d/bin/doppler" <<'STUB'
+#!/usr/bin/env bash
+printf 'doppler %s\n' "$*" >> "$CALLS"
+case "$*" in
+  *WORKSPACES_LUKS_HEARTBEAT_URL*) printf '%s' "${MON_HB_URL-}" ;;
+  *WORKSPACES_LUKS_KEY*)           printf '%s' "${MON_KEY-k}" ;;
+esac
+STUB
+  # Emulates `-o <file> -w %{http_code}`: body to the file, status to stdout — the shape
+  # wl_probe_readyz reads. The heartbeat push (no -o) just records and succeeds.
+  cat > "$d/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'curl %s\n' "$*" >> "$CALLS"
+outfile=""; wfmt=""; prev=""
+for a in "$@"; do
+  [ "$prev" = "-o" ] && outfile="$a"
+  [ "$prev" = "-w" ] && wfmt="$a"
+  prev="$a"
+done
+case "$*" in
+  *readyz*)
+    body="${MON_READYZ_BODY-{\"ready\":true,\"checks\":{\"workspaces_writable\":true,\"workspaces_populated\":true\}\}}"
+    if [ -n "$outfile" ]; then
+      printf '%s' "$body" > "$outfile"; printf '%s' "${MON_READYZ_CODE:-200}"
+    elif [ -n "$wfmt" ]; then
+      printf '%s\n%s' "$body" "${MON_READYZ_CODE:-200}"
+    else
+      printf '%s' "$body"
+    fi ;;
+  *) : ;;
+esac
+exit 0
+STUB
+  # readyz now probes via `docker exec <container> curl ...` (bridge-topology peer-gate
+  # fix). Record the docker call and, for the exec-curl shape, delegate to the sibling
+  # $d/bin/curl PATH stub (mon_run puts $d/bin first on PATH) so the readyz fixtures drive.
+  cat > "$d/bin/docker" <<'STUB'
+#!/usr/bin/env bash
+printf 'docker %s\n' "$*" >> "$CALLS"
+if [ "${1:-}" = exec ] && [ "${3:-}" = curl ]; then
+  shift 2
+  exec "$@"
+fi
+exit 0
+STUB
+  cat > "$d/bin/logger" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MARKER_LOG"
+STUB
+  cat > "$d/bin/df" <<'STUB'
+#!/usr/bin/env bash
+printf 'df %s\n' "$*" >> "$CALLS"
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 100 41 59 %s /mnt\n' "${MON_DF_USE-41%}"
+STUB
+  chmod +x "$d"/bin/*
+}
+
+# mon_run [env assignments...] — execute the prepared probe. Re-runnable against the same fixture,
+# so a case can assert on a baseline of 2 and then re-run with a baseline of 8 without rebuilding.
+mon_run() {
+  local d="$MON_DIR"
+  MON_OUT="$(
+    env "$@" \
+      PATH="$d/bin:$PATH" CALLS="$CALLS" MARKER_LOG="$MARKER_LOG" FAKE_MAPPER="$d/fake-mapper" \
+      WORKSPACES_MOUNT="$MNT" WORKSPACES_MAPPER_PATH="$d/fake-mapper" LUKS_MONITOR_TEST_SEAM=1 \
+      WORKSPACES_STATE_DIR="$STATE" LUKS_MONITOR_WORKSPACES_DIR="$WSDIR" \
+    bash "$MON_PROBE" 2>&1
+  )"
+  MON_RC=$?
+}
+
+monOut()  { [[ "$MON_OUT" == *"$1"* ]]; }
+monRan()  { [ "$MON_RC" -eq 0 ]; }
 
 # --- predicates: file-direct greps and bash matching ONLY, never a pipe ---
 has()     { grep -qE -- "$1" "$CALLS"; }            # a recorded call matches

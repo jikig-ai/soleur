@@ -1,0 +1,31 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "cloudflare_ruleset.bulk_redirects",
+      "mode": "managed",
+      "type": "cloudflare_ruleset",
+      "name": "bulk_redirects",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "kind": "root",
+          "name": "default",
+          "phase": "http_request_redirect",
+          "zone_id": null,
+          "account_id": "acct000000000000000000000000000a"
+        },
+        "after_unknown": {
+          "id": true,
+          "rules": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {},
+        "importing": null
+      }
+    }
+  ]
+}

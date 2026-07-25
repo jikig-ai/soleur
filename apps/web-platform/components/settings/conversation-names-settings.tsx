@@ -199,7 +199,7 @@ function LeaderRow({
         </button>
       )}
       <span className="min-w-0 flex-1 text-sm text-soleur-text-secondary">{title}</span>
-      <div className="w-48">
+      <div className="w-full max-w-[12rem]">
         <input
           type="text"
           value={value}

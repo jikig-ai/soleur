@@ -74,6 +74,26 @@ room to add frontmatter naively.
    `cron-strategy-review.ts`); this change creates no new parser but does **not** claim to
    collapse those three (`cq-union-widening-grep`).
 
+### Amendment — 2026-07-22 (#6794): third impl + promoters made unit-exact
+
+This extends Decision §5's frontmatter-strip contract; it is **not** a new decision (no new ordinal).
+
+1. **A third byte-identical implementation, `strip.ts`**, joins `strip.sh` and `strip.py` at
+   `scripts/lib/frontmatter-strip/strip.ts`. All three are pinned byte-identical by
+   `scripts/lib/frontmatter-strip.test.sh`, now extended to a three-way parity assertion.
+2. **The two always-loaded-budget measurement consumers now measure on the stripped basis.**
+   `cron-compound-promote.ts` (the runtime promoter contract) imports `strip.ts` via an
+   extracted, unit-tested `measureAlwaysLoadedBytes` helper; `compound-promote.sh` (operator
+   hand-testing) sources `strip.sh`. This closes the documented raw-vs-stripped skew (~73 B on
+   `AGENTS.core.md`) that #6461 accepted knowingly as fail-safe — the promoter total now equals
+   the commit gate's `B_ALWAYS` **exactly** (verified 22900 == 22900 at implementation time).
+   The runtime consumer keeps the *dangerous*-direction over-strip guard (a malformed strip that
+   drops a `[id:]` rule line falls back to RAW bytes + `op="frontmatter-overstrip-fallback"`).
+3. **The parity test is now CI-enforced.** It was already reached by the scripts shard's
+   `scripts/lib/*.test.sh` glob (so sh↔py parity ran), but that shard has no `bun`; registering
+   it in `scripts/test-all.sh`'s `want_bun` block is what actually exercises the `strip.ts` arm
+   in CI.
+
 ## Consequences
 
 - The freshness signal gains real integrity from the source-fixes and tamper-evidence

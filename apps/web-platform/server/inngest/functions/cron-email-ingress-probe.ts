@@ -45,7 +45,7 @@ import { randomUUID } from "node:crypto";
 import { Resend } from "resend";
 import { inngest } from "@/server/inngest/client";
 import { createServiceClient } from "@/lib/supabase/service";
-import { warnSilentFallback } from "@/server/observability";
+import { infoSilentFallback, warnSilentFallback } from "@/server/observability";
 import { notifyOfflineUser } from "@/server/notifications";
 import {
   PROBE_MARKER_PREFIX,
@@ -64,7 +64,8 @@ export const SENTRY_MONITOR_SLUG = "cron-email-ingress-probe";
 /** Ingress SLA: the probe row must land within this window of the send. */
 export const PROBE_AWAIT_INGRESS_DURATION = "15m";
 
-/** One-shot heads-up ping at exactly T-7 days (floor). */
+/** Upper edge of the heads-up BAND (#6799): items at T-7 through T-3 (floor)
+ * get the constant `headsup` tick; the exact-T-7 equality was jitter-fragile. */
 export const DEADLINE_REPIN_HEADS_UP_DAY = 7;
 
 /**
@@ -76,10 +77,14 @@ export const DEADLINE_REPIN_HEADS_UP_DAY = 7;
 export const DEADLINE_REPIN_DANGER_THRESHOLD_DAYS = 2;
 
 /**
- * Repin scan bound: only rows received within the last 60 days. Covers
- * every registry rule's due window (max: one calendar month ≈ 31 days)
- * plus a full month of overdue-daily-ping margin — and keeps the scan from
- * growing without bound as the table accretes acknowledged history.
+ * Repin scan bound: only rows ACKNOWLEDGED within the last 60 days (#6801/D3b —
+ * the anchor moved from `received_at` to `acknowledged_at`, since acknowledgement
+ * is what confers eligibility; an item is pingable for 60 days AFTER it becomes
+ * pingable). This is a PING-LIFETIME bound, not a scan-cost bound — the real cap
+ * on the scanned population is the 365-day statutory retention (mig 102
+ * `purge_email_triage_items`), and no index names `acknowledged_at` (the scan is
+ * already a filtered scan either way). Rows acknowledged longer ago than this
+ * window are deliberately dropped and counted as `excluded` in the sweep emit.
  */
 export const DEADLINE_REPIN_SCAN_WINDOW_DAYS = 60;
 
@@ -98,12 +103,18 @@ interface ProbeHandlerArgs {
     sleep(name: string, duration: string): Promise<void>;
   };
   logger: HandlerArgs["logger"];
+  /**
+   * Present only on the manual-trigger event. Carries the operator RELEASE
+   * verb (see `release_item_id` below); absent on the scheduled cron.
+   */
+  event?: { data?: Record<string, unknown> | null } | null;
 }
 
 interface AcknowledgedStatutoryRow {
   id: string;
   user_id: string | null;
   received_at: string;
+  acknowledged_at: string | null;
   rule_id: string | null;
   statutory_class: string;
 }
@@ -112,6 +123,30 @@ interface HandlerResult {
   ok: boolean;
   purged: unknown;
   repinged: number;
+  /**
+   * GENUINE same-tick double-fires only: a 23505 on a `daily:<date>` key (same
+   * day by construction) or a `headsup` key whose existing marker was written
+   * TODAY (#6799/M11). A non-zero value is the signal that a second scheduler is
+   * live. The EXPECTED heads-up-band re-hits (a `headsup` 23505 from an earlier
+   * day) are counted separately as `headsUpAlreadySent` and are NOT in this
+   * number or the `repin_suppressed` tag — so the double-fire detector survives
+   * the band widening.
+   */
+  repinSuppressed: number;
+  /**
+   * #6802: a dispatch that reached no channel (`undelivered`) and a rollback
+   * DELETE that itself failed (`markerRollbackFailed`) — the founder-facing
+   * delivery-failure counters, surfaced on the run output alongside
+   * `repinSuppressed` (both also escalate the sweep emit to warn).
+   */
+  repinUndelivered: number;
+  repinMarkerRollbackFailed: number;
+  /**
+   * Set only when the manual-trigger carried `release_item_id`. `cleared` is
+   * the number of markers deleted — 0 means there was nothing to release,
+   * which is itself the answer to "why did nothing re-send?".
+   */
+  released: { itemId: string; cleared: number } | null;
   probeFound: boolean;
 }
 
@@ -122,12 +157,80 @@ interface HandlerResult {
 export async function cronEmailIngressProbeHandler({
   step,
   logger,
+  event,
 }: ProbeHandlerArgs): Promise<HandlerResult> {
+  // ---- (0) operator RELEASE verb (#6781) ------------------------------------
+  // Reachable without SSH and without hand-written prod SQL, per
+  // hr-no-ssh-fallback-in-runbooks / hr-never-label-any-step-as-manual-without:
+  //
+  //   soleur:trigger-cron  →  POST /api/internal/trigger-cron
+  //   { "name": "cron/email-ingress-probe.manual-trigger",
+  //     "data": { "release_item_id": "<uuid>" } }
+  //
+  // Clears that item's send markers so a later tick can re-send, for the case
+  // where a dispatch was marked but demonstrably never delivered (the
+  // `statutory-notify-zero-delivery` alarm is what surfaces that case).
+  //
+  // IMPORTANT — releasing only RE-ARMS; it does not force a send. Since #6799
+  // the heads-up is a BAND (T-7 through T-3, keyed `headsup`), then daily from
+  // T-2 through overdue — there is no dead zone, so a release anywhere from T-7
+  // onward re-sends on the next tick. `released.cleared` reports how many
+  // markers were removed (0 = nothing to release).
+  //
+  // Validation mirrors cron-bug-fixer's event.data handling: the route is a
+  // dumb pass-through, so the shape is enforced HERE.
+  const rawRelease = event?.data?.release_item_id;
+  const releaseItemId =
+    typeof rawRelease === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawRelease)
+      ? rawRelease
+      : null;
+  if (rawRelease !== undefined && rawRelease !== null && releaseItemId === null) {
+    warnSilentFallback(null, {
+      feature: "email-triage",
+      op: "statutory-repin-release-invalid-id",
+      message: "release_item_id present but not a uuid; ignoring",
+    });
+  }
+  const released = releaseItemId
+    ? await step.run("statutory-repin-release", async () => {
+        const sb = createServiceClient();
+        const { data, error } = await sb.rpc("purge_statutory_repin_send", {
+          p_item_id: releaseItemId,
+        });
+        if (error) {
+          // Fatal for THIS step only. An operator invoked a recovery action on
+          // a statutory item; silently reporting success would be worse than
+          // failing the run, because they would believe the item is re-armed.
+          throw new Error(
+            `purge_statutory_repin_send(release) failed: ${error.message ?? "unknown"}`,
+          );
+        }
+        const cleared = typeof data === "number" ? data : 0;
+        // WORM-adjacent: the parent ledger is evidence, so deleting send
+        // evidence gets an audit line rather than vanishing.
+        warnSilentFallback(null, {
+          feature: "email-triage",
+          op: "statutory-repin-released",
+          message: "operator cleared statutory repin send-markers",
+          extra: { itemId: releaseItemId, cleared },
+        });
+        return { itemId: releaseItemId, cleared };
+      })
+    : null;
+
   // ---- (1) retention purge FIRST (Art. 5(1)(e)) -----------------------------
-  // No try/catch: a purge failure must fail the whole run loudly. Layer 1
-  // (sentry-correlation middleware) captures the terminal error with the
-  // retention-purge step breadcrumb — disambiguating purge-broken from
-  // ingress-broken without any extra plumbing here.
+  // MIXED failure contract — read this before adding a third RPC here.
+  //   * purge_email_triage_items: FATAL. No try/catch; a failure must fail the
+  //     whole run loudly. Layer 1 (sentry-correlation middleware) captures the
+  //     terminal error with the retention-purge step breadcrumb, disambiguating
+  //     purge-broken from ingress-broken without extra plumbing.
+  //   * purge_statutory_repin_send (#6781): NON-FATAL. A stale marker suppresses
+  //     nothing (the tick_key has already advanced), so failing the run here
+  //     would starve the ingress liveness probe for a retention nicety.
+  // Consequence: a successful step return does NOT mean both sweeps ran. The
+  // marker sweep's outcome is carried in `statutory_repin_markers_purged`
+  // (null = it failed) rather than in the step's success.
   const purged = await step.run("retention-purge", async () => {
     const sb = createServiceClient();
     const { data, error } = await sb.rpc("purge_email_triage_items");
@@ -136,7 +239,33 @@ export async function cronEmailIngressProbeHandler({
         `purge_email_triage_items RPC failed: ${error.message ?? "unknown"}`,
       );
     }
-    return data as Record<string, number>;
+    // Send-marker sweep (#6781). Separate RPC, not folded into the one above:
+    // replacing that function would drop its security attributes, and both
+    // AP-018 guard tiers are blind to the drop. Retention here MUST be
+    // explicit — statutory parent rows are evidence and are never purged, so
+    // the marker's ON DELETE CASCADE effectively never fires.
+    const { data: purgedMarkers, error: markerPurgeError } = await sb.rpc(
+      "purge_statutory_repin_send",
+    );
+    if (markerPurgeError) {
+      // Deliberately NOT fatal: a stale marker delays nothing and suppresses
+      // nothing (the tick_key has already moved on). Failing the run here
+      // would take the ingress liveness probe down for a retention nicety.
+      warnSilentFallback(markerPurgeError, {
+        feature: "email-triage",
+        op: "statutory-repin-marker-purge-failed",
+        message: "statutory repin send-marker retention sweep failed",
+      });
+    }
+    return {
+      ...(data as Record<string, number>),
+      // The RPC returns its delete count; carrying it is the ONLY detection for
+      // "the marker table grows without bound" (the sweep is non-fatal, so a
+      // permanently-failing sweep is otherwise silent). Null when the sweep
+      // errored — distinguishable from a real zero.
+      statutory_repin_markers_purged:
+        typeof purgedMarkers === "number" ? purgedMarkers : null,
+    } as Record<string, number | null>;
   });
 
   // ---- (2) deadline-approach re-pin (T-7d / T-2d) ---------------------------
@@ -147,18 +276,74 @@ export async function cronEmailIngressProbeHandler({
     ).toISOString();
     const { data, error } = await sb
       .from("email_triage_items")
-      .select("id, user_id, received_at, rule_id, statutory_class")
+      .select("id, user_id, received_at, acknowledged_at, rule_id, statutory_class")
       .eq("status", "acknowledged")
       .not("statutory_class", "is", null)
-      // Bounded scan — see DEADLINE_REPIN_SCAN_WINDOW_DAYS for why 60.
-      .gte("received_at", scanFloor);
+      // #6801 (D3b): the bound is on `acknowledged_at`, NOT `received_at`. What
+      // makes a row eligible is `status = 'acknowledged'`, so the window should
+      // be anchored on WHEN it became eligible — an item is pingable for 60 days
+      // AFTER it becomes pingable. `acknowledged_at` is WORM (mig 102) and is
+      // always set on the acknowledge transition (Phase 0.1), so it can never be
+      // NULL for an acknowledged row and the anchor cannot be gamed.
+      .gte("acknowledged_at", scanFloor);
     if (error) {
       throw new Error(
         `deadline-repin select failed: ${error.code ?? "unknown"}`,
       );
     }
 
+    // Computed ONCE, before the loop, and returned from the step so it is
+    // checkpointed (mirrors send-probe's `sentAt`): one run is one logical
+    // tick, so it gets one tick identity.
+    //
+    // Be honest about the midnight case rather than claiming it is a win. If a
+    // run straddled UTC midnight, computing once keys the tail as D while the
+    // next 06:00 tick keys D+1, so the tail could receive two sends a few hours
+    // apart; a per-iteration date would key the tail D+1 and suppress it. The
+    // reason to hoist is NOT that it handles the straddle better — it is that a
+    // single run should not fragment into two tick identities, and a daily
+    // 06:00 cron cannot straddle midnight in the first place. T9 pins the
+    // one-identity property.
+    //
+    // Note the daily key's real protection window is the remainder of the UTC
+    // day after the cron hour (~18h at 06:00), NOT 24h. That margin is a
+    // property of the SCHEDULE, not of the guard — moving the cron to late
+    // evening would shrink it toward zero.
+    const runDateUtc = new Date().toISOString().slice(0, 10);
+
     let pinged = 0;
+    // `suppressed` counts a GENUINE same-tick double-fire (a 23505 on a
+    // `daily:<date>` key — same day by construction — or a `headsup` key whose
+    // existing marker was written TODAY). It stays the sole signal that a second
+    // scheduler is live, and remains the `repin_suppressed` tag input (#6781).
+    let suppressed = 0;
+    // #6799 (D2a/M11): a 23505 on the `headsup` key whose existing marker was
+    // written on an EARLIER day is the EXPECTED steady state under the band (an
+    // item pinged at T-7 re-hits the same constant key at T-6..T-3). Counting it
+    // as `suppressed` would make `suppressed > 0` fire every run and destroy the
+    // double-fire detector; it is disambiguated by the marker's `created_at` and
+    // counted separately, never in the tag.
+    let headsUpAlreadySent = 0;
+    // #6802 (D4c): a dispatch that reached NO channel. `pinged` now means
+    // "delivered on at least one channel"; `undelivered` is its complement, a
+    // real founder-facing failure (the marker is rolled back so the next tick
+    // retries where that helps — see below). An anomaly counter → escalates.
+    let undelivered = 0;
+    // A rollback DELETE that itself failed: an undelivered send stays certified.
+    // Over-suppression is the strictly worse outcome, so this arm is loud.
+    let markerRollbackFailed = 0;
+    // Fail-open accounting, emitted ONCE after the loop (see M2 note above).
+    let failOpenCount = 0;
+    let failOpenFirstCode: string | undefined;
+    // RECIPIENT-GRAIN CONSTRAINT (ADR-037; migration 135 header note 4).
+    // statutory_repin_send is keyed (item_id, tick_key) — ITEM grain. That
+    // equals RECIPIENT grain only because this loop pings `row.user_id` and
+    // nobody else. Migration 111 already makes an item visible to every
+    // workspace Owner, so this is a property of THIS SEND PATH, not a
+    // structural guarantee. Before fanning out to multiple recipients, re-key
+    // the marker table to recipient grain — otherwise the first Owner's marker
+    // suppresses every other Owner and N-1 people get silence on a statutory
+    // deadline while this step reports success. Test T12 is the tripwire.
     for (const row of (data ?? []) as AcknowledgedStatutoryRow[]) {
       // Anonymised rows (Art. 17) have user_id NULL — nobody to ping.
       if (!row.user_id) continue;
@@ -176,27 +361,280 @@ export async function cronEmailIngressProbeHandler({
       }
       const due = computeDueDate(row.received_at, rule.dueRule);
       const daysUntilDue = Math.floor((due.getTime() - Date.now()) / DAY_MS);
-      // Fire at exactly T-7 (heads-up), then DAILY from T-2 through overdue
-      // — never silent in the most dangerous bucket (see constants above).
-      if (
-        daysUntilDue !== DEADLINE_REPIN_HEADS_UP_DAY &&
-        daysUntilDue > DEADLINE_REPIN_DANGER_THRESHOLD_DAYS
-      ) {
-        continue;
+      // #6799 (D2/M6): the heads-up is a BAND (T-7 through T-3), not an exact
+      // equality. `daysUntilDue` is floor((due - now)/day) evaluated at the cron
+      // instant, so an exact `=== 7` could be stepped OVER by ordinary scheduler
+      // jitter (8 one day, 6 the next) and the heads-up would silently never
+      // fire. 8+ is "not yet"; T-2-through-overdue is the daily danger band.
+      //
+      // `breach-art33` (72h dueRule) never enters this band by design: a scanned
+      // (acknowledged) item always has now > received_at, so its daysUntilDue is
+      // <= 2 = DANGER_THRESHOLD, never > it. A "7-day heads-up" on a 72-hour
+      // clock is incoherent — the item is in the danger band from acknowledgement.
+      // The generic property test pins this so a future longer hours-rule can't
+      // silently start writing headsup markers (see the repin idempotency suite).
+      if (daysUntilDue > DEADLINE_REPIN_HEADS_UP_DAY) continue; // 8+ → not yet
+      const inHeadsUpBand = daysUntilDue > DEADLINE_REPIN_DANGER_THRESHOLD_DAYS; // 3..7
+
+      // ---- idempotency guard (#6781) ------------------------------------
+      // The tick identity is BRANCH-DERIVED because the repin has two cadences.
+      // The heads-up band keys the CONSTANT `headsup` (so a calendar date would
+      // let jitter produce two heads-ups across the band — the constant collapses
+      // the whole T-7..T-3 window to one), while the T-2-through-overdue band is
+      // genuinely daily (so a constant would silence it after day 1). See
+      // migration 135 header note 3 — the CHECK still permits exactly these two
+      // shapes, so no migration is required.
+      const tickKey = inHeadsUpBand ? "headsup" : `daily:${runDateUtc}`;
+
+      // Marker BEFORE dispatch: the insert is the durable record that this
+      // send is claimed. Sending first would mean a crash in between re-sends
+      // forever — the exact failure this guard exists to prevent.
+      //
+      // FAIL OPEN on everything except a clean 23505. Over-suppression is
+      // strictly worse than duplication here: a duplicate statutory-deadline
+      // email is annoying, but a suppressed one is SILENCE on a legal clock.
+      // The T-7 arm makes this asymmetry sharper still — it is a structural
+      // one-shot, so suppressing it does not delay the heads-up, it deletes
+      // it (the next tick no longer satisfies the equality). And the likeliest
+      // fail-open trigger, a 42P01 during the deploy window, is correlated
+      // across every item in the band at once.
+      // #6802 (D4c/M5): the rollback below may ONLY delete a marker THIS
+      // iteration claimed. On a fail-open (a non-23505 error or a throw) we
+      // dispatch WITHOUT having written a marker, so a rollback there would
+      // delete a marker a concurrent run wrote — reopening the #6781 window.
+      let markerClaimedHere = false;
+      try {
+        // PLAIN insert, no `.select()` — the claimDedupRow idiom
+        // (app/api/webhooks/github/route.ts). Deliberately NOT the
+        // notifyInboxItem shape (`.select("id").single()`): that table has an
+        // `id uuid PRIMARY KEY` to return, this one's PK is the composite
+        // (item_id, tick_key) and it has NO `id` column at all. Asking
+        // PostgREST for a RETURNING clause naming a column that does not exist
+        // fails the whole statement with 42703 — which this guard would read
+        // as a non-23505 error, fail open, and dispatch, forever, while never
+        // writing a single marker. The guard would be inert in production and
+        // green in every test that fakes the response.
+        const { error: markerError } = await sb
+          .from("statutory_repin_send")
+          .insert({ item_id: row.id, tick_key: tickKey });
+        if (!markerError) {
+          markerClaimedHere = true;
+        }
+        if (markerError) {
+          if (markerError.code === "23505") {
+            // Already a marker for this (item, tick). For the daily band the key
+            // encodes the date, so a 23505 is unambiguously a same-day
+            // double-fire. For the constant `headsup` key it could be EITHER a
+            // genuine same-day double-fire OR the expected band re-hit on a later
+            // day — disambiguate by the existing marker's `created_at` (which the
+            // table carries), same UTC date => double-fire, earlier => band re-hit.
+            if (inHeadsUpBand) {
+              const { data: existing } = await sb
+                .from("statutory_repin_send")
+                .select("created_at")
+                .eq("item_id", row.id)
+                .eq("tick_key", "headsup")
+                .maybeSingle();
+              const createdDate =
+                existing && typeof existing.created_at === "string"
+                  ? existing.created_at.slice(0, 10)
+                  : null;
+              if (createdDate && createdDate !== runDateUtc) {
+                headsUpAlreadySent += 1;
+              } else {
+                // Same day, or created_at unreadable — treat as a genuine
+                // double-fire (fail toward the louder, safer signal).
+                suppressed += 1;
+              }
+            } else {
+              suppressed += 1;
+            }
+            continue;
+          }
+          // Aggregated, not emitted per item — see the sweep-complete emit
+          // below. The likeliest trigger (a 42P01 during the deploy window) is
+          // CORRELATED across every item in the band at once, so a per-item
+          // warn produces one event per statutory row per day. That is the
+          // shape that gets an alert rule muted, and a muted rule here would
+          // hide exactly the class of defect this guard exists to surface.
+          failOpenCount += 1;
+          failOpenFirstCode ??= markerError.code ?? "unknown";
+        }
+      } catch (err) {
+        // A THROWN rejection must not escape the iteration: under `retries: 0`
+        // an escape would kill the whole run, taking the ingress liveness
+        // probe (steps 3-5) down with it.
+        failOpenCount += 1;
+        failOpenFirstCode ??= "threw";
       }
 
       // Title carries only the registry-derived due string — never the
       // third-party subject (TR3 hygiene is moot for this synthetic title,
       // but keeping email content out of the ping keeps the surface uniform).
-      await notifyOfflineUser(row.user_id, {
+      //
+      // #6798 (M2): the verb must be state-accurate. "approaching" on an item
+      // that is already past due is exactly the over-claim #6798 is about, and
+      // the date is COMPUTED from received_at (a best-effort backstop), so the
+      // framing says so. The full not-legal-advice + clock-origin caveat rides
+      // in the email body via `statutoryExcerpt` (D1/M1); the push stays a short
+      // imperative pointer (its copy is CLO-adjudicated at ship, #6798 AC3).
+      const dueStr = formatDueDate(row.received_at, rule.dueRule);
+      const title =
+        daysUntilDue >= 0
+          ? `Statutory deadline (computed) approaching — ${dueStr}`
+          : `Statutory deadline (computed) OVERDUE — ${dueStr}`;
+      const delivered = await notifyOfflineUser(row.user_id, {
         type: "email_triage",
         emailId: row.id,
-        title: `Statutory deadline approaching — ${formatDueDate(row.received_at, rule.dueRule)}`,
+        title,
         isStatutory: true,
+        statutoryExcerpt: rule.catalogExcerpt,
       });
-      pinged += 1;
+
+      if (delivered) {
+        pinged += 1;
+        continue;
+      }
+
+      // #6802 (D4c): the send reached NO channel. The marker must not certify a
+      // dispatch that delivered nothing. Roll it back so the next tick retries —
+      // a designed restoration of the pre-#6781 self-heal, NOT the #6781 defect
+      // (a DELIVERED send keeps its marker, so a double-fire is still
+      // suppressed; only a provably-undelivered send is retried).
+      undelivered += 1;
+      // M6: rollback is scoped to the `headsup` key. The `daily:<date>` key
+      // rotates every day, so the next tick re-arms the daily arm for free
+      // whether or not this marker exists — deleting it there buys nothing and
+      // only reopens the same-day double-fire window. All rollback VALUE lives on
+      // the constant `headsup` key, whose re-send depends on the marker being
+      // gone. (M5: only a marker THIS iteration claimed may be deleted.)
+      if (markerClaimedHere && tickKey === "headsup") {
+        try {
+          const { error: delErr } = await sb
+            .from("statutory_repin_send")
+            .delete()
+            .eq("item_id", row.id)
+            .eq("tick_key", tickKey);
+          if (delErr) {
+            markerRollbackFailed += 1;
+          } else {
+            // Bypasses the audited purge_statutory_repin_send RPC boundary, so
+            // emit its own audit line (mig 135 routes deletions through an
+            // audited path; this raw delete needs an equivalent trail).
+            infoSilentFallback(null, {
+              feature: "email-triage",
+              op: "statutory-repin-marker-rolled-back",
+              message:
+                "rolled back an undelivered statutory heads-up marker so the next tick retries",
+              extra: { itemId: row.id, tickKey, runDateUtc },
+            });
+          }
+        } catch {
+          // M7: a THROWN rejection under `retries: 0` must not escape the loop
+          // (it would kill the ingress liveness probe). Count and continue.
+          markerRollbackFailed += 1;
+        }
+      }
     }
-    return { pinged, scanned: (data ?? []).length };
+
+    // ONE warn for the whole run's fail-open population, at WARN level so it
+    // clears the Vector >= 40 filter and reaches Better Stack as well as
+    // Sentry. `pg_code` is promoted to a searchable tag by the observability
+    // layer, so a 42P01 deploy race stays distinguishable from a real bug.
+    if (failOpenCount > 0) {
+      warnSilentFallback(
+        { code: failOpenFirstCode },
+        {
+          feature: "email-triage",
+          op: "deadline-repin-marker-insert-failed",
+          message:
+            "statutory repin send-marker insert failed; dispatched anyway (fail open)",
+          extra: {
+            failOpenCount,
+            firstCode: failOpenFirstCode ?? null,
+            scanned: (data ?? []).length,
+            runDateUtc,
+          },
+        },
+      );
+    }
+
+    // #6801 (D3a): the residue of the acknowledged-window cliff — rows
+    // acknowledged more than the window ago that are therefore no longer scanned.
+    // `head: true` transfers NO rows: one index-friendly count per daily run
+    // against a single-digit population. On query error, emit `excluded: null`
+    // (distinguishable from a real zero) and NEVER fail the run — an
+    // observability query must not take down the retention purge or ingress probe.
+    let excluded: number | null = null;
+    try {
+      const { count, error: exclErr } = await sb
+        .from("email_triage_items")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "acknowledged")
+        .not("statutory_class", "is", null)
+        .lt("acknowledged_at", scanFloor);
+      excluded = exclErr ? null : (count ?? 0);
+    } catch {
+      excluded = null;
+    }
+
+    // Per-run record via the observability layer, not a bare pino call.
+    //
+    // #6801 (D3a/M9/M10): the emit LEVEL-ESCALATES to warn when an ANOMALY
+    // counter is non-zero. `excluded` is deliberately NOT an anomaly: it is
+    // MONOTONIC (acknowledged is terminal, statutory rows live 365 days), so
+    // escalating on it would page every run forever — the exact alert-fatigue
+    // #6813 fixes. `headsUpAlreadySent` is expected steady state, also excluded.
+    // `excluded` stays a structured field AND a low-cardinality tag, so it is
+    // queryable from Sentry (reachable = the real #6801 requirement) without
+    // being a page. Vector keeps level_int >= 40, so only a warn reaches
+    // Better Stack (infra/vector.toml [transforms.app_container_warn_filter]).
+    // ANOMALY counters gate escalation. `excluded` (monotonic) and
+    // `headsUpAlreadySent` (expected steady state) are deliberately excluded.
+    const anomalyCount = suppressed + undelivered + markerRollbackFailed;
+    const emit = anomalyCount > 0 ? warnSilentFallback : infoSilentFallback;
+    emit(null, {
+      feature: "email-triage",
+      op: "deadline-repin-sweep-complete",
+      message: "statutory deadline repin sweep finished",
+      // `suppressed > 0` is the only signal that a second scheduler is live and
+      // double-firing (#6781), so it has to be queryable. Boolean, low-cardinality.
+      // `repin_excluded` surfaces the #6801 cliff residue as a queryable tag
+      // WITHOUT gating escalation (see above); `repin_undelivered` is the #6802
+      // total-silence signal.
+      tags: {
+        repin_suppressed: suppressed > 0 ? "yes" : "no",
+        repin_excluded: excluded && excluded > 0 ? "yes" : "no",
+        repin_undelivered: undelivered > 0 ? "yes" : "no",
+        // A rollback that itself failed leaves an undelivered send certified —
+        // queryable by tag for symmetry with the other anomaly counters.
+        repin_rollback_failed: markerRollbackFailed > 0 ? "yes" : "no",
+      },
+      extra: {
+        pinged,
+        suppressed,
+        // Expected steady state under the heads-up band (D2a/M11) — NOT a
+        // double-fire signal, so it never gates the `repin_suppressed` tag or
+        // escalation.
+        headsUpAlreadySent,
+        undelivered,
+        markerRollbackFailed,
+        excluded,
+        scanned: (data ?? []).length,
+        runDateUtc,
+      },
+    });
+
+    return {
+      pinged,
+      suppressed,
+      headsUpAlreadySent,
+      undelivered,
+      markerRollbackFailed,
+      excluded,
+      scanned: (data ?? []).length,
+      runDateUtc,
+    };
   });
 
   // ---- (3) send probe -------------------------------------------------------
@@ -294,6 +732,10 @@ export async function cronEmailIngressProbeHandler({
     ok: true,
     purged,
     repinged: repin.pinged,
+    repinSuppressed: repin.suppressed,
+    repinUndelivered: repin.undelivered,
+    repinMarkerRollbackFailed: repin.markerRollbackFailed,
+    released,
     probeFound: found.found,
   };
 }

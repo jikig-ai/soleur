@@ -1,5 +1,4 @@
 ---
-adr: 103
 title: Dedicated-host boot-armed push heartbeats require a mechanically-guarded non-SSH reprovision path
 status: accepted
 date: 2026-07-09

@@ -1,5 +1,4 @@
 ---
-adr: 100
 title: Inngest as a dedicated single-host singleton control plane
 status: adopting
 date: 2026-07-07
@@ -135,6 +134,29 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    `cron-egress-nftables.sh`.
 4. **Fresh signing/event keys (SEC-H3).** `INNGEST_SIGNING_KEY`/`INNGEST_EVENT_KEY` are freshly
    minted for the new boundary, NOT reused from the co-located host. Blast radius documented below.
+
+   > **Amendment (2026-07-24, Ref #6178 cutover-502 — CORRECTS this decision).** Decision 4 was
+   > **wrong** to treat `INNGEST_EVENT_KEY` / `INNGEST_SIGNING_KEY` as isolation-sensitive and mint
+   > them **separately** per host. They are a **SHARED app↔host CHANNEL auth token**: the app
+   > (`inngest.send()` / the `serve()` handler) and the dedicated host authenticate the SAME channel
+   > with them, so they **MUST be common** across `soleur/prd` (the app) and `soleur-inngest/prd`
+   > (the host). The #6178 host-cutover minted fresh host keys per this decision but **never
+   > reconciled** them into `soleur/prd`; after the 2.4 app-repoint (`INNGEST_BASE_URL` →
+   > `http://10.0.1.40:8288`) every app-originated send to the host was rejected against the stale
+   > event key → the app route returned **HTTP 502** (`op=rearm` failed). The live fix copied the
+   > host's event+signing key values into `soleur/prd` (out-of-band, which the `ignore_changes=[value]`
+   > lifecycle on those `doppler_secret`s explicitly supports) and redeployed the web app.
+   >
+   > The isolation that actually matters — and **stays separate per host** — is **`INNGEST_POSTGRES_URI`
+   > + `SUPABASE_SERVICE_ROLE`** (Decision 5, the `soleur-inngest` project boundary): those grant
+   > data-plane access and must never be shared. The channel keys are auth for a shared message
+   > channel and confer no such access, so sharing them across the two projects widens nothing.
+   > **Durability (prevents recurrence):** `op=arm` now carries a **G3.5 channel-key parity HARD GATE**
+   > (cutover-inngest.yml) that sha256-compares the app vs host `INNGEST_EVENT_KEY`/`INNGEST_SIGNING_KEY`
+   > (value-silent, AC-NOBODY) and **refuses to arm the flip** if they diverge, with the reconcile +
+   > redeploy remediation. Because `soleur/prd`'s keys carry `ignore_changes=[value]`, reconcile is via
+   > the Doppler copy (or `terraform apply -replace=random_id.inngest_{event,signing}_key_dedicated`
+   > + copy) + a web redeploy — **not** a naive `terraform apply`. See runbook §2.4.
 5. **Secrets on a SEPARATE Doppler project `soleur-inngest`, not a `prd` branch config.** A branch
    config under `prd` resolves the environment's ROOT config as its base and would inherit all
    ~116 `soleur/prd` secrets incl. `SUPABASE_SERVICE_ROLE_KEY`
@@ -286,8 +308,10 @@ the existing `op=rollback` verb. This removes the last operator secret-write sea
   secret rather than an environment secret because the TF GitHub App lacks permission to write
   environment secrets — a first-apply 403; the reviewer gate on the job preserves the ack either
   way. Fixed forward in #6369-followup.) This is the **first CI-consumed read/write token into the
-  isolated `soleur-inngest` project** — prior tokens there are read-only host-boot
-  (`inngest-host.tf:173`); CI can now WRITE `soleur-inngest/prd`. The token is a **standing read
+  isolated `soleur-inngest` project** — the other token there is the host-boot token
+  (`doppler_service_token.inngest`), which is also read/write as of #6178 (the flip FSM writes
+  `INNGEST_CUTOVER_FLIP` under it) but is HOST-consumed, not CI-consumed; CI can now WRITE
+  `soleur-inngest/prd` too. The token is a **standing read
   handle to the armed prod DSN** once op=arm runs, so it is revoked post-cutover.
 - **Source-of-truth: read-through, no seed (CTO decision at /work).** The two source *values*
   remain out-of-band (they are not TF `doppler_secret` resources — dark-window heartbeat masking +
@@ -405,13 +429,28 @@ project + host-local Redis).
   a sensitive no-default `var.betterstack_logs_token` from `prd_terraform`, so only the one 24-char
   token enters shared tfstate, NOT the full `soleur/prd` map). The boot isolation self-check
   (`cloud-init-inngest.yml`) now admits `BETTERSTACK_LOGS_TOKEN` as a TOP-LEVEL allowlist member
-  (dark-boot secret count 4→5, live 5→6); its admission criterion is "names this host's runtime
+  (dark-boot secret count 4→5, live 5→6; live is now 7 — see below); its admission criterion is "names this host's runtime
   consumes" (not `INNGEST_`-prefixed). During the dark window the host still does not push the prod
   heartbeat (out-of-band `INNGEST_HEARTBEAT_URL` set only at cutover, to avoid dual-pusher masking of
   the still-serving co-located scheduler — review #6180), so a DARK, inert host that boot-bricks or
   errors is surfaced at the Phase-2 pre-flight registry-empty check + the in-surface bootstrap-stderr
   lines (deploy-status endpoint), not by continuous monitoring. The shipper is wired ahead of the
   Phase-2 cutover (when this becomes the live scheduler) — the alignment claim above holds from cutover.
+- **Amendment (#6178, 2026-07-23) — the allowlist must admit the CONTROL-PLANE names too, and the
+  boot-brick is NOT loud.** `op=arm` writes `INNGEST_CUTOVER_FLIP` into this same isolated project,
+  so the live count is **7**, not 6 (`INNGEST_CONFIG_DIGEST` makes 8 once `inngest-config-digest.tf`
+  applies). The regex omitted `CUTOVER_FLIP`, so from the moment the cutover was armed every
+  re-provision FATALed the exact-set check — no Vector, no inngest-server, no flip timer. The flip
+  could therefore never run, and because Vector is installed BY the bootstrap the check gates, the
+  failure shipped nothing off-box: it was silent for hours until the `SOLEUR_INNGEST_BOOT_STAGE`
+  phone-home (#6702, curl-direct and Vector-independent) named `isolation-check-FAILED`.
+  Two consequences worth recording against the #6197 reasoning above: (a) "a loud boot-brick beats a
+  silent observability blind spot" does not hold as stated — here the boot-brick *was* the blind spot,
+  because the shipper is downstream of the gate; (b) an exact-set allowlist makes the *safe* operation
+  (adding a legitimate secret) fail closed, and that is precisely what the control plane does at
+  runtime. Follow-ups filed: alarm on `SOLEUR_INNGEST_BOOT_STAGE`; derive the allowlist from the
+  declared writers instead of hand-maintaining it; consider moving FSM/control state out of the
+  secret project entirely.
 - **Apply-path constraint (recorded #6197):** the additive-only `apply_target=inngest-host` dispatch
   CANNOT force-replace the host (its destroy-guard aborts on any delete), so a cloud-init/bootstrap
   change that force-replaces `hcloud_server.inngest` rides a NEW scoped `apply_target=inngest-host-replace`

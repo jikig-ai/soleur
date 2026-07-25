@@ -104,6 +104,13 @@ assert "workflow_dispatch present"      'workflow_dispatch'
 # --- Vestigial generic-template label step dropped ---
 refute "no vestigial 'gh label create' step" 'gh label create'
 
+# --- Failure self-report (staleness contract #6836): a FAILED digest run must not be a
+# silent absence. The 2026-06-26 and 2026-07-20 runs failed and nobody was notified — the
+# operator simply got no digest that week. An `if: failure()` step self-reports so a broken
+# digest is loud, mirroring the delivery fix. ---
+assert "self-reports on job failure (if: failure())" 'if:[[:space:]]*failure\(\)'
+assert "failure self-report names the FAILED digest" 'digest run FAILED|Weekly digest.*FAIL'
+
 # --- Containment: the asset must NEVER live under soleur's OWN .github/workflows/ — that would
 # run it in PUBLIC Actions logs and leak the operator's private data. It is an inert asset that
 # the provisioning script installs into the PRIVATE operator-digest repo. A future `git mv` into

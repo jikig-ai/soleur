@@ -1,9 +1,9 @@
 ---
 title: "Keyboard shortcuts now show the right key on every OS"
 type: feature-launch
-publish_date: ""
+publish_date: 2026-08-18
 channels: x, bluesky
-status: draft
+status: scheduled
 pr_reference: "#5896"
 ---
 

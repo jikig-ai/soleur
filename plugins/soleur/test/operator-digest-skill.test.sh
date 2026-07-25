@@ -77,6 +77,18 @@ assert "source 2: expenses/money ledger"         'expenses\.md'
 assert "source 3: post-mortems / PIRs"           'post-mortem'
 assert "source 4: action-required issues"        'action-required'
 
+# --- §4 triage render (staleness contract #6836): de-pollute + age + cap ---
+# The old §4 was a flat `--json title,url` dump: age invisible, decision-challenge +
+# content chores drowning the genuine asks. The contract fetches age+labels, excludes
+# the noise classes from the action list, surfaces per-item age, and caps the tail.
+assert "§4 harvest fetches createdAt (age signal)"  '\-\-json.*createdAt'
+assert "§4 harvest fetches labels (de-pollute)"     '\-\-json.*labels'
+assert "§4 de-pollutes decision-challenge"          'decision-challenge'
+assert "§4 de-pollutes content chores"              'content-publisher'
+assert "§4 keeps content-starvation visible"        'content-starvation'
+assert "§4 surfaces per-item age in days"           '[Aa]ge in days|days.*(old|open)|in days'
+assert "§4 caps the action list"                    '\+N more'
+
 # --- L2 control: incident from frontmatter/title/status ONLY, never body ---
 # Order-independent: a correct reword ("status, frontmatter, title") must not falsely fail.
 for kw in frontmatter title status; do

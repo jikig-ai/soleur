@@ -1,5 +1,4 @@
 ---
-adr: ADR-071
 title: Layer 1 deterministic constraint gates for product code
 status: accepted
 date: 2026-06-30

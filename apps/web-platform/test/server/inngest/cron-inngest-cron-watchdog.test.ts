@@ -269,9 +269,9 @@ describe("cron-inngest-cron-watchdog — resolveInngestHost", () => {
     );
   });
 
-  it("falls back to host.docker.internal loopback when unset", () => {
-    expect(resolveInngestHost(undefined)).toBe("http://host.docker.internal:8288");
-    expect(resolveInngestHost("")).toBe("http://host.docker.internal:8288");
+  it("falls back to the dedicated inngest host when unset", () => {
+    expect(resolveInngestHost(undefined)).toBe("http://10.0.1.40:8288");
+    expect(resolveInngestHost("")).toBe("http://10.0.1.40:8288");
   });
 
   // Parity guard: the fallback host must equal the INNGEST_BASE_URL that

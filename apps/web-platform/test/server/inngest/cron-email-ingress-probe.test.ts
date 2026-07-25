@@ -36,6 +36,7 @@ const {
   heartbeatSpy,
   warnSilentFallbackSpy,
   reportSilentFallbackSpy,
+  infoSilentFallbackSpy,
   ioOrder,
   dbState,
 } = vi.hoisted(() => {
@@ -57,11 +58,14 @@ const {
   };
   return {
     rpcSpy: vi.fn(),
-    notifySpy: vi.fn(async (..._args: unknown[]) => undefined),
+    // #6802: notifyOfflineUser now returns whether the notification was
+    // delivered — default true (delivered) so pinged counts normally.
+    notifySpy: vi.fn(async (..._args: unknown[]) => true),
     resendSendSpy: vi.fn(),
     heartbeatSpy: vi.fn(async (..._args: unknown[]) => undefined),
     warnSilentFallbackSpy: vi.fn(),
     reportSilentFallbackSpy: vi.fn(),
+    infoSilentFallbackSpy: vi.fn(),
     ioOrder,
     dbState,
   };
@@ -74,6 +78,10 @@ vi.mock("@/server/inngest/client", () => ({
 vi.mock("@/server/observability", () => ({
   warnSilentFallback: warnSilentFallbackSpy,
   reportSilentFallback: reportSilentFallbackSpy,
+  // The repin sweep counter (#6781) goes through the observability layer, not
+  // pino stdout — Vector keeps only level_int >= 40, so an info-level stdout
+  // line would never reach Better Stack.
+  infoSilentFallback: infoSilentFallbackSpy,
 }));
 
 vi.mock("@/server/notifications", () => ({
@@ -157,7 +165,15 @@ function makeBuilder(table: string) {
     onRejected?: (e: unknown) => unknown,
   ) => {
     let result: unknown;
-    if (table === "probe_tokens" && inserting) {
+    if (table === "statutory_repin_send" && inserting) {
+      // Send-marker insert (#6781). The guard uses a PLAIN `.insert()` with no
+      // `.select()` (the table has no `id` column to return), so this lands on
+      // the awaited path, not `.single()`. Always a clean insert here: this
+      // suite covers step order and the probe chain; the dedicated
+      // cron-email-ingress-probe-repin-idempotency.test.ts owns 23505 behavior.
+      ioOrder.push("repin-marker-insert");
+      result = { data: null, error: null };
+    } else if (table === "probe_tokens" && inserting) {
       ioOrder.push("probe-token-insert");
       result = { data: null, error: dbState.tokenInsertError };
     } else if (eqArgs.some(([c, v]) => c === "status" && v === "acknowledged")) {
@@ -253,7 +269,11 @@ beforeEach(() => {
   dbState.assertRows = [{ id: "probe-row-1" }];
   dbState.assertError = null;
   rpcSpy.mockReset();
-  rpcSpy.mockImplementation(async () => dbState.purgeResult);
+  rpcSpy.mockImplementation(async (name: string) =>
+    name === "purge_statutory_repin_send"
+      ? { data: 0, error: null }
+      : dbState.purgeResult,
+  );
   notifySpy.mockClear();
   resendSendSpy.mockReset();
   resendSendSpy.mockResolvedValue({ data: { id: "email-1" }, error: null });
@@ -317,27 +337,34 @@ describe("cron-email-ingress-probe — retention purge (Art. 5(1)(e) first)", ()
 });
 
 describe("cron-email-ingress-probe — deadline re-pin (acknowledge ≠ legal resolution)", () => {
-  it("pings at floor 7 (heads-up) and DAILY from floor 2 through overdue — never 8/6/3", async () => {
+  it("pings the T-7..T-3 heads-up BAND and DAILY from floor 2 through overdue — never floor 8 (#6799)", async () => {
     // dsar-art15 is calendar-month: due = received_at + 1 month (clamped).
     // Now = 2026-06-11T12:00Z. received 2026-05-DD T00:00Z → due 2026-06-DD
     // T00:00Z → days-until-due = (DD - 11) - 0.5 → floor (DD - 12).
-    // The overdue/danger bucket (floor <= 2, incl. negative) fires DAILY —
-    // an exact-day match would go silent on an already-overdue item or any
-    // day skipped by a missed cron run.
+    // #6799: the heads-up is now a BAND (floors 7..3), not an exact 7 — jitter
+    // can no longer step over it. Floor 8+ is "not yet"; floors 2..overdue fire
+    // DAILY (the danger band).
     dbState.repinRows = [
       dsarRow("due-in-8", "2026-05-20T00:00:00.000Z"), // floor 8 — no ping
-      dsarRow("due-in-7", "2026-05-19T00:00:00.000Z"), // floor 7 — PING (heads-up)
-      dsarRow("due-in-6", "2026-05-18T00:00:00.000Z"), // floor 6 — no ping
-      dsarRow("due-in-3", "2026-05-15T00:00:00.000Z"), // floor 3 — no ping
+      dsarRow("due-in-7", "2026-05-19T00:00:00.000Z"), // floor 7 — PING (heads-up band)
+      dsarRow("due-in-6", "2026-05-18T00:00:00.000Z"), // floor 6 — PING (heads-up band)
+      dsarRow("due-in-3", "2026-05-15T00:00:00.000Z"), // floor 3 — PING (heads-up band)
       dsarRow("due-in-2", "2026-05-14T00:00:00.000Z"), // floor 2 — PING (daily)
       dsarRow("due-in-1", "2026-05-13T00:00:00.000Z"), // floor 1 — PING (daily)
       dsarRow("due-in-0", "2026-05-12T00:00:00.000Z"), // floor 0 — PING (daily)
       dsarRow("overdue-1", "2026-05-11T00:00:00.000Z"), // floor -1 — PING (daily)
     ];
     const { result } = runHandler();
-    await result;
+    const resolved = await result;
 
-    expect(notifySpy).toHaveBeenCalledTimes(5);
+    // 7 items in the band or below (only floor 8 is excluded).
+    expect(notifySpy).toHaveBeenCalledTimes(7);
+
+    // #6781: distinct items with clean inserts → no genuine double-fire.
+    expect(resolved.repinSuppressed).toBe(0);
+    expect(resolved.repinged).toBe(7);
+    // And each ping wrote its marker before dispatching.
+    expect(ioOrder.filter((e) => e === "repin-marker-insert")).toHaveLength(7);
     const pingedIds = notifySpy.mock.calls.map(
       (c) => (c[1] as { emailId: string }).emailId,
     );
@@ -345,20 +372,23 @@ describe("cron-email-ingress-probe — deadline re-pin (acknowledge ≠ legal re
       "due-in-0",
       "due-in-1",
       "due-in-2",
+      "due-in-3",
+      "due-in-6",
       "due-in-7",
       "overdue-1",
     ]);
   });
 
-  it("bounds the repin scan to received_at >= now - 60 days (C2)", async () => {
+  it("bounds the repin scan to acknowledged_at >= now - 60 days (#6801 re-anchor)", async () => {
     const { result } = runHandler();
     await result;
     const repinQuery = recordedQueries.find((q) =>
       q.eqArgs.some(([c, v]) => c === "status" && v === "acknowledged"),
     );
     expect(repinQuery).toBeDefined();
+    // #6801: the bound moved from received_at to acknowledged_at.
     expect(repinQuery!.gteArgs).toContainEqual([
-      "received_at",
+      "acknowledged_at",
       new Date(Date.parse(NOW) - 60 * 24 * 60 * 60 * 1000).toISOString(),
     ]);
   });
@@ -371,10 +401,14 @@ describe("cron-email-ingress-probe — deadline re-pin (acknowledge ≠ legal re
     expect(notifySpy).toHaveBeenCalledWith("owner-user-1", {
       type: "email_triage",
       emailId: "due-in-7",
+      // #6798 (M2): the verb is now state-accurate ("(computed) approaching"
+      // for a future due date), and the rule's clock-origin excerpt rides in
+      // `statutoryExcerpt` for the email body.
       title: expect.stringMatching(
-        /^Statutory deadline approaching — due 19 Jun 2026/,
+        /^Statutory deadline \(computed\) approaching — due 19 Jun 2026/,
       ),
       isStatutory: true,
+      statutoryExcerpt: expect.stringContaining("one calendar month of receipt"),
     });
   });
 });

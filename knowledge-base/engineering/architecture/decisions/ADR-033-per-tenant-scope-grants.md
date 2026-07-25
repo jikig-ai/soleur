@@ -1,5 +1,4 @@
 ---
-adr: 033
 title: Per-tenant scope grants as Supabase WORM ledger
 status: accepted
 date: 2026-05-18

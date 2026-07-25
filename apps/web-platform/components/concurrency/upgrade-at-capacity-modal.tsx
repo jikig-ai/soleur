@@ -6,6 +6,7 @@ import * as Sentry from "@sentry/nextjs";
 import type { PlanTier, ConcurrencyCapHitPreamble } from "@/lib/types";
 import { OPEN_UPGRADE_MODAL_EVENT } from "@/lib/ws-client";
 import { PLAN_LIMITS } from "@/lib/plan-limits";
+import { ResponsiveModal } from "@/components/ui/responsive-modal";
 import {
   LOADING_COPY,
   ERROR_COPY,
@@ -148,17 +149,13 @@ export function UpgradeAtCapacityModal() {
       : null;
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
+    <ResponsiveModal
+      open
+      onClose={close}
+      desktopMaxWidth="max-w-md"
       aria-labelledby="upgrade-at-capacity-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      data-state={state}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) close();
-      }}
     >
-      <div className="w-full max-w-md rounded-2xl border border-soleur-border-default bg-soleur-bg-surface-1 p-6 text-soleur-text-primary shadow-2xl">
+      <div data-state={state} className="text-soleur-text-primary">
         <button
           type="button"
           onClick={close}
@@ -232,7 +229,7 @@ export function UpgradeAtCapacityModal() {
           <EnterpriseCapBody cap={ctx.effectiveCap} onClose={close} />
         )}
       </div>
-    </div>
+    </ResponsiveModal>
   );
 }
 

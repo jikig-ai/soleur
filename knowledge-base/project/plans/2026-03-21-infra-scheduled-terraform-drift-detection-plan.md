@@ -116,7 +116,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Generate SSH key for plan
-        run: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -q
+        run: ssh-keygen -t ed25519 -f ~/.ssh/id_<key> -N "" -q
 
       - name: Terraform init
         working-directory: <matrix.directory>
@@ -212,7 +212,7 @@ Both stacks use `file(var.ssh_key_path)` to read a public SSH key at plan time. 
 
 **Mitigation options:**
 
-1. **Generate dummy key in CI** (simplest) -- `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""`. The plan will show the SSH key as changed, but this is a known false positive.
+1. **Generate dummy key in CI** (simplest) -- `ssh-keygen -t ed25519 -f ~/.ssh/id_<key> -N ""`. The plan will show the SSH key as changed, but this is a known false positive.
 2. **Add `lifecycle { ignore_changes = [public_key] }` to `hcloud_ssh_key`** -- prevents the diff entirely. Better long-term but modifies infrastructure code.
 3. **Store the real public key in Doppler** as a `TF_VAR_ssh_key_path` variable pointing to a file written from secrets -- more complex, avoids false positives.
 
@@ -466,7 +466,7 @@ jobs:
       - name: Generate CI SSH key
         run: |
           mkdir -p ~/.ssh
-          ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -q
+          ssh-keygen -t ed25519 -f ~/.ssh/id_<key> -N "" -q
 
       - name: Terraform init
         working-directory: ${{ matrix.directory }}

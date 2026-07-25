@@ -25,7 +25,31 @@ LOG_TAG="luks-monitor"
 
 MOUNT="${WORKSPACES_MOUNT:-/mnt/data}"
 MAPPER_NAME="${WORKSPACES_MAPPER_NAME:-workspaces}"
-MAPPER="/dev/mapper/${MAPPER_NAME}"
+# Overridable so the behavioural seam can reach the READINESS block, which sits behind
+# `[ -e "$MAPPER" ]` — and `[` is a shell BUILTIN, unstubbable on a mock PATH. But UNLIKE
+# WORKSPACES_MAPPER_NAME, this override DECOUPLES two operands that were previously derived from one:
+# `[ "$mnt_src" = "$MAPPER" ]` / `[ -e "$MAPPER" ]` use $MAPPER, while the escrow + header asserts
+# (steps 2-5) use `cryptsetup status "$MAPPER_NAME"`. A lone stray WORKSPACES_MAPPER_PATH in the
+# host env (the verify path `set -a`-sources /etc/default/luks-monitor) pointed at the raw plaintext
+# device would then let /mnt/data=plaintext satisfy the mount-identity gate while steps 2-5 certify
+# some OTHER still-open mapper — reopening the #5274 silent-plaintext mode this probe exists to catch.
+# So an override that does NOT equal the derived path is REFUSED with its own reason code unless the
+# explicit test-seam flag is also set (the harness sets both; nothing in prod sets either).
+MAPPER="${WORKSPACES_MAPPER_PATH:-/dev/mapper/${MAPPER_NAME}}"
+# #6807 — defaults MUST match workspaces-cutover.sh:44-45; this is where the cutover persists
+# WORKSPACES_COUNT and where the readiness assert reads it back.
+STATE_DIR="${WORKSPACES_STATE_DIR:-/var/lib/workspaces-luks}"
+STATE_FILE="${STATE_DIR}/state"
+# /internal/readyz is loopback-GATED (readiness.ts requires BOTH a loopback socket peer AND a
+# loopback Host header). The container runs on the default docker bridge (`-p 0.0.0.0:3000:3000`),
+# so a bare HOST curl of this URL reaches the app with the docker bridge gateway (e.g. 172.17.0.1)
+# as its peer → 403 (readyz_gate_regression). On-host consumers therefore reach readyz ONLY from
+# INSIDE the container — wl_probe_readyz (workspaces-luks-emit.sh) wraps this URL in
+# `docker exec soleur-web-platform curl ...` so the peer is a genuine 127.0.0.1. (Contrast:
+# /internal/metrics is Host-only-gated, so resource-monitor.sh's bare host curl of it works.)
+READYZ_URL="${LUKS_MONITOR_READYZ_URL:-http://127.0.0.1:3000/internal/readyz}"
+# The host-side path that the container sees as /workspaces (a docker -v bind of $MOUNT/workspaces).
+WORKSPACES_DIR="${LUKS_MONITOR_WORKSPACES_DIR:-$MOUNT/workspaces}"
 EMIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspaces-luks-emit.sh"
 [ -f "$EMIT" ] || EMIT="/usr/local/bin/workspaces-luks-emit.sh"
 # shellcheck source=apps/web-platform/infra/workspaces-luks-emit.sh
@@ -60,6 +84,63 @@ emit_and_die() {
   fi
   exit 1
 }
+
+# #6807 — the READINESS/INVENTORY failure exit, DISTINCT from emit_and_die's LUKS-drift exit.
+#
+# Exit 1 = at-rest LUKS drift. Exit 3 = the volume is a correct LUKS mapper but the APPLICATION
+# cannot serve from it (not ready) or the inventory shrank. Collapsing both into `exit 1` made
+# probe_rc a three-way ambiguity (drift / readiness / SSH transport 255) behind one hardcoded
+# at-rest ::error:: message, which is why the workflow told the operator to read a Sentry event that
+# was never emitted. The Sentry `op` stays workspaces-luks-drift either way (see the emit header) —
+# de-conflation lives here, in `reason`, and in the workflow's per-arm ::error:: text.
+#
+# `3`, NOT `2`: bash exits 2 on a SYNTAX ERROR or builtin misuse, and this script parses (and would
+# fail-to-parse as) a unit before any logic runs. If exit 2 meant "readiness failure", a typo in
+# this file — or in the helper it sources — would be reported to the operator as a data-loss verdict
+# routing to the §5 halt-and-escalate table: the exact confidently-wrong-verdict class this change
+# removes, one layer down. 3 has no reserved meaning. (127 = bundle/command not found is handled by
+# the workflow's own arm.)
+emit_readiness_and_die() {
+  WL_REASON="$1"
+  export WL_READYZ_WRITABLE WL_READYZ_POPULATED WL_READYZ_CAPACITY \
+    WL_WORKSPACE_COUNT WL_WORKSPACE_COUNT_EXPECTED \
+    WL_PROBE_LAST_CODE WL_PROBE_ATTEMPTS WL_PROBE_ELAPSED_S WL_PROBE_CLASS WL_REASON
+  log "FAIL ($WL_REASON): readyz_writable=${WL_READYZ_WRITABLE:-unknown} readyz_populated=${WL_READYZ_POPULATED:-unknown} capacity=${WL_READYZ_CAPACITY:-unknown} workspace_count=${WL_WORKSPACE_COUNT:-unknown} expected=${WL_WORKSPACE_COUNT_EXPECTED:-unknown} probe_last_code=${WL_PROBE_LAST_CODE:-unknown} probe_attempts=${WL_PROBE_ATTEMPTS:-unknown}"
+  if command -v workspaces_luks_emit >/dev/null 2>&1; then
+    WL_LEVEL=fatal workspaces_luks_emit
+  else
+    log "WARN: workspaces-luks-emit.sh unavailable — readiness failure ($WL_REASON) NOT emitted to Sentry. Reinstall $EMIT."
+  fi
+  exit 3
+}
+
+# Mirrors workspaces-cutover.sh:171 read_state. `|| true` because `grep` exits 1 on no match and
+# this script runs under `set -o pipefail`, which would otherwise abort the substitution.
+read_ws_state() {
+  [ -f "$STATE_FILE" ] || { printf ''; return 0; }
+  (grep -E "^$1=" "$STATE_FILE" | tail -1 | cut -d= -f2-) 2>/dev/null || true
+}
+
+# Sourced-detection guard — mirrors workspaces-cutover.sh:1896. Returns HERE when this file is
+# `source`d, after every definition and before the main body.
+#
+# NOTE the asymmetry with the cutover, which the earlier draft of this comment got backwards: the
+# harness EXECUTES luks-monitor.sh (`mon_run` runs `bash "$MON_PROBE"`), because the readiness/
+# inventory logic under test lives in the MAIN BODY, not in a function. It reaches that body under
+# stubbed PATH binaries, NOT by sourcing. So unlike the cutover's guard — which run_case DOES rely on
+# to source workspaces-cutover.sh and reach app_canary — this guard's only in-repo consumer is the
+# one test that asserts sourcing does nothing (luks-monitor.test.sh, case (k)). It is kept because
+# (a) it makes that assertion true and cheap, (b) a future extraction of the block into a function
+# would immediately need it, and (c) it fails toward RUNNING (an executed run has BASH_SOURCE[0]==$0),
+# so it can never silently no-op the production probe. An executed run is a no-op here.
+if [ "${BASH_SOURCE[0]:-$0}" != "$0" ]; then return 0 2>/dev/null || true; fi
+
+# REFUSE an incoherent mapper-path override (see the MAPPER assignment above). A $MAPPER that does
+# not equal the path DERIVED from $MAPPER_NAME splits the mount-identity gate from the escrow/header
+# asserts; allow it only when the explicit test seam is ALSO set. Fail closed with its own reason.
+if [ "$MAPPER" != "/dev/mapper/${MAPPER_NAME}" ] && [ "${LUKS_MONITOR_TEST_SEAM:-0}" != "1" ]; then
+  WL_MOUNT_SOURCE="override"; emit_and_die mapper_path_override_refused
+fi
 
 # 1. The mount MUST resolve to the LUKS mapper (not the raw device — the #5274 silent-plaintext mode).
 mnt_src="$(findmnt -no SOURCE "$MOUNT" 2>/dev/null || true)"
@@ -105,6 +186,90 @@ else
   WL_HEADER_UUID_MATCH=false; emit_and_die header_uuid_unreadable
 fi
 : "${map_uuid:-}"  # informational; the device-header read above is the terminal-limb check
+
+# ---------------------------------------------------------------------------
+# 6. #6807 — APPLICATION READINESS + WORKSPACE INVENTORY (flag-gated, default OFF)
+# ---------------------------------------------------------------------------
+# Steps 1-5 prove the volume is a correct LUKS container. They do NOT prove the application can
+# serve user data from it, and NOTHING off-host did until this block existed: /health returns 200
+# unconditionally and never touches $MOUNT (server/index.ts), so it is the one endpoint in the
+# codebase GUARANTEED not to reflect the repointed volume.
+#
+# DEFAULT OFF, set to 1 only by workspaces-luks-verify.yml. The reason is NOT "it is slow": it is
+# that luks-monitor.service:5 carries `RequiresMountsFor=/mnt/data`, which makes the DAILY unit
+# structurally INERT in the reboot hazard (no mount => the unit does not run at all). Default-ON
+# therefore buys zero coverage in exactly the scenario it would be argued for, while adding a retry
+# budget to time-to-page on a real outage. The verify workflow's bare-file path has no such
+# RequiresMountsFor and CAN run in that state, which is why the flag lives there.
+#
+# ORDERING IS LOAD-BEARING: this runs BEFORE the heartbeat push below, so a host that is
+# LUKS-correct but cannot serve does not push a healthy beat.
+if [ "${LUKS_MONITOR_ASSERT_READYZ:-0}" = "1" ]; then
+  # The probe/counter helpers live in workspaces-luks-emit.sh (sourced at :32). If that install
+  # failed, an undefined function would still fail CLOSED below (rc 127) — but under a misleading
+  # reason code. Name the real cause instead: the assert cannot run, so this run proves nothing.
+  if ! command -v wl_probe_readyz >/dev/null 2>&1 || ! command -v wl_count_workspace_dirs >/dev/null 2>&1; then
+    emit_readiness_and_die readiness_helper_unavailable
+  fi
+  # Capacity FIRST, so a ready=false verdict can be discriminated capacity-fault vs data-loss. A
+  # full or read-only mount makes isWorkspacesWritable fail closed (readiness.ts:54-60 catches
+  # ENOSPC/EROFS/EACCES/EIO alike), and escalating a full disk to "data-recovery incident on
+  # sole-copy data" is a destructive operator response to a non-destructive problem.
+  # Shared with app_canary via the helper — both emitters of a not-ready verdict must populate it.
+  WL_READYZ_CAPACITY="$(wl_capacity_of "$MOUNT")"
+  export WL_READYZ_CAPACITY
+
+  if ! wl_probe_readyz "$READYZ_URL"; then
+    emit_readiness_and_die "${WL_READYZ_REASON:-readyz_unreachable}"
+  fi
+
+  # --- INVENTORY. readyz proves a FLOOR, not an inventory ---------------------
+  # readiness.ts:81 is `countWorkspaceDirsAt(root) > 0`, so a cutover that preserved 1 of 8
+  # sole-copy workspaces returns ready=true. The count below is what actually carries the claim
+  # "the inventory survived". It runs HOST-SIDE (not in the workflow run block) for four reasons:
+  # it BINDS the value (a runner-side echo plus a prefix grep passes on workspace_count=1 exactly
+  # as on =8), it can FAIL CLOSED on a missing baseline, it keeps any error text off the SSH
+  # boundary, and emit_drift/workspaces_luks_emit is a host-side function the workflow cannot call.
+  #
+  # wl_count_workspace_dirs is pure shell (globs + parameter expansion, no basename subprocess), so
+  # unlike a `find`/`ls` pipeline it emits NOTHING on stderr — a permission or symlink error cannot
+  # carry a user-identifying workspace path across the SSH boundary into the Actions run log.
+  if ! WL_WORKSPACE_COUNT="$(wl_count_workspace_dirs "$WORKSPACES_DIR" 2>/dev/null)"; then
+    WL_WORKSPACE_COUNT=unknown; export WL_WORKSPACE_COUNT
+    emit_readiness_and_die workspace_count_unreadable
+  fi
+  export WL_WORKSPACE_COUNT
+  WL_WORKSPACE_COUNT_EXPECTED="$(read_ws_state WORKSPACES_COUNT)"
+  export WL_WORKSPACE_COUNT_EXPECTED
+  # FAIL CLOSED. A missing operand must never become a SKIPPED comparison — that is the same
+  # "green probe that cannot fail on the condition it names" defect this whole change exists to fix.
+  # `0` is rejected as missing: a zero baseline makes `count -lt 0` false for EVERY count, so it is a
+  # missing baseline wearing a number — an absorbing green a total wipe would pass. A real host never
+  # has zero workspaces at a cutover, and wl_count_workspace_dirs already refuses to persist 0.
+  case "${WL_WORKSPACE_COUNT_EXPECTED:-}" in
+    ''|0|*[!0-9]*) emit_readiness_and_die workspace_count_baseline_missing ;;
+  esac
+  # BOTH operands guarded. The baseline is validated above; validate the OBSERVED count too, because
+  # `[ <non-numeric> -lt N ]` exits 2 ("integer expected") and — inside an `if` under `set -uo
+  # pipefail` with no `-e` — is read as "not less than", SILENTLY SKIPPING the comparison and falling
+  # through to the green verdict. A fail-OPEN shape next to a fail-CLOSED one on the same assertion is
+  # exactly the asymmetry this change removes. Latent today (the counter always prints an integer).
+  case "${WL_WORKSPACE_COUNT:-}" in
+    ''|*[!0-9]*) emit_readiness_and_die workspace_count_unreadable ;;
+  esac
+  # `-lt`, not `-ne`: users create workspaces between cutovers, so a GROWN inventory is healthy.
+  # Only a SHRINK is the sole-copy data-loss signal.
+  if [ "$WL_WORKSPACE_COUNT" -lt "$WL_WORKSPACE_COUNT_EXPECTED" ]; then
+    emit_readiness_and_die workspace_count_shortfall
+  fi
+
+  # MANDATORY VERDICT LINE — the positive control. If the flag is ever lost (it is delivered through
+  # the verify workflow's SSH quoting), this block silently never runs, the script exits 0, and the
+  # workflow prints PASSED: byte-for-byte the failure shape #6807 is about. The workflow therefore
+  # asserts this line is PRESENT rather than asserting no error occurred. Integers only — workspace
+  # directory NAMES are user-identifying and must not cross this boundary.
+  log "SOLEUR_WORKSPACES_READYZ ready=true writable=${WL_READYZ_WRITABLE} populated=${WL_READYZ_POPULATED} workspace_count=${WL_WORKSPACE_COUNT} expected=${WL_WORKSPACE_COUNT_EXPECTED} capacity=${WL_READYZ_CAPACITY}"
+fi
 
 # All asserts passed — push the heartbeat so a dead probe FAILS it (P1-4).
 hb_url="$(doppler secrets get WORKSPACES_LUKS_HEARTBEAT_URL --plain --config prd_workspaces_luks 2>/dev/null || true)"

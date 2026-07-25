@@ -90,12 +90,16 @@ clicking **Ready for review**:
    (silent failure or blast radius, no single-file trigger). Reject anything
    that should be hook-enforced or scanner-enforced — those don't belong in
    the registry per `cq-agents-md-tier-gate`.
-3. **Byte budget.** For `agents-core` PRs, verify the post-merge
-   always-loaded payload (`wc -c AGENTS.md AGENTS.core.md`) stays under the
-   18000-byte warn / 22000-byte critical thresholds defined in
-   `cq-agents-md-why-single-line`. The driver script's prompt enforces a
-   pre-merge 18k refuse, but caller-side verification is the second line of
-   defense.
+3. **Byte budget.** For `agents-core` PRs, verify the post-merge always-loaded
+   payload stays under the thresholds defined in
+   `scripts/lint-agents-rule-budget.py` (the authority: warn at
+   `B_ALWAYS >= 20000`, reject above `23000`), which
+   `cq-agents-md-why-single-line` restates. Measure by running the linter
+   rather than `wc -c` — the thresholds are defined over frontmatter-stripped
+   bytes, and a raw `wc -c` overstates the payload by the frontmatter size.
+   The driver script's prompt asks the LLM to propose against the lower warn
+   floor, and a post-apply gate reverts anything above the hard ceiling, but
+   caller-side verification is the second line of defense.
 4. **Rule shape.** Each AGENTS-md rule body uses single-line `**Why:**`;
    evidence longer than one sentence belongs in the linked PR or learning
    file, not in the rule body.
@@ -136,11 +140,14 @@ the linter rejects any future reintroduction of the retired ID.
   formats) may slip through. Use the LLM-driven `/soleur:gdpr-gate` for
   narrower targeted scans when needed; the human reviewer at PR time is the
   second line of defense.
-- **Always-loaded payload is already tight.** At PR #2720 merge time,
-  `wc -c AGENTS.md AGENTS.core.md` = 21,949 bytes — within the 22k critical
-  threshold but only 51 bytes from it. Most `agents-core` proposals in the
-  first cron tick will be refused by the prompt's size gate. Retire stale
-  rules first to create headroom.
+- **Always-loaded payload is already tight.** Do not trust a figure quoted
+  here — run `python3 scripts/lint-agents-rule-budget.py AGENTS.md
+  AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>&1` for the current number
+  and tier. As of 2026-07-20 it reports `B_ALWAYS=22900` in the WARN tier,
+  roughly two dozen bytes of raw headroom below the reject ceiling. Expect essentially
+  every `agents-core` proposal to be refused until a trim lands — that is the
+  budget genuinely being exhausted, not a stale constant. Retire stale rules
+  first to create headroom.
 - **DPIA candidate.** Art. 35 DPIA assessment is deferred until 4 weeks of
   operation generate empirical data. Tracked in `compliance-posture.md`.
 

@@ -338,9 +338,11 @@ EOF
         bash "$SUT" 2>&1) || exit_code=$?
 
   assert_eq        "T6 exit code is 0"               "0" "$exit_code"
-  # `idx\n` = 4 bytes, `core\n` = 5 bytes → total = 9. Cap is 18000.
-  assert_contains  "T6 byte-budget sentinel with 9:18000" \
-                   "::compound-promote-byte-budget::9:18000" "$out"
+  # `idx\n` = 4 bytes, `core\n` = 5 bytes → total = 9. The sentinel reports the
+  # HARD ceiling (ALWAYS_LOADED_CAP), which tracks B_ALWAYS_REJECT in
+  # scripts/lint-agents-rule-budget.py — not the lower proposal budget.
+  assert_contains  "T6 byte-budget sentinel with 9:23000" \
+                   "::compound-promote-byte-budget::9:23000" "$out"
   rm -rf "$root"
 }
 

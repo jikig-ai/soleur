@@ -110,7 +110,7 @@ Cloud Routine sub-agent sessions (spawned by `/soleur:content-writer --headless`
 
 **Verify (do this BEFORE H1):**
 
-1. Cross-check the routine's run history against `gh pr list --state all --search "created:<silence-start>..<silence-end>"` and `gh issue list --state all --search 'created:<silence-start>..<silence-end> "<label>"'`. If the routine shows runs but GitHub shows zero artifacts → H6 confirmed.
+1. Cross-check the routine's run history against `gh pr list --state all -L 200 --search "created:<silence-start>..<silence-end>"` and `gh issue list --state all -L 200 --search 'created:<silence-start>..<silence-end> "<label>"'`. If the routine shows runs but GitHub shows zero artifacts → H6 confirmed.
 2. Open a single SUCCESS-marked session in Claude Code UI and scroll to the end. Look for model-output strings: `"Doppler returned Forbidden"`, `"GitHub MCP tools unavailable"`, `"gh CLI unauthenticated"`, `"git proxy handles only git operations"`.
 3. Compare against a peer routine (e.g., Daily Issue Triage) that invokes `gh` directly from top-level prompt — if peer succeeds and target fails, the sub-agent boundary is the differentiator.
 
@@ -281,7 +281,7 @@ STEP 2 dedup + STEP 2.5 heartbeat issue.
 ### H8 — Frontmatter parser truncates multi-colon values (`awk -F': '`)
 
 Workflow STEP 2 dedup logic compares a frontmatter-derived title against
-existing-issue titles via `gh issue list --search "\"$CANONICAL_TITLE\" in:title"`.
+existing-issue titles via `gh issue list --state open -L 200 --search "\"$CANONICAL_TITLE\" in:title"`.
 If the parser truncates the title at an inner `: ` or leaves a trailing
 quote artifact, the search returns no match — dedup misfires and a fresh
 duplicate issue is filed each run. Two failure modes share the root cause:

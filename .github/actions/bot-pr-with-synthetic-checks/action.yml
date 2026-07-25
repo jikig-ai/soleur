@@ -145,6 +145,19 @@ runs:
         # earned-green pattern as the real gitleaks run below) and fail loud on a
         # BLOCK. Extending ALLOWED_PATHS to an AGENTS path without that
         # reproduction silently defeats the body-weakening gate for bot PRs.
+        #
+        # ⚠ #6882 / ADR-139 — the ALLOWED_PATHS ∩ SCAN_DIRS test. The two notes
+        # above (and the sentry-destroy-required note in required-checks.txt)
+        # rely on the guarded surface being UNREACHABLE from ALLOWED_PATHS. That
+        # argument is per-gate and must be RE-DERIVED, never inherited: it does
+        # NOT hold for `credential-path-guard`, whose scanner walks tracked *.md
+        # under plugins/ and knowledge-base/ — which includes weakness-digest.md
+        # below. Its green is therefore EARNED by a real scan in the Phase-4
+        # ceiling, not argued. Before adding ANY path here, re-derive the
+        # intersection for EVERY content-scoped required check, and note that
+        # reachability can also widen without touching this array — a change to
+        # a generator's OUTPUT FORMAT (e.g. weakness-miner.sh emitting learning
+        # titles instead of bare basenames) moves the other input silently.
         ALLOWED_PATHS=(
           "knowledge-base/project/weakness-digest.md"
           "knowledge-base/project/rule-metrics.json"
@@ -201,6 +214,31 @@ runs:
         fi
         if ! node apps/web-platform/scripts/lint-fixture-content.mjs "${PATHS[@]}"; then
           echo "::error::lint-fixture-content found a PII/prod-ref string in the bot diff — refusing to create the PR or post synthetics (#6049 content-safety ceiling)."
+          exit 1
+        fi
+        # --- #6882 earned green for `credential-path-guard` (ADR-139) ---
+        # A resolvable home-relative path to a real credential file makes Claude
+        # Code's harness auto-attach that file into model context when the doc
+        # loads — the vector that leaked a live Doppler token into transcripts.
+        #
+        # `credential-path-guard` is a required 15368 context, so the synthetic
+        # posted below is unconditional. Unlike `rule-body-lint` (#6103) and
+        # `sentry-destroy-required` (#6589) — whose fabricated greens are sound
+        # because their guarded surfaces sit OUTSIDE ALLOWED_PATHS — this gate's
+        # SCAN_DIRS (tracked *.md under plugins/ + knowledge-base/) INCLUDES
+        # knowledge-base/project/weakness-digest.md, which IS in ALLOWED_PATHS.
+        # ALLOWED_PATHS ∩ SCAN_DIRS is NON-empty, so the green must be EARNED
+        # here rather than argued from unreachability. Deleting this block
+        # fabricates a pass over a reachable surface; parity test 8 enforces it.
+        #
+        # Non-.md staged paths (rule-metrics.json) are filtered by the scanner
+        # itself — passing the full "${PATHS[@]}" is correct.
+        if ! command -v python3 >/dev/null 2>&1; then
+          echo "::error::python3 not found — cannot run lint-credential-path-literals over the bot diff (#6882 earned green requires it)."
+          exit 1
+        fi
+        if ! python3 scripts/lint-credential-path-literals.py "${PATHS[@]}"; then
+          echo "::error::lint-credential-path-literals found a resolvable credential-file path in the bot diff — refusing to create the PR or post synthetics (#6882 earned green)."
           exit 1
         fi
         DATE_SUFFIX="$(date -u +%Y-%m-%d)"

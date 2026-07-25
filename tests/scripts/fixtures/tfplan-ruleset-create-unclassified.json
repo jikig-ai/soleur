@@ -1,0 +1,31 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "cloudflare_ruleset.some_future_ruleset",
+      "mode": "managed",
+      "type": "cloudflare_ruleset",
+      "name": "some_future_ruleset",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "kind": "custom",
+          "name": "some future ruleset",
+          "phase": "http_request_firewall_custom",
+          "zone_id": "zone000000000000000000000000000f",
+          "account_id": null
+        },
+        "after_unknown": {
+          "id": true,
+          "rules": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {},
+        "importing": null
+      }
+    }
+  ]
+}

@@ -1,5 +1,4 @@
 ---
-adr: 030
 title: Inngest as durable trigger layer for server-side agents
 status: accepted
 date: 2026-05-17

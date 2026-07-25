@@ -1,5 +1,4 @@
 ---
-adr: ADR-073
 title: Multi-owner workspaces and the organizations.owner_user_id primary-owner pointer
 status: accepted
 date: 2026-06-30

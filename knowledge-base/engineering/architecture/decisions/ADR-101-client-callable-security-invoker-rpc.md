@@ -1,5 +1,4 @@
 ---
-adr: 101
 title: Client-callable SECURITY INVOKER RPC pattern (RLS-preserving reads)
 status: accepted
 date: 2026-07-07

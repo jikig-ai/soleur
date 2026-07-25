@@ -99,6 +99,17 @@ export function buildReadinessResponse(): ReadinessResponse {
 // loopback with a loopback Host header, not probe readyz as a direct off-host LB
 // healthcheck.
 //
+// CONTAINER TOPOLOGY: the prod app runs on the DEFAULT docker bridge with
+// `-p 0.0.0.0:3000:3000` (ci-deploy.sh — NOT `--network host`), so a HOST-side
+// `curl 127.0.0.1:3000/internal/readyz` arrives with the docker bridge gateway
+// (e.g. 172.17.0.1) as its peer, NOT loopback → 403. The on-host ops probes fix
+// this by running INSIDE the container (`docker exec … curl 127.0.0.1:3000/...`,
+// see workspaces-luks-emit.sh:wl_probe_readyz), where the peer is a genuine
+// 127.0.0.1. Do NOT "simplify" by widening isLoopbackPeer to accept the bridge
+// gateway: under docker's default userland-proxy the gateway is ALSO the source
+// of genuine off-host traffic through the published port, so accepting it would
+// collapse this boundary to the attacker-controlled Host header alone.
+//
 // FAIL CLOSED: the ENTIRE body (gate included) is wrapped so any throw becomes a
 // 503, never an escaped uncaught throw → installCrashHandlers() → process.exit(1),
 // which would *restart* live web-1 (strictly worse than a 503). `build` is

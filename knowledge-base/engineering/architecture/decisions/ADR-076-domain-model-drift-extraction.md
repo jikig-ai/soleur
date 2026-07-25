@@ -1,5 +1,4 @@
 ---
-adr: ADR-076
 title: Domain-model drift extraction — deterministic-first, last-writer-wins, content-anchored
 status: accepted
 date: 2026-07-01

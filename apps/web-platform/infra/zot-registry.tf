@@ -91,7 +91,9 @@ locals {
   # reuses this SAME source + token (SOLEUR_ZOT_DISK is the discriminating grep marker), so no
   # new source is provisioned. NON-secret host routing (like disk_heartbeat_url) → baked into
   # user_data via templatefile; the token is the only secret and stays in the isolated Doppler
-  # config, so the boot isolation self-check cardinality is 3 (2 ZOT + 1 logs token), NOT 4.
+  # config. (#6895) The boot isolation self-check cardinality is now 4 — 2 ZOT tokens + this logs
+  # token + REGISTRY_LUKS_KEY (the guest-LUKS passphrase) — see the boot isolation self-check
+  # (`n_admitted=…REGISTRY_LUKS_KEY…`, cardinality 4) in cloud-init-registry.yml.
   # keep in sync with vector.toml [sinks.betterstack].uri (same source 2457081 / eu-fsn-3 endpoint).
   betterstack_logs_ingest_url = "https://s2457081.eu-fsn-3.betterstackdata.com/"
 }
@@ -152,6 +154,22 @@ resource "random_password" "zot_push" {
   special = false
 }
 
+# --- #6895 (ADR-096 amendment / ADR-140) — guest-side LUKS-at-rest passphrase --------
+# The zot storage volume (hcloud_volume.registry) is a RAW block device (no `format`
+# below); cryptsetup luksFormat/luksOpen runs IN THE GUEST at cloud-init
+# (cloud-init-registry.yml), unlocked by THIS passphrase delivered ONLY as the
+# Doppler-injected env REGISTRY_LUKS_KEY — never an argv positional, never baked into
+# user_data. There is NO hcloud `encrypted` volume attribute (ADR-140). Mirrors
+# random_password.git_data_luks (git-data-luks.tf): length 40 alphanumeric (~238 bits),
+# special=false keeps it shell/stdin-safe for the `printf %s | cryptsetup --key-file -`
+# pipe. NO keepers / NO ignore_changes — rotation is operator-explicit via `-replace`
+# (SE1: a rotation is a volume RECUT, not a bare host replace — see the depends_on note
+# and cloud-init-registry.yml's LUKS block).
+resource "random_password" "registry_luks" {
+  length  = 40
+  special = false
+}
+
 # --- Host-scoped boot credential: the ISOLATED `soleur-registry` project ---------------
 # The registry host builds its htpasswd from BOTH tokens at boot, reading them via a
 # read-only service token. TRUE isolation requires a boundary that does NOT share the `prd`
@@ -204,6 +222,22 @@ resource "doppler_secret" "zot_push_token_registry" {
   config     = doppler_environment.registry_prd.slug
   name       = "ZOT_PUSH_TOKEN"
   value      = random_password.zot_push.result
+  visibility = "masked"
+}
+
+# #6895 — the guest-side LUKS passphrase, published to the SAME isolated soleur-registry/prd
+# root config the host already reads at boot (doppler_service_token.registry). Mirrors
+# doppler_secret.git_data_luks_key — no NEW service token is provisioned; the existing scoped
+# read token resolves it alongside the two ZOT tokens + the logs token. This is the FOURTH
+# secret in the isolated config, so the boot isolation self-check cardinality moves 3->4 (the
+# `n_admitted=…REGISTRY_LUKS_KEY…`, cardinality 4 self-check in cloud-init-registry.yml, P1-A) and
+# REGISTRY_LUKS_KEY is admitted BY NAME. It is a
+# registry-scoped secret, so the #6122 isolation property is preserved (no soleur/prd path).
+resource "doppler_secret" "registry_luks_key" {
+  project    = doppler_project.registry.name
+  config     = doppler_environment.registry_prd.slug
+  name       = "REGISTRY_LUKS_KEY"
+  value      = random_password.registry_luks.result
   visibility = "masked"
 }
 
@@ -389,10 +423,18 @@ resource "hcloud_server" "registry" {
   # GATE the htpasswd bake, so they need the identical treatment — the #6244 fix was made for
   # one secret and never generalized. Without them a fresh stand-up (or this host's own
   # replace) may boot before the secret writes land and bake an htpasswd from a stale read.
+  # #6895: REGISTRY_LUKS_KEY is read at boot through the SAME scoped Doppler CLI path and GATES
+  # the guest luksFormat/luksOpen of the store volume — the identical boot-ordering hazard the
+  # three secrets above already guard. Without this edge a fresh stand-up (or this host's own
+  # replace) may boot before the secret write lands and FATAL on an empty key (fail-loud). Do NOT
+  # add random_password.registry_luks to lifecycle.replace_triggered_by above: rotating the
+  # passphrase and merely replacing the HOST would luksOpen the OLD-key volume with the NEW key
+  # and FATAL — a rotation is a volume RECUT (SE1), not a bare host replace.
   depends_on = [
     doppler_secret.registry_betterstack_logs_token,
     doppler_secret.zot_pull_token_registry,
     doppler_secret.zot_push_token_registry,
+    doppler_secret.registry_luks_key,
   ]
 
   labels = {
@@ -408,7 +450,15 @@ resource "hcloud_volume" "registry" {
   name     = "soleur-registry-store"
   size     = var.registry_volume_size
   location = var.registry_location # MUST match hcloud_server.registry (#6122: nbg1)
-  format   = "ext4"
+  # SHARP EDGE (#6895 / D1 Option B): NO `format` — this is a RAW block device. Guest-side
+  # cryptsetup luksFormats it luks2 at cloud-init and mkfs.ext4's the real FS INSIDE the
+  # /dev/mapper/registry mapper (cloud-init-registry.yml). There is no hcloud `encrypted`
+  # attribute (ADR-140); at-rest encryption is guest-side only. A raw device lets the guest's
+  # `blkid TYPE` discriminator distinguish fresh ("") -> luksFormat, crypto_LUKS -> reuse, and
+  # any OTHER TYPE (e.g. a populated plaintext ext4 the registry-host-replace preserve-path
+  # kept) -> FATAL refuse instead of a silent wipe. This DEPARTS from git_data_luks (which keeps
+  # format=ext4 + an isLuks guard, Option A) precisely because the registry has a volume-preserving
+  # host-replace dispatch git-data lacks (ADR-096 footgun).
 
   labels = {
     app = "soleur-web-platform"

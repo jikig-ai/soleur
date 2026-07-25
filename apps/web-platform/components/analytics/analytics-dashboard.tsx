@@ -1,6 +1,9 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 import type { UserMetrics, FunnelResult } from "@/lib/analytics";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 
 // --- Inline SVG sparkline helper ---
 
@@ -130,7 +133,7 @@ function FunnelSection({ funnel }: { funnel: FunnelResult }) {
   const maxCount = Math.max(...funnel.stages.map((s) => s.count), 1);
 
   return (
-    <section className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-6 space-y-3">
+    <section className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-4 space-y-3 sm:p-6">
       <h2 className="text-sm font-medium text-soleur-text-muted uppercase tracking-wider">
         Activation funnel
       </h2>
@@ -140,12 +143,15 @@ function FunnelSection({ funnel }: { funnel: FunnelResult }) {
           const widthPct = Math.round((stage.count / maxCount) * 100);
           return (
             <div key={stage.key} className="flex items-center gap-3">
-              <div className="w-36 shrink-0 text-sm text-soleur-text-secondary flex items-center gap-1.5">
+              <div className="w-24 shrink-0 text-sm text-soleur-text-secondary flex items-center gap-1.5 sm:w-36">
                 {stage.label}
                 {isActivated && (
+                  // Hidden on mobile: the narrow label column can't fit the
+                  // badge without overlapping the funnel bar. The gold bar + the
+                  // activation-definition text below already convey it.
                   <span
                     title={funnel.activationDef}
-                    className="text-[10px] font-semibold text-soleur-accent-gold-fg border border-soleur-accent-gold-fg/50 rounded px-1 cursor-help"
+                    className="hidden text-[10px] font-semibold text-soleur-accent-gold-fg border border-soleur-accent-gold-fg/50 rounded px-1 cursor-help sm:inline"
                   >
                     SUCCESS METRIC
                   </span>
@@ -162,7 +168,7 @@ function FunnelSection({ funnel }: { funnel: FunnelResult }) {
               <div className="w-12 shrink-0 text-right text-sm text-soleur-text-primary tabular-nums">
                 {stage.count}
               </div>
-              <div className="w-16 shrink-0 text-right text-xs text-soleur-text-muted tabular-nums">
+              <div className="w-12 shrink-0 text-right text-xs text-soleur-text-muted tabular-nums sm:w-16">
                 {/* Only a percentage drop gets a leading minus; the zero-prior
                     "—" sentinel and the first stage (null) stand alone. */}
                 {stage.dropoffLabel === null
@@ -182,6 +188,115 @@ function FunnelSection({ funnel }: { funnel: FunnelResult }) {
   );
 }
 
+// --- Mobile card layout (below md) ---
+// Sibling renderer to the desktop <table>: one <tr> -> one card. Primary field
+// (user email) bold top-left, churn status as a badge top-right, the remaining
+// numeric metric columns collapse into a 2-col labeled stat grid. Every value is
+// computed from the SAME helpers the table cells use — no duplicated logic.
+
+function StatCell({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[10px] font-medium uppercase tracking-wider text-soleur-text-muted">
+        {label}
+      </div>
+      <div className="mt-0.5 text-soleur-text-secondary">{children}</div>
+    </div>
+  );
+}
+
+function MetricCard({ m }: { m: UserMetrics }) {
+  return (
+    <div className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-3 space-y-3">
+      {/* Header: primary field (email) + churn status badge */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate font-mono text-xs font-medium text-soleur-text-primary">
+          {m.email}
+        </span>
+        <span className="flex shrink-0 items-center gap-1.5">
+          <span
+            className={`inline-block w-2 h-2 rounded-full ${
+              m.churning ? "bg-red-500" : "bg-green-500"
+            }`}
+          />
+          <span className="whitespace-nowrap text-xs text-soleur-text-muted">
+            {m.churning
+              ? m.daysSinceLastSession !== null
+                ? `${m.daysSinceLastSession}d ago`
+                : "No sessions"
+              : `${m.daysSinceLastSession ?? 0}d ago`}
+          </span>
+        </span>
+      </div>
+
+      {/* Numeric metric columns -> labeled 2-col stat grid (labels = headers) */}
+      <div className="grid grid-cols-2 gap-2">
+        <StatCell label="Domains">
+          {m.totalSessions > 0 ? (
+            <span
+              title={Object.entries(m.domainCounts)
+                .map(([k, v]) => `${k}: ${v}`)
+                .join(", ")}
+            >
+              {Object.entries(m.domainCounts).map(([leader, count]) => (
+                <span key={leader} className="inline-block mr-1.5 text-xs">
+                  <span className="text-soleur-accent-gold-fg">{leader}</span>
+                  <span className="text-soleur-text-muted ml-0.5">{count}</span>
+                </span>
+              ))}
+            </span>
+          ) : (
+            <span className="text-soleur-text-muted">—</span>
+          )}
+        </StatCell>
+
+        <StatCell label="Sessions">
+          <span className="flex items-center gap-2">
+            <span className="text-soleur-text-secondary">{m.totalSessions}</span>
+            <Sparkline data={sessionSparklineData(m.sessionsByDay)} />
+          </span>
+        </StatCell>
+
+        <StatCell label="Multi-Domain">
+          {m.domainCount > 0 ? (
+            m.domainCount
+          ) : (
+            <span className="text-soleur-text-muted">—</span>
+          )}
+        </StatCell>
+
+        <StatCell label="KB Growth">
+          <span className="flex items-center gap-2">
+            <span className="text-soleur-text-secondary text-xs">
+              {kbGrowthLabel(m.kbHistory)}
+            </span>
+            <Sparkline
+              data={kbSparklineData(m.kbHistory)}
+              colorClass="text-green-500"
+            />
+          </span>
+        </StatCell>
+
+        <StatCell label="TTFV">{formatDays(m.ttfvDays)}</StatCell>
+
+        <StatCell label="Error Rate">
+          <span
+            className={
+              m.errorRate > 0.5
+                ? "text-red-400"
+                : m.errorRate > 0
+                  ? "text-amber-400"
+                  : "text-soleur-text-secondary"
+            }
+          >
+            {formatPercent(m.errorRate)}
+          </span>
+        </StatCell>
+      </div>
+    </div>
+  );
+}
+
 // --- Main component ---
 
 export function AnalyticsDashboard({
@@ -191,9 +306,11 @@ export function AnalyticsDashboard({
   metrics: UserMetrics[];
   funnel: FunnelResult;
 }) {
+  const isMobile = useIsMobile();
+
   if (metrics.length === 0) {
     return (
-      <div className="mx-auto max-w-6xl px-6 py-8 space-y-6">
+      <div className="mx-auto max-w-6xl px-4 py-6 space-y-6 sm:px-6 sm:py-8">
         <h1 className="text-2xl font-semibold text-soleur-text-primary">Analytics</h1>
         <FunnelSection funnel={funnel} />
       </div>
@@ -201,7 +318,7 @@ export function AnalyticsDashboard({
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8 space-y-6">
+    <div className="mx-auto max-w-6xl px-4 py-6 space-y-6 sm:px-6 sm:py-8">
       <h1 className="text-2xl font-semibold text-soleur-text-primary">Analytics</h1>
       <p className="text-sm text-soleur-text-muted">
         P4 validation metrics — {metrics.length} user{metrics.length !== 1 ? "s" : ""}
@@ -209,7 +326,14 @@ export function AnalyticsDashboard({
 
       <FunnelSection funnel={funnel} />
 
-      <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 overflow-x-auto">
+      {isMobile ? (
+        <div className="space-y-2">
+          {metrics.map((m) => (
+            <MetricCard key={m.userId} m={m} />
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-soleur-border-default">
@@ -318,7 +442,8 @@ export function AnalyticsDashboard({
             ))}
           </tbody>
         </table>
-      </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,5 +1,4 @@
 ---
-adr: 117
 title: A heartbeat's arming claim must be executable — a monitor is fed, or honestly declared unfed
 status: accepted
 date: 2026-07-16

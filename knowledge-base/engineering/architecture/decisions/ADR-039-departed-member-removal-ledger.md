@@ -1,5 +1,4 @@
 ---
-adr: 039
 title: workspace_member_removals WORM ledger for DSAR departed-member coverage
 status: accepted
 date: 2026-05-22

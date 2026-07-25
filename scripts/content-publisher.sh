@@ -782,7 +782,7 @@ create_dedup_issue() {
 
   # Check for existing open issue with exact title match
   local existing
-  existing=$(gh issue list --state open --search "in:title \"$title\"" --json number,title \
+  existing=$(gh issue list --state open -L 200 --search "in:title \"$title\"" --json number,title \
     --jq "[.[] | select(.title == \"$title\")] | .[0].number // empty")
 
   if [[ -n "$existing" ]]; then

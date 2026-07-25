@@ -3,7 +3,7 @@ title: "Start a new conversation straight from the sidebar"
 type: feature-launch
 publish_date: 2026-07-23
 channels: x, bluesky
-status: scheduled
+status: published
 pr_reference: "#5436"
 ---
 

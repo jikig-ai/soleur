@@ -14,6 +14,7 @@ import { useCallback, useEffect, useState } from "react";
 import useSWR from "swr";
 
 import { ChatSurface } from "@/components/chat/chat-surface";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import { swrKeys } from "@/lib/swr-config";
 import {
   ROUTINE_DRAFT_TAB_EVENT,
@@ -243,7 +244,7 @@ function DraftRoutineTab() {
           it, and shows you the result — then opens a PR you approve. It can also
           run and verify routines you already have.
         </p>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <div className="mt-3 hidden gap-3 sm:grid sm:grid-cols-2">
           <div className="rounded border border-soleur-border-default bg-soleur-bg-surface-1 p-3">
             <div className="text-xs font-medium text-soleur-text-primary">
               Draft a new routine
@@ -273,7 +274,7 @@ function DraftRoutineTab() {
             </span>
           ))}
         </div>
-        <p className="mt-2 text-[11px] text-soleur-text-muted">
+        <p className="mt-2 hidden text-[11px] text-soleur-text-muted sm:block">
           New routines ship as code — the Concierge drafts and tests; you approve
           the PR; it goes live on merge + deploy.
         </p>
@@ -283,6 +284,7 @@ function DraftRoutineTab() {
           variant="sidebar"
           conversationId="new"
           initialContext={{ type: "routine-authoring" }}
+          sidebarProps={{ placeholder: "Describe a routine…" }}
         />
       </div>
     </div>
@@ -383,7 +385,7 @@ function RoutinesTab() {
             {domain}{" "}
             <span className="ml-1 text-soleur-text-muted/70">{items.length}</span>
           </h2>
-          <ul className="divide-y divide-soleur-border-default rounded-lg border border-soleur-border-default">
+          <ul className="space-y-2 sm:space-y-0 sm:divide-y sm:divide-soleur-border-default sm:rounded-lg sm:border sm:border-soleur-border-default">
             {items.map((item) => (
               <RoutineRow
                 key={item.fnId}
@@ -434,7 +436,7 @@ function RoutineRow({
 }) {
   const last = item.lastRun;
   return (
-    <li className="flex items-center gap-4 px-4 py-3">
+    <li className="flex flex-col gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 sm:flex-row sm:items-center sm:gap-4 sm:rounded-none sm:border-0 sm:bg-transparent">
       <div className="min-w-0 flex-1">
         <button
           type="button"
@@ -462,7 +464,7 @@ function RoutineRow({
           )}
         </div>
       </div>
-      <div className="w-40 text-right text-xs">
+      <div className="w-full text-left text-xs sm:w-40 sm:text-right">
         {last ? (
           <>
             <StatusPill status={last.status} />
@@ -613,6 +615,11 @@ function RunLogView({
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<RecentRun | null>(null);
+  // Phase 3 (mobile): below `md` the runs table collapses to one card per run.
+  // Hydration-safe gate (seeds desktop on SSR + first client render, then flips)
+  // — see hooks/use-is-mobile.ts. Only the <table>/<card-list> swaps; the
+  // filter/error/empty/"Load more" states stay shared above/below the gate.
+  const isMobile = useIsMobile();
 
   const buildUrl = useCallback(
     (c: string | null) => {
@@ -715,26 +722,16 @@ function RunLogView({
         </div>
       ) : (
         <>
-          <table className="w-full text-left text-xs">
-            <thead className="text-soleur-text-muted">
-              <tr className="border-b border-soleur-border-default">
-                {!fixedRoutineId && (
-                  <th className="py-2 font-normal">Routine</th>
-                )}
-                <th className="py-2 font-normal">Status</th>
-                <th className="py-2 font-normal">Started</th>
-                <th className="py-2 font-normal">Duration</th>
-                <th className="py-2 font-normal">Trigger</th>
-              </tr>
-            </thead>
-            <tbody>
-              {/* #5766 — in-flight live rows sit at the top (newest); terminal
-                  history follows. */}
+          {isMobile ? (
+            // Below md: same rows, same ordering (live first, then terminal
+            // history), rendered as record cards from the SAME computed values.
+            <div className="space-y-2">
               {live.map((l) => (
                 <LiveRunRow
                   key={l.id}
                   live={l}
                   showRoutine={!fixedRoutineId}
+                  variant="card"
                 />
               ))}
               {runs.map((r) => (
@@ -743,10 +740,44 @@ function RunLogView({
                   run={r}
                   showRoutine={!fixedRoutineId}
                   onSelect={() => setSelected(r)}
+                  variant="card"
                 />
               ))}
-            </tbody>
-          </table>
+            </div>
+          ) : (
+            <table className="w-full text-left text-xs">
+              <thead className="text-soleur-text-muted">
+                <tr className="border-b border-soleur-border-default">
+                  {!fixedRoutineId && (
+                    <th className="py-2 font-normal">Routine</th>
+                  )}
+                  <th className="py-2 font-normal">Status</th>
+                  <th className="py-2 font-normal">Started</th>
+                  <th className="py-2 font-normal">Duration</th>
+                  <th className="py-2 font-normal">Trigger</th>
+                </tr>
+              </thead>
+              <tbody>
+                {/* #5766 — in-flight live rows sit at the top (newest); terminal
+                    history follows. */}
+                {live.map((l) => (
+                  <LiveRunRow
+                    key={l.id}
+                    live={l}
+                    showRoutine={!fixedRoutineId}
+                  />
+                ))}
+                {runs.map((r) => (
+                  <RecentRunRow
+                    key={r.id}
+                    run={r}
+                    showRoutine={!fixedRoutineId}
+                    onSelect={() => setSelected(r)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          )}
           {cursor && (
             <button
               onClick={() => loadMore(false)}
@@ -868,11 +899,52 @@ function RecentRunRow({
   run,
   showRoutine,
   onSelect,
+  variant = "row",
 }: {
   run: RecentRun;
   showRoutine: boolean;
   onSelect: () => void;
+  variant?: "row" | "card";
 }) {
+  // Single source of truth: the same computed values feed the desktop <tr>
+  // cells and the mobile record card below.
+  const started = relativeTime(run.started_at);
+  const duration = formatDuration(run.duration_ms);
+
+  if (variant === "card") {
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onSelect}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSelect();
+          }
+        }}
+        data-testid={`run-row-${run.id}`}
+        className="min-h-11 cursor-pointer rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-3"
+      >
+        <div className="flex items-center justify-between gap-2">
+          {showRoutine && (
+            <span className="min-w-0 truncate font-medium text-soleur-text-primary">
+              {humanizeFnId(run.routine_id)}
+            </span>
+          )}
+          <span className="ml-auto shrink-0">
+            <StatusPill status={run.status} />
+          </span>
+        </div>
+        <div className="mt-2 space-y-1">
+          <CardStat label="Started" value={started} />
+          <CardStat label="Duration" value={duration} />
+          <CardStat label="Trigger" value={run.trigger_source} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <tr
       className="cursor-pointer border-b border-soleur-border-default hover:bg-soleur-bg-surface-1"
@@ -887,14 +959,28 @@ function RecentRunRow({
       <td className="py-2">
         <StatusPill status={run.status} />
       </td>
-      <td className="py-2 font-mono text-soleur-text-muted">
-        {relativeTime(run.started_at)}
-      </td>
-      <td className="py-2 text-soleur-text-muted">
-        {formatDuration(run.duration_ms)}
-      </td>
+      <td className="py-2 font-mono text-soleur-text-muted">{started}</td>
+      <td className="py-2 text-soleur-text-muted">{duration}</td>
       <td className="py-2 text-soleur-text-muted">{run.trigger_source}</td>
     </tr>
+  );
+}
+
+// Phase 3 (mobile): a label:value stat row inside a record card. Shared by the
+// LiveRunRow and RecentRunRow card variants so the collapsed columns read
+// identically.
+function CardStat({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-xs">
+      <span className="text-soleur-text-muted">{label}</span>
+      <span className="text-right text-soleur-text-secondary">{value}</span>
+    </div>
   );
 }
 
@@ -905,11 +991,58 @@ function RecentRunRow({
 function LiveRunRow({
   live,
   showRoutine,
+  variant = "row",
 }: {
   live: LiveRun;
   showRoutine: boolean;
+  variant?: "row" | "card";
 }) {
   const heartbeat = relativeTime(live.last_heartbeat_at);
+  // Single source of truth: shared by the desktop <tr> and the mobile card.
+  const started = relativeTime(live.started_at);
+  const durationText =
+    live.status === "stuck"
+      ? `no heartbeat · ${heartbeat}`
+      : `running · updated ${heartbeat}`;
+  const statusBadge = (
+    <span className="inline-flex items-center gap-2">
+      <StatusPill status={live.status} />
+      {live.resumed && (
+        <span
+          data-testid={`resumed-badge-${live.id}`}
+          className="inline-flex items-center rounded-full border border-amber-400/40 px-1.5 text-[10px] uppercase tracking-wide text-amber-300"
+          title="Resumed after an interruption — completed steps were not re-run"
+        >
+          Resumed
+        </span>
+      )}
+    </span>
+  );
+
+  if (variant === "card") {
+    return (
+      <div
+        data-testid={`live-run-row-${live.id}`}
+        data-status={live.status}
+        className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-3"
+      >
+        <div className="flex items-center justify-between gap-2">
+          {showRoutine && (
+            <span className="min-w-0 truncate font-medium text-soleur-text-primary">
+              {humanizeFnId(live.routine_id)}
+            </span>
+          )}
+          <span className="ml-auto shrink-0">{statusBadge}</span>
+        </div>
+        <div className="mt-2 space-y-1">
+          <CardStat label="Started" value={started} />
+          <CardStat label="Duration" value={durationText} />
+          <CardStat label="Trigger" value="—" />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <tr
       className="border-b border-soleur-border-default"
@@ -921,28 +1054,9 @@ function LiveRunRow({
           {humanizeFnId(live.routine_id)}
         </td>
       )}
-      <td className="py-2">
-        <span className="inline-flex items-center gap-2">
-          <StatusPill status={live.status} />
-          {live.resumed && (
-            <span
-              data-testid={`resumed-badge-${live.id}`}
-              className="inline-flex items-center rounded-full border border-amber-400/40 px-1.5 text-[10px] uppercase tracking-wide text-amber-300"
-              title="Resumed after an interruption — completed steps were not re-run"
-            >
-              Resumed
-            </span>
-          )}
-        </span>
-      </td>
-      <td className="py-2 font-mono text-soleur-text-muted">
-        {relativeTime(live.started_at)}
-      </td>
-      <td className="py-2 text-soleur-text-muted">
-        {live.status === "stuck"
-          ? `no heartbeat · ${heartbeat}`
-          : `running · updated ${heartbeat}`}
-      </td>
+      <td className="py-2">{statusBadge}</td>
+      <td className="py-2 font-mono text-soleur-text-muted">{started}</td>
+      <td className="py-2 text-soleur-text-muted">{durationText}</td>
       <td className="py-2 text-soleur-text-muted">—</td>
     </tr>
   );

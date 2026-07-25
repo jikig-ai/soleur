@@ -1,5 +1,4 @@
 ---
-adr: ADR-011
 title: Three-Tier Enforcement Model
 status: active
 date: 2026-03-27

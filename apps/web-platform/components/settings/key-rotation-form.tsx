@@ -122,7 +122,7 @@ export function KeyRotationForm({
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           placeholder={isOauth ? "sk-ant-oat..." : "sk-ant-..."}
-          className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none focus:ring-1 focus:ring-soleur-border-emphasized"
+          className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2 text-base text-soleur-text-primary placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none focus:ring-1 focus:ring-soleur-border-emphasized md:text-sm"
           autoComplete="off"
         />
         {isOauth && (

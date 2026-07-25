@@ -1,5 +1,4 @@
 ---
-adr: ADR-022
 title: SDK as Router for the Command Center
 status: active
 date: 2026-04-24

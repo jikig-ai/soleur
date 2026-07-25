@@ -1,5 +1,4 @@
 ---
-adr: ADR-024
 title: Custom Theme Provider over `next-themes`
 status: active
 date: 2026-05-06

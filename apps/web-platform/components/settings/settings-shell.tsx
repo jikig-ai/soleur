@@ -135,7 +135,7 @@ export function SettingsShell({
       </RailSlotPortal>
 
       {/* Content area */}
-      <div className="relative flex-1 px-4 py-10 md:px-10">
+      <div className="relative min-w-0 flex-1 overflow-x-hidden px-4 py-10 md:px-10">
         <div className="mx-auto max-w-2xl">{children}</div>
       </div>
     </div>

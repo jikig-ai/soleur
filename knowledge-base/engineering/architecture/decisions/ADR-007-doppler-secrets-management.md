@@ -1,5 +1,4 @@
 ---
-adr: ADR-007
 title: Doppler Secrets Management
 status: active
 date: 2026-03-27

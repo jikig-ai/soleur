@@ -24,6 +24,16 @@ describe("middleware path routing", () => {
       expect(isPublicPath("/robots.txt")).toBe(true);
     });
 
+    test("/offline.html is public (SW navigate-fallback precache; #3002/Phase-2)", () => {
+      // The middleware matcher does not exclude .html, so the static offline
+      // shell must be in PUBLIC_PATHS or the SW would precache a 307→/login
+      // body instead of the real page.
+      expect(isPublicPath("/offline.html")).toBe(true);
+      // Guard the exact-match boundary: a look-alike must NOT be public.
+      expect(isPublicPath("/offline.htmlx")).toBe(false);
+      expect(isPublicPath("/offline")).toBe(false);
+    });
+
     test("/api/inngest is public (HMAC-gated by Inngest SDK, not Supabase)", () => {
       // ADR-030 I4: signature verification at /api/inngest is performed by
       // `inngest/next.serve` (signingKey from INNGEST_SIGNING_KEY).

@@ -656,9 +656,14 @@ fi
 # which shares this same bootstrap image) never installs the flip oneshot NOR gets a
 # start-blocking ExecStartPre guard on its inngest-server (cross-consumer safety —
 # hr-type-widening-cross-consumer-grep: the web host's INNGEST_POSTGRES_URI is prod with
-# no INNGEST_CUTOVER_FLIP, which the guard would read as "block"). Assets are staged to
-# /tmp by the OCI entrypoint (fresh-host cloud-init). This runs BEFORE the inngest-server
-# unit write + restart below so the ExecStartPre guard script exists on disk first.
+# no INNGEST_CUTOVER_FLIP, which the guard would read as "block"). The flip assets are staged
+# to /tmp by cloud-init's docker-cp extraction block (cloud-init-inngest.yml, alongside the
+# redis/vector assets) — NOT by the OCI image ENTRYPOINT: the dedicated host does `docker
+# create` + `docker cp` then runs THIS script on the host, so the image entrypoint never fires
+# for this path. (Mis-attributing the staging to the entrypoint is what masked #6178 — the
+# entrypoint's cp existed, the cloud-init cp did not, so the assets never reached /tmp and this
+# gate silently fell through to DEDICATED_FLIP=0.) This runs BEFORE the inngest-server unit
+# write + restart below so the ExecStartPre guard script exists on disk first.
 DEDICATED_FLIP=0
 if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
   if [[ -f /tmp/inngest-cutover-flip.sh && -f /tmp/inngest-server-flip-guard.sh \

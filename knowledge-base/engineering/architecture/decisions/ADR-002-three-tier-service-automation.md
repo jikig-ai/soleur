@@ -1,5 +1,4 @@
 ---
-adr: ADR-002
 title: Three-Tier Service Automation
 status: active
 date: 2026-03-27

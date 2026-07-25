@@ -1,5 +1,4 @@
 ---
-adr: ADR-072
 title: Adaptive CI-signal wait for the prod deploy gate
 status: accepted
 date: 2026-06-30

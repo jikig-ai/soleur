@@ -1,5 +1,4 @@
 ---
-adr: ADR-035
 title: Template registry — code-static literals + first-send-IS-authorization
 status: accepted
 date: 2026-05-21

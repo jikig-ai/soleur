@@ -27,9 +27,9 @@
 
 set -uo pipefail
 
-: "${WEBHOOK_DEPLOY_SECRET:?WEBHOOK_DEPLOY_SECRET must be set}"
-: "${CF_ACCESS_CLIENT_ID:?CF_ACCESS_CLIENT_ID must be set}"
-: "${CF_ACCESS_CLIENT_SECRET:?CF_ACCESS_CLIENT_SECRET must be set}"
+if [[ -z "${WEBHOOK_DEPLOY_SECRET:-}" ]]; then echo "TRANSIENT: WEBHOOK_DEPLOY_SECRET not set" >&2; exit 2; fi
+if [[ -z "${CF_ACCESS_CLIENT_ID:-}" ]]; then echo "TRANSIENT: CF_ACCESS_CLIENT_ID not set" >&2; exit 2; fi
+if [[ -z "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then echo "TRANSIENT: CF_ACCESS_CLIENT_SECRET not set" >&2; exit 2; fi
 
 STATUS_URL="https://deploy.soleur.ai/hooks/deploy-status"
 REQUIRED_GREENS=5

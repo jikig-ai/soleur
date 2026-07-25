@@ -1,5 +1,4 @@
 ---
-adr: 034
 title: GitHub App webhook as second multi-source ingress
 status: accepted
 date: 2026-05-19
@@ -10,9 +9,9 @@ related_plans:
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-034: GitHub App webhook as second multi-source ingress
+# ADR-036: GitHub App webhook as second multi-source ingress
 
-> Note on numbering: the plan provisionally named this ADR-031 to follow ADR-030. Between plan-time and /work, the ADR-031 / ADR-032 / ADR-033 slots were each consumed by two-or-three unrelated PRs (cc-dispatcher-extraction, sentry-as-iac, github-branch-protection-as-iac, inngest-cron-functions, runtime-jwt-signing, per-tenant-scope-grants). This ADR adopts the next free number (034). Related ADRs link to ADR-030 (the Inngest substrate this ingress feeds) and ADR-033 (`per-tenant-scope-grants`, the gate this ingress checks).
+> Note on numbering: the **filename ordinal is authoritative** (#6800). The plan provisionally named this ADR-031; between plan-time and /work the 031–033 slots were consumed by unrelated PRs, so the file was created as `ADR-036-*` while an earlier draft frontmatter/heading read `034`. That disagreeing ordinal has been reconciled to the filename. Related ADRs link to ADR-030 (the Inngest substrate this ingress feeds) and ADR-033 (`per-tenant-scope-grants`, the gate this ingress checks).
 
 ## Status
 

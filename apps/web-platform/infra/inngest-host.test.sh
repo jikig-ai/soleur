@@ -48,6 +48,35 @@ else
   fail "dedicated secrets reference the dedicated keys, not the co-located _prd keys"
 fi
 
+# 1b. (#6178) The host-boot token MUST be read/write, NOT read-only. The cutover flip FSM
+#     (inngest-cutover-flip.sh:flag_set) advances INNGEST_CUTOVER_FLIP on soleur-inngest/prd
+#     via `doppler secrets set` under this token; a read-only token fails that write at the
+#     FIRST transition (flag_set flipping), so the dedicated scheduler can never complete the
+#     flip. Extract the access value from the token resource block specifically (not a bare
+#     file-wide grep that a comment could satisfy), so a silent revert to "read" red-lines CI.
+#     The awk SKIPS in-block comment lines and requires `access` at STATEMENT position
+#     (^[[:space:]]*access) — a bare `access[[:space:]]*=` match plus no comment-skip is
+#     defeated by an in-block decoy comment (`# access = "read/write"`) sitting above the real
+#     read-only attribute (awk matches the comment first, prints read/write, exits green).
+TOKEN_ACCESS="$(awk '
+  /resource "doppler_service_token" "inngest"/ { inblk=1; next }
+  inblk && /^[[:space:]]*#/ { next }
+  inblk && /^[[:space:]]*access[[:space:]]*=/ { gsub(/[",]/,""); print $NF; exit }
+  inblk && /^}/ { exit }
+' "$HOST_TF")"
+[[ "$TOKEN_ACCESS" == "read/write" ]] \
+  && pass || fail "doppler_service_token.inngest access must be 'read/write' so the flip FSM can write INNGEST_CUTOVER_FLIP (got '${TOKEN_ACCESS:-<none>}'); a read-only token boot-fails the flip at its first transition (#6178)"
+# Cross-check: the flip script's flag_set genuinely writes under the ambient (boot-token) env —
+# if flag_set ever grows an explicit --token, this test's premise (boot token authorizes the
+# write) must be re-derived rather than trusted. Scope to the WHOLE flag_set function body
+# (awk between `flag_set() {` and the closing `}`), not a single line — the real write spans
+# two physical lines (`doppler secrets set … \` then `  --project … --silent`), so a --token
+# added on the continuation line would evade a line-scoped grep.
+FLAG_SET_BODY="$(awk '/^flag_set\(\)[[:space:]]*\{/{i=1} i{print} i&&/^\}/{exit}' "${DIR}/inngest-cutover-flip.sh")"
+printf '%s\n' "$FLAG_SET_BODY" | grep -qE 'doppler secrets set INNGEST_CUTOVER_FLIP' \
+  && ! printf '%s\n' "$FLAG_SET_BODY" | grep -qE -- '--token' \
+  && pass || fail "flip flag_set must write INNGEST_CUTOVER_FLIP under the ambient boot token (no explicit --token anywhere in the function body) — else the read/write requirement above is testing the wrong credential"
+
 # 2. Separate Doppler PROJECT (AC3), not a prd branch config.
 grep -qE 'resource "doppler_project" "inngest"' "$HOST_TF" \
   && grep -qE 'name[[:space:]]*=[[:space:]]*"soleur-inngest"' "$HOST_TF" \
@@ -177,6 +206,62 @@ else
   pass
 fi
 
+# 9b. (#6178) BEHAVIORAL replay of the boot isolation self-check.
+#     A source-text `grep -qF '<fragment>'` is NOT sufficient here: it certifies that a
+#     substring exists SOMEWHERE in a ~500-line YAML, so it stays green while the live regex
+#     is mutated into a no-op (grep -Ec -> grep -c), widened to admit everything
+#     (^( -> ^(.*|), or reverted outright with the fragment surviving in a COMMENT. Measured:
+#     5 of 8 such mutations passed the old fragment guard, including bug #6178 itself.
+#     Instead, extract the guard's OWN bytes and replay its predicate over synthesized name
+#     sets, so the assertions are about the decision the host actually makes.
+#     Mirrors registry-boot-guard.test.sh's extract-and-replay idiom (the sibling host).
+GUARD_RE="$(grep -E "n_inngest=.*grep -Ec" "$CLOUD_INIT" | grep -oE "grep -Ec '[^']*'" | sed "s/grep -Ec '//; s/'$//")"
+FLOOR="$(grep -oE '\[ "\$n_inngest" -lt [0-9]+ \]' "$CLOUD_INIT" | grep -oE '[0-9]+' | head -1)"
+# Non-vacuity: a failed extraction must NOT silently pass every case below. An empty GUARD_RE
+# makes `grep -Ec ""` match every line, which would fake a clean replay.
+[[ -n "$GUARD_RE" ]] && pass || fail "could not extract the admit-regex from $CLOUD_INIT (the replay below would be vacuous)"
+[[ "$FLOOR" == "5" ]] && pass || fail "could not extract the cardinality floor, or it is not 5 (got '${FLOOR:-<empty>}') — see the DEC-FLOOR note in cloud-init-inngest.yml before changing it"
+
+# Replays the file's exact predicate: strip DOPPLER_ builtins, then FATAL unless the visible
+# non-DOPPLER set is a SUBSET of the allowlist (n_total == n_inngest) AND meets the floor.
+isolation_decision() {
+  local names n_total n_ing
+  names="$(printf '%s\n' "$@" | grep -v '^DOPPLER_' || true)"
+  n_total="$(printf '%s\n' "$names" | grep -c . || true)"
+  n_ing="$(printf '%s\n' "$names" | grep -Ec "$GUARD_RE" || true)"
+  if [ "$n_total" -ne "$n_ing" ] || [ "$n_ing" -lt "$FLOOR" ]; then echo FATAL; return 1; fi
+  echo PASS; return 0
+}
+
+DARK5=(INNGEST_SIGNING_KEY INNGEST_EVENT_KEY INNGEST_REDIS_PASSWORD INNGEST_POSTGRES_URI BETTERSTACK_LOGS_TOKEN)
+LIVE7=("${DARK5[@]}" INNGEST_CUTOVER_FLIP INNGEST_HEARTBEAT_URL)
+
+# Dark boot (pre-arm) must PASS — the host has to bootstrap before any cutover.
+[[ "$(isolation_decision "${DARK5[@]}")" == PASS ]] && pass || fail "dark 5-secret boot must PASS the isolation self-check"
+# THE #6178 REGRESSION, behaviorally: op=arm adds CUTOVER_FLIP + HEARTBEAT_URL. Before the fix
+# this FATALed (n_total=7 vs n_inngest=6), bricking every provision while the flip was armed.
+[[ "$(isolation_decision "${LIVE7[@]}")" == PASS ]] && pass || fail "armed 7-secret set must PASS — op=arm writes INNGEST_CUTOVER_FLIP; rejecting it boot-bricks the dedicated host (#6178)"
+# The QUEUED repeat: inngest-config-digest.tf declares an 8th name into the same project.
+[[ "$(isolation_decision "${LIVE7[@]}" INNGEST_CONFIG_DIGEST)" == PASS ]] && pass || fail "8-secret set incl. INNGEST_CONFIG_DIGEST must PASS — inngest-config-digest.tf applies it at this cutover and requires the admitting regex to land atomically"
+# Isolation still holds: an over-scoped token leaking ONE foreign name must fail closed.
+[[ "$(isolation_decision "${LIVE7[@]}" SUPABASE_SERVICE_ROLE_KEY)" == FATAL ]] && pass || fail "a foreign secret must FATAL — this is the over-scoped-credential defense the self-check exists for"
+# Floor still bites (catches the degenerate empty-read case where n_total==n_inngest==0).
+[[ "$(isolation_decision INNGEST_SIGNING_KEY INNGEST_EVENT_KEY INNGEST_REDIS_PASSWORD INNGEST_POSTGRES_URI)" == FATAL ]] && pass || fail "a 4-name set must FATAL on the floor"
+# NESTING, behaviorally: CUTOVER_FLIP must be admitted only as INNGEST_CUTOVER_FLIP.
+[[ "$(isolation_decision INNGEST_SIGNING_KEY INNGEST_EVENT_KEY INNGEST_REDIS_PASSWORD INNGEST_POSTGRES_URI CUTOVER_FLIP)" == FATAL ]] && pass || fail "a BARE CUTOVER_FLIP (no INNGEST_ prefix) must FATAL — the member must be nested inside the INNGEST_ group"
+# TOP-LEVEL anchor (#6197), behaviorally: BETTERSTACK_LOGS_TOKEN is a sibling of the group,
+# so the INNGEST_-prefixed spelling must NOT be admitted.
+[[ "$(isolation_decision INNGEST_SIGNING_KEY INNGEST_EVENT_KEY INNGEST_REDIS_PASSWORD INNGEST_POSTGRES_URI INNGEST_BETTERSTACK_LOGS_TOKEN)" == FATAL ]] && pass || fail "INNGEST_BETTERSTACK_LOGS_TOKEN must FATAL — BETTERSTACK_LOGS_TOKEN is a TOP-LEVEL member, not nested (#6197)"
+# DOPPLER_* builtins are stripped before counting.
+[[ "$(isolation_decision "${DARK5[@]}" DOPPLER_PROJECT DOPPLER_CONFIG)" == PASS ]] && pass || fail "DOPPLER_* builtins must be stripped before counting"
+
+# 9c. Pin the COMPARISON OPERATOR. The replay above re-derives the predicate, so it cannot see
+#     an inversion in the file itself: flipping -ne to -eq makes an isolated host FATAL and a
+#     LEAKY one boot clean, with every behavioral case above still green.
+# shellcheck disable=SC2016  # literal $n_total/$n_inngest is intentional — matching the file's text
+grep -qF '[ "$n_total" -ne "$n_inngest" ]' "$CLOUD_INIT" \
+  && pass || fail "the isolation self-check must compare with -ne (an -eq inversion admits an over-scoped credential and rejects an isolated one)"
+
 # 10. (#6536, AC6) The dark-host heartbeat prose must NOT re-assert the false "curl no-ops"
 #     claim. `curl -fsS --max-time 10 ""` exits 2 ("blank argument where content is
 #     expected" — measured), it does NOT no-op. That false comment is what authorized the
@@ -232,6 +317,41 @@ grep -qE 'NO SIGNATURE VERIFICATION ON THIS PATH' "$CLOUD_INIT" \
 # cloud-init-inngest-bootstrap.test.sh armed, and docker resolves by the digest regardless.
 grep -qE '^[[:space:]]*IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$' "$CLOUD_INIT" \
   && pass || fail "IREF must be digest-pinned (repo:vX.Y.Z@sha256:<64-hex>) — CF-2: a mutable tag gates a root-executed payload on nothing but GHCR TLS"
+
+# --- (#6178) Flip-asset staging PARITY: cloud-init must docker-cp every flip asset that
+#     inngest-bootstrap.sh installs from /tmp. The bug this guards: the OCI image baked the
+#     flip trio in (Dockerfile COPY) and bootstrap gated its install on `-f /tmp/inngest-
+#     cutover-flip.*`, but cloud-init NEVER docker-cp'd image:/ -> /tmp, so DEDICATED_FLIP
+#     stayed 0 and the inngest-cutover-flip.timer never installed on any dedicated host — the
+#     flip FSM could not run. Derive the required set from the CONSUMER (bootstrap's install
+#     lines), so adding a new flip asset to bootstrap without staging it in cloud-init red-lines.
+#     The four hard-required files are those in bootstrap's install-gate condition (:664).
+# DERIVE the required set from bootstrap's OWN install-gate condition (the `-f /tmp/...` tests
+# whose failure keeps DEDICATED_FLIP=0), NOT a hardcoded list — so a NEW required asset added
+# to bootstrap's gate without a matching cloud-init cp red-lines (the new-asset-drift case a
+# static allowlist misses). The gate block runs from `DEDICATED_FLIP=0` to its `then`.
+# Anchor on the INNER flip-gate `if [[ -f /tmp/inngest-cutover-flip.sh ...` (NOT the outer
+# DOPPLER_PROJECT `if`, whose `then` would end the capture before the -f tests).
+GATE_BLOCK="$(awk '/if \[\[ -f \/tmp\/inngest-cutover-flip\.sh/{i=1} i{print} i&&/then$/{exit}' "$BOOTSTRAP")"
+mapfile -t FLIP_REQUIRED < <(printf '%s\n' "$GATE_BLOCK" | grep -oE '/tmp/inngest-[a-z-]+\.[a-z]+' | sed 's#^/tmp/##' | sort -u)
+[[ "${#FLIP_REQUIRED[@]}" -ge 4 ]] \
+  && pass || fail "could not derive the flip install-gate asset set from inngest-bootstrap.sh (got ${#FLIP_REQUIRED[@]}; expected >=4) — the parity check below would be vacuous"
+for asset in "${FLIP_REQUIRED[@]}"; do
+  # cloud-init must docker-cp it from the PINNED extract container to that exact /tmp path.
+  # The container name (soleur-inngest-bootstrap-extract) is pinned deliberately: a typo in the
+  # SOURCE container (`docker cp WRONGNAME:/asset ...`) fails at runtime, is swallowed by
+  # `2>/dev/null || true`, and silently skips staging — the exact silent-skip class this fix
+  # exists to prevent. A `[^ ]*:/asset` match would pass on the typo'd container.
+  if grep -qE "docker cp soleur-inngest-bootstrap-extract:/${asset//./\\.} /tmp/${asset//./\\.}" "$CLOUD_INIT"; then
+    pass
+  else
+    fail "cloud-init-inngest.yml must 'docker cp soleur-inngest-bootstrap-extract:/${asset} /tmp/${asset}' — bootstrap's install-gate requires it at /tmp; without the cp DEDICATED_FLIP=0 and the flip timer never installs (#6178)"
+  fi
+done
+# The staging outcome must self-report off-box (the silent absence hid the bug for a full
+# cutover attempt): assert a flip-assets phone-home marker exists.
+grep -qE 'inngest-boot-phone-home\.sh flip-assets-(staged|MISSING)' "$CLOUD_INIT" \
+  && pass || fail "cloud-init-inngest.yml must phone-home the flip-assets staging outcome (flip-assets-staged / flip-assets-MISSING) so a future staging failure self-diagnoses off-box (#6178)"
 
 echo ""
 echo "=== inngest-host.test.sh: ${passes} passed, ${fails} failed ==="

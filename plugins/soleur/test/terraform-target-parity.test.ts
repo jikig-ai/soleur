@@ -468,15 +468,24 @@ function stripDispatchJobs(workflowText: string): string {
   // (nbg1→hel1) — a dispatch-only scoped job whose 6 -targets are the SAME registry
   // OPERATOR_APPLIED_EXCLUSIONS. Strip it for the identical reason: a dispatch writer surface must
   // never broaden the per-merge coverage anchor.
+  // workspaces_luks_recut (#6855, #6812): a dispatch-only scoped -replace job whose 2 -targets
+  // (hcloud_volume.workspaces_luks + its attachment) are BOTH already OPERATOR_APPLIED_EXCLUSIONS,
+  // so stripping is coverage-neutral today — but strip it per the current best practice for a new
+  // dispatch job (uniform parity boundary; a FUTURE recut -target that is NOT an exclusion cannot
+  // silently mask a per-merge miss). Its sibling workspaces_luks_cutover is left folded-in
+  // historically; new dispatch jobs are stripped explicitly.
   return stripJob(
     stripJob(
       stripJob(
-        stripJob(workflowText, "inngest_host"),
-        "registry_host_replace",
+        stripJob(
+          stripJob(workflowText, "inngest_host"),
+          "registry_host_replace",
+        ),
+        "registry_region_migrate",
       ),
-      "registry_region_migrate",
+      "git_data_host_replace",
     ),
-    "git_data_host_replace",
+    "workspaces_luks_recut",
   );
 }
 
@@ -657,6 +666,15 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "doppler_secret.zot_pull_token",
   "doppler_secret.zot_push_user",
   "doppler_secret.zot_push_token",
+  // #6895 (ADR-096 amendment / ADR-119 / ADR-140) — the guest-side LUKS-at-rest apparatus for the
+  // registry (zot) store volume: the at-rest passphrase (random_password) + its masked secret in the
+  // ISOLATED soleur-registry/prd project. Same class as random_password.git_data_luks +
+  // doppler_secret.git_data_luks_key above: they ride the operator's gated registry recut apply (a
+  // scoped -replace of the volume+attachment+host together), NOT the #5566 per-PR-CI class. The
+  // isolated project's existing doppler_service_token.registry (above) already reads the key at boot;
+  // no new CI-published token type this test forces.
+  "random_password.registry_luks",
+  "doppler_secret.registry_luks_key",
   "betteruptime_heartbeat.registry_prd",
   "betteruptime_heartbeat.registry_disk_prd",
   // doppler_secret.zot_heartbeat_url_prd removed (#6438 B3): it was a reserved-but-inert secret for
@@ -705,6 +723,15 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // the additive inngest_host dispatch job (stripDispatchJobs excludes that job from the
   // coverage set, so this exclusions entry — not the -target line — is the load-bearing coverage).
   "doppler_secret.inngest_betterstack_logs_token",
+  // #6780 (ADR-134) — the promoted config-refresh digest pointer, minted into the ISOLATED
+  // soleur-inngest/prd project (inngest-config-digest.tf). DELIBERATELY has NO per-PR CI -target:
+  // the boot isolation self-check on soleur-inngest/prd is EXACT-SET, so this secret can be applied
+  // ONLY atomically with the cloud-init regex+floor admission that rides the #6178 cutover — a
+  // per-PR apply would brick the sole scheduler at its next boot. Rides the operator/cutover apply,
+  // exactly like the sibling isolated-inngest secrets above; `doppler_secret`, not a CI-published
+  // token type. (`github_repository_environment.inngest_config_signing`, by contrast, IS host-
+  // independent and carries a normal -target — see apply-web-platform-infra.yml.)
+  "doppler_secret.inngest_config_digest",
   "doppler_service_token.inngest",
   // #6545 — Grok Build dogfood host (headless Grok 4.5 trial). Gated by
   // `enable_grok_dogfood` (default false). Per-PR CI cannot birth this host

@@ -15,7 +15,7 @@ export default async function RoutinesPage() {
   if (!user) redirect("/login");
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-8">
+    <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <header className="mb-6">
         <h1 className="text-2xl font-medium text-soleur-text-primary">
           Routines

@@ -26,7 +26,7 @@ ERROR: failed to authorize: failed to fetch anonymous token: … 401 Unauthorize
 ##[error]tag->digest resolution returned '' … Aborting BEFORE -replace.
 ```
 GHCR is a **private** package. The plan's "live-confirmed no-auth" was almost certainly
-run on a machine whose Docker had cached `ghcr.io` credentials (`~/.docker/config.json`
+run on a machine whose Docker had cached `ghcr.io` credentials (`~/.docker/`
 from a prior `docker login`), so the local `imagetools inspect` succeeded *authenticated*
 while appearing anonymous. In CI (ephemeral runner, no login), the same command is
 genuinely anonymous → 401.

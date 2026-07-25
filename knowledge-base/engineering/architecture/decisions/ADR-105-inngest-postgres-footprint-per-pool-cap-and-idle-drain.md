@@ -1,5 +1,4 @@
 ---
-adr: 105
 title: Inngest self-hosted Postgres footprint — low per-pool cap + idle drain; keep default_pool_size at 30
 status: adopting
 date: 2026-07-09

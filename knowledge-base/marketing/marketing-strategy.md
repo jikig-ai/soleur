@@ -216,7 +216,7 @@ Full details in `knowledge-base/marketing/content-strategy.md` (updated 2026-03-
 
 1. **Listicle presence** (Critical) -- Soleur appears on zero third-party listicles. Single largest discoverability gap. [NEW 2026-03-20]
 2. **Cross-domain compounding narrative** (Critical) -- Partially addressed in "Why Tools Plateau" blog post. Dedicated pillar still needed.
-3. **Autopilot vs. Decision-Maker** (Critical) -- Polsia at $1.5M ARR. Comparison page and position paper needed.
+3. **Autopilot vs. Decision-Maker** (Critical) -- Polsia raised $30M at a $250M valuation (Sound Ventures, May 2026). Comparison page and position paper needed. [Updated 2026-07-20: re-grounded on the funding round; the prior $1.5M ARR figure was vendor-reported and is contradicted across sources.]
 4. **About/Founder page** (High) -- No About page. E-E-A-T gap. [NEW 2026-03-20]
 5. **External citations on catalog pages** (High) -- 12/15 pages have zero citations. [NEW 2026-03-20]
 

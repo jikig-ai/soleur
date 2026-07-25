@@ -1,5 +1,4 @@
 ---
-adr: ADR-018
 title: Passive Domain Routing
 status: active
 date: 2026-03-27

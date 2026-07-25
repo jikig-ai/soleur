@@ -26,7 +26,7 @@
 
 set -uo pipefail
 
-: "${GH_TOKEN:?GH_TOKEN must be set}"
+if [[ -z "${GH_TOKEN:-}" ]]; then echo "TRANSIENT: GH_TOKEN not set" >&2; exit 2; fi
 
 latest_completed_conclusion() {
   # Most-recent COMPLETED run's conclusion for a workflow on main (empty if none

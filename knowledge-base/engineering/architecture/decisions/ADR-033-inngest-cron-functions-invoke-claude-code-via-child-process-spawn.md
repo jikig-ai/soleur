@@ -1,5 +1,4 @@
 ---
-adr: ADR-033
 title: Inngest cron functions invoke claude-code via child_process.spawn
 status: active
 date: 2026-05-18

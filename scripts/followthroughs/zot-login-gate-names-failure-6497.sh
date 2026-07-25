@@ -41,9 +41,9 @@
 
 set -uo pipefail
 
-: "${BETTERSTACK_QUERY_HOST:?BETTERSTACK_QUERY_HOST must be set}"
-: "${BETTERSTACK_QUERY_USERNAME:?BETTERSTACK_QUERY_USERNAME must be set}"
-: "${BETTERSTACK_QUERY_PASSWORD:?BETTERSTACK_QUERY_PASSWORD must be set}"
+if [[ -z "${BETTERSTACK_QUERY_HOST:-}" ]]; then echo "TRANSIENT: BETTERSTACK_QUERY_HOST not set" >&2; exit 2; fi
+if [[ -z "${BETTERSTACK_QUERY_USERNAME:-}" ]]; then echo "TRANSIENT: BETTERSTACK_QUERY_USERNAME not set" >&2; exit 2; fi
+if [[ -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then echo "TRANSIENT: BETTERSTACK_QUERY_PASSWORD not set" >&2; exit 2; fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || printf '.')"
 QUERY="${REPO_ROOT}/scripts/betterstack-query.sh"

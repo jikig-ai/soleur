@@ -6,7 +6,6 @@ Use this template when creating Architecture Decision Records. Read `## Choosing
 
 ```yaml
 ---
-adr: ADR-NNN
 title: [Decision Title]
 status: active | superseded
 date: YYYY-MM-DD
@@ -14,6 +13,11 @@ superseded-by: ADR-NNN  # only when status is superseded
 supersedes: ADR-NNN     # only when this ADR replaces another
 ---
 ```
+
+> The ordinal lives in the **filename only** (`ADR-NNN-slug.md`) — do NOT add an
+> `adr:` frontmatter key. A frontmatter ordinal can disagree with the filename
+> and make `ADR-NNN` references ambiguous; `scripts/check-adr-ordinals.sh` layer 4
+> rejects any `adr:` key (#6800).
 
 ## Choosing the shape
 

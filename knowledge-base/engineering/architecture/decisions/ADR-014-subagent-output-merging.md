@@ -1,5 +1,4 @@
 ---
-adr: ADR-014
 title: Subagent Output Merging
 status: active
 date: 2026-03-27

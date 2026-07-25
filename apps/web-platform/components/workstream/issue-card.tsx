@@ -30,7 +30,7 @@ export function IssueCard({
       <p className="mt-1 line-clamp-2 text-sm text-soleur-text-primary">
         {issue.title}
       </p>
-      <div className="mt-3 flex items-center justify-between gap-2">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           {live && (
             <span className="inline-flex items-center gap-1 text-[11px] font-medium text-green-400">

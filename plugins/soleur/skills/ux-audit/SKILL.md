@@ -102,7 +102,7 @@ For each finding, compute the hash via [dedup-hash.ts](./scripts/dedup-hash.ts):
 Check against existing issues (open OR closed) in a single search:
 
 ```bash
-EXISTS=$(gh issue list --label ux-audit --state all --search "ux-audit-hash: $HASH" --json number --jq 'length')
+EXISTS=$(gh issue list --label ux-audit --state all -L 200 --search "ux-audit-hash: $HASH" --json number --jq 'length')
 if [ "$EXISTS" -gt 0 ]; then
   echo "dedup-suppressed: $HASH"
   continue
