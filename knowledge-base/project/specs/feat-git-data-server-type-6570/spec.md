@@ -65,33 +65,29 @@ has no arch-derivation local.
 
 Recorded so no reviewer reads a merged repin as "git-data is available". Each verified open.
 
-0. **DECISION GATE — born-on-LUKS vs plaintext-first (brainstorm Q1). Resolve BEFORE step 1.**
-   Encryption-at-rest is built as a *cutover*: `hcloud_volume.git_data` (plaintext ext4, the
-   source, flagged **#6897**) → `hcloud_volume.git_data_luks` (the target), via
-   `git-data-cutover.sh` under a write-freeze. That shape assumes a Phase-2 host already holding
-   live plaintext data. **No such data exists** — the host has never been born and
-   `GIT_DATA_STORE_ENABLED` is absent from Doppler `prd`, so `replicateToGitData` has never run
-   and neither volume has held a byte of user data.
-   **Brainstorm leans born-on-LUKS**, because it means no plaintext window ever exists for user
-   git history, it needs no `REPO_ROOT` or fence-wiring change (`git-data-cutover.sh:67` —
-   `OLD_ROOT="${OLD_ROOT:-/mnt/git-data}"  # plaintext source AND final LUKS mount` — so the path
-   is device-agnostic), and it makes item 3 non-blocking for the initial birth. Cost: it is an
-   **ADR-068 amendment**, gives up the plaintext volume as rollback backstop, and does not retire
-   the cutover machinery long-term (passphrase rotation is still a full volume cutover).
-   This gate is **out of scope for this PR** (NG1 — this PR does not birth the host), but it must
-   be answered before the birth dispatch, because it determines what cloud-init mounts at
-   `/mnt/git-data`.
-1. **Birth the host** — gated `workflow_dispatch`. `git-data-host-replace` plans a plain CREATE
-   against a host absent from state; **verify that path rather than assume it**, since the stock
-   preflight would have aborted on `cax11` and this shape has never actually run.
+0. **SETTLED (2026-07-27) — keep the plaintext→LUKS cutover topology; do NOT birth onto LUKS
+   directly.** Brainstorm **D10**. Born-on-LUKS was considered and rejected: the encryption
+   outcome it argued for is *already guaranteed*, because every git-data write path is gated on
+   `isGitDataStoreEnabled()` and `git-data-cutover.sh` `preconditions()` refuses to run unless the
+   flag is OFF, setting it to `true` only as its final step after `repoint_luks_mount`. So user
+   data can never reach the plaintext volume. Rejected on cost: ~12 files including the
+   both-volumes-preserved destroy-guard (`git-data-host-replace-gate.sh`) and an ADR-068
+   amendment. **The birth must therefore keep the flag OFF** — that is what makes the sequence
+   safe, and it is a hard precondition of step 1, not an optimization.
+1. **Birth the host** — gated `workflow_dispatch`, **with `GIT_DATA_STORE_ENABLED` OFF/absent**
+   (per item 0). `git-data-host-replace` plans a plain CREATE against a host absent from state;
+   **verify that path rather than assume it**, since the stock preflight would have aborted on
+   `cax11` and this shape has never actually run.
 2. **#6975** — heartbeat masking; precondition of the birth.
 3. **#6680** — `git-data-cutover.yml` has no tunnel ingress for `10.0.1.20`; the CF Tunnel SSH
-   bridge reaches only web-1 and the whole cutover runs over it. **Host born is not
-   cutover-runnable.** An unsolved design question, not a mechanical fix. **Conditional on item
-   0:** if born-on-LUKS is chosen there is no initial cutover to run, so this stops blocking the
-   *first* birth (it still gates any later plaintext→LUKS or rotation cutover).
-4. **Cutover + flip** via `git-data-cutover.sh` (write-freeze + drain). Under born-on-LUKS the
-   initial cutover collapses to the flag flip alone.
+   bridge reaches only web-1 and the whole cutover runs over it (`preconditions()` does
+   `gd_ssh "$GIT_DATA_HOST" 'true'`). **Host born is not cutover-runnable.** An unsolved design
+   question, not a mechanical fix — and per item 0 it is now unconditionally on the critical
+   path, since the cutover is the sanctioned mechanism that flips the flag.
+4. **Cutover + flip** via `git-data-cutover.sh`. On a never-enabled store this runs against an
+   **empty** source: the rsync copies nothing and the set-identity verify passes trivially, so
+   the write-freeze is a formality rather than a data-risk window. Its real work is
+   `repoint_luks_mount` + the coordinated two-host flag flip.
 
 Even all of the above does not give web-2 traffic: `lb-weight-gate.sh` Condition B additionally
 needs a `GIT_DATA_LUKS` soak marker, and condition (3) needs web-2 `/workspaces` LUKS-backed

@@ -115,6 +115,51 @@ not re-derived.
 | D7 | Update expense ledger row 19 `CAX11 (git-data)` → `CPX22`, $4.10 → ~$21.05 | `wg-record-recurring-vendor-expense-before-ready`. Status stays `approved-not-billing` — the host is still unborn; billing begins at the gated dispatch. |
 | D8 | Record as an **ADR-143 addendum**, not a new ADR | ADR-143:149 already scoped this as its own follow-on and anticipated the shape change; #6966 set the precedent of recording a forced-by-stock repin as an addendum. |
 | D9 | **Do not** birth the host in this PR | The birth is a gated `workflow_dispatch` with a live stock re-probe. Stock moves on an hours timescale — orderability at merge time is not orderability at apply time. |
+| D10 | **Keep the plaintext→LUKS cutover topology. Do NOT birth git-data directly onto LUKS.** Operator decision 2026-07-27. | See below — the encryption outcome is already guaranteed by the existing design, so born-on-LUKS buys almost nothing for a large, guard-weakening diff. |
+
+### D10 — why born-on-LUKS was considered and rejected
+
+The proposal was to mount the LUKS volume at `/mnt/git-data` from cloud-init and drop the
+plaintext volume, on the argument that it would avoid ever writing user data in plaintext.
+
+**That argument does not hold: the current design already guarantees it.** Two facts, verified
+together for the first time in this session:
+
+1. **Every git-data WRITE path is flag-gated** on `isGitDataStoreEnabled()` —
+   `replicateToGitData` (`git-data-replication.ts:232`), `ensureGitDataRemote` (`:166`), the
+   `:116` path, and `fetchFromGitData` (`git-data-client.ts:197`). The single un-gated path,
+   `removeGitDataRepo` (`:139`), is Art. 17 **erasure**, deliberately un-gated so a rollback
+   cannot strand PII. It deletes; it never writes.
+2. **`git-data-cutover.sh` refuses to run if the flag is already on** — `preconditions()`:
+   `[ "$cur" != "true" ] || die "$FLAG_NAME is already 'true' — cutover appears already done;
+   refusing to re-run"`. STEP 6 is what sets it to `true`, as the **final** step, after
+   `repoint_luks_mount` has already moved the LUKS mapper to `/mnt/git-data`.
+
+So the only reachable sequence is: **birth (flag OFF → nothing written) → cutover (rsync copies
+nothing; set-identity verify trivially passes on two empty stores; LUKS repointed to
+`/mnt/git-data`) → flag ON → every write lands on LUKS.** User git data can never reach the
+plaintext volume. ADR-068 §(b)'s "bulk rsync with writers live" describes a state this
+deployment cannot enter.
+
+**What born-on-LUKS would still have bought, and why it was not enough:**
+
+- *#6680 independence for the initial enablement* — real (the cutover needs `gd_ssh` to
+  `10.0.1.20`, which the tunnel cannot reach), but it would require **building** a replacement
+  lockstep flip (drain + two-host reload + auto-rollback; Doppler propagation to two containers
+  is not atomic, ADR-068 §(b)) to replace a tested path with an EXIT trap. #6680 must be fixed
+  regardless, since rotation remains a full volume cutover.
+- *Removing a vestigial volume* — ~€0.48/mo.
+
+**Cost that decided it:** ~12 files, including `tests/scripts/lib/git-data-host-replace-gate.sh`
+— the destroy-guard whose entire purpose is asserting **both** volumes survive a `-replace` —
+plus four sites in `plugins/soleur/test/terraform-target-parity.test.ts`, the `-target` list in
+`apply-web-platform-infra.yml:2348`, and an ADR-068 amendment. Weakening a destroy-guard to save
+€0.48/mo, inside a PR about a server type, is a bad trade.
+
+**Carried forward:** the plaintext volume *is* vestigial — it will never hold user data, so its
+DL-2 wipe is a no-op, its `>= git_data_volume_size` ENOSPC sizing rationale is moot, and the
+encryption-posture audit row overstates the exposure. Filed as **#6976** (against #6897),
+decoupled from this repin and explicitly gated on the host being born first.
 
 ## User-Brand Impact
 
@@ -154,43 +199,11 @@ Better Stack) and **#5914** (host-key TOFU on private-net git SSH).
 
 ## Open Questions
 
-1. **Should git-data be born with LUKS enabled from the start, skipping the plaintext-first
-   cutover entirely?** *(Leaning yes — see below.)*
+1. **~~Should git-data be born with LUKS enabled from the start?~~ SETTLED 2026-07-27 — NO.
+   Keep the current topology. See D10.**
 
-   Encryption-at-rest is fully built (`git-data-luks.tf`, guest-side LUKS2, ~238-bit passphrase
-   from a least-privilege `prd_git_data` Doppler config, rated **conforming** in the
-   encryption-posture audit). But it is built as a **cutover**: `hcloud_volume.git_data` is
-   plaintext ext4 and is the source; `hcloud_volume.git_data_luks` is the target;
-   `git-data-cutover.sh` rsyncs old→fresh under a write-freeze. The plaintext volume is flagged
-   under **#6897** pending its DL-2 wipe.
-
-   That design is correct for the scenario it was written for — a Phase-2 host already holding
-   live plaintext data. **That scenario never happened.** The host has never been born and
-   `GIT_DATA_STORE_ENABLED` is absent from Doppler `prd`, so `replicateToGitData` has never run
-   and *neither* volume has ever held a byte of user data. There is nothing to migrate.
-
-   **Why born-on-LUKS looks better:**
-   - **No plaintext window ever exists** for user git history — a cleaner GDPR Art. 32 / NFR-027
-     posture than migrating *into* encryption, and it moots the #6897 plaintext-volume item for
-     this host rather than deferring a wipe.
-   - **It is not a `REPO_ROOT` change.** `git-data-cutover.sh:67` reads
-     `OLD_ROOT="${OLD_ROOT:-/mnt/git-data}"  # plaintext source AND final LUKS mount` — the LUKS
-     volume ends up mounted *at* `/mnt/git-data` post-cutover anyway, so the path is
-     device-agnostic. Born-on-LUKS is "mount the LUKS volume at `/mnt/git-data` from cloud-init
-     and skip the plaintext volume", leaving `git-data-provision.sh:34` and the
-     `core.hooksPath` fence wiring untouched.
-   - **It sidesteps #6680.** The cutover runs over the CF Tunnel SSH bridge, which reaches only
-     web-1 and not `10.0.1.20` — the blocker in downstream-chain step 4. A birth that needs no
-     cutover does not need that ingress to exist first.
-
-   **Cost, stated honestly:** `git-data-cutover.sh` + its two-pass freeze-rsync and set-identity
-   verification are already built and tested, and ADR-068's phase structure assumes the
-   plaintext-first sequence. Choosing born-on-LUKS is an **ADR-068 amendment**, not a config
-   tweak, and it gives up the plaintext volume as a rollback backstop. It also does not remove
-   the need for the cutover machinery long-term (rotation is still a full volume cutover per
-   `git-data-luks.tf`).
-
-   Belongs to the **birth** (downstream-chain step 2), not this repin. Decide before dispatching.
+   Resolved during the brainstorm session. Retained here (rather than deleted) because the
+   *reason* is non-obvious and would otherwise be re-litigated at the birth.
 
 2. **Does the read-source flip need a one-time backfill for idle workspaces?** Population of
    git-data is **lazy and turn-driven**, not a bulk migration: `replicateToGitData` force-pushes
