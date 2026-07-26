@@ -147,7 +147,7 @@ check "the gate is generic over var.web_hosts keys => PASS for web-3" 0 "PASS" "
 # (3) is invisible to ANY plan-shaped gate: it is a property of cloud-init, not of
 # resource_changes. A gate that admitted web-1 would be certifying a safety it cannot
 # observe. Refusing is the only honest control until ADR-119 §Sequencing's volume-ID mount
-# pin lands. See knowledge-base/.../ADR-146 §Alternatives.
+# pin lands. See knowledge-base/.../ADR-148 §Alternatives.
 mk_plan "$TMP/happy-web1.json" "$(happy_changes web-1)"
 check "the LUKS-pinned host web-1 => ABORT (refused by name)" 1 "web-1" "$TMP/happy-web1.json" "web-1"
 check "the web-1 refusal names the ambiguous-mount prerequisite" 1 "AMBIGUOUS" "$TMP/happy-web1.json" "web-1"

@@ -489,7 +489,7 @@ function stripDispatchJobs(workflowText: string): string {
   // CTO must-fix that the deleted web_2_recreate strip originally existed to satisfy.
   // The other five are per-merge-covered, so the strip is coverage-neutral for them
   // (asserted below, non-vacuously).
-  // web_host_replace (#6969, ADR-146): the dispatch-only REPLACE path, sibling of the birth
+  // web_host_replace (#6969, ADR-148): the dispatch-only REPLACE path, sibling of the birth
   // above. Three of its four -targets (hcloud_server.web, hcloud_server_network.web,
   // hcloud_volume_attachment.workspaces) are the SAME MOVED_OPERATOR_CONSUMED / exclusion
   // bases the birth strip exists for, so the same blunting argument applies verbatim; the
@@ -1553,7 +1553,7 @@ describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", ()
 });
 
 // ─── web-host-replace dispatch: the replace path's -target set + gate pairing ──
-// `apply_target=web-host-replace` (#6969, ADR-146) is the sibling web-host-birth-gate.sh
+// `apply_target=web-host-replace` (#6969, ADR-148) is the sibling web-host-birth-gate.sh
 // named but nobody had built. It is NOT a widened birth: a birth is additive and its gate
 // permits zero destroys, while this one requires exactly one delete+create of the requested
 // host. Both gates gain their meaning from that distinction, so the two -target sets must

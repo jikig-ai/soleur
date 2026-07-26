@@ -59,7 +59,7 @@
 # check. Refusing is the only honest control until ADR-119 §Sequencing's volume-ID mount pin
 # lands; the refusal is keyed on the LUKS-pinned key below so that when that pin ships, the
 # reviewer of THAT change is the one who decides to relax this. Tracked as the web-1
-# follow-up in ADR-146 §Alternatives.
+# follow-up in ADR-148 §Alternatives.
 #
 # ── PASS (rc=0) iff ALL of ───────────────────────────────────────────────────────
 #

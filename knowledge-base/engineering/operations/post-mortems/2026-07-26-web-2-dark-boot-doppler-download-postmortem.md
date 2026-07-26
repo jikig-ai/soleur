@@ -131,6 +131,14 @@ showing no diff is expected rather than evidence of no effect.
 
 ## Recovery verification
 
+**Update 2026-07-26 (#6969, ADR-148):** the *mechanism* this section was waiting on now exists.
+`recovery_at` above said the host "must be destroyed and reborn (#6969 open decision)"; there was
+no route to do either — `web-host-create` is additive-only and its gate correctly refuses a host
+already in state. `apply_target=web-host-replace` is that route
+([runbook](../runbooks/web-host-replace.md)). It has **not yet been dispatched**, so this
+post-mortem's `status:` stays `unresolved but ended` and web-2 is still dark. The dispatch and
+its outcome are recorded below when it runs; only outcome (a) moves the status.
+
 Deferred by construction, and the deferral is the point. Recovery is verified at the **next fresh
 host birth on a post-#6969 image**: the birth-path gate must either reach `cloud_init_complete`, or
 fail with an `::error::` that names `stage=doppler_download` **together with the Doppler CLI's own

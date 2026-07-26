@@ -198,7 +198,7 @@ on:
           # #6730 (ADR-145) — the web-host BIRTH path. The ONE route granted the
           # capability every other route HALTs on; see the web_host_create job.
           - web-host-create
-          # #6969 (ADR-146) — the web-host REPLACE path, and the SIBLING of the birth
+          # #6969 (ADR-148) — the web-host REPLACE path, and the SIBLING of the birth
           # above, not a widened version of it: a birth is additive and its gate permits
           # no destroys, while this one requires exactly one delete+create of the
           # requested host. Both volumes and the LUKS passphrase are preserved by
@@ -3334,7 +3334,7 @@ jobs:
             echo "**This host has NO active heartbeat coverage yet.** Its two Better Stack heartbeats were REGISTERED by this dispatch but are \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured). The arming step lives in the \`apply\` job, so coverage begins at the next merge-to-main infra apply. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # --- #6969 (ADR-146): the web-host REPLACE path -------------------------------
+  # --- #6969 (ADR-148): the web-host REPLACE path -------------------------------
   # The sibling web-host-birth-gate.sh named but nobody had built: a scoped -replace of
   # an EXISTING hcloud_server.web, generic over var.web_hosts keys.
   #
@@ -3350,7 +3350,7 @@ jobs:
   # hardcoded to it (ForceNew), cloudflare_record.app is pinned to its ipv4_address, and it
   # currently carries TWO attached volumes mid-ADR-119 cutover — which makes cloud-init's
   # scsi-0HC_Volume_* mount glob AMBIGUOUS, a property no plan-shaped gate can observe. See
-  # tests/scripts/lib/web-host-replace-gate.sh's header and ADR-146 §Alternatives.
+  # tests/scripts/lib/web-host-replace-gate.sh's header and ADR-148 §Alternatives.
   #
   # A REPLACE DESTROYS BEFORE IT CREATES, so the stock preflight is mandatory here rather
   # than advisory: Hetzner's entire cx and cax lines were orderable in 0 of 3 EU DCs on
@@ -3434,7 +3434,7 @@ jobs:
           # and a terraform plan, and so the operator reads the reason at the top of the run.
           # Keep the key in lockstep with _WEB_HOST_REPLACE_LUKS_PINNED_KEY in the gate.
           if [[ "$WEB_HOST_KEY_RAW" == "web-1" ]]; then
-            echo "::error::'${WEB_HOST_KEY_RAW}' is the LUKS-pinned host and this path REFUSES it. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to it and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address), and it currently carries TWO attached volumes mid-ADR-119 cutover, which makes cloud-init's scsi-0HC_Volume_* mount glob AMBIGUOUS — a fresh host would mount whichever volume resolved first, serve normally, and strand or overwrite data. That is a cloud-init property, invisible to any plan-shaped gate. Land ADR-119 §Sequencing's volume-ID mount pin first (ADR-146 §Alternatives)."
+            echo "::error::'${WEB_HOST_KEY_RAW}' is the LUKS-pinned host and this path REFUSES it. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to it and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address), and it currently carries TWO attached volumes mid-ADR-119 cutover, which makes cloud-init's scsi-0HC_Volume_* mount glob AMBIGUOUS — a fresh host would mount whichever volume resolved first, serve normally, and strand or overwrite data. That is a cloud-init property, invisible to any plan-shaped gate. Land ADR-119 §Sequencing's volume-ID mount pin first (ADR-148 §Alternatives)."
             exit 1
           fi
           # image_tag is optional, but if supplied it is interpolated into a docker ref and a
@@ -3722,7 +3722,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           {
-            echo "## web-host-replace — scoped replace of ${WEB_HOST_KEY:-?} (ADR-146, #6969)"
+            echo "## web-host-replace — scoped replace of ${WEB_HOST_KEY:-?} (ADR-148, #6969)"
             echo ""
             echo "**Dispatch reason:** ${REASON:-n/a}"
             echo "**Pinned image:** ${PINNED_REF:-unresolved}"
