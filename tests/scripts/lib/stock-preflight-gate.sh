@@ -1,9 +1,14 @@
 # shellcheck shell=bash
-# Sourced STOCK preflight gate for every destroy-shaped apply_target in
-# .github/workflows/apply-web-platform-infra.yml (#6453).
+# Sourced STOCK preflight gate for every apply_target whose plan can fail on Hetzner
+# capacity in .github/workflows/apply-web-platform-infra.yml (#6453).
 #
-# EXTRACTED + SOURCED: the workflow's four destroy-guard plan steps (inngest-host-replace,
-# registry-host-replace, registry-region-migrate, git-data-host-replace) AND
+# NOT "every destroy-shaped target" any more: #6730's `web-host-create` is purely ADDITIVE
+# and sources this gate too. The wording mattered — a reader who took "destroy-shaped" as
+# the membership rule would conclude an additive path is out of scope, which is how a birth
+# ships without a capacity check.
+#
+# EXTRACTED + SOURCED: the workflow's five plan steps (inngest-host-replace,
+# registry-host-replace, registry-region-migrate, git-data-host-replace, web-host-create) AND
 # tests/scripts/test-stock-preflight-gate.sh source this file and call
 # stock_preflight_gate directly, so CI runs the SAME bytes the test exercises
 # (no re-derived inline jq to drift). Mirrors the sibling *-gate.sh files in this directory.
@@ -166,16 +171,22 @@ stock_preflight() {
   # one-click route to it is gone. It now requires the operator-local full apply per the
   # OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096).
   #
-  # WHY THE WEB-1 CLAUSE BELOW IS CONDITIONALLY WORDED: after #6575, NO production call site of
-  # stock_preflight_gate preflights a web host at all. The four surviving callers are
-  # inngest-host-replace, registry-host-replace, registry-region-migrate and
-  # git-data-host-replace (see the `source .../stock-preflight-gate.sh` steps in
-  # apply-web-platform-infra.yml). A web address reaches this function only through a direct
-  # `stock_preflight <type> <location>` operator probe, which carries no address at all. So the
-  # web-1 specifics are emitted as a guarded "if this host is web-1" clause the operator can
-  # self-apply — never as an unconditional claim, which would misdirect the four live
-  # non-web paths in the one message they read during a blocked prod recreate.
-  echo "::error::  - PRIMARY: wait and re-dispatch. Nothing has been destroyed — this gate runs BEFORE the destroy — so a retry costs nothing, and stock is time-varying on an HOURS timescale (cx33 went orderable -> nowhere in ~3h on 2026-07-15)." >&2
+  # WHY THE WEB-1 CLAUSE BELOW IS CONDITIONALLY WORDED: there are FIVE callers, and only one
+  # of them (#6730's web-host-create) preflights a web host. The other four —
+  # inngest-host-replace, registry-host-replace, registry-region-migrate,
+  # git-data-host-replace — never do. So the web-1 specifics stay a guarded "if this host is
+  # web-1" clause rather than an unconditional claim, which would misdirect the four non-web
+  # paths in the one message they read during a blocked prod recreate.
+  #
+  # CORRECTED at #6730: this comment previously read "after #6575, NO production call site
+  # preflights a web host at all. The four surviving callers are …". Both halves went false
+  # the moment web-host-create landed, and the stale version made the conditional clause look
+  # like dead code — one cleanup away from being deleted just as it became reachable.
+  # The retry advice is correct on every caller, but the REASON differs by shape, and an
+  # additive caller told "nothing has been destroyed — this gate runs BEFORE the destroy" is
+  # being reassured about a destroy that was never going to happen. Both framings are stated
+  # so the message is true on the path the operator is actually on.
+  echo "::error::  - PRIMARY: wait and re-dispatch. A retry costs nothing — on a -replace caller because this gate runs BEFORE the destroy, and on an additive caller (web-host-create) because nothing existed to destroy. Stock is time-varying on an HOURS timescale (cx33 went orderable -> nowhere in ~3h on 2026-07-15)." >&2
   echo "::error::  - SECONDARY: change server_type WITHIN the same location (the 'orderable in EU' list above is what is actually orderable right now). This is an operator cost/HA decision — see #6463 — not a free action." >&2
   echo "::error::  - IF THIS HOST IS web-1: change server_type within hel1 ONLY; do NOT relocate it. hcloud_server.web pins its location precisely because 'a location change would force-REPLACE the live prod host' (server.tf), and hcloud_volume.workspaces is location-bound — so relocating web-1 strands or RECREATES the workspaces volume. That is a data-migration decision, not a stock workaround." >&2
   echo "::error::  Do NOT bypass." >&2

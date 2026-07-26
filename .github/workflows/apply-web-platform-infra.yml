@@ -94,7 +94,30 @@ on:
       # Each job accepts only its OWN literal, so a token typed for one target cannot authorize
       # the other.
       confirm:
-        description: "For the two *-luks-recut targets ONLY: type RECUT-WORKSPACES-LUKS or RECUT-REGISTRY-LUKS to authorize the destructive volume replace (typo-guard, NOT the authorization)."
+        description: "For the two *-luks-recut targets: type RECUT-WORKSPACES-LUKS or RECUT-REGISTRY-LUKS. For apply_target=web-host-create: type BIRTH-<key> (e.g. BIRTH-web-2). Typo-guard, NOT the authorization."
+        required: false
+        type: string
+      # For apply_target=web-host-create ONLY (#6730). The var.web_hosts key of the host to
+      # birth. Ignored by every other target.
+      #
+      # UNTRUSTED BY POSTURE, not by threat model: only someone who can already dispatch this
+      # workflow can set it, but it is interpolated into `-target=` arguments and a shell
+      # environment, so it is validated against ^web-[0-9]{1,2}$ and routed exclusively through
+      # env: (never `${{ }}` inside a run: body). The regex is the injection guard; the
+      # var.web_hosts membership check downstream is the correctness guard; the sourced birth
+      # gate comparing the PLANNED create address to this key is the guard that actually
+      # protects production. Three layers because a typo here births the wrong host.
+      web_host_key:
+        description: "For apply_target=web-host-create ONLY: the var.web_hosts key to birth (e.g. web-2). Must match ^web-[0-9]{1,2}$ and exist in var.web_hosts."
+        required: false
+        type: string
+      # For apply_target=web-host-create ONLY (#6730). Overrides the pin source when web-1's
+      # /health cannot be read — which is BY CONSTRUCTION the case when the host being
+      # birthed IS web-1. Not a safety weakening: the value still passes the strict-semver
+      # guard, still resolves to an immutable digest, and still faces the coherence
+      # preflight. Same env:-routed, shape-validated handling as web_host_key.
+      image_tag:
+        description: "For apply_target=web-host-create ONLY: pin the image to this released tag (e.g. v1.2.3) instead of reading web-1's /health. Required when birthing web-1 or when the fleet is down."
         required: false
         type: string
       # For apply_target=workspaces-luks-recut ONLY. The Hetzner id of the ORPHANED LUKS volume the
@@ -135,8 +158,10 @@ on:
       # no longer exist, so neither could run to completion; the runbook surfaces that told
       # operators to dispatch them were rewritten or superseded in the same change (the
       # host_creates HALT below, scheduled-inngest-health.yml, the stock-preflight tine, and
-      # knowledge-base/engineering/operations/runbooks/ -- see web-host-birth.md). web-1 still has no
-      # automated birth path — that HALT is tracked by #6730, not by these targets.
+      # knowledge-base/engineering/operations/runbooks/ -- see web-host-birth.md). The web-host
+      # birth path those targets did NOT provide is `web-host-create` below (#6730, ADR-145):
+      # generic over var.web_hosts keys rather than hardcoded to web-2, and a purely additive
+      # +create rather than a -replace of a host that must already exist.
       apply_target:
         # Rendered as the FIELD LABEL above the dropdown — the last thing a non-technical operator
         # reads before firing a destructive apply. Kept as a short pointer at the runbooks: the
@@ -149,10 +174,12 @@ on:
           Which apply path? manual-rerun (default) | inngest-host | inngest-host-replace |
           registry-host-replace | registry-region-migrate | registry-luks-recut |
           git-data-host-replace | workspaces-luks-cutover | workspaces-luks-recut |
-          registry-ruleset-entrypoint-audit. DESTRUCTIVE targets need `confirm` and an id-pin —
-          see the runbook for the target you are firing. registry-luks-recut DESTROYS the zot
-          store (a disposable GHCR mirror); do NOT use registry-host-replace for that — it
-          preserves the volume and darks the registry.
+          web-host-create | registry-ruleset-entrypoint-audit. DESTRUCTIVE targets need
+          `confirm` and an id-pin — see the runbook for the target you are firing.
+          registry-luks-recut DESTROYS the zot store (a disposable GHCR mirror); do NOT use
+          registry-host-replace for that — it preserves the volume and darks the registry.
+          web-host-create BIRTHS a declared-but-absent web host; it is additive-only and
+          needs `web_host_key` + `confirm=BIRTH-<key>`.
         required: false
         default: manual-rerun
         type: choice
@@ -166,6 +193,9 @@ on:
           - git-data-host-replace
           - workspaces-luks-cutover
           - workspaces-luks-recut
+          # #6730 (ADR-145) — the web-host BIRTH path. The ONE route granted the
+          # capability every other route HALTs on; see the web_host_create job.
+          - web-host-create
           # #6767: read-only retrospective drift audit of every declared ruleset's
           # LIVE phase entrypoint (no terraform apply; own concurrency group;
           # issues:write App auth; posts findings to #6767). See the
@@ -430,6 +460,8 @@ jobs:
               -target=github_repository_environment.inngest_cutover \
               -target=github_repository_environment.inngest_config_signing \
               -target=github_repository_environment.workspaces_luks_cutover \
+              -target=github_repository_environment.web_platform_infra_apply \
+              -target=github_repository_environment_deployment_policy.web_platform_infra_apply_main \
               -target=cloudflare_r2_bucket.workspaces_luks_header \
               -target=doppler_secret.workspaces_luks_header_bucket \
               -target=doppler_secret.workspaces_luks_header_r2_endpoint \
@@ -541,16 +573,15 @@ jobs:
           if [[ "$host_creates" -gt 0 ]]; then
             echo "::error::terraform plan would CREATE ${host_creates} hcloud_server resource(s) on the per-PR apply path. This path must never birth a host: the server is target-reachable but its hcloud_server_network attachment is not, so the host would come up with no private-net IP (and, transiently, no firewall) — the #6416 failure mode. (hcloud_volume creates are NOT counted since #6919/T55 — a for_each volume fan-out for a legitimate web host is routine, not a host birth.)"
             echo "::error::Remediation depends on WHICH host is being created (see the plan output above):"
-            echo "::error::  • ANY hcloud_server.web[*] → there is NO automated path. Every route that could reach hcloud_server.web HALTs: this job (#6416), apply-deploy-pipeline-fix.yml (#6718) and workspaces-luks-cutover (gate requires zero actions on the web-1 server). Use the operator-local full apply below, run through the PINNED-IMAGE CHAIN at the end of this message."
-            echo "::error::    This no-automated-web-host-birth state violates hr-fresh-host-provisioning-reachable-from-terraform-apply and is tracked by #6730 — that issue owns closing it. Scope: WEB hosts only (inngest-host below does birth a host, and the registry/git-data paths are scoped -replace)."
+            echo "::error::  • ANY hcloud_server.web[*] → dispatch '-f apply_target=web-host-create -f web_host_key=<key> -f confirm=BIRTH-<key>' (#6730, ADR-145). That job is the ONE route granted this capability: it resolves a digest pin, runs the coherence preflight, asserts SENTRY_DSN is non-empty, and grades the plan with an INVERTED guard (exactly one create, OF THE REQUESTED HOST, zero destroys/reboots/out-of-scope changes). It is environment-gated on web-platform-infra-apply, so it waits for a reviewer before any step runs. This HALT stays because it is correct for THIS path — the per-PR apply reaches the server but not its hcloud_server_network attachment, so a birth here yields a host with no private IP and, transiently, no firewall (#6416)."
             echo "::error::  • hcloud_server.inngest → dispatch '-f apply_target=inngest-host'."
             echo "::error::  • hcloud_server.registry → no dispatch creates it FROM AN EMPTY ROOT, but two dispatches CAN re-create a registry host that is absent from state: 'registry-region-migrate' (a pure create in the new region) and 'registry-luks-recut' (its resume arm, admitted only by a live Hetzner probe). Both are gated by out_of_scope==0 over the registry's own 6-member allow-set, so neither can birth the fleet's other resources. If the registry host is missing ALONGSIDE out-of-scope resources, that is a from-empty root: run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) BEFORE merging."
-            echo "::error::  • a legitimate new host (e.g. web-3 added to var.web_hosts) → NO dispatch creates it either. The reason is the host_creates HALT on each of the three enumerated routes above. That HALT is NOT inherited: it is a separate inline copy per workflow (plus a distinct sourced gate for the luks cutover), and it lives in the apply job, whose if: guard is mutually exclusive with every dispatch job. A NEW dispatch job inherits nothing and MUST add its own guard. It needs an operator-local full apply BEFORE the code merges, or EVERY subsequent merge HALTs here — not just this PR's."
-            echo "::error::PINNED-IMAGE CHAIN — run this BEFORE any operator-local apply that CREATES a web host. A create bakes var.image_name into user_data; the mutable ':latest' can resolve to an image whose baked /opt/soleur/host-scripts disagree with this tree, and the new host then aborts cloud-init at STAGE=verify and never serves (ADR-080). Pin a digest and prove coherence first:"
+            echo "::error::  • a legitimate new WEB host (e.g. web-3 added to var.web_hosts) → dispatch web-host-create for that key, as above. Order matters: adding a key to var.web_hosts makes EVERY subsequent merge HALT here until the host is actually born, so dispatch promptly after the merge that introduces the key. For a NON-web new host, no dispatch creates it; note also that the HALT is NOT inherited — it is a separate inline copy per workflow (plus a distinct sourced gate for the luks cutover), living in the apply job whose if: guard is mutually exclusive with every dispatch job. A NEW dispatch job inherits nothing and MUST add its own guard."
+            echo "::error::PINNED-IMAGE CHAIN — the BREAK-GLASS fallback only, for when the web-host-create dispatch is itself unavailable (the job automates every step below). A create bakes var.image_name into user_data; the mutable ':latest' can resolve to an image whose baked /opt/soleur/host-scripts disagree with this tree, and the new host then aborts cloud-init at STAGE=verify and never serves (ADR-080). Pin a digest and prove coherence first:"
             echo "::error::    DIGEST=\$(crane digest ghcr.io/jikig-ai/soleur-web-platform:latest)   # any OCI digest reader works; crane is not preinstalled — go install github.com/google/go-containerregistry/cmd/crane@latest"
             echo "::error::    PINNED=\"ghcr.io/jikig-ai/soleur-web-platform@\${DIGEST}\""
             echo "::error::    PINNED=\"\$PINNED\" bash apps/web-platform/infra/scripts/host-image-coherence-preflight.sh   # docker-cp the pinned image's baked host-scripts out, recompute their combined sha256 byte-identically to the cloud-init boot check, and compare against 'terraform console local.host_scripts_content_hash'. exit 0 = coherent, non-zero = do NOT apply."
-            echo "::error::    test -n \"\$(doppler secrets get SENTRY_DSN -p soleur -c prd_terraform --plain)\" || { echo 'EMPTY SENTRY_DSN — do NOT create the host'; exit 1; }   # MANDATORY (#6575). The pre-extraction boot stages read ONLY the baked \${sentry_dsn}; doppler is not installed yet, so its fallback is dead. An empty DSN means the host boots DARK: no telemetry, no page, no signal that it died. The web-2-recreate job used to assert this automatically; that job is gone and nothing else enforces it (ADR-128 makes it a MUST for the #6730 birth path)."
+            echo "::error::    test -n \"\$(doppler secrets get SENTRY_DSN -p soleur -c prd_terraform --plain)\" || { echo 'EMPTY SENTRY_DSN — do NOT create the host'; exit 1; }   # MANDATORY (#6575, ADR-128 R1). The pre-extraction boot stages read ONLY the baked \${sentry_dsn}; doppler is not installed yet, so its fallback is dead. An empty DSN means the host boots DARK: no telemetry, no page, no signal that it died. The web-host-create job asserts this automatically — this line exists for the break-glass path, where nothing does."
             echo "::error::    cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -var image_name=\"\$PINNED\"   # full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096)"
             echo "::error::    Do not substitute 'just run the preflight' for this chain: the preflight REFUSES a mutable tag by design, so it is only actionable once DIGEST is resolved. And do not skip it — an incoherent pin destroys nothing at plan time, it strands you with a booted host that never passes verify."
             echo "::error::    hcloud_server.web carries lifecycle ignore_changes = [user_data, ssh_keys, image, placement_group_id] (server.tf). Two consequences: the pin is honoured ONLY at create, and a later routine merge apply passing ':latest' will NOT drift it back; conversely, editing user_data or image is INERT for an already-running host, so this chain matters only on the create path."
@@ -2810,6 +2841,630 @@ jobs:
             echo "**Run:** ${RUN_URL}"
             echo ""
             echo "Replaced the dead-man-orphaned LUKS volume with a FRESH RAW target (discarding the operator-accepted 27-min window; passphrase reused). Zero downtime. Next: the environment-gated workspaces-luks-cutover.yml dispatch (dry_run → freeze) luksFormats the fresh target and copies from live plaintext."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Selected by `-f apply_target=web-host-create -f web_host_key=<key>` (#6730, ADR-145).
+  # THE web-host BIRTH path — the one automated route allowed to create an
+  # hcloud_server.web, where every other route HALTs on host_creates > 0.
+  #
+  # THE HALT IS INVERTED HERE, NOT REMOVED. "must never create a host" becomes "must
+  # create exactly the one host that was authorized, and nothing else". That distinction
+  # is the whole design: weakening the HALT globally would reintroduce #6416 (a host born
+  # via the per-PR apply gets its server but not its hcloud_server_network attachment, so
+  # it comes up with no private IP and, transiently, no firewall). A NEW DISPATCH JOB
+  # INHERITS NOTHING — the per-PR HALT is a separate inline copy in the `apply` job whose
+  # `if:` is mutually exclusive with this one — so the sourced web_host_birth_gate is not
+  # defense-in-depth behind an existing check. For this path it is the ONLY check.
+  #
+  # THE -target SET IS THE WHOLE PER-HOST FAN-OUT, and each member is there for a reason
+  # that has already cost an incident or is one bad boot away from doing so:
+  #   • hcloud_server.web / hcloud_server_network.web  — the server WITHOUT its private
+  #     NIC is #6416 exactly.
+  #   • hcloud_volume.workspaces + attachment          — /mnt/data; server.tf's user_data
+  #     interpolates the volume id, so the host cannot even render without it.
+  #   • cloudflare_record.app                          — `content =
+  #     hcloud_server.web["web-1"].ipv4_address` (dns.tf). `-target` is transitive UPSTREAM
+  #     only, so this DEPENDENT never enters the plan on its own: a web-1 birth would
+  #     otherwise finish green with app.soleur.ai still resolving to the dead host's IP, and
+  #     the runbook's own verification step would fail with nothing explaining why. On a
+  #     web-2 birth it plans as a no-op (web-1's address is unchanged), so including it is
+  #     free there and load-bearing for the case the path is documented to serve.
+  #   • hcloud_firewall_attachment.web                 — a SINGLETON over
+  #     `[for h in hcloud_server.web : h.id]`. hcloud provider 1.63.0 documents that this
+  #     resource (unlike hcloud_server.firewall_ids) does NOT attach before first boot, so
+  #     omitting it means the new host is briefly reachable with no firewall. Including it
+  #     is what drags every OTHER web host into the plan — which is why the gate carries a
+  #     reboot arm and an allow-set: web-1 must come along as a no-op or not at all.
+  #   • the 4 web-probe resources                      — web-probe-envwrite.sh resolves
+  #     WEB_NIC_GUARD_URL_<KEY> / WEB_ZOT_CONSUMER_URL_<KEY> from Doppler ON the fresh
+  #     host, so omitting them births a host whose probes have no URL to beat to. Including
+  #     them REGISTERS the heartbeats; it does NOT arm them — web-probe.tf ships both
+  #     `paused = true` + `ignore_changes = [paused]`, and the only unpause path is the
+  #     `Arm web-host probe heartbeats` step in the `apply` job (ADR-117: measure a real beat
+  #     before arming). So this target set is necessary-but-not-sufficient for coverage, and
+  #     the born host is unmonitored until a later merge-to-main apply arms it. That is a
+  #     deliberate consequence of ADR-117's measure-then-arm ordering, not an oversight —
+  #     but it is disclosed in the Dispatch summary rather than left for the operator to
+  #     discover from a silent host.
+  # proxy-TLS is DELIBERATELY ABSENT: those resources are singletons, not a
+  # `for_each = var.web_hosts` fan-out (verified against proxy-tls.tf), so there is no
+  # per-host member of them to birth.
+  #
+  # ADR-128's five carried-forward MUSTs are implemented as named steps below: R1 (DSN
+  # non-empty BEFORE any create), R2 (surface the fresh host's boot telemetry), R3 (EU
+  # data plane), R4 (client-side filter — the events endpoint ignores `message:`), R5
+  # (`if: always()`, so a green apply still proves the probe fired).
+  #
+  # A GREEN APPLY IS NOT A GREEN BOOT. `runcmd` is once-per-instance: a host that aborts
+  # at stage=verify is not repairable by a reboot, only by replacement. That asymmetry is
+  # why the coherence preflight is mandatory and PRE-apply, and why R2 exists at all.
+  web_host_create:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'web-host-create'
+    runs-on: ubuntu-24.04
+    # The sole HUMAN authorization on this path (an authorization gate, not a task): the
+    # environment holds the job in "Waiting" before its first step. Declared in terraform
+    # at infra/web-host-birth-environment.tf so its reviewer set is covered by the DP-11 F8
+    # non-empty-reviewers guard; an untracked environment emptied in the UI auto-approves.
+    environment: web-platform-infra-apply
+    # Shared cross-pipeline web-1-swap mutex: this job's -target set includes
+    # hcloud_firewall_attachment.web, a singleton the release deploy and the pipeline-fix
+    # apply also touch. COEXISTS with (does not replace) the workflow-level R2 serializer
+    # (terraform-apply-web-platform-host) that protects the lockless backend.
+    concurrency:
+      group: web-1-swap
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      # GHCR is a PRIVATE package; the digest resolve below authenticates with
+      # GITHUB_TOKEN + this scope. Anonymous `imagetools inspect` 401s.
+      packages: read
+    # Budget: digest resolve (~1m) + preflight docker pull/extract (~3m) + plan (~2m) +
+    # apply, whose dominant term is Hetzner provisioning the server + volume (~5m). 30m
+    # leaves room for a slow GHCR pull without letting a wedged apply run unbounded.
+    timeout-minutes: 30
+    env:
+      IMAGE_REPO: "ghcr.io/jikig-ai/soleur-web-platform"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      # FIRST mutating-adjacent step: validate the dispatch inputs before anything reads a
+      # secret or contacts a provider. web_host_key is routed through env: and never
+      # interpolated into a run: body (workflow-injection guidance); the regex is the
+      # injection guard, and the var.web_hosts membership check is the correctness one.
+      # The confirm token is a TYPO guard, not the authorization — the environment gate
+      # above is the authorization. It embeds the key so that approving a dispatch for the
+      # wrong host requires typing that host's name.
+      - name: Validate dispatch inputs (host key shape + membership + confirm token)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          WEB_HOST_KEY_RAW: ${{ inputs.web_host_key }}
+          CONFIRM_RAW: ${{ inputs.confirm }}
+          IMAGE_TAG_RAW: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$WEB_HOST_KEY_RAW" =~ ^web-[0-9]{1,2}$ ]]; then
+            echo "::error::web_host_key must match ^web-[0-9]{1,2}\$ (got '${WEB_HOST_KEY_RAW}'). This value is interpolated into terraform -target arguments; it is validated by shape before use."
+            exit 1
+          fi
+          if [[ "$CONFIRM_RAW" != "BIRTH-${WEB_HOST_KEY_RAW}" ]]; then
+            echo "::error::confirm must be exactly 'BIRTH-${WEB_HOST_KEY_RAW}' (got '${CONFIRM_RAW}'). Typo-guard: birthing the wrong host is the failure this token exists to make hard to do by accident. It is NOT the authorization — the web-platform-infra-apply environment reviewer is."
+            exit 1
+          fi
+          # MEMBERSHIP: the key must exist in var.web_hosts. Without this, a plan for an
+          # unknown key produces zero creates and the gate would abort with the generic
+          # "nothing to birth" message, which reads like a mis-scoped -target rather than
+          # the real cause. Parsed from variables.tf's default map, which is where
+          # var.web_hosts is actually declared.
+          if ! grep -qE "^[[:space:]]*\"?${WEB_HOST_KEY_RAW}\"?[[:space:]]*=[[:space:]]*\{" variables.tf; then
+            echo "::error::'${WEB_HOST_KEY_RAW}' is not a key in var.web_hosts (apps/web-platform/infra/variables.tf). Add the host to var.web_hosts and MERGE that change first — this job births a host that is already declared, it does not declare one."
+            exit 1
+          fi
+          # image_tag is optional, but if supplied it is interpolated into a docker ref and
+          # a shell command, so it gets the same shape-before-use treatment as the host key.
+          # The semver validator downstream is the CORRECTNESS guard; this is the injection
+          # guard, and it runs first.
+          if [[ -n "${IMAGE_TAG_RAW:-}" && ! "$IMAGE_TAG_RAW" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::image_tag must be a bare release version matching ^v?[0-9]+\.[0-9]+\.[0-9]+\$ (got '${IMAGE_TAG_RAW}'). It is interpolated into an image ref; it is validated by shape before use."
+            exit 1
+          fi
+          printf 'WEB_HOST_KEY=%s\n' "$WEB_HOST_KEY_RAW" >> "$GITHUB_ENV"
+          echo "dispatch validated: birthing var.web_hosts[\"${WEB_HOST_KEY_RAW}\"]"
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway
+        # key satisfies var.ssh_key_path. hcloud_server.web carries
+        # lifecycle.ignore_changes = [ssh_keys], so it is never consumed by the create.
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      # ADR-128 R1 — MANDATORY, and deliberately the first thing that touches Doppler.
+      - name: Extract backend credentials + assert SENTRY_DSN non-empty (ADR-128 R1)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+          # R1. The baked ${sentry_dsn} (TF_VAR_sentry_dsn <- this SENTRY_DSN) is the SOLE
+          # fatal-emit path for the pre-extraction fresh-boot stages: doppler is not
+          # installed yet there, so its documented fallback is dead code. An empty DSN
+          # means the host boots DARK — no telemetry, no page, no signal that it died —
+          # and runcmd is once-per-instance, so that host is unrecoverable, not degraded.
+          #
+          # FAIL-CLOSED ON UNREADABLE, and the distinction is load-bearing: `doppler
+          # secrets get` on a missing secret and on an auth/network failure both yield an
+          # empty string through `|| true`, and "I could not read it" is not evidence the
+          # DSN is set. Capture rc separately so the two cases get different messages and
+          # neither is mistaken for a pass. The VALUE is never printed.
+          # `|| dsn_rc=$?`, NOT `; dsn_rc=$?`. Under the `set -e` armed at the top of this
+          # step, an assignment whose command substitution fails kills the step AT THAT LINE
+          # — the trailing `dsn_rc=$?` never executes and neither does the branch below it.
+          # Measured: `set -euo pipefail; X=$(bash -c "exit 7"); rc=$?; echo REACHED` exits 7
+          # and never prints. The earlier form here shipped with a comment claiming the two
+          # cases got different messages; the unreadable case actually died with a bare
+          # "Process completed with exit code 1" and the captured stderr unread on disk.
+          # Fail-closed either way — but the diagnosis this block exists to print was dead.
+          dsn_rc=0
+          DSN=$(doppler secrets get SENTRY_DSN --plain 2>/tmp/doppler-dsn.err) || dsn_rc=$?
+          if [[ "$dsn_rc" -ne 0 ]]; then
+            echo "::error::could not READ SENTRY_DSN from Doppler prd_terraform (rc=${dsn_rc}) — fail-closed. An unreadable secret is not evidence of a present one, and the pre-extraction boot stages have no other emit path. doppler stderr: $(tr '\n' ' ' </tmp/doppler-dsn.err | tail -c 300)"
+            exit 1
+          fi
+          if [[ -z "$DSN" ]]; then
+            echo "::error::SENTRY_DSN is empty in Doppler prd_terraform — the fresh-boot fatal-emit would be dark for the pre-extraction stages, so a failed birth would leave no signal at all. Set it before creating the host (ADR-128 R1, #6090/#6575)."
+            exit 1
+          fi
+          echo "ADR-128 R1 satisfied: SENTRY_DSN present and non-empty (value not printed)."
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      # Resolve tag -> immutable @sha256 digest ONCE and freeze it, so the preflight, the
+      # plan -var and the apply all consume the SAME bytes (TOCTOU: a `:latest` that moves
+      # between the preflight and the apply defeats the preflight entirely).
+      #
+      # DEVIATION FROM THE PLAN, recorded deliberately: the plan prescribed `crane digest`
+      # plus the install_crane() helper lifted from reusable-release.yml, on the (correct)
+      # ground that crane is not preinstalled. `docker buildx imagetools inspect` is
+      # preinstalled, is the exact shape the deleted web_2_recreate job used for this
+      # step, and needs the `docker login` that the coherence preflight requires anyway
+      # (it does `docker create` + `docker cp` against $PINNED). Installing a second OCI
+      # client to read a digest we are about to pull with the first one buys nothing.
+      - name: Assert runner is amd64 (multi-arch digest equivalence)
+        # RESTORED from the deleted web_2_recreate job, which carried this as an explicit
+        # fail gate before digest resolution (CTO must-fix 4 / P2-5 in its review). The
+        # first draft of this job dropped it and kept only its REASONING, as a comment on
+        # the pin step reading "the amd64 runner and amd64 host resolve it to the same
+        # manifest" — a documented assumption where the predecessor had an enforced
+        # invariant.
+        #
+        # It is load-bearing for the coherence preflight, not for the pull: $PINNED is a
+        # multi-arch OCI INDEX digest, and the preflight `docker create`s it ON THE RUNNER
+        # to recompute the baked host-scripts hash. A non-amd64 runner resolves the index to
+        # a different platform manifest, so the hash it computes is not the hash the amd64
+        # Hetzner host will compute — the preflight would then be comparing the wrong image
+        # and could pass a genuinely incoherent pin.
+        run: |
+          set -euo pipefail
+          ARCH=$(uname -m)
+          if [[ "$ARCH" != "x86_64" ]]; then
+            echo "::error::runner arch is ${ARCH}, expected x86_64 (amd64). The Hetzner host is amd64; a non-amd64 runner resolves the multi-arch index to a different platform manifest, voiding the coherence preflight's comparison. Pin the job to an amd64 runner rather than relaxing this check."
+            exit 1
+          fi
+          echo "runner arch ${ARCH} — multi-arch digest equivalence holds."
+
+      - name: Resolve known-good image digest off-host (freeze $PINNED)
+        id: pin
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+          IMAGE_TAG_INPUT: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          # Prefer the tag web-1 is ACTUALLY RUNNING (read off-host from its public
+          # /health .version) over :latest. A brand-new host should join the fleet on the
+          # image its siblings are already serving, not on whatever last built.
+          # resolve-web1-known-good-tag.sh is the pure, fixture-tested validator: it exits
+          # non-zero on a non-released / prerelease / `latest` version.
+          # THE PIN SOURCE MUST NOT BE THE HOST BEING BIRTHED. Reading web-1's live
+          # /health is the right default — a new host should join the fleet on the image its
+          # siblings are already serving, not on whatever last built. But it is CIRCULAR for
+          # the one case that matters most: if the host being born IS web-1, that endpoint is
+          # dead by definition, and an earlier revision aborted after 12 attempts. The birth
+          # path was therefore unable to birth web-1 during exactly the outage it exists to
+          # end, while the runbook advertised web-1 as in scope.
+          #
+          # `image_tag` is the explicit override for that case. It is NOT a weakening: the tag
+          # still goes through resolve-web1-known-good-tag.sh's strict-semver guard, still
+          # resolves to an immutable @sha256 digest, and still faces the mandatory coherence
+          # preflight. What it removes is the requirement that a HEALTHY SIBLING exist — a
+          # precondition the safety argument never actually needed.
+          if [[ -n "${IMAGE_TAG_INPUT:-}" ]]; then
+            RUNNING_VERSION="$IMAGE_TAG_INPUT"
+            echo "pin source: operator-supplied image_tag=${IMAGE_TAG_INPUT} (bypasses the /health read; the semver guard, digest resolve and coherence preflight all still apply)"
+          else
+            APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+            HEALTH_URL="https://app.${APP_DOMAIN_BASE}/health"
+            RUNNING_VERSION=""
+            for i in $(seq 1 12); do
+              RUNNING_VERSION=$(curl -sf --max-time 15 "$HEALTH_URL" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || echo "")
+              [[ -n "$RUNNING_VERSION" ]] && break
+              echo "Attempt $i/12: ${HEALTH_URL} unreachable or reported empty .version — retrying"
+              sleep 10
+            done
+            if [[ -z "$RUNNING_VERSION" ]]; then
+              echo "::error::could not read a running version from ${HEALTH_URL} after 12 attempts, and no image_tag input was supplied. Refusing to fall back to ':latest' — a birth on an unvetted image is the ADR-080 stale-image trap and the host cannot be repaired by a reboot if it aborts at stage=verify. If you are birthing web-1 (or the fleet is down), this read is CIRCULAR by construction: re-dispatch with -f image_tag=<vX.Y.Z>, naming the last known-good released version. It is still digest-pinned and coherence-preflighted."
+              exit 1
+            fi
+            echo "pin source: web-1 live /health (${HEALTH_URL})"
+          fi
+          TAG=$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh" "$RUNNING_VERSION")
+          echo "running version=${RUNNING_VERSION} -> known-good tag=${TAG}"
+          # GHCR is a PRIVATE package: an anonymous inspect 401s. --password-stdin so the
+          # token never lands in argv.
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
+          # .Manifest.Digest is the multi-arch OCI INDEX digest. The runner and the Hetzner
+          # host resolve it to the same manifest because the step above ENFORCES amd64 on
+          # the runner (it does not merely assume it), and host-scripts are arch-independent
+          # text — so the preflight's recomputed hash is identical to the host's.
+          DIGEST=$(docker buildx imagetools inspect "${IMAGE_REPO}:${TAG}" --format '{{.Manifest.Digest}}' || true)
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::tag->digest resolution returned '${DIGEST}' (want ^sha256:[0-9a-f]{64}\$) for ${IMAGE_REPO}:${TAG}. Aborting BEFORE any create."
+            exit 1
+          fi
+          PINNED="${IMAGE_REPO}@${DIGEST}"
+          echo "resolved ${IMAGE_REPO}:${TAG} -> ${PINNED}"
+          printf 'PINNED=%s\n' "$PINNED" >> "$GITHUB_ENV"
+          echo "pinned=${PINNED}" >> "$GITHUB_OUTPUT"
+
+      - name: Coherence preflight (LOAD-BEARING — abort before any create on mismatch)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # The pinned digest's baked /opt/soleur/host-scripts MUST recompute to the applied
+        # local.host_scripts_content_hash. If they diverge, the born host aborts cloud-init
+        # at stage=verify — no cloudflared, no deploy webhook, no monitors — and runcmd is
+        # once-per-instance, so nothing repairs it but replacement. Catching it here means
+        # the host is never created at all. The WANT hash comes from `terraform console`
+        # under the canonical Doppler tf-var invocation: single source of truth, no bash
+        # re-implementation of server.tf's file list.
+        run: |
+          set -euo pipefail
+          WANT=$(doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform console -input=false <<<'local.host_scripts_content_hash' | tr -d '"')
+          if [[ -z "$WANT" ]]; then
+            echo "::error::terraform console returned an empty local.host_scripts_content_hash — the preflight cannot compare against nothing. Fail-closed: an unknown WANT hash is not a match."
+            exit 1
+          fi
+          HOST_SCRIPTS_WANT_HASH="$WANT" PINNED="$PINNED" INFRA_DIR="$PWD" \
+            bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/host-image-coherence-preflight.sh"
+
+      - name: Terraform plan (scoped web-host birth) + inverted birth gate
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Purely ADDITIVE: no -replace anywhere. The nine -targets are this host's whole
+        # fan-out (see the job header for why each is required). The sourced
+        # web_host_birth_gate reads the STRUCTURED plan JSON and ABORTS unless the plan is
+        # exactly one create OF THE REQUESTED HOST with zero destroys, zero reboot-forcing
+        # updates, and nothing outside the fan-out. NO [ack-destroy] bypass on this path.
+        run: |
+          # set +e so the rc=$? diagnostic below actually runs — GitHub runs `run:` under
+          # an inherited -e, which `set -uo pipefail` does not clear. Re-armed after.
+          set +e
+          set -uo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -target="hcloud_server.web[\"${WEB_HOST_KEY}\"]" \
+              -target="hcloud_server_network.web[\"${WEB_HOST_KEY}\"]" \
+              -target="hcloud_volume.workspaces[\"${WEB_HOST_KEY}\"]" \
+              -target="hcloud_volume_attachment.workspaces[\"${WEB_HOST_KEY}\"]" \
+              -target="hcloud_firewall_attachment.web" \
+              -target="cloudflare_record.app" \
+              -target="betteruptime_heartbeat.web_zot_consumer[\"${WEB_HOST_KEY}\"]" \
+              -target="betteruptime_heartbeat.web_nic_guard[\"${WEB_HOST_KEY}\"]" \
+              -target="doppler_secret.web_zot_consumer_url[\"${WEB_HOST_KEY}\"]" \
+              -target="doppler_secret.web_nic_guard_url[\"${WEB_HOST_KEY}\"]" \
+              -var="ssh_key_path=${CI_SSH_PUB}" \
+              -var="image_name=${PINNED}"
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (web-host-create for ${WEB_HOST_KEY}) failed (exit $rc)."
+            exit $rc
+          fi
+          set -e
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
+          # Sourced gate — the SAME bytes tests/scripts/test-web-host-birth-gate.sh exercises.
+          # shellcheck source=tests/scripts/lib/web-host-birth-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/web-host-birth-gate.sh"
+          if ! web_host_birth_gate tfplan.json "${WEB_HOST_KEY}"; then
+            echo "::error::web-host-create birth gate ABORTED: the plan is not the exact scoped birth of ${WEB_HOST_KEY}. The gate's own message above names which arm refused. Nothing has been created. NO [ack-destroy] bypass on this path."
+            grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
+            exit 1
+          fi
+          # #6453 STOCK preflight. GATED rather than excluded, unlike the sibling additive
+          # path inngest-host, and the difference is the fan-out. The birth gate above proves
+          # the plan is the exact scoped birth; it cannot prove the create is FEASIBLE.
+          # terraform creates this host's dependencies FIRST — the workspaces volume and the
+          # two Better Stack heartbeats — and only then the server. So a server_type with no
+          # stock in the target DC does not fail cleanly here: it strands a 20 GB volume
+          # attached to nothing, plus two heartbeat resources for a host that will never
+          # exist. That is not "recoverable, not a strand" (the inngest-host reasoning, which
+          # holds for a host with no such fan-out) — it is billed debris and a dirty state
+          # slot, caught by a gate we already own and can run in 2 seconds.
+          #
+          # CORRECTION, recorded because the earlier wording was load-bearing and false: this
+          # comment used to say the stranded heartbeats "will therefore PAGE as down", and
+          # that was the headline argument for gating rather than excluding. They do not page.
+          # web-probe.tf declares both with `paused = true` + `ignore_changes = [paused]`, and
+          # the ONLY unpause path is the `Arm web-host probe heartbeats` step in the `apply`
+          # job, whose `if:` is mutually exclusive with this one. The gating decision survives
+          # on the stranded-volume argument alone; the false-page claim does not, and a
+          # decision defended by a false premise is one review away from being reverted for
+          # the right reason.
+          #
+          # KNOWN GAP (not fixed here): the same fact means a SUCCESSFUL birth also leaves the
+          # new host's two heartbeats paused, so it has no active heartbeat coverage until a
+          # later merge-to-main apply arms them. The Dispatch summary says so explicitly.
+          #
+          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
+          # OUTSIDE the `doppler run` wrapper above — without this read the gate would
+          # fail-closed on EVERY dispatch, and a gate that always fails is an outage, not a
+          # tripwire. Read-only; masked before any later step can echo it.
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*), and
+          # this token carries destroy authority over the whole prod fleet.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            echo "::error::web-host-create stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above for the repair path and #6463). Refusing to apply — the server create would fail AFTER its volume and heartbeats were already created, leaving a stranded volume and heartbeats that page as down."
+            exit 1
+          fi
+          echo "birth gate + stock preflight PASSED for ${WEB_HOST_KEY}. Plan summary:"
+          grep -E '^Plan:' tfplan.txt || true
+
+      - name: Terraform apply (web-host birth)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Apply the saved, guarded plan.
+        #
+        # There is deliberately NO post-apply create-proof loop here. An earlier revision
+        # had one, asserting the server + NIC each showed a create, with an ::error:: reading
+        # "this should have been caught by the birth gate" — and the gate structurally could
+        # not catch it, because every arm it had was a prohibition. Review found the gate
+        # PASSED a plan whose only entry was the server create. The requirement now lives in
+        # `web_host_birth_gate` (see its REQUIREMENT ARM), which runs BEFORE apply, so the
+        # bad plan is refused instead of post-mortem'd. A check that reads the same
+        # `tfplan.json` the gate already read cannot add information; it can only add the
+        # illusion of a second opinion.
+        run: |
+          set -euo pipefail
+          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false tfplan; then
+            echo "::error::terraform apply (web-host-create for ${WEB_HOST_KEY}) failed. The operation is additive, so nothing existing was destroyed; inspect the error, then re-dispatch — a re-dispatch is safe and is the normal remedy. Partial-create nuance: if the failure was BEFORE the server landed (its volume/heartbeats created, server not), the retry still plans exactly one server create WITH its NIC and volume attachment, and the gate passes. If the SERVER landed and a later address did not, the retry plans ZERO server creates and the gate correctly refuses — and completing that host by hand does NOT fix it: cloud-init runcmd is once-per-instance and has already finished on a host with no private IP, so attaching the NIC afterwards leaves the app unconfigured. That host must be REPLACED, not completed."
+            exit 1
+          fi
+          echo "birth applied: ${WEB_HOST_KEY}. The pre-apply gate proved the plan carried the server + its private NIC + its volume attachment. A green apply is NOT a green boot — boot telemetry is surfaced by the next step."
+
+      # ADR-128 R2/R3/R4/R5.
+      - name: Surface fresh-host Sentry breadcrumb trail (best-effort — R2/R3/R4/R5)
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # R5 (`if: always()`): runs on SUCCESS too. Without that, "the apply succeeded" and
+        # "the probe never ran" render identically, and a host that applied clean but booted
+        # dark reads as a win. On failure it names where the fresh boot died.
+        run: |
+          set +e
+          # R3-adjacent: read creds from Doppler prd_terraform, NOT GitHub repo secrets —
+          # the repo secret SENTRY_AUTH_TOKEN is unset, so a step reading it self-skips and
+          # logs "skipped", which is the silent-dark class this step exists to end. Capture
+          # the fetch rc so a FETCH FAILURE is NAMED rather than collapsed into "not
+          # configured".
+          SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN --plain -p soleur -c prd_terraform 2>/tmp/doppler-sentry.err); dop_rc=$?
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike `secrets.*`).
+          # Every other Doppler read in this job masks; this one was the sole exception, and
+          # it is the only NEW secret the PR introduced. Latent today (no `set -x` anywhere
+          # in the file, and nothing echoes it) — masked anyway, because "no current caller
+          # prints it" is a property of today's code, not of the secret.
+          [[ -n "${SENTRY_AUTH_TOKEN:-}" ]] && printf '::add-mask::%s\n' "$SENTRY_AUTH_TOKEN"
+          SENTRY_ORG=$(doppler secrets get SENTRY_ORG --plain -p soleur -c prd_terraform 2>/dev/null || true)
+          SENTRY_PROJECT=$(doppler secrets get SENTRY_PROJECT --plain -p soleur -c prd_terraform 2>/dev/null || true)
+          # Echo to the LOG as well as the summary so
+          # `gh run view <id> --log | grep 'fresh-host Sentry pointer'` works.
+          echo "web-host-create ${WEB_HOST_KEY:-?} — fresh-host Sentry pointer (job=${JOB_STATUS})"
+          {
+            echo "## web-host-create ${WEB_HOST_KEY:-?} — fresh-host Sentry pointer (best-effort)"
+            echo ""
+            if [[ "${JOB_STATUS}" == "success" ]]; then
+              echo "Apply succeeded. The trail below should show the probe fired and the last-reached stage (expect \`cloud_init_complete\` on a healthy fresh boot). An apply can succeed while the boot dies — that is what this read is for."
+            else
+              echo "The job failed. If the host was created and its boot aborted, a breadcrumb/fatal below names the last-reached stage."
+            fi
+            echo "_Best-effort: the host id is unknown to the runner, so this matches on message + a recent window — it may show an unrelated host or be empty._"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$dop_rc" -ne 0 ]]; then
+            echo "_Sentry query skipped: DOPPLER FETCH FAILED (rc=${dop_rc}) — verify secrets.DOPPLER_TOKEN scope/validity for soleur/prd_terraform. doppler stderr: $(tr '\n' ' ' </tmp/doppler-sentry.err | tail -c 300)_" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ -z "${SENTRY_AUTH_TOKEN:-}" || -z "${SENTRY_ORG:-}" || -z "${SENTRY_PROJECT:-}" ]]; then
+            echo "_Sentry query skipped: fetch succeeded but SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT is empty in Doppler prd_terraform (secret genuinely absent)._" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Lockstep with the emit MESSAGE literals in soleur-host-bootstrap.sh and
+          # cloud-init.yml. Keep byte-identical or
+          # apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh (AC8) fails
+          # — that test checks BOTH directions, so a rename on either side goes red here
+          # rather than silently making this query match nothing.
+          QUERY='message:"soleur-hostscript-seed failed" OR message:"soleur-host-bootstrap failed" OR message:"soleur-host-bootstrap complete" OR message:"soleur-cloud-init boot stage"'
+          # R4: the /projects/{org}/{proj}/events/ endpoint IGNORES the `message:` search
+          # prefix — a message:"x" query returns 0 even for events that provably exist
+          # (verified against a known event id: bare full-text = 1 hit, message:"x" = 0).
+          # So fetch RECENT events UNFILTERED and match client-side with a regex DERIVED
+          # from QUERY (single source, no drift). Passing query=$QUERY here would produce a
+          # confident, wrong "the host emitted nothing".
+          MSG_RE=$(printf '%s' "$QUERY" | grep -oE 'message:"[^"]+"' | sed -E 's/message:"([^"]+)"/\1/' | paste -sd'|' -)
+          # An empty MSG_RE (QUERY reshaped so the extraction yields nothing) would make jq
+          # test("") match EVERY event and list arbitrary ones as boot stages. Refuse.
+          if [[ -z "$MSG_RE" ]]; then
+            echo "_Sentry query skipped: QUERY message-literal extraction produced an empty regex — refusing to match-all (would mislabel arbitrary events as boot stages)._" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # POLLED, not sampled once. The earlier form issued a single curl immediately
+          # after `terraform apply` returned — and the signal it looks for cannot exist yet.
+          # `cloud_init_complete` is the LAST line of cloud-init runcmd (cloud-init.yml:825
+          # of 835) and the host's own declared budget is
+          # SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900 (soleur-host-bootstrap.sh). So on a HEALTHY
+          # birth the single read landed in the no-match branch and printed "the host
+          # genuinely emitted nothing" — which is byte-identical to what a genuinely dark
+          # host produces. The step satisfied ADR-128 R2's letter while inverting its purpose:
+          # it could not discriminate the two states it exists to tell apart.
+          #
+          # The budget fits: timeout-minutes is 30 and the apply costs ~5m, so ~16m of polling
+          # (900s window + slack) leaves margin. Terminal states end the poll early, so a
+          # healthy boot usually returns in well under the budget.
+          # The step is `if: always()`, so it also runs when the APPLY failed — and then
+          # there may be no host at all. Polling 16 minutes for a host that was never
+          # created would turn every failed apply into a 16-minute red run for no signal.
+          # On a failed job: read ONCE, report whatever partial boot trail exists, and never
+          # fail the step (the job is already failing, and a second ::error:: would obscure
+          # the real cause). Only a job that got as far as a successful apply is entitled to
+          # a dark-boot verdict.
+          if [[ "${JOB_STATUS}" == "success" ]]; then
+            DEADLINE=$(( SECONDS + 960 ))
+          else
+            DEADLINE=$SECONDS
+          fi
+          TERMINAL=""
+          LAST_STAGE=""
+          TOTAL=0
+          while :; do
+            HTTP=$(curl -s --max-time 20 -G -o /tmp/sentry-events.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+              --data-urlencode "per_page=100" \
+              --data-urlencode "statsPeriod=1h" \
+              --data-urlencode "sort=-timestamp" \
+              "https://de.sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/events/" 2>/dev/null || echo "000")
+            RESP=$(cat /tmp/sentry-events.json 2>/dev/null || echo "")
+            if [[ "$HTTP" != "200" ]] || ! echo "$RESP" | jq -e 'type == "array"' >/dev/null 2>&1; then
+              echo "::warning::fresh-host Sentry read FAILED (HTTP ${HTTP}) — the auto-read did NOT run; this is NOT a 'host emitted nothing' result."
+              echo "_Sentry query FAILED (HTTP ${HTTP}) — the auto-read did NOT run; this is NOT a 'host emitted nothing' result. $(echo "$RESP" | jq -r '.detail // empty' 2>/dev/null | tr '\n' ' ' | head -c 160)_" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            # TRUNCATION GUARD. This is a SHARED project (web-1 traffic, app errors,
+            # host_metrics), so a full page is not evidence of anything: the fresh host's
+            # events may simply be past the cap. "genuinely emitted nothing" is only sayable
+            # when the window was not truncated.
+            TOTAL=$(echo "$RESP" | jq 'length' 2>/dev/null || echo 0)
+            LAST_STAGE=$(echo "$RESP" | jq -r --arg re "$MSG_RE" '
+              [ .[] | select(((.message // .title) // "") | test($re))
+                    | ([ (.tags // [])[]? | select(.key=="stage") | .value ][0] // "?") ][0] // ""' 2>/dev/null || echo "")
+            # Terminal = the host finished, or died. Either ends the wait; only one is good.
+            if [[ "$LAST_STAGE" == "cloud_init_complete" ]]; then TERMINAL="complete"; break; fi
+            if echo "$RESP" | jq -e --arg re "$MSG_RE" '[.[] | select(((.message // .title) // "") | test($re)) | select((.tags // [])[]? | select(.key=="level") | .value == "fatal")] | length > 0' >/dev/null 2>&1; then
+              TERMINAL="fatal"; break
+            fi
+            if (( SECONDS >= DEADLINE )); then TERMINAL="timeout"; break; fi
+            sleep 30
+          done
+          {
+            if [[ "$TOTAL" -ge 100 ]]; then
+              echo "_NOTE: the recent-events page came back FULL (100/100) on a SHARED project — this window is truncated, so an absence below is NOT proof the host emitted nothing._"
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if [[ -n "$LAST_STAGE" ]]; then
+            echo "$RESP" | jq -r --arg re "$MSG_RE" '
+              [.[] | select(((.message // .title) // "") | test($re))] | .[0:8][]
+              | ( [ (.tags // [])[]? | select(.key=="stage") | .value ][0] // "?" ) as $stage
+              | "- `\((.message // .title) // "?")` — stage=`\($stage)` (\(.dateCreated // "?"))"
+            ' | tee -a "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          fi
+          case "$TERMINAL" in
+            complete)
+              echo "fresh-host boot reached cloud_init_complete — the host booted clean." | tee -a "$GITHUB_STEP_SUMMARY"
+              ;;
+            fatal)
+              if [[ "${JOB_STATUS}" != "success" ]]; then
+                echo "_A fatal boot-stage event was surfaced, but this job did not complete its apply — the trail above may belong to an earlier attempt or another host._" | tee -a "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              echo "::error::${WEB_HOST_KEY} booted DARK: a fatal boot-stage event was surfaced (last-reached stage: ${LAST_STAGE:-unknown}). runcmd is once-per-instance, so this host CANNOT be repaired by a reboot — it must be replaced. Do NOT put it into service."
+              echo "_**The host booted dark.** Last-reached stage \`${LAST_STAGE:-unknown}\`. runcmd is once-per-instance — replace the host, do not reboot it._" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+            timeout)
+              if [[ "${JOB_STATUS}" != "success" ]]; then
+                echo "_No terminal boot event; this job did not complete its apply, so no dark-boot verdict is drawn._" | tee -a "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              echo "::error::${WEB_HOST_KEY} did not reach cloud_init_complete within 960s (the host's own SOLEUR_FRESH_BOOT_WINDOW_SECONDS is 900). Last-reached stage: ${LAST_STAGE:-none observed}. Treat as DARK until proven otherwise — absence past the boot window is the documented dark-boot signal, not a slow boot."
+              echo "_**No terminal boot event inside the host's own boot window.** Last-reached stage \`${LAST_STAGE:-none observed}\`. Treated as dark._" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
+
+      - name: Dispatch summary
+        if: always()
+        env:
+          REASON: ${{ inputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+          PINNED_REF: ${{ steps.pin.outputs.pinned }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## web-host-create — birth of ${WEB_HOST_KEY:-?} (ADR-145, #6730)"
+            echo ""
+            echo "**Dispatch reason:** ${REASON:-n/a}"
+            echo "**Pinned image:** ${PINNED_REF:-unresolved}"
+            echo "**Status:** ${JOB_STATUS}"
+            echo "**Run:** ${RUN_URL}"
+            echo ""
+            echo "Purely additive +create of the host's ten-address fan-out on a digest-pinned image. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
+            echo ""
+            echo "**This host has NO active heartbeat coverage yet.** Its two Better Stack heartbeats were REGISTERED by this dispatch but are \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured). The arming step lives in the \`apply\` job, so coverage begins at the next merge-to-main infra apply. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --- #6767: read-only retrospective entrypoint drift AUDIT --------------------

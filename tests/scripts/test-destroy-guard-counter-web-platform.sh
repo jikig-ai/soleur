@@ -727,7 +727,9 @@ t_web2_retire_substring_collision_aborts() {
 # ["web-1"], and `-target` is TRANSITIVE at the resource level, so the server sits
 # in the plan graph. Neither passes -var image_name, so a transitive web-1 birth
 # would use the mutable :latest default — and web-1 is the sole web host since
-# web-2 retired 2026-07-17 (#6538). No automated path may birth it (#6730). Reason about THIS tripwire, never about -target
+# web-2 retired 2026-07-17 (#6538). Exactly ONE automated path may birth it — the
+# web-host-create dispatch (#6730, ADR-145), which sources its own inverted gate and does
+# NOT read host_creates. Reason about THIS tripwire, never about -target
 # membership: "web-1 appears in no -target=" is a recorded invalid inference
 # (ADR-114 2026-07-19 amendment item 5).
 #

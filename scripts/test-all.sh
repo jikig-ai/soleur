@@ -344,6 +344,12 @@ if want_scripts; then
   # or anything out of scope. Registered HERE — nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/workspaces-luks-cutover-gate" bash tests/scripts/test-workspaces-luks-cutover-gate.sh
   run_suite "tests/scripts/workspaces-luks-recut-gate" bash tests/scripts/test-workspaces-luks-recut-gate.sh
+  # web-host BIRTH gate (#6730) — the INVERSE of web2-retire-gate: requires exactly one
+  # hcloud_server create, matching the dispatched host key, with zero destroys. It is the
+  # only check on the one route granted the host_creates capability (a new dispatch job
+  # inherits nothing from the per-PR apply's inline HALT), so every arm is load-bearing and
+  # the suite mutation-proves each one. Registered HERE — nothing auto-discovers tests/scripts/.
+  run_suite "tests/scripts/web-host-birth-gate" bash tests/scripts/test-web-host-birth-gate.sh
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
@@ -421,6 +427,21 @@ fi
 tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 
 echo "=== $((suites - failed))/$suites suites passed ==="
+
+# COVERAGE BOUNDARY (#6730). This runner does NOT cover apps/web-platform/infra/;
+# those suites are registered only in .github/workflows/infra-validation.yml. The
+# gap is silent and has already cost a session: a required check was RED behind a
+# 223/223 green here, because "all tests pass" was read as evidence for an infra
+# change it never touched. Announce the boundary whenever infra is in the diff, so
+# the green above cannot be mistaken for coverage it does not have.
+if git diff --name-only HEAD 2>/dev/null | grep -q '^apps/web-platform/infra/' \
+   || git diff --name-only origin/main...HEAD 2>/dev/null | grep -q '^apps/web-platform/infra/'; then
+  echo ""
+  echo "NOTE: your diff touches apps/web-platform/infra/, which this runner does NOT cover."
+  echo "      The green above is not evidence for it. Run the CI-registered suites:"
+  echo "        bash apps/web-platform/infra/run-registered-suites.sh"
+fi
+
 if [[ "$failed" -gt 0 ]]; then
   exit 1
 fi

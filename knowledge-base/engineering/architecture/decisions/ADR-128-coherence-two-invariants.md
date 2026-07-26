@@ -36,7 +36,7 @@ under one word.** Separating them is what makes #6575 closable and #6712 not.
 | Invariant | What it catches | Where it is enforced |
 |---|---|---|
 | **Build-integrity** — the image's baked `/opt/soleur/host-scripts/` matches the repo tree it was built from | Dockerfile `COPY`-list drift; a post-`COPY` `RUN` mutating the baked directory; a duplicate `host_script_files` entry | **Statically**, in `plugins/soleur/test/cloud-init-user-data-size.test.ts` — the `Dockerfile <-> server.tf baked-set parity` describe, in the required bun shard. No image pull, no registry round-trip, no release-path coupling. |
-| **Cross-commit skew** — the image Terraform computed `host_scripts_content_hash` against is the image the host actually pulls | An apply at commit `C_tf` while `:latest` points at `C_img` | **Nowhere, today.** Only closable by pinning `var.image_name` to a digest at create time. Owned by **#6730**. |
+| **Cross-commit skew** — the image Terraform computed `host_scripts_content_hash` against is the image the host actually pulls | An apply at commit `C_tf` while `:latest` points at `C_img` | **The `web-host-create` dispatch, as of #6730 / ADR-145** — it resolves an immutable `@sha256` digest once, proves coherence against it pre-apply, and passes it as `-var image_name`. Closable only by digest-pinning at create time, which is what that path does. Every OTHER route still HALTs on `host_creates > 0` rather than pinning, so the invariant is enforced by exclusivity, not by universal coverage. |
 
 The distinction is not academic. Build-integrity is a property of **one commit** and is
 therefore decidable by a test. Cross-commit skew is a property of the **relation between an
@@ -240,10 +240,19 @@ Reviewed all three model files (`model.c4`, `views.c4`, `spec.c4`).
 
 ## Carried-forward requirements for the #6730 birth path (MUST)
 
-Deleting `web_2_recreate` removed assertions that were **never web-2-specific** and that
-nothing re-implements today. They are recorded here as binding acceptance criteria for the
-digest-pinned web-1 birth path #6730 builds. Until that path exists, the operator
-pinned-image chain in the `host_creates` HALT carries them as explicit manual steps.
+Deleting `web_2_recreate` removed assertions that were **never web-2-specific**. They are
+recorded here as binding acceptance criteria for the digest-pinned birth path #6730 builds.
+
+**MET as of 2026-07-26 (#6730, ADR-145).** That path exists: the `web-host-create` dispatch
+in `.github/workflows/apply-web-platform-infra.yml` implements R1–R5 as named steps, and
+`apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh` asserts each against
+that job — the executable re-add this section asked for. The framing this preamble carried
+until then ("until that path exists, the operator pinned-image chain in the `host_creates`
+HALT carries them as explicit manual steps") is retired: that chain survives only as the
+break-glass fallback for when the dispatch itself is unavailable, and the HALT text now
+routes to the dispatch first. R1 is additionally strengthened there — the job fails closed on
+an **unreadable** secret, not only an empty one, since `doppler secrets get` returns an empty
+string for both a missing secret and an auth failure.
 
 | # | Requirement | Why it is not optional |
 |---|---|---|
@@ -255,16 +264,22 @@ pinned-image chain in the `host_creates` HALT carries them as explicit manual st
 
 Provenance: these were AC14 / AC8 / AC8b / AC13 / AC16 in
 `apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh`, asserted against the
-`web_2_recreate` job. That file records the same loss inline at the deletion site. Re-add
-executable assertions there the moment an automated create path exists — a requirement that
-lives only in prose is one refactor away from being forgotten.
+`web_2_recreate` job, and re-pointed at `web_host_create` by #6730. The instruction that
+carried them through the gap — "re-add executable assertions there the moment an automated
+create path exists, because a requirement that lives only in prose is one refactor away from
+being forgotten" — is discharged. The restored assertions grep the JOB BLOCK rather than the
+whole workflow (eight other dispatch jobs would otherwise satisfy them) and carry a
+non-empty-block floor, because two of the five are negative assertions that pass trivially
+against an absent job.
 
 ## References
 
 - Issues #6575 (swept here), #6712 (stays OPEN — cross-commit skew), #6730 (digest-pinned
   birth path), #6574 (`-target` transitivity, unrelated and unchanged), #6425
 - ADR-082 → `superseded-in-part` by this ADR; its Item 4 (image digest pin + signature
-  verification) remains **in force but UNMET**, owned by #6730
+  verification) is **MET for the digest-pin half** as of #6730 (the birth path resolves and
+  applies an immutable `@sha256`); its **signature-verification half remains UNMET** — no
+  cosign verify runs on the fresh-boot path, and #6730 did not add one
 - ADR-114 hazard #5 — the delivery-channel hazard this decision re-scopes host-agnostically
 - ADR-068 §(c) — the weight-flip conditions `lb-weight-gate.sh` checked
 - ADR-079 amendment (#5955) — the original `.tag`-is-last-attempt finding

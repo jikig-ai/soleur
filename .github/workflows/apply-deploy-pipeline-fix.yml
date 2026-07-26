@@ -304,7 +304,7 @@ jobs:
           fi
           if [[ "$host_creates" -gt 0 ]]; then
             echo "::error::deploy-pipeline-fix plan would CREATE ${host_creates} hcloud_server resource(s). This path must never birth a host: it passes no -var image_name, so the host would boot against the mutable ':latest' tag and cloud-init's host_scripts_content_hash re-verify would abort the entire runcmd at stage=verify (no cloudflared, no webhook, no monitors, no egress firewall) — once per instance, unrepairable by reboot. (hcloud_volume creates are NOT counted since #6919/T55 — a for_each volume fan-out for a legitimate web host is routine, not a host birth.)"
-            echo "::error::ROUTING — do NOT re-run. A legitimate web-host birth needs an image pinned to a repo@sha256 digest, which no workflow performs today: run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) with -var image_name=<pinned digest>. Closing that gap is tracked in #6730."
+            echo "::error::ROUTING — do NOT re-run. A legitimate web-host birth needs an image pinned to a repo@sha256 digest, which THIS path does not perform: dispatch apply-web-platform-infra.yml with -f apply_target=web-host-create -f web_host_key=<key> -f confirm=BIRTH-<key> (#6730, ADR-145), which resolves a digest, runs the coherence preflight and grades the plan with an inverted birth gate. The operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) with -var image_name=<pinned digest> remains the break-glass fallback."
             echo "::error::NO BYPASS on this path — there is no ack token here to type past."
             terraform show -no-color tfplan > tfplan.txt || true
             grep -E 'will be created|Plan:' tfplan.txt | head -20 >&2 || true

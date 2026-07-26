@@ -617,6 +617,13 @@ jobs:
       - name: Run cross-pipeline web-1-swap concurrency parity drift-guard (#6060)
         run: bash apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh
 
+      # Pins the local runner that derives ITS suite list from this file (#6730).
+      # Registered here deliberately: the runner exists because these suites are
+      # invisible to scripts/test-all.sh, so leaving its own test unregistered
+      # would make it the very orphan class the runner reports.
+      - name: Run registered-infra-suite runner self-tests (#6730)
+        run: bash apps/web-platform/infra/run-registered-suites.test.sh
+
 
       - name: Run web-1 known-good tag resolver semver-guard tests (#6147)
         run: bash apps/web-platform/infra/resolve-web1-known-good-tag.test.sh
