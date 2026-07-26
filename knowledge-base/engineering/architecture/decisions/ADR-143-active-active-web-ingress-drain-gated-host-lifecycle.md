@@ -29,7 +29,7 @@ Read-only query of `/v1/datacenters` (available server types) + `/v1/server_type
 | Server type | Spec | Net €/mo (hel1) | Orderable in hel1 (live 2026-07-25) |
 |---|---|---|---|
 | `cx33` (Intel; web-1's current type) | 4c/8g x86 | 8.49 | **NO — out of stock (also all EU DCs)** |
-| `cax11` (ARM; git-data's type, #6570) | 2c/4g arm | 5.99 | **NO — ARM unavailable in EU DCs** |
+| `cax11` (ARM; git-data's type **at the time of this probe** — repinned to `cpx22` 2026-07-27, #6570) | 2c/4g arm | 5.99 | **NO — ARM unavailable in EU DCs** |
 | `cx22` (Intel) | 2c/4g x86 | ~4.59 | **NO — out of stock** |
 | `cpx32` (AMD) | 4c/8g x86 | 35.49 | YES |
 | `cpx22` (AMD) | 2c/4g x86 | 19.49 | YES |
@@ -146,8 +146,10 @@ The original `lb-weight-gate.sh` was deleted (#6575) because its first assertion
   the same workspaces). De-petting web-1 incurs a brief maintenance-window outage. A recurring `cpx32`
   standby cost (~similar to the retired web-2's €8.49/mo) — but this time with a consumer (disposability +
   blue-green readiness), unlike the retired standby.
-- **Follow-on:** git-data (#6570) must also move off the unorderable `cax11` (ARM) to an x86 type — its own
-  work; it is the root blocker for the Phase-6 concurrent-serving flip.
+- **Follow-on — DONE 2026-07-27 (#6570):** git-data has moved off the unorderable `cax11` (ARM) to
+  `cpx22`, with its arch derived rather than hardcoded; the decision record is the ADR-068 addendum
+  of that date. It was the root blocker for the Phase-6 concurrent-serving flip **as to the type**;
+  the flip remains blocked because the host has no birth route at all (#6977).
 
 ## Addendum — 2026-07-26: web-2 repinned `cx23` → `cpx22` (forced by stock, #6966)
 
@@ -223,8 +225,17 @@ They run fine, but **none can be rebuilt on its current type** — each rebuild 
 a cost change. Nothing catches "a declared type left the orderable set" until an apply; that periodic
 audit is #6460, which also now owns recording the account limits as facts with a decay date.
 
-**Not changed by this addendum:** `var.registry_server_type` and `var.git_data_server_type` keep their
-unorderable defaults. A `registry_server_type` change is a host *replace* of a live registry, and
-git-data's move off ARM voids the ARM-native rationale recorded in its own pin — #6570 owns that
-decision (its cloud-init installs the **arm64** Doppler build, so it is a real code change, not a var
-flip).
+**Not changed by this addendum:** `var.registry_server_type` keeps its unorderable default — a
+`registry_server_type` change is a host *replace* of a live registry. This addendum also left
+`var.git_data_server_type` on its unorderable `cax11`, and predicted that moving it would be a real
+code change rather than a var flip because git-data's cloud-init installed the **arm64** Doppler
+build.
+
+> **Superseded 2026-07-27 as to git-data (#6570).** That prediction was correct and the work is now
+> done: `var.git_data_server_type` is **`cpx22`**, and the host's arch — with the Doppler build and
+> checksum that hang off it — is **derived** from the type prefix rather than hardcoded, so it is a
+> var flip from here on. The sentence above no longer describes git-data; it remains accurate for
+> `registry_server_type`. **The decision record lives in
+> [ADR-068](./ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md) (addendum
+> 2026-07-27, D1–D10)**, because git-data is ADR-068's element, not this ADR's. Note this repin does
+> **not** make the host bornable — it still has no birth route (#6977).
