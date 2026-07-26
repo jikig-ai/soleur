@@ -50,6 +50,18 @@ rc_entry() {
     "$(printf '%s' "$1" | jq -R .)" "$(printf '%s' "$2" | jq -R .)" "$3"
 }
 
+# rc_noactions <address> <type>
+#
+# An entry with NO `.change.actions` key. Built through jq -R like its siblings rather
+# than as an inline JSON literal: an inline literal has to escape the `["key"]` quotes
+# through both the shell and printf, and getting that wrong yields a fixture that is
+# malformed for a DIFFERENT reason than the one under test — which then "passes" the
+# abort check while proving nothing about the shape guard.
+rc_noactions() {
+  printf '{"address":%s,"type":%s,"change":{"before":null,"after":{}}}' \
+    "$(printf '%s' "$1" | jq -R .)" "$(printf '%s' "$2" | jq -R .)"
+}
+
 # rc_update <address> <type> <before-json> <after-json>
 #
 # An IN-PLACE update, the one action shape rc_entry cannot express: it hardcodes
@@ -212,6 +224,22 @@ check "missing plan file => fail-closed ABORT" 1 "not found" "$TMP/nonexistent.j
 mk_plan "$TMP/nochanges.json" 'null'
 check "null resource_changes => fail-closed ABORT" 1 "" "$TMP/nochanges.json" "web-2"
 
+# An entry with NO `.change.actions` at all. jq's `null | index("delete")` returns null
+# rather than erroring, so such an entry is silently DROPPED by the destroy/out-of-scope
+# selects — a resource that vanishes from the work-list instead of failing closed.
+#
+# This aborts today only by ACCIDENT: `.change.actions | any(...)` happens to error on
+# null, so the out_of_scope counter comes back empty and trips the numeric check. That is
+# one jq expression away from silently passing, and the failure it would then hide is a
+# destroy the gate could not see. Assert the shape explicitly, and assert the MESSAGE
+# names it — a generic "counter parse failed" tells the operator nothing about which
+# entry is unclassifiable. Mirrors stock-preflight-gate.sh's identical guard.
+mk_plan "$TMP/noactions.json" "$(printf '[%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_noactions 'hcloud_volume.workspaces["web-2"]' 'hcloud_volume')")"
+check "an entry with no .change.actions => fail-closed ABORT" 1 "unclassifiable" "$TMP/noactions.json" "web-2"
+check "the unclassifiable ABORT names the offending address" 1 'hcloud_volume.workspaces["web-2"]' "$TMP/noactions.json" "web-2"
+
 # ── REJECT: no host key supplied ──────────────────────────────────────────────────
 out="$(web_host_birth_gate "$TMP/happy.json" "" 2>&1)"; rc=$?
 if [[ "$rc" -eq 1 && "$out" == *"host key"* ]]; then
@@ -313,6 +341,24 @@ mutate_and_check "destroy guard" 's/if \[\[ "\$destroys" -ne 0 \]\]; then/if fal
 
 # SOLE-GUARD: the cloudflare ruleset is out of scope and nothing else objects to it.
 mutate_and_check "out-of-scope guard" 's/if \[\[ "\$out_of_scope" -ne 0 \]\]; then/if false; then/' "$TMP/out-of-scope.json" "web-2"
+
+# SOLE-GUARD: the actions-shape check.
+#
+# Worth recording how this arm was classified, because the first reading was wrong. Before
+# the guard existed, a no-actions plan DID abort — so it looked layered, with the numeric
+# counter-validation as the backstop. Measuring the mutation says otherwise: neuter this
+# arm and the plan PASSES. The pre-guard abort came from the `offenders` extraction and
+# the ordering around it, not from a second arm that would still catch it.
+#
+# That is the whole reason the mutation is measured rather than reasoned about. "Something
+# else would catch it" is the most comfortable thing to believe about a guard you are
+# about to weaken, and here it was false.
+#
+# Anchored on the ABORT line's own literal rather than the multi-line `jq -e` condition:
+# that condition spans two lines and is dense with regex metacharacters, so a sed aimed at
+# it is brittle in a way the non-vacuity floor would (correctly) report as a missing guard.
+mutate_and_check "actions-shape guard" 's/^    echo "web_host_birth_gate: ABORT — unclassifiable.*/    return 0/' \
+  "$TMP/noactions.json" "web-2"
 
 # LAYERED: a create of web-1 is both an identity mismatch and out of scope. The
 # identity arm runs first and owns the message; the allow-set is the backstop.

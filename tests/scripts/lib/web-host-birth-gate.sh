@@ -96,6 +96,28 @@ web_host_birth_gate() {
     return 1
   fi
 
+  # Every entry MUST carry an ARRAY .change.actions before any counter reads one.
+  #
+  # jq's `null | index("delete")` returns null rather than erroring, so an entry missing
+  # `.change.actions` is silently DROPPED by the destroy and out-of-scope selects — a
+  # resource that vanishes from the work-list instead of failing closed. What that hides
+  # is precisely a destroy the gate cannot see.
+  #
+  # MEASURED, not assumed: deleting this check makes a no-actions plan PASS (the suite's
+  # mutation proves it). An earlier draft of this comment claimed the numeric
+  # counter-validation below was a sufficient backstop and that this check merely improved
+  # the message. That was wrong, and it is the comfortable kind of wrong — "something else
+  # would catch it" is the standard justification for weakening a guard.
+  #
+  # Scoped to ALL types, not just hcloud_server as in the sibling stock-preflight gate,
+  # because the destroy and out-of-scope arms read every entry's actions.
+  if jq -e '[.resource_changes[] | select((.change.actions | type) != "array")] | length > 0' \
+       < "$plan_json" >/dev/null 2>&1; then
+    offenders=$(jq -r '[.resource_changes[] | select((.change.actions | type) != "array") | .address] | .[0:10] | join(", ")' < "$plan_json" 2>/dev/null)
+    echo "web_host_birth_gate: ABORT — unclassifiable plan entry: ${offenders} has no array .change.actions, so it cannot be classified as create/destroy/no-op. Fail-closed: an entry the gate cannot read is not evidence of a safe plan — a destroy hiding in an unreadable entry is exactly what this refuses to wave through."
+    return 1
+  fi
+
   creates=$(jq '[.resource_changes[] | select(.type == "hcloud_server") | select(.change.actions | index("create"))] | length' < "$plan_json" 2>/dev/null)
 
   # Any destroy-shaped action ANYWHERE in the plan, not just on hcloud_server: a birth
