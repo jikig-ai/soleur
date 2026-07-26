@@ -162,6 +162,44 @@ Read the plan before confirming. Expect a create of `hcloud_server.web[<key>]` *
 NIC** — a server create without `hcloud_server_network.web[<key>]` is the #6416 shape. Anything
 touching another host's data volume is a stop signal.
 
+### 5. Verify the boot — MANDATORY
+
+`terraform apply` returning 0 means the *server* was created, not that it *booted*. The dispatch
+polls Sentry to a terminal state and fails the run on a dark boot; on this path nothing does, so
+read the trail yourself. "Verify the result" above does not cover you here — it reads the run's
+step summary, and a break-glass birth has no run.
+
+```bash
+export SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN --plain -p soleur -c prd_terraform)
+SENTRY_ORG=$(doppler secrets get SENTRY_ORG --plain -p soleur -c prd_terraform)
+SENTRY_PROJECT=$(doppler secrets get SENTRY_PROJECT --plain -p soleur -c prd_terraform)
+
+curl -sS -G -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+  --data-urlencode 'per_page=100' \
+  --data-urlencode 'statsPeriod=1h' \
+  --data-urlencode 'sort=-timestamp' \
+  "https://de.sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/events/" \
+| jq -r '.[] | select(.title // .message // ""
+    | test("soleur-hostscript-seed failed|soleur-host-bootstrap failed|soleur-host-bootstrap complete|soleur-cloud-init boot stage"))
+    | "\(.dateCreated)  \(.title // .message)"'
+```
+
+Fetch **unfiltered and match client-side**, as above. The `/events/` endpoint silently ignores a
+`message:"…"` search prefix and returns zero for events that provably exist — passing one produces
+a confident, wrong "the host emitted nothing".
+
+- **Expect** `cloud_init_complete` as the last-reached stage. A `fatal` names where the boot died.
+- **Poll, do not sample once.** `cloud_init_complete` is the last line of cloud-init `runcmd` and
+  the host's own budget is `SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900`. Read immediately after apply and
+  a *healthy* host looks identical to a dark one. Re-run until a terminal stage appears or ~16
+  minutes elapse.
+- **An empty result is not health.** This is a shared project — web-1 traffic and `host_metrics`
+  can push the fresh host's events past the 100-event cap. Empty means *unproven*, not *good*.
+- **A non-200 is not health either.** A failed read is a failed read; do not record it as a clean
+  boot.
+
+Then the serving check from "Verify the result" above, for a host in the serving path.
+
 </details>
 
 ## References

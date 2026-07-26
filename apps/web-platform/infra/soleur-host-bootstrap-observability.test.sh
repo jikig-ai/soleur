@@ -37,8 +37,13 @@ WF="$DIR/../../../.github/workflows/apply-web-platform-infra.yml"
 # these five assertions were removed rather than left to become.
 #
 # `$0 ~ /^  [A-Za-z0-9_-]+:/` is the top-level job header; capture flips on ours and
-# off at the next one, so the block ends where the job ends.
-JOB="$(awk '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ /^  web_host_create:/) } cap' "$WF" || true)"
+# off at the next one. Capture ALSO closes on `^  #` — a job-level comment preamble.
+# A following job's preamble is not a header, so header-only capture ran past the end
+# of this job and collected the NEXT job's prose (19 lines, mentioning `terraform
+# apply` and "read-only"), which is precisely the sibling-satisfies-our-assertion
+# shape this extraction exists to prevent. The birth job's body is indented four
+# spaces or more, so a two-space `#` is always someone else's preamble.
+JOB="$(awk '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ /^  web_host_create:/) } /^  #/ { cap = 0 } cap' "$WF" || true)"
 
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
@@ -47,6 +52,17 @@ no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
 # Deliberately-nonzero grep inside a command substitution must not trip `set -e`
 # (accumulate-then-exit foot-gun): the trailing `|| true` keeps a no-match empty.
 line_of() { { grep -nF -- "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1; } || true; }
+
+# ── AC0: the extraction above is actually job-scoped ──────────────────────────────
+# Every assertion that greps $JOB inherits its correctness from this one. Measured,
+# not assumed: the block must be non-empty, must open on our own header, and must
+# carry no two-space `#` — the marker of another job's preamble leaking in.
+if [[ -n "$JOB" ]] && head -1 <<<"$JOB" | grep -qE '^  web_host_create:' \
+   && ! grep -qE '^  #' <<<"$JOB"; then
+  ok "AC0: web_host_create block is job-scoped (opens on its header, no foreign preamble)"
+else
+  no "AC0: web_host_create block extraction is wrong — every \$JOB assertion below is unsound"
+fi
 
 # ── AC1 (B): cosign ENFORCE is not on the fresh-boot path (documentation guard) ──
 # The default is warn; no repo site sets enforce outside a test; cosign verify is
