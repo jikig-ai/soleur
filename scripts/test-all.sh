@@ -427,6 +427,21 @@ fi
 tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 
 echo "=== $((suites - failed))/$suites suites passed ==="
+
+# COVERAGE BOUNDARY (#6730). This runner does NOT cover apps/web-platform/infra/;
+# those suites are registered only in .github/workflows/infra-validation.yml. The
+# gap is silent and has already cost a session: a required check was RED behind a
+# 223/223 green here, because "all tests pass" was read as evidence for an infra
+# change it never touched. Announce the boundary whenever infra is in the diff, so
+# the green above cannot be mistaken for coverage it does not have.
+if git diff --name-only HEAD 2>/dev/null | grep -q '^apps/web-platform/infra/' \
+   || git diff --name-only origin/main...HEAD 2>/dev/null | grep -q '^apps/web-platform/infra/'; then
+  echo ""
+  echo "NOTE: your diff touches apps/web-platform/infra/, which this runner does NOT cover."
+  echo "      The green above is not evidence for it. Run the CI-registered suites:"
+  echo "        bash apps/web-platform/infra/run-registered-suites.sh"
+fi
+
 if [[ "$failed" -gt 0 ]]; then
   exit 1
 fi
