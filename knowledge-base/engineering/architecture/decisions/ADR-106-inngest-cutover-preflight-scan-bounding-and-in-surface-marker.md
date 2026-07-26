@@ -75,17 +75,50 @@ The cutover pre-flight hooks MUST bound scan **duration/cost** (in addition to A
    non-zero exit maps to a webhook non-200 (`hooks.json.tmpl` `include-command-output-in-response-on-error`),
    so the workflow's `CODE!=200` cause-branch surfaces the real timeout cause. `exit 1` fires the EXIT
    trap → the `mktemp` spool is cleaned; halting the loop releases the inngest→Postgres connections.
-4. **Cost reduction — completeness BY CONSTRUCTION.** The window is **never narrowed** (the `from`
-   filter bounds `receivedAt`, not fire-time, so narrowing silently drops far-future armed reminders).
+4. **Cost reduction — completeness BY CONSTRUCTION.** The window is **never narrowed for the
+   `receivedAt`-filtered inventory scans** (`armed_reminders` / `event_names`): that `from` filter
+   bounds `receivedAt`, not fire-time, so narrowing there silently drops far-future armed reminders.
+   The **doublefire** runs scan is the exception — see the ADR-146 amendment below.
    - **armed_reminders** is enumerated by a DEDICATED `eventNames:["reminder.scheduled"]` full-window
      query (small, page-ceiling-immune; precedent `inngest-enumerate-reminders.sh:82`).
    - **event_names** keeps the all-events distinct scan; the ONLY cost lever is raising `PAGE_SIZE`
      (lossless round-trip cut). If the corpus does not fit even at the raised size it aborts LOUD.
-   - **doublefire** is bounded by a `functionIDs` filter + the page ceiling, NOT a narrowed time
-     window: the probe window MUST stay ⊇ the operator cutover window (`FROM ≤ cutover_instant −
-     2×max_cron_period`) — a narrower window feeds false "missed ticks" into the enumeration
-     (`cutover-inngest.yml:704-743`) → operator re-fire → **double-fire**, the exact harm the cutover
+   - **doublefire** is bounded by a `functionIDs` filter + the page ceiling **and, since #6178, by a
+     narrowed time window anchored on the coexistence start** (see the amendment below). The probe
+     window MUST stay ⊇ the coexistence region — a narrower window feeds false "missed ticks" into the
+     enumeration (the missed-tick auto-enumeration block in the `op=verify` arm of
+     `cutover-inngest.yml`, content-anchored: the block beginning `# ---- Missed-tick
+     auto-enumeration (P2-16)`) → operator re-fire → **double-fire**, the exact harm the cutover
      prevents. This is a SEPARATE invariant from the inventory "superset" one.
+
+   > **Amended by [ADR-146](./ADR-146-trust-anchor-for-cutover-coexistence-window.md) (#6178,
+   > 2026-07-24).** The clause "the window is **never narrowed**" was retired for the doublefire scan
+   > (it still holds for `armed_reminders` / `event_names`, whose `from` filter bounds `receivedAt`
+   > rather than fire-time). Four corrections of record:
+   >
+   > 1. **The ⊇ invariant is restated** as `DF window ⊇ [coexistence_start − 2×cron_period, now]`,
+   >    where `coexistence_start` is the instant the dedicated host's scheduler went live. The
+   >    #6178 anchoring satisfies this exactly and no more.
+   > 2. **`2×max_cron_period` (≈182 d) was the FUNCTION-DISCOVERY term, not the double-fire term.**
+   >    The missed-tick loop enumerates `[.runs[].functionID] | unique`, so a window that wide
+   >    guaranteed even a quarterly cron appeared at least once. In other words that term bought
+   >    function discovery, not double-fire coverage. Discovery is deferred to a
+   >    follow-up (ADR-146 § Deferred), and **until it lands, slow-cron missed-tick recall is
+   >    reduced** — a recorded trade, not a silent one. The double-fire verdict itself is unaffected:
+   >    a function that never ran in the window cannot have double-fired in it.
+   > 3. **The window is OPEN-TOPPED and must stay so** — `DF_URL` carries no `until`. The
+   >    post-repoint region (when the dedicated host first had functions registered, and therefore
+   >    first *could* double-fire) lies AFTER `CUTOVER_WINDOW_UNTIL`, as does every
+   >    `op=rollback`-initiated interval. Bounding the top looks like a symmetric tidy-up and
+   >    removes the highest-risk region. Asserted by test.
+   > 4. **`timeField: STARTED_AT` is a load-bearing coupling.** It is what makes a straggler safe:
+   >    the filter key and the bucket key are the same quantity, so bucket membership is monotone in
+   >    the filter predicate. `RunsFilterV2` also offers `QUEUED_AT`, which is arguably more natural
+   >    for tick semantics — flip it and a run queued pre-window but started in-window escapes the
+   >    filter while its pair is bucketed by `startedAt`: asymmetric truncation, invisible pair.
+   >
+   > This does **not** disturb the `## Considered Options` rejection of "narrow the eventsV2 window",
+   > which concerns the *inventory* scan, not the *runs* scan.
 5. **In-surface marker (journald-only).** `SOLEUR_INNGEST_PREFLIGHT_{START,DONE,TIMEOUT}` via
    `logger -t "$LOG_TAG"` only (the hook's stdout IS the pure-JSON webhook body, #5503 — a stdout
    marker would corrupt the parse). START is the literal first line, before any network call, so an

@@ -164,13 +164,21 @@ echo "T-S: both copies carry the same Signal 2 matcher"
 # `review: ` sitting in an explanatory COMMENT, which satisfied the grep. Same
 # class this PR fixes elsewhere — a body-grep sees comments too, so assert on
 # something a comment cannot produce.
-SIG2_RE='grep -E "\^\[a-f0-9\]\+ \(refactor: add code review findings\|review: \)"'
+#
+# Compared as a FIXED string (grep -qF), not an ERE. The matcher now contains
+# `(`, `)`, `[`, `^`, `*`, `?` and a literal backslash for the optional
+# conventional-commit scope; hand-escaping all of that into a regex-matching-a-
+# regex is where the assertion silently rots. -F also makes the parity check
+# exact — byte-for-byte, which is what "both copies carry the same matcher"
+# means — and matches the trailer-lookup check below. A comment cannot produce
+# the full `grep -E "..."` call, so the anti-drift property above is preserved.
+SIG2_CALL='grep -E "^[a-f0-9]+ (refactor: add code review findings|review(\([^)]*\))?: )"'
 for hook in "$CLAUDE_HOOK" "$OPENHANDS_HOOK"; do
   name="$(basename "$(dirname "$(dirname "$hook")")")"
-  if grep -qE "$SIG2_RE" "$hook"; then
+  if grep -qF -- "$SIG2_CALL" "$hook"; then
     pass "[$name] Signal 2 uses the anchored two-pattern alternation"
   else
-    fail "[$name] Signal 2 drift — expected the anchored alternation matching BOTH the legacy subject and 'review: '"
+    fail "[$name] Signal 2 drift — expected the anchored alternation matching the legacy subject and 'review: ' with an optional (scope)"
   fi
 done
 # The trailer lookup must be present in both, anchored on the git format string
