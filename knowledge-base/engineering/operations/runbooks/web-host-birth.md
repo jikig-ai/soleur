@@ -48,7 +48,8 @@ host's name.
 | Asserts `SENTRY_DSN` non-empty in Doppler `prd_terraform`, failing closed if it is *unreadable* | The pre-extraction boot stages emit through the baked `${sentry_dsn}` and nothing else. Empty ⇒ a failed birth emits nothing and pages nobody (ADR-128 R1). |
 | Resolves web-1's running version → tag → immutable `@sha256` digest, once | A mutable `:latest` can move between the coherence check and the apply, which would defeat the check entirely. |
 | Runs `host-image-coherence-preflight.sh` against the pinned digest | An image whose baked host-scripts disagree with the applied hash aborts cloud-init at `stage=verify` (see below). Pre-apply, so nothing is created on a doomed boot. |
-| Plans the host's **nine-address fan-out** and grades it with the inverted birth gate | Exactly one create, of the requested host, zero destroys/reboots/out-of-scope changes. |
+| Plans the host's **ten-address fan-out** and grades it with the inverted birth gate | Exactly one create, OF the requested host, WITH its private NIC and volume attachment, and zero destroys/reboots/out-of-scope changes. The NIC and attachment are required, not merely permitted — a server without them is #6416 and silent data loss respectively. |
+| Includes `cloudflare_record.app` in the fan-out | `-target` is transitive upstream only, so the apex A record — a *dependent* of the server — would otherwise never re-point. On a web-1 birth that means a green run and `app.soleur.ai` still resolving to the dead host. |
 | Surfaces the fresh host's Sentry boot trail, `if: always()` | A green apply is not a green boot — the two are indistinguishable without asking Sentry. |
 
 ### Why the pin matters

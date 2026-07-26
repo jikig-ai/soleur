@@ -227,10 +227,10 @@ mk_plan "$TMP/sibling-fanout.json" "$(printf '[%s,%s]' \
   "$(rc_entry 'hcloud_volume.workspaces["web-3"]' 'hcloud_volume' '["create"]')")"
 check "a DIFFERENT host's volume riding the birth => ABORT" 1 "out-of-scope" "$TMP/sibling-fanout.json" "web-2"
 
-# The full in-scope fan-out — all nine addresses — must PASS. Without this control the
+# The full in-scope fan-out — all ten addresses — must PASS. Without this control the
 # allow-set could be too narrow and the gate would refuse every real birth plan, which
 # is an outage dressed as a safety feature.
-mk_plan "$TMP/full-fanout.json" "$(printf '[%s,%s,%s,%s,%s,%s,%s,%s,%s]' \
+mk_plan "$TMP/full-fanout.json" "$(printf '[%s,%s,%s,%s,%s,%s,%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
   "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
   "$(rc_entry 'hcloud_volume.workspaces["web-2"]' 'hcloud_volume' '["create"]')" \
@@ -239,8 +239,9 @@ mk_plan "$TMP/full-fanout.json" "$(printf '[%s,%s,%s,%s,%s,%s,%s,%s,%s]' \
   "$(rc_entry 'betteruptime_heartbeat.web_zot_consumer["web-2"]' 'betteruptime_heartbeat' '["create"]')" \
   "$(rc_entry 'betteruptime_heartbeat.web_nic_guard["web-2"]' 'betteruptime_heartbeat' '["create"]')" \
   "$(rc_entry 'doppler_secret.web_zot_consumer_url["web-2"]' 'doppler_secret' '["create"]')" \
-  "$(rc_entry 'doppler_secret.web_nic_guard_url["web-2"]' 'doppler_secret' '["create"]')")"
-check "the FULL nine-address birth fan-out => PASS" 0 "PASS" "$TMP/full-fanout.json" "web-2"
+  "$(rc_entry 'doppler_secret.web_nic_guard_url["web-2"]' 'doppler_secret' '["create"]')" \
+  "$(rc_update 'cloudflare_record.app' 'cloudflare_record' '{"content":"1.2.3.4"}' '{"content":"5.6.7.8"}')")"
+check "the FULL ten-address birth fan-out => PASS" 0 "PASS" "$TMP/full-fanout.json" "web-2"
 
 # A `no-op` refresh entry is not a change and must not trip the out-of-scope arm —
 # terraform emits these routinely for transitively-pulled resources.
@@ -250,6 +251,17 @@ mk_plan "$TMP/noop.json" "$(printf '[%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_entry 'cloudflare_record.app' 'cloudflare_record' '["no-op"]')")"
 check "a no-op refresh of an out-of-scope resource => PASS" 0 "PASS" "$TMP/noop.json" "web-2"
+
+# The apex A record is IN scope: on a web-1 birth it must update to the new address, or
+# app.soleur.ai keeps resolving to the dead host. On a web-2 birth it plans as a no-op.
+# Both shapes must PASS — a gate that refused the update would block the only birth that
+# actually needs it.
+mk_plan "$TMP/dns-update.json" "$(printf '[%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')" \
+  "$(rc_update 'cloudflare_record.app' 'cloudflare_record' '{"content":"1.2.3.4"}' '{"content":"5.6.7.8"}')")"
+check "the apex A record updating alongside the birth => PASS" 0 "PASS" "$TMP/dns-update.json" "web-2"
 
 # ── REJECT: unparseable input (fail-closed) ───────────────────────────────────────
 # "I could not check" must never read as "it is fine". This gate authorizes a

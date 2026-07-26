@@ -2862,6 +2862,13 @@ jobs:
   #     NIC is #6416 exactly.
   #   • hcloud_volume.workspaces + attachment          — /mnt/data; server.tf's user_data
   #     interpolates the volume id, so the host cannot even render without it.
+  #   • cloudflare_record.app                          — `content =
+  #     hcloud_server.web["web-1"].ipv4_address` (dns.tf). `-target` is transitive UPSTREAM
+  #     only, so this DEPENDENT never enters the plan on its own: a web-1 birth would
+  #     otherwise finish green with app.soleur.ai still resolving to the dead host's IP, and
+  #     the runbook's own verification step would fail with nothing explaining why. On a
+  #     web-2 birth it plans as a no-op (web-1's address is unchanged), so including it is
+  #     free there and load-bearing for the case the path is documented to serve.
   #   • hcloud_firewall_attachment.web                 — a SINGLETON over
   #     `[for h in hcloud_server.web : h.id]`. hcloud provider 1.63.0 documents that this
   #     resource (unlike hcloud_server.firewall_ids) does NOT attach before first boot, so
@@ -3187,6 +3194,7 @@ jobs:
               -target="hcloud_volume.workspaces[\"${WEB_HOST_KEY}\"]" \
               -target="hcloud_volume_attachment.workspaces[\"${WEB_HOST_KEY}\"]" \
               -target="hcloud_firewall_attachment.web" \
+              -target="cloudflare_record.app" \
               -target="betteruptime_heartbeat.web_zot_consumer[\"${WEB_HOST_KEY}\"]" \
               -target="betteruptime_heartbeat.web_nic_guard[\"${WEB_HOST_KEY}\"]" \
               -target="doppler_secret.web_zot_consumer_url[\"${WEB_HOST_KEY}\"]" \
@@ -3297,6 +3305,12 @@ jobs:
           # the fetch rc so a FETCH FAILURE is NAMED rather than collapsed into "not
           # configured".
           SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN --plain -p soleur -c prd_terraform 2>/tmp/doppler-sentry.err); dop_rc=$?
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike `secrets.*`).
+          # Every other Doppler read in this job masks; this one was the sole exception, and
+          # it is the only NEW secret the PR introduced. Latent today (no `set -x` anywhere
+          # in the file, and nothing echoes it) — masked anyway, because "no current caller
+          # prints it" is a property of today's code, not of the secret.
+          [[ -n "${SENTRY_AUTH_TOKEN:-}" ]] && printf '::add-mask::%s\n' "$SENTRY_AUTH_TOKEN"
           SENTRY_ORG=$(doppler secrets get SENTRY_ORG --plain -p soleur -c prd_terraform 2>/dev/null || true)
           SENTRY_PROJECT=$(doppler secrets get SENTRY_PROJECT --plain -p soleur -c prd_terraform 2>/dev/null || true)
           # Echo to the LOG as well as the summary so
@@ -3448,7 +3462,7 @@ jobs:
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
             echo ""
-            echo "Purely additive +create of the host's nine-address fan-out on a digest-pinned image. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
+            echo "Purely additive +create of the host's ten-address fan-out on a digest-pinned image. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
             echo ""
             echo "**This host has NO active heartbeat coverage yet.** Its two Better Stack heartbeats were REGISTERED by this dispatch but are \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured). The arming step lives in the \`apply\` job, so coverage begins at the next merge-to-main infra apply. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
           } >> "$GITHUB_STEP_SUMMARY"

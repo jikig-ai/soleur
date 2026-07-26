@@ -67,7 +67,7 @@ enforced by a sourced gate (`tests/scripts/lib/web-host-birth-gate.sh`) that PAS
 | the created address == the requested key | A count-only check passes a plan that births exactly one host that is **not** the one authorized. `web-1` is the singleton behind the `app.soleur.ai` A record. |
 | 0 destroys (incl. `forget`) | A replace is `["delete","create"]` — one create to a naive counter, while destroying a live host. |
 | 0 reboot-forcing in-place updates | The birth targets `hcloud_firewall_attachment.web`, a singleton over `[for h in hcloud_server.web : h.id]`, which drags every web host into the plan. A `placement_group_id`/`server_type` delta on web-1 power-cycles the sole live origin with zero destroys and a create-count of exactly 1. |
-| 0 changes outside the host's nine-address fan-out | Subsumes nested-block shrinkage (no `cloudflare_*` address is in the allow-set at all) without re-implementing five provider-schema-shaped counters that drift on the next provider major. |
+| 0 changes outside the host's ten-address fan-out | Subsumes nested-block shrinkage without re-implementing five provider-schema-shaped counters that drift on the next provider major. The one `cloudflare_*` member — `cloudflare_record.app`, the apex A record, which must re-point on a web-1 birth — is a flat record with no nested rule arrays, so it carries none of the shrinkage surface those counters exist for. Every `cloudflare_ruleset` remains out of scope entirely. |
 
 **A new dispatch job inherits nothing.** The per-PR HALT is a separate inline copy in the
 `apply` job whose `if:` is mutually exclusive with every dispatch job. So this gate is not

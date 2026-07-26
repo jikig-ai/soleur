@@ -1355,12 +1355,21 @@ const WEB_HOST_BIRTH_TARGET_BASES = [
   "hcloud_volume_attachment.workspaces",
   // Singleton over `[for h in hcloud_server.web : h.id]` — unkeyed by construction.
   "hcloud_firewall_attachment.web",
+  // The apex A record, pinned to web-1's ipv4_address. A DEPENDENT of hcloud_server.web,
+  // so `-target`'s upstream-only transitivity never pulls it in implicitly.
+  "cloudflare_record.app",
   "betteruptime_heartbeat.web_zot_consumer",
   "betteruptime_heartbeat.web_nic_guard",
   "doppler_secret.web_zot_consumer_url",
   "doppler_secret.web_nic_guard_url",
 ];
-// The four whose base is per-merge covered, so stripping the job cannot lose coverage.
+// The FLEET-SCOPED members: singletons with no per-host instance, so they carry no
+// `["<key>"]` and are exempt from the same-key assertion below.
+const WEB_HOST_BIRTH_UNKEYED = [
+  "hcloud_firewall_attachment.web",
+  "cloudflare_record.app",
+];
+// The bases that are per-merge covered, so stripping the job cannot lose coverage.
 const WEB_HOST_BIRTH_PER_MERGE_COVERED = [
   "hcloud_firewall_attachment.web",
   "betteruptime_heartbeat.web_zot_consumer",
@@ -1421,8 +1430,13 @@ describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", ()
     const keys = keyedTargets
       .map((t) => /\["([^"]*)"\]/.exec(t)?.[1])
       .filter((k): k is string => k !== undefined);
-    // 8 keyed + 1 unkeyed singleton (the firewall attachment).
-    expect(keys.length).toBe(WEB_HOST_BIRTH_TARGET_BASES.length - 1);
+    // Named explicitly rather than as an off-by-N against the total: the first version
+    // said "8 keyed + 1 unkeyed singleton (the firewall attachment)" and broke the moment a
+    // SECOND unkeyed member (cloudflare_record.app) joined the set. An arithmetic
+    // relationship to a list that grows is a constant pretending to be a derivation.
+    expect(keys.length).toBe(
+      WEB_HOST_BIRTH_TARGET_BASES.length - WEB_HOST_BIRTH_UNKEYED.length,
+    );
     expect([...new Set(keys)]).toEqual(["${WEB_HOST_KEY}"]);
   });
 
@@ -1499,7 +1513,7 @@ describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", ()
     // The fan-out lived in FOUR places — the workflow -target list, two copies inside the
     // gate, and WEB_HOST_BIRTH_TARGET_BASES here — and only workflow<->constant was bound.
     // Widening the gate's allow-set therefore silently permitted out-of-scope changes while
-    // this file still certified "exactly nine"; narrowing it made the gate refuse every real
+    // this file still certified the exact set; narrowing it made the gate refuse every real
     // birth plan, an outage dressed as a safety feature, with nothing red. The gate now
     // carries ONE `def allow($k)`; this binds it to the workflow. Mirrors the git-data
     // gate's parity assertion above.

@@ -108,6 +108,7 @@ _WEB_HOST_BIRTH_ALLOW='def allow($k): [
       "hcloud_volume.workspaces[\"\($k)\"]",
       "hcloud_volume_attachment.workspaces[\"\($k)\"]",
       "hcloud_firewall_attachment.web",
+      "cloudflare_record.app",
       "betteruptime_heartbeat.web_zot_consumer[\"\($k)\"]",
       "betteruptime_heartbeat.web_nic_guard[\"\($k)\"]",
       "doppler_secret.web_zot_consumer_url[\"\($k)\"]",
@@ -240,7 +241,7 @@ web_host_birth_gate() {
         | select(.change.actions | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
         | select(IN(.address; allow($k)[]) | not) | .address ] | .[0:10] | join(", ")' \
       < "$plan_json" 2>/dev/null)
-    echo "web_host_birth_gate: ABORT — ${out_of_scope} out-of-scope change(s), outside the birth fan-out for '${host_key}': ${offenders}. One authorization births one host and touches only that host's nine addresses. A sibling host's volume, or a Cloudflare ruleset riding along, is a different operation that has not been authorized here."
+    echo "web_host_birth_gate: ABORT — ${out_of_scope} out-of-scope change(s), outside the birth fan-out for '${host_key}': ${offenders}. One authorization births one host and touches only that host's ten fan-out addresses. A sibling host's volume, or a Cloudflare ruleset riding along, is a different operation that has not been authorized here."
     return 1
   fi
 
