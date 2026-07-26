@@ -101,6 +101,40 @@ mk_plan "$TMP/happy.json" "$(happy_changes)"
 check "the requested host's scoped birth => PASS" 0 "PASS" "$TMP/happy.json" "web-2"
 check "the PASS line names the host it authorized" 0 'web-2' "$TMP/happy.json" "web-2"
 
+# ── REJECT: the server WITHOUT its private NIC — the literal #6416 shape ──────────
+#
+# THE ARM THIS FILE WAS MISSING. Every other assertion here is a PROHIBITION ("nothing
+# forbidden happens"). A birth also needs a REQUIREMENT ("the necessary things happen"),
+# and the allow-set cannot express one: it says the NIC is PERMITTED to change, never that
+# it MUST. So the gate passed a plan creating the server and nothing else — a host with no
+# private IP and, transiently, no firewall, which is #6416 verbatim, the exact failure this
+# whole path exists to make impossible.
+#
+# It was caught by review, not by this suite, and the reason is instructive: a suite built
+# entirely from "does the gate refuse bad plans?" cases cannot discover a missing
+# requirement. The question that finds it is "what is the WORST plan the gate ACCEPTS?"
+mk_plan "$TMP/no-nic.json" "$(printf '[%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')")"
+check "the server with NO private NIC => ABORT (#6416)" 1 "hcloud_server_network" "$TMP/no-nic.json" "web-2"
+
+# The volume ATTACHMENT is the same class, and its absence is the data-loss shape rather
+# than the no-network one: cloud-init's /mnt/data mount is fail-open (`|| true` + `nofail`),
+# so a host born with no attachment writes user worktrees to the ROOT DISK, serves happily,
+# and loses every one of them the first time the real volume mounts over that path.
+mk_plan "$TMP/no-attach.json" "$(printf '[%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')")"
+check "the server with NO volume attachment => ABORT" 1 "hcloud_volume_attachment" "$TMP/no-attach.json" "web-2"
+
+# Both required members present but the NIC is an UPDATE rather than a CREATE. A new server
+# gets a new NIC by construction, so an update here means the plan is not the birth it
+# claims to be — and a count-of-entries check would have accepted it.
+mk_plan "$TMP/nic-not-create.json" "$(printf '[%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_update 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '{"ip":"10.0.1.11"}' '{"ip":"10.0.1.12"}')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')")"
+check "a NIC that updates instead of creating => ABORT" 1 "hcloud_server_network" "$TMP/nic-not-create.json" "web-2"
+
 # ── REJECT: zero creates ──────────────────────────────────────────────────────────
 # A dispatch that asked for a birth and whose plan births nothing is either a no-op
 # (the host already exists) or a mis-scoped -target set. Either way, applying it is
@@ -177,8 +211,10 @@ fi
 # allow-set at all, so a nested rule-array shrinkage cannot reach this path without
 # first tripping this arm. Refusing the whole resource is strictly stronger than
 # counting its blocks, and it does not drift when the provider schema changes.
-mk_plan "$TMP/out-of-scope.json" "$(printf '[%s,%s]' \
+mk_plan "$TMP/out-of-scope.json" "$(printf '[%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_update 'cloudflare_ruleset.seo_page_redirects' 'cloudflare_ruleset' \
       '{"rules":[{"a":1},{"b":2}]}' '{"rules":[{"a":1}]}')")"
 check "a cloudflare_ruleset change riding the birth => ABORT" 1 "out-of-scope" "$TMP/out-of-scope.json" "web-2"
@@ -208,8 +244,10 @@ check "the FULL nine-address birth fan-out => PASS" 0 "PASS" "$TMP/full-fanout.j
 
 # A `no-op` refresh entry is not a change and must not trip the out-of-scope arm —
 # terraform emits these routinely for transitively-pulled resources.
-mk_plan "$TMP/noop.json" "$(printf '[%s,%s]' \
+mk_plan "$TMP/noop.json" "$(printf '[%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_entry 'cloudflare_record.app' 'cloudflare_record' '["no-op"]')")"
 check "a no-op refresh of an out-of-scope resource => PASS" 0 "PASS" "$TMP/noop.json" "web-2"
 
@@ -333,8 +371,10 @@ mutate_layered() {
 # SOLE-GUARD: an IN-SCOPE destroy. Every address here is in web-2's fan-out, so the
 # out-of-scope arm counts zero and the destroy arm is genuinely the last line.
 # Neutering it therefore ACCEPTS a plan that deletes web-2's own data volume.
-mk_plan "$TMP/inscope-destroy.json" "$(printf '[%s,%s]' \
+mk_plan "$TMP/inscope-destroy.json" "$(printf '[%s,%s,%s,%s]' \
   "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["create"]')" \
   "$(rc_entry 'hcloud_volume.workspaces["web-2"]' 'hcloud_volume' '["delete"]')")"
 check "an IN-SCOPE destroy (the host's own volume) => ABORT" 1 "destroy" "$TMP/inscope-destroy.json" "web-2"
 mutate_and_check "destroy guard" 's/if \[\[ "\$destroys" -ne 0 \]\]; then/if false; then/' "$TMP/inscope-destroy.json" "web-2"
@@ -357,6 +397,13 @@ mutate_and_check "out-of-scope guard" 's/if \[\[ "\$out_of_scope" -ne 0 \]\]; th
 # Anchored on the ABORT line's own literal rather than the multi-line `jq -e` condition:
 # that condition spans two lines and is dense with regex metacharacters, so a sed aimed at
 # it is brittle in a way the non-vacuity floor would (correctly) report as a missing guard.
+# SOLE-GUARD: the requirement arm. No prohibition arm can catch a MISSING member — that
+# is the whole point of adding it — so neutering it must let the #6416 plan through, and
+# does. This is the one mutation in the battery whose fixture is a plan that is dangerous
+# by OMISSION rather than by commission.
+mutate_and_check "required-creates guard" 's/if \[\[ "\$required_creates" -ne 1 \]\]; then/if false; then/' \
+  "$TMP/no-nic.json" "web-2"
+
 mutate_and_check "actions-shape guard" 's/^    echo "web_host_birth_gate: ABORT — unclassifiable.*/    return 0/' \
   "$TMP/noactions.json" "web-2"
 

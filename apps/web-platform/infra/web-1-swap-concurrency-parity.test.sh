@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
 #
-# Drift guard: the THREE GitHub Actions jobs that MUTATE web-1 (two swap the web-1
-# container via `command: deploy web-platform …` → /hooks/deploy → ci-deploy.sh; the
-# third, #6604, attaches the encrypted volume to web-1) MUST share ONE job-level
+# Drift guard: the FIVE GitHub Actions jobs that MUTATE web-1 (two swap the web-1
+# container via `command: deploy web-platform …` → /hooks/deploy → ci-deploy.sh; #6604
+# attaches the encrypted volume; #6854 recuts it; #6730 births a web host and so pulls
+# web-1 in via the firewall-attachment singleton) MUST share ONE job-level
 # `web-1-swap` concurrency group so GitHub's scheduler serializes them across
 # pipelines — at most one web-1 mutation in flight at a time (#6060 item (c) /
 # FINDING 1 from #6051's review). A FOURTH member — the #6604 freeze workflow — carries
 # the group at WORKFLOW scope (it is a dedicated dispatch, not a job in a shared
 # workflow), asserted separately below.
 #
-# reason: 5 job-level members -> 3. The `warm_standby` and `web_2_recreate` members were
-# DELETED with the web-2 dispatch sweep (#6575, 2026-07-20).
+# reason: 5 job-level members -> 3 (the `warm_standby` and `web_2_recreate` members were
+# DELETED with the web-2 dispatch sweep, #6575, 2026-07-20) -> 4 (#6854) -> 5 (#6730).
 #
-# The three job-level members (allow-list — an explicit named list so a DELIBERATE
+# The five job-level members (allow-list — an explicit named list so a DELIBERATE
 # future member is a visible allow-list edit, while a silently-dropped copy OR an
 # accidentally-enrolled job both fail loud):
-#   1. web-platform-release.yml        job `deploy`                 (tagged-release deploy)
-#   2. apply-deploy-pipeline-fix.yml   job `apply`                  (POSTs deploy at :607)
+#   1. web-platform-release.yml        job `deploy`                  (tagged-release deploy)
+#   2. apply-deploy-pipeline-fix.yml   job `apply`                   (POSTs deploy at :607)
 #   3. apply-web-platform-infra.yml    job `workspaces_luks_cutover` (#6604 attaches the LUKS volume to web-1)
+#   4. apply-web-platform-infra.yml    job `workspaces_luks_recut`   (#6854 destroys + recreates that volume)
+#   5. apply-web-platform-infra.yml    job `web_host_create`         (#6730 births a web host; the firewall-attachment singleton pulls web-1 into the plan)
 # Plus the WORKFLOW-level member: workspaces-luks-cutover.yml (#6604 freeze — stops/repoints web-1's /mnt/data).
 #
 # NOT a member (negative assertion): the routine `apply` job in
@@ -28,7 +31,7 @@
 # Invariants asserted:
 #   - each named member carries a job-level `concurrency.group: web-1-swap` with
 #     `cancel-in-progress: false` (a killed in-progress swap would widen a 521 window);
-#   - the TOTAL count of `group: web-1-swap` across the three workflows == 3
+#   - the TOTAL count of `group: web-1-swap` across the three workflows == 5
 #     (allow-list length — NOT head -1, NOT >= 3: a dropped OR an unlisted member fails);
 #   - the workflow-level `terraform-apply-web-platform-host` R2 serializer literal is
 #     still present in BOTH apply-web-platform-infra.yml AND apply-deploy-pipeline-fix.yml
@@ -97,7 +100,7 @@ assert_member() {
   fi
 }
 
-# --- The three named members (allow-list) ---
+# --- The five named members (allow-list) ---
 assert_member "$RELEASE_WF"      "deploy"                  "release-deploy"
 assert_member "$PIPELINE_FIX_WF" "apply"                   "pipeline-fix-apply"
 assert_member "$APPLY_INFRA_WF"  "workspaces_luks_cutover" "workspaces-luks-cutover"
@@ -105,6 +108,12 @@ assert_member "$APPLY_INFRA_WF"  "workspaces_luks_cutover" "workspaces-luks-cuto
 # recreates the LUKS volume), so it legitimately shares the web-1-swap group. It was added
 # without enrolling here — the drift this member closes.
 assert_member "$APPLY_INFRA_WF"  "workspaces_luks_recut"   "workspaces-luks-recut"
+# #6730: the web-host BIRTH job targets `hcloud_firewall_attachment.web`, a SINGLETON over
+# `[for h in hcloud_server.web : h.id]`. It must ride the birth (a host born without it is
+# briefly reachable with no firewall — half of #6416), and targeting it pulls every web host
+# into the plan, web-1 included. That is a genuine web-1 mutation surface, so the job
+# legitimately shares this group rather than being exempted from it.
+assert_member "$APPLY_INFRA_WF"  "web_host_create"         "web-host-create"
 
 # --- The #6604 freeze workflow (workspaces-luks-cutover.yml) carries web-1-swap at
 # WORKFLOW scope (it is a dedicated dispatch, not a job in a shared workflow), so it
@@ -122,19 +131,26 @@ else
 fi
 
 # --- Total count of job-level `group: web-1-swap` across the three shared workflows
-# == 4. History: 5 -> 3 (warm_standby + web_2_recreate DELETED with the web-2 dispatch
+# == 5. History: 5 -> 3 (warm_standby + web_2_recreate DELETED with the web-2 dispatch
 # sweep #6575, 2026-07-20) -> 4 (the #6854 workspaces-luks-recut job added a legitimate
-# member; apply-web-platform-infra.yml now carries TWO: workspaces_luks_cutover +
-# workspaces_luks_recut). The four members are the release deploy, pipeline-fix apply, and
-# the #6604 volume-attach + #6854 volume-recut jobs. A silently-dropped member drops below
-# 4; an accidentally-enrolled or duplicated job pushes above 4. The freeze workflow's
-# workflow-level group is asserted above and NOT part of this count. ---
+# member) -> 5 (#6730's web_host_create; apply-web-platform-infra.yml now carries THREE:
+# workspaces_luks_cutover + workspaces_luks_recut + web_host_create). The five members are
+# the release deploy, pipeline-fix apply, the #6604 volume-attach, the #6854 volume-recut,
+# and the #6730 host-birth jobs. A silently-dropped member drops below 5; an
+# accidentally-enrolled or duplicated job pushes above 5. The freeze workflow's
+# workflow-level group is asserted above and NOT part of this count.
+#
+# KEEP THIS NUMBER EQUAL TO THE assert_member COUNT ABOVE. The count and the allow-list are
+# two encodings of one fact, and #6730 tripped exactly that: the job enrolled itself in the
+# group without adding either, so the count went 4 -> 5 and this suite reddened on a change
+# that was otherwise correct. The failure is the guard working; the fix is enrolling, never
+# widening the number alone. ---
 web1_count=$(grep -rhE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' \
   "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" | grep -c .)
-if [ "$web1_count" -eq 4 ]; then
+if [ "$web1_count" -eq 5 ]; then
   pass
 else
-  fail "expected exactly 4 'group: web-1-swap' occurrences (allow-list length), found $web1_count"
+  fail "expected exactly 5 'group: web-1-swap' occurrences (allow-list length), found $web1_count"
 fi
 
 # --- Workflow-level R2 serializer preserved in BOTH apply workflows (coexists

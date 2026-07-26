@@ -17,10 +17,31 @@
 #
 # ADOPTION, NOT CREATION. The GitHub environments API is an idempotent PUT on the
 # environment NAME, so the provider's create adopts the existing environment instead of
-# colliding with it. The declared reviewer set is byte-identical to the live one
-# (verified 2026-07-26: `gh api repos/jikig-ai/soleur/environments/web-platform-infra-apply`
-# returns exactly [{id: 54279, login: deruelle}]), so the adoption is zero-drift — it
-# changes no live protection, it only puts the existing one under version control.
+# colliding with it.
+#
+# ADOPTION IS ONLY ZERO-DRIFT IF IT DECLARES EVERY PROTECTION THE LIVE ENVIRONMENT HAS —
+# and an earlier revision of this file did not. It declared `reviewers` alone and claimed
+# "zero-drift, changes no live protection" on the strength of a reviewers-only check. The
+# live environment carries TWO protection rules, measured 2026-07-26:
+#
+#   gh api repos/jikig-ai/soleur/environments/web-platform-infra-apply
+#     protection_rules: [required_reviewers, branch_policy]
+#     deployment_branch_policy: {protected_branches: false, custom_branch_policies: true}
+#   gh api .../deployment-branch-policies  ->  1 policy, name "main"
+#
+# The provider serializes an omitted `deployment_branch_policy` as null, and the API reads
+# null as "allow all branches". So the reviewers-only declaration would have DELETED the
+# main-only pin on the next apply — and that pin is what makes this gate meaningful at all:
+# `workflow_dispatch` runs the SELECTED REF's workflow and its scripts, and the birth job
+# sources its only check from `${GITHUB_WORKSPACE}`. Without the branch policy, anyone who
+# can dispatch can point the run at a branch carrying a neutered gate, and the reviewer
+# prompt shows a branch name, not a diff. The PR would have removed a live security control
+# on the environment it exists to harden.
+#
+# This is why the three siblings this file "mirrors" are the wrong template for the branch
+# policy specifically: `workspaces-luks-cutover`, `inngest-config-signing` and
+# `inngest-cutover` all carry `deployment_branch_policy: null` (measured, same date). Mirror
+# a precedent's SHAPE, never its guarantees — the sibling's guarantee is not this one's.
 #
 # reviewers.users takes numeric GitHub user IDs — 54279 = @deruelle (the operator/founder).
 #
@@ -36,4 +57,21 @@ resource "github_repository_environment" "web_platform_infra_apply" {
   reviewers {
     users = [54279]
   }
+
+  # LOAD-BEARING, not cosmetic — see the ADOPTION note above. Omitting this block deletes
+  # the live main-only pin and makes the birth gate branch-supplied.
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+}
+
+# The custom policy the block above enables. `custom_branch_policies = true` only declares
+# that the environment uses a named list; without this resource the list is EMPTY, which
+# GitHub treats as "no branch may deploy" — the opposite failure from omitting the block
+# entirely, and just as wrong. Both halves are required to reproduce live state.
+resource "github_repository_environment_deployment_policy" "web_platform_infra_apply_main" {
+  repository     = "soleur"
+  environment    = github_repository_environment.web_platform_infra_apply.environment
+  branch_pattern = "main"
 }

@@ -452,6 +452,7 @@ jobs:
               -target=github_repository_environment.inngest_config_signing \
               -target=github_repository_environment.workspaces_luks_cutover \
               -target=github_repository_environment.web_platform_infra_apply \
+              -target=github_repository_environment_deployment_policy.web_platform_infra_apply_main \
               -target=cloudflare_r2_bucket.workspaces_luks_header \
               -target=doppler_secret.workspaces_luks_header_bucket \
               -target=doppler_secret.workspaces_luks_header_r2_endpoint \
@@ -2860,9 +2861,15 @@ jobs:
   #     reboot arm and an allow-set: web-1 must come along as a no-op or not at all.
   #   • the 4 web-probe resources                      — web-probe-envwrite.sh resolves
   #     WEB_NIC_GUARD_URL_<KEY> / WEB_ZOT_CONSUMER_URL_<KEY> from Doppler ON the fresh
-  #     host. Born without them, the host runs with empty heartbeat URLs: its beats never
-  #     fire, and a never-registered heartbeat pages nobody. Silent, and indistinguishable
-  #     from healthy on every other signal.
+  #     host, so omitting them births a host whose probes have no URL to beat to. Including
+  #     them REGISTERS the heartbeats; it does NOT arm them — web-probe.tf ships both
+  #     `paused = true` + `ignore_changes = [paused]`, and the only unpause path is the
+  #     `Arm web-host probe heartbeats` step in the `apply` job (ADR-117: measure a real beat
+  #     before arming). So this target set is necessary-but-not-sufficient for coverage, and
+  #     the born host is unmonitored until a later merge-to-main apply arms it. That is a
+  #     deliberate consequence of ADR-117's measure-then-arm ordering, not an oversight —
+  #     but it is disclosed in the Dispatch summary rather than left for the operator to
+  #     discover from a silent host.
   # proxy-TLS is DELIBERATELY ABSENT: those resources are singletons, not a
   # `for_each = var.web_hosts` fan-out (verified against proxy-tls.tf), so there is no
   # per-host member of them to birth.
@@ -2993,7 +3000,16 @@ jobs:
           # empty string through `|| true`, and "I could not read it" is not evidence the
           # DSN is set. Capture rc separately so the two cases get different messages and
           # neither is mistaken for a pass. The VALUE is never printed.
-          DSN=$(doppler secrets get SENTRY_DSN --plain 2>/tmp/doppler-dsn.err); dsn_rc=$?
+          # `|| dsn_rc=$?`, NOT `; dsn_rc=$?`. Under the `set -e` armed at the top of this
+          # step, an assignment whose command substitution fails kills the step AT THAT LINE
+          # — the trailing `dsn_rc=$?` never executes and neither does the branch below it.
+          # Measured: `set -euo pipefail; X=$(bash -c "exit 7"); rc=$?; echo REACHED` exits 7
+          # and never prints. The earlier form here shipped with a comment claiming the two
+          # cases got different messages; the unreadable case actually died with a bare
+          # "Process completed with exit code 1" and the captured stderr unread on disk.
+          # Fail-closed either way — but the diagnosis this block exists to print was dead.
+          dsn_rc=0
+          DSN=$(doppler secrets get SENTRY_DSN --plain 2>/tmp/doppler-dsn.err) || dsn_rc=$?
           if [[ "$dsn_rc" -ne 0 ]]; then
             echo "::error::could not READ SENTRY_DSN from Doppler prd_terraform (rc=${dsn_rc}) — fail-closed. An unreadable secret is not evidence of a present one, and the pre-extraction boot stages have no other emit path. doppler stderr: $(tr '\n' ' ' </tmp/doppler-dsn.err | tail -c 300)"
             exit 1
@@ -3136,11 +3152,25 @@ jobs:
           # the plan is the exact scoped birth; it cannot prove the create is FEASIBLE.
           # terraform creates this host's dependencies FIRST — the workspaces volume and the
           # two Better Stack heartbeats — and only then the server. So a server_type with no
-          # stock in the target DC does not fail cleanly here: it leaves a 20 GB volume
-          # attached to nothing and two registered heartbeats that will never beat and will
-          # therefore PAGE as down. That is not "recoverable, not a strand" (the inngest-host
-          # reasoning, which holds for a host with no such fan-out) — it is a false page plus
-          # a billing resource, produced by a gate we already own and can run in 2 seconds.
+          # stock in the target DC does not fail cleanly here: it strands a 20 GB volume
+          # attached to nothing, plus two heartbeat resources for a host that will never
+          # exist. That is not "recoverable, not a strand" (the inngest-host reasoning, which
+          # holds for a host with no such fan-out) — it is billed debris and a dirty state
+          # slot, caught by a gate we already own and can run in 2 seconds.
+          #
+          # CORRECTION, recorded because the earlier wording was load-bearing and false: this
+          # comment used to say the stranded heartbeats "will therefore PAGE as down", and
+          # that was the headline argument for gating rather than excluding. They do not page.
+          # web-probe.tf declares both with `paused = true` + `ignore_changes = [paused]`, and
+          # the ONLY unpause path is the `Arm web-host probe heartbeats` step in the `apply`
+          # job, whose `if:` is mutually exclusive with this one. The gating decision survives
+          # on the stranded-volume argument alone; the false-page claim does not, and a
+          # decision defended by a false premise is one review away from being reverted for
+          # the right reason.
+          #
+          # KNOWN GAP (not fixed here): the same fact means a SUCCESSFUL birth also leaves the
+          # new host's two heartbeats paused, so it has no active heartbeat coverage until a
+          # later merge-to-main apply arms them. The Dispatch summary says so explicitly.
           #
           # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
           # OUTSIDE the `doppler run` wrapper above — without this read the gate would
@@ -3164,31 +3194,29 @@ jobs:
           echo "birth gate + stock preflight PASSED for ${WEB_HOST_KEY}. Plan summary:"
           grep -E '^Plan:' tfplan.txt || true
 
-      - name: Terraform apply (web-host birth) — post-apply create proof
+      - name: Terraform apply (web-host birth)
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # Apply the saved, guarded plan. The post-apply jq re-reads the SAVED plan as a
-        # belt-and-suspenders backstop to the gate: the server AND its private NIC each
-        # show a create. The NIC assertion is the one that matters — a server without it
-        # is #6416, and that is precisely the shape that looks like a successful apply.
+        # Apply the saved, guarded plan.
+        #
+        # There is deliberately NO post-apply create-proof loop here. An earlier revision
+        # had one, asserting the server + NIC each showed a create, with an ::error:: reading
+        # "this should have been caught by the birth gate" — and the gate structurally could
+        # not catch it, because every arm it had was a prohibition. Review found the gate
+        # PASSED a plan whose only entry was the server create. The requirement now lives in
+        # `web_host_birth_gate` (see its REQUIREMENT ARM), which runs BEFORE apply, so the
+        # bad plan is refused instead of post-mortem'd. A check that reads the same
+        # `tfplan.json` the gate already read cannot add information; it can only add the
+        # illusion of a second opinion.
         run: |
           set -euo pipefail
           if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
-            echo "::error::terraform apply (web-host-create for ${WEB_HOST_KEY}) failed. The operation is additive, so nothing existing was destroyed; inspect the error, then re-dispatch — a re-dispatch is safe and is the normal remedy. Partial-create nuance: if the failure was BEFORE the server landed (its volume/heartbeats created, server not), the retry still plans exactly one server create and the gate passes. If the SERVER landed and a later address did not, the retry plans ZERO server creates and the gate correctly refuses — that case needs the remaining addresses applied from the break-glass chain in the host_creates HALT, never a weakened gate."
+            echo "::error::terraform apply (web-host-create for ${WEB_HOST_KEY}) failed. The operation is additive, so nothing existing was destroyed; inspect the error, then re-dispatch — a re-dispatch is safe and is the normal remedy. Partial-create nuance: if the failure was BEFORE the server landed (its volume/heartbeats created, server not), the retry still plans exactly one server create WITH its NIC and volume attachment, and the gate passes. If the SERVER landed and a later address did not, the retry plans ZERO server creates and the gate correctly refuses — and completing that host by hand does NOT fix it: cloud-init runcmd is once-per-instance and has already finished on a host with no private IP, so attaching the NIC afterwards leaves the app unconfigured. That host must be REPLACED, not completed."
             exit 1
           fi
-          for ADDR in "hcloud_server.web[\"${WEB_HOST_KEY}\"]" "hcloud_server_network.web[\"${WEB_HOST_KEY}\"]"; do
-            CREATED=$(jq --arg a "$ADDR" '[.resource_changes[]?
-              | select(.address == $a)
-              | select(.change.actions? | index("create"))] | length' tfplan.json)
-            if [[ "$CREATED" != "1" ]]; then
-              echo "::error::${ADDR} shows ${CREATED} create(s) in the applied plan — expected exactly 1. A server without its hcloud_server_network attachment comes up with no private IP (#6416). This should have been caught by the birth gate; failing hard."
-              exit 1
-            fi
-          done
-          echo "birth applied: ${WEB_HOST_KEY} server + private NIC each created. Boot telemetry is surfaced by the next step — a green apply is NOT a green boot."
+          echo "birth applied: ${WEB_HOST_KEY}. The pre-apply gate proved the plan carried the server + its private NIC + its volume attachment. A green apply is NOT a green boot — boot telemetry is surfaced by the next step."
 
       # ADR-128 R2/R3/R4/R5.
       - name: Surface fresh-host Sentry breadcrumb trail (best-effort — R2/R3/R4/R5)
@@ -3295,6 +3323,8 @@ jobs:
             echo "**Run:** ${RUN_URL}"
             echo ""
             echo "Purely additive +create of the host's nine-address fan-out on a digest-pinned image. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
+            echo ""
+            echo "**This host has NO active heartbeat coverage yet.** Its two Better Stack heartbeats were REGISTERED by this dispatch but are \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured). The arming step lives in the \`apply\` job, so coverage begins at the next merge-to-main infra apply. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --- #6767: read-only retrospective entrypoint drift AUDIT --------------------

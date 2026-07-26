@@ -295,7 +295,15 @@ fi
 # `if: always()` is what makes a GREEN dispatch informative. Without it, "the apply
 # succeeded" and "the probe never ran" render identically, and a host that applied
 # clean but booted dark reads as a success.
-if [[ -n "$(awk '/Surface fresh-host Sentry/{f=1} f&&/if: always\(\)/{print "y"; exit}' <<<"$JOB")" ]]; then
+#
+# SCOPED TO THE STEP, and comment lines excluded. The earlier form scanned forward from
+# the step name with no terminator, so it was satisfied by the NEXT step's `if: always()`
+# 87 lines below — and, once that was gone, by this assertion's own explanatory comment
+# inside the job. Both were mutation-proven: deleting the real `if: always()` left the
+# suite 94/0 green, and so did deleting BOTH of them. An assertion that its own
+# documentation satisfies is the vacuous pass #6575 deleted these five rather than leave
+# behind. `f && /^      - name:/ {exit}` bounds the scan; `!/^ *#/` rejects prose.
+if [[ -n "$(awk '/- name: Surface fresh-host Sentry/{f=1; next} f && /^      - name:/{exit} f && !/^[[:space:]]*#/ && /^[[:space:]]*if:[[:space:]]*always\(\)[[:space:]]*$/{print "y"; exit}' <<<"$JOB")" ]]; then
   ok "AC8b: the fresh-host Sentry surface runs if: always() (a green boot still shows the probe fired)"
 else
   no "AC8b: the Sentry surface step must be if: always() (spec-flow F4)"
@@ -311,10 +319,13 @@ else
 fi
 
 # ── AC14 (ADR-128 R1): the DSN is asserted non-empty BEFORE the host is created ──
-# Anchored on the ::error:: literal rather than the bare token `SENTRY_DSN`, which
-# also appears in this job's explanatory comments — a bare-token grep would stay
-# green against a job that only ever mentions the DSN in prose.
-if grep -qF 'SENTRY_DSN is empty in Doppler prd_terraform' <<<"$JOB"; then
+# Anchored on an `echo "::error::` CALL carrying the message — not the message alone.
+# The previous form grepped the bare sentence and its own comment claimed to be
+# "anchored on the ::error:: literal"; `::error::` was not in the pattern, so replacing
+# the real emit with a `#` comment carrying the same sentence left the suite 94/0 green.
+# The claim was true of the intent and false of the code, which is the failure mode this
+# whole block was restored to prevent.
+if grep -qE '^[[:space:]]*echo "::error::SENTRY_DSN is empty in Doppler prd_terraform' <<<"$JOB"; then
   ok "AC14: the birth job asserts baked SENTRY_DSN non-empty before create (pre-extraction cannot go dark)"
 else
   no "AC14: the birth job must assert SENTRY_DSN is non-empty BEFORE creating the host (an empty baked DSN is a silent pre-extraction blind spot)"
@@ -324,7 +335,14 @@ fi
 # The /projects/{org}/{proj}/events/ endpoint IGNORES the `message:` search prefix:
 # a `message:"x"` query returns 0 even for events that provably exist. Passing QUERY
 # to the endpoint therefore produces a confident, wrong "nothing was emitted".
-if grep -qF 'query=${QUERY}' <<<"$JOB"; then
+# BOTH spellings, and COMMENT LINES STRIPPED FIRST. The braced-only form missed
+# `query=$QUERY`, which is precisely what the job's own comment writes when explaining why
+# the param must not be sent — so the unbraced form is the one a future editor is most
+# likely to copy. Mutation-proven: adding `--data-urlencode "query=$QUERY"` to the curl
+# left the suite 94/0 green. Widening the pattern without stripping comments then made the
+# assertion false-FAIL on that same explanatory prose: the two halves of this fix are one
+# change, and shipping either alone is a regression in the opposite direction.
+if grep -vE '^[[:space:]]*#' <<<"$JOB" | grep -qE 'query=\$\{?QUERY\}?'; then
   no "AC16: the surface step still passes the broken message: query to the events endpoint (returns 0)"
 else
   ok "AC16: the surface step does not pass the broken message: query to the endpoint"

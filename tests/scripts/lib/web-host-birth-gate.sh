@@ -26,6 +26,13 @@
 #   destroys       == 0                purely additive; no delete/replace/forget
 #   reboot_updates == 0                no live host is power-cycled by the birth
 #   out_of_scope   == 0                nothing outside the birth fan-out changes
+#   NIC + volume attachment each create — the two members the server's own creation
+#                                        entails; their absence IS #6416 / data loss
+#
+# The first five are PROHIBITIONS; the sixth is a REQUIREMENT. A gate built only from
+# prohibitions cannot make a birth safe — it constrains what the plan may ALSO do, never
+# what it must do — and this gate shipped that way until review found it accepted a plan
+# whose only entry was the server create.
 #
 # WHY IDENTITY AND NOT JUST A COUNT. A count-only gate passes a plan that births
 # exactly one host that is not the one requested. `hcloud_server.web["web-1"]` is the
@@ -215,6 +222,49 @@ web_host_birth_gate() {
     return 1
   fi
 
-  echo "web_host_birth_gate: PASS — scoped birth of ${want_addr} permitted (exactly 1 host create, 0 destroys, 0 reboots, 0 out-of-scope changes, identity matches the dispatch request '${host_key}')."
+  # ── REQUIREMENT ARM ────────────────────────────────────────────────────────────
+  #
+  # Every arm above is a PROHIBITION. Prohibitions alone cannot make a birth safe: they
+  # constrain what the plan may ALSO do, never what it must do. Without this arm the gate
+  # passed a plan whose only entry was the server create — a host with no private IP and,
+  # transiently, no firewall, which is #6416 verbatim, the failure this path exists to
+  # prevent. The allow-set could not close it: it says these addresses are PERMITTED to
+  # change, not that they must.
+  #
+  # WHY THESE TWO AND NOT ALL NINE. Both are bound to the server's id
+  # (`hcloud_server_network.web[k]` and `hcloud_volume_attachment.workspaces[k]` reference
+  # `hcloud_server.web[k].id`), so a NEW server implies a NEW instance of each — the
+  # implication holds by construction, which is what makes the requirement safe to assert.
+  # The other six do not have it:
+  #   • hcloud_volume.workspaces[k] can legitimately pre-exist. A retry after a partial
+  #     apply that created the volume but not the server re-plans the volume as a no-op,
+  #     and that retry is the documented recovery path — requiring its create would break
+  #     the one case the apply-failure message tells the operator is safe.
+  #   • hcloud_firewall_attachment.web is a fleet singleton: it UPDATES (server_ids grows),
+  #     it does not create.
+  #   • the four web-probe resources are per-key but may pre-exist for the same
+  #     partial-apply reason as the volume.
+  #
+  # So the rule is not "require the fan-out", it is "require exactly those members whose
+  # existence the server's own creation entails". Anything looser breaks a legitimate
+  # retry; anything tighter is unenforceable.
+  local required_addr required_creates
+  for required_addr in \
+    "hcloud_server_network.web[\"${host_key}\"]" \
+    "hcloud_volume_attachment.workspaces[\"${host_key}\"]"; do
+    required_creates=$(jq --arg a "$required_addr" \
+      '[.resource_changes[] | select(.address == $a) | select(.change.actions | index("create"))] | length' \
+      < "$plan_json" 2>/dev/null)
+    if [[ ! "$required_creates" =~ ^[0-9]+$ ]]; then
+      echo "web_host_birth_gate: ABORT — counter parse failed for required address ${required_addr} (got '${required_creates}'). Fail-closed."
+      return 1
+    fi
+    if [[ "$required_creates" -ne 1 ]]; then
+      echo "web_host_birth_gate: ABORT — the plan births ${want_addr} but does NOT create ${required_addr} (${required_creates} creates; expected exactly 1). A server without its private NIC comes up with no private-net IP and, transiently, no firewall — that is #6416, and it looks exactly like a successful apply. A server without its volume attachment writes /mnt/data to the ROOT DISK behind a fail-open mount, serves normally, and loses every workspace the first time the real volume mounts over it. Both are entailed by the server's own creation, so their absence means the -target set is mis-scoped, not that they were deliberately omitted."
+      return 1
+    fi
+  done
+
+  echo "web_host_birth_gate: PASS — scoped birth of ${want_addr} permitted (exactly 1 host create + its private NIC + its volume attachment, 0 destroys, 0 reboots, 0 out-of-scope changes, identity matches the dispatch request '${host_key}')."
   return 0
 }
