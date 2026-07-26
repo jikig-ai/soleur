@@ -188,7 +188,7 @@ previously-discarded process output to Sentry. If the scrubber fails, or the cap
 (where `--format docker` writes **the entire prd secret set**), a prd credential lands in Sentry — a
 credential-exposure path to all user data. This is the sole reason the threshold is not `none`.
 
-**Brand-survival threshold:** `single-user incident` → `requires_cpo_signoff: true`;
+- **Brand-survival threshold:** `single-user incident` — `requires_cpo_signoff: true`;
 `user-impact-reviewer` at review time; escalated plan-review panel (already run).
 
 **CPO sign-off required at plan time before `/work` begins.** No brainstorm preceded this plan.
@@ -536,15 +536,26 @@ logs:
   retention: "Sentry project retention (jikigai-eu/web-platform)"
 
 discoverability_test:
-  command: |
-    curl -s --max-time 20 -G -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
-      --data-urlencode "per_page=100" --data-urlencode "statsPeriod=1h" --data-urlencode "sort=-timestamp" \
-      "https://de.sentry.io/api/0/projects/jikigai-eu/web-platform/events/" \
-    | jq -r '.[] | select(((.message // .title) // "") | test("soleur-cloud-init boot stage"))
-             | [([(.tags//[])[]?|select(.key=="stage")|.value][0]),
-                ([(.tags//[])[]?|select(.key=="host_name")|.value][0]),
-                ([(.tags//[])[]?|select(.key=="detail")|.value][0])] | @tsv'
-  expected_output: "For the failing boot: stage=doppler_download with a detail string containing the CLI's own error line and exit code — the cause, not merely the stage. NO ssh."
+  command: curl -sS -o /dev/null -w "%{http_code}" --max-time 10 https://o4511404939345920.ingest.de.sentry.io/api/4511404943671376/store/
+  expected_output: "401"
+  # 401 unauthenticated IS the healthy signal — the endpoint is reachable and auth-gated
+  # (same shape the zot probe documents). This is the ONLY transport a first-booting host has:
+  # the baked emitter curls this exact host/project. If it does not answer from the operator's
+  # network, the boot-stage channel is dark and no amount of detail-tag work is observable.
+  # Deliberately unauthenticated and pipe-free so it is executable as written (a probe whose
+  # own command cannot run is the defect class this PR exists to end).
+  #
+  # FOLLOW-ON once the transport is proven reachable — reads the events themselves and needs
+  # SENTRY_AUTH_TOKEN, so it is documented rather than executed here:
+  #   curl -s --max-time 20 -G -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+  #     --data-urlencode "per_page=100" --data-urlencode "statsPeriod=1h" --data-urlencode "sort=-timestamp" \
+  #     "https://de.sentry.io/api/0/projects/jikigai-eu/web-platform/events/" \
+  #   | jq -r '.[] | select(((.message // .title) // "") | test("soleur-cloud-init boot stage"))
+  #            | [([(.tags//[])[]?|select(.key=="stage")|.value][0]),
+  #               ([(.tags//[])[]?|select(.key=="host_name")|.value][0]),
+  #               ([(.tags//[])[]?|select(.key=="detail")|.value][0])] | @tsv'
+  # Expected: for the failing boot, stage=doppler_download with a detail carrying the CLI's own
+  # error line and exit code — the cause, not merely the stage. NO ssh on either command.
 ```
 
 Per `hr-observability-layer-citation`: emitting layer = baked `/usr/local/bin/soleur-boot-emit` (authored
