@@ -13,6 +13,56 @@ branch: feat-one-shot-6969-cloud-init-doppler-error-channel
 
 # fix(6969): ship the cloud-init boot-stage error channel before any black-box retry
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-26
+**Reviews folded in:** CTO domain review + 4-agent plan-review panel (architecture-strategist,
+spec-flow-analyzer, code-simplicity-reviewer, kieran) + deepen-plan verification passes.
+
+### Deepen-plan gate results
+
+| Gate | Result |
+|---|---|
+| 4.4 Precedent diff | **PASS** — 4 pattern-bound shapes, all with in-repo precedent, none novel |
+| 4.5 Network-outage deep-dive | **FIRED** (`timeout` trigger) — layer sweep recorded; telemetry emitted |
+| 4.55 Downtime & Cutover | **Does not fire** — `ignore_changes` makes every touched attribute inert on running hosts |
+| 4.6 User-Brand Impact | **PASS** — threshold `single-user incident`, concrete artifact + vector |
+| 4.7 Observability | **PASS** — all 5 fields present, none empty/placeholder, `discoverability_test.command` is SSH-free |
+| 4.8 PAT-shaped variable | **PASS** — no matches |
+| 4.9 UI wireframe | **Skip** — no UI surface (the only glob match is this plan's own prose *stating* the globs do not match) |
+| 4.10 Encryption Posture | **PASS** — 4 `does_not_defend` entries, zero boilerplate phrases, exception carries `tracking_issue` + `expires_on` |
+
+### Key improvements over the first draft
+
+1. **R15 / R26 — two plan-defeating defects caught and fixed.** The first draft would have shipped a
+   `fatal` with an **empty `detail`** (the exact #6969 symptom), and its headline `rc`-capture line
+   would have **converted a fail-closed boot into a fail-open one** — worst case a host reporting
+   `cloud_init_complete` with no prd secrets. Both were found by review, both re-verified by measurement.
+2. **R19 — the failing call is the only unbounded Doppler invocation in the file** (11 bounded siblings).
+   A hang emits nothing, so the channel would have been blind to its own leading hypothesis.
+3. **R18 — per-stage detail files** replaced a wire-format protocol, dissolving a delimiter collision,
+   a legacy migration, and the stale-read hazard in one move, with less code.
+4. **R20 — `doppler_download_attempt` string-prefixes `doppler_download`**, which would have made the
+   op-contract anti-rename test vacuous. Renamed to `doppler_retry`.
+5. **Scope discipline** — the 8-row sweep table (whose last row delivered nothing) narrowed to
+   `docker_run`; 23 ACs reduced to a lettered, behavioural set; the nondeterministic "stop at
+   `BUDGET − 100`" rule deleted.
+
+### New considerations discovered
+
+- The paging alert's group is **perpetually hot**, so the **first** matching event pages — even a single
+  stray `warning` on a filtered stage name would page the founder on a healthy boot (R29).
+- `grep -c` exits 1 on zero matches, which **aborts** the `set -euo pipefail` observability suite (R27).
+- Behavioural ACs need the existing `awk` heredoc-extraction harness or they silently degrade to greps,
+  leaving the R9/R26 defences unverified (R32).
+- **This plan's own premises needed probing too.** The deepen passes falsified four of its claims:
+  `extra` is *not* unverified (four in-repo emitters ship it); an over-long tag *truncates* rather than
+  losing the event; invalid UTF-8 is *sanitized*, not rejected; and the "Sentry drops untrimmed tag
+  values" claim is undocumented. Each design decision survived on better grounds — but the plan had been
+  resting on claims a single grep or doc-read falsifies, which is the exact failure mode it exists to end.
+- The `/store/` endpoint is **deprecated** in favour of `/envelope/`. Out of scope here; folded into the
+  tracking issue Phase 3 already requires.
+
 > **Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed).** No spec directory
 > exists under `knowledge-base/project/specs/` for this branch, so there is no `lane:` to carry forward.
 >
@@ -56,14 +106,14 @@ Two findings reshaped the design away from "add a `2>` at one call site":
 | Capture `rc` via `cmd && rc=0 \|\| rc=$?` **followed immediately by `[ "$rc" = 0 ] \|\| exit "$rc"`** | The `if !` form yields `$? = 0` (R9) — but the AND-OR list is `set -e`-exempt, so **without the re-raise the boot silently continues** and can report "booted clean" on a host with no prd secrets (R26). Both halves are mandatory |
 | `tail -c 180` after dropping the `^Using ` preamble | `head -c 200` truncates the cause away; 180 leaves margin under the tag-value limit on a fail-open emitter (R1) |
 | Attempt breadcrumbs use `doppler_retry` — **not** `doppler_download_attempt` | The latter is a strict string **prefix superset** of `doppler_download`, which makes the op-contract test's anti-rename guarantee **vacuous** (R20) |
-| Sentry **tags**, message literal **frozen** | Changing `message` mints a **new** issue group, where `value = 1` means ">1" — a single fatal would then **not page at all** (R12) |
+| Sentry **tags** for the searchable fields, message literal **frozen** | Tags are *indexed* — the birth-path gate's `jq` reads `.tags[]` and cannot see `extra`. Changing `message` mints a **new** issue group, where `value = 1` means ">1" — a single fatal would then **not page at all** (R12). (`extra` is *also* available and precedent-backed — see corrected R2 — so it may carry deeper stderr behind the searchable tag.) |
 
 ## Research Reconciliation — Spec vs. Codebase
 
 | # | Claim | Codebase reality (verified) | Plan response |
 |---|---|---|---|
 | R1 | "Capture … the **first N bytes** of that stderr" | **Measured against pinned Doppler CLI v3.75.3**: auth-failure stderr is 246 B, of which the **first 173 B are two `Using DOPPLER_* from the environment…` preamble lines** (both env vars are set by `/etc/default/webhook-deploy`, so both fire on the real host). `head -c 200` ships pure noise and **truncates away** `Doppler Error: Invalid Auth token`. | Use `tail -c`, and **drop the preamble first** — the preamble is what actually broke `head`, so removing it makes the head/tail choice mostly stop mattering. **Stated assumption:** this shape is measured for *auth failure* only; H1/H3 shapes are unmeasured and could put context at the front. Preamble-drop-then-`tail` is the hedge, not a proof. Cap **180**, not 200. |
-| R2 | "emit … as Sentry `extra`" | No emitter in `apps/web-platform/infra/` sends `extra`; every one uses `tags`. `extra` support on `/api/{proj}/store/` is unverified here. | **Tags only.** See also R12 (grouping) and R21 (ingestion probe). |
+| ~~R2~~ **R2 (CORRECTED)** | "emit … as Sentry `extra`" | **The first draft's premise was FALSE and is retracted.** It claimed *"no emitter in `apps/web-platform/infra/` sends `extra`; support is unverified"*. A deepen-plan verification pass found **`extra` already shipping to the same `/api/{proj}/store/` endpoint from at least four sites**: `ci-deploy.sh` (`extra: {reason: $r, sdk_version: $s}`, `extra: {ref: $ref, detail: $d}`, and two more), `container-restart-monitor.sh` (`extra: $extra`), `cron-egress-resolve.sh` (`extra: $extra`). `extra` is **proven in production on this exact endpoint** — it was never an unverified gamble. | **The decision does not change, but its justification does.** `detail` stays a **tag** because tags are *indexed and searchable* — the birth-path gate's `jq` reads `.tags[]`, and `extra` is not exposed there — and because tags do not affect grouping (R12). **Upgrade now unlocked:** since `extra` is precedent-backed, the fuller (uncapped-at-180) stderr MAY additionally ride in `extra` as depth behind the searchable tag. Additive and low-risk, not a gamble. |
 | R3 | "the failure path is … `exit 1`" | Confirmed. Anchor: `stage=doppler_download` followed by `if ! doppler secrets download --no-file --format docker --project soleur --config prd > "$TMPENV"; then`; the trap is `[ "$rc" = 0 ] \|\| soleur-boot-emit "$stage" fatal`. | Phase 2 replaces this block. |
 | R4 | "breadcrumb payload is only `stage=…` — empty entries" | Confirmed **and explained**: the baked emitter's body is `printf '{"message":"soleur-cloud-init boot stage","level":"%s","tags":{"stage":"%s","host_id":"%s","region":"cloud-init"}}'` — no detail field exists. The inline `_emit` **does** carry `detail`; the baked emitter **never reads that file**. | The gap is the emitter. Phase 1. |
 | R5 | "Tag with `server_name`/`host_name`" | `SOLEUR_HOST_NAME` is **already** passed into the bootstrap and already consumed for `vector.toml`'s `@@HOST_NAME@@`. TF source: `host_name = each.key == "web-1" ? "soleur-web-platform" : "soleur-${each.key}"`. | Bake a second sentinel via the existing `sed` idiom — **0 `user_data`**. Scoped to the **baked** emitter only (see R22). |
@@ -177,11 +227,15 @@ piped through standalone `jq --arg path … | contains($path)` for `cloud-init.y
   of *novel* inline shell: ~0.46 gzipped B per raw byte** (227 raw B → +104 gzipped B). Do **not** use the
   ~5.8:1 ratio you get from measuring duplicated text. **Working budget: ≈1,100 raw bytes of new inline
   shell, total.** That is what makes the baked-helper decision non-negotiable rather than stylistic.
-- **G2 — Ingestion probe for the payload actually shipped (R21).** POST the **full new tag set**
-  (`stage`, `host_id`, `region`, `host_name`, `exit_code`, `detail`) to the Sentry store API and confirm
-  **HTTP 200 and that the tags render**. A locally-valid JSON body is a proxy; ingestion is the invariant,
-  and on a fail-open emitter a rejected payload is *worse than today*. If any tag is rejected or
-  truncated, drop it rather than ship a silent loss. Record the verdict in the PR body.
+- **G2 — Ingestion probe for the payload actually shipped (R21; scope reduced by R2-corrected).** POST
+  the **full new tag set** (`stage`, `host_id`, `region`, `host_name`, `exit_code`, `detail`) — plus
+  `extra` if adopted — to the Sentry store API and confirm **HTTP 200 and that the fields render**. A
+  locally-valid JSON body is a proxy; ingestion is the invariant, and on a fail-open emitter a rejected
+  payload is *worse than today*. **Corrected risk level:** `extra` is **not** an unknown — four in-repo
+  emitters already ship it to this exact endpoint (`ci-deploy.sh`, `container-restart-monitor.sh`,
+  `cron-egress-resolve.sh`) — so this probe answers a *field-count and length* question, not a
+  *field-support* one. If any field is rejected or silently truncated, drop it rather than ship a silent
+  loss. Record the verdict in the PR body.
   <!-- verified: 2026-07-26 doppler v3.75.3 — exit=1, 246 B stderr, head -c 200 → 0 matches of
        "Doppler Error", tail -c 200 → 1; token NOT echoed; ANSI colour present -->
 
@@ -199,12 +253,14 @@ piped through standalone `jq --arg path … | contains($path)` for `cloud-init.y
    - drop `^Using ` preamble lines (this is what actually defeated `head`);
    - `LC_ALL=C` pinned — locale-dependent `tr -cd '[:print:]'` can leave a partial multi-byte sequence
      that makes the JSON invalid, and on a fail-open emitter that loses the breadcrumb entirely;
-   - strip control characters; drop `"` and `\`; fold newlines to spaces; **trim** leading/trailing
-     whitespace (Sentry drops untrimmed tag values — the existing `_emit` carries this latent bug; do
-     not copy it forward);
-   - **`tail -c 180`**, then an **ASCII-only pass AFTER the cap** (R31c) — `tail -c` can split a UTF-8
-     sequence, and on a fail-open emitter an invalid tag value loses the breadcrumb **entirely** (the
-     RK8 failure shape arriving through the sanitizer instead of through `extra`).
+   - strip control characters; drop `"` and `\`; **fold newlines to spaces — load-bearing**, since
+     newlines are *documented* as impermissible in Sentry tag values and stderr is multi-line by nature;
+   - **trim** leading/trailing whitespace — defensive only; the "Sentry drops untrimmed values" claim is
+     **undocumented**, so this is cheap insurance, not a fix for a known vendor behaviour;
+   - **`tail -c 180`** (under the documented 200-char tag cap), then an **ASCII-only pass AFTER the cap**.
+     Rationale corrected: an over-long or invalid-UTF-8 tag is **silently truncated / sanitized at 2xx**,
+     *not* rejected — so this guards against **losing the cause inside a surviving event**, not against
+     losing the event. Still worth doing: a silently truncated cause is the failure this PR exists to end.
    Validated at plan time: real stderr → **68 B**, `jq -e .` **VALID JSON**; adversarial fixture with
    quotes, backslashes, ANSI escape, BEL and embedded newlines also **VALID JSON**.
 3. **Carry `exit_code` and `attempts` inside the detail string**, not as new positional args. The
@@ -332,7 +388,7 @@ grep-shaped and prose-shaped criteria were cut (R24).
   **no residual `@@`**.
 - **AC-G (sweep, R23)** — `docker_run` stderr is captured to `.d/docker_run`, asserted by emitting for
   `docker_run` and reading back a non-empty detail. A tracking issue exists for the remaining stages.
-- **AC-H (no stdout capture / no corruption, R17)** — Grep spans **both** `cloud-init.yml` **and** the
+- **AC-H (no stdout capture / no corruption — see Phase 2 step 1)** — Grep spans **both** `cloud-init.yml` **and** the
   `soleur-doppler-download` body: no `2>&1`, no `&>`, and the helper writes nothing to stdout except
   the secret payload. *This is the most valuable criterion in the plan* — a stray `2>&1` converts this
   feature into credential exfiltration.
@@ -601,8 +657,123 @@ no `view … include` line is required and no undefined-element render failure i
 | **RK14** | **Fail-open regression (R26).** The prescribed `rc` capture is `set -e`-exempt; omitting the re-raise lets the boot continue with an empty/absent `$TMPENV`, producing either a **mistagged** fatal or a host reporting `cloud_init_complete` **without prd secrets**. | **High** | Mandatory `[ "$rc" = 0 ] \|\| exit "$rc"`, pinned behaviourally by AC-E(iii). |
 | **RK10** | **Stale detail cross-contamination** — a *plausible wrong answer* is worse than no answer. | Medium | Per-stage files (R18); AC-I. |
 | **RK11** | **`templatefile()` interpolation** — new inline `${...}` is interpolated at apply time unless written `$${...}`. | Medium | Phase 2 step 10; `validate-infra-templates.sh` renders and schema-checks in CI, and the size test throws on any un-provided `${var}`. |
-| **RK12** | **Correlated failure (R16).** The emitter's only transport is `curl` to Sentry, so H1 — a cold-boot network fault — can disable the very channel that would discriminate H1. | Medium | **Named, not papered over.** Partially mitigated by `timeout 45` + `rc=124`: a *hang* now produces a named fatal where it previously produced silence. Honest residual: if egress is fully dead, no Sentry event exists and the gate's `timeout` verdict is the only signal — that verdict is itself the documented dark-boot signal. No SSH or console step is prescribed (`hr-no-ssh-fallback-in-runbooks`). |
+| **RK12** | **Correlated failure** (full layer sweep in *Research Insights → Network-Outage Deep-Dive*). The emitter's only transport is `curl` to Sentry, so H1 — a cold-boot network fault — can disable the very channel that would discriminate H1. | Medium | **Named, not papered over.** Partially mitigated by `timeout 45` + `rc=124`: a *hang* now produces a named fatal where it previously produced silence. Honest residual: if egress is fully dead, no Sentry event exists and the gate's `timeout` verdict is the only signal — that verdict is itself the documented dark-boot signal. No SSH or console step is prescribed (`hr-no-ssh-fallback-in-runbooks`). |
 | **RK13** | **Truncation pressure.** The gate reads `per_page=100` on a **shared** project; extra attempt events make a full page (and thus a false `timeout` on a healthy host) more likely. | Low | Skip the warning on the exhausting attempt; N capped at 3. Pre-existing guard (`TOTAL >= 100` note) still fires. |
+
+## Research Insights (deepen-plan)
+
+### Precedent diff (Phase 4.4) — pattern-bound behaviors
+
+Three of this plan's prescriptions are pattern-bound. All have in-repo precedent; **none is novel**.
+
+| Prescribed shape | Canonical precedent | Adopted verbatim? |
+|---|---|---|
+| Bounded retry | `n=0; until <cmd>; do n=$((n+1)); [ "$n" -ge N ] && exit 1; sleep S; done` — 6 instances in `cloud-init.yml` (`cf_apt_key` N=3/5 s, `apt_update` N=2/10 s, `apt_install` N=2/10 s, and three `doppler secrets get` loops at N=3/5 s wrapped in `timeout 45`) | **Yes.** N=3 with `timeout 45` matches the Doppler-specific sibling loops exactly, not the apt ones. |
+| Baked helper authoring | `cat > /usr/local/bin/<name> <<'<EOF>'` — **6** existing helpers (`soleur-boot-emit`, `soleur-wait-ready`, `soleur-wait-nic`, `soleur-vector-install`, `soleur-luks-structural-gate`, `soleur-fresh-boot-ready`) | **Yes.** Confirms R25: the `install -D` loop is for seed-sourced files only. |
+| Heredoc test extraction | `apps/web-platform/infra/fresh-boot-ready.test.sh` — `HELPER="$(awk "/cat > \/usr\/local\/bin\/soleur-fresh-boot-ready <<'FRESHREADYEOF'/{f=1;next} f&&/^FRESHREADYEOF\$/{f=0} f{print}" "$BOOT")"` then runs it | **Yes.** This is the harness every behavioural AC must reuse (R32). |
+| Detail-capture + sanitize | The inline `_emit`'s `DETAIL=$(tr -cd '[:print:]' < /run/soleur-stage-detail 2>/dev/null \| tr -d '"\\' \| head -c 200)`, fed by `tail -c 140`/`tail -c 160` writers | **Extended, not copied.** The plan keeps the writer's `tail -c` direction (correct) and fixes three latent bugs the precedent carries: `head -c` on the reader, no whitespace trim, no locale pin. |
+
+**Scheduled-work check:** not applicable — this plan introduces no cron, timer, or recurring job.
+
+### Verify-the-negative pass (Phase 4.45)
+
+Every load-bearing negative claim in the plan was re-probed against the repo. **9 of 10 CONFIRM; 1
+CONTRADICTS**, and the contradiction was material enough to change a design justification.
+
+| # | Claim | Verdict |
+|---|---|---|
+| 1 | Five legacy `/run/soleur-stage-detail` producers + the inline `_emit` consumer are untouched | **CONFIRMS** — exactly 5 writers, all outside the terminal block this plan edits |
+| 2 | `soleur-boot-emit` is heredoc-authored, not `install -D`, not in the `test -x` block | **CONFIRMS** — the `test -x` loop iterates a fixed list that excludes it |
+| 3 | The failing `doppler secrets download` is the only unbounded Doppler call | **CONFIRMS** — 11 `timeout`-wrapped, 1 not, and the 1 is the failing call |
+| 4 | `ignore_changes = [user_data, ssh_keys, image, placement_group_id]` | **CONFIRMS** |
+| 5 | Alert has no `level` filter; exactly four `key = "stage"` filters | **CONFIRMS** |
+| 6 | Op-contract test asserts `toContain("stage=doppler_download")` | **CONFIRMS** — the prefix hazard (R20) is real |
+| 7 | Workflow `QUERY` has exactly four `message:"…"` literals | **CONFIRMS** |
+| 8 | `cron-egress-enforce-probe.sh` already self-emits with a `probe_result` tag | **CONFIRMS** — correctly excluded from the sweep |
+| 9 | "No emitter in `apps/web-platform/infra/` sends `extra`" | **CONTRADICTS** — see corrected R2 |
+| 10 | `fresh-boot-ready.test.sh` awk-extracts a heredoc and runs it | **CONFIRMS** — the harness R32 mandates exists |
+
+**The one contradiction mattered.** The plan had justified tags-only partly on "`extra` is unverified
+and a rejected payload is worse than today". That premise was false: `extra` ships to this exact
+endpoint from four in-repo emitters. The *decision* survives on the stronger, true ground (the gate's
+`jq` reads `.tags[]` and cannot see `extra`; tags don't affect grouping), but the plan no longer rests
+on a claim that a single grep falsifies. This is the same discipline the plan preaches — a premise
+stated confidently is still a premise until it is probed.
+
+### Sentry store-API contract (framework-docs research)
+
+The one genuinely vendor-dependent surface, now researched with citations. **Three of this plan's own
+claims were overstated and are corrected here** — the sanitizer design is unchanged, but its
+*justification* is now accurate.
+
+| Question | Answer | Source |
+|---|---|---|
+| Tag **value** length limit | **200 chars**, and over-length is **silently TRUNCATED at 2xx** — *not* rejected | [Event Payloads](https://develop.sentry.dev/sdk/data-model/event-payloads/) |
+| Tag **key** limit / max tag count | 200 chars; **max count undocumented** | same |
+| Newlines in tag values | **Not permitted** — documented | [setTag API](https://docs.sentry.io/platforms/javascript/configuration/apis/) |
+| Leading/trailing whitespace | **UNDOCUMENTED** — the "Sentry drops untrimmed values" claim is unverified | [getsentry/sentry#64541](https://github.com/getsentry/sentry/issues/64541) |
+| `extra` on `/store/` | **Documented optional field.** 16 kB per item, 256 kB total | [Event Payloads](https://develop.sentry.dev/sdk/data-model/event-payloads/) |
+| `server_name` on `/store/` | **Documented optional field** | same |
+| Rejection behaviour | 2xx on accept; **4xx only on a malformed envelope**. Field over-runs truncate silently | [getsentry/sentry#80434](https://github.com/getsentry/sentry/issues/80434) |
+| Grouping | **Tags do NOT affect grouping; `message` DOES** — confirms R12 | [Grouping](https://develop.sentry.dev/backend/application-domains/grouping/) |
+| Invalid UTF-8 in a tag | **Sanitized (U+FFFD), not rejected** | [sentry-ruby#1911](https://github.com/getsentry/sentry-ruby/issues/1911) |
+
+**Corrections to this plan's own claims:**
+
+1. **Newline-folding is load-bearing, not cosmetic.** Newlines are *documented* as impermissible in tag
+   values, and captured stderr is multi-line by nature. The sanitizer's `fold newlines to spaces` step is
+   promoted from tidiness to a correctness requirement.
+2. **An over-long tag does NOT lose the event** (this plan said it might). It truncates silently at 2xx,
+   so `curl -sf` still succeeds. The 180-byte cap therefore guards against **silent data loss of the
+   cause**, not against event loss — a weaker but still sufficient reason to keep it.
+3. **Invalid UTF-8 does NOT lose the event either** (R31c overstated this). It is sanitized to U+FFFD.
+   The ASCII pass after the cap stays for **determinism and readability**, not survival.
+4. **Whitespace-trim is defensive, not a known bug.** The CTO-sourced "Sentry drops untrimmed tag
+   values" claim is undocumented; trimming is cheap and harmless, so it stays — but the plan no longer
+   asserts a vendor behaviour it cannot cite.
+
+**Forward-looking note (out of scope, worth recording):** the `/store/` endpoint is **deprecated** in
+favour of `/envelope/`. Every boot-stage emitter in this repo uses `/store/`, and
+`cron-egress-resolve.sh` already carries a comment anticipating the sunset. Migrating the emitter fleet
+is **not** in this PR's scope; it belongs in the tracking issue Phase 3 already requires.
+
+### Network-Outage Deep-Dive (Phase 4.5)
+
+**Gate fired** on the `timeout` trigger substring. Telemetry emitted
+(`hr-ssh-diagnosis-verify-firewall applied`). This plan is **not** an SSH-connectivity diagnosis and
+prescribes no SSH step, but H1 is a network hypothesis, so the layer sweep is recorded honestly:
+
+| Layer | Status for this plan |
+|---|---|
+| **L3 firewall allow-list** | **Not applicable and not claimed.** No SSH/provisioner path is in scope; the change is delivered by cloud-init on a *fresh* host, and no resource in scope has a `provisioner "file" / "remote-exec" / connection { type = "ssh" }` block. |
+| **L3 DNS / routing** | **Explicitly UNVERIFIED, and that is the point.** H1 (cold-boot DNS/dial race) is one of the four live hypotheses. There is no artifact to cite because the deciding datum was discarded — which is precisely what this PR ships. `rc=124` + the stderr body are the artifacts a future occurrence will produce. |
+| **L7 TLS / proxy** | Unchanged. The Sentry POST already uses HTTPS with default CA verification; the Doppler CLI likewise. Neither is modified. |
+| **L7 application** | The failing component's own error channel is the deliverable. |
+
+**Gap closed by this plan, not before it:** the L3 layer currently has *no* observable at all from the
+booting host, because the only unbounded Doppler call in the file emits nothing on a hang (R19). Adding
+`timeout 45` + `rc=124` is what makes an L3 fault distinguishable from an L7 auth error at all.
+
+**Honest residual (RK12):** the emitter's only transport is `curl` to Sentry, so a *total* egress failure
+disables the discriminator for the hypothesis most likely to have caused it. The plan names this rather
+than claiming coverage it does not have. No SSH or console remediation is prescribed
+(`hr-no-ssh-fallback-in-runbooks`).
+
+### Downtime & Cutover (Phase 4.55) — gate evaluated, does not fire
+
+No trigger matches, and the reason is load-bearing rather than incidental:
+
+- **Infra reboot/replace class:** no. `hcloud_server.web` pins `user_data`, `ssh_keys`, `image` **and**
+  `placement_group_id` under `lifecycle.ignore_changes`, so none of the attributes this plan touches can
+  produce a `-/+` on a running host. `terraform plan` shows **no diff** for the cloud-init half. (The
+  `placement_group_id` token appears in this plan only inside a *quotation* of that ignore list — it is
+  not being changed.)
+- **Database lock class:** no migration, no DDL, no backfill.
+- **Deploy/router class:** no container swap, no tunnel or connector restructure.
+
+The change reaches a host **only at a fresh create**, which is by definition a host carrying zero
+traffic (serving-weight 0, behind the anti-pooling `lb-weight-gate`). Availability of the serving
+surface is untouched.
 
 ## Sharp Edges
 
@@ -639,7 +810,7 @@ no `view … include` line is required and no undefined-element render failure i
 |---|---|---|
 | **A1** | Patch only the doppler site | **Rejected.** Leaves every sibling blind; costs more `user_data` per unit of coverage than fixing the shared emitter. |
 | **A2** | **Ship the error channel alone; cut the retry.** | **Recorded as a User-Challenge, not applied.** The `2026-07-16` learning says the probe ships alone, and explicitly flags *"they ride the same artifact"* as a **circular** justification — so that argument is not used. The retry is retained because the issue scopes it, because it is not a fix for a *diagnosed* cause (all hypotheses UNKNOWN), and because AC-C makes it evidence-**preserving**. The simplicity reviewer's counter — that R10/RK9 exist *only because of* the retry — is the strongest argument against, and is recorded verbatim in `decision-challenges.md`. **Phase 2 is deliberately separable and is the designated descope target.** |
-| **A3** | Sentry `extra` / top-level `server_name` | **Not shipped.** Unverified on the store endpoint; grouping and fail-open risk make tags strictly safer. G2 now probes the tag set actually shipped. |
+| **A3** | Sentry `extra` / top-level `server_name` | **Re-assessed after verification.** The first draft rejected `extra` as "unverified on the store endpoint" — **that premise was wrong** (corrected R2: four in-repo emitters already ship `extra` to this endpoint). The **tag** remains the load-bearing channel because the birth-path gate reads `.tags[]` and cannot see `extra`; `extra` is now an *available, precedent-backed* place to put deeper stderr behind that tag. Top-level `server_name` remains unadopted — a `host_name` **tag** is what the gate can actually select on. |
 | **A4** | Ship stderr via journald → Vector → Better Stack | **Rejected.** Structurally impossible: Vector's token comes from the very fetch that failed. |
 | **A5** | `<stage>\|<detail>` wire format in the legacy buffer | **Rejected** in favour of per-stage files (R18) — the wire format created a delimiter collision with existing content, a migration nobody owned, and (via R15) the empty-`detail` defect. |
 | **A6** | Amend ADR-082 instead of a new ADR | **Rejected** — it is `superseded-in-part`; new constraints there are hard to read. ADR-147 stands alone. |
