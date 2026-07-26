@@ -167,10 +167,12 @@ done < <(git -C "$WORK_DIR" log origin/main..HEAD -G'code-review' \
 #
 # The two message patterns are retained as legacy fallbacks for branches
 # reviewed before the trailer existed: "refactor: add code review findings" and
-# the "review: <summary> (P<N>)" fix-inline convention from
+# the "review: <summary> (P<N>)" fix-inline convention (with an OPTIONAL
+# conventional-commit scope -- this repo writes `review(6178): ...`, which a
+# bare `review: ` regex misses, reading as "review never ran"; PR #6933) from
 # rf-review-finding-default-fix-inline (post-#2374).
 REVIEW_COMMIT=$(git -C "$WORK_DIR" log origin/main..HEAD --oneline 2>/dev/null \
-  | grep -E "^[a-f0-9]+ (refactor: add code review findings|review: )" || true)
+  | grep -E "^[a-f0-9]+ (refactor: add code review findings|review(\([^)]*\))?: )" || true)
 if [[ -z "$REVIEW_COMMIT" ]]; then
   REVIEW_COMMIT=$(git -C "$WORK_DIR" log origin/main..HEAD \
     --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' 2>/dev/null \

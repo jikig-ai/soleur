@@ -30,6 +30,15 @@ on:
       # never run the guard that catches it.
       - ".github/workflows/apply-inngest-rls.yml"
       - ".github/workflows/apply-inngest-rls-dev.yml"
+      # (#6178) cutover-inngest-workflow.test.sh asserts ~90 properties OF cutover-inngest.yml
+      # -- the anchor derivation, the non-vacuity gate, the per-arm window split, the null-safe
+      # bucketing, and the emitter-parity of the flip-FSM reason set. Without this path a PR that
+      # edits ONLY that workflow does not run the guard whose entire job is protecting it, which
+      # is the same "the job that proves the gate works would be skipped by the very PR changing
+      # the gate" defect the #6454 comment above describes. (The emitter the parity test reads,
+      # apps/web-platform/infra/inngest-cutover-flip.sh, needs no entry — `apps/*/infra/**`
+      # already covers it, so adding a terminal reason there does run the parity guard.)
+      - ".github/workflows/cutover-inngest.yml"
       # (#3366) supabase-advisor/scan-workflow.test.sh reads all of these. The
       # guard's whole job is to catch a gate that looks present but does nothing
       # — so a guard that cannot fire when its own subjects are edited would be

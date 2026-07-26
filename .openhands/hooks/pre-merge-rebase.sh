@@ -71,8 +71,14 @@ done < <(git -C "$WORK_DIR" log origin/main..HEAD -G'code-review' \
 # fix-inline convention (post-#2374) entirely. Both are now matched here, plus
 # the durable `Reviewed-By-Soleur:` trailer that emit-review-trailer.sh emits —
 # the only signal a zero-finding review can produce.
+#
+# The `review: ` arm carries an OPTIONAL conventional-commit scope: this repo
+# writes `review(6178): ...`, which a bare `review: ` regex misses, reading as
+# "review never ran" and blocking a merge that had in fact been reviewed
+# (PR #6933). Kept byte-identical to the .claude/hooks copy — the T-S case in
+# pre-merge-rebase-parity.test.sh asserts that on the full call shape.
 REVIEW_COMMIT=$(git -C "$WORK_DIR" log origin/main..HEAD --oneline 2>/dev/null \
-  | grep -E "^[a-f0-9]+ (refactor: add code review findings|review: )" || true)
+  | grep -E "^[a-f0-9]+ (refactor: add code review findings|review(\([^)]*\))?: )" || true)
 if [[ -z "$REVIEW_COMMIT" ]]; then
   REVIEW_COMMIT=$(git -C "$WORK_DIR" log origin/main..HEAD \
     --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' 2>/dev/null \
