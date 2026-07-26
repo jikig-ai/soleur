@@ -74,17 +74,46 @@ Recorded so no reviewer reads a merged repin as "git-data is available". Each ve
    both-volumes-preserved destroy-guard (`git-data-host-replace-gate.sh`) and an ADR-068
    amendment. **The birth must therefore keep the flag OFF** — that is what makes the sequence
    safe, and it is a hard precondition of step 1, not an optimization.
-1. **Birth the host** — gated `workflow_dispatch`, **with `GIT_DATA_STORE_ENABLED` OFF/absent**
-   (per item 0). `git-data-host-replace` plans a plain CREATE against a host absent from state;
-   **verify that path rather than assume it**, since the stock preflight would have aborted on
-   `cax11` and this shape has never actually run.
-2. **#6975** — heartbeat masking; precondition of the birth.
-3. **#6680** — `git-data-cutover.yml` has no tunnel ingress for `10.0.1.20`; the CF Tunnel SSH
+1. **#6977 — build a birth route. There is none today.** *(Added at deepen; the hedge in the
+   original item 1 — "verify that path rather than assume it" — was verified and came back
+   negative.)* `git-data-host-replace` **cannot** birth an unborn host: its gate counts
+   `server_replaced` as `actions ⊇ {delete, create}` and a first birth is `["create"]` only, and
+   ≥6 never-provisioned dependencies blow the `out_of_scope == 0` allow-set. There is no
+   `git-data-host-create` target. The only remaining route is an **untargeted** prod-wide
+   `terraform apply` that runs neither the destroy-guard nor the stock preflight.
+2. **Birth the host** via that new route, **with `GIT_DATA_STORE_ENABLED` OFF/absent** (per item 0).
+3. **Deliver the minted transport keys to the running web container.** *(Added at deepen — was
+   missing entirely.)* `git-data.tf` documents `GIT_TRANSPORT_/GIT_PROVISION_/GIT_REMOVE_SSH_PRIVATE_KEY`
+   as "baked into the container env at start". The birth mints the `tls_private_key` resources
+   (they are `user_data` dependencies) but their `doppler_secret` siblings are **dependents** and
+   are **not** in the replace `-target` set — verified: that set is five `hcloud_*` addresses and no
+   `doppler_secret`. So after a birth the host's `authorized_keys` holds public halves whose private
+   halves live only in tfstate, and `soleur-web.service` must be **restarted** to pick them up once
+   they land. This is a precondition of the cutover's `bulk_rsync`, not something
+   `flip_flag_and_reload`'s late restart covers.
+   **Coupled risk:** `removeGitDataRepo` is deliberately NOT gated on `isGitDataStoreEnabled()` — it
+   gates on `GIT_REMOVE_SSH_PRIVATE_KEY` being present. That key has no dependency on
+   `hcloud_server.git_data`, so an untargeted apply can land it in `prd` even if the server CREATE
+   fails; every account deletion then throws in `resolveGitDataSshHost()` and files a false
+   **"Art. 17 erasure failed"** Sentry event for a store that does not exist.
+4. **Fix `git-data-cutover.sh`'s stale web roster.** *(Added at deepen.)* `WEB_HOSTS` defaults to
+   `10.0.1.10` on the comment *"web-2 (10.0.1.11) retired #6538; single-host roster"* — falsified by
+   web-2's 2026-07-24 re-add at that same address (ADR-143), and `git-data-cutover.yml` does **not**
+   override it. If web-2 is alive at cutover: `acquire_freeze()` drains only web-1 so web-2 writes
+   straddle the "authoritative" freeze `verify_set_identity` assumes is quiesced;
+   `flip_flag_and_reload()` writes a **global** Doppler flag but restarts only web-1, leaving the two
+   hosts reading from **different git-data sources**; `rollback()` and `release_freeze()` inherit the
+   same blind spot. Every log line in those functions says "both hosts" — the tell that the constant
+   drifted out from under the code. Harmless today (web-2 is serving-weight 0), live by the time
+   this chain completes.
+5. **#6975** — heartbeat masking; precondition of the birth. **#6548** — `git_data_prd` heartbeat
+   never unpaused and absent from live Better Stack; same gating status as #6975.
+6. **#6680** — `git-data-cutover.yml` has no tunnel ingress for `10.0.1.20`; the CF Tunnel SSH
    bridge reaches only web-1 and the whole cutover runs over it (`preconditions()` does
    `gd_ssh "$GIT_DATA_HOST" 'true'`). **Host born is not cutover-runnable.** An unsolved design
    question, not a mechanical fix — and per item 0 it is now unconditionally on the critical
    path, since the cutover is the sanctioned mechanism that flips the flag.
-4. **Cutover + flip** via `git-data-cutover.sh`. On a never-enabled store this runs against an
+7. **Cutover + flip** via `git-data-cutover.sh`. On a never-enabled store this runs against an
    **empty** source: the rsync copies nothing and the set-identity verify passes trivially, so
    the write-freeze is a formality rather than a data-risk window. Its real work is
    `repoint_luks_mount` + the coordinated two-host flag flip.

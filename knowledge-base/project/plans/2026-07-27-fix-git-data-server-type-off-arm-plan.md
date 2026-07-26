@@ -241,6 +241,27 @@ row's prose carries four separate now-false or stale claims, all verified at dee
 Status **stays** `approved-not-billing` — the host is still unborn. Keep the PHANTOM-ROW note (still
 accurate) and carry the identical-net-vs-gross caveat the web-2 row uses.
 
+### Phase 4b — G5 sweep: the voided `cax11` rationale outside the three obvious files (R13)
+
+v1 covered three of six sites. The remaining three all survive the change and all mislead:
+
+1. **`.github/workflows/apply-web-platform-infra.yml:2393`** — a hardcoded CI error string:
+   *"cax11 has had no EU stock, so it cannot be born at any account cap."* After this PR it is wrong
+   on **both** clauses (the type is `cpx22`; the account-cap framing is the stale `5`). It fires on
+   the **exact path an operator will be debugging a failed birth**, which makes it the worst of the
+   three. `:2373` carries a matching comment.
+2. **`knowledge-base/operations/expenses.md:19`** — covered by Phase 4's table.
+3. **`knowledge-base/legal/article-30-register.md:69`** — the GDPR Art. 30 register records Phase-6
+   replication as *"externally blocked on shared git-data (#6570, git-data pinned to an unorderable
+   `cax11` ARM type)."* **Two** stale claims in one row: the `cax11` pin (this PR), and web-2
+   described as **`cx23`** (repinned to `cpx22` by #6966/#6967 — pre-existing drift this PR is
+   merely standing next to). Correct the `cax11` clause; flag the `cx23` one.
+
+Touching the Art. 30 register is a regulated-data surface (`hr-gdpr-gate-on-regulated-data-surfaces`),
+but this is a **factual correction to a row explicitly marked DRAFTED / NOT-YET-ACTIVE** with no
+present-tense processing asserted — no lawful-basis or transfer analysis changes. Note it in the PR
+body rather than escalating.
+
 ### Phase 5 — ADR record (split across two ADRs, R12)
 
 v1 put everything in ADR-143. That is **half right**, and the split matters:
@@ -262,6 +283,18 @@ re-derive the next free number from a freshly-fetched `origin/main` (highest is 
 
 ### Phase 6 — Verification
 
+**Spec TR3 and TR5 are restored here (R14).** Both exist in the spec but v1 gave neither a phase
+step nor an AC, so both would have been silently dropped:
+
+- **TR3** — verify the amd64 checksum against the real artifact, one command, no precedent-argument
+  (this is R11's replacement for the retracted provenance claim):
+  `curl -sL https://github.com/DopplerHQ/cli/releases/download/3.75.3/doppler_3.75.3_linux_amd64.tar.gz | sha256sum`
+  → must equal `9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db`.
+- **TR5** — confirm `tests/scripts/lib/stock-preflight-gate.sh` reads the **new** type and that no
+  test encodes today's availability (`cq-test-fixtures-synthesized-only`). Load-bearing after R1/R3:
+  with FR6 catching only *phantom* types, this gate is now the **sole** orderability guard.
+
+
 1. `cd apps/web-platform/infra && terraform init -input=false && terraform validate`
 2. `terraform plan` — assert **no diff** on `hcloud_volume.git_data*`, `random_password.git_data_luks`,
    `doppler_secret.git_data_luks_key` (TR2). The `hcloud_server.git_data` CREATE is expected and
@@ -280,7 +313,17 @@ re-derive the next free number from a freshly-fetched `origin/main` (highest is 
 - `.github/workflows/infra-validation.yml` — register the new suite (FR11)
 - `knowledge-base/operations/expenses.md` — FR8
 - `knowledge-base/engineering/architecture/decisions/ADR-143-active-active-web-ingress-drain-gated-host-lifecycle.md` — FR9
-- `plugins/soleur/test/cloud-init-user-data-size.test.ts` — FR10 (optional accuracy entries)
+- `.github/workflows/apply-web-platform-infra.yml` — FR12 (G5 sweep: the `:2393` CI error string
+  + the `:2373` comment)
+- `knowledge-base/legal/article-30-register.md` — FR13 (G5 sweep: the `:69` `cax11` clause)
+- `apps/web-platform/infra/git-data-luks.test.sh` — FR11 (four behavioral assertions, R8)
+
+**FR10 dropped (R15):** the optional `SECRET_LENGTHS` entries in
+`plugins/soleur/test/cloud-init-user-data-size.test.ts`. `DEFAULT_REF_LEN = 80` over-models the two
+new args (5 + 64 actual) by ~91 bytes — conservative, against ~6 KB headroom between
+`GIT_DATA_FLOOR` and `GIT_DATA_BUDGET`. v1 marked it "optional" and gave it no task, which is how a
+requirement silently evaporates; dropping it explicitly is the honest version. The test still runs
+in Phase 6.
 
 ## Files to Create
 
