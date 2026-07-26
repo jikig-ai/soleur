@@ -28,6 +28,17 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOOT="$DIR/soleur-host-bootstrap.sh"
 CI="$DIR/cloud-init.yml"
+WF="$DIR/../../../.github/workflows/apply-web-platform-infra.yml"
+
+# The birth job's own block, not the whole workflow. Every AC8/AC13/AC14/AC16
+# assertion below is about what THE BIRTH PATH does, and the file holds eight other
+# dispatch jobs; a whole-file grep would let a sibling job's Doppler read or Sentry
+# host satisfy an assertion about this one. That is the exact shape of vacuous pass
+# these five assertions were removed rather than left to become.
+#
+# `$0 ~ /^  [A-Za-z0-9_-]+:/` is the top-level job header; capture flips on ours and
+# off at the next one, so the block ends where the job ends.
+JOB="$(awk '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ /^  web_host_create:/) } cap' "$WF" || true)"
 
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
@@ -203,27 +214,126 @@ else
   ok "AC7: cloud-init.yml carries only soleur-boot-emit CALL sites (no duplicated body)"
 fi
 
-# ── CAPABILITY LOST 2026-07-20 (#6575) — carried forward, not dropped ──────────
-# AC8 / AC8b / AC13 / AC14 / AC16 asserted against the `web_2_recreate` job in
-# apply-web-platform-infra.yml. That job was deleted with the web-2 dispatch sweep,
-# and it was the ONLY consumer of $WF in this file — so those five assertions had no
-# subject left and were removed rather than left to pass vacuously.
+# ── CAPABILITY RESTORED 2026-07-26 (#6730) ────────────────────────────────────
+# AC8 / AC8b / AC13 / AC14 / AC16 were asserted against the `web_2_recreate` job
+# until #6575 deleted it with the web-2 dispatch sweep. It was the only consumer of
+# $WF here, so the five assertions lost their subject and were removed rather than
+# left to pass vacuously — with the instruction to re-add them the moment an
+# automated host-create path existed. `web_host_create` is that path, and these are
+# those assertions, re-pointed. Nothing about them was ever web-2-specific.
 #
-# What they enforced was NEVER web-2-specific, and is NOT re-implemented anywhere yet:
-#   AC14  `SENTRY_DSN` must be non-empty in Doppler prd_terraform BEFORE a host is
-#         created. The pre-extraction boot stages depend SOLELY on the baked
-#         ${sentry_dsn} (doppler is not installed yet, so its fallback is dead), so an
-#         empty DSN means a fresh host boots DARK — no telemetry, no page, no signal.
-#   AC8/AC8b/AC13/AC16  the fresh-host Sentry surfacing step: EU host (de.sentry.io),
-#         `if: always()`, token from Doppler, client-side regex filter (the events
-#         endpoint ignores `message:` queries and returns 0).
-#
-# There is no surviving automated host-create path to move them to — every route
-# HALTs, and building one is #6730's scope. So the requirement is carried in two
-# places instead: the operator pinned-image chain in the host_creates HALT, and
-# ADR-128, which makes both a MUST for #6730's birth path. Re-add assertions here
-# the moment that path exists.
+# The requirement they carry, restated once so the next reader does not have to
+# reconstruct it from the git history: the pre-extraction boot stages emit through
+# the BAKED ${sentry_dsn} and nothing else — doppler is not installed yet, so its
+# fallback is dead code on a fresh host. An empty DSN at birth means the host boots
+# dark: no telemetry, no page, no signal that it died. And `runcmd` is
+# once-per-instance, so a host that aborts at stage=verify is not repairable by a
+# reboot, only by replacement. That is why the DSN check is a precondition of the
+# create rather than a check on the result.
 # ------------------------------------------------------------------------------
+
+# The block must exist at all. Every assertion below greps $JOB, and grep against an
+# empty string simply finds nothing — so without this floor, deleting the job would
+# turn all five into silent passes, which is precisely the failure mode #6575
+# refused to leave behind.
+if [ -n "$JOB" ]; then
+  ok "AC8-16 floor: the web_host_create job block was extracted from $(basename "$WF")"
+else
+  no "AC8-16 floor: no web_host_create job in $(basename "$WF") — the five restored assertions have no subject and would all pass vacuously"
+fi
+
+# ── AC8 (lockstep, byte-equality): every emit message is a substring of the QUERY ──
+# The surfacing step's QUERY is the only thing standing between a dead host and a
+# green-looking dispatch, and it names the emit messages as literals. A rename on
+# either side leaves the query matching nothing — a dark read that reports "the host
+# emitted nothing" identically to a host that genuinely did. So the check runs in
+# BOTH directions: every literal in the QUERY must be emitted somewhere, and every
+# canonical emit must appear in the QUERY.
+QUERY_LINE=$(printf '%s\n' "$JOB" | grep -nE "^\s*QUERY='" | head -1 | cut -d: -f1 || true)
+if [ -z "$QUERY_LINE" ]; then
+  no "AC8: could not locate the QUERY line in the web_host_create job"
+else
+  QUERY=$(printf '%s\n' "$JOB" | sed -n "${QUERY_LINE}p")
+  for msg in \
+    "soleur-hostscript-seed failed" \
+    "soleur-host-bootstrap failed" \
+    "soleur-host-bootstrap complete" \
+    "soleur-cloud-init boot stage"; do
+    if printf '%s' "$QUERY" | grep -qF -- "$msg"; then
+      ok "AC8: QUERY includes message \"$msg\""
+    else
+      no "AC8: the birth job's QUERY is missing message \"$msg\" (lockstep drift re-opens the blind spot)"
+    fi
+  done
+  for pair in \
+    "soleur-hostscript-seed failed:$CI" \
+    "soleur-host-bootstrap failed:$BOOT" \
+    "soleur-host-bootstrap complete:$BOOT" \
+    "soleur-cloud-init boot stage:$BOOT"; do
+    msg="${pair%%:*}"; src="${pair##*:}"
+    if grep -qF -- "$msg" "$src"; then
+      ok "AC8: message \"$msg\" is emitted in $(basename "$src")"
+    else
+      no "AC8: message \"$msg\" not found in $(basename "$src") (query would match nothing)"
+    fi
+  done
+fi
+
+# ── AC8b (EU data plane + always-run breadcrumb surface) ──
+# The project is EU-resident (jikigai-eu); a US sentry.io query against it returns
+# empty — indistinguishable from a silent host.
+if printf '%s\n' "$JOB" | grep -qE 'https://de\.sentry\.io/api/0/projects/'; then
+  ok "AC8b: the birth job queries the EU Sentry host (de.sentry.io)"
+else
+  no "AC8b: the birth job's Sentry endpoint must be de.sentry.io (EU) — a US host returns empty"
+fi
+if printf '%s\n' "$JOB" | grep -qE 'https://sentry\.io/api/0/projects/'; then
+  no "AC8b: the birth job must NOT query the US sentry.io host (EU-resident project)"
+else
+  ok "AC8b: no US sentry.io endpoint in the birth job"
+fi
+# `if: always()` is what makes a GREEN dispatch informative. Without it, "the apply
+# succeeded" and "the probe never ran" render identically, and a host that applied
+# clean but booted dark reads as a success.
+if printf '%s\n' "$JOB" | awk '/Surface fresh-host Sentry/{f=1} f&&/if: always\(\)/{print "y"; exit}' | grep -q y; then
+  ok "AC8b: the fresh-host Sentry surface runs if: always() (a green boot still shows the probe fired)"
+else
+  no "AC8b: the Sentry surface step must be if: always() (spec-flow F4)"
+fi
+
+# ── AC13 (#6090 follow-up): the surfacing step sources its token from Doppler ──
+# The GitHub repo secret SENTRY_AUTH_TOKEN is unset, so a step reading it self-skips
+# and logs "Sentry query skipped" — the read never happens and nobody notices.
+if printf '%s\n' "$JOB" | grep -qE 'doppler secrets get SENTRY_AUTH_TOKEN .*-c prd_terraform'; then
+  ok "AC13: the surface step resolves SENTRY_AUTH_TOKEN from Doppler prd_terraform (not the unset repo secret)"
+else
+  no "AC13: the surface step must fetch SENTRY_AUTH_TOKEN via doppler -c prd_terraform"
+fi
+
+# ── AC14 (ADR-128 R1): the DSN is asserted non-empty BEFORE the host is created ──
+# Anchored on the ::error:: literal rather than the bare token `SENTRY_DSN`, which
+# also appears in this job's explanatory comments — a bare-token grep would stay
+# green against a job that only ever mentions the DSN in prose.
+if printf '%s\n' "$JOB" | grep -qF 'SENTRY_DSN is empty in Doppler prd_terraform'; then
+  ok "AC14: the birth job asserts baked SENTRY_DSN non-empty before create (pre-extraction cannot go dark)"
+else
+  no "AC14: the birth job must assert SENTRY_DSN is non-empty BEFORE creating the host (an empty baked DSN is a silent pre-extraction blind spot)"
+fi
+
+# ── AC16 (#6090): the read must NOT use the broken message: query ──
+# The /projects/{org}/{proj}/events/ endpoint IGNORES the `message:` search prefix:
+# a `message:"x"` query returns 0 even for events that provably exist. Passing QUERY
+# to the endpoint therefore produces a confident, wrong "nothing was emitted".
+if printf '%s\n' "$JOB" | grep -qF 'query=${QUERY}'; then
+  no "AC16: the surface step still passes the broken message: query to the events endpoint (returns 0)"
+else
+  ok "AC16: the surface step does not pass the broken message: query to the endpoint"
+fi
+if printf '%s\n' "$JOB" | grep -qF 'MSG_RE=' && printf '%s\n' "$JOB" | grep -qF 'test($re)'; then
+  ok "AC16: the surface step filters recent events client-side via a regex derived from QUERY"
+else
+  no "AC16: the surface step must derive MSG_RE from QUERY and filter events client-side (test(\$re))"
+fi
 
 # ── AC8c (transport parity for the BAKED emitter) ──
 # The DSN-parse + store-endpoint transport now exists in THREE copies inside bootstrap.sh:

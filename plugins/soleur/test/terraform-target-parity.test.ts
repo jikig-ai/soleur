@@ -480,22 +480,16 @@ function stripDispatchJobs(workflowText: string): string {
   // surface must never broaden the per-merge coverage anchor. NOT cosmetic: without the strip, a
   // FUTURE registry -target that is not already an exclusion would fold into the per-merge
   // coverage set and could silently mask a real per-merge miss.
-  return stripJob(
-    stripJob(
-      stripJob(
-        stripJob(
-          stripJob(
-            stripJob(workflowText, "inngest_host"),
-            "registry_host_replace",
-          ),
-          "registry_region_migrate",
-        ),
-        "registry_luks_recut",
-      ),
-      "git_data_host_replace",
-    ),
-    "workspaces_luks_recut",
-  );
+  // web_host_create (#6730, ADR-145): the dispatch-only BIRTH path — the one route
+  // granted the capability every other route HALTs on. Strip it for the same reason as
+  // every sibling, but note the stakes differ: four of its nine -targets
+  // (hcloud_server.web, hcloud_server_network.web, hcloud_volume.workspaces,
+  // hcloud_volume_attachment.workspaces) are MOVED_OPERATOR_CONSUMED / exclusion bases,
+  // so folding them into `allTargets` would blunt the moved-block anchor — exactly the
+  // CTO must-fix that the deleted web_2_recreate strip originally existed to satisfy.
+  // The other five are per-merge-covered, so the strip is coverage-neutral for them
+  // (asserted below, non-vacuously).
+  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create");
 }
 
 /** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
@@ -1339,6 +1333,126 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volu
   });
 });
 
+// ─── web-host-create dispatch: the birth path's -target set + gate pairing ────
+// `apply_target=web-host-create` (#6730, ADR-145) is the ONLY automated route allowed
+// to birth an hcloud_server.web. Every other route HALTs on host_creates > 0, and that
+// HALT is not inherited — it is a separate inline copy in the `apply` job whose `if:` is
+// mutually exclusive with every dispatch job. So this job's own sourced gate is not
+// defense-in-depth behind an existing check; for this path it is the ONLY check, and
+// this guard is what stops a future refactor from silently unhooking it.
+//
+// The -target set is the whole per-host fan-out. Getting it WRONG is not a cosmetic
+// scoping error: a server born without hcloud_server_network has no private IP, and
+// hcloud_firewall_attachment is documented (hcloud provider 1.63.0) NOT to attach before
+// first boot — that combination IS #6416. The four monitoring addresses matter for a
+// quieter reason: web-probe-envwrite.sh resolves WEB_NIC_GUARD_URL_<KEY> from Doppler on
+// the fresh host, so a birth that omits them produces a host whose heartbeats never fire
+// while every other signal looks green.
+const WEB_HOST_BIRTH_TARGET_BASES = [
+  "hcloud_server.web",
+  "hcloud_server_network.web",
+  "hcloud_volume.workspaces",
+  "hcloud_volume_attachment.workspaces",
+  // Singleton over `[for h in hcloud_server.web : h.id]` — unkeyed by construction.
+  "hcloud_firewall_attachment.web",
+  "betteruptime_heartbeat.web_zot_consumer",
+  "betteruptime_heartbeat.web_nic_guard",
+  "doppler_secret.web_zot_consumer_url",
+  "doppler_secret.web_nic_guard_url",
+];
+// The four whose base is per-merge covered, so stripping the job cannot lose coverage.
+const WEB_HOST_BIRTH_PER_MERGE_COVERED = [
+  "hcloud_firewall_attachment.web",
+  "betteruptime_heartbeat.web_zot_consumer",
+  "betteruptime_heartbeat.web_nic_guard",
+  "doppler_secret.web_zot_consumer_url",
+  "doppler_secret.web_nic_guard_url",
+];
+
+describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", () => {
+  let jobBlock: string;
+  let keyedTargets: string[];
+
+  beforeAll(() => {
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    jobBlock = extractJobBlock(wf, "web_host_create");
+    keyedTargets = extractTargetsWithKeys(jobBlock);
+  });
+
+  test("the job exists and its -target extraction is non-vacuous", () => {
+    // Every assertion below reads jobBlock; an absent job yields "" and turns the
+    // structural greps into silent passes. Fail here instead.
+    expect(jobBlock).not.toEqual("");
+    expect(keyedTargets.length).toBe(WEB_HOST_BIRTH_TARGET_BASES.length);
+  });
+
+  test("the -targets are EXACTLY the nine per-host birth fan-out addresses", () => {
+    const bases = [...new Set(keyedTargets.map((t) => t.replace(/\[.*$/, "")))];
+    expect(bases.sort()).toEqual([...WEB_HOST_BIRTH_TARGET_BASES].sort());
+  });
+
+  test("every keyed -target interpolates the SAME dispatch key, never a literal host", () => {
+    // One authorization births one host. A hardcoded `["web-1"]` slipped into the set —
+    // or a second variable name — would let a dispatch for web-3 quietly touch another
+    // host's volume or NIC, and the sourced gate grades against the key it was PASSED,
+    // so a mismatched literal here is invisible to it.
+    const keys = keyedTargets
+      .map((t) => /\["([^"]*)"\]/.exec(t)?.[1])
+      .filter((k): k is string => k !== undefined);
+    // 8 keyed + 1 unkeyed singleton (the firewall attachment).
+    expect(keys.length).toBe(WEB_HOST_BIRTH_TARGET_BASES.length - 1);
+    expect([...new Set(keys)]).toEqual(["${WEB_HOST_KEY}"]);
+  });
+
+  test("the job runs the sourced web_host_birth_gate and borrows no sibling gate", () => {
+    expect(jobBlock).toContain("web-host-birth-gate.sh");
+    expect(jobBlock).toContain("web_host_birth_gate");
+    // A birth graded against a RETIRE or REPLACE allow-set is graded against the wrong
+    // contract — the retire gate requires host_creates == 0, the exact inverse. Naming
+    // each sibling explicitly (rather than a generic "one gate only" count) keeps the
+    // failure message actionable.
+    for (const sibling of [
+      "web2-retire-gate.sh",
+      "workspaces-luks-cutover-gate.sh",
+      "workspaces-luks-recut-gate.sh",
+      "registry-host-replace-gate.sh",
+      "git-data-host-replace-gate.sh",
+    ]) {
+      expect(jobBlock).not.toContain(sibling);
+    }
+  });
+
+  test("the job carries a required-reviewer environment gate", () => {
+    // The sole human authorization on this path (the plan's own framing: an
+    // authorization gate, not a task). The environment's reviewer set is pinned
+    // non-empty by the DP-11 F8 guard below, which only reaches it because the
+    // environment is declared in terraform.
+    expect(jobBlock).toMatch(/^\s{4}environment:\s*web-platform-infra-apply\s*$/m);
+  });
+
+  test("the job passes a pinned @sha256 image_name, never a bare tag", () => {
+    // ADR-128: a host booted on an image whose baked host-scripts do not match the
+    // applied hash aborts cloud-init at stage=verify, and runcmd is once-per-instance —
+    // no reboot repairs it. The pin is what makes the coherence preflight meaningful.
+    expect(jobBlock).toMatch(/-var="image_name=\$\{PINNED\}"/);
+    expect(jobBlock).not.toMatch(/-var="image_name=[^"]*:latest"/);
+  });
+
+  test("stripDispatchJobs removes the job's -targets without losing per-merge coverage", () => {
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    const stripped = extractAllTargets(stripDispatchJobs(wf));
+    // The five per-merge-covered bases must SURVIVE the strip — they are targeted by the
+    // `apply` job too, so their presence proves the strip did not blow a hole in the
+    // #5566 coverage anchor.
+    for (const addr of WEB_HOST_BIRTH_PER_MERGE_COVERED) {
+      expect(stripped.has(addr)).toBe(true);
+    }
+    // Non-vacuity for the strip itself: the job block genuinely carries these targets,
+    // so the assertions above are not passing merely because the job is empty.
+    expect(extractAllTargets(jobBlock).has("hcloud_server.web")).toBe(true);
+  });
+});
+
 // ─── FIX B: betteruptime_team_member.ops per-merge coverage anchor ────────────
 describe("betteruptime_team_member.ops is a per-merge -targeted managed resource (FIX B)", () => {
   test("the resource exists in uptime-alerts.tf and is covered by a per-merge -target", () => {
@@ -1404,6 +1518,12 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     const names = envs.map((e) => e.name);
     expect(names).toContain("workspaces_luks_cutover");
     expect(names).toContain("inngest_cutover");
+    // #6730 — the birth path's environment. It pre-existed this change as a live,
+    // untracked GitHub environment, which meant its reviewer set was governed by
+    // nothing: emptying it in the UI would have silently converted the sole human
+    // authorization for a host birth into an auto-approve, with no test going red.
+    // Declaring it in terraform is what brings it under the loop below.
+    expect(names).toContain("web_platform_infra_apply");
 
     for (const env of envs) {
       const ids = env.users
