@@ -111,6 +111,15 @@ on:
         description: "For apply_target=web-host-create ONLY: the var.web_hosts key to birth (e.g. web-2). Must match ^web-[0-9]{1,2}$ and exist in var.web_hosts."
         required: false
         type: string
+      # For apply_target=web-host-create ONLY (#6730). Overrides the pin source when web-1's
+      # /health cannot be read — which is BY CONSTRUCTION the case when the host being
+      # birthed IS web-1. Not a safety weakening: the value still passes the strict-semver
+      # guard, still resolves to an immutable digest, and still faces the coherence
+      # preflight. Same env:-routed, shape-validated handling as web_host_key.
+      image_tag:
+        description: "For apply_target=web-host-create ONLY: pin the image to this released tag (e.g. v1.2.3) instead of reading web-1's /health. Required when birthing web-1 or when the fleet is down."
+        required: false
+        type: string
       # For apply_target=workspaces-luks-recut ONLY. The Hetzner id of the ORPHANED LUKS volume the
       # operator intends to destroy (read it from the incident / the latest terraform-drift run's
       # `hcloud_volume.workspaces_luks: Refreshing state... [id=...]` line). The recut gate PINS the
@@ -2931,6 +2940,7 @@ jobs:
         env:
           WEB_HOST_KEY_RAW: ${{ inputs.web_host_key }}
           CONFIRM_RAW: ${{ inputs.confirm }}
+          IMAGE_TAG_RAW: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
           if [[ ! "$WEB_HOST_KEY_RAW" =~ ^web-[0-9]{1,2}$ ]]; then
@@ -2948,6 +2958,14 @@ jobs:
           # var.web_hosts is actually declared.
           if ! grep -qE "^[[:space:]]*\"?${WEB_HOST_KEY_RAW}\"?[[:space:]]*=[[:space:]]*\{" variables.tf; then
             echo "::error::'${WEB_HOST_KEY_RAW}' is not a key in var.web_hosts (apps/web-platform/infra/variables.tf). Add the host to var.web_hosts and MERGE that change first — this job births a host that is already declared, it does not declare one."
+            exit 1
+          fi
+          # image_tag is optional, but if supplied it is interpolated into a docker ref and
+          # a shell command, so it gets the same shape-before-use treatment as the host key.
+          # The semver validator downstream is the CORRECTNESS guard; this is the injection
+          # guard, and it runs first.
+          if [[ -n "${IMAGE_TAG_RAW:-}" && ! "$IMAGE_TAG_RAW" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::image_tag must be a bare release version matching ^v?[0-9]+\.[0-9]+\.[0-9]+\$ (got '${IMAGE_TAG_RAW}'). It is interpolated into an image ref; it is validated by shape before use."
             exit 1
           fi
           printf 'WEB_HOST_KEY=%s\n' "$WEB_HOST_KEY_RAW" >> "$GITHUB_ENV"
@@ -3043,6 +3061,7 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
+          IMAGE_TAG_INPUT: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
           # Prefer the tag web-1 is ACTUALLY RUNNING (read off-host from its public
@@ -3050,21 +3069,40 @@ jobs:
           # image its siblings are already serving, not on whatever last built.
           # resolve-web1-known-good-tag.sh is the pure, fixture-tested validator: it exits
           # non-zero on a non-released / prerelease / `latest` version.
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
-          HEALTH_URL="https://app.${APP_DOMAIN_BASE}/health"
-          RUNNING_VERSION=""
-          for i in $(seq 1 12); do
-            RUNNING_VERSION=$(curl -sf --max-time 15 "$HEALTH_URL" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || echo "")
-            [[ -n "$RUNNING_VERSION" ]] && break
-            echo "Attempt $i/12: ${HEALTH_URL} unreachable or reported empty .version — retrying"
-            sleep 10
-          done
-          if [[ -z "$RUNNING_VERSION" ]]; then
-            echo "::error::could not read a running version from ${HEALTH_URL} after 12 attempts. Refusing to fall back to ':latest': a birth on an unvetted image is the ADR-080 stale-image trap, and this host cannot be repaired by a reboot if it aborts at stage=verify. Fix the health endpoint (or use the break-glass chain in the host_creates HALT) and re-dispatch."
-            exit 1
+          # THE PIN SOURCE MUST NOT BE THE HOST BEING BIRTHED. Reading web-1's live
+          # /health is the right default — a new host should join the fleet on the image its
+          # siblings are already serving, not on whatever last built. But it is CIRCULAR for
+          # the one case that matters most: if the host being born IS web-1, that endpoint is
+          # dead by definition, and an earlier revision aborted after 12 attempts. The birth
+          # path was therefore unable to birth web-1 during exactly the outage it exists to
+          # end, while the runbook advertised web-1 as in scope.
+          #
+          # `image_tag` is the explicit override for that case. It is NOT a weakening: the tag
+          # still goes through resolve-web1-known-good-tag.sh's strict-semver guard, still
+          # resolves to an immutable @sha256 digest, and still faces the mandatory coherence
+          # preflight. What it removes is the requirement that a HEALTHY SIBLING exist — a
+          # precondition the safety argument never actually needed.
+          if [[ -n "${IMAGE_TAG_INPUT:-}" ]]; then
+            RUNNING_VERSION="$IMAGE_TAG_INPUT"
+            echo "pin source: operator-supplied image_tag=${IMAGE_TAG_INPUT} (bypasses the /health read; the semver guard, digest resolve and coherence preflight all still apply)"
+          else
+            APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+            HEALTH_URL="https://app.${APP_DOMAIN_BASE}/health"
+            RUNNING_VERSION=""
+            for i in $(seq 1 12); do
+              RUNNING_VERSION=$(curl -sf --max-time 15 "$HEALTH_URL" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || echo "")
+              [[ -n "$RUNNING_VERSION" ]] && break
+              echo "Attempt $i/12: ${HEALTH_URL} unreachable or reported empty .version — retrying"
+              sleep 10
+            done
+            if [[ -z "$RUNNING_VERSION" ]]; then
+              echo "::error::could not read a running version from ${HEALTH_URL} after 12 attempts, and no image_tag input was supplied. Refusing to fall back to ':latest' — a birth on an unvetted image is the ADR-080 stale-image trap and the host cannot be repaired by a reboot if it aborts at stage=verify. If you are birthing web-1 (or the fleet is down), this read is CIRCULAR by construction: re-dispatch with -f image_tag=<vX.Y.Z>, naming the last known-good released version. It is still digest-pinned and coherence-preflighted."
+              exit 1
+            fi
+            echo "pin source: web-1 live /health (${HEALTH_URL})"
           fi
           TAG=$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh" "$RUNNING_VERSION")
-          echo "web-1 running version=${RUNNING_VERSION} -> known-good tag=${TAG} (resolved from ${HEALTH_URL})"
+          echo "running version=${RUNNING_VERSION} -> known-good tag=${TAG}"
           # GHCR is a PRIVATE package: an anonymous inspect 401s. --password-stdin so the
           # token never lands in argv.
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
@@ -3277,34 +3315,98 @@ jobs:
             echo "_Sentry query skipped: QUERY message-literal extraction produced an empty regex — refusing to match-all (would mislabel arbitrary events as boot stages)._" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          # R3: EU data plane (de.sentry.io) is LOAD-BEARING — a US sentry.io query against
-          # the EU-resident project returns empty, indistinguishable from a silent host.
-          # Capture the HTTP status so a curl/auth/API failure is NAMED, not reported as
-          # "no events". statsPeriod + sort ARE honored (only `message:` is broken): the
-          # time bound stops the boot events being pushed past per_page on this SHARED
-          # project, and sort pins "first match = last-reached stage".
-          HTTP=$(curl -s --max-time 20 -G -o /tmp/sentry-events.json -w '%{http_code}' \
-            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-            --data-urlencode "per_page=100" \
-            --data-urlencode "statsPeriod=1h" \
-            --data-urlencode "sort=-timestamp" \
-            "https://de.sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/events/" 2>/dev/null || echo "000")
-          RESP=$(cat /tmp/sentry-events.json 2>/dev/null || echo "")
-          if [[ "$HTTP" != "200" ]] || ! echo "$RESP" | jq -e 'type == "array"' >/dev/null 2>&1; then
-            echo "_Sentry query FAILED (HTTP ${HTTP}) — the auto-read did NOT run; this is NOT a 'host emitted nothing' result. $(echo "$RESP" | jq -r '.detail // empty' 2>/dev/null | tr '\n' ' ' | head -c 160)_" | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
+          # POLLED, not sampled once. The earlier form issued a single curl immediately
+          # after `terraform apply` returned — and the signal it looks for cannot exist yet.
+          # `cloud_init_complete` is the LAST line of cloud-init runcmd (cloud-init.yml:825
+          # of 835) and the host's own declared budget is
+          # SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900 (soleur-host-bootstrap.sh). So on a HEALTHY
+          # birth the single read landed in the no-match branch and printed "the host
+          # genuinely emitted nothing" — which is byte-identical to what a genuinely dark
+          # host produces. The step satisfied ADR-128 R2's letter while inverting its purpose:
+          # it could not discriminate the two states it exists to tell apart.
+          #
+          # The budget fits: timeout-minutes is 30 and the apply costs ~5m, so ~16m of polling
+          # (900s window + slack) leaves margin. Terminal states end the poll early, so a
+          # healthy boot usually returns in well under the budget.
+          # The step is `if: always()`, so it also runs when the APPLY failed — and then
+          # there may be no host at all. Polling 16 minutes for a host that was never
+          # created would turn every failed apply into a 16-minute red run for no signal.
+          # On a failed job: read ONCE, report whatever partial boot trail exists, and never
+          # fail the step (the job is already failing, and a second ::error:: would obscure
+          # the real cause). Only a job that got as far as a successful apply is entitled to
+          # a dark-boot verdict.
+          if [[ "${JOB_STATUS}" == "success" ]]; then
+            DEADLINE=$(( SECONDS + 960 ))
+          else
+            DEADLINE=$SECONDS
           fi
-          # `// ""` coalesces null message AND title so a malformed sibling event in the
-          # window cannot throw jq ("null cannot be matched") and blank the whole read.
-          if echo "$RESP" | jq -e --arg re "$MSG_RE" '[.[] | select(((.message // .title) // "") | test($re))] | length > 0' >/dev/null 2>&1; then
+          TERMINAL=""
+          LAST_STAGE=""
+          TOTAL=0
+          while :; do
+            HTTP=$(curl -s --max-time 20 -G -o /tmp/sentry-events.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+              --data-urlencode "per_page=100" \
+              --data-urlencode "statsPeriod=1h" \
+              --data-urlencode "sort=-timestamp" \
+              "https://de.sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/events/" 2>/dev/null || echo "000")
+            RESP=$(cat /tmp/sentry-events.json 2>/dev/null || echo "")
+            if [[ "$HTTP" != "200" ]] || ! echo "$RESP" | jq -e 'type == "array"' >/dev/null 2>&1; then
+              echo "::warning::fresh-host Sentry read FAILED (HTTP ${HTTP}) — the auto-read did NOT run; this is NOT a 'host emitted nothing' result."
+              echo "_Sentry query FAILED (HTTP ${HTTP}) — the auto-read did NOT run; this is NOT a 'host emitted nothing' result. $(echo "$RESP" | jq -r '.detail // empty' 2>/dev/null | tr '\n' ' ' | head -c 160)_" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            # TRUNCATION GUARD. This is a SHARED project (web-1 traffic, app errors,
+            # host_metrics), so a full page is not evidence of anything: the fresh host's
+            # events may simply be past the cap. "genuinely emitted nothing" is only sayable
+            # when the window was not truncated.
+            TOTAL=$(echo "$RESP" | jq 'length' 2>/dev/null || echo 0)
+            LAST_STAGE=$(echo "$RESP" | jq -r --arg re "$MSG_RE" '
+              [ .[] | select(((.message // .title) // "") | test($re))
+                    | ([ (.tags // [])[]? | select(.key=="stage") | .value ][0] // "?") ][0] // ""' 2>/dev/null || echo "")
+            # Terminal = the host finished, or died. Either ends the wait; only one is good.
+            if [[ "$LAST_STAGE" == "cloud_init_complete" ]]; then TERMINAL="complete"; break; fi
+            if echo "$RESP" | jq -e --arg re "$MSG_RE" '[.[] | select(((.message // .title) // "") | test($re)) | select((.tags // [])[]? | select(.key=="level") | .value == "fatal")] | length > 0' >/dev/null 2>&1; then
+              TERMINAL="fatal"; break
+            fi
+            if (( SECONDS >= DEADLINE )); then TERMINAL="timeout"; break; fi
+            sleep 30
+          done
+          {
+            if [[ "$TOTAL" -ge 100 ]]; then
+              echo "_NOTE: the recent-events page came back FULL (100/100) on a SHARED project — this window is truncated, so an absence below is NOT proof the host emitted nothing._"
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if [[ -n "$LAST_STAGE" ]]; then
             echo "$RESP" | jq -r --arg re "$MSG_RE" '
               [.[] | select(((.message // .title) // "") | test($re))] | .[0:8][]
               | ( [ (.tags // [])[]? | select(.key=="stage") | .value ][0] // "?" ) as $stage
               | "- `\((.message // .title) // "?")` — stage=`\($stage)` (\(.dateCreated // "?"))"
             ' | tee -a "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
-          else
-            echo "_The scan RAN (HTTP 200, project ${SENTRY_PROJECT}) but no fresh-host boot-stage event matched in the recent events — the host genuinely emitted nothing in this window._" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+          case "$TERMINAL" in
+            complete)
+              echo "fresh-host boot reached cloud_init_complete — the host booted clean." | tee -a "$GITHUB_STEP_SUMMARY"
+              ;;
+            fatal)
+              if [[ "${JOB_STATUS}" != "success" ]]; then
+                echo "_A fatal boot-stage event was surfaced, but this job did not complete its apply — the trail above may belong to an earlier attempt or another host._" | tee -a "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              echo "::error::${WEB_HOST_KEY} booted DARK: a fatal boot-stage event was surfaced (last-reached stage: ${LAST_STAGE:-unknown}). runcmd is once-per-instance, so this host CANNOT be repaired by a reboot — it must be replaced. Do NOT put it into service."
+              echo "_**The host booted dark.** Last-reached stage \`${LAST_STAGE:-unknown}\`. runcmd is once-per-instance — replace the host, do not reboot it._" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+            timeout)
+              if [[ "${JOB_STATUS}" != "success" ]]; then
+                echo "_No terminal boot event; this job did not complete its apply, so no dark-boot verdict is drawn._" | tee -a "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              echo "::error::${WEB_HOST_KEY} did not reach cloud_init_complete within 960s (the host's own SOLEUR_FRESH_BOOT_WINDOW_SECONDS is 900). Last-reached stage: ${LAST_STAGE:-none observed}. Treat as DARK until proven otherwise — absence past the boot window is the documented dark-boot signal, not a slow boot."
+              echo "_**No terminal boot event inside the host's own boot window.** Last-reached stage \`${LAST_STAGE:-none observed}\`. Treated as dark._" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
 
       - name: Dispatch summary
         if: always()

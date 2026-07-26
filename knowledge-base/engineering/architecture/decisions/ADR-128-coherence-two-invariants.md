@@ -36,7 +36,7 @@ under one word.** Separating them is what makes #6575 closable and #6712 not.
 | Invariant | What it catches | Where it is enforced |
 |---|---|---|
 | **Build-integrity** — the image's baked `/opt/soleur/host-scripts/` matches the repo tree it was built from | Dockerfile `COPY`-list drift; a post-`COPY` `RUN` mutating the baked directory; a duplicate `host_script_files` entry | **Statically**, in `plugins/soleur/test/cloud-init-user-data-size.test.ts` — the `Dockerfile <-> server.tf baked-set parity` describe, in the required bun shard. No image pull, no registry round-trip, no release-path coupling. |
-| **Cross-commit skew** — the image Terraform computed `host_scripts_content_hash` against is the image the host actually pulls | An apply at commit `C_tf` while `:latest` points at `C_img` | **Nowhere, today.** Only closable by pinning `var.image_name` to a digest at create time. Owned by **#6730**. |
+| **Cross-commit skew** — the image Terraform computed `host_scripts_content_hash` against is the image the host actually pulls | An apply at commit `C_tf` while `:latest` points at `C_img` | **The `web-host-create` dispatch, as of #6730 / ADR-145** — it resolves an immutable `@sha256` digest once, proves coherence against it pre-apply, and passes it as `-var image_name`. Closable only by digest-pinning at create time, which is what that path does. Every OTHER route still HALTs on `host_creates > 0` rather than pinning, so the invariant is enforced by exclusivity, not by universal coverage. |
 
 The distinction is not academic. Build-integrity is a property of **one commit** and is
 therefore decidable by a test. Cross-commit skew is a property of the **relation between an
@@ -277,7 +277,9 @@ against an absent job.
 - Issues #6575 (swept here), #6712 (stays OPEN — cross-commit skew), #6730 (digest-pinned
   birth path), #6574 (`-target` transitivity, unrelated and unchanged), #6425
 - ADR-082 → `superseded-in-part` by this ADR; its Item 4 (image digest pin + signature
-  verification) remains **in force but UNMET**, owned by #6730
+  verification) is **MET for the digest-pin half** as of #6730 (the birth path resolves and
+  applies an immutable `@sha256`); its **signature-verification half remains UNMET** — no
+  cosign verify runs on the fresh-boot path, and #6730 did not add one
 - ADR-114 hazard #5 — the delivery-channel hazard this decision re-scopes host-agnostically
 - ADR-068 §(c) — the weight-flip conditions `lb-weight-gate.sh` checked
 - ADR-079 amendment (#5955) — the original `.tag`-is-last-attempt finding

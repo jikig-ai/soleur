@@ -178,9 +178,15 @@ failure_modes:
     detection: the inverted birth guard compares the plan's create-set to the request
     alert_route: job aborts before apply
   - mode: host created but cloud-init died (green apply, dark boot)
-    detection: R2 surfacing step queries de.sentry.io for this host's boot-stage events
-      and filters client-side; runs if: always()
-    alert_route: ::error:: naming the failing stage; the run is red
+    detection: R2 surfacing step POLLS de.sentry.io for this host's boot-stage events and
+      filters client-side, to a terminal state (cloud_init_complete | a fatal | the 960s
+      deadline, against the host's own 900s SOLEUR_FRESH_BOOT_WINDOW_SECONDS); runs
+      if: always(), but only draws a verdict when the apply itself succeeded
+    alert_route: ::error:: naming the last-reached stage; the run is red. A single
+      post-apply read cannot carry this route — cloud_init_complete is the LAST line of
+      runcmd, so a one-shot read fires ~15 min early and reports "emitted nothing" on a
+      HEALTHY boot, which is byte-identical to a dark one. The poll is what makes this
+      route real rather than declared.
 logs:
   where: GitHub Actions run log; Sentry (soleur-cloud-init boot stage events)
   retention: Actions default (90d); Sentry per project retention

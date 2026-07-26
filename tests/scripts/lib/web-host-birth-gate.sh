@@ -54,10 +54,25 @@
 # targeting it drags every `hcloud_server.web` instance into the plan, web-1
 # included. A `placement_group_id` / `server_type` delta on web-1 then power-cycles
 # the sole live origin behind app.soleur.ai, with zero destroys and a host-create
-# count of exactly 1 — invisible to every other arm. Same surface as the #5911
-# `reboot_updates` counter in destroy-guard-filter-web-platform.jq, and scoped to the
-# same two attributes: `location`/`datacenter` force a full REPLACE, which shows up
-# as a delete and is already caught by the destroy arm.
+# count of exactly 1. Same surface as the #5911 `reboot_updates` counter in
+# destroy-guard-filter-web-platform.jq, scoped to the same two attributes:
+# `location`/`datacenter` force a full REPLACE, which shows up as a delete and is
+# already caught by the destroy arm.
+#
+# THIS ARM IS LAYERED, NOT SOLE. An earlier comment here said such a plan was
+# "invisible to every other arm" — false, and contradicted by this file's own test
+# suite 130 lines further down. The out-of-scope allow-set is keyed on the requested
+# host, so `hcloud_server.web["web-1"]` is out of scope on a web-2 birth and that arm
+# catches it too. What this arm adds is the MESSAGE: the allow-set says "an address
+# you did not authorize changed", which is true but does not tell an operator that
+# the live origin was about to be power-cycled. It also survives a future widening of
+# the allow-set, which would silence the backstop but not this. Both are real reasons;
+# neither is "nothing else catches it".
+#
+# The `placement_group_id` half is currently UNREACHABLE: server.tf carries
+# `lifecycle { ignore_changes = [..., placement_group_id] }`, so terraform never emits
+# that delta. Kept because the arm should not silently narrow to one attribute if that
+# ignore_changes entry is ever removed — but do not read it as live coverage.
 #
 # WHY AN ALLOW-SET RATHER THAN NESTED-BLOCK COUNTERS. The sibling per-PR guard counts
 # deletions *inside* five Cloudflare block arrays, because that path legitimately

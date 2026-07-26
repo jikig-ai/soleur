@@ -177,7 +177,7 @@ check "any destroy anywhere in the plan => ABORT" 1 "destroy" "$TMP/destroy.json
 # boots with no firewall — half of the #6416 failure mode). Targeting it drags every
 # `hcloud_server.web` instance into the plan, web-1 included. A `placement_group_id`
 # or `server_type` delta on web-1 then power-cycles the SOLE live origin behind
-# app.soleur.ai, and it is invisible to every other arm here: zero destroys, and the
+# app.soleur.ai, and it is layered behind the out-of-scope arm, which also catches it — this arm owns the MESSAGE, not the refusal: zero destroys, and the
 # host-create count is still exactly 1.
 mk_plan "$TMP/reboot.json" "$(printf '[%s,%s]' \
   "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["create"]')" \

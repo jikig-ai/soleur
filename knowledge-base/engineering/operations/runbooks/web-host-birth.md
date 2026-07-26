@@ -1,18 +1,33 @@
 # Runbook — birthing a web host
 
 **Status:** current as of 2026-07-26 (#6730, ADR-145).
-**Applies to:** any `hcloud_server.web[<key>]` — including `web-1`, the host serving `app.soleur.ai`.
+**Applies to:** any `hcloud_server.web[<key>]` declared in `var.web_hosts`, including `web-1`.
+
+**Birthing `web-1` needs `-f image_tag=<vX.Y.Z>`.** The pin defaults to whatever web-1 is
+currently serving, read from its live `/health` — which is circular when web-1 is the host
+being born. Pass the last known-good released version explicitly; it still goes through the
+strict-semver guard, the digest resolve and the coherence preflight. Without it the job
+aborts rather than guessing, and during a web-1 outage it would abort every time.
 
 ## The procedure
 
 Dispatch `web-host-create` and approve it:
 
 ```bash
+# web-2 (or any host with a healthy sibling serving app.soleur.ai)
 gh workflow run apply-web-platform-infra.yml \
   -f apply_target=web-host-create \
   -f web_host_key=web-2 \
   -f confirm=BIRTH-web-2 \
   -f reason='birth web-2 — <why>'
+
+# web-1, or any birth while the fleet is down — the pin source must be explicit
+gh workflow run apply-web-platform-infra.yml \
+  -f apply_target=web-host-create \
+  -f web_host_key=web-1 \
+  -f confirm=BIRTH-web-1 \
+  -f image_tag=v1.2.3 \
+  -f reason='rebirth web-1 after <incident>'
 ```
 
 The run pauses on the `web-platform-infra-apply` environment for reviewer approval before its

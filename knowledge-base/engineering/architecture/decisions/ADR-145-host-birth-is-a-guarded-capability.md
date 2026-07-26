@@ -89,10 +89,18 @@ Three further gates, each mapping to an already-observed failure:
    the job aborts rather than falling back to `:latest`: that would trade a retryable
    failure for a permanent one.
 3. **R2–R5 boot surfacing** — a green `terraform apply` is not a green boot, and the two are
-   indistinguishable without asking Sentry. The job queries `de.sentry.io` (R3), filters
+   indistinguishable without asking Sentry. The job POLLS `de.sentry.io` (R3), filters
    client-side (R4 — the events endpoint ignores `message:` search and returns 0 for events
-   that provably exist), and runs `if: always()` (R5), so a *successful* dispatch still
-   proves the probe fired and names the last-reached stage.
+   that provably exist), and runs `if: always()` (R5).
+
+   The poll, rather than a single read, is load-bearing and was not obvious: `cloud_init_complete`
+   is the last line of cloud-init's `runcmd`, and the host's own declared budget is
+   `SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900`. A read issued when `terraform apply` returns
+   therefore fires roughly fifteen minutes before the signal it looks for can exist, and
+   prints "the host genuinely emitted nothing" — the same words a genuinely dark host
+   produces. That version satisfied R2's letter while inverting its purpose. The job now waits
+   for a terminal state (complete, a fatal, or the deadline) and **fails the run** on either
+   bad outcome, which is what makes ADR-128's R2 a signal rather than a step.
 
 The sole human authorization is the `web-platform-infra-apply` GitHub environment's
 required reviewer, which holds the job in "Waiting" before its first step. That environment
