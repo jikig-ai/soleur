@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-07-23
+last_updated: 2026-07-26
 last_reviewed: 2026-07-06
 review_cadence: weekly
 owner: CPO
@@ -71,7 +71,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 | Dimension | Status |
 |-----------|--------|
-| Financial posture | Product COGS ~$81/mo, break-even 2 users at $49/mo. All-in burn ~$491/mo (includes ~$410/mo R&D: Claude Code Max seats + GitHub Copilot), break-even ~11 users. Gross margin at 50 users: ~97% vs COGS, ~80% all-in. BYOK eliminates per-user LLM cost (load-bearing architectural commitment). See [finance/cost-model.md](../finance/cost-model.md). |
+| Financial posture | Product COGS **$223.39/mo, break-even 5 users** at $49/mo. All-in burn **$643.24/mo** (includes ~$419.85/mo R&D: Claude Code Max seats + GitHub Copilot), **break-even 14 users**. Gross margin at 50 users: ~91% vs COGS, ~73% all-in. BYOK eliminates per-user LLM cost (load-bearing architectural commitment). Figures reconciled 2026-07-26 against [finance/cost-model.md](../finance/cost-model.md)`@2026-07-17` (subtotal + break-even tables, not a review note); the prior `~$81/mo / 2 users` was anchored 2026-04-23 and understated COGS ~2.75×. |
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
 | Phase 3 (Make it Sticky) | Complete. Milestone closed. 0 open, 175 closed. QA Gate (#2108) closed 2026-05-26. Agent work visualization (#2004) moved to Phase 4. KB chat sidebar (#2345) shipped PR #2347. |
@@ -451,7 +451,7 @@ Surfaced 2026-05-30 from benchmarking against **Viktor** (multi-player enterpris
 | Demand validation | 10+ solo founders used the platform for 2+ weeks | Not started |
 | Multi-domain validation | 5+ users engaged with 2+ non-engineering domains | Not started |
 | Willingness-to-pay signal | 3+ founders say they would pay $49/month | Not started |
-| Infrastructure cost model | Hosting costs per-user understood, margin positive | Partial. Affordability documented in [finance/cost-model.md](../finance/cost-model.md) (~$81/mo COGS, break-even 2 users; ~80% gross margin at 50 users all-in). Buildability pending CPO/CTO assessment. |
+| Infrastructure cost model | Hosting costs per-user understood, margin positive | Partial. Affordability documented in [finance/cost-model.md](../finance/cost-model.md) ($223.39/mo COGS, break-even 5 users; ~73% gross margin at 50 users all-in — reconciled 2026-07-26). Buildability pending CPO/CTO assessment. |
 | Cowork differentiation clear | Users articulate why Soleur is worth paying for vs. free Cowork plugins | Not started |
 
 Full analysis: `knowledge-base/product/pricing-strategy.md`.

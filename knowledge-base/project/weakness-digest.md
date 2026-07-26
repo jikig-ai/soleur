@@ -3,92 +3,60 @@
 _Read-only recurring-failure signal from learnings added in the last 7d (#6037).
 Triage clusters into `/compound`; this file never edits the harness._
 
-Learnings in window: 82
+Learnings in window: 68
 
 ## Recurring failure patterns
 
 _Clusters of learnings sharing >= 2 tags, ranked by size (>= 3 members)._
 
-### observability + terraform — 5 learnings
-- 2026-07-15-self-healing-guard-on-a-blind-host-must-fail-safe-on-its-own-instrument.md
-- 2026-07-15-sentry-event-frequency-threshold-unreachable-and-data-source-scope-403.md
-- 2026-07-17-a-detector-placed-before-the-cure-blocks-it.md
-- 2026-07-17-target-scoped-terraform-apply-makes-resource-deletion-a-silent-noop.md
-- 2026-07-18-web-1-root-doppler-unit-needs-home-and-dedicated-token-and-vector-toml-has-no-running-host-delivery.md
+### fail-open + mutation-testing — 9 learnings
+- 2026-07-19-a-self-graded-mutation-battery-went-vacuous-twice-in-one-pr-and-the-two-producer-count-that-fixed-it.md
+- 2026-07-19-my-mutation-battery-was-green-and-it-only-measured-the-mutations-i-thought-of.md
+- 2026-07-19-the-harness-broke-the-rule-it-enforced-and-the-canary-could-not-fail.md
+- 2026-07-20-my-fix-for-a-crash-class-reintroduced-the-crash-class-three-times.md
+- 2026-07-20-the-lint-i-wrote-to-catch-a-fail-open-shipped-the-same-fail-open.md
+- 2026-07-21-a-gates-own-documentation-satisfied-the-gates-test.md
+- 2026-07-22-widening-a-lint-repo-wide-shipped-three-fail-opens-my-green-suite-missed.md
+- 2026-07-23-live-api-fail-closed-guard-counts-degraded-200-as-empty-and-control-probe-must-cover-every-scheme.md
+- 2026-07-25-a-stale-presence-guard-fails-green-and-an-unknown-model-id-halves-max-tokens.md
 
-### observability + review — 4 learnings
-- 2026-07-15-self-healing-guard-on-a-blind-host-must-fail-safe-on-its-own-instrument.md
-- 2026-07-16-a-drift-guard-can-recreate-its-own-bug-and-a-forced-replace-from-a-stale-pin-ships-nothing.md
-- 2026-07-12-dry-run-fixture-must-derive-from-producer-source-not-fabricated-format.md
-- 2026-07-18-count-drift-fix-must-sweep-sibling-non-test-gated-docs.md
+### mutation-testing + vacuous-test — 5 learnings
+- 2026-07-19-a-self-graded-mutation-battery-went-vacuous-twice-in-one-pr-and-the-two-producer-count-that-fixed-it.md
+- 2026-07-19-an-allowlist-widening-verified-against-the-string-not-the-credential.md
+- 2026-07-19-the-harness-broke-the-rule-it-enforced-and-the-canary-could-not-fail.md
+- 2026-07-20-the-fix-for-a-green-with-no-artifact-bug-shipped-green-with-no-artifact.md
+- 2026-07-25-a-stale-presence-guard-fails-green-and-an-unknown-model-id-halves-max-tokens.md
 
-### mutation-testing + review — 3 learnings
-- 2026-07-15-narrowing-is-not-anchoring-and-a-documented-class-recurred-four-times-in-one-pr.md
-- 2026-07-16-a-gate-that-proves-it-cannot-fail-open-shipped-its-own-proof-unwired.md
-- 2026-07-17-source-scan-guard-battery-must-vary-shape-not-just-value.md
+### mutation-testing + vacuous-tests — 5 learnings
+- 2026-07-19-a-mutation-battery-that-passes-can-still-leave-the-central-mechanism-untestable.md
+- 2026-07-20-a-red-test-got-more-dangerous-while-the-suite-pass-count-improved.md
+- 2026-07-20-adding-a-second-copy-of-a-guarded-literal-disarms-the-first.md
+- 2026-07-21-a-gates-own-documentation-satisfied-the-gates-test.md
+- 2026-07-21-my-fixture-set-had-a-direction-and-both-batteries-were-blind-to-the-other-one.md
 
-### drift-guard + terraform — 3 learnings
-- 2026-07-18-web-1-root-doppler-unit-needs-home-and-dedicated-token-and-vector-toml-has-no-running-host-delivery.md
-- 2026-07-17-derive-replicated-literal-and-nonvacuous-drift-guard.md
-- 2026-07-17-a-drift-guard-scoped-by-resource-name-is-addition-blind.md
+### luks + mutation-testing — 4 learnings
+- 2026-07-19-a-self-graded-mutation-battery-went-vacuous-twice-in-one-pr-and-the-two-producer-count-that-fixed-it.md
+- 2026-07-19-the-harness-broke-the-rule-it-enforced-and-the-canary-could-not-fail.md
+- 2026-07-20-a-red-test-got-more-dangerous-while-the-suite-pass-count-improved.md
+- 2026-07-20-every-property-i-asserted-instead-of-measuring-was-wrong.md
 
-### rls + supabase — 3 learnings
-- 2026-07-16-a-gate-that-proves-it-cannot-fail-open-shipped-its-own-proof-unwired.md
-- 2026-07-18-rls-initplan-wrap-breaks-verify-sentinels-and-dev-prod-policy-divergence.md
-- 2026-07-18-supabase-disk-io-warning-self-pull-diagnose-and-heartbeat-coupling.md
+### ci + mutation-testing — 3 learnings
+- 2026-07-19-an-allowlist-widening-verified-against-the-string-not-the-credential.md
+- 2026-07-20-adding-a-second-copy-of-a-guarded-literal-disarms-the-first.md
+- 2026-07-23-ci-guard-test-must-assert-enforcement-not-just-presence.md
 
-### doppler + systemd — 3 learnings
-- 2026-07-16-refuting-a-hypothesis-by-reasoning-while-its-discriminator-is-invisible.md
-- 2026-07-18-web-1-root-doppler-unit-needs-home-and-dedicated-token-and-vector-toml-has-no-running-host-delivery.md
-- no-ssh-cutover-verb-by-verb-audit-inngest-quiesce-20260712.md
+### mutation-testing + observability — 3 learnings
+- 2026-07-19-a-mutation-battery-that-passes-can-still-leave-the-central-mechanism-untestable.md
+- 2026-07-20-the-fix-for-a-green-with-no-artifact-bug-shipped-green-with-no-artifact.md
+- 2026-07-19-real-cutover-routes-to-workflow-dispatch-and-failclosed-gate-must-self-report.md
 
-### drift-guard + observability — 3 learnings
-- 2026-07-16-a-drift-guard-can-recreate-its-own-bug-and-a-forced-replace-from-a-stale-pin-ships-nothing.md
-- 2026-07-18-web-1-root-doppler-unit-needs-home-and-dedicated-token-and-vector-toml-has-no-running-host-delivery.md
-- 2026-07-17-buy-the-datum-then-read-it-with-the-right-telemetry-key.md
+### fail-open + vacuous-test — 3 learnings
+- 2026-07-19-a-self-graded-mutation-battery-went-vacuous-twice-in-one-pr-and-the-two-producer-count-that-fixed-it.md
+- 2026-07-19-the-harness-broke-the-rule-it-enforced-and-the-canary-could-not-fail.md
+- 2026-07-25-a-stale-presence-guard-fails-green-and-an-unknown-model-id-halves-max-tokens.md
 
-### hetzner + terraform — 3 learnings
-- 2026-07-15-replace-shaped-ops-are-net-zero-on-the-resource-they-exhaust.md
-- 2026-07-13-warm-standby-cross-dc-and-replace-capacity-footgun.md
-- 2026-07-15-infra-incident-diagnose-before-mutate-and-no-out-of-band-applies.md
-
-### drift-guard + review — 3 learnings
-- 2026-07-16-a-drift-guard-can-recreate-its-own-bug-and-a-forced-replace-from-a-stale-pin-ships-nothing.md
-- 2026-07-16-a-gate-that-proves-it-cannot-fail-open-shipped-its-own-proof-unwired.md
-- 2026-07-18-forbiddance-drift-guard-encodes-pre-refactor-threat-model.md
-
-### github-actions + observability — 3 learnings
-- 2026-07-15-silent-fallback-masked-a-dead-primary-for-14-days.md
-- 2026-07-17-live-reconcile-observability-job-copy-fidelity-ssrf-and-two-parity-tests.md
-- 2026-07-13-watchdog-excluded-mode-shares-issue-class-untruthful-comment.md
-
-### drift-guard + mutation-testing — 3 learnings
-- 2026-07-15-widening-a-guard-to-accept-a-future-mechanism-is-a-fail-open-unless-self-validating.md
-- 2026-07-16-a-gate-that-proves-it-cannot-fail-open-shipped-its-own-proof-unwired.md
-- 2026-07-17-a-drift-guard-scoped-by-resource-name-is-addition-blind.md
-
-### fail-open + mutation-testing — 3 learnings
-- 2026-07-15-widening-a-guard-to-accept-a-future-mechanism-is-a-fail-open-unless-self-validating.md
-- 2026-07-16-a-gate-that-proves-it-cannot-fail-open-shipped-its-own-proof-unwired.md
-- 2026-07-17-source-scan-guard-battery-must-vary-shape-not-just-value.md
-
-### diagnosis + observability — 3 learnings
-- 2026-07-13-web-2-fsn1-fresh-boot-image-pull-auth-denied-stale-baked-cred.md
-- 2026-07-16-refuting-a-hypothesis-by-reasoning-while-its-discriminator-is-invisible.md
-- 2026-07-17-buy-the-datum-then-read-it-with-the-right-telemetry-key.md
-
-### false-green + mutation-testing — 3 learnings
-- 2026-07-15-narrowing-is-not-anchoring-and-a-documented-class-recurred-four-times-in-one-pr.md
-- 2026-07-15-widening-a-guard-to-accept-a-future-mechanism-is-a-fail-open-unless-self-validating.md
-- 2026-07-16-the-fix-for-an-inert-monitor-shipped-a-probe-that-could-never-fire.md
-
-### observability + systemd — 3 learnings
-- 2026-07-16-refuting-a-hypothesis-by-reasoning-while-its-discriminator-is-invisible.md
-- 2026-07-16-the-fix-for-an-inert-monitor-shipped-a-probe-that-could-never-fire.md
-- 2026-07-18-web-1-root-doppler-unit-needs-home-and-dedicated-token-and-vector-toml-has-no-running-host-delivery.md
-
-### observability + sentry — 3 learnings
-- 2026-07-15-sentry-event-frequency-threshold-unreachable-and-data-source-scope-403.md
-- 2026-07-17-live-reconcile-observability-job-copy-fidelity-ssrf-and-two-parity-tests.md
-- 2026-07-17-target-scoped-terraform-apply-makes-resource-deletion-a-silent-noop.md
+### mutation-testing + vacuity — 3 learnings
+- 2026-07-19-my-mutation-battery-was-green-and-it-only-measured-the-mutations-i-thought-of.md
+- 2026-07-20-i-fixed-three-unfailable-gates-and-shipped-eight-more.md
+- 2026-07-23-ci-guard-test-must-assert-enforcement-not-just-presence.md
 
