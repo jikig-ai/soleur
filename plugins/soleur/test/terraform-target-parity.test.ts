@@ -1473,6 +1473,62 @@ describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", ()
     // so the assertions above are not passing merely because the job is empty.
     expect(extractAllTargets(jobBlock).has("hcloud_server.web")).toBe(true);
   });
+
+  test("stripDispatchJobs REMOVES the four moved/exclusion bases from the coverage set", () => {
+    // The assertion the strip actually exists for, and the one the first draft omitted.
+    // "The per-merge-covered bases survive" is true whether or not the strip runs — the
+    // `apply` job targets them either way — so that test alone pins nothing. What the strip
+    // is FOR is keeping these four out of `allTargets`, because they are
+    // MOVED_OPERATOR_CONSUMED / exclusion bases and folding them in blunts the #5877
+    // moved-block anchor. That is the CTO must-fix the deleted web_2_recreate strip existed
+    // to satisfy; without this assertion, removing "web_host_create" from stripDispatchJobs
+    // left the suite fully green.
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    const stripped = extractAllTargets(stripDispatchJobs(wf));
+    for (const base of [
+      "hcloud_server.web",
+      "hcloud_server_network.web",
+      "hcloud_volume.workspaces",
+      "hcloud_volume_attachment.workspaces",
+    ]) {
+      expect(stripped.has(base)).toBe(false);
+    }
+  });
+
+  test("the gate's allow-set matches the job's -target set exactly", () => {
+    // The fan-out lived in FOUR places — the workflow -target list, two copies inside the
+    // gate, and WEB_HOST_BIRTH_TARGET_BASES here — and only workflow<->constant was bound.
+    // Widening the gate's allow-set therefore silently permitted out-of-scope changes while
+    // this file still certified "exactly nine"; narrowing it made the gate refuse every real
+    // birth plan, an outage dressed as a safety feature, with nothing red. The gate now
+    // carries ONE `def allow($k)`; this binds it to the workflow. Mirrors the git-data
+    // gate's parity assertion above.
+    const gateSrc = readFileSync(
+      resolve(REPO_ROOT, "tests/scripts/lib/web-host-birth-gate.sh"),
+      "utf8",
+    );
+    // Terminate on the closing `];` at line start, NOT a bare `]`. A non-greedy `[\s\S]*?\]`
+    // stops at the FIRST `]`, which is the one inside `hcloud_server.web[\"...\"]` — it
+    // extracted exactly one member and the comparison failed. The non-vacuity length check
+    // below is what surfaced that rather than letting a 1-member "allow-set" quietly pass
+    // some other assertion.
+    const defAllow = /def allow\(\$k\):\s*\[([\s\S]*?)\n\];/.exec(gateSrc);
+    expect(defAllow).not.toBeNull();
+    // Filter to terraform-address shape. The members are jq string literals containing
+    // ESCAPED quotes (`"hcloud_server.web[\"\($k)\"]"`), so a bare /"([^"]+)"/ also
+    // matches the `"]"` fragment between two escapes and yields a phantom member. Requiring
+    // `<type>.<name>` drops it without hiding a real one — every legitimate member has it.
+    const gateBases = [
+      ...new Set(
+        [...defAllow![1].matchAll(/"([^"]+)"/g)]
+          .map((m) => m[1].replace(/\[.*$/, ""))
+          .filter((a) => /^[a-z0-9_]+\.[a-z0-9_]+$/.test(a)),
+      ),
+    ].sort();
+    // Non-vacuity: the extraction must actually find the nine members.
+    expect(gateBases.length).toBe(WEB_HOST_BIRTH_TARGET_BASES.length);
+    expect(gateBases).toEqual([...WEB_HOST_BIRTH_TARGET_BASES].sort());
+  });
 });
 
 // ─── FIX B: betteruptime_team_member.ops per-merge coverage anchor ────────────

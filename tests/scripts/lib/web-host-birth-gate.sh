@@ -89,6 +89,31 @@
 # Usage:  source tests/scripts/lib/web-host-birth-gate.sh
 #         web_host_birth_gate <plan-json-file> <web-host-key>   # 0=PASS, 1=ABORT
 
+# The birth fan-out, defined ONCE.
+#
+# It used to appear twice inside this function — once in the counting filter and once in
+# the offenders extraction — differing only in `| length` vs `| join`. The counting copy
+# decides the abort; the offenders copy only shapes the message, so drift between them
+# degrades the one line an operator reads mid-abort without changing the verdict. Review
+# mutation-proved the second copy was guarded by nothing: deleting a member from it left
+# the suite fully green. `def allow($k)` mirrors git-data-host-replace-gate.sh, which
+# terraform-target-parity.test.ts already extracts and pins against the workflow's
+# -target list; the same assertion now covers this gate.
+#
+# KEEP IN LOCKSTEP WITH the -target list in apply-web-platform-infra.yml's web_host_create
+# job. The parity test enforces it; this comment tells you why it will fail.
+_WEB_HOST_BIRTH_ALLOW='def allow($k): [
+      "hcloud_server.web[\"\($k)\"]",
+      "hcloud_server_network.web[\"\($k)\"]",
+      "hcloud_volume.workspaces[\"\($k)\"]",
+      "hcloud_volume_attachment.workspaces[\"\($k)\"]",
+      "hcloud_firewall_attachment.web",
+      "betteruptime_heartbeat.web_zot_consumer[\"\($k)\"]",
+      "betteruptime_heartbeat.web_nic_guard[\"\($k)\"]",
+      "doppler_secret.web_zot_consumer_url[\"\($k)\"]",
+      "doppler_secret.web_nic_guard_url[\"\($k)\"]"
+];'
+
 web_host_birth_gate() {
   local plan_json="$1" host_key="${2:-}"
   local want_addr creates destroys created_addr reboot_updates out_of_scope
@@ -168,19 +193,10 @@ web_host_birth_gate() {
   # IN(...) is exact-equality membership. `contains`/`inside` would substring-match,
   # so a bare `hcloud_server.web` — the whole for_each map — would satisfy the
   # keyed `hcloud_server.web["web-2"]` member and wave the entire fleet through.
-  out_of_scope=$(jq -r --arg k "$host_key" '
-    [ "hcloud_server.web[\"\($k)\"]",
-      "hcloud_server_network.web[\"\($k)\"]",
-      "hcloud_volume.workspaces[\"\($k)\"]",
-      "hcloud_volume_attachment.workspaces[\"\($k)\"]",
-      "hcloud_firewall_attachment.web",
-      "betteruptime_heartbeat.web_zot_consumer[\"\($k)\"]",
-      "betteruptime_heartbeat.web_nic_guard[\"\($k)\"]",
-      "doppler_secret.web_zot_consumer_url[\"\($k)\"]",
-      "doppler_secret.web_nic_guard_url[\"\($k)\"]" ] as $allow
-    | [ .resource_changes[]
-        | select(.change.actions | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
-        | select(IN(.address; $allow[]) | not) ] | length' \
+  out_of_scope=$(jq -r --arg k "$host_key" "${_WEB_HOST_BIRTH_ALLOW}"'
+    [ .resource_changes[]
+      | select(.change.actions | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
+      | select(IN(.address; allow($k)[]) | not) ] | length' \
     < "$plan_json" 2>/dev/null)
 
   for v in "$creates" "$destroys" "$reboot_updates" "$out_of_scope"; do
@@ -219,19 +235,10 @@ web_host_birth_gate() {
   fi
 
   if [[ "$out_of_scope" -ne 0 ]]; then
-    offenders=$(jq -r --arg k "$host_key" '
-      [ "hcloud_server.web[\"\($k)\"]",
-        "hcloud_server_network.web[\"\($k)\"]",
-        "hcloud_volume.workspaces[\"\($k)\"]",
-        "hcloud_volume_attachment.workspaces[\"\($k)\"]",
-        "hcloud_firewall_attachment.web",
-        "betteruptime_heartbeat.web_zot_consumer[\"\($k)\"]",
-        "betteruptime_heartbeat.web_nic_guard[\"\($k)\"]",
-        "doppler_secret.web_zot_consumer_url[\"\($k)\"]",
-        "doppler_secret.web_nic_guard_url[\"\($k)\"]" ] as $allow
-      | [ .resource_changes[]
-          | select(.change.actions | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
-          | select(IN(.address; $allow[]) | not) | .address ] | .[0:10] | join(", ")' \
+    offenders=$(jq -r --arg k "$host_key" "${_WEB_HOST_BIRTH_ALLOW}"'
+      [ .resource_changes[]
+        | select(.change.actions | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
+        | select(IN(.address; allow($k)[]) | not) | .address ] | .[0:10] | join(", ")' \
       < "$plan_json" 2>/dev/null)
     echo "web_host_birth_gate: ABORT — ${out_of_scope} out-of-scope change(s), outside the birth fan-out for '${host_key}': ${offenders}. One authorization births one host and touches only that host's nine addresses. A sibling host's volume, or a Cloudflare ruleset riding along, is a different operation that has not been authorized here."
     return 1

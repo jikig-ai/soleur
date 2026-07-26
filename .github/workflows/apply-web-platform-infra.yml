@@ -3053,6 +3053,29 @@ jobs:
       # step, and needs the `docker login` that the coherence preflight requires anyway
       # (it does `docker create` + `docker cp` against $PINNED). Installing a second OCI
       # client to read a digest we are about to pull with the first one buys nothing.
+      - name: Assert runner is amd64 (multi-arch digest equivalence)
+        # RESTORED from the deleted web_2_recreate job, which carried this as an explicit
+        # fail gate before digest resolution (CTO must-fix 4 / P2-5 in its review). The
+        # first draft of this job dropped it and kept only its REASONING, as a comment on
+        # the pin step reading "the amd64 runner and amd64 host resolve it to the same
+        # manifest" — a documented assumption where the predecessor had an enforced
+        # invariant.
+        #
+        # It is load-bearing for the coherence preflight, not for the pull: $PINNED is a
+        # multi-arch OCI INDEX digest, and the preflight `docker create`s it ON THE RUNNER
+        # to recompute the baked host-scripts hash. A non-amd64 runner resolves the index to
+        # a different platform manifest, so the hash it computes is not the hash the amd64
+        # Hetzner host will compute — the preflight would then be comparing the wrong image
+        # and could pass a genuinely incoherent pin.
+        run: |
+          set -euo pipefail
+          ARCH=$(uname -m)
+          if [[ "$ARCH" != "x86_64" ]]; then
+            echo "::error::runner arch is ${ARCH}, expected x86_64 (amd64). The Hetzner host is amd64; a non-amd64 runner resolves the multi-arch index to a different platform manifest, voiding the coherence preflight's comparison. Pin the job to an amd64 runner rather than relaxing this check."
+            exit 1
+          fi
+          echo "runner arch ${ARCH} — multi-arch digest equivalence holds."
+
       - name: Resolve known-good image digest off-host (freeze $PINNED)
         id: pin
         env:
@@ -3106,9 +3129,10 @@ jobs:
           # GHCR is a PRIVATE package: an anonymous inspect 401s. --password-stdin so the
           # token never lands in argv.
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
-          # .Manifest.Digest is the multi-arch OCI INDEX digest. The amd64 runner and the
-          # amd64 host resolve it to the same manifest, and host-scripts are
-          # arch-independent text, so the preflight's recomputed hash is identical.
+          # .Manifest.Digest is the multi-arch OCI INDEX digest. The runner and the Hetzner
+          # host resolve it to the same manifest because the step above ENFORCES amd64 on
+          # the runner (it does not merely assume it), and host-scripts are arch-independent
+          # text — so the preflight's recomputed hash is identical to the host's.
           DIGEST=$(docker buildx imagetools inspect "${IMAGE_REPO}:${TAG}" --format '{{.Manifest.Digest}}' || true)
           if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::tag->digest resolution returned '${DIGEST}' (want ^sha256:[0-9a-f]{64}\$) for ${IMAGE_REPO}:${TAG}. Aborting BEFORE any create."
