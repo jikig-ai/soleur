@@ -3357,8 +3357,9 @@ jobs:
           # after `terraform apply` returned — and the signal it looks for cannot exist yet.
           # `cloud_init_complete` is the LAST line of the cloud-init terminal runcmd block
           # (anchor: `soleur-boot-emit cloud_init_complete info` in cloud-init.yml — cited by
-          # content, not by line number, because the previous `:825 of 835` coordinate had
-          # already rotted) and the host's own declared budget is
+          # content, not by line number, because THIS change shifts it. The previous `:825 of
+          # 835` coordinate was CORRECT on main; a content anchor is used so the next edit does
+          # not silently rot it) and the host's own declared budget is
           # SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900 (soleur-host-bootstrap.sh). So on a HEALTHY
           # birth the single read landed in the no-match branch and printed "the host
           # genuinely emitted nothing" — which is byte-identical to what a genuinely dark
@@ -3400,6 +3401,7 @@ jobs:
           FATAL_DETAIL=""
           FATAL_STAGE=""
           RETRIED=""
+          RETRY_DETAIL=""
           TOTAL=0
           while :; do
             HTTP=$(curl -s --max-time 20 -G -o /tmp/sentry-events.json -w '%{http_code}' \
@@ -3439,6 +3441,15 @@ jobs:
               [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
                     | select([ (.tags // [])[]? | select(.key=="stage") | .value ][0] == "doppler_retry") ] | length > 0' >/dev/null 2>&1; then
               RETRIED="yes"
+              # Capture the RETRY event's OWN detail. Using LAST_DETAIL here would be structurally
+              # always-empty: it is [0] of the newest-first list, and this branch is only reached
+              # when the newest event is cloud_init_complete, which has no per-stage detail file.
+              # The annotation would then reliably print "Detail: <none>" — the retry's cause
+              # discarded by the very line whose stated purpose is to surface it.
+              RETRY_DETAIL=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
+                [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
+                      | select([ (.tags // [])[]? | select(.key=="stage") | .value ][0] == "doppler_retry")
+                      | ([ (.tags // [])[]? | select(.key=="detail") | .value ][0] // "") ][0] // ""' 2>/dev/null || echo "")
             fi
             # Terminal = the host finished, or died. Either ends the wait; only one is good.
             if [[ "$LAST_STAGE" == "cloud_init_complete" ]]; then TERMINAL="complete"; break; fi
@@ -3477,8 +3488,8 @@ jobs:
               # (#6969) a retry that succeeded is still a real fault. Surface it as an annotation
               # so the cause is not buried in a green run's collapsed summary.
               if [[ -n "$RETRIED" ]]; then
-                echo "::warning::${WEB_HOST_KEY} booted clean but RETRIED a boot stage (stage=doppler_retry observed). The host is healthy; the underlying fault is not. Detail: ${LAST_DETAIL:-<none>}"
-                echo "_**Booted clean, but retried.** A \`doppler_retry\` breadcrumb was observed for \`${EXPECT_HOST}\`. Detail: \`${LAST_DETAIL:-<none>}\`_" | tee -a "$GITHUB_STEP_SUMMARY"
+                echo "::warning::${WEB_HOST_KEY} booted clean but RETRIED a boot stage (stage=doppler_retry observed). The host is healthy; the underlying fault is not. Detail: ${RETRY_DETAIL:-<none captured>}"
+                echo "_**Booted clean, but retried.** A \`doppler_retry\` breadcrumb was observed for \`${EXPECT_HOST}\`. Detail: \`${RETRY_DETAIL:-<none captured>}\`_" | tee -a "$GITHUB_STEP_SUMMARY"
               fi
               ;;
             fatal)

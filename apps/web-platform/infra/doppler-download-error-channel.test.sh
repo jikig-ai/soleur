@@ -30,9 +30,6 @@ pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
 no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
 
-# Non-comment, non-blank lines of a file (absence-check substrate — R28).
-code_lines() { LC_ALL=C sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$1"; }
-
 # ─────────────────────────── extract the two heredoc bodies ───────────────────────────
 
 EMIT="$(awk "/cat > \/usr\/local\/bin\/soleur-boot-emit <<'EMITEOF'/{f=1;next} f&&/^EMITEOF\$/{f=0} f{print}" "$BOOT")"
@@ -71,6 +68,20 @@ for h in soleur-boot-emit soleur-doppler-download; do
   else
     no "AC-F3: $h needs both 'FAILED_FILE=$h' and 'test -x /usr/local/bin/$h'"
   fi
+  # AC-F3b: ORDER, not just co-presence. The file runs under a top-level `set -e`, so an
+  # existence assertion placed ABOVE the heredoc that authors the file asserts a file that does
+  # not exist yet and aborts EVERY fresh boot at STAGE=assert — before the emitter exists, so
+  # the failure is itself unreportable. An earlier revision of this PR shipped exactly that, and
+  # AC-F3 above passed the whole time because co-presence is not ordering.
+  a_line="$(grep -nF "test -x /usr/local/bin/$h" "$BOOT" | head -1 | cut -d: -f1)"
+  c_line="$(grep -nF "cat > /usr/local/bin/$h <<" "$BOOT" | head -1 | cut -d: -f1)"
+  if [ -z "$a_line" ] || [ -z "$c_line" ]; then
+    no "AC-F3b: could not locate both the assertion and the authoring line for $h (anchors drifted)"
+  elif [ "$a_line" -gt "$c_line" ]; then
+    ok "AC-F3b: $h is asserted (line $a_line) AFTER it is authored (line $c_line)"
+  else
+    no "AC-F3b: $h asserted at line $a_line BEFORE it is authored at line $c_line — this aborts every fresh boot"
+  fi
 done
 
 # AC-F4: the @@SOLEUR_HOST_NAME@@ sentinel is spliced, and NO residual @@ survives in the
@@ -100,12 +111,30 @@ if printf '%s\n' "$helper_code" | grep -qE '2>&1|&>'; then
 else
   ok "AC-H1: no stream merge (2>&1 / &>) in the soleur-doppler-download body"
 fi
-# The helper must not write to its own stdout at all: the only stdout in scope is the CLI's
-# secret payload, redirected to the caller-supplied target file.
-if printf '%s\n' "$helper_code" | grep -qE '^[[:space:]]*(echo|printf)[^>]*$'; then
-  no "AC-H2: soleur-doppler-download writes to stdout (every printf/echo must be redirected)"
+# AC-H2: exactly ONE line may write to "$OUT", and it must be the doppler invocation.
+# The previous form grepped `^\s*(echo|printf)[^>]*$` — whose `[^>]*$` clause structurally
+# EXCLUDES every line containing `>`, i.e. precisely the shape that can corrupt the env file.
+# A `printf 'INJECTED=x\n' >> "$OUT"` inside the loop passed that assertion and landed in the
+# file `docker run --env-file` ingests. Count the write sites instead of pattern-matching prose.
+out_writes="$(printf '%s\n' "$helper_code" | grep -cE '>>?[[:space:]]*"\$OUT"' || true)"
+if [ "$out_writes" = 1 ]; then
+  ok "AC-H2a: exactly one line writes to \$OUT (the CLI invocation)"
 else
-  ok "AC-H2: soleur-doppler-download never writes to stdout"
+  no "AC-H2a: expected exactly 1 write to \$OUT, found $out_writes — a second writer corrupts the env file"
+fi
+# Join backslash-continuations first: the doppler call wraps, so `> "$OUT"` sits on the second
+# physical line and a per-line match would compare against a fragment.
+helper_joined="$(printf '%s\n' "$helper_code" | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta')"
+if printf '%s\n' "$helper_joined" | grep -E '>>?[[:space:]]*"\$OUT"' | grep -q 'doppler secrets download'; then
+  ok "AC-H2b: the sole \$OUT writer is the doppler invocation"
+else
+  no "AC-H2b: the line writing \$OUT is not the doppler invocation"
+fi
+# ...and nothing may write to the helper's own stdout (unredirected printf/echo).
+if printf '%s\n' "$helper_code" | grep -qE '^[[:space:]]*(echo|printf)([[:space:]][^|>]*)?$'; then
+  no "AC-H2c: soleur-doppler-download writes to stdout (every printf/echo must be redirected)"
+else
+  ok "AC-H2c: soleur-doppler-download never writes to its own stdout"
 fi
 # The cloud-init terminal doppler region must not merge streams either.
 ci_dl_region="$(awk '/^[[:space:]]*stage=doppler_download$/{f=1} f&&/^[[:space:]]*stage=docker_run$/{f=0} f{print}' "$CI" \
@@ -165,6 +194,11 @@ fi
 ALERTS="$DIR/sentry/issue-alerts.tf"
 if [ -f "$ALERTS" ]; then
   vals="$(grep -oE 'value[[:space:]]*=[[:space:]]*"[a-z_]+"' "$ALERTS" | grep -oE '"[a-z_]+"' | tr -d '"' | sort -u | tr '\n' ' ')"
+  if [ -z "$(printf '%s' "$vals" | tr -d '[:space:]')" ]; then
+    no "AC-D3: extracted ZERO filter values from issue-alerts.tf — the negative below is vacuous"
+  elif ! printf '%s' "$vals" | grep -qF 'doppler_download'; then
+    no "AC-D3: extraction did not find the known filter value doppler_download — anchor drifted"
+  fi
   if printf '%s' "$vals" | grep -qF 'doppler_retry'; then
     no "AC-D3: doppler_retry must NOT appear in the alert's filter values (would page on a healthy boot)"
   else
@@ -176,17 +210,21 @@ fi
 
 # AC-G: docker_run stderr is captured to the per-stage channel (the one alert-filtered sibling
 # that dies with no echo at all, and the most likely next dark boot).
+# AC-G1 (INVERTED from the plan, deliberately): docker's stderr must NOT be captured into the
+# detail channel. `docker run --env-file` holds the entire prd secret set and quotes offending
+# lines back verbatim on a parse error, so capturing it routes secret bytes into a tag on a
+# PAGING alert. No regex closes it — a secret VALUE is arbitrary text. Tracked in #6971.
 if grep -qF '2>/run/soleur-stage-detail.d/docker_run' "$CI"; then
-  ok "AC-G1: docker run stderr is captured to /run/soleur-stage-detail.d/docker_run"
+  no "AC-G1: docker stderr must NOT be captured to the detail channel (prd-secret echo path)"
 else
-  no "AC-G1: expected 'docker run' stderr redirected to /run/soleur-stage-detail.d/docker_run"
+  ok "AC-G1: docker stderr is not routed into the detail channel (credential path closed)"
 fi
 
 # Bounded call: the failing download was the ONLY unbounded Doppler invocation in the file
 # (11 bounded siblings). An unbounded hang emits NOTHING, so the channel would be structurally
 # blind to the leading hypothesis' most common shape.
-if printf '%s\n' "$helper_code" | grep -qE 'timeout "?\$?\{?[A-Z_]*TMO[^"]*"? doppler|timeout [0-9]+ doppler'; then
-  ok "AC-E4: the doppler invocation inside the helper is timeout-bounded (R19)"
+if printf '%s\n' "$helper_code" | grep -qE 'timeout -k [0-9]+ "\$TMO" doppler'; then
+  ok "AC-E4: the doppler invocation is timeout-bounded WITH -k (a TERM-ignoring hang is still bounded)"
 else
   no "AC-E4: the helper's doppler invocation must be wrapped in 'timeout' (R19)"
 fi
@@ -213,10 +251,22 @@ fi
 # emitter (with its sentinels resolved), and a `curl` stub capturing every POST body.
 mk_sandbox() { # mk_sandbox <sandbox-dir> <doppler-script-body>
   local sb="$1"; local dop="$2"
-  mkdir -p "$sb/bin" "$sb/detail.d"
-  printf '%s\n' "$EMIT" \
-    | LC_ALL=C sed -e "s|@@SOLEUR_SENTRY_DSN@@|https://pub@sentry.invalid/42|" \
-                   -e "s|@@SOLEUR_HOST_NAME@@|soleur-web-test|" > "$sb/bin/soleur-boot-emit"
+  mkdir -p "$sb/bin" "$sb/detail.d" "$sb/tmp"
+  # Write the RAW heredoc body, then run the SHIPPED `sed -i` splice lines against it. Doing our
+  # own substitution here would make a typo in the production sentinel (which ships an empty DSN
+  # and darkens the entire channel) invisible to every assertion in this file.
+  printf '%s\n' "$EMIT" > "$sb/bin/soleur-boot-emit"
+  splice="$(grep -F 'sed -i' "$BOOT" | grep -F '/usr/local/bin/soleur-boot-emit')"
+  if [ -z "$splice" ]; then
+    no "MK: could not extract the shipped sentinel splice lines from $BOOT"
+  fi
+  printf '%s\n' "$splice" \
+    | sed "s#/usr/local/bin/soleur-boot-emit#$sb/bin/soleur-boot-emit#g" > "$sb/splice.sh"
+  SOLEUR_SENTRY_DSN="https://pub@sentry.invalid/42" SOLEUR_HOST_NAME="soleur-web-test" \
+    sh "$sb/splice.sh"
+  if grep -q '@@' "$sb/bin/soleur-boot-emit"; then
+    no "MK: residual @@ sentinel after the SHIPPED splice — a typo'd sentinel darkens the channel"
+  fi
   printf '%s\n' "$HELPER" > "$sb/bin/soleur-doppler-download"
   # curl stub: record the -d body (the emitted event) one per line, always succeed.
   cat > "$sb/bin/curl" <<CURLSTUB
@@ -237,7 +287,6 @@ CURLSTUB
 ev_field() { # ev_field <events-file> <index 1-based> <jq-path>
   jq -r "$3 // empty" < <(sed -n "$2p" "$1") 2>/dev/null
 }
-ev_count() { grep -c . "$1" 2>/dev/null || echo 0; }
 
 if ! command -v jq >/dev/null 2>&1; then
   no "B0: jq is required for the behavioral half of this suite"
@@ -250,12 +299,14 @@ else
   # actually contains the CLI error line, the exit code and the attempt count.
   sb="$(mktemp -d -t ddl-acb.XXXXXXXX)"
   mk_sandbox "$sb" '#!/bin/sh
+c="$(cat "$SOLEUR_TEST_CALLCOUNT" 2>/dev/null || echo 0)"; echo $((c+1)) > "$SOLEUR_TEST_CALLCOUNT"
 printf "Using DOPPLER_TOKEN from the environment variable DOPPLER_TOKEN\n" >&2
 printf "Using DOPPLER_CONFIG_DIR from the environment variable DOPPLER_CONFIG_DIR\n" >&2
 printf "Doppler Error: Invalid Auth token\n" >&2
 exit 7'
-  out="$sb/envfile"
-  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" \
+  out="$sb/envfile"; : > "$sb/callcount"
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
+    SOLEUR_TEST_CALLCOUNT="$sb/callcount" \
     SOLEUR_DOPPLER_BACKOFF_1=0 SOLEUR_DOPPLER_BACKOFF_2=0 \
     sh -c '
       set -e
@@ -269,6 +320,21 @@ exit 7'
     ' ) >/dev/null 2>&1
   rcmain=$?
 
+  # m02/m03: `attempts=%s` prints the CONFIGURED value, so a loop that stops early still claims
+  # the full count — the detail would LIE about how many times the CLI actually ran. Count the
+  # stub's invocations and require the reported number to equal them.
+  real_calls="$(cat "$sb/callcount" 2>/dev/null || echo 0)"
+  if [ "$real_calls" = 3 ]; then
+    ok "AC-B6a: the exhaust path really invoked the CLI 3 times"
+  else
+    no "AC-B6a: expected 3 CLI invocations on the exhaust path, counted $real_calls"
+  fi
+  exh_warns="$(grep -c '"level":"warning"' "$sb/events.jsonl" || true)"
+  if [ "$exh_warns" = 2 ]; then
+    ok "AC-B6b: exhaust path emits ATTEMPTS-1 = 2 retry breadcrumbs (none on the exhausting attempt)"
+  else
+    no "AC-B6b: expected 2 retry breadcrumbs on the exhaust path, got $exh_warns"
+  fi
   fatal_line="$(grep -n '"level":"fatal"' "$sb/events.jsonl" | head -1 | cut -d: -f1)"
   if [ -n "$fatal_line" ]; then
     fstage="$(ev_field "$sb/events.jsonl" "$fatal_line" '.tags.stage')"
@@ -292,6 +358,11 @@ exit 7'
       ok "AC-B4: the fatal's detail carries the real exit code (rc=7, not 0 — R9)"
     else
       no "AC-B4: detail must carry rc=7, got: '$fdetail'"
+    fi
+    if printf '%s' "$fdetail" | grep -qF 'cond=error'; then
+      ok "AC-B4b: the fatal names the CONDITION class (cond=error), not just the code"
+    else
+      no "AC-B4b: detail must carry cond=error, got: '$fdetail'"
     fi
     if printf '%s' "$fdetail" | grep -qE 'attempts=3'; then
       ok "AC-B5: the fatal's detail carries the attempt count"
@@ -337,7 +408,7 @@ exit 7'
   mk_sandbox "$sb" '#!/bin/sh
 sleep 30
 exit 0'
-  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" \
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     SOLEUR_DOPPLER_TIMEOUT=1 SOLEUR_DOPPLER_ATTEMPTS=1 \
     SOLEUR_DOPPLER_BACKOFF_1=0 SOLEUR_DOPPLER_BACKOFF_2=0 \
     sh -c '
@@ -354,6 +425,11 @@ exit 0'
   else
     no "AC-E7: expected rc=124 for a hung CLI, got: '$hdetail'"
   fi
+  if printf '%s' "$hdetail" | grep -qF 'cond=timeout'; then
+    ok "AC-E7b: the hang is CLASSIFIED as cond=timeout (distinguishes it from an auth failure)"
+  else
+    no "AC-E7b: expected cond=timeout for a hung CLI, got: '$hdetail'"
+  fi
   rm -rf "$sb"
 
   # ── AC-C: evidence preserved on SUCCESS (fail-once-then-succeed) ──
@@ -366,7 +442,7 @@ if [ "$n" = 1 ]; then printf "Doppler Error: transient 503\n" >&2; exit 5; fi
 printf "SECRET_A=1\n"
 exit 0'
   : > "$sb/counter"
-  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" \
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     SOLEUR_TEST_COUNTER="$sb/counter" \
     SOLEUR_DOPPLER_BACKOFF_1=0 SOLEUR_DOPPLER_BACKOFF_2=0 \
     sh -c '
@@ -428,11 +504,17 @@ exit 0'
   else
     no "AC-D4: warning-level emit(s) carried filtered stage(s):$bad — would page on a healthy boot"
   fi
-  # AC-A6 / T5: no stderr temp file residue on the success path.
-  if find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'doppler-err.*' -newer "$sb/counter" 2>/dev/null | grep -q .; then
-    no "T5a: a doppler stderr temp file leaked on the success path"
-  else
+  # T5a: no stderr temp-file residue on the SUCCESS path. Read the find output into a variable
+  # rather than `find | grep -q` — this file's own rule (see header): under pipefail an early
+  # match SIGPIPEs the producer, the pipeline exits non-zero, and the negative assertion silently
+  # reports "clean" on a run that DID leak. The earlier form was also vacuous: it compared
+  # -newer against a stamp the stub rewrote after the buffer was truncated, so it could never
+  # be true regardless of the code under test.
+  leaked_ok="$(find "$sb/tmp" -name 'doppler-err.*' 2>/dev/null | head -3)"
+  if [ -z "$leaked_ok" ]; then
     ok "T5a: no stderr temp-file residue after a successful download"
+  else
+    no "T5a: a doppler stderr temp file leaked on the success path: $leaked_ok"
   fi
   rm -rf "$sb"
 
@@ -445,9 +527,9 @@ exit 0'
 printf "Doppler Error: fail\n" >&2
 exit 4'
   touch "$sb/.stamp"
-  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" TMPDIR="$sb/tmp" \
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     SOLEUR_DOPPLER_ATTEMPTS=1 SOLEUR_DOPPLER_BACKOFF_1=0 SOLEUR_DOPPLER_BACKOFF_2=0 \
-    sh -c 'mkdir -p "$TMPDIR"; soleur-doppler-download "'"$sb"'/envfile"' ) >/dev/null 2>&1
+    sh -c 'soleur-doppler-download "'"$sb"'/envfile"' ) >/dev/null 2>&1
   leaked="$(find "$sb/tmp" -name 'doppler-err.*' 2>/dev/null | head -3)"
   if [ -z "$leaked" ]; then
     ok "T5b: no stderr temp-file residue after an EXHAUSTED (failing) download"
@@ -456,34 +538,134 @@ exit 4'
   fi
   rm -rf "$sb"
 
-  # ── T7b: the LEGACY single-buffer channel still works (five producers left untouched) ──
-  # The per-stage channel is additive: `.d/<stage>` if present, else the legacy file. If the
-  # fallback regressed, the five existing producers in cloud-init.yml (ghcr login outcome, pull
-  # error, …) would go dark — a silent regression in a channel this PR never intended to touch.
+  # ── T7b: the emitter reads ONLY the per-stage file — no legacy-buffer fallback ──
+  # An earlier revision fell back to the shared /run/soleur-stage-detail when a stage had no
+  # per-stage file. That made every detail-less stage — including INFO emits on HEALTHY boots —
+  # ship whatever the ghcr/pull producers had left in the shared buffer, i.e. another stage's
+  # captured output presented as this stage's cause. A plausible WRONG cause is worse than none.
   sb="$(mktemp -d -t ddl-t7b.XXXXXXXX)"
   mk_sandbox "$sb" '#!/bin/sh
 exit 0'
   printf 'ghcr_login_fail: legacy-buffer-content\n' > "$sb/legacy"
-  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" \
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     SOLEUR_STAGE_DETAIL_FILE="$sb/legacy" \
     sh -c 'soleur-boot-emit pull fatal' ) >/dev/null 2>&1
   leg="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
-  if printf '%s' "$leg" | grep -qF 'legacy-buffer-content'; then
-    ok "T7b: a stage with no per-stage file still reads the LEGACY buffer (fallback intact)"
+  if [ -z "$leg" ]; then
+    ok "T7b: a stage with no per-stage file emits an EMPTY detail (no legacy-buffer bleed)"
   else
-    no "T7b: legacy single-buffer fallback regressed; got: '$leg'"
+    no "T7b: legacy buffer bled into an unrelated stage's detail: '$leg'"
   fi
-  # ...and the per-stage file WINS when both exist (no double-read, no concatenation).
-  printf 'per-stage-content\n' > "$sb/detail.d/pull"
+  # ...and a healthy INFO emit must not pick up the buffer either.
   : > "$sb/events.jsonl"
-  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" \
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     SOLEUR_STAGE_DETAIL_FILE="$sb/legacy" \
-    sh -c 'soleur-boot-emit pull fatal' ) >/dev/null 2>&1
-  both="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
-  if printf '%s' "$both" | grep -qF 'per-stage-content' && ! printf '%s' "$both" | grep -qF 'legacy-buffer-content'; then
-    ok "T7c: the per-stage file takes precedence over the legacy buffer (no double-read)"
+    sh -c 'soleur-boot-emit cloud_init_complete info' ) >/dev/null 2>&1
+  legi="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
+  if [ -z "$legi" ]; then
+    ok "T7c: a healthy cloud_init_complete INFO emit carries no captured output"
   else
-    no "T7c: precedence wrong when both exist; got: '$both'"
+    no "T7c: a green boot's INFO emit shipped captured output: '$legi'"
+  fi
+  rm -rf "$sb"
+
+  # ── Emitter-DIRECT redaction (each layer pinned independently) ──
+  # The helper scrubs AND the emitter scrubs. Driving only the helper path means mutating either
+  # layer alone leaves the other covering for it, so neither is actually verified. These fixtures
+  # write straight to the detail dir, so only the emitter can redact them.
+  # Every literal below is SYNTHESIZED and split across concatenation so no contiguous
+  # vendor-token shape exists in source (GitHub push protection), while the runtime value keeps
+  # the redactor-matching shape.
+  sb="$(mktemp -d -t ddl-red.XXXXXXXX)"
+  mk_sandbox "$sb" '#!/bin/sh
+exit 0'
+  {
+    printf 'Doppler Error: KEEPTHISCAUSE token %s rejected\n' "dp.""st.prd.aB3xK9mQ7zP1wR5tY8uI2oL4nH6gF0dS"
+    printf 'dial %s failed\n' "postgres://svc:S3cr3tP4ss@db.internal:5432/app"
+    printf 'auth %s\n' "Bearer ""eyJhbGciOiJIUzI1NiJ9.PAYLOAD.sig"
+    printf 'gh %s\n' "ghp_""AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+    printf 'image ghcr.io/jikig-ai/soleur-web-platform:latest@sha256:deadbeef\n'
+  } > "$sb/detail.d/redstage"
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
+    sh -c 'soleur-boot-emit redstage fatal' ) >/dev/null 2>&1
+  red="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
+  for shape in 'aB3xK9mQ7zP1wR5tY8uI2oL4nH6gF0dS:doppler-token-entropy' \
+               'S3cr3tP4ss:URI-userinfo password' \
+               'PAYLOAD.sig:Bearer token' \
+               'AbCdEfGhIjKlMnOpQrStUvWxYz:GitHub token'; do
+    pat="${shape%%:*}"; label="${shape#*:}"
+    if printf '%s' "$red" | grep -qF "$pat"; then
+      no "AC-A14: the EMITTER leaked a $label into the detail tag"
+    else
+      ok "AC-A14: the emitter redacts $label"
+    fi
+  done
+  rm -rf "$sb"
+
+  # ── AC-A15: the OTHER direction — redaction must not eat the diagnostic ──
+  # Its own fixture, deliberately SHORT: the 180-byte cap keeps the TAIL, so a multi-shape
+  # fixture pushes the marker out and the assertion silently reads the filler instead. The
+  # keep-marker sits on the SAME line as the token, so a rule that DELETES matching lines
+  # (rather than substituting) is caught — that rule yields an empty cause, i.e. the #6969
+  # symptom, while every absence-assertion above stays green.
+  sb="$(mktemp -d -t ddl-red2.XXXXXXXX)"
+  mk_sandbox "$sb" '#!/bin/sh
+exit 0'
+  printf 'KEEPTHISCAUSE bad token %s here\n' "dp.""st.prd.aB3xK9mQ7zP1wR5tY8uI2oL4nH6gF0dS" \
+    > "$sb/detail.d/keepstage"
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
+    sh -c 'soleur-boot-emit keepstage fatal' ) >/dev/null 2>&1
+  keep="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
+  if printf '%s' "$keep" | grep -qF 'KEEPTHISCAUSE'; then
+    ok "AC-A15a: redaction preserves the non-secret remainder of a token-bearing line"
+  else
+    no "AC-A15a: the redactor destroyed the diagnostic line — empty cause is the #6969 symptom"
+  fi
+  if printf '%s' "$keep" | grep -qF 'aB3xK9mQ7zP1wR5tY8uI2oL4nH6gF0dS'; then
+    no "AC-A15a2: FIXTURE/SUT ERROR — the token survived on the very line being kept"
+  else
+    ok "AC-A15a2: ...while still redacting the token on that same line"
+  fi
+  printf 'image ghcr.io/jikig-ai/soleur-web-platform:latest@sha256:deadbeef pull denied\n' \
+    > "$sb/detail.d/imgstage"
+  : > "$sb/events.jsonl"
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
+    sh -c 'soleur-boot-emit imgstage fatal' ) >/dev/null 2>&1
+  img="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
+  if printf '%s' "$img" | grep -qF 'soleur-web-platform:latest@sha256:'; then
+    ok "AC-A15b: redaction preserves docker image refs (userinfo rule is scheme-anchored)"
+  else
+    no "AC-A15b: the userinfo rule ate a docker image ref — the primary docker_run diagnostic"
+  fi
+  rm -rf "$sb"
+
+  # ── rc=0 with an EMPTY payload must be a named failure, not success ──
+  # `doppler` can exit 0 having written nothing, and `docker run --env-file <empty>` then STARTS
+  # the container: the host reaches cloud_init_complete and the gate reports "booted clean" while
+  # it serves with zero prd secrets. Strictly worse than a dark host.
+  sb="$(mktemp -d -t ddl-empty.XXXXXXXX)"
+  mk_sandbox "$sb" '#!/bin/sh
+exit 0'
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
+    SOLEUR_DOPPLER_ATTEMPTS=1 SOLEUR_DOPPLER_BACKOFF_1=0 SOLEUR_DOPPLER_BACKOFF_2=0 \
+    sh -c '
+      set -e
+      stage=doppler_download
+      trap '"'"'rc=$?; [ "$rc" = 0 ] || soleur-boot-emit "$stage" fatal'"'"' EXIT
+      soleur-doppler-download "'"$sb"'/envfile" && rc=0 || rc=$?
+      [ "$rc" = 0 ] || exit "$rc"
+      : > "'"$sb"'/REACHED_DOCKER_RUN"
+    ' ) >/dev/null 2>&1
+  if [ -e "$sb/REACHED_DOCKER_RUN" ]; then
+    no "AC-C6a: a zero-exit EMPTY payload was treated as success — host would serve with no prd secrets"
+  else
+    ok "AC-C6a: a zero-exit EMPTY payload is fail-closed (never reaches docker_run)"
+  fi
+  emptyd="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
+  if printf '%s' "$emptyd" | grep -qF 'cond=empty_payload'; then
+    ok "AC-C6b: the empty-payload failure is CLASSIFIED distinctly (cond=empty_payload)"
+  else
+    no "AC-C6b: expected cond=empty_payload, got: '$emptyd'"
   fi
   rm -rf "$sb"
 
@@ -492,7 +674,7 @@ exit 0'
   mk_sandbox "$sb" '#!/bin/sh
 exit 0'
   printf 'doppler_download failed rc=9 attempts=3 Doppler Error: isolated\n' > "$sb/detail.d/doppler_download"
-  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" \
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     sh -c 'soleur-boot-emit docker_run fatal' ) >/dev/null 2>&1
   iso="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
   if [ -z "$iso" ]; then
@@ -501,7 +683,7 @@ exit 0'
     no "AC-I1: cross-stage detail contamination — docker_run read '$iso'"
   fi
   : > "$sb/events.jsonl"
-  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" \
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     sh -c 'soleur-boot-emit doppler_download fatal' ) >/dev/null 2>&1
   iso2="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
   if printf '%s' "$iso2" | grep -qF 'isolated'; then
@@ -544,7 +726,7 @@ exit 0'
   { for _ in $(seq 50); do printf '\342\202\254'; done
     for _ in $(seq 20); do printf '\303\251'; done
     printf ' OK-TAIL-MARKER\n'; } > "$sb/detail.d/utf8stage"
-  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" \
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     sh -c 'soleur-boot-emit advstage fatal' ) >/dev/null 2>&1
   raw="$(sed -n 1p "$sb/events.jsonl")"
   if printf '%s' "$raw" | jq -e . >/dev/null 2>&1; then
@@ -563,14 +745,16 @@ exit 0'
   fi
   # The cap is asserted against its OWN oversize fixture.
   : > "$sb/events.jsonl"
-  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" \
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     sh -c 'soleur-boot-emit capstage fatal' ) >/dev/null 2>&1
   capd="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
   caplen=$(printf '%s' "$capd" | wc -c)
-  if [ "$caplen" -le 180 ] && [ "$caplen" -gt 0 ]; then
-    ok "AC-A4b: a 4 KB detail is capped to $caplen bytes (<= 180)"
+  # EXACT equality, not <=: the fixture is a deterministic 4000-byte run, so the output length is
+  # fully determined. `<= 180` passed identically with the cap set to 100, leaving the value free.
+  if [ "$caplen" = 180 ]; then
+    ok "AC-A4b: a 4 KB detail is capped to exactly 180 bytes"
   else
-    no "AC-A4b: oversize detail length was $caplen (expected 1..180)"
+    no "AC-A4b: oversize detail length was $caplen (expected exactly 180)"
   fi
   # Newline folding: lines must be joined by a SPACE, not concatenated. Newlines are documented
   # as impermissible in Sentry tag values; the trailing printable-ASCII pass would strip them
@@ -606,7 +790,7 @@ exit 0'
   esac
   # AC-A13: the byte-wise cap must never emit a partial multi-byte sequence.
   : > "$sb/events.jsonl"
-  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" \
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     sh -c 'soleur-boot-emit utf8stage fatal' ) >/dev/null 2>&1
   u8raw="$(sed -n 1p "$sb/events.jsonl")"
   if printf '%s' "$u8raw" | jq -e . >/dev/null 2>&1; then
@@ -631,7 +815,7 @@ exit 0'
   mk_sandbox "$sb" '#!/bin/sh
 printf "Doppler Error: bad token %s\n" "dp.""st.SYNTHETICPLACEHOLDERVALUE0000" >&2
 exit 3'
-  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" \
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     SOLEUR_DOPPLER_ATTEMPTS=1 SOLEUR_DOPPLER_BACKOFF_1=0 SOLEUR_DOPPLER_BACKOFF_2=0 \
     sh -c '
       stage=doppler_download
@@ -656,7 +840,7 @@ exit 3'
   sb="$(mktemp -d -t ddl-nv.XXXXXXXX)"
   mk_sandbox "$sb" '#!/bin/sh
 exit 0'
-  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" \
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" SOLEUR_DOPPLER_ERRDIR="$sb/tmp" \
     sh -c 'soleur-boot-emit nodetail info' ) >/dev/null 2>&1
   nv="$(sed -n 1p "$sb/events.jsonl")"
   if printf '%s' "$nv" | jq -e '.tags.stage == "nodetail"' >/dev/null 2>&1; then
@@ -751,15 +935,28 @@ FIXEOF
   # Anchored on the SELECTOR construct, not the bare token: the token also appears in the two
   # operator-facing echo strings, so a presence-grep stays green against a selector neutered to
   # `select(false)` — detection dead, messages intact, nobody the wiser.
-  if grep -qF '.value ][0] == "doppler_retry"' "$WF"; then
-    ok "AC-M7a: the workflow's jq actually compares stage to doppler_retry"
+  # COUNT, not presence. There are two doppler_retry selectors — the RETRIED detector and the
+  # RETRY_DETAIL capture — and a presence-grep is satisfied by either, so neutering one alone was
+  # invisible. This is the "a second copy of a guarded literal disarms the guard" class, created
+  # by this PR's own RETRY_DETAIL addition.
+  retry_sel="$(grep -cF '.value ][0] == "doppler_retry"' "$WF" || true)"
+  if [ "$retry_sel" = 2 ]; then
+    ok "AC-M7a: both doppler_retry selectors present (detector + RETRY_DETAIL capture)"
   else
-    no "AC-M7a: the doppler_retry SELECTOR is gone/neutered — green-run retries go unreported"
+    no "AC-M7a: expected 2 doppler_retry selectors in the workflow, found $retry_sel"
   fi
   if grep -qE '::warning::.*(RETRIED|doppler_retry)' "$WF"; then
     ok "AC-M7b: a green birth that retried raises a ::warning:: annotation"
   else
     no "AC-M7b: no ::warning:: annotation fires for a retry on an otherwise-green birth"
+  fi
+  # AC-M7c: and it must carry the RETRY event's detail. LAST_DETAIL is [0] of the newest-first
+  # list, which on this branch is cloud_init_complete (no per-stage file) — so interpolating it
+  # renders "<none>" on every run, discarding the very cause the annotation exists to surface.
+  if grep -E '::warning::.*RETRIED' "$WF" | grep -qF '${RETRY_DETAIL'; then
+    ok "AC-M7c: the retry warning interpolates RETRY_DETAIL (the retry event's own cause)"
+  else
+    no "AC-M7c: the retry warning must interpolate \${RETRY_DETAIL}, not the terminal event's detail"
   fi
   # The ::error:: ANNOTATION (not merely the job summary) must interpolate the detail — the
   # annotation is what renders at the top of the run page.

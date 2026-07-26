@@ -35,7 +35,7 @@
       },
       "at_rest": {
         "mechanism": "luks",
-        "evidence": "apps/web-platform/infra/workspaces-cutover.sh:2030,2041 (cryptsetup luksFormat/luksOpen, MAPPER_NAME=${WORKSPACES_MAPPER_NAME:-workspaces}); key: random_password.workspaces_luks + doppler_secret.workspaces_luks_key (workspaces-luks.tf); mount gate: soleur-host-bootstrap.sh:564-565",
+        "evidence": "apps/web-platform/infra/workspaces-cutover.sh:2030,2041 (cryptsetup luksFormat/luksOpen, MAPPER_NAME=${WORKSPACES_MAPPER_NAME:-workspaces}); key: random_password.workspaces_luks + doppler_secret.workspaces_luks_key (workspaces-luks.tf); mount gate: soleur-host-bootstrap.sh:759-760",
         "defends_against": "a seized/RMA'd or snapshot-imaged Hetzner block volume: contents are unreadable without the Doppler-held LUKS passphrase",
         "does_not_defend": "a leaked service-role credential, an RLS bypass, an SSRF reaching the store, or any read on the live host where the mapper is already unlocked",
         "disclosed_as": "docs/legal/privacy-policy.md:519",

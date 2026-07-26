@@ -30,7 +30,7 @@ missed*) proved the scanner stayed GREEN on realistic house-style shapes it neve
 - `/bin/sh -c 'docker login …'` (shell `-c` body)
 - `ExecStartPre=` / `ExecStartPost=` logins (only `ExecStart=` was captured)
 - `cat > /etc/systemd/system/x.service <<'EOF'` literal-path heredocs (regex was `$VAR`-only) —
-  and that exact shape already exists in the tree (`soleur-host-bootstrap.sh:461`)
+  and that exact shape already exists in the tree (`soleur-host-bootstrap.sh:656`)
 - any tool other than docker/doppler (`cosign`, `gh auth login`, `aws configure`) — the class
   already recurred via a *different* tool (doppler), so a two-family vocabulary is a fail-open
 

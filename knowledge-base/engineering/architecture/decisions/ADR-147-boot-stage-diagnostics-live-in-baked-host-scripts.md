@@ -71,9 +71,14 @@ Concretely, this ADR freezes four cross-consumer contract constraints:
    boot. Retry breadcrumbs therefore use the distinct, non-prefixing stage `doppler_retry`.
 
 4. **Diagnostic detail is carried in a per-stage file, read by the shared emitter.**
-   `/run/soleur-stage-detail.d/<stage>`, with a fallback to the legacy single-buffer
-   `/run/soleur-stage-detail` so the five existing producers and the inline `_emit` consumer stay
-   byte-identical.
+   `/run/soleur-stage-detail.d/<stage>`, and nothing else. There is deliberately **no** fallback
+   to the legacy single-buffer `/run/soleur-stage-detail`: an earlier revision added one "for
+   compatibility", which made all nine `soleur-boot-emit` stages — including INFO emits on
+   healthy boots — ship whatever the ghcr/pull producers had left in the shared buffer, i.e.
+   another stage's captured output presented as this stage's cause. None of those stages has a
+   legacy producer, so the fallback bought nothing and cost cross-stage contamination. A
+   plausible WRONG cause is worse than an empty one. The legacy buffer, its five producers and
+   the inline `_emit` consumer are untouched.
 
 ### Sanitizer contract
 
@@ -85,7 +90,7 @@ The emitter sanitizes in a fixed, load-bearing order:
 | strip ANSI CSI sequences | `NO_COLOR=1` is set at the call site, but the sanitizer must not depend on the producer's cooperation. |
 | strip control characters | Keeps the payload JSON-safe. |
 | drop `"` and `\` | Same. |
-| fold newlines/tabs to spaces | Newlines are documented as impermissible in Sentry tag values, and captured stderr is multi-line by nature. Also keeps words separated — the trailing ASCII pass would otherwise concatenate them. |
+| fold newlines/tabs/CR to spaces | Newlines are documented as impermissible in Sentry tag values, and captured stderr is multi-line by nature. Also keeps words separated — the trailing ASCII pass would otherwise concatenate them. |
 | trim leading/trailing whitespace | Defensive. The "Sentry drops untrimmed values" claim is undocumented, so this is cheap insurance, not a fix for a known vendor behaviour. |
 | `tail -c 180` | Under the documented 200-char tag-value limit. An over-long value is **silently truncated at 2xx**, not rejected — so the cap guards against losing the cause inside a surviving event, not against losing the event. |
 | printable-ASCII pass **after** the cap | `tail -c` is byte-wise and can split a multi-byte sequence. Ordering matters: the pass must run after the cut, not before. |
@@ -121,8 +126,11 @@ Both lines are mandatory and must not be collapsed:
 
 ## Consequences
 
-**Positive.** Every boot stage from the bootstrap handoff onward gains the *reader* side of a
-detail channel for zero `user_data` bytes. `doppler_download` and `docker_run` get producers here.
+**Positive** — from the first host born on an image containing this change. `runcmd` is
+once-per-instance and `hcloud_server.web` pins `user_data` under `lifecycle.ignore_changes`, so
+hosts running today keep emitting the pre-#6969 payload; only the birth-path gate half is live at
+merge. Every boot stage from the bootstrap handoff onward gains the *reader* side of a
+detail channel for zero `user_data` bytes. `doppler_download` gets the only producer here.
 A hang now produces `rc=124` as a distinct named condition where it previously produced silence.
 The birth-path run annotation names the cause instead of only the stage, and boot events carry
 `host_name`, removing the Hetzner API lookup that host attribution previously required on a shared
@@ -134,12 +142,32 @@ Sentry project.
   zero `user_data`. A pre-merge `image_tag` now carries stale baked scripts and fails the
   coherence preflight. This is fail-closed by an existing gate — the outcome is a *refused
   dispatch*, not a second dark host.
-- Only `doppler_download` and `docker_run` have detail *producers*. Every other stage has the
-  reader and an empty channel; the remaining stages are tracked separately.
-- The bounded retry adds worst-case ~150 s (3 attempts × `timeout 45` + 5 s + 10 s backoff) against
-  the host's own `SOLEUR_FRESH_BOOT_WINDOW_SECONDS=900` and the gate's 960 s deadline. Pinning N
-  and the backoff is load-bearing: an unbudgeted retry could push the boot past the window and
-  convert a *diagnosable* `fatal` verdict into an *undiagnosable* `timeout`.
+- Only `doppler_download` has a detail *producer*. `docker_run` was planned as the second and was
+  **cut at review**: `docker run --env-file` is handed the entire prd secret set, and docker's
+  env-file parser quotes the offending line back verbatim on a parse error, so capturing that
+  stream routes secret bytes into a tag on a paging alert and into the run log. No regex closes
+  it — a secret *value* is arbitrary text, not a matchable shape. Measured 2026-07-26: the prd
+  config is 129 keys / 129 lines, so the leak was latent, and would go live the day a multi-line
+  secret (a PEM key, a service-account JSON) is added. Wiring `docker_run` safely means
+  classifying the failure without echoing the stream; tracked with the remaining stages in #6971.
+  Every other stage has the reader and an empty channel.
+- The bounded retry adds worst case ~114 s: 3 attempts × (`timeout -k 5 20` = 25 s) + 5 s + 10 s
+  backoff + 2 × a 12 s-bounded retry breadcrumb. Every term is bounded deliberately. `TMO` is 20 s,
+  not 45 s, because the full prd download measures 0.27–0.33 s (129 secrets) — ~60× headroom on
+  the success path while bounding the failure path tightly. The in-loop `soleur-boot-emit` calls
+  are `timeout`-wrapped because the emitter's transport is `curl -m 10 --retry 3`, and `-m` is
+  *per transfer*: one emit's worst case is ~47 s, and it is slowest exactly when it is called
+  (the faults that fail the Doppler fetch are the same ones that make the Sentry POST hang).
+  Unbounded, two in-loop emits added ~94 s of failure-correlated latency. This matters because
+  `soleur-host-bootstrap.sh`'s own 900 s fresh-boot derivation sums to exactly 900 with no slack
+  term and does not include this stage at all (the pre-#6969 call was unbounded and implicitly
+  costed at zero); overshooting converts a *diagnosable* `fatal` into an *undiagnosable* `timeout`
+  and trips the Better Stack absence alert that shares the window as its grace period.
+- `rc=0` is not accepted as success on its own. `doppler` can exit 0 having written nothing, and
+  `docker run --env-file <empty>` then *starts* the container: the host reaches
+  `cloud_init_complete`, the gate reports "booted clean", and it serves with zero prd secrets. A
+  green-and-secretless serving host is strictly worse than a dark one, so an empty payload is a
+  distinct named failure (`cond=empty_payload`, rc 71).
 - Correlated failure is named, not papered over: the emitter's only transport is `curl` to Sentry,
   so a *total* egress failure disables the discriminator for the hypothesis most likely to have
   caused it. In that case the gate's `timeout` verdict is the only signal, and that verdict is
@@ -170,7 +198,14 @@ source greps. Stubbing the emitter would remove the component under test, since 
 lives inside it; and grep-shaped criteria are evadable (`if ! soleur-doppler-download` reintroduces
 the `$?`-is-zero defect while still satisfying a grep for the call).
 
-The suite is mutation-verified: 21 mutations, each neutering exactly one defence, are all detected.
+The suite is mutation-verified by a **committed** harness,
+`apps/web-platform/infra/doppler-download-error-channel.mutation.py`: 30 mutations, each neutering
+exactly one defence, all detected. The harness is committed rather than asserted because an
+uncommitted matrix is a claim nothing re-checks — and this PR is the proof of why that matters.
+The first, self-authored battery reported 23/23 detected while the suite could not see that the
+`test -x` assertions ran before the files existed (every fresh host would have powered off), nor
+21 further mutants a review pass found. A battery only ever covers the mutations its author
+imagined; the harness is the floor, not the ceiling.
 
 ## References
 
