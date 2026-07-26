@@ -68,6 +68,18 @@ rc_noactions() {
     "$(printf '%s' "$1" | jq -R .)" "$(printf '%s' "$2" | jq -R .)"
 }
 
+# rc_change <address> <type> <raw-json-.change>
+#
+# For malformed-`.change` fixtures: `.change` is emitted VERBATIM, so it can be a scalar, an
+# array, a bare number — any shape the shape guard must refuse. Address and type still go
+# through jq -R, so only the field under test is hand-written. Hand-escaping the whole entry
+# through a printf format is how a fixture ends up malformed for a DIFFERENT reason than the
+# one under test, which then "passes" the abort check while proving nothing.
+rc_change() {
+  printf '{"address":%s,"type":%s,"change":%s}' \
+    "$(printf '%s' "$1" | jq -R .)" "$(printf '%s' "$2" | jq -R .)" "$3"
+}
+
 # rc_update <address> <type> <before-json> <after-json>
 #
 # An IN-PLACE update with both sides populated — the shape the reboot arm compares on two
@@ -305,6 +317,84 @@ mk_plan "$TMP/noop-dep.json" "$(printf '[%s,%s,%s]' \
   "$(rc_entry 'hcloud_volume.workspaces["web-2"]' 'hcloud_volume' '["no-op"]')" \
   "$(rc_entry 'data.hcloud_image.snapshot' 'hcloud_image' '["read"]')")"
 check "no-op and read entries outside the allow-set do NOT false-abort" 0 "PASS" "$TMP/noop-dep.json" "web-2"
+
+# ── REJECT: the DETECTION-layer vacuities (added at review; all were PASSing) ──────
+#
+# Every one of these was a plan the gate ACCEPTED, and none was caught by the original
+# 12-mutation battery — because that battery mutated only the bash `if [[ ]]` arms and never
+# touched the ~90-line jq block that computes the counters. The decision logic was covered;
+# the DETECTION logic was not. Each fixture below is the input that proved an arm blind.
+
+# A SCALAR .change. jq raises on `.change.actions` and exits 5; `if jq -e ...; then` read that
+# error as "no offenders", and the counting filter's `.change.actions?` dropped the same entry
+# from every select. MEASURED PASSing before the shape guard became a positive assertion.
+mk_plan "$TMP/scalar-change.json" "$(printf '[%s,%s]' \
+  "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+  "$(rc_change 'hcloud_volume.workspaces["web-2"]' 'hcloud_volume' '"delete"')")"
+check "a SCALAR .change (destroys the workspaces volume) => ABORT" 1 "unclassifiable" "$TMP/scalar-change.json" "web-2"
+
+# The same shape at every other JSON type, because one malformed fixture only ever proved one.
+for _shape in '0' 'true' '["delete"]' '"x"'; do
+  mk_plan "$TMP/badchange.json" "$(printf '[%s,%s]' \
+    "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+    "$(rc_change 'hcloud_volume.workspaces_luks' 'hcloud_volume' "$_shape")")"
+  check "a .change of type ${_shape} => ABORT (fail-closed)" 1 "unclassifiable" "$TMP/badchange.json" "web-2"
+done
+
+# NESTED actions: `[["delete"]]` passes a bare `type=="array"` check, then compares an array to
+# a string in every `any(. == "delete")` — false forever.
+mk_plan "$TMP/nested-actions.json" "$(printf '[%s,%s]' \
+  "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+  "$(rc_change 'hcloud_volume.workspaces_luks' 'hcloud_volume' '{"actions":[["delete"]]}')")"
+check "a NESTED .change.actions ([[\"delete\"]]) => ABORT" 1 "unclassifiable" "$TMP/nested-actions.json" "web-2"
+
+# An UNKNOWN verb. The filter was an allow-list of create/update/delete/forget, so anything
+# terraform grows next was classified INERT — the fail-open direction, and the comment claimed
+# the opposite. Now a deny-list of the two known-inert verbs.
+mk_plan "$TMP/unknown-verb.json" "$(printf '[%s,%s]' \
+  "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+  "$(rc_entry 'hcloud_volume.workspaces_luks' 'hcloud_volume' '["destroy"]')")"
+check "an UNKNOWN action verb is NOT treated as inert => ABORT" 1 "out-of-scope" "$TMP/unknown-verb.json" "web-2"
+
+# `forget` had ZERO instances anywhere in the suite, yet appears in four gate predicates.
+# A forgotten volume is state divergence the next apply resolves destructively.
+mk_plan "$TMP/forget.json" "$(printf '[%s,%s]' \
+  "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+  "$(rc_entry 'hcloud_volume.workspaces["web-2"]' 'hcloud_volume' '["forget"]')")"
+check "a FORGET on the workspaces volume => ABORT (named)" 1 "workspaces volume" "$TMP/forget.json" "web-2"
+
+# out_of_scope discriminating a DELETE. Every out-of-scope fixture used ["update"], and the two
+# ["delete"] fixtures targeted addresses with named backstops that fire first — so no assertion
+# anywhere exercised the `delete` verb in this filter. This address has NO named backstop.
+mk_plan "$TMP/oos-delete.json" "$(printf '[%s,%s]' \
+  "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces_luks' 'hcloud_volume_attachment' '["delete"]')")"
+check "a DELETE of the LUKS attachment (no named backstop) => ABORT" 1 "out-of-scope" "$TMP/oos-delete.json" "web-2"
+
+# The firewall requirement arm's DISCRIMINATION. hcloud_firewall_attachment.web is INSIDE the
+# allow-set, so out_of_scope structurally cannot see it: the exact-equality predicate is the
+# only thing between "the fleet firewall attachment is destroyed" and a PASS.
+mk_plan "$TMP/fw-delete.json" "$(printf '[%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["delete","create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-2"]' 'hcloud_server_network' '["delete","create"]')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["delete","create"]')" \
+  "$(rc_entry 'hcloud_firewall_attachment.web' 'hcloud_firewall_attachment' '["delete"]')")"
+check "the fleet firewall attachment DESTROYED => ABORT (not 'requirement met')" 1 "hcloud_firewall_attachment" "$TMP/fw-delete.json" "web-2"
+
+# A sibling host's NIC must not ride along. NOTE WHAT THIS DOES AND DOES NOT PROVE, because the
+# first version of this comment overclaimed: it does NOT independently prove the nic arm is
+# KEY-scoped. Measured — type-scoping the arm (dropping the ["<key>"] from its address match)
+# leaves the whole suite green, because any sibling address is out-of-scope BY CONSTRUCTION, so
+# out_of_scope owns the rejection either way. The key-scoping is LAYERED behind out_of_scope and
+# cannot be discriminated by any plan fixture; the parity test is what pins the arm's address
+# shape. This case is still a real regression guard for the layered behaviour — it is just not
+# the sole-guard proof the label claimed.
+mk_plan "$TMP/sibling-nic.json" "$(printf '[%s,%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.web["web-2"]' 'hcloud_server' '["delete","create"]')" \
+  "$(rc_entry 'hcloud_server_network.web["web-3"]' 'hcloud_server_network' '["create"]')" \
+  "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["delete","create"]')" \
+  "$(rc_entry 'hcloud_firewall_attachment.web' 'hcloud_firewall_attachment' '["update"]')")"
+check "a SIBLING host's NIC in the plan => ABORT (out_of_scope owns this; see note)" 1 "out-of-scope" "$TMP/sibling-nic.json" "web-2"
 
 # ── REJECT: the requirement arms (dangerous by OMISSION) ──────────────────────────
 #
