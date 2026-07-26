@@ -119,7 +119,13 @@ starting — it records five defects (R9, R15, R19, R20, R26) that are invisible
 - [x] **6.9** T10 lockstep: `bash …/soleur-host-bootstrap-observability.test.sh` and
       `cd apps/web-platform && ./node_modules/.bin/vitest run test/sentry-web-terminal-boot-fatal-op-contract.test.ts`.
 - [x] **6.10** T11 byte budget → AC-L. T12 gate printer + `::error::` interpolation → AC-M.
-- [ ] **6.11** Full infra suite; confirm no regression against the Phase 0.4 baselines.
+- [x] **6.11** Full infra suite; confirm no regression against the Phase 0.4 baselines.
+      Ran every `apps/web-platform/infra/*.test.sh` (superset of the 73 CI-registered set).
+      Sole failure: `workspaces-luks-loopback.test.sh` exit 2 `LOOPBACK_UNAVAILABLE` — **pre-existing
+      and environmental**, reproduced identically on pristine `origin/main`; needs root/sudo, which
+      CI runners have. Baselines held: observability **95/0** (was 95), op-contract **4/4** (was 4),
+      size test **30 pass**. New suite **70/70**. Registration verified at
+      `infra-validation.yml:406` + the registration-drift meta-test (11/0).
 
 ## Phase 7 — Ship
 
