@@ -240,10 +240,19 @@ Reviewed all three model files (`model.c4`, `views.c4`, `spec.c4`).
 
 ## Carried-forward requirements for the #6730 birth path (MUST)
 
-Deleting `web_2_recreate` removed assertions that were **never web-2-specific** and that
-nothing re-implements today. They are recorded here as binding acceptance criteria for the
-digest-pinned web-1 birth path #6730 builds. Until that path exists, the operator
-pinned-image chain in the `host_creates` HALT carries them as explicit manual steps.
+Deleting `web_2_recreate` removed assertions that were **never web-2-specific**. They are
+recorded here as binding acceptance criteria for the digest-pinned birth path #6730 builds.
+
+**MET as of 2026-07-26 (#6730, ADR-145).** That path exists: the `web-host-create` dispatch
+in `.github/workflows/apply-web-platform-infra.yml` implements R1–R5 as named steps, and
+`apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh` asserts each against
+that job — the executable re-add this section asked for. The framing this preamble carried
+until then ("until that path exists, the operator pinned-image chain in the `host_creates`
+HALT carries them as explicit manual steps") is retired: that chain survives only as the
+break-glass fallback for when the dispatch itself is unavailable, and the HALT text now
+routes to the dispatch first. R1 is additionally strengthened there — the job fails closed on
+an **unreadable** secret, not only an empty one, since `doppler secrets get` returns an empty
+string for both a missing secret and an auth failure.
 
 | # | Requirement | Why it is not optional |
 |---|---|---|
@@ -255,9 +264,13 @@ pinned-image chain in the `host_creates` HALT carries them as explicit manual st
 
 Provenance: these were AC14 / AC8 / AC8b / AC13 / AC16 in
 `apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh`, asserted against the
-`web_2_recreate` job. That file records the same loss inline at the deletion site. Re-add
-executable assertions there the moment an automated create path exists — a requirement that
-lives only in prose is one refactor away from being forgotten.
+`web_2_recreate` job, and re-pointed at `web_host_create` by #6730. The instruction that
+carried them through the gap — "re-add executable assertions there the moment an automated
+create path exists, because a requirement that lives only in prose is one refactor away from
+being forgotten" — is discharged. The restored assertions grep the JOB BLOCK rather than the
+whole workflow (eight other dispatch jobs would otherwise satisfy them) and carry a
+non-empty-block floor, because two of the five are negative assertions that pass trivially
+against an absent job.
 
 ## References
 
