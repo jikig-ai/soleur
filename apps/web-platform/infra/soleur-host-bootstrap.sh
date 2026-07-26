@@ -414,8 +414,15 @@ TMO="${SOLEUR_DOPPLER_TIMEOUT:-45}"
 B1="${SOLEUR_DOPPLER_BACKOFF_1:-5}"
 B2="${SOLEUR_DOPPLER_BACKOFF_2:-10}"
 mkdir -p "$DDIR" 2>/dev/null || true
-ERRF=$(mktemp "${TMPDIR:-/tmp}/doppler-err.XXXXXX" 2>/dev/null) || ERRF="${TMPDIR:-/tmp}/doppler-err.$$"
-: > "$ERRF" 2>/dev/null || true
+# 0700: the per-stage buffers hold scrubbed, capped process stderr. /run is root-owned tmpfs and
+# the content is sanitized, but there is no reason for it to be world-readable.
+chmod 700 "$DDIR" 2>/dev/null || true
+# No predictable-path fallback. If mktemp fails, /tmp is unwritable — and the caller's own
+# `TMPENV=$(mktemp ...)` runs FIRST under cloud-init's set -e, so by the time this helper runs
+# mktemp is demonstrably working. A `doppler-err.$$` fallback would only add a symlink-follow
+# surface for a case that cannot occur; exiting non-zero here stays fail-closed and the caller's
+# re-raise propagates a distinct code.
+ERRF=$(mktemp "${TMPDIR:-/tmp}/doppler-err.XXXXXX") || exit 70
 chmod 600 "$ERRF" 2>/dev/null || true
 # This helper is a SEPARATE PROCESS from the cloud-init terminal block, so that block's EXIT
 # trap cannot see $ERRF. The helper owns its own cleanup.

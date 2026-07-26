@@ -67,3 +67,19 @@ three-site attribution improvement into a P0 error-channel PR makes a rollback e
 stage". The plan partially narrows that. Flagging rather than silently descoping.
 
 **Disposition:** narrowed, with a tracking issue required before the PR is marked ready.
+
+**Filed:** #6971 — consolidated tracker covering the `bootcmd` beacon + inline `_emit` `host_name`
+scope (DC-2), the detail producers for the remaining boot stages, and the `/store/` → `/envelope/`
+migration. Note the inline `_emit` costs `user_data` bytes, so its `host_name` tag must be measured
+against `WEB_GZIP_BUDGET` (the web render is at 23,316 B of 23,700 B after this PR) — which is a
+second, independent reason the narrowing was right.
+
+---
+
+## Implementation disposition (recorded at `/work`)
+
+- **DC-1 → Option A** implemented as planned: the bounded retry ships (3 attempts, 5 s/10 s backoff,
+  `timeout 45` per attempt). Phase 2 was written as a separable block, so Option B remains a clean
+  descope: it would delete the `doppler_retry` producer + emit and the retry loop, leaving capture +
+  `timeout` + re-raise. AC-C/AC-D are the assertions that would go with it.
+- **DC-2 → narrowed as planned**, tracker filed above.
