@@ -19,15 +19,25 @@
 # Usage:
 #   bash apps/web-platform/infra/run-registered-suites.sh          # all suites
 #   JOBS=12 bash apps/web-platform/infra/run-registered-suites.sh  # override width
+#   bash apps/web-platform/infra/run-registered-suites.sh --list   # derive only, run nothing
+#
+# `--list` prints the derived suite list and the orphan report without executing
+# anything. It exists so this script's own logic (derivation, the zero-guard, the
+# orphan scan) is testable in under a second — a runner whose correctness could
+# only be checked by a 25-minute full run would not, in practice, be checked.
+# INFRA_WF overrides the workflow path for the same reason (fixtures).
 #
 # Exit 0 only when every registered suite passes.
 
 set -uo pipefail
 
+LIST_ONLY=0
+[[ "${1:-}" == "--list" ]] && LIST_ONLY=1
+
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT" || exit 1
 
-WF=".github/workflows/infra-validation.yml"
+WF="${INFRA_WF:-.github/workflows/infra-validation.yml}"
 [[ -f "$WF" ]] || { echo "FATAL: $WF not found — cannot derive the registered suite list." >&2; exit 2; }
 
 mapfile -t SUITES < <(
@@ -42,6 +52,31 @@ mapfile -t SUITES < <(
   echo "       fix the extraction rather than trusting this run." >&2
   exit 2
 }
+
+# Report suites present on disk that NO workflow or script references. A test that
+# nothing runs is not coverage, and it fails silently forever — the same
+# false-assurance class as the test-all blind spot above, one level down. Advisory,
+# not a failure: this runner's job is to run what CI runs, not to police the rest.
+report_orphans() {
+  local -a orphans
+  mapfile -t orphans < <(
+    while IFS= read -r f; do
+      git grep -qF -- "$(basename "$f")" -- .github/workflows/ scripts/ || printf '%s\n' "$f"
+    done < <(git ls-files 'apps/web-platform/infra/**/*.test.sh' 'apps/web-platform/infra/*.test.sh' | sort -u)
+  )
+  (( ${#orphans[@]} > 0 )) || return 0
+  echo ""
+  echo "NOTE: ${#orphans[@]} suite(s) on disk are referenced by NO workflow or script —"
+  echo "      nothing runs them, in CI or here:"
+  printf '  %s\n' "${orphans[@]}"
+}
+
+if (( LIST_ONLY )); then
+  echo "Derived ${#SUITES[@]} registered infra suite(s) from ${WF}:"
+  printf '  %s\n' "${SUITES[@]}"
+  report_orphans
+  exit 0
+fi
 
 # min(nproc, 6) — capped because several suites shell out to terraform/docker and
 # oversubscribing turns a slow run into a flaky one.
@@ -60,21 +95,7 @@ printf '%s\n' "${SUITES[@]}" \
 RED=$(grep -c '^RED' "$LOG" || true)
 PASS=$(grep -c '^PASS' "$LOG" || true)
 
-# Report suites present on disk that NO workflow or script references. A test that
-# nothing runs is not coverage, and it fails silently forever — the same
-# false-assurance class as the test-all blind spot above, one level down. Advisory,
-# not a failure: this runner's job is to run what CI runs, not to police the rest.
-mapfile -t ORPHANS < <(
-  while IFS= read -r f; do
-    git grep -qF -- "$(basename "$f")" -- .github/workflows/ scripts/ || printf '%s\n' "$f"
-  done < <(git ls-files 'apps/web-platform/infra/**/*.test.sh' 'apps/web-platform/infra/*.test.sh' | sort -u)
-)
-if (( ${#ORPHANS[@]} > 0 )); then
-  echo ""
-  echo "NOTE: ${#ORPHANS[@]} suite(s) on disk are referenced by NO workflow or script —"
-  echo "      nothing runs them, in CI or here:"
-  printf '  %s\n' "${ORPHANS[@]}"
-fi
+report_orphans
 
 echo ""
 echo "=== registered infra suites: ${PASS} passed, ${RED} failed (of ${#SUITES[@]}) ==="
