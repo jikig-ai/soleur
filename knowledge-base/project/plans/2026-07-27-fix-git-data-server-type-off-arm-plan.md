@@ -47,7 +47,7 @@ own cuts. **12 revisions; 5 were P0.**
 reads the new type) was silently dropped and must be restored — it is now the *sole* orderability
 guard. **G5's sweep is under-scoped**: stale `cax11` claims also survive at
 `apply-web-platform-infra.yml:2393` (a CI error string that becomes wrong on both clauses),
-`expenses.md:19`, and `article-30-register.md:69` (the Art. 30 register records Phase-6 replication
+`knowledge-base/operations/expenses.md:19`, and `knowledge-base/legal/article-30-register.md:69` (the Art. 30 register records Phase-6 replication
 as blocked on the `cax11` pin). Two chain omissions also need spec entries: minted `GIT_*_SSH_PRIVATE_KEY`
 never reach the running web container (their `doppler_secret`s are dependents, outside the `-target`
 set), and `git-data-cutover.sh`'s `WEB_HOSTS` is hardcoded single-host on a now-false "web-2 retired"
@@ -107,7 +107,7 @@ Phase order is **load-bearing**: the contract (variables + locals) must land bef
 ### Phase 0 — Preconditions (no edits)
 
 1. `git fetch origin main` and re-confirm zero drift on `variables.tf`, `git-data.tf`,
-   `cloud-init-git-data.yml`, `expenses.md` (TR7).
+   `cloud-init-git-data.yml`, `knowledge-base/operations/expenses.md` (TR7).
 2. Confirm the three Doppler checksum sites still agree and all pin `3.75.3`:
    `grep -n 'doppler_sha256\|DOPPLER_VERSION' apps/web-platform/infra/{zot-registry.tf,inngest-host.tf,cloud-init-*.yml}`
 3. **Confirm `hcloud_server.git_data` is absent from Terraform state.** The plan asserts
@@ -645,7 +645,7 @@ Not applicable — no path in Files to Edit/Create matches any UI-surface term o
 
 **None.** Queried `gh issue list --label code-review --state open --limit 200` and matched every
 planned file path (`infra/variables.tf`, `infra/git-data.tf`, `cloud-init-git-data.yml`,
-`expenses.md`) against issue bodies — zero hits.
+`knowledge-base/operations/expenses.md`) against issue bodies — zero hits.
 
 ## Risks & Mitigations
 
