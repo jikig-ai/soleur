@@ -76,7 +76,7 @@ to authorize a destroy.
 
 | Step | Guards against |
 |---|---|
-| Input validation (shape regex → `var.web_hosts` membership → `REPLACE-<key>` → web-1 refusal) | An unknown key, a mis-selected `apply_target`, and the web-1 hazard above — all before anything reads a secret |
+| Input validation, in this order: key shape regex → `confirm=REPLACE-<key>` → `var.web_hosts` membership → web-1 refusal → `image_tag` shape | An unknown key, a mis-selected `apply_target`, and the web-1 hazard above — all before anything reads a secret |
 | `SENTRY_DSN` non-empty (ADR-128 R1) | The replacement is a *fresh* host: its pre-extraction boot stages emit through the baked DSN and nothing else. An empty DSN means it boots dark **with the original already destroyed** |
 | amd64 runner assertion | A non-amd64 runner resolves the multi-arch index to a different manifest, voiding the coherence preflight's comparison |
 | Digest pin (`tag → @sha256`) | TOCTOU: a tag that moves between preflight and apply defeats the preflight entirely |

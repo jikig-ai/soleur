@@ -178,9 +178,12 @@ three files in `knowledge-base/engineering/architecture/diagrams/` (`model.c4`, 
 - **External systems** — `github` (Actions as the apply substrate), `hetzner` (Compute),
   `sentry` (boot-stage ingest) and Doppler are all already modeled, and this change adds no
   new vendor edge.
-- **Containers / data stores** — no new store. `hetzner.workspacesVolume` and the LUKS volume
-  already appear with their at-rest posture; this change *preserves* both by omission and
-  alters neither their declaration nor their encryption posture.
+- **Containers / data stores** — no new store. `hetzner.workspacesVolume` is modelled
+  (`model.c4`); the LUKS volume is **not** a distinct C4 element — it appears only inside
+  prose on the `workspacesVolume` and `doppler -> hetzner` descriptions. (An earlier draft of
+  this section claimed both were modelled; measured, only the former is.) Either way this
+  change adds no store and alters neither declaration nor encryption posture, so the absence
+  is pre-existing and out of scope here.
 - **Relationships** — the existing `github -> hetzner` apply relationship already covers a
   terraform-driven host lifecycle operation. A second `apply_target` on an existing workflow
   is a new *authorization route inside* that relationship, not a new edge between elements.
