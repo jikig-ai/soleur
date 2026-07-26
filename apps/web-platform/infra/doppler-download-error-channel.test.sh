@@ -616,5 +616,112 @@ exit 0'
   rm -rf "$sb"
 fi
 
+
+# ───────────────── (C) BIRTH-PATH GATE: the RUN must name the cause (AC-M) ─────────────────
+# The gate's jq is embedded in YAML inside a shell heredoc, three quoting layers deep. A filter
+# that is merely MALFORMED returns empty and the gate degrades to exactly the uninformative
+# "last-reached stage: doppler_download" annotation this PR exists to replace — silently, and on
+# the one run an operator is actually reading. So run the SHIPPED filter against a fixture.
+WF="$(cd "$DIR/../../.." && pwd)/.github/workflows/apply-web-platform-infra.yml"
+if [ ! -f "$WF" ]; then
+  no "AC-M0: could not locate apply-web-platform-infra.yml"
+else
+  ok "AC-M0: located the birth-path workflow"
+  # Pull the host-selection filter out of the workflow itself (single source — a copy here
+  # would drift and this suite would then be verifying its own copy, not the shipped gate).
+  HOSTSEL_WF="$(grep -F "HOSTSEL='" "$WF" | head -1 | sed -e "s/^[[:space:]]*HOSTSEL='//" -e "s/'$//")"
+  if [ -n "$HOSTSEL_WF" ]; then
+    ok "AC-M1: extracted HOSTSEL from the shipped workflow"
+  else
+    no "AC-M1: could not extract HOSTSEL from the workflow"
+  fi
+  fx="$(mktemp -t ddl-fx.XXXXXXXX.json)"
+  cat > "$fx" <<'FIXEOF'
+[
+  {"message":"soleur-cloud-init boot stage","dateCreated":"2026-07-26T16:51:58Z",
+   "tags":[{"key":"stage","value":"doppler_download"},{"key":"level","value":"fatal"},
+           {"key":"host_name","value":"soleur-web-2"},
+           {"key":"detail","value":"doppler_download rc=124 cond=timeout attempts=3 Doppler Error: context deadline exceeded"}]},
+  {"message":"soleur-cloud-init boot stage","dateCreated":"2026-07-26T16:51:40Z",
+   "tags":[{"key":"stage","value":"doppler_retry"},{"key":"level","value":"warning"},
+           {"key":"host_name","value":"soleur-web-2"},
+           {"key":"detail","value":"doppler_retry rc=124 cond=timeout attempt=1/3 Doppler Error: context deadline exceeded"}]},
+  {"message":"soleur-cloud-init boot stage","dateCreated":"2026-07-26T16:40:00Z",
+   "tags":[{"key":"stage","value":"cloud_init_complete"},{"key":"level","value":"info"},
+           {"key":"host_name","value":"soleur-web-platform"},{"key":"detail","value":""}]},
+  {"message":"soleur-cloud-init boot stage","dateCreated":"2026-07-26T16:30:00Z",
+   "tags":[{"key":"stage","value":"docker_run"},{"key":"level","value":"info"}]}
+]
+FIXEOF
+  MSG_RE_T='soleur-cloud-init boot stage'
+  EH='soleur-web-2'
+  m_stage="$(jq -r --arg re "$MSG_RE_T" --arg eh "$EH" "
+    [ .[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL_WF)
+          | ([ (.tags // [])[]? | select(.key==\"stage\") | .value ][0] // \"?\") ][0] // \"\"" < "$fx" 2>/dev/null)"
+  m_detail="$(jq -r --arg re "$MSG_RE_T" --arg eh "$EH" "
+    [ .[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL_WF)
+          | ([ (.tags // [])[]? | select(.key==\"detail\") | .value ][0] // \"\") ][0] // \"\"" < "$fx" 2>/dev/null)"
+  if [ "$m_stage" = "doppler_download" ]; then
+    ok "AC-M2: the gate's jq selects the failing stage"
+  else
+    no "AC-M2: gate jq returned stage '$m_stage', expected 'doppler_download'"
+  fi
+  if printf '%s' "$m_detail" | grep -qF 'rc=124'; then
+    ok "AC-M3: the gate's jq surfaces the detail (cause), not just the stage"
+  else
+    no "AC-M3: gate jq returned detail '$m_detail', expected one containing rc=124"
+  fi
+  # HOST SCOPING: the web-1 event must NOT be selected when web-2 is the host under test. This
+  # is the ambiguity that forced a Hetzner API lookup during the #6969 investigation.
+  m_other="$(jq -r --arg re "$MSG_RE_T" --arg eh "soleur-web-9" "
+    [ .[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL_WF)
+          | ([ (.tags // [])[]? | select(.key==\"stage\") | .value ][0] // \"?\") ][0] // \"\"" < "$fx" 2>/dev/null)"
+  if [ "$m_other" = "docker_run" ]; then
+    ok "AC-M4: host scoping excludes other hosts' events (only the untagged legacy event matches)"
+  else
+    no "AC-M4: host scoping returned '$m_other', expected only the untagged legacy event 'docker_run'"
+  fi
+  # Retry detection on an otherwise-green birth.
+  if jq -e --arg re "$MSG_RE_T" --arg eh "$EH" "
+    [ .[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL_WF)
+          | select([ (.tags // [])[]? | select(.key==\"stage\") | .value ][0] == \"doppler_retry\") ] | length > 0" < "$fx" >/dev/null 2>&1; then
+    ok "AC-M5: the gate detects a doppler_retry breadcrumb (::warning:: on a green birth)"
+  else
+    no "AC-M5: the gate failed to detect the doppler_retry breadcrumb"
+  fi
+  rm -f "$fx"
+  # AC-M5 above proves the FILTER SHAPE works, but it runs a copy written here — so it stays
+  # green even if the workflow drops retry detection entirely. Pin the shipped wiring too:
+  # the workflow must both SELECT doppler_retry and EMIT a ::warning:: for it, or a
+  # retry-that-succeeded leaves its cause buried in a green run's collapsed summary.
+  # Anchored on the SELECTOR construct, not the bare token: the token also appears in the two
+  # operator-facing echo strings, so a presence-grep stays green against a selector neutered to
+  # `select(false)` — detection dead, messages intact, nobody the wiser.
+  if grep -qF '.value ][0] == \"doppler_retry\"' "$WF"; then
+    ok "AC-M7a: the workflow's jq actually compares stage to doppler_retry"
+  else
+    no "AC-M7a: the doppler_retry SELECTOR is gone/neutered — green-run retries go unreported"
+  fi
+  if grep -qE '::warning::.*(RETRIED|doppler_retry)' "$WF"; then
+    ok "AC-M7b: a green birth that retried raises a ::warning:: annotation"
+  else
+    no "AC-M7b: no ::warning:: annotation fires for a retry on an otherwise-green birth"
+  fi
+  # The ::error:: ANNOTATION (not merely the job summary) must interpolate the detail — the
+  # annotation is what renders at the top of the run page.
+  if grep -qE '^\s*echo "::error::\$\{WEB_HOST_KEY\}.*booted DARK.*\$\{FATAL_DETAIL' "$WF"; then
+    ok "AC-M6: the dark-boot ::error:: annotation interpolates the captured detail"
+  else
+    no "AC-M6: the dark-boot ::error:: annotation must interpolate \${FATAL_DETAIL}"
+  fi
+  # QUERY message literals stay byte-identical: renaming one darks the gate AND mints a new
+  # Sentry issue group where value=1 means '>1', so a single fatal would stop paging entirely.
+  if grep -qF 'QUERY='"'"'message:"soleur-hostscript-seed failed" OR message:"soleur-host-bootstrap failed" OR message:"soleur-host-bootstrap complete" OR message:"soleur-cloud-init boot stage"'"'" "$WF"; then
+    ok "AC-J2: the workflow QUERY message literals are byte-identical (lockstep held)"
+  else
+    no "AC-J2: the workflow QUERY message literals changed — this darks the gate and breaks paging"
+  fi
+fi
+
 echo "=== doppler-download-error-channel: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]

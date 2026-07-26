@@ -782,14 +782,9 @@ runcmd:
     stage=doppler_download
     TMPENV=$(mktemp /tmp/doppler-env.XXXXXX)
     chmod 600 "$TMPENV"
-    # #6969: the baked helper owns the timeout, the bounded retry, and the stderr capture that
-    # makes the trap's fatal name its own cause. Two lines, both mandatory:
-    #   1. `&& rc=0 || rc=$?` — `if ! cmd; then ... $?` yields 0 in dash AND bash, so the old
-    #      form could only ever have recorded exit_code=0.
-    #   2. the re-raise — an AND-OR list is set -e EXEMPT, so the capture ALONE would silently
-    #      continue the boot. Worst case is not a missing diagnostic: it is a host reaching
-    #      cloud_init_complete with an empty $TMPENV and NO prd secrets, which is strictly
-    #      worse than booting dark. Do not collapse these into one statement.
+    # #6969 (ADR-147): baked helper owns timeout+retry+stderr capture. BOTH lines are
+    # mandatory — `if !` yields $?=0, and an AND-OR list is set -e exempt, so without the
+    # re-raise the boot continues to cloud_init_complete with NO prd secrets.
     soleur-doppler-download "$TMPENV" && rc=0 || rc=$?
     [ "$rc" = 0 ] || exit "$rc"
     # tmpfs /tmp (closes #2473): caps overlayfs COW write-amp from
