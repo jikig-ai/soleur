@@ -40,7 +40,7 @@
 # luksFormat/luksOpen a NEW header on the fresh boot, STRANDING the existing at-rest data. The
 # named `luks_passphrase_touched` backstop asserts ZERO actions on BOTH (redundant with
 # out_of_scope, but names the specific catastrophe). The idempotent isLuks skip in
-# cloud-init-git-data.yml:142-163 only preserves data when the passphrase is unchanged.
+# cloud-init-git-data.yml:152-173 only preserves data when the passphrase is unchanged.
 #
 # LARGER + STRICTER than the inngest gate (5-member allow-set, positive NIC / BOTH-attachment /
 # firewall assertions, named volume + passphrase preserves). Do NOT "simplify" it to the

@@ -190,7 +190,7 @@ Into an ADR whose **Status says "registry host only."**
 
 Applied to git-data it mandates `replace_triggered_by` on `random_password.git_data_luks`
 (`git-data-luks.tf:31`) → a rotation **replaces the host** → the new host runs
-`cryptsetup luksOpen` (`cloud-init-git-data.yml:163`) with the **new** passphrase against volumes
+`cryptsetup luksOpen` (`cloud-init-git-data.yml:173`) with the **new** passphrase against volumes
 still encrypted with the **old** one → the data survives and becomes **permanently unopenable**.
 That inverts the existing design, which preserves the passphrase deliberately:
 `apply-web-platform-infra.yml:2059-2060` — *"BOTH data volumes + the LUKS passphrase are

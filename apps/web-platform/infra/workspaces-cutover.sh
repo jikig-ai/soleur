@@ -863,7 +863,7 @@ disarm_dead_man() {
 # catches a wrong-device copy, which is precisely what the paragraph above describes.
 #
 # The sibling git-data volume carries the IDENTICAL `mountpoint … || mount …` line
-# (cloud-init-git-data.yml:159-170) — but under `set -euo pipefail`, where a failed mount is
+# (cloud-init-git-data.yml:169-180) — but under `set -euo pipefail`, where a failed mount is
 # fatal. This script copied the line's SHAPE into a no-`-e` regime, converting a fail-closed
 # line into a fail-open one, and dropped the `mkfs.ext4 /dev/mapper/git-data` that makes the
 # mount succeed at all. git-data-luks.tf:73-78 documents the mechanism verbatim.
