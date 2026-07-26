@@ -27,14 +27,26 @@ not merely higher-stakes; it is topologically different:
   at-rest store boots **unattached** while the host reports healthy.
 - `cloudflare_record.app.content` is web-1's `ipv4_address`. Replace it without re-pointing
   the record and `app.soleur.ai` resolves to a destroyed host.
-- Decisively: web-1 currently carries **two** attached volumes mid-ADR-119 cutover, which
-  makes cloud-init's `scsi-0HC_Volume_*` mount glob ambiguous. A fresh web-1 would mount
-  whichever volume resolved first, serve normally, and strand or overwrite data.
+- All **15** `terraform_data.*` SSH provisioners in `server.tf` pin `connection.host` to
+  web-1 — including the seccomp and AppArmor sandbox controls. `-target` is upstream-only, so
+  none is pulled into the plan and all 15 would be left un-run against a dead IP.
+- Decisively: `/mnt/data` pins **by-id** to `hcloud_volume.workspaces[key]`, which on web-1 is
+  the **plaintext** volume the 2026-07-23 LUKS cutover **superseded**. Nothing on a fresh boot
+  opens the LUKS mapper (crypttab keyfile is `none`; the guest-side unlock path is deferred to
+  **#6931**). A rebuilt web-1 would boot healthy and serve every user worktree **rolled back
+  to 2026-07-23**, while the live LUKS volume sat attached and unopened.
 
 The last one is a property of cloud-init, not of the terraform plan, so no gate arm can
 observe it. **There is no automated route to replace web-1 today**, and there was none before
-this path either. The prerequisite is ADR-119 §Sequencing's volume-ID mount pin; see ADR-148
-§Alternatives item 4.
+this path either.
+
+> **Corrected 2026-07-27.** This section previously named an *"ambiguous `scsi-0HC_Volume_*`
+> mount glob"* as decisive and gave *"ADR-119 §Sequencing's volume-ID mount pin"* as the
+> prerequisite. Both were false — #6604 pinned the mount by-id before this path existed, and
+> ADR-119 has no §Sequencing — which made the refusal read as already relaxable. If you are
+> here to lift the refusal: the prerequisite is **#6931**, plus key-conditional gate arms for
+> `hcloud_volume_attachment.workspaces_luks` and `cloudflare_record.app`, plus a rehearsal on
+> a non-production host. Tracker **#6964**; see ADR-148 §Alternatives item 4.
 
 ## The procedure
 
@@ -77,11 +89,14 @@ to authorize a destroy.
 
 The `-target` set is four addresses: the server, its NIC, its workspaces volume attachment,
 and the fleet firewall attachment. Everything else is **absent from the target set**, and that
-absence is the preservation mechanism — an untargeted resource cannot be planned for destroy:
+absence is what keeps them out of the destroy set. The obvious formulation — *"an untargeted
+resource cannot be planned for destroy"* — is **false**: `-target` prunes **dependents**, not
+**dependencies**. So the mechanism differs per address:
 
-- `hcloud_volume.workspaces[<key>]` — the host's workspace store. It survives the replace and
-  re-attaches to the new host. (It also carries `prevent_destroy`, but the gate does not rely
-  on a downstream error to save it.)
+- `hcloud_volume.workspaces[<key>]` — the host's workspace store. It IS in the plan graph (the
+  targeted attachment references it) and appears as a no-op. What preserves it is
+  `prevent_destroy = true`, which errors at **plan** time, plus the gate's `out_of_scope` and
+  `workspaces_volume_destroyed` arms. It survives the replace and re-attaches to the new host.
 - `hcloud_volume.workspaces_luks` and the LUKS passphrase pair — untouched, so the at-rest
   data stays readable behind its existing header. A rotated passphrase would open a *new*
   header and strand the data while the host booted healthy.
@@ -97,8 +112,9 @@ catastrophe rather than saying "an address you did not authorize changed".
 The `-target` set is upstream-only, so nothing downstream of the server rides along. Two
 consequences worth knowing before you dispatch:
 
-- **The eight `terraform_data.*` SSH provisioners** (disk monitor, resource monitor, fail2ban
-  tuning, persistent journald, seccomp/AppArmor profiles, orphan reaper) hardcode
+- **All 15 `terraform_data.*` SSH provisioners** (disk monitor, resource monitor, fail2ban
+  tuning, persistent journald, seccomp/AppArmor profiles, cron egress firewall, orphan reaper,
+  …) hardcode
   `connection.host` to **web-1**. They never applied to any other host, so a non-web-1
   replace neither loses nor needs them.
 - **Better Stack heartbeats** for the host already exist and are not targeted. If they are

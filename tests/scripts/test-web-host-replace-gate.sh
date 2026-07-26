@@ -141,21 +141,32 @@ check "the gate is generic over var.web_hosts keys => PASS for web-3" 0 "PASS" "
 #   2. cloudflare_record.app.content is hcloud_server.web["web-1"].ipv4_address (dns.tf).
 #      Replacing web-1 without re-pointing it leaves app.soleur.ai resolving to a destroyed
 #      host — a total outage of the product.
-#   3. DECISIVE, and not a plan property at all: web-1 currently carries TWO attached
-#      volumes (the live plaintext one plus the LUKS volume receiving the ADR-119 rsync).
-#      workspaces-luks.tf says so in terms — "with a second volume attached, the
-#      `scsi-0HC_Volume_*` glob in cloud-init.yml becomes AMBIGUOUS. Pinning the mount by
-#      volume ID is a hard prerequisite of the cutover". A fresh web-1 would therefore boot
-#      and mount whichever volume the glob resolved first, serve normally, and strand or
-#      overwrite data.
+#   3. all 15 terraform_data.* SSH provisioners in server.tf pin connection.host to web-1;
+#      `-target` is upstream-only so none is pulled into the plan, and a replaced web-1
+#      leaves every one of them un-run against a dead IP.
+#   4. DECISIVE, and not a plan property at all: /mnt/data pins BY-ID to
+#      hcloud_volume.workspaces[key] — on web-1 the PLAINTEXT volume the 2026-07-23 cutover
+#      SUPERSEDED — and nothing on a fresh boot opens the LUKS mapper (crypttab keyfile
+#      `none`; guest-side unlock deferred to #6931). A rebuilt web-1 boots healthy and
+#      serves every worktree rolled back to 2026-07-23 while the live LUKS volume sits
+#      attached and unopened.
 #
-# (3) is invisible to ANY plan-shaped gate: it is a property of cloud-init, not of
+#      An earlier revision of this suite asserted an "AMBIGUOUS `scsi-0HC_Volume_*` glob"
+#      here, quoting a workspaces-luks.tf comment that went stale when #6604 pinned the
+#      mount by-id. The needle below was re-anchored on the real hazard; the old one would
+#      have kept passing against a rationale the codebase falsifies.
+#
+# (4) is invisible to ANY plan-shaped gate: it is a property of cloud-init, not of
 # resource_changes. A gate that admitted web-1 would be certifying a safety it cannot
-# observe. Refusing is the only honest control until ADR-119 §Sequencing's volume-ID mount
-# pin lands. See knowledge-base/.../ADR-148 §Alternatives.
+# observe. The unblock condition is #6931 (fresh-boot guest-side LUKS unlock) — NOT the
+# ADR-119 mount pin, which already shipped. Tracker #6964; see ADR-148 §Alternatives.
 mk_plan "$TMP/happy-web1.json" "$(happy_changes web-1)"
 check "the LUKS-pinned host web-1 => ABORT (refused by name)" 1 "web-1" "$TMP/happy-web1.json" "web-1"
-check "the web-1 refusal names the ambiguous-mount prerequisite" 1 "AMBIGUOUS" "$TMP/happy-web1.json" "web-1"
+# ANCHORED ON THE DECISIVE HAZARD'S OWN WORDS. This asserted "AMBIGUOUS" until the review
+# panel measured that ground false; a needle pinned to a rationale the codebase contradicts
+# keeps passing while the message misleads the operator it exists for.
+check "the web-1 refusal names the superseded-plaintext hazard" 1 "superseded by the 2026-07-23 LUKS cutover" "$TMP/happy-web1.json" "web-1"
+check "the web-1 refusal names the real unblock condition (#6931), not the shipped mount pin" 1 "deferred to #6931" "$TMP/happy-web1.json" "web-1"
 
 # ── REJECT: no host key supplied ──────────────────────────────────────────────────
 #

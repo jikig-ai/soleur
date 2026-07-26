@@ -4,7 +4,7 @@
 - **Date:** 2026-07-26
 - **Issue:** #6969 (`soleur-web-2` is dark and there is no mechanism to replace it). Related: #6416 (the birth-without-NIC incident the `host_creates` HALT exists for), #6393/#6400 (an out-of-stock recreate stranding the fleet), #6966 (the cx→cpx repin forced by stock), #6459 (web-2 as the cattle-host disposability proof).
 - **Extends:** ADR-145 (host birth is a guarded capability — this is the *replacement* sibling it explicitly deferred), ADR-143 (host lifecycle), ADR-128 (fresh-boot observability R1–R5).
-- **Constrained by:** ADR-119 (the workspaces-LUKS cutover, whose in-flight two-volume state is why web-1 is refused).
+- **Constrained by:** #6931 (fresh-boot guest-side LUKS unlock — the real reason web-1 is refused; see §web-1 is refused). Related: ADR-119 (the workspaces-LUKS cutover), #6964 (tracker).
 - **Plan:** `knowledge-base/project/plans/2026-07-26-feat-web-host-replace-dispatch-target-plan.md`
 
 ## Context
@@ -57,9 +57,24 @@ bypass** (`hr-menu-option-ack-not-prod-write-auth`).
 The `-target` set is four addresses: the server, its NIC, its workspaces volume attachment,
 and the fleet firewall attachment. `hcloud_volume.workspaces[key]`,
 `hcloud_volume.workspaces_luks`, the LUKS passphrase pair and `cloudflare_record.app` are all
-**absent**. An untargeted resource cannot be planned for destroy, so omission is the primary
-mechanism; the three named backstops in the gate are intentionally redundant and exist for
-the error text an operator reads mid-abort.
+**absent** from the `-target` set.
+
+Be precise about *why* that preserves them, because the obvious formulation is wrong.
+"An untargeted resource cannot be planned for destroy" is **false**: `-target` prunes
+**dependents**, not **dependencies**, so `hcloud_volume.workspaces[key]` IS in this plan's
+graph (the targeted attachment references it, and the server's `user_data` takes its id) and
+appears as a no-op. What actually preserves each address is different per address:
+
+- `hcloud_volume.workspaces[key]` — in-graph. Preserved by `prevent_destroy = true`, which
+  errors at **plan** time, plus the `out_of_scope` and `workspaces_volume_destroyed` arms.
+- `hcloud_volume.workspaces_luks`, the LUKS passphrase pair, `cloudflare_record.app` — genuinely
+  outside the graph, because no targeted address references them. Note the LUKS volume has
+  **no** `prevent_destroy`, so `out_of_scope` and `luks_volume_destroyed` are its only guards;
+  if a future reference path is added (the shape `workspaces_volume_id` already establishes),
+  it becomes in-graph and those two arms are all that remain.
+
+The named backstops are intentionally redundant with `out_of_scope` and exist for the error
+text an operator reads mid-abort.
 
 ### The stock preflight is mandatory here, not advisory
 
@@ -86,29 +101,49 @@ So replacing web-1 entails two members no other key has — the LUKS attachment 
 (pinned to web-1's `ipv4_address`; omit it and `app.soleur.ai` resolves to a destroyed host).
 
 There is a third asymmetry, found while checking whether the `-target` set was complete: the
-eight `terraform_data.*` SSH provisioners in `server.tf` (`disk_monitor_install`,
-`resource_monitor_install`, `fail2ban_tuning`, `journald_persistent`, …) hardcode
+**15** `terraform_data.*` SSH provisioners in `server.tf` — every one except
+`deploy_pipeline_fix`, and including the `docker_seccomp_config`, `apparmor_bwrap_profile`
+and `cron_egress_firewall` sandbox controls — hardcode
 `connection.host = hcloud_server.web["web-1"].ipv4_address`. They are web-1-only, not
 per-host, so they are correctly absent from a non-web-1 replace — but a web-1 replace changes
 that IP and would leave every one of them pointing at a destroyed host until the next
 token-gated SSH apply. `-target` is upstream-only, so nothing pulls them in and no gate arm
 would notice.
 
-Those three are all expressible as key-conditional arms. The decisive reason is not:
+Those three are all expressible as key-conditional arms. The decisive reason is not — and
+**this paragraph replaces a false one**, recorded rather than quietly rewritten because the
+false version was load-bearing and shipped to five places:
 
-> *"with a second volume attached, the `scsi-0HC_Volume_*` glob in cloud-init.yml becomes
-> AMBIGUOUS. Pinning the mount by volume ID is a hard prerequisite of the cutover."*
-> — `workspaces-luks.tf`
+> **RETRACTED.** An earlier revision named an *"AMBIGUOUS `scsi-0HC_Volume_*` glob"* as
+> decisive, quoting `workspaces-luks.tf`. That glob does not exist: **#6604** pinned the mount
+> by-id (`cloud-init.yml`: `/dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id}`), and
+> `soleur-host-bootstrap-observability.test.sh` AC6b REDs if the bare glob returns. The
+> quoted comment had been stale on `main` for nine days. It was **quoted, not measured** — in
+> a plan whose Research Reconciliation table opens *"Every row measured this session against
+> the worktree, not recalled."*
 
-web-1 currently carries **two** attached volumes mid-ADR-119 cutover. A fresh web-1 would
-boot, mount whichever volume the glob resolved first, serve normally, and strand or overwrite
-data. That is a property of **cloud-init**, not of `resource_changes` — no plan-shaped gate
-can observe it. Admitting web-1 would mean certifying a safety property the gate cannot
-check, which is the failure mode every arm above exists to refuse.
+The real decisive reason is the **opposite of ambiguity — it is determinism pointed at the
+wrong volume**, and it is worse:
 
-The refusal is keyed on `_WEB_HOST_REPLACE_LUKS_PINNED_KEY` so that when ADR-119
-§Sequencing's volume-ID mount pin lands, the reviewer of *that* change is the one who decides
-to relax it. The workflow repeats the refusal as a fail-fast input check purely so the
+`/mnt/data` on a fresh host pins by-id to `hcloud_volume.workspaces[key]`, which on web-1 is
+the **plaintext** volume that the 2026-07-23 cutover **superseded** — the encryption-posture
+ledger records live data on `hcloud_volume.workspaces_luks` and the plaintext volume as
+*"retained as the pre-cutover rollback backstop"*. Nothing on a fresh boot opens the mapper:
+`soleur-host-bootstrap.sh` writes crypttab with keyfile `none` + `nofail`, and the guest-side
+unlock path is **deferred to #6931**. So a rebuilt web-1 boots healthy, mounts the superseded
+backstop, and serves every user worktree **rolled back to 2026-07-23**, while the live LUKS
+volume sits attached and unopened. That is a property of **cloud-init**, not of
+`resource_changes` — no plan-shaped gate can observe it.
+
+**The unblock condition is #6931**, not the ADR-119 mount pin. The retracted wording named
+*"ADR-119 §Sequencing's volume-ID mount pin"* — a section that does not exist in ADR-119, for
+a pin that already shipped — so the refusal read as **relaxable today**, and a reviewer
+following it would have deleted the refusal and inherited reasons 1–3 with no gate arms at
+all. Relaxing requires: #6931, plus key-conditional requirement arms for
+`hcloud_volume_attachment.workspaces_luks` and `cloudflare_record.app`, plus a rehearsal on a
+non-production host. Tracker: **#6964**.
+
+The refusal is keyed on `_WEB_HOST_REPLACE_LUKS_PINNED_KEY`. The workflow repeats the refusal as a fail-fast input check purely so the
 operator reads the reason before a digest resolve and a terraform plan; the gate remains the
 load-bearing control, and `terraform-target-parity.test.ts` binds the two literals.
 

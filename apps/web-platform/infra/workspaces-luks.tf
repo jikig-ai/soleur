@@ -221,9 +221,22 @@ resource "hcloud_volume" "workspaces_luks" {
 # nobody has ever restored — and it manufactures no indefinitely-retained plaintext
 # copy, which is what made the snapshot wrong (CTO/COO).
 #
-# NOTE: with a second volume attached, the `scsi-0HC_Volume_*` glob in
-# cloud-init.yml becomes AMBIGUOUS. Pinning the mount by volume ID is a hard
-# prerequisite of the cutover — see ADR-119 §Sequencing.
+# HISTORICAL (corrected 2026-07-27, #6969): this note used to say the
+# `scsi-0HC_Volume_*` glob becomes AMBIGUOUS with a second volume attached, and named
+# pinning the mount by volume ID as a pending prerequisite. That pin LANDED in #6604 —
+# cloud-init.yml mounts `/dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id}`, and
+# soleur-host-bootstrap-observability.test.sh (AC6b) REDs if the bare glob returns. The
+# stale wording was quoted verbatim into five places by #6969 and presented there as the
+# decisive ground for refusing a web-1 replace; it is corrected at source here so the
+# next reader does not re-inherit it.
+#
+# The live hazard is the OPPOSITE of ambiguity — it is determinism pointed at the wrong
+# volume. /mnt/data pins by-id to hcloud_volume.workspaces[key], the PLAINTEXT volume,
+# which the 2026-07-23 cutover SUPERSEDED (live data is on this LUKS volume; see the
+# encryption-posture ledger). Nothing on a fresh boot opens the mapper — crypttab is
+# written with keyfile `none` (soleur-host-bootstrap.sh) and the guest-side unlock path
+# is deferred to #6931. So a rebuilt web-1 mounts the superseded plaintext backstop and
+# serves stale worktrees while this volume sits attached and unopened.
 resource "hcloud_volume_attachment" "workspaces_luks" {
   volume_id = hcloud_volume.workspaces_luks.id
   server_id = hcloud_server.web["web-1"].id

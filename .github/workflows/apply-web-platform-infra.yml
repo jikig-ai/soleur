@@ -3347,10 +3347,13 @@ jobs:
   #
   # WEB-1 IS REFUSED, by the sourced gate and again by the input validation below. It is not
   # "web-2 with a bigger blast radius": hcloud_volume_attachment.workspaces_luks.server_id is
-  # hardcoded to it (ForceNew), cloudflare_record.app is pinned to its ipv4_address, and it
-  # currently carries TWO attached volumes mid-ADR-119 cutover — which makes cloud-init's
-  # scsi-0HC_Volume_* mount glob AMBIGUOUS, a property no plan-shaped gate can observe. See
-  # tests/scripts/lib/web-host-replace-gate.sh's header and ADR-148 §Alternatives.
+  # hardcoded to it (ForceNew), cloudflare_record.app is pinned to its ipv4_address, and all
+  # 15 web-1-pinned terraform_data SSH provisioners would be left un-run against a dead IP.
+  # DECISIVELY, and invisible to any plan-shaped gate: /mnt/data pins by-id to the PLAINTEXT
+  # hcloud_volume.workspaces[key], which the 2026-07-23 LUKS cutover superseded, and nothing
+  # on a fresh boot opens the mapper (guest-side unlock deferred to #6931) — so a rebuilt
+  # web-1 would serve every worktree rolled back to 2026-07-23. See
+  # tests/scripts/lib/web-host-replace-gate.sh's header and ADR-148 §Alternatives; #6964.
   #
   # A REPLACE DESTROYS BEFORE IT CREATES, so the stock preflight is mandatory here rather
   # than advisory: Hetzner's entire cx and cax lines were orderable in 0 of 3 EU DCs on
@@ -3434,7 +3437,7 @@ jobs:
           # and a terraform plan, and so the operator reads the reason at the top of the run.
           # Keep the key in lockstep with _WEB_HOST_REPLACE_LUKS_PINNED_KEY in the gate.
           if [[ "$WEB_HOST_KEY_RAW" == "web-1" ]]; then
-            echo "::error::'${WEB_HOST_KEY_RAW}' is the LUKS-pinned host and this path REFUSES it. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to it and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address), and it currently carries TWO attached volumes mid-ADR-119 cutover, which makes cloud-init's scsi-0HC_Volume_* mount glob AMBIGUOUS — a fresh host would mount whichever volume resolved first, serve normally, and strand or overwrite data. That is a cloud-init property, invisible to any plan-shaped gate. Land ADR-119 §Sequencing's volume-ID mount pin first (ADR-148 §Alternatives)."
+            echo "::error::'${WEB_HOST_KEY_RAW}' is the LUKS-pinned host and this path REFUSES it. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to it and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address), and it would leave all 15 web-1-pinned terraform_data SSH provisioners un-run against a dead IP. DECISIVELY: /mnt/data pins by-id to hcloud_volume.workspaces[key], which on this host is the PLAINTEXT volume superseded by the 2026-07-23 LUKS cutover, and nothing on a fresh boot opens the LUKS mapper (guest-side unlock deferred to #6931) — a rebuilt host would boot healthy and serve every worktree rolled back to 2026-07-23. That is a cloud-init property, invisible to any plan-shaped gate. NOTHING HAS BEEN DESTROYED — this dispatch stopped before reading a secret. Land #6931 first; tracker #6964 (ADR-148 §Alternatives)."
             exit 1
           fi
           # image_tag is optional, but if supplied it is interpolated into a docker ref and a
@@ -3605,8 +3608,11 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         # FOUR -targets, and the omissions are the safety property. hcloud_volume.workspaces
-        # is NOT targeted: an untargeted resource cannot be planned for destroy, so leaving
-        # the workspace store out is simpler AND strictly safer than including it. Same for
+        # is NOT targeted. Be precise about why that helps: `-target` prunes DEPENDENTS, not
+        # DEPENDENCIES, so this volume IS in the graph (the targeted attachment references it)
+        # and shows as a no-op — what preserves it is `prevent_destroy` (a PLAN-time error)
+        # plus the gate's out_of_scope + workspaces_volume_destroyed arms. Genuinely out of
+        # the graph, because nothing targeted references them:
         # hcloud_volume.workspaces_luks and the LUKS passphrase. cloudflare_record.app is out
         # because this job refuses web-1, so the apex A record must NOT move — any positive
         # action on it is an out-of-scope abort, not a permitted side effect. The four
@@ -3729,7 +3735,7 @@ jobs:
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
             echo ""
-            echo "Scoped \`-replace\` of the host plus its private NIC, its workspaces volume attachment and the fleet firewall re-attachment, on a digest-pinned image. The workspaces volume, the LUKS volume and the LUKS passphrase were preserved by OMISSION from the \`-target\` set — an untargeted resource cannot be planned for destroy. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
+            echo "Scoped \`-replace\` of the host plus its private NIC, its workspaces volume attachment and the fleet firewall re-attachment, on a digest-pinned image. The workspaces volume, the LUKS volume and the LUKS passphrase were all kept OUT of the \`-target\` set. The workspaces volume is still in the plan graph as a no-op (\`-target\` prunes dependents, not dependencies) and is held by \`prevent_destroy\` plus two gate arms; the LUKS volume and passphrase are outside the graph entirely. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
             echo ""
             echo "**This host's heartbeat coverage is unchanged by this dispatch.** Its two Better Stack heartbeats already exist and are not in this job's \`-target\` set; if they are still \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured), the arming step lives in the \`apply\` job. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
           } >> "$GITHUB_STEP_SUMMARY"
