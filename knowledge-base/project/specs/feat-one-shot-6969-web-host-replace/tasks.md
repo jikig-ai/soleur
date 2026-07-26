@@ -64,12 +64,12 @@ Lane: `cross-domain`. Brand-survival threshold: `single-user incident`.
 
 ## Phase 5 — Verification
 
-- [ ] 5.1 `bash tests/scripts/test-web-host-replace-gate.sh`
-- [ ] 5.2 `bun test plugins/soleur/test/terraform-target-parity.test.ts`
-- [ ] 5.3 `bash apps/web-platform/infra/run-registered-suites.sh` (authoritative for infra)
-- [ ] 5.4 `bash scripts/test-all.sh`
-- [ ] 5.5 `bash scripts/check-adr-ordinals.sh`
-- [ ] 5.6 `bash .github/scripts/validate-infra-templates.sh apps/web-platform/infra`
+- [x] 5.1 `bash tests/scripts/test-web-host-replace-gate.sh`
+- [x] 5.2 `bun test plugins/soleur/test/terraform-target-parity.test.ts`
+- [x] 5.3 `bash apps/web-platform/infra/run-registered-suites.sh` (authoritative for infra)
+- [x] 5.4 `bash scripts/test-all.sh`
+- [x] 5.5 `bash scripts/check-adr-ordinals.sh`
+- [x] 5.6 `bash .github/scripts/validate-infra-templates.sh apps/web-platform/infra`
 
 ## Phase 6 — Ship (PR body uses `Ref #6969`, never a closing keyword)
 
