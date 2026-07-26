@@ -329,7 +329,7 @@ assert "#6919 workflow maps CUTOVER_WINDOW_FROM into the step env (missed-tick a
 #
 # The 182d figure was never the double-fire invariant; it was the FUNCTION-DISCOVERY term (wide
 # enough that a quarterly cron appears at least once for the missed-tick loop). Discovery is
-# deferred to ADR-143. The double-fire invariant is only:
+# deferred to ADR-146. The double-fire invariant is only:
 #     window ⊇ [coexistence_start − 2×cron_period , now]
 # which the transition-row anchor satisfies exactly. The per-arm split below is what keeps the
 # PRE-cutover dark-host detector wide while letting op=verify narrow.

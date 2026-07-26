@@ -85,7 +85,7 @@ revision: 2
 - [x] 3.1 Amend ADR-106 `## Decision` item 4: ⊇ restatement; `2×max_cron_period` was the
       function-discovery term; recall trade recorded; open-topped invariant; `timeField: STARTED_AT`
       coupling; re-anchor the stale `:704-743` cross-reference by content.
-- [x] 3.2 Author `ADR-143-trust-anchor-for-cutover-coexistence-window.md` (`amends: ADR-106`).
+- [x] 3.2 Author `ADR-146-trust-anchor-for-cutover-coexistence-window.md` (`amends: ADR-106`).
       Ordinal is PROVISIONAL — re-verify at ship; a renumber must sweep plan + tasks + ACs.
 - [x] 3.3 Runbook `inngest-server.md` §2.6: two windows, anchor sources, `cron_period_seconds=1200`.
 - [x] 3.4 File deferred issues: (a) registry-sourced discovery w/ the second scoped query design;

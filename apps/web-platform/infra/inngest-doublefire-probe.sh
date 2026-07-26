@@ -75,7 +75,7 @@
 # where coexistence_start is the instant the dedicated host's scheduler went live. The
 # caller (cutover-inngest.yml `doublefire_from`) now derives that instant from the on-host
 # flip-FSM transition row and passes it as ?from=, so the window is exactly as wide as the
-# invariant needs and no wider. Function discovery is deferred (ADR-143); until it lands,
+# invariant needs and no wider. Function discovery is deferred (ADR-146); until it lands,
 # slow-cron missed-tick recall is reduced — a recorded trade, not a silent one.
 #
 # The window stays OPEN-TOPPED (no `until`): the post-repoint and post-rollback coexistence

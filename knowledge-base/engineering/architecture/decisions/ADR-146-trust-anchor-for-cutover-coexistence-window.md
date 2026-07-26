@@ -8,7 +8,7 @@ amends: ADR-106
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-143: Trust anchor for the Inngest cutover coexistence window
+# ADR-146: Trust anchor for the Inngest cutover coexistence window
 
 ## Status
 

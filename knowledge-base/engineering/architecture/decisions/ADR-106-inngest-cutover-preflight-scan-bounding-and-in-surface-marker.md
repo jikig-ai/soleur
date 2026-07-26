@@ -78,7 +78,7 @@ The cutover pre-flight hooks MUST bound scan **duration/cost** (in addition to A
 4. **Cost reduction — completeness BY CONSTRUCTION.** The window is **never narrowed for the
    `receivedAt`-filtered inventory scans** (`armed_reminders` / `event_names`): that `from` filter
    bounds `receivedAt`, not fire-time, so narrowing there silently drops far-future armed reminders.
-   The **doublefire** runs scan is the exception — see the ADR-143 amendment below.
+   The **doublefire** runs scan is the exception — see the ADR-146 amendment below.
    - **armed_reminders** is enumerated by a DEDICATED `eventNames:["reminder.scheduled"]` full-window
      query (small, page-ceiling-immune; precedent `inngest-enumerate-reminders.sh:82`).
    - **event_names** keeps the all-events distinct scan; the ONLY cost lever is raising `PAGE_SIZE`
@@ -91,7 +91,7 @@ The cutover pre-flight hooks MUST bound scan **duration/cost** (in addition to A
      auto-enumeration (P2-16)`) → operator re-fire → **double-fire**, the exact harm the cutover
      prevents. This is a SEPARATE invariant from the inventory "superset" one.
 
-   > **Amended by [ADR-143](./ADR-143-trust-anchor-for-cutover-coexistence-window.md) (#6178,
+   > **Amended by [ADR-146](./ADR-146-trust-anchor-for-cutover-coexistence-window.md) (#6178,
    > 2026-07-24).** The clause "the window is **never narrowed**" was retired for the doublefire scan
    > (it still holds for `armed_reminders` / `event_names`, whose `from` filter bounds `receivedAt`
    > rather than fire-time). Four corrections of record:
@@ -103,7 +103,7 @@ The cutover pre-flight hooks MUST bound scan **duration/cost** (in addition to A
    >    The missed-tick loop enumerates `[.runs[].functionID] | unique`, so a window that wide
    >    guaranteed even a quarterly cron appeared at least once. In other words that term bought
    >    function discovery, not double-fire coverage. Discovery is deferred to a
-   >    follow-up (ADR-143 § Deferred), and **until it lands, slow-cron missed-tick recall is
+   >    follow-up (ADR-146 § Deferred), and **until it lands, slow-cron missed-tick recall is
    >    reduced** — a recorded trade, not a silent one. The double-fire verdict itself is unaffected:
    >    a function that never ran in the window cannot have double-fired in it.
    > 3. **The window is OPEN-TOPPED and must stay so** — `DF_URL` carries no `until`. The

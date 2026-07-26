@@ -841,7 +841,7 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    >   count so `op=rearm`/`op=verify` enforce `function_count ≥ baseline` (a half-sync otherwise
    >   passes); without it, confirm the count matches the pre-cutover inventory manually.
 
-   #### Scan window + trust anchor (#6178, ADR-143)
+   #### Scan window + trust anchor (#6178, ADR-146)
 
    There are **two** windows, and they are deliberately different:
 

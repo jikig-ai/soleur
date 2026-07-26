@@ -137,7 +137,7 @@ Two sharp edges the correction carries:
 
 Fixed inline rather than routed as an architecture fork: the plan's *intent* — anchor on the instant
 stamped by 10.0.1.40's clock — is preserved exactly; only its literal row-selection predicate was
-wrong, because the plan's author did not know the emitter is a heartbeat. Recorded in ADR-143 § 1.
+wrong, because the plan's author did not know the emitter is a heartbeat. Recorded in ADR-146 § 1.
 
 ### Phase 0.5 DISPOSITION — `INNGEST_GQL_PAGE_SIZE=500` stays unmeasured, with the reason
 
@@ -150,7 +150,7 @@ It changes **no decision in this PR**: the fsm-anchored window fits comfortably 
 (the measured coexistence start is ~10.7 h before the measurement, ≈ 343 runs ≈ 4 pages ≈ 17 s; the
 1-day floor is 728 runs ≈ 8 pages ≈ 34 s). It would only widen headroom — and headroom only matters
 in the branch where the anchor is underivable, which this design **fails closed** on by choice.
-Carried as ADR-143 § Deferred 4.
+Carried as ADR-146 § Deferred 4.
 
 ### UNKNOWN — resolved by Phase 0 above; kept for the record
 
@@ -304,7 +304,7 @@ forward fix. Delete trigger: AC-V4 satisfied (`exactly-once VERIFIED`, non-vacuo
 - Note it does not disturb the `## Considered Options` "narrow the eventsV2 window" rejection,
   which concerns the *inventory* scan, not the *runs* scan.
 
-**New `ADR-143` (`amends: ADR-106`)** — *Trust anchor for the cutover coexistence window*.
+**New `ADR-146` (`amends: ADR-106`)** — *Trust anchor for the cutover coexistence window*.
 Moving the safety bound from an operator-typed repo variable to the Better Stack flip-FSM row is a
 **source-of-truth change**, not a restatement: it introduces a new trust boundary and a new
 failure mode (retention miss). ADR-106 is scoped to scan bounding + abandon-safety + markers;
@@ -382,7 +382,7 @@ wrong instant" in a single event.
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-143-trust-anchor-for-cutover-coexistence-window.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-146-trust-anchor-for-cutover-coexistence-window.md`
 
 ## Implementation Phases
 
@@ -472,7 +472,7 @@ naming why (the post-repoint and post-rollback regions lie after `CUTOVER_WINDOW
 
 ### Phase 3 — Docs + deferred work
 
-3.1 Amend ADR-106 item 4; author ADR-143 (§ Architecture Decision).
+3.1 Amend ADR-106 item 4; author ADR-146 (§ Architecture Decision).
 3.2 Runbook §2.6: the two windows, the anchor sources, and `cron_period_seconds=1200`.
 3.3 File the deferred issues (§ Deferred work).
 
@@ -551,7 +551,7 @@ Every criterion carries its **measured baseline on `main`**, so none can pass on
   `grep -c 'function discovery' ADR-106-*.md` ≥ 1 — **and** the preservation check
   `grep -c 'SEPARATE invariant'` ≥ 1 still holds. *(Baselines: 0 and 1. v1 asserted only the
   preservation half, which passes on an untouched file.)*
-- **AC10** `ADR-143-*.md` exists and `grep -c 'amends: ADR-106'` ≥ 1. *(Baseline: file absent.)*
+- **AC10** `ADR-146-*.md` exists and `grep -c 'amends: ADR-106'` ≥ 1. *(Baseline: file absent.)*
 - **AC11** PR body uses `Ref #6178`, not `Closes` — the probe is delivered *by* the merge, so the
   verifying run cannot precede it.
 
@@ -615,7 +615,7 @@ persistent store and no new cross-component connection.
 | FSM row unavailable (Better Stack retention) | Fall through to the **widest** window, never narrower; `::warning::` names `anchor_source=floor`. |
 | Narrowed window still not exhaustible | Phase 0 measures before merging; page-1 gate aborts in ~2 s with computed remediation. |
 | `DF_FROM` empty → silent 365-day probe default | Fail-closed regex assertion (Phase 2.3) — the reachable failure v1 left open. |
-| Fallback stops covering as the cutover ages (window is open-topped, cost grows with wall-clock) | Recorded as a known property; FSM anchor is age-independent. Named in ADR-143. |
+| Fallback stops covering as the cutover ages (window is open-topped, cost grows with wall-clock) | Recorded as a known property; FSM anchor is age-independent. Named in ADR-146. |
 | Dark-host detector silently narrowed | Per-arm fallback: `op=doublefire-probe` keeps 200 d, asserted in the workflow test. |
 | Guard/harness vacuous | AC6 requires demonstrating the harness **fails** on a mutated function. |
 
