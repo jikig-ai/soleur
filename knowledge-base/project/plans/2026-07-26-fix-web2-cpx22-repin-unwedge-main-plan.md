@@ -104,7 +104,21 @@ here (see Alternatives Considered).
 EUR 5.49) has Hetzner stock". Neither has stock in any EU DC. Correct to state that the registry is
 **grandfathered** on `cx23` and cannot be rebuilt on it.
 
-2.2 `apps/web-platform/infra/cloud-init-registry.yml:731` — same claim, same correction.
+2.2 ~~`apps/web-platform/infra/cloud-init-registry.yml:731` — same claim, same correction.~~
+**DROPPED 2026-07-26 after measurement — do not reinstate.** `hcloud_server.registry` carries
+`user_data = base64gzip(templatefile("cloud-init-registry.yml", …))` and **deliberately has NO
+`lifecycle.ignore_changes = [user_data]`** (the rationale is written at the resource: omitting it
+"preserves a clean replace-to-reprovision path"). So *any* edit to that file — including a
+pure comment — re-renders `user_data` and plans a **replace** of the live registry, which sits on
+the now-unorderable `cx23`: the destroy would succeed and the create would fail
+`resource_unavailable`, stranding the registry. That is the #6393 shape the stock preflight exists
+to prevent. Measured attribution: with a pristine `cloud-init-registry.yml` the registry *already*
+plans `delete,create` / `replace_because_cannot_update` (driven by the new
+`random_password.registry_luks` + `doppler_secret.registry_luks_key` that `user_data` references —
+the #6929 LUKS-recut vehicle shipped unfired), so this edit was not the *cause* of a replace, only
+a redundant contributor to the same diff. It buys nothing the `zot-registry.tf` comment (2.1) does
+not already say, on a file where a comment is a live-host input. Keep registry stock corrections in
+`.tf` comments only.
 
 2.3 `var.registry_server_type` description + comments (`variables.tf:152-184`) — the stock
 sub-claims only. **Leave `default = "cx23"` exactly as it is**: changing it is a host replace, and
@@ -223,9 +237,18 @@ is why it was deliberately left open by the birth-path PR.
       `test-all.sh`). Assert specifically that `tests/scripts/test-stock-preflight-gate.sh`,
       `tests/scripts/test-web-host-birth-gate.sh`, and
       `tests/scripts/test-destroy-guard-counter-web-platform.sh` pass.
-- [ ] AC10 — `terraform validate` passes, and a `terraform plan` shows `hcloud_server.web["web-2"]`
-      as a **create** with `server_type = "cpx22"`, **`0 to destroy`**, and **no** create/replace of
-      `hcloud_server.registry`, `.inngest`, `.grok_dogfood`, `.git_data`, or `.web["web-1"]`.
+- [ ] AC10 — `terraform validate` passes, and the **merge-path-scoped** plan (the 113 `-target`s the
+      `on: push` apply step uses, NOT an unscoped root plan — see Sharp Edges) shows
+      `hcloud_server.web["web-2"]` as a **create** with `server_type = "cpx22"`,
+      `hcloud_server.web["web-1"]` as **no-op**, `0 to destroy`, and no other `hcloud_server` at all.
+      Score it with the repo's own filter, not the `Plan:` summary line:
+      `jq -f tests/scripts/lib/destroy-guard-filter-web-platform.jq <plan.json>` must report
+      `host_creates: 1` (web-2 only), `resource_deletes: 0`, `nested_deletes: 0`,
+      `reboot_updates: 0`.
+      **MEASURED 2026-07-26:** exactly that — `Plan: 8 to add, 1 to change, 0 to destroy`;
+      `host_creates: 1`; the only two hosts in the plan are web-1 (no-op) and web-2 (create, cpx22).
+      This is also the AC17 pre-check: web-2 is the **sole** `host_creates` source on the merge
+      path, so its birth takes the counter to 0 and clears the HALT.
 - [ ] AC11 — PR body uses **`Closes #6966`** and **`Ref #6730`** (not `Closes #6730`): #6730's
       closure is a post-merge dispatch outcome, and `Closes` would auto-close it at merge before the
       remediation runs (`wg-use-closes-n-in-pr-body-not-title-to`, ops-remediation carve-out).
@@ -528,6 +551,25 @@ single keyword grep):
 
 ## Sharp Edges
 
+- **A comment in a cloud-init template is a live-host input, not documentation.** Any host whose
+  `user_data` is a `templatefile()` of a cloud-init YAML and which lacks
+  `lifecycle.ignore_changes = [user_data]` will plan a **replace** on a pure comment edit to that
+  file. `hcloud_server.registry` is exactly that shape, by deliberate design, and its type (`cx23`)
+  is no longer orderable — so a comment edit points at a destroy-then-failed-create. Before editing
+  any `cloud-init-*.yml`, check the consuming resource's `lifecycle` block; if there is no
+  `ignore_changes = [user_data]`, put the prose in the `.tf` instead. (web hosts are the opposite
+  case: `hcloud_server.web` **does** carry `ignore_changes = [user_data]`, which is why
+  `cloud-init.yml` edits are safe there and also why they never reach an already-booted web host.)
+- **Score the tripwire on the merge-path-scoped plan, never the unscoped root plan.** An unscoped
+  `terraform plan` on this root legitimately reports `46 to add, 5 to change, 9 to destroy` —
+  pre-existing drift including same-type replaces of `registry`, `inngest` and `grok_dogfood`, none
+  of which is target-reachable from the `on: push` apply step's 113 `-target`s. Reading "9 to
+  destroy" as this PR's blast radius is a false alarm; reading "0 to destroy" from an unscoped plan
+  would be a false negative. Reproduce the exact target list and score it with
+  `tests/scripts/lib/destroy-guard-filter-web-platform.jq`. Note `host_creates` counts any
+  `hcloud_server` whose actions contain `create` — which **includes** the `create` half of a
+  `["delete","create"]` replace — so a replace that becomes target-reachable would also HALT the
+  merge path.
 - **Re-measure before the dispatch, every time.** Stock moves on an hours timescale. Read
   `.server_types.available`, never `.supported` (24 per EU DC — a gate built on it passes the live
   trap), and never `hcloud server-type list`, which reports the supported set: on 2026-07-15 it said
