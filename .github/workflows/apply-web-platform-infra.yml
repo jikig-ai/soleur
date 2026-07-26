@@ -3392,7 +3392,7 @@ jobs:
           # A MISSING host_name matches (an image predating #6969 emits none, and dropping those
           # events would make this gate blind rather than precise); a PRESENT-but-different one
           # does not. So the filter can only ever exclude events provably from another host.
-          HOSTSEL='([ (.tags // [])[]? | select(.key=="host_name") | .value ][0]) as $hn | ($hn == null or $hn == "" or $hn == $eh)'
+          JQ_HOSTDEF='def hostok($eh): ([ (.tags // [])[]? | select(.key=="host_name") | .value ][0]) as $hn | ($hn == null or $hn == "" or $hn == $eh);'
           TERMINAL=""
           LAST_STAGE=""
           LAST_DETAIL=""
@@ -3421,34 +3421,36 @@ jobs:
             TOTAL=$(echo "$RESP" | jq 'length' 2>/dev/null || echo 0)
             # (#6969) host-scoped selection, and carry the detail/host_name alongside the stage —
             # the whole point of the new channel is that the RUN can name the cause, so these
-            # must be SELECTED here, not merely printed in the trail below.
-            LAST_STAGE=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "
-              [ .[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL)
-                    | ([ (.tags // [])[]? | select(.key==\"stage\") | .value ][0] // \"?\") ][0] // \"\"" 2>/dev/null || echo "")
-            LAST_DETAIL=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "
-              [ .[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL)
-                    | ([ (.tags // [])[]? | select(.key==\"detail\") | .value ][0] // \"\") ][0] // \"\"" 2>/dev/null || echo "")
-            LAST_HOST=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "
-              [ .[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL)
-                    | ([ (.tags // [])[]? | select(.key==\"host_name\") | .value ][0] // \"\") ][0] // \"\"" 2>/dev/null || echo "")
+            # must be SELECTED here, not merely printed in the trail below. The jq programs stay
+            # SINGLE-quoted (host matching rides in a concatenated `def`) so the `test($re)`
+            # literal the observability suite's AC16 pins stays byte-identical.
+            LAST_STAGE=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
+              [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
+                    | ([ (.tags // [])[]? | select(.key=="stage") | .value ][0] // "?") ][0] // ""' 2>/dev/null || echo "")
+            LAST_DETAIL=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
+              [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
+                    | ([ (.tags // [])[]? | select(.key=="detail") | .value ][0] // "") ][0] // ""' 2>/dev/null || echo "")
+            LAST_HOST=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
+              [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
+                    | ([ (.tags // [])[]? | select(.key=="host_name") | .value ][0] // "") ][0] // ""' 2>/dev/null || echo "")
             # A retry that SUCCEEDED still names a real fault; without this its cause is buried
             # in a green run's collapsed summary and is seen by no one.
-            if echo "$RESP" | jq -e --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "
-              [ .[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL)
-                    | select([ (.tags // [])[]? | select(.key==\"stage\") | .value ][0] == \"doppler_retry\") ] | length > 0" >/dev/null 2>&1; then
+            if echo "$RESP" | jq -e --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
+              [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
+                    | select([ (.tags // [])[]? | select(.key=="stage") | .value ][0] == "doppler_retry") ] | length > 0' >/dev/null 2>&1; then
               RETRIED="yes"
             fi
             # Terminal = the host finished, or died. Either ends the wait; only one is good.
             if [[ "$LAST_STAGE" == "cloud_init_complete" ]]; then TERMINAL="complete"; break; fi
-            if echo "$RESP" | jq -e --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "[.[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL) | select((.tags // [])[]? | select(.key==\"level\") | .value == \"fatal\")] | length > 0" >/dev/null 2>&1; then
-              FATAL_STAGE=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "
-                [ .[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL)
-                      | select((.tags // [])[]? | select(.key==\"level\") | .value == \"fatal\")
-                      | ([ (.tags // [])[]? | select(.key==\"stage\") | .value ][0] // \"?\") ][0] // \"\"" 2>/dev/null || echo "")
-              FATAL_DETAIL=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "
-                [ .[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL)
-                      | select((.tags // [])[]? | select(.key==\"level\") | .value == \"fatal\")
-                      | ([ (.tags // [])[]? | select(.key==\"detail\") | .value ][0] // \"\") ][0] // \"\"" 2>/dev/null || echo "")
+            if echo "$RESP" | jq -e --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'[.[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select((.tags // [])[]? | select(.key=="level") | .value == "fatal")] | length > 0' >/dev/null 2>&1; then
+              FATAL_STAGE=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
+                [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
+                      | select((.tags // [])[]? | select(.key=="level") | .value == "fatal")
+                      | ([ (.tags // [])[]? | select(.key=="stage") | .value ][0] // "?") ][0] // ""' 2>/dev/null || echo "")
+              FATAL_DETAIL=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
+                [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
+                      | select((.tags // [])[]? | select(.key=="level") | .value == "fatal")
+                      | ([ (.tags // [])[]? | select(.key=="detail") | .value ][0] // "") ][0] // ""' 2>/dev/null || echo "")
               TERMINAL="fatal"; break
             fi
             if (( SECONDS >= DEADLINE )); then TERMINAL="timeout"; break; fi
@@ -3460,13 +3462,14 @@ jobs:
             fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
           if [[ -n "$LAST_STAGE" ]]; then
-            echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "
-              [.[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL)] | .[0:8][]
-              | ( [ (.tags // [])[]? | select(.key==\"stage\") | .value ][0] // \"?\" ) as \$stage
-              | ( [ (.tags // [])[]? | select(.key==\"host_name\") | .value ][0] // \"?\" ) as \$hn
-              | ( [ (.tags // [])[]? | select(.key==\"detail\") | .value ][0] // \"\" ) as \$d
-              | \"- \` \((.message // .title) // \"?\")\` — stage=\`\(\$stage)\` host=\`\(\$hn)\` (\(.dateCreated // \"?\"))\" + (if \$d == \"\" then \"\" else \"\n  - detail: \`\(\$d)\`\" end)
-            " | tee -a "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+            echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
+              [.[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))] | .[0:8][]
+              | ( [ (.tags // [])[]? | select(.key=="stage") | .value ][0] // "?" ) as $stage
+              | ( [ (.tags // [])[]? | select(.key=="host_name") | .value ][0] // "?" ) as $hn
+              | ( [ (.tags // [])[]? | select(.key=="detail") | .value ][0] // "" ) as $d
+              | "- `\((.message // .title) // "?")` — stage=`\($stage)` host=`\($hn)` (\(.dateCreated // "?"))"
+                + (if $d == "" then "" else "\n  - detail: `\($d)`" end)
+            ' | tee -a "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           fi
           case "$TERMINAL" in
             complete)

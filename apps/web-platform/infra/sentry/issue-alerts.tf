@@ -1617,7 +1617,11 @@ resource "sentry_issue_alert" "zot_mirror_fallback_rate" {
 # the SAFE direction (never a miss); a fatal terminal-block boot is always worth paging.
 #
 # Distinct `frequency = 24` avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-23,30,60-62).
-# Events carry only stage/host_id/region tags — no user content.
+# Events carry stage/host_id/region/host_name tags plus a `detail` tag (#6969, ADR-147). `detail`
+# is the failing boot stage's own stderr — machine output from a first-booting host, never user
+# or tenant content. It is scrubbed for token-shaped strings, stripped to printable ASCII and
+# byte-capped at 180 before emit; stdout (which carries the prd secret set) is structurally never
+# routed into it. host_name is the TF-injected server name, not a user identifier.
 resource "sentry_issue_alert" "web_terminal_boot_fatal" {
   organization = var.sentry_org
   project      = data.sentry_project.web_platform.slug
@@ -1666,8 +1670,9 @@ resource "sentry_issue_alert" "web_terminal_boot_fatal" {
     },
   ]
   # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no ownership rule
-  # on this project → falls through to ActiveMembers, paging the solo founder. Events carry only
-  # stage/host_id/region — no cross-tenant content.
+  # on this project → falls through to ActiveMembers, paging the solo founder. Events carry
+  # stage/host_id/region/host_name plus a scrubbed, ASCII-only, 180-byte-capped `detail` tag
+  # (#6969, ADR-147) — boot-process stderr, no cross-tenant content.
   actions_v2 = [
     {
       notify_email = {
@@ -1736,7 +1741,9 @@ resource "sentry_issue_alert" "web_private_nic_boot_gate" {
   ]
   # N=1 accepted risk, mirroring every sibling apply-created rule: IssueOwners has no ownership
   # rule on this project → falls through to ActiveMembers, paging the solo founder. Events carry
-  # only stage/host_id/region — no cross-tenant content, and never the expected IP.
+  # stage/host_id/region/host_name — no cross-tenant content, and never the expected IP. These
+  # stages share the `soleur-boot-emit` emitter, so a `detail` tag is present on the payload too
+  # (#6969, ADR-147); it is EMPTY for these stages, which wire no detail producer.
   actions_v2 = [
     {
       notify_email = {

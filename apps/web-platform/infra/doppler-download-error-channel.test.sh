@@ -627,14 +627,17 @@ if [ ! -f "$WF" ]; then
   no "AC-M0: could not locate apply-web-platform-infra.yml"
 else
   ok "AC-M0: located the birth-path workflow"
-  # Pull the host-selection filter out of the workflow itself (single source — a copy here
+  # Pull the host-matching jq function out of the workflow itself (single source — a copy here
   # would drift and this suite would then be verifying its own copy, not the shipped gate).
-  HOSTSEL_WF="$(grep -F "HOSTSEL='" "$WF" | head -1 | sed -e "s/^[[:space:]]*HOSTSEL='//" -e "s/'$//")"
-  if [ -n "$HOSTSEL_WF" ]; then
-    ok "AC-M1: extracted HOSTSEL from the shipped workflow"
+  # The workflow defines it as a jq `def` so its jq programs can stay single-quoted, which is
+  # what keeps the `test($re)` literal that the observability suite's AC16 pins byte-identical.
+  HOSTDEF_WF="$(grep -F "JQ_HOSTDEF='" "$WF" | head -1 | sed -e "s/^[[:space:]]*JQ_HOSTDEF='//" -e "s/'$//")"
+  if [ -n "$HOSTDEF_WF" ]; then
+    ok "AC-M1: extracted the host-matching jq def from the shipped workflow"
   else
-    no "AC-M1: could not extract HOSTSEL from the workflow"
+    no "AC-M1: could not extract JQ_HOSTDEF from the workflow"
   fi
+  HOSTSEL_WF='hostok($eh)'
   fx="$(mktemp -t ddl-fx.XXXXXXXX.json)"
   cat > "$fx" <<'FIXEOF'
 [
@@ -655,10 +658,10 @@ else
 FIXEOF
   MSG_RE_T='soleur-cloud-init boot stage'
   EH='soleur-web-2'
-  m_stage="$(jq -r --arg re "$MSG_RE_T" --arg eh "$EH" "
+  m_stage="$(jq -r --arg re "$MSG_RE_T" --arg eh "$EH" "$HOSTDEF_WF
     [ .[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL_WF)
           | ([ (.tags // [])[]? | select(.key==\"stage\") | .value ][0] // \"?\") ][0] // \"\"" < "$fx" 2>/dev/null)"
-  m_detail="$(jq -r --arg re "$MSG_RE_T" --arg eh "$EH" "
+  m_detail="$(jq -r --arg re "$MSG_RE_T" --arg eh "$EH" "$HOSTDEF_WF
     [ .[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL_WF)
           | ([ (.tags // [])[]? | select(.key==\"detail\") | .value ][0] // \"\") ][0] // \"\"" < "$fx" 2>/dev/null)"
   if [ "$m_stage" = "doppler_download" ]; then
@@ -673,7 +676,7 @@ FIXEOF
   fi
   # HOST SCOPING: the web-1 event must NOT be selected when web-2 is the host under test. This
   # is the ambiguity that forced a Hetzner API lookup during the #6969 investigation.
-  m_other="$(jq -r --arg re "$MSG_RE_T" --arg eh "soleur-web-9" "
+  m_other="$(jq -r --arg re "$MSG_RE_T" --arg eh "soleur-web-9" "$HOSTDEF_WF
     [ .[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL_WF)
           | ([ (.tags // [])[]? | select(.key==\"stage\") | .value ][0] // \"?\") ][0] // \"\"" < "$fx" 2>/dev/null)"
   if [ "$m_other" = "docker_run" ]; then
@@ -682,7 +685,7 @@ FIXEOF
     no "AC-M4: host scoping returned '$m_other', expected only the untagged legacy event 'docker_run'"
   fi
   # Retry detection on an otherwise-green birth.
-  if jq -e --arg re "$MSG_RE_T" --arg eh "$EH" "
+  if jq -e --arg re "$MSG_RE_T" --arg eh "$EH" "$HOSTDEF_WF
     [ .[] | select(((.message // .title) // \"\") | test(\$re)) | select($HOSTSEL_WF)
           | select([ (.tags // [])[]? | select(.key==\"stage\") | .value ][0] == \"doppler_retry\") ] | length > 0" < "$fx" >/dev/null 2>&1; then
     ok "AC-M5: the gate detects a doppler_retry breadcrumb (::warning:: on a green birth)"
@@ -697,7 +700,7 @@ FIXEOF
   # Anchored on the SELECTOR construct, not the bare token: the token also appears in the two
   # operator-facing echo strings, so a presence-grep stays green against a selector neutered to
   # `select(false)` — detection dead, messages intact, nobody the wiser.
-  if grep -qF '.value ][0] == \"doppler_retry\"' "$WF"; then
+  if grep -qF '.value ][0] == "doppler_retry"' "$WF"; then
     ok "AC-M7a: the workflow's jq actually compares stage to doppler_retry"
   else
     no "AC-M7a: the doppler_retry SELECTOR is gone/neutered — green-run retries go unreported"
