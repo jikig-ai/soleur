@@ -103,12 +103,46 @@ variable "web_hosts" {
   # €8.49/mo standing by for a cutover with no consumer). This web-2 has a CONSUMER: it proves
   # fresh-boot readiness (#6459), is the cattle-host template Phase 4's disposability proof
   # rebuilds, and de-risks the Phase-5 web-1 de-pet. Born in hel1 (inside the location-scoped
-  # web_spread placement group, server.tf:134) on cx23 (2c/4g x86, ~€5.49/mo) — SIZED TO MEASURED
-  # web-1 usage, not web-1's over-provisioned cx33 shape: 30-day Better Stack host_metrics show
-  # web-1 peaks ~1.5 GB RAM / 0.48 load15 (ADR-143 D1), so 4 GB / 2 vCPU is ample. web-1's own
-  # cx33 (8g) is unorderable in all 3 EU DCs (ADR-143 live stock probe 2026-07-25); cx23 is the
-  # cheapest orderable 4g x86 in hel1 (the registry runs it there), even cheaper than web-1's
-  # cx33. Resize to a serving shape at the GA flip only if web-2's OWN metrics warrant (a
+  # web_spread placement group, server.tf:134) on **cpx22** (2c/4g x86, ~€19.49/mo net) — SIZED TO
+  # MEASURED web-1 usage, not web-1's over-provisioned cx33 shape: 30-day Better Stack host_metrics
+  # show web-1 peaks ~1.5 GB RAM / 0.48 load15 (ADR-143 D1), so 4 GB / 2 vCPU is ample.
+  #
+  # TYPE REPINNED cx23 → cpx22 2026-07-26 (#6966), FORCED BY STOCK, not by sizing. cpx22 matches
+  # cx23 on cores and RAM exactly (2c/4g) and doubles local disk (40→80 GB), so the ADR-143 D1
+  # sizing rationale above is UNCHANGED — this is a price change (+€14.00/mo net). The prior
+  # comment here claimed "cx23 is the cheapest orderable 4g x86 in hel1"; that is now FALSE and is
+  # deleted rather than left standing as stale justification. LIVE PROBE 2026-07-26 ~18:05 UTC
+  # (/v1/datacenters .server_types.available): the ENTIRE cx line (incl. cx23 AND web-1's cx33) and
+  # the ENTIRE cax ARM line are orderable in 0 of 3 EU DCs; the orderable set is identical in
+  # nbg1-dc3/hel1-dc2/fsn1-dc14 = cpx12 cpx22 cpx32 cpx42 cpx52 cpx62 ccx13 ccx23 ccx33 ccx43
+  # ccx53 ccx63. No `deprecation` block is set on any of them — Hetzner simply stopped selling them
+  # in our region. cpx22 is the cheapest ORDERABLE like-for-like (2c/4g) x86; cpx12 (1c/2g,
+  # ~€11.49) is the only cheaper orderable option and was rejected on headroom — 1.5 GB measured
+  # peak on a 2 GB box is 75% with ~0 headroom, and its 1 vCPU would force a reboot-forcing resize
+  # at the GA flip (i.e. a second birth cycle through the gated dispatch). Recorded as an ADR-143
+  # addendum (2026-07-26), not a new ADR: ADR-143 already anticipated a shape change here.
+  #
+  # MEASUREMENT TRAP — read `.server_types.available` (orderable NOW), NEVER `.supported` (what a
+  # DC *can* host, 24 per EU DC): a gate built on `.supported` passes this trap silently. The
+  # `hcloud` CLI has the SAME trap (`hcloud server-type list -o columns=name,location` reports the
+  # SUPPORTED set — on 2026-07-15 it said `cx33 -> fsn1,nbg1,hel1` while cx33 was orderable
+  # NOWHERE). Full writeup at the head of tests/scripts/lib/stock-preflight-gate.sh. Stock moves on
+  # an HOURS timescale, so re-probe before any apply that CREATES a host.
+  #
+  # ARCH: cpx22 is x86/amd64, same architecture as cx23 (only the CPU vendor differs, Intel→AMD),
+  # so nothing downstream changes — there is no arch derivation for web hosts at all (server.tf
+  # passes each.value.server_type straight through, unlike var.registry_server_type and
+  # var.inngest_server_type which derive arm64/amd64). NOTE the latent constraint that creates: a
+  # web host can never be born on the cax ARM line regardless of stock, because cloud-init.yml
+  # PINS amd64 in three places (Doppler CLI, the Docker apt `arch=amd64` line, the webhook binary).
+  #
+  # DISASTER-RECOVERY GAP (2026-07-26, feeds #6460): THREE running hosts sit on types that can no
+  # longer be ordered — web-1/soleur-web-platform (cx33), soleur-grok-dogfood (cx33) and
+  # soleur-registry (cx23). They run fine, but NONE of them can be REBUILT on its current type: a
+  # rebuild of any of them is a TYPE DECISION, not a recreate. Nothing catches "a declared type
+  # left the orderable set" until an apply; that periodic audit is #6460.
+  #
+  # Resize to a serving shape at the GA flip only if web-2's OWN metrics warrant (a
   # server_type change is a reboot-forcing in-place update — reboot_updates guard). It reuses
   # the freed 10.0.1.11 address. web-2 is OUT-OF-BAND (serving-weight 0, ADR-143 D2): NOT in the
   # ingress rotation (dns.tf app record stays web-1-only; the single tunnel connector stays
@@ -118,7 +152,7 @@ variable "web_hosts" {
   # Keys are IMMUTABLE (moved-block for_each; never rename web-1 — 29 refs / 6 files, ADR-143 D4).
   default = {
     "web-1" = { location = "hel1", private_ip = "10.0.1.10" }
-    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cx23" }
+    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }
   }
   validation {
     condition     = alltrue([for h in values(var.web_hosts) : contains(["nbg1", "fsn1", "hel1"], h.location)])
@@ -170,14 +204,29 @@ variable "registry_server_type" {
   # an in-memory blob index. Projected at the current ~9.4 GB store: ~50 MB, ~1.6 % of the 3072m cap.
   #
   # RESIDUAL RISK, stated honestly: still UNMEASURED is RSS during a boot scan of a LARGE store
-  # (every sampled boot so far scanned a near-empty one). The cx23 recreate IS that measurement.
+  # (every sampled boot so far scanned a near-empty one). The cx23 recreate WAS to be that
+  # measurement — but it can no longer happen on cx23 (see the STOCK REALITY note below), so the
+  # large-store boot-scan RSS stays unmeasured until a recreate on an orderable type.
   # It is bounded and reversible: on a 4 GB host the 3072m cap now BINDS (it was a hardcoded 7168m
   # with no edge to this var until #6508 — on 4 GB that could never bind, which is #6288's real
   # uncapped condition; that is fixed). So a wrong call yields a CONTAINED container-OOM
   # (zot_memory_capped=true, zot_oom_kills>0 — both self-reported and gated) plus GHCR fallback,
-  # NOT #6288's host-OOM restart-loop. Revert path: back to cx33 (8 GB, ~€8.49/mo) if hel1 stock
-  # allows, else cpx32 (8 GB, ~€35/mo, the always-available 8 GB fallback), then re-dispatch.
-  # #6288's exact failure mode (uncapped zot on a 4 GB host) is now structurally impossible.
+  # NOT #6288's host-OOM restart-loop. Revert path: cpx32 (8 GB, ~€35.49/mo net) — the cx33 arm of
+  # this revert path is CLOSED (see STOCK REALITY below), so cpx32 is no longer a fallback but the
+  # only orderable 8 GB option. Then re-dispatch. #6288's exact failure mode (uncapped zot on a
+  # 4 GB host) is now structurally impossible.
+  #
+  # STOCK REALITY (live probe 2026-07-26, #6966) — the shapes named in the description above are
+  # HISTORICAL, not a menu. `cx23` (this default) and `cx33` are both orderable in **0 of 3** EU
+  # DCs, as is the entire `cax` ARM line; the orderable set is `cpx12 cpx22 cpx32 cpx42 cpx52
+  # cpx62 ccx13 ccx23 ccx33 ccx43 ccx53 ccx63`, identical in nbg1-dc3/hel1-dc2/fsn1-dc14. Read
+  # `.server_types.available`, never `.supported`, and never the `hcloud` CLI's location column —
+  # both report the SUPPORTED set (tests/scripts/lib/stock-preflight-gate.sh, head).
+  # CONSEQUENCE: soleur-registry is GRANDFATHERED on cx23. It runs fine, but it CANNOT BE REBUILT
+  # on this type — any recreate is a TYPE DECISION and a cost change, not a like-for-like recreate.
+  # This default is deliberately NOT changed here (#6966 was scoped to unwedging web-2, and a
+  # registry_server_type change is a host REPLACE of a live registry); the DR remediation for all
+  # three grandfathered hosts belongs to #6460.
   #
   # A nonexistent type fails at PLAN via data.hcloud_server_type.registry (#6508) instead of
   # destroying the host first — that was #6288's cx32 disaster. registry_location stays hel1.
