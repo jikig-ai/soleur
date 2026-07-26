@@ -117,7 +117,12 @@ printf '\n=== web-host-replace-gate ===\n\n'
 # ── The one plan that must PASS ───────────────────────────────────────────────────
 mk_plan "$TMP/happy.json" "$(happy_changes web-2)"
 check "the requested host's scoped replace => PASS" 0 "PASS" "$TMP/happy.json" "web-2"
-check "the PASS line names the host it authorized" 0 'web-2' "$TMP/happy.json" "web-2"
+# ANCHORED ON THE PASS LINE'S OWN PHRASING, not the bare key: the status line printed on every
+# invocation already contains `requested=web-2` and `replaced_addr=hcloud_server.web["web-2"]`,
+# so a 'web-2' needle here would be satisfied by a run in which the PASS line said nothing
+# about which host it authorized. Same defect as the passphrase anchor below, found by the
+# same audit (cq-assert-anchor-not-bare-token).
+check "the PASS line names the host it authorized" 0 'replace of hcloud_server.web["web-2"] permitted' "$TMP/happy.json" "web-2"
 
 # A key that is neither web-1 nor web-2 must work identically — the gate is generic over
 # var.web_hosts keys, not hardcoded to the host that motivated it (#6969 was web-2).
