@@ -367,6 +367,7 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > the change to image-bake sequencing: a host created after the apply but before `:latest`
 > carries the matching bootstrap aborts its entire runcmd at `stage=verify`.
 >
+> <!-- lint-infra-ignore start -->
 > **[Scope corrected 2026-07-20, #6575 — the hazard survives; only its scope statement changes.]**
 > This bullet previously said the coherence preflight covered **only** the web-2-recreate dispatch.
 > That scoping is gone with the dispatch job. The verifier is retained, renamed host-agnostic
@@ -374,6 +375,12 @@ and those 12 are `-target`ed by the per-PR merge apply, so main wedges.
 > host through a documented operator procedure: the `host_creates` HALT runbook now carries the
 > complete `crane digest` → preflight → `terraform apply -var image_name=<pinned>` chain. So the
 > preflight is no longer web-2-scoped and no longer callerless.
+> <!-- lint-infra-ignore end -->
+>
+> <!-- The region above DESCRIBES the operator-local birth path that exists today; it does not
+>      prescribe a new manual step. That path having no automated equivalent IS the open defect,
+>      tracked by #6730. The ignore region is the sanctioned wrapper for deferred-orchestrator
+>      prose (see hr-no-ssh-fallback-in-runbooks) — remove it when #6730 lands an automated path. -->
 >
 > **What did not change is the hazard itself.** The verifier still requires a pinned `@sha256` ref
 > while the default `var.image_name` is the mutable `:latest`, so the routine merge apply is still
