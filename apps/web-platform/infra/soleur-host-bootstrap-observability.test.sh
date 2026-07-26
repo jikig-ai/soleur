@@ -249,11 +249,11 @@ fi
 # emitted nothing" identically to a host that genuinely did. So the check runs in
 # BOTH directions: every literal in the QUERY must be emitted somewhere, and every
 # canonical emit must appear in the QUERY.
-QUERY_LINE=$(printf '%s\n' "$JOB" | grep -nE "^\s*QUERY='" | head -1 | cut -d: -f1 || true)
+QUERY_LINE=$({ grep -nE "^\s*QUERY='" <<<"$JOB" || true; } | head -1 | cut -d: -f1)
 if [ -z "$QUERY_LINE" ]; then
   no "AC8: could not locate the QUERY line in the web_host_create job"
 else
-  QUERY=$(printf '%s\n' "$JOB" | sed -n "${QUERY_LINE}p")
+  QUERY=$(sed -n "${QUERY_LINE}p" <<<"$JOB")
   for msg in \
     "soleur-hostscript-seed failed" \
     "soleur-host-bootstrap failed" \
@@ -282,12 +282,12 @@ fi
 # ── AC8b (EU data plane + always-run breadcrumb surface) ──
 # The project is EU-resident (jikigai-eu); a US sentry.io query against it returns
 # empty — indistinguishable from a silent host.
-if printf '%s\n' "$JOB" | grep -qE 'https://de\.sentry\.io/api/0/projects/'; then
+if grep -qE 'https://de\.sentry\.io/api/0/projects/' <<<"$JOB"; then
   ok "AC8b: the birth job queries the EU Sentry host (de.sentry.io)"
 else
   no "AC8b: the birth job's Sentry endpoint must be de.sentry.io (EU) — a US host returns empty"
 fi
-if printf '%s\n' "$JOB" | grep -qE 'https://sentry\.io/api/0/projects/'; then
+if grep -qE 'https://sentry\.io/api/0/projects/' <<<"$JOB"; then
   no "AC8b: the birth job must NOT query the US sentry.io host (EU-resident project)"
 else
   ok "AC8b: no US sentry.io endpoint in the birth job"
@@ -295,7 +295,7 @@ fi
 # `if: always()` is what makes a GREEN dispatch informative. Without it, "the apply
 # succeeded" and "the probe never ran" render identically, and a host that applied
 # clean but booted dark reads as a success.
-if printf '%s\n' "$JOB" | awk '/Surface fresh-host Sentry/{f=1} f&&/if: always\(\)/{print "y"; exit}' | grep -q y; then
+if [[ -n "$(awk '/Surface fresh-host Sentry/{f=1} f&&/if: always\(\)/{print "y"; exit}' <<<"$JOB")" ]]; then
   ok "AC8b: the fresh-host Sentry surface runs if: always() (a green boot still shows the probe fired)"
 else
   no "AC8b: the Sentry surface step must be if: always() (spec-flow F4)"
@@ -304,7 +304,7 @@ fi
 # ── AC13 (#6090 follow-up): the surfacing step sources its token from Doppler ──
 # The GitHub repo secret SENTRY_AUTH_TOKEN is unset, so a step reading it self-skips
 # and logs "Sentry query skipped" — the read never happens and nobody notices.
-if printf '%s\n' "$JOB" | grep -qE 'doppler secrets get SENTRY_AUTH_TOKEN .*-c prd_terraform'; then
+if grep -qE 'doppler secrets get SENTRY_AUTH_TOKEN .*-c prd_terraform' <<<"$JOB"; then
   ok "AC13: the surface step resolves SENTRY_AUTH_TOKEN from Doppler prd_terraform (not the unset repo secret)"
 else
   no "AC13: the surface step must fetch SENTRY_AUTH_TOKEN via doppler -c prd_terraform"
@@ -314,7 +314,7 @@ fi
 # Anchored on the ::error:: literal rather than the bare token `SENTRY_DSN`, which
 # also appears in this job's explanatory comments — a bare-token grep would stay
 # green against a job that only ever mentions the DSN in prose.
-if printf '%s\n' "$JOB" | grep -qF 'SENTRY_DSN is empty in Doppler prd_terraform'; then
+if grep -qF 'SENTRY_DSN is empty in Doppler prd_terraform' <<<"$JOB"; then
   ok "AC14: the birth job asserts baked SENTRY_DSN non-empty before create (pre-extraction cannot go dark)"
 else
   no "AC14: the birth job must assert SENTRY_DSN is non-empty BEFORE creating the host (an empty baked DSN is a silent pre-extraction blind spot)"
@@ -324,12 +324,12 @@ fi
 # The /projects/{org}/{proj}/events/ endpoint IGNORES the `message:` search prefix:
 # a `message:"x"` query returns 0 even for events that provably exist. Passing QUERY
 # to the endpoint therefore produces a confident, wrong "nothing was emitted".
-if printf '%s\n' "$JOB" | grep -qF 'query=${QUERY}'; then
+if grep -qF 'query=${QUERY}' <<<"$JOB"; then
   no "AC16: the surface step still passes the broken message: query to the events endpoint (returns 0)"
 else
   ok "AC16: the surface step does not pass the broken message: query to the endpoint"
 fi
-if printf '%s\n' "$JOB" | grep -qF 'MSG_RE=' && printf '%s\n' "$JOB" | grep -qF 'test($re)'; then
+if grep -qF 'MSG_RE=' <<<"$JOB" && grep -qF 'test($re)' <<<"$JOB"; then
   ok "AC16: the surface step filters recent events client-side via a regex derived from QUERY"
 else
   no "AC16: the surface step must derive MSG_RE from QUERY and filter events client-side (test(\$re))"

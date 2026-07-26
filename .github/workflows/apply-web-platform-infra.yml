@@ -3131,7 +3131,37 @@ jobs:
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
-          echo "birth gate PASSED for ${WEB_HOST_KEY}. Plan summary:"
+          # #6453 STOCK preflight. GATED rather than excluded, unlike the sibling additive
+          # path inngest-host, and the difference is the fan-out. The birth gate above proves
+          # the plan is the exact scoped birth; it cannot prove the create is FEASIBLE.
+          # terraform creates this host's dependencies FIRST — the workspaces volume and the
+          # two Better Stack heartbeats — and only then the server. So a server_type with no
+          # stock in the target DC does not fail cleanly here: it leaves a 20 GB volume
+          # attached to nothing and two registered heartbeats that will never beat and will
+          # therefore PAGE as down. That is not "recoverable, not a strand" (the inngest-host
+          # reasoning, which holds for a host with no such fan-out) — it is a false page plus
+          # a billing resource, produced by a gate we already own and can run in 2 seconds.
+          #
+          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
+          # OUTSIDE the `doppler run` wrapper above — without this read the gate would
+          # fail-closed on EVERY dispatch, and a gate that always fails is an outage, not a
+          # tripwire. Read-only; masked before any later step can echo it.
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*), and
+          # this token carries destroy authority over the whole prod fleet.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            echo "::error::web-host-create stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above for the repair path and #6463). Refusing to apply — the server create would fail AFTER its volume and heartbeats were already created, leaving a stranded volume and heartbeats that page as down."
+            exit 1
+          fi
+          echo "birth gate + stock preflight PASSED for ${WEB_HOST_KEY}. Plan summary:"
           grep -E '^Plan:' tfplan.txt || true
 
       - name: Terraform apply (web-host birth) — post-apply create proof
@@ -3146,7 +3176,7 @@ jobs:
           set -euo pipefail
           if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
-            echo "::error::terraform apply (web-host-create for ${WEB_HOST_KEY}) failed. The operation is additive, so nothing existing was destroyed; inspect the error, then re-dispatch. If a PARTIAL create landed, the next dispatch's plan will show fewer creates and the birth gate will refuse it — resolve that by targeting the remainder from the break-glass chain rather than by weakening the gate."
+            echo "::error::terraform apply (web-host-create for ${WEB_HOST_KEY}) failed. The operation is additive, so nothing existing was destroyed; inspect the error, then re-dispatch — a re-dispatch is safe and is the normal remedy. Partial-create nuance: if the failure was BEFORE the server landed (its volume/heartbeats created, server not), the retry still plans exactly one server create and the gate passes. If the SERVER landed and a later address did not, the retry plans ZERO server creates and the gate correctly refuses — that case needs the remaining addresses applied from the break-glass chain in the host_creates HALT, never a weakened gate."
             exit 1
           fi
           for ADDR in "hcloud_server.web[\"${WEB_HOST_KEY}\"]" "hcloud_server_network.web[\"${WEB_HOST_KEY}\"]"; do
