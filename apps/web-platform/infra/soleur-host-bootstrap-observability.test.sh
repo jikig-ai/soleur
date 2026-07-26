@@ -417,7 +417,12 @@ if grep -vE '^[[:space:]]*#' "$TRAIL" | grep -qE 'query=\$\{?QUERY\}?'; then
 else
   ok "AC16: the surface step does not pass the broken message: query to the endpoint"
 fi
-if grep -qF 'MSG_RE=' "$TRAIL" && grep -qF 'test($re)' "$TRAIL"; then
+# COMMENTS STRIPPED, matching what the AC16 half directly above already does. `test($re)`
+# appears in an explanatory comment inside the reader (the note about keeping the literal
+# byte-identical for this very assertion), so the bare -qF form is satisfied by the prose that
+# documents it — the assertion its own documentation satisfies (cq-assert-anchor-not-bare-token).
+if grep -vE '^[[:space:]]*#' "$TRAIL" | grep -qF 'MSG_RE=' \
+   && grep -vE '^[[:space:]]*#' "$TRAIL" | grep -qF 'test($re)'; then
   ok "AC16: the surface step filters recent events client-side via a regex derived from QUERY"
 else
   no "AC16: the surface step must derive MSG_RE from QUERY and filter events client-side (test(\$re))"
