@@ -154,7 +154,67 @@ Better Stack) and **#5914** (host-key TOFU on private-net git SSH).
 
 ## Open Questions
 
-1. **The git-data heartbeat masks across hosts — filed as #6975.** `web-probe-envwrite.sh:42`
+1. **Should git-data be born with LUKS enabled from the start, skipping the plaintext-first
+   cutover entirely?** *(Leaning yes — see below.)*
+
+   Encryption-at-rest is fully built (`git-data-luks.tf`, guest-side LUKS2, ~238-bit passphrase
+   from a least-privilege `prd_git_data` Doppler config, rated **conforming** in the
+   encryption-posture audit). But it is built as a **cutover**: `hcloud_volume.git_data` is
+   plaintext ext4 and is the source; `hcloud_volume.git_data_luks` is the target;
+   `git-data-cutover.sh` rsyncs old→fresh under a write-freeze. The plaintext volume is flagged
+   under **#6897** pending its DL-2 wipe.
+
+   That design is correct for the scenario it was written for — a Phase-2 host already holding
+   live plaintext data. **That scenario never happened.** The host has never been born and
+   `GIT_DATA_STORE_ENABLED` is absent from Doppler `prd`, so `replicateToGitData` has never run
+   and *neither* volume has ever held a byte of user data. There is nothing to migrate.
+
+   **Why born-on-LUKS looks better:**
+   - **No plaintext window ever exists** for user git history — a cleaner GDPR Art. 32 / NFR-027
+     posture than migrating *into* encryption, and it moots the #6897 plaintext-volume item for
+     this host rather than deferring a wipe.
+   - **It is not a `REPO_ROOT` change.** `git-data-cutover.sh:67` reads
+     `OLD_ROOT="${OLD_ROOT:-/mnt/git-data}"  # plaintext source AND final LUKS mount` — the LUKS
+     volume ends up mounted *at* `/mnt/git-data` post-cutover anyway, so the path is
+     device-agnostic. Born-on-LUKS is "mount the LUKS volume at `/mnt/git-data` from cloud-init
+     and skip the plaintext volume", leaving `git-data-provision.sh:34` and the
+     `core.hooksPath` fence wiring untouched.
+   - **It sidesteps #6680.** The cutover runs over the CF Tunnel SSH bridge, which reaches only
+     web-1 and not `10.0.1.20` — the blocker in downstream-chain step 4. A birth that needs no
+     cutover does not need that ingress to exist first.
+
+   **Cost, stated honestly:** `git-data-cutover.sh` + its two-pass freeze-rsync and set-identity
+   verification are already built and tested, and ADR-068's phase structure assumes the
+   plaintext-first sequence. Choosing born-on-LUKS is an **ADR-068 amendment**, not a config
+   tweak, and it gives up the plaintext volume as a rollback backstop. It also does not remove
+   the need for the cutover machinery long-term (rotation is still a full volume cutover per
+   `git-data-luks.tf`).
+
+   Belongs to the **birth** (downstream-chain step 2), not this repin. Decide before dispatching.
+
+2. **Does the read-source flip need a one-time backfill for idle workspaces?** Population of
+   git-data is **lazy and turn-driven**, not a bulk migration: `replicateToGitData` force-pushes
+   all `refs/heads/*` + `refs/tags/*` at *session end* and no-ops at flag-off. There is no
+   web-1 → git-data rsync (`git-data-cutover.sh` is entirely git-data-host-local; it SSHes to web
+   hosts only to drain them), and `git grep -E 'backfill|seed|bulk.*push'` over
+   `git-data-*.ts` returns **zero hits**.
+
+   So a workspace with no session after the flip never populates. That is harmless while
+   git-data is a **write-only replica** (the read-source flag defaults to the volume until PR C)
+   — the web volume stays the read source, so an empty repo costs nothing.
+
+   It becomes load-bearing at the **read-source flip**, because ADR-068 §(d) concedes GitHub is
+   not a complete backstop: *"`syncPush` auto-commits only `knowledge-base/**` and reroutes a
+   protected-default push to a `soleur/kb-sync` PR branch, so the agent's real commits never land
+   on origin's default branch … a fresh GitHub clone can be strictly behind the user's latest
+   tip."* git-data is authoritative for the most-recent per-user worktree tip, and today that tip
+   lives **only on web-1's volume**. An unpopulated workspace read through `fetchFromGitData`
+   would resolve from a clone that is behind.
+
+   Unresolved: whether PR C needs a one-time backfill, or whether lazy population suffices
+   because reads fall back to the volume. Not this PR's scope; flag before the read-source flip.
+
+3. **The git-data heartbeat masks across hosts — filed as #6975.** `web-probe-envwrite.sh:42`
    asserts *"git-data uses ONE shared beat today (single-host; masking moot, C3) → the KEY is
    unsuffixed"*, and line 54 writes `GIT_DATA_HEARTBEAT_URL_KEY=GIT_DATA_HEARTBEAT_URL`. That
    single-host premise is **dead** — `soleur-web-2` is live. Both hosts probe `10.0.1.20:22` and
@@ -164,16 +224,16 @@ Better Stack) and **#5914** (host-key TOFU on private-net git SSH).
    repin is a server-type decision and this is a probe-topology defect. It gates the **birth**
    (step 2 above), not this PR, because with no git-data host both probes currently fail and
    nothing is yet masked.
-2. **`terraform_data.git_data_probe_install` (`server.tf:622`) is hardcoded to
+4. **`terraform_data.git_data_probe_install` (`server.tf:622`) is hardcoded to
    `hcloud_server.web["web-1"]`**, while fresh hosts get the probe baked via
    `cloud-init`/`soleur-host-bootstrap.sh`. web-2 has the probe, but the two hosts receive it by
    different mechanisms — a drift surface. The same resource also hardcodes `web-1` inside the
    zot key suffix. Carried into #6975.
-3. **Should the remaining grandfathered hosts get D5's plan-time guard?** web-1 (`cx33`) and
+5. **Should the remaining grandfathered hosts get D5's plan-time guard?** web-1 (`cx33`) and
    grok-dogfood (`cx33`) have none; only zot-registry does. Owned by #6460.
-4. **Revert-to-ARM trigger.** D2 makes reverting to `cax11` a var flip when Ampere restocks, but
+6. **Revert-to-ARM trigger.** D2 makes reverting to `cax11` a var flip when Ampere restocks, but
    nothing watches for a restock. #6460's periodic orderability audit is the natural home.
-5. **Expense ledger row 16 (`CPX22 (web-2)`) is stale** — it reads `approved-not-billing` with
+7. **Expense ledger row 16 (`CPX22 (web-2)`) is stale** — it reads `approved-not-billing` with
    "web-2 is NOT provisioned yet", but the host is **live** (Hetzner API 2026-07-26T22:07Z; #6969
    covers its first boot). Adjacent to FR8's ledger edit; flagged, not fixed here.
 
