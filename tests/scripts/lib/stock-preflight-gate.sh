@@ -7,8 +7,9 @@
 # the membership rule would conclude an additive path is out of scope, which is how a birth
 # ships without a capacity check.
 #
-# EXTRACTED + SOURCED: the workflow's five plan steps (inngest-host-replace,
-# registry-host-replace, registry-region-migrate, git-data-host-replace, web-host-create) AND
+# EXTRACTED + SOURCED: the workflow's six plan steps (inngest-host-replace,
+# registry-host-replace, registry-region-migrate, git-data-host-replace, web-host-create,
+# web-host-replace) AND
 # tests/scripts/test-stock-preflight-gate.sh source this file and call
 # stock_preflight_gate directly, so CI runs the SAME bytes the test exercises
 # (no re-derived inline jq to drift). Mirrors the sibling *-gate.sh files in this directory.
@@ -31,7 +32,7 @@
 # menu-ack workflow_dispatch (hr-menu-option-ack-not-prod-write-auth), never a
 # commit trailer — and an ack cannot conjure stock. Matches the sibling gates
 # (inngest-host-replace, registry-host-replace, registry-region-migrate,
-# git-data-host-replace), none of which carry an override.
+# git-data-host-replace, web-host-replace), none of which carry an override.
 #
 # `available` vs `.supported` — LOAD-BEARING:
 #   /v1/datacenters exposes BOTH. `.supported` (24 per EU DC) is what a DC *can*
@@ -171,12 +172,17 @@ stock_preflight() {
   # one-click route to it is gone. It now requires the operator-local full apply per the
   # OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096).
   #
-  # WHY THE WEB-1 CLAUSE BELOW IS CONDITIONALLY WORDED: there are FIVE callers, and only one
-  # of them (#6730's web-host-create) preflights a web host. The other four —
-  # inngest-host-replace, registry-host-replace, registry-region-migrate,
+  # WHY THE WEB-1 CLAUSE BELOW IS CONDITIONALLY WORDED: there are SIX callers, and only two
+  # of them (#6730's web-host-create and #6969's web-host-replace) preflight a web host. The
+  # other four — inngest-host-replace, registry-host-replace, registry-region-migrate,
   # git-data-host-replace — never do. So the web-1 specifics stay a guarded "if this host is
   # web-1" clause rather than an unconditional claim, which would misdirect the four non-web
   # paths in the one message they read during a blocked prod recreate.
+  #
+  # NOTE web-host-replace refuses web-1 by name (it is the LUKS-pinned host), so on that
+  # caller the clause is reachable only for a NON-web-1 key. It stays conditional anyway: the
+  # condition is on the host the PLAN creates, not on the dispatch key, and the six callers
+  # do not share a key space.
   #
   # CORRECTED at #6730: this comment previously read "after #6575, NO production call site
   # preflights a web host at all. The four surviving callers are …". Both halves went false
