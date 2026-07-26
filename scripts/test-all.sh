@@ -325,6 +325,17 @@ if want_scripts; then
   run_suite "tests/scripts/registry-host-replace-gate" bash tests/scripts/test-registry-host-replace-gate.sh
   # registry-region-migrate destroy-guard (#6288; permits the registry's OWN store-volume replace across regions, forbids all out-of-scope destroys).
   run_suite "tests/scripts/registry-region-migrate-gate" bash tests/scripts/test-registry-region-migrate-gate.sh
+  # registry-luks-recut destroy-guard (#6929). The INVERSE of registry-host-replace: it REQUIRES
+  # the store volume to be replaced alongside its attachment and the host, so cloud-init meets a
+  # fresh RAW device and luksFormats it. A preserved volume is the footgun that darks the
+  # registry. Its suite also asserts the two gates DISAGREE on the same fixtures.
+  run_suite "tests/scripts/registry-luks-recut-gate" bash tests/scripts/test-registry-luks-recut-gate.sh
+  # D10 pre-destroy pull-path health gate (#6929) — refuses to destroy the zot store while the
+  # GHCR fallback that covers its absence is itself degraded. Leads with a positive control.
+  run_suite "tests/scripts/registry-pull-path-health" bash tests/scripts/test-registry-pull-path-health.sh
+  # D11 post-apply liveness poller (#6929) — requires a heartbeat TRANSITION, since the monitor
+  # reports the dead host's residual `up` for ~90s and exposes no last_ping_at.
+  run_suite "tests/scripts/registry-heartbeat-poll" bash tests/scripts/test-registry-heartbeat-poll.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
   # workspaces-luks-cutover FIRST-PROVISION destroy-guard (#6604). Permits the +create of the

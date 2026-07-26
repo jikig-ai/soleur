@@ -474,14 +474,23 @@ function stripDispatchJobs(workflowText: string): string {
   // dispatch job (uniform parity boundary; a FUTURE recut -target that is NOT an exclusion cannot
   // silently mask a per-merge miss). Its sibling workspaces_luks_cutover is left folded-in
   // historically; new dispatch jobs are stripped explicitly.
+  // registry_luks_recut (#6929): the sanctioned guest-side-LUKS recut. A dispatch-only job whose
+  // 6 -targets are the SAME registry OPERATOR_APPLIED_EXCLUSIONS as its two registry siblings, so
+  // stripping is coverage-neutral today — but strip it for the identical reason: a dispatch writer
+  // surface must never broaden the per-merge coverage anchor. NOT cosmetic: without the strip, a
+  // FUTURE registry -target that is not already an exclusion would fold into the per-merge
+  // coverage set and could silently mask a real per-merge miss.
   return stripJob(
     stripJob(
       stripJob(
         stripJob(
-          stripJob(workflowText, "inngest_host"),
-          "registry_host_replace",
+          stripJob(
+            stripJob(workflowText, "inngest_host"),
+            "registry_host_replace",
+          ),
+          "registry_region_migrate",
         ),
-        "registry_region_migrate",
+        "registry_luks_recut",
       ),
       "git_data_host_replace",
     ),
@@ -1406,5 +1415,237 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
         `github_repository_environment.${env.name} has an EMPTY reviewers.users — a zero-reviewer environment auto-approves (DP-11 F8)`,
       ).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * registry-luks-recut dispatch (#6929) — the sanctioned guest-side-LUKS recut.
+ *
+ * The load-bearing property is the ATOMIC 3-WAY `-replace`. Replacing the host alone preserves
+ * the still-plaintext store volume, so cloud-init hits the `blkid` else->FATAL arm and DARKS the
+ * registry; replacing the volume alone leaves the old host mounting a device that no longer
+ * exists. They move together or not at all.
+ */
+describe("registry-luks-recut dispatch -target/-replace set (#6929)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const jobBlock = extractJobBlock(wf, "registry_luks_recut");
+
+  test("the job exists and is dispatch-gated on its own apply_target", () => {
+    expect(jobBlock.length).toBeGreaterThan(0);
+    expect(jobBlock).toContain("inputs.apply_target == 'registry-luks-recut'");
+  });
+
+  test("-targets are exactly the registry's own 6 addresses", () => {
+    const targets = extractAllTargets(jobBlock);
+    for (const addr of REGISTRY_REPLACE_TARGETS) {
+      expect(targets.has(addr)).toBe(true);
+    }
+    expect(targets.size).toBe(REGISTRY_REPLACE_TARGETS.length);
+  });
+
+  test("every -target is an OPERATOR_APPLIED_EXCLUSION (merging applies nothing)", () => {
+    for (const addr of extractAllTargets(jobBlock)) {
+      expect(OPERATOR_APPLIED_EXCLUSIONS.has(addr)).toBe(true);
+    }
+  });
+
+  test("carries all THREE -replace flags — the volume, its attachment, and the host", () => {
+    // Anchored on the flag syntax, not a bare address: every one of these addresses also
+    // appears as a `-target=` on the very next lines and in the job's prose, so a bare-token
+    // grep would pass against a job that lost its -replace flags entirely.
+    const replaced = [
+      ...jobBlock.matchAll(/-replace='([^']+)'/g),
+    ].map((m) => m[1]);
+    expect(replaced.sort()).toEqual(
+      [
+        "hcloud_server.registry",
+        "hcloud_volume.registry",
+        "hcloud_volume_attachment.registry",
+      ].sort(),
+    );
+  });
+
+  test("sources the recut gate lib and states there is no ack-destroy bypass", () => {
+    expect(jobBlock).toContain("registry-luks-recut-gate.sh");
+    expect(jobBlock).toContain("registry_luks_recut_gate");
+    expect(jobBlock).toContain("NO [ack-destroy] bypass");
+  });
+
+  test("does NOT re-derive an inline copy of the gate's counter logic", () => {
+    // The gate must be the SAME BYTES the test suite exercises. An inline jq over
+    // resource_changes inside the plan step would be a second, untested implementation.
+    const planStep = jobBlock.slice(
+      jobBlock.indexOf("Terraform plan (atomic 3-way recut)"),
+      jobBlock.indexOf("Pre-apply zero-touch assert"),
+    );
+    expect(planStep.length).toBeGreaterThan(0);
+    expect(planStep).not.toContain("resource_changes");
+  });
+
+  test("requires the typed confirm and the id-pin before planning", () => {
+    expect(jobBlock).toContain("RECUT-REGISTRY-LUKS");
+    expect(jobBlock).toContain("expected_registry_store_volume_id");
+  });
+
+  test("declares NO environment: (a zero-reviewer environment auto-approves — DP-11 F8)", () => {
+    expect(/^\s+environment:/m.test(jobBlock)).toBe(false);
+  });
+
+  test("pins timeout-minutes below GitHub's 360-minute default", () => {
+    // It holds the fleet-wide apply mutex with cancel-in-progress: false, so no declaration
+    // would let a hung poll block every merge-apply for six hours.
+    const m = /timeout-minutes:\s*(\d+)/.exec(jobBlock);
+    expect(m).not.toBeNull();
+    expect(Number(m![1])).toBeLessThanOrEqual(30);
+  });
+
+  test("stripDispatchJobs removes this job's -targets from the coverage set", () => {
+    const strippedTargets = extractAllTargets(stripDispatchJobs(wf));
+    for (const addr of REGISTRY_REPLACE_TARGETS) {
+      expect(strippedTargets.has(addr)).toBe(false);
+    }
+    // Non-vacuity: unstripped, the whole-file scan DOES see them.
+    expect(extractAllTargets(wf).has("hcloud_server.registry")).toBe(true);
+  });
+});
+
+/**
+ * ALLOW-SET <=> -target PARITY across all three registry dispatch jobs.
+ *
+ * The identical 6-address set now lives in SIX places (three gate libs + three job -target
+ * lists) with nothing asserting they agree. A seventh registry resource would have to move in
+ * lockstep across all six, and missing one surfaces only as a mysterious `out_of_scope > 0`
+ * at dispatch time — against a prod apply the operator is waiting on.
+ */
+describe("registry gate allow-sets match their jobs' -target sets", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const PAIRS: Array<[string, string]> = [
+    ["registry_host_replace", "registry-host-replace-gate.sh"],
+    ["registry_region_migrate", "registry-region-migrate-gate.sh"],
+    ["registry_luks_recut", "registry-luks-recut-gate.sh"],
+  ];
+
+  for (const [jobId, libFile] of PAIRS) {
+    test(`${jobId} allow-set === its -target set`, () => {
+      const lib = readFileSync(
+        join(REPO_ROOT, "tests/scripts/lib", libFile),
+        "utf8",
+      );
+      const defAllow = /def allow:\s*\[([\s\S]*?)\]/.exec(lib);
+      expect(defAllow).not.toBeNull();
+      const allow = [...defAllow![1].matchAll(/"([^"]+)"/g)]
+        .map((m) => m[1])
+        .sort();
+      // Non-vacuity floor: the extraction must actually find addresses.
+      expect(allow.length).toBeGreaterThan(0);
+      const targets = [...extractAllTargets(extractJobBlock(wf, jobId))].sort();
+      expect(targets).toEqual(allow);
+    });
+  }
+});
+
+/**
+ * JOB <=> GATE-LIB PAIRING.
+ *
+ * Two INVERSE, near-identically-named registry gates now exist (host-replace PRESERVES the
+ * store; luks-recut REPLACES it). A copy-pasted `source` line would silently invert a destroy
+ * authorization while every other assertion in this file stays green.
+ */
+/**
+ * Escape EVERY regex metacharacter, not just `.`.
+ *
+ * The previous form escaped only the dot, which CodeQL correctly flags as
+ * incomplete escaping (js/incomplete-sanitization, high): a `\` in the input
+ * would survive into the pattern and change its meaning rather than match
+ * itself. Today's inputs are hardcoded filenames from ALL_REGISTRY_LIBS below,
+ * so nothing is exploitable — but a partial escaper in a gate-parity assertion
+ * is a wrong-by-construction helper that the next filename (or the next reader
+ * who copies it) inherits. Escape the whole class instead of the one character
+ * that happened to appear.
+ */
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+describe("each registry dispatch job sources exactly its own gate lib", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const ALL_REGISTRY_LIBS = [
+    "registry-host-replace-gate.sh",
+    "registry-region-migrate-gate.sh",
+    "registry-luks-recut-gate.sh",
+  ];
+  const PAIRS: Array<[string, string]> = [
+    ["registry_host_replace", "registry-host-replace-gate.sh"],
+    ["registry_region_migrate", "registry-region-migrate-gate.sh"],
+    ["registry_luks_recut", "registry-luks-recut-gate.sh"],
+  ];
+
+  for (const [jobId, ownLib] of PAIRS) {
+    test(`${jobId} sources ${ownLib} and no sibling registry gate`, () => {
+      const block = extractJobBlock(wf, jobId);
+      expect(block.length).toBeGreaterThan(0);
+      for (const lib of ALL_REGISTRY_LIBS) {
+        const sourced = new RegExp(
+          `source\\s+"\\$\\{GITHUB_WORKSPACE\\}/tests/scripts/lib/${escapeRe(lib)}"`,
+        ).test(block);
+        expect(sourced).toBe(lib === ownLib);
+      }
+    });
+  }
+});
+
+/**
+ * STEP ORDER for registry_luks_recut (#6929).
+ *
+ * Order is a safety property here, not cosmetics:
+ *   - the pull-path health gate and the destroy-guard must precede the APPLY (afterwards there
+ *     is nothing left to protect — the store is already destroyed);
+ *   - the web-1/workspaces zero-touch assert must precede the apply too. In the plan's v1 it ran
+ *     AFTER, reading the same tfplan.json the gate had already read — it therefore added no
+ *     information and could prevent nothing;
+ *   - the liveness poll must follow the apply, since it asserts the NEW host beats.
+ */
+describe("registry_luks_recut step order is a safety property", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  // Step names in declaration order, read from the job block. Anchored on the `- name:` step
+  // key at its exact indent so prose inside a `run:` body cannot be mistaken for a step.
+  const names = [
+    ...extractJobBlock(wf, "registry_luks_recut").matchAll(
+      /^ {6}- name: (.+)$/gm,
+    ),
+  ].map((m) => m[1].trim());
+
+  const idx = (needle: string) => names.findIndex((n) => n.includes(needle));
+
+  test("all ordered steps are present", () => {
+    // Non-vacuity floor: if the extraction found nothing, every findIndex below returns -1 and
+    // the ordering assertions would pass on an all -1 array.
+    expect(names.length).toBeGreaterThanOrEqual(6);
+    for (const needle of [
+      "Validate typed confirm",
+      "Pre-destroy pull-path health gate",
+      "destroy-guard",
+      "Pre-apply zero-touch assert",
+      "Terraform apply",
+      "Post-apply liveness assert",
+    ]) {
+      expect(idx(needle)).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  test("confirm < pull-path < destroy-guard < zero-touch < apply < liveness", () => {
+    const order = [
+      idx("Validate typed confirm"),
+      idx("Pre-destroy pull-path health gate"),
+      idx("destroy-guard"),
+      idx("Pre-apply zero-touch assert"),
+      idx("Terraform apply"),
+      idx("Post-apply liveness assert"),
+    ];
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  test("the zero-touch assert runs BEFORE the apply, not after", () => {
+    // Pinned separately from the chain above because this is the one ordering the plan's v1 got
+    // wrong, and a chain assertion would not name it if it regressed.
+    expect(idx("Pre-apply zero-touch assert")).toBeLessThan(idx("Terraform apply"));
   });
 });

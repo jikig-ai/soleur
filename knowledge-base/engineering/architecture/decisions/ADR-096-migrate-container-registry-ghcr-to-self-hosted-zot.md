@@ -491,17 +491,51 @@ re-fills from GHCR, and carries no user/repo data.
 
 <!-- lint-infra-ignore start -->
 <!-- Deferred-orchestrator prose: this describes a SANCTIONED, gated operator recut that runs OUTSIDE
-     any per-PR apply (an OPERATOR_APPLIED_EXCLUSION `-replace` / the deferred guarded dispatch #6929),
-     not a human-run step prescribed inside a runbook this PR executes. Grandfathered per the lint's
-     own escape hatch; the recommended fully-automated vehicle is the guarded dispatch (#6929). -->
+     any per-PR apply (the guarded `registry-luks-recut` dispatch), not a human-run step prescribed
+     inside a runbook this PR executes. Grandfathered per the lint's own escape hatch; the
+     fully-automated vehicle is that guarded dispatch, which has now SHIPPED. -->
 
 **Recut vehicle (the operator step, OUTSIDE the landing PR).** Encrypting the *live* volume is a
 destroy+recreate: a scoped **`terraform apply -replace` of the volume + its attachment + the host,
-all three together** (a fresh raw volume ⇒ cloud-init luksFormats it ⇒ zot re-fills from GHCR). The
-recommended vehicle is a guarded, typed-confirm `registry-luks-recut` `workflow_dispatch` mirroring
-`workspaces-luks-recut`/`registry-region-migrate`; that guarded dispatch is **deferred to a follow-up**
-(#6929; the landing PR is cloud-init + Terraform + ledger only) — until it ships, the sanctioned
-`OPERATOR_APPLIED_EXCLUSION` `-replace` path is the vehicle, with all three resources targeted together.
+all three together** (a fresh raw volume ⇒ cloud-init luksFormats it ⇒ zot re-fills from GHCR).
+
+**SHIPPED (amendment 2026-07-25).** The vehicle is now the guarded, typed-confirm
+`registry-luks-recut` `workflow_dispatch` in `apply-web-platform-infra.yml`, mirroring
+`workspaces-luks-recut`/`registry-region-migrate`. It supplies all three `-replace` flags itself, so
+the "forgot one" failure mode is no longer reachable by hand. Fences in order: typed
+`confirm=RECUT-REGISTRY-LUKS` + a numeric id-pin, the pre-destroy pull-path health gate, the sourced
+`registry_luks_recut_gate` (with a live Hetzner existence probe admitting its resume arm),
+`stock_preflight_gate`, a **pre**-apply web-1/workspaces zero-touch assert, then the apply, then a
+heartbeat-**transition** liveness poll. Operator runbook:
+`knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md`.
+
+**COLD VEHICLE — mandatory pre-first-fire re-verification.** The dispatch shipped with **zero live
+executions**: no recut was scheduled when it merged, so its live-API surfaces (the two Hetzner
+probes, the Sentry pull-path query, the Better Stack heartbeat read) first meet production at the
+single highest-stakes moment — an irreversible destroy of the store. The guard *logic* is not cold
+(≈22 synthesized gate fixtures including the exact `registry-host-replace` footgun case, a tested
+heartbeat poller, and cross-gate divergence + allow-set⇄`-target` parity tests), but the live surface
+is. **Before the first-ever fire, all five checks in the runbook's "Cold-vehicle re-verification"
+section are REQUIRED**, not advisory: re-run the pull-path positive control; hand-dry-run both
+Hetzner probes; re-confirm the heartbeat id and its `period + grace` from tfstate; re-read the
+ordering-window records below against current `zot-registry.tf` / `cloud-init-registry.yml`; and fire
+immediately before a planned release so the empty-store paging window is bounded. If a probe cannot
+be shown to work, fix it and re-verify — do **not** proceed with a degraded gate. A gate that cannot
+fail is worse than no gate, because it is read as evidence.
+
+**Pull-path health gate reads SENTRY, not Better Stack (measured).** The gate was specified against
+`betterstack-query.sh --grep ghcr-fallback`. That query can never return a row: `registry_pull_event`
+emits to the Sentry store API and to **web**-host journald, while Better Stack's only ingested source
+here is the **inngest** vector feed. Measured, not inferred — `--since 720h` greps for both
+`ghcr-fallback` and `registry_pull_event` returned zero rows while an ungrepped query over the same
+window returned rows normally. The gate now queries Sentry with the same tags
+`scripts/followthroughs/zot-soak-6122.sh` already uses.
+
+**Accepted residual — the weaker sibling (#6946).** `registry_region_migrate_gate` accepts the same
+bare-create shape with **no** confirm token, **no** id-pin and **no** live probe. An operator whose
+`registry-luks-recut` dispatch ABORTs can fire `registry-region-migrate` and get the same creates
+through unguarded. Mirroring the id-pin onto that second shipped dispatch was deliberately **not**
+done inside this change (it would alter a second dispatch's contract); tracked separately.
 
 **FOOTGUN — do NOT use `registry-host-replace` for the recut.** That existing dispatch **preserves**
 the volume, so it boots cloud-init against the still-**plaintext** ext4 volume, which hits the D1/B
