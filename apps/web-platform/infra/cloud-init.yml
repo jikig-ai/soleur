@@ -782,11 +782,13 @@ runcmd:
     stage=doppler_download
     TMPENV=$(mktemp /tmp/doppler-env.XXXXXX)
     chmod 600 "$TMPENV"
-    if ! doppler secrets download --no-file --format docker --project soleur --config prd > "$TMPENV"; then
-      rm -f "$TMPENV"
-      echo "FATAL: Doppler secrets download failed during initial provisioning" >&2
-      exit 1
-    fi
+    # #6969 (ADR-147): baked helper owns timeout+retry+stderr capture. BOTH lines are
+    # mandatory — `if !` yields $?=0, and an AND-OR list is set -e exempt, so without the
+    # re-raise the boot continues to cloud_init_complete with NO prd secrets.
+    soleur-doppler-download "$TMPENV" && rc=0 || rc=$?
+    [ "$rc" = 0 ] || exit "$rc"
+    # #6969/ADR-147: docker stderr is deliberately NOT captured into the detail channel —
+    # env-file parse errors quote prd secret lines back verbatim. Rationale in ADR-147; #6971.
     # tmpfs /tmp (closes #2473): caps overlayfs COW write-amp from
     # pdf-linearize tempfiles. Post-GIT_ASKPASS migration, git credential
     # scripts live in $HOME (see `server/git-auth.ts#writeAskpassScript`),

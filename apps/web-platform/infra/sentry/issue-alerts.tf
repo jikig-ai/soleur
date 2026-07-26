@@ -1617,7 +1617,16 @@ resource "sentry_issue_alert" "zot_mirror_fallback_rate" {
 # the SAFE direction (never a miss); a fatal terminal-block boot is always worth paging.
 #
 # Distinct `frequency = 24` avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-23,30,60-62).
-# Events carry only stage/host_id/region tags — no user content.
+# Events carry stage/host_id/region tags. FROM THE FIRST HOST BORN on an image containing #6969
+# (ADR-147) they additionally carry `host_name` and `detail`; hosts running today keep emitting
+# the three-tag payload, because runcmd is once-per-instance and hcloud_server.web pins user_data
+# under lifecycle.ignore_changes — the new tags reach a host only at a fresh create.
+# `detail` is the failing boot stage's own stderr — machine output from a first-booting host,
+# never user or tenant content. It is redacted for credential shapes (Doppler/GitHub tokens, URI
+# userinfo, Bearer, PEM headers), stripped to printable ASCII and byte-capped at 180 before emit.
+# Only stages with an explicit producer populate it; `docker run` stderr is deliberately NOT
+# captured (its env-file parse errors quote prd secret lines back verbatim — see cloud-init.yml).
+# host_name is the TF-injected server name, not a user identifier.
 resource "sentry_issue_alert" "web_terminal_boot_fatal" {
   organization = var.sentry_org
   project      = data.sentry_project.web_platform.slug
@@ -1666,8 +1675,10 @@ resource "sentry_issue_alert" "web_terminal_boot_fatal" {
     },
   ]
   # N=1 accepted risk (mirrors every sibling apply-created rule): IssueOwners has no ownership rule
-  # on this project → falls through to ActiveMembers, paging the solo founder. Events carry only
-  # stage/host_id/region — no cross-tenant content.
+  # on this project → falls through to ActiveMembers, paging the solo founder. Events carry
+  # stage/host_id/region, plus host_name and a redacted, ASCII-only, 180-byte-capped `detail`
+  # tag on hosts born from a post-#6969 image (ADR-147) — boot-process stderr, no cross-tenant
+  # content.
   actions_v2 = [
     {
       notify_email = {
@@ -1736,7 +1747,11 @@ resource "sentry_issue_alert" "web_private_nic_boot_gate" {
   ]
   # N=1 accepted risk, mirroring every sibling apply-created rule: IssueOwners has no ownership
   # rule on this project → falls through to ActiveMembers, paging the solo founder. Events carry
-  # only stage/host_id/region — no cross-tenant content, and never the expected IP.
+  # stage/host_id/region — no cross-tenant content, and never the expected IP. On hosts born from
+  # a post-#6969 image these also carry host_name (ADR-147). They do NOT carry a `detail` tag:
+  # the emitter reads only /run/soleur-stage-detail.d/<stage> and these stages wire no producer,
+  # so the tag is absent rather than empty. (An earlier revision added a legacy-buffer fallback
+  # here, which would have made these stages ship ANOTHER stage's captured output; removed.)
   actions_v2 = [
     {
       notify_email = {

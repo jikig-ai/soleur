@@ -77,6 +77,13 @@ targets a distinct blind-surface failure mode:
 
 ### Item 5 — web-host Vector log shipping + terminal-block boot-emit trap + pull_failure host_id (#6396)
 
+> **Extended by [ADR-147](./ADR-147-boot-stage-diagnostics-live-in-baked-host-scripts.md) (#6969).**
+> Item 5's boot-emit trap named the failing *stage* but discarded the failing command's own stderr
+> and exit code, so `soleur-web-2`'s dark boot could not be diagnosed after the fact. ADR-147 adds
+> a per-stage detail channel to the shared emitter and freezes the four cross-consumer contract
+> constraints (message literals, alert-filtered stage names, no string-prefixing of a filtered
+> stage, and diagnostics living in the baked host-scripts). Item 5's own status is unchanged.
+
 Three additions closing the observability blind spots left after the ADR-100 inngest cutover:
 
 - **Vector on every web host, ungated from `web_colocate_inngest`.** ADR-100 moved scheduling to

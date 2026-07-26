@@ -181,10 +181,17 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   it("both boot emitters tag with the literal key `stage` (the soak's bare stage: queries depend on it)", () => {
     // cloud-init.yml `_emit` -> tags:{stage,image_ref,host_id,detail}; emits app_ghcr_fallback.
     expect(cloudInit).toContain('"tags":{"stage":"%s","image_ref":"%s","host_id":"%s","detail":"%s"}');
-    // soleur-host-bootstrap.sh `soleur-boot-emit` -> tags:{stage,host_id,region}; emits
+    // soleur-host-bootstrap.sh `soleur-boot-emit` -> tags:{stage,host_id,region,...}; emits
     // inngest_ghcr_fallback. A separate emitter that happens to share the no-feature/op gap.
+    //
+    // Deliberately NOT terminated with `}`: #6969/ADR-147 APPENDS host_name and detail tags to
+    // this emitter, and ADR-147's design rule is "add tags, never rename". Pinning the closing
+    // brace would forbid the additive case the rule explicitly allows, while adding nothing to
+    // the anti-rename guarantee this test exists for. The open-ended prefix still fails on
+    // `stage` -> `boot_stage`, on reordering, and on dropping host_id/region — it tolerates only
+    // appended tags.
     const bootstrap = readFileSync(join(here, "../infra/soleur-host-bootstrap.sh"), "utf8");
-    expect(bootstrap).toContain('"tags":{"stage":"%s","host_id":"%s","region":"cloud-init"}');
+    expect(bootstrap).toContain('"tags":{"stage":"%s","host_id":"%s","region":"cloud-init"');
   });
 
   it("cloud-init.yml emits both fresh-boot fallback stages (inngest + app-image)", () => {

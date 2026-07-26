@@ -398,6 +398,13 @@ jobs:
       - name: Run fresh-boot readiness marker guard (#6459/#6538 SOLEUR_FRESH_BOOT_READY dark-host)
         run: bash apps/web-platform/infra/fresh-boot-ready.test.sh
 
+      # LOAD-BEARING registration (see the note above — this job has no glob). Hybrid suite:
+      # static drift-guards over the call-site's fail-closed shape, plus a BEHAVIORAL harness
+      # that extracts both baked heredocs and drives helper -> trap -> the REAL soleur-boot-emit,
+      # asserting the emitted body. Needs `jq` (preinstalled on ubuntu-latest) and is gated on it.
+      - name: Run boot-stage error-channel guard (#6969/ADR-147 doppler_download names its cause)
+        run: bash apps/web-platform/infra/doppler-download-error-channel.test.sh
+
       # LOAD-BEARING registration (explicit list, no glob). Byte-identity + wiring guard for the
       # Phase-2.2 fresh-boot parity bakes (orphan-reaper + bwrap-userns sysctl). Pins the baked unit
       # bodies to their retained SSH-heredoc twins so the two delivery paths cannot silently drift.
