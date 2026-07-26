@@ -278,8 +278,12 @@ def destroyed_at($addr):
   # either (a host create is never the right thing to type past on an unattended
   # per-PR apply, nor on a push path that passes no -var image_name; the dispatch
   # jobs that legitimately create/replace are separate jobs and do not read this
-  # key). web-1 itself still has NO automated birth path — every route that could
-  # reach hcloud_server.web HALTs here; building one is tracked by #6730.
+  # key). As of #6730 (ADR-145) web hosts DO have an automated birth path — the
+  # `web-host-create` dispatch — but it is a separate job that does not read this
+  # key at all: it sources its own INVERTED gate
+  # (tests/scripts/lib/web-host-birth-gate.sh), which demands exactly one create OF
+  # THE REQUESTED HOST plus zero destroys/reboots/out-of-scope changes. This HALT is
+  # unchanged and still correct for every route that reaches it.
   host_creates: (
     [ .resource_changes[]?
       | select(.type == "hcloud_server")

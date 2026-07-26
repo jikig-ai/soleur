@@ -1369,6 +1369,28 @@ const WEB_HOST_BIRTH_PER_MERGE_COVERED = [
   "doppler_secret.web_nic_guard_url",
 ];
 
+/**
+ * `-target` values for a job whose keys are SHELL-INTERPOLATED rather than literal.
+ *
+ * extractTargetsWithKeys assumes the sibling dispatch shape
+ * `-target='hcloud_server.web["web-2"]'` — single quotes around a hardcoded key. This
+ * job cannot use it: single quotes suppress the `${WEB_HOST_KEY}` expansion that makes
+ * the job generic over var.web_hosts, so its targets are double-quoted with escaped
+ * inner quotes (`-target="hcloud_server.web[\"${WEB_HOST_KEY}\"]"`). Fed to the shared
+ * extractor, the outer-quote match stops at the first `\"` and yields a truncated
+ * `hcloud_server.web[\` — which is why this exists rather than a widened shared regex:
+ * the other callers genuinely want the literal-key shape, and loosening the shared one
+ * to tolerate escapes would make THEIR assertions accept an interpolated target too.
+ */
+function extractEscapedQuotedTargets(text: string): string[] {
+  const out: string[] = [];
+  for (const m of stripComments(text).matchAll(/-target="((?:[^"\\]|\\.)*)"/g)) {
+    // Unescape so the result reads like the address terraform receives.
+    out.push(m[1].replace(/\\"/g, '"'));
+  }
+  return out;
+}
+
 describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", () => {
   let jobBlock: string;
   let keyedTargets: string[];
@@ -1376,7 +1398,7 @@ describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", ()
   beforeAll(() => {
     const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
     jobBlock = extractJobBlock(wf, "web_host_create");
-    keyedTargets = extractTargetsWithKeys(jobBlock);
+    keyedTargets = extractEscapedQuotedTargets(jobBlock);
   });
 
   test("the job exists and its -target extraction is non-vacuous", () => {
