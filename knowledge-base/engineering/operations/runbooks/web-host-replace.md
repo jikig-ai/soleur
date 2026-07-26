@@ -92,6 +92,23 @@ The gate carries named backstops for the two volumes and the passphrase. They ar
 intentionally redundant with the out-of-scope arm; they exist so the abort message names the
 catastrophe rather than saying "an address you did not authorize changed".
 
+## What the replace does NOT restore
+
+The `-target` set is upstream-only, so nothing downstream of the server rides along. Two
+consequences worth knowing before you dispatch:
+
+- **The eight `terraform_data.*` SSH provisioners** (disk monitor, resource monitor, fail2ban
+  tuning, persistent journald, seccomp/AppArmor profiles, orphan reaper) hardcode
+  `connection.host` to **web-1**. They never applied to any other host, so a non-web-1
+  replace neither loses nor needs them.
+- **Better Stack heartbeats** for the host already exist and are not targeted. If they are
+  still `paused`, they are armed by the measure-then-arm step in the `apply` job at the next
+  merge-to-main infra apply — the same as after a birth.
+
+Neither is a regression introduced by this path; both match the birth path's behaviour. They
+are listed because "the host is back" and "the host is fully configured" are different
+claims, and the dispatch summary only supports the first.
+
 ## Verify the result
 
 The job verifies itself and fails if the host booted dark — there is nothing to eyeball. The

@@ -85,7 +85,16 @@ So replacing web-1 entails two members no other key has — the LUKS attachment 
 `server_id`; omit it and the at-rest store boots unattached) and `cloudflare_record.app`
 (pinned to web-1's `ipv4_address`; omit it and `app.soleur.ai` resolves to a destroyed host).
 
-Both of those are expressible as key-conditional arms. The decisive reason is not:
+There is a third asymmetry, found while checking whether the `-target` set was complete: the
+eight `terraform_data.*` SSH provisioners in `server.tf` (`disk_monitor_install`,
+`resource_monitor_install`, `fail2ban_tuning`, `journald_persistent`, …) hardcode
+`connection.host = hcloud_server.web["web-1"].ipv4_address`. They are web-1-only, not
+per-host, so they are correctly absent from a non-web-1 replace — but a web-1 replace changes
+that IP and would leave every one of them pointing at a destroyed host until the next
+token-gated SSH apply. `-target` is upstream-only, so nothing pulls them in and no gate arm
+would notice.
+
+Those three are all expressible as key-conditional arms. The decisive reason is not:
 
 > *"with a second volume attached, the `scsi-0HC_Volume_*` glob in cloud-init.yml becomes
 > AMBIGUOUS. Pinning the mount by volume ID is a hard prerequisite of the cutover."*
