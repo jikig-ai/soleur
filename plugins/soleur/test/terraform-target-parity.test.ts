@@ -1448,8 +1448,15 @@ describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", ()
   });
 
   test("the job runs the sourced web_host_birth_gate and borrows no sibling gate", () => {
-    expect(jobBlock).toContain("web-host-birth-gate.sh");
-    expect(jobBlock).toContain("web_host_birth_gate");
+    // Same bare-token defect as the replace block below, and pre-existing — but ADR-145 §73-76
+    // asserts "terraform-target-parity.test.ts pins the job<->gate pairing so a future refactor
+    // cannot silently unhook it", which was measured FALSE for this job too. Fixed here rather
+    // than filed: this PR already edits this file, and the claim is load-bearing for the one
+    // route granted the host_creates capability.
+    expect(jobBlock).toMatch(/^\s*source\s+\S*web-host-birth-gate\.sh/m);
+    expect(jobBlock).toMatch(
+      /\bweb_host_birth_gate\s+tfplan\.json\s+"\$\{WEB_HOST_KEY\}"/,
+    );
     // A birth graded against a RETIRE or REPLACE allow-set is graded against the wrong
     // contract — the retire gate requires host_creates == 0, the exact inverse. Naming
     // each sibling explicitly (rather than a generic "one gate only" count) keeps the
@@ -1666,8 +1673,17 @@ describe("web-host-replace dispatch -target set + replace-gate pairing (#6969)",
   });
 
   test("the job runs the sourced web_host_replace_gate and borrows no sibling gate", () => {
-    expect(jobBlock).toContain("web-host-replace-gate.sh");
-    expect(jobBlock).toContain("web_host_replace_gate");
+    // ANCHORED ON THE SOURCE COMMAND AND THE CALL-WITH-ARGUMENT, not bare tokens.
+    // `extractJobBlock` does NOT strip comments, and both tokens appear in comments inside
+    // this job (the prose above the step and the `# shellcheck source=` directive). MEASURED:
+    // with the bare `toContain` form, replacing the real invocation with `if false; then`
+    // left this suite 82/0 green — and this gate is the ONLY check on a path that destroys a
+    // production host. Mirrors stock-preflight-coverage.test.ts, whose own comment records
+    // that deleting all five real `source` lines left IT green (cq-assert-anchor-not-bare-token).
+    expect(jobBlock).toMatch(/^\s*source\s+\S*web-host-replace-gate\.sh/m);
+    expect(jobBlock).toMatch(
+      /\bweb_host_replace_gate\s+tfplan\.json\s+"\$\{WEB_HOST_KEY\}"/,
+    );
     // A replace graded against the BIRTH allow-set is graded against the inverse contract
     // (the birth gate requires zero destroys). Naming each sibling explicitly rather than a
     // generic "one gate only" count keeps the failure message actionable.

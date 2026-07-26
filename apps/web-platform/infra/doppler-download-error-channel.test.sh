@@ -870,7 +870,7 @@ if [ ! -f "$WF" ]; then
   no "AC-M0: could not locate apply-web-platform-infra.yml"
 elif [ ! -s "$TRAIL" ]; then
   no "AC-M0: could not locate the extracted boot-trail reader ($TRAIL) — every reader-scoped assertion below would grep nothing and pass vacuously"
-elif ! grep -qF 'scripts/fresh-host-boot-trail.sh' "$WF"; then
+elif ! grep -qF 'apps/web-platform/infra/scripts/fresh-host-boot-trail.sh' "$WF"; then
   no "AC-M0: the workflow no longer invokes scripts/fresh-host-boot-trail.sh — the reader can be perfect and still never run"
 else
   ok "AC-M0: located the birth-path workflow, the extracted boot-trail reader, and the wiring between them"

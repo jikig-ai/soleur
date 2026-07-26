@@ -354,7 +354,7 @@ for prov_job in web_host_create web_host_replace; do
   PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$WF" || true)"
   if [ -z "$PROV" ]; then
     no "AC8d: no ${prov_job} job in $(basename "$WF") — a provisioning path that does not exist cannot surface a boot trail"
-  elif grep -qF 'scripts/fresh-host-boot-trail.sh' <<<"$PROV"; then
+  elif grep -qF 'apps/web-platform/infra/scripts/fresh-host-boot-trail.sh' <<<"$PROV"; then
     ok "AC8d: ${prov_job} wires the extracted boot-trail reader"
   else
     no "AC8d: ${prov_job} does not invoke scripts/fresh-host-boot-trail.sh — a green apply is not a green boot, and without this call the job cannot tell the two apart"
@@ -377,11 +377,22 @@ fi
 # the real emit with a `#` comment carrying the same sentence left the suite 94/0 green.
 # The claim was true of the intent and false of the code, which is the failure mode this
 # whole block was restored to prevent.
-if grep -qE '^[[:space:]]*echo "::error::SENTRY_DSN is empty in Doppler prd_terraform' <<<"$JOB"; then
-  ok "AC14: the birth job asserts baked SENTRY_DSN non-empty before create (pre-extraction cannot go dark)"
-else
-  no "AC14: the birth job must assert SENTRY_DSN is non-empty BEFORE creating the host (an empty baked DSN is a silent pre-extraction blind spot)"
-fi
+#
+# PER-JOB (#6969), for the same reason AC8d is: this was scoped to $JOB (web_host_create)
+# only, while web_host_replace ships the identical assertion and needs it MORE — a replace
+# DESTROYS the existing host first, so an empty baked DSN means the replacement boots dark
+# with nothing to fall back to. Nothing pinned the replace copy: deleting that step left the
+# suite fully green. Same half-closed wiring-drift class AC8d exists to close.
+for prov_job in web_host_create web_host_replace; do
+  PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$WF" || true)"
+  if [ -z "$PROV" ]; then
+    no "AC14: no ${prov_job} job in $(basename "$WF") — the DSN precondition has no subject and would pass vacuously"
+  elif grep -qE '^[[:space:]]*echo "::error::SENTRY_DSN is empty in Doppler prd_terraform' <<<"$PROV"; then
+    ok "AC14: ${prov_job} asserts baked SENTRY_DSN non-empty before it provisions (pre-extraction cannot go dark)"
+  else
+    no "AC14: ${prov_job} must assert SENTRY_DSN is non-empty BEFORE provisioning (an empty baked DSN is a silent pre-extraction blind spot)"
+  fi
+done
 
 # ── AC16 (#6090): the read must NOT use the broken message: query ──
 # The /projects/{org}/{proj}/events/ endpoint IGNORES the `message:` search prefix:

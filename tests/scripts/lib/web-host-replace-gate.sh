@@ -181,10 +181,28 @@ web_host_replace_gate() {
   # the work-list instead of failing closed. What that hides is precisely a destroy the gate
   # cannot see. MEASURED, not assumed: the mutation battery proves neutering this arm makes
   # a no-actions plan PASS.
-  if jq -e '[.resource_changes[] | select((.change.actions | type) != "array")] | length > 0' \
+  # POSITIVE assertion, and that shape is the whole point. The earlier form searched for
+  # offenders with `.change.actions` (no `?`): when `.change` is a SCALAR, jq raises
+  # "Cannot index string with actions" and exits 5 — and `if jq -e ...; then` reads a jq
+  # ERROR as "no offenders found". The counting filter below uses `.change.actions?`, which
+  # swallows the same error and drops the entry from every select. MEASURED: a plan carrying
+  # {"address":"hcloud_volume.workspaces[\"web-2\"]","change":"delete"} returned rc=0 PASS
+  # with workspaces_volume_destroyed=0 and out_of_scope=0 — every user worktree on the host
+  # destroyed, invisible to all three arms that exist to name it.
+  #
+  # `all(...)` requires EVERY entry to be well-formed, so any error, any missing key and any
+  # wrong type all land on the abort side. The inner `all(.change.actions[]; type=="string")`
+  # closes the nested case: `"actions": [["delete"]]` passes a bare `type=="array"` check and
+  # then compares an array to a string in every `any(. == "delete")`, which is false forever.
+  if ! jq -e 'all(.resource_changes[];
+                  (.change | type) == "object"
+                  and (.change.actions | type) == "array"
+                  and all(.change.actions[]; type == "string"))' \
        < "$plan_json" >/dev/null 2>&1; then
-    offenders=$(jq -r '[.resource_changes[] | select((.change.actions | type) != "array") | .address] | .[0:10] | join(", ")' < "$plan_json" 2>/dev/null)
-    echo "web_host_replace_gate: ABORT — unclassifiable plan entry: ${offenders} has no array .change.actions, so it cannot be classified as create/replace/destroy/no-op. Fail-closed: an entry the gate cannot read is not evidence of a safe plan — a destroy hiding in an unreadable entry is exactly what this refuses to wave through."
+    # `.change.actions?` here, matching the counting filter — without it this extraction
+    # errors on the very entry it is trying to name and the operator gets an empty list.
+    offenders=$(jq -r '[.resource_changes[] | select(((.change | type) != "object") or ((.change.actions? | type) != "array")) | .address] | .[0:10] | join(", ")' < "$plan_json" 2>/dev/null)
+    echo "web_host_replace_gate: ABORT — unclassifiable plan entry: ${offenders} has no object .change carrying an array of string .change.actions, so it cannot be classified as create/replace/destroy/no-op. Fail-closed: an entry the gate cannot read is not evidence of a safe plan — a destroy hiding in an unreadable entry is exactly what this refuses to wave through."
     return 1
   fi
 
@@ -196,12 +214,15 @@ web_host_replace_gate() {
       $p[0] as $plan
       | {
           out_of_scope: (
-            # `no-op` entries are excluded by listing the four MUTATING actions explicitly
-            # rather than negating "no-op" — terraform also emits `read` for data sources,
-            # which is not a change either, and an allow-list of verbs stays correct as the
-            # action vocabulary grows.
+            # DENY-LIST of the two known-inert verbs, NOT an allow-list of mutating ones.
+            # The allow-list form shipped here first and its comment claimed "an allow-list of
+            # verbs stays correct as the action vocabulary grows" — that is backwards, and it
+            # is the fail-open direction: anything terraform emits that is not one of the four
+            # named verbs was classified INERT. Terraform has already grown the vocabulary once
+            # (`forget`, 1.7). MEASURED: {"actions":["destroy"]} on hcloud_volume.workspaces_luks
+            # returned PASS. Only a deny-list of `no-op`/`read` stays correct as it grows again.
             [ $plan.resource_changes[]?
-              | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
+              | select([.change.actions[]] - ["no-op", "read"] | length > 0)
               | select(IN(.address; allow($k)[]) | not) ]
             | length
           ),
@@ -229,7 +250,7 @@ web_host_replace_gate() {
             # positive actions.
             [ $plan.resource_changes[]?
               | select(.address == "random_password.workspaces_luks" or .address == "doppler_secret.workspaces_luks_key")
-              | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget")) ]
+              | select([.change.actions[]] - ["no-op", "read"] | length > 0) ]
             | length
           ),
           replaced: (
