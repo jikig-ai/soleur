@@ -170,6 +170,14 @@ done
 FAILED_FILE=infra-config-install
 test -x /usr/local/bin/infra-config-install
 [ "$(stat -c %a /usr/local/bin/infra-config-install)" = 755 ]
+# (#6969) the two HEREDOC-authored helpers. The loop above only covers seed-sourced files, so
+# these were never asserted: a truncated heredoc still lets the boot write
+# /run/soleur-hostscripts.ok, and the terminal block then dies `command not found` (127) with
+# no named stage. Assert them here so a write miss fails with an attributable FAILED_FILE.
+FAILED_FILE=soleur-boot-emit
+test -x /usr/local/bin/soleur-boot-emit
+FAILED_FILE=soleur-doppler-download
+test -x /usr/local/bin/soleur-doppler-download
 for f in container-restart-monitor.service container-restart-monitor.timer \
          cron-egress-firewall.service cron-egress-resolve.service cron-egress-resolve.timer \
          cron-egress-alarm@.service; do
@@ -297,12 +305,41 @@ cat > /usr/local/bin/soleur-boot-emit <<'EMITEOF'
 ( set +e
   STAGE="$1"; LEVEL="$2"; [ -n "$LEVEL" ] || LEVEL=info
   HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
+  # (#6969) host_name attribution. Baked from the TF-injected SOLEUR_HOST_NAME via a second
+  # sentinel splice; falls back to the kernel hostname. Attributing the web-2 dark boot
+  # required a separate Hetzner API lookup to turn host_id=155488316 into a name — friction at
+  # exactly the wrong moment on a Sentry project shared with web-1 traffic.
+  HOST_NAME='@@SOLEUR_HOST_NAME@@'
+  [ -n "$HOST_NAME" ] || HOST_NAME=$(hostname)
   DSN='@@SOLEUR_SENTRY_DSN@@'
   [ -n "$DSN" ] || exit 0
   KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
   SHOST=$(printf '%s' "$DSN" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
   PROJ=$(printf '%s' "$DSN" | sed -E 's#.*/([0-9]+)$#\1#')
-  BODY=$(printf '{"message":"soleur-cloud-init boot stage","level":"%s","tags":{"stage":"%s","host_id":"%s","region":"cloud-init"}}' "$LEVEL" "$STAGE" "$HOST_ID")
+  # (#6969) per-stage detail channel. Reads /run/soleur-stage-detail.d/<stage>, falling back to
+  # the legacy single-buffer /run/soleur-stage-detail so the five existing producers and the
+  # inline _emit consumer stay byte-identical. Per-stage files (rather than a <stage>|<detail>
+  # wire format in the legacy buffer) dissolve the delimiter collision, the migration and the
+  # stale-read hazard at once — a detail written for one stage can never surface under another.
+  DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail.d}"
+  DFILE="${SOLEUR_STAGE_DETAIL_FILE:-/run/soleur-stage-detail}"
+  SRC="$DDIR/$STAGE"; [ -f "$SRC" ] || SRC="$DFILE"
+  # Sanitizer order is load-bearing (ADR-147). The preamble drop comes FIRST: the Doppler CLI
+  # writes two `Using DOPPLER_* from the environment` lines (173 B measured on the pinned
+  # v3.75.3) ahead of the real error, so a leading-bytes cap would ship pure noise and truncate
+  # the cause away. Newline folding is a correctness requirement, not tidiness — newlines are
+  # documented as impermissible in Sentry tag values and captured stderr is multi-line by
+  # nature. The printable-ASCII pass runs AFTER the cap so a byte-wise cut can never emit a
+  # partial multi-byte sequence.
+  ESC=$(printf '\033')
+  DETAIL=$(LC_ALL=C sed -e '/^Using /d' -e "s/${ESC}\\[[0-9;]*[a-zA-Z]//g" "$SRC" 2>/dev/null \
+    | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' \
+    | LC_ALL=C tr -d '"\\' \
+    | LC_ALL=C tr '\011\012' '  ' \
+    | LC_ALL=C sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+    | tail -c 180 \
+    | LC_ALL=C tr -cd '\040-\176')
+  BODY=$(printf '{"message":"soleur-cloud-init boot stage","level":"%s","tags":{"stage":"%s","host_id":"%s","region":"cloud-init","host_name":"%s","detail":"%s"}}' "$LEVEL" "$STAGE" "$HOST_ID" "$HOST_NAME" "$DETAIL")
   curl -m 10 --retry 3 -sf -X POST "https://$SHOST/api/$PROJ/store/" \
     -H 'Content-Type: application/json' \
     -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$KEY" \
@@ -311,7 +348,21 @@ cat > /usr/local/bin/soleur-boot-emit <<'EMITEOF'
 exit 0
 EMITEOF
 sed -i "s|@@SOLEUR_SENTRY_DSN@@|${SOLEUR_SENTRY_DSN:-}|" /usr/local/bin/soleur-boot-emit
+# (#6969) second splice, same non-`/` delimiter idiom + the same ${SOLEUR_HOST_NAME:-$(hostname)}
+# fallback vector.toml already uses. A residual @@ would ship host_name=@@SOLEUR_HOST_NAME@@ on
+# every event, silently — asserted below.
+sed -i "s|@@SOLEUR_HOST_NAME@@|${SOLEUR_HOST_NAME:-}|" /usr/local/bin/soleur-boot-emit
+# `if`, NOT `grep -q ... && { false; }`: the latter is an AND-OR list whose own exit status is
+# the statement's, so a CLEAN file (grep exits 1) would abort the boot under set -e. An `if`
+# condition is set -e-exempt in both dash and bash.
+if grep -q '@@' /usr/local/bin/soleur-boot-emit; then
+  STAGE=boot_emit_sentinel; FAILED_FILE=soleur-boot-emit; false
+fi
 chmod 0755 /usr/local/bin/soleur-boot-emit
+# (#6969) the per-stage detail directory must exist before the terminal block's `docker run`
+# redirects its stderr into it. /run is tmpfs and this bootstrap runs in an earlier runcmd item
+# of the same boot, so the directory is guaranteed present by the time the terminal block runs.
+mkdir -p /run/soleur-stage-detail.d
 # Bounded readiness poll (#6090, H4) — baked (0 user_data; only ~0.4 KB cap headroom, so the
 # poll body cannot live inline). systemd enable commands
 # return 0 the instant a unit launches, NOT when it connects/binds; this polls the real
@@ -332,6 +383,79 @@ done
 soleur-boot-emit "$STAGE" info
 WAITEOF
 chmod 0755 /usr/local/bin/soleur-wait-ready
+
+# (#6969) Bounded, self-reporting Doppler secrets download for the cloud-init terminal block.
+# Baked (0 user_data; only ~0.5 KB of gzipped cap headroom remains, so this body cannot live
+# inline). Authored as a heredoc like soleur-boot-emit — NOT via the `install -D "$SEED/$f"`
+# loop above, which only handles files that come from the seed tarball; a seed file would force
+# edits to local.host_script_files, the image bake and the coherence preflight.
+#
+# Replaces a single unbounded attempt whose stderr and exit code were discarded. That call was
+# the ONLY unbounded Doppler invocation in cloud-init.yml (11 siblings are timeout-wrapped), so
+# a hang emitted nothing at all and the channel was structurally blind to the leading
+# hypothesis' most common shape.
+STAGE=doppler_download_helper; FAILED_FILE=soleur-doppler-download
+cat > /usr/local/bin/soleur-doppler-download <<'DDLEOF'
+#!/bin/sh
+# usage: soleur-doppler-download <target-env-file>
+#
+# STDOUT IS RESERVED FOR THE SECRET PAYLOAD. `--format docker` writes the entire prd secret set
+# to stdout, and the caller feeds the target file to `docker run --env-file`. Every diagnostic
+# here goes to stderr or to the per-stage detail files; a stray stdout write would corrupt the
+# env file and misattribute the resulting fatal to stage=docker_run. Never `2>&1`, never `&>`.
+set -u
+OUT="$1"
+DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail.d}"
+ATTEMPTS="${SOLEUR_DOPPLER_ATTEMPTS:-3}"
+TMO="${SOLEUR_DOPPLER_TIMEOUT:-45}"
+# Worst case 3 x 45 s + 5 s + 10 s = 150 s, budgeted against the host's own 900 s fresh-boot
+# window: an unbudgeted retry could push the boot past it and convert a DIAGNOSABLE fatal
+# verdict into an undiagnosable timeout — the retry would then degrade the channel it rides on.
+B1="${SOLEUR_DOPPLER_BACKOFF_1:-5}"
+B2="${SOLEUR_DOPPLER_BACKOFF_2:-10}"
+mkdir -p "$DDIR" 2>/dev/null || true
+ERRF=$(mktemp "${TMPDIR:-/tmp}/doppler-err.XXXXXX" 2>/dev/null) || ERRF="${TMPDIR:-/tmp}/doppler-err.$$"
+: > "$ERRF" 2>/dev/null || true
+chmod 600 "$ERRF" 2>/dev/null || true
+# This helper is a SEPARATE PROCESS from the cloud-init terminal block, so that block's EXIT
+# trap cannot see $ERRF. The helper owns its own cleanup.
+trap 'rm -f "$ERRF"' EXIT INT TERM HUP
+rc=0
+n=1
+while :; do
+  : > "$ERRF"
+  NO_COLOR=1 timeout "$TMO" doppler secrets download --no-file --format docker \
+    --project soleur --config prd > "$OUT" 2>"$ERRF" && rc=0 || rc=$?
+  [ "$rc" = 0 ] && exit 0
+  # Scrub BEFORE any write. The "stderr does not echo the token" measurement is pinned to CLI
+  # v3.75.3 and CLI-version behaviour is itself a live hypothesis, so this is defence in depth.
+  # The preamble drop and the cap happen here too: the emitter re-caps at 180, and capping a
+  # preamble-laden string there would tail away the actual cause.
+  SCRUB=$(LC_ALL=C sed -e '/^Using /d' -e 's/dp\.[a-z]*\.[A-Za-z0-9_-]*/dp.REDACTED/g' "$ERRF" 2>/dev/null \
+    | LC_ALL=C tr '\011\012' '  ' | tail -c 130)
+  if [ "$rc" = 124 ]; then COND=timeout; else COND=error; fi
+  # Ordering is load-bearing: capture rc -> scrub -> write the detail -> emit -> increment ->
+  # exhaust-check -> sleep. `n=$((n+1))` resets $?, and emitting after the exhaust-check would
+  # lose the final attempt's breadcrumb.
+  if [ "$n" -lt "$ATTEMPTS" ]; then
+    # stage=doppler_retry, never `doppler_download_attempt`: the latter string-PREFIXES the
+    # alert-filtered stage, which would make the op-contract anti-rename test vacuous. The
+    # alert has no level filter and its shared group is perpetually hot, so a warning reusing a
+    # filtered stage name would page the founder on a healthy boot.
+    printf 'doppler_retry rc=%s cond=%s attempt=%s/%s %s' "$rc" "$COND" "$n" "$ATTEMPTS" "$SCRUB" > "$DDIR/doppler_retry"
+    soleur-boot-emit doppler_retry warning
+  fi
+  n=$((n+1))
+  [ "$n" -gt "$ATTEMPTS" ] && break
+  if [ "$n" = 2 ]; then sleep "$B1"; else sleep "$B2"; fi
+done
+# The terminal block's trap emits stage=doppler_download and reads THIS file. Writing it before
+# returning non-zero is what keeps the headline fatal from shipping an empty detail — an empty
+# detail is byte-for-byte the #6969 symptom this helper exists to end.
+printf 'doppler_download rc=%s cond=%s attempts=%s %s' "$rc" "$COND" "$ATTEMPTS" "$SCRUB" > "$DDIR/doppler_download"
+exit "$rc"
+DDLEOF
+chmod 0755 /usr/local/bin/soleur-doppler-download
 
 # Bounded private-NIC wait (#6441, ADR-114 I1) — baked (0 user_data; the call site is the
 # only inline cost). DELIBERATELY fail-OPEN, unlike its fail-CLOSED neighbour

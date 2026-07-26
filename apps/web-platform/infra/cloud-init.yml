@@ -782,11 +782,16 @@ runcmd:
     stage=doppler_download
     TMPENV=$(mktemp /tmp/doppler-env.XXXXXX)
     chmod 600 "$TMPENV"
-    if ! doppler secrets download --no-file --format docker --project soleur --config prd > "$TMPENV"; then
-      rm -f "$TMPENV"
-      echo "FATAL: Doppler secrets download failed during initial provisioning" >&2
-      exit 1
-    fi
+    # #6969: the baked helper owns the timeout, the bounded retry, and the stderr capture that
+    # makes the trap's fatal name its own cause. Two lines, both mandatory:
+    #   1. `&& rc=0 || rc=$?` — `if ! cmd; then ... $?` yields 0 in dash AND bash, so the old
+    #      form could only ever have recorded exit_code=0.
+    #   2. the re-raise — an AND-OR list is set -e EXEMPT, so the capture ALONE would silently
+    #      continue the boot. Worst case is not a missing diagnostic: it is a host reaching
+    #      cloud_init_complete with an empty $TMPENV and NO prd secrets, which is strictly
+    #      worse than booting dark. Do not collapse these into one statement.
+    soleur-doppler-download "$TMPENV" && rc=0 || rc=$?
+    [ "$rc" = 0 ] || exit "$rc"
     # tmpfs /tmp (closes #2473): caps overlayfs COW write-amp from
     # pdf-linearize tempfiles. Post-GIT_ASKPASS migration, git credential
     # scripts live in $HOME (see `server/git-auth.ts#writeAskpassScript`),
@@ -809,7 +814,8 @@ runcmd:
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:80:3000 \
       -p 0.0.0.0:3000:3000 \
-      "$(cat /run/soleur-image-ref 2>/dev/null || echo '${image_name}')"
+      "$(cat /run/soleur-image-ref 2>/dev/null || echo '${image_name}')" \
+      2>/run/soleur-stage-detail.d/docker_run
     rm -f "$TMPENV"
     # #6396: disarm the EXIT trap before the self-emitting egress probe (spanning it would
     # double-emit); the trap-covered region fails via exit-1/set-e, never poweroff.
