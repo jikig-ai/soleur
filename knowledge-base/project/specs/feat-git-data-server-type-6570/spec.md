@@ -53,6 +53,29 @@ has no arch-derivation local.
   `luks_passphrase_touched` backstop keeps holding.
 - **NG5 — an account-cap raise.** The live limit is 10 servers with 5 running; the issue's "cap
   is 5" premise is false.
+- **NG6 — the git-data heartbeat OR-masking fix (#6975).** Filed by this brainstorm. It is a
+  probe-topology defect, not a server-type decision, and it gates the **birth** rather than this
+  repin (with no git-data host, both probes currently fail and nothing is masked).
+- **NG7 — `GIT_DATA_STORE_ENABLED`.** Verified absent from Doppler `soleur/prd`;
+  `workspace-resolver.ts:57` gates on `=== "true"`. It must be flipped **only** via
+  `git-data-cutover.sh`, which sits behind drain → delta-rsync → set-identity verify. A manual
+  Doppler set would skip the write-freeze. Not touched here.
+
+## Downstream Dependencies — merging this does NOT yield a usable git-data store
+
+Recorded so no reviewer reads a merged repin as "git-data is available". Each verified open.
+
+1. **Birth the host** — gated `workflow_dispatch`. `git-data-host-replace` plans a plain CREATE
+   against a host absent from state; **verify that path rather than assume it**, since the stock
+   preflight would have aborted on `cax11` and this shape has never actually run.
+2. **#6975** — heartbeat masking; precondition of the birth.
+3. **#6680** — `git-data-cutover.yml` has no tunnel ingress for `10.0.1.20`; the CF Tunnel SSH
+   bridge reaches only web-1 and the whole cutover runs over it. **Host born is not
+   cutover-runnable.** An unsolved design question, not a mechanical fix.
+4. **Cutover + flip** via `git-data-cutover.sh` (write-freeze + drain).
+
+Even all four does not give web-2 traffic: `lb-weight-gate.sh` Condition B additionally needs a
+`GIT_DATA_LUKS` soak marker, and condition (3) needs web-2 `/workspaces` LUKS-backed (#6931).
 
 ## Functional Requirements
 
@@ -97,6 +120,25 @@ has no arch-derivation local.
 - **TR5** — `tests/scripts/lib/stock-preflight-gate.sh` is already sourced by
   `git-data-host-replace`; confirm the gate reads the new type and that no test encodes today's
   availability (`cq-test-fixtures-synthesized-only`).
+- **TR6 — validation gates that fail silently and green if skipped.**
+  - `scripts/test-all.sh` does **not** cover `apps/web-platform/infra/`. The authoritative infra
+    gate is `bash apps/web-platform/infra/run-registered-suites.sh`, which derives its suite list
+    from `.github/workflows/infra-validation.yml` and reports unregistered orphans. It must be
+    run (~25 min).
+  - Nothing auto-discovers `tests/scripts/` — any new suite needs an explicit `run_suite` line in
+    `scripts/test-all.sh` inside the `want_scripts` block.
+  - Any new dispatch job sharing `group: web-1-swap` must be enrolled in **both** the allow-list
+    and the total-count assertion in
+    `apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh` — enrolling in one half makes
+    the number stop meaning what it says.
+- **TR7 — rebase hygiene.** `variables.tf` and `apply-web-platform-infra.yml` are high-traffic
+  files. No pushed branch currently conflicts (`origin/feat-one-shot-6969-web-host-replace`
+  changes only two planning docs, verified 2026-07-27), but a parallel session holds unpushed
+  edits to them. Fetch `origin/main` immediately before editing either file.
+- **TR8 — ADR numbering is not consumed.** D8 records an ADR-143 **addendum**, allocating no new
+  number. If that is ever revisited into a standalone ADR, re-derive the next free number
+  (`ls knowledge-base/engineering/architecture/decisions | grep -oE 'ADR-[0-9]+' | sort -t- -k2 -n | tail -1`
+  — highest on `main` was **ADR-147** at spec time).
 
 ## Acceptance Criteria
 

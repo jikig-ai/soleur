@@ -131,17 +131,74 @@ here and must survive: D1–D6 keep `random_password.git_data_luks` and
 `doppler_secret.git_data_luks_key` out of scope, so the existing `luks_passphrase_touched`
 backstop continues to assert it.
 
+## Downstream Chain — what merging this does NOT unblock
+
+The repin is step 1 of a chain. Recorded so no reader mistakes a merged #6570 for a usable
+git-data store. Each item verified open at brainstorm time.
+
+| # | Gate | State |
+|---|---|---|
+| 1 | **#6570 repin** (this work) | The host cannot be *declared* bornable until this lands. |
+| 2 | **Birth the host** via gated dispatch | `git-data-host-replace` plans a plain CREATE against a host absent from state. **Verify that path rather than assume it** — the stock preflight would have aborted on `cax11`, so it has never actually run this shape. If it does not fit, an additive birth route may need building, as the web-host birth path did (#6730). |
+| 3 | **#6975 heartbeat masking** (filed by this brainstorm) | Precondition of the *birth*, not the repin — see Open Questions. |
+| 4 | **#6680** — `git-data-cutover.yml` has no tunnel ingress for `10.0.1.20` | The CF Tunnel SSH bridge reaches only web-1, and the whole cutover runs over that bridge. **Host born is not cutover-runnable.** An unsolved design question, not a mechanical fix. |
+| 5 | **Flip `GIT_DATA_STORE_ENABLED`** on both hosts in lockstep | Verified **absent from Doppler `soleur/prd` entirely**; `workspace-resolver.ts:57` gates on `=== "true"`. Flip **only** via `git-data-cutover.sh` — it sits behind drain → delta-rsync → set-identity verify, and a manual Doppler set skips the write-freeze. |
+
+**Even completing all five does not give web-2 traffic.** `lb-weight-gate.sh` Condition B needs
+`GIT_DATA_STORE_ENABLED==true` *plus* a `GIT_DATA_LUKS` soak marker, and condition (3) needs
+web-2's `/workspaces` LUKS-backed (#6931). Necessary, not sufficient. Serving-weight stays out of
+scope here.
+
+Adjacent and deliberately deferred: **#6548** (git_data_prd never unpaused, absent from live
+Better Stack) and **#5914** (host-key TOFU on private-net git SSH).
+
 ## Open Questions
 
-1. **Does the armed `betteruptime_heartbeat.git_data_prd` (230s) alert on a host that has never
-   existed?** The heartbeat is armed in `apply-web-platform-infra.yml:976`. If it is
-   absence-alerted, it has been firing against a phantom host — worth confirming, and out of
-   scope here if so (feeds #6460).
-2. **Should `var.registry_server_type` get the same D5 plan-time guard treatment?** It already
-   has `data.hcloud_server_type.registry`; the question is whether the remaining grandfathered
-   hosts (web-1 `cx33`, grok-dogfood `cx33`) need equivalent coverage. Owned by #6460.
-3. **Revert-to-ARM trigger.** D2 makes reverting to `cax11` a var flip when Ampere restocks, but
+1. **The git-data heartbeat masks across hosts — filed as #6975.** `web-probe-envwrite.sh:42`
+   asserts *"git-data uses ONE shared beat today (single-host; masking moot, C3) → the KEY is
+   unsuffixed"*, and line 54 writes `GIT_DATA_HEARTBEAT_URL_KEY=GIT_DATA_HEARTBEAT_URL`. That
+   single-host premise is **dead** — `soleur-web-2` is live. Both hosts probe `10.0.1.20:22` and
+   ping the same unsuffixed beat, so a healthy web-1 path MASKS a dead web-2→git-data path. This
+   is the exact OR-masking `web-probe.tf` designed out of the zot and NIC-guard beats via
+   `for_each var.web_hosts`. No open issue tracked it. **Decided: file, do not fold in** — the
+   repin is a server-type decision and this is a probe-topology defect. It gates the **birth**
+   (step 2 above), not this PR, because with no git-data host both probes currently fail and
+   nothing is yet masked.
+2. **`terraform_data.git_data_probe_install` (`server.tf:622`) is hardcoded to
+   `hcloud_server.web["web-1"]`**, while fresh hosts get the probe baked via
+   `cloud-init`/`soleur-host-bootstrap.sh`. web-2 has the probe, but the two hosts receive it by
+   different mechanisms — a drift surface. The same resource also hardcodes `web-1` inside the
+   zot key suffix. Carried into #6975.
+3. **Should the remaining grandfathered hosts get D5's plan-time guard?** web-1 (`cx33`) and
+   grok-dogfood (`cx33`) have none; only zot-registry does. Owned by #6460.
+4. **Revert-to-ARM trigger.** D2 makes reverting to `cax11` a var flip when Ampere restocks, but
    nothing watches for a restock. #6460's periodic orderability audit is the natural home.
+5. **Expense ledger row 16 (`CPX22 (web-2)`) is stale** — it reads `approved-not-billing` with
+   "web-2 is NOT provisioned yet", but the host is **live** (Hetzner API 2026-07-26T22:07Z; #6969
+   covers its first boot). Adjacent to FR8's ledger edit; flagged, not fixed here.
+
+## Cross-Session Review (2026-07-27)
+
+A parallel session produced an independent plan for the wider git-data enablement. Its findings
+were checked rather than adopted. Corroborated and folded in: the type choice (`cpx22`, reached
+independently), the #6975 masking defect, the #6680 cutover-ingress gate, the
+`GIT_DATA_STORE_ENABLED` absence, the probe-install drift, and `run-registered-suites.sh` as the
+authoritative infra gate (TR6).
+
+**Two of its claims did not verify and were not adopted:**
+
+- **"branch `feat-one-shot-6969-web-host-replace` (PR #6973) already edits `variables.tf`,
+  `apply-web-platform-infra.yml`, `stock-preflight-gate.sh`, `scheduled-inngest-health.yml`,
+  `terraform-target-parity.test.ts`, `test-all.sh`."** `git diff origin/main...origin/feat-one-shot-6969-web-host-replace`
+  shows **exactly two files**: a plan doc and a `tasks.md`. None of the claimed files is touched.
+  That session was describing its own uncommitted working tree, not pushed state — which also
+  makes its "green on all 13 ACs, only needs `/review` → `/ship`" unverifiable, since the
+  implementation is not pushed. The conflict is therefore **prospective, not actual**; the
+  mitigation (fetch `origin/main` immediately before editing `variables.tf`) is still sound, and
+  no sequencing dependency on that branch is warranted.
+- **"It CLAIMS ADR-148 — take 149 or higher."** No `ADR-148` reference exists on that branch, and
+  the highest ADR on `main` is **ADR-147**. Moot for this work regardless: D8 records an ADR-143
+  **addendum**, which allocates no new number.
 
 ## Domain Assessments
 
