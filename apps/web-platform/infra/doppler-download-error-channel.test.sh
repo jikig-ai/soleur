@@ -436,6 +436,57 @@ exit 0'
   fi
   rm -rf "$sb"
 
+  # ── T5b: temp-file hygiene on the FAILURE path ──
+  # The helper mktemps its stderr buffer and owns its own EXIT trap for it: it runs as a separate
+  # process, so the cloud-init terminal block's trap cannot see that variable. The failure path is
+  # the one that matters — it is the path that runs on the boot nobody is watching.
+  sb="$(mktemp -d -t ddl-t5b.XXXXXXXX)"
+  mk_sandbox "$sb" '#!/bin/sh
+printf "Doppler Error: fail\n" >&2
+exit 4'
+  touch "$sb/.stamp"
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" TMPDIR="$sb/tmp" \
+    SOLEUR_DOPPLER_ATTEMPTS=1 SOLEUR_DOPPLER_BACKOFF_1=0 SOLEUR_DOPPLER_BACKOFF_2=0 \
+    sh -c 'mkdir -p "$TMPDIR"; soleur-doppler-download "'"$sb"'/envfile"' ) >/dev/null 2>&1
+  leaked="$(find "$sb/tmp" -name 'doppler-err.*' 2>/dev/null | head -3)"
+  if [ -z "$leaked" ]; then
+    ok "T5b: no stderr temp-file residue after an EXHAUSTED (failing) download"
+  else
+    no "T5b: stderr temp file leaked on the failure path: $leaked"
+  fi
+  rm -rf "$sb"
+
+  # ── T7b: the LEGACY single-buffer channel still works (five producers left untouched) ──
+  # The per-stage channel is additive: `.d/<stage>` if present, else the legacy file. If the
+  # fallback regressed, the five existing producers in cloud-init.yml (ghcr login outcome, pull
+  # error, …) would go dark — a silent regression in a channel this PR never intended to touch.
+  sb="$(mktemp -d -t ddl-t7b.XXXXXXXX)"
+  mk_sandbox "$sb" '#!/bin/sh
+exit 0'
+  printf 'ghcr_login_fail: legacy-buffer-content\n' > "$sb/legacy"
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" \
+    SOLEUR_STAGE_DETAIL_FILE="$sb/legacy" \
+    sh -c 'soleur-boot-emit pull fatal' ) >/dev/null 2>&1
+  leg="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
+  if printf '%s' "$leg" | grep -qF 'legacy-buffer-content'; then
+    ok "T7b: a stage with no per-stage file still reads the LEGACY buffer (fallback intact)"
+  else
+    no "T7b: legacy single-buffer fallback regressed; got: '$leg'"
+  fi
+  # ...and the per-stage file WINS when both exist (no double-read, no concatenation).
+  printf 'per-stage-content\n' > "$sb/detail.d/pull"
+  : > "$sb/events.jsonl"
+  ( PATH="$sb/bin:$PATH" SOLEUR_STAGE_DETAIL_DIR="$sb/detail.d" \
+    SOLEUR_STAGE_DETAIL_FILE="$sb/legacy" \
+    sh -c 'soleur-boot-emit pull fatal' ) >/dev/null 2>&1
+  both="$(ev_field "$sb/events.jsonl" 1 '.tags.detail')"
+  if printf '%s' "$both" | grep -qF 'per-stage-content' && ! printf '%s' "$both" | grep -qF 'legacy-buffer-content'; then
+    ok "T7c: the per-stage file takes precedence over the legacy buffer (no double-read)"
+  else
+    no "T7c: precedence wrong when both exist; got: '$both'"
+  fi
+  rm -rf "$sb"
+
   # ── AC-I: channel isolation — a detail written for one stage must not bleed into another ──
   sb="$(mktemp -d -t ddl-aci.XXXXXXXX)"
   mk_sandbox "$sb" '#!/bin/sh
