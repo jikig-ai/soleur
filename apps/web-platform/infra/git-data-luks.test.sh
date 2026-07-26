@@ -190,8 +190,15 @@ p_prereceive_freeze() {
 # expands to EMPTY, and .github/scripts/validate-infra-templates.sh skips any `$${key}`
 # BY DESIGN, so the render gate is blind to it. This exact-form grep is the only guard.
 # Verbatim shape from inngest-host.test.sh:177 (the sibling dual-arch host).
+# BOTH interpolations are pinned, not just the URL. The plan named the silent direction
+# as this change's top risk, and it can land on EITHER line — a `$${doppler_sha256}`
+# renders an empty checksum just as invisibly as a `$${doppler_arch}` renders an empty
+# arch. Guarding only the URL would leave the checksum half covered by a one-shot PR
+# acceptance grep and by nothing durable afterwards.
 p_doppler_arch_url() {
-  if grep -qF 'doppler_$${DOPPLER_VERSION}_linux_${doppler_arch}.tar.gz' "$1"; then echo 1; else echo 0; fi
+  grep -qF 'doppler_$${DOPPLER_VERSION}_linux_${doppler_arch}.tar.gz' "$1" || { echo 0; return; }
+  grep -qF 'DOPPLER_SHA256="${doppler_sha256}"' "$1" || { echo 0; return; }
+  echo 1
 }
 
 # Extract a file's per-arch Doppler checksum pair as "<arm64sha> <amd64sha>", read from
@@ -343,6 +350,12 @@ assert_holds    "A14 doppler-arch-url" p_doppler_arch_url "$CLOUD_INIT"
 # Mutation: revert to the pre-#6570 hardcoded arm64 build — the actual regression.
 assert_mutation "A14 doppler-arch-url" p_doppler_arch_url "$CLOUD_INIT" \
   's/_linux_[^"]*\.tar\.gz/_linux_arm64.tar.gz/'
+# Mutation: the SILENT escaping direction — a double-$ on the TERRAFORM var renders a
+# literal ${doppler_sha256} that bash expands to EMPTY, so `sha256sum -c -` is handed a
+# blank digest. terraform validate stays green and validate-infra-templates.sh skips
+# $${key} BY DESIGN, so this assertion is the only thing between that typo and a boot.
+assert_mutation "A14 doppler-arch-url (silent \$\$ escape)" p_doppler_arch_url "$CLOUD_INIT" \
+  's/DOPPLER_SHA256="/DOPPLER_SHA256="$$/'
 
 # A15: checksum pair byte-equals the two canon sites, in arm64-then-amd64 order.
 assert_holds    "A15 doppler-checksum-parity" p_doppler_checksum_parity "$GIT_DATA_TF"
@@ -366,8 +379,8 @@ assert_mutation "A17 default-not-cax" p_default_not_cax "$VARIABLES_TF" \
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 total=$((passes + fails))
-if [ "$total" -lt 34 ]; then
-  echo "FAIL: ran only ${total} assertions (<34) — suite did not execute fully" >&2
+if [ "$total" -lt 35 ]; then
+  echo "FAIL: ran only ${total} assertions (<35) — suite did not execute fully" >&2
   exit 1
 fi
 
