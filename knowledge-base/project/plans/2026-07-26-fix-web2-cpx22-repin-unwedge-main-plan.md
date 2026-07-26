@@ -218,7 +218,7 @@ is why it was deliberately left open by the birth-path PR.
       note and a `verify_by`.
 - [ ] AC8 — `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is clean (**not**
       `npm run -w`; the repo root declares no `workspaces` field).
-- [ ] AC9 — `bash scripts/test-all.sh` green **and** `bash tests/scripts/run-registered-suites.sh`
+- [ ] AC9 — `bash scripts/test-all.sh` green **and** `bash apps/web-platform/infra/run-registered-suites.sh`
       green (the CI-registered infra suites `test-all.sh` does not cover — boundary documented in
       `test-all.sh`). Assert specifically that `tests/scripts/test-stock-preflight-gate.sh`,
       `tests/scripts/test-web-host-birth-gate.sh`, and
@@ -476,7 +476,7 @@ single keyword grep):
    Expect green (this change destroys nothing).
 6. **C4 validators** —
    `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts`.
-7. **Full suites** — `bash scripts/test-all.sh` **and** `bash tests/scripts/run-registered-suites.sh`.
+7. **Full suites** — `bash scripts/test-all.sh` **and** `bash apps/web-platform/infra/run-registered-suites.sh`.
    The second is not optional: it covers the 70 CI-registered infra suites `test-all.sh` does not.
 8. **Post-birth liveness** (Phase 5) —
    `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep soleur-web-2`.
@@ -551,7 +551,7 @@ single keyword grep):
   places (`:403`, `:432`, `:609`) and there is no arch derivation for `var.web_hosts` — unlike the
   registry and inngest hosts, which derive arch from their type vars. If the `cax` line restocks, a
   web host still needs cloud-init work first. Recorded in the ADR-143 addendum.
-- **`test-all.sh` does not cover the infra suites.** Run `tests/scripts/run-registered-suites.sh` as
+- **`test-all.sh` does not cover the infra suites.** Run `apps/web-platform/infra/run-registered-suites.sh` as
   well; the coverage boundary is documented in `test-all.sh` itself. #6965 tracks 9 infra suites
   nothing runs.
 - **`Ref #6730`, not `Closes #6730`.** #6730 closes on the *post-merge dispatch outcome*; a `Closes`

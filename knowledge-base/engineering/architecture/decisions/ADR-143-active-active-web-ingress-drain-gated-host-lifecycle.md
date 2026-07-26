@@ -148,3 +148,83 @@ The original `lb-weight-gate.sh` was deleted (#6575) because its first assertion
   blue-green readiness), unlike the retired standby.
 - **Follow-on:** git-data (#6570) must also move off the unorderable `cax11` (ARM) to an x86 type — its own
   work; it is the root blocker for the Phase-6 concurrent-serving flip.
+
+## Addendum — 2026-07-26: web-2 repinned `cx23` → `cpx22` (forced by stock, #6966)
+
+Status unchanged (`adopting`). This is an amendment to the Decision's host-shape choice, not a new
+decision — D1 already provided for a shape change ("resize to a serving shape at the GA flip only if
+web-2's OWN metrics warrant"), and the choice set here was reduced by the vendor, not by us.
+
+**What forced it.** `main` HALTed on every merge: `hcloud_server.web["web-2"]` was declared but
+absent, tripping the `host_creates` tripwire, and the birth path that shipped 2026-07-26 could not
+clear it because **`cx23` had become orderable in 0 of 3 EU DCs**. The birth *mechanism* had merged;
+the *value* had never been changed. Verified on the birth-path merge commit: run `30207415503`,
+"Apply web-platform infra" → failure, `host_creates` HALT.
+
+**Live probe, 2026-07-26 ~18:05 UTC** (`GET /v1/datacenters` → `.server_types.available`):
+
+| | orderable in nbg1-dc3 / hel1-dc2 / fsn1-dc14 |
+|---|---|
+| available (identical sets) | `cpx12 cpx22 cpx32 cpx42 cpx52 cpx62 ccx13 ccx23 ccx33 ccx43 ccx53 ccx63` |
+| orderable **nowhere** | the entire `cx` line (incl. `cx23` **and** web-1's `cx33`) and the entire `cax` ARM line |
+
+No `deprecation` block is set on any of them — Hetzner stopped selling them in our region. Stock
+moves on an **hours** timescale (`cx33` went orderable-in-hel1 → orderable-nowhere in ~3h on
+2026-07-15), so this table is a snapshot and every host-creating apply re-probes.
+
+**The `cx23` rationale recorded in D1 is void.** It read "cx23 is the cheapest orderable 4g x86 in
+hel1". That is now false and has been deleted from `variables.tf` rather than left standing as stale
+justification.
+
+**Why `cpx22`.** The D1 *sizing* input is unchanged — 30-day host_metrics still show web-1 peaking
+~1.5 GB RAM / 0.48 load15, and `cpx22` matches `cx23` on cores and RAM **exactly** (2c/4g), doubling
+local disk (40 → 80 GB). So this is a **price** change, not a resize:
+
+| type | shape | EUR/mo net (hel1) | orderable | vs `cx23` |
+|---|---|---|---|---|
+| `cx23` | 2c 4g 40gb x86 | 5.49 | **no** | — (superseded) |
+| `cpx12` | 1c 2g 40gb x86 | 11.49 | yes | +6.00 |
+| **`cpx22`** | **2c 4g 80gb x86** | **19.49** | **yes** | **+14.00** |
+| `cpx32` | 4c 8g 160gb x86 | 35.49 | yes | +30.00 |
+| `ccx13` | 2c 8g 80gb x86 ded. | 42.99 | yes | +37.50 |
+
+`cpx12` was the only cheaper orderable option and was rejected on **headroom**, not price: 1.5 GB
+measured peak on a 2 GB box is 75% with ~0 headroom, and its 1 vCPU is below web-1's shape. Since
+web-2's stated purpose is to be the cattle template the Phase-5 web-1 de-pet rebuilds from, it must
+be serving-capable as born; `cpx12` would force a reboot-forcing `server_type` resize at the GA flip,
+i.e. a second birth cycle through the gated dispatch. `ccx13` is 7.8× `cx23` for a serving-weight-0
+standby and over-provisions against the very measurement D1 used to size *down* from web-1's `cx33`.
+
+**Cost caveat.** The Hetzner API returns **identical `net` and `gross`** for this account, so
++EUR 14.00/mo is arithmetic on those values and **not** a VAT-adjusted quote. The ledger row carries
+the caveat and a `verify_by`; the first invoice showing the host is the reconciliation point.
+
+**Arch: unchanged.** `cpx22` and `cx23` are both `architecture: x86` (only the CPU vendor differs,
+Intel → AMD), and there is no arch derivation for web hosts at all — `server.tf` passes
+`each.value.server_type` straight through, unlike `var.registry_server_type` and
+`var.inngest_server_type`, which derive `arm64`/`amd64`. **Latent constraint worth recording:** a web
+host can never be born on the `cax` ARM line *regardless of stock*, because `cloud-init.yml` pins
+`amd64` in three places (Doppler CLI, the Docker apt `arch=amd64` line, the webhook binary). If the
+ARM line restocks, a web host still needs cloud-init work first. This permanently narrows the
+web-host choice set to `cpx*`/`ccx*`.
+
+**Account cap: not a constraint, and the recorded value was stale.** The birth needed no vendor
+request. The live limit is **10 servers with 4 running** (verified 2026-07-26), i.e. six free slots —
+the granted outcome of the 2026-07-15 cap-headroom workstream. The pre-raise value of 5 had survived
+in the repo's assumptions because `GET /v1/limits` returns **404**, so no automated check can read
+the cap and nothing could contradict it. Two decisions were nearly made on the stale number:
+requesting a raise that already existed, and retiring `soleur-grok-dogfood` to "free a slot" — an
+irreversible `cx33` loss (cheapest orderable 8 GB replacement `cpx32`, 4.2×) for a slot already free
+six times over.
+
+**Disaster-recovery consequence, stated plainly.** Three of the four running hosts are on types that
+can no longer be ordered: web-1 (`cx33`), `soleur-grok-dogfood` (`cx33`), `soleur-registry` (`cx23`).
+They run fine, but **none can be rebuilt on its current type** — each rebuild is a type decision and
+a cost change. Nothing catches "a declared type left the orderable set" until an apply; that periodic
+audit is #6460, which also now owns recording the account limits as facts with a decay date.
+
+**Not changed by this addendum:** `var.registry_server_type` and `var.git_data_server_type` keep their
+unorderable defaults. A `registry_server_type` change is a host *replace* of a live registry, and
+git-data's move off ARM voids the ARM-native rationale recorded in its own pin — #6570 owns that
+decision (its cloud-init installs the **arm64** Doppler build, so it is a real code change, not a var
+flip).

@@ -49,7 +49,7 @@ plan: knowledge-base/project/plans/2026-07-26-fix-web2-cpx22-repin-unwedge-main-
       no sibling host create/replace
 - [ ] 5.2 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean
 - [ ] 5.3 `bash scripts/test-all.sh` green
-- [ ] 5.4 `bash tests/scripts/run-registered-suites.sh` green (infra suites test-all.sh misses)
+- [ ] 5.4 `bash apps/web-platform/infra/run-registered-suites.sh` green (infra suites test-all.sh misses)
 - [ ] 5.5 AC1–AC11 all verified
 
 ## Phase 6 — post-merge birth (gated dispatch)

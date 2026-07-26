@@ -46,9 +46,14 @@ locals {
   # zot's OWN image is third-party (upstream project-zot), DIGEST-PINNED, v2.1.2. Pulled from
   # the PUBLIC upstream registry at boot — NEVER from our own zot (bootstrap paradox, Sharp Edges).
   # Arch is DERIVED from var.registry_server_type so a single var switches the whole host: `cax*`
-  # (Ampere) → arm64, anything else (`cx*`/`cpx*`) → amd64. This lets provisioning take whichever of
-  # cax11 (ARM, €5.99) / cx23 (x86, €5.49) has Hetzner stock — both are functionally identical for a
-  # store-and-serve registry (it never RUNS the amd64 platform images it holds). Re-verify BOTH
+  # (Ampere) → arm64, anything else (`cx*`/`cpx*`) → amd64. The arch-agnosticism is real — both are
+  # functionally identical for a store-and-serve registry (it never RUNS the amd64 platform images
+  # it holds) — but the stock claim that used to sit here is NOT. It read "this lets provisioning
+  # take whichever of cax11 (ARM, €5.99) / cx23 (x86, €5.49) has Hetzner stock"; as of the live
+  # probe 2026-07-26 (#6966) NEITHER has stock: the entire cx line AND the entire cax ARM line are
+  # orderable in 0 of 3 EU DCs. soleur-registry is GRANDFATHERED on its cx23 — it runs fine but
+  # CANNOT BE REBUILT on that type, so a registry recreate is a type decision (the orderable set is
+  # cpx*/ccx* only). Do not read this block as offering a cax11↔cx23 choice. Re-verify BOTH
   # digests on a version bump: `crane digest ghcr.io/project-zot/zot-linux-{arm64,amd64}:vX.Y.Z`.
   registry_arch   = startswith(var.registry_server_type, "cax") ? "arm64" : "amd64"
   zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64@sha256:c3fc47782d98b731d5928a24182b495e28cc92f9dcf1d5317f7dbd632e10bf30"
