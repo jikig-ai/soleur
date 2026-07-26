@@ -156,9 +156,14 @@ load-bearing control, and `terraform-target-parity.test.ts` binds the two litera
 2. **Destroy then create as two dispatches.** Rejected. It opens a window in which the host
    is absent from state with no plan to restore it, and doubles the approval surface for one
    logical operation.
+<!-- lint-infra-ignore start: alternative (3) NAMES the laptop-run apply in order to REJECT it.
+     It is a rejected alternative, not a prescribed step — the whole decision is that this path
+     is not the remedy. Same actor+imperative co-occurrence the linter matches on, inverted in
+     meaning; identical precedent to ADR-145's problem-statement region. -->
 3. **Operator-local `terraform apply -replace`.** Rejected per
    `hr-all-infrastructure-provisioning-servers` and
    `hr-fresh-host-provisioning-reachable-from-terraform-apply`.
+<!-- lint-infra-ignore end -->
 4. **Support web-1 via key-conditional requirement arms** (require the LUKS attachment
    recreate and the `cloudflare_record.app` update when the key is web-1). Rejected *for now*
    — the arms are writable and would be strengthening rather than weakening, but they cannot

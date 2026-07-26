@@ -40,6 +40,11 @@ The last one is a property of cloud-init, not of the terraform plan, so no gate 
 observe it. **There is no automated route to replace web-1 today**, and there was none before
 this path either.
 
+<!-- lint-infra-ignore start: the blockquote below states the PRECONDITIONS a future change
+     must satisfy before the web-1 refusal can be lifted (land #6931, add gate arms, rehearse
+     off-prod). It prescribes no step for today's operator — the operative instruction in this
+     runbook is a single `gh workflow run` dispatch. Naming a rehearsal as a prerequisite for
+     someone else's future PR is not a human-run infra step in this one. -->
 > **Corrected 2026-07-27.** This section previously named an *"ambiguous `scsi-0HC_Volume_*`
 > mount glob"* as decisive and gave *"ADR-119 §Sequencing's volume-ID mount pin"* as the
 > prerequisite. Both were false — #6604 pinned the mount by-id before this path existed, and
@@ -47,6 +52,7 @@ this path either.
 > here to lift the refusal: the prerequisite is **#6931**, plus key-conditional gate arms for
 > `hcloud_volume_attachment.workspaces_luks` and `cloudflare_record.app`, plus a rehearsal on
 > a non-production host. Tracker **#6964**; see ADR-148 §Alternatives item 4.
+<!-- lint-infra-ignore end -->
 
 ## The procedure
 

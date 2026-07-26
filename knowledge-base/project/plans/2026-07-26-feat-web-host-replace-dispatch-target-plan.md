@@ -81,8 +81,11 @@ own inverted gate whose contract is *exactly one replace of the requested host, 
 preserved*. Alternatives considered: (a) widen the birth gate to accept `["delete","create"]` —
 rejected, it dissolves the birth/replace distinction the birth gate exists to enforce; (b)
 destroy-then-create as two dispatches — rejected, it opens a window where the host is absent and
-doubles the approval surface; (c) operator-local `terraform apply -replace` — rejected per
+doubles the approval surface; <!-- lint-infra-ignore start: (c) NAMES the laptop-run apply in order to REJECT it — a
+     rejected alternative, not a prescribed step. ADR-145 precedent. -->
+(c) operator-local `terraform apply -replace` — rejected per
 `hr-all-infrastructure-provisioning-servers`.
+<!-- lint-infra-ignore end -->
 
 **The ordinal is provisional.** `/ship`'s ADR-Ordinal Collision Gate re-verifies against `origin/main`
 before merge; on renumber, sweep this plan + `tasks.md` + any AC naming the ordinal.
