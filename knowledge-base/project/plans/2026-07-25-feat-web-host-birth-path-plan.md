@@ -66,22 +66,20 @@ never create one".
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** `app.soleur.ai` returning connection
-errors or a stale/blank app. A web host birthed on an incoherent image aborts cloud-init at
-`stage=verify` — no cloudflared connector, so the tunnel has no origin — and `runcmd` is
-once-per-instance, so no reboot repairs it. Today web-2 is out-of-band (serving weight 0),
-but this path is generic over `web-N` and is the documented birth path for **web-1**, the
-sole singleton behind the `app.soleur.ai` A record.
-
-**If this leaks, the user's data is exposed via:** the dispatch reads `SENTRY_DSN`,
-`HCLOUD_TOKEN` and the R2 backend credentials from Doppler `prd_terraform`. An unmasked
-echo, a `set -x` region, or a `::notice::` interpolating a secret would put live production
-credentials into a world-readable Actions log — from which the whole fleet is reachable.
-
-**Brand-survival threshold:** single-user incident
+- **If this lands broken, the user experiences:** `app.soleur.ai` returning connection
+  errors or a stale/blank app. A web host birthed on an incoherent image aborts cloud-init at
+  `stage=verify` — no cloudflared connector, so the tunnel has no origin — and `runcmd` is
+  once-per-instance, so no reboot repairs it. Today web-2 sits outside the serving rotation
+  (weight 0), but this path is generic over `web-N` and is the documented birth path for
+  **web-1**, the sole singleton behind the `app.soleur.ai` A record.
+- **If this leaks, the user's data is exposed via:** the dispatch reads `SENTRY_DSN`,
+  `HCLOUD_TOKEN` and the R2 backend credentials from Doppler `prd_terraform`. An unmasked
+  echo, a `set -x` region, or a `::notice::` interpolating a secret would put live production
+  credentials into a world-readable Actions log — from which the whole fleet is reachable.
+- **Brand-survival threshold:** `single-user incident`
 
 A single dark web-1 is a total outage for every user, with no failover partner (web-2 is
-out-of-band pre-GA; #6459 unbuilt). One incident is the whole brand.
+outside the serving rotation pre-GA; #6459 unbuilt). One incident is the whole brand.
 
 ## Infrastructure (IaC)
 
@@ -97,7 +95,7 @@ The `-target` set is the web-host fan-out for one `each.key`.
 (c) gated `workflow_dispatch` with a scoped `-target` set and `-var image_name=<pinned digest>`.
 Blast radius is bounded by the birth guard (§Distinctness) — exactly one `hcloud_server`
 create, zero destroys, zero replaces. Expected downtime: none (the host does not exist yet;
-out-of-band host, serving weight 0).
+it sits outside the serving rotation, weight 0).
 
 ### Distinctness / drift safeguards
 

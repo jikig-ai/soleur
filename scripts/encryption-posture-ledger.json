@@ -13,6 +13,7 @@
     "cloudflare_zero_trust_tunnel_cloudflared", "cloudflare_zero_trust_tunnel_cloudflared_config",
     "cloudflare_zone_dnssec", "cloudflare_zone_settings_override", "doppler_environment", "doppler_project",
     "doppler_secret", "doppler_service_token", "github_actions_secret", "github_repository_environment",
+    "github_repository_environment_deployment_policy",
     "github_repository_ruleset", "hcloud_firewall", "hcloud_firewall_attachment", "hcloud_network",
     "hcloud_network_subnet", "hcloud_placement_group", "hcloud_server", "hcloud_server_network",
     "hcloud_ssh_key", "hcloud_volume_attachment", "null_resource", "random_id", "random_password",
