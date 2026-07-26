@@ -331,11 +331,18 @@ fi
 # suite 94/0 green, and so did deleting BOTH of them. An assertion that its own
 # documentation satisfies is the vacuous pass #6575 deleted these five rather than leave
 # behind. `f && /^      - name:/ {exit}` bounds the scan; `!/^ *#/` rejects prose.
-if [[ -n "$(awk '/- name: Surface fresh-host Sentry/{f=1; next} f && /^      - name:/{exit} f && !/^[[:space:]]*#/ && /^[[:space:]]*if:[[:space:]]*always\(\)[[:space:]]*$/{print "y"; exit}' <<<"$JOB")" ]]; then
-  ok "AC8b: the fresh-host Sentry surface runs if: always() (a green boot still shows the probe fired)"
-else
-  no "AC8b: the Sentry surface step must be if: always() (spec-flow F4)"
-fi
+# PER-JOB (#6969 review): this was $JOB-scoped, so deleting `if: always()` from the REPLACE
+# job's boot-trail step left every suite green. On a replace that is strictly worse than on a
+# birth — the original host is already destroyed, so "the apply succeeded" and "the probe
+# never ran" render identically, with nothing to fall back to.
+for prov_job in web_host_create web_host_replace; do
+  PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$WF" || true)"
+  if [[ -n "$(awk '/- name: Surface fresh-host Sentry/{f=1; next} f && /^      - name:/{exit} f && !/^[[:space:]]*#/ && /^[[:space:]]*if:[[:space:]]*always\(\)[[:space:]]*$/{print "y"; exit}' <<<"$PROV")" ]]; then
+    ok "AC8b: ${prov_job} fresh-host Sentry surface runs if: always()"
+  else
+    no "AC8b: ${prov_job} Sentry surface step must be if: always() (spec-flow F4)"
+  fi
+done
 
 # ── AC8d (#6969): EVERY host-provisioning dispatch job WIRES the extracted reader ──
 #

@@ -146,11 +146,24 @@ A replace destroys before it creates, so check the apply output for whether the 
 landed:
 
 - **Destroy did not run** — nothing changed. Re-dispatch after fixing the cause.
-- **Destroy landed, create failed** (out-of-stock is the documented cause) — the host is
-  absent from the provider. Re-dispatching *this* target will not help: there is nothing left
-  to delete, so the plan yields zero replaces and the gate correctly refuses. The recovery is
-  [`web-host-create`](./web-host-birth.md), which is additive and is graded against the birth
-  contract. The workspaces volume was preserved by omission and re-attaches to the new host.
+- **Destroy landed, create failed** (out-of-stock is the documented cause) — **two states are
+  reachable and their recoveries are opposite.** Determine which one you are in first, from
+  the apply log or a Hetzner API existence probe:
+
+  ```bash
+  curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN" \
+    "https://api.hetzner.cloud/v1/servers?name=soleur-<key>" | jq '.servers | length'
+  ```
+
+  - **Absent from state** (the create never returned an id) — re-dispatching *this* target
+    plans zero replaces and the gate correctly refuses. Recovery is
+    [`web-host-create`](./web-host-birth.md): additive, graded against the birth contract.
+  - **In state but TAINTED** (the create returned an id and a later step failed) — a tainted
+    resource plans `delete+create`, which *this* gate PASSES. Re-dispatch
+    `web-host-replace`. Do **not** use `web-host-create` here: the birth gate aborts on the
+    destroy arm.
+
+  Either way the workspaces volume was never in the destroy set and re-attaches to the new host.
   If stock is the cause, repin `var.web_hosts[<key>].server_type` to an orderable type and
   **merge that change first** — this job replaces a host as declared, it does not redeclare
   one.

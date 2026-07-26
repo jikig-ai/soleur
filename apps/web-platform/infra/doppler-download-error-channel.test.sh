@@ -977,6 +977,35 @@ FIXEOF
   else
     no "AC-M6: the dark-boot ::error:: annotation must interpolate \${FATAL_DETAIL}"
   fi
+  # ── AC-M8 (#6969 review): the RUN ANCHOR ──
+  # host_name is soleur-<key> for BOTH a destroyed host and its replacement, and the query is
+  # statsPeriod=1h with sort=-timestamp. Without a lower bound the first poll iteration reads
+  # the PREDECESSOR's terminal event — a healthy predecessor yields TERMINAL=complete and a
+  # GREEN run with the replacement's boot never verified, which is #6969's originating
+  # incident re-created inside the mechanism built to prevent it. Pin the predicate AND its
+  # application to every host-scoped selection: a def nothing calls is decoration.
+  if grep -qF 'def sincok($s)' "$TRAIL"; then
+    ok "AC-M8: the reader defines the run-anchor predicate"
+  else
+    no "AC-M8: the reader must define sincok(\$s) to discard events predating this run"
+  fi
+  hostsel=$({ grep -cF 'select(hostok($eh))' "$TRAIL" || true; })
+  bothsel=$({ grep -cF 'select(hostok($eh)) | select(sincok($since))' "$TRAIL" || true; })
+  if [ "$hostsel" -gt 0 ] && [ "$hostsel" -eq "$bothsel" ]; then
+    ok "AC-M8: all ${hostsel} host-scoped selections also apply the run anchor"
+  else
+    no "AC-M8: ${bothsel} of ${hostsel} host-scoped selections apply sincok — an unanchored selection can read the predecessor's terminal event"
+  fi
+  # CALLER side: a perfect predicate is inert if nobody stamps the epoch.
+  for prov_job in web_host_create web_host_replace; do
+    PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$WF" || true)"
+    if grep -qE '^[[:space:]]*run:[[:space:]]*printf .BOOT_TRAIL_SINCE=' <<<"$PROV"; then
+      ok "AC-M8: ${prov_job} stamps BOOT_TRAIL_SINCE before its apply"
+    else
+      no "AC-M8: ${prov_job} must stamp BOOT_TRAIL_SINCE before apply, or its boot-trail read is unanchored"
+    fi
+  done
+
   # QUERY message literals stay byte-identical: renaming one darks the gate AND mints a new
   # Sentry issue group where value=1 means '>1', so a single fatal would stop paging entirely.
   if grep -qF 'QUERY='"'"'message:"soleur-hostscript-seed failed" OR message:"soleur-host-bootstrap failed" OR message:"soleur-host-bootstrap complete" OR message:"soleur-cloud-init boot stage"'"'" "$TRAIL"; then

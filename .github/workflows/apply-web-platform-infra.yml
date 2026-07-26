@@ -3272,6 +3272,14 @@ jobs:
           echo "birth gate + stock preflight PASSED for ${WEB_HOST_KEY}. Plan summary:"
           grep -E '^Plan:' tfplan.txt || true
 
+      # RUN ANCHOR for the boot-trail read (#6969). Stamped BEFORE the apply so the
+      # reader can discard events that predate this run. Without it the Sentry query
+      # (statsPeriod=1h, host_name=soleur-<key>) cannot tell a destroyed host's terminal
+      # event from its replacement's — on a replace that means a healthy predecessor
+      # yields a GREEN run with the new host's boot never verified.
+      - name: Stamp boot-trail run anchor (create)
+        run: printf 'BOOT_TRAIL_SINCE=%s\n' "$(date -u +%s)" >> "$GITHUB_ENV"
+
       - name: Terraform apply (web-host birth)
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -3302,6 +3310,11 @@ jobs:
         env:
           JOB_STATUS: ${{ job.status }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # Explicit rather than inherited: WEB_HOST_KEY rides $GITHUB_ENV from the validation
+          # step, so on any if: always() run where validation FAILED it is empty and the host
+          # filter degrades to matching only untagged events. `unknown` is legible in the
+          # summary; an empty string is not.
+          WEB_HOST_KEY: ${{ env.WEB_HOST_KEY || 'unknown' }}
         # R5 (`if: always()`): runs on SUCCESS too. Without that, "the apply succeeded" and
         # "the probe never ran" render identically, and a host that applied clean but booted
         # dark reads as a win. On failure it names where the fresh boot died.
@@ -3684,6 +3697,14 @@ jobs:
           echo "replace gate + stock preflight PASSED for ${WEB_HOST_KEY}. Plan summary:"
           grep -E '^Plan:' tfplan.txt || true
 
+      # RUN ANCHOR for the boot-trail read (#6969). Stamped BEFORE the apply so the
+      # reader can discard events that predate this run. Without it the Sentry query
+      # (statsPeriod=1h, host_name=soleur-<key>) cannot tell a destroyed host's terminal
+      # event from its replacement's — on a replace that means a healthy predecessor
+      # yields a GREEN run with the new host's boot never verified.
+      - name: Stamp boot-trail run anchor (replace)
+        run: printf 'BOOT_TRAIL_SINCE=%s\n' "$(date -u +%s)" >> "$GITHUB_ENV"
+
       - name: Terraform apply (web-host replace)
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -3700,7 +3721,7 @@ jobs:
           set -euo pipefail
           if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
-            echo "::error::terraform apply (web-host-replace for ${WEB_HOST_KEY}) failed. This operation DESTROYS BEFORE IT CREATES, so ${WEB_HOST_KEY} may be gone: check the apply output for whether the destroy completed. If the destroy landed and the create did not (out-of-stock is the documented cause, #6393/#6400), the host is ABSENT from the provider but PRESENT in state as tainted — re-dispatching this target re-plans the replace and the gate will refuse it (zero replaces, since there is nothing to delete). The recovery is apply_target=web-host-create, which is additive and is graded against the birth contract. The workspaces volume was preserved by omission and re-attaches to the new host."
+            echo "::error::terraform apply (web-host-replace for ${WEB_HOST_KEY}) failed. This operation DESTROYS BEFORE IT CREATES, so ${WEB_HOST_KEY} may be gone: check the apply output for whether the destroy completed. If the destroy landed and the create did not (out-of-stock is the documented cause, #6393/#6400), TWO states are reachable and they have OPPOSITE recoveries — determine which one before acting, via terraform state or a Hetzner API existence probe. (a) The create never returned an id, so the resource is ABSENT FROM STATE: re-dispatching THIS target plans zero replaces and the gate correctly refuses; the recovery is apply_target=web-host-create, additive and graded against the birth contract. (b) The create returned an id and a later step failed, so the resource is IN state and TAINTED: that plans delete+create, which THIS gate PASSES, so re-dispatch web-host-replace — web-host-create would be refused by the birth gate on its destroy arm. The earlier wording asserted both halves at once ("ABSENT from the provider but PRESENT in state as tainted ... the gate will refuse it"), which is self-refuting and sent the operator to the wrong remedy in case (b). The workspaces volume was preserved by omission and re-attaches to the new host."
             exit 1
           fi
           echo "replace applied: ${WEB_HOST_KEY}. The pre-apply gate proved the plan carried exactly one replace of this host with its private NIC, its volume attachment and the fleet firewall. A green apply is NOT a green boot — boot telemetry is surfaced by the next step."
@@ -3711,6 +3732,11 @@ jobs:
         env:
           JOB_STATUS: ${{ job.status }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # Explicit rather than inherited: WEB_HOST_KEY rides $GITHUB_ENV from the validation
+          # step, so on any if: always() run where validation FAILED it is empty and the host
+          # filter degrades to matching only untagged events. `unknown` is legible in the
+          # summary; an empty string is not.
+          WEB_HOST_KEY: ${{ env.WEB_HOST_KEY || 'unknown' }}
         # R5 (`if: always()`): runs on SUCCESS too. Without that, "the apply succeeded" and
         # "the probe never ran" render identically, and a host that applied clean but booted
         # dark reads as a win — which is #6969's originating incident exactly.

@@ -23,6 +23,8 @@
 #                   entitled to a dark-boot verdict
 #   DISPATCH_LABEL  the apply_target name, used in log/summary prose (default web-host-create)
 #   DOPPLER_TOKEN   read-only source for SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT
+#   BOOT_TRAIL_SINCE epoch seconds; events older than this are ignored (run anchor, see below)
+#   GITHUB_STEP_SUMMARY  runner-provided; every summary write appends to it (REQUIRED)
 #
 # Exit: 0 on a clean boot, a skipped read, or a non-success job; 1 on a proven dark boot
 # (fatal stage, or no terminal event inside the host's own boot window).
@@ -31,6 +33,20 @@ set +e
 # Prose-only. Defaulted rather than required so a caller that forgets it degrades to the
 # historical wording instead of printing an empty label into the operator-facing summary.
 DISPATCH_LABEL="${DISPATCH_LABEL:-web-host-create}"
+# RUN ANCHOR (#6969 review). Sentry is queried with statsPeriod=1h and host attribution is by
+# host_name, which is IDENTICAL for a destroyed host and its replacement (soleur-<key>). Without
+# a lower bound, iteration 1 reads the PREDECESSOR's terminal event: a healthy predecessor
+# yields TERMINAL=complete and a GREEN run with the replacement's boot never verified — #6969's
+# originating incident, re-created inside the mechanism built to prevent it. Structural to
+# REPLACE; a birth has no same-named predecessor, which is why the inline original lacked it.
+# Callers stamp this immediately before `terraform apply`. Unset/0 disables the bound, which
+# preserves the pre-extraction behaviour for any caller that has not been updated.
+BOOT_TRAIL_SINCE="${BOOT_TRAIL_SINCE:-0}"
+if [[ -n "$BOOT_TRAIL_SINCE" && "$BOOT_TRAIL_SINCE" != "0" ]]; then
+  echo "boot-trail: ignoring events older than epoch ${BOOT_TRAIL_SINCE} (run anchor)"
+else
+  echo "boot-trail: NO run anchor set — a same-named predecessor's terminal event can be read as this host's. Callers should export BOOT_TRAIL_SINCE."
+fi
 # R3-adjacent: read creds from Doppler prd_terraform, NOT GitHub repo secrets —
 # the repo secret SENTRY_AUTH_TOKEN is unset, so a step reading it self-skips and
 # logs "skipped", which is the silent-dark class this step exists to end. Capture
@@ -125,7 +141,8 @@ fi
 # A MISSING host_name matches (an image predating #6969 emits none, and dropping those
 # events would make this gate blind rather than precise); a PRESENT-but-different one
 # does not. So the filter can only ever exclude events provably from another host.
-JQ_HOSTDEF='def hostok($eh): ([ (.tags // [])[]? | select(.key=="host_name") | .value ][0]) as $hn | ($hn == null or $hn == "" or $hn == $eh);'
+JQ_HOSTDEF='def hostok($eh): ([ (.tags // [])[]? | select(.key=="host_name") | .value ][0]) as $hn | ($hn == null or $hn == "" or $hn == $eh);
+def sincok($s): if $s <= 0 then true else ((.dateCreated // "") | if . == "" then false else (((sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // 0) >= $s) end) end;'
 TERMINAL=""
 LAST_STAGE=""
 LAST_DETAIL=""
@@ -158,19 +175,19 @@ while :; do
   # must be SELECTED here, not merely printed in the trail below. The jq programs stay
   # SINGLE-quoted (host matching rides in a concatenated `def`) so the `test($re)`
   # literal the observability suite's AC16 pins stays byte-identical.
-  LAST_STAGE=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
-    [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
+  LAST_STAGE=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'
+    [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since))
           | ([ (.tags // [])[]? | select(.key=="stage") | .value ][0] // "?") ][0] // ""' 2>/dev/null || echo "")
-  LAST_DETAIL=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
-    [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
+  LAST_DETAIL=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'
+    [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since))
           | ([ (.tags // [])[]? | select(.key=="detail") | .value ][0] // "") ][0] // ""' 2>/dev/null || echo "")
-  LAST_HOST=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
-    [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
+  LAST_HOST=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'
+    [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since))
           | ([ (.tags // [])[]? | select(.key=="host_name") | .value ][0] // "") ][0] // ""' 2>/dev/null || echo "")
   # A retry that SUCCEEDED still names a real fault; without this its cause is buried
   # in a green run's collapsed summary and is seen by no one.
-  if echo "$RESP" | jq -e --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
-    [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
+  if echo "$RESP" | jq -e --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'
+    [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since))
           | select([ (.tags // [])[]? | select(.key=="stage") | .value ][0] == "doppler_retry") ] | length > 0' >/dev/null 2>&1; then
     RETRIED="yes"
     # Capture the RETRY event's OWN detail. Using LAST_DETAIL here would be structurally
@@ -178,20 +195,20 @@ while :; do
     # when the newest event is cloud_init_complete, which has no per-stage detail file.
     # The annotation would then reliably print "Detail: <none>" — the retry's cause
     # discarded by the very line whose stated purpose is to surface it.
-    RETRY_DETAIL=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
-      [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
+    RETRY_DETAIL=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'
+      [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since))
             | select([ (.tags // [])[]? | select(.key=="stage") | .value ][0] == "doppler_retry")
             | ([ (.tags // [])[]? | select(.key=="detail") | .value ][0] // "") ][0] // ""' 2>/dev/null || echo "")
   fi
   # Terminal = the host finished, or died. Either ends the wait; only one is good.
   if [[ "$LAST_STAGE" == "cloud_init_complete" ]]; then TERMINAL="complete"; break; fi
-  if echo "$RESP" | jq -e --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'[.[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select((.tags // [])[]? | select(.key=="level") | .value == "fatal")] | length > 0' >/dev/null 2>&1; then
-    FATAL_STAGE=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
-      [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
+  if echo "$RESP" | jq -e --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'[.[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since)) | select((.tags // [])[]? | select(.key=="level") | .value == "fatal")] | length > 0' >/dev/null 2>&1; then
+    FATAL_STAGE=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'
+      [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since))
             | select((.tags // [])[]? | select(.key=="level") | .value == "fatal")
             | ([ (.tags // [])[]? | select(.key=="stage") | .value ][0] // "?") ][0] // ""' 2>/dev/null || echo "")
-    FATAL_DETAIL=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
-      [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))
+    FATAL_DETAIL=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'
+      [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since))
             | select((.tags // [])[]? | select(.key=="level") | .value == "fatal")
             | ([ (.tags // [])[]? | select(.key=="detail") | .value ][0] // "") ][0] // ""' 2>/dev/null || echo "")
     TERMINAL="fatal"; break
@@ -205,8 +222,8 @@ done
   fi
 } | tee -a "$GITHUB_STEP_SUMMARY"
 if [[ -n "$LAST_STAGE" ]]; then
-  echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" "$JQ_HOSTDEF"'
-    [.[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh))] | .[0:8][]
+  echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'
+    [.[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since))] | .[0:8][]
     | ( [ (.tags // [])[]? | select(.key=="stage") | .value ][0] // "?" ) as $stage
     | ( [ (.tags // [])[]? | select(.key=="host_name") | .value ][0] // "?" ) as $hn
     | ( [ (.tags // [])[]? | select(.key=="detail") | .value ][0] // "" ) as $d
