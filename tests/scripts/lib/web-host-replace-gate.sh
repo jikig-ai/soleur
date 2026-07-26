@@ -167,7 +167,7 @@ web_host_replace_gate() {
   local oos wvd lvd lpt replaced replaced_addr nic vatt fw reboot
 
   if [[ -z "$host_key" ]]; then
-    echo "web_host_replace_gate: ABORT — no host key supplied. The gate cannot verify WHICH host is being replaced without the request it is grading against, and a replace gate that does not check identity is a count check wearing a costume — one satisfied by destroying web-1."
+    echo "web_host_replace_gate: ABORT — no host key supplied. The gate cannot verify WHICH host is being replaced without the request it is grading against, and a replace gate that does not check identity is a count check wearing a costume — one satisfied by destroying web-1. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
@@ -181,7 +181,7 @@ web_host_replace_gate() {
   fi
 
   if [[ ! -f "$plan_json" ]]; then
-    echo "web_host_replace_gate: ABORT — plan JSON not found: ${plan_json}"
+    echo "web_host_replace_gate: ABORT — plan JSON not found: ${plan_json} NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
@@ -193,7 +193,7 @@ web_host_replace_gate() {
   # a count check. An unreadable plan is an abort, not a zero.
   if ! jq -e 'has("resource_changes") and (.resource_changes | type == "array")' \
        < "$plan_json" >/dev/null 2>&1; then
-    echo "web_host_replace_gate: ABORT — the document at ${plan_json} is unparseable or has no resource_changes array. Fail-closed: an unreadable plan is not evidence of a safe one."
+    echo "web_host_replace_gate: ABORT — the document at ${plan_json} is unparseable or has no resource_changes array. Fail-closed: an unreadable plan is not evidence of a safe one. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
@@ -225,7 +225,7 @@ web_host_replace_gate() {
     # `.change.actions?` here, matching the counting filter — without it this extraction
     # errors on the very entry it is trying to name and the operator gets an empty list.
     offenders=$(jq -r '[.resource_changes[] | select(((.change | type) != "object") or ((.change.actions? | type) != "array")) | .address] | .[0:10] | join(", ")' < "$plan_json" 2>/dev/null)
-    echo "web_host_replace_gate: ABORT — unclassifiable plan entry: ${offenders} has no object .change carrying an array of string .change.actions, so it cannot be classified as create/replace/destroy/no-op. Fail-closed: an entry the gate cannot read is not evidence of a safe plan — a destroy hiding in an unreadable entry is exactly what this refuses to wave through."
+    echo "web_host_replace_gate: ABORT — unclassifiable plan entry: ${offenders} has no object .change carrying an array of string .change.actions, so it cannot be classified as create/replace/destroy/no-op. Fail-closed: an entry the gate cannot read is not evidence of a safe plan — a destroy hiding in an unreadable entry is exactly what this refuses to wave through. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
@@ -328,7 +328,7 @@ web_host_replace_gate() {
           )
         }
     ' 2>/dev/null); then
-    echo "web_host_replace_gate: ABORT — jq evaluation failed on ${plan_json}. Fail-closed."
+    echo "web_host_replace_gate: ABORT — jq evaluation failed on ${plan_json}. Fail-closed. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
@@ -348,7 +348,7 @@ web_host_replace_gate() {
   # silently mis-decide; fail LOUD instead.
   for v in "$oos" "$wvd" "$lvd" "$lpt" "$replaced" "$nic" "$vatt" "$fw" "$reboot"; do
     if [[ ! "$v" =~ ^[0-9]+$ ]]; then
-      echo "web_host_replace_gate: ABORT — counter parse failed (out_of_scope='${oos}' workspaces_volume_destroyed='${wvd}' luks_volume_destroyed='${lvd}' luks_passphrase_touched='${lpt}' replaced='${replaced}' nic='${nic}' vatt='${vatt}' fw='${fw}' reboot_updates='${reboot}'). Fail-closed."
+      echo "web_host_replace_gate: ABORT — counter parse failed (out_of_scope='${oos}' workspaces_volume_destroyed='${wvd}' luks_volume_destroyed='${lvd}' luks_passphrase_touched='${lpt}' replaced='${replaced}' nic='${nic}' vatt='${vatt}' fw='${fw}' reboot_updates='${reboot}'). Fail-closed. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
       return 1
     fi
   done
@@ -357,35 +357,35 @@ web_host_replace_gate() {
 
   if [[ "$replaced" -ne 1 ]]; then
     if [[ "$replaced" -eq 0 ]]; then
-      echo "web_host_replace_gate: ABORT — no host replace in this plan. \`terraform plan -replace=<addr>\` on an address ABSENT from state exits 0 with no warning and plans a plain CREATE — which is a BIRTH, and a birth must go through apply_target=web-host-create so it is graded against the additive contract. Either '${host_key}' is not in state, or the -target set is mis-scoped."
+      echo "web_host_replace_gate: ABORT — no host replace in this plan. \`terraform plan -replace=<addr>\` on an address ABSENT from state exits 0 with no warning and plans a plain CREATE — which is a BIRTH, and a birth must go through apply_target=web-host-create so it is graded against the additive contract. Either '${host_key}' is not in state, or the -target set is mis-scoped. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     else
-      echo "web_host_replace_gate: ABORT — ${replaced} hcloud_server replaces; expected exactly 1. The -target set has escaped its scope; one authorization replaces one host."
+      echo "web_host_replace_gate: ABORT — ${replaced} hcloud_server replaces; expected exactly 1. The -target set has escaped its scope; one authorization replaces one host. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     fi
     return 1
   fi
 
   if [[ "$replaced_addr" != "$want_addr" ]]; then
-    echo "web_host_replace_gate: ABORT — IDENTITY MISMATCH: the plan replaces ${replaced_addr} but the dispatch authorized ${want_addr} (key '${host_key}'). A count-only check passes this plan. If the replaced host is web-1, applying it would DESTROY the singleton behind the app.soleur.ai A record, which has no failover partner and no load balancer."
+    echo "web_host_replace_gate: ABORT — IDENTITY MISMATCH: the plan replaces ${replaced_addr} but the dispatch authorized ${want_addr} (key '${host_key}'). A count-only check passes this plan. If the replaced host is web-1, applying it would DESTROY the singleton behind the app.soleur.ai A record, which has no failover partner and no load balancer. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
   if [[ "$wvd" -ne 0 ]]; then
-    echo "web_host_replace_gate: ABORT — ${wvd} destroy/forget action(s) on hcloud_volume.workspaces[\"${host_key}\"], this host's workspaces volume. That volume holds every user worktree on the host and is preserved by OMISSION from the -target set; a plan that destroys it is not a replace, it is data loss. (It also carries prevent_destroy, so this plan could not apply — but a gate that relies on a downstream error to save it is not a gate.)"
+    echo "web_host_replace_gate: ABORT — ${wvd} destroy/forget action(s) on hcloud_volume.workspaces[\"${host_key}\"], this host's workspaces volume. That volume holds every user worktree on the host and is preserved by OMISSION from the -target set; a plan that destroys it is not a replace, it is data loss. (It also carries prevent_destroy, so this plan could not apply — but a gate that relies on a downstream error to save it is not a gate.) NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
   if [[ "$lvd" -ne 0 ]]; then
-    echo "web_host_replace_gate: ABORT — ${lvd} destroy/forget action(s) on hcloud_volume.workspaces_luks, the LUKS at-rest volume. It is the Art.17 at-rest store and the rollback backstop, it belongs to no host's replace fan-out, and it is preserved by omission."
+    echo "web_host_replace_gate: ABORT — ${lvd} destroy/forget action(s) on hcloud_volume.workspaces_luks, the LUKS at-rest volume. It is the Art.17 at-rest store and the rollback backstop, it belongs to no host's replace fan-out, and it is preserved by omission. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
   if [[ "$lpt" -ne 0 ]]; then
-    echo "web_host_replace_gate: ABORT — ${lpt} action(s) on the LUKS passphrase (random_password.workspaces_luks / doppler_secret.workspaces_luks_key). A rotated passphrase opens a NEW header on the fresh boot and STRANDS the existing at-rest data behind it, while the host boots and reports perfectly healthy."
+    echo "web_host_replace_gate: ABORT — ${lpt} action(s) on the LUKS passphrase (random_password.workspaces_luks / doppler_secret.workspaces_luks_key). A rotated passphrase opens a NEW header on the fresh boot and STRANDS the existing at-rest data behind it, while the host boots and reports perfectly healthy. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
   if [[ "$reboot" -ne 0 ]]; then
-    echo "web_host_replace_gate: ABORT — ${reboot} reboot-forcing in-place update(s) on a LIVE hcloud_server (placement_group_id or server_type). Replacing one host must not power-cycle another. This is reachable because hcloud_firewall_attachment.web is a singleton over the whole for_each map, so targeting it pulls every web host into the plan — web-1 included, the sole live origin behind app.soleur.ai. Apply the reboot as its own maintenance-window operation, not as a side effect of a replace."
+    echo "web_host_replace_gate: ABORT — ${reboot} reboot-forcing in-place update(s) on a LIVE hcloud_server (placement_group_id or server_type). Replacing one host must not power-cycle another. This is reachable because hcloud_firewall_attachment.web is a singleton over the whole for_each map, so targeting it pulls every web host into the plan — web-1 included, the sole live origin behind app.soleur.ai. Apply the reboot as its own maintenance-window operation, not as a side effect of a replace. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
@@ -395,7 +395,7 @@ web_host_replace_gate() {
         | select(.change.actions | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
         | select(IN(.address; allow($k)[]) | not) | .address ] | .[0:10] | join(", ")' \
       < "$plan_json" 2>/dev/null)
-    echo "web_host_replace_gate: ABORT — ${oos} out-of-scope change(s), outside the replace fan-out for '${host_key}': ${offenders}. One authorization replaces one host and touches only that host's four fan-out addresses. A sibling host's NIC, the apex A record, or a Cloudflare ruleset riding along is a different operation that has not been authorized here."
+    echo "web_host_replace_gate: ABORT — ${oos} out-of-scope change(s), outside the replace fan-out for '${host_key}': ${offenders}. One authorization replaces one host and touches only that host's four fan-out addresses. A sibling host's NIC, the apex A record, or a Cloudflare ruleset riding along is a different operation that has not been authorized here. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
@@ -406,17 +406,17 @@ web_host_replace_gate() {
   # addresses are PERMITTED to change, not that they must. Kept as three separate arms rather
   # than a loop so each names its OWN consequence — the message is what an operator acts on.
   if [[ "$nic" -lt 1 ]]; then
-    echo "web_host_replace_gate: ABORT — the plan replaces ${want_addr} but does NOT create hcloud_server_network.web[\"${host_key}\"] (${nic} creates; expected >= 1). server_id is ForceNew, so a new server entails a new NIC by construction; its absence means the -target set is mis-scoped. A server without its private NIC comes up with no private-net IP and, transiently, no firewall — that is #6416, and it looks exactly like a successful apply."
+    echo "web_host_replace_gate: ABORT — the plan replaces ${want_addr} but does NOT create hcloud_server_network.web[\"${host_key}\"] (${nic} creates; expected >= 1). server_id is ForceNew, so a new server entails a new NIC by construction; its absence means the -target set is mis-scoped. A server without its private NIC comes up with no private-net IP and, transiently, no firewall — that is #6416, and it looks exactly like a successful apply. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
   if [[ "$vatt" -lt 1 ]]; then
-    echo "web_host_replace_gate: ABORT — the plan replaces ${want_addr} but does NOT create hcloud_volume_attachment.workspaces[\"${host_key}\"] (${vatt} creates; expected >= 1). server_id is ForceNew, so the attachment is entailed by the replace. A server without it writes /mnt/data to the ROOT DISK behind a fail-open mount, serves normally, and loses every workspace the first time the real volume mounts over that path."
+    echo "web_host_replace_gate: ABORT — the plan replaces ${want_addr} but does NOT create hcloud_volume_attachment.workspaces[\"${host_key}\"] (${vatt} creates; expected >= 1). server_id is ForceNew, so the attachment is entailed by the replace. A server without it writes /mnt/data to the ROOT DISK behind a fail-open mount, serves normally, and loses every workspace the first time the real volume mounts over that path. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
   if [[ "$fw" -lt 1 ]]; then
-    echo "web_host_replace_gate: ABORT — the plan replaces ${want_addr} but hcloud_firewall_attachment.web shows no create/update (${fw}; expected >= 1). Its server_ids is [for h in hcloud_server.web : h.id], so replacing a host changes that list by construction. Without the re-attachment the fresh Hetzner host boots NAKED on its public IPv4/IPv6."
+    echo "web_host_replace_gate: ABORT — the plan replaces ${want_addr} but hcloud_firewall_attachment.web shows no create/update (${fw}; expected >= 1). Its server_ids is [for h in hcloud_server.web : h.id], so replacing a host changes that list by construction. Without the re-attachment the fresh Hetzner host boots NAKED on its public IPv4/IPv6. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 

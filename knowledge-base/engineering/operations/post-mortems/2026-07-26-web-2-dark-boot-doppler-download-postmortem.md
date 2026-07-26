@@ -3,7 +3,7 @@ title: "soleur-web-2 booted DARK at cloud-init stage doppler_download — the fa
 date: 2026-07-26
 incident_pr: 6970
 incident_window: "2026-07-26T16:49:35Z (host created) → ongoing (host is dark, still occupying a fleet slot; cause UNDETERMINED)"
-recovery_at: "not recovered — runcmd is once-per-instance, so this host cannot be repaired by reboot; it must be destroyed and reborn (#6969 open decision)"
+recovery_at: "not recovered — runcmd is once-per-instance, so this host cannot be repaired by reboot; it must be destroyed and reborn. The MECHANISM now exists (apply_target=web-host-replace, ADR-148) but has NOT been dispatched; see Recovery verification."
 suspected_change: "none identified — the birth path (#6730, ADR-145) behaved correctly and detected the dark boot. The cause of the doppler_download failure itself is UNDETERMINED because the failing call discarded the Doppler CLI's stderr and exit code."
 brand_survival_threshold: single-user incident
 status: unresolved but ended

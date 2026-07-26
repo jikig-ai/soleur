@@ -114,8 +114,11 @@ fi
 # host produces. The step satisfied ADR-128 R2's letter while inverting its purpose:
 # it could not discriminate the two states it exists to tell apart.
 #
-# The budget fits: timeout-minutes is 30 and the apply costs ~5m, so ~16m of polling
-# (900s window + slack) leaves margin. Terminal states end the poll early, so a
+# COST OF THIS POLL, stated on its own terms — a shared script must not name one caller's
+# timeout-minutes. The loop checks the deadline BEFORE sleeping, so the worst case is 960s plus
+# one more iteration (~30s sleep + <=20s curl) ~= 17m. Every caller's timeout-minutes must cover
+# its own pre-poll work plus that; measured pre-poll cost on the birth path is ~2.6m, so both
+# the 30m (create) and 40m (replace) budgets have ample margin. Terminal states end the poll early, so a
 # healthy boot usually returns in well under the budget.
 # The step is `if: always()`, so it also runs when the APPLY failed — and then
 # there may be no host at all. Polling 16 minutes for a host that was never

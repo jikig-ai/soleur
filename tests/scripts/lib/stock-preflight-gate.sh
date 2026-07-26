@@ -266,7 +266,7 @@ stock_preflight_gate() {
     # No server create planned => nothing to preflight. A pure in-place update, a
     # volume-only plan, or a no-op is legitimately out of this gate's scope.
     #
-    # This MUST announce itself. On all five call sites the preceding destroy-guard has
+    # This MUST announce itself. On all six call sites the preceding destroy-guard has
     # already asserted the plan IS the exact scoped recreate, so a server create is
     # guaranteed present — an empty extraction there means the jq broke (a provider field
     # rename, a terraform-show-json shape change), NOT a legitimate no-op. Returning 0

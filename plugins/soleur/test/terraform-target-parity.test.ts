@@ -1342,7 +1342,9 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volu
 
 // ─── web-host-create dispatch: the birth path's -target set + gate pairing ────
 // `apply_target=web-host-create` (#6730, ADR-145) is the ONLY automated route allowed
-// to birth an hcloud_server.web. Every other route HALTs on host_creates > 0, and that
+// to BIRTH an hcloud_server.web. (Since #6969, `web-host-replace` also creates one as the
+// create half of a delete+create — a different contract, graded by a different gate; see the
+// web-host-replace block below.) Every other route HALTs on host_creates > 0, and that
 // HALT is not inherited — it is a separate inline copy in the `apply` job whose `if:` is
 // mutually exclusive with every dispatch job. So this job's own sourced gate is not
 // defense-in-depth behind an existing check; for this path it is the ONLY check, and

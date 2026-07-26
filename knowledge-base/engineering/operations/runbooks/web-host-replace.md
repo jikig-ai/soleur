@@ -134,7 +134,8 @@ boot-trail step polls Sentry for the host's own stage breadcrumbs and:
   host booted clean but *retried* a stage — a real fault that a green run would otherwise
   bury);
 - fails the run with an `::error::` naming the **stage and the cause** on a fatal;
-- fails the run if no terminal event lands inside the host's own 900 s boot window, because
+- fails the run if no terminal event lands inside the poll's 960 s deadline (the host's own
+  declared boot window is 900 s; the reader allows slack), because
   absence past the boot window is the documented dark signal, not a slow boot.
 
 If it reports a dark boot: `runcmd` is once-per-instance, so the host **cannot be repaired by
