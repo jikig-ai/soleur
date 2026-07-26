@@ -250,9 +250,11 @@ this rebirth. Fill in what the birth gate reported. **Only then** close #6969.
 
 ## Open Code-Review Overlap
 
-To be run at `/work` against the finalized file list:
-`gh issue list --label code-review --state open --json number,title,body --limit 200`, then a
-standalone `jq --arg path ...` per file. Record `None` explicitly if empty.
+**None.** Run at `/work` (2026-07-26) against the finalized file list: 60 open `code-review`
+issues fetched, then a per-file `jq --arg path ... | contains($path)` for each of the eight
+changed/created files (gate lib, gate suite, workflow, parity test, `test-all.sh`,
+`stock-preflight-gate.sh`, the extracted boot-trail reader, the observability suite). Every
+query returned `[]`.
 
 ## Observability
 
@@ -384,6 +386,39 @@ which resources a dispatch may replace. If Phase 0 finds a web-host LUKS passphr
 | Concurrent apply clobbers the lockless R2 state | Shared workflow-level concurrency literal + `web-1-swap` group; do not rename |
 | New job silently un-tested | `scripts/test-all.sh` explicit registration + parity test's `stripDispatchJobs` pin |
 | Gate ships with a vacuous arm | AC4 mutation check |
+
+## Deviations from the PLAN, recorded at /work
+
+Two, both forced by Phase 0 measurement rather than chosen.
+
+**1. web-1 is refused, not handled.** The plan required a gate handling web-1 and non-web-1
+keys "without a special case that weakens it". Its premise — that a web host owns two
+symmetric per-host volume families, mirroring git-data — is false:
+`hcloud_volume.workspaces` is `for_each`-keyed, but `hcloud_volume.workspaces_luks` is a
+SINGLETON whose attachment is hardcoded to `hcloud_server.web["web-1"].id`, and **web-2 has no
+LUKS volume at all**. The two extra members web-1 entails (that attachment, and
+`cloudflare_record.app`) are expressible as key-conditional arms; the decisive hazard is not.
+web-1 currently carries two attached volumes mid-ADR-119 cutover, which `workspaces-luks.tf`
+states makes cloud-init's `scsi-0HC_Volume_*` mount glob AMBIGUOUS — a cloud-init property no
+plan-shaped gate can observe. Refusing is a *strengthening* special case and the only honest
+one. Full reasoning + the revisit condition: ADR-148 §Alternatives item 4.
+
+**2. The ADR ordinal is 148, not the plan's provisional 146.** ADR-146 and ADR-147 both exist
+on `origin/main`; the plan's own note said the ordinal was provisional and to sweep on
+renumber, which was done across five in-code references.
+
+**3. Two further findings that changed the -target set** (not deviations from a stated
+requirement, but corrections to plan assumptions): the four web-probe resources reference no
+server id, so a replace does not change them and they are out of both the `-target` set and
+the allow-set; and `cloudflare_record.app` is likewise out, because with web-1 refused the
+apex record must never move — any positive action on it is an out-of-scope abort rather than a
+permitted side effect.
+
+**4. The fresh-host boot-trail reader was extracted** to
+`apps/web-platform/infra/scripts/fresh-host-boot-trail.sh`. The plan's Observability block
+requires the replace job to carry the boot-trail poll; the birth job's copy is ~230 lines of
+dense shell pinned by exactly one test, so duplicating it would have left the two copies with
+one test between them. Lifted with `sed`, not retyped.
 
 ## Deviations from the plan skill (disclosed)
 

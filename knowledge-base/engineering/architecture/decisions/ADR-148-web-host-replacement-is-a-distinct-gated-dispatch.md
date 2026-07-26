@@ -122,6 +122,30 @@ load-bearing control, and `terraform-target-parity.test.ts` binds the two litera
    as a follow-up once ADR-119's volume-ID mount pin lands; that work also needs a rehearsal
    on a non-production host, since no web-1 replace has ever been performed.
 
+## C4 impact — none, and here is what was enumerated
+
+A bare "no C4 impact" is not checkable, so the enumeration is recorded. Checked against all
+three files in `knowledge-base/engineering/architecture/diagrams/` (`model.c4`, `views.c4`,
+`spec.c4`):
+
+- **External actors** — `founder` ("Founder / Operator") already models the person who fires a
+  gated `workflow_dispatch` and clicks the environment approval. No new actor; `emailSender`,
+  `betaContact` and `contributor` are untouched.
+- **External systems** — `github` (Actions as the apply substrate), `hetzner` (Compute),
+  `sentry` (boot-stage ingest) and Doppler are all already modeled, and this change adds no
+  new vendor edge.
+- **Containers / data stores** — no new store. `hetzner.workspacesVolume` and the LUKS volume
+  already appear with their at-rest posture; this change *preserves* both by omission and
+  alters neither their declaration nor their encryption posture.
+- **Relationships** — the existing `github -> hetzner` apply relationship already covers a
+  terraform-driven host lifecycle operation. A second `apply_target` on an existing workflow
+  is a new *authorization route inside* that relationship, not a new edge between elements.
+
+The one description that could be argued stale is `hetzner`'s, which says the fleet "remains
+single-host until web-2 is provisioned by the gated web-host-create dispatch" — still true;
+this change adds a replacement route and does not provision anything. It is updated when the
+rebirth actually lands, not on the mechanism merging.
+
 ## Consequences
 
 - The fleet gains a real replacement mechanism, and #6969's dark web-2 becomes recoverable
