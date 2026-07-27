@@ -43,7 +43,12 @@ for path in "$@"; do
         HIGH-RISK)
           # Check for override artifact in current branch staged or committed diff.
           override_present=0
-          if git diff --cached --name-only --diff-filter=A 2>/dev/null | grep -q '^knowledge-base/engineering/security/skill-overrides/'; then
+          # grep -c, not grep -q — see #6992: -q early-closes the pipe and the
+          # SIGPIPEd producer reads as "no override", so a HIGH-RISK skill whose
+          # override artifact IS staged gets the un-overridden advisory. This
+          # hook always exits 0 (see the header), so the consequence is a
+          # misleading breadcrumb, not a blocked commit.
+          if [ "$(git diff --cached --name-only --diff-filter=A 2>/dev/null | grep -c '^knowledge-base/engineering/security/skill-overrides/' || true)" -gt 0 ]; then
             override_present=1
           fi
           if [ "$override_present" = "1" ]; then

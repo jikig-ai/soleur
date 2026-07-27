@@ -107,19 +107,26 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
   ],
 ]);
 
-// Sentinel: 10 options today (manual-rerun, inngest-host, inngest-host-replace,
-// registry-host-replace, registry-region-migrate, registry-luks-recut,
-// git-data-host-replace, workspaces-luks-cutover, workspaces-luks-recut,
-// entrypoint-audit). registry-luks-recut (#6929) is NOT exempt — it destroys and
-// re-creates hcloud_server.registry, so it runs stock_preflight_gate like its two
-// registry siblings; no stock in the location means the host is destroyed and the
-// replacement never lands.
-// reason: 9 -> 7. warm-standby and web-2-recreate were REMOVED with the web-2
-// dispatch sweep (#6575, 2026-07-20) after web-2 retired; both hard--targeted
-// addresses that no longer exist. This floor is lowered to match a real deletion,
-// NOT to make a failing assertion pass. `>=` so adding an option raises the count
-// without a brittle exact-match edit — the coverage assertion is what enforces correctness. This
-// only guards the parser silently collapsing to zero, which would make every assertion below vacuous.
+// NON-VACUITY FLOOR ONLY. This exists to catch the options parser silently collapsing to
+// zero — which would make every coverage assertion below pass by finding nothing. It is
+// deliberately `>=` and deliberately well below the live count, so adding an option never
+// requires editing it.
+//
+// (#6977) THE ENUMERATION THAT USED TO LIVE HERE HAS BEEN DELETED RATHER THAN UPDATED.
+// It hand-listed "10 options today (manual-rerun, inngest-host, ...)" and had already
+// rotted twice: it predated web-host-create and web-host-replace and omitted both, so a
+// reader consulting it got a list that disagreed with the dropdown. A restated count in a
+// comment has no mechanism keeping it true, and the value below is a FLOOR, so the
+// enumeration was never what made this assertion correct.
+//
+// The authoritative list is the `apply_target` enum in apply-web-platform-infra.yml, and
+// it is now bound two ways: `every apply_target option resolves to exactly one job` below,
+// and the enum<->description parity assertion in terraform-target-parity.test.ts (#6977),
+// which fires if the field label ever again advertises a target that is not selectable.
+//
+// reason: 9 -> 7. warm-standby and web-2-recreate were REMOVED with the web-2 dispatch
+// sweep (#6575, 2026-07-20) after web-2 retired; both hard--targeted addresses that no
+// longer exist. Lowered to match a real deletion, NOT to make a failing assertion pass.
 const MIN_APPLY_TARGET_OPTIONS = 7;
 
 // Sentinel for the same reason, on the other side of the ledger.

@@ -122,6 +122,14 @@ resource "doppler_secret" "git_transport_ssh_private_key" {
   name       = "GIT_TRANSPORT_SSH_PRIVATE_KEY"
   value      = tls_private_key.git_transport.private_key_openssh
   visibility = "masked"
+
+  # (#6977) Ordering only: a partial apply must not publish a runtime key for a host that
+  # does not exist, or the consumer resolves a 10.0.1.20 that nothing answers on. The
+  # Art. 17 ARMING-SWITCH argument does NOT apply to this key — see the canonical block
+  # above `doppler_secret.git_remove_ssh_private_key`, which is the only key whose mere
+  # presence arms erasure. NO-CYCLE and REACHABILITY-RESIDUAL notes are recorded there too
+  # and hold identically for this edge.
+  depends_on = [hcloud_server.git_data]
 }
 
 # Provision key private half → Doppler `prd` (RUNTIME key; same rationale as
@@ -133,6 +141,13 @@ resource "doppler_secret" "git_provision_ssh_private_key" {
   name       = "GIT_PROVISION_SSH_PRIVATE_KEY"
   value      = tls_private_key.git_provision.private_key_openssh
   visibility = "masked"
+
+  # (#6977) Ordering only, same as git_transport above: do not publish a runtime key ahead
+  # of the host it authenticates to. The Art. 17 ARMING-SWITCH argument does NOT apply
+  # here either — the canonical block above `doppler_secret.git_remove_ssh_private_key`
+  # explains why that reasoning is specific to the remove key, and carries the NO-CYCLE
+  # and REACHABILITY-RESIDUAL notes that hold for all three edges.
+  depends_on = [hcloud_server.git_data]
 }
 
 # Remove key private half → Doppler `prd` (RUNTIME key; same rationale as the
@@ -144,6 +159,27 @@ resource "doppler_secret" "git_remove_ssh_private_key" {
   name       = "GIT_REMOVE_SSH_PRIVATE_KEY"
   value      = tls_private_key.git_remove.private_key_openssh
   visibility = "masked"
+
+  # (#6977, Defect 2) The remove key's PRESENCE is the arming switch for Art. 17 erasure.
+  #
+  # `removeGitDataRepo` is deliberately NOT gated on `isGitDataStoreEnabled()` — flag-
+  # gating erasure would strand a user's PII across a rollback window, which is a worse
+  # Art. 17 gap than the one this guards. It gates on the remove key being present
+  # instead. But this secret has no dependency on the host, so a partial apply could land
+  # it while the server create fails; every subsequent account deletion would then call
+  # resolveGitDataSshHost(), throw, and file a FALSE "Art. 17 erasure failed" Sentry event
+  # for a store that does not exist — alarm fatigue on the one signal that must stay
+  # trustworthy.
+  #
+  # NO CYCLE: the server reaches tls_private_key.git_* through local.git_*_pubkey (the
+  # PUBLIC halves, baked into user_data). Nothing in the server's graph reaches these
+  # doppler_secret resources, so the edge only ever points this way. Verified
+  # independently by two reviewers and by `terraform validate`.
+  #
+  # RESIDUAL, recorded rather than claimed fixed: this anchors on the server OBJECT, not
+  # on REACHABILITY. A birth where the server lands but hcloud_server_network.git_data
+  # does not still arms the key against an unroutable 10.0.1.20. ADR-149 carries it.
+  depends_on = [hcloud_server.git_data]
 }
 
 # --- The git-data host -------------------------------------------------------
@@ -257,6 +293,32 @@ resource "hcloud_server" "git_data" {
       error_message = "git_data_server_type=${var.git_data_server_type} derives ${local.git_data_arch}, but Hetzner reports architecture=${data.hcloud_server_type.git_data.architecture} (enum: x86|arm). The Doppler CLI download would be wrong-arch."
     }
   }
+
+  # (#6977, P13) Order the LUKS passphrase BEFORE the host boots.
+  #
+  # There was no edge in EITHER direction between this server and
+  # doppler_secret.git_data_luks_key. doppler_service_token.git_data IS upstream (its
+  # .key is baked into user_data), but the token is only an authorization to READ the
+  # config — it says nothing about the config CONTAINING the key. So terraform was free
+  # to create the host first; it would boot, `doppler run` would return a config with no
+  # GIT_DATA_LUKS_KEY, and `cryptsetup luksOpen` would fail.
+  #
+  # AND NOTHING WOULD REPORT IT. The Doppler install runcmd has no `set -e`, and the LUKS
+  # block's `set -euo pipefail` is line 1 of the heredoc that `doppler run` EXECUTES — so
+  # if the binary is missing or wrong-arch it never runs at all. The boot "succeeds" with
+  # /mnt/git-data-luks unmounted: at-rest encryption absent while every artifact claims it
+  # is present. `runcmd` is once-per-instance so no reboot repairs it, and ADR-115
+  # excludes git-data from the reboot primitive anyway — the host must be REPLACED.
+  #
+  # Low probability, unrecoverable, no signal. That combination is what makes an explicit
+  # ordering edge worth more than the arithmetic it costs.
+  #
+  # CROSS-PATH CONSEQUENCE: this puts the passphrase pair UPSTREAM of the server, so it
+  # now enters the git-data-host-REPLACE job's closure as a `no-op`. That gate's
+  # `luks_passphrase_touched` counter filters on the four mutating verbs, so a no-op does
+  # not trip it — asserted as a regression arm in test-git-data-host-replace-gate.sh
+  # rather than left to inference.
+  depends_on = [doppler_secret.git_data_luks_key]
 
   labels = {
     app = "soleur-web-platform"

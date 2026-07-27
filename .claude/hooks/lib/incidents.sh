@@ -324,9 +324,9 @@ detect_bypass() {
 # git stash unconditionally, so CWD detection is not needed there.
 resolve_command_cwd() {
   local cmd="${1:-}" input="${2:-}" dir=""
-  if echo "$cmd" | grep -qE '^\s*cd\s+'; then
+  if grep -qE '^\s*cd\s+' <<<"$cmd"; then
     dir=$(echo "$cmd" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
-  elif echo "$cmd" | grep -qoE 'git\s+-C\s+\S+'; then
+  elif grep -qoE 'git\s+-C\s+\S+' <<<"$cmd"; then
     dir=$(echo "$cmd" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
   fi
   if [[ -z "$dir" || ! -d "$dir" ]]; then

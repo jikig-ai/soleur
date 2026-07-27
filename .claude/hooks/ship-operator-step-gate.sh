@@ -52,7 +52,7 @@ if command -v strip_command_bodies >/dev/null 2>&1; then
 else
   SCAN="$CMD"
 fi
-if ! echo "$SCAN" | grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)'; then
+if ! grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)' <<<"$SCAN"; then
   exit 0
 fi
 
@@ -136,7 +136,7 @@ while IFS= read -r match_line; do
     state=$(gh issue view "$n" --json state --jq .state 2>/dev/null || echo "")
     [[ "$state" == "OPEN" ]] || continue
     body=$(gh issue view "$n" --json body --jq .body 2>/dev/null || echo "")
-    if printf '%s' "$body" | grep -qiE 'deferred-automation|automation gap'; then
+    if grep -qiE 'deferred-automation|automation gap' <<<"$body"; then
       ok=1; break
     fi
   done

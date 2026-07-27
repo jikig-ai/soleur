@@ -144,9 +144,12 @@ resource "hcloud_server" "web" {
   # host; its name/server_type/location come from var.web_hosts pinned to current
   # state so the `moved` migration below is 0-destroy (a location change would
   # force-REPLACE the live prod host). web-2 is fresh — provisioned entirely by
-  # cloud-init at boot (the 11 SSH provisioners below stay web-1-scoped, mirroring
+  # cloud-init at boot (the 15 SSH provisioners below stay web-1-scoped, mirroring
   # the git-data host's cloud-init-only shape, so a web-2 that is not yet
-  # SSH-reachable never hangs the merge-triggered auto-apply).
+  # SSH-reachable never hangs the merge-triggered auto-apply). The count said 11
+  # until #7000 measured it; the scoping is now mechanically enforced by
+  # web-host-provisioner-parity.test.sh, which also pins every artifact these
+  # provisioners write to a fresh-boot counterpart (bake + cloud-init).
   for_each    = var.web_hosts
   name        = each.key == "web-1" ? "soleur-web-platform" : "soleur-${each.key}"
   server_type = each.value.server_type
