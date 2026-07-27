@@ -40,6 +40,44 @@ discriminating datum was never captured.
 
 ## Status
 
+> **UPDATE 2026-07-27 — root cause DETERMINED. The text below this block was written while it was
+> not, and is preserved unedited as the record of what was knowable at the time.**
+>
+> The `web-host-replace` mechanism (#6969/#6973) replaced `soleur-web-2` on 2026-07-27
+> ([run 30247210123](https://github.com/jikig-ai/soleur/actions/runs/30247210123)). The replace
+> itself succeeded — the host was destroyed and recreated — and it booted dark **again**, but this
+> time the #6970 error channel carried the deciding datum the original incident lacked:
+>
+> ```
+> doppler_download rc=1 cond=error attempts=3
+> Unable to determine home directory
+> Doppler Error: $HOME is not defined
+> ```
+>
+> **Root cause:** `cloud-final.service` executes `runcmd` as root and declares no `User=`. systemd
+> synthesises `$HOME` only for units that declare one, so every `runcmd` command inherits an
+> environment with `HOME` unset. The Doppler CLI resolves its home directory *before* it consults
+> `DOPPLER_CONFIG_DIR`, so the config dir cloud-init already sets is not a substitute — reproduced
+> against the pinned `3.75.3`: `HOME` unset with `DOPPLER_CONFIG_DIR` set fails identically.
+>
+> This also explains why it was invisible: `doppler_download` is the only *fatal* Doppler call.
+> The GHCR-credential and `ZOT_REGISTRY_URL` reads are `|| true`-wrapped and were degrading
+> **silently** on every fresh host.
+>
+> Two hypotheses were tested and **falsified**, recorded so they are not re-run:
+>
+> - *"A newer Doppler CLI introduced the `$HOME` requirement."* No — `3.75.3` was already the
+>   newest release before web-1's 2026-03-17 birth (published 2026-02-17) and fails identically.
+> - *"`DOPPLER_CONFIG_DIR` should have compensated."* No — home resolution precedes it.
+>
+> **Still open:** why web-1 (`soleur-web-platform`, born 2026-03-17) booted successfully under the
+> same CLI version. Most plausibly a cloud-init behaviour difference between the March and July
+> `ubuntu-24.04` images; not verifiable here, since `cloud-init.yml` history begins 2026-07-11 and
+> the host cannot be re-interrogated. Tracked in #6981.
+>
+> Fix: #6981. `soleur-web-2` remains dark until a post-fix replace runs — `runcmd` is
+> once-per-instance, so the current instance cannot be repaired by reboot.
+
 `unresolved but ended` — the boot failure is not recurring (no further host births have been
 attempted), but the root cause is UNDETERMINED and `soleur-web-2` is still dark.
 

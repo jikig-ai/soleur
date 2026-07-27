@@ -420,6 +420,14 @@ cat > /usr/local/bin/soleur-doppler-download <<'DDLEOF'
 # here goes to stderr or to the per-stage detail files; a stray stdout write would corrupt the
 # env file and misattribute the resulting fatal to stage=docker_run. Never `2>&1`, never `&>`.
 set -u
+# (#6981) Second layer, independent of the caller. cloud-init's runcmd now exports HOME, but this
+# helper is a baked binary on PATH that anything may invoke, and the Doppler CLI hard-fails
+# ("Unable to determine home directory") when HOME is unset — BEFORE it reads DOPPLER_CONFIG_DIR,
+# so the config dir the caller sets is not a substitute. `:=` assigns only when unset or empty, so
+# a caller that already has a correct HOME (systemd supplies one to any unit with `User=`, e.g.
+# webhook.service as `deploy`) keeps it; only the no-HOME root context gets the /root default.
+: "${HOME:=/root}"
+export HOME
 OUT="$1"
 DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail.d}"
 ATTEMPTS="${SOLEUR_DOPPLER_ATTEMPTS:-3}"

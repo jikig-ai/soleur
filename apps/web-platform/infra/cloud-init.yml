@@ -314,6 +314,20 @@ runcmd:
   - |
     IMAGE_REF='${image_name}'
     STAGE=runcmd_early
+    # (#6981) cloud-final.service executes runcmd as root and declares no `User=`. systemd
+    # synthesises $HOME only for units that DO declare one, so every command in runcmd inherits
+    # an environment with HOME UNSET. The Doppler CLI resolves its home directory BEFORE it
+    # consults DOPPLER_CONFIG_DIR (verified against the pinned 3.75.3: setting the config dir
+    # alone still dies "Unable to determine home directory"), so all 11 doppler call sites below
+    # fail. Only doppler_download is fatal — the GHCR-cred and ZOT_REGISTRY_URL reads are
+    # `|| true`-wrapped and degrade SILENTLY, which is why this stayed invisible until #6970 gave
+    # the fatal a cause. Exported once here so every present and future call site inherits it.
+    #
+    # webhook.service is deliberately NOT given the same treatment: it declares User=deploy, so
+    # systemd already supplies the correct per-user HOME. Hardcoding /root into its
+    # EnvironmentFile would point `deploy` at a directory its own ProtectHome=read-only makes
+    # unreadable — the fix belongs to the no-User= root context only.
+    export HOME=/root
     HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
     # (#6090) ONE transport, reused by on_err (fatal) + the runcmd_start breadcrumb (info):
     #   _emit <message> <stage> <level>. Prefers the BAKED DSN so it fires even when doppler is

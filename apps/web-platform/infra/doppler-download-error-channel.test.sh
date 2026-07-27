@@ -1015,5 +1015,53 @@ FIXEOF
   fi
 fi
 
+# ───────────────────────── (C) $HOME is defined for the CLI (#6981) ─────────────────────────
+#
+# soleur-web-2 booted dark TWICE at stage=doppler_download with "Doppler Error: $HOME is not
+# defined". cloud-final.service runs runcmd as root and declares no `User=`; systemd synthesises
+# $HOME only for units that DO declare one, so runcmd inherits HOME unset. The CLI resolves its
+# home directory BEFORE reading DOPPLER_CONFIG_DIR, so the config dir cloud-init already sets is
+# NOT a substitute (verified against the pinned 3.75.3).
+#
+# Every assertion here strips comments first: the production code this guards carries comments
+# that discuss HOME at length, so a bare token match would be satisfied by prose alone
+# (cq-assert-anchor-not-bare-token).
+
+CI_CODE="$(grep -vE '^[[:space:]]*#' "$CI")"
+
+if grep -qE '^[[:space:]]*export HOME=/root[[:space:]]*$' <<<"$CI_CODE"; then
+  ok "AC-HOME1: runcmd exports HOME on a non-comment line"
+else
+  no "AC-HOME1: runcmd must 'export HOME=/root' — without it every doppler call dies 'Unable to determine home directory'"
+fi
+
+# ORDERING is load-bearing: an export placed after the first doppler call leaves that call broken
+# while the grep above still passes.
+home_ln=$(grep -nE '^[[:space:]]*export HOME=/root[[:space:]]*$' <<<"$CI_CODE" | head -1 | cut -d: -f1)
+dop_ln=$(grep -nE 'doppler secrets|soleur-doppler-download' <<<"$CI_CODE" | head -1 | cut -d: -f1)
+if [ -n "$home_ln" ] && [ -n "$dop_ln" ] && [ "$home_ln" -lt "$dop_ln" ]; then
+  ok "AC-HOME2: the export precedes the first doppler invocation (line $home_ln < $dop_ln)"
+else
+  no "AC-HOME2: 'export HOME' must precede the first doppler call (export=${home_ln:-none} first-doppler=${dop_ln:-none})"
+fi
+
+# Second layer: the baked helper is on PATH and any caller may invoke it, so it must not depend
+# on cloud-init having exported HOME first.
+if grep -vE '^[[:space:]]*#' <<<"$HELPER" | grep -qF ': "${HOME:=/root}"'; then
+  ok "AC-HOME3: the helper defaults HOME independently of its caller"
+else
+  no "AC-HOME3: soleur-doppler-download must default HOME (: \"\${HOME:=/root}\") — it is invocable outside runcmd"
+fi
+
+# The DELIBERATE omission, pinned so a future 'consistency' edit cannot silently break deploys:
+# webhook.service declares User=deploy, so systemd already gives it the right per-user HOME.
+# Writing HOME into its EnvironmentFile would override that with /root, which `deploy` cannot
+# read and its own ProtectHome=read-only would not let it write.
+if grep -E '^[[:space:]]*- printf .*> /etc/default/webhook-deploy' <<<"$CI_CODE" | grep -q 'HOME='; then
+  no "AC-HOME4: /etc/default/webhook-deploy must NOT set HOME — it is webhook.service's EnvironmentFile (User=deploy), and /root would be unreadable to that user"
+else
+  ok "AC-HOME4: the webhook EnvironmentFile leaves HOME to systemd's per-user value"
+fi
+
 echo "=== doppler-download-error-channel: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]
