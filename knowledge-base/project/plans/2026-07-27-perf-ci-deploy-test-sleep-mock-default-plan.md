@@ -20,8 +20,8 @@ revision: v2 (post 5-agent plan-review + scoped strong-model consult)
 **Passes:** 5-agent plan-review (DHH, Kieran, code-simplicity,
 architecture-strategist, CTO) + scoped strong-model consult + deepen-plan gates
 4.5 / 4.6 / 4.7 / 4.8 (4.9, 4.10, 4.55 skipped — no UI surface, no store, no
-serving-surface downtime) + Phase 4.45 verify-the-negative and post-edit
-self-audit passes.
+serving-surface downtime) + deepen-plan Phase 4.45's verify-the-negative and
+post-edit self-audit passes.
 
 ### Key improvements over the first draft
 
@@ -73,8 +73,9 @@ self-audit passes.
   lever. Discovered empirically: a PATH-prepended shim caught only the 3 sleeps
   *outside* the runner subshells.
 - **ADR-139** (earned-green for reachable-surface content gates) governs the
-  shape of the residual: the Phase 2.2 comment is written as its tripwire
-  (`tasks.md` step 2.3, which breaks Phase 2 down more finely).
+  shape of the residual: the Phase 2.2 comment is written as its tripwire.
+  (`tasks.md` mirrors this numbering exactly, lettering finer actions as `2.2a`,
+  `2.2b`, … so a plan citation always resolves to the matching `tasks.md` step.)
 
 ## Overview
 
@@ -155,7 +156,8 @@ real CI numbers** — see §Sequencing.
 
 ## Hypotheses
 
-The Phase 1.4 network-outage gate fired on the literal token **`timeout`**;
+The **plan-skill** Phase 1.4 network-outage gate fired on the literal token
+**`timeout`** (its deepen-plan enforcement counterpart is Phase 4.5, below);
 telemetry emitted (`hr-ssh-diagnosis-verify-firewall`, `applied`). The L3→L7
 checklist does not apply: the subject is `actions/runner` cancelling a job that
 exceeded `timeout-minutes` — a scheduler decision made on the runner with no
@@ -330,8 +332,9 @@ discoverability_test:
     numbers come from the GitHub API.
 ```
 
-No soak-gated close criterion is declared (Phase 2.9.1 N/A). No blind execution
-surface is touched (Phase 2.9.2 N/A).
+No soak-gated close criterion is declared (**plan-skill** Phase 2.9.1 — N/A). No
+blind execution surface is touched (**plan-skill** Phase 2.9.2 — N/A). Both refer
+to the plan skill's own gate numbering, not to this document's Phase 2.
 
 ## Open Code-Review Overlap
 

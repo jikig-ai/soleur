@@ -7,6 +7,12 @@ Derived from
 **Run the suite with `run_in_background: true`.** It exceeds the foreground Bash
 limit, and a 300 s `Monitor` will time out before it finishes.
 
+**Numbering contract:** step numbers here mirror the plan's exactly — `N.M` means
+the same thing in both documents. Where a plan step needs several concrete
+actions, they are lettered (`2.2a`, `2.2b`, …) rather than renumbered, so a plan
+citation like "Phase 2.2's rewritten comment" always resolves to `2.2*` here. Do
+not renumber one file without the other.
+
 ---
 
 ## Phase 0 — Preconditions (no edits)
@@ -57,42 +63,42 @@ limit, and a 300 s `Monitor` will time out before it finishes.
 
 ## Phase 2 — GREEN: invert the default
 
-- [ ] **2.1** `create_base_mocks:699` → install the mock **unless**
+- [ ] **2.1a** `create_base_mocks:699` → install the mock **unless**
       `MOCK_SLEEP_REAL=1`. Keep the `if [[ … ]]; then … fi` form. **Never** a
       bare `[[ … ]] && cmd` statement — under `set -euo pipefail` a false
       condition aborts the entire suite.
-- [ ] **2.2** Confirm no runner subshell's `unset` list clears `MOCK_SLEEP_REAL`
+- [ ] **2.1b** Confirm no runner subshell's `unset` list clears `MOCK_SLEEP_REAL`
       (`grep -n 'unset ' ci-deploy.test.sh`).
-- [ ] **2.3** Rewrite the comment at `:673-675` as an **ADR-139-shaped tripwire**:
+- [ ] **2.2a** Rewrite the comment at `:673-675` as an **ADR-139-shaped tripwire**:
       the inverted contract, the opt-out, and the two properties the safety now
       rests on — `create_mock_seq` is the sole loop brake, and the mock shadows
       only a **bare** `sleep`. Do not paste a sibling regex literal near a count
       guard.
-- [ ] **2.4** Drop `MOCK_SLEEP_NOOP` from `:3946`, `:3951`, `:3966`.
-- [ ] **2.5** Update `workspaces-luks-harness.sh:308-314` — it describes the
+- [ ] **2.2b** Drop `MOCK_SLEEP_NOOP` from `:3946`, `:3951`, `:3966`.
+- [ ] **2.2c** Update `workspaces-luks-harness.sh:308-314` — it describes the
       idiom as "an opt-in gate", which this PR falsifies. Update the
       cross-reference only; **do not unify the two mechanisms** (that comment is
       correct that they are different).
-- [ ] **2.6** **Behavioural-equivalence gate.** Full run, then
+- [ ] **2.3a** **Behavioural-equivalence gate.** Full run, then
       `diff <(grep -o 'PASS: .*' before.txt | sort) <(grep -o 'PASS: .*' after.txt | sort)`
       → must be empty, and `=== Results: ===` must read `184/184` (AC2).
-- [ ] **2.7** **Stability gate.** Repeat the full run 5×, at least one under
+- [ ] **2.3b** **Stability gate.** Repeat the full run 5×, at least one under
       artificial CPU load; all five PASS name-sets must be identical (AC2b).
       This is the only detector for a real `sleep` that was acting as an
       undeclared synchronization barrier — that failure is intermittent and
       invisible to a single run.
-- [ ] **2.8** Record the after wall clock + the CPU floor (`user + sys`) for AC1;
+- [ ] **2.3c** Record the after wall clock + the CPU floor (`user + sys`) for AC1;
       confirm no single test block exceeds 60 s.
-- [ ] **2.9** Hot-spin probe (T7): arm a large `MOCK_CRON_INFLIGHT_FILE` countdown
+- [ ] **2.3d** Hot-spin probe (T7): arm a large `MOCK_CRON_INFLIGHT_FILE` countdown
       with the default `CRON_DRAIN_TIMEOUT` and confirm the invocation cap aborts
       in seconds with a named cause rather than hanging.
 
 ## Phase 3 — Return the budget against real CI numbers
 
-- [ ] **3.1** Push Phases 0-2 with `timeout-minutes` **unchanged at 12**.
-- [ ] **3.2** Let CI run, then `gh run rerun` — a **second observation is
+- [ ] **3.1a** Push Phases 0-2 with `timeout-minutes` **unchanged at 12**.
+- [ ] **3.1b** Let CI run, then `gh run rerun` — a **second observation is
       mandatory**, not "if available". `n=1` is not a ceiling policy.
-- [ ] **3.3** Read job + step seconds from the API (never a dashboard) for both
+- [ ] **3.2** Read job + step seconds from the API (never a dashboard) for both
       runs; take the max:
       ```
       gh api repos/jikig-ai/soleur/actions/runs/<id>/jobs \
@@ -102,16 +108,16 @@ limit, and a 300 s `Monitor` will time out before it finishes.
                  steps: [.steps[] | {name, secs: ((.completed_at|fromdate) - (.started_at|fromdate))}]
                         | sort_by(-.secs) | .[0:5]}'
       ```
-- [ ] **3.4** Set `timeout-minutes` per the rule: **8** if max job seconds ≤ ~240 s
+- [ ] **3.3a** Set `timeout-minutes` per the rule: **8** if max job seconds ≤ ~240 s
       (ceiling ≈ 2× observed); **10** if max lands 240-360 s — and say which and
       why. Replace `:296-306` with a comment naming measured step seconds,
       measured job seconds, and the run IDs.
-- [ ] **3.5** **Delete** the stale note at `:604-608`. Verify with
+- [ ] **3.3b** **Delete** the stale note at `:604-608`. Verify with
       `grep -c 'of slack under timeout-minutes' .github/workflows/infra-validation.yml`
       → `0`. Do **not** use the pattern `~12s of slack`: that phrase is split
       across `:607`/`:608` and can never match a line-oriented grep, while its
-      only single-line occurrence sits inside the block 3.4 replaces anyway.
-- [ ] **3.6** Push, and require a **green `deploy-script-tests` run at the new
+      only single-line occurrence sits inside the block 3.3a replaces anyway.
+- [ ] **3.3c** Push, and require a **green `deploy-script-tests` run at the new
       ceiling** with `job_secs ≤ 0.5 × ceiling` before ship (AC7). A YAML grep
       alone cannot show the ceiling holds.
 

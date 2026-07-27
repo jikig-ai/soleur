@@ -54,8 +54,11 @@ is the same `if`, inverted) and buys the plan's only attributability probe: Test
 Scenario T2 runs the full suite under `MOCK_SLEEP_REAL=1` and expects wall clock
 ≈ baseline, which is what proves the speedup came from the mock rather than from
 an accidental skip. Without the opt-out that probe is unavailable. The
-reviewer's related objection to AC6 (`grep -c 'MOCK_SLEEP_REAL' >= 2` is a
-string-count proxy for a property) **was** accepted — AC6 is cut.
+reviewer's related objection **was** accepted: the count-based assertion
+(`grep -c 'MOCK_SLEEP_REAL' >= 2` — a string-count proxy for a property) does not
+survive into the final AC list. Note the AC *numbers* were compacted when four
+criteria were cut, so the plan's current AC6 is a different, unrelated criterion
+(the stale `~12s of slack` grep); the cut one has no surviving number to cite.
 
 ---
 
@@ -89,9 +92,13 @@ sleep for exactly this reason, with `rec()` at `:163`.
 issue).
 **Raised by:** code-simplicity-reviewer and the strong-model consult, converging.
 
-**The challenge.** The local baseline is `user + sys ≈ 134 s` of pure CPU
-(process-spawn cost for thousands of subshells and mock binaries) — which no
-sleep mock removes. On a 2-vCPU CI runner the floor is likely higher still.
+**The challenge.** The measured CPU floor is `user + sys ≈ 117 s` — the
+*counterfactual's* CPU (`0m36.572s + 1m20.362s`, measured with the sleep mock
+forced on), which is the figure the plan uses consistently in §R2 and AC1. (The
+*baseline's* `user + sys ≈ 134 s` is the wrong number to argue from: it includes
+CPU burned by processes that also slept.) That ~117 s is process-spawn cost for
+thousands of subshells and mock binaries, which no sleep mock removes. On a
+2-vCPU CI runner the floor is likely higher still.
 Planning around 120 s is planning around a number the arithmetic already
 refutes; the honest restatement is "eliminate the ~400 s of sleep wait", and the
 binding floor should be measured on **CI**, not locally.
