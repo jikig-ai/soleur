@@ -13,8 +13,8 @@
 #   bot-pr-with-synthetic-checks composite action.
 #
 # Neither mode edits AGENTS.md — humans retire rule text in a separate PR.
-# Both modes filter `^hr-` ids out (per cq-rule-ids-are-immutable + the
-# hr-rule-retirement-guard). hr-* retirement requires a human edit to
+# Both modes filter `^hr-` ids out (per cq-rule-ids-are-immutable; hr-* ids
+# are never auto-retired). hr-* retirement requires a human edit to
 # scripts/lint-rule-ids.py's HR_RETIREMENT_ALLOWLIST and is not automated.
 #
 # Reads knowledge-base/project/rule-metrics.json (written by

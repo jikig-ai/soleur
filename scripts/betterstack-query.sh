@@ -49,7 +49,7 @@ set -uo pipefail
 # `doppler run` wrapper) trips this. The message is deliberately explicit that the
 # fix is the invocation, NOT a missing capability: an agent that reads "unset" as
 # "this session lacks Better Stack access" and gives up is the exact misdiagnosis
-# this hint exists to prevent (see hr-observability-probe-transient-is-not-no-access).
+# this hint exists to prevent: a transient probe failure is not proof of no access.
 if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then
   cat >&2 <<'EOF'
 betterstack-query.sh: BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not set.

@@ -653,6 +653,150 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# Owning trap (ADR-129) for the late-added fixtures below (#7008). The block above already
+# registers an EXIT trap for $TALARM, and a bare re-register REPLACES it — so
+# this one covers BOTH. Parent-scope append is the shape the ownership lint
+# recognizes (scripts/lint-trap-tempfile-ownership).
+LATE_TMPDIRS=()
+trap 'rm -rf "${TALARM:-}" ${LATE_TMPDIRS[@]+"${LATE_TMPDIRS[@]}"}' EXIT
+
+# ------------- Test 25: stamp denominator counts rule BODIES, not bodies+index ----
+# The fixture repo carries 3 index pointers in AGENTS.md AND 3 rule bodies across
+# the sidecars. A denominator globbed over AGENTS*.md spans BOTH and reports 6 —
+# i.e. "3 of 6" (looks like 50%) when 100% of a 3-rule corpus is loaded. #7008.
+
+TOTAL=$((TOTAL+1))
+T25=$(mktemp -d); LATE_TMPDIRS+=("$T25"); setup_repo "$T25" mixed          # mixed → all three classes load
+out25=$(invoke_hook "$T25")
+ctx25=$(printf '%s' "$out25" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+stamp25=$(printf '%s' "$ctx25" | head -1)
+# Tolerate trailing stamp fields (byte figure, notes); `|| true` so a
+# non-match reports a clear FAIL instead of aborting the suite under `set -e`.
+den25=$(printf '%s' "$stamp25" | sed -nE 's/.*\([0-9]+ of ([0-9]+) rules.*/\1/p' || true)
+# Independently re-derive the body count from the sidecars only.
+bodies25=$(grep -hE '^- .*\[id: ' "$T25"/AGENTS.core.md "$T25"/AGENTS.docs.md "$T25"/AGENTS.rest.md | wc -l | tr -d ' ')
+if [[ "$den25" == "$bodies25" ]]; then
+  echo "PASS: stamp denominator == sidecar body count ($den25)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: stamp denominator=$den25 but sidecar bodies=$bodies25 (stamp: $stamp25)"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 26: denominator must come from a FIXED expected set ----
+# Two regressions this pins, both of which render a truncated corpus as 100%:
+#   (a) an `AGENTS*` glob (with or without `.md`) also matches the index;
+#   (b) deriving the count from $CONTEXT / the sidecars actually loaded, which
+#       degrades in lockstep with the numerator.
+# Anchored on shape, not on a bare literal, and comment lines are stripped so
+# the loader may still NAME the retired forms when explaining them.
+
+TOTAL=$((TOTAL+1))
+code26=$(grep -vE '^[[:space:]]*#' "$HOOK")
+bad26=""
+printf '%s' "$code26" | grep -qE 'AGENTS[^"[:space:]]*\*' && bad26="glob spanning the index"
+printf '%s' "$code26" | grep -qE 'TOTAL_RULES=.*\$(CONTEXT|CORPUS)' && bad26="denominator derived from loaded sidecars"
+if [[ -z "$bad26" ]]; then
+  echo "PASS: denominator derives from a fixed expected set"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: $bad26 — a truncated corpus would stamp as 100%"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 27: docs-only class -> numerator < denominator ----
+# Every other fixture uses `mixed`, where the loaded set IS the whole corpus, so
+# numerator and denominator are indistinguishable. A proper SUBSET is the only
+# shape that pins the numerator, and it is the shape a lockstep-collapse bug
+# renders as 100%.
+
+TOTAL=$((TOTAL+1))
+T27=$(mktemp -d); LATE_TMPDIRS+=("$T27"); setup_repo "$T27" docs   # docs -> core+docs-only
+stamp27=$(invoke_hook "$T27" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
+num27=$(printf '%s' "$stamp27" | sed -nE 's/.*\(([0-9]+) of [0-9]+ rules.*/\1/p' || true)
+den27=$(printf '%s' "$stamp27" | sed -nE 's/.*\([0-9]+ of ([0-9]+) rules.*/\1/p' || true)
+idx27=$(grep -c '^- \[id: ' "$T27/AGENTS.md")
+if [[ -n "$num27" && -n "$den27" ]] && (( num27 < den27 )) && [[ "$den27" == "$idx27" ]]; then
+  echo "PASS: docs-only stamps a proper subset ($num27 of $den27, index=$idx27)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: docs-only numerator/denominator wrong (num=$num27 den=$den27 index=$idx27) — $stamp27"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 27b: a MISSING sidecar must not shrink the denominator ----
+# The #7008 regression in its most dangerous form: delete AGENTS.rest.md and the
+# change is itself a .md edit, so the classifier picks docs-only, `rest` is never
+# requested, and the fail-safe never arms. A denominator derived from what loaded
+# stamps a clean 100% while 42 of 101 rules are simply absent.
+
+TOTAL=$((TOTAL+1))
+T27B=$(mktemp -d); LATE_TMPDIRS+=("$T27B"); setup_repo "$T27B" docs
+idx27b=$(grep -c '^- \[id: ' "$T27B/AGENTS.md")
+rm -f "$T27B/AGENTS.rest.md"
+stamp27b=$(invoke_hook "$T27B" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
+den27b=$(printf '%s' "$stamp27b" | sed -nE 's/.*\([0-9]+ of ([0-9]+) rules.*/\1/p' || true)
+if [[ "$den27b" == "$idx27b" ]]; then
+  echo "PASS: absent sidecar leaves the denominator at the declared corpus size ($den27b)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: denominator collapsed to $den27b (index says $idx27b) — a truncated corpus reads as full: $stamp27b"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 28: WORST-CASE composed stamp (both notes) ≤ 200 BYTES ----
+# Test 11 measures the happy path with awk's `length` (CHARACTERS). The notes
+# carry em-dashes (3 B each), so the real contract needs `wc -c` against the
+# composed worst case: all three classes + fail-safe note + over-strip note.
+
+TOTAL=$((TOTAL+1))
+T28=$(mktemp -d); LATE_TMPDIRS+=("$T28"); setup_repo "$T28" mixed
+# Force BOTH notes: a symlinked sidecar trips the fail-safe re-walk, and
+# malformed frontmatter trips the over-strip guard.
+rm -f "$T28/AGENTS.docs.md"; ln -s AGENTS.rest.md "$T28/AGENTS.docs.md"
+printf -- '---\nbroken frontmatter\n# AGENTS Core\n- Core rule [id: hr-test-core].\n' > "$T28/AGENTS.core.md"
+stamp28=$(invoke_hook "$T28" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
+bytes28=$(printf '%s' "$stamp28" | wc -c | tr -d ' ')
+if (( bytes28 <= 200 )); then
+  echo "PASS: worst-case composed stamp ≤ 200 bytes (${bytes28}B)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: worst-case composed stamp ${bytes28}B > 200B: $stamp28"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 29: fail-safe names its ACTUAL cause ----
+# A symlink rejection is a prompt-injection defense firing; reporting it as
+# "sidecar missing" sends the operator looking for a deleted file (#7008).
+
+TOTAL=$((TOTAL+1))
+T29=$(mktemp -d); LATE_TMPDIRS+=("$T29"); setup_repo "$T29" code
+rm -f "$T29/AGENTS.docs.md"; ln -s AGENTS.rest.md "$T29/AGENTS.docs.md"
+stamp29=$(invoke_hook "$T29" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
+if printf '%s' "$stamp29" | grep -qF 'symlink'; then
+  echo "PASS: fail-safe names the symlink rejection, not a phantom missing file"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: symlink rejection reported as: $stamp29"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 30: core-only fallback must not claim a load it did not do ----
+# When AGENTS.core.md is itself unreadable the fallback loads NOTHING; saying
+# "loaded AGENTS.core.md only" there is a false claim on the least-visible path.
+
+TOTAL=$((TOTAL+1))
+T30=$(mktemp -d); LATE_TMPDIRS+=("$T30")   # deliberately NOT a git repo -> fallback path
+out30=$(printf '{"cwd":"%s"}' "$T30" | "$HOOK" 2>/dev/null)
+ctx30=$(printf '%s' "$out30" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
+if printf '%s' "$ctx30" | grep -qF 'NO rules loaded'; then
+  echo "PASS: fallback reports that nothing was loaded when core is unreadable"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: fallback claims a load it did not perform: $ctx30"
+  FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "RESULT: $PASS/$TOTAL passed ($FAIL failed)"
 [[ $FAIL -eq 0 ]] || exit 1
