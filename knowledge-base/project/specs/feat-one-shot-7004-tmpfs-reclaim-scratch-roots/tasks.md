@@ -12,15 +12,24 @@ Legend: `[ ]` todo · `AC#` maps to the plan's Acceptance Criteria.
 The guard alarms every 5 minutes **today**, before any of this. The reaper neither causes nor
 worsens it, so this is separable and has the highest immediate operator value.
 
-- [x] 0.1 In `scripts/tmpfs-guard.sh`, count only entries **not** matching `soleur-run.*`.
-      `unowned_entry_count()` filters on `SCRATCH_SCHEMA_RE` — anchored and fixed-arity
-      (`^soleur-run\.[0-9]+\.[A-Za-z0-9]{8}$`), so `soleur-run.notapid.…` is *not* accepted as a
-      near-miss. Uses `grep -c`, never `grep -q`, so an early match cannot SIGPIPE the producer
-      under `pipefail`.
+- [ ] 0.1 In `scripts/tmpfs-guard.sh`, count only entries **not** matching `soleur-run.*`.
+      **MOVED TO PR 1** (task 1.x below) on converging review evidence. The recogniser matches
+      **zero** entries today (no producer exists on `main`), so it delivers nothing in PR 0 while
+      carrying a live risk: its failure direction is *silent*. If PR 1's allocator emits
+      `XXXXXXXXXX` (mktemp's common arity) nothing matches, every scratch root counts as unowned,
+      and the every-5-minutes alarm returns at the moment the allocator lands — the exact defect
+      PR 0 exists to remove. Three agents converged independently: architecture ("the single
+      highest-leverage change available to this PR"), simplicity ("the clearest YAGNI in the
+      diff"), and security (the name-only test is blind to a dead-pid orphan, which is *the* leak
+      class #7004 addresses). Mutation testing then showed five of eleven surviving mutants were
+      schema-regex vacuities that dissolve entirely with the move. Shipping recogniser and producer
+      together is what makes the contract testable at all.
 - [x] 0.2 Persist a watermark beside the heartbeat; re-floor every run to `min(stored, current)`.
       `WATERMARK_FILE` sits in the same state dir as the alarm + heartbeat. A missing or
       unparseable value seeds from the current count rather than reading as `0` — reading a corrupt
       file as zero would alarm on the entire legacy backlog, which is the behaviour being replaced.
+      Reseeding is **not** silent when a heartbeat proves a prior run completed: see 0.5, where
+      review showed the reseed forgives the whole accumulated leak.
 - [x] 0.3 Alarm on growth above the floor, never on absolute count.
       Order is load-bearing and is asserted: the floor derives from the *previously stored* value,
       the comparison runs against that, and only then is the new floor persisted. Re-flooring first
@@ -29,15 +38,75 @@ worsens it, so this is separable and has the highest immediate operator value.
       watermark; (c) growth above the *lowered* watermark alarms; (d) simulated `/tmp` reset to ~0
       re-floors and does **not** disarm. → **AC-A1**
   - (c) and (d) are the two arms a frozen ship-time baseline fails.
-  - Evidence: `scripts/tmpfs-guard.test.sh` Arm 21 (AC-A1 a–d) + Arm 22 (schema exclusion,
-    with a mutation control and a near-miss arm). Suite: **49 passed, 0 failed**.
-  - Non-vacuity proven by mutation, each against a **GREEN positive control**: frozen watermark
-    ⇒ 6 failures; no schema exclusion ⇒ 2; absolute-count alarm ⇒ 2. An earlier mutation run was
-    discarded as void — its baseline exited non-zero with zero `[FAIL]` lines (the sandbox omitted
-    a file a drift-guard arm reads), so every "RED" was the same harness abort rather than the
-    mutation.
-  - Measured on the real `/tmp`: **20,832 unowned entries counted in 0.076 s** against the 300 s
-    cron interval.
+
+- [x] 0.5 Review-driven fixes (8 agents; the ones below are merge-blocking silent failures, all
+      independently reproduced before fixing):
+  - **Enumeration failure no longer floors the watermark.** `find` failing was swallowed into `0`;
+    because the ratchet is down-only that persisted `floor=0` and re-armed the forever-alarm on the
+    next healthy run. Reproduced: run1 wm=30, run2 (unreadable `/tmp`) wm=0, run3 alarms at the
+    full count forever. `top_level_entry_count` now returns non-zero for "could not look" and the
+    caller leaves the stored floor alone. **This had to land before deleting the dead
+    `entry_count`** — that variable was dead as a *value* but load-bearing as a *side effect*
+    (under `pipefail` its un-guarded `find` aborted the run), so removing it alone, as two agents
+    suggested, would have converted the defect from latent to live.
+  - **Watermark loss is no longer silently forgiven.** `min(stored,current)` does not neutralise a
+    lost/corrupt/hostile value — it re-floors to *current*, granting the leak an amnesty equal to
+    its size (leak at 18,000 over a true floor of 600 ⇒ floor rewritten to 18,000, alarm now needs
+    23,000). Reproduced three ways. `HEARTBEAT_FILE` is the discriminator: present ⇒ a run
+    completed ⇒ a missing watermark is state loss, not a first run, and now alarms.
+  - **An unpersistable watermark says so.** Both write paths swallowed failure, disarming growth
+    detection permanently with no artifact anywhere. Now atomic (tmp+mv, mirroring `alarm_record`)
+    and loud, with a `COUNT_DEGRADED` flag so `alarm_clear_if_healthy` cannot erase the very alarm
+    reporting the disarm.
+  - **The count alarm can no longer be buried.** The loader renders `tail -1`; the count alarm is
+    appended at run start and the usage alarm at run end, so at 94 % usage the usage line always
+    outranked it. Harmless while the count alarm re-fired every 5 min — but this PR makes it rare
+    and edge-triggered, so a real leak would have been the tail line for one run then evicted
+    within hours. The usage alarm is now suppressed when count pressure already fired.
+  - **A dry run no longer mutates the watermark**, and the floor is written only when it moves.
+  - **Newline-safe counting**: one line emitted per *entry* rather than per name-line. Measured
+    before the fix, a single directory named `leak_a<newline>leak_b` counted as 3. The reap path in
+    this same file already defends against this after a measured incident; the count path had
+    re-solved the problem from scratch and got it wrong.
+  - **Octal-shaped watermarks rejected** (`08` aborts bash arithmetic under `set -e`; `0600` means
+    384).
+  - **The suite no longer overwrites the operator's real heartbeat.** Live proof during review: it
+    read `run complete: /tmp/tmpfs-guard.vFKDu4hJ/tmp at 94%` — a fixture root — which masks a dead
+    cron for 30 minutes. Caused by my own test runs.
+  - Stale prose corrected where the change falsified it: the "provably reachable" justification for
+    5000 (argued from absolute counts), the "BOTH signals must hold" comment (a passing arm
+    disproves it), the seam-list omission, and `plugins/soleur/skills/work/SKILL.md` — the
+    highest-reach one, injected into every agent session, which told the agent a reclamation
+    mechanism exists that was removed before merge.
+  - Declined, with reasons: adding the watermark to Arm 20's loader-parity loop (observability
+    showed there is no loader coupling to assert — kept a standalone "not on tmpfs" assertion
+    instead, which is the real defect that mutant exposed); and an upward ratchet to absorb a new
+    legitimate steady state (a design change with tradeoffs — recorded as a known limit in the
+    code and carried to PR 1 rather than improvised here).
+  - Evidence: `scripts/tmpfs-guard.test.sh` Arms 21–29. Suite: **60 passed, 0 failed**, stable
+    across 4 consecutive runs.
+  - **My first mutation battery was the floor, not the proof.** It ran 3 mutations, all killed, and
+    I recorded that as "mutation-verified". An independent pass then ran 13 and **11 survived** —
+    evidence about the mutations I imagined, not about the tests. The decisive survivor: replacing
+    `growth >= COUNT_TRIGGER` with a hardcoded `growth >= 7` passed the entire suite, as does any
+    constant in roughly [2,12], so `COUNT_TRIGGER`, its env override and the whole justification
+    for 5000 were unfalsifiable. Also correcting the earlier claim's arithmetic: each reported
+    figure was inflated by one, because the cardinality guard fires on *any* failure and is not an
+    independent detector.
+  - Arms 22–29 were written to close those survivors. Re-verified against a **GREEN positive
+    control**, 8/8 killed: threshold `>=`→`>`; hardcoded trigger; 20 % threshold inflation; alarm
+    reporting a hardcoded count; watermark default relocated onto tmpfs; enumeration failure
+    read as 0; dry-run persisting; state-loss reseeding silently.
+  - **Two mutation runs were discarded as VOID rather than counted** — the failure mode this
+    repo documents. Run 1's baseline exited non-zero with zero `[FAIL]` lines (sandbox missing a
+    file a drift-guard arm reads). Run 2's baseline did the same because `/tmp` had reached 99 %
+    and Arm 1's 20 MB fixture could not allocate; re-running with scratch on disk restored a green
+    baseline. A baseline that is not green makes every mutation result meaningless in both
+    directions.
+  - Measured on the real `/tmp`, re-derivable with
+    `find /tmp -mindepth 1 -maxdepth 1 -printf '.\n' | wc -l`: **20,832 top-level entries counted
+    in 0.076 s** against the 300 s cron interval (an independent re-derivation during review read
+    20,855 — `/tmp` is volatile, so treat the figure as ~20.8k, not a constant).
 
 ---
 
@@ -46,6 +115,32 @@ worsens it, so this is separable and has the highest immediate operator value.
 ### Phase 0 — Preconditions
 - [ ] 1.0 Re-run the Overview measurements; paste into the PR body. `/tmp` is volatile — all plan
       figures are `as-measured 2026-07-27`.
+- [ ] 1.0a **Carried from PR 0 task 0.1 — the schema recogniser.** Add the ownership-schema
+      exclusion to `tmpfs-guard.sh`'s count **in the same PR as the allocator that produces the
+      names**, so producer and recogniser can be pinned to each other. Requirements the PR 0 review
+      established, all of which PR 0 could not satisfy alone:
+  - Derive the recogniser and the producer from ONE source (the plan's ADR-150 Record #4 already
+    mandates extracting a shared `soleur_tmp_reaper_owner` predicate). Note this collides with the
+    stated "`tmpfs-guard.sh` sources nothing" constraint — resolve that in the ADR, do not
+    discover it mid-implementation.
+  - Build the exclusion fixture from **real `mktemp` output**, not a hand-written literal, so the
+    coreutils alphabet/arity assumption is asserted rather than assumed.
+  - Include a **mixed** fixture (schema + unowned entries in one `/tmp`). A pure all-or-nothing
+    fixture pair cannot distinguish per-entry exclusion from "any schema entry ⇒ count 0", and the
+    latter mutant survived PR 0's original suite — in production one scratch root would have
+    silenced the machine's alarm.
+  - Gate the exclusion on **liveness, not name shape** (`/proc/<pid>`) plus `-user`. A name-only
+    test excludes dead-pid orphans, which is exactly the leak class #7004 exists to catch, and it
+    lets any local process hide behind a schema-shaped name in a world-writable `/tmp`.
+  - Pin the anchors and the arity with a fixture that deviates in the **suffix**, not only the pid
+    component; dropping `^`, dropping `$`, and `{8}`→`+` all survived PR 0's near-miss arm.
+  - Verify the regex under the **cron locale**: `[A-Za-z0-9]` is a collation range, and
+    `/etc/pam.d/cron` loads `LANG=fr_FR.UTF-8`, so `soleur-run.1.aaaaaaaé` matches in production
+    but not under `LC_ALL=C`. Direction is suppression. Pin `LC_ALL=C`.
+- [ ] 1.0b Consider an **upward ratchet** for the count watermark. PR 0's floor only ratchets down,
+      so a sustained *legitimate* rise into a new steady state alarms every run and cannot be
+      absorbed. Correct for an unreclaimed leak, noise for a genuine new baseline; deliberately not
+      improvised in PR 0.
 
 ### Phase 1 — Allocator (`scripts/lib/scratch-root.sh`)
 - [ ] 1.1 Add `soleur_scratch_session_begin [base]`. **Published contract: prints nothing.** After it

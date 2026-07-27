@@ -66,7 +66,8 @@
 #   TMPFS_GUARD_SCRATCH_MIN_MB, TMPFS_GUARD_SCRATCH_AGE_MIN,
 #   TMPFS_GUARD_LOG_SINK, TMPFS_GUARD_ALARM_FILE,
 #   TMPFS_GUARD_COUNT_TRIGGER, TMPFS_GUARD_UNIX_SOCKETS,
-#   TMPFS_GUARD_HEARTBEAT_FILE, TMPFS_GUARD_LOCKFILE, TMPFS_GUARD_NO_FLOCK
+#   TMPFS_GUARD_HEARTBEAT_FILE, TMPFS_GUARD_LOCKFILE, TMPFS_GUARD_NO_FLOCK,
+#   TMPFS_GUARD_WATERMARK_FILE
 #
 # Every name above is read by the code below. Keep this list exact: a seam that
 # is documented but unimplemented produces a test that sets it, observes no
@@ -89,21 +90,26 @@ SCRATCH_MIN_MB="${TMPFS_GUARD_SCRATCH_MIN_MB:-100}"
 SCRATCH_AGE_MIN="${TMPFS_GUARD_SCRATCH_AGE_MIN:-1440}"
 
 # Count-pressure ALARM threshold, applied to GROWTH ABOVE THE WATERMARK — never
-# to the absolute entry count. 5000 sits far above the ~600 entries a healthy
-# /tmp carries here and far below the 17,898 measured while the leak was
-# present, so it is provably reachable rather than notional. It arms a report,
-# never a delete — see reap_scratch_entries.
+# to the absolute entry count.
+#
+# The old justification for 5000 ("far above the ~600 a healthy /tmp carries,
+# far below the 17,898 measured during the leak, therefore provably reachable")
+# argued from ABSOLUTE counts and does not survive the change to growth
+# semantics — reachability of "5000 entries present" says nothing about
+# reachability of "5000 above an all-time-minimum floor". Re-derived for growth:
+# routine churn measured +651 over a plan-authoring session (19,931 -> 20,582),
+# an order of magnitude below the trigger, while the leak this guard exists to
+# catch is 14,260 `tmp.` entries — comfortably above it. So the trigger
+# discriminates churn from the observed leak class; it is not calibrated for a
+# leak smaller than ~5000, and nothing here claims otherwise.
+#
+# Growth ACCUMULATES rather than being forgiven per-run: `floor` is the all-time
+# minimum, so a slow +N/run leak sums until it crosses the trigger (measured:
+# +3/run against a trigger of 10 alarms on run 5). It arms a report, never a
+# delete — see reap_scratch_entries.
 COUNT_TRIGGER="${TMPFS_GUARD_COUNT_TRIGGER:-5000}"
 
-# The declared-ownership schema: `soleur-run.<pid>.XXXXXXXX`. PR 1's allocator
-# produces these; this guard only needs to RECOGNISE them, so that roots which
-# already have an owner to reclaim them are not counted as an unreclaimable
-# leak. Anchored and fixed-arity on purpose — a substring match would let
-# `soleur-run.notapid.x` and `evil/../soleur-run.1.abcdefgh` through.
-SCRATCH_SCHEMA_RE='^soleur-run\.[0-9]+\.[A-Za-z0-9]{8}$'
-
-# Downward-ratcheting count watermark, kept beside the alarm + heartbeat so all
-# three live or die together.
+# Downward-ratcheting count watermark, kept beside the alarm + heartbeat.
 #
 # The naive rebaseline — freeze a constant at ship time — fails two ways, both
 # silent:
@@ -118,6 +124,12 @@ SCRATCH_SCHEMA_RE='^soleur-run\.[0-9]+\.[A-Za-z0-9]{8}$'
 #
 # Re-flooring to min(stored, current) every run follows the drain down and
 # survives the reboot, while growth above the current floor still alarms.
+#
+# KNOWN LIMIT, stated rather than discovered: the floor only ratchets DOWN, so a
+# sustained *legitimate* rise into a new steady state above the trigger alarms
+# every run until the count falls again. For an unreclaimed leak that is the
+# intended behaviour; for a genuine new baseline it is noise, and absorbing it
+# needs an upward ratchet this PR deliberately does not ship (see PR 1).
 WATERMARK_FILE="${TMPFS_GUARD_WATERMARK_FILE:-${HOME:-/nonexistent}/.local/state/soleur/tmpfs-guard-count-watermark}"
 # Where /proc exposes unix-domain socket paths. See _build_inuse_top.
 UNIX_SOCKETS="${TMPFS_GUARD_UNIX_SOCKETS:-/proc/net/unix}"
@@ -198,37 +210,65 @@ heartbeat_write() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" > "$HEARTBEAT_FILE" 2>/dev/null || true
 }
 
-# Count top-level entries that do NOT parse as the ownership schema. Roots that
-# DO parse have an owner responsible for reclaiming them, so counting them here
-# would re-arm the forever-alarm the moment PR 1's allocator ships.
+# Count top-level entries, and distinguish "there are none" from "I could not
+# look". That distinction is load-bearing, not defensive: the watermark ratchets
+# DOWN only, so an enumeration failure read as 0 floors it to 0 permanently and
+# re-arms the every-5-minutes alarm on the next healthy run — the exact defect
+# this change removes. Returns non-zero when the count is unknown; the caller
+# then leaves the stored floor untouched.
 #
-# `grep -c` is used rather than `grep -q`: under `set -o pipefail` a `-q` closes
-# the pipe on first match, the producer takes SIGPIPE, and the pipeline exits
-# non-zero even though the match succeeded. `-c` reads all input.
-unowned_entry_count() {
+# `-printf '.\n'` emits one line per entry regardless of the entry's NAME, so a
+# filename containing a newline cannot inflate the count. The reap path below
+# learned that the expensive way (a 14-byte directory was deleted because a
+# 20 MB sibling embedded a newline); counting basenames would have reintroduced
+# it on the other side of the same function.
+top_level_entry_count() {
   local n
-  n=$(find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null \
-      | grep -cvE "$SCRATCH_SCHEMA_RE" || true)
-  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  [[ -d "$TMP_ROOT" ]] || return 1
+  n=$(find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -printf '.\n' 2>/dev/null | wc -l) || return 1
+  [[ "$n" =~ ^(0|[1-9][0-9]*)$ ]] || return 1
   printf '%s\n' "$n"
 }
 
 # Read the persisted watermark. Returns non-zero when absent or unparseable, so
-# the caller can distinguish "no baseline yet" (seed from current) from a real
-# stored floor. A corrupt value must NOT be read as 0 — that would alarm on the
-# full legacy count, which is the behaviour this replaces.
+# the caller can distinguish "no baseline" from a real stored floor. A corrupt
+# value must NOT be read as 0 — that would alarm on the full legacy count, which
+# is the behaviour this replaces.
+#
+# Leading zeros are rejected alongside non-numerics: bash arithmetic reads `08`
+# as invalid octal (aborting the run under `set -e`) and `0600` as 384. Both
+# silently corrupt a floor the alarm depends on.
 watermark_read() {
   local v
-  v=$(cat "$WATERMARK_FILE" 2>/dev/null || true)
-  [[ "$v" =~ ^[0-9]+$ ]] || return 1
+  v=$(cat "$WATERMARK_FILE" 2>/dev/null) || return 1
+  [[ "$v" =~ ^(0|[1-9][0-9]*)$ ]] || return 1
   printf '%s\n' "$v"
 }
 
+# Persist the floor, atomically, and say so when it fails.
+#
+# Both halves are load-bearing. The tmp+mv mirrors alarm_record: an in-place
+# truncate leaves a window where a concurrent reader sees an empty file, which
+# watermark_read correctly rejects — and a rejected read reseeds the floor to
+# the current count, forgiving the whole accumulated leak. And a SILENT write
+# failure disarms the count alarm forever (every subsequent run reseeds, growth
+# is permanently 0) with no artifact anywhere distinguishing it from health.
+# That is precisely the "invisible because the failure surface is silence"
+# failure this file warns about, so it gets the ALARM-DROP treatment its sibling
+# alarm_record already has.
 watermark_write() {
-  local dir
+  local dir tmp
   dir="$(dirname "$WATERMARK_FILE")"
-  mkdir -p "$dir" 2>/dev/null || return 0
-  printf '%s\n' "$1" > "$WATERMARK_FILE" 2>/dev/null || true
+  if ! mkdir -p "$dir" 2>/dev/null; then
+    guard_log "WATERMARK-DROP: cannot create $dir — the count alarm is disarmed until this is fixed"
+    return 1
+  fi
+  tmp="$WATERMARK_FILE.tmp.$$"
+  if ! printf '%s\n' "$1" > "$tmp" 2>/dev/null || ! mv -f "$tmp" "$WATERMARK_FILE" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null || true
+    guard_log "WATERMARK-DROP: cannot write $WATERMARK_FILE — the count alarm is disarmed until this is fixed"
+    return 1
+  fi
 }
 
 # Clear the alarm file once the machine is demonstrably healthy. Without this
@@ -428,18 +468,16 @@ reap_scratch_entries() {
   local reaped=0 reaped_mb=0
   local e base size_mb
 
-  # Which tier are we in? The count signal is one `find | wc -l`.
-  local entry_count min_mb age_min max_reap
-  entry_count=$(find "$TMP_ROOT" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
-  [[ "$entry_count" =~ ^[0-9]+$ ]] || entry_count=0
+  local min_mb age_min max_reap
   [[ "$usage_pct" =~ ^[0-9]+$ ]] || usage_pct=0
 
-  # BOTH signals must hold. Entry count alone is not pressure: this repo's
-  # documented workflow runs parallel worktrees, which inflates /tmp's entry
-  # count without filling it, and the pressure tier drops the size floor to zero
-  # and the age floor to 6h. Engaging it on a /tmp at 10% would take real risk
-  # to reclaim space nobody needs. Usage is already computed by main; requiring
-  # it makes the tier's name true.
+  # The count signal is deliberately NOT gated on usage. An earlier revision of
+  # this comment claimed "BOTH signals must hold… requiring usage makes the
+  # tier's name true", describing a pressure tier that no longer exists — and
+  # the suite disproves it directly (Arm 17: "COUNT alarm fires below the usage
+  # threshold"). The #6991 incident was 17,898 entries at 29% blocks, so gating
+  # the alarm on 70% usage would have kept exactly that incident silent. Alarm
+  # early (free), reap late (destructive).
   # COUNT PRESSURE IS AN ALARM, NOT A REAP TRIGGER.
   #
   # #6991 asks for a reaper that can act on a count signal. This detects the
@@ -466,22 +504,62 @@ reap_scratch_entries() {
   # load-bearing: the floor is derived from the PREVIOUSLY stored value, the
   # comparison happens against that, and only then is the new floor persisted.
   # Re-flooring first would compare the count against itself and never alarm.
-  local unowned_count stored floor growth
-  unowned_count=$(unowned_entry_count)
-  if ! stored=$(watermark_read); then
-    # No baseline yet: seed from the current count and stay quiet. Alarming on
-    # the first run would report the pre-existing backlog as a new leak, which
-    # is the every-5-minutes alarm this replaces.
-    stored="$unowned_count"
-  fi
-  floor=$(( stored < unowned_count ? stored : unowned_count ))
-  growth=$(( unowned_count - floor ))
-  watermark_write "$floor"
+  local cur stored floor growth wm_state
+  if ! cur=$(top_level_entry_count); then
+    # Could not enumerate. Reporting 0 here would floor the watermark to 0 and,
+    # because the ratchet is down-only, re-arm the forever-alarm permanently on
+    # the next healthy run. Leave the stored floor alone and say so.
+    guard_log "count signal unavailable: cannot enumerate $TMP_ROOT — watermark left at its stored value"
+  else
+    if stored=$(watermark_read); then
+      wm_state=ok
+    elif [[ -f "$HEARTBEAT_FILE" ]]; then
+      # STATE LOSS, not a first run — the heartbeat proves a previous run
+      # completed, so a watermark should exist. This matters because reseeding
+      # sets floor=current, which forgives the ENTIRE accumulated growth: a leak
+      # sitting at 18,000 above a true floor of 600 gets its floor rewritten to
+      # 18,000 and the alarm then needs 23,000. `min(stored,current)` does not
+      # protect against this — it is what causes it. There is nothing else to
+      # floor to, so reseed, but never silently.
+      wm_state=lost
+      stored="$cur"
+    else
+      # Genuine first run: seed from the current count and stay quiet. Alarming
+      # here would report the pre-existing backlog as a new leak, which is the
+      # every-5-minutes alarm this replaces.
+      wm_state=first
+      stored="$cur"
+    fi
 
-  if (( growth >= COUNT_TRIGGER )); then
-    COUNT_PRESSURE_SEEN=1
-    guard_log "count pressure: $unowned_count unowned top-level entries in $TMP_ROOT at ${usage_pct}% (+$growth above watermark $floor, trigger $COUNT_TRIGGER) — reporting, not reaping"
-    alarm_record "$TMP_ROOT grew to $unowned_count unowned top-level entries (+$growth above the $floor watermark, trigger $COUNT_TRIGGER) at ${usage_pct}% usage — a count-shaped leak the size-based reaper cannot reclaim. Inspect the oldest: find $TMP_ROOT -mindepth 1 -maxdepth 1 -printf '%T@ %p\n' | sort -n | head -40"
+    floor=$(( stored < cur ? stored : cur ))
+    growth=$(( cur - floor ))
+    COUNT_ENTRIES="$cur"; COUNT_FLOOR="$floor"; COUNT_GROWTH="$growth"
+
+    # Persist only when there is something to persist. Two independent reasons:
+    # a DRY run must not mutate persistent state (it is the only safe way to
+    # inspect the guard, and writing would permanently lower the floor), and the
+    # floor is monotonically non-increasing, so rewriting an unchanged value
+    # every 5 minutes buys nothing while destroying the file mtime as a "when
+    # was this floor set" anchor.
+    local need_write=0
+    [[ "$wm_state" == "ok" && "$floor" == "$stored" ]] || need_write=1
+    if [[ "$DRY_RUN" != "1" && "$need_write" == "1" ]] && ! watermark_write "$floor"; then
+      # Not guard_log alone: this script's own header records that the journal
+      # has no consumer on this host. A disarmed guard reports growth=0 forever,
+      # so without an alarm the operator's only channel shows health.
+      COUNT_DEGRADED=1
+      alarm_record "tmpfs-guard cannot persist its count watermark to $WATERMARK_FILE — growth detection is DISARMED (every run re-seeds from the current count, so a new leak can never raise an alarm). Check the path is writable: touch $WATERMARK_FILE"
+    fi
+
+    if [[ "$wm_state" == "lost" ]]; then
+      alarm_record "$TMP_ROOT count watermark was missing or unreadable at $WATERMARK_FILE although a previous run completed — the floor was reseeded to $cur, so any growth accumulated before now is no longer counted. Re-check once: find $TMP_ROOT -mindepth 1 -maxdepth 1 | wc -l"
+    fi
+
+    if (( growth >= COUNT_TRIGGER )); then
+      COUNT_PRESSURE_SEEN=1
+      guard_log "count pressure: $cur top-level entries in $TMP_ROOT at ${usage_pct}% (+$growth above watermark $floor, trigger $COUNT_TRIGGER) — reporting, not reaping"
+      alarm_record "$TMP_ROOT grew to $cur top-level entries (+$growth above the $floor watermark, trigger $COUNT_TRIGGER) at ${usage_pct}% usage — a count-shaped leak the size-based reaper cannot reclaim. Inspect the oldest: find $TMP_ROOT -mindepth 1 -maxdepth 1 -printf '%T@ %p\n' | sort -n | head -40"
+    fi
   fi
 
   # One tier. The floors below are the pre-existing, conservative ones.
@@ -664,6 +742,10 @@ main() {
   REAP_COUNT=0
   REAP_MB=0
   COUNT_PRESSURE_SEEN=0
+  COUNT_DEGRADED=0
+  COUNT_ENTRIES=-1
+  COUNT_FLOOR=-1
+  COUNT_GROWTH=-1
 
   reap_output_files "$usage_pct"
   reap_scratch_entries "$usage_pct"
@@ -672,7 +754,12 @@ main() {
   # it "the guard is silent because nothing needed doing" and "the guard is not
   # running at all" are indistinguishable, and the cron entry stopping is a
   # failure mode with no detector.
-  local summary="run complete: $TMP_ROOT at ${usage_pct}%, cleaned=${CLEANED_COUNT}, reaped=${REAP_COUNT} (${REAP_MB} MB), count_pressure=${COUNT_PRESSURE_SEEN}"
+  # entries/floor/growth ride along because they are the only way to tell a
+  # HEALTHY quiet run from a DISARMED one from the heartbeat alone: a guard
+  # whose watermark cannot be persisted reports growth=0 forever and is
+  # otherwise indistinguishable from a clean /tmp. `-1` means "not measured
+  # this run" (the enumeration failed).
+  local summary="run complete: $TMP_ROOT at ${usage_pct}%, cleaned=${CLEANED_COUNT}, reaped=${REAP_COUNT} (${REAP_MB} MB), count_pressure=${COUNT_PRESSURE_SEEN}, entries=${COUNT_ENTRIES}, floor=${COUNT_FLOOR}, growth=${COUNT_GROWTH}, count_degraded=${COUNT_DEGRADED}"
   guard_log "$summary"
   # The journal line above has no consumer. The heartbeat does: SessionStart
   # compares its mtime against the 5-minute cadence, which is what makes "the
@@ -688,15 +775,28 @@ main() {
   # the journal (unwatched) and notify-send (a no-op under cron). It now also
   # writes the durable alarm file that the SessionStart hook surfaces, so the
   # next agent session shows it to the operator.
+  # Suppressed when count pressure already alarmed THIS run. The SessionStart
+  # hook renders only the LAST line of the alarm file, and the count alarm is
+  # appended at run start while this one is appended at run end — so without the
+  # guard the usage line always outranks it. That was harmless while the count
+  # alarm re-fired every 5 minutes; now that it is rare and edge-triggered, a
+  # genuine leak would be the tail line for exactly one run and then be buried,
+  # and evicted from the 200-line cap within hours. The count message already
+  # carries `at ${usage_pct}% usage`, so it strictly dominates this one.
   if [[ "$usage_pct" -ge "$USAGE_WARN_PCT" ]] \
      && [[ "${CLEANED_COUNT:-0}" -eq 0 ]] && [[ "${REAP_COUNT:-0}" -eq 0 ]]; then
     guard_log "$TMP_ROOT at ${usage_pct}% — nothing reapable found."
-    alarm_record "$TMP_ROOT at ${usage_pct}% — nothing reapable found. Investigate: du -sh $TMP_ROOT/* | sort -h | tail"
+    if [[ "${COUNT_PRESSURE_SEEN:-0}" -eq 0 ]]; then
+      alarm_record "$TMP_ROOT at ${usage_pct}% — nothing reapable found. Investigate: du -sh $TMP_ROOT/* | sort -h | tail"
+    fi
   fi
 
-  # Healthy run: usage below the warn threshold AND no count pressure. Clear the
-  # alarm file so a resolved incident stops being reported as active.
-  if [[ "$usage_pct" -lt "$USAGE_WARN_PCT" ]] && [[ "${COUNT_PRESSURE_SEEN:-0}" -eq 0 ]]; then
+  # Healthy run: usage below the warn threshold AND no count pressure AND the
+  # count signal is actually armed. The degraded check is load-bearing: a guard
+  # that cannot persist its watermark reports growth=0 forever, which satisfies
+  # "no count pressure" and would otherwise erase the very alarm saying so.
+  if [[ "$usage_pct" -lt "$USAGE_WARN_PCT" ]] \
+     && [[ "${COUNT_PRESSURE_SEEN:-0}" -eq 0 ]] && [[ "${COUNT_DEGRADED:-0}" -eq 0 ]]; then
     alarm_clear_if_healthy
   fi
 }
