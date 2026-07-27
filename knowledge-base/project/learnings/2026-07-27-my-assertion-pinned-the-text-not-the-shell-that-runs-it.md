@@ -92,7 +92,7 @@ This was the **fourth** occurrence of "root context runs Doppler with no resolva
 | #6669 | web-1 probe units | `Environment=HOME=/root` |
 | #6981 | cloud-init `runcmd` | this PR |
 
-Eight systemd units already carried `Environment=HOME=/root`, five per-unit drift tests guarded
+Nine systemd units already carried `Environment=HOME=/root`, five per-unit drift tests guarded
 them, and `inngest-bootstrap.sh` writes the rule down verbatim: *"If a future edit adds `doppler run`
 here, it MUST also set `Environment=HOME=/root`."* Every guard was **opt-in** — so the one root
 execution context nobody enrolled is precisely where it bit again.
@@ -111,16 +111,19 @@ always lands on the one they didn't.
 config was unknowable and hypothesised a March-vs-July `ubuntu-24.04` image difference — then wrote
 that hypothesis into **three durable artifacts** (the issue, the PR body, the post-mortem).
 
-The repo is a shallow clone: `git rev-parse --is-shallow-repository` → `true`, graft at `09e9a3e82`.
-`git log --all` recovers **113 commits** back to 2026-02-10, and the real answer is unambiguous:
+The repo is a shallow clone: `git rev-parse --is-shallow-repository` → `true`, with **two** grafts
+(`09e9a3e82` 2026-07-11 and `0d3a33adb` 2026-07-25). `git log --all --follow` recovers **113
+commits** back to 2026-02-10 — the `--follow` is load-bearing, because bare `--all` stops at 112 and
+2026-03-18; the extra commit is across a rename, and the real answer is unambiguous:
 `cloud-init.yml` was added 2026-03-18, ~28 hours *after* web-1 was created; Doppler was adopted
 2026-03-20; and `lifecycle.ignore_changes = [user_data]` means web-1 has **never re-run cloud-init**.
 web-2's July births are the first execution of the current `runcmd` on any web host. There was no
 image difference to find.
 
 **Before writing "the history does not contain X":** run `git rev-parse --is-shallow-repository` and
-retry with `--all`. An absent commit and an unfetched commit are indistinguishable in `git log`, and
-only one of them is a fact about the project.
+retry with `--all` — and add `--follow`, or a rename silently truncates the result you just
+"verified". An absent commit and an unfetched commit are indistinguishable in `git log`, and only
+one of them is a fact about the project.
 
 ## 6. Relaying an agent's claim is asserting it
 
@@ -152,14 +155,17 @@ prose is.
    and a later command died `ENOSPC`. **Prevention:** copy only the paths the suite resolves; check
    `du -sh` on the source before a recursive copy into a tmpfs.
 
-5. **Comments blew the `user_data` byte budget** — 33 lines took the rendered size from 23,016 B to
-   23,852 B against a 23,700 B sub-cap. **Prevention:** folded into
+5. **Comments blew the `user_data` byte budget** — 33 lines pushed the rendered size to 23,852 B
+   against a 23,700 B sub-cap (the pre-change rendered baseline was 23,400 B; "23,016" is the
+   SHORTCUT value and appeared in this file's first draft — see error 6, which it undermines). **Prevention:** folded into
    [[2026-07-26-cloud-init-comment-is-a-live-host-input-and-an-unreadable-vendor-limit-decays]] — check
    the budget before adding prose to a byte-capped template.
 
-6. **I measured the budget with the wrong instrument** — raw `gzip | base64 | wc -c` on the source read
-   23,444 (under budget) because the file is a terraform *template* the test renders first. I would
-   have declared it fixed on a number ~400 B low. **Prevention:** when a gate owns a measurement, run
+6. **I measured the budget with the wrong instrument** — raw `gzip | base64 | wc -c` on the source reads
+   ~390 B LOW because the file is a terraform *template* the test renders first, so it said "under
+   budget" when the gate said over. I would have declared it fixed on the wrong number — and then
+   quoted that same wrong-instrument number as the baseline in the write-up warning about it, until a
+   fact-check pass caught it. **Prevention:** when a gate owns a measurement, run
    the gate; a hand-rolled equivalent is a different measurement until proven identical.
 
 7. **I relayed an unverified agent claim** to the operator (§6). **Prevention:** verify before relaying,

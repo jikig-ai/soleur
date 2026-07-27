@@ -52,19 +52,31 @@ above `hcloud_server.web` looks like the safe case. It is not fully safe: `user_
 `base64gzip(templatefile(…))` against Hetzner's **32,768 B cap**, with a 23,700 B sub-cap budget
 guarded by `plugins/soleur/test/cloud-init-user-data-size.test.ts`. Prose is payload.
 
-In #6981 a 33-line explanatory comment took the rendered `user_data` from 23,016 B to **23,852 B** —
-over budget. Nothing local caught it: the infra suites (72/72) and the PR's own new assertions
-(104/0) do not model the render. Only `scripts/test-all.sh` did.
+In #6981 a 33-line explanatory comment pushed the rendered `user_data` to **23,852 B** — over budget.
+Nothing local caught it: the infra suites (72/72) and the PR's own new assertions (104/0) do not
+model the render. Only `scripts/test-all.sh` did.
 
 **And the obvious hand-check is wrong.** Measuring the source directly reads ~400 B LOW, because the
-file is a terraform *template* and the test renders it with real variable values first:
+file is a terraform *template* and the test renders it with real variable values first. Measured at
+two committed revisions:
 
-```
-gzip -9 -c cloud-init.yml | base64 -w0 | wc -c   → 23,444   (under budget — WRONG)
-bun test cloud-init-user-data-size.test.ts       → 23,852   (over budget — the real number)
-```
+| revision | instrument (`renderedGzipB64Len`) | shortcut (`gzip -9 \| base64 -w0 \| wc -c`) |
+|---|---|---|
+| `f0df12daf` (pre-#6981) | **23,400** | 23,016 |
+| `6cfa119f2` (post-#6981) | **23,628** | 23,228 |
 
-Acting on the first number would have "fixed" the overrun on a value that was never the measurement.
+The gap is a consistent ~390 B. Acting on the shortcut would "fix" an overrun against a value that
+was never the measurement.
+
+> **This exact trap caught the first draft of this addendum.** It originally quoted the pre-#6981
+> baseline as "23,016 B" — which is the **shortcut** number, not the rendered one. A reader
+> re-deriving it from the instrument would never reproduce it and would reasonably conclude the
+> instrument was broken. Corrected to 23,400 B after a fact-check pass. If you quote a byte figure
+> here, say which instrument produced it.
+
+**Headroom is thin right now.** Current `origin/main` renders to **23,628 B against a 23,700 B
+budget — 72 B left.** The next infra edit of almost any size trips the gate. Treat the size test as a
+precondition for touching this file at all, not a formality.
 
 **So, before adding prose to any `cloud-init-*.yml`, check both axes:**
 
