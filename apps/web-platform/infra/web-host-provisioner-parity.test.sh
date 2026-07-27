@@ -62,10 +62,16 @@
 # than assuming the other suite ran.
 #
 # Every section carries a NON-VACUITY FLOOR: a parse that silently matches nothing must fail
-# loudly rather than report a clean sweep of an empty set.
+# loudly rather than report a clean sweep of an empty set. The sweep-size floors (FLOOR_RESOURCES,
+# FLOOR_DESTS, FLOOR_IDENTITY) are pinned at the EXACT baseline rather than baseline-minus-slack:
+# any slack is a silent-erosion window, and removing a provisioner or a delivered artifact is a
+# Phase-5-class change that should cost a deliberate edit here. The §0 PARSE floors keep slack on
+# purpose -- cloud-init.yml and the bake list legitimately shrink as artifacts move onto the image.
 #
 # Mutation-proven by web-host-provisioner-parity-mutation.test.sh, which asserts WHICH check
-# fires for each mutation (a bare non-zero exit credits crashes as detections).
+# fires for each mutation (a bare non-zero exit credits crashes as detections). Anything that
+# battery cannot reach by editing the four INPUT FILES is unproven no matter how green the run
+# looks, which is why §5's hygiene checks carry an env-driven reachability probe (see §5).
 
 set -uo pipefail
 
@@ -76,12 +82,17 @@ ROOT="$(git rev-parse --show-toplevel)" || exit 2
 # setter in the repo is the mutation battery.
 INFRA="${SOLEUR_INFRA_DIR:-$ROOT/apps/web-platform/infra}"
 
+# This loop is the guard's INPUT CONTRACT, and the mutation battery DERIVES its sandbox
+# file set from it rather than keeping a second copy (#7014 gap 4). Keep it a single
+# `for f in <names>; do` line: the battery parses that shape and hard-fails on divergence,
+# because a fifth input read tolerantly (`try/except FileNotFoundError`) would otherwise let
+# the battery report a clean run over a check that never executed.
 for f in server.tf cloud-init.yml web-probe-envwrite.sh soleur-host-bootstrap.sh; do
   [[ -f "$INFRA/$f" ]] || { echo "FATAL: $INFRA/$f not found" >&2; exit 2; }
 done
 
 python3 - "$INFRA" <<'PYEOF'
-import os, re, sys
+import json, os, re, sys
 
 INFRA = sys.argv[1]
 def read(n): return open(os.path.join(INFRA, n)).read()
@@ -252,9 +263,18 @@ def _strip_heredoc_bodies(cmd):
 
 def destinations(body):
     """Every absolute path this provisioner delivers. Fail-closed by over-extraction."""
-    out, interpolated = set(), set()
+    out, interpolated, unresolvable = set(), set(), set()
     for d in re.findall(r'destination\s*=\s*"([^"]+)"', body):
         (out if d.startswith('/') else interpolated).add(d)
+    # A destination that is not a STRING LITERAL at all -- `destination = local.x`,
+    # `destination = var.y` -- is invisible to the quoted extraction above. It does not become
+    # a finding; it simply LEAVES THE SWEEP. Converting `destination = "/abs"` attributes to
+    # locals is an ordinary HCL refactor, and without this branch two of them could be dropped
+    # silently while the guard stayed green, because the FLOOR_DESTS margin absorbed the loss
+    # (#7014 gap 1; the margin is now zero as well, so the two defences are independent).
+    # Same fail-silent class as the interpolated case, arriving through a second door.
+    for d in re.findall(r'destination\s*=\s*([^"\s]\S*)', body):
+        unresolvable.add(d)
     for arr in re.findall(r'inline\s*=\s*\[(.*?)\n\s*\]', body, re.S):
         for raw in re.findall(r'"((?:[^"\\]|\\.)*)"', arr):
             cmd = _strip_heredoc_bodies(raw.replace('\\n', '\n').replace('\\"', '"'))
@@ -271,7 +291,8 @@ def destinations(body):
                         if m.group(1) or verb not in READONLY_VERBS:
                             out.add(path)
     return ({d for d in out if not d.startswith(TRANSIENT) and d.rstrip('/') != ''},
-            {d for d in interpolated})
+            {d for d in interpolated},
+            unresolvable)
 
 def _last_path(seg):
     """Last path-like argument of a command -- an absolute literal OR a $VAR/${VAR} token.
@@ -338,9 +359,14 @@ bs_vars = heredoc_scoped_vars(bootstrap)
 
 all_dests = {}
 for name, body in ssh_resources.items():
-    dests, interpolated = destinations(body)
+    dests, interpolated, unresolvable = destinations(body)
     for d in dests:
         all_dests.setdefault(d, set()).add(name)
+    for d in sorted(unresolvable):
+        no(f"2: {name} sets destination = {d}, an HCL REFERENCE rather than a string literal, "
+           "which the quoted-destination extraction cannot see -- so the destination would "
+           "leave the sweep SILENTLY rather than report as uncovered. Use a literal path, or "
+           "ALLOWLIST the resolved path with the reason its parity is verified elsewhere.")
     # An interpolated destination cannot be statically resolved, so parity CANNOT be proven
     # for it. v2 dropped these silently via a startswith('/') filter -- the purest fail-open
     # in the file, since `destination = "${local.x}/y"` is idiomatic HCL. Not provable is a
@@ -369,7 +395,12 @@ for dest in sorted(all_dests):
            "Only if the artifact is provably meaningless on a fresh host (a running-host "
            "rotation, not config) add it to ALLOWLIST with that reason.")
 
-FLOOR_DESTS = 50
+# Pinned to the EXACT baseline, not baseline-minus-slack. At 50 against a real 52 this floor
+# carried a two-destination silent-erosion window: delete two `provisioner "file"` blocks and
+# the sweep quietly covers 50 while reporting a clean run (#7014 gap 1). Removing a delivered
+# artifact is a Phase-5-class change (plan §5.3(c)), so it SHOULD cost an explicit edit here --
+# same margin-zero rationale as FLOOR_RESOURCES and FLOOR_IDENTITY.
+FLOOR_DESTS = 52
 if len(all_dests) >= FLOOR_DESTS:
     if not uncovered:
         ok(f"2: all {len(all_dests)} SSH-written destinations have a fresh-boot writer "
@@ -385,13 +416,31 @@ else:
 # by §2; installed-but-not-baked is caught here. Both directions, or the pair is not proof.
 missing_seed = sorted({src for dest, src in bs_installs.items()
                        if dest in all_dests and src not in baked})
+n_checked = sum(1 for d in bs_installs if d in all_dests)
 if not missing_seed:
-    n_checked = sum(1 for d in bs_installs if d in all_dests)
     ok(f"3: all {n_checked} bootstrap-installed destinations have their seed file baked")
 else:
     no(f"3: soleur-host-bootstrap.sh installs from $SEED/{missing_seed} but those are NOT in "
        "local.host_script_files, so the seed file will not exist on a fresh host and the "
        "install fails at boot.")
+
+# NON-VACUITY FLOOR. §3 quantifies over `bs_installs INTERSECT all_dests`, and an empty
+# intersection makes `missing_seed` empty too -- a clean sweep of nothing, reported as a pass.
+# Every other section carried a floor; this one did not (#7014 gap 3).
+#
+# Stated limit, so nobody reads more into it than it proves: this floor cannot be exercised in
+# ISOLATION, because both of its operands are floored elsewhere -- shrinking the intersection
+# necessarily moves §0's install count, §2's sweep count, or §2's per-destination coverage. Its
+# value is that an intersection collapse is named HERE rather than inferred from a neighbour.
+FLOOR_SEEDED = 30
+if n_checked >= FLOOR_SEEDED:
+    ok(f"3: the seed-baked check ran over {n_checked} bootstrap-installed destinations "
+       f"(floor {FLOOR_SEEDED})")
+else:
+    no(f"3: the seed-baked check ran over only {n_checked} bootstrap-installed destinations "
+       f"(floor {FLOOR_SEEDED}). Either the install-loop destinations no longer overlap what "
+       "the SSH provisioners write -- which means §3 is checking almost nothing -- or the "
+       "bootstrap install extraction drifted. A clean sweep of nothing is not coverage.")
 
 # ── §4. BYTE-IDENTITY where both paths carry their own copy of a unit body ───────────
 # A heredoc whose counterpart is a cloud-init write_files entry means the SAME body written
@@ -449,11 +498,34 @@ else:
        "the heredoc/write_files extraction broke.")
 
 # ── §5. ALLOWLIST hygiene: every entry justified, none stale ─────────────────────────
-for art, reason in sorted(ALLOWLIST.items()):
-    if not reason.strip():
-        no(f"5: ALLOWLIST entry {art!r} has no stated reason")
-    if art not in all_dests:
-        no(f"5: ALLOWLIST names {art} but no SSH provisioner writes it -- remove the stale entry")
+def check_allowlist(entries, label):
+    for art, reason in sorted(entries.items()):
+        if not reason.strip():
+            no(f"5: {label} entry {art!r} has no stated reason")
+        if art not in all_dests:
+            no(f"5: {label} names {art} but no SSH provisioner writes it -- remove the stale "
+               "entry")
+
+check_allowlist(ALLOWLIST, "ALLOWLIST")
+
+# REACHABILITY PROBE (#7014 gap 2). ALLOWLIST is empty -- which is the correct state -- so both
+# hygiene checks above are STRUCTURALLY UNREACHABLE from the mutation battery: no edit to the
+# four input FILES can add an entry, and the checks could therefore be deleted with the battery
+# reporting a full pass. They asserted nothing. This env var feeds a synthetic entry set through
+# the SAME function so both arms can be proven to fire.
+#
+# It is deliberately NOT merged into ALLOWLIST. An env var able to SUPPRESS a §2 finding would
+# be a fail-open switch on the guard's load-bearing invariant, and a test hook must never be
+# able to make a real failure disappear. This one can only ADD failures. CI never sets it --
+# the only setter in the repo is the mutation battery, same contract as SOLEUR_INFRA_DIR.
+probe_raw = os.environ.get("SOLEUR_PARITY_ALLOWLIST_PROBE", "")
+if probe_raw:
+    try:
+        probe_entries = json.loads(probe_raw)
+    except ValueError as exc:
+        no(f"5: SOLEUR_PARITY_ALLOWLIST_PROBE is set but is not parseable JSON ({exc})")
+        probe_entries = {}
+    check_allowlist(probe_entries, "ALLOWLIST probe")
 
 print(f"=== web-host-provisioner-parity: {npass} passed, {nfail} failed ===")
 sys.exit(1 if nfail else 0)
