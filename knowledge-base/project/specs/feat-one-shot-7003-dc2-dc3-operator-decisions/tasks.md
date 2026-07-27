@@ -37,30 +37,30 @@ Target: `knowledge-base/project/specs/feat-one-shot-6977-git-data-birth-route/de
 
 Target: `knowledge-base/engineering/architecture/decisions/ADR-149-git-data-host-birth-route-and-readiness-interlock.md`
 
-- [ ] 2.0 Re-read `### Interlock release checklist — #6982 inherits this` and confirm it is still a
+- [x] 2.0 Re-read `### Interlock release checklist — #6982 inherits this` and confirm it is still a
       7-item numbered list of prose sentences with bolded lead phrases. Mirror that shape — no table,
       no checkboxes, no new heading level.
-- [ ] 2.1 Insert the DC-2 mandate as **item 7** (plan Phase 2.1) and renumber the existing
+- [x] 2.1 Insert the DC-2 mandate as **item 7** (plan Phase 2.1) and renumber the existing
       *"Clear the DO-NOT-DISPATCH banner"* item to **8**, adding its terminal note. Confirm first
       that nothing outside the ADR references items 7 or 8 by number and that `Residual 2`'s
       `item 5` reference is unaffected.
-- [ ] 2.2 Extend **item 5** with DC-3's two mechanical constraints (plan Phase 2.2), preserving every
+- [x] 2.2 Extend **item 5** with DC-3's two mechanical constraints (plan Phase 2.2), preserving every
       existing word. State the #6415 precedent **accurately** — it routed
       `hcloud_server_network.registry` through a `local` that still holds the literal, so DC-3's
       mandate goes one step further by reading the resource attribute.
-- [ ] 2.3 Amend the existing `Include \`doppler_secret.git_data_ssh_host\`` row in
+- [x] 2.3 Amend the existing `Include \`doppler_secret.git_data_ssh_host\`` row in
       `## Alternatives considered`: dissent → **upheld by the operator on 2026-07-27**, and add the
       full artifact path plus `#6989` so the dissent is resolvable from the ADR side. Edit **inside
       the verdict cell** — text past the trailing `|` is discarded by GFM while still passing a
       grep. Do **not** add a new row for the interlock mechanism (item 7 is its home).
-- [ ] 2.4 At anchor `Items 2–7 are not machine-checked at all` (**en dash**, U+2013), replace the
+- [x] 2.4 At anchor `Items 2–7 are not machine-checked at all` (**en dash**, U+2013), replace the
       range with `The remaining items`. Third count-mirror, in the file already being edited.
-- [ ] 2.5 In `### The birth-readiness interlock`, append the interim clause (plan Phase 2.5) after
+- [x] 2.5 In `### The birth-readiness interlock`, append the interim clause (plan Phase 2.5) after
       the *"That choice is load-bearing"* passage. Without it the Decision section still presents the
       sentinel as permanent three headings above an item mandating its deletion.
-- [ ] 2.6 Add `- **Amended by:** #7003 (operator decisions DC-2, DC-3 — 2026-07-27)` to the header
+- [x] 2.6 Add `- **Amended by:** #7003 (operator decisions DC-2, DC-3 — 2026-07-27)` to the header
       bullets. ADR-149 has no YAML frontmatter, so the ordinal guard is unaffected.
-- [ ] 2.7 Verify **AC5**, **AC6**, **AC8**, **AC10**, and AC4's `<adr>` clause.
+- [x] 2.7 Verify **AC5**, **AC6**, **AC8**, **AC10**, and AC4's `<adr>` clause.
 
 ## Phase 3 — The gate: add the mandate where it is actionable, stop stating counts
 
