@@ -88,7 +88,8 @@ entries):
 
 - **12,240 entries** cleared every gate
 - only ~10,700 were the leak; the rest were authored work — `pr-body-*.md`,
-  `review-bak.*`, a 12.5 MB downloaded `doppler` binary, `/tmp/.doppler/.doppler.yaml`
+  `review-bak.*`, a 12.5 MB downloaded `doppler` binary and the Doppler CLI's
+  config directory under `/tmp/.doppler/`
 - the pass had **not finished after 10 minutes**
 - `find -delete` on a RAM-backed tmpfs is terminal
 
@@ -177,6 +178,17 @@ cursor rather than by a time window.
 21. **`sweep.md` counts did not re-derive** (`plugins/` counted under a different scope than `scripts/`). — *Recovery:* recounted; published the command beside each number. — **Prevention:** an evidence record states the command, not just the number.
 22. **A comment claimed `skill-security-scan` "denies"**; that hook always exits 0. — *Recovery:* reworded. — **Prevention:** read the header before describing a hook's consequence.
 23. **Invented `TMP_BASE`/`REPO_A` in the loader test**; `--milestone 6` rejected (number vs title). — *Recovery:* used the real fixture helper and the milestone title. — **Prevention:** grep the file for its existing fixture idiom before adding an arm.
+
+24. **This learning file itself failed a required CI check.** Enumerating what the
+    reap tier would have deleted meant quoting a real credential-file path, which
+    `lint-credential-path-literals` correctly rejects: a resolvable path in a doc
+    makes the harness auto-attach the real file into model context when the doc
+    loads. — *Recovery:* replaced with the directory-only form plus a descriptive
+    name. — **Prevention:** when a post-mortem enumerates deleted or leaked files
+    as evidence, name them descriptively or directory-only; the evidentiary value
+    is in the CLASS of file, never in a path a tool can resolve. Run
+    `python3 scripts/lint-credential-path-literals.py` before pushing any doc that
+    lists real paths.
 
 ## Related
 
