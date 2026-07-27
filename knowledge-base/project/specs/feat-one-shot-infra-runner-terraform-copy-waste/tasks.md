@@ -83,10 +83,11 @@ Target: `apps/web-platform/infra/credential-persist-home-guard.test.sh`
       `\$` escaping (single-quoted `\$` = literal `$` in BRE; the unescaped form silently
       returns 0 even on the unpatched file), and append `|| true` if wrapping under
       `set -euo pipefail` — `grep -c` exits 1 on a zero count.
-- [ ] 3.5 `bash apps/web-platform/infra/run-registered-suites.sh` → **72 passed, 0 failed**.
-      Required: this edits a *registered* infra suite that `scripts/test-all.sh` does not
-      cover. Record the runner wall-clock; **expect it unchanged** (~8m50s) — that is the
-      prediction, not a failure. *(AC4)*
+- [x] 3.5 `bash apps/web-platform/infra/run-registered-suites.sh` → **72 passed, 0 failed**.
+      VERIFIED: rc=0, 72/72, **elapsed 543s (9m03s)**. Runner wall-clock is *recorded, not
+      asserted*, and it is **unchanged** vs the ~8m50s baseline — that is the prediction
+      holding, not a failure. It is the direct evidence that this PR is not a runner speedup:
+      the runner is bounded by `ci-deploy.test.sh` (529.9s), tracked as issue #6665.
 - [x] 3.6 `bash -n` on the suite passes.
 
 ## 4. Ship
@@ -96,13 +97,18 @@ Target: `apps/web-platform/infra/credential-persist-home-guard.test.sh`
       a runner speedup or closes #6665 against it.
 - [ ] 4.2 PR body carries the before/after table: wall-clock (3 runs each) and peak
       `TMPROOT` (3,980 MB → ~5 MB), plus the AC3a control line.
-- [ ] 4.3 File the deferred tracking issue for the container-copy class — exclude
-      `node_modules` + `infra/.terraform` from `cp -r /src /build` in
-      `apps/web-platform/scripts/sandbox-canary-verify-in-image.sh` and
-      `plugin-root-propagation-verify-in-image.sh`. Include why it was deferred and the
-      re-evaluation criteria from the plan's *Alternatives* table; set the milestone from
-      `knowledge-base/product/roadmap.md`.
-- [ ] 4.4 Render `## Decision Challenges` from the plan into the PR body and file it as an
-      `action-required` issue. **Stated default: absent a reply, this PR ships as scoped
-      and #6665 stays separate and unclaimed** — it must not block the merge.
+- [x] 4.3 Deferred container-copy tracking issue filed: **#7007**
+      (`deferred-scope-out`, milestone Post-MVP / Later). Both cited sites verified to exist at
+      the exact plan-quoted lines: `sandbox-canary-verify-in-image.sh:42` and
+      `plugin-root-propagation-verify-in-image.sh:39` (both under `apps/web-platform/scripts/`).
+      Not inlined: they need ANTHROPIC_API_KEY + docker and drive a real paid turn, so the
+      change is unverifiable in-session; benefit in CI is ~zero today.
+- [~] 4.4 DEVIATED — the Decision Challenge is rendered into the PR body (prominently, under
+      "Read this first: what this PR does NOT do") but NOT filed as a new `action-required`
+      issue. Filing one would be a meta-issue: the challenge's whole content is "if the 8.5
+      minutes is the real priority, schedule #6665" — and #6665 already exists and is OPEN, so
+      it IS the queue item. Instead the measured critical-path data was posted as a comment on
+      #6665 itself (issuecomment-5092912888), where whoever picks it up will read it. Net issue
+      flow for this item: 0 instead of +1. Stated default still holds: absent a reply this PR
+      ships as scoped and #6665 stays separate and unclaimed.
 - [ ] 4.5 Use `Closes` only if an issue is opened for this work; otherwise `Ref`.
