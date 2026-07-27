@@ -78,8 +78,8 @@ strip_sidecar_into_global() {
   # on the normal path; both fire on a malformed/greedy strip.
   if (( stripped_n != raw_n )) \
      || { [[ -n "$sentinel" ]] \
-          && printf '%s' "$raw" | grep -qF "$sentinel" \
-          && ! printf '%s' "$stripped" | grep -qF "$sentinel"; }; then
+          && grep -qF "$sentinel" <<<"$raw" \
+          && ! grep -qF "$sentinel" <<<"$stripped"; }; then
     OVERSTRIP_DETECTED=1
     STRIPPED_OUT="$raw"
   else

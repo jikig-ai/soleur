@@ -70,7 +70,7 @@ SCAN=$(strip_command_bodies "$CMD")
 # Word boundary (\s|$) prevents false positives on hypothetical merge-* subcommands.
 # Chain operator pattern from guardrails.sh catches chained commands.
 # Runs against $SCAN (quote-stripped), not $CMD, per the #4600 fix above.
-if ! echo "$SCAN" | grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)'; then
+if ! grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)' <<<"$SCAN"; then
   exit 0
 fi
 # Note: the `\s--\s` alternative catches the with_lock wrapped form
@@ -150,7 +150,9 @@ fi
 REVIEW_TODOS=""
 while IFS= read -r _todo; do
   [[ -n "$_todo" ]] || continue
-  if git -C "$WORK_DIR" show "HEAD:$_todo" 2>/dev/null | grep -q "code-review"; then
+  # grep -c, not grep -q: -c reads all input and never early-closes the pipe,
+  # so the producer cannot take SIGPIPE and be misread as "no match" (#6992).
+  if [ "$(git -C "$WORK_DIR" show "HEAD:$_todo" 2>/dev/null | grep -c "code-review" || true)" -gt 0 ]; then
     REVIEW_TODOS="$_todo"
     break
   fi

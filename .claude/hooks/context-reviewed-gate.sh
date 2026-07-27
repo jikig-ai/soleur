@@ -54,7 +54,7 @@ eval "$(echo "$INPUT" | jq -r '@sh "CMD=\(.tool_input.command // "")"' 2>/dev/nu
 #    `[^&|;]*` keeps the git↔commit span inside a single command segment so
 #    `git add . && git commit` still resolves to the real `git commit`.
 SCAN=$(strip_command_bodies "$CMD")
-if ! echo "$SCAN" | grep -qE '\bgit\b[^&|;]*\bcommit\b'; then
+if ! grep -qE '\bgit\b[^&|;]*\bcommit\b' <<<"$SCAN"; then
   exit 0
 fi
 
@@ -135,7 +135,7 @@ esac
 #    colon / case (grep -E: `[[:space:]]`, not `\s`). The `--- a/<file>` diff
 #    header starts with `-` but carries no `last_reviewed` token, so it never
 #    false-matches.
-if ! echo "$DELTA" | grep -qE '^-.*["'"'"']?[Ll]ast_[Rr]eviewed["'"'"']?[[:space:]]*:'; then
+if ! grep -qE '^-.*["'"'"']?[Ll]ast_[Rr]eviewed["'"'"']?[[:space:]]*:' <<<"$DELTA"; then
   exit 0
 fi
 
@@ -165,7 +165,7 @@ if [[ -n "$BODY_FILE" ]]; then
 fi
 
 # 6. Trailer present → allow (attributable). Absent → deny + incident.
-if printf '%s' "$MSG" | grep -qE 'Context-Reviewed:[[:space:]]*(all|[^[:space:]]+)'; then
+if grep -qE 'Context-Reviewed:[[:space:]]*(all|[^[:space:]]+)' <<<"$MSG"; then
   exit 0
 fi
 
