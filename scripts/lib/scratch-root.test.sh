@@ -138,7 +138,15 @@ fi
 
 # --- 10. the resolver does NOT export TMPDIR --------------------------------------------
 #         Redirecting every child is the caller's decision, not this module's.
-out=$(env "HOME=$TMP_ROOT" --unset=TMPDIR bash -c \
+# OPTION ORDER IS LOAD-BEARING: `--unset` must precede the NAME=VALUE operands. GNU env
+# stops option parsing at the first assignment, so `env HOME=x --unset=TMPDIR` does not
+# unset anything — it silently defines a variable literally NAMED `--unset` with the value
+# `TMPDIR`, and still exits 0. This assertion then passed only because TMPDIR happened to
+# be absent from the ambient environment; once a harness exported it (#6977 set
+# TMPDIR=/var/tmp in test-all.sh) the same green test went red, having never isolated the
+# variable it claims to isolate. A flag reinterpreted as data is indistinguishable from a
+# flag that worked.
+out=$(env --unset=TMPDIR "HOME=$TMP_ROOT" bash -c \
   'source "'"$LIB"'"; soleur_scratch_root >/dev/null; printf "%s" "${TMPDIR:-UNSET}"' 2>/dev/null)
 if [[ "$out" == "UNSET" ]]; then
   pass "TMPDIR is not exported (redirection stays the caller's decision)"

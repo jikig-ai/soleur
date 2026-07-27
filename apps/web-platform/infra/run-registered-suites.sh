@@ -31,6 +31,23 @@
 
 set -uo pipefail
 
+# Default TMPDIR to /var/tmp (disk-backed), mirroring scripts/test-all.sh.
+#
+# These suites are the heaviest bulk writers in the repo: several copy the whole
+# 162 MB `.terraform` provider tree PER MUTATION, and `credential-persist-home-guard`
+# alone makes ~13 such copies. Against the ~4 GiB /tmp tmpfs that exhausts the mount
+# and the suite dies on `cp: No space left on device` — a RED that looks like a real
+# regression and is really a full RAM disk. It reproduces with the runner completely
+# idle, so it is capacity, not contention.
+#
+# test-all.sh already defaults this, but its own epilogue points here — the ONE runner
+# it structurally cannot cover — and that pointer used to land on a command still
+# requiring a manual `TMPDIR=/var/tmp` prefix. Defaulting it there and not here left
+# the footgun exactly where the hand-off sends you; #6977 removed it in both halves.
+#
+# Respects an explicit caller value — CI or an operator pinning TMPDIR keeps it.
+export TMPDIR="${TMPDIR:-/var/tmp}"
+
 LIST_ONLY=0
 [[ "${1:-}" == "--list" ]] && LIST_ONLY=1
 
