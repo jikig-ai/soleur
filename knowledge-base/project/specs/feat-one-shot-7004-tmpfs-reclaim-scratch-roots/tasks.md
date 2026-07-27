@@ -12,13 +12,32 @@ Legend: `[ ]` todo · `AC#` maps to the plan's Acceptance Criteria.
 The guard alarms every 5 minutes **today**, before any of this. The reaper neither causes nor
 worsens it, so this is separable and has the highest immediate operator value.
 
-- [ ] 0.1 In `scripts/tmpfs-guard.sh`, count only entries **not** matching `soleur-run.*`.
-- [ ] 0.2 Persist a watermark beside the heartbeat; re-floor every run to `min(stored, current)`.
-- [ ] 0.3 Alarm on growth above the floor, never on absolute count.
-- [ ] 0.4 Tests: (a) legacy present + zero orphans ⇒ silent; (b) simulated drain lowers the
+- [x] 0.1 In `scripts/tmpfs-guard.sh`, count only entries **not** matching `soleur-run.*`.
+      `unowned_entry_count()` filters on `SCRATCH_SCHEMA_RE` — anchored and fixed-arity
+      (`^soleur-run\.[0-9]+\.[A-Za-z0-9]{8}$`), so `soleur-run.notapid.…` is *not* accepted as a
+      near-miss. Uses `grep -c`, never `grep -q`, so an early match cannot SIGPIPE the producer
+      under `pipefail`.
+- [x] 0.2 Persist a watermark beside the heartbeat; re-floor every run to `min(stored, current)`.
+      `WATERMARK_FILE` sits in the same state dir as the alarm + heartbeat. A missing or
+      unparseable value seeds from the current count rather than reading as `0` — reading a corrupt
+      file as zero would alarm on the entire legacy backlog, which is the behaviour being replaced.
+- [x] 0.3 Alarm on growth above the floor, never on absolute count.
+      Order is load-bearing and is asserted: the floor derives from the *previously stored* value,
+      the comparison runs against that, and only then is the new floor persisted. Re-flooring first
+      would compare the count against itself and never alarm.
+- [x] 0.4 Tests: (a) legacy present + zero orphans ⇒ silent; (b) simulated drain lowers the
       watermark; (c) growth above the *lowered* watermark alarms; (d) simulated `/tmp` reset to ~0
       re-floors and does **not** disarm. → **AC-A1**
   - (c) and (d) are the two arms a frozen ship-time baseline fails.
+  - Evidence: `scripts/tmpfs-guard.test.sh` Arm 21 (AC-A1 a–d) + Arm 22 (schema exclusion,
+    with a mutation control and a near-miss arm). Suite: **49 passed, 0 failed**.
+  - Non-vacuity proven by mutation, each against a **GREEN positive control**: frozen watermark
+    ⇒ 6 failures; no schema exclusion ⇒ 2; absolute-count alarm ⇒ 2. An earlier mutation run was
+    discarded as void — its baseline exited non-zero with zero `[FAIL]` lines (the sandbox omitted
+    a file a drift-guard arm reads), so every "RED" was the same harness abort rather than the
+    mutation.
+  - Measured on the real `/tmp`: **20,832 unowned entries counted in 0.076 s** against the 300 s
+    cron interval.
 
 ---
 
