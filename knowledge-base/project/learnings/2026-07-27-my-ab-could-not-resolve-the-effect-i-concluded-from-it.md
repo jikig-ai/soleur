@@ -132,6 +132,24 @@ own pin or none of the inner ones bind.
 10. `rm -rf` inside a compound Bash command was blocked twice by the guardrail. The guardrail
     behaved correctly; the fix was moving the logic into a script file.
 
+## Postscript: three gates matched a declaration of absence
+
+Shipping this PR tripped three separate matchers, each on text asserting the OPPOSITE of what the
+matcher looks for:
+
+| Gate | Matched | Actual meaning |
+|---|---|---|
+| auto-close scanner | `do not close #6665` | GitHub's parser is negation-blind — merging would have CLOSED #6665 |
+| incident-PIR | `network-outage` | the *name* of a deepen-plan gate, in a row whose value is **skip** |
+| soak-followthrough | `Soak enrollment: N/A` | a line declaring that no soak exists |
+
+Only the first was a live defect (it would have closed the issue this PR exists to hand off); the
+other two are conservative-by-design gates firing on a label. The generalizable point is the same
+one this learning is about: **a matcher that keys on a token cannot distinguish an assertion from
+its negation, so any prose that NAMES the hazard reads as the hazard.** When writing text that a
+gate will scan, state what is not needed without naming the forbidden thing — and when a gate
+fires, diagnose the exact matched string before either obeying or overriding it.
+
 ## Related
 
 - `2026-07-16-a-mutation-battery-only-covers-what-you-mutate.md` — the panel found the vacuity my
