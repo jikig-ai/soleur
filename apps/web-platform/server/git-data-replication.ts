@@ -56,14 +56,20 @@ const GIT_DATA_REPO_PATH_PREFIX = "/repositories";
 // session end would convert a capacity limit into a user-visible hang — strictly worse
 // than the replication lag it is trying to prevent. On timeout we SHED, and the shed is
 // reported so it is a measurable event rather than a silent gap.
-const GIT_DATA_MAX_CONCURRENT = Math.max(
-  1,
-  Number(process.env.GIT_DATA_MAX_CONCURRENT ?? "2") || 2,
-);
-const GIT_DATA_QUEUE_TIMEOUT_MS = Math.max(
-  0,
-  Number(process.env.GIT_DATA_QUEUE_TIMEOUT_MS ?? "10000") || 10_000,
-);
+const _mc = Number(process.env.GIT_DATA_MAX_CONCURRENT ?? "2");
+const GIT_DATA_MAX_CONCURRENT = Math.max(1, Number.isFinite(_mc) ? _mc : 2);
+// `?? "120000"` then Number(), with NO `|| default`: `Number("0")` is 0, which is falsy, so
+// a `||` fallback makes 0 UNSETTABLE — in production and in tests, where "use a zero-length
+// window" silently ran the full production timeout instead.
+//
+// 120 s, not 10 s. A slot is held for the whole provision+push (30 s + 60 s worst case), so
+// a 10 s queue window meant the third concurrent session-end shed with near-certainty — the
+// queue could essentially never grant a slot. That matters more here than latency: git-data
+// holds the SOLE copy of the delta between a user's last GitHub push and their worktree, and
+// replication is session-end-coupled, so a shed is not lag — it is that delta never being
+// written unless the same user happens to open another session.
+const _qt = Number(process.env.GIT_DATA_QUEUE_TIMEOUT_MS ?? "120000");
+const GIT_DATA_QUEUE_TIMEOUT_MS = Number.isFinite(_qt) && _qt >= 0 ? _qt : 120_000;
 
 let gitDataInFlight = 0;
 const gitDataWaiters: Array<() => void> = [];
