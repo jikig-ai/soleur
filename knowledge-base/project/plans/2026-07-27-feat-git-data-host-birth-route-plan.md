@@ -16,6 +16,32 @@ branch: feat-one-shot-6977-git-data-birth-route
 > `hcloud_server.git_data`. The hold on dispatching is mechanical (§Birth-readiness interlock),
 > not prose.
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-27 · **Halt gates:** 4.5 · 4.6 · 4.7 · 4.8 · 4.9 · 4.10 · 4.55 all evaluated
+
+| Gate | Verdict |
+|---|---|
+| 4.6 User-Brand Impact | **HALTED** — the v2 compression had dropped the section entirely. Restored with the four reachable end-states and the exposure vector. |
+| 4.55 Downtime & Cutover | **Missing → added.** Trigger does not fire (no running host touched, no migration, no router change); the future dispatch is zero-downtime by construction. |
+| 4.5 Network-outage | Keyword trigger fires; **resource-shape trigger does not** (no provisioner on any target). Layer table added. |
+| 4.7 Observability · 4.8 PAT-shape · 4.10 Encryption Posture | Pass. |
+| 4.9 UI wireframe | Correctly skips — the 2 glob "hits" are the plan quoting the globs in its own skip rationale (self-reference), and the Files sections contain zero UI paths. |
+
+### Key improvements
+
+1. **`doppler_config` resolved against the installed provider** — exact 3-attribute HCL, plus the
+   consumer re-point that makes the dependency implicit instead of a string literal.
+2. **10/10 negative claims independently verified.** Zero contradictions.
+3. **A new latent bug found** — `git-data-cutover.sh` drives a systemd unit that does not exist, at
+   both its flip and rollback sites. Out of scope, recorded so #5274/#6982 inherits it.
+4. **Two anchor corrections** — `hcloud_firewall_attachment.web` is in `firewall.tf`; the git-data
+   attachment is a true singleton, which is *why* the reboot arm is a backstop here.
+5. **A self-reference landmine removed** from the Observability block, so an automated re-check
+   cannot match the plan's own prose (the same trap that produced three false-failing v1 ACs).
+
+---
+
 **v2 after a 7-agent review panel.** Three reviewers independently found the same P0 in v1's gate
 contract. Two found a blocking unverified precondition. Kieran found two false measurements in v1 —
 one of which I copied from the task brief without checking. All fixed below; v1's reasoning is
@@ -53,6 +79,81 @@ closure of the targets adds exactly `hcloud_ssh_key.default`, `hcloud_network.pr
 single-host, unlike the web fleet singleton. **No birth dispatch can mutate a live serving
 resource.** This is a genuine advantage over the web precedent, and it is why several ADR-145 arms
 are backstops here rather than live coverage.
+
+---
+
+## User-Brand Impact
+
+**If this lands broken, the user experiences:** nothing immediately — this PR creates no
+infrastructure. The harm is **latent and deferred**: a subtly-wrong birth gate is a rubber stamp
+that a future dispatch trusts. Reachable end-states, descending severity: **(a)** a birth that
+lands the host **naked on its public IPv4/IPv6** (omit `hcloud_firewall_attachment.git_data`, which
+is *downstream* of the server and therefore not auto-pulled), exposing a bare-repo store holding
+every user's source code to the open internet; **(b)** a birth with **`/mnt/git-data-luks` silently
+unmounted** (P12/P13), so at-rest encryption is absent while every artifact claims it is present;
+**(c)** a birth with **no private NIC** (#6416 verbatim), which no reboot repairs because `runcmd`
+is once-per-instance — the host must be replaced. A fourth, added by review: **(d)** a
+gate that wedges the retry path, leaving a half-created host with **no recovery route in either
+direction** except the laptop apply this work exists to eliminate.
+
+**If this leaks, the user's source code and workspace history is exposed via:** the git-data host's
+public interface. `hcloud_firewall.git_data` is a **zero-rule deny-all** firewall and
+`hcloud_firewall_attachment.git_data` is the only thing binding it to the server. hcloud provider
+1.63.0 documents that `hcloud_firewall_attachment` — unlike `hcloud_server.firewall_ids` — **does
+not attach before first boot**, so a transient naked window exists even on a correct birth; omitting
+the attachment makes it permanent. v1's gate additionally permitted an `update` adding inbound rules
+to that firewall (§Gate contract), which would have made the exposure survivable-looking and silent.
+
+**Brand-survival threshold:** `single-user incident`.
+
+Consequences: `requires_cpo_signoff: true` (granted with 5 conditions, all folded in);
+`user-impact-reviewer` is invoked at `/review`; the eng plan-review panel escalated to 5 agents,
+which is what surfaced the requirement-arm P0.
+
+---
+
+## Downtime & Cutover
+
+**Assessed; the downtime trigger does NOT fire for this PR, and the future dispatch is
+zero-downtime by construction.**
+
+- **Infra reboot/replace class — no.** Merging changes no running host. The two `depends_on`
+  additions and the new `doppler_config` do not force replacement of any resource, and every
+  git-data address is an `OPERATOR_APPLIED_EXCLUSION`, so the per-merge apply does not reach them
+  (§Infrastructure). No `hcloud_server` shows `-/+` on this diff.
+- **Database lock class — no.** No migration; no `supabase/migrations/` file in Files to Edit.
+- **Deploy/router class — no.** No tunnel, router, or connector change.
+- **The future birth dispatch is inherently zero-downtime**: it is purely additive onto a host that
+  has never existed, so there is nothing serving to take offline. This is the blue-green end of the
+  spectrum by default, not by design effort.
+- **The one residual cutover is post-birth and pre-existing:** the `ci-deploy` redeploy that puts
+  the three transport keys into the web container's env (Defect 1). That is the platform's standard
+  container swap on any merge touching `apps/web-platform/**` — the same operation that already runs
+  on every release — and it is **not introduced by this PR**. The runbook records it so the operator
+  knows the keys are inert until the next redeploy, rather than discovering it as a silent failure.
+
+---
+
+## Network-Outage Layer Assessment (Phase 4.5)
+
+The keyword trigger fires (`SSH` appears throughout), so the layer check is recorded explicitly. The
+**resource-shape trigger does not fire**: no address in the 18-member `-target` set carries a
+`provisioner "file"`, `provisioner "remote-exec"`, or `connection { type = "ssh" }` block —
+`git-data.tf` states the contract in its own header (*"Apply-path note: cloud-init-only (NO
+remote-exec provisioner)"*), and repo-wide only `ci-ssh-key.tf` and `server.tf` declare provisioners.
+
+| Layer | Status for this plan |
+|---|---|
+| **L3 firewall allow-list / egress IP** | **Not an apply-time dependency.** The birth is cloud-init-only; the runner never opens an SSH session to any host, so operator/runner egress-IP drift cannot fail this apply. This is why the job can mint a throwaway `ssh-keygen` key purely to satisfy HCL's plan-time `file()` evaluation. |
+| **L3 DNS / routing** | Not exercised. The birth creates no DNS record (no `cloudflare_*` address in the set — unlike the web birth, which must re-point the apex A record). |
+| **L7 TLS / proxy** | Only runner→vendor API calls (Hetzner, Doppler, Better Stack), all HTTPS with default verification. No new cross-component connection is opened by the apply itself. |
+| **L7 application** | The web→git-data SSH path (`10.0.1.20`, private net) is a **post-birth** concern, and is the subject of Defect 1 + the GDPR F1a residual — not an apply-time failure mode. |
+
+**Load-bearing consequence:** `terraform_data.git_data_probe_install` — the one `git_data`-named
+address that *does* carry an SSH provisioner, targets **web-1**, and sits in the per-merge apply's
+`-target` list on a step with no destroy-guard — is kept out of scope deliberately and refused by
+the gate (Sharp Edge #1), because that is the only route by which this work could touch a live SSH
+path.
 
 ---
 
@@ -327,6 +428,81 @@ inheritance* feature `zot-registry.tf` calls out as paid (#6067), which this doe
 
 ---
 
+## Research Insights (deepen pass)
+
+### The `doppler_config` block, resolved against the installed provider
+
+`terraform providers schema -json` on dopplerhq/doppler **v1.21.2** gives `doppler_config` exactly
+three **required** attributes — `project`, `environment`, `name` — plus optional `inheritable` /
+`inherits` and computed `descriptor` / `id`. The optional pair is the *config-inheritance* feature
+`zot-registry.tf` flags as paid (#6067); **this block uses neither**, so no tier gate applies.
+
+```hcl
+# #6977 — the prd_git_data branch config, provisioned rather than hand-created.
+# VERIFIED ABSENT 2026-07-27: `doppler configs -p soleur` lists prd, prd_cla, prd_ghcr,
+# prd_kb_drift_walker, prd_scheduled, prd_terraform, prd_workspaces_luks — no prd_git_data.
+# Mirrors the zero-operator-provisioning rationale of doppler_environment.registry_prd
+# (zot-registry.tf): without it the two writes below fail at apply with
+# "Doppler Error: Could not find requested config".
+resource "doppler_config" "git_data_prd" {
+  project     = "soleur"
+  environment = "prd"
+  name        = "prd_git_data"
+}
+```
+
+Then re-point both consumers off the string literal so the dependency is implicit and ordered:
+
+```hcl
+resource "doppler_secret" "git_data_luks_key" {
+  project = doppler_config.git_data_prd.project
+  config  = doppler_config.git_data_prd.name      # was: "prd_git_data"
+  # …
+}
+
+resource "doppler_service_token" "git_data" {
+  project = doppler_config.git_data_prd.project
+  config  = doppler_config.git_data_prd.name      # was: "prd_git_data"
+  # …
+}
+```
+
+**/work must still confirm two things before the first dispatch** (neither is assumable):
+(a) an ADR-130-style scope probe that `var.doppler_token_tf` can create a **branch config** — a
+distinct API surface from the `doppler_environment` it is already proven to create; and (b) the
+already-exists failure mode — if the config is ever created by hand first, determine whether
+`doppler_config` errors or adopts, and whether a `terraform import` is required.
+
+### Verify-the-negative sweep — 10 of 10 claims CONFIRM
+
+Every absolute/negative claim in this plan was re-checked against the tree: the 17 existing targets
+are each present in `OPERATOR_APPLIED_EXCLUSIONS`; neither `git-data.tf` nor `git-data-luks.tf` is
+hashed into any `triggers_replace`/`filesha256`; no target carries a provisioner or `connection`
+block; `hcloud_ssh_key.default` does carry `ignore_changes = [public_key]`;
+`betteruptime_heartbeat.git_data_prd` does ship `paused = true` with `ignore_changes = [paused]`;
+`hcloud_firewall.git_data` has **no `rule` blocks at all**; `doppler_service_token.git_data` is
+`access = "read"` on `prd_git_data`; and no new root variable is implied. **Zero contradictions.**
+
+Two corrections this sweep produced:
+
+- **`hcloud_firewall_attachment.web` lives in `firewall.tf`, not `server.tf`.** The contrast the
+  plan draws still holds and is now anchored correctly: the web attachment is
+  `server_ids = [for h in hcloud_server.web : h.id]` (a fleet for-loop — the reason ADR-145 needs a
+  reboot arm), while `hcloud_firewall_attachment.git_data` is `server_ids = [hcloud_server.git_data.id]`,
+  a direct singleton. **No other `hcloud_server` can enter this gate's closure**, which is why the
+  reboot arm here is a synthesized-fixture backstop rather than live coverage.
+- **New finding — `git-data-cutover.sh` drives a systemd unit that does not exist.** At **two**
+  sites (the coordinated flip and the rollback path) it shells to each web host and asks `systemd`
+  to `restart` a `soleur-web.service` unit. `find / -name soleur-web.service` returns nothing, on
+  disk or in-repo — the app is started by a bare `docker run -d` in `cloud-init.yml`. So the
+  cutover's flip **and its rollback** would both fail at that step. This is #5274/#6982 scope,
+  **not** fixed here (`git-data-cutover.sh` is not in Files to Edit), but it independently
+  corroborates AC5: the correct remediation verb is a `ci-deploy` redeploy, and this plan must not
+  add a third caller of a phantom unit. Recorded so the cutover work inherits it rather than
+  rediscovering it live.
+
+---
+
 ## Observability
 
 ```yaml
@@ -380,7 +556,11 @@ logs:
   retention: 90 days (GitHub Actions default)
 discoverability_test:
   command: gh run list --workflow=apply-web-platform-infra.yml --limit 5 --json conclusion,displayTitle
-  expected_output: JSON array with non-null `conclusion`. Contains no `ssh `.
+  expected_output: >-
+    JSON array with a non-null `conclusion` per entry. The command is remote-API-only and invokes
+    no shell-into-host verb — deliberately worded without the literal token so an automated
+    re-check of this block does not match the plan's own prose (the self-reference trap that
+    produced three false-failing ACs in v1).
 ```
 
 **Soak follow-through: not triggered** — no time-gated close criterion; there is no deploy.

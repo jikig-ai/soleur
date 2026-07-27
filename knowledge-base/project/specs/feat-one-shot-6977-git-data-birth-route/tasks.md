@@ -16,6 +16,11 @@ Open scope decisions: `knowledge-base/project/specs/feat-one-shot-6977-git-data-
       in full — they are the template; the new files must read as siblings, not a fork
 - [ ] 0.4 ADR-130-style scope probe: confirm `var.doppler_token_tf` can create a **branch config**
       (distinct API surface from `doppler_environment`) before relying on it
+- [ ] 0.5 Determine `doppler_config`'s already-exists failure mode (errors vs adopts) and whether a
+      `terraform import` would be needed if the config is ever hand-created first
+- [ ] 0.6 Note (no action — out of scope): `git-data-cutover.sh` drives a `soleur-web.service`
+      systemd unit that does not exist, at both the flip and rollback sites. #5274/#6982 owns it;
+      do NOT add a third caller of that phantom unit here
 
 ## Phase 1: Gate contracts (RED first)
 
