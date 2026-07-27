@@ -311,9 +311,12 @@ copy_scan_tree() {
 }
 
 # Sandboxes were never reclaimed until the EXIT trap, so all 24 were concurrently
-# resident. Reclaiming the previous one first bounds the footprint at a single tree and
-# keeps the last sandbox alive for post-mortem. Cheap ONLY because of the exclusion above
-# (rm -rf of ~4.5 MB, not 166 MB) — on its own this measured a wall-clock REGRESSION.
+# resident. Reclaiming the previous one first bounds the footprint at a single tree; the
+# current sandbox stays alive for the whole assertion so a fail() diagnostic is still
+# computed against it. (It does NOT survive the run — the EXIT trap removes TMPROOT
+# unconditionally. The original "keeps the last sandbox alive for post-mortem" claim was
+# false and was corrected at review.) Cheap ONLY because of the exclusion above (rm -rf of
+# ~4.5 MB, not 166 MB) — on its own this measured a wall-clock REGRESSION.
 fresh_sbx() { rm -rf "$TMPROOT"/sbx.*; mktemp -d "$TMPROOT/sbx.XXXXXX"; }
 ```
 
