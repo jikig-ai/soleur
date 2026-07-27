@@ -44,7 +44,10 @@ Target: `apps/web-platform/infra/credential-persist-home-guard.test.sh`
       (the plan documents why both are redundant, with evidence).
 - [~] 2.1a **DEVIATED — the fast path was measured OUT and is NOT shipped.** The plan's
       justification (cold root 9.8s -> 11.0s without it, 7.2s with) did not reproduce. Interleaved
-      A/B, 5 pairs, cold root: **6.86s WITH the fast path vs 6.60s WITHOUT** — no saving. It also
+      A/B, 5 pairs, cold root: 6.86s WITH vs 6.60s WITHOUT — i.e. the whole-suite harness could
+      not resolve the effect in EITHER direction (review later showed that sign is impossible: the
+      fast path is strictly less work, ~89ms/suite at the primitive level, against a ~590ms noise
+      floor). The removal stands on the COVERAGE argument, which needs no timing. It also
       opened a coverage hole: CI is always cold, so a fast path means CI never executes the
       `GLOBIGNORE` line and the step-5 pin could not catch a regression in it. AC3b is retained
       as a flat-within-noise gate (origin/main 5.76s -> this PR 5.89s; the +0.13s is the 29th
@@ -67,7 +70,7 @@ Target: `apps/web-platform/infra/credential-persist-home-guard.test.sh`
 ## 3. Testing & verification
 
 - [x] 3.1 `bash apps/web-platform/infra/credential-persist-home-guard.test.sh` →
-      `PASS=29 FAIL=0` (**exactly** 29, not `≥`), exit 0. *(AC1)*
+      `PASS=34 FAIL=0` (**exactly** 34, not `≥`), exit 0. *(AC1)*
 - [x] 3.2 Benchmark AFTER on the **warm** root, 3 runs: peak `TMPROOT` < 250 MB (expect
       ~5 MB) *(AC2)*; median wall-clock ≤ 10.4s (expect ~8.0s) *(AC3)*. Record the spread.
 - [x] 3.2a **Cold-root control** *(AC3b)*: with no `.terraform` in `CRED_GUARD_INFRA_ROOT`,
@@ -75,7 +78,7 @@ Target: `apps/web-platform/infra/credential-persist-home-guard.test.sh`
       the only shape CI runs and AC3 cannot catch it.
 - [x] 3.3 Non-vacuity control *(AC3a)*: in a **scratch copy only**, replace the helper body
       with `cp -r "$1"/* "$2"/` and confirm the pin reports
-      `FAIL: copy/diff pair BROKEN` → `PASS=28 FAIL=1`. Paste the line into the PR body.
+      `FAIL: copy/diff pair BROKEN` → `PASS=32 FAIL=3` (the decoy pin now catches it too). Paste the line into the PR body.
       Do not commit the mutation. (This control discriminates on a cold root too, because
       `.gitignore`/`.terraform.lock.hcl` exist regardless of `terraform init`.)
 - [x] 3.4 `grep -c 'cp -r "\$REAL_ROOT"' <suite>` and

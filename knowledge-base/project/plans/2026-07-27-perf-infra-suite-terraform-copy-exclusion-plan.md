@@ -27,9 +27,10 @@ advisor · **Method:** every claim executed, not reasoned.
 2. **Falsified three implementations that look correct.** `find -exec cp \;` (44.6s),
    `fresh_sbx` alone (14.2s), and the copy/diff pin placed per-mutation (16.5–17.9s) are
    each *slower than doing nothing*. Only the measured combination wins.
-3. **Caught a regression on the one path CI runs.** The exclusion helper without a fast
-   path makes the cold root (CI's only shape) go 9.8s → **11.0s**. Added the fast path and
-   **AC3b** to gate it — AC3 measures a shape CI never executes.
+3. **Caught a regression on the one path CI runs.** ⚠️ **SUPERSEDED at /work** — the
+   9.8s → 11.0s figure did not reproduce (and has an impossible sign: the fast path is
+   strictly less work). The fast path is NOT shipped; it was removed for a coverage reason.
+   **AC3b** survives as a cold-root non-regression gate. See "/work deviation" below.
 4. **Refuted a serious fail-open hypothesis by probing** rather than accepting it, and
    recorded the refutation so nobody adds the redundant guard it implied.
 5. **Caught a gate violation in the plan's own compliance section**: `apps/*/infra/`
@@ -169,14 +170,26 @@ this, which is the most likely source of its 11.04s figure):
 | WITH the fast path | 6.86s |
 | WITHOUT it (shipped) | **6.60s** |
 
-No saving — if anything the branch costs slightly more. The plan predicted 11.04s vs 7.18s; the
-11s arm did not reproduce in any of 5 pairs.
+The plan's 11s arm did not reproduce in any of 5 pairs.
+
+**But do not read the table above as "the fast path costs more" — that conclusion is also wrong,
+and post-implementation review corrected it.** The fast path is *strictly less work* (no subshell
+fork, no 235-way glob expansion, no 235-argument `execve`), so it cannot be slower; a wrong-sign
+result at n=5 is the signature of a noise-dominated harness, not a finding. Measured at the
+primitive level it saves ~3.7 ms per copy = **~89 ms per suite (~1.3%)**, against a whole-suite
+noise floor of **~±590 ms (1σ)** — resolving that effect whole-suite would need ~160 interleaved
+pairs. The honest statement is that the whole-suite A/B **could not resolve the effect at all**,
+in either direction.
+
+**Removing the fast path remains correct, on the coverage argument alone**, which needs no timing:
+CI never runs `terraform init`, so with a fast path CI would never execute the `GLOBIGNORE` line,
+and the pins that guard it could never fire.
 
 Removing it also **closes a coverage hole the plan did not consider**: CI is always cold, so with
 a fast path CI would never execute the `GLOBIGNORE` line at all — and the step-5 pin, whose whole
 job is to catch a regression in that line, would be shortcut around on every CI run. AC3a's
 control was verified against the shipped branchless form and correctly reports
-`copy/diff pair BROKEN` → `PASS=28 FAIL=1`.
+`copy/diff pair BROKEN` → `PASS=32 FAIL=3` (the decoy pin now catches it too).
 
 **Consequence for AC3b:** it is retained as a cold-root non-regression gate, but its expected
 delta changes from "faster (9.81s → 7.18s)" to "flat within noise". Measured: origin/main 5.76s
@@ -188,6 +201,10 @@ The `find -exec` rejection stands and was re-measured (18.0 / 20.1s vs this form
 though the plan's exact 44.6s is machine-specific and is not reproduced here.
 
 ### The cold root — the only shape CI actually runs
+
+> ⚠️ **SUPERSEDED — see "/work deviation: the fast path was measured OUT" above.** The table
+> below reports a sequential 3-run block whose 11.04s arm never reproduced under an interleaved
+> A/B, and whose sign is not physically possible. Retained for provenance only; do not cite it.
 
 Premise-validation row 5 establishes that CI never has a `.terraform`. So the *warm*
 benchmark above measures a shape CI never executes. Measured separately, 3 runs each,
@@ -284,12 +301,12 @@ Insert after the existing `TMPROOT` trap:
 # them) and measured 44.6s vs 8.0s. Assumes $1 holds no glob metacharacters — true for
 # mktemp/SCRIPT_DIR paths.
 copy_scan_tree() {
-  # FAST PATH — load-bearing, not an optimisation. CI's `deploy-script-tests` job runs no
-  # `terraform init`, so the ONLY shape CI ever executes is the one with nothing to
-  # exclude. There, the ~235-argument `cp` + subshell is measurably SLOWER than the plain
-  # single-directory form: cold-root median 11.0s without this line vs 9.8s on origin —
-  # i.e. the fix would regress the only path CI runs. With it: 7.2s.
-  [[ -e "$1/.terraform" ]] || { cp -r "$1"/. "$2"/; return; }
+  # ~~FAST PATH — prescribed here, but NOT SHIPPED.~~ STRUCK: see "/work deviation" above.
+  # The 11.0s-vs-9.8s cold-root regression this cited did not reproduce, and a later review
+  # showed the figure had an impossible sign (the fast path is strictly LESS work). It was
+  # removed for a COVERAGE reason: CI is always cold, so a fast path means CI never executes
+  # the GLOBIGNORE line and the copy/diff pin cannot catch a regression in it.
+  #   [[ -e "$1/.terraform" ]] || { cp -r "$1"/. "$2"/; return; }
   ( GLOBIGNORE="$1/.terraform"; cp -r "$1"/* "$2"/; )
 }
 
@@ -376,7 +393,7 @@ the property belongs to the *helper*, not to any mutation.
 
 **Verified non-vacuous:** replacing `copy_scan_tree` with the tempting "simplification"
 `cp -r "$1"/* "$2"/` (which silently drops `.gitignore` and `.terraform.lock.hcl` — R5)
-makes this pin report `FAIL: copy/diff pair BROKEN`, i.e. `PASS=28 FAIL=1`.
+makes this pin report `FAIL: copy/diff pair BROKEN`, i.e. `PASS=32 FAIL=3`.
 
 No static self-grep pin is included: a call-site count assertion would go RED when someone
 legitimately adds a 25th mutation, and a source-text pin breaks on a rename while seeing
@@ -412,9 +429,9 @@ diff surviving).
 ### Pre-merge (PR)
 
 - **AC1** `bash apps/web-platform/infra/credential-persist-home-guard.test.sh` exits **0**
-  with `FAIL=0` and `PASS=29` **exactly** (28 existing + the step-5 copy/diff pair pin).
+  with `FAIL=0` and `PASS=34` **exactly** (28 existing + 6 new pins added at review: copy/diff pair, decoy root, scanner walk-prune, exclusion-effect, nested-terraform tripwire, sandbox-reclamation).
   Exact, not `≥`: a `≥` cannot fail when a pin is silently dropped and another added.
-  Measured `PASS=29 FAIL=0`.
+  Measured `PASS=34 FAIL=0`.
 - **AC2** Under the external benchmark (162 MB `.terraform`, disk-backed `TMPDIR`), peak
   `TMPROOT` is **< 250 MB** — measured 5 MB, was 3,980 MB. *Threshold basis:* ~6% of the
   4.0 GB tmpfs, i.e. a footprint that stays safe with all 6 parallel runner slots occupied
@@ -429,7 +446,7 @@ diff surviving).
   one that controls for drift between the two arms.)
 - **AC3a** *(non-vacuity control — scratch copy only, never committed)* A `copy_scan_tree`
   replaced by a bare `cp -r "$1"/* "$2"/` makes the step-5 pin report
-  `FAIL: copy/diff pair BROKEN` → `PASS=28 FAIL=1`. Verified during planning; re-verify at
+  `FAIL: copy/diff pair BROKEN` → `PASS=32 FAIL=3` (the decoy pin now catches it too). Verified during planning; re-verify at
   `/work` and paste the line into the PR body. **This control discriminates on a cold root
   too**, because `.gitignore` and `.terraform.lock.hcl` exist regardless of whether
   `terraform init` has run — a bare glob drops them either way. *(Contrast: an
@@ -522,15 +539,15 @@ matches none of the detection globs. The change strictly reduces bytes written t
 liveness_signal:
   what: "suite exit status + `=== credential-persist-home-guard: PASS=N FAIL=M ===` summary"
   cadence: "every PR touching apps/web-platform/infra/**"
-  alert_target: "deploy-script-tests required check"
+  alert_target: "deploy-script-tests ADVISORY check (NOT in ruleset-ci-required.tf; see infra-validation.yml 'advisory job' note and #6480 — it is a visible-red signal, not a merge gate)"
   configured_in: ".github/workflows/infra-validation.yml (job deploy-script-tests, line 763)"
 error_reporting:
   destination: "GitHub Actions job log + step annotation; non-zero exit reds the required check"
   fail_loud: true   # sole exit chokepoint: `[[ "$FAIL" -eq 0 ]] || exit 1`
 failure_modes:
   - mode: "copy over-strips, or the diff loses its exclusion -> assert_mutated misattributes"
-    detection: "in-suite step-5 pin: fresh copy must diff-clean against the source before mutation, 20x"
-    alert_route: "FAIL>0 -> deploy-script-tests red"
+    detection: "in-suite pin: a fresh copy must diff-clean against the source, asserted ONCE before the battery"
+    alert_route: "FAIL>0 -> deploy-script-tests red (advisory, not merge-blocking — #6480)"
   - mode: "sandbox copy truncated (ENOSPC)"
     detection: "scanner's own MIN_SANDBOXED_UNITS=5 floor returns rc=4 on every sandbox (verified)"
     alert_route: "`fresh copy not GREEN before mutation` -> deploy-script-tests red"
@@ -573,7 +590,7 @@ blast radius, and its remedy risks masking genuine lease/lock/drain timing regre
 
 | Approach | Verdict | Rationale |
 |---|---|---|
-| Exclusion **+** `fresh_sbx` | **Adopted** | Best measured on both axes: 7.5s, 5 MB peak. |
+| Exclusion **+** `fresh_sbx` | **Adopted** | Peak bounded at ONE resident sandbox instead of 24: 3,980 MB → ~5 MB. Wall-clock 9.79s → 5.71s warm (5 interleaved pairs). |
 | `fresh_sbx` alone | **Rejected** | Elegant (3 lines, no diff coupling) but **measured 14.2s — a regression**. `rm -rf` of a 166 MB tree 24× costs more than the concurrency it saves. |
 | Exclusion alone | **Rejected** | 8.0s / 108 MB — good, but peak still scales with battery size; `fresh_sbx` makes it constant for 2 more lines. |
 | Hardlink `.terraform` (`cp -al`) | **Rejected** | Unsafe — see R2. |
@@ -628,12 +645,19 @@ The instruction is satisfied by the single-suite fix; the sweep predicates are r
 - **Fixes that are individually obvious can each be regressions while their combination
   wins.** Both single-fix variants here are slower than the pair; three of the candidate
   implementations measured slower than doing nothing. Measure combinations, not candidates.
-- **Optimising the pathological shape can pessimise the common one — measure both.** The
-  exclusion helper pays a subshell and a ~235-argument `cp` to skip a directory that is
-  absent on every CI run and on every contributor machine that never ran `terraform init`.
-  Without the `[[ -e … ]] || { plain copy; }` fast path it regresses the *only* shape CI
-  executes (9.8s → 11.0s) while improving a shape CI never sees. Whenever a fix is
-  conditioned on an artifact that is sometimes absent, add a control for the absent case.
+- **A whole-suite A/B cannot resolve a primitive-level effect — and a wrong SIGN means the
+  harness, not the code.** This plan prescribed a fast path on a sequential 3-run block showing
+  the exclusion helper regressing CI's cold shape 9.8s → 11.0s. At /work an interleaved A/B put
+  the two arms within 0.26s of each other, and review then showed the whole framing was
+  unsound: the fast path is *strictly less work* (no subshell, no 235-way glob, no 235-argument
+  execve), so it CANNOT be slower — a wrong-sign result at n=5 is the signature of a
+  noise-dominated harness, not a finding. Measured at the primitive level it saves ~3.7ms per
+  copy (~89ms/suite, ~1.3%), against a suite noise floor of ~±590ms (1σ); resolving that
+  whole-suite would need ~160 pairs. The fast path was still correctly removed — for a
+  COVERAGE reason that needs no timing at all: CI never runs `terraform init`, so a fast path
+  means CI never executes the GLOBIGNORE line and the pin guarding it can never fire.
+  **Whenever a measured delta is smaller than the harness's noise floor, report it as
+  unresolved — never as zero.**
 - **The exclusion is top-level-only; `diff --exclude` matches at every depth.**
   `copy_scan_tree` filters basenames of `"$src"/*`, so a `.terraform` nested under a
   subdirectory would still be copied 24× while the diff quietly hid the asymmetry. There
