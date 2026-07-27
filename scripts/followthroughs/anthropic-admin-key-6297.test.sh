@@ -10,26 +10,59 @@
 # require the corresponding fixture to flip, so neither arm is vacuous.
 set -uo pipefail
 
-# Single owning trap (ADR-129 / #6734). This suite allocates a sandbox dir plus a
-# fixture file PER TEST — the set is built dynamically, so the trap owns an
-# accumulator rather than a fixed list of names. Without it a mid-suite abort
-# (a failing assertion under `set -e` in a future edit, or an operator ^C) leaks
-# ~20 sandbox trees per run into TMPDIR.
+# SINGLE SCRATCH ROOT (ADR-129 / #6734). This suite allocates a sandbox dir plus a
+# fixture file PER TEST, so cleanup must cover a dynamically-built set.
 #
-# `rm -rf` is correct here and not over-broad: every registered path came from
-# `mktemp`/`mktemp -d`, so each is a fresh private path this script created.
-TMP_PATHS=()
-cleanup_tmp() {
-  local p
-  for p in "${TMP_PATHS[@]:-}"; do
-    [[ -n "$p" ]] && rm -rf -- "$p" 2>/dev/null
-  done
+# It previously did that with a `TMP_PATHS=()` accumulator plus register-on-allocate
+# helpers. That design was silently INERT and leaked every artifact it created:
+#
+#   mktmp() { local p; p=$(mktemp "$@"); TMP_PATHS+=("$p"); printf '%s' "$p"; }
+#   f=$(mktmp -t ft.XXXXXXXX)      # <-- command substitution == SUBSHELL
+#
+# Every call site invoked the helper via `$( )`, so the append mutated a subshell copy
+# of TMP_PATHS and was discarded on return. The parent array stayed empty for the whole
+# run and the EXIT trap iterated nothing. Measured: 1,883 `ft.*` + 1,883 `ft6297.*`
+# orphans in /tmp, spanning weeks.
+#
+# The fix is to stop tracking individual paths at all. One root is created up front,
+# TMPDIR is pointed at it so every bare `mktemp` in this file (and in anything it runs)
+# lands INSIDE it, and the trap removes exactly that one directory. There is no
+# registration step left to get wrong, and the shape is already the house idiom in 15
+# sibling suites.
+#
+# `rm -rf` is correct and not over-broad: TMP_ROOT is a fresh `mktemp -d` this script
+# owns, and `rm` never descends symlinks (a symlinked entry removes only the link).
+#
+# GUARDS BELOW ARE LOAD-BEARING — do not simplify them:
+#
+#   * This file is `set -uo pipefail` with NO `-e`. A failing `mktemp -d` therefore does
+#     NOT abort the script. Unguarded, TMP_ROOT would be empty, `export TMPDIR=""` would
+#     send every allocation back to /tmp, and `rm -rf -- ""` would be a silent no-op —
+#     i.e. the leak would return while the run still looked clean. That failure is most
+#     likely exactly when /tmp is full, which is the condition this whole fix exists for.
+#   * `readonly` is not defensive style. The trap body is SINGLE-QUOTED and therefore
+#     late-bound: it resolves $TMP_ROOT at exit, not at trap-installation. Any later
+#     reassignment would redirect the delete. `readonly` makes that unrepresentable.
+TMP_ROOT=$(mktemp -d -t ft6297root.XXXXXXXX) || {
+  echo "FATAL: could not create scratch root (is the filesystem full?)" >&2
+  exit 1
 }
-trap cleanup_tmp EXIT INT TERM
+: "${TMP_ROOT:?scratch root must be non-empty}"
+[[ "$TMP_ROOT" == /* && -d "$TMP_ROOT" && ! -L "$TMP_ROOT" ]] || {
+  echo "FATAL: scratch root is not a plain absolute directory: '$TMP_ROOT'" >&2
+  exit 1
+}
+readonly TMP_ROOT
+trap 'rm -rf -- "$TMP_ROOT"' EXIT INT TERM
 
-# Allocate + register in one step. Every mktemp in this file goes through these.
-mktmp()  { local p; p=$(mktemp "$@");    TMP_PATHS+=("$p"); printf '%s' "$p"; }
-mktmpd() { local p; p=$(mktemp -d "$@"); TMP_PATHS+=("$p"); printf '%s' "$p"; }
+# Point every allocation at the root. `run_probe` re-exports this through its `env -i`
+# allowlist so the code under test allocates inside the root too, rather than escaping
+# back to a shared /tmp where nothing would reap it.
+export TMPDIR="$TMP_ROOT"
+
+# Allocate inside the root. No registration step — the root's removal covers everything.
+mktmp()  { mktemp "$@"; }
+mktmpd() { mktemp -d "$@"; }
 
 PROBE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/anthropic-admin-key-6297.sh"
 fails=0
@@ -77,8 +110,12 @@ T2="2026-07-20 06:17:00"   # newer
 # to sentry.io, so the suite's result depends on the machine it runs on.
 run_probe() {
   local dir="$1"
+  # TMPDIR is in the allowlist deliberately. `env -i` clears the environment, so without
+  # it the probe would inherit no TMPDIR and every temp file the CODE UNDER TEST creates
+  # would land in the shared /tmp — outside the scratch root, where this suite's trap
+  # cannot reap it and any root-scoped leak assertion would read clean while /tmp grew.
   ( cd "$dir" && env -i \
-      PATH="$PATH" HOME="$HOME" \
+      PATH="$PATH" HOME="$HOME" TMPDIR="$TMPDIR" \
       BETTERSTACK_QUERY_HOST=h \
       BETTERSTACK_QUERY_USERNAME=u \
       BETTERSTACK_QUERY_PASSWORD=p \
@@ -308,6 +345,65 @@ d=$(make_sandbox "$f")
 out=$(run_probe_out "$d" 'exit 1' "$CURL_ZERO")
 check_out "$out" "Stall counter query FAILED" "gh failure → loud sentinel, not a silent 0"
 check_no_out "$out" "STALLED" "a failed counter does not also claim STALLED"
+
+# 13 — CLEANUP REGRESSION (#6734 follow-up). Asserts the scratch root is GONE from
+#      disk after the owning process exits.
+#
+#      This must assert on-disk ABSENCE, never "a trap is installed". The pre-fix
+#      script installed a perfectly well-formed `trap cleanup_tmp EXIT INT TERM` and
+#      still leaked 3,766 files, because the registration feeding that trap ran in a
+#      command-substitution subshell and was discarded. A trap-presence check passes
+#      against that script, so it would have certified the bug as fixed.
+#
+#      The child is driven through the SAME shapes the real suite uses — helpers
+#      invoked via `$( )` at two levels of nesting — so a regression that reintroduces
+#      subshell registration is caught rather than side-stepped by a simpler fixture.
+probe_root=$(mktemp -d -t ft6297cleanup.XXXXXXXX)
+cat > "$probe_root/child.sh" <<'CHILD'
+#!/usr/bin/env bash
+set -uo pipefail
+TMP_ROOT=$(mktemp -d -t ft6297probe.XXXXXXXX) || exit 1
+: "${TMP_ROOT:?}"
+readonly TMP_ROOT
+trap 'rm -rf -- "$TMP_ROOT"' EXIT INT TERM
+export TMPDIR="$TMP_ROOT"
+mktmp()  { mktemp "$@"; }
+mktmpd() { mktemp -d "$@"; }
+# Report the root to the parent, then allocate through it via command substitution.
+printf '%s\n' "$TMP_ROOT"
+f=$(mktmp -t ft.XXXXXXXX); : > "$f"
+d=$(mktmpd -t ft6297.XXXXXXXX); : > "$d/nested"
+inner=$( cd "$d" && printf '%s' "$(mktmp -t ftinner.XXXXXXXX)" ); : > "$inner"
+CHILD
+chmod +x "$probe_root/child.sh"
+child_root=$(bash "$probe_root/child.sh" | head -1)
+
+if [[ -z "$child_root" ]]; then
+  fail "cleanup probe: child did not report a scratch root (fixture broken, not a SUT result)"
+elif [[ -e "$child_root" ]]; then
+  fail "scratch root survives process exit — cleanup leaked: $child_root"
+else
+  pass "scratch root is absent from disk after process exit (not merely trap-registered)"
+fi
+
+# 13b — positive control. Proves 13 can actually fail: a child with NO cleanup must
+#       leave its root behind. Without this, 13 would still pass if `mktemp -d` silently
+#       stopped creating anything at all.
+cat > "$probe_root/leaky.sh" <<'LEAKY'
+#!/usr/bin/env bash
+set -uo pipefail
+r=$(mktemp -d -t ft6297leak.XXXXXXXX) || exit 1
+printf '%s\n' "$r"
+LEAKY
+chmod +x "$probe_root/leaky.sh"
+leaky_root=$(bash "$probe_root/leaky.sh" | head -1)
+if [[ -n "$leaky_root" && -e "$leaky_root" ]]; then
+  pass "positive control: an uncleaned root DOES survive (test 13 is not vacuous)"
+  rm -rf -- "$leaky_root"
+else
+  fail "positive control failed — test 13 cannot distinguish cleaned from leaked"
+fi
+rm -rf -- "$probe_root"
 
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi

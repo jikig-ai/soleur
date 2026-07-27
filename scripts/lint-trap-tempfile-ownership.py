@@ -73,8 +73,24 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HIGHWATER_FILE = Path(__file__).resolve().parent / "lint-trap-tempfile-ownership.highwater"
 
-# `ARR+=( ... )` -- an append to a shell array.
-ARRAY_APPEND = re.compile(r'^\s*(\w+)\+=\(')
+# `ARR+=( ... )` -- an append to a shell array, in COMMAND POSITION.
+#
+# Deliberately NOT anchored at line start. The `^\s*` form this replaced could only ever
+# see an append that began its own line, which silently exempted the single highest-value
+# shape: the one-liner registration helper.
+#
+#     mktmp() { local p; p=$(mktemp "$@"); TMP_PATHS+=("$p"); printf '%s' "$p"; }
+#
+# That is a real leak (the append runs in the `$( )` subshell and is discarded, so the
+# EXIT trap iterates an empty array) and it scanned clean -- the append sits mid-line,
+# after two `;` separators. The anchor, not the logic, was the blind spot.
+#
+# Uses the same command-position alternation as MKTEMP below: line start, after a
+# `;` / `&&` / `||` / `|` separator, after a `{` or `(` block opener, or after
+# then/do/else. Matching a bare `\w+\+=\(` anywhere would be the anchor-on-a-token bug
+# (cq-assert-anchor-not-bare-token) -- it would fire on the string `"TMP_PATHS+=("` in
+# a heredoc or an error message.
+ARRAY_APPEND = re.compile(r'(?:^|[;&|{(]|\bthen\b|\bdo\b|\belse\b)\s*(\w+)\+=\(')
 # `name() {` or `function name {` -- a function definition opening.
 FUNC_DEF = re.compile(r'^\s*(?:function\s+)?(\w+)\s*\(\)\s*\{|^\s*function\s+(\w+)\s*\{')
 # A cleanup trap registration. Anchored on the `trap` keyword and the signal name so a
@@ -250,7 +266,7 @@ def find_functions(lines: list[str]) -> dict[str, tuple[int, int]]:
 
 
 def trap_owned_arrays(lines: list[str]) -> set[str]:
-    """Names referenced from inside a `trap ... EXIT` body.
+    r"""Names referenced from inside a `trap ... EXIT` body.
 
     This is what makes rule (a) precise rather than merely suggestive. Appending to an
     array inside a `$(...)`-invoked function is only a DEFECT when the array is a
@@ -260,15 +276,47 @@ def trap_owned_arrays(lines: list[str]) -> set[str]:
     apps/web-platform/infra/git-data-pre-receive.test.sh). An earlier draft of this rule
     flagged those, which is precisely the "fires on correct code, disabled within a week"
     failure this gate must avoid.
+
+    Traps come in two shapes and BOTH must be resolved:
+
+      trap 'rm -f "${_TMPFILES[@]}"' EXIT      # inline body -- refs are on the trap line
+      trap cleanup_tmp EXIT INT TERM           # named function -- refs are in its BODY
+
+    Harvesting only the trap LINE (the original implementation) silently returned an
+    empty set for the second shape: a bare function name contains no `$` at all, so every
+    `\$\{?(\w+)\}?` pattern found nothing and rule (a) had no owned array to match
+    against. The named-function form is common precisely BECAUSE the cleanup is
+    non-trivial -- i.e. exactly where the leak is worth catching.
+
+    Resolving one level of indirection is deliberate: a trap naming a function that
+    itself dispatches to another function is rare enough that the added false-negative
+    surface is not worth the cycle-detection complexity.
     """
     owned: set[str] = set()
+    funcs = find_functions(lines)
+
+    def harvest(code: str) -> None:
+        owned.update(re.findall(r'\$\{(\w+)\[@\*]?', code))
+        owned.update(re.findall(r'\$\{(\w+)\[', code))
+        owned.update(re.findall(r'\$\{?(\w+)\}?', code))
+
     for ln in lines:
         code = strip_comment(ln)
         if not TRAP_EXIT.search(code):
             continue
-        owned.update(re.findall(r'\$\{(\w+)\[@\*]?', code))
-        owned.update(re.findall(r'\$\{(\w+)\[', code))
-        owned.update(re.findall(r'\$\{?(\w+)\}?', code))
+        harvest(code)
+        # Resolve `trap <fn> EXIT` by harvesting the named function's body. Strip the
+        # `trap` keyword and the signal names, then treat any surviving bare identifier
+        # that find_functions() knows as a handler.
+        handler_zone = re.sub(r'\b(?:EXIT|RETURN|INT|TERM|HUP|ERR|QUIT)\b', ' ', code)
+        handler_zone = re.sub(r'(?:^|;)\s*trap\b', ' ', handler_zone)
+        for tok in re.findall(r'(?<![$\w.-])([A-Za-z_]\w*)', handler_zone):
+            span = funcs.get(tok)
+            if span is None:
+                continue
+            fstart, fend = span
+            for k in range(fstart, min(fend + 1, len(lines))):
+                harvest(strip_comment(lines[k]))
     return owned
 
 
@@ -286,7 +334,11 @@ def check_rule_a(path: Path, lines: list[str]) -> list[str]:
     for name, (start, end) in funcs.items():
         appends: list[tuple[int, str]] = []
         for k in range(start, min(end + 1, len(lines))):
-            m = ARRAY_APPEND.match(strip_comment(lines[k]))
+            # `.search()`, not `.match()` -- ARRAY_APPEND is command-position-anchored
+            # rather than line-start-anchored, so the append may legitimately begin
+            # partway into a one-liner function body. `.match()` would re-impose the
+            # very line-start constraint the regex was widened to drop.
+            m = ARRAY_APPEND.search(strip_comment(lines[k]))
             if not m:
                 continue
             arr = m.group(1)
