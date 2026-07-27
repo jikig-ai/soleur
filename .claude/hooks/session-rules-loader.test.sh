@@ -556,6 +556,77 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# ------------- Test 25: stamp denominator counts rule BODIES, not bodies+index ----
+# The fixture repo carries 3 index pointers in AGENTS.md AND 3 rule bodies across
+# the sidecars. A denominator globbed over AGENTS*.md spans BOTH and reports 6 —
+# i.e. "3 of 6" (looks like 50%) when 100% of a 3-rule corpus is loaded. #7008.
+
+TOTAL=$((TOTAL+1))
+T25=$(mktemp -d); setup_repo "$T25" mixed          # mixed → all three classes load
+out25=$(invoke_hook "$T25")
+ctx25=$(printf '%s' "$out25" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+stamp25=$(printf '%s' "$ctx25" | head -1)
+den25=$(printf '%s' "$stamp25" | grep -oE '\(([0-9]+) of ([0-9]+) rules\)' | grep -oE 'of [0-9]+' | grep -oE '[0-9]+')
+# Independently re-derive the body count from the sidecars only.
+bodies25=$(grep -hE '^- .*\[id: ' "$T25"/AGENTS.core.md "$T25"/AGENTS.docs.md "$T25"/AGENTS.rest.md | wc -l | tr -d ' ')
+if [[ "$den25" == "$bodies25" ]]; then
+  echo "PASS: stamp denominator == sidecar body count ($den25)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: stamp denominator=$den25 but sidecar bodies=$bodies25 (stamp: $stamp25)"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 26: permanent anti-regression — no AGENTS*.md glob in the loader ----
+# Survives the PR (unlike pasted output): the doubled-count bug is exactly an
+# `AGENTS*.md` glob spanning the index plus its expansion.
+
+TOTAL=$((TOTAL+1))
+if grep -q 'AGENTS\*\.md' "$HOOK"; then
+  echo "FAIL: loader still globs AGENTS*.md (double-counts index + bodies) — $(grep -n 'AGENTS\*\.md' "$HOOK" | head -2 | tr '\n' '~')"
+  FAIL=$((FAIL+1))
+else
+  echo "PASS: loader carries no AGENTS*.md glob"
+  PASS=$((PASS+1))
+fi
+
+# ------------- Test 27: stamp reports loaded/total BYTES ----
+# Rule count alone cannot express that a docs-only session still loads ~60% of
+# the bytes; the harness cost scales with bytes, not rule count. #7008 FR2.
+
+TOTAL=$((TOTAL+1))
+T27=$(mktemp -d); setup_repo "$T27" mixed
+out27=$(invoke_hook "$T27")
+stamp27=$(printf '%s' "$out27" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
+if printf '%s' "$stamp27" | grep -qE '[0-9]+/[0-9]+B'; then
+  echo "PASS: stamp carries a loaded/total byte figure"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: stamp has no byte figure (stamp: $stamp27)"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 28: WORST-CASE composed stamp ≤ 200 BYTES ----
+# Test 11 measures the happy path with awk's `length` (CHARACTERS). The notes
+# carry em-dashes (3 B each), so the real contract needs `wc -c` against the
+# composed worst case: all three classes + fail-safe note + over-strip note.
+
+TOTAL=$((TOTAL+1))
+T28=$(mktemp -d); setup_repo "$T28" mixed
+# Force BOTH notes: a symlinked sidecar trips the fail-safe re-walk, and
+# malformed frontmatter trips the over-strip guard.
+rm -f "$T28/AGENTS.docs.md"; ln -s AGENTS.rest.md "$T28/AGENTS.docs.md"
+printf -- '---\nbroken frontmatter\n# AGENTS Core\n- Core rule [id: hr-test-core].\n' > "$T28/AGENTS.core.md"
+stamp28=$(invoke_hook "$T28" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
+bytes28=$(printf '%s' "$stamp28" | wc -c | tr -d ' ')
+if (( bytes28 <= 200 )); then
+  echo "PASS: worst-case composed stamp ≤ 200 bytes (${bytes28}B)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: worst-case composed stamp ${bytes28}B > 200B: $stamp28"
+  FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "RESULT: $PASS/$TOTAL passed ($FAIL failed)"
 [[ $FAIL -eq 0 ]] || exit 1
