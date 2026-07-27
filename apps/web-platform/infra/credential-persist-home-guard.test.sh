@@ -50,6 +50,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REAL_ROOT="${CRED_GUARD_INFRA_ROOT:-$SCRIPT_DIR}"
 
+# GLOBIGNORE (used by copy_scan_tree below to keep the 162 MB provider cache out of 24 sandboxes)
+# is a COLON-SEPARATED pattern list. A ':' anywhere in the root path splits the single intended
+# pattern into two that match nothing, so the exclusion silently stops applying and the whole tree
+# rides back into every sandbox — measured 201 MB per sandbox instead of 4.5 MB, with the suite
+# still reporting all-green. Glob metacharacters break it the same way. Only reachable via the
+# documented CRED_GUARD_INFRA_ROOT override (the SCRIPT_DIR default is safe), so refuse the input
+# rather than silently degrade to the footprint this guard exists to bound.
+case "$REAL_ROOT" in
+  *[][*?:\\]*)
+    echo "FATAL: CRED_GUARD_INFRA_ROOT contains ':' or a glob metacharacter, which silently" >&2
+    echo "       disables copy_scan_tree's .terraform exclusion: $REAL_ROOT" >&2
+    exit 2 ;;
+esac
+
 PASS=0
 FAIL=0
 # fail() MUST return 0 so `set -e` does not abort the harness at the first failing assertion —
@@ -62,9 +76,11 @@ TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT INT TERM HUP
 
 # `.terraform/` is a gitignored Terraform provider cache (~162 MB once `terraform init` has run)
-# holding zero .tf/.sh/.service/.yml files — nothing the scanner reads. Copying it into all 24
-# sandboxes peaked TMPROOT at a measured 3,980 MB against a /tmp that is a 4.0 GB tmpfs shared by
-# the 6 parallel slots of run-registered-suites.sh.
+# holding zero .tf/.sh/.service/.yml/.yaml files — nothing the scanner reads TODAY (see the
+# `.terraform/modules/` note on the scanner's dirs[:] prune below, which is what keeps that true
+# as soon as a `module {}` block is added). Copying it into all 24 sandboxes peaked TMPROOT at a
+# measured 3,980 MB against a /tmp that is a 4.0 GB tmpfs shared by up to 6 parallel slots of
+# run-registered-suites.sh (JOBS defaults to min(nproc, 6) — 6 is a cap, not a count).
 #
 # GLOBIGNORE (not `find -exec`, not `shopt`): setting it non-null implicitly enables dotfile
 # matching, so `.gitignore` and `.terraform.lock.hcl` are still copied — a bare `cp -r "$1"/*`
@@ -73,26 +89,60 @@ trap 'rm -rf "$TMPROOT"' EXIT INT TERM HUP
 # change exists to fix. The copy/diff pair pin below is what holds that property down.
 #
 # One `cp` invocation is deliberate: `find "$1" -mindepth 1 -maxdepth 1 -name .terraform -prune
-# -o -exec cp -r {} "$2"/ \;` forks per entry (~236 of them) and measured 18.0/20.1s against this
-# form's 8.3s median on the warm root. Assumes $1 holds no glob metacharacters — true for
-# mktemp/SCRIPT_DIR paths.
+# -o -exec cp -r {} "$2"/ \;` forks per entry (~236 of them) and measured 18.0/20.1s warm against
+# this form's 5.71s warm median.
 #
-# Deliberately branchless. An `[[ -e "$1/.terraform" ]] || { cp -r "$1"/. "$2"/; return; }` fast
-# path was prescribed and measured OUT: interleaved A/B over 5 pairs on the cold root (CI's only
-# shape — the `deploy-script-tests` job runs no `terraform init`) gave 6.86s WITH the fast path
-# vs 6.60s without, i.e. no saving. It also costs coverage: CI is always cold, so a fast path
-# would mean CI never executes this GLOBIGNORE line at all and the pin below could not catch a
-# regression in it. Re-derive before re-adding:
-#   bash <bench> --cold --interleaved 5   # see PR body for the harness
+# Deliberately branchless — for a COVERAGE reason, not a speed one. An
+# `[[ -e "$1/.terraform" ]] || { cp -r "$1"/. "$2"/; return; }` fast path was prescribed and
+# rejected because CI is always cold (the `deploy-script-tests` job runs no `terraform init`), so
+# a fast path would mean CI never executes this GLOBIGNORE line at all and the pins below could
+# never catch a regression in it. That argument is independent of any timing.
+#
+# On timing, be precise about what is and is not known: the fast path is strictly LESS work (no
+# subshell fork, no 235-way glob expansion, no 235-argument execve) and measured ~3.7 ms cheaper
+# per copy at the primitive level, i.e. ~89 ms over the suite's 24 copies — about 1.3% of a ~7 s
+# run. A whole-suite A/B cannot see that: the suite's run-to-run noise is ~±590 ms (1 sigma), so
+# resolving a 90 ms effect would need ~160 interleaved pairs, not the 5 that were run. Do not cite
+# a whole-suite number as evidence either way here; measure the primitive if you care.
+#   ./credential-persist-home-guard.bench.sh --mode cold --ab <other-revision> --runs 5
+# The exclusion is TOP-LEVEL-ONLY by construction: GLOBIGNORE filters the results of the `"$1"/*`
+# glob, and `cp -r` then recurses into whatever survived on its own — so a nested `sub/.terraform`
+# cannot be expressed here at all (measured: a `GLOBIGNORE="$1/.terraform:$1/*/.terraform"` still
+# copies the nested one). `infra/sentry/` IS a second terraform root, so this becomes live the day
+# anyone runs `terraform init` there; the nested-root tripwire in the pin block below is what
+# turns that from a silent 162 MB regression into a RED with instructions.
+#
+# The copy's exit status is checked EXPLICITLY rather than left to `set -e`. A truncated sandbox
+# must never be scanned: the scanner's own MIN_SANDBOXED_UNITS=5 floor does NOT catch truncation
+# (the real tree has exactly 6 sandboxed units, so dropping webhook.service — one of the two real
+# cred-bearing units — leaves 5 and the scanner reports a healthy census, rc=0). errexit is the
+# only thing standing between that and a vacuous PASS, and errexit is silently suppressed in any
+# `if copy_scan_tree …` / `copy_scan_tree … || true` / `set +e` context a future edit might add.
 copy_scan_tree() {
-  ( GLOBIGNORE="$1/.terraform"; cp -r "$1"/* "$2"/; )
+  local rc=0
+  ( GLOBIGNORE="$1/.terraform"; cp -r "$1"/* "$2"/; ) || rc=$?
+  [[ "$rc" -eq 0 ]] || {
+    echo "FATAL: sandbox copy failed (rc=$rc) — refusing to scan a truncated tree: $1 -> $2" >&2
+    exit 1
+  }
 }
 
+# SINGLE SOURCE of the exclusion for the comparison side. Both consumers (the copy/diff pair pin
+# and expect_red's assert_mutated) call this, so the exclusion cannot drift between them — a
+# `--exclude=.terraform` deleted from ONE of two separate diff call sites was verified to ship
+# PASS/FAIL-clean while permanently disarming assert_mutated. With one call site that edit is not
+# expressible; and deleting it HERE is caught by the pin on any warm root, where $REAL_ROOT holds
+# a .terraform the sandbox deliberately does not.
+scan_diff() { diff -rq --exclude=.terraform "$1" "$2"; }
+
 # Sandboxes were never reclaimed until the EXIT trap, so all 24 were concurrently resident.
-# Reclaiming the previous one first bounds the footprint at a single tree and keeps the last
-# sandbox alive for post-mortem. Cheap ONLY because of the exclusion above (rm -rf of ~4.5 MB,
-# not 166 MB) — on its own this measured a wall-clock REGRESSION.
-fresh_sbx() { rm -rf "$TMPROOT"/sbx.*; mktemp -d "$TMPROOT/sbx.XXXXXX"; }
+# Reclaiming the previous one first bounds the footprint at a single tree; the current sandbox
+# stays alive for the whole assertion, so a fail() diagnostic is still computed against it. (It
+# does NOT survive the run — the EXIT trap at the top removes TMPROOT unconditionally.) Cheap
+# ONLY because of the exclusion above (rm -rf of ~4.5 MB, not 166 MB) — on its own this measured
+# a wall-clock REGRESSION. $1 tags the sandbox with its battery (mut/grn) so a mid-run listing
+# still says which expectation it came from.
+fresh_sbx() { rm -rf "$TMPROOT"/sbx.*; mktemp -d "$TMPROOT/sbx.$1.XXXXXX"; }
 
 # --- the scanner (stages 1-3 + census), written once to a temp OUTSIDE any scanned tree ---------
 SCANNER="$TMPROOT/scanner.py"
@@ -533,21 +583,114 @@ fi
 # assert-mutated, RED-after, finding-text attribution to the mutated unit/script + reason/target.
 # ---------------------------------------------------------------------------------------------
 echo ""
+echo "--- copy/diff pair pin (guards assert_mutated below from going vacuous) ---"
 # Copy/diff pair pin (ONCE, not per-mutation: this is a property of copy_scan_tree, not of any
 # individual mutation). A fresh copy MUST diff-clean against the source under the same exclusion —
 # otherwise assert_mutated below can never report "mutation did not land" and every broken
 # mutation is misattributed to the scanner. Placement decided by measurement: running this inside
 # expect_red costs ~9s (20 extra full-tree recursive diffs) and regresses the suite; hoisted here
-# it costs ~0.4s and pins the identical property.
-_pin_sbx="$(mktemp -d "$TMPROOT/pin.XXXXXX")"
-copy_scan_tree "$REAL_ROOT" "$_pin_sbx"
-if diff -rq --exclude=.terraform "$REAL_ROOT" "$_pin_sbx" >/dev/null 2>&1; then
+# it costs ~0.4s and pins the identical property. It also covers expect_green, which has no
+# assert_mutated gate of its own and would otherwise go silently vacuous on a dropped file.
+PIN_SBX="$(mktemp -d "$TMPROOT/pin.XXXXXX")"
+copy_scan_tree "$REAL_ROOT" "$PIN_SBX"
+if scan_diff "$REAL_ROOT" "$PIN_SBX" >/dev/null 2>&1; then
   pass "copy/diff pair intact: a fresh copy_scan_tree copy diff-cleans against the source"
 else
   fail "copy/diff pair BROKEN: fresh copy differs from source (assert_mutated is now vacuous)" \
-    "$(diff -rq --exclude=.terraform "$REAL_ROOT" "$_pin_sbx" 2>&1 | head -3)"
+    "$(scan_diff "$REAL_ROOT" "$PIN_SBX" 2>&1 | head -3)"
 fi
-rm -rf "$_pin_sbx"
+
+# DECOY-ROOT PIN — the only assertion here that is non-vacuous on CI's shape.
+# Everything else in this block reads the real root, which in CI never contains a `.terraform`,
+# so on the one shape that actually gates merges they assert nothing about the exclusion. A
+# synthetic root carries both load-bearing GLOBIGNORE properties on EVERY run, for ~2 ms:
+#   (a) `.terraform` IS excluded              -> the footprint bound this suite exists to hold
+#   (b) dotfiles are NOT dropped              -> a bare `cp -r "$1"/*` silently drops
+#       `.gitignore`/`.terraform.lock.hcl`, which makes every sandbox differ from the source
+#       forever, which makes assert_mutated pass unconditionally (the vacuity bug, R5)
+_dsrc="$TMPROOT/decoy.src"; _ddst="$TMPROOT/decoy.dst"
+mkdir -p "$_dsrc/.terraform/modules/vendored" "$_ddst"
+echo vendored > "$_dsrc/.terraform/provider.bin"
+echo ignored  > "$_dsrc/.gitignore"
+echo lock     > "$_dsrc/.terraform.lock.hcl"
+echo 'resource "null_resource" "x" {}' > "$_dsrc/main.tf"
+# A sandboxed, credential-persisting unit inside .terraform/modules/ — the shape a registry- or
+# git-sourced `module {}` block vendors in. It exercises the scanner's `dirs[:]` walk prune, which
+# otherwise has ZERO coverage in any shape this suite can reach (verified: deleting the prune
+# leaves the whole suite green). Without the prune the REAL_ROOT scan would enumerate units from
+# third-party code the team does not own while every sandbox scan does not — a RED on the real
+# tree that nobody can fix.
+cat > "$_dsrc/.terraform/modules/vendored/decoy-vendored.service" <<'DECOYEOF'
+[Unit]
+Description=Decoy vendored unit that must never be enumerated
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'docker login ghcr.io -u u --password-stdin'
+ProtectSystem=strict
+ProtectHome=read-only
+DECOYEOF
+copy_scan_tree "$_dsrc" "$_ddst"
+if [[ -e "$_ddst/.terraform" ]]; then
+  fail "decoy: copy_scan_tree did NOT exclude .terraform (footprint bound is broken)"
+elif [[ ! -f "$_ddst/.gitignore" || ! -f "$_ddst/.terraform.lock.hcl" ]]; then
+  fail "decoy: copy_scan_tree DROPPED dotfiles — assert_mutated would pass unconditionally" \
+    "GLOBIGNORE's implicit dotglob is not in effect; every sandbox would differ from the source"
+elif [[ ! -f "$_ddst/main.tf" ]]; then
+  fail "decoy: copy_scan_tree dropped a regular file"
+else
+  pass "decoy root: .terraform excluded AND dotfiles preserved (pins both on every shape, incl. CI)"
+fi
+
+# Walk-prune pin, same decoy. The scanner must NOT enumerate the unit vendored under
+# .terraform/modules/. Asserted on the census line rather than the exit code: a 1-unit decoy trips
+# the scanner's own MIN_SANDBOXED_UNITS floor (rc=4) regardless, so rc says nothing about pruning.
+# NO PIPE. `python3 … | grep -qF` is unusable here: the 1-unit decoy trips the scanner's own
+# MIN_SANDBOXED_UNITS floor so python exits 4, and under `set -o pipefail` the pipeline is
+# therefore non-zero EVEN WHEN grep matches — sending a real failure down the else branch and
+# reporting the prune healthy forever. (grep -q also closes the pipe on first match, SIGPIPE-ing
+# the producer.) Redirect to a file and grep the FILE.
+python3 "$SCANNER" "$_dsrc" > "$TMPROOT/decoy.scan" 2>&1 || true
+if grep -qF 'decoy-vendored.service' "$TMPROOT/decoy.scan"; then
+  fail "scanner walk enumerated a unit under .terraform/modules/ — the dirs[:] prune is not working" \
+    "REAL_ROOT would go RED on vendored third-party code while every sandbox stayed GREEN"
+else
+  pass "scanner walk prunes .terraform/modules/ (vendored unit not enumerated)"
+fi
+rm -rf "$_dsrc" "$_ddst"
+
+# The full-tree diff above is SYMMETRIC in .terraform — excluded on BOTH sides — so it passes happily
+# on a sandbox that still CONTAINS the 162 MB tree. That makes it blind to the two ways the
+# footprint win reverts silently: the GLOBIGNORE literal drifting out of sync with the excluded
+# name, and the exclusion not applying at all (see the ':' guard at the top of this file). Assert
+# the exclusion's EFFECT, not just the pair's symmetry. Always emits exactly one assertion so the
+# suite's total stays fixed; on a cold root it reports the coverage gap instead of hiding it.
+if [[ ! -e "$REAL_ROOT/.terraform" ]]; then
+  pass "copy_scan_tree .terraform exclusion NOT exercised: source has none (CI's cold shape)"
+elif [[ -n "$(find "$PIN_SBX" -type d -name .terraform -print -quit 2>/dev/null)" ]]; then
+  # `find` at ANY depth, deliberately not `[[ -e "$PIN_SBX/.terraform" ]]`: a top-level-only
+  # check would inherit copy_scan_tree's exact blind spot and so could never catch the case the
+  # copy also misses. Assert the requirement (no provider cache reaches the sandbox), not the
+  # implementation's assumption about where one can be.
+  fail "copy_scan_tree left a .terraform in the sandbox — the ~162 MB footprint is back" \
+    "$(find "$PIN_SBX" -type d -name .terraform -print -quit)"
+else
+  pass "copy_scan_tree excluded .terraform from the sandbox (footprint bound is live)"
+fi
+
+# Nested-terraform-root tripwire. copy_scan_tree's exclusion is top-level-only and CANNOT be
+# extended to nested roots (see its comment). `infra/sentry/` is a real second terraform root, so
+# the day someone runs `terraform init` there, every sandbox silently regains a provider cache and
+# the footprint bound this suite exists to hold quietly stops holding — with both diffs and the
+# scanner walk still reporting clean, because they exclude/prune `.terraform` at EVERY depth.
+# Fail loudly with the remedy instead.
+_nested_tf="$(find "$REAL_ROOT" -mindepth 2 -type d -name .terraform -print -quit 2>/dev/null || true)"
+if [[ -z "$_nested_tf" ]]; then
+  pass "no nested .terraform root (copy_scan_tree's top-level-only exclusion is sufficient)"
+else
+  fail "nested .terraform found — copy_scan_tree's top-level exclusion does NOT cover it" \
+    "$_nested_tf — the per-sandbox footprint bound is silently broken; prune it after the copy"
+fi
+rm -rf "$PIN_SBX"
 
 echo ""
 echo "--- AC3: mutation battery (each must independently drive RED, attributed) ---"
@@ -555,16 +698,16 @@ echo "--- AC3: mutation battery (each must independently drive RED, attributed) 
 expect_red() {
   # expect_red <label> <attribution-substring> <mutate-fn>
   local label="$1" attrib="$2" mutate_fn="$3"
-  local sbx; sbx="$(fresh_sbx)"
+  local sbx; sbx="$(fresh_sbx mut)"
   copy_scan_tree "$REAL_ROOT" "$sbx"
   if ! python3 "$SCANNER" "$sbx" >/dev/null 2>&1; then
     fail "$label: fresh copy not GREEN before mutation (latent FAIL — attribution unsafe)"; return 0
   fi
   "$mutate_fn" "$sbx"
-  # --exclude is load-bearing, not cosmetic: $sbx no longer holds .terraform, so an unexcluded
-  # diff can NEVER report the trees identical — assert_mutated would pass unconditionally and
-  # every broken mutation would be misreported as a vacuous guard.
-  if diff -rq --exclude=.terraform "$REAL_ROOT" "$sbx" >/dev/null 2>&1; then
+  # scan_diff's exclusion is load-bearing, not cosmetic: $sbx no longer holds .terraform, so an
+  # unexcluded diff can NEVER report the trees identical — assert_mutated would pass
+  # unconditionally and every broken mutation would be misreported as a vacuous guard.
+  if scan_diff "$REAL_ROOT" "$sbx" >/dev/null 2>&1; then
     fail "$label: mutation did not change the tree (assert_mutated failed)"; return 0
   fi
   local out rc
@@ -760,9 +903,16 @@ echo "--- AC4 + GREEN pins (no false positives) ---"
 expect_green() {
   # expect_green <label> <mutate-fn>
   local label="$1" mutate_fn="$2"
-  local sbx; sbx="$(fresh_sbx)"
+  local sbx; sbx="$(fresh_sbx grn)"
   copy_scan_tree "$REAL_ROOT" "$sbx"
   "$mutate_fn" "$sbx"
+  # assert_mutated for the GREEN side too. Without it these four pins are vacuous-by-drift: a
+  # mutation whose `sed` stops matching after a ci-deploy.sh refactor (greloc) applies nothing,
+  # the tree stays pristine, the scanner is GREEN because the REAL tree is GREEN, and the pin
+  # reports PASS while asserting nothing about the false-positive it was written to catch.
+  if scan_diff "$REAL_ROOT" "$sbx" >/dev/null 2>&1; then
+    fail "$label: mutation did not change the tree (GREEN pin is vacuous — it pins nothing)"; return 0
+  fi
   local out rc
   out="$(python3 "$SCANNER" "$sbx" 2>&1)" && rc=0 || rc=$?
   if [[ "$rc" -eq 0 ]]; then
@@ -818,6 +968,33 @@ gwrapped() { printf '\n/bin/sh -c '"'"'/usr/bin/docker login ghcr.io -u x --pass
 expect_green "abs-path + sh -c docker login under a relocated DOCKER_CONFIG (no false positive)" gwrapped
 
 # ---------------------------------------------------------------------------------------------
+# Sandbox-reclamation invariant. The ~3.9 GB -> ~5 MB footprint bound is delivered entirely by
+# fresh_sbx's `rm -rf`, whose exit status is DISCARDED (the function returns mktemp's status, and
+# it is called via `$( )` so `set -e` cannot see the rm). A reclaim that silently stops working
+# therefore restores the exact tmpfs-exhaustion hazard this suite was changed to remove, with the
+# whole run still green. A directory count has no variance, so this is a hard bound, not a flaky
+# measurement: strictly serial batteries leave at most the one sandbox still in hand.
+_resident=$(find "$TMPROOT" -maxdepth 1 -type d -name 'sbx.*' | wc -l)
+if [[ "$_resident" -le 1 ]]; then
+  pass "sandbox reclamation live ($_resident resident, not 24 — the tmpfs footprint bound holds)"
+else
+  fail "sandbox reclamation BROKEN: $_resident sandboxes resident — the ~3.9 GB peak is back" \
+    "fresh_sbx's rm -rf is best-effort (its status is mktemp's); a failing reclaim is silent"
+fi
+
+# ANTI-VACUITY FLOOR ON THE BATTERY ITSELF. The sole merge gate is the exit code below, and it
+# reads FAIL alone — so deleting every expect_red/expect_green invocation reports `PASS=6 FAIL=0`
+# and exits 0 (measured). Every other anti-vacuity mechanism in this file — the census floor, the
+# scanner's own `min=`, the per-mutation attribution greps — is defeated by simply not calling the
+# function. This is the assertion that makes "the battery actually ran" checkable.
+# A FLOOR, not equality: the count is developer-incremented, so `-eq` would turn every legitimate
+# new assertion into a spurious failure. Bump it deliberately when adding assertions; NEVER lower
+# it to make a run pass — a drop means assertions stopped executing.
+MIN_ASSERTIONS=34
+[[ "$PASS" -ge "$MIN_ASSERTIONS" ]] || \
+  fail "assertion count $PASS < floor $MIN_ASSERTIONS — the battery silently stopped running" \
+    "an assertion was deleted or an early return skipped a block; this is not a count to lower"
+
 echo ""
 echo "=== credential-persist-home-guard: PASS=$PASS FAIL=$FAIL ==="
 [[ "$FAIL" -eq 0 ]] || exit 1
