@@ -47,7 +47,6 @@ new_fstab() {
 # run_sut <fstab> [args...] -> stdout+stderr; sets RC
 run_sut() {
   local fstab="$1"; shift
-  local out
   OUT=$(RAISE_TMPFS_FSTAB="$fstab" \
         RAISE_TMPFS_MEMINFO="$MEMINFO" \
         RAISE_TMPFS_LOCK="$TMP_ROOT/lock" \
@@ -214,8 +213,10 @@ for i in 1 2 3 4 5 6 7; do
   : > "${f}.bak.2026010${i}T000000Z"
   touch -d "2026-01-0${i}" "${f}.bak.2026010${i}T000000Z"
 done
-out=$(RAISE_TMPFS_FSTAB="$f" RAISE_TMPFS_MEMINFO="$MEMINFO" RAISE_TMPFS_LOCK="$TMP_ROOT/lock" \
-      RAISE_TMPFS_STAMP="20260727T130000Z" RAISE_TMPFS_BACKUP_KEEP=3 bash "$SUT" 2>&1)
+# Output is deliberately discarded here — this case asserts on the surviving backup
+# COUNT, not on what the script printed.
+RAISE_TMPFS_FSTAB="$f" RAISE_TMPFS_MEMINFO="$MEMINFO" RAISE_TMPFS_LOCK="$TMP_ROOT/lock" \
+  RAISE_TMPFS_STAMP="20260727T130000Z" RAISE_TMPFS_BACKUP_KEEP=3 bash "$SUT" >/dev/null 2>&1
 kept=$(find "$TMP_ROOT" -maxdepth 1 -name "$(basename "$f").bak.*" | wc -l)
 if [[ "$kept" -eq 3 ]]; then
   pass "backup pruning keeps exactly the configured number ($kept)"
