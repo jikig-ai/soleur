@@ -31,6 +31,25 @@ would close on a partial. That is a scope change only the operator can authorize
 **Plan's current disposition:** stated direction retained (route ships here, interlocked).
 Surfaced for the operator.
 
+### RESOLVED 2026-07-27 by the operator — ship the route now, interlocked
+
+Asked before implementation began, because the two options produce materially different
+code and the fork sits on the one sequencing risk the task brief singled out.
+
+**Decision: retain the stated direction.** The enum option, the `git_data_host_create`
+job, both gates, the suites and the runbook all ship in #6977, held from use by the
+birth-readiness interlock that #6982 releases. #6977 therefore closes on a complete
+executable route rather than a partial.
+
+What this commits us to, stated plainly: the ordering constraint is now enforced by a
+CONTROL (a gate that can in principle be released early) rather than by the ABSENCE of the
+capability (which cannot). The plan reduces that exposure by moving the interlock out of
+inline YAML into a sourced, suite-covered gate file, so it inherits the mutation battery
+and the parity job⇄gate pairing — which answers `architecture-strategist`'s structural
+objection, the strongest form of the challenge. It does not eliminate the exposure, and
+ADR-149 records the release checklist so #6982 inherits it mechanically rather than by
+memory.
+
 ---
 
 ## DC-2 — `taste` — The interlock's mechanism is contested, and the recommended alternative is falsified
