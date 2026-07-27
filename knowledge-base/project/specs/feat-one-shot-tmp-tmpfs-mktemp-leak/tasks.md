@@ -7,13 +7,41 @@ status: pending
 
 # Tasks — /tmp tmpfs cleanup leak
 
-Derived from the **post-review (v2)** plan. Phase order follows `## Plan Review Revisions` R9,
-not the original body: RED → widen linter → derive defective set from tool output → fix → relocate
-→ ADR → track. Where the plan body and the Revisions section disagree, **the Revisions section
-wins**.
+Derived from the **post-review (v3)** plan: v2 restructured by a 7-agent panel, then reconciled
+against the two panel seats that never reported (`code-simplicity-reviewer`, `spec-flow-analyzer`)
+plus a round of direct measurement. Phase order: RED → widen linter → derive defective set from
+tool output → fix → relocate → ceiling → ADR → track.
 
-> Two reviews (code-simplicity, spec-flow-analyzer) were still running when the plan was written.
-> Read their findings and fold them in before starting Phase 1.
+**Precedence:** this file wins over the plan body wherever they disagree. The plan body's Phase
+numbering is v1 and is retained only for its prose rationale.
+
+## Verified failure chain (all five links measured 2026-07-27, not inferred)
+
+The leak survived **two** deployed defenses. Every link below was confirmed by direct command:
+
+1. **Source defect.** `scripts/followthroughs/anthropic-admin-key-6297.test.sh:31-32` — `mktmp()`/
+   `mktmpd()` append to `TMP_PATHS` but every call site uses `$( )`, so the append lands in a
+   subshell and is discarded. `trap cleanup_tmp EXIT INT TERM` (line 28) then iterates an empty
+   array. Leaked 1,883 `ft.*` + 1,883 `ft6297.*`.
+2. **CI linter blind.** `python3 scripts/lint-trap-tempfile-ownership.py <that file>` → **0
+   findings**. Two compounding causes: `ARRAY_APPEND.match()` (line 289) anchors at line start and
+   the helpers are one-liners, so the append sits mid-line; and the trap names a *function*
+   (`cleanup_tmp`), which `trap_owned_arrays()` does not resolve.
+3. **Janitor structurally blind.** `scripts/tmpfs-guard.sh` runs `*/5` on the user crontab, but
+   `SCRATCH_MIN_MB=100` (line 50). Largest leaked `ft.*` = **372 bytes**; `tmp.*` entries ≥1 MB =
+   **0 of 11,172**. Not one leaked artifact could ever be reaped. `SCRATCH_AGE_MIN=1440` (24h)
+   additionally excluded the one ≥100 MB item (a 2.3 GB repo copy, 14h old at fill time).
+4. **The alarm for exactly this fired, unheard.** `tmpfs-guard.sh:250` logs "nothing reapable
+   found" when usage ≥70% and both reapers came back empty — **94 occurrences in 14 days**. It
+   goes to `logger` (journal, unwatched) and `notify-send`, which no-ops under cron with no DBUS
+   session and is `2>/dev/null || true`.
+5. **Its telemetry reads healthy but is fabricated by its own tests.** 346 `Reaped` journal lines
+   in 14 days; **344 came from fixture roots** (`/tmp/tmpfs-guard.XXXX/tmp`), **1** from real
+   `/tmp`. The test suite writes into the operator's production journal, so the only telemetry for
+   this guard is dominated by test noise.
+
+**The through-line:** every layer reported success while doing nothing. Hold the plan's OWN new
+machinery to that standard — see the silent-failure gates marked **[SF]** below.
 
 ## Phase 0 — Preconditions
 
@@ -21,92 +49,188 @@ wins**.
       `python3 scripts/lint-trap-tempfile-ownership.py scripts/followthroughs/anthropic-admin-key-6297.test.sh` → 0
       `python3 scripts/lint-trap-tempfile-ownership.py --census` → 98 (highwater 100)
 - [ ] 0.2 Confirm no bats; suites are plain `*.test.sh`. Do not add a framework.
-- [ ] 0.3 Confirm `run_probe` uses `env -i` and determine whether `TMPDIR` reaches the child —
-      load-bearing for whether the single-root fix closes the full 1,883/1,883 pairing.
-- [ ] 0.4 Census headroom is **2**. Every new `.sh` created in this PR must carry an owning trap or
-      `--check-highwater` fails at the end (kieran P1-6).
+- [ ] 0.3 **`run_probe` uses `env -i` — this is settled, not an open question.**
+      `anthropic-admin-key-6297.test.sh:80` is `( cd "$dir" && env -i PATH=… HOME=… …)`, which
+      strips `TMPDIR` from the child. Consequence, precisely scoped: the 1,883/1,883 leak is
+      allocated in the **parent** (lines 51, 113-258), so `export TMPDIR` **does** fix the
+      observed leak. But any temp the code under test allocates inside the probe still lands in
+      `/tmp` while every scratch-root-anchored AC reads 0. **Branch: add `TMPDIR="$TMP_ROOT"` to
+      the `env -i` allowlist** beside `PATH`/`HOME`. Do not leave this as a question for `/work`.
+- [ ] 0.4 **Census headroom is exactly 2** (98/100). This PR adds `raise-tmp-tmpfs-ceiling.sh` and
+      `raise-tmp-tmpfs-ceiling.test.sh` — both MUST carry an owning `trap … EXIT` or
+      `--check-highwater` fails at merge. Do not add a third `.sh` without lowering the census
+      first. (Converged finding: code-simplicity P2-10, spec-flow P1-11.)
+- [ ] 0.5 **Collect a 95-suite `tmp_delta` baseline BEFORE gating on it** (spec-flow P1-3). The
+      counter had zero consumers, so its live distribution is unknown; gating first would go
+      instantly red across the suite or be quieted into uselessness.
 
 ## Phase 1 — RED (tests first, must fail)
 
-- [ ] 1.1 `scripts/followthroughs/anthropic-admin-key-6297-cleanup.test.sh` — drive the helper via
-      command substitution at real nesting depth; assert `[[ ! -e "$path" ]]` **after process exit**.
-      Asserting a trap exists is forbidden (it passes today against a leaking script).
+- [ ] 1.1 Assert on-disk absence after process exit, driving the helper through command
+      substitution at real nesting depth (2 levels). Asserting that a trap *exists* is forbidden —
+      it passes today against a leaking script. **Fold into the existing suite** rather than adding
+      `anthropic-admin-key-6297-cleanup.test.sh`: a new file costs a `run_suite` registration,
+      orphan/exec-bit/varq lints, and 1 of the 2 remaining census slots that Phase 6 needs
+      (code-simplicity P2-8).
 - [ ] 1.2 Linter fixture reproducing the **mid-line** append inside a `$()`-invoked helper with a
-      named-function trap. Must exit 1. A multi-line fixture is vacuous — it is not the real shape.
-- [ ] 1.3 `run_suite` delta test: a synthetic leaking suite must make `test-all.sh` fail.
+      **named-function** trap. Must exit 1. A multi-line fixture is vacuous — it is not the real
+      shape. Both conditions must be present in one fixture; either alone under-constrains.
+- [ ] 1.3 Inverse arm: a clean suite must still pass (spec-flow P2). Without it the delta gate can
+      be satisfied by a detector that fails closed on everything.
 
 ## Phase 2 — Widen rule (a) (contract change BEFORE consumers)
 
-- [ ] 2.1 Un-anchor `ARRAY_APPEND` using the proven command-position idiom already used by `MKTEMP`;
-      switch `.match()` → `.search()` at the append test.
+- [ ] 2.1 Un-anchor `ARRAY_APPEND` using the command-position idiom already used by `MKTEMP`;
+      switch `.match()` → `.search()` at the append test (line 289).
 - [ ] 2.2 Resolve named-function traps in `trap_owned_arrays()` via `find_functions()` spans.
-- [ ] 2.3 Give rule (a) an accept mechanism — added-line scoping or its own highwater — in this same
-      change. It currently has none, unlike rule (c) (architecture P1-4b).
-- [ ] 2.4 Do **not** implement transitive `$()` detection (old Phase 5.2 — cut, R5).
+      Kieran's prototype: this fix ALONE yields 0 findings across 689 files — it is necessary but
+      not sufficient. Only 2.1 + 2.2 together yield the 2 real findings.
+- [ ] 2.3 ~~Give rule (a) an accept mechanism~~ — **CUT.** It already has one: `check_rule_a`
+      calls `escaped()` (`lint-trap-tempfile-ownership.py:109`, invoked at `:311`), the
+      reason-required `# lint-trap-ownership: ok <reason>` hatch. Added-line scoping would
+      additionally blind the rule to exactly the pre-existing files 3.2 sweeps
+      (code-simplicity P1-3).
+- [ ] 2.4 Do **not** implement transitive `$()` detection (cut, R5).
 - [ ] 2.5 Note in-source that `find_functions()` desyncs on heredoc braces and misses `cleanup` in
-      the two largest scripts, so this fails toward silence there.
-- [ ] 2.6 Run the full scan; confirm exactly 2 findings, both the real defect, zero false positives.
+      the two largest scripts, so it fails toward silence there. **[SF]**
+- [ ] 2.6 Run the full scan; confirm exactly 2 findings, both real, zero false positives. **Record
+      the tool output as the 3.2 derivation artifact in the same commit** — this count expires the
+      moment 3.1 lands (code-simplicity P2, spec-flow P2).
 
 ## Phase 3 — Fix the leak site and sweep the class
 
-- [ ] 3.1 Replace the `TMP_PATHS` accumulator in `anthropic-admin-key-6297.test.sh` with a **single
-      scratch root** + `export TMPDIR` + `trap 'rm -rf -- "$TMP_ROOT"' EXIT INT TERM`. No registry
-      file (R2).
-- [ ] 3.2 Derive the defective set **from Phase 2.6 tool output**, not by hand. Expect **12** files,
-      not 10. Record a *defective* / *sound* verdict for each in the PR body; fix only the defective.
+- [ ] 3.1 Replace the `TMP_PATHS` accumulator with a **single scratch root** + `export TMPDIR` +
+      `trap 'rm -rf -- "$TMP_ROOT"' EXIT INT TERM`. No registry file (R2) — this is already the
+      house idiom in 15 sibling files.
+- [ ] 3.2 Derive the defective set **from 2.6 tool output**, not by hand. Expect **12** files, not
+      10. Record a *defective* / *sound* verdict per file in the PR body; fix only the defective.
 - [ ] 3.3 `constraint-scaffold.sh` and `constraint-scaffold/test/boundary.test.sh` — trap signals to
       `EXIT INT TERM`. Confirm no `git worktree prune` is separately owed on the kill path.
 
-## Phase 4 — Outcome-based detection (highest leverage, R7)
+## Phase 4 — Outcome-based detection
 
-- [ ] 4.1 Ungate `tmp_delta` in `scripts/test-all.sh` `run_suite()` from `TEST_TIMING_LOG`.
-- [ ] 4.2 Give each suite a private scratch root; export `TMPDIR` for the child; reap unconditionally.
-- [ ] 4.3 Fail a suite on non-zero delta. Covers 95 suites and the 65 non-shell temp allocators the
-      shell linter structurally cannot see.
+Highest leverage in the plan, but it was **vacuous as written** and needs the fix below.
+
+- [ ] 4.1 **Do NOT simply ungate `tmp_delta` from `TEST_TIMING_LOG`.** `TC_TMPDIR` is bound at
+      **source time** (`scripts/lib/test-contention.sh:38`), so a per-suite exported `TMPDIR`
+      never repoints it — the delta would keep measuring shared `/tmp`, which 4.2 drives to 0 by
+      construction. **[SF]** (code-simplicity P1-1, spec-flow P1-3/P1-4.)
+      **Resolution — do not cut the item, fix it:** `tc_tmp_entry_count` already accepts an
+      optional path (`local d="${1:-$TC_TMPDIR}"`, `:61`). Pass each suite's private root
+      explicitly. This makes the delta measure the right directory without globally repointing
+      `TC_TMPDIR` (which 5.3 exists to prevent).
+- [ ] 4.2 Give each suite a private scratch root; export `TMPDIR` for the child; reap on exit.
+- [ ] 4.3 Fail a suite on non-zero delta **against its own private root**. Covers 95 suites and the
+      65 non-shell temp allocators the shell linter structurally cannot see. Gate only after 0.5's
+      baseline exists.
+- [ ] 4.4 **"Reap unconditionally" needs a liveness gate** (spec-flow P1-6) — the property
+      `tmpfs-guard.test.sh`'s `MUTATION CONTROL: once the process is gone` arms exist to protect.
+      Backgrounded children would otherwise lose scratch mid-run.
+- [ ] 4.5 **Ownership marker for nested runs** (spec-flow P1-5): 5.2 says never override an
+      inherited `TMPDIR`, 3.1 mandates override — undefined for nested `run_suite`, where the
+      parent's reap would delete the child's live scratch. Stamp `SOLEUR_SCRATCH_OWNER=$$` and
+      reap only roots you own.
+- [ ] 4.6 **The `*/5` tmpfs-guard cron mutates `/tmp` mid-suite** (spec-flow P1-3): a reap of N
+      cancelling a leak of N reads as a **false green**; live agent sessions inject false reds.
+      Private roots under 4.2 resolve this — assert that the guard's reaper cannot see them.
 
 ## Phase 5 — Relocate bulk temp writes off RAM
 
 - [ ] 5.1 New `scripts/lib/scratch-root.sh` (NOT `test-contention.sh`, which declares itself
       observation-only and whose `TC_TMPDIR` binds at source time — R6).
-- [ ] 5.2 Call-time only; never mutate `TC_TMPDIR`; never override an explicit `TMPDIR`.
-- [ ] 5.3 Add a test asserting `TC_TMPDIR` still resolves to the tmpfs after the resolver runs, so
-      ADR-133's instrumentation cannot be silently repointed.
-- [ ] 5.4 Assign an age policy for `$HOME/.cache/soleur/tmp` or drop the claim that it is handled.
+- [ ] 5.2 Call-time only; never mutate `TC_TMPDIR`; never override an explicit `TMPDIR` (see 4.5
+      for the nested-ownership carve-out).
+- [ ] 5.3 Test that `TC_TMPDIR` still resolves to the tmpfs after the resolver runs, so ADR-133's
+      instrumentation cannot be silently repointed. **Assert the resolver was actually called** —
+      as written this passes trivially when it is never invoked (spec-flow P1-4). **[SF]**
+- [ ] 5.4 **Failure contract for scratch-root creation** (spec-flow P1-2). **[SF]** Undefined today
+      for: `mkdir` failure, unset/read-only `$HOME`, `XDG_CACHE_HOME` relative or inside the repo,
+      pre-existing dir at 0755, or a symlink. An empty return makes `export TMPDIR=""` → `mktemp`
+      silently reverts to `/tmp` **and** the delta gate reads clean — two silent failures
+      compounding into a false green. Require a loud abort; mirror per
+      `cq-silent-fallback-must-mirror-to-sentry`.
+- [ ] 5.5 Assign an age policy + owner for `$HOME/.cache/soleur/tmp`, or drop the claim that it is
+      handled. Relocating an un-janitored leak surface only moves the leak (code-simplicity P2-7,
+      spec-flow P3).
 
-## Phase 6 — Observability fix (small, unblocks the probe)
+## Phase 6 — Raise the tmpfs ceiling (RESTORED by operator decision)
 
-- [ ] 6.1 Route `tmpfs-guard.sh`'s per-reap line through `logger`, not captured stdout. Today the
-      journal has 0 `reaping` vs 346 `Reaped`, so every AC and doc claim keyed on it is false.
-- [ ] 6.2 Fix `[[ "${reaped:-0}" -eq 0 ]]` doing arithmetic on a multi-line capture.
+The review panel cut this (R4) as lowest-value/highest-risk. **The operator explicitly overrode
+that cut and restored it to this PR.** Do not re-defer it; task 8.3 is deleted accordingly.
+The `/etc/tmpfiles.d` 2d age drop-in stays **cut on safety grounds** and must not be reinstated —
+re-measured 2026-07-27, it would unlink **11 files** under live Claude session scratchpads.
 
-## Phase 7 — ADR (gate, not record — runs before any deferred reaper work)
+- [ ] 6.1 `scripts/raise-tmp-tmpfs-ceiling.sh` — idempotent, re-runnable, `--dry-run`. Target
+      derived from `/proc/meminfo` (25% of MemTotal, floored at current so it can never shrink),
+      not hardcoded 8G. Backup + `flock` + atomic temp-file `mv`.
+- [ ] 6.2 Handle every fstab shape with a defined branch; catch-all is a **loud abort, never a
+      silent exit 0** (spec-flow P1-7): no `/tmp` line (systemd `tmp.mount` host); `/tmp` line with
+      no `size=`; multiple/commented `/tmp` lines; unit normalization (`4G` vs `4194304k` vs `50%`
+      compared in bytes). **[SF]**
+- [ ] 6.3 **Validate intent, not just syntax** (spec-flow P1-9). **[SF]** `findmnt --verify` proves
+      the file parses, not that `/tmp` means what was intended — re-parse the emitted line and
+      assert `size=` equals the derived target in bytes. `mount -o remount /tmp` can exit 0 without
+      changing size, so read the live value back via `findmnt -no SIZE /tmp` and compare rather
+      than trusting the remount exit code.
+- [ ] 6.4 `scripts/raise-tmp-tmpfs-ceiling.test.sh` — fixture fstab via an injected path seam
+      (mirroring `TMPFS_GUARD_TMP`), never the real `/etc/fstab`. Cases: already-applied ⇒ no-op;
+      unapplied ⇒ rewritten + backup exists; malformed ⇒ restored + non-zero; `--dry-run` ⇒ zero
+      writes; plus one case per 6.2 shape.
+- [ ] 6.5 Both new `.sh` files must carry an owning trap (see 0.4 — headroom is exactly 2).
+- [ ] 6.6 Bound backup accumulation under `/etc` (spec-flow P3) — keep N most recent.
+
+## Phase 7 — ADR
 
 - [ ] 7.1 Withdraw amendment 2a (registry file). Decision #2 stands.
 - [ ] 7.2 Re-file the named-function/anchor finding under Decision #2 or "Enforcement, stated
       honestly" — not #4, which governs rule (c).
-- [ ] 7.3 New ADR: per-run private scratch roots reaped unconditionally, over shared `/tmp` reaping
-      gated on conjunctive evidence. Ordinal provisional; `/ship` re-verifies against `origin/main`.
+- [ ] 7.3 New ADR: per-run private scratch roots reaped by owner, over shared `/tmp` reaping gated
+      on conjunctive evidence. **Record what shipped; do not re-litigate the cut reaper**
+      (code-simplicity P3-13). Ordinal provisional; `/ship` re-verifies against `origin/main`.
 
 ## Phase 8 — Track
 
 - [ ] 8.1 File the tracking issue; `Closes #<N>` in the PR body. Cross-ref #6734, #6789, #6713, #6760.
-- [ ] 8.2 File: count-based reaper, redesigned after the source fix soaks (R3).
-- [ ] 8.3 File: fstab ceiling raise (R4).
+- [ ] 8.2 File: count-based reaper, redesigned after the source fix soaks (R3). **Include the
+      measured size-floor evidence** — `SCRATCH_MIN_MB=100` vs a 372-byte largest artifact and
+      0-of-11,172 over 1 MB — so the successor issue starts from why the size axis cannot see this
+      leak class at all. Carry Phase 6-of-v2 (`tmpfs-guard.sh` logger + `-eq` on multi-line
+      capture) here; nothing in this PR reads that journal (code-simplicity P2-9).
+- [ ] 8.3 ~~File: fstab ceiling raise~~ — **DELETED.** Restored to this PR as Phase 6 above by
+      operator decision.
 - [ ] 8.4 File: ADR-129 D#4 accept re-evaluation across the bare-`mktemp` population — the upgrade
       trigger has fired (architecture P0-2).
 - [ ] 8.5 File: `iac-plan-write-guard.sh` `echo | grep -q` race under `pipefail` (measured 9 deny /
       3 allow on identical 50 KB input). **Sibling pattern checks lose the same race fail-OPEN** —
-      higher priority than this plan.
-- [ ] 8.6 Withdraw the #6760 harm-reduction comment — `skill-security-scan-` matches nothing; the
+      a guard that silently permits what it exists to block. Higher priority than this plan.
+- [ ] 8.6 File: **`tmpfs-guard.test.sh` writes to the production journal.** 344 of 346 `Reaped`
+      lines in 14 days came from fixture roots, making the guard's only telemetry unreadable.
+      Route test-run logging to a fixture-scoped sink. **[SF]**
+- [ ] 8.7 File: **the "nothing reapable found" alarm fired 94 times in 14 days into channels nobody
+      reads** — `logger` (unwatched journal) and `notify-send` (no-ops under cron, no DBUS,
+      `2>/dev/null || true`). Route to the observability layer per
+      `hr-no-dashboard-eyeball-pull-data-yourself`. **[SF]**
+- [ ] 8.8 Withdraw the #6760 harm-reduction comment — `skill-security-scan-` matches nothing; the
       real prefixes are `skill-scan-input-` / `skill-scan-results-`.
-- [ ] 8.7 Capture the learning: an outcome detector beats a source-shape detector, and a default
-      name template is not a leak signature.
+- [ ] 8.9 Capture the learning: an outcome detector beats a source-shape detector; a default name
+      template is not a leak signature; and **a size-thresholded reaper cannot see a count-shaped
+      leak**.
 
 ## Acceptance criteria corrections (apply before claiming any AC)
 
 - [ ] AC2/AC17 must anchor on the **resolved scratch root**, not `/tmp` — Phase 5 moves the
-      artifacts out of `/tmp` and makes the original counts vacuous.
+      artifacts and makes the original counts vacuous. **But note AC2-corrected is still vacuous**
+      as written: `rm -rf "$TMP_ROOT"` at exit makes any post-exit count 0 by construction
+      (spec-flow P2). Assert *during* the run, or assert on `/tmp` non-growth instead.
 - [ ] AC12: 12 files, not 10.
 - [ ] AC7/T9 are unconstructable (disjoint namespaces) — drop with the reaper.
 - [ ] AC1 restate as inspection; AC3 fold into AC4; AC4 wording is inverted; AC13 pin `env -u TMPDIR`;
-      AC14 anchor on amendment text, not the word "nesting".
+      AC14 — **do not assert on amendment 2a text**, which 7.1 withdraws (code-simplicity P2-11).
+- [ ] AC9-AC11 / T15-T19 reinstated for the restored Phase 6. T15 and T19 are the same assertion —
+      keep one (code-simplicity P3-12).
+- [ ] AC16 (post-merge live verification of the raised ceiling) has **no follow-through
+      enrollment**; the soak script covers AC17 only. Either enroll it or drop the claim
+      (spec-flow P1-9). **[SF]**
+- [ ] Delete AC17 + its soak follow-through, rather than correcting them: the pass condition is a
+      reap by the **deferred** count arm, i.e. new machinery proving a phase that is not shipping
+      (code-simplicity P1-4).

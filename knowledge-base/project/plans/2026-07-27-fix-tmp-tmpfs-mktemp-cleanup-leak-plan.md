@@ -363,13 +363,39 @@ ship an executable, **not** a checklist.
 - Detect the current `size=` in `/etc/fstab`; **no-op with exit 0** if already at or above
   target (the idempotency guard).
 - Back up `/etc/fstab` to a timestamped sibling before any write.
-- Rewrite only the `/tmp` tmpfs line's `size=` field (`8G` proposed — 27% of 30 GiB RAM,
-  still far under systemd's 50% default, so the downward pin's original intent is preserved
-  rather than discarded).
-- Install `/etc/tmpfiles.d/tmp.conf` as a drop-in overriding the 10d age to **2d** for
-  `/tmp` only. `/etc/tmpfiles.d` shadows `/usr/lib/tmpfiles.d` by filename, and the
-  directory already exists (holds `screen-cleanup.conf`), so this is the supported
-  mechanism, not a workaround.
+- Rewrite only the `/tmp` tmpfs line's `size=` field. Target is **derived from
+  `/proc/meminfo`**, not hardcoded: 25% of `MemTotal`, floored at the current value so the
+  script can never shrink `/tmp`. On this host that yields ~8G (30 GiB RAM) — still far under
+  systemd's 50% default, so the downward pin's original intent is preserved rather than
+  discarded. Print the derived target in `--dry-run`.
+- **Enumerate the fstab shapes explicitly; each needs a defined branch, and the catch-all is a
+  loud abort, never a silent exit 0** (spec-flow P1-7):
+  - **no `/tmp` line at all** (host uses systemd `tmp.mount`) ⇒ abort non-zero with a message
+    naming `tmp.mount` as the surface to edit instead. Exiting 0 here would report success
+    having changed nothing — the exact false-green class this whole plan exists to kill.
+  - **`/tmp` line present but no `size=`** ⇒ the mount defaults to 50% of RAM, which already
+    exceeds target ⇒ no-op exit 0, but say so explicitly. An empty-string compare must not be
+    allowed to satisfy the idempotency guard.
+  - **multiple or commented-out `/tmp` lines** ⇒ operate only on the single active
+    (non-comment) entry; abort if more than one is active.
+  - **unit normalization** ⇒ compare in bytes after parsing `k`/`m`/`g`/`%` suffixes, so
+    `4G` vs `4194304k` vs `50%` never mis-compares as "already applied".
+- **Serialize and write atomically** (spec-flow P1-8): take an `flock` on the fstab path for
+  the whole read-modify-write, render to a temp file, `mv` into place. Two concurrent runs
+  must not collide on a same-second backup name or interleave writes.
+- **Validate intent, not just syntax** (spec-flow P1-9): `findmnt --verify` proves the file
+  parses, not that the `/tmp` entry means what was intended. After rewriting, re-parse the
+  emitted line and assert the `size=` field equals the derived target in bytes. Likewise
+  `mount -o remount /tmp` can exit 0 without changing size — so the post-apply check reads
+  the **live** size back from `findmnt -no SIZE /tmp` and compares, rather than trusting the
+  remount's exit code.
+- **DO NOT install an `/etc/tmpfiles.d/tmp.conf` 2d age drop-in.** An earlier draft of this
+  phase proposed it; it is **cut on safety grounds and must not be reinstated** (R4).
+  `systemd-tmpfiles` age-cleans by timestamp with **no protected-path concept and no
+  liveness gate**. Re-measured 2026-07-27: `find /tmp/claude-1001 -type f -mtime +2` returns
+  **11 files** — a 2d policy would unlink live/resumable Claude session scratchpads. A change
+  introduced as a safety improvement would itself be a destructive-delete regression. The
+  ceiling raise below is the whole of Phase 4; the age policy is not part of it.
 - `--dry-run` prints every intended mutation and writes nothing.
 - Validate the resulting fstab (`findmnt --verify --tab-file`) **before** exiting non-zero
   on failure, and restore the backup if validation fails. A broken `/etc/fstab` is a
