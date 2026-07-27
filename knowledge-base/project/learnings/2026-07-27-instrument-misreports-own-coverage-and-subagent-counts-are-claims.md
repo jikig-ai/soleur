@@ -173,3 +173,75 @@ around the block. Trim to one line; never delete.
 insight here is discoverable-with-evidence and therefore routes to this learning file per
 the discoverability litmus in `wg-every-session-error-must-produce-either` — which is the
 litmus working as designed on the very session that audited it.
+
+---
+
+## 7. A fix for a placebo can itself be a placebo — check the *reachability* of the predicate you are fixing
+
+Plan v1 correctly caught that `scripts/rule-prune.sh` computes `is_he` for
+`[hook-enforced]`/`[skill-enforced]` but never `continue`s, so the "exemption" only
+decorates a breadcrumb string. It then proposed adding `[compliance-tier]` to that same
+predicate and a real `continue`.
+
+That fix could never have worked. `sanitized_prefix` is truncated to `RULE_PREFIX_LEN=50`
+(`scripts/lib/rule-metrics-constants.sh:13`), and `[compliance-tier]` sits at **character
+214 of a 349-character line**. A substring test against a 50-char prefix cannot match at
+any point. The corollary is worse: the *existing* `is_he` has therefore always evaluated
+0, making `rule-prune.sh:193`'s `($hook_enforced hook/skill-enforced)` a standing
+tautology that has been reported as fact.
+
+**Generalisable:** when fixing a predicate that "doesn't fire", verify the predicate's
+**input can physically contain what it tests for** before changing the test. Truncation,
+normalisation, case-folding, and field-extraction upstream all silently make a correct-looking
+test unreachable. The tell is a fix that changes the *comparison* without ever inspecting
+the *operand*.
+
+Severity also moved on evidence, in the opposite direction from the initial framing:
+`rule-prune.sh:15` states *"Neither mode edits AGENTS.md — humans retire rule text in a
+separate PR"*, and 4 of the 5 `[compliance-tier]` rules are `hr-*`, already hard-skipped at
+`:154-157`. The exposure was a bad *proposal* on one rule, not a deletion.
+
+## 8. "Dead citation" is a claim about INTENT — three of four were load-bearing
+
+Plan v1 flagged four rule-id citations that resolve to neither `AGENTS.md` nor
+`retired-rule-ids.txt`, and proposed repairing all four. Three were legitimate, and each
+proposed repair would have damaged a working file:
+
+| Site | What it actually is | Damage the "fix" would have done |
+|---|---|---|
+| `plugins/soleur/skills/plan/SKILL.md:968` | **Narration** of PR #5349's descope inside a `**Why:**` clause | Renders the sentence unintelligible |
+| `plugins/soleur/skills/deepen-plan/SKILL.md:775` | The **worked example of a fabricated id**, inside the checklist that teaches agents to detect fabricated ids. The line literally reads "(fabricated, never existed)" | Deletes the lesson; makes the prose false |
+| `cq-pencil-collapse-auto-recover` (6 files) | A **deliberate tier-gate carve-out** — `scripts/rule-metrics-aggregate.sh:302-309` documents it in place: *"per `cq-agents-md-tier-gate`, the rule body lives in the hook header + pencil-setup SKILL (a Pencil-domain rule is tier-gated OUT of AGENTS.md)"*. It is also a live runtime key in `.claude/.rule-incidents.jsonl` | Removing the exclusion trips the aggregator's orphan gate; orphans emitted records |
+
+Only `plugins/soleur/skills/ship/SKILL.md:770` was a genuine dead citation.
+
+**Generalisable:** an unresolvable identifier is not automatically a defect. Before
+"repairing" one, read the *surrounding sentence* and grep for an existing carve-out. Three
+intents produce legitimately-unresolvable ids: **narration** (describing history),
+**exemplification** (teaching what a bad id looks like), and **deliberate tier-gating**
+(the body lives elsewhere by policy). A resolver lint that does not model all three is
+net-negative — which is exactly why the proposed lint was deferred (~45 raw hits, ~30 of
+them mandated test fixtures, plus `\b` matching `rf-worktrees` inside `block-rm-rf-worktrees`).
+
+**Corollary on scope:** the same audit found the *real* orphan class is wider than the
+spec knew — `.claude/hooks/durable-reminder-prefer-inngest.sh:6`,
+`scripts/betterstack-query.sh:52`, `scripts/rule-prune.sh:17`, and a wrong-prefix citation
+at `worktree-manager.sh:817`. Being wrong about which four does not mean there is nothing
+there; it means the census was never run.
+
+## 9. Session errors (plan phase)
+
+7. **Proposed a fix that could not reach its target** (FR5). Recovery: architecture-strategist
+   traced the truncation; verified independently. **Prevention:** §7.
+8. **Proposed three repairs that would have damaged working files** (FR9). Recovery:
+   code-simplicity + Kieran + spec-flow independently converged; verified each against
+   source. **Prevention:** §8.
+9. **Dropped two spec requirements silently.** Spec FR4 (skill descriptions 2,400 → ≤1,800
+   words) and TR2 appeared in no plan phase, AC, or Non-Goal. Caught only by spec-flow.
+   **Prevention:** when a plan claims to implement "N spec FRs", enumerate the spec's FR
+   list and mark each implemented / deferred / out-of-scope — absence is invisible otherwise.
+10. **Found a bug, wrote it in a learning, then omitted it from the plan.** The
+    `compound/SKILL.md:257` doubled glob was measured during the brainstorm and recorded in
+    §1 above, but never reached Files-to-Edit until CTO re-found it. **Prevention:** a
+    finding recorded in a learning is not thereby scheduled; cross-check the learning's
+    findings against the plan's work-list before the plan is final.
