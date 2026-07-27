@@ -245,11 +245,18 @@ current setup lacks.
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** the janitor's new count-based arm deletes a
-directory an in-flight agent session is actively using — the session loses its scratchpad
-mid-run and fails with a confusing ENOENT rather than an obvious cause. This is the same
-"a leak of this shape does not announce itself, it corrupts the next thing that needs
-space" failure mode #6760 describes, inverted into an over-eager reap.
+**If this lands broken, the user experiences:** one of three destructive paths misfires.
+(a) The per-suite scratch reap (Phase 4.2/4.4) deletes a directory an in-flight agent session
+or a backgrounded child is actively using — the session loses its scratchpad mid-run and fails
+with a confusing ENOENT rather than an obvious cause. (b) The `rm -rf -- "$TMP_ROOT"` in
+Phase 3.1 fires against an unset or empty `TMP_ROOT` (see the Phase 5.4 failure contract).
+(c) The fstab rewrite (Phase 6) leaves `/etc/fstab` malformed and the machine does not boot.
+(a) is the same "a leak of this shape does not announce itself, it corrupts the next thing
+that needs space" failure mode #6760 describes, inverted into an over-eager reap; (c) is the
+single highest-severity outcome in the plan.
+
+Note: the count-based reaper arm is **not** part of this PR (deferred, task 8.2). The
+threshold below is driven by (a)-(c), which do ship.
 
 **If this leaks, the user's workflow is exposed via:** nothing is *exposed* — `/tmp` entries
 are uid-scoped and the reaper never widens permissions. The exposure axis here is
@@ -258,11 +265,14 @@ through these agent sessions, and a wedged `/tmp` costs a full session's context
 
 **Brand-survival threshold:** `single-user incident`
 
-Justification: the deliverable includes an **unattended, recurring, destructive delete** on
-the operator's own machine, running as a `*/5` cron with no human in the loop. A
-mis-scoped predicate does not degrade gracefully — it removes live work. That blast radius
-warrants CPO sign-off at plan time and `user-impact-reviewer` at PR time, and it is why
-every safety gate in Phase 6 is additive to (never a relaxation of) the existing ones.
+Justification: the deliverable includes **destructive deletes that run without a human in the
+loop** (per-suite reaping on every `test-all.sh` invocation, plus `rm -rf` on a shell-derived
+path) and a **write to boot-critical host config**. Neither degrades gracefully: a mis-scoped
+reap removes live work, and a malformed `/etc/fstab` costs the operator their only machine
+until rescue media is found. That blast radius warrants CPO sign-off at plan time and
+`user-impact-reviewer` at PR time, and it is why every safety gate added here is additive to
+(never a relaxation of) the existing ones — and why Phase 6 validates the raised ceiling by
+reading the live value back rather than trusting an exit code.
 
 ## Implementation Phases
 
