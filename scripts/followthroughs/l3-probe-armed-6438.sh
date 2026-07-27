@@ -10,7 +10,7 @@
 # three monitors should be live `up` — but "stays armed and green after the measured beat" is a
 # post-deploy close-criterion, and without enrollment that promise rests on human memory (the exact
 # dependency ADR-117 exists to kill). This script is that close-criterion, mechanized — self-pulled
-# from the Better Stack heartbeats API, NO ssh, NO dashboard (hr-no-dashboard-eyeball-pull-data,
+# from the Better Stack heartbeats API, NO ssh, NO dashboard (hr-no-dashboard-eyeball-pull-data-yourself,
 # hr-no-ssh-fallback-in-runbooks; mirrors the plan's discoverability_test).
 #
 # Enrollment (the directive the sweeper discovers — plus the `follow-through` label on #6438):
