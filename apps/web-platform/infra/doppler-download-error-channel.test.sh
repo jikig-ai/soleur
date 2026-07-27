@@ -1187,7 +1187,15 @@ fi
 if [ -n "${TRAIL:-}" ] && [ -s "${TRAIL:-/nonexistent}" ]; then
   # Pull the reader's ACTUAL terminal-complete jq program, so a future edit to it is
   # exercised here rather than compared against a copy that silently drifts.
-  _cc_line="$(grep -F 'TERMINAL="complete"; break' "$TRAIL" | grep -F 'cloud_init_complete' | head -1 || true)"
+  # `grep | head -1` lets a DECOY line win: a correct copy placed above the shipped test
+  # makes every assertion below exercise the wrong program at full green (mutation-proven).
+  # Require the match to be UNIQUE, so a second copy is a loud failure, not a silent swap.
+  _cc_matches=$(grep -cF 'TERMINAL="complete"; break' "$TRAIL" || true)
+  # TWO filters now: fresh_boot_ready is the PRIMARY terminal (the definitive readiness
+  # verdict), cloud_init_complete is the graced FALLBACK. Extract and exercise both — a
+  # single-filter test would leave whichever one it skipped completely unpinned.
+  _cc_line="$(grep -F 'TERMINAL="complete"; break' "$TRAIL" | grep -F 'fresh_boot_ready' | head -1 || true)"
+  _mk_line="$(grep -F 'cloud_init_complete")] | length > 0' "$TRAIL" | head -1 || true)"
   _cc_prog="$(printf '%s' "$_cc_line" | sed -e "s/^.*\"\\\$JQ_HOSTDEF\"'//" -e "s/'[[:space:]]*>\\/dev\\/null.*$//")"
   # JQ_HOSTDEF is a MULTI-LINE single-quoted assignment (hostok on line 1, sincok on
   # line 2). A `grep | head -1` captures only hostok, leaving sincok undefined — jq then
@@ -1195,24 +1203,44 @@ if [ -n "${TRAIL:-}" ] && [ -s "${TRAIL:-/nonexistent}" ]; then
   # vacuously while the positive one fails. Take the whole assignment.
   _hostdef="$(awk "/JQ_HOSTDEF='/{f=1} f{print} f&&/;'\$/{exit}" "$TRAIL" \
     | sed -e "s/^[[:space:]]*JQ_HOSTDEF='//" -e "s/'\$//")"
+  _mk_prog="$(printf '%s' "$_mk_line" | sed -e "s/^.*\"\\\$JQ_HOSTDEF\"'//" -e "s/'[[:space:]]*>\\/dev\\/null.*$//")"
 
   if [ -z "$_cc_prog" ] || [ -z "$_hostdef" ]; then
     no "AC-TERM0: could not extract the reader's terminal-complete jq program — the assertions below would be vacuous"
+  elif [ "$_cc_matches" -ne 1 ]; then
+    no "AC-TERM0: expected exactly ONE 'TERMINAL=\"complete\"; break' line in the reader, found ${_cc_matches} — a duplicate lets the extraction below bind to a decoy while the shipped test is broken"
   # NON-EMPTY IS NOT VALID. An extraction that silently drops a `def` yields a program
   # jq refuses to compile; `jq -e` then exits non-zero for every input, which is
-  # indistinguishable from an honest "false" at every call site below.
-  elif ! printf '[]' | jq -e --arg re x --arg eh y --argjson since 0 "${_hostdef}${_cc_prog}" >/dev/null 2>&1 \
-       && [ "$?" -gt 1 ]; then
-    no "AC-TERM0: the extracted jq program does not COMPILE (jq exit >1) — every assertion below would read false regardless of the fixture"
+  # indistinguishable from an honest "false" at every call site below. Capture the rc
+  # FIRST: in `! cmd && [ "$?" -gt 1 ]`, `$?` is the NEGATION's status (0/1), never jq's,
+  # so that form is unreachable dead code — it was, and it printed "and it compiles".
+  elif { printf '[]' | jq -e --arg re x --arg eh y --argjson since 0 "${_hostdef}${_cc_prog}" >/dev/null 2>&1; _jqrc=$?; [ "$_jqrc" -gt 1 ]; }; then
+    no "AC-TERM0: the extracted jq program does not COMPILE (jq exit ${_jqrc}) — every assertion below would read false regardless of the fixture"
+  # A truncated-but-compiling fragment is the other extraction failure the compile check
+  # cannot see; pin the program's shape.
+  elif ! printf '%s' "$_cc_prog" | grep -q '^\[\.\[\]' || ! printf '%s' "$_cc_prog" | grep -q 'length > 0$'; then
+    no "AC-TERM0: the extracted READINESS jq program is not a whole filter (expected [.[] … length > 0) — extraction bound to a fragment"
+  # The MARKER program needs the same guard: a broken one returns false for every fixture,
+  # which makes the negative controls (TERM3/TERM6) pass VACUOUSLY while only the positive
+  # one (TERM5) fails. That happened during development — an escaping slip expanded
+  # $JQ_HOSTDEF to empty, and three assertions reported green over a program that could
+  # never match.
+  elif [ -z "$_mk_prog" ] || ! printf '%s' "$_mk_prog" | grep -q '^\[\.\[\]' \
+       || { printf '[]' | jq -e --arg re x --arg eh y --argjson since 0 "${_hostdef}${_mk_prog}" >/dev/null 2>&1; [ "$?" -gt 1 ]; }; then
+    no "AC-TERM0: the extracted MARKER jq program is empty, malformed, or does not compile — TERM3/TERM5/TERM6 below would be vacuous"
   else
     ok "AC-TERM0: extracted the reader's terminal-complete jq program and it compiles"
 
     _ev() { # stage, iso-date  -> one Sentry-shaped event
       printf '{"message":"soleur-cloud-init boot stage","dateCreated":"%s","tags":[{"key":"stage","value":"%s"},{"key":"host_name","value":"soleur-web-2"}]}' "$2" "$1"
     }
-    _run() { # events-json -> exit status of the reader's own membership test
+    _run() { # events-json -> exit status of the reader's READINESS terminal test
       printf '%s' "$1" | jq -e --arg re 'soleur-cloud-init boot stage' --arg eh 'soleur-web-2' \
         --argjson since 0 "${_hostdef}${_cc_prog}" >/dev/null 2>&1
+    }
+    _runmk() { # events-json, since -> exit status of the reader's MARKER fallback test
+      printf '%s' "$1" | jq -e --arg re 'soleur-cloud-init boot stage' --arg eh 'soleur-web-2' \
+        --argjson since "$2" "${_hostdef}${_mk_prog}" >/dev/null 2>&1
     }
 
     # THE REGRESSION: newest-first, fresh_boot_ready ABOVE cloud_init_complete — exactly
@@ -1226,22 +1254,47 @@ if [ -n "${TRAIL:-}" ] && [ -s "${TRAIL:-/nonexistent}" ]; then
 
     # NEGATIVE CONTROL: without it, AC-TERM1 would also pass against a filter that always
     # returns true.
-    _dark="[$(_ev fresh_boot_ready 2026-07-27T11:06:03Z),$(_ev webhook_bound 2026-07-27T11:05:43Z)]"
-    if _run "$_dark"; then
-      no "AC-TERM2: a trail with NO cloud_init_complete read as complete — the membership test is vacuous (always true)"
+    _dark="[$(_ev cloud_init_complete 2026-07-27T11:05:58Z),$(_ev webhook_bound 2026-07-27T11:05:43Z)]"
+    # Real Sentry emits fractional seconds; `sincok` normalises them (sub("\\.[0-9]+Z$")).
+    # Every whole-second fixture leaves that branch unexercised — deleting it survives while
+    # blinding production entirely (every event filtered out).
+    _frac='[{"message":"soleur-cloud-init boot stage","dateCreated":"2026-07-27T11:05:58.529000Z","tags":[{"key":"stage","value":"cloud_init_complete"},{"key":"host_name","value":"soleur-web-2"}]}]'
+    if _runmk "$_frac" 1785150000; then
+      ok "AC-TERM5: a fractional-second dateCreated passes the run anchor (sincok normalises it)"
     else
-      ok "AC-TERM2: a trail without cloud_init_complete correctly reads NOT complete"
+      no "AC-TERM5: a fractional-second dateCreated was filtered out — sincok's normalisation is broken and production events (which ALL carry microseconds) would be discarded wholesale"
+    fi
+    # hostok returns TRUE on an ABSENT host_name (deliberate: a missing tag must not blind
+    # the gate). With every fixture on the matching host, nothing discriminates a WRONG one.
+    _wrong='[{"message":"soleur-cloud-init boot stage","dateCreated":"2026-07-27T11:05:58.529000Z","tags":[{"key":"stage","value":"cloud_init_complete"},{"key":"host_name","value":"soleur-web-9"}]}]'
+    if _runmk "$_wrong" 1785150000; then
+      no "AC-TERM6: another host's cloud_init_complete satisfied the membership test — the hostok filter is absent or inert"
+    else
+      ok "AC-TERM6: another host's cloud_init_complete does not satisfy the membership test"
+    fi
+    if _run "$_dark"; then
+      no "AC-TERM2: a trail with NO fresh_boot_ready read as the READINESS terminal — the primary test is vacuous (always true), so a not-ready host would report clean"
+    else
+      ok "AC-TERM2: a trail without fresh_boot_ready does NOT satisfy the readiness terminal (the graced fallback handles it instead)"
     fi
 
     # The run anchor is what makes membership safe: a PREDECESSOR's cloud_init_complete
     # must not satisfy it. Same host name, event older than the stamped epoch.
     _pred="[$(_ev cloud_init_complete 2026-07-27T07:50:00Z)]"
-    if printf '%s' "$_pred" | jq -e --arg re 'soleur-cloud-init boot stage' --arg eh 'soleur-web-2' \
-         --argjson since 1785150000 "${_hostdef}${_cc_prog}" >/dev/null 2>&1; then
+    if _runmk "$_pred" 1785150000; then
       no "AC-TERM3: a PREDECESSOR's cloud_init_complete satisfied the membership test — without the run anchor this is the #6969 same-named-host bug in a new place"
     else
       ok "AC-TERM3: the run anchor excludes a predecessor's cloud_init_complete from the membership test"
     fi
+  fi
+
+  # S3: AC-TERM3 supplies its OWN --argjson since, so it tests the FILTER, not the WIRING.
+  # Changing the shipped call site to `--argjson since 0` disables the anchor entirely and
+  # survives every fixture. Pin the call site itself.
+  if printf '%s' "$_cc_line" | grep -qF -- '--argjson since "${BOOT_TRAIL_SINCE:-0}"'; then
+    ok "AC-TERM3b: the shipped complete test passes the run anchor through --argjson since"
+  else
+    no "AC-TERM3b: the shipped complete test does not bind --argjson since to BOOT_TRAIL_SINCE — the anchor is inert and a predecessor's marker satisfies membership (#6969 class)"
   fi
 
   # ORDERING: fatal must be tested BEFORE complete. Membership alone would let a

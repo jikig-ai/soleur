@@ -150,6 +150,12 @@ fi
 JQ_HOSTDEF='def hostok($eh): ([ (.tags // [])[]? | select(.key=="host_name") | .value ][0]) as $hn | ($hn == null or $hn == "" or $hn == $eh);
 def sincok($s): if $s <= 0 then true else ((.dateCreated // "") | if . == "" then false else (((sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // 0) >= $s) end) end;'
 TERMINAL=""
+# (#6995) `cloud_init_complete` is necessary but NOT sufficient — see the terminal block.
+# CC_SEEN records when the marker first appeared; CC_GRACE must exceed the 180s
+# `timeout 180 sh -c 'soleur-vector-install'` that sits between the marker and the
+# readiness verdict, or the fallback fires before the verdict can arrive.
+CC_SEEN=""
+CC_GRACE="${SOLEUR_BOOT_TRAIL_CC_GRACE:-210}"
 LAST_STAGE=""
 LAST_DETAIL=""
 LAST_HOST=""
@@ -222,8 +228,22 @@ while :; do
   #     doppler_download, so nothing had ever followed the success marker.
   #   * FATAL FIRST. Under recency, a fatal arriving after completion won because it
   #     was newest. Membership alone would let `complete` mask it — fail-OPEN on a
-  #     boot-health gate. Testing fatal first keeps the failure direction: a run that
-  #     somehow emits both is reported as fatal.
+  #     boot-health gate. Testing fatal first keeps the failure direction WITHIN one
+  #     response; the grace below is what handles a fatal that has not ARRIVED yet.
+  #
+  # `cloud_init_complete` IS NECESSARY BUT NOT SUFFICIENT — do not break on it. It is
+  # emitted at cloud-init.yml's `soleur-boot-emit cloud_init_complete info`, and the
+  # DEFINITIVE verdict comes later, from `soleur-fresh-boot-ready`, which emits either
+  # `fresh_boot_ready` (info) or `fresh_boot_not_ready_<reason>` (FATAL — the #6538 dark
+  # signal, e.g. vector not active). Between them sits `timeout 180 sh -c
+  # 'soleur-vector-install'`, so the verdict lands 0-180s after the marker while this
+  # loop polls every 30s. Breaking on the marker would report "booted clean" BEFORE the
+  # readiness check ran — and because the pre-#6995 recency test made this branch
+  # effectively unreachable, that hole was dormant until the membership fix promoted it
+  # to the DEFAULT path. So: prefer the readiness verdict, and fall back to the marker
+  # only after a grace exceeding the vector-install ceiling. The fallback is deliberate —
+  # a lost readiness event (Sentry egress hiccup) must not manufacture a dark verdict on
+  # a host that demonstrably finished cloud-init.
   #
   # Membership is safe here ONLY because of the run anchor (`sincok`): events predating
   # this run's stamped epoch are already excluded, so a PREDECESSOR's cloud_init_complete
@@ -240,7 +260,14 @@ while :; do
             | ([ (.tags // [])[]? | select(.key=="detail") | .value ][0] // "") ][0] // ""' 2>/dev/null || echo "")
     TERMINAL="fatal"; break
   fi
-  if echo "$RESP" | jq -e --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'[.[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since)) | select([ (.tags // [])[]? | select(.key=="stage") | .value ][0] == "cloud_init_complete")] | length > 0' >/dev/null 2>&1; then TERMINAL="complete"; break; fi
+  if echo "$RESP" | jq -e --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'[.[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since)) | select([ (.tags // [])[]? | select(.key=="stage") | .value ][0] == "fresh_boot_ready")] | length > 0' >/dev/null 2>&1; then TERMINAL="complete"; break; fi
+  if echo "$RESP" | jq -e --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'[.[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since)) | select([ (.tags // [])[]? | select(.key=="stage") | .value ][0] == "cloud_init_complete")] | length > 0' >/dev/null 2>&1; then
+    if [[ -z "$CC_SEEN" ]]; then
+      CC_SEEN=$SECONDS
+      echo "boot-trail: cloud_init_complete seen; waiting up to ${CC_GRACE}s for the soleur-fresh-boot-ready verdict (it emits fresh_boot_ready info, or fresh_boot_not_ready_<reason> FATAL, after vector-install)"
+    fi
+    if (( SECONDS - CC_SEEN >= CC_GRACE )); then TERMINAL="complete_no_readiness"; break; fi
+  fi
   if (( SECONDS >= DEADLINE )); then TERMINAL="timeout"; break; fi
   sleep 30
 done
@@ -260,8 +287,27 @@ if [[ -n "$LAST_STAGE" ]]; then
   ' | tee -a "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 fi
 case "$TERMINAL" in
-  complete)
-    echo "fresh-host boot reached cloud_init_complete — the host booted clean." | tee -a "$GITHUB_STEP_SUMMARY"
+  complete|complete_no_readiness)
+    # (#6995) Guarded like the two negative terminals below. `complete` was the ONLY
+    # terminal without a JOB_STATUS check, so a run that failed before its apply could
+    # still print "the host booted clean" about a trail that belongs to the predecessor.
+    # Membership widened that (any in-window marker satisfies it, where recency needed
+    # the newest), so the asymmetry had to go.
+    if [[ "${JOB_STATUS}" != "success" ]]; then
+      echo "_A clean boot trail was surfaced, but this job did not complete its apply — the trail above may belong to an earlier attempt or another host, so no boot verdict is drawn._" | tee -a "$GITHUB_STEP_SUMMARY"
+      exit 0
+    fi
+    if [[ "$TERMINAL" == "complete_no_readiness" ]]; then
+      # cloud_init_complete observed, but soleur-fresh-boot-ready never reported within
+      # the grace. NOT treated as dark: the host demonstrably finished cloud-init, and a
+      # lost readiness event (Sentry egress hiccup) must not manufacture a dark verdict.
+      # Surfaced loudly because the unobserved verdict is the one that would have named
+      # a not-ready host (#6538 vector-dark).
+      echo "::warning::${WEB_HOST_KEY} reached cloud_init_complete but no soleur-fresh-boot-ready verdict arrived within ${CC_GRACE}s. The host finished cloud-init; its READINESS is unconfirmed. Check for fresh_boot_not_ready_* before putting it in service."
+      echo "_**Booted, readiness unconfirmed.** \`cloud_init_complete\` observed for \`${EXPECT_HOST}\`, but no \`fresh_boot_ready\` / \`fresh_boot_not_ready_*\` within ${CC_GRACE}s._" | tee -a "$GITHUB_STEP_SUMMARY"
+    else
+      echo "fresh-host boot reached fresh_boot_ready — the host booted clean and reported ready." | tee -a "$GITHUB_STEP_SUMMARY"
+    fi
     # (#6969) a retry that succeeded is still a real fault. Surface it as an annotation
     # so the cause is not buried in a green run's collapsed summary.
     if [[ -n "$RETRIED" ]]; then
