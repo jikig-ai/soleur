@@ -26,7 +26,7 @@ When generating Terraform configurations, produce a modular file structure:
 - Include `user_data` cloud-init for server hardening (disable root SSH, enable fail2ban, configure UFW)
 - Use `hcloud_network` + `hcloud_network_subnet` for multi-server setups
 - Use placement groups (`type = "spread"`, max 10 servers) for high availability. Place HA/standby peers (warm standbys, active-active) in a DIFFERENT DC than prod — same network zone (e.g. eu-central spans nbg1/fsn1/hel1) so the private subnet still attaches, but a distinct DC so a single-DC outage or capacity shortage can't take out both. A Hetzner placement group is LOCATION-scoped, so a cross-DC host cannot join it: gate `placement_group_id` on co-location with prod (`each.value.location == <prod>.location ? group.id : null`), else the apply is rejected
-- Prefer CAX (ARM) instances for cost optimization; note ARM64 compatibility requirement to the user
+- Do NOT default to CAX (ARM) for cost: the whole Hetzner `cax` line has measured orderable in 0 of 3 EU DCs at three separate probes, and three hosts have now been repinned off it (#6178, #6967, #6570). Probe `/v1/datacenters` `.server_types.available` (never `.supported`) before recommending any type, and note the ARM64 compatibility requirement to the user
 
 ### AWS Requirements
 
@@ -122,7 +122,7 @@ For workspace strategy: use workspaces for identical infra across environments; 
 
 ## Cost Optimization
 
-Recommend the cheapest viable configuration for the workload. Prefer ARM instances (Hetzner CAX, AWS Graviton) when the application stack supports ARM64. Note regional pricing differences -- Hetzner EU regions are cheapest, US and Singapore cost significantly more.
+Recommend the cheapest viable configuration for the workload. Prefer ARM (AWS Graviton) only where it is actually orderable; for Hetzner, treat `cax` as unavailable in EU unless a live `.server_types.available` probe says otherwise (#6570). Note regional pricing differences -- Hetzner EU regions are cheapest, US and Singapore cost significantly more.
 
 Always include this disclaimer: "Prices reflect model training data. Verify current pricing at the provider's pricing page before making budget decisions."
 
