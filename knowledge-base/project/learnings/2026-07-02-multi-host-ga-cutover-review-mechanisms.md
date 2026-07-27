@@ -19,7 +19,7 @@ validate`. Each is generalizable.
 
 `hcloud_firewall` rules apply only to the **public** interface; intra-`hcloud_network`
 (`10.0.1.0/24`) traffic is open by network membership (the codebase says so at
-`git-data.tf:182-186`). So "scope port 8443 to peer hosts with an `hcloud_firewall` rule"
+`git-data.tf, resource "hcloud_firewall" "git_data" — no rule blocks`). So "scope port 8443 to peer hosts with an `hcloud_firewall` rule"
 is a **non-functional** fix — the attack traverses the private net the firewall never sees.
 A token-less private-net listener (the owner session-proxy) was therefore reachable from
 *any* `10.0.1.x` host, including the deliberately-lesser-privileged git-data host →

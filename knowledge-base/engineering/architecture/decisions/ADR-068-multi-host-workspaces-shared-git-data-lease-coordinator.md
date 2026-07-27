@@ -472,7 +472,7 @@ fixes for every per-step plan:
 > scope, Sub-PR 3.D security review).** Activating the owner proxy listener (3.D) surfaced
 > that one-way TLS + a token-less `proxy_hello` handshake makes network reachability the
 > only control — and Hetzner **cloud firewalls do NOT filter the private net** (intra-`
-> hcloud_network` traffic is open by network membership; git-data.tf:182-186). So ANY
+> hcloud_network` traffic is open by network membership; git-data.tf, resource "hcloud_firewall" "git_data" — no rule blocks). So ANY
 > `10.0.1.0/24` host — including the deliberately-lesser-privileged **git-data host** —
 > could open port 8443 and `attachProxiedSession` grants it a full act-as-user session:
 > account **takeover**, strictly ⊃ the §D2 "cross-tenant WRITE" residual, and reachable

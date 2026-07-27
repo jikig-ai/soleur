@@ -204,7 +204,7 @@ export function createProxyServer(params: {
   }
   // Peer-origin allowlist (3.D, CTO ruling). One-way TLS + a token-less handshake
   // means network reachability is the only control, and Hetzner cloud firewalls do
-  // NOT filter the private net (git-data.tf:182-186) — so any 10.0.1.0/24 host,
+  // NOT filter the private net (git-data.tf, resource "hcloud_firewall" "git_data" — no rule blocks) — so any 10.0.1.0/24 host,
   // INCLUDING the deliberately-lesser-privileged git-data host, could open this port
   // and take over any account (attachProxiedSession registers a full act-as-user
   // session). The infra firewall cannot scope 8443; this guest-side allowlist is the

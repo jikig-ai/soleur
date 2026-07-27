@@ -92,7 +92,7 @@
       },
       "at_rest": {
         "mechanism": "plaintext-exception",
-        "evidence": "apps/web-platform/infra/git-data.tf:196 (format = \"ext4\", no LUKS apparatus)",
+        "evidence": "apps/web-platform/infra/git-data.tf:264 (format = \"ext4\", no LUKS apparatus)",
         "defends_against": "nothing at the volume layer; the pre-cutover rollback backstop pending the DL-2 wipe",
         "does_not_defend": "a seized/snapshot disk exposes any git data still resident on this volume",
         "disclosed_as": "not-publicly-claimed",
