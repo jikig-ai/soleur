@@ -555,9 +555,15 @@ logs:
     over the private net, on a deny-all-public-ingress host. Tracked as a birth blocker.
   retention: n/a
 discoverability_test:
-  command: cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform
-    --name-transformer tf-var -- terraform plan -target=hcloud_server.git_data -no-color
-  expected_output: hcloud_server.git_data planned with server_type = "cpx22"
+  # Credential-free and executable as written. The earlier form was a bare `terraform
+  # plan`, which cannot run (this root has 26 no-default variables); the obvious fix —
+  # wrapping it in `doppler run` — is worse, because preflight Check 10 EXECUTES this
+  # command and refuses any credentialed CLI (it runs with $HOME preserved, so a
+  # Doppler token is reachable). For a declaration-only change on a host with no
+  # runtime surface, the honest discoverable fact is the DECLARED type; the runtime
+  # signal genuinely does not exist yet (see liveness_signal / logs above).
+  command: grep -A3 'variable "git_data_server_type"' apps/web-platform/infra/variables.tf
+  expected_output: cpx22
 ```
 
 
