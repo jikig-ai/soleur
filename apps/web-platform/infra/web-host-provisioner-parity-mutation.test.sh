@@ -19,7 +19,11 @@
 #      copy is good.
 #   2. Every mutation is proven to have LANDED (mutated text must differ from PRISTINE) before
 #      the RED is credited, so a no-op `str.replace` cannot masquerade as a result.
-#   3. Every RED is attributed to a named check (above).
+#   3. Every RED is attributed to a named check, and the anchor must appear ON A [FAIL] LINE.
+#      Matching anywhere in combined output is weaker than it looks: a guard whose §2 emitted
+#      its findings as plain prints while an unrelated floor supplied the exit code would still
+#      satisfy a substring test. Both greps read a FILE (never a pipe into `grep -q` on the
+#      producer), so the SIGPIPE-fails-open trap in the header does not apply.
 #   4. TWO POSITIVE CONTROLS, in both directions: a benign edit stays GREEN, and a
 #      legitimately dual-delivered NEW artifact stays GREEN. Without the second, a guard that
 #      over-fires on any addition would score a clean run.
@@ -86,7 +90,7 @@ expect_red() {
   mutations_run=$((mutations_run + 1))
   if run_guard; then
     no "$label: guard still PASSED with the invariant broken -- it cannot detect this"
-  elif [[ "$(<"$OUT")" == *"$anchor"* ]]; then
+  elif grep -F "[FAIL]" "$OUT" | grep -qF -- "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: guard went red but NOT via '$anchor' -- it failed for an unrelated reason, so
@@ -135,23 +139,23 @@ assert old in s
 s = s.replace(old, old + "\n  for_each = var.web_hosts", 1)
 '
 
-# The case a presence-check misses: fanned out, but a web-1 literal survives elsewhere in the
-# block (a nested per-provisioner connection is the standard HCL idiom for retargeting one
-# provisioner). The old guard passed this; asserting ABSENCE of for_each is what catches it.
-expect_red "M3 (§1: for_each + surviving web-1 literal in a nested connection)" server.tf \
-  "for_each'd=['orphan_reaper_install']" '
-old = "resource \"terraform_data\" \"orphan_reaper_install\" {"
+# §1 has TWO clauses -- `fanned` (M2) and `unpinned`. Nothing covered `unpinned`, so it was
+# deletable. This is the shape it exists for: the host is repointed away from web-1 WITHOUT a
+# for_each, so the fan-out check does not fire and only the pin check can catch it.
+expect_red "M3 (§1: host repointed off web-1 without for_each)" server.tf \
+  "not-web-1-pinned=" '
+old = "    host        = hcloud_server.web[\"web-1\"].ipv4_address\n    user        = \"root\"\n    private_key = var.ci_ssh_private_key         # null in operator-local context"
 assert old in s
-s = s.replace(old, old + "\n  for_each = var.web_hosts", 1)
+s = s.replace(old, "    host        = local.web1_ip\n    user        = \"root\"\n    private_key = var.ci_ssh_private_key         # null in operator-local context", 1)
 '
 
-expect_red "M4 (§1: resource renamed with uppercase/hyphen still swept, then deleted)" server.tf \
-  "1: swept only 14 SSH-connected" '
-import re
-m = re.search(r"resource \"terraform_data\" \"cosign_trusted_root\" \{", s)
-assert m
-end = s.index("\nresource ", m.end())
-s = s[:m.start()] + s[end+1:]
+# Terraform identifiers legally contain uppercase and hyphens. v1 matched `[a-z_0-9]+`, so such
+# a resource was skipped by every section at once -- and because all floors are `>=`, invisibly.
+# This is a GREEN control: after the rename the resource must still be swept (count unchanged).
+expect_green "control-C (uppercase/hyphen resource name is still swept)" server.tf '
+old = "resource \"terraform_data\" \"cosign_trusted_root\" {"
+assert old in s
+s = s.replace(old, "resource \"terraform_data\" \"Cosign-Trusted_Root\" {", 1)
 '
 
 # ── §2: the destination sweep (the load-bearing invariant) ───────────────────────────
@@ -286,6 +290,133 @@ s = s.replace("install -D -m 0755 -o root -g root \"$SEED/$f\"", "cp \"$SEED/$f\
 s = s.replace("install -D -m 0644 -o root -g root \"$SEED/$f\"", "cp \"$SEED/$f\"")
 '
 
+
+# ── Review round 2: the 12 hostile mutations that defeated the v2 destination-keyed guard ──
+# Every one was GREEN against v2 and is pinned here so the fix cannot silently regress.
+# M18-M24 are EXTRACTION misses: v2 enumerated write VERBS, so an unlisted verb meant the
+# destination never entered the set at all -- a SILENT fail-open (a channel-keyed miss at
+# least failed loudly). M25-M28 are over-CREDITS on the coverage side.
+
+expect_red "M18 (§2 extraction: QUOTED redirect target)" server.tf \
+  "/etc/soleur/quoted-artifact.conf is written by" '
+old = "      \"chmod 600 /etc/default/disk-monitor\","
+assert old in s
+s = s.replace(old, "      \"printf %s hello > \\\"/etc/soleur/quoted-artifact.conf\\\"\"," + chr(10) + old, 1)
+'
+
+expect_red "M19 (§2 extraction: install to a new destination)" server.tf \
+  "/etc/soleur/install-artifact.conf is written by" '
+old = "      \"chmod 600 /etc/default/disk-monitor\","
+assert old in s
+s = s.replace(old, "      \"install -m 0644 /tmp/staged.conf /etc/soleur/install-artifact.conf\"," + chr(10) + old, 1)
+'
+
+expect_red "M20 (§2 extraction: mv -- the atomic-rename idiom)" server.tf \
+  "/etc/soleur/moved-artifact.conf is written by" '
+old = "      \"chmod 600 /etc/default/disk-monitor\","
+assert old in s
+s = s.replace(old, "      \"mv /tmp/staged.conf /etc/soleur/moved-artifact.conf\"," + chr(10) + old, 1)
+'
+
+expect_red "M21 (§2 extraction: dd of=)" server.tf \
+  "/etc/soleur/dd-artifact.conf is written by" '
+old = "      \"chmod 600 /etc/default/disk-monitor\","
+assert old in s
+s = s.replace(old, "      \"dd if=/tmp/staged.conf of=/etc/soleur/dd-artifact.conf\"," + chr(10) + old, 1)
+'
+
+expect_red "M22 (§2 extraction: curl -o)" server.tf \
+  "/etc/soleur/curl-artifact.conf is written by" '
+old = "      \"chmod 600 /etc/default/disk-monitor\","
+assert old in s
+s = s.replace(old, "      \"curl -fsSL https://example.com/x -o /etc/soleur/curl-artifact.conf\"," + chr(10) + old, 1)
+'
+
+expect_red "M23 (§2 extraction: python3 - /path (the bootstrap's own hooks.json idiom))" server.tf \
+  "/etc/soleur/py-artifact.json is written by" '
+old = "      \"chmod 600 /etc/default/disk-monitor\","
+assert old in s
+s = s.replace(old, "      \"python3 - /etc/soleur/py-artifact.json < /dev/null\"," + chr(10) + old, 1)
+'
+
+expect_red "M24 (§2: an INTERPOLATED destination is unprovable, not skippable)" server.tf \
+  "an INTERPOLATED destination this guard cannot" '
+a = """  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = "/usr/local/bin/disk-monitor.sh"
+  }"""
+assert a in s
+s = s.replace(a, a + """
+
+  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = "${local.soleur_etc}/interp.conf"
+  }""", 1)
+'
+
+# Break the ONLY real writer of /opt/soleur/vector.toml. v2 stayed GREEN because the NEXT
+# line names that path as the SOURCE argument of an install, which made the entire vector
+# delivery chain unfalsifiable -- the very chain the guard's variable resolver exists for.
+expect_red "M25 (§2 coverage: a SOURCE argument is not a write)" soleur-host-bootstrap.sh \
+  "/opt/soleur/vector.toml is written by" '
+old = "> /opt/soleur/vector.toml"
+assert s.count(old) == 1
+s = s.replace(old, "> /opt/soleur/vector-TYPO.toml", 1)
+'
+
+expect_red "M26 (§2 coverage: install -d creates a DIRECTORY, not an artifact)" server.tf \
+  "/etc/soleur/dironly is written by" '
+a = """  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = "/usr/local/bin/disk-monitor.sh"
+  }"""
+assert a in s
+s = s.replace(a, a + """
+
+  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = "/etc/soleur/dironly"
+  }""", 1)
+'
+
+expect_red "M27 (§2 coverage: a stray VAR= assignment must not credit a destination)" server.tf \
+  "/etc/soleur/brand-new-thing.conf is written by" '
+a = """  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = "/usr/local/bin/disk-monitor.sh"
+  }"""
+assert a in s
+s = s.replace(a, a + """
+
+  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = "/etc/soleur/brand-new-thing.conf"
+  }""", 1)
+'
+
+# A write inside a heredoc body that authors a script NOBODY RUNS. Dead code certifying
+# coverage -- structurally the same defect as v1's ExecStart-as-producer row.
+expect_red "M28 (§2 coverage: dead-code heredoc body is not delivery)" soleur-host-bootstrap.sh \
+  "/etc/soleur/deadcode-artifact.conf is written by" '
+import os
+# Two-file mutation: the artifact must be REQUIRED (a server.tf destination) before the
+# dead-code "delivery" can be tested. Mutating only the bootstrap would be vacuous -- there
+# would be nothing for the guard to check, and the green would prove nothing.
+sp = os.path.join(os.path.dirname(p), "server.tf")
+t = open(sp).read()
+a = chr(34) * 3
+blk = "  provisioner " + chr(34) + "file" + chr(34) + " {" + chr(10) \
+    + "    source      = " + chr(34) + "${path.module}/disk-monitor.sh" + chr(34) + chr(10) \
+    + "    destination = " + chr(34) + "/usr/local/bin/disk-monitor.sh" + chr(34) + chr(10) + "  }"
+assert blk in t
+add = chr(10) + chr(10) + "  provisioner " + chr(34) + "file" + chr(34) + " {" + chr(10) \
+    + "    source      = " + chr(34) + "${path.module}/disk-monitor.sh" + chr(34) + chr(10) \
+    + "    destination = " + chr(34) + "/etc/soleur/deadcode-artifact.conf" + chr(34) + chr(10) + "  }"
+open(sp, "w").write(t.replace(blk, blk + add, 1))
+s += chr(10) + "cat > /usr/local/bin/never-invoked.sh <<" + chr(39) + "DEADEOF" + chr(39) + chr(10)
+s += "install -m 0644 /opt/x /etc/soleur/deadcode-artifact.conf" + chr(10) + "DEADEOF" + chr(10)
+'
+
 # ── POSITIVE CONTROLS: both directions ───────────────────────────────────────────────
 expect_green "control-A (benign comment-only edit)" server.tf '
 old = "resource \"terraform_data\" \"disk_monitor_install\" {"
@@ -293,8 +424,12 @@ assert old in s
 s = s.replace(old, "# benign comment added by the mutation battery\n" + old, 1)
 '
 
-# The direction the old battery never tested: an ADDITION that IS legitimately dual-delivered
-# must stay green. Without this, a guard that reddens on any new destination scores perfectly.
+# An ADDITION that IS legitimately dual-delivered must stay green, or a guard that reddens on
+# any new destination scores a perfect run. It must also MOVE a number the guard prints --
+# /usr/local/bin/orphan-reaper.sh was the obvious pick and is useless, because it is ALREADY an
+# SSH destination, so the sweep iterated the identical key set and the control asserted nothing.
+# cat-deploy-state.sh is bootstrap-installed but NOT currently SSH-written, so this genuinely
+# takes the sweep 52 -> 53 and still resolves.
 expect_green "control-B (new destination WITH a real fresh-boot writer)" server.tf '
 anchor = """  provisioner "file" {
     source      = "${path.module}/disk-monitor.sh"
@@ -304,13 +439,13 @@ assert anchor in s
 s = s.replace(anchor, anchor + """
 
   provisioner "file" {
-    source      = "${path.module}/orphan-reaper.sh"
-    destination = "/usr/local/bin/orphan-reaper.sh"
+    source      = "${path.module}/cat-deploy-state.sh"
+    destination = "/usr/local/bin/cat-deploy-state.sh"
   }""", 1)
 '
 
 # ── Non-vacuity floor on the battery itself ─────────────────────────────────────────
-FLOOR=17
+FLOOR=27
 if [[ "$mutations_run" -ge "$FLOOR" ]]; then
   ok "battery ran $mutations_run landed, attributed mutations (floor $FLOOR)"
 else

@@ -223,56 +223,132 @@ else:
        "the firewall and the -target lists must change FIRST, and this check with them.")
 
 # ── §2. Destination sweep: the load-bearing invariant ────────────────────────────────
-# Every absolute path the 15 WRITE must be written on a fresh host too. Transient staging
-# and device paths are excluded -- they are not delivered artifacts.
+# ASYMMETRY (the v2 defect, and the reason this is shaped the way it is). The two halves of
+# the derivation fail in OPPOSITE directions:
+#   * EXTRACTION ("what do the 15 write?") -- a miss is SILENT: the destination never enters
+#     the set, so nothing is checked and the guard reports a clean sweep. Enumerating write
+#     verbs here is therefore fail-OPEN, which is exactly how v2 shipped: `mv`, `dd of=`,
+#     `curl -o`, `python3 - /path`, and any quoted path all walked past it. So this half is
+#     INVERTED -- every absolute path is a delivery UNLESS it appears only under a read-only
+#     verb. An unknown verb defaults to "delivery", which fails LOUD.
+#   * COVERAGE ("does a fresh host write it?") -- a miss is LOUD: the destination reports as
+#     uncovered. Enumerating verbs here is safe; the danger is over-CREDITING. So this half is
+#     positionally strict: for install/cp/mv the token must be the LAST path (v2 credited a
+#     path appearing as the SOURCE argument, which made the whole vector chain unfalsifiable).
+READONLY_VERBS = {
+    'test', '[', 'grep', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'systemctl',
+    'systemd-tmpfiles', 'journalctl', 'ls', 'stat', 'dpkg', 'docker', 'visudo',
+    'apparmor_parser', 'bash', 'sh', 'command', 'sysctl', 'printf', 'echo',
+    'fail2ban-client', 'systemd-analyze', 'export', 'cd', 'true', 'set',
+}
 TRANSIENT = ('/tmp/', '/dev/', '/proc/', '/sys/', '/run/')
+_SEG = re.compile(r'(?:&&|\|\||[;|])')
+
+def _strip_heredoc_bodies(cmd):
+    """Drop `<< 'MARK' … MARK` bodies. They are FILE CONTENT (systemd units), not commands --
+    an `ExecStart=/usr/local/bin/x` inside one is not this provisioner writing /usr/local/bin/x.
+    The `cat > DEST` line itself survives, so the real write is still extracted."""
+    return re.sub(r"<<\s*'([A-Za-z0-9_]+)'.*?\n\1(?=\s|$)", "<<STRIPPED", cmd, flags=re.S)
 
 def destinations(body):
-    out = set()
-    out |= set(re.findall(r'destination\s*=\s*"([^"]+)"', body))       # provisioner "file"
-    out |= set(re.findall(r'>\s*(/[^\s"\';|&)]+)', body))              # echo/printf/sed/cat/base64
-    out |= set(re.findall(r'\btee\s+(?:-\S+\s+)*(/[^\s"\';|&)]+)', body))
-    for seg in re.findall(r'\binstall\b([^"\n]*)', body):
-        if re.match(r'\s+-\S*d', seg): continue                        # install -d == mkdir
-        p = re.findall(r'(/[^\s"\';|&)]+)', seg)
-        if p: out.add(p[-1])
-    for seg in re.findall(r'\bcp\b\s+([^"\n]*)', body):
-        p = re.findall(r'(/[^\s"\';|&)]+)', seg)
-        if len(p) >= 2: out.add(p[-1])
-    return {d for d in out if d.startswith('/') and not d.startswith(TRANSIENT)}
+    """Every absolute path this provisioner delivers. Fail-closed by over-extraction."""
+    out, interpolated = set(), set()
+    for d in re.findall(r'destination\s*=\s*"([^"]+)"', body):
+        (out if d.startswith('/') else interpolated).add(d)
+    for arr in re.findall(r'inline\s*=\s*\[(.*?)\n\s*\]', body, re.S):
+        for raw in re.findall(r'"((?:[^"\\]|\\.)*)"', arr):
+            cmd = _strip_heredoc_bodies(raw.replace('\\n', '\n').replace('\\"', '"'))
+            for line in cmd.split('\n'):
+                for seg in _SEG.split(line):
+                    seg = seg.strip()
+                    if not seg: continue
+                    toks = seg.split()
+                    verb = toks[0].strip('"\'(!') if toks else ''
+                    # `install -d` / `mkdir` create DIRECTORIES, not delivered artifacts.
+                    if verb == 'install' and re.match(r'\s*-\S*d\b', seg[len(verb):]): continue
+                    for m in re.finditer(r'(>>?\s*"?)?((?<![\w$.:/])/[A-Za-z0-9._@/-]+)', seg):
+                        path = m.group(2)
+                        if m.group(1) or verb not in READONLY_VERBS:
+                            out.add(path)
+    return ({d for d in out if not d.startswith(TRANSIENT) and d.rstrip('/') != ''},
+            {d for d in interpolated})
 
-def _write_pats(token):
-    return [rf'>\s*{token}(?:\s|$|["\';|&)])', rf'\btee\s+(?:-\S+\s+)*{token}(?:\s|$|["\';|&)])',
-            rf'\binstall\b[^\n]*?\s"?{token}"?(?:\s|$|["\';|&)])',
-            rf'\bcp\b[^\n]*?\s"?{token}"?(?:\s|$|["\';|&)])',
-            rf'^\s*-\s*path:\s*{token}\s*$']
-
-def shell_path_vars(text):
-    """`VAR=/abs/path` assignments, so a write through "$VAR" resolves. soleur-host-bootstrap.sh
-    authors /usr/local/bin/soleur-vector-install, which does `CFG=/etc/vector/vector.toml` then
-    `install -m 0644 /opt/soleur/vector.toml "$CFG"`. Without this the guard reports a real
-    delivery as missing -- and the tempting fix is an ALLOWLIST entry, which would blind the
-    destination permanently. Deliberately shallow: one level, literal absolute paths only."""
-    return {m.group(2): m.group(1)
-            for m in re.finditer(r'^\s*(\w+)=(/[^\s"\';|&)$]+)\s*$', text, re.M)}
+def _last_path(seg):
+    """Last path-like argument of a command -- an absolute literal OR a $VAR/${VAR} token.
+    Both must be recognised or the LAST-argument test silently falls back to an earlier
+    literal, which is how a SOURCE argument gets credited as the destination."""
+    p = re.findall(r'(?<![\w])"?((?:/[A-Za-z0-9._@/-]+)|(?:\$\{?\w+\}?))"?(?=\s|$)', seg)
+    return p[-1] if p else None
 
 def written_by(text, dest, var_map=None):
-    """Does `text` WRITE dest (not merely mention it)? Anchored on write constructs, so a
-    systemd ExecStart or a chmod that names the path does not count as delivery -- review
-    showed the previous substring test crediting an ExecStart consumer reference as proof
-    that cloud-init rendered the file."""
-    tokens = [re.escape(dest)]
+    """Does `text` WRITE dest? Positionally strict -- a path appearing as a SOURCE argument,
+    or as an `install -d` directory, or in a consumer reference (ExecStart, chmod), does NOT
+    count. Verb list may grow freely: a miss here fails LOUD as 'uncovered'."""
+    tokens = [dest]
     var = (var_map or {}).get(dest)
-    if var:
-        tokens += [re.escape(f'${var}'), re.escape('${' + var + '}')]
-    return any(re.search(p, text, re.M) for t in tokens for p in _write_pats(t))
+    if var: tokens += [f'${var}', '${' + var + '}']
+    for line in text.split('\n'):
+        if re.match(r'\s*-\s*path:\s*' + re.escape(dest) + r'\s*$', line):
+            return True
+        for seg in _SEG.split(line):
+            seg = seg.strip()
+            if not seg: continue
+            toks = seg.split()
+            verb = toks[0].strip('"\'(!') if toks else ''
+            for tok in tokens:
+                e = re.escape(tok)
+                if re.search(r'>>?\s*"?' + e + r'"?(?:\s|$)', seg): return True
+                if re.search(r'\btee\s+(?:-\S+\s+)*"?' + e + r'"?(?:\s|$)', seg): return True
+                if re.search(r'\bdd\b[^\n]*\bof="?' + e + r'"?(?:\s|$)', seg): return True
+                if re.search(r'\b(?:curl|wget)\b[^\n]*\s-[oO]\s+"?' + e + r'"?(?:\s|$)', seg): return True
+                if verb in ('install', 'cp', 'mv'):
+                    if verb == 'install' and re.match(r'\s*-\S*d\b', seg[len(verb):]): continue
+                    if _last_path(seg) in (tok, f'"{tok}"'): return True
+                if verb == 'python3' and _last_path(seg) == tok: return True
+    return False
 
-bs_vars = shell_path_vars(bootstrap)
+def strip_uninvoked_heredocs(text, invoked_in):
+    """A write inside a heredoc BODY is only a delivery if the script that body authors is
+    actually RUN on the fresh-boot path. Without this, appending a never-invoked script whose
+    body contains `install … /etc/soleur/x` credits /etc/soleur/x as delivered -- dead code
+    certifying coverage, structurally the same defect as v1's ExecStart-as-producer row.
+    The `cat > TARGET` line itself is preserved, so TARGET remains a real write."""
+    def repl(m):
+        target, body, marker = m.group(1), m.group(3), m.group(2)
+        base = os.path.basename(target.strip('"\''))
+        runs = base and (base in invoked_in or len(re.findall(re.escape(base), text)) > 2)
+        return m.group(0) if runs else f"cat > {target} <<'{marker}'\nUNINVOKED\n{marker}"
+    return re.sub(r"cat > (\S+) <<\s*'([A-Za-z0-9_]+)'\n(.*?)\n\2(?=\s|$)", repl, text, flags=re.S)
+
+def heredoc_scoped_vars(text):
+    """`VAR=/abs/path` bindings, scoped to the heredoc body they appear in. v2 built this map
+    GLOBALLY, so one stray `CFG=/some/path` anywhere in an 800-line file permanently credited
+    that path via an unrelated `install … "$CFG"` ~600 lines away. Scoping kills that."""
+    out = {}
+    for hm in re.finditer(r"<<\s*'([A-Za-z0-9_]+)'(.*?)\n\1(?=\s|$)", text, re.S):
+        body = hm.group(2)
+        local = {m.group(2): m.group(1)
+                 for m in re.finditer(r'^\s*(\w+)=(/[^\s"\';|&)$]+)\s*$', body, re.M)}
+        for path, var in local.items():
+            if written_by(body, path, {path: var}): out[path] = var
+    return out
+
+bootstrap = strip_uninvoked_heredocs(bootstrap, ci)
+bs_vars = heredoc_scoped_vars(bootstrap)
 
 all_dests = {}
 for name, body in ssh_resources.items():
-    for d in destinations(body):
+    dests, interpolated = destinations(body)
+    for d in dests:
         all_dests.setdefault(d, set()).add(name)
+    # An interpolated destination cannot be statically resolved, so parity CANNOT be proven
+    # for it. v2 dropped these silently via a startswith('/') filter -- the purest fail-open
+    # in the file, since `destination = "${local.x}/y"` is idiomatic HCL. Not provable is a
+    # finding, not a skip.
+    for d in sorted(interpolated):
+        no(f"2: {name} delivers to {d!r}, an INTERPOLATED destination this guard cannot "
+           "statically resolve, so its fresh-boot parity is unproven. Use a literal path, or "
+           "ALLOWLIST it with the reason its parity is verified elsewhere.")
 
 uncovered = []
 for dest in sorted(all_dests):
