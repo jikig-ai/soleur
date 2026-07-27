@@ -513,6 +513,29 @@ result. `decision-challenges.md` is rendered by ship Phase 6.
 - **AC2b** Five consecutive runs produce **identical** PASS name-sets, at least
   one under artificial CPU load. (Catches the synchronization-barrier race that
   AC2 structurally cannot.)
+
+  **Measured: PASS.** `after1`-`after5`, all 184/184, PASS name-sets
+  byte-identical (single `md5sum` class across all five), with `after5` run under
+  a busy loop on every core (wall 8m14.777s vs ~4m unloaded — the load landed).
+  A sixth run after the T2 fix (`after6`) is also byte-identical. **No real
+  `sleep` was acting as an undeclared synchronization barrier.**
+
+  **Sibling-contention note, recorded because it nearly read as a regression.**
+  Two `MOCK_SLEEP_REAL=1` runs failed with *different* test subsets (`real2`:
+  the canary /dashboard check; `real3`: five zot login-classification checks)
+  while **other sessions were concurrently running this same suite** in sibling
+  worktrees (confirmed via `/proc/<pid>/cwd`: `feat-one-shot-7004` running
+  `test-all.sh`, `feat-one-shot-6982` looping `ci-deploy.test.sh`). Discriminated
+  rather than assumed, in three steps: (1) `main`'s unmodified suite, copied in
+  verbatim and run as a control, passed 184/184 — and passed again under
+  artificial CPU load (13m56.703s); (2) under `MOCK_SLEEP_REAL=1` this PR's
+  `create_base_mocks` is byte-equivalent in effect to `main`'s (neither installs
+  the mock), so the diff cannot reach that path; (3) re-running the identical
+  opt-out command on a quiet machine (`real4`) gave **184/184 with a PASS
+  name-set identical to the mocked runs**. Contention, not regression. Note the
+  two load profiles are NOT equivalent — artificial CPU spin is not the same
+  stressor as sibling suites doing heavy process-spawn and file I/O, which is why
+  the CPU-load control passed while the sibling-contended runs did not.
 - **AC3** T-6525-8 asserts the production default backoff **values** (`2` then
   `4`) from `$MOCK_SLEEP_LOG`; mutating `ci-deploy.sh:1437` to `9 9` turns it
   RED, with the mutation output pasted.

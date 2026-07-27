@@ -84,12 +84,12 @@ not renumber one file without the other.
 - [x] **2.3a** **Behavioural-equivalence gate.** Full run, then
       `diff <(grep -o 'PASS: .*' before.txt | sort) <(grep -o 'PASS: .*' after.txt | sort)`
       → must be empty, and `=== Results: ===` must read `184/184` (AC2).
-- [ ] **2.3b** **Stability gate.** Repeat the full run 5×, at least one under
+- [x] **2.3b** **Stability gate.** Repeat the full run 5×, at least one under
       artificial CPU load; all five PASS name-sets must be identical (AC2b).
       This is the only detector for a real `sleep` that was acting as an
       undeclared synchronization barrier — that failure is intermittent and
       invisible to a single run.
-- [ ] **2.3c** Record the after wall clock + the CPU floor (`user + sys`) for AC1;
+- [x] **2.3c** Record the after wall clock + the CPU floor (`user + sys`) for AC1;
       confirm no single test block exceeds 60 s.
 - [x] **2.3d** Hot-spin probe (T7): arm a large `MOCK_CRON_INFLIGHT_FILE` countdown
       with the default `CRON_DRAIN_TIMEOUT` and confirm the invocation cap aborts
@@ -119,7 +119,7 @@ not renumber one file without the other.
       → `0`. Do **not** use the pattern `~12s of slack`: that phrase is split
       across `:607`/`:608` and can never match a line-oriented grep, while its
       only single-line occurrence sits inside the block 3.3a replaces anyway.
-- [ ] **3.3c** Push, and require a **green `deploy-script-tests` run at the new
+- [x] **3.3c** Push, and require a **green `deploy-script-tests` run at the new
       ceiling** with `job_secs ≤ 0.5 × ceiling` before ship (AC7). A YAML grep
       alone cannot show the ceiling holds.
 
