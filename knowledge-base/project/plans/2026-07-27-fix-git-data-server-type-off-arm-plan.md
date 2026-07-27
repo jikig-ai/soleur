@@ -459,8 +459,17 @@ bypassable (the gate carries no `[ack-destroy]`):
    provisioned → `out_of_scope ≥ 6` → **abort before the stock preflight is reached**.
 
 And there is no `git-data-host-create` in the `apply_target` enum — only `web-host-create`
-(#6730/ADR-145). **The only remaining route is an operator-local untargeted `terraform apply`
-across the whole prod root**, which runs neither the destroy-guard nor the stock preflight.
+(#6730/ADR-145).
+
+<!-- lint-infra-ignore start -->
+<!-- DESCRIPTIVE, not prescriptive: this sentence records what the only remaining route WOULD be
+     in order to argue that it is NOT a route and must not be taken. The single imperative in the
+     surrounding paragraph is a negation ("nothing in it makes the host bornable"), and #6977 was
+     filed precisely so that no human runs this. Same posture as ADR-115's authority note. -->
+**The only remaining route is an operator-local untargeted `terraform apply` across the whole prod
+root**, which runs neither the destroy-guard nor the stock preflight — and a plan taken 2026-07-27
+showed that apply carrying **9 destroys**. It is named here to be refused, not followed.
+<!-- lint-infra-ignore end -->
 
 **Filed as #6977** (additive birth path, mirroring `web-host-create`'s inverted gate), which now
 sits in the downstream chain between this repin and the birth. This PR still merges safely — it
