@@ -504,20 +504,29 @@ the honest current state, not a new instrumentation surface.
 
 ```yaml
 liveness_signal:
-  what: betteruptime_heartbeat.git_data_prd (armed at 230s, apply-web-platform-infra.yml:976)
-  cadence: 60s expected / 180s grace
-  alert_target: Better Stack
+  what: betteruptime_heartbeat.git_data_prd — DECLARED ONLY, NOT armed
+  live_verification: ABSENT from Better Stack (live GET /api/v2/heartbeats, 2026-07-27:
+    7 heartbeats returned, none is soleur-git-data-prd — not paused, nonexistent).
+    Source declares paused=true with ignore_changes=[paused], and the arm_one call in
+    apply-web-platform-infra.yml no-ops because the address is not in tfstate (#6548).
+  cadence: 60s expected / 180s grace — DESIGNED values; nothing emits a beat today
+  alert_target: Better Stack (once #6548 arms it)
   configured_in: apps/web-platform/infra/git-data.tf + apply-web-platform-infra.yml
 error_reporting:
-  destination: cloud-init failure is fail-closed at boot — `sha256sum -c -` aborts the Doppler
-    install, and git-data-bootstrap.sh fails loud on any unmet invariant
-  fail_loud: true
+  destination: NONE off-host. This corrects the claim that stood here: `sha256sum -c -` does
+    NOT abort the Doppler install (that runcmd item carries no `set -e`), and the LUKS block's
+    `set -euo pipefail` is inside the heredoc `doppler run` executes, so a missing or wrong-arch
+    binary never reaches it. A failed boot exits non-zero inside cloud-init and leaves NO signal
+    off the host. git-data-bootstrap.sh does fail loud on an unmet invariant — but on-host only.
+  fail_loud: false
 failure_modes:
   - mode: wrong-arch Doppler binary selected (the defect this PR structurally prevents)
     detection: FR6b lifecycle.precondition at PLAN time — the ONLY mechanism that catches this.
       NOT the checksum -- see R3, the checksum is selected BY the same derived arch, so it
       verifies the tarball it just chose and passes. Residual runtime symptom is
-      "Exec format error" at `doppler run`, on a deny-all host whose beat is paused (#6548).
+      "Exec format error" at `doppler run`, on a deny-all host whose heartbeat does not exist
+      at all (#6548) and which ships no logs off-box.
+    residual_layer: NONE — off-keyboard until #6548 arms the beat and a log shipper lands.
     alert_route: terraform plan fails before apply
   - mode: phantom / nonexistent server type (the cx32-class destroy-before-fail)
     detection: data.hcloud_server_type.git_data catalog lookup at plan (FR6) -- live ONLY
@@ -525,13 +534,20 @@ failure_modes:
     alert_route: apply aborts before any destroy
   - mode: declared type left the ORDERABLE set (distinct from phantom -- cax11 resolves fine
       in the catalog, so FR6 would never have caught this PR's own defect)
-    detection: stock-preflight-gate.sh at dispatch (live /v1/datacenters .server_types.available)
-    alert_route: apply aborts before any destroy
+    detection: stock-preflight-gate.sh reads .change.after.server_type from the plan JSON, so it
+      picks up cpx22 with no edit. UNREACHABLE ON A BIRTH TODAY: the destroy-guard runs earlier in
+      the same step and hard-aborts a pure CREATE, so the preflight below it never executes
+      (#6977). It is live on the REPLACE path only, and arms for births once #6977 lands.
+    alert_route: apply aborts before any destroy (replace path)
 logs:
-  where: host journald → Vector → Better Stack (post-birth only)
-  retention: Better Stack default
+  where: NONE. cloud-init-git-data.yml installs no log shipper — measured 0 occurrences of
+    vector/betterstack/journald, against 31/11/5 in cloud-init-inngest.yml and 14/2/7 in
+    cloud-init.yml. Boot failures are readable only in on-host /var/log/cloud-init-output.log,
+    over the private net, on a deny-all-public-ingress host. Tracked as a birth blocker.
+  retention: n/a
 discoverability_test:
-  command: cd apps/web-platform/infra && terraform plan
+  command: cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform
+    --name-transformer tf-var -- terraform plan -target=hcloud_server.git_data -no-color
   expected_output: hcloud_server.git_data planned with server_type = "cpx22"
 ```
 
@@ -691,7 +707,12 @@ planned file path (`infra/variables.tf`, `infra/git-data.tf`, `cloud-init-git-da
   download token `amd64` / `arm64`. A precondition written the way v1 described it in prose —
   comparing the two directly — is `"amd64" == "x86"`, **false on every plan forever**, wedging the
   whole root including unrelated applies. Map explicitly (Phase 2), and let AC4b assert the mapping.
-- **`sha256sum -c -` is not the fail-closed point, and its runcmd item has no `set -e`.** A failing
-  checksum does not stop the following `tar xzf`. The boot does still fail closed, but **downstream**
-  — no `doppler` binary → the `doppler run` at the LUKS block (which *does* carry
-  `set -euo pipefail`) exits 1. Name the real abort point in any runbook; do not credit the checksum.
+- **`sha256sum -c -` is not the fail-closed point — and NOTHING here is.** Its runcmd item has no
+  `set -e`, so a failing checksum does not stop the following `tar xzf`. Corrected at review: the
+  boot does **not** fail closed downstream either. The `doppler run` at the LUKS block does carry
+  `set -euo pipefail`, but that is line 1 of the heredoc `doppler run` EXECUTES — on a missing or
+  wrong-arch binary `doppler run` never execs and the line runs zero times. cloud-init also
+  concatenates `runcmd` into one non-`-e` script, so the item merely exits non-zero and boot
+  continues, leaving sshd up and the LUKS volume unmounted with no off-host signal. Any runbook must
+  name the plan-time precondition as the only guard that fires; credit neither the checksum nor that
+  `set -e`.
