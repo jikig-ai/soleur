@@ -3989,6 +3989,13 @@ echo "--- #6525 T-6525-8 (M10/M11): DEFAULT schedule (var UNSET) retries — exa
 T6525=$(mktemp -d)
 export MOCK_GHCR_PULL_TRANSIENT_ALWAYS=1
 unset PULL_TRANSIENT_RETRY_SLEEPS   # exercise the PROD default (2 4) — the wiring M10 leaves untested
+# This arm needs the RECORDING mock installed regardless of a suite-wide MOCK_SLEEP_REAL=1 opt-out:
+# $MOCK_SLEEP_LOG is its only observation channel for the schedule VALUES, and under the opt-out the
+# mock is absent, nothing records, and the assertion below fails on an empty log rather than on a
+# real regression. Force it on for this arm only, then restore the caller's choice. (Found by
+# Scenario T2 — running the whole suite under MOCK_SLEEP_REAL=1 turned this test red at 183/184.)
+T8_SLEEP_REAL_SAVED="${MOCK_SLEEP_REAL:-}"
+unset MOCK_SLEEP_REAL
 export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
 export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
 # Record the sleep ARGUMENTS, not just the call count. The pull-count assertion below pins how MANY
@@ -4008,6 +4015,8 @@ else
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
 unset MOCK_GHCR_PULL_TRANSIENT_ALWAYS MOCK_SLEEP_LOG MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+if [[ -n "$T8_SLEEP_REAL_SAVED" ]]; then export MOCK_SLEEP_REAL="$T8_SLEEP_REAL_SAVED"; fi
+unset T8_SLEEP_REAL_SAVED
 rm -rf "$T6525"
 
 # T-6525-9 (pattern/code-quality F1): PULL_TRANSIENT_RETRY_SLEEPS="" DISABLES the retry. This locks

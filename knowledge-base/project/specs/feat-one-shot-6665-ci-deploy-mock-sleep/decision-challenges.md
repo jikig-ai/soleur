@@ -60,6 +60,23 @@ survive into the final AC list. Note the AC *numbers* were compacted when four
 criteria were cut, so the plan's current AC6 is a different, unrelated criterion
 (the stale `~12s of slack` grep); the cut one has no surviving number to cite.
 
+**MEASURED AT /work — keeping the opt-out paid for itself immediately, but not
+for the reason the plan gave.** The plan defended the opt-out as enabling the T2
+attribution probe. T2 did confirm attribution (opt-out run 8m50.139s vs 8m56.685s
+baseline). But its actual value was different and larger: **T2 failed, 183/184**,
+exposing a defect this PR had introduced. T-6525-8's new schedule assertion reads
+`$MOCK_SLEEP_LOG`, which only exists when the mock is installed — so under
+`MOCK_SLEEP_REAL=1` it failed on an empty log rather than on a real regression.
+Fixed by forcing the mock on for that one arm and restoring the caller's value.
+
+The honest reading cuts both ways. It is **not** evidence that the opt-out is
+load-bearing in production terms — with DC-2 adopted (no opt-out at all) the
+defect could not have existed, because nothing could have disabled the recorder.
+What it does show is that a knob with zero consumers is not automatically inert:
+adding it created a reachable state in which a test silently loses its
+observation channel, and only exercising that state caught it. The opt-out is
+kept, and the arm that depends on the recorder now defends itself against it.
+
 ---
 
 ## DC-3 — Drop the `$MOCK_SLEEP_LOG` recording rider entirely

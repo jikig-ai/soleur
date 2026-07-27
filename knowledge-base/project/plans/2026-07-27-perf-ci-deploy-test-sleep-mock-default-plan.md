@@ -468,13 +468,36 @@ result. `decision-challenges.md` is rendered by ship Phase 6.
 
 ### Pre-merge (PR)
 
-- **AC1** The suite's wall clock is reported before and after on clean solo local
-  runs (baseline measured: `8m58.232s`; gate-forced-on counterfactual:
-  `4m23.728s`), together with the **measured CPU floor** (`user + sys`;
-  counterfactual: ~117 s). The PR states the seconds eliminated and whether
-  120 s was reached. **An evidenced miss of 120 s is acceptable; a silent one is
-  not** — the floor is a property of process-spawn cost, not of sleeps (§R2).
-  Additionally: no single test block exceeds 60 s.
+- **AC1** The suite's wall clock is reported before and after, locally **and on
+  CI**, with the seconds eliminated and whether 120 s was reached.
+  **An evidenced miss of 120 s is acceptable; a silent one is not.**
+
+  **Measured at /work.** Local (this machine, clocked at ~1.4-1.5 GHz against a
+  5.0 GHz max — see §R2):
+
+  | Run | wall | user+sys | result |
+  | --- | --- | --- | --- |
+  | baseline | 8m56.685s | 118.4 s | 184/184 |
+  | after (4 unloaded) | 3m40.010s / 4m14.428s / 4m16.179s / 4m46.432s | 136.6-157.2 s | 184/184 each |
+  | after (under full CPU load) | 8m14.777s | 159.9 s | 184/184 |
+  | `MOCK_SLEEP_REAL=1` | 8m50.139s | 121.8 s | 184/184 (after the T2 fix) |
+
+  **CI** (`Run ci-deploy.sh tests` step): **399-409 s → 22-25 s**, i.e. ~94 %
+  removed, ~384 s per run. 24 pre-change runs vs 3 post-change runs.
+
+  **120 s verdict, stated honestly both ways:** MET on CI (22-25 s, ~5× inside
+  the target — this is where the budget the issue is about is actually spent);
+  MISSED locally (best 3m40s). The local miss is *evidenced*, and §R2 names its
+  cause as operator-hardware throttling rather than an inherent floor.
+
+  **One honest wrinkle: local CPU time went slightly UP** (118 s → 137-157 s),
+  not down. Part is the mock's own bookkeeping — it is a bash script doing two
+  small file operations per call, where the real `sleep` is a C binary that
+  mostly blocks — and part is run-to-run variance (the after-runs alone span
+  136.6-157.2 s, and the baseline ran first, when sibling worktrees were idlest).
+  The measurement does not separate the two, so no causal split is claimed. It
+  does not affect the result: wall clock is what the CI budget spends, and it
+  halved locally and fell 94 % on CI.
 - **AC2** `=== Results: 184/184 passed, 0 failed ===`, **and** the sorted
   PASS-name-set diff before vs after contains **no added and no removed PASS** —
   i.e. every difference is a line-for-line substitution whose replacement is an
@@ -618,7 +641,7 @@ and file as `action-required`, per ADR-084.
 | # | Scenario | Expected |
 | --- | --- | --- |
 | T1 | Full suite, default (no env) | `184/184 passed`; wall clock ≪ baseline; PASS name-set identical to baseline |
-| T2 | Full suite with `MOCK_SLEEP_REAL=1` | Still `184/184`; wall clock ≈ baseline — proves the opt-out is wired **and** that the speedup came from the mock, not an accidental skip |
+| T2 | Full suite with `MOCK_SLEEP_REAL=1` | Still `184/184`; wall clock ≈ baseline — proves the opt-out is wired **and** that the speedup came from the mock, not an accidental skip. **RESULT: caught a real defect on first run — 183/184.** Wall clock was 8m50.139s vs the 8m56.685s baseline, so the opt-out was wired correctly and the attribution held; but T-6525-8 failed with `sched=''`, because under the opt-out the recording mock is absent and its only observation channel disappears. Fixed by forcing the mock on for that arm alone and restoring the caller's value afterwards. This is the scenario DC-2 proposed deleting. |
 | T3 | T-6525-8 with `ci-deploy.sh:1437` default mutated to `9 9` | **FAIL** on the schedule assertion |
 | T4 | T-6525-9 (`PULL_TRANSIENT_RETRY_SLEEPS=""`, `max=0`) | PASS with exactly 1 pull — the `-` vs `:-` empty-means-empty contract untouched |
 | T5 | Trap-isolation test (`:2466-2567`) under the inverted default | PASS — structurally outside the mock PATH; `sleep 30 &` still real |
