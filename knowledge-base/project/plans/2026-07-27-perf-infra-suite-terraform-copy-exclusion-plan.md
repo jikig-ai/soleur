@@ -154,6 +154,39 @@ Run-to-run spread on the prescribed variant is 7.2–9.6s (±17% around ~8.3s), 
 smaller than the 2.1s improvement over baseline but not by a wide margin — AC3 is therefore
 written as "does not regress", not as a point estimate.
 
+### /work deviation (2026-07-27): the fast path was measured OUT
+
+**The prescribed `[[ -e "$1/.terraform" ]] || { cp -r "$1"/. "$2"/; return; }` fast path is NOT
+in the shipped change.** Its justification below did not reproduce at implementation time, and
+plan-quoted numbers are preconditions to re-derive, not facts.
+
+Re-measured with an **interleaved A/B harness** (variants alternate run-by-run, so thermal drift
+and sibling load hit both arms equally — the plan's sequential 3-run blocks do not control for
+this, which is the most likely source of its 11.04s figure):
+
+| Cold root (CI's only shape), 5 interleaved pairs | Median |
+|---|---|
+| WITH the fast path | 6.86s |
+| WITHOUT it (shipped) | **6.60s** |
+
+No saving — if anything the branch costs slightly more. The plan predicted 11.04s vs 7.18s; the
+11s arm did not reproduce in any of 5 pairs.
+
+Removing it also **closes a coverage hole the plan did not consider**: CI is always cold, so with
+a fast path CI would never execute the `GLOBIGNORE` line at all — and the step-5 pin, whose whole
+job is to catch a regression in that line, would be shortcut around on every CI run. AC3a's
+control was verified against the shipped branchless form and correctly reports
+`copy/diff pair BROKEN` → `PASS=28 FAIL=1`.
+
+**Consequence for AC3b:** it is retained as a cold-root non-regression gate, but its expected
+delta changes from "faster (9.81s → 7.18s)" to "flat within noise". Measured: origin/main 5.76s
+vs this PR 5.89s over 5 interleaved pairs — a +0.13s median difference that is *expected and
+explained*, because this PR adds a 29th assertion (the pin costs one extra copy + full-tree diff
+on every run, cold included). AC3b passes as "does not regress", not as "improves".
+
+The `find -exec` rejection stands and was re-measured (18.0 / 20.1s vs this form's warm median),
+though the plan's exact 44.6s is machine-specific and is not reproduced here.
+
 ### The cold root — the only shape CI actually runs
 
 Premise-validation row 5 establishes that CI never has a `.terraform`. So the *warm*
@@ -386,11 +419,14 @@ diff surviving).
   `TMPROOT` is **< 250 MB** — measured 5 MB, was 3,980 MB. *Threshold basis:* ~6% of the
   4.0 GB tmpfs, i.e. a footprint that stays safe with all 6 parallel runner slots occupied
   and survives growth of both the battery and the infra root. Report the 3-run spread.
-- **AC3** Median suite wall-clock over **3 runs** under the benchmark does **not regress**
-  versus the 10.4s BEFORE figure (measured 7.2 / 8.0 / 9.6s → median 8.0s). Median, not
-  best-of, because the run-to-run spread (±17%) is comparable to the improvement. This is
-  the gate that catches all three measured traps: `find -exec` (44.6s), `fresh_sbx`-alone
-  (14.2s), and a per-mutation pin (16.5–17.9s). Report all 3 runs.
+- **AC3** Median suite wall-clock under the warm benchmark does **not regress** versus the
+  re-derived BEFORE figure. Median, not best-of, because the run-to-run spread is comparable
+  to the improvement. This is the gate that catches the measured traps: `find -exec`,
+  `fresh_sbx`-alone, and a per-mutation pin. **Re-derived at /work over 5 interleaved pairs:
+  origin/main 9.79s → this PR 5.71s (−42%), every pair favouring this PR.** (The plan's
+  sequential BEFORE figure of 10.4s re-measured as 8.8s on a plain 3-run block and 9.79s
+  interleaved — the interleaved figure is the one AC3 is judged against, since it is the only
+  one that controls for drift between the two arms.)
 - **AC3a** *(non-vacuity control — scratch copy only, never committed)* A `copy_scan_tree`
   replaced by a bare `cp -r "$1"/* "$2"/` makes the step-5 pin report
   `FAIL: copy/diff pair BROKEN` → `PASS=28 FAIL=1`. Verified during planning; re-verify at
@@ -401,9 +437,13 @@ diff surviving).
   trivially symmetric and a broken implementation emits the same message as a correct one.
   Any control added later must be checked for this.)*
 - **AC3b** **Cold-root control — the only shape CI runs.** With **no** `.terraform` in
-  `CRED_GUARD_INFRA_ROOT`, median wall-clock over 3 runs does not regress versus
-  `origin/main` (measured: origin 9.81s → prescribed 7.18s; **without the fast path,
-  11.04s — a regression**). AC3 gates only the warm benchmark and cannot catch this.
+  `CRED_GUARD_INFRA_ROOT`, median wall-clock does not regress versus `origin/main`. AC3 gates
+  only the warm benchmark and cannot catch this. **Re-derived at /work over 5 interleaved
+  pairs: origin/main 5.76s → this PR 5.89s — flat within a 5.4–8.2s spread.** The +0.13s is
+  expected and explained: this PR adds a 29th assertion (the pin costs one extra copy +
+  full-tree diff on every run, cold included). The plan's original prediction (9.81s → 7.18s,
+  with a fast path required to avoid an 11.04s regression) did not reproduce — see
+  *"/work deviation: the fast path was measured OUT"*.
 - **AC4** `bash apps/web-platform/infra/run-registered-suites.sh` reports **72 passed, 0
   failed**. Required because this edits a *registered* infra suite and `scripts/test-all.sh`
   does not cover `apps/web-platform/infra/` — the coverage boundary of

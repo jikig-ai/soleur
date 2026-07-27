@@ -61,6 +61,39 @@ fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; [[ -n "${2:-}" ]] && echo "     
 TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT INT TERM HUP
 
+# `.terraform/` is a gitignored Terraform provider cache (~162 MB once `terraform init` has run)
+# holding zero .tf/.sh/.service/.yml files — nothing the scanner reads. Copying it into all 24
+# sandboxes peaked TMPROOT at a measured 3,980 MB against a /tmp that is a 4.0 GB tmpfs shared by
+# the 6 parallel slots of run-registered-suites.sh.
+#
+# GLOBIGNORE (not `find -exec`, not `shopt`): setting it non-null implicitly enables dotfile
+# matching, so `.gitignore` and `.terraform.lock.hcl` are still copied — a bare `cp -r "$1"/*`
+# would silently DROP them, and `diff -rq` would then report "Only in $REAL_ROOT" on every
+# sandbox, permanently satisfying assert_mutated and re-introducing the exact vacuity bug this
+# change exists to fix. The copy/diff pair pin below is what holds that property down.
+#
+# One `cp` invocation is deliberate: `find "$1" -mindepth 1 -maxdepth 1 -name .terraform -prune
+# -o -exec cp -r {} "$2"/ \;` forks per entry (~236 of them) and measured 18.0/20.1s against this
+# form's 8.3s median on the warm root. Assumes $1 holds no glob metacharacters — true for
+# mktemp/SCRIPT_DIR paths.
+#
+# Deliberately branchless. An `[[ -e "$1/.terraform" ]] || { cp -r "$1"/. "$2"/; return; }` fast
+# path was prescribed and measured OUT: interleaved A/B over 5 pairs on the cold root (CI's only
+# shape — the `deploy-script-tests` job runs no `terraform init`) gave 6.86s WITH the fast path
+# vs 6.60s without, i.e. no saving. It also costs coverage: CI is always cold, so a fast path
+# would mean CI never executes this GLOBIGNORE line at all and the pin below could not catch a
+# regression in it. Re-derive before re-adding:
+#   bash <bench> --cold --interleaved 5   # see PR body for the harness
+copy_scan_tree() {
+  ( GLOBIGNORE="$1/.terraform"; cp -r "$1"/* "$2"/; )
+}
+
+# Sandboxes were never reclaimed until the EXIT trap, so all 24 were concurrently resident.
+# Reclaiming the previous one first bounds the footprint at a single tree and keeps the last
+# sandbox alive for post-mortem. Cheap ONLY because of the exclusion above (rm -rf of ~4.5 MB,
+# not 166 MB) — on its own this measured a wall-clock REGRESSION.
+fresh_sbx() { rm -rf "$TMPROOT"/sbx.*; mktemp -d "$TMPROOT/sbx.XXXXXX"; }
+
 # --- the scanner (stages 1-3 + census), written once to a temp OUTSIDE any scanned tree ---------
 SCANNER="$TMPROOT/scanner.py"
 cat > "$SCANNER" <<'PYEOF'
@@ -350,7 +383,14 @@ def read(path):
 
 def enumerate_units(root):
     units = []
-    for dp, _dirs, files in os.walk(root):
+    for dp, dirs, files in os.walk(root):
+        # `.terraform/modules/` holds real .tf files as soon as any `module {}` block with a
+        # registry/git source is added. The REAL_ROOT scan would then enumerate units from
+        # vendored third-party code while every sandbox scan does not — a RED on the real tree
+        # over code the team does not own and cannot fix. Zero `module` blocks exist today, so
+        # this is behaviour-preserving now and cheap insurance later. `dirs[:]` in-place
+        # assignment is required — rebinding `dirs` does not prune the walk.
+        dirs[:] = [d for d in dirs if d != '.terraform']
         for fn in sorted(files):
             path = os.path.join(dp, fn)
             if fn.endswith('.test.sh'):  # test fixtures build unit strings; never real defs
@@ -493,18 +533,38 @@ fi
 # assert-mutated, RED-after, finding-text attribution to the mutated unit/script + reason/target.
 # ---------------------------------------------------------------------------------------------
 echo ""
+# Copy/diff pair pin (ONCE, not per-mutation: this is a property of copy_scan_tree, not of any
+# individual mutation). A fresh copy MUST diff-clean against the source under the same exclusion —
+# otherwise assert_mutated below can never report "mutation did not land" and every broken
+# mutation is misattributed to the scanner. Placement decided by measurement: running this inside
+# expect_red costs ~9s (20 extra full-tree recursive diffs) and regresses the suite; hoisted here
+# it costs ~0.4s and pins the identical property.
+_pin_sbx="$(mktemp -d "$TMPROOT/pin.XXXXXX")"
+copy_scan_tree "$REAL_ROOT" "$_pin_sbx"
+if diff -rq --exclude=.terraform "$REAL_ROOT" "$_pin_sbx" >/dev/null 2>&1; then
+  pass "copy/diff pair intact: a fresh copy_scan_tree copy diff-cleans against the source"
+else
+  fail "copy/diff pair BROKEN: fresh copy differs from source (assert_mutated is now vacuous)" \
+    "$(diff -rq --exclude=.terraform "$REAL_ROOT" "$_pin_sbx" 2>&1 | head -3)"
+fi
+rm -rf "$_pin_sbx"
+
+echo ""
 echo "--- AC3: mutation battery (each must independently drive RED, attributed) ---"
 
 expect_red() {
   # expect_red <label> <attribution-substring> <mutate-fn>
   local label="$1" attrib="$2" mutate_fn="$3"
-  local sbx; sbx="$(mktemp -d "$TMPROOT/mut.XXXXXX")"
-  cp -r "$REAL_ROOT"/. "$sbx"/
+  local sbx; sbx="$(fresh_sbx)"
+  copy_scan_tree "$REAL_ROOT" "$sbx"
   if ! python3 "$SCANNER" "$sbx" >/dev/null 2>&1; then
     fail "$label: fresh copy not GREEN before mutation (latent FAIL — attribution unsafe)"; return 0
   fi
   "$mutate_fn" "$sbx"
-  if diff -rq "$REAL_ROOT" "$sbx" >/dev/null 2>&1; then
+  # --exclude is load-bearing, not cosmetic: $sbx no longer holds .terraform, so an unexcluded
+  # diff can NEVER report the trees identical — assert_mutated would pass unconditionally and
+  # every broken mutation would be misreported as a vacuous guard.
+  if diff -rq --exclude=.terraform "$REAL_ROOT" "$sbx" >/dev/null 2>&1; then
     fail "$label: mutation did not change the tree (assert_mutated failed)"; return 0
   fi
   local out rc
@@ -700,8 +760,8 @@ echo "--- AC4 + GREEN pins (no false positives) ---"
 expect_green() {
   # expect_green <label> <mutate-fn>
   local label="$1" mutate_fn="$2"
-  local sbx; sbx="$(mktemp -d "$TMPROOT/grn.XXXXXX")"
-  cp -r "$REAL_ROOT"/. "$sbx"/
+  local sbx; sbx="$(fresh_sbx)"
+  copy_scan_tree "$REAL_ROOT" "$sbx"
   "$mutate_fn" "$sbx"
   local out rc
   out="$(python3 "$SCANNER" "$sbx" 2>&1)" && rc=0 || rc=$?
