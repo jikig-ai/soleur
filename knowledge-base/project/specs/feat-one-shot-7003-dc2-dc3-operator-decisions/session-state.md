@@ -7,7 +7,7 @@
 
 ### Errors
 - `iac-plan-write-guard` PreToolUse hook blocked the first plan write (a quoted `systemctl enable …` evidence string in a premise table). Resolved by removing the literal rather than opting out of the gate.
-- `lint-infra-no-human-steps.py` failed on one Research Reconciliation row (`-target … operator-applied` matched the `-target … applied` imperative plus a bare `operator` actor). Resolved by rewording to "per-PR target set xor operator exclusion list". Final run: `OK: no human-run infra steps in 4 scanned file(s)`.
+- `lint-infra-no-human-steps.py` failed on one Research Reconciliation row: the exclusion-list phrasing tripped both halves of its actor-plus-imperative predicate at once. Resolved by rewording to "per-PR target set xor operator exclusion list" rather than by adding an ignore-region.
 - No blocking errors remain. Deepen-plan halts 4.5–4.10 pass; gate suite green at `21 passed, 0 failed`.
 
 ### Decisions
@@ -15,7 +15,7 @@
 - ADR-149 states its checklist size in **three** places — its own prose (en dash `2–7`), the gate header (`(2)-(7)`), and the gate RELEASED message (ASCII `2-7`) — and nothing in CI compares them. Two plan reviewers found this independently. All three become **universally quantified** ("every other item") rather than incremented, so a future item 9 never re-opens the drift.
 - **Commenting alone is insufficient on both issues.** #7003's body still says "still open" twice and poses the exact question DC-2 answers (DC-1's resolved heading in the same body is the in-file precedent for the fix); #6982's body is a 7-checkbox list that never names ADR-149. Both bodies get edited, then #7003 closes.
 - **GitHub side effects move post-merge**, using `Ref #7003` rather than `Closes #7003`. They are irreversible while the merge is not — an abandoned PR would leave the escalation discharged with nothing on `main`, and ADR-138's SLA cron cannot reopen it because a human touch vetoes its auto-close.
-- The DC-2 mandate goes in the gate's **HOLD** message, not RELEASED — HOLD is what a dispatch prints today, i.e. what the #6982 implementer reads *before* the work.
+- The DC-2 mandate's primary home is the gate's **HOLD** message — HOLD is what a dispatch prints today, i.e. what the #6982 implementer reads *before* the work. Review moved it out of HOLD's numbered "TO RELEASE" list into a following note: a release list whose item says *delete the interlock* is incoherent, and a new "5." misread as ADR item 5 because HOLD 1–4 aligned 1:1 with ADR 1–4. RELEASED names it too, inside a count-free enumeration of every unchecked item (review found the first draft had dropped that enumeration, losing `GIT_DATA_SSH_HOST` from the operator-facing text).
 - Two scope calls: DC-3's mechanical constraints are added to ADR-149 item 5 (the obligation they constrain), but the separately-discovered ADR-149 item 3 gap (a fourth registry, `OPERATOR_APPLIED_EXCLUSIONS`, absent from its "all three" enumeration) is routed to the #6982 comment rather than edited into the ADR, because it is a question the operator did not decide.
 
 ### Components Invoked

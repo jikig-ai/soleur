@@ -489,7 +489,17 @@ Each command is scoped to a named file — a repo-wide grep would self-match thi
   `### Interlock release checklist` heading (i.e. inside `### The birth-readiness interlock`).
 - **AC9 — Phase 3 landed in all three gate locations:**
   `grep -c 'It cannot check the remaining items' <gate>` = **1** (header),
-  `grep -c 'Replace this gate.s own mechanism' <gate>` = **1** (HOLD),
+  `grep -c 'replace THIS GATE.s own' <gate>` = **1** (HOLD),
+
+  > **AC9b amended at review time (2026-07-27), explicitly rather than silently.** The original
+  > literal was `Replace this gate.s own mechanism`, which pinned the mandate as **item 5 of HOLD's
+  > numbered `TO RELEASE THIS INTERLOCK` list**. Review rejected that placement on two grounds: a
+  > release list whose item instructs the reader to *delete the interlock* is incoherent (completing
+  > it does not release the gate, it removes it), and HOLD items 1–4 aligned 1:1 with ADR items 1–4,
+  > so a new "5." reads as ADR item 5 (`GIT_DATA_SSH_HOST`) which it is not. The mandate stays in
+  > HOLD — that audience argument was and remains correct — but as a note **after** the numbered
+  > list. The AC is re-pinned to the new text rather than relaxed; it still asserts the mandate is
+  > present in the HOLD message.
   `grep -c 'EVERY OTHER item on the ADR-149 release checklist' <gate>` = **1** (RELEASED), and
   `grep -c 'NOT machine-checked' <gate>` ≥ 1 (the substring the suite asserts on).
 - **AC10 — the edited Alternatives row still renders.** `awk '{n=gsub(/\|/,"|"); print NR, n}' <adr>`
