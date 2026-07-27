@@ -50,14 +50,14 @@ eval "$(echo "$INPUT" | jq -r '@sh "CMD=\(.tool_input.command // "") WORK_DIR=\(
 # stays on $CMD so a REAL create's quoted body is still read (its flags live
 # outside the stripped span).
 SCAN=$(strip_command_bodies "$CMD")
-if ! echo "$SCAN" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create(\s|$)'; then
+if ! grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create(\s|$)' <<<"$SCAN"; then
   exit 0
 fi
 
 # Only fire when the create includes the `follow-through` label. We accept
 # either `--label follow-through` (single use) or `--label "follow-through"`
 # (quoted) — both shapes appear in /ship Phase 7 Step 3.5.
-if ! echo "$CMD" | grep -qE -- '--label[[:space:]]+["'"'"']?follow-through(["'"'"']|[[:space:]]|$)'; then
+if ! grep -qE -- '--label[[:space:]]+["'"'"']?follow-through(["'"'"']|[[:space:]]|$)' <<<"$CMD"; then
   exit 0
 fi
 
@@ -106,7 +106,7 @@ fi
 
 # Open marker. Mirrors scripts/sweep-followthroughs.sh's awk pattern at
 # the `^<!-- *soleur:followthrough` anchor.
-if ! printf '%s' "$PARSED_BODY" | grep -qE '^[[:space:]]*<!-- *soleur:followthrough'; then
+if ! grep -qE '^[[:space:]]*<!-- *soleur:followthrough' <<<"$PARSED_BODY"; then
   emit_incident "wg-pm-class-followthrough-for-operator-dogfood" deny \
     "Follow-through issues MUST embed the soleur:foll" "$CMD"
   jq -n '{
@@ -120,7 +120,7 @@ if ! printf '%s' "$PARSED_BODY" | grep -qE '^[[:space:]]*<!-- *soleur:followthro
 fi
 
 # Closing marker on the same/subsequent line.
-if ! printf '%s' "$PARSED_BODY" | grep -qE -- '-->'; then
+if ! grep -qE -- '-->' <<<"$PARSED_BODY"; then
   emit_incident "wg-pm-class-followthrough-for-operator-dogfood" deny \
     "Follow-through directive MUST include closing -" "$CMD"
   jq -n '{

@@ -73,7 +73,7 @@ command="$(echo "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
 # The regex anchors `git commit` after one of: start-of-string, whitespace
 # after a chain operator (`&&`, `||`, `;`, `|`), or `$(`. Then requires a
 # trailing space-or-end so `commit-tree` / `commit-graph` are not matched.
-if ! echo "$command" | grep -qE '(^|[[:space:]]|&&|\|\||;|\$\()[[:space:]]*git[[:space:]]+commit([[:space:]]|$)'; then
+if ! grep -qE '(^|[[:space:]]|&&|\|\||;|\$\()[[:space:]]*git[[:space:]]+commit([[:space:]]|$)' <<<"$command"; then
   allow
 fi
 

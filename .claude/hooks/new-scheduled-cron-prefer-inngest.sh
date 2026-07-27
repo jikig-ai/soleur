@@ -77,7 +77,7 @@ esac
 content="$(echo "$payload" | jq -r '.tool_input.content // .tool_input.new_string // empty' 2>/dev/null || true)"
 
 # Override-marker escape hatch — must appear literally in the YAML body.
-if echo "$content" | grep -qF '<!-- gate-override: new-scheduled-cron-prefer-inngest -->'; then
+if grep -qF '<!-- gate-override: new-scheduled-cron-prefer-inngest -->' <<<"$content"; then
   emit adr-033-inngest-cron-canonical bypass "new-scheduled-cron-prefer-inngest: acknowledged opt-out via marker"
   allow
 fi
@@ -109,7 +109,7 @@ fi
 # `cron:` (the cron-expression key inside it) as a YAML key (preceded by
 # whitespace, escaped newline, or start-of-string; followed by newline,
 # escaped newline, end-of-string, or whitespace).
-if ! echo "$content" | grep -Eq '(^|[[:space:]]|\\n)(schedule|cron):([[:space:]]|\\n|$)'; then
+if ! grep -Eq '(^|[[:space:]]|\\n)(schedule|cron):([[:space:]]|\\n|$)' <<<"$content"; then
   allow
 fi
 

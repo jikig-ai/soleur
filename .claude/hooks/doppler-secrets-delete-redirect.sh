@@ -13,8 +13,8 @@ CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 
 # Intercept any Doppler secrets write command (delete, set, upload)
 # Read-only commands (get, download) are safe — they show only requested keys.
-if printf '%s' "$CMD" | grep -qE 'doppler\s+secrets\s+(delete|set|upload)'; then
-  if ! printf '%s' "$CMD" | grep -qE '>\s*/dev/null|>\s*&-|1>\s*/dev/null'; then
+if grep -qE 'doppler\s+secrets\s+(delete|set|upload)' <<<"$CMD"; then
+  if ! grep -qE '>\s*/dev/null|>\s*&-|1>\s*/dev/null' <<<"$CMD"; then
     SUBCMD=$(printf '%s' "$CMD" | grep -oE 'doppler\s+secrets\s+(delete|set|upload)' | awk '{print $3}')
     jq -n --arg subcmd "$SUBCMD" '{
       hookSpecificOutput: {

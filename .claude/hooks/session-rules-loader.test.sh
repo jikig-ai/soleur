@@ -556,13 +556,117 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# ---------------------------------------------------------------------------
+# tmpfs-guard alarm surfacing (#6991).
+#
+# The guard writes these files from cron; this hook is the only channel by
+# which they reach a human. Every arm pins the files to a fixture — the
+# defaults point at the operator's real $HOME, so an unpinned arm would read
+# live machine state and pass or fail for reasons unrelated to the code.
+# ---------------------------------------------------------------------------
+TALARM=$(mktemp -d)
+# Owning trap (ADR-129). The pre-existing T1..T9 fixture dirs above predate the
+# lint and are grandfathered by its diff scoping; this one is new, so it cleans
+# up after itself rather than adding to the /tmp entry count the sibling half of
+# this very PR exists to report on.
+trap 'rm -rf "$TALARM"' EXIT
+setup_repo "$TALARM" docs
+ALARM_FIX="$TALARM/alarm-fixture.log"
+HB_FIX="$TALARM/heartbeat-fixture"
+
+# AC-T1: a healthy machine injects nothing. A banner on every session for a
+# machine with no problem is how the previous channel earned its silence.
+TOTAL=$((TOTAL+1))
+rm -f "$ALARM_FIX" "$HB_FIX"
+ctx_alarm_none=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
+  | jq -r '.hookSpecificOutput.additionalContext')
+if ! printf '%s' "$ctx_alarm_none" | grep -qF '[tmpfs-guard]'; then
+  echo "PASS: AC-T1 no alarm file → nothing injected"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC-T1 injected a tmpfs-guard block with no alarm present"
+  FAIL=$((FAIL+1))
+fi
+
+# AC-T2: an alarm is rendered, and lines 4-6 stay the session-context triple.
+# That positional contract is asserted by AC7/AC11 above; splicing the alarm
+# into the line-4 slot would red them the first time the guard fires, i.e.
+# during the incident, presenting as an unrelated loader regression.
+TOTAL=$((TOTAL+1))
+printf '2026-07-27T10:00:00Z /tmp at 91%% — nothing reapable found.\n' > "$ALARM_FIX"
+ctx_alarm=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
+  | jq -r '.hookSpecificOutput.additionalContext')
+al4=$(printf '%s' "$ctx_alarm" | sed -n '4p')
+al5=$(printf '%s' "$ctx_alarm" | sed -n '5p')
+al6=$(printf '%s' "$ctx_alarm" | sed -n '6p')
+if printf '%s' "$ctx_alarm" | grep -qF '/tmp at 91%' \
+   && [[ "$al4" == '[session-context]'* ]] \
+   && [[ "$al5" == '[session-context]'* ]] \
+   && [[ "$al6" == '[session-context]'* ]]; then
+  echo "PASS: AC-T2 alarm rendered without displacing the lines 4-6 contract"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC-T2 alarm rendering (l4='$al4')"
+  FAIL=$((FAIL+1))
+fi
+
+# AC-T3: the alarm file is cron-written input reaching the top of every agent
+# session. Control characters are stripped and the line is capped, matching how
+# this file already treats the MCP roster and the worktree path.
+TOTAL=$((TOTAL+1))
+{ printf '2026-07-27T10:00:00Z NASTY\001\002CTRL '; head -c 3000 /dev/zero | tr '\0' 'Z'; printf '\n'; } > "$ALARM_FIX"
+ctx_nasty=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
+  | jq -r '.hookSpecificOutput.additionalContext')
+nasty_line=$(printf '%s' "$ctx_nasty" | grep -F '[tmpfs-guard]' | head -1)
+nasty_ctrl=$(printf '%s' "$nasty_line" | tr -cd '\001-\010\013\014\016-\037' | wc -c)
+if [[ "$nasty_ctrl" -eq 0 ]] && [[ "${#nasty_line}" -le 512 ]]; then
+  echo "PASS: AC-T3 alarm content is control-char stripped and length-capped"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC-T3 sanitization (ctrl=$nasty_ctrl len=${#nasty_line})"
+  FAIL=$((FAIL+1))
+fi
+
+# AC-T4: a stale heartbeat reports that the guard stopped running. This is the
+# only signal that can: a dead guard writes no alarms, so an absent alarm file
+# reads as health. An ABSENT heartbeat is not an alarm — it means the guard has
+# never run here (a fresh checkout), which must stay silent.
+TOTAL=$((TOTAL+1))
+rm -f "$ALARM_FIX"
+printf '2026-07-27T09:00:00Z run complete\n' > "$HB_FIX"
+touch -d '-90 minutes' "$HB_FIX"
+ctx_stale=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
+  | jq -r '.hookSpecificOutput.additionalContext')
+touch "$HB_FIX"
+ctx_fresh=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
+  | jq -r '.hookSpecificOutput.additionalContext')
+rm -f "$HB_FIX"
+ctx_absent=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
+  | jq -r '.hookSpecificOutput.additionalContext')
+if printf '%s' "$ctx_stale" | grep -qF 'no completed run' \
+   && ! printf '%s' "$ctx_fresh" | grep -qF 'no completed run' \
+   && ! printf '%s' "$ctx_absent" | grep -qF 'no completed run'; then
+  echo "PASS: AC-T4 stale heartbeat reported; fresh and absent stay silent"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC-T4 heartbeat staleness detection"
+  FAIL=$((FAIL+1))
+fi
+
+# Owning trap (ADR-129) for the #7008 fixtures below. The block above already
+# registers an EXIT trap for $TALARM, and a bare re-register REPLACES it — so
+# this one covers BOTH. Parent-scope append is the shape the ownership lint
+# recognizes (scripts/lint-trap-tempfile-ownership).
+CE7008_TMPDIRS=()
+trap 'rm -rf "$TALARM" ${CE7008_TMPDIRS[@]+"${CE7008_TMPDIRS[@]}"}' EXIT
+
 # ------------- Test 25: stamp denominator counts rule BODIES, not bodies+index ----
 # The fixture repo carries 3 index pointers in AGENTS.md AND 3 rule bodies across
 # the sidecars. A denominator globbed over AGENTS*.md spans BOTH and reports 6 —
 # i.e. "3 of 6" (looks like 50%) when 100% of a 3-rule corpus is loaded. #7008.
 
 TOTAL=$((TOTAL+1))
-T25=$(mktemp -d); setup_repo "$T25" mixed          # mixed → all three classes load
+T25=$(mktemp -d); CE7008_TMPDIRS+=("$T25"); setup_repo "$T25" mixed          # mixed → all three classes load
 out25=$(invoke_hook "$T25")
 ctx25=$(printf '%s' "$out25" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
 stamp25=$(printf '%s' "$ctx25" | head -1)
@@ -600,7 +704,7 @@ fi
 # the bytes; the harness cost scales with bytes, not rule count. #7008 FR2.
 
 TOTAL=$((TOTAL+1))
-T27=$(mktemp -d); setup_repo "$T27" mixed
+T27=$(mktemp -d); CE7008_TMPDIRS+=("$T27"); setup_repo "$T27" mixed
 out27=$(invoke_hook "$T27")
 stamp27=$(printf '%s' "$out27" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
 if printf '%s' "$stamp27" | grep -qE '[0-9]+/[0-9]+B'; then
@@ -617,7 +721,7 @@ fi
 # composed worst case: all three classes + fail-safe note + over-strip note.
 
 TOTAL=$((TOTAL+1))
-T28=$(mktemp -d); setup_repo "$T28" mixed
+T28=$(mktemp -d); CE7008_TMPDIRS+=("$T28"); setup_repo "$T28" mixed
 # Force BOTH notes: a symlinked sidecar trips the fail-safe re-walk, and
 # malformed frontmatter trips the over-strip guard.
 rm -f "$T28/AGENTS.docs.md"; ln -s AGENTS.rest.md "$T28/AGENTS.docs.md"

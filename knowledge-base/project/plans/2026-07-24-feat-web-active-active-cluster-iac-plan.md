@@ -156,6 +156,14 @@ shrinking the surface.
   and `web-hosts-fanout-parity.test.sh`. (`web-1-swap-concurrency-parity.test.sh` is a workflow-membership
   guard, not roster; `plugins/soleur/test/terraform-target-parity.test.ts` only couples in **Phase 5** when
   provisioners drop.)
+  - **(#7000, added 2026-07-27) Two more suites couple in Phase 5**, both under
+    `apps/web-platform/infra/`: `web-host-provisioner-parity.test.sh` (its §1 floor of 15 and its
+    "none is `for_each`'d" assertion both go RED the moment 5.3(c) drops the provisioners — by
+    design, so the drop cannot happen incidentally) and its companion
+    `web-host-provisioner-parity-mutation.test.sh`, whose 17 mutators are anchored on specific
+    resource names and unit bodies (`orphan_reaper_install`, `disk_monitor_install`,
+    `Description=Disk space monitor`, …) and will fail with "anchor drifted" rather than a clean
+    signal. Retire both **with** 5.3(c), in the same PR — not before, not after.
 
 ### Phase 4 — Disposability proof: volume-preserving host reprovision (on non-prod data)
 

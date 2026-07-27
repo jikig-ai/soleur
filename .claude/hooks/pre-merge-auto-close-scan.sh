@@ -65,7 +65,7 @@ CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' || true)
 SCAN=$(printf '%s' "$CMD" | strip_command_bodies || printf '%s' "$CMD")
 
 # Only intercept `gh pr merge` (incl. the `… -- gh pr merge` wrapped form).
-if ! echo "$SCAN" | grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)'; then
+if ! grep -qE '(^|&&|\|\||;|\s--\s)\s*gh\s+pr\s+merge(\s|$)' <<<"$SCAN"; then
   exit 0
 fi
 
