@@ -476,8 +476,17 @@ result. `decision-challenges.md` is rendered by ship Phase 6.
   not** — the floor is a property of process-spawn cost, not of sleeps (§R2).
   Additionally: no single test block exceeds 60 s.
 - **AC2** `=== Results: 184/184 passed, 0 failed ===`, **and** the sorted
-  PASS-name-set diff before vs after is empty. A count match alone does not
-  satisfy this.
+  PASS-name-set diff before vs after contains **no added and no removed PASS** —
+  i.e. every difference is a line-for-line substitution whose replacement is an
+  intentional, named assertion-text change in this PR. A count match alone does
+  not satisfy this.
+  **Measured:** exactly one substitution (`34c34`), T-6525-8's own PASS text,
+  which Phase 1.2 strengthened to name the backoff durations. Zero additions,
+  zero deletions. The v1 wording said the diff must be "empty"; that was written
+  before Phase 1.2 existed and is unsatisfiable alongside it — a strengthened
+  assertion necessarily renames its own PASS line. Restated to assert the
+  property that actually matters (no test silently stopped passing) rather than
+  the proxy that happened to hold at plan time.
 - **AC2b** Five consecutive runs produce **identical** PASS name-sets, at least
   one under artificial CPU load. (Catches the synchronization-barrier race that
   AC2 structurally cannot.)

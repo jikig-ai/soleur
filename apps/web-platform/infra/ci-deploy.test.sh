@@ -670,9 +670,24 @@ MOCK
 # Shared mock scaffold: creates all common mock binaries in $MOCK_DIR.
 # Docker/curl behavior is driven by MOCK_DOCKER_MODE / MOCK_CURL_MODE env vars
 # (see factory docs above). Specialized overrides are rare after consolidation.
-# #6525: opt-in no-op `sleep` mock so a test can exercise the DEFAULT transient backoff schedule
-# (unset PULL_TRANSIENT_RETRY_SLEEPS ⇒ "2 4" = 6 s of REAL sleeps) without the wall-clock cost.
-# Gated on MOCK_SLEEP_NOOP=1 so every OTHER test keeps the real `sleep` (lease/lock/drain timing).
+# No-op `sleep` mock. #6525 added it as an opt-in; #6665 INVERTED the default — create_base_mocks
+# now installs it for EVERY test unless MOCK_SLEEP_REAL=1. Measured: the suite spent ~78% of its
+# 8m57s wall clock voluntarily sleeping (user+sys was only ~118 s), and an opt-in gate means every
+# test written afterwards silently re-pays that, which is how the timeout-minutes bump loop
+# (#6649 → #6650 → #6665) started. The exclusion set is empty at merge: the tests the #6525 comment
+# called out as timing-sensitive ("lease/lock/drain") already opt out through a DIFFERENT seam —
+# they pin CRON_DRAIN_POLL=0 / QUIESCE_PROBE_INTERVAL=0 — so they never paid real sleep anyway.
+#
+# ADR-139 tripwire. The inverted default is safe ONLY while BOTH of these hold; each one, if it
+# stops holding, silently converts a bounded wait into a hot spin rather than into a test failure:
+#   (1) create_mock_seq prints only "1", so every `for i in $(seq 1 N)` loop in ci-deploy.sh runs a
+#       SINGLE iteration. Before #6665 the real `sleep` was a second, undeclared brake on those
+#       loops; removing it leaves create_mock_seq as the SOLE brake. Making that mock emit a real
+#       sequence re-opens the class.
+#   (2) The PATH shadow only catches a BARE `sleep`. A `/bin/sleep` or `command sleep` introduced
+#       into ci-deploy.sh would pay real wall clock and escape both this mock and its cap.
+# The backstop for both is the invocation cap in create_mock_sleep: a time-gated loop reaches it in
+# milliseconds and aborts with a named cause, instead of hanging the job until timeout-minutes.
 create_mock_sleep() {
   cat > "$1/sleep" << 'MOCK'
 #!/bin/bash
@@ -716,7 +731,11 @@ create_base_mocks() {
   create_mock_layer3 "$mock_dir"
   # `if` (not `[[ … ]] && …`): create_base_mocks runs under `set -euo pipefail`, where a bare
   # `[[ false ]] && cmd` statement exits non-zero and aborts the whole suite.
-  if [[ "${MOCK_SLEEP_NOOP:-}" == "1" ]]; then create_mock_sleep "$mock_dir"; fi
+  # #6665: installed by DEFAULT. MOCK_SLEEP_REAL=1 is the opt-out for a test that genuinely needs
+  # real wall clock; no test sets it today, and it is the knob that keeps Scenario T2 (full suite
+  # under real sleeps ⇒ wall clock back at baseline) able to attribute the speedup to this mock
+  # rather than to an accidental skip.
+  if [[ "${MOCK_SLEEP_REAL:-}" != "1" ]]; then create_mock_sleep "$mock_dir"; fi
 }
 
 # Parse .reason and .exit_code out of a ci-deploy.state JSON file.
@@ -3963,12 +3982,12 @@ fi
 # #6525 test overrides PULL_TRANSIENT_RETRY_SLEEPS="0 0", so none exercises the prod wiring — a
 # one-char edit making the default empty (`${VAR-2 4}` → `${VAR-}`) silently reverts to the pre-#6525
 # ZERO-retry bug while staying green. Here the var is UNSET (prod path) so the real "2 4" default is
-# used; MOCK_SLEEP_NOOP=1 no-ops the 6 s of real sleeps so the test stays fast. Assert EXACTLY 3 GHCR
-# pulls (1 + 2 retries) → also pins the retry COUNT (a wrong default like "9 9 9 9 9" would give 6).
+# used; the no-op `sleep` mock (installed by default since #6665) keeps the 6 s of real sleeps off
+# the wall clock. Assert EXACTLY 3 GHCR pulls (1 + 2 retries) → pins the retry COUNT (a wrong default
+# like "9 9 9 9 9" would give 6) — and the recorded schedule below pins their DURATIONS.
 echo "--- #6525 T-6525-8 (M10/M11): DEFAULT schedule (var UNSET) retries — exactly 3 pulls, transient_exhausted ---"
 T6525=$(mktemp -d)
 export MOCK_GHCR_PULL_TRANSIENT_ALWAYS=1
-export MOCK_SLEEP_NOOP=1            # no-op the real "2 4" default sleeps so the test stays fast
 unset PULL_TRANSIENT_RETRY_SLEEPS   # exercise the PROD default (2 4) — the wiring M10 leaves untested
 export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
 export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
@@ -3988,13 +4007,13 @@ else
   FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-8 (rc=$T8_RC ghcr_pulls=$T8_PULLS sched='$T8_SCHED'; expected nonzero + 3 pulls + sched '2 4' + network + transient_exhausted — the DEFAULT '2 4' must produce 2 retries at 2s then 4s; an empty default gives 1 pull)"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
-unset MOCK_GHCR_PULL_TRANSIENT_ALWAYS MOCK_SLEEP_NOOP MOCK_SLEEP_LOG MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+unset MOCK_GHCR_PULL_TRANSIENT_ALWAYS MOCK_SLEEP_LOG MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
 rm -rf "$T6525"
 
 # T-6525-9 (pattern/code-quality F1): PULL_TRANSIENT_RETRY_SLEEPS="" DISABLES the retry. This locks
 # the `-` (not `:-`) default contract: an empty value yields an empty array → max=0 → exactly 1 pull,
 # no retry. Under the old buggy `:-`, empty would fall back to "2 4" and give 3 pulls → this test
-# FAILS, catching the regression. max=0 means no sleep is ever reached, so no MOCK_SLEEP_NOOP needed.
+# FAILS, catching the regression. max=0 means no sleep is ever reached, so the sleep mock is moot here.
 echo "--- #6525 T-6525-9: PULL_TRANSIENT_RETRY_SLEEPS=\"\" DISABLES retry (break-glass lever) — 1 pull ---"
 T6525=$(mktemp -d)
 export MOCK_GHCR_PULL_TRANSIENT_ALWAYS=1
