@@ -6,11 +6,31 @@
 # line cannot express. Rationale: ADR-068 D-SIZE.
 Description=git-data bare-repo maintenance (unreachable-object reclaim)
 Documentation=https://github.com/jikig-ai/soleur/issues/6982
+Wants=network-online.target
 After=network-online.target
+
+# OnFailure= is a [Unit] DIRECTIVE. It was in [Service] until review ran
+# `systemd-analyze verify`, which reports "Unknown key 'OnFailure' in section [Service],
+# ignoring" — i.e. the entire failure-reporting path was dead while both this file and the
+# handler carried comments asserting it pages. A unit FAILURE (OOM kill, missing binary,
+# timeout) routes a stage=gc fatal to Sentry. A per-repo failure does NOT: git-data-gc.sh
+# exits 0 on those so this stays a signal rather than weekly noise.
+OnFailure=git-data-gc-failure.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/git-data-gc.sh
+# Under `doppler run`, exactly like the OnFailure sibling. Without it
+# BETTERSTACK_LOGS_TOKEN is absent from the environment, so git-data-gc.sh's emits are
+# Sentry-only — while the plan's steady-state channel and the runbook's query both read
+# SOLEUR_GIT_DATA_GC from BETTER STACK, which would have returned zero rows forever.
+#
+# That gap was worst in the case it matters: every repo failing to repack exits 0 by
+# design (per-repo failures are reported, not fatal), so OnFailure never fires either —
+# disk climbs, Better Stack shows nothing, and systemctl reports success.
+#
+# --config prd_git_data is the config this host's token is scoped to (#6982 W0).
+ExecStart=/bin/sh -c 'set -a; . /etc/default/git-data-doppler; set +a; \
+  exec doppler run --project soleur --config prd_git_data -- /usr/local/bin/git-data-gc.sh'
 
 # MemoryMax is an OOM boundary for THIS cgroup, so a runaway repack is killed here rather
 # than letting the kernel choose — the other candidates on this host are sshd and the git
@@ -25,12 +45,13 @@ Nice=19
 IOSchedulingClass=idle
 TimeoutStartSec=3600
 
+# HOME is REQUIRED for `doppler run` under a root systemd unit: the CLI resolves its home
+# dir before reading DOPPLER_CONFIG_DIR and dies "Doppler Error: $HOME is not defined".
+# Every other root-doppler unit in this repo sets it (web-git-data-probe.service,
+# web-zot-consumer-probe.service, inngest-cutover-flip.service). ProtectHome is NOT set:
+# it masks /root inside the unit's namespace, which would defeat this.
+Environment=HOME=/root
 ProtectSystem=strict
-ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
 ReadWritePaths=/mnt/git-data /var/lock
-
-# A unit FAILURE (OOM kill, missing binary, timeout) pages. A per-repo failure does not,
-# and git-data-gc.sh exits 0 on those so this stays a signal rather than weekly noise.
-OnFailure=git-data-gc-failure.service

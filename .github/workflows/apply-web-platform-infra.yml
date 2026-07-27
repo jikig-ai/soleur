@@ -4138,48 +4138,84 @@ jobs:
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
         run: |
           set -uo pipefail
-          if [[ -z "${BETTERSTACK_QUERY_HOST:-}" ]]; then
-            echo "::warning::BETTERSTACK_QUERY_* absent — cannot read the boot signal. Verify manually per the runbook before trusting this birth."
-            exit 0
+          # FAIL, do not warn. A `::warning::` inside a 4000-line workflow log is not a
+          # gate, and exiting 0 here reproduces exactly the state this whole interlock
+          # exists to prevent: a GREEN birth job over a host nobody has heard from. The
+          # credentials live in prd_terraform already, so their absence is a repo-config
+          # bug, not an expected operating condition.
+          if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then
+            echo "::error::BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not all present — the boot signal cannot be read, so this birth CANNOT be verified. Refusing to report success. Fix the workflow secrets and re-dispatch (the birth is additive; a re-dispatch is the normal remedy)."
+            exit 1
           fi
 
           # cloud-init on a fresh host: package install, the Doppler download, luksFormat
           # on a 10 GB volume, then the bootstrap. ~6 minutes is the observed envelope on
           # sibling hosts; 20 polls x 30 s bounds it at 10 minutes.
+          #
+          # MODE 1 (raw SQL) TAKES THE QUERY AS THE FIRST POSITIONAL AND NO CONVENIENCE
+          # FLAGS. betterstack-query.sh detects Mode 1 by matching $1 against ^(SELECT|WITH|
+          # SHOW); passing `--since 1h` first makes $1 a flag, so it falls into Mode 2, hits
+          # the SQL as an unrecognised argument and exits 64 having sent ZERO HTTP requests.
+          # The window therefore lives INSIDE the SQL.
+          #
+          # AND DO NOT CAPTURE STDERR INTO THE MATCH BUFFER. betterstack-query.sh echoes the
+          # failing query back on the error path, and that query CONTAINS the literal
+          # 'boot_complete' — so `out=$(… 2>&1)` + `grep -q boot_complete` matches the
+          # script's own error message and reports the boot signal as received on poll 1/20.
+          # A usage error would print "boot signal received" over a host that never booted,
+          # which is precisely the green-light-over-a-dark-host this interlock exists to
+          # prevent. stdout only; rc checked separately; the match is on a PARSED FIELD.
           found=""
           for i in $(seq 1 20); do
-            # Mode 1 raw SQL for FIELD isolation. A bare-substring --grep would match the
-            # shared source's inngest rows quoting issue bodies verbatim. The s3Cluster arm
-            # is REQUIRED, not belt-and-braces: remote() alone covers only the ~40-minute
-            # hot window, and a once-per-boot marker falls out of it immediately.
-            out=$(bash scripts/betterstack-query.sh --since 1h "
-              SELECT dt, JSONExtractString(raw,'message') AS msg,
-                     JSONExtractString(raw,'stage') AS stage,
-                     JSONExtractString(raw,'host_name') AS host
+            # Field-isolated raw SQL: a bare-substring --grep would match the shared source's
+            # inngest rows quoting issue bodies. The s3Cluster arm is REQUIRED, not
+            # belt-and-braces: remote() alone is the ~40-minute hot window and a once-per-boot
+            # marker falls out of it immediately. NOTE remote() takes NO `primary` argument —
+            # only s3Cluster does; the `remote(primary, …)` form needs a NAMED COLLECTION
+            # grant this credential does not have (measured: HTTP 500 ACCESS_DENIED).
+            out=$(bash scripts/betterstack-query.sh "
+              SELECT dt,
+                     JSONExtractString(raw,'stage')        AS stage,
+                     JSONExtractString(raw,'host_name')    AS host,
+                     JSONExtractString(raw,'luks_mounted') AS luks_mounted,
+                     JSONExtractString(raw,'repo_root')    AS repo_root,
+                     JSONExtractString(raw,'hooks_path')   AS hooks_path,
+                     JSONExtractString(raw,'provision')    AS provision
               FROM (SELECT * FROM remote(\$BS_TABLE)
                     UNION ALL SELECT * FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
-              WHERE JSONExtractString(raw,'stage') = 'boot_complete'
+              WHERE dt > now() - INTERVAL 2 HOUR
+                AND JSONExtractString(raw,'stage') = 'boot_complete'
                 AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
-              ORDER BY dt DESC LIMIT 5" 2>&1) || true
-            if printf '%s' "$out" | grep -q 'boot_complete'; then found="$out"; break; fi
-            echo "poll ${i}/20: no boot_complete yet"
+              ORDER BY dt DESC LIMIT 5" 2>/dev/null); rc=$?
+            # Match the PARSED field, not free text. A row is a JSON object carrying
+            # "stage":"boot_complete"; the query text never appears on stdout.
+            if [[ $rc -eq 0 ]] && printf '%s' "$out" | grep -q '"stage":"boot_complete"'; then
+              found="$out"; break
+            fi
+            echo "poll ${i}/20: rc=${rc}, no boot_complete row yet"
             sleep 30
           done
 
           if [[ -z "$found" ]]; then
-            echo "::error::No stage:boot_complete from soleur-git-data within 10 minutes. The apply may be green while the host booted DARK — that is precisely the state this interlock exists to catch. Do NOT treat this birth as complete: check Sentry for a git-data fatal (stage=runcmd_early/sshd_config/doppler_dl/doppler_run/luks_open/bootstrap), and see the runbook's partial-birth decision tree."
+            echo "::error::No stage:boot_complete from soleur-git-data within 10 minutes. The apply may be green while the host booted DARK — that is precisely the state this interlock exists to catch. Do NOT treat this birth as complete: check Sentry for a git-data fatal (stage=runcmd_early/sshd_config/volume_mount/doppler_dl/doppler_run/luks_open/bootstrap), and see the runbook's partial-birth decision tree."
             exit 1
           fi
 
           echo "$found"
-          # A boot_complete carrying a FALSE assertion is worse than none: it means the
-          # bootstrap reached its end with an invariant unmet. The emit only fires after
-          # the fail-loud asserts pass, so a `no` here means someone weakened one.
-          if printf '%s' "$found" | grep -qE '"(luks_mounted|repo_root|hooks_path|provision)":"no"'; then
-            echo "::error::boot_complete arrived with a FALSE assertion — the host is up but an invariant is unmet. Treat as a failed birth."
-            exit 1
-          fi
-          echo "boot signal received: git-data reported boot_complete with all assertions positive."
+          # A boot_complete carrying a FALSE assertion is worse than none: the bootstrap
+          # reached its final stage with an invariant unmet. Checked per NAMED FIELD — a bare
+          # `grep -qE '\bno\b'` over the whole payload would match the word anywhere.
+          for f in luks_mounted repo_root hooks_path provision; do
+            if printf '%s' "$found" | grep -q "\"${f}\":\"no\""; then
+              echo "::error::boot_complete arrived with ${f}=no — the host is up but an invariant is unmet. Treat as a failed birth."
+              exit 1
+            fi
+            if ! printf '%s' "$found" | grep -q "\"${f}\":\"yes\""; then
+              echo "::error::boot_complete arrived WITHOUT a ${f} assertion. The emit contract and this reader have drifted; do not treat this birth as verified."
+              exit 1
+            fi
+          done
+          echo "boot signal received: git-data reported boot_complete with luks_mounted/repo_root/hooks_path/provision all positive."
 
       - name: Dispatch summary
         if: always()

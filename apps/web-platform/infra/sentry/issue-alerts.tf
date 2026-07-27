@@ -1739,12 +1739,18 @@ resource "sentry_issue_alert" "git_data_boot_fatal" {
       }
     },
   ]
+  # STAGE VALUES ARE HOST-PREFIXED WHERE THEY WOULD COLLIDE. The web host emits into this
+  # SAME project with the same `stage` tag key and uses `runcmd_early` and `doppler_dl`
+  # itself; with filter_match = "any" a host_name filter cannot be AND-ed on, so those two
+  # values would have paged a WEB-host boot fatal as "git-data-boot-fatal" and sent the
+  # operator to the git-data birth runbook. Only the two colliding values are prefixed —
+  # the other seven are unique to this host (verified by diffing both emitters' stage sets).
   filters_v2 = [
     {
       tagged_event = {
         key   = "stage"
         match = "EQUAL"
-        value = "runcmd_early"
+        value = "gitdata_runcmd_early"
       }
     },
     {
@@ -1765,7 +1771,7 @@ resource "sentry_issue_alert" "git_data_boot_fatal" {
       tagged_event = {
         key   = "stage"
         match = "EQUAL"
-        value = "doppler_dl"
+        value = "gitdata_doppler_dl"
       }
     },
     {

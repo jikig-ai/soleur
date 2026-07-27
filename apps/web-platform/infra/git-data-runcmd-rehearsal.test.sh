@@ -131,6 +131,25 @@ run_case() {
   if [ "$rc" -eq "$want" ]; then pass; else fail "$name: exit $rc, expected $want" "$(tail -3 "$TMP/out/stdout")"; fi
 }
 
+# ── D1 — the SHIPPED emitter must survive /bin/sh, which is dash on 24.04 ──────────
+# cloud-init's util.shellify() emits `#!/bin/sh`, and the emitter itself declares it. bash
+# TOLERATES constructs dash kills the shell on — most sharply `shift N` with fewer than N
+# args, because `shift` is a POSIX SPECIAL BUILTIN whose error terminates a non-interactive
+# shell outright and which `|| true` cannot catch. Asserted DIRECTLY against dash rather
+# than inferred from the driver's interpreter, so it holds regardless of how the container
+# case is wired.
+if command -v dash >/dev/null 2>&1; then
+  if dash -n "$TMP/git-data-emit" 2>/dev/null; then pass; else fail "D1: emitter is not valid dash"; fi
+  # A 3-arg call is what the usage line invites. Under a bare `shift 4` dash exits 2 having
+  # emitted nothing — silently, on a host whose only diagnostic is this emitter.
+  ( cd "$TMP" && dash ./git-data-emit "m" "s" info >/dev/null 2>&1 )
+  _d_rc=$?
+  if [ "$_d_rc" -ne 2 ] || [ -s "$CAPTURE" ]; then pass; else
+    fail "D1: a 3-arg call died at the shift (dash rc=2) instead of emitting"; fi
+else
+  pass; pass   # dash absent: keep the cardinality floor honest rather than skewing it
+fi
+
 # ── T5 — a WRONG checksum must ABORT before tar/chmod ──────────────────────────────
 # This is the supply-chain half of issue item 3. Before #6982 there was no `set -e`, so a
 # failed `sha256sum -c -` still ran `tar xzf` and `chmod +x /usr/local/bin/doppler` on an
@@ -185,8 +204,8 @@ total=$((passes + fails))
 # Floor = the ACTUAL assertion count (T5: 4, T17: 2, mutation: 1). Its job is to catch a
 # silently-empty harness — an early `exit 0` from a skip guard, or a docker run that never
 # produced output — not to be an aspirational target.
-if [ "$total" -lt 7 ]; then
-  echo "FAIL: ran only ${total} assertions (<7) — harness did not execute fully" >&2
+if [ "$total" -lt 9 ]; then
+  echo "FAIL: ran only ${total} assertions (<9) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed (${total} assertions)"

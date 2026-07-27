@@ -362,6 +362,14 @@ p_doppler_config_scope() {
   # permanently red (cq-assert-anchor-not-bare-token).
   n_run=$(grep -Ec '^[[:space:]]*doppler run ' "$1" || true)
   n_scoped=$(grep -Ec '^[[:space:]]*doppler run --project soleur --config prd_git_data ' "$1" || true)
+  # Guard the SIBLINGS too. Scoping this to cloud-init alone let the identical W0 defect
+  # survive in git-data-cutover.sh — a file that runs ON this host under the same
+  # single-config token — because the guard structurally could not see it.
+  for _sib in "${DIR}/git-data-cutover.sh" "${DIR}/git-data-gc-failure.service"; do
+    [ -f "$_sib" ] || continue
+    n_run=$(( n_run + $(grep -Ec 'doppler run --project soleur ' "$_sib" || true) ))
+    n_scoped=$(( n_scoped + $(grep -Ec 'doppler run --project soleur --config prd_git_data ' "$_sib" || true) ))
+  done
   if [ "$n_run" -ge 2 ] && [ "$n_run" -eq "$n_scoped" ]; then echo 1; else echo 0; fi
 }
 
@@ -378,16 +386,33 @@ p_emitter_present() {
 # fatal channel inverts into noise (R7/AC36/T17). Anchored on the guard's syntax, and the
 # count is compared against the number of arming sites so a NEW unguarded trap fails.
 p_trap_rc_guard() {
-  local n_trap n_guard
+  local n_trap n_guard n_bind n_first
   n_trap=$(grep -Ec '^[[:space:]]*trap [a-z_]+ EXIT$' "$1" || true)
   n_guard=$(grep -Ec '^[[:space:]]*\[ "\$rc" -eq 0 \] && exit 0$' "$1" || true)
-  if [ "$n_trap" -ge 3 ] && [ "$n_guard" -eq "$n_trap" ]; then echo 1; else echo 0; fi
+  # The BINDING, not just the guard line. `rc=0` satisfies every count-based assertion while
+  # making `[ "$rc" -eq 0 ] && exit 0` ALWAYS fire — so no handler can emit a fatal at any
+  # stage and every failing stage exits 0. Measured: that mutation left all three suites green.
+  n_bind=$(grep -Ec '^[[:space:]]*rc=\$\?$' "$1" || true)
+  # And `rc=$?` must be the FIRST statement in each handler: `$?` is clobbered by any command
+  # before it, so a guard placed after the emit reads the emit's status, not the failure's.
+  n_first=$(grep -A1 -E '^[[:space:]]*[a-z_]+\(\) \{$' "$1" | grep -Ec '^[[:space:]]*rc=\$\?$' || true)
+  if [ "$n_trap" -ge 3 ] && [ "$n_guard" -eq "$n_trap" ] \
+     && [ "$n_bind" -eq "$n_trap" ] && [ "$n_first" -ge "$n_trap" ]; then echo 1; else echo 0; fi
 }
 
 # A23: the delivery assertion (AC34) — the ONE emit call with no `|| true`, gated by an
 # `if !` so a non-delivering emitter fails the boot LOUDLY instead of silently.
 p_delivery_assert() {
-  if grep -Eq 'if ! /usr/local/bin/git-data-emit .* runcmd_early info' "$1"; then echo 1; else echo 0; fi
+  # ANCHORED AT LINE START and stripped of comments: the previous form was an unanchored
+  # substring match that a prose line could satisfy. Pins all three parts of the contract:
+  # the executable precondition, the rc capture, and the refusal on the STRUCTURAL class
+  # only (rc 2) — a blanket `if ! emit` would make a Sentry 429 a permanent boot abort.
+  local src
+  src="$(sed 's/#.*//' "$1")"
+  printf '%s\n' "$src" | grep -Eq '^[[:space:]]*if \[ ! -x /usr/local/bin/git-data-emit \]; then' || { echo 0; return; }
+  printf '%s\n' "$src" | grep -Eq '^[[:space:]]*_emit_rc=\$\?$' || { echo 0; return; }
+  printf '%s\n' "$src" | grep -Eq '^[[:space:]]*if \[ "\$_emit_rc" -eq 2 \]; then' || { echo 0; return; }
+  echo 1
 }
 
 # A24: sshd slot bounding lands INSIDE the 01-hardening.conf write_files block (AC5) —
@@ -403,10 +428,18 @@ p_sshd_limits() {
 # A25: `set -e` is armed in runcmd, and the checksum block is UNDER it — the supply-chain
 # half of issue item 3. Asserted by ORDER: `set -e` must appear before `sha256sum -c -`.
 p_set_e_before_checksum() {
-  local l_sete l_sum
-  l_sete=$(grep -n '^[[:space:]]*set -e$' "$1" | head -1 | cut -d: -f1)
-  l_sum=$(grep -n 'sha256sum -c -' "$1" | head -1 | cut -d: -f1)
-  if [ -n "$l_sete" ] && [ -n "$l_sum" ] && [ "$l_sete" -lt "$l_sum" ]; then echo 1; else echo 0; fi
+  # STRIP COMMENTS FIRST. A bare `grep -n 'sha256sum -c -'` matches the STAGE prose comment
+  # that quotes the command, so the ordering was measured against a comment and the real
+  # block was never seen — `|| true` on the actual checksum line left this GREEN.
+  local src l_sete l_sum
+  src="$(sed 's/#.*//' "$1")"
+  l_sete=$(printf '%s\n' "$src" | grep -n '^[[:space:]]*set -e$' | head -1 | cut -d: -f1)
+  l_sum=$(printf '%s\n' "$src" | grep -n 'sha256sum -c -' | head -1 | cut -d: -f1)
+  [ -n "$l_sete" ] && [ -n "$l_sum" ] && [ "$l_sete" -lt "$l_sum" ] || { echo 0; return; }
+  # And the checksum must not be TOLERATED. `set -e` before a `|| true`-suffixed command
+  # aborts nothing; the ordering alone is not the property.
+  printf '%s\n' "$src" | grep -E 'sha256sum -c -' | grep -qE '\|\|[[:space:]]*true' && { echo 0; return; }
+  echo 1
 }
 
 # A26: no BARE terraform directive anywhere (AC4). The doubled form `curl -w` would need
@@ -588,7 +621,7 @@ assert_mutation "A22 trap-rc-guard" p_trap_rc_guard "$CLOUD_INIT" \
 assert_holds    "A23 delivery-assert" p_delivery_assert "$CLOUD_INIT"
 # Mutation: make the one checking call fail-open like every other call site.
 assert_mutation "A23 delivery-assert" p_delivery_assert "$CLOUD_INIT" \
-  's;if ! /usr/local/bin/git-data-emit;/usr/local/bin/git-data-emit;'
+  's#^([[:space:]]*)if \[ "\$_emit_rc" -eq 2 \]; then#\1if false; then#'
 
 # A24: sshd slot bounding, inside the drop-in block.
 assert_holds    "A24 sshd-limits" p_sshd_limits "$CLOUD_INIT"
@@ -597,11 +630,22 @@ assert_holds    "A24 sshd-limits" p_sshd_limits "$CLOUD_INIT"
 assert_mutation "A24 sshd-limits" p_sshd_limits "$CLOUD_INIT" \
   's;^([[:space:]]*)ClientAliveInterval 60$;\1ClientAliveInterval 300;'
 
+# A22b: the rc BINDING (not just the guard line).
+assert_holds    "A22b trap-rc-binding" p_trap_rc_guard "$CLOUD_INIT"
+# Mutation: bind rc=0 — every count-based assertion still passes, but no handler can ever
+# emit a fatal. This is the mutation that survived the first battery.
+assert_mutation "A22b trap-rc-binding" p_trap_rc_guard "$CLOUD_INIT" \
+  's;^([[:space:]]*)rc=\$\?$;\1rc=0;'
+
 # A25: `set -e` precedes the checksum block (issue item 3).
 assert_holds    "A25 set-e-before-checksum" p_set_e_before_checksum "$CLOUD_INIT"
 # Mutation: disarm it — `tar xzf` + `chmod +x` would again run on an unverified tarball.
 assert_mutation "A25 set-e-before-checksum" p_set_e_before_checksum "$CLOUD_INIT" \
   's;^([[:space:]]*)set -e$;\1set +e;'
+# Mutation: TOLERATE the checksum. Ordering alone is not the property — `set -e` before a
+# `|| true`-suffixed command aborts nothing, and this mutation survived the first battery.
+assert_mutation "A25 checksum-not-tolerated" p_set_e_before_checksum "$CLOUD_INIT" \
+  's;(sha256sum -c -)$;\1 || true;'
 
 # A26: no bare terraform directive (AC4).
 assert_holds    "A26 no-bare-directive" p_no_bare_directive "$CLOUD_INIT"
@@ -618,8 +662,8 @@ assert_mutation "A27 plain-script-delivery" p_plain_script_delivery "$CLOUD_INIT
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 total=$((passes + fails))
-if [ "$total" -lt 55 ]; then
-  echo "FAIL: ran only ${total} assertions (<55) — suite did not execute fully" >&2
+if [ "$total" -lt 58 ]; then
+  echo "FAIL: ran only ${total} assertions (<58) — suite did not execute fully" >&2
   exit 1
 fi
 

@@ -12,8 +12,7 @@ packages:
   - git
   - util-linux # provides flock for the per-(workspace,worktree) fence lock
   - cryptsetup # guest-side LUKS-at-rest for the fresh cutover volume (Sub-PR 3.D)
-  # (#6982) The emit chain is a curl POST. Already in the 24.04 image, and a failed
-  # install is non-fatal to cloud-init — so git-data-emit degrades silently instead.
+  # (#6982) The emit chain is a curl POST; a failed install is non-fatal to cloud-init.
   - curl
 
 # (#6982) PRE-runcmd beacon. packages:/write_files: run before runcmd and a death there
@@ -51,9 +50,9 @@ write_files:
   # THE `01-` PREFIX IS LOAD-BEARING: sshd_config.d is FIRST-MATCH-WINS per keyword and
   # Hetzner ships 50-cloud-init.conf, so a higher number would be shadowed.
   #
-  # (#6982, W6) Slot bounding on a 2 vCPU/no-swap box; defaults were stock (10:30:100 /
-  # 10, zero occurrences repo-wide before this). ClientAliveInterval 300 -> 60 is the one
-  # that bites today: with CountMax 2 a WEDGED connection held a slot ~10 min, now ~2.
+  # (#6982, W6) Slot bounding on a 2 vCPU/no-swap box (defaults were stock; zero occurrences
+  # repo-wide before). ClientAliveInterval 300->60 bites today: a WEDGED connection held a
+  # slot ~10 min, now ~2.
   - path: /etc/ssh/sshd_config.d/01-hardening.conf
     content: |
       PasswordAuthentication no
@@ -91,37 +90,37 @@ write_files:
     permissions: '0600'
     defer: true
 
-  # --- (#6982, W1) The off-host emitter. ONE script, one redactor. -------------------
-  # Full rationale: ADR-147 "#6982 addendum (D-EMIT)". Terse here — every byte of this
-  # file is ForceNew user_data under a hard 32 KB cap.
-  #
-  # A FILE, not an inline function: luksOpen runs in a CHILD bash under `doppler run`,
-  # which a shell function cannot reach, so a LUKS failure would be unreportable and
-  # surface under the Doppler stage (R2). ONE script so redaction is structural. Sentry
-  # is unconditional from the BAKED DSN (one read from Doppler is dark exactly when
-  # Doppler is the broken stage); Better Stack fires only when BETTERSTACK_LOGS_TOKEN is
-  # in the env, i.e. only under `doppler run` — the D1 split, by construction not by flag.
-  #
-  # Usage: git-data-emit <msg> <stage> <level> [detail-file-or-literal] [k=v ...]
-  # Exit:  0 = Sentry accepted. Every site EXCEPT the delivery assertion adds `|| true`.
+  # --- (#6982, W1) Off-host emitter. ONE script, one redactor. Rationale: ADR-147's #6982
+  # addendum (terse here: ForceNew user_data, hard 32 KB cap). A FILE not an inline function
+  # — luksOpen runs in a CHILD bash. Sentry unconditional from the BAKED DSN; Better Stack
+  # only when the ingest token is in env (only under `doppler run`) = the D1 split.
+  # Usage: <msg> <stage> <level> [detail-file-or-literal] [k=v ...]
   - path: /usr/local/bin/git-data-emit
     content: |
       #!/bin/sh
       # No `set -e`: an emitter that aborts loses the event it was called to ship.
       MSG="$${1:-git-data boot stage}"; STAGE="$${2:-unknown}"; LEVEL="$${3:-info}"
-      DETAIL_SRC="$${4:-}"; shift 4 2>/dev/null || true
+      DETAIL_SRC="$${4:-}"
+      # NOT `shift 4 || true`: shift is a POSIX SPECIAL BUILTIN — an error terminates a
+      # non-interactive shell and `|| true` cannot catch it (measured: dash rc=2). /bin/sh
+      # is dash, and the usage line invites 3-arg calls.
+      if [ "$#" -ge 4 ]; then shift 4; else shift "$#"; fi
 
-      command -v curl >/dev/null 2>&1 || exit 1
+      command -v curl >/dev/null 2>&1 || exit 2   # structural: nothing to emit WITH
 
-      # Sanitiser + redactor on EVERY value, EVERY path. Order per ADR-147; two git-data
-      # rules at the FRONT. The UUID rule is critical: repos are <workspace_id>.git and
-      # workspace_id === user_id (mig-053 N2), so a bare repo path is a raw auth.users.id,
-      # and pii_scrub_string does NOT scrub a bare UUID — shipping one breaks PA-8's
-      # Recital 26 claim. BEFORE `tail -c 180`: the cap is byte-wise and a truncated
-      # prefix still identifies.
+      # Sanitiser + redactor on EVERY value, EVERY path. The UUID rule is critical: repos
+      # are <workspace_id>.git and workspace_id === user_id (mig-053 N2), so a bare repo
+      # path is a raw auth.users.id and pii_scrub_string does NOT scrub a bare UUID.
       ESC=$(printf '\033')
       _clean() {
-        LC_ALL=C sed -e '/^Using /d' -e "s/$${ESC}\[[0-9;]*[a-zA-Z]//g" \
+        # NORMALISE -> REDACT -> TRUNCATE. The byte strips MUST precede the seds: after them,
+        # a DEL/BS byte inside a UUID defeats the pattern and is then REMOVED, reassembling
+        # the identifier on the wire (measured, 4 variants).
+        LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' \
+          | LC_ALL=C tr '\011\012\015' '   ' \
+          | LC_ALL=C tr -cd '\040-\176' \
+          | LC_ALL=C sed -e 's/^Using [^;]*;//g' \
+          | LC_ALL=C sed -e "s/$${ESC}\[[0-9;]*[a-zA-Z]//g" \
           | LC_ALL=C sed \
               -e 's/[0-9a-fA-F]\{8\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{12\}/UUID_REDACTED/g' \
               -e 's#/mnt/git-data\(-luks\)\{0,1\}/repositories/[^[:space:]]*#/mnt/git-data/repositories/REDACTED#g' \
@@ -130,16 +129,12 @@ write_files:
               -e 's#://[A-Za-z0-9._%+-]\{1,\}:[^@/[:space:]]\{1,\}@#://REDACTED@#g' \
               -e 's/[Bb]earer[[:space:]]\{1,\}[A-Za-z0-9._~+/=-]\{8,\}/Bearer REDACTED/g' \
               -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----.*/[PRIVATE KEY REDACTED]/' \
-          | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' \
           | LC_ALL=C tr -d '"\\' \
-          | LC_ALL=C tr '\011\012\015' '   ' \
           | LC_ALL=C sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-          | tail -c 180 \
-          | LC_ALL=C tr -cd '\040-\176'
+          | tail -c 180
       }
 
-      # VALUE-based: the LUKS passphrase is high-entropy and matches NO pattern above, but
-      # is in our env and can land in captured stderr. The arm no pattern replaces (AC23).
+      # VALUE-based: the LUKS passphrase is high-entropy, matches no pattern, and is in env.
       _devalue() {
         if [ -n "$${GIT_DATA_LUKS_KEY:-}" ]; then
           SAFE=$(printf '%s' "$${GIT_DATA_LUKS_KEY}" | LC_ALL=C sed -e 's/[]\/$*.^[]/\\&/g')
@@ -167,17 +162,18 @@ write_files:
       done
 
       # --- Sentry: the durable channel, and the only one that pages --------------------
+      # EXIT: 0 delivered · 1 transient · 2 STRUCTURAL (no curl / no DSN). Only 2 refuses a boot.
       RC=1
       DSN='${sentry_dsn}'
+      [ -n "$${DSN}" ] || RC=2                    # structural: nothing to emit TO
       if [ -n "$${DSN}" ]; then
         KEY=$(printf '%s' "$${DSN}" | sed -E 's#https://([^@]+)@.*#\1#')
         SHOST=$(printf '%s' "$${DSN}" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
         PROJ=$(printf '%s' "$${DSN}" | sed -E 's#.*/([0-9]+)$#\1#')
         BODY=$(printf '{"message":"%s","level":"%s","tags":{"stage":"%s","host_name":"%s","detail":"%s"%s}}' \
           "$${MSG}" "$${LEVEL}" "$${STAGE}" '${host_name}' "$${DETAIL}" "$${TAGS}")
-        # -f makes a 4xx/5xx a non-zero exit — delivery detection without curl's
-        # --write-out, whose format specifier is a percent-brace Terraform would read as a
-        # template directive (its scanner does not skip comments either).
+        # -f makes a 4xx/5xx non-zero: delivery detection without curl's --write-out, whose
+        # percent-brace format specifier Terraform would read as a template directive.
         if curl --connect-timeout 5 -m 10 --retry 2 -sf -X POST "https://$${SHOST}/api/$${PROJ}/store/" \
              -H 'Content-Type: application/json' \
              -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$${KEY}" \
@@ -186,13 +182,14 @@ write_files:
         fi
       fi
 
-      # Better Stack: queryable second copy, post-Doppler stages only. An absent token
-      # simply skips this block — that IS the channel split.
+      # Better Stack: queryable second copy, post-Doppler only — an absent token skips this
+      # block, which IS the channel split. $${TAGS} rides here too: THREE consumers read the
+      # four boot_complete booleans from BETTER STACK, not Sentry.
       if [ -n "$${BETTERSTACK_LOGS_TOKEN:-}" ]; then
         curl --connect-timeout 5 -m 10 -sf -X POST '${betterstack_ingest_url}' \
           -H "Authorization: Bearer $${BETTERSTACK_LOGS_TOKEN}" \
           -H 'Content-Type: application/json' \
-          --data-raw "{\"message\":\"$${MSG}\",\"stage\":\"$${STAGE}\",\"level\":\"$${LEVEL}\",\"host_name\":\"${host_name}\",\"detail\":\"$${DETAIL}\"}" \
+          --data-raw "{\"message\":\"$${MSG}\",\"stage\":\"$${STAGE}\",\"level\":\"$${LEVEL}\",\"host_name\":\"${host_name}\",\"detail\":\"$${DETAIL}\"$${TAGS}}" \
           >/dev/null 2>&1 || true
       fi
 
@@ -285,20 +282,18 @@ write_files:
     permissions: '0755'
 
 runcmd:
-  # --- (#6982, W3) ARM THE FAIL-CLOSED BOOT -------------------------------------------
+  # --- (#6982, W3) ARM THE FAIL-CLOSED BOOT ------------------------------------------
   # cloud-init concatenates runcmd into ONE script, so this trap and `set -e` cover every
-  # item below. This file had NEITHER until #6982 — git-data.tf's tripwire says it
-  # verbatim, "NOTHING ABORTS": a failed checksum still tar-xzf'd and chmod +x'd an
-  # unverified binary, and a dead Doppler stage left the host up with LUKS unmounted and
-  # nothing emitted. The `rc` guard is NOT optional (R7): `trap … EXIT` fires on every
-  # exit including success, so without it every HEALTHY boot emits level=fatal and the
-  # channel inverts into noise. Present at all THREE arming sites; T17 pins it.
+  # item below. This file had NEITHER until #6982 ("NOTHING ABORTS"): a failed checksum
+  # still tar-xzf'd an unverified binary, and a dead Doppler stage left the host up with
+  # LUKS unmounted, emitting nothing. The `rc` guard is NOT optional — `trap … EXIT` fires
+  # on success too, so without it every HEALTHY boot emits fatal. All THREE sites; T17 pins it.
   - |
     # HOME is required BEFORE any doppler call: cloud-final.service synthesises none, and
     # the CLI resolves its home dir before reading DOPPLER_CONFIG_DIR. Three prior dark
     # boots on sibling hosts came from exactly this.
     export HOME=/root
-    STAGE=runcmd_early
+    STAGE=gitdata_runcmd_early
     on_err() {
       rc=$?
       trap - EXIT
@@ -314,20 +309,40 @@ runcmd:
     # asserted the inverse ("DSN empty -> the abort still happens"), which certifies the
     # DARK BOOT as passing — the exact state the interlock exists to prevent. Note the
     # deliberate absence of `|| true`: every other call site has it, this one checks.
-    if ! /usr/local/bin/git-data-emit "git-data cloud-init reached runcmd" runcmd_early info "" ; then
-      echo "[git-data] FATAL: boot emitter did not deliver (missing, non-executable, or transport refused). Refusing to continue into a boot nothing can report on." >&2
+    if [ ! -x /usr/local/bin/git-data-emit ]; then
+      echo "[git-data] FATAL: boot emitter missing or non-executable. Refusing to continue into a boot nothing can report on." >&2
       exit 1
     fi
+    /usr/local/bin/git-data-emit "git-data cloud-init reached runcmd" gitdata_runcmd_early info ""
+    _emit_rc=$?
+    # REFUSE ONLY ON rc 2 (structural). A blanket `if ! emit; exit 1` makes a 2xx from
+    # sentry.io a HARD BOOT PRECONDITION, and runcmd is once-per-instance — a 429 would
+    # permanently abort the boot, recoverable only by a replacement that re-runs the same
+    # assertion against the same outage. rc 1 degrades; later stages retry.
+    if [ "$_emit_rc" -eq 2 ]; then
+      echo "[git-data] FATAL: boot emitter structurally cannot emit (no curl, or empty baked DSN). Refusing to continue into a boot nothing can report on." >&2
+      exit 1
+    fi
+    [ "$_emit_rc" -eq 0 ] || echo "[git-data] WARN: boot emitter did not deliver (rc=$_emit_rc) — transient; continuing and will retry at later stages." >&2
 
-  # (#6982, R16) VALIDATE BEFORE RESTARTING. runcmd item #1, and this same PR adds
-  # MaxStartups/MaxSessions above — a malformed directive under the armed `set -e` would
-  # abort runcmd, so LUKS would never open. The halves are classified differently ON
-  # PURPOSE (Phase 0.4): `sshd -t` MUST-ABORT (a config we just wrote failing to parse
-  # must stop the boot loudly); the restart MUST-TOLERATE (a transient systemd hiccup must
-  # not brick the store — sshd keeps its previous config, and the warn emit shows it).
+  # (#6982, R16) VALIDATE BEFORE RESTARTING. runcmd item #1, and this PR adds MaxStartups
+  # above — a malformed directive under the armed `set -e` aborts runcmd and LUKS never
+  # opens. `sshd -t` MUST-ABORT; the restart MUST-TOLERATE (a systemd hiccup must not brick
+  # the store; sshd keeps its previous config and the warn emit shows it).
   - |
     STAGE=sshd_config
-    if ! sshd -t 2>/run/git-data-sshd-t.err; then
+    # ABSOLUTE PATH + 126/127 branch: sshd is in /usr/sbin and nothing pins a PATH, so a bare
+    # `sshd` can exit 127 — which a blanket `if !` reads as "malformed" and answers with a
+    # permanent boot abort. Never treat "could not measure" as "measurement is false".
+    /usr/sbin/sshd -t 2>/run/git-data-sshd-t.err
+    _sshd_t_rc=$?
+    if [ "$_sshd_t_rc" -eq 126 ] || [ "$_sshd_t_rc" -eq 127 ]; then
+      /usr/local/bin/git-data-emit "git-data sshd -t could not run" sshd_config warning \
+        /run/git-data-sshd-t.err "rc=$_sshd_t_rc" || true
+      echo "[git-data] WARN: sshd -t unavailable (rc=$_sshd_t_rc) — cannot validate; restarting anyway rather than bricking the boot." >&2
+      _sshd_t_rc=0
+    fi
+    if [ "$_sshd_t_rc" -ne 0 ]; then
       /usr/local/bin/git-data-emit "git-data sshd config INVALID" sshd_config fatal \
         /run/git-data-sshd-t.err || true
       echo "[git-data] FATAL: sshd -t rejected the hardening drop-in" >&2
@@ -372,12 +387,10 @@ runcmd:
   # that backwards is SILENT — a double-$ on a Terraform var renders a literal that
   # bash expands to empty, and validate-infra-templates.sh skips $${key} by design.
   # git-data-luks.test.sh A14 is the only guard on it.
-  # (#6982) STAGE=doppler_dl sits immediately above the checksum block — the supply-chain
-  # fix issue item 3 asks for. Under the armed `set -e` a failed `sha256sum -c -` now
-  # ABORTS, so `tar xzf` and `chmod +x /usr/local/bin/doppler` no longer run on an
-  # unverified tarball that would then execute as root. Before, all three ran regardless
-  # and the only trace was a line in an on-host log nothing ships.
-  - STAGE=doppler_dl
+  # (#6982) The stage sits immediately above the checksum block — issue item 3. Under the
+  # armed `set -e` a failed `sha256sum -c -` now ABORTS, so `tar xzf` and `chmod +x` no
+  # longer run on an unverified tarball that would execute as root.
+  - STAGE=gitdata_doppler_dl
   - |
     DOPPLER_VERSION="3.75.3"
     DOPPLER_SHA256="${doppler_sha256}"
@@ -403,19 +416,13 @@ runcmd:
   # plaintext source. FAIL LOUD if GIT_DATA_LUKS_KEY is empty — NEVER an unencrypted
   # fallback (NFR-026). `${git_data_luks_volume_id}` is terraform-interpolated;
   # $GIT_DATA_LUKS_KEY / $DEV (no braces) are left literal for the doppler-run shell.
-  # (#6982, W0) `--config prd_git_data`, NOT `--config prd`. THIS WAS A LIVE BOOT-BREAKER.
-  #
-  # doppler_service_token.git_data is scoped to soleur/prd_git_data, but both invocations
-  # named --config prd. Measured under a token scoped exactly as this one is:
-  #   --config prd          -> exit 1, "token does not have access to requested config
-  #                            'prd'", GIT_DATA_LUKS_KEY ABSENT
-  #   --config prd_git_data -> exit 0, key present
-  # The CLI ERRORS on the mismatch, it does not fall back to the token's own scope. So
-  # `doppler run` exited BEFORE exec'ing this heredoc — its `set -euo pipefail` (line 1)
-  # ran ZERO times, luksOpen never ran, and at-rest encryption was absent while every
-  # artifact claimed it present. With no `set -e`, cloud-init continued and sshd stayed
-  # up, so a :22 beat would call that host healthy. Every sibling agreed with its own
-  # token's scope; git-data alone did not, and had never booted to reveal it.
+  # (#6982, W0) `--config prd_git_data`, NOT `--config prd`. A LIVE BOOT-BREAKER: the token
+  # is scoped to prd_git_data, and measured under an identically-scoped token, `--config prd`
+  # exits 1 ("token does not have access to requested config 'prd'") with the key ABSENT.
+  # The CLI ERRORS rather than falling back to its own scope, so `doppler run` exited BEFORE
+  # exec'ing this heredoc — its `set -euo pipefail` ran ZERO times, luksOpen never ran, and
+  # at-rest encryption was absent while every artifact claimed it present. sshd stays up, so
+  # a :22 beat would call that host healthy.
   - STAGE=doppler_run
   - |
     set -a
@@ -423,11 +430,9 @@ runcmd:
     set +a
     doppler run --project soleur --config prd_git_data -- bash -s <<'LUKSEOF'
     set -euo pipefail
-    # (#6982, R2) HEREDOC-LOCAL STAGE + TRAP. This bash is a CHILD of `doppler run`, so
-    # the parent's STAGE and on_err do not cross the exec boundary. Without it a failed
-    # luksOpen and a Doppler scope failure BOTH surface as STAGE=doppler_run, collapsing
-    # the key discriminator. Only expressible because git-data-emit is a file, not the web
-    # host's inline function. Same `rc` guard — a healthy LUKS stage emits no fatal.
+    # (#6982, R2) HEREDOC-LOCAL STAGE + TRAP. A CHILD of `doppler run`, so the parent's
+    # STAGE/on_err do not cross the exec boundary — without it a failed luksOpen and a
+    # Doppler scope failure both surface as doppler_run, collapsing the discriminator.
     STAGE=luks_open
     luks_err() {
       rc=$?
@@ -451,21 +456,17 @@ runcmd:
       printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" git-data
     fi
     if ! blkid /dev/mapper/git-data >/dev/null 2>&1; then
-      # (#6982, W5/R31) `-O quota,project` enables ext4 project quotas at mkfs time. The
-      # FLAG is migration-forcing — adding it later needs a host replace PLUS an rsync of
-      # every user's objects — so it ships now, before any data exists. The `prjquota`
-      # MOUNT OPTION is deliberately NOT shipped with it: opposite cost profile. It is
-      # reversible, does nothing until projects are assigned (deferred, and per the CLO
-      # panel also blocked on a T&C storage-limit clause that does not exist), and would
-      # add a NEW boot-failure mode on a host with no SSH and no console.
+      # (#6982, W5/R31) `-O quota,project` at mkfs time: MIGRATION-FORCING (adding it later
+      # needs a replace PLUS an rsync of every user's objects), so it ships before any data
+      # exists. The `prjquota` MOUNT option is deliberately NOT shipped — reversible, inert
+      # until projects are assigned, and it adds a boot-failure mode on a console-less host.
       mkfs.ext4 -q -O quota,project /dev/mapper/git-data
     fi
     mkdir -p /mnt/git-data-luks
     mountpoint -q /mnt/git-data-luks || mount /dev/mapper/git-data /mnt/git-data-luks
     grep -q '/dev/mapper/git-data' /etc/fstab || echo '/dev/mapper/git-data /mnt/git-data-luks ext4 defaults,nofail 0 2' >> /etc/fstab
-    # NO `trap - EXIT` here, deliberately: disarming on success would make the `rc` guard
-    # unreachable and therefore untested. The guard IS the mechanism that keeps a healthy
-    # boot silent (AC36/T17), so it must be the thing that runs.
+    # NO `trap - EXIT`: disarming on success would make the `rc` guard unreachable and so
+    # untested. The guard IS what keeps a healthy boot silent (AC36/T17).
     LUKSEOF
 
   # Run the idempotent bootstrap UNDER doppler run (so its LUKS re-assert has
@@ -477,28 +478,23 @@ runcmd:
     set -a
     . /etc/default/git-data-doppler
     set +a
-    # (#6982, 3.6) Hand off under a BOOTSTRAP-SPECIFIC trap so a failure inside
-    # git-data-bootstrap.sh is not emitted mislabelled under the previous stage. Same `rc`
-    # guard. `--config prd_git_data` for the same measured reason as the LUKS block: this
-    # invocation was equally broken, so the bootstrap ran zero times too — which is why
-    # the host had no repo root, no core.hooksPath and no fence.
+    # (#6982, 3.6) Hand off under a BOOTSTRAP-SPECIFIC trap so a bootstrap failure is not
+    # mislabelled under the previous stage. Same `rc` guard. `--config prd_git_data` for the
+    # same measured reason as the LUKS block — this invocation was equally broken.
     trap - EXIT
     bootstrap_err() {
       rc=$?
       trap - EXIT
       [ "$rc" -eq 0 ] && exit 0
-      /usr/local/bin/git-data-emit "git-data bootstrap FAILED" bootstrap fatal \
+      /usr/local/bin/git-data-emit "git-data bootstrap FAILED" "$STAGE" fatal \
         /var/log/cloud-init-output.log "rc=$rc" || true
       exit 1
     }
     trap bootstrap_err EXIT
     doppler run --project soleur --config prd_git_data -- bash /usr/local/bin/git-data-bootstrap.sh
 
-  # (#6982, W4) Arm the weekly maintenance timer. MUST-TOLERATE (Phase 0.4): a maintenance
-  # timer that fails to enable is a degraded steady state, NOT a reason to abort a boot and
-  # leave the store unprovisioned — the `|| true` is the classification, not laziness. The
-  # failure is visible because the unit is absent from `systemctl list-timers`, and the
-  # first missed run emits nothing rather than emitting something wrong.
+  # (#6982, W4) Arm the weekly maintenance timer. MUST-TOLERATE (Phase 0.4): a timer that
+  # fails to enable is a degraded steady state, not a reason to abort a boot.
   - |
     STAGE=gc_timer
     systemctl daemon-reload || true

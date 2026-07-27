@@ -194,7 +194,16 @@ resource "doppler_secret" "git_remove_ssh_private_key" {
   # RESIDUAL, recorded rather than claimed fixed: this anchors on the server OBJECT, not
   # on REACHABILITY. A birth where the server lands but hcloud_server_network.git_data
   # does not still arms the key against an unroutable 10.0.1.20. ADR-149 carries it.
-  depends_on = [hcloud_server.git_data]
+  #
+  # (#6982) The ANTIDOTE edge. This key's presence is the Art. 17 arming switch, and
+  # `removeGitDataRepo` resolves GIT_DATA_SSH_HOST at the same call site — so the arming
+  # switch must never land without it. Fewer-dependencies makes the antidote eligible
+  # earlier but does NOT order it (terraform orders only by edges, and -parallelism=10
+  # schedules both at once); a transient Doppler 5xx on the ssh-host write would otherwise
+  # leave the switch armed and the antidote missing, and every account deletion from that
+  # instant files a FALSE "erasure failed" event. No cycle: git_data_ssh_host reads a
+  # static local and has no upstream at all.
+  depends_on = [hcloud_server.git_data, doppler_secret.git_data_ssh_host]
 }
 
 # --- The git-data host's address → Doppler prd (#6982 W8 / ADR-149 §5, Residual 2) ---
@@ -214,10 +223,15 @@ resource "doppler_secret" "git_remove_ssh_private_key" {
 # co-landing is precisely what must NOT be required. Two consequences, both wanted:
 #
 #   1. It lands in terraform's FIRST wave (its value is a static local, so it has no
-#      upstream at all). The remove key waits on hcloud_server.git_data. Therefore this
-#      secret is ORDERED BEFORE the remove key BY CONSTRUCTION — which is what pins
-#      AC35: a partial birth cannot land the arming switch while leaving the antidote
-#      behind, because the antidote has strictly fewer dependencies.
+#      upstream at all). NOTE the correction: that makes it ELIGIBLE earlier, it does NOT
+#      order it before an unrelated node — Terraform orders only by dependency edges, and
+#      under the default -parallelism=10 both are scheduled concurrently. An earlier draft
+#      of this comment claimed ordering "BY CONSTRUCTION"; that was false, and a transient
+#      Doppler 5xx on THIS write in an apply where the server and the remove key both
+#      succeed leaves the arming switch on with the antidote absent — exactly the state the
+#      claim denied. AC35 is pinned by the explicit edge on the REMOVE key instead (see
+#      `doppler_secret.git_remove_ssh_private_key`), which is a mechanism rather than a
+#      scheduling accident.
 #   2. It carries no edge that could drag hcloud_server.git_data into an upstream
 #      `-target` closure — the wedge ADR-149 feared when it cut this resource from #6977.
 #

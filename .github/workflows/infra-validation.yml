@@ -835,6 +835,23 @@ jobs:
       - name: Rehearse the git-data runcmd chain (abort ordering + rc guard)
         run: bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
 
+      # (#6982) systemd unit lint. `OnFailure=` is a [Unit] directive; placing it in
+      # [Service] makes systemd IGNORE it silently, which shipped the whole gc
+      # failure-reporting path dead past three review passes while two comments asserted it
+      # paged. `systemd-analyze verify` catches that class for free. Filtered to OUR units:
+      # the tool also resolves dependencies and would otherwise report on host units.
+      - name: Lint the git-data systemd unit set
+        run: |
+          out=$(systemd-analyze verify \
+            apps/web-platform/infra/git-data-gc.service \
+            apps/web-platform/infra/git-data-gc-failure.service \
+            apps/web-platform/infra/git-data-gc.timer 2>&1 || true)
+          echo "$out"
+          if printf '%s' "$out" | grep -E 'git-data-gc[^:]*\.(service|timer):' ; then
+            echo "::error::systemd-analyze verify reported problems in the git-data unit set"
+            exit 1
+          fi
+
       # (#6982) Hetzner's 32,768-byte user_data cap is a HARD gate on hcloud_server.git_data,
       # and the resource carries no ignore_changes=[user_data] — so an over-budget template
       # is discovered by a FAILING BIRTH APPLY unless something measures it first. This job
