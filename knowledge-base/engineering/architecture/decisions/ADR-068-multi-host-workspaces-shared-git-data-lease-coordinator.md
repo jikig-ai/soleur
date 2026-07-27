@@ -1260,7 +1260,7 @@ wrong-arch binary. That is why this was a real code change and not a var flip.
 
 | # | Decision |
 |---|---|
-| **D1** | Repin the default to **`cpx22`** (2 vCPU AMD x86 / 4 GB, ~EUR 19.49/mo net). Forced by **orderability**, not by sizing — a bare-repo git store is neither CPU- nor RAM-bound. |
+| **D1** | Repin the default to **`cpx22`** (2 vCPU AMD x86 / 4 GB, ~EUR 19.49/mo net). Forced by **orderability**. **On sizing this row was too strong, and #6982 corrects it (D-SIZE below):** a bare-repo git store is neither CPU- nor RAM-bound *in steady state*, but git's DEFAULTS made it burst-bound, so the unqualified claim was false as written. It is true now because #6982 removed the regime that made it false — an enforced invariant, not an inherent property. |
 | **D2** | **Derive** the host arch from the type prefix (`local.git_data_arch`: `cax*` → arm64, else amd64) rather than hardcoding it, mirroring `local.registry_arch` / `local.inngest_arch`. The host now boots on either arm, so a future Ampere restock is a var flip. |
 | **D3** | Select the Doppler CLI checksum off the same local (`local.git_data_doppler_sha256`), reusing the per-arch pair already live at `inngest-host.tf` and `zot-registry.tf`. |
 | **D4** | Reject `cx23` (cheaper) on stock durability — the whole `cx` line was also 0-of-3 at the 2026-07-26 probe. |
@@ -1306,3 +1306,79 @@ the `destroy_count` sum, so `[ack-destroy]` cannot bypass it.)
 a pure CREATE, so the preflight below it never executes. It arms only once #6977 ships a birth route. ADR-115's
 normative blocker also still stands: git-data is excluded from the reboot primitive until its
 `luksOpen` is reboot-safe.
+
+## Addendum — 2026-07-27: the sizing claim is made true by construction (#6982, D-SIZE)
+
+**No new ordinal**, same convention as the repin addendum above: git-data is this ADR's
+element, so its type decision belongs here.
+
+### The contradiction #6982 inherited
+
+Two artifacts disagreed, neither citing telemetry:
+
+- **D1 above** — *"a bare-repo git store is neither CPU- nor RAM-bound"*.
+- **The 2026-07-27 git-data-server-type brainstorm** — rejects `cpx12` **because** `git gc`
+  and `repack` are spiky on a single vCPU.
+
+Both cannot be load-bearing. The resolution is that **each is right about a different
+regime**, and the weaker claim was false only because of a configuration nobody had looked at:
+
+| | |
+|---|---|
+| `receive.autogc` | default **ON** — *every push* can trigger a server-side `gc --auto` → `repack`, inline, while the client waits |
+| `pack.windowMemory` | default **0 = unlimited**, on a 4 GB box with **no swap** |
+| `gc.autoDetach` | default **on** — the resulting OOM kill is **invisible** to the pushing client, which sees a stalled push |
+
+So the burst the brainstorm feared is real, and it is a **config artifact of the store, not a
+property of it**.
+
+### D-SIZE — keep `cpx22`, and remove the regime rather than argue about it
+
+#6982's W4 tuning (`receive.autogc=false`, `gc.auto=0`, `gc.autoDetach=false`, bounded
+`pack.*`, plus a resource-capped weekly `git-data-gc.timer`) moves maintenance **off the
+push path** and bounds its peak. **After it, "neither CPU- nor RAM-bound" is an ENFORCED
+INVARIANT rather than an unbacked assertion** — which is why the tuning and the sizing are
+one decision and not two, and why every setting is re-asserted fail-loud in
+`git-data-bootstrap.sh` (a `git config` that silently failed to take is indistinguishable
+from one never written, and its failure mode is an OOM weeks later on the push path).
+
+**Not downsized to `cpx12`** (−$103.68/yr), on two arguments of unequal weight:
+
+1. *Supporting.* One vCPU serialises the gc timer against concurrent `git-receive-pack`.
+   Stated honestly: W4's own `IOSchedulingClass=idle` + `Nice=19` + `CPUQuota=` **are** a
+   serialisation mitigation, so this is weaker than it first looks — `Nice` does not preempt
+   and `CPUQuota` caps gc's *share* without bounding receive-pack *latency*.
+2. **Carrying the decision on its own.** The correction path is **destructive**. A
+   post-birth type change routes through `git-data-host-replace`: a destroy-then-create of
+   the host holding every connected user's source code, with the store and the writer-side
+   CAS fence offline and passphrase preservation resting on omission. $104/yr does not buy
+   that exposure on a host that has never been measured.
+
+**Not upsized to `ccx13`** (+$304.56/yr, and it would consume 2 of 8 dedicated vCPUs):
+over-provisions against no measurement.
+
+**`cx23`/`cx33`/`cax11` are not candidates** — all out of stock in all three EU DCs at the
+live 2026-07-27 probe. A host cannot be born on a type nobody will sell.
+
+### The claim this addendum retires
+
+An earlier framing said sizing is **uncorrectable** after birth. That is **false**:
+`git-data-host-replace` exists and plans `-replace='hcloud_server.git_data'`, and its own
+stock-preflight error text describes the var-flip-and-merge remediation. The directional
+conclusion (decide before birth) survives on the **replace-is-destructive** argument, which
+is the one that actually holds. Shipping the stronger-but-false version would let a reviewer
+who checks it discount everything around it.
+
+### Residual, stated rather than papered over
+
+**No pre-birth measurement is possible.** The honest statement is *"unmeasured, sized for the
+burst, with the burst now explicitly bounded"* — not *"measured and unbound"*. ADR-149 gains
+a checklist item (8) so the next person confronts this rather than inheriting it.
+
+### Companion decision — no swap file
+
+The obvious OOM backstop is **rejected**: an unencrypted root-disk swapfile can hold
+plaintext git object data paged out from under the LUKS posture the whole `git_data_luks`
+apparatus exists to establish. Encrypted swap (random-key dm-crypt) would work but adds a
+second crypt device to a host already barred from ADR-115's reboot primitive. **Bound memory
+instead** — which is what `MemoryMax=`/`MemorySwapMax=0` on the gc unit do.

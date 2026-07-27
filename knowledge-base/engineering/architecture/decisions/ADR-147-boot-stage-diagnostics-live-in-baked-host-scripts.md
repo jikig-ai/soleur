@@ -207,6 +207,65 @@ The first, self-authored battery reported 23/23 detected while the suite could n
 21 further mutants a review pass found. A battery only ever covers the mutations its author
 imagined; the harness is the floor, not the ceiling.
 
+## Addendum — 2026-07-27: git-data gets the same treatment, as ONE script (#6982, D-EMIT)
+
+**No new ordinal.** This ADR's decision is literally *"boot-stage diagnostics live in baked
+host scripts"*, and #6982 applies it to the second blind host. Recorded here rather than as
+a new ADR because nothing about the decision changes — only the host and one deliberate
+divergence.
+
+### The divergence: a `/usr/local/bin` FILE, not an inline shell function
+
+The web host's `_emit` is an inline function defined at the top of `runcmd`. On git-data
+that shape does not work, and the reason is structural rather than stylistic:
+`cryptsetup luksOpen` runs inside `doppler run … -- bash -s <<'LUKSEOF'` — a **child bash**.
+A parent shell function does not cross that `exec` boundary, so an inline emitter could not
+report a LUKS failure **at all**, and a failed `luksOpen` would surface under the same
+`STAGE` as a Doppler scope failure — collapsing the single most useful discriminator this
+host has into another mode.
+
+So `git-data-emit` is a file on disk, callable from any child process. Everything else —
+the sanitizer order, the `tail -c 180` cap, the printable-ASCII pass after the cap — is this
+ADR's contract, unchanged.
+
+### One script, so the redaction guarantee is structural
+
+The first design had three scripts (emit, phone-home, redact). That makes *"every emitted
+excerpt passes the redactor"* a **convention** two other producers must remember. Folding
+redaction into the only emitter makes it **structural**: there is no path that emits without
+redacting, because there is no other path. Both in-repo precedents (`_emit`,
+`cloud-init-registry.yml`'s `post()`) are one thing for the same reason.
+
+### Two git-data-specific redaction rules, at the FRONT of the chain
+
+- **A bare-UUID rule.** On this host the repo identifier **is** the user identifier: repos
+  are `<workspace_id>.git` and `workspace_id === user_id` (the mig-053 N2 invariant). Better
+  Stack's shared `pii_scrub_string` scrubs `userid=<token>` pairs, emails, bearer tokens and
+  DSNs — **not a bare UUID in free text**. Emitting one would ship raw `auth.users.id`
+  values and break PA-8's Recital 26 pseudonymity claim.
+- **A repo-path rule**, for the same reason via the containing path.
+
+Both run **before** `tail -c 180`: the cap is byte-wise, and a truncated-but-still-
+identifying prefix survives a literal grep. Ordering here is as load-bearing as the
+printable-ASCII pass this ADR already pins.
+
+### Channel split without a flag
+
+Sentry is unconditional from the **baked** DSN. Better Stack fires only when
+`BETTERSTACK_LOGS_TOKEN` is present in the environment — true **only** under `doppler run`.
+So *"early stages and fatals are Sentry-only; boot-completion and gc faults are both"* falls
+out of the call sites **by construction** rather than from a flag that can be set wrongly.
+The invariant that matters — a fatal never depends on Doppler to be reported — is therefore
+structural, which is what this ADR's `fail_loud` contract requires.
+
+### The `rc` guard, at every arming site
+
+`trap … EXIT` fires on **every** exit, including a successful one. Without
+`rc=$?; [ "$rc" -eq 0 ] && exit 0` every healthy boot emits `level=fatal`, which inverts the
+fatal channel into noise on day one and makes the real fatal indistinguishable. git-data has
+**three** arming sites (top-level runcmd, the LUKS heredoc, the bootstrap re-arm) and the
+guard is mandatory at each.
+
 ## References
 
 - #6969 — the dark boot this ADR responds to.

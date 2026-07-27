@@ -4156,7 +4156,7 @@ jobs:
               SELECT dt, JSONExtractString(raw,'message') AS msg,
                      JSONExtractString(raw,'stage') AS stage,
                      JSONExtractString(raw,'host_name') AS host
-              FROM (SELECT * FROM remote(primary, \$BS_TABLE)
+              FROM (SELECT * FROM remote(\$BS_TABLE)
                     UNION ALL SELECT * FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
               WHERE JSONExtractString(raw,'stage') = 'boot_complete'
                 AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
