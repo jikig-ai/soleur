@@ -765,6 +765,38 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# ------------- Test 29: fail-safe names its ACTUAL cause ----
+# A symlink rejection is a prompt-injection defense firing; reporting it as
+# "sidecar missing" sends the operator looking for a deleted file (#7008).
+
+TOTAL=$((TOTAL+1))
+T29=$(mktemp -d); LATE_TMPDIRS+=("$T29"); setup_repo "$T29" code
+rm -f "$T29/AGENTS.docs.md"; ln -s AGENTS.rest.md "$T29/AGENTS.docs.md"
+stamp29=$(invoke_hook "$T29" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
+if printf '%s' "$stamp29" | grep -qF 'symlink'; then
+  echo "PASS: fail-safe names the symlink rejection, not a phantom missing file"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: symlink rejection reported as: $stamp29"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 30: core-only fallback must not claim a load it did not do ----
+# When AGENTS.core.md is itself unreadable the fallback loads NOTHING; saying
+# "loaded AGENTS.core.md only" there is a false claim on the least-visible path.
+
+TOTAL=$((TOTAL+1))
+T30=$(mktemp -d); LATE_TMPDIRS+=("$T30")   # deliberately NOT a git repo -> fallback path
+out30=$(printf '{"cwd":"%s"}' "$T30" | "$HOOK" 2>/dev/null)
+ctx30=$(printf '%s' "$out30" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
+if printf '%s' "$ctx30" | grep -qF 'NO rules loaded'; then
+  echo "PASS: fallback reports that nothing was loaded when core is unreadable"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: fallback claims a load it did not perform: $ctx30"
+  FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "RESULT: $PASS/$TOTAL passed ($FAIL failed)"
 [[ $FAIL -eq 0 ]] || exit 1

@@ -114,7 +114,13 @@ emit_core_only_fallback() {
     strip_sidecar_into_global "$root/AGENTS.core.md" hr-never-git-stash-in-worktrees
     fb="$STRIPPED_OUT"
   fi
-  printf '%s' "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":$(jq -Rs . <<<"[rules-loader] FALLBACK ($reason): loaded AGENTS.core.md only"$'\n'"$fb")}}"
+  # Say what actually happened. `fb` is empty when AGENTS.core.md is absent or
+  # symlink-rejected — claiming "loaded AGENTS.core.md only" there asserts a
+  # load that did not occur, on the one path where the operator has least
+  # visibility (#7008).
+  local loaded_note="loaded AGENTS.core.md only"
+  [[ -z "$fb" ]] && loaded_note="NO rules loaded (AGENTS.core.md unreadable)"
+  printf '%s' "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":$(jq -Rs . <<<"[rules-loader] FALLBACK ($reason): $loaded_note"$'\n'"$fb")}}"
 }
 
 INPUT=$(cat 2>/dev/null || true)
@@ -195,6 +201,7 @@ fi
 # fall-back transition.
 CONTEXT=""
 FAIL_SAFE_TRIGGERED=0
+FAIL_SAFE_CAUSE=""
 for class in $CLASSES; do
   sentinel=""
   case "$class" in
@@ -208,6 +215,7 @@ for class in $CLASSES; do
     # symlink in the repo could redirect AGENTS.<class>.md to /etc/passwd or
     # a crafted payload). Reject and fall through to fail-safe.
     FAIL_SAFE_TRIGGERED=1
+    FAIL_SAFE_CAUSE="sidecar symlinked (rejected)"
     break
   fi
   if [[ -f "$sidecar" ]]; then
@@ -216,6 +224,7 @@ for class in $CLASSES; do
     CONTEXT+="$STRIPPED_OUT"
   else
     FAIL_SAFE_TRIGGERED=1
+    FAIL_SAFE_CAUSE="sidecar missing"
     break
   fi
 done
@@ -233,7 +242,7 @@ if (( FAIL_SAFE_TRIGGERED == 1 )); then
     fi
   done
   CLASSES="core docs-only rest"
-  FAIL_SAFE_NOTE=" — fail-safe: sidecar missing"
+  FAIL_SAFE_NOTE=" — fail-safe: ${FAIL_SAFE_CAUSE:-sidecar unreadable}"
 else
   FAIL_SAFE_NOTE=""
 fi
