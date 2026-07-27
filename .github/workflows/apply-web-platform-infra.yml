@@ -3993,10 +3993,18 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         # Purely ADDITIVE: no -replace anywhere, and NO [ack-destroy] bypass on this path.
         #
-        # The eighteen -targets are the whole birth fan-out and MUST stay in lockstep with
-        # `def allow:` in tests/scripts/lib/git-data-host-birth-gate.sh and with
-        # GIT_DATA_BIRTH_TARGET_BASES in plugins/soleur/test/terraform-target-parity.test.ts.
-        # That test asserts all three are equal; this comment tells you why it will fail.
+        # The twenty -targets are the whole birth fan-out and MUST stay in lockstep with
+        # `def allow:` in tests/scripts/lib/git-data-host-birth-gate.sh, with that gate's
+        # SEPARATE presence loop, and with GIT_DATA_BIRTH_TARGET_BASES in
+        # plugins/soleur/test/terraform-target-parity.test.ts. That test asserts all of them
+        # agree; this comment tells you why it will fail.
+        #
+        # (#6982) 18 -> 20: doppler_secret.git_data_ssh_host (ADR-149 item 5 — without it
+        # every account deletion files a FALSE Art. 17 erasure-failed event from the moment
+        # the host exists) and doppler_secret.git_data_betterstack_logs_token (the ingest
+        # token the post-Doppler emits read). BOTH join the gate's PRESENCE half, never its
+        # entailed loop: entailed demands `creates == 1`, and on a resumed dispatch these
+        # legitimately re-plan as no-ops, so requiring a create would be a permanent wedge.
         #
         # Four of them are DOWNSTREAM of the server and so are NOT auto-pulled by
         # -target's upstream closure — omitting any one is a distinct catastrophe:
@@ -4034,6 +4042,8 @@ jobs:
               -target='doppler_secret.git_remove_ssh_private_key' \
               -target='random_password.git_data_luks' \
               -target='doppler_secret.git_data_luks_key' \
+              -target='doppler_secret.git_data_ssh_host' \
+              -target='doppler_secret.git_data_betterstack_logs_token' \
               -var="ssh_key_path=${CI_SSH_PUB}"
           rc=$?
           if [[ $rc -ne 0 ]]; then
@@ -4124,7 +4134,7 @@ jobs:
             echo ""
             echo "### What a green run gives you — and what it does not"
             echo ""
-            echo "It gives you: the eighteen-address fan-out CREATED IN TERRAFORM — the server, both volumes, both attachments, the private NIC and the deny-all firewall attachment."
+            echo "It gives you: the twenty-address fan-out CREATED IN TERRAFORM — the server, both volumes, both attachments, the private NIC, the deny-all firewall attachment, and (#6982) the GIT_DATA_SSH_HOST + Better Stack ingest secrets."
             echo ""
             echo "It does NOT prove the host booted, that git-data-bootstrap.sh ran, or that the LUKS volume mounted. This host emits nothing off-host until #6982, which is the whole reason the route is interlocked — a green apply and a dark host are indistinguishable here."
             echo ""

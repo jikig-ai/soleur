@@ -67,6 +67,21 @@ resource "tls_private_key" "git_remove" {
 }
 
 locals {
+  # (#6982, W8) The host's stable private-net address, hoisted out of network.tf so
+  # doppler_secret.git_data_ssh_host below can publish it WITHOUT referencing any
+  # hcloud resource. Mirrors local.registry_private_ip (zot-registry.tf:40, #6415):
+  # the host's own file owns the constant, network.tf consumes it.
+  #
+  # THIS BEING A STATIC LITERAL IS THE WHOLE POINT. ADR-149 cut this secret from #6977
+  # because sourcing it from hcloud_server_network.git_data.ip (a COMPUTED attribute)
+  # would drag hcloud_server.git_data into any -target closure that reached the secret,
+  # and the natural remedy — a per-PR -target line — wedges every merge to main. A
+  # literal has no such edge: the secret is plannable and appliable with the host
+  # absent, which is exactly the state it must survive (see the resource comment).
+  #
+  # web = .10/.11, git-data = .20, registry = .30, inngest = .40.
+  git_data_private_ip = "10.0.1.20"
+
   # trimspace() strips the trailing newline tls_private_key.public_key_openssh
   # carries — without it the cloud-init authorized_keys line renders with a
   # trailing blank, breaking the forced-command entry. Same rationale as
@@ -182,6 +197,44 @@ resource "doppler_secret" "git_remove_ssh_private_key" {
   depends_on = [hcloud_server.git_data]
 }
 
+# --- The git-data host's address → Doppler prd (#6982 W8 / ADR-149 §5, Residual 2) ---
+#
+# `resolveGitDataSshHost()` (git-data-replication.ts) reads GIT_DATA_SSH_HOST and THROWS in
+# production when it is unset. `removeGitDataRepo` — the Art. 17 erasure path — calls it. So
+# without this secret, from the instant the host exists EVERY account deletion throws and
+# files a "git-data Art. 17 erasure failed" Sentry event for a store that is fine. That is
+# 100 % false alarms on the one signal that must stay trustworthy, and it is why ADR-149
+# lists this as checklist item 5 rather than a nicety.
+#
+# NO `depends_on` — and that is deliberate, load-bearing, and the opposite of its three
+# sibling key secrets above (#6982 R9). ADR-149 Residual 2 corrected exactly this reasoning:
+# `depends_on` guarantees the value CO-LANDS with the server, and for the REMOVE KEY
+# co-landing is the harmful state (its presence is the arming switch for erasure). This
+# secret is the ANTIDOTE, not the poison — it is the thing that makes erasure work — so
+# co-landing is precisely what must NOT be required. Two consequences, both wanted:
+#
+#   1. It lands in terraform's FIRST wave (its value is a static local, so it has no
+#      upstream at all). The remove key waits on hcloud_server.git_data. Therefore this
+#      secret is ORDERED BEFORE the remove key BY CONSTRUCTION — which is what pins
+#      AC35: a partial birth cannot land the arming switch while leaving the antidote
+#      behind, because the antidote has strictly fewer dependencies.
+#   2. It carries no edge that could drag hcloud_server.git_data into an upstream
+#      `-target` closure — the wedge ADR-149 feared when it cut this resource from #6977.
+#
+# NO `lifecycle { ignore_changes = [value] }` either (#6982 R38): every sibling
+# doppler_secret in this root lets Terraform own the value, and pinning it here would
+# freeze a stale IP the day local.git_data_private_ip moves — silently re-creating the
+# drift that this single-sourcing exists to remove.
+resource "doppler_secret" "git_data_ssh_host" {
+  project = "soleur"
+  config  = "prd"
+  name    = "GIT_DATA_SSH_HOST"
+  # The static literal, NEVER hcloud_server_network.git_data.ip. Reading the computed
+  # attribute is what made this resource look infeasible in #6977 (see the local's comment).
+  value      = local.git_data_private_ip
+  visibility = "masked"
+}
+
 # --- The git-data host -------------------------------------------------------
 resource "hcloud_server" "git_data" {
   name = "soleur-git-data"
@@ -242,11 +295,16 @@ resource "hcloud_server" "git_data" {
     # The FRESH LUKS-at-rest cutover volume (Sub-PR 3.D, git-data-luks.tf). Guest-side
     # cryptsetup luksOpens + mounts it at /mnt/git-data-luks. by-id like the plaintext one.
     git_data_luks_volume_id = hcloud_volume.git_data_luks.id
-    # Doppler service token → 0600 root env file so the boot-time `doppler run` can
-    # read GIT_DATA_LUKS_KEY. SCOPED read-only token for the `prd_git_data` config
-    # (only GIT_DATA_LUKS_KEY) — NOT the full-prd var.doppler_token (3.D security review
-    # MEDIUM / CTO ruling: a git-data-host compromise must not yield service-role /
+    # Doppler service token → 0600 root env file so the boot-time `doppler run` can read
+    # GIT_DATA_LUKS_KEY and (since #6982) BETTERSTACK_LOGS_TOKEN. SCOPED read-only token
+    # for the `prd_git_data` config — NOT the full-prd var.doppler_token (3.D security
+    # review MEDIUM / CTO ruling: a git-data-host compromise must not yield service-role /
     # GIT_REMOVE / PROXY_TLS material). The passphrase itself is NEVER in this user_data.
+    #
+    # #6982: the runcmd invocations name `--config prd_git_data`, i.e. the config this
+    # token is actually scoped to. They named `--config prd` until #6982, which the W0
+    # probe measured as a hard failure ("This token does not have access to requested
+    # config 'prd'", exit 1) — so the LUKS heredoc ran zero times and the host booted dark.
     doppler_token = doppler_service_token.git_data.key
     # Dual-arch Doppler CLI download (#6570). BOTH are derived from
     # var.git_data_server_type — the cloud-init hardcoded the arm64 build and its checksum,

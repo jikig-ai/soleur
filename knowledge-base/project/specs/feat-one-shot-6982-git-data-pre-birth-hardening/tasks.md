@@ -56,17 +56,17 @@ creates `hcloud_server.git_data`.
 
 ## Phase 1 — Terraform contract
 
-- [ ] 1.1 Hoist `local.git_data_private_ip = "10.0.1.20"`; have `hcloud_server_network.git_data.ip`
+- [x] 1.1 Hoist `local.git_data_private_ip = "10.0.1.20"`; have `hcloud_server_network.git_data.ip`
       read it. Do **not** reference the computed attribute from the new secret.
-- [ ] 1.2 Add `doppler_secret.git_data_ssh_host` — project `soleur`, config `prd`, name
+- [x] 1.2 Add `doppler_secret.git_data_ssh_host` — project `soleur`, config `prd`, name
       `GIT_DATA_SSH_HOST`, `value = local.git_data_private_ip`, `visibility = "masked"`.
       **No `depends_on`** (R9 — v1 applied the rationale ADR-149 Residual 2 explicitly corrected;
       this secret is the antidote, not the arming switch). **No
       `lifecycle{ignore_changes=[value]}`** (R38 — diverges from every sibling and would pin a stale
       IP).
-- [ ] 1.3 Amend `variables.tf`'s `git_data_server_type` description: corrected D1 claim + the
+- [x] 1.3 Amend `variables.tf`'s `git_data_server_type` description: corrected D1 claim + the
       finding that `cpx22` is now the only sensible **orderable** option.
-- [ ] 1.4 **Register the new address at all SIX sites, in this same commit** (R6): the birth
+- [x] 1.4 **Register the new address at all SIX sites, in this same commit** (R6): the birth
       `-target` list (**18 → 20**, per D1) and its prose; `_GIT_DATA_BIRTH_ALLOW`'s `def allow: [ … ]`; the
       gate's **separate presence loop**; the gate's two prose counts;
       `GIT_DATA_BIRTH_TARGET_BASES` plus the two "eighteen members" comments (now **20**); the
