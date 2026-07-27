@@ -177,6 +177,42 @@ run_suite() {
   fi
 }
 
+# COVERAGE BOUNDARY (#6730), announced in the PREAMBLE (#7014). This runner does NOT
+# cover apps/web-platform/infra/; those suites are registered only in
+# .github/workflows/infra-validation.yml, and the authoritative runner for that
+# directory is apps/web-platform/infra/run-registered-suites.sh, which DERIVES its list
+# from that workflow (an ad-hoc `for f in infra/*.test.sh` loop is not the CI-registered
+# set either). The gap is silent and has cost two sessions: a required check was RED
+# behind a 223/223 green here (#6730), and an infra diff was validated by the wrong
+# runner entirely (#6969) — both times "all tests pass" was read as evidence for infra
+# the run never touched.
+#
+# It fires HERE rather than after the suites because the announcement is only actionable
+# while there is still a decision to make; at the end of a ~20-minute run the cost is
+# already paid and the note reads as an epitaph. A one-line restatement stays in the
+# epilogue for readers who `tail` the log instead of reading it from the top.
+#
+# Detection reads a VARIABLE, not a pipe into `grep -q`. Under this script's `set -o
+# pipefail`, `git diff --name-only | grep -q` takes SIGPIPE (141) on an early match and
+# the whole condition evaluates FALSE — and `apps/…` sorts near the front of any diff, so
+# the early match is the common case, not the corner one. That fails OPEN: exactly the
+# announcement going missing on the runs that need it.
+_infra_diff_names="$(
+  { git diff --name-only HEAD 2>/dev/null
+    git diff --name-only origin/main...HEAD 2>/dev/null
+  } || true
+)"
+_infra_in_diff=0
+if grep -qE '^apps/web-platform/infra/' <<<"$_infra_diff_names"; then
+  _infra_in_diff=1
+  echo ""
+  echo "NOTE: your diff touches apps/web-platform/infra/, which this runner does NOT cover."
+  echo "      Nothing below is evidence for it. Run the CI-registered suites — in parallel"
+  echo "      with this run, not after it:"
+  echo "        bash apps/web-platform/infra/run-registered-suites.sh"
+  echo ""
+fi
+
 # Contention preamble — emitted before the first `--- <suite> ---` line so a
 # contended run is self-identifying and a false RED is never again diagnosed
 # as a regression (AC1/AC2).
@@ -481,17 +517,15 @@ tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 
 echo "=== $((suites - failed))/$suites suites passed ==="
 
-# COVERAGE BOUNDARY (#6730). This runner does NOT cover apps/web-platform/infra/;
-# those suites are registered only in .github/workflows/infra-validation.yml. The
-# gap is silent and has already cost a session: a required check was RED behind a
-# 223/223 green here, because "all tests pass" was read as evidence for an infra
-# change it never touched. Announce the boundary whenever infra is in the diff, so
-# the green above cannot be mistaken for coverage it does not have.
-if git diff --name-only HEAD 2>/dev/null | grep -q '^apps/web-platform/infra/' \
-   || git diff --name-only origin/main...HEAD 2>/dev/null | grep -q '^apps/web-platform/infra/'; then
+# Restatement of the PREAMBLE coverage-boundary notice (#6730/#7014). The decision it
+# supports is made up top, before the run is paid for; this line exists only so a reader
+# who `tail`s the log — the documented log-reading shape — still sees that the summary
+# above excludes apps/web-platform/infra/. Reuses the preamble's detection result rather
+# than re-running the diff, so the two can never disagree.
+if [[ "${_infra_in_diff:-0}" == 1 ]]; then
   echo ""
-  echo "NOTE: your diff touches apps/web-platform/infra/, which this runner does NOT cover."
-  echo "      The green above is not evidence for it. Run the CI-registered suites:"
+  echo "NOTE (announced in the preamble): apps/web-platform/infra/ is NOT covered above."
+  echo "      The green is not evidence for it. Run the CI-registered suites:"
   echo "        bash apps/web-platform/infra/run-registered-suites.sh"
 fi
 
