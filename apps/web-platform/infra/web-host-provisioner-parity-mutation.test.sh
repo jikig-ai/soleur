@@ -46,6 +46,14 @@
 
 set -uo pipefail
 
+# Default TMPDIR to /var/tmp (disk-backed), mirroring scripts/test-all.sh and
+# run-registered-suites.sh. Those two cover the CI path; a DIRECT invocation of this file --
+# the documented inner loop while editing the guard -- inherited the bare /tmp default and so
+# put its sandbox on the machine-global 4 GiB tmpfs that parallel worktrees share. At 94% full
+# the sandbox copies start failing, and this battery's verdicts become a function of another
+# session's disk usage. Respects an explicit caller value.
+export TMPDIR="${TMPDIR:-/var/tmp}"
+
 ROOT="$(git rev-parse --show-toplevel)" || exit 2
 REAL_INFRA="$ROOT/apps/web-platform/infra"
 GUARD="$REAL_INFRA/web-host-provisioner-parity.test.sh"
@@ -174,7 +182,23 @@ done
 
 # Runs the real guard against the sandbox; combined output lands in $OUT for attribution.
 run_guard() { SOLEUR_INFRA_DIR="$SANDBOX" bash "$GUARD" >"$OUT" 2>&1; }
-restore()   { for f in "${INPUTS[@]}"; do cp "$PRISTINE/$f" "$SANDBOX/$f"; done; }
+# restore() FAILS LOUDLY. An unchecked `cp` here is a silent-corruption vector, not a tidiness
+# nit: when it fails, the sandbox keeps the PREVIOUS case's mutation and every later case runs
+# against a fixture nobody chose. The observable symptom is a case reporting "guard still PASSED
+# with the invariant broken" or "mutator errored" -- i.e. a real-looking verdict about the guard,
+# produced by a broken harness. Measured while /tmp sat at 94% under sibling test-all.sh runs:
+# three different failure sets across three consecutive runs of an unchanged tree.
+restore() {
+  local f
+  for f in "${INPUTS[@]}"; do
+    cp "$PRISTINE/$f" "$SANDBOX/$f" || {
+      echo "FATAL: could not restore $f into the sandbox (disk pressure? $TMPDIR)." >&2
+      echo "  Every result after this point would be measured against the previous case's" >&2
+      echo "  mutation, so the run is void rather than red." >&2
+      exit 2
+    }
+  done
+}
 
 apply_mutation() {
   local file="$1" script="$2"
@@ -677,12 +701,16 @@ assert old in s
 s = s.replace(old, "host_script_files_v2 = [", 1)
 '
 
-# M33 pins the MESSAGE. It does not pin the EXIT: deleting `print(summary); sys.exit(1)` while
-# keeping the `no(...)` leaves the anchor on a [FAIL] line and the run still ends non-zero (the
-# next statement dereferences the None match), so M33 credits the check either way. What the
-# early exit uniquely buys is that NOTHING downstream ran against a broken parse -- observable
-# as a summary reporting zero passes. Anchored on the summary line, which is not a [FAIL] line,
-# so it needs its own assertion rather than expect_red.
+# M33 pins the MESSAGE, not the EXIT. M33b pins the exit -- but NOT via the summary line, which
+# was the first attempt and was measured NOT load-bearing: `print(summary)` runs BEFORE
+# `sys.exit(1)`, so neutering the exit alone still emits "0 passed, 1 failed" and the assertion
+# passed with the site removed.
+#
+# What the early exit actually buys is a CLEAN named failure. Without it the next statement
+# dereferences the None match and the run dies on an AttributeError traceback -- still non-zero,
+# still carrying M33's anchor, but the operator now reads a Python stack trace instead of the
+# sentence the guard wrote for exactly this case. So the discriminating assertion is the ABSENCE
+# of a traceback alongside the presence of the summary.
 restore
 if apply_mutation server.tf '
 old = "host_script_files = ["
@@ -691,13 +719,14 @@ s = s.replace(old, "host_script_files_v2 = [", 1)
 ' && ! cmp -s "$SANDBOX/server.tf" "$PRISTINE/server.tf"; then
   mutations_run=$((mutations_run + 1))
   run_guard
-  if grep -qF "=== web-host-provisioner-parity: 0 passed, 0 failed ===" "$OUT"; then
-    no "M33b (§0 early exit ABORTS the run): the guard exited without recording the failure"
+  if grep -qF "Traceback (most recent call last)" "$OUT"; then
+    no "M33b (§0 early exit ABORTS cleanly): the guard continued past an unparseable bake list
+      and died on a traceback instead of the named failure it had already composed.
+      Output: $(<"$OUT")"
   elif grep -qF "0 passed, 1 failed" "$OUT"; then
-    ok "M33b (§0 early exit ABORTS the run): guard stopped at §0 with zero downstream checks"
+    ok "M33b (§0 early exit ABORTS cleanly): guard stopped at §0, no traceback"
   else
-    no "M33b (§0 early exit ABORTS the run): the guard continued past an unparseable bake list --
-      downstream sections ran against an empty \`baked\`. Output: $(<"$OUT")"
+    no "M33b (§0 early exit ABORTS cleanly): unexpected output. Output: $(<"$OUT")"
   fi
 else
   no "M33b: mutation did not land"
