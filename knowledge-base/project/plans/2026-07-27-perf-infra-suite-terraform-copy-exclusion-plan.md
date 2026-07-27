@@ -459,8 +459,9 @@ diff surviving).
 
 ### Post-merge (operator)
 
-_None._ Every step is automatable in-session. No operator action, credential mint,
-dashboard visit, or `terraform apply`.
+_None._ Every step is automatable in-session, and all of them ran there. This change is
+confined to a bash test harness: nothing to provision, nothing to deploy, no credential to
+mint, no console to open.
 
 **Ship instruction (not an AC):** the PR body must state that the runner's ~8m50s is
 unchanged and bounded by `ci-deploy.test.sh`, and name **#6665** — so no reader mistakes
