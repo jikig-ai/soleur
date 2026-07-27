@@ -45,6 +45,36 @@ The two cases look identical in a diff and have opposite consequences. Neither `
 `terraform validate`, nor any test suite distinguishes them — only `terraform plan` does, and only
 if you read the resource-level actions rather than the `Plan:` summary.
 
+### Addendum (2026-07-27, #6981): the SECOND reason a comment is not free — it costs bytes
+
+`ignore_changes = [user_data]` makes comment edits inert on an already-booted host, so by the rule
+above `hcloud_server.web` looks like the safe case. It is not fully safe: `user_data` is
+`base64gzip(templatefile(…))` against Hetzner's **32,768 B cap**, with a 23,700 B sub-cap budget
+guarded by `plugins/soleur/test/cloud-init-user-data-size.test.ts`. Prose is payload.
+
+In #6981 a 33-line explanatory comment took the rendered `user_data` from 23,016 B to **23,852 B** —
+over budget. Nothing local caught it: the infra suites (72/72) and the PR's own new assertions
+(104/0) do not model the render. Only `scripts/test-all.sh` did.
+
+**And the obvious hand-check is wrong.** Measuring the source directly reads ~400 B LOW, because the
+file is a terraform *template* and the test renders it with real variable values first:
+
+```
+gzip -9 -c cloud-init.yml | base64 -w0 | wc -c   → 23,444   (under budget — WRONG)
+bun test cloud-init-user-data-size.test.ts       → 23,852   (over budget — the real number)
+```
+
+Acting on the first number would have "fixed" the overrun on a value that was never the measurement.
+
+**So, before adding prose to any `cloud-init-*.yml`, check both axes:**
+
+1. **Does the consuming resource carry `ignore_changes = [user_data]`?** No → the comment can replace
+   a live host (§1 above).
+2. **Is there byte headroom?** Run the size test, not a hand-rolled `gzip`. If headroom is thin, put
+   the rationale in the ADR / issue / post-mortem — those have no byte budget — and leave a pointer.
+
+Full write-up: [[2026-07-27-my-assertion-pinned-the-text-not-the-shell-that-runs-it]].
+
 ### Attribution matters, and it is cheap
 
 The registry planned `delete, create` / `replace_because_cannot_update` **even with a pristine
