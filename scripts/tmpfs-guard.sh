@@ -267,7 +267,7 @@ reap_scratch_entries() {
   [[ -d "$TMP_ROOT" ]] || return 0
   local uid; uid="$(id -u)"
   local reaped=0 reaped_mb=0
-  local e base fresh size_mb
+  local e base size_mb
 
   # Which tier are we in? The count signal is one `find | wc -l`.
   local entry_count min_mb age_min max_reap
