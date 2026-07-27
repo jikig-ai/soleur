@@ -196,18 +196,50 @@ p_prereceive_freeze() {
 # arch. Guarding only the URL would leave the checksum half covered by a one-shot PR
 # acceptance grep and by nothing durable afterwards.
 p_doppler_arch_url() {
-  grep -qF 'doppler_$${DOPPLER_VERSION}_linux_${doppler_arch}.tar.gz' "$1" || { echo 0; return; }
-  grep -qF 'DOPPLER_SHA256="${doppler_sha256}"' "$1" || { echo 0; return; }
+  # Comment-stripped FIRST. This file now carries an ESCAPING: block that names
+  # $${doppler_arch} / $${doppler_sha256} in prose, so a bare whole-file grep is
+  # satisfiable by the explanatory comment alone — the assertion would survive a
+  # full revert to the hardcoded arm64 build (cq-assert-anchor-not-bare-token).
+  local src
+  src="$(sed 's/#.*//' "$1")"
+  printf '%s\n' "$src" | grep -qF 'doppler_$${DOPPLER_VERSION}_linux_${doppler_arch}.tar.gz' || { echo 0; return; }
+  printf '%s\n' "$src" | grep -qF 'DOPPLER_SHA256="${doppler_sha256}"' || { echo 0; return; }
+  # The digest must be CONSUMED, not merely assigned. Without this, deleting the
+  # verification line entirely leaves the whole A14/A15 apparatus green: a correct
+  # checksum is proven computed and proven assigned, and nothing proves it is ever
+  # compared against the downloaded tarball.
+  printf '%s\n' "$src" | grep -qF 'echo "$${DOPPLER_SHA256}' || { echo 0; return; }
+  printf '%s\n' "$src" | grep -qF 'sha256sum -c -' || { echo 0; return; }
   echo 1
 }
 
 # Extract a file's per-arch Doppler checksum pair as "<arm64sha> <amd64sha>", read from
 # the ternary's own bytes. Comments are stripped FIRST so a checksum eulogized in prose
 # can neither stand in for a live literal nor be miscounted.
+# Emits a NORMALIZED, order-independent binding "amd64=<sha>;arm64=<sha>".
+# Reading the ternary's CONDITION is the whole point: comparing the two literals in
+# textual order cannot see a checksum<->arch PAIRING SWAP. Flipping the condition to
+# `== "amd64"` leaves both literals present in the same order, so an order-compare
+# stays green while the host verifies the amd64 tarball against the arm64 digest —
+# and because that runcmd carries no `set -e`, it then installs it anyway, with the
+# supply-chain check silently disarmed. Normalizing also makes the guard robust to a
+# semantically identical refactor that inverts the condition deliberately.
 canon_doppler_pair() {
-  sed 's/#.*//' "$1" \
-    | grep -E 'doppler_sha256[[:space:]]*=' \
-    | grep -oE '"[0-9a-f]{64}"' | tr -d '"' | paste -sd' '
+  local line condarch t f
+  # Strip `#` and whitespace-preceded `//` comments (HCL supports both). The `//` arm
+  # requires leading whitespace or line-start so a `https://` URL is never truncated.
+  line="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" \
+    | grep -E 'doppler_sha256[[:space:]]*=' | grep -F '?' | head -1)"
+  [ -n "$line" ] || { echo ""; return; }
+  condarch="$(printf '%s' "$line" | grep -oE '==[[:space:]]*"[a-z0-9]+"' | grep -oE '[a-z0-9]+"$' | tr -d '"')"
+  t="$(printf '%s' "$line" | grep -oE '\?[[:space:]]*"[0-9a-f]{64}"' | grep -oE '[0-9a-f]{64}')"
+  f="$(printf '%s' "$line" | grep -oE ':[[:space:]]*"[0-9a-f]{64}"' | grep -oE '[0-9a-f]{64}')"
+  { [ -n "$condarch" ] && [ -n "$t" ] && [ -n "$f" ]; } || { echo ""; return; }
+  case "$condarch" in
+    arm64) printf 'amd64=%s;arm64=%s\n' "$f" "$t" ;;
+    amd64) printf 'amd64=%s;arm64=%s\n' "$t" "$f" ;;
+    *)     echo "" ;;
+  esac
 }
 
 # A15: git-data's checksum pair is byte-identical to BOTH live canon sites, in ORDER.
@@ -221,13 +253,48 @@ p_doppler_checksum_parity() {
   gd_pair="$(canon_doppler_pair "$1")"
   ing_pair="$(canon_doppler_pair "$INNGEST_HOST_TF")"
   zot_pair="$(canon_doppler_pair "$ZOT_TF")"
-  # Non-vacuity: every side must yield EXACTLY two 64-hex tokens. Without this an empty
-  # extraction on all three would compare "" == "" and fake a clean parity.
+  # Non-vacuity: every side must be a fully-formed normalized binding. Without this an
+  # empty extraction on all three would compare "" == "" and fake a clean parity.
   for p in "$gd_pair" "$ing_pair" "$zot_pair"; do
-    # shellcheck disable=SC2086  # word-splitting is the point — count the tokens
-    [ "$(printf '%s\n' $p | grep -c '^[0-9a-f]\{64\}$' || true)" -eq 2 ] || { echo 0; return; }
+    printf '%s' "$p" | grep -qE '^amd64=[0-9a-f]{64};arm64=[0-9a-f]{64}$' || { echo 0; return; }
   done
   if [ "$gd_pair" = "$ing_pair" ] && [ "$gd_pair" = "$zot_pair" ]; then echo 1; else echo 0; fi
+}
+
+# The templatefile map is the WIRE between the derivation (A16) and its consumer (A14).
+# A16 proves local.git_data_arch is computed correctly; A14 proves the cloud-init reads
+# ${doppler_arch}. Neither sees the map that connects them, so hardcoding
+# `doppler_arch = "arm64"` there reproduces the exact #6570 boot-brick — arm64 binary on
+# an x86 host, doppler never runs, GIT_DATA_LUKS_KEY never arrives, volume never opens —
+# with the precondition still green (local.git_data_arch is still correctly amd64).
+p_templatefile_wiring() {
+  local src
+  src="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1")"
+  printf '%s\n' "$src" | grep -qE '^[[:space:]]*doppler_arch[[:space:]]*=[[:space:]]*local\.git_data_arch[[:space:]]*$' || { echo 0; return; }
+  printf '%s\n' "$src" | grep -qE '^[[:space:]]*doppler_sha256[[:space:]]*=[[:space:]]*local\.git_data_doppler_sha256[[:space:]]*$' || { echo 0; return; }
+  echo 1
+}
+
+# The phantom/wrong-arch tripwire is load-bearing ONLY while hcloud_server.git_data
+# REFERENCES the data source: terraform prunes an unreferenced data source under
+# `-target=`, and every git-data dispatch is -targeted. Deleting the precondition
+# therefore disarms the data source silently — the untargeted PR-time plan still reads
+# it, so CI and `terraform validate` both stay green and the only signal is prose.
+# Comment-stripped, because `data.hcloud_server_type.git_data` appears in the
+# surrounding explanatory comments (a bare grep would be satisfied by those alone).
+p_tripwire_edge() {
+  local src cond
+  src="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1")"
+  printf '%s\n' "$src" | grep -qE '^data "hcloud_server_type" "git_data"' || { echo 0; return; }
+  printf '%s\n' "$src" | grep -qE '^[[:space:]]*precondition[[:space:]]*\{' || { echo 0; return; }
+  cond="$(printf '%s\n' "$src" | grep -A 3 -E '^[[:space:]]*condition[[:space:]]*=' | head -4)"
+  printf '%s' "$cond" | grep -qF 'data.hcloud_server_type.git_data.architecture' || { echo 0; return; }
+  # The enums MUST be mapped, never compared: hcloud emits x86/arm, the local is
+  # amd64/arm64, so a direct compare is false on every plan forever and wedges the root.
+  printf '%s' "$cond" | grep -qF '"arm"' || { echo 0; return; }
+  printf '%s' "$cond" | grep -qF '"x86"' || { echo 0; return; }
+  printf '%s' "$cond" | grep -qE 'architecture[[:space:]]*==[[:space:]]*local\.git_data_arch' && { echo 0; return; }
+  echo 1
 }
 
 # A16: the arch derivation is ORIENTED correctly. This is the only assertion that catches
@@ -237,7 +304,11 @@ p_doppler_checksum_parity() {
 # values, then replay the decision over the real type space.
 p_arch_derivation() {
   local expr pfx tval fval pair t exp got
-  expr="$(sed 's/#.*//' "$1" | grep -E 'git_data_arch[[:space:]]*=' | head -1)"
+  # Anchored on the ASSIGNMENT at line-start. A bare `git_data_arch[[:space:]]*=` also
+  # matches the precondition's `local.git_data_arch == "arm64" ? "arm" : "x86"`, so the
+  # extraction was order-coupled — correct today only because `locals` precedes the
+  # resource in the file.
+  expr="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*git_data_arch[[:space:]]*=' | head -1)"
   [ -n "$expr" ] || { echo 0; return; }
   pfx="$(printf '%s' "$expr" | grep -oE 'startswith\(var\.git_data_server_type,[[:space:]]*"[a-z]+"\)' | grep -oE '"[a-z]+"' | tr -d '"')"
   tval="$(printf '%s' "$expr" | grep -oE '\?[[:space:]]*"[a-z0-9]+"' | grep -oE '"[a-z0-9]+"' | tr -d '"')"
@@ -246,7 +317,11 @@ p_arch_derivation() {
   { [ -n "$pfx" ] && [ -n "$tval" ] && [ -n "$fval" ]; } || { echo 0; return; }
   # cax* is Ampere/ARM; cpx*/cx*/ccx* are all x86. Synthesized types, not a live probe
   # (cq-test-fixtures-synthesized-only) — this pins the DERIVATION, not today's stock.
-  for pair in "cax11:arm64" "cpx22:amd64" "cx23:amd64" "ccx13:amd64"; do
+  # The arm64 class had cardinality 1 (cax11 alone) — a claim quantified over the ARM
+  # line but sampled once. Hetzner's ARM lineup is cax11/21/31/41; all four are replayed
+  # so a truncated prefix (e.g. "ca") cannot pass on a single lucky member.
+  for pair in "cax11:arm64" "cax21:arm64" "cax31:arm64" "cax41:arm64" \
+              "cpx22:amd64" "cx23:amd64" "ccx13:amd64"; do
     t="${pair%%:*}"; exp="${pair##*:}"
     case "$t" in "$pfx"*) got="$tval" ;; *) got="$fval" ;; esac
     [ "$got" = "$exp" ] || { echo 0; return; }
@@ -355,7 +430,7 @@ assert_mutation "A14 doppler-arch-url" p_doppler_arch_url "$CLOUD_INIT" \
 # blank digest. terraform validate stays green and validate-infra-templates.sh skips
 # $${key} BY DESIGN, so this assertion is the only thing between that typo and a boot.
 assert_mutation "A14 doppler-arch-url (silent \$\$ escape)" p_doppler_arch_url "$CLOUD_INIT" \
-  's/DOPPLER_SHA256="/DOPPLER_SHA256="$$/'
+  's;DOPPLER_SHA256="\$\{;DOPPLER_SHA256="$$\{;'
 
 # A15: checksum pair byte-equals the two canon sites, in arm64-then-amd64 order.
 assert_holds    "A15 doppler-checksum-parity" p_doppler_checksum_parity "$GIT_DATA_TF"
@@ -377,10 +452,23 @@ assert_holds    "A17 default-not-cax" p_default_not_cax "$VARIABLES_TF"
 assert_mutation "A17 default-not-cax" p_default_not_cax "$VARIABLES_TF" \
   's/default([[:space:]]*)=[[:space:]]*"cpx22"/default\1= "cax11"/'
 
+# A18: the templatefile map wires BOTH derived locals through to the cloud-init.
+assert_holds    "A18 templatefile-wiring" p_templatefile_wiring "$GIT_DATA_TF"
+# Mutation: the #6570 regression, relocated from the cloud-init to the var map.
+assert_mutation "A18 templatefile-wiring" p_templatefile_wiring "$GIT_DATA_TF" \
+  's;^([[:space:]]*)doppler_arch([[:space:]]*)=[[:space:]]*local\.git_data_arch[[:space:]]*$;\1doppler_arch\2= "arm64";'
+
+# A19: the tripwire's referencing edge survives, and the enums stay MAPPED not compared.
+assert_holds    "A19 tripwire-edge" p_tripwire_edge "$GIT_DATA_TF"
+# Mutation: drop the precondition — the data source is then pruned under -target= and the
+# phantom-type guard fires on zero production paths, silently.
+assert_mutation "A19 tripwire-edge" p_tripwire_edge "$GIT_DATA_TF" \
+  's;^([[:space:]]*)precondition([[:space:]]*)\{;\1notaprecondition\2{;'
+
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 total=$((passes + fails))
-if [ "$total" -lt 35 ]; then
-  echo "FAIL: ran only ${total} assertions (<35) — suite did not execute fully" >&2
+if [ "$total" -lt 39 ]; then
+  echo "FAIL: ran only ${total} assertions (<39) — suite did not execute fully" >&2
   exit 1
 fi
 
