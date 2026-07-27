@@ -578,7 +578,7 @@ s += "install -m 0644 /opt/x /etc/soleur/deadcode-artifact.conf" + chr(10) + "DE
 # `destination\s*=\s*(local\.\S*)` and the battery stayed fully green while `var.x`, `each.value`,
 # `module.a.b` and every function call remained silently droppable. Each case anchors on its own
 # expression text so they cannot credit one another.
-expect_red "M29a (§2 extraction: a `local.` reference must not vanish silently)" server.tf \
+expect_red "M29a (§2 extraction: a local.* reference must not vanish silently)" server.tf \
   "sets destination = local.phantom_dest" '
 a = """  provisioner "file" {
     source      = "${path.module}/disk-monitor.sh"
@@ -593,7 +593,7 @@ s = s.replace(a, a + """
   }""", 1)
 '
 
-expect_red "M29b (§2 extraction: a `var.` reference must not vanish silently)" server.tf \
+expect_red "M29b (§2 extraction: a var.* reference must not vanish silently)" server.tf \
   "sets destination = var.phantom_dest" '
 a = """  provisioner "file" {
     source      = "${path.module}/disk-monitor.sh"

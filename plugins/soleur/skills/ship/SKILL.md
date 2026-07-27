@@ -321,10 +321,16 @@ For each new source file, check if a corresponding test file exists (e.g., `foo.
 
 **Interactive mode:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
 
-Then run the project's full test suite (matches CI):
+Then run the project's full test suite. It is CI parity MINUS `apps/web-platform/infra/`, whose
+suites are registered only in `.github/workflows/infra-validation.yml` — so when the diff touches
+that directory, `run-registered-suites.sh` is required too and `test-all.sh` says so in its
+preamble. Calling `test-all.sh` alone "matches CI" is what produced #6969: a green summary read as
+evidence for infra it never executed, at the last gate before merge.
 
 ```bash
 bash scripts/test-all.sh
+# AND, when the diff touches apps/web-platform/infra/ (derives its list from infra-validation.yml):
+bash apps/web-platform/infra/run-registered-suites.sh
 ```
 
 **If tests fail:**
