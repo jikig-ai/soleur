@@ -21,12 +21,18 @@ limit, and a 300 s `Monitor` will time out before it finishes.
       Record every hit and its disposition. Historical record
       (`knowledge-base/project/learnings/`, `knowledge-base/project/{plans,specs}/`)
       is **excluded from rewriting** — those files legitimately cite the old seam.
-- [ ] **0.3** Build the **loop-exit classification** table for all **17** `sleep`
-      sites in `ci-deploy.sh`, labelling each enclosing loop *bounded-iteration*
-      / *counter-bounded* / *straight-line* / *wall-clock exit*. Must include the
-      five canary `sleep 3` sites (`:2471`, `:2477`, `:2483`, `:2491`, `:2526`)
-      inside the `:2452` `seq` loop. Conclusion must be zero reachable hot-spin
-      loops. Keep for the PR body (AC4).
+- [ ] **0.3** Build the **loop-exit classification** table for all **15** `sleep`
+      **invocation** sites in `ci-deploy.sh` — `:1200 :1201 :1275 :1278 :1472
+      :1851 :1915 :1961 :2471 :2477 :2483 :2491 :2526 :2610 :2678` — labelling
+      each enclosing loop *bounded-iteration* / *counter-bounded* /
+      *straight-line* / *wall-clock exit*. Must include the five canary
+      `sleep 3` sites (`:2471`, `:2477`, `:2483`, `:2491`, `:2526`) inside the
+      `:2452` `seq` loop. Conclusion must be zero reachable hot-spin loops. Keep
+      for the PR body (AC4).
+      **The count is 15, not 17.** `ci-deploy.sh:1430` is a comment and `:1437`
+      is the `_sleeps` **array declaration** — neither is a call. Verify with
+      `grep -nE '\bsleep ' apps/web-platform/infra/ci-deploy.sh | grep -vE ':\s*#' | wc -l`;
+      a bare `grep -c '\bsleep\b'` reads 17 and is the wrong instrument.
 - [ ] **0.4** Clean solo baseline for the record:
       `time bash apps/web-platform/infra/ci-deploy.test.sh`. Plan-time reading:
       `real 8m58.232s / user 0m41.805s / sys 1m32.496s`, `184/184 passed`.

@@ -14,6 +14,68 @@ revision: v2 (post 5-agent plan-review + scoped strong-model consult)
 > Spec lacks a valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed). No
 > `spec.md` exists for this branch; this plan is its first artifact.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-27
+**Passes:** 5-agent plan-review (DHH, Kieran, code-simplicity,
+architecture-strategist, CTO) + scoped strong-model consult + deepen-plan gates
+4.5 / 4.6 / 4.7 / 4.8 (4.9, 4.10, 4.55 skipped — no UI surface, no store, no
+serving-surface downtime) + Phase 4.45 verify-the-negative and post-edit
+self-audit passes.
+
+### Key improvements over the first draft
+
+1. **The premise stopped being a projection.** Forcing the existing gate on for
+   the whole suite — zero code changes — was run at plan time: **538 s → 264 s,
+   184/184, with an empty PASS-name-set diff.** The plan is now built on a
+   measurement, and AC2's non-vacuity gate has already passed once.
+2. **The 120 s target was tested against arithmetic and found to be at the
+   floor.** Counterfactual `user + sys` ≈ 117 s of process-spawn cost that no
+   sleep mock removes. AC1 is floor-relative and requires an *evidenced* miss
+   rather than a silent one; DC-4 surfaces the target itself to the operator.
+3. **A wrong rationale was caught and corrected.** The draft claimed the
+   recording rider prevented T-6525-8 going vacuous. T-6525-8 already runs with
+   the mock and already pays 0 s — the schedule-value hole is **pre-existing**,
+   so the rider is net-new coverage. Stated honestly rather than defended.
+4. **The tier argument was rebuilt.** "Two independent defects" does not survive
+   P(later regression) ≈ 1 — the suite exists *because* deploy regressions
+   recur. The honest ground for `aggregate pattern` is that the check is
+   **advisory**, with #6480 named as the dependency that would expire it.
+5. **A failure mode nobody else named was added.** A real `sleep` can be an
+   undeclared **synchronization barrier**; under a no-op it becomes a race that
+   is green locally and intermittent on a loaded runner — structurally invisible
+   to a single-run name-set diff. AC2b (5 identical name-sets, ≥1 under load) is
+   the detector, and the speedup is what makes it affordable.
+6. **The hot-spin guard was generalised from instance to class.** A per-call-site
+   countdown cap became an invocation cap **inside the mock** (~500 → loud
+   abort) — one guard covering every time-gated loop, present and future.
+7. **Two false-green ACs were killed.** `grep '~12s of slack'` can never match
+   (the phrase is split across `:607`/`:608`), and `git grep -c` cannot express
+   "returns 0" (it prints nothing and exits 1). Both verified at the keyboard.
+8. **~60 % of the draft was cut.** Both simplification reviewers fired on the
+   same scope, so the response was delete, not patch: the attribution histogram,
+   the ~60-row delta table, the separate mutation battery, two of three
+   structural guards, and four ACs are gone.
+
+### New considerations discovered
+
+- An in-repo precedent already anticipated this issue by name:
+  `apps/web-platform/infra/workspaces-luks-harness.sh:301-315` (#6807) uses a
+  **recording** no-op sleep, states the exact safety rule this plan derived
+  independently (*"safe ONLY because the retry loops are bounded by ATTEMPTS,
+  never by wall clock"*), and says that if #6665 broadens the gate, "the thing to
+  share is the opt-in convention". Its prose is falsified by this PR and is now
+  in `## Files to Edit`.
+- Real `sleep` was an **undeclared second brake** on the canary `seq 1 10` loop.
+  Removing it makes `create_mock_seq` the sole brake — a defense relaxation that
+  must name its replacement ceiling, which the invocation cap now does.
+- `TEST_PATH_BASE` is a `readonly` **absolute** PATH, so `$MOCK_DIR` is the only
+  lever. Discovered empirically: a PATH-prepended shim caught only the 3 sleeps
+  *outside* the runner subshells.
+- **ADR-139** (earned-green for reachable-surface content gates) governs the
+  shape of the residual: the Phase 2.2 comment is written as its tripwire
+  (`tasks.md` step 2.3, which breaks Phase 2 down more finely).
+
 ## Overview
 
 `apps/web-platform/infra/ci-deploy.test.sh` (4983 lines, 184 assertions) spends
@@ -103,6 +165,24 @@ host, no egress IP, no firewall, and no sshd in the causal chain.
 | --- | --- | --- | --- |
 | H1 | The dominant cost is real `sleep` inside `ci-deploy.sh`, reached through the harness's mock PATH | **CONFIRMED by measurement** | The Overview table: forcing the existing gate on cuts 538 s → 264 s with an identical PASS name-set. Not reasoned — run. |
 
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+The gate fired and is answered per layer rather than waved off, because "obvious"
+is not a verification. The finding is that **every layer is structurally
+inapplicable — not merely unverified** — and each row says why:
+
+| Layer | Status | Reason |
+| --- | --- | --- |
+| **L3 — firewall allow-list** | **N/A, structurally** | There is no affected host. The failing actor is a GitHub-hosted `ubuntu-24.04` runner cancelling its own job; no `hcloud firewall describe` target exists and no operator egress IP participates. |
+| **L3 — DNS / routing** | **N/A, structurally** | The suite resolves nothing over the network: `create_base_mocks` PATH-shadows `docker`, `curl`, `doppler`, `systemctl`, `flock`, `df`, and `logger`. No name resolution occurs on the measured path. |
+| **L7 — TLS / proxy** | **N/A, structurally** | No HTTPS is transacted. The `curl` mock (`ci-deploy.test.sh:532`) answers from local files. |
+| **L7 — application** | **VERIFIED — and it is the cause** | The measurement in the Overview is the artifact: `user + sys` is ~117 s against a 538 s wall clock, i.e. ~78 % of the run is a process voluntarily sleeping. Forcing the sleep mock on removes 274 s with an identical PASS name-set. The cost is in-process `sleep(2)` calls, not I/O wait on a socket. |
+
+The positive evidence that this is budget exhaustion rather than a hung network
+call: the cancelled runs cited in #6665 advanced *through several steps* before
+being cancelled at ~8:02. A hung network call stalls on one step; a wall-clock
+ceiling cuts wherever the job happens to be.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 Every row verified by reading the file. Line cites were re-verified by an
@@ -162,7 +242,7 @@ introduced, no resolver/dispatch/trust boundary changes.
 **ADR-139 applies and is cited, not extended.** It is the repo's accepted
 decision on when a green assertion may be non-earned, requiring the residual be
 paired with a **tripwire comment** naming the condition under which it goes live.
-Phase 2.2's rewritten comment and Phase 3.2's guard are written in that shape:
+Phase 2.2's rewritten comment and Phase 1.1's invocation cap are written in that shape:
 each states the property it depends on (`create_mock_seq` is now the sole loop
 brake; the mock shadows only a *bare* `sleep`) and what would make the residual
 live.
@@ -310,12 +390,20 @@ plan keeps the operator's stated scope and raises the evidence bar instead
   technique in this codebase (`workspaces-luks-harness.sh:305-306`: *"a no-op is
   safe ONLY because the retry loops are bounded by ATTEMPTS, never by wall
   clock"*). For every `sleep` site in `ci-deploy.sh`, classify the enclosing
-  loop. Enumerate **all 17**, including the five `sleep 3` canary sites:
+  loop. Enumerate **all 15** invocation sites, including the five `sleep 3`
+  canary sites. (15, not 17: `ci-deploy.sh:1430` is a comment and `:1437` is the
+  `_sleeps` **array declaration** — neither is a call. A case-insensitive
+  `grep -c '\bsleep\b'` counts both and reads 17; the enumeration below is the
+  authority.)
   - *bounded-iteration* — `for i in $(seq 1 N)`: `:1842`, `:1907`, `:1954`, and `:2452` (which contains `sleep 3` at `:2471`, `:2477`, `:2483`, `:2491`, `:2526`). 1-shot via `create_mock_seq`.
   - *counter-bounded* — `until … [[ "$n" -ge 3 ]] && break`: `:1200`, `:1201`, `:1275`, `:1278`; and `attempt < max` at `:1470` inside `while :; do` (`:1439`), sleep at `:1472`.
   - *straight-line* — `sleep 5` at `:2678`.
   - *wall-clock exit* — `while cron_in_flight` at `:2603` (sleep `:2610`). **The only one**; data-bounded in tests by the docker-mock countdown (`ci-deploy.test.sh:213-225`, default `exit 1` = zero iterations), and the timeout test pins `CRON_DRAIN_TIMEOUT=0` (`:3351`).
   Deliverable: this table re-derived, with a zero-reachable-hot-spin conclusion.
+- **0.4** Clean **solo** baseline for the record (nothing else running):
+  `time bash apps/web-platform/infra/ci-deploy.test.sh`, saved — it is the
+  `before` side of every name-set diff. Plan-time reading: `real 8m58.232s /
+  user 0m41.805s / sys 1m32.496s`, `184/184 passed`.
 
 ### Phase 1 — RED: make the schedule assertable
 
@@ -391,8 +479,13 @@ result. `decision-challenges.md` is rendered by ship Phase 6.
   `4`) from `$MOCK_SLEEP_LOG`; mutating `ci-deploy.sh:1437` to `9 9` turns it
   RED, with the mutation output pasted.
 - **AC4** The Phase 0.3 loop-exit classification table is in the PR body,
-  enumerating **all 17** `sleep` sites, and concludes zero reachable hot-spin
-  loops. The mock's invocation cap is present.
+  enumerating **all 15** `sleep` **invocation** sites
+  (`ci-deploy.sh:1200 1201 1275 1278 1472 1851 1915 1961 2471 2477 2483 2491 2526 2610 2678`),
+  and concludes zero reachable hot-spin loops. The mock's invocation cap is
+  present. Verify the count with
+  `grep -nE '\bsleep ' apps/web-platform/infra/ci-deploy.sh | grep -vE ':\s*#' | wc -l`
+  → `15`; a bare `grep -c '\bsleep\b'` reads 17 because it also counts the
+  `:1430` comment and the `:1437` array declaration.
 - **AC5** No stale seam prose survives repo-wide:
   `grep -rc 'MOCK_SLEEP_NOOP' apps/web-platform/infra/ | grep -v ':0'` returns
   nothing (learnings and `knowledge-base/project/{plans,specs}` are historical
@@ -474,8 +567,10 @@ workflow YAML. No match against any UI-surface term or glob
 scoped strong-model consult. Both simplification reviewers fired on the same
 scope, so — per the panel protocol — the response was **cut, not patch**:
 
-**Cut (mechanical, applied):** per-site sleep-attribution histogram (Phase 0.3
-v1); the ~60-row per-test delta table and its AC; the separate 3-test mutation
+**Cut (mechanical, applied):** the per-site sleep-attribution histogram (v1's
+Phase 0.3 — v2's 0.3 is the loop-exit classification, which was **kept**, since
+it is the documented precondition for the technique, not a nice-to-have); the
+~60-row per-test delta table and its AC; the separate 3-test mutation
 battery (Phase 1.3 *is* the battery — only T-6525-8's semantics change); two of
 three structural guards ("every sleep site is bare", "`create_base_mocks` honours
 the flag" — change-detectors asserting the line above them); four ACs; the
@@ -535,6 +630,12 @@ and file as `action-required`, per ADR-084.
 - **A grep for a phrase that spans a line break is a permanent false-green.**
   `~12s of slack under timeout-minutes: 8` is split across `:607`/`:608`. Pick a
   phrase that spans no line break (and no punctuation boundary).
+- **A word-boundary grep counts declarations and comments, not call sites.**
+  `grep -ci '\bsleep\b' ci-deploy.sh` reads **17**; there are **15** actual
+  invocations. The two extras are a comment (`:1430`) and the `_sleeps` array
+  declaration (`:1437`). An AC that says "enumerate all N" must derive N from the
+  same instrument the enumeration uses — this plan shipped `17` in two places
+  before the verify-the-negative pass caught it.
 - `TEST_PATH_BASE` (`:17`) is a `readonly` **absolute** PATH, so `$MOCK_DIR` is
   the only lever — a PATH-prepended shim outside the runners catches nothing.
   Verified empirically while measuring this plan.
