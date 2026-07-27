@@ -617,6 +617,26 @@ s = s.replace(a, a + """
   }""", 1)
 '
 
+# The EMPTY destination. `destination = ""` satisfies neither a 1+-char quoted capture nor the
+# non-quote-initial pattern, so before the quoted branch was widened to `([^"]*)` it evaded BOTH
+# and left the sweep in silence. The guard fix shipped without this case and the neuter matrix
+# scored the widened capture UNCOVERED -- a fix with nothing behind it, which is the shape this
+# whole PR exists to remove.
+expect_red "M29d (§2 extraction: an EMPTY destination must not vanish silently)" server.tf \
+  "delivers to '', an INTERPOLATED" '
+a = """  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = "/usr/local/bin/disk-monitor.sh"
+  }"""
+assert a in s
+s = s.replace(a, a + """
+
+  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = ""
+  }""", 1)
+'
+
 expect_red "M29b (§2 extraction: a var.* reference must not vanish silently)" server.tf \
   "sets destination = var.phantom_dest" '
 a = """  provisioner "file" {
@@ -880,7 +900,7 @@ s = s.replace(anchor, anchor + """
 '
 
 # ── Non-vacuity floor on the battery itself ─────────────────────────────────────────
-FLOOR=37
+FLOOR=38
 if [[ "$mutations_run" -ge "$FLOOR" ]]; then
   ok "battery ran $mutations_run landed, attributed mutations (floor $FLOOR)"
 else
