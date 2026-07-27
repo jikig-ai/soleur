@@ -118,9 +118,9 @@ SLEEP='(^|[[:space:];&|])sleep([[:space:]]|$)'
 is_poll=0
 if grep -Eq "$WATCH_IDIOM" <<<"$cmd"; then
   is_poll=1
-elif grep -Eq "$LOOP" <<<"$cmd" && echo "$cmd" | grep -Eq "$REMOTE_READ"; then
+elif grep -Eq "$LOOP" <<<"$cmd" && grep -Eq "$REMOTE_READ" <<<"$cmd"; then
   is_poll=1
-elif grep -Eq "$FOR_LOOP" <<<"$cmd" && echo "$cmd" | grep -Eq "$SLEEP" && echo "$cmd" | grep -Eq "$REMOTE_READ"; then
+elif grep -Eq "$FOR_LOOP" <<<"$cmd" && grep -Eq "$SLEEP" <<<"$cmd" && grep -Eq "$REMOTE_READ" <<<"$cmd"; then
   is_poll=1
 fi
 [ "$is_poll" -eq 1 ] || allow
