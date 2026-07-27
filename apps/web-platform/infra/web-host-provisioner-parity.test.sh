@@ -100,7 +100,14 @@ if all(r.strip() for r in ALLOWLIST.values()):
     ok(f"0: allowlist well-formed ({len(ALLOWLIST)} entries, every one carries a reason)")
 
 # ── Parse local.host_script_files (the image bake set) ────────────────────────────────
-m = re.search(r'host_script_files = \[(.*?)\n  \]', srv, re.S)
+# Parsed from the COMMENT-STRIPPED source (see strip_comments below): the bake list carries
+# 46 comment lines, one of which contains the literal `provisioner "file"` in prose. Parsing
+# raw picks `file` up as a 46th "baked filename", so an SSH provisioner delivering a file
+# actually named `file` would have falsely passed §2 -- a guard satisfied by a paragraph.
+def _strip_comments(text):
+    return '\n'.join(L for L in text.split('\n') if not L.lstrip().startswith('#'))
+
+m = re.search(r'host_script_files = \[(.*?)\n  \]', _strip_comments(srv), re.S)
 if not m:
     no("0: could not parse local.host_script_files from server.tf -- fix the extraction, "
        "do not trust this run")
@@ -143,7 +150,16 @@ else:
        "extraction is probably broken")
 
 # ── §1. Enumerate the SSH-connected terraform_data resources ─────────────────────────
-blocks = re.split(r'\n(?=resource "terraform_data" ")', srv)
+# COMMENTS ARE STRIPPED FIRST. server.tf's infra_config_handler_bootstrap rationale contains
+# the literal `connection{type="ssh"}` in prose, and every artifact regex below (`type =`,
+# `source =`, `printf … >`) would match such prose just as happily as real HCL. That is the
+# cq-assert-anchor-not-bare-token trap: a guard that reads a comment as configuration can be
+# satisfied -- or inflated past its own floor -- by a paragraph. Full-line comments only:
+# HCL `#` starts a line comment, and trailing comments sit after real config on their line,
+# so dropping lstrip-starts-with-# lines removes the prose without touching any attribute.
+srv_code = _strip_comments(srv)
+
+blocks = re.split(r'\n(?=resource "terraform_data" ")', srv_code)
 ssh_resources = {}
 for b in blocks:
     rm = re.match(r'resource "terraform_data" "([a-z_0-9]+)"', b)
@@ -151,8 +167,9 @@ for b in blocks:
         continue
     # `type = "ssh"` inside a connection block, fmt-aligned (terraform fmt re-aligns `=`,
     # so match whitespace-tolerantly -- a single-space pattern would blind this guard the
-    # moment the block gains an attribute).
-    if re.search(r'\btype\s*=\s*"ssh"', b):
+    # moment the block gains an attribute). Anchored to a `connection {` block so a `type`
+    # attribute belonging to some other nested block cannot be read as an SSH connection.
+    if re.search(r'connection\s*\{[^}]*?\btype\s*=\s*"ssh"', b, re.S):
         ssh_resources[rm.group(1)] = b
 
 FLOOR_RESOURCES = 15
@@ -237,7 +254,7 @@ for name, dest, marker in heredocs:
     if dest not in wf or wf[dest] is None:
         continue
     hm = re.search(r'"cat > ' + re.escape(dest) + r" << '" + marker + r"'\\n(.*?)\\n"
-                   + marker + r'"', srv)
+                   + marker + r'"', srv_code)
     if not hm:
         no(f"4: could not extract the {dest} heredoc body from server.tf -- fix the "
            "extraction rather than trusting this run")

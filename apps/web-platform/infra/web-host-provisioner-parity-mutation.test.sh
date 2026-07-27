@@ -195,6 +195,29 @@ assert old in s, "anchor missing"
 s = s.replace(old, "", 1)
 '
 
+# ── M11 §2 comment contamination: a COMMENT must not satisfy the bake requirement ────
+# The cq-assert-anchor-not-bare-token case, and a defect this guard actually shipped with:
+# server.tf's bake list carries 46 comment lines, one containing the literal
+# `provisioner "file"`, so parsing the list raw counted `file` as a baked filename. Here an
+# artifact is SSH-delivered while its ONLY claim to being baked is a COMMENT naming it. A
+# guard that reads prose as configuration passes this; the real one must go RED.
+expect_red "M11 (§2: bake claim backed only by a comment)" server.tf '
+anchor = """  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = "/usr/local/bin/disk-monitor.sh"
+  }"""
+assert anchor in s, "anchor missing"
+s = s.replace(anchor, anchor + """
+
+  provisioner "file" {
+    source      = "${path.module}/comment-only-artifact.sh"
+    destination = "/usr/local/bin/comment-only-artifact.sh"
+  }""", 1)
+old = "    \"web-probe-envwrite.sh\",\n"
+assert old in s, "bake anchor missing"
+s = s.replace(old, old + "    # \"comment-only-artifact.sh\",\n", 1)
+'
+
 # ── POSITIVE CONTROL: a benign edit must stay GREEN ─────────────────────────────────
 # Without this, a guard that is unconditionally RED would score 10/10 above.
 restore
@@ -213,7 +236,7 @@ fi
 restore
 
 # ── Non-vacuity floor on the battery itself ─────────────────────────────────────────
-FLOOR=10
+FLOOR=11
 if [[ "$mutations_run" -ge "$FLOOR" ]]; then
   ok "battery ran $mutations_run landed mutations (floor $FLOOR)"
 else
