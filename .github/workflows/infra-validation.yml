@@ -828,6 +828,13 @@ jobs:
       - name: Run git-data boot-emitter redaction + delivery tests
         run: bash apps/web-platform/infra/git-data-emit.test.sh
 
+      # (#6982, W12 rung 1) RUNTIME rehearsal of the runcmd chain in the pinned Ubuntu
+      # 24.04 image. Every other git-data gate is static, and the failure class they defend
+      # against is only observable when the code RUNS — the Phase-0 W0 probe passed every
+      # static check and would still have booted dark. Skips cleanly without docker.
+      - name: Rehearse the git-data runcmd chain (abort ordering + rc guard)
+        run: bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
+
       # (#6982) Hetzner's 32,768-byte user_data cap is a HARD gate on hcloud_server.git_data,
       # and the resource carries no ignore_changes=[user_data] — so an over-budget template
       # is discovered by a FAILING BIRTH APPLY unless something measures it first. This job

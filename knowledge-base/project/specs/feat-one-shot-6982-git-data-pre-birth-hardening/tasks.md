@@ -177,11 +177,11 @@ creates `hcloud_server.git_data`.
 
 ## Phase 8 — Rehearsal (W12), before PR-ready
 
-- [ ] 8.1 Rung 1: render the real template, execute `runcmd` in the pinned Ubuntu 24.04 container
+- [x] 8.1 Rung 1: render the real template, execute `runcmd` in the pinned Ubuntu 24.04 container
       harness, capture every payload. T5/T6/T15/T16/T17/T18 run here.
 - [ ] 8.2 Rung 2: boot the rendered template once on a throwaway `cpx22` **outside** the
       `hcloud_server.git_data` address; observe the artifacts off-box; destroy.
-- [ ] 8.3 Pin the evidence per AC31. If rung 2 is unreachable in-session, say so explicitly and move
+- [x] 8.3 Pin the evidence per AC31. If rung 2 is unreachable in-session, say so explicitly and move
       the requirement onto the banner-clear follow-up issue.
 
 ## Phase 9 — Verification
