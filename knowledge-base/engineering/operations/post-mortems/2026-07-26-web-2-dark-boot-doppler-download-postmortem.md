@@ -108,6 +108,16 @@ discriminating datum was never captured.
 > Fix: #6981 / PR #6984. `soleur-web-2` remains dark until a post-fix replace runs — `runcmd` is
 > once-per-instance, so the current instance cannot be repaired by reboot.
 
+> **RESOLVED 2026-07-27.** `soleur-web-2` (instance `155786558`, created `11:00:53Z`) booted clean
+> on the third attempt — `cloud_init_complete` at `11:05:58Z`, `fresh_boot_ready` at `11:06:03Z`,
+> **0 fatals** for the current instance. The first fresh web host in the fleet's history to complete
+> cloud-init. Root cause and fix: #6981 / PR #6984. Issue #6969 closed with the evidence trail.
+>
+> The line below is the original status, preserved unedited. It is superseded in full — do NOT read
+> it as current. (This status line and the UPDATE block near the top are the same claim in two
+> places; marking one and not the other is the defect class recorded in
+> `2026-07-21-i-marked-one-block-and-not-its-twin-in-the-file-whose-purpose-was-removing-that-defect.md`.)
+
 `unresolved but ended` — the boot failure is not recurring (no further host births have been
 attempted), but the root cause is UNDETERMINED and `soleur-web-2` is still dark.
 

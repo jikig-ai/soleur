@@ -47,6 +47,28 @@ for id in $ids; do
             --jq '[.jobs[] | select(.name == "'"$JOB_NAME"'")] | .[0].conclusion // empty' 2>/dev/null) || continue
   [ -n "$concl" ] || continue          # this run was some other apply_target
   saw_job=1
+  # (#6995) THE JOB CONCLUSION IS NOT THE BOOT VERDICT. The 2026-07-27 rebirth booted
+  # CLEAN — cloud_init_complete + fresh_boot_ready, 0 fatals — and the job still
+  # concluded `failure`, because the boot-trail reader's terminal check was wrong. A
+  # conclusion-only predicate would have reported that clean boot as a failed
+  # follow-through and told the operator to investigate a healthy host. The apply and
+  # the boot are separate facts; a job can fail for a reader defect, a post-apply step,
+  # or a runner fault while the host is fine.
+  #
+  # So: `success` still PASSes outright, but a non-success run is only FAILed after the
+  # boot trail has been checked for a terminal `::error::...booted DARK`. Absent that,
+  # the run is TRANSIENT (needs a human look) rather than a verdict on the host.
+  if [ "$concl" != "success" ]; then
+    if gh run view "$id" --log 2>/dev/null | grep -qF 'booted DARK at stage'; then
+      echo "FAIL: ${JOB_NAME} run ${id} concluded '${concl}' AND the boot trail names a dark boot."
+      echo "      gh run view ${id} --log | grep 'booted DARK'"
+      exit 1
+    fi
+    echo "TRANSIENT: ${JOB_NAME} run ${id} concluded '${concl}' but the boot trail shows no dark boot."
+    echo "           The job failed for a reason other than the host's boot — inspect before judging the host."
+    echo "           gh run view ${id}"
+    exit 2
+  fi
   if [ "$concl" = "success" ]; then
     echo "PASS: ${JOB_NAME} succeeded in run ${id} — web-2 rebirth dispatch completed."
     echo "      Confirm the boot trail reached cloud_init_complete, update the post-mortem,"
