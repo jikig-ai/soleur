@@ -18,7 +18,9 @@ destroying and IaC-rebuilding a host. Three repo facts constrain the design:
    unrecoverable loss. The **volume, not the host, is the protected asset.**
 2. **`replicas=1` is still operationally in force** (ADR-068); the git-data CAS fence is live-but-non-rejecting.
    Two hosts serving one workspace's git index corrupts it, so *concurrent serving* is gated on ADR-068
-   Phase-3 GA (shared git-data #6570 + coordinator), which is blocked (git-data pinned to an unorderable type).
+   Phase-3 GA (shared git-data #6570 + coordinator), which is blocked — no longer by the type
+   (repinned `cax11` → `cpx22` 2026-07-27, #6570) but because git-data still has **no birth route**
+   at all (#6977).
 3. **The programmatic anti-pooling gate was deleted 2026-07-20 (#6575)** and `server.tf:278-287` says it
    "MUST be rebuilt before any second web host is pooled."
 
@@ -36,7 +38,9 @@ Read-only query of `/v1/datacenters` (available server types) + `/v1/server_type
 | **`cx23`** (Intel; the registry's type) | **2c/4g x86** | **5.49** | **YES — in stock (registry runs it in hel1)** |
 
 This confirms model.c4:182 against live data: `cx33` cannot be recreated, so a rebuilt `web-1` cannot come
-back as `cx33`. It also confirms #6570's root-blocker framing: `cax11` (ARM) is unorderable.
+back as `cx33`. It also confirmed #6570's root-blocker framing at the time of this probe: `cax11` (ARM)
+is unorderable. **Superseded 2026-07-27 (#6570):** git-data is repinned to `cpx22`, so the TYPE is no
+longer the blocker; the remaining blocker is the absent birth route (#6977).
 
 ## Sizing input (30-day Better Stack host_metrics, measured 2026-07-25 — the decided input for D1)
 

@@ -10,7 +10,7 @@ set -u
 # SERVICEABILITY ASYMMETRY (Kieran P2, C1b — named, not hidden): a bounded TCP connect-and-close to
 # :22 proves the port is OPEN, not that git transport SERVES — the same reachability-vs-service-
 # ability gap this bundle REJECTS for zot (where it presents auth + reads a real repo). git-data is
-# fail-soft, so connect-and-close is an ACCEPTED v1 tradeoff; the git-data.tf:338-341 TODO
+# fail-soft, so connect-and-close is an ACCEPTED v1 tradeoff; the git-data.tf:270-273 TODO
 # prescribes `git ls-remote` (a real transport check) as the upgrade if a port-open-but-wedged
 # git-data is ever observed.
 #

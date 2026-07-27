@@ -230,9 +230,15 @@ resource "hcloud_server" "git_data" {
   #   2. It catches a MIS-DERIVED arch at plan time. Nothing downstream does: the checksum
   #      is selected BY local.git_data_arch, so a wrong derivation verifies the tarball it
   #      just chose and `sha256sum -c -` passes. That runcmd item also carries no `set -e`,
-  #      so even a genuine checksum failure does not stop the following `tar xzf`. The real
-  #      abort is downstream at the LUKS block's `doppler run` (which does carry
-  #      `set -euo pipefail`) — do not credit the checksum with failing closed here.
+  #      so even a genuine checksum failure does not stop the following `tar xzf`.
+  #      NOTHING ABORTS. cloud-init concatenates runcmd into one non-`-e` script, so a
+  #      failed item is logged and boot CONTINUES. The LUKS block's `set -euo pipefail`
+  #      is not a backstop either: it is line 1 of the heredoc `doppler run` executes, so
+  #      on a missing or wrong-arch binary `doppler run` fails to exec and that line runs
+  #      ZERO times. The failure surfaces only as a non-zero runcmd exit in on-host
+  #      /var/log/cloud-init-output.log — git-data ships no log shipper — leaving sshd up
+  #      and the LUKS volume unmounted. Do not credit the checksum, or that `set -e`, with
+  #      failing closed: the plan-time precondition below is the only guard that fires.
   #
   # The enums are DELIBERATELY mapped, not compared. hcloud reports architecture as
   # `x86`/`arm`, while local.git_data_arch is the download token `amd64`/`arm64`. Comparing

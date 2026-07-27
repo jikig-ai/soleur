@@ -131,8 +131,9 @@ variable "web_hosts" {
   #
   # ARCH: cpx22 is x86/amd64, same architecture as cx23 (only the CPU vendor differs, Intel→AMD),
   # so nothing downstream changes — there is no arch derivation for web hosts at all (server.tf
-  # passes each.value.server_type straight through, unlike var.registry_server_type and
-  # var.inngest_server_type which derive arm64/amd64). NOTE the latent constraint that creates: a
+  # passes each.value.server_type straight through, unlike var.registry_server_type,
+  # var.inngest_server_type and — since #6570 — var.git_data_server_type, which all three
+  # derive arm64/amd64). NOTE the latent constraint that creates: a
   # web host can never be born on the cax ARM line regardless of stock, because cloud-init.yml
   # PINS amd64 in three places (Doppler CLI, the Docker apt `arch=amd64` line, the webhook binary).
   #

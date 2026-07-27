@@ -1283,17 +1283,26 @@ without D7 would fire on **zero** production paths — live only in the untarget
 D7 is also the **only** mis-derivation detector. The checksum cannot be one: it is selected **by**
 the derived arch, so a wrong derivation verifies the tarball it just chose and passes. The
 `sha256sum -c -` runcmd item additionally carries no `set -e`, so even a genuine checksum failure
-does not stop the following `tar xzf`. The real abort is downstream at the LUKS block's
-`doppler run`, which does carry `set -euo pipefail`. Do not credit the checksum with failing closed.
+does not stop the following `tar xzf` — and **nothing aborts at all**. cloud-init concatenates
+`runcmd` into one non-`-e` script, and the LUKS block's `set -euo pipefail` is line 1 of the heredoc
+that `doppler run` executes, so on a missing or wrong-arch binary `doppler run` fails to exec and that
+line runs zero times. The failure surfaces only as a non-zero runcmd exit in on-host
+`/var/log/cloud-init-output.log` (git-data ships no log shipper), leaving sshd up and the LUKS volume
+unmounted. Credit neither the checksum nor that `set -e` with failing closed.
 
 ### What this does NOT unblock
 
 The host still has **no birth route** (**#6977**): `git-data-host-replace` requires
 `{delete, create}` so a first CREATE hard-aborts, its dependencies are unprovisioned so
 `out_of_scope` blows the allow-set, and no `git-data-host-create` target exists. The only remaining
-route is an untargeted prod-wide apply, which runs neither the destroy-guard nor the stock preflight
-— and a plan taken 2026-07-27 showed that apply carrying **9 destroys**, so it is not a route.
+route is an **operator-local** untargeted prod-wide apply, which runs neither the destroy-guard nor
+the stock preflight — and a plan taken 2026-07-27 showed that apply carrying **9 destroys**, so it is
+not a route. (The *CI* untargeted path is not a route either, for a stronger reason: the
+`host_creates` HALT counts every `hcloud_server` create with no type filter and is evaluated outside
+the `destroy_count` sum, so `[ack-destroy]` cannot bypass it.)
 `stock-preflight-gate.sh` remains the **sole orderability** guard (D6 catches only *phantom* types;
-`cax11` resolves fine in the catalog, so it would never have caught this defect). ADR-115's
+`cax11` resolves fine in the catalog, so it would never have caught this defect) — but note it is
+**unreachable on the birth path today**: the destroy-guard runs first in the same step and hard-aborts
+a pure CREATE, so the preflight below it never executes. It arms only once #6977 ships a birth route. ADR-115's
 normative blocker also still stands: git-data is excluded from the reboot primitive until its
 `luksOpen` is reboot-safe.
