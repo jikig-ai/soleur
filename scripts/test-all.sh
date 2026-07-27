@@ -350,6 +350,14 @@ if want_scripts; then
   # inherits nothing from the per-PR apply's inline HALT), so every arm is load-bearing and
   # the suite mutation-proves each one. Registered HERE — nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/web-host-birth-gate" bash tests/scripts/test-web-host-birth-gate.sh
+  # web-host REPLACE gate (#6969) — the SIBLING of the birth gate above and its opposite by
+  # contract: exactly one delete+create of the dispatched host, both volume families and the
+  # LUKS passphrase preserved by omission, plus positive requirements on the NIC, the volume
+  # attachment and the fleet firewall re-attachment. Same "a new dispatch job inherits
+  # nothing" reasoning, so the same mutation battery. Registered HERE for the same reason the
+  # line above says — nothing auto-discovers tests/scripts/, and an unregistered suite is
+  # silent AND green.
+  run_suite "tests/scripts/web-host-replace-gate" bash tests/scripts/test-web-host-replace-gate.sh
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh

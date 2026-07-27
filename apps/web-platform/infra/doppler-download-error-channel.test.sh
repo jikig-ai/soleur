@@ -858,15 +858,27 @@ fi
 # "last-reached stage: doppler_download" annotation this PR exists to replace — silently, and on
 # the one run an operator is actually reading. So run the SHIPPED filter against a fixture.
 WF="$(cd "$DIR/../../.." && pwd)/.github/workflows/apply-web-platform-infra.yml"
+# #6969: the boot-trail reader was EXTRACTED out of the workflow's web_host_create `run:`
+# block into a script, so the REPLACE path (web_host_replace) executes the same bytes rather
+# than a second copy. Every AC below that inspects the READER's own filter logic therefore
+# reads this file; the workflow is still the subject of AC-M0 (it must exist and wire it).
+# Missing this re-point is what turned this suite red at run-registered-suites.sh — the
+# observability suite next door was re-pointed in the same change and this sibling was not,
+# which is the orphan-suite class exactly.
+TRAIL="$(cd "$DIR/../../.." && pwd)/apps/web-platform/infra/scripts/fresh-host-boot-trail.sh"
 if [ ! -f "$WF" ]; then
   no "AC-M0: could not locate apply-web-platform-infra.yml"
+elif [ ! -s "$TRAIL" ]; then
+  no "AC-M0: could not locate the extracted boot-trail reader ($TRAIL) — every reader-scoped assertion below would grep nothing and pass vacuously"
+elif ! grep -qF 'apps/web-platform/infra/scripts/fresh-host-boot-trail.sh' "$WF"; then
+  no "AC-M0: the workflow no longer invokes scripts/fresh-host-boot-trail.sh — the reader can be perfect and still never run"
 else
-  ok "AC-M0: located the birth-path workflow"
+  ok "AC-M0: located the birth-path workflow, the extracted boot-trail reader, and the wiring between them"
   # Pull the host-matching jq function out of the workflow itself (single source — a copy here
   # would drift and this suite would then be verifying its own copy, not the shipped gate).
   # The workflow defines it as a jq `def` so its jq programs can stay single-quoted, which is
   # what keeps the `test($re)` literal that the observability suite's AC16 pins byte-identical.
-  HOSTDEF_WF="$(grep -F "JQ_HOSTDEF='" "$WF" | head -1 | sed -e "s/^[[:space:]]*JQ_HOSTDEF='//" -e "s/'$//")"
+  HOSTDEF_WF="$(grep -F "JQ_HOSTDEF='" "$TRAIL" | head -1 | sed -e "s/^[[:space:]]*JQ_HOSTDEF='//" -e "s/'$//")"
   if [ -n "$HOSTDEF_WF" ]; then
     ok "AC-M1: extracted the host-matching jq def from the shipped workflow"
   else
@@ -939,13 +951,13 @@ FIXEOF
   # RETRY_DETAIL capture — and a presence-grep is satisfied by either, so neutering one alone was
   # invisible. This is the "a second copy of a guarded literal disarms the guard" class, created
   # by this PR's own RETRY_DETAIL addition.
-  retry_sel="$(grep -cF '.value ][0] == "doppler_retry"' "$WF" || true)"
+  retry_sel="$(grep -cF '.value ][0] == "doppler_retry"' "$TRAIL" || true)"
   if [ "$retry_sel" = 2 ]; then
     ok "AC-M7a: both doppler_retry selectors present (detector + RETRY_DETAIL capture)"
   else
     no "AC-M7a: expected 2 doppler_retry selectors in the workflow, found $retry_sel"
   fi
-  if grep -qE '::warning::.*(RETRIED|doppler_retry)' "$WF"; then
+  if grep -qE '::warning::.*(RETRIED|doppler_retry)' "$TRAIL"; then
     ok "AC-M7b: a green birth that retried raises a ::warning:: annotation"
   else
     no "AC-M7b: no ::warning:: annotation fires for a retry on an otherwise-green birth"
@@ -953,21 +965,50 @@ FIXEOF
   # AC-M7c: and it must carry the RETRY event's detail. LAST_DETAIL is [0] of the newest-first
   # list, which on this branch is cloud_init_complete (no per-stage file) — so interpolating it
   # renders "<none>" on every run, discarding the very cause the annotation exists to surface.
-  if grep -E '::warning::.*RETRIED' "$WF" | grep -qF '${RETRY_DETAIL'; then
+  if grep -E '::warning::.*RETRIED' "$TRAIL" | grep -qF '${RETRY_DETAIL'; then
     ok "AC-M7c: the retry warning interpolates RETRY_DETAIL (the retry event's own cause)"
   else
     no "AC-M7c: the retry warning must interpolate \${RETRY_DETAIL}, not the terminal event's detail"
   fi
   # The ::error:: ANNOTATION (not merely the job summary) must interpolate the detail — the
   # annotation is what renders at the top of the run page.
-  if grep -qE '^\s*echo "::error::\$\{WEB_HOST_KEY\}.*booted DARK.*\$\{FATAL_DETAIL' "$WF"; then
+  if grep -qE '^\s*echo "::error::\$\{WEB_HOST_KEY\}.*booted DARK.*\$\{FATAL_DETAIL' "$TRAIL"; then
     ok "AC-M6: the dark-boot ::error:: annotation interpolates the captured detail"
   else
     no "AC-M6: the dark-boot ::error:: annotation must interpolate \${FATAL_DETAIL}"
   fi
+  # ── AC-M8 (#6969 review): the RUN ANCHOR ──
+  # host_name is soleur-<key> for BOTH a destroyed host and its replacement, and the query is
+  # statsPeriod=1h with sort=-timestamp. Without a lower bound the first poll iteration reads
+  # the PREDECESSOR's terminal event — a healthy predecessor yields TERMINAL=complete and a
+  # GREEN run with the replacement's boot never verified, which is #6969's originating
+  # incident re-created inside the mechanism built to prevent it. Pin the predicate AND its
+  # application to every host-scoped selection: a def nothing calls is decoration.
+  if grep -qF 'def sincok($s)' "$TRAIL"; then
+    ok "AC-M8: the reader defines the run-anchor predicate"
+  else
+    no "AC-M8: the reader must define sincok(\$s) to discard events predating this run"
+  fi
+  hostsel=$({ grep -cF 'select(hostok($eh))' "$TRAIL" || true; })
+  bothsel=$({ grep -cF 'select(hostok($eh)) | select(sincok($since))' "$TRAIL" || true; })
+  if [ "$hostsel" -gt 0 ] && [ "$hostsel" -eq "$bothsel" ]; then
+    ok "AC-M8: all ${hostsel} host-scoped selections also apply the run anchor"
+  else
+    no "AC-M8: ${bothsel} of ${hostsel} host-scoped selections apply sincok — an unanchored selection can read the predecessor's terminal event"
+  fi
+  # CALLER side: a perfect predicate is inert if nobody stamps the epoch.
+  for prov_job in web_host_create web_host_replace; do
+    PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$WF" || true)"
+    if grep -qE '^[[:space:]]*run:[[:space:]]*printf .BOOT_TRAIL_SINCE=' <<<"$PROV"; then
+      ok "AC-M8: ${prov_job} stamps BOOT_TRAIL_SINCE before its apply"
+    else
+      no "AC-M8: ${prov_job} must stamp BOOT_TRAIL_SINCE before apply, or its boot-trail read is unanchored"
+    fi
+  done
+
   # QUERY message literals stay byte-identical: renaming one darks the gate AND mints a new
   # Sentry issue group where value=1 means '>1', so a single fatal would stop paging entirely.
-  if grep -qF 'QUERY='"'"'message:"soleur-hostscript-seed failed" OR message:"soleur-host-bootstrap failed" OR message:"soleur-host-bootstrap complete" OR message:"soleur-cloud-init boot stage"'"'" "$WF"; then
+  if grep -qF 'QUERY='"'"'message:"soleur-hostscript-seed failed" OR message:"soleur-host-bootstrap failed" OR message:"soleur-host-bootstrap complete" OR message:"soleur-cloud-init boot stage"'"'" "$TRAIL"; then
     ok "AC-J2: the workflow QUERY message literals are byte-identical (lockstep held)"
   else
     no "AC-J2: the workflow QUERY message literals changed — this darks the gate and breaks paging"

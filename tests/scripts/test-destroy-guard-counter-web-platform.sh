@@ -729,7 +729,10 @@ t_web2_retire_substring_collision_aborts() {
 # would use the mutable :latest default — and web-1 is the sole web host since
 # web-2 retired 2026-07-17 (#6538). Exactly ONE automated path may birth it — the
 # web-host-create dispatch (#6730, ADR-145), which sources its own inverted gate and does
-# NOT read host_creates. Reason about THIS tripwire, never about -target
+# NOT read host_creates. Since #6969 a SECOND dispatch (web-host-replace, ADR-148) also
+# creates one — the create half of a delete+create — graded by its own gate and likewise not
+# reading host_creates. So the T54/T56 HALT proofs below are scoped to the per-PR apply path,
+# which is what they always tested. Reason about THIS tripwire, never about -target
 # membership: "web-1 appears in no -target=" is a recorded invalid inference
 # (ADR-114 2026-07-19 amendment item 5).
 #

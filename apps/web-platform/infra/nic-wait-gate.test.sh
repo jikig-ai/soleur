@@ -457,7 +457,11 @@ assert "the tripwire's counter is actually parsed from the plan (not a dangling 
 # "auto-apply workflow" is a set of at least two.
 WEB1_DIRECT=0
 for wf in "$WF_DIR"/*.yml; do
-  grep -hoE -- "-target=('?)hcloud_server\.web[^ '\\\\]*" "$wf" 2>/dev/null | tr -d "'" >> "$WORK/targets.txt" || true
+  # Quote class is ['"]?, NOT '? — the two gated dispatch jobs spell their targets
+  # DOUBLE-quoted with escaped inner quotes (-target="hcloud_server.web[\"${WEB_HOST_KEY}\"]")
+  # so they can interpolate the key. With a single-quote-only class this extractor returned
+  # ZERO and the assertion below passed while reporting "<none>" — blind, not clean.
+  grep -hoE -- "-target=[\"']?hcloud_server\.web[^ ]*" "$wf" 2>/dev/null | tr -d "'" >> "$WORK/targets.txt" || true
 done
 # CARVE-OUT REMOVED (#6575, 2026-07-20) — this is the cleanup its own control demanded. The
 # carve-out excluded hcloud_server.web["web-2"] from this scan, because the web-2-recreate job was
@@ -470,11 +474,25 @@ done
 # `hcloud_server.web` targets every instance including web-1, and an explicit ["web-1"] is the
 # live sole origin. This is STRICTLY STRONGER than what it replaces: there is no allowance left
 # that could silently widen into a blanket pass.
+# CARVE-OUT RESTORED, deliberately and narrowly (#6969). The claim above — "the extractor now
+# finds zero hcloud_server.web targets in any workflow" — was TRUE only because the extractor
+# could not see double-quoted targets. With the quote class fixed it finds TWO, both legitimate:
+# the web_host_create and web_host_replace dispatch jobs, each of which resolves a digest, runs
+# the coherence preflight, and grades its plan with its own sourced gate. Those two are named
+# explicitly, so a THIRD direct target is still a finding — the property this fact pins is
+# preserved, it is just no longer being asserted by an extractor that matches nothing.
+GATED_DISPATCH_TARGET='-target="hcloud_server.web[\"${WEB_HOST_KEY}\"]"'
 WEB1_DIRECT=$(grep -c 'hcloud_server\.web' "$WORK/targets.txt" 2>/dev/null | tr -d ' ' || true)
 [ -n "$WEB1_DIRECT" ] || WEB1_DIRECT=0
+UNGATED=$({ grep -v -F "hcloud_server.web[\\\"\${WEB_HOST_KEY}\\\"]" "$WORK/targets.txt" 2>/dev/null || true; } | grep -c 'hcloud_server\.web' || true)
+[ -n "$UNGATED" ] || UNGATED=0
 DIRECT_LIST=$(sort -u "$WORK/targets.txt" 2>/dev/null | paste -sd, - || true)
-assert "no workflow -targets hcloud_server.web at all, any spelling or index (found ${WEB1_DIRECT}: ${DIRECT_LIST:-<none>})" \
-  "[[ '$WEB1_DIRECT' == '0' ]]"
+# NON-VACUITY FLOOR on the extractor itself: it must find the two known-good targets. A zero
+# here means the extractor is blind again, which is exactly how this assertion passed before.
+assert "the -target extractor is not blind (found ${WEB1_DIRECT}: ${DIRECT_LIST:-<none>})" \
+  "[[ '$WEB1_DIRECT' -ge 2 ]]"
+assert "every direct hcloud_server.web -target is a gated dispatch job's keyed target (${UNGATED} ungated)" \
+  "[[ '$UNGATED' == '0' ]]"
 # Positive control on the EXTRACTOR, not on a retired host's spelling. An earlier draft
 # controlled on the web-2 needle — but web-2 is retired (var.web_hosts holds only web-1), so a
 # future cleanup deleting that dead workflow arm would have RED-ed this suite while the failure

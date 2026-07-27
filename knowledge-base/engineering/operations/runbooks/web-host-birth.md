@@ -202,8 +202,18 @@ Then the serving check from "Verify the result" above, for a host in the serving
 
 </details>
 
+## Replacing an existing host
+
+This runbook covers the ADDITIVE case only: a host declared in `var.web_hosts` that is absent
+from the provider. A host that already exists cannot be birthed — the gate refuses a plan with
+zero creates rather than rubber-stamping a no-op. To destroy and recreate an existing host, see
+[Runbook — replacing a web host](./web-host-replace.md) (`apply_target=web-host-replace`,
+#6969/ADR-148), which is a separate dispatch with its own gate and a `REPLACE-<key>` token.
+That path refuses `web-1`.
+
 ## References
 
+- ADR-148 — the REPLACE sibling of this path (what to use when the host already exists)
 - ADR-145 — this birth path: why the HALT is inverted rather than removed, and the alternatives rejected
 - ADR-128 — the two coherence invariants, the verifier retention rule, and R1–R5 (met by the dispatch)
 - ADR-096 — `OPERATOR_APPLIED_EXCLUSIONS`, the routing the `host_creates` HALT falls back to

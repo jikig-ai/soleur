@@ -489,7 +489,14 @@ function stripDispatchJobs(workflowText: string): string {
   // CTO must-fix that the deleted web_2_recreate strip originally existed to satisfy.
   // The other five are per-merge-covered, so the strip is coverage-neutral for them
   // (asserted below, non-vacuously).
-  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create");
+  // web_host_replace (#6969, ADR-148): the dispatch-only REPLACE path, sibling of the birth
+  // above. Three of its four -targets (hcloud_server.web, hcloud_server_network.web,
+  // hcloud_volume_attachment.workspaces) are the SAME MOVED_OPERATOR_CONSUMED / exclusion
+  // bases the birth strip exists for, so the same blunting argument applies verbatim; the
+  // fourth (hcloud_firewall_attachment.web) is per-merge-covered and the strip is
+  // coverage-neutral for it. Stripped for the uniform reason too: a dispatch writer surface
+  // must never broaden the per-merge coverage anchor.
+  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace");
 }
 
 /** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
@@ -1335,7 +1342,9 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volu
 
 // ─── web-host-create dispatch: the birth path's -target set + gate pairing ────
 // `apply_target=web-host-create` (#6730, ADR-145) is the ONLY automated route allowed
-// to birth an hcloud_server.web. Every other route HALTs on host_creates > 0, and that
+// to BIRTH an hcloud_server.web. (Since #6969, `web-host-replace` also creates one as the
+// create half of a delete+create — a different contract, graded by a different gate; see the
+// web-host-replace block below.) Every other route HALTs on host_creates > 0, and that
 // HALT is not inherited — it is a separate inline copy in the `apply` job whose `if:` is
 // mutually exclusive with every dispatch job. So this job's own sourced gate is not
 // defense-in-depth behind an existing check; for this path it is the ONLY check, and
@@ -1441,8 +1450,15 @@ describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", ()
   });
 
   test("the job runs the sourced web_host_birth_gate and borrows no sibling gate", () => {
-    expect(jobBlock).toContain("web-host-birth-gate.sh");
-    expect(jobBlock).toContain("web_host_birth_gate");
+    // Same bare-token defect as the replace block below, and pre-existing — but ADR-145 §73-76
+    // asserts "terraform-target-parity.test.ts pins the job<->gate pairing so a future refactor
+    // cannot silently unhook it", which was measured FALSE for this job too. Fixed here rather
+    // than filed: this PR already edits this file, and the claim is load-bearing for the one
+    // route granted the host_creates capability.
+    expect(jobBlock).toMatch(/^\s*source\s+\S*web-host-birth-gate\.sh/m);
+    expect(jobBlock).toMatch(
+      /\bweb_host_birth_gate\s+tfplan\.json\s+"\$\{WEB_HOST_KEY\}"/,
+    );
     // A birth graded against a RETIRE or REPLACE allow-set is graded against the wrong
     // contract — the retire gate requires host_creates == 0, the exact inverse. Naming
     // each sibling explicitly (rather than a generic "one gate only" count) keeps the
@@ -1542,6 +1558,256 @@ describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", ()
     // Non-vacuity: the extraction must actually find the nine members.
     expect(gateBases.length).toBe(WEB_HOST_BIRTH_TARGET_BASES.length);
     expect(gateBases).toEqual([...WEB_HOST_BIRTH_TARGET_BASES].sort());
+  });
+});
+
+// ─── web-host-replace dispatch: the replace path's -target set + gate pairing ──
+// `apply_target=web-host-replace` (#6969, ADR-148) is the sibling web-host-birth-gate.sh
+// named but nobody had built. It is NOT a widened birth: a birth is additive and its gate
+// permits zero destroys, while this one requires exactly one delete+create of the requested
+// host. Both gates gain their meaning from that distinction, so the two -target sets must
+// stay separately pinned — a replace graded against the birth allow-set would abort on the
+// destroy arm, and a birth graded against this one would abort on replace cardinality.
+//
+// The SAFETY PROPERTY OF THIS SET IS ITS OMISSIONS, which is why they are asserted
+// explicitly below rather than left implicit in a four-member equality check. An untargeted
+// resource cannot be planned for destroy, so leaving the workspace store, the LUKS volume
+// and the LUKS passphrase out of the -target set is what preserves them.
+const WEB_HOST_REPLACE_TARGET_BASES = [
+  "hcloud_server.web",
+  "hcloud_server_network.web",
+  "hcloud_volume_attachment.workspaces",
+  // Singleton over `[for h in hcloud_server.web : h.id]` — unkeyed by construction. It MUST
+  // ride the replace: a fresh Hetzner host has a public IPv4/IPv6 and boots NAKED without it.
+  "hcloud_firewall_attachment.web",
+];
+const WEB_HOST_REPLACE_UNKEYED = ["hcloud_firewall_attachment.web"];
+// PRESERVED BY OMISSION — asserted ABSENT from the -target set. Each is a store or a key
+// whose loss is unrecoverable, and omission (not a gate arm) is the primary mechanism.
+const WEB_HOST_REPLACE_PRESERVED = [
+  "hcloud_volume.workspaces",
+  "hcloud_volume.workspaces_luks",
+  "random_password.workspaces_luks",
+  "doppler_secret.workspaces_luks_key",
+  // The apex A record is pinned to web-1's ipv4_address. This job REFUSES web-1, so the
+  // record must never move; its presence in the -target set would be the difference between
+  // "replace a standby" and "re-point production DNS".
+  "cloudflare_record.app",
+];
+
+/**
+ * `-replace` values for a job whose key is SHELL-INTERPOLATED rather than literal.
+ *
+ * The shared extractReplaceAddrs assumes the sibling dispatch shape
+ * `-replace='hcloud_server.git_data'`. This job cannot use it: single quotes would suppress
+ * the `${WEB_HOST_KEY}` expansion that makes the job generic over var.web_hosts, so its
+ * -replace is double-quoted with escaped inner quotes. Fed to the shared extractor, the
+ * outer-quote match stops at the first `\"` and yields a truncated `hcloud_server.web[`.
+ * Sibling of extractEscapedQuotedTargets, and separate for the same reason: loosening the
+ * shared extractor would make the OTHER callers' assertions accept an interpolated address.
+ */
+function extractEscapedQuotedReplaceAddrs(text: string): string[] {
+  const out: string[] = [];
+  for (const m of stripComments(text).matchAll(/-replace="((?:[^"\\]|\\.)*)"/g)) {
+    out.push(m[1].replace(/\\"/g, '"'));
+  }
+  return out;
+}
+
+describe("web-host-replace dispatch -target set + replace-gate pairing (#6969)", () => {
+  let jobBlock: string;
+  let keyedTargets: string[];
+  let replaceAddrs: string[];
+
+  beforeAll(() => {
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    jobBlock = extractJobBlock(wf, "web_host_replace");
+    // The escaped-quote extractor, not the literal-key one: this job's targets interpolate
+    // ${WEB_HOST_KEY} so they are double-quoted with escaped inner quotes.
+    keyedTargets = extractEscapedQuotedTargets(jobBlock);
+    replaceAddrs = extractEscapedQuotedReplaceAddrs(jobBlock);
+  });
+
+  test("the job exists and its -target extraction is non-vacuous", () => {
+    // Every assertion below reads jobBlock; an absent job yields "" and turns the structural
+    // greps into silent passes. Fail here instead.
+    expect(jobBlock).not.toEqual("");
+    expect(keyedTargets.length).toBe(WEB_HOST_REPLACE_TARGET_BASES.length);
+  });
+
+  test("the -targets are EXACTLY the four replace fan-out addresses", () => {
+    const bases = [...new Set(keyedTargets.map((t) => t.replace(/\[.*$/, "")))];
+    expect(bases.sort()).toEqual([...WEB_HOST_REPLACE_TARGET_BASES].sort());
+  });
+
+  test("every keyed -target interpolates the SAME dispatch key, never a literal host", () => {
+    // One authorization replaces one host. A hardcoded `["web-1"]` slipped into the set would
+    // let a dispatch for web-3 destroy the live origin, and the sourced gate grades against
+    // the key it was PASSED — so a mismatched literal here is invisible to it.
+    const keys = keyedTargets
+      .map((t) => /\["([^"]*)"\]/.exec(t)?.[1])
+      .filter((k): k is string => k !== undefined);
+    expect(keys.length).toBe(
+      WEB_HOST_REPLACE_TARGET_BASES.length - WEB_HOST_REPLACE_UNKEYED.length,
+    );
+    expect([...new Set(keys)]).toEqual(["${WEB_HOST_KEY}"]);
+  });
+
+  test("the -replace address is EXACTLY the keyed web server", () => {
+    expect(replaceAddrs).toEqual(['hcloud_server.web["${WEB_HOST_KEY}"]']);
+  });
+
+  test("exactly ONE address is -replaced (one authorization, one destroy)", () => {
+    // The cardinality the gate enforces on the PLAN, asserted here on the INVOCATION. A
+    // second -replace would put a destroy in the plan that the gate's replace-count arm
+    // would then have to catch after the fact; keeping the invocation single-address means
+    // the two agree by construction.
+    expect(replaceAddrs.length).toBe(1);
+  });
+
+  test("neither data volume, the LUKS passphrase, nor the apex A record is targeted", () => {
+    // The omissions ARE the preservation. An untargeted resource cannot be planned for
+    // destroy, so this assertion guards the primary mechanism, not a backstop.
+    const bases = new Set(keyedTargets.map((t) => t.replace(/\[.*$/, "")));
+    for (const addr of WEB_HOST_REPLACE_PRESERVED) {
+      expect(bases.has(addr)).toBe(false);
+    }
+  });
+
+  test("the job runs the sourced web_host_replace_gate and borrows no sibling gate", () => {
+    // ANCHORED ON THE SOURCE COMMAND AND THE CALL-WITH-ARGUMENT, not bare tokens.
+    // `extractJobBlock` does NOT strip comments, and both tokens appear in comments inside
+    // this job (the prose above the step and the `# shellcheck source=` directive). MEASURED:
+    // with the bare `toContain` form, replacing the real invocation with `if false; then`
+    // left this suite 82/0 green — and this gate is the ONLY check on a path that destroys a
+    // production host. Mirrors stock-preflight-coverage.test.ts, whose own comment records
+    // that deleting all five real `source` lines left IT green (cq-assert-anchor-not-bare-token).
+    expect(jobBlock).toMatch(/^\s*source\s+\S*web-host-replace-gate\.sh/m);
+    expect(jobBlock).toMatch(
+      /\bweb_host_replace_gate\s+tfplan\.json\s+"\$\{WEB_HOST_KEY\}"/,
+    );
+    // A replace graded against the BIRTH allow-set is graded against the inverse contract
+    // (the birth gate requires zero destroys). Naming each sibling explicitly rather than a
+    // generic "one gate only" count keeps the failure message actionable.
+    for (const sibling of [
+      "web-host-birth-gate.sh",
+      "web2-retire-gate.sh",
+      "workspaces-luks-cutover-gate.sh",
+      "workspaces-luks-recut-gate.sh",
+      "registry-host-replace-gate.sh",
+      "git-data-host-replace-gate.sh",
+    ]) {
+      expect(jobBlock).not.toContain(sibling);
+    }
+  });
+
+  test("the job sources the stock preflight (a replace destroys before it creates)", () => {
+    // MANDATORY on this path rather than advisory: the destroy frees the slot but cannot
+    // conjure DC stock, so an out-of-stock create leaves the host gone and unrecreatable
+    // (#6393/#6400). The entire cx line was orderable in 0 of 3 EU DCs on 2026-07-26.
+    expect(jobBlock).toContain("stock-preflight-gate.sh");
+    expect(jobBlock).toContain("stock_preflight_gate");
+  });
+
+  test("the job carries a required-reviewer environment gate and the shared swap mutex", () => {
+    expect(jobBlock).toMatch(/^\s{4}environment:\s*web-platform-infra-apply\s*$/m);
+    // The group string is a SHARED literal across the release deploy and the pipeline-fix
+    // apply. GitHub does not error on divergent group strings — they simply fail to
+    // serialize — so a rename here is a silent loss of the mutex on a lockless backend.
+    expect(jobBlock).toMatch(/^\s{6}group:\s*web-1-swap\s*$/m);
+    expect(jobBlock).toMatch(/^\s{6}cancel-in-progress:\s*false\s*$/m);
+  });
+
+  test("the confirm token is REPLACE-<key>, never the birth path's BIRTH-<key>", () => {
+    // Distinct by design: a token typed for a birth must not authorize a destroy.
+    expect(jobBlock).toContain('"REPLACE-${WEB_HOST_KEY_RAW}"');
+    expect(jobBlock).not.toContain('"BIRTH-${WEB_HOST_KEY_RAW}"');
+  });
+
+  test("the job passes a pinned @sha256 image_name, never a bare tag", () => {
+    expect(jobBlock).toMatch(/-var="image_name=\$\{PINNED\}"/);
+    expect(jobBlock).not.toMatch(/-var="image_name=[^"]*:latest"/);
+  });
+
+  test("stripDispatchJobs REMOVES the replace job's exclusion bases from the coverage set", () => {
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    const stripped = extractAllTargets(stripDispatchJobs(wf));
+    for (const base of [
+      "hcloud_server.web",
+      "hcloud_server_network.web",
+      "hcloud_volume_attachment.workspaces",
+    ]) {
+      expect(stripped.has(base)).toBe(false);
+    }
+    // The fleet firewall singleton is per-merge covered, so it must SURVIVE the strip —
+    // proving the strip did not blow a hole in the #5566 coverage anchor.
+    expect(stripped.has("hcloud_firewall_attachment.web")).toBe(true);
+    // Non-vacuity for the strip itself: the job block genuinely carries the server target.
+    expect(extractAllTargets(jobBlock).has("hcloud_server.web")).toBe(true);
+  });
+
+  test("the gate's allow-set matches the job's -target set exactly", () => {
+    // The load-bearing invariant. Widening the gate's allow-set would silently permit
+    // out-of-scope changes while this file still certified the exact set; narrowing it would
+    // make the gate refuse every real replace — an outage dressed as a safety feature, with
+    // nothing red. Mirrors the birth and git-data parity assertions.
+    const gateSrc = readFileSync(
+      resolve(REPO_ROOT, "tests/scripts/lib/web-host-replace-gate.sh"),
+      "utf8",
+    );
+    // Terminate on the closing `];` at line start, NOT a bare `]` — a non-greedy match would
+    // stop at the `]` inside `hcloud_server.web[\"...\"]` and extract one member. The
+    // non-vacuity length check below is what surfaces that rather than letting a 1-member
+    // "allow-set" quietly pass.
+    const defAllow = /def allow\(\$k\):\s*\[([\s\S]*?)\n\];/.exec(gateSrc);
+    expect(defAllow).not.toBeNull();
+    // The members are jq string literals containing ESCAPED quotes, so a bare /"([^"]+)"/
+    // also matches the `"]"` fragment between two escapes and yields a phantom member.
+    // Requiring `<type>.<name>` drops it without hiding a real one.
+    const gateBases = [
+      ...new Set(
+        [...defAllow![1].matchAll(/"([^"]+)"/g)]
+          .map((m) => m[1].replace(/\[.*$/, ""))
+          .filter((a) => /^[a-z0-9_]+\.[a-z0-9_]+$/.test(a)),
+      ),
+    ].sort();
+    expect(gateBases.length).toBe(WEB_HOST_REPLACE_TARGET_BASES.length);
+    expect(gateBases).toEqual([...WEB_HOST_REPLACE_TARGET_BASES].sort());
+  });
+
+  test("the gate's LUKS-pinned refusal key matches the job's fail-fast key", () => {
+    // The gate is the load-bearing refusal; the job's input validation repeats it only so
+    // the operator reads the reason at the top of the run instead of after a digest resolve
+    // and a terraform plan. Two copies of a safety-relevant literal is exactly the drift
+    // shape this file exists to pin, so bind them.
+    const gateSrc = readFileSync(
+      resolve(REPO_ROOT, "tests/scripts/lib/web-host-replace-gate.sh"),
+      "utf8",
+    );
+    const pinned = /_WEB_HOST_REPLACE_LUKS_PINNED_KEY="([^"]+)"/.exec(gateSrc);
+    expect(pinned).not.toBeNull();
+    expect(pinned![1]).toBe("web-1");
+    expect(jobBlock).toContain(`"$WEB_HOST_KEY_RAW" == "${pinned![1]}"`);
+  });
+
+  test("the three keyed bases ARE moved-consumed, which is why the strip is load-bearing", () => {
+    // Written first as "no replace-path address leaked into MOVED_OPERATOR_CONSUMED",
+    // copied from the git-data block where that IS true — and measured false here. It is
+    // the inverse that matters: these three bases are exactly the MOVED_OPERATOR_CONSUMED
+    // endpoints, so folding this job's -targets into `allTargets` would let a moved base be
+    // dropped from that set without turning the #5877 anchor red. Recorded rather than
+    // quietly deleted, because a copied assertion that happens to be false about the new
+    // subject is the failure this block's own strip test exists to catch.
+    for (const addr of [
+      "hcloud_server.web",
+      "hcloud_server_network.web",
+      "hcloud_volume_attachment.workspaces",
+    ]) {
+      expect(MOVED_OPERATOR_CONSUMED.has(addr)).toBe(true);
+    }
+    // The fleet firewall singleton is NOT a moved endpoint — it is per-merge covered, and
+    // the strip test above asserts it survives.
+    expect(MOVED_OPERATOR_CONSUMED.has("hcloud_firewall_attachment.web")).toBe(false);
   });
 });
 

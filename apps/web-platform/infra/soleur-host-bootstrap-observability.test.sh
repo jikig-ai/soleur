@@ -29,6 +29,13 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOOT="$DIR/soleur-host-bootstrap.sh"
 CI="$DIR/cloud-init.yml"
 WF="$DIR/../../../.github/workflows/apply-web-platform-infra.yml"
+# The fresh-host boot-trail reader, EXTRACTED from web_host_create's inline `run:` block so
+# the web_host_replace path (#6969) executes the same bytes. Every assertion below that is
+# about the READER's own behaviour (the QUERY literals, the EU endpoint, the Doppler token
+# source, the client-side MSG_RE filter) now reads this file; the assertions about a JOB's
+# WIRING stay scoped to $JOB. Splitting them that way is the point of the extraction — one
+# body to pin, and a separate check that each caller still invokes it.
+TRAIL="$DIR/scripts/fresh-host-boot-trail.sh"
 
 # The birth job's own block, not the whole workflow. Every AC8/AC13/AC14/AC16
 # assertion below is about what THE BIRTH PATH does, and the file holds eight other
@@ -252,6 +259,11 @@ fi
 # empty string simply finds nothing — so without this floor, deleting the job would
 # turn all five into silent passes, which is precisely the failure mode #6575
 # refused to leave behind.
+if [ -s "$TRAIL" ]; then
+  ok "AC8-16 floor: the extracted boot-trail reader $(basename "$TRAIL") exists and is non-empty"
+else
+  no "AC8-16 floor: $TRAIL is missing or empty — every reader-scoped assertion below greps nothing and would pass vacuously"
+fi
 if [ -n "$JOB" ]; then
   ok "AC8-16 floor: the web_host_create job block was extracted from $(basename "$WF")"
 else
@@ -265,11 +277,11 @@ fi
 # emitted nothing" identically to a host that genuinely did. So the check runs in
 # BOTH directions: every literal in the QUERY must be emitted somewhere, and every
 # canonical emit must appear in the QUERY.
-QUERY_LINE=$({ grep -nE "^\s*QUERY='" <<<"$JOB" || true; } | head -1 | cut -d: -f1)
+QUERY_LINE=$({ grep -nE "^\s*QUERY='" "$TRAIL" || true; } | head -1 | cut -d: -f1)
 if [ -z "$QUERY_LINE" ]; then
-  no "AC8: could not locate the QUERY line in the web_host_create job"
+  no "AC8: could not locate the QUERY line in $(basename "$TRAIL")"
 else
-  QUERY=$(sed -n "${QUERY_LINE}p" <<<"$JOB")
+  QUERY=$(sed -n "${QUERY_LINE}p" "$TRAIL")
   for msg in \
     "soleur-hostscript-seed failed" \
     "soleur-host-bootstrap failed" \
@@ -278,7 +290,7 @@ else
     if printf '%s' "$QUERY" | grep -qF -- "$msg"; then
       ok "AC8: QUERY includes message \"$msg\""
     else
-      no "AC8: the birth job's QUERY is missing message \"$msg\" (lockstep drift re-opens the blind spot)"
+      no "AC8: the boot-trail reader's QUERY is missing message \"$msg\" (lockstep drift re-opens the blind spot)"
     fi
   done
   for pair in \
@@ -298,15 +310,15 @@ fi
 # ── AC8b (EU data plane + always-run breadcrumb surface) ──
 # The project is EU-resident (jikigai-eu); a US sentry.io query against it returns
 # empty — indistinguishable from a silent host.
-if grep -qE 'https://de\.sentry\.io/api/0/projects/' <<<"$JOB"; then
-  ok "AC8b: the birth job queries the EU Sentry host (de.sentry.io)"
+if grep -qE 'https://de\.sentry\.io/api/0/projects/' "$TRAIL"; then
+  ok "AC8b: the boot-trail reader queries the EU Sentry host (de.sentry.io)"
 else
-  no "AC8b: the birth job's Sentry endpoint must be de.sentry.io (EU) — a US host returns empty"
+  no "AC8b: the boot-trail reader's Sentry endpoint must be de.sentry.io (EU) — a US host returns empty"
 fi
-if grep -qE 'https://sentry\.io/api/0/projects/' <<<"$JOB"; then
-  no "AC8b: the birth job must NOT query the US sentry.io host (EU-resident project)"
+if grep -qE 'https://sentry\.io/api/0/projects/' "$TRAIL"; then
+  no "AC8b: the boot-trail reader must NOT query the US sentry.io host (EU-resident project)"
 else
-  ok "AC8b: no US sentry.io endpoint in the birth job"
+  ok "AC8b: no US sentry.io endpoint in the boot-trail reader"
 fi
 # `if: always()` is what makes a GREEN dispatch informative. Without it, "the apply
 # succeeded" and "the probe never ran" render identically, and a host that applied
@@ -319,16 +331,47 @@ fi
 # suite 94/0 green, and so did deleting BOTH of them. An assertion that its own
 # documentation satisfies is the vacuous pass #6575 deleted these five rather than leave
 # behind. `f && /^      - name:/ {exit}` bounds the scan; `!/^ *#/` rejects prose.
-if [[ -n "$(awk '/- name: Surface fresh-host Sentry/{f=1; next} f && /^      - name:/{exit} f && !/^[[:space:]]*#/ && /^[[:space:]]*if:[[:space:]]*always\(\)[[:space:]]*$/{print "y"; exit}' <<<"$JOB")" ]]; then
-  ok "AC8b: the fresh-host Sentry surface runs if: always() (a green boot still shows the probe fired)"
-else
-  no "AC8b: the Sentry surface step must be if: always() (spec-flow F4)"
-fi
+# PER-JOB (#6969 review): this was $JOB-scoped, so deleting `if: always()` from the REPLACE
+# job's boot-trail step left every suite green. On a replace that is strictly worse than on a
+# birth — the original host is already destroyed, so "the apply succeeded" and "the probe
+# never ran" render identically, with nothing to fall back to.
+for prov_job in web_host_create web_host_replace; do
+  PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$WF" || true)"
+  if [[ -n "$(awk '/- name: Surface fresh-host Sentry/{f=1; next} f && /^      - name:/{exit} f && !/^[[:space:]]*#/ && /^[[:space:]]*if:[[:space:]]*always\(\)[[:space:]]*$/{print "y"; exit}' <<<"$PROV")" ]]; then
+    ok "AC8b: ${prov_job} fresh-host Sentry surface runs if: always()"
+  else
+    no "AC8b: ${prov_job} Sentry surface step must be if: always() (spec-flow F4)"
+  fi
+done
+
+# ── AC8d (#6969): EVERY host-provisioning dispatch job WIRES the extracted reader ──
+#
+# The drift the extraction newly makes possible, and the reason the reader-scoped
+# assertions above are no longer sufficient on their own. Once the body lives in a script,
+# every assertion about the body passes whether or not any job still CALLS it — so a job
+# that silently drops the invocation keeps the suite green while losing exactly the signal
+# #6969 exists to provide: web-2 booted dark and nothing said so.
+#
+# Both provisioning paths are named explicitly rather than discovered, so ADDING a third
+# one is a deliberate edit here rather than an omission nothing notices. Scoped per job
+# with the same awk extraction used for $JOB — a whole-file grep would let either job's
+# invocation satisfy the assertion about the other, which is the vacuous-pass shape the
+# $JOB extraction was written to prevent.
+for prov_job in web_host_create web_host_replace; do
+  PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$WF" || true)"
+  if [ -z "$PROV" ]; then
+    no "AC8d: no ${prov_job} job in $(basename "$WF") — a provisioning path that does not exist cannot surface a boot trail"
+  elif grep -qF 'apps/web-platform/infra/scripts/fresh-host-boot-trail.sh' <<<"$PROV"; then
+    ok "AC8d: ${prov_job} wires the extracted boot-trail reader"
+  else
+    no "AC8d: ${prov_job} does not invoke scripts/fresh-host-boot-trail.sh — a green apply is not a green boot, and without this call the job cannot tell the two apart"
+  fi
+done
 
 # ── AC13 (#6090 follow-up): the surfacing step sources its token from Doppler ──
 # The GitHub repo secret SENTRY_AUTH_TOKEN is unset, so a step reading it self-skips
 # and logs "Sentry query skipped" — the read never happens and nobody notices.
-if grep -qE 'doppler secrets get SENTRY_AUTH_TOKEN .*-c prd_terraform' <<<"$JOB"; then
+if grep -qE 'doppler secrets get SENTRY_AUTH_TOKEN .*-c prd_terraform' "$TRAIL"; then
   ok "AC13: the surface step resolves SENTRY_AUTH_TOKEN from Doppler prd_terraform (not the unset repo secret)"
 else
   no "AC13: the surface step must fetch SENTRY_AUTH_TOKEN via doppler -c prd_terraform"
@@ -341,11 +384,22 @@ fi
 # the real emit with a `#` comment carrying the same sentence left the suite 94/0 green.
 # The claim was true of the intent and false of the code, which is the failure mode this
 # whole block was restored to prevent.
-if grep -qE '^[[:space:]]*echo "::error::SENTRY_DSN is empty in Doppler prd_terraform' <<<"$JOB"; then
-  ok "AC14: the birth job asserts baked SENTRY_DSN non-empty before create (pre-extraction cannot go dark)"
-else
-  no "AC14: the birth job must assert SENTRY_DSN is non-empty BEFORE creating the host (an empty baked DSN is a silent pre-extraction blind spot)"
-fi
+#
+# PER-JOB (#6969), for the same reason AC8d is: this was scoped to $JOB (web_host_create)
+# only, while web_host_replace ships the identical assertion and needs it MORE — a replace
+# DESTROYS the existing host first, so an empty baked DSN means the replacement boots dark
+# with nothing to fall back to. Nothing pinned the replace copy: deleting that step left the
+# suite fully green. Same half-closed wiring-drift class AC8d exists to close.
+for prov_job in web_host_create web_host_replace; do
+  PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$WF" || true)"
+  if [ -z "$PROV" ]; then
+    no "AC14: no ${prov_job} job in $(basename "$WF") — the DSN precondition has no subject and would pass vacuously"
+  elif grep -qE '^[[:space:]]*echo "::error::SENTRY_DSN is empty in Doppler prd_terraform' <<<"$PROV"; then
+    ok "AC14: ${prov_job} asserts baked SENTRY_DSN non-empty before it provisions (pre-extraction cannot go dark)"
+  else
+    no "AC14: ${prov_job} must assert SENTRY_DSN is non-empty BEFORE provisioning (an empty baked DSN is a silent pre-extraction blind spot)"
+  fi
+done
 
 # ── AC16 (#6090): the read must NOT use the broken message: query ──
 # The /projects/{org}/{proj}/events/ endpoint IGNORES the `message:` search prefix:
@@ -358,12 +412,17 @@ fi
 # left the suite 94/0 green. Widening the pattern without stripping comments then made the
 # assertion false-FAIL on that same explanatory prose: the two halves of this fix are one
 # change, and shipping either alone is a regression in the opposite direction.
-if grep -vE '^[[:space:]]*#' <<<"$JOB" | grep -qE 'query=\$\{?QUERY\}?'; then
+if grep -vE '^[[:space:]]*#' "$TRAIL" | grep -qE 'query=\$\{?QUERY\}?'; then
   no "AC16: the surface step still passes the broken message: query to the events endpoint (returns 0)"
 else
   ok "AC16: the surface step does not pass the broken message: query to the endpoint"
 fi
-if grep -qF 'MSG_RE=' <<<"$JOB" && grep -qF 'test($re)' <<<"$JOB"; then
+# COMMENTS STRIPPED, matching what the AC16 half directly above already does. `test($re)`
+# appears in an explanatory comment inside the reader (the note about keeping the literal
+# byte-identical for this very assertion), so the bare -qF form is satisfied by the prose that
+# documents it — the assertion its own documentation satisfies (cq-assert-anchor-not-bare-token).
+if grep -vE '^[[:space:]]*#' "$TRAIL" | grep -qF 'MSG_RE=' \
+   && grep -vE '^[[:space:]]*#' "$TRAIL" | grep -qF 'test($re)'; then
   ok "AC16: the surface step filters recent events client-side via a regex derived from QUERY"
 else
   no "AC16: the surface step must derive MSG_RE from QUERY and filter events client-side (test(\$re))"

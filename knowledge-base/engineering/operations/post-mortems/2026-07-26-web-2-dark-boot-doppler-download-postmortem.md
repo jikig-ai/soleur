@@ -3,7 +3,7 @@ title: "soleur-web-2 booted DARK at cloud-init stage doppler_download — the fa
 date: 2026-07-26
 incident_pr: 6970
 incident_window: "2026-07-26T16:49:35Z (host created) → ongoing (host is dark, still occupying a fleet slot; cause UNDETERMINED)"
-recovery_at: "not recovered — runcmd is once-per-instance, so this host cannot be repaired by reboot; it must be destroyed and reborn (#6969 open decision)"
+recovery_at: "not recovered — runcmd is once-per-instance, so this host cannot be repaired by reboot; it must be destroyed and reborn. The MECHANISM now exists (apply_target=web-host-replace, ADR-148) but has NOT been dispatched; see Recovery verification."
 suspected_change: "none identified — the birth path (#6730, ADR-145) behaved correctly and detected the dark boot. The cause of the doppler_download failure itself is UNDETERMINED because the failing call discarded the Doppler CLI's stderr and exit code."
 brand_survival_threshold: single-user incident
 status: unresolved but ended
@@ -130,6 +130,14 @@ take effect only at a **fresh create**. It cannot repair `soleur-web-2`, and a `
 showing no diff is expected rather than evidence of no effect.
 
 ## Recovery verification
+
+**Update 2026-07-26 (#6969, ADR-148):** the *mechanism* this section was waiting on now exists.
+`recovery_at` above said the host "must be destroyed and reborn (#6969 open decision)"; there was
+no route to do either — `web-host-create` is additive-only and its gate correctly refuses a host
+already in state. `apply_target=web-host-replace` is that route
+([runbook](../runbooks/web-host-replace.md)). It has **not yet been dispatched**, so this
+post-mortem's `status:` stays `unresolved but ended` and web-2 is still dark. The dispatch and
+its outcome are recorded below when it runs; only outcome (a) moves the status.
 
 Deferred by construction, and the deferral is the point. Recovery is verified at the **next fresh
 host birth on a post-#6969 image**: the birth-path gate must either reach `cloud_init_complete`, or

@@ -207,3 +207,24 @@ not can only be re-derived. Keep writing them.
   the false comment that started this thread.
 - [[2026-07-15-ad-hoc-verification-evidence-is-as-perishable-as-uncommitted-code]] — why the
   battery was committed as a script, and why the restore ran in a separate call.
+
+## Addendum 2026-07-27 (#6969 / PR #6973): the LAYER axis
+
+This file's thesis is about mutations you did not *imagine*. There is a second axis, and it is
+checkable **before** you run anything: mutations you did imagine, all of the same **shape**,
+leaving an entire implementation layer untouched.
+
+A 12-mutation battery on `tests/scripts/lib/web-host-replace-gate.sh` reported every arm
+load-bearing. Every mutation was `if [[ … ]]; then` → `if false; then` — i.e. the bash **decision**
+layer. None touched the ~90 lines of **jq** that compute the counters those arms decide on. That
+detection layer held three independent fail-opens, one of which PASSed a plan destroying every
+user worktree on the host.
+
+**The tell is uniformity: N mutations of one shape is one mutation.** Before trusting a battery,
+enumerate the *layers* it edits, not the count it reports — a guard that shells out to jq, awk,
+python or SQL has at least two, and a battery confined to the outer one certifies nothing about
+the inner one. Same question shape as the fixture-cardinality rule: name the set, then count how
+many distinct members you actually instantiated.
+
+Full write-up: [the safety rationale I wrote was false, and the gate it justified failed open
+three ways](./2026-07-27-the-safety-rationale-i-wrote-was-false-and-the-gate-it-justified-failed-open-three-ways.md).
