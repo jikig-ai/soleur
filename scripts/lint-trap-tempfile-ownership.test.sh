@@ -54,7 +54,8 @@ for case in \
   "bad-mktemp-no-trap.sh.fixture|rule (c) mktemp with no owning trap|rule (c) flags mktemp with zero traps" \
   "bad-escape-hatch-no-reason.sh.fixture|with no reason|a bare escape hatch is itself an error" \
   "bad-mktemp-inside-double-quotes.sh.fixture|rule (c) mktemp with no owning trap|rule (c) still fires on an allocation inside double quotes" \
-  "bad-mktemp-in-brace-body.sh.fixture|rule (c) mktemp with no owning trap|rule (c) fires on mktemp in a { } function body"
+  "bad-mktemp-in-brace-body.sh.fixture|rule (c) mktemp with no owning trap|rule (c) fires on mktemp in a { } function body" \
+  "bad-midline-append-named-fn-trap.sh.fixture|rule (a) subshell-append|rule (a) fires on a MID-LINE append in a one-liner helper whose trap names a FUNCTION (#6734 blind spot)"
 do
   IFS='|' read -r file needle label <<< "$case"
   rc=$(lint_rc "$FIX/$file")

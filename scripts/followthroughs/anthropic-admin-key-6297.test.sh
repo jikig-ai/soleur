@@ -10,26 +10,59 @@
 # require the corresponding fixture to flip, so neither arm is vacuous.
 set -uo pipefail
 
-# Single owning trap (ADR-129 / #6734). This suite allocates a sandbox dir plus a
-# fixture file PER TEST — the set is built dynamically, so the trap owns an
-# accumulator rather than a fixed list of names. Without it a mid-suite abort
-# (a failing assertion under `set -e` in a future edit, or an operator ^C) leaks
-# ~20 sandbox trees per run into TMPDIR.
+# SINGLE SCRATCH ROOT (ADR-129 / #6734). This suite allocates a sandbox dir plus a
+# fixture file PER TEST, so cleanup must cover a dynamically-built set.
 #
-# `rm -rf` is correct here and not over-broad: every registered path came from
-# `mktemp`/`mktemp -d`, so each is a fresh private path this script created.
-TMP_PATHS=()
-cleanup_tmp() {
-  local p
-  for p in "${TMP_PATHS[@]:-}"; do
-    [[ -n "$p" ]] && rm -rf -- "$p" 2>/dev/null
-  done
+# It previously did that with a `TMP_PATHS=()` accumulator plus register-on-allocate
+# helpers. That design was silently INERT and leaked every artifact it created:
+#
+#   mktmp() { local p; p=$(mktemp "$@"); TMP_PATHS+=("$p"); printf '%s' "$p"; }
+#   f=$(mktmp -t ft.XXXXXXXX)      # <-- command substitution == SUBSHELL
+#
+# Every call site invoked the helper via `$( )`, so the append mutated a subshell copy
+# of TMP_PATHS and was discarded on return. The parent array stayed empty for the whole
+# run and the EXIT trap iterated nothing. Measured: 1,883 `ft.*` + 1,883 `ft6297.*`
+# orphans in /tmp, spanning weeks.
+#
+# The fix is to stop tracking individual paths at all. One root is created up front,
+# TMPDIR is pointed at it so every bare `mktemp` in this file (and in anything it runs)
+# lands INSIDE it, and the trap removes exactly that one directory. There is no
+# registration step left to get wrong, and the shape is already the house idiom in 15
+# sibling suites.
+#
+# `rm -rf` is correct and not over-broad: TMP_ROOT is a fresh `mktemp -d` this script
+# owns, and `rm` never descends symlinks (a symlinked entry removes only the link).
+#
+# GUARDS BELOW ARE LOAD-BEARING — do not simplify them:
+#
+#   * This file is `set -uo pipefail` with NO `-e`. A failing `mktemp -d` therefore does
+#     NOT abort the script. Unguarded, TMP_ROOT would be empty, `export TMPDIR=""` would
+#     send every allocation back to /tmp, and `rm -rf -- ""` would be a silent no-op —
+#     i.e. the leak would return while the run still looked clean. That failure is most
+#     likely exactly when /tmp is full, which is the condition this whole fix exists for.
+#   * `readonly` is not defensive style. The trap body is SINGLE-QUOTED and therefore
+#     late-bound: it resolves $TMP_ROOT at exit, not at trap-installation. Any later
+#     reassignment would redirect the delete. `readonly` makes that unrepresentable.
+TMP_ROOT=$(mktemp -d -t ft6297root.XXXXXXXX) || {
+  echo "FATAL: could not create scratch root (is the filesystem full?)" >&2
+  exit 1
 }
-trap cleanup_tmp EXIT INT TERM
+: "${TMP_ROOT:?scratch root must be non-empty}"
+[[ "$TMP_ROOT" == /* && -d "$TMP_ROOT" && ! -L "$TMP_ROOT" ]] || {
+  echo "FATAL: scratch root is not a plain absolute directory: '$TMP_ROOT'" >&2
+  exit 1
+}
+readonly TMP_ROOT
+trap 'rm -rf -- "$TMP_ROOT"' EXIT INT TERM
 
-# Allocate + register in one step. Every mktemp in this file goes through these.
-mktmp()  { local p; p=$(mktemp "$@");    TMP_PATHS+=("$p"); printf '%s' "$p"; }
-mktmpd() { local p; p=$(mktemp -d "$@"); TMP_PATHS+=("$p"); printf '%s' "$p"; }
+# Point every allocation at the root. `run_probe` re-exports this through its `env -i`
+# allowlist so the code under test allocates inside the root too, rather than escaping
+# back to a shared /tmp where nothing would reap it.
+export TMPDIR="$TMP_ROOT"
+
+# Allocate inside the root. No registration step — the root's removal covers everything.
+mktmp()  { mktemp "$@"; }
+mktmpd() { mktemp -d "$@"; }
 
 PROBE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/anthropic-admin-key-6297.sh"
 fails=0
@@ -77,8 +110,12 @@ T2="2026-07-20 06:17:00"   # newer
 # to sentry.io, so the suite's result depends on the machine it runs on.
 run_probe() {
   local dir="$1"
+  # TMPDIR is in the allowlist deliberately. `env -i` clears the environment, so without
+  # it the probe would inherit no TMPDIR and every temp file the CODE UNDER TEST creates
+  # would land in the shared /tmp — outside the scratch root, where this suite's trap
+  # cannot reap it and any root-scoped leak assertion would read clean while /tmp grew.
   ( cd "$dir" && env -i \
-      PATH="$PATH" HOME="$HOME" \
+      PATH="$PATH" HOME="$HOME" TMPDIR="$TMPDIR" \
       BETTERSTACK_QUERY_HOST=h \
       BETTERSTACK_QUERY_USERNAME=u \
       BETTERSTACK_QUERY_PASSWORD=p \
@@ -308,6 +345,68 @@ d=$(make_sandbox "$f")
 out=$(run_probe_out "$d" 'exit 1' "$CURL_ZERO")
 check_out "$out" "Stall counter query FAILED" "gh failure → loud sentinel, not a silent 0"
 check_no_out "$out" "STALLED" "a failed counter does not also claim STALLED"
+
+# 13 — CLEANUP REGRESSION (#6734 follow-up). Runs THIS FILE and asserts it leaves
+#      nothing behind.
+#
+#      It must assert on-disk ABSENCE, never "a trap is installed": the pre-fix script
+#      carried a perfectly well-formed `trap cleanup_tmp EXIT INT TERM` and still leaked
+#      3,766 files, because the registration feeding that trap ran in a
+#      command-substitution subshell and was discarded.
+#
+#      It must also run THE REAL FILE. An earlier version of this test drove a heredoc
+#      child that re-declared the correct idiom inline — so it asserted that a
+#      known-good snippet was known-good, and was completely decoupled from the header
+#      above it. Reverting that header to the leaky form leaked 34 orphans while this
+#      test still printed PASS. A regression test that cannot observe the regression it
+#      was written for is worse than no test: it certifies the bug as fixed.
+#
+#      Recursion is broken by SOLEUR_FT6297_SELFTEST, which the child sets to skip this
+#      block. Everything else in the suite runs normally in the child.
+if [[ -z "${SOLEUR_FT6297_SELFTEST:-}" ]]; then
+  probe_root=$(mktemp -d -t ft6297selftest.XXXXXXXX)
+  sentinel="$probe_root/sentinel"
+  mkdir -p "$sentinel"
+
+  # Run the real suite with TMPDIR pointed at an empty sentinel dir we own. Every
+  # allocation this file makes — and every allocation its own scratch root makes — must
+  # land inside it, and nothing may survive the child's exit.
+  ( SOLEUR_FT6297_SELFTEST=1 TMPDIR="$sentinel" bash "${BASH_SOURCE[0]}" ) >/dev/null 2>&1
+  child_rc=$?
+
+  survivors=$(find "$sentinel" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
+
+  if [[ "$child_rc" -ne 0 ]]; then
+    fail "self-test child exited $child_rc — cannot judge cleanup (fixture problem, not a SUT result)"
+  elif [[ "$survivors" -ne 0 ]]; then
+    fail "THIS FILE leaked $survivors entr(ies) into TMPDIR after exiting: $(find "$sentinel" -mindepth 1 -maxdepth 1 | head -3 | tr '\n' ' ')"
+  else
+    pass "the suite leaves zero entries in TMPDIR after it exits (real file, not a stand-in)"
+  fi
+
+  # 13b — POSITIVE CONTROL, against the SAME sentinel mechanism. Proves the probe can
+  #       see a leak at all: without it, test 13 would still pass if TMPDIR were being
+  #       ignored, if the child never allocated anything, or if `find` were misscoped.
+  leak_sentinel="$probe_root/leak-sentinel"
+  mkdir -p "$leak_sentinel"
+  cat > "$probe_root/leaky.sh" <<'LEAKY'
+#!/usr/bin/env bash
+set -uo pipefail
+# Deliberately no trap: the pre-fix shape, reduced.
+r=$(mktemp -d -t ft6297leak.XXXXXXXX) || exit 1
+: > "$r/artifact"
+LEAKY
+  chmod +x "$probe_root/leaky.sh"
+  ( TMPDIR="$leak_sentinel" bash "$probe_root/leaky.sh" ) >/dev/null 2>&1
+  leaked=$(find "$leak_sentinel" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
+  if [[ "$leaked" -gt 0 ]]; then
+    pass "positive control: an uncleaned child DOES leave entries in the sentinel (test 13 is not vacuous)"
+  else
+    fail "positive control failed — the sentinel probe cannot distinguish cleaned from leaked"
+  fi
+
+  rm -rf -- "$probe_root"
+fi
 
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi

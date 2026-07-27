@@ -126,6 +126,11 @@ check_value_safe_drift() {  # returns 0 = value-safe, 1 = drift detected
 # committed to this test file (GitHub push protection) while the runtime fixture holds
 # the real shape.
 DRIFT_TMP="$(mktemp -d)"
+# Own the cleanup with a trap, not just the `rm -rf` at the end of this block. The
+# trailing rm only runs on the happy path — any early exit between here and there (a
+# `set -e` abort in a future edit, an operator ^C, a SIGTERM) skips it and leaks the
+# directory. /tmp here is a 4 GiB RAM-backed tmpfs, so leaked scratch is not free.
+trap 'rm -rf -- "${DRIFT_TMP:-}"' EXIT INT TERM
 printf 'export const X = process.env.SECRET_KEY;\n' > "$DRIFT_TMP/bad-env-dot.ts"
 printf 'export const X = process["env"]["SECRET_KEY"];\n' > "$DRIFT_TMP/bad-env-bracket.ts"
 SK="sk_""live_"; printf 'export const K = "%s%s";\n' "$SK" "0123456789abcdefABCDEF0123456789" > "$DRIFT_TMP/bad-literal.ts"
@@ -197,8 +202,17 @@ fi
 # Fast path: the installed web-platform binary (present locally + in the
 # test-webplat CI shard). Fallback: the test-scripts shard has node+npm but no
 # web-platform deps, so install dependency-cruiser on demand into a temp dir.
-TMPROOT="$(mktemp -d)"
-trap 'rm -rf "$TMPROOT"' EXIT
+TMPROOT="$(mktemp -d)" || { echo "FATAL: cannot create scratch root" >&2; exit 1; }
+: "${TMPROOT:?scratch root must be non-empty}"
+[[ "$TMPROOT" == /* && -d "$TMPROOT" && ! -L "$TMPROOT" ]] || {
+  echo "FATAL: scratch root is not a plain absolute directory: '$TMPROOT'" >&2; exit 1; }
+# EXIT **INT TERM**, not EXIT alone. bash traps REPLACE rather than stack, so an
+# EXIT-only registration here left the earlier `… INT TERM` handler live and still
+# pointing at DRIFT_TMP — which is already deleted by this point. A ^C during the
+# `npm install` below (the longest step in this file) would then run that stale handler,
+# never touch TMPROOT, and orphan a full node_modules tree onto the 4 GiB tmpfs: the
+# exact leak class this PR exists to close, reintroduced in the second half of the file.
+trap 'rm -rf -- "${TMPROOT:-}"' EXIT INT TERM
 
 DEPCRUISE="$APP/node_modules/.bin/depcruise"
 if [[ ! -x "$DEPCRUISE" ]]; then
