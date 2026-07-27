@@ -83,11 +83,32 @@ The third shape is the one that hides, and it is common in this repo:
 
 ## Disposition
 
-### Fixed in this PR — `.claude/hooks/` (51 sites, 21 files)
+### Fixed in this PR — `.claude/hooks/` (59 sites, 22 files)
 
-Zero `| grep -q` remain in non-test hook code. Variable producers became
-herestrings; command producers became `grep -c … -gt 0`. All 34 hook suites
-pass byte-identically to the pre-conversion baseline.
+Zero `| grep -*q` remain in non-test hook code. Variable producers became
+herestrings; command producers became `grep -c … -gt 0`. The 34 pre-existing
+`.claude/hooks/*.test.sh` suites pass byte-identically to the pre-conversion
+baseline; this PR adds a 35th (`grep-q-pipe-guard.test.sh`).
+
+**Every count in this document is stated with the command that produces it.**
+A number pinned to prose rots exactly like a citation pinned to a line number —
+a reader who re-derives it under a slightly different scope gets a different
+answer and concludes the record is wrong. All counts below are measured against
+`origin/main` (the pre-PR state), scope `*.sh` only, excluding `*.test.sh`:
+
+```bash
+W='\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q'
+git grep -nE "$W" origin/main -- '<scope>**/*.sh' '<scope>*.sh' | grep -vcE '\.test\.sh'
+```
+
+| Scope | Sites | Files |
+|---|---|---|
+| `.claude/hooks/` | 59 | 22 |
+| `scripts/` | 52 | 27 |
+| `plugins/` | 35 | 17 |
+
+Of the 59 hook sites, 8 are in `iac-plan-write-guard.sh` itself — the file the
+issue names — leaving 51 in the 21 sibling files.
 
 The five sites that needed hand conversion, with direction:
 
@@ -96,7 +117,7 @@ The five sites that needed hand conversion, with direction:
 | `skill-context-queries.sh:77` | **FAILS OPEN** | `awk … \| grep -q … \|\| exit 0` — silently disables `context_queries` for the skills that declare them |
 | `pre-merge-rebase.sh:153` | **FAILS OPEN** | an open `code-review` todo reads as absent |
 | `guardrails.sh:341` | fails closed | denies a `gh issue create` that *did* carry `--milestone` |
-| `skill-security-scan.sh:46` | fails closed | denies a HIGH-RISK skill whose override artifact **is** staged |
+| `skill-security-scan.sh:46` | fails closed | a HIGH-RISK skill whose override artifact **is** staged gets the un-overridden advisory. That hook always exits 0, so this is a misleading breadcrumb, not a blocked commit |
 | `brand-hex-commit-gate.sh:159` | fails closed | a CSS file that does define a token reads as not defining one |
 
 `ship-soak-followthrough-gate.sh` has no test suite of its own; its two sites
@@ -117,13 +138,28 @@ under-reports by roughly 2% in `.claude/hooks/` and by 1 and 5 sites in
 
 ### Not fixed here — tracked
 
+Counted with the same command and scope as the table above.
+
 | Scope | Non-test sites | Why deferred |
 |---|---|---|
-| `scripts/**/*.sh` | 51 | Mostly one-shot follow-through scripts and operator tooling. Real but lower consequence than a policy gate, and each needs its own reading. |
-| `plugins/**/*.sh` | 64 | Same. |
-| test files (all trees) | 160 | A racing assertion in a **test** is its own hazard — a negative assertion (`! … \| grep -q …`) passes vacuously — but converting test harnesses wholesale in a bug-fix PR risks masking real failures. |
+| `scripts/**/*.sh` | 52 | Mostly one-shot follow-through scripts and operator tooling. Real but lower consequence than a policy gate, and each needs its own reading. |
+| `plugins/**/*.sh` | 35 | Same. |
+| `*.test.sh` in those three scopes | 157 | A racing assertion in a **test** is its own hazard — a negative assertion (`! … \| grep -q …`) passes vacuously — but converting test harnesses wholesale in a bug-fix PR risks masking real failures. |
 
-A tracking issue is filed at ship time covering all three rows.
+Two adjacent classes found during review and deferred with the rest:
+
+- **`| head -N` early-closes identically.** `head` exits after N lines and
+  SIGPIPEs the producer exactly as `grep -q` does. `ship-runbook-ssh-gate.sh`
+  has the worst shape — a bare assignment under `set -eo pipefail`, where a
+  SIGPIPE kills the hook outright and fails the gate open. Seven further
+  instances sit in files this PR already touched.
+- **CI workflow gates.** GitHub Actions runs steps under `-eo pipefail` by
+  default, and several gates decide *whether they run at all* via
+  `git diff --name-only … | grep -qE …`. A large PR's file list exceeds 64 KiB,
+  at which point the gate silently skips itself. `constraint-gates.yml` and
+  `ci.yml` both carry this shape.
+
+A tracking issue is filed at ship time covering all of these.
 
 ## Vacuity warning for anyone re-running these measurements
 

@@ -189,14 +189,58 @@ mk_big_body() {
 
 VIOLATION='Phase 1: ssh root@hetzner and run setup.'
 
-# T1 (AC-A2) — the criterion the issue asks for. Fails 30/30 pre-fix at 128 KB.
-assert_decision_stable "T1 128 KB body, violation at top, denies every run" "deny" \
-  "$(mk_payload "$PLAN_PATH" "$(mk_big_body 128 "$VIOLATION")")"
+# T1 (AC-A2) — EVERY policy check at scale, not just the first.
+#
+# The hook has six independent checks, each its own `<match> && add_match`
+# pipeline, so each fails open independently. An arm that only drives the SSH
+# pattern leaves the other five free to be reverted to the pipe form with the
+# whole suite green — i.e. the filed bug restored, undetected. Measured: with
+# the `doppler secrets set` check alone reverted, the hook denied 0 of 15 runs
+# on a 128 KB body and the suite still reported 30/30.
+#
+# One arm per check, at a size where the pre-fix race is deterministic.
+declare -a VIOLATION_CASES=(
+  "ssh|Phase 1: ssh root@hetzner and run setup."
+  "operator-driven|Phase 1: Operator runs the bootstrap by hand."
+  "systemctl|Phase 1: Run systemctl enable soleur.service on the box."
+  "systemd-path|Phase 1: Drop the unit at /etc/systemd/system/soleur.service"
+  "doppler|Phase 1: Run doppler secrets set FOO=bar -p soleur -c prd"
+  "dashboard|Phase 1: Go to the Cloudflare dashboard and add the record."
+  "crontab|Phase 1: Add the entry via crontab -e on the host."
+)
+for _case in "${VIOLATION_CASES[@]}"; do
+  _label="${_case%%|*}"
+  _text="${_case#*|}"
+  assert_decision_stable "T1[$_label] 128 KB body, violation at top, denies every run" "deny" \
+    "$(mk_payload "$PLAN_PATH" "$(mk_big_body 128 "$_text")")"
+done
 
 # T1b — the size the issue reports (~50 KB), where the race is partial. This is
 # the arm that reproduces the filed 9-deny/3-allow ratio.
 assert_decision_stable "T1b 50 KB body, violation at top, denies every run" "deny" \
   "$(mk_payload "$PLAN_PATH" "$(mk_big_body 50 "$VIOLATION")")"
+
+# T1c (AC-A5, registration half) — the hook only runs on the tools its matcher
+# names. T4 below proves the hook HANDLES a MultiEdit payload, but a hook that
+# is never invoked handles nothing: reverting the matcher in settings.json to
+# `Write|Edit` restores the production bypass with T4 still green. Assert the
+# registration itself.
+TOTAL=$((TOTAL + 1))
+_settings="$(cd "$SCRIPT_DIR/../.." && pwd)/.claude/settings.json"
+_matcher="$(jq -r '
+  [ .hooks.PreToolUse[]
+    | select(any(.hooks[]?; .command | test("iac-plan-write-guard\\.sh")))
+    | .matcher ] | first // "<not-registered>"
+' "$_settings" 2>/dev/null || echo "<jq-fail>")"
+if [[ "$_matcher" == *MultiEdit* ]]; then
+  PASS=$((PASS + 1))
+  echo "PASS: T1c settings.json registers the hook on MultiEdit (matcher: $_matcher)"
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: T1c the hook is not registered for MultiEdit — the bypass is open"
+  echo "  matcher: $_matcher"
+  echo "  a MultiEdit-written plan never reaches this hook, whatever its own case says"
+fi
 
 # T2 — the fail-CLOSED direction: a VALID acked plan must never be denied.
 # Pre-fix this denied 22/30 at 50 KB — the symptom that surfaced the bug.

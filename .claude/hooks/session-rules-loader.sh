@@ -352,19 +352,50 @@ jq -nc \
 #
 # Surfacing it here needs no credential and no network. Emits NOTHING when there
 # are no alarms — a healthy machine must not tax every session's context.
-TMPFS_ALARM_FILE="${TMPFS_GUARD_ALARM_FILE:-$HOME/.local/state/soleur/tmpfs-guard-alarms.log}"
+#
+# POSITION IS LOAD-BEARING: this block is appended at the END of the envelope,
+# never spliced into the line-4 slot. Lines 4-6 are the `[session-context]`
+# triple that Test 19/AC7 and Test 21/AC11 assert positionally (l4/l5/l6 are
+# session-context, l7 is not). Prepending here passes only while the alarm file
+# does not exist, then reddens the loader suite the moment /tmp crosses the warn
+# threshold — i.e. during the very incident this feature exists to report, where
+# the failure would read as an unrelated loader regression.
+#
+# CONTENT IS UNTRUSTED: the file is written by cron and read into the top of an
+# agent's context. Sanitize it exactly like the two sibling external inputs in
+# this file — the MCP roster keys (gsub cntrl) and the worktree path (tr -d) —
+# and cap it, so a runaway line cannot dominate the session.
+# `${HOME:-…}` is deliberate: this file runs under `set -u`, and an unset HOME
+# would abort the loader BEFORE it emits its envelope — producing a session with
+# the bare pointer index and zero rule bodies, which the header calls a
+# single-user incident. Every other variable in this region is defaulted too.
+TMPFS_ALARM_FILE="${TMPFS_GUARD_ALARM_FILE:-${HOME:-/nonexistent}/.local/state/soleur/tmpfs-guard-alarms.log}"
+TMPFS_HEARTBEAT_FILE="${TMPFS_GUARD_HEARTBEAT_FILE:-${HOME:-/nonexistent}/.local/state/soleur/tmpfs-guard-last-run}"
 TMPFS_ALARM_BLOCK=""
 if [[ -s "$TMPFS_ALARM_FILE" ]]; then
-  _alarm_n=$(wc -l < "$TMPFS_ALARM_FILE" 2>/dev/null || echo 0)
-  if [[ "$_alarm_n" =~ ^[0-9]+$ ]] && (( _alarm_n > 0 )); then
-    _alarm_last=$(tail -1 "$TMPFS_ALARM_FILE" 2>/dev/null || true)
-    TMPFS_ALARM_BLOCK="[tmpfs-guard] ${_alarm_n} unresolved /tmp alarm(s); most recent: ${_alarm_last}"$'\n'"[tmpfs-guard] full log: ${TMPFS_ALARM_FILE} (clear it once investigated)"$'\n'
+  # Report the most recent alarm, not a count of cron ticks: the guard appends
+  # every 5 minutes while the condition holds (288/day against a 200-line cap),
+  # so a count saturates within hours and carries no severity information.
+  _alarm_last=$(tail -1 "$TMPFS_ALARM_FILE" 2>/dev/null | tr -d '\000-\037' | cut -c1-400 || true)
+  if [[ -n "$_alarm_last" ]]; then
+    TMPFS_ALARM_BLOCK=$'\n'"[tmpfs-guard] /tmp alarm, most recent: ${_alarm_last}"
   fi
+fi
+
+# Staleness. The alarm file cannot report a guard that stopped running — a dead
+# guard writes no alarms, so its silence is indistinguishable from health. The
+# heartbeat can: it is overwritten on every completed run, so an mtime older
+# than a few cron intervals means the guard is not running. Only reported when
+# the file EXISTS and is stale; an absent heartbeat means the guard has simply
+# never run on this machine (a fresh checkout), which is not an alarm.
+if [[ -f "$TMPFS_HEARTBEAT_FILE" ]] && [[ -z "$(find "$TMPFS_HEARTBEAT_FILE" -mmin -30 2>/dev/null)" ]]; then
+  TMPFS_ALARM_BLOCK="${TMPFS_ALARM_BLOCK}"$'\n'"[tmpfs-guard] no completed run in over 30m (expected every 5m) — the cron entry may have stopped; check: crontab -l | grep tmpfs-guard"
 fi
 
 # Final output envelope. SESSION_CONTEXT lands on lines 4-6 — after the
 # operator-glanceable header (STAMP/HINT/manifest, lines 1-3, which Test 11
-# byte-budgets via `head -3`) and before the rule bodies.
-OUT_BODY="${STAMP}"$'\n'"${HINT}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${TMPFS_ALARM_BLOCK}${SESSION_CONTEXT}"$'\n'"${CONTEXT}"
+# byte-budgets via `head -3`) and before the rule bodies. The alarm block, if
+# any, trails everything (see above).
+OUT_BODY="${STAMP}"$'\n'"${HINT}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}${TMPFS_ALARM_BLOCK}"
 jq -nc --arg out "$OUT_BODY" '{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: $out } }'
 exit 0

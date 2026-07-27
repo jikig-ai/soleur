@@ -157,6 +157,15 @@ ACK_LITERAL='<!-- iac-routing-ack: plan-phase-2-8-reviewed -->'
 acked() {
   grep -qF "$ACK_LITERAL" <<<"$content" && return 0
 
+  # The on-disk fallback applies to PARTIAL writes only. A `Write` replaces the
+  # whole document, so its content is the complete post-write state: consulting
+  # the pre-write file there would allow a Write that DELETES the ack while
+  # adding a violation, using the very ack it is removing as the justification.
+  case "$tool_name" in
+    Edit|MultiEdit) ;;
+    *) return 1 ;;
+  esac
+
   # Resolve a repo-relative file_path the same way the rest of the hook does.
   local resolved="$file_path"
   case "$resolved" in
@@ -180,6 +189,6 @@ if [ ${#matches[@]} -eq 0 ]; then
 fi
 
 # Compose the deny reason. Keep it actionable.
-reason="BLOCKED: plan/spec content includes manual-infrastructure patterns that violate hr-all-infrastructure-provisioning-servers. Detected: $(IFS='; '; echo "${matches[*]}"). Route through Terraform per plan Phase 2.8 (Infrastructure-as-Code Routing Gate): invoke terraform-architect, write a ## Infrastructure (IaC) section, and replace manual steps with .tf resources + cloud-init / bootstrap script. If you have already reviewed Phase 2.8 and the manual step is genuinely required, add the comment '<!-- iac-routing-ack: plan-phase-2-8-reviewed -->' to the plan to opt out."
+reason="BLOCKED: plan/spec content includes manual-infrastructure patterns that violate hr-all-infrastructure-provisioning-servers. Detected: $(IFS='; '; echo "${matches[*]}"). Route through Terraform per plan Phase 2.8 (Infrastructure-as-Code Routing Gate): invoke terraform-architect, write a ## Infrastructure (IaC) section, and replace manual steps with .tf resources + cloud-init / bootstrap script. If you have already reviewed Phase 2.8 and the manual step is genuinely required, add the comment '${ACK_LITERAL}' to the plan to opt out."
 
 deny "$reason"
