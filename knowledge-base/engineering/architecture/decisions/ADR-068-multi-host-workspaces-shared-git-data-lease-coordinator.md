@@ -472,7 +472,7 @@ fixes for every per-step plan:
 > scope, Sub-PR 3.D security review).** Activating the owner proxy listener (3.D) surfaced
 > that one-way TLS + a token-less `proxy_hello` handshake makes network reachability the
 > only control — and Hetzner **cloud firewalls do NOT filter the private net** (intra-`
-> hcloud_network` traffic is open by network membership; git-data.tf:182-186). So ANY
+> hcloud_network` traffic is open by network membership; git-data.tf, resource "hcloud_firewall" "git_data" — no rule blocks). So ANY
 > `10.0.1.0/24` host — including the deliberately-lesser-privileged **git-data host** —
 > could open port 8443 and `attachProxiedSession` grants it a full act-as-user session:
 > account **takeover**, strictly ⊃ the §D2 "cross-tenant WRITE" residual, and reachable
@@ -1235,3 +1235,74 @@ flowchart TB
   class coord,pg,gitdata,hostA,hostB,wtA,wtB ga
   class redis post
 ```
+
+## Addendum — 2026-07-27: the git-data host is repinned `cax11` → `cpx22` and its arch is derived (#6570)
+
+**Filed here, not in ADR-143.** ADR-143 is scoped to active-active web ingress and drain-gated host
+lifecycle; **git-data is this ADR's element**. ADR-143:149 assigns *ownership* of the decision to
+#6570 and calls the move "its own work" — that assigns who decides, not where the record lives, and
+"its own work" reads closer to *not here*. Someone reading ADR-068 for the git-data host shape would
+otherwise not find the type decision, the dual-arch derivation, or the born-on-LUKS rejection.
+ADR-143 carries only the correction to its own closing paragraph plus a pointer.
+
+**No new ordinal** — this is an addendum, per the same convention as the ADR-100 dual-arch addendum.
+
+### The defect
+
+`var.git_data_server_type` defaulted to `cax11` (2 vCPU ARM64/Ampere). The **entire** Hetzner `cax`
+line was orderable in **0 of 3** EU datacentres at both recorded probes (2026-07-15 and 2026-07-26),
+so `soleur-git-data` could never be born on its declared type — and never has been. Its cloud-init
+compounded this by hardcoding the **arm64** Doppler CLI build and checksum, so the type was not a
+free variable: flipping it to an x86 type without touching the template would have installed a
+wrong-arch binary. That is why this was a real code change and not a var flip.
+
+### Decisions
+
+| # | Decision |
+|---|---|
+| **D1** | Repin the default to **`cpx22`** (2 vCPU AMD x86 / 4 GB, ~EUR 19.49/mo net). Forced by **orderability**, not by sizing — a bare-repo git store is neither CPU- nor RAM-bound. |
+| **D2** | **Derive** the host arch from the type prefix (`local.git_data_arch`: `cax*` → arm64, else amd64) rather than hardcoding it, mirroring `local.registry_arch` / `local.inngest_arch`. The host now boots on either arm, so a future Ampere restock is a var flip. |
+| **D3** | Select the Doppler CLI checksum off the same local (`local.git_data_doppler_sha256`), reusing the per-arch pair already live at `inngest-host.tf` and `zot-registry.tf`. |
+| **D4** | Reject `cx23` (cheaper) on stock durability — the whole `cx` line was also 0-of-3 at the 2026-07-26 probe. |
+| **D5** | Add a `validation` block constraining the **prefix** only. It deliberately does not encode which types are orderable *today*; that rots. |
+| **D6** | Add `data "hcloud_server_type" "git_data"` as a plan-time **phantom-type** tripwire (the #6288 `cx32` class, which destroyed the registry host before failing on the create). |
+| **D7** | Reference that data source from a `lifecycle.precondition` on `hcloud_server.git_data`. **Load-bearing, not cosmetic** — see below. |
+| **D8** | Keep the arch enums **mapped**, never compared: hcloud reports `x86`/`arm`, the local is `amd64`/`arm64`. |
+| **D9** | **This ADR authorizes no birth.** The repin changes declared state only. |
+| **D10** | **Born-on-LUKS rejected** — keep the additive cutover topology (plaintext source volume + fresh LUKS target, flipped by `git-data-cutover.sh`). Revisiting it would rewrite a cutover path that is already built and tested for a host that does not exist yet. |
+
+### Why D7 is mandatory
+
+Terraform **prunes an unreferenced data source under `-target=`** (probed against the pinned
+toolchain: `-target` an unrelated resource and the data source is never read; add a
+`lifecycle.precondition` edge and it reads). **Every** git-data dispatch is `-target`ed, so D6
+without D7 would fire on **zero** production paths — live only in the untargeted PR-time plan. The
+`zot-registry.tf` precedent is not a counterexample but the proof: its data source feeds
+`local.registry_memory_cap_mb`, and that is what makes it an ancestor under `-target`.
+
+D7 is also the **only** mis-derivation detector. The checksum cannot be one: it is selected **by**
+the derived arch, so a wrong derivation verifies the tarball it just chose and passes. The
+`sha256sum -c -` runcmd item additionally carries no `set -e`, so even a genuine checksum failure
+does not stop the following `tar xzf` — and **nothing aborts at all**. cloud-init concatenates
+`runcmd` into one non-`-e` script, and the LUKS block's `set -euo pipefail` is line 1 of the heredoc
+that `doppler run` executes, so on a missing or wrong-arch binary `doppler run` fails to exec and that
+line runs zero times. The failure surfaces only as a non-zero runcmd exit in on-host
+`/var/log/cloud-init-output.log` (git-data ships no log shipper), leaving sshd up and the LUKS volume
+unmounted. Credit neither the checksum nor that `set -e` with failing closed.
+
+### What this does NOT unblock
+
+The host still has **no birth route** (**#6977**): `git-data-host-replace` requires
+`{delete, create}` so a first CREATE hard-aborts, its dependencies are unprovisioned so
+`out_of_scope` blows the allow-set, and no `git-data-host-create` target exists. The only remaining
+route is an **operator-local** untargeted prod-wide apply, which runs neither the destroy-guard nor
+the stock preflight — and a plan taken 2026-07-27 showed that apply carrying **9 destroys**, so it is
+not a route. (The *CI* untargeted path is not a route either, for a stronger reason: the
+`host_creates` HALT counts every `hcloud_server` create with no type filter and is evaluated outside
+the `destroy_count` sum, so `[ack-destroy]` cannot bypass it.)
+`stock-preflight-gate.sh` remains the **sole orderability** guard (D6 catches only *phantom* types;
+`cax11` resolves fine in the catalog, so it would never have caught this defect) — but note it is
+**unreachable on the birth path today**: the destroy-guard runs first in the same step and hard-aborts
+a pure CREATE, so the preflight below it never executes. It arms only once #6977 ships a birth route. ADR-115's
+normative blocker also still stands: git-data is excluded from the reboot primitive until its
+`luksOpen` is reboot-safe.

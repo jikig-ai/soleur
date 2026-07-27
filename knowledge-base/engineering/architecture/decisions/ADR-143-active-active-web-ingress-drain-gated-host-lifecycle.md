@@ -18,7 +18,9 @@ destroying and IaC-rebuilding a host. Three repo facts constrain the design:
    unrecoverable loss. The **volume, not the host, is the protected asset.**
 2. **`replicas=1` is still operationally in force** (ADR-068); the git-data CAS fence is live-but-non-rejecting.
    Two hosts serving one workspace's git index corrupts it, so *concurrent serving* is gated on ADR-068
-   Phase-3 GA (shared git-data #6570 + coordinator), which is blocked (git-data pinned to an unorderable type).
+   Phase-3 GA (shared git-data #6570 + coordinator), which is blocked — no longer by the type
+   (repinned `cax11` → `cpx22` 2026-07-27, #6570) but because git-data still has **no birth route**
+   at all (#6977).
 3. **The programmatic anti-pooling gate was deleted 2026-07-20 (#6575)** and `server.tf:278-287` says it
    "MUST be rebuilt before any second web host is pooled."
 
@@ -29,14 +31,16 @@ Read-only query of `/v1/datacenters` (available server types) + `/v1/server_type
 | Server type | Spec | Net €/mo (hel1) | Orderable in hel1 (live 2026-07-25) |
 |---|---|---|---|
 | `cx33` (Intel; web-1's current type) | 4c/8g x86 | 8.49 | **NO — out of stock (also all EU DCs)** |
-| `cax11` (ARM; git-data's type, #6570) | 2c/4g arm | 5.99 | **NO — ARM unavailable in EU DCs** |
+| `cax11` (ARM; git-data's type **at the time of this probe** — repinned to `cpx22` 2026-07-27, #6570) | 2c/4g arm | 5.99 | **NO — ARM unavailable in EU DCs** |
 | `cx22` (Intel) | 2c/4g x86 | ~4.59 | **NO — out of stock** |
 | `cpx32` (AMD) | 4c/8g x86 | 35.49 | YES |
 | `cpx22` (AMD) | 2c/4g x86 | 19.49 | YES |
 | **`cx23`** (Intel; the registry's type) | **2c/4g x86** | **5.49** | **YES — in stock (registry runs it in hel1)** |
 
 This confirms model.c4:182 against live data: `cx33` cannot be recreated, so a rebuilt `web-1` cannot come
-back as `cx33`. It also confirms #6570's root-blocker framing: `cax11` (ARM) is unorderable.
+back as `cx33`. It also confirmed #6570's root-blocker framing at the time of this probe: `cax11` (ARM)
+is unorderable. **Superseded 2026-07-27 (#6570):** git-data is repinned to `cpx22`, so the TYPE is no
+longer the blocker; the remaining blocker is the absent birth route (#6977).
 
 ## Sizing input (30-day Better Stack host_metrics, measured 2026-07-25 — the decided input for D1)
 
@@ -114,7 +118,7 @@ The original `lb-weight-gate.sh` was deleted (#6575) because its first assertion
 
 `workspaces-luks.tf` implements LUKS as an **additive web-1 singleton** (`hcloud_volume.workspaces_luks`, ADR-119); web-2's `for_each` volume is plaintext, and its old "slated for destruction (#6538)" justification is now FALSE (web-2 is a permanent standby). AC5 requires web-2 LUKS-backed, but the fresh-boot LUKS path does not exist and modifying the sole-copy-volume cloud-init boot path is the highest blast radius in the repo.
 
-**Ruling: DEFER** the guest-side fresh-boot LUKS path to the **Phase-4 disposability-proof PR** (tracking **#6931**), CONDITIONAL on three couplings that make the defer fail-CLOSED (all built in this PR): **(1)** rewrite the void justification in `workspaces-luks.tf:169-179`; **(2)** add a `WORKSPACES_LUKS_CUTOVER_AT` precondition to `lb-weight-gate.sh` Condition B so a plaintext web-2 **cannot be pooled** (a flip reddens unless web-2 `/workspaces` is asserted LUKS-backed — the merge-blocker that makes the defer safe); **(3)** open #6931 + record here. **AC5 is REFRAMED**: LUKS-intent declared in HCL + plaintext-pooling physically gated + tracked for Phase-4. web-2 holds NO user data pre-flip (serves nothing; flip externally blocked on #6570) → no GDPR Art. 32 at-rest exposure. **Corrections the Phase-4 PR MUST inherit:** (i) use the `blkid -o value -s TYPE` discriminator, NEVER `cryptsetup isLuks` (the `cloud-init-git-data.yml:159` pattern is the documented data-destroyer on a populated device — safe there only because that host is single-purpose fresh; the web-host cloud-init is SHARED); (ii) **reconcile the two-mechanism topology split** — decide whether web-1's post-de-pet serving volume is the additive singleton or a fresh-boot `for_each` volume, so web-1/web-2 share ONE topology (cattle parity). **This split is an OPEN architectural question, deferred to Phase-4** (cross-ref ADR-119 additive design + ADR-068 §(c)); "mirror web-1's cutover" is ambiguous today because web-1 serves off the singleton, not off `hcloud_volume.workspaces["web-1"]`.
+**Ruling: DEFER** the guest-side fresh-boot LUKS path to the **Phase-4 disposability-proof PR** (tracking **#6931**), CONDITIONAL on three couplings that make the defer fail-CLOSED (all built in this PR): **(1)** rewrite the void justification in `workspaces-luks.tf:169-179`; **(2)** add a `WORKSPACES_LUKS_CUTOVER_AT` precondition to `lb-weight-gate.sh` Condition B so a plaintext web-2 **cannot be pooled** (a flip reddens unless web-2 `/workspaces` is asserted LUKS-backed — the merge-blocker that makes the defer safe); **(3)** open #6931 + record here. **AC5 is REFRAMED**: LUKS-intent declared in HCL + plaintext-pooling physically gated + tracked for Phase-4. web-2 holds NO user data pre-flip (serves nothing; flip externally blocked on #6570) → no GDPR Art. 32 at-rest exposure. **Corrections the Phase-4 PR MUST inherit:** (i) use the `blkid -o value -s TYPE` discriminator, NEVER `cryptsetup isLuks` (the `cloud-init-git-data.yml:169` pattern is the documented data-destroyer on a populated device — safe there only because that host is single-purpose fresh; the web-host cloud-init is SHARED); (ii) **reconcile the two-mechanism topology split** — decide whether web-1's post-de-pet serving volume is the additive singleton or a fresh-boot `for_each` volume, so web-1/web-2 share ONE topology (cattle parity). **This split is an OPEN architectural question, deferred to Phase-4** (cross-ref ADR-119 additive design + ADR-068 §(c)); "mirror web-1's cutover" is ambiguous today because web-1 serves off the singleton, not off `hcloud_volume.workspaces["web-1"]`.
 
 ## Alternatives Considered
 
@@ -146,8 +150,10 @@ The original `lb-weight-gate.sh` was deleted (#6575) because its first assertion
   the same workspaces). De-petting web-1 incurs a brief maintenance-window outage. A recurring `cpx32`
   standby cost (~similar to the retired web-2's €8.49/mo) — but this time with a consumer (disposability +
   blue-green readiness), unlike the retired standby.
-- **Follow-on:** git-data (#6570) must also move off the unorderable `cax11` (ARM) to an x86 type — its own
-  work; it is the root blocker for the Phase-6 concurrent-serving flip.
+- **Follow-on — DONE 2026-07-27 (#6570):** git-data has moved off the unorderable `cax11` (ARM) to
+  `cpx22`, with its arch derived rather than hardcoded; the decision record is the ADR-068 addendum
+  of that date. It was the root blocker for the Phase-6 concurrent-serving flip **as to the type**;
+  the flip remains blocked because the host has no birth route at all (#6977).
 
 ## Addendum — 2026-07-26: web-2 repinned `cx23` → `cpx22` (forced by stock, #6966)
 
@@ -223,8 +229,17 @@ They run fine, but **none can be rebuilt on its current type** — each rebuild 
 a cost change. Nothing catches "a declared type left the orderable set" until an apply; that periodic
 audit is #6460, which also now owns recording the account limits as facts with a decay date.
 
-**Not changed by this addendum:** `var.registry_server_type` and `var.git_data_server_type` keep their
-unorderable defaults. A `registry_server_type` change is a host *replace* of a live registry, and
-git-data's move off ARM voids the ARM-native rationale recorded in its own pin — #6570 owns that
-decision (its cloud-init installs the **arm64** Doppler build, so it is a real code change, not a var
-flip).
+**Not changed by this addendum:** `var.registry_server_type` keeps its unorderable default — a
+`registry_server_type` change is a host *replace* of a live registry. This addendum also left
+`var.git_data_server_type` on its unorderable `cax11`, and predicted that moving it would be a real
+code change rather than a var flip because git-data's cloud-init installed the **arm64** Doppler
+build.
+
+> **Superseded 2026-07-27 as to git-data (#6570).** That prediction was correct and the work is now
+> done: `var.git_data_server_type` is **`cpx22`**, and the host's arch — with the Doppler build and
+> checksum that hang off it — is **derived** from the type prefix rather than hardcoded, so it is a
+> var flip from here on. The sentence above no longer describes git-data; it remains accurate for
+> `registry_server_type`. **The decision record lives in
+> [ADR-068](./ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md) (addendum
+> 2026-07-27, D1–D10)**, because git-data is ADR-068's element, not this ADR's. Note this repin does
+> **not** make the host bornable — it still has no birth route (#6977).

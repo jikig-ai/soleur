@@ -74,7 +74,7 @@ records `error during placement (resource_unavailable)`.
 
 **And slots were never what blocked blue-green anyway.** `create_before_destroy`
 appears nowhere in `apps/web-platform/infra/*.tf`, and the singleton hosts have
-hard-coded names (`git-data.tf:119`, `inngest-host.tf:182`, `zot-registry.tf:227`)
+hard-coded names (`git-data.tf:151`, `inngest-host.tf:182`, `zot-registry.tf:227`)
 plus pinned private IPs (`network.tf:51` → `10.0.1.20`). A create-before-destroy
 collides on **both** before it ever reaches the cap. Blue-green needs an IaC
 redesign, not a quota change (filed: #6459).
@@ -92,7 +92,7 @@ author didn't know either.
 
 ### The phantom-resource class (filed: #6460)
 
-`hcloud_server.git_data` is declared unconditionally (`git-data.tf:118` — no
+`hcloud_server.git_data` is declared unconditionally (`git-data.tf:150` — no
 `count`/`for_each`/`removed`) but excluded from every apply allow-list, so
 `soleur-git-data` has **never existed**. Yet a whole corpus reasons about it:
 

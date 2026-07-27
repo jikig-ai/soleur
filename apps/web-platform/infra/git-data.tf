@@ -74,6 +74,38 @@ locals {
   git_transport_pubkey = trimspace(tls_private_key.git_transport.public_key_openssh)
   git_provision_pubkey = trimspace(tls_private_key.git_provision.public_key_openssh)
   git_remove_pubkey    = trimspace(tls_private_key.git_remove.public_key_openssh)
+
+  # Arch DERIVED from var.git_data_server_type (mirrors zot-registry.tf local.registry_arch
+  # and inngest-host.tf local.inngest_arch): `cax*` (Ampere) → arm64, anything else
+  # (`cpx*`/`cx*`/`ccx*`) → amd64. Every arch-coupled download in cloud-init-git-data.yml
+  # is selected off this local, so the host boots correctly on EITHER arm. #6570: the host
+  # was pinned to cax11, orderable in 0 of 3 EU datacenters, so it could never be born on
+  # its declared type; deriving the arch is what makes the repin to an x86 type safe rather
+  # than a boot-brick (the old cloud-init hardcoded the arm64 build + its checksum).
+  git_data_arch = startswith(var.git_data_server_type, "cax") ? "arm64" : "amd64"
+
+  # Doppler CLI (v3.75.3, pinned in cloud-init-git-data.yml) per-arch download checksum —
+  # byte-identical to inngest-host.tf local.inngest_doppler_sha256 and zot-registry.tf
+  # local.doppler_sha256 (same version, same values). git-data-luks.test.sh A15 asserts
+  # that parity against BOTH canon sites so a version bump cannot land on two of three.
+  git_data_doppler_sha256 = local.git_data_arch == "arm64" ? "f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143" : "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
+}
+
+# The git-data host's server type, read from the live Hetzner catalog. Read-only; creates
+# nothing. Resolves at PLAN time, which makes it a PHANTOM-TYPE tripwire: #6288 set
+# var.registry_server_type to `cx32`, a type that does not exist, and the apply DESTROYED
+# the registry host before failing `server type cx32 not found` on the create. Mirrors
+# zot-registry.tf's data.hcloud_server_type.registry.
+#
+# This data source is load-bearing ONLY because hcloud_server.git_data references it in a
+# lifecycle.precondition below. Terraform PRUNES an unreferenced data source under
+# `-target=` (probed against the pinned toolchain: -target an unrelated resource → the
+# data source is never read, exit 0; add a precondition edge → it reads). EVERY git-data
+# dispatch is -targeted, so without that referencing edge this tripwire would fire on
+# ZERO production paths — live only in the untargeted PR-time plan. Do not "simplify" the
+# precondition away and keep this block believing it still guards anything (#6570 R1).
+data "hcloud_server_type" "git_data" {
+  name = var.git_data_server_type
 }
 
 # Private half → Doppler. Consumed at RUNTIME by the web host's git-auth.ts, which
@@ -116,8 +148,11 @@ resource "doppler_secret" "git_remove_ssh_private_key" {
 
 # --- The git-data host -------------------------------------------------------
 resource "hcloud_server" "git_data" {
-  name        = "soleur-git-data"
-  server_type = var.git_data_server_type # cax11 = ARM64 (Ampere); git/sshd are ARM-native
+  name = "soleur-git-data"
+  # Arch is DERIVED from this value (local.git_data_arch), never assumed — see the local.
+  # Default cpx22 (amd64): the cax line was orderable in 0 of 3 EU DCs, so the previous
+  # cax11 pin made this host unbornable (#6570).
+  server_type = var.git_data_server_type
   location    = var.location
   image       = "ubuntu-24.04"
   keep_disk   = true
@@ -177,12 +212,51 @@ resource "hcloud_server" "git_data" {
     # MEDIUM / CTO ruling: a git-data-host compromise must not yield service-role /
     # GIT_REMOVE / PROXY_TLS material). The passphrase itself is NEVER in this user_data.
     doppler_token = doppler_service_token.git_data.key
+    # Dual-arch Doppler CLI download (#6570). BOTH are derived from
+    # var.git_data_server_type — the cloud-init hardcoded the arm64 build and its checksum,
+    # which boot-bricks the moment the type moves to an x86 arm. `${doppler_arch}` is a
+    # TERRAFORM interpolation (single-$) in the template; `$${DOPPLER_VERSION}` beside it is
+    # a SHELL variable (double-$) that must pass through literally.
+    doppler_arch   = local.git_data_arch
+    doppler_sha256 = local.git_data_doppler_sha256
   }))
 
-  # Deliberately NO lifecycle.ignore_changes=[user_data]. The web host carries it
-  # only as an IMPORT ARTIFACT (server.tf:66-72); a FRESH host has no spurious
-  # diff, and omitting it preserves a clean replace-to-reprovision path during the
-  # fence-iteration window (P1).
+  # PHANTOM/WRONG-ARCH TRIPWIRE (#6570). Two jobs, and the second is why this block is
+  # MANDATORY rather than a nicety:
+  #   1. It is the referencing edge that keeps data.hcloud_server_type.git_data alive under
+  #      `-target=`. Unreferenced, that data source is PRUNED and never read, so the
+  #      phantom-type guard would fire on zero production paths (every git-data dispatch is
+  #      -targeted). Deleting this precondition silently disarms the data source above.
+  #   2. It catches a MIS-DERIVED arch at plan time. Nothing downstream does: the checksum
+  #      is selected BY local.git_data_arch, so a wrong derivation verifies the tarball it
+  #      just chose and `sha256sum -c -` passes. That runcmd item also carries no `set -e`,
+  #      so even a genuine checksum failure does not stop the following `tar xzf`.
+  #      NOTHING ABORTS. cloud-init concatenates runcmd into one non-`-e` script, so a
+  #      failed item is logged and boot CONTINUES. The LUKS block's `set -euo pipefail`
+  #      is not a backstop either: it is line 1 of the heredoc `doppler run` executes, so
+  #      on a missing or wrong-arch binary `doppler run` fails to exec and that line runs
+  #      ZERO times. The failure surfaces only as a non-zero runcmd exit in on-host
+  #      /var/log/cloud-init-output.log — git-data ships no log shipper — leaving sshd up
+  #      and the LUKS volume unmounted. Do not credit the checksum, or that `set -e`, with
+  #      failing closed: the plan-time precondition below is the only guard that fires.
+  #
+  # The enums are DELIBERATELY mapped, not compared. hcloud reports architecture as
+  # `x86`/`arm`, while local.git_data_arch is the download token `amd64`/`arm64`. Comparing
+  # them directly is `"amd64" == "x86"` → false on EVERY plan forever, which would wedge
+  # this whole root including unrelated applies.
+  #
+  # This block carries a precondition ONLY. Still deliberately NO
+  # lifecycle.ignore_changes=[user_data]: the web host carries that only as an IMPORT
+  # ARTIFACT (server.tf:66-72); a FRESH host has no spurious diff, and omitting it
+  # preserves a clean replace-to-reprovision path during the fence-iteration window (P1).
+  lifecycle {
+    precondition {
+      condition = data.hcloud_server_type.git_data.architecture == (
+        local.git_data_arch == "arm64" ? "arm" : "x86"
+      )
+      error_message = "git_data_server_type=${var.git_data_server_type} derives ${local.git_data_arch}, but Hetzner reports architecture=${data.hcloud_server_type.git_data.architecture} (enum: x86|arm). The Doppler CLI download would be wrong-arch."
+    }
+  }
 
   labels = {
     app = "soleur-web-platform"

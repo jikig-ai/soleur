@@ -39,7 +39,7 @@ afterEach(() => vi.unstubAllEnvs());
 
 // CTO ruling (3.D security): the owner proxy listener carries a token-less
 // pre-authed session, and Hetzner cloud firewalls do NOT filter the private net
-// (git-data.tf:182-186), so any 10.0.1.0/24 host — including the LESS-privileged
+// (git-data.tf, resource "hcloud_firewall" "git_data" — no rule blocks), so any 10.0.1.0/24 host — including the LESS-privileged
 // git-data host — could open port 8443 and take over any account. The load-bearing
 // control is a guest-side peer-origin allowlist (the infra firewall can't do it).
 // These lock the pure decision the connection handler uses.

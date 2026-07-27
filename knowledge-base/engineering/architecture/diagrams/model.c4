@@ -213,7 +213,7 @@ model {
       }
       gitDataStore = database "Shared git-data" {
         technology "Bare git repos over private net"
-        description "Shared bare git repos (objects/refs) over the private net; per-user worktrees stay host-local on NVMe. The git-data host holds the per-ref monotonic max generation and writer-side-CAS-rejects stale lease writes (ADR-068). AT REST: currently PLAINTEXT ext4 (`hcloud_volume.git_data`, `format = \"ext4\"`, no LUKS apparatus — git-data.tf:196) — a fresh `hcloud_volume.git_data_luks` cutover target already exists (git-data-luks.tf) but is not yet the live store (`GIT_DATA_STORE_ENABLED` gates the cutover). Ledgered exception (encryption-posture-ledger.json, tracking #6897), pending cutover"
+        description "Shared bare git repos (objects/refs) over the private net; per-user worktrees stay host-local on NVMe. The git-data host holds the per-ref monotonic max generation and writer-side-CAS-rejects stale lease writes (ADR-068). AT REST: currently PLAINTEXT ext4 (`hcloud_volume.git_data`, `format = \"ext4\"`, no LUKS apparatus — git-data.tf:264) — a fresh `hcloud_volume.git_data_luks` cutover target already exists (git-data-luks.tf) but is not yet the live store (`GIT_DATA_STORE_ENABLED` gates the cutover). Ledgered exception (encryption-posture-ledger.json, tracking #6897), pending cutover"
       }
       sessionStore = database "Session Redis" {
         technology "Self-hosted Redis — TLS, EU (Phase 4a)"
