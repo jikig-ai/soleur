@@ -123,25 +123,12 @@ resource "doppler_secret" "git_transport_ssh_private_key" {
   value      = tls_private_key.git_transport.private_key_openssh
   visibility = "masked"
 
-  # (#6977, Defect 2) The remove key's PRESENCE is the arming switch for Art. 17 erasure.
-  #
-  # `removeGitDataRepo` is deliberately NOT gated on `isGitDataStoreEnabled()` — flag-
-  # gating erasure would strand a user's PII across a rollback window, which is a worse
-  # Art. 17 gap than the one this guards. It gates on the remove key being present
-  # instead. But this secret has no dependency on the host, so a partial apply could land
-  # it while the server create fails; every subsequent account deletion would then call
-  # resolveGitDataSshHost(), throw, and file a FALSE "Art. 17 erasure failed" Sentry event
-  # for a store that does not exist — alarm fatigue on the one signal that must stay
-  # trustworthy.
-  #
-  # NO CYCLE: the server reaches tls_private_key.git_* through local.git_*_pubkey (the
-  # PUBLIC halves, baked into user_data). Nothing in the server's graph reaches these
-  # doppler_secret resources, so the edge only ever points this way. Verified
-  # independently by two reviewers and by `terraform validate`.
-  #
-  # RESIDUAL, recorded rather than claimed fixed: this anchors on the server OBJECT, not
-  # on REACHABILITY. A birth where the server lands but hcloud_server_network.git_data
-  # does not still arms the key against an unroutable 10.0.1.20. ADR-149 carries it.
+  # (#6977) Ordering only: a partial apply must not publish a runtime key for a host that
+  # does not exist, or the consumer resolves a 10.0.1.20 that nothing answers on. The
+  # Art. 17 ARMING-SWITCH argument does NOT apply to this key — see the canonical block
+  # above `doppler_secret.git_remove_ssh_private_key`, which is the only key whose mere
+  # presence arms erasure. NO-CYCLE and REACHABILITY-RESIDUAL notes are recorded there too
+  # and hold identically for this edge.
   depends_on = [hcloud_server.git_data]
 }
 
@@ -155,25 +142,11 @@ resource "doppler_secret" "git_provision_ssh_private_key" {
   value      = tls_private_key.git_provision.private_key_openssh
   visibility = "masked"
 
-  # (#6977, Defect 2) The remove key's PRESENCE is the arming switch for Art. 17 erasure.
-  #
-  # `removeGitDataRepo` is deliberately NOT gated on `isGitDataStoreEnabled()` — flag-
-  # gating erasure would strand a user's PII across a rollback window, which is a worse
-  # Art. 17 gap than the one this guards. It gates on the remove key being present
-  # instead. But this secret has no dependency on the host, so a partial apply could land
-  # it while the server create fails; every subsequent account deletion would then call
-  # resolveGitDataSshHost(), throw, and file a FALSE "Art. 17 erasure failed" Sentry event
-  # for a store that does not exist — alarm fatigue on the one signal that must stay
-  # trustworthy.
-  #
-  # NO CYCLE: the server reaches tls_private_key.git_* through local.git_*_pubkey (the
-  # PUBLIC halves, baked into user_data). Nothing in the server's graph reaches these
-  # doppler_secret resources, so the edge only ever points this way. Verified
-  # independently by two reviewers and by `terraform validate`.
-  #
-  # RESIDUAL, recorded rather than claimed fixed: this anchors on the server OBJECT, not
-  # on REACHABILITY. A birth where the server lands but hcloud_server_network.git_data
-  # does not still arms the key against an unroutable 10.0.1.20. ADR-149 carries it.
+  # (#6977) Ordering only, same as git_transport above: do not publish a runtime key ahead
+  # of the host it authenticates to. The Art. 17 ARMING-SWITCH argument does NOT apply
+  # here either — the canonical block above `doppler_secret.git_remove_ssh_private_key`
+  # explains why that reasoning is specific to the remove key, and carries the NO-CYCLE
+  # and REACHABILITY-RESIDUAL notes that hold for all three edges.
   depends_on = [hcloud_server.git_data]
 }
 

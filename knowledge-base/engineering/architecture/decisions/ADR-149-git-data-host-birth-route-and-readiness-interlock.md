@@ -190,8 +190,14 @@ rather than adopting, so a hand-created config makes the birth apply fail and th
 - One human step is **deleted** rather than documented (the Doppler config), so the
   post-merge operator checklist for this work is genuinely empty.
 - A new per-target gate adds maintenance surface. Mitigated by extracting the shared
-  fail-closed preamble (`plan-gate-preamble.sh`); a follow-on issue covers retrofitting it
-  into the five gates that carry neither the readability nor the classifiability check.
+  fail-closed preamble (`plan-gate-preamble.sh`); issue #6997 covers retrofitting it into
+  the **eight** gates that carry neither the readability nor the classifiability check.
+  The count is re-derived, not remembered — earlier revisions of this ADR said "five" and
+  the preamble header said "seven", and both were wrong. Re-derive before citing it:
+  `grep -l 'local plan_json' tests/scripts/lib/*gate*.sh | xargs grep -L plan_gate_assert_readable`.
+  Three further gates (`web-host-birth`, `web-host-replace`, `stock-preflight`) carry
+  equivalent INLINE checks, so their retrofit is pure deletion and changes no safety
+  property; the eight are the fail-open tier and are the priority.
 
 ### Residuals, accepted and recorded
 

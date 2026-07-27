@@ -2472,20 +2472,41 @@ describe("apply_target enum <-> description parity (#6977)", () => {
 
     const desc = /apply_target:[\s\S]*?description:\s*>-\n([\s\S]*?)\n\s{8}required:/.exec(wf);
     expect(desc).not.toBeNull();
-    // Split on `|`, the separator the label itself uses, then keep tokens that LOOK like
-    // a target (kebab-case with at least one hyphen). Prose words are single tokens
-    // without hyphens and drop out; `manual-rerun (default)` keeps its leading token.
+    // Split on `|`, the separator the label itself uses, then take the FIRST token in each
+    // segment that LOOKS like a target (kebab-case with at least one hyphen). Prose words
+    // are single tokens without hyphens and drop out.
+    //
+    // Taking the first KEBAB-MATCHING token, not simply the first token: the opening
+    // segment is `Which apply path? manual-rerun (default)`, so a first-token rule yields
+    // the prose word "Which", fails the kebab filter, and drops the segment entirely.
+    // That silently exempted `manual-rerun` — the DEFAULT option, and so the single member
+    // likeliest to matter — from the phantom check, while a comment here claimed it
+    // "keeps its leading token". A member that is never examined is indistinguishable
+    // from one that passes.
+    const kebab = /^[a-z0-9]+(-[a-z0-9]+)+$/;
     const cited = [
       ...new Set(
         desc![1]
           .split("|")
-          .map((seg) => seg.trim().split(/[\s.,]/)[0])
-          .filter((t) => /^[a-z0-9]+(-[a-z0-9]+)+$/.test(t)),
+          .map((seg) => seg.trim().split(/[\s.,]/).find((t) => kebab.test(t)))
+          .filter((t): t is string => t !== undefined),
       ),
     ];
     // Non-vacuity: the label must genuinely cite targets, else this asserts nothing.
     expect(cited.length).toBeGreaterThan(5);
+    // Pin the fix above: the default option must actually be among the cited set.
+    expect(cited).toContain("manual-rerun");
     const phantom = cited.filter((t) => !options.includes(t));
     expect(phantom).toEqual([]);
+
+    // The converse direction. Phantom-checking alone is one-way: it catches a label that
+    // cites a target the enum lacks, but not an option ADDED to the enum and never
+    // documented — the likelier drift, since the enum is what the dispatch UI reads.
+    // Word-boundary match, because `inngest-host` is a prefix of `inngest-host-replace`
+    // and a substring test would let the shorter one ride on the longer one's mention.
+    const undocumented = options.filter(
+      (opt) => !new RegExp(`(?<![\\w-])${opt}(?![\\w-])`).test(desc![1]),
+    );
+    expect(undocumented).toEqual([]);
   });
 });

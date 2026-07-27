@@ -15,6 +15,20 @@ set -euo pipefail
 # Respects an explicit caller value — CI or an operator pinning TMPDIR keeps it.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
+# Pin the #6789 contention instrumentation to /tmp, INDEPENDENTLY of TMPDIR above.
+#
+# test-contention.sh binds `TC_TMPDIR="${TC_TMPDIR:-${TMPDIR:-/tmp}}"` at SOURCE time, so
+# without this line the TMPDIR default above silently repoints it at /var/tmp. That is
+# fail-open in the worst way: the lib exists to observe headroom on the /tmp TMPFS, and
+# /var/tmp is disk-backed with hundreds of GB free, so every reading would come back
+# healthy while the mount it was built to watch went unobserved. Instrumentation aimed at
+# the wrong mount is indistinguishable from a healthy mount.
+#
+# The two settings are deliberately separate and must stay that way (see the
+# "RELATIONSHIP TO test-contention.sh" section of scripts/lib/scratch-root.sh): suites get
+# a disk-backed scratch dir, the janitor keeps watching the tmpfs.
+export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
+
 # Sequential test runner that isolates test suites to avoid Bun's FPE crash
 # when running all tests via recursive directory discovery.
 # See: knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md

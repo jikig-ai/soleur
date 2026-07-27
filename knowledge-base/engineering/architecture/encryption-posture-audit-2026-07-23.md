@@ -32,7 +32,7 @@ the mechanism that closes this — and today it can only measure `workspaces_luk
 | Store | Declared at | Measured at-rest posture | Source | Finding |
 |---|---|---|---|---|
 | `hcloud_volume.workspaces_luks` | `workspaces-luks.tf:184` | **LUKS** (mapper `workspaces`) | `workspaces-cutover.sh:2041` luksOpen + `random_password`/`doppler_secret` + `soleur-host-bootstrap.sh:759-760` gate | conforming |
-| `hcloud_volume.git_data_luks` | `git-data-luks.tf:79` | **LUKS** (mapper `git-data`) | `cloud-init-git-data.yml:170,173,180` | conforming |
+| `hcloud_volume.git_data_luks` | `git-data-luks.tf` → `resource "hcloud_volume" "git_data_luks"` | **LUKS** (mapper `git-data`) | `cloud-init-git-data.yml:170,173,180` | conforming |
 | `hcloud_volume.workspaces` | `server.tf:1569` | **plaintext ext4** (superseded on web-1 by `workspaces_luks`, cutover 2026-07-23 verify run 30040444418) | `format = "ext4"`, no apparatus | #6897 (remove/confirm-detach) |
 | `hcloud_volume.git_data` | `git-data.tf:264` | **plaintext ext4** (rollback backstop, pending DL-2 wipe) | `format = "ext4"`, no apparatus | #6897 |
 | `hcloud_volume.inngest_redis` | `inngest-host.tf:288` | **plaintext ext4** — Inngest AOF (in-flight job payloads) | `format = "ext4"`, no apparatus | **#6894 (highest sensitivity)** |

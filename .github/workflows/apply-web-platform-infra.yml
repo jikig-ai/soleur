@@ -2280,7 +2280,8 @@ jobs:
   #   hcloud_volume_attachment.git_data        (git-data.tf:275 — server_id ForceNew → replace;
   #                                              else /mnt/git-data — plaintext bare-repo store —
   #                                              boots UNMOUNTED)
-  #   hcloud_volume_attachment.git_data_luks   (git-data-luks.tf:90 — server_id ForceNew → replace;
+  #   hcloud_volume_attachment.git_data_luks   (git-data-luks.tf, `resource "hcloud_volume_attachment"
+  #                                              "git_data_luks"` — server_id ForceNew → replace;
   #                                              else /mnt/git-data-luks — LUKS at-rest store —
   #                                              boots UNMOUNTED)
   #   hcloud_firewall_attachment.git_data      (git-data.tf:296 — server_ids update-in-place;
