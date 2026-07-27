@@ -45,7 +45,7 @@ machinery to that standard — see the silent-failure gates marked **[SF]** belo
 
 ## Phase 0 — Preconditions
 
-- [ ] 0.1 Re-run the falsifying measurements; confirm they still hold:
+- [x] 0.1 Re-run the falsifying measurements; confirm they still hold:
       `python3 scripts/lint-trap-tempfile-ownership.py scripts/followthroughs/anthropic-admin-key-6297.test.sh` → 0
       `python3 scripts/lint-trap-tempfile-ownership.py --census` → 98 (highwater 100)
 - [ ] 0.2 Confirm no bats; suites are plain `*.test.sh`. Do not add a framework.
@@ -66,13 +66,13 @@ machinery to that standard — see the silent-failure gates marked **[SF]** belo
 
 ## Phase 1 — RED (tests first, must fail)
 
-- [ ] 1.1 Assert on-disk absence after process exit, driving the helper through command
+- [x] 1.1 Assert on-disk absence after process exit, driving the helper through command
       substitution at real nesting depth (2 levels). Asserting that a trap *exists* is forbidden —
       it passes today against a leaking script. **Fold into the existing suite** rather than adding
       `anthropic-admin-key-6297-cleanup.test.sh`: a new file costs a `run_suite` registration,
       orphan/exec-bit/varq lints, and 1 of the 2 remaining census slots that Phase 6 needs
       (code-simplicity P2-8).
-- [ ] 1.2 Linter fixture reproducing the **mid-line** append inside a `$()`-invoked helper with a
+- [x] 1.2 Linter fixture reproducing the **mid-line** append inside a `$()`-invoked helper with a
       **named-function** trap. Must exit 1. A multi-line fixture is vacuous — it is not the real
       shape. Both conditions must be present in one fixture; either alone under-constrains.
 - [ ] 1.3 Inverse arm: a clean suite must still pass (spec-flow P2). Without it the delta gate can
@@ -80,12 +80,12 @@ machinery to that standard — see the silent-failure gates marked **[SF]** belo
 
 ## Phase 2 — Widen rule (a) (contract change BEFORE consumers)
 
-- [ ] 2.1 Un-anchor `ARRAY_APPEND` using the command-position idiom already used by `MKTEMP`;
+- [x] 2.1 Un-anchor `ARRAY_APPEND` using the command-position idiom already used by `MKTEMP`;
       switch `.match()` → `.search()` at the append test (line 289).
-- [ ] 2.2 Resolve named-function traps in `trap_owned_arrays()` via `find_functions()` spans.
+- [x] 2.2 Resolve named-function traps in `trap_owned_arrays()` via `find_functions()` spans.
       Kieran's prototype: this fix ALONE yields 0 findings across 689 files — it is necessary but
       not sufficient. Only 2.1 + 2.2 together yield the 2 real findings.
-- [ ] 2.3 ~~Give rule (a) an accept mechanism~~ — **CUT.** It already has one: `check_rule_a`
+- [x] 2.3 ~~Give rule (a) an accept mechanism~~ — **CUT.** It already has one: `check_rule_a`
       calls `escaped()` (`lint-trap-tempfile-ownership.py:109`, invoked at `:311`), the
       reason-required `# lint-trap-ownership: ok <reason>` hatch. Added-line scoping would
       additionally blind the rule to exactly the pre-existing files 3.2 sweeps
@@ -93,16 +93,16 @@ machinery to that standard — see the silent-failure gates marked **[SF]** belo
 - [ ] 2.4 Do **not** implement transitive `$()` detection (cut, R5).
 - [ ] 2.5 Note in-source that `find_functions()` desyncs on heredoc braces and misses `cleanup` in
       the two largest scripts, so it fails toward silence there. **[SF]**
-- [ ] 2.6 Run the full scan; confirm exactly 2 findings, both real, zero false positives. **Record
+- [x] 2.6 Run the full scan; confirm exactly 2 findings, both real, zero false positives. **Record
       the tool output as the 3.2 derivation artifact in the same commit** — this count expires the
       moment 3.1 lands (code-simplicity P2, spec-flow P2).
 
 ## Phase 3 — Fix the leak site and sweep the class
 
-- [ ] 3.1 Replace the `TMP_PATHS` accumulator with a **single scratch root** + `export TMPDIR` +
+- [x] 3.1 Replace the `TMP_PATHS` accumulator with a **single scratch root** + `export TMPDIR` +
       `trap 'rm -rf -- "$TMP_ROOT"' EXIT INT TERM`. No registry file (R2) — this is already the
       house idiom in 15 sibling files.
-- [ ] 3.1a **`set -u` does NOT protect this trap — the failure mode is empty, not unset.** **[SF]**
+- [x] 3.1a **`set -u` does NOT protect this trap — the failure mode is empty, not unset.** **[SF]**
       Verified: `anthropic-admin-key-6297.test.sh:11` is `set -uo pipefail` — **no `-e`**. So a
       failing `TMP_ROOT=$(mktemp -d …)` — which is exactly what happens when `/tmp` is full, the
       scenario this plan exists for — does not abort. `TMP_ROOT=""` → `export TMPDIR=""` → `mktemp`
@@ -110,7 +110,7 @@ machinery to that standard — see the silent-failure gates marked **[SF]** belo
       clean-looking run that leaks exactly as before. All four guards are required, not optional:
       `|| { echo …; exit 1; }` on the `mktemp -d`; `: "${TMP_ROOT:?}"`;
       `[[ $TMP_ROOT == /* && -d $TMP_ROOT && ! -L $TMP_ROOT ]]`; and `readonly TMP_ROOT`.
-- [ ] 3.1b **`readonly TMP_ROOT` is load-bearing, not defensive style.** The trap body is
+- [x] 3.1b **`readonly TMP_ROOT` is load-bearing, not defensive style.** The trap body is
       **single-quoted, therefore late-bound** — it resolves `$TMP_ROOT` at exit, not at trap
       installation. Any later reassignment redirects the delete, *including by the Phase 5
       `scratch-root.sh` resolver this same PR introduces*. Contrast `tmpfs-guard.sh`'s deliberate
@@ -213,7 +213,7 @@ re-measured 2026-07-27, it would unlink **11 files** under live Claude session s
 - [ ] 6.1 `scripts/raise-tmp-tmpfs-ceiling.sh` — idempotent, re-runnable, `--dry-run`. Target
       derived from `/proc/meminfo` (25% of MemTotal, floored at current so it can never shrink),
       not hardcoded 8G. Backup + lock + atomic install.
-- [ ] 6.1a **Stage the temp file IN `/etc`, never in `/tmp` or `$HOME`.** **[SF]** `mv` is atomic
+- [x] 6.1a **Stage the temp file IN `/etc`, never in `/tmp` or `$HOME`.** **[SF]** `mv` is atomic
       only *within one filesystem*. `/tmp` is a separate tmpfs, and once Phase 5 lands a bare
       `mktemp` resolves under `$HOME/.cache` — either way `mv` silently degrades to copy+unlink,
       and a kill mid-copy leaves `/etc/fstab` **neither the old file nor a valid new one**, with
@@ -221,21 +221,21 @@ re-measured 2026-07-27, it would unlink **11 files** under live Claude session s
       `apps/web-platform/infra/infra-config-apply.sh` mktemps *in the destination dir* for exactly
       this reason; `.claude/hooks/lib/session-state.sh:211` uses the sibling-of-target
       `mktemp "${target}.XXXXXX"` + `mv` form.
-- [ ] 6.1b **Validate the temp file BEFORE installing it** — `findmnt --verify --tab-file "$tmp"`
+- [x] 6.1b **Validate the temp file BEFORE installing it** — `findmnt --verify --tab-file "$tmp"`
       — so the only content ever placed at `/etc/fstab` is already-validated. 6.3's post-write
       re-parse then *confirms*, rather than being the gate. **Precedent:** `infra-config-apply.sh`
       validates with `visudo` before installing, for the same boot/security-critical reason.
-- [ ] 6.1c **`flock` on `/etc/fstab` itself is defeated by the `mv`** — the lock ends up on an
+- [x] 6.1c **`flock` on `/etc/fstab` itself is defeated by the `mv`** — the lock ends up on an
       orphaned inode. Lock a separate, never-replaced path.
-- [ ] 6.1d **Preserve mode and ownership explicitly:** `install -m 0644 -o root -g root`.
+- [x] 6.1d **Preserve mode and ownership explicitly:** `install -m 0644 -o root -g root`.
       `mktemp` creates 0600, which would break non-root `findmnt`/mount helpers. Copy the
       SELinux/AppArmor label too — the temp file's context does not survive as the right one.
-- [ ] 6.1e **`fsync` the file AND the parent directory** around the rename. `mv` is atomic but not
+- [x] 6.1e **`fsync` the file AND the parent directory** around the rename. `mv` is atomic but not
       *durable*: without an `fsync` on `/etc` itself, a power loss between rename and boot can lose
       the entry (kernel/PostgreSQL durability guidance).
-- [ ] 6.1f **Abort if `/etc/fstab` is a symlink** (`-L`) — `mv` would silently replace the link
+- [x] 6.1f **Abort if `/etc/fstab` is a symlink** (`-L`) — `mv` would silently replace the link
       rather than the target.
-- [ ] 6.2 Handle every fstab shape with a defined branch; catch-all is a **loud abort, never a
+- [x] 6.2 Handle every fstab shape with a defined branch; catch-all is a **loud abort, never a
       silent exit 0** (spec-flow P1-7): no `/tmp` line (systemd `tmp.mount` host); `/tmp` line with
       no `size=`; multiple/commented `/tmp` lines; unit normalization (`4G` vs `4194304k` vs `50%`
       compared in bytes). **[SF]**
@@ -244,7 +244,7 @@ re-measured 2026-07-27, it would unlink **11 files** under live Claude session s
       assert `size=` equals the derived target in bytes. `mount -o remount /tmp` can exit 0 without
       changing size, so read the live value back via `findmnt -no SIZE /tmp` and compare rather
       than trusting the remount exit code.
-- [ ] 6.3a **Validate what `findmnt --verify` does NOT catch** (it proves the file parses and the
+- [x] 6.3a **Validate what `findmnt --verify` does NOT catch** (it proves the file parses and the
       targets resolve, nothing more): exactly **6 fields** per line; numeric `dump`/`pass` fields;
       spaces/tabs inside paths escaped as `\040`/`\011`; no CRLF; **trailing newline present**; no
       duplicate mountpoints; and the `4GB`-vs-`4G` suffix trap — an invalid unit *parses fine in
@@ -253,21 +253,21 @@ re-measured 2026-07-27, it would unlink **11 files** under live Claude session s
       (mirroring `TMPFS_GUARD_TMP`), never the real `/etc/fstab`. Cases: already-applied ⇒ no-op;
       unapplied ⇒ rewritten + backup exists; malformed ⇒ restored + non-zero; `--dry-run` ⇒ zero
       writes; plus one case per 6.2 shape.
-- [ ] 6.4a **Assert non-target lines survive — this is the only unbootable-machine path in the
+- [x] 6.4a **Assert non-target lines survive — this is the only unbootable-machine path in the
       plan and it is currently untested.** **[SF]** T15-T19 all pass for a rewrite that correctly
       fixes `size=` while dropping the `/` or swap line. Gate on **both**: line count unchanged,
       and `diff` of before/after with the `/tmp` line excised is empty.
-- [ ] 6.4b Acknowledge the coverage limit honestly: because fixtures never touch the real
+- [x] 6.4b Acknowledge the coverage limit honestly: because fixtures never touch the real
       `/etc/fstab`, the **symlink, cross-device, and mode/ownership branches are untested by
       construction**. Either exercise them against a fixture `/etc`-like dir on the same
       filesystem, or state the gap in the PR body — do not let the fixture suite imply coverage it
       does not have.
-- [ ] 6.5 Both new `.sh` files must carry an owning trap (see 0.4 — headroom is exactly 2).
-- [ ] 6.6 Bound backup accumulation under `/etc` (spec-flow P3) — keep N most recent. **This is the
+- [x] 6.5 Both new `.sh` files must carry an owning trap (see 0.4 — headroom is exactly 2).
+- [x] 6.6 Bound backup accumulation under `/etc` (spec-flow P3) — keep N most recent. **This is the
       plan's only root-owned delete.** **[SF]** Enumerate with a literal-prefix
       `find /etc -maxdepth 1 -name 'fstab.bak.*' -type f`; **never** a constructed glob (an empty
       variable yields `rm -f /etc/fstab.bak.` at best) and **never** `rm -rf`.
-- [ ] 6.7 **Record the ceiling raise as a raised backstop, not a free win.** The kernel's tmpfs
+- [x] 6.7 **Record the ceiling raise as a raised backstop, not a free win.** The kernel's tmpfs
       docs warn: *"if you oversize your tmpfs instances the machine will deadlock since the OOM
       handler will not be able to free that memory."* Tmpfs pages count against RAM; swap on this
       host is ~fully used (2.0 GiB total, 204 KiB free). The `size=4G` pin was incidentally
@@ -275,7 +275,7 @@ re-measured 2026-07-27, it would unlink **11 files** under live Claude session s
       ~7.5G a runaway gets twice as far before that backstop engages. Still sound (25% is well
       under the kernel's 50% default, and the leak fix drives accrual to ~0), but the plan must say
       so plainly rather than presenting the raise as unqualified improvement.
-- [ ] 6.8 Verify the live result with `findmnt -no SIZE /tmp`, **never `df`** (which can report a
+- [x] 6.8 Verify the live result with `findmnt -no SIZE /tmp`, **never `df`** (which can report a
       stale cached value). `mount -o remount /tmp` is safe with open file handles but can exit 0
       without applying the new size — hence read-back, not exit-code trust.
 
@@ -296,17 +296,17 @@ re-measured 2026-07-27, it would unlink **11 files** under live Claude session s
       0-of-11,172 over 1 MB — so the successor issue starts from why the size axis cannot see this
       leak class at all. Carry Phase 6-of-v2 (`tmpfs-guard.sh` logger + `-eq` on multi-line
       capture) here; nothing in this PR reads that journal (code-simplicity P2-9).
-- [ ] 8.3 ~~File: fstab ceiling raise~~ — **DELETED.** Restored to this PR as Phase 6 above by
+- [x] 8.3 ~~File: fstab ceiling raise~~ — **DELETED.** Restored to this PR as Phase 6 above by
       operator decision.
 - [ ] 8.4 File: ADR-129 D#4 accept re-evaluation across the bare-`mktemp` population — the upgrade
       trigger has fired (architecture P0-2).
-- [ ] 8.5 File: `iac-plan-write-guard.sh` `echo | grep -q` race under `pipefail` (measured 9 deny /
+- [x] 8.5 File: `iac-plan-write-guard.sh` `echo | grep -q` race under `pipefail` (measured 9 deny /
       3 allow on identical 50 KB input). **Sibling pattern checks lose the same race fail-OPEN** —
       a guard that silently permits what it exists to block. Higher priority than this plan.
 - [ ] 8.6 File: **`tmpfs-guard.test.sh` writes to the production journal.** 344 of 346 `Reaped`
       lines in 14 days came from fixture roots, making the guard's only telemetry unreadable.
       Route test-run logging to a fixture-scoped sink. **[SF]**
-- [ ] 8.7 File: **the "nothing reapable found" alarm fired 94 times in 14 days into channels nobody
+- [x] 8.7 File: **the "nothing reapable found" alarm fired 94 times in 14 days into channels nobody
       reads** — `logger` (unwatched journal) and `notify-send` (no-ops under cron, no DBUS,
       `2>/dev/null || true`). Route to the observability layer per
       `hr-no-dashboard-eyeball-pull-data-yourself`. **[SF]**
