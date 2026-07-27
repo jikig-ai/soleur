@@ -767,7 +767,7 @@ fi
 
 **Detection:**
 
-The trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (per `cq-when-a-plan-prescribes-a-validator-guard-or` — guard-surface coupling). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
+The trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (guard-surface coupling: a gate's regex, its documentation block, and its fixtures are one unit — changing any one alone silently blinds the gate). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
 
 ```bash
 DEPLOY_PIPELINE_FIX_TRIGGERS=(
@@ -816,9 +816,12 @@ if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]] && ssh-add -l >/dev/null 2>&1;
   # (deploy_pipeline_fix) is independently covered by the CI auto-apply and does not
   # need the operator's SSH path. Do NOT widen this to a 2-target apply.
   doppler run -p soleur -c prd_terraform -- \
-    terraform apply -target=terraform_data.infra_config_handler_bootstrap -input=true
-  # The Terraform "yes" prompt is the load-bearing authorization
-  # (hr-menu-option-ack-not-prod-write-auth). Do NOT pass -auto-approve.
+    terraform apply -target=terraform_data.infra_config_handler_bootstrap \
+      -input=false -auto-approve
+  # The per-command ack in chat is the load-bearing authorization, NOT a TTY
+  # prompt: the Bash tool is non-interactive, so `-input=true` without
+  # `-auto-approve` hangs forever (hr-menu-option-ack-not-prod-write-auth +
+  # hr-the-bash-tool-runs-in-a-non-interactive).
 fi
 ```
 
@@ -851,9 +854,11 @@ apply as part of the merge ritual:
   doppler run -p soleur -c prd_terraform -- \
     terraform apply -target=terraform_data.deploy_pipeline_fix -input=true
 
-You will be prompted for "yes" by Terraform — that prompt is the load-bearing
-authorization per `hr-menu-option-ack-not-prod-write-auth`. Do NOT pass
-`-auto-approve`.
+The per-command ack **in chat** is the load-bearing authorization: show the exact
+command, wait for a literal `yes`, then run `terraform apply -input=false
+-auto-approve`. Terraform's native TTY prompt is unanswerable from the Bash tool,
+so withholding `-auto-approve` hangs the apply instead of gating it
+(`hr-menu-option-ack-not-prod-write-auth` + `hr-the-bash-tool-runs-in-a-non-interactive`).
 
 After the apply completes, verify (server IP comes from Terraform output —
 the output name is `server_ip`, not `server_ipv4`):
