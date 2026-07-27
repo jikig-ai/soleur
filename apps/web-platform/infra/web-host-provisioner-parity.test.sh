@@ -525,6 +525,12 @@ if probe_raw:
     except ValueError as exc:
         no(f"5: SOLEUR_PARITY_ALLOWLIST_PROBE is set but is not parseable JSON ({exc})")
         probe_entries = {}
+    # Shape-check before use. `.items()` on a JSON array raises AttributeError, and a
+    # traceback exits non-zero with no [FAIL] line -- which the battery's attribution rule
+    # correctly refuses to credit, but as an unexplained failure rather than a named one.
+    if not isinstance(probe_entries, dict):
+        no("5: SOLEUR_PARITY_ALLOWLIST_PROBE must be a JSON object of {path: reason}")
+        probe_entries = {}
     check_allowlist(probe_entries, "ALLOWLIST probe")
 
 print(f"=== web-host-provisioner-parity: {npass} passed, {nfail} failed ===")

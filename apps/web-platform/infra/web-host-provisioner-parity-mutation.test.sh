@@ -27,6 +27,14 @@
 #   4. TWO POSITIVE CONTROLS, in both directions: a benign edit stays GREEN, and a
 #      legitimately dual-delivered NEW artifact stays GREEN. Without the second, a guard that
 #      over-fires on any addition would score a clean run.
+#   5. The sandboxed INPUT SET is DERIVED from the guard, not copied (#7014). A hand-kept copy
+#      lets a newly-added, tolerantly-read input sit outside the sandbox, so every check over
+#      it runs against an empty string and this battery scores a clean pass over a check that
+#      never executed.
+#   6. Anything the guard asserts that NO edit to those input files can reach is unproven no
+#      matter how green the run looks. §5's ALLOWLIST hygiene was exactly that -- structurally
+#      unreachable -- and is now driven through a guard-side probe (P1-P3) that can only ADD
+#      failures, never suppress one.
 #
 # Assertion predicates read a FILE or use bash `[[ ]]`; none pipe into `grep -q`, whose
 # SIGPIPE-on-early-match fails OPEN under `set -o pipefail`.
@@ -281,7 +289,7 @@ for L in s.split("\n"):
         out.append(L)
 out.insert(3, "# historical: this bootstrap used to install /usr/local/bin/orphan-reaper.sh")
 s = "\n".join(out)
-assert "/usr/local/bin/orphan-reaper.sh" in "\n".join(out)
+assert "/usr/local/bin/orphan-reaper.sh" in s, "the comment must still name the path, or the case tests nothing"
 '
 
 # A CONSUMER reference (systemd ExecStart) is not a producer. The old guard credited exactly
