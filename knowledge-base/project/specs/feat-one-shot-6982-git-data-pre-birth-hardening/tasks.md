@@ -67,15 +67,20 @@ creates `hcloud_server.git_data`.
 - [ ] 1.3 Amend `variables.tf`'s `git_data_server_type` description: corrected D1 claim + the
       finding that `cpx22` is now the only sensible **orderable** option.
 - [ ] 1.4 **Register the new address at all SIX sites, in this same commit** (R6): the birth
-      `-target` list (18 → 19) and its prose; `_GIT_DATA_BIRTH_ALLOW`'s `def allow: [ … ]`; the
+      `-target` list (**18 → 20**, per D1) and its prose; `_GIT_DATA_BIRTH_ALLOW`'s `def allow: [ … ]`; the
       gate's **separate presence loop**; the gate's two prose counts;
-      `GIT_DATA_BIRTH_TARGET_BASES` plus the two "eighteen members" comments; the
+      `GIT_DATA_BIRTH_TARGET_BASES` plus the two "eighteen members" comments (now **20**); the
       `rest_thirteen_except`/`rest_thirteen_with` fixture helpers. Add to
       `OPERATOR_APPLIED_EXCLUSIONS`. **The address joins the PRESENCE half, never the entailed
       loop** (entailed demands `creates == 1` → permanent wedge).
 
 ## Phase 2 — The emitter
 
+- [ ] 2.0 **Per D1 (deepen pass)**, re-add `doppler_secret.git_data_betterstack_logs_token` to
+      `doppler_config.git_data_prd` (the `registry_betterstack_logs_token` precedent), gated on
+      W0's probe result, and register it at all six sites alongside the SSH-host secret — birth
+      `-target` set **18 -> 20**, not 19. Read via `doppler run` **only** by the post-Doppler
+      emits (boot-completion, gc faults); the early stages stay Sentry-only.
 - [ ] 2.1 `write_files:` **one** script `/usr/local/bin/git-data-emit` (R13) — Sentry store-API emit
       from the **baked** `${sentry_dsn}`, **no Doppler fallback**, applying the ADR-147 sanitiser
       chain **plus** the value-based redactor **internally on every path**.

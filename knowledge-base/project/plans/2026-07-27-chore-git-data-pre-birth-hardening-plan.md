@@ -19,6 +19,130 @@ closes: 6982
 > `knowledge-base/engineering/operations/runbooks/git-data-birth.md`. Dispatching a host birth is
 > a production write and is out of scope for this plan (`hr-menu-option-ack-not-prod-write-auth`).
 
+## Deepen-Plan Pass (v2 → v3)
+
+**Deepened:** 2026-07-27 · **Halt gates evaluated:** 4.5 · 4.55 · 4.6 · 4.7 · 4.8 · 4.9 · 4.10
+
+| Gate | Verdict |
+|---|---|
+| 4.5 Network-outage deep-dive | **PASS** — triggered on `SSH`/`firewall`/`timeout`; `## Hypotheses` answers all four L3→L7 layers with named artifacts and honest N/A opt-outs. |
+| 4.55 Downtime & Cutover | **PASS (new section added)** — the trigger words are present but the subject host **does not exist**, so no serving surface can go offline. Recorded explicitly rather than left implicit; see `## Downtime & Cutover`. |
+| 4.6 User-Brand Impact | **PASS** — section present, concrete artifact + vector, threshold `single-user incident`, no placeholders. |
+| 4.7 Observability | **PASS** — all 5 fields present with non-placeholder values and children; `discoverability_test.command` contains **zero** `ssh ` occurrences. |
+| 4.8 PAT-shaped variable | **PASS — one match adjudicated as a false positive**, and it surfaced a real design constraint (D1 below). |
+| 4.9 UI-wireframe artifact | **SKIP** — no path in Files-to-Edit/Create matches any UI-surface term or glob. No `.pen` required. |
+| 4.10 Encryption Posture | **PASS** — `at_rest` (3 stores), `in_transit` (3 connections) and `exception` all present; every required sub-field populated; `does_not_defend` non-empty everywhere; the one `plaintext-exception` carries `tracking_issue` **and** `expires_on`. |
+
+### D1 — Gate 4.8 adjudication, and the constraint it exposed
+
+The sweep matched exactly one line: `var.betterstack_logs_token`, via the broad
+`var\.[a-z_]*_(pat|token)` arm. **False positive** — `hr-github-app-auth-not-pat` governs *"infra-time
+GitHub writes"*, and this is a **Better Stack Logs ingest** token with no GitHub surface. No GitHub
+auth of any kind appears in this plan. Recorded rather than silently dismissed, because the gate is
+fail-closed by design and the next reader deserves the adjudication.
+
+**But chasing it exposed a genuine drift my own v2 fixes introduced** — exactly the post-edit
+self-audit class this phase exists to catch. R3 cut Better Stack from the boot path and R12
+re-routed the gc fault event to Sentry; taken together those imply *"no Better Stack on git-data at
+all"*, which would have made `var.betterstack_logs_token` dead. Before deleting it I checked whether
+the follow-through probe could then run on Sentry — **and it cannot**:
+
+- `.github/workflows/scheduled-followthrough-sweeper.yml` passes `SENTRY_AUTH_TOKEN` (sourced from
+  `SENTRY_IAC_AUTH_TOKEN`), and `scripts/sentry-issue.sh`'s own header records that this token
+  **403s** on `event:read`. The script needs `SENTRY_ISSUE_RO_TOKEN`, which the sweeper does **not**
+  pass.
+- The sweeper **does** pass `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`, and those work.
+
+**So the channel split is refined, not collapsed** — and the refinement is forced by a real
+constraint rather than taste:
+
+| Signal | Channel | Why |
+|---|---|---|
+| Early boot stages (`runcmd_early` … `doppler_dl`) and **all fatals** | **Sentry only** | Baked DSN, no Doppler dependency — works precisely when Doppler is the broken stage. R3's objection stands in full, and this is the interlock's sentinel. |
+| **Boot-completion** (`stage:boot_complete`) and **gc faults** | **Sentry *and* Better Stack** | Both are **post-Doppler by construction** — the bootstrap only reaches its final stage after `doppler run` has succeeded, and the gc timer runs long after boot. So the ingest token *is* readable here, and R3's pre-Doppler objection does not apply. |
+| The follow-through probe's read path | **Better Stack** | The only channel the sweeper can authenticate (above). This is what makes AC20's *"the sweeper can actually execute it"* satisfiable at all. |
+
+**Consequences, all folded in below:** `var.betterstack_logs_token` stays (the 4.8 match is
+legitimate); `doppler_secret.git_data_betterstack_logs_token` in `prd_git_data` **returns**, gated on
+W0's probe result; and the birth `-target` set therefore goes **18 → 20**, not 18 → 19. That count
+correction propagates to all six registration sites (R6) and to AC8.
+
+### D2 — Residual: git-data has one paging vendor, not two
+
+`model.c4` records the Sentry/Better Stack duplication as deliberate — *"a SECOND-SOURCE vendor that
+pages independently precisely so a Sentry outage is survivable… Do not 'consolidate' the two — the
+redundancy is the design."* On git-data, **only Sentry pages**: the Better Stack copy is queryable
+(and is what the follow-through probe reads) but nothing alerts on it, because R12 established there
+is no generic disk/gc recurrence poller to extend and this plan does not build one.
+
+The second paging source for this host is the `git_data_prd` heartbeat — **deferred to #6548** by
+D-HB. So between this PR and #6548, a Sentry outage concurrent with a git-data boot failure is
+unobserved. Stated as an accepted residual rather than hidden: the window is bounded by #6548, the
+host is unborn for all of it, and the alternative (arming a beat that goes green on a host whose
+LUKS never mounted) is worse than the gap.
+
+### D3 — Precedent-diff gate (Phase 4.4): no novel patterns
+
+Checked the four pattern-bound behaviours this plan introduces against in-repo precedent:
+
+| Pattern | Precedent | Divergence |
+|---|---|---|
+| Boot-fatal emitter + `trap on_err` + `STAGE=` | `cloud-init.yml`'s `_emit`/`on_err`; `cloud-init-inngest.yml`'s phone-home | **One** deliberate divergence: git-data's emitter is a `/usr/local/bin/` **binary**, not an inline shell function, so the LUKS heredoc's child bash can call it (R2). Recorded in Phase 3.5. |
+| Per-host scoped-config ingest token | `doppler_secret.registry_betterstack_logs_token` (`zot-registry.tf`) | None — same shape. |
+| Bounded maintenance unit | `soleur-host-bootstrap.sh` / `inngest-bootstrap.sh` `CPUQuota=`/`MemoryMax=` units | None — this is the in-house idiom for bounding a background job on a small host. |
+| Scheduled work | Phase 4.4's Inngest-vs-GH-Actions check | **N/A** — the gc timer is a host-resident systemd timer on a host with no app context and no Inngest connectivity (deny-all, private-net only). ADR-033's Inngest preference does not reach it. |
+
+No novel pattern is introduced, so no "pattern is novel — scrutinise" flag is needed.
+
+### D4 — Verify-the-negative pass (Phase 4.45)
+
+Negative security claims in the plan body were re-grepped against the implementation:
+
+- *"the LUKS passphrase is **never** in `user_data`"* — **confirmed**. `git-data.tf`'s templatefile
+  vars pass `doppler_token` (a scoped read token), never `GIT_DATA_LUKS_KEY`; the passphrase is
+  fetched at boot via `doppler run`.
+- *"git-data has **no** `remote-exec` provisioner and no human SSH path"* — **confirmed**.
+  `git-data.tf` carries no `provisioner` block; all three `authorized_keys` entries are
+  `command=`-forced with `no-pty`; the login shell is `git-shell`.
+- *"`grep -rn "MaxStartups\|MaxSessions"` returns **zero hits anywhere in the tree**"* — **confirmed**
+  at plan time; this is a claim `/work` should re-run rather than trust, since a sibling PR could
+  land the first occurrence.
+- *"`pii_scrub_string` does **not** scrub a bare UUID"* — **confirmed** by the CLO panel against
+  `vector.toml`'s transform bodies. This is the claim AC22 exists to defend against.
+
+### D5 — Post-edit self-audit (Phase 4.45)
+
+Swept the plan for references to symbols the v2 edits dropped. One hit, now fixed: the Observability
+`logs:` field and Phase 5.2's `alert_route` still described a Better-Stack-only steady-state path
+after R12 re-routed gc faults to Sentry — resolved by D1's explicit split. No references remain to
+`git-data-store-monitor.*`, `git-data-phone-home`, or `git-data-redact` outside the "cut in v2"
+annotations that deliberately name them.
+
+## Downtime & Cutover
+
+**Gate 4.55 fired on keyword match and is discharged by the subject, not by an argument: there is no
+serving surface to take offline.** `soleur-git-data` **has never existed** — an authenticated
+`terraform state list` returns zero git-data members.
+
+- **Infra reboot/replace class:** not triggered. This PR changes `hcloud_server.git_data`'s
+  `user_data` (ForceNew) and `variables.tf`'s `server_type` **description** — on a resource that is
+  absent from state, so Terraform plans nothing. No running host is power-cycled, replaced, or
+  resized. AC7 asserts mechanically that the per-merge plan shows **zero** creates for any git-data
+  address, which is the same property from the other direction.
+- **Database lock class:** not triggered — no migration, no DDL, no backfill.
+- **Deploy/router class:** not triggered — no container swap, no tunnel or router change, no
+  connector restart. git-data carries no `cloudflared` (ADR-096).
+
+**The one adjacent surface, and why it is also zero-downtime:** W6's client-side limiter edits
+`git-data-replication.ts`, which ships in the web container. It is fail-soft by construction — on
+queue timeout it sheds rather than blocking, because git-data is an overlay and session end must
+never wait on it. Its deploy is the ordinary container roll, unchanged by this PR.
+
+**Zero-downtime posture for the birth itself** (out of scope here, recorded for the dispatch): a
+birth is **additive-only** — the gate demands zero destroys, zero volume destroys, zero firewall
+rules and zero reboot-forcing updates on any live host, and refuses otherwise. The blue-green
+question does not arise because there is no old host to cut over from.
+
 ## Plan Review Revisions (v1 → v2)
 
 Panel: Fable advisor consult (ADR-083 Step 4.5) · kieran-rails-reviewer · architecture-strategist ·
@@ -577,7 +701,8 @@ per-PR target. The clean shape:
    arming-switch ordering reason `git_remove_ssh_private_key` carries it — do not publish a runtime
    key ahead of the host it addresses. The `depends_on` edge is only dangerous **in combination
    with** a per-PR target, and there is no reason to add one.
-3. Register in **all three** of: the birth `-target` list (18 → 19); the allow-set in
+3. Register in **all three** of: the birth `-target` list (**18 → 20** per D1 — the Better Stack
+   ingest secret returns alongside the SSH-host secret); the allow-set in
    `tests/scripts/lib/git-data-host-birth-gate.sh` — shell var `_GIT_DATA_BIRTH_ALLOW`, whose body
    is the **unparameterised** `def allow: [ … ]` because git-data is a singleton (unlike
    `web-host-birth-gate.sh`'s `def allow($k):` for the `hcloud_server.web` for_each map); the parity
@@ -735,12 +860,26 @@ failure_modes:
     alert_route: red apply (fails closed before any resource is created)
 
 logs:
-  where: Better Stack Logs, shared source 2457081 (eu-fsn-3), reached by DIRECT CURL from the host
-         — NOT via a Vector agent (A1). Discriminated from sibling hosts by the baked
-         host_name=soleur-git-data field. Note the create-time-render caveat: host_name is baked at
-         render time and is not a runtime-guaranteed invariant.
-  retention: 3 days (Better Stack free tier). Sentry retains per plan and is the durable record for
-             fatals; Better Stack carries the stage narrative.
+  # v3 channel split (D1) — forced by the sweeper's auth, not by taste:
+  #   * EARLY STAGES + ALL FATALS -> Sentry ONLY. Baked DSN, no Doppler dependency, so it works
+  #     precisely when Doppler is the broken stage. This is also the interlock's sentinel.
+  #   * BOOT-COMPLETION + GC FAULTS -> Sentry AND Better Stack. Both are post-Doppler BY
+  #     CONSTRUCTION (the bootstrap reaches its last stage only after `doppler run` succeeded; the
+  #     gc timer runs long after boot), so the ingest token IS readable here.
+  #   * The FOLLOW-THROUGH PROBE reads Better Stack, because that is the only channel
+  #     scheduled-followthrough-sweeper.yml can authenticate: it passes SENTRY_AUTH_TOKEN (from
+  #     SENTRY_IAC_AUTH_TOKEN), which sentry-issue.sh's own header records as 403-ing on
+  #     event:read — the script needs SENTRY_ISSUE_RO_TOKEN, which the sweeper does not pass.
+  where: Sentry (project web-platform, org jikigai-eu, de.sentry.io ingest) for every stage and
+         fatal; PLUS a Better Stack Logs copy of boot-completion and gc faults on shared source
+         2457081 (eu-fsn-3), reached by DIRECT CURL from the host — NOT via a Vector agent (A1),
+         so git-data ships no host_metrics and structurally cannot reopen the 3 GB/mo quota
+         breached on 2026-06-10. Discriminated from sibling hosts by the baked
+         host_name=soleur-git-data field. Create-time-render caveat: host_name is baked at render
+         time and is not a runtime-guaranteed invariant.
+  retention: Sentry per plan — the durable record, and the only channel that PAGES (see D2: git-data
+             has one paging vendor until #6548 arms the second). Better Stack 3 days on the free
+             tier — a query surface for the follow-through probe, not an alert surface.
 
 discoverability_test:
   # v2 (R10). Three defects in v1 are fixed here: the credential wrapper (bare invocation exits 3),
@@ -1130,7 +1269,7 @@ it. Do **not** reference `hcloud_server_network.git_data.ip` from the new secret
 finding).
 1.4 **Register the new address at all SIX sites, in this same commit** (R6, and Kieran's P1-9 —
 v1 assigned these to no phase at all while its own IaC section required them to be one commit):
-(i) the birth `-target` list in `apply-web-platform-infra.yml` (18 → 19) and its "eighteen -targets"
+(i) the birth `-target` list in `apply-web-platform-infra.yml` (**18 → 20**, D1) and its "eighteen -targets"
 prose; (ii) `_GIT_DATA_BIRTH_ALLOW`'s `def allow: [ … ]`; (iii) the gate's **separate hardcoded
 presence loop** — the fourth site v1 never named, and the one whose omission lets a birth pass while
 the Doppler write is absent; (iv) the gate's two prose counts; (v) `GIT_DATA_BIRTH_TARGET_BASES`
@@ -1141,6 +1280,11 @@ plus the two "eighteen members" comments in the parity test; (vi) the
 
 ### Phase 2 — The emitter (W1)
 
+2.0 **Per D1**, re-add `doppler_secret.git_data_betterstack_logs_token` to
+`doppler_config.git_data_prd` (the `registry_betterstack_logs_token` precedent), gated on W0's probe
+result, and register it at all six sites alongside the SSH-host secret (birth `-target` set
+**18 → 20**). It is read via `doppler run` **only** by the post-Doppler emits (boot-completion, gc
+faults) — never by the early stages, which stay Sentry-only because the token is unreadable there.
 2.1 `write_files:` **one** script, `/usr/local/bin/git-data-emit` (R13) — the Sentry store-API emit
 from the baked DSN, with **no** Doppler fallback (the scoped token demonstrably cannot read
 `SENTRY_DSN`, and a fallback that is dark by construction is worse than none because it reads as a
@@ -1530,8 +1674,8 @@ structural instead of conventional).
 - `apps/web-platform/infra/variables.tf` (W7 description)
 - `apps/web-platform/infra/git-data-bootstrap.sh` (W4 config + W1 boot-completion assertions)
 - `apps/web-platform/server/git-data-replication.ts` (W6 limiter)
-- `.github/workflows/apply-web-platform-infra.yml` — birth `-target` set **18 → 19** (exactly one
-  new address after R3 deleted the Better Stack secret), the "eighteen -targets" prose, **and** the
+- `.github/workflows/apply-web-platform-infra.yml` — birth `-target` set **18 → 20** (the SSH-host
+  secret **and** the Better Stack ingest secret, per D1), the "eighteen -targets" prose, **and** the
   new post-apply `if: always()` boot-signal poll (R20)
 - `.github/workflows/infra-validation.yml` (register the one new suite)
 - `.github/workflows/scheduled-followthrough-sweeper.yml` — verify the three real
