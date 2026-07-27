@@ -109,5 +109,24 @@ of 120 s rather than a silent one. Going below the floor would require a
 different architecture (sharding the suite, or reducing subshell/mock-spawn
 count) and is out of scope here.
 
-**Operator decision needed:** confirm the restated AC1, or amend #6665's stated
-120 s target to match the measured floor.
+**MEASURED AT /work — the challenge's premise is REFUTED, and the plan's own
+counter-argument was wrong too.** Both sides of this exchange reasoned from a
+local number and then guessed about CI. The challenge said "the binding floor
+should be measured on **CI**, not locally" — that half was right, and nobody ran
+it. Run on this PR: the `Run ci-deploy.sh tests` step completes the identical
+**184/184 in 25 s** on the CI runner (run `30302371047`, job total 179 s), which
+is *one fifth* of the ~117 s local CPU floor the whole argument rested on. The
+local box was clocked at ~1.4-1.5 GHz against a 5.0 GHz maximum during
+measurement, so the "floor" was a throttled-laptop artifact, not a property of
+the suite. The plan's rebuttal — "on a 2-vCPU CI runner the floor is likely
+higher still" — was wrong by an order of magnitude in the opposite direction.
+
+So 120 s is **not** arithmetically unreachable: on CI, where the budget this
+issue is about is actually spent, the suite is already ~5× inside it. AC1's
+local miss (8m57s → 4m16s, still above 120 s) stands as an *evidenced* miss whose
+cause is now named rather than attributed to an inherent floor.
+
+**Operator decision needed — now much narrower:** none required for AC1 on the
+merits; #6665's 120 s target is met where it matters (CI). The only remaining
+question is whether AC1 should be re-scoped to measure on CI rather than
+locally, since the local figure tracks operator hardware and not the code.
