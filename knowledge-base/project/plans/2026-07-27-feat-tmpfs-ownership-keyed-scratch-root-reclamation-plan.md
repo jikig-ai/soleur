@@ -388,7 +388,15 @@ A.2 Alarm on growth above the floor, never on absolute count.
 and leaves no root; `mktemp` failure never yields empty `TMPDIR`; trap quarantines on EXIT, INT,
 TERM; fallback `rm -rf` when quarantine cannot be created; guards hold under `-e` and `+e`.
 
-### Phase 2 — Reaper 3 (`scripts/tmpfs-guard.sh`, `/tmp` only in PR 1)
+### Phase 2 — Reaper 3 (`scripts/tmpfs-guard.sh`; PR 1 scans `/tmp` only)
+
+> **Seam-vs-scope reconciliation (self-audit finding).** `TMPFS_GUARD_SCRATCH_BASES` is
+> **introduced in PR 1 but defaults to `/tmp` alone**; PR 2 only changes what the default
+> contains. The seam therefore *exists* in PR 1, which is why Phase 2.7 must list it in the
+> header seam list and AC14 must pin it under test. That pinning is not bookkeeping: AC2
+> mandates a **non-dry-run** reap, so a seam that exists but is unpinned would let the suite
+> reach the operator's real `/var/tmp`. Introducing the seam late — after tests were written
+> against a hardcoded `/tmp` — is exactly how that gap would ship unnoticed.
 
 2.1 `reap_orphan_scratch_roots()`. Candidates:
     `find /tmp -mindepth 1 -maxdepth 1 -name 'soleur-run.*' -type d -user "$uid" -print0`.
@@ -717,8 +725,12 @@ lawful-basis question, no disclosure change.**
 
 ## Acceptance Criteria
 
-Ten, deliberately. The earlier draft had twenty; ten were ceremony restating phase instructions,
-asserting the status quo, or — in two cases proven by review — **unfalsifiable**.
+**Nineteen** (`AC-A1`, `AC1`–`AC15`, with `AC4` split into `AC4`/`AC4b`/`AC4c`/`AC4d`), across
+three PRs. The count moved twice and the direction matters: an earlier draft's twenty were cut to
+ten after review removed ceremony that restated phase instructions, asserted the status quo, or —
+in two cases — was **unfalsifiable**. The five-defects sweep (Phase 2X) then *added* nine, because
+each defect it found is one the plan's safety argument depends on and none was covered by an
+existing criterion. Fewer ACs is not the goal; every AC here fails on a real defect.
 
 ### PR 0
 
