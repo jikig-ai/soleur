@@ -41,16 +41,51 @@ resource "random_password" "git_data_luks" {
 # SUPABASE_SERVICE_ROLE, GIT_REMOVE_SSH_PRIVATE_KEY, and PROXY_TLS_KEY/CERT). Doppler
 # tokens are config-scoped, so isolation requires a separate config.
 #
-# OPERATOR NOTE (mirrors kb-drift.tf `prd_kb_drift_walker`): the `prd_git_data` config
-# must exist in the `prd` environment BEFORE `terraform apply`. The Doppler provider
-# manages environments-and-their-configs as a unit and the operator's existing
-# environment+configs are not under TF management, so create it once via the dashboard
-# (Project → soleur → New config under `prd`, name = "prd_git_data"); this is a
-# documented cutover precondition (runbook §Preconditions). Rotate the boot key via
-# `terraform apply -replace=random_password.git_data_luks`.
+# (#6977) The `prd_git_data` branch config, PROVISIONED IN TERRAFORM.
+#
+# This replaces an OPERATOR NOTE that stood here and was wrong in two ways: it told the
+# reader to create the config by hand in the dashboard, and it justified that with "the
+# Doppler provider manages environments-and-their-configs as a unit". `doppler_config` is
+# a first-class resource in the installed provider (dopplerhq/doppler v1.21.2 — verified
+# against `terraform providers schema -json`, which gives it exactly three required
+# attributes and two optional inheritance ones this block does not use).
+#
+# VERIFIED ABSENT 2026-07-27: `GET /v3/configs?project=soleur&environment=prd` returns
+# prd, prd_cla, prd_ghcr, prd_kb_drift_walker, prd_scheduled, prd_terraform,
+# prd_workspaces_luks — no prd_git_data. Both writes below target it, so without this
+# resource the birth apply fails with "Doppler Error: Could not find requested config",
+# which is verbatim the failure zot-registry.tf's doppler_environment.registry_prd exists
+# to prevent ("REQUIRED for zero-operator provisioning").
+#
+# SCOPE, PROBED NOT ASSUMED (ADR-130 shape): `var.doppler_token_tf` is the sole
+# `provider "doppler"` token and is a PERSONAL token carrying its owner's workplace
+# scope. A live `POST /v3/configs` for a throwaway branch config under soleur/prd
+# returned 200 with `root:false` — the exact shape this resource needs — and the
+# throwaway was deleted. A branch config is a distinct API surface from the
+# `doppler_environment` this token already provisions for the registry and inngest, so
+# the capability was measured rather than inferred from the sibling.
+#
+# ALREADY-EXISTS IS AN ERROR, NOT AN ADOPTION — measured the same way: a repeated create
+# returns 400 {"messages":["Name is already in use"]}. So if this config is ever created
+# by hand first, the birth apply FAILS and the remedy is
+# `terraform import doppler_config.git_data_prd soleur.prd_git_data`, NOT a re-dispatch.
+# The birth runbook's partial-birth decision tree records this; it is the one failure
+# mode the otherwise-additive re-dispatch story does not cover.
+#
+# NOT in any per-PR `-target` list: this address is an OPERATOR_APPLIED_EXCLUSION like
+# every other git-data resource (ADR-103). Giving it a per-PR target would drag
+# hcloud_server.git_data into the per-merge plan through upstream closure and trip
+# `host_creates > 0`, wedging every merge to main.
+resource "doppler_config" "git_data_prd" {
+  project     = "soleur"
+  environment = "prd"
+  name        = "prd_git_data"
+}
+
+# Rotate the boot key via `terraform apply -replace=random_password.git_data_luks`.
 resource "doppler_secret" "git_data_luks_key" {
-  project    = "soleur"
-  config     = "prd_git_data"
+  project    = doppler_config.git_data_prd.project
+  config     = doppler_config.git_data_prd.name
   name       = "GIT_DATA_LUKS_KEY"
   value      = random_password.git_data_luks.result
   visibility = "masked"
@@ -63,8 +98,8 @@ resource "doppler_secret" "git_data_luks_key" {
 # doppler_service_token.write / .kb_drift); rotate via
 # `terraform apply -replace=doppler_service_token.git_data`.
 resource "doppler_service_token" "git_data" {
-  project = "soleur"
-  config  = "prd_git_data"
+  project = doppler_config.git_data_prd.project
+  config  = doppler_config.git_data_prd.name
   name    = "git-data-luks-boot"
   access  = "read"
 }

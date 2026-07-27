@@ -94,7 +94,13 @@ resource "random_password" "workspaces_luks" {
 #
 # OPERATOR PRECONDITION: the `prd_workspaces_luks` config must exist in Doppler
 # BEFORE `terraform apply` — the provider manages environments and configs as a unit
-# and will not create a bare config. Same precondition as git-data-luks.tf:44-50.
+# and will not create a bare config.
+#
+# git-data USED to carry this same precondition; #6977 DELETED it by declaring the config
+# in Terraform (see `resource "doppler_config" "git_data_prd"` in git-data-luks.tf), which
+# is why the birth route's post-merge operator checklist is empty. This resource is now
+# the one holding the manual step, and that git-data block is the pattern to copy when
+# closing it — do NOT re-derive the deleted operator note.
 resource "doppler_secret" "workspaces_luks_key" {
   project    = "soleur"
   config     = "prd_workspaces_luks"

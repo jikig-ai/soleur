@@ -18,7 +18,8 @@
 #       the ONLY private-net transport path 10.0.1.20 for web-host push/pull)
 #   - hcloud_volume_attachment.git_data       (git-data.tf:275; server_id ForceNew -> replace;
 #       else /mnt/git-data — the plaintext bare-repo store — boots UNMOUNTED)
-#   - hcloud_volume_attachment.git_data_luks  (git-data-luks.tf:90; server_id ForceNew -> replace;
+#   - hcloud_volume_attachment.git_data_luks  (git-data-luks.tf, `resource "hcloud_volume_attachment"
+#       "git_data_luks"`; server_id ForceNew -> replace;
 #       else /mnt/git-data-luks — the LUKS at-rest store — boots UNMOUNTED)
 #   - hcloud_firewall_attachment.git_data     (git-data.tf:296; server_ids update-in-place —
 #       registry-style INCLUDE, NOT the inngest omission. A fresh Hetzner host has a public
@@ -26,7 +27,7 @@
 #
 # DELIBERATELY DIFFERENT FROM REGISTRY (the two data VOLUMES are NOT in the allow-set):
 #   - hcloud_volume.git_data       (git-data.tf:264) — plaintext bare-repo store, and
-#   - hcloud_volume.git_data_luks  (git-data-luks.tf:79) — LUKS at-rest store
+#   - hcloud_volume.git_data_luks  (git-data-luks.tf, `resource "hcloud_volume" "git_data_luks"`) — LUKS at-rest store
 # are PRESERVED BY OMISSION: an untargeted resource cannot be planned for destroy, so leaving
 # them out of the -target set is simpler AND strictly safer than including them. Because they
 # are OUTSIDE the allow-set, `out_of_scope` catches any positive action on them directly.
@@ -107,7 +108,8 @@ git_data_host_replace_gate() {
             | length
           ),
           luks_volume_destroyed: (
-            # Named backstop for the LUKS at-rest store (git-data-luks.tf:79; Art.17 + rollback).
+            # Named backstop for the LUKS at-rest store
+            # (git-data-luks.tf, `resource "hcloud_volume" "git_data_luks"`; Art.17 + rollback).
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume.git_data_luks")
               | select(.change.actions? | any(. == "delete" or . == "forget")) ]

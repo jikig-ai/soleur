@@ -79,7 +79,7 @@ on:
         description: "Why are you applying? (e.g. transient retry, or the dispatch reason)"
         required: true
         type: string
-      # NOTE on the input budget: `workflow_dispatch` caps at 10 inputs; 5 are used. The next
+      # NOTE on the input budget: `workflow_dispatch` caps at 10 inputs; 7 are used. The next
       # per-target input pair should split its target into a DEDICATED workflow rather than
       # spend two more slots here (precedent: workspaces-luks-cutover.yml; the concurrency group
       # is a shared literal and survives the split).
@@ -94,7 +94,7 @@ on:
       # Each job accepts only its OWN literal, so a token typed for one target cannot authorize
       # the other.
       confirm:
-        description: "For the two *-luks-recut targets: type RECUT-WORKSPACES-LUKS or RECUT-REGISTRY-LUKS. For apply_target=web-host-create: type BIRTH-<key> (e.g. BIRTH-web-2). For apply_target=web-host-replace: type REPLACE-<key> (e.g. REPLACE-web-2) — deliberately distinct, so a token typed for a birth cannot authorize a destroy. Typo-guard, NOT the authorization."
+        description: "Typo-guard for destructive/creative targets, NOT the authorization (the environment reviewer gate is). The exact token is in the runbook for the target you are firing, and in that target's job header in this file — deliberately not enumerated here, because this string accreted one clause per target and no operator reads a field label that long. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
         required: false
         type: string
       # For apply_target=web-host-create ONLY (#6730). The var.web_hosts key of the host to
@@ -173,15 +173,19 @@ on:
         description: >-
           Which apply path? manual-rerun (default) | inngest-host | inngest-host-replace |
           registry-host-replace | registry-region-migrate | registry-luks-recut |
-          git-data-host-replace | workspaces-luks-cutover | workspaces-luks-recut |
-          web-host-create | web-host-replace | registry-ruleset-entrypoint-audit. DESTRUCTIVE targets need
-          `confirm` and an id-pin — see the runbook for the target you are firing.
+          git-data-host-replace | git-data-host-create | workspaces-luks-cutover |
+          workspaces-luks-recut | web-host-create | web-host-replace | entrypoint-audit.
+          DESTRUCTIVE targets need `confirm` and an id-pin — see the runbook for the
+          target you are firing.
           registry-luks-recut DESTROYS the zot store (a disposable GHCR mirror); do NOT use
           registry-host-replace for that — it preserves the volume and darks the registry.
           web-host-create BIRTHS a declared-but-absent web host; it is additive-only and
           needs `web_host_key` + `confirm=BIRTH-<key>`. web-host-replace DESTROYS AND
           RECREATES an existing web host (both volumes preserved by omission); it needs
           `web_host_key` + `confirm=REPLACE-<key>`, and it REFUSES web-1.
+          git-data-host-create BIRTHS the never-provisioned git-data store; additive-only,
+          needs `confirm=BIRTH-GIT-DATA`, and is INTERLOCKED until #6982 ships an
+          off-host emitter.
         required: false
         default: manual-rerun
         type: choice
@@ -204,6 +208,19 @@ on:
           # requested host. Both volumes and the LUKS passphrase are preserved by
           # OMISSION from the -target set. REFUSES web-1. See the web_host_replace job.
           - web-host-replace
+          # #6977 — the git-data BIRTH path, and the counterpart to git-data-host-replace
+          # above rather than a widened version of it. That gate requires
+          # actions ⊇ {delete,create} and fires its luks_passphrase_touched arm on a
+          # CREATE, so a first birth aborts on it three separate ways; its 5-member
+          # allow-set also rests on "preserved by OMISSION", an argument that INVERTS on a
+          # birth (an omitted address is then a MISSING resource, not a protected one).
+          #
+          # INTERLOCKED: the job sources a birth-readiness gate that refuses to plan while
+          # cloud-init-git-data.yml has no off-host emitter, because for this host a green
+          # apply and a dark boot are indistinguishable. #6982 ships the emitter and
+          # releases the interlock. See the git_data_host_create job and
+          # knowledge-base/engineering/operations/runbooks/git-data-birth.md.
+          - git-data-host-create
           # #6767: read-only retrospective drift audit of every declared ruleset's
           # LIVE phase entrypoint (no terraform apply; own concurrency group;
           # issues:write App auth; posts findings to #6767). See the
@@ -2263,7 +2280,8 @@ jobs:
   #   hcloud_volume_attachment.git_data        (git-data.tf:275 — server_id ForceNew → replace;
   #                                              else /mnt/git-data — plaintext bare-repo store —
   #                                              boots UNMOUNTED)
-  #   hcloud_volume_attachment.git_data_luks   (git-data-luks.tf:90 — server_id ForceNew → replace;
+  #   hcloud_volume_attachment.git_data_luks   (git-data-luks.tf, `resource "hcloud_volume_attachment"
+  #                                              "git_data_luks"` — server_id ForceNew → replace;
   #                                              else /mnt/git-data-luks — LUKS at-rest store —
   #                                              boots UNMOUNTED)
   #   hcloud_firewall_attachment.git_data      (git-data.tf:296 — server_ids update-in-place;
@@ -2279,6 +2297,15 @@ jobs:
   git_data_host_replace:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'git-data-host-replace'
     runs-on: ubuntu-24.04
+    # (#6977) Shared with git_data_host_create so a birth and a replace cannot race the
+    # same state. Added to BOTH jobs in the same change deliberately: GitHub does not
+    # error on divergent or one-sided group strings — they silently fail to serialize —
+    # so a group declared on only the new job would read like a mutex and be a mutex of
+    # one. COEXISTS with the workflow-level R2 serializer, which remains the sole
+    # protection for the lockless backend object.
+    concurrency:
+      group: git-data-state
+      cancel-in-progress: false
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -3790,6 +3817,326 @@ jobs:
   # issues:write via a GitHub App installation token (hr-github-app-auth-not-pat;
   # the default job token is contents:read only, so `gh issue comment` would
   # silently fail without the elevated permission + App auth).
+  git_data_host_create:
+    # ── #6977 — the git-data BIRTH path ───────────────────────────────────────────────
+    #
+    # CONFIRM TOKEN: BIRTH-GIT-DATA. (The confirm input's own description deliberately does
+    # not enumerate per-target tokens — it accreted one clause per target until no operator
+    # read it. The token lives here and in the runbook.)
+    #
+    # WHY THIS JOB EXISTS. `soleur-git-data` is declared in IaC and has never existed. An
+    # authenticated `terraform state list` returns 201 addresses and ZERO git-data members.
+    # No automated route could create it: git-data-host-replace requires
+    # actions ⊇ {delete,create} so a first CREATE fails its server_replaced arm, its
+    # luks_passphrase_touched arm fires on a create too, and its 5-member allow-set cannot
+    # hold an 18-address birth fan-out. The only remaining route was an untargeted apply
+    # from an operator laptop — no destroy-guard, no stock preflight, and a plan of that
+    # shape taken 2026-07-27 carried NINE destroys. That was a standing violation of
+    # hr-all-infrastructure-provisioning-servers.
+    #
+    # A NEW DISPATCH JOB INHERITS NOTHING (ADR-145). The per-PR `host_creates > 0` HALT is
+    # a separate inline copy in the `apply` job whose `if:` is mutually exclusive with this
+    # one, so for this path the sourced birth gate is the ONLY check.
+    #
+    # INTERLOCKED — this job REFUSES TO PLAN today, by design. cloud-init-git-data.yml emits
+    # nothing off-host (measured 0 for sentry_dsn/sentry/vector/betterstack/journald/
+    # heartbeat against the web host's 9/-/14/2/7/1 (grep -ci)), and nothing in its boot path fails
+    # closed. So a green apply and a dark host are indistinguishable, and ADR-145's readiness
+    # gates have no analogue here because there is nothing to poll. #6982 ships the emitter
+    # and releases the interlock. See ADR-149 for the full release checklist.
+    #
+    # DELTAS FROM web_host_create, each evidenced rather than inherited:
+    #   • SINGLETON, not a for_each map — no host key input, and the gate's `def allow:`
+    #     takes no key argument.
+    #   • NO image digest pin. git-data has no image var and no host_scripts_content_hash,
+    #     so the amd64 assert, the GHCR login, the digest freeze and the coherence preflight
+    #     have no analogue. Omitted rather than faked.
+    #   • A LUKS BOOT DEPENDENCY the web host lacks (P12/P13).
+    #   • NO firewall-attachment fan-out risk: hcloud_firewall_attachment.git_data is
+    #     `server_ids = [hcloud_server.git_data.id]`, a direct singleton, unlike the web
+    #     fleet's for-loop. No other hcloud_server can enter this plan's closure, which is
+    #     why the gate's reboot arm is a backstop here rather than live coverage.
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'git-data-host-create'
+    runs-on: ubuntu-24.04
+    # The sole HUMAN authorization on this path. REUSED, never re-declared: the
+    # environment is managed at infra/web-host-birth-environment.tf with a non-empty
+    # reviewer set (DP-11 F8 — a zero-reviewer environment auto-approves) and a
+    # main-only deployment_branch_policy. The branch pin is load-bearing here because
+    # both gates are sourced from ${GITHUB_WORKSPACE}: without it, a branch dispatch
+    # could source a neutered gate and approve itself.
+    #
+    # The approver approves BEFORE any step runs, so they cannot verify a plan — what
+    # they are authorizing is the dispatch, not its contents. The runbook says so.
+    environment: web-platform-infra-apply
+    # Shared with git_data_host_replace so a birth and a replace cannot race the same
+    # state. This COEXISTS with the workflow-level R2 serializer
+    # (terraform-apply-web-platform-host) rather than replacing it — the backend has no
+    # state lock (main.tf `use_lockfile = false`; R2 lacks conditional writes), so that
+    # group is the sole protection against last-writer-wins on the tfstate object.
+    #
+    # The literal MUST stay identical in both jobs. GitHub does not error on divergent
+    # group strings — they silently fail to serialize — so a group naming only one job is
+    # a mutex of one that reads like a mutex of two.
+    concurrency:
+      group: git-data-state
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    # Budget: plan (~2m) + apply, whose dominant term is Hetzner provisioning the server
+    # plus two volumes (~6m). No image pull on this path.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      # FIRST step that could matter: validate the dispatch before anything reads a secret
+      # or contacts a provider. The token is a TYPO guard, not the authorization — the
+      # environment reviewer above is. It is distinct from the replace path's token so a
+      # token typed for a birth can never authorize a destroy.
+      - name: Validate dispatch inputs (confirm token)
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_RAW" != "BIRTH-GIT-DATA" ]]; then
+            echo "::error::confirm must be exactly 'BIRTH-GIT-DATA' (got '${CONFIRM_RAW}'). Typo-guard: this job creates the shared bare-repo store that will hold every connected user's source code. It is NOT the authorization — the web-platform-infra-apply environment reviewer is."
+            exit 1
+          fi
+          echo "dispatch validated: birthing hcloud_server.git_data"
+
+      # THE INTERLOCK. Runs BEFORE the plan — before any provider is contacted — because
+      # its answer does not depend on the plan and an operator should learn the route is
+      # held in seconds, not after a two-minute terraform plan.
+      - name: Birth-readiness interlock (refuses while the host would boot dark)
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
+          if ! git_data_birth_readiness_gate "${GITHUB_WORKSPACE}/apps/web-platform/infra/cloud-init-git-data.yml"; then
+            echo "::error::git-data-host-create is INTERLOCKED: cloud-init-git-data.yml has no off-host emitter, so a failed birth would produce no signal at all and a green apply would be indistinguishable from a dark host. The gate's message above carries the full release checklist (#6982 / ADR-149). Nothing has been planned or created."
+            exit 1
+          fi
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway
+        # key satisfies var.ssh_key_path. It is never consumed: the git-data host is
+        # cloud-init-only with NO remote-exec provisioner (git-data.tf header), which is
+        # also why no operator/runner egress-IP allowlist is an apply-time dependency on
+        # this path.
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract R2 backend credentials + assert SENTRY_DSN present
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+          # `|| dsn_rc=$?`, NOT `; dsn_rc=$?`. Under the `set -e` armed above, an assignment
+          # whose command substitution fails kills the step AT THAT LINE — the trailing
+          # capture never runs and neither does the branch below it, so the diagnosis this
+          # block exists to print would be dead code. That exact bug shipped on the web
+          # path with a comment claiming the two cases got different messages.
+          #
+          # UNREADABLE and EMPTY get DIFFERENT messages because they have different
+          # remedies, and "I could not read it" is not evidence the DSN is set. The VALUE
+          # is never printed.
+          dsn_rc=0
+          DSN=$(doppler secrets get SENTRY_DSN --plain 2>/tmp/doppler-dsn.err) || dsn_rc=$?
+          if [[ "$dsn_rc" -ne 0 ]]; then
+            echo "::error::could not READ SENTRY_DSN from Doppler prd_terraform (rc=${dsn_rc}) — fail-closed. doppler stderr: $(tr '\n' ' ' </tmp/doppler-dsn.err | tail -c 300)"
+            exit 1
+          fi
+          if [[ -z "$DSN" ]]; then
+            echo "::error::SENTRY_DSN is empty in Doppler prd_terraform. Asserted here even though git-data's cloud-init does not consume it YET: it is item 1 of the ADR-149 interlock-release checklist, and the release lands the emitter that reads it. An empty DSN at release time would produce a host that LOOKS instrumented and emits nothing."
+            exit 1
+          fi
+          echo "SENTRY_DSN present and non-empty (value not printed)."
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Terraform plan (scoped git-data birth) + inverted birth gate + stock preflight
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Purely ADDITIVE: no -replace anywhere, and NO [ack-destroy] bypass on this path.
+        #
+        # The eighteen -targets are the whole birth fan-out and MUST stay in lockstep with
+        # `def allow:` in tests/scripts/lib/git-data-host-birth-gate.sh and with
+        # GIT_DATA_BIRTH_TARGET_BASES in plugins/soleur/test/terraform-target-parity.test.ts.
+        # That test asserts all three are equal; this comment tells you why it will fail.
+        #
+        # Four of them are DOWNSTREAM of the server and so are NOT auto-pulled by
+        # -target's upstream closure — omitting any one is a distinct catastrophe:
+        #   hcloud_server_network.git_data      -> no private IP (#6416), unrepairable
+        #   hcloud_firewall_attachment.git_data -> host NAKED on public IPv4/IPv6
+        #   hcloud_volume_attachment.git_data*  -> store boots with its volume unmounted
+        # Five more would not be pulled by the server's own graph. Note this PR's two
+        # depends_on edits changed their DIRECTION even though it does not change the
+        # conclusion: the three doppler_secret SSH halves are now DOWNSTREAM of the server
+        # (issue AC4), and the LUKS passphrase pair is now UPSTREAM of it (P13). Neither is
+        # reached by `-target`'s upstream closure from the server alone, so both stay
+        # explicitly targeted.
+        run: |
+          # set +e so the rc=$? diagnostic below actually runs — GitHub runs `run:` under
+          # an inherited -e, which `set -uo pipefail` does not clear. Re-armed after.
+          set +e
+          set -uo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -target='hcloud_server.git_data' \
+              -target='hcloud_server_network.git_data' \
+              -target='hcloud_volume.git_data' \
+              -target='hcloud_volume.git_data_luks' \
+              -target='hcloud_volume_attachment.git_data' \
+              -target='hcloud_volume_attachment.git_data_luks' \
+              -target='hcloud_firewall.git_data' \
+              -target='hcloud_firewall_attachment.git_data' \
+              -target='doppler_config.git_data_prd' \
+              -target='doppler_service_token.git_data' \
+              -target='tls_private_key.git_transport' \
+              -target='tls_private_key.git_provision' \
+              -target='tls_private_key.git_remove' \
+              -target='doppler_secret.git_transport_ssh_private_key' \
+              -target='doppler_secret.git_provision_ssh_private_key' \
+              -target='doppler_secret.git_remove_ssh_private_key' \
+              -target='random_password.git_data_luks' \
+              -target='doppler_secret.git_data_luks_key' \
+              -var="ssh_key_path=${CI_SSH_PUB}"
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (git-data-host-create) failed (exit $rc)."
+            exit $rc
+          fi
+          set -e
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
+          # Sourced gates — the SAME bytes tests/scripts/test-git-data-host-birth-gate.sh
+          # exercises. An inline copy would be untestable and would break the parity test's
+          # job-to-gate pairing assertion.
+          # shellcheck source=tests/scripts/lib/plan-gate-preamble.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/plan-gate-preamble.sh"
+          # shellcheck source=tests/scripts/lib/git-data-host-birth-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-host-birth-gate.sh"
+          if ! git_data_host_birth_gate tfplan.json; then
+            echo "::error::git-data-host-create birth gate ABORTED: the plan is not the exact scoped birth of hcloud_server.git_data. The gate's message above names WHICH arm refused. Nothing has been created. NO [ack-destroy] bypass on this path — this gate does NOT borrow git-data-host-replace-gate.sh, whose contract is the opposite of this one."
+            grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
+            exit 1
+          fi
+          # STOCK preflight, sourced AFTER the birth gate. Order is load-bearing: the birth
+          # gate proves the plan IS the scoped birth, the preflight proves it is FEASIBLE.
+          # GATED rather than allowlisted, because terraform creates the two volumes BEFORE
+          # the server — so an unorderable server_type does not fail cleanly here, it
+          # strands two billed volumes attached to nothing.
+          #
+          # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
+          # OUTSIDE the `doppler run` wrapper above. Without this read the gate fails closed
+          # on EVERY dispatch — an outage, not a tripwire. stock-preflight-coverage.test.ts
+          # asserts this read exists per gated job.
+          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain) || HCLOUD_TOKEN=""
+          # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*), and
+          # this token carries destroy authority over the whole prod fleet.
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            echo "::error::git-data-host-create stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above for the repair path and #6463). Refusing to apply — terraform creates both volumes before the server, so the create would fail AFTER leaving two stranded billed volumes."
+            exit 1
+          fi
+          echo "birth gate + stock preflight PASSED. Plan summary:"
+          grep -E '^Plan:' tfplan.txt || true
+
+      - name: Terraform apply (git-data birth)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Apply the saved, guarded plan.
+        #
+        # There is deliberately NO post-apply create-proof loop. Any such check would read
+        # the same tfplan.json the gate already read, so it cannot add information — only
+        # the illusion of a second opinion. The requirement lives in the gate's REQUIREMENT
+        # ARM, which runs BEFORE apply, so a bad plan is refused rather than post-mortem'd.
+        run: |
+          set -euo pipefail
+          if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false tfplan; then
+            echo "::error::terraform apply (git-data-host-create) failed. The operation is additive, so nothing existing was destroyed; inspect the error, then re-dispatch — a re-dispatch is normally the correct remedy, and the gate's requirement arm accepts a no-op on every member the server's creation does not entail, so a partial apply does NOT wedge the retry."
+            echo "::error::TWO EXCEPTIONS. (1) If the SERVER landed and a later address did not, the retry plans ZERO server creates and the gate correctly refuses. Completing that host by hand does not fix it: cloud-init runcmd is once-per-instance and has already finished, and ADR-115 excludes git-data from the reboot primitive — that host must be REPLACED, not completed. (2) If the failure names doppler_config.git_data_prd already existing, the config was created outside terraform; a re-dispatch CANNOT succeed because the Doppler API returns 400 'Name is already in use' rather than adopting it. Run 'terraform import doppler_config.git_data_prd soleur.prd_git_data' first. See the runbook's partial-birth decision tree."
+            exit 1
+          fi
+          echo "birth applied. A green apply is NOT a green boot — and for THIS host there is currently no boot signal at all, which is why the interlock exists. See the summary below for what you now have and what you do not."
+
+      - name: Dispatch summary
+        if: always()
+        # `inputs.reason` is operator-supplied free text. It is routed through env: and
+        # referenced as a shell variable rather than interpolated into the run: body —
+        # the repo-wide convention recorded at the top of this file ("Untrusted-input
+        # handling: HEAD_MSG and REASON are routed through env vars"). Only someone who
+        # can already dispatch this workflow can set it, so this is posture rather than
+        # threat model, but the interpolated form is a workflow-injection sink and the
+        # convention exists so nobody has to re-derive that per step.
+        env:
+          REASON: ${{ inputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "## git-data-host-create"
+            echo ""
+            echo "- outcome: ${JOB_STATUS}"
+            echo "- reason: ${REASON:-n/a}"
+            echo ""
+            echo "### What a green run gives you — and what it does not"
+            echo ""
+            echo "It gives you: the eighteen-address fan-out CREATED IN TERRAFORM — the server, both volumes, both attachments, the private NIC and the deny-all firewall attachment."
+            echo ""
+            echo "It does NOT prove the host booted, that git-data-bootstrap.sh ran, or that the LUKS volume mounted. This host emits nothing off-host until #6982, which is the whole reason the route is interlocked — a green apply and a dark host are indistinguishable here."
+            echo ""
+            echo "It does NOT give you:"
+            echo "- a serving store — \`GIT_DATA_STORE_ENABLED\` is still absent from Doppler prd, so the feature stays dark;"
+            echo "- encryption of the live store — every wrapper still mounts the PLAINTEXT /mnt/git-data until the #5274 Phase-3 cutover;"
+            echo "- monitoring — \`betteruptime_heartbeat.git_data_prd\` is deliberately OUT of this job's -target set and ships paused;"
+            echo "- working transport keys in the running web container — the three private halves land in Doppler prd, but the container bakes its env at \`docker run\`, so they are inert until the next \`ci-deploy\` redeploy."
+            echo ""
+            echo "Next: knowledge-base/engineering/operations/runbooks/git-data-birth.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   entrypoint_audit:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'entrypoint-audit'
     runs-on: ubuntu-24.04
