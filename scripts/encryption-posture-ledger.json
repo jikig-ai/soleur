@@ -11,7 +11,7 @@
     "cloudflare_record", "cloudflare_ruleset", "cloudflare_zero_trust_access_application",
     "cloudflare_zero_trust_access_policy", "cloudflare_zero_trust_access_service_token",
     "cloudflare_zero_trust_tunnel_cloudflared", "cloudflare_zero_trust_tunnel_cloudflared_config",
-    "cloudflare_zone_dnssec", "cloudflare_zone_settings_override", "doppler_environment", "doppler_project",
+    "cloudflare_zone_dnssec", "cloudflare_zone_settings_override", "doppler_config", "doppler_environment", "doppler_project",
     "doppler_secret", "doppler_service_token", "github_actions_secret", "github_repository_environment",
     "github_repository_environment_deployment_policy",
     "github_repository_ruleset", "hcloud_firewall", "hcloud_firewall_attachment", "hcloud_network",

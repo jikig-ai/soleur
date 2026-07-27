@@ -74,7 +74,10 @@ real_skills="$(realpath "$skills_dir" 2>/dev/null || true)"
 # (c==1), never a `context_queries:` line in the body (e.g. a SKILL.md that
 # documents this very feature). The ~89 skills that declare nothing exit here,
 # paying no git/glob cost.
-awk 'FNR==1{c=0} /^---$/{c++; next} c==1' "$skillmd" 2>/dev/null | grep -q '^context_queries:' || exit 0
+# grep -c, not grep -q: -q exits on first match and SIGPIPEs the awk producer
+# under pipefail, which reads as "no context_queries" and silently exits 0 —
+# disabling the feature for the very skills that declare it (#6992).
+[ "$(awk 'FNR==1{c=0} /^---$/{c++; next} c==1' "$skillmd" 2>/dev/null | grep -c '^context_queries:' || true)" -gt 0 ] || exit 0
 
 # Parse context_queries (inline [a,b] + block form) — the full generate-kb-index
 # idiom, NOT a stricter block-only subset (which silently parses inline to empty).

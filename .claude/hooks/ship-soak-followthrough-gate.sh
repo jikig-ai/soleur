@@ -44,7 +44,7 @@ if command -v strip_command_bodies >/dev/null 2>&1; then
 else
   SCAN="$CMD"
 fi
-if ! echo "$SCAN" | grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)'; then
+if ! grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)' <<<"$SCAN"; then
   exit 0
 fi
 
@@ -69,7 +69,7 @@ PR_BODY=$(gh pr view "$PR_NUM" --json body --jq .body 2>/dev/null || true)
 [[ -n "$PR_BODY" ]] || exit 0
 
 # Operator-attestation override in the PR body (soak genuinely non-mechanizable).
-if printf '%s' "$PR_BODY" | grep -q 'gate-override: soak-followthrough-enrollment'; then
+if grep -q 'gate-override: soak-followthrough-enrollment' <<<"$PR_BODY"; then
   exit 0
 fi
 
@@ -106,8 +106,8 @@ for n in $REFS; do
   [[ "$labels" == "__ERR__" || "$body" == "__ERR__" ]] && continue
   enrolled=0
   if [[ ",$labels," == *",follow-through,"* ]] \
-     && printf '%s' "$body" | grep -q '<!-- soleur:followthrough' \
-     && printf '%s' "$body" | grep -qE 'earliest='; then
+     && grep -q '<!-- soleur:followthrough' <<<"$body" \
+     && grep -qE 'earliest=' <<<"$body"; then
     spath=$(printf '%s' "$body" | grep -oE 'script=scripts/followthroughs/[^[:space:]]+\.sh' | head -1 | sed 's/^script=//')
     [[ -n "$spath" && -f "$spath" ]] && enrolled=1
   fi

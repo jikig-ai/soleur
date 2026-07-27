@@ -144,6 +144,20 @@ v4→v5 schema drift already documented as pending.
 
 ## Consequences
 
+> **Amended by ADR-149 (#6977).** The pattern this ADR establishes has a second instance:
+> `git-data-host-create`. Three deltas were evidenced rather than inherited — the git-data
+> host is a SINGLETON (so its gate's `def allow:` takes no key argument), it has no
+> container image (so the digest pin, the amd64 assert and the coherence preflight have no
+> analogue and are omitted rather than faked), and it carries a LUKS boot dependency the
+> web host lacks.
+>
+> ADR-149 also records a case this ADR's shape does not cover: a host that emits NOTHING
+> off-host. ADR-145's readiness gates presuppose the host reports, so for git-data a green
+> apply and a dark boot are indistinguishable and the R2-R5 boot poll has no analogue.
+> That route is therefore held by a mechanical birth-readiness interlock until an emitter
+> ships (#6982).
+
+
 - Web-host birth is reachable from CI, closing the
   `hr-fresh-host-provisioning-reachable-from-terraform-apply` violation for web hosts.
 - Adding a key to `var.web_hosts` still HALTs every subsequent merge until the host is born —
