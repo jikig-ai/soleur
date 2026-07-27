@@ -16,7 +16,7 @@
 # Scope note: this asserts ZERO, not "no growth beyond a baseline". A baseline
 # allowlist that grandfathers existing entries asserts nothing on day one. The
 # hooks tree was taken to zero in #6992, so zero is the enforceable invariant.
-# scripts/ and plugins/ are NOT in scope yet — tracked separately.
+# scripts/ and plugins/ are NOT in scope yet — tracked in #7005.
 
 set -euo pipefail
 

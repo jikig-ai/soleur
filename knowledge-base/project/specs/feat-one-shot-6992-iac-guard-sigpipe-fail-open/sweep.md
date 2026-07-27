@@ -132,9 +132,14 @@ every other cluster where `q` is not the first flag letter. Two live sites in
 of this and were caught only by the drift guard, which uses
 `\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q`.
 
-Anyone re-running this sweep should use the wide form. The narrow form
-under-reports by roughly 2% in `.claude/hooks/` and by 1 and 5 sites in
-`scripts/` and `plugins/` respectively.
+Anyone re-running this sweep should use the wide form. Measured under-report of
+the narrow form against `origin/main`, same scope as the table above:
+
+| Scope | Wide | Narrow | Missed |
+|---|---|---|---|
+| `.claude/hooks/` | 59 | 55 | 4 |
+| `scripts/` | 52 | 51 | 1 |
+| `plugins/` | 35 | 32 | 3 |
 
 ### Not fixed here — tracked
 
@@ -159,7 +164,7 @@ Two adjacent classes found during review and deferred with the rest:
   at which point the gate silently skips itself. `constraint-gates.yml` and
   `ci.yml` both carry this shape.
 
-A tracking issue is filed at ship time covering all of these.
+Tracked in #7005.
 
 ## Vacuity warning for anyone re-running these measurements
 

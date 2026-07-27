@@ -46,7 +46,7 @@
 # a 5-minute cron interval. Age and size cannot separate a leaked artifact from
 # an old-but-precious one in a SHARED /tmp. The sound fix is per-run private
 # scratch roots reaped by their owner, which needs a migration this script
-# cannot perform; it is tracked separately.
+# cannot perform; it is tracked in #7004.
 #
 # Two constraints on any future attempt, both measured, so they are not
 # rediscovered:
