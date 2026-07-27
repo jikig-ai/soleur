@@ -21,6 +21,46 @@ status: draft
 > grew during authoring (19,931 → 20,582). Every figure carries its re-derivation command;
 > re-run rather than trust.
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-27 · **Reviewers:** DHH, Kieran, code-simplicity, architecture-strategist,
+spec-flow-analyzer, CTO (devex), plus a strong-model consult at plan Step 4.5.
+
+### What review changed, and why each change was accepted
+
+1. **The schema went from five fields to one** (`soleur-run.<pid>.XXXXXXXX`). Both the
+   simplification and correctness panels fired on the same scope, which the plan-review contract
+   says means *delete, don't fix*. Each cut dissolved a defect rather than defending one — the
+   `starttime` cut alone removed the `/proc` field-22 misparse (17 of 573 live processes), the
+   unfalsifiable AC that guarded it, and a cross-file helper that `tmpfs-guard.sh` could not source.
+2. **Primary liveness became a held fd, not a sampled seam.** Measured: `export` after `execve`
+   does not rewrite `/proc/<pid>/environ`, so a *forked subshell* is invisible to all five seams.
+   An inherited `exec 9>` holder fd survives `fork` **and** `execve` and is held continuously — it
+   removes the sampling race instead of adding a sixth sampler, and the existing `_INUSE_TOP` fd
+   walk already sees it with no new code.
+3. **Quarantine was adopted after being rejected.** The rejection ("a rename frees no tmpfs space")
+   was the wrong frame: an `rm -rf` trap is indistinguishable from correct cleanup to the residue
+   probe, so without quarantine the plan's own guards are blind to its stated worst case.
+4. **Five defects found in the code *around* the new arm**, none visible from the new code alone —
+   most seriously that Reaper 2 has no name filter and would delete the roots Reaper 3 spares,
+   which falsified the central safety claim outright (Phase 2X).
+5. **Three premises of mine were proven false** and corrected in place: ADR-129 was never amended
+   by #6986; `scratch-root.test.sh` *is* already runner-covered; the census ratchet cannot move.
+6. **One advisory claim was refuted by my own measurement** and not adopted — the backlog is
+   677 MB allocated (34% of in-use), not the "3.1 MB / 2.6%" reported.
+
+### Gate results (deepen-plan Phases 4.5–4.10)
+
+| Gate | Result |
+|---|---|
+| 4.5 network-outage | **Skip** — 4 keyword hits, all `ssh` as a TMPDIR-inheritance boundary or the plan's own "no ssh in any verification path". No connectivity symptom is diagnosed |
+| 4.55 downtime/cutover | **Skip** — no serving surface, no host reboot, no lock-taking DDL, no router change |
+| 4.6 user-brand impact | **PASS** — section present, 26 body lines, threshold `single-user incident`, no placeholders |
+| 4.7 observability | **PASS** — all 5 fields present and non-empty; `discoverability_test` is ssh-free |
+| 4.8 PAT-shaped variable | **PASS** — no matches |
+| 4.9 UI wireframe | **Skip** — 0 UI-surface paths in Files to Create/Edit |
+| 4.10 encryption posture | **Skip** — no `.tf`, migration, cloud-init, or compose file; no persistent store or cross-component connection (the capped breadcrumb log sits beside the existing alarm file on the operator's own machine) |
+
 ## Overview
 
 `scripts/tmpfs-guard.sh` detects a count-shaped `/tmp` leak every five minutes and reclaims
