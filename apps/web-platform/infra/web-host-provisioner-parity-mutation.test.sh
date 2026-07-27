@@ -24,6 +24,11 @@
 # SIGPIPE-on-early-match fails OPEN under `set -o pipefail` and would make every negative
 # case pass vacuously.
 
+# shellcheck disable=SC2016
+# ^ Every mutator below is a PYTHON program passed as a single-quoted bash string. Shell
+#   expansion inside them would be a bug, not a feature: `$` and backticks belong to the
+#   python source. The disable is file-scoped because all 12 mutators share the shape.
+
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)" || exit 2
@@ -91,8 +96,7 @@ restore
 if run_guard; then
   ok "baseline: guard is GREEN against the unmutated tree"
 else
-  no "baseline: guard is RED against the UNMUTATED tree -- every 'RED' below would be "\
-"meaningless. Fix the guard before trusting this battery."
+  no "baseline: guard is RED against the UNMUTATED tree -- every 'RED' below is meaningless. Fix the guard first."
   echo "=== provisioner-parity mutation: $pass passed, $fail failed ===" >&2
   exit 1
 fi
@@ -240,8 +244,7 @@ FLOOR=11
 if [[ "$mutations_run" -ge "$FLOOR" ]]; then
   ok "battery ran $mutations_run landed mutations (floor $FLOOR)"
 else
-  no "battery ran only $mutations_run landed mutations (floor $FLOOR) -- anchors have "\
-"drifted and the untested invariants are unproven"
+  no "battery ran only $mutations_run landed mutations (floor $FLOOR) -- anchors drifted; untested invariants are unproven"
 fi
 
 echo "=== provisioner-parity mutation: $pass passed, $fail failed ==="
