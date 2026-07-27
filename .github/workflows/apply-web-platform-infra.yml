@@ -3839,7 +3839,7 @@ jobs:
     #
     # INTERLOCKED — this job REFUSES TO PLAN today, by design. cloud-init-git-data.yml emits
     # nothing off-host (measured 0 for sentry_dsn/sentry/vector/betterstack/journald/
-    # heartbeat against the web host's 9/-/14/2/7/4), and nothing in its boot path fails
+    # heartbeat against the web host's 9/-/14/2/7/1 (grep -ci)), and nothing in its boot path fails
     # closed. So a green apply and a dark host are indistinguishable, and ADR-145's readiness
     # gates have no analogue here because there is nothing to poll. #6982 ships the emitter
     # and releases the interlock. See ADR-149 for the full release checklist.
@@ -4002,8 +4002,12 @@ jobs:
         #   hcloud_server_network.git_data      -> no private IP (#6416), unrepairable
         #   hcloud_firewall_attachment.git_data -> host NAKED on public IPv4/IPv6
         #   hcloud_volume_attachment.git_data*  -> store boots with its volume unmounted
-        # Three more are SIBLINGS terraform would never pull: the doppler_secret halves of
-        # the SSH keys (issue AC4) and the LUKS passphrase pair (P12).
+        # Five more would not be pulled by the server's own graph. Note this PR's two
+        # depends_on edits changed their DIRECTION even though it does not change the
+        # conclusion: the three doppler_secret SSH halves are now DOWNSTREAM of the server
+        # (issue AC4), and the LUKS passphrase pair is now UPSTREAM of it (P13). Neither is
+        # reached by `-target`'s upstream closure from the server alone, so both stay
+        # explicitly targeted.
         run: |
           # set +e so the rc=$? diagnostic below actually runs — GitHub runs `run:` under
           # an inherited -e, which `set -uo pipefail` does not clear. Re-armed after.
@@ -4119,7 +4123,9 @@ jobs:
             echo ""
             echo "### What a green run gives you — and what it does not"
             echo ""
-            echo "It gives you: an EMPTY bare-repo store on a host that has never existed before."
+            echo "It gives you: the eighteen-address fan-out CREATED IN TERRAFORM — the server, both volumes, both attachments, the private NIC and the deny-all firewall attachment."
+            echo ""
+            echo "It does NOT prove the host booted, that git-data-bootstrap.sh ran, or that the LUKS volume mounted. This host emits nothing off-host until #6982, which is the whole reason the route is interlocked — a green apply and a dark host are indistinguishable here."
             echo ""
             echo "It does NOT give you:"
             echo "- a serving store — \`GIT_DATA_STORE_ENABLED\` is still absent from Doppler prd, so the feature stays dark;"

@@ -67,7 +67,7 @@ not providing.
 
 `cloud-init-git-data.yml` emits **nothing** off-host. Measured against the web host's
 cloud-init: `sentry_dsn` 0/9, `vector` 0/14, `betterstack` 0/2, `journald` 0/7,
-`heartbeat` 0/4, `trap on_err` 0/1.
+`heartbeat` 0/1, `trap on_err` 0/1.
 
 Combined with the fact that **nothing in the boot path fails closed** — the Doppler install
 `runcmd` has no `set -e`, and the LUKS block's `set -euo pipefail` is line 1 of the heredoc
@@ -102,18 +102,47 @@ repository. An earlier draft said "impossible"; that overstated it.
    the gate and changes nothing observable.
 3. Add any new address the emitter introduces to **all three** of: the `-target` set, the
    gate's `def allow:`, and `GIT_DATA_BIRTH_TARGET_BASES`.
-4. Provide a post-apply signal to replace ADR-145's dropped R2–R5 boot poll.
-5. Clear the DO-NOT-DISPATCH banner in `git-data-birth.md`.
+4. Provide a post-apply signal to replace ADR-145's dropped R2–R5 boot poll. Note the
+   partial signal that already exists: `web-git-data-probe.service` runs on the web host
+   and ships to Better Stack via Vector journald, emitting
+   `SUPPRESS ping: 10.0.1.20:22 UNREACHABLE` today. On a successful birth those lines stop.
+   It observes reachability, not boot correctness, so it is a floor to build on rather than
+   the signal itself.
+5. **Produce `GIT_DATA_SSH_HOST`** (`doppler_secret.git_data_ssh_host`, cut from #6977 as a
+   feasibility regression — see *Alternatives*). Without it `resolveGitDataSshHost()` throws
+   in production on every account deletion, so the birth converts a dormant Art. 17 path
+   into a 100 %-false-alarm one. Residual 2 below has the measurement.
+6. Correct the `hcloud_firewall_attachment.git_data` entailment rule if it has not already
+   been corrected — see *Requirement arm split by entailment*.
+7. Clear the DO-NOT-DISPATCH banner in `git-data-birth.md`.
 
-**The gate mechanically enforces only item 1.** Items 2–5 are not machine-checked, and the
-gate's own success message says so. A gate believed to cover more than it does is worse
+**The gate mechanically enforces only the THREADING half of item 1** — that `sentry_dsn`
+reaches non-comment template text, which `templatefile` makes impossible to fake. It cannot
+verify the emitter actually *emits*: a non-comment line that merely references the variable
+releases it. Items 2–7 are not machine-checked at all, and the gate's own success message
+says so. A gate believed to cover more than it does is worse
 than one whose scope is written down.
 
 ### Requirement arm split by entailment
 
-The gate demands `creates == 1` for exactly the four addresses that reference
-`hcloud_server.git_data.id` (the NIC, both volume attachments, the firewall attachment),
-and mere **presence** (`create` ∨ `no-op`) for the other thirteen.
+The gate demands `creates == 1` for the **three** addresses whose STATE IDENTITY is the
+server (the NIC and both volume attachments), an **outcome** assertion for the firewall
+attachment, and mere **presence** (`create` ∨ `no-op`) for the other thirteen.
+
+**`.id`-reference is not the property that governs entailment — state identity is**, and
+the two diverge on exactly one member. `hcloud_firewall_attachment`'s terraform ID is the
+FIREWALL's id (provider v1.63.0, `internal/firewall/attachment_resource.go`), and its read
+evicts only when the *firewall* is nil. So when the server is destroyed outside terraform —
+the exact scenario the TOO LOOSE case below describes — the attachment survives refresh
+with `server_ids` emptied and the re-birth plans an in-place **update**, not a create.
+Demanding a create there aborts the re-birth with a wrong diagnosis and wedges it, which is
+the TOO STRICT failure arrived at from the other direction. It therefore asserts the
+outcome (`server_ids` ends at length 1, bound to this plan's own firewall), which holds on
+both a first birth and a re-birth. The web precedent states this reasoning for its own
+fleet attachment; an earlier draft of this ADR dropped it.
+
+`depends_on` is an ordering edge and entails nothing — only `.id` references qualify, and
+then only when state identity follows.
 
 This is the most consequential contract in the design, because getting it wrong breaks the
 gate in both directions:
@@ -170,8 +199,27 @@ rather than adopting, so a hand-created config makes the birth apply fail and th
    attach; it never proves the guest *configured* it. git-data is barred from ADR-115's
    remedy (the reboot primitive), so the only repair for a mis-converged guest is
    replacement.
-2. **`depends_on` anchors on existence, not reachability.** A birth where the server lands
-   but the NIC does not still arms the remove key against an unroutable `10.0.1.20`.
+2. **The Art. 17 false-alarm is UNCONDITIONAL after any birth, not contingent on a partial
+   one.** An earlier draft of this residual said "a birth where the server lands but the NIC
+   does not still arms the remove key against an unroutable `10.0.1.20`". That is wrong for
+   production, and the correction matters because it changes who must act.
+
+   `resolveGitDataSshHost()` returns the `10.0.1.20` default **only when
+   `NODE_ENV !== "production"`**; in prd it throws. `GIT_DATA_SSH_HOST` has **no producer
+   anywhere in the repo** — `doppler_secret.git_data_ssh_host` was cut to #6982 (see
+   *Alternatives*). So after **any** successful birth plus the next `ci-deploy`, the remove
+   key is present, the arming switch is on, and **every** account deletion throws and files
+   a false "Art. 17 erasure failed" Sentry event — deterministically, whether or not the NIC
+   landed.
+
+   The reasoning that hid this was in the DC-3 disposition: *"`depends_on` guarantees it can
+   never land without the server."* True, and it is the wrong direction — `depends_on`
+   guarantees the key **co-lands with** the server, and co-landing is precisely the harmful
+   state. "Unreachable today" was true; "unreachable once this route is used" was not.
+
+   Consequence: **`GIT_DATA_SSH_HOST` must be produced before the first dispatch**, and it
+   is item 5 of the release checklist below. It was absent from the checklist entirely,
+   so #6982 could have satisfied every listed item and still shipped this.
 3. **Empty-store Art. 17 silent success.** Post-birth and pre-cutover the store is empty and
    `git-data-remove.sh` is idempotent, so an erasure request exits 0 and records **success**
    for a repo the store never held. Closing this needs a birth-completion marker the app can

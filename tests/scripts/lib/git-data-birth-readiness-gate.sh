@@ -3,8 +3,12 @@
 #
 # WHAT THIS REFUSES, AND WHY IT IS NOT PROSE. `cloud-init-git-data.yml` emits NOTHING
 # off-host. Measured on the file as it stands: 0 occurrences of sentry_dsn, sentry,
-# vector, betterstack, journald, heartbeat, STAGE=, trap on_err. The web host's
-# cloud-init scores 9 / — / 14 / 2 / 7 / 4 / 1 on the same tokens.
+# vector, betterstack, journald, heartbeat. The web host's cloud-init scores
+# 9 / 17 / 14 / 2 / 7 / 1 on the same six tokens, counted with `grep -ci`.
+#
+# State the counting convention, and count only tokens you list: an earlier revision named
+# eight tokens against seven values (so the mapping was undeterminable) and reported
+# heartbeat as 4, which is 1.
 #
 # The consequence is the whole reason this file exists: A GREEN `terraform apply` AND A
 # DARK HOST ARE INDISTINGUISHABLE FOR GIT-DATA. ADR-145's readiness gates presuppose the
@@ -42,9 +46,15 @@
 #      CONSTRUCTION today, so wiring the sentinel without this is theatre;
 #   3. any new address the emitter introduces is added to the -target set, the gate's
 #      allow-set and the parity const, all three;
-#   4. a post-apply signal exists to replace ADR-145's dropped R2-R5 boot poll.
+#   4. a post-apply signal exists to replace ADR-145's dropped R2-R5 boot poll;
+#   5. GIT_DATA_SSH_HOST is produced (it has no producer today, and resolveGitDataSshHost()
+#      THROWS in production without it — so a birth turns Art. 17 erasure into a 100 %
+#      false-alarm path);
+#   6. the firewall-attachment entailment correction is in place;
+#   7. the DO-NOT-DISPATCH banner in git-data-birth.md is cleared.
 #
-# This gate mechanically enforces only (1). It cannot check (2)-(4), and saying so here is
+# This gate mechanically enforces only the THREADING half of (1) — a non-comment line that
+# merely references the variable releases it. It cannot check (2)-(7), and saying so here is
 # deliberate: a gate that is believed to cover more than it does is worse than one whose
 # scope is written down.
 #
@@ -141,6 +151,6 @@ HOLD
     return 1
   fi
 
-  echo "git_data_birth_readiness_gate: RELEASED — ${hits} non-comment \${sentry_dsn} interpolation(s) found in ${cloud_init}; the host has an off-host emitter wired. NOTE: this gate enforces only item 1 of the ADR-149 release checklist. Items 2-4 (Doppler scope reachability, -target/allow-set/const three-way registration, post-apply signal) are NOT machine-checked here."
+  echo "git_data_birth_readiness_gate: RELEASED — ${hits} non-comment \${sentry_dsn} interpolation(s) found in ${cloud_init}; the host has an off-host emitter wired. NOTE: this gate enforces only the THREADING half of item 1 of the ADR-149 release checklist — a non-comment line that merely references the variable satisfies it. Items 2-7 (Doppler scope reachability, three-way address registration, post-apply signal, GIT_DATA_SSH_HOST production, the firewall-attachment entailment correction, and clearing the runbook banner) are NOT machine-checked here."
   return 0
 }

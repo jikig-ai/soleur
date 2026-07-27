@@ -1,11 +1,14 @@
 # shellcheck shell=bash
 # Shared fail-closed preamble for tfplan-grading gates (#6977, cto F1).
 #
-# WHY THIS FILE EXISTS. Seven gates in tests/scripts/lib/ grade a `terraform show -json`
+# WHY THIS FILE EXISTS. NINE gates in tests/scripts/lib/ grade a `terraform show -json`
 # document before authorising an apply. Only TWO of them — web-host-birth-gate.sh and
 # web-host-replace-gate.sh — validate that the document is readable and that every entry
-# is classifiable before any counter reads one. The other five, INCLUDING
-# git-data-host-replace-gate.sh, carry neither check. That is not a style difference; it
+# is classifiable before any counter reads one. The other SEVEN, INCLUDING
+# git-data-host-replace-gate.sh, carry neither check.
+#
+# Re-derive rather than trusting these numbers (an earlier revision said seven and five):
+#   grep -l 'local plan_json' tests/scripts/lib/*gate*.sh | xargs grep -L plan_gate_assert_readable That is not a style difference; it
 # is a two-tier safety floor produced by copy-the-sibling, and the lower tier fails OPEN.
 #
 # THE THREE FAILURES THIS PREVENTS, each measured on a real gate:

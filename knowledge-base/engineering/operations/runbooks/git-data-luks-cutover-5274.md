@@ -23,7 +23,14 @@ you never SSH a host to *check* whether it worked — you read Sentry/Better Sta
   name = `prd_git_data`) — the LUKS boot key + its read-only service token live there
   so the git-data host carries a one-secret token, not the full-prd token (security
   MEDIUM / CTO ruling). `terraform apply` writes `GIT_DATA_LUKS_KEY` + mints the token
-  into it; the empty config must be created once via the dashboard first (the Doppler
+  **SUPERSEDED 2026-07-27 by #6977 — do NOT hand-create this config.** It is now
+  `doppler_config.git_data_prd`, provisioned by the gated `git-data-host-create`
+  dispatch. The parenthetical that stood here ("the Doppler provider does not create
+  configs") is false: `doppler_config` is first-class in the pinned provider. Creating
+  it by hand makes the birth apply FAIL with `400 {"messages":["Name is already in
+  use"]}` — measured — and recovery is `terraform import doppler_config.git_data_prd
+  soleur.prd_git_data`, not a re-dispatch. Before the birth this config must be
+  ABSENT; by cutover time it already exists.
   provider does not create configs — same constraint as `prd_kb_drift_walker`).
 - **Proxy activation (when the owner relay goes live):** whenever `SOLEUR_PROXY_BIND`
   is set on a host (the private-net proxy listener), `SOLEUR_PROXY_PEER_ALLOWLIST` MUST

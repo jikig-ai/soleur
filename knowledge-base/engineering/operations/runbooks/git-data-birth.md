@@ -157,10 +157,26 @@ runbook by design (`hr-no-ssh-fallback-in-runbooks`).
 - **The step summary** restates what you have and what you do not.
 - **Hetzner** — the server, both volumes and both attachments are visible in the console.
 
-**Be honest about what you cannot verify yet.** Until #6982 lands there is no boot signal
-at all: no Sentry emit, no log shipper, no heartbeat. A green apply means Terraform created
-the resources; it does not mean the host booted correctly. That gap is the entire reason
-the interlock exists, and it closes when #6982 does.
+- **The web host's reachability probe** — a real, no-SSH, post-apply signal that already
+  exists:
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m --grep git-data-probe
+  ```
+
+  `web-git-data-probe.service` runs on the web host and ships to Better Stack via Vector
+  journald. **Before the birth** every line reads
+  `[git-data-probe] SUPPRESS ping: 10.0.1.20:22 UNREACHABLE over the private net`. **After a
+  successful birth** those stop and `cannot ping` lines begin (the heartbeat URL is
+  deliberately unwired — see above). Continued `SUPPRESS` lines five minutes post-apply mean
+  the host is dark or the NIC never attached.
+
+**Be honest about what you cannot verify yet.** The probe above observes *reachability*, not
+*boot correctness*: it tells you something answers on `10.0.1.20:22`, not that the bootstrap
+ran or that the LUKS volume mounted. **The git-data host itself** emits nothing — no Sentry
+emit, no log shipper, no heartbeat of its own — until #6982. A green apply means Terraform
+created the resources; it does not mean the host booted correctly. That gap is the entire
+reason the interlock exists, and it closes when #6982 does.
 
 ## References
 
