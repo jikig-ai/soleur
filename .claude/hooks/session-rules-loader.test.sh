@@ -566,7 +566,9 @@ T25=$(mktemp -d); setup_repo "$T25" mixed          # mixed → all three classes
 out25=$(invoke_hook "$T25")
 ctx25=$(printf '%s' "$out25" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
 stamp25=$(printf '%s' "$ctx25" | head -1)
-den25=$(printf '%s' "$stamp25" | grep -oE '\(([0-9]+) of ([0-9]+) rules\)' | grep -oE 'of [0-9]+' | grep -oE '[0-9]+')
+# Tolerate trailing stamp fields (byte figure, notes); `|| true` so a
+# non-match reports a clear FAIL instead of aborting the suite under `set -e`.
+den25=$(printf '%s' "$stamp25" | sed -nE 's/.*\([0-9]+ of ([0-9]+) rules.*/\1/p' || true)
 # Independently re-derive the body count from the sidecars only.
 bodies25=$(grep -hE '^- .*\[id: ' "$T25"/AGENTS.core.md "$T25"/AGENTS.docs.md "$T25"/AGENTS.rest.md | wc -l | tr -d ' ')
 if [[ "$den25" == "$bodies25" ]]; then
@@ -582,8 +584,11 @@ fi
 # `AGENTS*.md` glob spanning the index plus its expansion.
 
 TOTAL=$((TOTAL+1))
-if grep -q 'AGENTS\*\.md' "$HOOK"; then
-  echo "FAIL: loader still globs AGENTS*.md (double-counts index + bodies) — $(grep -n 'AGENTS\*\.md' "$HOOK" | head -2 | tr '\n' '~')"
+# Anchor on CODE, not the bare token: a body-grep sees comments too, and the
+# loader legitimately NAMES the retired glob when explaining why it is gone
+# (cq-assert-anchor-not-bare-token). Strip whole-line comments first.
+if grep -vE '^[[:space:]]*#' "$HOOK" | grep -q 'AGENTS\*\.md'; then
+  echo "FAIL: loader code still globs the index+bodies — $(grep -vE '^[[:space:]]*#' "$HOOK" | grep -n 'AGENTS\*\.md' | head -2 | tr '\n' '~')"
   FAIL=$((FAIL+1))
 else
   echo "PASS: loader carries no AGENTS*.md glob"
