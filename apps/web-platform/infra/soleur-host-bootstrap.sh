@@ -420,6 +420,14 @@ cat > /usr/local/bin/soleur-doppler-download <<'DDLEOF'
 # here goes to stderr or to the per-stage detail files; a stray stdout write would corrupt the
 # env file and misattribute the resulting fatal to stage=docker_run. Never `2>&1`, never `&>`.
 set -u
+# (#6981) Second layer, independent of the caller. cloud-init's runcmd now exports HOME, but this
+# helper is a baked binary on PATH that anything may invoke, and the Doppler CLI hard-fails
+# ("Unable to determine home directory") when HOME is unset — BEFORE it reads DOPPLER_CONFIG_DIR,
+# so the config dir the caller sets is not a substitute. `:=` assigns only when unset or empty, so
+# a caller that already has a correct HOME (systemd supplies one to any unit with `User=`, e.g.
+# webhook.service as `deploy`) keeps it; only the no-HOME root context gets the /root default.
+: "${HOME:=/root}"
+export HOME
 OUT="$1"
 DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail.d}"
 ATTEMPTS="${SOLEUR_DOPPLER_ATTEMPTS:-3}"
@@ -815,6 +823,16 @@ cat > /usr/local/bin/soleur-fresh-boot-ready <<'FRESHREADYEOF'
 # OBSERVABILITY marker, NOT a gate: always exits 0 (the app is already up; a poweroff here is worse
 # than a loud ready=0). Absence past SOLEUR_FRESH_BOOT_WINDOW_SECONDS = the host booted dark.
 set -u
+# (#6981) Same two-line guard as soleur-doppler-download, for the same reason: this helper is
+# chmod 0755 on PATH and calls `doppler secrets get BETTERSTACK_LOGS_TOKEN` below, and the Doppler
+# CLI hard-fails ("Unable to determine home directory") when HOME is unset — BEFORE it reads
+# DOPPLER_CONFIG_DIR. Its only current caller is inside runcmd, which now exports HOME, so this is
+# belt-and-braces today; it stops the helper being silently non-self-sufficient for the next caller.
+# `:=` assigns only when unset or empty, so a caller with a correct HOME (systemd supplies one to
+# any unit declaring `User=`) keeps it. The `export` is the load-bearing half — `:=` alone creates a
+# SHELL variable, which a child `doppler` process does not inherit.
+: "${HOME:=/root}"
+export HOME
 # Absence-detection deadline (seconds). Derivation — worst-case bounded first-boot span:
 # soleur-wait-ready x2 (webhook :9000 + cloudflared) 120s + soleur-wait-nic <=120s + `timeout 180`
 # vector install 180s + image-pull budget (web+app+plugin-seed) ~300s + apt/docker install ~120s +

@@ -1015,5 +1015,163 @@ FIXEOF
   fi
 fi
 
+# ───────────────────────── (C) $HOME is defined for the CLI (#6981) ─────────────────────────
+#
+# soleur-web-2 booted dark TWICE at stage=doppler_download with "Doppler Error: $HOME is not
+# defined". cloud-final.service runs runcmd as root and declares no `User=`; systemd synthesises
+# $HOME only for units that DO declare one, so runcmd inherits HOME unset. The CLI resolves its
+# home directory BEFORE reading DOPPLER_CONFIG_DIR, so the config dir cloud-init already sets is
+# NOT a substitute (verified against the pinned 3.75.3).
+#
+# Every assertion here strips comments first: the production code this guards carries comments
+# that discuss HOME at length, so a bare token match would be satisfied by prose alone
+# (cq-assert-anchor-not-bare-token).
+
+# TEXTUAL PRESENCE IS NOT EXECUTED CONTEXT. A file-wide grep for the export is satisfied by the
+# line sitting in `bootcmd:` (a SEPARATE cloud-init process), in a `write_files:` payload, or
+# inside a heredoc BODY — all three keep the assertion green while the runcmd shell never runs it.
+# All three were mutation-proven green against the first version of this block. So scope the search
+# to the runcmd REGION, and separately forbid the line above it.
+CI_CODE="$(grep -vE '^[[:space:]]*#' "$CI")"
+# Heredoc BODIES are data, not executed shell. runcmd authors files with `cat > X <<'EOF' … EOF`
+# all over, so `export HOME=/root` parked inside one is textually in the runcmd region and
+# executes never. Mutation-proven: without this elision, wrapping the export in a heredoc left
+# the suite fully green. Elide body lines between a `<<TAG` / `<<'TAG'` / `<<-TAG` opener and its
+# terminator before any search.
+_elide_heredocs() {
+  awk '
+    tag != "" { if ($0 ~ ("^[ \t]*" tag "[ \t]*$")) { tag = "" } ; next }
+    {
+      line = $0
+      if (match(line, /<<-?[ \t]*'"'"'?"?[A-Za-z_][A-Za-z0-9_]*'"'"'?"?/)) {
+        t = substr(line, RSTART, RLENGTH)
+        gsub(/^<<-?[ \t]*/, "", t); gsub(/['"'"'"]/, "", t)
+        tag = t
+      }
+      print line
+    }'
+}
+CI_RUNCMD="$(awk '/^runcmd:/{f=1} f' <<<"$CI_CODE" | _elide_heredocs)"
+CI_PRERUNCMD="$(awk '/^runcmd:/{exit} {print}' <<<"$CI_CODE" | _elide_heredocs)"
+
+# `([[:space:]]+#.*)?` — a trailing inline comment on the export line is legitimate and must not
+# red the suite (it did, before this arm was widened); the `$` anchor still rejects `export
+# HOME=/nonexistent` and any trailing command.
+EXPORT_RE='^[[:space:]]*export HOME=/root([[:space:]]+#.*)?[[:space:]]*$'
+
+if grep -qE "$EXPORT_RE" <<<"$CI_RUNCMD"; then
+  ok "AC-HOME1: runcmd exports HOME on a non-comment line"
+else
+  no "AC-HOME1: runcmd must 'export HOME=/root' — without it every doppler call dies 'Unable to determine home directory'"
+fi
+
+if grep -qE "$EXPORT_RE" <<<"$CI_PRERUNCMD"; then
+  no "AC-HOME1b: 'export HOME=/root' appears BEFORE runcmd: — bootcmd and write_files run in a different process, so it would not reach the runcmd shell"
+else
+  ok "AC-HOME1b: the export is not misplaced above runcmd:"
+fi
+
+# ORDERING is load-bearing: an export placed after the first doppler call leaves that call broken
+# while the grep above still passes. `\bdoppler\b` not `doppler secrets` — the sibling cloud-inits
+# use `doppler run`/`doppler configure`, and a narrow verb list would let a new early call site
+# slip above the export while this arm still reported correct ordering.
+home_ln=$(grep -nE "$EXPORT_RE" <<<"$CI_RUNCMD" | head -1 | cut -d: -f1)
+dop_ln=$(grep -nE '\bdoppler\b|soleur-doppler-download' <<<"$CI_RUNCMD" | head -1 | cut -d: -f1)
+if [ -n "$home_ln" ] && [ -n "$dop_ln" ] && [ "$home_ln" -lt "$dop_ln" ]; then
+  ok "AC-HOME2: the export precedes the first doppler invocation (line $home_ln < $dop_ln)"
+else
+  no "AC-HOME2: 'export HOME' must precede the first doppler call (export=${home_ln:-none} first-doppler=${dop_ln:-none})"
+fi
+
+# Second layer: the baked helpers are on PATH and any caller may invoke them, so they must not
+# depend on cloud-init having exported HOME first. Read into a variable rather than
+# `producer | grep -q` — this file's header forbids that shape (SIGPIPE early-match fail-open).
+FRESHREADY="$(awk "/cat > \/usr\/local\/bin\/soleur-fresh-boot-ready <<'FRESHREADYEOF'/{f=1;next} f&&/^FRESHREADYEOF\$/{f=0} f{print}" "$BOOT")"
+for _h in "soleur-doppler-download:$HELPER" "soleur-fresh-boot-ready:$FRESHREADY"; do
+  _name="${_h%%:*}"; _body="${_h#*:}"
+  _code="$(grep -vE '^[[:space:]]*#' <<<"$_body")"
+  if [ -z "$_body" ]; then
+    no "AC-HOME3: could not extract the ${_name} heredoc body — the assertions below would be vacuous"
+    continue
+  fi
+  if grep -qF ': "${HOME:=/root}"' <<<"$_code"; then
+    ok "AC-HOME3: ${_name} defaults HOME independently of its caller"
+  else
+    no "AC-HOME3: ${_name} must default HOME (: \"\${HOME:=/root}\") — it is on PATH and invocable outside runcmd"
+  fi
+  # THE LOAD-BEARING HALF, and the one the first version of this block left uncovered: `:=` creates
+  # a SHELL variable. Measured: `env -u HOME sh -c ': "${HOME:=/root}"; env | grep ^HOME='` prints
+  # NOTHING, so the child `doppler` still dies. Deleting the `export` left the whole suite green.
+  _assign_ln=$(grep -nF ': "${HOME:=/root}"' <<<"$_code" | head -1 | cut -d: -f1)
+  _export_ln=$(grep -nE '^[[:space:]]*export HOME[[:space:]]*$' <<<"$_code" | head -1 | cut -d: -f1)
+  if [ -n "$_assign_ln" ] && [ -n "$_export_ln" ] && [ "$_export_ln" -gt "$_assign_ln" ]; then
+    ok "AC-HOME3b: ${_name} exports HOME after defaulting it (a bare := would not reach the doppler child)"
+  else
+    no "AC-HOME3b: ${_name} must 'export HOME' AFTER the := default (assign=${_assign_ln:-none} export=${_export_ln:-none}) — := alone sets a shell variable the child process never sees"
+  fi
+done
+
+# The DELIBERATE omission, pinned so a future 'consistency' edit cannot silently break deploys:
+# webhook.service declares User=deploy, so systemd already gives it the right per-user HOME.
+# Writing HOME into its EnvironmentFile would point `deploy` at a 0700 root-owned directory it
+# cannot read (that DAC mode is the barrier; ProtectHome=read-only additionally forbids WRITING
+# it — it does not make it unreadable). This matters doubly because runcmd sources that same file
+# under `set -a` immediately before the doppler_download call, so a HOME= there would also CLOBBER
+# the root export above.
+#
+# Anchor on the REDIRECT TARGET, not the `- printf ` YAML shape: reflowing the write to a `- |`
+# block or the `( umask 0137 && printf … )` form used in cloud-init-inngest.yml drops the old
+# anchor to zero matches, and a zero-match negative assertion passes forever. Both reflows were
+# mutation-proven to defeat the previous version of this arm.
+ENVFILE_WRITES="$(grep -E '>>?[[:space:]]*/etc/default/webhook-deploy' <<<"$CI_CODE")"
+if grep -q 'DOPPLER_TOKEN=' <<<"$ENVFILE_WRITES"; then
+  ok "AC-HOME4a: the webhook-EnvironmentFile write anchor is live (non-vacuity control)"
+else
+  no "AC-HOME4a: found no write to /etc/default/webhook-deploy carrying DOPPLER_TOKEN — the AC-HOME4 assertion below is VACUOUS, re-anchor it"
+fi
+if grep -q 'HOME=' <<<"$ENVFILE_WRITES"; then
+  no "AC-HOME4: /etc/default/webhook-deploy must NOT set HOME — it is the EnvironmentFile for two User=deploy units (webhook, vector); /root is 0700 root-owned and unreadable to that user, and it would clobber the runcmd export for root"
+else
+  ok "AC-HOME4: the webhook EnvironmentFile leaves HOME to systemd's per-user value"
+fi
+
+# The OTHER route to the same harm, which AC-HOME4 cannot see: setting it directly in the unit body.
+WEBHOOK_UNIT="$(awk '/- path: \/etc\/systemd\/system\/webhook.service/{f=1;next} f&&/^  - path:/{f=0} f' "$CI")"
+if [ -z "$WEBHOOK_UNIT" ]; then
+  no "AC-HOME5: could not extract the webhook.service unit body — the assertion below would be vacuous"
+elif grep -qE '^[[:space:]]*Environment=.*HOME=' <<<"$WEBHOOK_UNIT"; then
+  no "AC-HOME5: webhook.service must NOT set Environment=HOME — it declares User=deploy and systemd already supplies the correct per-user HOME"
+else
+  ok "AC-HOME5: webhook.service leaves HOME to systemd's User=deploy value"
+fi
+
+# AC-HOME6 — the CLASS, not just this instance. #6981 is the FOURTH occurrence of "root context
+# runs doppler with no resolvable HOME" (after #4116 inngest heartbeat, #6196 registry+git-data
+# cloud-inits, #6669 web-1 probe units). Each was fixed per-unit and guarded per-unit, so the one
+# context nobody opted into — cloud-init runcmd — is exactly where it bit again. This is the
+# opt-out sweep: every unit that runs doppler must get HOME from SOMEWHERE, either systemd
+# (User= makes systemd synthesise it) or an explicit Environment=HOME=/root.
+_dop_units=0; _dop_bad=""
+for _u in "$DIR"/*.service; do
+  [ -f "$_u" ] || continue
+  grep -qE '^[[:space:]]*Exec[A-Za-z]*=.*\bdoppler\b' "$_u" || continue
+  _dop_units=$((_dop_units + 1))
+  grep -qE '^[[:space:]]*User=' "$_u" && continue                      # systemd supplies HOME
+  grep -qE '^[[:space:]]*Environment=HOME=/root[[:space:]]*$' "$_u" && continue
+  _dop_bad="$_dop_bad $(basename "$_u")"
+done
+# Non-vacuity floor: if the glob or the Exec* pattern ever stops matching, the loop above reports
+# a clean sweep having inspected nothing — byte-identical to a real pass.
+if [ "$_dop_units" -ge 8 ]; then
+  ok "AC-HOME6: swept ${_dop_units} doppler-invoking units (non-vacuity floor met)"
+else
+  no "AC-HOME6: only ${_dop_units} doppler-invoking units found (expected >=8) — the sweep below is near-vacuous, check the glob and the Exec* pattern"
+fi
+if [ -z "$_dop_bad" ]; then
+  ok "AC-HOME6: every doppler-invoking unit resolves HOME (via User= or Environment=HOME=/root)"
+else
+  no "AC-HOME6: these doppler-invoking units declare neither User= nor Environment=HOME=/root, so the CLI dies 'Unable to determine home directory':${_dop_bad}"
+fi
+
 echo "=== doppler-download-error-channel: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]

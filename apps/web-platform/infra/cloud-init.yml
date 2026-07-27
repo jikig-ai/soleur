@@ -314,6 +314,11 @@ runcmd:
   - |
     IMAGE_REF='${image_name}'
     STAGE=runcmd_early
+    # (#6981) runcmd runs as root with no `User=`, so systemd sets no HOME and every doppler
+    # call dies (it resolves HOME before DOPPLER_CONFIG_DIR). SCOPE: sites above the exporting
+    # `set -a; . webhook-deploy` use a bare `.` and stay tokenless/inert — not fixed here
+    # (#6985). Do NOT put HOME in webhook-deploy (User=deploy units). Guarded by AC-HOME1..6.
+    export HOME=/root
     HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
     # (#6090) ONE transport, reused by on_err (fatal) + the runcmd_start breadcrumb (info):
     #   _emit <message> <stage> <level>. Prefers the BAKED DSN so it fires even when doppler is

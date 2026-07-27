@@ -40,6 +40,74 @@ discriminating datum was never captured.
 
 ## Status
 
+> **UPDATE 2026-07-27 — root cause DETERMINED. The text below this block was written while it was
+> not, and is preserved unedited as the record of what was knowable at the time.**
+>
+> The `web-host-replace` mechanism (#6969/#6973) replaced `soleur-web-2` on 2026-07-27
+> ([run 30247210123](https://github.com/jikig-ai/soleur/actions/runs/30247210123)). The replace
+> itself succeeded — the host was destroyed and recreated — and it booted dark **again**, but this
+> time the #6970 error channel carried the deciding datum the original incident lacked:
+>
+> ```
+> doppler_download rc=1 cond=error attempts=3
+> Unable to determine home directory
+> Doppler Error: $HOME is not defined
+> ```
+>
+> **Root cause:** `cloud-final.service` executes `runcmd` as root and declares no `User=`. systemd
+> synthesises `$HOME` only for units that declare one, so every `runcmd` command inherits an
+> environment with `HOME` unset. The Doppler CLI resolves its home directory *before* it consults
+> `DOPPLER_CONFIG_DIR`, so the config dir cloud-init already sets is not a substitute — reproduced
+> against the pinned `3.75.3`: `HOME` unset with `DOPPLER_CONFIG_DIR` set fails identically.
+>
+> This also explains why it was invisible: `doppler_download` is the only *fatal* Doppler call.
+> The GHCR-credential and `ZOT_REGISTRY_URL` reads are `|| true`-wrapped, so they fail silently.
+>
+> **Correction to an earlier draft of this block:** those silent sites are **not** fixed by
+> restoring `HOME`. They source `/etc/default/webhook-deploy` with a bare `.`, which sets shell
+> variables without exporting them, so `doppler` — a child process — gets no `DOPPLER_TOKEN` and
+> exits "you must provide a token" regardless of `HOME`. Measured: token readable in the shell,
+> absent from the child's environment. `HOME` was one of **two** independent blockers. Only the
+> fatal `doppler_download` call site sits below the exporting `set -a` sourcing, which is why the
+> boot fix works while the silent sites stay inert. Tracked separately in #6985.
+>
+> **Three hypotheses were tested and falsified**, recorded so they are not re-run:
+>
+> - *"A newer Doppler CLI introduced the `$HOME` requirement."* No — `3.75.3` was already the
+>   newest release before web-1's 2026-03-17 birth and fails identically with `HOME` unset.
+> - *"`DOPPLER_CONFIG_DIR` should have compensated."* No — home resolution precedes it.
+> - *"A cloud-init behaviour difference between the March and July `ubuntu-24.04` images."* No —
+>   see below. This was this document's own standing hypothesis and it was wrong.
+>
+> **Resolved: why web-1 booted fine.** It never ran this cloud-init. `apps/web-platform/infra/cloud-init.yml`
+> was *added* 2026-03-18 (commit `5b8e24206`, "web platform MVP"), roughly 28 hours **after** web-1
+> was created; at the preceding commit `apps/` contained only `apps/telegram-bridge/`. Doppler was
+> not adopted until 2026-03-20 (`d48da3060`), and the first `doppler secrets download` in this file
+> landed 2026-04-03 (`bf1be151c`) inside the **`webhook.service`** path — which declares
+> `User=deploy`, so systemd supplies `HOME` automatically. The fatal root-`runcmd` `doppler_download`
+> is a July-2026 construct. `hcloud_server.web` carries `lifecycle.ignore_changes = [user_data]`, so
+> web-1 has never re-run cloud-init. **web-2's July births are the first time the current `runcmd`
+> has ever executed on a web host.** There was no image difference to find.
+>
+> A methodological note, because it produced the wrong hypothesis above: the earlier claim that
+> "`cloud-init.yml` history begins 2026-07-11" was an artefact of a **shallow clone**
+> (`git rev-parse --is-shallow-repository` → `true`, graft at `09e9a3e82`). `git log --all` recovers
+> 113 commits back to 2026-02-10. A clone artefact was read as a fact about the project's history.
+>
+> **Contributing factor — this is the fourth occurrence, not a novel failure.** "Root context running
+> Doppler needs an explicit `HOME`" was already known and fixed three times: #4116 (inngest heartbeat,
+> via `User=deploy`), #6196 (registry + git-data cloud-inits, `HOME=/root` — its commit message states
+> near-verbatim this diagnosis, including that `DOPPLER_CONFIG_DIR` alone does not satisfy it), and
+> #6669 (web-1 probe units, `Environment=HOME=/root`). `inngest-bootstrap.sh` even writes the rule
+> down: *"If a future edit adds `doppler run` here, it MUST also set `Environment=HOME=/root`."*
+> Every guard was **per-unit and opt-in**, so the one context nobody opted into — cloud-init `runcmd`
+> — is exactly where it recurred. The durable fix is therefore not the export alone but the
+> opt-out sweep added in #6984 (AC-HOME6): every doppler-invoking unit must resolve `HOME` via
+> `User=` or an explicit `Environment=HOME=/root`.
+>
+> Fix: #6981 / PR #6984. `soleur-web-2` remains dark until a post-fix replace runs — `runcmd` is
+> once-per-instance, so the current instance cannot be repaired by reboot.
+
 `unresolved but ended` — the boot failure is not recurring (no further host births have been
 attempted), but the root cause is UNDETERMINED and `soleur-web-2` is still dark.
 
