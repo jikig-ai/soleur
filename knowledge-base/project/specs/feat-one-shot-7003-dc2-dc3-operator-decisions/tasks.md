@@ -118,13 +118,21 @@ pre-check for its marker string and skip if present — a retried call that land
 
 ## Phase 5 — Artifacts, suites, commit (runs BEFORE Phase 4)
 
-- [ ] 5.1 Run `bash tests/scripts/test-git-data-birth-readiness-gate.sh`; require exit 0, the output
+- [x] 5.1 Run `bash tests/scripts/test-git-data-birth-readiness-gate.sh`; require exit 0, the output
       `, 0 failed ===` (leading comma — bare `0 failed` matches `10 failed`), and a live-file note
-      still reading `HOLD`.
-- [ ] 5.2 Run `python3 scripts/lint-infra-no-human-steps.py` over the ADR, the decision-challenges
+      still reading `HOLD`. — **PASS**: exit 0, `=== 21 passed, 0 failed ===`, live note `HOLD`.
+- [x] 5.2 Run `python3 scripts/lint-infra-no-human-steps.py` over the ADR, the decision-challenges
       file, this plan, and this tasks file; require exit 0 **and** `4 scanned file(s)` in the output.
-- [ ] 5.3 Verify **AC12** — no path under `apps/` in the diff, and no `decision-challenges.md` under
-      this branch's spec dir.
+      — **PASS**: `OK: no human-run infra steps in 4 scanned file(s)`.
+- [x] 5.3 Verify **AC12** — no path under `apps/` in the diff, and no `decision-challenges.md` under
+      this branch's spec dir. — **PASS**: 0 `apps/` paths; the file is absent.
+
+> **Full-suite exit gate:** `scripts/test-all.sh` → rc=1, `232/233 suites passed`. The single
+> failure is `plugins/soleur/skills/compound/test/phase-16.test.sh` Scenario 15, confirmed
+> **pre-existing and unrelated**: compound is untouched by this branch, the suite passes `14/0` in
+> isolation, and `main` CI is green across its last 5 runs. Root cause is `grep -q` on a pipe under
+> `pipefail` failing OPEN on SIGPIPE (the #6649 class) — the failure message prints the very string
+> it reports missing. Tracked as **#7024** per `wg-when-tests-fail-and-are-confirmed-pre`.
 - [ ] 5.4 Commit with a `docs(7003):` prefix. PR body uses **`Ref #7003`**, never `Closes #7003`
       (**AC13**) — auto-closing at merge would discharge the escalation before Phase 4 runs.
 - [ ] 5.5 Merge, then execute Phase 4.
