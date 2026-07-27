@@ -429,6 +429,20 @@ jobs:
       - name: Run web-host provisioner parity MUTATION battery (#7000 the guard can actually fail)
         run: bash apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh
 
+      # (#7000) Two ORPHAN suites adopted. run-registered-suites.sh reports both as referenced by
+      # no workflow or script, i.e. silent ZERO coverage — and both cover resources the parity
+      # guard above sweeps: orphan-reaper.test.sh backs terraform_data.orphan_reaper_install (its
+      # decorative coverage is called out in #7000 itself), and disk-monitor.test.sh backs
+      # terraform_data.disk_monitor_install, one of the five provisioners that was named by no
+      # suite at all. Both measured green (8/8 and 11/11) and need nothing beyond curl/jq, which
+      # this ubuntu-24.04 job already has. The other 7 orphans are unrelated to these provisioners
+      # and one needs docker, so they are deliberately NOT adopted here — see the PR body.
+      - name: Run orphan-reaper guard (#7000 adopting an unregistered suite)
+        run: bash apps/web-platform/infra/orphan-reaper.test.sh
+
+      - name: Run disk-monitor guard (#7000 adopting an unregistered suite)
+        run: bash apps/web-platform/infra/disk-monitor.test.sh
+
       # LOAD-BEARING registration (explicit, no glob — an unregistered suite is silent ZERO
       # coverage; this is exactly the "gate that looks present but does nothing" class #6575
       # deleted). Rebuilt ADR-068 §(c) / ADR-143 D3 anti-pooling gate: fail-closed serving-weight
