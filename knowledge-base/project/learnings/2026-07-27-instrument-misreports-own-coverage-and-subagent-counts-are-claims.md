@@ -245,3 +245,81 @@ there; it means the census was never run.
     §1 above, but never reached Files-to-Edit until CTO re-found it. **Prevention:** a
     finding recorded in a learning is not thereby scheduled; cross-check the learning's
     findings against the plan's work-list before the plan is final.
+
+---
+
+## 10. A finding can be wrong in the direction that makes you look diligent
+
+The review panel overturned my most dramatic finding. I reported six shipped
+files as containing a **"literal inversion"** of a `[compliance-tier]` rule —
+they said "do NOT pass `-auto-approve`" while citing a rule I read as mandating
+ack-then-`-auto-approve`. I rated it the highest operational severity in the
+PR, wrote it into the brainstorm, the plan, the issue comment, the commit
+messages and the PR framing, and shipped a fix to all six.
+
+It rested on two claims I never measured, each one command away:
+
+| Claim I asserted | Measured reality |
+|---|---|
+| "`terraform apply -input=true` with no TTY hangs on an unanswerable prompt" | Exits **immediately**: `Error: error asking for approval: EOF`, rc=1, 0s. The old form failed **closed**. |
+| "the agent runs this, so the ack must move to chat" | `.claude/hooks/prod-write-defer-gate.sh` is a registered PreToolUse hook that **defers** any agent-run `terraform apply`. The agent never runs it unattended, with or without the flag. |
+
+And the files themselves said so: `admin-ip-refresh/SKILL.md` Step 7 reads
+*"Print the exact `terraform plan` and `terraform apply` commands … **for the
+operator to run. Do NOT execute them.**"* Those commands are run by a human at
+a real terminal, where Terraform's native prompt **is** the per-command gate.
+"Do NOT pass `-auto-approve`" was correct guidance. There was no inversion.
+
+**Generalisable:** a finding shaped as *"these N shipped files contradict their
+own rule"* is maximally persuasive and maximally worth distrusting — it flatters
+the finder. Before acting on one, measure the failure it predicts (run the
+command) and identify **who actually executes the thing** (grep the hooks, read
+the surrounding step). An agent-vs-operator mixup inverts the correct answer.
+
+This is the same root as §1-§5 and §7-§8: *asserting a property instead of
+measuring it*. What differs is the payoff — the earlier instances made me look
+sloppy, this one made me look thorough, so nothing internal flagged it. Three
+independent agents did.
+
+## 11. A fix for a misreporting instrument can misreport in a new way
+
+My FR1 fix built a `CORPUS` by re-walking all three sidecars, to get a
+denominator commensurate with the injected `$CONTEXT`. It introduced two P1s,
+both reproduced by the panel:
+
+- **False alarm.** `strip_sidecar_into_global` sets a shared `OVERSTRIP_DETECTED`
+  latch (0→1, never cleared). Calling it a second time over sidecars the session
+  never loads made the stamp warn *"raw sidecar injected"* when nothing was.
+- **Silent under-report.** The loop skipped unreadable sidecars, so the
+  denominator degraded in lockstep with the numerator. A symlinked
+  `AGENTS.core.md` stamped **`48 of 48`** — reading as full coverage — with every
+  `[compliance-tier]` rule absent. `main` stamped `48 of 202`: wrong, but loud.
+
+**The fix made the instrument quieter in exactly the scenario the plan named as
+its single-user-incident vector.**
+
+**Generalisable — the shape worth remembering:** *a denominator derived from
+what was actually loaded collapses onto the numerator and pins the ratio at
+100%.* Derive it from a **fixed expected set** instead (here the `AGENTS.md`
+index, which `lint-rule-ids.py` enforces 1:1 against bodies). Same scenarios
+then read `48 of 101`. And distinguish **"could not measure"** from **"measured
+zero"** — an unreadable index now renders `?`, not a plausible number.
+
+Corollary: reusing a helper that writes a **shared global** is not free. The
+second call site inherits state the first one owns.
+
+## 12. A mutation battery with a red baseline is not a weak result — it is no result
+
+My first battery reported the sandbox at 30/33 before any mutation. I nearly
+read the mutation runs as evidence. They were noise: every arm was measured
+against an already-broken baseline, and a heredoc-escaping bug meant two
+mutations never landed at all (a mutation that does not land reports the
+baseline, which reads exactly like "the guard caught nothing to catch").
+
+The repo already documents both traps. I hit them anyway, one round after
+citing them.
+
+**Generalisable:** require a **green baseline in the same harness** before any
+mutation result counts; assert each mutation **landed** (`diff -q` against a
+pristine copy); and compare **per-case verdicts**, never suite totals — a total
+can improve while a specific case silently stops failing.
