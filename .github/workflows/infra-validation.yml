@@ -821,6 +821,15 @@ jobs:
       - name: Run git-data LUKS-at-rest cutover drift-guards
         run: bash apps/web-platform/infra/git-data-luks.test.sh
 
+      # (#6982) Hetzner's 32,768-byte user_data cap is a HARD gate on hcloud_server.git_data,
+      # and the resource carries no ignore_changes=[user_data] — so an over-budget template
+      # is discovered by a FAILING BIRTH APPLY unless something measures it first. This job
+      # already installs terraform with terraform_wrapper:false (for `terraform console`),
+      # which is exactly what the measurement needs; the script would SKIP without it, so
+      # registering it in a runner that lacks terraform would be a fake gate (#6454).
+      - name: Check git-data user_data stays under the Hetzner 32 KB cap
+        run: bash apps/web-platform/infra/git-data-userdata-budget.sh
+
       - name: Run /workspaces LUKS-at-rest drift-guards (#6588, ADR-119)
         run: bash apps/web-platform/infra/workspaces-luks.test.sh
 

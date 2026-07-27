@@ -76,35 +76,35 @@ creates `hcloud_server.git_data`.
 
 ## Phase 2 — The emitter
 
-- [ ] 2.0 **Per D1 (deepen pass)**, re-add `doppler_secret.git_data_betterstack_logs_token` to
+- [x] 2.0 **Per D1 (deepen pass)**, re-add `doppler_secret.git_data_betterstack_logs_token` to
       `doppler_config.git_data_prd` (the `registry_betterstack_logs_token` precedent), gated on
       W0's probe result, and register it at all six sites alongside the SSH-host secret — birth
       `-target` set **18 -> 20**, not 19. Read via `doppler run` **only** by the post-Doppler
       emits (boot-completion, gc faults); the early stages stay Sentry-only.
-- [ ] 2.1 `write_files:` **one** script `/usr/local/bin/git-data-emit` (R13) — Sentry store-API emit
+- [x] 2.1 `write_files:` **one** script `/usr/local/bin/git-data-emit` (R13) — Sentry store-API emit
       from the **baked** `${sentry_dsn}`, **no Doppler fallback**, applying the ADR-147 sanitiser
       chain **plus** the value-based redactor **internally on every path**.
-- [ ] 2.2 Add `curl` to `packages:`; emitter degrades silently if absent (R23).
-- [ ] 2.3 Add a `bootcmd:` beacon (R23) — `packages:`/`write_files` failures currently leave the ssh
+- [x] 2.2 Add `curl` to `packages:`; emitter degrades silently if absent (R23).
+- [x] 2.3 Add a `bootcmd:` beacon (R23) — `packages:`/`write_files` failures currently leave the ssh
       daemon up and emit nothing.
 - [ ] 2.4 **Add `git_data_boot_fatal` to `apps/web-platform/infra/sentry/issue-alerts.tf`** (R1).
       Justify `event_frequency` in a comment — **do not copy `value = 1`**; on a fresh per-deploy
       group it means ">1" and a single event does not page.
-- [ ] 2.5 Land `${sentry_dsn}` in **non-comment** template text (the sentinel).
+- [x] 2.5 Land `${sentry_dsn}` in **non-comment** template text (the sentinel).
 
 ## Phase 3 — Fail-closed boot
 
-- [ ] 3.1 First runcmd item: `export HOME=/root`, `STAGE=runcmd_early`, `on_err` +
+- [x] 3.1 First runcmd item: `export HOME=/root`, `STAGE=runcmd_early`, `on_err` +
       `trap on_err EXIT` **with the `rc=$?; [ "$rc" -eq 0 ] && exit 0` guard** (R7), then emit
       `runcmd-entered` **and assert 2xx**, failing loudly otherwise (R8).
-- [ ] 3.2 Add an `sshd -t` config validation before the sshd restart item (R16).
-- [ ] 3.3 Arm `set -e` after 0.4's classification; explicit `|| true` + naming comment per
+- [x] 3.2 Add an `sshd -t` config validation before the sshd restart item (R16).
+- [x] 3.3 Arm `set -e` after 0.4's classification; explicit `|| true` + naming comment per
       must-tolerate item.
-- [ ] 3.4 `STAGE=` progression, with `doppler_dl` immediately above the
+- [x] 3.4 `STAGE=` progression, with `doppler_dl` immediately above the
       `sha256sum` → `tar xzf` → `chmod +x` block.
-- [ ] 3.5 **Arm a heredoc-local `STAGE=` and trap inside `LUKSEOF`** (R2) — `luksOpen` runs in a
+- [x] 3.5 **Arm a heredoc-local `STAGE=` and trap inside `LUKSEOF`** (R2) — `luksOpen` runs in a
       child bash; without this a LUKS failure is indistinguishable from a Doppler scope failure.
-- [ ] 3.6 Disarm before handing to the bootstrap; re-arm with a bootstrap-specific trap (same `rc`
+- [x] 3.6 Disarm before handing to the bootstrap; re-arm with a bootstrap-specific trap (same `rc`
       guard) capturing 20 redacted lines.
 
 ## Phase 4 — Boot-completion signal
@@ -125,7 +125,7 @@ creates `hcloud_server.git_data`.
       `IOSchedulingClass=idle` / `Nice=19`, `OnFailure=` → `SOLEUR_GIT_DATA_GC` routed to the
       **Phase-2.4 Sentry rule**. Body over **`/mnt/git-data/repositories`**, **unreachable objects
       only**, under `flock`. Emits `df%` each run.
-- [ ] 5.3 `mkfs.ext4 -q -O quota,project` on the LUKS volume. **Ship the flag; DEFER the `prjquota`
+- [x] 5.3 `mkfs.ext4 -q -O quota,project` on the LUKS volume. **Ship the flag; DEFER the `prjquota`
       mount option** (R31) — the flag is migration-forcing, the mount option is not and adds a new
       boot-failure mode on a host with no console.
 - [ ] ~~5.4 store-monitor timer~~ — **CUT (R11)**: it polled the empty-by-construction LUKS volume.
@@ -136,7 +136,7 @@ creates `hcloud_server.git_data`.
 - [ ] 6.1 **Post-apply boot-signal poll in `git_data_host_create`, `if: always()`** (R20) — the real
       ADR-149 item-4 discharge. Fail the job if `stage:boot_complete` does not arrive, or arrives
       with any false assertion.
-- [ ] 6.2 `01-hardening.conf`: add `MaxStartups`, `MaxSessions`; tighten `ClientAliveInterval`
+- [x] 6.2 `01-hardening.conf`: add `MaxStartups`, `MaxSessions`; tighten `ClientAliveInterval`
       300 → 60. Keep the `01-` prefix (OpenSSH is first-match-wins; Hetzner ships
       `50-cloud-init.conf`). Declarative `write_files`, never `sed`.
 - [ ] 6.3 `git-data-replication.ts`: module-level in-process semaphore bounding concurrent

@@ -274,17 +274,17 @@ resource "hcloud_server" "git_data" {
   # #5887's first `terraform plan`; fail-closed at first provisioning if decode fails
   # (web-host readiness check finds no git/bare-repo, blocks cutover). See ADR-080.
   user_data = base64gzip(templatefile("${path.module}/cloud-init-git-data.yml", {
-    git_data_bootstrap_b64               = base64encode(file("${path.module}/git-data-bootstrap.sh"))
-    git_data_pre_receive_placeholder_b64 = base64encode(file("${path.module}/git-data-pre-receive-placeholder.sh"))
+    git_data_bootstrap               = file("${path.module}/git-data-bootstrap.sh")
+    git_data_pre_receive_placeholder = file("${path.module}/git-data-pre-receive-placeholder.sh")
     # The FIXED provision forced-command wrapper (git init --bare), delivered to
     # /usr/local/bin like the bootstrap (ADR provisioning amendment).
-    git_data_provision_b64 = base64encode(file("${path.module}/git-data-provision.sh"))
+    git_data_provision = file("${path.module}/git-data-provision.sh")
     # The TRANSPORT allowlist forced-command wrapper (Sub-PR 3.D) — replaces the raw
     # git-shell forced command; delivered to /usr/local/bin like the others.
-    git_data_transport_wrapper_b64 = base64encode(file("${path.module}/git-data-transport-wrapper.sh"))
+    git_data_transport_wrapper = file("${path.module}/git-data-transport-wrapper.sh")
     # The FIXED erasure forced-command wrapper (rm -rf <id>.git), Art. 17 (3.A;
     # app-side call lands in 3.D). Delivered to /usr/local/bin like the others.
-    git_data_remove_b64 = base64encode(file("${path.module}/git-data-remove.sh"))
+    git_data_remove = file("${path.module}/git-data-remove.sh")
     # trimspace()'d — see local.git_transport_pubkey / local.git_provision_pubkey.
     git_transport_pubkey = local.git_transport_pubkey
     git_provision_pubkey = local.git_provision_pubkey
@@ -313,6 +313,24 @@ resource "hcloud_server" "git_data" {
     # a SHELL variable (double-$) that must pass through literally.
     doppler_arch   = local.git_data_arch
     doppler_sha256 = local.git_data_doppler_sha256
+    # (#6982, W1) The off-host emitter's three inputs.
+    #
+    # sentry_dsn is BAKED, and that is the point: it is the ONE channel that still works
+    # when Doppler is the broken stage, which on this host is the most likely stage to
+    # break. It is semi-public (already in the client bundle; variables.tf says so) and
+    # lands in tfstate + metadata-retrievable user_data — accepted, and the reason the
+    # LUKS passphrase and the Better Stack INGEST token are deliberately NOT baked.
+    #
+    # This interpolation is also the birth-readiness INTERLOCK's sentinel:
+    # git-data-birth-readiness-gate.sh refuses to plan while `${sentry_dsn}` is absent
+    # from non-comment template text. `templatefile` fails on an unsupplied variable, so
+    # threading it here IS the work — the sentinel cannot be faked by a comment.
+    sentry_dsn             = var.sentry_dsn
+    betterstack_ingest_url = local.betterstack_logs_ingest_url
+    # Baked at RENDER time, so it is a create-time constant rather than a runtime-
+    # guaranteed invariant — it discriminates git-data's rows from its siblings on the
+    # shared Better Stack source 2457081.
+    host_name = "soleur-git-data"
   }))
 
   # PHANTOM/WRONG-ARCH TRIPWIRE (#6570). Two jobs, and the second is why this block is

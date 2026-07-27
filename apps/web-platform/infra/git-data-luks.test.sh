@@ -342,6 +342,104 @@ p_default_not_cax() {
   case "$d" in cax*) echo 0 ;; *) echo 1 ;; esac
 }
 
+# ---------------------------------------------------------------------------------
+# #6982 — pre-birth hardening guards.
+# ---------------------------------------------------------------------------------
+
+# A20: EVERY `doppler run` names the config its service token is actually scoped to.
+#
+# THIS IS THE #6982 W0 REGRESSION GUARD. doppler_service_token.git_data is scoped to
+# `prd_git_data`, but both invocations named `--config prd`. Measured under a token
+# scoped exactly that way: exit 1, "This token does not have access to requested config
+# 'prd'", GIT_DATA_LUKS_KEY absent. `doppler run` therefore exited BEFORE exec'ing the
+# LUKS heredoc, so its `set -euo pipefail` ran zero times, luksOpen never ran, and the
+# host booted dark with sshd up. A6 above asserts only that the STRING `doppler run`
+# survives — it is blind to the scope, which is why this arm exists.
+p_doppler_config_scope() {
+  local n_run n_scoped
+  # Anchor on the COMMAND at line start. A bare 'doppler run' also matches the prose
+  # comment above the bootstrap invocation, which made this 3-vs-2 and the guard
+  # permanently red (cq-assert-anchor-not-bare-token).
+  n_run=$(grep -Ec '^[[:space:]]*doppler run ' "$1" || true)
+  n_scoped=$(grep -Ec '^[[:space:]]*doppler run --project soleur --config prd_git_data ' "$1" || true)
+  if [ "$n_run" -ge 2 ] && [ "$n_run" -eq "$n_scoped" ]; then echo 1; else echo 0; fi
+}
+
+# A21: the boot emitter exists, is delivered as an executable file, and the FATAL channel
+# reads the BAKED DSN rather than Doppler (a DSN fetched from Doppler is dark exactly
+# when Doppler is the broken stage).
+p_emitter_present() {
+  if grep -Eq '^[[:space:]]*- path: /usr/local/bin/git-data-emit$' "$1" \
+     && grep -Eq "^[[:space:]]*DSN='\\\$\\{sentry_dsn\\}'" "$1"; then echo 1; else echo 0; fi
+}
+
+# A22: every `trap ... EXIT` arming site carries the rc guard. Without it `trap EXIT`
+# fires on a SUCCESSFUL exit too, so every healthy boot emits level=fatal and the whole
+# fatal channel inverts into noise (R7/AC36/T17). Anchored on the guard's syntax, and the
+# count is compared against the number of arming sites so a NEW unguarded trap fails.
+p_trap_rc_guard() {
+  local n_trap n_guard
+  n_trap=$(grep -Ec '^[[:space:]]*trap [a-z_]+ EXIT$' "$1" || true)
+  n_guard=$(grep -Ec '^[[:space:]]*\[ "\$rc" -eq 0 \] && exit 0$' "$1" || true)
+  if [ "$n_trap" -ge 3 ] && [ "$n_guard" -eq "$n_trap" ]; then echo 1; else echo 0; fi
+}
+
+# A23: the delivery assertion (AC34) — the ONE emit call with no `|| true`, gated by an
+# `if !` so a non-delivering emitter fails the boot LOUDLY instead of silently.
+p_delivery_assert() {
+  if grep -Eq 'if ! /usr/local/bin/git-data-emit .* runcmd_early info' "$1"; then echo 1; else echo 0; fi
+}
+
+# A24: sshd slot bounding lands INSIDE the 01-hardening.conf write_files block (AC5) —
+# anchored on the block, not on a bare token that a comment could satisfy.
+p_sshd_limits() {
+  local block
+  block=$(awk '/- path: \/etc\/ssh\/sshd_config.d\/01-hardening.conf/,/permissions:/' "$1")
+  if printf '%s' "$block" | grep -Eq '^[[:space:]]*MaxStartups[[:space:]]+[0-9]' \
+     && printf '%s' "$block" | grep -Eq '^[[:space:]]*MaxSessions[[:space:]]+[0-9]' \
+     && printf '%s' "$block" | grep -Eq '^[[:space:]]*ClientAliveInterval[[:space:]]+60$'; then echo 1; else echo 0; fi
+}
+
+# A25: `set -e` is armed in runcmd, and the checksum block is UNDER it — the supply-chain
+# half of issue item 3. Asserted by ORDER: `set -e` must appear before `sha256sum -c -`.
+p_set_e_before_checksum() {
+  local l_sete l_sum
+  l_sete=$(grep -n '^[[:space:]]*set -e$' "$1" | head -1 | cut -d: -f1)
+  l_sum=$(grep -n 'sha256sum -c -' "$1" | head -1 | cut -d: -f1)
+  if [ -n "$l_sete" ] && [ -n "$l_sum" ] && [ "$l_sete" -lt "$l_sum" ]; then echo 1; else echo 0; fi
+}
+
+# A26: no BARE terraform directive anywhere (AC4). The doubled form `curl -w` would need
+# must still pass, so the pattern is negative-lookbehind, not a plain substring.
+p_no_bare_directive() {
+  # NOT `grep -cP … | grep -q '^0$'`: grep -c PRINTS 0 but EXITS 1 when there are no
+  # matches, and this file runs under `set -o pipefail`, so that pipeline fails on a
+  # CLEAN file and the guard reports the opposite of the truth.
+  local n
+  n=$(grep -cP '(?<!%)%\{' "$1" || true)
+  if [ "$n" -eq 0 ]; then echo 1; else echo 0; fi
+}
+
+# A27: BYTE-IDENTITY of every plain-text-delivered script.
+#
+# #6982 moved five scripts off `encoding: b64` because base64 defeats gzip and cost 57 %
+# of the 32 KB user_data budget. The re-scan hazard base64 was guarding against does not
+# exist (templatefile does not re-scan an interpolated VALUE), but a YAML block scalar
+# CAN be mangled by a bad indent, so the property is pinned rather than assumed: each
+# script must be delivered via the indent+file interpolation, and NONE may still carry a
+# b64 encoding line.
+p_plain_script_delivery() {
+  local f n_indent
+  # The TEMPLATE var names are underscored (git_data_bootstrap), not the hyphenated
+  # filenames — matching on hyphens found nothing and the guard was vacuously red.
+  for f in git_data_bootstrap git_data_provision git_data_transport_wrapper \
+           git_data_remove git_data_pre_receive_placeholder; do
+    grep -Eq "indent\\(6, ${f}\\)" "$1" || { echo 0; return; }
+  done
+  n_indent=$(grep -Ec '^[[:space:]]*encoding: b64$' "$1" || true)
+  if [ "$n_indent" -eq 0 ]; then echo 1; else echo 0; fi
+}
+
 # --- Assertion + mutation harness ---
 # assert_holds <name> <predicate-fn> <file>            -> predicate MUST be 1
 # assert_mutation <name> <predicate-fn> <file> <sed>   -> after the sed mutation the
@@ -465,10 +563,63 @@ assert_holds    "A19 tripwire-edge" p_tripwire_edge "$GIT_DATA_TF"
 assert_mutation "A19 tripwire-edge" p_tripwire_edge "$GIT_DATA_TF" \
   's;^([[:space:]]*)precondition([[:space:]]*)\{;\1notaprecondition\2{;'
 
+# --- #6982 assertions ---------------------------------------------------------------
+
+# A20: the W0 config-scope regression guard.
+assert_holds    "A20 doppler-config-scope" p_doppler_config_scope "$CLOUD_INIT"
+# Mutation: revert to the pre-#6982 `--config prd`, the exact form measured to boot dark.
+assert_mutation "A20 doppler-config-scope" p_doppler_config_scope "$CLOUD_INIT" \
+  's/--config prd_git_data/--config prd/g'
+
+# A21: the emitter exists and reads the BAKED DSN.
+assert_holds    "A21 emitter-present" p_emitter_present "$CLOUD_INIT"
+# Mutation: point the fatal channel at Doppler instead of the baked value — dark exactly
+# when Doppler is the broken stage.
+assert_mutation "A21 emitter-present" p_emitter_present "$CLOUD_INIT" \
+  's;^([[:space:]]*)DSN=.*;\1DSN=@FROMDOPPLER@;'
+
+# A22: every trap arming site carries the rc guard (a healthy boot emits zero fatals).
+assert_holds    "A22 trap-rc-guard" p_trap_rc_guard "$CLOUD_INIT"
+# Mutation: drop the guard — every SUCCESSFUL boot would then emit level=fatal.
+assert_mutation "A22 trap-rc-guard" p_trap_rc_guard "$CLOUD_INIT" \
+  's;^([[:space:]]*)\[ "\$rc" -eq 0 \] && exit 0$;\1true;'
+
+# A23: the AC34 delivery assertion.
+assert_holds    "A23 delivery-assert" p_delivery_assert "$CLOUD_INIT"
+# Mutation: make the one checking call fail-open like every other call site.
+assert_mutation "A23 delivery-assert" p_delivery_assert "$CLOUD_INIT" \
+  's;if ! /usr/local/bin/git-data-emit;/usr/local/bin/git-data-emit;'
+
+# A24: sshd slot bounding, inside the drop-in block.
+assert_holds    "A24 sshd-limits" p_sshd_limits "$CLOUD_INIT"
+# Mutation: revert ClientAliveInterval to the 300 that lets a wedged connection hold a
+# slot ~10 minutes.
+assert_mutation "A24 sshd-limits" p_sshd_limits "$CLOUD_INIT" \
+  's;^([[:space:]]*)ClientAliveInterval 60$;\1ClientAliveInterval 300;'
+
+# A25: `set -e` precedes the checksum block (issue item 3).
+assert_holds    "A25 set-e-before-checksum" p_set_e_before_checksum "$CLOUD_INIT"
+# Mutation: disarm it — `tar xzf` + `chmod +x` would again run on an unverified tarball.
+assert_mutation "A25 set-e-before-checksum" p_set_e_before_checksum "$CLOUD_INIT" \
+  's;^([[:space:]]*)set -e$;\1set +e;'
+
+# A26: no bare terraform directive (AC4).
+assert_holds    "A26 no-bare-directive" p_no_bare_directive "$CLOUD_INIT"
+# Mutation: introduce one — the render would fail, and it is invisible to a plain
+# substring check because the doubled form is legitimate.
+assert_mutation "A26 no-bare-directive" p_no_bare_directive "$CLOUD_INIT" \
+  's;^packages:$;packages: %{ if true }x%{ endif };'
+
+# A27: byte-safe plain-text script delivery.
+assert_holds    "A27 plain-script-delivery" p_plain_script_delivery "$CLOUD_INIT"
+# Mutation: revert one script to a b64 blob — the budget regression, caught structurally.
+assert_mutation "A27 plain-script-delivery" p_plain_script_delivery "$CLOUD_INIT" \
+  's;^([[:space:]]*)content: \|$;\1encoding: b64;'
+
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 total=$((passes + fails))
-if [ "$total" -lt 39 ]; then
-  echo "FAIL: ran only ${total} assertions (<39) — suite did not execute fully" >&2
+if [ "$total" -lt 55 ]; then
+  echo "FAIL: ran only ${total} assertions (<55) — suite did not execute fully" >&2
   exit 1
 fi
 
