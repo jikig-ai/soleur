@@ -74,7 +74,7 @@ root to quarantine on exit. The reaper reclaims a root only when `/proc/<pid>` i
 liveness evidence remains. Age, size, and prefix never enter the decision.
 
 **Day one, the operator sees exactly one thing: the every-five-minutes alarm stops.** The
-677 MB of legacy `/tmp` is reclaimed by the next reboot, not by this PR. The benefit is
+677 MB of legacy `/tmp` is reclaimed at the next machine restart, not by this PR. The benefit is
 measured at day 7 by the soak probe, not at merge. That is the honest framing.
 
 ### Measured, not proposed
@@ -227,7 +227,7 @@ them; doing so needs exactly the heuristic #6991 removed.
 
 They are not trivial (677 MB allocated, 34% of in-use) but they are **verifiably draining**:
 mtimes span a rolling 8-day window and **zero** entries survive the 10d `tmpfiles.d` age, so
-nothing is refreshing their timestamps. A reboot clears `/tmp` entirely at any time. The
+nothing is refreshing their timestamps. Restarting the machine clears `/tmp` entirely at any time. The
 operator's complaint therefore resolves passively within ≤10 days — the scope-out lets an
 already-verified mechanism finish rather than leaving the complaint unsolved.
 
@@ -308,7 +308,7 @@ in full. Enumerated: 4 actors (`founder`, `emailSender`, `betaContact`, `contrib
 containers/data stores, 17 external systems, 5 element kinds. **The model has no
 developer-workstation tier at any level** — `founder` is a product Owner reaching the platform
 over HTTPS, not a machine that runs `mktemp`; the 13 `cron` matches are all *hosted* crons, not
-the operator's local `*/5` crontab; `spec.c4` defines no kind capable of expressing a local mount.
+the operator's local `*/5` crontab; `spec.c4` defines no kind capable of expressing a locally-attached filesystem.
 Checked and unchanged: (a) external human actor, (b) external system/vendor, (c) container/data
 store, (d) actor↔surface relationship. Precedent: ADR-133 shipped this class with no C4 delta.
 
