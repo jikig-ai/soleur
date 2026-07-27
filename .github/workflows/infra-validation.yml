@@ -411,6 +411,24 @@ jobs:
       - name: Run fresh-boot parity guard (#6459 Phase 2.2 baked==SSH-heredoc + wiring)
         run: bash apps/web-platform/infra/fresh-boot-parity.test.sh
 
+      # LOAD-BEARING registration (explicit list, no glob — an unregistered suite is silent ZERO
+      # coverage). BREADTH half of the dual-delivery invariant, complementing fresh-boot-parity
+      # above (which pins the 5 Phase-2.2 resources deeply). Sweeps ALL 15 web-1-pinned SSH
+      # provisioners in server.tf and every artifact each delivers, asserting each has a fresh-boot
+      # counterpart (bake + cloud-init) so a fresh cattle host cannot silently come up without it.
+      # Before #7000, 10 of the 15 had no suite pinning that correspondence and 5 were named by no
+      # suite at all. Also pins the web-1 host-scoping itself: a for_each fan-out fails here,
+      # because CI has one SSH route (web-1) and a bare -target hits every instance.
+      - name: Run web-host provisioner dual-delivery parity guard (#7000 all 15 SSH provisioners)
+        run: bash apps/web-platform/infra/web-host-provisioner-parity.test.sh
+
+      # The guard above is GREEN the day it lands, as every drift guard is; green says nothing
+      # about whether it CAN go red. This battery breaks each invariant on a sandbox copy and
+      # requires a RED for each, plus a positive control that must stay GREEN so an always-red
+      # guard cannot score a clean run. Same shape as the LUKS G4 mutation battery below.
+      - name: Run web-host provisioner parity MUTATION battery (#7000 the guard can actually fail)
+        run: bash apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh
+
       # LOAD-BEARING registration (explicit, no glob — an unregistered suite is silent ZERO
       # coverage; this is exactly the "gate that looks present but does nothing" class #6575
       # deleted). Rebuilt ADR-068 §(c) / ADR-143 D3 anti-pooling gate: fail-closed serving-weight
