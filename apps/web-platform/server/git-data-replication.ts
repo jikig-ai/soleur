@@ -39,6 +39,77 @@ const log = createChildLogger("git-data-replication");
 // amendment's "repo-root reconcile" note).
 const GIT_DATA_REPO_PATH_PREFIX = "/repositories";
 
+// --- (#6982, W6) Client-side concurrency limiter -------------------------------------
+//
+// The git-data host is 2 vCPU / 4 GB with no swap, and every session end fires a
+// provision+push pair at it. sshd there is now bounded (MaxStartups/MaxSessions), but a
+// server-side bound expresses itself as REFUSED CONNECTIONS — the client should not be
+// the thing that discovers that. This caps what we send.
+//
+// `server/concurrency.ts`'s `acquireSlot` is deliberately NOT reused: it is a DB-backed
+// workspace-slot primitive with its own lease semantics, not an in-process semaphore, and
+// borrowing it would put a database round-trip on the session-end path to solve a
+// process-local problem.
+//
+// FAIL-SOFT ON TIMEOUT, and that is the whole design. git-data is an OVERLAY
+// (ensure-workspace-repo.ts: "an OVERLAY, not a hard dependency"), so a queue that BLOCKS
+// session end would convert a capacity limit into a user-visible hang — strictly worse
+// than the replication lag it is trying to prevent. On timeout we SHED, and the shed is
+// reported so it is a measurable event rather than a silent gap.
+const GIT_DATA_MAX_CONCURRENT = Math.max(
+  1,
+  Number(process.env.GIT_DATA_MAX_CONCURRENT ?? "2") || 2,
+);
+const GIT_DATA_QUEUE_TIMEOUT_MS = Math.max(
+  0,
+  Number(process.env.GIT_DATA_QUEUE_TIMEOUT_MS ?? "10000") || 10_000,
+);
+
+let gitDataInFlight = 0;
+const gitDataWaiters: Array<() => void> = [];
+
+/** Test-only view of the live counter, so a test can assert the bound rather than infer it. */
+export function __gitDataInFlightForTest(): number {
+  return gitDataInFlight;
+}
+
+/**
+ * Acquire a replication slot. Resolves `true` when a slot was taken, `false` when the
+ * caller should SHED (queue timed out). Never rejects and never blocks indefinitely.
+ */
+async function acquireGitDataSlot(): Promise<boolean> {
+  if (gitDataInFlight < GIT_DATA_MAX_CONCURRENT) {
+    gitDataInFlight++;
+    return true;
+  }
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      // Drop our waiter so a later release does not hand a slot to a caller that has
+      // already given up — that would leak the counter and permanently shrink the pool.
+      const i = gitDataWaiters.indexOf(grant);
+      if (i !== -1) gitDataWaiters.splice(i, 1);
+      resolve(false);
+    }, GIT_DATA_QUEUE_TIMEOUT_MS);
+    function grant() {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      gitDataInFlight++;
+      resolve(true);
+    }
+    gitDataWaiters.push(grant);
+  });
+}
+
+function releaseGitDataSlot(): void {
+  gitDataInFlight = Math.max(0, gitDataInFlight - 1);
+  const next = gitDataWaiters.shift();
+  if (next) next();
+}
+
 // workspace_id names a repo path + a fence sidecar file on the git-data host, so
 // it must be an opaque safe token. It is an app-generated UUID
 // (`basename(workspacePath)`), but every boundary re-validates — the resource
@@ -249,6 +320,32 @@ export async function replicateToGitData(params: {
     );
   }
 
+  // (#6982, W6) Bound what we send at a 2 vCPU host. Acquired AFTER the authorization
+  // check so a denied write never consumes a slot, and released in `finally` below so a
+  // throwing push cannot leak one.
+  const slot = await acquireGitDataSlot();
+  if (!slot) {
+    // SHED — do not block session end. Reported rather than silently dropped: a shed is a
+    // real capacity signal, and a gap nobody can see is indistinguishable from a bug
+    // (cq-silent-fallback-must-mirror-to-sentry).
+    reportSilentFallback(
+      new Error(
+        `git-data replication shed: ${GIT_DATA_MAX_CONCURRENT} slots busy for ` +
+          `${GIT_DATA_QUEUE_TIMEOUT_MS}ms`,
+      ),
+      {
+        feature: "git_data_replication",
+        op: "queue_shed",
+        tags: { limit: String(GIT_DATA_MAX_CONCURRENT) },
+      },
+    );
+    log.warn(
+      { workspaceId, limit: GIT_DATA_MAX_CONCURRENT },
+      "git-data replication shed — queue timeout; session end is not blocked",
+    );
+    return;
+  }
+
   try {
     await provisionGitDataRepo(workspaceId);
     ensureGitDataRemote(workspacePath, workspaceId);
@@ -299,5 +396,11 @@ export async function replicateToGitData(params: {
         "transport error; the workspace's objects were NOT replicated to the shared store",
     });
     throw err instanceof Error ? err : new Error(String(err));
+  } finally {
+    // `finally`, not the end of `try`: the push above RE-THROWS on a fence reject or a
+    // transport error, and a slot leaked on that path would permanently shrink the pool
+    // until the process restarted — the failure mode being that replication silently
+    // stops after N failures.
+    releaseGitDataSlot();
   }
 }

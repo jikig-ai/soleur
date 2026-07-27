@@ -133,13 +133,13 @@ creates `hcloud_server.git_data`.
 
 ## Phase 6 — Concurrency and workflow wiring
 
-- [ ] 6.1 **Post-apply boot-signal poll in `git_data_host_create`, `if: always()`** (R20) — the real
+- [x] 6.1 **Post-apply boot-signal poll in `git_data_host_create`, `if: always()`** (R20) — the real
       ADR-149 item-4 discharge. Fail the job if `stage:boot_complete` does not arrive, or arrives
       with any false assertion.
 - [x] 6.2 `01-hardening.conf`: add `MaxStartups`, `MaxSessions`; tighten `ClientAliveInterval`
       300 → 60. Keep the `01-` prefix (OpenSSH is first-match-wins; Hetzner ships
       `50-cloud-init.conf`). Declarative `write_files`, never `sed`.
-- [ ] 6.3 `git-data-replication.ts`: module-level in-process semaphore bounding concurrent
+- [x] 6.3 `git-data-replication.ts`: module-level in-process semaphore bounding concurrent
       provision+replicate pairs. **Fail-soft on queue timeout** (git-data is an overlay; session end
       must never block). Emit a `reportSilentFallback`-class event when shedding.
       `server/concurrency.ts`'s `acquireSlot` is **not** reusable — it is DB-backed.

@@ -188,3 +188,115 @@ describe("removeGitDataRepo — Art. 17 erasure of the git-data bare repo (AC9)"
     expect(sshProvision).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------------
+// (#6982, W6 / AC18) The client-side concurrency limiter.
+//
+// The limiter reads its bounds from env AT MODULE LOAD, so these tests re-import the
+// module under `vi.resetModules()` with small bounds. Importing once at the top of the
+// file would pin the production defaults and make the assertions untestable.
+//
+// The property under test is a GATE, so a final-state assertion is not enough: a test
+// that only checked "all N+1 eventually settle" passes identically with the semaphore
+// DELETED. Each case therefore asserts an INTERMEDIATE state — the live in-flight count
+// while calls are held open — which is the thing only the gate can produce.
+// ---------------------------------------------------------------------------------
+describe("replicateToGitData — concurrency limiter (#6982 W6)", () => {
+  async function loadWithLimits(max: string, timeoutMs: string) {
+    vi.resetModules();
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    vi.stubEnv("GIT_TRANSPORT_SSH_PRIVATE_KEY", "transport-key");
+    vi.stubEnv("GIT_PROVISION_SSH_PRIVATE_KEY", "provision-key");
+    vi.stubEnv("GIT_DATA_MAX_CONCURRENT", max);
+    vi.stubEnv("GIT_DATA_QUEUE_TIMEOUT_MS", timeoutMs);
+    return await import("../server/git-data-replication");
+  }
+
+  const call = (mod: typeof import("../server/git-data-replication"), id: string) =>
+    mod.replicateToGitData({
+      workspacePath: `/tmp/${id}`,
+      workspaceId: id,
+      worktreeId: "wt-1",
+      leaseGeneration: 1,
+      userId: "user-1",
+    });
+
+  it("holds concurrent replications at or below the limit", async () => {
+    const mod = await loadWithLimits("2", "10000");
+
+    // Block the push so slots stay held while we observe the counter. Resolving these is
+    // what lets the queued caller through.
+    let releasePush: () => void = () => {};
+    const pushGate = new Promise<Buffer>((res) => {
+      releasePush = () => res(Buffer.from(""));
+    });
+    gitPush.mockImplementation(() => pushGate);
+
+    const a = call(mod, "ws-a");
+    const b = call(mod, "ws-b");
+    const c = call(mod, "ws-c"); // third — must WAIT, not run
+
+    // Let the two admitted calls reach their (blocked) push.
+    await vi.waitFor(() => expect(mod.__gitDataInFlightForTest()).toBe(2));
+
+    // THE INTERMEDIATE ASSERTION. Without the semaphore this reads 3.
+    expect(mod.__gitDataInFlightForTest()).toBe(2);
+
+    releasePush();
+    await Promise.all([a, b, c]);
+    expect(mod.__gitDataInFlightForTest()).toBe(0);
+    gitPush.mockResolvedValue(Buffer.from(""));
+  });
+
+  it("SHEDS on queue timeout without blocking, and reports the shed", async () => {
+    // Zero-length queue window: the third caller gives up immediately rather than the
+    // test waiting out a real timeout.
+    const mod = await loadWithLimits("1", "0");
+
+    let releasePush: () => void = () => {};
+    const pushGate = new Promise<Buffer>((res) => {
+      releasePush = () => res(Buffer.from(""));
+    });
+    gitPush.mockImplementation(() => pushGate);
+    reportSilentFallback.mockClear();
+
+    const held = call(mod, "ws-held");
+    await vi.waitFor(() => expect(mod.__gitDataInFlightForTest()).toBe(1));
+
+    // The shed caller must RESOLVE (not hang, not throw): git-data is an overlay and
+    // session end must never block on it.
+    await expect(call(mod, "ws-shed")).resolves.toBeUndefined();
+
+    // ...and the shed must be OBSERVABLE. A silent shed is indistinguishable from a bug.
+    expect(reportSilentFallback).toHaveBeenCalled();
+    const opts = reportSilentFallback.mock.calls.at(-1)?.[1] as {
+      feature?: string;
+      op?: string;
+    };
+    expect(opts?.feature).toBe("git_data_replication");
+    expect(opts?.op).toBe("queue_shed");
+
+    // The shed must NOT have consumed a slot.
+    expect(mod.__gitDataInFlightForTest()).toBe(1);
+
+    releasePush();
+    await held;
+    gitPush.mockResolvedValue(Buffer.from(""));
+  });
+
+  it("releases the slot when the push THROWS (no leak)", async () => {
+    // The leak this guards: replicateToGitData re-throws on a fence reject, so a slot
+    // released only at the end of `try` would shrink the pool by one per failure until
+    // replication silently stopped.
+    const mod = await loadWithLimits("1", "0");
+    gitPush.mockRejectedValueOnce(new Error("fence reject: stale lease-gen"));
+
+    await expect(call(mod, "ws-boom")).rejects.toThrow(/fence reject/);
+    expect(mod.__gitDataInFlightForTest()).toBe(0);
+
+    // Proof the pool still works afterwards — the assertion above would also hold if the
+    // counter were merely reset rather than properly released.
+    gitPush.mockResolvedValue(Buffer.from(""));
+    await expect(call(mod, "ws-after")).resolves.toBeUndefined();
+  });
+});
