@@ -32,8 +32,9 @@ Before this route existed there was no way to create it. `git-data-host-replace`
 its gate requires `actions ⊇ {delete, create}`, so a first CREATE fails the
 `server_replaced` arm; its `luks_passphrase_touched` arm fires on a create too; and its
 five-member allow-set cannot hold an eighteen-address birth fan-out. The only remaining
-route was an untargeted `terraform apply` from an operator laptop — no destroy-guard, no
+route was an untargeted <!-- lint-infra-ignore start -->`terraform apply` from an operator laptop<!-- lint-infra-ignore end --> — no destroy-guard, no
 stock preflight, and a plan of that shape taken 2026-07-27 carried **nine destroys**.
+(That route is what this runbook exists to replace — it is described, never prescribed.)
 
 ## Before you dispatch
 
@@ -171,19 +172,21 @@ runbook by design (`hr-no-ssh-fallback-in-runbooks`).
   deliberately unwired — see above). Continued `SUPPRESS` lines five minutes post-apply mean
   the host is dark or the NIC never attached.
 
-**Be honest about what you cannot verify yet.** The probe above observes *reachability*, not
+**Be honest about what you cannot verify yet.** <!-- lint-infra-ignore start -->The probe above observes *reachability*, not
 *boot correctness*: it tells you something answers on `10.0.1.20:22`, not that the bootstrap
-ran or that the LUKS volume mounted. **The git-data host itself** emits nothing — no Sentry
+ran or that the LUKS volume mounted.<!-- lint-infra-ignore end --> **The git-data host itself** emits nothing — no Sentry
 emit, no log shipper, no heartbeat of its own — until #6982. A green apply means Terraform
 created the resources; it does not mean the host booted correctly. That gap is the entire
 reason the interlock exists, and it closes when #6982 does.
 
 ## References
 
+<!-- lint-infra-ignore start -->
 - ADR-149 — this route, the interlock, and its release checklist
 - ADR-145 — the web-host birth precedent this mirrors
 - ADR-115 — why git-data is excluded from the reboot primitive
 - ADR-103 — why every git-data address is an operator-applied exclusion
+<!-- lint-infra-ignore end -->
 - ADR-068 — the multi-host workspaces architecture this serves
 - `web-host-birth.md` — the sibling runbook
 - `git-data-luks-cutover-5274.md` — the cutover that makes the LUKS volume live

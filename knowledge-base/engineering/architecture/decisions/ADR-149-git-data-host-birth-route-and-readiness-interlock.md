@@ -30,11 +30,17 @@ cannot be planned for destroy. On a birth that argument *inverts*: an omitted ad
 shape and opposites by contract, and widening one to cover the other would destroy the
 property that makes it worth having.
 
+<!-- lint-infra-ignore start -->
 The only remaining route was an untargeted `terraform apply` from an operator laptop,
 which runs neither the destroy-guard nor the stock preflight. A plan of that shape taken
 2026-07-27 carried **nine destroys**. That is a standing violation of
 `hr-all-infrastructure-provisioning-servers` and
 `hr-fresh-host-provisioning-reachable-from-terraform-apply`.
+<!-- lint-infra-ignore end -->
+<!-- The region above describes the PRE-EXISTING broken state this ADR REMOVES; it is
+     not a prescribed step. The whole point of the decision below is that no operator
+     ever runs that apply again. -->
+
 
 ## Decision
 
