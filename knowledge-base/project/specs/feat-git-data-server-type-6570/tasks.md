@@ -127,10 +127,10 @@ on every new assertion (`cq-assert-anchor-not-bare-token`).
 - [x] 6.6 **TR5 restored (R14)**: confirm `stock-preflight-gate.sh` reads the new type and no test
       encodes today's availability. **Now the sole orderability guard** — FR6 catches only phantom
       types, not unorderable ones
-- [ ] 6.7 `bash apps/web-platform/infra/run-registered-suites.sh` — exits 0 and adds **no new**
+- [x] 6.7 `bash apps/web-platform/infra/run-registered-suites.sh` — exits 0 and adds **no new**
       orphan vs the `origin/main` baseline (9 pre-existing; the check is advisory)
 - [x] 6.8 `cloud-init-user-data-size.test.ts` passes
-- [ ] 6.9 `bash scripts/test-all.sh` — note it does **not** cover `apps/web-platform/infra/`
+- [x] 6.9 `bash scripts/test-all.sh` — note it does **not** cover `apps/web-platform/infra/`
 - [x] 6.10 AC13 in its fixed form (must be able to `exit 1`)
 
 ## Phase 7 — Ship prep
