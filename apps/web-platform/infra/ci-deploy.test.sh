@@ -676,6 +676,26 @@ MOCK
 create_mock_sleep() {
   cat > "$1/sleep" << 'MOCK'
 #!/bin/bash
+# Record the requested duration when MOCK_SLEEP_LOG is set (mirrors rec() in
+# workspaces-luks-harness.sh:163). This is the only observation channel for the
+# backoff schedule VALUES — a pull-COUNT assertion cannot distinguish "2 4" from
+# "9 9", so without this the prod default schedule is mutable while green.
+if [[ -n "${MOCK_SLEEP_LOG:-}" ]]; then printf '%s\n' "${1:-}" >> "$MOCK_SLEEP_LOG"; fi
+# Invocation cap. Scoped per mock dir (every runner takes a fresh `mktemp -d`, so
+# this counts one run_deploy, not the whole suite). Real deploy paths sleep well
+# under 50 times per run; a loop whose exit is time-gated rather than data-gated
+# hot-spins under a no-op `sleep` and reaches 500 in milliseconds — so this turns
+# a would-be hang-until-timeout-minutes into a fast, named, countable failure.
+_cap="${MOCK_SLEEP_MAX_CALLS:-500}"
+_cf="$0.calls"
+_n=$(cat "$_cf" 2>/dev/null || echo 0)
+[[ "$_n" =~ ^[0-9]+$ ]] || _n=0
+_n=$((_n + 1))
+echo "$_n" > "$_cf"
+if (( _n > _cap )); then
+  echo "MOCK_SLEEP_CAP_EXCEEDED: no-op sleep invoked ${_n} times (cap=${_cap}) — a time-gated loop in ci-deploy.sh is hot-spinning under the mock. See create_mock_sleep in ci-deploy.test.sh." >&2
+  exit 1
+fi
 exit 0
 MOCK
   chmod +x "$1/sleep"
@@ -3952,18 +3972,23 @@ export MOCK_SLEEP_NOOP=1            # no-op the real "2 4" default sleeps so the
 unset PULL_TRANSIENT_RETRY_SLEEPS   # exercise the PROD default (2 4) — the wiring M10 leaves untested
 export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
 export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+# Record the sleep ARGUMENTS, not just the call count. The pull-count assertion below pins how MANY
+# retries the default yields, but is blind to their DURATIONS: mutating the default to "9 9" still
+# gives 3 pulls and stays green. Truncated per arm — the mock APPENDS, so a stale file would leak.
+export MOCK_SLEEP_LOG="$T6525/sleeps.txt";      : > "$MOCK_SLEEP_LOG"
 run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && T8_RC=0 || T8_RC=$?
 TOTAL=$((TOTAL + 1))
 T8_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
-if [[ "$T8_RC" -ne 0 ]] && [[ "$T8_PULLS" -eq 3 ]] \
+T8_SCHED=$(tr '\n' ' ' < "$MOCK_SLEEP_LOG" 2>/dev/null | sed 's/[[:space:]]*$//')
+if [[ "$T8_RC" -ne 0 ]] && [[ "$T8_PULLS" -eq 3 ]] && [[ "$T8_SCHED" == "2 4" ]] \
    && grep -q 'image pull failed (network)' "$MOCK_SENTRY_CAPTURE_FILE" \
    && grep -q '"recovery_stage": *"transient_exhausted"' "$MOCK_SENTRY_CAPTURE_FILE"; then
-  PASS=$((PASS + 1)); echo "  PASS: default schedule (unset ⇒ 2 4) retries — exactly 3 GHCR pulls (1+2), transient_exhausted (kills the empty-default regression)"
+  PASS=$((PASS + 1)); echo "  PASS: default schedule (unset ⇒ 2 4) retries — exactly 3 GHCR pulls (1+2), backoff durations exactly '2 4', transient_exhausted (kills the empty-default regression)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-8 (rc=$T8_RC ghcr_pulls=$T8_PULLS; expected nonzero + 3 pulls + network + transient_exhausted — the DEFAULT '2 4' must produce 2 retries; an empty default gives 1 pull)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-8 (rc=$T8_RC ghcr_pulls=$T8_PULLS sched='$T8_SCHED'; expected nonzero + 3 pulls + sched '2 4' + network + transient_exhausted — the DEFAULT '2 4' must produce 2 retries at 2s then 4s; an empty default gives 1 pull)"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
-unset MOCK_GHCR_PULL_TRANSIENT_ALWAYS MOCK_SLEEP_NOOP MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+unset MOCK_GHCR_PULL_TRANSIENT_ALWAYS MOCK_SLEEP_NOOP MOCK_SLEEP_LOG MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
 rm -rf "$T6525"
 
 # T-6525-9 (pattern/code-quality F1): PULL_TRANSIENT_RETRY_SLEEPS="" DISABLES the retry. This locks

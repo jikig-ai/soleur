@@ -394,11 +394,14 @@ plan keeps the operator's stated scope and raises the evidence bar instead
   safe ONLY because the retry loops are bounded by ATTEMPTS, never by wall
   clock"*). For every `sleep` site in `ci-deploy.sh`, classify the enclosing
   loop. Enumerate **all 15** invocation sites, including the five `sleep 3`
-  canary sites. (15, not 17: `ci-deploy.sh:1430` is a comment and `:1437` is the
-  `_sleeps` **array declaration** — neither is a call. A case-insensitive
-  `grep -c '\bsleep\b'` counts both and reads 17; the enumeration below is the
-  authority.)
-  - *bounded-iteration* — `for i in $(seq 1 N)`: `:1842`, `:1907`, `:1954`, and `:2452` (which contains `sleep 3` at `:2471`, `:2477`, `:2483`, `:2491`, `:2526`). 1-shot via `create_mock_seq`.
+  canary sites. (15, not 16: the single extra is the **comment** at
+  `ci-deploy.sh:1430`. `grep -c '\bsleep\b'` reads **16**, not 17 — the v1 plan
+  claimed 17 and attributed the second extra to the `_sleeps` **array
+  declaration** at `:1437`; that is wrong on both counts, because `_` is a word
+  character so `_sleeps` has no `\b` before `sleep` and never matched. Measured
+  at /work: bare `grep -c` = 16, invocation grep = 15. The enumeration below is
+  the authority.)
+  - *bounded-iteration* — `for i in $(seq 1 N)`: `:1842`, `:1907`, `:1954`, and `:2452` (whose sleeps are `sleep 3` at `:2471`, `:2477`, `:2483`, `:2491`, `:2526`; the three interval sleeps are at `:1851`, `:1915`, `:1961`). 1-shot via `create_mock_seq`.
   - *counter-bounded* — `until … [[ "$n" -ge 3 ]] && break`: `:1200`, `:1201`, `:1275`, `:1278`; and `attempt < max` at `:1470` inside `while :; do` (`:1439`), sleep at `:1472`.
   - *straight-line* — `sleep 5` at `:2678`.
   - *wall-clock exit* — `while cron_in_flight` at `:2603` (sleep `:2610`). **The only one**; data-bounded in tests by the docker-mock countdown (`ci-deploy.test.sh:213-225`, default `exit 1` = zero iterations), and the timeout test pins `CRON_DRAIN_TIMEOUT=0` (`:3351`).
@@ -487,8 +490,8 @@ result. `decision-challenges.md` is rendered by ship Phase 6.
   and concludes zero reachable hot-spin loops. The mock's invocation cap is
   present. Verify the count with
   `grep -nE '\bsleep ' apps/web-platform/infra/ci-deploy.sh | grep -vE ':\s*#' | wc -l`
-  → `15`; a bare `grep -c '\bsleep\b'` reads 17 because it also counts the
-  `:1430` comment and the `:1437` array declaration.
+  → `15`; a bare `grep -c '\bsleep\b'` reads **16**, the one extra being the
+  `:1430` comment.
 - **AC5** No stale seam prose survives repo-wide:
   `grep -rc 'MOCK_SLEEP_NOOP' apps/web-platform/infra/ | grep -v ':0'` returns
   nothing (learnings and `knowledge-base/project/{plans,specs}` are historical
@@ -633,12 +636,16 @@ and file as `action-required`, per ADR-084.
 - **A grep for a phrase that spans a line break is a permanent false-green.**
   `~12s of slack under timeout-minutes: 8` is split across `:607`/`:608`. Pick a
   phrase that spans no line break (and no punctuation boundary).
-- **A word-boundary grep counts declarations and comments, not call sites.**
-  `grep -ci '\bsleep\b' ci-deploy.sh` reads **17**; there are **15** actual
-  invocations. The two extras are a comment (`:1430`) and the `_sleeps` array
-  declaration (`:1437`). An AC that says "enumerate all N" must derive N from the
-  same instrument the enumeration uses — this plan shipped `17` in two places
-  before the verify-the-negative pass caught it.
+- **A word-boundary grep counts comments, not call sites — and the correction is
+  itself a claim to measure.** `grep -c '\bsleep\b' ci-deploy.sh` reads **16**;
+  there are **15** actual invocations, the one extra being a comment (`:1430`).
+  The plan shipped `17` in two places, "corrected" by a verify-the-negative pass
+  that reasoned rather than ran: it attributed the second extra to the `_sleeps`
+  **array declaration** at `:1437`, which never matched at all — `_` is a word
+  character, so `_sleeps` has no `\b` before `sleep`. An AC that says "enumerate
+  all N" must derive N by RUNNING the same instrument the enumeration uses;
+  deriving it by reading is how both the original `17` and its wrong rationale
+  survived to /work.
 - `TEST_PATH_BASE` (`:17`) is a `readonly` **absolute** PATH, so `$MOCK_DIR` is
   the only lever — a PATH-prepended shim outside the runners catches nothing.
   Verified empirically while measuring this plan.

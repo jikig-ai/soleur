@@ -35,10 +35,12 @@ not renumber one file without the other.
       `sleep 3` sites (`:2471`, `:2477`, `:2483`, `:2491`, `:2526`) inside the
       `:2452` `seq` loop. Conclusion must be zero reachable hot-spin loops. Keep
       for the PR body (AC4).
-      **The count is 15, not 17.** `ci-deploy.sh:1430` is a comment and `:1437`
-      is the `_sleeps` **array declaration** — neither is a call. Verify with
-      `grep -nE '\bsleep ' apps/web-platform/infra/ci-deploy.sh | grep -vE ':\s*#' | wc -l`;
-      a bare `grep -c '\bsleep\b'` reads 17 and is the wrong instrument.
+      **The count is 15.** Verify by RUNNING
+      `grep -nE '\bsleep ' apps/web-platform/infra/ci-deploy.sh | grep -vE ':\s*#' | wc -l`.
+      A bare `grep -c '\bsleep\b'` is the wrong instrument and reads **16** — the
+      one extra is the comment at `:1430`. (The plan originally said 17, blaming
+      the `_sleeps` array declaration at `:1437`; that never matched, since `_`
+      is a word character. Measured at /work, not reasoned.)
 - [ ] **0.4** Clean solo baseline for the record:
       `time bash apps/web-platform/infra/ci-deploy.test.sh`. Plan-time reading:
       `real 8m58.232s / user 0m41.805s / sys 1m32.496s`, `184/184 passed`.
