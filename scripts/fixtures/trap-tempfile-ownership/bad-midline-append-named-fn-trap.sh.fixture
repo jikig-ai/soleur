@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# SYNTHESIZED fixture (cq-test-fixtures-synthesized-only) — not a copy of any real script.
+#
+# The real-world defect shape that rule (a) was blind to, combining TWO conditions that
+# each independently defeated the pre-fix implementation:
+#
+#   1. The helper is a ONE-LINER, so `_TMPFILES+=(` sits mid-line rather than at line
+#      start. `ARRAY_APPEND` was `^\s*`-anchored and applied with `.match()`, so it could
+#      never see the append.
+#   2. The trap names a FUNCTION (`trap cleanup_tmp EXIT`) rather than carrying an inline
+#      `${_TMPFILES[@]}` body. `trap_owned_arrays()` harvested `${VAR}` references only
+#      from the trap LINE, and a bare function name contains no `$` at all — so the
+#      owned-set came back empty and rule (a) had nothing to match against.
+#
+# Either condition alone is enough to hide the defect; a fixture carrying only one of
+# them is vacuous for this regression. Both must be present.
+set -uo pipefail
+
+_TMPFILES=()
+
+cleanup_tmp() {
+  local p
+  for p in "${_TMPFILES[@]:-}"; do
+    [[ -n "$p" ]] && rm -rf -- "$p"
+  done
+}
+trap cleanup_tmp EXIT INT TERM
+
+# The append below is discarded: command substitution runs the body in a subshell, so the
+# parent's _TMPFILES stays empty and cleanup_tmp iterates nothing.
+mktmp()  { local p; p=$(mktemp "$@");    _TMPFILES+=("$p"); printf '%s' "$p"; }
+mktmpd() { local p; p=$(mktemp -d "$@"); _TMPFILES+=("$p"); printf '%s' "$p"; }
+
+f=$(mktmp -t fx.XXXXXXXX)
+d=$(mktmpd -t fxd.XXXXXXXX)
+printf 'payload\n' > "$f"
+printf 'payload\n' > "$d/inner"

@@ -216,6 +216,12 @@ if want_scripts; then
   # #6789: arms for the tmpfs scratch reaper. It DELETES files, so every gate
   # (age/size/ownership/liveness/protected-path) is asserted in both directions.
   run_suite "scripts/tmpfs-guard" bash scripts/tmpfs-guard.test.sh
+  # The fstab ceiling applier. Every case drives a FIXTURE fstab through the
+  # RAISE_TMPFS_FSTAB seam — the real /etc/fstab is never read or written, because a
+  # test that touched it could leave the machine unbootable. Registered explicitly for
+  # the same reason as its neighbours: scripts/*.test.sh is NOT auto-globbed, so an
+  # unregistered suite is an ORPHAN that gates nothing.
+  run_suite "scripts/raise-tmp-tmpfs-ceiling" bash scripts/raise-tmp-tmpfs-ceiling.test.sh
   run_suite "scripts/lint-orphan-test-suites" bash scripts/lint-orphan-test-suites.sh
   run_suite "scripts/cron-artifact-age" bash scripts/cron-artifact-age.test.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
