@@ -188,6 +188,13 @@ from a silent wrong-host write into a loud apply failure, which is a strict impr
 not a fix. Tracked in #6441; the audit of what may already have been written to the wrong host is #6440.
 
 **Load-bearing constraint for any I2 implementation.** Do **NOT** repoint the 12
+<!-- AMENDED 2026-07-27 (#7000): the count is 15, not 12 — `server.tf` carries 15 SSH-connected
+     `terraform_data` provisioners today (a 16th, `terraform_data.root_authorized_keys`, lives in
+     ci-ssh-key.tf and is outside this file's scope). The constraint below is unchanged and was
+     re-confirmed at #7000: it is why that issue's prescribed `for_each` fan-out was withdrawn
+     rather than implemented. It is now MECHANICALLY ENFORCED — `apps/web-platform/infra/
+     web-host-provisioner-parity.test.sh` §1 fails if any of the 15 gains `for_each` or loses its
+     web-1 pin, so this prose can no longer be violated silently. -->
 `terraform_data.*` `connection { host }` blocks to `10.0.1.10`. They dial web-1's **public**
 IP by design: `.github/actions/cf-tunnel-ssh-bridge/action.yml:165` sets
 `SERVER_IP=$(terraform output -raw server_ip)` (public by contract, `outputs.tf:1-4`) and
