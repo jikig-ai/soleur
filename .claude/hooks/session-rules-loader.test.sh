@@ -564,7 +564,13 @@ fi
 # defaults point at the operator's real $HOME, so an unpinned arm would read
 # live machine state and pass or fail for reasons unrelated to the code.
 # ---------------------------------------------------------------------------
-TALARM=$(mktemp -d); setup_repo "$TALARM" docs
+TALARM=$(mktemp -d)
+# Owning trap (ADR-129). The pre-existing T1..T9 fixture dirs above predate the
+# lint and are grandfathered by its diff scoping; this one is new, so it cleans
+# up after itself rather than adding to the /tmp entry count the sibling half of
+# this very PR exists to report on.
+trap 'rm -rf "$TALARM"' EXIT
+setup_repo "$TALARM" docs
 ALARM_FIX="$TALARM/alarm-fixture.log"
 HB_FIX="$TALARM/heartbeat-fixture"
 
