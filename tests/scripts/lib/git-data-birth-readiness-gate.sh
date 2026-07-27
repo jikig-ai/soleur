@@ -51,12 +51,16 @@
 #      THROWS in production without it — so a birth turns Art. 17 erasure into a 100 %
 #      false-alarm path);
 #   6. the firewall-attachment entailment correction is in place;
-#   7. the DO-NOT-DISPATCH banner in git-data-birth.md is cleared.
+#   7. THIS GATE'S OWN MECHANISM is replaced by a direct assertion on the emitter resource
+#      and this text sentinel is deleted (operator decision 2026-07-27, DC-2) — a dispatch
+#      precondition, not a post-release cleanup, which is why it sits ahead of (8);
+#   8. the DO-NOT-DISPATCH banner in git-data-birth.md is cleared (terminal: the runbook
+#      clears it only when every item above is done).
 #
 # This gate mechanically enforces only the THREADING half of (1) — a non-comment line that
-# merely references the variable releases it. It cannot check (2)-(7), and saying so here is
-# deliberate: a gate that is believed to cover more than it does is worse than one whose
-# scope is written down.
+# merely references the variable releases it. It cannot check the remaining items, and saying
+# so here is deliberate: a gate that is believed to cover more than it does is worse than one
+# whose scope is written down.
 #
 # Usage:  source tests/scripts/lib/git-data-birth-readiness-gate.sh
 #         git_data_birth_readiness_gate <cloud-init-git-data.yml>   # 0=RELEASED, 1=HOLD
@@ -138,6 +142,10 @@ TO RELEASE THIS INTERLOCK — this is #6982's handoff, and the full checklist is
      GIT_DATA_BIRTH_TARGET_BASES in terraform-target-parity.test.ts.
   4. Provide a post-apply signal to replace ADR-145's R2-R5 boot poll, which has no
      analogue here because there is currently nothing to poll.
+  5. Replace this gate's own mechanism with a direct assertion on the emitter resource
+     and delete this sentinel (ADR-149 release-checklist item 7; operator decision
+     2026-07-27, DC-2). Once the emitter is a real Terraform resource, assert THAT
+     resource rather than grepping template text. This is mandated, not optional.
 
 THEN clear the DO-NOT-DISPATCH banner at the top of
 knowledge-base/engineering/operations/runbooks/git-data-birth.md.
@@ -151,6 +159,6 @@ HOLD
     return 1
   fi
 
-  echo "git_data_birth_readiness_gate: RELEASED — ${hits} non-comment \${sentry_dsn} interpolation(s) found in ${cloud_init}; the host has an off-host emitter wired. NOTE: this gate enforces only the THREADING half of item 1 of the ADR-149 release checklist — a non-comment line that merely references the variable satisfies it. Items 2-7 (Doppler scope reachability, three-way address registration, post-apply signal, GIT_DATA_SSH_HOST production, the firewall-attachment entailment correction, and clearing the runbook banner) are NOT machine-checked here."
+  echo "git_data_birth_readiness_gate: RELEASED — ${hits} non-comment \${sentry_dsn} interpolation(s) found in ${cloud_init}; the host has an off-host emitter wired. NOTE: this gate enforces only the THREADING half of item 1 of the ADR-149 release checklist — a non-comment line that merely references the variable satisfies it. EVERY OTHER item on the ADR-149 release checklist — including this gate's own mandated replacement by a direct assertion on the emitter resource (operator decision 2026-07-27, DC-2) — is NOT machine-checked here."
   return 0
 }

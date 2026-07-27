@@ -67,22 +67,22 @@ Target: `knowledge-base/engineering/architecture/decisions/ADR-149-git-data-host
 Target: `tests/scripts/lib/git-data-birth-readiness-gate.sh` — **comments and message text only.**
 No branch, regex, or exit code.
 
-- [ ] 3.1 Header block, anchor `RELEASE CONDITION — the checklist #6982 inherits`: insert the new
+- [x] 3.1 Header block, anchor `RELEASE CONDITION — the checklist #6982 inherits`: insert the new
       condition as item 7 and renumber banner-clearing to 8 (matching the ADR), then change
       `It cannot check (2)-(7)` → `It cannot check the remaining items`.
-- [ ] 3.2 **HOLD** message, anchor `TO RELEASE THIS INTERLOCK`: add a 5th item — *"Replace this
+- [x] 3.2 **HOLD** message, anchor `TO RELEASE THIS INTERLOCK`: add a 5th item — *"Replace this
       gate's own mechanism with a direct assertion on the emitter resource and delete this sentinel
       (ADR-149 release-checklist item 7; operator decision 2026-07-27, DC-2)."* This is a
       `<<'HOLD'` quoted heredoc, so there is no interpolation risk. HOLD is what a dispatch prints
       today — it is where the #6982 implementer reads it *before* doing the work.
-- [ ] 3.3 **RELEASED** message, anchor `Items 2-7 (Doppler scope reachability` (**ASCII** hyphen
+- [x] 3.3 **RELEASED** message, anchor `Items 2-7 (Doppler scope reachability` (**ASCII** hyphen
       here): replace the range **and its six-phrase enumeration** with the universally-quantified
       sentence from plan Phase 3.3. This edit is inside a double-quoted `echo` — the replacement text
       must contain no `$`, backtick, or unescaped `"`.
-- [ ] 3.4 Confirm the literal `NOT machine-checked` survives — it is the suite's only assertion on
+- [x] 3.4 Confirm the literal `NOT machine-checked` survives — it is the suite's only assertion on
       this text (`test-git-data-birth-readiness-gate.sh`, anchor
       `the RELEASE states what it did NOT check`).
-- [ ] 3.5 Verify **AC7**, **AC9**, and run AC11's gate suite.
+- [x] 3.5 Verify **AC7**, **AC9**, and run AC11's gate suite.
 
 ## Phase 4 — GitHub: **post-merge**, agent-executed
 
