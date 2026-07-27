@@ -146,33 +146,33 @@ creates `hcloud_server.git_data`.
 
 ## Phase 7 — Records
 
-- [ ] 7.1 Amend ADR-068's addendum (D1-corrected + D-SIZE) and ADR-149 (checklist item 8, the D-HB
+- [x] 7.1 Amend ADR-068's addendum (D1-corrected + D-SIZE) and ADR-149 (checklist item 8, the D-HB
       Alternatives amendment, the Residual 2 disposition, **and Residual 1 as partially discharged**
       by the boot-completion emit, R30).
-- [ ] 7.2 Record **D-EMIT as an ADR-147 addendum** (R30) — that ADR is literally "boot-stage
+- [x] 7.2 Record **D-EMIT as an ADR-147 addendum** (R30) — that ADR is literally "boot-stage
       diagnostics live in baked host scripts".
-- [ ] 7.3 Art. 30 register: wrap PA-1 (g)(13) and PA-2 (g)(17) in the **DRAFTED / NOT-YET-ACTIVE**
+- [x] 7.3 Art. 30 register: wrap PA-1 (g)(13) and PA-2 (g)(17) in the **DRAFTED / NOT-YET-ACTIVE**
       pattern PA-2 already carries; amend PA-8 (c)(ii)/(d)/(f)/(g) for the additional emitting host.
-- [ ] 7.4 `expenses.md`: add the missing **plaintext** volume row, bring both volume rows to `0.62`,
+- [x] 7.4 `expenses.md`: add the missing **plaintext** volume row, bring both volume rows to `0.62`,
       strike the "no net-new" claim for the pre-cutover period, keep all git-data rows
       `approved-not-billing`, **and amend the third site of the D1 claim** (R27). Check whether
       §Downstream Consumers requires a `finance/cost-model.md` refresh (R38).
-- [ ] 7.5 `model.c4`: two new edges (`gitDataStore -> betterstack`, `gitDataStore -> sentry`) with
+- [x] 7.5 `model.c4`: two new edges (`gitDataStore -> betterstack`, `gitDataStore -> sentry`) with
       TARGET-state honesty markers, **and two description amendments — the `betterstack` ELEMENT
       description as well as the `betterstack -> founder` relationship** (R24). Run
       `c4-code-syntax.test.ts` + `c4-render.test.ts`. `views.c4` needs no change (both endpoints are
       already in the `containers` view — R25).
-- [ ] 7.6 `git-data-birth.md`: **retain** the DO-NOT-DISPATCH banner, rewrite its release condition
+- [x] 7.6 `git-data-birth.md`: **retain** the DO-NOT-DISPATCH banner, rewrite its release condition
       to name the W12 rehearsal evidence, add sizing + emitter-verified rows, add a post-birth
       verification section, note the ForceNew hazard on **both** files.
 - [ ] ~~7.7 readiness-gate GREEN arm~~ — **CUT (R15)**: already exists.
-- [ ] 7.8 File the deferred tracking issues: A10 quota assignment (**must name the missing T&C/AUP
+- [x] 7.8 File the deferred tracking issues: A10 quota assignment (**must name the missing T&C/AUP
       storage-limit clause as the blocker** — CPO C5); A11 Residual 3 (**bound to
       `GIT_DATA_STORE_ENABLED`**, plus the three public-doc LUKS paths per R33); the banner-clear
       follow-up (AC32); the multi-sentinel gate hardening (R26); the ADR-143 `cx22` phantom SKU +
       stale `cx23` row; the registry-volume ledger cell. **Separately** (CPO C6, do NOT scope in):
       the blog-post accuracy defect and the cloud-side backup-responsibility gap.
-- [ ] 7.9 Create the follow-through probe with the **three real secret names** and **exit 2 for
+- [x] 7.9 Create the follow-through probe with the **three real secret names** and **exit 2 for
       unborn** (R4, R21); post the #6548 and #6975 comments.
 
 ## Phase 8 — Rehearsal (W12), before PR-ready

@@ -2,23 +2,40 @@
 
 > ## ⛔ DO NOT DISPATCH THIS YET
 >
-> `git-data-host-create` exists and is **mechanically held**. The job refuses to plan
-> until **#6982** ships an off-host emitter in `cloud-init-git-data.yml`.
+> **The MECHANICAL hold is released; this banner is now the only thing holding the route.**
+> Read that twice before dispatching.
 >
-> This is not caution and it is not a preference — it is enforced by
-> `tests/scripts/lib/git-data-birth-readiness-gate.sh`, which runs before any provider is
-> contacted. If you dispatch today you get a clean refusal in about ten seconds and
-> nothing is created.
+> #6982 shipped the off-host emitter, so `git-data-birth-readiness-gate.sh` no longer
+> refuses — the sentinel it looks for (`${sentry_dsn}` in non-comment template text) is
+> present. A dispatch today would **plan and apply**. Nothing stops you but this paragraph.
 >
-> **Why the hold exists:** this host emits nothing off-host, and nothing in its boot path
-> fails closed. A green `terraform apply` and a host whose encrypted volume never mounted
-> are *indistinguishable*. #6982 also carries items ADR-115 makes **unfixable after the
-> birth** — git-data is excluded from the reboot primitive, so a wrong sizing or a missing
-> log shipper cannot be corrected by the usual reboot-forcing resize. Birthing first
-> forecloses those options permanently.
+> **RELEASE CONDITION — clear this banner only when the rehearsal evidence exists.**
+> Every gate #6982 ships is STATIC, and the failure class it defends against
+> (*green apply, dark host*) is only observable at RUNTIME. Mutation arms prove the code
+> CAN go red when neutered; they never prove an event ARRIVES when it is intact. So the
+> condition is not "the code merged" — it is:
 >
-> The full release checklist is in **ADR-149**. Clear this banner only when every item is
-> done, not merely when the gate stops refusing.
+> 1. the rendered template booted **once on a throwaway host** outside the
+>    `hcloud_server.git_data` address, and
+> 2. all three artifacts were **observed off-box**: a Sentry event from the fatal channel,
+>    a Better Stack stage marker, and one `stage:boot_complete` row carrying its four
+>    assertion booleans — each with the query that retrieved it.
+>
+> If only the container-harness rung was reached, that is **not** sufficient: the harness
+> cannot exercise `doppler run` against real Doppler, `luksOpen` against a real volume, the
+> private NIC, or whether an event actually lands. The banner-clear PR carries the
+> throwaway-host rung as **its own** precondition.
+>
+> **Why the hold outlived the gate:** the interlock is a ONE-BIT LATCH guarding a
+> seven-item checklist, and the bit flips on *threading*, not on *emitting*. It cannot
+> verify the emitter emits. ADR-115 additionally makes several #6982 items unfixable after
+> the birth — git-data is excluded from the reboot primitive, and `user_data` is ForceNew
+> with no `ignore_changes`, so **every** cloud-init edit after birth costs a destructive
+> `git-data-host-replace` of the host holding every user's source code.
+>
+> The full release checklist is **ADR-149**, and its per-item disposition table records
+> what #6982 discharged. Clear this banner only when every item is done — including the
+> rehearsal — not merely when the gate stops refusing.
 
 ---
 
@@ -43,6 +60,9 @@ stock preflight, and a plan of that shape taken 2026-07-27 carried **nine destro
 | #6982 has shipped and ADR-149's release checklist is complete | The banner above is cleared |
 | You are on `main` | The environment pins `main`; a branch dispatch is refused |
 | `prd_git_data` has **not** been hand-created in Doppler | `doppler configs -p soleur` — it must be ABSENT (Terraform creates it) |
+| **SIZING is confirmed** (#6982 / ADR-149 item 8) | `var.git_data_server_type` is `cpx22`, and ADR-068's D-SIZE addendum records WHY. Step 7's stock preflight checks **orderability**, never **adequacy** — it will happily birth an under-sized host. `user_data` is ForceNew and a type change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape must be right at birth. |
+| **EMITTER verified** — it has actually emitted, not merely shipped | The rehearsal evidence named in the banner. `grep -c '$${sentry_dsn}'` proves nothing: the readiness gate checks THREADING, and a non-comment line that merely references the variable releases it. The question is whether an event ARRIVED. |
+| The Better Stack query credentials are present | The birth job's post-apply poll needs `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. If that step warns they are absent, the boot signal is **unread** and you are back to "a green apply proves nothing". |
 
 That last row matters more than it looks. See *"Doppler config already exists"* below.
 
@@ -191,3 +211,70 @@ reason the interlock exists, and it closes when #6982 does.
 - `web-host-birth.md` — the sibling runbook
 - `git-data-luks-cutover-5274.md` — the cutover that makes the LUKS volume live
 - #6977 (this route) · #6982 (the interlock's release) · #5274 (Phase-3 GA)
+
+## After the birth — verify the host actually booted (#6982)
+
+**A green apply is not a green boot.** The dispatch's own post-apply step polls for the
+boot signal and FAILS the job if it does not arrive, so a green run is now meaningful — but
+verify independently if that step warned that its credentials were missing.
+
+No SSH appears below, and none is possible: git-data has no human SSH path by design
+(`git-shell` + three `command=`/`no-pty` forced commands, deny-all public ingress).
+
+```bash
+# 1. The boot-completion signal, with its four assertions. Field-isolated raw SQL — a
+#    bare-substring grep matches the shared source's inngest rows quoting issue bodies.
+#    NOTE `remote($BS_TABLE)` takes NO `primary` argument; only s3Cluster does. The
+#    archive arm is REQUIRED: remote() alone is the ~40-minute hot window.
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh "
+  SELECT dt, JSONExtractString(raw,'stage') AS stage,
+             JSONExtractString(raw,'luks_mounted') AS luks_mounted,
+             JSONExtractString(raw,'repo_root')    AS repo_root,
+             JSONExtractString(raw,'hooks_path')   AS hooks_path,
+             JSONExtractString(raw,'provision')    AS provision
+  FROM (SELECT * FROM remote(\$BS_TABLE)
+        UNION ALL SELECT * FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+  WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data'
+    AND JSONExtractString(raw,'stage') = 'boot_complete'
+  ORDER BY dt DESC LIMIT 5"
+
+# 2. Any boot FATAL. Sentry is the durable channel and the only one that pages.
+bash scripts/sentry-issue.sh --search 'host_name:soleur-git-data'
+
+# 3. The standing probe (runs daily until it passes).
+bash scripts/followthroughs/git-data-birth-emitter-6982.sh   # 0 PASS / 1 FAIL / 2 TRANSIENT
+```
+
+**Reading the result.** ANY `"no"` among the four assertions is a FAILED birth even if the
+apply was green: it means the bootstrap reached its final stage with an invariant unmet.
+Zero rows means the host never got that far — check (2) for the stage that died.
+
+**What the boot signal does NOT say.** It reports `luks_mounted` — the LUKS *device* is open
+and mounted — and asserts **nothing** about the repositories being encrypted at rest,
+because they are not: `REPO_ROOT` is on the PLAINTEXT volume until the
+`GIT_DATA_STORE_ENABLED` cutover. Do not read it as an encryption-at-rest attestation; the
+Art. 30 register carries that distinction explicitly.
+
+## ForceNew hazard — read before editing either file (#6982)
+
+`hcloud_server.git_data` deliberately carries **no** `lifecycle.ignore_changes = [user_data]`,
+and `user_data` is **ForceNew**. Both of these are inputs to it:
+
+- `apps/web-platform/infra/cloud-init-git-data.yml`
+- `apps/web-platform/infra/git-data-bootstrap.sh` (and the four other scripts, now injected
+  as plain text rather than base64 — #6982)
+
+**Every byte counts, comments included.** Post-birth, a one-word comment fix in either file
+costs a full `git-data-host-replace`: a destroy-then-create of the host holding every
+connected user's source code, with both volumes and the passphrase preserved *by omission*.
+Pre-birth the same edit costs nothing. The omission is deliberate — it preserves the clean
+replace-to-reprovision path — so this is a residual to respect, not a bug to fix.
+
+There is also a hard **32,768-byte** cap on the rendered `user_data`, gated in CI by
+`apps/web-platform/infra/git-data-userdata-budget.sh`. Measure with Terraform's own
+`base64gzip`, never `gzip -9` — the latter overstates headroom.
+
+**Deferred:** the `prjquota` MOUNT option is deliberately NOT set (#6982 / R31). The
+`mkfs -O quota,project` FLAG ships because it is migration-forcing; the mount option is
+reversible, does nothing until projects are assigned, and would add a new way for the mount
+to fail at boot on a host with no console.
