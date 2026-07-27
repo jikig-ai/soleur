@@ -64,7 +64,7 @@ else
   SCAN="$CMD"
 fi
 
-if ! echo "$SCAN" | grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge)(\s|$|&&|\|\||;)'; then
+if ! grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge)(\s|$|&&|\|\||;)' <<<"$SCAN"; then
   exit 0
 fi
 

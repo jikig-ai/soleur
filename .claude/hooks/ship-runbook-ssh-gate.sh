@@ -32,7 +32,7 @@ eval "$(echo "$INPUT" | jq -r '@sh "CMD=\(.tool_input.command // "") WORK_DIR=\(
 # scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
 # commit message documenting `gh pr ready` is not mistaken for one (#5192).
 SCAN=$(strip_command_bodies "$CMD")
-if ! echo "$SCAN" | grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)'; then
+if ! grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)' <<<"$SCAN"; then
   exit 0
 fi
 if [[ "$WORK_DIR" != /* ]] || [[ ! -d "$WORK_DIR" ]]; then exit 0; fi
@@ -69,7 +69,7 @@ for f in $RUNBOOK_FILES; do
   # Filter out hits that fall inside a "Last-resort diagnosis" or "Emergency
   # only" section — those are sanctioned. The check is heuristic: scan the
   # full added-line window for one of those headings before the hit.
-  if printf '%s\n' "$added" | grep -qiE '(last-?resort|emergency only|when all else fails)' ; then
+  if grep -qiE '(last-?resort|emergency only|when all else fails)' <<<"$added"; then
     # If the file has a "last-resort" heading in its added content, only
     # block if the hit appears BEFORE that heading in the diff order.
     last_resort_line=$(printf '%s\n' "$added" | grep -niE '(last-?resort|emergency only|when all else fails)' | head -1 | awk -F: '{print $1}')

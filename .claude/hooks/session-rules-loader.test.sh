@@ -556,6 +556,103 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# ---------------------------------------------------------------------------
+# tmpfs-guard alarm surfacing (#6991).
+#
+# The guard writes these files from cron; this hook is the only channel by
+# which they reach a human. Every arm pins the files to a fixture — the
+# defaults point at the operator's real $HOME, so an unpinned arm would read
+# live machine state and pass or fail for reasons unrelated to the code.
+# ---------------------------------------------------------------------------
+TALARM=$(mktemp -d)
+# Owning trap (ADR-129). The pre-existing T1..T9 fixture dirs above predate the
+# lint and are grandfathered by its diff scoping; this one is new, so it cleans
+# up after itself rather than adding to the /tmp entry count the sibling half of
+# this very PR exists to report on.
+trap 'rm -rf "$TALARM"' EXIT
+setup_repo "$TALARM" docs
+ALARM_FIX="$TALARM/alarm-fixture.log"
+HB_FIX="$TALARM/heartbeat-fixture"
+
+# AC-T1: a healthy machine injects nothing. A banner on every session for a
+# machine with no problem is how the previous channel earned its silence.
+TOTAL=$((TOTAL+1))
+rm -f "$ALARM_FIX" "$HB_FIX"
+ctx_alarm_none=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
+  | jq -r '.hookSpecificOutput.additionalContext')
+if ! printf '%s' "$ctx_alarm_none" | grep -qF '[tmpfs-guard]'; then
+  echo "PASS: AC-T1 no alarm file → nothing injected"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC-T1 injected a tmpfs-guard block with no alarm present"
+  FAIL=$((FAIL+1))
+fi
+
+# AC-T2: an alarm is rendered, and lines 4-6 stay the session-context triple.
+# That positional contract is asserted by AC7/AC11 above; splicing the alarm
+# into the line-4 slot would red them the first time the guard fires, i.e.
+# during the incident, presenting as an unrelated loader regression.
+TOTAL=$((TOTAL+1))
+printf '2026-07-27T10:00:00Z /tmp at 91%% — nothing reapable found.\n' > "$ALARM_FIX"
+ctx_alarm=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
+  | jq -r '.hookSpecificOutput.additionalContext')
+al4=$(printf '%s' "$ctx_alarm" | sed -n '4p')
+al5=$(printf '%s' "$ctx_alarm" | sed -n '5p')
+al6=$(printf '%s' "$ctx_alarm" | sed -n '6p')
+if printf '%s' "$ctx_alarm" | grep -qF '/tmp at 91%' \
+   && [[ "$al4" == '[session-context]'* ]] \
+   && [[ "$al5" == '[session-context]'* ]] \
+   && [[ "$al6" == '[session-context]'* ]]; then
+  echo "PASS: AC-T2 alarm rendered without displacing the lines 4-6 contract"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC-T2 alarm rendering (l4='$al4')"
+  FAIL=$((FAIL+1))
+fi
+
+# AC-T3: the alarm file is cron-written input reaching the top of every agent
+# session. Control characters are stripped and the line is capped, matching how
+# this file already treats the MCP roster and the worktree path.
+TOTAL=$((TOTAL+1))
+{ printf '2026-07-27T10:00:00Z NASTY\001\002CTRL '; head -c 3000 /dev/zero | tr '\0' 'Z'; printf '\n'; } > "$ALARM_FIX"
+ctx_nasty=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
+  | jq -r '.hookSpecificOutput.additionalContext')
+nasty_line=$(printf '%s' "$ctx_nasty" | grep -F '[tmpfs-guard]' | head -1)
+nasty_ctrl=$(printf '%s' "$nasty_line" | tr -cd '\001-\010\013\014\016-\037' | wc -c)
+if [[ "$nasty_ctrl" -eq 0 ]] && [[ "${#nasty_line}" -le 512 ]]; then
+  echo "PASS: AC-T3 alarm content is control-char stripped and length-capped"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC-T3 sanitization (ctrl=$nasty_ctrl len=${#nasty_line})"
+  FAIL=$((FAIL+1))
+fi
+
+# AC-T4: a stale heartbeat reports that the guard stopped running. This is the
+# only signal that can: a dead guard writes no alarms, so an absent alarm file
+# reads as health. An ABSENT heartbeat is not an alarm — it means the guard has
+# never run here (a fresh checkout), which must stay silent.
+TOTAL=$((TOTAL+1))
+rm -f "$ALARM_FIX"
+printf '2026-07-27T09:00:00Z run complete\n' > "$HB_FIX"
+touch -d '-90 minutes' "$HB_FIX"
+ctx_stale=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
+  | jq -r '.hookSpecificOutput.additionalContext')
+touch "$HB_FIX"
+ctx_fresh=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
+  | jq -r '.hookSpecificOutput.additionalContext')
+rm -f "$HB_FIX"
+ctx_absent=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
+  | jq -r '.hookSpecificOutput.additionalContext')
+if printf '%s' "$ctx_stale" | grep -qF 'no completed run' \
+   && ! printf '%s' "$ctx_fresh" | grep -qF 'no completed run' \
+   && ! printf '%s' "$ctx_absent" | grep -qF 'no completed run'; then
+  echo "PASS: AC-T4 stale heartbeat reported; fresh and absent stay silent"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: AC-T4 heartbeat staleness detection"
+  FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "RESULT: $PASS/$TOTAL passed ($FAIL failed)"
 [[ $FAIL -eq 0 ]] || exit 1

@@ -54,7 +54,7 @@ eval "$(echo "$INPUT" | jq -r '@sh "CMD=\(.tool_input.command // "") WORK_DIR=\(
 # scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
 # commit message documenting `gh pr merge` is not mistaken for one (#5192).
 SCAN=$(strip_command_bodies "$CMD")
-if ! echo "$SCAN" | grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+merge(\s|$)'; then
+if ! grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+merge(\s|$)' <<<"$SCAN"; then
   exit 0
 fi
 

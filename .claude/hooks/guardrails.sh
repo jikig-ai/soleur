@@ -99,7 +99,7 @@ fi
 # so chained commands like "git add && git commit" are caught.
 # Scans $COMMAND (NOT $SCAN): this gates the REAL commit, so a message body
 # mentioning "git commit" still IS a commit — no false-positive class here.
-if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+commit'; then
+if grep -qE '(^|&&|\|\||;)\s*git\s+commit' <<<"$COMMAND"; then
   # Resolve the branch from the command's working directory, not the hook's CWD.
   # resolve_command_cwd (lib/incidents.sh) covers: "cd /worktree && ...",
   # "git -C /worktree commit", and hook-input .cwd. Falls through to the
@@ -126,7 +126,7 @@ fi
 # Match rm with recursive-force flags followed by a worktree path as an argument.
 # Uses a single pattern to avoid false positives when .worktrees/ appears in
 # unrelated text (e.g., inside a gh issue comment body or heredoc).
-if echo "$COMMAND" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\s+\S*\.worktrees/'; then
+if grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\s+\S*\.worktrees/' <<<"$COMMAND"; then
   emit_incident "guardrails-block-rm-rf-worktrees" "deny" "Never rm -rf on a worktree path" "$COMMAND"
   jq -n '{
     hookSpecificOutput: {
@@ -168,7 +168,7 @@ fi
 # commit-message bodies blanked) so a commit whose MESSAGE documents `rm -rf`
 # does not false-deny, while a real chained `rm` after the body is preserved and
 # tokenized from the raw $COMMAND (so a quoted path ARGUMENT is still checked).
-if echo "$SCAN" | grep -qE '(^|[[:space:]]|&&|\|\||;|\|)[^[:space:]]*rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)'; then
+if grep -qE '(^|[[:space:]]|&&|\|\||;|\|)[^[:space:]]*rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)' <<<"$SCAN"; then
   # Resolve the command's working directory so relative targets resolve the same
   # way the shell would (cd <dir> && ..., git -C <dir>, hook .cwd, else $PWD).
   # `|| _rd_cwd=""` is belt-and-braces: resolve_command_cwd returns 0 today, but
@@ -263,7 +263,7 @@ fi
 # scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
 # commit message documenting `gh pr merge --delete-branch` is not mistaken for
 # one (#5192 sweep — same phrase-class FP as require-milestone).
-if echo "$SCAN" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
+if grep -qE 'gh\s+pr\s+merge.*--delete-branch' <<<"$SCAN"; then
   WORKTREE_COUNT=$(git worktree list 2>/dev/null | wc -l)
   if [ "$WORKTREE_COUNT" -gt 1 ]; then
     emit_incident "guardrails-block-delete-branch" "deny" "Never use --delete-branch with gh pr merge" "$COMMAND"
@@ -283,14 +283,14 @@ fi
 # Checks only added lines (^\+) to avoid blocking removal of markers.
 # CWD resolution mirrors guardrails:block-commit-on-main via resolve_command_cwd.
 # Scans $COMMAND (NOT $SCAN): gates the REAL commit / merge --continue.
-if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge\s+--continue)'; then
+if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge\s+--continue)' <<<"$COMMAND"; then
   CONFLICT_MARKERS_DIR=$(resolve_command_cwd "$COMMAND" "$INPUT")
   if [ -n "$CONFLICT_MARKERS_DIR" ] && [ -d "$CONFLICT_MARKERS_DIR" ]; then
     STAGED_DIFF=$(git -C "$CONFLICT_MARKERS_DIR" diff --cached 2>/dev/null || true)
   else
     STAGED_DIFF=$(git diff --cached 2>/dev/null || true)
   fi
-  if echo "$STAGED_DIFF" | grep -qE '^\+(<{7}|={7}|>{7})'; then
+  if grep -qE '^\+(<{7}|={7}|>{7})' <<<"$STAGED_DIFF"; then
     emit_incident "guardrails-block-conflict-markers" "deny" "Resolve conflicts before committing" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
@@ -308,7 +308,7 @@ fi
 # The --repo/--milestone flag checks below intentionally read $COMMAND: on a
 # real create those flags live OUTSIDE quotes and survive the strip, and on a
 # commit-body FP this `if` never fires so they are never reached.
-if echo "$SCAN" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
+if grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN"; then
   # Exempt issue creation targeting an EXTERNAL repo (--repo owner/name where
   # owner is not our org). The constitution backlog-hygiene rule applies only to
   # OUR issues; external/vendor repos (e.g. upstream bug reports) have their own
@@ -338,7 +338,7 @@ if echo "$SCAN" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
   done
   # Gate only when no external target was named AND our own repo wasn't named
   # (our repo appearing anywhere wins, so an external token can't ungate it).
-  if [[ "$_our_repo" == 1 || "$_ext_repo" == 0 ]] && ! echo "$COMMAND" | grep -qF -- '--milestone'; then
+  if [[ "$_our_repo" == 1 || "$_ext_repo" == 0 ]] && ! grep -qF -- '--milestone' <<<"$COMMAND"; then
     emit_incident "guardrails-require-milestone" "deny" "gh issue create must include --milestone" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
@@ -357,7 +357,7 @@ fi
 # is no legitimate automated use case for git stash in this repo.
 # scans $SCAN (commit bodies/heredocs stripped — see lib/incidents.sh) so a
 # commit message documenting "never git stash" is not mistaken for one (#5192).
-if echo "$SCAN" | grep -qE '(^|&&|\|\||;)\s*git\s+stash'; then
+if grep -qE '(^|&&|\|\||;)\s*git\s+stash' <<<"$SCAN"; then
   emit_incident "hr-never-git-stash-in-worktrees" "deny" "Never git stash in worktrees" "$COMMAND"
   jq -n '{
     hookSpecificOutput: {

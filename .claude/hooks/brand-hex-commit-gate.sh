@@ -90,7 +90,7 @@ command="$(echo "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
 # Match `git commit` as a command-leading verb (identical to
 # git-commit-secret-scan.sh): tolerates chains (`&&`, `||`, `;`, `|`, `$(`),
 # rejects substring matches and `git commit-tree` / `git commit-graph`.
-if ! echo "$command" | grep -qE '(^|[[:space:]]|&&|\|\||;|\$\()[[:space:]]*git[[:space:]]+commit([[:space:]]|$)'; then
+if ! grep -qE '(^|[[:space:]]|&&|\|\||;|\$\()[[:space:]]*git[[:space:]]+commit([[:space:]]|$)' <<<"$command"; then
   allow
 fi
 
@@ -112,7 +112,7 @@ commit_args="${command#*git commit}"
 # Strip quoted argument values (e.g. -m '… -a …') first so flag-like text inside
 # the commit message cannot flip the diff base and cause a false deny.
 flag_scan="$(printf '%s' "$commit_args" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")"
-if echo "$flag_scan" | grep -qE '(^|[[:space:]])(-[A-Za-z]*a[A-Za-z]*|--all)([[:space:]]|=|$)'; then
+if grep -qE '(^|[[:space:]])(-[A-Za-z]*a[A-Za-z]*|--all)([[:space:]]|=|$)' <<<"$flag_scan"; then
   NAME_REF="HEAD"
 else
   NAME_REF="--cached"
@@ -156,7 +156,10 @@ is_token_def() {
   esac
   case "$f" in
     *.css)
-      _committed_content "$f" | grep -qE -- '--[A-Za-z0-9_-]+[[:space:]]*:[[:space:]]*#[0-9a-fA-F]{3,8}' && return 0
+      # Herestring, not a pipe: a whole CSS file can exceed the pipe capacity,
+      # and grep -q exiting early would SIGPIPE the producer under pipefail —
+      # reporting "no token definition" for a file that has one (#6992).
+      grep -qE -- '--[A-Za-z0-9_-]+[[:space:]]*:[[:space:]]*#[0-9a-fA-F]{3,8}' <<<"$(_committed_content "$f")" && return 0
       ;;
   esac
   return 1
@@ -221,9 +224,9 @@ for f in "${changed_files[@]}"; do
   if is_token_def "$f"; then continue; fi
 
   klass=""
-  if echo "$f" | grep -qE "$EMAIL_RE"; then
+  if grep -qE "$EMAIL_RE" <<<"$f"; then
     klass="email"
-  elif echo "$f" | grep -qE "$UI_RE"; then
+  elif grep -qE "$UI_RE" <<<"$f"; then
     klass="ui"
   else
     continue

@@ -88,7 +88,7 @@ cmd="$(echo "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null || tru
 [ -n "$cmd" ] || allow
 
 # Override-marker escape hatch — must appear literally in the command.
-if echo "$cmd" | grep -qF '# gate-override: background-poll-prefer-monitor'; then
+if grep -qF '# gate-override: background-poll-prefer-monitor' <<<"$cmd"; then
   emit hr-monitor-not-run-in-background-for-polling bypass "background-poll-prefer-monitor: acknowledged opt-out via marker"
   allow
 fi
@@ -116,11 +116,11 @@ FOR_LOOP='(^|[[:space:];&|])for([[:space:]])'
 SLEEP='(^|[[:space:];&|])sleep([[:space:]]|$)'
 
 is_poll=0
-if echo "$cmd" | grep -Eq "$WATCH_IDIOM"; then
+if grep -Eq "$WATCH_IDIOM" <<<"$cmd"; then
   is_poll=1
-elif echo "$cmd" | grep -Eq "$LOOP" && echo "$cmd" | grep -Eq "$REMOTE_READ"; then
+elif grep -Eq "$LOOP" <<<"$cmd" && grep -Eq "$REMOTE_READ" <<<"$cmd"; then
   is_poll=1
-elif echo "$cmd" | grep -Eq "$FOR_LOOP" && echo "$cmd" | grep -Eq "$SLEEP" && echo "$cmd" | grep -Eq "$REMOTE_READ"; then
+elif grep -Eq "$FOR_LOOP" <<<"$cmd" && grep -Eq "$SLEEP" <<<"$cmd" && grep -Eq "$REMOTE_READ" <<<"$cmd"; then
   is_poll=1
 fi
 [ "$is_poll" -eq 1 ] || allow

@@ -84,7 +84,7 @@ recurring="$(echo "$payload" | jq -r 'if (.tool_input|type=="object") and (.tool
 prompt="$(echo "$payload" | jq -r '.tool_input.prompt // empty' 2>/dev/null || true)"
 
 # Override-marker escape hatch — must appear literally in the prompt body.
-if echo "$prompt" | grep -qF '<!-- gate-override: durable-reminder-prefer-inngest -->'; then
+if grep -qF '<!-- gate-override: durable-reminder-prefer-inngest -->' <<<"$prompt"; then
   emit durable-reminder-prefer-inngest bypass "durable-reminder-prefer-inngest: acknowledged opt-out via marker"
   allow
 fi
