@@ -113,6 +113,45 @@ a `UnicodeDecodeError` scored as a detection.
    `install … path`, `- path:`), never bare containment. Otherwise an `ExecStart`, a `chmod`, or a
    sentence certifies delivery.
 
+8. **When a guard has an extraction half and a coverage half, they fail in OPPOSITE directions —
+   shape each accordingly.** This took three passes to see. Extraction ("what does the code
+   write?") fails SILENT: a miss means the item never enters the set, so nothing is checked and
+   the guard reports a clean sweep. Coverage ("does the other path provide it?") fails LOUD: a
+   miss reports as uncovered. So enumeration is fail-open on the extraction side and safe on the
+   coverage side, while over-crediting is harmless on extraction and fatal on coverage. v2 got
+   both backwards — it enumerated write verbs for extraction (so `mv`, `dd of=`, `curl -o`,
+   `python3 - /path` and any quoted path walked past) and matched loosely for coverage (so a path
+   appearing as an `install` SOURCE argument credited itself as written). The fix is asymmetric:
+   INVERT extraction (everything is a delivery unless it is under a read-only verb, so an unknown
+   verb fails loud) and make coverage POSITIONALLY STRICT (for `install`/`cp`/`mv` the token must
+   be the LAST path). Ask of any guard: *for each half, does a miss produce a failure or a
+   silence?* Shape the half that produces silence to over-approximate.
+
+9. **"Not statically provable" is a finding, not a skip.** v2 dropped `destination = "${local.x}/y"`
+   via a `startswith('/')` filter — silently, with no diagnostic. An interpolated value the guard
+   cannot resolve is precisely the case where it cannot make its claim, so it must say so.
+
+10. **A mutation battery's own vacuities are the last place anyone looks.** Four shipped here:
+    (a) crediting any non-zero exit scored a `UnicodeDecodeError` crash as a detection and left
+    nine checks deletable while green — the anchor must appear on a `[FAIL]` line, not merely
+    somewhere in combined output; (b) two mutators were malformed (one injected unescaped quotes
+    so the HCL string closed early; one mutated a single file so nothing REQUIRED the artifact and
+    the case was vacuous) — a mutation must be verified to produce the *intended* broken state,
+    not merely to differ from pristine; (c) two labels described mutations that never occurred
+    (one byte-identical to its predecessor, one claiming a rename it did not perform); (d) both
+    positive controls were tautological — one edited bytes the guard discards during comment
+    stripping, the other named a destination already in the swept set, so neither could
+    distinguish "correctly ignored" from "never seen". **A control must move a number the guard
+    prints.** Litmus for each case: *name the implementation that satisfies this assertion while
+    violating the property.*
+
+11. **Three review rounds each found real defects in a guard that measured green.** Rounds 1 and 2
+    found present fail-opens; round 3 found battery-completeness gaps. The value came from giving
+    each panel the previous findings and an explicit mandate to attack the NEW shape rather than
+    re-report the old — and from reproducing every claim independently before acting on it (one
+    round-1 finding did not reproduce on my first attempt because my test removed the comment
+    along with the real writer; the correction was to fix the test, not dismiss the finding).
+
 ## Resolution
 
 No `.tf` logic changed (one stale comment count corrected, 11 → 15). Delivered:
@@ -121,10 +160,12 @@ No `.tf` logic changed (one stale comment count corrected, 11 → 15). Delivered
   the 15 provisioners write and requires each to have a *derived* fresh-boot writer (cloud-init
   `write_files`, a cloud-init write, a `soleur-host-bootstrap.sh` install, or the baked
   env-writer). Also checks the reverse — a bootstrap install whose seed file is not baked — and
-  byte-identity on the 4 dual-written unit bodies. Every input comment-stripped string-aware;
-  HCL blocks brace-balanced. `ALLOWLIST` is empty and unused.
-- `web-host-provisioner-parity-mutation.test.sh` — **17 attributed mutations**, each proven to
-  have landed, each asserting the anchor of the check it names, plus both positive controls.
+  byte-identity on the 4 dual-written unit bodies. Extraction inverted (fail-closed), coverage
+  positionally strict. Every input comment-stripped string-aware; HCL blocks brace-balanced.
+  Residual battery-completeness gaps filed as #7014.
+- `web-host-provisioner-parity-mutation.test.sh` — **28 attributed mutations** (anchors must land
+  on a `[FAIL]` line) plus **3 direction controls**, including one that genuinely moves the swept
+  count 52 -> 53. M18-M28 pin every hostile mutation from review round 2.
 - ADR-114's constraint amended (count 12 → 15) and noted as now mechanically enforced; the two
   suites registered in the plan's Phase-5 coupling register so they are retired *with* §5.3(c).
 
