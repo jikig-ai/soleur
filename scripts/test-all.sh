@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Default TMPDIR to /var/tmp (disk-backed) rather than /tmp.
+#
+# /tmp on this machine class is a ~4 GiB SHARED tmpfs, and parallel worktrees are this
+# repo's documented workflow — so two concurrent runs compete for the same RAM-backed
+# capacity. The observed failure is a suite TIMEOUT that reads exactly like a real
+# regression (documented in-repo for skill-security-scan #4096 and vitest.config.ts
+# #3817/#4128), plus abandoned sibling scratch dirs that produced a false RED and a
+# blocked tool-output failure. Six separate places in the repo currently DOCUMENT the
+# workaround "run with TMPDIR=/var/tmp"; setting it here removes the footgun instead of
+# documenting it a seventh time.
+#
+# Respects an explicit caller value — CI or an operator pinning TMPDIR keeps it.
+export TMPDIR="${TMPDIR:-/var/tmp}"
+
 # Sequential test runner that isolates test suites to avoid Bun's FPE crash
 # when running all tests via recursive directory discovery.
 # See: knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md
@@ -274,6 +288,17 @@ if want_scripts; then
   # infra-validation.yml only lists apps/web-platform/infra/*.test.sh. Without this line
   # the gate that stands between a -replace and a stranded fleet ships with zero coverage.
   run_suite "tests/scripts/stock-preflight-gate" bash tests/scripts/test-stock-preflight-gate.sh
+
+  # (#6977) The git-data birth route's gates. NOTHING else runs these:
+  # lint-orphan-test-suites.sh walks only scripts/*.test.sh, and
+  # apps/web-platform/infra/run-registered-suites.sh DERIVES its list from
+  # infra-validation.yml's `run: bash apps/web-platform/infra/<name>.test.sh` steps, so a
+  # tests/scripts/ suite is structurally invisible to both. These three run_suite lines
+  # are the ONLY registration — an unregistered gate suite is silent AND green, which is
+  # the exact shape that let a fail-open rung ship in #3366.
+  run_suite "tests/scripts/plan-gate-preamble" bash tests/scripts/test-plan-gate-preamble.sh
+  run_suite "tests/scripts/git-data-host-birth-gate" bash tests/scripts/test-git-data-host-birth-gate.sh
+  run_suite "tests/scripts/git-data-birth-readiness-gate" bash tests/scripts/test-git-data-birth-readiness-gate.sh
   # Supabase advisor RLS gate (#3366). Registered HERE for the same reason as the
   # line above: nothing auto-discovers tests/scripts/. This is the harness that
   # proves the gate cannot silently pass (a 401 must not parse to a clean 0);
