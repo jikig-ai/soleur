@@ -218,17 +218,21 @@ fi
 # --- Arm 7: dry run deletes nothing ----------------------------------------
 reset_fixtures
 mk_dir "tmp.dry" 20 120
-out="$(guard_env env TMPFS_GUARD_DRY_RUN=1 bash -c "source '$GUARD'; reap_scratch_entries" 2>&1 || true)"
+# Reap detail now goes to the log sink, not stdout (#6991): the caller used to
+# capture stdout and throw it away, so the journal carried zero `reaping` lines.
+: > "$TESTROOT/dry.log"
+out="$(guard_env env TMPFS_GUARD_DRY_RUN=1 TMPFS_GUARD_LOG_SINK="$TESTROOT/dry.log" \
+  bash -c "source '$GUARD'; reap_scratch_entries" 2>&1 || true)"
 if [[ -e "$FAKE_TMP/tmp.dry" ]]; then
   pass "TMPFS_GUARD_DRY_RUN=1 deletes nothing"
 else
   fail "dry run deleted a file; got: $out"
 fi
 # The dry run must still REPORT what it would have done, or it is untestable.
-if [[ "$(grep -cF -- "tmp.dry" <<<"$out" || true)" -ge 1 ]]; then
+if [[ "$(grep -cF -- "tmp.dry" "$TESTROOT/dry.log" || true)" -ge 1 ]]; then
   pass "dry run still reports the candidate it would reap"
 else
-  fail "dry run reported nothing; got: $out"
+  fail "dry run reported nothing; sink: $(cat "$TESTROOT/dry.log")"
 fi
 
 # --- Arm 8: the guard runs even when no claude tmp dir exists --------------
@@ -254,8 +258,9 @@ mkdir -p "$FAKE_TMP/tmp.nested/inner"
 dd if=/dev/zero of="$FAKE_TMP/tmp.nested/inner/blob" bs=1M count=20 status=none 2>/dev/null
 find "$FAKE_TMP/tmp.nested" -exec touch -d "-120 minutes" {} + 2>/dev/null || true
 touch -d "-120 minutes" "$FAKE_TMP/tmp.nested"
-out="$(guard_env env TMPFS_GUARD_DRY_RUN=1 bash -c "source '$GUARD'; reap_scratch_entries" 2>&1 || true)"
-echo "$out" > "$TESTROOT/nested.txt"
+: > "$TESTROOT/nested.txt"
+out="$(guard_env env TMPFS_GUARD_DRY_RUN=1 TMPFS_GUARD_LOG_SINK="$TESTROOT/nested.txt" \
+  bash -c "source '$GUARD'; reap_scratch_entries" 2>&1 || true)"
 if [[ "$(grep -cF -- "tmp.nested/inner" "$TESTROOT/nested.txt" || true)" -eq 0 ]] \
    && [[ "$(grep -cE 'would reap .*/tmp\.nested \(' "$TESTROOT/nested.txt" || true)" -ge 1 ]]; then
   pass "reaps the top-level scratch entry, never its nested subdirs (du -sm)"
@@ -273,9 +278,209 @@ else
   fail "no -user predicate in the reaper — it could reap another user's files"
 fi
 
+# ===========================================================================
+# #6991 — count-shaped leaks, socket liveness, log sink, return contract.
+# ===========================================================================
+
+# --- Arm 10: a socket-held directory is never reaped, in EITHER tier --------
+# The fd walk is architecturally blind to unix sockets: a socket fd readlinks
+# to `socket:[inode]`, never to its path. Measured 2026-07-27, /tmp's live
+# Chrome IPC directory cleared ownership, top-level age, recursive age, the
+# denylist AND the fd liveness scan — only the 100 MB size floor stood between
+# it and deletion. The pressure tier drops that floor, so without the
+# /proc/net/unix pass below, engaging pressure would kill a running browser.
+reset_fixtures
+mkdir -p "$FAKE_TMP/sockdir"
+dd if=/dev/zero of="$FAKE_TMP/sockdir/blob" bs=1M count=20 status=none 2>/dev/null
+SOCK_PATH="$FAKE_TMP/sockdir/live.sock"
+python3 -c "
+import socket, sys, time
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind('$SOCK_PATH'); s.listen(1)
+sys.stdout.write('ready\n'); sys.stdout.flush()
+time.sleep(60)
+" > "$TESTROOT/sock.ready" 2>/dev/null &
+SOCK_PID=$!
+for _ in $(seq 1 40); do [[ -s "$TESTROOT/sock.ready" ]] && break; sleep 0.25; done
+find "$FAKE_TMP/sockdir" -exec touch -d "-120 minutes" {} + 2>/dev/null || true
+touch -d "-120 minutes" "$FAKE_TMP/sockdir"
+
+if [[ -S "$SOCK_PATH" ]] && grep -qF -- "$SOCK_PATH" /proc/net/unix 2>/dev/null; then
+  reap env TMPFS_GUARD_COUNT_TRIGGER=99999 >/dev/null
+  if [[ -d "$FAKE_TMP/sockdir" ]]; then
+    pass "SOCKET liveness: a socket-held tree is NOT reaped (normal tier)"
+  else
+    fail "a live socket-held tree was deleted in the normal tier"
+  fi
+  reap env TMPFS_GUARD_COUNT_TRIGGER=1 TMPFS_GUARD_PRESSURE_MIN_MB=1 \
+    TMPFS_GUARD_PRESSURE_AGE_MIN=60 >/dev/null
+  if [[ -d "$FAKE_TMP/sockdir" ]]; then
+    pass "SOCKET liveness: a socket-held tree is NOT reaped (pressure tier)"
+  else
+    fail "a live socket-held tree was deleted under pressure — the PR-1 defect"
+  fi
+  # Non-vacuity: blind the seam and the SAME fixture must be deleted. Without
+  # this the two assertions above could pass because of some unrelated gate.
+  reap env TMPFS_GUARD_COUNT_TRIGGER=1 TMPFS_GUARD_PRESSURE_MIN_MB=1 \
+    TMPFS_GUARD_PRESSURE_AGE_MIN=60 TMPFS_GUARD_UNIX_SOCKETS=/dev/null >/dev/null
+  if [[ ! -d "$FAKE_TMP/sockdir" ]]; then
+    pass "SOCKET liveness is non-vacuous: blinding /proc/net/unix reaps it"
+  else
+    fail "blinding the socket seam changed nothing — the arm proves nothing"
+  fi
+else
+  fail "socket fixture did not register in /proc/net/unix — arm cannot run"
+  fail "socket fixture unavailable (pressure arm)"
+  fail "socket fixture unavailable (non-vacuity arm)"
+fi
+kill "$SOCK_PID" 2>/dev/null || true
+wait "$SOCK_PID" 2>/dev/null || true
+
+# --- Arm 11: the count-shaped leak the size floor cannot see ---------------
+# ~15,000 artifacts of a few hundred bytes. None reaches any plausible size
+# floor, so the normal tier must leave them and the pressure tier must take
+# them.
+reset_fixtures
+for i in $(seq 1 40); do
+  mkdir -p "$FAKE_TMP/tmp.tiny$i"
+  printf 'x%.0s' $(seq 1 300) > "$FAKE_TMP/tmp.tiny$i/f"
+done
+find "$FAKE_TMP" -mindepth 1 -exec touch -d "-120 minutes" {} + 2>/dev/null || true
+
+reap env TMPFS_GUARD_COUNT_TRIGGER=99999 >/dev/null
+remaining=$(find "$FAKE_TMP" -mindepth 1 -maxdepth 1 -name 'tmp.tiny*' | wc -l)
+if [[ "$remaining" -eq 40 ]]; then
+  pass "COUNT tier disengaged: tiny entries survive below the trigger"
+else
+  fail "tiny entries were reaped without count pressure ($remaining/40 left)"
+fi
+
+reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_PRESSURE_MIN_MB=0 \
+  TMPFS_GUARD_PRESSURE_AGE_MIN=60 >/dev/null
+remaining=$(find "$FAKE_TMP" -mindepth 1 -maxdepth 1 -name 'tmp.tiny*' | wc -l)
+if [[ "$remaining" -eq 0 ]]; then
+  pass "COUNT tier engaged: the count-shaped leak IS reaped under pressure"
+else
+  fail "count-shaped leak survived the pressure tier ($remaining/40 left)"
+fi
+
+# --- Arm 11b: the per-run cap bounds blast radius ---------------------------
+reset_fixtures
+for i in $(seq 1 30); do
+  mkdir -p "$FAKE_TMP/tmp.cap$i"; printf 'x' > "$FAKE_TMP/tmp.cap$i/f"
+done
+find "$FAKE_TMP" -mindepth 1 -exec touch -d "-120 minutes" {} + 2>/dev/null || true
+reap env TMPFS_GUARD_COUNT_TRIGGER=5 TMPFS_GUARD_PRESSURE_MIN_MB=0 \
+  TMPFS_GUARD_PRESSURE_AGE_MIN=60 TMPFS_GUARD_PRESSURE_MAX_REAP=10 >/dev/null
+remaining=$(find "$FAKE_TMP" -mindepth 1 -maxdepth 1 -name 'tmp.cap*' | wc -l)
+if [[ "$remaining" -eq 20 ]]; then
+  pass "per-run cap holds: 10 of 30 reaped, 20 left for the next run"
+else
+  fail "per-run cap did not hold; expected 20 survivors, got $remaining"
+fi
+
+# --- Arm 12: the suite must not write to the production journal ------------
+# 344 of 346 `Reaped` lines in the real journal came from THIS suite's fixture
+# roots. Anyone reading it to judge the guard saw a healthy reaper that had in
+# fact reaped once in 14 days.
+# Comment lines are stripped first. A prose mention of `logger -t` in a comment
+# explaining why the sink exists would otherwise fail this assertion — the same
+# false-match trap that cq-assert-anchor-not-bare-token warns about, and which
+# this suite hit while being written.
+logger_sites=$(grep -vE '^[[:space:]]*#' "$GUARD" | grep -cE 'logger[[:space:]]+-t' || true)
+if [[ "$logger_sites" -eq 1 ]]; then
+  pass "exactly one logger call site remains, inside guard_log (was 3)"
+else
+  fail "expected 1 logger call site (guard_log's own), found $logger_sites"
+fi
+
+reset_fixtures
+mk_dir "tmp.sink" 20 120
+: > "$TESTROOT/sink.log"
+reap env TMPFS_GUARD_LOG_SINK="$TESTROOT/sink.log" >/dev/null
+if [[ "$(grep -cF -- "tmp.sink" "$TESTROOT/sink.log" || true)" -ge 1 ]]; then
+  pass "per-entry reap detail reaches the log sink (was stdout, discarded)"
+else
+  fail "reap detail did not reach the sink: $(cat "$TESTROOT/sink.log")"
+fi
+
+# --- Arm 13: return contract is globals, not stdout -------------------------
+# `reaped="$(reap_scratch_entries)"` captured the per-entry lines AND the count
+# into one multi-line string; `[[ "$reaped" -eq 0 ]]` then parsed the leading
+# word `tmpfs` as a variable name and `set -u` made it FATAL. main exited 1 and
+# the high-usage alarm never ran — on exactly the runs that had reaped
+# something while /tmp was full.
+# Comments stripped: the fix's own explanation quotes the defective
+# `reaped="$(reap_scratch_entries)"` shape, and a naive grep matches that.
+subst_sites=$(grep -vE '^[[:space:]]*#' "$GUARD" \
+  | grep -cE '\$\((reap_scratch_entries|reap_output_files)' || true)
+if [[ "$subst_sites" -eq 0 ]]; then
+  pass "no command substitution captures the reapers (globals contract)"
+else
+  fail "a reaper is still called in \$( ) in code — found $subst_sites"
+fi
+
+reset_fixtures
+mk_dir "tmp.exit" 20 120
+: > "$TESTROOT/exit.log"
+if guard_env env TMPFS_GUARD_USAGE_WARN_PCT=0 TMPFS_GUARD_LOG_SINK="$TESTROOT/exit.log" \
+     TMPFS_GUARD_ALARM_FILE="$TESTROOT/alarm.log" bash "$GUARD" >/dev/null 2>&1; then
+  pass "a run that reaps >=1 entry at high usage exits 0 (was: unbound variable)"
+else
+  fail "the reaping-at-high-usage run still aborts"
+fi
+
+# --- Arm 14: liveness line on every run, alarm only when alarming ----------
+if [[ "$(grep -cE 'run complete' "$TESTROOT/exit.log" || true)" -ge 1 ]]; then
+  pass "every run emits a liveness line (silent != not running)"
+else
+  fail "no liveness line: $(cat "$TESTROOT/exit.log")"
+fi
+
+# A run that REAPED something is not an alarm — nothing should be recorded.
+if [[ ! -s "$TESTROOT/alarm.log" ]]; then
+  pass "a run that reclaimed space records no alarm"
+else
+  fail "an alarm was recorded on a successful reap: $(cat "$TESTROOT/alarm.log")"
+fi
+
+# --- Arm 15: the alarm fires and is capped ---------------------------------
+# High usage AND nothing reapable — the 94-times-in-14-days case.
+reset_fixtures
+: > "$TESTROOT/alarm2.log"
+guard_env env TMPFS_GUARD_USAGE_WARN_PCT=0 TMPFS_GUARD_LOG_SINK=/dev/null \
+  TMPFS_GUARD_ALARM_FILE="$TESTROOT/alarm2.log" bash "$GUARD" >/dev/null 2>&1 || true
+if [[ "$(grep -cE 'nothing reapable' "$TESTROOT/alarm2.log" || true)" -ge 1 ]]; then
+  pass "high usage with nothing reapable writes a durable alarm record"
+else
+  fail "the alarm reached no durable channel: $(cat "$TESTROOT/alarm2.log")"
+fi
+
+# Size cap: drive it past the ceiling and confirm it stops growing.
+for _ in $(seq 1 40); do
+  guard_env env TMPFS_GUARD_USAGE_WARN_PCT=0 TMPFS_GUARD_LOG_SINK=/dev/null \
+    TMPFS_GUARD_ALARM_FILE="$TESTROOT/alarm2.log" bash "$GUARD" >/dev/null 2>&1 || true
+done
+alarm_lines=$(wc -l < "$TESTROOT/alarm2.log")
+if [[ "$alarm_lines" -le 200 ]]; then
+  pass "alarm file size cap holds ($alarm_lines lines <= 200)"
+else
+  fail "alarm file grew unbounded ($alarm_lines lines)"
+fi
+
+# --- Arm 16: notify-send is gone -------------------------------------------
+# A no-op under cron (no DBUS session), additionally swallowed by
+# `2>/dev/null || true`. Keeping it as a best-effort extra is how the dead
+# channel came to exist.
+if [[ "$(grep -cE '^[^#]*notify-send' "$GUARD" || true)" -eq 0 ]]; then
+  pass "notify-send is gone (it was a silent no-op under cron)"
+else
+  fail "notify-send call sites remain"
+fi
+
 # --- Minimum-cardinality guard ---------------------------------------------
-if [[ "$pass_n" -lt 16 ]]; then
-  fail "cardinality guard: only $pass_n assertions ran (expected >= 16)"
+if [[ "$pass_n" -lt 31 ]]; then
+  fail "cardinality guard: only $pass_n assertions ran (expected >= 31)"
 fi
 
 echo "=== tmpfs-guard: $pass_n passed, $fails failed ==="

@@ -32,9 +32,35 @@
 #
 # Designed to run as a user cron job every 5 minutes.
 #
+# COUNT-SHAPED LEAKS (#6991). The size floor above cannot see the failure mode
+# that actually occurred on 2026-07-27: ~15,000 files of a few hundred bytes
+# each. The largest leaked artifact was 372 bytes and 0 of 11,172 `tmp.*`
+# entries reached 1 MB, so not one of them could EVER have been reaped. The
+# single entry over the floor was 14h old against a 24h age gate, so that was
+# excluded too.
+#
+# The reaper now has a second, pressure-gated tier keyed on the TOP-LEVEL ENTRY
+# COUNT. Three constraints shaped it, each measured rather than assumed:
+#
+#   - NOT `df -i`. On a host carrying the leak, /tmp was 29% blocks but only 7%
+#     inodes (268,438 of 3,992,059) — tmpfs charges a full page per file, so
+#     blocks exhaust long before inodes can. An inode trigger would sit
+#     disengaged through exactly the scenario it exists for.
+#   - NOT a `tmp.` prefix signature. `tmp.` is GNU mktemp's DEFAULT template:
+#     856 of 1013 command-position mktemp call sites in this repo are bare. It
+#     is a default name, not a leak signature.
+#   - The size floor is REDUCED under pressure, never removed. Removing it
+#     would expose the entire small-entry population, which is where unix
+#     sockets, lockfiles and IPC directories live — see the liveness note on
+#     _build_inuse_top.
+#
 # Test seams (default to the real system; overridden only by tmpfs-guard.test.sh):
 #   TMPFS_GUARD_TMP, TMPFS_GUARD_PROC, TMPFS_GUARD_DRY_RUN,
-#   TMPFS_GUARD_SCRATCH_MIN_MB, TMPFS_GUARD_SCRATCH_AGE_MIN
+#   TMPFS_GUARD_SCRATCH_MIN_MB, TMPFS_GUARD_SCRATCH_AGE_MIN,
+#   TMPFS_GUARD_LOG_SINK, TMPFS_GUARD_USAGE_PCT, TMPFS_GUARD_ALARM_FILE,
+#   TMPFS_GUARD_COUNT_TRIGGER, TMPFS_GUARD_PRESSURE_MIN_MB,
+#   TMPFS_GUARD_PRESSURE_AGE_MIN, TMPFS_GUARD_PRESSURE_MAX_REAP,
+#   TMPFS_GUARD_UNIX_SOCKETS, TMPFS_GUARD_NO_FLOCK
 
 set -euo pipefail
 
@@ -50,7 +76,67 @@ DRY_RUN="${TMPFS_GUARD_DRY_RUN:-0}"
 SCRATCH_MIN_MB="${TMPFS_GUARD_SCRATCH_MIN_MB:-100}"
 SCRATCH_AGE_MIN="${TMPFS_GUARD_SCRATCH_AGE_MIN:-1440}"
 
+# Pressure tier. Engages only when the top-level entry count crosses the
+# trigger. 5000 sits far above the ~600 entries a healthy /tmp carries here and
+# far below the 17,898 measured while the leak was present, so it is provably
+# reachable rather than notionally reachable.
+COUNT_TRIGGER="${TMPFS_GUARD_COUNT_TRIGGER:-5000}"
+PRESSURE_MIN_MB="${TMPFS_GUARD_PRESSURE_MIN_MB:-1}"
+PRESSURE_AGE_MIN="${TMPFS_GUARD_PRESSURE_AGE_MIN:-360}"
+PRESSURE_MAX_REAP="${TMPFS_GUARD_PRESSURE_MAX_REAP:-4000}"
+
+# Where /proc exposes unix-domain socket paths. See _build_inuse_top.
+UNIX_SOCKETS="${TMPFS_GUARD_UNIX_SOCKETS:-/proc/net/unix}"
+
+# Durable alarm store. Deliberately NOT under $TMP_ROOT — an alarm log on the
+# filesystem being reaped is self-defeating.
+ALARM_FILE="${TMPFS_GUARD_ALARM_FILE:-$HOME/.local/state/soleur/tmpfs-guard-alarms.log}"
+ALARM_MAX_LINES=200
+
 CLAUDE_TMP="$TMP_ROOT/claude-$(id -u)"
+
+# --- Logging seam ----------------------------------------------------------
+# Every log line goes through here. The default sink is the journal, exactly as
+# before; the test suite points TMPFS_GUARD_LOG_SINK at a fixture-scoped file so
+# it stops polluting the operator's journal.
+#
+# That pollution was not cosmetic: of 346 `Reaped` lines in the journal over 14
+# days, 344 came from this suite's fixture roots and ONE came from the real
+# /tmp. Anyone reading the journal to judge whether the guard works saw a busy,
+# healthy-looking reaper that had in fact reaped once in a fortnight.
+#
+# `notify-send` is deliberately absent. It is a silent no-op under cron (no DBUS
+# session) and was additionally swallowed by `2>/dev/null || true` — keeping it
+# as a best-effort extra is exactly how the current dead channel came to exist.
+guard_log() {
+  local msg="$1"
+  if [[ -n "${TMPFS_GUARD_LOG_SINK:-}" ]]; then
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$msg" >> "$TMPFS_GUARD_LOG_SINK" 2>/dev/null || true
+  else
+    logger -t tmpfs-guard "$msg" 2>/dev/null || true
+  fi
+}
+
+# Append an alarm record the operator will actually see. The SessionStart hook
+# renders this file at the top of the next agent session; there is no network
+# path from this host's cron to Better Stack or Sentry (Vector is not installed,
+# `tmpfs-guard` is not in the vector tag allowlist, no local Sentry DSN exists,
+# `doppler` is off cron's PATH, and `gh` authenticates via an OS keyring that
+# cron cannot reach). Inventing one would create an egress surface where none
+# exists; surfacing at SessionStart needs no credential at all.
+alarm_record() {
+  local msg="$1" dir
+  dir="$(dirname "$ALARM_FILE")"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$msg" >> "$ALARM_FILE" 2>/dev/null || return 0
+  # Size cap: keep the most recent ALARM_MAX_LINES.
+  local n
+  n=$(wc -l < "$ALARM_FILE" 2>/dev/null || echo 0)
+  if [[ "$n" =~ ^[0-9]+$ ]] && (( n > ALARM_MAX_LINES )); then
+    tail -n "$ALARM_MAX_LINES" "$ALARM_FILE" > "$ALARM_FILE.tmp" 2>/dev/null \
+      && mv -f "$ALARM_FILE.tmp" "$ALARM_FILE" 2>/dev/null || true
+  fi
+}
 
 tmpfs_usage_pct() {
   local p
@@ -75,6 +161,28 @@ tmpfs_usage_pct() {
 # covers only top-level *file* candidates; this fd scan is what covers the
 # common *directory* case (a scratch tree with a live open handle inside).
 declare -A _INUSE_TOP
+declare -A _FRESH_TOP
+
+# Populate _FRESH_TOP with every top-level $TMP_ROOT entry whose tree contains
+# ANYTHING modified inside the age floor, in a SINGLE walk. This replaces a
+# per-candidate recursive `find`; see the AGE gate in reap_scratch_entries for
+# the measurement that motivated it.
+_build_fresh_top() {
+  _FRESH_TOP=()
+  local age_min="$1" top
+  while IFS= read -r -d '' top; do
+    [[ -n "$top" ]] && _FRESH_TOP["$TMP_ROOT/$top"]=1
+  done < <(
+    find "$TMP_ROOT" -mindepth 1 -mmin "-${age_min}" -print0 2>/dev/null \
+      | awk -v RS='\0' -v ORS='\0' -v root="$TMP_ROOT/" '
+          {
+            s = substr($0, length(root) + 1)
+            i = index(s, "/")
+            print (i ? substr(s, 1, i - 1) : s)
+          }' \
+      | sort -zu
+  )
+}
 # Map an absolute path to its top-level $TMP_ROOT entry and mark it in use.
 _mark_inuse() {
   local target="$1" rest top
@@ -101,6 +209,24 @@ _build_inuse_top() {
       target=$(readlink "$fd" 2>/dev/null) && _mark_inuse "$target"
     done
   done
+
+  # UNIX-DOMAIN SOCKETS. The fd walk above is architecturally BLIND to these: a
+  # socket fd readlinks to `socket:[12345]`, never to its filesystem path, so a
+  # directory held open only by a live socket looks completely idle. /proc/net/unix
+  # is the only place the kernel exposes the path, and it is one file read —
+  # cheaper than the fd walk it completes.
+  #
+  # This is not theoretical. /tmp/com.google.Chrome.* holds `SingletonSocket`
+  # for a LIVE browser; measured 2026-07-27, it cleared ownership, top-level
+  # age, recursive age, the denylist, and the fd-based liveness scan — all five
+  # gates. The ONLY thing standing between it and deletion was the 100 MB size
+  # floor, which is why the pressure tier reduces that floor instead of removing
+  # it, and why this pass had to land before the pressure tier existed at all.
+  if [[ -r "$UNIX_SOCKETS" ]]; then
+    while read -r sock_path; do
+      [[ -n "$sock_path" ]] && _mark_inuse "$sock_path"
+    done < <(awk 'NF > 7 && $NF ~ /^\// { print $NF }' "$UNIX_SOCKETS" 2>/dev/null || true)
+  fi
 }
 
 # --- Reaper 1: oversized .output files (pre-existing behaviour) -------------
@@ -126,21 +252,43 @@ reap_output_files() {
   done < <(find "$CLAUDE_TMP" -name "*.output" -size "+${THRESHOLD_MB}M" -type f 2>/dev/null)
 
   if [[ "$cleaned" -gt 0 ]]; then
-    notify-send -u critical -i dialog-warning "tmpfs-guard" \
-      "Removed $cleaned runaway .output file(s) (${cleaned_mb} MB). /tmp was at ${usage_pct}%." 2>/dev/null || true
-    logger -t tmpfs-guard "Removed $cleaned .output files (${cleaned_mb} MB). /tmp at ${usage_pct}%."
+    guard_log "Removed $cleaned .output files (${cleaned_mb} MB). $TMP_ROOT at ${usage_pct}%."
   fi
-  printf '%s\n' "$cleaned"
+  # Return via a global, never stdout — see the REAP_COUNT note on
+  # reap_scratch_entries.
+  CLEANED_COUNT="$cleaned"
+  return 0
 }
 
 # --- Reaper 2: stale, large, own-uid scratch entries (#6789) ---------------
 reap_scratch_entries() {
+  REAP_COUNT=0
+  REAP_MB=0
   [[ -d "$TMP_ROOT" ]] || return 0
   local uid; uid="$(id -u)"
   local reaped=0 reaped_mb=0
   local e base fresh size_mb
 
+  # Which tier are we in? The count signal is one `find | wc -l`.
+  local entry_count min_mb age_min max_reap
+  entry_count=$(find "$TMP_ROOT" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
+  [[ "$entry_count" =~ ^[0-9]+$ ]] || entry_count=0
+
+  if (( entry_count >= COUNT_TRIGGER )); then
+    PRESSURE_ACTIVE=1
+    min_mb="$PRESSURE_MIN_MB"
+    age_min="$PRESSURE_AGE_MIN"
+    max_reap="$PRESSURE_MAX_REAP"
+    guard_log "count pressure: $entry_count top-level entries in $TMP_ROOT (trigger $COUNT_TRIGGER) — floor ${min_mb}MB, age ${age_min}min, cap ${max_reap}"
+  else
+    PRESSURE_ACTIVE=0
+    min_mb="$SCRATCH_MIN_MB"
+    age_min="$SCRATCH_AGE_MIN"
+    max_reap=0   # 0 = uncapped; the normal tier's floors already bound it
+  fi
+
   _build_inuse_top
+  _build_fresh_top "$age_min"
 
   # SIZE FIRST, via a SINGLE batched `du`. Size is the most selective gate — a
   # measured 3 of thousands of entries qualify — but it is also the only gate
@@ -159,7 +307,7 @@ reap_scratch_entries() {
   # shellcheck disable=SC2064
   trap "rm -f '$cand_file' '$sized_file'" RETURN
 
-  find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -user "$uid" -mmin "+${SCRATCH_AGE_MIN}" -print0 \
+  find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -user "$uid" -mmin "+${age_min}" -print0 \
     2>/dev/null > "$cand_file" || true
   # `du -sm` emits ONE "<size>\t<path>" summary line per candidate. `-s` is
   # load-bearing — without it du descends and prints every subdirectory, which
@@ -168,7 +316,7 @@ reap_scratch_entries() {
   # did size are still valid. Keep only rows at or above the floor; the size↔path
   # tab is preserved verbatim for the read loop below.
   du -sm --files0-from="$cand_file" 2>/dev/null \
-    | awk -F'\t' -v floor="$SCRATCH_MIN_MB" '$1 ~ /^[0-9]+$/ && $1 >= floor' \
+    | awk -F'\t' -v floor="$min_mb" '$1 ~ /^[0-9]+$/ && $1 >= floor' \
     > "$sized_file" || true
 
   while IFS=$'\t' read -r size_mb e; do
@@ -183,15 +331,32 @@ reap_scratch_entries() {
     # it (that function owns the signature-gated sandbox-copy class; this reaper
     # additionally covers the dotted `tmp.XXXXXX` mkdtemp trees its 15+-char
     # regex excludes, so the two cooperate — see the delete-idiom note below).
+    # The pressure tier drops the size floor to ~1 MB, which exposes the entire
+    # small-entry population for the first time — and that population is where
+    # IPC directories, sockets and lockfiles live. The names below were taken
+    # from a live /tmp listing on 2026-07-27 rather than assumed; the previous
+    # 9-entry list predates the pressure tier and was never audited against one.
     case "$base" in
       claude-*|soleur-session-state*|node-compile-cache|.X11-unix|.ICE-unix|.font-unix|.XIM-unix|.Test-unix|systemd-*|snap*)
+        continue ;;
+      com.google.Chrome.*|.org.chromium.*|.com.google.Chrome.*|chromium-*|firefox-*|\
+      dbus-*|pulse-*|.mount_*|tmux-*|ssh-*|.X*-lock|gpg-*|wayland-*|at-spi2-*)
         continue ;;
     esac
 
     # Never follow a symlink out of the scratch root.
     [[ -L "$e" ]] && continue
 
-    # LIVENESS (O(1) set lookup for dirs — no /proc access here; fuser for files).
+    # LIVENESS (O(1) set lookup — the map now covers cwd, open fds, AND
+    # unix-socket paths from /proc/net/unix).
+    #
+    # `fuser` stays scoped to FILES. Running it on directories as well was
+    # measured at 66 ms per call — 19.9 s for 300 candidates, which alone
+    # blows the 5-minute cron interval at leak scale — and it is redundant:
+    # _INUSE_TOP already covers the directory cases (cwd, open fd, and socket
+    # path). Verified non-vacuous: blinding the /proc/net/unix seam lets a
+    # socket-held directory be deleted, so the map is what protects it, not
+    # fuser.
     [[ -n "${_INUSE_TOP[$e]:-}" ]] && continue
     if [[ ! -d "$e" ]]; then
       fuser "$e" >/dev/null 2>&1 && continue
@@ -199,16 +364,30 @@ reap_scratch_entries() {
 
     # AGE (recursive) — the R6 safety gate. A directory's own mtime does NOT
     # change when a nested file is written, so a top-level test alone would
-    # delete a tree that is actively in use. `-print -quit` stops at the first
-    # fresh entry. Runs only on the size-survivors, so its cost is bounded.
-    fresh=$(find "$e" -mmin "-${SCRATCH_AGE_MIN}" -print -quit 2>/dev/null) || fresh=""
-    [[ -n "$fresh" ]] && continue
+    # delete a tree that is actively in use.
+    #
+    # Answered from the _FRESH_TOP set built in ONE pass before the loop.
+    # Per-candidate `find` was 18 ms a call (5.3 s for 300); the single batched
+    # walk that replaces it measured 0.024 s for the same fixture — ~220x
+    # cheaper, and the gap widens with the candidate count. At leak scale the
+    # per-candidate form does not finish inside the cron interval.
+    [[ -n "${_FRESH_TOP[$e]:-}" ]] && continue
 
+    # Per-run cap on the pressure tier. Bounds both blast radius and wall clock.
+    if (( max_reap > 0 && reaped >= max_reap )); then
+      guard_log "pressure cap reached ($max_reap entries) — stopping this run"
+      break
+    fi
+
+    # guard_log, not echo. These lines used to go to stdout, which the caller
+    # captured and discarded, so the journal carried 0 `reaping` lines against
+    # 346 `Reaped` summaries — every doc claim keyed on per-entry reap detail
+    # was unverifiable.
     if [[ "$DRY_RUN" == "1" ]]; then
-      echo "tmpfs-guard: would reap $e (${size_mb} MB)"
+      guard_log "would reap $e (${size_mb} MB)"
       continue
     fi
-    echo "tmpfs-guard: reaping $e (${size_mb} MB)"
+    guard_log "reaping $e (${size_mb} MB)"
     # `find … -delete`, NEVER `rm -rf` — a size-survivor can be an abandoned repo
     # clone (a `.git`-bearing checkout), and the constitution's
     # guardrails:block-recursive-delete rule forbids `rm -rf` on such a target.
@@ -223,35 +402,75 @@ reap_scratch_entries() {
   done < "$sized_file"
 
   if [[ "$reaped" -gt 0 ]]; then
-    notify-send -u normal -i dialog-information "tmpfs-guard" \
-      "Reclaimed ${reaped_mb} MB from $reaped stale scratch entr(ies) in $TMP_ROOT." 2>/dev/null || true
-    logger -t tmpfs-guard "Reaped $reaped stale scratch entries (${reaped_mb} MB) from $TMP_ROOT."
+    guard_log "Reaped $reaped stale scratch entries (${reaped_mb} MB) from $TMP_ROOT."
   fi
-  printf '%s\n' "$reaped"
+
+  # RETURN VIA GLOBALS, never stdout. The previous contract was
+  # `reaped="$(reap_scratch_entries)"`, which captured the per-entry `echo`
+  # lines AND the trailing count into one multi-line string. `main` then ran
+  # `[[ "${reaped:-0}" -eq 0 ]]` on it: bash arithmetic parses the leading word
+  # `tmpfs` as a variable name and `set -u` makes that FATAL. main exited 1 and
+  # the high-usage alarm branch never ran — on precisely the runs that had
+  # reaped something while /tmp was full. Reproduced: `tmpfs: unbound variable`,
+  # exit 1.
+  #
+  # With globals there is no command substitution, no subshell, and no parsing,
+  # so a stray write to stdout can never break the arithmetic again.
+  REAP_COUNT="$reaped"
+  REAP_MB="$reaped_mb"
+  return 0
 }
 
 main() {
-  local usage_pct cleaned reaped
+  local usage_pct
   usage_pct="$(tmpfs_usage_pct)"
 
   # NOTE: the .output reaper self-guards on CLAUDE_TMP. This used to be a
   # top-of-script `exit 0`, which would now silently disable the scratch reaper
   # on any machine without an active Claude session — the reaper would never
   # run precisely where abandoned scratch accumulates unattended.
-  cleaned="$(reap_output_files "$usage_pct")"
-  reaped="$(reap_scratch_entries)"
+  CLEANED_COUNT=0
+  REAP_COUNT=0
+  REAP_MB=0
+  PRESSURE_ACTIVE=0
+
+  reap_output_files "$usage_pct"
+  reap_scratch_entries
+
+  # Per-run liveness line, emitted on EVERY run including a healthy one. Without
+  # it "the guard is silent because nothing needed doing" and "the guard is not
+  # running at all" are indistinguishable, and the cron entry stopping is a
+  # failure mode with no detector.
+  guard_log "run complete: $TMP_ROOT at ${usage_pct}%, cleaned=${CLEANED_COUNT}, reaped=${REAP_COUNT} (${REAP_MB} MB), pressure=${PRESSURE_ACTIVE}"
 
   # Warn on high usage when neither reaper found anything — something else is
   # filling /tmp and no automated path will reclaim it.
+  #
+  # This branch fired 94 times in 14 days and reached nobody: it went only to
+  # the journal (unwatched) and notify-send (a no-op under cron). It now also
+  # writes the durable alarm file that the SessionStart hook surfaces, so the
+  # next agent session shows it to the operator.
   if [[ "$usage_pct" -ge "$USAGE_WARN_PCT" ]] \
-     && [[ "${cleaned:-0}" -eq 0 ]] && [[ "${reaped:-0}" -eq 0 ]]; then
-    notify-send -u normal -i dialog-information "tmpfs-guard" \
-      "$TMP_ROOT is at ${usage_pct}% usage. Investigate with: du -sh $TMP_ROOT/*" 2>/dev/null || true
-    logger -t tmpfs-guard "$TMP_ROOT at ${usage_pct}% — nothing reapable found."
+     && [[ "${CLEANED_COUNT:-0}" -eq 0 ]] && [[ "${REAP_COUNT:-0}" -eq 0 ]]; then
+    guard_log "$TMP_ROOT at ${usage_pct}% — nothing reapable found."
+    alarm_record "$TMP_ROOT at ${usage_pct}% — nothing reapable found. Investigate: du -sh $TMP_ROOT/* | sort -h | tail"
   fi
 }
 
 # CLI vs. sourced (test harness). Mirrors the session-state.sh idiom.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  # Serialise runs. A pressure-tier pass over a large /tmp can outlast the
+  # 5-minute cron interval, and two overlapping runs would race each other's
+  # deletes — one stat-ing an entry the other has already removed. There was no
+  # lock at all before. Non-blocking: if a run is already in flight, this one
+  # exits rather than queueing up behind it (a queue of guards is its own leak).
+  if [[ "${TMPFS_GUARD_NO_FLOCK:-0}" != "1" ]] && command -v flock >/dev/null 2>&1; then
+    _lockfile="${TMPDIR:-/tmp}/.tmpfs-guard-$(id -u).lock"
+    exec 9>"$_lockfile" 2>/dev/null || exec 9>/dev/null
+    if ! flock -n 9; then
+      guard_log "another tmpfs-guard run is in flight — skipping"
+      exit 0
+    fi
+  fi
   main
 fi

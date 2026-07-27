@@ -343,9 +343,28 @@ jq -nc \
   '{timestamp: $ts, change_class: $cls, rule_ids_loaded: $ids}' \
   > "$MANIFEST"
 
+# tmpfs-guard alarms (#6991). The guard runs from cron, where it has no path to
+# Better Stack or Sentry: Vector is not installed on this host, `tmpfs-guard` is
+# not in the vector tag allowlist, there is no local Sentry DSN, `doppler` is
+# off cron's PATH, and `gh` authenticates through an OS keyring cron cannot
+# reach. Its high-usage alarm therefore fired 94 times in 14 days into the
+# journal (unwatched) and notify-send (a no-op under cron) and reached nobody.
+#
+# Surfacing it here needs no credential and no network. Emits NOTHING when there
+# are no alarms — a healthy machine must not tax every session's context.
+TMPFS_ALARM_FILE="${TMPFS_GUARD_ALARM_FILE:-$HOME/.local/state/soleur/tmpfs-guard-alarms.log}"
+TMPFS_ALARM_BLOCK=""
+if [[ -s "$TMPFS_ALARM_FILE" ]]; then
+  _alarm_n=$(wc -l < "$TMPFS_ALARM_FILE" 2>/dev/null || echo 0)
+  if [[ "$_alarm_n" =~ ^[0-9]+$ ]] && (( _alarm_n > 0 )); then
+    _alarm_last=$(tail -1 "$TMPFS_ALARM_FILE" 2>/dev/null || true)
+    TMPFS_ALARM_BLOCK="[tmpfs-guard] ${_alarm_n} unresolved /tmp alarm(s); most recent: ${_alarm_last}"$'\n'"[tmpfs-guard] full log: ${TMPFS_ALARM_FILE} (clear it once investigated)"$'\n'
+  fi
+fi
+
 # Final output envelope. SESSION_CONTEXT lands on lines 4-6 — after the
 # operator-glanceable header (STAMP/HINT/manifest, lines 1-3, which Test 11
 # byte-budgets via `head -3`) and before the rule bodies.
-OUT_BODY="${STAMP}"$'\n'"${HINT}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}"
+OUT_BODY="${STAMP}"$'\n'"${HINT}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${TMPFS_ALARM_BLOCK}${SESSION_CONTEXT}"$'\n'"${CONTEXT}"
 jq -nc --arg out "$OUT_BODY" '{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: $out } }'
 exit 0
