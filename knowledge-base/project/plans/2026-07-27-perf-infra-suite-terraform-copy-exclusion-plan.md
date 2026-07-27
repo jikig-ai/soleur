@@ -498,7 +498,7 @@ copy/diff pair 20× rather than asserting it once.
 **If this leaks, the user's data/workflow/money is exposed via:** no new vector — the
 change strictly *reduces* bytes written to local temp.
 
-**Brand-survival threshold:** `none`.
+- **Brand-survival threshold:** `none`.
 
 - `threshold: none, reason: the only edited file is an author-time bash test harness with
   no runtime path, no credential handling, and no user data — the change strictly narrows
@@ -555,8 +555,8 @@ logs:
   where: "GitHub Actions job log; locally, stdout of run-registered-suites.sh"
   retention: "GitHub Actions default (90 days)"
 discoverability_test:
-  command: "bash apps/web-platform/infra/credential-persist-home-guard.test.sh; echo rc=$?"
-  expected_output: "final line `=== credential-persist-home-guard: PASS=<N> FAIL=0 ===` and rc=0"
+  command: bash apps/web-platform/infra/credential-persist-home-guard.test.sh
+  expected_output: "FAIL=0"
 ```
 
 No `ssh` in any field; every failure mode is detected in-suite. **Soak enrollment:** N/A —
