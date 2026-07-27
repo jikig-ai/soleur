@@ -114,6 +114,166 @@ assert_decision "terraform import (correct migration) allows" "allow" \
 assert_decision "empty content allows" "allow" \
   "$(mk_payload "$PLAN_PATH" "")"
 
+# ---------------------------------------------------------------------------
+# #6992 regression suite — SIGPIPE race, Edit-scope ack, MultiEdit bypass.
+#
+# Measured 2026-07-27 against the pre-fix hook (GNU grep 3.12, bash 5.3.9,
+# default 64 KiB pipe capacity). `echo "$content" | grep -q P` under
+# `set -o pipefail` reports FAILURE on a successful match once $content
+# exceeds what fits in the pipe: grep -q exits on first match, closing the
+# read end; the still-writing producer takes SIGPIPE and exits 141; pipefail
+# propagates 141 as the pipeline status. The `&& add_match` then never runs.
+#
+#   body   DENY/30 (violation at top, pre-fix)
+#    4 KB    30      correct
+#   50 KB    22      racing
+#  128 KB     0      silent, total fail-open
+#
+# Direction matters: the policy checks fail OPEN (forbidden content allowed),
+# and the ack check fails CLOSED (a valid opt-out read as absent).
+# ---------------------------------------------------------------------------
+
+ACK='<!-- iac-routing-ack: plan-phase-2-8-reviewed -->'
+
+# T5 (AC-A6) — vacuity guard. In an agent Bash session `grep` resolves to a
+# ugrep shim shell function whose -q DRAINS its input, so the race is
+# invisible and every case below would pass without testing anything.
+# Must run FIRST: it invalidates the rest of the suite.
+TOTAL=$((TOTAL + 1))
+grep_kind="$(type -t grep || echo "<none>")"
+if [[ "$grep_kind" == "file" ]]; then
+  PASS=$((PASS + 1))
+  echo "PASS: T5 grep resolves to a binary ($(command -v grep)), not a shim"
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: T5 grep resolves to '$grep_kind', not a binary — the SIGPIPE cases"
+  echo "      below would pass VACUOUSLY. Re-run with a clean PATH:"
+  echo "      env -i PATH=/usr/bin:/bin bash --noprofile --norc $0"
+fi
+
+# Repeat-until-flake harness. A single run proves nothing about a race: the
+# pre-fix hook is non-deterministic in the 50-96 KB band, so an assertion that
+# runs once passes ~73% of the time at 50 KB. Every run must agree.
+assert_decision_stable() {
+  local label="$1" want="$2" payload="$3" runs="${4:-30}"
+  TOTAL=$((TOTAL + 1))
+  local i out decision mismatch=0 got_first=""
+  for ((i = 0; i < runs; i++)); do
+    out="$(printf '%s' "$payload" | bash "$HOOK" 2>/dev/null)"
+    decision="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // "<missing>"' 2>/dev/null || echo "<jq-fail>")"
+    [[ -z "$got_first" ]] && got_first="$decision"
+    [[ "$decision" == "$want" ]] || mismatch=$((mismatch + 1))
+  done
+  if [[ "$mismatch" -eq 0 ]]; then
+    PASS=$((PASS + 1))
+    echo "PASS: $label → $want on all $runs runs"
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: $label"
+    echo "  want: $want on all $runs runs"
+    echo "  got:  $mismatch/$runs disagreed (first was '$got_first')"
+  fi
+}
+
+# Build a body of at least $1 KB with the caller's line placed at the very top,
+# where an early grep match closes the pipe soonest.
+mk_big_body() {
+  local kb="$1" head_line="$2" i=0 lines
+  lines=$((kb * 1024 / 40))
+  printf '%s\n\n' "$head_line"
+  while ((i < lines)); do
+    printf 'filler prose line %d padding padding\n' "$i"
+    i=$((i + 1))
+  done
+}
+
+VIOLATION='Phase 1: ssh root@hetzner and run setup.'
+
+# T1 (AC-A2) — the criterion the issue asks for. Fails 30/30 pre-fix at 128 KB.
+assert_decision_stable "T1 128 KB body, violation at top, denies every run" "deny" \
+  "$(mk_payload "$PLAN_PATH" "$(mk_big_body 128 "$VIOLATION")")"
+
+# T1b — the size the issue reports (~50 KB), where the race is partial. This is
+# the arm that reproduces the filed 9-deny/3-allow ratio.
+assert_decision_stable "T1b 50 KB body, violation at top, denies every run" "deny" \
+  "$(mk_payload "$PLAN_PATH" "$(mk_big_body 50 "$VIOLATION")")"
+
+# T2 — the fail-CLOSED direction: a VALID acked plan must never be denied.
+# Pre-fix this denied 22/30 at 50 KB — the symptom that surfaced the bug.
+assert_decision_stable "T2 50 KB body, violation + ack, allows every run" "allow" \
+  "$(mk_payload "$PLAN_PATH" "$ACK
+$(mk_big_body 50 "$VIOLATION")")"
+
+assert_decision_stable "T2b 128 KB body, violation + ack, allows every run" "allow" \
+  "$(mk_payload "$PLAN_PATH" "$ACK
+$(mk_big_body 128 "$VIOLATION")")"
+
+# T6 — producer/size behaviour, the measurement that drives the fix. Asserts
+# the RACE EXISTS in the pre-fix shape, so this test pins the mechanism itself
+# rather than the hook. It must hold regardless of how the hook is written.
+TOTAL=$((TOTAL + 1))
+t6_big="$(mk_big_body 128 MATCHME)"
+t6_fails=0
+for _ in $(seq 1 20); do
+  ( set -o pipefail; echo "$t6_big" | grep -q MATCHME ) || t6_fails=$((t6_fails + 1))
+done
+t6_safe_fails=0
+for _ in $(seq 1 20); do
+  ( set -o pipefail; grep -q MATCHME <<<"$t6_big" ) || t6_safe_fails=$((t6_safe_fails + 1))
+done
+if [[ "$t6_fails" -gt 0 && "$t6_safe_fails" -eq 0 ]]; then
+  PASS=$((PASS + 1))
+  echo "PASS: T6 pipe form races ($t6_fails/20 false failures), herestring does not (0/20)"
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: T6 expected pipe form to race and herestring not to"
+  echo "  pipe form false failures:       $t6_fails/20 (want >0)"
+  echo "  herestring false failures:      $t6_safe_fails/20 (want 0)"
+fi
+
+# T3 (AC-A4) — Edit-scope ack blindness. The hook scans only `new_string`, so
+# an ack living elsewhere in the file is invisible and a valid plan is denied.
+# Independent of the SIGPIPE race: deterministic, and reproduces at any size.
+T3_DIR="$(mktemp -d)"
+trap 'rm -rf "$T3_DIR"' EXIT
+mkdir -p "$T3_DIR/knowledge-base/project/plans"
+T3_FILE="$T3_DIR/knowledge-base/project/plans/2026-07-27-acked-plan.md"
+printf '%s\n# Plan\n\nExisting prose the edit does not touch.\n' "$ACK" > "$T3_FILE"
+
+assert_decision "T3 Edit with ack on disk outside the chunk allows" "allow" \
+  "$(mk_edit_payload "$T3_FILE" "Now $VIOLATION")"
+
+# T3b — the ack must not be conjured from a file that lacks it.
+T3B_FILE="$T3_DIR/knowledge-base/project/plans/2026-07-27-unacked-plan.md"
+printf '# Plan\n\nNo acknowledgement anywhere in this file.\n' > "$T3B_FILE"
+
+assert_decision "T3b Edit with no ack on disk still denies" "deny" \
+  "$(mk_edit_payload "$T3B_FILE" "Now $VIOLATION")"
+
+# T4 (AC-A5) — MultiEdit bypass. The hook's matcher and its own tool_name case
+# both omit MultiEdit, so a plan written that way skips the guard entirely.
+mk_multiedit_payload() {
+  local path="$1" new_string="$2"
+  jq -nc --arg p "$path" --arg n "$new_string" \
+    '{tool_name: "MultiEdit", tool_input: {file_path: $p, edits: [
+       {old_string: "a", new_string: "harmless"},
+       {old_string: "b", new_string: $n}
+     ]}}'
+}
+
+assert_decision "T4 MultiEdit carrying a violation denies" "deny" \
+  "$(mk_multiedit_payload "$PLAN_PATH" "$VIOLATION")"
+
+assert_decision "T4b MultiEdit with benign edits allows" "allow" \
+  "$(mk_multiedit_payload "$PLAN_PATH" "Add a column to the messages table.")"
+
+assert_decision "T4c MultiEdit violation + ack in a sibling edit allows" "allow" \
+  "$(jq -nc --arg p "$PLAN_PATH" --arg n "$VIOLATION" --arg a "$ACK" \
+     '{tool_name: "MultiEdit", tool_input: {file_path: $p, edits: [
+        {old_string: "a", new_string: $a},
+        {old_string: "b", new_string: $n}
+      ]}}')"
+
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
 [[ $FAIL -eq 0 ]] || exit 1
