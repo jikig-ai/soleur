@@ -36,8 +36,11 @@ All figures re-derived in worktree `feat-context-engineering-audit` at `655eb012
 | `B_ALWAYS` (gated) | **22,900 B** | `python3 scripts/lint-agents-rule-budget.py` → `[WARN]`, ceiling 23,000 |
 | Real fail-open footprint | **43,513 B (~10.9k tok)** | AGENTS.md 6,072 + core 16,901 + docs 3,266 + rest 17,274 |
 | Ratio real : gated | **1.89×** | the budget gate measures 53% of what actually loads |
-| Skill-description budget | **2,296 / 1,800 words** | **exceeded by 27.6% (−496 words)** |
+| Skill-description budget | **2,400 / 1,800 words** | **exceeded by 33.3% (−600 words)**, 95 skills |
 | Rule↔skill duplication | **0 of 10 sampled** | no core rule restated in any SKILL.md |
+| Rule↔rule contradictions | **4** | CTO audit, 2 verified verbatim below |
+| Rule↔skill drifts | **4** | incl. one literal inversion, verified below |
+| Dead rule citations in skills | **4** | skills cite ids absent from `AGENTS.md` |
 
 ### The finding that reframes everything
 
@@ -87,6 +90,34 @@ reassuringly and wrongly. Confirmed against `knowledge-base/project/learnings/20
 (#6794), which already established `202 = 2 × 101` as a category error in the sibling
 metric — the same double-count survives here.
 
+### The one anti-pattern Soleur *does* have: conflicting messages
+
+The article's first-named anti-pattern is contradiction across system prompt, skills and
+request. Soleur has it, and `scripts/lint-rule-ids.py` cannot see it — it validates id
+integrity only, never semantics. Two verified verbatim:
+
+**Rule ↔ rule.** `wg-when-an-audit-identifies-pre-existing` says *"create GitHub issues to
+track them before fixing. Don't just note them in conversation — file them."*
+`wg-when-deferring-a-capability-create-a` says *"default to **documenting it in-place** …
+File a GitHub issue ONLY when the `wg-defer-only-after-inline-triage` triple test passes …
+converting every Non-Goal to an issue creates phantom backlog."* An agent that finds a
+pre-existing issue during an audit *and* elects to defer it receives opposite
+instructions. The overlap is partial, not total — which is worse, because it surfaces
+only in the ambiguous case where guidance is most needed.
+
+**Rule ↔ skill — a literal inversion.** `hr-menu-option-ack-not-prod-write-auth`
+`[compliance-tier]` says: *"show the exact command, wait for explicit per-command
+go-ahead, THEN run with `-auto-approve`/`--yes`/`--force`."* But
+`plugins/soleur/skills/ship/SKILL.md:821` says *"Do NOT pass `-auto-approve`"* — **citing
+that same rule id** — and `admin-ip-refresh/SKILL.md:42` says *"no `--yes`, no
+`-auto-approve`, per AGENTS.md `hr-menu-option-ack-not-prod-write-auth`."*
+
+This is not cosmetic. The rule's ack-then-`-auto-approve` design exists *because* the Bash
+tool is non-interactive (`hr-the-bash-tool-runs-in-a-non-interactive`). Following the
+skills instead of the rule makes the command block on a TTY prompt nothing can answer —
+producing exactly the operator-blocking stall that Soleur's "never defer to the operator"
+posture exists to prevent.
+
 ## Prescription-by-Prescription Verdict
 
 | Article prescription | Soleur's primitive | Automation | Verdict |
@@ -94,6 +125,7 @@ metric — the same double-count survives here.
 | Replace rules with judgment | **discoverability litmus**, landed in `wg-every-session-error-must-produce-either`; 58 rules retired via allowlist | **full** | **Already done.** Independently invented 2026-04-23, precedent from 2026-02-25. No action. |
 | Progressive disclosure | change-class loader + 3 sidecars | **partial — 8.7% effective** | **Real gap.** Mechanism present, rarely fires. See decisions. |
 | Instructions in exactly one place | rules cite skills by `[id:]`; bodies not restated | **full** | 0 duplication in sample. No action. |
+| No conflicting messages | `lint-rule-ids.py` — id integrity only | **none semantically** | **Real gap.** 4 rule↔rule, 4 rule↔skill (one a literal inversion), 4 dead citations. Nothing audits this. |
 | Design tool interfaces, not examples | skill `description:` frontmatter | **partial — over budget** | **Real gap.** 2,296/1,800 words. |
 | Auto-memory over manual files | `hr-never-write-to-claude-code-memory-claude` (hook-enforced) | **deliberately inverted** | **Reject.** See below. |
 | Rich references over markdown specs | ATDD (`cq-write-failing-tests-before`), `.pen` wireframe gate, eval-harness | **substantially done** | Largely already satisfied. |
@@ -129,7 +161,10 @@ a guardrail, and no Soleur-specific A/B evidence exists either way.
 | Fix loader denominator (`:247`) | **Yes — first** | One-line glob fix. The instrument that measures every future decision here is wrong by 2×. Zero behaviour change. |
 | Publish the real fail-open rate | **Yes** | 8.7% effective vs ~50% implied. Make the stamp report the loaded/total *bytes*, not just rule count. |
 | Re-cut the class axis | **No — not yet** | Would be a large change premised on the same broken instrument. Fix the instrument, observe, then decide. Explicitly deferred. |
-| Skill-description budget breach | **Yes — fix** | 27.6% over an existing enforced cap; the article's "tool interface" surface. |
+| Skill-description budget breach | **Yes — fix** | 33% over an existing enforced cap; the article's "tool interface" surface. |
+| Resolve the 12 conflicts/drifts | **Yes** | The article's #1 anti-pattern, live. The `-auto-approve` inversion has an operator-blocking failure mode. |
+| Hook-enforced rule prose | **Trim to one line, never delete** | Redundant *as enforcement* (the hook blocks), load-bearing *as explanation* — the deny message cites the id; without prose the agent is blocked without knowing why and routes around it. |
+| Rule-vs-skill drift auditor | **Defer — file as capability gap** | No agent or skill audits rule↔skill semantics today; that absence is why all 12 are live. |
 | `rule-prune.sh` compliance exemption | **Yes — fix** | `scripts/rule-prune.sh:167` gates only on `[hook-enforced]`/`[skill-enforced]`; it can propose retiring rules cited by the Art. 30 register. Latent compliance bug. |
 | Dangling register citation | **Yes — fix** | `article-30-register.md:417` cites `hr-block-pr-ready-…`; real id is `wg-`. Already broken today. |
 | Adopt auto-memory | **No** | CC memory is machine- and operator-local. Soleur's moat is portable cross-operator knowledge. Rejecting is correct, not a defect. |
@@ -178,10 +213,31 @@ a guardrail, and no Soleur-specific A/B evidence exists either way.
 Support: not relevant — no user-facing surface, pricing, or vendor change.)
 
 ### Engineering
-Progressive disclosure is implemented but 8.7% effective because 70% of PRs are
-multi-class; the loader's own utilisation stamp is computed with a doubled denominator
-and reads 50% when it means 100%. `B_ALWAYS` sits at 22,900 of a 23,000 REJECT ceiling —
-100 bytes of headroom, so the next rule cannot land without a demotion.
+Progressive disclosure is implemented but near-inert: independently measured at 68%
+multi-class over 80 PRs (orchestrator) and 72% over 200 commits (CTO), plus synthetic-tree
+runs confirming clean-on-main → `101 of 202`, docs-only → `59`, code-only → `95`,
+mixed → `101`. Realistic fail-open rate **75–85%** once clean-tree and question-only
+sessions are counted. The loader's utilisation stamp is computed with a doubled
+denominator and reads 50% when it means 100%. `B_ALWAYS` sits at 22,900 of a 23,000
+REJECT ceiling — **100 bytes of headroom**, so the next core rule fails CI.
+
+**Verdict on the 80% headline: it does not transfer. A defensible target is 15–25%**,
+concentrated in generic-behaviour rules now enforced by the tools themselves
+(`hr-always-read-a-file-before-editing-it` is enforced by the Edit tool;
+`hr-the-bash-tool-runs-in-a-non-interactive` is model-known) and in trimming
+hook-enforced prose. The distinction that decides it:
+**Claude Code's system prompt described *the tool*; Soleur's rules describe *the world the
+tool acts on*.** No model's judgment reconstructs "#5736's dedup INSERT was 63% of prod
+WAL". The article's *diagnosis* transfers completely; its *prescription* mostly does not.
+
+**Capability gap:** nothing audits rule↔skill semantic drift. `lint-rule-ids.py` validates
+id integrity only — which is precisely why 4 contradictions, 4 drifts and 4 dead citations
+are live and undetected. Belongs to engineering; filed as follow-up.
+
+**Architecture decision required** if the classifier axis is ever re-cut (deferred here):
+excluding `knowledge-base/**` from `DOCS_RE` would move most multi-class sessions into
+`core+rest`, saving ~17 KB on ~70% of sessions — but a docs rule silently missing is
+exactly PR #3681's failure mode, so it needs an ADR, not a patch.
 
 ### Product
 Cost falls entirely on the founder, not on target users: `scaffoldWorkspaceDefaults()`
