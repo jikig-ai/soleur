@@ -14,6 +14,46 @@ status: draft
 > `knowledge-base/project/specs/feat-one-shot-infra-runner-terraform-copy-waste/spec.md`
 > exists; this plan is the first artifact for the branch.
 
+## Enhancement Summary
+
+**Deepened:** 2026-07-27 · **Panel:** DHH, Kieran, code-simplicity, scoped strong-model
+advisor · **Method:** every claim executed, not reasoned.
+
+### What the deepen pass changed
+
+1. **Found a second, independent defect the first draft missed** — sandbox *lifetime*.
+   Sandboxes were never reclaimed until the `EXIT` trap, so 24 were concurrently resident.
+   Fixing size alone left peak at 108 MB; fixing both lands it at **5 MB**.
+2. **Falsified three implementations that look correct.** `find -exec cp \;` (44.6s),
+   `fresh_sbx` alone (14.2s), and the copy/diff pin placed per-mutation (16.5–17.9s) are
+   each *slower than doing nothing*. Only the measured combination wins.
+3. **Caught a regression on the one path CI runs.** The exclusion helper without a fast
+   path makes the cold root (CI's only shape) go 9.8s → **11.0s**. Added the fast path and
+   **AC3b** to gate it — AC3 measures a shape CI never executes.
+4. **Refuted a serious fail-open hypothesis by probing** rather than accepting it, and
+   recorded the refutation so nobody adds the redundant guard it implied.
+5. **Caught a gate violation in the plan's own compliance section**: `apps/*/infra/`
+   matches the sensitive-path regex, so `threshold: none` required a scope-out bullet the
+   first draft explicitly claimed was unnecessary. It would have failed `deepen-plan`
+   Phase 4.6 and `/soleur:preflight` Check 6 at ship time.
+6. **Replaced a synthetic-fixture pin with an in-place one**, cutting a 25th copy of the
+   real tree from a change whose entire purpose is fewer copies of the real tree.
+
+### Gate results
+
+| Gate | Result |
+|---|---|
+| 4.5 network-outage | skip — no connectivity symptom, no SSH-provisioned `terraform apply` |
+| 4.55 downtime/cutover | skip — no reboot/replace, DB-lock, or router class |
+| **4.6 user-brand impact** | **initially REJECTED** (`threshold: none` on a sensitive path with no scope-out) → fixed → pass |
+| 4.7 observability | pass — 5 fields present, non-placeholder, no `ssh` in `discoverability_test.command` |
+| 4.8 PAT-shaped variable | pass — no matches |
+| 4.9 UI wireframe | skip — no UI surface |
+| 4.10 encryption posture | skip — no persistent store or new connection |
+| 4.4 precedent-diff | **no precedent — pattern is novel.** No `GLOBIGNORE`, `--exclude=.terraform`, or `TF_DATA_DIR` exists anywhere in the repo's suites or scripts. Reviewers should scrutinise the helper accordingly; it is pinned by step 5 and AC3a rather than by resemblance to a sibling. |
+| rule-id citations | pass — plan cites no `hr-*`/`wg-*`/`cq-*` IDs requiring existence checks beyond those verified |
+| PR/issue citations | pass — #6665, #6730, #6789, #6734 all resolved live via `gh` |
+
 ## Overview
 
 `apps/web-platform/infra/credential-persist-home-guard.test.sh` builds a sandbox copy of
@@ -114,6 +154,24 @@ Run-to-run spread on the prescribed variant is 7.2–9.6s (±17% around ~8.3s), 
 smaller than the 2.1s improvement over baseline but not by a wide margin — AC3 is therefore
 written as "does not regress", not as a point estimate.
 
+### The cold root — the only shape CI actually runs
+
+Premise-validation row 5 establishes that CI never has a `.terraform`. So the *warm*
+benchmark above measures a shape CI never executes. Measured separately, 3 runs each,
+against a real cold infra root:
+
+| Variant | Cold-root wall-clock | Median |
+|---|---|---|
+| `origin/main` (unchanged) | 9.08 / 9.93 / 9.81s | 9.81s |
+| Exclusion **without** a fast path | 11.59 / 11.04 / 9.67s ⚠️ | **11.04s — a regression** |
+| Exclusion **with** the fast path *(prescribed)* | 8.30 / 7.18 / 6.69s | **7.18s** |
+
+Without the fast path, the helper pays a subshell plus a ~235-argument `cp` to exclude a
+directory that **is not there**, and the change makes the one path CI runs *slower*. With
+it, the cold root is faster than `origin/main` too (`fresh_sbx` reclaims a small tree
+instead of letting 24 accumulate). **AC3 alone would never have caught this** — it gates
+only the warm benchmark. Hence AC3b.
+
 ### Anti-vacuity control (measured both ways)
 
 A no-op mutation (`m0noop() { : ; }`) injected as an extra `expect_red`:
@@ -192,7 +250,15 @@ Insert after the existing `TMPROOT` trap:
 # One `cp` invocation is deliberate: `find … -exec cp -r {} \;` forks per entry (~236 of
 # them) and measured 44.6s vs 8.0s. Assumes $1 holds no glob metacharacters — true for
 # mktemp/SCRIPT_DIR paths.
-copy_scan_tree() { ( GLOBIGNORE="$1/.terraform"; cp -r "$1"/* "$2"/; ); }
+copy_scan_tree() {
+  # FAST PATH — load-bearing, not an optimisation. CI's `deploy-script-tests` job runs no
+  # `terraform init`, so the ONLY shape CI ever executes is the one with nothing to
+  # exclude. There, the ~235-argument `cp` + subshell is measurably SLOWER than the plain
+  # single-directory form: cold-root median 11.0s without this line vs 9.8s on origin —
+  # i.e. the fix would regress the only path CI runs. With it: 7.2s.
+  [[ -e "$1/.terraform" ]] || { cp -r "$1"/. "$2"/; return; }
+  ( GLOBIGNORE="$1/.terraform"; cp -r "$1"/* "$2"/; )
+}
 
 # Sandboxes were never reclaimed until the EXIT trap, so all 24 were concurrently
 # resident. Reclaiming the previous one first bounds the footprint at a single tree and
@@ -292,9 +358,14 @@ diff surviving).
    ```bash
    B=/var/tmp/credbench; rm -rf "$B"; mkdir -p "$B/infra" "$B/tmp"
    cp -a apps/web-platform/infra/. "$B/infra/"
-   # safe to hardlink here, unlike the R2 case: .terraform is never mutated and never
-   # enters a sandbox — no mutation appends to it.
-   cp -al <a-worktree-with-warm-.terraform>/apps/web-platform/infra/.terraform "$B/infra/.terraform"
+   # Safe to hardlink here, unlike the R2 case: .terraform is never mutated and never
+   # enters a sandbox — no mutation appends to it. Resolvable source on this machine:
+   #   .worktrees/feat-one-shot-6977-git-data-birth-route/apps/web-platform/infra/.terraform
+   # (162 MB, verified). Do NOT use the copy under the bare-repo root — that path is
+   # forbidden by `hr-when-in-a-worktree-never-read-from-bare`. If no worktree has a warm
+   # cache, create one with `terraform init -backend=false` in a scratch copy — never
+   # inside the repo worktree.
+   cp -al <warm-worktree>/apps/web-platform/infra/.terraform "$B/infra/.terraform"
    TMPDIR="$B/tmp" CRED_GUARD_INFRA_ROOT="$B/infra" \
      bash apps/web-platform/infra/credential-persist-home-guard.test.sh
    ```
@@ -308,8 +379,9 @@ diff surviving).
 ### Pre-merge (PR)
 
 - **AC1** `bash apps/web-platform/infra/credential-persist-home-guard.test.sh` exits **0**
-  with `FAIL=0` and `PASS` ≥ **29** (28 existing + the step-5 copy/diff pair pin). Measured
-  `PASS=29 FAIL=0`.
+  with `FAIL=0` and `PASS=29` **exactly** (28 existing + the step-5 copy/diff pair pin).
+  Exact, not `≥`: a `≥` cannot fail when a pin is silently dropped and another added.
+  Measured `PASS=29 FAIL=0`.
 - **AC2** Under the external benchmark (162 MB `.terraform`, disk-backed `TMPDIR`), peak
   `TMPROOT` is **< 250 MB** — measured 5 MB, was 3,980 MB. *Threshold basis:* ~6% of the
   4.0 GB tmpfs, i.e. a footprint that stays safe with all 6 parallel runner slots occupied
@@ -319,18 +391,31 @@ diff surviving).
   best-of, because the run-to-run spread (±17%) is comparable to the improvement. This is
   the gate that catches all three measured traps: `find -exec` (44.6s), `fresh_sbx`-alone
   (14.2s), and a per-mutation pin (16.5–17.9s). Report all 3 runs.
-- **AC3a** A `copy_scan_tree` replaced by a bare `cp -r "$1"/* "$2"/` makes the step-5 pin
-  report `FAIL: copy/diff pair BROKEN` — i.e. the pin is non-vacuous. Verified during
-  planning; re-verify with a scratch copy at `/work` time and paste the line into the PR
-  body. Do **not** commit the mutation.
+- **AC3a** *(non-vacuity control — scratch copy only, never committed)* A `copy_scan_tree`
+  replaced by a bare `cp -r "$1"/* "$2"/` makes the step-5 pin report
+  `FAIL: copy/diff pair BROKEN` → `PASS=28 FAIL=1`. Verified during planning; re-verify at
+  `/work` and paste the line into the PR body. **This control discriminates on a cold root
+  too**, because `.gitignore` and `.terraform.lock.hcl` exist regardless of whether
+  `terraform init` has run — a bare glob drops them either way. *(Contrast: an
+  `m0noop`-style control would be vacuous on a cold root, where the copy and the diff are
+  trivially symmetric and a broken implementation emits the same message as a correct one.
+  Any control added later must be checked for this.)*
+- **AC3b** **Cold-root control — the only shape CI runs.** With **no** `.terraform` in
+  `CRED_GUARD_INFRA_ROOT`, median wall-clock over 3 runs does not regress versus
+  `origin/main` (measured: origin 9.81s → prescribed 7.18s; **without the fast path,
+  11.04s — a regression**). AC3 gates only the warm benchmark and cannot catch this.
 - **AC4** `bash apps/web-platform/infra/run-registered-suites.sh` reports **72 passed, 0
   failed**. Required because this edits a *registered* infra suite and `scripts/test-all.sh`
   does not cover `apps/web-platform/infra/` — the coverage boundary of
   `2026-07-26-a-green-test-run-is-only-evidence-for-what-it-actually-ran`. Runner
   wall-clock is *recorded, not asserted*: it is predicted unchanged (~8m50s).
-- **AC5** `git grep -c 'cp -r "$REAL_ROOT"' -- <suite>` and
-  `git grep -c 'diff -rq "$REAL_ROOT" "$sbx"' -- <suite>` both return **0** (no unguarded
-  copy or unexcluded diff survives).
+- **AC5** `grep -c 'cp -r "\$REAL_ROOT"' <suite>` and
+  `grep -c 'diff -rq "\$REAL_ROOT" "\$sbx"' <suite>` both return **0** (no unguarded copy
+  or unexcluded diff survives). Two mechanics verified, both non-obvious: (a) inside single
+  quotes `\$` reaches grep as BRE `\$` = a literal `$` and **does** match — the unescaped
+  form returns 0 against the *unpatched* file and would silently false-pass; (b) `grep -c`
+  **exits 1 on a zero count**, so any script wrapping these under `set -euo pipefail` must
+  append `|| true` or it aborts before reporting.
 
 ### Post-merge (operator)
 
@@ -355,9 +440,19 @@ copy/diff pair 20× rather than asserting it once.
 **If this leaks, the user's data/workflow/money is exposed via:** no new vector — the
 change strictly *reduces* bytes written to local temp.
 
-**Brand-survival threshold:** `none`. Author-time test harness; touches no path in the
-sensitive-path regex (no schema, migration, auth flow, API route, `.sql`), so no scope-out
-bullet is required.
+**Brand-survival threshold:** `none`.
+
+- `threshold: none, reason: the only edited file is an author-time bash test harness with
+  no runtime path, no credential handling, and no user data — the change strictly narrows
+  which local directories are copied into a temp sandbox.`
+
+> **Scope-out bullet is mandatory here, and the first draft wrongly omitted it.** The edited
+> path `apps/web-platform/infra/credential-persist-home-guard.test.sh` **matches** the
+> canonical sensitive-path regex via the `apps/[^/]+/infra/` arm — the whole `infra/` tree is
+> in scope regardless of the file being a test. A `threshold: none` on a matching path
+> without the bullet is rejected by `deepen-plan` Phase 4.6 **and** fails `/soleur:preflight`
+> Check 6 at ship time. Caught by running the gate rather than assuming the verdict:
+> `echo <path> | grep -qE "$SENSITIVE_PATH_RE"` → match.
 
 ## Domain Review
 
@@ -490,9 +585,22 @@ The instruction is satisfied by the single-suite fix; the sweep predicates are r
   source. Prefer `du -sm` sampling over wall-clock assertions when pinning this —
   wall-clock gates on a loaded parallel runner are the flake class of #6496.
 - **Fixes that are individually obvious can each be regressions while their combination
-  wins.** Both single-fix variants here are slower than the pair; two of the three
-  candidate implementations are slower than doing nothing. Measure combinations, not just
-  candidates.
+  wins.** Both single-fix variants here are slower than the pair; three of the candidate
+  implementations measured slower than doing nothing. Measure combinations, not candidates.
+- **Optimising the pathological shape can pessimise the common one — measure both.** The
+  exclusion helper pays a subshell and a ~235-argument `cp` to skip a directory that is
+  absent on every CI run and on every contributor machine that never ran `terraform init`.
+  Without the `[[ -e … ]] || { plain copy; }` fast path it regresses the *only* shape CI
+  executes (9.8s → 11.0s) while improving a shape CI never sees. Whenever a fix is
+  conditioned on an artifact that is sometimes absent, add a control for the absent case.
+- **The exclusion is top-level-only; `diff --exclude` matches at every depth.**
+  `copy_scan_tree` filters basenames of `"$src"/*`, so a `.terraform` nested under a
+  subdirectory would still be copied 24× while the diff quietly hid the asymmetry. There
+  are none today (`find apps/web-platform/infra -type d -name .terraform` → root only). If
+  a nested terraform root is ever added, the helper must prune recursively.
+- **`grep -c` exits 1 on a zero count.** Any verification wrapper that greps for the
+  *absence* of a pattern under `set -euo pipefail` aborts before it can report, unless the
+  call carries `|| true`. Absence-assertions are exactly where this bites.
 
 ## Related
 

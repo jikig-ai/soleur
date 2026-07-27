@@ -42,6 +42,10 @@ Target: `apps/web-platform/infra/credential-persist-home-guard.test.sh`
       or `shopt`, and why a bare `cp -r "$1"/*` would re-introduce the vacuity bug by
       dropping dotfiles. Do **not** add an empty-array guard or a `cp` exit-status check
       (the plan documents why both are redundant, with evidence).
+- [ ] 2.1a **The `[[ -e "$1/.terraform" ]] || { cp -r "$1"/. "$2"/; return; }` fast path is
+      mandatory, not an optimisation.** CI runs no `terraform init`, so the cold root is
+      the only shape CI executes — and without the fast path the change *regresses* it
+      (9.8s → 11.0s measured). With it: 7.2s. Gated by AC3b.
 - [ ] 2.2 Replace the sandbox allocation at **both** call sites (`expect_red`,
       `expect_green`): `mktemp -d "$TMPROOT/{mut,grn}.XXXXXX"` → `fresh_sbx`.
 - [ ] 2.3 Replace the copy at **both** call sites: `cp -r "$REAL_ROOT"/. "$sbx"/` →
@@ -60,15 +64,22 @@ Target: `apps/web-platform/infra/credential-persist-home-guard.test.sh`
 ## 3. Testing & verification
 
 - [ ] 3.1 `bash apps/web-platform/infra/credential-persist-home-guard.test.sh` →
-      `PASS=29 FAIL=0`, exit 0. *(AC1)*
-- [ ] 3.2 Benchmark AFTER, 3 runs: peak `TMPROOT` < 250 MB (expect ~5 MB) *(AC2)*; median
-      wall-clock ≤ 10.4s (expect ~8.0s) *(AC3)*. Record all 3 runs and the spread.
+      `PASS=29 FAIL=0` (**exactly** 29, not `≥`), exit 0. *(AC1)*
+- [ ] 3.2 Benchmark AFTER on the **warm** root, 3 runs: peak `TMPROOT` < 250 MB (expect
+      ~5 MB) *(AC2)*; median wall-clock ≤ 10.4s (expect ~8.0s) *(AC3)*. Record the spread.
+- [ ] 3.2a **Cold-root control** *(AC3b)*: with no `.terraform` in `CRED_GUARD_INFRA_ROOT`,
+      median over 3 runs must not regress vs `origin/main` (expect ~7.2s vs 9.8s). This is
+      the only shape CI runs and AC3 cannot catch it.
 - [ ] 3.3 Non-vacuity control *(AC3a)*: in a **scratch copy only**, replace the helper body
       with `cp -r "$1"/* "$2"/` and confirm the pin reports
       `FAIL: copy/diff pair BROKEN` → `PASS=28 FAIL=1`. Paste the line into the PR body.
-      Do not commit the mutation.
-- [ ] 3.4 `git grep -c 'cp -r "$REAL_ROOT"'` and
-      `git grep -c 'diff -rq "$REAL_ROOT" "$sbx"'` on the suite both return **0**. *(AC5)*
+      Do not commit the mutation. (This control discriminates on a cold root too, because
+      `.gitignore`/`.terraform.lock.hcl` exist regardless of `terraform init`.)
+- [ ] 3.4 `grep -c 'cp -r "\$REAL_ROOT"' <suite>` and
+      `grep -c 'diff -rq "\$REAL_ROOT" "\$sbx"' <suite>` both return **0**. *(AC5)* Keep the
+      `\$` escaping (single-quoted `\$` = literal `$` in BRE; the unescaped form silently
+      returns 0 even on the unpatched file), and append `|| true` if wrapping under
+      `set -euo pipefail` — `grep -c` exits 1 on a zero count.
 - [ ] 3.5 `bash apps/web-platform/infra/run-registered-suites.sh` → **72 passed, 0 failed**.
       Required: this edits a *registered* infra suite that `scripts/test-all.sh` does not
       cover. Record the runner wall-clock; **expect it unchanged** (~8m50s) — that is the
