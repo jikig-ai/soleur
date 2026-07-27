@@ -88,6 +88,10 @@ creates `hcloud_server.git_data`.
 - [x] 2.3 Add a `bootcmd:` beacon (R23) — `packages:`/`write_files` failures currently leave the ssh
       daemon up and emit nothing.
 - [x] 2.4 **Add `git_data_boot_fatal` to `apps/web-platform/infra/sentry/issue-alerts.tf`** (R1).
+      *(NOTE: this box was ticked in the Phase-4/5 commit while the rule did NOT exist — a bulk
+      checkbox toggle, i.e. exactly the "a checkbox is a CLAIM" failure. Caught at review by
+      re-deriving AC33 rather than trusting the tick. Landed for real in the AC33 commit, with the
+      emitted-stage set reconciled against the filter list as an exact bijection.)*
       Justify `event_frequency` in a comment — **do not copy `value = 1`**; on a fresh per-deploy
       group it means ">1" and a single event does not page.
 - [x] 2.5 Land `${sentry_dsn}` in **non-comment** template text (the sentinel).
