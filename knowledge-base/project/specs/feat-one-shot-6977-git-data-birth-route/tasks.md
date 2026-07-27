@@ -97,6 +97,16 @@ Open scope decisions: `knowledge-base/project/specs/feat-one-shot-6977-git-data-
   - [ ] 3.1.4 New `describe` block: `source` via `^\s*source\s+` command anchor; borrows no sibling
         gate; environment asserted; `def allow:` == `-target` == const
   - [ ] 3.1.5 Omit the keyed-interpolation and pinned-digest tests (no analogue — drop, don't fake)
+  - [ ] 3.1.6 **Trap:** the `stripDispatchJobs` self-pinning guard extracts EVERY `"[a-z0-9_]+"`
+        string literal in that function body and asserts each names a real `^  <id>:` job. Add
+        `"git_data_host_create"` and a justification comment — but no other string literal
+  - [ ] 3.1.7 Use the unparameterized extractor `/def allow:\s*\[([^\]]+)\]/` (this gate is a
+        singleton, so the web gate's `def allow\(\$k\):` form does not apply)
+- [ ] 3.6 Refresh the stale `MIN_APPLY_TARGET_OPTIONS` sentinel comment in
+      `stock-preflight-coverage.test.ts` — it enumerates 10 options and predates
+      `web-host-create`/`web-host-replace`. Floors are `>=` so nothing breaks; update the inventory
+      while adding the new option rather than letting it rot a third time
+- [ ] 3.7 Do NOT add a `stock-preflight` `EXCLUSION_ALLOWLIST` entry — this target stays **gated**
 - [ ] 3.2 Add the enum ⇄ `description` parity assertion
 - [ ] 3.3 `export TMPDIR="${TMPDIR:-/var/tmp}"` at the top of `scripts/test-all.sh`
 - [ ] 3.4 Add the replace-gate regression arm for P13's new upstream `no-op`

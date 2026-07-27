@@ -501,6 +501,33 @@ Two corrections this sweep produced:
   add a third caller of a phantom unit. Recorded so the cutover work inherits it rather than
   rediscovering it live.
 
+### Gate precedent-diff — three implementation traps in the parity/registry layer
+
+Read out of `web-host-birth-gate.sh` (293 lines, 34-assertion suite) and
+`terraform-target-parity.test.ts`. All three are invisible until CI runs.
+
+- **`stripDispatchJobs`'s self-pinning guard extracts *every* `"[a-z0-9_]+"` string literal in
+  the function body** and asserts each names a real `^  <id>:` job. So adding `"git_data_host_create"`
+  is correct — but adding *any other* lowercase string literal inside that function (a comment is
+  fine; a literal is not) makes the guard treat it as a job name and go red. The function is a
+  nested `stripJob(stripJob(...))` chain; the new entry is one more nesting level plus a
+  per-job justification comment in the doc block.
+- **`stock-preflight-coverage.test.ts`'s `MIN_APPLY_TARGET_OPTIONS` sentinel comment is already
+  stale** — it enumerates 10 options and predates `web-host-create` / `web-host-replace`. The floors
+  are `>=` so they do not break, but Phase 3 should refresh that inventory while adding the new
+  option, or it rots a third time. The `inngest-host` allowlist entry is the exact class argument a
+  birth option would use if it were ever excluded (*"additive create; nothing destroyed first, so a
+  stock miss is recoverable, not a strand"*) — this plan does **not** exclude it, so it stays gated.
+- **`lint-orphan-test-suites.sh` walks only `scripts/*.test.sh`** — it does not cover
+  `tests/scripts/test-*.sh`. Independently confirms AC12: the `run_suite` line is the *only*
+  registration, and an unregistered suite is **silent and green**.
+
+Two shape confirmations for the implementer: the singleton `def allow:` form this plan chose means
+the parity extractor is the simpler `/def allow:\s*\[([^\]]+)\]/` (the web gate's parameterized
+`def allow($k):` needs `/def allow\(\$k\):\s*\[([\s\S]*?)\n\];/` because its members contain `[`/`]`).
+And all 17 existing targets are **already** in `OPERATOR_APPLIED_EXCLUSIONS`, so only
+`doppler_config.git_data_prd` needs adding there.
+
 ---
 
 ## Observability
