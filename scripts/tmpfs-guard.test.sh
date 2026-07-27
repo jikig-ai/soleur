@@ -81,8 +81,15 @@ guard_env() {
       TMPFS_GUARD_LOG_SINK="${TMPFS_GUARD_LOG_SINK:-$TESTROOT/guard.log}" \
       TMPFS_GUARD_LOCKFILE="$TESTROOT/tmpfs-guard.lock" \
       TMPFS_GUARD_ALARM_FILE="${TMPFS_GUARD_ALARM_FILE:-$TESTROOT/alarms.log}" \
+      TMPFS_GUARD_WATERMARK_FILE="${TMPFS_GUARD_WATERMARK_FILE:-$TESTROOT/count-watermark}" \
       "$@"
 }
+
+# Seed the count watermark. Arms that assert on ABSOLUTE count must pin the
+# floor to 0 explicitly: with no watermark file the guard SEEDS from the
+# current count (the rebaseline) and is deliberately silent on that first run,
+# so an unseeded arm would assert against the seeding path, not the alarm path.
+seed_watermark() { printf '%s\n' "$1" > "$TESTROOT/count-watermark"; }
 
 reap() { guard_env "$@" bash -c "source '$GUARD'; reap_scratch_entries" 2>&1 || true; }
 
@@ -384,6 +391,7 @@ for i in $(seq 1 40); do
 done
 find "$FAKE_TMP" -mindepth 1 -exec touch -d "-120 minutes" {} + 2>/dev/null || true
 : > "$TESTROOT/count.alarm"
+seed_watermark 0
 reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/count.alarm" >/dev/null
 remaining=$(find "$FAKE_TMP" -mindepth 1 -maxdepth 1 -name 'tmp.tiny*' | wc -l)
 if [[ "$(grep -cF -- 'count-shaped leak' "$TESTROOT/count.alarm" || true)" -ge 1 ]]; then
@@ -535,6 +543,7 @@ for i in $(seq 1 12); do
 done
 find "$FAKE_TMP" -mindepth 1 -exec touch -d "-120 minutes" {} + 2>/dev/null || true
 : > "$TESTROOT/lowusage.alarm"
+seed_watermark 0
 reap env TMPFS_GUARD_COUNT_TRIGGER=5 TMPFS_GUARD_USAGE_WARN_PCT=70 \
   TMPFS_GUARD_ALARM_FILE="$TESTROOT/lowusage.alarm" >/dev/null
 if [[ "$(grep -cF -- 'count-shaped leak' "$TESTROOT/lowusage.alarm" || true)" -ge 1 ]]; then
@@ -598,9 +607,146 @@ for var in TMPFS_GUARD_ALARM_FILE TMPFS_GUARD_HEARTBEAT_FILE; do
   fi
 done
 
+# --- Arm 21 (AC-A1): the count alarm is a re-floored watermark -------------
+# COUNT_TRIGGER=5000 against 20,582 legacy entries means the guard alarms every
+# five minutes, forever, before any reaper exists. Rebaselining is not a matter
+# of raising the constant: a FROZEN ship-time baseline fails two ways this arm
+# pins directly.
+#
+#   (c) it goes BLIND while the legacy drains — a new leak of thousands reads
+#       as "below baseline" for the whole drain window, i.e. exactly this
+#       feature's own validation period.
+#   (d) it is permanently DISARMED by a reboot — /tmp is tmpfs, so a stored
+#       ~20,500 sits against an actual ~0 and nothing can alarm until a new
+#       leak regrows past 20,500. That is the inverse of the bug, and it is
+#       invisible because the failure surface is silence.
+#
+# A watermark re-floored to min(stored, current) every run follows the drain
+# down and survives the reboot. Arms (c) and (d) are the non-vacuous core.
+wm() { cat "$TESTROOT/count-watermark" 2>/dev/null || echo MISSING; }
+mk_many() {  # prefix, count — tiny, old, sub-floor entries (never reap targets)
+  local p="$1" n="$2" i
+  for ((i = 1; i <= n; i++)); do
+    mkdir -p "$FAKE_TMP/$p$i"; printf 'x' > "$FAKE_TMP/$p$i/f"
+  done
+  find "$FAKE_TMP" -mindepth 1 -exec touch -d "-120 minutes" {} + 2>/dev/null || true
+}
+
+# (a) legacy present, zero orphans, no prior watermark ⇒ SEED, and stay quiet.
+reset_fixtures
+rm -f "$TESTROOT/count-watermark"
+mk_many "legacy" 30
+: > "$TESTROOT/wm.alarm"
+reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/wm.alarm" >/dev/null
+if [[ ! -s "$TESTROOT/wm.alarm" ]]; then
+  pass "AC-A1(a): legacy backlog alone does NOT alarm (absolute count is not pressure)"
+else
+  fail "AC-A1(a): legacy alarmed on absolute count — the every-5-min alarm survives: $(cat "$TESTROOT/wm.alarm")"
+fi
+if [[ "$(wm)" == "30" ]]; then
+  pass "AC-A1(a): first run seeds the watermark from the current count"
+else
+  fail "AC-A1(a): watermark seeded to '$(wm)', expected 30"
+fi
+
+# (b) the legacy drains ⇒ the persisted watermark DECREASES to follow it.
+reset_fixtures
+mk_many "legacy" 12
+reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/wm.alarm" >/dev/null
+if [[ "$(wm)" == "12" ]]; then
+  pass "AC-A1(b): the watermark ratchets DOWN as the legacy drains"
+else
+  fail "AC-A1(b): watermark is '$(wm)' after draining 30 -> 12; a frozen baseline would still read 30"
+fi
+
+# (c) growth above the NEW (drained) watermark ⇒ ALARMS.
+# A frozen ship-time baseline of 30 would swallow this entirely: 27 < 30.
+reset_fixtures
+mk_many "legacy" 27
+: > "$TESTROOT/wm.alarm"
+reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/wm.alarm" >/dev/null
+if [[ "$(grep -cF -- 'count-shaped leak' "$TESTROOT/wm.alarm" || true)" -ge 1 ]]; then
+  pass "AC-A1(c): growth above the drained watermark ALARMS (a frozen baseline is blind here)"
+else
+  fail "AC-A1(c): 12 -> 27 raised no alarm; the guard went blind during the drain window"
+fi
+if [[ "$(wm)" == "12" ]]; then
+  pass "AC-A1(c): growth does NOT raise the watermark (it only ever ratchets down)"
+else
+  fail "AC-A1(c): watermark rose to '$(wm)'; a rising floor self-silences on every leak"
+fi
+
+# (d) a /tmp reset to ~0 (reboot; tmpfs) ⇒ re-floor, and do NOT disarm.
+reset_fixtures
+mk_many "post_reboot" 1
+: > "$TESTROOT/wm.alarm"
+reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/wm.alarm" >/dev/null
+if [[ "$(wm)" == "1" ]]; then
+  pass "AC-A1(d): the watermark re-floors after a reboot clears tmpfs"
+else
+  fail "AC-A1(d): watermark stuck at '$(wm)' after reset; the alarm is disarmed until a leak regrows past it"
+fi
+# ...and the re-floored guard still fires. This is the half that proves (d) is
+# not merely "the number got smaller": a frozen baseline of 12 would NOT alarm
+# at 16, so this assertion fails against the implementation (d) rules out.
+reset_fixtures
+mk_many "post_reboot" 16
+: > "$TESTROOT/wm.alarm"
+reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/wm.alarm" >/dev/null
+if [[ "$(grep -cF -- 'count-shaped leak' "$TESTROOT/wm.alarm" || true)" -ge 1 ]]; then
+  pass "AC-A1(d): a post-reboot leak ALARMS against the re-floored watermark"
+else
+  fail "AC-A1(d): post-reboot leak stayed silent — the reboot permanently disarmed the guard"
+fi
+
+# --- Arm 22: the count is over UNOWNED entries only ------------------------
+# Entries carrying the declared ownership schema are PR 1's reclamation target,
+# so counting them here would re-arm the same forever-alarm the moment the
+# allocator ships. Excluding them is what makes A.1 "count only entries that do
+# not parse as the schema" true.
+reset_fixtures
+seed_watermark 0
+for i in $(seq 1 30); do
+  mkdir -p "$FAKE_TMP/soleur-run.$$.abcdef$(printf '%02d' "$i")"
+done
+find "$FAKE_TMP" -mindepth 1 -exec touch -d "-120 minutes" {} + 2>/dev/null || true
+: > "$TESTROOT/schema.alarm"
+reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/schema.alarm" >/dev/null
+if [[ ! -s "$TESTROOT/schema.alarm" ]]; then
+  pass "schema-named roots are excluded from the count (PR 1 reclaims them; the alarm ignores them)"
+else
+  fail "schema-named roots counted as a leak — the alarm re-arms forever once the allocator ships"
+fi
+# MUTATION CONTROL: the SAME count of non-schema entries DOES alarm, so the arm
+# above cannot pass by the alarm simply never firing.
+reset_fixtures
+seed_watermark 0
+mk_many "unowned" 30
+: > "$TESTROOT/schema.alarm"
+reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/schema.alarm" >/dev/null
+if [[ "$(grep -cF -- 'count-shaped leak' "$TESTROOT/schema.alarm" || true)" -ge 1 ]]; then
+  pass "the same count of NON-schema entries does alarm (arm 22 is not vacuous)"
+else
+  fail "30 unowned entries above a 0 floor raised no alarm — the count path is dead"
+fi
+# ...and a near-miss name is NOT treated as schema (anchored, fixed-arity).
+reset_fixtures
+seed_watermark 0
+for i in $(seq 1 30); do
+  mkdir -p "$FAKE_TMP/soleur-run.notapid.abcdef$(printf '%02d' "$i")"
+done
+find "$FAKE_TMP" -mindepth 1 -exec touch -d "-120 minutes" {} + 2>/dev/null || true
+: > "$TESTROOT/nearmiss.alarm"
+reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/nearmiss.alarm" >/dev/null
+if [[ "$(grep -cF -- 'count-shaped leak' "$TESTROOT/nearmiss.alarm" || true)" -ge 1 ]]; then
+  pass "a near-miss name (non-numeric pid) does NOT parse as schema"
+else
+  fail "near-miss name accepted as schema — the exclusion is a substring match, not a parse"
+fi
+
 # --- Minimum-cardinality guard ---------------------------------------------
-if [[ "$pass_n" -lt 34 ]]; then
-  fail "cardinality guard: only $pass_n assertions ran (expected >= 34)"
+if [[ "$pass_n" -lt 49 ]]; then
+  fail "cardinality guard: only $pass_n assertions ran (expected >= 49)"
 fi
 
 echo "=== tmpfs-guard: $pass_n passed, $fails failed ==="

@@ -88,11 +88,37 @@ DRY_RUN="${TMPFS_GUARD_DRY_RUN:-0}"
 SCRATCH_MIN_MB="${TMPFS_GUARD_SCRATCH_MIN_MB:-100}"
 SCRATCH_AGE_MIN="${TMPFS_GUARD_SCRATCH_AGE_MIN:-1440}"
 
-# Count-pressure ALARM threshold. 5000 sits far above the ~600 entries a
-# healthy /tmp carries here and far below the 17,898 measured while the leak
-# was present, so it is provably reachable rather than notional. It arms a
-# report, never a delete — see reap_scratch_entries.
+# Count-pressure ALARM threshold, applied to GROWTH ABOVE THE WATERMARK — never
+# to the absolute entry count. 5000 sits far above the ~600 entries a healthy
+# /tmp carries here and far below the 17,898 measured while the leak was
+# present, so it is provably reachable rather than notional. It arms a report,
+# never a delete — see reap_scratch_entries.
 COUNT_TRIGGER="${TMPFS_GUARD_COUNT_TRIGGER:-5000}"
+
+# The declared-ownership schema: `soleur-run.<pid>.XXXXXXXX`. PR 1's allocator
+# produces these; this guard only needs to RECOGNISE them, so that roots which
+# already have an owner to reclaim them are not counted as an unreclaimable
+# leak. Anchored and fixed-arity on purpose — a substring match would let
+# `soleur-run.notapid.x` and `evil/../soleur-run.1.abcdefgh` through.
+SCRATCH_SCHEMA_RE='^soleur-run\.[0-9]+\.[A-Za-z0-9]{8}$'
+
+# Downward-ratcheting count watermark, kept beside the alarm + heartbeat so all
+# three live or die together.
+#
+# The naive rebaseline — freeze a constant at ship time — fails two ways, both
+# silent:
+#
+#   * It goes BLIND while the legacy drains. A new leak of thousands reads as
+#     "below baseline" for the entire drain window, which is precisely this
+#     feature's own validation period.
+#   * It is permanently DISARMED by a reboot. /tmp is tmpfs, so a stored
+#     ~20,500 sits against an actual ~0 and nothing can alarm until a fresh
+#     leak regrows past 20,500 — the exact inverse of the bug, invisible
+#     because the failure surface is silence.
+#
+# Re-flooring to min(stored, current) every run follows the drain down and
+# survives the reboot, while growth above the current floor still alarms.
+WATERMARK_FILE="${TMPFS_GUARD_WATERMARK_FILE:-${HOME:-/nonexistent}/.local/state/soleur/tmpfs-guard-count-watermark}"
 # Where /proc exposes unix-domain socket paths. See _build_inuse_top.
 UNIX_SOCKETS="${TMPFS_GUARD_UNIX_SOCKETS:-/proc/net/unix}"
 
@@ -170,6 +196,39 @@ heartbeat_write() {
   dir="$(dirname "$HEARTBEAT_FILE")"
   mkdir -p "$dir" 2>/dev/null || return 0
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" > "$HEARTBEAT_FILE" 2>/dev/null || true
+}
+
+# Count top-level entries that do NOT parse as the ownership schema. Roots that
+# DO parse have an owner responsible for reclaiming them, so counting them here
+# would re-arm the forever-alarm the moment PR 1's allocator ships.
+#
+# `grep -c` is used rather than `grep -q`: under `set -o pipefail` a `-q` closes
+# the pipe on first match, the producer takes SIGPIPE, and the pipeline exits
+# non-zero even though the match succeeded. `-c` reads all input.
+unowned_entry_count() {
+  local n
+  n=$(find "$TMP_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null \
+      | grep -cvE "$SCRATCH_SCHEMA_RE" || true)
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  printf '%s\n' "$n"
+}
+
+# Read the persisted watermark. Returns non-zero when absent or unparseable, so
+# the caller can distinguish "no baseline yet" (seed from current) from a real
+# stored floor. A corrupt value must NOT be read as 0 — that would alarm on the
+# full legacy count, which is the behaviour this replaces.
+watermark_read() {
+  local v
+  v=$(cat "$WATERMARK_FILE" 2>/dev/null || true)
+  [[ "$v" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$v"
+}
+
+watermark_write() {
+  local dir
+  dir="$(dirname "$WATERMARK_FILE")"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  printf '%s\n' "$1" > "$WATERMARK_FILE" 2>/dev/null || true
 }
 
 # Clear the alarm file once the machine is demonstrably healthy. Without this
@@ -403,10 +462,26 @@ reap_scratch_entries() {
   # owner — and rejects prefix signatures, because `tmp.` is mktemp's default
   # at 856 of 1013 call sites. That fix needs the scratch-root migration, which
   # has zero adopters today. Filed separately rather than approximated here.
-  if (( entry_count >= COUNT_TRIGGER )); then
+  # The signal is GROWTH ABOVE THE WATERMARK, not the absolute count. Order is
+  # load-bearing: the floor is derived from the PREVIOUSLY stored value, the
+  # comparison happens against that, and only then is the new floor persisted.
+  # Re-flooring first would compare the count against itself and never alarm.
+  local unowned_count stored floor growth
+  unowned_count=$(unowned_entry_count)
+  if ! stored=$(watermark_read); then
+    # No baseline yet: seed from the current count and stay quiet. Alarming on
+    # the first run would report the pre-existing backlog as a new leak, which
+    # is the every-5-minutes alarm this replaces.
+    stored="$unowned_count"
+  fi
+  floor=$(( stored < unowned_count ? stored : unowned_count ))
+  growth=$(( unowned_count - floor ))
+  watermark_write "$floor"
+
+  if (( growth >= COUNT_TRIGGER )); then
     COUNT_PRESSURE_SEEN=1
-    guard_log "count pressure: $entry_count top-level entries in $TMP_ROOT at ${usage_pct}% (trigger $COUNT_TRIGGER) — reporting, not reaping"
-    alarm_record "$TMP_ROOT holds $entry_count top-level entries (trigger $COUNT_TRIGGER) at ${usage_pct}% usage — a count-shaped leak the size-based reaper cannot reclaim. Inspect the oldest: find $TMP_ROOT -mindepth 1 -maxdepth 1 -printf '%T@ %p\n' | sort -n | head -40"
+    guard_log "count pressure: $unowned_count unowned top-level entries in $TMP_ROOT at ${usage_pct}% (+$growth above watermark $floor, trigger $COUNT_TRIGGER) — reporting, not reaping"
+    alarm_record "$TMP_ROOT grew to $unowned_count unowned top-level entries (+$growth above the $floor watermark, trigger $COUNT_TRIGGER) at ${usage_pct}% usage — a count-shaped leak the size-based reaper cannot reclaim. Inspect the oldest: find $TMP_ROOT -mindepth 1 -maxdepth 1 -printf '%T@ %p\n' | sort -n | head -40"
   fi
 
   # One tier. The floors below are the pre-existing, conservative ones.
