@@ -190,6 +190,8 @@ Open scope decisions: `knowledge-base/project/specs/feat-one-shot-6977-git-data-
 | `stock-preflight-coverage.test.ts` | 9 / 0 | held, new option auto-enrolled as GATED |
 | `c4-code-syntax` + `c4-render` | 23 / 0 | held |
 | `scripts/test-all.sh` | **222 / 222 suites** | all three new suites execute (AC12) |
+| `run-registered-suites.sh` | **72 / 72** | the CI-registered infra runner — `test-all.sh` does NOT cover `apps/web-platform/infra/` and says so in its own epilogue, so this is the infra evidence |
+| `shellcheck -x` (7 files) | 18 findings, ALL SC2016 (info) | single-quoted jq/sed expressions where shell expansion must NOT happen; `web-host-birth-gate.sh` carries the same. Used instead of semgrep: OSS semgrep's tree-sitter bash parser matches ~0 rules, so a clean semgrep on a bash-dominant diff is vacuous |
 | `actionlint` | rc 0 | — |
 
 ## Corrections made during /work, each caught by a gate rather than by reading
