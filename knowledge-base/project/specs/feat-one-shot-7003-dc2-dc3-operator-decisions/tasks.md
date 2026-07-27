@@ -18,20 +18,20 @@ Issue: #7003 · Inherits into: #6982 · Amends: ADR-149
 
 Target: `knowledge-base/project/specs/feat-one-shot-6977-git-data-birth-route/decision-challenges.md`
 
-- [ ] 1.0 Re-read the file. Confirm DC-1's heading form is still
+- [x] 1.0 Re-read the file. Confirm DC-1's heading form is still
       `### RESOLVED 2026-07-27 by the operator — <verdict>` (em dash). Do **not** use the
       `### RESOLVED — <date>:` form from the `feat-one-shot-6425-…` spec.
-- [ ] 1.1 Append the header status line (plan Phase 1.1) immediately after the existing
+- [x] 1.1 Append the header status line (plan Phase 1.1) immediately after the existing
       *"**These are NOT applied** …"* sentence, which is false once all three are resolved.
-- [ ] 1.2 Append `(scope: that implementation only — see RESOLVED below)` to DC-2's
+- [x] 1.2 Append `(scope: that implementation only — see RESOLVED below)` to DC-2's
       `**That recommendation is falsified by measurement.**` sentence.
-- [ ] 1.3 Insert the **DC-2** RESOLVED block verbatim from plan Phase 1.3, after DC-2's
+- [x] 1.3 Insert the **DC-2** RESOLVED block verbatim from plan Phase 1.3, after DC-2's
       `**Plan's current disposition:**` paragraph and **before** the `---` separating DC-2 from DC-3.
-- [ ] 1.4 Append the **DC-3** RESOLVED block verbatim from plan Phase 1.4 at end of file. Keep both
+- [x] 1.4 Append the **DC-3** RESOLVED block verbatim from plan Phase 1.4 at end of file. Keep both
       the in-line scope marker (*"— for the pre-birth window, which is the window this decision
       governs —"*) and the `> Scope, and why it matters` blockquote. Together they are the R3
       mitigation and AC4 asserts the blockquote.
-- [ ] 1.5 Verify **AC1**, **AC2**, **AC3**, and AC4's `<dc>` clauses.
+- [x] 1.5 Verify **AC1**, **AC2**, **AC3**, and AC4's `<dc>` clauses.
 
 ## Phase 2 — Propagate into ADR-149
 

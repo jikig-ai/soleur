@@ -4,6 +4,10 @@ Recorded headless per ADR-084. `ship` Phase 6 renders these into the PR body and
 `action-required` issue. **These are NOT applied** — they challenge the operator's stated
 direction and require an operator decision.
 
+**Status (2026-07-27): all three resolved by the operator.** DC-1 and DC-2 in favour of the plan's
+disposition, DC-3 upholding the cut. The two mandates that outlive this PR are recorded as items 5
+and 7 of ADR-149's release checklist, which #6982 inherits. Issue #7003 is closed.
+
 ---
 
 ## DC-1 — `user-challenge` — Should the enum option + job ship in THIS PR, or in #6982?
@@ -66,7 +70,8 @@ Recorded because the resolution is a judgement call, not a fact.
   the plan's own rejected Alternative (c) applied to its riskiest gate). Recommended replacing the
   cloud-init grep with a read of `heartbeat-manifest.ts`'s git-data `feeder` declaration.
 
-**That recommendation is falsified by measurement.** `plugins/soleur/lib/heartbeat-manifest.ts`
+**That recommendation is falsified by measurement** — scope: that implementation only, see RESOLVED
+below. `plugins/soleur/lib/heartbeat-manifest.ts`
 already records git-data's feeder as `kind: "timer"` (*"#5274 PR C (#6548) SHIPPED the web-host
 probe"*). A sentinel reading that declaration would release **immediately**, so option (a) cannot
 work.
@@ -76,6 +81,33 @@ gate file** (`tests/scripts/lib/git-data-birth-readiness-gate.sh`) so it inherit
 battery and the parity job⇄gate pairing — which answers architecture-strategist's structural
 objection — and mandate its failure-message text as the #6982 handoff (cto F4, cpo C2). Sentinel
 pinned to the interpolated `${sentry_dsn}` (code-simplicity), not a bare word.
+
+### RESOLVED 2026-07-27 by the operator — replace the sentinel with a direct emitter check when #6982 lands
+
+**Decision: the `${sentry_dsn}` sentinel is an interim mechanism with a fixed expiry.** It stays
+exactly as shipped for as long as the emitter does not exist. Once #6982 defines the git-data
+emitter as a **real Terraform resource**, the birth-readiness interlock must assert **that
+resource**, and the cloud-init text sentinel must be **deleted** rather than kept alongside it.
+
+**Why this rather than any of the five reviewer positions.** It answers `dhh-rails-reviewer`'s
+*"prose with a `grep` wrapper"* and `architecture-strategist`'s structural objection **at the
+root** instead of wrapping them. Both complaints reduce to the same thing: the interlock reads
+TEXT in order to infer a FACT. A resource assertion reads the fact. The only reason that cannot
+be done today is timing, not taste — the resource does not exist until #6982 creates it.
+
+**The falsification recorded above does NOT apply to this decision, and that distinction is the
+whole decision.** What measurement killed was the proposal to read
+`plugins/soleur/lib/heartbeat-manifest.ts`: that file already declares git-data's feeder as
+`kind: "timer"`, so a sentinel reading it would release the interlock **immediately**. It says
+nothing about reading the **emitter's own resource**, which does not exist until #6982 creates
+it and therefore cannot release anything early. One is a declaration that is already true; the
+other is a resource whose creation *is* the release condition.
+
+**Accepted cost: #6982 inherits a mandated interlock rewrite** — not an optional cleanup. It is a
+**precondition of the first dispatch**, not a post-release cleanup, because it changes the gate
+that guards the dispatch: recorded as **item 7 of ADR-149's release checklist**, ahead of the
+banner-clearing item, and mirrored into the gate's own HOLD and RELEASED messages so it is carried
+mechanically rather than by memory.
 
 ---
 
@@ -108,3 +140,34 @@ single-source the address (`hcloud_server_network.git_data.ip`), never a 25th co
 today**, because `doppler_secret.git_remove_ssh_private_key` is itself absent from state, so the
 arming switch is unarmed, and Defect 2a's `depends_on` guarantees it can never land without the
 server.
+
+### RESOLVED 2026-07-27 by the operator — the cut stands; it lands in #6982
+
+**Decision: retain the cut.** `doppler_secret.git_data_ssh_host` stays out of #6977 and lands in
+**#6982**, where the emitter work already touches `git-data.tf` and the
+`OPERATOR_APPLIED_EXCLUSIONS` entry can land in the **same change**. When it lands it **MUST**
+single-source the address from `hcloud_server_network.git_data.ip` — never a fresh copy of the
+`10.0.1.20` literal.
+
+**The residual false-"Art. 17 erasure failed" alarm window is accepted** — for the pre-birth
+window, which is the window this decision governs — because it is unreachable today:
+`doppler_secret.git_remove_ssh_private_key` is itself absent from state, so the arming switch is
+unarmed.
+
+> **Scope, and why it matters.** ADR-149 `Residual 2` records the correction that the false alarm
+> becomes **unconditional after any birth** — it names *"the DC-3 disposition"* as the reasoning
+> that hid this. That is why release-checklist **item 5** requires `GIT_DATA_SSH_HOST` to be
+> produced **before the first dispatch**. The two documents agree on the action: produce it in
+> #6982, before any birth. "Accepted" above scopes the *pre-birth* window only; it is not an
+> acceptance of the post-birth state, which item 5 makes a precondition.
+
+**Why not add it now anyway.** Adding the resource today would still drag `hcloud_server.git_data`
+into the per-merge plan via **transitive upstream closure** and **wedge every merge to `main`** —
+the ADR-145 web-2 wedge, reproduced for git-data from a one-line edit. A capability that cannot
+be merged is not a capability.
+
+**`spec-flow-analyzer`'s 30-second-hang finding is noted but not decisive.** It was one of the
+reasons the cut was defensible; it is not a reason the cut is *permanent*. That hang occurs only
+*while the host is unreachable* — and #6982's birth is precisely what ends that condition. It is
+an argument about the ordering of two things that now ship together, not about whether to ship
+them.
