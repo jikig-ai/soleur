@@ -2374,23 +2374,22 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(jobBlock).not.toMatch(/^\s*source\s+\S*git-data-host-replace-gate\.sh/m);
   });
 
-  // ORDERING ASSERTIONS. Every index below is taken from a SYNTACTIC CONSTRUCT (a
-  // `source` command at line start, `terraform plan` with its flags), never a bare
-  // filename or phrase.
+  // ORDERING ASSERTIONS. Every index below is taken from a SYNTACTIC CONSTRUCT — an
+  // INVOCATION at line start (`if ! <gate_fn>`), or `terraform plan` with its flags —
+  // never a bare filename or phrase.
   //
-  // That is not stylistic caution — the first draft of these two tests used
-  // `indexOf("terraform plan")` and FAILED, because the job's own header comment says
-  // "...not after a two-minute terraform plan". A bare-token index matched the comment
-  // and reported the interlock as running after the plan when it runs before it. The
-  // same file carries `# shellcheck source=...` directives naming each gate one line
-  // above the real `source`, so a bare-filename index is exposed to the identical class.
-  const sourceIdx = (basename: string) =>
-    jobBlock.search(
-      new RegExp(
-        `^\\s*source\\s+"\\$\\{GITHUB_WORKSPACE\\}/tests/scripts/lib/${basename.replace(/\./g, "\\.")}"`,
-        "m",
-      ),
-    );
+  // That is not stylistic caution. The first draft used `indexOf("terraform plan")` and
+  // FAILED, because the job's own header comment says "...not after a two-minute
+  // terraform plan": a bare-token index matched the COMMENT and reported the interlock
+  // as running after the plan when it runs before it.
+  //
+  // A `source`-position index was then tried and MEASURED INERT — see the note in the
+  // first test below. Its helper has been DELETED rather than left unused: a `source`
+  // line only DEFINES a bash function, so indexing on it pins definition order while
+  // the invocations it claims to order can be freely swapped. Keeping a dead helper
+  // that reconstructs that mistake is an invitation to re-adopt it, and it was also the
+  // source of a CodeQL `js/incomplete-sanitization` alert (it escaped `.` but not `\`).
+  // Index on invocations; do not reintroduce a source-position helper.
 
   test("the birth gate is sourced BEFORE the stock preflight", () => {
     // Order is load-bearing: the birth gate proves the plan IS the scoped birth, the
