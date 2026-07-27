@@ -35,23 +35,23 @@ creates `hcloud_server.git_data`.
 
 ## Phase 0 — Probes and preconditions (no product code)
 
-- [ ] 0.1 **W0 probe (blocking).** Mint a throwaway `read` service token scoped **exactly as
+- [x] 0.1 **W0 probe (blocking).** Mint a throwaway `read` service token scoped **exactly as
       `doppler_service_token.git_data` is** (single config, `prd_git_data`). Run
       `doppler run --project soleur --config prd -- env` and **grep the output for
       `GIT_DATA_LUKS_KEY`**. Exit status is not the question — a CLI that silently resolves to an
       empty `prd` view exits 0 with the key absent, which is the dark boot. Record verbatim.
-- [ ] 0.2 Prove the readiness gate currently **HOLDs** (the RED half):
+- [x] 0.2 Prove the readiness gate currently **HOLDs** (the RED half):
       `source tests/scripts/lib/git-data-birth-readiness-gate.sh && git_data_birth_readiness_gate apps/web-platform/infra/cloud-init-git-data.yml; echo $?` → `1`.
-- [ ] 0.3 Measure the baseline `user_data` render **with Terraform's own `base64gzip`**, not
+- [x] 0.3 Measure the baseline `user_data` render **with Terraform's own `base64gzip`**, not
       `gzip -9` (which overstates headroom on a hard gate). Record bytes + headroom.
-- [ ] 0.4 Classify every `runcmd` item must-abort / must-tolerate — **including the items W4/W5/W6
+- [x] 0.4 Classify every `runcmd` item must-abort / must-tolerate — **including the items W4/W5/W6
       add**. Start from the nine-item table in the plan; item #1 (the sshd restart) is the real
       hazard.
-- [ ] 0.5 Confirm `export HOME=/root` reaches the runcmd shell before any `doppler` invocation
+- [x] 0.5 Confirm `export HOME=/root` reaches the runcmd shell before any `doppler` invocation
       (`cloud-final.service` synthesises no `$HOME`; three prior dark boots came from this).
-- [ ] 0.6 Record the verification that ADR-149 item 6 (firewall entailment) is **already
+- [x] 0.6 Record the verification that ADR-149 item 6 (firewall entailment) is **already
       discharged** on main — evidence, not assumption.
-- [ ] 0.7 Pin `$BS_TABLE` explicitly and confirm the Mode-1 raw-SQL query form (the ACs cannot use
+- [x] 0.7 Pin `$BS_TABLE` explicitly and confirm the Mode-1 raw-SQL query form (the ACs cannot use
       `--grep`).
 
 ## Phase 1 — Terraform contract
