@@ -62,11 +62,16 @@
 # than assuming the other suite ran.
 #
 # Every section carries a NON-VACUITY FLOOR: a parse that silently matches nothing must fail
-# loudly rather than report a clean sweep of an empty set. The sweep-size floors (FLOOR_RESOURCES,
-# FLOOR_DESTS, FLOOR_IDENTITY) are pinned at the EXACT baseline rather than baseline-minus-slack:
-# any slack is a silent-erosion window, and removing a provisioner or a delivered artifact is a
-# Phase-5-class change that should cost a deliberate edit here. The §0 PARSE floors keep slack on
-# purpose -- cloud-init.yml and the bake list legitimately shrink as artifacts move onto the image.
+# loudly rather than report a clean sweep of an empty set. The SWEEP-SIZE floors (FLOOR_RESOURCES
+# 15, FLOOR_DESTS 52, FLOOR_IDENTITY 4, FLOOR_SEEDED 36) are pinned at the EXACT baseline rather
+# than baseline-minus-slack: any slack is a silent-erosion window, and removing a provisioner or a
+# delivered artifact is a Phase-5-class change that should cost a deliberate edit here. The §0
+# PARSE floors keep slack on purpose -- cloud-init.yml and the bake list legitimately shrink as
+# artifacts move onto the image. That slack is real and worth naming: baked 45 vs floor 40,
+# write_files 13 vs floor 10, bootstrap installs 42 vs floor 30. Inside each window an extraction
+# can go partially blind without tripping the floor (review demonstrated three write_files paths
+# hidden at 13->10), so the §0 floors detect a COLLAPSED parse, not a degraded one. The
+# per-destination checks in §2/§3 are what cover the degraded case.
 #
 # Mutation-proven by web-host-provisioner-parity-mutation.test.sh, which asserts WHICH check
 # fires for each mutation (a bare non-zero exit credits crashes as detections). Anything that
@@ -264,7 +269,10 @@ def _strip_heredoc_bodies(cmd):
 def destinations(body):
     """Every absolute path this provisioner delivers. Fail-closed by over-extraction."""
     out, interpolated, unresolvable = set(), set(), set()
-    for d in re.findall(r'destination\s*=\s*"([^"]+)"', body):
+    # `([^"]*)` not `([^"]+)`: `destination = ""` satisfies neither a 1+-char quoted capture nor
+    # the non-quote-initial pattern below, so with `+` it evaded BOTH branches and left the sweep
+    # in silence -- the exact class this pair exists to close (review F7, reproduced: guard rc=0).
+    for d in re.findall(r'destination\s*=\s*"([^"]*)"', body):
         (out if d.startswith('/') else interpolated).add(d)
     # A destination that is not a STRING LITERAL at all -- `destination = local.x`,
     # `destination = var.y` -- is invisible to the quoted extraction above. It does not become
@@ -273,7 +281,15 @@ def destinations(body):
     # silently while the guard stayed green, because the FLOOR_DESTS margin absorbed the loss
     # (#7014 gap 1; the margin is now zero as well, so the two defences are independent).
     # Same fail-silent class as the interpolated case, arriving through a second door.
-    for d in re.findall(r'destination\s*=\s*([^"\s]\S*)', body):
+    #
+    # ANCHORED to the start of a line. Unanchored, this ran over the WHOLE resource body --
+    # including `inline` shell strings and heredoc bodies -- so an ordinary
+    # `logger --destination=/var/log/audit.log`, a `grep -q 'destination = local' …`, or a
+    # config heredoc line `destination = tcp://logs:514` each produced a bogus "HCL REFERENCE"
+    # failure whose remediation text made no sense for the input. All three reproduced at
+    # review. An HCL attribute is always the first token on its line; a shell flag or a
+    # heredoc payload line is not.
+    for d in re.findall(r'^[ \t]*destination\s*=\s*([^"\s]\S*)', body, re.M):
         unresolvable.add(d)
     for arr in re.findall(r'inline\s*=\s*\[(.*?)\n\s*\]', body, re.S):
         for raw in re.findall(r'"((?:[^"\\]|\\.)*)"', arr):
@@ -362,19 +378,23 @@ for name, body in ssh_resources.items():
     dests, interpolated, unresolvable = destinations(body)
     for d in dests:
         all_dests.setdefault(d, set()).add(name)
+    # The remedy deliberately does NOT offer ALLOWLIST. ALLOWLIST is keyed by the resolved
+    # DESTINATION PATH and is consulted only in the coverage loop below; this branch fires
+    # before any path is known, so an entry added here would suppress nothing AND would then
+    # trip §5's stale-entry check -- turning one failure into two. Advice that makes the
+    # failure worse is worse than no advice.
     for d in sorted(unresolvable):
         no(f"2: {name} sets destination = {d}, an HCL REFERENCE rather than a string literal, "
            "which the quoted-destination extraction cannot see -- so the destination would "
-           "leave the sweep SILENTLY rather than report as uncovered. Use a literal path, or "
-           "ALLOWLIST the resolved path with the reason its parity is verified elsewhere.")
+           "leave the sweep SILENTLY rather than report as uncovered. Use a literal path.")
     # An interpolated destination cannot be statically resolved, so parity CANNOT be proven
     # for it. v2 dropped these silently via a startswith('/') filter -- the purest fail-open
     # in the file, since `destination = "${local.x}/y"` is idiomatic HCL. Not provable is a
     # finding, not a skip.
     for d in sorted(interpolated):
         no(f"2: {name} delivers to {d!r}, an INTERPOLATED destination this guard cannot "
-           "statically resolve, so its fresh-boot parity is unproven. Use a literal path, or "
-           "ALLOWLIST it with the reason its parity is verified elsewhere.")
+           "statically resolve, so its fresh-boot parity is unproven. Use a literal path. "
+           "(ALLOWLIST is not a remedy here -- see the note above the unresolvable branch.)")
 
 uncovered = []
 for dest in sorted(all_dests):
@@ -428,11 +448,19 @@ else:
 # intersection makes `missing_seed` empty too -- a clean sweep of nothing, reported as a pass.
 # Every other section carried a floor; this one did not (#7014 gap 3).
 #
-# Stated limit, so nobody reads more into it than it proves: this floor cannot be exercised in
-# ISOLATION, because both of its operands are floored elsewhere -- shrinking the intersection
-# necessarily moves §0's install count, §2's sweep count, or §2's per-destination coverage. Its
-# value is that an intersection collapse is named HERE rather than inferred from a neighbour.
-FLOOR_SEEDED = 30
+# Pinned at the EXACT baseline, same doctrine as FLOOR_RESOURCES / FLOOR_DESTS / FLOOR_IDENTITY:
+# at 30 against a real 36 this carried a six-destination silent-erosion window, and review
+# confirmed the battery stayed green at every value from 22 up. A slack floor on a sweep size
+# is the defect #7014 gap 1 existed to close; shipping a new one would have re-opened it.
+#
+# Stated limit, so nobody reads more into it than it proves: against the CURRENT tree this floor
+# cannot be exercised in isolation -- instrumentation at review found ZERO destinations covered
+# by both a bootstrap install and another channel, so every shrink of the intersection also
+# moves §2's per-destination coverage. That is a property of today's delivery layout, not a
+# theorem: give a bootstrap-installed destination a second fresh-boot writer and §3's floor
+# becomes independently trippable. Its value either way is that an intersection collapse is
+# named HERE rather than inferred from a neighbour.
+FLOOR_SEEDED = 36
 if n_checked >= FLOOR_SEEDED:
     ok(f"3: the seed-baked check ran over {n_checked} bootstrap-installed destinations "
        f"(floor {FLOOR_SEEDED})")
@@ -520,16 +548,23 @@ check_allowlist(ALLOWLIST, "ALLOWLIST")
 # the only setter in the repo is the mutation battery, same contract as SOLEUR_INFRA_DIR.
 probe_raw = os.environ.get("SOLEUR_PARITY_ALLOWLIST_PROBE", "")
 if probe_raw:
+    # RecursionError is not a ValueError, and deeply-nested JSON raises it -- a traceback
+    # rather than the named failure this branch exists to produce.
     try:
         probe_entries = json.loads(probe_raw)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         no(f"5: SOLEUR_PARITY_ALLOWLIST_PROBE is set but is not parseable JSON ({exc})")
         probe_entries = {}
-    # Shape-check before use. `.items()` on a JSON array raises AttributeError, and a
-    # traceback exits non-zero with no [FAIL] line -- which the battery's attribution rule
-    # correctly refuses to credit, but as an unexplained failure rather than a named one.
-    if not isinstance(probe_entries, dict):
-        no("5: SOLEUR_PARITY_ALLOWLIST_PROBE must be a JSON object of {path: reason}")
+    # Shape-check before use, at BOTH levels. `.items()` on a JSON array raises AttributeError;
+    # so does `reason.strip()` on a non-string VALUE, and the first version checked only the
+    # top level -- so `{"/a": null}` produced exactly the outcome this comment claimed to
+    # prevent: a traceback, non-zero exit, and zero [FAIL] lines. The battery's attribution
+    # rule then refuses to credit it, correctly, but as an unexplained failure rather than a
+    # named one.
+    if not isinstance(probe_entries, dict) or not all(
+            isinstance(v, str) for v in probe_entries.values()):
+        no("5: SOLEUR_PARITY_ALLOWLIST_PROBE must be a JSON object of {path: reason} with "
+           "string values")
         probe_entries = {}
     check_allowlist(probe_entries, "ALLOWLIST probe")
 

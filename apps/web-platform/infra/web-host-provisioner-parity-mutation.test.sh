@@ -60,9 +60,11 @@ GUARD="$REAL_INFRA/web-host-provisioner-parity.test.sh"
 # preflight loop and reconciled against what is written here; a divergence is FATAL, not a
 # warning, because a battery running on the wrong file set proves nothing.
 #
-# EXPECTED_INPUTS is not redundant with the derivation. The derivation keeps the battery
-# CORRECT under drift; the reconciliation makes the drift VISIBLE, so adding an input is a
-# deliberate two-file edit rather than a silent widening of what the sandbox covers.
+# EXPECTED_INPUTS is not redundant with the derivation, but the split of labour is narrower than
+# it first looks and the first version of this comment overstated it. The derivation does NOT
+# keep the battery correct under drift -- on any divergence the battery ABORTS. What the pair
+# buys is that adding an input is a deliberate two-file edit whose omission is loud, rather than
+# a silent widening of what the sandbox covers.
 EXPECTED_INPUTS=(server.tf cloud-init.yml web-probe-envwrite.sh soleur-host-bootstrap.sh)
 
 mapfile -t DERIVED_INPUTS < <(
@@ -78,16 +80,69 @@ fi
 INPUTS=("${DERIVED_INPUTS[@]}")
 
 # The preflight loop only proves which files the guard REQUIRES. What it READS is the second
-# half, and a read that bypasses the loop would reopen the same hole from the other side. The
-# guard funnels every read through one helper (`def read(n)`), so assert (a) that helper is
-# still the single reader -- exactly one `os.path.join(INFRA` in the file -- and (b) every
-# `read("<name>")` call site names a file this battery actually copies into the sandbox.
+# half, and a read that bypasses the loop reopens the same hole from the other side.
+#
+# The first version of this block asserted (a) exactly one `os.path.join(INFRA` and (b) every
+# `read("<literal>")` site names a sandboxed input -- and TWO review agents independently drove
+# a fifth, unsandboxed input straight past both, to a green 43/43, using the exact shape #7014
+# gap 4 describes. Neither assertion constrains a read whose filename is NOT a literal at the
+# call site (`read(_FIFTH)`), nor a helper that wraps `read` under a different name, nor a bare
+# `open(f"{INFRA}/x")` which contains neither matched token.
+#
+# So the invariant is now stated positively and closed on all three: the guard opens files ONLY
+# through `def read(n)`, and EVERY call site passes a string literal.
 n_join=$(grep -cF 'os.path.join(INFRA' "$GUARD")
 if [[ "$n_join" != "1" ]]; then
   echo "FATAL: expected exactly one 'os.path.join(INFRA' in the guard (the read() helper), found $n_join." >&2
   echo "  A second reader can take an input this battery never sandboxes. Route it through read()." >&2
   exit 2
 fi
+
+# No `open(` outside the read() helper. The helper's own line is the single permitted match.
+n_open=$(grep -c 'open(' "$GUARD")
+if [[ "$n_open" != "1" ]]; then
+  echo "FATAL: expected exactly one 'open(' in the guard (inside def read), found $n_open." >&2
+  echo "  A direct open() bypasses read() and can take an input this battery never sandboxes." >&2
+  exit 2
+fi
+
+# Every `read(` call site passes a STRING LITERAL. `grep -c 'read('` counts the `def read(n)`
+# line too, so the literal-site count must be exactly one fewer. A `read(SOME_VAR)` breaks this
+# (6 vs 4) while leaving the two assertions above satisfied -- that is the bypass review drove.
+n_read_call=$(grep -c 'read(' "$GUARD")
+n_read_lit=$(grep -c 'read("' "$GUARD")
+if [[ "$((n_read_call - 1))" != "$n_read_lit" ]]; then
+  echo "FATAL: the guard has $((n_read_call - 1)) read() call sites but only $n_read_lit pass a" >&2
+  echo "  string literal. A non-literal filename is invisible to the sandbox-membership check" >&2
+  echo "  below, so this battery would run clean over a check that never executed." >&2
+  exit 2
+fi
+# The two PRODUCTION ALLOWLIST wirings, asserted by presence rather than by behaviour -- and
+# that weakness is the point of this comment, not something it hides.
+#
+# `ALLOWLIST` is deliberately empty, so `check_allowlist(ALLOWLIST, …)` iterates zero entries
+# and `if dest in ALLOWLIST: continue` never fires. Neither produces any output a mutation could
+# observe: review confirmed both lines can be deleted with the battery at 43/43. P1-P7 exercise
+# `check_allowlist` through the PROBE call site, which proves the FUNCTION works and says
+# nothing about whether it is still wired to the real list.
+#
+# The obvious way to make them observable -- letting the probe feed `ALLOWLIST` -- is exactly
+# the fail-open P4 exists to forbid, so it is not available. A presence assertion pins spelling,
+# not behaviour, which is a real limitation; it is chosen because it is the strongest instrument
+# that does not reintroduce a suppression path.
+while IFS= read -r wiring; do
+  grep -qF -- "$wiring" "$GUARD" || {
+    echo "FATAL: the guard no longer contains the production ALLOWLIST wiring:" >&2
+    echo "  $wiring" >&2
+    echo "  §5's hygiene checks and §2's allowlist consult are unobservable while ALLOWLIST is" >&2
+    echo "  empty, so this presence check is the only thing standing between them and deletion." >&2
+    exit 2
+  }
+done <<'WIRINGS'
+check_allowlist(ALLOWLIST, "ALLOWLIST")
+if dest in ALLOWLIST: continue
+WIRINGS
+
 n_reads=0
 while IFS= read -r rf; do
   n_reads=$((n_reads + 1))
@@ -150,8 +205,10 @@ expect_red() {
   elif grep -F "[FAIL]" "$OUT" | grep -qF -- "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
   else
-    no "$label: guard went red but NOT via '$anchor' -- it failed for an unrelated reason, so
-      this mutation proves nothing about the check it is named for"
+    no "$label: guard went red but NOT via '$anchor'. Either it failed for an unrelated reason
+      (so this mutation proves nothing about the check it is named for), or a count baked into
+      the anchor drifted because the infra files legitimately changed -- several anchors below
+      encode a baseline-derived number. Compare against the output. Output: $(<"$OUT")"
   fi
   restore
 }
@@ -279,17 +336,35 @@ s = "\n".join(out)
 # is what makes the two anchors discriminating. M10 takes an install-loop artifact whose only
 # remaining mention is prose; M11 keeps hooks.json, whose ExecStart consumer lives in
 # cloud-init.yml and is deliberately left intact.
-expect_red "M10 (§2: a COMMENT naming the path does not count as delivery)" soleur-host-bootstrap.sh \
-  "/usr/local/bin/orphan-reaper.sh is written by" '
-out = []
-for L in s.split("\n"):
-    if "orphan-reaper.sh" in L and not L.lstrip().startswith("#"):
-        out.append(L.replace("orphan-reaper.sh", "orphan-reaper-RENAMED.sh"))
-    else:
-        out.append(L)
-out.insert(3, "# historical: this bootstrap used to install /usr/local/bin/orphan-reaper.sh")
-s = "\n".join(out)
-assert "/usr/local/bin/orphan-reaper.sh" in s, "the comment must still name the path, or the case tests nothing"
+# M10 REQUIRES a brand-new artifact on the SSH path and then "delivers" it ONLY through a
+# TRAILING comment in the bootstrap. That makes the comment LOAD-BEARING, which the previous
+# version was not: it renamed the real install and merely inserted a comment alongside, so the
+# RED came from the rename and the comment was inert -- review proved the anchor still fired
+# with the comment deleted AND with strip_comments reduced to `return text`, i.e. the case was
+# a duplicate of M25 wearing a comment-handling label while `strip_comments` had NO coverage at
+# all. Reverting comment stripping to its v1 behaviour is a LIVE fail-open (measured: this
+# fixture goes GREEN against a v1 guard, RED against the shipped one), and nothing pinned it.
+expect_red "M10 (§2: a trailing COMMENT is not delivery -- pins strip_comments)" soleur-host-bootstrap.sh \
+  "/etc/soleur/comment-covered.conf is written by" '
+import os
+sp = os.path.join(os.path.dirname(p), "server.tf")
+t = open(sp).read()
+blk = """  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = "/usr/local/bin/disk-monitor.sh"
+  }"""
+assert blk in t
+add = """
+
+  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = "/etc/soleur/comment-covered.conf"
+  }"""
+open(sp, "w").write(t.replace(blk, blk + add, 1))
+o = "install -D -m 0644 -o root -g root " + chr(34) + "$SEED/journald-soleur.conf" + chr(34) + " /etc/systemd/journald.conf.d/00-soleur.conf"
+assert o in s
+c = "   # install -D -m 0644 " + chr(34) + "$SEED/disk-monitor.sh" + chr(34) + " " + chr(34) + "/etc/soleur/comment-covered.conf" + chr(34)
+s = s.replace(o, o + c, 1)
 '
 
 # A CONSUMER reference (systemd ExecStart) is not a producer. The old guard credited exactly
@@ -497,8 +572,14 @@ s += "install -m 0644 /opt/x /etc/soleur/deadcode-artifact.conf" + chr(10) + "DE
 # quoted string, so the destination did not become a finding -- it LEFT THE SWEEP. Two such
 # conversions fitted inside the old floor's slack. This adds one rather than converting one, so
 # the case isolates the new extraction branch instead of also moving the sweep count.
-expect_red "M29 (§2 extraction: a non-literal destination must not vanish silently)" server.tf \
-  "an HCL REFERENCE rather than a string literal" '
+#
+# THREE members, not one. The property quantifies over "every non-string-literal HCL expression",
+# and a single `local.`-shaped fixture is a sample, not a proof: review narrowed the branch to
+# `destination\s*=\s*(local\.\S*)` and the battery stayed fully green while `var.x`, `each.value`,
+# `module.a.b` and every function call remained silently droppable. Each case anchors on its own
+# expression text so they cannot credit one another.
+expect_red "M29a (§2 extraction: a `local.` reference must not vanish silently)" server.tf \
+  "sets destination = local.phantom_dest" '
 a = """  provisioner "file" {
     source      = "${path.module}/disk-monitor.sh"
     destination = "/usr/local/bin/disk-monitor.sh"
@@ -512,9 +593,42 @@ s = s.replace(a, a + """
   }""", 1)
 '
 
-# FLOOR_DESTS itself. Deleting ONE delivered artifact is the realistic erosion; it now fires
-# because the floor is pinned at the exact baseline. Nothing else moves: the destination leaves
-# both sides of the comparison, so §2 reports no uncovered entry and §3 stays above its floor.
+expect_red "M29b (§2 extraction: a `var.` reference must not vanish silently)" server.tf \
+  "sets destination = var.phantom_dest" '
+a = """  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = "/usr/local/bin/disk-monitor.sh"
+  }"""
+assert a in s
+s = s.replace(a, a + """
+
+  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = var.phantom_dest
+  }""", 1)
+'
+
+expect_red "M29c (§2 extraction: a FUNCTION CALL must not vanish silently)" server.tf \
+  "sets destination = trimsuffix(" '
+a = """  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = "/usr/local/bin/disk-monitor.sh"
+  }"""
+assert a in s
+s = s.replace(a, a + """
+
+  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = trimsuffix(local.etc, "/")
+  }""", 1)
+'
+
+# FLOOR_DESTS itself. Deleting ONE delivered artifact is the realistic erosion; it fires because
+# the floor is pinned at the exact baseline. §2 reports no UNCOVERED entry (the destination
+# leaves both sides of the comparison), but §3's floor co-fires: FLOOR_SEEDED is pinned at its
+# own exact baseline too, so removing a bootstrap-installed destination moves the intersection.
+# Measured: 2 [FAIL] lines. That is the deliberate cost of margin-zero floors on overlapping
+# sweeps -- the anchor still attributes this case to FLOOR_DESTS, which is what the rule requires.
 expect_red "M30 (§2 floor: one delivered artifact removed)" server.tf \
   "2: swept only 51 destinations" '
 blk = """  provisioner "file" {
@@ -563,6 +677,33 @@ assert old in s
 s = s.replace(old, "host_script_files_v2 = [", 1)
 '
 
+# M33 pins the MESSAGE. It does not pin the EXIT: deleting `print(summary); sys.exit(1)` while
+# keeping the `no(...)` leaves the anchor on a [FAIL] line and the run still ends non-zero (the
+# next statement dereferences the None match), so M33 credits the check either way. What the
+# early exit uniquely buys is that NOTHING downstream ran against a broken parse -- observable
+# as a summary reporting zero passes. Anchored on the summary line, which is not a [FAIL] line,
+# so it needs its own assertion rather than expect_red.
+restore
+if apply_mutation server.tf '
+old = "host_script_files = ["
+assert old in s
+s = s.replace(old, "host_script_files_v2 = [", 1)
+' && ! cmp -s "$SANDBOX/server.tf" "$PRISTINE/server.tf"; then
+  mutations_run=$((mutations_run + 1))
+  run_guard
+  if grep -qF "=== web-host-provisioner-parity: 0 passed, 0 failed ===" "$OUT"; then
+    no "M33b (§0 early exit ABORTS the run): the guard exited without recording the failure"
+  elif grep -qF "0 passed, 1 failed" "$OUT"; then
+    ok "M33b (§0 early exit ABORTS the run): guard stopped at §0 with zero downstream checks"
+  else
+    no "M33b (§0 early exit ABORTS the run): the guard continued past an unparseable bake list --
+      downstream sections ran against an empty \`baked\`. Output: $(<"$OUT")"
+  fi
+else
+  no "M33b: mutation did not land"
+fi
+restore
+
 # §4 extraction failure. Adds a FIFTH dual-written heredoc whose body cannot be extracted (a
 # trailing newline before the closing quote), so the four real identity checks still pass and
 # the floor stays satisfied -- the extraction-failure branch is the only thing that can fire.
@@ -593,18 +734,32 @@ s = s.replace(old, "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/syste
 # It can only ADD failures -- it is never merged into the ALLOWLIST §2 consults -- so this hook
 # cannot be turned into a way to silence a real finding.
 probes_run=0
+probe_reds=0
 
+# expect_probe_red <label> <anchor> <json> [mutator-file] [mutator-script]
+# The optional mutation runs FIRST, so a case can require the guard to reach a §2 verdict and
+# THEN check what the probe did or did not do to it (P4).
 expect_probe_red() {
-  local label="$1" anchor="$2" probe="$3"
+  local label="$1" anchor="$2" probe="$3" mfile="${4:-}" mscript="${5:-}"
   restore
+  if [[ -n "$mfile" ]]; then
+    if ! apply_mutation "$mfile" "$mscript"; then
+      no "$label: mutator errored -- the mutation never landed"; restore; return
+    fi
+    if cmp -s "$SANDBOX/$mfile" "$PRISTINE/$mfile"; then
+      no "$label: mutation did NOT land ($mfile byte-identical to pristine)"; restore; return
+    fi
+  fi
   probes_run=$((probes_run + 1))
+  probe_reds=$((probe_reds + 1))
   if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
     no "$label: guard still PASSED with the hygiene rule broken -- the check asserts nothing"
   elif grep -F "[FAIL]" "$OUT" | grep -qF -- "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
   else
-    no "$label: guard went red but NOT via '$anchor' -- it failed for an unrelated reason"
+    no "$label: guard went red but NOT via '$anchor' -- unrelated reason. Output: $(<"$OUT")"
   fi
+  restore
 }
 
 expect_probe_green() {
@@ -629,6 +784,44 @@ expect_probe_red "P2 (§5: an entry naming a path nothing writes)" \
 
 expect_probe_green "P3 (§5 control: a well-formed entry is accepted)" \
   '{"/usr/local/bin/disk-monitor.sh": "parity verified by fresh-boot-parity.test.sh"}'
+
+# P4 is the NEGATIVE CONTROL for the whole probe design, and the only case here that can catch
+# the probe becoming a fail-open switch. The guard claims twice, in prose, that the probe "can
+# only ADD failures, never suppress one". Review demonstrated that claim was verified by nothing:
+# adding a single line that merges the probe into the real ALLOWLIST made an uncovered
+# destination disappear, and P1/P2/P3 all still scored 3/3. So: break §2 for real (M5's phantom
+# destination), then hand the probe an entry naming that exact path. The §2 finding must survive.
+expect_probe_red "P4 (§5 negative control: the probe cannot SUPPRESS a §2 finding)" \
+  "/etc/soleur/phantom-file.conf is written by" \
+  '{"/etc/soleur/phantom-file.conf": "try to suppress me"}' \
+  server.tf '
+anchor = """  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = "/usr/local/bin/disk-monitor.sh"
+  }"""
+assert anchor in s
+s = s.replace(anchor, anchor + """
+
+  provisioner "file" {
+    source      = "${path.module}/disk-monitor.sh"
+    destination = "/etc/soleur/phantom-file.conf"
+  }""", 1)
+'
+
+# P5/P6 reach the two input-validation branches. Commit 1d19bcb73 added the shape check and
+# review found NO case reached it -- P1-P3 all pass well-formed JSON objects, so both the
+# isinstance guard and the except-branch were deletable with the battery at 43/43.
+expect_probe_red "P5 (§5: a non-object probe is named, not a traceback)" \
+  "must be a JSON object" '["/usr/local/bin/disk-monitor.sh"]'
+
+expect_probe_red "P6 (§5: unparseable JSON is named, not a traceback)" \
+  "is not parseable JSON" '{oops'
+
+# A non-string VALUE reaches `reason.strip()`. Before the value-type check this raised
+# AttributeError -- non-zero exit, zero [FAIL] lines, i.e. exactly the unexplained failure the
+# shape check exists to replace.
+expect_probe_red "P7 (§5: a non-string reason is named, not a traceback)" \
+  "must be a JSON object" '{"/usr/local/bin/disk-monitor.sh": null}'
 
 # ── POSITIVE CONTROLS: both directions ───────────────────────────────────────────────
 expect_green "control-A (benign comment-only edit)" server.tf '
@@ -658,7 +851,7 @@ s = s.replace(anchor, anchor + """
 '
 
 # ── Non-vacuity floor on the battery itself ─────────────────────────────────────────
-FLOOR=34
+FLOOR=37
 if [[ "$mutations_run" -ge "$FLOOR" ]]; then
   ok "battery ran $mutations_run landed, attributed mutations (floor $FLOOR)"
 else
@@ -667,11 +860,23 @@ fi
 
 # The probes are counted separately: they never touch a file, so `mutations_run`'s
 # landed-vs-pristine proof does not apply to them and folding them in would weaken it.
-PROBE_FLOOR=3
+#
+# RED probes are counted separately AGAIN. The first version floored `probes_run`, which
+# `expect_probe_green` also increments -- so three GREEN controls would have satisfied a floor
+# whose failure text claims the RED arms ran. A floor that a passing control can satisfy is not
+# a floor on the thing it names.
+PROBE_FLOOR=7
+PROBE_RED_FLOOR=6
 if [[ "$probes_run" -ge "$PROBE_FLOOR" ]]; then
   ok "battery ran $probes_run ALLOWLIST hygiene probes (floor $PROBE_FLOOR)"
 else
   no "battery ran only $probes_run ALLOWLIST hygiene probes (floor $PROBE_FLOOR) -- §5 is unproven"
+fi
+if [[ "$probe_reds" -ge "$PROBE_RED_FLOOR" ]]; then
+  ok "battery ran $probe_reds RED-arm probes (floor $PROBE_RED_FLOOR)"
+else
+  no "battery ran only $probe_reds RED-arm probes (floor $PROBE_RED_FLOOR) -- the green controls
+    cannot stand in for them; §5's failure arms are unproven"
 fi
 
 echo "=== provisioner-parity mutation: $pass passed, $fail failed ==="

@@ -193,18 +193,62 @@ run_suite() {
 # epilogue for readers who `tail` the log instead of reading it from the top.
 #
 # Detection reads a VARIABLE, not a pipe into `grep -q`. Under this script's `set -o
-# pipefail`, `git diff --name-only | grep -q` takes SIGPIPE (141) on an early match and
-# the whole condition evaluates FALSE — and `apps/…` sorts near the front of any diff, so
-# the early match is the common case, not the corner one. That fails OPEN: exactly the
-# announcement going missing on the runs that need it.
-_infra_diff_names="$(
-  { git diff --name-only HEAD 2>/dev/null
-    git diff --name-only origin/main...HEAD 2>/dev/null
-  } || true
-)"
+# pipefail` a `producer | grep -q` pipeline reports non-zero when grep exits on a match
+# while the producer is still writing — the producer takes SIGPIPE (141) and pipefail
+# surfaces it — so the condition evaluates FALSE despite the match. What decides this is
+# whether the producer's output exceeds the ~64 KiB pipe buffer, NOT where the match sits:
+# measured on a 185-byte diff the old form matched correctly every time, and only went
+# fail-open past roughly 1,300 changed paths. So the old form was not failing open on
+# realistic diffs — but it made correctness a function of diff SIZE, and a herestring has
+# no producer to kill. Do not generalise this to "an early match causes SIGPIPE"; that is
+# the wrong rule and it was written here first.
+#
+# Detection failure is reported, never silently equated with "no infra in the diff". Both
+# refs can legitimately fail to resolve (shallow clone, no `origin`, a fresh repo) and the
+# earlier form's `2>/dev/null … || true` made that indistinguishable from a clean result —
+# a fail-open sitting inside the very notice this block exists to deliver. Untracked files
+# are included too: `git diff --name-only` never lists them, so a session that ADDS a new
+# infra suite and runs this before committing got no notice at all.
+#
+# `grep -qF` without a `^` anchor, and `core.quotePath=false`: git C-quotes any path with
+# non-ASCII or control characters onto a single leading-quote line, which moves the path
+# off the start of the line and defeats an anchored match. Over-matching a path that merely
+# CONTAINS the directory string errs toward showing the notice, which is the safe direction.
+# The two refs answer DIFFERENT questions and only one of them is load-bearing. `HEAD` sees
+# uncommitted work; `origin/main...HEAD` sees what the BRANCH changes, which is the question
+# the notice is about. On a branch whose infra edits are already committed the HEAD diff is
+# legitimately empty, so treating "either ref resolved" as success reports a confident
+# no-infra verdict from the ref that could not have known — measured on a scratch repo with a
+# committed infra file and no remote. Only the range ref's failure means "could not determine".
+_infra_detect_ok=0
+_infra_diff_names=""
+if _infra_out="$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null)"; then
+  _infra_diff_names="${_infra_diff_names}
+${_infra_out}"
+fi
+if _infra_out="$(git -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)"; then
+  _infra_detect_ok=1
+  _infra_diff_names="${_infra_diff_names}
+${_infra_out}"
+fi
+_infra_diff_names="${_infra_diff_names}
+$(git ls-files --others --exclude-standard -- apps/web-platform/infra 2>/dev/null || true)"
+
 _infra_in_diff=0
-if grep -qE '^apps/web-platform/infra/' <<<"$_infra_diff_names"; then
+if grep -qF 'apps/web-platform/infra/' <<<"$_infra_diff_names"; then
   _infra_in_diff=1
+fi
+
+if [[ "$_infra_detect_ok" == 0 ]]; then
+  # Fail SAFE, not quiet: assume the boundary applies rather than assume it does not.
+  _infra_in_diff=1
+  echo ""
+  echo "NOTE: could not determine this branch's diff (no origin/main, shallow clone, or a"
+  echo "      fresh repo), so this runner cannot tell whether apps/web-platform/infra/ is"
+  echo "      affected. It does NOT cover that directory in any case. Run:"
+  echo "        bash apps/web-platform/infra/run-registered-suites.sh"
+  echo ""
+elif [[ "$_infra_in_diff" == 1 ]]; then
   echo ""
   echo "NOTE: your diff touches apps/web-platform/infra/, which this runner does NOT cover."
   echo "      Nothing below is evidence for it. Run the CI-registered suites — in parallel"
@@ -522,10 +566,18 @@ echo "=== $((suites - failed))/$suites suites passed ==="
 # who `tail`s the log — the documented log-reading shape — still sees that the summary
 # above excludes apps/web-platform/infra/. Reuses the preamble's detection result rather
 # than re-running the diff, so the two can never disagree.
-if [[ "${_infra_in_diff:-0}" == 1 ]]; then
+#
+# Bare `$_infra_in_diff`, deliberately NOT `${_infra_in_diff:-0}`. The variable is set
+# unconditionally at top level, so the default could only mask a future edit that removed
+# the preamble block — and it would mask it by silently dropping BOTH notices. Under this
+# script's `set -u` the bare form makes that edit fail loudly instead.
+#
+# "Nothing above is evidence" rather than "the green is not evidence": this line prints
+# BEFORE the `exit 1` below, so on a failing run there is no green to qualify.
+if [[ "$_infra_in_diff" == 1 ]]; then
   echo ""
   echo "NOTE (announced in the preamble): apps/web-platform/infra/ is NOT covered above."
-  echo "      The green is not evidence for it. Run the CI-registered suites:"
+  echo "      Nothing above is evidence for it. Run the CI-registered suites:"
   echo "        bash apps/web-platform/infra/run-registered-suites.sh"
 fi
 
