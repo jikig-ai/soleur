@@ -7,7 +7,7 @@
   a pattern under repair, never a prescribed step. See "Infrastructure (IaC)".
 -->
 ---
-title: "fix: guard hygiene — SIGPIPE race at external-producer grep sites, iac-guard Edit-scope blindness, and tmpfs-guard reaper/alarm/telemetry"
+title: "fix: guard hygiene — iac-guard MultiEdit bypass + Edit-scope ack blindness, live SIGPIPE sites, and tmpfs-guard reaper/alarm/telemetry"
 date: 2026-07-27
 type: fix
 lane: cross-domain
@@ -15,6 +15,7 @@ branch: feat-one-shot-6992-iac-guard-sigpipe-fail-open
 closes: [6992, 6991]
 brand_survival_threshold: none
 requires_cpo_signoff: false
+revision: v2 (post plan-review — 3 P0 and 4 P1 findings applied; see Plan Review Revisions)
 ---
 
 # Guard hygiene: two guards that reported success while doing nothing
@@ -24,158 +25,180 @@ requires_cpo_signoff: false
 Two shell-script guards, both surfaced by the 2026-07-27 `/tmp` tmpfs incident, both
 defence-in-depth layers that were silently non-functional while reading as healthy.
 
-- **#6992** — `.claude/hooks/iac-plan-write-guard.sh` was reported to fail OPEN on every
-  policy check via a `pipefail` + `grep -q` SIGPIPE race.
-- **#6991** — `scripts/tmpfs-guard.sh` cannot see a count-shaped leak, its alarm fires into
+- **#6992** — `.claude/hooks/iac-plan-write-guard.sh`, reported to fail OPEN on every policy
+  check via a `pipefail` + `grep -q` SIGPIPE race.
+- **#6991** — `scripts/tmpfs-guard.sh`: cannot see a count-shaped leak, its alarm fires into
   channels nobody reads, and its telemetry is 99% its own test noise.
 
-**The planning phase materially changed the diagnosis of #6992.** The reported mechanism was
-measured and does not apply to the named file; a different, deterministic defect in the same
-file produces the same symptom, and the SIGPIPE race is real but lives at a *different and
-previously unenumerated* set of sites. Both the corrected diagnosis and the evidence are in
-"Research Reconciliation" below. The issue's measured symptom stands; only its explanation
-was wrong, so neither issue is closable as invalid.
+**Planning materially changed both diagnoses, and plan-review then falsified three of v1's own
+load-bearing claims.** The evidence is in "Research Reconciliation" (issue claims) and "Plan
+Review Revisions" (v1's claims). Read both before implementing — several fixes that look
+obvious are measurably wrong.
 
-Unifying theme, and the acceptance bar for every change here: **a guard that reports success
-while doing nothing is worse than no guard.** Where a fix is possible, prefer the form whose
-own failure is self-reporting.
+Headline corrections:
+
+- The SIGPIPE mechanism **does not apply** to the file #6992 names (bash builtin producers
+  cannot raise it). The real defects there are an **Edit-scope blindness** and — found at
+  review — a **complete MultiEdit bypass** that is a larger, unreported fail-open than the one
+  the issue filed.
+- Dropping `SCRATCH_MIN_MB`, which v1 argued was safe, would have **deleted a live Chrome IPC
+  socket directory**. Measured, not theorised. The floor is load-bearing in a way nobody had
+  noticed.
+
+Unifying theme and acceptance bar: **a guard that reports success while doing nothing is worse
+than no guard.** Every fix below is judged against whether its own failure would be visible.
 
 ---
 
 ## Research Reconciliation — Issue Claims vs. Measured Reality
 
-All measurements taken 2026-07-27 on the target host (bash 5.3.9, GNU grep 3.12,
-`pipe-max-size` 1048576, `pipe-user-pages-soft` 16384). Reproduction scripts are re-created
-in Phase 0 so every row is re-verifiable at implementation time.
+Measured 2026-07-27 on the target host (bash 5.3.9, GNU grep 3.12, `pipe-max-size` 1048576).
+Phase 0 re-runs each probe so no verdict rots between planning and implementation.
 
-| # | Claim (from issue / prior art) | Measured reality | Plan response |
+| # | Claim (issue / prior art) | Measured reality | Plan response |
 |---|---|---|---|
-| R1 | "Every check in `iac-plan-write-guard.sh` fails open via a `pipefail`+`grep -q` SIGPIPE race." | **REFUTED for this file, by measurement.** All 7 checks use `echo "$content"` — a **bash builtin**. Builtin producers never raise the race: `echo`/`printf` into `grep -q` with match-at-top measured **0/40 pipeline failures at 4 / 16 / 50 / 64 / 128 / 1024 KB**. `PIPESTATUS` is `0 0` at 1 MB. Bash handles EPIPE for its own builtins; it does not die of SIGPIPE the way a forked binary does. | Keep the herestring conversion (cheap, matches repo canon at `plugins/soleur/skills/work/SKILL.md` §"never `grep -q` on a pipe"), but bill it honestly as **shape hygiene, not the bug fix**. Do not claim it fixes the reported symptom. |
-| R2 | End-to-end: the guard fails open on forbidden content. | **REFUTED.** Driving the real hook with a 50 KB body: violation → `deny 12/12`; clean → `allow 12/12`; clean+ack → `allow 12/12`; violation+ack → `allow 12/12`. Zero flakes across all arms. | No change needed for the `Write` path. |
-| R3 | "The ack escape hatch reads a PRESENT ack as absent — ~9 deny / 3 allow on byte-identical 50 KB input." | **SYMPTOM CONFIRMED; CAUSE DIFFERENT — and it is deterministic, not a race.** `iac-plan-write-guard.sh` derives its scan text as `.tool_input.content // .tool_input.new_string`. On an **`Edit`**, that is the **replacement chunk only, never the file**. Measured: `Edit` with a violation in `new_string` and the ack elsewhere in the file → **deny**; identical `Edit` with the ack inside the chunk → **allow**. A plan author editing successive regions of one acked plan therefore sees an apparently random deny/allow split on "byte-identical" input — exactly the reported 9/3 shape. | **This is the real #6992 defect.** Fix the scan scope (Phase 2). This is the load-bearing change. |
-| R4 | (Corollary nobody filed.) | The same Edit-scope blindness is **also a genuine fail-open**: a violation already present in a plan is invisible to every subsequent `Edit` that does not touch it, so a plan can be walked past the guard in pieces. | Folded into the Phase 2 fix — one change closes both directions. |
-| R5 | "The SIGPIPE race is the defect class; sweep siblings." | **CONFIRMED, but the discriminating axis is producer class, not input size — and no prior artifact states this.** With an **external** producer the race is real and *non-deterministic at every size*, including tiny inputs: `cat \| grep -q` match-at-top failed **3/20 at 1 KB**, 13/20 at 32 KB, 4/20 at 64 KB, 3/20 at 128 KB. `yes \| grep -q y` → `PIPESTATUS=141 0`, 3/3. Match-at-**bottom** → 0/20 (grep must read all; no early close). | Re-triage the whole sweep on **producer class**. Fix every *external*-producer site (the live bugs). Treat *builtin*-producer sites as inert-but-wrong-shaped: convert opportunistically, grandfather the rest under the Phase 5 lint. This cuts the work from ~95 sites to a small, fully-live set. |
-| R6 | Sweep scope: "`.claude/hooks/*.sh` and `scripts/*.sh`". | The issue's glob under-reaches. Repo-wide the shape appears **~135 times in scope** (`.claude/hooks/`, `scripts/`, `plugins/`), ~95 non-test. **Every non-test shell file in scope that has a `set` line sets `pipefail`**; the three without a `set` line are sourced into callers that do. There is no immune-by-declaration site in scope except `plugins/soleur/skills/linear-fetch/scripts/assert-no-linear-telemetry.sh` (`set -eu`, no `pipefail`) and `plugins/soleur/skills/pencil-setup/scripts/check_deps.sh` (no `set` line). | Phase 1 records the full sweep with producer class + failure direction, per AC. Phase 3 fixes the external-producer subset. |
-| R7 | Prior art `2026-07-18-pipefail-grep-q-early-match-sigpipe-flakes-drift-guards.md` describes the same class. | Confirmed and **already canonicalised**: `plugins/soleur/skills/work/SKILL.md` mandates herestring or `grep -c`, and two test files carry verbatim warning comments (`.claude/hooks/pre-merge-rebase.test.sh` §"Herestring, not a pipe"; `.claude/hooks/pre-merge-auto-close-scan.test.sh` §"grep a FILE-free herestring"). Both cite `git log`/`printf` producers. | The rule exists; enforcement does not. Phase 5 adds the missing mechanical gate and corrects the rule text to name the producer-class distinction. |
-| R8 | **(Test-methodology hazard, newly found.)** | The interactive Bash tool resolves `grep` to a **Claude Code `ugrep` shim shell function**, and **ugrep `-q` drains its input** — it never early-closes, so the race is *invisible to anyone testing by hand in an agent session*. Hooks and cron run non-interactively and get `/usr/bin/grep` (GNU 3.12), where the race is live. Measured both ways. | **The regression test MUST pin the grep binary** (clean `PATH=/usr/bin:/bin`, `--noprofile --norc`) or it will pass vacuously. This is an explicit AC. It also likely explains why the class survived prior review passes. |
-| R9 | "`scripts/lib/scratch-root.sh` already exists — the per-run private scratch root machinery may already be there to build on." | **REFUTED.** `soleur_scratch_root()` has **zero production callers**; the only invoker is its own test file, which is **not registered in `scripts/test-all.sh`**. It landed in the immediately preceding commit (`a5160b29a`) and was never wired. Its own docstring directs the common case *away* from it ("Small-fixture callers should keep using plain `mktemp`"). | The reviewed direction ("per-run private scratch roots reaped by their owner") **has nothing to key on today**. Adopting it would mean migrating hundreds of call sites — out of scope. Phase 6 takes a different route that needs no new convention (see D1). |
-| R10 | "`tmp.` is mktemp's default template — 576 bare call sites." | **CONFIRMED, and worse.** Command-position `$(mktemp …)` invocations: **1013 total, 856 bare (84.5%)** producing the default `tmp.XXXXXXXXXX`. Only 48 use a `-t <prefix>` template, and **all 48 prefixes are unique (max frequency 1)**. The "576" figure is a *file* count (`git grep -l mktemp` → 587), not a call-site count. | A prefix allowlist would need 48 entries to cover 4.7% of the population and would grow with every new call site. **Prefix-based leak signatures are not viable.** Confirms the issue's warning; Phase 6 keys on nothing name-derived. |
-| R11 | "The alarm must reach the observability layer — a monitored stdout `SOLEUR_*` marker → Better Stack, and/or Sentry." | **NOT REACHABLE AS SPECIFIED, by measurement.** (a) The `SOLEUR_*` marker convention is a **journald** convention consumed by **Vector**, and `vector.toml`'s `include_matches.SYSLOG_IDENTIFIER` is an **exact-value allowlist of 14 tags** that does not include `tmpfs-guard`. (b) **Vector is not installed on this host** (`command -v vector` → not found); it is deployed only to the Hetzner hosts. So `logger -t tmpfs-guard` cannot reach Better Stack even if allowlisted. (c) There is **no Sentry DSN wired into any locally-executing shell script**; every shell→Sentry call in the repo runs on a GitHub runner with an Actions-injected token. (d) `doppler` is at `~/.local/bin` — **not on cron's `PATH`**. (e) `gh` **is** at `/usr/bin/gh`, but authenticates via the **OS keyring**, which is unavailable to a cron job with no unlocked session. | **There is no existing local-cron → remote-observability path, and inventing one is out of scope.** Phase 7 routes the alarm to the surface that provably reaches the operator — the next agent session — and escalates remotely from a context where credentials exist. This is a design decision made against a measured constraint, and it is flagged for challenge at plan-review. |
-| R12 | (Constraint nobody flagged.) | `iac-plan-write-guard.sh` **denies** plan text matching `crontab -e` / `sudo crontab` / `edit the crontab`, and `plugins/soleur/skills/plan/SKILL.md` lists crontab edits as a banned operator step. There is **no installer** for the tmpfs-guard cron entry — the live crontab line was hand-installed and is recorded only in a learning file. | The plan **must not** prescribe any crontab change. Every Part-B fix must be a **drop-in replacement at the existing path**, requiring no re-installation. Made an explicit constraint (C1) and an AC. |
-| R13 | "Every doc claim keyed on per-entry reap detail is unverifiable." | **CONFIRMED and broader.** Falsified claims found in: `knowledge-base/project/plans/2026-07-27-fix-tmp-tmpfs-mktemp-cleanup-leak-plan.md` §Observability (5 distinct false claims, incl. an AC that greps for a string `logger` never writes and therefore **can never pass**), `.../plans/2026-07-22-fix-testall-worktree-contention-plan.md` §alert_route, and — most seriously — `plugins/soleur/skills/work/SKILL.md` ("tmpfs-guard.sh's cron reaper now bounds the abandoned-scratch growth"), which is **agent instruction loaded every session**. | Correcting these is in scope (Phase 9). A false claim in a per-session instruction file actively misleads every future agent. |
+| R1 | "Every check in `iac-plan-write-guard.sh` fails open via a `pipefail`+`grep -q` SIGPIPE race." | **REFUTED for this file, by measurement.** All 7 checks use `echo "$content"` — a **bash builtin**. Builtin producers never raise the race: `echo`/`printf` into `grep -q`, match-at-top, measured **0/40 failures at 4/16/50/64/128/1024 KB**; `PIPESTATUS` `0 0` at 1 MB. Bash handles EPIPE for its own builtins. | Convert the 7 sites anyway (cheap, matches repo canon in `plugins/soleur/skills/work/SKILL.md`), billed honestly as **shape hygiene, not the bug fix**. |
+| R2 | End-to-end the guard fails open on forbidden content. | **REFUTED.** Real hook, 50 KB body: violation → `deny 12/12`; clean → `allow 12/12`; clean+ack → `allow 12/12`; violation+ack → `allow 12/12`. Zero flakes. | No change needed on the `Write` path. |
+| R3 | "The ack reads as absent — ~9 deny / 3 allow on byte-identical 50 KB input." | **SYMPTOM CONFIRMED; CAUSE DIFFERENT, and deterministic.** The guard scans `.tool_input.content // .tool_input.new_string`. On an **`Edit`** that is the **replacement chunk only**. Measured: ack outside the chunk → deny; ack inside → allow. An author editing successive regions of one acked plan sees an apparently random split on "identical" input. | **The real #6992 defect.** Fixed in Phase 2 by the narrow ack lookup, not by whole-document rescanning (see PR-2). |
+| R4 | (Corollary nobody filed.) | Edit-scope blindness is also a fail-open: a violation already in a plan is invisible to later edits. | Partially closed by Phase 2; the general form is deferred with a tracking issue — the full fix (delta scanning) has a measured 274-file blast radius (PR-2). |
+| R5 | "The SIGPIPE race is the defect class; sweep siblings." | **CONFIRMED — but the discriminating axis is producer class, not input size, and no prior artifact says so.** External producers race **non-deterministically at every size**: `cat \| grep -q` match-at-top failed **3/20 at 1 KB**, 13/20 at 32 KB, 4/20 at 64 KB, 3/20 at 128 KB. `yes \| grep -q y` → `141 0`, 3/3. Match-at-**bottom** → 0/20. | Re-triage the sweep on **producer class**; fix external-producer sites (the live bugs); treat builtin sites as inert-but-wrong-shaped. Cuts the work from ~95 sites to ~8 live ones. |
+| R6 | Sweep scope `.claude/hooks/*.sh` + `scripts/*.sh`. | Under-reaches: ~135 in-scope hits across `.claude/hooks/`, `scripts/`, `plugins/`, ~95 non-test. Every non-test in-scope file with a `set` line sets `pipefail`. | Phase 1 sweeps the wider scope and records producer class + direction. |
+| R7 | Prior art documents the class. | Confirmed and **already canonicalised** in `work/SKILL.md`, with verbatim warnings in `.claude/hooks/pre-merge-rebase.test.sh` and `.claude/hooks/pre-merge-auto-close-scan.test.sh`. | The rule exists; enforcement does not. Phase 5 (reduced) closes the gap and corrects the rule to name the producer-class distinction. |
+| R8 | **(Test-methodology hazard, newly found.)** | The interactive Bash tool resolves `grep` to a Claude Code **`ugrep` shim shell function**, and **ugrep `-q` drains its input** — the race is invisible to anyone testing by hand in an agent session. Hooks and cron get `/usr/bin/grep` (GNU 3.12), where it is live. | **Tests must pin the grep binary** (clean `PATH=/usr/bin:/bin`, `--noprofile --norc`) or pass vacuously. Explicit AC. Likely explains why the class survived prior reviews. |
+| R9 | "`scripts/lib/scratch-root.sh` already exists — build on it." | **REFUTED.** `soleur_scratch_root()` has **zero production callers**; its only invoker is its own test file, which is registered in no runner. It landed in the previous commit (`a5160b29a`) and was never wired. | "Per-run private scratch roots reaped by their owner" has nothing to key on. Out of scope; deferred with a tracking issue. |
+| R10 | "`tmp.` is the default template — 576 bare call sites." | **CONFIRMED, and worse.** Command-position `$(mktemp …)`: **1013 total, 856 bare (84.5%)**. Only 48 use `-t <prefix>`, and **all 48 prefixes are unique**. "576" was a *file* count (`git grep -l` → 587). | **Prefix-based leak signatures are not viable.** Phase 6 keys on nothing name-derived. |
+| R11 | "The alarm must reach a `SOLEUR_*` marker → Better Stack, and/or Sentry." | **NOT REACHABLE AS SPECIFIED.** (a) `SOLEUR_*` is a **journald** convention consumed by **Vector**, whose `include_matches.SYSLOG_IDENTIFIER` is an **exact-value allowlist of 14 tags** excluding `tmpfs-guard`. (b) **Vector is not installed on this host.** (c) No Sentry DSN is wired into any locally-executing shell script. (d) `doppler` is at `~/.local/bin` — off cron's `PATH`. (e) `gh` is at `/usr/bin/gh` but authenticates via the **OS keyring**, unavailable under cron. | No local-cron → remote-observability path exists, and inventing one is out of scope (C2). Phase 7 routes to the surface that provably reaches the operator. |
+| R12 | (Constraint nobody flagged.) | `iac-plan-write-guard.sh` **denies** plan text matching crontab-edit patterns, and `plan/SKILL.md` bans crontab steps. There is **no installer** — the live cron line was hand-installed, recorded only in a learning file. | **No crontab change may be prescribed.** Every Part-B fix must be a drop-in at the existing path (C1). |
+| R13 | "Doc claims keyed on per-entry reap detail are unverifiable." | **CONFIRMED and broader** — false claims in two merged plans and, most seriously, in `plugins/soleur/skills/work/SKILL.md`, which is **agent instruction loaded every session**. | Phase 9 corrects the session-loaded claim. The historical-plan corrections were cut at review as ceremony. |
 
-### What this means for issue disposition
+### Issue disposition
 
-Neither issue closes as invalid.
+Neither issue closes as invalid. **#6992**'s symptom is real and reproducible; its stated cause
+is not. The plan fixes the actual cause, performs the requested sweep on a better axis, fixes
+the genuinely live race sites, adds the requested regression test, and closes a larger
+bypass the issue never knew about. **#6991**'s four defects are all confirmed; two of its
+suggested directions are blocked by measured facts it could not have known, and the plan states
+the blockers rather than prescribing a path that does not exist.
 
-- **#6992** — the reported symptom is real and reproducible; the stated cause is not. The plan
-  fixes the *actual* cause (Edit-scope), performs the *requested* sweep (with a corrected and
-  more useful triage axis), fixes the *genuinely live* race sites the sweep exposes, and adds
-  the regression test the issue asks for. Every acceptance box is satisfied, one of them by a
-  better mechanism than proposed.
-- **#6991** — all four defects confirmed. Two of the issue's suggested directions (per-run
-  scratch roots; `SOLEUR_*` → Better Stack) are blocked by measured facts the issue could not
-  have known. The plan states the blockers and routes around them rather than prescribing a
-  path that does not exist.
+---
+
+## Plan Review Revisions (v1 → v2)
+
+Plan-review falsified three v1 claims by direct measurement. Recorded in full because two of
+them would have shipped active harm, and because the *pattern* — a plan refuting the issue's
+assumptions and then confidently substituting its own — is the lesson.
+
+| ID | v1 claim | Measured refutation | v2 response |
+|---|---|---|---|
+| **PR-1** | *"`SCRATCH_MIN_MB` is a cost gate, not a safety gate. Removing it costs no safety at all."* | **FALSE, and dangerous.** Reviewer ran all four surviving gates by hand against `/tmp/com.google.Chrome.mhBY3H`, which holds `SingletonSocket` for a **live** Chrome: ownership ✓, top-level age ✓, recursive age ✓ (tree entirely stale), denylist ✓ (`com.google.Chrome.*` matches nothing), symlink ✓, liveness ✓ (**0 hits**). It would have been deleted. Root cause: `_build_inuse_top` works by `readlink` on `/proc/<pid>/fd/*`, and **a unix-domain socket fd readlinks to `socket:[inode]`, never to its path** — the scan is architecturally blind to socket-held directories, and `fuser` is skipped for directories. | **The size floor is load-bearing** — it is the only thing excluding the entire small-entry population, which is where sockets, locks, and IPC dirs live. Phase 6 now **reduces** the floor rather than removing it, and first **fixes the liveness blindness** (`/proc/net/unix`, `fuser` on directories, widened denylist). |
+| **PR-2** | *"On `Edit`, reconstruct the post-edit document and scan the result."* | **Would brick 274 files.** Across live plan/spec files: 4194 total, 357 contain a violation, 172 contain the ack, **274 contain a violation and no ack** — every one denied on every future edit. It silently converts policy from "did this edit introduce a violation?" to "does the document contain one?", retroactively. Trains authors to paste the ack reflexively, destroying the escape hatch. | **Narrow the fix.** Phase 2 now does an **ack lookup against the on-disk file** (two lines; closes R3 completely) plus the MultiEdit matcher fix. Whole-document delta scanning is recorded as the considered alternative and deferred with a tracking issue. |
+| **PR-3** | *"The pressure arm skips `du`, so it is cheaper than the normal tier."* | **Inverted ~100x.** `du` runs over the **entire** candidate set *before* the floor is applied by `awk` — the floor never bounded `du`. What it bounds is the **per-candidate recursive `find`**. Measured on this host (17,898 top-level uid-owned entries): batched `du` = **0.76 s** for 4,841 entries (~2.8 s extrapolated); per-candidate `find` = **5.29 s** for 300 entries (**~316 s ≈ 5.3 min** extrapolated) — exceeding the entire cron interval, at 29% usage. | **Keep the batched `du`**; batch the recursive-age pass the same way (one `find … -printf` over the root, not 17,898 forks). Add `flock` — the guard has none today, so overlapping runs would race each other's deletes. |
+| **PR-4** | *"Trigger the pressure tier on `df -i` inode usage."* | **Would never fire.** On a host *currently carrying the leak*: `df -h /tmp` → 29%, `df -i /tmp` → **7%** (268,438 of 3,992,059). tmpfs charges a full page per file, so blocks exhaust long before inodes can. The tier would sit disengaged through exactly the scenario it exists for — shipping a second guard that reports success while doing nothing. | Trigger on the **count-shaped signal directly**: top-level entry count under `$TMP_ROOT`. One `find \| wc -l`. Threshold pinned against measured current state so engagement is proven. |
+| **PR-5** | *(v1 missed entirely.)* | **The guard is bypassed by MultiEdit today, unconditionally.** `.claude/settings.json` registers this hook with matcher `Write\|Edit`, while three sibling hooks in the same file use `Write\|Edit\|MultiEdit\|NotebookEdit`; the hook's own `case` also allows anything else. **Any plan written via MultiEdit skips the IaC guard entirely.** | **Folded into Phase 2 and promoted to the headline fail-open.** This is a larger hole than the one #6992 filed. |
+| **PR-6** | *"The multi-line `-eq` raises a syntax error every 5 minutes."* | **Understated — it is a hard abort.** Under `set -euo pipefail`, `[[ "tmpfs-guard: reaping …\n1" -eq 0 ]]` parses `tmpfs` as a variable name; `set -u` makes it fatal. `main` exits 1 and **the high-usage alarm branch never executes** — and only on a run that reaped something while usage ≥ 70%, i.e. exactly the run that matters. | Severity corrected in Phase 8 and in AC-B7. Return contract changed from "stdout carries the count" to **globals** — a stray `echo` can then never break arithmetic again. |
+| **PR-7** | *v1 Part B order 6 → 7 → 8.* | **Inverted.** Phase 6's ceiling (iv) and its tests both consume `guard_log()` and the usage-probe seam, which are Phase 8. Shipping 6 before 8 also *regresses production*: new per-entry logging lands in `reaped` and triggers the PR-6 hard abort. | **Part B reordered 8 → 6 → 7.** |
+| **PR-8** | *v1 Phase 5: a lint script + ~95-entry allowlist.* | ~250 lines of permanent CI infrastructure whose day-one allowlist grandfathers ~95 entries and therefore asserts nothing, policing a class the same plan measures at near-zero live yield. | **Reduced** to a plain checked-in sweep record plus a minimal assertion in the existing runner. The full lint is deferred to its own issue. |
+| **PR-9** | *v1 Phase 7's third tier: agent files a deduped GitHub issue at a threshold.* | Not a mechanism — agent behaviour, no code, no named threshold, no dedupe key, no AC. A channel that would report success while reaching no one. | **Cut.** State file + existing SessionStart hook only. `notify-send` deleted outright rather than kept as a hedge. |
+| **PR-10** | *v1 AC set (18 ACs).* | Several unverifiable, tautological, or restating phase instructions. | Rewritten per the table in Acceptance Criteria. |
+
+**Dissent recorded, not applied:** plan-review recommended **splitting into two PRs**. The
+directive for this work is one PR closing both issues, so the plan keeps the single-PR shape.
+The reviewer's reasoning is sound (no shared file, mechanism, test, or failure mode) and is
+persisted to `decision-challenges.md` for the operator rather than silently discarded.
 
 ---
 
 ## Hypotheses
 
-Recorded per the plan skill's diagnosis discipline. Every verdict below is backed by a
-measurement in "Research Reconciliation", not by reasoning. Phase 0 re-runs each probe so a
-verdict cannot silently rot between planning and implementation.
+Every verdict rests on a measurement, not on reasoning. Phase 0 re-runs each probe.
 
 | ID | Hypothesis | Verdict | Discriminator |
 |---|---|---|---|
-| H1 | The 7 `iac-plan-write-guard.sh` checks fail open via SIGPIPE. | **REFUTED** | Builtin producer measured 0/40 at 6 sizes up to 1 MB; hook end-to-end 12/12 correct on 5 arms. |
-| H2 | The ack check fails closed via SIGPIPE. | **REFUTED** | Same measurement; ack arm allowed 12/12 on a 50 KB `Write`. |
-| H3 | The ack check fails closed because `Edit` scans only `new_string`. | **CONFIRMED** | Ack-outside-chunk → deny; ack-inside-chunk → allow. Deterministic, reproduced directly. |
-| H4 | The SIGPIPE race is real somewhere in the swept set. | **CONFIRMED** | External producers: `yes` 3/3 at `141`; `cat` 3–13/20 across 1 KB–128 KB. |
-| H5 | The race is gated on input size (>64 KiB pipe buffer). | **REFUTED** | It fires at **1 KB** (3/20). It is a genuine race on writer-exit vs reader-close, not a buffer-capacity threshold. Size raises probability, it is not a gate. |
-| H6 | Reduced pipe capacity under `pipe-user-pages-soft` explains sub-64 KB firing. | **NOT NEEDED / UNTESTED** | H5 already explains it without invoking pressure. Recorded so a future reader does not re-derive it as a live theory. |
+| H1 | The 7 `iac-plan-write-guard.sh` checks fail open via SIGPIPE. | **REFUTED** | Builtin producer 0/40 at six sizes to 1 MB; hook 12/12 correct on 5 arms. |
+| H2 | The ack check fails closed via SIGPIPE. | **REFUTED** | Ack arm allowed 12/12 on a 50 KB `Write`. |
+| H3 | The ack fails closed because `Edit` scans only `new_string`. | **CONFIRMED** | Ack-outside-chunk → deny; ack-inside → allow. Deterministic. |
+| H4 | The SIGPIPE race is real somewhere in the swept set. | **CONFIRMED** | `yes` 3/3 at `141`; `cat` 3–13/20 across 1 KB–128 KB. |
+| H5 | The race is gated on input size (>64 KiB pipe buffer). | **REFUTED** | Fires at **1 KB**. A genuine writer-exit/reader-close race, not a buffer threshold. |
+| H6 | Reduced pipe capacity under `pipe-user-pages-soft` explains sub-64 KB firing. | **NOT NEEDED** | H5 explains it without invoking pressure. Recorded so it is not re-derived. |
+| H7 | Ownership + age + liveness + denylist suffice without a size floor. | **REFUTED** | A live Chrome IPC socket directory clears all four (PR-1). |
+| H8 | `df -i` is a usable count-pressure trigger on tmpfs. | **REFUTED** | 7% inodes at 17,898 leaked entries (PR-4). |
+| H9 | The guard is reachable only via `Write` and `Edit`. | **REFUTED** | `MultiEdit` bypasses it entirely (PR-5). |
 
-**Network-outage checklist (plan Phase 1.4):** evaluated and **does not apply**. The trigger
-words (`ssh`, `timeout`) occur in this plan only as quoted detection regexes belonging to the
-guard under repair. No network path, host, or connectivity failure is in scope.
+**Network-outage checklist (Phase 1.4 / 4.5):** evaluated, **does not apply**. Trigger words
+occur only as quoted detection regexes belonging to the guard under repair. No network path,
+host, or connectivity failure is in scope.
 
 ---
 
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** their machine wedging again — `/tmp` fills,
-agent sessions stop being able to write tool output, and work in progress is lost mid-task —
-with a janitor and an alarm that both still report healthy. Secondarily, a plan carrying a
-real manual-infrastructure step is written unchallenged because the guard's Edit path let it
-through a chunk at a time.
+agent sessions cannot write tool output, work in progress is lost — with a janitor and alarm
+that still report healthy. In the worst v1 shape, *the fix itself* would have deleted a live
+browser's IPC socket, killing a running application mid-session (PR-1). Secondarily, a plan
+carrying a real manual-infrastructure step ships unchallenged via the MultiEdit bypass.
 
 **If this leaks, the user's data is exposed via:** nothing. Both scripts are local, read no
 user content, and transmit nothing. The plan deliberately does **not** add a network egress
-path from the operator's laptop (R11) — adding one would *create* a data-egress surface where
-none exists, which `.claude/hooks/README.md` §"External-observability boundary" already rules
-out pending DPA review.
+path from the laptop (R11/C2) — doing so would *create* a data-egress surface where none
+exists, which `.claude/hooks/README.md` §"External-observability boundary" rules out pending
+DPA review.
 
-**Brand-survival threshold:** `none`. Both targets are developer-workstation tooling with no
-customer-facing surface, no persistence of user data, and no production blast radius. The
-sensitive-path regex is not touched by any file in "Files to Edit"; no scope-out bullet is
-required. Consequently `requires_cpo_signoff: false` and `user-impact-reviewer` is not
-invoked.
+**Brand-survival threshold:** `none`. Developer-workstation tooling, no customer-facing
+surface, no user data, no production blast radius. No file in "Files to Edit" matches the
+sensitive-path regex, so no scope-out bullet is required; `requires_cpo_signoff: false` and
+`user-impact-reviewer` is not invoked.
 
 ---
 
 ## Constraints
 
-- **C1 — No crontab change.** The fix must be a drop-in replacement at the existing
-  `scripts/tmpfs-guard.sh` path. There is no installer, and the guard under repair in Part A
-  denies plan text prescribing crontab edits (R12).
-- **C2 — No new local→remote egress.** Out of scope by R11 and by the standing DPA boundary.
-- **C3 — Cron `PATH` is `/usr/bin:/bin`.** `doppler` is unreachable; `gh` resolves but its
-  keyring auth does not survive a cron session. Anything Part B relies on must work with
-  neither.
-- **C4 — The regression test must pin the `grep` binary** (R8), or it passes vacuously inside
-  an agent session.
-- **C5 — Planning phase touches only `knowledge-base/project/{plans,specs}/`.** All source
-  edits below are implementation-phase work.
+- **C1 — No crontab change.** Drop-in replacement at the existing path; no installer exists and
+  Part A's guard denies plan text prescribing crontab edits (R12).
+- **C2 — No new local→remote egress** (R11 + the standing DPA boundary).
+- **C3 — Cron `PATH` is `/usr/bin:/bin`.** `doppler` unreachable; `gh` resolves but its keyring
+  auth does not survive cron. Part B may rely on neither.
+- **C4 — Tests must pin the `grep` binary** (R8) or pass vacuously in an agent session.
+- **C5 — No unbounded per-candidate work.** Any pass over `/tmp` candidates must be batched;
+  the 5-minute cron interval is a hard ceiling (PR-3).
+- **C6 — Planning touches only `knowledge-base/project/{plans,specs}/`.**
 
 ---
 
 ## Implementation Phases
 
-### Phase 0 — Re-verify every premise (blocking, no edits)
+### Phase 0 — Re-verify premises (blocking, no edits)
 
-Re-run each probe and paste output into the spec's evidence block. A verdict that no longer
-reproduces halts the phase it justifies.
+Re-run and paste output into the spec evidence block. A verdict that no longer reproduces halts
+the phase it justifies.
 
-0.1 Producer-class probe, in a **clean non-interactive shell**:
-`env -i PATH=/usr/bin:/bin HOME="$HOME" bash --noprofile --norc <probe>`. Assert
-`command -v grep` is `/usr/bin/grep` and it reports GNU grep. Confirm builtin `echo` → 0
-failures at 1 MB; `yes | grep -q y` → `PIPESTATUS` `141 0`; `cat` of a 1 KB file with
-match-at-top → non-zero failure count over 20 runs.
-0.2 Hook end-to-end: 5 arms × 12 runs (`Write` × {violation, clean, clean+ack, violation+ack};
-1 KB clean). Expect 12/12 correct in all arms.
-0.3 Edit-scope probe: ack outside chunk → deny; ack inside chunk → allow.
-0.4 `command -v vector` → absent. `grep -c tmpfs-guard apps/web-platform/infra/vector.toml`
-→ 0. `env -i PATH=/usr/bin:/bin gh auth status` → confirm it fails without a keyring.
-0.5 Re-count `mktemp`: total command-position invocations, bare count, `-t` count, and the
-max prefix frequency among `-t` sites. Assert max frequency is 1.
-0.6 Confirm `scripts/lib/scratch-root.sh` still has zero production callers.
+0.1 **Producer class**, clean shell (`env -i PATH=/usr/bin:/bin bash --noprofile --norc`):
+assert `grep` is `/usr/bin/grep` (GNU); builtin `echo` → 0 failures at 1 MB; `yes | grep -q y`
+→ `PIPESTATUS 141 0`; `cat` of a 1 KB file, match-at-top → non-zero failures over 20 runs.
+0.2 **Edit-scope**: ack outside chunk → deny; ack inside → allow.
+0.3 **MultiEdit bypass**: confirm `.claude/settings.json`'s matcher for this hook lacks
+`MultiEdit` while sibling hooks include it (PR-5).
+0.4 **Socket liveness blindness**: pick a live socket-holding directory under `/tmp`; confirm it
+clears ownership, recursive age, denylist, and `_INUSE_TOP` liveness (PR-1). **If this no longer
+reproduces, Phase 6's ordering assumption changes — do not skip.**
+0.5 **Cost model**: time batched `du --files0-from` vs per-candidate recursive `find` over the
+current candidate set; confirm the per-candidate form extrapolates past the cron interval (PR-3).
+0.6 **Trigger signal**: record `df -h /tmp`, `df -i /tmp`, and the top-level entry count.
+Confirm inode % is far below any plausible high-water mark (PR-4).
 
-**Gate:** if 0.1 or 0.3 fails to reproduce, stop and re-diagnose. Do not proceed on a stale
-premise.
+**Gate:** if 0.1, 0.2, or 0.4 fails to reproduce, stop and re-diagnose.
 
 ---
 
 ### Part A — issue #6992
 
-### Phase 1 — Sweep and record (satisfies AC-A3)
+### Phase 1 — Sweep and record (AC-A3)
 
-Run `git grep -nE '\|[[:space:]]*grep[[:space:]]+-q'` over `.claude/hooks/`, `scripts/`, and
-`plugins/` — **wider than the issue's glob** (R6). For every non-test hit record: file:line,
-`pipefail` status, **producer class (builtin vs external)**, the producer's provenance,
-failure direction, and live/inert verdict.
+Sweep `git grep -nE '\|[[:space:]]*grep[[:space:]]+-q'` over `.claude/hooks/`, `scripts/`, and
+`plugins/` — wider than the issue's glob (R6). Record per non-test hit: file:line, `pipefail`
+status, **producer class (builtin vs external)**, provenance, failure direction, live/inert.
 
-Failure-direction taxonomy — the third form is the subtle one and must be flagged explicitly
-wherever it appears:
+Direction taxonomy — the third form is the subtle one and must be flagged wherever it appears:
 
 | Shape | On race | Direction |
 |---|---|---|
@@ -183,242 +206,204 @@ wherever it appears:
 | `if X \| grep -q P; then allow` | bypass skipped | fails closed |
 | `if ! X \| grep -q P; then <early-exit>` | `!` inverts the false negative → early-exit fires → **the gate skips its own check** | **FAILS OPEN** |
 
-Deliverable: a table in `knowledge-base/project/specs/<branch>/sweep.md`, plus the
-producer-class summary. This table is the input to Phase 3's scope and to Phase 5's allowlist.
+Deliverable: `knowledge-base/project/specs/<branch>/sweep.md`.
 
-### Phase 2 — Fix the real `iac-plan-write-guard.sh` defect (Edit scope) — **load-bearing**
+### Phase 1.5 — Land the failing tests RED (before Phase 2)
 
-The guard must evaluate the **resulting document**, not the edited fragment.
+Per `cq-write-failing-tests-before` and AC-A4, T3/T4 must exist and fail against unmodified
+code, demonstrated at that commit. Writing them after the fix cannot prove RED→GREEN.
 
-- For `Write`: unchanged — `tool_input.content` already is the whole document.
-- For `Edit`: reconstruct the post-edit document. Read the file at `tool_input.file_path` and
-  apply the `old_string`→`new_string` substitution in memory; scan the result. If the file is
-  unreadable (new file, path outside the repo), fall back to scanning `new_string` alone and
-  **say so in the deny reason** — a degraded scan must never masquerade as a full one.
-- The ack check then sees an ack wherever it lives in the document (fixes the fail-closed
-  symptom, R3), and a pre-existing violation is no longer invisible to an unrelated edit
-  (fixes the fail-open corollary, R4).
-- Correct the file's header comment: "Hook exit code: 0 always" is a claim to verify against
-  the fixed control flow, not to inherit.
+### Phase 2 — Fix the real #6992 defects — **load-bearing**
 
-Order matters: this precedes Phase 3 because it changes what the guard scans, and Phase 4's
-tests assert against the fixed contract.
+Two changes, both narrow. v1's whole-document reconstruction is **not** taken (PR-2).
+
+- **2a — Close the MultiEdit bypass (PR-5).** Add `MultiEdit` to this hook's matcher in
+  `.claude/settings.json` (matching its three siblings) and to the hook's own `tool_name` case.
+  Fold `edits[]` into the scanned text. This is the largest fail-open in Part A and was not in
+  the issue.
+- **2b — Find the ack wherever it lives (R3).** Check the ack literal against the `new_string`
+  **and** against the on-disk file. Two lines; closes the reported symptom completely, with
+  zero retroactive blast radius:
+
+  ```bash
+  ack='<!-- iac-routing-ack: plan-phase-2-8-reviewed -->'
+  if grep -qF "$ack" <<<"$content" \
+     || { [ -f "$file_path" ] && grep -qF "$ack" "$file_path"; }; then
+  ```
+
+  Resolve a relative `file_path` against the hook's existing `PROJECT_DIR`, and guard the read
+  so a failure cannot trip `set -e` and change the hook's "exit 0 always" contract.
+- **Not taken:** whole-document delta scanning (compare pre/post match counts, deny only on an
+  *increase*). It is the correct general fix for R4 and elegantly satisfies AC-A1 via `grep -c`,
+  but it needs `replace_all` handling, a glob-safe substitution (unquoted `${doc/$old/$new}`
+  treats `*`, `?`, `[` as globs and silently returns the document **unchanged** — a silent
+  fail-open), and MultiEdit sequencing. Deferred with a tracking issue rather than rushed into
+  a bug-fix PR.
+- Correct the header's "Hook exit code: 0 always" comment against the final control flow.
 
 ### Phase 3 — Fix the genuinely live race sites
 
 Convert **external-producer** sites (`cat`, `git show`, `git log`, `git diff`, `base64 -d`,
-`jq`, `awk`, and function wrappers around them) to a non-racing form:
+`jq`, `awk`, and wrappers around them):
 
-- Producer already in a variable → `grep -q P <<<"$var"` (herestring, no pipe).
-- True command producer → capture first (`v="$(cmd)"`, then herestring), or use
-  `[ "$(cmd | grep -c P || true)" -gt 0 ]` (`grep -c` reads all input, never early-closes).
+- Value already in a variable → `grep -q P <<<"$var"`.
+- True command producer → capture first, or `[ "$(cmd | grep -c P || true)" -gt 0 ]`.
 - Never `grep -qo` — `-q` wins over `-o` and still early-exits.
 
-Known live set from the sweep (Phase 1 finalises it): `.claude/hooks/pre-merge-rebase.sh`
-(`git show` → review-evidence read, fails closed), `.claude/hooks/brand-hex-commit-gate.sh`
-(`_committed_content` → `cat`/`git show`, fails closed),
-`.claude/hooks/skill-security-scan.sh` and `.claude/hooks/skill-context-queries.sh`
-(`git diff` / `awk`), `scripts/update-ci-required-ruleset.sh` and
-`scripts/create-ci-required-ruleset.sh` (`base64 -d`, fails closed),
-`scripts/watch-live-verify-pass.sh` (`gh | jq`),
-`plugins/soleur/skills/review/scripts/emit-review-trailer.sh` (`git log`).
+Live set from the sweep (Phase 1 finalises): `.claude/hooks/pre-merge-rebase.sh`,
+`.claude/hooks/brand-hex-commit-gate.sh`, `.claude/hooks/skill-security-scan.sh`,
+`.claude/hooks/skill-context-queries.sh`, `scripts/update-ci-required-ruleset.sh`,
+`scripts/create-ci-required-ruleset.sh`, `scripts/watch-live-verify-pass.sh`,
+`plugins/soleur/skills/review/scripts/emit-review-trailer.sh`.
 
-Also convert the 7 builtin-producer sites in `iac-plan-write-guard.sh` — inert today (R1),
-but wrong-shaped, and the file is the subject of the issue.
+Also convert the 7 builtin sites in `iac-plan-write-guard.sh` (inert per R1, but wrong-shaped
+and the file is the issue's subject) — satisfies AC-A1. **Surrounding control flow stays
+unchanged at every site**; each touched hook's existing test suite must pass untouched.
 
-**Every converted site keeps its surrounding control flow byte-for-byte.** A herestring swap
-must not alter `&&` chaining, `!` inversion, or exit paths.
+### Phase 4 — Regression tests (AC-A2, AC-A4..A6)
 
-### Phase 4 — Regression tests (satisfies AC-A2)
+- **T1** (the AC's test) — ≥64 KB body, violation near the top → `deny` on every one of ≥30
+  runs. *Annotate: issue-requested; passes pre- and post-fix per R1/R2, so it verifies
+  no-regression, not the fix.*
+- **T2** — same body + ack → `allow` on ≥30 runs.
+- **T3** (RED anchor, from Phase 1.5) — `Edit`, violation in `new_string`, ack elsewhere in the
+  file → `allow`.
+- **T4** — MultiEdit carrying a violation → `deny` (fails before 2a, passes after).
+- **T5** (C4/R8 vacuity guard) — assert `grep` resolves to a GNU grep **binary**, not a shell
+  function; abort loudly otherwise.
+- **T6** — producer-class behaviour: `cat | grep -q` can fail, `echo | grep -q` does not. This
+  is the single executable home for that measurement (Phase 0.1 is the pre-flight; do not also
+  restate it as prose elsewhere).
 
-In `.claude/hooks/iac-plan-write-guard.test.sh`:
+### Phase 5 — Record and nudge (reduced from v1 per PR-8)
 
-- **T1 (the AC's test):** drive the guard with a large body (≥64 KB) whose violation sits near
-  the top; assert `deny` on **every** iteration of **≥30** runs. Non-determinism means one run
-  proves nothing.
-- **T2:** same body plus the ack → `allow` on ≥30 runs.
-- **T3 (Edit scope, the real bug):** `Edit` whose `new_string` carries a violation while the
-  ack lives elsewhere in the file → `allow`. This test **fails before Phase 2 and passes
-  after**; it is the RED→GREEN anchor.
-- **T4 (Edit fail-open corollary):** file already contains a violation; `Edit` touches an
-  unrelated region → `deny`.
-- **T5 (C4/R8 — vacuity guard):** the harness asserts `command -v grep` resolves to a GNU grep
-  and **not** to a shell function, aborting loudly otherwise. Without T5 the suite passes for
-  the wrong reason inside an agent session.
-
-Add a producer-class unit test next to the Phase 5 lint proving `cat | grep -q` can fail and
-`echo | grep -q` does not — this is the evidence that keeps the lint's allowlist honest.
-
-### Phase 5 — Mechanical enforcement (the self-reporting piece)
-
-The rule already exists in `plugins/soleur/skills/work/SKILL.md`; nothing enforces it, which
-is why ~95 sites accumulated. Add a lint (registered in `scripts/test-all.sh`) that fails on
-any **external-producer** `| grep -q` under `pipefail` not present in a checked-in allowlist.
-
-- Seed the allowlist from Phase 1 **minus** everything Phase 3 fixes, so the count can only
-  shrink. Per the guard-surface Sharp Edge, the current match count is non-zero and is
-  therefore grandfathered explicitly rather than pretending enforcement is future-only.
-- The allowlist file carries one line per site with its recorded failure direction — reading
-  it *is* the sweep record, so the AC-A3 artifact cannot rot away from the code.
-- Correct the `work/SKILL.md` rule text to state the producer-class distinction (R5): the
-  current wording implies all piped `grep -q` is equally dangerous, which sends reviewers
-  hunting inert builtin sites while live external ones pass unremarked.
+- Commit `sweep.md` as the AC-A3 record.
+- Add a **minimal assertion** to the existing `scripts/test-all.sh` surface that the
+  external-producer count does not grow beyond the recorded baseline. No new script, no
+  bespoke allowlist format.
+- Correct the `work/SKILL.md` rule text to name the **producer-class distinction** (R5) — the
+  current wording sends reviewers hunting inert builtin sites while live external ones pass.
+- **Deferred:** the full lint + per-site allowlist, as its own issue.
 
 ---
 
-### Part B — issue #6991
+### Part B — issue #6991 — order is 8 → 6 → 7 (PR-7)
 
-### Phase 6 — A reaper that can see a count-shaped leak (AC-B1)
+### Phase 8 — Log sink, telemetry, return contract (AC-B5..B8) — **first**
 
-**Design first, per the issue's instruction.** The reviewed direction (per-run private scratch
-roots reaped by their owner) is **not available**: `scratch-root.sh` has zero adopters (R9)
-and 84.5% of `mktemp` sites emit the default template (R10). Prefix-guessing is exactly what
-the issue forbids.
+Phase 6 consumes `guard_log()` and the usage seam, and shipping 6 first actively regresses
+production (PR-6/PR-7).
 
-**D1 — the resolving insight: safety was never coming from the name or the size.** The
-existing reaper already clears four independent gates — ownership (own uid), **recursive** age
-(nothing anywhere in the tree touched within the floor), liveness (no process cwd and no open
-fd inside it, via the single `/proc` pass), and a protected-path denylist. `SCRATCH_MIN_MB` is
-**not a safety gate**; it is a *cost* gate that bounds how many trees `du` must walk. Removing
-it therefore costs no safety at all — and it is the sole reason the reaper could not see
-15,000 × 372-byte files.
-
-So: add a **pressure-tiered second arm** keyed on measured pressure, not on names.
-
-- **Normal tier** — unchanged (100 MB / 24 h). Cheap, conservative, always on.
-- **Pressure tier** — engages only when `/tmp` block usage **or inode usage** (`df -i`, the
-  count-shaped signal the issue asks for) crosses a high-water mark. It drops the size floor
-  entirely and lowers the age floor to a shorter window, while keeping ownership, recursive
-  age, liveness, and the protected denylist **fully intact**.
-- **Cheaper, not costlier:** with no size floor the pressure arm skips `du` altogether, so it
-  avoids the very walk that made the size gate expensive. It is `find` + the existing `/proc`
-  set lookup.
-- It must skip the guard's **own** two `mktemp -t tmpfs-guard-*` working files.
-
-**Defense-relaxation ceilings** (required whenever a load-bearing floor is relaxed — the
-lowered age floor is one). The relaxation is bounded by, and the implementation must encode,
-all four: (i) it runs *only* under measured pressure, never on a healthy mount; (ii) ownership
-and liveness are never relaxed, so live work and other users' files remain untouchable;
-(iii) a per-run cap on entries reaped, so a mis-tuned floor cannot empty `/tmp` in one tick;
-(iv) every pressure-tier reap is logged individually, so the arm's behaviour is auditable
-rather than inferred.
-
-Deletion keeps the existing `find … -delete` idiom (never `rm -rf`) — a survivor can be an
-abandoned `.git`-bearing checkout.
-
-### Phase 7 — An alarm that reaches a human (AC-B2)
-
-**The specified route is unavailable** (R11): no Vector locally, tag not allowlisted, no local
-Sentry DSN, `doppler` off cron's `PATH`, and `gh` blocked by keyring auth under cron. Naming
-this honestly is required — prescribing a `SOLEUR_*` → Better Stack marker here would produce
-a *second* alarm that reports success while reaching no one, which is the exact failure under
-repair.
-
-**Route the alarm to the surface that provably reaches the operator: the next agent session.**
-
-- The guard appends to a durable, size-capped alarm state file at a fixed path (outside `/tmp`
-  — an alarm store on the filesystem being reaped is self-defeating), recording timestamp,
-  usage %, inode %, and reap counts.
-- A `SessionStart` hook surfaces a one-line summary ("tmpfs-guard alarmed N times since
-  `<ts>`; `/tmp` at X%") into session context. This path needs **no network, no credentials,
-  and no `PATH` assumptions** — it cannot fail the way the current one does, and the operator
-  works through agent sessions daily.
-- **Remote escalation happens from a context where credentials exist.** When the surfaced
-  count crosses a threshold, the agent files a deduped `action-required` GitHub issue — the
-  repo's established alarm-dedupe pattern, executed where `gh` actually authenticates. This
-  keeps a remote artifact without inventing a cron-time egress path (C2).
-- Retire `notify-send` from the alarm path, or keep it strictly as a best-effort extra with a
-  comment recording that it is a no-op under cron. It must never again be counted as a channel.
-
-### Phase 8 — Log sink, telemetry, and the arithmetic bug (AC-B3, AC-B4)
-
-One change fixes three of the four defects.
-
-- **`guard_log()` wrapper + `TMPFS_GUARD_LOG_SINK` seam** (default `logger`), replacing all
-  three hard-coded `logger -t tmpfs-guard` sites. The test harness points it at a
-  fixture-scoped file under its own `TESTROOT`, so the suite stops writing to the operator's
-  journal (AC-B3). This matches the existing `TMPFS_GUARD_*` seam naming and is the *only*
-  seam class not already present — every current seam is a path or a numeric floor, and
+- **`guard_log()` + `TMPFS_GUARD_LOG_SINK` seam** (default `logger`), replacing all three
+  hard-coded `logger -t tmpfs-guard` sites. Tests point it at a fixture-scoped file under their
+  own `TESTROOT`, so the suite stops writing to the operator's journal (AC-B5). This is the only
+  seam class not already present — every existing seam is a path or a numeric floor, and
   `logger` writes to a socket no path seam can redirect.
-- **`echo` → `guard_log` for per-entry reap detail** (both the live and `DRY_RUN` lines). The
-  journal gains the per-entry `reaping <path> (<N> MB)` lines that several docs already claim
-  exist (AC-B4a, R13).
-- **The multi-line arithmetic bug falls out for free** (AC-B4b): once the human-readable lines
-  route to the sink instead of stdout, `reap_scratch_entries` emits **only the integer** on
-  stdout, so `reaped="$(…)"` captures a clean number and `[[ "$reaped" -eq 0 ]]` stops raising
-  a syntax error every 5 minutes. Add a defensive numeric sanitize at the consumer anyway — a
-  future stray `echo` must not silently re-break the high-usage branch. Apply the same
-  sanitize to `cleaned`, which is safe today only by luck.
-- Add a **per-run liveness line** so a healthy run is distinguishable from a dead cron. Today
-  the guard logs nothing at all unless it reaps or alarms, so "silent" and "not running" are
-  indistinguishable — the property that let this rot unnoticed.
-- **Hermeticity:** the suite currently runs `df` against a `TESTROOT` that lives on the real
-  `/tmp`, so it branches on live production state. Point the usage probe at a seam so tests
-  are deterministic.
+- **`echo` → `guard_log`** for per-entry reap detail (live and `DRY_RUN`) — the journal gains the
+  `reaping <path> (<N> MB)` lines several docs already claim exist (AC-B4a, R13).
+- **Return contract → globals, not stdout** (PR-6). `reap_scratch_entries` and
+  `reap_output_files` set `REAP_COUNT` / `REAP_MB` and `return 0`; `main` reads the globals and
+  drops the command substitution entirely. This removes the subshell, the parsing, and the need
+  for a sanitize — a stray `echo` can never again break arithmetic. If any sanitize survives it
+  must **log loudly**, never silently default to 0.
+- **Severity note for the implementer:** the current bug is a **hard abort**, not a warning —
+  `set -u` makes the multi-line arithmetic fatal, `main` exits 1, and the high-usage alarm
+  branch never runs, precisely on a high-usage run that reaped something.
+- **Per-run liveness line** so "silent" and "not running" become distinguishable.
+- **Hermetic usage probe** — the suite currently runs `df` against a `TESTROOT` on the real
+  `/tmp` and so branches on live production state; put it behind a seam.
+- **`flock`** — the guard has none (PR-3); overlapping runs would race each other's deletes.
 
-### Phase 9 — Correct the falsified documentation (R13)
+### Phase 6 — A reaper that can see a count-shaped leak, safely (AC-B1..B3)
 
-Ordered by blast radius:
+**Design first.** The reviewed direction (per-run private scratch roots) is unavailable (R9),
+and prefix signatures are forbidden and unviable (R10). v1's answer — drop the size floor — is
+**refuted** (PR-1). The corrected design has a hard prerequisite.
 
-1. `plugins/soleur/skills/work/SKILL.md` — the claim that the cron reaper "bounds the
-   abandoned-scratch growth" is **loaded into every agent session** and is false for the
-   count-shaped class. Highest priority.
-2. `knowledge-base/project/plans/2026-07-27-fix-tmp-tmpfs-mktemp-cleanup-leak-plan.md`
-   §Observability — five false claims, including an acceptance criterion that greps for a
-   string `logger` never writes and therefore can never pass. Mark corrected in place;
-   after Phase 8 most of these become *true*, so update rather than delete.
-3. `knowledge-base/project/plans/2026-07-22-fix-testall-worktree-contention-plan.md`
-   §alert_route — the named backstop is the 94-times-unheard branch.
+**6a — Fix the liveness blindness FIRST. Nothing else in Phase 6 may land before this.**
+`_build_inuse_top` sees only paths reachable by `readlink` on `/proc/<pid>/fd/*`, and a
+unix-domain socket fd readlinks to `socket:[inode]` — so socket-held directories are invisible,
+and `fuser` is skipped for directories entirely. Three changes:
 
-### Phase 10 — Learning capture
+1. Parse **`/proc/net/unix`** (which carries the filesystem path) into the same `_INUSE_TOP`
+   map. One file read — cheaper than the existing fd walk.
+2. Run `fuser` on directories too (drop the `[[ ! -d ]]` gate).
+3. Widen the protected denylist to the non-scratch classes empirically present in `/tmp`:
+   `com.google.Chrome.*`, `.org.chromium.*`, `dbus-*`, `pulse-*`, `.mount_*`, `tmux-*`, `ssh-*`,
+   `.X*-lock`. Re-review against a live `/tmp` listing rather than assuming the current
+   9-entry list is complete.
 
-One learning file. The durable, transferable findings are:
+Also correct the SAFETY header's "no open file handle" claim, which is currently overstated.
 
-- **The producer-class discriminator**: `pipefail` + `grep -q` is a live race only with an
-  **external** producer; bash builtins are immune. This reframes an entire documented defect
-  class and is not stated anywhere in the repo today.
-- **The race is not size-gated** — it fires at 1 KB. Any "the input is small, it's fine"
-  triage is wrong.
-- **A `ugrep` shim in agent sessions hides the bug from manual testing** — a test-methodology
-  trap that likely explains the class's survival, and a reason to pin binaries in guard tests.
-- **A hook that scans `new_string` scans a fragment, not a document** — generalises to every
-  PreToolUse guard on `Edit`.
-- **"Reviewed direction" is a hypothesis about the codebase, not a fact.** Two of #6991's were
-  blocked by measurable repo state (zero adopters; no local Vector).
+**6b — Reduce the floor; do not remove it.** Keep a small size floor (order 1 MB) under
+pressure. Sockets and lockfiles are ~0 bytes, so even a tiny floor preserves the accidental
+protection PR-1 exposed while still catching the 15,000 × 372-byte class. Removing it outright
+is not justified by any acceptance criterion.
+
+**6c — Trigger on the count-shaped signal directly** (PR-4). `df -i` on tmpfs is dead as a
+trigger (7% at 17,898 entries). Use the **top-level entry count** under `$TMP_ROOT` — one
+`find | wc -l`. Pin the threshold against the measured current state so engagement is proven,
+not assumed.
+
+**6d — Keep work batched** (PR-3/C5). Retain the batched `du --files0-from` (it is ~2.8 s at
+full scale and it supplies the `size_mb` that the per-entry log lines and `reaped_mb` accounting
+require — v1's design silently lost both). Batch the recursive-age check the same way: one
+`find "$TMP_ROOT" -mindepth 1 -mmin -N -printf '%H\n' | sort -u` pass yields the fresh-tree set
+in one process instead of ~17,900 forks.
+
+**6e — Ceilings on the age relaxation.** The lowered age floor is the only genuine defense
+relaxation; it is bounded by: (i) it runs only under measured count pressure; (ii) ownership and
+liveness are never relaxed — **and 6a is what makes that claim true**; (iii) a per-run cap on
+entries reaped; (iv) every pressure reap is logged individually via `guard_log`.
+
+Deletion keeps `find … -delete` (never `rm -rf`) — a survivor may be a `.git`-bearing checkout.
+
+### Phase 7 — An alarm that reaches a human (AC-B4)
+
+The specified route is unavailable (R11). Naming that honestly is required: prescribing a
+`SOLEUR_*` → Better Stack marker here would produce a *second* alarm reaching no one.
+
+- Append to a durable, size-capped alarm state file at a fixed path **outside `/tmp`** (an alarm
+  store on the mount being reaped is self-defeating): timestamp, usage %, entry count, reap counts.
+- Surface a one-line summary at `SessionStart` by extending the **existing** hook. No network, no
+  credentials, no `PATH` assumptions. **Emit nothing when the state file records zero alarms** —
+  a healthy machine must not tax every session's context.
+- **Delete `notify-send`** from all three call sites. It is a no-op under cron and keeping it as
+  a "best-effort extra" is how the current dead channel came to exist.
+- **Not taken (PR-9):** threshold-triggered agent-filed GitHub issues. No named threshold, no
+  dedupe key, no code, no AC — agent behaviour dressed as a channel.
+
+### Phase 9 — Correct the session-loaded doc claim (AC-B10)
+
+`plugins/soleur/skills/work/SKILL.md` claims the cron reaper "bounds the abandoned-scratch
+growth". It is **loaded into every agent session** and is false for the count-shaped class.
+
+*Cut at review as ceremony:* corrections to the merged 2026-07-27 and 2026-07-22 plan documents.
+Historical plans record what was planned; nobody re-runs their ACs.
+
+### Phase 10 — Verify, capture, ship
+
+Full suite; learning file; deferred tracking issues; PR body closing both.
 
 ---
 
 ## Files to Edit
 
-**Part A**
-- `.claude/hooks/iac-plan-write-guard.sh` — Edit-scope reconstruction (Phase 2); 7 herestring
-  conversions (Phase 3); header-comment correction.
-- `.claude/hooks/iac-plan-write-guard.test.sh` — T1–T5 (Phase 4).
-- External-producer sites finalised by Phase 1, currently: `.claude/hooks/pre-merge-rebase.sh`,
-  `.claude/hooks/brand-hex-commit-gate.sh`, `.claude/hooks/skill-security-scan.sh`,
-  `.claude/hooks/skill-context-queries.sh`, `scripts/update-ci-required-ruleset.sh`,
-  `scripts/create-ci-required-ruleset.sh`, `scripts/watch-live-verify-pass.sh`,
-  `plugins/soleur/skills/review/scripts/emit-review-trailer.sh`.
-- `plugins/soleur/skills/work/SKILL.md` — producer-class correction to the existing rule.
-- `scripts/test-all.sh` — register the Phase 5 lint (and, opportunistically,
-  `scripts/lib/scratch-root.test.sh`, which is currently registered nowhere).
+**Part A** — `.claude/hooks/iac-plan-write-guard.sh` (2a/2b + 7 herestrings + header);
+`.claude/settings.json` (MultiEdit matcher); `.claude/hooks/iac-plan-write-guard.test.sh`
+(T1–T6); the eight external-producer sites listed in Phase 3;
+`plugins/soleur/skills/work/SKILL.md` (producer-class correction); `scripts/test-all.sh`
+(baseline assertion).
 
-**Part B**
-- `scripts/tmpfs-guard.sh` — Phases 6, 7, 8.
-- `scripts/tmpfs-guard.test.sh` — sink seam, hermetic usage probe, pressure-tier arms.
-- `.claude/hooks/` — SessionStart alarm surfacing (Phase 7); extend the existing SessionStart
-  hook rather than adding a new one if it already carries context injection.
-- `plugins/soleur/skills/work/SKILL.md`,
-  `knowledge-base/project/plans/2026-07-27-fix-tmp-tmpfs-mktemp-cleanup-leak-plan.md`,
-  `knowledge-base/project/plans/2026-07-22-fix-testall-worktree-contention-plan.md` — Phase 9.
+**Part B** — `scripts/tmpfs-guard.sh` (Phases 8, 6, 7); `scripts/tmpfs-guard.test.sh`;
+the existing SessionStart hook under `.claude/hooks/`;
+`plugins/soleur/skills/work/SKILL.md` (Phase 9 — note both parts touch this file).
 
 ## Files to Create
 
-- `scripts/lint-piped-grep-q.sh` (or equivalent) + its allowlist — Phase 5.
-- `knowledge-base/project/specs/feat-one-shot-6992-iac-guard-sigpipe-fail-open/sweep.md` —
-  Phase 1 record.
-- One learning file under `knowledge-base/project/learnings/` — Phase 10 (directory + topic
-  only; the author picks the date at write time).
+- `knowledge-base/project/specs/feat-one-shot-6992-iac-guard-sigpipe-fail-open/sweep.md`
+- One learning file under `knowledge-base/project/learnings/` (directory + topic only; the
+  author picks the date at write time).
 
 ---
 
@@ -428,89 +413,78 @@ One learning file. The durable, transferable findings are:
 
 **Part A — #6992**
 - [ ] **AC-A1** No check in `iac-plan-write-guard.sh` consumes `$content` through a pipe into
-      `grep -q`. Verify: the sweep pattern returns 0 hits for that file.
-- [ ] **AC-A2** A regression test drives the guard with a ≥64 KB body whose match is near the
-      top and asserts the deny fires on **every one of ≥30** runs.
-- [ ] **AC-A3** Sibling `| grep -q` sites are swept and recorded with **producer class and
-      failure direction per site**, in a checked-in artifact that is also the lint's allowlist
-      (so it cannot rot). Sweep spans `.claude/hooks/`, `scripts/`, `plugins/`.
-- [ ] **AC-A4** T3 (Edit + ack-elsewhere → `allow`) fails on the pre-Phase-2 code and passes
-      after. Demonstrated by running it at both commits.
-- [ ] **AC-A5** T4 (pre-existing violation + unrelated Edit → `deny`) passes.
-- [ ] **AC-A6** T5 aborts loudly when `grep` resolves to a shell function rather than a GNU
-      grep binary — the suite cannot pass vacuously.
-- [ ] **AC-A7** Every external-producer site listed in Phase 3 is converted, with surrounding
-      control flow unchanged (verify by reading the diff, not by grep count alone).
-- [ ] **AC-A8** The Phase 5 lint fails on a deliberately introduced external-producer
-      `| grep -q` and passes on the post-fix tree.
+      `grep -q`; the sweep pattern returns 0 hits for that file.
+- [ ] **AC-A2** A regression test drives the guard with a ≥64 KB body, match near the top, and
+      asserts deny on **every one of ≥30** runs. *(Issue-requested; verifies no-regression, not
+      the fix — see R1/R2.)*
+- [ ] **AC-A3** `sweep.md` records file:line, **producer class**, and failure direction for every
+      hit across `.claude/hooks/`, `scripts/`, `plugins/`.
+- [ ] **AC-A4** T3 fails at the pre-Phase-2 commit and passes after, demonstrated at both.
+- [ ] **AC-A5** A `MultiEdit` payload carrying a violation is denied; the hook's matcher in
+      `.claude/settings.json` includes `MultiEdit`.
+- [ ] **AC-A6** T5 aborts loudly when `grep` resolves to a shell function rather than a GNU grep
+      binary — the suite cannot pass vacuously.
+- [ ] **AC-A7** Every external-producer site in Phase 3 is converted, **and each touched hook's
+      existing test suite passes unchanged** (the tests encode the control flow).
+- [ ] **AC-A8** The `test-all.sh` baseline assertion fails when a new external-producer
+      `| grep -q` is introduced.
 
 **Part B — #6991**
-- [ ] **AC-B1** The reaper acts on a count/inode-pressure signal, not size alone, and keys on
-      **no name-derived signature** — grep the diff for `tmp.` prefix logic and find none.
-      Ownership, recursive age, liveness, and the protected denylist are all still enforced on
-      the pressure path.
-- [ ] **AC-B2** The relaxation ceilings (i)–(iv) of Phase 6 are each present in code.
-- [ ] **AC-B3** A test proves a count-shaped leak (many tiny files, no entry near the old size
-      floor) is reaped under simulated pressure and **not** reaped without pressure.
-- [ ] **AC-B4** The high-usage alarm reaches a surface that requires no network, credentials,
-      or non-default `PATH`; a test asserts the alarm state file is written and the SessionStart
-      surfacing renders it.
-- [ ] **AC-B5** `tmpfs-guard.test.sh` writes nothing to the production journal. Verify: run the
-      suite, then confirm `journalctl -t tmpfs-guard` gained no lines during the run.
-- [ ] **AC-B6** Per-entry reap detail reaches the log sink (not bare stdout), and
-      `reap_scratch_entries` emits **only** an integer on stdout.
-- [ ] **AC-B7** No arithmetic syntax error on a run that reaps ≥1 entry — assert clean stderr.
-- [ ] **AC-B8** A healthy run emits a liveness line, so "silent" and "not running" are
-      distinguishable.
-- [ ] **AC-B9** `scripts/tmpfs-guard.sh` remains a drop-in at its existing path; the PR
-      prescribes **no** crontab change (C1).
-- [ ] **AC-B10** The three falsified doc claims of Phase 9 are corrected, `work/SKILL.md`
-      first.
+- [ ] **AC-B1** The reaper engages on a **top-level entry-count** signal (not `df -i`, which
+      measures 7% while the leak is present), and its behaviour is proven by AC-B3 rather than
+      by grepping for absent prefix logic.
+- [ ] **AC-B2** Liveness sees socket-held directories: a fixture directory held open only by a
+      unix-domain socket is **not** reaped, in both normal and pressure modes. *(This is the
+      PR-1 regression test; without it Phase 6 is unsafe.)*
+- [ ] **AC-B3** A count-shaped leak (many tiny files, none near the old size floor) is reaped
+      under simulated pressure and **not** reaped without it; a live (open-fd) tree, a
+      socket-held tree, and a foreign-uid tree are never reaped in either mode; the per-run cap
+      holds.
+- [ ] **AC-B4** A pressure run over a ≥10,000-entry fixture completes **well inside the
+      5-minute cron interval**, with the measured bound recorded. *(PR-3.)*
+- [ ] **AC-B5** `tmpfs-guard.test.sh` writes nothing to the production journal: run the suite,
+      confirm `journalctl -t tmpfs-guard` gained no lines.
+- [ ] **AC-B6** Per-entry reap detail reaches the log sink, and the reaper functions return their
+      count via globals — no command substitution remains in `main`.
+- [ ] **AC-B7** On a run that reaps ≥1 entry with usage ≥ 70%, `main` exits 0 **and the
+      high-usage branch is evaluated** (today it hard-aborts under `set -u`).
+- [ ] **AC-B8** A healthy run emits a liveness line; a run with zero alarms injects nothing into
+      SessionStart context.
+- [ ] **AC-B9** The alarm state file is written on a pressure run, the size cap holds, and the
+      SessionStart surfacing renders the summary.
+- [ ] **AC-B10** `work/SKILL.md` no longer claims the cron reaper bounds abandoned-scratch growth.
 
 **Cross-cutting**
 - [ ] **AC-X1** PR body contains `Closes #6992` and `Closes #6991`.
 - [ ] **AC-X2** `bash scripts/test-all.sh` passes.
-- [ ] **AC-X3** Phase 0 probe outputs are pasted into the spec evidence block, so every
-      Reconciliation verdict is re-verifiable from the PR alone.
 
 ### Post-merge (operator)
 
-None. Both targets are drop-in replacements at existing paths (C1); the tmpfs-guard cron entry
-continues to invoke the same path and needs no re-installation. No infrastructure, no secret,
-no vendor action.
+None. Both targets are drop-in replacements at existing paths (C1); the cron entry invokes the
+same path and needs no re-installation. No infrastructure, secret, or vendor action.
 
 ---
 
 ## Open Code-Review Overlap
 
-Checked against open `code-review`-labelled issues for the files in "Files to Edit".
-
-**None.** No open code-review issue names `iac-plan-write-guard.sh`, `tmpfs-guard.sh`, or the
-external-producer sites in Phase 3. The two governing issues (#6992, #6991) are `type/bug`,
-not `code-review`, and are both closed by this PR. Recorded so the next planner can see the
-check ran.
+**None.** No open `code-review`-labelled issue names `iac-plan-write-guard.sh`,
+`tmpfs-guard.sh`, or the Phase 3 sites. The two governing issues are `type/bug`. Recorded so the
+next planner can see the check ran.
 
 ---
 
 ## Infrastructure (IaC)
 
-**Not applicable — no infrastructure is introduced, changed, or provisioned.**
+**Not applicable — no infrastructure is introduced, changed, or provisioned.** Both targets are
+existing local developer tooling; no server, systemd unit, DNS record, cert, secret, firewall
+rule, vendor account, or webhook is created or modified, and no Terraform root is touched.
 
-Both targets are existing local developer tooling. No server, systemd unit, DNS record, TLS
-cert, secret, firewall rule, vendor account, or monitoring webhook is created or modified. No
-Terraform root is touched.
+The Phase 2.8 detector fires on this document only because it must **quote the detection regexes
+of the guard it repairs**. The ack at the top records that deliberate, audited opt-out.
 
-The Phase 2.8 detector fires on this document only because the plan must **quote the detection
-regexes of the guard it repairs** — the operator-SSH, systemd, secret-write, vendor-dashboard,
-and crontab literals appear exclusively as citations of patterns under repair. The ack comment
-at the top of this file records that deliberate, audited opt-out.
-
-Two related notes:
-
-- **No crontab change is prescribed** (C1/R12). The existing cron entry invokes
-  `scripts/tmpfs-guard.sh`; the fix replaces that file's contents in place.
-- **No new egress path** is created from the operator's machine (C2/R11), which keeps this
-  change on the safe side of the standing external-observability boundary.
+- **No crontab change is prescribed** (C1/R12) — the fix replaces the file's contents in place.
+- **No new egress path** is created (C2/R11), keeping this on the safe side of the standing
+  external-observability boundary.
 
 ---
 
@@ -521,25 +495,34 @@ liveness_signal:
   what: "tmpfs-guard emits a per-run line via guard_log on EVERY run, healthy or not (Phase 8)"
   cadence: "every 5 minutes, unchanged"
   alert_target: "durable alarm state file -> SessionStart context injection -> operator's next agent session"
-  configured_in: "scripts/tmpfs-guard.sh (guard_log + alarm state file); .claude/hooks/ SessionStart surfacing"
+  configured_in: "scripts/tmpfs-guard.sh (guard_log + alarm state file); the existing SessionStart hook under .claude/hooks/"
 
 error_reporting:
-  destination: "alarm state file read at SessionStart; escalated to a deduped action-required GitHub issue by the agent, from a context where gh authenticates"
+  destination: "alarm state file, read and rendered at SessionStart"
   fail_loud: true
-  note: "Deliberately NOT logger-only and NOT notify-send. Measured (R11): Vector is absent on this host, tmpfs-guard is not in the vector.toml tag allowlist, no local Sentry DSN exists, doppler is off cron PATH, and gh keyring auth does not survive cron. The prior design counted two channels that reached nobody 94 times in 14 days; this one depends on no network, no credentials, and no PATH assumption."
+  note: "Deliberately NOT logger-only and NOT notify-send. Measured (R11): Vector is absent on this host, tmpfs-guard is not in the vector.toml tag allowlist, no local Sentry DSN exists, doppler is off cron PATH, and gh keyring auth does not survive cron. The prior design counted two channels that reached nobody 94 times in 14 days. A threshold-triggered GitHub issue was considered and cut (PR-9) because it was agent behaviour with no code, threshold, or test behind it."
 
 failure_modes:
   - mode: "cron entry stops firing entirely"
-    detection: "the per-run liveness line stops appearing; its absence is now meaningful because a healthy run always emits one (Phase 8)"
-    alert_route: "SessionStart surfacing reports the staleness of the alarm state file"
+    detection: "the per-run liveness line stops appearing; its absence is meaningful now that a healthy run always emits one (Phase 8)"
+    alert_route: "SessionStart surfacing reports staleness of the alarm state file"
   - mode: "/tmp fills with a count-shaped leak the reaper cannot reclaim"
-    detection: "pressure tier engages on inode/block usage and logs per-entry reaps; if it reaps nothing while pressure persists, the alarm state file records the streak"
-    alert_route: "SessionStart surfacing -> agent files a deduped action-required issue"
+    detection: "entry-count pressure trigger engages and logs per-entry reaps; a persistent streak with zero reaps is recorded in the alarm state file"
+    alert_route: "SessionStart surfacing"
+  - mode: "the reaper deletes a live socket-held directory"
+    detection: "AC-B2 regression test; /proc/net/unix liveness pass plus fuser-on-directories (Phase 6a)"
+    alert_route: "CI failure on scripts/test-all.sh"
+  - mode: "a pressure run overruns the 5-minute cron interval and overlapping runs race deletes"
+    detection: "AC-B4 wall-clock bound on a >=10,000-entry fixture; flock makes overlap impossible rather than merely unlikely"
+    alert_route: "CI failure on scripts/test-all.sh"
+  - mode: "a plan bypasses the IaC guard entirely via MultiEdit"
+    detection: "AC-A5 asserts both the settings.json matcher and a denied MultiEdit payload"
+    alert_route: "CI failure on scripts/test-all.sh"
   - mode: "iac-plan-write-guard denies a valid acked plan (the #6992 symptom)"
-    detection: "T2/T3 regression tests in CI; the deny reason now distinguishes a full scan from a degraded new_string-only scan (Phase 2)"
+    detection: "T2/T3 regression tests"
     alert_route: "CI failure on scripts/test-all.sh"
   - mode: "a new external-producer `| grep -q` lands and silently disables a gate"
-    detection: "Phase 5 lint over the whole tree, with a shrink-only allowlist"
+    detection: "the test-all.sh baseline assertion over the recorded sweep count"
     alert_route: "CI failure on scripts/test-all.sh"
   - mode: "the guard test suite passes vacuously because grep resolved to the ugrep shim"
     detection: "T5 asserts the resolved grep is a GNU grep binary, not a shell function"
@@ -550,43 +533,54 @@ logs:
   retention: "journal per host defaults; alarm state file is size-capped by the guard"
 
 discoverability_test:
-  command: "bash scripts/tmpfs-guard.test.sh && bash .claude/hooks/iac-plan-write-guard.test.sh && bash scripts/lint-piped-grep-q.sh"
-  expected_output: "all suites pass; journalctl -t tmpfs-guard gains no lines attributable to the test run; the lint reports zero non-allowlisted external-producer sites"
+  command: "bash scripts/tmpfs-guard.test.sh && bash .claude/hooks/iac-plan-write-guard.test.sh && bash scripts/test-all.sh"
+  expected_output: "all suites pass; journalctl -t tmpfs-guard gains no lines attributable to the test run; the external-producer baseline assertion reports no growth"
 ```
 
-No SSH appears in any verification command. Both surfaces are local and directly inspectable
-by the operator's agent.
+No SSH in any verification command. Both surfaces are local and directly inspectable.
 
 ---
 
 ## Encryption Posture
 
-**Not applicable.** No persistent data store (volume, bucket, table, queue, cache, backup
-target, log sink beyond the existing local journal) and no new cross-component or network
-connection is introduced. The alarm state file is local, contains only usage percentages,
-timestamps, and counts, and holds no user or secret data. Detection patterns (`.tf`,
-`supabase/migrations/*.sql`, `cloud-init*.yaml`, `docker-compose*.yaml`) match nothing in
-"Files to Edit".
+**Not applicable — no persistent data store and no cross-component or network connection is
+introduced.** Detection patterns (`.tf`, `supabase/migrations/*.sql`, `cloud-init*.yaml`,
+`docker-compose*.yaml`) match nothing in "Files to Edit".
+
+The one new artifact is the local alarm state file:
+
+```yaml
+at_rest:
+  - store: "tmpfs-guard alarm state file (local, operator workstation)"
+    mechanism: "none — plaintext on the operator's existing local filesystem; inherits whatever full-disk encryption the workstation already has"
+    evidence: "content is limited to timestamps, usage percentages, entry counts, and reap counts (Phase 7)"
+    defends_against: "nothing additional; it is not a security control"
+    does_not_defend: "local disk theft or any local process reading the file — both already true of every other file on the workstation, and the file holds no user data, no secret, and no content"
+    disclosed_as: "not disclosed — developer-workstation telemetry, never transmitted and never leaving the machine"
+    live_verification: "read the file; confirm it contains only numeric counters and timestamps"
+in_transit:
+  - connection: "none — the file is never transmitted"
+    tls: "n/a"
+    cert_verification: "n/a"
+    does_not_defend: "n/a — there is no connection; the plan explicitly declines to create one (C2/R11)"
+    disclosed_as: "n/a"
+```
 
 ---
 
 ## Architecture Decision (ADR/C4)
 
-**No ADR required.** This plan makes no architectural decision: no ownership or tenancy
-boundary moves, no new substrate or integration pattern is introduced, no resolver/dispatch/
-trust boundary changes, and no existing ADR is reversed or extended. Both changes are bug
-fixes on existing local surfaces.
+**No ADR required.** No ownership or tenancy boundary moves, no new substrate or integration
+pattern, no resolver/dispatch/trust boundary change, and no existing ADR reversed or extended.
+Both changes are bug fixes on existing local surfaces.
 
-**C4 views — no impact.** All three model files (`model.c4`, `views.c4`, `spec.c4`) were
-reviewed rather than keyword-grepped, per the completeness mandate. Enumerated for this change:
-(a) **external human actors** — none; neither guard receives input from or emits output to any
-party outside the operator, and no correspondent, reviewer, or recipient is added;
-(b) **external systems/vendors** — none added; the plan explicitly *declines* to add a
-Better Stack or Sentry edge from the laptop (R11/C2), so no new vendor boundary is crossed;
-(c) **containers/data stores** — none; the local alarm state file is developer-workstation
-scratch, not a modelled container, and the operator laptop is not a modelled element;
-(d) **actor↔surface access relationships** — unchanged; no sharing, ownership, or permission
-edge is altered. No element description is falsified by this change.
+**C4 views — no impact.** All three model files (`model.c4`, `views.c4`, `spec.c4`) were reviewed
+rather than keyword-grepped. Enumerated: (a) **external human actors** — none added; neither
+guard receives from or emits to any party outside the operator; (b) **external systems/vendors**
+— none added, and the plan explicitly *declines* a Better Stack or Sentry edge from the laptop
+(R11/C2); (c) **containers/data stores** — none; the alarm state file is workstation scratch, not
+a modelled container, and the laptop is not a modelled element; (d) **actor↔surface access
+relationships** — unchanged. No element description is falsified.
 
 ---
 
@@ -597,20 +591,17 @@ edge is altered. No element description is falsified by this change.
 ### Engineering
 
 **Status:** reviewed
-**Assessment:** Both issues are `domain/engineering` (CTO). The work is developer-tooling
-correctness with no product, legal, financial, marketing, sales, support, or operations
-surface. The three engineering-relevant risks are (1) scope — a 95-site sweep is compressed to
-a small live set by the producer-class finding, which is the correct cut; (2) a defense
-relaxation in the tmpfs pressure tier, which is bounded by four explicit ceilings and by the
-fact that the relaxed floor was a cost gate, not a safety gate; (3) the alarm route departs
-from the issue's stated target for measured reasons, and should be challenged at plan-review
-to confirm the SessionStart route is accepted over inventing a cron-time egress path.
+**Assessment:** Both issues are `domain/engineering` (CTO); developer-tooling correctness with no
+product, legal, financial, marketing, sales, support, or operations surface. Three risks carried
+into v2: (1) **safety** — Phase 6 was actively dangerous in v1 and is now gated on the 6a
+liveness fix landing first; (2) **cost** — the reaper's per-candidate walk must stay batched or
+it overruns the cron interval; (3) **scope** — plan-review recommended splitting into two PRs,
+which the single-PR directive overrides; the dissent is persisted rather than dropped.
 
 ### Product/UX Gate
 
-Not applicable. Product domain not relevant; the mechanical UI-surface override does not fire —
-no path in "Files to Create"/"Files to Edit" matches `components/**/*.tsx`, `app/**/page.tsx`,
-`app/**/layout.tsx`, or any UI-surface glob. No user-facing surface, no wireframe required.
+Not applicable. Product domain not relevant and the mechanical UI-surface override does not fire —
+no path in Files to Create/Edit matches any UI-surface glob. No wireframe required.
 
 ---
 
@@ -618,15 +609,16 @@ no path in "Files to Create"/"Files to Edit" matches `components/**/*.tsx`, `app
 
 | Risk | Mitigation |
 |---|---|
-| **The corrected #6992 diagnosis is itself wrong.** | Every verdict rests on a re-runnable measurement, not on reasoning; Phase 0 re-runs all of them and halts on any that no longer reproduces. The Edit-scope cause was reproduced directly, both directions. |
-| **Reconstructing the post-edit document in Phase 2 mis-applies the substitution** (multiple matches, `replace_all`, whitespace drift) and denies a valid plan. | Fall back to `new_string`-only scanning on any reconstruction failure, and say so in the deny reason so a degraded scan is never mistaken for a full one. Tests cover both paths. |
-| **Reading the target file on every `Edit` slows the hook** or breaks on unreadable paths. | Files in scope are plans/specs (measured avg ~29 KB, max ~120 KB) — trivial to read. Unreadable path falls back as above. |
-| **Dropping the size floor makes the pressure tier delete live work.** | The floor was a cost gate, not a safety gate (D1). Ownership, recursive age, liveness, and the protected denylist all still apply, plus the four Phase-6 ceilings. The lowered *age* floor is the only true relaxation and is confined to measured-pressure runs with a per-run cap. |
-| **The pressure tier is too slow for a 5-minute cron on a full `/tmp`.** | It is *cheaper* than the normal tier: with no size floor it skips `du` entirely, which was the expensive walk. Verify against a realistic fixture (≥10,000 entries) as part of AC-B3. |
-| **The SessionStart alarm route is judged insufficient at review.** | Flagged explicitly for plan-review and deepen-plan. The measured blockers (R11) are documented so the panel can weigh a genuine alternative rather than re-propose the unreachable one. |
-| **The Phase 5 lint's allowlist becomes a dumping ground.** | Shrink-only by construction: seeded once from Phase 1 minus Phase 3's fixes; the lint fails on any new entry. The allowlist doubles as the AC-A3 sweep record, so it is read, not ignored. |
-| **Scope creep across two issues in one PR.** | Phase boundaries are strict and the phases are independently revertible. Part A's fix set is bounded by the measured live-site list, not by the 95-site shape count. |
-| **A later `Edit` to this plan file is denied by the guard** because the ack sits outside the edited chunk (the very bug under repair, R3). | Known hazard. Re-`Write` the whole file rather than `Edit`ing it, or include the ack line in the chunk. This is recorded as first-hand evidence for T3. |
+| **Phase 6 deletes live application state** (the v1 defect, PR-1). | 6a lands first and is a hard prerequisite: `/proc/net/unix` liveness, `fuser` on directories, widened denylist. The floor is reduced, not removed. AC-B2 is a dedicated regression test with a socket-held fixture. |
+| **A pressure run overruns the 5-minute cron and overlapping runs race deletes** (PR-3). | Keep batched `du`; batch the recursive-age pass; add `flock`. AC-B4 pins a measured wall-clock bound on a ≥10,000-entry fixture. |
+| **The pressure tier never engages** (PR-4). | Trigger on top-level entry count, not `df -i`. Threshold pinned against measured current state (17,898 entries at 29% blocks / 7% inodes). |
+| **The denylist is incomplete** — removing/reducing the floor widens the candidate set by orders of magnitude, which is exactly when an unlisted name gets reaped. | 6a.3 re-reviews the denylist against a live `/tmp` listing rather than assuming the 9-entry list is complete. Stated as an assumption to test, not asserted away. |
+| **Phase 2 makes 274 existing files un-editable** (the v1 design, PR-2). | Not taken. The narrow ack lookup has zero retroactive blast radius. |
+| **The deferred delta-scan design is silently forgotten**, leaving R4 open. | Tracking issue filed at ship time, with the `replace_all` / glob-safety / MultiEdit-sequencing requirements recorded so the next attempt does not rediscover them. |
+| **An unquoted bash substitution silently returns the document unchanged** (a fail-open) if the delta design is later attempted. | Recorded in Phase 2's "Not taken" note: use a literal-split (`jq … split/join`), never `${doc/$old/$new}`. |
+| **Both parts edit `plugins/soleur/skills/work/SKILL.md`.** | Noted in Files to Edit; sequence the two edits or make them in one pass. |
+| **Single PR spanning two unrelated issues** raises review surface. | Phase boundaries are strict and each part is independently revertible. Reviewer dissent recorded in `decision-challenges.md`. |
+| **A later `Edit` to this plan file is denied** because the ack sits outside the edited chunk — the very bug under repair. | Known hazard. Re-`Write` the whole file rather than `Edit`ing it. First-hand evidence for T3. |
 
 ---
 
@@ -634,42 +626,40 @@ no path in "Files to Create"/"Files to Edit" matches `components/**/*.tsx`, `app
 
 | Approach | Why not chosen |
 |---|---|
-| Fix only the 7 `iac-plan-write-guard.sh` sites as the issue literally asks. | Measured inert (R1). It would close the issue while leaving the reported symptom live and every genuinely racing site untouched — the exact "guard reports success while doing nothing" failure this plan exists to end. |
-| Convert all ~95 `| grep -q` sites. | ~90% are builtin producers and provably cannot race (R1). Large diff, large review surface, near-zero defect yield. The lint grandfathers them and blocks new ones instead. |
-| Close #6992 as invalid, since its stated mechanism is refuted. | The measured 9/3 symptom is real and has a real cause (R3). Closing it would discard a genuine, reproducible fail-closed **and** fail-open defect. |
-| Per-run private scratch roots reaped by owner (the issue's reviewed direction). | `scratch-root.sh` has zero adopters and 84.5% of `mktemp` sites use the default template (R9/R10). Adopting it means migrating hundreds of call sites — a separate, much larger piece of work. Deferred; see below. |
-| Count-based reaping keyed on the `tmp.` prefix. | Explicitly forbidden by the issue and confirmed unsafe: `tmp.` is the default template at 856 sites (R10). Phase 6 keys on nothing name-derived. |
-| Emit a `SOLEUR_*` marker to `logger` and add `tmpfs-guard` to the Vector tag allowlist. | Vector is not installed on this host (R11); the tag would be allowlisted on servers that never see this journal. It would create a second alarm reaching nobody. |
-| Have the cron job file a GitHub issue directly. | `gh` resolves under cron but authenticates via the OS keyring, which is unavailable to a cron session (R11/C3). Measured, not assumed. |
-| Store a `gh` token on disk so cron can authenticate. | Creates a durable credential on the workstation and a new egress path, against C2 and the standing external-observability boundary, to solve a problem the SessionStart route solves with no credential at all. |
+| Fix only the 7 `iac-plan-write-guard.sh` sites, as #6992 literally asks. | Measured inert (R1). Would close the issue while leaving the reported symptom live and the MultiEdit bypass wide open. |
+| Convert all ~95 `\| grep -q` sites. | ~90% are builtin producers and provably cannot race. Large diff, near-zero defect yield. |
+| Whole-document delta scanning on `Edit`. | Correct general fix for R4, but 274 live files would be denied on every edit (PR-2), and it needs `replace_all`, glob-safe substitution, and MultiEdit sequencing. Deferred with a tracking issue. |
+| Close #6992 as invalid since its mechanism is refuted. | The 9/3 symptom is real and reproducible with a real cause (R3), and the investigation surfaced a larger bypass (PR-5). |
+| Remove `SCRATCH_MIN_MB` outright (v1's design; also plan-review's simplification). | **Measured dangerous** — deletes live socket-held directories (PR-1). Reduced, not removed. |
+| Per-run private scratch roots reaped by owner (the issue's reviewed direction). | `scratch-root.sh` has zero adopters and 84.5% of `mktemp` sites use the default template (R9/R10). Requires migrating hundreds of call sites. Deferred. |
+| Count-based reaping keyed on the `tmp.` prefix. | Forbidden by the issue and confirmed unsafe — `tmp.` is the default at 856 sites (R10). |
+| `SOLEUR_*` marker to `logger` + Vector tag allowlist. | Vector is not installed on this host (R11); the tag would be allowlisted on servers that never see this journal. A second alarm reaching nobody. |
+| Cron job files a GitHub issue directly. | `gh` resolves under cron but authenticates via the OS keyring, unavailable to a cron session (R11/C3). Measured. |
+| Store a `gh` token on disk so cron can authenticate. | Creates a durable workstation credential and a new egress path (C2) to solve what SessionStart solves with no credential. |
+| A dedicated lint script + per-site allowlist (v1 Phase 5). | ~250 lines of permanent CI infrastructure whose day-one allowlist grandfathers ~95 entries and asserts nothing (PR-8). Reduced to a baseline assertion; full lint deferred. |
 
-**Deferred, needs a tracking issue at ship time:** migrating bulk-writing `mktemp` call sites
-onto `soleur_scratch_root()` so that a per-run private scratch root becomes a real convention
-(R9). Re-evaluation trigger: when a second count-shaped leak occurs, or when adopter count
-passes a threshold that makes owner-scoped reaping viable. Also note
-`scripts/lib/scratch-root.test.sh` is registered in no runner — folded into Phase 5's
-`test-all.sh` edit.
+**Deferred — tracking issues required at ship time:**
+1. Whole-document delta scanning for the guard (closes R4 generally).
+2. Migrating bulk `mktemp` call sites onto `soleur_scratch_root()` (R9); also register
+   `scripts/lib/scratch-root.test.sh`, currently in no runner.
+3. The full external-producer `| grep -q` lint with a per-site allowlist (PR-8).
 
 ---
 
 ## Test Scenarios
 
 1. **Producer class** — builtin `echo`/`printf` into `grep -q` never fails on match (≥40 runs,
-   ≥1 MB); external `cat`/`yes` into `grep -q` does fail on match-at-top; match-at-bottom never
-   fails. Pins the discriminator the whole Part-A scope rests on.
-2. **Guard, `Write` path** — violation → deny; clean → allow; clean+ack → allow;
-   violation+ack → allow. ≥30 runs each on a ≥64 KB body.
-3. **Guard, `Edit` path** — ack elsewhere in file → allow (RED before Phase 2); pre-existing
-   violation + unrelated edit → deny; unreadable file → degraded scan with the degradation
-   named in the deny reason.
-4. **Vacuity guard** — harness aborts when `grep` is a shell function.
-5. **Lint** — fails on an injected external-producer site; passes on the fixed tree; allowlist
-   entries are accepted but cannot grow silently.
-6. **tmpfs pressure tier** — a fixture of ~10,000 tiny files with no entry near the old size
-   floor is reaped under simulated pressure, untouched without pressure; a live (open-fd) tree
-   and a foreign-uid tree are never reaped in either mode; the per-run cap holds.
-7. **tmpfs telemetry** — suite run adds no lines to `journalctl -t tmpfs-guard`; per-entry
-   detail lands in the fixture sink; `reap_scratch_entries` stdout is a bare integer; stderr is
-   clean on a reaping run; a healthy run emits a liveness line.
-8. **Alarm** — state file written on a pressure run, size cap holds, SessionStart surfacing
-   renders the summary; nothing requires network or credentials.
+   ≥1 MB); external `cat`/`yes` does fail on match-at-top; match-at-bottom never fails.
+2. **Guard, `Write`** — violation → deny; clean → allow; clean+ack → allow; violation+ack →
+   allow. ≥30 runs each on a ≥64 KB body.
+3. **Guard, `Edit`** — ack elsewhere in the file → allow (RED before Phase 2).
+4. **Guard, `MultiEdit`** — violation in any edit → deny (RED before Phase 2a).
+5. **Vacuity guard** — harness aborts when `grep` is a shell function.
+6. **Reaper safety** — a socket-held directory, an open-fd tree, and a foreign-uid tree are never
+   reaped in either mode. A ~10,000-file count-shaped leak is reaped under pressure, untouched
+   without it. Per-run cap holds. Wall clock well inside 5 minutes.
+7. **Telemetry** — suite adds no lines to `journalctl -t tmpfs-guard`; per-entry detail lands in
+   the fixture sink; no command substitution remains in `main`; a reaping run at ≥70% usage exits
+   0 with the high-usage branch evaluated; a healthy run emits a liveness line.
+8. **Alarm** — state file written on a pressure run, size cap holds, SessionStart renders the
+   summary, and a zero-alarm state injects nothing.
