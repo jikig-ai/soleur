@@ -1,0 +1,15 @@
+[Unit]
+# (#6982, W4) Weekly trigger for the bounded git-data maintenance run.
+Description=Weekly git-data bare-repo maintenance
+Documentation=https://github.com/jikig-ai/soleur/issues/6982
+
+[Timer]
+# Sunday 03:20 UTC, off the weekday push path. Jitter so a fleet restart cannot align it.
+OnCalendar=Sun *-*-* 03:20:00
+RandomizedDelaySec=1800
+# Run a missed occurrence after a reboot. Cheap: the script is idempotent and holds a
+# non-blocking flock.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -247,6 +247,35 @@ write_files:
     owner: root:root
     permissions: '0755'
 
+  # (#6982, W4/W5) Bounded weekly maintenance. The units carry the resource caps
+  # (MemoryMax/CPUQuota/IOSchedulingClass) that make `receive.autogc=false` safe:
+  # maintenance still happens, it just stops happening inline on a user's push.
+  - path: /usr/local/bin/git-data-gc.sh
+    content: |
+      ${indent(6, git_data_gc)}
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/systemd/system/git-data-gc.service
+    content: |
+      ${indent(6, git_data_gc_service)}
+    owner: root:root
+    permissions: '0644'
+
+  # The OnFailure= target. A dangling OnFailure is a silent no-op, so the handler is a
+  # real unit rather than an aspiration.
+  - path: /etc/systemd/system/git-data-gc-failure.service
+    content: |
+      ${indent(6, git_data_gc_failure_service)}
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/git-data-gc.timer
+    content: |
+      ${indent(6, git_data_gc_timer)}
+    owner: root:root
+    permissions: '0644'
+
   # Fail-closed placeholder pre-receive — staged to /tmp; the bootstrap installs it
   # onto the volume at /mnt/git-data/hooks/pre-receive and wires core.hooksPath.
   - path: /tmp/git-data-pre-receive-placeholder.sh
@@ -464,3 +493,13 @@ runcmd:
     }
     trap bootstrap_err EXIT
     doppler run --project soleur --config prd_git_data -- bash /usr/local/bin/git-data-bootstrap.sh
+
+  # (#6982, W4) Arm the weekly maintenance timer. MUST-TOLERATE (Phase 0.4): a maintenance
+  # timer that fails to enable is a degraded steady state, NOT a reason to abort a boot and
+  # leave the store unprovisioned — the `|| true` is the classification, not laziness. The
+  # failure is visible because the unit is absent from `systemctl list-timers`, and the
+  # first missed run emits nothing rather than emitting something wrong.
+  - |
+    STAGE=gc_timer
+    systemctl daemon-reload || true
+    systemctl enable --now git-data-gc.timer || true

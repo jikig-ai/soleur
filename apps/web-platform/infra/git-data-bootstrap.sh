@@ -17,7 +17,25 @@
 # would let a stale gen=5 writer beat a fresh 0 (git-data-pre-receive.sh header).
 set -euo pipefail
 
-log() { echo "[git-data-bootstrap] $*"; }
+# (#6982, W1) Teach the EXISTING log() to speak off-box.
+#
+# Step 7 below already asserts, fail-loud, every invariant the boot signal needs — the two
+# mountpoints, the executable hook, the core.hooksPath equality. The ONLY defect was that
+# `log` went nowhere off-box: on a deny-all host with no SSH and no console, a FATAL line
+# was written to /var/log/cloud-init-output.log and read by nobody, ever. So this is ~a
+# tenth of the work "add a boot-completion signal" sounds like: give the existing
+# assertions a voice, do not rewrite them.
+#
+# Routing on the FATAL prefix rather than adding a die() at 12 call sites keeps the change
+# small and makes it impossible for a future FATAL to be added WITHOUT an emit.
+# Fail-open (`|| true`): the emitter must never be what stops a bootstrap.
+GIT_DATA_EMIT="${GIT_DATA_EMIT:-/usr/local/bin/git-data-emit}"
+log() {
+  echo "[git-data-bootstrap] $*"
+  case "$*" in
+    FATAL:*) [ -x "$GIT_DATA_EMIT" ] && "$GIT_DATA_EMIT" "git-data bootstrap FATAL" bootstrap fatal "$*" || true ;;
+  esac
+}
 
 GIT_DATA_ROOT="/mnt/git-data"
 REPO_ROOT="$GIT_DATA_ROOT/repositories" # per-workspace bare repos land here
@@ -176,6 +194,37 @@ git config --system core.hooksPath "$HOOKS_DIR"
 #     is app-server-side; the in-sandbox GIT_PUSH_OPTION_* path lands in Phase 3.
 git config --system receive.advertisePushOptions true
 
+# 6c. (#6982, W4) Move maintenance OFF the push path and BOUND its peak.
+#
+# This is the tuning that makes ADR-068 D1's "neither CPU- nor RAM-bound" TRUE rather than
+# merely asserted. Git's defaults make a 2 vCPU / 4 GB / no-swap box burst-bound:
+#
+#   receive.autogc   default ON  -> every push can trigger a server-side gc --auto ->
+#                                   repack, inline, while the client waits.
+#   pack.windowMemory default 0  -> UNLIMITED. Repack grows until the kernel OOM-kills it.
+#   gc.autoDetach    default ON  -> gc runs in the background and its failure is INVISIBLE
+#                                   to the pushing client, which just sees a stalled push.
+#
+# So the burst the 2026-07-27 brainstorm feared is real, and it is a CONFIG artifact, not
+# a property of the store. Removing the regime is what resolves the ADR-068-vs-brainstorm
+# contradiction by construction instead of by picking a side (D-SIZE).
+#
+# Maintenance still happens — git-data-gc.timer runs it weekly under systemd resource
+# caps, which is the only context that can bound it. `gc.auto 0` does NOT mean "never
+# gc"; it means "never gc as a side effect of someone else's push".
+git config --system receive.autogc false
+git config --system gc.auto 0
+git config --system gc.autoDetach false
+# 64m window / 128m pack / single thread: sized to leave headroom on a 4 GB box that also
+# serves receive-pack. threads=1 because parallel delta search multiplies the window
+# budget by the thread count, which is the actual OOM path.
+git config --system pack.windowMemory 64m
+git config --system pack.packSizeLimit 128m
+git config --system pack.threads 1
+git config --system pack.deltaCacheSize 64m
+# Above this, store blobs undeltified rather than spending window memory on them.
+git config --system core.bigFileThreshold 32m
+
 # 7. Liveness assert — fail LOUD if any invariant is unmet (the post-merge
 #    readiness/cutover gate surfaces it; never leave a half-provisioned host
 #    silently "green" — hr-fresh-host-provisioning-reachable-from-terraform-apply).
@@ -199,6 +248,21 @@ mountpoint -q "$LUKS_ROOT" || {
   log "FATAL: receive.advertisePushOptions not advertised — push-option fence unreachable"
   exit 1
 }
+# (#6982, W4) RE-ASSERT every maintenance setting. A `git config` that silently failed to
+# take is indistinguishable from one that was never written, and the failure mode is not
+# an error — it is an OOM-killed repack weeks later, on the push path, invisible to the
+# client. Asserting the read-back is what makes the D1 claim an enforced invariant.
+for _kv in "receive.autogc=false" "gc.auto=0" "gc.autoDetach=false" \
+           "pack.windowMemory=64m" "pack.packSizeLimit=128m" "pack.threads=1" \
+           "pack.deltaCacheSize=64m" "core.bigFileThreshold=32m"; do
+  _k="${_kv%%=*}"
+  _want="${_kv#*=}"
+  _got="$(git config --system "$_k" 2>/dev/null || true)"
+  [[ "$_got" == "$_want" ]] || {
+    log "FATAL: git config --system $_k is '$_got', expected '$_want' — maintenance would run unbounded on the push path"
+    exit 1
+  }
+done
 [[ "$(readlink -f "$GIT_HOME/repositories" 2>/dev/null)" == "$(readlink -f "$REPO_ROOT")" ]] || {
   log "FATAL: $GIT_HOME/repositories does not resolve to $REPO_ROOT — transport push URL and provisioned/fenced repo would diverge"
   exit 1
@@ -208,3 +272,37 @@ mountpoint -q "$LUKS_ROOT" || {
   exit 1
 }
 log "bootstrap complete: plaintext volume mounted, LUKS cutover volume mounted at $LUKS_ROOT, git+flock present, bare-repo root $REPO_ROOT, repositories symlink reconciled, provision wrapper present, fail-closed placeholder hook active, push-options advertised"
+
+# 8. (#6982, W1 / ADR-149 item 4) THE BOOT-COMPLETION SIGNAL.
+#
+# This is the post-apply signal ADR-145's R2-R5 poll needs and this host never had. It is
+# emitted only here, at the end, so its mere ARRIVAL means every assertion above passed —
+# and the birth job polls for it (apply-web-platform-infra.yml) rather than treating a
+# green `terraform apply` as a green boot.
+#
+# Chosen over arming betteruptime_heartbeat.git_data_prd, and the reason is the whole
+# point: web-git-data-probe.sh names its own limit — a TCP connect-and-close to :22 proves
+# the port is OPEN, not that git transport SERVES. sshd is up before runcmd runs, so a
+# host whose Doppler download 404'd, whose LUKS never mounted and whose bootstrap died
+# ANSWERS ON :22 AND BEATS GREEN. Wiring that in as the boot signal would install a green
+# light over the exact failure the birth interlock exists to catch.
+#
+# The four booleans are all `yes` by construction here — reaching this line means the
+# fail-loud asserts above passed. They are emitted anyway because the CONSUMER asserts on
+# them: a future edit that weakens an assert shows up as a false, not as a missing event.
+#
+# WORDING IS PINNED (AC30). It reports `luks_mounted` — the LUKS DEVICE is open and
+# mounted, which is true and testable — and says NOTHING about the repositories being
+# encrypted at rest, because they are NOT: REPO_ROOT is on the PLAINTEXT volume until the
+# GIT_DATA_STORE_ENABLED cutover. Duplicating that false claim into telemetry would be the
+# same defect the Art. 30 register is being corrected for, in a second artifact.
+#
+# df% is for GIT_DATA_ROOT, the volume that actually fills — not the LUKS mount, which is
+# empty by construction pre-cutover. No repo paths, no UUIDs: the payload is four booleans
+# and an integer, which carries no identifier by construction.
+_disk_pct="$(df --output=pcent "$GIT_DATA_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9')"
+if [[ -x "$GIT_DATA_EMIT" ]]; then
+  "$GIT_DATA_EMIT" "git-data bootstrap complete" boot_complete info "" \
+    "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" \
+    "disk_pct=${_disk_pct:-unknown}" || true
+fi

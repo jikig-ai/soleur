@@ -87,7 +87,7 @@ creates `hcloud_server.git_data`.
 - [x] 2.2 Add `curl` to `packages:`; emitter degrades silently if absent (R23).
 - [x] 2.3 Add a `bootcmd:` beacon (R23) — `packages:`/`write_files` failures currently leave the ssh
       daemon up and emit nothing.
-- [ ] 2.4 **Add `git_data_boot_fatal` to `apps/web-platform/infra/sentry/issue-alerts.tf`** (R1).
+- [x] 2.4 **Add `git_data_boot_fatal` to `apps/web-platform/infra/sentry/issue-alerts.tf`** (R1).
       Justify `event_frequency` in a comment — **do not copy `value = 1`**; on a fresh per-deploy
       group it means ">1" and a single event does not page.
 - [x] 2.5 Land `${sentry_dsn}` in **non-comment** template text (the sentinel).
@@ -109,19 +109,19 @@ creates `hcloud_server.git_data`.
 
 ## Phase 4 — Boot-completion signal
 
-- [ ] 4.1 **Teach the existing `log()` to emit** (R14). `git-data-bootstrap.sh` step 7 already
+- [x] 4.1 **Teach the existing `log()` to emit** (R14). `git-data-bootstrap.sh` step 7 already
       asserts all four properties fail-loud; the only defect is that `log()` goes nowhere off-box.
       Route it through `git-data-emit` on FATAL paths, and add one success line emitting
       `stage:boot_complete` with the four booleans. **This is ~a tenth of the work v1 described.**
-- [ ] 4.2 Include guest `df%` for **`/mnt/git-data`** (the live root) in the payload.
-- [ ] 4.3 No repo paths, no workspace/user UUIDs in any payload.
+- [x] 4.2 Include guest `df%` for **`/mnt/git-data`** (the live root) in the payload.
+- [x] 4.3 No repo paths, no workspace/user UUIDs in any payload.
 
 ## Phase 5 — Store maintenance
 
-- [ ] 5.1 `git-data-bootstrap.sh`: add `receive.autogc false`, `gc.auto 0`, `gc.autoDetach false`,
+- [x] 5.1 `git-data-bootstrap.sh`: add `receive.autogc false`, `gc.auto 0`, `gc.autoDetach false`,
       `pack.windowMemory`, `pack.packSizeLimit`, `pack.threads 1`, `pack.deltaCacheSize`,
       `core.bigFileThreshold` — **and add each to the existing fail-loud re-assert block**.
-- [ ] 5.2 `git-data-gc.service`/`.timer` — weekly, `MemoryMax=` / `CPUQuota=` /
+- [x] 5.2 `git-data-gc.service`/`.timer` — weekly, `MemoryMax=` / `CPUQuota=` /
       `IOSchedulingClass=idle` / `Nice=19`, `OnFailure=` → `SOLEUR_GIT_DATA_GC` routed to the
       **Phase-2.4 Sentry rule**. Body over **`/mnt/git-data/repositories`**, **unreachable objects
       only**, under `flock`. Emits `df%` each run.

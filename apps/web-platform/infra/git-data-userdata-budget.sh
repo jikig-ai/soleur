@@ -48,6 +48,10 @@ locals {
     git_data_provision               = file("${DIR}/git-data-provision.sh")
     git_data_transport_wrapper       = file("${DIR}/git-data-transport-wrapper.sh")
     git_data_remove                  = file("${DIR}/git-data-remove.sh")
+    git_data_gc                      = file("${DIR}/git-data-gc.sh")
+    git_data_gc_service              = file("${DIR}/git-data-gc.service")
+    git_data_gc_failure_service      = file("${DIR}/git-data-gc-failure.service")
+    git_data_gc_timer                = file("${DIR}/git-data-gc.timer")
     git_transport_pubkey             = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBTRANSPORTKEYAAAAAAAAAAAAAAAAAAAAA"
     git_provision_pubkey             = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBPROVISIONKEYAAAAAAAAAAAAAAAAAAAAA"
     git_remove_pubkey                = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBREMOVEKEYAAAAAAAAAAAAAAAAAAAAAAAA"

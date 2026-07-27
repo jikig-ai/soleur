@@ -1,0 +1,36 @@
+[Unit]
+# (#6982, W4) Bounded weekly maintenance for the git-data bare-repo store. This unit is
+# WHY `receive.autogc=false` + `gc.auto=0` are safe: maintenance still happens, it just
+# stops happening inline on a user's push. The resource caps are the point — a cgroup is
+# the only thing that bounds a repack's peak RSS on a 4 GB box with no swap, which a cron
+# line cannot express. Rationale: ADR-068 D-SIZE.
+Description=git-data bare-repo maintenance (unreachable-object reclaim)
+Documentation=https://github.com/jikig-ai/soleur/issues/6982
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/git-data-gc.sh
+
+# MemoryMax is an OOM boundary for THIS cgroup, so a runaway repack is killed here rather
+# than letting the kernel choose — the other candidates on this host are sshd and the git
+# transport itself.
+MemoryMax=1G
+MemorySwapMax=0
+
+# Bounds gc's SHARE. It deliberately does NOT bound receive-pack latency (Nice does not
+# preempt) — that honesty is why the type stays cpx22 rather than being downsized.
+CPUQuota=50%
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=3600
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ReadWritePaths=/mnt/git-data /var/lock
+
+# A unit FAILURE (OOM kill, missing binary, timeout) pages. A per-repo failure does not,
+# and git-data-gc.sh exits 0 on those so this stays a signal rather than weekly noise.
+OnFailure=git-data-gc-failure.service

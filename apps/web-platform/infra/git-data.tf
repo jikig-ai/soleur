@@ -285,6 +285,12 @@ resource "hcloud_server" "git_data" {
     # The FIXED erasure forced-command wrapper (rm -rf <id>.git), Art. 17 (3.A;
     # app-side call lands in 3.D). Delivered to /usr/local/bin like the others.
     git_data_remove = file("${path.module}/git-data-remove.sh")
+    # (#6982, W4) The bounded maintenance unit set. Plain text like its siblings, so it
+    # gzips instead of paying base64's 33 % inflation against the 32 KB user_data cap.
+    git_data_gc                 = file("${path.module}/git-data-gc.sh")
+    git_data_gc_service         = file("${path.module}/git-data-gc.service")
+    git_data_gc_failure_service = file("${path.module}/git-data-gc-failure.service")
+    git_data_gc_timer           = file("${path.module}/git-data-gc.timer")
     # trimspace()'d — see local.git_transport_pubkey / local.git_provision_pubkey.
     git_transport_pubkey = local.git_transport_pubkey
     git_provision_pubkey = local.git_provision_pubkey
