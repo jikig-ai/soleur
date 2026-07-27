@@ -126,6 +126,11 @@ check_value_safe_drift() {  # returns 0 = value-safe, 1 = drift detected
 # committed to this test file (GitHub push protection) while the runtime fixture holds
 # the real shape.
 DRIFT_TMP="$(mktemp -d)"
+# Own the cleanup with a trap, not just the `rm -rf` at the end of this block. The
+# trailing rm only runs on the happy path — any early exit between here and there (a
+# `set -e` abort in a future edit, an operator ^C, a SIGTERM) skips it and leaks the
+# directory. /tmp here is a 4 GiB RAM-backed tmpfs, so leaked scratch is not free.
+trap 'rm -rf -- "${DRIFT_TMP:-}"' EXIT INT TERM
 printf 'export const X = process.env.SECRET_KEY;\n' > "$DRIFT_TMP/bad-env-dot.ts"
 printf 'export const X = process["env"]["SECRET_KEY"];\n' > "$DRIFT_TMP/bad-env-bracket.ts"
 SK="sk_""live_"; printf 'export const K = "%s%s";\n' "$SK" "0123456789abcdefABCDEF0123456789" > "$DRIFT_TMP/bad-literal.ts"
