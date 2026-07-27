@@ -1173,5 +1173,87 @@ else
   no "AC-HOME6: these doppler-invoking units declare neither User= nor Environment=HOME=/root, so the CLI dies 'Unable to determine home directory':${_dop_bad}"
 fi
 
+# ───────────── (D) terminal detection is MEMBERSHIP, not recency (#6995) ─────────────
+#
+# Run 30259798197: soleur-web-2 emitted cloud_init_complete at 11:05:58 and
+# fresh_boot_ready at 11:06:03. The reader's `[[ "$LAST_STAGE" == "cloud_init_complete" ]]`
+# asked "is the NEWEST event the success marker", so it declared a HEALTHY host DARK 960s
+# later — while printing cloud_init_complete in its own trail. It could not fire before
+# #6981, because every prior boot died at doppler_download and nothing had ever followed
+# the success marker.
+#
+# These assertions EXECUTE the reader's own jq against synthesized fixtures rather than
+# grepping for a shape; a grep cannot distinguish membership from recency.
+if [ -n "${TRAIL:-}" ] && [ -s "${TRAIL:-/nonexistent}" ]; then
+  # Pull the reader's ACTUAL terminal-complete jq program, so a future edit to it is
+  # exercised here rather than compared against a copy that silently drifts.
+  _cc_line="$(grep -F 'TERMINAL="complete"; break' "$TRAIL" | grep -F 'cloud_init_complete' | head -1 || true)"
+  _cc_prog="$(printf '%s' "$_cc_line" | sed -e "s/^.*\"\\\$JQ_HOSTDEF\"'//" -e "s/'[[:space:]]*>\\/dev\\/null.*$//")"
+  # JQ_HOSTDEF is a MULTI-LINE single-quoted assignment (hostok on line 1, sincok on
+  # line 2). A `grep | head -1` captures only hostok, leaving sincok undefined — jq then
+  # errors and EVERY call returns false, which makes the negative controls below pass
+  # vacuously while the positive one fails. Take the whole assignment.
+  _hostdef="$(awk "/JQ_HOSTDEF='/{f=1} f{print} f&&/;'\$/{exit}" "$TRAIL" \
+    | sed -e "s/^[[:space:]]*JQ_HOSTDEF='//" -e "s/'\$//")"
+
+  if [ -z "$_cc_prog" ] || [ -z "$_hostdef" ]; then
+    no "AC-TERM0: could not extract the reader's terminal-complete jq program — the assertions below would be vacuous"
+  # NON-EMPTY IS NOT VALID. An extraction that silently drops a `def` yields a program
+  # jq refuses to compile; `jq -e` then exits non-zero for every input, which is
+  # indistinguishable from an honest "false" at every call site below.
+  elif ! printf '[]' | jq -e --arg re x --arg eh y --argjson since 0 "${_hostdef}${_cc_prog}" >/dev/null 2>&1 \
+       && [ "$?" -gt 1 ]; then
+    no "AC-TERM0: the extracted jq program does not COMPILE (jq exit >1) — every assertion below would read false regardless of the fixture"
+  else
+    ok "AC-TERM0: extracted the reader's terminal-complete jq program and it compiles"
+
+    _ev() { # stage, iso-date  -> one Sentry-shaped event
+      printf '{"message":"soleur-cloud-init boot stage","dateCreated":"%s","tags":[{"key":"stage","value":"%s"},{"key":"host_name","value":"soleur-web-2"}]}' "$2" "$1"
+    }
+    _run() { # events-json -> exit status of the reader's own membership test
+      printf '%s' "$1" | jq -e --arg re 'soleur-cloud-init boot stage' --arg eh 'soleur-web-2' \
+        --argjson since 0 "${_hostdef}${_cc_prog}" >/dev/null 2>&1
+    }
+
+    # THE REGRESSION: newest-first, fresh_boot_ready ABOVE cloud_init_complete — exactly
+    # the run-30259798197 shape. A recency test reads this as "not complete".
+    _healthy="[$(_ev fresh_boot_ready 2026-07-27T11:06:03Z),$(_ev cloud_init_complete 2026-07-27T11:05:58Z),$(_ev webhook_bound 2026-07-27T11:05:43Z)]"
+    if _run "$_healthy"; then
+      ok "AC-TERM1: cloud_init_complete followed by fresh_boot_ready reads COMPLETE (membership, not recency)"
+    else
+      no "AC-TERM1: a healthy boot whose newest event is fresh_boot_ready read as NOT complete — this is the #6995 false-dark regression"
+    fi
+
+    # NEGATIVE CONTROL: without it, AC-TERM1 would also pass against a filter that always
+    # returns true.
+    _dark="[$(_ev fresh_boot_ready 2026-07-27T11:06:03Z),$(_ev webhook_bound 2026-07-27T11:05:43Z)]"
+    if _run "$_dark"; then
+      no "AC-TERM2: a trail with NO cloud_init_complete read as complete — the membership test is vacuous (always true)"
+    else
+      ok "AC-TERM2: a trail without cloud_init_complete correctly reads NOT complete"
+    fi
+
+    # The run anchor is what makes membership safe: a PREDECESSOR's cloud_init_complete
+    # must not satisfy it. Same host name, event older than the stamped epoch.
+    _pred="[$(_ev cloud_init_complete 2026-07-27T07:50:00Z)]"
+    if printf '%s' "$_pred" | jq -e --arg re 'soleur-cloud-init boot stage' --arg eh 'soleur-web-2' \
+         --argjson since 1785150000 "${_hostdef}${_cc_prog}" >/dev/null 2>&1; then
+      no "AC-TERM3: a PREDECESSOR's cloud_init_complete satisfied the membership test — without the run anchor this is the #6969 same-named-host bug in a new place"
+    else
+      ok "AC-TERM3: the run anchor excludes a predecessor's cloud_init_complete from the membership test"
+    fi
+  fi
+
+  # ORDERING: fatal must be tested BEFORE complete. Membership alone would let a
+  # completed-then-fatal run report clean — fail-OPEN on a boot-health gate.
+  _fatal_ln=$(grep -nF 'TERMINAL="fatal"; break' "$TRAIL" | head -1 | cut -d: -f1)
+  _cc_ln=$(grep -nF 'TERMINAL="complete"; break' "$TRAIL" | head -1 | cut -d: -f1)
+  if [ -n "$_fatal_ln" ] && [ -n "$_cc_ln" ] && [ "$_fatal_ln" -lt "$_cc_ln" ]; then
+    ok "AC-TERM4: the fatal test precedes the complete test (line $_fatal_ln < $_cc_ln) — a run emitting both reports fatal"
+  else
+    no "AC-TERM4: the complete test must not precede the fatal test (fatal=${_fatal_ln:-none} complete=${_cc_ln:-none}) — otherwise a completed-then-fatal boot reports clean"
+  fi
+fi
+
 echo "=== doppler-download-error-channel: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]

@@ -103,7 +103,10 @@ if [[ -z "$MSG_RE" ]]; then
 fi
 # POLLED, not sampled once. The earlier form issued a single curl immediately
 # after `terraform apply` returned — and the signal it looks for cannot exist yet.
-# `cloud_init_complete` is the LAST line of the cloud-init terminal runcmd block
+# `cloud_init_complete` is the last line of the cloud-init terminal runcmd BLOCK — but
+# NOT the last event the host emits: `soleur-fresh-boot-ready` runs after it (#6995).
+# Read "last" here as "the end of the block", never as "the newest event"; the terminal
+# test below is membership for exactly that reason.
 # (anchor: `soleur-boot-emit cloud_init_complete info` in cloud-init.yml — cited by
 # content, not by line number, because THIS change shifts it. The previous `:825 of
 # 835` coordinate was CORRECT on main; a content anchor is used so the next edit does
@@ -204,7 +207,28 @@ while :; do
             | ([ (.tags // [])[]? | select(.key=="detail") | .value ][0] // "") ][0] // ""' 2>/dev/null || echo "")
   fi
   # Terminal = the host finished, or died. Either ends the wait; only one is good.
-  if [[ "$LAST_STAGE" == "cloud_init_complete" ]]; then TERMINAL="complete"; break; fi
+  #
+  # (#6995) FATAL IS TESTED FIRST, and `complete` is a MEMBERSHIP test, not a recency
+  # test. Both halves are load-bearing:
+  #
+  #   * MEMBERSHIP, not recency. `cloud_init_complete` is NOT the last event a healthy
+  #     boot emits — `soleur-fresh-boot-ready` fires AFTER it (by its own contract:
+  #     "the LAST first-boot cloud-init item, AFTER the app binds :80/:3000"). The old
+  #     `[[ "$LAST_STAGE" == "cloud_init_complete" ]]` asked "is the NEWEST event the
+  #     success marker" and so failed on exactly the healthy case: run 30259798197
+  #     emitted cloud_init_complete at 11:05:58 and fresh_boot_ready at 11:06:03, and
+  #     the gate declared the host DARK 960s later while printing cloud_init_complete
+  #     in its own trail. This could not fire before #6981 — every prior boot died at
+  #     doppler_download, so nothing had ever followed the success marker.
+  #   * FATAL FIRST. Under recency, a fatal arriving after completion won because it
+  #     was newest. Membership alone would let `complete` mask it — fail-OPEN on a
+  #     boot-health gate. Testing fatal first keeps the failure direction: a run that
+  #     somehow emits both is reported as fatal.
+  #
+  # Membership is safe here ONLY because of the run anchor (`sincok`): events predating
+  # this run's stamped epoch are already excluded, so a PREDECESSOR's cloud_init_complete
+  # cannot satisfy it. Without the anchor this test would be the #6969 same-named-host
+  # bug in a new place. Do not weaken one without re-reading the other.
   if echo "$RESP" | jq -e --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'[.[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since)) | select((.tags // [])[]? | select(.key=="level") | .value == "fatal")] | length > 0' >/dev/null 2>&1; then
     FATAL_STAGE=$(echo "$RESP" | jq -r --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'
       [ .[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since))
@@ -216,6 +240,7 @@ while :; do
             | ([ (.tags // [])[]? | select(.key=="detail") | .value ][0] // "") ][0] // ""' 2>/dev/null || echo "")
     TERMINAL="fatal"; break
   fi
+  if echo "$RESP" | jq -e --arg re "$MSG_RE" --arg eh "$EXPECT_HOST" --argjson since "${BOOT_TRAIL_SINCE:-0}" "$JQ_HOSTDEF"'[.[] | select(((.message // .title) // "") | test($re)) | select(hostok($eh)) | select(sincok($since)) | select([ (.tags // [])[]? | select(.key=="stage") | .value ][0] == "cloud_init_complete")] | length > 0' >/dev/null 2>&1; then TERMINAL="complete"; break; fi
   if (( SECONDS >= DEADLINE )); then TERMINAL="timeout"; break; fi
   sleep 30
 done
