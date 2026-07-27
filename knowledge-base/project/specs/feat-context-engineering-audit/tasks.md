@@ -68,8 +68,8 @@ pr: 7006
 
 ## Phase 6 — Verify
 
-- [ ] 6.1 All ACs AC1–AC3, AC6–AC8, AC10–AC14 green (see plan).
-- [ ] 6.2 `bash .claude/hooks/session-rules-loader.test.sh` — all PASS.
-- [ ] 6.3 `python3 scripts/lint-rule-ids.py` exits 0.
-- [ ] 6.4 AC6: re-derive the three per-class hashes; match Phase 0 pairwise.
-- [ ] 6.5 AC12: counts identical to Phase 0 (101 / 53-6-42 / 58).
+- [x] 6.1 All ACs AC1–AC3, AC6–AC8, AC10–AC14 green (see plan).
+- [x] 6.2 `bash .claude/hooks/session-rules-loader.test.sh` — all PASS.
+- [x] 6.3 `python3 scripts/lint-rule-ids.py` exits 0.
+- [x] 6.4 AC6: re-derive the three per-class hashes; match Phase 0 pairwise.
+- [x] 6.5 AC12: counts identical to Phase 0 (101 / 53-6-42 / 58).
