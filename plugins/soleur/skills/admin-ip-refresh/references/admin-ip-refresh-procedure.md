@@ -104,7 +104,7 @@ doppler secrets set ADMIN_IPS -p soleur -c prd_terraform --silent \
 
 Prompt the operator: `Proceed with Doppler write? Type "yes" to confirm.` Accept only literal `yes`. On anything else, print "Aborted. No changes made." and exit 5.
 
-Per AGENTS.md `hr-menu-option-ack-not-prod-write-auth`: operator ack is explicit, per-command, and happens **in chat** — the Doppler write itself then runs non-interactively. (`--auto-approve` is not a Doppler flag at all; for `terraform apply` it is REQUIRED after the ack, since the Bash tool has no TTY to answer the native prompt.)
+Per AGENTS.md `hr-menu-option-ack-not-prod-write-auth`: prod-scoped Doppler mutations do NOT take `--yes`/`--force`/`--auto-approve`. Operator ack is explicit and per-command.
 
 If running under `--dry-run`, skip Steps 5-7 entirely and exit 0 after Step 4.
 
@@ -145,10 +145,10 @@ doppler run --project soleur --config prd_terraform \
   --name-transformer tf-var -- \
   terraform plan
 
-# Apply -- ack in chat FIRST, then run non-interactively (no TTY to prompt at):
+# Apply (Terraform will prompt for confirmation -- do NOT pass --auto-approve):
 doppler run --project soleur --config prd_terraform \
   --name-transformer tf-var -- \
-  terraform apply -input=false -auto-approve
+  terraform apply
 ```
 
 Under `--fast`, also emit the narrow-target form with a warning:

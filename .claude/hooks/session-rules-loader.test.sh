@@ -658,7 +658,7 @@ fi
 # this one covers BOTH. Parent-scope append is the shape the ownership lint
 # recognizes (scripts/lint-trap-tempfile-ownership).
 CE7008_TMPDIRS=()
-trap 'rm -rf "$TALARM" ${CE7008_TMPDIRS[@]+"${CE7008_TMPDIRS[@]}"}' EXIT
+trap 'rm -rf "${TALARM:-}" ${CE7008_TMPDIRS[@]+"${CE7008_TMPDIRS[@]}"}' EXIT
 
 # ------------- Test 25: stamp denominator counts rule BODIES, not bodies+index ----
 # The fixture repo carries 3 index pointers in AGENTS.md AND 3 rule bodies across
@@ -683,39 +683,68 @@ else
   FAIL=$((FAIL+1))
 fi
 
-# ------------- Test 26: permanent anti-regression — no AGENTS*.md glob in the loader ----
-# Survives the PR (unlike pasted output): the doubled-count bug is exactly an
-# `AGENTS*.md` glob spanning the index plus its expansion.
+# ------------- Test 26: denominator must come from a FIXED expected set ----
+# Two regressions this pins, both of which render a truncated corpus as 100%:
+#   (a) an `AGENTS*` glob (with or without `.md`) also matches the index;
+#   (b) deriving the count from $CONTEXT / the sidecars actually loaded, which
+#       degrades in lockstep with the numerator.
+# Anchored on shape, not on a bare literal, and comment lines are stripped so
+# the loader may still NAME the retired forms when explaining them.
 
 TOTAL=$((TOTAL+1))
-# Anchor on CODE, not the bare token: a body-grep sees comments too, and the
-# loader legitimately NAMES the retired glob when explaining why it is gone
-# (cq-assert-anchor-not-bare-token). Strip whole-line comments first.
-if grep -vE '^[[:space:]]*#' "$HOOK" | grep -q 'AGENTS\*\.md'; then
-  echo "FAIL: loader code still globs the index+bodies — $(grep -vE '^[[:space:]]*#' "$HOOK" | grep -n 'AGENTS\*\.md' | head -2 | tr '\n' '~')"
-  FAIL=$((FAIL+1))
-else
-  echo "PASS: loader carries no AGENTS*.md glob"
-  PASS=$((PASS+1))
-fi
-
-# ------------- Test 27: stamp reports loaded/total BYTES ----
-# Rule count alone cannot express that a docs-only session still loads ~60% of
-# the bytes; the harness cost scales with bytes, not rule count. #7008 FR2.
-
-TOTAL=$((TOTAL+1))
-T27=$(mktemp -d); CE7008_TMPDIRS+=("$T27"); setup_repo "$T27" mixed
-out27=$(invoke_hook "$T27")
-stamp27=$(printf '%s' "$out27" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
-if printf '%s' "$stamp27" | grep -qE '[0-9]+/[0-9]+B'; then
-  echo "PASS: stamp carries a loaded/total byte figure"
+code26=$(grep -vE '^[[:space:]]*#' "$HOOK")
+bad26=""
+printf '%s' "$code26" | grep -qE 'AGENTS[^"[:space:]]*\*' && bad26="glob spanning the index"
+printf '%s' "$code26" | grep -qE 'TOTAL_RULES=.*\$(CONTEXT|CORPUS)' && bad26="denominator derived from loaded sidecars"
+if [[ -z "$bad26" ]]; then
+  echo "PASS: denominator derives from a fixed expected set"
   PASS=$((PASS+1))
 else
-  echo "FAIL: stamp has no byte figure (stamp: $stamp27)"
+  echo "FAIL: $bad26 — a truncated corpus would stamp as 100%"
   FAIL=$((FAIL+1))
 fi
 
-# ------------- Test 28: WORST-CASE composed stamp ≤ 200 BYTES ----
+# ------------- Test 27: docs-only class -> numerator < denominator ----
+# Every other fixture uses `mixed`, where the loaded set IS the whole corpus, so
+# numerator and denominator are indistinguishable. A proper SUBSET is the only
+# shape that pins the numerator, and it is the shape a lockstep-collapse bug
+# renders as 100%.
+
+TOTAL=$((TOTAL+1))
+T27=$(mktemp -d); CE7008_TMPDIRS+=("$T27"); setup_repo "$T27" docs   # docs -> core+docs-only
+stamp27=$(invoke_hook "$T27" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
+num27=$(printf '%s' "$stamp27" | sed -nE 's/.*\(([0-9]+) of [0-9]+ rules.*/\1/p' || true)
+den27=$(printf '%s' "$stamp27" | sed -nE 's/.*\([0-9]+ of ([0-9]+) rules.*/\1/p' || true)
+idx27=$(grep -c '^- \[id: ' "$T27/AGENTS.md")
+if [[ -n "$num27" && -n "$den27" ]] && (( num27 < den27 )) && [[ "$den27" == "$idx27" ]]; then
+  echo "PASS: docs-only stamps a proper subset ($num27 of $den27, index=$idx27)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: docs-only numerator/denominator wrong (num=$num27 den=$den27 index=$idx27) — $stamp27"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 27b: a MISSING sidecar must not shrink the denominator ----
+# The #7008 regression in its most dangerous form: delete AGENTS.rest.md and the
+# change is itself a .md edit, so the classifier picks docs-only, `rest` is never
+# requested, and the fail-safe never arms. A denominator derived from what loaded
+# stamps a clean 100% while 42 of 101 rules are simply absent.
+
+TOTAL=$((TOTAL+1))
+T27B=$(mktemp -d); CE7008_TMPDIRS+=("$T27B"); setup_repo "$T27B" docs
+idx27b=$(grep -c '^- \[id: ' "$T27B/AGENTS.md")
+rm -f "$T27B/AGENTS.rest.md"
+stamp27b=$(invoke_hook "$T27B" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
+den27b=$(printf '%s' "$stamp27b" | sed -nE 's/.*\([0-9]+ of ([0-9]+) rules.*/\1/p' || true)
+if [[ "$den27b" == "$idx27b" ]]; then
+  echo "PASS: absent sidecar leaves the denominator at the declared corpus size ($den27b)"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: denominator collapsed to $den27b (index says $idx27b) — a truncated corpus reads as full: $stamp27b"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 28: WORST-CASE composed stamp (both notes) ≤ 200 BYTES ----
 # Test 11 measures the happy path with awk's `length` (CHARACTERS). The notes
 # carry em-dashes (3 B each), so the real contract needs `wc -c` against the
 # composed worst case: all three classes + fail-safe note + over-strip note.

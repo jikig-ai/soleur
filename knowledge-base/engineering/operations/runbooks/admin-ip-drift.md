@@ -101,9 +101,8 @@ Run `/soleur:admin-ip-refresh` and follow its prompts. The skill:
 3. Warns on single-entry lists (the risk class that caused the original
    incident) and on lists with more than 10 entries (stale residue).
 4. Shows the exact Doppler mutation (pre-image and post-image) and waits
-   for explicit operator go-ahead **in chat**, per AGENTS.md
-   `hr-menu-option-ack-not-prod-write-auth`. The write then runs
-   non-interactively (stdin-piped, `--silent`).
+   for explicit operator go-ahead -- no `--yes`, no auto-approve, per
+   AGENTS.md `hr-menu-option-ack-not-prod-write-auth`.
 5. On approval, writes Doppler (stdin-piped, `--silent`) and prints the
    Doppler dashboard activity URL for the audit trail.
 6. Emits the exact `terraform plan` and `terraform apply` invocations
@@ -160,10 +159,10 @@ doppler run --project soleur --config prd_terraform \
   --name-transformer tf-var -- \
   terraform plan -target=hcloud_firewall.web
 
-# Apply -- ack in chat FIRST, then run non-interactively (no TTY to prompt at):
+# Apply -- confirms at Terraform's native prompt (no --auto-approve):
 doppler run --project soleur --config prd_terraform \
   --name-transformer tf-var -- \
-  terraform apply -target=hcloud_firewall.web -input=false -auto-approve
+  terraform apply -target=hcloud_firewall.web
 ```
 
 `-target=hcloud_firewall.web` is the recovery-scoped form -- it skips the
@@ -221,11 +220,10 @@ hotspot + one travel/coworking).
 - Do NOT widen `hcloud_firewall.web` port-22 rule to `0.0.0.0/0`. That
   regresses defense-in-depth and amplifies fail2ban exposure; every
   scanner on the internet would be hammering sshd.
-- Do NOT run a prod write without a per-command go-ahead **in chat** first.
-  Per AGENTS.md `hr-menu-option-ack-not-prod-write-auth`, that ack IS the
-  authorization — and once given, `terraform apply` MUST carry
-  `-input=false -auto-approve`, because the Bash tool has no TTY and would
-  otherwise hang on the native prompt rather than gate on it.
+- Do NOT pass `-auto-approve` or `--yes` to `terraform apply` or to
+  `doppler secrets set` in the `prd_terraform` config. Per AGENTS.md
+  `hr-menu-option-ack-not-prod-write-auth`, destructive writes against
+  shared prod require per-command go-ahead.
 - Do NOT SSH into the host to "fix" the firewall live. The firewall
   lives in Terraform; changes go through `terraform apply`, not
   `iptables`/`nftables` edits on the host. Per AGENTS.md

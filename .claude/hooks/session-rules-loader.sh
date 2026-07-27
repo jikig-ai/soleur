@@ -238,30 +238,21 @@ else
   FAIL_SAFE_NOTE=""
 fi
 
-# Full corpus (all three sidecars, same strip + separators as the loop above) —
-# the denominator for BOTH the rule count and the byte figure. Built after
-# CONTEXT so the shared $STRIPPED_OUT global is free to reuse.
-CORPUS=""
-for sc in "$REPO_ROOT"/AGENTS.core.md "$REPO_ROOT"/AGENTS.docs.md "$REPO_ROOT"/AGENTS.rest.md; do
-  [[ -L "$sc" || ! -f "$sc" ]] && continue
-  sentinel=""
-  [[ "$sc" == *"/AGENTS.core.md" ]] && sentinel="hr-never-git-stash-in-worktrees"
-  strip_sidecar_into_global "$sc" "$sentinel"
-  CORPUS+=$'\n\n---\n\n'
-  CORPUS+="$STRIPPED_OUT"
-done
-
 # Stamp + hint — both ≤ 200 bytes per line (asserted in tests 11 and 28).
 RULE_COUNT=$(printf '%s' "$CONTEXT" | grep -cE '^- .*\[id: ' || true)
-# Count rule BODIES only. An `AGENTS*.md` glob also matches the AGENTS.md
-# INDEX — one pointer per body — so it double-counts and renders a fully
-# loaded corpus as "N of 2N" (#7008). Numerator and denominator must span
-# the same population.
-TOTAL_RULES=$(printf '%s' "$CORPUS" | grep -cE '^- .*\[id: ' || true)
-# Bytes, not characters: the harness cost scales with bytes, and the stamp's
-# own notes carry multi-byte em-dashes.
-LOADED_BYTES=$(printf '%s' "$CONTEXT" | wc -c | tr -d ' ')
-TOTAL_BYTES=$(printf '%s' "$CORPUS" | wc -c | tr -d ' ')
+# Denominator = the AGENTS.md INDEX pointer count, a FIXED expected set.
+# Two properties matter, both learned the hard way (#7008):
+#   1. An `AGENTS*.md` glob also matches the index — one pointer per body — so
+#      it double-counts and renders a full load as "N of 2N".
+#   2. Deriving it from the sidecars ACTUALLY LOADED makes it degrade in
+#      lockstep with the numerator: a symlinked/absent AGENTS.core.md then
+#      stamps "48 of 48" (reads as full coverage) while every compliance-tier
+#      rule is missing. A fixed expected set stamps "48 of 101" instead.
+# lint-rule-ids.py enforces pointer<->body 1:1, so the index IS the corpus size.
+# "?" distinguishes "could not measure" from "measured zero" — an unreadable
+# index must not render as a plausible number.
+TOTAL_RULES=$(grep -c '^- \[id: ' "$REPO_ROOT/AGENTS.md" 2>/dev/null || true)
+[[ -z "$TOTAL_RULES" || "$TOTAL_RULES" == "0" ]] && TOTAL_RULES="?"
 CLASSES_DISPLAY="${CLASSES// /+}"
 # Loud stamp note when the over-strip guard fired: a sidecar's frontmatter strip
 # would have dropped rule bodies, so the RAW sidecar was injected instead (rules
@@ -269,7 +260,7 @@ CLASSES_DISPLAY="${CLASSES// /+}"
 # contract (test 11). Empty on the normal path.
 OVERSTRIP_NOTE=""
 (( OVERSTRIP_DETECTED == 1 )) && OVERSTRIP_NOTE=" — WARN: frontmatter over-strip; raw sidecar injected"
-STAMP="[rules-loader] loaded: ${CLASSES_DISPLAY} (${RULE_COUNT} of ${TOTAL_RULES} rules, ${LOADED_BYTES}/${TOTAL_BYTES}B)${FAIL_SAFE_NOTE}${OVERSTRIP_NOTE}"
+STAMP="[rules-loader] loaded: ${CLASSES_DISPLAY} (${RULE_COUNT} of ${TOTAL_RULES} rules)${FAIL_SAFE_NOTE}${OVERSTRIP_NOTE}"
 # The hint embeds the *current* REPO_ROOT so the agent can re-run the loader
 # against the same worktree without relying on `$PWD` (which depends on the
 # Bash tool's resetting CWD between calls). Bare `echo '{}'` would have empty

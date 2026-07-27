@@ -816,12 +816,9 @@ if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]] && ssh-add -l >/dev/null 2>&1;
   # (deploy_pipeline_fix) is independently covered by the CI auto-apply and does not
   # need the operator's SSH path. Do NOT widen this to a 2-target apply.
   doppler run -p soleur -c prd_terraform -- \
-    terraform apply -target=terraform_data.infra_config_handler_bootstrap \
-      -input=false -auto-approve
-  # The per-command ack in chat is the load-bearing authorization, NOT a TTY
-  # prompt: the Bash tool is non-interactive, so `-input=true` without
-  # `-auto-approve` hangs forever (hr-menu-option-ack-not-prod-write-auth +
-  # hr-the-bash-tool-runs-in-a-non-interactive).
+    terraform apply -target=terraform_data.infra_config_handler_bootstrap -input=true
+  # The Terraform "yes" prompt is the load-bearing authorization
+  # (hr-menu-option-ack-not-prod-write-auth). Do NOT pass -auto-approve.
 fi
 ```
 
@@ -854,11 +851,9 @@ apply as part of the merge ritual:
   doppler run -p soleur -c prd_terraform -- \
     terraform apply -target=terraform_data.deploy_pipeline_fix -input=true
 
-The per-command ack **in chat** is the load-bearing authorization: show the exact
-command, wait for a literal `yes`, then run `terraform apply -input=false
--auto-approve`. Terraform's native TTY prompt is unanswerable from the Bash tool,
-so withholding `-auto-approve` hangs the apply instead of gating it
-(`hr-menu-option-ack-not-prod-write-auth` + `hr-the-bash-tool-runs-in-a-non-interactive`).
+You will be prompted for "yes" by Terraform — that prompt is the load-bearing
+authorization per `hr-menu-option-ack-not-prod-write-auth`. Do NOT pass
+`-auto-approve`.
 
 After the apply completes, verify (server IP comes from Terraform output —
 the output name is `server_ip`, not `server_ipv4`):
