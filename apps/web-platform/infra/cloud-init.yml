@@ -318,15 +318,34 @@ runcmd:
     # synthesises $HOME only for units that DO declare one, so every command in runcmd inherits
     # an environment with HOME UNSET. The Doppler CLI resolves its home directory BEFORE it
     # consults DOPPLER_CONFIG_DIR (verified against the pinned 3.75.3: setting the config dir
-    # alone still dies "Unable to determine home directory"), so all 11 doppler call sites below
-    # fail. Only doppler_download is fatal — the GHCR-cred and ZOT_REGISTRY_URL reads are
-    # `|| true`-wrapped and degrade SILENTLY, which is why this stayed invisible until #6970 gave
-    # the fatal a cause. Exported once here so every present and future call site inherits it.
+    # alone still dies "Unable to determine home directory"), so EVERY doppler call in runcmd
+    # fails on it. cloud-init shellifies all runcmd items into ONE /bin/sh script (cc_runcmd.py
+    # -> util.shellify), which is why the `trap on_err EXIT` armed in this block still fires for
+    # items far below it — so one export here covers every later item and the baked scripts this
+    # shell invokes as children.
+    #
+    # SCOPE — read this before citing the line as "the fix": HOME is ONE of TWO independent
+    # blockers, and this only removes the first. `stage=doppler_download` works after this
+    # because its `soleur-doppler-download` call sits below the exporting
+    # `set -a; . /etc/default/webhook-deploy; set +a`, so it also gets DOPPLER_TOKEN. The
+    # earlier sites source that same file with a BARE `. /etc/default/webhook-deploy 2>/dev/null
+    # || true` (in the _emit helper, and in the STAGE=ghcr_login subshell), which sets shell
+    # variables WITHOUT exporting them — measured: token readable in the shell, ABSENT from the
+    # child's env — so `doppler` still exits "you must provide a token", still `|| true`, still
+    # silent. Those sites (the #6090 GHCR-token refetch and the ADR-096 zot ZURL reads) remain
+    # inert; do NOT assume this line activated them. Tracked in #6985 — deliberately not fixed
+    # here, because exporting a full-prd token across ~10 previously-dead call sites activates
+    # never-before-run boot paths (including which registry the host pulls from) and is not a
+    # change to ride along on a fix whose job is to un-dark a host.
     #
     # webhook.service is deliberately NOT given the same treatment: it declares User=deploy, so
     # systemd already supplies the correct per-user HOME. Hardcoding /root into its
-    # EnvironmentFile would point `deploy` at a directory its own ProtectHome=read-only makes
-    # unreadable — the fix belongs to the no-User= root context only.
+    # EnvironmentFile would point `deploy` at a 0700 root-owned directory it cannot read (that
+    # DAC mode is the actual barrier — ProtectHome=read-only additionally forbids WRITING it,
+    # it does not make it unreadable). This is also why web cannot reuse the sibling pattern:
+    # cloud-init-{inngest,registry,git-data}.yml do put HOME=/root in their Doppler env files,
+    # but those files are root-owned, whereas /etc/default/webhook-deploy is chown deploy:deploy
+    # and is the EnvironmentFile for TWO User=deploy units (webhook + vector).
     export HOME=/root
     HOST_ID=$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | tr -d '"' )
     # (#6090) ONE transport, reused by on_err (fatal) + the runcmd_start breadcrumb (info):

@@ -823,6 +823,16 @@ cat > /usr/local/bin/soleur-fresh-boot-ready <<'FRESHREADYEOF'
 # OBSERVABILITY marker, NOT a gate: always exits 0 (the app is already up; a poweroff here is worse
 # than a loud ready=0). Absence past SOLEUR_FRESH_BOOT_WINDOW_SECONDS = the host booted dark.
 set -u
+# (#6981) Same two-line guard as soleur-doppler-download, for the same reason: this helper is
+# chmod 0755 on PATH and calls `doppler secrets get BETTERSTACK_LOGS_TOKEN` below, and the Doppler
+# CLI hard-fails ("Unable to determine home directory") when HOME is unset — BEFORE it reads
+# DOPPLER_CONFIG_DIR. Its only current caller is inside runcmd, which now exports HOME, so this is
+# belt-and-braces today; it stops the helper being silently non-self-sufficient for the next caller.
+# `:=` assigns only when unset or empty, so a caller with a correct HOME (systemd supplies one to
+# any unit declaring `User=`) keeps it. The `export` is the load-bearing half — `:=` alone creates a
+# SHELL variable, which a child `doppler` process does not inherit.
+: "${HOME:=/root}"
+export HOME
 # Absence-detection deadline (seconds). Derivation — worst-case bounded first-boot span:
 # soleur-wait-ready x2 (webhook :9000 + cloudflared) 120s + soleur-wait-nic <=120s + `timeout 180`
 # vector install 180s + image-pull budget (web+app+plugin-seed) ~300s + apt/docker install ~120s +
