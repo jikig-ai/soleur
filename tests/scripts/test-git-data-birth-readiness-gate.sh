@@ -110,6 +110,29 @@ runcmd:
 YML
 check "an INDENTED comment mentioning the sentinel => still HOLD" 1 "HOLD" "$TMP/indented-comment.yml"
 
+# A TRAILING comment. This is not a hypothetical shape: line 13 of the live
+# cloud-init-git-data.yml is `- util-linux # provides flock for the …`, so a trailing
+# comment is the single most natural place to write a #6982 back-reference. A whole-line
+# strip cannot see it, and MEASURED against the live file, appending
+# `TODO(#6982): emit boot status to ${sentry_dsn}` there flipped HOLD to RELEASED — the
+# interlock disengaged by prose, which the gate's header claimed was impossible.
+cat > "$TMP/trailing-comment.yml" <<'YML'
+#cloud-config
+packages:
+  - util-linux # provides flock; TODO(#6982): emit boot status to ${sentry_dsn}
+runcmd:
+  - [ bash, -c, "true" ]
+YML
+check "a TRAILING comment mentioning the sentinel => still HOLD" 1 "HOLD" "$TMP/trailing-comment.yml"
+
+# A trailing comment must not eat REAL template text earlier on the same line.
+cat > "$TMP/code-then-comment.yml" <<'YML'
+#cloud-config
+runcmd:
+  - [ bash, -c, "curl -sf ${sentry_dsn}" ] # emit boot status
+YML
+check "real interpolation with a trailing comment after it => RELEASED" 0 "RELEASED" "$TMP/code-then-comment.yml"
+
 # ── THE ESCAPED-LITERAL ARM ───────────────────────────────────────────────────────
 # `$${sentry_dsn}` is how a template writes a LITERAL dollar-brace. Terraform substitutes
 # nothing, so the host receives the eight characters and no DSN. Counting it would let a
@@ -187,7 +210,7 @@ mutate_and_check() {
 # non-vacuity floor correctly reports as a missing guard rather than a real result. It
 # did, twice, which is why the gate hoists these onto their own lines.
 mutate_and_check "comment-stripping guard" \
-  's|^  strip_comments=.*|  strip_comments="ZZZ_MATCHES_NO_LINE"|' \
+  's|^  strip_comments=.*|  strip_comments="s/^$//"|' \
   0 "$TMP/comment-only.yml"
 
 # Neuter the escaped-literal exclusion by widening the sentinel to a bare substring that

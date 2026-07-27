@@ -3816,45 +3816,45 @@ jobs:
   # issues:write via a GitHub App installation token (hr-github-app-auth-not-pat;
   # the default job token is contents:read only, so `gh issue comment` would
   # silently fail without the elevated permission + App auth).
-  # ── #6977 — the git-data BIRTH path ───────────────────────────────────────────────
-  #
-  # CONFIRM TOKEN: BIRTH-GIT-DATA. (The confirm input's own description deliberately does
-  # not enumerate per-target tokens — it accreted one clause per target until no operator
-  # read it. The token lives here and in the runbook.)
-  #
-  # WHY THIS JOB EXISTS. `soleur-git-data` is declared in IaC and has never existed. An
-  # authenticated `terraform state list` returns 201 addresses and ZERO git-data members.
-  # No automated route could create it: git-data-host-replace requires
-  # actions ⊇ {delete,create} so a first CREATE fails its server_replaced arm, its
-  # luks_passphrase_touched arm fires on a create too, and its 5-member allow-set cannot
-  # hold an 18-address birth fan-out. The only remaining route was an untargeted apply
-  # from an operator laptop — no destroy-guard, no stock preflight, and a plan of that
-  # shape taken 2026-07-27 carried NINE destroys. That was a standing violation of
-  # hr-all-infrastructure-provisioning-servers.
-  #
-  # A NEW DISPATCH JOB INHERITS NOTHING (ADR-145). The per-PR `host_creates > 0` HALT is
-  # a separate inline copy in the `apply` job whose `if:` is mutually exclusive with this
-  # one, so for this path the sourced birth gate is the ONLY check.
-  #
-  # INTERLOCKED — this job REFUSES TO PLAN today, by design. cloud-init-git-data.yml emits
-  # nothing off-host (measured 0 for sentry_dsn/sentry/vector/betterstack/journald/
-  # heartbeat against the web host's 9/-/14/2/7/4), and nothing in its boot path fails
-  # closed. So a green apply and a dark host are indistinguishable, and ADR-145's readiness
-  # gates have no analogue here because there is nothing to poll. #6982 ships the emitter
-  # and releases the interlock. See ADR-149 for the full release checklist.
-  #
-  # DELTAS FROM web_host_create, each evidenced rather than inherited:
-  #   • SINGLETON, not a for_each map — no host key input, and the gate's `def allow:`
-  #     takes no key argument.
-  #   • NO image digest pin. git-data has no image var and no host_scripts_content_hash,
-  #     so the amd64 assert, the GHCR login, the digest freeze and the coherence preflight
-  #     have no analogue. Omitted rather than faked.
-  #   • A LUKS BOOT DEPENDENCY the web host lacks (P12/P13).
-  #   • NO firewall-attachment fan-out risk: hcloud_firewall_attachment.git_data is
-  #     `server_ids = [hcloud_server.git_data.id]`, a direct singleton, unlike the web
-  #     fleet's for-loop. No other hcloud_server can enter this plan's closure, which is
-  #     why the gate's reboot arm is a backstop here rather than live coverage.
   git_data_host_create:
+    # ── #6977 — the git-data BIRTH path ───────────────────────────────────────────────
+    #
+    # CONFIRM TOKEN: BIRTH-GIT-DATA. (The confirm input's own description deliberately does
+    # not enumerate per-target tokens — it accreted one clause per target until no operator
+    # read it. The token lives here and in the runbook.)
+    #
+    # WHY THIS JOB EXISTS. `soleur-git-data` is declared in IaC and has never existed. An
+    # authenticated `terraform state list` returns 201 addresses and ZERO git-data members.
+    # No automated route could create it: git-data-host-replace requires
+    # actions ⊇ {delete,create} so a first CREATE fails its server_replaced arm, its
+    # luks_passphrase_touched arm fires on a create too, and its 5-member allow-set cannot
+    # hold an 18-address birth fan-out. The only remaining route was an untargeted apply
+    # from an operator laptop — no destroy-guard, no stock preflight, and a plan of that
+    # shape taken 2026-07-27 carried NINE destroys. That was a standing violation of
+    # hr-all-infrastructure-provisioning-servers.
+    #
+    # A NEW DISPATCH JOB INHERITS NOTHING (ADR-145). The per-PR `host_creates > 0` HALT is
+    # a separate inline copy in the `apply` job whose `if:` is mutually exclusive with this
+    # one, so for this path the sourced birth gate is the ONLY check.
+    #
+    # INTERLOCKED — this job REFUSES TO PLAN today, by design. cloud-init-git-data.yml emits
+    # nothing off-host (measured 0 for sentry_dsn/sentry/vector/betterstack/journald/
+    # heartbeat against the web host's 9/-/14/2/7/4), and nothing in its boot path fails
+    # closed. So a green apply and a dark host are indistinguishable, and ADR-145's readiness
+    # gates have no analogue here because there is nothing to poll. #6982 ships the emitter
+    # and releases the interlock. See ADR-149 for the full release checklist.
+    #
+    # DELTAS FROM web_host_create, each evidenced rather than inherited:
+    #   • SINGLETON, not a for_each map — no host key input, and the gate's `def allow:`
+    #     takes no key argument.
+    #   • NO image digest pin. git-data has no image var and no host_scripts_content_hash,
+    #     so the amd64 assert, the GHCR login, the digest freeze and the coherence preflight
+    #     have no analogue. Omitted rather than faked.
+    #   • A LUKS BOOT DEPENDENCY the web host lacks (P12/P13).
+    #   • NO firewall-attachment fan-out risk: hcloud_firewall_attachment.git_data is
+    #     `server_ids = [hcloud_server.git_data.id]`, a direct singleton, unlike the web
+    #     fleet's for-loop. No other hcloud_server can enter this plan's closure, which is
+    #     why the gate's reboot arm is a backstop here rather than live coverage.
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'git-data-host-create'
     runs-on: ubuntu-24.04
     # The sole HUMAN authorization on this path. REUSED, never re-declared: the

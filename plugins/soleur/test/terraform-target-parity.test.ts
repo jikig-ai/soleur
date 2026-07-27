@@ -2231,9 +2231,15 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(jobBlock).toMatch(
       /if:\s*github\.event_name == 'workflow_dispatch' && inputs\.apply_target == 'git-data-host-create'/,
     );
+    // LINE-ANCHORED, not `.toContain`. The extracted `options:` block includes its YAML
+    // COMMENT lines, and this job's enum entry carries a comment block naming itself — so
+    // `.toContain("- git-data-host-create")` is satisfied by the comment. MEASURED:
+    // commenting out the real enum line kept the whole suite green while making the job
+    // permanently undispatchable, i.e. killing the feature this PR ships. That is the same
+    // false-green class the assertion's own comment claims to avoid.
     const opts = /apply_target:[\s\S]*?options:([\s\S]*?)\n\nconcurrency:/.exec(wf);
     expect(opts).not.toBeNull();
-    expect(opts![1]).toContain("- git-data-host-create");
+    expect(opts![1]).toMatch(/^\s*-\s+git-data-host-create\s*$/m);
   });
 
   test("the -target set equals the constant, exactly", () => {
@@ -2272,6 +2278,81 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(extractAllTargets(jobBlock).has("doppler_config.git_data_prd")).toBe(true);
   });
 
+  test("the job INVOKES each gate, and the invocations cannot be skipped", () => {
+    // SOURCING A BASH LIBRARY ONLY DEFINES FUNCTIONS — it runs no check. Asserting the
+    // `source` lines therefore pins nothing about whether the gate ever executes, and
+    // three separate mutations were MEASURED green against the source-only assertions:
+    //   • `if ! git_data_host_birth_gate tfplan.json; then` -> `if false; then`
+    //   • deleting the only git_data_birth_readiness_gate invocation
+    //   • adding `if: ${{ false }}` to the Birth-readiness interlock step
+    // Each disarms the only check on a path that creates the store holding every user's
+    // source code. The sibling web_host_replace suite already asserts its invocation; that
+    // precedent was dropped here.
+    expect(jobBlock).toMatch(/^\s*if ! git_data_host_birth_gate tfplan\.json; then/m);
+    expect(jobBlock).toMatch(/^\s*if ! stock_preflight_gate tfplan\.json; then/m);
+    expect(jobBlock).toMatch(
+      /^\s*if ! git_data_birth_readiness_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+"; then/m,
+    );
+
+    // The interlock is a separate STEP, so it can also be disarmed without touching its
+    // body at all. Pin the three ways: a conditional, continue-on-error, or a missing
+    // non-zero exit.
+    const interlock = /- name: Birth-readiness interlock[\s\S]*?(?=\n      - name: )/.exec(jobBlock);
+    expect(interlock).not.toBeNull();
+    expect(interlock![0]).not.toMatch(/^\s*if:/m);
+    expect(interlock![0]).not.toMatch(/continue-on-error/);
+    expect(interlock![0]).toMatch(/^\s*exit 1$/m);
+  });
+
+  test("the interlock inspects the SAME template git-data.tf renders", () => {
+    // MEASURED: repointing the job's path argument to apps/web-platform/infra/cloud-init.yml
+    // — the WEB host's template — left every suite green AND made the gate RELEASE, because
+    // that file legitimately carries four ${sentry_dsn} interpolations. A one-token edit
+    // silently disengages the entire interlock, and the gate's fail-closed arms cannot help:
+    // the wrong file exists and satisfies the sentinel.
+    //
+    // The gate's whole argument is "wiring the sentinel IS the work, because templatefile
+    // fails on an unsupplied variable" — which holds only if the template it inspects is
+    // the one being rendered. Bind them.
+    const tfSrc = readFileSync(resolve(REPO_ROOT, "apps/web-platform/infra/git-data.tf"), "utf8");
+    const rendered = /templatefile\("\$\{path\.module\}\/([^"]+)"/.exec(tfSrc);
+    expect(rendered).not.toBeNull();
+    const inspected = /git_data_birth_readiness_gate "\$\{GITHUB_WORKSPACE\}\/apps\/web-platform\/infra\/([^"]+)"/.exec(jobBlock);
+    expect(inspected).not.toBeNull();
+    expect(inspected![1]).toBe(rendered![1]);
+  });
+
+  test("the replicated literals are bound, not merely commented", () => {
+    // Each of these lives in >= 2 places with a COMMENT asserting they must agree, and
+    // each was MEASURED to drift silently: renaming the new job's concurrency group,
+    // changing the confirm token, or renaming the Doppler config all left the suite green
+    // while breaking the mutex, the runbook's dispatch command, and the documented
+    // terraform-import recovery respectively.
+
+    // The shared mutex. GitHub does not error on divergent group strings — they silently
+    // fail to serialize — so a one-sided literal is a mutex of one.
+    for (const job of ["git_data_host_create", "git_data_host_replace"]) {
+      expect(extractJobBlock(wf, job)).toMatch(/^\s{6}group:\s*git-data-state\s*$/m);
+    }
+    expect((wf.match(/^\s{6}group: git-data-state\s*$/gm) ?? []).length).toBe(2);
+
+    // The confirm token, bound to the runbook that tells the operator to type it.
+    expect(jobBlock).toMatch(/\[\[\s*"\$CONFIRM_RAW"\s*!=\s*"BIRTH-GIT-DATA"\s*\]\]/);
+    const runbook = readFileSync(
+      resolve(REPO_ROOT, "knowledge-base/engineering/operations/runbooks/git-data-birth.md"),
+      "utf8",
+    );
+    expect(runbook).toContain("confirm=BIRTH-GIT-DATA");
+
+    // The Doppler config name, bound to the ONLY documented recovery from the
+    // already-exists dead end (a 400 that a re-dispatch cannot clear).
+    const luksSrc = readFileSync(resolve(REPO_ROOT, "apps/web-platform/infra/git-data-luks.tf"), "utf8");
+    const cfg = /resource "doppler_config" "git_data_prd"[\s\S]*?name\s*=\s*"([^"]+)"/.exec(luksSrc);
+    expect(cfg).not.toBeNull();
+    expect(jobBlock).toContain(`terraform import doppler_config.git_data_prd soleur.${cfg![1]}`);
+    expect(runbook).toContain(`terraform import doppler_config.git_data_prd soleur.${cfg![1]}`);
+  });
+
   test("the job SOURCES both gates by command, and borrows no sibling gate", () => {
     // Anchored on `source` as a COMMAND at line start, not a bare filename `.includes`.
     // A filename substring is satisfied by a comment mentioning the gate — a recorded
@@ -2288,7 +2369,9 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     );
     // It must NOT source the replace gate. Grading a birth against that contract aborts
     // three ways, and the two files are siblings by shape and opposites by contract.
-    expect(jobBlock).not.toMatch(/source[^\n]*git-data-host-replace-gate\.sh/);
+    // Anchored on `source` as a COMMAND: `[^\n]*` would let any line containing the
+    // substring "source" qualify — and "re-source" / "resource" contain it.
+    expect(jobBlock).not.toMatch(/^\s*source\s+\S*git-data-host-replace-gate\.sh/m);
   });
 
   // ORDERING ASSERTIONS. Every index below is taken from a SYNTACTIC CONSTRUCT (a
@@ -2313,15 +2396,18 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     // Order is load-bearing: the birth gate proves the plan IS the scoped birth, the
     // preflight proves it is FEASIBLE. Reversed, an out-of-scope plan would be stock-
     // checked before anyone asked whether it was the right plan.
-    const birthAt = sourceIdx("git-data-host-birth-gate.sh");
-    const stockAt = sourceIdx("stock-preflight-gate.sh");
+    // Compares INVOCATIONS. MEASURED: leaving both `source` lines in place and swapping
+    // only the two `if ! …_gate tfplan.json` blocks so the preflight runs first left the
+    // suite green — the source-position form pinned definition order, which is inert.
+    const birthAt = jobBlock.search(/^\s*if ! git_data_host_birth_gate\b/m);
+    const stockAt = jobBlock.search(/^\s*if ! stock_preflight_gate\b/m);
     expect(birthAt).toBeGreaterThan(-1);
     expect(stockAt).toBeGreaterThan(-1);
     expect(birthAt).toBeLessThan(stockAt);
   });
 
   test("the readiness interlock runs BEFORE the terraform plan", () => {
-    const interlockAt = sourceIdx("git-data-birth-readiness-gate.sh");
+    const interlockAt = jobBlock.search(/^\s*if ! git_data_birth_readiness_gate\b/m);
     // `terraform plan` WITH its flags — the invocation, not the words. The job header
     // comment contains the bare phrase.
     const planAt = jobBlock.search(/^\s*terraform plan -no-color/m);
@@ -2331,11 +2417,14 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
   });
 
   test("the job carries the environment gate and reads HCLOUD_TOKEN for the preflight", () => {
-    expect(jobBlock).toMatch(/^\s*environment:\s*web-platform-infra-apply\s*$/m);
+    // `\s{4}` pins JOB-level indentation, matching both web precedents. `\s*` would
+    // accept a step-level `environment:` at six spaces, which GitHub ignores — so the
+    // assertion on the sole human authorization would no longer prove it is job-scoped.
+    expect(jobBlock).toMatch(/^\s{4}environment:\s*web-platform-infra-apply\s*$/m);
     // The sourced stock gate runs OUTSIDE the `doppler run` wrapper, and this step's env:
     // is DOPPLER_TOKEN only. Without this read the gate fails closed on EVERY dispatch —
     // an outage, not a tripwire.
-    expect(jobBlock).toMatch(/export HCLOUD_TOKEN/);
+    expect(jobBlock).toMatch(/^\s*export HCLOUD_TOKEN\s*$/m);
   });
 
   test("the gate's allow-set matches the job's -target set exactly", () => {

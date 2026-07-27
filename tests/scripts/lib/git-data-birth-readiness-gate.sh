@@ -72,11 +72,20 @@ git_data_birth_readiness_gate() {
   # properties into one assertion.
   local strip_comments sentinel_re
 
-  # Drops YAML comment lines, anchored to allow leading whitespace: a marker is most
-  # likely to be written inside an indented block, which is exactly where an unanchored
-  # strip would miss it. A comment-only back-reference pointing at #6982 is explicitly
-  # PERMITTED and desirable — it must not release the interlock.
-  strip_comments='^[[:space:]]*#'
+  # Strips BOTH comment forms. `sed` rather than `grep -v`, because a whole-line filter
+  # cannot see a TRAILING comment — and the live cloud-init-git-data.yml already uses one
+  # on its `- util-linux # provides flock …` line. Measured: appending
+  # `TODO(#6982): emit boot status to ${sentry_dsn}` to that existing trailing comment
+  # flipped the gate from HOLD to RELEASED, so a prose marker in the single most natural
+  # place to write one disengaged the whole interlock. The header claimed "it cannot be
+  # satisfied by prose"; that was true only of whole-line comments.
+  #
+  # A comment-only back-reference pointing at #6982 is explicitly PERMITTED and desirable
+  # in either form — it must not release the interlock.
+  #
+  # `#[^"'"'"']*$` deliberately does not strip a `#` inside a quoted string: a sentinel
+  # written inside a quoted YAML scalar is real template text that terraform interpolates.
+  strip_comments='s/^[[:space:]]*#.*$//; s/[[:space:]]#[^"'"'"']*$//'
 
   # Matches the terraform interpolation while refusing the escaped literal
   # `$${sentry_dsn}`, which terraform renders as text and substitutes nothing. The
@@ -86,7 +95,7 @@ git_data_birth_readiness_gate() {
 
   # `|| true` because grep exits 1 on no-match and this function runs under a caller that
   # may have `set -e`; the count, not the exit status, is the signal.
-  hits=$(grep -v "$strip_comments" "$cloud_init" 2>/dev/null \
+  hits=$(sed "$strip_comments" "$cloud_init" 2>/dev/null \
          | grep -c "$sentinel_re" || true)
 
   if [[ ! "$hits" =~ ^[0-9]+$ ]]; then

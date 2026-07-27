@@ -112,7 +112,9 @@ git_data_host_birth_gate() {
   local plan_json="${1:-}"
   local want_addr="hcloud_server.git_data"
   local creates destroys created_addr reboot_updates out_of_scope
-  local volume_destroys volume_updates firewall_rules luks_passphrase_touched
+  local volume_destroys volume_updates firewall_rules firewall_unreadable luks_passphrase_touched luks_orphan_mint
+  local fw_identity_bad server_inline_firewalls
+  local fw_attach_ok
   local offenders required_addr required_creates present_addr present
 
   plan_gate_assert_readable "git_data_host_birth_gate" "$plan_json" || return 1
@@ -140,13 +142,55 @@ git_data_host_birth_gate() {
   # `update` adding inbound rules passed every arm while converting a correct-looking
   # birth into a bare-repo store reachable from the open internet.
   #
-  # Scoped to CREATE and UPDATE both — a create carrying rules is as wrong as an update
-  # adding them, and an update-only arm would miss it. Counts rules in `.change.after`,
+  # Scoped to every verb except `read`, NOT just create|update. A create-or-update filter
+  # skips the `no-op` shape — and `no-op` is exactly what the firewall plans on the
+  # PARTIAL-BIRTH RESUME, which is the documented must-pass recovery path. Measured: a
+  # resume plan whose firewall was `["no-op"]` with a populated `.after.rule` opening
+  # 0.0.0.0/0:22 scored firewall_rules=0 and PASSED, so the headline promise "the deny-all
+  # firewall stays deny-all" was unchecked on the one path an operator is told to re-run. Counts rules in `.change.after`,
   # tolerating the key being absent or null (a no-op refresh has no `after.rule`).
+  # FAIL CLOSED on a rule set the plan does not disclose.
+  #
+  # `(.change.after.rule // []) | length` reads 0 in three distinct "I cannot see the
+  # rules" cases, all measured PASS before this was hardened:
+  #   • `after.rule` is null but `after_unknown.rule` is true — the shape a
+  #     `dynamic "rule" { for_each = <computed> }` produces, so the rule set is simply not
+  #     known at plan time;
+  #   • `after` is null entirely (`after_unknown: true`);
+  #   • `after.rule` is present but not an array.
+  # Counting those as "zero rules" is the same fail-open as reading a degraded 200 as an
+  # empty list. A separate counter keeps the abort message able to say WHICH it was.
   firewall_rules=$(jq '[.resource_changes[]
     | select(.address == "hcloud_firewall.git_data")
-    | select(.change.actions | any(. == "create" or . == "update"))
-    | (.change.after.rule // []) | length] | add // 0' < "$plan_json" 2>/dev/null)
+    | select(.change.actions | any(. != "read"))
+    | if (.change.after.rule // null) == null then 0
+      elif (.change.after.rule | type) != "array" then 0
+      else (.change.after.rule | length) end] | add // 0' < "$plan_json" 2>/dev/null)
+
+  firewall_unreadable=$(jq '[.resource_changes[]
+    | select(.address == "hcloud_firewall.git_data")
+    | select(.change.actions | any(. != "read"))
+    | select(((.change.after | type) != "object")
+          or ((.change.after_unknown.rule // false) != false)
+          or (((.change.after.rule // null) != null) and ((.change.after.rule | type) != "array")))] | length' < "$plan_json" 2>/dev/null)
+
+  # F5: the attachment's IDENTITY, not just the firewall's content. Nothing else in this
+  # gate reads which firewall the attachment binds, nor whether the server carries inline
+  # `firewall_ids`. Both were measured PASS: an attachment created against a permissive
+  # `hcloud_firewall.web` (present only as a no-op, so out_of_scope skips it) satisfies
+  # every content arm while leaving the store bound to an internet-open firewall.
+  #
+  # A correct birth either creates the firewall in this same plan (so its id is unknown
+  # and `after_unknown.firewall_id` is true) or binds the already-created one. Anything
+  # that resolves to a KNOWN id which is not this plan's own firewall is refused.
+  fw_identity_bad=$(jq '[.resource_changes[]
+    | select(.address == "hcloud_firewall_attachment.git_data")
+    | select(((.change.after.firewall_id // null) != null)
+          and ((.change.after_unknown.firewall_id // false) == false))] | length' < "$plan_json" 2>/dev/null)
+
+  server_inline_firewalls=$(jq '[.resource_changes[]
+    | select(.address == "hcloud_server.git_data")
+    | select(((.change.after.firewall_ids // []) | length) > 0)] | length' < "$plan_json" 2>/dev/null)
 
   # LUKS-PASSPHRASE arm — ADR-115's second normative blocker, and the one mutation with
   # no recovery path at all. A rotated passphrase luksOpens a NEW header; `isLuks` then
@@ -159,6 +203,35 @@ git_data_host_birth_gate() {
   luks_passphrase_touched=$(jq '[.resource_changes[]
     | select(.address == "random_password.git_data_luks" or .address == "doppler_secret.git_data_luks_key")
     | select(.change.actions | any(. == "delete" or . == "forget" or . == "update"))] | length' < "$plan_json" 2>/dev/null)
+
+  # ORPHANED PASSPHRASE MINT — the hole the delete/forget/update arm above does NOT close.
+  #
+  # Not mandating a create is not the same as REFUSING one, and terraform plans a create
+  # for any resource absent from state regardless of what this gate asks for. So consider
+  # the exact state this file's own TOO LOOSE paragraph describes — volumes retained, the
+  # passphrase pair gone from state (a `state rm`, a partial state restore, a workspace
+  # rebuilt against a stale backend):
+  #
+  #   random_password.git_data_luks     -> create   (absent from state)
+  #   doppler_secret.git_data_luks_key  -> create
+  #   hcloud_volume.git_data_luks       -> no-op    (the volume still exists, with data)
+  #
+  # Every arm passed: the verb filter sees no delete/forget/update, presence accepts a
+  # create, out_of_scope is 0. MEASURED rc=0 before this arm existed. The apply then mints
+  # a NEW passphrase, overwrites GIT_DATA_LUKS_KEY, and the host luksOpens a new header
+  # against the old volume — `isLuks` declines to reformat, the old passphrase is gone from
+  # both state and Doppler, and the data is permanently unopenable. ADR-115 bars git-data
+  # from the reboot primitive, so there is no recovery.
+  #
+  # THE INVARIANT: a passphrase create is legitimate ONLY when the volume it will encrypt
+  # is being created in the same plan. A correct first birth has both as `create`. The
+  # catastrophic state is the one where they diverge, and that is exactly what this counts.
+  luks_orphan_mint=$(jq '
+    ( [.resource_changes[] | select(.address == "random_password.git_data_luks" or .address == "doppler_secret.git_data_luks_key")
+       | select(.change.actions | index("create"))] | length ) as $pw_creates
+    | ( [.resource_changes[] | select(.address == "hcloud_volume.git_data_luks")
+       | select(.change.actions | index("create"))] | length ) as $vol_creates
+    | if $pw_creates > 0 and $vol_creates == 0 then $pw_creates else 0 end' < "$plan_json" 2>/dev/null)
 
   # VOLUME-UPDATE arm. Both volumes are in the allow-set (their ids are baked into
   # user_data), so `update` on either is permitted by every other arm. A resize riding a
@@ -189,25 +262,36 @@ git_data_host_birth_gate() {
   # also emits `read` for data sources, which is not a change either, and a verb
   # allow-list stays correct as the action vocabulary grows.
   #
+  # A DENY-list of the known-INERT verbs, not an allow-list of the mutating ones.
+  #
+  # `any(. == "create" or . == "update" or . == "delete" or . == "forget")` classifies any
+  # verb terraform adds NEXT as inert, and terraform has grown this vocabulary once
+  # already (`forget`). Measured: a synthesized `["evict"]` on an out-of-scope address
+  # scores 0 under the allow-list (gate PASSES) and 1 under this deny-list (gate ABORTS),
+  # while every legitimate shape — the 18-address birth, a data-source `read`, a
+  # transitive `no-op` — scores identically under both. A novel verb is now refused until
+  # someone deliberately classifies it.
+  #
   # IN(...) is EXACT-equality membership. `contains`/`inside` substring-match, so a bare
   # `hcloud_volume.git_data` would satisfy the `hcloud_volume.git_data_luks` member —
   # conflating the plaintext store with the encrypted one, which is the single confusion
   # this gate must never make.
   out_of_scope=$(jq -r "${_GIT_DATA_BIRTH_ALLOW}"'
     [ .resource_changes[]
-      | select(.change.actions | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
+      | select(.change.actions | any(. != "no-op" and . != "read"))
       | select(IN(.address; allow[]) | not) ] | length' \
     < "$plan_json" 2>/dev/null)
 
   plan_gate_assert_numeric "git_data_host_birth_gate" \
     "creates=${creates}" "destroys=${destroys}" "volume_destroys=${volume_destroys}" \
-    "volume_updates=${volume_updates}" "firewall_rules=${firewall_rules}" \
-    "luks_passphrase_touched=${luks_passphrase_touched}" \
+    "volume_updates=${volume_updates}" "firewall_rules=${firewall_rules}" "firewall_unreadable=${firewall_unreadable}" \
+    "fw_identity_bad=${fw_identity_bad}" "server_inline_firewalls=${server_inline_firewalls}" \
+    "luks_passphrase_touched=${luks_passphrase_touched}" "luks_orphan_mint=${luks_orphan_mint}" \
     "reboot_updates=${reboot_updates}" "out_of_scope=${out_of_scope}" || return 1
 
   # Telemetry BEFORE the verdict, so a truncated log still shows the counters that
   # produced the decision.
-  echo "git_data_host_birth_gate: host_creates=${creates} destroys=${destroys} volume_destroys=${volume_destroys} volume_updates=${volume_updates} firewall_rules=${firewall_rules} luks_passphrase_touched=${luks_passphrase_touched} reboot_updates=${reboot_updates} out_of_scope=${out_of_scope}"
+  echo "git_data_host_birth_gate: host_creates=${creates} destroys=${destroys} volume_destroys=${volume_destroys} volume_updates=${volume_updates} firewall_rules=${firewall_rules} firewall_unreadable=${firewall_unreadable} fw_identity_bad=${fw_identity_bad} luks_passphrase_touched=${luks_passphrase_touched} luks_orphan_mint=${luks_orphan_mint} reboot_updates=${reboot_updates} out_of_scope=${out_of_scope}"
 
   if [[ "$creates" -ne 1 ]]; then
     if [[ "$creates" -eq 0 ]]; then
@@ -242,6 +326,11 @@ git_data_host_birth_gate() {
     return 1
   fi
 
+  if [[ "$luks_orphan_mint" -ne 0 ]]; then
+    echo "git_data_host_birth_gate: ABORT — ORPHANED LUKS PASSPHRASE MINT: the plan CREATES the LUKS passphrase pair while hcloud_volume.git_data_luks is NOT being created. That means the encrypted volume already exists — with data on it — and this apply would mint a FRESH passphrase and overwrite GIT_DATA_LUKS_KEY. The host would then luksOpen a new header against the old volume; cloud-init's isLuks check declines to reformat, and the previous passphrase is gone from both terraform state and Doppler, so the existing at-rest data becomes permanently unopenable. ADR-115 bars git-data from the reboot primitive, so there is no on-host recovery. This is the state a \`state rm\`, a partial state restore, or a rebuild against a stale backend produces. If you are deliberately re-keying an EMPTY volume, destroy the volume in its own operation first."
+    return 1
+  fi
+
   if [[ "$destroys" -ne 0 ]]; then
     offenders=$(jq -r '[.resource_changes[] | select(.change.actions | index("delete") or index("forget")) | .address] | .[0:10] | join(", ")' < "$plan_json" 2>/dev/null)
     echo "git_data_host_birth_gate: ABORT — ${destroys} destroy/forget action(s): ${offenders}. A birth is purely ADDITIVE. A replace (delete+create) reads as one create to a count check while destroying a live host; scoped host replacement is a different operation with its own gate (git-data-host-replace-gate.sh) and does not borrow this one."
@@ -252,6 +341,21 @@ git_data_host_birth_gate() {
 
   if [[ "$created_addr" != "$want_addr" ]]; then
     echo "git_data_host_birth_gate: ABORT — IDENTITY MISMATCH: the plan births ${created_addr} but this dispatch authorizes ${want_addr}. A count-only check passes this plan. If the born host is hcloud_server.web[\"web-1\"], applying it would create the singleton behind the app.soleur.ai A record, which has no failover partner."
+    return 1
+  fi
+
+  if [[ "$firewall_unreadable" -ne 0 ]]; then
+    echo "git_data_host_birth_gate: ABORT — FIREWALL CONTENT UNREADABLE: the plan does not disclose hcloud_firewall.git_data's rule set (after is not an object, after_unknown.rule is set, or after.rule is not an array). That is the shape a computed \`dynamic \"rule\"\` block produces. Fail-closed: an undisclosed rule set is not evidence of a deny-all firewall, and this firewall plus its attachment are the entire public-exposure defense for a store holding every user's source code."
+    return 1
+  fi
+
+  if [[ "$fw_identity_bad" -ne 0 ]]; then
+    echo "git_data_host_birth_gate: ABORT — FIREWALL IDENTITY: hcloud_firewall_attachment.git_data binds a firewall whose id is already KNOWN, so it is not the hcloud_firewall.git_data this plan creates. Every rule-content arm in this gate inspects hcloud_firewall.git_data; binding the host to a DIFFERENT firewall satisfies all of them while leaving the store reachable from whatever that firewall permits."
+    return 1
+  fi
+
+  if [[ "$server_inline_firewalls" -ne 0 ]]; then
+    echo "git_data_host_birth_gate: ABORT — the plan sets firewall_ids inline on hcloud_server.git_data. This host's firewall is bound via hcloud_firewall_attachment.git_data, whose content this gate inspects; an inline firewall_ids list bypasses that inspection entirely and can attach any firewall, including a permissive one."
     return 1
   fi
 
@@ -276,7 +380,7 @@ git_data_host_birth_gate() {
   if [[ "$out_of_scope" -ne 0 ]]; then
     offenders=$(jq -r "${_GIT_DATA_BIRTH_ALLOW}"'
       [ .resource_changes[]
-        | select(.change.actions | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
+        | select(.change.actions | any(. != "no-op" and . != "read"))
         | select(IN(.address; allow[]) | not) | .address ] | .[0:10] | join(", ")' \
       < "$plan_json" 2>/dev/null)
     echo "git_data_host_birth_gate: ABORT — ${out_of_scope} out-of-scope change(s), outside the eighteen-address birth fan-out: ${offenders}. One authorization births one host and touches only that host's fan-out. Two addresses are refused here deliberately: betteruptime_heartbeat.git_data_prd (its feeder already shipped and is web-host-resident — creating a monitor this route cannot arm produces a green dashboard measuring nothing) and terraform_data.git_data_probe_install (it SSH-provisions web-1, the LIVE serving host, and remote-exec runs at APPLY, not at plan)."
@@ -290,11 +394,13 @@ git_data_host_birth_gate() {
   # to demand here and unsafe to demand anywhere else. Every arm above is a PROHIBITION,
   # and prohibitions cannot catch a MISSING member — the allow-set says these addresses
   # are PERMITTED to change, never that they must.
+  # hcloud_firewall_attachment.git_data is DELIBERATELY NOT IN THIS LOOP — see the
+  # outcome assertion below it. `.id`-reference is not the property that governs
+  # entailment; STATE IDENTITY is, and this is the one member where they diverge.
   for required_addr in \
     "hcloud_server_network.git_data" \
     "hcloud_volume_attachment.git_data" \
-    "hcloud_volume_attachment.git_data_luks" \
-    "hcloud_firewall_attachment.git_data"; do
+    "hcloud_volume_attachment.git_data_luks"; do
     required_creates=$(jq --arg a "$required_addr" \
       '[.resource_changes[] | select(.address == $a) | select(.change.actions | index("create"))] | length' \
       < "$plan_json" 2>/dev/null)
@@ -329,7 +435,7 @@ git_data_host_birth_gate() {
     "random_password.git_data_luks" \
     "doppler_secret.git_data_luks_key"; do
     present=$(jq --arg a "$present_addr" \
-      '[.resource_changes[] | select(.address == $a) | select(.change.actions | all(. == "create" or . == "no-op"))] | length' \
+      '[.resource_changes[] | select(.address == $a) | select((.change.actions | length) > 0 and (.change.actions | all(. == "create" or . == "no-op")))] | length' \
       < "$plan_json" 2>/dev/null)
     plan_gate_assert_numeric "git_data_host_birth_gate" "present[${present_addr}]=${present}" || return 1
     if [[ "$present" -eq 0 ]]; then
@@ -338,6 +444,40 @@ git_data_host_birth_gate() {
     fi
   done
 
-  echo "git_data_host_birth_gate: PASS — scoped birth of ${want_addr} permitted (exactly 1 host create, its 4 entailed members created, all 13 presence members create-or-no-op, 0 destroys, 0 volume destroys, 0 firewall rules, 0 passphrase mutations, 0 reboots, 0 out-of-scope changes)."
+  # ── FIREWALL ATTACHMENT — an OUTCOME assertion, not a verb assertion ────────────
+  #
+  # This address looks entailed and is not. From the hcloud provider source (v1.63.0,
+  # internal/firewall/attachment_resource.go): the resource's terraform ID is the
+  # FIREWALL's id, not the server's, and readAttachment calls d.SetId("") only when the
+  # FIREWALL is nil. So when the server is destroyed outside terraform — the exact
+  # scenario this file's TOO LOOSE paragraph is about — the attachment SURVIVES refresh
+  # with `server_ids` emptied, and the re-birth plans an in-place UPDATE, not a create
+  # (`server_ids` is plain Optional; only `firewall_id` is ForceNew).
+  #
+  # Demanding a create here therefore aborts the re-birth with "the -target set is
+  # mis-scoped" — a wrong diagnosis — and wedges it permanently, because the replace gate
+  # cannot rescue a server that does not exist either. That is the same
+  # only-the-laptop-apply-remains outcome the entailment split exists to prevent,
+  # arrived at from the opposite direction.
+  #
+  # web-host-birth-gate.sh states this exact reasoning for its own fleet attachment
+  # ("it UPDATES (server_ids grows), it does not create"); the justification transfers in
+  # full and an earlier draft of this gate dropped it.
+  #
+  # Assert the OUTCOME instead: the attachment ends up bound to exactly one server. True
+  # on a first birth (create with one id) and on a re-birth (update from [] to one id),
+  # and it still catches BOTH failure directions the strict-create arm was protecting —
+  # omission (the host boots naked on its public IPs) and a fan-out to several servers.
+  fw_attach_ok=$(jq '[.resource_changes[]
+    | select(.address == "hcloud_firewall_attachment.git_data")
+    | select(.change.actions | all(. == "create" or . == "update" or . == "no-op"))
+    | select((.change.after.server_ids // []) | length == 1)] | length' < "$plan_json" 2>/dev/null)
+  plan_gate_assert_numeric "git_data_host_birth_gate" "fw_attach_ok=${fw_attach_ok}" || return 1
+  if [[ "$fw_attach_ok" -eq 0 ]]; then
+    echo "git_data_host_birth_gate: ABORT — hcloud_firewall_attachment.git_data does not end this plan bound to exactly one server. It is the ONLY thing binding the zero-rule deny-all hcloud_firewall.git_data to the host, so without it the store boots NAKED on its public IPv4/IPv6 with every connected user's source code on it. This arm asserts the OUTCOME (server_ids ends at length 1) rather than a verb, because the attachment's terraform ID is the FIREWALL's id: when a host is destroyed outside terraform the attachment survives refresh with server_ids emptied, so a legitimate re-birth plans an UPDATE here, not a create. Both an omitted attachment and a fan-out to multiple servers fail this check."
+    return 1
+  fi
+
+  echo "git_data_host_birth_gate: PASS — scoped birth of ${want_addr} permitted (exactly 1 host create, its 3 entailed members created + its firewall attachment bound to exactly 1 server, all 13 presence members create-or-no-op, 0 destroys, 0 volume destroys, 0 firewall rules, 0 passphrase mutations, 0 reboots, 0 out-of-scope changes)."
   return 0
 }
