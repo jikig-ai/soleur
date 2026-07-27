@@ -202,8 +202,17 @@ fi
 # Fast path: the installed web-platform binary (present locally + in the
 # test-webplat CI shard). Fallback: the test-scripts shard has node+npm but no
 # web-platform deps, so install dependency-cruiser on demand into a temp dir.
-TMPROOT="$(mktemp -d)"
-trap 'rm -rf "$TMPROOT"' EXIT
+TMPROOT="$(mktemp -d)" || { echo "FATAL: cannot create scratch root" >&2; exit 1; }
+: "${TMPROOT:?scratch root must be non-empty}"
+[[ "$TMPROOT" == /* && -d "$TMPROOT" && ! -L "$TMPROOT" ]] || {
+  echo "FATAL: scratch root is not a plain absolute directory: '$TMPROOT'" >&2; exit 1; }
+# EXIT **INT TERM**, not EXIT alone. bash traps REPLACE rather than stack, so an
+# EXIT-only registration here left the earlier `… INT TERM` handler live and still
+# pointing at DRIFT_TMP — which is already deleted by this point. A ^C during the
+# `npm install` below (the longest step in this file) would then run that stale handler,
+# never touch TMPROOT, and orphan a full node_modules tree onto the 4 GiB tmpfs: the
+# exact leak class this PR exists to close, reintroduced in the second half of the file.
+trap 'rm -rf -- "${TMPROOT:-}"' EXIT INT TERM
 
 DEPCRUISE="$APP/node_modules/.bin/depcruise"
 if [[ ! -x "$DEPCRUISE" ]]; then

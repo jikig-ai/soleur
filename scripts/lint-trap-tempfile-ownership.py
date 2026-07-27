@@ -119,6 +119,7 @@ TRAP_EXIT = re.compile(r'(?:^|;)\s*trap\s+.*\b(?:EXIT|RETURN)\b')
 # block opener (`mk_root() { mktemp -d; }` is a real allocation), or then/do/else.
 MKTEMP = re.compile(r'(?:^|\$\(|`|[;&|{(]|\bthen\b|\bdo\b|\belse\b)\s*mktemp\b')
 # The escape hatch. The trailing group must be non-empty -- a bare marker is an error.
+LOCAL_DECL = re.compile(r'(?:^|[;&|{(]|\bthen\b|\bdo\b|\belse\b)\s*(?:local|declare|typeset)\s+(\w+)')
 ESCAPE = re.compile(r'#\s*lint-trap-ownership:\s*ok\b[ \t]*(.*)$')
 
 
@@ -296,7 +297,9 @@ def trap_owned_arrays(lines: list[str]) -> set[str]:
     funcs = find_functions(lines)
 
     def harvest(code: str) -> None:
-        owned.update(re.findall(r'\$\{(\w+)\[@\*]?', code))
+        # `${#ARR[@]}` (a length reference) is a real ownership signal and is not matched
+        # by the bare-name pattern below, because `#` sits between `{` and the name.
+        owned.update(re.findall(r'\$\{#(\w+)\[', code))
         owned.update(re.findall(r'\$\{(\w+)\[', code))
         owned.update(re.findall(r'\$\{?(\w+)\}?', code))
 
@@ -312,18 +315,51 @@ def trap_owned_arrays(lines: list[str]) -> set[str]:
         handler_zone = re.sub(r'(?:^|;)\s*trap\b', ' ', handler_zone)
         for tok in re.findall(r'(?<![$\w.-])([A-Za-z_]\w*)', handler_zone):
             span = funcs.get(tok)
-            if span is None:
-                continue
-            fstart, fend = span
-            for k in range(fstart, min(fend + 1, len(lines))):
-                harvest(strip_comment(lines[k]))
+            if span is not None:
+                # Harvest the handler's body, MINUS its own `local`/`declare` names.
+                #
+                # Without this exclusion the two widenings compound into a false positive
+                # on correct code. A handler that copies the cleanup array into a local
+                # (`cleanup() { local paths=("${TMP_PATHS[@]}"); rm -f "${paths[@]}"; }`)
+                # would otherwise leak the name `paths` into the owned set, and any
+                # UNRELATED helper with its own per-invocation `local paths=()` would be
+                # flagged for appending to a "trap-owned" array it has nothing to do with.
+                # A handler's locals are its private state; they can never be the parent
+                # array whose registration a subshell discards.
+                fstart, fend = span
+                handler_locals = {
+                    m.group(1)
+                    for k in range(fstart, min(fend + 1, len(lines)))
+                    for m in [LOCAL_DECL.search(strip_comment(lines[k]))]
+                    if m
+                }
+                before = set(owned)
+                for k in range(fstart, min(fend + 1, len(lines))):
+                    harvest(strip_comment(lines[k]))
+                owned.difference_update(handler_locals - before)
     return owned
 
 
 def declared_local(lines: list[str], start: int, end: int, name: str) -> bool:
-    """True when `name` is declared `local`/`declare` inside the function body."""
-    pat = re.compile(r'^\s*(?:local|declare|typeset)\b[^\n]*?\b' + re.escape(name) + r'\b')
-    return any(pat.match(strip_comment(lines[k])) for k in range(start, min(end + 1, len(lines))))
+    """True when `name` is declared `local`/`declare` inside the function body.
+
+    Command-position anchored, NOT line-start anchored, and applied with `.search()`.
+
+    This must stay symmetric with ARRAY_APPEND. When ARRAY_APPEND was widened to see a
+    mid-line append in a one-liner helper, this exemption was left `^\\s*`-anchored, and
+    the asymmetry was a false positive on correct code: in
+
+        collect() { local paths=(); paths+=("$1"); printf '%s' "${paths[0]}"; }
+
+    the append was now visible but the `local` that makes it per-invocation state was
+    not, so a correct helper got flagged for "appending to a trap-owned array". Any
+    future widening of one of these two patterns must widen the other.
+    """
+    pat = re.compile(
+        r'(?:^|[;&|{(]|\bthen\b|\bdo\b|\belse\b)\s*(?:local|declare|typeset)\b[^;]*?\b'
+        + re.escape(name) + r'\b'
+    )
+    return any(pat.search(strip_comment(lines[k])) for k in range(start, min(end + 1, len(lines))))
 
 
 def check_rule_a(path: Path, lines: list[str]) -> list[str]:

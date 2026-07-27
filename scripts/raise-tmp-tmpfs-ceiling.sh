@@ -72,10 +72,20 @@ note() { echo "raise-tmp-tmpfs-ceiling: $*"; }
 # string compare would read them as different and re-apply forever, or read a larger
 # value as smaller and shrink /tmp. Both are silent.
 # ---------------------------------------------------------------------------
+# Prints MemTotal in bytes, or NOTHING with a non-zero return.
+#
+# It deliberately does NOT call `die`. Every caller uses `mem=$(mem_total_bytes)`, and a
+# `die` there would `exit 1` the COMMAND-SUBSTITUTION SUBSHELL only: the parent would
+# continue with an empty `mem`, compute `target_bytes=0`, satisfy the never-shrink guard
+# trivially (`cur >= 0`), print "already at or above target", and exit 0 having done
+# nothing — printing FATAL and then succeeding.
+#
+# That is the same subshell-scope defect this whole PR exists to fix, one layer up.
+# Callers MUST check the return.
 mem_total_bytes() {
   local kb
   kb=$(awk '/^MemTotal:/ { print $2; exit }' "$MEMINFO" 2>/dev/null)
-  [[ "$kb" =~ ^[0-9]+$ ]] || die "could not read MemTotal from $MEMINFO"
+  [[ "$kb" =~ ^[0-9]+$ ]] || return 1
   echo $(( kb * 1024 ))
 }
 
@@ -121,8 +131,19 @@ main() {
   [[ -r "$FSTAB" ]] || die "$FSTAB is not readable (run under sudo)"
 
   local mem target_bytes
-  mem=$(mem_total_bytes)
+  mem=$(mem_total_bytes) || die "could not read MemTotal from $MEMINFO"
+  # Re-assert in the PARENT. `mem_total_bytes` cannot abort us from inside `$( )`, so an
+  # empty or non-numeric value must be caught here or it silently becomes target 0.
+  [[ "$mem" =~ ^[0-9]+$ ]] && [[ "$mem" -gt 0 ]] \
+    || die "MemTotal read as '$mem' — refusing to compute a ceiling from it"
+
+  # Floor the target to whole MiB, because that is the granularity the emitted `size=`
+  # spec can express. Comparing an un-floored target against a MiB-rounded spec makes
+  # validation fail on any host whose MemTotal is not a multiple of 4096 kB — i.e. most
+  # of them. The 25%-of-RAM intent is preserved to within 1 MiB.
   target_bytes=$(( mem * TARGET_PCT / 100 ))
+  target_bytes=$(( target_bytes / 1048576 * 1048576 ))
+  [[ "$target_bytes" -gt 0 ]] || die "computed target of 0 bytes from MemTotal=$mem"
 
   local matches count
   matches=$(find_tmp_line)
@@ -147,6 +168,26 @@ main() {
   local nf
   nf=$(awk -v n="$lineno" 'NR == n { print NF }' "$FSTAB")
   [[ "$nf" -eq 6 ]] || die "the /tmp entry at line $lineno has $nf fields, expected 6 — refusing to rewrite a malformed line: $line"
+
+  # The entry MUST be tmpfs. `size=` is a tmpfs option; splicing it into an ext4/xfs
+  # entry produces a line the kernel rejects at mount time, so a disk-backed /tmp would
+  # fail to mount at boot. Without this gate the script happily rewrote
+  # `/dev/sda3 /tmp ext4 defaults,size=1G 0 2`.
+  local fstype
+  fstype=$(awk -v n="$lineno" 'NR == n { print $3 }' "$FSTAB")
+  [[ "$fstype" == "tmpfs" ]] || die "the /tmp entry at line $lineno is '$fstype', not tmpfs.
+  This script only manages a tmpfs ceiling; 'size=' is not a valid option for '$fstype'
+  and splicing it in would make /tmp fail to mount at boot. Nothing was changed."
+
+  # Reject a line carrying MORE THAN ONE size= option. The rewrite below replaces only
+  # the first, and the validation re-parse also reads only the first, so the two agree
+  # with each other while the KERNEL takes the LAST option — meaning the script would
+  # report raising a ceiling it had actually left at the later (possibly smaller) value.
+  local size_count
+  size_count=$(awk -v n="$lineno" 'NR == n { print $4 }' "$FSTAB" | tr ',' '\n' | grep -c '^size=' || true)
+  [[ "$size_count" -le 1 ]] || die "the /tmp entry at line $lineno carries $size_count size= options.
+  mount(8) honours the LAST one, so rewriting the first would silently misreport the
+  result. Collapse them to a single size= by hand, then re-run."
 
   if [[ "$opts" =~ (^|,)size=([^,]+)(,|$) ]]; then
     cur_spec="${BASH_REMATCH[2]}"
@@ -191,7 +232,15 @@ main() {
   exec {lockfd}>"$LOCKFILE" || die "cannot open lock file $LOCKFILE"
   flock -w 30 "$lockfd" || die "another run holds $LOCKFILE (waited 30s)"
 
-  cp -p -- "$FSTAB" "${FSTAB}.bak.${STAMP}" || die "backup failed; refusing to modify $FSTAB"
+  # `cp`, NOT `cp -p`. `-p` preserves the SOURCE's mtime, which would stamp every backup
+  # with /etc/fstab's own (often install-date) timestamp rather than when the backup was
+  # taken. `prune_backups` sorts by mtime, so `-p` made it sort by "age of the file that
+  # was copied" — and the FIRST backup, the only copy of the pristine pre-Soleur fstab,
+  # sorted oldest and was deleted first. That is precisely the artifact a bad rewrite
+  # needs. Mode and ownership are restored explicitly below, so `-p` bought nothing.
+  cp -- "$FSTAB" "${FSTAB}.bak.${STAMP}" || die "backup failed; refusing to modify $FSTAB"
+  chmod --reference="$FSTAB" -- "${FSTAB}.bak.${STAMP}" 2>/dev/null || true
+  chown --reference="$FSTAB" -- "${FSTAB}.bak.${STAMP}" 2>/dev/null || true
   note "backed up to ${FSTAB}.bak.${STAMP}"
 
   # Stage the rewrite IN THE SAME DIRECTORY as the target. `mv` is atomic only WITHIN one
@@ -205,6 +254,18 @@ main() {
   awk -v n="$lineno" -v o="$new_opts" 'NR == n { $4 = o } { print }' OFS='\t' "$FSTAB" > "$tmp" \
     || die "failed to render the rewritten fstab"
 
+  # TEST-ONLY SEAM. Without a way to hand `validate_candidate` a corrupt candidate, none
+  # of its branches are reachable from any fixture — inserting `return 0` at its top left
+  # the whole suite green, i.e. the validator was dead weight and the "non-target lines
+  # survive" test passed only because `awk` happened to be correct. The hook lets the
+  # suite corrupt the rendered file and assert the validator refuses it.
+  #
+  # Unset in production, so this is a no-op there.
+  if [[ -n "${RAISE_TMPFS_RENDER_HOOK:-}" ]]; then
+    note "TEST HOOK active: mutating the rendered candidate before validation"
+    "$RAISE_TMPFS_RENDER_HOOK" "$tmp" "$lineno" || die "render hook failed"
+  fi
+
   # Guarantee a trailing newline. A truncated final line can be dropped by boot-time parsers.
   [[ -s "$tmp" ]] || die "rendered fstab is empty — refusing to install"
   [[ "$(tail -c1 "$tmp" | wc -l)" -eq 1 ]] || printf '\n' >> "$tmp"
@@ -212,7 +273,13 @@ main() {
   # VALIDATE BEFORE INSTALLING, so the only content ever placed at $FSTAB is already
   # known-good. Validating after the install would mean a window where the live file is
   # broken and only a rollback saves the boot.
-  validate_candidate "$tmp" "$lineno" "$target_bytes" "$mem" || die "candidate fstab failed validation; original left untouched"
+  # Prune BEFORE the abort path too. The backup is taken before validation, so a run that
+  # fails validation still leaves one behind; without this, a persistently-failing run
+  # accumulates `/etc/fstab.bak.*` forever and BACKUP_KEEP never applies.
+  validate_candidate "$tmp" "$lineno" "$target_bytes" "$mem" || {
+    prune_backups
+    die "candidate fstab failed validation; original left untouched"
+  }
 
   # Match the original's mode/ownership explicitly. mktemp creates 0600, which would break
   # non-root readers of fstab.
@@ -290,6 +357,20 @@ validate_candidate() {
     got=$(size_to_bytes "$new_spec" "$mem") || { echo "  validation: emitted size='$new_spec' is unparseable" >&2; return 1; }
     [[ "$got" -eq "$want_bytes" ]] || {
       echo "  validation: emitted size=$new_spec is $got bytes, expected $want_bytes" >&2; rc=1; }
+    # Re-assert NEVER-SHRINK here, against the CURRENT on-disk value, not the value read
+    # before the lock was taken. Two concurrent runs with different TARGET_PCT would
+    # otherwise both read the same starting ceiling, and the lower one could install a
+    # SMALLER size after the higher one had already raised it — silently shrinking /tmp,
+    # the exact ENOSPC wedge this script exists to prevent.
+    local live_spec live_bytes
+    live_spec=$(awk -v n="$lineno" 'NR == n { print $4 }' "$FSTAB" | tr ',' '\n' | sed -n 's/^size=//p' | head -1)
+    if [[ -n "$live_spec" ]]; then
+      live_bytes=$(size_to_bytes "$live_spec" "$mem") || live_bytes=""
+      if [[ -n "$live_bytes" && "$got" -lt "$live_bytes" ]]; then
+        echo "  validation: emitted size=$new_spec ($got bytes) is SMALLER than the current on-disk ceiling ($live_bytes bytes) — refusing to shrink /tmp" >&2
+        rc=1
+      fi
+    fi
   else
     echo "  validation: emitted /tmp line has no size= option" >&2; rc=1
   fi
@@ -306,16 +387,30 @@ validate_candidate() {
 prune_backups() {
   local dir base n
   dir=$(dirname "$FSTAB"); base=$(basename "$FSTAB")
-  n=$(find "$dir" -maxdepth 1 -type f -name "${base}.bak.*" 2>/dev/null | wc -l)
+
+  # Match only OUR stamp shape (`<base>.bak.<YYYYmmdd>T<HHMMSS>Z`), never a bare
+  # `.bak.*` glob. An operator's hand-made `/etc/fstab.bak.pre-upgrade` is not ours to
+  # delete, and this is the script's only root-owned removal.
+  local pat="${base}.bak.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z"
+
+  n=$(find "$dir" -maxdepth 1 -type f -name "$pat" 2>/dev/null | wc -l)
   [[ "$n" -gt "$BACKUP_KEEP" ]] || return 0
-  find "$dir" -maxdepth 1 -type f -name "${base}.bak.*" -printf '%T@ %p\n' 2>/dev/null \
-    | sort -n \
-    | head -n "$(( n - BACKUP_KEEP ))" \
-    | cut -d' ' -f2- \
-    | while IFS= read -r old; do
-        [[ -n "$old" ]] && find "$old" -maxdepth 0 -type f -delete 2>/dev/null
+
+  # Sort by the STAMP EMBEDDED IN THE FILENAME, not by mtime. Filesystem mtimes are not
+  # a reliable ordering for backups (a restore, a `touch`, or a config-management pass
+  # reorders them), and the name is the one field we control and that means what we mean.
+  #
+  # NUL-delimited end to end: a newline in a filename would otherwise split one path into
+  # two, and the second fragment is RELATIVE — `find` would then resolve it against the
+  # caller's CWD and delete an unrelated file outside /etc.
+  find "$dir" -maxdepth 1 -type f -name "$pat" -print0 2>/dev/null \
+    | sort -z \
+    | head -z -n "$(( n - BACKUP_KEEP ))" \
+    | while IFS= read -r -d '' old; do
+        [[ -n "$old" ]] || continue
+        find "$old" -maxdepth 0 -type f -delete 2>/dev/null || true
       done
-  note "pruned backups, keeping the $BACKUP_KEEP most recent"
+  note "pruned backups, keeping the $BACKUP_KEEP newest by filename stamp"
 }
 
 main "$@"

@@ -235,6 +235,100 @@ if [[ -z "$(find "$TMP_ROOT" -maxdepth 0 -newer /etc/fstab 2>/dev/null; true)" ]
   fi
 fi
 
+# --- 16-19. VALIDATOR IS REACHABLE AND LOAD-BEARING -----------------------------------
+#            Until these existed, no fixture could hand validate_candidate a corrupt
+#            candidate, so inserting `return 0` at its top left the suite fully green —
+#            the validator was dead weight and test 10 passed only because awk happened
+#            to be right. Each case corrupts the RENDERED file via the render hook and
+#            asserts the install is refused with the original left intact.
+mk_hook() { # mk_hook <name> <body>  -> prints hook path
+  local h="$TMP_ROOT/hook-$1.sh"
+  { echo '#!/usr/bin/env bash'; echo 'set -uo pipefail'; echo 'cand="$1"; lineno="$2"'; echo "$2"; } > "$h"
+  chmod +x "$h"; printf '%s' "$h"
+}
+
+run_with_hook() { # run_with_hook <fstab> <hook>
+  OUT=$(RAISE_TMPFS_FSTAB="$1" RAISE_TMPFS_MEMINFO="$MEMINFO" RAISE_TMPFS_LOCK="$TMP_ROOT/lock" \
+        RAISE_TMPFS_STAMP="20260727T140000Z" RAISE_TMPFS_RENDER_HOOK="$2" \
+        bash "$SUT" 2>&1)
+  RC=$?
+}
+
+# 16 — a DROPPED non-target line must be refused (the unbootable path)
+f=$(new_fstab v-drop "tmpfs /tmp tmpfs defaults,size=4G 0 0")
+before=$(cat "$f")
+h=$(mk_hook drop 'grep -v "/swapfile" "$cand" > "$cand.x" && mv "$cand.x" "$cand"')
+run_with_hook "$f" "$h"
+if [[ "$RC" -ne 0 && "$(cat "$f")" == "$before" ]]; then
+  pass "validator refuses a candidate with a non-target line DROPPED (original intact)"
+else
+  fail "validator accepted a dropped swap line — THE UNBOOTABLE PATH — rc=$RC"
+fi
+
+# 17 — a MUTATED non-target line must be refused
+f=$(new_fstab v-mutate "tmpfs /tmp tmpfs defaults,size=4G 0 0")
+before=$(cat "$f")
+h=$(mk_hook mutate 'sed -i "s|/swapfile|/swapfile-EVIL|" "$cand"')
+run_with_hook "$f" "$h"
+if [[ "$RC" -ne 0 && "$(cat "$f")" == "$before" ]]; then
+  pass "validator refuses a candidate with a non-target line MUTATED"
+else
+  fail "validator accepted a mutated non-target line — rc=$RC"
+fi
+
+# 18 — a WRONG emitted size must be refused (the size re-parse branch)
+f=$(new_fstab v-size "tmpfs /tmp tmpfs defaults,size=4G 0 0")
+before=$(cat "$f")
+h=$(mk_hook size 'sed -i "s|size=[0-9]*M|size=99M|" "$cand"')
+run_with_hook "$f" "$h"
+if [[ "$RC" -ne 0 && "$(cat "$f")" == "$before" && "$OUT" == *"expected"* ]]; then
+  pass "validator refuses a candidate whose emitted size= is not the derived target"
+else
+  fail "validator accepted a wrong size= — rc=$RC"
+fi
+
+# 19 — a SHRINK must be refused even if it is internally self-consistent.
+#      Guards the concurrent-run race: two runs with different TARGET_PCT read the same
+#      starting ceiling, and the lower one must not install a smaller value after the
+#      higher one already raised it.
+f=$(new_fstab v-shrink "tmpfs /tmp tmpfs defaults,size=16G 0 0")
+before=$(cat "$f")
+OUT=$(RAISE_TMPFS_FSTAB="$f" RAISE_TMPFS_MEMINFO="$MEMINFO" RAISE_TMPFS_LOCK="$TMP_ROOT/lock" \
+      RAISE_TMPFS_STAMP="20260727T150000Z" RAISE_TMPFS_TARGET_PCT=25 bash "$SUT" 2>&1)
+RC=$?
+if [[ "$RC" -eq 0 && "$(cat "$f")" == "$before" ]]; then
+  pass "a ceiling above target is left alone rather than shrunk (never-shrink holds)"
+else
+  fail "never-shrink — rc=$RC"
+fi
+
+# 20 — PRUNE KEEPS THE NEWEST, not merely the right COUNT.
+#      Asserting only `kept -eq N` passed with `sort -n` reversed, which deleted the
+#      newest backups — including the one just taken for the in-flight rewrite, i.e. the
+#      only rollback target. Assert the surviving NAMES.
+f=$(new_fstab prune-names "tmpfs /tmp tmpfs defaults,size=4G 0 0")
+for i in 1 2 3 4 5; do : > "${f}.bak.2026010${i}T000000Z"; done
+OUT=$(RAISE_TMPFS_FSTAB="$f" RAISE_TMPFS_MEMINFO="$MEMINFO" RAISE_TMPFS_LOCK="$TMP_ROOT/lock" \
+      RAISE_TMPFS_STAMP="20260727T160000Z" RAISE_TMPFS_BACKUP_KEEP=2 bash "$SUT" 2>&1)
+survivors=$(find "$TMP_ROOT" -maxdepth 1 -name "$(basename "$f").bak.*" -printf '%f\n' | sort | tr '\n' ' ')
+if [[ "$survivors" == *"20260727T160000Z"* && "$survivors" == *"20260105T000000Z"* && "$survivors" != *"20260101T000000Z"* ]]; then
+  pass "prune keeps the NEWEST backups by filename stamp (not just the right count)"
+else
+  fail "prune kept the wrong set: $survivors"
+fi
+
+# 21 — an operator's own backup must NOT be pruned (only our stamp shape is ours)
+f=$(new_fstab prune-scope "tmpfs /tmp tmpfs defaults,size=4G 0 0")
+: > "${f}.bak.pre-upgrade"
+for i in 1 2 3 4; do : > "${f}.bak.2026020${i}T000000Z"; done
+OUT=$(RAISE_TMPFS_FSTAB="$f" RAISE_TMPFS_MEMINFO="$MEMINFO" RAISE_TMPFS_LOCK="$TMP_ROOT/lock" \
+      RAISE_TMPFS_STAMP="20260727T170000Z" RAISE_TMPFS_BACKUP_KEEP=2 bash "$SUT" 2>&1)
+if [[ -f "${f}.bak.pre-upgrade" ]]; then
+  pass "an operator-created backup outside our stamp shape is never pruned"
+else
+  fail "prune deleted an operator-created backup"
+fi
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "All raise-tmp-tmpfs-ceiling tests passed."

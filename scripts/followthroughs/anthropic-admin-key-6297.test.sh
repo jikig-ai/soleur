@@ -346,64 +346,67 @@ out=$(run_probe_out "$d" 'exit 1' "$CURL_ZERO")
 check_out "$out" "Stall counter query FAILED" "gh failure → loud sentinel, not a silent 0"
 check_no_out "$out" "STALLED" "a failed counter does not also claim STALLED"
 
-# 13 — CLEANUP REGRESSION (#6734 follow-up). Asserts the scratch root is GONE from
-#      disk after the owning process exits.
+# 13 — CLEANUP REGRESSION (#6734 follow-up). Runs THIS FILE and asserts it leaves
+#      nothing behind.
 #
-#      This must assert on-disk ABSENCE, never "a trap is installed". The pre-fix
-#      script installed a perfectly well-formed `trap cleanup_tmp EXIT INT TERM` and
-#      still leaked 3,766 files, because the registration feeding that trap ran in a
-#      command-substitution subshell and was discarded. A trap-presence check passes
-#      against that script, so it would have certified the bug as fixed.
+#      It must assert on-disk ABSENCE, never "a trap is installed": the pre-fix script
+#      carried a perfectly well-formed `trap cleanup_tmp EXIT INT TERM` and still leaked
+#      3,766 files, because the registration feeding that trap ran in a
+#      command-substitution subshell and was discarded.
 #
-#      The child is driven through the SAME shapes the real suite uses — helpers
-#      invoked via `$( )` at two levels of nesting — so a regression that reintroduces
-#      subshell registration is caught rather than side-stepped by a simpler fixture.
-probe_root=$(mktemp -d -t ft6297cleanup.XXXXXXXX)
-cat > "$probe_root/child.sh" <<'CHILD'
+#      It must also run THE REAL FILE. An earlier version of this test drove a heredoc
+#      child that re-declared the correct idiom inline — so it asserted that a
+#      known-good snippet was known-good, and was completely decoupled from the header
+#      above it. Reverting that header to the leaky form leaked 34 orphans while this
+#      test still printed PASS. A regression test that cannot observe the regression it
+#      was written for is worse than no test: it certifies the bug as fixed.
+#
+#      Recursion is broken by SOLEUR_FT6297_SELFTEST, which the child sets to skip this
+#      block. Everything else in the suite runs normally in the child.
+if [[ -z "${SOLEUR_FT6297_SELFTEST:-}" ]]; then
+  probe_root=$(mktemp -d -t ft6297selftest.XXXXXXXX)
+  sentinel="$probe_root/sentinel"
+  mkdir -p "$sentinel"
+
+  # Run the real suite with TMPDIR pointed at an empty sentinel dir we own. Every
+  # allocation this file makes — and every allocation its own scratch root makes — must
+  # land inside it, and nothing may survive the child's exit.
+  ( SOLEUR_FT6297_SELFTEST=1 TMPDIR="$sentinel" bash "${BASH_SOURCE[0]}" ) >/dev/null 2>&1
+  child_rc=$?
+
+  survivors=$(find "$sentinel" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
+
+  if [[ "$child_rc" -ne 0 ]]; then
+    fail "self-test child exited $child_rc — cannot judge cleanup (fixture problem, not a SUT result)"
+  elif [[ "$survivors" -ne 0 ]]; then
+    fail "THIS FILE leaked $survivors entr(ies) into TMPDIR after exiting: $(find "$sentinel" -mindepth 1 -maxdepth 1 | head -3 | tr '\n' ' ')"
+  else
+    pass "the suite leaves zero entries in TMPDIR after it exits (real file, not a stand-in)"
+  fi
+
+  # 13b — POSITIVE CONTROL, against the SAME sentinel mechanism. Proves the probe can
+  #       see a leak at all: without it, test 13 would still pass if TMPDIR were being
+  #       ignored, if the child never allocated anything, or if `find` were misscoped.
+  leak_sentinel="$probe_root/leak-sentinel"
+  mkdir -p "$leak_sentinel"
+  cat > "$probe_root/leaky.sh" <<'LEAKY'
 #!/usr/bin/env bash
 set -uo pipefail
-TMP_ROOT=$(mktemp -d -t ft6297probe.XXXXXXXX) || exit 1
-: "${TMP_ROOT:?}"
-readonly TMP_ROOT
-trap 'rm -rf -- "$TMP_ROOT"' EXIT INT TERM
-export TMPDIR="$TMP_ROOT"
-mktmp()  { mktemp "$@"; }
-mktmpd() { mktemp -d "$@"; }
-# Report the root to the parent, then allocate through it via command substitution.
-printf '%s\n' "$TMP_ROOT"
-f=$(mktmp -t ft.XXXXXXXX); : > "$f"
-d=$(mktmpd -t ft6297.XXXXXXXX); : > "$d/nested"
-inner=$( cd "$d" && printf '%s' "$(mktmp -t ftinner.XXXXXXXX)" ); : > "$inner"
-CHILD
-chmod +x "$probe_root/child.sh"
-child_root=$(bash "$probe_root/child.sh" | head -1)
-
-if [[ -z "$child_root" ]]; then
-  fail "cleanup probe: child did not report a scratch root (fixture broken, not a SUT result)"
-elif [[ -e "$child_root" ]]; then
-  fail "scratch root survives process exit — cleanup leaked: $child_root"
-else
-  pass "scratch root is absent from disk after process exit (not merely trap-registered)"
-fi
-
-# 13b — positive control. Proves 13 can actually fail: a child with NO cleanup must
-#       leave its root behind. Without this, 13 would still pass if `mktemp -d` silently
-#       stopped creating anything at all.
-cat > "$probe_root/leaky.sh" <<'LEAKY'
-#!/usr/bin/env bash
-set -uo pipefail
+# Deliberately no trap: the pre-fix shape, reduced.
 r=$(mktemp -d -t ft6297leak.XXXXXXXX) || exit 1
-printf '%s\n' "$r"
+: > "$r/artifact"
 LEAKY
-chmod +x "$probe_root/leaky.sh"
-leaky_root=$(bash "$probe_root/leaky.sh" | head -1)
-if [[ -n "$leaky_root" && -e "$leaky_root" ]]; then
-  pass "positive control: an uncleaned root DOES survive (test 13 is not vacuous)"
-  rm -rf -- "$leaky_root"
-else
-  fail "positive control failed — test 13 cannot distinguish cleaned from leaked"
+  chmod +x "$probe_root/leaky.sh"
+  ( TMPDIR="$leak_sentinel" bash "$probe_root/leaky.sh" ) >/dev/null 2>&1
+  leaked=$(find "$leak_sentinel" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
+  if [[ "$leaked" -gt 0 ]]; then
+    pass "positive control: an uncleaned child DOES leave entries in the sentinel (test 13 is not vacuous)"
+  else
+    fail "positive control failed — the sentinel probe cannot distinguish cleaned from leaked"
+  fi
+
+  rm -rf -- "$probe_root"
 fi
-rm -rf -- "$probe_root"
 
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
