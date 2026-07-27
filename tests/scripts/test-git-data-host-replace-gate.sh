@@ -220,6 +220,40 @@ else
   pass
 fi
 
+# --- #6977 P13 REGRESSION ARM --------------------------------------------------------
+#
+# WHY THIS EXISTS. #6977 added `depends_on = [doppler_secret.git_data_luks_key]` to
+# hcloud_server.git_data, to stop terraform booting the host before the LUKS key exists.
+# That edge has a CROSS-PATH consequence this suite owns: the passphrase pair is now
+# UPSTREAM of the server, so it enters THIS job's transitive closure and terraform emits
+# it as an explicit `no-op` where previously it was absent from resource_changes entirely.
+#
+# The plan asserted that a no-op does not trip `luks_passphrase_touched` because that
+# counter filters on the four MUTATING verbs. That is a claim about a jq filter, and this
+# is the arm that measures it rather than inferring it — if it were wrong, the #6977 merge
+# would have silently wedged the git-data REPLACE path (a gate that always fails is an
+# outage, not a tripwire) and nothing else in the tree would have noticed.
+PASSPHRASE_NOOP="$(rc_obj 'random_password.git_data_luks' '"no-op"')"
+LUKS_SECRET_NOOP="$(rc_obj 'doppler_secret.git_data_luks_key' '"no-op"')"
+
+write_plan "${PASS_SET},${PASSPHRASE_NOOP},${LUKS_SECRET_NOOP}"
+if git_data_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  pass
+else
+  fail "P13 regression: an explicit no-op on the LUKS passphrase pair (now upstream of the server via #6977's depends_on) must NOT trip luks_passphrase_touched — the git-data replace path is wedged"
+fi
+
+# NON-VACUITY for the arm above: the same pair with a MUTATING verb must still ABORT.
+# Without this, the no-op assertion would also pass against a gate whose passphrase
+# counter had been deleted outright — which is the failure it exists to detect.
+PASSPHRASE_UPDATE="$(rc_obj 'random_password.git_data_luks' '"update"')"
+write_plan "${PASS_SET},${PASSPHRASE_UPDATE}"
+if git_data_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "P13 non-vacuity: an UPDATE on the LUKS passphrase must still ABORT — the counter has been neutered, so the no-op arm above proves nothing"
+else
+  pass
+fi
+
 echo ""
 echo "=== test-git-data-host-replace-gate.sh: ${passes} passed, ${fails} failed ==="
 [ "$fails" -eq 0 ] || exit 1

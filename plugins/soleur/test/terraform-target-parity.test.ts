@@ -496,7 +496,18 @@ function stripDispatchJobs(workflowText: string): string {
   // fourth (hcloud_firewall_attachment.web) is per-merge-covered and the strip is
   // coverage-neutral for it. Stripped for the uniform reason too: a dispatch writer surface
   // must never broaden the per-merge coverage anchor.
-  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace");
+  // git_data_host_create (#6977, ADR-149): the dispatch-only git-data BIRTH path. Stripped
+  // for the uniform reason every dispatch job is — a dispatch writer surface must never
+  // broaden the per-merge coverage anchor — and here the strip is genuinely load-bearing
+  // rather than merely uniform: ALL EIGHTEEN of its -targets are
+  // OPERATOR_APPLIED_EXCLUSIONS (ADR-103), so folding them into `allTargets` would assert
+  // per-merge coverage for a fan-out the per-merge apply deliberately never touches.
+  //
+  // NOTE for whoever edits this function next: the guard above extracts EVERY
+  // "[a-z0-9_]+" string literal in this body and requires each to name a real top-level
+  // job. Adding any other lowercase quoted literal here — even in a helper call — makes
+  // that guard treat it as a job name and go red. Comments are fine; literals are not.
+  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create");
 }
 
 /** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
@@ -605,14 +616,26 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   //   OPERATOR_APPLIED_TOKEN_EXCLUSIONS below): unlike doppler_service_token.write /
   //   .kb_drift (whose `.key` is published into a paired github_actions_secret consumed
   //   by CI, so #5566 forces them to be CI-targeted), this token is minted into an
-  //   operator-created `prd_git_data` Doppler config and consumed by cloud-init on the
-  //   git-data HOST. CI cannot apply it — the config does not exist until the operator
-  //   creates it (runbook precondition), and CI cannot provision the host that reads it.
+  //   `prd_git_data` Doppler config and consumed by cloud-init on the git-data HOST. CI
+  //   cannot apply it: it is minted into a config that only the gated birth dispatch
+  //   creates, and CI cannot provision the host that reads it.
+  //
+  //   (#6977) That config is now `doppler_config.git_data_prd` below rather than an
+  //   operator's dashboard click. The prose here used to read "the config does not exist
+  //   until the operator creates it (runbook precondition)" — true when written, and the
+  //   precondition it referenced has been deleted, not merely automated.
   "random_password.git_data_luks",
   "doppler_secret.git_data_luks_key",
   "hcloud_volume.git_data_luks",
   "hcloud_volume_attachment.git_data_luks",
   "doppler_service_token.git_data",
+  // (#6977) The prd_git_data BRANCH CONFIG itself. An exclusion for the same reason as
+  // every git-data sibling — and it must NEVER be given a per-PR `-target` line. Both
+  // Doppler writes above reference it, so a per-PR target would drag
+  // hcloud_server.git_data into the per-merge plan through upstream closure, trip
+  // `host_creates > 0`, and wedge every merge to main. That is the exact mechanism that
+  // killed the `doppler_secret.git_data_ssh_host` proposal (DC-3).
+  "doppler_config.git_data_prd",
   // #6588 (ADR-119) — the ADDITIVE LUKS-at-rest /workspaces volume + its at-rest key +
   // its scoped read-only token ALL ride the operator's `workspaces-luks-cutover` dispatch
   // apply, NOT the #5566 per-PR-CI class. Same class as hcloud_volume.workspaces +
@@ -2125,5 +2148,255 @@ describe("registry_luks_recut step order is a safety property", () => {
     // Pinned separately from the chain above because this is the one ordering the plan's v1 got
     // wrong, and a chain assertion would not name it if it regressed.
     expect(idx("Pre-apply zero-touch assert")).toBeLessThan(idx("Terraform apply"));
+  });
+});
+
+// ─── git-data-host-create dispatch: the birth -target set + gate pairing (#6977) ──
+//
+// `apply_target=git-data-host-create` (ADR-149) is the ONLY automated route that can
+// create the git-data store. It is NOT a widened git-data-host-replace: that gate
+// requires actions ⊇ {delete,create}, fires its luks_passphrase_touched arm on a CREATE,
+// and rests its 5-member allow-set on "preserved by OMISSION" — an argument that INVERTS
+// on a birth, where an omitted address is a MISSING resource rather than a protected one.
+// So the two -target sets stay separately pinned, and the job is asserted below to borrow
+// neither the sibling gate nor its allow-set.
+//
+// THE SAFETY PROPERTY OF THIS SET IS ITS COMPLETENESS, which is the mirror image of the
+// replace set (whose property is its omissions). Four members are DOWNSTREAM of the
+// server and so are not auto-pulled by -target's upstream closure; three more are
+// siblings terraform would never pull at all. Each omission is a distinct catastrophe —
+// enumerated in the gate's requirement arm — so the set is asserted three ways: workflow
+// -target list == gate `def allow:` == this constant.
+const GIT_DATA_BIRTH_TARGET_BASES = [
+  "hcloud_server.git_data",
+  // DOWNSTREAM of the server (references its .id) — omit and the host comes up with no
+  // private-net IP (#6416). runcmd is once-per-instance and ADR-115 bars git-data from
+  // the reboot primitive, so that host must be REPLACED, not repaired.
+  "hcloud_server_network.git_data",
+  "hcloud_volume.git_data",
+  "hcloud_volume.git_data_luks",
+  // DOWNSTREAM — omit either and the store boots with its volume unmounted. For the LUKS
+  // one that means at-rest encryption is absent while every artifact claims it present.
+  "hcloud_volume_attachment.git_data",
+  "hcloud_volume_attachment.git_data_luks",
+  // UPSTREAM of its own attachment (the attachment references .id), which is why it is in
+  // the set at all — and why the gate needs a separate firewall-CONTENT arm: being in the
+  // allow-set makes `update` a permitted verb on the one resource carrying the entire
+  // public-exposure defense.
+  "hcloud_firewall.git_data",
+  // DOWNSTREAM, and the only thing binding the zero-rule deny-all firewall to the host.
+  // Omit and the store boots NAKED on its public IPv4/IPv6.
+  "hcloud_firewall_attachment.git_data",
+  // (#6977 P7) The prd_git_data branch config. VERIFIED ABSENT in Doppler prd; both
+  // writes below target it, so without it the apply fails "Could not find requested
+  // config". Provisioned rather than hand-created — and NEVER given a per-PR -target.
+  "doppler_config.git_data_prd",
+  "doppler_service_token.git_data",
+  "tls_private_key.git_transport",
+  "tls_private_key.git_provision",
+  "tls_private_key.git_remove",
+  // SIBLINGS, not in the server's graph (issue AC4). Omit one and the host's
+  // authorized_keys holds a public half whose private half exists only in tfstate.
+  "doppler_secret.git_transport_ssh_private_key",
+  "doppler_secret.git_provision_ssh_private_key",
+  "doppler_secret.git_remove_ssh_private_key",
+  // SIBLINGS (P12). The service token authorizes READING the config; it says nothing
+  // about the config CONTAINING the key. Omit these and luksOpen fails — silently.
+  "random_password.git_data_luks",
+  "doppler_secret.git_data_luks_key",
+];
+
+// Asserted ABSENT from the -target set. Both are refused by the gate's out-of-scope arm
+// too, but absence here is the primary mechanism — an untargeted resource cannot be
+// planned at all.
+const GIT_DATA_BIRTH_REFUSED = [
+  // The feeder already shipped and is web-host-resident (#6548), so creating a monitor
+  // this route cannot arm reproduces the #6537 fed-but-paused shape: a green dashboard
+  // measuring nothing.
+  "betteruptime_heartbeat.git_data_prd",
+  "doppler_secret.git_data_heartbeat_url_prd",
+  // SSH-provisions web-1, the LIVE serving host, and remote-exec runs at APPLY not plan.
+  "terraform_data.git_data_probe_install",
+];
+
+describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const jobBlock = extractJobBlock(wf, "git_data_host_create");
+
+  test("the job exists and is reachable only via its own apply_target", () => {
+    // AC1 is verified by PARSED ENUM MEMBERSHIP + the job `if:` needle, deliberately not
+    // by a `grep -c … >= 3` — three comment lines satisfy that, and
+    // stock-preflight-coverage.test.ts documents it as a real false-green in this repo.
+    expect(jobBlock.length).toBeGreaterThan(0);
+    expect(jobBlock).toMatch(
+      /if:\s*github\.event_name == 'workflow_dispatch' && inputs\.apply_target == 'git-data-host-create'/,
+    );
+    const opts = /apply_target:[\s\S]*?options:([\s\S]*?)\n\nconcurrency:/.exec(wf);
+    expect(opts).not.toBeNull();
+    expect(opts![1]).toContain("- git-data-host-create");
+  });
+
+  test("the -target set equals the constant, exactly", () => {
+    const targets = [...extractAllTargets(jobBlock)].sort();
+    // Non-vacuity: the extraction must actually find the eighteen members.
+    expect(targets.length).toBe(GIT_DATA_BIRTH_TARGET_BASES.length);
+    expect(targets).toEqual([...GIT_DATA_BIRTH_TARGET_BASES].sort());
+  });
+
+  test("the refused addresses are ABSENT from the -target set", () => {
+    const targets = extractAllTargets(jobBlock);
+    for (const addr of GIT_DATA_BIRTH_REFUSED) {
+      expect(targets.has(addr)).toBe(false);
+    }
+    // Non-vacuity for the assertion above: the set is genuinely non-empty, so "absent"
+    // is a real property rather than a consequence of extracting nothing.
+    expect(targets.has("hcloud_server.git_data")).toBe(true);
+  });
+
+  test("every -target is an OPERATOR_APPLIED_EXCLUSION (ADR-103)", () => {
+    // The property that keeps merging this PR from applying anything to git-data. If a
+    // future -target is added here without a matching exclusion, the per-merge apply
+    // would start reaching it.
+    const missing = GIT_DATA_BIRTH_TARGET_BASES.filter(
+      (a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  test("stripDispatchJobs removes the job's targets from the coverage set", () => {
+    const stripped = extractAllTargets(stripDispatchJobs(wf));
+    // All eighteen are exclusions, so folding them in would assert per-merge coverage for
+    // a fan-out the per-merge apply deliberately never touches.
+    expect(stripped.has("doppler_config.git_data_prd")).toBe(false);
+    // Non-vacuity for the strip: the job block genuinely carries the target.
+    expect(extractAllTargets(jobBlock).has("doppler_config.git_data_prd")).toBe(true);
+  });
+
+  test("the job SOURCES both gates by command, and borrows no sibling gate", () => {
+    // Anchored on `source` as a COMMAND at line start, not a bare filename `.includes`.
+    // A filename substring is satisfied by a comment mentioning the gate — a recorded
+    // false-green in this repo — and the whole point of this assertion is that the job
+    // executes the same bytes the gate's own suite exercises.
+    expect(jobBlock).toMatch(
+      /^\s*source\s+"\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/git-data-host-birth-gate\.sh"/m,
+    );
+    expect(jobBlock).toMatch(
+      /^\s*source\s+"\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/git-data-birth-readiness-gate\.sh"/m,
+    );
+    expect(jobBlock).toMatch(
+      /^\s*source\s+"\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/stock-preflight-gate\.sh"/m,
+    );
+    // It must NOT source the replace gate. Grading a birth against that contract aborts
+    // three ways, and the two files are siblings by shape and opposites by contract.
+    expect(jobBlock).not.toMatch(/source[^\n]*git-data-host-replace-gate\.sh/);
+  });
+
+  // ORDERING ASSERTIONS. Every index below is taken from a SYNTACTIC CONSTRUCT (a
+  // `source` command at line start, `terraform plan` with its flags), never a bare
+  // filename or phrase.
+  //
+  // That is not stylistic caution — the first draft of these two tests used
+  // `indexOf("terraform plan")` and FAILED, because the job's own header comment says
+  // "...not after a two-minute terraform plan". A bare-token index matched the comment
+  // and reported the interlock as running after the plan when it runs before it. The
+  // same file carries `# shellcheck source=...` directives naming each gate one line
+  // above the real `source`, so a bare-filename index is exposed to the identical class.
+  const sourceIdx = (basename: string) =>
+    jobBlock.search(
+      new RegExp(
+        `^\\s*source\\s+"\\$\\{GITHUB_WORKSPACE\\}/tests/scripts/lib/${basename.replace(/\./g, "\\.")}"`,
+        "m",
+      ),
+    );
+
+  test("the birth gate is sourced BEFORE the stock preflight", () => {
+    // Order is load-bearing: the birth gate proves the plan IS the scoped birth, the
+    // preflight proves it is FEASIBLE. Reversed, an out-of-scope plan would be stock-
+    // checked before anyone asked whether it was the right plan.
+    const birthAt = sourceIdx("git-data-host-birth-gate.sh");
+    const stockAt = sourceIdx("stock-preflight-gate.sh");
+    expect(birthAt).toBeGreaterThan(-1);
+    expect(stockAt).toBeGreaterThan(-1);
+    expect(birthAt).toBeLessThan(stockAt);
+  });
+
+  test("the readiness interlock runs BEFORE the terraform plan", () => {
+    const interlockAt = sourceIdx("git-data-birth-readiness-gate.sh");
+    // `terraform plan` WITH its flags — the invocation, not the words. The job header
+    // comment contains the bare phrase.
+    const planAt = jobBlock.search(/^\s*terraform plan -no-color/m);
+    expect(interlockAt).toBeGreaterThan(-1);
+    expect(planAt).toBeGreaterThan(-1);
+    expect(interlockAt).toBeLessThan(planAt);
+  });
+
+  test("the job carries the environment gate and reads HCLOUD_TOKEN for the preflight", () => {
+    expect(jobBlock).toMatch(/^\s*environment:\s*web-platform-infra-apply\s*$/m);
+    // The sourced stock gate runs OUTSIDE the `doppler run` wrapper, and this step's env:
+    // is DOPPLER_TOKEN only. Without this read the gate fails closed on EVERY dispatch —
+    // an outage, not a tripwire.
+    expect(jobBlock).toMatch(/export HCLOUD_TOKEN/);
+  });
+
+  test("the gate's allow-set matches the job's -target set exactly", () => {
+    const gateSrc = readFileSync(
+      resolve(REPO_ROOT, "tests/scripts/lib/git-data-host-birth-gate.sh"),
+      "utf8",
+    );
+    // The UNPARAMETERIZED extractor. This gate is a SINGLETON, so it carries `def allow:`
+    // with no key argument and its members contain no `[`/`]` — unlike
+    // web-host-birth-gate.sh, whose `def allow($k):` members embed `[\"\($k)\"]` and
+    // therefore need the `\n];`-terminated form. Using the web extractor here would match
+    // nothing; using this one there would stop at the first `]` inside a member.
+    const defAllow = /def allow:\s*\[([^\]]+)\]/.exec(gateSrc);
+    expect(defAllow).not.toBeNull();
+    const gateBases = [
+      ...new Set(
+        [...defAllow![1].matchAll(/"([^"]+)"/g)]
+          .map((m) => m[1])
+          .filter((a) => /^[a-z0-9_]+\.[a-z0-9_]+$/.test(a)),
+      ),
+    ].sort();
+    // Non-vacuity: the extraction must actually find the eighteen members.
+    expect(gateBases.length).toBe(GIT_DATA_BIRTH_TARGET_BASES.length);
+    expect(gateBases).toEqual([...GIT_DATA_BIRTH_TARGET_BASES].sort());
+  });
+});
+
+// ─── apply_target enum <-> field-label parity (#6977, cto F2) ──────────────────
+//
+// The `description:` is the FIELD LABEL a non-technical operator reads above the
+// dropdown. It enumerated the selectable targets by hand, and drifted: it advertised
+// `registry-ruleset-entrypoint-audit`, which is NOT selectable — the option is
+// `entrypoint-audit`. An operator following the label would look for an option that does
+// not exist. That is the second time this class of rot has been paid for here, so it is
+// pinned rather than fixed again.
+describe("apply_target enum <-> description parity (#6977)", () => {
+  test("every target-shaped token in the description is a real enum option", () => {
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    const block = /apply_target:[\s\S]*?options:([\s\S]*?)\n\nconcurrency:/.exec(wf);
+    expect(block).not.toBeNull();
+    const options = [...block![1].matchAll(/^\s*-\s+([a-z0-9-]+)\s*$/gm)].map(
+      (m) => m[1],
+    );
+    expect(options.length).toBeGreaterThan(10);
+
+    const desc = /apply_target:[\s\S]*?description:\s*>-\n([\s\S]*?)\n\s{8}required:/.exec(wf);
+    expect(desc).not.toBeNull();
+    // Split on `|`, the separator the label itself uses, then keep tokens that LOOK like
+    // a target (kebab-case with at least one hyphen). Prose words are single tokens
+    // without hyphens and drop out; `manual-rerun (default)` keeps its leading token.
+    const cited = [
+      ...new Set(
+        desc![1]
+          .split("|")
+          .map((seg) => seg.trim().split(/[\s.,]/)[0])
+          .filter((t) => /^[a-z0-9]+(-[a-z0-9]+)+$/.test(t)),
+      ),
+    ];
+    // Non-vacuity: the label must genuinely cite targets, else this asserts nothing.
+    expect(cited.length).toBeGreaterThan(5);
+    const phantom = cited.filter((t) => !options.includes(t));
+    expect(phantom).toEqual([]);
   });
 });

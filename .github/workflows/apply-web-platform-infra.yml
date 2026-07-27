@@ -4041,8 +4041,9 @@ jobs:
           # Sourced gates — the SAME bytes tests/scripts/test-git-data-host-birth-gate.sh
           # exercises. An inline copy would be untestable and would break the parity test's
           # job-to-gate pairing assertion.
-          # shellcheck source=tests/scripts/lib/git-data-host-birth-gate.sh
+          # shellcheck source=tests/scripts/lib/plan-gate-preamble.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/plan-gate-preamble.sh"
+          # shellcheck source=tests/scripts/lib/git-data-host-birth-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-host-birth-gate.sh"
           if ! git_data_host_birth_gate tfplan.json; then
             echo "::error::git-data-host-create birth gate ABORTED: the plan is not the exact scoped birth of hcloud_server.git_data. The gate's message above names WHICH arm refused. Nothing has been created. NO [ack-destroy] bypass on this path — this gate does NOT borrow git-data-host-replace-gate.sh, whose contract is the opposite of this one."
