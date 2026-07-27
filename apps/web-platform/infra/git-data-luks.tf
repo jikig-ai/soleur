@@ -21,7 +21,7 @@
 # it as GIT_DATA_LUKS_KEY. special=false keeps it shell/stdin-safe for the
 # `printf %s | cryptsetup --key-file -` pipe; length 40 alphanumeric is ~238 bits.
 # Mirrors random_password.live_verify_user (live-verify.tf) + doppler_secret shape
-# (git-data.tf:74-80).
+# (git-data.tf, doppler_secret.git_transport_ssh_private_key).
 #
 # Rotation (leak response) is NOT a re-key of an existing LUKS header — it is a full
 # volume cutover: `terraform apply -replace=random_password.git_data_luks` mints a
@@ -74,7 +74,7 @@ resource "doppler_service_token" "git_data" {
 # boot (cloud-init isLuks-guards so a 2nd run is a no-op). `format = "ext4"` here is
 # only the hcloud-side initial FS; the guest's luksFormat overwrites the LUKS header
 # region and mkfs.ext4 lays the real FS INSIDE the mapper. Shape mirrors
-# hcloud_volume.git_data (git-data.tf:155-169): separate volume + attachment
+# hcloud_volume.git_data (git-data.tf, resource "hcloud_volume" "git_data"): separate volume + attachment
 # resources, attached to hcloud_server.git_data.
 resource "hcloud_volume" "git_data_luks" {
   name     = "soleur-git-data-luks-store"

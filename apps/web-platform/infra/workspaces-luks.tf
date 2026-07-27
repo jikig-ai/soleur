@@ -194,7 +194,7 @@ resource "github_actions_secret" "workspaces_luks_boot_token" {
 #
 # NOTE for the Phase-4 implementer (ADR-143 D3): the fresh-boot LUKS path MUST use the
 # `blkid -o value -s TYPE` discriminator (raw ""→luksFormat; crypto_LUKS→no-op; anything else→FATAL),
-# NEVER `cryptsetup isLuks` (cloud-init-git-data.yml:159) — that pattern is the documented
+# NEVER `cryptsetup isLuks` (cloud-init-git-data.yml:169) — that pattern is the documented
 # data-destroyer on a populated device (lines 144-167 above), safe on git-data only because its host
 # is single-purpose fresh; the web-host cloud-init is SHARED across web-1 (populated) and web-2.
 #

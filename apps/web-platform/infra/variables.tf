@@ -131,8 +131,9 @@ variable "web_hosts" {
   #
   # ARCH: cpx22 is x86/amd64, same architecture as cx23 (only the CPU vendor differs, Intel→AMD),
   # so nothing downstream changes — there is no arch derivation for web hosts at all (server.tf
-  # passes each.value.server_type straight through, unlike var.registry_server_type and
-  # var.inngest_server_type which derive arm64/amd64). NOTE the latent constraint that creates: a
+  # passes each.value.server_type straight through, unlike var.registry_server_type,
+  # var.inngest_server_type and — since #6570 — var.git_data_server_type, which all three
+  # derive arm64/amd64). NOTE the latent constraint that creates: a
   # web host can never be born on the cax ARM line regardless of stock, because cloud-init.yml
   # PINS amd64 in three places (Doppler CLI, the Docker apt `arch=amd64` line, the webhook binary).
   #
@@ -170,9 +171,20 @@ variable "web_hosts" {
 # already exist (hr-tf-variable-no-operator-mint-default).
 
 variable "git_data_server_type" {
-  description = "Hetzner server type for the git-data host (cax11 = 2 vCPU ARM64/Ampere, 4GB RAM). ARM64: git/sshd are ARM-native. Verify current Hetzner pricing before budget decisions."
+  description = "Hetzner server type for the git-data host. HOST ARCH IS DERIVED FROM THIS (git-data.tf local.git_data_arch): cax* (Ampere) → arm64, cpx*/cx*/ccx* → amd64 — mirroring var.registry_server_type and var.inngest_server_type. Every arch-coupled download in cloud-init-git-data.yml (today: the Doppler CLI + its checksum) is selected off that local, so both arms boot correctly. cpx22 (2 vCPU AMD x86, 4 GB, ~€19.49/mo) is the default because it is ORDERABLE: the entire cax line was orderable in 0 of 3 EU datacenters at both recorded probes, so cax11 (arm64, ~€5.99/mo) could never birth this host — that is #6570, and the repin is a purchase of orderability, not a sizing decision. A bare-repo git store is neither CPU- nor RAM-bound, so 2 vCPU / 4 GB is ample on either arch. Verify current Hetzner pricing before budget decisions — recorded via ops-advisor."
   type        = string
-  default     = "cax11"
+  default     = "cpx22"
+
+  # #6570: arch is DERIVED from this prefix (local.git_data_arch), so an unrecognized
+  # prefix has no inferable arch and would silently select the amd64 download on an ARM
+  # host. This guard only rejects a typo; it deliberately does NOT encode which types are
+  # ORDERABLE today (that rots — stock-preflight-gate.sh re-probes the live Hetzner
+  # catalog at dispatch, and data.hcloud_server_type.git_data catches a phantom type at
+  # plan). Mirrors var.inngest_server_type's validation.
+  validation {
+    condition     = can(regex("^(cax|cpx|cx|ccx)", var.git_data_server_type))
+    error_message = "git_data_server_type must be a recognized Hetzner type (cax*=arm64, or cpx*/cx*/ccx*=amd64); arch is derived from the prefix."
+  }
 }
 
 variable "git_data_volume_size" {

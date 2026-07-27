@@ -12,6 +12,16 @@
 #   * the key arrives from the Doppler-injected env (doppler run), and the passphrase
 #     literal is NOT baked into user_data (only random_password → doppler_secret).
 #
+# Also carries the #6570 DUAL-ARCH DERIVATION guards (A14-A17). git-data was pinned to
+# `cax11`, a type orderable in 0 of 3 EU datacenters, so the host could never be born on
+# its declared type. The repin to `cpx22` makes the host arch DERIVED from the type
+# prefix, and these four assertions pin that derivation behaviorally:
+#   * the Doppler URL is arch-interpolated with the $${shell}/${terraform} escaping split
+#     correct (the silent direction renders an EMPTY arch and the render gate is blind);
+#   * the per-arch checksum pair is byte-identical to the two live canon sites, IN ORDER;
+#   * the derivation is ORIENTED correctly (replays the ternary — catches an inversion);
+#   * the declared default is not a cax* type (#6570 regressing, statically).
+#
 # Each assertion is MUTATION-TESTED: the predicate is re-run against a deliberately
 # broken copy and MUST flip to failing (a green test that cannot go red is worthless
 # — the bash-gate-authoring foot-gun). Deliberately-nonzero commands are wrapped in
@@ -27,6 +37,13 @@ CLOUD_INIT="${DIR}/cloud-init-git-data.yml"
 LUKS_TF="${DIR}/git-data-luks.tf"
 CUTOVER="${DIR}/git-data-cutover.sh"
 PRERECEIVE="${DIR}/git-data-pre-receive.sh"
+# #6570 dual-arch derivation (A14-A17). git-data.tf carries the derivation + the
+# per-arch checksum pair; inngest-host.tf / zot-registry.tf are the CANON the pair
+# is derived from (never a second hardcoded literal); variables.tf holds the default.
+GIT_DATA_TF="${DIR}/git-data.tf"
+INNGEST_HOST_TF="${DIR}/inngest-host.tf"
+ZOT_TF="${DIR}/zot-registry.tf"
+VARIABLES_TF="${DIR}/variables.tf"
 
 passes=0
 fails=0
@@ -37,6 +54,9 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 [ -f "$LUKS_TF" ]      || { echo "FAIL: git-data-luks.tf not found at $LUKS_TF" >&2; exit 1; }
 [ -f "$CUTOVER" ]      || { echo "FAIL: git-data-cutover.sh not found at $CUTOVER" >&2; exit 1; }
 [ -f "$PRERECEIVE" ]   || { echo "FAIL: git-data-pre-receive.sh not found at $PRERECEIVE" >&2; exit 1; }
+for f in "$GIT_DATA_TF" "$INNGEST_HOST_TF" "$ZOT_TF" "$VARIABLES_TF"; do
+  [ -f "$f" ] || { echo "FAIL: required file not found: $f" >&2; exit 1; }
+done
 
 # --- Predicates (each takes a file, echoes "1" if the property holds, else "0") ---
 
@@ -150,6 +170,178 @@ p_prereceive_freeze() {
     && grep -Eq 'if \[ -e "\$cutover_freeze" \]; then' "$1"; then echo 1; else echo 0; fi
 }
 
+# --- #6570 dual-arch derivation predicates (A14-A17) ------------------------
+# git-data was pinned to `cax11` (ARM64/Ampere) — a type orderable in 0 of 3 EU
+# datacenters, so the host could never be born on its declared type. #6570 repins to
+# `cpx22` (amd64) and DERIVES the arch from the type prefix instead of hardcoding it.
+#
+# These four are deliberately BEHAVIORAL, not bare-fragment greps. inngest-host.test.sh
+# §9b measured that 5 of 8 realistic mutations passed a `grep -qF '<fragment>'` guard —
+# including bug #6178 itself — because a fragment only certifies that a substring exists
+# SOMEWHERE in the file, so it stays green while the live expression is inverted or
+# commented out. Each predicate below extracts the expression's OWN bytes and replays
+# the decision the host actually makes, and each carries a non-vacuity guard: a failed
+# extraction must return 0 (fail loudly), never silently pass every case.
+
+# A14: the Doppler download URL is arch-INTERPOLATED, with the escaping split correct.
+# `$${DOPPLER_VERSION}` is a SHELL variable Terraform must pass through literally;
+# `${doppler_arch}` is a Terraform interpolation that must have a templatefile map key.
+# Getting that split backwards is silent: `$${doppler_arch}` renders a literal that bash
+# expands to EMPTY, and .github/scripts/validate-infra-templates.sh skips any `$${key}`
+# BY DESIGN, so the render gate is blind to it. This exact-form grep is the only guard.
+# Verbatim shape from inngest-host.test.sh:177 (the sibling dual-arch host).
+# BOTH interpolations are pinned, not just the URL. The plan named the silent direction
+# as this change's top risk, and it can land on EITHER line — a `$${doppler_sha256}`
+# renders an empty checksum just as invisibly as a `$${doppler_arch}` renders an empty
+# arch. Guarding only the URL would leave the checksum half covered by a one-shot PR
+# acceptance grep and by nothing durable afterwards.
+p_doppler_arch_url() {
+  # Comment-stripped FIRST. This file now carries an ESCAPING: block that names
+  # $${doppler_arch} / $${doppler_sha256} in prose, so a bare whole-file grep is
+  # satisfiable by the explanatory comment alone — the assertion would survive a
+  # full revert to the hardcoded arm64 build (cq-assert-anchor-not-bare-token).
+  local src
+  src="$(sed 's/#.*//' "$1")"
+  printf '%s\n' "$src" | grep -qF 'doppler_$${DOPPLER_VERSION}_linux_${doppler_arch}.tar.gz' || { echo 0; return; }
+  printf '%s\n' "$src" | grep -qF 'DOPPLER_SHA256="${doppler_sha256}"' || { echo 0; return; }
+  # The digest must be CONSUMED, not merely assigned. Without this, deleting the
+  # verification line entirely leaves the whole A14/A15 apparatus green: a correct
+  # checksum is proven computed and proven assigned, and nothing proves it is ever
+  # compared against the downloaded tarball.
+  printf '%s\n' "$src" | grep -qF 'echo "$${DOPPLER_SHA256}' || { echo 0; return; }
+  printf '%s\n' "$src" | grep -qF 'sha256sum -c -' || { echo 0; return; }
+  echo 1
+}
+
+# Extract a file's per-arch Doppler checksum pair as "<arm64sha> <amd64sha>", read from
+# the ternary's own bytes. Comments are stripped FIRST so a checksum eulogized in prose
+# can neither stand in for a live literal nor be miscounted.
+# Emits a NORMALIZED, order-independent binding "amd64=<sha>;arm64=<sha>".
+# Reading the ternary's CONDITION is the whole point: comparing the two literals in
+# textual order cannot see a checksum<->arch PAIRING SWAP. Flipping the condition to
+# `== "amd64"` leaves both literals present in the same order, so an order-compare
+# stays green while the host verifies the amd64 tarball against the arm64 digest —
+# and because that runcmd carries no `set -e`, it then installs it anyway, with the
+# supply-chain check silently disarmed. Normalizing also makes the guard robust to a
+# semantically identical refactor that inverts the condition deliberately.
+canon_doppler_pair() {
+  local line condarch t f
+  # Strip `#` and whitespace-preceded `//` comments (HCL supports both). The `//` arm
+  # requires leading whitespace or line-start so a `https://` URL is never truncated.
+  line="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" \
+    | grep -E 'doppler_sha256[[:space:]]*=' | grep -F '?' | head -1)"
+  [ -n "$line" ] || { echo ""; return; }
+  condarch="$(printf '%s' "$line" | grep -oE '==[[:space:]]*"[a-z0-9]+"' | grep -oE '[a-z0-9]+"$' | tr -d '"')"
+  t="$(printf '%s' "$line" | grep -oE '\?[[:space:]]*"[0-9a-f]{64}"' | grep -oE '[0-9a-f]{64}')"
+  f="$(printf '%s' "$line" | grep -oE ':[[:space:]]*"[0-9a-f]{64}"' | grep -oE '[0-9a-f]{64}')"
+  { [ -n "$condarch" ] && [ -n "$t" ] && [ -n "$f" ]; } || { echo ""; return; }
+  case "$condarch" in
+    arm64) printf 'amd64=%s;arm64=%s\n' "$f" "$t" ;;
+    amd64) printf 'amd64=%s;arm64=%s\n' "$t" "$f" ;;
+    *)     echo "" ;;
+  esac
+}
+
+# A15: git-data's checksum pair is byte-identical to BOTH live canon sites, in ORDER.
+# Derived from inngest-host.tf + zot-registry.tf rather than hardcoding a fourth literal
+# (the CANON_WEB_HOSTS idiom, inngest-host.test.sh:135-145): a future Doppler version bump
+# that updates the canon sites red-lines this until git-data follows. Order matters — it
+# is what pins each checksum to its OWN arch, so a pairing SWAP (arm64 sha on the amd64
+# arm) fails here even though both literals are still "present".
+p_doppler_checksum_parity() {
+  local gd_pair ing_pair zot_pair p
+  gd_pair="$(canon_doppler_pair "$1")"
+  ing_pair="$(canon_doppler_pair "$INNGEST_HOST_TF")"
+  zot_pair="$(canon_doppler_pair "$ZOT_TF")"
+  # Non-vacuity: every side must be a fully-formed normalized binding. Without this an
+  # empty extraction on all three would compare "" == "" and fake a clean parity.
+  for p in "$gd_pair" "$ing_pair" "$zot_pair"; do
+    printf '%s' "$p" | grep -qE '^amd64=[0-9a-f]{64};arm64=[0-9a-f]{64}$' || { echo 0; return; }
+  done
+  if [ "$gd_pair" = "$ing_pair" ] && [ "$gd_pair" = "$zot_pair" ]; then echo 1; else echo 0; fi
+}
+
+# The templatefile map is the WIRE between the derivation (A16) and its consumer (A14).
+# A16 proves local.git_data_arch is computed correctly; A14 proves the cloud-init reads
+# ${doppler_arch}. Neither sees the map that connects them, so hardcoding
+# `doppler_arch = "arm64"` there reproduces the exact #6570 boot-brick — arm64 binary on
+# an x86 host, doppler never runs, GIT_DATA_LUKS_KEY never arrives, volume never opens —
+# with the precondition still green (local.git_data_arch is still correctly amd64).
+p_templatefile_wiring() {
+  local src
+  src="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1")"
+  printf '%s\n' "$src" | grep -qE '^[[:space:]]*doppler_arch[[:space:]]*=[[:space:]]*local\.git_data_arch[[:space:]]*$' || { echo 0; return; }
+  printf '%s\n' "$src" | grep -qE '^[[:space:]]*doppler_sha256[[:space:]]*=[[:space:]]*local\.git_data_doppler_sha256[[:space:]]*$' || { echo 0; return; }
+  echo 1
+}
+
+# The phantom/wrong-arch tripwire is load-bearing ONLY while hcloud_server.git_data
+# REFERENCES the data source: terraform prunes an unreferenced data source under
+# `-target=`, and every git-data dispatch is -targeted. Deleting the precondition
+# therefore disarms the data source silently — the untargeted PR-time plan still reads
+# it, so CI and `terraform validate` both stay green and the only signal is prose.
+# Comment-stripped, because `data.hcloud_server_type.git_data` appears in the
+# surrounding explanatory comments (a bare grep would be satisfied by those alone).
+p_tripwire_edge() {
+  local src cond
+  src="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1")"
+  printf '%s\n' "$src" | grep -qE '^data "hcloud_server_type" "git_data"' || { echo 0; return; }
+  printf '%s\n' "$src" | grep -qE '^[[:space:]]*precondition[[:space:]]*\{' || { echo 0; return; }
+  cond="$(printf '%s\n' "$src" | grep -A 3 -E '^[[:space:]]*condition[[:space:]]*=' | head -4)"
+  printf '%s' "$cond" | grep -qF 'data.hcloud_server_type.git_data.architecture' || { echo 0; return; }
+  # The enums MUST be mapped, never compared: hcloud emits x86/arm, the local is
+  # amd64/arm64, so a direct compare is false on every plan forever and wedges the root.
+  printf '%s' "$cond" | grep -qF '"arm"' || { echo 0; return; }
+  printf '%s' "$cond" | grep -qF '"x86"' || { echo 0; return; }
+  printf '%s' "$cond" | grep -qE 'architecture[[:space:]]*==[[:space:]]*local\.git_data_arch' && { echo 0; return; }
+  echo 1
+}
+
+# A16: the arch derivation is ORIENTED correctly. This is the only assertion that catches
+# an INVERTED ternary — `startswith(..., "cax") ? "amd64" : "arm64"` ships cpx22 -> arm64,
+# fails `sha256sum -c -` at boot, and produces exactly the failure this change prevents.
+# A bare "the local is declared" grep cannot see it. Extract the prefix + both branch
+# values, then replay the decision over the real type space.
+p_arch_derivation() {
+  local expr pfx tval fval pair t exp got
+  # Anchored on the ASSIGNMENT at line-start. A bare `git_data_arch[[:space:]]*=` also
+  # matches the precondition's `local.git_data_arch == "arm64" ? "arm" : "x86"`, so the
+  # extraction was order-coupled — correct today only because `locals` precedes the
+  # resource in the file.
+  expr="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | grep -E '^[[:space:]]*git_data_arch[[:space:]]*=' | head -1)"
+  [ -n "$expr" ] || { echo 0; return; }
+  pfx="$(printf '%s' "$expr" | grep -oE 'startswith\(var\.git_data_server_type,[[:space:]]*"[a-z]+"\)' | grep -oE '"[a-z]+"' | tr -d '"')"
+  tval="$(printf '%s' "$expr" | grep -oE '\?[[:space:]]*"[a-z0-9]+"' | grep -oE '"[a-z0-9]+"' | tr -d '"')"
+  fval="$(printf '%s' "$expr" | grep -oE ':[[:space:]]*"[a-z0-9]+"' | grep -oE '"[a-z0-9]+"' | tr -d '"')"
+  # Non-vacuity: a partial extraction must fail loudly, never replay vacuously.
+  { [ -n "$pfx" ] && [ -n "$tval" ] && [ -n "$fval" ]; } || { echo 0; return; }
+  # cax* is Ampere/ARM; cpx*/cx*/ccx* are all x86. Synthesized types, not a live probe
+  # (cq-test-fixtures-synthesized-only) — this pins the DERIVATION, not today's stock.
+  # The arm64 class had cardinality 1 (cax11 alone) — a claim quantified over the ARM
+  # line but sampled once. Hetzner's ARM lineup is cax11/21/31/41; all four are replayed
+  # so a truncated prefix (e.g. "ca") cannot pass on a single lucky member.
+  for pair in "cax11:arm64" "cax21:arm64" "cax31:arm64" "cax41:arm64" \
+              "cpx22:amd64" "cx23:amd64" "ccx13:amd64"; do
+    t="${pair%%:*}"; exp="${pair##*:}"
+    case "$t" in "$pfx"*) got="$tval" ;; *) got="$fval" ;; esac
+    [ "$got" = "$exp" ] || { echo 0; return; }
+  done
+  echo 1
+}
+
+# A17: the declared default is not a `cax*` type — #6570 itself, statically. The whole
+# `cax` line was orderable in 0 of 3 EU datacenters, so a regression here re-creates an
+# unbornable host. stock-preflight-gate.sh covers the LIVE case at dispatch (it re-probes
+# .server_types.available); this covers the SOURCE case at PR time, where no API is
+# reachable. Block-scoped: a bare `grep 'default = "cpx22"'` on this file is green on the
+# UNMODIFIED tree because inngest_server_type already defaults to cpx22.
+p_default_not_cax() {
+  local d
+  d="$(awk '/^variable "git_data_server_type"/{i=1} i&&/^[[:space:]]*default[[:space:]]*=/{gsub(/[",]/,"");print $NF;exit} i&&/^}/{exit}' "$1")"
+  [ -n "$d" ] || { echo 0; return; }
+  case "$d" in cax*) echo 0 ;; *) echo 1 ;; esac
+}
+
 # --- Assertion + mutation harness ---
 # assert_holds <name> <predicate-fn> <file>            -> predicate MUST be 1
 # assert_mutation <name> <predicate-fn> <file> <sed>   -> after the sed mutation the
@@ -226,10 +418,57 @@ assert_mutation "A12 postdrain-gate" p_postdrain_gate "$CUTOVER" \
 assert_holds    "A13 prereceive-freeze" p_prereceive_freeze "$PRERECEIVE"
 assert_mutation "A13 prereceive-freeze" p_prereceive_freeze "$PRERECEIVE" 's/cutover_freeze=/cutover_nofreeze=/g'
 
+# --- #6570 dual-arch derivation (A14-A17) ---
+
+# A14: arch-interpolated Doppler URL with the $${shell} / ${terraform} split correct.
+assert_holds    "A14 doppler-arch-url" p_doppler_arch_url "$CLOUD_INIT"
+# Mutation: revert to the pre-#6570 hardcoded arm64 build — the actual regression.
+assert_mutation "A14 doppler-arch-url" p_doppler_arch_url "$CLOUD_INIT" \
+  's/_linux_[^"]*\.tar\.gz/_linux_arm64.tar.gz/'
+# Mutation: the SILENT escaping direction — a double-$ on the TERRAFORM var renders a
+# literal ${doppler_sha256} that bash expands to EMPTY, so `sha256sum -c -` is handed a
+# blank digest. terraform validate stays green and validate-infra-templates.sh skips
+# $${key} BY DESIGN, so this assertion is the only thing between that typo and a boot.
+assert_mutation "A14 doppler-arch-url (silent \$\$ escape)" p_doppler_arch_url "$CLOUD_INIT" \
+  's;DOPPLER_SHA256="\$\{;DOPPLER_SHA256="$$\{;'
+
+# A15: checksum pair byte-equals the two canon sites, in arm64-then-amd64 order.
+assert_holds    "A15 doppler-checksum-parity" p_doppler_checksum_parity "$GIT_DATA_TF"
+# Mutation: collapse the arm64 arm onto the amd64 checksum (models a pairing swap /
+# copy-paste of one literal over both arms) -> the pair no longer equals canon.
+assert_mutation "A15 doppler-checksum-parity" p_doppler_checksum_parity "$GIT_DATA_TF" \
+  's/f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143/9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db/'
+
+# A16: derivation orientation (the inverted-ternary catcher).
+assert_holds    "A16 arch-derivation" p_arch_derivation "$GIT_DATA_TF"
+# Mutation: invert the ternary. This ships cpx22 -> arm64 and is the precise defect the
+# assertion exists for; every "the local is declared" grep stays green against it.
+assert_mutation "A16 arch-derivation" p_arch_derivation "$GIT_DATA_TF" \
+  's/\? "arm64" : "amd64"/? "amd64" : "arm64"/'
+
+# A17: the git_data_server_type default is not an (unorderable) cax* type.
+assert_holds    "A17 default-not-cax" p_default_not_cax "$VARIABLES_TF"
+# Mutation: regress the default to cax11 (#6570 itself).
+assert_mutation "A17 default-not-cax" p_default_not_cax "$VARIABLES_TF" \
+  's/default([[:space:]]*)=[[:space:]]*"cpx22"/default\1= "cax11"/'
+
+# A18: the templatefile map wires BOTH derived locals through to the cloud-init.
+assert_holds    "A18 templatefile-wiring" p_templatefile_wiring "$GIT_DATA_TF"
+# Mutation: the #6570 regression, relocated from the cloud-init to the var map.
+assert_mutation "A18 templatefile-wiring" p_templatefile_wiring "$GIT_DATA_TF" \
+  's;^([[:space:]]*)doppler_arch([[:space:]]*)=[[:space:]]*local\.git_data_arch[[:space:]]*$;\1doppler_arch\2= "arm64";'
+
+# A19: the tripwire's referencing edge survives, and the enums stay MAPPED not compared.
+assert_holds    "A19 tripwire-edge" p_tripwire_edge "$GIT_DATA_TF"
+# Mutation: drop the precondition — the data source is then pruned under -target= and the
+# phantom-type guard fires on zero production paths, silently.
+assert_mutation "A19 tripwire-edge" p_tripwire_edge "$GIT_DATA_TF" \
+  's;^([[:space:]]*)precondition([[:space:]]*)\{;\1notaprecondition\2{;'
+
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 total=$((passes + fails))
-if [ "$total" -lt 26 ]; then
-  echo "FAIL: ran only ${total} assertions (<26) — suite did not execute fully" >&2
+if [ "$total" -lt 39 ]; then
+  echo "FAIL: ran only ${total} assertions (<39) — suite did not execute fully" >&2
   exit 1
 fi
 

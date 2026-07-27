@@ -11,7 +11,31 @@
 # variable validation under test (var.web_hosts EU pin) fires regardless of the
 # provider layer, and mocking keeps the test credential-free for CI.
 mock_provider "cloudflare" {}
-mock_provider "hcloud" {}
+mock_provider "hcloud" {
+  # #6570: hcloud_server.git_data carries a lifecycle.precondition asserting
+  # `data.hcloud_server_type.git_data.architecture` matches the arch derived from
+  # var.git_data_server_type. `mock_provider` synthesizes a RANDOM STRING for every
+  # computed attribute it is not told about, so the precondition compares "amd64"
+  # against e.g. "qq64nr49" and fails EVERY run block in this file — a failure that
+  # has nothing to do with the var.web_hosts validation under test, and whose error
+  # text ("Hetzner reports architecture=qq64nr49") actively misdirects, since no
+  # Hetzner call happened at all.
+  #
+  # Pin it to the value the real catalog returns for the cpx22 default. This is the
+  # arch the derivation must agree with, so the override keeps the precondition
+  # meaningful here rather than disabling it: flip the default to a `cax*` type and
+  # this file goes red, which is the correct signal.
+  #
+  # zot-registry.tf reads the same data source but consumes only `.memory`, which a
+  # synthesized number satisfies harmlessly — git-data is the first assertion in this
+  # root on a mocked STRING attribute, which is why no prior test needed this.
+  override_data {
+    target = data.hcloud_server_type.git_data
+    values = {
+      architecture = "x86"
+    }
+  }
+}
 mock_provider "random" {}
 mock_provider "doppler" {}
 mock_provider "betteruptime" {}

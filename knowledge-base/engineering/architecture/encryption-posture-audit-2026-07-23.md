@@ -32,9 +32,9 @@ the mechanism that closes this — and today it can only measure `workspaces_luk
 | Store | Declared at | Measured at-rest posture | Source | Finding |
 |---|---|---|---|---|
 | `hcloud_volume.workspaces_luks` | `workspaces-luks.tf:184` | **LUKS** (mapper `workspaces`) | `workspaces-cutover.sh:2041` luksOpen + `random_password`/`doppler_secret` + `soleur-host-bootstrap.sh:759-760` gate | conforming |
-| `hcloud_volume.git_data_luks` | `git-data-luks.tf:79` | **LUKS** (mapper `git-data`) | `cloud-init-git-data.yml:160,163,170` | conforming |
+| `hcloud_volume.git_data_luks` | `git-data-luks.tf:79` | **LUKS** (mapper `git-data`) | `cloud-init-git-data.yml:170,173,180` | conforming |
 | `hcloud_volume.workspaces` | `server.tf:1569` | **plaintext ext4** (superseded on web-1 by `workspaces_luks`, cutover 2026-07-23 verify run 30040444418) | `format = "ext4"`, no apparatus | #6897 (remove/confirm-detach) |
-| `hcloud_volume.git_data` | `git-data.tf:196` | **plaintext ext4** (rollback backstop, pending DL-2 wipe) | `format = "ext4"`, no apparatus | #6897 |
+| `hcloud_volume.git_data` | `git-data.tf:264` | **plaintext ext4** (rollback backstop, pending DL-2 wipe) | `format = "ext4"`, no apparatus | #6897 |
 | `hcloud_volume.inngest_redis` | `inngest-host.tf:288` | **plaintext ext4** — Inngest AOF (in-flight job payloads) | `format = "ext4"`, no apparatus | **#6894 (highest sensitivity)** |
 | `hcloud_volume.registry` | `zot-registry.tf` (`resource "hcloud_volume" "registry"`) | **guest-side LUKS — code-declared, live-pending** — GHCR mirror (OCI blobs + cosign sigs). The volume is declared RAW (no `format`) and `cloud-init-registry.yml` luksFormats/luksOpens it; the LIVE device is still plaintext ext4 until the `registry-luks-recut` dispatch fires. Not a live-verified claim. | raw volume + `cryptsetup` in cloud-init; key `random_password.registry_luks` → `doppler_secret.registry_luks_key` | #6929 (recut vehicle shipped, unfired) |
 | `cloudflare_r2_bucket.cla_evidence` | `apps/cla-evidence/infra/bucket.tf:1` | provider-managed AES-256-GCM (Cloudflare default) | Cloudflare Trust Hub SOC 2 Type II | #6896 (SOC 2 Type II named — resolved) |

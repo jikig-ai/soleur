@@ -117,16 +117,26 @@ runcmd:
   - mount /dev/disk/by-id/scsi-0HC_Volume_${git_data_volume_id} /mnt/git-data || true
   - echo '/dev/disk/by-id/scsi-0HC_Volume_${git_data_volume_id} /mnt/git-data ext4 defaults,nofail 0 2' >> /etc/fstab
 
-  # --- Doppler CLI (arm64) — the ONLY channel for the LUKS passphrase -----------
+  # --- Doppler CLI (arch-derived) — the ONLY channel for the LUKS passphrase -----
   # The LUKS key is NEVER baked into this user_data (retrievable via the hcloud
   # metadata API/console) and NEVER an argv positional. It is delivered ONLY as the
-  # Doppler-injected env GIT_DATA_LUKS_KEY at boot. cax11 is ARM64, so this is the
-  # linux_arm64 build + its checksum (the web host, cloud-init.yml, installs amd64).
+  # Doppler-injected env GIT_DATA_LUKS_KEY at boot.
+  # Both the build and its checksum are DERIVED from var.git_data_server_type
+  # (git-data.tf local.git_data_arch / local.git_data_doppler_sha256): cax* → arm64,
+  # cpx*/cx*/ccx* → amd64. They were hardcoded to arm64 while the host was pinned to
+  # cax11 — a type orderable in 0 of 3 EU DCs, so it could never boot at all (#6570).
   # Egress (github release download) is open — git-data.tf denies only PUBLIC ingress.
+  #
+  # ESCAPING: $${DOPPLER_VERSION} is a SHELL variable (double-$, passed through
+  # literally by templatefile); $${doppler_arch} / $${doppler_sha256} would be too,
+  # which is why they are written single-$ below as TERRAFORM interpolations. Getting
+  # that backwards is SILENT — a double-$ on a Terraform var renders a literal that
+  # bash expands to empty, and validate-infra-templates.sh skips $${key} by design.
+  # git-data-luks.test.sh A14 is the only guard on it.
   - |
     DOPPLER_VERSION="3.75.3"
-    DOPPLER_SHA256="f1954f3717fe4c5b65e906a3c6dfe0d20e97b032af35e43db41250931302e143"
-    curl -fsSL --retry 3 "https://github.com/DopplerHQ/cli/releases/download/$${DOPPLER_VERSION}/doppler_$${DOPPLER_VERSION}_linux_arm64.tar.gz" -o /tmp/doppler.tar.gz
+    DOPPLER_SHA256="${doppler_sha256}"
+    curl -fsSL --retry 3 "https://github.com/DopplerHQ/cli/releases/download/$${DOPPLER_VERSION}/doppler_$${DOPPLER_VERSION}_linux_${doppler_arch}.tar.gz" -o /tmp/doppler.tar.gz
     echo "$${DOPPLER_SHA256}  /tmp/doppler.tar.gz" | sha256sum -c -
     tar xzf /tmp/doppler.tar.gz -C /usr/local/bin doppler
     chmod +x /usr/local/bin/doppler

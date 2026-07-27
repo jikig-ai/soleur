@@ -122,7 +122,7 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    Phase-3 decommission.
 3. **Signature verification is the SOLE `/api/inngest` boundary; `:8288/:8289` scoped by
    host-local nftables (SEC-H1/H2).** Hetzner firewalls filter only the *public* interface —
-   intra-subnet traffic is open by network membership (`git-data.tf:200-204`,
+   intra-subnet traffic is open by network membership (`git-data.tf, resource "hcloud_firewall" "git_data" — no rule blocks`,
    `firewall-9000-deny.test.sh:6-8`), so a `hcloud_firewall.web` inbound rule for `10.0.1.40`
    would be a **no-op** and is not claimed. The effective app boundary is fail-closed HMAC
    signature verification (`client.ts:43-50`, `route.ts:87`). The inngest control API

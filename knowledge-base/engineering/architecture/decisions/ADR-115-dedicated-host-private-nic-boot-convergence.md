@@ -149,7 +149,7 @@ entire existence while the fleet reported green. Extending the decision:
 > **git-data is excluded, and the exclusion is not cosmetic.** `random_password.git_data_luks`
 > (`git-data-luks.tf:31`) is structurally identical to `random_password.zot_pull` — #6497's
 > own code comment even says *"Mirrors `random_password.git_data_luks`"* — and its value is
-> boot-baked exactly the same way (`cloud-init-git-data.yml:163`,
+> boot-baked exactly the same way (`cloud-init-git-data.yml:173`,
 > `cryptsetup luksOpen --key-file -`). So the naive generalization is not just permitted by
 > the first blocker (which constrains reboots, not replaces): it is *invited* by the analogy
 > the code already draws. It is also catastrophic. A replace on rotation boots a fresh host
@@ -213,7 +213,7 @@ this amendment named the dispatch, and the dispatch cannot fire the edge.
 > without a reboot-safe equivalent (`crypttab` or a keyscript).
 >
 > **git-data is excluded until that is fixed.** Its `luksOpen` is in `runcmd`
-> (`cloud-init-git-data.yml:163`), which is **per-instance and does not re-run on reboot**;
+> (`cloud-init-git-data.yml:173`), which is **per-instance and does not re-run on reboot**;
 > there is **no `crypttab` anywhere in the repo** (verified); and its fstab entry carries
 > `nofail` (`:118`). A reboot would therefore leave the fleet's most irreplaceable data store
 > **silently unmounted**.

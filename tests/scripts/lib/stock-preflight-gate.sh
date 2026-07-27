@@ -106,9 +106,10 @@ stock_preflight() {
   # `/server_types?name=${want_type}`, so a value carrying `&name=` (or `#`, or a space) would
   # make Hetzner answer about a DIFFERENT type than terraform is about to order — the gate
   # returns green and the create still fails, i.e. exactly the stranding it exists to prevent.
-  # var.git_data_server_type and var.registry_server_type carry no terraform validation (only
-  # inngest_server_type does, variables.tf:173), so the plan JSON is not a trusted source of
-  # shape here. Real Hetzner ids are lowercase alnum (cx33, cpx41, cax11); locations are
+  # var.registry_server_type carries no terraform validation (inngest_server_type and, since
+  # #6570, git_data_server_type both do — see their `validation` blocks in variables.tf), and
+  # even those only constrain the PREFIX, so the plan JSON is not a trusted source of shape
+  # here. Real Hetzner ids are lowercase alnum (cx33, cpx41, cax11); locations are
   # lowercase alnum with an optional dash (fsn1, hel1, ash-dc1). Anything else fails closed —
   # a value we cannot safely ask about is not evidence of availability.
   if [[ ! "$want_type" =~ ^[a-z0-9]+$ ]]; then
