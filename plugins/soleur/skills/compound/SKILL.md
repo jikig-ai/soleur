@@ -256,7 +256,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    - `B_TOTAL=$(cat AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>/dev/null | wc -c)` — full registry (informational)
    - Rules: `A=$(grep -hE '^- .*\[id: ' AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>/dev/null | wc -l)` — sidecar BODIES only; an `AGENTS*.md` glob also matches the index (one pointer per body) and doubles the count (#7008)
    - Longest: `L=$(grep -h '^- ' AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>/dev/null | awk '{print length}' | sort -n | tail -1)` (chars; the linter measures BYTES — it is the authority for the per-rule cap)
-   - Constitution: `C=$(grep -c '^- ' knowledge-base/project/constitution.md 2>/dev/null)` (tracked separately)
+   - Constitution: `C=$(grep -c '^- ' knowledge-base/project/constitution.md 2>/dev/null)` (tracked separately; counts every bullet, NOT just rules — a ceiling, not a rule count)
 
    Output:
    ```

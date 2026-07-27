@@ -238,7 +238,8 @@ else
   FAIL_SAFE_NOTE=""
 fi
 
-# Stamp + hint — both ≤ 200 bytes per line (asserted in tests 11 and 28).
+# Stamp + hint — both ≤ 200 bytes per line (asserted by the stamp-byte tests
+# in session-rules-loader.test.sh; search: 'stamp + hint').
 RULE_COUNT=$(printf '%s' "$CONTEXT" | grep -cE '^- .*\[id: ' || true)
 # Denominator = the AGENTS.md INDEX pointer count, a FIXED expected set.
 # Two properties matter, both learned the hard way (#7008):

@@ -23,6 +23,33 @@ plan_review: 6-agent panel (DHH, Kieran, code-simplicity, architecture-strategis
 
 # Context-governance instrument fixes
 
+> **CORRECTION (2026-07-27, post-review): FR7 is WITHDRAWN, and FR2 was cut.**
+>
+> **FR7 — my finding was wrong.** I reported the six `-auto-approve` sites as a
+> "literal inversion" of `hr-menu-option-ack-not-prod-write-auth`. They are not.
+> Three review agents converged, and two measurements settle it:
+> 1. `terraform apply -input=true` with no TTY does **not** hang — it exits
+>    immediately with `Error: error asking for approval: EOF` (measured: rc=1,
+>    0s). My "hangs forever" rationale — repeated in this document, the commit
+>    messages and the issue — was false. The old form failed **closed**.
+> 2. `.claude/hooks/prod-write-defer-gate.sh` is a registered PreToolUse hook
+>    that **defers** any agent-run `terraform apply` (measured), so the agent
+>    never runs it unattended regardless of the flag.
+>
+> Those commands are run by a human at a real terminal (`admin-ip-refresh`
+> SKILL.md Step 7: *"for the operator to run. Do NOT execute them."*), where
+> Terraform's native prompt **is** the per-command gate. "Do NOT pass
+> `-auto-approve`" was correct guidance. All six sites are reverted to `main`.
+>
+> **FR2 (stamp byte figure) — cut.** It was the only reason the `CORPUS` loop
+> existed, and that loop introduced two P1s of its own (a false over-strip
+> warning, and a denominator that collapsed onto the numerator so a truncated
+> corpus stamped as 100%). The denominator now derives from the `AGENTS.md`
+> index — a fixed expected set — which is simpler and strictly more honest.
+>
+> What ships: FR1, FR6, FR8, FR9, FR11.
+
+
 ## Overview
 
 Repair the instruments that report which AGENTS rules reach context. **Zero rules added

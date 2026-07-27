@@ -653,12 +653,12 @@ else
   FAIL=$((FAIL+1))
 fi
 
-# Owning trap (ADR-129) for the #7008 fixtures below. The block above already
+# Owning trap (ADR-129) for the late-added fixtures below (#7008). The block above already
 # registers an EXIT trap for $TALARM, and a bare re-register REPLACES it — so
 # this one covers BOTH. Parent-scope append is the shape the ownership lint
 # recognizes (scripts/lint-trap-tempfile-ownership).
-CE7008_TMPDIRS=()
-trap 'rm -rf "${TALARM:-}" ${CE7008_TMPDIRS[@]+"${CE7008_TMPDIRS[@]}"}' EXIT
+LATE_TMPDIRS=()
+trap 'rm -rf "${TALARM:-}" ${LATE_TMPDIRS[@]+"${LATE_TMPDIRS[@]}"}' EXIT
 
 # ------------- Test 25: stamp denominator counts rule BODIES, not bodies+index ----
 # The fixture repo carries 3 index pointers in AGENTS.md AND 3 rule bodies across
@@ -666,7 +666,7 @@ trap 'rm -rf "${TALARM:-}" ${CE7008_TMPDIRS[@]+"${CE7008_TMPDIRS[@]}"}' EXIT
 # i.e. "3 of 6" (looks like 50%) when 100% of a 3-rule corpus is loaded. #7008.
 
 TOTAL=$((TOTAL+1))
-T25=$(mktemp -d); CE7008_TMPDIRS+=("$T25"); setup_repo "$T25" mixed          # mixed → all three classes load
+T25=$(mktemp -d); LATE_TMPDIRS+=("$T25"); setup_repo "$T25" mixed          # mixed → all three classes load
 out25=$(invoke_hook "$T25")
 ctx25=$(printf '%s' "$out25" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
 stamp25=$(printf '%s' "$ctx25" | head -1)
@@ -711,7 +711,7 @@ fi
 # renders as 100%.
 
 TOTAL=$((TOTAL+1))
-T27=$(mktemp -d); CE7008_TMPDIRS+=("$T27"); setup_repo "$T27" docs   # docs -> core+docs-only
+T27=$(mktemp -d); LATE_TMPDIRS+=("$T27"); setup_repo "$T27" docs   # docs -> core+docs-only
 stamp27=$(invoke_hook "$T27" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
 num27=$(printf '%s' "$stamp27" | sed -nE 's/.*\(([0-9]+) of [0-9]+ rules.*/\1/p' || true)
 den27=$(printf '%s' "$stamp27" | sed -nE 's/.*\([0-9]+ of ([0-9]+) rules.*/\1/p' || true)
@@ -731,7 +731,7 @@ fi
 # stamps a clean 100% while 42 of 101 rules are simply absent.
 
 TOTAL=$((TOTAL+1))
-T27B=$(mktemp -d); CE7008_TMPDIRS+=("$T27B"); setup_repo "$T27B" docs
+T27B=$(mktemp -d); LATE_TMPDIRS+=("$T27B"); setup_repo "$T27B" docs
 idx27b=$(grep -c '^- \[id: ' "$T27B/AGENTS.md")
 rm -f "$T27B/AGENTS.rest.md"
 stamp27b=$(invoke_hook "$T27B" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
@@ -750,7 +750,7 @@ fi
 # composed worst case: all three classes + fail-safe note + over-strip note.
 
 TOTAL=$((TOTAL+1))
-T28=$(mktemp -d); CE7008_TMPDIRS+=("$T28"); setup_repo "$T28" mixed
+T28=$(mktemp -d); LATE_TMPDIRS+=("$T28"); setup_repo "$T28" mixed
 # Force BOTH notes: a symlinked sidecar trips the fail-safe re-walk, and
 # malformed frontmatter trips the over-strip guard.
 rm -f "$T28/AGENTS.docs.md"; ln -s AGENTS.rest.md "$T28/AGENTS.docs.md"
