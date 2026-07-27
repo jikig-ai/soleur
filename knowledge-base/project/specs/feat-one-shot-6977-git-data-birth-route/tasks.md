@@ -8,19 +8,42 @@ Open scope decisions: `knowledge-base/project/specs/feat-one-shot-6977-git-data-
 
 ## Phase 0: Preconditions
 
-- [ ] 0.1 Re-run the trap-#3 clearance: confirm neither `git-data.tf`, `git-data-luks.tf` nor
+- [x] 0.1 Re-run the trap-#3 clearance: confirm neither `git-data.tf`, `git-data-luks.tf` nor
       `cloud-init-git-data.yml` appears in any `triggers_replace` / `filesha256` in
       `apps/web-platform/infra/*.tf`
-- [ ] 0.2 Re-verify the ADR-149 ordinal is still free against `origin/main`
-- [ ] 0.3 Read `tests/scripts/lib/web-host-birth-gate.sh` + `tests/scripts/test-web-host-birth-gate.sh`
+      → **CLEARED.** The only `filesha256` in the tree is `filesha256("${path.module}/${f}")` over
+      `local.host_script_files` (server.tf); none of the three is a member. Same sweep confirms
+      AC13's premise from the other side: `web-git-data-probe.sh` **is** a member, so it is
+      double-hashed (coherence hash + the `terraform_data.git_data_probe_install` SSH provisioner)
+      and stays untouched.
+- [x] 0.2 Re-verify the ADR-149 ordinal is still free against `origin/main`
+      → **FREE.** `ADR-148` is highest on `origin/main`.
+- [x] 0.3 Read `tests/scripts/lib/web-host-birth-gate.sh` + `tests/scripts/test-web-host-birth-gate.sh`
       in full — they are the template; the new files must read as siblings, not a fork
-- [ ] 0.4 ADR-130-style scope probe: confirm `var.doppler_token_tf` can create a **branch config**
+      → Read (293 + 438 lines). Harness to mirror: `mk_plan`/`rc_entry`/`rc_noactions`/`rc_update`,
+      `check <name> <want_rc> <needle> <plan>`, `mutate_and_check` (SOLE-GUARD) and
+      `mutate_layered` (LAYERED, with its unmutated-gate control), both with the `cmp -s`
+      non-vacuity floor.
+- [x] 0.4 ADR-130-style scope probe: confirm `var.doppler_token_tf` can create a **branch config**
       (distinct API surface from `doppler_environment`) before relying on it
-- [ ] 0.5 Determine `doppler_config`'s already-exists failure mode (errors vs adopts) and whether a
+      → **PROVED BY MEASUREMENT, not inferred.** `var.doppler_token_tf` is the sole `provider
+      "doppler"` token (main.tf) and is a **personal** token (`/v3/me` → `{"type":"personal",
+      "workplace":"Soleur"}`). A live `POST /v3/configs` for a throwaway branch config under
+      `soleur`/`prd` returned **http=200** (`root:false`, i.e. a branch config, the exact shape
+      `prd_git_data` needs). Throwaway deleted; the `prd` config list is byte-for-byte the original
+      seven and `prd_git_data` remains ABSENT so Terraform creates it.
+- [x] 0.5 Determine `doppler_config`'s already-exists failure mode (errors vs adopts) and whether a
       `terraform import` would be needed if the config is ever hand-created first
-- [ ] 0.6 Note (no action — out of scope): `git-data-cutover.sh` drives a `soleur-web.service`
+      → **IT ERRORS — it does not adopt.** A repeated create returned **http=400**
+      `{"messages":["Name is already in use"]}`. So a hand-created `prd_git_data` makes the first
+      `terraform apply` **fail**, and recovery is `terraform import doppler_config.git_data_prd
+      soleur.prd_git_data` — NOT a re-dispatch. This must appear in the runbook's partial-birth
+      decision tree; it is the one failure mode the additive re-dispatch story does not cover.
+- [x] 0.6 Note (no action — out of scope): `git-data-cutover.sh` drives a `soleur-web.service`
       systemd unit that does not exist, at both the flip and rollback sites. #5274/#6982 owns it;
       do NOT add a third caller of that phantom unit here
+      → Confirmed and left alone; `git-data-cutover.sh` is not in Files to Edit. AC5 forbids the
+      unit name in the new runbook.
 
 ## Phase 1: Gate contracts (RED first)
 
