@@ -1,107 +1,132 @@
 ---
-title: An issue's claim about RUNTIME state is refuted by a live off-host signal, not by reading more code — and a bare `-target` hits every for_each instance
+title: An issue's claim about RUNTIME state is refuted by a live signal, not more code reading — and the guard I wrote to replace it failed open in the same way, keyed on the delivery verb instead of the destination
 date: 2026-07-27
 category: best-practices
-tags: [infra, terraform, for-each, issue-triage, drift-guard, premise-verification, cattle-hosts, ci-apply]
+tags: [infra, terraform, for-each, issue-triage, drift-guard, premise-verification, cattle-hosts, ci-apply, mutation-testing, fail-open]
 issues: [7000, 6459]
 pr: 7001
 ---
 
 ## Problem
 
-#7000 was a P1 `type/bug` with everything a good issue has: exact file paths, a named precedent to
-copy (`placement-group.tf`), a load-bearing trap called out in bold (`for_each` changes the resource
-address, so a missing `moved` block re-runs provisioners against live web-1), a second trap ("this
-change is currently unguarded"), and six acceptance criteria. It prescribed fanning 15 web-1-pinned
-`terraform_data` host provisioners in `server.tf` out over `var.web_hosts`.
+#7000 was a P1 `type/bug` with everything a good issue has: exact paths, a named precedent to
+copy, a load-bearing trap in bold, a second trap ("this change is currently unguarded"), and six
+acceptance criteria. It prescribed fanning 15 web-1-pinned `terraform_data` host provisioners in
+`apps/web-platform/infra/server.tf` out over `var.web_hosts`.
 
-Its central factual claim — *"`soleur-web-2` is a booted host, not a wired fleet member … never
-receives the per-host env files, unit enablement, or config those provisioners write"*, with the
-concrete instance *"`git_data_probe_install` writes `/etc/default/web-git-data-probe` and enables the
-timer — on web-1 only"* — was **false**. And the prescribed fix was **unapplyable**: it would have
-broken every merge-triggered infra apply.
+Its central claim — *"`soleur-web-2` is a booted host, not a wired fleet member … never receives
+the per-host env files, unit enablement, or config those provisioners write"* — was **false**, and
+the prescribed fix would have **broken every merge-triggered infra apply**.
 
-Both were established before a single line of Terraform was written. The refutation cost one API
-query.
+Then the guard I shipped in its place failed open in ~13 measured ways, including the exact
+defect class I had fixed one commit earlier. That second half is the more useful learning.
 
-## Root cause of the wrong premise
+## Part 1 — the premise
 
 The issue reasoned from a `grep` over `server.tf` (15 resources hardcode
-`connection.host = hcloud_server.web["web-1"].ipv4_address`) straight to a **runtime** conclusion
-(web-2 lacks what they deliver). That inference skips the second delivery path. #6459 Phase 2.2 had
-already given all 15 a fresh-boot route — the image bake (`local.host_script_files` →
-`soleur-host-bootstrap.sh`) plus `cloud-init.yml` `write_files`/`runcmd`, including a baked
-`web-probe-envwrite.sh` that writes exactly the `/etc/default/web-<probe>` files the issue named.
+`connection.host = hcloud_server.web["web-1"]`) straight to a **runtime** conclusion. That skips
+the second delivery path: #6459 Phase 2.2 had already given all 15 a fresh-boot route via the
+image bake (`local.host_script_files` → `soleur-host-bootstrap.sh`) plus `cloud-init.yml`.
 
-The web-1 pinning is *deliberate*, and `server.tf` says so at the `hcloud_server.web` comment: the
-SSH provisioners stay web-1-scoped so a web-2 that is not yet SSH-reachable never hangs the
-merge-triggered auto-apply. ADR-143 / #6459 **Phase 5 removes** them; it does not extend them.
-
-## What actually settled it — a live signal, in ~4 minutes
+Settled in ~4 minutes by a live off-host signal:
 
 ```
-BETTERSTACK_API_TOKEN_READONLY → GET /api/v2/heartbeats
-  soleur-web-nic-guard-web-2      360s/120s   status=up   paused=false
-  soleur-web-zot-consumer-web-2   180s/60s    status=up   paused=false
+soleur-web-zot-consumer-web-2   period=180s grace=60s   status=up   paused=false
 ```
 
-A 180s-period / 60s-grace heartbeat **cannot read `up`** unless the host is actively beating — it
-flips `down` inside four minutes otherwise. And those probe units **cannot start without their
-`/etc/default/web-<probe>` EnvironmentFile**, which is precisely the artifact the issue said only
-web-1 receives. `web-probe.tf` further documents that the unpause happens only "after a real measured
-beat lands", so `paused=false` is independent corroboration.
+A 180s/60s heartbeat cannot read `up` unless the host is beating, and that probe unit cannot
+start without the `/etc/default/web-<probe>` EnvironmentFile the issue said only web-1 receives.
 
-No amount of additional code reading would have been as conclusive, and code reading is what the
-issue author had already done.
+And the fan-out was unapplyable: CI can SSH exactly one host (`outputs.tf` exposes only web-1 as
+`server_ip`; the tunnel bridge installs ONE iptables NAT rule; the connector is web-1-only by
+construction; web-2's `:22` is firewalled to `var.admin_ips`). All 15 are `-target`ed by **bare
+address** across two workflows, and a bare `-target` hits **every** `for_each` instance — so a
+fan-out makes every merge dial `web-2:22` and hang to the SSH timeout (no `timeout` is set on any
+connection block). ADR-114 already recorded this constraint in prose; I did not decide new
+architecture, I mechanised existing architecture.
+
+## Part 2 — the guard failed open the same way the code did
+
+The replacement guard keyed on four enumerated delivery **CHANNELS**: `provisioner "file"`
+source, remote-exec heredoc, rendered `content=`, and `printf`. A ten-agent review panel found
+~13 fail-opens, each reproduced by execution. The representative three:
+
+- **Prose satisfied delivery.** I comment-stripped `server.tf` and matched `cloud-init.yml` and
+  `web-probe-envwrite.sh` as raw substrings. Renaming the real `/etc/webhook/hooks.json` write
+  away and leaving one **comment** → guard reported it covered, 21/0 green. Two of the 35 real
+  sources were passing on comment text alone, so the shipped green was partly coincidental.
+- **A fifth channel already existed.** `server.tf:1421` writes via `echo … > /etc/sysctl.d/…`.
+  My header claimed "all four that server.tf actually uses". `echo AUTH_TOKEN=xyz > /etc/default/
+  phantom-env` → green. `sed >`, `install`, `tee`, `cp` were all live and all evaded it.
+- **A row was verified by a consumer.** The COVERAGE table claimed cloud-init rendered
+  `hooks.json`; `soleur-host-bootstrap.sh` does. The row passed on a systemd `ExecStart` —
+  a *reader* of the file — being present in cloud-init.
+
+My own 11-mutation battery caught none of it: it mutated only the bake list, and `expect_red`
+discarded output and credited any non-zero exit, so nine checks were deletable with it green and
+a `UnicodeDecodeError` scored as a detection.
 
 ## Rules
 
-1. **When an issue's claim is about RUNTIME state ("host X does not have Y", "the timer is not
-   enabled", "the secret never lands"), verify it with a live off-host signal BEFORE writing code.**
-   Heartbeats, monitor status, a state-reporter webhook, a metrics query. Static analysis of the
-   provisioning code cannot see a second delivery path, and second delivery paths are exactly what a
-   dual-delivery (pet + cattle) fleet has. This is the runtime-state sibling of "trace the ACTUAL
-   producer, not the plan hypothesis", and of `hr-no-dashboard-eyeball-pull-data-yourself` — pull the
-   data yourself, and pull it from the layer that would *observe* the defect.
+1. **When an issue's claim is about RUNTIME state ("host X does not have Y"), verify it with a
+   live off-host signal before writing code.** Static analysis of the provisioning code cannot
+   see a *second* delivery path, and a dual-delivery (pet + cattle) fleet always has one. Caveat
+   learned at review: the static path *was* also conclusive here — `cloud-init.yml` invokes the
+   env-writer ungated with per-host inputs — so the honest rule is "read the OTHER path's file,
+   and corroborate off-host", not "code reading cannot settle it".
 
 2. **A "nothing guards this" claim must be measured per-subject, not by grepping one keyword.**
-   #7000 supported its second trap with `git grep 'terraform_data' -- '*.test.sh' '*.test.ts'` →
-   nothing. Literally true, materially misleading: `fresh-boot-parity.test.sh` guarded 5 of the 15
-   already — keyed on the **artifacts** they deliver, not on the string `terraform_data`. The honest
-   measurement is a per-resource loop (`for r in <all 15>; do grep -rlF "$r" *.test.sh; done`), which
-   returned the real numbers: 10 of 15 unguarded for dual-delivery, 5 named by no suite at all. Guards
-   commonly key on the artifact, the destination path, or the unit name — never assume the resource
-   name is the index.
+   #7000 supported its second trap with `git grep 'terraform_data' -- '*.test.sh'` → nothing.
+   True, and misleading: `fresh-boot-parity.test.sh` already guarded 5 of the 15, keyed on the
+   **artifacts** they deliver. A per-resource loop returned the real numbers (10 of 15 unguarded,
+   5 named by no suite). Guards commonly key on the artifact or the destination — never assume
+   the resource name is the index.
 
 3. **Before converting a singleton to `for_each`, grep how CI `-target`s it.** A bare
-   `-target=terraform_data.X` hits **every** instance, so the refactor silently widens the blast
-   radius of every apply to hosts CI may have no route to. Here `apply-web-platform-infra.yml`
-   `-target`s 14 of these by bare address, while CI can SSH exactly one host: `outputs.tf` exposes
-   only web-1 as `server_ip`, `cf-tunnel-ssh-bridge` installs a single `iptables` NAT rule for that
-   IP, the tunnel connector is web-1-only by construction (ADR-114 I1), and web-2's `:22` is
-   firewalled to `var.admin_ips` which the non-static runner egress is not in. The `moved`-block trap
-   the issue led with was real but **second-order** — the change could not apply at all.
+   `-target=X` hits every instance, silently widening the blast radius of every apply to hosts CI
+   may have no route to. The `moved`-block trap the issue led with was real but second-order —
+   the change could not apply at all.
 
-4. **"Wired at birth, then frozen" is not "unwired".** On a cattle host, cloud-init runs once, so a
-   later config edit reaches the pet over SSH and reaches the cattle host only on rebuild. That is
-   `hr-prod-host-config-change-immutable-redeploy` working as designed, not a bug. Naming the gap
-   precisely is what turns an unapplyable refactor into the guard that was actually missing.
+4. **Key a delivery guard on the DESTINATION, not the delivery VERB.** "Which command performed
+   the write" is an **open set** — `echo >`, `sed >`, `install`, `tee`, `cp`, a heredoc, a
+   rendered `content=`, a python one-liner. Enumerating it guarantees a future verb walks past.
+   The destination is the **closed set**: it is what a fresh host does or does not have. Keying on
+   it made the fifth channel a non-event, replaced a hand-maintained coverage table with coverage
+   *derived* from real install/write statements (which is what let the false `hooks.json` row
+   exist at all), and made the guard shorter. When a guard needs an ever-growing list of things to
+   recognise, the axis is wrong.
+
+5. **A hardening fix applied to one input is not applied.** I comment-stripped `server.tf` and
+   left the other two inputs raw — the same defect, one wall over, in the same file, one commit
+   later. When you fix one arm of a disjunction (or one of N parsed inputs), sweep the others in
+   the same edit. And strip **trailing** comments, not just full-line ones: a trailing
+   `# "phantom.sh"` injected a phantom baked filename past a guard whose header argued trailing
+   comments were safe.
+
+6. **A mutation battery must assert WHICH check fired.** Crediting a bare non-zero exit credits
+   crashes as detections and lets one mutation's collateral damage cover for a check that is
+   already dead. Give every case the anchor it expects from the guard's own failure text. And
+   carry **two** positive controls — benign-edit-stays-green proves it is not always-red, but only
+   a *legitimate addition* stays-green proves it does not over-fire on any new artifact.
+
+7. **`written_by`, not `mentions`.** Anchor a coverage check on the write construct (`> path`,
+   `install … path`, `- path:`), never bare containment. Otherwise an `ExecStart`, a `chmod`, or a
+   sentence certifies delivery.
 
 ## Resolution
 
-No `.tf` file was changed. Delivered instead:
+No `.tf` logic changed (one stale comment count corrected, 11 → 15). Delivered:
 
-- `web-host-provisioner-parity.test.sh` — sweeps all 15 and every artifact each delivers across the
-  four channels `server.tf` uses (`provisioner "file"` source, remote-exec heredoc, rendered
-  `content=`, `printf`/`base64` env write), asserting each has a fresh-boot counterpart, with
-  byte-identity where both paths carry their own copy of a unit body. Non-vacuity floor per section.
-  Also pins the web-1 host-scoping, so a future fan-out fails here and forces the CI-reachability
-  question to be answered first.
-- `web-host-provisioner-parity-mutation.test.sh` — drives the real guard against a sandbox copy via
-  `SOLEUR_INFRA_DIR`, breaks each invariant in turn, requires a RED for each (10 mutations, each
-  proven landed), plus a positive control that must stay GREEN so an always-red guard cannot score a
-  clean run.
-- Adopted 2 orphan suites covering resources in the sweep. `run-registered-suites.sh` 72 → 76.
+- `web-host-provisioner-parity.test.sh` — destination-keyed. Sweeps **52** absolute destinations
+  the 15 provisioners write and requires each to have a *derived* fresh-boot writer (cloud-init
+  `write_files`, a cloud-init write, a `soleur-host-bootstrap.sh` install, or the baked
+  env-writer). Also checks the reverse — a bootstrap install whose seed file is not baked — and
+  byte-identity on the 4 dual-written unit bodies. Every input comment-stripped string-aware;
+  HCL blocks brace-balanced. `ALLOWLIST` is empty and unused.
+- `web-host-provisioner-parity-mutation.test.sh` — **17 attributed mutations**, each proven to
+  have landed, each asserting the anchor of the check it names, plus both positive controls.
+- ADR-114's constraint amended (count 12 → 15) and noted as now mechanically enforced; the two
+  suites registered in the plan's Phase-5 coupling register so they are retired *with* §5.3(c).
 
 Related: [[2026-07-15-guard-gate-and-probe-must-pin-the-thing-they-name]],
 [[2026-07-19-my-own-mutation-battery-was-the-false-confidence]],

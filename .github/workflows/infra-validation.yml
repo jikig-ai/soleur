@@ -435,8 +435,12 @@ jobs:
       # decorative coverage is called out in #7000 itself), and disk-monitor.test.sh backs
       # terraform_data.disk_monitor_install, one of the five provisioners that was named by no
       # suite at all. Both measured green (8/8 and 11/11) and need nothing beyond curl/jq, which
-      # this ubuntu-24.04 job already has. The other 7 orphans are unrelated to these provisioners
-      # and one needs docker, so they are deliberately NOT adopted here — see the PR body.
+      # this ubuntu-24.04 job already has. The other 7 orphans (audit-bwrap-uid,
+      # cat-infra-config-state, cloud-init-plugin-seed, inngest-cutover-flip,
+      # inngest-server-flip-guard, live-verify.tf, mu1-runbook-cleanup) all pass too, but are
+      # unrelated to these provisioners and cloud-init-plugin-seed needs docker — adopting them
+      # would put a container dependency on this job for unrelated scope. Left deliberately;
+      # `run-registered-suites.sh` reports the current orphan set on every run.
       - name: Run orphan-reaper guard (#7000 adopting an unregistered suite)
         run: bash apps/web-platform/infra/orphan-reaper.test.sh
 

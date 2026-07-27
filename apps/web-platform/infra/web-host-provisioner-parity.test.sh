@@ -2,82 +2,89 @@
 # Web-host provisioner DUAL-DELIVERY parity guard (#7000).
 #
 # WHAT THIS PINS. server.tf carries 15 `terraform_data` host provisioners whose SSH
-# `connection` is pinned to `hcloud_server.web["web-1"]`. That pinning is DELIBERATE
-# (server.tf, the hcloud_server.web comment: the SSH provisioners stay web-1-scoped so a
-# web-2 that is not yet SSH-reachable never hangs the merge-triggered auto-apply) and is
+# `connection` is pinned to `hcloud_server.web["web-1"]`. That pinning is DELIBERATE and is
 # NOT a bug to be fixed by fanning them out over var.web_hosts:
 #
 #   * CI can SSH exactly ONE host. outputs.tf's `server_ip` is web-1's address, the
 #     cf-tunnel-ssh-bridge installs a single iptables NAT rule for it, and the tunnel
-#     connector is web-1-only by construction (ADR-114 I1). web-2's public :22 is
-#     firewalled to var.admin_ips, which the non-static GH runner egress is not in.
-#   * apply-web-platform-infra.yml `-target=`s these resources by bare address, and a
-#     bare -target hits EVERY for_each instance — so a fan-out would make every merge
-#     dial web-2:22 from CI, hang to the SSH timeout, and fail the apply.
-#   * ADR-143 / #6459 Phase 5 REMOVES these SSH provisioners once web-1 is cattle. It
-#     does not extend them. fresh-boot-parity.test.sh §6/§13 already pin that retention.
+#     connector is web-1-only by construction. web-2's public :22 is firewalled to
+#     var.admin_ips, which the non-static GH runner egress is not in.
+#   * All 15 are `-target=`ed by BARE address across two workflows (14 in
+#     apply-web-platform-infra.yml, infra_config_handler_bootstrap in
+#     apply-deploy-pipeline-fix.yml), and a bare -target hits EVERY for_each instance — so a
+#     fan-out would make every merge dial web-2:22 and hang to the SSH timeout. There is no
+#     `timeout` on any connection block, so that burns the job budget.
+#   * ADR-114 ("Load-bearing constraint for any I2 implementation") ALREADY records this:
+#     "do NOT repoint the ... terraform_data.* connection { host } blocks ... every
+#     provisioner dies — and those are -targeted by the per-PR merge apply, so main wedges."
+#     (ADR-114 says 12; the real count in this file is 15.) This guard MECHANISES a
+#     constraint the architecture already carried in prose.
+#   * The plan's Phase 5 (2026-07-24-feat-web-active-active-cluster-iac-plan.md §5.3(c))
+#     REMOVES these provisioners once web-1 is cattle. It does not extend them.
 #
 # So web-2 is NOT wired by SSH — it is wired at BIRTH by the image bake
 # (local.host_script_files -> soleur-host-bootstrap.sh) plus cloud-init.yml. That is the
-# cattle model (hr-prod-host-config-change-immutable-redeploy): a running cattle host is
-# immutable and a config change reaches it by rebuild, not by mutation.
+# cattle model (hr-prod-host-config-change-immutable-redeploy).
 #
-# THE ACTUAL RISK, and the one this guard closes. Because the two delivery paths are
-# INDEPENDENT, an artifact can be added to (or changed in) the web-1 SSH path without a
-# matching change on the fresh-boot path. Nothing then fails: web-1 gets it, CI is green,
-# and web-2 silently comes up WITHOUT it on its next rebuild. Before this guard, 10 of the
-# 15 provisioners had no suite pinning that correspondence at all, and 5
-# (disk_monitor_install, resource_monitor_install, container_restart_monitor_install,
-# cosign_trusted_root, apparmor_bwrap_profile) were named by no suite whatsoever.
+# SCOPE LIMIT, stated plainly: this proves SOURCE parity, not DELIVERED parity. Because
+# `hcloud_server.web` carries `ignore_changes = [user_data, ssh_keys, image, ...]` for BOTH
+# hosts, an edit to a baked script reaches web-1 at the next merge-apply and reaches web-2
+# only on rebuild. Nothing detects that gap — cron-terraform-drift cannot see it (ignore_changes
+# suppresses the diff) and host_scripts_content_hash only fires at boot. This guard says
+# "the repo describes the same artifact on both paths", NOT "web-2 currently has it".
 #
-# The invariant, therefore, is NOT "these resources are for_each'd". It is:
+# THE RISK IT CLOSES. The two delivery paths are INDEPENDENT, so an artifact can be added to
+# (or changed in) the web-1 SSH path with no matching change on the fresh-boot path. Nothing
+# fails: web-1 gets it, CI is green, web-2 silently comes up WITHOUT it on its next rebuild.
 #
-#     EVERY artifact an SSH provisioner delivers to web-1 has a fresh-boot counterpart
-#     that delivers the SAME artifact to a fresh cattle host.
+#     EVERY absolute destination the 15 SSH provisioners WRITE has a fresh-boot counterpart
+#     that writes the SAME destination on a fresh cattle host.
 #
-# Complements fresh-boot-parity.test.sh, which pins the 5 Phase-2.2 resources deeply
-# (byte-identity of unit bodies, env-file key-set parity). This guard is the BREADTH
-# half: it sweeps all 15 and every artifact each one delivers, so a NEW artifact added to
-# any SSH provisioner cannot land without a fresh-boot counterpart. Deliberately overlaps
-# rather than assuming the other suite ran.
+# WHY DESTINATION-KEYED (this is the whole design). The first version of this guard keyed on
+# four enumerated delivery CHANNELS (`provisioner "file"` source, heredoc, rendered `content=`,
+# `printf`). Review demonstrated ~13 fail-opens against that shape, because "which command
+# performed the write" is an open set: `echo >`, `sed >`, `install`, `tee`, `cp` all existed in
+# server.tf already and all evaded it. The DESTINATION is the closed set — it is what a fresh
+# host does or does not have. Keying on it makes a new delivery verb a non-event, and it means
+# coverage is DERIVED from real install/write statements instead of asserted in a hand-kept
+# table. (The first version's table contained a row claiming cloud-init rendered
+# /etc/webhook/hooks.json; soleur-host-bootstrap.sh does, and the row was "verified" by a
+# systemd ExecStart CONSUMER reference.)
 #
-# Delivery channels enumerated (all four that server.tf actually uses):
-#   1. provisioner "file" { source = "${path.module}/X" }  -> X must be baked or in cloud-init
-#   2. remote-exec heredoc `cat > DEST << 'MARK'`          -> DEST must have a counterpart,
-#                                                             and if that counterpart is a
-#                                                             cloud-init write_files entry the
-#                                                             BODIES must be byte-identical
-#   3. provisioner "file" { content = <rendered> }         -> reviewed COVERAGE table
-#   4. remote-exec printf / base64 -d > DEST               -> reviewed COVERAGE table
+# Every input is COMMENT-STRIPPED first, string-aware (a `#` inside a quoted HCL/YAML/shell
+# string is not a comment) and covering TRAILING comments, not just full-line ones. The
+# previous version stripped only full-line comments and only from server.tf; review showed a
+# trailing `# "phantom.sh"` injected a phantom baked filename, prose in cloud-init satisfied
+# the delivery requirement, and two of the real sources were passing on comment text alone.
 #
-# Every section carries a NON-VACUITY FLOOR: a parse that silently matches nothing must
-# fail loudly rather than report a clean sweep of an empty set.
+# Complements fresh-boot-parity.test.sh, which pins 5 resources DEEPLY (byte-identity of unit
+# bodies, env-file key-set parity). This is the BREADTH half. Deliberately overlaps rather
+# than assuming the other suite ran.
+#
+# Every section carries a NON-VACUITY FLOOR: a parse that silently matches nothing must fail
+# loudly rather than report a clean sweep of an empty set.
+#
+# Mutation-proven by web-host-provisioner-parity-mutation.test.sh, which asserts WHICH check
+# fires for each mutation (a bare non-zero exit credits crashes as detections).
 
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)" || exit 2
 # SOLEUR_INFRA_DIR overrides the analysed directory so this guard's own logic can be
 # mutation-tested against a sandbox copy in under a second (same rationale as
-# run-registered-suites.sh's INFRA_WF override). CI never sets it, so the default is the
-# real tree. A guard whose correctness could only be checked by hand-editing prod HCL
-# would not, in practice, be checked -- see web-host-provisioner-parity-mutation.test.sh.
+# run-registered-suites.sh's INFRA_WF override). CI never sets it — verified: the only
+# setter in the repo is the mutation battery.
 INFRA="${SOLEUR_INFRA_DIR:-$ROOT/apps/web-platform/infra}"
 
-for f in server.tf cloud-init.yml web-probe-envwrite.sh; do
+for f in server.tf cloud-init.yml web-probe-envwrite.sh soleur-host-bootstrap.sh; do
   [[ -f "$INFRA/$f" ]] || { echo "FATAL: $INFRA/$f not found" >&2; exit 2; }
 done
 
-# The analysis is parse-heavy (HCL heredoc bodies, cloud-init write_files blocks), so it
-# lives in python3 -- the same choice journald-config.test.sh, registry-insecure-config.test.sh
-# and web-git-data-probe.test.sh already make. python3 is base on ubuntu-24.04, the runner
-# `deploy-script-tests` uses. Emits `[ok] …` / `[FAIL] …`; exit status is the verdict.
 python3 - "$INFRA" <<'PYEOF'
 import os, re, sys
 
 INFRA = sys.argv[1]
-srv = open(os.path.join(INFRA, "server.tf")).read()
-ci  = open(os.path.join(INFRA, "cloud-init.yml")).read()
-envwriter = open(os.path.join(INFRA, "web-probe-envwrite.sh")).read()
+def read(n): return open(os.path.join(INFRA, n)).read()
 
 npass = nfail = 0
 def ok(m):
@@ -85,262 +92,292 @@ def ok(m):
 def no(m):
     global nfail; nfail += 1; print(f"[FAIL] {m}", file=sys.stderr)
 
-# ── Web-1-only ALLOWLIST ─────────────────────────────────────────────────────────────
-# An artifact that is LEGITIMATELY web-1-only goes here, keyed by artifact, valued by the
-# reason. Deliberately EMPTY: as measured at #7000, every artifact all 15 provisioners
-# deliver does have a fresh-boot counterpart, so nothing needs an exception today. Adding
-# an entry is therefore a visible, reviewable diff that must carry a stated reason -- which
-# is the point. An entry with an empty reason is rejected below.
+# ── Comment stripping: string-aware, trailing-comment-aware ──────────────────────────
+# A `#` starts a comment ONLY when it is outside a quoted string AND at line-start or
+# preceded by whitespace (the YAML rule; also correct for HCL and shell, and it protects
+# `http://x#y` and `${VAR#pfx}`). Handles backslash escapes inside strings so an escaped
+# quote does not desynchronise the scanner. Trailing comments are stripped, not just
+# full-line ones -- review proved a trailing `# "phantom.sh"` injects a phantom filename.
+def strip_comments(text):
+    out = []; i = 0; n = len(text); in_str = False; quote = ''
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == '\\' and i + 1 < n:
+                out.append(text[i + 1]); i += 2; continue
+            if c == quote: in_str = False
+            i += 1; continue
+        if c in '"\'':
+            in_str = True; quote = c; out.append(c); i += 1; continue
+        if c == '#' and (i == 0 or text[i - 1] in ' \t\n'):
+            while i < n and text[i] != '\n': i += 1
+            continue
+        out.append(c); i += 1
+    return ''.join(out)
+
+srv       = strip_comments(read("server.tf"))
+ci        = strip_comments(read("cloud-init.yml"))
+envwriter = strip_comments(read("web-probe-envwrite.sh"))
+bootstrap = strip_comments(read("soleur-host-bootstrap.sh"))
+
+# ── ALLOWLIST: destinations that are LEGITIMATELY web-1-only ─────────────────────────
+# Keyed by the exact DESTINATION PATH the failure message prints -- one key namespace, not
+# three (the previous version had three and documented one). Value is the reason, which is
+# mandatory. Deliberately empty: every destination the 15 write has a real fresh-boot
+# counterpart, so nothing needs an exception. Adding an entry is a reviewable diff.
 ALLOWLIST: dict[str, str] = {}
 
-for art, reason in ALLOWLIST.items():
-    if not reason.strip():
-        no(f"0: allowlist entry {art!r} has no stated reason")
-if all(r.strip() for r in ALLOWLIST.values()):
-    ok(f"0: allowlist well-formed ({len(ALLOWLIST)} entries, every one carries a reason)")
-
-# ── Parse local.host_script_files (the image bake set) ────────────────────────────────
-# Parsed from the COMMENT-STRIPPED source (see strip_comments below): the bake list carries
-# 46 comment lines, one of which contains the literal `provisioner "file"` in prose. Parsing
-# raw picks `file` up as a 46th "baked filename", so an SSH provisioner delivering a file
-# actually named `file` would have falsely passed §2 -- a guard satisfied by a paragraph.
-def _strip_comments(text):
-    return '\n'.join(L for L in text.split('\n') if not L.lstrip().startswith('#'))
-
-m = re.search(r'host_script_files = \[(.*?)\n  \]', _strip_comments(srv), re.S)
+# ── §0. Parse the three fresh-boot channels ──────────────────────────────────────────
+m = re.search(r'host_script_files = \[(.*?)\n  \]', srv, re.S)
 if not m:
-    no("0: could not parse local.host_script_files from server.tf -- fix the extraction, "
-       "do not trust this run")
+    no("0: could not parse local.host_script_files -- fix the extraction, do not trust this run")
     print(f"=== web-host-provisioner-parity: {npass} passed, {nfail} failed ===")
     sys.exit(1)
 baked = set(re.findall(r'"([^"]+)"', m.group(1)))
 if len(baked) >= 40:
     ok(f"0: parsed local.host_script_files ({len(baked)} baked files)")
 else:
-    no(f"0: local.host_script_files parsed to only {len(baked)} files (floor 40) -- "
-       "extraction is probably broken")
+    no(f"0: local.host_script_files parsed to only {len(baked)} files (floor 40) -- extraction broken")
 
-# ── Parse cloud-init write_files paths + bodies ───────────────────────────────────────
-def parse_write_files(text):
-    out = {}
-    for wm in re.finditer(r'- path: (\S+)\n(.*?)(?=\n  - path: |\n[a-z_]+:\n)', text, re.S):
-        path, body = wm.group(1), wm.group(2)
-        cm = re.search(r'content: \|\n(.*)', body, re.S)
-        if not cm:
-            out.setdefault(path, None)
-            continue
-        lines, acc = cm.group(1).split('\n'), []
-        for L in lines:
-            if L.strip() == '':
-                acc.append('')
-            elif L.startswith('      '):
-                acc.append(L[6:])
-            else:
-                break
-        while acc and acc[-1] == '':
-            acc.pop()
-        out[path] = '\n'.join(acc)
-    return out
-
-wf = parse_write_files(ci)
-if len(wf) >= 10:
-    ok(f"0: parsed cloud-init write_files ({len(wf)} paths)")
+# cloud-init write_files paths (structural, anchored to the list-item shape)
+wf_paths = set(re.findall(r'^\s*-\s*path:\s*(\S+)\s*$', ci, re.M))
+if len(wf_paths) >= 10:
+    ok(f"0: parsed cloud-init write_files ({len(wf_paths)} paths)")
 else:
-    no(f"0: cloud-init write_files parsed to only {len(wf)} paths (floor 10) -- "
-       "extraction is probably broken")
+    no(f"0: cloud-init write_files parsed to only {len(wf_paths)} paths (floor 10) -- extraction broken")
+
+# soleur-host-bootstrap.sh installs. Two shapes:
+#   (a) `for f in A B C; do ... install ... "$SEED/$f" "<DIR>/$f"; done`  -> DIR/A, DIR/B, ...
+#   (b) `install ... "$SEED/<src>" <literal-dest>`
+# Modelling (a) is what makes this an INSTALL check rather than a BAKE check -- review's P1
+# was that the previous version proved membership in a content-hash list and called it delivery.
+def parse_bootstrap_installs(text):
+    joined = re.sub(r'\\\n\s*', ' ', text)   # join shell line-continuations
+    installs = {}                            # dest -> seed source basename
+    for fm in re.finditer(r'\bfor\s+(\w+)\s+in\s+(.*?);\s*do(.*?)\bdone\b', joined, re.S):
+        var, names_raw, body = fm.group(1), fm.group(2), fm.group(3)
+        names = [w for w in names_raw.split() if w and not w.startswith('$')]
+        im = re.search(r'\binstall\b[^\n]*?"\$SEED/\$\{?' + var + r'\}?"\s+"?([^"\s]*)/\$\{?'
+                       + var + r'\}?"?', body)
+        if not im: continue
+        d = im.group(1)
+        for nm in names:
+            installs[f"{d}/{nm}"] = nm
+    for im in re.finditer(r'\binstall\b[^\n]*?"\$SEED/([^"$]+)"\s+"?(/[^"\s]+)"?', joined):
+        installs[im.group(2)] = im.group(1)
+    return installs
+
+bs_installs = parse_bootstrap_installs(bootstrap)
+if len(bs_installs) >= 30:
+    ok(f"0: parsed soleur-host-bootstrap.sh installs ({len(bs_installs)} destinations)")
+else:
+    no(f"0: soleur-host-bootstrap.sh parsed to only {len(bs_installs)} installs (floor 30) -- "
+       "extraction broken; the install loops changed shape")
 
 # ── §1. Enumerate the SSH-connected terraform_data resources ─────────────────────────
-# COMMENTS ARE STRIPPED FIRST. server.tf's infra_config_handler_bootstrap rationale contains
-# the literal `connection{type="ssh"}` in prose, and every artifact regex below (`type =`,
-# `source =`, `printf … >`) would match such prose just as happily as real HCL. That is the
-# cq-assert-anchor-not-bare-token trap: a guard that reads a comment as configuration can be
-# satisfied -- or inflated past its own floor -- by a paragraph. Full-line comments only:
-# HCL `#` starts a line comment, and trailing comments sit after real config on their line,
-# so dropping lstrip-starts-with-# lines removes the prose without touching any attribute.
-srv_code = _strip_comments(srv)
+# Brace-balanced and string-aware, so a block ends at its OWN closing brace. The previous
+# version split on the next `resource "terraform_data"`, so the last block ran to EOF and
+# swallowed two sibling hcloud_volume resources.
+def hcl_blocks(hcl, kind):
+    for bm in re.finditer(r'resource\s+"' + kind + r'"\s+"([^"]+)"\s*\{', hcl):
+        i = bm.end(); depth = 1; in_str = False; q = ''
+        while i < len(hcl) and depth > 0:
+            c = hcl[i]
+            if in_str:
+                if c == '\\': i += 2; continue
+                if c == q: in_str = False
+            elif c in '"\'': in_str = True; q = c
+            elif c == '{': depth += 1
+            elif c == '}': depth -= 1
+            i += 1
+        yield bm.group(1), hcl[bm.end():i - 1]
 
-blocks = re.split(r'\n(?=resource "terraform_data" ")', srv_code)
 ssh_resources = {}
-for b in blocks:
-    rm = re.match(r'resource "terraform_data" "([a-z_0-9]+)"', b)
-    if not rm:
-        continue
-    # `type = "ssh"` inside a connection block, fmt-aligned (terraform fmt re-aligns `=`,
-    # so match whitespace-tolerantly -- a single-space pattern would blind this guard the
-    # moment the block gains an attribute). Anchored to a `connection {` block so a `type`
-    # attribute belonging to some other nested block cannot be read as an SSH connection.
-    if re.search(r'connection\s*\{[^}]*?\btype\s*=\s*"ssh"', b, re.S):
-        ssh_resources[rm.group(1)] = b
+for name, body in hcl_blocks(srv, "terraform_data"):
+    if re.search(r'connection\s*\{[^{}]*?\btype\s*=\s*"ssh"', body, re.S):
+        ssh_resources[name] = body
 
 FLOOR_RESOURCES = 15
 if len(ssh_resources) >= FLOOR_RESOURCES:
-    ok(f"1: swept {len(ssh_resources)} SSH-connected terraform_data resources "
-       f"(floor {FLOOR_RESOURCES})")
+    ok(f"1: swept {len(ssh_resources)} SSH-connected terraform_data resources (floor {FLOOR_RESOURCES})")
 else:
     no(f"1: swept only {len(ssh_resources)} SSH-connected terraform_data resources "
-       f"(floor {FLOOR_RESOURCES}) -- a provisioner was removed, or the extraction broke. "
-       "Removing one is a Phase-5 change (ADR-143), not an incidental edit.")
+       f"(floor {FLOOR_RESOURCES}). Either a provisioner was REMOVED -- which is a Phase-5 "
+       "change (plan §5.3(c)), not an incidental edit, and must be done with the rest of "
+       "Phase 5 -- or the extraction broke. Check which before editing this floor.")
 
-# Every one of them must be host-pinned to web-1 (the deliberate scoping this guard
-# documents). If a future change DOES fan one out over var.web_hosts, this fails and
-# forces the CI-reachability question above to be answered first.
-pinned = [n for n, b in ssh_resources.items()
-          if re.search(r'host\s*=\s*hcloud_server\.web\["web-1"\]\.ipv4_address', b)]
-if len(pinned) == len(ssh_resources):
-    ok(f"1: all {len(pinned)} SSH provisioners are host-pinned to web-1 "
-       "(CI can SSH exactly one host -- see header)")
+# Host-pinning. Assert the ABSENCE of for_each rather than the presence of a web-1 string:
+# review showed a fanned-out resource with a nested per-provisioner connection kept a literal
+# `web["web-1"]` elsewhere in the block and passed the presence check.
+fanned = [n for n, b in ssh_resources.items() if re.search(r'^\s*for_each\s*=', b, re.M)]
+unpinned = [n for n, b in ssh_resources.items()
+            if not re.search(r'host\s*=\s*hcloud_server\.web\["web-1"\]\.ipv4_address', b)]
+if not fanned and not unpinned:
+    ok(f"1: all {len(ssh_resources)} SSH provisioners are web-1-pinned and none is for_each'd")
 else:
-    unpinned = sorted(set(ssh_resources) - set(pinned))
-    no(f"1: SSH provisioners not pinned to web-1: {unpinned}. A for_each fan-out makes "
-       "every merge-triggered apply dial a host CI has no SSH route to. If this is "
-       "intentional, the tunnel connector + firewall + -target list must change FIRST.")
+    no(f"1: for_each'd={sorted(fanned)} not-web-1-pinned={sorted(unpinned)}. CI has ONE SSH "
+       "route (web-1) and all 15 are bare -target'ed, so a fan-out makes every merge-triggered "
+       "apply dial a host it cannot reach and hang to the SSH timeout. See ADR-114's "
+       "load-bearing constraint. If CI genuinely gained a route to web-2, the tunnel connector, "
+       "the firewall and the -target lists must change FIRST, and this check with them.")
 
-# ── §2. provisioner "file" { source = … } -> must be baked or present in cloud-init ───
-n_sources = 0
-for name, b in ssh_resources.items():
-    for src_file in re.findall(r'source\s*=\s*"\$\{path\.module\}/([^"]+)"', b):
-        n_sources += 1
-        if src_file in ALLOWLIST:
-            continue
-        if src_file in baked:
-            continue
-        if src_file in ci:
-            continue
-        no(f"2: {name} SSH-delivers {src_file!r} but it is NOT in local.host_script_files "
-           "and is not referenced by cloud-init.yml -- a fresh cattle host (web-2) would "
-           "come up without it. Bake it, or add it to ALLOWLIST with a reason.")
+# ── §2. Destination sweep: the load-bearing invariant ────────────────────────────────
+# Every absolute path the 15 WRITE must be written on a fresh host too. Transient staging
+# and device paths are excluded -- they are not delivered artifacts.
+TRANSIENT = ('/tmp/', '/dev/', '/proc/', '/sys/', '/run/')
 
-FLOOR_SOURCES = 30
-if n_sources >= FLOOR_SOURCES:
-    ok(f"2: swept {n_sources} `provisioner \"file\"` sources, every one has a fresh-boot "
-       f"counterpart (floor {FLOOR_SOURCES})")
+def destinations(body):
+    out = set()
+    out |= set(re.findall(r'destination\s*=\s*"([^"]+)"', body))       # provisioner "file"
+    out |= set(re.findall(r'>\s*(/[^\s"\';|&)]+)', body))              # echo/printf/sed/cat/base64
+    out |= set(re.findall(r'\btee\s+(?:-\S+\s+)*(/[^\s"\';|&)]+)', body))
+    for seg in re.findall(r'\binstall\b([^"\n]*)', body):
+        if re.match(r'\s+-\S*d', seg): continue                        # install -d == mkdir
+        p = re.findall(r'(/[^\s"\';|&)]+)', seg)
+        if p: out.add(p[-1])
+    for seg in re.findall(r'\bcp\b\s+([^"\n]*)', body):
+        p = re.findall(r'(/[^\s"\';|&)]+)', seg)
+        if len(p) >= 2: out.add(p[-1])
+    return {d for d in out if d.startswith('/') and not d.startswith(TRANSIENT)}
+
+def _write_pats(token):
+    return [rf'>\s*{token}(?:\s|$|["\';|&)])', rf'\btee\s+(?:-\S+\s+)*{token}(?:\s|$|["\';|&)])',
+            rf'\binstall\b[^\n]*?\s"?{token}"?(?:\s|$|["\';|&)])',
+            rf'\bcp\b[^\n]*?\s"?{token}"?(?:\s|$|["\';|&)])',
+            rf'^\s*-\s*path:\s*{token}\s*$']
+
+def shell_path_vars(text):
+    """`VAR=/abs/path` assignments, so a write through "$VAR" resolves. soleur-host-bootstrap.sh
+    authors /usr/local/bin/soleur-vector-install, which does `CFG=/etc/vector/vector.toml` then
+    `install -m 0644 /opt/soleur/vector.toml "$CFG"`. Without this the guard reports a real
+    delivery as missing -- and the tempting fix is an ALLOWLIST entry, which would blind the
+    destination permanently. Deliberately shallow: one level, literal absolute paths only."""
+    return {m.group(2): m.group(1)
+            for m in re.finditer(r'^\s*(\w+)=(/[^\s"\';|&)$]+)\s*$', text, re.M)}
+
+def written_by(text, dest, var_map=None):
+    """Does `text` WRITE dest (not merely mention it)? Anchored on write constructs, so a
+    systemd ExecStart or a chmod that names the path does not count as delivery -- review
+    showed the previous substring test crediting an ExecStart consumer reference as proof
+    that cloud-init rendered the file."""
+    tokens = [re.escape(dest)]
+    var = (var_map or {}).get(dest)
+    if var:
+        tokens += [re.escape(f'${var}'), re.escape('${' + var + '}')]
+    return any(re.search(p, text, re.M) for t in tokens for p in _write_pats(t))
+
+bs_vars = shell_path_vars(bootstrap)
+
+all_dests = {}
+for name, body in ssh_resources.items():
+    for d in destinations(body):
+        all_dests.setdefault(d, set()).add(name)
+
+uncovered = []
+for dest in sorted(all_dests):
+    if dest in ALLOWLIST: continue
+    chans = []
+    if dest in wf_paths:                        chans.append("cloud-init write_files")
+    if written_by(ci, dest):                    chans.append("cloud-init write")
+    if dest in bs_installs:                     chans.append("bootstrap seed-install")
+    if written_by(bootstrap, dest, bs_vars):    chans.append("bootstrap write")
+    if written_by(envwriter, dest):             chans.append("web-probe-envwrite")
+    if not chans:
+        uncovered.append(dest)
+        no(f"2: {dest} is written by {sorted(all_dests[dest])} but NOTHING writes it on a "
+           "fresh host (not a cloud-init write_files entry, not a cloud-init write, not a "
+           "soleur-host-bootstrap.sh install, not web-probe-envwrite.sh). web-2 comes up "
+           "WITHOUT it on its next rebuild. Fix by delivering it on the fresh-boot path -- "
+           "bake it and install it in soleur-host-bootstrap.sh, or write it from cloud-init. "
+           "Only if the artifact is provably meaningless on a fresh host (a running-host "
+           "rotation, not config) add it to ALLOWLIST with that reason.")
+
+FLOOR_DESTS = 50
+if len(all_dests) >= FLOOR_DESTS:
+    if not uncovered:
+        ok(f"2: all {len(all_dests)} SSH-written destinations have a fresh-boot writer "
+           f"(floor {FLOOR_DESTS})")
 else:
-    no(f"2: swept only {n_sources} `provisioner \"file\"` sources (floor {FLOOR_SOURCES}) "
-       "-- the extraction is probably broken; a clean sweep of nothing is not coverage")
+    no(f"2: swept only {len(all_dests)} destinations (floor {FLOOR_DESTS}). Either artifacts "
+       "were legitimately removed -- a Phase-5-class change -- or the destination extraction "
+       "broke. A clean sweep of nothing is not coverage.")
 
-# ── §3. remote-exec heredocs -> destination must have a fresh-boot counterpart ────────
-heredocs = []   # (resource, dest, marker)
-for name, b in ssh_resources.items():
-    for dest, marker in re.findall(r"cat > (\S+) << '([A-Z]+)'", b):
-        heredocs.append((name, dest, marker))
-
-for name, dest, _marker in heredocs:
-    base = os.path.basename(dest)
-    if dest in ALLOWLIST or base in ALLOWLIST:
-        continue
-    if base in baked:          # delivered fresh-boot as a baked repo file
-        continue
-    if dest in wf:             # delivered fresh-boot by cloud-init write_files
-        continue
-    no(f"3: {name} heredoc-writes {dest} but no fresh-boot counterpart exists "
-       f"(no baked {base!r}, no cloud-init write_files entry) -- web-2 comes up without it.")
-
-FLOOR_HEREDOCS = 7
-if len(heredocs) >= FLOOR_HEREDOCS:
-    ok(f"3: swept {len(heredocs)} remote-exec heredoc destinations, every one has a "
-       f"fresh-boot counterpart (floor {FLOOR_HEREDOCS})")
+# ── §3. Bootstrap-installed destinations must have their SEED source BAKED ───────────
+# soleur-host-bootstrap.sh installs from "$SEED/<name>", which only exists if <name> is in
+# local.host_script_files AND in the Dockerfile COPY set. Baked-but-not-installed is caught
+# by §2; installed-but-not-baked is caught here. Both directions, or the pair is not proof.
+missing_seed = sorted({src for dest, src in bs_installs.items()
+                       if dest in all_dests and src not in baked})
+if not missing_seed:
+    n_checked = sum(1 for d in bs_installs if d in all_dests)
+    ok(f"3: all {n_checked} bootstrap-installed destinations have their seed file baked")
 else:
-    no(f"3: swept only {len(heredocs)} heredoc destinations (floor {FLOOR_HEREDOCS}) -- "
-       "extraction is probably broken")
+    no(f"3: soleur-host-bootstrap.sh installs from $SEED/{missing_seed} but those are NOT in "
+       "local.host_script_files, so the seed file will not exist on a fresh host and the "
+       "install fails at boot.")
 
-# ── §4. BYTE-IDENTITY where both paths carry their own copy of the body ──────────────
-# A heredoc whose counterpart is a cloud-init write_files entry means the SAME unit body
-# is written out TWICE, in two files, in two encodings. That is the drift shape with no
-# compiler behind it: web-1 and web-2 would run different units and nothing would say so.
-# (Heredocs whose counterpart is a BAKED repo file are byte-identical by construction --
-# fresh-boot-parity.test.sh §5 pins those separately.)
+# ── §4. BYTE-IDENTITY where both paths carry their own copy of a unit body ───────────
+# A heredoc whose counterpart is a cloud-init write_files entry means the SAME body written
+# TWICE, in two files, in two encodings -- drift with no compiler behind it. (Heredocs whose
+# counterpart is a BAKED repo file are byte-identical by construction; fresh-boot-parity.test.sh
+# §3/§5 pins those, including the install, separately.)
+def parse_write_files(text):
+    out = {}
+    for wm in re.finditer(r'-\s*path:\s*(\S+)\n(.*?)(?=\n  - path: |\n[a-z_]+:\n)', text, re.S):
+        path, body = wm.group(1), wm.group(2)
+        cm = re.search(r'content:\s*\|\n(.*)', body, re.S)
+        if not cm:
+            out.setdefault(path, None); continue
+        acc = []
+        for L in cm.group(1).split('\n'):
+            if L.strip() == '': acc.append('')
+            elif L.startswith('      '): acc.append(L[6:])
+            else: break
+        while acc and acc[-1] == '': acc.pop()
+        out[path] = '\n'.join(acc)
+    return out
+
+wf_bodies = parse_write_files(ci)
 n_identity = 0
-for name, dest, marker in heredocs:
-    if dest not in wf or wf[dest] is None:
-        continue
-    hm = re.search(r'"cat > ' + re.escape(dest) + r" << '" + marker + r"'\\n(.*?)\\n"
-                   + marker + r'"', srv_code)
-    if not hm:
-        no(f"4: could not extract the {dest} heredoc body from server.tf -- fix the "
-           "extraction rather than trusting this run")
-        continue
-    n_identity += 1
-    if hm.group(1).replace('\\n', '\n').strip() == wf[dest].strip():
-        ok(f"4: {dest} body identical across server.tf heredoc and cloud-init write_files")
-    else:
-        no(f"4: {dest} DRIFTED -- the server.tf heredoc body and the cloud-init "
-           "write_files body differ, so web-1 and web-2 run different units.")
+for name, body in ssh_resources.items():
+    for dest, marker in re.findall(r"cat > (\S+) << '([A-Za-z0-9_]+)'", body):
+        if dest not in wf_bodies: continue
+        if wf_bodies[dest] is None:
+            no(f"4: {dest} is heredoc-written by {name} and has a cloud-init write_files entry "
+               "with no parseable `content: |` body, so the two copies cannot be compared. "
+               "Give it a literal block body, or the drift is invisible.")
+            continue
+        hm = re.search(r'"cat > ' + re.escape(dest) + r" << '" + marker + r"'\\n(.*?)\\n"
+                       + marker + r'"', srv)
+        if not hm:
+            no(f"4: could not extract the {dest} heredoc body -- fix the extraction rather "
+               "than trusting this run")
+            continue
+        n_identity += 1
+        if hm.group(1).replace('\\n', '\n').strip() == wf_bodies[dest].strip():
+            ok(f"4: {dest} body identical across server.tf heredoc and cloud-init write_files")
+        else:
+            no(f"4: {dest} DRIFTED between the server.tf heredoc and the cloud-init "
+               "write_files body, so web-1 and web-2 would run DIFFERENT units. The change "
+               "that produced this belongs on BOTH paths -- do not edit whichever side is "
+               "cheaper just to clear the failure; restore the body the originating change "
+               "intended, on both.")
 
 FLOOR_IDENTITY = 4
 if n_identity >= FLOOR_IDENTITY:
-    ok(f"4: byte-identity checked on {n_identity} dual-written bodies "
-       f"(floor {FLOOR_IDENTITY})")
+    ok(f"4: byte-identity checked on {n_identity} dual-written bodies (floor {FLOOR_IDENTITY})")
 else:
-    no(f"4: byte-identity checked on only {n_identity} bodies (floor {FLOOR_IDENTITY}) -- "
-       "extraction is probably broken")
+    no(f"4: byte-identity checked on only {n_identity} bodies (floor {FLOOR_IDENTITY}). Either "
+       "a dual-written unit moved to a single delivery path -- a Phase-5-class change -- or "
+       "the heredoc/write_files extraction broke.")
 
-# ── §5. Rendered / env-file destinations (content= and printf/base64) ────────────────
-# These carry INTERPOLATED values, so there is no file to compare. Each is claimed here
-# against the channel that covers it on a fresh host, and the claim is then VERIFIED --
-# an unverified table would just be a comment.
-#   write_files : cloud-init.yml write_files entry for that exact path
-#   inline      : cloud-init.yml writes the path from a runcmd/inline block
-#   envwriter   : the baked web-probe-envwrite.sh writes it (key-set parity for these
-#                 three is pinned separately by fresh-boot-parity.test.sh §12)
-COVERAGE = {
-    "/etc/default/disk-monitor":              ("write_files", "cloud-init seeds RESEND_API_KEY at boot"),
-    "/etc/default/resource-monitor":          ("write_files", "cloud-init seeds RESEND_API_KEY at boot"),
-    "/etc/default/container-restart-monitor": ("write_files", "cloud-init seeds RESEND_API_KEY at boot"),
-    "/etc/default/web-private-nic-guard":     ("envwriter",   "baked web-probe-envwrite.sh, invoked by cloud-init with per-host inputs"),
-    "/etc/default/web-zot-consumer-probe":    ("envwriter",   "baked web-probe-envwrite.sh, invoked by cloud-init with per-host inputs"),
-    "/etc/default/web-git-data-probe":        ("envwriter",   "baked web-probe-envwrite.sh, invoked by cloud-init with per-host inputs"),
-    "/etc/docker/daemon.json":                ("inline",      "cloud-init writes daemon.json inline, same local.registry_endpoint source"),
-    "/etc/webhook/hooks.json":                ("inline",      "cloud-init renders the baked hooks.json.tmpl with the secret at boot"),
-}
-
-rendered = set()
-for name, b in ssh_resources.items():
-    for dest in re.findall(r'content\s*=\s*.*\n\s*destination = "([^"]+)"', b):
-        rendered.add(dest)
-    for dest in re.findall(r'printf .*?> (/[^\s")]+)', b):
-        rendered.add(dest)
-    for dest in re.findall(r'base64 -d > (/[^\s")]+)', b):
-        rendered.add(dest)
-
-for dest in sorted(rendered):
-    if dest in ALLOWLIST:
-        continue
-    if dest not in COVERAGE:
-        no(f"5: {dest} is written by an SSH provisioner but is absent from the COVERAGE "
-           "table -- state which fresh-boot channel delivers it to web-2, or ALLOWLIST it.")
-        continue
-    channel, _reason = COVERAGE[dest]
-    if channel == "write_files":
-        if dest in wf:
-            ok(f"5: {dest} covered fresh-boot by cloud-init write_files")
-        else:
-            no(f"5: {dest} claims write_files coverage but cloud-init has no such entry")
-    elif channel == "inline":
-        if dest in ci:
-            ok(f"5: {dest} covered fresh-boot by a cloud-init inline write")
-        else:
-            no(f"5: {dest} claims inline coverage but cloud-init never names it")
-    elif channel == "envwriter":
-        base = os.path.basename(dest)
-        if "web-probe-envwrite.sh" in baked and dest in envwriter:
-            ok(f"5: {dest} covered fresh-boot by the baked web-probe-envwrite.sh")
-        else:
-            no(f"5: {dest} claims envwriter coverage but web-probe-envwrite.sh is not "
-               f"baked or does not write {base}")
-    else:
-        no(f"5: {dest} has an unknown coverage channel {channel!r}")
-
-FLOOR_RENDERED = 8
-if len(rendered) >= FLOOR_RENDERED:
-    ok(f"5: swept {len(rendered)} rendered/env destinations (floor {FLOOR_RENDERED})")
-else:
-    no(f"5: swept only {len(rendered)} rendered/env destinations (floor {FLOOR_RENDERED}) "
-       "-- extraction is probably broken")
-
-# Stale-entry check: a COVERAGE row for a destination no longer written by any SSH
-# provisioner is dead weight that makes the table read as broader than it is.
-for dest in sorted(set(COVERAGE) - rendered):
-    no(f"5: COVERAGE names {dest} but no SSH provisioner writes it -- remove the stale row")
+# ── §5. ALLOWLIST hygiene: every entry justified, none stale ─────────────────────────
+for art, reason in sorted(ALLOWLIST.items()):
+    if not reason.strip():
+        no(f"5: ALLOWLIST entry {art!r} has no stated reason")
+    if art not in all_dests:
+        no(f"5: ALLOWLIST names {art} but no SSH provisioner writes it -- remove the stale entry")
 
 print(f"=== web-host-provisioner-parity: {npass} passed, {nfail} failed ===")
 sys.exit(1 if nfail else 0)
