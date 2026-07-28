@@ -20,7 +20,7 @@ import { execFileSync } from "child_process";
 import { createChildLogger } from "./logger";
 import { isGitDataStoreEnabled } from "./workspace-resolver";
 import { gitWithPrivateKeyAuth, sshWithPrivateKeyAuth } from "./git-auth";
-import { reportSilentFallback } from "./observability";
+import { hashUserId, reportSilentFallback } from "./observability";
 import { assertSafeWorktreeId } from "./worktree-write-lease";
 // D2 write-boundary sentinel (ADR-068 §6, epic #5274 Sub-PR 3.C). The membership
 // authority is shared with the fetch side (git-data-client.ts) so a single check
@@ -345,8 +345,19 @@ export async function replicateToGitData(params: {
         tags: { limit: String(GIT_DATA_MAX_CONCURRENT) },
       },
     );
+    // PSEUDONYMISED, never the raw ids (#6982 review). workspace_id === auth.users.id
+    // (mig-053 N2), so a bare workspaceId here is a raw user identifier on the app log
+    // sink — and Vector's `pii_scrub_string` does not scrub a bare UUID in free text.
+    // That is the same reasoning that put a UUID redactor in the git-data HOST emitter in
+    // this PR; this module was the app-side outlier. Matches the sibling git-data-client.ts,
+    // which already logs `workspaceIdHash`. worktreeId rides the same treatment: it is a
+    // stable PER-USER identifier, so leaving it bare would defeat the point.
     log.warn(
-      { workspaceId, limit: GIT_DATA_MAX_CONCURRENT },
+      {
+        workspaceIdHash: hashUserId(workspaceId),
+        worktreeIdHash: hashUserId(worktreeId),
+        limit: GIT_DATA_MAX_CONCURRENT,
+      },
       "git-data replication shed — queue timeout; session end is not blocked",
     );
     return;
@@ -389,7 +400,11 @@ export async function replicateToGitData(params: {
       { cwd: workspacePath, timeout: 60_000 },
     );
     log.info(
-      { workspaceId, worktreeId, leaseGeneration },
+      {
+        workspaceIdHash: hashUserId(workspaceId),
+        worktreeIdHash: hashUserId(worktreeId),
+        leaseGeneration,
+      },
       "git-data replication push complete",
     );
   } catch (err) {

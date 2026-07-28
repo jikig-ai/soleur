@@ -300,3 +300,56 @@ describe("replicateToGitData — concurrency limiter (#6982 W6)", () => {
     await expect(call(mod, "ws-after")).resolves.toBeUndefined();
   });
 });
+
+// #6982 review P3 — the replication logger must not ship a BARE workspace UUID.
+//
+// workspace_id === auth.users.id (mig-053 N2), so a bare workspaceId in a log line is a
+// raw user identifier on the app log sink — and Vector's `pii_scrub_string` does NOT
+// scrub a bare UUID in free text. That is the same reasoning that put a UUID redactor in
+// the git-data host emitter in this very PR; the app side was the outlier. The sibling
+// module git-data-client.ts already pseudonymises via hashUserId(workspaceId).
+describe("replicateToGitData — workspace id is pseudonymised in logs (#6982)", () => {
+  const REAL_WS = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
+  const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+  it("logs a hash, never the raw workspace id, on a successful push", async () => {
+    vi.resetModules();
+    const logCalls: unknown[][] = [];
+    vi.doMock("../server/logger", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../server/logger")>()),
+      createChildLogger: () => ({
+        info: (...a: unknown[]) => logCalls.push(a),
+        warn: (...a: unknown[]) => logCalls.push(a),
+        error: (...a: unknown[]) => logCalls.push(a),
+        debug: (...a: unknown[]) => logCalls.push(a),
+      }),
+    }));
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    const mod = await import("../server/git-data-replication");
+    await mod.replicateToGitData({
+      workspacePath: "/tmp/ws",
+      workspaceId: REAL_WS,
+      worktreeId: WT,
+      leaseGeneration: 1,
+      userId: USER,
+    });
+
+    expect(logCalls.length).toBeGreaterThan(0);
+    const serialized = JSON.stringify(logCalls);
+    // The raw id must not be present in ANY form.
+    expect(serialized).not.toContain(REAL_WS);
+    // ...and not merely absent because nothing was logged about the workspace: a
+    // pseudonymous handle must be there instead.
+    expect(serialized).toMatch(/workspaceIdHash/);
+    // No OTHER bare UUID may ride either (worktreeId is one).
+    const structured = logCalls.map((c) => c[0]);
+    for (const obj of structured) {
+      for (const v of Object.values((obj ?? {}) as Record<string, unknown>)) {
+        if (typeof v === "string" && UUID_RE.test(v)) {
+          throw new Error(`bare UUID reached the log sink: ${String(v)}`);
+        }
+      }
+    }
+    vi.doUnmock("../server/logger");
+  });
+});
