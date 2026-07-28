@@ -309,6 +309,18 @@ resource "hcloud_server" "inngest" {
   # window `apply_target=inngest-host` dispatch. The AOF volume is a SEPARATE resource that
   # survives the replace (verify re-attach on replace — git-data precedent).
 
+  # `ssh_keys` is a CREATE-TIME attribute: Hetzner injects the named keys into root's
+  # authorized_keys at first boot and never re-reads them, so a changed key ID cannot
+  # reach a running host — Terraform's only way to "apply" it is to REPLACE the host.
+  # Rotating `hcloud_ssh_key.default` (an operator credential rotation, not an infra
+  # change) therefore armed a force-replacement on this SOLE-scheduler host plus a
+  # cascading replace of hcloud_volume_attachment.inngest_redis. Mirrors the
+  # ignore_changes=[ssh_keys] that server.tf already carries. Deliberately NOT widened to
+  # user_data — that force-replace is the intended replace-to-reprovision path (above).
+  lifecycle {
+    ignore_changes = [ssh_keys]
+  }
+
   labels = {
     app = "soleur-web-platform"
   }

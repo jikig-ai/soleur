@@ -33,7 +33,16 @@ PROD_RE='(prod|production|deployed|live|app\.soleur\.ai|tenant-zero|customer)'
 #   3. the threshold declaration (frontmatter key + the bold User-Brand-Impact
 #      label) and the hypothetical/conditional framing lines, so trigger 3 does
 #      not read a plan's own metadata or its "if this lands broken" section as
-#      an incident.
+#      an incident;
+#   4. the `Network-Outage Deep-Dive determination` HEADING (deepen-plan Phase
+#      4.5, recorded per `hr-ssh-diagnosis-verify-firewall` so an N/A skip is
+#      auditable). This is a plan-TEMPLATE section name, not an outage claim —
+#      and since nearly every plan carries some prod word, matching the word
+#      `Outage` inside it made the gate fire on any plan that recorded the
+#      determination, including ones whose body says the checklist is "not
+#      applicable rather than unverified". Same structural-artifact shape as
+#      (3): only the heading LINE is stripped, so a real outage claim inside
+#      that section still signals. **Why:** #7003.
 # Residual (accepted): a plan whose SUBJECT is incident detection still discusses
 # outages in prose and may signal — that is fail-toward-PIR over-production the
 # operator hand-adjudicates, not the #6813 false-positive class (which was every
@@ -42,7 +51,7 @@ PROD_RE='(prod|production|deployed|live|app\.soleur\.ai|tenant-zero|customer)'
 haystack="$(cat \
   | awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' \
   | sed 's/`[^`]*`//g' \
-  | grep -vaiE '^brand_survival_threshold:|Brand-survival threshold:|If this lands broken|If this leaks|if this lands|would break|could break')"
+  | grep -vaiE '^brand_survival_threshold:|Brand-survival threshold:|If this lands broken|If this leaks|if this lands|would break|could break|Network-Outage Deep-Dive')"
 
 # Herestrings (no pipe) — a piped `grep -q` under pipefail can SIGPIPE on an
 # early match and invert the result; a herestring cannot.

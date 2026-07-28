@@ -433,7 +433,7 @@ drop it:
   (this is the regression the gate exists to catch). Report-only: it does not
   block "done" on this PR, but it is the signal the #5463 flip will gate on.
 - `CANT-RUN:<reason>` → record `Live verification: CANT-RUN:<reason>` and
-  **auto-file a tracking issue** (`wg-when-deferring-a-capability`):
+  **auto-file a tracking issue** (`wg-when-deferring-a-capability-create-a`):
 
 ```bash
 gh issue create --label type/chore \

@@ -3,7 +3,8 @@
 # Blocks use of the in-session CronCreate scheduler for DURABLE / future-dated
 # reminders and redirects to the Inngest reminder primitive (server-side).
 #
-# Source rule: hr-durable-reminders-use-inngest-primitive (AGENTS.core.md).
+# Rationale: durable reminders belong on the Inngest primitive, not an
+# in-process timer — a process restart silently drops the latter.
 # Mechanical backstop to the soleur:schedule Step 0 execution-substrate gate and
 # the runbook decision matrix (inngest-oneshot-and-reminder-patterns.md), both of
 # which are prose scoped to one code path — a run that hand-rolls a reminder via

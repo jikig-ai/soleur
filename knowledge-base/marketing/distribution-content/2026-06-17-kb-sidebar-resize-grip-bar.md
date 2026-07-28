@@ -3,7 +3,7 @@ title: "KB sidebar resize handle: a clear grip bar"
 type: feature-launch
 publish_date: 2026-07-28
 channels: x, bluesky
-status: scheduled
+status: published
 pr_reference: "#5477"
 ---
 
