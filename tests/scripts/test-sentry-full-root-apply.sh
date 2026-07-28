@@ -299,8 +299,8 @@ t_fixed_predicate_does_not_flake_on_the_real_input() {
   printf '            -target=sentry_cron_monitor.synthetic_top_mutation \\\n' > "$tmp"
   cat "$WORKFLOW" >> "$tmp"
 
-  local i rc bad=0 runs=40
-  for i in $(seq 1 "$runs"); do
+  local rc bad=0 runs=40
+  for _ in $(seq 1 "$runs"); do
     rc=0
     ( set -o pipefail; _has_executable_target "$tmp" ) || rc=$?
     # The predicate must be TRUE (0) every time: the file carries a -target= on line 1.
