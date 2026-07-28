@@ -1,8 +1,15 @@
 # Decision Challenges — feat-one-shot-6977-git-data-birth-route
 
 Recorded headless per ADR-084. `ship` Phase 6 renders these into the PR body and files an
-`action-required` issue. **These are NOT applied** — they challenge the operator's stated
-direction and require an operator decision.
+`action-required` issue. These challenged the operator's stated direction and required an operator
+decision; all three now carry a RESOLVED block recording that decision.
+
+**Status (2026-07-27): all three resolved by the operator.** DC-1 retained the plan's disposition.
+DC-2 kept the sentinel but only as an **interim** mechanism, adding a replacement mandate the plan
+did not carry. DC-3 upheld the cut. The two mandates that outlive this PR are recorded on ADR-149's
+release checklist — the items titled *"Produce `GIT_DATA_SSH_HOST`"* and *"Replace this interlock's
+mechanism with a direct assertion on the emitter resource"* — which #6982 inherits. Issue #7003 is
+discharged by this change and closes on merge.
 
 ---
 
@@ -66,7 +73,8 @@ Recorded because the resolution is a judgement call, not a fact.
   the plan's own rejected Alternative (c) applied to its riskiest gate). Recommended replacing the
   cloud-init grep with a read of `heartbeat-manifest.ts`'s git-data `feeder` declaration.
 
-**That recommendation is falsified by measurement.** `plugins/soleur/lib/heartbeat-manifest.ts`
+**That recommendation is falsified by measurement** (see RESOLVED below).
+`plugins/soleur/lib/heartbeat-manifest.ts`
 already records git-data's feeder as `kind: "timer"` (*"#5274 PR C (#6548) SHIPPED the web-host
 probe"*). A sentinel reading that declaration would release **immediately**, so option (a) cannot
 work.
@@ -76,6 +84,39 @@ gate file** (`tests/scripts/lib/git-data-birth-readiness-gate.sh`) so it inherit
 battery and the parity job⇄gate pairing — which answers architecture-strategist's structural
 objection — and mandate its failure-message text as the #6982 handoff (cto F4, cpo C2). Sentinel
 pinned to the interpolated `${sentry_dsn}` (code-simplicity), not a bare word.
+
+### RESOLVED 2026-07-27 by the operator — replace the sentinel with a direct emitter check when #6982 lands
+
+**Decision: the `${sentry_dsn}` sentinel is an interim mechanism with a fixed expiry.** It stays
+exactly as shipped for as long as the emitter does not exist. Once #6982 defines the git-data
+emitter as a **real Terraform resource**, the birth-readiness interlock must assert **that
+resource**, and **the gate's `${sentry_dsn}` text check** must be deleted rather than kept
+alongside it.
+
+**What is deleted is the gate's grep, NOT the interpolation it greps for.** The `${sentry_dsn}`
+interpolation in `cloud-init-git-data.yml` is required by release-checklist **item 1** and must
+stay — removing it would un-wire the DSN and recreate the dark-host condition this interlock
+exists to close. What retires is the gate's *dependence on grepping for it*.
+
+**Why this rather than any of the five reviewer positions.** It answers `dhh-rails-reviewer`'s
+*"prose with a `grep` wrapper"* and `architecture-strategist`'s structural objection at the root
+instead of wrapping them. The only reason it cannot be done today is timing, not taste — the
+resource does not exist until #6982 creates it.
+
+**The falsification recorded above does NOT apply to this decision, and that distinction is the
+whole decision.** What measurement killed was the proposal to read
+`plugins/soleur/lib/heartbeat-manifest.ts`: that file already declares git-data's feeder as
+`kind: "timer"`, so a sentinel reading it would release the interlock **immediately**. It says
+nothing about reading the **emitter's own resource**, which does not exist until #6982 creates
+it and therefore cannot release anything early. One is a declaration that is already true; the
+other is a resource whose creation *is* the release condition.
+
+**Accepted cost: #6982 inherits a mandated interlock rewrite** — not an optional cleanup. It is a
+**precondition of the first dispatch**, not a post-release cleanup, because it changes the gate
+that guards the dispatch: recorded on ADR-149's release checklist as the item titled *"Replace this
+interlock's mechanism with a direct assertion on the emitter resource"*, ahead of the
+banner-clearing item, and carried in the gate's own HOLD message so the implementer meets it before
+starting rather than after.
 
 ---
 
@@ -107,4 +148,31 @@ single-source the address (`hcloud_server_network.git_data.ip`), never a 25th co
 **Residual accepted:** the false-alarm window stays open in principle — but it is **unreachable
 today**, because `doppler_secret.git_remove_ssh_private_key` is itself absent from state, so the
 arming switch is unarmed, and Defect 2a's `depends_on` guarantees it can never land without the
-server.
+server — *but see RESOLVED below and ADR-149 `Residual 2`: this last clause has the direction
+wrong. `depends_on` guarantees the key CO-LANDS with the server, and co-landing is precisely the
+harmful state.*
+
+### RESOLVED 2026-07-27 by the operator — the cut stands; it lands in #6982
+
+**Decision: retain the cut.** `doppler_secret.git_data_ssh_host` stays out of #6977 and lands in
+**#6982**, where the emitter work already touches `git-data.tf` and the
+`OPERATOR_APPLIED_EXCLUSIONS` entry can land in the **same change**. When it lands it **MUST**
+single-source the address from `hcloud_server_network.git_data.ip` — never a fresh copy of the
+`10.0.1.20` literal.
+
+**The residual false-"Art. 17 erasure failed" alarm window is accepted** because it is unreachable
+today: `doppler_secret.git_remove_ssh_private_key` is itself absent from state, so the arming
+switch is unarmed.
+
+> **Scope, and why it matters.** ADR-149 `Residual 2` records the correction that the false alarm
+> becomes **unconditional after any birth** — it names *"the DC-3 disposition"* as the reasoning
+> that hid this. That is why the release-checklist item titled *"Produce `GIT_DATA_SSH_HOST`"*
+> requires it **before the first dispatch**. The acceptance above therefore scopes the *pre-birth*
+> window only; it is not an acceptance of the post-birth state, which that item makes a
+> precondition.
+>
+> **What makes that scoping safe, rather than merely asserted:** the birth-readiness interlock
+> makes a dispatch before #6982 mechanically unreachable *from this route*, and #6982 is where
+> `GIT_DATA_SSH_HOST` lands. There is no window in which the acceptance and a birth overlap. (The
+> interlock does not constrain a break-glass laptop apply — ADR-149 is explicit that it makes a
+> dark boot unreachable from this route, not impossible.)
