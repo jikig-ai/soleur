@@ -55,22 +55,13 @@ source "$GATE"
 # `sensitive = true` — sensitivity masks render-time text output, not JSON serialization.
 # This tree has already shipped a captured fixture carrying a GitHub App RSA private key.
 
-mk_plan() {
-  local f="$1" changes="$2"
-  printf '{"format_version":"1.2","resource_changes":%s}\n' "$changes" > "$f"
-}
-
-# rc_entry <address> <type> <actions-json>
-rc_entry() {
-  printf '{"address":%s,"type":%s,"change":{"actions":%s,"before":null,"after":{}}}' \
-    "$(printf '%s' "$1" | jq -R .)" "$(printf '%s' "$2" | jq -R .)" "$3"
-}
-
-# rc_noactions <address> <type> — no `.change.actions` key at all.
-rc_noactions() {
-  printf '{"address":%s,"type":%s,"change":{"before":null,"after":{}}}' \
-    "$(printf '%s' "$1" | jq -R .)" "$(printf '%s' "$2" | jq -R .)"
-}
+# mk_plan, rc_entry, rc_noactions, rc_empty_actions, rc_scalar_change, gate_check,
+# gate_mutate_and_check and gate_mutate_layered now come from the shared harness (#6997).
+# It requires pass/fail/TMP (defined above) and GATE/PREAMBLE (defined above) — hence the
+# source ordering. This suite is the harness's FIRST consumer and its migration is the
+# harness's own proof: the arm count below must be unchanged.
+# shellcheck source=tests/scripts/lib/gate-suite-harness.sh
+source "${ROOT}/tests/scripts/lib/gate-suite-harness.sh"
 
 # rc_update <address> <type> <before-json> <after-json>
 #
@@ -181,15 +172,13 @@ minimal_changes() {
     "$(entailed_four)"
 }
 
+# This suite's own `check` signature, bound to its gate. `check()` had drifted into three
+# incompatible signatures across the four suites that grew a copy, so the harness ships the
+# general `gate_check <name> <fn> <want_rc> <needle> <args…>` and each suite keeps the
+# one-line wrapper that preserves its existing call sites.
 check() {
-  local name="$1" want_rc="$2" needle="$3" plan="$4"
-  local out rc
-  out="$(git_data_host_birth_gate "$plan" 2>&1)"; rc=$?
-  if [[ "$rc" -eq "$want_rc" && "$out" == *"$needle"* ]]; then
-    pass "$name"
-  else
-    fail "$name (want rc=$want_rc containing '$needle')" "$rc" "$out"
-  fi
+  local name="$1"; shift
+  gate_check "$name" git_data_host_birth_gate "$@"
 }
 
 printf '\n=== git-data-host-birth-gate ===\n\n'
@@ -707,44 +696,18 @@ fi
 # it is how a 35/35 battery in this tree hid seven P1s.
 printf '\nmutation checks (each neuters one guard; the arm it protects must flip)\n'
 
+# Both contracts now live in tests/scripts/lib/gate-suite-harness.sh (#6997) — written once
+# rather than once per gate suite, because each has four moving parts and every one of them
+# can be got subtly wrong in a way that reports a pass. These wrappers preserve THIS suite's
+# argument order (plan before own/fallback), which differs from the shared signature.
 mutate_and_check() {
-  local label="$1" sed_expr="$2" plan="$3"
-  local mutated out rc
-  mutated="$TMP/mutated-gate.sh"
-  sed "$sed_expr" "$GATE" > "$mutated"
-  if cmp -s "$mutated" "$GATE"; then
-    fail "$label — the mutation matched NOTHING in the gate (byte-identical copy); the guard is missing or the sed expression drifted. This check would have reported a vacuous pass." "n/a" "no textual change"
-    return
-  fi
-  out="$(bash -c "source '$PREAMBLE'; source '$mutated'; git_data_host_birth_gate '$plan'" 2>&1)"; rc=$?
-  if [[ "$rc" -eq 0 ]]; then
-    pass "$label (arm is load-bearing — neutering it lets the bad plan through)"
-  else
-    fail "$label — the arm did NOT change behavior when neutered; it may be dead code" "$rc" "$out"
-  fi
+  gate_mutate_and_check "$1" "$2" git_data_host_birth_gate "$3"
 }
 
 mutate_layered() {
-  local label="$1" sed_expr="$2" plan="$3" own="$4" fallback="$5"
-  local mutated base out rc
-  mutated="$TMP/mutated-layered.sh"
-  sed "$sed_expr" "$GATE" > "$mutated"
-  if cmp -s "$mutated" "$GATE"; then
-    fail "$label — the mutation matched NOTHING in the gate (byte-identical copy); the guard is missing or the sed expression drifted." "n/a" "no textual change"
-    return
-  fi
-  base="$(git_data_host_birth_gate "$plan" 2>&1)"
-  if [[ "$base" != *"$own"* ]]; then
-    fail "$label — the unmutated gate did not reject this plan via the '$own' arm; the fixture does not exercise it." "n/a" "$base"
-    return
-  fi
-  out="$(bash -c "source '$PREAMBLE'; source '$mutated'; git_data_host_birth_gate '$plan'" 2>&1)"; rc=$?
-  if [[ "$rc" -eq 1 && "$out" != *"$own"* && "$out" == *"$fallback"* ]]; then
-    pass "$label (layered — owns the rejection; neutering it hands off to '$fallback', never to PASS)"
-  else
-    fail "$label — layered contract broken (want rc=1, '$own' absent, '$fallback' present)" "$rc" "$out"
-  fi
+  gate_mutate_layered "$1" "$2" "$4" "$5" git_data_host_birth_gate "$3"
 }
+
 
 # SOLE-GUARD: a REPLACE of the host itself. This fixture — not the volume-destroy one —
 # is where the generic destroy arm is genuinely the last line, and finding that out was
