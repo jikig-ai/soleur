@@ -389,6 +389,23 @@ model {
   hooks -> claude "Guards tool calls" { technology "Event hook" }
   hooks -> kb "Reads context_queries artifacts (skill-scoped injection)" { technology "File I/O" }
   api -> kb "Reads context_queries artifacts (skill-scoped injection, web in-process)" { technology "File I/O" }
+  // #6750 — the ONLY inbound kb edge that is NOT an operator-attended session.
+  // Every other one models a human-initiated in-session read/write; this one is a
+  // scheduled server-side container authoring committed KB content unattended,
+  // which the model previously did not represent at all.
+  //
+  // Attributed to `api` (container), NOT `inngest`: that host is a Go
+  // queue/scheduler (ADR-100) and never opens a git workspace, so `inngest -> kb`
+  // would assert an authorship path that does not exist — the same defect class
+  // this edge was added to fix. Matches the model's own reasoning for Sentry
+  // ("the Inngest-FIRED crons' check-ins are posted by the code `api` serves").
+  // NOT `webapp` either: that is a SYSTEM, and all nine other inbound kb edges are
+  // container/component level, so a system-level edge would draw a
+  // different-altitude parallel edge beside the existing `api -> kb`.
+  //
+  // A second relationship on an existing pair is legal and already present in this
+  // model (hetzner -> zotRegistry x2), and it is why the altitude had to be right.
+  api -> kb "Scheduled UNATTENDED authorship: the Inngest-fired claude-eval crons spawn an agent into an ephemeral server-side workspace and land committed KB content via safeCommitAndPr (branch → PR → auto-merge squash). Liveness of that landing is asserted handler-locally per producer class (ADR-126 amendment, #6750)" { technology "Ephemeral git workspace → GitHub push/PR (safeCommitAndPr)" }
   skills -> kb "Reads/writes" { technology "File I/O" }
   agents -> kb "Reads/writes" { technology "File I/O" }
   api -> supabase "Auth and data; per-call audit_github_token_use write for every GitHub App-token use (reads AND Workstream issue writes, Art. 30 PA-16, ADR-109)" { technology "HTTPS" }
@@ -518,6 +535,13 @@ model {
   // #6031 / ADR-088 — control-plane GHCR installation-token minter (cron-ghcr-token-minter,
   // every 20 min). Mints a 1h packages:read App installation token and writes it to Doppler,
   // retiring the interim read:packages PAT; hosts read GHCR_READ_TOKEN unchanged.
+  // #6750 — these two edges and the one below them attribute an Inngest-FIRED
+  // cron's writes to `inngest`, but `cron-ghcr-token-minter` is an `api`-served
+  // Inngest function just like the claude-eval cohort, so by the rule applied at
+  // `api -> kb` they belong on `api`. Left as-is deliberately rather than
+  // re-pointed in an unrelated PR; tracked in #7046. Annotated rather than left
+  // silent so the newer convention is not the minority with its rationale
+  // attached only to the new edge.
   inngest -> github "Mints packages:read installation token every 20 min (ADR-088)" { technology "HTTPS (GitHub App JWT → /app/installations/{id}/access_tokens)" }
   inngest -> doppler "Writes GHCR_READ_TOKEN (1h scoped, prd_ghcr) (ADR-088)" { technology "HTTPS (Doppler REST API)" }
 

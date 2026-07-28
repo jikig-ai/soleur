@@ -87,7 +87,7 @@ readonly MAX_THRESHOLD_DAYS=75
 cron_producer_rows() {
   cat <<'ROWS'
 cron-seo-aeo-audit|0 11 * * 1|7|B|^fix\(seo\): weekly SEO/AEO audit fixes
-cron-content-generator|0 10 * * 2,4|4|A|^feat\(content\): auto-generate article
+cron-content-generator|0 10 * * 2,4|4|B|^feat\(content\): auto-generate article
 cron-growth-execution|0 10 1,15 * *|15|B|^fix\(growth\): biweekly keyword optimization
 cron-campaign-calendar|0 16 * * 1|7|A|^ci: update campaign calendar and content-strategy review
 cron-growth-audit|0 7 * * 1|7|A|^docs: weekly growth audit

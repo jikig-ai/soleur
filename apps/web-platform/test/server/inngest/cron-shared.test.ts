@@ -65,6 +65,7 @@ import {
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   digestIssueExistsForDate,
   ensureDedupIssue,
+  artifactCommittedSince,
   ensureScheduledAuditIssue,
   finalizeOutputAwareHeartbeat,
   formatTailForSentry,
@@ -1793,5 +1794,122 @@ describe("finalizeOutputAwareHeartbeat — retryEligible identity (#6750 A1 pin 
     const explicitTrue = await finalize({ retryEligible: true });
     expect(explicitTrue.retry).toBe(omitted.retry);
     expect(explicitTrue.retry).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #6750 — artifactCommittedSince: the FRESHNESS probe.
+// ---------------------------------------------------------------------------
+// digestCommittedOnDefaultBranch is an EXISTENCE probe on an exact path. It is
+// sound evidence of "this run's artifact landed" only when the artifact is
+// date-named (a new file per run). Six of the seven cohort producers overwrite
+// a permanent file or directory, so the contents API returns 200 forever and an
+// existence probe there is a guard that CAN NEVER FAIL — the same always-green
+// defect this work exists to close, reproduced inside the fix.
+//
+// This probe asks a different question: did a commit matching THIS cron's own
+// message anchor land on the default branch within the dedup window? That is
+// the mechanism scripts/cron-artifact-age.sh already trusts.
+describe("artifactCommittedSince (#6750 freshness probe)", () => {
+  const SINCE = "2026-07-28T00:00:00.000Z";
+  const ANCHOR = /^docs: update competitive intelligence report/;
+
+  const octokitReturningCommits = (messages: string[]) => {
+    const request = vi
+      .fn()
+      .mockResolvedValue({ data: messages.map((m) => ({ commit: { message: m } })) });
+    return { request } as unknown as Parameters<
+      typeof artifactCommittedSince
+    >[0]["octokit"] & { request: typeof request };
+  };
+
+  it("returns TRUE when a commit matching the anchor landed in the window", async () => {
+    const octokit = octokitReturningCommits([
+      "chore: unrelated",
+      "docs: update competitive intelligence report (#123)",
+    ]);
+    await expect(
+      artifactCommittedSince({
+        anchorRegex: ANCHOR,
+        sinceIso: SINCE,
+        cronName: "cron-competitive-analysis",
+        octokit,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("queries the DEFAULT branch and passes `since` through (a probe on the wrong ref or window proves nothing)", async () => {
+    const octokit = octokitReturningCommits(["docs: update competitive intelligence report"]);
+    await artifactCommittedSince({
+      anchorRegex: ANCHOR,
+      sinceIso: SINCE,
+      cronName: "cron-competitive-analysis",
+      octokit,
+    });
+    expect(octokit.request).toHaveBeenCalledTimes(1);
+    const [route, params] = octokit.request.mock.calls[0];
+    expect(route).toBe("GET /repos/{owner}/{repo}/commits");
+    expect(params.sha).toBe("main");
+    expect(params.since).toBe(SINCE);
+  });
+
+  it("returns FALSE when commits landed but NONE match the anchor (the near-miss)", async () => {
+    // Near-miss fixture: a plausible sibling cron's message in the same window.
+    // Without the anchor this would pass, which is the whole point.
+    const octokit = octokitReturningCommits([
+      "docs: weekly growth audit",
+      "docs: update competitive intelligence REPORT",
+      "fix: docs: update competitive intelligence report",
+    ]);
+    await expect(
+      artifactCommittedSince({
+        anchorRegex: ANCHOR,
+        sinceIso: SINCE,
+        cronName: "cron-competitive-analysis",
+        octokit,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("returns FALSE on an empty window", async () => {
+    await expect(
+      artifactCommittedSince({
+        anchorRegex: ANCHOR,
+        sinceIso: SINCE,
+        cronName: "cron-competitive-analysis",
+        octokit: octokitReturningCommits([]),
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("FAILS CLOSED toward spawning on a read error, and reports it", async () => {
+    const request = vi.fn().mockRejectedValue(Object.assign(new Error("boom"), { status: 500 }));
+    const octokit = { request } as unknown as Parameters<
+      typeof artifactCommittedSince
+    >[0]["octokit"];
+    await expect(
+      artifactCommittedSince({
+        anchorRegex: ANCHOR,
+        sinceIso: SINCE,
+        cronName: "cron-competitive-analysis",
+        octokit,
+      }),
+    ).resolves.toBe(false);
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("tolerates a malformed payload without throwing (degraded 200 must not read as a match)", async () => {
+    const request = vi.fn().mockResolvedValue({ data: null });
+    const octokit = { request } as unknown as Parameters<
+      typeof artifactCommittedSince
+    >[0]["octokit"];
+    await expect(
+      artifactCommittedSince({
+        anchorRegex: ANCHOR,
+        sinceIso: SINCE,
+        cronName: "cron-competitive-analysis",
+        octokit,
+      }),
+    ).resolves.toBe(false);
   });
 });

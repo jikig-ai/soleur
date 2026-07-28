@@ -260,6 +260,18 @@ CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log
 // EXPORTED so the three test suites that assert against the dated digest path
 // derive it from this value instead of hardcoding a mirror. The comment below
 // calls this the single source of truth; before the export it was not one.
+// #6750 (ADR-126 amendment) — this producer's class, single-sourced against
+// scripts/cron-artifact-age.sh's `class` column by a parity test so the shell
+// detector and the handler's liveness table cannot drift apart silently.
+// Class A: the prompt mandates a dated digest write on every run.
+//
+// Read by cron-safe-commit-parity.test.ts as SOURCE TEXT rather than imported:
+// importing a handler pulls its whole static graph (server/inngest/client.ts)
+// into the test, which throws `INNGEST_SIGNING_KEY missing at startup` at module
+// eval under CI's env. Exported so the declaration is an explicit part of the
+// module contract rather than an unread local.
+export const PRODUCER_CLASS = "A";
+
 export const COMMUNITY_DIGEST_DIR = "knowledge-base/support/community/";
 const COMMUNITY_MONITOR_ALLOWED_PATHS = [COMMUNITY_DIGEST_DIR] as const;
 

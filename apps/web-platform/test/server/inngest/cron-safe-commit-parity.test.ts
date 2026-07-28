@@ -433,3 +433,53 @@ describe("#6750 A1 pin 1 — every finalizeOutputAwareHeartbeat caller passes re
     },
   );
 });
+
+// A1 pin 3 — the class table is single-sourced in scripts/cron-artifact-age.sh.
+// Without this, the shell detector's `class` column and the handlers' compiled
+// class arms are two independent rosters that drift silently — which is exactly
+// how cron-content-generator came to be classified A in the detector while its
+// prompt carries two no-artifact stop paths (ADR-126 amendment, R3).
+describe("#6750 A1 pin 3 — the shell class table matches the handlers' class arms", () => {
+  const AGE_SCRIPT = resolve(__dirname, "../../../../../scripts/cron-artifact-age.sh");
+
+  /** name -> "A" | "B", parsed from the detector's pipe-delimited producer table. */
+  const shellClasses = (): Map<string, string> => {
+    const out = new Map<string, string>();
+    for (const line of readFileSync(AGE_SCRIPT, "utf-8").split("\n")) {
+      // name|cron_expr|interval_days|class|anchor_regex
+      const m = /^(cron-[a-z-]+)\|[^|]*\|[^|]*\|([AB])\|/.exec(line);
+      if (m) out.set(m[1], m[2]);
+    }
+    return out;
+  };
+
+  it("parses a non-empty table (guards against a silent regex/format drift)", () => {
+    const t = shellClasses();
+    expect(t.size).toBeGreaterThanOrEqual(9);
+  });
+
+  it("classifies cron-content-generator as B — it has two prompt-mandated no-artifact exits (R3)", () => {
+    // A near-miss pin on the ONE row this PR corrects. Under the old value (A)
+    // a legitimate no-topic / failed-citations run would false-RED the monitor.
+    expect(shellClasses().get("cron-content-generator")).toBe("B");
+  });
+
+  it("agrees with each handler's compiled class arm for every MIGRATED_PROMPT cron", () => {
+    const table = shellClasses();
+    let checked = 0;
+    for (const file of MIGRATED_PROMPT) {
+      const name = file.replace(/\.ts$/, "");
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      const shellClass = table.get(name);
+      expect(shellClass, `${name} missing from cron-artifact-age.sh`).toBeDefined();
+      // The handler declares its own class as a single source-visible literal
+      // so the two rosters are mechanically comparable.
+      const m = /^export const PRODUCER_CLASS = "([AB])";$/m.exec(src);
+      expect(m, `${name} declares no PRODUCER_CLASS`).not.toBeNull();
+      expect(m![1], `${name}: shell says ${shellClass}, handler says ${m![1]}`).toBe(shellClass);
+      checked += 1;
+    }
+    // Cardinality: the loop must actually have run for the whole cohort.
+    expect(checked).toBe(MIGRATED_PROMPT.length);
+  });
+});

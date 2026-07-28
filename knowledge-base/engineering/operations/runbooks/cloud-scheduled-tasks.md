@@ -663,6 +663,64 @@ check-in — ADR-033 I8 rejects it). For #5728 the verdict was H11a-dominant, so
 margin was left at 60 (no TF change). Cross-link: H10 (credit/error regime + the
 prolonged-mute re-enable via Sentry REST API).
 
+### H12 — `error` on a claude-eval cron whose ISSUE landed (liveness, #6750 / ADR-126 amendment)
+
+A monitor goes RED while the cron's GitHub digest issue **was** filed. Before
+2026-07-28 that run posted GREEN. This is usually **not** a regression in the cron
+— it is the liveness gate reporting something that was previously invisible.
+
+**Read `missed` vs `error` first (H11).** They are different questions and this
+section is only about `error`:
+
+| Colour | Means | Section |
+|---|---|---|
+| `missed` | No check-in arrived. The cron never ran, or the heartbeat step never executed. | **H11** |
+| `error` | A check-in arrived and reported failure. The cron ran and reported honestly. | **H10** (credit/infra) / **H12** (liveness) |
+| `ok` | A check-in arrived and reported success. | — |
+
+**Why a previously-GREEN run is now RED.** `heartbeatOk` answers *"did a labelled
+issue land"*. That is a correct persistence gate but it is not liveness: the
+artifact the operator consumes is the **committed file**, not the issue. `livenessOk`
+now answers the second question, and the check-in is gated on both.
+
+**Diagnose from Better Stack — no SSH, no dashboard-eyeballing.** One structured
+field names the arm that decided the verdict:
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+  --since 24h --grep SOLEUR_CRON_DIGEST_LIVENESS
+```
+
+| `reason` | What happened | Action |
+|---|---|---|
+| `digest-committed` | Class A proved today's artifact is in the commit. GREEN. | none |
+| `allowlisted-commit-no-artifact` | Class B landed a non-empty allowlisted commit. GREEN. Note this is **not** proof the consumed artifact landed — Class B cannot supply that. | none |
+| `no-changes-change-conditional` | Class B produced no diff. GREEN by design. | none; staleness is the detector's job |
+| `persistence-not-committed` | `safeCommitAndPr` returned `failed`, or a Class A producer returned `no-changes`. | Read `SOLEUR_CRON_PERSIST_RESULT` for the stage that failed; then the "PR Withheld by safe-commit" section below. |
+| `digest-absent-from-commit` | **The flagship new RED.** The commit SUCCEEDED but did not contain the consumed artifact. No "PR withheld" comment fires and `SOLEUR_CRON_PERSIST_RESULT` says `status: committed`, which reads healthy — this marker is the only thing that distinguishes it. | Check whether the agent wrote to the expected path; for `cron-growth-audit` the path is date-anchored, so a stale-dated report reads as absent. |
+| `undetermined-contract-drift` | `paths` came back undefined outside a replay-resume. The `SafeCommitResult` contract drifted. | Code fix; the signal deliberately refuses to vote GREEN on an unknown. |
+| `undetermined-replay-resume` | Replay resumed a prior commit. GREEN. | none |
+| `persistence-skipped` | Persistence never ran. Pair with `SOLEUR_CRON_PERSIST_SKIPPED`, whose `reason` is `timeout` or `red`. | For `timeout`, the spawn exceeded its budget — the run's issue may exist with nothing committed. |
+
+**Expect a noisier week one, deliberately.** The change makes the monitors report
+honestly before it makes them quiet. A producer that has been silently landing
+nothing will now go RED on its next fire; that is the defect surfacing, not a new
+one. The expected-RED roster is in the #4375 comment.
+
+**Two things this does NOT do.** It cannot produce or suppress a `missed` (that is
+H11's regime), and a liveness-RED run does **not** retry: `retryEligible: false`
+makes it terminal, because a replay reads back an `ephemeralRoot` the handler's
+`finally` already deleted and would comment a misleading *"PR withheld … at stage
+`workspace-lost`"* onto the operator's issue for a fault that never occurred.
+
+**Producer-side dedup (distinct from the watchdog Dedup Contract below).** The
+short-circuit that skips the eval when today's digest issue already exists now
+requires **both** the issue **and** the artifact on the default branch. Step name:
+`dedup-digest-committed-check`. `SOLEUR_CRON_DEDUP_SKIP` carries
+`digest_committed: 0|1`, which tells the healthy-dedup case apart from the
+issue-without-artifact recovery case. A `0` means run N-1 filed its issue but lost
+its commit and this run correctly re-spawned rather than posting GREEN on a phantom.
+
 ## Restore Procedure (generalized)
 
 Based on the diagnosed H\* above:
@@ -740,6 +798,12 @@ assertions, and update both tables here in the same PR — and add it to the
 Excluded Non-Producers table if it was removed for being a non-producer.
 
 ## Dedup Contract
+
+> **Two different dedups share this word.** This section is the **watchdog's**
+> issue dedup (does a silence issue already exist for this task). The
+> **producer-side** dedup — does today's digest already exist, and did its
+> artifact actually land — is in **H12** above, and since #6750 it requires the
+> committed artifact, not just the issue.
 
 The watchdog's open-silence-issue lookup and auto-close lookup both depend on
 **exact-prefix match against the title template**. Breaking either half of
