@@ -21,8 +21,13 @@ framing under-credited both:
   (the heaviest ~100-tool surface is behind a search-to-load gate). Re-fetched on
   demand → inherently fail-open.
 - **Change-class scoping already ships** via `.claude/hooks/session-rules-loader.sh`
-  (#3493): it injects only the relevant `AGENTS.{core,docs,rest}.md` per diff
-  class, with multi-class/empty → load-all (fail-open).
+  (#3493): it injects only the relevant rule sidecar(s) per diff class, with
+  multi-class/empty → load-all (fail-open).
+  **Superseded by ADR-150 (2026-07-28):** this prior art was RETIRED. The
+  change-class conditionality saved ~8% of session-start bytes while the majority
+  of sessions were multi-class anyway, and it produced two silent-drop incidents.
+  The corpus is now injected unconditionally. Cite this as a cautionary precedent
+  for context-scoping-by-predicted-need, not as supporting evidence.
 
 The genuine residual is the **92 always-loaded skill descriptions** (the Claude
 Code runtime, not Soleur, owns the menu — a hook can only *hint*, not
@@ -225,3 +230,16 @@ end-user NEVER legitimately needs, so their removal breaks no valid flow. The
 harm this ADR enumerates (a silent unknown-tool failure for a tool the paying user
 legitimately needs) does not arise. This carve-out is scoped to `persona:"support"`
 only; the Command Center path is unchanged.
+
+## Amendment — ADR-150 (2026-07-28)
+
+This ADR cited the change-class rules loader twice as prior art: once as evidence
+that context scoping "already ships", and once for its fail-open posture. That
+loader's **classifier** has since been retired (ADR-150) — measured at ~8% byte
+saving against a 70%-multi-class session population, with two production
+silent-drop incidents attributable to it.
+
+The **Decision here stands**: phase tool-scoping is a different mechanism with a
+different cost curve (deferred tool schemas are re-fetchable on demand; a missing
+rule body is not). But the supporting analogy is weaker than when written, and the
+fail-open posture it "mirrors" now lives in a loader that no longer classifies.

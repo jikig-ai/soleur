@@ -47,13 +47,13 @@ jobs:
           skipped=0
 
           # Liveness guard (#5999, ADR-094): constitutional paths that MUST be
-          # evaluated on every run. The repo-root AGENTS.core.md lives OUTSIDE
+          # evaluated on every run. The repo-root AGENTS.rules.md lives OUTSIDE
           # `find knowledge-base`, so it is appended to the feed below AND
           # tracked here. If a required path is silently dropped (frontmatter or
           # cadence removed, invalid date, or absent from the feed) the run fails
           # loudly rather than letting its review clock rot unnoticed. This also
-          # trips if the Phase 3 frontmatter is ever removed from AGENTS.core.md.
-          required_paths=("AGENTS.core.md")
+          # trips if the Phase 3 frontmatter is ever removed from AGENTS.rules.md.
+          required_paths=("AGENTS.rules.md")
           declare -A evaluated_required=()
 
           # Ensure label exists (once, before loop)

@@ -20,7 +20,7 @@ component, lefthook mirror) lands with the proposer PR — see Alternatives Cons
 
 #6038 will add a Layer-2 auto-proposer that drafts PRs editing the harness's own
 guardrails. Its write target (`TARGET_ALLOW_RE` in `cron-compound-promote.ts`) is
-`AGENTS.core.md` + skill `SKILL.md` files — i.e. it can edit the file where every
+the always-loaded rule corpus + skill `SKILL.md` files — i.e. it can edit the file where every
 `hr-*` hard-rule and `wg-*` workflow-gate BODY lives. The Goodhart risk (plan
 `## User-Brand Impact`, brand-survival threshold *single-user incident*): a proposer —
 or a careless human — reworders `hr-gdpr-gate-on-regulated-data-surfaces` from
@@ -46,7 +46,8 @@ per-change ack. "Add a rule" is always safe; "revise/remove a rule" never is.
 
 **2. Body-weakening gate (`scripts/lint-rule-bodies.py`).** A committed `sha256`
 body-hash manifest (`.claude/rule-body-hashes.txt`) over the union of `hr-*`/`wg-*`
-body lines across all three sidecars (`AGENTS.{core,docs,rest}.md`). The CI gate
+body lines across the rule corpus (`AGENTS.rules.md`; three change-class sidecars
+until ADR-150 — see Amendment). The CI gate
 `--check --base <merge-base>` **re-derives** every hash itself (never trusts the
 committed manifest value — a hand-edited/stale manifest is BLOCKED), diffs each body
 against its state at `git merge-base origin/main HEAD` (NOT `origin/main` tip), and
@@ -110,7 +111,7 @@ manifest, the ack file, `ci.yml`, `lefthook.yml`, this ADR, the `.c4` model — 
 OUTSIDE `TARGET_ALLOW_RE`, so a proposer cannot weaken a rule and rewrite the gate that
 would catch it in the same draft. Pinned by a test that **imports** the live
 `TARGET_ALLOW_RE` symbol AND asserts the real catch property (a synthetic weakening /
-tag-drop to `AGENTS.core.md` IS blocked by `--check`) — not the vacuous ∉ tautology.
+tag-drop to the rule corpus IS blocked by `--check`) — not the vacuous ∉ tautology.
 
 ## Consequences
 
@@ -122,7 +123,7 @@ tag-drop to `AGENTS.core.md` IS blocked by `--check`) — not the vacuous ∉ ta
   a 15368 context, so canonical set-parity forces it into `required-checks.txt`, which
   the bot composite action FABRICATES a green for (no per-check review, #6049). This is
   a residual over a **null set today**: the bot action's `ALLOWED_PATHS` =
-  {weakness-digest.md, rule-metrics.json} makes `AGENTS.{core,docs,rest}.md` physically
+  {weakness-digest.md, rule-metrics.json} makes `AGENTS.rules.md` physically
   unreachable by every bot PR, so no bot can weaken a body under the fabricated green.
   The residual goes LIVE only when #6038's auto-proposer adds an AGENTS path to
   `ALLOWED_PATHS` — and the #6049 Phase-4 ceiling guard STRUCTURALLY forces that PR to
@@ -165,3 +166,27 @@ tag-drop to `AGENTS.core.md` IS blocked by `--check`) — not the vacuous ∉ ta
   away the ABI/anti-deletion strength (a standalone required context that stops reporting
   → merge blocked) for a smaller surface — the wrong trade for a single-user-incident
   guardrail whose value is being hard to silently remove.
+
+## Amendment — ADR-150 (2026-07-28)
+
+Two changes, both consequences of collapsing the three change-class sidecars into
+one unconditional `AGENTS.rules.md`:
+
+1. **The "cross-sidecar decoy (last-file-wins)" threat class (F1) no longer
+   exists.** It required a SECOND sidecar in which a same-id decoy body could win
+   the union merge and mask a weakening of the real, runtime-loaded body. With one
+   corpus there is no second file, so the collision detector in
+   `lint-rule-bodies.py` had no failing input left and was DELETED rather than
+   left as a green gate that cannot fail. A duplicate id *within* the corpus is
+   still caught by `lint-rule-ids.py`'s per-file duplicate check.
+2. **The gate's scope is now "body lines in `AGENTS.rules.md`"**, not "across all
+   three sidecars".
+
+**Disclosed migration gap (SE-1).** `SIDECARS` is head-side, so across the single
+commit performing the merge, `git show <base>:AGENTS.rules.md` resolves to nothing
+and the base map is empty — the gate passes VACUOUSLY for that one commit. This
+was accepted knowingly, with an all-101 body-hash identity snapshot as the
+compensating proof (the committed manifest covers only the 74 `^(hr|wg)-` bodies,
+so it could not have proven the other 27 unchanged). Splitting the file move and
+the constant into separate commits would have been worse: every gated body would
+read as DELETED and demand ~74 WORM acks.

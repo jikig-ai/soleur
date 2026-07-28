@@ -2,7 +2,7 @@
 # PreToolUse hook for Write, Edit, MultiEdit, NotebookEdit, and Bash.
 # Blocks writes to Claude Code memory directories (~/.claude/projects/*/memory/).
 #
-# Source rule: AGENTS.core.md hr-never-write-to-claude-code-memory-claude
+# Source rule: AGENTS.rules.md hr-never-write-to-claude-code-memory-claude
 # Source learning: knowledge-base/project/learnings/workflow-issues/2026-05-22-honor-skill-chain-through-do-not-rationalize-stops.md
 #
 # Knowledge must go to committed repo files so it transfers across machines and
@@ -52,7 +52,7 @@ if [[ "$TARGET" =~ /\.claude/projects/[^/]+/memory(/|$|[\"\'[:space:]]) ]]; then
   jq -n --arg target "$TARGET" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",      permissionDecision: "deny",
-      permissionDecisionReason: ("BLOCKED: hr-never-write-to-claude-code-memory-claude (Source: AGENTS.core.md).\n\nTarget: " + $target + "\n\nWrites to ~/.claude/projects/*/memory/ do not transfer across machines or operators. Commit knowledge to one of these committed repo files instead:\n  - AGENTS.md / AGENTS.{core,docs,rest}.md (hard rules + workflow gates)\n  - knowledge-base/project/constitution.md (architecture + style)\n  - knowledge-base/project/learnings/<category>/<slug>.md (session learnings)\n\nSee plugins/soleur/skills/compound for the canonical learning-write flow.")
+      permissionDecisionReason: ("BLOCKED: hr-never-write-to-claude-code-memory-claude (Source: AGENTS.rules.md).\n\nTarget: " + $target + "\n\nWrites to ~/.claude/projects/*/memory/ do not transfer across machines or operators. Commit knowledge to one of these committed repo files instead:\n  - AGENTS.md / AGENTS.rules.md (hard rules + workflow gates)\n  - knowledge-base/project/constitution.md (architecture + style)\n  - knowledge-base/project/learnings/<category>/<slug>.md (session learnings)\n\nSee plugins/soleur/skills/compound for the canonical learning-write flow.")
     }
   }'
   exit 0

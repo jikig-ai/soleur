@@ -51,11 +51,10 @@ skills/
 └── <skill-name>/          # All skills at root level (flat)
 ```
 
-**Note:** Files at the repo root matching `AGENTS.*.md` (e.g.
-`AGENTS.core.md`, `AGENTS.docs.md`, `AGENTS.rest.md`) are the change-class
-sidecars introduced by #3493. They are *not* plugin components — the plugin
-loader scans `plugins/soleur/{commands,skills,agents}/` only. Edits to the
-sidecars route through the `cq-agents-md-tier-gate` placement gate and the
+**Note:** `AGENTS.rules.md` at the repo root is the rule corpus injected on
+every session (ADR-150). It is *not* a plugin component — the plugin loader
+scans `plugins/soleur/{commands,skills,agents}/` only. Edits to the corpus route
+through the `cq-agents-md-tier-gate` placement gate and the
 `session-rules-loader.sh` SessionStart hook.
 
 **Workflow scripts (`skills/<name>/workflows/<name>.workflow.js`).** A skill

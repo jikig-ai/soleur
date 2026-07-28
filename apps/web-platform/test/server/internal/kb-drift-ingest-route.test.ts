@@ -61,7 +61,7 @@ const validPayload = {
     },
     {
       kind: "broken-anchor",
-      source_path: "AGENTS.core.md",
+      source_path: "AGENTS.rules.md",
       target: "apps/web-platform/lib/gone.ts:42",
       source_ref: "anchor-cafef00d00000000",
     },

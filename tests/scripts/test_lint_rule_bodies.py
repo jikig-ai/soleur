@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Tests for scripts/lint-rule-bodies.py — the hard-rule body-weakening gate.
 
-Hermetic fixtures: each test builds a throwaway git repo with small
-AGENTS.{core,docs,rest}.md sidecars, generates the body-hash manifest via
+Hermetic fixtures: each test builds a throwaway git repo with a small
+AGENTS.rules.md corpus, generates the body-hash manifest via
 `--write`, optionally mutates + commits a body change, then runs
 `--check --base <merge-base>` and asserts BLOCK (exit non-zero) vs PASS.
 
@@ -25,10 +25,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "lint-rule-bodies.py"
 
-# A minimal but structurally faithful sidecar trio. Bodies live under a
+# A minimal but structurally faithful corpus. Bodies live under a
 # `## <SECTION>` heading matching scripts/_agents_md_sections.py; pointer
-# lines (`- [id: x] → core`) live in the index and are ignored by the gate.
-CORE = """# AGENTS Core
+# lines (`- [id: x]`) live in the index and are ignored by the gate.
+RULES = """# AGENTS Rules
 
 ## Hard Rules
 
@@ -38,20 +38,11 @@ CORE = """# AGENTS Core
 ## Workflow Gates
 
 - Ship only after review [id: wg-ship-after-review]. Do not skip.
-"""
-
-DOCS = """# AGENTS Docs
+- Verified work ships [id: wg-verified-ships]. No extra ask needed.
 
 ## Code Quality
 
 - Rule ids are immutable [id: cq-rule-ids-immutable]. Never reuse a retired id.
-"""
-
-REST = """# AGENTS Rest
-
-## Workflow Gates
-
-- Verified work ships [id: wg-verified-ships]. No extra ask needed.
 """
 
 
@@ -72,8 +63,8 @@ def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:
 class _RepoFixture:
     """Context manager that yields a committed temp repo with a fresh manifest."""
 
-    def __init__(self, core: str = CORE, docs: str = DOCS, rest: str = REST):
-        self._core, self._docs, self._rest = core, docs, rest
+    def __init__(self, rules: str = RULES):
+        self._rules = rules
 
     def __enter__(self) -> Path:
         self._tmp = tempfile.TemporaryDirectory()
@@ -81,9 +72,7 @@ class _RepoFixture:
         _git(repo, "init", "-q", "-b", "main")
         _git(repo, "config", "user.email", "t@t")
         _git(repo, "config", "user.name", "t")
-        (repo / "AGENTS.core.md").write_text(self._core)
-        (repo / "AGENTS.docs.md").write_text(self._docs)
-        (repo / "AGENTS.rest.md").write_text(self._rest)
+        (repo / "AGENTS.rules.md").write_text(self._rules)
         (repo / ".claude").mkdir()
         (repo / ".claude" / "rule-weakening-acks.txt").write_text(
             "# id|sha256|date|PR|reason\n"
@@ -153,8 +142,8 @@ class TestBodyWeakeningGate(unittest.TestCase):
         """AC1: hr-* body change under a stable id, no ack → BLOCK naming id."""
         with _RepoFixture() as repo:
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
-            (repo / "AGENTS.core.md").write_text(
-                CORE.replace("Do the safe thing instead.", "Optional: maybe do it.")
+            (repo / "AGENTS.rules.md").write_text(
+                RULES.replace("Do the safe thing instead.", "Optional: maybe do it.")
             )
             _regen_manifest(repo)
             _git(repo, "commit", "-qam", "weaken")
@@ -166,8 +155,8 @@ class TestBodyWeakeningGate(unittest.TestCase):
         """AC2: body change + ack whose sha256 == new body hash → PASS."""
         with _RepoFixture() as repo:
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
-            (repo / "AGENTS.core.md").write_text(
-                CORE.replace("Do the safe thing instead.", "Optional: maybe do it.")
+            (repo / "AGENTS.rules.md").write_text(
+                RULES.replace("Do the safe thing instead.", "Optional: maybe do it.")
             )
             _regen_manifest(repo)
             new_hash = _body_hash(repo, "hr-never-dangerous")
@@ -183,8 +172,8 @@ class TestBodyWeakeningGate(unittest.TestCase):
         """AC3: ack present for the id but sha256 != current body hash → BLOCK."""
         with _RepoFixture() as repo:
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
-            (repo / "AGENTS.core.md").write_text(
-                CORE.replace("Do the safe thing instead.", "Optional: maybe do it.")
+            (repo / "AGENTS.rules.md").write_text(
+                RULES.replace("Do the safe thing instead.", "Optional: maybe do it.")
             )
             _regen_manifest(repo)
             _append_ack(
@@ -201,10 +190,10 @@ class TestBodyWeakeningGate(unittest.TestCase):
         with _RepoFixture() as repo:
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
             lines = [
-                ln for ln in CORE.splitlines()
+                ln for ln in RULES.splitlines()
                 if "hr-never-dangerous" not in ln
             ]
-            (repo / "AGENTS.core.md").write_text("\n".join(lines) + "\n")
+            (repo / "AGENTS.rules.md").write_text("\n".join(lines) + "\n")
             _regen_manifest(repo)
             _git(repo, "commit", "-qam", "delete-body")
             r = _run(repo, "--check", "--base", base)
@@ -216,10 +205,10 @@ class TestBodyWeakeningGate(unittest.TestCase):
         with _RepoFixture() as repo:
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
             lines = [
-                ln for ln in CORE.splitlines()
+                ln for ln in RULES.splitlines()
                 if "hr-never-dangerous" not in ln
             ]
-            (repo / "AGENTS.core.md").write_text("\n".join(lines) + "\n")
+            (repo / "AGENTS.rules.md").write_text("\n".join(lines) + "\n")
             _regen_manifest(repo)
             _append_ack(
                 repo,
@@ -233,8 +222,8 @@ class TestBodyWeakeningGate(unittest.TestCase):
         """AC5: benign additive edit (new rule, fresh id) → PASS."""
         with _RepoFixture() as repo:
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
-            (repo / "AGENTS.core.md").write_text(
-                CORE + "- A brand new rule [id: hr-brand-new]. Do this.\n"
+            (repo / "AGENTS.rules.md").write_text(
+                RULES + "- A brand new rule [id: hr-brand-new]. Do this.\n"
             )
             _regen_manifest(repo)
             _git(repo, "commit", "-qam", "add-rule")
@@ -245,8 +234,8 @@ class TestBodyWeakeningGate(unittest.TestCase):
         """AC5: new id carrying a security tag → mandatory-human-review annotation, still PASS."""
         with _RepoFixture() as repo:
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
-            (repo / "AGENTS.core.md").write_text(
-                CORE
+            (repo / "AGENTS.rules.md").write_text(
+                RULES
                 + "- New compliance control [id: hr-new-compliance] [compliance-tier]. Mandatory.\n"
             )
             _regen_manifest(repo)
@@ -259,8 +248,8 @@ class TestBodyWeakeningGate(unittest.TestCase):
         """AC-annotation: changing a [hook-enforced] body emits the louder annotation (ack still required)."""
         with _RepoFixture() as repo:
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
-            (repo / "AGENTS.core.md").write_text(
-                CORE.replace("Mandatory on every write.", "Advisory only.")
+            (repo / "AGENTS.rules.md").write_text(
+                RULES.replace("Mandatory on every write.", "Advisory only.")
             )
             _regen_manifest(repo)
             _git(repo, "commit", "-qam", "weaken-tagged")
@@ -279,8 +268,8 @@ class TestBodyWeakeningGate(unittest.TestCase):
         with _RepoFixture() as repo:
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
             # Add a new rule but do NOT regenerate the manifest (stale baseline).
-            (repo / "AGENTS.core.md").write_text(
-                CORE + "- A sibling-added rule [id: hr-sibling-added]. Do this.\n"
+            (repo / "AGENTS.rules.md").write_text(
+                RULES + "- A sibling-added rule [id: hr-sibling-added]. Do this.\n"
             )
             _git(repo, "commit", "-qam", "sibling-add-no-regen")
             r = _run(repo, "--check", "--base", base)
@@ -308,8 +297,8 @@ class TestBodyWeakeningGate(unittest.TestCase):
         """AC7: trailing-whitespace-only reformat → PASS (normalized before hashing)."""
         with _RepoFixture() as repo:
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
-            (repo / "AGENTS.core.md").write_text(
-                CORE.replace(
+            (repo / "AGENTS.rules.md").write_text(
+                RULES.replace(
                     "Do the safe thing instead.",
                     "Do the safe thing instead.   ",  # trailing spaces
                 )
@@ -319,19 +308,25 @@ class TestBodyWeakeningGate(unittest.TestCase):
             r = _run(repo, "--check", "--base", base)
             self.assertEqual(r.returncode, 0, r.stderr)
 
-    def test_wg_body_moved_core_to_rest_and_weakened_is_caught(self):
-        """AC12: a wg-* body moved core→rest AND weakened is caught via the unioned base map."""
+    def test_wg_body_moved_across_sections_and_weakened_is_caught(self):
+        """AC12: a wg-* body MOVED to another section AND weakened is still caught.
+
+        Pre-ADR-150 this asserted a core→rest sidecar move. With one corpus the
+        surviving analogue is a cross-SECTION move, which matters for the same
+        reason: `parse_bodies` is section-scoped, so a body that relocates under a
+        different `## <SECTION>` heading must not read as "unchanged" or slip out
+        of the gated set. Relocation is not a licence to weaken.
+        """
         with _RepoFixture() as repo:
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
-            # Remove wg-ship-after-review from core, re-add a WEAKENED copy in rest.
-            core_lines = [
-                ln for ln in CORE.splitlines()
+            lines = [
+                ln for ln in RULES.splitlines()
                 if "wg-ship-after-review" not in ln
             ]
-            (repo / "AGENTS.core.md").write_text("\n".join(core_lines) + "\n")
-            (repo / "AGENTS.rest.md").write_text(
-                REST + "- Ship only after review [id: wg-ship-after-review]. Optional.\n"
+            moved = "\n".join(lines) + (
+                "\n- Ship only after review [id: wg-ship-after-review]. Optional.\n"
             )
+            (repo / "AGENTS.rules.md").write_text(moved)
             _regen_manifest(repo)
             _git(repo, "commit", "-qam", "move+weaken")
             r = _run(repo, "--check", "--base", base)
@@ -371,25 +366,12 @@ class TestBodyWeakeningGate(unittest.TestCase):
             self.assertEqual(r.returncode, 2)
             self.assertIn("schema", r.stderr)
 
-    def test_cross_sidecar_duplicate_id_fails_closed(self):
-        """F1: a same-id decoy in a 2nd sidecar (masking a weakening of the real,
-        runtime-loaded core body) is fail-closed, not silently last-file-wins."""
-        with _RepoFixture() as repo:
-            base = _git(repo, "rev-parse", "HEAD").stdout.strip()
-            # Weaken the real core body AND add a same-id strong decoy in rest.
-            (repo / "AGENTS.core.md").write_text(
-                CORE.replace("Mandatory on every write.", "Advisory only.")
-            )
-            (repo / "AGENTS.rest.md").write_text(
-                REST
-                + "- Always gate regulated data [id: hr-gdpr-example] [hook-enforced: some-hook.sh]. Mandatory on every write.\n"
-            )
-            # --write would also fail-closed; regenerate under the honest (base) tree first.
-            _git(repo, "commit", "-qam", "dup-id-decoy")
-            r = _run(repo, "--check", "--base", base)
-            self.assertEqual(r.returncode, 2)
-            self.assertIn("hr-gdpr-example", r.stderr)
-            self.assertIn("duplicate", r.stderr.lower())
+    # test_cross_sidecar_duplicate_id_fails_closed was DELETED by ADR-150 along
+    # with the detector it exercised. Threat F1 was a same-id decoy in a SECOND
+    # sidecar winning a last-file-wins merge and masking a weakening of the real,
+    # runtime-loaded body. With one corpus there is no second file to host the
+    # decoy, so the check had no failing input left. A duplicate id WITHIN the
+    # corpus is still caught, by lint-rule-ids.py's per-file duplicate check.
 
     def test_ack_replay_blocks(self):
         """F2: reverting a body to a PREVIOUSLY-acked form (ack already present at
@@ -406,11 +388,11 @@ class TestBodyWeakeningGate(unittest.TestCase):
             _git(repo, "commit", "-qam", "seed-historical-ack")
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
             # Head reverts the body to the weak form; NO new ack added.
-            core_weak = CORE.replace(
+            core_weak = RULES.replace(
                 "- Never do the dangerous thing [id: hr-never-dangerous]. Do the safe thing instead.",
                 weak_line,
             )
-            (repo / "AGENTS.core.md").write_text(core_weak)
+            (repo / "AGENTS.rules.md").write_text(core_weak)
             _regen_manifest(repo)
             _git(repo, "commit", "-qam", "replay-weak-no-new-ack")
             r = _run(repo, "--check", "--base", base)
@@ -421,8 +403,8 @@ class TestBodyWeakeningGate(unittest.TestCase):
         """A reason-less / short ack (<5 fields) is not a valid ack → still BLOCK."""
         with _RepoFixture() as repo:
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
-            (repo / "AGENTS.core.md").write_text(
-                CORE.replace("Do the safe thing instead.", "Optional: maybe.")
+            (repo / "AGENTS.rules.md").write_text(
+                RULES.replace("Do the safe thing instead.", "Optional: maybe.")
             )
             _regen_manifest(repo)
             new_hash = _body_hash(repo, "hr-never-dangerous")
@@ -437,8 +419,8 @@ class TestBodyWeakeningGate(unittest.TestCase):
         with _RepoFixture() as repo:
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
             # Delete the [hook-enforced] hr-gdpr-example body line.
-            lines = [ln for ln in CORE.splitlines() if "hr-gdpr-example" not in ln]
-            (repo / "AGENTS.core.md").write_text("\n".join(lines) + "\n")
+            lines = [ln for ln in RULES.splitlines() if "hr-gdpr-example" not in ln]
+            (repo / "AGENTS.rules.md").write_text("\n".join(lines) + "\n")
             _regen_manifest(repo)
             _git(repo, "commit", "-qam", "delete-tagged")
             r = _run(repo, "--check", "--base", base)
@@ -467,9 +449,7 @@ class TestBodyWeakeningGate(unittest.TestCase):
             _git(repo, "init", "-q", "-b", "main")
             _git(repo, "config", "user.email", "t@t")
             _git(repo, "config", "user.name", "t")
-            (repo / "AGENTS.core.md").write_text(CORE)
-            (repo / "AGENTS.docs.md").write_text(DOCS)
-            (repo / "AGENTS.rest.md").write_text(REST)
+            (repo / "AGENTS.rules.md").write_text(RULES)
             (repo / "scripts").mkdir()
             (repo / "scripts" / "_agents_md_sections.py").write_text(sections_full)
             (repo / ".claude").mkdir()
@@ -480,8 +460,8 @@ class TestBodyWeakeningGate(unittest.TestCase):
             base = _git(repo, "rev-parse", "HEAD").stdout.strip()
             # Attack: narrow SECTIONS (drop "Hard Rules") AND weaken a hard rule.
             (repo / "scripts" / "_agents_md_sections.py").write_text(sections_narrowed)
-            (repo / "AGENTS.core.md").write_text(
-                CORE.replace("Do the safe thing instead.", "Optional: maybe.")
+            (repo / "AGENTS.rules.md").write_text(
+                RULES.replace("Do the safe thing instead.", "Optional: maybe.")
             )
             _regen_manifest(repo)
             _git(repo, "commit", "-qam", "narrow-sections+weaken")

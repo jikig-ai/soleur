@@ -29,7 +29,7 @@
 # blocks un-acked hr-*/wg-* rule-body weakening. First apply (this PR's merge via
 # apply-github-infra.yml) makes it LIVE-required. It is a content-scoped gate: on
 # bot PRs the synthetic is FABRICATED (not earned) — sound ONLY while the bot
-# action's ALLOWED_PATHS excludes AGENTS.{core,docs,rest}.md; #6038 must reproduce
+# action's ALLOWED_PATHS excludes AGENTS.rules.md; #6038 must reproduce
 # it in the action's Phase-4 ceiling before extending ALLOWED_PATHS. See the
 # CODEOWNERS-gated note in scripts/required-checks.txt + ADR-092.
 #
@@ -193,7 +193,7 @@ resource "github_repository_ruleset" "ci_required" {
       # --- Tier 5: hard-rule body-weakening gate (#6103, ADR-092). Context is
       # the JOB name `rule-body-lint` at .github/workflows/ci.yml — an always-run
       # gate that BLOCKS any un-acked change/deletion of an hr-*/wg-* rule BODY
-      # line in AGENTS.{core,docs,rest}.md. Runs under GitHub Actions
+      # line in AGENTS.rules.md. Runs under GitHub Actions
       # (integration_id 15368). Content-scoped: the bot synthetic is fabricated,
       # not earned — sound only while the bot action's ALLOWED_PATHS excludes
       # AGENTS bodies (see scripts/required-checks.txt note + ADR-092 residual).

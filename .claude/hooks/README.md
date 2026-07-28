@@ -167,44 +167,55 @@ brew install flock
 Without `flock`, the `emit_incident` helper still exits cleanly (the `|| true`
 guard) — you just won't get telemetry locally. CI (Ubuntu) always has `flock`.
 
-## Change-class loader (#3493)
+## Rule-corpus loader (#3493 index/body split, ADR-150 unconditional corpus)
 
 `session-rules-loader.sh` is a **SessionStart** hook (matchers
-`startup|resume|clear|compact`) — it does not block tool calls. It computes
-the session's change-class from `git diff --name-only origin/main...HEAD ∪
-git status --porcelain` and injects the matching `AGENTS.<class>.md`
-sidecar(s) into `hookSpecificOutput.additionalContext`. See spec at
-`knowledge-base/project/specs/feat-agents-md-change-class-loader/spec.md`.
+`startup|resume|clear|compact`) — it does not block tool calls. It injects the
+whole rule corpus (`AGENTS.rules.md`, frontmatter-stripped) into
+`hookSpecificOutput.additionalContext`, together with the `(N of M rules)` stamp,
+the `[session-context]` snapshot, and the tmpfs-guard alarm block.
+
+ADR-150 retired the change-class CLASSIFIER. There is no longer a per-session
+class, no conditional sidecar selection, and no fail-closed escape-hatch env var
+— every rule is in context from the first turn of every session. The measured
+saving from conditionality was ~8% of session-start bytes against a majority
+class (70% of sessions were multi-class and loaded everything anyway), and it
+cost two silent-drop incidents where a rule was absent from exactly the sessions
+it was written to fire on.
 
 ### Operator commands
 
-Inspect what the loader picked for the active session:
+Inspect what the loader recorded for the active session:
 
 ```bash
 cat .claude/.session-manifests/$(ls -t .claude/.session-manifests/ | head -1)
 ```
 
-Force a full re-load when scope shifts mid-session (e.g., a docs-only session
-that pivots into code):
+Re-run the loader against a specific worktree:
 
 ```bash
-LOADER_FAIL_CLOSED=1 bash .claude/hooks/session-rules-loader.sh \
-  < <(printf '{"cwd":"%s"}' "$PWD")
+bash .claude/hooks/session-rules-loader.sh < <(printf '{"cwd":"%s"}' "$PWD")
 ```
 
-### Default class
+### Failure modes
 
-- Empty diff (fresh worktree, on main, no uncommitted) → `mixed` → all
-  sidecars loaded (fail-closed).
-- Multi-class diff → `mixed` → all sidecars loaded.
-- Missing sidecar file at runtime → all available sidecars loaded with a
-  `(fail-safe: sidecar missing)` annotation in the stamp.
+- Corpus missing or symlink-rejected → `CONTEXT` is empty, the stamp reads
+  `0 of N rules — fail-safe: <cause>`, and the numerator is the
+  governance-blackout signal. The denominator comes from the `AGENTS.md` pointer
+  count (a FIXED expected set), never from what actually loaded — otherwise it
+  would degrade in lockstep and render a truncated corpus as 100%.
+- Frontmatter over-strip → the RAW corpus is injected instead (rules preserved,
+  frontmatter leaked) plus a loud `WARN` in the stamp.
 
 ### Manifests
 
 Per-session manifests at `.claude/.session-manifests/<session_id>.json` carry
 the three fields `{timestamp, change_class, rule_ids_loaded}` — sufficient for
 SOC 2 CC6.1/CC7.2 evidence ("which rules were in context at session X").
+Since ADR-150 `change_class` is pinned to the constant `"all"`: the key is kept
+rather than dropped so the evidence schema stays stable for any
+historical-manifest reader, and `"all"` is the honest value now that every
+session loads the whole corpus.
 The directory is gitignored.
 
 ### Sharp Edges (SessionStart hook design)

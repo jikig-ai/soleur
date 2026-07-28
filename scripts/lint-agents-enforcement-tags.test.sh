@@ -75,9 +75,7 @@ t1_real_tree() {
   set +e
   out=$(python3 "$SUT" \
     "$REPO_ROOT/AGENTS.md" \
-    "$REPO_ROOT/AGENTS.core.md" \
-    "$REPO_ROOT/AGENTS.docs.md" \
-    "$REPO_ROOT/AGENTS.rest.md" 2>&1)
+    "$REPO_ROOT/AGENTS.rules.md" 2>&1)
   rc=$?
   set -e
   assert_exit "T1 real tree exit 0" "0" "$rc"

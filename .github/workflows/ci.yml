@@ -263,7 +263,7 @@ jobs:
         run: bash scripts/check-adr-ordinals.sh
 
   # Hard-rule body-weakening gate (ADR-092, #6103). BLOCKS any un-acked change
-  # or deletion of an `hr-*`/`wg-*` rule BODY line in AGENTS.{core,docs,rest}.md
+  # or deletion of an `hr-*`/`wg-*` rule BODY line in AGENTS.rules.md
   # (see scripts/lint-rule-bodies.py). This job's name IS the `rule-body-lint`
   # required context pinned in infra/github/ruleset-ci-required.tf +
   # scripts/ci-required-ruleset-canonical-required-status-checks.json — a rename

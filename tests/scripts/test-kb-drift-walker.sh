@@ -43,7 +43,7 @@ cat > "$FIXTURE/knowledge-base/legal/three-broken-links.md" <<'EOF'
 EOF
 
 # --- broken anchors (2) ----------------------------------------------------
-cat > "$FIXTURE/AGENTS.core.md" <<'EOF'
+cat > "$FIXTURE/AGENTS.rules.md" <<'EOF'
 - [id: hr-fake-rule-1] -> see scripts/ghost-1.sh:42 for details
 EOF
 cat > "$FIXTURE/knowledge-base/project/learnings/has-broken-anchor.md" <<'EOF'
@@ -52,7 +52,7 @@ EOF
 
 # AGENTS.md index referring to the existing core file.
 cat > "$FIXTURE/AGENTS.md" <<'EOF'
-# Index — see AGENTS.core.md for bodies
+# Index — see AGENTS.rules.md for bodies
 EOF
 
 # --- run + assert ---------------------------------------------------------

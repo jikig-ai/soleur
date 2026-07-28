@@ -85,6 +85,12 @@ make_temp_root() {
   local root
   root=$(mktemp -d)
   mkdir -p "$root/knowledge-base/project/learnings" "$root/scripts"
+  # The always-loaded pair is a REQUIRED input: since ADR-150 the SUT refuses to
+  # compute a byte budget from a partial corpus rather than reading a missing
+  # file as 0 bytes (which invented phantom headroom). Every temp root therefore
+  # ships both files; T6 overwrites them to pin an exact sentinel.
+  printf 'idx\n' > "$root/AGENTS.md"
+  printf 'core\n' > "$root/AGENTS.rules.md"
   echo "$root"
 }
 
@@ -326,7 +332,7 @@ enabled: true
 EOF
   # Synthesize stand-in AGENTS files so the driver has something to wc.
   printf 'idx\n' > "$root/AGENTS.md"
-  printf 'core\n' > "$root/AGENTS.core.md"
+  printf 'core\n' > "$root/AGENTS.rules.md"
   local gh_bin="$root/gh"; make_mock_gh "$gh_bin"
   local curl_bin="$root/curl"; make_mock_curl "$curl_bin" "$root/curl-capture.txt"
 
@@ -341,8 +347,8 @@ EOF
   # `idx\n` = 4 bytes, `core\n` = 5 bytes → total = 9. The sentinel reports the
   # HARD ceiling (ALWAYS_LOADED_CAP), which tracks B_ALWAYS_REJECT in
   # scripts/lint-agents-rule-budget.py — not the lower proposal budget.
-  assert_contains  "T6 byte-budget sentinel with 9:23000" \
-                   "::compound-promote-byte-budget::9:23000" "$out"
+  assert_contains  "T6 byte-budget sentinel with 9:46000" \
+                   "::compound-promote-byte-budget::9:46000" "$out"
   rm -rf "$root"
 }
 

@@ -6,7 +6,7 @@ model: inherit
 
 # Observability Coverage Reviewer
 
-You verify that every new server-side surface is debuggable from a keyboard without SSH or `docker exec`. You enforce three hard rules from `AGENTS.core.md`:
+You verify that every new server-side surface is debuggable from a keyboard without SSH or `docker exec`. You enforce three hard rules from `AGENTS.rules.md`:
 
 - `hr-observability-as-plan-quality-gate` — `## Observability` block present in plans with 5 fields + no-SSH `discoverability_test.command`.
 - `hr-observability-layer-citation` — every declared failure mode names which of the five observability layers covers it.
