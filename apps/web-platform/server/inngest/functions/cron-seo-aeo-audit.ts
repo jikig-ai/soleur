@@ -474,9 +474,17 @@ export async function cronSeoAeoAuditHandler({
             // silent window is written down as a named residual in the ADR-126
             // amendment rather than papered over here.
             //
-            // Non-vacuous regardless: `paths === undefined` occurs only on the
-            // replay-resume branch (handled above), so without this test the only
-            // reachable RED cell would be `failed` — one bit, asserting nothing.
+            // Stronger than first documented, and stated plainly: this predicate
+            // is UNREACHABLE-FALSE in production, not merely reducible. On top of
+            // the allowlist pre-filter, safeCommitAndPr returns `no-changes` when
+            // `matched.length === 0` (anchor `no committable changes inside
+            // allowedPaths`), so a defined `paths` is also always non-empty. Both
+            // conjuncts are therefore constant-true against the real producer.
+            // It is retained as a consumer-side contract restatement — if
+            // safeCommitAndPr ever returns an empty or out-of-allowlist `paths`,
+            // this votes RED rather than GREEN — and it is falsifiable only
+            // against the unit tests, which inject shapes the real producer
+            // cannot emit. Class B's genuine liveness ceiling is the detector.
             commitResult.paths.length > 0 &&
             commitResult.paths.some((p) => SEO_AEO_ALLOWED_PATHS.some((a) => p.startsWith(a)))
           ) {
@@ -567,10 +575,13 @@ export async function cronSeoAeoAuditHandler({
     // (2) OUTSIDE the try: as the try's last statement it would be skipped
     //     whenever a trailing step threw — exactly the compound-failure run.
     //
-    // Reachability note for the `threw && !heartbeatOk → retry` hazard:
-    // livenessOk is falsified only at the tail of the try with nothing
-    // throwing after it, and a throw out of safe-commit-pr leaves it true by
-    // construction — and `retryEligible: false` makes the point moot anyway.
+    // Reachability note for the `threw && !heartbeatOk → retry` hazard: it IS
+    // reachable. A throw out of safe-commit-pr skips the liveness table
+    // entirely, so livenessOk keeps its `false` initialiser and this line
+    // lowers heartbeatOk on a run that also threw. (Scenario 10 exercises
+    // exactly that and asserts {ok:false}.) What makes it safe is NOT
+    // unreachability — it is `retryEligible: false` at the finalize call, which
+    // turns that combination into one honest terminal RED instead of a replay.
     if (!livenessOk) heartbeatOk = false;
 
     // --- Single authoritative terminal heartbeat (memoization-safe,

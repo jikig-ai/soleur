@@ -314,10 +314,12 @@ Written down with numbers rather than papered over:
 4. **Class B silent windows: 15d / 22d / 46d / 75d.** Class B's `no-changes` stays GREEN by design, so
    staleness is caught only by the threshold detector — and the detector's `last_artifact_epoch()`
    matches the commit **message** with **no pathspec**, so a Class B run that commits anything under
-   its allowlist resets the age clock with the consumed artifact never written. The windows are 15d
-   (Class A weekly), 22d (Class B weekly — `seo-aeo-audit`, `architecture-diagram-sync`), 46d
-   (`growth-execution`), and 75d (`competitive-analysis`, the `MAX_THRESHOLD_DAYS` cap), plus 22d for
-   the EXEMPT `cron-roadmap-review`.
+   its allowlist resets the age clock with the consumed artifact never written. The Class B windows are 13d (`content-generator`, 2x/week — see below),
+   22d (`seo-aeo-audit`, `architecture-diagram-sync`), 46d (`growth-execution`), and 75d
+   (`competitive-analysis`, the `MAX_THRESHOLD_DAYS` cap), plus 22d for the EXEMPT
+   `cron-roadmap-review`. The 15d figure listed in an earlier draft is a CLASS A threshold
+   (`7*2+1`) and does not belong here at all: Class A's `no-changes` is RED by design, so Class A
+   has no silent window of this kind.
 
    **This amendment CREATED one of these windows and must say so.** Correcting
    `cron-content-generator` A -> B moves its detector threshold from `4*2+1 = 9d` to `4*3+1 = 13d`,

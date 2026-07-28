@@ -535,7 +535,7 @@ model {
   // #6031 / ADR-088 — control-plane GHCR installation-token minter (cron-ghcr-token-minter,
   // every 20 min). Mints a 1h packages:read App installation token and writes it to Doppler,
   // retiring the interim read:packages PAT; hosts read GHCR_READ_TOKEN unchanged.
-  // #6750 — these two edges and the one below them attribute an Inngest-FIRED
+  // #6750 — the two edges below attribute an Inngest-FIRED
   // cron's writes to `inngest`, but `cron-ghcr-token-minter` is an `api`-served
   // Inngest function just like the claude-eval cohort, so by the rule applied at
   // `api -> kb` they belong on `api`. Left as-is deliberately rather than

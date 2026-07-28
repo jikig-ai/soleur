@@ -534,10 +534,13 @@ export async function cronCampaignCalendarHandler({
     // (2) OUTSIDE the try: as the try's last statement it would be skipped
     //     whenever a trailing step threw — exactly the compound-failure run.
     //
-    // Reachability note for the `threw && !heartbeatOk → retry` hazard:
-    // livenessOk is falsified only at the tail of the try with nothing
-    // throwing after it, and a throw out of safe-commit-pr leaves it true by
-    // construction — and `retryEligible: false` makes the point moot anyway.
+    // Reachability note for the `threw && !heartbeatOk → retry` hazard: it IS
+    // reachable. A throw out of safe-commit-pr skips the liveness table
+    // entirely, so livenessOk keeps its `false` initialiser and this line
+    // lowers heartbeatOk on a run that also threw. (Scenario 10 exercises
+    // exactly that and asserts {ok:false}.) What makes it safe is NOT
+    // unreachability — it is `retryEligible: false` at the finalize call, which
+    // turns that combination into one honest terminal RED instead of a replay.
     if (!livenessOk) heartbeatOk = false;
 
     // --- Single authoritative terminal heartbeat (memoization-safe,

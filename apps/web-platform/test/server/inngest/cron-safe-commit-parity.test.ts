@@ -415,8 +415,13 @@ describe("#6750 A1 pin 1 — every finalizeOutputAwareHeartbeat caller passes re
   it("discovers the cohort by behaviour and finds a non-trivial roster", () => {
     // Cardinality guard: a filter that silently matched nothing would make
     // every it.each below vacuous (zero cases is a passing suite).
-    expect(FINALIZE_CALLERS.length).toBeGreaterThanOrEqual(8);
+    // EXACT, not a floor: a floor at 8 is already implied by the MIGRATED_PROMPT
+    // loop below, so it could only ever mask the 9th member disappearing.
+    expect(FINALIZE_CALLERS).toHaveLength(9);
     for (const f of MIGRATED_PROMPT) expect(FINALIZE_CALLERS).toContain(f);
+    // The 9th is EXEMPT from liveness but shares the workspace lifecycle, so it
+    // carries retryEligible too. Named explicitly so its removal is loud.
+    expect(FINALIZE_CALLERS).toContain("cron-roadmap-review.ts");
   });
 
   it.each(FINALIZE_CALLERS.map((f) => [f]))(
@@ -424,12 +429,24 @@ describe("#6750 A1 pin 1 — every finalizeOutputAwareHeartbeat caller passes re
     (file) => {
       const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
       // ANCHORED, not a bare token. Measured against the reference
-      // implementation: the bare token `retryEligible: false` returns 2 (the
-      // field AND the mirrored explanatory comment), so a bare-token assertion
-      // stays GREEN after the FIELD is deleted — vacuous by construction.
+      // implementation at the time: the bare token `retryEligible: false`
+      // returned 2 (the field AND the mirrored explanatory comment), so a
+      // bare-token assertion stays GREEN after the FIELD is deleted — vacuous by
+      // construction. (The exact count has since grown with the added comments;
+      // the anchored form is what the mutation evidence rests on, not the count.)
       // The leading indent and the trailing comma are both load-bearing: only
       // an object-literal property can produce them, and a comment line cannot.
-      expect(src).toMatch(/^\s+retryEligible: false,$/m);
+      // Bound to the call site, not the file. A whole-file match is satisfied by
+      // the flag migrating into ANY object literal — including an indented line
+      // inside one of the large backtick prompt templates — while the finalize
+      // call silently loses it.
+      const calls = [...src.matchAll(/finalizeOutputAwareHeartbeat\(\{([\s\S]*?)\n    \}\)/g)];
+      expect(calls.length, `${file}: could not parse the finalize call — gate DISENGAGED`).toBeGreaterThan(0);
+      for (const [, body] of calls) {
+        expect(body, `${file}: a finalizeOutputAwareHeartbeat call omits retryEligible`).toMatch(
+          /^\s+retryEligible: false,$/m,
+        );
+      }
     },
   );
 });
@@ -493,6 +510,31 @@ describe("#6750 A1 pin 3 — the shell class table matches the handlers' class a
       checked += 1;
     }
     expect(checked).toBe(7);
+  });
+
+  // F5 — the constant alone pins NOTHING about behaviour. What actually differs
+  // by class is the presence of the `no-changes` -> GREEN arm, and that arm is
+  // hand-written and structurally unlinked to PRODUCER_CLASS: deleting it from a
+  // Class B handler, or adding it to a Class A handler, left the constant, the
+  // shell row and this whole describe untouched and green. This test closes that
+  // by asserting the ARM SHAPE the class is supposed to produce.
+  it("each handler's no-changes ARM matches its declared class", () => {
+    let checked = 0;
+    for (const file of MIGRATED_PROMPT) {
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      const m = /^export const PRODUCER_CLASS = "([AB])";$/m.exec(src);
+      if (!m) continue;
+      // Class B is exactly the set that treats a no-diff run as healthy.
+      const hasNoChangesGreenArm =
+        /commitResult\.status === "no-changes"/.test(src) &&
+        /reason: "no-changes-change-conditional"|livenessReason = "no-changes-change-conditional"/.test(src);
+      expect(
+        hasNoChangesGreenArm,
+        `${file}: declares class ${m[1]} but ${hasNoChangesGreenArm ? "HAS" : "lacks"} the no-changes GREEN arm`,
+      ).toBe(m[1] === "B");
+      checked += 1;
+    }
+    expect(checked).toBe(8);
   });
 
   it("agrees with each handler's compiled class arm for every MIGRATED_PROMPT cron", () => {
