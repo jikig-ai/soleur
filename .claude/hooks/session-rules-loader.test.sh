@@ -754,12 +754,64 @@ TOTAL=$((TOTAL+1))
 T30=$(mktemp -d); LATE_TMPDIRS+=("$T30")   # deliberately NOT a git repo -> fallback path
 out30=$(printf '{"cwd":"%s"}' "$T30" | "$HOOK" 2>/dev/null)
 ctx30=$(printf '%s' "$out30" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
-if printf '%s' "$ctx30" | grep -qF 'NO rules loaded'; then
-  echo "PASS: fallback reports that nothing was loaded when core is unreadable"
+# The old assertion accepted a present/absent BOOLEAN ('NO rules loaded'). That
+# is too weak: a PARTIAL corpus is 'present', so a 3-of-101 fallback rendered
+# byte-identical to a healthy one. Assert the NUMERATOR shape instead, which
+# also makes the `loaded: N of M` liveness probe total on this path.
+if printf '%s' "$ctx30" | grep -qE 'loaded: 0 of [0-9?]+ rules'; then
+  echo "PASS: fallback stamps a 0-of-N numerator when the corpus is unreadable"
   PASS=$((PASS+1))
 else
   echo "FAIL: fallback claims a load it did not perform: $ctx30"
   FAIL=$((FAIL+1))
+fi
+
+# --- Test 31: the fallback must not render a PARTIAL corpus as a full load ----
+# Regression for the shape the boolean missed entirely.
+TOTAL=$((TOTAL+1))
+T31=$(mktemp -d); LATE_TMPDIRS+=("$T31")   # deliberately NOT a git repo -> fallback
+printf '# Index\n## Hard Rules\n- [id: hr-a]\n- [id: hr-b]\n- [id: hr-c]\n' > "$T31/AGENTS.md"
+printf '# R\n## Hard Rules\n- one [id: hr-a].\n' > "$T31/AGENTS.rules.md"
+ctx31=$(printf '{"cwd":"%s"}' "$T31" | "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
+if printf '%s' "$ctx31" | grep -qE 'loaded: 1 of 3 rules'; then
+  echo "PASS: fallback distinguishes a partial corpus (1 of 3) from a full load"
+  PASS=$((PASS+1))
+else
+  echo "FAIL: fallback did not report the partial count: $ctx31"
+  FAIL=$((FAIL+1))
+fi
+
+# ------------- Test 32: the corpus is injected IN FULL (ADR-150's core claim) ----
+# Nothing else in this suite observes WHAT REACHED CONTEXT. Every other arm reads
+# the stamp, and the stamp can be honest about a partial load (`1 of 3`) or, if
+# the numerator is ever re-derived from the file on disk instead of from
+# $CONTEXT, dishonest about it (`3 of 3` while injecting 1). Both mutations were
+# measured to pass the pre-existing 29 arms.
+#
+# The manifest is the seam that closes it: `rule_ids_loaded` is derived from
+# $CONTEXT, so it is a true record of what was injected. Assert it equals the
+# AGENTS.md pointer id set — the fixed expected set lint-rule-ids.py already
+# couples 1:1 to the bodies.
+
+TOTAL=$((TOTAL+1))
+T32=$(mktemp -d); LATE_TMPDIRS+=("$T32"); setup_repo "$T32" mixed
+m32=$(invoke_hook "$T32" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null \
+        | grep -oE 'manifest: [^ ]+' | sed 's/manifest: //' | head -1)
+if [[ -z "$m32" || ! -f "$m32" ]]; then
+  echo "FAIL: full-injection check could not locate the manifest"
+  FAIL=$((FAIL+1))
+else
+  want32=$(grep -oE '^- \[id: [a-z0-9-]+\]' "$T32/AGENTS.md" | sed -E 's/^- \[id: (.*)\]$/\1/' | sort | tr '\n' ' ')
+  got32=$(jq -r '.rule_ids_loaded[]' "$m32" | sort | tr '\n' ' ')
+  if [[ "$want32" == "$got32" && -n "$want32" ]]; then
+    echo "PASS: every indexed rule id actually reached context ($(printf '%s' "$want32" | wc -w) ids)"
+    PASS=$((PASS+1))
+  else
+    echo "FAIL: injected id set != index id set"
+    echo "  index:    $want32"
+    echo "  injected: $got32"
+    FAIL=$((FAIL+1))
+  fi
 fi
 
 echo ""

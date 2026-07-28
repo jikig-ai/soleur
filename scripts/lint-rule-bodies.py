@@ -87,13 +87,18 @@ ID_RE = re.compile(r"\[id: ([a-z0-9-]+)\]")
 # class arrow). The corpus holds bodies; pointer-shaped lines are filtered
 # defensively so this parse mirrors lint-rule-ids.POINTER_LINE_RE.
 #
-# SE-13 asked whether this filter becomes a no-op once the arrow is gone.
-# Measured at /work, gutting a real body down to its bare slug: with the filter
-# the id VANISHES from the head map (74 → 73) and reads as a deletion; without
-# it the id stays with a changed hash and reads as a weakening. BOTH paths block
-# and demand an ack, so the filter is NOT the thing standing between a gutted
-# body and a green gate — it decides how the block is CLASSIFIED, not whether it
-# fires. Kept for parse symmetry with lint-rule-ids; not a security control.
+# SE-13 asked whether this filter becomes a no-op once the arrow is gone. It does
+# not, but the first answer recorded here was measured against a NON-VACUOUS base
+# and was wrong for the base this very PR ships with. Corrected:
+#   * with the filter, a body gutted to its bare slug VANISHES from the head map,
+#     which reads as a DELETION — caught by the manifest-side deletion check
+#     below, and (when the base map resolves) by the base-map deletion arm;
+#   * with the filter NEUTERED, the id stays with a changed hash and trips the
+#     manifest-integrity check instead.
+# So both routes do block — but by DIFFERENT checks, and the filter suppresses the
+# manifest-integrity one. Do not describe it as neutral, and do not lean on it as
+# a control; the gutted-slug case is ultimately held by lint-rule-ids.py's
+# orphan-pointer check, which is a different gate in a different file.
 POINTER_LINE_RE = re.compile(r"^- \[id: [a-z0-9-]+\](?:\s+\[[^\]]+\])*\s*$")
 # Only hr-* and wg-* bodies are gated (plan: hard rules + workflow gates).
 GATED_PREFIX_RE = re.compile(r"^(hr|wg)-")
@@ -379,15 +384,21 @@ def cmd_check(
 
     # Base state (the corpus as of <base>, same section set).
     #
-    # ADR-150 MIGRATION NOTE (SE-1): `SIDECARS` is head-side, so across the single
-    # commit that merged the three change-class sidecars into AGENTS.rules.md,
-    # `git show <base>:AGENTS.rules.md` resolves to nothing and this base map is
-    # EMPTY — the gate passes vacuously for that one commit. That is accepted and
-    # disclosed, not overlooked: the compensating proof is the all-101 body-hash
-    # identity snapshot recorded in the migration PR (the committed manifest here
-    # covers only the 74 `^(hr|wg)-` bodies). Splitting the file move and this
-    # constant into different commits would be worse — every gated body would then
-    # read as DELETED and demand ~74 WORM acks.
+    # ADR-150 MIGRATION NOTE (SE-1): `SIDECARS` is head-side, so while the base
+    # predates the corpus rename `git show <base>:AGENTS.rules.md` resolves to
+    # nothing and this base map is EMPTY. CI's base is `git merge-base origin/main
+    # HEAD`, so that is true for EVERY commit of the renaming PR, not just the one
+    # that moves the file — the CHANGE arm of this gate is blind for the whole
+    # branch. Two things carry the load in that state, and neither is this map:
+    #   * MODIFICATION is caught by the manifest-integrity loop above (74 gated
+    #     bodies, committed hashes, no git history involved).
+    #   * DELETION is caught by the manifest-side deletion check above, which was
+    #     added precisely because it was NOT caught here (measured).
+    # The remaining uncovered surface is a weakened `cq-*`/`rf-*`/`pdr-*`/`cm-*`
+    # body: `GATED_PREFIX_RE` never admitted those, so the migration's all-101
+    # identity proof for them is a one-time recorded measurement, not a standing
+    # automated control. Splitting the file move and this constant into different
+    # commits would be worse — every gated body would then read as DELETED.
     base_texts = {name: (_git_show(root, base_commit, name) or "") for name in SIDECARS}
     base_bodies = build_body_map(base_texts, sections)
     base_hashes = hashes_for(base_bodies)
@@ -402,6 +413,36 @@ def cmd_check(
 
     def new_acks(rid: str) -> set[str]:
         return head_acks.get(rid, set()) - base_acks.get(rid, set())
+
+    # MANIFEST-SIDE DELETION CHECK (the reverse direction of the manifest-integrity loop).
+    #
+    # The intersection scoping above is right for MODIFICATION but structurally
+    # blind to DELETION: a removed id is absent from `head_hashes`, so the loop
+    # never visits it. Deletion detection was therefore carried entirely by the
+    # git base map below — which is EMPTY whenever `git show <base>:` cannot
+    # resolve the corpus (any rename of the corpus file, and every commit of the
+    # PR that performs one, because CI's base is `git merge-base origin/main
+    # HEAD`). In that state a `[compliance-tier]` hard rule could be deleted from
+    # both the index and the corpus and BOTH linters exited 0 — measured on a
+    # sandbox worktree of this branch, and blocked on `origin/main`, i.e. a hole
+    # opened by the rename itself.
+    #
+    # The committed manifest is an independent, git-history-free record of which
+    # gated ids existed, so checking it in the deleting direction closes the class
+    # permanently rather than just for this migration. A legitimate retirement
+    # regenerates the manifest via `--write` in the same commit, so this does not
+    # false-fire on `scripts/retired-rule-ids.txt` flows.
+    for rid in manifest_hashes:
+        if rid in head_hashes:
+            continue
+        if DELETED_TOKEN in new_acks(rid):
+            continue
+        errors.append(
+            f"::error::rule-body-lint: {rid} is recorded in "
+            f"{MANIFEST_REL} but ABSENT from the corpus — a gated rule body was "
+            "DELETED without a `<id>|DELETED|<date>|<PR>|<reason>` ack. If the "
+            "removal is intentional, append the ack and re-run `--write`."
+        )
 
     # Changed or deleted bodies present at base → require a matching per-change ack.
     for rid, base_raw in base_bodies.items():

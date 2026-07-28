@@ -1,5 +1,14 @@
 # Learning: AGENTS always-loaded byte-budget trims come from rationale bytes, not directive bytes
 
+> **SUPERSEDED IN PART — ADR-150 (2026-07-28).** The demotion lever this file
+> reasons about no longer exists: the change-class sidecars are merged into one
+> unconditionally-loaded `AGENTS.rules.md`, and `lint-rule-ids.py` no longer pins
+> residency at all (both core-pinning checks were deleted as structurally
+> unfailable). `B_ALWAYS` was re-scoped to what every session actually loads and
+> re-baselined 23000 → 46000. **The trim-from-rationale-not-directive lesson in
+> §1 survives and is still correct**; the demotion ladder and the
+> component-test-pins-a-rule-to-core reasoning do not.
+
 ## Problem
 
 Issue #4599: the always-loaded AGENTS payload `B_ALWAYS = len(AGENTS.md) + len(AGENTS.core.md)` was 26814 B, over the 22000 B reject ceiling, and the budget linter (`scripts/lint-agents-rule-budget.py`) was lefthook-pre-commit-only, never CI-wired. The deepened plan committed to **path (a)** (trim under 22000 + wire the gate) and modelled reaching core ≈ 15741 / B_ALWAYS ≈ 21212 (788 B margin) via levers L1 (over-cap trims) + L3 (demote 2 ship-phase `wg-*` gates) + **L2 "imperative tightening ≈ −2100 B (~12% of the residual core body)"**.

@@ -21,6 +21,16 @@
 #   7. the slim per-session manifest for SOC 2 CC6.1/CC7.2 evidence
 #   8. the tmpfs-guard alarm block — the ONLY SessionStart reader of that alarm
 #      (#6991 dead-channel class; pinned by scripts/tmpfs-guard.test.sh Arm 20)
+#   9. the `HEADLESS_MODE` export. Listed for completeness because this
+#      enumeration exists so a future reader knows what deleting the hook costs,
+#      and an unlisted job is one that gets dropped silently. Caveat: a repo-wide
+#      grep finds NO live consumer outside this file's own tests, so the comment
+#      below claiming "downstream hooks read this" is currently unsupported —
+#      wire it or retire it, but do not delete it by accident.
+#
+# WHAT MUST NOT BE "SIMPLIFIED": do not merge AGENTS.rules.md into AGENTS.md.
+# The index is re-rendered every turn and the corpus is injected once per
+# session; collapsing them puts the whole corpus on every turn (ADR-150 C-ii).
 #
 # Mid-session pivot safety is no longer a concern the loader has to reason about:
 # every rule is in context from the first turn regardless of what the session
@@ -125,11 +135,20 @@ emit_core_only_fallback() {
     strip_sidecar_into_global "$root/AGENTS.rules.md" hr-never-git-stash-in-worktrees
     fb="$STRIPPED_OUT"
   fi
-  # Say what actually happened. `fb` is empty when the corpus is absent or
-  # symlink-rejected — claiming "loaded the corpus" there asserts a load that did
-  # not occur, on the one path where the operator has least visibility (#7008).
-  local loaded_note="loaded AGENTS.rules.md only"
-  [[ -z "$fb" ]] && loaded_note="NO rules loaded (AGENTS.rules.md unreadable)"
+  # Say what actually happened, WITH A NUMERATOR. `fb` is empty when the corpus
+  # is absent or symlink-rejected — claiming "loaded the corpus" there asserts a
+  # load that did not occur, on the one path where the operator has least
+  # visibility (#7008). A present/absent boolean is not enough: a PARTIAL corpus
+  # (3 of 101 bodies on disk) is `fb`-non-empty and used to render byte-identical
+  # to a healthy load. Emit the same `loaded: N of M rules` shape the main path
+  # emits, so no path in this file can claim a load without a count — and so the
+  # `loaded: …` liveness probe is TOTAL rather than silent here.
+  local fb_count fb_total
+  fb_count=$(printf '%s' "$fb" | grep -cE '^- .*\[id: ' || true)
+  fb_total=$(grep -c '^- \[id: ' "$root/AGENTS.md" 2>/dev/null || true)
+  [[ -z "$fb_total" || "$fb_total" == "0" ]] && fb_total="?"
+  local loaded_note="loaded: ${fb_count} of ${fb_total} rules (corpus only)"
+  (( OVERSTRIP_DETECTED == 1 )) && loaded_note="${loaded_note} — WARN: frontmatter over-strip; raw corpus injected"
   printf '%s' "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":$(jq -Rs . <<<"[rules-loader] FALLBACK ($reason): $loaded_note"$'\n'"$fb")}}"
 }
 
@@ -176,18 +195,33 @@ CONTEXT=""
 FAIL_SAFE_TRIGGERED=0
 FAIL_SAFE_CAUSE=""
 CORPUS="$REPO_ROOT/AGENTS.rules.md"
+# Every non-loading branch MUST name its cause. `-f` tests existence, not
+# readability or content, so an earlier form let TWO reachable blackouts through
+# with an empty note: a zero-byte corpus (a partial `git checkout`/write) and a
+# `chmod 000` corpus (a bad umask). Both stamped a bare `0 of N` with no
+# explanation — the #7008 class this file fixes elsewhere. Order matters:
+# symlink first (security), then existence, then readability, then emptiness.
 if [[ -L "$CORPUS" ]]; then
   # Symlinks are a prompt-injection vector (an attacker who controls a symlink in
   # the repo could redirect the corpus to /etc/passwd or a crafted payload).
   FAIL_SAFE_TRIGGERED=1
   FAIL_SAFE_CAUSE="corpus symlinked (rejected)"
-elif [[ -f "$CORPUS" ]]; then
+elif [[ ! -e "$CORPUS" ]]; then
+  FAIL_SAFE_TRIGGERED=1
+  FAIL_SAFE_CAUSE="corpus missing"
+elif [[ ! -f "$CORPUS" ]]; then
+  FAIL_SAFE_TRIGGERED=1
+  FAIL_SAFE_CAUSE="corpus not a regular file"
+elif [[ ! -r "$CORPUS" ]]; then
+  FAIL_SAFE_TRIGGERED=1
+  FAIL_SAFE_CAUSE="corpus unreadable (permissions)"
+elif [[ ! -s "$CORPUS" ]]; then
+  FAIL_SAFE_TRIGGERED=1
+  FAIL_SAFE_CAUSE="corpus empty (truncated write?)"
+else
   strip_sidecar_into_global "$CORPUS" "hr-never-git-stash-in-worktrees"
   CONTEXT+=$'\n\n---\n\n'
   CONTEXT+="$STRIPPED_OUT"
-else
-  FAIL_SAFE_TRIGGERED=1
-  FAIL_SAFE_CAUSE="corpus missing"
 fi
 
 # With one corpus there is no second file to re-walk, so the fail-safe cannot
@@ -196,7 +230,12 @@ fi
 # (0 of N) is the governance-blackout signal.
 if (( FAIL_SAFE_TRIGGERED == 1 )); then
   CONTEXT=""
-  FAIL_SAFE_NOTE=" — fail-safe: ${FAIL_SAFE_CAUSE:-corpus unreadable}"
+  # Carry a REMEDIATION clause, not just a diagnosis. Deleting the HINT line
+  # (ADR-150) removed the only actionable text the envelope ever carried, and
+  # Soleur's operator is non-technical: "0 of 101" is a diagnosis they cannot act
+  # on. Kept short and root-free so the composed stamp stays inside the 200-byte
+  # contract even with the over-strip note appended.
+  FAIL_SAFE_NOTE=" — fail-safe: ${FAIL_SAFE_CAUSE:-corpus unreadable} — fix: git checkout -- AGENTS.rules.md"
 else
   FAIL_SAFE_NOTE=""
 fi
@@ -241,12 +280,20 @@ STAMP="[rules-loader] loaded: ${RULE_COUNT} of ${TOTAL_RULES} rules${FAIL_SAFE_N
 # placed into OUT_BODY *after* the manifest line so it lands on envelope lines 4-6.
 #
 # Fail-OPEN value contract: every query yields a usable fallback so the snapshot
-# never blanks out. NOTE on the ERR trap (verified 2026-06-15): a plain
-# assignment `VAR=$(failing_cmd)` does NOT fire the trap — command-substitution
-# failure in assignment position is ERR-exempt. The `|| …` guards here exist to
-# produce FALLBACK VALUES, not for trap-safety. The genuine trap risk is a BARE
-# non-zero-returning command at statement position — keep every external call
-# inside a command-sub with a `|| …` fallback.
+# never blanks out. The `|| …` guards below serve BOTH purposes: they produce
+# fallback VALUES *and* they are trap-safety.
+#
+# CORRECTION (2026-07-28, ADR-150): a prior note here claimed that a plain
+# assignment `VAR=$(failing_cmd)` is ERR-exempt. That is FALSE under this file's
+# options, and it was load-bearing enough to be worth disproving in place:
+#
+#   bash -c 'set -uo pipefail; trap "echo FIRED" ERR;
+#            V=$(printf "" | { grep -oE zzz; } | sort -u | jq -Rsc .)'   # -> FIRED
+#
+# The trap DOES fire on a failing command-substitution in assignment position.
+# Dropping a `|| …` guard here on the strength of the old claim would route the
+# session onto the FALLBACK path — the one with the least operator visibility.
+# Keep every external call inside a command-sub with a `|| …` fallback.
 WS_BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "(unknown)")
 # Guard git's non-zero exit INSIDE the pipe, not after it. `… | wc -l || echo 0`
 # is a double-output bug under pipefail: when git fails, `wc -l` already emits
@@ -291,10 +338,17 @@ SESSION_CONTEXT="[session-context] branch: ${WS_BRANCH} | dirty: ${WS_DIRTY} fil
 [session-context] MCP(committed-config): ${MCP_SERVERS}"
 
 # Slim manifest (3 fields). Key by sanitized session_id; fallback to timestamp.
-# `change_class` is pinned to the constant "all" rather than dropped: this is a
-# CC6.1/CC7.2 evidence record, so the 3-field schema stays stable for any
-# historical-manifest reader, and "all" is the honest value now that every
-# session loads the whole corpus (ADR-150).
+# `change_class` is RETAINED (not dropped) so the 3-field schema stays stable for
+# any historical-manifest reader of this CC6.1/CC7.2 evidence record.
+#
+# It is NOT a bare constant. A constant `"all"` would be unfalsifiable, and a
+# blackout session would then write `{"change_class":"all","rule_ids_loaded":[]}`
+# — a record asserting "all" for a session that loaded ZERO rules. On the
+# fail-safe path the field carries the CAUSE instead, so the retained artifact is
+# self-identifying and an auditor can separate a healthy session from a blackout
+# without inferring it from an empty id list. (It also separates post-ADR-150
+# rows from pre-ADR-150 rows, whose classifier emitted a literal "all" ~70% of
+# the time as its fail-closed multi-class default.)
 # SESSION_ID has already been stripped of any non-alphanum (see top of file);
 # if it ends up empty after sanitization (e.g., the envelope sent `../`), the
 # `:-$TS` fallback ensures we still write into MANIFEST_DIR, never outside.
@@ -307,6 +361,8 @@ TS=$(date -u +%Y-%m-%dT%H-%M-%SZ)
 KEY="${SESSION_ID:-$TS}"
 [[ -z "$KEY" || "$KEY" == "." || "$KEY" == ".." ]] && KEY="$TS"
 MANIFEST="$MANIFEST_DIR/${KEY}.json"
+MANIFEST_CLASS="all"
+(( FAIL_SAFE_TRIGGERED == 1 )) && MANIFEST_CLASS="fail-safe:${FAIL_SAFE_CAUSE:-corpus unreadable}"
 # `|| true` on the grep is load-bearing under `set -o pipefail` + the ERR trap.
 # Before ADR-150 an empty CONTEXT was unreachable: the fail-safe re-walked three
 # sidecars, so at least one body was always present. With ONE corpus, a missing
@@ -323,7 +379,7 @@ RULE_IDS_JSON=$(printf '%s' "$CONTEXT" \
 
 jq -nc \
   --arg ts "$TS" \
-  --arg cls "all" \
+  --arg cls "$MANIFEST_CLASS" \
   --argjson ids "$RULE_IDS_JSON" \
   '{timestamp: $ts, change_class: $cls, rule_ids_loaded: $ids}' \
   > "$MANIFEST"

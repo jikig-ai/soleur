@@ -27,6 +27,16 @@ synced_to: [brainstorm]
 
 # Learning: an "advisory-first" precedent is a claim to measure, not a plan to copy
 
+> **SUPERSEDED IN PART — ADR-150 (2026-07-28).** The change-class sidecars
+> (`AGENTS.core.md` / `AGENTS.docs.md` / `AGENTS.rest.md`) and the loader's
+> class selection no longer exist: the whole rule corpus is injected on every
+> session from `AGENTS.rules.md`. **Do not follow any demotion / class-fit
+> instruction below** — there is no class to demote into, `lint-rule-ids.py`
+> no longer pins residency, and a grep for `→ core` / `→ rest` returns zero
+> forever. The reasoning about *why* a rule must load on its own trigger is
+> what survives, and it is now structural rather than something a planner
+> verifies by hand.
+
 Source brainstorm (full decision record + domain assessments):
 `knowledge-base/project/brainstorms/2026-07-16-citation-rot-bare-token-gates-brainstorm.md`
 

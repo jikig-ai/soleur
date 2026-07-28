@@ -92,8 +92,9 @@ but preventing the #3681 class.
   remains if a genuinely class-specific rule ever appears.
 - **Option C-ii: collapse the index INTO the corpus** (one file, no pointer
   index). **REJECTED, and future readers must be warned explicitly:** this would
-  destroy the index/body separation and revert the per-turn cost to ~43 kB *per
-  turn*. It is the one variant of "collapse" that makes things dramatically worse,
+  destroy the index/body separation and put the whole corpus on EVERY turn —
+  ~37 kB of bodies, or ~42 kB once the index is folded in, against the ~5 kB of
+  pointers a turn costs today. It is the one variant of "collapse" that makes things dramatically worse,
   and it is the obvious next simplification for someone who reads only the title
   of this ADR.
 - **Option C-iii: replace hook injection with an `@AGENTS.rules.md` @-import.**
@@ -113,12 +114,20 @@ index/body separation. `AGENTS.md` remains a slug-only pointer index re-rendered
 every turn; the corpus is injected once at SessionStart. The ` → <class>` arrow is
 dropped from all 101 pointer lines because there is no class left to name.
 
-The merge is a file move plus a section-wise heading union, nothing else. Rule ids
-and rule body text are untouched (`cq-rule-ids-are-immutable`). Losslessness was
-verified two independent ways: a full-corpus sha256 snapshot built from
-`lint-rule-bodies.py`'s own parse and normalization with the `^(hr|wg)-` gate
-disabled (so it covers all **101** rules, not the 74 the committed manifest
-covers), and a sorted raw-body-line diff. Both are identical across the move.
+The merge is a file move plus a section-wise heading union, nothing else. Rule
+**ids** are untouched (`cq-rule-ids-are-immutable`) and no rule was added or
+dropped: 101 in, 101 out.
+
+Body text is **100 of 101 byte-identical**, not 101 of 101 — and stating it that
+way matters, because the exception is what the control FOUND rather than
+something it missed. `cq-agents-md-why-single-line` was rewritten because its own
+text described the retired architecture and carries the threshold-mirror literals
+the compound-sync gate anchors on. It is `cq-*`, so `GATED_PREFIX_RE` never sees
+it: no ack was possible or required, and `.claude/rule-weakening-acks.txt` is
+untouched. Verified two independent ways — a full-corpus sha256 snapshot built
+from `lint-rule-bodies.py`'s own parse and normalization with the `^(hr|wg)-` gate
+disabled (so it covers all **101**, not the 74 the committed manifest covers),
+and a sorted raw-body-line diff. Both report exactly that one id.
 
 **The decision rests on correctness, not bytes.** An earlier draft also credited
 collapse with −939 B/turn from dropping the class arrow; that is **confounded**.
@@ -233,7 +242,7 @@ skill/agent (per `cq-agents-md-tier-gate`), not to rebuild the classifier.
 
 **This ADR supersedes a spec, not an ADR.** The split shipped under
 `knowledge-base/project/specs/feat-agents-md-change-class-loader/` and never had an
-ADR. It amends seven ADRs unevenly: substantively **092** (a named threat class
+ADR. It amends eight ADRs unevenly: substantively **092** (a named threat class
 ceases to exist), **094** (decision intact — and it is now the decisive reason
 hook injection beat an @-import), **140** (its decisive rejection rationale is
 void; the blocked `hr-*` rule is writable again), and **116** (reach restated as
@@ -241,11 +250,20 @@ unconditional); a factual fix to **070** (its prior-art citation is now a
 cautionary precedent); token swaps in **139** and the *active* **027** (two files
 share that ordinal — only the `active` one is in scope); and a note on **086**.
 
-**Two residual references to the retired filenames remain by decision.**
-`.claude/rule-weakening-acks.txt` is append-only WORM and CODEOWNERS-gated —
-rewriting a historical ack line would alter a signed audit record — and
-`tests/scripts/fixtures/tfplan-real-ruleset-baseline.json` is a point-in-time
-capture of a past Terraform plan, not a live assertion about current prose.
+**Residual references.** Within the swept scope — everything except
+`knowledge-base/project/{plans,specs,brainstorms,learnings}` and `**/archive/**`,
+which are point-in-time records that must keep the old paths — exactly two remain,
+by decision: `.claude/rule-weakening-acks.txt` (append-only WORM, CODEOWNERS-gated;
+rewriting a historical ack would alter a signed audit record) and
+`tests/scripts/fixtures/tfplan-real-ruleset-baseline.json` (a captured Terraform
+plan, not a live assertion).
+
+Outside that scope the narrative corpus still names the retired files ~100 times,
+which is correct for a historical record — with one caveat worth naming, because
+it is this ADR's own thesis pointed at itself: a learning that *prescribes* a
+demotion ladder is not inert narrative, it is live advice that `learnings-researcher`
+will surface during `/plan`. "Appears retired, still advises" is the mirror of
+"appears enforced, is absent". The prescriptive ones carry a superseded marker.
 
 ## Cost Impacts
 

@@ -195,6 +195,12 @@ is now perfectly placeable.
 The **budget** half survives in form but not in figure: `B_ALWAYS` was re-baselined
 23000 → 46000 because the measurement got honest (it now counts what every session
 actually loads), and the corpus currently sits at ~42.4 kB. The blocked `hr-*` rule
-is therefore writable today. This ADR's Decision — encryption posture as a
-design-time default routed through the owning skills — is NOT reopened here; only
-the rationale for why it could not also be an `hr-*` rule is corrected.
+is therefore writable today.
+
+**A third leg of the original rejection survives untouched, and it is the one that
+still carries the Decision:** the insight is *domain-scoped* (infra/data-design
+turns only), so `cq-agents-md-tier-gate` routes it into the owning skills and
+agents rather than into AGENTS.md regardless of budget or loader mechanics. A
+reader who sees both *stated* blockers voided should not conclude the rejection is
+now unsupported — it rests on placement, not on capacity. This ADR's Decision is
+NOT reopened here.

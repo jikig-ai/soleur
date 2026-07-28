@@ -212,10 +212,19 @@ bash .claude/hooks/session-rules-loader.sh < <(printf '{"cwd":"%s"}' "$PWD")
 Per-session manifests at `.claude/.session-manifests/<session_id>.json` carry
 the three fields `{timestamp, change_class, rule_ids_loaded}` — sufficient for
 SOC 2 CC6.1/CC7.2 evidence ("which rules were in context at session X").
-Since ADR-150 `change_class` is pinned to the constant `"all"`: the key is kept
-rather than dropped so the evidence schema stays stable for any
-historical-manifest reader, and `"all"` is the honest value now that every
-session loads the whole corpus.
+Since ADR-150 the key is kept rather than dropped so the evidence schema stays
+stable, and it carries `"all"` on the happy path. On a fail-safe path it carries
+`"fail-safe:<cause>"` instead — a bare constant would be unfalsifiable, and a
+blackout session would otherwise record `{"change_class":"all",
+"rule_ids_loaded":[]}`, asserting "all" for a session that loaded zero rules.
+
+**No manifest is written on the `emit_core_only_fallback` path**, and that is
+deliberate rather than an oversight: the dominant reason that path fires is
+`cwd` resolving OUTSIDE a git worktree, so writing there would let a crafted
+envelope (`{"cwd":"/tmp/x"}`) plant files at an arbitrary location — the exact
+vector the `is-inside-work-tree` guard exists to block. The evidence gap on that
+path is accepted in exchange for the write guard; the FALLBACK stamp still
+carries a `loaded: N of M` count.
 The directory is gitignored.
 
 ### Sharp Edges (SessionStart hook design)

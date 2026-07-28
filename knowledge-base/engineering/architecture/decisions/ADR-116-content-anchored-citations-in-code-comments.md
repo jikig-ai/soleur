@@ -53,7 +53,7 @@ gate is not yet built.
 1. **Code comments cite `<file> › <symbol>()`, never `<file>:NNN`** — generalizing ADR-076
    item 3 from the domain-model register to all code. Carried by the rule
    `cq-cite-content-anchor-not-line-number` (`AGENTS.rules.md`, injected on every
-   session by the class-aware loader — which is exactly the session class that writes code
+   session by the SessionStart rules loader — unconditionally, on every session, including the ones that write code
    comments).
 
 2. **Three carve-outs, all load-bearing:**

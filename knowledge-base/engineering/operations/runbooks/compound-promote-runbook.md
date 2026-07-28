@@ -143,13 +143,13 @@ the linter rejects any future reintroduction of the retired ID.
 - **Always-loaded payload is already tight.** Do not trust a figure quoted
   here — run `python3 scripts/lint-agents-rule-budget.py AGENTS.md
   AGENTS.rules.md 2>&1` for the current number
-  and tier. As of 2026-07-20 it reports `B_ALWAYS=22900` in the WARN tier,
-  roughly two dozen bytes of raw headroom below the reject ceiling. Expect essentially
-  every `agents-core` proposal to be refused until a trim lands — that is the
-  budget genuinely being exhausted, not a stale constant. Retire stale rules
-  first to create headroom.
-- **DPIA candidate.** Art. 35 DPIA assessment is deferred until 4 weeks of
-  operation generate empirical data. Tracked in `compliance-posture.md`.
+  and tier. Do not quote a figure here — run the command. The previously-frozen number in this
+  spot (`B_ALWAYS=22900`, WARN tier, "expect essentially every agents-core proposal to be
+  refused") went stale at ADR-150 and inverted the operating conclusion: the corpus
+  collapse re-scoped `B_ALWAYS` to what every session actually loads and re-baselined the
+  thresholds, so the tree now sits in the `[OK]` tier with kilobytes of headroom and
+  in-budget proposals should be ACCEPTED, not refused. That is exactly the failure this
+  runbook warns about two paragraphs above.
 
 ## Related artifacts
 

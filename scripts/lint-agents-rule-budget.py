@@ -73,8 +73,10 @@ def _rule_line_count(text: str) -> int:
 # sidecar that loaded every session, and ignored the other two — but ~70% of
 # sessions were multi-class and already injected all three (43,680 B measured),
 # so the old ceiling described 53% of reality and gated only the minority path.
-# B_ALWAYS now measures what every session actually loads (~42,427 B), which is
-# ~1,255 B LESS than what that 70% majority was already carrying.
+# B_ALWAYS now measures what every session actually loads (~42,547 B), which is
+# ~1,133 B LESS than what that 70% majority was already carrying (43,680 B).
+# Re-derive rather than trusting this comment: it is a restatement, and this file
+# is the authority — `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md`.
 #
 # The old comment derived 23000 as "floor + small headroom", where the floor was
 # the hr-* and compliance-tier bodies pinned to core. Those pins are gone (the
@@ -87,6 +89,11 @@ B_ALWAYS_WARN = 44000
 B_ALWAYS_REJECT = 46000
 PER_RULE_CAP = 600
 
+# The two entries are NOT interchangeable and must stay two files. AGENTS.md is
+# a slug-only pointer index re-rendered EVERY TURN; AGENTS.rules.md holds the
+# bodies and is injected ONCE per session by the SessionStart hook. Merging them
+# (ADR-150 option C-ii) would put ~37 kB of bodies on every turn instead of ~5 kB
+# of pointers — the one "simplification" that makes things dramatically worse.
 ALWAYS_LOADED = ("AGENTS.md", "AGENTS.rules.md")
 
 SECTION_HEADING_RE = re.compile(r"^## (.+?)\s*$")
