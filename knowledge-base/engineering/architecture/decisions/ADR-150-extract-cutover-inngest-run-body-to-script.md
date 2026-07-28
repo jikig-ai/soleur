@@ -59,8 +59,15 @@ from `scripts/` (`apply-web-platform-infra.yml:1968, :2196`; `apply-sentry-infra
 :321, :407, :621`).
 
 **A `ci.yml` step guards the deadlock directly.** It installs a pinned, SHA-verified
-actionlint and runs `timeout 120 actionlint .github/workflows/`, failing **only on
-`rc=124`**. It asserts *not hung* and nothing else, which is what lets it land while 93
+actionlint and runs `timeout 120 actionlint .github/workflows/*.yml`, failing **only on
+`rc=124`** — plus on any *unrecognised* status, and on a workflow-file count below a floor.
+
+Those last two are not belt-and-braces. The obvious invocation `actionlint
+.github/workflows/` exits **3** with "is a directory": actionlint takes FILES and only
+auto-discovers when given no path at all. A guard written that way scans zero files, and if
+it treats only 124 as failure it prints "rc=3, acceptable" and goes green forever — the
+same cannot-report-so-it-passed shape this whole change set exists to close, reproduced
+inside its own remedy. It was caught by running the guard rather than by reading it. It asserts *not hung* and nothing else, which is what lets it land while 93
 pre-existing findings remain open (#7042) — the objection that kept actionlint out of CI.
 
 ## Consequences
