@@ -2,6 +2,7 @@
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 
+<!-- lint-infra-ignore start -->
 > **IaC routing note.** Every service-state change referenced below (`systemctl` units, mounts,
 > package installs) lives inside `cloud-init-git-data.yml`'s `runcmd:`/`bootcmd:` or inside
 > `git-data-bootstrap.sh` — both rendered into `hcloud_server.git_data`'s `user_data` by
@@ -9,6 +10,7 @@
 > no human SSH path** by design, so an operator-run step here is not merely discouraged, it is
 > impossible. Where a task quotes such a command it is describing template content, not an operator
 > action. See the plan's `## Infrastructure (IaC)` section (plan Phase 2.8 output).
+<!-- lint-infra-ignore end -->
 
 Derived from
 [`knowledge-base/project/plans/2026-07-27-chore-git-data-pre-birth-hardening-plan.md`](../../plans/2026-07-27-chore-git-data-pre-birth-hardening-plan.md)

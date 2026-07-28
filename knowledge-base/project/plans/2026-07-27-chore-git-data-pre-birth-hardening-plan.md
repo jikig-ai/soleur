@@ -149,6 +149,7 @@ Panel: Fable advisor consult (ADR-083 Step 4.5) · kieran-rails-reviewer · arch
 spec-flow-analyzer · code-simplicity-reviewer · CPO (sign-off, threshold `single-user incident`).
 Every row was verified against the worktree by the reviewer that raised it.
 
+<!-- lint-infra-ignore start -->
 | R | Finding | Sev | Disposition |
 |---|---|---|---|
 | R1 | **The Sentry fatal channel matches NO alert rule.** `apps/web-platform/infra/sentry/issue-alerts.tf` holds 28 narrowly tag-filtered `sentry_issue_alert` resources, no catch-all, zero `git.data` hits — and the file was in neither Files list. The repo already documents this class in its `web_terminal_boot_fatal` comment: the web host's whole runcmd stage set *"matches NO alert rule, so those events are write-only today."* Four of six declared `alert_route`s were false. | **P0** | **Fixed.** `issue-alerts.tf` added to *Files to Edit*; a `git_data_boot_fatal` rule is a Phase-2 deliverable with AC33. The `event_frequency` threshold is flagged load-bearing: `value = 1` works for the web host only because its group is always already hot, and git-data's first-ever boot fatal is by definition the first event in its group. |
@@ -189,6 +190,7 @@ Every row was verified against the worktree by the reviewer that raised it.
 | R36 | **W0's probe asserted the wrong thing.** Exit status is not the question — a CLI that silently resolves to an empty `prd` view exits 0 with `GIT_DATA_LUKS_KEY` **absent**, which is the dark boot. | **P2** | **Fixed** — the probe greps the resulting environment for the key name, under a token scoped exactly as `doppler_service_token.git_data` is. |
 | R37 | Ceremony ACs: several restate phase instructions or assert that untouched tests still pass. | **P2** | **Adopted in part.** Cut AC2, AC17, AC19, AC21. **Kept** AC14/15/27/28/29 — at this threshold the prose-drift and record-keeping criteria are the deliverable's only mechanical trace, and R27 showed AC14 catching a real missed site. Kept the load-bearing halves of AC11/AC12. |
 | R38 | Minor, all fixed: measure AC3 with Terraform's `base64gzip` default level, not `gzip -9` (overstates headroom on a hard gate); `lifecycle{ignore_changes=[value]}` on the new secret diverges from every sibling and would pin a stale IP — dropped; `$BS_TABLE` pinned explicitly; `expenses.md` §Downstream Consumers requires a `finance/cost-model.md` refresh on a category subtotal shift; `terraform-target-parity.test.ts` prose says "eighteen" in two places and must move to nineteen; the `arm_one` step is gated `if: steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'`, so the ADR-149 amendment says "every merge **on the normal path**". | **P2** | **Fixed.** |
+<!-- lint-infra-ignore end -->
 
 **CPO sign-off: APPROVED WITH CONDITIONS.** C1 (R33/R34) and C2 (AC25 non-negotiable — if a mutation
 arm is hard to build that is a blocker, not a trim) are blocking; C3–C7 are folded in above and into
@@ -419,6 +421,7 @@ change is capacity hardening for a host that does not yet accept a single connec
 
 ## User-Brand Impact
 
+<!-- lint-infra-ignore start -->
 **If this lands broken, the user experiences:** a `git push` at session end that hangs or fails
 against a git-data host whose LUKS volume never mounted — and, because nothing in the boot path
 fails closed today, an operator who sees a green `terraform apply` and no alert. Concretely: the
@@ -428,6 +431,7 @@ is not there. A second reachable end-state: OOM during a receive-triggered `gc`/
 2 vCPU / 4 GB no-swap box, killed silently because `gc.autoDetach` is default-on, presenting to the
 pushing client as a stalled push with no error. A third, newly identified: **every account deletion
 files a false "Art. 17 erasure failed" event** from the moment the host exists (W8).
+<!-- lint-infra-ignore end -->
 
 **If this leaks, the user's source code is exposed via:** the store holds **every connected user's
 repository objects and refs**. (a) The zero-rule deny-all firewall plus its attachment are the
@@ -647,6 +651,7 @@ same honesty marker (TARGET state, unobserved until the birth dispatch). No edge
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 
+<!-- lint-infra-ignore start -->
 `plan` Phase 2.8 fired and this section is its required output. **Nothing is routed to an operator
 SSH session or a vendor dashboard.** Every service-state change named anywhere in this plan
 (`systemctl` invocations, mounts, package installs) lives inside `cloud-init-git-data.yml`'s
@@ -656,6 +661,7 @@ by `terraform apply`, never by a human at a shell. git-data has **no `remote-exe
 no human SSH path** by design, so an operator-run step is not merely discouraged here, it is
 impossible. Where this plan's prose quotes such a command, it is quoting template content under
 review, not prescribing an operator action.
+<!-- lint-infra-ignore end -->
 
 ### Terraform changes
 
