@@ -7,7 +7,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-WF="$REPO_ROOT/.github/workflows/cutover-inngest.yml"
+WF_YAML="$REPO_ROOT/.github/workflows/cutover-inngest.yml"
+BODY_SH="$REPO_ROOT/scripts/cutover-inngest.sh"
 
 PASS=0
 FAIL=0
@@ -23,6 +24,31 @@ scratch_cleanup() {
 }
 trap scratch_cleanup EXIT
 
+# #7002: THE CUTOVER DEFINITION IS NOW TWO FILES — reconstruct the single-file view.
+#
+# The 118,722-byte `run:` body was extracted VERBATIM to scripts/cutover-inngest.sh because
+# it deadlocked actionlint (a body over the 65,536-byte pipe buffer blocks the shellcheck
+# integration forever, so the repo's only workflow linter reported nothing at all, on every
+# file). Nothing about the cutover's behaviour changed.
+#
+# Every content assertion below was written against the pre-extraction file, and ~120 of them
+# grep or awk that body — many ANCHORED ON ITS YAML INDENTATION (e.g. /^            verify\)$/,
+# twelve spaces). A plain `cat` of the two files would silently break every one of those:
+# YAML dedents a `|` block scalar, so the script holds the body at column 0 while the
+# assertions expect it at the block-scalar indent.
+#
+# So $WF is rebuilt as the byte-equivalent of what the workflow used to be: the YAML as-is,
+# plus the script body re-indented by the 10 spaces the `run: |` block carried. Every existing
+# assertion then means exactly what it meant before the extraction, and a future edit to
+# EITHER file is still covered.
+#
+# $WF_YAML remains the real workflow for the two structural assertions (file exists, YAML
+# parses) — the reconstructed view is deliberately NOT valid YAML.
+WF="$(mktemp)"
+SCRATCH+=("$WF")
+cat "$WF_YAML" > "$WF"
+sed -n '/^set -euo pipefail$/,$p' "$BODY_SH" | sed 's/^./          &/' >> "$WF"
+
 assert() {
   local desc="$1" cond="$2"
   if eval "$cond"; then echo "  PASS: $desc"; PASS=$((PASS + 1));
@@ -31,10 +57,11 @@ assert() {
 
 echo "=== cutover-inngest.yml workflow tests ==="
 
-assert "workflow file exists" "[[ -f '$WF' ]]"
+assert "workflow file exists" "[[ -f '$WF_YAML' ]]"
+assert "extracted cutover body exists (#7002)" "[[ -f '$BODY_SH' ]]"
 
 # YAML parses
-assert "YAML parses (pyyaml)" "python3 -c 'import yaml,sys; yaml.safe_load(open(\"$WF\"))'"
+assert "YAML parses (pyyaml)" "python3 -c 'import yaml,sys; yaml.safe_load(open(\"$WF_YAML\"))'"
 
 # op input is a constrained choice (NOT a free string → no run-step injection)
 assert "op input is type: choice" "grep -qE 'type:[[:space:]]*choice' '$WF'"
