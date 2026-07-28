@@ -153,7 +153,7 @@ Every row was verified against the worktree by the reviewer that raised it.
 |---|---|---|---|
 | R1 | **The Sentry fatal channel matches NO alert rule.** `apps/web-platform/infra/sentry/issue-alerts.tf` holds 28 narrowly tag-filtered `sentry_issue_alert` resources, no catch-all, zero `git.data` hits — and the file was in neither Files list. The repo already documents this class in its `web_terminal_boot_fatal` comment: the web host's whole runcmd stage set *"matches NO alert rule, so those events are write-only today."* Four of six declared `alert_route`s were false. | **P0** | **Fixed.** `issue-alerts.tf` added to *Files to Edit*; a `git_data_boot_fatal` rule is a Phase-2 deliverable with AC33. The `event_frequency` threshold is flagged load-bearing: `value = 1` works for the web host only because its group is always already hot, and git-data's first-ever boot fatal is by definition the first event in its group. |
 | R2 | **`STAGE=luks_open` has no producer.** `luksOpen` runs inside `doppler run … -- bash -s <<'LUKSEOF'` — a **child bash**. The parent's `STAGE` and `on_err` do not cross the exec boundary, and no phase armed anything inside the heredoc. A failed `luksOpen` and a W0 scope failure would both surface as `STAGE=doppler_run`, collapsing the plan's single most important discriminator into another mode. | **P0** | **Fixed.** Phase 3.5 arms a heredoc-local `STAGE=`/trap. Only possible because the emitter is a `write_files` binary under `/usr/local/bin/` (unlike the web host's non-exported inline `_emit`) — a child process can call it. |
-| R3 | **The Better Stack channel is dark for the stages it was specified to cover.** The token cannot be baked (metadata-API retrievable) and the Doppler CLI does not exist until `STAGE=doppler_dl`, so a `doppler-cli-install-FAILED` marker to Better Stack was unreachable *by construction* — the exact "dark by construction" trap ADR-149 item 2 names and W0 exists to avoid. Neither W0 branch resolved it. | **P0** | **Fixed by cutting, not patching.** Boot fatal + boot-completion → **Sentry only** (baked DSN, works when Doppler is the broken stage). Better Stack keeps **steady-state only**. This removes the Better Stack credential from W0's critical path, removes a second address from the partial-birth surface, and deletes `doppler_secret.git_data_betterstack_logs_token` and its registration entirely. |
+| R3 | **The Better Stack channel is dark for the stages it was specified to cover.** The token cannot be baked (metadata-API retrievable) and the Doppler CLI does not exist until `STAGE=doppler_dl`, so a `doppler-cli-install-FAILED` marker to Better Stack was unreachable *by construction* — the exact "dark by construction" trap ADR-149 item 2 names and W0 exists to avoid. Neither W0 branch resolved it. | **P0** | **Fixed by cutting, not patching.** Boot fatal + boot-completion → **Sentry only** (baked DSN, works when Doppler is the broken stage). Better Stack keeps **steady-state only**. This removes the Better Stack credential from W0's critical path. **Corrected against what shipped:** the resolution's last clause claimed the secret was deleted *entirely* — it was not, and could not be, because R3 itself keeps Better Stack for STEADY STATE (the gc emits) and that needs the token. `doppler_secret.git_data_betterstack_logs_token` ships in `git-data-luks.tf`, is one of the twenty `-target`s, and is one of the fifteen members of the birth gate's presence loop. What was cut is the BOOT-time Better Stack marker, not the secret. |
 | R4 | **The follow-through probe names a credential that does not exist.** `BETTERSTACK_LOGS_QUERY_TOKEN` appears nowhere; `scripts/betterstack-query.sh` needs `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` (already wired in the sweeper), and `BETTERSTACK_LOGS_TOKEN` is **ingest-only (write)** per that script's own header. `sweep-followthroughs.sh` on an unknown `secrets=` name fails and `return 0`s — issue left open, no comment. Fully silent. | **P0** | **Fixed.** Directive corrected to the three real names. Worse than the name: AC20's proven-RED arm was being satisfied by a *credential* failure rather than "host unborn", so the probe could never flip to pass. AC20 now asserts the **sweeper can execute it**, not merely that the script exits non-zero locally. |
 | R5 | **AC4 forbade the escape the design requires.** `grep -c '%{' … returns 0`, but the prescribed `curl -w 'http=%%{http_code};…'` probe **contains** `%{` as a substring. The plan's own *Template escaping* paragraph stated both halves without noticing they contradict. Any correct implementation failed AC4. | **P0** | **Fixed.** AC4 is now `grep -cP '(?<!%)%\{'`, matching a bare Terraform directive but not the doubled `curl` form. |
 | R6 | **The birth gate has a FOURTH registration site.** `git-data-host-birth-gate.sh` carries `_GIT_DATA_BIRTH_ALLOW` (18-member *permission* set) **and** a separate hardcoded 13-member presence loop (*completeness* set) that `terraform-target-parity.test.ts` never extracts. A three-of-four edit is green — the new address would be *permitted* but not *required*, so a birth whose Doppler write is absent passes the gate, reinstating ADR-149 Residual 2's harm behind a PASS. The plan's own mitigation ("the parity test catches a partial edit") is what made this dangerous. | **P0** | **Fixed.** The plan now names **six** sites (adding the presence loop, two gate prose counts, and the fixture helpers `rest_thirteen_except`/`rest_thirteen_with`), states explicitly that the new address joins the **presence** half (the entailed loop would reproduce ADR-149's *"Too strict → a permanent wedge"*), and AC8 requires a parity assertion that extracts the presence loop. |
@@ -819,8 +819,15 @@ failure_modes:
                Phase-0 probe rather than left to runtime.
     alert_route: Sentry issue alert -> founder email
   - mode: Doppler CLI checksum mismatch or wrong-arch tarball (supply-chain / mis-derivation)
-    detection: STAGE=doppler_dl fatal + a `doppler-cli-install-FAILED` stage marker to Better Stack
-               carrying rc, the curl API probe (http/ip/dns/conn timings) and redacted stderr.
+    # AS-SHIPPED (corrected): the Better Stack marker named here was CUT by R3 and never
+    # built — it was unreachable by construction, since the Doppler CLI that fetches the
+    # ingest token does not exist until this very stage succeeds. `doppler-cli-install-FAILED`
+    # exists only on the inngest host (cloud-init-inngest.yml), never on git-data.
+    detection: STAGE=gitdata_doppler_dl fatal via /usr/local/bin/git-data-emit, carrying rc
+               and the redacted tail of /var/log/cloud-init-output.log. Sentry ONLY — from
+               the BAKED DSN, which is precisely what makes it work when Doppler is the
+               broken stage. The armed `trap`/`set -e` means a checksum failure ABORTS here
+               rather than continuing into `tar xzf`/`chmod +x` on an unverified tarball.
     alert_route: same Sentry route
   - mode: `cryptsetup luksOpen` fails / LUKS volume never mounts — at-rest encryption silently absent
     detection: STAGE=luks_open fatal; AND the boot-completion emit's mountpoint assertion FAILS
@@ -836,22 +843,33 @@ failure_modes:
                independent.
     alert_route: the SUPPRESS-line recurrence poller (below) + the missing boot-completion emit
   - mode: Store fills (10 GB; `--force` pushes orphan objects, nothing prunes)
-    detection: `SOLEUR_GIT_DATA_DISK` event to Better Stack Logs every 15 min carrying the GUEST
-               filesystem df% for /mnt/git-data-luks (never the block-device size — a full ext4
-               reads as not-full via the Hetzner Volume API) plus AGGREGATE `git count-objects -vH`
-               totals. NO per-repo identifiers, ever (see AC22).
-    alert_route: in-repo GitHub-cron poller over Better Stack Logs via
-                 scripts/betterstack-query.sh, isolating the SYSLOG_IDENTIFIER/message FIELD (not a
-                 bare substring of `raw`, which the shared source contaminates with quoted issue
-                 bodies) — the ADR-096 log-content-recurrence pattern, mirroring the #6291
-                 SOLEUR_ZOT_DISK alarm. Added to the EXISTING scheduled workflow; no new Sentry
-                 cron monitor (PAYG headroom is ~$7.78).
+    # AS-SHIPPED (corrected — the v2 text below described a route that was never built:
+    # there is no SOLEUR_GIT_DATA_DISK event, no 15-minute cadence, and no GitHub-cron
+    # poller for git-data. Verified: `grep -rn SOLEUR_GIT_DATA_DISK` matches nothing
+    # outside this plan.)
+    detection: `disk_pct` rides as a k=v TAG on the git-data-gc emit (`df --output=pcent`
+               on the GUEST filesystem, never the block-device size — a full ext4 reads as
+               not-full via the Hetzner Volume API), and on the boot-completion emit. It is
+               AGGREGATE only; no per-repo identifiers (AC22).
+    cadence: the gc timer, `OnCalendar=Sun *-*-* 03:20:00` (+ up to 1800 s jitter) — WEEKLY,
+             not every 15 minutes. A fill that starts on a Monday is therefore not visible
+             for up to a week.
+    alert_route: NONE AUTOMATED — this is the honest gap. The tag is queryable in Better
+                 Stack but nothing polls it and nothing pages on it. Tracked in #7026; the
+                 threshold alarm (mirroring the #6291 SOLEUR_ZOT_DISK pattern) is deferred
+                 work, not shipped work.
   - mode: Maintenance gc OOM-killed on the 4 GB no-swap box
-    detection: `gc.autoDetach=false` surfaces it to the caller; git-data-gc.service carries
-               OnFailure= -> a `SOLEUR_GIT_DATA_GC` fault event with rc and the last 20 journald
-               lines of the unit, redacted. OOM confirmed via the cgroup-v2 MONOTONIC oom kill
-               counter, never a point-sampled memory gauge.
-    alert_route: same Better Stack Logs poller
+    # AS-SHIPPED (corrected): the cgroup-v2 oom-kill-counter confirmation was not built.
+    detection: git-data-gc.service sets `MemoryMax=1G` so a runaway repack is killed in ITS
+               cgroup rather than by the kernel choosing among sshd and the git transport,
+               and carries `OnFailure=git-data-gc-failure.service`, which emits
+               `SOLEUR_GIT_DATA_GC unit failed` through /usr/local/bin/git-data-emit with
+               `unit=git-data-gc.service`. That emit has a no-Doppler fallback arm, so it
+               still reaches Sentry from the baked DSN when `doppler run` is the broken thing.
+               Per-repo failures deliberately exit 0 — OnFailure= is reserved for the unit
+               DYING, so a partial failure does not page.
+    alert_route: Sentry (pages), plus Better Stack when the Doppler stage has run. No poller
+                 and no OOM-counter corroboration; the signal is the unit death itself.
   - mode: The emitter itself is dark (baked DSN empty, or the emit curl fails)
     detection: the birth job already asserts SENTRY_DSN non-empty in prd_terraform BEFORE any
                create (ADR-149 §1, implemented). A `Type=oneshot` unit reads `inactive` as its
@@ -890,9 +908,17 @@ discoverability_test:
   # which is the inngest-vector table, not necessarily source 2457081.
   command: |
     # 1+2. Boot stages and the boot-completion assertions — Sentry, the PRIMARY boot channel.
-    #      Sentry is queryable from the terminal today; scripts/sentry-issue.sh is GET-only.
-    bash scripts/sentry-issue.sh --search 'stage:bootstrap-done host_name:soleur-git-data'
-    bash scripts/sentry-issue.sh --search 'stage:boot_complete host_name:soleur-git-data'
+    #      CORRECTED: scripts/sentry-issue.sh has NO --search flag (usage is
+    #      `[--latest-event] [--redact] <issue-id>`), so both lines below were unrunnable.
+    #      Query the issues API directly; feed any id it returns to sentry-issue.sh.
+    doppler run -p soleur -c prd -- sh -c '
+      for q in "stage:bootstrap-done host_name:soleur-git-data" \
+               "stage:boot_complete host_name:soleur-git-data"; do
+        e=$(printf "%s" "$q" | jq -sRr @uri)
+        curl -sS -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" -H "Accept: application/json" \
+          "https://sentry.io/api/0/organizations/jikigai-eu/issues/?query=$e&statsPeriod=7d" \
+        | jq -r --arg q "$q" ".[] | \"\($q): \(.shortId) \(.count)x \(.title)\""
+      done'
     # 3. gc faults — Better Stack, the STEADY-STATE channel. Mode 1 raw SQL for FIELD isolation,
     #    with the s3Cluster archive arm (Mode 1 does NOT auto-add it, and remote() alone covers
     #    only the ~40-minute hot window, so a boot-time event would be invisible without it).

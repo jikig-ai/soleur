@@ -252,7 +252,17 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh "
   ORDER BY dt DESC LIMIT 5"
 
 # 2. Any boot FATAL. Sentry is the durable channel and the only one that pages.
-bash scripts/sentry-issue.sh --search 'host_name:soleur-git-data'
+#    scripts/sentry-issue.sh takes an ISSUE ID, not a query (usage:
+#    [--latest-event] [--redact] <issue-id>) — so search the issues API directly, then
+#    feed an id it returns into that script for the full event.
+doppler run -p soleur -c prd -- sh -c '
+  q=$(printf "%s" "host_name:soleur-git-data" | jq -sRr @uri)
+  curl -sS -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" -H "Accept: application/json" \
+    "https://sentry.io/api/0/organizations/jikigai-eu/issues/?query=$q&statsPeriod=24h" \
+  | jq -r ".[] | \"\(.shortId)  \(.count)x  \(.title)\""'
+
+#    Then, for any id above:
+#    doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --latest-event <issue-id>
 
 # 3. The standing probe (runs daily until it passes).
 bash scripts/followthroughs/git-data-birth-emitter-6982.sh   # 0 PASS / 1 FAIL / 2 TRANSIENT
