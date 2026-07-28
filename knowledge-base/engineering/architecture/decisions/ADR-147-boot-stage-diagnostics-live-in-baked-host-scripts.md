@@ -209,12 +209,42 @@ imagined; the harness is the floor, not the ceiling.
 
 ## Addendum — 2026-07-27: git-data gets the same treatment, as ONE script (#6982, D-EMIT)
 
-**No new ordinal.** This ADR's decision is literally *"boot-stage diagnostics live in baked
-host scripts"*, and #6982 applies it to the second blind host. Recorded here rather than as
-a new ADR because nothing about the decision changes — only the host and one deliberate
-divergence.
+**No new ordinal.** #6982 brings this ADR's diagnostics contract — the sanitizer order, the
+`tail -c 180` cap, the printable-ASCII pass, the fail-closed call site — to the second blind
+host. Recorded here rather than as a new ADR because the CONTRACT does not change. Two
+divergences do, and the second one inverts this ADR's title, so it is stated plainly rather
+than left for a reader to notice.
 
-### The divergence: a `/usr/local/bin` FILE, not an inline shell function
+### The divergence that matters: git-data-emit ships INSIDE `user_data`
+
+This ADR's decision is *"boot-stage diagnostics live in baked host-scripts, **not**
+`user_data`"*, and Consequence 2 is *"`user_data` is a hard budget"* — the two together are
+the whole point of the title. **git-data does the opposite**: `/usr/local/bin/git-data-emit`
+is delivered by `cloud-init-git-data.yml` `write_files`, so it costs `user_data` bytes, which
+is precisely what this ADR moved the web host's emitter away from.
+
+**Why, and why it is not a choice.** git-data has **no bake path to put it on**. The web host
+is built from a baked image gated by `host_scripts_content_hash`; git-data boots a stock
+Ubuntu image with cloud-init as its only delivery channel (this is also why ADR-149 records
+that the birth route has no image-digest pin, no coherence preflight and no amd64 assert —
+there is no image variable to pin). "Bake it" is not an option that exists here; the real
+choice was between an emitter in `user_data` and no emitter at all, and no emitter is the
+dark-boot state ADR-149's interlock exists to prevent.
+
+**The cost is real and is being paid.** git-data's `user_data` sits at **31,904 / 32,768 B**
+— 864 B of headroom, measured with Terraform's own `base64gzip`:
+
+```
+bash apps/web-platform/infra/git-data-userdata-budget.sh
+```
+
+So this ADR's budget argument is not refuted by the divergence; it is confirmed by it. Every
+byte of emitter, every unit file and every comment in that template competes for those 864 B,
+and the budget script exists because the cap was hit three times while writing #6982. If
+git-data ever gains a bake path, moving the emitter onto it is the change this ADR already
+argues for.
+
+### The second divergence: a `/usr/local/bin` FILE, not an inline shell function
 
 The web host's `_emit` is an inline function defined at the top of `runcmd`. On git-data
 that shape does not work, and the reason is structural rather than stylistic:
