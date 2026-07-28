@@ -155,6 +155,33 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
   "unclassifiable plan entry" "plan is NOT the exact scoped" \
   inngest_host_replace_gate "$TMP/pg-d5.json"
 
+
+
+
+# ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
+# non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
+# the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
+# the CALLS to those helpers silences all of them at once while the suite still exits 0,
+# because the only merge gate is the `fails -eq 0` expression below and CI reads only the
+# exit code. Measured: removing one arm block took a sibling suite from 13 assertions to 8,
+# still exit 0.
+#
+# DELIBERATELY SELF-CONTAINED — bash builtins and this suite's own counters only, no
+# harness function. The first version called a helper from gate-suite-harness.sh and the
+# harness `source` lived INSIDE the arm block, so deleting the arms also undefined the
+# floor: it exited 127 under `set -uo pipefail`, recorded nothing, and the suite passed. A
+# floor that depends on the thing it guards is not a floor.
+#
+# A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
+# suite on every legitimately-added assertion and train people to bump it unread.
+_ran=$((passes + fails))
+if [[ "$_ran" -lt 11 ]]; then
+  fails=$((fails + 1))
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 11. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+else
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 11)\n' "$_ran"
+fi
+
 echo ""
 echo "=== test-inngest-host-replace-gate.sh: ${passes} passed, ${fails} failed ==="
 [ "$fails" -eq 0 ] || exit 1

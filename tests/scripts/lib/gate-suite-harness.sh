@@ -95,6 +95,36 @@ rc_scalar_change() {
     "$(printf '%s' "$1" | jq -R .)" "$(printf '%s' "$2" | jq -R .)"
 }
 
+# ── Anti-vacuity floor ────────────────────────────────────────────────────────────
+
+# gate_assert_ran <observed-total> <floor>
+#
+# NOTHING ELSE ASSERTS THAT THE ASSERTIONS RAN, and every anti-vacuity mechanism in this
+# file is defeated by the same move: not calling it. The `cmp -s` floors, the layered
+# contract's unmutated control, the preamble-distinctive anchors — all of them live INSIDE
+# helpers, so deleting the calls to those helpers silences every one at once while the
+# suite still exits 0, because the only merge gate is `[[ "$fails" -eq 0 ]]` and CI reads
+# only the exit code.
+#
+# Measured on this suite family: removing all five preamble arms from
+# test-inngest-host-replace-gate.sh took it from 13 assertions to 8 and it still exited 0.
+#
+# A FLOOR, NOT EQUALITY. The count is developer-incremented, so `-eq` would turn every
+# newly-added assertion into a spurious failure and train people to bump the number without
+# reading it. Derive the floor from a green run and set it at or just below that.
+gate_assert_ran() {
+  local observed="$1" floor="$2"
+  if [[ ! "$observed" =~ ^[0-9]+$ ]] || [[ ! "$floor" =~ ^[0-9]+$ ]]; then
+    fail "ANTI-VACUITY: non-numeric assertion count (observed='${observed}' floor='${floor}')" "n/a" ""
+    return
+  fi
+  if [[ "$observed" -lt "$floor" ]]; then
+    fail "ANTI-VACUITY: only ${observed} assertions ran, floor is ${floor}. Arms were deleted, skipped, or the suite exited early — a suite that runs NO assertions exits 0 exactly like one that passes." "n/a" "observed=${observed} floor=${floor}"
+  else
+    pass "anti-vacuity floor: ${observed} assertions ran (floor ${floor})"
+  fi
+}
+
 # ── Assertion ─────────────────────────────────────────────────────────────────────
 
 # gate_check <name> <fn> <want_rc> <needle> <args…>
