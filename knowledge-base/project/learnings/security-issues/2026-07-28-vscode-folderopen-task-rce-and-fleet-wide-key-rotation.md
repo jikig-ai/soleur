@@ -115,7 +115,7 @@ Hit **four times in one session**:
 | Deleted locally | Still live |
 |---|---|
 | Mobius SSH key (shredded) | until Mobius revokes the pubkey their side |
-| `~/.aws/credentials` | (already dead — but only because we tested) |
+| the AWS credentials file (`~/.aws/`) | (already dead — but only because we tested) |
 | Cursor config holding a Gemini API key | **HTTP 200** after the app was deleted; died only when the right GCP project was removed |
 | Dropbox `~/.dropbox/host.db` | cloud-side access to the whole account |
 
