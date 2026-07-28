@@ -63,15 +63,18 @@ None. All deepen-plan halt gates (4.5–4.10) passed; KB citations, rule IDs, an
   root-only only because of the `.` member root).
 
 ### Measured effect
-In the pinned `node:22-slim` image against a warm tree: **22.96 s / 2.3 GB → 0.48 s / 35 MB**,
-whole-tree parity clean.
+See the `/work` re-measurement under **Work Phase** above (24.6–28.1 s / 2.6 GB → 0.44 s / 30 MB).
+The plan-phase figure (22.96 s / 2.3 GB → 0.48 s / 35 MB) was taken against a different tree and is
+superseded — it is retained only in the plan document as the plan-time record.
 
-### Open findings surfaced (not yet fixed)
-- Neither CI gate's trigger regex names the helper scripts, so the change ships with zero CI
-  coverage unless the new hermetic suite is added.
+### Open findings — resolved during /work
+- Neither CI gate's trigger regex names the helper scripts, so a cold CI checkout is structurally
+  incapable of observing a broken exclusion. **Closed:** the hermetic suite shipped and is confirmed
+  auto-registered (it ran in the green 226/226 shard). It is the only detector, by design.
 - `sdk-bump-sandbox-gate.sh` captured its verify command as `"$(… 2>/dev/null | tail -1 || true)"`,
-  making a copy FATAL invisible. One redirect deleted inline; the residual ack-fallback posture is
-  filed as a scope-out rather than claimed as fail-loud.
+  making a copy FATAL invisible. **Closed inline:** the redirect is deleted, so the FATAL reaches the
+  job log. The residual `|| true` ack-fallback posture is deliberate, untouched, and filed as #7043
+  rather than claimed as fail-loud.
 
 ### Components Invoked
 - `Skill: soleur:plan`, `Skill: soleur:deepen-plan`
