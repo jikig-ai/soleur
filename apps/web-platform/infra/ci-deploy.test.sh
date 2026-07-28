@@ -24,6 +24,21 @@ readonly TEST_PATH_BASE="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 DEPLOY_DOCKER_CONFIG_DIR="$(mktemp -d)"   # split from export so SC2155 doesn't mask mktemp's rc
 export DEPLOY_DOCKER_CONFIG_DIR
 
+# #6665: the sleep mock's invocation cap has to be able to REPORT itself, and its own stderr
+# cannot. `run_deploy` merges the deploy script's stderr into the subshell's stdout
+# (`bash "$DEPLOY_SCRIPT" 2>&1`) and 18 call sites close with `>/dev/null 2>&1`, so a diagnostic
+# written to the mock's stderr lands in /dev/null; `$MOCK_DIR` — and the invocation counter in
+# it — is then removed by run_deploy's own EXIT trap, leaving zero residue. A cap fire would
+# therefore surface as a bare nonzero rc under whatever assertion happened to be running, naming
+# the wrong cause. This marker lives OUTSIDE `$MOCK_DIR`, survives every redirection shape, and
+# is reported at the suite footer — which is the entire difference between "a hang" and "a fast,
+# NAMED, countable failure" that the cap claims to provide.
+MOCK_SLEEP_CAP_MARKER="$(mktemp -t ci-deploy-sleep-cap.XXXXXXXX)"
+export MOCK_SLEEP_CAP_MARKER
+# The footer removes this on the normal path, ~5100 lines below; the trap covers every `set -e`
+# abort in between, so a failing run cannot leak the file into the shared /tmp tmpfs (#6734).
+trap 'rm -f "$MOCK_SLEEP_CAP_MARKER"' EXIT
+
 # --- Mock factories ---------------------------------------------------------
 # All specialized mocks are driven by env vars. Tests set MOCK_DOCKER_MODE /
 # MOCK_CURL_MODE before invoking a runner; the runner calls create_base_mocks
@@ -670,12 +685,103 @@ MOCK
 # Shared mock scaffold: creates all common mock binaries in $MOCK_DIR.
 # Docker/curl behavior is driven by MOCK_DOCKER_MODE / MOCK_CURL_MODE env vars
 # (see factory docs above). Specialized overrides are rare after consolidation.
-# #6525: opt-in no-op `sleep` mock so a test can exercise the DEFAULT transient backoff schedule
-# (unset PULL_TRANSIENT_RETRY_SLEEPS ⇒ "2 4" = 6 s of REAL sleeps) without the wall-clock cost.
-# Gated on MOCK_SLEEP_NOOP=1 so every OTHER test keeps the real `sleep` (lease/lock/drain timing).
+# No-op `sleep` mock. #6525 added it as an opt-in; #6665 INVERTED the default — create_base_mocks
+# now installs it for EVERY test unless MOCK_SLEEP_REAL=1. Measured removal: the CI step went from
+# 399-409s to 22-25s (~94%); locally 8m57s → 3m40-4m46s (~53-59%, the gap being process-spawn cost
+# this mock does not touch). An opt-in gate means every test written afterwards silently re-pays
+# that, which is how the timeout-minutes bump loop (#6649 → #6650 → #6665) started.
+# (An earlier draft of this comment said "~78% of wall clock was spent sleeping", derived as
+# wall − (user+sys). That subtraction also absorbs I/O wait and scheduling delay, so it is not a
+# measurement of sleep; the before/after numbers above are.) The exclusion set is empty at merge: the tests the #6525 comment
+# called out as timing-sensitive ("lease/lock/drain") already opt out through a DIFFERENT seam —
+# they pin CRON_DRAIN_POLL=0 / QUIESCE_PROBE_INTERVAL=0 — so they never paid real sleep anyway.
+#
+# The inverted default rests on three properties. Each is stated with the mechanism that actually
+# enforces it — ADR-139's point is that a green must be EARNED, and two of these were prose-only
+# in the first draft of this PR, attributed to a backstop that structurally cannot cover them:
+#
+#   (1) create_mock_seq prints only "1", so a `for i in $(seq 1 N)` loop in ci-deploy.sh runs a
+#       SINGLE iteration — EXCEPT in run_quiesce_pessimism, which deliberately `rm -f`s the seq
+#       mock to exercise the real multi-count loop. That exception is why this is stated as "the
+#       mock still collapses" rather than "every loop runs once": the invariant is a property of
+#       the MOCK, not of the suite, and one runner opts out of it on purpose.
+#       ENFORCED BY: the seq-mock output pin (search "seq mock still collapses"). NOT by the cap —
+#       these loops are DATA-gated (`seq 1 N`, N ≤ 10), so a real `seq` yields ≤10 iterations per
+#       loop and ~40 sleep invocations across the whole script: bounded, and a fraction of the
+#       cap, which would therefore never fire for this class. (Real `sleep` PACED these loops; it
+#       never bounded them. Calling it a "brake" was wrong.)
+#   (2) The PATH shadow is bypassed only by an ABSOLUTE PATH. Measured, not assumed:
+#       `command sleep`, `exec sleep` and `env sleep` all still resolve through PATH and DO hit
+#       the mock; only `/bin/sleep`, `/usr/bin/sleep`, `/usr/local/bin/sleep` etc. escape it and
+#       pay real wall clock. (An earlier draft of this comment listed `command`/`exec` as escapes
+#       and had a guard forbidding them — that would have banned two harmless forms while missing
+#       any absolute path outside /bin and /usr/bin.)
+#       ENFORCED BY: the sleep-bypass source pin (search "no absolute-path sleep").
+#       NOT by the cap — a call that never reaches the mock cannot be counted by it.
+#   (3) No loop whose exit is WALL-CLOCK-gated may spin freely. This is the class the cap does
+#       guard, and it is not hypothetical: `while cron_in_flight` (ci-deploy.sh:2603) breaks on
+#       `waited >= CRON_DRAIN_TIMEOUT`, default 4200 (ci-deploy.sh:257). Under a no-op `sleep`
+#       that is a 70-minute 100%-CPU spin that no `timeout-minutes` bounds usefully. The cap turns
+#       it into a fast abort naming its own cause, via $MOCK_SLEEP_CAP_MARKER (the mock's stderr
+#       alone is NOT enough — 18 call sites discard it; see the marker's own comment above).
+#       Today's tests are data-bounded (the docker `pgrep` mock's countdown, and CRON_DRAIN_TIMEOUT
+#       pinned to 0 in the timeout test), so the cap is a guard against future reachability.
 create_mock_sleep() {
   cat > "$1/sleep" << 'MOCK'
 #!/bin/bash
+# Record the requested duration when MOCK_SLEEP_LOG is set. This is the only
+# observation channel for the backoff schedule VALUES — a pull-COUNT assertion
+# cannot distinguish "2 4" from "9 9", so without this the prod default schedule
+# is mutable while green.
+# Precedent: nic-wait-gate.test.sh › the `sleep` stub + its "budget" assertions —
+# structurally identical (a PATH-mock sleep BINARY appending "$1" to a log, then
+# asserted on both call count and argument values). Deliberately NOT the `rec()`
+# recorder in workspaces-luks-harness.sh › the stub block: that one is a shell
+# FUNCTION inside an already-stubbed subshell, which that file's own comment is
+# careful to say is a different mechanism. The log var keeps this file's MOCK_
+# prefix (cf. MOCK_PULL_ARGS_FILE, MOCK_SENTRY_CAPTURE_FILE) rather than
+# nic-wait's bare SLEEP_LOG.
+if [[ -n "${MOCK_SLEEP_LOG:-}" ]]; then printf '%s\n' "${1:-}" >> "$MOCK_SLEEP_LOG"; fi
+# Invocation cap. Scoped per mock dir (every runner takes a fresh `mktemp -d`, so
+# this counts one run_deploy, not the whole suite). Real deploy paths sleep well
+# under 50 times per run; a loop whose exit is time-gated rather than data-gated
+# hot-spins under a no-op `sleep` and reaches 500 in milliseconds — so this turns
+# a would-be hang-until-timeout-minutes into a fast, named, countable failure.
+_cap="${MOCK_SLEEP_MAX_CALLS:-500}"
+# `$0` is the absolute path the kernel used to exec this mock (execve pathname, not argv[0]), so
+# the counter lands beside the mock in $MOCK_DIR and is scoped to ONE run_deploy — every runner
+# takes a fresh `mktemp -d`. Do not "simplify" to a bare `sleep.calls`: that would be $PWD-relative
+# and would leak counts across runners. `$(<file)` is a bash builtin — no fork, on the hottest
+# mock in the suite.
+_cf="$0.calls"
+# Braces are load-bearing: for a simple command that is ONLY an assignment, bash expands the
+# right-hand side BEFORE applying the redirection, so a bare `_n=$(<"$_cf") 2>/dev/null` still
+# prints "No such file or directory" on the first call of every run_deploy — into a 2>&1-captured
+# runner log. The braced group applies the redirect to the expansion.
+{ _n=$(<"$_cf"); } 2>/dev/null || _n=0
+[[ "$_n" =~ ^[0-9]+$ ]] || _n=0
+_n=$((_n + 1))
+# Fail loud if the counter cannot be persisted: a silently-failing write pins _n at 1 forever, the
+# cap never fires, and the hang it exists to prevent happens with no diagnostic at all.
+if ! echo "$_n" > "$_cf"; then
+  echo "MOCK_SLEEP_COUNTER_UNWRITABLE: cannot write ${_cf} — the invocation cap is inoperative." >&2
+  exit 1
+fi
+if (( _n > _cap )); then
+  # Report ONCE. Past the cap every subsequent call would otherwise flood a 2>&1-captured runner
+  # log; today all 15 sleep sites propagate failure under `set -euo pipefail`, but a future
+  # `sleep … || true` would turn an unguarded print into an unbounded flood.
+  if (( _n == _cap + 1 )); then
+    _msg="MOCK_SLEEP_CAP_EXCEEDED: no-op sleep invoked ${_n} times (cap=${_cap}) — a wall-clock-gated loop in ci-deploy.sh is hot-spinning under the mock. See create_mock_sleep in ci-deploy.test.sh."
+    echo "$_msg" >&2
+    # stderr alone is swallowed at 18 call sites (`>/dev/null 2>&1`) and $MOCK_DIR is removed by
+    # run_deploy's EXIT trap, so this marker OUTSIDE $MOCK_DIR is what makes the failure named.
+    if [[ -n "${MOCK_SLEEP_CAP_MARKER:-}" ]]; then
+      printf '%s\n' "$_msg" >> "$MOCK_SLEEP_CAP_MARKER"
+    fi
+  fi
+  exit 1
+fi
 exit 0
 MOCK
   chmod +x "$1/sleep"
@@ -696,7 +802,17 @@ create_base_mocks() {
   create_mock_layer3 "$mock_dir"
   # `if` (not `[[ … ]] && …`): create_base_mocks runs under `set -euo pipefail`, where a bare
   # `[[ false ]] && cmd` statement exits non-zero and aborts the whole suite.
-  if [[ "${MOCK_SLEEP_NOOP:-}" == "1" ]]; then create_mock_sleep "$mock_dir"; fi
+  # #6665: installed by DEFAULT. MOCK_SLEEP_REAL=1 is the opt-out for a test that genuinely needs
+  # real wall clock; no test sets it today, and it is the knob that keeps Scenario T2 (full suite
+  # under real sleeps ⇒ wall clock back at baseline) able to attribute the speedup to this mock
+  # rather than to an accidental skip.
+  # `|| -n MOCK_SLEEP_LOG`: the recorder is the ONLY observation channel for the backoff schedule
+  # VALUES, and it lives inside this mock — so a test that asks to record must get the mock even
+  # under a suite-wide opt-out. Without this, `MOCK_SLEEP_REAL=1` yields an empty log and the
+  # reading test fails on a missing channel rather than on a real regression (measured: 183/184).
+  # Enforced HERE rather than by each test saving/unsetting/restoring the opt-out, so the next
+  # test to set MOCK_SLEEP_LOG cannot silently re-open the hole.
+  if [[ "${MOCK_SLEEP_REAL:-}" != "1" || -n "${MOCK_SLEEP_LOG:-}" ]]; then create_mock_sleep "$mock_dir"; fi
 }
 
 # Parse .reason and .exit_code out of a ci-deploy.state JSON file.
@@ -2942,14 +3058,76 @@ else
   FAIL=$((FAIL + 1)); echo "  FAIL: cosign trust anchor drifted (Phase 4 continuity)"
 fi
 
+# #6665: the two properties the inverted sleep-mock default rests on (see create_mock_sleep's
+# header). Both are one-token edits away, so per ADR-139 they are pinned mechanically rather than
+# asserted in prose. Neither is covered by the invocation cap: a real `seq` yields ~50 invocations
+# (a tenth of the cap) and a bypassed `sleep` never reaches the mock to be counted at all.
+echo ""
+echo "--- #6665 sleep-mock preconditions (seq mock collapses loops; no sleep bypass) ---"
+TOTAL=$((TOTAL + 1))
+# (1) The seq mock must still collapse every loop to ONE iteration. Assert the GENERATED mock's
+#     output, not its source text — that is the property the safety argument uses.
+SEQ_PIN_DIR=$(mktemp -d)
+create_mock_seq "$SEQ_PIN_DIR"
+SEQ_PIN_OUT=$("$SEQ_PIN_DIR/seq" 1 10 | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+rm -rf "$SEQ_PIN_DIR"
+# (2) No ABSOLUTE-PATH sleep may exist in ci-deploy.sh — that is the only form that escapes the
+#     PATH shadow (measured: `command`/`exec`/`env sleep` all still hit the mock, so forbidding
+#     them would ban harmless forms). Matches any absolute path ending in /sleep, not just
+#     /bin and /usr/bin. Full-line comments are stripped and the match is anchored at a command
+#     position: a body-grep for a bare substring goes falsely red the moment a comment in
+#     ci-deploy.sh mentions /bin/sleep (cq-assert-anchor-not-bare-token — a comment is not inert).
+SLEEP_BYPASS_COUNT=$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" \
+  | grep -cE '(^|[;&|(]|[[:space:]])/[^[:space:];|&]*/sleep([[:space:]]|$)' || true)
+if [[ "$SEQ_PIN_OUT" == "1" ]] && [[ "$SLEEP_BYPASS_COUNT" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: seq mock still collapses loops to one iteration, and ci-deploy.sh has no absolute-path sleep"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: #6665 sleep-mock precondition (seq mock emitted '$SEQ_PIN_OUT', expected '1'; absolute-path sleep count=$SLEEP_BYPASS_COUNT, expected 0). A real seq multiplies every retry loop's iterations under a free sleep; an absolute-path sleep pays real wall clock and never reaches the mock at all."
+fi
+
+# #6665: pin the DEFAULT-INSTALL itself — the property this whole change buys, and the one nothing
+# else in this suite can see. Adding a single conjunct to create_base_mocks' condition (e.g.
+# `&& [[ -n "${MOCK_SLEEP_LOG:-}" ]]` — exactly the opt-in shape #6525 had) leaves every assertion
+# green with a byte-identical PASS name-set while the suite silently returns to ~9 minutes. Since
+# the job ceiling is now 8 minutes, that regression would surface only as an intermittent
+# deploy-script-tests cancellation with no red test naming the cause. T-6525-8 cannot serve as the
+# canary: it sets MOCK_SLEEP_LOG, so it keeps its mock under precisely that mutation.
+# Asserts the factory directly — no runner, no deploy, no wall clock.
+echo ""
+echo "--- #6665 sleep-mock install matrix (default ON; opt-out; recorder precedence) ---"
+TOTAL=$((TOTAL + 1))
+MI_DIR=$(mktemp -d)
+( unset MOCK_SLEEP_REAL MOCK_SLEEP_LOG; create_base_mocks "$MI_DIR" ) >/dev/null 2>&1
+MI_DEFAULT=$([[ -x "$MI_DIR/sleep" ]] && echo present || echo absent)
+rm -rf "${MI_DIR:?}"/*
+( export MOCK_SLEEP_REAL=1; unset MOCK_SLEEP_LOG; create_base_mocks "$MI_DIR" ) >/dev/null 2>&1
+MI_OPTOUT=$([[ -x "$MI_DIR/sleep" ]] && echo present || echo absent)
+rm -rf "${MI_DIR:?}"/*
+( export MOCK_SLEEP_REAL=1 MOCK_SLEEP_LOG="$MI_DIR/log"; create_base_mocks "$MI_DIR" ) >/dev/null 2>&1
+MI_RECORDER=$([[ -x "$MI_DIR/sleep" ]] && echo present || echo absent)
+rm -rf "$MI_DIR"
+if [[ "$MI_DEFAULT" == "present" && "$MI_OPTOUT" == "absent" && "$MI_RECORDER" == "present" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: sleep mock installs by DEFAULT, is suppressed by MOCK_SLEEP_REAL=1, and is reinstated when MOCK_SLEEP_LOG requests recording"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: #6665 install matrix (default=$MI_DEFAULT expected present; opt-out=$MI_OPTOUT expected absent; recorder-precedence=$MI_RECORDER expected present). default!=present means the suite has silently reverted to paying real sleep; opt-out!=absent means Scenario T2 can no longer attribute the speedup; recorder!=present means a test asking to record gets an empty log and fails on a missing channel."
+fi
+
 # #5145 / reframed #5159: the cron-plan loop owns its own (advisory) budget,
 # distinct from the /health loop. Post-#5159 the cron-plan check is best-effort
 # (crons re-arm async via redeploy or --poll-interval), so the budget is the
 # narrower cron_max_attempts=10 rather than the old 40.
 # Budget VALUES are runtime-untestable here: create_mock_seq collapses every
-# loop to one iteration (that mock is what keeps this suite inside
-# infra-validation.yml's 5-min job timeout — do not weaken it), so these are
-# static source pins. Regression classes guarded:
+# loop to one iteration, so these are static source pins.
+# #6665 CHANGED WHY THAT MOCK MATTERS — do not weaken it, but the old reason is
+# gone. It used to be "the seq mock is what keeps this suite inside the job
+# timeout"; since the no-op `sleep` mock became the default, the iterations it
+# would add are nearly free in wall clock, so that deterrent no longer bites.
+# What it now bounds is ITERATION COUNT under a free sleep: with sleep no-opped,
+# a real `seq` turns every retry loop into an unbounded-in-CPU spin. The mock's
+# output is pinned mechanically above (search "seq mock still collapses").
+# (The old note also cited a "5-min job timeout"; the ceiling has since been
+# 8 → 12 → 8 minutes — see infra-validation.yml. Numbers in prose rot; the pin
+# does not.) Regression classes guarded:
 #   - shared-budget collapse (cron loop reverting to $max_attempts)
 #   - loop swap (the cron budget driving the FIRST loop instead of the second)
 #   - curl-tail retune (--max-time 5 is the source of the drift guard's +5
@@ -3943,33 +4121,88 @@ fi
 # #6525 test overrides PULL_TRANSIENT_RETRY_SLEEPS="0 0", so none exercises the prod wiring — a
 # one-char edit making the default empty (`${VAR-2 4}` → `${VAR-}`) silently reverts to the pre-#6525
 # ZERO-retry bug while staying green. Here the var is UNSET (prod path) so the real "2 4" default is
-# used; MOCK_SLEEP_NOOP=1 no-ops the 6 s of real sleeps so the test stays fast. Assert EXACTLY 3 GHCR
-# pulls (1 + 2 retries) → also pins the retry COUNT (a wrong default like "9 9 9 9 9" would give 6).
+# used; the no-op `sleep` mock (installed by default since #6665) keeps the 6 s of real sleeps off
+# the wall clock. Assert EXACTLY 3 GHCR pulls (1 + 2 retries) → pins the retry COUNT (a wrong default
+# like "9 9 9 9 9" would give 6) — and the recorded schedule below pins their DURATIONS.
 echo "--- #6525 T-6525-8 (M10/M11): DEFAULT schedule (var UNSET) retries — exactly 3 pulls, transient_exhausted ---"
 T6525=$(mktemp -d)
 export MOCK_GHCR_PULL_TRANSIENT_ALWAYS=1
-export MOCK_SLEEP_NOOP=1            # no-op the real "2 4" default sleeps so the test stays fast
 unset PULL_TRANSIENT_RETRY_SLEEPS   # exercise the PROD default (2 4) — the wiring M10 leaves untested
+# Setting MOCK_SLEEP_LOG is sufficient to get the recorder even under a suite-wide
+# MOCK_SLEEP_REAL=1 opt-out — create_base_mocks makes that precedence structural, so this arm
+# needs no save/unset/restore of its own. (Found by Scenario T2: before that, the whole suite run
+# under MOCK_SLEEP_REAL=1 turned this test red at 183/184 on an empty log.)
 export MOCK_PULL_ARGS_FILE="$T6525/pulls.txt";  : > "$MOCK_PULL_ARGS_FILE"
 export MOCK_SENTRY_CAPTURE_FILE="$T6525/sentry.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
+# Record the sleep ARGUMENTS, not just the call count. The pull-count assertion below pins how MANY
+# retries the default yields, but is blind to their DURATIONS: mutating the default to "9 9" still
+# gives 3 pulls and stays green. Truncated per arm — the mock APPENDS, so a stale file would leak.
+export MOCK_SLEEP_LOG="$T6525/sleeps.txt";      : > "$MOCK_SLEEP_LOG"
 run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && T8_RC=0 || T8_RC=$?
 TOTAL=$((TOTAL + 1))
 T8_PULLS=$(grep -c '^PULL:ghcr.io/' "$MOCK_PULL_ARGS_FILE" 2>/dev/null || true)
-if [[ "$T8_RC" -ne 0 ]] && [[ "$T8_PULLS" -eq 3 ]] \
+# `2>/dev/null` on the `tr` would bind to tr's OWN stderr, not to the input redirection — a missing
+# log file makes the assignment non-zero and, under `set -euo pipefail`, aborts the WHOLE suite
+# here rather than failing this one test. Guard the read instead.
+if [[ -s "$MOCK_SLEEP_LOG" ]]; then
+  T8_SCHED=$(tr '\n' ' ' < "$MOCK_SLEEP_LOG" | sed 's/[[:space:]]*$//')
+else
+  T8_SCHED="<missing>"
+fi
+# Tail-match, not exact: $MOCK_SLEEP_LOG records EVERY sleep in the run, not just the backoff, and
+# ci-deploy.sh:1275/1278 (`sleep 5` in the GHCR-cred `until` loops) sit upstream of the pull on this
+# same path — silent only because the doppler mock answers first try. Under exact-match, any such
+# upstream sleep would red this test with a message blaming the backoff default: a confidently
+# wrong diagnosis. The tail is equally discriminating here because T8_PULLS pins the COUNT at 3,
+# so "4 2", "9 9" and "2 4 8" all still fail.
+if [[ "$T8_RC" -ne 0 ]] && [[ "$T8_PULLS" -eq 3 ]] && [[ "$T8_SCHED" == *"2 4" ]] \
    && grep -q 'image pull failed (network)' "$MOCK_SENTRY_CAPTURE_FILE" \
    && grep -q '"recovery_stage": *"transient_exhausted"' "$MOCK_SENTRY_CAPTURE_FILE"; then
-  PASS=$((PASS + 1)); echo "  PASS: default schedule (unset ⇒ 2 4) retries — exactly 3 GHCR pulls (1+2), transient_exhausted (kills the empty-default regression)"
+  PASS=$((PASS + 1)); echo "  PASS: default schedule (unset ⇒ 2 4) retries — exactly 3 GHCR pulls (1+2), backoff durations exactly '2 4', transient_exhausted (kills the empty-default regression)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-8 (rc=$T8_RC ghcr_pulls=$T8_PULLS; expected nonzero + 3 pulls + network + transient_exhausted — the DEFAULT '2 4' must produce 2 retries; an empty default gives 1 pull)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6525-8 (rc=$T8_RC ghcr_pulls=$T8_PULLS sched='$T8_SCHED'; expected nonzero + 3 pulls + sched '2 4' + network + transient_exhausted — the DEFAULT '2 4' must produce 2 retries at 2s then 4s; an empty default gives 1 pull)"
   echo "        sentry:"; sed 's/^/          /' "$MOCK_SENTRY_CAPTURE_FILE"
 fi
-unset MOCK_GHCR_PULL_TRANSIENT_ALWAYS MOCK_SLEEP_NOOP MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
+unset MOCK_GHCR_PULL_TRANSIENT_ALWAYS MOCK_SLEEP_LOG MOCK_PULL_ARGS_FILE MOCK_SENTRY_CAPTURE_FILE
 rm -rf "$T6525"
+
+# T-6665-CAP: the invocation cap must FIRE, and must NAME itself on a channel no call site can
+# discard. The cap's whole value is converting a wall-clock-gated hot spin (ci-deploy.sh:2603, a
+# 70-minute 100%-CPU spin at the default CRON_DRAIN_TIMEOUT=4200) into a fast, named failure — a
+# claim worth nothing unless exercised, since the mock's own stderr is swallowed at 18 call sites.
+# Drives 3 sleeps against a cap of 2. Uses its OWN marker path so the suite footer stays clean.
+echo "--- #6665 T-6665-CAP: sleep-mock invocation cap fires and names its own cause ---"
+CAPTMP=$(mktemp -d)
+CAP_MARKER_SAVED="$MOCK_SLEEP_CAP_MARKER"
+export MOCK_SLEEP_CAP_MARKER="$CAPTMP/cap.txt"; : > "$MOCK_SLEEP_CAP_MARKER"
+# Setting MOCK_SLEEP_LOG is what makes this arm SELF-SUFFICIENT: it forces the mock in via the
+# recorder-precedence branch of create_base_mocks, so the test still exercises the cap when the
+# whole suite runs under the MOCK_SLEEP_REAL=1 opt-out (Scenario T2). Without it this test reds
+# under T2 for a missing mock rather than a real regression — the same defect T2 caught in
+# T-6525-8, found here by running the mutation battery's control arm under the opt-out.
+# It also lets the arm assert HOW MANY sleeps happened, so "the cap fired" is pinned to a
+# specific invocation count rather than to any nonzero rc.
+export MOCK_SLEEP_LOG="$CAPTMP/sleeps.txt"; : > "$MOCK_SLEEP_LOG"
+export MOCK_SLEEP_MAX_CALLS=2
+export MOCK_GHCR_PULL_TRANSIENT_ALWAYS=1
+export PULL_TRANSIENT_RETRY_SLEEPS="0 0 0"   # 3 retries ⇒ 3 sleeps ⇒ exceeds cap=2
+run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" >/dev/null 2>&1 && CAP_RC=0 || CAP_RC=$?
+TOTAL=$((TOTAL + 1))
+CAP_HITS=$(grep -c 'MOCK_SLEEP_CAP_EXCEEDED' "$MOCK_SLEEP_CAP_MARKER" 2>/dev/null || true)
+CAP_SLEEPS=$(wc -l < "$MOCK_SLEEP_LOG" 2>/dev/null | tr -d ' ' || echo 0)
+if [[ "$CAP_RC" -ne 0 ]] && [[ "$CAP_HITS" -eq 1 ]] && [[ "$CAP_SLEEPS" -eq 3 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: invocation cap fired on the 3rd sleep past a cap of 2 and named itself exactly once in a channel the call site's >/dev/null cannot swallow"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: T-6665-CAP (rc=$CAP_RC cap_hits=$CAP_HITS sleeps=$CAP_SLEEPS; expected nonzero rc + EXACTLY 1 MOCK_SLEEP_CAP_EXCEEDED line in \$MOCK_SLEEP_CAP_MARKER + exactly 3 recorded sleeps — 0 hits means the cap never fired or its diagnostic was swallowed, >1 means the report-once guard regressed into a log flood, sleeps!=3 means the mock was not installed for this arm)"
+fi
+unset MOCK_SLEEP_MAX_CALLS MOCK_GHCR_PULL_TRANSIENT_ALWAYS PULL_TRANSIENT_RETRY_SLEEPS MOCK_SLEEP_LOG
+export MOCK_SLEEP_CAP_MARKER="$CAP_MARKER_SAVED"
+rm -rf "$CAPTMP"
 
 # T-6525-9 (pattern/code-quality F1): PULL_TRANSIENT_RETRY_SLEEPS="" DISABLES the retry. This locks
 # the `-` (not `:-`) default contract: an empty value yields an empty array → max=0 → exactly 1 pull,
 # no retry. Under the old buggy `:-`, empty would fall back to "2 4" and give 3 pulls → this test
-# FAILS, catching the regression. max=0 means no sleep is ever reached, so no MOCK_SLEEP_NOOP needed.
+# FAILS, catching the regression. max=0 means no sleep is ever reached, so the sleep mock is moot here.
 echo "--- #6525 T-6525-9: PULL_TRANSIENT_RETRY_SLEEPS=\"\" DISABLES retry (break-glass lever) — 1 pull ---"
 T6525=$(mktemp -d)
 export MOCK_GHCR_PULL_TRANSIENT_ALWAYS=1
@@ -4974,6 +5207,20 @@ rm -f "$T21_LIB"
 
 # Restore strict mode for the summary/exit.
 set -e -o pipefail
+
+# #6665: surface a sleep-cap fire BY NAME. Any test whose run_deploy hot-spun under the no-op
+# `sleep` aborted with a bare nonzero rc, which reads as an ordinary assertion failure naming the
+# wrong cause (the mock's stderr is discarded at 18 call sites, and $MOCK_DIR is removed by
+# run_deploy's EXIT trap). This is the one channel that survives, so report it adjacent to the
+# results line where it cannot be mistaken for an assertion message.
+if [[ -s "$MOCK_SLEEP_CAP_MARKER" ]]; then
+  TOTAL=$((TOTAL + 1)); FAIL=$((FAIL + 1))
+  echo ""
+  echo "  FAIL: sleep-mock invocation cap fired — a wall-clock-gated loop hot-spun under the no-op sleep."
+  echo "        This is the named cause; the failing assertion above will name a different one."
+  sort -u "$MOCK_SLEEP_CAP_MARKER" | sed 's/^/          /'
+fi
+rm -f "$MOCK_SLEEP_CAP_MARKER"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
