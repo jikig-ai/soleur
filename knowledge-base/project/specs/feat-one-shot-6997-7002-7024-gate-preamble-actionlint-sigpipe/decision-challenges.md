@@ -203,3 +203,48 @@ Recorded as a factual correction, not a direction change. No operator decision r
 case was a live fail-open and wrote an AC demanding `rc=141` from it. That AC was unachievable. Asserting an
 unmeasured property is precisely the defect class all three issues are about, so the correction is logged
 rather than quietly edited.
+
+---
+
+## DC-6 — #7024's sentry case IS a live fail-open, reversing DC-5 (factual correction; no operator decision required)
+
+**DC-5 above recorded** that `tests/scripts/test-sentry-full-root-apply.sh` was *not* a live
+fail-open: `apply-sentry-infra.yml` strips to ~16.8 KB against a 65,536-byte pipe buffer, and
+ten runs with `-target=` injected at the top returned `0` every time. On that basis the plan
+filed all of #7024 as a latent shape, wrote AC18 to require `rc=141` only from a **synthetic**
+producer, and explicitly forbade any AC demanding it from the real input.
+
+**That measurement was under-powered and its conclusion is wrong.** Re-measured at `/work`
+time — 100 runs, binaries pinned under `env -i PATH=/usr/bin:/bin`, positive control
+(`yes` into a quiet grep) confirmed firing at 141:
+
+```
+rc=141 -> 2 ; rc=0 -> 98
+```
+
+**~2%.** A 10-run sample had a ~82% chance of observing zero of those
+(`0.98^10 ≈ 0.82`), so DC-5's all-zero result was the *likely* outcome even with the defect
+fully live. This is the same insufficient-power trap recorded in
+`2026-07-27-my-ab-could-not-resolve-the-effect-i-concluded-from-it.md`, one issue later.
+
+**Why the buffer argument does not hold.** The pipe buffer bounds how much a producer can
+write *before blocking*; it does not stop the consumer exiting first. `grep -q` exits on its
+first match and closes the pipe, and any write the producer has not yet completed then takes
+EPIPE. A total size under the buffer makes the race **narrow**, not impossible.
+
+**Severity, stated plainly.** `_has_executable_target` is a POSITIVE predicate, so `rc=141`
+reads as "no `-target=` found" and T1 reports **ok**. That is a live FAIL-OPEN, roughly 1 run
+in 50, in the #6074 guard on `terraform destroy` reachability for the Sentry root.
+
+**What changed in the PR.** The fix was already planned and is unchanged — the shape is
+converted either way. What changed is the *claim*: the PR body and ADR-adjacent prose now
+describe a live intermittent fail-open rather than a prophylactic cleanup, and the durable
+arm (T4b) guards the FIXED predicate on the REAL input over 40 runs instead of asserting an
+absence of risk. AC18's synthetic requirement stands, and the arm additionally pins the
+producer family — measured, a `cat`-based probe yields 141 in **0/50** runs while `grep -v`
+yields it in **50/50**, so a `cat` probe would have been vacuous.
+
+**Recorded rather than silently fixed** because DC-5 is itself an entry that exists to log a
+correction. Overwriting it would hide that the correction needed correcting — and the reason
+it did is exactly the property all three issues are about: a check (here, a measurement) that
+cannot resolve the thing it is asked about is indistinguishable from one that found nothing.
