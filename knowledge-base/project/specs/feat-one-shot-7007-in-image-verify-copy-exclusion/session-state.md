@@ -3,7 +3,31 @@
 ## Plan Phase
 - Plan file: `knowledge-base/project/plans/2026-07-28-perf-ci-in-image-verify-copy-exclusion-plan.md`
 - Status: complete (v3 — plan-review + deepen applied)
-- Paused at operator request after plan; `/work` not yet started.
+- Paused at operator request after plan; resumed on "please continue".
+
+## Work Phase
+- Status: implementation complete; RED/GREEN/mutation + L2 rehearsal all executed.
+- RED (naive body): failures exactly **{3, 5, 6}** as the plan predicted; assertion 5 RAN (not SKIP).
+- GREEN: 8/8, 0 FAIL, 0 SKIP.
+- Mutation (Phase 3): sandbox copy baseline 8/8 → `set -euo pipefail` mutated to `set -eu`
+  (mutation confirmed landed via `diff`) → assertion 5 RED with the predicted message
+  ("unreadable member produced exit 0 — DEST is silently truncated"). R5 is tested, not asserted.
+- AC6: in-image `diff -rq` parity clean, `node_modules` + `infra/.terraform` absent,
+  `infra/.terraform.lock.hcl` survived, all three `stat -c %U` lines `root`.
+- AC7 (never run before): `npm ci --no-audit --no-fund` in the filtered `/build` exited 0,
+  added 1357 packages, 827 top-level `node_modules` entries — confirms the excluded tree is
+  genuinely discarded-and-rebuilt by the very next command.
+- A/B re-measured at /work time (2 interleaved pairs, pinned digest, warm tree with the real
+  247 MB provider cache staged in): **24.6–28.1 s / 2.6 GB → 0.44 s / 30 MB** (~57×). Supersedes
+  the plan's 22.96 s / 2.3 GB → 0.48 s / 35 MB, which was measured against a different tree.
+- AC5 lint green; trap-tempfile-ownership 20/20 green; AC1 grep pair green.
+- SO-1 filed as issue **#7043** (labels + milestone reconciled via `gh issue view`).
+- **L3 paid end-to-end: NOT RUN** — both helpers require `ANTHROPIC_API_KEY` and drive a real
+  Haiku turn, and neither CI gate's trigger regex names the changed files.
+
+### Follow-up net flow
+Closing 1 (#7007) / filing 1 (#7043) / **net 0**. #7043 is a genuine posture question about a paid
+gate that cannot be verified without the paid path — not inlineable.
 
 ### Errors
 None. All deepen-plan halt gates (4.5–4.10) passed; KB citations, rule IDs, and GitHub labels verified to resolve.
