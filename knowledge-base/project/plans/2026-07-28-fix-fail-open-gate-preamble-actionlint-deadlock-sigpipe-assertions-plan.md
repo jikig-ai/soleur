@@ -9,7 +9,8 @@ branch: feat-one-shot-6997-7002-7024-gate-preamble-actionlint-sigpipe
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 status: draft
-revision: v3 (post six-agent plan-review — see § Plan-Review Revisions)
+revision: v4 (post six-agent plan-review + deepen-plan — see § Plan-Review Revisions and § Research Insights)
+deepened: 2026-07-28
 ---
 
 # fix: close three checks that cannot report
@@ -191,12 +192,22 @@ helper drift **does not arise**; one byte-exact diff instead of 13 normalized on
 
 ### V11 — no call site suppresses rc, but the contract is unenforced
 
-All 19 `if ! <gate>` sites are non-suppressing. **v1's stated reason for putting asserts inside the function
-was also wrong:** `set -e` **is** re-enabled before every gate `source` (e.g. `:1288` immediately precedes
-`:1293`), so a file-scope failure fails **closed**, not open. **The correct reason is that the asserts
-consume `$plan_json`, a function parameter that does not exist at file scope.** Note the shapes that
-actually suppress are `|| true`, `|| echo`, pipelines, un-negated `if <gate>`, and command substitution —
-**not** a bare command.
+All 19 `if ! <gate>` sites are non-suppressing. **v1's stated reason for putting the asserts inside the
+function was wrong — and the first correction was imprecise, so here is the measured version** (a
+deepen-plan verify-the-negative sweep caught it):
+
+- `set -e` is **armed at every gate `source` line**, but it is **not re-armed adjacent to each one**. Only the
+  *first* gate source per step has a fresh `set -e` a few lines above (`:1288`→`:1293`, `:1476`→`:1481`,
+  `:1695`→`:1700`, `:2392`→`:2397`, `:2623`→`:2628`, `:2817`→`:2822`, `:3249`→`:3254`, `:4043`→`:4050`).
+  The eight `stock-preflight-gate.sh` sources (`:1320, :1508, :1730, :2103, :2431, :3299, :3724, :4078`) and
+  `registry-luks-recut-gate.sh`'s at `:2086` inherit it from 27-37 lines earlier — **with no intervening
+  `set +e`**. The *conclusion* holds (a file-scope failure would fail **closed**), but "re-enabled shortly
+  before every source" was not accurate.
+- **The load-bearing reason is that the asserts consume `$plan_json`, a function parameter that does not
+  exist at file scope.** That reason is independent of `set -e` state, which is why it is the one to cite.
+
+Note the shapes that actually suppress rc are `|| true`, `|| echo`, pipelines, un-negated `if <gate>`, and
+command substitution — **not** a bare command.
 
 ### V12 — #7024: a latent shape, not a live fail-open (CORRECTED)
 
@@ -302,6 +313,80 @@ deferral issue.
 
 ---
 
+## Research Insights (deepen-plan)
+
+Deepened 2026-07-28. Gates run: 4.6 User-Brand Impact **PASS**, 4.7 Observability **PASS** (all five fields
+non-empty, no `ssh `), 4.8 PAT-shape **PASS** *(verified by exit code, not empty output — the trap this plan
+itself warns about)*. Not triggered: 4.5 (the only hits are `timeout(1)` and "unreachable" describing
+*SIGPIPE* — no network symptom, and the plan drives no `terraform apply`), 4.55 (no serving surface taken
+offline), 4.9 (no UI surface), 4.10 (no store or new cross-component connection).
+
+### Verify-the-negative sweep — 20 of 21 absolute claims confirmed, 1 corrected
+
+Every negative/absolute claim in § Verified Facts was re-grepped independently. **20 CONFIRMED**; the one
+CONTRADICTION is fixed in V11 above (`set -e` is *armed* at every gate source but not re-armed *adjacent* to
+each; the conclusion held, the wording did not). Two incidental confirmations worth carrying into
+implementation:
+
+- The cutover body's only `<<` occurrences are **herestrings** (`<<<`) at body lines 330, 700, 1087, 1274,
+  1435 — **not heredocs**. The verbatim move preserves them untouched, and it confirms the body already uses
+  the blessed form this PR is spreading elsewhere.
+- `.claude/hooks/grep-q-pipe-guard.test.sh:50` — the guard's own probe line matches its forbidden pattern.
+  This is the mechanical proof behind Phase 7.5's "do not promote it to `scripts/`".
+
+### Precedent-diff gate (Phase 4.4) — what to copy for each new deliverable
+
+**A. `tests/scripts/lib/gate-suite-harness.sh` — NO precedent; it would be the first test-support lib under
+`tests/scripts/lib/` (every other non-`.jq` file there is a gate).** The path-resolution idiom is
+established — `_<ABBREV>_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`
+(`git-data-host-birth-gate.sh:72-76`; also `scripts/audit-ruleset-bypass.sh:47`). It is **sourced, not
+invoked, so it needs no `run_suite` registration**. The `if ! declare -F` guard is a gate idiom and is
+probably unnecessary for a utility — decide explicitly.
+
+> **The extraction is NOT a pure move — it forces two reconciliations. Do these deliberately, not by
+> picking whichever copy is open:**
+>
+> 1. **`rc_entry` has DRIFTED.** `test-web-host-replace-gate.sh:54-57` emits `"before":{},"after":{}`; the
+>    other three (`test-plan-gate-preamble.sh:41-44`, `test-git-data-host-birth-gate.sh:64-67`,
+>    `test-web-host-birth-gate.sh:48-51`) emit `"before":null,"after":{}`. **This is semantic, not
+>    cosmetic** — in a terraform plan `before: null` means *create* and `before: {}` means *pre-existing*,
+>    so the two fixture generators build materially different plans. Pick the correct form, state why, and
+>    re-run the affected suite.
+> 2. **`check()` is POLYMORPHIC across three signatures** — `(name, fn, want_rc, needle, …)` in
+>    `test-plan-gate-preamble.sh:53-64`; `(name, want_rc, needle, plan)` in
+>    `test-git-data-host-birth-gate.sh:184-193`; and a 5th `key` parameter in the two web-host suites
+>    (`:86-97`, `:113-124`). A single shared `check` therefore needs either a common signature or thin
+>    per-suite wrappers. `mk_plan` alone is byte-identical across all four and is a clean move.
+
+**B. The `ci.yml` actionlint hang guard — strong precedent for installation, none for the exit-code branch.**
+- House style for lint steps: `ci.yml:117-118`, `:130-131`, `:139-147` — plain `name:` + `run:`, no ceremony.
+- **Pinned third-party binary install: `ci.yml:644-652` (gitleaks)** — `GITLEAKS_VERSION` + `GITLEAKS_SHA256`
+  in `env:`, `curl -sSLo`, `echo "<sha>  file" | sha256sum -c -`, `tar -xzf`, `chmod +x`,
+  `sudo mv … /usr/local/bin/`, then a version echo. **Copy this shape for actionlint** — Phase 8.1 said
+  "pinned release download" and this is the repo's exact form, including the checksum verification.
+- **Host job: `lint-bot-statuses` (`ci.yml:122-186`)** — the existing lint aggregator, already does
+  `actions/checkout` at `:125`. The new step goes there, after checkout.
+- **No precedent for tolerating a non-zero exit while failing on a specific code.** The `rc=124`-only branch
+  is genuinely novel here — flagged so review scrutinizes it rather than assuming a house pattern exists.
+
+**C. Extracting the cutover body to `scripts/cutover-inngest.sh` — strong precedent, and one honest gap.**
+- Six existing invocations of the exact shape: `apply-web-platform-infra.yml:1968, :2196`;
+  `apply-sentry-infra.yml:308, :321, :407, :621`. Confirms `scripts/` (not `.github/scripts/`) is the home.
+- Script shape: shebang line 1, then a header comment block, then `set -euo pipefail`
+  (`sentry-create-gate.sh:1,34`; `registry-pull-path-health.sh:1,72` uses `set -uo pipefail`). **Note the
+  `set` line is not line 2** — it follows the header. The extracted script should carry a header explaining
+  it is workflow-invoked, matching `registry-pull-path-health.sh:1-50`.
+- **Known gap, recorded rather than papered over:** every other workflow-invoked script in `scripts/` has a
+  companion `tests/scripts/test-<name>.sh` registered in `test-all.sh` (`:380` for
+  `registry-pull-path-health`, `:418` for `sentry-create-gate`). `scripts/cutover-inngest.sh` will **not**
+  have one — a suite for a 1597-line cutover orchestrator is its own project. This is still a strict
+  improvement on the status quo (the body has no test today *and* cannot be linted), and `shellcheck` now
+  covers it where nothing did before. Name it in the new ADR alongside the `.github/scripts/`-is-unswept
+  note so the gap is a recorded decision, not an accident.
+- No naming convention distinguishes workflow-only from operator-runnable scripts; the distinction lives in
+  the file header. `scripts/lint-orphan-test-suites.sh:10-12` is the documented precedent for a script that
+  deliberately ships **without** a `.test.sh` — cite it for `lint-workflows.sh` (Phase 8.2).
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Claim supplied with the task | Reality | Response |
@@ -405,6 +490,17 @@ deferral issue.
     self-proving and must leave its 55 arms green. This dedupes four existing `mk_plan` copies and, more
     importantly, means the subtle mutation contract is written **once** instead of nine times (nine
     hand-written copies is nine chances at a vacuous arm — R1, the top risk).
+    **It is NOT a pure move — resolve two reconciliations deliberately** (deepen-plan precedent gate):
+    - **`rc_entry` has DRIFTED and the difference is semantic.** `test-web-host-replace-gate.sh:54-57` emits
+      `"before":{}`; the other three emit `"before":null`. In a terraform plan `before: null` means *create*
+      and `before: {}` means *pre-existing*, so the two build materially different fixtures. Pick one, record
+      why, re-run the affected suite.
+    - **`check()` is polymorphic across three signatures** (`test-plan-gate-preamble.sh:53-64`;
+      `test-git-data-host-birth-gate.sh:184-193`; a 5th `key` param in the two web-host suites). Choose a
+      common signature or thin per-suite wrappers. `mk_plan` alone is byte-identical and moves cleanly.
+    No `run_suite` registration — the harness is sourced, not invoked. Resolve its own path with the
+    established idiom `_<ABBREV>_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`; the `if ! declare -F`
+    guard is a *gate* idiom and is likely unnecessary here — decide explicitly rather than copying it.
 1.6 Add the **drift check inside `test-plan-gate-preamble.sh`** (~10 lines, no new file, already registered):
     re-run the corrected derivation; assert empty except a two-element exclusion array whose comments cite the
     Non-Goal 2 issue; assert **≥ 12 gate files scanned**; and assert no `tests/scripts/lib/*.sh` containing
@@ -508,9 +604,16 @@ plan_gate_assert_classifiable  "<gate_name>" "$plan_json" || return 1
     normalization anywhere** — normalization is precisely the transform that would hide a dedent error. The
     body's existing first line `set -euo pipefail` travels with it; **do not add a second**.
     **Home:** `scripts/`, not `.github/scripts/` — the latter is six `check-*` PR-quality guards feeding a
-    required check via `test/run-all.sh`, and every precedent this plan cites
-    (`apply-sentry-infra.yml:299/308/321/605`, `apply-web-platform-infra.yml:712`) points at `scripts/` or
-    `tests/scripts/` (V15).
+    required check via `test/run-all.sh`, while six existing workflow-invoked scripts use exactly this shape
+    from `scripts/` (`apply-web-platform-infra.yml:1968, :2196`; `apply-sentry-infra.yml:308, :321, :407,
+    :621`). **House shape: shebang on line 1, then a header comment block explaining it is workflow-invoked,
+    then the `set` line** (`sentry-create-gate.sh:1,34`; `registry-pull-path-health.sh:1,72`) — the `set` line
+    is *not* line 2. Here the `set -euo pipefail` arrives as the body's own first line, so the header sits
+    between the shebang and it.
+    **Recorded gap:** every other workflow-invoked script in `scripts/` has a companion
+    `tests/scripts/test-<name>.sh` registered in `test-all.sh` (`:380`, `:418`). This one will not — a suite
+    for a 1597-line cutover orchestrator is its own project. It remains a strict improvement (the body has no
+    test today *and* cannot be linted; shellcheck will now cover it). Name the gap in the new ADR.
 6.3 Reduce the step to `run: bash "${GITHUB_WORKSPACE}/scripts/cutover-inngest.sh"`, keeping `name:` and
     `env:` (incl. the conditional `DOPPLER_TOKEN_INNGEST_ARM`) unchanged. **`if:` and `timeout-minutes:` are
     job-level (`:57`, `:59`), not step-level** — do not claim to preserve step keys that do not exist.
@@ -579,7 +682,15 @@ _has_executable_target() {
     kept actionlint out of CI. It catches the deadlock **directly** (`rc=124`) rather than via a byte-count
     proxy, needs no PyYAML and no threshold to re-tune, and gives #7002's stated defect a terminal, enforced
     criterion. **Installing actionlint on the runner is part of this step's setup** — the tool currently
-    exists on one laptop (V15), so the plan must provision it (pinned release download) rather than assume it.
+    exists on one laptop (V15), so the plan must provision it rather than assume it. **Copy the repo's
+    pinned-binary precedent verbatim — `ci.yml:644-652` (gitleaks):** `ACTIONLINT_VERSION` +
+    `ACTIONLINT_SHA256` in the job's `env:`, `curl -sSLo`, `echo "<sha>  <file>" | sha256sum -c -`,
+    `tar -xzf`, `chmod +x`, `sudo mv … /usr/local/bin/`, then a version echo. **Host it in the
+    `lint-bot-statuses` job (`ci.yml:122-186`)** — the existing lint aggregator, which already runs
+    `actions/checkout` at `:125`; the step must come after checkout. Step house style: `ci.yml:117-118`,
+    `:130-131`.
+    *The `rc=124`-only branch has **no** precedent in this repo (verified) — genuinely novel, so review
+    should scrutinize it rather than assume a house pattern exists.*
     **RED-proof:** run the same step against `origin/main`'s pre-extraction workflow → exit 1.
 8.2 `scripts/lint-workflows.sh` — the documented **local** entry point (~20 lines, **no `.test.sh`**, per the
     `lint-orphan-test-suites.sh` precedent). Wrap in `timeout`; **never pipe the tool into `head`/`tail`**;
