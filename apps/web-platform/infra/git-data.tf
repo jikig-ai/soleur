@@ -292,6 +292,14 @@ resource "hcloud_server" "git_data" {
       )
       error_message = "git_data_server_type=${var.git_data_server_type} derives ${local.git_data_arch}, but Hetzner reports architecture=${data.hcloud_server_type.git_data.architecture} (enum: x86|arm). The Doppler CLI download would be wrong-arch."
     }
+
+    # `ssh_keys` is a CREATE-TIME attribute (Hetzner injects it at first boot and never
+    # re-reads it), so a changed key ID is unappliable to a running host and Terraform
+    # resolves it as a REPLACE. Rotating `hcloud_ssh_key.default` — an operator credential
+    # rotation, not an infra change — would therefore force-replace this host and cascade
+    # to its LUKS volume attachment. Mirrors server.tf. Deliberately NOT widened to
+    # user_data: that replace is the intended replace-to-reprovision path (comment above).
+    ignore_changes = [ssh_keys]
   }
 
   # (#6977, P13) Order the LUKS passphrase BEFORE the host boots.

@@ -82,6 +82,22 @@ describe("ship Incident-PIR gate (#6813)", () => {
     expect(signals("hypothetical-only-outage.md")).toBe(false);
   });
 
+  // #7003: `### Network-Outage Deep-Dive determination` is a deepen-plan Phase 4.5
+  // TEMPLATE heading (recorded per `hr-ssh-diagnosis-verify-firewall` so an N/A
+  // skip stays auditable). Matching `Outage` inside it made the gate fire on any
+  // plan that recorded the determination, since nearly every plan carries a prod
+  // token — the #6813 structural-artifact class, recurring in a new spot.
+  test("the Network-Outage Deep-Dive determination heading alone does NOT signal", () => {
+    expect(signals("network-outage-determination-heading.md")).toBe(false);
+  });
+
+  // Both directions pinned: only the HEADING line is stripped, so a real outage
+  // claim written INSIDE that section must still signal. Without this, widening
+  // the strip to swallow the section body would stay green while blinding the gate.
+  test("a real outage claim inside that section DOES still signal", () => {
+    expect(signals("network-outage-determination-with-real-outage.md")).toBe(true);
+  });
+
   // The gate must own its own exit semantics: a no-signal run exits 1 cleanly,
   // never crashes, so a `set -euo pipefail` caller cannot misread it as an
   // infrastructure failure (the foot-gun the old inline `A && B && echo` chain had).

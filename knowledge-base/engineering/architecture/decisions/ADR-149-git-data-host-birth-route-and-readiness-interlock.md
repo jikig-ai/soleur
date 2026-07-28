@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-27
 - **Issue:** #6977
+- **Amended by:** #7003 (operator decisions DC-2, DC-3 — 2026-07-27)
 - **Supersedes / amends:** amends ADR-145 (`## Consequences`)
 - **Related:** ADR-068 (multi-host workspaces), ADR-103 (operator-applied exclusions),
   ADR-115 (dedicated-host boot convergence), ADR-130 (vendor-scope probes), ADR-143
@@ -92,7 +93,9 @@ interpolation `${sentry_dsn}` in **non-comment** template text. That choice is
 load-bearing: `templatefile` fails on a variable the caller does not supply, so the marker
 cannot exist without `git-data.tf` actually threading the DSN into the host — wiring the
 sentinel *is* the work. A comment-only back-reference to #6982 is explicitly permitted and
-is asserted **not** to release the gate.
+is asserted **not** to release the gate. This mechanism is **interim**; the release-checklist item
+titled *"Replace this interlock's mechanism with a direct assertion on the emitter resource"*
+mandates its replacement once #6982 defines one.
 
 **Scope-honest claim:** the interlock makes a dark boot unreachable **from this route**. It
 does not make it impossible — a break-glass laptop apply is unaffected by anything in this
@@ -118,14 +121,53 @@ repository. An earlier draft said "impossible"; that overstated it.
    feasibility regression — see *Alternatives*). Without it `resolveGitDataSshHost()` throws
    in production on every account deletion, so the birth converts a dormant Art. 17 path
    into a 100 %-false-alarm one. Residual 2 below has the measurement.
+   **Operator decision, 2026-07-27 (DC-3): the cut stands, and this is where it lands.** Two
+   mechanical constraints ride with it. First, `doppler_secret.git_data_ssh_host` MUST
+   single-source the address from
+   `hcloud_server_network.git_data.ip` — never a fresh copy of the `10.0.1.20` literal. (The
+   nearest precedent is #6415, which removed exactly such a duplicate on the sibling
+   `hcloud_server_network.registry`; note it routed that resource through a `local` that still
+   holds the string, so this mandate goes one step further and reads the resource attribute
+   itself.) Second, its `OPERATOR_APPLIED_EXCLUSIONS` entry MUST land in the **same change**,
+   because it is the absence of that entry that makes `terraform-target-parity.test.ts` red on
+   landing and drives the remedy that wedges `main`.
 6. Correct the `hcloud_firewall_attachment.git_data` entailment rule if it has not already
    been corrected — see *Requirement arm split by entailment*.
-7. Clear the DO-NOT-DISPATCH banner in `git-data-birth.md`.
+7. **Replace this interlock's mechanism with a direct assertion on the emitter resource, and
+   delete this gate's `${sentry_dsn}` text check.** Operator decision, 2026-07-27 (DC-2). Once
+   **#6982** defines the emitter as a real Terraform resource,
+   `tests/scripts/lib/git-data-birth-readiness-gate.sh` must assert **that resource** rather than
+   grep template text, and the gate's text check must be **removed**, not kept alongside it.
+   **What is deleted is the gate's grep, not the interpolation it greps for:** the `${sentry_dsn}`
+   interpolation in `cloud-init-git-data.yml` is required by item 1 and must stay — removing it
+   would un-wire the DSN and recreate the dark-host condition this ADR exists to close. This
+   answers `dhh-rails-reviewer`'s *"prose with a `grep` wrapper"* and `architecture-strategist`'s
+   structural objection at the root rather than by wrapping them. The falsification recorded under
+   DC-2 does **not** license skipping this: what it killed was reading `heartbeat-manifest.ts`'s
+   already-true `kind: "timer"` declaration — not reading the emitter's own resource, which cannot
+   exist before #6982 creates it. Until then the `${sentry_dsn}`-pinned sentinel stays exactly as
+   shipped. **Accepted cost: a mandated interlock rewrite, not an optional cleanup.**
+   **Two consequences to carry, not to assume away.** (a) Completing this retires the only
+   mechanical check on item 1's threading. The replacement asserts a *different* fact — that a
+   Terraform resource exists, not that `sentry_dsn` was threaded into the host's cloud-init — so
+   item 1's threading becomes mechanically unenforced unless the replacement also asserts it.
+   That is an accepted consequence of the decision, recorded here so it is not mistaken for
+   coverage. (b) The gate today runs BEFORE the plan, on a cloud-init path, so an operator learns
+   the route is held in seconds without contacting a provider (see
+   `apply-web-platform-infra.yml`). A resource assertion that reads the plan must move after the
+   plan step and forfeits that fast refusal; one that greps `git-data.tf` source keeps it but is
+   still text-grepping. Which to choose is #6982's call — the pre-plan placement is worth
+   preserving if it can be.
+   **If #6982 ships the emitter without introducing a Terraform resource to assert**, this item is
+   not satisfiable as written: the sentinel stays, and that outcome must be recorded here before
+   item 8 is cleared.
+8. Clear the DO-NOT-DISPATCH banner in `git-data-birth.md`. *(Terminal: `git-data-birth.md`
+   instructs that it be cleared only when every item above is done.)*
 
 **The gate mechanically enforces only the THREADING half of item 1** — that `sentry_dsn`
 reaches non-comment template text, which `templatefile` makes impossible to fake. It cannot
 verify the emitter actually *emits*: a non-comment line that merely references the variable
-releases it. Items 2–7 are not machine-checked at all, and the gate's own success message
+releases it. The remaining items are not machine-checked by this gate, and its own success message
 says so. A gate believed to cover more than it does is worse
 than one whose scope is written down.
 
@@ -230,8 +272,14 @@ rather than adopting, so a hand-created config makes the birth apply fail and th
    state. "Unreachable today" was true; "unreachable once this route is used" was not.
 
    Consequence: **`GIT_DATA_SSH_HOST` must be produced before the first dispatch**, and it
-   is item 5 of the release checklist below. It was absent from the checklist entirely,
-   so #6982 could have satisfied every listed item and still shipped this.
+   is the release-checklist item titled *"Produce `GIT_DATA_SSH_HOST`"* above. It was absent
+   from the checklist entirely, so #6982 could have satisfied every listed item and still
+   shipped this.
+
+   The DC-3 disposition was **upheld by the operator on 2026-07-27**, with its scope corrected
+   to the pre-birth window only — see the DC-3 RESOLVED block in
+   `knowledge-base/project/specs/feat-one-shot-6977-git-data-birth-route/decision-challenges.md`.
+   The acceptance recorded there does not extend to the post-birth state this residual describes.
 3. **Empty-store Art. 17 silent success.** Post-birth and pre-cutover the store is empty and
    `git-data-remove.sh` is idempotent, so an erasure request exits 0 and records **success**
    for a repo the store never held. Closing this needs a birth-completion marker the app can
@@ -247,5 +295,5 @@ rather than adopting, so a hand-created config makes the birth apply fail and th
 | Inline the gate in the workflow YAML | **Rejected on evidence.** Untestable, and it fails the parity job⇄gate pairing. An earlier draft then shipped the *interlock* inline, contradicting itself; corrected. |
 | Ship the route with no interlock, hold by convention | **Rejected.** A capability held only by prose is held until the first person who reads the runbook and not the plan — and #6982 contains items ADR-115 makes unfixable after birth. |
 | Target the heartbeat too | **Rejected.** The feeder already shipped and is web-host-resident; creating a monitor this route cannot arm is the #6537 fed-but-paused shape. #6548 owns it. |
-| Include `doppler_secret.git_data_ssh_host` | **Cut** — a feasibility regression: it would make `terraform-target-parity.test.ts` red on landing, and the natural remedy drags `hcloud_server.git_data` into the per-merge plan and wedges every merge to `main`. Moved to #6982; the dissent is recorded in the PR's decision-challenges. |
+| Include `doppler_secret.git_data_ssh_host` | **Cut** — a feasibility regression: it would make `terraform-target-parity.test.ts` red on landing, and the natural remedy drags `hcloud_server.git_data` into the per-merge plan and wedges every merge to `main`. Moved to #6982. **The operator upheld the cut on 2026-07-27 (DC-3)**, adding two mechanical constraints now recorded in release-checklist item 5: single-source the address from `hcloud_server_network.git_data.ip`, and land the `OPERATOR_APPLIED_EXCLUSIONS` entry in the same change. The dissent is recorded in `knowledge-base/project/specs/feat-one-shot-6977-git-data-birth-route/decision-challenges.md` (PR #6989); the operator's decision upholding it was added to that same file by #7003. |
 | Ship gate + suite now, enum + job in #6982 | **Considered and declined by the operator.** It would delete the interlock entirely by removing the capability, but #6977 would no longer deliver an executable route and would close on a partial. Recorded as DC-1. |

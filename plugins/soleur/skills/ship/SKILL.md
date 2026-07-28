@@ -321,10 +321,16 @@ For each new source file, check if a corresponding test file exists (e.g., `foo.
 
 **Interactive mode:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
 
-Then run the project's full test suite (matches CI):
+Then run the project's full test suite. It is CI parity MINUS `apps/web-platform/infra/`, whose
+suites are registered only in `.github/workflows/infra-validation.yml` — so when the diff touches
+that directory, `run-registered-suites.sh` is required too and `test-all.sh` says so in its
+preamble. Calling `test-all.sh` alone "matches CI" is what produced #6969: a green summary read as
+evidence for infra it never executed, at the last gate before merge.
 
 ```bash
 bash scripts/test-all.sh
+# AND, when the diff touches apps/web-platform/infra/ (derives its list from infra-validation.yml):
+bash apps/web-platform/infra/run-registered-suites.sh
 ```
 
 **If tests fail:**
@@ -767,7 +773,7 @@ fi
 
 **Detection:**
 
-The trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (per `cq-when-a-plan-prescribes-a-validator-guard-or` — guard-surface coupling). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
+The trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (guard-surface coupling: a gate's regex, its documentation block, and its fixtures are one unit — changing any one alone silently blinds the gate). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
 
 ```bash
 DEPLOY_PIPELINE_FIX_TRIGGERS=(

@@ -445,7 +445,17 @@ EXPECTED_TAGS=$(
 # binary basename). Fold these into EXPECTED so AC3 still enforces logger-tag lockstep
 # (a new/removed logger tag not mirrored here fails CI) without flagging the binary
 # channel. Keep this list to genuine unit-binary identifiers, not a drift-guard bypass.
-SYSTEMD_UNIT_IDENTIFIERS="webhook"
+#
+# `sshd` (2026-07-28 incident): sshd(8) sets SYSLOG_IDENTIFIER=sshd natively — there is no
+# SyslogIdentifier= line in infra/*.sh to derive it from, because the unit ships with the OS
+# rather than being one of ours. Same category as `webhook`, opposite reason: webhook inherits
+# its tag from the ExecStart basename, sshd sets its own. Verified on web-1: 193/200 sampled
+# auth records carry exactly `sshd`. Its vector.toml entry exists so "did anyone authenticate
+# to prod?" is answerable from Better Stack instead of requiring an SSH session into the host
+# (hr-no-ssh-fallback-in-runbooks). Removing it here without removing it from vector.toml — or
+# vice versa — fails AC3; they are a lockstep pair.
+SYSTEMD_UNIT_IDENTIFIERS="webhook
+sshd"
 EXPECTED_TAGS=$(printf '%s\n%s\n' "$EXPECTED_TAGS" "$SYSTEMD_UNIT_IDENTIFIERS" | grep -v '^$' | sort -u)
 # Array entries are quoted strings on their own lines inside the include_matches
 # block; pull the bare tag from each.

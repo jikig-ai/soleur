@@ -814,7 +814,7 @@ ensure_worktree_identity() {
 
   if (( ! have_global )); then
     # Nothing to set from. If local is bot-shaped and uncorrectable, warn (the commit will
-    # be bot-authored and bounce at the CLA gate, hr-cla-signed-author-before-merge).
+    # be bot-authored and bounce at the CLA gate, wg-cla-signed-author-before-merge).
     if [[ -n "$local_email$local_name" ]] && _identity_is_bot "$local_email" "$local_name"; then
       headless_or_stderr warn "ensure_worktree_identity: $worktree_path has a bot-shaped local identity and no human --global to override it; commits may fail the CLA author gate."
     fi

@@ -28,6 +28,17 @@ Both mutants confirmed killed by running the true SUT vs each mutant against an 
 
 For a guard that compares a **count** to a **threshold**, the fixture set must include a point where the *plausible wrong operator* gives a *different verdict* than the correct one. `<`, `<=`, `==`, `!=`, `>` all agree at the single boundary point `(N, N)` and at `(N, N-1)`; they diverge only at `(N, N+1)` (over-threshold) and at a second magnitude `N≥2`. Testing only at the boundary proves nothing about which operator you wrote. This is the documented "fixture-space cardinality" anti-pattern (`cq`-adjacent; the 2026-07-19 "my own mutation battery was the false confidence" learning) — and it recurred in *my* work despite the AGENTS warnings, which is exactly why it's worth a concrete instance.
 
+**Recurrence, 2026-07-28 (#7004 PR 0).** This class hit again four days later, in a different
+language and subsystem. `tmpfs-guard.sh`'s count alarm compares `growth >= COUNT_TRIGGER`; every
+fixture cleared or missed the threshold by 5x-10^5x, so **replacing the whole comparison with a
+hardcoded `growth >= 7` passed all 49 assertions** — as does any constant in roughly [2,12]. The
+production default of 5000, the `TMPFS_GUARD_COUNT_TRIGGER` env override, and the file's own
+documented justification for the value were all unfalsifiable. The fix is exactly the "Magnitude"
+fixture prescribed above: a boundary pair (`growth == COUNT_TRIGGER` alarms, `== COUNT_TRIGGER - 1`
+stays silent) at a small trigger, which kills the `>`/`>=` mutant, a 20% inflation, and the
+hardcoded constant in one stroke. See
+[[2026-07-28-the-fix-for-a-too-noisy-alarm-shipped-five-new-ways-for-it-to-go-silent]].
+
 Corollary: **every new `validate_*` reject branch is a distinct behavior that needs its own fixture.** A defensive code comment ("bool is an int subclass; reject explicitly") is a signal that the branch is load-bearing and therefore mutation-worthy — write the fixture that fails without it.
 
 ## Session Errors

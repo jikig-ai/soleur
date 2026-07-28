@@ -417,6 +417,15 @@ resource "hcloud_server" "registry" {
       random_password.zot_pull,
       random_password.zot_push,
     ]
+
+    # `ssh_keys` is a CREATE-TIME attribute (Hetzner injects it at first boot and never
+    # re-reads it), so a changed key ID is unappliable to a running host and Terraform
+    # resolves it as a REPLACE. Rotating `hcloud_ssh_key.default` — an operator credential
+    # rotation, not an infra change — therefore armed a force-replacement of this host AND
+    # a cascading replace of hcloud_volume_attachment.registry (the 60 GB LUKS store).
+    # Mirrors server.tf. Deliberately NOT widened to user_data: that replace is the
+    # intended replace-to-reprovision path documented at the top of this resource.
+    ignore_changes = [ssh_keys]
   }
 
   # #6244: the host does NOT reference doppler_secret.registry_betterstack_logs_token directly

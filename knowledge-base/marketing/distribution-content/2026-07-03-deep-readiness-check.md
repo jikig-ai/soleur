@@ -1,9 +1,9 @@
 ---
 title: "A 'healthy' server can lie — new deep-readiness check proves a host can actually serve you"
 type: feature-launch
-publish_date: ""
+publish_date: 2026-08-25
 channels: x, bluesky
-status: draft
+status: scheduled
 pr_reference: "#5967"
 issue_reference: "#5966"
 ---
