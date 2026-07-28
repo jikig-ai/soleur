@@ -34,7 +34,7 @@ tops out at and the observable trigger that says "do the real thing now":
   it `no-trigger`.
 
 This marker is the canonical, grep-discoverable form of the in-place deferral that
-the `wg-when-deferring-a-capability` gate prefers over filing speculative backlog
+the `wg-when-deferring-a-capability-create-a` gate prefers over filing speculative backlog
 issues. Document a deferral here, in code, and harvest makes it visible without
 converting every shortcut into phantom backlog.
 

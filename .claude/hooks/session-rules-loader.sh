@@ -114,7 +114,13 @@ emit_core_only_fallback() {
     strip_sidecar_into_global "$root/AGENTS.core.md" hr-never-git-stash-in-worktrees
     fb="$STRIPPED_OUT"
   fi
-  printf '%s' "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":$(jq -Rs . <<<"[rules-loader] FALLBACK ($reason): loaded AGENTS.core.md only"$'\n'"$fb")}}"
+  # Say what actually happened. `fb` is empty when AGENTS.core.md is absent or
+  # symlink-rejected — claiming "loaded AGENTS.core.md only" there asserts a
+  # load that did not occur, on the one path where the operator has least
+  # visibility (#7008).
+  local loaded_note="loaded AGENTS.core.md only"
+  [[ -z "$fb" ]] && loaded_note="NO rules loaded (AGENTS.core.md unreadable)"
+  printf '%s' "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":$(jq -Rs . <<<"[rules-loader] FALLBACK ($reason): $loaded_note"$'\n'"$fb")}}"
 }
 
 INPUT=$(cat 2>/dev/null || true)
@@ -195,6 +201,7 @@ fi
 # fall-back transition.
 CONTEXT=""
 FAIL_SAFE_TRIGGERED=0
+FAIL_SAFE_CAUSE=""
 for class in $CLASSES; do
   sentinel=""
   case "$class" in
@@ -208,6 +215,7 @@ for class in $CLASSES; do
     # symlink in the repo could redirect AGENTS.<class>.md to /etc/passwd or
     # a crafted payload). Reject and fall through to fail-safe.
     FAIL_SAFE_TRIGGERED=1
+    FAIL_SAFE_CAUSE="sidecar symlinked (rejected)"
     break
   fi
   if [[ -f "$sidecar" ]]; then
@@ -216,6 +224,7 @@ for class in $CLASSES; do
     CONTEXT+="$STRIPPED_OUT"
   else
     FAIL_SAFE_TRIGGERED=1
+    FAIL_SAFE_CAUSE="sidecar missing"
     break
   fi
 done
@@ -233,18 +242,27 @@ if (( FAIL_SAFE_TRIGGERED == 1 )); then
     fi
   done
   CLASSES="core docs-only rest"
-  FAIL_SAFE_NOTE=" — fail-safe: sidecar missing"
+  FAIL_SAFE_NOTE=" — fail-safe: ${FAIL_SAFE_CAUSE:-sidecar unreadable}"
 else
   FAIL_SAFE_NOTE=""
 fi
 
-# Stamp + hint — both ≤ 200 bytes per line (asserted in test 11).
+# Stamp + hint — both ≤ 200 bytes per line (asserted by the stamp-byte tests
+# in session-rules-loader.test.sh; search: 'stamp + hint').
 RULE_COUNT=$(printf '%s' "$CONTEXT" | grep -cE '^- .*\[id: ' || true)
-# Single-pipeline awk avoids the multi-line `paste -sd+ | bc` failure mode
-# where `grep -hc` emits one count per file (e.g., `"0\n5\n0\n4"`) and `bc`
-# either crashes or returns a multi-line value that violates the stamp-byte
-# contract.
-TOTAL_RULES=$(grep -hE '^- .*\[id: ' "$REPO_ROOT"/AGENTS*.md 2>/dev/null | wc -l | tr -d ' ')
+# Denominator = the AGENTS.md INDEX pointer count, a FIXED expected set.
+# Two properties matter, both learned the hard way (#7008):
+#   1. An `AGENTS*.md` glob also matches the index — one pointer per body — so
+#      it double-counts and renders a full load as "N of 2N".
+#   2. Deriving it from the sidecars ACTUALLY LOADED makes it degrade in
+#      lockstep with the numerator: a symlinked/absent AGENTS.core.md then
+#      stamps "48 of 48" (reads as full coverage) while every compliance-tier
+#      rule is missing. A fixed expected set stamps "48 of 101" instead.
+# lint-rule-ids.py enforces pointer<->body 1:1, so the index IS the corpus size.
+# "?" distinguishes "could not measure" from "measured zero" — an unreadable
+# index must not render as a plausible number.
+TOTAL_RULES=$(grep -c '^- \[id: ' "$REPO_ROOT/AGENTS.md" 2>/dev/null || true)
+[[ -z "$TOTAL_RULES" || "$TOTAL_RULES" == "0" ]] && TOTAL_RULES="?"
 CLASSES_DISPLAY="${CLASSES// /+}"
 # Loud stamp note when the over-strip guard fired: a sidecar's frontmatter strip
 # would have dropped rule bodies, so the RAW sidecar was injected instead (rules
