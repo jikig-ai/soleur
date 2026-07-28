@@ -210,7 +210,7 @@ t_filter_counts_removed_block() {
 # for the RIGHT reason, and that it will catch the shape if apply-sentry-infra.yml ever
 # grows past the pipe buffer.
 t_no_executable_target_is_not_vacuous_top_injection() {
-  local tmp; tmp=$(mktemp)
+  local tmp; tmp=$(mktemp)  # lint-trap-ownership: ok — rm -f inline below; single tmp, no exit between alloc and cleanup; bounded; matches this file's existing arms (#6734, ADR-129)
   printf '            -target=sentry_cron_monitor.synthetic_top_mutation \\\n' > "$tmp"
   cat "$WORKFLOW" >> "$tmp"
   if _has_executable_target "$tmp"; then
@@ -254,7 +254,7 @@ t_sigpipe_mechanism_is_real() {
     return
   fi
 
-  local big; big=$(mktemp)
+  local big; big=$(mktemp)  # lint-trap-ownership: ok — rm -f inline below; single tmp, no exit between alloc and cleanup; bounded (#6734, ADR-129)
   printf 'MATCH_ME_FIRST\n' > "$big"
   head -c 200000 /dev/zero | tr '\0' 'x' | fold -w 100 >> "$big"
 
@@ -295,7 +295,7 @@ t_sigpipe_mechanism_is_real() {
 #
 # So this arm guards the FIX on the REAL input rather than asserting an absence of risk.
 t_fixed_predicate_does_not_flake_on_the_real_input() {
-  local tmp; tmp=$(mktemp)
+  local tmp; tmp=$(mktemp)  # lint-trap-ownership: ok — rm -f inline below; single tmp, no exit between alloc and cleanup; bounded (#6734, ADR-129)
   printf '            -target=sentry_cron_monitor.synthetic_top_mutation \\\n' > "$tmp"
   cat "$WORKFLOW" >> "$tmp"
 

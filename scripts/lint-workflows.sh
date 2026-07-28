@@ -54,12 +54,16 @@ if ! command -v actionlint >/dev/null 2>&1; then
   exit 1
 fi
 
+# An OWNING trap, not an inline rm: the script can exit between allocation and cleanup via
+# the `set -u` / signal paths, and a leaked file in a shared /tmp is the count-shaped growth
+# tmpfs-guard cannot reclaim (#6734, ADR-129).
 out="$(mktemp -t lint-workflows.XXXXXXXX.out)"
+trap 'rm -f "$out"' EXIT INT TERM HUP
+
 timeout 120 actionlint "${TARGETS[@]}" > "$out" 2>&1
 rc=$?
 
 cat "$out"
-rm -f "$out"
 
 case "$rc" in
   0)
