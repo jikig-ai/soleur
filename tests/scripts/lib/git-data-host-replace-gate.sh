@@ -71,14 +71,36 @@
 # Usage:  source tests/scripts/lib/git-data-host-replace-gate.sh
 #         git_data_host_replace_gate <plan-json-file>   # 0=PASS, 1=ABORT
 
+# THE FAIL-CLOSED PREAMBLE (#6997). A gate that authorises destructive production
+# infrastructure must never let "I could not check" read as "it is fine". These three
+# assertions refuse a plan document the gate cannot READ, cannot CLASSIFY, or whose
+# counters did not evaluate — the shapes that otherwise score zero-of-everything and PASS.
+#
+# The `declare -F` guard makes the source idempotent: the workflow step may have sourced
+# the preamble already, in either order.
+# shellcheck source=tests/scripts/lib/plan-gate-preamble.sh
+if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
+  _GDHRG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=/dev/null
+  source "${_GDHRG_DIR}/plan-gate-preamble.sh"
+fi
+
 git_data_host_replace_gate() {
   local plan_json="$1"
-  local counts oos gvd lvd lpt replaced nic patt latt fw v
+  local counts oos gvd lvd lpt replaced nic patt latt fw
 
-  if [[ ! -f "$plan_json" ]]; then
-    echo "git_data_host_replace_gate: plan JSON not found: ${plan_json}"
-    return 1
-  fi
+  # THE ASSERTS LIVE INSIDE THE FUNCTION, AS ITS FIRST STATEMENTS, because they consume
+  # $plan_json — a FUNCTION PARAMETER that does not exist at file scope. (Not, as an
+  # earlier revision claimed, because a file-scope failure would fail open: `set -e` is
+  # armed at every gate source site in apply-web-platform-infra.yml, so a file-scope
+  # failure fails CLOSED. Getting the right answer from the wrong mechanism is still a
+  # defect when the mechanism ends up in an ADR.)
+  #
+  # `|| return 1` also catches a 127 undefined-function status, so a preamble that failed
+  # to source aborts the gate rather than silently skipping the check.
+  plan_gate_assert_readable     "git_data_host_replace_gate" "$plan_json" || return 1
+  plan_gate_assert_classifiable "git_data_host_replace_gate" "$plan_json" || return 1
+
   # Read from the STRUCTURED plan JSON (terraform show -json), never stderr.
   # EXACT-EQUALITY membership via IN(.address; allow[]) — NOT `inside`/`contains`
   # (substring matching would false-match similar addresses). Verified on jq 1.8.x.
@@ -170,14 +192,11 @@ git_data_host_replace_gate() {
   latt=$(echo "$counts" | jq -r '.luks_attachment_recreated')
   fw=$(echo "$counts" | jq -r '.firewall_ok')
 
-  # Parse-validate every counter. A jq null/empty would evaluate false in the
-  # arithmetic below and could silently mis-decide; fail LOUD instead.
-  for v in "$oos" "$gvd" "$lvd" "$lpt" "$replaced" "$nic" "$patt" "$latt" "$fw"; do
-    if [[ ! "$v" =~ ^[0-9]+$ ]]; then
-      echo "git_data_host_replace_gate: counter parse failed (out_of_scope='${oos}' git_data_volume_destroyed='${gvd}' luks_volume_destroyed='${lvd}' luks_passphrase_touched='${lpt}' server_replaced='${replaced}' nic_recreated='${nic}' plaintext_attachment_recreated='${patt}' luks_attachment_recreated='${latt}' firewall_ok='${fw}')"
-      return 1
-    fi
-  done
+  # Every counter is a non-negative integer BEFORE any arithmetic compares one.
+  # A counter that did not evaluate is the empty string, and [[ "" -gt 0 ]] is FALSE
+  # under bash coercion — so an uncomputed counter silently satisfies every threshold.
+  # The shared helper names WHICH counter failed rather than reporting them all.
+  plan_gate_assert_numeric "git_data_host_replace_gate" "out_of_scope=${oos}" "git_data_volume_destroyed=${gvd}" "luks_volume_destroyed=${lvd}" "luks_passphrase_touched=${lpt}" "server_replaced=${replaced}" "nic_recreated=${nic}" "plaintext_attachment_recreated=${patt}" "luks_attachment_recreated=${latt}" "firewall_ok=${fw}" || return 1
 
   echo "out_of_scope=${oos} git_data_volume_destroyed=${gvd} luks_volume_destroyed=${lvd} luks_passphrase_touched=${lpt} server_replaced=${replaced} nic_recreated=${nic} plaintext_attachment_recreated=${patt} luks_attachment_recreated=${latt} firewall_ok=${fw}"
   if [[ "$oos" -eq 0 && "$gvd" -eq 0 && "$lvd" -eq 0 && "$lpt" -eq 0 && "$replaced" -eq 1 && "$nic" -ge 1 && "$patt" -ge 1 && "$latt" -ge 1 && "$fw" -ge 1 ]]; then

@@ -281,10 +281,20 @@ plan "$TMP/birth.json" \
 check "from-empty birth shape ABORT (out_of_scope is the sole rejecter)" 1 "out_of_scope=6" "$TMP/birth.json" "$ID" "absent"
 
 # --- Fail-closed on the plan JSON itself ---------------------------------------------------------
+#
+# MESSAGE MIGRATION (#6997). Both refusals are now owned by the shared preamble rather than
+# by this gate's own inline checks, which were deleted as redundant. The missing-file text is
+# unchanged ("plan JSON not found"), but the malformed-JSON text moved from this gate's
+# "jq evaluation failed" — which named the gate's OWN big counting filter — to the preamble's
+# "jq filter failed … the document is unparseable or has no resource_changes array".
+#
+# The distinction is worth keeping: the gate's "jq evaluation failed" still exists below for
+# a plan that PARSES but breaks the counting filter. These two arms pin the preamble's, so a
+# regression that silently reverted the retrofit would show up here as the OLD string.
 check "plan JSON missing ABORT" 1 "plan JSON not found" "$TMP/does-not-exist.json"
 
 printf 'not json at all {{{' > "$TMP/malformed.json"
-check "malformed plan JSON ABORT (fail-loud, never a silent 0)" 1 "jq evaluation failed" "$TMP/malformed.json"
+check "malformed plan JSON ABORT (fail-loud, never a silent 0)" 1 "the document is unparseable" "$TMP/malformed.json"
 
 # --- A data.* read and unrelated no-ops must NOT false-abort --------------------------------------
 plan "$TMP/reads.json" \
