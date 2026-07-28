@@ -104,7 +104,7 @@ Two things the plan measured that you must not re-derive from memory:
 
 ## 6. Exit gate
 
-- [ ] 6.1 `bash scripts/test-all.sh scripts` — the gate's own invocation over the whole shard.
+- [x] 6.1 `bash scripts/test-all.sh scripts` — the gate's own invocation over the whole shard.
 - [x] 6.2 File scope-out SO-1 (canary gate degrades a verify failure to an ack-fallback rather than
       reddening; only the diagnosability half is fixed inline). Verify each label exists via
       `gh label list --limit 200` before use: `deferred-scope-out`, `domain/engineering`,

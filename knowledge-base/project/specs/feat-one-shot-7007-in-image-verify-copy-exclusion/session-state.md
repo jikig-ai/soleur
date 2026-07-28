@@ -21,6 +21,12 @@
   247 MB provider cache staged in): **24.6–28.1 s / 2.6 GB → 0.44 s / 30 MB** (~57×). Supersedes
   the plan's 22.96 s / 2.3 GB → 0.48 s / 35 MB, which was measured against a different tree.
 - AC5 lint green; trap-tempfile-ownership 20/20 green; AC1 grep pair green.
+- AC4 `bash scripts/test-all.sh scripts`: rc=0, **226/226 suites passed**. The new suite
+  auto-registered and ran (`[ok] apps/web-platform/scripts/lib/in-image-copy-src.test.sh`,
+  419ms), confirming the `scripts/lib/*.test.sh` glob picks it up — load-bearing, since it is
+  the only detector a broken exclusion can ever trip. Run under a `SIBLING_RUN_DETECTED`
+  banner (2 sibling test-all runs in other worktrees); result was green, so no
+  contention-vs-real disambiguation was needed.
 - SO-1 filed as issue **#7043** (labels + milestone reconciled via `gh issue view`).
 - **L3 paid end-to-end: NOT RUN** — both helpers require `ANTHROPIC_API_KEY` and drive a real
   Haiku turn, and neither CI gate's trigger regex names the changed files.
