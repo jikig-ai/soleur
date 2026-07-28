@@ -52,6 +52,13 @@ open(f"{out}/doppler-dl.sh", "w").write(blocks[0])
 pre = [c for c in d["runcmd"] if isinstance(c, str) and "trap on_err EXIT" in c]
 assert len(pre) == 1, f"expected exactly 1 trap-arming block, found {len(pre)}"
 open(f"{out}/preamble.sh", "w").write(pre[0])
+# The WHOLE runcmd, concatenated the way cloud-init actually runs it. B2 compares against
+# THIS, not against the trap-arming entry alone: `trap on_err EXIT` and the `set -e` that
+# arms abort-on-error live in DIFFERENT runcmd entries, and it is precisely because
+# cloud-init joins every entry into ONE script that the trap covers the later ones. A
+# comparison scoped to a single entry reports drift that does not exist.
+open(f"{out}/runcmd-all.sh", "w").write(
+    "\n".join(c for c in d["runcmd"] if isinstance(c, str)))
 PY
 [ -s "$TMP/doppler-dl.sh" ] || { echo "FAIL: could not extract the checksum block" >&2; exit 1; }
 
@@ -130,8 +137,21 @@ class H(http.server.BaseHTTPRequestHandler):
 socketserver.TCPServer(("127.0.0.1", 8099), H).serve_forever()
 PY
 
-# The in-container driver. It arms the SAME trap/STAGE preamble the real boot uses, then
-# runs the extracted checksum block under `set -e` exactly as runcmd does.
+# The in-container driver. It arms a MODEL of the shipped trap/STAGE preamble — a
+# hand-written copy, not the extracted one — and runs the extracted checksum block under
+# `set -e` exactly as runcmd does.
+#
+# WHY A COPY, AND WHAT KEEPS IT HONEST. The shipped preamble cannot be sourced verbatim
+# here: it hard-codes /var/log/cloud-init-output.log as its detail (absent in the container,
+# so every emit would ship an empty detail and the delivery assertion would prove nothing)
+# and it runs a delivery pre-check against the real DSN. So the driver models it.
+#
+# A model that nothing compares against is how "the SAME preamble" becomes false without
+# anyone noticing — this comment said exactly that while `preamble.sh` was extracted,
+# asserted to be exactly one block, and then never read by anything. B2 below is the
+# comparison that makes the claim true: every load-bearing construct of the shipped
+# preamble must appear in BOTH, so a shipped preamble that loses its `set -e`, its trap, or
+# its rc guard turns this suite red instead of leaving it green against a stale model.
 cat > "$TMP/drive.sh" <<'DRIVE'
 #!/bin/bash
 set -uo pipefail
@@ -164,6 +184,50 @@ STAGE=doppler_dl
 # what ships.
 . /work/doppler-dl.sh
 DRIVE
+
+# ── B2 — the driver's arming must not drift from the SHIPPED preamble ──────────────
+# Each construct below is load-bearing, and each must appear on BOTH sides:
+#   trap on_err EXIT        the arming itself — without it nothing reports
+#   set -e                  what makes a failed checksum abort instead of continuing
+#   rc=$?                   captured BEFORE `trap - EXIT` clobbers it
+#   [ "$rc" -eq 0 ]         the rc guard: without it every HEALTHY boot emits fatal (T17)
+#   trap - EXIT             disarm inside the handler, so the handler cannot re-enter
+#   git-data-emit           the emit call the whole channel depends on
+# ANCHORED ON CODE, NOT ON THE TOKEN — and comments stripped first. Both halves are
+# load-bearing, and the first draft of this guard had neither, so it was VACUOUS: deleting
+# the shipped `set -e` left B2 green, because `grep -F 'set -e'` still matched the comment
+# two lines above it ("Arm `set -e` only AFTER the Phase-0.4 classification") — and would
+# equally have matched `set -euo pipefail` as a substring. A body-grep sees comments too
+# (cq-assert-anchor-not-bare-token). Each pattern below is line-anchored and `$`-terminated
+# where the construct is a whole statement, so prose about it cannot satisfy it.
+_b2_strip() { sed -e 's/[[:space:]]*#.*$//' "$1"; }
+_b2_missing=""
+_b2_pre="$TMP/preamble.nocomment"; _b2_drv="$TMP/drive.nocomment"
+_b2_strip "$TMP/runcmd-all.sh" > "$_b2_pre"
+_b2_strip "$TMP/drive.sh"    > "$_b2_drv"
+# COUNTS, not existence. `rc=$?`, the rc guard and `trap - EXIT` each appear once per trap
+# site — on_err, luks_err, bootstrap_err — and cloud-init's own comment says so ("All THREE
+# sites; T17 pins it"). An existence check therefore cannot see ONE of them deleted, which
+# is the realistic drift: measured, removing on_err's rc guard left an existence-based B2
+# fully green because luks_err's and bootstrap_err's copies still satisfied it. The driver
+# models a single trap, so its minimum is 1 for every construct.
+while IFS='|' read -r _label _min _re; do
+  [ -n "$_label" ] || continue
+  _n_pre=$(grep -cE -- "$_re" "$_b2_pre" || true)
+  _n_drv=$(grep -cE -- "$_re" "$_b2_drv" || true)
+  [ "$_n_pre" -ge "$_min" ] || _b2_missing="${_b2_missing} shipped:[${_label} ${_n_pre}<${_min}]"
+  [ "$_n_drv" -ge 1 ]       || _b2_missing="${_b2_missing} driver:[${_label}]"
+done <<'B2SPEC'
+trap on_err EXIT|1|^[[:space:]]*trap on_err EXIT[[:space:]]*$
+set -e (exactly)|1|^[[:space:]]*set -e[[:space:]]*$
+rc=$? capture|3|^[[:space:]]*rc=\$\?[[:space:]]*$
+rc guard|3|^[[:space:]]*\[ "\$rc" -eq 0 \][[:space:]]*&&[[:space:]]*exit 0[[:space:]]*$
+trap - EXIT disarm|3|^[[:space:]]*trap - EXIT[[:space:]]*$
+emit call|1|/usr/local/bin/git-data-emit[[:space:]]+"
+B2SPEC
+if [ -z "$_b2_missing" ]; then pass; else
+  fail "B2: the driver and the shipped preamble have drifted" "missing —${_b2_missing}"
+fi
 
 # NOTE on container networking: these runs are NOT `--network none`. The image needs curl
 # and python3 from apt, and with no network `apt-get` exits 100 before any assertion runs —
@@ -299,8 +363,8 @@ total=$((passes + fails))
 # Floor = the ACTUAL assertion count (D1: 2, T5: 4 + 1 mutation, T17: 2 + 1 mutation). Its
 # job is to catch a silently-empty harness — an early `exit 0` from a skip guard, or a
 # docker run that never produced output — not to be an aspirational target.
-if [ "$total" -lt 11 ]; then
-  echo "FAIL: ran only ${total} assertions (<11) — harness did not execute fully" >&2
+if [ "$total" -lt 12 ]; then
+  echo "FAIL: ran only ${total} assertions (<12) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed (${total} assertions)"
