@@ -150,7 +150,7 @@ creates `hcloud_server.git_data`.
 
 ## Phase 7 — Records
 
-- [x] 7.1 Amend ADR-068's addendum (D1-corrected + D-SIZE) and ADR-149 (checklist item 8, the D-HB
+- [x] 7.1 Amend ADR-068's addendum (D1-corrected + D-SIZE) and ADR-149 (checklist item 9 after #7003's renumber — sizing; the D-HB
       Alternatives amendment, the Residual 2 disposition, **and Residual 1 as partially discharged**
       by the boot-completion emit, R30).
 - [x] 7.2 Record **D-EMIT as an ADR-147 addendum** (R30) — that ADR is literally "boot-stage

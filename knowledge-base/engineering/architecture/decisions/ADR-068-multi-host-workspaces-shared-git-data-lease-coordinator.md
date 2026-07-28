@@ -1280,15 +1280,21 @@ without D7 would fire on **zero** production paths — live only in the untarget
 `zot-registry.tf` precedent is not a counterexample but the proof: its data source feeds
 `local.registry_memory_cap_mb`, and that is what makes it an ancestor under `-target`.
 
-D7 is also the **only** mis-derivation detector. The checksum cannot be one: it is selected **by**
-the derived arch, so a wrong derivation verifies the tarball it just chose and passes. The
-`sha256sum -c -` runcmd item additionally carries no `set -e`, so even a genuine checksum failure
-does not stop the following `tar xzf` — and **nothing aborts at all**. cloud-init concatenates
-`runcmd` into one non-`-e` script, and the LUKS block's `set -euo pipefail` is line 1 of the heredoc
-that `doppler run` executes, so on a missing or wrong-arch binary `doppler run` fails to exec and that
-line runs zero times. The failure surfaces only as a non-zero runcmd exit in on-host
-`/var/log/cloud-init-output.log` (git-data ships no log shipper), leaving sshd up and the LUKS volume
-unmounted. Credit neither the checksum nor that `set -e` with failing closed.
+D7 is also the **only** mis-derivation detector, and **#6982 does not change that**. The checksum
+cannot be one: it is selected **by** the derived arch, so a wrong derivation verifies the tarball it
+just chose and passes. That is a property of the *selection*, so no amount of failing closed reaches
+it — D7 remains the only guard that fires on a mis-derived arch.
+
+**Amended by #6982 — the fail-closed half of this paragraph is now historical.** As originally
+written it continued: *"the `sha256sum -c -` runcmd item additionally carries no `set -e`, so even a
+genuine checksum failure does not stop the following `tar xzf` — and nothing aborts at all."* That
+was true and is no longer: the runcmd path is armed with a top-level `trap`/`set -e` ahead of the
+checksum block, so a genuine checksum failure now ABORTS rather than continuing into `tar xzf` and
+`chmod +x` on an unverified tarball. The host also no longer surfaces the failure only in on-host
+`/var/log/cloud-init-output.log` — `/usr/local/bin/git-data-emit` ships it to Sentry (and, once the
+Doppler stage has run, Better Stack). What still stands: the LUKS block's `set -euo pipefail` is
+line 1 of the heredoc that `doppler run` executes, so on a missing or wrong-arch binary that line
+runs zero times — do not credit *that* `set -e` with failing closed.
 
 ### What this does NOT unblock
 

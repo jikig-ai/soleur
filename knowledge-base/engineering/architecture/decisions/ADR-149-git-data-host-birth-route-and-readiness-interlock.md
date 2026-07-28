@@ -22,8 +22,8 @@ No automated route could create it, and the reason is structural rather than an 
    `["create"]`;
 2. its `luks_passphrase_touched` arm fires on a **create** of the passphrase, not only a
    rotation;
-3. its five-member allow-set produces `out_of_scope ≥ 6` against an eighteen-address birth
-   fan-out.
+3. its five-member allow-set produces `out_of_scope ≥ 6` against a twenty-address birth
+   fan-out (eighteen when this ADR was written; #6982 added two Doppler secrets).
 
 That gate's safety argument rests on **"preserved by omission"** — an untargeted resource
 cannot be planned for destroy. On a birth that argument *inverts*: an omitted address is a
@@ -212,7 +212,17 @@ than one whose scope is written down.
 
 The gate demands `creates == 1` for the **three** addresses whose STATE IDENTITY is the
 server (the NIC and both volume attachments), an **outcome** assertion for the firewall
-attachment, and mere **presence** (`create` ∨ `no-op`) for the other thirteen.
+attachment, and mere **presence** (`create` ∨ `no-op`) for the other **fifteen** (thirteen
+until #6982 added `doppler_secret.git_data_ssh_host` and
+`doppler_secret.git_data_betterstack_logs_token`). 1 + 3 + 1 + 15 = the twenty-address
+fan-out below. The presence set is the gate's own list, and
+`tests/scripts/test-git-data-host-birth-gate.sh` pins it against the fixture as a set in
+both directions, so this number cannot drift silently:
+
+```
+awk '/for present_addr in/,/; do$/' tests/scripts/lib/git-data-host-birth-gate.sh \
+  | grep -coE '"[a-z0-9_]+\.[a-z0-9_]+"'          # => 15
+```
 
 **`.id`-reference is not the property that governs entailment — state identity is**, and
 the two diverge on exactly one member. `hcloud_firewall_attachment`'s terraform ID is the

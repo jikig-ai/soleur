@@ -359,18 +359,21 @@ resource "hcloud_server" "git_data" {
   #      `-target=`. Unreferenced, that data source is PRUNED and never read, so the
   #      phantom-type guard would fire on zero production paths (every git-data dispatch is
   #      -targeted). Deleting this precondition silently disarms the data source above.
-  #   2. It catches a MIS-DERIVED arch at plan time. Nothing downstream does: the checksum
-  #      is selected BY local.git_data_arch, so a wrong derivation verifies the tarball it
-  #      just chose and `sha256sum -c -` passes. That runcmd item also carries no `set -e`,
-  #      so even a genuine checksum failure does not stop the following `tar xzf`.
-  #      NOTHING ABORTS. cloud-init concatenates runcmd into one non-`-e` script, so a
-  #      failed item is logged and boot CONTINUES. The LUKS block's `set -euo pipefail`
-  #      is not a backstop either: it is line 1 of the heredoc `doppler run` executes, so
-  #      on a missing or wrong-arch binary `doppler run` fails to exec and that line runs
-  #      ZERO times. The failure surfaces only as a non-zero runcmd exit in on-host
-  #      /var/log/cloud-init-output.log — git-data ships no log shipper — leaving sshd up
-  #      and the LUKS volume unmounted. Do not credit the checksum, or that `set -e`, with
-  #      failing closed: the plan-time precondition below is the only guard that fires.
+  #   2. It catches a MIS-DERIVED arch at plan time, and NOTHING DOWNSTREAM CAN — including
+  #      after #6982. The checksum is selected BY local.git_data_arch, so a wrong derivation
+  #      verifies the tarball it just chose and `sha256sum -c -` passes. That is a property
+  #      of the selection, not of error handling, so no amount of failing closed reaches it.
+  #      This precondition remains the only guard that fires on that case.
+  #
+  #      What #6982 DID change, so the rest of this note is not read as still true: the
+  #      runcmd path is now armed with a top-level `trap`/`set -e` ahead of the checksum
+  #      block, so a GENUINE checksum failure aborts instead of continuing into `tar xzf`
+  #      and `chmod +x` on an unverified tarball (the supply-chain half). It used to say
+  #      "NOTHING ABORTS" here, and that is no longer the case. The LUKS block's
+  #      `set -euo pipefail` still is not a backstop — it is line 1 of the heredoc
+  #      `doppler run` executes, so on a missing or wrong-arch binary that line runs ZERO
+  #      times — and the host now reports the failure off-host via /usr/local/bin/git-data-emit
+  #      rather than only into on-host /var/log/cloud-init-output.log.
   #
   # The enums are DELIBERATELY mapped, not compared. hcloud reports architecture as
   # `x86`/`arm`, while local.git_data_arch is the download token `amd64`/`arm64`. Comparing

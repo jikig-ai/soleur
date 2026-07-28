@@ -184,8 +184,11 @@ on:
           RECREATES an existing web host (both volumes preserved by omission); it needs
           `web_host_key` + `confirm=REPLACE-<key>`, and it REFUSES web-1.
           git-data-host-create BIRTHS the never-provisioned git-data store; additive-only,
-          needs `confirm=BIRTH-GIT-DATA`, and is INTERLOCKED until #6982 ships an
-          off-host emitter.
+          needs `confirm=BIRTH-GIT-DATA`. The birth-readiness interlock is RELEASED as of
+          #6982 (the host now has an off-host emitter), but DISPATCH IS STILL HELD: the
+          runbook's DO-NOT-DISPATCH banner stands until the rung-2 boot rehearsal evidence
+          lands under #7025. Read knowledge-base/engineering/operations/runbooks/
+          git-data-birth.md before choosing this.
         required: false
         default: manual-rerun
         type: choice
@@ -215,10 +218,12 @@ on:
           # allow-set also rests on "preserved by OMISSION", an argument that INVERTS on a
           # birth (an omitted address is then a MISSING resource, not a protected one).
           #
-          # INTERLOCKED: the job sources a birth-readiness gate that refuses to plan while
+          # The job sources a birth-readiness gate that refuses to plan while
           # cloud-init-git-data.yml has no off-host emitter, because for this host a green
-          # apply and a dark boot are indistinguishable. #6982 ships the emitter and
-          # releases the interlock. See the git_data_host_create job and
+          # apply and a dark boot are indistinguishable. #6982 SHIPPED that emitter, so the
+          # gate now RELEASES — it remains armed as a regression check, not as a hold.
+          # Dispatch is still held by the runbook's DO-NOT-DISPATCH banner (rung-2 rehearsal
+          # evidence, #7025). See the git_data_host_create job and
           # knowledge-base/engineering/operations/runbooks/git-data-birth.md.
           - git-data-host-create
           # #6767: read-only retrospective drift audit of every declared ruleset's
@@ -3838,12 +3843,20 @@ jobs:
     # a separate inline copy in the `apply` job whose `if:` is mutually exclusive with this
     # one, so for this path the sourced birth gate is the ONLY check.
     #
-    # INTERLOCKED — this job REFUSES TO PLAN today, by design. cloud-init-git-data.yml emits
-    # nothing off-host (measured 0 for sentry_dsn/sentry/vector/betterstack/journald/
-    # heartbeat against the web host's 9/-/14/2/7/1 (grep -ci)), and nothing in its boot path fails
-    # closed. So a green apply and a dark host are indistinguishable, and ADR-145's readiness
-    # gates have no analogue here because there is nothing to poll. #6982 ships the emitter
-    # and releases the interlock. See ADR-149 for the full release checklist.
+    # THE BIRTH-READINESS INTERLOCK IS RELEASED as of #6982 — this job now plans. It held
+    # because cloud-init-git-data.yml emitted nothing off-host and nothing in its boot path
+    # failed closed, so a green apply and a dark host were indistinguishable and ADR-145's
+    # readiness gates had no analogue here (nothing to poll). #6982 shipped the emitter:
+    #
+    #   grep -vE '^[[:space:]]*#' apps/web-platform/infra/cloud-init-git-data.yml \
+    #     | grep -c 'sentry_dsn'          # => 2 (was 0; the gate's sentinel, non-comment)
+    #
+    # WHAT IS STILL HELD, AND BY WHAT. The mechanical hold is gone; the dispatch hold is not.
+    # The runbook's DO-NOT-DISPATCH banner stands until the rung-2 boot rehearsal (booting the
+    # rendered template once on a throwaway host outside the hcloud_server.git_data address)
+    # produces evidence — carried as #7025's own precondition, deliberately NOT inherited as a
+    # pass from #6982's rung-1 container rehearsal. See ADR-149's release checklist and its
+    # #6982 disposition table for what each item actually delivered.
     #
     # DELTAS FROM web_host_create, each evidenced rather than inherited:
     #   • SINGLETON, not a for_each map — no host key input, and the gate's `def allow:`
@@ -3920,7 +3933,7 @@ jobs:
           # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
           if ! git_data_birth_readiness_gate "${GITHUB_WORKSPACE}/apps/web-platform/infra/cloud-init-git-data.yml"; then
-            echo "::error::git-data-host-create is INTERLOCKED: cloud-init-git-data.yml has no off-host emitter, so a failed birth would produce no signal at all and a green apply would be indistinguishable from a dark host. The gate's message above carries the full release checklist (#6982 / ADR-149). Nothing has been planned or created."
+            echo "::error::git-data-host-create is HELD: cloud-init-git-data.yml has no off-host emitter, so a failed birth would produce no signal at all and a green apply would be indistinguishable from a dark host. #6982 shipped that emitter and this gate released, so seeing this message now means the threading has REGRESSED — the \${sentry_dsn} interpolation is gone from non-comment template text. The gate's message above carries the ADR-149 release checklist. Nothing has been planned or created."
             exit 1
           fi
 
@@ -3977,7 +3990,7 @@ jobs:
             exit 1
           fi
           if [[ -z "$DSN" ]]; then
-            echo "::error::SENTRY_DSN is empty in Doppler prd_terraform. Asserted here even though git-data's cloud-init does not consume it YET: it is item 1 of the ADR-149 interlock-release checklist, and the release lands the emitter that reads it. An empty DSN at release time would produce a host that LOOKS instrumented and emits nothing."
+            echo "::error::SENTRY_DSN is empty in Doppler prd_terraform. git-data's cloud-init CONSUMES it as of #6982 — it is baked into /usr/local/bin/git-data-emit, which is the host's only always-available off-host channel (Better Stack needs the Doppler stage to have run). An empty DSN here produces a host that LOOKS instrumented and emits nothing, which is exactly the dark-boot state ADR-149's interlock existed to prevent."
             exit 1
           fi
           echo "SENTRY_DSN present and non-empty (value not printed)."

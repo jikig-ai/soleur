@@ -1,10 +1,17 @@
 # shellcheck shell=bash
 # Birth-readiness interlock for the git-data host CREATE dispatch (#6977).
 #
-# WHAT THIS REFUSES, AND WHY IT IS NOT PROSE. `cloud-init-git-data.yml` emits NOTHING
-# off-host. Measured on the file as it stands: 0 occurrences of sentry_dsn, sentry,
-# vector, betterstack, journald, heartbeat. The web host's cloud-init scores
-# 9 / 17 / 14 / 2 / 7 / 1 on the same six tokens, counted with `grep -ci`.
+# WHAT THIS REFUSES, AND WHY IT IS NOT PROSE. When this gate was written,
+# `cloud-init-git-data.yml` emitted NOTHING off-host: 0 occurrences of sentry_dsn, sentry,
+# vector, betterstack, journald, heartbeat, against the web host's 9 / 17 / 14 / 2 / 7 / 1
+# on the same six tokens, counted with `grep -ci`.
+#
+# THAT MEASUREMENT IS HISTORY, NOT THE CURRENT STATE. #6982 shipped the emitter, so this
+# gate RELEASES today and stands as a regression check rather than a hold. Re-derive rather
+# than trusting either number:
+#
+#   grep -vE '^[[:space:]]*#' apps/web-platform/infra/cloud-init-git-data.yml \
+#     | grep -c 'sentry_dsn'          # => 2 as of #6982 (the sentinel; 0 is what held)
 #
 # State the counting convention, and count only tokens you list: an earlier revision named
 # eight tokens against seven values (so the mapping was undeterminable) and reported
@@ -13,16 +20,19 @@
 # The consequence is the whole reason this file exists: A GREEN `terraform apply` AND A
 # DARK HOST ARE INDISTINGUISHABLE FOR GIT-DATA. ADR-145's readiness gates presuppose the
 # host reports — gate #1 asserts SENTRY_DSN is non-empty, gate #3 polls the boot through
-# R2-R5 — and neither has an analogue here, because there is nothing to poll. Combine
-# that with the fact that nothing in the boot path fails closed (the Doppler runcmd has
+# R2-R5 — and neither has an analogue here, because there was nothing to poll. Combine
+# that with the fact that nothing in the boot path failed closed (the Doppler runcmd had
 # no `set -e`, and the LUKS block's `set -euo pipefail` is line 1 of the heredoc that
-# `doppler run` executes, so on a missing or wrong-arch binary it never runs) and a birth
-# can land a host with its encrypted volume unmounted, no private NIC, or a failed
+# `doppler run` executes, so on a missing or wrong-arch binary it never ran) and a birth
+# could land a host with its encrypted volume unmounted, no private NIC, or a failed
 # bootstrap — and report success.
 #
-# So the route refuses to apply until an emitter exists. #6982 ships that emitter; this
-# gate is what makes the ordering mechanical instead of a sentence in a runbook that the
-# next person may not read.
+# BOTH HALVES OF THAT ARE NOW CLOSED BY #6982 and the tenses above are historical: the
+# runcmd path is armed with a top-level `trap`/`set -e` ahead of the checksum block, and
+# `stage:boot_complete` gives the birth job something to poll. So the route no longer
+# refuses; this gate stays armed as the regression check that the emitter's DSN threading
+# cannot silently disappear, which is what makes the ordering mechanical instead of a
+# sentence in a runbook that the next person may not read.
 #
 # WHY THE SENTINEL IS AN INTERPOLATION AND NOT A WORD. A bare grep for "sentry" is
 # satisfied by a comment saying "TODO: add sentry". The sentinel here is the terraform

@@ -48,7 +48,7 @@ authenticated `terraform state list` returns 201 addresses and zero git-data mem
 Before this route existed there was no way to create it. `git-data-host-replace` cannot:
 its gate requires `actions ⊇ {delete, create}`, so a first CREATE fails the
 `server_replaced` arm; its `luks_passphrase_touched` arm fires on a create too; and its
-five-member allow-set cannot hold an eighteen-address birth fan-out. The only remaining
+five-member allow-set cannot hold a twenty-address birth fan-out. The only remaining
 route was an untargeted <!-- lint-infra-ignore start -->`terraform apply` from an operator laptop<!-- lint-infra-ignore end --> — no destroy-guard, no
 stock preflight, and a plan of that shape taken 2026-07-27 carried **nine destroys**.
 (That route is what this runbook exists to replace — it is described, never prescribed.)
@@ -60,7 +60,7 @@ stock preflight, and a plan of that shape taken 2026-07-27 carried **nine destro
 | #6982 has shipped and ADR-149's release checklist is complete | The banner above is cleared |
 | You are on `main` | The environment pins `main`; a branch dispatch is refused |
 | `prd_git_data` has **not** been hand-created in Doppler | `doppler configs -p soleur` — it must be ABSENT (Terraform creates it) |
-| **SIZING is confirmed** (#6982 / ADR-149 item 8) | `var.git_data_server_type` is `cpx22`, and ADR-068's D-SIZE addendum records WHY. Step 7's stock preflight checks **orderability**, never **adequacy** — it will happily birth an under-sized host. `user_data` is ForceNew and a type change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape must be right at birth. |
+| **SIZING is confirmed** (#6982 / ADR-149 item 9) | `var.git_data_server_type` is `cpx22`, and ADR-068's D-SIZE addendum records WHY. Step 7's stock preflight checks **orderability**, never **adequacy** — it will happily birth an under-sized host. `user_data` is ForceNew and a type change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape must be right at birth. |
 | **EMITTER verified** — it has actually emitted, not merely shipped | The rehearsal evidence named in the banner. `grep -c '$${sentry_dsn}'` proves nothing: the readiness gate checks THREADING, and a non-comment line that merely references the variable releases it. The question is whether an event ARRIVED. |
 | The Better Stack query credentials are present | The birth job's post-apply poll needs `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. If that step warns they are absent, the boot signal is **unread** and you are back to "a green apply proves nothing". |
 
@@ -91,7 +91,15 @@ approval: the interlock, the birth gate, and the stock preflight.
    cloud-init-only and never receives it).
 4. Asserts `SENTRY_DSN` is present and non-empty — *unreadable* and *empty* get different
    messages, because they have different remedies.
-5. **`terraform plan`** scoped to eighteen `-target`s.
+5. **`terraform plan`** scoped to twenty `-target`s — re-derive rather than trusting the
+   number here:
+
+   ```
+   awk '/^  git_data_host_create:/{f=1}
+        f && /^[[:space:]]*-target=/{n++}
+        f && /^  [a-z_]+:$/ && !/git_data_host_create/{exit}
+        END{print n}' .github/workflows/apply-web-platform-infra.yml    # => 20
+   ```
 6. **Birth gate** — refuses unless the plan is exactly the scoped birth. Its message names
    which arm refused.
 7. **Stock preflight** — refuses if the server type is not orderable in its location. Runs
@@ -194,10 +202,15 @@ runbook by design (`hr-no-ssh-fallback-in-runbooks`).
 
 **Be honest about what you cannot verify yet.** <!-- lint-infra-ignore start -->The probe above observes *reachability*, not
 *boot correctness*: it tells you something answers on `10.0.1.20:22`, not that the bootstrap
-ran or that the LUKS volume mounted.<!-- lint-infra-ignore end --> **The git-data host itself** emits nothing — no Sentry
-emit, no log shipper, no heartbeat of its own — until #6982. A green apply means Terraform
-created the resources; it does not mean the host booted correctly. That gap is the entire
-reason the interlock exists, and it closes when #6982 does.
+ran or that the LUKS volume mounted.<!-- lint-infra-ignore end --> A green apply means Terraform created the
+resources; on its own it does not mean the host booted correctly.
+
+**That gap is why the interlock existed, and #6982 closed it.** The host now emits off-host
+itself via `/usr/local/bin/git-data-emit` — Sentry always (from the baked DSN), plus Better
+Stack once the Doppler stage has run — and reports `stage:boot_complete` with its four
+booleans, which the birth job polls. So do not stop at the reachability probe: go to
+**After the birth — verify the host actually booted** below and read the host's own
+channels. It still has no heartbeat of its own (deliberate — see ADR-149's D-HB finding).
 
 ## References
 
