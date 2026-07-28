@@ -303,17 +303,33 @@ jobs:
     # ci-deploy.test.sh is now installed by DEFAULT (opt out with MOCK_SLEEP_REAL=1),
     # so the step no longer pays wall clock where no timing fidelity is asserted.
     #
-    # Measured from the API, not estimated. Pre-change, across 24 runs on other infra
-    # branches: step 399-409s, whole job 507-574s — the 574s max is ABOVE the old
-    # 480s ceiling, which is the cancellation #6649 was reacting to. Post-change, on
-    # this PR (runs/30302371047 attempts 1 and 2): step 25s and 22s, whole job 179s
-    # and 170s. Non-suite overhead (checkout, setup-terraform, apt-get cloud-init,
-    # the docker build, ~55 other suites) measured 106-166s across those same 24 runs,
-    # so the worst projected job is ~166+25 = ~191s.
+    # Measured from the API, not estimated. Pre-change, across 26 runs on other infra
+    # branches: step 399-409s, whole job 507-574s over the 23 that SUCCEEDED, and
+    # 440-615s including the 3 that failed. Either way the max is ABOVE the old 480s
+    # ceiling, which is the cancellation #6649 was reacting to. (Stating the filter
+    # because a duration ceiling has to hold for failing runs too — they occupy the
+    # runner just the same.)
     #
-    # 8 minutes = 480s is therefore ~2.7x the observed max and ~2.5x the worst
-    # projection. Deliberately not lower: this is a ceiling absorbing runner variance
-    # on network-bound, heavy-tailed steps, not a budget to spend.
+    # Post-change, measured at THIS ceiling (not at the old one): runs/30303303433 =
+    # 184s, runs/30305631089 = 187s, runs/30309264705 = 184s, all `success`, step 25s.
+    # Non-suite overhead (checkout, setup-terraform, apt-get cloud-init, the docker
+    # build, ~55 other suites) measured 108-166s across the pre-change set, so the
+    # worst projected job is ~166+25 = ~191s.
+    #
+    # 8 minutes = 480s is therefore ~2.57x the observed max (187s) and ~2.5x the worst
+    # projection. Note 187s is within 4s of that projection — it is being met, not
+    # beaten. Deliberately not lower: this is a ceiling absorbing runner variance on
+    # network-bound, heavy-tailed steps, not a budget to spend. Nearly all remaining
+    # variance is now in the non-suite overhead, not in the suite (22-25s).
+    #
+    # Re-derive this if steps are added to the job — the numbers above are a property
+    # of its current composition, not of the suite alone. If a future run exceeds
+    # ~300s, suspect the sleep mock has been bypassed (a /bin/sleep in ci-deploy.sh,
+    # or MOCK_SLEEP_REAL leaking into the environment) before bumping the ceiling.
+    # If this job CANCELS: do not blame the step it stopped on — the cancel lands
+    # wherever the clock ran out. Pull per-step durations from the API instead
+    # (`gh api repos/jikig-ai/soleur/actions/runs/<id>/jobs`); see
+    # knowledge-base/project/learnings/best-practices/2026-07-18-deploy-script-tests-at-budget-timeout-and-infra-pr-ci-gotchas.md
     timeout-minutes: 8
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
@@ -382,7 +398,14 @@ jobs:
       - name: Fixture tests for validate-infra-templates.sh (#6454)
         run: bash .github/scripts/test/fixtures-validate-infra-templates.sh
 
+      # #6665: a step-level ceiling on the long-pole step, adopted from the architecture
+      # recommendation recorded in 2026-07-18-deploy-script-tests-at-budget-timeout-and-infra-pr-ci-gotchas.md.
+      # Measured 22-25s; 3 minutes is ~7x that. Its value is ATTRIBUTION, not budget: if this suite
+      # ever hangs (the wall-clock-gated hot-spin class the sleep mock's invocation cap guards), the
+      # job fails naming THIS step, instead of the job ceiling cancelling at whatever unrelated step
+      # the clock happened to reach — the red herring documented in that learning.
       - name: Run ci-deploy.sh tests
+        timeout-minutes: 3
         run: bash apps/web-platform/infra/ci-deploy.test.sh
 
       - name: Run cosign trusted-root staleness + integrity gate (#6005)
