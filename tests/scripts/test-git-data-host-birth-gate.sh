@@ -150,6 +150,27 @@ rest_fifteen_except() {
     | sed 's/^\[//; s/\]$//'
 }
 
+# gate_presence_members — the addresses the GATE's own `for present_addr in` list names.
+#
+# Derived from the gate source rather than restated here, because a second hand-maintained
+# copy is exactly the drift this guards against. The awk range is anchored on the loop
+# header and its `; do` terminator (not on a member count), and only double-quoted tokens
+# are taken, so the trailing `; do` and the backslashes cannot enter the set.
+#
+# Fails LOUD on an empty extraction: a regex that silently matches nothing would make the
+# omission loop below iterate zero times and the drift guard compare two empty strings —
+# both reporting green while asserting nothing at all.
+gate_presence_members() {
+  local out
+  out="$(awk '/for present_addr in/,/; do$/' "$GATE" | grep -oE '"[a-z0-9_]+\.[a-z0-9_]+"' | tr -d '"')"
+  if [[ -z "$out" ]]; then
+    echo "FATAL: could not extract the gate's presence loop from $GATE — the AC4 population" >&2
+    echo "       and the drift guard would both be vacuous." >&2
+    exit 2
+  fi
+  printf '%s\n' "$out"
+}
+
 rest_fifteen_with() {
   printf '[%s]' "$(rest_fifteen)" \
     | jq -c --arg a "$1" --argjson acts "$2" \
@@ -593,17 +614,44 @@ check "an entailed member that UPDATES instead of creating => ABORT" 1 "hcloud_s
 mk_plan "$TMP/minimal.json" "$(minimal_changes)"
 check "a plan missing the presence members => ABORT" 1 "not present in the plan" "$TMP/minimal.json"
 
-# AC4 specifically: each of the three SSH private-key secrets. Omit one and its private
-# half lives only in tfstate while the host's authorized_keys holds the public half — the
-# host accepts a key nobody can present.
-for k in transport provision remove; do
-  addr="doppler_secret.git_${k}_ssh_private_key"
-  mk_plan "$TMP/no-$k-secret.json" "$(printf '[%s,%s,%s]' \
+# AC4 — omit EACH presence member in turn. This was a population of three (the SSH
+# private-key secrets) against a loop of fifteen, so the twelve unfixtured members were
+# asserted by nobody: deleting either address this PR ADDED
+# (doppler_secret.git_data_ssh_host, doppler_secret.git_data_betterstack_logs_token) from
+# the gate's `for present_addr in` list left this suite fully green. The population is now
+# the gate's own list, derived from the gate source below, so a member added to the gate
+# without a fixture cannot silently go uncovered.
+#
+# Omitting any one of them is a real harm, not a formality: the three SSH secrets leave a
+# private half that exists only in tfstate while the host's authorized_keys holds the public
+# half; doppler_config.git_data_prd is the branch config both Doppler writes target;
+# doppler_secret.git_data_ssh_host is what removeGitDataRepo resolves Art. 17 erasure
+# against.
+while IFS= read -r addr; do
+  [[ -n "$addr" ]] || continue
+  mk_plan "$TMP/no-presence-member.json" "$(printf '[%s,%s,%s]' \
     "$(rc_entry 'hcloud_server.git_data' 'hcloud_server' '["create"]')" \
     "$(entailed_four)" \
     "$(rest_fifteen_except "$addr")")"
-  check "a birth omitting ${addr} => ABORT (AC4)" 1 "$addr" "$TMP/no-$k-secret.json"
-done
+  check "a birth omitting ${addr} => ABORT (AC4)" 1 "$addr" "$TMP/no-presence-member.json"
+done < <(gate_presence_members)
+
+# DRIFT GUARD: the gate's loop and the fixture must be the SAME SET, both directions.
+#
+# The old `n_all -eq 15` self-check pinned the FIXTURE's cardinality and nothing about the
+# GATE — deleting a member from the gate's `for present_addr in` list left it 15, so the
+# check passed while the gate stopped asserting that address entirely. That is the shape
+# this whole file exists to prevent: an address PERMITTED to change but not REQUIRED to
+# appear. Compared as sorted sets so an addition on either side is caught too.
+_gate_set="$(gate_presence_members | sort)"
+_fixture_set="$(printf '[%s]' "$(rest_fifteen)" | jq -r '.[].address' | sort)"
+_gate_n="$(printf '%s\n' "$_gate_set" | grep -c .)"
+if [[ "$_gate_set" == "$_fixture_set" && "$_gate_n" -ge 15 ]]; then
+  pass "gate presence loop and fixture are the same set (${_gate_n} members)"
+else
+  fail "gate presence loop has DRIFTED from the fixture — an address is asserted by only one of them" \
+    "n/a" "$(diff <(printf '%s\n' "$_gate_set") <(printf '%s\n' "$_fixture_set") | head -6)"
+fi
 
 # Fixture self-check: rest_fifteen_except must actually REMOVE one member, else every
 # assertion in the loop above is vacuous — the same class of silent-no-op the jq rewrite
@@ -849,9 +897,6 @@ mutate_layered "named volume-destroy guard" \
   's/if \[\[ "\$volume_destroys" -ne 0 \]\]; then/if false; then/' \
   "$TMP/destroy-vol.json" "DATA VOLUME" "destroy"
 
-
-
-
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
@@ -869,11 +914,11 @@ mutate_layered "named volume-destroy guard" \
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 76 ]]; then
+if [[ "$_ran" -lt 93 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 76. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 93. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 76)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 93)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
