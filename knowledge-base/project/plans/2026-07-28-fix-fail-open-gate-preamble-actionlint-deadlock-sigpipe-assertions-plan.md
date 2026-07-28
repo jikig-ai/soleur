@@ -877,8 +877,20 @@ logs:
   retention:     "GitHub Actions default (90 days); local test output is not retained"
 
 discoverability_test:
-  command:       "bash scripts/test-all.sh && bash scripts/lint-workflows.sh"
-  expected_output: "test-all.sh reports all suites Pass with 0 Fail (baseline 225/225 in ~417 s on the scripts shard); lint-workflows.sh prints an explicit rc= that is 0 or 1, never 124, and itself exits 0 on both so the chain does not break on the expected findings state"
+  # ONE command, no shell-active tokens, runnable under preflight Check 10's env -i sandbox.
+  # Three constraints the earlier form violated, each found by RUNNING the check rather than
+  # reading it:
+  #   1. "bash scripts/test-all.sh && bash scripts/lint-workflows.sh" is rejected outright —
+  #      Check 10 treats `&&` as a shell-active token and refuses to execute.
+  #   2. A ~40-minute suite exceeds the check's 15s cap regardless.
+  #   3. `scripts/lint-workflows.sh` ALSO fails, less obviously: Check 10 runs under
+  #      `env -i PATH=/usr/local/bin:/usr/bin:/bin`, where `actionlint` (installed in
+  #      ~/.local/bin) is not resolvable, so the probe exits 1 on a healthy tree.
+  # The probe below runs the coverage drift check this PR adds — the durable guard that every
+  # plan-grading gate CALLS the preamble — using only jq/grep/sed from the sandbox PATH.
+  # test-all.sh remains the exit gate (AC21); it was never a discoverability probe.
+  command:       "bash tests/scripts/test-plan-gate-preamble.sh"
+  expected_output: "0 failed"
 ```
 
 ---
