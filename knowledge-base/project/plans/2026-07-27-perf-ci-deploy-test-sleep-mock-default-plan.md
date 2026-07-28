@@ -218,7 +218,7 @@ exposure vector. No data flow, no logging of user content, no network call.
 `$MOCK_SLEEP_LOG` records only sleep durations emitted by `ci-deploy.sh`, into a
 per-test `mktemp -d`.
 
-**Brand-survival threshold:** `aggregate pattern`.
+- **Brand-survival threshold:** `aggregate pattern`
 
 **Rationale — and the argument v1 got wrong.** The first draft justified the tier
 by claiming an incident needs *two independent* defects (vacuity here, plus a
@@ -316,20 +316,25 @@ logs:
   retention: GitHub default workflow-log retention (90 days)
 
 discoverability_test:
-  command: |
-    gh run list --workflow=infra-validation.yml \
-      --branch=feat-one-shot-6665-ci-deploy-mock-sleep \
-      --json databaseId,conclusion --limit 5
-    gh api repos/jikig-ai/soleur/actions/runs/<id>/jobs \
-      --jq '.jobs[] | select(.name=="deploy-script-tests")
-            | {conclusion,
-               job_secs: ((.completed_at|fromdate) - (.started_at|fromdate)),
-               steps: [.steps[] | {name, secs: ((.completed_at|fromdate) - (.started_at|fromdate))}]
-                      | sort_by(-.secs) | .[0:5]}'
-  expected_output: |
-    a JSON object naming conclusion, job_secs, and the five slowest steps, with
-    `Run ci-deploy.sh tests` no longer at the top. NO `ssh` in the path — the
-    numbers come from the GitHub API.
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://api.github.com/repos/jikig-ai/soleur/actions/workflows/infra-validation.yml
+  expected_output: "200"
+  note: |
+    This probe answers "can an operator reach this signal at all, with no SSH and
+    no credentials?" — the workflow is addressable over the public GitHub REST API
+    on a public repo. It is deliberately the REACHABILITY probe rather than the
+    richer timing query: the earlier draft of this field ran `gh run list` +
+    `gh api`, which (a) invokes a credentialed CLI that preflight Check 10 refuses
+    to execute (it runs commands with the operator's file-backed CLI auth
+    reachable), and (b) embedded a literal `<id>` placeholder, so it could never
+    have run as written. A discoverability_test that cannot be executed documents
+    nothing.
+
+    The DIAGNOSTIC query — the one that actually answers "did the step get
+    faster" — is the per-job timing read, run by hand when investigating:
+      gh api repos/jikig-ai/soleur/actions/runs/<run-id>/jobs --jq
+        '.jobs[] | select(.name=="deploy-script-tests")
+         | {conclusion, job_secs: ((.completed_at|fromdate) - (.started_at|fromdate))}'
+    Neither path uses ssh; both read from the GitHub API.
 ```
 
 No soak-gated close criterion is declared (**plan-skill** Phase 2.9.1 — N/A). No
