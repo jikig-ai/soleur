@@ -220,6 +220,27 @@ include_matches.SYSLOG_IDENTIFIER = [
   "inngest-redis",
   "inngest-nftables",
   "inngest-server-probe",
+  # (2026-07-28 incident) sshd AUTH events. During a laptop compromise the operator
+  # question that decided the whole response was "did anyone authenticate to prod during
+  # the window?" — and it was NOT answerable from Better Stack. Source 2's PRIORITY 0-2
+  # (CRIT+) cut drops `Accepted publickey` (PRIORITY 6) and `Failed publickey` (4-5), so
+  # the ONLY way to answer was a live SSH session into the host, which is exactly what
+  # hr-no-ssh-fallback-in-runbooks forbids. An empty query result was also indistinguishable
+  # from "no intrusion" vs "not instrumented" — the worse failure of the two.
+  #
+  # Quota (measured on web-1, 2026-07-28, not estimated): 375 rows/7d = ~53/day total for
+  # the tag, of which 62/7d are Accepted/Failed. The comment above warns that widening
+  # Source 2's PRIORITY filter would ship "every host NOTICE+ line (sshd, cron, systemd
+  # units, fail2ban)" and blow quota — that reasoning is sound and NOT contradicted here:
+  # this is an exact-value SYSLOG_IDENTIFIER match on ONE identifier, not a priority widen,
+  # and ~53 rows/day sits inside the same headroom the other 14 tags occupy.
+  #
+  # Identifier is native, not declared: sshd(8) sets SYSLOG_IDENTIFIER=sshd itself, so
+  # unlike the tags above there is no SyslogIdentifier= line in infra/*.sh to mirror.
+  # Verified on web-1: 193/200 sampled auth records carry exactly `sshd`. It is therefore
+  # registered in vector-pii-scrub.test.sh's SYSTEMD_UNIT_IDENTIFIERS (same mechanism as
+  # `webhook`), NOT derivable by AC3 — the two must stay in lockstep.
+  "sshd",
 ]
 journal_directory = "/var/log/journal"
 batch_size = 16
