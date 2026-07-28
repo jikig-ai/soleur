@@ -453,14 +453,20 @@ p_no_bare_directive() {
   if [ "$n" -eq 0 ]; then echo 1; else echo 0; fi
 }
 
-# A27: BYTE-IDENTITY of every plain-text-delivered script.
+# A27: the DELIVERY MECHANISM of every plain-text-delivered script.
 #
-# #6982 moved five scripts off `encoding: b64` because base64 defeats gzip and cost 57 %
-# of the 32 KB user_data budget. The re-scan hazard base64 was guarding against does not
-# exist (templatefile does not re-scan an interpolated VALUE), but a YAML block scalar
-# CAN be mangled by a bad indent, so the property is pinned rather than assumed: each
-# script must be delivered via the indent+file interpolation, and NONE may still carry a
-# b64 encoding line.
+# NOT byte-identity — it was named that and is not. This is a STATIC check on the raw
+# template: it never renders and never compares a byte, so a block-scalar chomp (`|` -> `|-`),
+# a trailing-whitespace strip, or an indent() that swallowed a blank line all pass it while
+# shipping a script that differs from the repo's. The real comparison is B1 in
+# git-data-runcmd-rehearsal.test.sh, which renders, parses, and sha256s each payload against
+# its source file (mutation-proven: chomping one payload's scalar turns it red).
+#
+# What A27 does pin, which is worth pinning on its own: #6982 moved five scripts off
+# `encoding: b64` because base64 defeats gzip and cost 57 % of the 32 KB user_data budget.
+# The re-scan hazard base64 was guarding against does not exist (templatefile does not
+# re-scan an interpolated VALUE), so each script must be delivered via the indent+file
+# interpolation, and NONE may still carry a b64 encoding line.
 p_plain_script_delivery() {
   local f n_indent
   # The TEMPLATE var names are underscored (git_data_bootstrap), not the hyphenated
@@ -654,16 +660,67 @@ assert_holds    "A26 no-bare-directive" p_no_bare_directive "$CLOUD_INIT"
 assert_mutation "A26 no-bare-directive" p_no_bare_directive "$CLOUD_INIT" \
   's;^packages:$;packages: %{ if true }x%{ endif };'
 
-# A27: byte-safe plain-text script delivery.
+# A27: plain-text delivery MECHANISM (not byte-identity — that is B1 in the rehearsal).
 assert_holds    "A27 plain-script-delivery" p_plain_script_delivery "$CLOUD_INIT"
 # Mutation: revert one script to a b64 blob — the budget regression, caught structurally.
 assert_mutation "A27 plain-script-delivery" p_plain_script_delivery "$CLOUD_INIT" \
   's;^([[:space:]]*)content: \|$;\1encoding: b64;'
 
+# --- A28: the passphrase must stay unreachable from the SHARED log -------------------
+#
+# `_devalue` (git-data-emit) is the passphrase's ONLY defence: it is 40 chars of
+# alphanumeric and matches no pattern rule in the redactor chain. It is armed only when
+# GIT_DATA_LUKS_KEY is in the emitter's environment — which is true for `luks_err` and the
+# bootstrap trap (both children of `doppler run`) and FALSE for the parent `on_err` and
+# `bootstrap_err`, which run outside that boundary. All four traps ship the SAME
+# /var/log/cloud-init-output.log as their detail.
+#
+# So the invariant that keeps this safe is not the redactor — it is that the passphrase
+# never reaches that log in the first place. Audited: every use is either `[ -n "$VAR" ]`
+# (a test, no output) or `printf '%s' "$VAR" | cryptsetup … --key-file -` (stdin, never
+# argv, never echoed), and nothing in the boot path enables shell tracing. That makes the
+# unarmed-trap path unreachable TODAY, and this pair of guards is what keeps it that way:
+# a future `set -x`, or a key moved onto a command line, would put it in the log where two
+# of the four traps cannot scrub it.
+#
+# Fixing the asymmetry directly would mean giving the parent traps the passphrase — moving
+# key material to widen who holds it, to defend a path that is closed. Guarding the closure
+# is the cheaper and safer half, and it costs zero user_data bytes.
+p_no_shell_tracing() {
+  # No `set -x`/`sh -x`/`bash -x` anywhere in the boot path.
+  # `-[a-z]*x[a-z]*` on BOTH sides of the x: the realistic drift is `set -exuo pipefail`,
+  # where x sits mid-flag. An anchor requiring whitespace immediately after the x misses
+  # exactly that form — measured: the mutation below did not flip the predicate.
+  if grep -Eq '(^|[[:space:]])(set|(ba)?sh)[[:space:]]+-[a-z]*x[a-z]*([[:space:]]|$)' "$1"; then
+    echo 0; else echo 1; fi
+}
+assert_holds    "A28a no-shell-tracing" p_no_shell_tracing "$CLOUD_INIT"
+# Mutation: arm tracing on the LUKS heredoc — every expansion, including the key, lands in
+# the shared log that the two unarmed traps ship verbatim.
+assert_mutation "A28a no-shell-tracing" p_no_shell_tracing "$CLOUD_INIT" \
+  's/^([[:space:]]*)set -euo pipefail$/\1set -exuo pipefail/'
+
+p_key_never_on_argv() {
+  # Every GIT_DATA_LUKS_KEY expansion in an EXECUTABLE line must be one of the two audited
+  # shapes. Comment lines are excluded (they name the variable in prose by design); the
+  # emitter's own `_devalue` body is matched by the `[ -n` / `printf '%s'` forms already.
+  local bad
+  bad=$(grep -nE 'GIT_DATA_LUKS_KEY' "$1" \
+        | grep -vE '^[0-9]+:[[:space:]]*#' \
+        | grep -vE '\[[[:space:]]+-n[[:space:]]+"\$+\{?GIT_DATA_LUKS_KEY' \
+        | grep -vE "printf '%s' \"\\\$+\{?GIT_DATA_LUKS_KEY" \
+        | grep -cE '.' || true)
+  if [ "$bad" -eq 0 ]; then echo 1; else echo 0; fi
+}
+assert_holds    "A28b key-never-on-argv" p_key_never_on_argv "$CLOUD_INIT"
+# Mutation: echo the key. This is the shape that actually puts it in the shared log.
+assert_mutation "A28b key-never-on-argv" p_key_never_on_argv "$CLOUD_INIT" \
+  's;^([[:space:]]*)mkdir -p /mnt/git-data-luks$;\1echo "key=$GIT_DATA_LUKS_KEY";'
+
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 total=$((passes + fails))
-if [ "$total" -lt 58 ]; then
-  echo "FAIL: ran only ${total} assertions (<58) — suite did not execute fully" >&2
+if [ "$total" -lt 62 ]; then
+  echo "FAIL: ran only ${total} assertions (<62) — suite did not execute fully" >&2
   exit 1
 fi
 

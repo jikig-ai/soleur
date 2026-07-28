@@ -55,6 +55,51 @@ open(f"{out}/preamble.sh", "w").write(pre[0])
 PY
 [ -s "$TMP/doppler-dl.sh" ] || { echo "FAIL: could not extract the checksum block" >&2; exit 1; }
 
+# ── B1 — BYTE-IDENTITY of every indent(6, …)-delivered payload ─────────────────────
+#
+# git-data-luks.test.sh A27 carries the name "BYTE-IDENTITY" but greps for the
+# `indent(6, <var>)` call sites and asserts zero `encoding: b64`. That proves the
+# DELIVERY MECHANISM is the plain-text one; it never renders and never compares a byte.
+# A trailing-whitespace strip, a YAML block-scalar chomp, or an indent() that swallowed a
+# blank line inside a heredoc would all pass it — and each ships a script that differs
+# from the one in the repo, which is the whole property the name claims.
+#
+# This is the actual comparison, and it belongs here because this is where the render is
+# already parsed. Mapping is by BASENAME of the delivered path, which is 1:1 with the
+# source file for all nine payloads; the count is asserted so a payload added without a
+# fixture cannot slip through as "nothing to check".
+_b1_out="$(python3 - "$TMP/rendered.yml" "$DIR" <<'PY'
+import sys, yaml, os, hashlib
+rendered, srcdir = sys.argv[1], sys.argv[2]
+d = yaml.safe_load(open(rendered))
+checked, bad = 0, []
+for wf in d["write_files"]:
+    src = os.path.join(srcdir, os.path.basename(wf["path"]))
+    if not os.path.isfile(src):
+        continue            # inline payloads (git-data-emit, authorized_keys, sshd conf)
+    want = open(src, "rb").read()
+    got = wf["content"].encode()
+    checked += 1
+    if hashlib.sha256(got).hexdigest() != hashlib.sha256(want).hexdigest():
+        bad.append("%s: rendered sha=%s (%d B) != source sha=%s (%d B)" % (
+            wf["path"], hashlib.sha256(got).hexdigest()[:12], len(got),
+            hashlib.sha256(want).hexdigest()[:12], len(want)))
+if checked < 9:
+    print("B1 FAIL: only %d file-backed payloads compared (<9) — the mapping found nothing "
+          "to check, which is not the same as everything matching" % checked)
+    sys.exit(1)
+if bad:
+    print("B1 FAIL: %d payload(s) are NOT byte-identical to their source:" % len(bad))
+    for b in bad:
+        print("  " + b)
+    sys.exit(1)
+print("B1 OK: %d payloads byte-identical" % checked)
+PY
+)"; _b1_rc=$?
+if [ "$_b1_rc" -eq 0 ]; then pass; else
+  fail "B1: a delivered payload differs from its repo source" "$_b1_out"
+fi
+
 # INSTRUMENT the extracted block so T5's "the chain did not continue past the failed
 # checksum" assertion can OBSERVE continuation. Nothing in the shipped block prints
 # anything, so `grep -q CHMOD_RAN` matched only its own source text — the assertion passed
@@ -254,8 +299,8 @@ total=$((passes + fails))
 # Floor = the ACTUAL assertion count (D1: 2, T5: 4 + 1 mutation, T17: 2 + 1 mutation). Its
 # job is to catch a silently-empty harness — an early `exit 0` from a skip guard, or a
 # docker run that never produced output — not to be an aspirational target.
-if [ "$total" -lt 10 ]; then
-  echo "FAIL: ran only ${total} assertions (<10) — harness did not execute fully" >&2
+if [ "$total" -lt 11 ]; then
+  echo "FAIL: ran only ${total} assertions (<11) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed (${total} assertions)"
