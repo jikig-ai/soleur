@@ -396,3 +396,40 @@ describe("#6602 — cron-expenses-verify-by is a non-git dispatch-hybrid cron", 
     expect(TIER2_DEFERRED_CRONS.has("cron-expenses-verify-by")).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #6750 A1 pin 1 + pin 3 — the cohort pins that survive merge. ADD-ONLY:
+// nothing above this line is modified.
+// ---------------------------------------------------------------------------
+// The roster is DERIVED FROM BEHAVIOUR, not from the MIGRATED_PROMPT literal
+// above. MIGRATED_PROMPT is a hand-maintained array, so a 9th cron that calls
+// finalizeOutputAwareHeartbeat without being added to it would silently escape
+// this gate — and omission is the dangerous direction (see the ADR-126
+// amendment: omitting `retryEligible: false` while consuming safeCommitAndPr's
+// return value buys an Inngest replay that cannot succeed).
+const FINALIZE_CALLERS = cronFiles.filter((f) =>
+  /finalizeOutputAwareHeartbeat\(/.test(readFileSync(join(FUNCTIONS_DIR, f), "utf-8")),
+);
+
+describe("#6750 A1 pin 1 — every finalizeOutputAwareHeartbeat caller passes retryEligible: false", () => {
+  it("discovers the cohort by behaviour and finds a non-trivial roster", () => {
+    // Cardinality guard: a filter that silently matched nothing would make
+    // every it.each below vacuous (zero cases is a passing suite).
+    expect(FINALIZE_CALLERS.length).toBeGreaterThanOrEqual(8);
+    for (const f of MIGRATED_PROMPT) expect(FINALIZE_CALLERS).toContain(f);
+  });
+
+  it.each(FINALIZE_CALLERS.map((f) => [f]))(
+    "%s passes retryEligible: false AT THE CALL SITE",
+    (file) => {
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      // ANCHORED, not a bare token. Measured against the reference
+      // implementation: the bare token `retryEligible: false` returns 2 (the
+      // field AND the mirrored explanatory comment), so a bare-token assertion
+      // stays GREEN after the FIELD is deleted — vacuous by construction.
+      // The leading indent and the trailing comma are both load-bearing: only
+      // an object-literal property can produce them, and a comment line cannot.
+      expect(src).toMatch(/^\s+retryEligible: false,$/m);
+    },
+  );
+});

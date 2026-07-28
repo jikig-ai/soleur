@@ -66,6 +66,7 @@ import {
   digestIssueExistsForDate,
   ensureDedupIssue,
   ensureScheduledAuditIssue,
+  finalizeOutputAwareHeartbeat,
   formatTailForSentry,
   getAnthropicAdminReport,
   isRealScheduledDigest,
@@ -1694,5 +1695,103 @@ describe("getAnthropicAdminReport (Admin transport redaction, security F1)", () 
     }).catch((e: Error) => e);
     expect(err).toBeInstanceOf(AnthropicApiError);
     expect((err as AnthropicApiError).status).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #6750 A1 pin 2 — `retryEligible` is an IDENTITY test, and OMISSION is the
+// dangerous direction.
+// ---------------------------------------------------------------------------
+// `const failed = threw && !heartbeatOk && retryEligible !== false;`
+//
+// Both arms are pinned because only the PAIR proves the field is load-bearing:
+// asserting the `false` arm alone passes against an implementation that ignores
+// the field entirely and never retries. The omitted arm is what makes the
+// `false` arm mean something.
+//
+// Why this matters for the cohort (ADR-126 amendment): consuming
+// safeCommitAndPr's return value LOWERS heartbeatOk. On a run that also threw,
+// that flips `failed` true → {retry:true} → Inngest replays and re-spawns the
+// agent (real API spend, duplicate artifacts) against a workspace the handler's
+// `finally` already deleted — a replay that was never capable of recovery.
+// So `retryEligible: false` is a PREREQUISITE for return-value consumption,
+// never a peer of it.
+describe("finalizeOutputAwareHeartbeat — retryEligible identity (#6750 A1 pin 2)", () => {
+  const VALID_DOMAIN = "o4509.ingest.sentry.io";
+  const VALID_PROJECT = "4509999";
+  const VALID_PUBLIC_KEY = "abcdef0123456789abcdef0123456789";
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  // Described behaviourally rather than as a literal call: the helper also
+  // requires `step`, `sentryMonitorSlug`, `cronName` and `logger`, so an
+  // abbreviated literal would not typecheck.
+  const finalize = async (opts: { retryEligible?: boolean }) => {
+    const step = {
+      run: vi.fn(async (_id: string, fn: () => Promise<unknown>) => fn()),
+    };
+    const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const { retry } = await finalizeOutputAwareHeartbeat({
+      // The failure shape the cohort actually hits: the body threw AND produced
+      // no verified output, on a NON-final attempt (0 of 2).
+      threw: true,
+      heartbeatOk: false,
+      attempt: 0,
+      maxAttempts: 2,
+      sentryMonitorSlug: "scheduled-growth-audit",
+      cronName: "cron-growth-audit",
+      step: step as unknown as Parameters<
+        typeof finalizeOutputAwareHeartbeat
+      >[0]["step"],
+      logger: logger as unknown as Parameters<
+        typeof finalizeOutputAwareHeartbeat
+      >[0]["logger"],
+      ...("retryEligible" in opts ? { retryEligible: opts.retryEligible } : {}),
+    });
+    return { retry, step, logger };
+  };
+
+  beforeEach(() => {
+    fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.stubEnv("SENTRY_INGEST_DOMAIN", VALID_DOMAIN);
+    vi.stubEnv("SENTRY_PROJECT_ID", VALID_PROJECT);
+    vi.stubEnv("SENTRY_PUBLIC_KEY", VALID_PUBLIC_KEY);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("retryEligible: false → terminal {retry:false} and exactly ONE ?status=error check-in", async () => {
+    const { retry, step } = await finalize({ retryEligible: false });
+    expect(retry).toBe(false);
+    // The heartbeat step DID run — the run reports honestly instead of
+    // silently retrying into a torn-down workspace.
+    const ids = step.run.mock.calls.map((c) => c[0]);
+    expect(ids).toContain("sentry-heartbeat");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const url = fetchSpy.mock.calls[0][0] as string;
+    expect(url).toContain(
+      `/cron/scheduled-growth-audit/${VALID_PUBLIC_KEY}/?status=error`,
+    );
+    // Anchored: it must be the ERROR status, not merely "a check-in".
+    expect(url).not.toContain("?status=ok");
+  });
+
+  it("retryEligible OMITTED → {retry:true} and the heartbeat step is NEVER run (byte-identical to pre-#6714 behaviour)", async () => {
+    const { retry, step } = await finalize({});
+    expect(retry).toBe(true);
+    const ids = step.run.mock.calls.map((c) => c[0]);
+    expect(ids).not.toContain("sentry-heartbeat");
+    // No check-in of ANY colour is posted on a non-final retry — posting one
+    // here is what the memoization-safety rule forbids.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("retryEligible: true is explicitly identical to omitting it (the field is a !== false identity test, not a truthiness test)", async () => {
+    const omitted = await finalize({});
+    const explicitTrue = await finalize({ retryEligible: true });
+    expect(explicitTrue.retry).toBe(omitted.retry);
+    expect(explicitTrue.retry).toBe(true);
   });
 });

@@ -391,6 +391,21 @@ export async function cronRoadmapReviewHandler({
       sentryMonitorSlug: SENTRY_MONITOR_SLUG,
       cronName: "cron-roadmap-review",
       logger,
+      // #6750 (ADR-126 amendment) — a replay CANNOT recover a failure inside the
+      // guarded body: `setup-workspace` is memoized inside step.run, so an Inngest
+      // replay reads back an ephemeralRoot the `finally` below already deleted, and
+      // the re-spawned agent burns real Anthropic spend against a path that no
+      // longer exists. One honest terminal RED beats a retry that cannot succeed.
+      // Scoped precisely: throws BEFORE the try (token mint, setup-workspace
+      // itself) are unaffected and still retry into a fresh workspace, and
+      // DeployInProgressError still rethrows bare.
+      //
+      // This cron routes persistence through the agent's own hook-guarded commit
+      // rather than safeCommitAndPr, so it gains no `livenessOk` remedy — but its
+      // workspace lifecycle is byte-shape-identical to the cohort's, so the replay
+      // is equally incapable of recovery. Included here so the invariant carries no
+      // carve-out (a carve-out is where the next drift hides).
+      retryEligible: false,
       onBeforeHeartbeat: heartbeatOk
         ? undefined
         : async () => {

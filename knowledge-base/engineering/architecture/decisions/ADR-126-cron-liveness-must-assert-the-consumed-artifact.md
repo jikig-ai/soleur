@@ -157,3 +157,170 @@ re-derive information the writer already had.
 
 **Leave diagnosis to Inngest step history.** Rejected: ADR-030 binds it to `127.0.0.1:8288`, so it
 is unreachable without SSH. That is what made H9 undecidable.
+
+---
+
+## Amendment 2026-07-28 (#6750) — the cohort widening
+
+The original decision above closed the blind spot for **one** cron (`cron-community-monitor`) and
+deliberately declined to widen: *"This ADR deliberately does not widen to the cohort."* The follow-up
+audit (#6737, `knowledge-base/engineering/audits/2026-07-20-cron-liveness-cohort-audit.md`) measured
+the cohort from an independent vantage and shipped a detector, but edited no handler — because
+widening carries accepted negatives that had to be recorded before they were applied.
+
+This amendment discharges that deferred clause. It is an amendment rather than a new ordinal because
+the decision is literally ADR-126's own deferred clause being taken up, and #6750 sanctioned either.
+
+### Decision
+
+**Liveness is gated on the consumed artifact across all 8 `MIGRATED_PROMPT` crons, parameterised by
+producer class.** `heartbeatOk` keeps its name and its role as the persistence gate (it is asserted
+as literal source text by `cron-safe-commit-parity.test.ts` across all 8 files, so a rename would
+break a cohort invariant to fix a colour bug); `livenessOk` is added **beside** it, initialised
+`false`, and set true only by an observed positive.
+
+| Class | Producers | committed + artifact ∈ `paths` | committed, `paths` undetermined | committed, artifact ∉ `paths` | `no-changes` | `failed` |
+|---|---|---|---|---|---|---|
+| **A** (deterministic) | `growth-audit`, `campaign-calendar`, `community-monitor` | GREEN | GREEN **iff** `resumed` | **RED** | **RED** | **RED** |
+| **B** (change-conditional) | `content-generator`, `seo-aeo-audit`, `growth-execution`, `competitive-analysis`, `architecture-diagram-sync` | GREEN | GREEN **iff** `resumed` | GREEN **iff** `paths.length > 0` and some path is under the allowlist | **GREEN** | **RED** |
+
+The class table is **single-sourced** in `scripts/cron-artifact-age.sh`'s `class` column and pinned to
+the handlers' compiled class arms by a set-equality parity test, so a ninth cron cannot drift the two
+apart silently.
+
+### The remedy has TWO halves, and porting one is the failure mode
+
+This is the load-bearing paragraph of the amendment. The first draft of #6750's plan ported only half
+the remedy, and **every one of its acceptance criteria would have passed green** while the dated
+2026-07-14 → 07-19 incident shape stayed live across all seven handlers.
+
+1. **Consume `safeCommitAndPr`'s return value** (`livenessOk`) — closes "committed nothing, posted GREEN".
+2. **Harden the dedup short-circuit** — closes "run 1 filed the issue but lost its commit; run 2
+   dedups on that issue and posts GREEN with nothing landed".
+
+The reference implementation says so in-line, and the sentence is quoted here so a future porter
+cannot miss it (`cron-community-monitor.ts`, anchor `#6714 Phase 3.4 — the dedup early-return used to
+post GREEN`):
+
+> *"the exact 2026-07-14 → 07-19 state, and it **SURVIVES the captured-return and `livenessOk` fixes
+> below unless closed here**."*
+
+The mechanism: the dedup short-circuit posts GREEN and `return`s **before**
+`finalizeOutputAwareHeartbeat`, so neither `livenessOk` nor `retryEligible` is ever consulted on that
+path. Measured at the time of this amendment: 7/7 targets carried `dedup-digest-check`, **0/7**
+carried `dedup-digest-committed-check`.
+
+**The hardening does not port uniformly.** `digestCommittedOnDefaultBranch` is an *existence* probe on
+an exact path, so it is sound evidence of "this run's artifact landed" **only when the artifact is
+date-named** — a new file per run. Only `cron-growth-audit` qualifies. For the other six the artifact
+is a permanent file or directory (`campaign-calendar.md`, `competitive-intelligence.md`,
+`plugins/soleur/docs/`, `.../diagrams/`), so the contents API returns 200 forever and the "hardened"
+guard could never fail — reproducing the always-green defect *inside the fix*. Those six use
+`artifactCommittedSince`, a **freshness** probe on the cron's own `commitMessage:` anchor, reusing the
+mechanism `scripts/cron-artifact-age.sh` already trusts. `cron-content-generator` takes the freshness
+arm for a second reason: its blog slug is topic-derived, so the handler cannot predict the path at all.
+
+**No handler may pass a directory or a permanent file path to `digestCommittedOnDefaultBranch`.** A
+probe whose path always exists is a guard that can never fail, which is the defect class this ADR
+exists to close. This is asserted negatively in the test suite.
+
+### Accepted negatives
+
+1. **A trailing persistence throw on an output-present run posts RED where it was previously GREEN**
+   (#5728) — now across seven more handlers. Deliberately noisier before quieter.
+2. **A non-final no-output throw posts one terminal RED instead of retrying.** `retryEligible: false`
+   makes the failure terminal. This is correct rather than merely tolerable: a replay was never
+   capable of recovery, because `setup-workspace` is memoized inside `step.run` and the handler's
+   `finally` tears down `ephemeralRoot` unconditionally, so the replay reads back an already-deleted
+   path, hits `safeCommitAndPr`'s `workspace-lost` guard, and comments a misleading *"PR withheld"* +
+   runbook pointer onto the operator's own issue. Scoped precisely: throws **before** the try (token
+   mint, `setup-workspace` itself) still retry into a fresh workspace, and `DeployInProgressError`
+   still rethrows bare.
+3. **Every liveness-RED run now attempts a GitHub issue write.** All seven use
+   `onBeforeHeartbeat: heartbeatOk ? undefined : …ensureScheduledAuditIssue(…)`, evaluated *after*
+   `if (!livenessOk) heartbeatOk = false;`. It is bounded only by title dedup, so if that dedup ever
+   drifts the operator gets duplicate FAILED audit issues. An earlier draft of the #6750 plan claimed
+   this change "carries only a colour" — that was false, and the test suite now asserts that a
+   liveness-RED run does not create a *second* issue for the same date.
+
+**Ordering is load-bearing at construction time.** `retryEligible: false` must land **before**
+return-value consumption, never beside it. `const failed = threw && !heartbeatOk && retryEligible !== false;`
+is an identity test, so omission is byte-identical to today's behaviour — and omission is the
+dangerous direction: consuming the return value lowers `heartbeatOk`, and on a run that also throws
+that yields `{retry: true}` → Inngest replays and re-spawns the agent (real API spend, duplicate
+artifacts) against a torn-down workspace. Because the change merges atomically this is a construction
+and reviewability discipline rather than a deployment-safety property; what survives merge is the pair
+of test pins.
+
+### Class-assignment evidence
+
+A producer is Class **A** iff its prompt mandates the consumed-artifact write with **no** conditional
+and **no** early stop. The evidence is the quoted instruction, not an empirical commit count — the
+`SOLEUR_CRON_PERSIST_RESULT` marker only shipped 2026-07-20, so for weekly and monthly producers the
+observation window holds roughly one fire and cannot support a "never" claim.
+
+- `cron-growth-audit` → **A**. Steps 1–4 write four `<RUN_DATE>-*.md` reports unconditionally; Step 3
+  even says *"If the audit fails, write a stub report and continue"*.
+- `cron-campaign-calendar` → **A**. STEP 3 writes `content-strategy.md`'s `last_updated` every run,
+  and the allowlist is exactly two files.
+- `cron-content-generator` → **B**, corrected from **A**. This is a correction to a *derived artifact*:
+  the #6737 audit's classification table said `A`, and `scripts/cron-artifact-age.sh` inherited the
+  error. Reading the prompt directly, it carries **two prompt-mandated no-artifact exits** — STEP 1b
+  *"If no usable topic, create issue … and stop"* and STEP 2 *"If content-writer aborts due to FAIL
+  citations, create issue and stop"*. Both are designed-healthy outcomes: they file the audit issue
+  (so `heartbeatOk` stays true) and commit nothing. Under a Class A must-commit rule they would
+  **false-RED**. #6750's enumeration was right and the audit's table was wrong.
+
+Reversing a class assignment is deliberately cheap — one line in `scripts/cron-artifact-age.sh`. If a
+future observation shows a `no-changes` run for a Class A producer, that demotes it to B.
+
+### Named residuals
+
+Written down with numbers rather than papered over:
+
+1. **`DeployInProgressError` mid-spawn** is rethrown bare with no heartbeat, so Inngest retries — and
+   that retry fires the exact hazard `retryEligible` exists to close, because the workspace is already
+   gone. Outside this amendment's reach.
+2. **A throw inside the `sentry-heartbeat` step itself** is outside `retryEligible`'s reach.
+3. **The detector posts no check-in of its own**, so if it stops running its silence reads as healthy
+   — the reporter-is-the-subject problem displaced one level up. Tracked in **#7047**.
+4. **Class B silent windows: 15d / 22d / 46d / 75d.** Class B's `no-changes` stays GREEN by design, so
+   staleness is caught only by the threshold detector — and the detector's `last_artifact_epoch()`
+   matches the commit **message** with **no pathspec**, so a Class B run that commits anything under
+   its allowlist resets the age clock with the consumed artifact never written. The windows are 15d
+   (Class A weekly), 22d (Class B weekly — `seo-aeo-audit`, `architecture-diagram-sync`), 46d
+   (`growth-execution`), and 75d (`competitive-analysis`, the `MAX_THRESHOLD_DAYS` cap). **A 75-day
+   window under a `single-user incident` brand-survival threshold is recorded here as accepted, not
+   solved.**
+
+### C4 attribution
+
+The missing relationship is **`api -> kb`**, added as a second relationship on that pair (duplicate
+pairs are already legal and present in this model — `hetzner -> zotRegistry` ×2). It models the one
+inbound `kb` edge that is not an operator-attended session: a scheduled server-side container
+authoring committed KB content unattended.
+
+It is **not** `inngest -> kb`, which is what #6750 originally specified. The Inngest Server is a Go
+queue/scheduler on a dedicated host (ADR-100) and never opens a git workspace, so that edge would
+assert an authorship path that does not exist — the same defect class the edge was added to fix. The
+model already answers this question the same way for Sentry: *"Deliberately NO `inngest -> sentry`
+edge… The Inngest-FIRED crons' check-ins are posted by the code `api` serves."* Stated honestly: that
+note's **headline** reason is network topology (the Inngest host has no Sentry path at all), and the
+attribution sentence is secondary.
+
+It is also not `webapp -> kb`: `webapp` is a **system**, while all nine existing inbound `kb` edges
+are container or component level. `webapp -> sentry` earns system altitude because it spans the
+dashboard *and* server configs; the cron→kb path is single-container and server-only. Getting the
+altitude right is what keeps the new edge a legal same-altitude parallel edge rather than a
+different-altitude one.
+
+**Counter-evidence, stated fairly:** `inngest -> github` and `inngest -> doppler` (ADR-088,
+`cron-ghcr-token-minter`) *do* attribute an Inngest-fired cron's writes to `inngest`, and
+`inngest -> kb` would have matched them. The model is internally inconsistent. Rather than leave that
+silent — which would put the new convention in the minority with its rationale attached only to the
+new edge — a 2-line annotation above `inngest -> github` marks both as the same mis-attribution and
+points at **#7046**, which tracks resolving it.
+
+No `views.c4` edit is required: the `containers` view already enumerates both endpoints, and LikeC4
+renders the relationship automatically.
+
