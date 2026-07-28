@@ -55,6 +55,24 @@ open(f"{out}/preamble.sh", "w").write(pre[0])
 PY
 [ -s "$TMP/doppler-dl.sh" ] || { echo "FAIL: could not extract the checksum block" >&2; exit 1; }
 
+# INSTRUMENT the extracted block so T5's "the chain did not continue past the failed
+# checksum" assertion can OBSERVE continuation. Nothing in the shipped block prints
+# anything, so `grep -q CHMOD_RAN` matched only its own source text — the assertion passed
+# identically against a completely unguarded chain. The marker rides on the chmod line
+# because chmod is the last of the three commands the abort must prevent (`sha256sum -c -`
+# fails => tar, chmod and this echo are all unreached).
+python3 - "$TMP/doppler-dl.sh" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "chmod +x /usr/local/bin/doppler"
+if s.count(old) != 1:
+    sys.stderr.write("expected exactly 1 chmod line in the extracted block, found %d\n" % s.count(old))
+    sys.exit(3)
+open(p, "w").write(s.replace(old, old + "; echo CHMOD_RAN"))
+PY
+grep -q 'echo CHMOD_RAN' "$TMP/doppler-dl.sh" || {
+  echo "FAIL: CHMOD_RAN instrumentation did not land — T5 would be a tautology again" >&2; exit 1; }
+
 # A capture endpoint inside the container network, standing in for Sentry.
 cat > "$TMP/capture.py" <<'PY'
 import http.server, socketserver
@@ -166,6 +184,38 @@ if grep -q '"level":"fatal"' "$CAPTURE" 2>/dev/null; then pass; else fail "T5: e
 if grep -q 'CHMOD_RAN' "$TMP/out/stdout" 2>/dev/null; then
   fail "T5: the chain continued past the failed checksum"; else pass; fi
 
+# MUTATION for T5 — prove the marker is REACHABLE, so its absence above is evidence of the
+# abort rather than evidence that nothing ever prints it.
+#
+# The mutant removes the driver's `set -e`, which is exactly the pre-#6982 boot: curl still
+# succeeds (real network, genuine tarball), the checksum still fails, and the chain runs
+# `tar xzf` + `chmod +x /usr/local/bin/doppler` on an UNVERIFIED tarball that then executes
+# as root. So this arm reproduces the supply-chain defect the fix closes, and CHMOD_RAN
+# must appear.
+rm -rf "$TMP/out"; mkdir -p "$TMP/out"; : > "$TMP/out/capture.log"
+sed 's/^set -e$/true/' "$TMP/drive.sh" > "$TMP/drive.noerrexit.sh"
+if diff -q "$TMP/drive.sh" "$TMP/drive.noerrexit.sh" >/dev/null; then
+  fail "T5 MUTATION did not land: 'set -e' not found in the driver"
+else
+  cp "$TMP/doppler-dl.sh" "$TMP/dl.case.sh"
+  sed -i 's#^DOPPLER_SHA256=.*#DOPPLER_SHA256="0000000000000000000000000000000000000000000000000000000000000000"#' "$TMP/dl.case.sh"
+  docker run --rm \
+    -v "$TMP/dl.case.sh:/work/doppler-dl.sh:ro" \
+    -v "$TMP/git-data-emit:/work/git-data-emit-src:ro" \
+    -v "$TMP/capture.py:/work/capture.py:ro" \
+    -v "$TMP/drive.noerrexit.sh:/work/drive.sh:ro" \
+    -v "$TMP/out:/out" \
+    ubuntu:24.04 bash -c '
+      set -e
+      cp /work/git-data-emit-src /work/git-data-emit
+      apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq curl python3 >/dev/null 2>&1
+      bash /work/drive.sh
+    ' >"$TMP/out/stdout" 2>&1 || true
+  if grep -q 'CHMOD_RAN' "$TMP/out/stdout" 2>/dev/null; then pass; else
+    fail "T5 MUTATION: without set -e the chain still did not reach chmod — T5's check is vacuous" \
+         "$(tail -5 "$TMP/out/stdout" 2>/dev/null)"; fi
+fi
+
 # ── T17 — a HEALTHY run emits ZERO fatals ──────────────────────────────────────────
 # The rc-guard's whole purpose. Without `rc=$?; [ "$rc" -eq 0 ] && exit 0`, `trap … EXIT`
 # fires on a SUCCESSFUL exit too and every healthy boot emits level=fatal, inverting the
@@ -201,11 +251,11 @@ if [ -s "$TMP/out/capture.log" ]; then pass; else
   fail "T17 MUTATION: removing the rc guard did NOT make a healthy run emit — the check is vacuous"; fi
 
 total=$((passes + fails))
-# Floor = the ACTUAL assertion count (T5: 4, T17: 2, mutation: 1). Its job is to catch a
-# silently-empty harness — an early `exit 0` from a skip guard, or a docker run that never
-# produced output — not to be an aspirational target.
-if [ "$total" -lt 9 ]; then
-  echo "FAIL: ran only ${total} assertions (<9) — harness did not execute fully" >&2
+# Floor = the ACTUAL assertion count (D1: 2, T5: 4 + 1 mutation, T17: 2 + 1 mutation). Its
+# job is to catch a silently-empty harness — an early `exit 0` from a skip guard, or a
+# docker run that never produced output — not to be an aspirational target.
+if [ "$total" -lt 10 ]; then
+  echo "FAIL: ran only ${total} assertions (<10) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed (${total} assertions)"
