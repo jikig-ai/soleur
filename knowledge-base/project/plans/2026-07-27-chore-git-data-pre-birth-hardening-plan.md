@@ -1527,8 +1527,10 @@ requirement onto the banner-clear follow-up issue (AC32) rather than letting it 
     `grep -rn "neither CPU- nor RAM-bound" --include='*.tf' --include='*.md' --exclude-dir=archive --exclude-dir=plans --exclude-dir=specs .`
     returning only qualified occurrences. **The `--exclude-dir` flags are load-bearing**: without
     them the command matches this plan file itself (R27).
-15. ADR-149 carries checklist **item 8** (sizing) and an Alternatives amendment recording D-HB's
-    three findings with the original reasoning preserved.
+15. ADR-149 carries the sizing checklist item — **item 9 as merged**, not item 8: #7003 landed
+    the DC-2 mandate as item 7 while this branch was open, so banner-clearing moved to 8 and
+    sizing to 9 (see the ADR's `Disposition — #6982` table) — and an Alternatives amendment
+    recording D-HB's three findings with the original reasoning preserved.
 16. The `resource "doppler_secret" "git_data_ssh_host"` **block** in `git-data.tf` has
     `value = local.git_data_private_ip` and **no `depends_on`** — asserted by extracting the block
     (e.g. `awk '/resource "doppler_secret" "git_data_ssh_host"/,/^}/'`) and checking both
