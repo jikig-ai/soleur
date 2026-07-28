@@ -5,8 +5,14 @@
 #
 # WHY A CHECKED-IN GUARD AND NOT A ONE-SHOT PR REVIEW: a PR-time grep does not stop a
 # later de-pin, a re-widened `paths:` glob, or a copy-paste that re-collides the two
-# workflows' issue titles. actionlint is local-only (it runs in ZERO workflows), so a
-# checked-in test invoked by infra-validation.yml is the enforceable gate.
+# workflows' issue titles. actionlint cannot see any of those — it checks workflow SYNTAX
+# and shell, not this repo's routing semantics — so a checked-in test invoked by
+# infra-validation.yml is the enforceable gate.
+#
+# (#7002 note: actionlint now DOES run in CI, as a hang guard in ci.yml. That step asserts
+# only that the linter TERMINATES — it is not a semantic gate and does not subsume this
+# file. The earlier wording here, "actionlint is local-only (it runs in ZERO workflows)",
+# is no longer true; the reason for this guard is unchanged.)
 #
 # THE TWO FAILURES THIS EXISTS TO PREVENT:
 #  1. TRIGGER BLEED (finding 0). apply-inngest-rls.yml used to trigger on

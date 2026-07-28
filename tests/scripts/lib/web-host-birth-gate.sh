@@ -115,57 +115,66 @@ _WEB_HOST_BIRTH_ALLOW='def allow($k): [
       "doppler_secret.web_nic_guard_url[\"\($k)\"]"
 ];'
 
+# THE FAIL-CLOSED PREAMBLE (#6997). A gate that authorises destructive production
+# infrastructure must never let "I could not check" read as "it is fine". These three
+# assertions refuse a plan document the gate cannot READ, cannot CLASSIFY, or whose
+# counters did not evaluate — the shapes that otherwise score zero-of-everything and PASS.
+#
+# The `declare -F` guard makes the source idempotent: the workflow step may have sourced
+# the preamble already, in either order.
+# shellcheck source=tests/scripts/lib/plan-gate-preamble.sh
+if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
+  _WHBG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=/dev/null
+  source "${_WHBG_DIR}/plan-gate-preamble.sh"
+fi
+
 web_host_birth_gate() {
   local plan_json="$1" host_key="${2:-}"
   local want_addr creates destroys created_addr reboot_updates out_of_scope
   local offenders
+
+  # THE ASSERTS LIVE INSIDE THE FUNCTION, AS ITS FIRST STATEMENTS, because they consume
+  # $plan_json — a FUNCTION PARAMETER that does not exist at file scope. (Not, as an
+  # earlier revision claimed, because a file-scope failure would fail open: `set -e` is
+  # armed at every gate source site in apply-web-platform-infra.yml, so a file-scope
+  # failure fails CLOSED. Getting the right answer from the wrong mechanism is still a
+  # defect when the mechanism ends up in an ADR.)
+  #
+  # `|| return 1` also catches a 127 undefined-function status, so a preamble that failed
+  # to source aborts the gate rather than silently skipping the check.
+  plan_gate_assert_readable     "web_host_birth_gate" "$plan_json" || return 1
+  plan_gate_assert_classifiable "web_host_birth_gate" "$plan_json" || return 1
 
   if [[ -z "$host_key" ]]; then
     echo "web_host_birth_gate: ABORT — no host key supplied. The gate cannot verify WHICH host is being born without the request it is grading against, and a birth gate that does not check identity is a count check wearing a costume."
     return 1
   fi
 
-  if [[ ! -f "$plan_json" ]]; then
-    echo "web_host_birth_gate: ABORT — plan JSON not found: ${plan_json}"
-    return 1
-  fi
 
   want_addr="hcloud_server.web[\"${host_key}\"]"
 
   # Read from the STRUCTURED plan JSON (terraform show -json), never stderr.
   #
-  # `resource_changes[]?` tolerates the key being absent, which is why the null-guard
-  # below is a SEPARATE explicit check: `null | length` is 0 in jq and `-eq 0` would
-  # read a degraded document as "no creates" — the same fail-open shape that makes a
-  # 200-with-null-body pass a count check. An unreadable plan is an abort, not a zero.
-  if ! jq -e 'has("resource_changes") and (.resource_changes | type == "array")' \
-       < "$plan_json" >/dev/null 2>&1; then
-    echo "web_host_birth_gate: ABORT — jq filter failed on ${plan_json}: the document is unparseable or has no resource_changes array. Fail-closed: an unreadable plan is not evidence of a safe one."
-    return 1
-  fi
-
-  # Every entry MUST carry an ARRAY .change.actions before any counter reads one.
+  # THE READABILITY AND CLASSIFIABILITY CHECKS THAT USED TO LIVE HERE WERE DELETED IN
+  # #6997 — plan_gate_assert_readable and plan_gate_assert_classifiable above are the same
+  # assertions, and STRICTLY STRONGER on two shapes this gate's inline copy missed:
   #
-  # jq's `null | index("delete")` returns null rather than erroring, so an entry missing
-  # `.change.actions` is silently DROPPED by the destroy and out-of-scope selects — a
-  # resource that vanishes from the work-list instead of failing closed. What that hides
-  # is precisely a destroy the gate cannot see.
+  #   - `"actions": []`. The inline check tested `type != "array"` only, and `[]` IS an
+  #     array — so it passed, and an empty actions array is invisible to every downstream
+  #     arm at once (`[] | any(...)` is false, `[] | index("delete")` is null). That is the
+  #     MEASURED hole: a happy 18-address birth that also carried
+  #     hcloud_server.web["web-1"] with "actions": [] and "after": null — a destroy of the
+  #     singleton behind app.soleur.ai — scored destroys=0, out_of_scope=0 and PASSED.
   #
-  # MEASURED, not assumed: deleting this check makes a no-actions plan PASS (the suite's
-  # mutation proves it). An earlier draft of this comment claimed the numeric
-  # counter-validation below was a sufficient backstop and that this check merely improved
-  # the message. That was wrong, and it is the comfortable kind of wrong — "something else
-  # would catch it" is the standard justification for weakening a guard.
+  #   - a SCALAR `.change`. The inline form was a NEGATIVE search (`if jq -e '[…|select(bad)]
+  #     | length > 0'`), which reads a jq ERROR as "condition false". `.change.actions` on a
+  #     number raises, jq exits 5, and the gate reported the plan classifiable. The shared
+  #     helper asserts the property POSITIVELY with `all(...)`, so an error lands on the
+  #     abort side.
   #
-  # Scoped to ALL types, not just hcloud_server as in the sibling stock-preflight gate,
-  # because the destroy and out-of-scope arms read every entry's actions.
-  if jq -e '[.resource_changes[] | select((.change.actions | type) != "array")] | length > 0' \
-       < "$plan_json" >/dev/null 2>&1; then
-    offenders=$(jq -r '[.resource_changes[] | select((.change.actions | type) != "array") | .address] | .[0:10] | join(", ")' < "$plan_json" 2>/dev/null)
-    echo "web_host_birth_gate: ABORT — unclassifiable plan entry: ${offenders} has no array .change.actions, so it cannot be classified as create/destroy/no-op. Fail-closed: an entry the gate cannot read is not evidence of a safe plan — a destroy hiding in an unreadable entry is exactly what this refuses to wave through."
-    return 1
-  fi
-
+  # This is why the retrofit was NOT "pure deletion changing no safety property", as #6997
+  # and ADR-149 both originally claimed. Deleting these was a strict strengthening.
   creates=$(jq '[.resource_changes[] | select(.type == "hcloud_server") | select(.change.actions | index("create"))] | length' < "$plan_json" 2>/dev/null)
 
   # Any destroy-shaped action ANYWHERE in the plan, not just on hcloud_server: a birth
@@ -200,12 +209,11 @@ web_host_birth_gate() {
       | select(IN(.address; allow($k)[]) | not) ] | length' \
     < "$plan_json" 2>/dev/null)
 
-  for v in "$creates" "$destroys" "$reboot_updates" "$out_of_scope"; do
-    if [[ ! "$v" =~ ^[0-9]+$ ]]; then
-      echo "web_host_birth_gate: ABORT — counter parse failed (creates='${creates}' destroys='${destroys}' reboot_updates='${reboot_updates}' out_of_scope='${out_of_scope}'). Fail-closed."
-      return 1
-    fi
-  done
+  # Every counter is a non-negative integer BEFORE any arithmetic compares one.
+  # A counter that did not evaluate is the empty string, and [[ "" -gt 0 ]] is FALSE
+  # under bash coercion — so an uncomputed counter silently satisfies every threshold.
+  # The shared helper names WHICH counter failed rather than reporting them all.
+  plan_gate_assert_numeric "web_host_birth_gate" "creates=${creates}" "destroys=${destroys}" "reboot_updates=${reboot_updates}" "out_of_scope=${out_of_scope}" || return 1
 
   echo "web_host_birth_gate: requested=${host_key} host_creates=${creates} destroys=${destroys} reboot_updates=${reboot_updates} out_of_scope=${out_of_scope}"
 

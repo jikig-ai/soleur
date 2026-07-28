@@ -74,14 +74,36 @@
 # Usage:  source tests/scripts/lib/registry-host-replace-gate.sh
 #         registry_host_replace_gate <plan-json-file>   # 0=PASS, 1=ABORT
 
+# THE FAIL-CLOSED PREAMBLE (#6997). A gate that authorises destructive production
+# infrastructure must never let "I could not check" read as "it is fine". These three
+# assertions refuse a plan document the gate cannot READ, cannot CLASSIFY, or whose
+# counters did not evaluate — the shapes that otherwise score zero-of-everything and PASS.
+#
+# The `declare -F` guard makes the source idempotent: the workflow step may have sourced
+# the preamble already, in either order.
+# shellcheck source=tests/scripts/lib/plan-gate-preamble.sh
+if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
+  _RHRG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=/dev/null
+  source "${_RHRG_DIR}/plan-gate-preamble.sh"
+fi
+
 registry_host_replace_gate() {
   local plan_json="$1"
-  local counts oos sdel secdel vbad replaced nic att fw v
+  local counts oos sdel secdel vbad replaced nic att fw
 
-  if [[ ! -f "$plan_json" ]]; then
-    echo "registry_host_replace_gate: plan JSON not found: ${plan_json}"
-    return 1
-  fi
+  # THE ASSERTS LIVE INSIDE THE FUNCTION, AS ITS FIRST STATEMENTS, because they consume
+  # $plan_json — a FUNCTION PARAMETER that does not exist at file scope. (Not, as an
+  # earlier revision claimed, because a file-scope failure would fail open: `set -e` is
+  # armed at every gate source site in apply-web-platform-infra.yml, so a file-scope
+  # failure fails CLOSED. Getting the right answer from the wrong mechanism is still a
+  # defect when the mechanism ends up in an ADR.)
+  #
+  # `|| return 1` also catches a 127 undefined-function status, so a preamble that failed
+  # to source aborts the gate rather than silently skipping the check.
+  plan_gate_assert_readable     "registry_host_replace_gate" "$plan_json" || return 1
+  plan_gate_assert_classifiable "registry_host_replace_gate" "$plan_json" || return 1
+
   # Read from the STRUCTURED plan JSON (terraform show -json), never stderr.
   # EXACT-EQUALITY membership via IN(.address; allow[]) — NOT `inside`/`contains`
   # (substring matching would false-match similar addresses). Verified on jq 1.8.x.
@@ -162,14 +184,11 @@ registry_host_replace_gate() {
   att=$(echo "$counts" | jq -r '.attachment_recreated')
   fw=$(echo "$counts" | jq -r '.firewall_ok')
 
-  # Parse-validate every counter. A jq null/empty would evaluate false in the
-  # arithmetic below and could silently mis-decide; fail LOUD instead.
-  for v in "$oos" "$sdel" "$secdel" "$vbad" "$replaced" "$nic" "$att" "$fw"; do
-    if [[ ! "$v" =~ ^[0-9]+$ ]]; then
-      echo "registry_host_replace_gate: counter parse failed (out_of_scope='${oos}' store_destroyed='${sdel}' secret_destroyed='${secdel}' volume_bad_update='${vbad}' server_replaced='${replaced}' nic_recreated='${nic}' attachment_recreated='${att}' firewall_ok='${fw}')"
-      return 1
-    fi
-  done
+  # Every counter is a non-negative integer BEFORE any arithmetic compares one.
+  # A counter that did not evaluate is the empty string, and [[ "" -gt 0 ]] is FALSE
+  # under bash coercion — so an uncomputed counter silently satisfies every threshold.
+  # The shared helper names WHICH counter failed rather than reporting them all.
+  plan_gate_assert_numeric "registry_host_replace_gate" "out_of_scope=${oos}" "store_destroyed=${sdel}" "secret_destroyed=${secdel}" "volume_bad_update=${vbad}" "server_replaced=${replaced}" "nic_recreated=${nic}" "attachment_recreated=${att}" "firewall_ok=${fw}" || return 1
 
   echo "out_of_scope=${oos} store_destroyed=${sdel} secret_destroyed=${secdel} volume_bad_update=${vbad} server_replaced=${replaced} nic_recreated=${nic} attachment_recreated=${att} firewall_ok=${fw}"
   if [[ "$oos" -eq 0 && "$sdel" -eq 0 && "$secdel" -eq 0 && "$vbad" -eq 0 && "$replaced" -eq 1 && "$nic" -ge 1 && "$att" -ge 1 && "$fw" -ge 1 ]]; then

@@ -3238,7 +3238,12 @@ fi
 # pinned literals) — the distinct QMAX_POLLS/QPOLL_INTERVAL names in the quiesce-web arm keep
 # this grep unambiguous vs the other polls in that workflow.
 TOTAL=$((TOTAL + 1))
-CUTOVER_WORKFLOW="$SCRIPT_DIR/../../../.github/workflows/cutover-inngest.yml"
+# #7002: the cutover run body was extracted verbatim from the workflow into
+# scripts/cutover-inngest.sh (the 118722-byte body deadlocked actionlint). The QMAX_POLLS /
+# QPOLL_INTERVAL literals moved with it, so this guard now reads the SCRIPT — pointing it at
+# the YAML would extract empty strings and fail on "non-integer extraction", which is how
+# this fired on the extraction PR.
+CUTOVER_WORKFLOW="$SCRIPT_DIR/../../../scripts/cutover-inngest.sh"
 QDG_ATTEMPTS=$(grep -oE 'QUIESCE_PROBE_ATTEMPTS:-[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' || true)
 QDG_INTERVAL=$(grep -oE 'QUIESCE_PROBE_INTERVAL:-[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+' || true)
 QDG_STOP=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -oE '^TimeoutStopSec=[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
@@ -3269,7 +3274,7 @@ if [[ "$QDG_OK" -eq 1 ]]; then
   echo "  PASS: op=quiesce-web poll window (${QDG_LEFT}s) covers host quiesce worst case (${QDG_RIGHT}s) — #6178 drift guard"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: quiesce-web poll drift guard (#6178): $QDG_WHY (attempts=$QDG_ATTEMPTS interval=$QDG_INTERVAL stop=$QDG_STOP QMAX_POLLS=$QDG_MAX_POLLS QPOLL_INTERVAL=$QDG_POLL_INTERVAL; files: ci-deploy.sh, inngest-bootstrap.sh, .github/workflows/cutover-inngest.yml)"
+  echo "  FAIL: quiesce-web poll drift guard (#6178): $QDG_WHY (attempts=$QDG_ATTEMPTS interval=$QDG_INTERVAL stop=$QDG_STOP QMAX_POLLS=$QDG_MAX_POLLS QPOLL_INTERVAL=$QDG_POLL_INTERVAL; files: ci-deploy.sh, inngest-bootstrap.sh, scripts/cutover-inngest.sh)"
 fi
 
 echo ""

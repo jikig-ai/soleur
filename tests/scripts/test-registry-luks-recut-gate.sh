@@ -281,10 +281,20 @@ plan "$TMP/birth.json" \
 check "from-empty birth shape ABORT (out_of_scope is the sole rejecter)" 1 "out_of_scope=6" "$TMP/birth.json" "$ID" "absent"
 
 # --- Fail-closed on the plan JSON itself ---------------------------------------------------------
+#
+# MESSAGE MIGRATION (#6997). Both refusals are now owned by the shared preamble rather than
+# by this gate's own inline checks, which were deleted as redundant. The missing-file text is
+# unchanged ("plan JSON not found"), but the malformed-JSON text moved from this gate's
+# "jq evaluation failed" — which named the gate's OWN big counting filter — to the preamble's
+# "jq filter failed … the document is unparseable or has no resource_changes array".
+#
+# The distinction is worth keeping: the gate's "jq evaluation failed" still exists below for
+# a plan that PARSES but breaks the counting filter. These two arms pin the preamble's, so a
+# regression that silently reverted the retrofit would show up here as the OLD string.
 check "plan JSON missing ABORT" 1 "plan JSON not found" "$TMP/does-not-exist.json"
 
 printf 'not json at all {{{' > "$TMP/malformed.json"
-check "malformed plan JSON ABORT (fail-loud, never a silent 0)" 1 "jq evaluation failed" "$TMP/malformed.json"
+check "malformed plan JSON ABORT (fail-loud, never a silent 0)" 1 "the document is unparseable" "$TMP/malformed.json"
 
 # --- A data.* read and unrelated no-ops must NOT false-abort --------------------------------------
 plan "$TMP/reads.json" \
@@ -371,5 +381,75 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+
+# ── #6997: the shared fail-closed preamble is INVOKED, not merely sourced ─────────
+#
+# A1/A2 pin the two degraded shapes the retrofit closes. Both PASSED this gate's
+# predecessor: an entry with "actions": [] is invisible to `any(...)` and to
+# `index("delete")` simultaneously, and a scalar `.change` makes a negative-search
+# classifiability check read a jq ERROR as "condition false".
+#
+# A4 is the arm that nothing in test-plan-gate-preamble.sh can replace: it proves THIS
+# gate CALLS the preamble. Neutering the call must leave the plan REJECTED (so the
+# retrofit never opened a door) while the preamble-distinctive signature DISAPPEARS (so
+# the rejection was really the preamble's).
+#
+# THE ANCHOR IS NOT THE GATE NAME. Every abort this gate emits — including its own
+# pre-existing ones — is prefixed with the gate name, so a name anchor cannot tell a
+# preamble abort from a gate abort and the arm would be a redness detector, not a
+# binding. `unclassifiable plan entry` is text only the preamble can produce.
+#
+# A3 (the happy plan still PASSES) is NOT duplicated here: this suite's existing PASS
+# arms already are it, and an always-aborting gate would redden them.
+_PG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GATE="${_PG_DIR}/lib/registry-luks-recut-gate.sh"
+PREAMBLE="${_PG_DIR}/lib/plan-gate-preamble.sh"
+# shellcheck source=tests/scripts/lib/gate-suite-harness.sh
+source "${_PG_DIR}/lib/gate-suite-harness.sh"
+
+mk_plan "$TMP/pg-d5.json" "[$(rc_empty_actions 'hcloud_volume.workspaces' 'hcloud_volume')]"
+mk_plan "$TMP/pg-d6.json" "[$(rc_scalar_change 'hcloud_volume.workspaces' 'hcloud_volume')]"
+
+gate_check "A1 (D5): an EMPTY actions array hiding a destroy => fail-closed ABORT" \
+  registry_luks_recut_gate 1 "unclassifiable plan entry" "$TMP/pg-d5.json" "12345" "absent"
+gate_check "A1 (D5): the ABORT is the preamble's and names this gate" \
+  registry_luks_recut_gate 1 "registry_luks_recut_gate: ABORT — unclassifiable" "$TMP/pg-d5.json" "12345" "absent"
+gate_check "A2 (D6): a SCALAR .change => fail-closed ABORT" \
+  registry_luks_recut_gate 1 "unclassifiable plan entry" "$TMP/pg-d6.json" "12345" "absent"
+gate_check "A2 (D6): the ABORT names the offending address" \
+  registry_luks_recut_gate 1 "hcloud_volume.workspaces" "$TMP/pg-d6.json" "12345" "absent"
+
+gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
+  's/^  plan_gate_assert_classifiable .*/  :/' \
+  "unclassifiable plan entry" "plan is NOT the exact scoped" \
+  registry_luks_recut_gate "$TMP/pg-d5.json" "12345" "absent"
+
+
+
+
+# ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
+# non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
+# the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
+# the CALLS to those helpers silences all of them at once while the suite still exits 0,
+# because the only merge gate is the `fails -eq 0` expression below and CI reads only the
+# exit code. Measured: removing one arm block took a sibling suite from 13 assertions to 8,
+# still exit 0.
+#
+# DELIBERATELY SELF-CONTAINED — bash builtins and this suite's own counters only, no
+# harness function. The first version called a helper from gate-suite-harness.sh and the
+# harness `source` lived INSIDE the arm block, so deleting the arms also undefined the
+# floor: it exited 127 under `set -uo pipefail`, recorded nothing, and the suite passed. A
+# floor that depends on the thing it guards is not a floor.
+#
+# A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
+# suite on every legitimately-added assertion and train people to bump it unread.
+_ran=$((passes + fails))
+if [[ "$_ran" -lt 34 ]]; then
+  fails=$((fails + 1))
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 34. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+else
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 34)\n' "$_ran"
+fi
+
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

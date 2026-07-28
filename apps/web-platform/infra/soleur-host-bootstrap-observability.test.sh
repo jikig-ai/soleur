@@ -85,7 +85,12 @@ fi
 # (explaining why plain-HTTP zot is safe) — that comment is documentation, not a call.
 # Exclude comment lines so the guard tracks the real invariant (no cosign VERIFY runs
 # on the fresh-boot path — it lives only in ci-deploy.sh).
-if grep -E 'cosign' "$CI" | grep -qvE '^[[:space:]]*#'; then
+# #7024: capture-then-herestring, never `producer | grep -q`. Under `set -o pipefail`
+# grep -q exits on its first match and closes the pipe; the upstream whole-file grep then
+# takes SIGPIPE (141) and pipefail propagates it, so the `if` reads FALSE even though the
+# pattern MATCHED. Intermittent by nature — it needs the producer to still be writing.
+_COSIGN_LINES="$(grep -E 'cosign' "$CI" || true)"
+if grep -qvE '^[[:space:]]*#' <<<"$_COSIGN_LINES" && [[ -n "$_COSIGN_LINES" ]]; then
   no "AC1: cloud-init.yml must NOT invoke cosign (verify lives only in ci-deploy.sh)"
 else
   ok "AC1: no cosign call in the fresh-boot cloud-init sequence"
@@ -412,7 +417,13 @@ done
 # left the suite 94/0 green. Widening the pattern without stripping comments then made the
 # assertion false-FAIL on that same explanatory prose: the two halves of this fix are one
 # change, and shipping either alone is a regression in the opposite direction.
-if grep -vE '^[[:space:]]*#' "$TRAIL" | grep -qE 'query=\$\{?QUERY\}?'; then
+# #7024: $TRAIL is read once, comments stripped, then matched with herestrings. The piped
+# form (`grep -v … "$TRAIL" | grep -q …`) takes SIGPIPE on the producer when grep -q exits
+# early, and under `set -euo pipefail` that inverts the verdict. THIS SUITE ACTUALLY FLAKED
+# ON IT: CI run 30405127004 printed `grep: write error: Broken pipe` immediately before a
+# spurious "[FAIL] AC16 … must derive MSG_RE from QUERY", on code that is correct.
+_TRAIL_NC="$(grep -vE '^[[:space:]]*#' "$TRAIL" || true)"
+if grep -qE 'query=\$\{?QUERY\}?' <<<"$_TRAIL_NC"; then
   no "AC16: the surface step still passes the broken message: query to the events endpoint (returns 0)"
 else
   ok "AC16: the surface step does not pass the broken message: query to the endpoint"
@@ -421,8 +432,8 @@ fi
 # appears in an explanatory comment inside the reader (the note about keeping the literal
 # byte-identical for this very assertion), so the bare -qF form is satisfied by the prose that
 # documents it — the assertion its own documentation satisfies (cq-assert-anchor-not-bare-token).
-if grep -vE '^[[:space:]]*#' "$TRAIL" | grep -qF 'MSG_RE=' \
-   && grep -vE '^[[:space:]]*#' "$TRAIL" | grep -qF 'test($re)'; then
+if grep -qF 'MSG_RE=' <<<"$_TRAIL_NC" \
+   && grep -qF 'test($re)' <<<"$_TRAIL_NC"; then
   ok "AC16: the surface step filters recent events client-side via a regex derived from QUERY"
 else
   no "AC16: the surface step must derive MSG_RE from QUERY and filter events client-side (test(\$re))"
