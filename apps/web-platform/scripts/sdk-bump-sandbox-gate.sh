@@ -196,7 +196,11 @@ require_capture_ack=0
 if [[ "$capture_trigger" -eq 1 ]]; then
   if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
     VERIFY_CMD="${SDK_GATE_VERIFY_CMD:-SANDBOX_CANARY_CAPTURE=1 bun apps/web-platform/scripts/sandbox-canary.mjs --verify apps/web-platform/infra/sandbox-canary-argv.json}"
-    verdict_json="$(bash -c "$VERIFY_CMD" 2>/dev/null | tail -1 || true)"
+    # stderr is deliberately NOT discarded: the in-image copy (#7007) prints a
+    # FATAL: diagnostic there on a truncated tree, and `$( )` captures stdout only,
+    # so letting stderr through reaches the job log without polluting the verdict.
+    # `|| true` stays — the ack-fallback below is intentional (tracked in issue 7043).
+    verdict_json="$(bash -c "$VERIFY_CMD" | tail -1 || true)"
     v_verdict="$(printf '%s' "$verdict_json" | jq -r '.verdict // ""' 2>/dev/null || echo "")"
     v_reason="$(printf '%s' "$verdict_json" | jq -r '.reason // ""' 2>/dev/null || echo "")"
     if [[ "$v_reason" == "argv_drift" ]]; then

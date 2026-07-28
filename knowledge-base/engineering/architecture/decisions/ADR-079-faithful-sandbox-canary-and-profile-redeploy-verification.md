@@ -324,6 +324,13 @@ CI auth uses `ANTHROPIC_API_KEY` (repo secret); the in-image `--verify` runs via
 the helper uses `node:22-slim` + `npm ci` (the deploy `FROM` base), not the fully
 built web-platform image; they share the base OS filesystem so the host-conditional
 token set is identical — a follow-up could pin to the built image for exactness.
+Addendum (#7007, 2026-07-28): whoever next regenerates the fixture with `--capture`
+should know that `/build` is now a *filtered* copy of the checkout —
+`scripts/lib/in-image-copy-src.sh` excludes `node_modules` (rebuilt by the very next
+`npm ci`) and `.terraform` (read by nothing here). Both are outside the argv
+projection surface: the committed fixture carries only `/`, `/proc`, `/dev`,
+`/dev/null`, `${CANARY_WS}` and `${CANARY_EMPTY}`, and the invariant above is
+grounded in the **base OS filesystem**, not in project-relative paths.
 
 ### Amendment (#5955, 2026-07-03) — the seccomp reload resolves the running semver from `/health`; the deploy contract stays semver-only
 
