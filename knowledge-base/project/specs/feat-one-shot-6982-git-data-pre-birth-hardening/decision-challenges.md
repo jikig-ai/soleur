@@ -101,3 +101,49 @@ exposure the operator should know about:
 
 **Disposition:** all three deferred with gate-bound (not date-bound) tracking. No operator action
 required now.
+
+---
+
+## DC-5 — User-Challenge: item 5's mandated MECHANISM is not satisfiable in the window it applies to
+
+**Raised at:** rebase onto `origin/main`, 2026-07-28. Not a review finding — the constraint landed
+on `main` in **#7003** after this branch's `git-data.tf` work was already committed, so nothing in
+this session's review panel could have seen it.
+
+**The operator's stated direction (the default).** ADR-149 release-checklist item 5, and the DC-3
+`RESOLVED` block in
+`knowledge-base/project/specs/feat-one-shot-6977-git-data-birth-route/decision-challenges.md`:
+
+> When it lands it **MUST** single-source the address from `hcloud_server_network.git_data.ip` —
+> never a fresh copy of the `10.0.1.20` literal.
+
+**What shipped instead.** `doppler_secret.git_data_ssh_host.value = local.git_data_private_ip`
+(`git-data.tf`). `hcloud_server_network.git_data.ip` reads that **same** local (`network.tf`), so
+the repo holds exactly one `10.0.1.20` literal.
+
+**Why the mandated mechanism cannot be used.** It contradicts a second requirement of the same
+checklist. `hcloud_server_network.git_data` depends on `hcloud_server.git_data.id`; a secret that
+reads its `ip` attribute therefore cannot be planned or applied while the host is absent. But
+ADR-149 Residual 2 requires `GIT_DATA_SSH_HOST` to exist **before the first dispatch** — i.e.
+precisely while the host is absent. The two constraints have no common satisfying assignment.
+
+Reading the computed attribute would also restore the `-target`-closure edge to
+`hcloud_server.git_data` that DC-3 cited as its own reason for cutting the resource from #6977, so
+the mandate works against the rationale that produced it.
+
+**What is and is not met.**
+
+| Constraint (DC-3) | Status |
+|---|---|
+| `OPERATOR_APPLIED_EXCLUSIONS` entry lands in the same change | **MET.** |
+| Never a fresh copy of the `10.0.1.20` literal (the stated *harm*) | **MET** — one literal, one source, repo-wide. |
+| Single-source specifically from `hcloud_server_network.git_data.ip` (the prescribed *mechanism*) | **NOT MET.** Infeasible pre-birth, as above. |
+
+**Disposition:** shipped as `local.git_data_private_ip`, divergence recorded rather than silently
+absorbed. The mandate's protective intent is satisfied by a strictly stronger property (a single
+source that *both* consumers read, with no dependency edge to an unborn server). Recorded in
+ADR-149 under *Item 5's mandated mechanism is not satisfiable pre-birth*.
+
+**Operator action:** confirm the substitution, or direct a different resolution. If the literal
+mechanism is required, item 5 and Residual 2's "before the first dispatch" requirement need to be
+reconciled first — they cannot both stand as written.
