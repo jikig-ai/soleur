@@ -16,7 +16,19 @@
 # Scope note: this asserts ZERO, not "no growth beyond a baseline". A baseline
 # allowlist that grandfathers existing entries asserts nothing on day one. The
 # hooks tree was taken to zero in #6992, so zero is the enforceable invariant.
-# scripts/ and plugins/ are NOT in scope yet — tracked in #7005.
+#
+# #7024 added the two files it took to zero, so they cannot regress:
+#   tests/scripts/test-sentry-full-root-apply.sh
+#   plugins/soleur/skills/compound/test/phase-16.test.sh
+# The REST of scripts/ and plugins/ is still out of scope — ~800 sites repo-wide,
+# tracked in #7005. #7024 was a slice of that corpus, not a peer of it.
+#
+# THE PATHSPEC CANNOT SIMPLY BE WIDENED TO scripts/ OR plugins/. This pattern matches
+# COMMENTS as well as code — it is a text search, not a parse — so a wider sweep starts
+# matching prose that merely NAMES the forbidden shape, including this file's own
+# non-vacuity probe below and the learning file that documents the bug. Zero is
+# enforceable here precisely because the pathspec is narrow and each member was taken to
+# zero deliberately. Growth happens by adding a named file, never by widening a glob.
 
 set -euo pipefail
 
@@ -33,6 +45,31 @@ PATTERN='\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q'
 hits="$(git grep -nE "$PATTERN" -- '.claude/hooks/*.sh' '.claude/hooks/lib/*.sh' \
   | grep -vE '\.test\.sh' || true)"
 
+# The two files #7024 took to zero. Named individually, NOT via a glob — see the scope
+# note above. They are .test.sh files, which the exclusion filter above deliberately drops
+# from the hooks sweep, so they are matched in their own pass.
+#
+# TWO FILTERS, AND BOTH ARE THE SAME LESSON THIS GUARD IS ABOUT.
+#
+#   1. COMMENT LINES ARE STRIPPED. The pattern is a text search, so it matches prose that
+#      merely NAMES the shape — and these two files necessarily document it at length. The
+#      sibling `_strip_comments` in test-sentry-full-root-apply.sh exists for exactly this
+#      reason (cq-assert-anchor-not-bare-token): anchor on the executable construct, never
+#      on a token a comment can also produce. Written without this, the guard false-FAILs
+#      on the very explanation of the bug it enforces.
+#
+#   2. AN EXPLICIT PER-LINE OPT-OUT. test-sentry-full-root-apply.sh's T4 arm has to USE the
+#      forbidden shape: it is the synthetic reproduction of the SIGPIPE mechanism, plus the
+#      `yes | grep -q y` positive control that proves the environment can exhibit SIGPIPE
+#      at all. A test that demonstrates a bug must be allowed to contain it. The marker is
+#      per-LINE and must be typed out, so it cannot be applied by accident or by a glob.
+ALLOW_MARKER='#[[:space:]]*sigpipe-demo:[[:space:]]*intentional'
+hits_7024="$(git grep -nE "$PATTERN" -- \
+  'tests/scripts/test-sentry-full-root-apply.sh' \
+  'plugins/soleur/skills/compound/test/phase-16.test.sh' \
+  | grep -vE ':[0-9]+:[[:space:]]*#' \
+  | grep -vE "$ALLOW_MARKER" || true)"
+
 if [[ -n "$hits" ]]; then
   FAIL=1
   echo "FAIL: pipe-into-grep-q found in policy-gate hooks (#6992 regression)"
@@ -41,6 +78,16 @@ if [[ -n "$hits" ]]; then
   echo "  Rewrite as a herestring, or as grep -c compared against 0."
 else
   echo "PASS: no pipe-into-grep-q in .claude/hooks/ non-test code"
+fi
+
+if [[ -n "$hits_7024" ]]; then
+  FAIL=1
+  echo "FAIL: pipe-into-grep-q found in a file #7024 took to zero"
+  echo "$hits_7024" | sed 's/^/  /'
+  echo
+  echo "  Rewrite as a herestring, or as grep -c compared against 0."
+else
+  echo "PASS: no pipe-into-grep-q in the two files #7024 took to zero"
 fi
 
 # Non-vacuity: the pattern must actually match the shape it forbids. Without

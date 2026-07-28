@@ -54,7 +54,17 @@ _strip_comments() { grep -vE '^[[:space:]]*#' "$1"; }
 
 # ── T1: no executable `-target=` survives in the workflow ────────────────────
 # The #6074 fix itself. Checks EXECUTABLE lines only (comments stripped above).
-_has_executable_target() { _strip_comments "$1" | grep -qE -- '-target='; }
+# NO PIPE INTO `grep -q` (#7024). Under `set -o pipefail`, `grep -q` exits on its FIRST
+# match and closes the pipe; if the producer still has unwritten data it takes SIGPIPE and
+# the PIPELINE reports 141 even though the pattern MATCHED. In a POSITIVE predicate like
+# this one that reads as "no -target= found" — the FAIL-OPEN direction, on the #6074 guard
+# for `terraform destroy` reachability.
+#
+# Capture once, then match with a herestring: no pipe, so no SIGPIPE.
+_has_executable_target() {
+  local body; body=$(_strip_comments "$1")
+  grep -qE -- '-target=' <<<"$body"
+}
 
 t_no_executable_target() {
   if _has_executable_target "$WORKFLOW"; then
@@ -113,7 +123,7 @@ t_comment_mentioning_target_is_tolerated() {
 # Assert BOTH halves are wired, or the union is a claim rather than a mechanism.
 t_scope_guard_accepts_state_injection() {
   local body; body=$(_strip_comments "$SCOPE_GUARD")
-  if echo "$body" | grep -qE 'SENTRY_STATE_TYPES'; then
+  if grep -qE 'SENTRY_STATE_TYPES' <<<"$body"; then
     _report "T2 scope guard accepts the state half via SENTRY_STATE_TYPES" ok
   else
     _report "T2 scope guard accepts the state half via SENTRY_STATE_TYPES" fail \
@@ -125,8 +135,8 @@ t_workflow_feeds_plan_types_to_guard() {
   local body; body=$(_strip_comments "$WORKFLOW")
   # Anchor on the assignment construct + the guard invocation carrying the env
   # var — not the bare token, which also appears in this workflow's prose.
-  if echo "$body" | grep -qE 'SENTRY_STATE_TYPES="\$plan_types"' \
-     && echo "$body" | grep -qE 'plan_types=\$\(terraform show -json'; then
+  if grep -qE 'SENTRY_STATE_TYPES="\$plan_types"' <<<"$body" \
+     && grep -qE 'plan_types=\$\(terraform show -json' <<<"$body"; then
     _report "T2b workflow feeds the PLAN's types (state UNION config) into the guard" ok
   else
     _report "T2b workflow feeds the PLAN's types (state UNION config) into the guard" fail \
@@ -136,7 +146,7 @@ t_workflow_feeds_plan_types_to_guard() {
 
 t_scope_guard_reads_tf() {
   local body; body=$(_strip_comments "$SCOPE_GUARD")
-  if echo "$body" | grep -qE 'SENTRY_TF_DIR'; then
+  if grep -qE 'SENTRY_TF_DIR' <<<"$body"; then
     _report "T2c scope guard sources the .tf half via SENTRY_TF_DIR (parameterized)" ok
   else
     _report "T2c scope guard sources the .tf half via SENTRY_TF_DIR" fail \
@@ -186,8 +196,131 @@ t_filter_counts_removed_block() {
   fi
 }
 
+
+# T1-mut-top: the SAME injection, at the TOP of the file instead of the bottom (#7024).
+#
+# THE EXISTING BOTTOM-INJECTION ARM COULD NEVER HAVE DETECTED THE SIGPIPE SHAPE, EVEN IN
+# PRINCIPLE. `grep -q` only early-closes the pipe on an EARLY match; a match appended at
+# the very end means grep reads to EOF and the producer never blocks. So an arm that
+# appends can prove the PATTERN works and nothing at all about the pipeline.
+#
+# This arm is GREEN both before and after the #7024 fix, and that is documented rather
+# than hidden: at current file sizes SIGPIPE is structurally unreachable here (see
+# t_sigpipe_mechanism_is_real below for the measurement). Its value is that it stays green
+# for the RIGHT reason, and that it will catch the shape if apply-sentry-infra.yml ever
+# grows past the pipe buffer.
+t_no_executable_target_is_not_vacuous_top_injection() {
+  local tmp; tmp=$(mktemp)
+  printf '            -target=sentry_cron_monitor.synthetic_top_mutation \\\n' > "$tmp"
+  cat "$WORKFLOW" >> "$tmp"
+  if _has_executable_target "$tmp"; then
+    _report "T1-mut-top T1 detects a -target= injected at the TOP (the only position SIGPIPE could bite)" ok
+  else
+    _report "T1-mut-top T1 detects a -target= injected at the TOP (the only position SIGPIPE could bite)" fail \
+      "the check stayed green against a workflow whose FIRST line carries a real -target="
+  fi
+  rm -f "$tmp"
+}
+
+# T4: the SIGPIPE mechanism itself, proved on a SYNTHETIC producer (#7024, AC18).
+#
+# THE PRODUCER MATTERS, and getting this wrong makes the arm silently vacuous. Measured on
+# a 202,014-byte input with the match on line 1:
+#
+#   grep -v ... | grep -q MATCH   -> rc=141 in 50/50 runs
+#   cat        ... | grep -q MATCH -> rc=141 in  0/50 runs
+#
+# So the arm uses the SAME producer family as production (`grep -v`, which is what
+# _strip_comments is). A `cat`-based probe reports a clean 0 forever and proves nothing —
+# the instrument removing the phenomenon it is meant to observe.
+#
+# TWO INSTRUMENT GUARDS, for the same reason:
+#   - `grep` must resolve to a real BINARY. In some interactive shells it is a function
+#     shim whose -q drains stdin, which removes the race and reports 0 at every size.
+#   - A POSITIVE CONTROL that MUST fire. If `yes | grep -q y` does not yield 141, this
+#     environment cannot exhibit SIGPIPE at all and any result here is VOID, not clean.
+t_sigpipe_mechanism_is_real() {
+  if [[ "$(type -t grep)" != "file" ]]; then
+    _report "T4 SIGPIPE mechanism (synthetic >64KB producer, early match)" fail \
+      "grep resolves to a $(type -t grep), not a binary — a shim that drains stdin removes the very race this measures"
+    return
+  fi
+
+  local ctl=0
+  yes 2>/dev/null | grep -q y || ctl=$?  # sigpipe-demo: intentional (this IS the control)
+  if [[ "$ctl" -ne 141 ]]; then
+    _report "T4 SIGPIPE mechanism (synthetic >64KB producer, early match)" fail \
+      "positive control did not fire: the yes-into-quiet-grep control returned $ctl, want 141 — this environment cannot exhibit SIGPIPE, so any result here is void"
+    return
+  fi
+
+  local big; big=$(mktemp)
+  printf 'MATCH_ME_FIRST\n' > "$big"
+  head -c 200000 /dev/zero | tr '\0' 'x' | fold -w 100 >> "$big"
+
+  local rc=0 rc_fixed=0 body
+  ( set -o pipefail; grep -vE '^ZZZ_NEVER_MATCHES' "$big" | grep -q 'MATCH_ME_FIRST' ) || rc=$?  # sigpipe-demo: intentional (this IS the reproduction)
+  body=$(grep -vE '^ZZZ_NEVER_MATCHES' "$big")
+  ( set -o pipefail; grep -q 'MATCH_ME_FIRST' <<<"$body" ) || rc_fixed=$?
+  rm -f "$big"
+
+  if [[ "$rc" -eq 141 && "$rc_fixed" -eq 0 ]]; then
+    _report "T4 SIGPIPE mechanism: a piped grep -q reports 141 ON A MATCH; the herestring form reports 0" ok
+  else
+    _report "T4 SIGPIPE mechanism: a piped grep -q reports 141 ON A MATCH; the herestring form reports 0" fail \
+      "piped=$rc (want 141), herestring=$rc_fixed (want 0)"
+  fi
+}
+
+# T4b: the FIXED predicate never flakes on the REAL input (#7024).
+#
+# THIS CORRECTS A MEASUREMENT THIS PR WAS PLANNED AROUND. The plan asserted SIGPIPE was
+# "structurally unreachable" here because apply-sentry-infra.yml strips to ~16.8 KB against
+# a 65,536-byte pipe buffer, and cited 10/10 runs returning 0.
+#
+# That reasoning is wrong and the conclusion with it. The buffer bounds how much a producer
+# can write BEFORE BLOCKING; it does not stop the consumer exiting first. `grep -q` exits on
+# the first match, and any write the producer has not yet completed then takes EPIPE. Total
+# size under the buffer only makes the race NARROW, not impossible.
+#
+# Measured on the real input, 100 runs, binaries pinned, with `-target=` injected at the top:
+#
+#   rc=141 -> 2 ; rc=0 -> 98
+#
+# ~2%. A 10-run sample had a ~82% chance of seeing zero of those, so the original
+# all-zero observation was the LIKELY outcome even with the defect fully live. And because
+# _has_executable_target is a POSITIVE predicate, rc=141 reads as "no -target= found" and
+# T1 reports OK — a live FAIL-OPEN on the #6074 guard for `terraform destroy`
+# reachability, roughly 1 run in 50.
+#
+# So this arm guards the FIX on the REAL input rather than asserting an absence of risk.
+t_fixed_predicate_does_not_flake_on_the_real_input() {
+  local tmp; tmp=$(mktemp)
+  printf '            -target=sentry_cron_monitor.synthetic_top_mutation \\\n' > "$tmp"
+  cat "$WORKFLOW" >> "$tmp"
+
+  local i rc bad=0 runs=40
+  for i in $(seq 1 "$runs"); do
+    rc=0
+    ( set -o pipefail; _has_executable_target "$tmp" ) || rc=$?
+    # The predicate must be TRUE (0) every time: the file carries a -target= on line 1.
+    [[ "$rc" -eq 0 ]] || bad=$((bad + 1))
+  done
+  rm -f "$tmp"
+
+  if [[ "$bad" -eq 0 ]]; then
+    _report "T4b the FIXED _has_executable_target is stable over ${runs} runs on the real workflow (the piped form flaked ~2%)" ok
+  else
+    _report "T4b the FIXED _has_executable_target is stable over ${runs} runs on the real workflow" fail \
+      "${bad}/${runs} runs did not return 0 — the predicate is still non-deterministic; a piped grep -q has come back"
+  fi
+}
+
 t_no_executable_target
 t_no_executable_target_is_not_vacuous
+t_no_executable_target_is_not_vacuous_top_injection
+t_sigpipe_mechanism_is_real
+t_fixed_predicate_does_not_flake_on_the_real_input
 t_comment_mentioning_target_is_tolerated
 t_scope_guard_accepts_state_injection
 t_workflow_feeds_plan_types_to_guard
