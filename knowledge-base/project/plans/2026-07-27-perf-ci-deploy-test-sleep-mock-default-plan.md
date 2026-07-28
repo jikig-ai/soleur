@@ -498,8 +498,12 @@ result. `decision-challenges.md` is rendered by ship Phase 6.
   The measurement does not separate the two, so no causal split is claimed. It
   does not affect the result: wall clock is what the CI budget spends, and it
   halved locally and fell 94 % on CI.
-- **AC2** `=== Results: 184/184 passed, 0 failed ===`, **and** the sorted
-  PASS-name-set diff before vs after contains **no added and no removed PASS** —
+- **AC2** `=== Results: N/N passed, 0 failed ===` with zero failures, **and** the
+  sorted PASS-name-set diff before vs after contains **no removed PASS** —
+  **Final: 187/187** (baseline was 184; post-review this PR adds three
+  assertions — the seq/sleep-bypass precondition pin, the install matrix, and
+  T-6665-CAP). Also verified 187/187 under `MOCK_SLEEP_REAL=1`.
+  The original wording follows; it was written when this PR added no tests:
   i.e. every difference is a line-for-line substitution whose replacement is an
   intentional, named assertion-text change in this PR. A count match alone does
   not satisfy this.
@@ -658,6 +662,44 @@ requirement in AC7.
 opt-out), DC-3 (drop the recording rider), DC-4 (the 120 s target may be
 arithmetically unreachable). Headless run: persisted for `ship` Phase 6 to render
 and file as `action-required`, per ADR-084.
+
+## Post-Implementation Review Outcome
+
+Six agents (test-design, security, pattern-recognition, code-quality,
+architecture, observability-coverage). **Every finding fixed inline; zero
+scope-outs filed** — all were under the ≤100-line / ≤4-file cost-of-filing bar.
+The load-bearing ones landed on this plan's own reasoning, not on the perf work:
+
+1. **The ADR-139 tripwire was wrong about both properties it named.** It said the
+   invocation cap backstopped them. It cannot: a real `seq` yields ~40 mock
+   invocations (a fraction of the 500 cap), and a bypassed `sleep` never reaches
+   the mock to be counted. The class the cap *does* guard — `while cron_in_flight`
+   at `ci-deploy.sh:2603`, exiting on `CRON_DRAIN_TIMEOUT` default **4200** (a
+   70-minute 100%-CPU spin under a no-op sleep) — went unnamed. Both prose-only
+   properties are now **pinned by source assertions**, which is what ADR-139
+   actually asks for; the plan had accepted the tripwire form on a *reachable*
+   surface, which is the case ADR-139 declines.
+2. **The property this whole change buys was pinned by nothing.** One added
+   conjunct to `create_base_mocks` — the opt-in shape #6525 had — left the suite
+   green with a byte-identical PASS name-set at 9m17s. Since Phase 3 lowers the
+   ceiling to 8 minutes in the same PR, that regression would have surfaced only
+   as an intermittent cancellation with no red test. T-6525-8 cannot serve as the
+   canary (it sets `MOCK_SLEEP_LOG`, so it keeps its mock under that exact
+   mutation). Closed with an install-matrix fixture.
+3. **The cap's diagnostic could never be read** — 18 call sites discard it and
+   `$MOCK_DIR` is removed by `run_deploy`'s EXIT trap, so "a fast, NAMED failure"
+   was false. Closed with a marker outside `$MOCK_DIR` reported at the footer.
+4. **Two claims I introduced were themselves false:** `command sleep` / `exec
+   sleep` do NOT escape a PATH mock (measured — only an absolute path does), and
+   `_n=$(<"$f") 2>/dev/null` does not suppress (bash expands before redirecting).
+5. The `timeout-minutes` comment cited runs predating the ceiling it justifies and
+   excluded 3 failed runs (true pre-change max **615s**, not 574s).
+
+**Mutation-proved** on a sandbox copy, control arm first, per-case verdicts:
+seq pin, bypass pin, cap-disabled, marker-removed, re-narrow-to-opt-in, and
+drop-precedence were all **caught**. The control arm, run under
+`MOCK_SLEEP_REAL=1`, additionally exposed that T-6665-CAP had the same
+self-sufficiency gap Scenario T2 found in T-6525-8 — fixed before merge.
 
 ## Test Scenarios
 

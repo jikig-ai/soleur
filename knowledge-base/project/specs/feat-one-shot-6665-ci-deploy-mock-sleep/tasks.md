@@ -125,7 +125,7 @@ not renumber one file without the other.
 
 ## Phase 4 — Ship
 
-- [ ] **4.1** Verify every AC (AC1, AC2, AC2b, AC3, AC4, AC5, AC6, AC7). For
+- [x] **4.1** Verify every AC (AC1, AC2, AC2b, AC3, AC4, AC5, AC6, AC7). For
       absence assertions use `grep -c`, never `git grep -c` — the latter prints
       nothing and exits 1 on zero matches, so it cannot express "returns 0".
 - [ ] **4.2** `/soleur:ship`. Use `Closes #6665` in the PR **body**, not the title.
