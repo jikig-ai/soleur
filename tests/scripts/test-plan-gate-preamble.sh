@@ -119,6 +119,61 @@ mk_plan "$TMP/nullactions.json" "$(printf '[%s]' \
   '{"address":"hcloud_server.x","type":"hcloud_server","change":{"actions":null,"before":null,"after":{}}}')"
 check "null actions => ABORT" plan_gate_assert_classifiable 1 "unclassifiable" "demo_gate" "$TMP/nullactions.json"
 
+# D5, EXPLICIT. An EMPTY actions array is the MEASURED hole, and it is the one shape a
+# type-only check cannot catch: `[]` IS an array. It is then invisible to every downstream
+# arm at once — `[] | any(...)` is false so the out-of-scope and firewall selects skip it,
+# `[] | index("delete")` is null so the destroy select skips it. Measured on a real plan: a
+# happy 18-address birth that also carried hcloud_server.web["web-1"] with "actions": [] and
+# "after": null — a destroy of the singleton behind app.soleur.ai — scored destroys=0,
+# out_of_scope=0 and PASSED.
+#
+# `length > 0` is what rejects it, and NOTHING ELSE DOES: jq's `all` over an empty stream is
+# vacuously TRUE, so the actions-are-strings conjunct below is satisfied by `[]`.
+mk_plan "$TMP/emptyactions.json" "$(printf '[%s]' \
+  '{"address":"hcloud_server.web[\"web-1\"]","type":"hcloud_server","change":{"actions":[],"before":{"id":9},"after":null}}')"
+check "D5: an EMPTY actions array => ABORT" plan_gate_assert_classifiable 1 "unclassifiable" "demo_gate" "$TMP/emptyactions.json"
+check "D5: the ABORT names the address whose destroy it hides" plan_gate_assert_classifiable 1 'hcloud_server.web["web-1"]' "demo_gate" "$TMP/emptyactions.json"
+
+# D6. `.change` is a SCALAR. `.change.actions` on a number raises
+# `Cannot index number with string "actions"`, so jq exits 5 — and `if jq -e '[...|select(bad)]
+# | length > 0'` reads a jq ERROR as "condition false", reporting the plan CLASSIFIABLE. That
+# is the shape the positive `all(...)` form exists to close; asserted here so a future
+# "simplification" back to a negative search fails loudly.
+mk_plan "$TMP/scalarchange.json" "$(printf '[%s]' \
+  '{"address":"hcloud_volume.workspaces","type":"hcloud_volume","change":42}')"
+check "D6: a SCALAR .change => ABORT" plan_gate_assert_classifiable 1 "unclassifiable" "demo_gate" "$TMP/scalarchange.json"
+
+# The OFFENDER-EXTRACTION filter must survive the same scalar. Without a `?` on
+# `.change.actions` in the offender jq, the extraction raises on the very entry it is trying
+# to name, jq exits 5, `2>/dev/null` swallows it, and the ABORT names NO offender — verdict
+# correct, operator's only diagnostic blank. web-host-replace-gate.sh documents this exact
+# reason for its own `?`.
+check "D6: the ABORT still NAMES the offender on a scalar .change" plan_gate_assert_classifiable 1 "hcloud_volume.workspaces" "demo_gate" "$TMP/scalarchange.json"
+
+# A NESTED array. `["delete"]` is a string list; `[["delete"]]` is a list of lists. It is a
+# non-empty array of the right outer type, so length > 0 and the type test both pass — only
+# an assertion about the ELEMENTS rejects it. `index("delete")` on it is null, so a destroy
+# hiding here is dropped by the destroy select exactly like a missing-actions entry.
+#
+# web-host-replace-gate.sh already carried this conjunct inline while this shared helper did
+# not, so retrofitting that gate onto the helper WITHOUT adding it here would have been a
+# REGRESSION. That is why the conjunct lands before any retrofit.
+mk_plan "$TMP/nestedactions.json" "$(printf '[%s]' \
+  '{"address":"hcloud_server.git_data","type":"hcloud_server","change":{"actions":[["delete"]],"before":null,"after":{}}}')"
+check "a NESTED actions array => ABORT" plan_gate_assert_classifiable 1 "unclassifiable" "demo_gate" "$TMP/nestedactions.json"
+
+# A NON-OBJECT ELEMENT of resource_changes. The verdict was always right — `.change` on a
+# number raises, jq exits 5, and `if !` aborts — but it aborted because jq ERRORED, not
+# because the assertion was false, and the offender list came back EMPTY. Measured before
+# the element-type guard: "unclassifiable plan entry:  has no non-empty array
+# .change.actions" — a correct refusal with a blank diagnostic.
+#
+# Both halves are pinned: the abort must survive, AND it must name something. A bare
+# `.address?` would satisfy the first and silently fail the second by yielding empty.
+printf '{"format_version":"1.2","resource_changes":[42]}\n' > "$TMP/scalarelem.json"
+check "a NON-OBJECT element => ABORT" plan_gate_assert_classifiable 1 "unclassifiable" "demo_gate" "$TMP/scalarelem.json"
+check "the ABORT on a non-object element is NOT blank" plan_gate_assert_classifiable 1 "<entry with no address>" "demo_gate" "$TMP/scalarelem.json"
+
 # ── plan_gate_assert_numeric ──────────────────────────────────────────────────────
 check "all counters numeric => rc 0" plan_gate_assert_numeric 0 "" "demo_gate" "creates=1" "destroys=0"
 check "zero is numeric => rc 0" plan_gate_assert_numeric 0 "" "demo_gate" "creates=0"
