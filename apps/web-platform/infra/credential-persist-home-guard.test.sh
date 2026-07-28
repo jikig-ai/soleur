@@ -372,7 +372,21 @@ def is_sandboxed(body):
 
 EXEC_RE = re.compile(r'^\s*Exec(?:Start|StartPre|StartPost|Stop|StopPost|Reload|Condition)=(.*)$', re.M)
 
+# systemd continues any directive whose line ends in a backslash. Every directive regex here
+# is line-anchored (`^\s*Exec…=(.*)$`), so WITHOUT this join a multi-line ExecStart is
+# TRUNCATED at the first backslash — and `texts` for that unit then carries only the opening
+# fragment, making every credential-family scan blind to the rest. That is fail-OPEN: a
+# `docker login` or `doppler configure token` sitting on a continuation line is invisible to
+# the guard, which is the precise class it exists to catch.
+#
+# It also mis-classifies. git-data-gc.service's first fragment ends
+#   /bin/sh -c 'set -a; . /etc/default/git-data-doppler; set +a; \
+# which contains "doppler" but no `run`, so it fell through to UNCLASSIFIED even though the
+# continuation is a plain `exec doppler run --config prd_git_data -- …` token read.
+CONT_RE = re.compile(r'\\\n[ \t]*')
+
 def mk_unit(name, source, body):
+    body = CONT_RE.sub(' ', body)
     execs = [m.group(1).strip() for m in EXEC_RE.finditer(body)]
     sm = re.search(r'^\s*ExecStart=(.*)$', body, re.M)
     execstart = sm.group(1).strip() if sm else (execs[0] if execs else '')
@@ -894,6 +908,33 @@ UNITEOF
 }
 expect_red "AC5 novel sandboxed unit not in the map (fail-closed enumeration)" "unit=ac5-novel.service" ac5
 
+# M16 — a credential action on a systemd LINE-CONTINUATION (#6982).
+#
+# Every directive regex here is line-anchored, so before the CONT_RE join in mk_unit an
+# ExecStart written across two lines was truncated at the backslash and everything after it
+# was invisible to all three stages. This is the fail-OPEN twin of AC5: AC5 pins that an
+# unrecognised unit cannot slip through, M16 pins that a RECOGNISED unit cannot hide its cred
+# site past a line break. The unwrapped first fragment classifies as `doppler-run` (it holds
+# "doppler" but no `run`... only via the continuation), which is exactly how git-data-gc.service
+# reached UNCLASSIFIED and how a `docker login` here would have reached nobody at all.
+m16() {
+  cat > "$1/m16-continuation.service" <<'UNITEOF'
+[Unit]
+Description=M16 cred action hidden past a line continuation
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'set -a; . /etc/default/some-doppler-env; set +a; \
+  docker --config "$HOME/.docker" login ghcr.io -u u --password-stdin'
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+}
+expect_red "M16 cred action past a line continuation (line-anchored-regex fail-open)" \
+  "reason=config dir resolves under home" m16
+
 # ---------------------------------------------------------------------------------------------
 # AC4 + GREEN pins — boot-immune sites and legitimate relocations must NOT be flagged.
 # ---------------------------------------------------------------------------------------------
@@ -990,7 +1031,7 @@ fi
 # A FLOOR, not equality: the count is developer-incremented, so `-eq` would turn every legitimate
 # new assertion into a spurious failure. Bump it deliberately when adding assertions; NEVER lower
 # it to make a run pass — a drop means assertions stopped executing.
-MIN_ASSERTIONS=34
+MIN_ASSERTIONS=35
 [[ "$PASS" -ge "$MIN_ASSERTIONS" ]] || \
   fail "assertion count $PASS < floor $MIN_ASSERTIONS — the battery silently stopped running" \
     "an assertion was deleted or an early return skipped a block; this is not a count to lower"
