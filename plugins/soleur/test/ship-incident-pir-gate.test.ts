@@ -49,6 +49,15 @@ describe("ship Incident-PIR gate (#6813)", () => {
     expect(signals("incidental-word.md")).toBe(false);
   });
 
+  // #6665: `network-outage` is the NAME of the plan-skill Phase 1.4 gate, and
+  // EVERY plan that documents it firing writes the phrase — so the bare `outage`
+  // alternative matched a gate name rather than an event, demanding a PIR on a
+  // CI-perf PR with no production incident. Same class as #6813 (matching a
+  // label instead of a claim), second instance.
+  test("a plan documenting the Phase 1.4 network-outage GATE does NOT signal", () => {
+    expect(signals("network-outage-gate-name.md")).toBe(false);
+  });
+
   // AC22: genuine past production incidents DO still signal (both directions
   // pinned so the regex cannot silently loosen).
   test("the chat-RLS outage postmortem DOES signal", () => {
