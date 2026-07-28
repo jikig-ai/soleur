@@ -238,14 +238,58 @@ rather than adopting, so a hand-created config makes the birth apply fail and th
 - One human step is **deleted** rather than documented (the Doppler config), so the
   post-merge operator checklist for this work is genuinely empty.
 - A new per-target gate adds maintenance surface. Mitigated by extracting the shared
-  fail-closed preamble (`plan-gate-preamble.sh`); issue #6997 covers retrofitting it into
-  the **eight** gates that carry neither the readability nor the classifiability check.
+  fail-closed preamble (`plan-gate-preamble.sh`). **#6997 completed the retrofit**: of the
+  **thirteen** gates that grade a plan document, **eleven** now call the preamble. The two
+  that do not — `stock-preflight-gate.sh` and `web-host-replace-gate.sh` — are tracked in
+  **#7044**.
+
   The count is re-derived, not remembered — earlier revisions of this ADR said "five" and
-  the preamble header said "seven", and both were wrong. Re-derive before citing it:
-  `grep -l 'local plan_json' tests/scripts/lib/*gate*.sh | xargs grep -L plan_gate_assert_readable`.
-  Three further gates (`web-host-birth`, `web-host-replace`, `stock-preflight`) carry
-  equivalent INLINE checks, so their retrofit is pure deletion and changes no safety
-  property; the eight are the fail-open tier and are the priority.
+  "eight", and the preamble header said "seven"; all were wrong. Re-derive before citing:
+
+  ```bash
+  grep -l 'local plan_json' tests/scripts/lib/*gate*.sh \
+    | xargs -r grep -LE '^\s*plan_gate_assert_readable'
+  ```
+
+  **The form this ADR published before #6997 was vacuous, and the fix is not cosmetic.**
+  A bare `grep -L plan_gate_assert_readable` is a PRESENCE check: every retrofitted gate
+  contains that literal inside its `if ! declare -F plan_gate_assert_readable` re-source
+  guard, so a gate that *sources* the preamble and never *calls* it satisfied the published
+  command and reported clean. That is precisely the "sourced but not invoked" vacuity the
+  retrofit had to be proved against, sitting inside the command meant to police it. The
+  `^\s*` anchor matches the call form, which `if ! declare -F …` does not. `xargs -r` is
+  equally load-bearing: without it an empty first stage leaves `grep -L` with no operands
+  and it reads STDIN (measured: `printf '' | xargs grep -L PAT` prints `(standard input)`
+  and exits 0), so a broken glob reports clean rather than failing.
+
+- **CORRECTION.** An earlier revision of this ADR stated that `web-host-birth`,
+  `web-host-replace` and `stock-preflight` "carry equivalent INLINE checks, so their
+  retrofit is pure deletion and changes no safety property". **Reading them disproved it**,
+  and #6997 acted on the corrected reading:
+
+  - None of the three carried the preamble's `(.change.actions | length) > 0` conjunct, so
+    an entry with `"actions": []` passed all three. That is the **measured** hole: a happy
+    18-address birth plan that also carried `hcloud_server.web["web-1"]` with
+    `"actions": []` and `"after": null` — a destroy of the singleton behind `app.soleur.ai`
+    — scored `destroys=0, out_of_scope=0` and **PASSED**.
+  - `web-host-birth` and `stock-preflight` used the NEGATIVE-search form
+    (`if jq -e '[…|select(bad)] | length > 0'`), which reads a jq **error** as "condition
+    false" — so a scalar `.change` reported the plan classifiable.
+  - `stock-preflight`'s readability check is `jq -e '.resource_changes'`, a truthiness test
+    rather than a type test.
+  - Conversely `web-host-replace-gate.sh` carried a conjunct the shared helper did **not**
+    (`all(.change.actions[]; type == "string")`, closing a nested-array case), so
+    retrofitting it onto the helper as it stood would have been a **regression**. #6997
+    added that conjunct to the helper first, before any gate moved.
+
+  So `web-host-birth`'s retrofit was a strict strengthening, not a deletion. It was folded
+  into #6997's scope; the other two are deferred to #7044.
+
+- **Priority by call sites, not by tier label.** `stock-preflight-gate.sh` is sourced **8×**
+  by `apply-web-platform-infra.yml` — more call sites than any gate #6997 retrofitted —
+  while `web2-retire-gate.sh`, named in #6997's original priority set, is sourced by **no
+  workflow at all** and is documented in-repo as test-only. The "lower-priority readability
+  tier" label understated the first and overstated the second.
 
 ### Residuals, accepted and recorded
 

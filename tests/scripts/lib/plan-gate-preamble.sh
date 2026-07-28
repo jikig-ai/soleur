@@ -1,19 +1,49 @@
 # shellcheck shell=bash
 # Shared fail-closed preamble for tfplan-grading gates (#6977, cto F1).
 #
-# WHY THIS FILE EXISTS. TWELVE gates in tests/scripts/lib/ grade a `terraform show -json`
-# document before authorising an apply. Only FOUR validate that the document is readable
-# and that every entry is classifiable before any counter reads one: this file's consumer
-# (git-data-host-birth-gate.sh), plus web-host-birth-gate.sh, web-host-replace-gate.sh and
-# stock-preflight-gate.sh, which carry equivalent checks INLINE. The other EIGHT —
-# INCLUDING git-data-host-replace-gate.sh — carry neither. That is not a style difference;
-# it is a two-tier safety floor produced by copy-the-sibling, and the lower tier fails OPEN.
+# WHY THIS FILE EXISTS. THIRTEEN gates in tests/scripts/lib/ grade a `terraform show -json`
+# document before authorising an apply. As of #6997, ELEVEN call this preamble. The
+# remaining TWO — stock-preflight-gate.sh and web-host-replace-gate.sh — still carry their
+# own inline checks and are tracked in issue #7044. That is not a style difference; it is a
+# two-tier safety floor produced by copy-the-sibling, and the lower tier fails OPEN.
 #
-# Re-derive rather than trusting these numbers. Successive revisions have said "nine and
-# seven" and "five", and every one of them was wrong:
-#   grep -l 'local plan_json' tests/scripts/lib/*gate*.sh | xargs grep -L plan_gate_assert_readable
-# (that lists the 11 not yet ON this preamble; three of the 11 hold inline equivalents.)
-# Retrofitting the eight is tracked by issue #6997.
+# RE-DERIVE RATHER THAN TRUSTING THESE NUMBERS. Successive revisions have said "nine and
+# seven", "five", and "eight", and every one of them was wrong:
+#
+#   grep -l 'local plan_json' tests/scripts/lib/*gate*.sh \
+#     | xargs -r grep -LE '^\s*plan_gate_assert_readable'
+#
+# TWO THINGS IN THAT COMMAND ARE LOAD-BEARING, and the form published here before #6997
+# had neither.
+#
+#   `-E '^\s*plan_gate_assert_readable'` anchors on the CALL. A bare
+#   `grep -L plan_gate_assert_readable` is a PRESENCE check, and every retrofitted gate now
+#   contains that literal inside its `if ! declare -F plan_gate_assert_readable` re-source
+#   guard — so a gate that SOURCES this file and never CALLS it satisfied the old form and
+#   reported clean. That is the exact "sourced but not invoked" vacuity the retrofit had to
+#   be proved against, sitting inside the command that was supposed to police it.
+#
+#   `xargs -r` matters when the first stage is empty: without it `grep -L` is left with no
+#   file operands and READS STDIN. Measured: `printf '' | xargs grep -L PAT` prints
+#   `(standard input)` and exits 0, so a broken glob hangs or reports clean.
+#
+# The drift check in tests/scripts/test-plan-gate-preamble.sh runs this derivation on every
+# CI run, with a >=12 scanned-file floor and a probe for a plan-grading file named off the
+# `*gate*` glob. Its four non-vacuity arms include a synthetic gate that sources this file
+# and never calls it.
+#
+# CALLERS MUST CHECK THE GATE'S RETURN CODE. These functions `return 1`; they do not `exit`,
+# so a caller that discards the status is exactly as fail-open as a gate with no guard — and
+# no mutation battery over a gate function can see its call site.
+#
+# All 21 gate invocations in .github/workflows/apply-web-platform-infra.yml are
+# non-suppressing as of #6997:
+#   - 19 of the form `if ! <gate> …` (of which stock_preflight_gate alone is 8);
+#   - `bash …/preapply-entrypoint-gate.sh --gate tfplan.json` at :712, a bare command under
+#     `set -e`;
+#   - `AUDIT_OUT=$(bash …/preapply-entrypoint-gate.sh --audit --live) || rc=$?` at :4193,
+#     which captures the status deliberately and re-raises it after posting the audit body.
+# A lint for that property is tracked in #7045.
 #
 # THE THREE FAILURES THIS PREVENTS, each measured on a real gate:
 #
