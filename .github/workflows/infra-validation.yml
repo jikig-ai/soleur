@@ -310,17 +310,20 @@ jobs:
     # because a duration ceiling has to hold for failing runs too — they occupy the
     # runner just the same.)
     #
-    # Post-change, measured at THIS ceiling (not at the old one): runs/30303303433 =
-    # 184s, runs/30305631089 = 187s, runs/30309264705 = 184s, all `success`, step 25s.
-    # Non-suite overhead (checkout, setup-terraform, apt-get cloud-init, the docker
-    # build, ~55 other suites) measured 108-166s across the pre-change set, so the
-    # worst projected job is ~166+25 = ~191s.
+    # Post-change, measured at THIS ceiling (not at the old one): 5 runs on this PR,
+    # all `success` — runs/30303303433, /30305631089, /30309264705, /30346685660,
+    # /30346763422 — whole job **184-189s**, step 22-26s. Stated as a RANGE on a named
+    # run set rather than as a single max: every later push adds a run, so a lone
+    # "observed max" figure goes stale on its own branch (it moved 187 -> 189 during
+    # this PR). Non-suite overhead (checkout, setup-terraform, apt-get cloud-init, the
+    # docker build, ~55 other suites) measured 108-166s across the pre-change set, so
+    # the worst projected job is ~166+26 = ~192s.
     #
-    # 8 minutes = 480s is therefore ~2.57x the observed max (187s) and ~2.5x the worst
-    # projection. Note 187s is within 4s of that projection — it is being met, not
-    # beaten. Deliberately not lower: this is a ceiling absorbing runner variance on
-    # network-bound, heavy-tailed steps, not a budget to spend. Nearly all remaining
-    # variance is now in the non-suite overhead, not in the suite (22-25s).
+    # 8 minutes = 480s is therefore ~2.5x both the observed max and the worst
+    # projection. Note 189s is within a few seconds of that projection — it is being
+    # met, not beaten. Deliberately not lower: this is a ceiling absorbing runner
+    # variance on network-bound, heavy-tailed steps, not a budget to spend. Nearly all
+    # remaining variance is now in the non-suite overhead, not in the suite (22-26s).
     #
     # Re-derive this if steps are added to the job — the numbers above are a property
     # of its current composition, not of the suite alone. If a future run exceeds
