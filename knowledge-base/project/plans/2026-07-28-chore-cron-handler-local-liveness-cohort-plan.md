@@ -21,6 +21,57 @@ Closes #6750.
 > this plan exists to close: it ported **half** the ADR-126 remedy and every one of its ACs would
 > have gone green. See §Review Revisions.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-28 · **Plan version:** v2 · **Halt gates:** 4.6 / 4.7 / 4.8 pass; 4.5 trigger
+matched but not applicable (recorded, not skipped); 4.9 / 4.10 / 4.55 do not fire.
+
+**Passes run:** a 6-reviewer plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist,
+spec-flow-analyzer, CTO-devex) + a strong-model consult, then deepen-plan's verify-the-negative pass,
+post-edit self-audit pass, and a precedent-diff on the dedup hardening.
+
+### Key improvements over v1
+
+1. **A P0 the issue and v1 both missed.** The ADR-126 remedy has **two** halves; v1 ported one. The
+   dedup short-circuit posts GREEN and `return`s *before* `finalizeOutputAwareHeartbeat` in all 7, so
+   `livenessOk` never runs — every v1 acceptance criterion would have passed while the dated
+   2026-07-14→07-19 incident shape stayed live ×7.
+2. **The hardening does not port uniformly (R14).** `digestCommittedOnDefaultBranch` is an *existence*
+   probe on an exact path. Only `cron-growth-audit` has a date-named artifact; for the other six the
+   probe returns 200 forever, so the "hardened" guard could never fail — the same always-green defect,
+   reproduced inside the fix. They need a *freshness* probe instead.
+3. **The new RED would have been undiagnosable (R10).** `emitCronPersistResult` reports
+   `status: "committed"` on the flagship failure arm, which reads healthy. The liveness marker the
+   reference carries for exactly this reason was missing from v1's scope.
+4. **Two of v1's own claims were false** and are corrected in place: the change does *not* "carry only
+   a colour" (it triggers a GitHub issue write via `onBeforeHeartbeat`), and the ADR-029 residual is
+   the **`redact` key set**, not user ids — the identical error the predecessor learning records as a
+   review-found defect.
+5. **~1,020 lines of planned new test code deleted.** The cohort suite already parameterises over the
+   handlers; two verbatim harness ports became one `describe.each` block covering 7 handlers instead
+   of 2 — and gave `cron-architecture-diagram-sync`, previously at zero executable coverage, its first
+   behavioural test.
+6. **A production prompt edit dropped.** v1 proposed bumping `last_updated` so an assertion could
+   hold; the same reasoning proved the file change-conditional.
+7. **The class table corrected and single-sourced.** `cron-content-generator` is Class **B** — its
+   prompt carries two explicit no-artifact stop paths — so the issue's enumeration was right and the
+   audit's table was wrong. The table now lives once, in `scripts/cron-artifact-age.sh`.
+8. **New ADR ordinal dropped** in favour of an ADR-126 amendment (the issue sanctions either),
+   removing the collision + renumber-sweep failure mode.
+
+### New considerations discovered
+
+- **This worktree is a shallow clone**, and the detector reports NEVER/STALE for 9 of 9 here
+  regardless of production state. Two reviewers drew false conclusions from it, and v1's own evidence
+  gate would have passed on the empty set. Phase 0.1 `--unshallow` is now a hard prerequisite.
+- **Four residuals are named with numbers** rather than papered over: `DeployInProgressError`
+  mid-spawn still buys a useless replay; a `sentry-heartbeat` step throw is outside `retryEligible`'s
+  reach; the detector posts no check-in of its own, so its own silence reads as healthy; and Class B's
+  silent windows run 15 / 22 / 46 / 75 days.
+- **Every count-style acceptance criterion in v1 was wrong** in at least one of three measured ways
+  (per-file `grep -c`, directory scope catching 9 and 12 files, and an "unbound" regex that also
+  matched the bound form). They are now roster-scoped and anchored.
+
 ## Overview
 
 ADR-126 (2026-07-20) closed the GREEN-with-no-artifact blind spot for **one** cron
@@ -168,8 +219,10 @@ survives merge is the pair of test pins in A1.
 
 1. **Cohort pin**, roster derived from behaviour, not a literal array (V10):
    `cronFiles.filter(f => /finalizeOutputAwareHeartbeat\(/.test(src))` — then assert each carries
-   `retryEligible: false` **at the call site**, matching within the
-   `finalizeOutputAwareHeartbeat({…})` argument object or after stripping `//` lines (V6).
+   `retryEligible: false` **at the call site**. The exact discriminator, measured against the
+   reference: `grep -cE '^\s+retryEligible: false,'` → **1** (the field) while the bare-token
+   `grep -c 'retryEligible: false'` → **2** (field + the comment Phase 2 mandates mirroring). Use the
+   anchored form; the trailing comma and leading indent are both load-bearing (V6).
 2. **Behavioural pin** in `cron-shared.test.ts`: both arms of the identity test —
    `retryEligible: false` → `{retry: false}` + exactly one `?status=error`; **omitted** →
    `{retry: true}` + no heartbeat step.
@@ -308,10 +361,46 @@ Nothing deferred. The amendment is written in Phase 1, before any handler edit.
 3.4 (`growth-audit` **only**) R8: `{{RUN_DATE}}` in the four report paths; delete the "compute today's date yourself" instruction and its containment-hook caveat; **update `_cron-shared.ts`'s `injectRunDate` contract comment** to enumerate this exception (R13). Scoping the widening to growth-audit keeps `cron-content-generator`'s STEP 3 note (*"only the issue TITLE date is pre-filled"*) true.
 3.5 Export the predicate consts the tests import.
 3.6 *(deleted — was R9)*
-3.7 **Dedup short-circuit hardening (V1, P0).** Port `digestCommittedOnDefaultBranch` +
-`dedup-digest-committed-check` to all 7, mirroring `cron-community-monitor.ts`: the short-circuit
-requires **both** the issue and the artifact committed on the default branch, and fails **closed
-toward spawning**. Class B uses its allowlist-prefix predicate rather than an exact dated path.
+3.7 **Dedup short-circuit hardening (V1, P0) — and it does NOT port uniformly (R14).**
+`digestCommittedOnDefaultBranch({ path, cronName })` takes an **exact path** and answers it with
+`GET /repos/{owner}/{repo}/contents/{path}` at `ref: "main"`. That is an **existence** probe, so it is
+sound evidence of "this run's artifact landed" **only when the artifact is date-named** — a new file
+per run. Two arms:
+
+- **Date-named (`cron-growth-audit` only).** Port verbatim: probe
+  `knowledge-base/marketing/audits/soleur-ai/<RUN_DATE>-content-audit.md`. Sound because that exact
+  path cannot exist unless *this* run wrote it.
+- **Overwrite-in-place (the other 6).** An existence probe is **VACUOUS** — `campaign-calendar.md`,
+  `competitive-intelligence.md`, `plugins/soleur/docs/` and `.../diagrams/` are permanent, so the
+  contents API returns 200 on every run forever and the "hardened" short-circuit would be a guard
+  that can never fail. Shipping that would reproduce, inside the fix, exactly the always-green defect
+  this plan exists to close. Instead add a small shared helper in `_cron-shared.ts` —
+  `artifactCommittedSince({ anchorRegex, sinceIso })` — that asks whether a commit matching the
+  cron's own allowlist paths were touched on `main` within the dedup window, via
+  `GET /repos/{owner}/{repo}/commits?path=<p>&since=<runStartedAt-window>` at `ref: main`. That is a
+  **freshness** probe, it reuses the mechanism `scripts/cron-artifact-age.sh` already trusts, and it
+  is the only shape that can answer "did *this* run's work land" for an overwritten file. No such
+  helper exists today — verified: the only `contents/{path}` callers are `_cron-shared.ts`,
+  `cron-content-vendor-drift.ts`, `cron-ruleset-bypass-audit.ts` and `oneshot-gdpr-gate-50d-eval.ts`,
+  and there is **no** `GET /repos/{owner}/{repo}/commits` helper anywhere in `apps/web-platform/server`.
+- **`cron-content-generator`** takes the freshness arm: its blog slug is **topic-derived**, not
+  date-derived, so the handler cannot predict the path at all.
+
+**Three port details that are load-bearing and easy to lose:**
+
+- **`emitCronDedupSkip` placement.** In the reference it sits **outside** any `step.run` and
+  **before** the `digestAlreadyExists && digestCommitted` gate, so it fires on **both** the
+  healthy-dedup arm and the issue-without-artifact recovery arm. An emit on only one arm cannot
+  distinguish them. Preserve the placement; do not tuck it inside the gate.
+- **No target exports its allowlist const.** `COMPETITIVE_ANALYSIS_ALLOWED_PATHS` is the only exported
+  one; `GROWTH_AUDIT_ALLOWED_PATHS` and the rest are module-private. Export the per-target const the
+  probe and the tests both need, rather than hardcoding the path twice (the `COMMUNITY_DIGEST_DIR`
+  pattern — the heartbeat suite imports it precisely so a rename cannot desync the fixture).
+- **`cron-roadmap-review` is the 8th `digestIssueExistsForDate` caller** and its dedup block is
+  byte-shape-identical to the targets'. It is **deliberately out of scope**: it calls
+  `safeCommitAndPr` zero times (it is `EXEMPT`, hook-guarded Tier-1 self-commit), so no remedy phrased
+  in terms of that helper's return value can reach it. Stated here so its untouched dedup block does
+  not read as an oversight at review.
 3.8 **Liveness markers (R10).** Wire `emitCronDigestLiveness` (with the arm that decided the verdict)
 and `emitCronPersistSkipped` into the 7, mirroring the reference's call sites.
 
@@ -324,7 +413,7 @@ an early `return` ~50 lines before `safe-commit-pr` and never reaches the livene
 it as a liveness fix would break a correct, passing test. It changes for a **different** reason:
 Phase 3.7's hardening means the skip now also requires the committed artifact, so its fixture must
 stage that artifact. The terminal assertion liveness actually moves is `return { ok: heartbeatOk };`.
-4.3 One `describe.each(ROWS)` liveness block covering scenarios 1–14 for **all 7**.
+4.3 One `describe.each(ROWS)` liveness block covering scenarios 1–15 for **all 7**.
 4.4 Mutation-battery rules carried forward verbatim: **≥2-element `paths`** wherever production calls
 `.includes`/`.some`; a **near-miss** fixture for every anchored property; **cardinality** assertions
 on any table claiming exhaustiveness; every added field asserted on a **non-zero** value.
@@ -332,7 +421,11 @@ on any table claiming exhaustiveness; every added field asserted on a **non-zero
 
 **Phase 5 — C4.** Edit `model.c4`; `bash scripts/regenerate-c4-model.sh`; commit both together.
 
-**Phase 6 — Operator comms + reconciliation (V14).**
+**Phase 6 — Docs, operator comms + reconciliation (V14).**
+6.0 Update `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` — the new RED
+arms and the `SOLEUR_CRON_DIGEST_LIVENESS` reasons in the stage table and the Dedup Contract, keeping
+the `ok` / `error` / `missed` three-way distinction intact (anchor `### H11`). The runbook is the
+target of the operator-facing "PR withheld" comment, so it must not go stale.
 6.1 Compute the **expected-RED roster** mechanically from `cron-artifact-age.sh`'s `name` +
 `cron_expr` columns: which monitors may go RED and when each next fires.
 6.2 Comment it on **#4375** with the defer-corrected diagnosis and a pointer to this PR. Do **not**
@@ -380,10 +473,16 @@ failure as real, check for a sibling worktree's concurrent run (`ps -ef | grep t
   `onBeforeHeartbeat`. If title dedup ever drifts, the operator gets duplicate FAILED audit issues.
   **v1 wrongly claimed this change "carries only a colour".**
 - **If this leaks, the user's workflow is exposed via:** no new exposure vector. The two new markers
-  carry `cron`, `run_id`, `attempt`, `ok`, `reason` — no user id, email, or secret. That is
-  load-bearing: the marker logger has **no ADR-029 `renameUserIdToHash` formatter and no redact
-  paths**, so adding a regulated field would silently bypass ADR-029. Phase 4 asserts the emitted
-  field set with `toEqual`, not `toMatchObject`.
+  carry `cron`, `run_id`, `attempt`, `ok`, `reason` — no user id, email, or secret.
+  **Be precise about which half is uncovered** (the source comment in `cron-liveness-marker.ts` says
+  so verbatim, and an earlier draft of this plan got it wrong — the same error the predecessor
+  learning records as a review-found defect): a top-level `userId` **would** still be pseudonymized
+  downstream, because Vector's `pii_scrub_structured` re-applies the ADR-029 HMAC rename in VRL to
+  every line reaching Better Stack. What is genuinely unprotected on this dedicated instance is the
+  **`redact` KEY SET** — a top-level `token` / `secret` / `password` / `authorization` ships
+  **verbatim**, since `pii_scrub_drop_userdata` drops only Art-9 content keys. So the guard the new
+  markers need is *credential-shaped keys*, not user ids. Phase 4 asserts the emitted field set with
+  `toEqual`, not `toMatchObject`, so any added field fails the build.
 - **Brand-survival threshold:** `single-user incident`
 
 ---
@@ -435,6 +534,21 @@ discoverability_test:
   command: "git fetch --unshallow 2>/dev/null; bash scripts/cron-artifact-age.sh --all"
   expected_output: "one row per producer with CADENCE/CLASS/AGE/THRESHOLD/VERDICT; every row PASS once the cohort is healthy. No SSH, no credential, no dashboard. The unshallow is load-bearing — a shallow clone reports NEVER/STALE for 9 of 9 regardless of production state."
 ```
+
+**`missed` is a third colour, and it is not this plan's to change.** A Sentry cron monitor has three
+terminal states — `ok`, `error`, and `missed` (no check-in arrived inside the grace window). This plan
+moves runs between `ok` and `error` only; it cannot produce or suppress a `missed`, which means
+"Inngest never fired the function" and has a different remedy. The runbook already carries the
+distinction (anchor `### H11 — \`missed\` (not \`error\`) on a claude-eval cron whose digest WAS
+produced`), and **Phase 6.0's runbook edit** must not blur it: an operator who reads a new RED must be
+able to tell "the cron ran and reported honestly" from "the cron never ran".
+
+**Network-outage gate (deepen-plan Phase 4.5) — trigger matched, checklist not applicable.** The
+mechanical scan fires on the substring `timeout`, which occurs here only as `spawnResult.abortedByTimeout`
+(an in-process agent-spawn abort budget) and in prose about the Better Stack query window. No
+network-connectivity symptom is under diagnosis: this plan proposes no SSH, no firewall or DNS change,
+and no `provisioner`/`connection` Terraform block. The L3→L7 ordering the checklist enforces has
+nothing to order. Recorded rather than skipped silently so the next reader can see the gate ran.
 
 **Affected-surface note (2.9.2).** The cron worker is a blind execution surface, and v1's claim that
 the existing three emitters "already discriminate every hypothesis" was **false** (R10). With Phase
@@ -493,6 +607,11 @@ MP=$(sed -n '/^const MIGRATED_PROMPT = \[/,/^\];/p' \
 - **AC6 (V1, P0)** — `echo "$MP" | xargs grep -l 'dedup-digest-committed-check' | wc -l` → **8**, and
   a behavioural case per handler: an issue present **without** the committed artifact does **not**
   short-circuit (it spawns), and with the artifact it does.
+- **AC6b (R14 — the anti-vacuity gate)** — exactly **one** of the 7 (`cron-growth-audit`) calls
+  `digestCommittedOnDefaultBranch`; the other 6 call `artifactCommittedSince`. Assert both counts, and
+  assert **negatively** that no handler passes a directory or a permanent file path to
+  `digestCommittedOnDefaultBranch` — a probe whose path always exists is a guard that can never fail,
+  which is the defect class this plan exists to close.
 - **AC7 (R10)** — `echo "$MP" | xargs grep -l 'emitCronDigestLiveness' | wc -l` → **8**; a
   `digest-absent-from-commit` run emits exactly one marker whose `reason` names the deciding arm; the
   emitted field set is asserted with `toEqual` (ADR-029 leak guard).
@@ -530,8 +649,9 @@ MP=$(sed -n '/^const MIGRATED_PROMPT = \[/,/^\];/p' \
 - **AC12b (A1 pin 1)** — the cohort assertion derives its roster from
   `cronFiles.filter(src => /finalizeOutputAwareHeartbeat\(/)` (**not** the literal array) and matches
   `retryEligible: false` **at the call site** (inside the `finalizeOutputAwareHeartbeat({…})` argument
-  object, or after stripping `//` lines). Falsify by deleting the **field** while leaving the comment
-  — the suite must go RED.
+  object). **Prescribed regex: `^\s+retryEligible: false,`** — measured to return 1 against the
+  reference where the bare token returns 2. Falsify by deleting the **field** while leaving the
+  mirrored comment; the suite must go RED.
 - **AC12c (A1 pin 2)** — both arms of the identity test in `cron-shared.test.ts`, described
   behaviourally rather than as a literal call (the helper also requires `step`, `sentryMonitorSlug`,
   `cronName`, `logger`, so an abbreviated literal would not typecheck): with `threw: true`,
