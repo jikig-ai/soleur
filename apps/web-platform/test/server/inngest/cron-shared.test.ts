@@ -1812,7 +1812,7 @@ describe("finalizeOutputAwareHeartbeat — retryEligible identity (#6750 A1 pin 
 // the mechanism scripts/cron-artifact-age.sh already trusts.
 describe("artifactCommittedSince (#6750 freshness probe)", () => {
   const SINCE = "2026-07-28T00:00:00.000Z";
-  const ANCHOR = /^docs: update competitive intelligence report/;
+  const ANCHOR = "docs: update competitive intelligence report";
 
   const octokitReturningCommits = (messages: string[]) => {
     const request = vi
@@ -1830,7 +1830,7 @@ describe("artifactCommittedSince (#6750 freshness probe)", () => {
     ]);
     await expect(
       artifactCommittedSince({
-        anchorRegex: ANCHOR,
+        anchorPrefix: ANCHOR,
         sinceIso: SINCE,
         cronName: "cron-competitive-analysis",
         octokit,
@@ -1841,7 +1841,7 @@ describe("artifactCommittedSince (#6750 freshness probe)", () => {
   it("queries the DEFAULT branch and passes `since` through (a probe on the wrong ref or window proves nothing)", async () => {
     const octokit = octokitReturningCommits(["docs: update competitive intelligence report"]);
     await artifactCommittedSince({
-      anchorRegex: ANCHOR,
+      anchorPrefix: ANCHOR,
       sinceIso: SINCE,
       cronName: "cron-competitive-analysis",
       octokit,
@@ -1863,7 +1863,7 @@ describe("artifactCommittedSince (#6750 freshness probe)", () => {
     ]);
     await expect(
       artifactCommittedSince({
-        anchorRegex: ANCHOR,
+        anchorPrefix: ANCHOR,
         sinceIso: SINCE,
         cronName: "cron-competitive-analysis",
         octokit,
@@ -1874,7 +1874,7 @@ describe("artifactCommittedSince (#6750 freshness probe)", () => {
   it("returns FALSE on an empty window", async () => {
     await expect(
       artifactCommittedSince({
-        anchorRegex: ANCHOR,
+        anchorPrefix: ANCHOR,
         sinceIso: SINCE,
         cronName: "cron-competitive-analysis",
         octokit: octokitReturningCommits([]),
@@ -1889,7 +1889,7 @@ describe("artifactCommittedSince (#6750 freshness probe)", () => {
     >[0]["octokit"];
     await expect(
       artifactCommittedSince({
-        anchorRegex: ANCHOR,
+        anchorPrefix: ANCHOR,
         sinceIso: SINCE,
         cronName: "cron-competitive-analysis",
         octokit,
@@ -1898,16 +1898,71 @@ describe("artifactCommittedSince (#6750 freshness probe)", () => {
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("tolerates a malformed payload without throwing (degraded 200 must not read as a match)", async () => {
-    const request = vi.fn().mockResolvedValue({ data: null });
+  // A degraded 200 must never read as a match. Pinned across every shape the
+  // API can actually degrade into, not just `data: null` — "not evidence" is
+  // the invariant, and one shape cannot establish it over a set.
+  it.each([
+    ["data: null", { data: null }],
+    ["missing data key", {}],
+    ["null response", null],
+    ["array of empty objects", { data: [{}] }],
+    ["array of non-objects", { data: ["docs: update competitive intelligence report"] }],
+  ])("degraded 200 (%s) resolves FALSE without throwing", async (_label, payload) => {
+    const request = vi.fn().mockResolvedValue(payload);
     const octokit = { request } as unknown as Parameters<
       typeof artifactCommittedSince
     >[0]["octokit"];
     await expect(
       artifactCommittedSince({
-        anchorRegex: ANCHOR,
+        anchorPrefix: ANCHOR,
         sinceIso: SINCE,
         cronName: "cron-competitive-analysis",
+        octokit,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  // #6750 review F1 — the defect the date-bound anchor closes.
+  it("does NOT match a PREVIOUS day's artifact that merged after midnight", async () => {
+    // safeCommitAndPr's PR title is `<commitMessage> <run date>`; the squash
+    // merge carries it into the subject. This commit is YESTERDAY's artifact,
+    // merged 00:20 today — so it sits inside today's `since` window.
+    const octokit = octokitReturningCommits([
+      "docs: update competitive intelligence report 2026-07-27 (#1234)",
+    ]);
+    await expect(
+      artifactCommittedSince({
+        anchorPrefix: "docs: update competitive intelligence report 2026-07-28",
+        sinceIso: SINCE,
+        cronName: "cron-competitive-analysis",
+        octokit,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("DOES match today's artifact by its dated PR-title subject", async () => {
+    const octokit = octokitReturningCommits([
+      "docs: update competitive intelligence report 2026-07-28 (#1235)",
+    ]);
+    await expect(
+      artifactCommittedSince({
+        anchorPrefix: "docs: update competitive intelligence report 2026-07-28",
+        sinceIso: SINCE,
+        cronName: "cron-competitive-analysis",
+        octokit,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("escapes regex metacharacters in the prefix (a conventional-commit scope is not a group)", async () => {
+    // `fix(seo): ...` contains ( ) — unescaped these would be a capture group
+    // and the anchor would match a DIFFERENT string than the literal.
+    const octokit = octokitReturningCommits(["fixseo: weekly SEO/AEO audit fixes 2026-07-28"]);
+    await expect(
+      artifactCommittedSince({
+        anchorPrefix: "fix(seo): weekly SEO/AEO audit fixes 2026-07-28",
+        sinceIso: SINCE,
+        cronName: "cron-seo-aeo-audit",
         octokit,
       }),
     ).resolves.toBe(false);

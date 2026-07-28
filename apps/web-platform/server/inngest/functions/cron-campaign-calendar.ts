@@ -138,13 +138,17 @@ export const PRODUCER_CLASS = "A";
 // safeCommitAndPr actually writes — and so both agree with the detector's
 // anchor_regex column.
 const COMMIT_MESSAGE = "ci: update campaign calendar and content-strategy review";
-const COMMIT_MESSAGE_ANCHOR = new RegExp(
-  "^" + COMMIT_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-);
+
+// The ONE file the prompt mandates on every run (STEP 3: bump content-strategy's
+// `last_updated`). Named separately from the allowlist because the liveness
+// predicate must anchor on the MANDATED artifact, not on allowlist membership —
+// see the predicate below for why those are not the same test.
+export const CAMPAIGN_CALENDAR_MANDATED_ARTIFACT =
+  "knowledge-base/marketing/content-strategy.md";
 
 export const CAMPAIGN_CALENDAR_ALLOWED_PATHS = [
   "knowledge-base/marketing/campaign-calendar.md",
-  "knowledge-base/marketing/content-strategy.md",
+  CAMPAIGN_CALENDAR_MANDATED_ARTIFACT,
 ] as const;
 
 // Spawn-env allowlist (NOT a denylist). The keys below are the COMPLETE set
@@ -241,7 +245,11 @@ export async function cronCampaignCalendarHandler({
         // inside its own fix. Asks instead whether THIS cron's commit landed on
         // main today, the same signal scripts/cron-artifact-age.sh measures.
         artifactCommittedSince({
-          anchorRegex: COMMIT_MESSAGE_ANCHOR,
+          // Date-bound: this is the PR TITLE safeCommitAndPr builds, which the
+          // squash merge carries into the commit subject. Anchoring on the
+          // message alone would match a PREVIOUS day's artifact that merged
+          // after midnight, and dedup GREEN on it.
+          anchorPrefix: `${COMMIT_MESSAGE} ${runStartedAt.slice(0, 10)}`,
           sinceIso: `${runStartedAt.slice(0, 10)}T00:00:00.000Z`,
           cronName: "cron-campaign-calendar",
         }),
@@ -430,8 +438,19 @@ export async function cronCampaignCalendarHandler({
         let livenessReason: CronDigestLivenessMarker["reason"] =
           "persistence-not-committed";
         if (commitResult.status === "committed") {
-          if (commitResult.paths?.some((p) => CAMPAIGN_CALENDAR_ALLOWED_PATHS.includes(p as (typeof CAMPAIGN_CALENDAR_ALLOWED_PATHS)[number]))) {
-            // THE POSITIVE: one of the two allowlisted files (STEP 3 writes content-strategy.md every run).
+          if (commitResult.paths?.includes(CAMPAIGN_CALENDAR_MANDATED_ARTIFACT)) {
+            // THE POSITIVE: the file STEP 3 mandates on EVERY run.
+            //
+            // Anchored on that one file, NOT on allowlist membership. The
+            // membership form is vacuous in production: safeCommitAndPr already
+            // filters staged entries through
+            // `allowedPaths.some((p) => e.path.startsWith(p))`
+            // (_cron-safe-commit.ts, anchor `allowedPaths.some`), so every member
+            // of `paths` is allowlisted by construction and the test would reduce
+            // to `paths.length > 0` — the exact vacuity R12 identified for Class
+            // B, but reported under Class A's `digest-committed`, which claims the
+            // artifact was PROVED. A run that refreshes only campaign-calendar.md
+            // and never touches content-strategy.md would have posted GREEN.
             // `.some` is MEMBERSHIP, not position — the agent may land other
             // allowlisted files beside the artifact, in any order.
             livenessOk = true;

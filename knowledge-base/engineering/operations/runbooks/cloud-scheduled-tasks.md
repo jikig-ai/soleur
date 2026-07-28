@@ -684,7 +684,8 @@ artifact the operator consumes is the **committed file**, not the issue. `livene
 now answers the second question, and the check-in is gated on both.
 
 **Diagnose from Better Stack — no SSH, no dashboard-eyeballing.** One structured
-field names the arm that decided the verdict:
+field names the arm that decided the verdict — **for every run that REACHED the liveness table**. A
+run that threw before it, or an exempt cron, emits nothing here; both are covered by the last row:
 
 ```bash
 doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
@@ -701,6 +702,7 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 | `undetermined-contract-drift` | `paths` came back undefined outside a replay-resume. The `SafeCommitResult` contract drifted. | Code fix; the signal deliberately refuses to vote GREEN on an unknown. |
 | `undetermined-replay-resume` | Replay resumed a prior commit. GREEN. | none |
 | `persistence-skipped` | Persistence never ran. Pair with `SOLEUR_CRON_PERSIST_SKIPPED`, whose `reason` is `timeout` or `red`. | For `timeout`, the spawn exceeded its budget — the run's issue may exist with nothing committed. |
+| **(no marker at all for the run)** | Two cases, and neither reaches the table above. (a) The handler **threw** inside the guarded body, so the liveness table never ran — the monitor is RED and the only signal is in **Sentry**, not Better Stack. (b) The cron is **`cron-roadmap-review`**, which is liveness-EXEMPT (it commits via the agent's own hook, never `safeCommitAndPr`) and emits this marker never. | For (a): `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep handler-body-threw`, or read the Sentry issue for `op:handler-body-threw`. For (b): this section does not apply — use H10/H11. |
 
 **Expect a noisier week one, deliberately.** The change makes the monitors report
 honestly before it makes them quiet. A producer that has been silently landing
@@ -717,9 +719,22 @@ makes it terminal, because a replay reads back an `ephemeralRoot` the handler's
 short-circuit that skips the eval when today's digest issue already exists now
 requires **both** the issue **and** the artifact on the default branch. Step name:
 `dedup-digest-committed-check`. `SOLEUR_CRON_DEDUP_SKIP` carries
-`digest_committed: 0|1`, which tells the healthy-dedup case apart from the
-issue-without-artifact recovery case. A `0` means run N-1 filed its issue but lost
-its commit and this run correctly re-spawned rather than posting GREEN on a phantom.
+`digest_committed: 0|1`.
+
+A `0` means **the artifact was not PROVEN on `main`** — which has three causes, and only the last is
+an incident. Rule them out in order:
+
+1. **A read fault.** The probes fail closed. Check Sentry for `op:artifact-freshness-read-failed`
+   (the six freshness-probe crons) or `op:digest-commit-read-failed` (`cron-growth-audit`).
+2. **A healthy Class B `no-changes` run.** For the five change-conditional producers, a run that
+   legitimately produced no diff commits nothing, so a later same-day invocation correctly reads `0`.
+   Confirm with an earlier same-day `SOLEUR_CRON_DIGEST_LIVENESS reason=no-changes-change-conditional`.
+   This is the COMMON case for Class B, not an exception.
+3. **Only after 1 and 2 are excluded:** run N-1 filed its issue but lost its commit, and this run
+   correctly re-spawned rather than posting GREEN on a phantom.
+
+Note the re-spawn in cases 2 and 3 costs a full agent run, and the re-spawned agent files its own
+dated issue — so **two issues with the same dated title for one day is expected**, not a bug.
 
 ## Restore Procedure (generalized)
 

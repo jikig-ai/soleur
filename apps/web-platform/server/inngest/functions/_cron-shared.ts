@@ -1056,17 +1056,43 @@ export async function digestCommittedOnDefaultBranch(args: {
  * already measures staleness with, so the handler-local probe and the
  * independent-vantage detector agree on what "landed" means by construction.
  *
+ * THE ANCHOR MUST BE DATE-BOUND, and `sinceIso` alone is not enough. `since`
+ * filters on the commit's date ON MAIN, which for these crons is MERGE time:
+ * they run with the default `mergeMode: "auto"`, so the commit lands only after
+ * CI passes — minutes to hours later, and across a UTC midnight for a late run.
+ * A day-N artifact merging at 00:20 on day N+1 therefore sits inside day N+1's
+ * `since` window, and a message-only anchor would match it — letting a day-N+1
+ * sibling run dedup GREEN on an artifact day N+1 never produced. That is the
+ * exact defect this probe exists to close, displaced by one day.
+ *
+ * Callers therefore pass `"<commitMessage> <YYYY-MM-DD>"`, which is the PR TITLE
+ * `safeCommitAndPr` builds (`${config.commitMessage} ${runStartedAt.slice(0,10)}`)
+ * and which GitHub's squash merge carries into the commit subject. That binds
+ * the match to the date the artifact was PRODUCED rather than the date it
+ * merged, and `since` becomes belt-and-braces. It also tightens the match enough
+ * that an unrelated operator commit sharing the message stem no longer
+ * suppresses the day's run.
+ *
  * FAIL-CLOSED-FOR-DEDUP, matching the sibling probe: any error, and any payload
  * that is not an array, returns `false` = "not proven committed", so the caller
  * SPAWNS. A duplicate run is a paper cut; a silently-skipped run is the bug.
+ * A `mergeMode: "direct"` caller (none today) whose commit subject omits the
+ * date would simply always spawn — degraded, still in the safe direction.
  */
 export async function artifactCommittedSince(args: {
-  anchorRegex: RegExp;
+  anchorPrefix: string;
   sinceIso: string;
   cronName: string;
   octokit?: Awaited<ReturnType<typeof createProbeOctokit>>;
 }): Promise<boolean> {
-  const { anchorRegex, sinceIso, cronName, octokit } = args;
+  const { anchorPrefix, sinceIso, cronName, octokit } = args;
+  // Escaped HERE, at the boundary, rather than at each call site. Taking a
+  // `RegExp` would put the security property in six places and would admit a
+  // `/g`-flagged pattern, whose `.test()` is stateful across `.some()` and
+  // therefore order-dependent. A plain string cannot carry either hazard.
+  const anchorRegex = new RegExp(
+    "^" + anchorPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  );
   try {
     const client = octokit ?? (await createProbeOctokit());
     const res = await client.request("GET /repos/{owner}/{repo}/commits", {
@@ -1074,6 +1100,11 @@ export async function artifactCommittedSince(args: {
       repo: REPO_NAME,
       sha: "main",
       since: sinceIso,
+      // Accepted cap, not an oversight: >100 commits landing on main inside one
+      // UTC day would push this cron's commit off page 1 and the probe returns
+      // false -> the run SPAWNS. That is the safe direction (a duplicate run,
+      // not a missed artifact), so pagination buys nothing the fail-closed
+      // default does not already provide.
       per_page: 100,
       headers: { "X-GitHub-Api-Version": "2022-11-28" },
     });

@@ -334,9 +334,11 @@ const ROWS: Row[] = [
         // The Class A predicate is EXACT allowlist membership (.includes), so a
         // sibling that merely shares the prefix must NOT satisfy it.
         nearMiss: "knowledge-base/marketing/content-strategy.md.bak",
-        // null by construction — see the field docs. Both allowlist entries ARE
-        // artifacts for this producer.
-        unrelated: null,
+        // #6750 review: no longer degenerate. The predicate now anchors on the
+        // MANDATED file (content-strategy.md), so campaign-calendar.md is a
+        // genuine allowlisted-but-not-the-artifact path and the Class A RED arm
+        // is reachable for this producer too.
+        unrelated: "knowledge-base/marketing/campaign-calendar.md",
       },
   },
   {
@@ -385,7 +387,14 @@ function seedCommitFor(row: Row, override?: Record<string, unknown>) {
     const landed = (result.paths as string[] | undefined) ?? [];
     if (result.status === "committed") {
       committedPaths.push(...landed);
-      if (row.commitMessage) committedMessages.push(row.commitMessage);
+      // Model what actually lands on `main`: safeCommitAndPr's PR title is
+      // `<commitMessage> <run date>` and GitHub's squash merge renders the
+      // subject as `<PR title> (#N)`. Recording the BARE message would let a
+      // date-bound anchor fail for a fixture reason, and — worse — would let a
+      // date-blind anchor pass, hiding the cross-midnight defect.
+      if (row.commitMessage) {
+        committedMessages.push(`${row.commitMessage} ${TODAY} (#4242)`);
+      }
     }
     return result;
   });
@@ -755,6 +764,24 @@ describe("#6750 — handler-local liveness across the cohort", () => {
       expect(livenessCalls()[0]).toMatchObject({ ok: 0, reason: "persistence-skipped" });
     });
 
+    // --- F5: the persistence-skipped "red" arm (zero calls before this) ----
+    it("spawn ran but the issue never landed → persistence SKIPPED with reason=red", async () => {
+      // resolveOutputAwareOk is stubbed true in beforeEach and was never
+      // overridden anywhere in this suite, so heartbeatOk === false was never
+      // instantiated: the "red" arm and this whole path had no coverage, and
+      // hardcoding the reason to "timeout" survived the full suite.
+      resolveOutputAwareOkSpy.mockResolvedValue(false);
+      const { res, step } = await runFresh(row);
+      expect(res).toEqual({ ok: false });
+      expect(step.executed).not.toContain("safe-commit-pr");
+      expect(emitPersistSkippedSpy).toHaveBeenCalledTimes(1);
+      expect(emitPersistSkippedSpy.mock.calls[0][0]).toEqual({
+        cron: row.cronName,
+        reason: "red",
+      });
+      expect(livenessCalls()[0]).toMatchObject({ ok: 0, reason: "persistence-skipped" });
+    });
+
     // --- scenario 13 (V1, the P0) -----------------------------------------
     it("dedup: a digest ISSUE WITHOUT the committed artifact does NOT short-circuit — the run spawns", async () => {
       // Run 1 files the issue but its commit is LOST.
@@ -772,6 +799,26 @@ describe("#6750 — handler-local liveness across the cohort", () => {
 
       expect(step.executed).toContain("dedup-digest-committed-check");
       expect(spawnClaudeEvalSpy).toHaveBeenCalledTimes(1); // it RECOVERED
+
+      // F3 — the marker must record the RECOVERY arm, not just the healthy one.
+      // This is the only operator-reachable signal separating "recovered from a
+      // green-with-no-artifact" from "healthy dedup"; hardcoding it to 1, or
+      // moving the emit inside the gate, previously survived the whole suite.
+      expect(emitDedupSkipSpy).toHaveBeenCalledTimes(1);
+      expect(emitDedupSkipSpy.mock.calls[0][0]).toEqual({
+        cron: row.cronName,
+        date: TODAY,
+        digest_committed: 0,
+      });
+
+      // The COST of recovering, pinned honestly rather than wished away: the
+      // re-spawned agent files its own dated issue, so the operator now has TWO
+      // issues with the same dated title for the same day. GitHub permits
+      // duplicate titles and nothing upstream dedups them. This is the accepted
+      // negative recorded in the ADR amendment — two issues plus a landed
+      // artifact beats one issue and nothing. What must NOT happen is unbounded
+      // growth, so the count is pinned exactly.
+      expect(realDigestCount(row.titlePrefix, row.titleSuffix)).toBe(2);
     });
 
     // --- scenario 14 ------------------------------------------------------

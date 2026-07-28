@@ -140,9 +140,6 @@ export const PRODUCER_CLASS = "B";
 // safeCommitAndPr actually writes — and so both agree with the detector's
 // anchor_regex column.
 const COMMIT_MESSAGE = "docs(arch): weekly architecture diagram sync";
-const COMMIT_MESSAGE_ANCHOR = new RegExp(
-  "^" + COMMIT_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-);
 
 export const ARCH_DIAGRAM_ALLOWED_PATHS = [
   "knowledge-base/engineering/architecture/diagrams/",
@@ -220,7 +217,11 @@ export async function cronArchitectureDiagramSyncHandler({
         // inside its own fix. Asks instead whether THIS cron's commit landed on
         // main today, the same signal scripts/cron-artifact-age.sh measures.
         artifactCommittedSince({
-          anchorRegex: COMMIT_MESSAGE_ANCHOR,
+          // Date-bound: this is the PR TITLE safeCommitAndPr builds, which the
+          // squash merge carries into the commit subject. Anchoring on the
+          // message alone would match a PREVIOUS day's artifact that merged
+          // after midnight, and dedup GREEN on it.
+          anchorPrefix: `${COMMIT_MESSAGE} ${runStartedAt.slice(0, 10)}`,
           sinceIso: `${runStartedAt.slice(0, 10)}T00:00:00.000Z`,
           cronName: "cron-architecture-diagram-sync",
         }),

@@ -185,8 +185,16 @@ break a cohort invariant to fix a colour bug); `livenessOk` is added **beside** 
 | **B** (change-conditional) | `content-generator`, `seo-aeo-audit`, `growth-execution`, `competitive-analysis`, `architecture-diagram-sync` | GREEN | GREEN **iff** `resumed` | GREEN **iff** `paths.length > 0` and some path is under the allowlist | **GREEN** | **RED** |
 
 The class table is **single-sourced** in `scripts/cron-artifact-age.sh`'s `class` column and pinned to
-the handlers' compiled class arms by a set-equality parity test, so a ninth cron cannot drift the two
-apart silently.
+the handlers' compiled class arms by a set-equality parity test.
+
+**`retryEligible: false` reaches NINE callers, not eight.** The liveness gate is scoped to the 8
+`MIGRATED_PROMPT` crons, but the retry decision is a property of the WORKSPACE LIFECYCLE, and
+`cron-roadmap-review` — liveness-EXEMPT, since it routes persistence through the agent's own
+hook-guarded commit and calls `safeCommitAndPr` zero times — shares that lifecycle byte-for-byte
+(memoized `setup-workspace` inside `step.run`, unconditional `teardownEphemeralWorkspace` in a
+`finally`). Excluding it would have bought no recovery it uniquely had, and an invariant with one
+exemption needs an allowlist, which rots. It has no `PRODUCER_CLASS` and is not in the class parity
+set — deliberately: it has no liveness table to pin.
 
 ### The remedy has TWO halves, and porting one is the failure mode
 
@@ -229,8 +237,11 @@ exists to close. This is asserted negatively in the test suite.
 1. **A trailing persistence throw on an output-present run posts RED where it was previously GREEN**
    (#5728) — now across seven more handlers. Deliberately noisier before quieter.
 2. **A non-final no-output throw posts one terminal RED instead of retrying.** `retryEligible: false`
-   makes the failure terminal. This is correct rather than merely tolerable: a replay was never
-   capable of recovery, because `setup-workspace` is memoized inside `step.run` and the handler's
+   makes the failure terminal. This is correct rather than merely tolerable for every
+   WORKSPACE-DEPENDENT throw — which is all of them except an Inngest step-transport fault on
+   `verify-output`, where `claude-eval` is already memoized and the workspace is untouched. That one
+   shape does lose a recovery it previously had; it is accepted as the price of removing the
+   exemption. For the rest, a replay was never capable of recovery, because `setup-workspace` is memoized inside `step.run` and the handler's
    `finally` tears down `ephemeralRoot` unconditionally, so the replay reads back an already-deleted
    path, hits `safeCommitAndPr`'s `workspace-lost` guard, and comments a misleading *"PR withheld"* +
    runbook pointer onto the operator's own issue. Scoped precisely: throws **before** the try (token
@@ -242,6 +253,22 @@ exists to close. This is asserted negatively in the test suite.
    drifts the operator gets duplicate FAILED audit issues. An earlier draft of the #6750 plan claimed
    this change "carries only a colour" — that was false, and the test suite now asserts that a
    liveness-RED run does not create a *second* issue for the same date.
+
+4. **The dedup recovery arm files a SECOND dated issue.** When the issue exists but the artifact does
+   not, the run correctly re-spawns — and the re-spawned agent files its own issue with the same
+   dated title, which GitHub permits and nothing upstream dedups. The operator sees two issues for
+   that day. Two issues plus a landed artifact beats one issue and nothing, so this is accepted; the
+   test suite pins the count at exactly two so it cannot grow unbounded.
+
+5. **The dedup re-spawn is not free, and for Class B it is the common case.** Both probes read
+   `main`, while `safeCommitAndPr` reports `status: "committed"` as soon as the PR is opened with
+   auto-merge armed — so the two halves use different definitions of "landed", separated by CI
+   latency. A same-day second invocation therefore re-spawns whenever the first run's PR has not yet
+   merged, and for the five Class B producers a designed-healthy `no-changes` run leaves nothing on
+   `main` at all, so the dedup can essentially never short-circuit for them. The cost is a full
+   agent spawn (real Anthropic spend), not the "paper cut" a duplicate commit would be. Accepted
+   because the alternative — trusting an armed PR as evidence — reintroduces a GREEN verdict for an
+   artifact that auto-merge may silently drop on conflict.
 
 **Ordering is load-bearing at construction time.** `retryEligible: false` must land **before**
 return-value consumption, never beside it. `const failed = threw && !heartbeatOk && retryEligible !== false;`
@@ -289,9 +316,29 @@ Written down with numbers rather than papered over:
    matches the commit **message** with **no pathspec**, so a Class B run that commits anything under
    its allowlist resets the age clock with the consumed artifact never written. The windows are 15d
    (Class A weekly), 22d (Class B weekly — `seo-aeo-audit`, `architecture-diagram-sync`), 46d
-   (`growth-execution`), and 75d (`competitive-analysis`, the `MAX_THRESHOLD_DAYS` cap). **A 75-day
-   window under a `single-user incident` brand-survival threshold is recorded here as accepted, not
-   solved.**
+   (`growth-execution`), and 75d (`competitive-analysis`, the `MAX_THRESHOLD_DAYS` cap), plus 22d for
+   the EXEMPT `cron-roadmap-review`.
+
+   **This amendment CREATED one of these windows and must say so.** Correcting
+   `cron-content-generator` A -> B moves its detector threshold from `4*2+1 = 9d` to `4*3+1 = 13d`,
+   and its `no-changes` runs now vote GREEN where they would have gone RED. So "blog generation
+   quietly stopped producing" goes from *RED on the next fire (~4 days)* to *13 days of silence*.
+   That is a monitoring WEAKENING shipped alongside the false-RED fix, and it is the correct trade
+   only because the alternative false-REDs a designed-healthy run — but it is a trade, not a pure win.
+
+   **A 75-day window under a `single-user incident` threshold is accepted, and here is why it does
+   not breach that threshold**: every Class B artifact is an internal knowledge document
+   (`competitive-intelligence.md`, `seo-refresh-queue.md`, the architecture diagrams). A stale copy
+   exposes no user data, loses no user work, charges nobody, and blocks no user workflow. The cost is
+   the operator's own decision quality, which degrades gradually and visibly rather than as an
+   incident. Had any Class B producer written a user-facing artifact, this window would not be
+   acceptable.
+
+   **The handler-local freshness probe inherits the detector's pathspec weakness.** Residual 4 was
+   originally scoped to `last_artifact_epoch()`, but `artifactCommittedSince` matches the commit
+   MESSAGE with no pathspec too. It proves *"a commit with this cron's message and this run's date
+   landed on main"*, NOT *"this run's consumed artifact landed"* — the same honesty the
+   `allowlisted-commit-no-artifact` reason name already carries, applied at the dedup layer.
 
 ### C4 attribution
 

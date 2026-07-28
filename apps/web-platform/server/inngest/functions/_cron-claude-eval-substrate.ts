@@ -872,7 +872,12 @@ export async function spawnClaudeEval(args: {
   if (!existsSync(spawnCwd)) {
     throw new Error(
       `spawn cwd ${spawnCwd} no longer exists (container restart between setup-workspace and claude-eval?). ` +
-        `Re-run will re-execute setup-workspace and create a fresh ephemeral root.`,
+        // #6750 — this string previously promised "Re-run will re-execute
+        // setup-workspace and create a fresh ephemeral root." That is FALSE:
+        // setup-workspace runs inside step.run and is memoized, so a replay
+        // reads back the same deleted path and lands here again. The operator
+        // reads this in Sentry, so the promise was actively misleading.
+        `A replay will NOT rebuild it — setup-workspace is memoized inside step.run, so the replay reads back this same deleted path. Callers passing retryEligible:false report one honest terminal failure instead.`,
     );
   }
 

@@ -285,9 +285,16 @@ export async function cronRoadmapReviewHandler({
   // Wrap the entire post-setup pipeline in try/finally so the ephemeral
   // workspace is torn down even if claude-eval throws at the Inngest step
   // boundary. The teardown side-effect outside step.run is acceptable
-  // because rm {recursive:true, force:true} is idempotent — a replay
-  // re-creates a fresh ephemeralRoot from setup-workspace's memoization
-  // (or the existsSync guard at the top of spawnClaudeEval rebuilds it).
+  // because rm {recursive:true, force:true} is idempotent.
+  //
+  // #6750 — the previous version of this comment claimed a replay "re-creates a
+  // fresh ephemeralRoot from setup-workspace's memoization (or the existsSync
+  // guard at the top of spawnClaudeEval rebuilds it)". BOTH halves were false:
+  // memoization is precisely why setup-workspace does NOT re-run, and the
+  // existsSync guard (_cron-claude-eval-substrate.ts, anchor `no longer exists`)
+  // THROWS rather than rebuilding. A replay after teardown cannot recover, which
+  // is why every finalizeOutputAwareHeartbeat caller now passes
+  // `retryEligible: false`.
   try {
     // #5728 — flag pattern. The body (claude-eval → verify-output) runs in an
     // inner try whose throw sets `threw`; the single terminal heartbeat is

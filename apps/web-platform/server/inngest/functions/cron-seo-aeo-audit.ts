@@ -161,9 +161,6 @@ export const PRODUCER_CLASS = "B";
 // safeCommitAndPr actually writes — and so both agree with the detector's
 // anchor_regex column.
 const COMMIT_MESSAGE = "fix(seo): weekly SEO/AEO audit fixes";
-const COMMIT_MESSAGE_ANCHOR = new RegExp(
-  "^" + COMMIT_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-);
 
 export const SEO_AEO_ALLOWED_PATHS = ["plugins/soleur/docs/"] as const;
 
@@ -248,7 +245,11 @@ export async function cronSeoAeoAuditHandler({
         // inside its own fix. Asks instead whether THIS cron's commit landed on
         // main today, the same signal scripts/cron-artifact-age.sh measures.
         artifactCommittedSince({
-          anchorRegex: COMMIT_MESSAGE_ANCHOR,
+          // Date-bound: this is the PR TITLE safeCommitAndPr builds, which the
+          // squash merge carries into the commit subject. Anchoring on the
+          // message alone would match a PREVIOUS day's artifact that merged
+          // after midnight, and dedup GREEN on it.
+          anchorPrefix: `${COMMIT_MESSAGE} ${runStartedAt.slice(0, 10)}`,
           sinceIso: `${runStartedAt.slice(0, 10)}T00:00:00.000Z`,
           cronName: "cron-seo-aeo-audit",
         }),
@@ -324,9 +325,16 @@ export async function cronSeoAeoAuditHandler({
   // Wrap the entire post-setup pipeline in try/finally so the ephemeral
   // workspace is torn down even if claude-eval throws at the Inngest step
   // boundary. The teardown side-effect outside step.run is acceptable
-  // because rm {recursive:true, force:true} is idempotent — a replay
-  // re-creates a fresh ephemeralRoot from setup-workspace's memoization
-  // (or the existsSync guard at the top of spawnClaudeEval rebuilds it).
+  // because rm {recursive:true, force:true} is idempotent.
+  //
+  // #6750 — the previous version of this comment claimed a replay "re-creates a
+  // fresh ephemeralRoot from setup-workspace's memoization (or the existsSync
+  // guard at the top of spawnClaudeEval rebuilds it)". BOTH halves were false:
+  // memoization is precisely why setup-workspace does NOT re-run, and the
+  // existsSync guard (_cron-claude-eval-substrate.ts, anchor `no longer exists`)
+  // THROWS rather than rebuilding. A replay after teardown cannot recover, which
+  // is why every finalizeOutputAwareHeartbeat caller now passes
+  // `retryEligible: false`.
   try {
     // #5728 — flag pattern. The body (claude-eval → verify-output →
     // safe-commit-pr) runs in an inner try whose throw sets `threw`; the single

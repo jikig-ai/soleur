@@ -464,6 +464,37 @@ describe("#6750 A1 pin 3 — the shell class table matches the handlers' class a
     expect(shellClasses().get("cron-content-generator")).toBe("B");
   });
 
+  // F6 — the `class` column was single-sourced; `anchor_regex` was not, and it
+  // is the more load-bearing of the two: the freshness probe's soundness AND the
+  // detector's staleness measurement both rest on it. A handler renaming its
+  // COMMIT_MESSAGE updates its own probe automatically and silently desyncs the
+  // detector, which then pages at 22d for a healthy producer.
+  it("each handler's COMMIT_MESSAGE matches the detector's anchor_regex column", () => {
+    const rows = new Map<string, string>();
+    for (const line of readFileSync(AGE_SCRIPT, "utf-8").split("\n")) {
+      const m = /^(cron-[a-z-]+)\|[^|]*\|[^|]*\|[AB]\|(.+)$/.exec(line);
+      if (m) rows.set(m[1], m[2]);
+    }
+    let checked = 0;
+    for (const file of MIGRATED_PROMPT) {
+      const name = file.replace(/\.ts$/, "");
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      const cm = /^const COMMIT_MESSAGE = "([^"]+)";$/m.exec(src);
+      if (!cm) continue; // community-monitor predates the const; covered by its own suite
+      const anchor = rows.get(name);
+      expect(anchor, `${name} missing from cron-artifact-age.sh`).toBeDefined();
+      // The shell column is an ERE anchored at ^; unescape it and require it to
+      // be a prefix of what the handler actually commits.
+      const unescaped = anchor!.replace(/^\^/, "").replace(/\\([().])/g, "$1");
+      expect(
+        cm[1].startsWith(unescaped),
+        `${name}: handler commits "${cm[1]}" but the detector anchors on "${anchor}"`,
+      ).toBe(true);
+      checked += 1;
+    }
+    expect(checked).toBe(7);
+  });
+
   it("agrees with each handler's compiled class arm for every MIGRATED_PROMPT cron", () => {
     const table = shellClasses();
     let checked = 0;
@@ -510,17 +541,70 @@ describe("#6750 AC6b — the existence probe is only used where it can actually 
   });
 
   it("NEGATIVE: no existence probe is passed a directory or an undated path", () => {
+    // FAIL-CLOSED. The previous form extracted `path:` with a regex that assumed
+    // it was the FIRST key; reordering the object literal made it match zero
+    // calls, the loop body never ran, and BOTH assertions silently skipped —
+    // leaving growth-audit's only dedup guard unguarded. A gate on vacuity that
+    // is itself vacuity-prone is the defect this PR exists to close, so the
+    // per-file cardinality assertion below is the load-bearing line.
+    let inspected = 0;
     for (const file of COHORT) {
       const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
-      // Capture the `path:` argument of every digestCommittedOnDefaultBranch call.
-      const calls = [...src.matchAll(/digestCommittedOnDefaultBranch\(\{\s*path:\s*([^\n]+?),\s*\n/g)];
-      for (const [, arg] of calls) {
+      // Capture the whole call BODY, order-independently, then pull `path:` out.
+      const calls = [...src.matchAll(/digestCommittedOnDefaultBranch\(\{([\s\S]*?)\}\)/g)];
+      const declares = /digestCommittedOnDefaultBranch\(/.test(src);
+      expect(
+        calls.length > 0,
+        `${file}: calls digestCommittedOnDefaultBranch but the gate could not parse it — the gate is DISENGAGED`,
+      ).toBe(declares);
+      for (const [, body] of calls) {
+        const m = /(?:^|\n)\s*path:\s*([^\n]+?),\s*$/m.exec(body);
+        expect(m, `${file}: no path: argument found in the call body`).not.toBeNull();
+        const arg = m![1];
         // A directory argument can never 404 once the directory exists.
         expect(arg.trimEnd().replace(/[`"']/g, "")).not.toMatch(/\/$/);
+        // Nor may it be a bare directory CONSTANT — the source-text check above
+        // cannot see through an identifier.
+        expect(arg).not.toMatch(/^\s*[A-Z_]+\s*$/);
         // The path MUST vary per run, or the probe is a constant-true guard. The
         // only sanctioned source of that variance is the run date.
         expect(arg).toMatch(/runStartedAt\.slice\(0, 10\)/);
+        inspected += 1;
       }
     }
+    // Cardinality: exactly one cohort handler uses the existence probe.
+    expect(inspected).toBe(1);
+  });
+
+  // F1 — the SYMMETRIC gate for the freshness probe, which the original AC6b
+  // omitted: the PR built an anti-vacuity gate for the 1 existence-probe
+  // producer and none for the 6 freshness-probe producers, i.e. the majority
+  // path. `sinceIso` is what makes it a FRESHNESS probe rather than an
+  // existence probe; pinning it to 1970 made it match forever and survived the
+  // whole suite.
+  it("NEGATIVE: every freshness probe binds its window AND its anchor to the run date", () => {
+    let inspected = 0;
+    for (const file of COHORT) {
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      const calls = [...src.matchAll(/artifactCommittedSince\(\{([\s\S]*?)\}\)/g)];
+      const declares = /artifactCommittedSince\(/.test(src);
+      expect(
+        calls.length > 0,
+        `${file}: calls artifactCommittedSince but the gate could not parse it — the gate is DISENGAGED`,
+      ).toBe(declares);
+      for (const [, body] of calls) {
+        const since = /(?:^|\n)\s*sinceIso:\s*([^\n]+?),\s*$/m.exec(body);
+        expect(since, `${file}: no sinceIso argument`).not.toBeNull();
+        expect(since![1]).toMatch(/runStartedAt\.slice\(0, 10\)/);
+        const prefix = /(?:^|\n)\s*anchorPrefix:\s*([^\n]+?),\s*$/m.exec(body);
+        expect(prefix, `${file}: no anchorPrefix argument`).not.toBeNull();
+        // Date-bound anchor: a message-only anchor matches a PREVIOUS day's
+        // artifact that merged after midnight (safeCommitAndPr defaults to
+        // auto-merge, so the commit lands on main hours after the run).
+        expect(prefix![1]).toMatch(/runStartedAt\.slice\(0, 10\)/);
+        inspected += 1;
+      }
+    }
+    expect(inspected).toBe(6);
   });
 });
