@@ -41,10 +41,25 @@ If both are empty/after-the-cancel, the budget was already blown on `main` — a
 (it cancelled again, deterministically).
 
 **Fix:** bumped `timeout-minutes: 8 → 12` (honest interim — root cause understood, not a hidden
-hang) and filed #6665 to broaden the existing `MOCK_SLEEP_NOOP` gate (`ci-deploy.test.sh:673`) so
-the timing-non-fidelity tests stop paying real wall-clock, returning the budget to a tight 8. The
-architecture review preferred a step-level `timeout-minutes` on the long-pole step over inflating
-the whole job ceiling — worth considering when #6665 lands.
+hang) and filed #6665 to broaden the opt-in no-op `sleep` gate so the timing-non-fidelity tests
+stop paying real wall-clock, returning the budget to a tight 8.
+
+**RESOLVED by #6665 (PR #7020) — the three state claims above are now stale, deliberately left in
+place as the record of what was true on 2026-07-18:**
+
+- The `MOCK_SLEEP_NOOP` seam **no longer exists**. #6665 inverted it: the no-op `sleep` mock is now
+  installed by DEFAULT by `ci-deploy.test.sh › create_base_mocks`, and a test opts OUT with
+  `MOCK_SLEEP_REAL=1`. Searching for `MOCK_SLEEP_NOOP` will find nothing in code — do not go
+  looking for that gate.
+- The `~407s` step and the `8 → 12` ceiling are both superseded. Measured on PR #7020: the step is
+  **22-25s** on CI (399-409s before), the whole job **184-187s**, and `timeout-minutes` is back at
+  **8**. The "job is at-budget on `main`" statement was true then and is not now.
+- The architecture review's step-level `timeout-minutes` suggestion **was adopted** in PR #7020:
+  `Run ci-deploy.sh tests` now carries its own `timeout-minutes`, so a future hang in that step is
+  attributable to it rather than producing another red-herring job cancel.
+
+The **diagnostic** and **attribution** sections above are unaffected and still correct — per-step
+durations remain the right instrument, and the cancel location remains a red herring.
 
 ## 2. A no-default TF root variable breaks the existing `terraform test` file
 

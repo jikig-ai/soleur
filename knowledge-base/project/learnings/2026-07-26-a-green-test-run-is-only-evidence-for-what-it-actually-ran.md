@@ -63,6 +63,13 @@ swallowed the next job's prose — letting a sibling job's text satisfy an asser
 `apps/web-platform/infra/` path in the diff and prints, after the summary, that its green is not
 evidence for that change — naming the command that is.
 
+> **Superseded by #7014 (2026-07-27):** the notice moved to the **preamble**. Printing it after
+> the summary meant it arrived once the ~20-minute run was already paid for, which is too late to
+> be a decision — #6969 recurred behind it. A one-line restatement stays in the epilogue for
+> readers who `tail` the log. The detection also changed: it now distinguishes "could not
+> determine the diff" from "no infra in the diff" (a committed infra file with no `origin/main`
+> previously reported clean) and includes untracked files.
+
 **Give the uncovered suites a runnable local command.**
 `apps/web-platform/infra/run-registered-suites.sh` derives the suite list **from
 `infra-validation.yml`** rather than globbing the directory, so the runner and CI cannot drift, and
