@@ -483,3 +483,44 @@ describe("#6750 A1 pin 3 — the shell class table matches the handlers' class a
     expect(checked).toBe(MIGRATED_PROMPT.length);
   });
 });
+
+// #6750 AC6b — the ANTI-VACUITY gate on the dedup hardening itself.
+//
+// digestCommittedOnDefaultBranch is an EXISTENCE probe. Pointed at a DATE-NAMED
+// path it proves "this run's artifact landed"; pointed at a directory or a
+// permanent file it returns 200 forever and becomes a guard that can never fail
+// — which would reproduce the always-green defect INSIDE its own fix. This test
+// is the thing that stops a future handler from taking the easy wrong arm.
+describe("#6750 AC6b — the existence probe is only used where it can actually fail", () => {
+  const COHORT = MIGRATED_PROMPT.filter((f) => f !== "cron-community-monitor.ts");
+
+  it("exactly ONE cohort handler uses the existence probe, and it is the date-named producer", () => {
+    const users = COHORT.filter((f) =>
+      /digestCommittedOnDefaultBranch\(/.test(readFileSync(join(FUNCTIONS_DIR, f), "utf-8")),
+    );
+    expect(users).toEqual(["cron-growth-audit.ts"]);
+  });
+
+  it("the other six use the FRESHNESS probe", () => {
+    const users = COHORT.filter((f) =>
+      /artifactCommittedSince\(/.test(readFileSync(join(FUNCTIONS_DIR, f), "utf-8")),
+    );
+    expect(users).toHaveLength(6);
+    expect(users).not.toContain("cron-growth-audit.ts");
+  });
+
+  it("NEGATIVE: no existence probe is passed a directory or an undated path", () => {
+    for (const file of COHORT) {
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      // Capture the `path:` argument of every digestCommittedOnDefaultBranch call.
+      const calls = [...src.matchAll(/digestCommittedOnDefaultBranch\(\{\s*path:\s*([^\n]+?),\s*\n/g)];
+      for (const [, arg] of calls) {
+        // A directory argument can never 404 once the directory exists.
+        expect(arg.trimEnd().replace(/[`"']/g, "")).not.toMatch(/\/$/);
+        // The path MUST vary per run, or the probe is a constant-true guard. The
+        // only sanctioned source of that variance is the run date.
+        expect(arg).toMatch(/runStartedAt\.slice\(0, 10\)/);
+      }
+    }
+  });
+});
