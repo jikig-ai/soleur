@@ -93,7 +93,7 @@ clicking **Ready for review**:
 3. **Byte budget.** For `agents-core` PRs, verify the post-merge always-loaded
    payload stays under the thresholds defined in
    `scripts/lint-agents-rule-budget.py` (the authority: warn at
-   `B_ALWAYS >= 20000`, reject above `23000`), which
+   `B_ALWAYS >= 44000`, reject above `46000`), which
    `cq-agents-md-why-single-line` restates. Measure by running the linter
    rather than `wc -c` — the thresholds are defined over frontmatter-stripped
    bytes, and a raw `wc -c` overstates the payload by the frontmatter size.

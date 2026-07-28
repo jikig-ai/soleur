@@ -2,7 +2,7 @@
 """Hard-rule body-weakening gate (ADR-092, minimal v1).
 
 Guards against a SILENTLY weakened `hr-*`/`wg-*` guardrail: any change or
-deletion of a hard-rule / workflow-gate BODY line in AGENTS.{core,docs,rest}.md
+deletion of a hard-rule / workflow-gate BODY line in AGENTS.rules.md
 is BLOCKED unless a per-change, hash-bound ack exists in the CODEOWNERS-owned
 WORM file `.claude/rule-weakening-acks.txt`. The safe primitive is "add a new
 rule" (new id) — always allowed; "revise/remove an existing rule body" is
@@ -67,7 +67,10 @@ if _SCRIPTS_DIR not in sys.path:
 
 from _agents_md_sections import SECTIONS  # noqa: E402
 
-SIDECARS = ("AGENTS.core.md", "AGENTS.docs.md", "AGENTS.rest.md")
+# ADR-150: one unconditional corpus. The tuple shape is retained (rather than a
+# bare string) so the parse/union plumbing below stays list-driven and a future
+# second corpus file needs no structural change.
+SIDECARS = ("AGENTS.rules.md",)
 SECTIONS_MODULE_REL = "scripts/_agents_md_sections.py"
 # Manifest is a HASH-FIRST text file (`<sha256>  <id>` per line), NOT JSON keyed
 # by id: a rule-id whose suffix is a secret-scanner keyword (`…-auth`, `…-key`,
@@ -80,12 +83,18 @@ ACKS_REL = Path(".claude") / "rule-weakening-acks.txt"
 MANIFEST_SCHEMA = 1
 
 ID_RE = re.compile(r"\[id: ([a-z0-9-]+)\]")
-# Pointer line: `- [id: x] (tags)? → <class>` anchored end-of-line. Sidecars
-# hold bodies, but filter pointer-shaped lines defensively (mirrors
-# lint-rule-ids.POINTER_LINE_RE).
-POINTER_LINE_RE = re.compile(
-    r"^- \[id: [a-z0-9-]+\](?:\s+\[[^\]]+\])*\s+→\s+(core|docs-only|rest)\s*$"
-)
+# Pointer line: `- [id: x] (tags)?` anchored end-of-line (ADR-150 dropped the
+# class arrow). The corpus holds bodies; pointer-shaped lines are filtered
+# defensively so this parse mirrors lint-rule-ids.POINTER_LINE_RE.
+#
+# SE-13 asked whether this filter becomes a no-op once the arrow is gone.
+# Measured at /work, gutting a real body down to its bare slug: with the filter
+# the id VANISHES from the head map (74 → 73) and reads as a deletion; without
+# it the id stays with a changed hash and reads as a weakening. BOTH paths block
+# and demand an ack, so the filter is NOT the thing standing between a gutted
+# body and a green gate — it decides how the block is CLASSIFIED, not whether it
+# fires. Kept for parse symmetry with lint-rule-ids; not a security control.
+POINTER_LINE_RE = re.compile(r"^- \[id: [a-z0-9-]+\](?:\s+\[[^\]]+\])*\s*$")
 # Only hr-* and wg-* bodies are gated (plan: hard rules + workflow gates).
 GATED_PREFIX_RE = re.compile(r"^(hr|wg)-")
 # Enforcement tags whose presence escalates a changed body to a louder
@@ -154,27 +163,23 @@ def parse_bodies(text: str, sections: frozenset[str] | set[str]) -> dict[str, st
 
 def build_body_map(
     sidecar_texts: dict[str, str], sections: frozenset[str] | set[str]
-) -> tuple[dict[str, str], list[str]]:
-    """Union {id: raw_body_line} across all sidecars (SF-P2-9).
+) -> dict[str, str]:
+    """Union {id: raw_body_line} across the corpus file(s).
 
-    Returns (merged, collisions). A gated id that appears in MORE THAN ONE
-    sidecar is a `collision` — the pointer index is 1:1, so an id lives in
-    exactly one sidecar. Callers fail-closed on any collision: last-file-wins
-    would otherwise let a same-id decoy in a second sidecar mask a weakening of
-    the real, runtime-loaded body (F1). `sidecar_texts` is ordered so the
-    collision message names both hosts.
+    ADR-150 removed the cross-sidecar collision detector that used to live here.
+    It existed for threat F1: with three sidecars, a same-id decoy in a second
+    file could win a last-file-wins merge and mask a weakening of the real,
+    runtime-loaded body. With ONE unconditional corpus there is no second file to
+    host a decoy, so the check had no failing input left — the repo's anti-vacuity
+    posture (SE-4) says delete such a gate rather than leave it green.
+
+    A duplicate id WITHIN the corpus is still caught, by `lint-rule-ids.py`'s
+    per-file duplicate check (`collect_ids_typed`).
     """
     merged: dict[str, str] = {}
-    origin: dict[str, str] = {}
-    collisions: list[str] = []
-    for name, text in sidecar_texts.items():
-        for rid, raw in parse_bodies(text, sections).items():
-            if rid in origin:
-                collisions.append(f"{rid} (in {origin[rid]} and {name})")
-            else:
-                origin[rid] = name
-            merged[rid] = raw
-    return merged, sorted(collisions)
+    for text in sidecar_texts.values():
+        merged.update(parse_bodies(text, sections))
+    return merged
 
 
 def hashes_for(body_map: dict[str, str]) -> dict[str, str]:
@@ -292,14 +297,7 @@ def _base_sections(root: Path, base_commit: str) -> set[str]:
 
 
 def cmd_write(root: Path, manifest_path: Path) -> int:
-    body_map, collisions = build_body_map(_read_worktree_sidecars(root), _head_sections(root))
-    if collisions:
-        print(
-            "ERROR: cross-sidecar duplicate gated id(s) — a rule body must live "
-            f"in exactly one sidecar: {collisions}",
-            file=sys.stderr,
-        )
-        return 2
+    body_map = build_body_map(_read_worktree_sidecars(root), _head_sections(root))
     hashes = hashes_for(body_map)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(render_manifest(hashes))
@@ -350,17 +348,9 @@ def cmd_check(
     # parse (the SECTIONS-oracle reward-hack — a silent false-negative).
     sections = _head_sections(root) | _base_sections(root, base_commit)
 
-    # Head (working-tree) state. Cross-sidecar duplicate id → fail-closed (F1:
-    # last-file-wins would let a same-id decoy in a second sidecar mask a
-    # weakening of the real, runtime-loaded body).
-    head_bodies, head_collisions = build_body_map(_read_worktree_sidecars(root), sections)
-    if head_collisions:
-        print(
-            "::error::rule-body-lint: cross-sidecar duplicate gated id(s) in head "
-            f"(fail-closed; a rule body must live in exactly one sidecar): {head_collisions}",
-            file=sys.stderr,
-        )
-        return 2
+    # Head (working-tree) state. The cross-sidecar collision fail-closed is gone
+    # with the sidecars themselves (ADR-150); see build_body_map.
+    head_bodies = build_body_map(_read_worktree_sidecars(root), sections)
     head_hashes = hashes_for(head_bodies)
 
     # Manifest integrity (AC6, TR1): for every id present in BOTH head and the
@@ -387,16 +377,19 @@ def cmd_check(
                 "Run `python3 scripts/lint-rule-bodies.py --write` to regenerate."
             )
 
-    # Base state (unioned across all three sidecars at <base>, same section set).
+    # Base state (the corpus as of <base>, same section set).
+    #
+    # ADR-150 MIGRATION NOTE (SE-1): `SIDECARS` is head-side, so across the single
+    # commit that merged the three change-class sidecars into AGENTS.rules.md,
+    # `git show <base>:AGENTS.rules.md` resolves to nothing and this base map is
+    # EMPTY — the gate passes vacuously for that one commit. That is accepted and
+    # disclosed, not overlooked: the compensating proof is the all-101 body-hash
+    # identity snapshot recorded in the migration PR (the committed manifest here
+    # covers only the 74 `^(hr|wg)-` bodies). Splitting the file move and this
+    # constant into different commits would be worse — every gated body would then
+    # read as DELETED and demand ~74 WORM acks.
     base_texts = {name: (_git_show(root, base_commit, name) or "") for name in SIDECARS}
-    base_bodies, base_collisions = build_body_map(base_texts, sections)
-    if base_collisions:
-        print(
-            "::error::rule-body-lint: cross-sidecar duplicate gated id(s) at base "
-            f"(fail-closed): {base_collisions}",
-            file=sys.stderr,
-        )
-        return 2
+    base_bodies = build_body_map(base_texts, sections)
     base_hashes = hashes_for(base_bodies)
 
     # F2 (ack-replay): the ack must be NEWLY added in this diff (head ack set

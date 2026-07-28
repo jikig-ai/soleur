@@ -28,9 +28,7 @@ REPO_ROOT="${KB_DRIFT_FIXTURE_ROOT:-$(git rev-parse --show-toplevel)}"
 KB_DIR="$REPO_ROOT/knowledge-base"
 AGENTS_FILES=(
   "$REPO_ROOT/AGENTS.md"
-  "$REPO_ROOT/AGENTS.core.md"
-  "$REPO_ROOT/AGENTS.docs.md"
-  "$REPO_ROOT/AGENTS.rest.md"
+  "$REPO_ROOT/AGENTS.rules.md"
 )
 LEARNINGS_DIR="$KB_DIR/project/learnings"
 
@@ -115,7 +113,7 @@ while IFS= read -r -d '' md; do
 done < <(find "$KB_DIR" -type f -name "*.md" ! -path "*/archive/*" ! -path "*/.git/*" -print0 2>/dev/null)
 
 # ---- Check 2: code-anchor drift ------------------------------------------
-# Source files to scan: AGENTS.{core,docs,rest}.md + every learning .md.
+# Source files to scan: AGENTS.rules.md + every learning .md.
 # Pattern: `path/to/file.ext:NN` where NN is a line number. Resolve path
 # relative to repo root.
 declare -a anchor_sources=()

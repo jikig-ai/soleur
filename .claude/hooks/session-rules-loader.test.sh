@@ -26,8 +26,11 @@ if [[ ! -x "$HOOK" ]]; then
   exit 1
 fi
 
-# Make a temp repo with sidecar fixtures + an `origin/main` baseline so
-# `git diff --name-only origin/main...HEAD` is meaningful.
+# Make a temp repo with a rule-corpus fixture + an `origin/main` baseline.
+# ADR-150 retired the change-class classifier, so the change_pattern argument no
+# longer selects which bodies load (the whole corpus always loads); it is kept
+# because several tests still exercise diff-shaped repos and the session-context
+# snapshot reads git state.
 setup_repo() {
   local repo="$1" change_pattern="${2:-}" mcp_variant="${3:-}"
   mkdir -p "$repo"
@@ -36,29 +39,22 @@ setup_repo() {
     git init -q -b main
     git config user.email t@test
     git config user.name t
-    # Sidecars with one rule body each (so the loader has content to concat).
-    cat > AGENTS.core.md <<'CORE'
-# AGENTS Core
+    # One corpus holding every rule body (ADR-150).
+    cat > AGENTS.rules.md <<'RULES'
+# AGENTS Rules
 ## Hard Rules
 - Core rule [id: hr-test-core].
-CORE
-    cat > AGENTS.docs.md <<'DOCS'
-# AGENTS Docs
 ## Code Quality
 - Docs rule [id: cq-test-docs].
-DOCS
-    cat > AGENTS.rest.md <<'REST'
-# AGENTS Rest
-## Code Quality
 - Rest rule [id: cq-test-rest].
-REST
+RULES
     cat > AGENTS.md <<'IDX'
 # Index
 ## Hard Rules
-- [id: hr-test-core] → core
+- [id: hr-test-core]
 ## Code Quality
-- [id: cq-test-docs] → docs
-- [id: cq-test-rest] → rest
+- [id: cq-test-docs]
+- [id: cq-test-rest]
 IDX
     # MCP capability-roster fixtures (#5319). The hook reads .mcp.json and
     # plugins/soleur/.claude-plugin/plugin.json from REPO_ROOT. Seed per variant;
@@ -104,52 +100,12 @@ invoke_hook() {
   fi
 }
 
-assert_class() {
-  local name="$1" repo="$2" expected_class_set="$3"
-  TOTAL=$((TOTAL+1))
-  local out actual
-  out=$(invoke_hook "$repo") || { echo "FAIL: $name (hook crashed)"; FAIL=$((FAIL+1)); return; }
-  actual=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' | grep -oE '\[rules-loader\] loaded: [^ ]+' | head -1 | sed 's/.*loaded: //')
-  if [[ "$actual" == "$expected_class_set" ]]; then
-    echo "PASS: $name (class=$actual)"
-    PASS=$((PASS+1))
-  else
-    echo "FAIL: $name (expected=$expected_class_set actual=$actual)"
-    FAIL=$((FAIL+1))
-  fi
-}
-
-# ------------- Test 1-4: classifier per change-class ------------
-
-T1=$(mktemp -d); setup_repo "$T1" docs
-assert_class "classifier docs-only diff → core+docs"  "$T1"  "core+docs-only"
-
-T2=$(mktemp -d); setup_repo "$T2" code
-assert_class "classifier code diff → core+rest"        "$T2"  "core+rest"
-
-T3=$(mktemp -d); setup_repo "$T3" infra
-assert_class "classifier infra diff → core+rest"       "$T3"  "core+rest"
-
-T4=$(mktemp -d); setup_repo "$T4" mixed
-assert_class "classifier mixed diff → core+docs+rest"  "$T4"  "core+docs-only+rest"
-
-T5=$(mktemp -d); setup_repo "$T5" ""
-# Empty diff → all sidecars (fail-closed)
-assert_class "classifier empty diff → core+docs+rest"  "$T5"  "core+docs-only+rest"
-
-# ------------- Test 6: LOADER_FAIL_CLOSED=1 override ------------
-
-TOTAL=$((TOTAL+1))
-T6=$(mktemp -d); setup_repo "$T6" docs
-out6=$(invoke_hook "$T6" "LOADER_FAIL_CLOSED=1") || true
-actual6=$(printf '%s' "$out6" | jq -r '.hookSpecificOutput.additionalContext' | grep -oE '\[rules-loader\] loaded: [^ ]+' | head -1 | sed 's/.*loaded: //')
-if [[ "$actual6" == "core+docs-only+rest" ]]; then
-  echo "PASS: LOADER_FAIL_CLOSED=1 forces all sidecars"
-  PASS=$((PASS+1))
-else
-  echo "FAIL: LOADER_FAIL_CLOSED=1 forces all sidecars (got $actual6)"
-  FAIL=$((FAIL+1))
-fi
+# Tests 1-6 (per-change-class classifier assertions and the fail-closed override)
+# were DELETED by ADR-150: there is no classifier to assert and no override to
+# force, because the whole corpus loads on every session. The property they
+# protected — "the rules that should be in context are in context" — is now
+# structural; what remains observable is the stamp's numerator/denominator,
+# covered by Tests 25 and 27 below.
 
 # ------------- Test 7: 3-run idempotency (compaction parity) ----
 
@@ -224,29 +180,34 @@ fi
 
 TOTAL=$((TOTAL+1))
 T10=$(mktemp -d); setup_repo "$T10" docs
-rm -f "$T10/AGENTS.docs.md"
+rm -f "$T10/AGENTS.rules.md"
 out10=$(invoke_hook "$T10")
 ctx10=$(printf '%s' "$out10" | jq -r '.hookSpecificOutput.additionalContext')
-if printf '%s' "$ctx10" | grep -q 'fail-safe: sidecar missing'; then
-  echo "PASS: fail-closed on missing sidecar"
+# Both halves matter: the operator must see WHY, and the numerator must show 0
+# (a missing corpus that stamped "3 of 3" would be the governance blackout).
+if printf '%s' "$ctx10" | grep -q 'fail-safe: corpus missing' \
+   && printf '%s' "$ctx10" | grep -qE 'loaded: 0 of [0-9]+ rules'; then
+  echo "PASS: fail-closed on missing corpus (0-of-N + cause)"
   PASS=$((PASS+1))
 else
-  echo "FAIL: fail-closed on missing sidecar (no fail-safe marker in stamp)"
+  echo "FAIL: fail-closed on missing corpus — got: $(printf '%s' "$ctx10" | head -1)"
   FAIL=$((FAIL+1))
 fi
 
-# ------------- Test 11: stamp + hint ≤ 200 bytes per line ----
+# ------------- Test 11: header lines ≤ 200 bytes each ----
 
 TOTAL=$((TOTAL+1))
 T11=$(mktemp -d); setup_repo "$T11" docs
 out11=$(invoke_hook "$T11")
 ctx11=$(printf '%s' "$out11" | jq -r '.hookSpecificOutput.additionalContext')
-max_line=$(printf '%s' "$ctx11" | head -3 | awk '{ print length }' | sort -n | tail -1)
+# head -2: the operator-glanceable header is STAMP(1) + manifest(2). It was
+# head -3 until ADR-150 removed the HINT line.
+max_line=$(printf '%s' "$ctx11" | head -2 | awk '{ print length }' | sort -n | tail -1)
 if (( max_line <= 200 )); then
-  echo "PASS: stamp+hint lines ≤ 200 bytes (max=$max_line)"
+  echo "PASS: header lines ≤ 200 bytes (max=$max_line)"
   PASS=$((PASS+1))
 else
-  echo "FAIL: stamp+hint line exceeded 200 bytes (max=$max_line)"
+  echo "FAIL: header line exceeded 200 bytes (max=$max_line)"
   FAIL=$((FAIL+1))
 fi
 
@@ -274,7 +235,7 @@ fi
 
 TOTAL=$((TOTAL+1))
 T13_NONREPO=$(mktemp -d)
-cp "$T13_NONREPO/../"*/AGENTS.core.md "$T13_NONREPO/AGENTS.core.md" 2>/dev/null || true
+cp "$T13_NONREPO/../"*/AGENTS.rules.md "$T13_NONREPO/AGENTS.rules.md" 2>/dev/null || true
 # Use an arbitrary non-repo directory. The hook must refuse to operate
 # (no git worktree at cwd → emit core-only fallback, do NOT create
 # .claude/.session-manifests/ inside the bogus dir).
@@ -289,20 +250,20 @@ else
   FAIL=$((FAIL+1))
 fi
 
-# ------------- Test 14: symlinked sidecar is rejected (no body read) --
+# ------------- Test 14: symlinked corpus is rejected (no body read) --
 
 TOTAL=$((TOTAL+1))
 T14=$(mktemp -d); setup_repo "$T14" docs
 echo "EXFIL_TARGET=symlink-pointed-at-this-file" > /tmp/loader-symlink-target-$$
-rm -f "$T14/AGENTS.docs.md"
-ln -s "/tmp/loader-symlink-target-$$" "$T14/AGENTS.docs.md"
+rm -f "$T14/AGENTS.rules.md"
+ln -s "/tmp/loader-symlink-target-$$" "$T14/AGENTS.rules.md"
 out14=$(invoke_hook "$T14")
 ctx14=$(printf '%s' "$out14" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
 if printf '%s' "$ctx14" | grep -q 'EXFIL_TARGET'; then
-  echo "FAIL: symlinked sidecar — content from /tmp leaked into context"
+  echo "FAIL: symlinked corpus — content from /tmp leaked into context"
   FAIL=$((FAIL+1))
 else
-  echo "PASS: symlinked sidecar rejected (no exfil content in additionalContext)"
+  echo "PASS: symlinked corpus rejected (no exfil content in additionalContext)"
   PASS=$((PASS+1))
 fi
 rm -f /tmp/loader-symlink-target-$$
@@ -390,7 +351,8 @@ rm -rf "$GITSHIM"
 # ------------- Test 19 (AC7): per-line byte budget + line position -----
 # Long branch name (100 chars) + deep worktree path. Each [session-context]
 # line must be ≤ 512 bytes, and the 3 session-context lines must sit at envelope
-# positions 4-6 (after STAMP/HINT/manifest, outside Test 11's head -3 window).
+# positions 3-5 (after STAMP/manifest, outside Test 11's head -2 window).
+# Was 4-6 until ADR-150 removed the HINT line from the header.
 TOTAL=$((TOTAL+1))
 LONGBR=$(printf 'b%.0s' $(seq 1 100))
 T19_DEEP=$(mktemp -d)/aaaaaaaaaa/bbbbbbbbbb/cccccccccc/dddddddddd/eeeeeeeeee
@@ -400,16 +362,16 @@ setup_repo "$T19_DEEP" docs both
 out19=$(invoke_hook "$T19_DEEP")
 ctx19=$(printf '%s' "$out19" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
 sc_max=$(printf '%s' "$ctx19" | grep -F '[session-context]' | awk '{ print length }' | sort -n | tail -1 || true)
-l4=$(printf '%s' "$ctx19" | sed -n '4p'); l5=$(printf '%s' "$ctx19" | sed -n '5p'); l6=$(printf '%s' "$ctx19" | sed -n '6p')
-l3=$(printf '%s' "$ctx19" | sed -n '3p'); l7=$(printf '%s' "$ctx19" | sed -n '7p')
+l3=$(printf '%s' "$ctx19" | sed -n '3p'); l4=$(printf '%s' "$ctx19" | sed -n '4p'); l5=$(printf '%s' "$ctx19" | sed -n '5p')
+l2=$(printf '%s' "$ctx19" | sed -n '2p'); l6=$(printf '%s' "$ctx19" | sed -n '6p')
 if (( ${sc_max:-0} <= 512 && sc_max > 0 )) \
-   && [[ "$l3" == '[rules-loader] manifest: '* ]] \
-   && [[ "$l4" == '[session-context]'* && "$l5" == '[session-context]'* && "$l6" == '[session-context]'* ]] \
-   && [[ "$l7" != '[session-context]'* ]]; then
-  echo "PASS: AC7 byte budget (max=$sc_max ≤ 512) + lines 4-6 are session-context"
+   && [[ "$l2" == '[rules-loader] manifest: '* ]] \
+   && [[ "$l3" == '[session-context]'* && "$l4" == '[session-context]'* && "$l5" == '[session-context]'* ]] \
+   && [[ "$l6" != '[session-context]'* ]]; then
+  echo "PASS: AC7 byte budget (max=$sc_max ≤ 512) + lines 3-5 are session-context"
   PASS=$((PASS+1))
 else
-  echo "FAIL: AC7 byte/position (max=$sc_max; l3='${l3:0:40}' l4='${l4:0:40}' l7='${l7:0:40}')"
+  echo "FAIL: AC7 byte/position (max=$sc_max; l2='${l2:0:40}' l3='${l3:0:40}' l6='${l6:0:40}')"
   FAIL=$((FAIL+1))
 fi
 
@@ -455,24 +417,24 @@ out21=$(invoke_hook "$T21")
 ctx21=$(printf '%s' "$out21" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
 mcp21=$(printf '%s' "$ctx21" | grep -F '[session-context] MCP(committed-config):' | head -1 || true)
 sc_count21=$(printf '%s' "$ctx21" | grep -cF '[session-context]' || true)
-l7_21=$(printf '%s' "$ctx21" | sed -n '7p')
+l6_21=$(printf '%s' "$ctx21" | sed -n '6p')
 if printf '%s' "$mcp21" | grep -qE 'MCP\(committed-config\): abinjected$' \
    && [[ "$sc_count21" == "3" ]] \
-   && [[ "$l7_21" != '[session-context]'* ]]; then
+   && [[ "$l6_21" != '[session-context]'* ]]; then
   echo "PASS: AC11 control-char sanitization (single clean token, 3 session-context lines)"
   PASS=$((PASS+1))
 else
-  echo "FAIL: AC11 control-char sanitization (mcp='$mcp21' sc_count=$sc_count21 l7='${l7_21:0:40}')"
+  echo "FAIL: AC11 control-char sanitization (mcp='$mcp21' sc_count=$sc_count21 l6='${l6_21:0:40}')"
   FAIL=$((FAIL+1))
 fi
 
 # ------------- Test 22 (AC6): frontmatter stripped on the MAIN-CONCAT path --
-# A frontmatter-bearing AGENTS.core.md → injected context carries the rule
+# A frontmatter-bearing corpus → injected context carries the rule
 # bodies but NOT the YAML frontmatter keys (last_reviewed / review_cadence).
 # The fixture includes the sentinel rule-id so the over-strip guard's
 # was-present-then-gone clause has something to verify survived.
 write_frontmatter_core() {
-  cat > "$1/AGENTS.core.md" <<'CORE'
+  cat > "$1/AGENTS.rules.md" <<'CORE'
 ---
 last_reviewed: 2026-07-05
 review_cadence: monthly
@@ -506,7 +468,7 @@ fi
 
 # ------------- Test 23 (AC6): frontmatter stripped on the CORE-ONLY FALLBACK path (:50)
 # cwd NOT inside a git worktree → emit_core_only_fallback fires, reading
-# AGENTS.core.md via emit_stripped_sidecar. Frontmatter must be stripped there
+# the corpus via emit_stripped_sidecar. Frontmatter must be stripped there
 # too (the error path is not exempt).
 TOTAL=$((TOTAL+1))
 T23=$(mktemp -d)   # NOT a git repo
@@ -532,7 +494,7 @@ fi
 # the stamp with a loud over-strip note.
 TOTAL=$((TOTAL+1))
 T24=$(mktemp -d); setup_repo "$T24" ""
-cat > "$T24/AGENTS.core.md" <<'CORE'
+cat > "$T24/AGENTS.rules.md" <<'CORE'
 ---
 last_reviewed: 2026-07-05
 review_cadence: monthly
@@ -588,7 +550,7 @@ else
   FAIL=$((FAIL+1))
 fi
 
-# AC-T2: an alarm is rendered, and lines 4-6 stay the session-context triple.
+# AC-T2: an alarm is rendered, and lines 3-5 stay the session-context triple.
 # That positional contract is asserted by AC7/AC11 above; splicing the alarm
 # into the line-4 slot would red them the first time the guard fires, i.e.
 # during the incident, presenting as an unrelated loader regression.
@@ -596,17 +558,17 @@ TOTAL=$((TOTAL+1))
 printf '2026-07-27T10:00:00Z /tmp at 91%% — nothing reapable found.\n' > "$ALARM_FIX"
 ctx_alarm=$(invoke_hook "$TALARM" "TMPFS_GUARD_ALARM_FILE=$ALARM_FIX TMPFS_GUARD_HEARTBEAT_FILE=$HB_FIX" \
   | jq -r '.hookSpecificOutput.additionalContext')
+al3=$(printf '%s' "$ctx_alarm" | sed -n '3p')
 al4=$(printf '%s' "$ctx_alarm" | sed -n '4p')
 al5=$(printf '%s' "$ctx_alarm" | sed -n '5p')
-al6=$(printf '%s' "$ctx_alarm" | sed -n '6p')
 if printf '%s' "$ctx_alarm" | grep -qF '/tmp at 91%' \
+   && [[ "$al3" == '[session-context]'* ]] \
    && [[ "$al4" == '[session-context]'* ]] \
-   && [[ "$al5" == '[session-context]'* ]] \
-   && [[ "$al6" == '[session-context]'* ]]; then
-  echo "PASS: AC-T2 alarm rendered without displacing the lines 4-6 contract"
+   && [[ "$al5" == '[session-context]'* ]]; then
+  echo "PASS: AC-T2 alarm rendered without displacing the lines 3-5 contract"
   PASS=$((PASS+1))
 else
-  echo "FAIL: AC-T2 alarm rendering (l4='$al4')"
+  echo "FAIL: AC-T2 alarm rendering (l3='$al3')"
   FAIL=$((FAIL+1))
 fi
 
@@ -666,20 +628,20 @@ trap 'rm -rf "${TALARM:-}" ${LATE_TMPDIRS[@]+"${LATE_TMPDIRS[@]}"}' EXIT
 # i.e. "3 of 6" (looks like 50%) when 100% of a 3-rule corpus is loaded. #7008.
 
 TOTAL=$((TOTAL+1))
-T25=$(mktemp -d); LATE_TMPDIRS+=("$T25"); setup_repo "$T25" mixed          # mixed → all three classes load
+T25=$(mktemp -d); LATE_TMPDIRS+=("$T25"); setup_repo "$T25" mixed
 out25=$(invoke_hook "$T25")
 ctx25=$(printf '%s' "$out25" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
 stamp25=$(printf '%s' "$ctx25" | head -1)
 # Tolerate trailing stamp fields (byte figure, notes); `|| true` so a
 # non-match reports a clear FAIL instead of aborting the suite under `set -e`.
-den25=$(printf '%s' "$stamp25" | sed -nE 's/.*\([0-9]+ of ([0-9]+) rules.*/\1/p' || true)
-# Independently re-derive the body count from the sidecars only.
-bodies25=$(grep -hE '^- .*\[id: ' "$T25"/AGENTS.core.md "$T25"/AGENTS.docs.md "$T25"/AGENTS.rest.md | wc -l | tr -d ' ')
+den25=$(printf '%s' "$stamp25" | sed -nE 's/.*loaded: [0-9]+ of ([0-9]+) rules.*/\1/p' || true)
+# Independently re-derive the body count from the corpus only.
+bodies25=$(grep -hE '^- .*\[id: ' "$T25"/AGENTS.rules.md | wc -l | tr -d ' ')
 if [[ "$den25" == "$bodies25" ]]; then
-  echo "PASS: stamp denominator == sidecar body count ($den25)"
+  echo "PASS: stamp denominator == corpus body count ($den25)"
   PASS=$((PASS+1))
 else
-  echo "FAIL: stamp denominator=$den25 but sidecar bodies=$bodies25 (stamp: $stamp25)"
+  echo "FAIL: stamp denominator=$den25 but corpus bodies=$bodies25 (stamp: $stamp25)"
   FAIL=$((FAIL+1))
 fi
 
@@ -704,40 +666,43 @@ else
   FAIL=$((FAIL+1))
 fi
 
-# ------------- Test 27: docs-only class -> numerator < denominator ----
-# Every other fixture uses `mixed`, where the loaded set IS the whole corpus, so
-# numerator and denominator are indistinguishable. A proper SUBSET is the only
-# shape that pins the numerator, and it is the shape a lockstep-collapse bug
-# renders as 100%.
+# ------------- Test 27: a TRUNCATED corpus -> numerator < denominator ----
+# Under one unconditional corpus the happy path always stamps N of N, so the
+# numerator and denominator are indistinguishable there and a lockstep-collapse
+# bug would be invisible. A proper SUBSET is the only shape that pins the
+# numerator. Before ADR-150 this arm used a docs-only class fixture; the
+# equivalent shape now is a corpus TRUNCATED after the index was written —
+# exactly what a partial write or a botched merge leaves behind.
 
 TOTAL=$((TOTAL+1))
-T27=$(mktemp -d); LATE_TMPDIRS+=("$T27"); setup_repo "$T27" docs   # docs -> core+docs-only
-stamp27=$(invoke_hook "$T27" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
-num27=$(printf '%s' "$stamp27" | sed -nE 's/.*\(([0-9]+) of [0-9]+ rules.*/\1/p' || true)
-den27=$(printf '%s' "$stamp27" | sed -nE 's/.*\([0-9]+ of ([0-9]+) rules.*/\1/p' || true)
+T27=$(mktemp -d); LATE_TMPDIRS+=("$T27"); setup_repo "$T27" docs
 idx27=$(grep -c '^- \[id: ' "$T27/AGENTS.md")
+grep -v 'cq-test-rest' "$T27/AGENTS.rules.md" > "$T27/AGENTS.rules.md.tmp"
+mv "$T27/AGENTS.rules.md.tmp" "$T27/AGENTS.rules.md"
+stamp27=$(invoke_hook "$T27" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
+num27=$(printf '%s' "$stamp27" | sed -nE 's/.*loaded: ([0-9]+) of [0-9]+ rules.*/\1/p' || true)
+den27=$(printf '%s' "$stamp27" | sed -nE 's/.*loaded: [0-9]+ of ([0-9]+) rules.*/\1/p' || true)
 if [[ -n "$num27" && -n "$den27" ]] && (( num27 < den27 )) && [[ "$den27" == "$idx27" ]]; then
-  echo "PASS: docs-only stamps a proper subset ($num27 of $den27, index=$idx27)"
+  echo "PASS: truncated corpus stamps a proper subset ($num27 of $den27, index=$idx27)"
   PASS=$((PASS+1))
 else
-  echo "FAIL: docs-only numerator/denominator wrong (num=$num27 den=$den27 index=$idx27) — $stamp27"
+  echo "FAIL: truncated-corpus numerator/denominator wrong (num=$num27 den=$den27 index=$idx27) — $stamp27"
   FAIL=$((FAIL+1))
 fi
 
 # ------------- Test 27b: a MISSING sidecar must not shrink the denominator ----
-# The #7008 regression in its most dangerous form: delete AGENTS.rest.md and the
-# change is itself a .md edit, so the classifier picks docs-only, `rest` is never
-# requested, and the fail-safe never arms. A denominator derived from what loaded
-# stamps a clean 100% while 42 of 101 rules are simply absent.
+# The #7008 regression in its most dangerous form: the corpus is gone entirely.
+# A denominator derived from what actually loaded would stamp a vacuous "0 of 0";
+# the fixed expected set from the index keeps it "0 of N", the blackout signal.
 
 TOTAL=$((TOTAL+1))
 T27B=$(mktemp -d); LATE_TMPDIRS+=("$T27B"); setup_repo "$T27B" docs
 idx27b=$(grep -c '^- \[id: ' "$T27B/AGENTS.md")
-rm -f "$T27B/AGENTS.rest.md"
+rm -f "$T27B/AGENTS.rules.md"
 stamp27b=$(invoke_hook "$T27B" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
-den27b=$(printf '%s' "$stamp27b" | sed -nE 's/.*\([0-9]+ of ([0-9]+) rules.*/\1/p' || true)
+den27b=$(printf '%s' "$stamp27b" | sed -nE 's/.*loaded: [0-9]+ of ([0-9]+) rules.*/\1/p' || true)
 if [[ "$den27b" == "$idx27b" ]]; then
-  echo "PASS: absent sidecar leaves the denominator at the declared corpus size ($den27b)"
+  echo "PASS: absent corpus leaves the denominator at the declared corpus size ($den27b)"
   PASS=$((PASS+1))
 else
   echo "FAIL: denominator collapsed to $den27b (index says $idx27b) — a truncated corpus reads as full: $stamp27b"
@@ -751,10 +716,10 @@ fi
 
 TOTAL=$((TOTAL+1))
 T28=$(mktemp -d); LATE_TMPDIRS+=("$T28"); setup_repo "$T28" mixed
-# Force BOTH notes: a symlinked sidecar trips the fail-safe re-walk, and
-# malformed frontmatter trips the over-strip guard.
-rm -f "$T28/AGENTS.docs.md"; ln -s AGENTS.rest.md "$T28/AGENTS.docs.md"
-printf -- '---\nbroken frontmatter\n# AGENTS Core\n- Core rule [id: hr-test-core].\n' > "$T28/AGENTS.core.md"
+# With one corpus the two notes are mutually exclusive (a symlink-rejected corpus
+# is never stripped, so the over-strip guard cannot also fire). Measure the
+# worst case that is actually REACHABLE: the over-strip note.
+printf -- '---\nbroken frontmatter\n# AGENTS Rules\n## Hard Rules\n- Core rule [id: hr-test-core].\n' > "$T28/AGENTS.rules.md"
 stamp28=$(invoke_hook "$T28" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
 bytes28=$(printf '%s' "$stamp28" | wc -c | tr -d ' ')
 if (( bytes28 <= 200 )); then
@@ -767,11 +732,11 @@ fi
 
 # ------------- Test 29: fail-safe names its ACTUAL cause ----
 # A symlink rejection is a prompt-injection defense firing; reporting it as
-# "sidecar missing" sends the operator looking for a deleted file (#7008).
+# "corpus missing" sends the operator looking for a deleted file (#7008).
 
 TOTAL=$((TOTAL+1))
 T29=$(mktemp -d); LATE_TMPDIRS+=("$T29"); setup_repo "$T29" code
-rm -f "$T29/AGENTS.docs.md"; ln -s AGENTS.rest.md "$T29/AGENTS.docs.md"
+rm -f "$T29/AGENTS.rules.md"; ln -s /dev/null "$T29/AGENTS.rules.md"
 stamp29=$(invoke_hook "$T29" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | head -1)
 if printf '%s' "$stamp29" | grep -qF 'symlink'; then
   echo "PASS: fail-safe names the symlink rejection, not a phantom missing file"
@@ -782,8 +747,8 @@ else
 fi
 
 # ------------- Test 30: core-only fallback must not claim a load it did not do ----
-# When AGENTS.core.md is itself unreadable the fallback loads NOTHING; saying
-# "loaded AGENTS.core.md only" there is a false claim on the least-visible path.
+# When the corpus is itself unreadable the fallback loads NOTHING; saying
+# "loaded AGENTS.rules.md only" there is a false claim on the least-visible path.
 
 TOTAL=$((TOTAL+1))
 T30=$(mktemp -d); LATE_TMPDIRS+=("$T30")   # deliberately NOT a git repo -> fallback path

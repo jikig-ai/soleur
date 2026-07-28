@@ -1,4 +1,4 @@
-"""Single source of truth for AGENTS.{md,core.md,docs.md,rest.md} section names.
+"""Single source of truth for AGENTS.{md,rules.md} section names.
 
 Used by `lint-rule-ids.py` (rule-id coverage, residency invariants) and
 `lint-agents-rule-budget.py` (per-rule body cap). A rule body line is any
