@@ -112,8 +112,12 @@ rc_scalar_change() {
 # The wrapper is the suite's existing signature; the contract lives once.
 gate_check() {
   local name="$1" fn="$2" want_rc="$3" needle="$4"; shift 4
-  local out rc
-  out="$("$fn" "$@" 2>&1)"; rc=$?
+  local out rc=0
+  # `|| rc=$?` rather than `; rc=$?`: these gates return 1 by design, and under a
+  # suite running `set -e` a bare failing command substitution would kill the shell
+  # mid-suite — silently, with no tally printed. Making it a tested command keeps the
+  # harness usable from `set -euo pipefail` suites as well as `set -uo pipefail` ones.
+  out="$("$fn" "$@" 2>&1)" || rc=$?
   if [[ "$rc" -eq "$want_rc" && "$out" == *"$needle"* ]]; then
     pass "$name"
   else
@@ -147,7 +151,8 @@ gate_mutate_and_check() {
     fail "$label — the mutation matched NOTHING in the gate (byte-identical copy); the guard is missing or the sed expression drifted. This check would have reported a vacuous pass." "n/a" "no textual change"
     return
   fi
-  out="$(bash -c "source '$PREAMBLE'; source '$mutated'; $fn $(printf "'%s' " "$@")" 2>&1)"; rc=$?
+  rc=0
+  out="$(bash -c "source '$PREAMBLE'; source '$mutated'; $fn $(printf "'%s' " "$@")" 2>&1)" || rc=$?
   if [[ "$rc" -eq 0 ]]; then
     pass "$label (arm is load-bearing — neutering it lets the bad plan through)"
   else
@@ -179,12 +184,13 @@ gate_mutate_layered() {
     fail "$label — the mutation matched NOTHING in the gate (byte-identical copy); the guard is missing or the sed expression drifted." "n/a" "no textual change"
     return
   fi
-  base="$("$fn" "$@" 2>&1)"
+  base="$("$fn" "$@" 2>&1)" || true
   if [[ "$base" != *"$own"* ]]; then
     fail "$label — the unmutated gate did not reject this input via the '$own' arm; the fixture does not exercise it." "n/a" "$base"
     return
   fi
-  out="$(bash -c "source '$PREAMBLE'; source '$mutated'; $fn $(printf "'%s' " "$@")" 2>&1)"; rc=$?
+  rc=0
+  out="$(bash -c "source '$PREAMBLE'; source '$mutated'; $fn $(printf "'%s' " "$@")" 2>&1)" || rc=$?
   if [[ "$rc" -eq 1 && "$out" != *"$own"* && "$out" == *"$fallback"* ]]; then
     pass "$label (layered — owns the rejection; neutering it hands off to '$fallback', never to PASS)"
   else

@@ -381,5 +381,48 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+
+# ── #6997: the shared fail-closed preamble is INVOKED, not merely sourced ─────────
+#
+# A1/A2 pin the two degraded shapes the retrofit closes. Both PASSED this gate's
+# predecessor: an entry with "actions": [] is invisible to `any(...)` and to
+# `index("delete")` simultaneously, and a scalar `.change` makes a negative-search
+# classifiability check read a jq ERROR as "condition false".
+#
+# A4 is the arm that nothing in test-plan-gate-preamble.sh can replace: it proves THIS
+# gate CALLS the preamble. Neutering the call must leave the plan REJECTED (so the
+# retrofit never opened a door) while the preamble-distinctive signature DISAPPEARS (so
+# the rejection was really the preamble's).
+#
+# THE ANCHOR IS NOT THE GATE NAME. Every abort this gate emits — including its own
+# pre-existing ones — is prefixed with the gate name, so a name anchor cannot tell a
+# preamble abort from a gate abort and the arm would be a redness detector, not a
+# binding. `unclassifiable plan entry` is text only the preamble can produce.
+#
+# A3 (the happy plan still PASSES) is NOT duplicated here: this suite's existing PASS
+# arms already are it, and an always-aborting gate would redden them.
+_PG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GATE="${_PG_DIR}/lib/registry-luks-recut-gate.sh"
+PREAMBLE="${_PG_DIR}/lib/plan-gate-preamble.sh"
+# shellcheck source=tests/scripts/lib/gate-suite-harness.sh
+source "${_PG_DIR}/lib/gate-suite-harness.sh"
+
+mk_plan "$TMP/pg-d5.json" "[$(rc_empty_actions 'hcloud_volume.workspaces' 'hcloud_volume')]"
+mk_plan "$TMP/pg-d6.json" "[$(rc_scalar_change 'hcloud_volume.workspaces' 'hcloud_volume')]"
+
+gate_check "A1 (D5): an EMPTY actions array hiding a destroy => fail-closed ABORT" \
+  registry_luks_recut_gate 1 "unclassifiable plan entry" "$TMP/pg-d5.json" "12345" "absent"
+gate_check "A1 (D5): the ABORT is the preamble's and names this gate" \
+  registry_luks_recut_gate 1 "registry_luks_recut_gate: ABORT — unclassifiable" "$TMP/pg-d5.json" "12345" "absent"
+gate_check "A2 (D6): a SCALAR .change => fail-closed ABORT" \
+  registry_luks_recut_gate 1 "unclassifiable plan entry" "$TMP/pg-d6.json" "12345" "absent"
+gate_check "A2 (D6): the ABORT names the offending address" \
+  registry_luks_recut_gate 1 "hcloud_volume.workspaces" "$TMP/pg-d6.json" "12345" "absent"
+
+gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
+  's/^  plan_gate_assert_classifiable .*/  :/' \
+  "unclassifiable plan entry" "plan is NOT the exact scoped" \
+  registry_luks_recut_gate "$TMP/pg-d5.json" "12345" "absent"
+
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]
