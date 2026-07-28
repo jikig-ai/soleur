@@ -31,7 +31,11 @@ top-level; here the root is `apps/web-platform` and `.terraform` sits one level 
 `tar --exclude=./node_modules --exclude=.terraform`, which both helpers call. Verified in the
 pinned `node:22-slim` digest against the real tree: both directories excluded (plus the
 not-yet-initialised `infra/sentry/.terraform`), all dotfiles and both `.terraform.lock.hcl` files
-preserved, `diff -rq` parity clean, `/build` root-owned. 22.96 s / 2.3 GB → 0.48 s / 35 MB.
+preserved, `diff -rq` parity clean, `/build` root-owned. Re-measured at `/work` time against this
+worktree's warm tree (2.2 GB `node_modules` + the real 247 MB provider cache), two interleaved
+pairs in the pinned digest: **24.6–28.1 s / 2.6 GB → 0.44 s / 30 MB**. (The plan phase recorded
+22.96 s / 2.3 GB → 0.48 s / 35 MB against a different tree with a 1.8 GB `node_modules`; the
+`/work` figures supersede it. The effect dwarfs the ~3.5 s run-to-run spread on the BEFORE arm.)
 
 **Nothing about the issue's goal changed** — both named directories are excluded, which the
 proposed snippet would only half-achieve. Only the mechanism differs.
@@ -45,9 +49,14 @@ with the sibling suite, say so and it can be re-scoped — but it would need a p
 
 Neither invoking gate's trigger regex names the helper scripts (`ci.yml`, *Detect capture-input
 changes* / *Detect propagation-input changes*), so a PR touching only them fires neither gate.
-Adding the helpers to those regexes would make this PR self-exercise — at the cost of two paid
-Haiku turns on **every** future edit to these files, permanently, to re-prove copy logic the paid
-gates do not actually validate (they validate the paid turn).
+Adding the helpers to those regexes would make this PR self-exercise — at the cost of a paid Haiku
+turn on **every** future edit to these files, permanently, to re-prove copy logic the paid gates do
+not actually validate (they validate the paid turn). The deepen pass corrected the cost from *two*
+turns to **one**: `sdk-bump-sandbox-gate.sh` carries a second, internal `capture_trigger` regex
+covering only `agent-runner-sandbox-config.ts`, `sandbox-canary.mjs` and `sandbox-canary-argv.json`,
+so widening `ci.yml` alone would start the canary job and leave its capture a no-op — a gate that
+structurally cannot fire. That makes the alternative a worse trade than it first appeared, not a
+better one.
 
 The plan instead ships a hermetic suite that executes the real copy artifact, plus an unpaid
 in-image rehearsal proving whole-tree parity and a successful `npm ci` in the filtered `/build`.
