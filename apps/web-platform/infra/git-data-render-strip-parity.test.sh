@@ -37,7 +37,13 @@ printf '\n=== git-data-render-strip-parity ===\n\n'
 #
 # Extracted by shape (`git_data_rationale_strip = <literal>`) rather than by line number, so
 # neither file's formatting can silently decouple them.
-extract_strip() { grep -oE 'git_data_rationale_strip[[:space:]]*=[[:space:]]*".*"' "$1" | head -1 | sed 's/^[^=]*=[[:space:]]*//'; }
+# COMMENTS STRIPPED FIRST. `grep … | head -1` over an unstripped file will happily pick a
+# COMMENT that mentions the assignment — and this repo's house style is dense inline
+# rationale, so a line like `# git_data_rationale_strip = "<old form>"` explaining a past
+# change is exactly the kind of prose that gets written. Both files would then be compared on
+# their comments while their real expressions drifted apart. Latent today (no such comment
+# exists); stripped so it stays that way. (cq-assert-anchor-not-bare-token)
+extract_strip() { grep -vE '^[[:space:]]*(#|//)' "$1" | grep -oE 'git_data_rationale_strip[[:space:]]*=[[:space:]]*".*"' | head -1 | sed 's/^[^=]*=[[:space:]]*//'; }
 
 tf_strip="$(extract_strip "$TF")"
 # The budget script emits its locals block through an UNQUOTED heredoc, so bash halves every

@@ -710,6 +710,11 @@ p_no_shell_tracing() {
 # injected script is covered the day it is added rather than the day someone remembers.
 boot_path_files() {
   printf '%s\n' "$CLOUD_INIT"
+  # git-data-cutover.sh is NOT file()-bound into user_data (it ships via the deploy pipeline),
+  # so the derivation below cannot see it — yet it references GIT_DATA_LUKS_KEY six times and
+  # runs on the same host against the same shared log. The property A28 asserts is about the
+  # PASSPHRASE, not about user_data membership, so the quantifier has to include it explicitly.
+  [ -f "$CUTOVER" ] && printf '%s\n' "$CUTOVER"
   sed -nE 's/^[[:space:]]*[a-z_]+[[:space:]]*=[[:space:]]*(replace\()?file\("\$\{path\.module\}\/([^"]+)".*/\2/p' \
     "$DIR/git-data.tf" | sort -u | while read -r f; do
       [ -n "$f" ] && [ -f "$DIR/$f" ] && printf '%s\n' "$DIR/$f"
@@ -719,8 +724,8 @@ boot_path_files() {
 # A floor, because a derivation that silently returned only the template would re-create the
 # exact gap this fix closes while every arm below still reported green.
 _bp_count=$(boot_path_files | wc -l)
-if [ "$_bp_count" -ge 10 ]; then pass; else
-  fail "A28 boot-path derivation: only $_bp_count file(s) found (expected the template + 9 injected)"
+if [ "$_bp_count" -ge 11 ]; then pass; else
+  fail "A28 boot-path derivation: only $_bp_count file(s) found (expected the template + 9 injected + the cutover script)"
 fi
 
 for _bp in $(boot_path_files); do
@@ -823,8 +828,8 @@ assert_mutation "B16 mkfs-quota-project (drop -O entirely)" p_mkfs_quota_project
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 total=$((passes + fails))
-if [ "$total" -lt 93 ]; then
-  echo "FAIL: ran only ${total} assertions (<93) — suite did not execute fully" >&2
+if [ "$total" -lt 95 ]; then
+  echo "FAIL: ran only ${total} assertions (<95) — suite did not execute fully" >&2
   exit 1
 fi
 
