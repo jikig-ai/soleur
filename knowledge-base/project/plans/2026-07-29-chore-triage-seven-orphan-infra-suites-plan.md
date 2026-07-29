@@ -16,6 +16,62 @@ requires_cpo_signoff: false
 
 # chore: Triage and resolve the seven orphan infra test suites (#7068)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-07-29 · **Panel:** 6 agents (dhh, kieran, code-simplicity,
+architecture-strategist, spec-flow-analyzer, cto) + 2 research agents
+(learnings-researcher, repo-research-analyst).
+
+### Key improvements over the first draft
+
+1. **Scope cut roughly in half.** A proposed detector-regex widening (v1 "Phase 3") was
+   **deferred to D1** after four reviewers independently showed the naive fix would add
+   `workspaces-luks-loopback.test.sh` — which exits **2** unprivileged by design — to the local
+   runner's execute set, turning a *mandated ship gate* permanently RED for any operator without
+   passwordless sudo. The v1 draft had mis-diagnosed this as a possible false *green*.
+2. **An AC that passed on the untouched repo was deleted.** v1's derived-list count returned `7`
+   on clean `main`, because `report_orphans()` prints with the same two-space indent as the
+   derived list. Three reviewers found it independently; the detector's own test documents the
+   exact trap. Replaced with a **job-scoped step grep, verified RED**.
+3. **A fabricated citation was corrected.** v1 justified scope as `AC3 "unchanged or
+   strengthened"` attributed to issue #7068 — which has **no acceptance criteria at all**. The
+   criteria are the operator's task framing; the plan now says so.
+4. **The strongest argument for the change was added** (it was missing): registration has **two**
+   consumers, and only one is a display. `run-registered-suites.sh` ends in `(( RED == 0 ))` and
+   both `work` and `ship` mandate it as an infra exit gate — so this confers real teeth, which is
+   what resolves the #6769 "advisory is no gate" tension.
+5. **Recurrence prevention added** (Phase 3): a bash-only fail-closed registration gate dropped
+   into the existing `.github/scripts/test/test-*.sh` glob, which feeds a **required,
+   merge_group-triggered, path-filter-free** check — buying blocking enforcement with no ruleset
+   edit and no apt (so #6454 stays honoured). Surfaced as **DC-1** in `decision-challenges.md`
+   because it is elective under criterion 3.
+6. **A flake the PR would have *introduced* was caught**: `cloud-init-plugin-seed.test.sh` uses
+   fixed docker identifiers with `docker rm -f`/`rmi -f` in its EXIT trap; registration puts it in
+   the local `xargs -P 6` runner, where concurrent worktree runs would kill each other's container.
+7. **A dual-mode `REQUIRE_DOCKER` flag was replaced** by a separate preceding `docker info` step —
+   one code path, and separate *on purpose*: folding it in would make a multi-line `run: |` that
+   the derivation regex cannot match, silently re-orphaning the suite.
+8. **Numbers and anchors corrected:** "~79 registered" → **87**; the job's image build is at the
+   sandbox-canary **regression** step, not `sandbox-canary-soak.test.sh`; the reference step name
+   carried in full; log-line counts replaced with assertion counts (68/68, 16/16).
+
+### Gate results
+
+| Gate | Result |
+|---|---|
+| 4.4 Precedent-diff | **PASS** — 5 in-repo precedents diffed (`git-data-runcmd-rehearsal`, `lint-orphan-test-suites.sh`, `scan-workflow.test.sh` self-registration, `REGISTRATION IS NOT ENVIRONMENT`, `ci-deploy.test.sh` timeout attribution) |
+| 4.45 Verify-the-negative | **PASS** — 5 negative claims probed: no `ssh` in any verification path; 94 suites on disk; no `bats`; all 7 subjects under `apps/web-platform/infra/` (so no new `paths:` entry); reference step name unique |
+| 4.5 Network-outage | **SKIP** — no connectivity symptom; no `provisioner`/`connection` resource driven |
+| 4.55 Downtime & cutover | **SKIP** — 0 downtime-class tokens; no serving surface goes offline |
+| 4.6 User-Brand Impact | **PASS** — section present, 10 non-blank lines, threshold `aggregate pattern` (valid; scope-out bullet not required since threshold ≠ `none`) |
+| 4.7 Observability | **PASS** — all 5 fields present with children, no placeholders, `discoverability_test.command` is ssh-free |
+| 4.8 PAT-shaped variable | **PASS** — no matches |
+| 4.9 UI-wireframe | **SKIP** — no UI surface (the single glob hit is the Domain Review's own negation prose) |
+| 4.10 Encryption Posture | **SKIP** — no persistent store or new cross-component connection (the `.tf` / `cloud-init*.yml` hits are the plan's own negation sentence) |
+
+Citation integrity: all 4 `knowledge-base/**` paths and all 5 referenced repo scripts resolve;
+ADR-023 / ADR-079 / ADR-100 exist.
+
 ## Overview
 
 `apps/web-platform/infra/run-registered-suites.sh` derives the infra suite list from
