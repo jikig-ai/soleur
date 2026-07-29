@@ -68,7 +68,7 @@ Closes #6750. Lane: `cross-domain`. Brand-survival threshold: `single-user incid
 - [x] 5.7 A1 pin 1 in `cron-safe-commit-parity.test.ts` (**ADD-ONLY**): roster derived from `cronFiles.filter(src => /finalizeOutputAwareHeartbeat\(/)`, matching `retryEligible: false` **at the call site** (not the mirrored comment).
 - [x] 5.8 A1 pin 3: parse `scripts/cron-artifact-age.sh`'s `class` column and assert set-equality with the handlers' class arms.
 - [x] 5.9 Assert plan R11: a liveness-RED run does not create a **second** issue for the same date.
-- [ ] 5.10 Adversarial pass — a reviewer briefed to *"find what my battery missed; do not re-run my mutations"*.
+- [x] 5.10 Adversarial pass — a reviewer briefed to *"find what my battery missed; do not re-run my mutations"*. `test-design-reviewer` surfaced **6** surviving mutations the battery did not imagine; all closed in `072b033f`/`1b3785de`. Highest-value finding: the `PRODUCER_CLASS` assertion was **dead** — it pinned a constant rather than a behaviour, so it could never have gone RED. Now pins the class **arm**.
 
 ## Phase 6 — C4
 
@@ -92,10 +92,10 @@ Closes #6750. Lane: `cross-domain`. Brand-survival threshold: `single-user incid
 
 ## Phase 8 — Verification
 
-- [ ] 8.1 Launch `bash scripts/test-all.sh` with `run_in_background`; **wait via the Monitor tool**, never a hand-rolled rc-file poll. Redirect the log to `/var/tmp`; leave `TMPDIR`/`TC_TMPDIR` to the script.
-- [ ] 8.2 If it fails, check for a sibling worktree's concurrent run (`ps -ef | grep test-all`, then `/proc/<pid>/cwd`) before treating it as real.
+- [x] 8.1 Launch `bash scripts/test-all.sh` with `run_in_background`; **wait via the Monitor tool**, never a hand-rolled rc-file poll. Redirect the log to `/var/tmp`; leave `TMPDIR`/`TC_TMPDIR` to the script. **Final run: `=== 233/233 suites passed ===`, exit 0**, on a clean tree with zero edits made while the gate was live.
+- [x] 8.2 If it fails, check for a sibling worktree's concurrent run (`ps -ef | grep test-all`, then `/proc/<pid>/cwd`) before treating it as real. Exercised twice: runs 1–2 hit 232/233 with a **different** suite each time (`apps/web-platform`, then `test/content-publisher`), both green in isolation, `SIBLING_RUN_DETECTED` throughout. Neither suite is reachable from this diff — `test/content-publisher` imports only `bun:test` and `path`. Contention, not regression; the clean run confirms it.
 - [x] 8.3 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
-- [ ] 8.4 Walk plan ACs 1–18 in order. Note the `$MP` roster-scoping preamble — directory-wide greps are wrong three separate ways.
+- [x] 8.4 Walk plan ACs 1–18 in order. Note the `$MP` roster-scoping preamble — directory-wide greps are wrong three separate ways. **All pass.** Two apparent misses were both scoping errors in the *walk*, not the implementation, and are recorded because they are the preamble's own trap re-sprung: (a) AC6a's `sed` range for `GROWTH_AUDIT_PROMPT` needs the closing backtick **escaped** inside a double-quoted shell string, or the range runs past line 123 and swallows the `<today>` **code comment** at line 368 — correctly scoped the prompt body has 0; (b) AC6b is scoped to the **cohort of 7**, not `$MP`'s 8 — the 8th caller of `digestCommittedOnDefaultBranch` is `cron-community-monitor`, the pre-existing #6714 reference implementation.
 - [x] 8.5 Sanity-test AC12's ordering script against **four** throwaway commits (retryEligible-only, livenessOk-only, both-in-one-commit, correct-order); it must reject the middle two.
 - [x] 8.6 Confirm AC17: `git diff --numstat origin/main -- .../cron-safe-commit-parity.test.ts` shows **0 deletions**.
 - [ ] 8.7 PR body carries `Closes #6750`.
