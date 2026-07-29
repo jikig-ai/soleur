@@ -43,16 +43,24 @@ Two facts made this an architecture decision rather than a wording exercise:
 `git-data.tf`, via a shared local:
 
 ```hcl
-git_data_rationale_strip = "/(?m)^[ \t]*#([^!=\n][^\n]*)?\n/"
+git_data_rationale_strip = "/(?m)^[ \t]*#([^!\n][^\n]*)?\n/"
 ```
 
 `cloud-init-git-data.yml` itself is **not** stripped. The repo keeps its full rationale;
 `user_data` stops paying for it.
 
     before: 33,028 B stored (over cap by 260 B)
-    after:  19,588 B stored (13,180 B headroom)
+    after:  19,588 B stored (13,180 B headroom) at the moment of the strip
+    now:    20,456 B stored (12,312 B headroom) with B7/B11/B12 and the review
+            fixes added back on top
 
 The expression is **anchored at line start** and **preserves `#!` by construction**.
+
+The class is `[^!\n]`, not `[^!=\n]`. The first draft excluded `=` as well, which was an
+accident rather than a carve-out: it left exactly one unstrippable class (a comment whose
+first character after `#` is `=`, with no space, e.g. `#===== banner`) for no stated reason.
+Zero such lines exist in the nine, so narrowing it costs nothing and stops the expression
+from quietly disagreeing with its own documented intent.
 
 ### Why the anchoring and the `#!` carve-out are load-bearing
 

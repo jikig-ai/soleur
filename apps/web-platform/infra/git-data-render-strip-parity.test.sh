@@ -82,6 +82,46 @@ else
     "a wrapped entry defeats the line-based var parser in cloud-init-user-data-size.test.ts"
 fi
 
+# THE SAME COUNT ON THE MIRROR. Arm 1 compares the strip EXPRESSION; nothing checked that the
+# budget harness actually APPLIES it to every payload. Measured: removing one `replace()` from
+# git-data-userdata-budget.sh alone left this suite 8/8 green while that harness rendered
+# git-data-gc.sh UNSTRIPPED (22,920 B vs 20,448 B) — CI measuring and rehearsing a different
+# payload than production ships, the exact failure this file's header claims to catch.
+n_budget=$(grep -cE '^[[:space:]]+git_data_[a-z_]+[[:space:]]*=[[:space:]]*replace\(file\(' "$BUDGET")
+if [[ "$n_budget" -eq "$n_entries" ]]; then
+  pass "git-data-userdata-budget.sh applies the strip to the same ${n_entries} payloads"
+else
+  fail "strip application DRIFTED: git-data.tf wraps ${n_entries}, budget harness wraps ${n_budget}" \
+    "CI would measure and rehearse a different payload than production ships"
+fi
+
+# ── NO COMMENT DIRECTLY AFTER A LINE CONTINUATION ─────────────────────────────────────
+#
+# The strip deletes a whole-line comment INCLUDING its newline, so a comment sitting between a
+# line ending in `\` and its continuation silently JOINS two commands in the shipped script:
+#
+#     echo "a" \        renders as   echo "a" \
+#     # joined?                       echo "b"
+#     echo "b"
+#
+# Source prints `a` then `b`; rendered prints `a echo b`. `bash -n` is CLEAN on both, so the
+# shebang/syntax arm cannot see it, and nothing ever executes the unstripped source — there is
+# no second chance. The three units are worse off: CI's `systemd-analyze verify` lints the
+# SOURCE files, never the rendered ones.
+#
+# Latent today (0 hits) across ~20 continuation sites. Guarded because ADR-151 tells
+# maintainers comments are now free, which is exactly the belief that trips it.
+_cont_hits="$(awk 'prev ~ /\\[ \t]*$/ && $0 ~ /^[ \t]*#/ {printf "%s:%d\n", FILENAME, NR} {prev=$0}' \
+  "$DIR"/git-data-bootstrap.sh "$DIR"/git-data-provision.sh "$DIR"/git-data-transport-wrapper.sh \
+  "$DIR"/git-data-remove.sh "$DIR"/git-data-gc.sh "$DIR"/git-data-pre-receive-placeholder.sh \
+  "$DIR"/git-data-gc.service "$DIR"/git-data-gc-failure.service "$DIR"/git-data-gc.timer 2>/dev/null || true)"
+if [[ -z "$_cont_hits" ]]; then
+  pass "no comment sits directly after a line continuation in any injected payload"
+else
+  fail "a comment follows a line continuation — the strip JOINS the two commands on the host" \
+    "$(printf '%s' "$_cont_hits" | head -6)"
+fi
+
 # ── 3. The rendered payloads: shebang intact, and still valid shell ────────────────────
 if ! command -v terraform >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
   # NOT a silent skip: an unrenderable harness must be visible, not read as coverage.
@@ -116,8 +156,8 @@ for wf in d["write_files"]:
     if r.returncode != 0:
         bad.append("%s: bash -n failed: %s" % (path, r.stderr.strip()[:120]))
 # A floor, because "found nothing to check" is not "everything passed".
-if checked < 6:
-    bad.append("only %d shell payloads inspected (<6) — the render lost payloads" % checked)
+if checked < 7:
+    bad.append("only %d shell payloads inspected (<7) — the render lost payloads" % checked)
 print("CHECKED=%d" % checked)
 for b in bad:
     print("BAD " + b)
@@ -174,11 +214,11 @@ rm -f "$probe"
 
 # ── Minimum-cardinality floor ──────────────────────────────────────────────────────────
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 7 ]]; then
+if [[ "$_ran" -lt 9 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 7.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 9.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 7)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 9)\n' "$_ran"
 fi
 
 printf '\n=== git-data-render-strip-parity: %d passed, %d failed ===\n\n' "$passes" "$fails"

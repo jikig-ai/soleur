@@ -276,7 +276,7 @@ resource "doppler_secret" "git_data_ssh_host" {
 # physical line (its var parser is line-based). git-data-userdata-budget.sh mirrors this
 # expression byte-for-byte; git-data-render-strip-parity.test.sh is what keeps them equal.
 locals {
-  git_data_rationale_strip = "/(?m)^[ \t]*#([^!=\n][^\n]*)?\n/"
+  git_data_rationale_strip = "/(?m)^[ \t]*#([^!\n][^\n]*)?\n/"
 }
 
 resource "hcloud_server" "git_data" {

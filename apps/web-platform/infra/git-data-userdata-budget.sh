@@ -42,7 +42,7 @@ trap 'rm -rf "$TFDIR"' EXIT
 # the real pubkeys/ids/token are all shorter than or equal to these.
 cat > "$TFDIR/main.tf" <<EOF
 locals {
-  git_data_rationale_strip = "/(?m)^[ \\t]*#([^!=\\n][^\\n]*)?\\n/"
+  git_data_rationale_strip = "/(?m)^[ \\t]*#([^!\\n][^\\n]*)?\\n/"
   vars = {
     git_data_bootstrap               = replace(file("${DIR}/git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
     git_data_pre_receive_placeholder = replace(file("${DIR}/git-data-pre-receive-placeholder.sh"), local.git_data_rationale_strip, "")
