@@ -471,7 +471,7 @@ vendor console, no credential mint, no infrastructure apply).
 | R8 | `tar -x` as root re-owns `/build` to the host uid off the ro bind. | Low | `--no-same-owner`, now pinned by AC6's `stat -c %U`. Ownership parity only — mode/mtime are restored exactly rather than umask-filtered (measured: `cp -r` → 644 + fresh mtime; `tar` → 664 + preserved). Accepted: more faithful, and outside the fixture projection surface (R9). |
 | R9 | The `/build` content/mode/mtime delta perturbs the captured bwrap argv and byte-diff-fails the committed fixture. | Low | `sandbox-canary-argv.json` contains only `/`, `/proc`, `/dev`, `/dev/null`, `${CANARY_WS}`, `${CANARY_EMPTY}` — zero project-relative tokens — and its `_comment` records that `normalizeCapturedArgv()` drops host paths; ADR-079 grounds the invariant in the **base OS filesystem**. The delta is provably outside the projection surface. The ADR-079 addendum tells the next fixture-regenerator that `/build` is now filtered. |
 | R10 | `tar` absent or behaviourally different after a base-image bump. | Low | The base is a **digest pin**, so the trigger is a deliberate edit, not drift — and that edit is exactly when AC6/AC7 re-run. Assertion 8 reddens a one-sided bump. A self-skipping docker arm in the suite was considered and declined (see Alternatives). |
-| R11 | `tar -c` exits non-zero on `file changed as we read it`; with `pipefail` a race that `cp -r` tolerated becomes a FATAL. Candidate churners in a warm tree: `.next/`, `tsconfig.tsbuildinfo`. | Low | Cannot occur in CI (cold checkout, no dev server, no concurrent build). Locally it requires a writer inside `apps/web-platform` during a deliberate run of a creds-gated script, and the new behaviour is a **loud** failure where `cp -r` would have produced a torn file silently. `--warning=no-file-changed` was considered and **not** prescribed: the race could not be reproduced in-session, so its effect on the exit status is unverified — and suppressing a truncation signal is what R5 exists to prevent. Excluding `.next`/`tsconfig.tsbuildinfo` was also declined: `/build` is already 35 MB and each extra exclusion widens the semantic delta from `cp -r`. |
+| R11 | `tar -c` exits non-zero on `file changed as we read it`; with `pipefail` a race that `cp -r` tolerated becomes a FATAL. Candidate churners in a warm tree: `.next/`, `tsconfig.tsbuildinfo`. | Low | Cannot occur in CI (cold checkout, no dev server, no concurrent build). Locally it requires a writer inside `apps/web-platform` during a deliberate run of a creds-gated script, and the new behaviour is a **loud** failure where `cp -r` would have produced a torn file silently. `--warning=no-file-changed` was considered and **not** prescribed: the race could not be reproduced in-session, so its effect on the exit status is unverified — and suppressing a truncation signal is what R5 exists to prevent. **REVISED at review.** Two corrections. (a) The dismissal was backwards: CI is exactly where this change is INERT (a cold checkout has no `node_modules`/`.terraform`), so "cannot occur in CI" argues nothing — local is the only place the optimisation acts, and local is where the race lives. (b) `--warning=no-file-changed` was measured: it suppresses the MESSAGE and still exits 1, so it could never have worked. The shipped fix discriminates on tar's overloaded STATUS instead (2 = error -> FATAL; 1 = warning -> WARN, copy is complete), and `.next`/`out` are now excluded outright — removing the dominant churner as well as the largest local cost. |
 | R12 | A copy FATAL is invisible on the **canary** path and degrades the gate to an ack-fallback a commit trailer satisfies. | Medium (pre-existing) | The `2>/dev/null` deletion puts the FATAL in the job log. The residual — `\|\| true` still swallows the exit, so the gate warns rather than reddens — is a deliberate pre-existing design ("a soft-degraded capture must never REMOVE the ack requirement") and is filed, not silently inherited. See §Scope-outs. |
 
 ## Scope-outs
@@ -508,13 +508,17 @@ error_reporting:
     the helper in `$(... | tail -1 || true)`; this plan deletes its `2>/dev/null` so the
     FATAL reaches the log, but `|| true` still converts the failure into an ack-fallback
     warning rather than a red gate (scope-out SO-1).
-  fail_loud: partial -- fully fail-closed on the propagation gate; diagnostic-but-degraded
-    on the canary gate. Stated precisely rather than claimed uniformly.
+  fail_loud: partial -- fail-closed on the propagation JOB; diagnostic-but-degraded on the
+    canary gate. CORRECTED at review: neither in-image gate is a branch-protection
+    required context (infra/github/ruleset-ci-required.tf lists 21, and neither is
+    among them), so a red propagation job does NOT block a merge. The only required
+    context in play is the `test` aggregator that carries the hermetic suite.
 failure_modes:
   - mode: producer or consumer tar fails, DEST truncated
     detection: FATAL on container stderr + non-zero exit; pinned by suite assertion 5 and
       proven by the Phase 3 pipefail-mutation run
-    alert_route: propagation gate reddens; canary gate emits ::warning:: + requires the ack trailer
+    alert_route: propagation JOB reddens (advisory, not merge-blocking); canary gate emits
+      ::warning:: + requires the ack trailer
   - mode: exclusion silently stops applying (anchor broken, regression to a full copy)
     detection: suite assertion 3 against the positive-controlled fixture. NOTE this is the
       ONLY detector -- a cold CI checkout has neither directory, so no CI job can observe
@@ -531,7 +535,9 @@ failure_modes:
       syntax is checked by nothing.
     alert_route: red `test` context
   - mode: canary verify fails for any reason and the gate degrades to the ack trailer
-    detection: the ::warning:: line in the canary job log, now carrying the FATAL text
+    detection: the FATAL line on container stderr, adjacent to the ::warning:: in the
+      workflow run log (observability layer 6). NOTE the ::warning:: ANNOTATION itself
+      renders verdict='' reason='' and does not carry the cause; the cause is in the raw log.
     alert_route: reviewer reading the job log; tracked by scope-out SO-1
 logs:
   where: GitHub Actions job logs for the `test` (scripts shard) job and, when the paid gates

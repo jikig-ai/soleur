@@ -43,12 +43,12 @@ docker run --rm \
   -v "$PWD/$APP_DIR:/src:ro" \
   "$IMG" bash -c '
     set -e
-    apt-get update -qq >/dev/null 2>&1
-    apt-get install -y -qq --no-install-recommends socat curl unzip ca-certificates >/dev/null 2>&1
+    apt-get update -qq >/dev/null
+    apt-get install -y -qq --no-install-recommends socat curl unzip ca-certificates >/dev/null
     bash /src/scripts/lib/in-image-copy-src.sh /src /build
     cd /build
-    npm ci --no-audit --no-fund >/dev/null 2>&1
-    curl -fsSL https://bun.sh/install 2>/dev/null | bash >/dev/null 2>&1
+    npm ci --no-audit --no-fund >/dev/null
+    curl -fsSL https://bun.sh/install 2>/dev/null | bash >/dev/null
     export PATH="/root/.bun/bin:$PATH"
     bun scripts/sandbox-canary.mjs --verify infra/sandbox-canary-argv.json
   '

@@ -31,11 +31,12 @@ top-level; here the root is `apps/web-platform` and `.terraform` sits one level 
 `tar --exclude=./node_modules --exclude=.terraform`, which both helpers call. Verified in the
 pinned `node:22-slim` digest against the real tree: both directories excluded (plus the
 not-yet-initialised `infra/sentry/.terraform`), all dotfiles and both `.terraform.lock.hcl` files
-preserved, `diff -rq` parity clean, `/build` root-owned. Re-measured at `/work` time against this
-worktree's warm tree (2.2 GB `node_modules` + the real 247 MB provider cache), two interleaved
-pairs in the pinned digest: **24.6–28.1 s / 2.6 GB → 0.44 s / 30 MB**. (The plan phase recorded
-22.96 s / 2.3 GB → 0.48 s / 35 MB against a different tree with a 1.8 GB `node_modules`; the
-`/work` figures supersede it. The effect dwarfs the ~3.5 s run-to-run spread on the BEFORE arm.)
+preserved, `diff -rq` parity clean, `/build` root-owned. Measured in the pinned digest against a
+warm tree: **2.6 GB / 99,263 archive members → 30 MB / 2,974** (deterministic, reproduced exactly
+on an independent re-run), wall clock ~18–28 s → ~0.25–0.5 s. Stated as a range because the
+BEFORE arm's own spread is ~20% of its mean; an earlier "~57×" point estimate was withdrawn at
+review as not derivable from the data. The win is LOCAL — both CI jobs are checkout-only, so in
+CI the exclusions save nothing and the change is perf-neutral within noise.
 
 **Nothing about the issue's goal changed** — both named directories are excluded, which the
 proposed snippet would only half-achieve. Only the mechanism differs.
@@ -62,5 +63,15 @@ The plan instead ships a hermetic suite that executes the real copy artifact, pl
 in-image rehearsal proving whole-tree parity and a successful `npm ci` in the filtered `/build`.
 The paid end-to-end path is **not run** and the PR body says so.
 
+**Sharpened at review.** The observability reviewer made a better version of the counter-argument
+than the plan had considered: the "canary half is structurally inert" finding argues against adding
+**both** regexes, not against adding the **propagation** one. Propagation-only would cost one paid
+Haiku turn per future edit to these files and would buy the sole real in-image execution of the
+changed path — which is otherwise never exercised in CI at all. The plan's decline was kept because
+reversing it unilaterally would override a recorded operator decision, not because the argument is
+weak. It is the strongest case for the expansion and the operator should decide against it, not
+against the weaker version.
+
 **Operator decision requested:** confirm the trade (unpaid hermetic coverage over recurring paid
-CI coverage) or ask for the trigger-set expansion.
+CI coverage), or ask for the trigger-set expansion — propagation-gate only, at one paid turn per
+future edit to these two helpers plus the shared copy script.

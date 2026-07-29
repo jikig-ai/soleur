@@ -83,7 +83,7 @@ Two things the plan measured that you must not re-derive from memory:
       `verdict_json="$(bash -c "$VERIFY_CMD" 2>/dev/null | tail -1 || true)"`. Nothing else on that
       line changes — `|| true` stays (see 6.2). Safe: `$( )` captures stdout only, and
       `sdk-bump-sandbox-gate.test.sh` injects `SDK_GATE_VERIFY_CMD` without asserting on stderr.
-- [x] 3.6 Add the one-line addendum to ADR-079's Fidelity note: `/build` is now a filtered copy, so
+- [x] 3.6 Add the addendum to ADR-079's Fidelity note: `/build` is now a filtered copy, so
       whoever next regenerates the fixture with `--capture` knows; the exclusions are outside the
       argv projection surface.
 - [x] 3.7 Re-run the suite: 8/8 pass. Record the transcript.

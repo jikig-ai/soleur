@@ -252,6 +252,34 @@ else
   fail "T14 expected exit 0 (dormant), got $? ($(tail -1 "$T/out.txt"))"
 fi
 
+# ---------------------------------------------------------------------------
+# T15 — the verify command's STDERR must reach the gate output (#7007).
+# The in-image copy prints "FATAL: in-image copy failed ..." on stderr. If the
+# verdict capture ever re-acquires a `2>/dev/null`, that diagnostic is destroyed
+# and a truncated-tree failure degrades to an ack-fallback with NO cause text in
+# the job log. Nothing else here pins it: every other arm's VERIFY_CMD is silent
+# on stderr, so re-inserting the redirect leaves the rest of this suite green.
+# ---------------------------------------------------------------------------
+echo "T15: verify command stderr reaches the gate output"
+T15_FIX="apps/web-platform/infra/sandbox-canary-argv.json"
+write_pkglock "$T/head-pkg.json" "0.3.197" "2.1.197"
+write_bunlock "$T/bun.lock" "0.3.197" "2.1.197"
+write_pkglock "$T/base-pkg.json" "0.3.197" "2.1.197"
+env ANTHROPIC_API_KEY="sk-test" \
+  SANDBOX_CANARY_GATE_ENABLED=1 \
+  SDK_GATE_PKG_LOCK="$T/head-pkg.json" \
+  SDK_GATE_BUN_LOCK="$T/bun.lock" \
+  SDK_GATE_BASE_PKG_LOCK="$T/base-pkg.json" \
+  SDK_GATE_ACK_TEXT="" \
+  SDK_GATE_CHANGED_FILES="$T15_FIX" \
+  SDK_GATE_VERIFY_CMD='printf "SOLEUR_T15_STDERR_MARKER\n" >&2; printf "{\"verdict\":\"verify_ok\",\"reason\":\"ok\"}\n"' \
+  bash "$GATE" >"$T/out.txt" 2>&1 || true
+if grep -q 'SOLEUR_T15_STDERR_MARKER' "$T/out.txt"; then
+  pass "T15 verify stderr reaches the gate output"
+else
+  fail "T15 verify stderr was swallowed (a 2>/dev/null on the verdict capture?)"
+fi
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

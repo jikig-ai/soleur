@@ -39,12 +39,12 @@ docker run --rm \
   -v "$PWD/$APP_DIR:/src:ro" \
   "$IMG" bash -c '
     set -e
-    apt-get update -qq >/dev/null 2>&1
+    apt-get update -qq >/dev/null
     # socat is required by the SDK sandbox availability check (bwrap is shimmed).
-    apt-get install -y -qq --no-install-recommends socat ca-certificates >/dev/null 2>&1
+    apt-get install -y -qq --no-install-recommends socat ca-certificates >/dev/null
     bash /src/scripts/lib/in-image-copy-src.sh /src /build
     cd /build
-    npm ci --no-audit --no-fund >/dev/null 2>&1
-    npm i -g bun@1.3.11 >/dev/null 2>&1
+    npm ci --no-audit --no-fund >/dev/null
+    npm i -g bun@1.3.11 >/dev/null
     bun scripts/plugin-root-sandbox-propagation-probe.mjs
   '

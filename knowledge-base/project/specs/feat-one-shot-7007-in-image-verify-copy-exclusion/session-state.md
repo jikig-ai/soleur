@@ -8,18 +8,26 @@
 ## Work Phase
 - Status: implementation complete; RED/GREEN/mutation + L2 rehearsal all executed.
 - RED (naive body): failures exactly **{3, 5, 6}** as the plan predicted; assertion 5 RAN (not SKIP).
-- GREEN: 8/8, 0 FAIL, 0 SKIP.
-- Mutation (Phase 3): sandbox copy baseline 8/8 → `set -euo pipefail` mutated to `set -eu`
-  (mutation confirmed landed via `diff`) → assertion 5 RED with the predicted message
-  ("unreadable member produced exit 0 — DEST is silently truncated"). R5 is tested, not asserted.
+- GREEN: 8/8 at work-time. **The suite was substantially rewritten at review** (now 10 assertions)
+  after multi-agent review proved the 8-assertion version could be fully defeated — see Review Phase.
 - AC6: in-image `diff -rq` parity clean, `node_modules` + `infra/.terraform` absent,
   `infra/.terraform.lock.hcl` survived, all three `stat -c %U` lines `root`.
 - AC7 (never run before): `npm ci --no-audit --no-fund` in the filtered `/build` exited 0,
   added 1357 packages, 827 top-level `node_modules` entries — confirms the excluded tree is
   genuinely discarded-and-rebuilt by the very next command.
-- A/B re-measured at /work time (2 interleaved pairs, pinned digest, warm tree with the real
-  247 MB provider cache staged in): **24.6–28.1 s / 2.6 GB → 0.44 s / 30 MB** (~57×). Supersedes
-  the plan's 22.96 s / 2.3 GB → 0.48 s / 35 MB, which was measured against a different tree.
+- A/B measured in the pinned digest against a warm tree. **Lead with the deterministic
+  quantity — it has zero variance and reproduced exactly on an independent re-run:
+  2.6 GB / 99,263 archive members → 30 MB / 2,974.** Wall clock is a RANGE, not a point:
+  ~18–28 s → ~0.25–0.5 s. Two earlier claims were withdrawn at review: "~57×" is not
+  derivable from the recorded pairs (they give 63.5× and 55.4×; both estimators give 59.4×),
+  and the runs were two sequential BEFORE-first blocks, not "interleaved" — a counterbalanced
+  re-run found no resolvable ordering penalty, so the conclusion stands but the label was wrong.
+  **Scope correction:** this is a LOCAL win only. Both CI jobs are checkout-only, so the
+  exclusions save 0 bytes and 0 ms there; the CI-visible effect is the cp→tar substitution,
+  measured as unresolved at ±24 ms (i.e. perf-neutral within noise). Commit scope retagged
+  perf(scripts). Independent measurement also showed `npm ci` gets ~2.8 s FASTER (it deletes any
+  pre-existing node_modules first — 96,279 inodes / 2,334 MB), so the PR understated itself.
+  Plan-phase figures (22.96 s / 2.3 GB → 0.48 s / 35 MB) were a different tree; superseded.
 - AC5 lint green; trap-tempfile-ownership 20/20 green; AC1 grep pair green.
 - AC4 `bash scripts/test-all.sh scripts`: rc=0, **226/226 suites passed**. The new suite
   auto-registered and ran (`[ok] apps/web-platform/scripts/lib/in-image-copy-src.test.sh`,
@@ -63,9 +71,8 @@ None. All deepen-plan halt gates (4.5–4.10) passed; KB citations, rule IDs, an
   root-only only because of the `.` member root).
 
 ### Measured effect
-See the `/work` re-measurement under **Work Phase** above (24.6–28.1 s / 2.6 GB → 0.44 s / 30 MB).
-The plan-phase figure (22.96 s / 2.3 GB → 0.48 s / 35 MB) was taken against a different tree and is
-superseded — it is retained only in the plan document as the plan-time record.
+See the A/B bullet under **Work Phase** above. Headline: **2.6 GB / 99,263 members → 30 MB / 2,974**
+(deterministic), wall clock ~18–28 s → ~0.25–0.5 s, **local only** — CI is perf-neutral within noise.
 
 ### Open findings — resolved during /work
 - Neither CI gate's trigger regex names the helper scripts, so a cold CI checkout is structurally
@@ -83,3 +90,62 @@ superseded — it is retained only in the plan document as the plan-time record.
 - Empirical probes: synthetic-fixture `GLOBIGNORE`/`tar` A/B, `docker run` against the pinned
   `node:22-slim` digest (tar version, parity diff, ownership, before/after wall clock), tar anchoring
   control, producer-failure `PIPESTATUS` discrimination
+
+## Review Phase
+
+Ten agents (change class `code`; shellcheck substituted for semgrep on a bash-only diff;
+`user-impact-reviewer` not triggered — plan threshold is `none`). No agent found a P1 in the copy
+mechanism itself; the exclusion semantics were independently confirmed against the real tree
+(**tar member set 2978 == expected 2978, zero unintended exclusions**, on tar 1.34 and 1.35).
+
+**Four P1s, all fixed inline. Every one was a guard that certified the wrong property:**
+
+1. **Assertion 8 pinned the followers to each other and left the leader unpinned.** Both helper
+   headers say "pin to the same base as `apps/web-platform/Dockerfile`"; the assertion compared
+   helper-vs-helper and never read the Dockerfile. Renovate's `dockerfile` manager bumps that
+   digest and **automerges** (`default:automergeDigest` + `platformAutomerge`), and the helpers sit
+   outside every configured manager — so both would go stale together and the guard stays green,
+   silently breaking ADR-079's capture-env == replay-env == deploy-image invariant. Now extracts
+   from the Dockerfile plus each helper's `IMG=` pin, requires exactly one digest per helper (a
+   decoy in a comment would otherwise unpin the real one), and `sort -u` must yield one.
+2. **The whole optimisation could be reverted with the suite green.** `grep -qF` matched comments,
+   and this PR's own file carries the invocation literal as usage text — so `cp -r` plus a decoy
+   comment passed 8/8 while copying 2.3 GB again. The ban also missed `cp -vr` / `cp --recursive`.
+   Now comment-blind, and bans any `cp`/`rsync` touching `/src`.
+3. **Nothing asserted the assertions ran.** Deleting every assertion block yielded
+   "0 passed, 0 failed", **exit 0**. Added a `MIN_ASSERTIONS` floor (a floor, not equality; SKIP
+   counts so the root path degrades observably).
+4. **The FATAL guard conflated tar's two exit statuses and was untested in production.** GNU tar
+   uses 2 = error, **1 = warning** ("file changed as we read it"). The unreadable-member case is
+   unreachable as root — which is how this ships — so the only reachable class was the warning,
+   and it produced a false FATAL on a complete tree. `/src` is read-only to the *container*; the
+   host tree stays live, so any editor save, `tsc --watch`, or even a file deletion during the
+   ~0.44 s window would have reddened the gate on the operator's warm tree — the one machine this
+   optimisation exists for. Now discriminates on status (2 → FATAL, 1 → WARN + proceed), pinned by
+   a stubbed-`tar` assertion that is deterministic and does **not** skip as root.
+   `--warning=no-file-changed` was measured and does NOT help: it suppresses the message, not the status.
+
+**Also fixed inline:** `.next`/`out` excluded (already in `.dockerignore`; removes the dominant
+race trigger and the largest local cost); symlink survivor pinning tar's non-dereferencing (a future
+`-h` would pull targets from outside the ro mount); nested `.next`/`out`/`node_modules` over-reach
+sentinels with membership assertions; `/src`-mount and `CALL_LITERAL` derived from the SUT path;
+the four sibling in-container steps un-muted (`2>&1` → `>`) so an `apt`/`npm ci` failure has cause
+text; T15 added to `sdk-bump-sandbox-gate.test.sh` (the `2>/dev/null` deletion had **zero** coverage
+— every other arm's VERIFY_CMD is silent on stderr); ADR-079 addendum re-grounded structurally
+rather than on a token census; perf claims rescoped and de-pointed.
+
+**Mutation battery (post-fix): 16 RED + 1 documented GREEN**, each mutation verified landed against
+a pristine backup, against a green sandbox baseline. The GREEN is `--no-same-owner`, which the
+hermetic suite is structurally unable to pin (as non-root, tar cannot chown at all) — proven instead
+by the in-image rehearsal, and now said so in both the script header and the suite header rather
+than claimed as covered.
+
+**One battery result was self-caught as fabricated:** an early mutation "survived", but inspection
+showed the edit had landed on the *comment* documenting the flag rather than the code — the
+documented replace-first-occurrence trap. Re-run with exactly-once anchors, it goes RED. Anchors now
+assert single-occurrence so an ambiguous one fails loudly instead of producing a false verdict.
+
+**Declined:** widening the CI trigger regex to the propagation gate. It is a sharper argument than
+the plan's (the canary half is structurally inert, the propagation half is not), but it reverses a
+trade recorded in `decision-challenges.md` UC-2 as an operator decision and costs a paid Haiku turn
+on every future edit to these files. UC-2 carries the sharper framing so the operator decides on it.

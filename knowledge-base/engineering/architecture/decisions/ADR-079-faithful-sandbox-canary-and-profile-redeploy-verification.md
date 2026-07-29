@@ -326,11 +326,20 @@ built web-platform image; they share the base OS filesystem so the host-conditio
 token set is identical — a follow-up could pin to the built image for exactness.
 Addendum (#7007, 2026-07-28): whoever next regenerates the fixture with `--capture`
 should know that `/build` is now a *filtered* copy of the checkout —
-`scripts/lib/in-image-copy-src.sh` excludes `node_modules` (rebuilt by the very next
-`npm ci`) and `.terraform` (read by nothing here). Both are outside the argv
-projection surface: the committed fixture carries only `/`, `/proc`, `/dev`,
-`/dev/null`, `${CANARY_WS}` and `${CANARY_EMPTY}`, and the invariant above is
-grounded in the **base OS filesystem**, not in project-relative paths.
+`scripts/lib/in-image-copy-src.sh` excludes `node_modules` (deleted and rebuilt by
+the very next `npm ci`), `.terraform`, `.next` and `out` (read by nothing here).
+This is outside the argv projection surface **by construction, not by token census**:
+`computeCanaryPaths()` roots the capture workspace at
+`/tmp/soleur-sandbox-canary/<fixed uuid>` and the SDK `query()` runs with
+`cwd: resolvedOwn`, so `/build` is neither the workspace, nor the cwd, nor a sibling,
+and cannot contribute a token at *any* SDK version. The committed fixture corroborates
+(it carries only paths rooted at `/`, `/proc`, `/dev`, `/dev/null`, `${CANARY_WS}` and
+`${CANARY_EMPTY}`), but the structural reason is the durable one — a token census
+expires silently the day an SDK version emits a cwd-conditional token.
+Note the change moves `/build` *toward* the deploy image, not away from it:
+`apps/web-platform/.dockerignore` already excludes `node_modules`, `.next`, `out` and
+`infra/`, so the deploy build context never carried them. The previous full-fat
+`cp -r` made `/build` less like the deploy context than the filtered copy does.
 
 ### Amendment (#5955, 2026-07-03) — the seccomp reload resolves the running semver from `/health`; the deploy contract stays semver-only
 
