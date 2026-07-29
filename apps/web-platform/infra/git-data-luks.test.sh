@@ -365,7 +365,8 @@ p_doppler_config_scope() {
   # Guard the SIBLINGS too. Scoping this to cloud-init alone let the identical W0 defect
   # survive in git-data-cutover.sh — a file that runs ON this host under the same
   # single-config token — because the guard structurally could not see it.
-  for _sib in "${DIR}/git-data-cutover.sh" "${DIR}/git-data-gc-failure.service"; do
+  for _sib in "${DIR}/git-data-cutover.sh" "${DIR}/git-data-gc-failure.service" \
+           "${DIR}/git-data-gc.service"; do
     [ -f "$_sib" ] || continue
     n_run=$(( n_run + $(grep -Ec 'doppler run --project soleur ' "$_sib" || true) ))
     n_scoped=$(( n_scoped + $(grep -Ec 'doppler run --project soleur --config prd_git_data ' "$_sib" || true) ))

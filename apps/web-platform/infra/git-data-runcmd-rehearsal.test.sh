@@ -211,6 +211,10 @@ _b2_strip "$TMP/drive.sh"    > "$_b2_drv"
 # is the realistic drift: measured, removing on_err's rc guard left an existence-based B2
 # fully green because luks_err's and bootstrap_err's copies still satisfied it. The driver
 # models a single trap, so its minimum is 1 for every construct.
+# NOTE the trap-disarm minimum is 4, not 3: the three handlers each disarm, PLUS a bare
+# disarm outside any handler before bootstrap_err is defined. A floor of 3 tolerated
+# deleting one (measured) -- derive minimums from the artifact, not from the count you
+# expect the design to have.
 while IFS='|' read -r _label _min _re; do
   [ -n "$_label" ] || continue
   _n_pre=$(grep -cE -- "$_re" "$_b2_pre" || true)
@@ -222,7 +226,7 @@ trap on_err EXIT|1|^[[:space:]]*trap on_err EXIT[[:space:]]*$
 set -e (exactly)|1|^[[:space:]]*set -e[[:space:]]*$
 rc=$? capture|3|^[[:space:]]*rc=\$\?[[:space:]]*$
 rc guard|3|^[[:space:]]*\[ "\$rc" -eq 0 \][[:space:]]*&&[[:space:]]*exit 0[[:space:]]*$
-trap - EXIT disarm|3|^[[:space:]]*trap - EXIT[[:space:]]*$
+trap - EXIT disarm|4|^[[:space:]]*trap - EXIT[[:space:]]*$
 emit call|1|/usr/local/bin/git-data-emit[[:space:]]+"
 B2SPEC
 if [ -z "$_b2_missing" ]; then pass; else

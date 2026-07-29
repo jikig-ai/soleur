@@ -115,10 +115,16 @@ write_files:
       _clean() {
         # NORMALISE -> REDACT -> TRUNCATE. The byte strips MUST precede the seds: after them,
         # a DEL/BS byte inside a UUID defeats the pattern and is then REMOVED, reassembling
-        # the identifier on the wire (measured, 4 variants).
+        # the identifier on the wire (measured, 4 variants). THE SAME IS TRUE OF `"` AND `\`
+        # AND OF THE VALUE SUBSTITUTION, and #6982's first draft applied the rule only to the
+        # control bytes: with `tr -d '"\\'` below the seds, a `\` inside a workspace UUID
+        # leaked a raw auth.users.id (measured), and with _devalue outside _clean a control
+        # byte inside the passphrase reassembled it. Both now sit ABOVE every pattern rule.
         LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' \
           | LC_ALL=C tr '\011\012\015' '   ' \
           | LC_ALL=C tr -cd '\040-\176' \
+          | LC_ALL=C tr -d '"\\' \
+          | _devalue \
           | LC_ALL=C sed -e 's/^Using [^;]*;//g' \
           | LC_ALL=C sed -e "s/$${ESC}\[[0-9;]*[a-zA-Z]//g" \
           | LC_ALL=C sed \
@@ -129,7 +135,6 @@ write_files:
               -e 's#://[A-Za-z0-9._%+-]\{1,\}:[^@/[:space:]]\{1,\}@#://REDACTED@#g' \
               -e 's/[Bb]earer[[:space:]]\{1,\}[A-Za-z0-9._~+/=-]\{8,\}/Bearer REDACTED/g' \
               -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----.*/[PRIVATE KEY REDACTED]/' \
-          | LC_ALL=C tr -d '"\\' \
           | LC_ALL=C sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
           | tail -c 180
       }
