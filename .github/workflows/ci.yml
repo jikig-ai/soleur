@@ -121,6 +121,12 @@ jobs:
   # PR can merge with it red. See the #6882 note inside for what moved out.
   lint-bot-statuses:
     runs-on: ubuntu-latest
+    # Pinned + checksum-verified, same shape as the gitleaks install below. Variables are
+    # workflow-internal literals; no untrusted input is interpolated into the run: blocks.
+    # To upgrade, bump BOTH together — the checksum is for actionlint_<VERSION>_linux_amd64.tar.gz.
+    env:
+      ACTIONLINT_VERSION: "1.7.7"
+      ACTIONLINT_SHA256: "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -170,6 +176,60 @@ jobs:
         run: python3 scripts/lint-trap-tempfile-ownership.py --check-highwater
       - name: Lint orphan test suites (scripts/*.test.sh must be registered)
         run: bash scripts/lint-orphan-test-suites.sh
+      # #7002 actionlint hang guard. Asserts ONLY that the linter TERMINATES.
+      #
+      # actionlint pipes every `run:` body into shellcheck over a pipe. When a body exceeds
+      # the 65536-byte pipe buffer, actionlint blocks writing while shellcheck blocks
+      # reading and the process never returns. cutover-inngest.yml's 118722-byte body did
+      # exactly that, and the damage was not "one file went unlinted": a bare actionlint
+      # invocation over the whole directory never terminated, so the repo's only workflow
+      # linter reported NOTHING AT ALL, on every file, silently.
+      #
+      # WHY IT DOES NOT FAIL ON FINDINGS. There are 93 pre-existing ones across 20 files
+      # (67% the benign SC2016 markdown-backtick shape); driving them down is #7042. A guard
+      # that also failed on findings could not have landed, which is the objection that kept
+      # actionlint out of CI in the first place. rc=124 is the DIRECT signal for the
+      # deadlock — no byte-count proxy, no threshold to re-tune as the buffer or tool changes.
+      - name: Install actionlint (pinned, sha-verified)
+        run: |
+          set -euo pipefail
+          curl -sSLo actionlint.tgz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tgz" | sha256sum -c -
+          tar -xzf actionlint.tgz actionlint
+          chmod +x actionlint
+          sudo mv actionlint /usr/local/bin/actionlint
+          actionlint --version
+      - name: actionlint hang guard (#7002)
+        run: |
+          set -euo pipefail
+
+          # NON-VACUITY FLOOR, and it is not decoration. The obvious invocation
+          # `actionlint .github/workflows/` exits **3** with "is a directory" — actionlint
+          # takes FILES, and only auto-discovers when given no path at all. A guard written
+          # that way scans ZERO files, and unless every non-{0,1,124} status is treated as
+          # failure it prints "rc=3, acceptable" and goes green forever. That is the same
+          # can't-report-so-it-passed shape this guard exists to catch, so both halves —
+          # the file floor and the catch-all rc arm below — are load-bearing.
+          count=$(find .github/workflows -maxdepth 1 -name '*.yml' | wc -l)
+          if [ "$count" -lt 40 ]; then
+            echo "::error::actionlint hang guard found only ${count} workflow files — the glob is broken and this guard is scanning nothing."
+            exit 1
+          fi
+          echo "linting ${count} workflow files"
+
+          rc=0
+          timeout 120 actionlint .github/workflows/*.yml > /tmp/actionlint.out 2>&1 || rc=$?
+          cat /tmp/actionlint.out || true
+
+          case "$rc" in
+            0)   echo "actionlint rc=0 — clean, and it terminated." ;;
+            1)   echo "actionlint rc=1 — findings (expected; census + ratchet tracked in #7042). It terminated, which is what this guard asserts." ;;
+            124) echo "::error::actionlint HUNG (#7002 recurrence). A run: body has crossed the 65536-byte pipe buffer and deadlocked the shellcheck integration. Find it with: python3 -c 'import yaml,sys;d=yaml.safe_load(open(sys.argv[1]));[print(len(s[\"run\"]),s.get(\"name\")) for j in d[\"jobs\"].values() for s in j.get(\"steps\",[]) if \"run\" in s]' <workflow>  — then extract the body to a checked-in script (precedent: scripts/cutover-inngest.sh, ADR-150)."
+                 exit 1 ;;
+            *)   echo "::error::actionlint exited ${rc} — neither clean (0), findings (1), nor hang (124). The invocation itself is broken, so this guard scanned nothing. Do not treat an unrecognised status as a pass."
+                 exit 1 ;;
+          esac
       # NOTE (#6901): the Encryption-posture Layer A repo-sweep (ADR-140) used to
       # run here as a step inside this shared advisory job. It was extracted to the
       # standalone `encryption-posture` job below so its green/red status is

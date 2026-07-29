@@ -870,11 +870,31 @@ export async function verifyScheduledIssueCreated(args: {
 //
 // THROWS if the sentinel is absent so a forgotten wiring is loud (a literal
 // "{{RUN_DATE}}" title would silently defeat both dedup and the output-aware
-// verify). Pins the issue-TITLE date ONLY — the sole input to the dedup key;
-// secondary agent-derived dates (digest FILE names, publish_date frontmatter,
-// audit-report paths) stay agent-derived. `{{RUN_DATE}}` is collision-free (no
-// `{{` token exists in any cohort prompt). `.replaceAll` is available (tsconfig
-// ES2022; already used above in this file).
+// verify). `{{RUN_DATE}}` is collision-free (no `{{` token exists in any cohort
+// prompt). `.replaceAll` is available (tsconfig ES2022; already used above).
+//
+// SCOPE — widened by #6750, deliberately and by enumeration:
+//
+//   * The issue-TITLE date, for every cohort cron. This is the sole input to the
+//     dedup key and the original reason the sentinel exists.
+//   * `cron-growth-audit`'s FOUR audit-report paths
+//     (`knowledge-base/marketing/audits/soleur-ai/{{RUN_DATE}}-{content-audit,
+//     aeo-audit,seo-audit,content-plan}.md`) — and NOTHING else.
+//
+// Everything else stays agent-derived: digest FILE names, `publish_date`
+// frontmatter, and every other cron's report paths.
+//
+// Why the growth-audit exception: its Class A liveness predicate asserts that
+// TODAY'S dated report is in the commit, and its dedup hardening probes that
+// exact path. Both are date-anchored, so a model-computed date would false-RED
+// the monitor at a UTC-midnight boundary — the same divergence #6143 pinned the
+// title for. Pinning it also DELETES a fragile two-sentence prompt instruction
+// ("compute today's date yourself... do NOT use command substitution") plus its
+// containment-hook caveat, so it is net-negative prompt LOC.
+//
+// The exception is scoped to `cron-growth-audit` on purpose, which keeps
+// `cron-content-generator`'s STEP 3 note ("only the issue TITLE date is
+// pre-filled by the platform") true for that cron.
 // ---------------------------------------------------------------------------
 export const RUN_DATE_SENTINEL = "{{RUN_DATE}}";
 
@@ -1009,6 +1029,104 @@ export async function digestCommittedOnDefaultBranch(args: {
         extra: { fn: cronName, path },
       });
     }
+    return false;
+  }
+}
+
+/**
+ * Did a commit matching `anchorRegex` land on the DEFAULT BRANCH since `sinceIso`? (#6750.)
+ *
+ * The FRESHNESS counterpart to `digestCommittedOnDefaultBranch` above, and the
+ * distinction is load-bearing rather than stylistic.
+ *
+ * `digestCommittedOnDefaultBranch` is an EXISTENCE probe on an exact path. It
+ * proves "this run's artifact landed" only when the artifact is DATE-NAMED — a
+ * new file per run, which cannot exist unless this run wrote it. Across the
+ * ADR-126 cohort exactly one producer qualifies (`cron-growth-audit`). The other
+ * six overwrite a permanent file or directory (`campaign-calendar.md`,
+ * `competitive-intelligence.md`, `plugins/soleur/docs/`, `.../diagrams/`), so a
+ * contents read returns 200 on every run forever and an existence probe there is
+ * a guard that CAN NEVER FAIL — the identical always-green defect ADR-126 exists
+ * to close, reproduced inside its own remedy.
+ *
+ * `cron-content-generator` needs this arm for a second, independent reason: its
+ * blog slug is topic-derived, so the handler cannot predict the path at all.
+ *
+ * The commit-message anchor is the same signal `scripts/cron-artifact-age.sh`
+ * already measures staleness with, so the handler-local probe and the
+ * independent-vantage detector agree on what "landed" means by construction.
+ *
+ * THE ANCHOR MUST BE DATE-BOUND, and `sinceIso` alone is not enough. `since`
+ * filters on the commit's date ON MAIN, which for these crons is MERGE time:
+ * they run with the default `mergeMode: "auto"`, so the commit lands only after
+ * CI passes — minutes to hours later, and across a UTC midnight for a late run.
+ * A day-N artifact merging at 00:20 on day N+1 therefore sits inside day N+1's
+ * `since` window, and a message-only anchor would match it — letting a day-N+1
+ * sibling run dedup GREEN on an artifact day N+1 never produced. That is the
+ * exact defect this probe exists to close, displaced by one day.
+ *
+ * Callers therefore pass `"<commitMessage> <YYYY-MM-DD>"`, which is the PR TITLE
+ * `safeCommitAndPr` builds (`${config.commitMessage} ${runStartedAt.slice(0,10)}`)
+ * and which GitHub's squash merge carries into the commit subject. That binds
+ * the match to the date the artifact was PRODUCED rather than the date it
+ * merged, and `since` becomes belt-and-braces. It also tightens the match enough
+ * that an unrelated operator commit sharing the message stem no longer
+ * suppresses the day's run.
+ *
+ * FAIL-CLOSED-FOR-DEDUP, matching the sibling probe: any error, and any payload
+ * that is not an array, returns `false` = "not proven committed", so the caller
+ * SPAWNS. A duplicate run is a paper cut; a silently-skipped run is the bug.
+ * A `mergeMode: "direct"` caller (none today) whose commit subject omits the
+ * date would simply always spawn — degraded, still in the safe direction.
+ */
+export async function artifactCommittedSince(args: {
+  anchorPrefix: string;
+  sinceIso: string;
+  cronName: string;
+  octokit?: Awaited<ReturnType<typeof createProbeOctokit>>;
+}): Promise<boolean> {
+  const { anchorPrefix, sinceIso, cronName, octokit } = args;
+  // Escaped HERE, at the boundary, rather than at each call site. Taking a
+  // `RegExp` would put the security property in six places and would admit a
+  // `/g`-flagged pattern, whose `.test()` is stateful across `.some()` and
+  // therefore order-dependent. A plain string cannot carry either hazard.
+  const anchorRegex = new RegExp(
+    "^" + anchorPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  );
+  try {
+    const client = octokit ?? (await createProbeOctokit());
+    const res = await client.request("GET /repos/{owner}/{repo}/commits", {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      sha: "main",
+      since: sinceIso,
+      // Accepted cap, not an oversight: >100 commits landing on main inside one
+      // UTC day would push this cron's commit off page 1 and the probe returns
+      // false -> the run SPAWNS. That is the safe direction (a duplicate run,
+      // not a missed artifact), so pagination buys nothing the fail-closed
+      // default does not already provide.
+      per_page: 100,
+      headers: { "X-GitHub-Api-Version": "2022-11-28" },
+    });
+    // A degraded 200 (null/absent/non-array body) must NOT read as "no match" by
+    // way of an exception either — it is simply not evidence, so it falls
+    // through to the fail-closed `false` below.
+    const commits = res?.data;
+    if (!Array.isArray(commits)) return false;
+    return commits.some((c: { commit?: { message?: string } }) =>
+      anchorRegex.test(c?.commit?.message ?? ""),
+    );
+  } catch (err) {
+    // Unlike the contents probe there is no "expected 404" here: an empty window
+    // is a 200 with an empty array, so ANY throw is a genuine read fault and is
+    // reported. It still returns false, so the run spawns rather than deduping
+    // on an unknown.
+    reportSilentFallback(err, {
+      feature: cronName,
+      op: "artifact-freshness-read-failed",
+      message: `Could not list default-branch commits since ${sinceIso} (treating as NOT committed → will spawn)`,
+      extra: { fn: cronName, sinceIso, anchor: String(anchorRegex) },
+    });
     return false;
   }
 }

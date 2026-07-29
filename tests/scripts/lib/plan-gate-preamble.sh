@@ -1,19 +1,49 @@
 # shellcheck shell=bash
 # Shared fail-closed preamble for tfplan-grading gates (#6977, cto F1).
 #
-# WHY THIS FILE EXISTS. TWELVE gates in tests/scripts/lib/ grade a `terraform show -json`
-# document before authorising an apply. Only FOUR validate that the document is readable
-# and that every entry is classifiable before any counter reads one: this file's consumer
-# (git-data-host-birth-gate.sh), plus web-host-birth-gate.sh, web-host-replace-gate.sh and
-# stock-preflight-gate.sh, which carry equivalent checks INLINE. The other EIGHT —
-# INCLUDING git-data-host-replace-gate.sh — carry neither. That is not a style difference;
-# it is a two-tier safety floor produced by copy-the-sibling, and the lower tier fails OPEN.
+# WHY THIS FILE EXISTS. THIRTEEN gates in tests/scripts/lib/ grade a `terraform show -json`
+# document before authorising an apply. As of #6997, ELEVEN call this preamble. The
+# remaining TWO — stock-preflight-gate.sh and web-host-replace-gate.sh — still carry their
+# own inline checks and are tracked in issue #7044. That is not a style difference; it is a
+# two-tier safety floor produced by copy-the-sibling, and the lower tier fails OPEN.
 #
-# Re-derive rather than trusting these numbers. Successive revisions have said "nine and
-# seven" and "five", and every one of them was wrong:
-#   grep -l 'local plan_json' tests/scripts/lib/*gate*.sh | xargs grep -L plan_gate_assert_readable
-# (that lists the 11 not yet ON this preamble; three of the 11 hold inline equivalents.)
-# Retrofitting the eight is tracked by issue #6997.
+# RE-DERIVE RATHER THAN TRUSTING THESE NUMBERS. Successive revisions have said "nine and
+# seven", "five", and "eight", and every one of them was wrong:
+#
+#   grep -l 'local plan_json' tests/scripts/lib/*gate*.sh \
+#     | xargs -r grep -LE '^\s*plan_gate_assert_readable'
+#
+# TWO THINGS IN THAT COMMAND ARE LOAD-BEARING, and the form published here before #6997
+# had neither.
+#
+#   `-E '^\s*plan_gate_assert_readable'` anchors on the CALL. A bare
+#   `grep -L plan_gate_assert_readable` is a PRESENCE check, and every retrofitted gate now
+#   contains that literal inside its `if ! declare -F plan_gate_assert_readable` re-source
+#   guard — so a gate that SOURCES this file and never CALLS it satisfied the old form and
+#   reported clean. That is the exact "sourced but not invoked" vacuity the retrofit had to
+#   be proved against, sitting inside the command that was supposed to police it.
+#
+#   `xargs -r` matters when the first stage is empty: without it `grep -L` is left with no
+#   file operands and READS STDIN. Measured: `printf '' | xargs grep -L PAT` prints
+#   `(standard input)` and exits 0, so a broken glob hangs or reports clean.
+#
+# The drift check in tests/scripts/test-plan-gate-preamble.sh runs this derivation on every
+# CI run, with a >=12 scanned-file floor and a probe for a plan-grading file named off the
+# `*gate*` glob. Its four non-vacuity arms include a synthetic gate that sources this file
+# and never calls it.
+#
+# CALLERS MUST CHECK THE GATE'S RETURN CODE. These functions `return 1`; they do not `exit`,
+# so a caller that discards the status is exactly as fail-open as a gate with no guard — and
+# no mutation battery over a gate function can see its call site.
+#
+# All 21 gate invocations in .github/workflows/apply-web-platform-infra.yml are
+# non-suppressing as of #6997:
+#   - 19 of the form `if ! <gate> …` (of which stock_preflight_gate alone is 8);
+#   - `bash …/preapply-entrypoint-gate.sh --gate tfplan.json` at :712, a bare command under
+#     `set -e`;
+#   - `AUDIT_OUT=$(bash …/preapply-entrypoint-gate.sh --audit --live) || rc=$?` at :4193,
+#     which captures the status deliberately and re-raises it after posting the audit body.
+# A lint for that property is tracked in #7045.
 #
 # THE THREE FAILURES THIS PREVENTS, each measured on a real gate:
 #
@@ -101,9 +131,58 @@ plan_gate_assert_classifiable() {
   # `all(...)` asserts the property instead, so an error, a missing key, a wrong type and
   # a scalar `.change` all land on the abort side. The `-e` exit is then only consulted
   # for the assertion's own truth.
-  if ! jq -e 'all(.resource_changes[]; (.change | type) == "object" and (.change.actions | type) == "array" and (.change.actions | length) > 0)' \
+  #
+  # THE CONJUNCTS ARE ORDERED, AND THE ORDER IS LOAD-BEARING. jq's `and` short-circuits, so
+  # each conjunct is the type guard for the one after it:
+  #
+  #   (type == "object")               — the ELEMENT itself. Without it, `resource_changes:
+  #                                      [42]` makes `.change` RAISE, and this function then
+  #                                      aborts because jq errored rather than because the
+  #                                      assertion was false. Right verdict, wrong mechanism —
+  #                                      and this file's own header calls that out as the trap.
+  #   (.change | type) == "object"     — guards `.change.actions` against a scalar `.change`.
+  #   (.change.actions | type) == "array"
+  #   (.change.actions | length) > 0   — D5. `[]` IS an array, so nothing above rejects it,
+  #                                      and it is invisible to `any(...)` and to
+  #                                      `index("delete")` simultaneously. See the header.
+  #   all(.change.actions[]; type == "string")
+  #                                    — ADDITIVE, and it does NOT subsume `length > 0`:
+  #                                      jq's `all` over an EMPTY stream is vacuously TRUE, so
+  #                                      `[]` satisfies this conjunct and only `length > 0`
+  #                                      rejects it. Both are required. It closes the NESTED
+  #                                      case `[["delete"]]`, which is a non-empty array of
+  #                                      the right outer type whose `index("delete")` is null —
+  #                                      so a destroy hiding there is dropped by the destroy
+  #                                      select exactly like a missing-actions entry.
+  #                                      web-host-replace-gate.sh carried this inline while
+  #                                      this shared helper did not, so retrofitting that gate
+  #                                      onto the helper without it would have been a
+  #                                      REGRESSION (#6997). `.change.actions` is a closed enum
+  #                                      of strings in terraform, so no legitimate plan shape
+  #                                      is newly rejected.
+  if ! jq -e 'all(.resource_changes[]; (type == "object") and (.change | type) == "object" and (.change.actions | type) == "array" and (.change.actions | length) > 0 and all(.change.actions[]; type == "string"))' \
        < "$plan_json" >/dev/null 2>&1; then
-    offenders=$(jq -r '[.resource_changes[] | select(((.change | type) != "object") or ((.change.actions | type) != "array") or ((.change.actions | length) == 0)) | .address] | .[0:10] | join(", ")' < "$plan_json" 2>/dev/null)
+    # THE OFFENDER LIST MIRRORS THOSE GUARDS, for the same short-circuit reason and one
+    # more: it must never come back BLANK. An ABORT that names no offender leaves the
+    # operator's only diagnostic empty and sends them to read the gate source.
+    #
+    # `or` short-circuits too, so `(type != "object")` first is what keeps `.change` from
+    # raising on a non-object element. Measured before this guard existed: a
+    # `resource_changes: [42]` document aborted with the literal text
+    # "unclassifiable plan entry:  has no non-empty array .change.actions" — correct
+    # verdict, blank diagnostic.
+    #
+    # `.address? // "<entry with no address>"` covers the same element: a bare `.address`
+    # on a number raises, and `.address?` alone yields EMPTY, which silently drops the
+    # entry from the list and reproduces the blank. Naming it as unnameable is the point.
+    #
+    # (An earlier revision proposed a `?` on `.change.actions` here instead. Measured: it
+    # is a no-op on every shape — the `(.change | type) != "object"` disjunct already
+    # short-circuits ahead of it, and it does not help the non-object ELEMENT case either,
+    # because that raises one level up at `.change`. Recorded rather than silently
+    # substituted: shipping a guard whose stated justification is false is this file's own
+    # defect class.)
+    offenders=$(jq -r '[.resource_changes[] | select((type != "object") or ((.change | type) != "object") or ((.change.actions | type) != "array") or ((.change.actions | length) == 0) or (any(.change.actions[]; type != "string"))) | (.address? // "<entry with no address>")] | .[0:10] | join(", ")' < "$plan_json" 2>/dev/null)
     echo "${gate}: ABORT — unclassifiable plan entry: ${offenders} has no non-empty array .change.actions, so it cannot be classified as create/destroy/no-op. Fail-closed: an entry the gate cannot read is not evidence of a safe plan — a destroy hiding in an unreadable entry is exactly what this refuses to wave through."
     return 1
   fi

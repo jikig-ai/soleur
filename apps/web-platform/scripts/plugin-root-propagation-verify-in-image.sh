@@ -13,6 +13,12 @@
 # PATH shim inside the probe (no real bubblewrap needed), but socat must be a
 # real binary for the availability check to pass.
 #
+# /build is a FILTERED copy of /src, produced by scripts/lib/in-image-copy-src.sh
+# (node_modules and .terraform excluded — the next command, `npm ci`, rebuilds the
+# former and nothing here reads the latter; #7007). $APP_DIR must therefore carry
+# that file: the /src contract is "a directory carrying its own copy tool at
+# scripts/lib/in-image-copy-src.sh", not "any directory".
+#
 # Emits the probe verdict JSON on stdout (last line). Exit non-zero on
 # `does_not_propagate` (fail-closed) so the CI gate reddens on a regression;
 # `infra_error` (no creds / sandbox didn't engage) exits 0 with the verdict for
@@ -33,11 +39,12 @@ docker run --rm \
   -v "$PWD/$APP_DIR:/src:ro" \
   "$IMG" bash -c '
     set -e
-    apt-get update -qq >/dev/null 2>&1
+    apt-get update -qq >/dev/null
     # socat is required by the SDK sandbox availability check (bwrap is shimmed).
-    apt-get install -y -qq --no-install-recommends socat ca-certificates >/dev/null 2>&1
-    cp -r /src /build && cd /build
-    npm ci --no-audit --no-fund >/dev/null 2>&1
-    npm i -g bun@1.3.11 >/dev/null 2>&1
+    apt-get install -y -qq --no-install-recommends socat ca-certificates >/dev/null
+    bash /src/scripts/lib/in-image-copy-src.sh /src /build
+    cd /build
+    npm ci --no-audit --no-fund >/dev/null
+    npm i -g bun@1.3.11 >/dev/null
     bun scripts/plugin-root-sandbox-propagation-probe.mjs
   '

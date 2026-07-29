@@ -48,9 +48,17 @@ PROD_RE='(prod|production|deployed|live|app\.soleur\.ai|tenant-zero|customer)'
 # operator hand-adjudicates, not the #6813 false-positive class (which was every
 # ordinary `single-user incident` plan tripping on the threshold label alone).
 # shellcheck disable=SC2016  # the sed backticks are literal (inline-code strip), no expansion wanted
+#      Same class, second instance (#6665): "network-outage" is the NAME of the
+#      plan-skill Phase 1.4 gate, and every plan that documents it firing writes
+#      the phrase — so the bare `outage` alternative matched a gate name, not an
+#      event, on a CI-perf PR with no production incident. Gate NAMES are stripped
+#      below (not added to a negative lookahead) so the token cannot reach
+#      OUTAGE_RE at all; this is the same shape as the threshold-label strip.
+# shellcheck disable=SC2016  # the sed backticks are literal (inline-code strip), no expansion wanted
 haystack="$(cat \
   | awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' \
   | sed 's/`[^`]*`//g' \
+  | sed -E 's/[Nn]etwork-[Oo]utage//g' \
   | grep -vaiE '^brand_survival_threshold:|Brand-survival threshold:|If this lands broken|If this leaks|if this lands|would break|could break|Network-Outage Deep-Dive')"
 
 # Herestrings (no pipe) — a piped `grep -q` under pipefail can SIGPIPE on an

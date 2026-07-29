@@ -247,7 +247,16 @@ export interface CronDigestLivenessMarker {
     | "digest-absent-from-commit"
     | "undetermined-replay-resume"
     | "undetermined-contract-drift"
-    | "persistence-skipped";
+    | "persistence-skipped"
+    // --- Class B (change-conditional producers), #6750 ---------------------
+    // A Class B producer legitimately commits nothing on a run with no diff, so
+    // these two arms are GREEN. They are named distinctly rather than folded
+    // into "digest-committed" so Better Stack can tell "the artifact is proven
+    // landed" apart from "this producer had nothing to do" — the second is
+    // healthy but it is NOT evidence of liveness, and conflating them would
+    // rebuild the blind spot ADR-126 closed.
+    | "allowlisted-commit-no-artifact"
+    | "no-changes-change-conditional";
 }
 
 /** Emit one `SOLEUR_CRON_DIGEST_LIVENESS` WARN marker. NEVER throws. */

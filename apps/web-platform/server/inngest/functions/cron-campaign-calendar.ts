@@ -19,6 +19,7 @@ import {
   redactToken,
   mintInstallationToken,
   deferIfTier2Cron,
+  artifactCommittedSince,
   digestIssueExistsForDate,
   injectRunDate,
   postSentryHeartbeat,
@@ -38,6 +39,12 @@ import {
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { safeCommitAndPr } from "./_cron-safe-commit";
+import {
+  emitCronDedupSkip,
+  emitCronDigestLiveness,
+  emitCronPersistSkipped,
+  type CronDigestLivenessMarker,
+} from "@/server/cron-liveness-marker";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
@@ -116,9 +123,32 @@ Creating the calendar issues above (STEP 2 or the STEP 2.5 heartbeat) is REQUIRE
 
 // Persistence allowlist (#5111): verbatim from the prompt's former scoped
 // staging list (the two files the calendar refresh and review-date bump edit).
-const CAMPAIGN_CALENDAR_ALLOWED_PATHS = [
+// #6750 (ADR-126 amendment) — this producer's class, single-sourced against
+// scripts/cron-artifact-age.sh's `class` column by a parity test so the shell
+// detector and the handler's liveness table cannot drift apart silently.
+//
+// Read by cron-safe-commit-parity.test.ts as SOURCE TEXT rather than imported:
+// importing a handler pulls its whole static graph (server/inngest/client.ts)
+// into the test, which throws `INNGEST_SIGNING_KEY missing at startup` at module
+// eval under CI's env. Exported so the declaration is an explicit part of the
+// module contract rather than an unread local.
+export const PRODUCER_CLASS = "A";
+
+// Single-sourced so the freshness probe below cannot drift from the message
+// safeCommitAndPr actually writes — and so both agree with the detector's
+// anchor_regex column.
+const COMMIT_MESSAGE = "ci: update campaign calendar and content-strategy review";
+
+// The ONE file the prompt mandates on every run (STEP 3: bump content-strategy's
+// `last_updated`). Named separately from the allowlist because the liveness
+// predicate must anchor on the MANDATED artifact, not on allowlist membership —
+// see the predicate below for why those are not the same test.
+export const CAMPAIGN_CALENDAR_MANDATED_ARTIFACT =
+  "knowledge-base/marketing/content-strategy.md";
+
+export const CAMPAIGN_CALENDAR_ALLOWED_PATHS = [
   "knowledge-base/marketing/campaign-calendar.md",
-  "knowledge-base/marketing/content-strategy.md",
+  CAMPAIGN_CALENDAR_MANDATED_ARTIFACT,
 ] as const;
 
 // Spawn-env allowlist (NOT a denylist). The keys below are the COMPLETE set
@@ -199,7 +229,44 @@ export async function cronCampaignCalendarHandler({
       cronName: "cron-campaign-calendar",
     }),
   );
+  // #6750 (ADR-126 amendment), P0 — the dedup early-return used to post GREEN and
+  // return on ISSUE-PRESENCE ALONE, which is a GREEN-with-no-artifact path by
+  // construction. Observed shape: run 1 files a genuine issue but fails to commit;
+  // run 2 dedups on that issue and posts GREEN with nothing landed — the exact
+  // 2026-07-14 -> 07-19 state. It SURVIVES the captured-return and livenessOk
+  // fixes below unless closed HERE, because this branch returns BEFORE
+  // finalizeOutputAwareHeartbeat ever runs. So the short-circuit now requires BOTH
+  // the issue AND the artifact on the default branch.
+  const artifactCommitted = digestAlreadyExists
+    ? await step.run("dedup-digest-committed-check", async () =>
+        // FRESHNESS probe, not existence: this producer overwrites a permanent
+        // file/directory, so a contents read would return 200 forever and the
+        // "hardened" guard could never fail — reproducing the always-green defect
+        // inside its own fix. Asks instead whether THIS cron's commit landed on
+        // main today, the same signal scripts/cron-artifact-age.sh measures.
+        artifactCommittedSince({
+          // Date-bound: this is the PR TITLE safeCommitAndPr builds, which the
+          // squash merge carries into the commit subject. Anchoring on the
+          // message alone would match a PREVIOUS day's artifact that merged
+          // after midnight, and dedup GREEN on it.
+          anchorPrefix: `${COMMIT_MESSAGE} ${runStartedAt.slice(0, 10)}`,
+          sinceIso: `${runStartedAt.slice(0, 10)}T00:00:00.000Z`,
+          cronName: "cron-campaign-calendar",
+        }),
+      )
+    : false;
   if (digestAlreadyExists) {
+    // Emitted on BOTH outcomes — the healthy dedup-and-return case AND the
+    // issue-without-artifact recovery case. An emit on only one arm could not
+    // distinguish them. Placement is load-bearing: OUTSIDE step.run and BEFORE
+    // the gate below.
+    emitCronDedupSkip({
+      cron: "cron-campaign-calendar",
+      date: runStartedAt.slice(0, 10),
+      digest_committed: artifactCommitted ? 1 : 0,
+    });
+  }
+  if (digestAlreadyExists && artifactCommitted) {
     await step.run("sentry-heartbeat", async () => {
       await postSentryHeartbeat({
         ok: true,
@@ -262,6 +329,21 @@ export async function cronCampaignCalendarHandler({
     // class). spawnResult is hoisted so the silence-hole audit issue can read it
     // even when a later step threw.
     let heartbeatOk = false;
+    // #6750 — the LIVENESS signal, split from heartbeatOk by ADDITION.
+    // heartbeatOk is asserted as LITERAL SOURCE TEXT by
+    // cron-safe-commit-parity.test.ts across all 8 cohort files, so it keeps
+    // both its name and its role as the persistence gate; renaming it would
+    // break a cohort invariant to fix a colour bug.
+    //
+    // heartbeatOk answers "did a labelled issue land". livenessOk answers "did
+    // the artifact the operator actually consumes get COMMITTED".
+    //
+    // Initialised FALSE and set true ONLY by an observed positive. A signal that
+    // votes GREEN on an UNOBSERVED artifact is precisely the defect ADR-126
+    // exists to close, so fail-closed is the only defensible default. The retry
+    // consequence is handled by `retryEligible: false` at the finalize call
+    // rather than by weakening the signal.
+    let livenessOk = false;
     let threw = false;
     let spawnResult: SpawnResult | null = null;
     try {
@@ -336,18 +418,98 @@ export async function cronCampaignCalendarHandler({
       //     the reportSilentFallback above. Guard aborts / persistence failures
       //     self-report inside the helper (Sentry + issue comment).
       if (heartbeatOk && !spawnResult.abortedByTimeout) {
-        await step.run("safe-commit-pr", async () =>
+        const commitResult = await step.run("safe-commit-pr", async () =>
           safeCommitAndPr({
             spawnCwd: spawnCwd!,
             installationToken,
             cronName: "cron-campaign-calendar",
-            commitMessage: "ci: update campaign calendar and content-strategy review",
+            commitMessage: COMMIT_MESSAGE,
             allowedPaths: CAMPAIGN_CALENDAR_ALLOWED_PATHS,
             runStartedAt,
             scheduledIssueLabel: SENTRY_MONITOR_SLUG,
             logger,
           }),
         );
+
+        // The liveness table (Class A — deterministic producer). `livenessOk` is
+        // FALSE until proven otherwise, so only the two arms below can turn the
+        // run GREEN; "no-changes", "failed", committed-without-the-artifact, and
+        // every throw that never reaches here all fall through still RED.
+        let livenessReason: CronDigestLivenessMarker["reason"] =
+          "persistence-not-committed";
+        if (commitResult.status === "committed") {
+          if (commitResult.paths?.includes(CAMPAIGN_CALENDAR_MANDATED_ARTIFACT)) {
+            // THE POSITIVE: the file STEP 3 mandates on EVERY run.
+            //
+            // Anchored on that one file, NOT on allowlist membership. The
+            // membership form is vacuous in production: safeCommitAndPr already
+            // filters staged entries through
+            // `allowedPaths.some((p) => e.path.startsWith(p))`
+            // (_cron-safe-commit.ts, anchor `allowedPaths.some`), so every member
+            // of `paths` is allowlisted by construction and the test would reduce
+            // to `paths.length > 0` — the exact vacuity R12 identified for Class
+            // B, but reported under Class A's `digest-committed`, which claims the
+            // artifact was PROVED. A run that refreshes only campaign-calendar.md
+            // and never touches content-strategy.md would have posted GREEN.
+            // `.some` is MEMBERSHIP, not position — the agent may land other
+            // allowlisted files beside the artifact, in any order.
+            livenessOk = true;
+            livenessReason = "digest-committed";
+          } else if (commitResult.paths === undefined) {
+            // NOT DETERMINED, never "nothing committed". Only the replay-resume
+            // branch has a legitimate reason to leave it undetermined — it is the
+            // one path that skips the allowlist scan. Any OTHER undetermined shape
+            // means the result contract drifted, and voting GREEN on an unknown is
+            // the failure this closes, so it stays RED.
+            livenessOk = commitResult.resumed === true;
+            livenessReason = commitResult.resumed
+              ? "undetermined-replay-resume"
+              : "undetermined-contract-drift";
+          } else {
+            // Committed something, but not the consumed artifact → stays RED.
+            // This is the flagship new RED, and it is UNDIAGNOSABLE without the
+            // marker below: safeCommitAndPr SUCCEEDED, so no "PR withheld" comment
+            // fires and SOLEUR_CRON_PERSIST_RESULT already reported
+            // status:"committed", which reads healthy.
+            livenessReason = "digest-absent-from-commit";
+          }
+        }
+        // The VERDICT plus the arm that decided it. Without this the RED arms are
+        // indistinguishable in Better Stack.
+        emitCronDigestLiveness({
+          cron: "cron-campaign-calendar",
+          run_id: runId ?? "unknown",
+          attempt: attempt ?? 0,
+          ok: livenessOk ? 1 : 0,
+          reason: livenessReason,
+        });
+      } else {
+        // This gate had NO else, so a RED or timed-out run skipped persistence
+        // leaving no trace on any operator-reachable surface. abortedByTimeout is
+        // checked first because a timed-out run is usually also red, and the
+        // timeout is the more specific cause.
+        emitCronPersistSkipped({
+          cron: "cron-campaign-calendar",
+          reason: spawnResult.abortedByTimeout ? "timeout" : "red",
+        });
+        // Nothing was persisted. The case that matters is a timed-out run whose
+        // ISSUE landed, which was GREEN-with-no-artifact before #6750.
+        //
+        // This assignment is PROVABLY REDUNDANT and is kept only as an explicit
+        // statement of intent: livenessOk is initialised false and is set true
+        // ONLY inside the `if (heartbeatOk && !abortedByTimeout)` branch, which
+        // is mutually exclusive with this else. A mutation battery confirms it —
+        // deleting this line does not turn any test red. It is NOT a guard, and
+        // it must not be read as one; the falsification that actually carries
+        // this arm is the initialiser.
+        livenessOk = false;
+        emitCronDigestLiveness({
+          cron: "cron-campaign-calendar",
+          run_id: runId ?? "unknown",
+          attempt: attempt ?? 0,
+          ok: 0,
+          reason: "persistence-skipped",
+        });
       }
     } catch (err) {
       if (err instanceof DeployInProgressError) throw err;
@@ -363,6 +525,23 @@ export async function cronCampaignCalendarHandler({
         extra: { fn: "cron-campaign-calendar", attempt: attempt ?? 0, producedOutput: heartbeatOk },
       });
     }
+
+    // #6750 — the liveness signal APPLIED. Placed HERE, after the inner
+    // try/catch closes, for two reasons:
+    // (1) AFTER persistence: heartbeatOk also gates safeCommitAndPr, so
+    //     lowering it any earlier would discard the very artifact whose
+    //     absence is being reported.
+    // (2) OUTSIDE the try: as the try's last statement it would be skipped
+    //     whenever a trailing step threw — exactly the compound-failure run.
+    //
+    // Reachability note for the `threw && !heartbeatOk → retry` hazard: it IS
+    // reachable. A throw out of safe-commit-pr skips the liveness table
+    // entirely, so livenessOk keeps its `false` initialiser and this line
+    // lowers heartbeatOk on a run that also threw. (Scenario 10 exercises
+    // exactly that and asserts {ok:false}.) What makes it safe is NOT
+    // unreachability — it is `retryEligible: false` at the finalize call, which
+    // turns that combination into one honest terminal RED instead of a replay.
+    if (!livenessOk) heartbeatOk = false;
 
     // --- Single authoritative terminal heartbeat (memoization-safe,
     //     final-attempt gated). On a genuine non-final failure the helper skips
@@ -380,6 +559,21 @@ export async function cronCampaignCalendarHandler({
       sentryMonitorSlug: SENTRY_MONITOR_SLUG,
       cronName: "cron-campaign-calendar",
       logger,
+      // #6750 (ADR-126 amendment) — a replay CANNOT recover a failure inside the
+      // guarded body: `setup-workspace` is memoized inside step.run, so an Inngest
+      // replay reads back an ephemeralRoot the `finally` below already deleted, and
+      // the re-spawned agent burns real Anthropic spend against a path that no
+      // longer exists. One honest terminal RED beats a retry that cannot succeed.
+      // Scoped precisely: throws BEFORE the try (token mint, setup-workspace
+      // itself) are unaffected and still retry into a fresh workspace, and
+      // DeployInProgressError still rethrows bare.
+      //
+      // This is a PREREQUISITE for consuming safeCommitAndPr's return value, not a
+      // peer of it: that consumption lowers heartbeatOk, which on a run that also
+      // threw would otherwise flip `failed` true and buy exactly the useless replay
+      // above — one that additionally comments a misleading "PR withheld: safe-commit
+      // failed at stage `workspace-lost`" onto the operator's own issue.
+      retryEligible: false,
       onBeforeHeartbeat: heartbeatOk
         ? undefined
         : async () => {
