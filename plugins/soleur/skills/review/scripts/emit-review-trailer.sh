@@ -49,8 +49,45 @@
 # warranted. Adding the field later would be the expensive part; enforcing a
 # field already present is cheap.
 #
+# WHAT `Reviewed-Coverage:` ADDS, AND WHY IT IS NOT A CONTRADICTION OF ADR-127
+#
+# ADR-127 settled ONE axis: the trailer does not attest that the merged tree is
+# the reviewed tree, and content-binding was rejected. `Reviewed-Coverage:`
+# records a DIFFERENT axis — HOW MUCH review ran — and leaves that decision
+# untouched.
+#
+# The gap it closes is measured, not hypothetical. review/SKILL.md's Rate Limit
+# Fallback gate reads "if ANY agent returned substantive output: proceed
+# normally with available results", which is the right call and is silent about
+# WHICH agents did not. So a 10-agent review where every agent concurred and a
+# review where 7 of 10 died on `529 Overloaded` — losing security-sentinel,
+# test-design-reviewer and architecture-strategist — emit a BYTE-IDENTICAL
+# trailer. Downstream, `/ship` reads that boolean and merges. Observed
+# 2026-07-29 on PR #7066: 7 of 9 agents terminated early on 529s, and nothing
+# in the repo would have recorded it.
+#
+# The worse shape is a review that could not spawn agents AT ALL — a harness
+# constraint, a headless run with no agent surface. The Rate Limit Fallback gate
+# cannot see that state, because it is defined over agents that COMPLETED and
+# nothing ever completes. The reviewer then either does an inline pass (correct)
+# or skips review (silent), and both emit the full-strength trailer.
+#
+# This field is emitted with NO consumer, by exactly the argument ADR-127 used
+# for `Reviewed-Commit:`: adding a field once the key is in main's permanent
+# history and read by three consumers is the expensive part. Recording it now is
+# cheap; a future gate that wants to weight a merge by review strength — or an
+# operator asking "was this PR actually reviewed, or reviewed-shaped?" — needs
+# the data to already be there.
+#
+# It is NOT a quality score. Ten agents returning nothing useful outranks two
+# that found a P1 on every axis this field measures. It answers one narrow
+# question: how many of the intended reviewers actually ran.
+#
 # Usage:
 #   emit-review-trailer.sh [--findings <n>] [--summary <text>]
+#                          [--agents-ran <n>] [--agents-expected <n>]
+#                          [--agents-missing <comma-separated-names>]
+#                          [--mode full|degraded|inline-fallback]
 #
 # Exit codes:
 #   0  trailer committed and verified parseable
@@ -75,17 +112,80 @@ EOF
 }
 
 TRAILER_KEY="Reviewed-By-Soleur"
+COVERAGE_KEY="Reviewed-Coverage"
 FINDINGS=""
 SUMMARY=""
+AGENTS_RAN=""
+AGENTS_EXPECTED=""
+AGENTS_MISSING=""
+MODE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --findings) FINDINGS="${2:?--findings needs a value}"; shift 2 ;;
     --summary)  SUMMARY="${2:?--summary needs a value}";  shift 2 ;;
+    --agents-ran)      AGENTS_RAN="${2:?--agents-ran needs a value}"; shift 2 ;;
+    --agents-expected) AGENTS_EXPECTED="${2:?--agents-expected needs a value}"; shift 2 ;;
+    --agents-missing)  AGENTS_MISSING="${2:?--agents-missing needs a value}"; shift 2 ;;
+    --mode)            MODE="${2:?--mode needs a value}"; shift 2 ;;
     -h|--help)  usage; exit 0 ;;
     *) echo "emit-review-trailer: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
+
+# Validate the coverage inputs BEFORE committing anything. A malformed count
+# would land in main's permanent history as an unparseable coverage claim, which
+# is the same "looks like evidence to a human, invisible to a consumer" defect
+# the VERIFY block at the bottom exists to prevent — just on a different field.
+for _pair in "AGENTS_RAN:$AGENTS_RAN" "AGENTS_EXPECTED:$AGENTS_EXPECTED"; do
+  _name="${_pair%%:*}"; _val="${_pair#*:}"
+  if [[ -n "$_val" && ! "$_val" =~ ^[0-9]+$ ]]; then
+    echo "emit-review-trailer: --${_name,,} must be a non-negative integer (got '${_val}')" >&2
+    exit 2
+  fi
+done
+AGENTS_RAN="${AGENTS_RAN//_/-}"  # no-op for digits; guards a stray underscore in a hand-typed value
+if [[ -n "$MODE" && ! "$MODE" =~ ^(full|degraded|inline-fallback)$ ]]; then
+  echo "emit-review-trailer: --mode must be one of full|degraded|inline-fallback (got '${MODE}')" >&2
+  exit 2
+fi
+# `ran > expected` is a contradiction, and silently accepting it would let the
+# field overclaim in exactly the direction that matters.
+if [[ -n "$AGENTS_RAN" && -n "$AGENTS_EXPECTED" && "$AGENTS_RAN" -gt "$AGENTS_EXPECTED" ]]; then
+  echo "emit-review-trailer: --agents-ran ($AGENTS_RAN) exceeds --agents-expected ($AGENTS_EXPECTED)" >&2
+  exit 2
+fi
+
+# DERIVE the mode rather than trusting the caller's label where the counts
+# already answer it. A caller that passes `--mode full` alongside `--agents-ran 2
+# --agents-expected 10` is either confused or overclaiming; the counts win.
+if [[ -n "$AGENTS_RAN" && -n "$AGENTS_EXPECTED" ]]; then
+  if [[ "$AGENTS_RAN" -eq 0 ]]; then
+    MODE="inline-fallback"
+  elif [[ "$AGENTS_RAN" -lt "$AGENTS_EXPECTED" ]]; then
+    MODE="degraded"
+  else
+    MODE="full"
+  fi
+fi
+
+# UNKNOWN is the honest default, and it is deliberately not "full". A caller that
+# does not pass the flags has told us nothing about coverage, and defaulting an
+# absent measurement to the strongest value is how a field like this becomes
+# decorative — every legacy call site would silently read as a 10-agent review.
+COVERAGE_VALUE="unknown"
+if [[ -n "$AGENTS_RAN" && -n "$AGENTS_EXPECTED" ]]; then
+  COVERAGE_VALUE="${MODE} ${AGENTS_RAN}/${AGENTS_EXPECTED} agents"
+  if [[ -n "$AGENTS_MISSING" ]]; then
+    # Commas separate names; keep them, they cannot break trailer parsing (only a
+    # newline or a non-`Key: value` line can).
+    COVERAGE_VALUE="${COVERAGE_VALUE} (missing: ${AGENTS_MISSING})"
+  fi
+elif [[ -n "$MODE" ]]; then
+  COVERAGE_VALUE="$MODE"
+fi
+# Newlines would split the final paragraph and void every trailer below this one.
+COVERAGE_VALUE="${COVERAGE_VALUE//$'\n'/ }"
 
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
   echo "emit-review-trailer: not a git repository" >&2
@@ -156,11 +256,12 @@ fi
 # later, once the key is in main's permanent history and read by three
 # consumers, is the expensive part; enforcing a field already present is cheap.
 REVIEWED_SHA=$(git rev-parse HEAD)
-COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: soleur:review\n%s: %s\n' \
+COMMIT_MSG=$(printf '%s\n\n%s\n\n%s: soleur:review\n%s: %s\n%s: %s\n' \
   "review: ${SUMMARY}" \
-  "Records that soleur:review ran on this branch (see issue 6724). Empty by design: a review that finds nothing still needs to prove it ran. This is a boolean, not an attestation that the merged tree is the reviewed tree — see ADR-127." \
+  "Records that soleur:review ran on this branch (see issue 6724). Empty by design: a review that finds nothing still needs to prove it ran. This is a boolean, not an attestation that the merged tree is the reviewed tree — see ADR-127. Reviewed-Coverage records HOW MUCH review ran (a separate axis from ADR-127's tree-binding decision); 'unknown' means the caller did not measure, never that coverage was full." \
   "$TRAILER_KEY" \
-  "Reviewed-Commit" "$REVIEWED_SHA")
+  "Reviewed-Commit" "$REVIEWED_SHA" \
+  "$COVERAGE_KEY" "$COVERAGE_VALUE")
 
 # `--allow-empty` does NOT mean "empty" — it commits the INDEX, so anything
 # staged is silently absorbed into a commit whose subject reads
@@ -193,4 +294,23 @@ if [[ -z "$PARSED" ]]; then
   exit 1
 fi
 
+# Verify the coverage key SEPARATELY. `Reviewed-By-Soleur` parsing does not imply
+# its siblings parse: git needs the whole final paragraph to be `Key: value`
+# lines, but a value containing a newline splits the block and voids only the
+# keys BELOW the split — which is exactly where this one sits. Checking the first
+# key alone would report success while the field this change exists to add is
+# silently absent.
+PARSED_COVERAGE=$(git log -1 --format='%(trailers:key='"$COVERAGE_KEY"',valueonly)' | tr -d '[:space:]')
+if [[ -z "$PARSED_COVERAGE" ]]; then
+  echo "emit-review-trailer: FAILED — commit landed but '$COVERAGE_KEY' does not parse." >&2
+  echo "  It is the LAST trailer, so it is the first casualty of a split final paragraph." >&2
+  echo "  Inspect with: git interpret-trailers --parse < <(git log -1 --format=%B)" >&2
+  exit 1
+fi
+
 echo "emit-review-trailer: emitted $TRAILER_KEY on '$BRANCH' ($(git rev-parse --short HEAD))"
+echo "emit-review-trailer: $COVERAGE_KEY: $COVERAGE_VALUE"
+if [[ "$COVERAGE_VALUE" == "unknown" ]]; then
+  echo "emit-review-trailer: NOTE — coverage is 'unknown' because no --agents-ran/--agents-expected was passed." >&2
+  echo "  This is recorded honestly, but it means nothing downstream can tell a full review from a degraded one." >&2
+fi
