@@ -235,9 +235,16 @@ for _p in "${_r2_payloads[@]}"; do printf '#!/usr/bin/env bash\n# %s\ntrue\n' "$
 _r2_hash() {  # $1 = dir holding ci.yml + modules/git-data-userdata/main.tf + payloads
   local d="$1" md="$1/modules/git-data-userdata" ins=() f
   ins+=("$d/ci.yml")
+  # THE MODULE .tf IS AN INPUT (#7066 review, P1). It holds the strip expression applied to
+  # every payload, so omitting it was a live fail-open: relaxing that expression changed what
+  # boots and left the hash BYTE-IDENTICAL on the live tree. Mirrors the gate's own set, and
+  # shares its extraction rule so the two cannot drift.
+  ins+=("$md/main.tf")
   while IFS= read -r f; do
     [[ -n "$f" && -r "$md/$f" ]] && ins+=("$md/$f")
-  done < <(sed -nE 's/^[[:space:]]*[a-z_]+[[:space:]]*=[[:space:]]*(replace\()?file\("\$\{path\.module\}\/([^"]+)"\).*/\2/p' "$md/main.tf" | sort -u)
+  done < <(sed 's/^[[:space:]]*#.*$//' "$md/main.tf" \
+           | grep -oE '(^|[^A-Za-z])file\("\$\{path\.module\}/[^"]+"' \
+           | sed -E 's/.*file\("\$\{path\.module\}\///; s/"$//' | sort -u)
   { for f in "${ins[@]}"; do
       printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$(basename "$f")"
     done; } | LC_ALL=C sort | sha256sum | cut -d' ' -f1
@@ -260,10 +267,12 @@ r2check() {
 # precondition of nine fixtures, not a property of any of them.
 R2_URL="https://github.com/jikig-ai/soleur/actions/runs/17250000001"
 
-r2_evidence() {  # $1=dest $2=verdict $3=url $4=sha [$5=divergence]
-  printf 'RUNG2_BOOT_REHEARSAL=%s\nRUNG2_EVIDENCE_URL=%s\nRUNG2_TEMPLATE_SHA256=%s\n' \
-    "$2" "$3" "$4" > "$1"
-  [[ -n "${5:-}" ]] && printf 'RUNG2_VAR_DIVERGENCE=%s\n' "$5" >> "$1"
+r2_evidence() {  # $1=dest $2=verdict $3=url $4=sha [$5=divergence, default "none"]
+  # Defaults to the EXPLICIT `none` rather than omitting the key: an absent key is now
+  # refused, because omitting it left the allowlist loop iterating zero times and the CLOSED
+  # allowlist refusing nothing (#7066 review). "Nothing diverged" must be declared.
+  printf 'RUNG2_BOOT_REHEARSAL=%s\nRUNG2_EVIDENCE_URL=%s\nRUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=%s\n' \
+    "$2" "$3" "$4" "${5:-none}" > "$1"
   return 0
 }
 
@@ -274,9 +283,12 @@ r2check "absent evidence => HOLD" 1 "no rung-2 boot evidence" "$R2/ci.yml" "$R2/
 
 # Prose must not disengage a mechanical hold — the lesson the sentinel gate learned when a
 # trailing comment flipped it from HOLD to RELEASED.
-{ printf '# RUNG2_BOOT_REHEARSAL=PASS\n# RUNG2_EVIDENCE_URL=https://x/1\n'
-  printf '# RUNG2_TEMPLATE_SHA256=%s\n' "$R2_SHA"; } > "$R2/comment.env"
-r2check "a fully commented-out evidence file => HOLD" 1 "does not assert" "$R2/ci.yml" "$R2/comment.env"
+{ printf '# RUNG2_BOOT_REHEARSAL=PASS\n# RUNG2_EVIDENCE_URL=%s\n' "$R2_URL"
+  printf '# RUNG2_TEMPLATE_SHA256=%s\n# RUNG2_VAR_DIVERGENCE=none\n' "$R2_SHA"; } > "$R2/comment.env"
+# The needle moved from "does not assert" to the exactly-once refusal: with every line
+# commented out the key-cardinality check now fires FIRST (0 occurrences of each key). Still
+# a HOLD, still for the right reason — prose does not disengage a mechanical hold.
+r2check "a fully commented-out evidence file => HOLD" 1 "exactly 1 is required" "$R2/ci.yml" "$R2/comment.env"
 
 r2_evidence "$R2/fail.env" FAIL "$R2_URL" "$R2_SHA"
 r2check "evidence claiming FAIL => HOLD" 1 "does not assert" "$R2/ci.yml" "$R2/fail.env"
@@ -387,9 +399,50 @@ r2_evidence "$R2/div-unknown.env" PASS "https://github.com/jikig-ai/soleur/actio
   "some_new_var"
 r2check "divergence on an UNKNOWN var => HOLD" 1 "some_new_var" "$R2/ci.yml" "$R2/div-unknown.env"
 
-# ABSENT is permitted and means "nothing diverged". It must not become a silent bypass that a
-# rehearsal can take by simply omitting the line — so the RELEASE message says which it was.
-r2check "evidence with NO divergence line => RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/ok.env"
+# ── (#7066 review, P1) OMISSION IS NOT A BYPASS ───────────────────────────────────
+#
+# Measured fail-open: with RUNG2_VAR_DIVERGENCE omitted, `divergence` was empty, the
+# allowlist loop iterated zero times, and the CLOSED allowlist refused nothing — a
+# hand-authored file evaded R6 entirely by saying LESS.
+{ printf 'RUNG2_BOOT_REHEARSAL=PASS\nRUNG2_EVIDENCE_URL=%s\n' "$R2_URL"
+  printf 'RUNG2_TEMPLATE_SHA256=%s\n' "$R2_SHA"; } > "$R2/nodivkey.env"
+r2check "evidence with NO divergence line => HOLD" 1 "exactly 1 is required" \
+  "$R2/ci.yml" "$R2/nodivkey.env"
+
+# The explicit declaration IS accepted — otherwise the fix above would make a genuinely-clean
+# rehearsal unreleasable, which is a different bug.
+r2check "explicit RUNG2_VAR_DIVERGENCE=none => RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/ok.env"
+
+# ── (#7066 review, P1) DUPLICATE KEYS ARE REFUSED ─────────────────────────────────
+#
+# The PASS assertion was `grep -qE` (matches ANY line) while every other key used `head -1`,
+# so a file carrying BOTH PASS and FAIL RELEASED — the gate read first-wins while dotenv
+# semantics are last-wins, and a merge or append produced a file whose meaning differed
+# between the gate and every human reading it.
+{ printf 'RUNG2_BOOT_REHEARSAL=PASS\nRUNG2_BOOT_REHEARSAL=FAIL\nRUNG2_EVIDENCE_URL=%s\n' "$R2_URL"
+  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=none\n' "$R2_SHA"; } > "$R2/duppass.env"
+r2check "PASS alongside a second FAIL line => HOLD" 1 "exactly 1 is required" \
+  "$R2/ci.yml" "$R2/duppass.env"
+
+# A duplicated divergence key hid a real declaration behind `head -1` taking the first
+# (empty) line, so the second line's doppler_arch never reached the allowlist check.
+{ printf 'RUNG2_BOOT_REHEARSAL=PASS\nRUNG2_EVIDENCE_URL=%s\n' "$R2_URL"
+  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=\nRUNG2_VAR_DIVERGENCE=doppler_arch\n' "$R2_SHA"; } > "$R2/dupdiv.env"
+r2check "a duplicated divergence key => HOLD" 1 "exactly 1 is required" \
+  "$R2/ci.yml" "$R2/dupdiv.env"
+
+# ── (#7066 review, P1) THE STRIP EXPRESSION IS HASH-BOUND ─────────────────────────
+#
+# The regression guard for this PR's sharpest finding. The module .tf holds
+# `local.git_data_rationale_strip`, the transform applied to all nine payloads. Before the
+# fix, relaxing it left the hash BYTE-IDENTICAL while the render changed materially — the
+# live-tree mutation strips the shebang from three forced-command wrappers, which then
+# silently fall back to dash. The suite had NO arm mutating the module .tf, which is exactly
+# why the fail-open shipped.
+R2ME="$TMP/r2modedit"; cp -r "$R2" "$R2ME"
+printf '\n# a later edit to the RENDER TRANSFORM, not to any payload\n' >> "$R2ME/modules/git-data-userdata/main.tf"
+r2check "evidence goes stale when the RENDER MODULE is edited" 1 "STALE EVIDENCE" \
+  "$R2ME/ci.yml" "$R2/ok.env"
 r2check "the RELEASE reports the divergence set it accepted" 0 "divergence" \
   "$R2/ci.yml" "$R2/div-ok.env"
 
@@ -544,11 +597,11 @@ r2check "trailing comments on valid evidence => still RELEASED" 0 "RELEASED" "$R
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
 # rather than masquerading as an empty suite.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 50 ]]; then
+if [[ "$_ran" -lt 54 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 50. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 54. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 50)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 54)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"

@@ -60,6 +60,15 @@ env:
   # PRODUCTION host. The same literal is pinned in the orphan sweep in
   # scheduled-terraform-drift.yml and in the rehearsal root's locals.
   REHEARSAL_PREFIX: soleur-git-data-rehearsal-
+  # THE DECLARED DIVERGENCE SET — what rung2-rehearsal/rehearsal.tf's `module` block binds to
+  # rehearsal-specific values. The evidence hash binds the template, the render module and the
+  # nine payloads; it does NOT bind templatefile ARGUMENTS, so this is the axis that has to be
+  # declared rather than derived. The gate refuses any entry outside its identity-only allowlist.
+  #
+  # It is declared HERE, by the dispatcher, and not computed by the capture script: that script
+  # reads Better Stack, not terraform state, so it cannot know. It used to echo the gate's own
+  # allowlist back out, which made the check allowlist-subset-of-allowlist and refused nothing.
+  REHEARSAL_DIVERGENCE: host_name,git_data_volume_id,git_data_luks_volume_id,doppler_token,doppler_config_name,git_transport_pubkey,git_provision_pubkey,git_remove_pubkey
 
 jobs:
   rehearse:
@@ -269,6 +278,7 @@ jobs:
               bash scripts/followthroughs/git-data-rung2-evidence-capture.sh \
                 --host-name "$REHEARSAL_HOST" \
                 --evidence-url "$url" \
+                --divergence "$REHEARSAL_DIVERGENCE" \
                 --out /tmp/rung2/git-data-rung2-boot-evidence.env
             rc=$?
             # 0 PASS and 1 FAIL are both TERMINAL. Only 2 (nothing known yet) is retried —

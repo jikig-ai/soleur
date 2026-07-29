@@ -51,7 +51,12 @@ variable "betterstack_logs_token" {
 variable "location" {
   description = "Hetzner location. MUST match prod's — the Doppler CLI download and the volume shapes are the same everywhere, but a rehearsal in another DC is not rehearsing prod's capacity reality (#6570 made a host unbornable on exactly that axis)."
   type        = string
-  default     = "fsn1"
+  # hel1, matching production's `variable "location"` default. This shipped as "fsn1"
+  # while the description above said "MUST match prod's" — caught in review. Nothing
+  # compared them, so the rehearsal would have booted in the wrong datacenter and the
+  # evidence would have been silent about it. git-data-rung2-rehearsal.test.sh now pins
+  # the two defaults against each other by shape.
+  default     = "hel1"
 }
 
 variable "git_data_server_type" {

@@ -207,6 +207,39 @@ else
     "rehearsal='${reh_ingest}' prod='${prod_ingest}'"
 fi
 
+# ── 7b. MUST-MATCH DEFAULTS ARE COMPARED, NOT JUST DESCRIBED ───────────────────────
+#
+# Caught in review: `location` carried the description "MUST match prod's" and shipped as
+# `fsn1` against production's `hel1`. Nothing compared them, so the rehearsal would have booted
+# in the wrong datacenter and the evidence would have been silent about it. A description is
+# not a guard.
+#
+# Both sides extracted BY SHAPE from their own variables.tf — a hardcoded expectation here
+# would pass while production moved.
+_var_default() {  # $1=file $2=variable name
+  awk -v v="variable \"$2\"" '
+    index($0,v){i=1; next}
+    i && /^[[:space:]]*default[[:space:]]*=/{gsub(/[",]/,""); print $NF; exit}
+    i && /^}/{exit}' "$1"
+}
+_mm_drift=""; _mm_checked=0
+for _v in location git_data_server_type; do
+  _rv="$(_var_default "$REH/variables.tf" "$_v")"
+  _pv="$(_var_default "$DIR/variables.tf" "$_v")"
+  [[ -z "$_rv" || -z "$_pv" ]] && continue
+  _mm_checked=$((_mm_checked + 1))
+  [[ "$_rv" != "$_pv" ]] && _mm_drift="${_mm_drift} ${_v}(rehearsal=${_rv},prod=${_pv})"
+done
+if [[ "$_mm_checked" -lt 2 ]]; then
+  fail "MUST-MATCH default extraction found only ${_mm_checked} of 2 variables" \
+    "the awk extraction drifted; an empty comparison is vacuous"
+elif [[ -z "$_mm_drift" ]]; then
+  pass "location and git_data_server_type defaults match production byte-for-byte"
+else
+  fail "a MUST-MATCH default DIVERGED from production:${_mm_drift}" \
+    "the rehearsal would boot on different hardware/DC than the host it attests for"
+fi
+
 # ── 8. THE WORKFLOW CONTRACT ───────────────────────────────────────────────────────
 if command -v python3 >/dev/null 2>&1; then
   _wf_out="$(python3 - "$WF" <<'PY'

@@ -72,6 +72,7 @@ CLOUD_INIT="${REPO_ROOT}/apps/web-platform/infra/cloud-init-git-data.yml"
 OUT=""
 WINDOW="30 DAY"
 VERIFY_ONLY=0
+DIVERGENCE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -80,6 +81,7 @@ while [[ $# -gt 0 ]]; do
     --cloud-init)   CLOUD_INIT="${2:-}"; shift 2 ;;
     --out)          OUT="${2:-}"; shift 2 ;;
     --window)       WINDOW="${2:-}"; shift 2 ;;
+    --divergence)   DIVERGENCE="${2:?--divergence needs a value}"; shift 2 ;;
     --verify-only)  VERIFY_ONLY=1; shift ;;
     --) shift ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
@@ -106,6 +108,19 @@ fi
 # already cost a real host and ~8 minutes of wall clock — the expensive way to learn it.
 if [[ ! "$EVIDENCE_URL" =~ ^https://github\.com/jikig-ai/soleur/actions/runs/[0-9]+ ]]; then
   echo "refusing: --evidence-url must be an Actions run URL for this repository (https://github.com/jikig-ai/soleur/actions/runs/<id>), because git_data_rung2_rehearsal_gate refuses anything else. Got: ${EVIDENCE_URL}" >&2
+  exit 64
+fi
+
+# `--window` REACHES THE SAME `WHERE` CLAUSE, so it gets the same treatment as --host-name.
+#
+# Caught in review: --host-name was validated precisely BECAUSE it is interpolated into the
+# Better Stack SQL, and then `WINDOW` was interpolated into `INTERVAL ${WINDOW}` in BOTH
+# queries with no validation at all — the sibling parameter, same sink, missed. It is
+# operator-supplied rather than attacker-controlled, so this is not a remote injection; but
+# "which rows the query returns" IS the verdict this script produces, and a malformed or
+# creative window silently changes what was measured while still reporting a verdict.
+if [[ ! "$WINDOW" =~ ^[0-9]+[[:space:]]+(MINUTE|HOUR|DAY|WEEK|MONTH)$ ]]; then
+  echo "refusing: --window must be '<n> MINUTE|HOUR|DAY|WEEK|MONTH' (it is interpolated into the Better Stack SQL). Got: ${WINDOW}" >&2
   exit 64
 fi
 
@@ -247,10 +262,19 @@ if ! TEMPLATE_SHA="$(git_data_rung2_user_data_sha256 "$CLOUD_INIT")"; then
   exit 2
 fi
 
-# EXACTLY THE GATE'S OWN ALLOWLIST, read from the gate rather than restated. A literal here
-# could drift from the consumer, and the failure mode of that drift is evidence the gate
-# refuses — a rehearsal that cost a real host and released nothing.
-DIVERGENCE="${GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST// /,}"
+# THE DIVERGENCE SET IS DECLARED BY THE CALLER, not echoed from the allowlist.
+#
+# This previously read `DIVERGENCE="${GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST// /,}"` — it wrote
+# the gate's own allowlist back out, unconditionally, so the gate then checked
+# allowlist ⊆ allowlist and R6 could only ever refuse a HAND-edited file. Caught in review.
+# This script cannot know what diverged: it reads Better Stack, not terraform state.
+#
+# So the dispatcher declares it and this script refuses to invent one. `none` is the
+# explicit no-divergence declaration; the gate refuses an absent or duplicated key.
+if [[ -z "$DIVERGENCE" ]]; then
+  echo "refusing: --divergence is required. It records which templatefile ARGUMENTS the rehearsal diverged from production on — the axis the evidence hash does NOT bind. Pass the identity-shaped set the rehearsal root actually diverges on, or 'none'. This script reads Better Stack, not terraform state, so it cannot derive it; echoing the gate's own allowlist back (which it used to do) makes the check allowlist-subset-of-allowlist and refuses nothing." >&2
+  exit 64
+fi
 
 if [[ "$VERIFY_ONLY" -eq 1 ]]; then
   echo "PASS (--verify-only): ${HOST_NAME} reported stage:boot_complete with all four assertions positive, and no fatal. NO evidence file written."
@@ -292,7 +316,12 @@ fi
   printf 'RUNG2_VAR_DIVERGENCE=%s\n' "$DIVERGENCE"
 } > "$OUT"
 
-echo "PASS: ${HOST_NAME} reported stage:boot_complete with all four assertions positive, and no fatal."
+# WORDED TO WHAT WAS ACTUALLY CHECKED. This said "with all four assertions positive",
+# which overstates it: git-data-bootstrap.sh emits those four booleans as HARDCODED
+# literals, so the `"…":"no"` arm can never fire against real telemetry. The real
+# predicate is the one below. The overstatement mattered because it landed in the file a
+# human reads at the second of the two intentional gates — the compensating control.
+echo "PASS: ${HOST_NAME} reported stage:boot_complete and no level:fatal. NOTE: boot_complete's four booleans are hardcoded literals in git-data-bootstrap.sh, so this attests that the final stage was REACHED and that nothing reported a fatal — not that four invariants were independently measured."
 echo "Evidence written to ${OUT} (user_data sha256 ${TEMPLATE_SHA})."
 echo
 echo "This file is NOT committed by this script and must NOT be committed by a workflow."

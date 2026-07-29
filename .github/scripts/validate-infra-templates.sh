@@ -102,10 +102,15 @@ tf_call_pattern() { printf 'templatefile\\(\\s*"\\$\\{path\\.module\\}/(?:\\.\\.
 # See the call site for why the dependency mattered: this runs before the fail-closed tooling
 # check, and two fixtures exercise this script under a restricted PATH.
 #
-# LEXICAL, not filesystem-resolving, and that is the correct semantics here rather than a
-# limitation: terraform resolves `${path.module}/…` lexically too, so a symlink inside the
-# infra root does not change which file it renders. `..` past the root collapses to `/`,
-# which then fails the containment prefix test — the refusal path, not an escape.
+# LEXICAL, not filesystem-resolving. `..` past the root collapses to `/`, which then fails
+# the containment prefix test — the refusal path, not an escape.
+#
+# WHAT LEXICAL RESOLUTION DOES NOT COVER, corrected after review: a SYMLINK. An earlier
+# version of this comment claimed "a symlink inside the infra root does not change which
+# file it renders". That is true of terraform's own path arithmetic and FALSE of this
+# script, whose `[[ -f ]]` and `templatefile()` both follow links — so containment passed
+# on an in-root path while the read went out of root. The `[[ -L ]]` guard at the read site
+# is what actually closes it; this resolver is not the right layer for it.
 _resolve_under() {  # $1 = absolute base dir, $2 = relative referent -> absolute normalized
   local _p="$1/$2" _seg _out=()
   local IFS='/'
@@ -322,6 +327,21 @@ TOTAL_BOOLS=0
 
 for base in "${MEMBERS[@]}"; do
   path="$ROOT/$base"
+
+  # SYMLINKS ARE REFUSED. The containment check above is LEXICAL; the read is not.
+  # `[[ -f ]]` and `templatefile()` both FOLLOW symlinks, so a committed
+  # `cloud-init-leak.yml -> /etc/passwd` (or any out-of-root target) passed containment on
+  # the resolved in-root path and then had its first line echoed verbatim into the CI log
+  # by the cloud-init schema error. This job runs on `pull_request` and is
+  # credential-free, so it runs for fork PRs from anyone.
+  #
+  # Caught in review, which also corrected the comment at the resolver that claimed "a
+  # symlink inside the infra root does not change which file it renders" — true of
+  # terraform's path handling, false of this script's read.
+  if [[ -L "$path" ]]; then
+    echo "ERROR [$base]: is a symlink. Refusing to read outside the infra root — containment is checked lexically and the read follows links." >&2
+    exit 4
+  fi
 
   if [[ ! -f "$path" || ! -r "$path" ]]; then
     # Do NOT increment. The counter assertion below turns this into exit 5 —

@@ -271,17 +271,65 @@ git_data_rung2_user_data_sha256() {
   fi
 
   _inputs+=("$cloud_init")
+  # THE MODULE .tf IS ITSELF A USER_DATA INPUT, and omitting it was a live fail-open.
+  #
+  # It holds `local.git_data_rationale_strip` — the `replace()` transform applied to ALL NINE
+  # payloads at render time — so it materially decides what boots. Measured on the live tree:
+  # relaxing that expression from `[^!\n]` to `[^\n]` (which strips the SHEBANG from
+  # git-data-provision.sh, -remove.sh and -transport-wrapper.sh, all invoked via
+  # authorized_keys `command="…"`, so they silently fall back to dash) left the hash
+  # BYTE-IDENTICAL at ec52960784d6f4… and the gate reporting RELEASED.
+  #
+  # #7025 moved the render into a module to kill a SECOND copy of that expression, on the
+  # argument that two copies which drift hash identically while rendering differently. The
+  # move fixed the two-copies variant and created the one-copy-edited variant: one file, still
+  # unhashed. Hashing it closes both.
+  _inputs+=("$module_tf")
   # Payload paths are written relative to the MODULE (`${path.module}/../../<name>`), so they
   # resolve against module_dir — not against tf_dir, which would land two levels too high and
   # drop every payload out of the set.
+  #
+  # Key class is `[A-Za-z0-9_]+`, not `[a-z_]+`: a binding named `boot_probe2` or `bootProbe`
+  # was silently unextracted, so its payload rendered into user_data while edits to it left the
+  # hash unchanged (the floor did not fire — the original ten were all still present).
+  # ONE RULE, used for both the extraction and the count below: every `file("${path.module}/…")`
+  # on a NON-COMMENT line, excluding `templatefile(` (the template is added separately, above).
+  # Deliberately wrapper-agnostic — `replace(file(…))`, bare `file(…)`, `trimspace(file(…))`,
+  # `base64encode(file(…))` all resolve, because the previous key-anchored form silently
+  # skipped any binding whose wrapper or key shape it did not anticipate, and a skipped payload
+  # renders into user_data while edits to it leave the evidence hash unchanged.
+  _payload_refs() {
+    sed 's/^[[:space:]]*#.*$//' "$module_tf" \
+      | grep -oE '(^|[^A-Za-z])file\("\$\{path\.module\}/[^"]+"' \
+      | sed -E 's/.*file\("\$\{path\.module\}\///; s/"$//'
+  }
   while IFS= read -r _f; do
     [[ -n "$_f" && -r "${module_dir}/${_f}" ]] && _inputs+=("${module_dir}/${_f}")
-  done < <(sed -nE 's/^[[:space:]]*[a-z_]+[[:space:]]*=[[:space:]]*(replace\()?file\("\$\{path\.module\}\/([^"]+)"\).*/\2/p' "$module_tf" | sort -u)
+  done < <(_payload_refs | sort -u)
 
-  # A floor: the template + nine payloads. A shrunken extraction would silently narrow what
-  # the evidence is bound to, which is the same fail-open in a different costume.
-  if [[ "${#_inputs[@]}" -lt 10 ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — resolved only ${#_inputs[@]} user_data input(s) (expected the template + 9 payloads). The payload-set extraction from ${module_tf} drifted. Fail-closed."
+  # A floor: the template + the module .tf + nine payloads.
+  if [[ "${#_inputs[@]}" -lt 11 ]]; then
+    echo "git_data_rung2_user_data_sha256: ABORT — resolved only ${#_inputs[@]} user_data input(s) (expected the template + the render module + 9 payloads). The payload-set extraction from ${module_tf} drifted. Fail-closed."
+    return 1
+  fi
+
+  # REFERENCED vs RESOLVED. Both sides now use `_payload_refs`, so this is NOT a tautology
+  # over the same predicate: extraction additionally requires each referent to be READABLE, so
+  # a difference means the module references a payload that is not on disk. That is a genuine
+  # signal — a missing payload would otherwise silently shrink what the evidence binds to,
+  # and the floor cannot see it once the module also grows a replacement.
+  local _n_refs _n_resolved
+  # COMMENTS STRIPPED, and `templatefile(` excluded. Both were live defects in the first
+  # version of this very check: it matched `templatefile("${path.module}/…` (a substring) AND
+  # matched the header comment in this module that DOCUMENTS the mechanism — reporting 11
+  # references against 9 payloads and aborting on a correct tree. The extraction `sed` above
+  # is comment-safe by anchoring on `^[[:space:]]*[A-Za-z0-9_]+=`, so the count has to be too,
+  # or the two disagree the moment anyone explains the mechanism in prose.
+  # (cq-assert-anchor-not-bare-token — the same trap, in the guard added to catch a different one.)
+  _n_refs="$(_payload_refs | sort -u | grep -c . || true)"
+  _n_resolved=$(( ${#_inputs[@]} - 2 ))   # minus the cloud-init and the module .tf itself
+  if [[ "$_n_refs" -ne "$_n_resolved" ]]; then
+    echo "git_data_rung2_user_data_sha256: ABORT — ${module_tf} contains ${_n_refs} file(\${path.module}/…) reference(s) but only ${_n_resolved} resolved into the hash input set. A payload the extraction cannot see would render into user_data while edits to it left the evidence hash unchanged. Fail-closed."
     return 1
   fi
 
@@ -372,6 +420,27 @@ HOLD
   # Strip whole-line AND trailing comments, same two forms the sentinel gate strips.
   body="$(sed 's/^[[:space:]]*#.*$//; s/[[:space:]]#.*$//' "$evidence" 2>/dev/null)"
 
+  # EXACTLY-ONCE ON EVERY KEY, and this is a fail-open fix rather than tidiness.
+  #
+  # The PASS assertion was `grep -qE` (matches ANY line) while every other key uses `head -1`.
+  # So the gate read FIRST-WINS while `source`/dotenv semantics are LAST-WINS, and a file
+  # containing both `RUNG2_BOOT_REHEARSAL=PASS` and `RUNG2_BOOT_REHEARSAL=FAIL` RELEASED —
+  # measured. A git merge of two evidence files, or a careless append, produces a file whose
+  # meaning differs between this gate and any human or shell that reads it.
+  #
+  # RUNG2_VAR_DIVERGENCE is REQUIRED PRESENT for the same reason: an absent key left
+  # `divergence` empty, the allowlist loop iterated zero times, and the closed allowlist
+  # refused nothing. Declaring "nothing diverged" must be explicit (`RUNG2_VAR_DIVERGENCE=none`),
+  # never inferred from silence.
+  local _k _n
+  for _k in RUNG2_BOOT_REHEARSAL RUNG2_EVIDENCE_URL RUNG2_TEMPLATE_SHA256 RUNG2_VAR_DIVERGENCE; do
+    _n="$(grep -cE "^[[:space:]]*${_k}[[:space:]]*=" <<<"$body" || true)"
+    if [[ "$_n" -ne 1 ]]; then
+      echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} carries ${_n} '${_k}' line(s); exactly 1 is required. Fail-closed: this gate reads first-wins while dotenv semantics are last-wins, so a duplicated key means the file's meaning differs between this gate and every other reader of it. An ABSENT key is equally refused — 'nothing diverged' must be declared, not inferred from silence."
+      return 1
+    fi
+  done
+
   if ! grep -qE '^[[:space:]]*RUNG2_BOOT_REHEARSAL[[:space:]]*=[[:space:]]*PASS[[:space:]]*$' <<<"$body"; then
     echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} does not assert RUNG2_BOOT_REHEARSAL=PASS in non-comment text. Fail-closed: an evidence file that does not claim a pass is not a pass."
     return 1
@@ -411,8 +480,26 @@ HOLD
   # send the reader to the wrong one whenever both are true.
   local divergence _tok _allowed
   divergence="$(grep -E '^[[:space:]]*RUNG2_VAR_DIVERGENCE[[:space:]]*=' <<<"$body" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//')"
-  for _tok in ${divergence//,/ }; do
+  # `read -ra` + noglob, NOT an unquoted expansion. Caught in review: `for _tok in
+  # ${divergence//,/ }` subjects the evidence file's value to PATHNAME EXPANSION, so a
+  # `RUNG2_VAR_DIVERGENCE=*` is replaced by whatever happens to be in the caller's cwd.
+  # Measured: with files named `host_name` and `sentry_dsn` present, `*` expanded to exactly
+  # those two names and both are on the allowlist.
+  #
+  # At the real cwd (repo root / GITHUB_WORKSPACE) the expansion yields README.md, apps,
+  # scripts … none allowlisted, so today it fails CLOSED. Fixed anyway: a gate whose verdict
+  # is a function of ambient directory contents is wrong regardless of which way the current
+  # accident happens to point, and nothing pins that cwd.
+  local _old_glob; _old_glob="$(set +o | grep noglob)"
+  set -o noglob
+  # shellcheck disable=SC2086
+  read -ra _div_toks <<<"${divergence//,/ }"
+  eval "$_old_glob"
+  for _tok in "${_div_toks[@]+"${_div_toks[@]}"}"; do
     [[ -z "$_tok" ]] && continue
+    # The explicit no-divergence declaration. Required because an ABSENT key is now refused
+    # outright, so a rehearsal that genuinely diverged on nothing needs a way to say so.
+    [[ "$_tok" == "none" ]] && continue
     _allowed=0
     for _a in $GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST; do
       [[ "$_tok" == "$_a" ]] && { _allowed=1; break; }

@@ -96,10 +96,14 @@ row() {  # $1=stage $2=level [k=v ...]
     "$stage" "$level" "$HOST" "$extra"
 }
 
+# --divergence is REQUIRED (#7066 review). The script used to echo the gate's own allowlist
+# back out, which made the gate's check allowlist-subset-of-allowlist and refused nothing; it
+# reads Better Stack, not terraform state, so it cannot derive the set and must be told.
+DIVERGENCE="host_name,git_data_volume_id,doppler_token"
 run_sut() {  # remaining args appended
   BETTERSTACK_QUERY_SH="$STUB" \
   BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
-    bash "$SUT" --host-name "$HOST" --evidence-url "$URL" \
+    bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
       --cloud-init "$FIX/cloud-init-git-data.yml" "$@" 2>&1
 }
 
@@ -252,6 +256,7 @@ if [[ "$rc" -ne 0 ]]; then pass "a missing --host-name refuses"; else
 out="$(BETTERSTACK_QUERY_SH="$STUB" BETTERSTACK_QUERY_HOST=stub \
        BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
        bash "$SUT" --host-name "$HOST" --evidence-url "https://example.com/nope" \
+         --divergence "$DIVERGENCE" \
          --cloud-init "$FIX/cloud-init-git-data.yml" --out "$TMP/evidence-badurl.env" 2>&1)"; rc=$?
 if [[ "$rc" -ne 0 ]]; then pass "a non-Actions evidence URL refuses at capture time"; else
   fail "a non-Actions evidence URL refuses at capture time" "$rc" "$out"; fi
@@ -261,7 +266,7 @@ if [[ ! -f "$TMP/evidence-badurl.env" ]]; then pass "a refused URL writes no evi
 # The credential preflight is what turns "I queried and saw nothing" into "I never queried".
 out="$(BETTERSTACK_QUERY_SH="$STUB" BETTERSTACK_QUERY_HOST='' \
        BETTERSTACK_QUERY_USERNAME='' BETTERSTACK_QUERY_PASSWORD='' \
-       bash "$SUT" --host-name "$HOST" --evidence-url "$URL" \
+       bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
          --cloud-init "$FIX/cloud-init-git-data.yml" 2>&1)"; rc=$?
 if [[ "$rc" -eq 2 ]]; then pass "absent Better Stack credentials => TRANSIENT, not a verdict"; else
   fail "absent Better Stack credentials => TRANSIENT, not a verdict" "$rc" "$out"; fi
@@ -275,8 +280,32 @@ make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS"
 OUT_DIV="$TMP/evidence-div.env"
 run_sut --out "$OUT_DIV" >/dev/null 2>&1
 _div="$(grep -E '^RUNG2_VAR_DIVERGENCE=' "$OUT_DIV" 2>/dev/null | sed 's/^[^=]*=//')"
-if [[ -n "$_div" ]]; then pass "the capture script declares a divergence set"; else
-  fail "the capture script declares a divergence set" "n/a" "$(cat "$OUT_DIV" 2>/dev/null)"; fi
+if [[ "$_div" == "$DIVERGENCE" ]]; then
+  pass "the evidence records the CALLER's declared divergence verbatim"
+else
+  fail "the evidence's divergence set is not the caller's" "n/a" "got '$_div' want '$DIVERGENCE'"
+fi
+
+# THE TAUTOLOGY IS GONE. The script used to write GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST back out,
+# so the gate compared the allowlist against itself and R6 could only refuse a hand-edited file.
+_allow_csv="${GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST// /,}"
+if [[ "$_div" != "$_allow_csv" ]]; then
+  pass "the evidence does NOT echo the gate's whole allowlist back (tautology closed)"
+else
+  fail "the evidence echoes the gate's entire allowlist — the R6 check is a tautology" "n/a" "$_div"
+fi
+
+# And omitting it is refused rather than defaulted, so a caller cannot get the old behavior back
+# by saying less.
+_out_nodiv="$(BETTERSTACK_QUERY_SH="$STUB" BETTERSTACK_QUERY_HOST=stub \
+  BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+  bash "$SUT" --host-name "$HOST" --evidence-url "$URL" \
+    --cloud-init "$FIX/cloud-init-git-data.yml" --out "$TMP/evidence-nodiv.env" 2>&1)"; _rc_nodiv=$?
+if [[ "$_rc_nodiv" -ne 0 && ! -f "$TMP/evidence-nodiv.env" ]]; then
+  pass "an omitted --divergence is refused and writes no evidence"
+else
+  fail "an omitted --divergence is refused" "$_rc_nodiv" "$_out_nodiv"
+fi
 _bad=""
 for _t in ${_div//,/ }; do
   case " $GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST " in *" $_t "*) ;; *) _bad="${_bad} ${_t}" ;; esac
@@ -292,11 +321,11 @@ fi
 # not redden the suite and train the next person to bump it unread. Counts passes+fails, so a
 # genuine failure still reports as a failure rather than as an empty suite.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 26 ]]; then
+if [[ "$_ran" -lt 28 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 26. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 28. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 26)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 28)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
