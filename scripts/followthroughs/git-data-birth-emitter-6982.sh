@@ -53,8 +53,8 @@ SQL="
          JSONExtractString(raw,'repo_root')    AS repo_root,
          JSONExtractString(raw,'hooks_path')   AS hooks_path,
          JSONExtractString(raw,'provision')    AS provision
-  FROM (SELECT * FROM remote(\$BS_TABLE)
-        UNION ALL SELECT * FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+  FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+        UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
   WHERE dt > now() - INTERVAL 30 DAY
     AND JSONExtractString(raw,'stage') = 'boot_complete'
     AND JSONExtractString(raw,'host_name') = 'soleur-git-data'

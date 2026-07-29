@@ -930,17 +930,30 @@ discoverability_test:
     #    only the ~40-minute hot window, so a boot-time event would be invisible without it).
     doppler run -p soleur -c prd_terraform -- \
       env BS_TABLE="$BS_TABLE" bash scripts/betterstack-query.sh --since 7d "
-        SELECT dt, JSONExtractString(raw,'message') AS msg
-        FROM (SELECT * FROM remote(primary, $BS_TABLE)
-              UNION ALL SELECT * FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
-        WHERE JSONExtractString(raw,'message') = 'SOLEUR_GIT_DATA_GC'
+        SELECT dt, JSONExtractString(raw,'message') AS msg,
+                   JSONExtractString(raw,'complete')   AS complete,
+                   JSONExtractString(raw,'failures')   AS failures,
+                   JSONExtractString(raw,'disk_pct')   AS disk_pct,
+                   JSONExtractString(raw,'inode_pct')  AS inode_pct
+        FROM (SELECT dt, raw FROM remote($BS_TABLE)
+              UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
+        WHERE JSONExtractString(raw,'message') LIKE 'SOLEUR_GIT_DATA_GC%'
         ORDER BY dt DESC LIMIT 50"
   expected_output: |
     1. One Sentry issue per boot stage, the last being `stage:bootstrap-done`.
     2. Exactly one `stage:boot_complete` event per boot, carrying luks_mounted / repo_root /
        hooks_path / provision. ANY false value is a failure regardless of the apply's exit status.
        (Pre-birth, zero rows is the correct and expected result for 1 and 2.)
-    3. Zero rows on a healthy host; one row per failed gc run.
+    3. ONE ROW PER RUN (the timer is daily since B12, so ~7 rows over 7d on a healthy host).
+       Investigate any row whose `complete` is `no` (the run was killed part-way and every repo
+       after that point is unmaintained), whose `failures` is non-zero, or whose `inode_pct` is
+       high while `disk_pct` looks healthy (the A1 exhaustion path: loose objects exhaust inodes
+       at roughly 55-60% of bytes).
+       NOTE the `LIKE 'SOLEUR_GIT_DATA_GC%'` prefix rather than `=`. Equality matched ONLY the
+       healthy/per-repo-failure summaries and missed every fault this PR added -- the killed-run,
+       lock-unopenable, lock-held and unit-failed messages all carry a suffix. The equality form
+       returned rows exactly when the host was fine and zero rows for every fault, which is the
+       inversion of this section's own stated purpose.
   # NO `ssh ` appears in any command above. hr-no-ssh-fallback-in-runbooks becomes satisfiable for
   # this host for the first time — which is the point of the PR.
 ```
