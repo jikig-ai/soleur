@@ -967,10 +967,10 @@ manifest (`.claude/.session-manifests/`) or the `[session-context]` snapshot
 being dropped in the hook reduction — removing the CC6.1/CC7.2 evidence trail
 that records which rules were in context for a given session.
 
-**Brand-survival threshold:** `single-user incident` — same threshold CPO
-assigned to PR #3496, for the same reason: this is the mechanism that decides
-which governance rules exist in the agent's context. `requires_cpo_signoff:
-true`. `user-impact-reviewer` MUST run at review time.
+- **Brand-survival threshold:** `single-user incident` — same threshold CPO
+  assigned to PR #3496, for the same reason: this is the mechanism that decides
+  which governance rules exist in the agent's context. `requires_cpo_signoff:
+  true`. `user-impact-reviewer` MUST run at review time.
 
 ## Observability
 
@@ -1000,12 +1000,18 @@ logs:
   where: .claude/.session-manifests/<session_id>.json (3-field, per session)
   retention: local, gitignored; SOC 2 CC6.1/CC7.2 evidence
 discoverability_test:
-  command: "printf '{\"cwd\":\"%s\"}' \"$PWD\" | bash .claude/hooks/session-rules-loader.sh | sed -n 's/.*loaded: \\([0-9]*\\) of \\([0-9]*\\) rules.*/\\1 \\2/p' | awk '{print ($1==$2 && $1>0) ? \"OK\" : \"MISMATCH\"}'"
+  command: bash scripts/rules-loader-stamp-probe.sh
   expected_output: "OK"
-  # NOTE: deliberately NOT `grep -cE 'loaded: ([0-9]+) of \1 rules'`. ERE
-  # backreferences are non-POSIX; the operator's `grep` may be ugrep, which
-  # rejects `\1` outright ("invalid escape"). Verified: sed+awk form returns OK
-  # on 101/101, MISMATCH on 48/101, MISMATCH on 0/0.
+  # The pipeline lives in the script, not here, because `/soleur:preflight`
+  # Check 10 EXECUTES this command and refuses any shell-active token — pipes
+  # included. The earlier one-liner form (printf | hook | sed | awk) was correct
+  # and un-runnable by its own verifier, which is a probe nobody runs. Verified:
+  # OK on 101/101, MISMATCH on a truncated 3/101 corpus, MISMATCH on a missing
+  # corpus (the loader's 0-of-N blackout stamp).
+  # Deliberately NOT `grep -cE 'loaded: ([0-9]+) of \1 rules'`: ERE
+  # backreferences are non-POSIX and the operator's grep may be ugrep, which
+  # rejects `\1` outright. The script never hardcodes the count either — the
+  # denominator comes from the loader's expected set, so it survives rule 102.
 ```
 
 No `ssh` anywhere. Soak/follow-through enrollment: **not applicable** — no
