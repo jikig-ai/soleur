@@ -143,6 +143,24 @@ resource "cloudflare_zero_trust_access_application" "deploy" {
 resource "cloudflare_zero_trust_access_service_token" "deploy" {
   account_id = var.cf_account_id
   name       = "github-actions-deploy"
+
+  # Without this, the token is UNROTATABLE via Terraform. `-replace` defaults to
+  # destroy-then-create, and Cloudflare rejects the destroy while an Access policy
+  # still references the token:
+  #   access.api.error.service_token_in_use: cannot delete service token because it
+  #   is used by a policy, group, or app SCIM configuration (12139)
+  # `cloudflare_zero_trust_access_policy.deploy_service_token` holds exactly such a
+  # reference, so the apply fails after planning 3-add/3-destroy and changes nothing.
+  # create_before_destroy inverts the order: new token → policy repointed to it →
+  # old token destroyed, all in one apply.
+  #
+  # Safe on the name collision this implies (both tokens exist briefly): Cloudflare
+  # permits duplicate service-token names — probed 2026-07-29 against the live account
+  # by creating two tokens with an identical name (both succeeded, both deleted), so
+  # no unique-name suffix is required.
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
@@ -181,6 +199,12 @@ resource "cloudflare_zero_trust_access_application" "ssh" {
 resource "cloudflare_zero_trust_access_service_token" "ci_ssh" {
   account_id = var.cf_account_id
   name       = "github-actions-ci-ssh"
+
+  # See the rationale on `.deploy` above — destroy-then-create is rejected while
+  # `cloudflare_zero_trust_access_policy.ci_ssh_service_token` references this token.
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "cloudflare_zero_trust_access_policy" "ci_ssh_service_token" {
@@ -213,6 +237,17 @@ resource "cloudflare_zero_trust_access_application" "registry" {
 resource "cloudflare_zero_trust_access_service_token" "registry_push" {
   account_id = var.cf_account_id
   name       = "github-actions-registry-push"
+
+  # See the rationale on `.deploy` above. This one is load-bearing beyond rotation
+  # ergonomics: `doppler_secret.registry_push_access_token_{id,secret}` derive from
+  # this resource's client_id/client_secret, so Terraform is the ONLY safe way to roll
+  # it. Rotating it out-of-band (the Cloudflare `/rotate` endpoint) leaves the old
+  # client_secret in state, and the next apply pushes that stale value back into
+  # Doppler — breaking registry pushes with no signal saying why. `.deploy` and
+  # `.ci_ssh` are exempt from that trap because they are `output`s, not doppler_secrets.
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "cloudflare_zero_trust_access_policy" "registry_push_service_token" {
