@@ -149,3 +149,31 @@ assert single-occurrence so an ambiguous one fails loudly instead of producing a
 the plan's (the canary half is structurally inert, the propagation half is not), but it reverses a
 trade recorded in `decision-challenges.md` UC-2 as an operator decision and costs a paid Haiku turn
 on every future edit to these files. UC-2 carries the sharper framing so the operator decides on it.
+
+## Compound Phase
+
+Learning: `knowledge-base/project/learnings/2026-07-29-my-guard-tested-the-one-case-that-cannot-happen-in-production.md`
+(15 session errors, each with a Prevention line).
+
+**Routed to definition:** one bullet appended to `plugins/soleur/skills/review/SKILL.md`'s
+defect-class catalogue — the two NOVEL shapes (discriminating case unreachable in the shipping
+environment; "keep in sync" guard pinning followers instead of an automerge-mutated leader).
+Eval-gate checked first: `gated:false`, so applied normally. Placement gate says review-scoped,
+NOT AGENTS.md — the insight only fires inside a review, and the always-loaded payload is in WARN.
+
+**Not promoted to constitution.** Two of the four P1 lessons are recurrences of classes already in
+`review/SKILL.md`; constitution.md is at 295/300 bullets and the rule-budget linter reports
+`[WARN] B_ALWAYS=22900 >= 20000` (~100 bytes of headroom). Adding an always-loaded rule for a
+review-scoped insight is exactly what that WARN advises against. Budget shrink is already tracked
+as **#6138** — not re-filed.
+
+**Archival DEFERRED to post-ship (deliberate, not skipped).** Auto-consolidation would `git mv` the
+whole `specs/feat-<branch>/` directory to `archive/`, but `/ship` Phase 2.5 reads
+`specs/<branch>/decision-challenges.md` by exact path to render `## Model Dissents (informational)`
+and open the `action-required` issue. Archiving first would silently strip UC-1/UC-2 from the PR
+body — losing the operator visibility that artifact exists for. The plan file is not in scope
+anyway (its filename lacks the branch slug). Run
+`bash plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` after the PR merges.
+
+**Rule-metrics aggregator failed**; its partial write was reverted so a later blanket
+`git add -A knowledge-base/` could not stage a rejected aggregate. No unused-rules hint this run.
