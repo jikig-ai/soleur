@@ -191,30 +191,56 @@ printf '\nrung-2 rehearsal gate\n'
 
 # The gate binds its evidence to EVERY file that composes user_data, not just the template —
 # a rehearsal is only meaningful for the payload set that actually boots. So the fixture models
-# that set: a git-data.tf with nine `file()` bindings and the nine payloads beside it.
-R2="$TMP/r2"; mkdir -p "$R2"
+# that set: the render MODULE with nine `file()` bindings, and the nine payloads two levels up.
+#
+# (#7025, R7) The layout mirrors production: the map lives in
+# modules/git-data-userdata/main.tf and reaches its payloads through `${path.module}/../../`,
+# because both the production root and the rung-2 rehearsal root call that one module. A
+# fixture still shaped like the old inline git-data.tf would exercise a resolution path the
+# gate no longer has.
+R2="$TMP/r2"; mkdir -p "$R2/modules/git-data-userdata"
 cp "$TMP/mixed.yml" "$R2/ci.yml"
 _r2_payloads=(git-data-bootstrap.sh git-data-provision.sh git-data-transport-wrapper.sh
               git-data-remove.sh git-data-gc.sh git-data-pre-receive-placeholder.sh
               git-data-gc.service git-data-gc-failure.service git-data-gc.timer)
-{
-  printf 'resource "x" "y" {\n  user_data = templatefile("${path.module}/ci.yml", {\n'
-  for _p in "${_r2_payloads[@]}"; do
-    printf '    %s = file("${path.module}/%s")\n' "${_p//[-.]/_}" "$_p"
-  done
-  printf '  })\n}\n'
-} > "$R2/git-data.tf"
+_r2_write_module() {  # $1 = root dir, remaining args = payload basenames
+  local d="$1"; shift
+  local p
+  mkdir -p "$d/modules/git-data-userdata"
+  {
+    printf 'locals {\n  git_data_rationale_strip = "/(?m)^[ \\t]*#([^!\\n][^\\n]*)?\\n/"\n}\n\n'
+    printf 'locals {\n  rendered = templatefile("${path.module}/../../ci.yml", {\n'
+    for p in "$@"; do
+      printf '    %s = replace(file("${path.module}/../../%s"), local.git_data_rationale_strip, "")\n' \
+        "${p//[-.]/_}" "$p"
+    done
+    printf '  })\n}\n'
+  } > "$d/modules/git-data-userdata/main.tf"
+}
+_r2_write_module "$R2" "${_r2_payloads[@]}"
 for _p in "${_r2_payloads[@]}"; do printf '#!/usr/bin/env bash\n# %s\ntrue\n' "$_p" > "$R2/$_p"; done
 
 # Compute the expected hash exactly the way the gate does, so the fixture tracks the gate's
 # own definition rather than restating it.
-_r2_hash() {  # $1 = dir holding ci.yml + git-data.tf + payloads
-  local d="$1" ins=() f
+#
+# (#7025, R4) BASENAME-NORMALISED, LC_ALL=C. The pre-#7025 derivation piped the resolved
+# PATHS through `xargs sha256sum`, whose output embeds each path — so identical bytes hashed
+# to three different values depending on the caller's cwd. Measured on the live tree:
+#   apps/web-platform/infra/<name>  -> aa1447f2…   (repo-root-relative)
+#   <name>                          -> dcaa1281…   (cwd = infra)
+#   /abs/path/<name>                -> b77f4998…   (absolute)
+# Production invokes the gate with ${GITHUB_WORKSPACE}/… while a rehearsal or a laptop run
+# would not, so evidence captured at one cwd would read STALE EVIDENCE forever — blaming a
+# template edit that never happened.
+_r2_hash() {  # $1 = dir holding ci.yml + modules/git-data-userdata/main.tf + payloads
+  local d="$1" md="$1/modules/git-data-userdata" ins=() f
   ins+=("$d/ci.yml")
   while IFS= read -r f; do
-    [[ -n "$f" && -r "$d/$f" ]] && ins+=("$d/$f")
-  done < <(sed -nE 's/^[[:space:]]*[a-z_]+[[:space:]]*=[[:space:]]*(replace\()?file\("\$\{path\.module\}\/([^"]+)"\).*/\2/p' "$d/git-data.tf" | sort -u)
-  printf '%s\n' "${ins[@]}" | sort | xargs sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1
+    [[ -n "$f" && -r "$md/$f" ]] && ins+=("$md/$f")
+  done < <(sed -nE 's/^[[:space:]]*[a-z_]+[[:space:]]*=[[:space:]]*(replace\()?file\("\$\{path\.module\}\/([^"]+)"\).*/\2/p' "$md/main.tf" | sort -u)
+  { for f in "${ins[@]}"; do
+      printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$(basename "$f")"
+    done; } | LC_ALL=C sort | sha256sum | cut -d' ' -f1
 }
 R2_SHA="$(_r2_hash "$R2")"
 
@@ -229,9 +255,16 @@ r2check() {
   fi
 }
 
-r2_evidence() {  # $1=dest $2=verdict $3=url $4=sha
+# A URL that SATISFIES the R8 Actions-run shape, so every arm below tests the refusal it
+# names rather than tripping on the URL check first. Hoisted to one place: it is a
+# precondition of nine fixtures, not a property of any of them.
+R2_URL="https://github.com/jikig-ai/soleur/actions/runs/17250000001"
+
+r2_evidence() {  # $1=dest $2=verdict $3=url $4=sha [$5=divergence]
   printf 'RUNG2_BOOT_REHEARSAL=%s\nRUNG2_EVIDENCE_URL=%s\nRUNG2_TEMPLATE_SHA256=%s\n' \
     "$2" "$3" "$4" > "$1"
+  [[ -n "${5:-}" ]] && printf 'RUNG2_VAR_DIVERGENCE=%s\n' "$5" >> "$1"
+  return 0
 }
 
 r2_evidence "$R2/ok.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/1" "$R2_SHA"
@@ -245,16 +278,125 @@ r2check "absent evidence => HOLD" 1 "no rung-2 boot evidence" "$R2/ci.yml" "$R2/
   printf '# RUNG2_TEMPLATE_SHA256=%s\n' "$R2_SHA"; } > "$R2/comment.env"
 r2check "a fully commented-out evidence file => HOLD" 1 "does not assert" "$R2/ci.yml" "$R2/comment.env"
 
-r2_evidence "$R2/fail.env" FAIL "https://x/1" "$R2_SHA"
+r2_evidence "$R2/fail.env" FAIL "$R2_URL" "$R2_SHA"
 r2check "evidence claiming FAIL => HOLD" 1 "does not assert" "$R2/ci.yml" "$R2/fail.env"
 
 r2_evidence "$R2/nourl.env" PASS "ask-me-about-it" "$R2_SHA"
-r2check "an unauditable non-URL pointer => HOLD" 1 "not a URL" "$R2/ci.yml" "$R2/nourl.env"
+r2check "an unauditable non-URL pointer => HOLD" 1 "not an Actions run URL" "$R2/ci.yml" "$R2/nourl.env"
 
-r2_evidence "$R2/badsha.env" PASS "https://x/1" "deadbeef"
+# ── (#7025, R8) THE URL MUST BE AN ACTIONS RUN, NOT MERELY A URL ──────────────────
+#
+# `^https?://` was satisfied by anything a human could type. That matters more here than it
+# would elsewhere: `main` carries NO `pull_request` ruleset (no required approving reviews)
+# and `can_approve_pull_request_reviews: true`, so a hand-authored evidence file citing
+# https://example.com would release the last mechanical hold on a host that will store every
+# connected user's source code. An Actions run URL is not unforgeable, but it names an
+# artifact that either exists in this repo's run history or does not.
+r2_evidence "$R2/anyurl.env" PASS "https://example.com/i-rehearsed-it" "$R2_SHA"
+r2check "a well-formed but NON-ACTIONS URL => HOLD" 1 "not an Actions run URL" \
+  "$R2/ci.yml" "$R2/anyurl.env"
+
+# A run URL for a DIFFERENT repository is the same class: it is auditable, just not about us.
+r2_evidence "$R2/otherrepo.env" PASS "https://github.com/attacker/soleur/actions/runs/1" "$R2_SHA"
+r2check "an Actions run URL for another repo => HOLD" 1 "not an Actions run URL" \
+  "$R2/ci.yml" "$R2/otherrepo.env"
+
+# Trailing segments (`/job/123`, `/attempts/2`) are what GitHub actually links to, so the
+# shape must be a PREFIX match on the run id and not an anchored-to-end equality.
+r2_evidence "$R2/runjob.env" PASS \
+  "https://github.com/jikig-ai/soleur/actions/runs/17253046871/job/48972331209" "$R2_SHA"
+r2check "an Actions run URL with a /job/ suffix => RELEASED" 0 "RELEASED" \
+  "$R2/ci.yml" "$R2/runjob.env"
+
+# ── (#7025, R4) PATH INVARIANCE ───────────────────────────────────────────────────
+#
+# The SAME tree, addressed two ways, must produce ONE hash. Measured on the live tree before
+# this fix, identical bytes hashed to three different values purely by path form
+# (aa1447f2… / dcaa1281… / b77f4998…), because the derivation piped resolved paths through
+# `xargs sha256sum`, whose output embeds the path. Production invokes the gate with
+# ${GITHUB_WORKSPACE}/… ; a rehearsal capture or a laptop run does not. Evidence produced at
+# one cwd would then read STALE EVIDENCE forever, and the message would blame a template edit
+# that never happened — the worst kind of wrong, because it is actionable and false.
+#
+# Asserted as an EQUALITY between two invocations rather than against a pinned constant: a
+# constant would need updating on every legitimate payload edit and would be re-derived from
+# the very function under test.
+_rel_hash="$(cd "$R2" && git_data_rung2_user_data_sha256 "ci.yml")"
+_abs_hash="$(git_data_rung2_user_data_sha256 "$R2/ci.yml")"
+if [[ "$_rel_hash" =~ ^[0-9a-f]{64}$ && "$_rel_hash" == "$_abs_hash" ]]; then
+  pass "the hash is PATH-INVARIANT (relative and absolute forms agree)"
+else
+  fail "path invariance: relative and absolute invocations disagree" "n/a" \
+    "rel=${_rel_hash} abs=${_abs_hash}"
+fi
+
+# And the helper the gate uses must be the helper the capture script uses — one call, so
+# disagreement is structurally impossible. This arm guards the CALL SITE, not the arithmetic:
+# it asserts the gate's own verdict agrees with the standalone helper on the same tree.
+if [[ "$_abs_hash" == "$R2_SHA" ]]; then
+  pass "git_data_rung2_user_data_sha256 agrees with the gate's own evidence binding"
+else
+  fail "the extracted helper and the gate's binding disagree" "n/a" \
+    "helper=${_abs_hash} gate-fixture=${R2_SHA}"
+fi
+
+# ── (#7025) THE <10 PAYLOAD FLOOR, exercised rather than asserted in prose ─────────
+#
+# A shrunken extraction silently narrows what the evidence is bound to — the same fail-open
+# the ten-input binding was introduced to close, wearing a different costume. The floor is
+# the only thing standing between "the map moved" and "the evidence now attests one file".
+R2F="$TMP/r2floor"; cp -r "$R2" "$R2F"
+_r2_write_module "$R2F" git-data-bootstrap.sh git-data-gc.sh
+r2check "a render module binding fewer than 9 payloads => ABORT" 1 "ABORT" \
+  "$R2F/ci.yml" "$R2/ok.env"
+r2check "the ABORT names the drifted extraction rather than blaming the evidence" 1 "drifted" \
+  "$R2F/ci.yml" "$R2/ok.env"
+
+# The module going missing entirely is the same fail-closed class, and is what a botched
+# module move looks like.
+R2M="$TMP/r2nomodule"; cp -r "$R2" "$R2M"; rm -rf "$R2M/modules"
+r2check "no render module at all => ABORT" 1 "ABORT" "$R2M/ci.yml" "$R2/ok.env"
+
+# ── (#7025, R6) THE RENDER-VAR DIVERGENCE ALLOWLIST ───────────────────────────────
+#
+# The hash binds the template and the nine payloads. It does NOT bind the templatefile
+# ARGUMENTS, so a rehearsal that booted with a different Doppler CLI arch, a different
+# checksum, or a different Sentry DSN still produces hash-valid evidence for a boot that is
+# not the boot production would get. doppler_arch and doppler_sha256 are the sharp case: they
+# select WHICH BINARY is downloaded and WHICH CHECKSUM verifies it, so a mis-derived pair
+# verifies the tarball it just chose and passes — the #6570 boot-brick class, rehearsed away.
+#
+# The gap is closed by DECLARATION: the rehearsal writes what it diverged on, and anything
+# outside the identity-shaped allowlist refuses.
+r2_evidence "$R2/div-ok.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/2" "$R2_SHA" \
+  "host_name,git_data_volume_id,git_data_luks_volume_id,doppler_token,doppler_config_name"
+r2check "divergence confined to identity-shaped vars => RELEASED" 0 "RELEASED" \
+  "$R2/ci.yml" "$R2/div-ok.env"
+
+r2_evidence "$R2/div-arch.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/3" "$R2_SHA" \
+  "host_name,doppler_arch"
+r2check "divergence on doppler_arch => HOLD" 1 "doppler_arch" "$R2/ci.yml" "$R2/div-arch.env"
+
+r2_evidence "$R2/div-dsn.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/4" "$R2_SHA" \
+  "sentry_dsn"
+r2check "divergence on sentry_dsn => HOLD" 1 "sentry_dsn" "$R2/ci.yml" "$R2/div-dsn.env"
+
+# An unknown var name is NOT waved through. A typo'd or newly-introduced var is exactly the
+# case where "not on the deny list" and "safe" come apart, so the allowlist is closed.
+r2_evidence "$R2/div-unknown.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/5" "$R2_SHA" \
+  "some_new_var"
+r2check "divergence on an UNKNOWN var => HOLD" 1 "some_new_var" "$R2/ci.yml" "$R2/div-unknown.env"
+
+# ABSENT is permitted and means "nothing diverged". It must not become a silent bypass that a
+# rehearsal can take by simply omitting the line — so the RELEASE message says which it was.
+r2check "evidence with NO divergence line => RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/ok.env"
+r2check "the RELEASE reports the divergence set it accepted" 0 "divergence" \
+  "$R2/ci.yml" "$R2/div-ok.env"
+
+r2_evidence "$R2/badsha.env" PASS "$R2_URL" "deadbeef"
 r2check "a malformed template hash => HOLD" 1 "malformed" "$R2/ci.yml" "$R2/badsha.env"
 
-r2_evidence "$R2/stale.env" PASS "https://x/1" \
+r2_evidence "$R2/stale.env" PASS "$R2_URL" \
   "0000000000000000000000000000000000000000000000000000000000000000"
 r2check "a hash for a DIFFERENT template => HOLD" 1 "STALE EVIDENCE" "$R2/ci.yml" "$R2/stale.env"
 
@@ -263,7 +405,7 @@ r2check "a missing cloud-init => ABORT" 1 "missing or not supplied" "$R2/nonexis
 # THE SELF-INVALIDATION PROPERTY, asserted end-to-end rather than inferred from (d): the
 # SAME evidence file that just released the gate must stop releasing it once the template
 # it attests to is edited. This is the whole reason the hash binding exists.
-R2E="$TMP/r2edited"; mkdir -p "$R2E"; cp "$R2"/* "$R2E"/ 2>/dev/null || true
+R2E="$TMP/r2edited"; cp -r "$R2" "$R2E"
 printf '\n# a later edit to the template\n' >> "$R2E/ci.yml"
 r2check "evidence goes stale when the TEMPLATE is edited" 1 "STALE EVIDENCE" \
   "$R2E/ci.yml" "$R2/ok.env"
@@ -271,7 +413,7 @@ r2check "evidence goes stale when the TEMPLATE is edited" 1 "STALE EVIDENCE" \
 # THE POINT OF BINDING ALL TEN INPUTS. An earlier version hashed the template ALONE — 1 of the
 # 10 files composing user_data — so editing a PAYLOAD left the evidence valid for a boot that
 # had changed. This is the arm that pins the fix.
-R2P="$TMP/r2payload"; mkdir -p "$R2P"; cp "$R2"/* "$R2P"/ 2>/dev/null || true
+R2P="$TMP/r2payload"; cp -r "$R2" "$R2P"
 printf '\n# a later edit to a shipped payload\n' >> "$R2P/git-data-gc.sh"
 r2check "evidence goes stale when a PAYLOAD is edited (not just the template)" 1 "STALE EVIDENCE" \
   "$R2P/ci.yml" "$R2/ok.env"
@@ -367,14 +509,29 @@ mutate_r2 "rung-2 evidence-URL arm" \
   's|^  if \[\[ ! "\$url" =~ .*|  if false; then|' \
   0 "$R2/ci.yml" "$R2/nourl.env"
 
-# NO comment-stripping mutation arm here, and the reason is worth recording rather than
+# (#7025, R6) Neutered, evidence declaring a doppler_arch divergence releases the route —
+# and doppler_arch is the var that selects WHICH BINARY is downloaded and WHICH CHECKSUM
+# verifies it, so the rehearsal would have proven the absence of a boot-brick production
+# still has (#6570).
+mutate_r2 "rung-2 render-var divergence arm" \
+  's/^    if \[\[ "\$_allowed" -eq 0 \]\]; then/    if false; then/' \
+  0 "$R2/ci.yml" "$R2/div-arch.env"
+
+# NO PATH-INVARIANCE MUTATION ARM, and the absence is deliberate rather than an oversight.
+# Neutering the basename normalisation makes the hash cwd-dependent, which yields a
+# MISMATCH — the gate then HOLDs with STALE EVIDENCE. There is no fail-open mutation to
+# assert, because the defect it fixes is a false REFUSAL, not a false release. The
+# equality assertion above is the guard, and it was measured RED against the pre-#7025
+# derivation before this landed.
+#
+# NO comment-stripping mutation arm here either, and the reason is worth recording rather than
 # leaving as an absence. Neutering the `body="$(sed ...)"` line does NOT flip the
 # commented-out fixture to RELEASED — the mutation battery said so — because whole-line
 # comments are already refused by the `^[[:space:]]*RUNG2_...` ANCHOR in each grep, not by
 # the strip. What the strip actually buys is TOLERANCE of a trailing comment on an otherwise
 # valid line, which is a permissiveness property: mutating it away makes the gate STRICTER,
 # so there is no fail-open mutation to assert. The positive test below is what pins it.
-r2_evidence "$R2/trailing.env" PASS "https://x/1" "$R2_SHA"
+r2_evidence "$R2/trailing.env" PASS "$R2_URL" "$R2_SHA"
 sed -i 's|^RUNG2_BOOT_REHEARSAL=PASS$|RUNG2_BOOT_REHEARSAL=PASS   # rehearsed on a throwaway host|' "$R2/trailing.env"
 grep -q '#' "$R2/trailing.env" || fail "fixture setup: trailing comment was not applied" "n/a" ""
 r2check "trailing comments on valid evidence => still RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/trailing.env"
@@ -387,11 +544,11 @@ r2check "trailing comments on valid evidence => still RELEASED" 0 "RELEASED" "$R
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
 # rather than masquerading as an empty suite.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 31 ]]; then
+if [[ "$_ran" -lt 50 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 31. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 50. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 31)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 50)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
