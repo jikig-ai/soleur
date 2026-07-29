@@ -148,7 +148,10 @@ if grep -qE 'source[[:space:]]*=[[:space:]]*"\.\./modules/git-data-userdata"' "$
 else
   fail "the rehearsal root does not call ../modules/git-data-userdata — it would attest a render it does not produce"
 fi
-if sed 's/^[[:space:]]*#.*$//' "$DIR/git-data.tf" | grep -qE 'source[[:space:]]*=[[:space:]]*"\./modules/git-data-userdata"'; then
+# Herestring, not a pipe: under pipefail an early match makes `sed | grep -q` return the
+# producer's SIGPIPE rather than grep's success once the body passes 64 KiB (#6649).
+_git_data_code="$(sed 's/^[[:space:]]*#.*$//' "$DIR/git-data.tf")"
+if grep -qE 'source[[:space:]]*=[[:space:]]*"\./modules/git-data-userdata"' <<<"$_git_data_code"; then
   pass "the production root renders through the SAME shared module"
 else
   fail "git-data.tf does not call ./modules/git-data-userdata"

@@ -173,7 +173,13 @@ fi
 # DELIBERATELY EXCLUDES THIS HOST'S OWN ROWS (see the SQL). If the anchor could be satisfied
 # by the rehearsal host, then "this host emitted nothing" would make the anchor dead too — and
 # the two states the anchor exists to separate would collapse into one.
-if ! printf '%s' "$anchor_out" | grep -q 'host'; then
+# HERESTRING, NOT A PIPE. Under `set -o pipefail`, `producer | grep -q PAT` returns
+# NON-ZERO on a successful EARLY match once the body exceeds the 64 KiB pipe buffer: grep
+# closes the pipe on first match, the producer takes SIGPIPE (141), and pipefail propagates
+# it — so the match reads as a miss (#6649). A herestring has no pipe and no producer to
+# kill. The bodies here are usually small, which is exactly what makes this the kind of bug
+# that ships and then surfaces on the one run with a verbose `detail` field.
+if ! grep -q 'host' <<<"$anchor_out"; then
   echo "TRANSIENT: the source-liveness anchor returned ZERO rows from ANY other host in the last ${WINDOW}."
   echo "That is a statement about the INSTRUMENT, not about ${HOST_NAME}: a live source with a"
   echo "silent host and a dead source look identical from this host's rows alone, so this run"
@@ -200,15 +206,15 @@ fi
 #
 # The `\bno\b` arm is retained anyway: it costs nothing and it is exactly the arm that fires
 # if those literals are ever replaced by real measurements.
-if printf '%s' "$host_out" | grep -q '"level":"fatal"'; then
+if grep -q '"level":"fatal"' <<<"$host_out"; then
   echo "FAIL: ${HOST_NAME} reported a FATAL. The rehearsal found the failure class this route exists to catch — a boot that would have looked green from the apply."
-  printf '%s\n' "$host_out" | grep '"level":"fatal"' | head -10
+  grep '"level":"fatal"' <<<"$host_out" | head -10
   echo
   echo "NO EVIDENCE FILE WRITTEN. Fix the cause, then re-run the rehearsal against the corrected template."
   exit 1
 fi
 
-if ! printf '%s' "$host_out" | grep -q 'boot_complete'; then
+if ! grep -q 'boot_complete' <<<"$host_out"; then
   echo "TRANSIENT: the source is live (the anchor answered) but ${HOST_NAME} has not reported"
   echo "stage:boot_complete within ${WINDOW}, and reported no fatal either. Either the boot is"
   echo "still in progress, or it died before reaching a stage that can emit to Better Stack at"
@@ -218,9 +224,10 @@ if ! printf '%s' "$host_out" | grep -q 'boot_complete'; then
   exit 2
 fi
 
-if printf '%s' "$host_out" | grep 'boot_complete' | grep -qE '"(luks_mounted|repo_root|hooks_path|provision)":"no"'; then
+_bc_rows="$(grep 'boot_complete' <<<"$host_out" || true)"
+if grep -qE '"(luks_mounted|repo_root|hooks_path|provision)":"no"' <<<"$_bc_rows"; then
   echo "FAIL: ${HOST_NAME} reported boot_complete with a FALSE assertion — it reached its final stage with an invariant unmet, which is the dark boot the interlock exists to catch."
-  printf '%s\n' "$host_out" | grep 'boot_complete' | head -5
+  printf '%s\n' "$_bc_rows" | head -5
   echo
   echo "NO EVIDENCE FILE WRITTEN."
   exit 1
