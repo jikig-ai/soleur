@@ -1928,6 +1928,29 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
       ).toBeGreaterThan(0);
     }
   });
+
+  // (#7025) The rung-2 rehearsal dispatch is the THIRD consumer of web-platform-infra-apply,
+  // and it inherits its reviewer set from the loop above rather than declaring its own.
+  //
+  // The assertion lives HERE, beside the guard that makes the environment meaningful, rather
+  // than only in the infra suite: F8 proves the environment HAS reviewers, and this proves
+  // the rehearsal actually ROUTES THROUGH it. Either fact alone is satisfiable while the
+  // rehearsal dispatches unreviewed — a job with no `environment:` never meets a reviewer no
+  // matter how well-populated that reviewer set is.
+  test("the rung-2 rehearsal dispatch routes through the reviewed environment", () => {
+    const wf = readFileSync(
+      resolve(REPO_ROOT, ".github/workflows/git-data-rung2-rehearsal.yml"),
+      "utf8",
+    );
+    expect(wf).toMatch(/^\s{4}environment:\s*web-platform-infra-apply\s*$/m);
+
+    // It must NOT be able to commit its own evidence. That file releases the birth
+    // interlock, so a workflow with `contents: write` would be approving the birth as a side
+    // effect of a dispatch whose prompt said "rehearsal" — the environment reviewer would be
+    // authorizing one thing and getting another.
+    expect(wf).toMatch(/^permissions:\n\s{2}contents:\s*read\s*$/m);
+    expect(wf).not.toMatch(/contents:\s*write/);
+  });
 });
 
 /**

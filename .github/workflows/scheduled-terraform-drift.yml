@@ -462,3 +462,98 @@ jobs:
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
+
+  # ── (#7025, R9) RUNG-2 REHEARSAL ORPHAN SWEEP ──────────────────────────────────────
+  #
+  # WHY THIS IS A SEPARATE JOB AND NOT A CLAIM ABOUT THE DRIFT CHECK ABOVE. An earlier draft
+  # of the #7025 plan asserted that "the existing scheduled-terraform-drift run would also
+  # surface an unmanaged host". It would not, twice over: this workflow's matrix is
+  # `apps/web-platform/infra` + `infra/github` and does not include the rehearsal root, and
+  # more fundamentally `terraform plan` reports on resources IN STATE — a host the rehearsal
+  # root's state has forgotten (a destroy that failed after the state write, an aborted run,
+  # a hand-deleted state object) is invisible to every plan in this repository, forever.
+  #
+  # A leaked rehearsal host is a paying Hetzner box running the git transport wrappers with a
+  # LUKS volume attached. The only source that can see it is Hetzner, so this asks Hetzner.
+  #
+  # THE TRAILING HYPHEN IN THE PREFIX IS LOAD-BEARING. `soleur-git-data` is a PREFIX of
+  # `soleur-git-data-rehearsal-<id>`, so a match written without it reports the PRODUCTION
+  # git-data host as a leaked rehearsal — and the remedy an operator would reach for on that
+  # report is a destroy.
+  rung2-rehearsal-orphan-sweep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Sweep for orphaned rung-2 rehearsal hosts
+        id: sweep
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          REHEARSAL_PREFIX: soleur-git-data-rehearsal-
+        run: |
+          set -euo pipefail
+          TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"
+          printf '::add-mask::%s\n' "$TOKEN"
+          # Fail CLOSED: an unreachable API is not evidence that nothing leaked.
+          body="$(curl -sS -f -H "Authorization: Bearer ${TOKEN}" \
+                    'https://api.hetzner.cloud/v1/servers?per_page=50')" || {
+            echo "::error::could not list Hetzner servers — this sweep has no verdict. Fail-closed rather than reporting a clean sweep it did not perform."
+            exit 1; }
+          survivors="$(printf '%s' "$body" | jq -r --arg p "$REHEARSAL_PREFIX" \
+            '[.servers[]? | select(.name | startswith($p)) | .name] | .[]')"
+          if [[ -z "$survivors" ]]; then
+            echo "no orphaned rung-2 rehearsal hosts"
+            echo "orphans=0" >> "$GITHUB_OUTPUT"
+          else
+            n="$(printf '%s\n' "$survivors" | grep -c .)"
+            echo "orphans=${n}" >> "$GITHUB_OUTPUT"
+            { echo "names<<EOFN"; printf '%s\n' "$survivors"; echo "EOFN"; } >> "$GITHUB_OUTPUT"
+            echo "::error::${n} orphaned rung-2 rehearsal host(s) found"
+            printf '%s\n' "$survivors"
+          fi
+
+      - name: File an issue for orphaned rehearsal hosts
+        if: steps.sweep.outputs.orphans != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NAMES: ${{ steps.sweep.outputs.names }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Idempotent: one open issue for this class, not one per scheduled run.
+          existing="$(gh issue list --label infra-drift --state open \
+                        --search "orphaned rung-2 rehearsal host in:title" \
+                        --json number --jq '.[0].number // empty')"
+          {
+            echo "The Hetzner API reports server(s) matching the rung-2 rehearsal prefix that"
+            echo "no Terraform state owns. Each is a **paying** box running the git transport"
+            echo "wrappers with a LUKS volume attached."
+            echo ""
+            echo '```'
+            printf '%s\n' "$NAMES"
+            echo '```'
+            echo ""
+            echo "## Remedy"
+            echo ""
+            echo "Dispatch **git-data rung-2 boot rehearsal** with \`teardown_only=true\`."
+            echo "That arm exists for exactly this case. If the rehearsal root's state no longer"
+            echo "knows about the host, delete it from the Hetzner console — but check the state"
+            echo "first, because a destroy through Terraform also reclaims the volumes and the"
+            echo "scratch Doppler config."
+            echo ""
+            echo "_Auto-created by the [terraform-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml)._"
+          } > /tmp/orphan-body.md
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --body-file /tmp/orphan-body.md
+          else
+            gh issue create \
+              --title "Orphaned rung-2 rehearsal host(s) on Hetzner" \
+              --label "infra-drift" \
+              --milestone "Post-MVP / Later" \
+              --body-file /tmp/orphan-body.md
+          fi

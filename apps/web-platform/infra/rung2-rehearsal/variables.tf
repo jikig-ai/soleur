@@ -30,6 +30,16 @@ variable "sentry_dsn" {
 variable "betterstack_ingest_url" {
   description = "MUST be prod's Better Stack ingest URL, byte-for-byte. Same argument as sentry_dsn — this is the stage-marker channel the capture script queries to distinguish a dark boot from a slow one."
   type        = string
+  # DEFAULTED to prod's value rather than threaded from the workflow, because prod does not
+  # thread it either: it is `local.betterstack_logs_ingest_url` in zot-registry.tf, a
+  # hardcoded literal. Threading it here would let a dispatch silently point the rehearsal at
+  # a different source and still produce hash-valid evidence.
+  #
+  # THAT MAKES THIS A SECOND COPY OF A LITERAL, so it is guarded rather than trusted:
+  # git-data-rung2-rehearsal.test.sh extracts both sides BY SHAPE and fails if they diverge.
+  # Not a credential, so hr-tf-variable-no-operator-mint-default does not apply — an ingest
+  # URL is a public endpoint; the token that authorizes writing to it is separate.
+  default = "https://s2457081.eu-fsn-3.betterstackdata.com/"
 }
 
 variable "betterstack_logs_token" {

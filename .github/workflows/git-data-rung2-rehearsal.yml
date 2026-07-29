@@ -1,0 +1,341 @@
+# (#7025) THE RUNG-2 REHEARSAL ROUTE — build it, do not fire it.
+#
+# WHAT THIS PRODUCES. Boot evidence for the git-data cloud-init, captured off-box from a
+# THROWAWAY host, so that the first real boot of that template is not the production host
+# holding every connected user's source code. `git_data_rung2_rehearsal_gate` refuses the
+# birth until that evidence exists and is hash-bound to the template being dispatched.
+#
+# THIS WORKFLOW SHIPS UNFIRED, AND THAT IS THE DESIGN RATHER THAN AN OVERSIGHT. A PR merges
+# ATOMICALLY, so evidence committed in the same PR that builds the harness would be evidence
+# from a rehearsal that never ran. The harness must exist, merge, and then RUN before its
+# output can release anything. The DO-NOT-DISPATCH banner in git-data-birth.md stays up.
+#
+# IT NEVER COMMITS ITS OWN EVIDENCE. The evidence file lands as a workflow ARTIFACT and, if
+# the operator wants it, as a PR they review. A route that writes its own gate-releasing
+# evidence to main converts a two-human-gate birth into a one-dispatch birth — the operator
+# would be approving "run a rehearsal" and getting "release the interlock" as a side effect.
+# `permissions: contents: read` is what makes that structural rather than a promise.
+#
+# THE TWO INTENTIONAL HUMAN GATES: the environment approval on the dispatch, and the review
+# of the evidence PR. Everything between them is automated.
+name: git-data rung-2 boot rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type REHEARSE-GIT-DATA to confirm. Typo-guard only — the environment reviewer is the authorization."
+        required: true
+        type: string
+      dry_run:
+        description: "true = plan only, assert the plan creates ONLY rehearsal addresses and destroys nothing, then stop. Leave true unless you intend to spend a real host."
+        required: true
+        type: boolean
+        default: true
+      teardown_only:
+        description: "true = skip plan/apply/capture and destroy whatever this root still owns. The recovery arm for a rehearsal whose teardown failed."
+        required: false
+        type: boolean
+        default: false
+
+# JOIN THE PARENT'S GROUP, do not declare a new one. A DISTINCT group would PERMIT a
+# rehearsal and a birth to run concurrently, which is the opposite of what a concurrency
+# group is for — and the backend has no state lock (R2 lacks conditional writes;
+# `use_lockfile = false` in both roots), so serialization is the only protection against
+# last-writer-wins. git_data_host_create and git_data_host_replace already share this exact
+# literal for the same reason. GitHub does not error on divergent group strings; they
+# silently fail to serialize, so a group naming only this workflow is a mutex of one.
+concurrency:
+  group: git-data-state
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  REHEARSAL_DIR: apps/web-platform/infra/rung2-rehearsal
+  # The trailing hyphen is LOAD-BEARING: `soleur-git-data` is a PREFIX of
+  # `soleur-git-data-rehearsal-…`, so a prefix match written without it would also match the
+  # PRODUCTION host. The same literal is pinned in the orphan sweep in
+  # scheduled-terraform-drift.yml and in the rehearsal root's locals.
+  REHEARSAL_PREFIX: soleur-git-data-rehearsal-
+
+jobs:
+  rehearse:
+    runs-on: ubuntu-24.04
+    # REUSED, never re-declared. Managed at infra/web-host-birth-environment.tf with a
+    # non-empty reviewer set (DP-11 F8 — a zero-reviewer environment auto-approves) and a
+    # main-only deployment_branch_policy. The branch pin matters here for the same reason it
+    # matters on the birth path: this job SOURCES a gate library from ${GITHUB_WORKSPACE},
+    # and without the pin a branch dispatch could source a neutered one and approve itself.
+    #
+    # Reusing the birth environment means a rehearsal approval LOOKS like a birth approval in
+    # the notification. Mitigated by a distinct workflow name, a distinct confirm token and
+    # the dry_run default — and recorded in ADR-149 with the alternative (a dedicated
+    # environment) and its DP-11 F8 cost, rather than left as an unstated trade.
+    environment: web-platform-infra-apply
+    # Budget: Hetzner provisioning the server plus two volumes (~6m) + boot + emit + the
+    # bounded capture poll + teardown.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      # FIRST step that could matter: validate the dispatch before anything reads a secret or
+      # contacts a provider. Every untrusted input is routed through `env:` and never
+      # interpolated into the shell body — an input is attacker-controlled text as far as this
+      # runner is concerned, and `${{ }}` inside a `run:` is textual substitution.
+      - name: Validate dispatch inputs (confirm token)
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_RAW" != "REHEARSE-GIT-DATA" ]]; then
+            echo "::error::confirm must be exactly 'REHEARSE-GIT-DATA' (got '${CONFIRM_RAW}'). Distinct from the birth path's BIRTH-GIT-DATA so a token typed for one can never authorize the other. Typo-guard only — the environment reviewer is the authorization."
+            exit 1
+          fi
+          echo "dispatch validated"
+
+      # THE INVARIANT THIS WORKFLOW MUST NEVER VIOLATE, asserted before anything is planned.
+      # The whole safety argument for this route is that it operates a SEPARATE Terraform
+      # root; if the rehearsal root ever grew a reference to a prod git-data address, a
+      # rehearsal apply's target closure could create the production host outside the birth
+      # route. Cheap, so it runs every dispatch rather than only in CI.
+      #
+      # Comments are STRIPPED FIRST. This root's rationale legitimately NAMES the prod
+      # addresses it must not reference (explaining why it does not reference them), and a
+      # bare grep would refuse the file for the sentences that make it reviewable —
+      # cq-assert-anchor-not-bare-token.
+      - name: Assert the rehearsal root references no production git-data address
+        run: |
+          set -euo pipefail
+          hits="$(sed 's/^[[:space:]]*#.*$//' "${REHEARSAL_DIR}"/*.tf \
+                  | grep -cE 'hcloud_(server|volume|firewall)\.git_data\b|terraform_remote_state' || true)"
+          if [[ "$hits" -ne 0 ]]; then
+            echo "::error::${REHEARSAL_DIR} references ${hits} production git-data address(es) or a remote state. -target is TRANSITIVE ON DEPENDENCIES, so a rehearsal apply could pull hcloud_server.git_data into its plan closure and create the production host outside the birth route. Refusing to plan."
+            exit 1
+          fi
+          echo "rehearsal root is clean: 0 production git-data references in code"
+
+      - name: Extract R2 backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init (rehearsal root — DISTINCT state key)
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        run: terraform init -input=false
+
+      # ── TEARDOWN-ONLY ARM (R12) ────────────────────────────────────────────────────
+      #
+      # Teardown failure previously had DETECTION and no RECOVERY: the post-teardown orphan
+      # assertion would fail the job and leave a paying host running with nothing to run
+      # against it, which is a "please fix this by hand" that
+      # hr-exhaust-all-automated-options-before forbids. This arm is the recovery.
+      - name: Teardown only (recovery arm)
+        if: inputs.teardown_only
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          # `rehearsal_run_id` is required by the root but irrelevant to a destroy — every
+          # address is already in state. This run's own id satisfies the ^[0-9]+$ validation.
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform destroy -auto-approve -input=false \
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}"
+          echo "teardown-only complete"
+
+      - name: Terraform plan
+        id: plan
+        if: '!inputs.teardown_only'
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}"
+
+      # THE DRY-RUN ASSERTION, and it runs on BOTH arms rather than only on dry_run. A check
+      # that guards the apply is worth nothing if the apply path skips it — the dangerous
+      # dispatch is precisely the one with dry_run=false.
+      #
+      # NOTE ON THE PLAN JSON: `terraform show -json` embeds plan-input VARIABLES verbatim,
+      # including ones declared `sensitive` (sensitive masks render-time TEXT output, not JSON
+      # serialization). This step therefore READS the JSON and never uploads it, and no later
+      # step turns it into an artifact.
+      - name: Assert the plan creates ONLY rehearsal addresses and destroys nothing
+        if: '!inputs.teardown_only'
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan > /tmp/plan.json
+          # Fail closed on an unparseable plan: a jq error must not read as "zero destroys".
+          if ! jq -e 'has("resource_changes") or has("format_version")' /tmp/plan.json >/dev/null; then
+            echo "::error::could not parse the plan JSON — refusing to read an unparseable plan as a clean one."
+            exit 1
+          fi
+          destroys=$(jq '[.resource_changes[]? | select(.change.actions | index("delete"))] | length' /tmp/plan.json)
+          creates=$(jq -r '[.resource_changes[]? | select(.change.actions | index("create")) | .address] | .[]' /tmp/plan.json)
+          if [[ "$destroys" -ne 0 ]]; then
+            echo "::error::the rehearsal plan contains ${destroys} destroy(s). This root is additive-only; a destroy here means state drifted or an address was renamed."
+            jq -r '.resource_changes[]? | select(.change.actions | index("delete")) | .address' /tmp/plan.json
+            exit 1
+          fi
+          # Every created address must be rehearsal-scoped. `-target` is transitive, so this
+          # is the assertion that would catch a prod resource entering the closure — the one
+          # failure this whole route is built around.
+          bad=0
+          while IFS= read -r addr; do
+            [[ -z "$addr" ]] && continue
+            case "$addr" in
+              *.rehearsal|*.rehearsal_*) ;;
+              *) echo "::error::plan would create a NON-rehearsal address: ${addr}"; bad=1 ;;
+            esac
+          done <<< "$creates"
+          if [[ "$bad" -ne 0 ]]; then
+            echo "::error::refusing to apply — see the non-rehearsal addresses above."
+            exit 1
+          fi
+          n=$(printf '%s\n' "$creates" | grep -c . || true)
+          echo "plan is clean: ${n} create(s), all rehearsal-scoped; 0 destroys"
+          rm -f /tmp/plan.json
+
+      - name: Dry run complete — stopping here
+        if: ${{ !inputs.teardown_only && inputs.dry_run }}
+        run: |
+          echo "dry_run=true: the plan was rendered and asserted clean. NOTHING was applied,"
+          echo "no host was created, and no evidence was captured. Re-dispatch with"
+          echo "dry_run=false to spend a real host and produce rung-2 evidence."
+
+      # ── THE REAL ARM ───────────────────────────────────────────────────────────────
+      - name: Terraform apply (creates the throwaway rehearsal host)
+        id: apply
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -auto-approve -input=false tfplan
+          echo "host=${REHEARSAL_PREFIX}${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      # BOUNDED POLL. The capture script's TRANSIENT state is "nothing known YET", so polling
+      # it is the correct way to wait — and its exit codes are what stop the loop: 0 PASS and
+      # 1 FAIL are both terminal, only 2 is worth retrying. A fixed sleep would either waste
+      # wall clock or truncate a slow boot.
+      - name: Capture rung-2 evidence (bounded poll)
+        id: capture
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          REHEARSAL_HOST: ${{ steps.apply.outputs.host }}
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/rung2
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          rc=2
+          for attempt in $(seq 1 20); do
+            echo "--- capture attempt ${attempt}/20 ---"
+            doppler run -p soleur -c prd_terraform -- \
+              bash scripts/followthroughs/git-data-rung2-evidence-capture.sh \
+                --host-name "$REHEARSAL_HOST" \
+                --evidence-url "$url" \
+                --out /tmp/rung2/git-data-rung2-boot-evidence.env
+            rc=$?
+            # 0 PASS and 1 FAIL are both TERMINAL. Only 2 (nothing known yet) is retried —
+            # retrying a FAIL would turn a real finding into a timeout.
+            [[ "$rc" -ne 2 ]] && break
+            sleep 30
+          done
+          echo "capture_rc=${rc}" >> "$GITHUB_OUTPUT"
+          if [[ "$rc" -eq 0 ]]; then
+            echo "### Rung-2 rehearsal: PASS" >> "$GITHUB_STEP_SUMMARY"
+            echo "Evidence captured for \`${REHEARSAL_HOST}\`. It is an ARTIFACT, not a commit." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$rc" -eq 1 ]]; then
+            echo "### Rung-2 rehearsal: FAIL" >> "$GITHUB_STEP_SUMMARY"
+            echo "The rehearsal host reported a fatal or a false assertion. This is the failure class the route exists to find: it would have looked green from the apply. No evidence written." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Rung-2 rehearsal: TRANSIENT (no verdict)" >> "$GITHUB_STEP_SUMMARY"
+            echo "The poll expired without a terminal answer. This is NOT evidence the host booted dark — read the capture output above to see whether the log source itself was answering." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$rc"
+
+      # UPLOADED, NEVER COMMITTED. This is the release artifact for the birth interlock; the
+      # operator opens a PR with it themselves after reading it. `permissions: contents: read`
+      # above means this workflow could not commit it even if a later edit tried to.
+      - name: Upload the evidence file as an artifact
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: git-data-rung2-boot-evidence
+          path: /tmp/rung2/git-data-rung2-boot-evidence.env
+          retention-days: 90
+          if-no-files-found: error
+
+      # ── TEARDOWN ───────────────────────────────────────────────────────────────────
+      #
+      # `if: always()` so an aborted or failed rehearsal still tears down. A leaked host is a
+      # paying box running the git transport wrappers with a LUKS volume attached, and nothing
+      # outside this step and the drift sweeper's orphan probe would ever reclaim it.
+      - name: Teardown (always)
+        if: ${{ always() && !inputs.teardown_only && !inputs.dry_run }}
+        working-directory: ${{ env.REHEARSAL_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform destroy -auto-approve -input=false \
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}"
+
+      # DETECTION INDEPENDENT OF THE THING IT CHECKS. `terraform destroy` exiting 0 says the
+      # state file believes the host is gone; it does not say Hetzner agrees. This asks
+      # Hetzner directly, which is the only source that can distinguish "destroyed" from
+      # "forgotten by state".
+      - name: Assert no rehearsal host survives (Hetzner API)
+        if: ${{ always() && !inputs.teardown_only && !inputs.dry_run }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"
+          printf '::add-mask::%s\n' "$TOKEN"
+          body="$(curl -sS -f -H "Authorization: Bearer ${TOKEN}" \
+                    'https://api.hetzner.cloud/v1/servers?per_page=50')" || {
+            echo "::error::could not list Hetzner servers, so the teardown is UNVERIFIED. Fail-closed: this is not evidence that no host survived."
+            exit 1; }
+          # Anchored with the trailing hyphen. `soleur-git-data` is a PREFIX of the rehearsal
+          # names, so an unanchored contains-match would report the PRODUCTION host as a
+          # leaked rehearsal — or, run the other way, hide a leak behind a prod match.
+          survivors="$(printf '%s' "$body" | jq -r --arg p "$REHEARSAL_PREFIX" \
+            '[.servers[]? | select(.name | startswith($p)) | .name] | .[]')"
+          if [[ -n "$survivors" ]]; then
+            echo "::error::rehearsal host(s) SURVIVED teardown — a paying, running box with a LUKS volume attached:"
+            printf '%s\n' "$survivors"
+            echo "::error::Re-dispatch this workflow with teardown_only=true to reclaim them."
+            exit 1
+          fi
+          echo "teardown verified against the Hetzner API: no server matching ${REHEARSAL_PREFIX} survives"

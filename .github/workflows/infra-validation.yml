@@ -845,6 +845,55 @@ jobs:
       - name: Verify the git-data render-strip contract (parity + shebang + no-op guards)
         run: bash apps/web-platform/infra/git-data-render-strip-parity.test.sh
 
+      # (#7025) The rung-2 rehearsal route's drift-guards: root purity, the distinct state
+      # key, the no-auto-commit permission set, the dry-run default, the shared concurrency
+      # literal, and the trailing hyphen on the rehearsal name prefix. Registered HERE
+      # because run-registered-suites.sh DERIVES the infra suite list from this workflow —
+      # an unregistered suite is silent AND green.
+      - name: Run rung-2 rehearsal route drift-guards
+        run: bash apps/web-platform/infra/git-data-rung2-rehearsal.test.sh
+
+      # (#7025) THE REHEARSAL ROOT GETS NO `terraform validate` FROM THE `validate` JOB.
+      # That job derives its matrix with `sed -E 's|^(apps/[^/]+/infra)/.*|\1|'`, which
+      # COLLAPSES apps/web-platform/infra/rung2-rehearsal/... to apps/web-platform/infra and
+      # never descends — so the rehearsal root would ship with zero parse coverage and the
+      # first syntax error would surface at dispatch, after an environment approval.
+      #
+      # -backend=false: this must not touch R2 or need credentials.
+      - name: Terraform validate the rung-2 rehearsal root
+        working-directory: apps/web-platform/infra/rung2-rehearsal
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      # (#7025, R11) THE RUNG-2 GATE AS A PR CHECK, active only once evidence exists.
+      #
+      # The gate has exactly ONE non-test call site: the birth job. So today a payload edit
+      # that merges AFTER a rehearsal silently re-holds the route, and the operator learns
+      # about it only by dispatching a birth and burning the environment approval to be told
+      # "STALE EVIDENCE". Running it here turns that into a red check on the PR that caused it.
+      #
+      # SKIPS WHILE THE EVIDENCE FILE IS ABSENT, deliberately. Until #7025's rehearsal has
+      # actually run, "no evidence" is the DESIGNED state — failing every PR on it would be a
+      # countdown timer, not a regression guard, and the first person to hit it would delete
+      # the step. It arms itself the moment the evidence lands.
+      - name: Rung-2 evidence freshness (active only once evidence exists)
+        run: |
+          set -euo pipefail
+          EV=apps/web-platform/infra/git-data-rung2-boot-evidence.env
+          if [[ ! -f "$EV" ]]; then
+            echo "no rung-2 evidence committed yet — this check is dormant by design (#7025)."
+            echo "The birth stays HELD; that is the interlock working, not a gap."
+            exit 0
+          fi
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source tests/scripts/lib/git-data-birth-readiness-gate.sh
+          if ! git_data_rung2_rehearsal_gate apps/web-platform/infra/cloud-init-git-data.yml; then
+            echo "::error::rung-2 evidence is committed but NO LONGER VALID for the current template. This PR changed something that ships to the git-data host, so the boot that was rehearsed is not the boot that would happen. Either revert the payload change or re-run the rung-2 rehearsal and update the evidence — do NOT dispatch a birth against this tree."
+            exit 1
+          fi
+          echo "rung-2 evidence is valid for the current template."
+
       # (#6982) systemd unit lint. `OnFailure=` is a [Unit] directive; placing it in
       # [Service] makes systemd IGNORE it silently, which shipped the whole gc
       # failure-reporting path dead past three review passes while two comments asserted it
