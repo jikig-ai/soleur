@@ -764,10 +764,32 @@ assert_mutation "A28b key-never-on-argv" p_key_never_on_argv "$CLOUD_INIT" \
 assert_mutation "A28b key-never-on-argv (bootstrap)" p_key_never_on_argv \
   "$DIR/git-data-bootstrap.sh" 's;^LUKS_ROOT="/mnt/git-data-luks"$;echo "key=$GIT_DATA_LUKS_KEY";'
 
+# --- B16: the mkfs feature flags are MIGRATION-FORCING, so pin them ------------------
+#
+# `mkfs.ext4 -O quota,project` had zero assertions anywhere. Dropping either flag is not a
+# thing you can fix forward: the filesystem is created ONCE, at birth, and adding quota or
+# project support afterwards means taking the store offline and migrating every repo on it.
+# The cost of losing them is paid months later by whoever needs per-workspace accounting.
+p_mkfs_quota_project() {
+  # Anchored on the mkfs call itself, not a bare token: `quota` and `project` are ordinary
+  # English words that appear in this file's prose (cq-assert-anchor-not-bare-token).
+  if grep -Eq 'mkfs\.ext4[^|]*-O[[:space:]]+[a-z,]*quota[a-z,]*' "$1" \
+    && grep -Eq 'mkfs\.ext4[^|]*-O[[:space:]]+[a-z,]*project[a-z,]*' "$1"; then echo 1; else echo 0; fi
+}
+assert_holds    "B16 mkfs-quota-project" p_mkfs_quota_project "$CLOUD_INIT"
+# Each flag independently: dropping ONE is the realistic drift, and an assertion that only
+# catches losing BOTH would miss it.
+assert_mutation "B16 mkfs-quota-project (drop quota)" p_mkfs_quota_project "$CLOUD_INIT" \
+  's/-O quota,project/-O project/'
+assert_mutation "B16 mkfs-quota-project (drop project)" p_mkfs_quota_project "$CLOUD_INIT" \
+  's/-O quota,project/-O quota/'
+assert_mutation "B16 mkfs-quota-project (drop -O entirely)" p_mkfs_quota_project "$CLOUD_INIT" \
+  's/ -O quota,project//'
+
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 total=$((passes + fails))
-if [ "$total" -lt 83 ]; then
-  echo "FAIL: ran only ${total} assertions (<83) — suite did not execute fully" >&2
+if [ "$total" -lt 87 ]; then
+  echo "FAIL: ran only ${total} assertions (<87) — suite did not execute fully" >&2
   exit 1
 fi
 

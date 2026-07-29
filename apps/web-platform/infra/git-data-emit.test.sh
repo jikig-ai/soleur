@@ -24,11 +24,18 @@ fails=0
 pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; [ -n "${2:-}" ] && echo "      $2" >&2; }
 
-command -v terraform >/dev/null 2>&1 || {
-  echo "git-data-emit: SKIP — terraform not on PATH (the emitter is extracted from a real render)" >&2
+# B5: a skip is not a pass, and under CI it is not even a skip — see _skip.
+_skip() {
+  if [ "${CI:-}" = "true" ]; then
+    echo "$1 — and CI=true, so this is a FAILURE: the runner must provide this dependency. A gate that cannot run must not report success." >&2
+    exit 1
+  fi
+  echo "$1" >&2
   exit 0
 }
-command -v python3 >/dev/null 2>&1 || { echo "git-data-emit: SKIP — python3 absent" >&2; exit 0; }
+
+command -v terraform >/dev/null 2>&1 || _skip "git-data-emit: SKIP — terraform not on PATH (the emitter is extracted from a real render)"
+command -v python3 >/dev/null 2>&1 || _skip "git-data-emit: SKIP — python3 absent"
 
 TMP="$(mktemp -d -t gdemit.XXXXXXXX)"
 trap 'kill "${SRV_PID:-}" 2>/dev/null; rm -rf "$TMP"' EXIT
@@ -360,16 +367,36 @@ else fail "AC25d MUTATION did not land (quote-strip marker absent)"; fi
 # ---------------------------------------------------------------------------------
 : > "$CAPTURE"
 emit "git-data bootstrap complete" boot_complete info "" \
-  "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" "disk_pct=7" >/dev/null 2>&1
+  "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" "disk_pct=7" "inode_pct=9" >/dev/null 2>&1
 BODY="$(last_body)"
 # KEY **AND VALUE**. The former loop grepped `"$k"` only, so blanking every value on the
 # wire left it 21/21 green — and the value is the entire content of this payload: THREE
 # consumers read these four booleans to decide whether the birth succeeded. A key with an
 # empty value is a boot report that says nothing while looking complete.
-for kv in luks_mounted=yes repo_root=yes hooks_path=yes provision=yes disk_pct=7; do
+for kv in luks_mounted=yes repo_root=yes hooks_path=yes provision=yes disk_pct=7 inode_pct=9; do
   k="${kv%%=*}"; v="${kv#*=}"
   if grep -qF "\"$k\":\"$v\"" <<<"$BODY"; then pass; else fail "AC30 boot_complete $k != $v" "$BODY"; fi
 done
+
+# B6 — PARITY WITH THE PRODUCER. The fixture above is a hand-written copy of the payload
+# git-data-bootstrap.sh actually emits, and nothing tied the two together: dropping
+# `hooks_path=yes` from the producer left this suite green and would surface only during a
+# real birth, on the one signal whose ARRIVAL is supposed to mean every assertion passed.
+#
+# So derive the producer's key set from the producer and compare it to the set asserted here.
+# Both directions: a key added to the producer and never asserted is untested, and a key
+# asserted here but no longer produced is a fixture that has drifted off the artifact.
+_producer_keys="$(sed -n '/boot_complete info/,/|| true/p' "$DIR/git-data-bootstrap.sh" \
+  | grep -oE '"[a-z_]+=' | tr -d '"=' | sort -u | tr '\n' ' ')"
+_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision disk_pct inode_pct | sort -u | tr '\n' ' ')"
+if [ -z "$_producer_keys" ]; then
+  fail "AC30-parity: derived NO keys from git-data-bootstrap.sh — the extraction drifted, so this parity check would pass vacuously"
+elif [ "$_producer_keys" = "$_asserted_keys" ]; then
+  pass
+else
+  fail "AC30-parity: boot_complete key set drifted between producer and this suite" \
+    "producer: ${_producer_keys}| asserted: ${_asserted_keys}"
+fi
 
 # The `[ -n "$k" ]` empty-key guard. A malformed tag (`=value`, the shape a `"$var=..."`
 # with an unset var produces) must be DROPPED, not emitted as `"":"value"` — an empty JSON

@@ -24,10 +24,24 @@ passes=0; fails=0
 pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; [ -n "${2:-}" ] && echo "      $2" >&2; }
 
-command -v docker >/dev/null 2>&1 || { echo "git-data-runcmd-rehearsal: SKIP — docker absent" >&2; exit 0; }
-docker info >/dev/null 2>&1 || { echo "git-data-runcmd-rehearsal: SKIP — docker daemon unreachable" >&2; exit 0; }
-command -v terraform >/dev/null 2>&1 || { echo "git-data-runcmd-rehearsal: SKIP — terraform absent" >&2; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo "git-data-runcmd-rehearsal: SKIP — python3 absent" >&2; exit 0; }
+# B5: A SKIP IS NOT A PASS, AND UNDER CI IT IS NOT EVEN A SKIP. Every guard below exits 0 when
+# a tool is missing, which is right on a laptop and wrong in CI: the runner is the one place
+# this suite is REQUIRED to execute, and a missing dependency there silently converts a
+# runtime gate into a green no-op that nothing distinguishes from a real pass. Under CI=true
+# the absence is a FAILURE of the runner's provisioning, reported as such.
+_skip() {
+  if [ "${CI:-}" = "true" ]; then
+    echo "$1 — and CI=true, so this is a FAILURE: the runner must provide this dependency. A gate that cannot run must not report success." >&2
+    exit 1
+  fi
+  echo "$1" >&2
+  exit 0
+}
+
+command -v docker >/dev/null 2>&1 || _skip "git-data-runcmd-rehearsal: SKIP — docker absent"
+docker info >/dev/null 2>&1 || _skip "git-data-runcmd-rehearsal: SKIP — docker daemon unreachable"
+command -v terraform >/dev/null 2>&1 || _skip "git-data-runcmd-rehearsal: SKIP — terraform absent"
+command -v python3 >/dev/null 2>&1 || _skip "git-data-runcmd-rehearsal: SKIP — python3 absent"
 
 TMP="$(mktemp -d -t gdreh.XXXXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
