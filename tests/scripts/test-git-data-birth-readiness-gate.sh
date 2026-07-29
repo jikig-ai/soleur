@@ -178,6 +178,71 @@ else
   printf '  note live cloud-init-git-data.yml not found at the expected path\n'
 fi
 
+# ── THE RUNG-2 REHEARSAL GATE (#6982 A3) ─────────────────────────────────────────
+#
+# Same fixture discipline as above: never the live evidence path. The contract is (a) no
+# evidence => HOLD, (b) evidence must CLAIM a pass in non-comment text, (c) it must carry an
+# auditable URL, and (d) it must be hash-bound to the template being dispatched, so a
+# rehearsal of a since-edited template does not release the route.
+#
+# (d) is the one worth stating: without it "evidence exists" is satisfied forever by a
+# rehearsal of a template that has since changed, and this template changes constantly.
+printf '\nrung-2 rehearsal gate\n'
+
+R2="$TMP/r2"; mkdir -p "$R2"
+cp "$TMP/mixed.yml" "$R2/ci.yml"
+R2_SHA="$(sha256sum "$R2/ci.yml" | cut -d' ' -f1)"
+
+r2check() {
+  local name="$1" want_rc="$2" needle="$3" ci="$4" ev="$5"
+  local out rc
+  out="$(git_data_rung2_rehearsal_gate "$ci" "$ev" 2>&1)"; rc=$?
+  if [[ "$rc" -eq "$want_rc" && "$out" == *"$needle"* ]]; then
+    pass "$name"
+  else
+    fail "$name (want rc=$want_rc containing '$needle')" "$rc" "$out"
+  fi
+}
+
+r2_evidence() {  # $1=dest $2=verdict $3=url $4=sha
+  printf 'RUNG2_BOOT_REHEARSAL=%s\nRUNG2_EVIDENCE_URL=%s\nRUNG2_TEMPLATE_SHA256=%s\n' \
+    "$2" "$3" "$4" > "$1"
+}
+
+r2_evidence "$R2/ok.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/1" "$R2_SHA"
+r2check "valid, hash-matched evidence => RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/ok.env"
+
+r2check "absent evidence => HOLD" 1 "no rung-2 boot evidence" "$R2/ci.yml" "$R2/absent.env"
+
+# Prose must not disengage a mechanical hold — the lesson the sentinel gate learned when a
+# trailing comment flipped it from HOLD to RELEASED.
+{ printf '# RUNG2_BOOT_REHEARSAL=PASS\n# RUNG2_EVIDENCE_URL=https://x/1\n'
+  printf '# RUNG2_TEMPLATE_SHA256=%s\n' "$R2_SHA"; } > "$R2/comment.env"
+r2check "a fully commented-out evidence file => HOLD" 1 "does not assert" "$R2/ci.yml" "$R2/comment.env"
+
+r2_evidence "$R2/fail.env" FAIL "https://x/1" "$R2_SHA"
+r2check "evidence claiming FAIL => HOLD" 1 "does not assert" "$R2/ci.yml" "$R2/fail.env"
+
+r2_evidence "$R2/nourl.env" PASS "ask-me-about-it" "$R2_SHA"
+r2check "an unauditable non-URL pointer => HOLD" 1 "not a URL" "$R2/ci.yml" "$R2/nourl.env"
+
+r2_evidence "$R2/badsha.env" PASS "https://x/1" "deadbeef"
+r2check "a malformed template hash => HOLD" 1 "malformed" "$R2/ci.yml" "$R2/badsha.env"
+
+r2_evidence "$R2/stale.env" PASS "https://x/1" \
+  "0000000000000000000000000000000000000000000000000000000000000000"
+r2check "a hash for a DIFFERENT template => HOLD" 1 "STALE EVIDENCE" "$R2/ci.yml" "$R2/stale.env"
+
+r2check "a missing cloud-init => ABORT" 1 "missing or not supplied" "$R2/nonexistent.yml" "$R2/ok.env"
+
+# THE SELF-INVALIDATION PROPERTY, asserted end-to-end rather than inferred from (d): the
+# SAME evidence file that just released the gate must stop releasing it once the template
+# it attests to is edited. This is the whole reason the hash binding exists.
+cp "$R2/ci.yml" "$R2/ci-edited.yml"
+printf '\n# a later edit to the template\n' >> "$R2/ci-edited.yml"
+r2check "evidence goes stale when the template is edited" 1 "STALE EVIDENCE" \
+  "$R2/ci-edited.yml" "$R2/ok.env"
+
 # ── MUTATION SECTION ──────────────────────────────────────────────────────────────
 # This gate is a single decision, so every arm is SOLE-GUARD: there is no second line of
 # defence to hand off to, and a mutation that still HOLDs means the arm was decorative.
@@ -228,6 +293,73 @@ mutate_and_check "hold branch" \
 mutate_and_check "missing-file guard" \
   's/^  if \[\[ ! -f "\$cloud_init" \]\]; then/  if false; then/' \
   1 "$TMP/nonexistent.yml"
+
+# Rung-2 arms. Same SOLE-GUARD reasoning: that gate is a chain of independent refusals with
+# no second line of defence, so a mutation that still HOLDs means the arm was decorative.
+printf '\nmutation checks — rung-2 gate\n'
+
+mutate_r2() {
+  local label="$1" sed_expr="$2" want_rc="$3" ci="$4" ev="$5"
+  local mutated out rc
+  mutated="$TMP/mutated-r2.sh"
+  sed "$sed_expr" "$GATE" > "$mutated"
+  if cmp -s "$mutated" "$GATE"; then
+    fail "$label — the mutation matched NOTHING in the gate (byte-identical copy); the guard is missing or the sed expression drifted." "n/a" "no textual change"
+    return
+  fi
+  out="$(bash -c "source '$mutated'; git_data_rung2_rehearsal_gate '$ci' '$ev'" 2>&1)"; rc=$?
+  if [[ "$rc" -eq "$want_rc" ]]; then
+    pass "$label (arm is load-bearing — neutering it flips the verdict)"
+  else
+    fail "$label — the arm did NOT change behavior when neutered; it may be dead code" "$rc" "$out"
+  fi
+}
+
+# The hash binding is the arm most likely to be "simplified" away by a reader who takes it as
+# redundant with the PASS assertion. Neutered, stale evidence releases the birth route.
+mutate_r2 "rung-2 hash-binding arm" \
+  's/^  if \[\[ "\$claimed_sha" != "\$live_sha" \]\]; then/  if false; then/' \
+  0 "$R2/ci.yml" "$R2/stale.env"
+
+# Neutered, an evidence file that says FAIL releases the route.
+mutate_r2 "rung-2 PASS-assertion arm" \
+  's/^  if ! grep -qE .\^\[\[:space:\]\]\*RUNG2_BOOT_REHEARSAL.*$/  if false; then/' \
+  0 "$R2/ci.yml" "$R2/fail.env"
+
+# Neutered, an unauditable pointer releases the route. Anchored on `$url` rather than on the
+# URL regex itself: the gate's text contains a LITERAL `?` (`^https?://`), and in sed's BRE
+# `\?` means "optional previous character", so the obvious-looking expression matches nothing
+# and the mutation reports a missing guard rather than a real result.
+mutate_r2 "rung-2 evidence-URL arm" \
+  's|^  if \[\[ ! "\$url" =~ .*|  if false; then|' \
+  0 "$R2/ci.yml" "$R2/nourl.env"
+
+# NO comment-stripping mutation arm here, and the reason is worth recording rather than
+# leaving as an absence. Neutering the `body="$(sed ...)"` line does NOT flip the
+# commented-out fixture to RELEASED — the mutation battery said so — because whole-line
+# comments are already refused by the `^[[:space:]]*RUNG2_...` ANCHOR in each grep, not by
+# the strip. What the strip actually buys is TOLERANCE of a trailing comment on an otherwise
+# valid line, which is a permissiveness property: mutating it away makes the gate STRICTER,
+# so there is no fail-open mutation to assert. The positive test below is what pins it.
+r2_evidence "$R2/trailing.env" PASS "https://x/1" "$R2_SHA"
+sed -i 's|^RUNG2_BOOT_REHEARSAL=PASS$|RUNG2_BOOT_REHEARSAL=PASS   # rehearsed on a throwaway host|' "$R2/trailing.env"
+grep -q '#' "$R2/trailing.env" || fail "fixture setup: trailing comment was not applied" "n/a" ""
+r2check "trailing comments on valid evidence => still RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/trailing.env"
+
+# MINIMUM-CARDINALITY FLOOR. This suite had none, and it now covers TWO gates: an early
+# `exit`, a helper that silently stopped being called, or a fixture-setup failure would
+# otherwise report "0 failed" — the vacuous green every guard in this file exists to reject.
+# A floor, not equality: it is developer-incremented, so `-eq` would redden the suite on every
+# legitimately added assertion and train the next person to bump it unread. Counts
+# passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
+# rather than masquerading as an empty suite.
+_ran=$((passes + fails))
+if [[ "$_ran" -lt 30 ]]; then
+  fails=$((fails + 1))
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 30. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+else
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 30)\n' "$_ran"
+fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

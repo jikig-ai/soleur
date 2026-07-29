@@ -181,6 +181,114 @@ HOLD
     return 1
   fi
 
-  echo "git_data_birth_readiness_gate: RELEASED — ${hits} non-comment \${sentry_dsn} interpolation(s) found in ${cloud_init}; the host has an off-host emitter wired. NOTE: this gate enforces only the THREADING half of item 1 of the ADR-149 release checklist — a non-comment line that merely references the variable satisfies it. EVERY OTHER item on the ADR-149 release checklist — Doppler scope reachability, address registration, the post-apply signal, GIT_DATA_SSH_HOST production, the firewall-attachment entailment correction, this gate's own mandated replacement by a direct assertion on the emitter resource (operator decision 2026-07-27, DC-2), and clearing the runbook banner — is NOT machine-checked here."
+  echo "git_data_birth_readiness_gate: RELEASED — ${hits} non-comment \${sentry_dsn} interpolation(s) found in ${cloud_init}; the host has an off-host emitter wired. NOTE: this gate enforces only the THREADING half of item 1 of the ADR-149 release checklist — a non-comment line that merely references the variable satisfies it. EVERY OTHER item on the ADR-149 release checklist — Doppler scope reachability, address registration, the post-apply signal, GIT_DATA_SSH_HOST production, the firewall-attachment entailment correction, this gate's own mandated replacement by a direct assertion on the emitter resource (operator decision 2026-07-27, DC-2), and clearing the runbook banner — is NOT machine-checked here. The rung-2 boot rehearsal is checked SEPARATELY by git_data_rung2_rehearsal_gate, which the dispatch job runs alongside this one."
+  return 0
+}
+
+# ── THE SECOND INTERLOCK: rung-2 boot evidence (#6982 A3) ─────────────────────────────
+#
+# WHY THIS EXISTS. #6982 shipped the emitter, so the sentinel gate above now RELEASES. That
+# retired the ONLY mechanical hold on the birth route, leaving the dispatch held by prose:
+# the DO-NOT-DISPATCH banner in git-data-birth.md and the ADR-149 checklist. ADR-149's own
+# Alternatives table rejects exactly that posture — "a capability held only by prose is held
+# until the first person who reads the runbook and not the plan" — and the workflow's own
+# comment now reads "THE BIRTH-READINESS INTERLOCK IS RELEASED", which INVITES the dispatch
+# the banner forbids. The banner lives in a different file from the button.
+#
+# WHAT IT CHECKS, and nothing more. That the rendered cloud-init has been booted once on a
+# throwaway host (rung 2) and that the evidence is for THE TEMPLATE BEING DISPATCHED. It is
+# deliberately NOT a proxy for the rest of the ADR-149 checklist.
+#
+# THE HASH BINDING IS THE POINT. Requiring only "some evidence file exists" would be
+# satisfied forever by a rehearsal of a template that has since been edited — and this
+# template is edited constantly. Pinning RUNG2_TEMPLATE_SHA256 to the live file's hash makes
+# the evidence SELF-INVALIDATING: any later edit to cloud-init-git-data.yml re-holds the
+# route until it is re-rehearsed. That is the property prose cannot have.
+#
+# Rung 1 (the container harness this PR shipped) deliberately does NOT satisfy this. It never
+# boots the rendered template, so it cannot evidence a real boot. #7025 carries rung 2 as its
+# own precondition and is the issue that lands this file.
+#
+# Comments are stripped before matching, for the reason the sentinel gate learned the hard
+# way: a prose marker in a comment must never disengage a mechanical hold.
+#
+# Usage:  git_data_rung2_rehearsal_gate <cloud-init-git-data.yml> [evidence-file]
+#         # 0=RELEASED, 1=HOLD
+git_data_rung2_rehearsal_gate() {
+  local cloud_init="${1:-}"
+  local evidence="${2:-}"
+  local body live_sha claimed_sha url
+
+  if [[ -z "$cloud_init" || ! -f "$cloud_init" ]]; then
+    echo "git_data_rung2_rehearsal_gate: ABORT — cloud-init template missing or not supplied ('${cloud_init}'). Fail-closed: with no template there is nothing to bind evidence to."
+    return 1
+  fi
+
+  # Default beside the template it attests to, so the two move together in review.
+  if [[ -z "$evidence" ]]; then
+    evidence="$(dirname "$cloud_init")/git-data-rung2-boot-evidence.env"
+  fi
+
+  if [[ ! -f "$evidence" ]]; then
+    cat <<HOLD
+git_data_rung2_rehearsal_gate: HOLD — the git-data birth route is INTERLOCKED and will not apply.
+
+WHY: no rung-2 boot evidence at ${evidence}.
+
+The emitter shipped in #6982, so the \${sentry_dsn} threading interlock released. That was
+the only MECHANICAL hold on this route. What still holds it is the DO-NOT-DISPATCH banner in
+knowledge-base/engineering/operations/runbooks/git-data-birth.md — prose, in a different
+file from this button. This gate exists so that hold is mechanical too.
+
+WHAT IS MISSING: the rendered cloud-init has never been booted on real hardware. #6982
+reached rung 1 only — a CONTAINER harness that never boots the rendered template — and that
+was deliberately NOT inherited as a rung-2 pass. So the first real boot of this template
+would be the production host that holds every connected user's source code.
+
+TO RELEASE: run the rung-2 rehearsal (boot the rendered template once on a throwaway host,
+outside the hcloud_server.git_data address), then commit ${evidence} containing:
+
+  RUNG2_BOOT_REHEARSAL=PASS
+  RUNG2_EVIDENCE_URL=<workflow run or write-up URL>
+  RUNG2_TEMPLATE_SHA256=<sha256 of the cloud-init template that was booted>
+
+Carried by #7025, which owns rung 2 as its own precondition. Nothing has been planned or
+created.
+HOLD
+    return 1
+  fi
+
+  # Strip whole-line AND trailing comments, same two forms the sentinel gate strips.
+  body="$(sed 's/^[[:space:]]*#.*$//; s/[[:space:]]#.*$//' "$evidence" 2>/dev/null)"
+
+  if ! grep -qE '^[[:space:]]*RUNG2_BOOT_REHEARSAL[[:space:]]*=[[:space:]]*PASS[[:space:]]*$' <<<"$body"; then
+    echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} does not assert RUNG2_BOOT_REHEARSAL=PASS in non-comment text. Fail-closed: an evidence file that does not claim a pass is not a pass."
+    return 1
+  fi
+
+  url="$(grep -E '^[[:space:]]*RUNG2_EVIDENCE_URL[[:space:]]*=' <<<"$body" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//')"
+  if [[ ! "$url" =~ ^https?:// ]]; then
+    echo "git_data_rung2_rehearsal_gate: HOLD — RUNG2_EVIDENCE_URL in ${evidence} is absent or not a URL (got '${url}'). Fail-closed: an unauditable claim is not evidence."
+    return 1
+  fi
+
+  claimed_sha="$(grep -E '^[[:space:]]*RUNG2_TEMPLATE_SHA256[[:space:]]*=' <<<"$body" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//' | tr 'A-F' 'a-f')"
+  if [[ ! "$claimed_sha" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "git_data_rung2_rehearsal_gate: HOLD — RUNG2_TEMPLATE_SHA256 in ${evidence} is absent or malformed (got '${claimed_sha}'). Fail-closed."
+    return 1
+  fi
+
+  live_sha="$(sha256sum "$cloud_init" 2>/dev/null | cut -d' ' -f1)"
+  if [[ ! "$live_sha" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "git_data_rung2_rehearsal_gate: ABORT — could not hash ${cloud_init}. Fail-closed."
+    return 1
+  fi
+
+  if [[ "$claimed_sha" != "$live_sha" ]]; then
+    echo "git_data_rung2_rehearsal_gate: HOLD — STALE EVIDENCE. ${evidence} attests a rehearsal of template sha256 ${claimed_sha}, but ${cloud_init} is now ${live_sha}. The template changed after it was rehearsed, so the boot that was proven is not the boot that would happen. Re-run the rung-2 rehearsal against the current template and update the evidence."
+    return 1
+  fi
+
+  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for template sha256 ${live_sha} (${url}). NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
   return 0
 }

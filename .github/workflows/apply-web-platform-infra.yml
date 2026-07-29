@@ -3843,20 +3843,30 @@ jobs:
     # a separate inline copy in the `apply` job whose `if:` is mutually exclusive with this
     # one, so for this path the sourced birth gate is the ONLY check.
     #
-    # THE BIRTH-READINESS INTERLOCK IS RELEASED as of #6982 — this job now plans. It held
-    # because cloud-init-git-data.yml emitted nothing off-host and nothing in its boot path
-    # failed closed, so a green apply and a dark host were indistinguishable and ADR-145's
-    # readiness gates had no analogue here (nothing to poll). #6982 shipped the emitter:
+    # THIS JOB IS STILL HELD, BY TWO GATES, AND BOTH ARE MECHANICAL.
+    #
+    # (1) The birth-readiness (sentinel) interlock RELEASED as of #6982. It held because
+    # cloud-init-git-data.yml emitted nothing off-host and nothing in its boot path failed
+    # closed, so a green apply and a dark host were indistinguishable and ADR-145's readiness
+    # gates had no analogue here (nothing to poll). #6982 shipped the emitter:
     #
     #   grep -vE '^[[:space:]]*#' apps/web-platform/infra/cloud-init-git-data.yml \
     #     | grep -c 'sentry_dsn'          # => 2 (was 0; the gate's sentinel, non-comment)
     #
-    # WHAT IS STILL HELD, AND BY WHAT. The mechanical hold is gone; the dispatch hold is not.
-    # The runbook's DO-NOT-DISPATCH banner stands until the rung-2 boot rehearsal (booting the
-    # rendered template once on a throwaway host outside the hcloud_server.git_data address)
-    # produces evidence — carried as #7025's own precondition, deliberately NOT inherited as a
-    # pass from #6982's rung-1 container rehearsal. See ADR-149's release checklist and its
-    # #6982 disposition table for what each item actually delivered.
+    # (2) The RUNG-2 REHEARSAL interlock HOLDS. Releasing (1) retired the only mechanical
+    # hold on this route, which left the birth held by the runbook's DO-NOT-DISPATCH banner
+    # alone — prose, in a different file from this button, and an earlier revision of THIS
+    # COMMENT said "the interlock is released", inviting the dispatch the banner forbids.
+    # ADR-149's own Alternatives table rejects a capability held only by prose. So the rung-2
+    # precondition is now enforced here: git_data_rung2_rehearsal_gate requires committed boot
+    # evidence hash-bound to the template being dispatched, and re-holds automatically on any
+    # later edit to cloud-init-git-data.yml.
+    #
+    # Rung 2 — booting the rendered template once on a throwaway host outside the
+    # hcloud_server.git_data address — is carried as #7025's own precondition and was
+    # deliberately NOT inherited as a pass from #6982's rung-1 container rehearsal. See
+    # ADR-149's release checklist and its #6982 disposition table for what each item
+    # delivered. The banner stays up until #7025 lands the evidence.
     #
     # DELTAS FROM web_host_create, each evidenced rather than inherited:
     #   • SINGLETON, not a for_each map — no host key input, and the gate's `def allow:`
@@ -3934,6 +3944,27 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
           if ! git_data_birth_readiness_gate "${GITHUB_WORKSPACE}/apps/web-platform/infra/cloud-init-git-data.yml"; then
             echo "::error::git-data-host-create is HELD: cloud-init-git-data.yml has no off-host emitter, so a failed birth would produce no signal at all and a green apply would be indistinguishable from a dark host. #6982 shipped that emitter and this gate released, so seeing this message now means the threading has REGRESSED — the \${sentry_dsn} interpolation is gone from non-comment template text. The gate's message above carries the ADR-149 release checklist. Nothing has been planned or created."
+            exit 1
+          fi
+
+      # THE SECOND INTERLOCK (#6982 A3). Separate step and separate function, because the
+      # two gates assert DIFFERENT facts and a reader should be able to tell which one held.
+      #
+      # The gate above went from HOLD to RELEASED when #6982 shipped the emitter, which
+      # retired the only MECHANICAL hold on this route — from then on the birth was held
+      # only by the DO-NOT-DISPATCH banner in a runbook, i.e. by prose, in a different file
+      # from this button. ADR-149's own Alternatives table rejects that posture. This gate
+      # restores a mechanical hold for the one precondition that is about the HOST BOOTING:
+      # rung-2 evidence, hash-bound to the template being dispatched so it self-invalidates
+      # the moment cloud-init-git-data.yml is edited again. #7025 carries rung 2 and lands
+      # the evidence file; until then this step HOLDS by design.
+      - name: Rung-2 rehearsal interlock (refuses while the template has never really booted)
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
+          if ! git_data_rung2_rehearsal_gate "${GITHUB_WORKSPACE}/apps/web-platform/infra/cloud-init-git-data.yml"; then
+            echo "::error::git-data-host-create is HELD: no rung-2 boot evidence for the CURRENT cloud-init-git-data.yml. #6982 reached rung 1 only (a container harness that never boots the rendered template), so the first real boot of this template would be the production host holding every user's source. The gate's message above says exactly what to commit to release it. Carried by #7025. Nothing has been planned or created."
             exit 1
           fi
 
