@@ -835,6 +835,16 @@ jobs:
       - name: Rehearse the git-data runcmd chain (abort ordering + rc guard)
         run: bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
 
+      # (#6982, ADR-151) The render-strip contract. git-data.tf strips whole-line comments
+      # from the nine injected payloads so rationale does not compete with the 32,768 B
+      # ForceNew cap. Two things make that safe and neither is self-enforcing: the strip
+      # expression is hand-mirrored in git-data-userdata-budget.sh (the render harness for
+      # two other suites, so drift means CI renders a different payload than production),
+      # and it must never eat a shebang — three payloads run via authorized_keys
+      # command="...", where a lost #! falls back to dash SILENTLY rather than ENOEXEC.
+      - name: Verify the git-data render-strip contract (parity + shebang + no-op guards)
+        run: bash apps/web-platform/infra/git-data-render-strip-parity.test.sh
+
       # (#6982) systemd unit lint. `OnFailure=` is a [Unit] directive; placing it in
       # [Service] makes systemd IGNORE it silently, which shipped the whole gc
       # failure-reporting path dead past three review passes while two comments asserted it

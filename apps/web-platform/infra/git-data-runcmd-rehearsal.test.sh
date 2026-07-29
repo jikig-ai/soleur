@@ -104,9 +104,32 @@ INLINE_ALLOWLIST = {
 tpl = open(os.path.join(srcdir, "cloud-init-git-data.yml")).read()
 tf = open(os.path.join(srcdir, "git-data.tf")).read()
 
+# The payloads are delivered with whole-line `#` comments stripped at render time (ADR-151),
+# so the source must be stripped the same way before the bytes are compared. The expression
+# is READ FROM git-data.tf rather than restated here: a hand-copied fourth spelling of it
+# would drift, and a stripper that silently disagreed with production would make this whole
+# check compare the wrong bytes while still reporting byte-identity.
+m = re.search(r'git_data_rationale_strip\s*=\s*"(.*)"', tf)
+if not m:
+    print("B1 FAIL: no git_data_rationale_strip in git-data.tf — cannot mirror the render-time "
+          "strip, so a byte comparison would be against the wrong bytes")
+    sys.exit(1)
+_expr = m.group(1)
+if not (_expr.startswith("/") and _expr.endswith("/")):
+    print("B1 FAIL: git_data_rationale_strip is not a /…/ regex literal: %r" % _expr)
+    sys.exit(1)
+# HCL turns \t and \n into real characters before terraform's regex engine sees them; do the
+# same so python compiles the identical pattern.
+_pat = _expr[1:-1].replace("\\t", "\t").replace("\\n", "\n")
+STRIP = re.compile(_pat)
+if not STRIP.search("#!/bin/sh\n# a comment\n"):
+    print("B1 FAIL: the strip expression from git-data.tf matches nothing on a known-"
+          "commented probe — it would make every payload trivially 'identical'")
+    sys.exit(1)
+
 # var -> source filename, from git-data.tf's templatefile vars block.
 bindings = dict(re.findall(
-    r'^\s*([a-z_]+)\s*=\s*file\("\$\{path\.module\}/([^"]+)"\)', tf, re.M))
+    r'^\s*([a-z_]+)\s*=\s*(?:replace\()?file\("\$\{path\.module\}/([^"]+)"\)', tf, re.M))
 # The vars actually delivered via indent(6, …) in the template.
 delivered_vars = sorted(set(re.findall(r'\$\{indent\(6,\s*([a-z_]+)\)\}', tpl)))
 
@@ -156,7 +179,7 @@ if missing:
     sys.exit(1)
 
 for name in sorted(delivered_sources):
-    want = open(os.path.join(srcdir, name), "rb").read()
+    want = STRIP.sub("", open(os.path.join(srcdir, name)).read()).encode()
     got = delivered_sources[name]
     if hashlib.sha256(got).hexdigest() != hashlib.sha256(want).hexdigest():
         bad.append("%s: rendered sha=%s (%d B) != source sha=%s (%d B)" % (

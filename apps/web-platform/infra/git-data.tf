@@ -256,6 +256,29 @@ resource "doppler_secret" "git_data_ssh_host" {
 }
 
 # --- The git-data host -------------------------------------------------------
+# (#6982, ADR-151) THE RATIONALE STRIP. Removes whole-line `#` comments from the nine
+# injected scripts/units AT RENDER TIME, so the repo keeps its rationale and user_data does
+# not pay for it. Hetzner's cap is a hard 32,768 B ForceNew gate and comments were 61% of the
+# raw payload; without this, every safety comment competes with a fail-closed invariant for
+# space, which on a host where a green apply and a dark host are indistinguishable is the
+# wrong trade. cloud-init-git-data.yml itself is NOT stripped.
+#
+# ANCHORED AT LINE START, and `#!` is preserved by construction. `${var#...}` and other
+# mid-line `#` are untouched because the match must begin the line; a `#`-anywhere rule
+# (`s/#.*//`) breaks four of the six scripts on parameter expansion — measured.
+# Preserving `#!` is not cosmetic: git-data-provision.sh, -remove.sh and -transport-wrapper.sh
+# are invoked via authorized_keys `command="..."`, so a lost shebang does NOT fail loudly —
+# it silently falls back to dash. That is the same class as the A2 defect this PR fixes.
+#
+# TWO INVARIANTS THIS EXPRESSION MUST KEEP, both load-bearing for downstream parsers in
+# plugins/soleur/test/cloud-init-user-data-size.test.ts: it contains NO brace (that file
+# counts brace depth to find the templatefile map), and every map entry below stays on ONE
+# physical line (its var parser is line-based). git-data-userdata-budget.sh mirrors this
+# expression byte-for-byte; git-data-render-strip-parity.test.sh is what keeps them equal.
+locals {
+  git_data_rationale_strip = "/(?m)^[ \t]*#([^!=\n][^\n]*)?\n/"
+}
+
 resource "hcloud_server" "git_data" {
   name = "soleur-git-data"
   # Arch is DERIVED from this value (local.git_data_arch), never assumed — see the local.
@@ -294,23 +317,23 @@ resource "hcloud_server" "git_data" {
   # #5887's first `terraform plan`; fail-closed at first provisioning if decode fails
   # (web-host readiness check finds no git/bare-repo, blocks cutover). See ADR-080.
   user_data = base64gzip(templatefile("${path.module}/cloud-init-git-data.yml", {
-    git_data_bootstrap               = file("${path.module}/git-data-bootstrap.sh")
-    git_data_pre_receive_placeholder = file("${path.module}/git-data-pre-receive-placeholder.sh")
+    git_data_bootstrap               = replace(file("${path.module}/git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
+    git_data_pre_receive_placeholder = replace(file("${path.module}/git-data-pre-receive-placeholder.sh"), local.git_data_rationale_strip, "")
     # The FIXED provision forced-command wrapper (git init --bare), delivered to
     # /usr/local/bin like the bootstrap (ADR provisioning amendment).
-    git_data_provision = file("${path.module}/git-data-provision.sh")
+    git_data_provision = replace(file("${path.module}/git-data-provision.sh"), local.git_data_rationale_strip, "")
     # The TRANSPORT allowlist forced-command wrapper (Sub-PR 3.D) — replaces the raw
     # git-shell forced command; delivered to /usr/local/bin like the others.
-    git_data_transport_wrapper = file("${path.module}/git-data-transport-wrapper.sh")
+    git_data_transport_wrapper = replace(file("${path.module}/git-data-transport-wrapper.sh"), local.git_data_rationale_strip, "")
     # The FIXED erasure forced-command wrapper (rm -rf <id>.git), Art. 17 (3.A;
     # app-side call lands in 3.D). Delivered to /usr/local/bin like the others.
-    git_data_remove = file("${path.module}/git-data-remove.sh")
+    git_data_remove = replace(file("${path.module}/git-data-remove.sh"), local.git_data_rationale_strip, "")
     # (#6982, W4) The bounded maintenance unit set. Plain text like its siblings, so it
     # gzips instead of paying base64's 33 % inflation against the 32 KB user_data cap.
-    git_data_gc                 = file("${path.module}/git-data-gc.sh")
-    git_data_gc_service         = file("${path.module}/git-data-gc.service")
-    git_data_gc_failure_service = file("${path.module}/git-data-gc-failure.service")
-    git_data_gc_timer           = file("${path.module}/git-data-gc.timer")
+    git_data_gc                 = replace(file("${path.module}/git-data-gc.sh"), local.git_data_rationale_strip, "")
+    git_data_gc_service         = replace(file("${path.module}/git-data-gc.service"), local.git_data_rationale_strip, "")
+    git_data_gc_failure_service = replace(file("${path.module}/git-data-gc-failure.service"), local.git_data_rationale_strip, "")
+    git_data_gc_timer           = replace(file("${path.module}/git-data-gc.timer"), local.git_data_rationale_strip, "")
     # trimspace()'d — see local.git_transport_pubkey / local.git_provision_pubkey.
     git_transport_pubkey = local.git_transport_pubkey
     git_provision_pubkey = local.git_provision_pubkey
