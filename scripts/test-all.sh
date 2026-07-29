@@ -330,6 +330,13 @@ if want_scripts; then
   # the same reason as its neighbours: scripts/*.test.sh is NOT auto-globbed, so an
   # unregistered suite is an ORPHAN that gates nothing.
   run_suite "scripts/raise-tmp-tmpfs-ceiling" bash scripts/raise-tmp-tmpfs-ceiling.test.sh
+  # ADR-150 / #7012: arms for the rules-loader discoverability probe. The
+  # NEGATIVE arms carry the weight — a probe that prints OK unconditionally is
+  # indistinguishable from a working one. T6 additionally pins that preflight
+  # Check 10 can still EXECUTE the plan's command, so a later "simplify it back
+  # to a pipeline" edit fails here instead of silently un-verifying the probe.
+  # Registered explicitly: scripts/*.test.sh is NOT auto-globbed by this runner.
+  run_suite "scripts/rules-loader-stamp-probe" bash scripts/rules-loader-stamp-probe.test.sh
   run_suite "scripts/lint-orphan-test-suites" bash scripts/lint-orphan-test-suites.sh
   run_suite "scripts/cron-artifact-age" bash scripts/cron-artifact-age.test.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
