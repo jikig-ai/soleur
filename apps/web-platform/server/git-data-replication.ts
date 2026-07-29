@@ -284,6 +284,24 @@ export function ensureGitDataRemote(
  * mirror-to-sentry). The error is re-thrown so the caller can decide; call sites
  * on the session-end path catch it so a replication failure never breaks the turn.
  */
+/**
+ * What actually happened to a replication attempt.
+ *
+ * B13 (#6982 review): this function used to return bare `void`, and BOTH callers `await` it
+ * inside a `catch {}`. That made the three outcomes indistinguishable at the call site — a
+ * completed push, a disabled-by-flag no-op, and a SHED all looked identical. The shed is the
+ * one that matters: it means this session's delta was never replicated, and because
+ * replication is session-end-coupled, "later" never comes for that delta. A caller that
+ * cannot tell it happened cannot count it, retry it, or decide not to.
+ *
+ * The shed is already reported to Sentry and the app log; this makes it legible to CODE as
+ * well, without changing any control flow — `void` was structurally incapable of carrying it.
+ */
+export type GitDataReplicationOutcome =
+  | { status: "replicated" }
+  | { status: "disabled" }
+  | { status: "shed"; slotsBusy: number; queueTimeoutMs: number };
+
 export async function replicateToGitData(params: {
   workspacePath: string;
   workspaceId: string;
@@ -305,8 +323,8 @@ export async function replicateToGitData(params: {
    * cc-dispatcher) already thread the session userId.
    */
   userId: string;
-}): Promise<void> {
-  if (!isGitDataStoreEnabled()) return;
+}): Promise<GitDataReplicationOutcome> {
+  if (!isGitDataStoreEnabled()) return { status: "disabled" };
   const { workspacePath, workspaceId, worktreeId, leaseGeneration, userId } = params;
   assertSafeWorkspaceId(workspaceId);
   assertSafeWorktreeId(worktreeId);
@@ -360,7 +378,11 @@ export async function replicateToGitData(params: {
       },
       "git-data replication shed — queue timeout; session end is not blocked",
     );
-    return;
+    return {
+      status: "shed",
+      slotsBusy: GIT_DATA_MAX_CONCURRENT,
+      queueTimeoutMs: GIT_DATA_QUEUE_TIMEOUT_MS,
+    };
   }
 
   try {
@@ -407,6 +429,8 @@ export async function replicateToGitData(params: {
       },
       "git-data replication push complete",
     );
+
+    return { status: "replicated" };
   } catch (err) {
     reportSilentFallback(err, {
       feature: "worktree_lease",

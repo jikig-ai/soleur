@@ -52,7 +52,7 @@
       },
       "at_rest": {
         "mechanism": "luks",
-        "evidence": "apps/web-platform/infra/cloud-init-git-data.yml:170,173 (cryptsetup luksFormat/luksOpen git-data); key: random_password.git_data_luks + doppler_secret.git_data_luks_key (git-data-luks.tf); fstab: cloud-init-git-data.yml:180",
+        "evidence": "apps/web-platform/infra/cloud-init-git-data.yml, anchored on content not line numbers (cq-cite-content-anchor-not-line-number): the `cryptsetup luksFormat --batch-mode --type luks2 --key-file -` and `cryptsetup luksOpen --key-file - \"$DEV\" git-data` calls, and the `/dev/mapper/git-data /mnt/git-data-luks ext4` fstab line. Key: random_password.git_data_luks + doppler_secret.git_data_luks_key (git-data-luks.tf)",
         "defends_against": "a seized/RMA'd or snapshot-imaged git-data block volume: unreadable without the Doppler-held passphrase",
         "does_not_defend": "a leaked credential, an app-layer read on the unlocked host, or exfiltration via a compromised git-data process",
         "disclosed_as": "not-publicly-claimed",

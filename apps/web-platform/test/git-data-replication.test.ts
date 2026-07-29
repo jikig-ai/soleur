@@ -264,8 +264,14 @@ describe("replicateToGitData — concurrency limiter (#6982 W6)", () => {
     await vi.waitFor(() => expect(mod.__gitDataInFlightForTest()).toBe(1));
 
     // The shed caller must RESOLVE (not hang, not throw): git-data is an overlay and
-    // session end must never block on it.
-    await expect(call(mod, "ws-shed")).resolves.toBeUndefined();
+    // session end must never block on it. And it must SAY it shed — B13 (#6982 review):
+    // returning bare `void` made a shed indistinguishable from a completed push at the call
+    // site, on a path where a shed delta is never replicated later.
+    await expect(call(mod, "ws-shed")).resolves.toEqual({
+      status: "shed",
+      slotsBusy: expect.any(Number),
+      queueTimeoutMs: expect.any(Number),
+    });
 
     // ...and the shed must be OBSERVABLE. A silent shed is indistinguishable from a bug.
     expect(reportSilentFallback).toHaveBeenCalled();
@@ -297,7 +303,7 @@ describe("replicateToGitData — concurrency limiter (#6982 W6)", () => {
     // Proof the pool still works afterwards — the assertion above would also hold if the
     // counter were merely reset rather than properly released.
     gitPush.mockResolvedValue(Buffer.from(""));
-    await expect(call(mod, "ws-after")).resolves.toBeUndefined();
+    await expect(call(mod, "ws-after")).resolves.toEqual({ status: "replicated" });
   });
 });
 
