@@ -217,11 +217,16 @@ export async function cronRoadmapReviewHandler({
   // for today, skip the eval and post a healthy OK heartbeat — do NOT fall
   // through to verify-output, whose run-window (updated_at >= THIS runStartedAt)
   // would exclude the earlier issue and false-RED the skip.
-  // concurrency:{scope:"fn",limit:1} (registration below) serializes the two
-  // invocations, so the second's FRESH LIST read sees the first's create. Date
-  // anchor is runStartedAt.slice(0,10) (replay-stable across the retries:1
-  // memoization). Fail-OPEN: a read error → spawn (a duplicate paper-cut beats a
-  // missed digest).
+  // #6770 — the prior version of this comment claimed
+  // concurrency:{scope:"fn",limit:1} (registration below) serializes overlapping
+  // invocations so the second's FRESH LIST read is GUARANTEED to see the first's
+  // create. Observed duplicates (#6756/#6758, ~4 min apart same date; #5779/#5781,
+  // same date) falsify that guarantee — either the two invocations were not
+  // actually serialized, or the intervening GitHub read lagged behind the first's
+  // write. Treat the concurrency limit as a best-effort reducer of the race
+  // window, NOT a correctness proof. Date anchor is runStartedAt.slice(0,10)
+  // (replay-stable across the retries:1 memoization). Fail-OPEN: a read error (or
+  // an undetected race) → spawn (a duplicate paper-cut beats a missed digest).
   const digestAlreadyExists = await step.run("dedup-digest-check", async () =>
     digestIssueExistsForDate({
       label: SENTRY_MONITOR_SLUG,
