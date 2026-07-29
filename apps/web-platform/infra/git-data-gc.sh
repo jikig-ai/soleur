@@ -56,7 +56,12 @@ exec 9>"$LOCK" || {
 }
 if ! flock -n 9; then
   log "another maintenance holder owns $LOCK — skipping this run"
-  [ -x "$EMIT" ] && "$EMIT" "SOLEUR_GIT_DATA_GC run skipped (lock held)" gc info "" \
+  # stage `gc_report`, NOT `gc`: the git_data_boot_fatal Sentry rule filters stage EQUAL "gc"
+  # with filter_match="any" and NO level filter, so an `info` on this stage pages the operator
+  # for a routine skip. `gc` is reserved for the unit DYING. The sibling `lock unopenable`
+  # arm below deliberately keeps `gc` -- a lock that cannot be opened means the store is
+  # never maintained again, which is worth waking someone for.
+  [ -x "$EMIT" ] && "$EMIT" "SOLEUR_GIT_DATA_GC run skipped (lock held)" gc_report info "" \
     "lock=held" || true
   exit 0
 fi
@@ -68,9 +73,12 @@ failed=0
 completed=0
 emitted=0
 
-# B8: THE SUMMARY EMITS FROM A TRAP, so a kill still reports. MemoryMax=1G and
-# TimeoutStartSec are real outcomes on a 4 GB box, and a SIGKILL/SIGTERM part-way through the
-# glob used to destroy the loop AND the emit together: the unit died, OnFailure fired a bare
+# B8: THE SUMMARY EMITS FROM A TRAP, so a SIGTERM still reports. NOT SIGKILL -- no trap can
+# catch that, and MemoryMax=1G produces exactly SIGKILL, so the OOM-killed repack is covered
+# by OnFailure=git-data-gc-failure.service (which reports the DEATH) and not by this
+# (which reports HOW FAR IT GOT). TimeoutStartSec expiry sends SIGTERM first, so that one
+# does reach here. Before this, a termination part-way through the glob destroyed the loop
+# AND the emit together: the unit died, OnFailure fired a bare
 # "unit failed", and nothing said HOW FAR it got — so every repo after the offender in glob
 # order was silently unmaintained, indefinitely, with no signal naming the shortfall.
 #
@@ -80,7 +88,11 @@ emitted=0
 summarize() {
   [ "$emitted" -eq 1 ] && return 0
   emitted=1
-  read -r disk_pct inode_pct < <(df --output=pcent,ipcent "$GIT_DATA_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9 \n') || true
+  # `timeout 5`: df on a wedged block device hangs with no bound, and this read is the FIRST
+  # statement in summarize -- ahead of every emit. Under the TERM trap that burns
+  # TimeoutStopSec until systemd SIGKILLs, losing the summary on the failure class most
+  # correlated with a full store. Emitting disk_pct=unknown beats emitting nothing.
+  read -r disk_pct inode_pct < <(timeout 5 df --output=pcent,ipcent "$GIT_DATA_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9 \n') || true
   log "maintenance done: repos=${repos} failures=${failed} complete=${completed} disk=${disk_pct:-unknown}% inodes=${inode_pct:-unknown}%"
   # NO per-repo identifiers, ever: a repo name is <workspace_id>.git and workspace_id IS the
   # user id. Only aggregate counts leave this host.
