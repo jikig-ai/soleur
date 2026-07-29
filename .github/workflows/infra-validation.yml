@@ -852,6 +852,15 @@ jobs:
       # the tool also resolves dependencies and would otherwise report on host units.
       - name: Lint the git-data systemd unit set
         run: |
+          set -uo pipefail
+          # B4: the gate must not pass because the LINTER is missing. `|| true` plus a grep
+          # for `git-data-gc*.service:` lines means an absent binary produces
+          # "systemd-analyze: command not found", which matches nothing and reads as clean —
+          # a linter that cannot run reporting no problems. Fail closed on absence instead.
+          if ! command -v systemd-analyze >/dev/null 2>&1; then
+            echo "::error::systemd-analyze is not installed on this runner, so the git-data unit lint did NOT run. This gate fails closed rather than reporting a clean lint it never performed."
+            exit 1
+          fi
           out=$(systemd-analyze verify \
             apps/web-platform/infra/git-data-gc.service \
             apps/web-platform/infra/git-data-gc-failure.service \

@@ -383,11 +383,29 @@ EXEC_RE = re.compile(r'^\s*Exec(?:Start|StartPre|StartPost|Stop|StopPost|Reload|
 #   /bin/sh -c 'set -a; . /etc/default/git-data-doppler; set +a; \
 # which contains "doppler" but no `run`, so it fell through to UNCLASSIFIED even though the
 # continuation is a plain `exec doppler run --config prd_git_data -- …` token read.
+# B3: `execs` is the UNION of the joined and the raw body, so no Exec* directive can be lost
+# to the continuation join. The join itself fires on ANY trailing backslash, which means a
+# directive on the following physical line is absorbed into its predecessor and stops matching
+# the line-anchored EXEC_RE — fail-OPEN for a guard whose entire job is spotting a
+# `docker login` or `doppler configure token`.
+#
+# The join is NOT made smarter, deliberately. A lookahead refusing to swallow a `Directive=`
+# line was tried and reverted: systemd itself continues on any trailing backslash, so teaching
+# this parser to stop early would make it MODEL SOMETHING SYSTEMD DOES NOT DO, trading a
+# fail-open for a wrong parse. Collecting both readings closes the gap without taking a
+# position on what the backslash meant. Over-collecting is safe here — these scans test for
+# the PRESENCE of credential-family commands, so a duplicate costs nothing and a miss is the
+# failure this file exists to prevent.
 CONT_RE = re.compile(r'\\\n[ \t]*')
 
 def mk_unit(name, source, body):
+    raw = body
     body = CONT_RE.sub(' ', body)
     execs = [m.group(1).strip() for m in EXEC_RE.finditer(body)]
+    for m2 in EXEC_RE.finditer(raw):
+        t = m2.group(1).strip()
+        if t not in execs:
+            execs.append(t)
     sm = re.search(r'^\s*ExecStart=(.*)$', body, re.M)
     execstart = sm.group(1).strip() if sm else (execs[0] if execs else '')
     rwp = []

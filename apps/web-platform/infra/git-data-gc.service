@@ -33,7 +33,13 @@ Type=oneshot
 # failed source kills the shell before doppler runs. See the OnFailure sibling for the
 # reachability bug this same shape caused there.
 EnvironmentFile=-/etc/default/git-data-doppler
-ExecStart=/usr/local/bin/doppler run --project soleur --config prd_git_data -- /usr/local/bin/git-data-gc.sh
+# The `/bin/sh -c` wrapper stays, and NOT for the sourcing it used to do. `systemd-analyze
+# verify` resolves the ExecStart BINARY on the machine running the lint, so a bare
+# ExecStart=/usr/local/bin/doppler reports "Command ... is not executable" on any CI runner
+# without doppler installed — reddening the unit lint for a file that is perfectly correct on
+# the host it ships to. Keeping /bin/sh as the binary keeps the unit lintable; the inner path
+# is absolute so nothing depends on systemd's default PATH.
+ExecStart=/bin/sh -c 'exec /usr/local/bin/doppler run --project soleur --config prd_git_data -- /usr/local/bin/git-data-gc.sh'
 
 # MemoryMax is an OOM boundary for THIS cgroup, so a runaway repack is killed here rather
 # than letting the kernel choose — the other candidates on this host are sshd and the git
