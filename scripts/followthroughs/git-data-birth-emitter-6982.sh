@@ -58,7 +58,7 @@ SQL="
   WHERE dt > now() - INTERVAL 30 DAY
     AND JSONExtractString(raw,'stage') = 'boot_complete'
     AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
-  ORDER BY dt DESC LIMIT 20"
+  ORDER BY dt DESC LIMIT 20 FORMAT JSONEachRow"
 
 # Mode 1 (raw SQL) takes the query as the FIRST POSITIONAL and no convenience flags:
 # `--since` belongs to Mode 2, and passing both makes the arg parser reject the SQL with

@@ -83,10 +83,10 @@ log "maintenance done: repos=${repos} failures=${failed} disk=${disk_pct:-unknow
 # user id. Only aggregate counts leave this host.
 if [[ -x "$EMIT" ]]; then
   if [[ "$failed" -gt 0 ]]; then
-    "$EMIT" "SOLEUR_GIT_DATA_GC" gc warning "$ERRLOG" \
+    "$EMIT" "SOLEUR_GIT_DATA_GC" gc_report warning "$ERRLOG" \
       "repos=${repos}" "failures=${failed}" "disk_pct=${disk_pct:-unknown}" || true
   else
-    "$EMIT" "SOLEUR_GIT_DATA_GC" gc info "" \
+    "$EMIT" "SOLEUR_GIT_DATA_GC" gc_report info "" \
       "repos=${repos}" "failures=0" "disk_pct=${disk_pct:-unknown}" || true
   fi
 fi

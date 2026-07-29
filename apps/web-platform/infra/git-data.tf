@@ -243,9 +243,15 @@ resource "doppler_secret" "git_data_ssh_host" {
   project = "soleur"
   config  = "prd"
   name    = "GIT_DATA_SSH_HOST"
-  # The static literal, NEVER hcloud_server_network.git_data.ip. Reading the computed
-  # attribute is what made this resource look infeasible in #6977 (see the local's comment).
-  value      = local.git_data_private_ip
+  # DC-3's MANDATED source. #6982's first draft shipped local.git_data_private_ip and
+  # recorded the mandate as "not satisfiable pre-birth"; review refuted that. The secret's
+  # ONLY -target line is the birth job, which already targets hcloud_server.git_data AND
+  # hcloud_server_network.git_data -- so the edge drags nothing new into any plan that
+  # exists, and there is no pre-birth window to protect because the secret is created BY
+  # the dispatch, not before it. The mandated form is also strictly stronger: it closes the
+  # residual above (a birth landing the server but not the NIC can no longer publish an
+  # address nothing answers on).
+  value      = hcloud_server_network.git_data.ip
   visibility = "masked"
 }
 

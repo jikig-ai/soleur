@@ -245,11 +245,11 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh "
              JSONExtractString(raw,'repo_root')    AS repo_root,
              JSONExtractString(raw,'hooks_path')   AS hooks_path,
              JSONExtractString(raw,'provision')    AS provision
-  FROM (SELECT * FROM remote(\$BS_TABLE)
-        UNION ALL SELECT * FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+  FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+        UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
   WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data'
     AND JSONExtractString(raw,'stage') = 'boot_complete'
-  ORDER BY dt DESC LIMIT 5"
+  ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow"
 
 # 2. Any boot FATAL. Sentry is the durable channel and the only one that pages.
 #    scripts/sentry-issue.sh takes an ISSUE ID, not a query (usage:
@@ -257,7 +257,7 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh "
 #    feed an id it returns into that script for the full event.
 doppler run -p soleur -c prd -- sh -c '
   q=$(printf "%s" "host_name:soleur-git-data" | jq -sRr @uri)
-  curl -sS -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" -H "Accept: application/json" \
+  curl -sS -H "Authorization: Bearer $SENTRY_ISSUE_RO_TOKEN" -H "Accept: application/json" \
     "https://sentry.io/api/0/organizations/jikigai-eu/issues/?query=$q&statsPeriod=24h" \
   | jq -r ".[] | \"\(.shortId)  \(.count)x  \(.title)\""'
 
@@ -265,7 +265,10 @@ doppler run -p soleur -c prd -- sh -c '
 #    doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --latest-event <issue-id>
 
 # 3. The standing probe (runs daily until it passes).
-bash scripts/followthroughs/git-data-birth-emitter-6982.sh   # 0 PASS / 1 FAIL / 2 TRANSIENT
+doppler run -p soleur -c prd_terraform -- \
+  bash scripts/followthroughs/git-data-birth-emitter-6982.sh   # 0 PASS / 1 FAIL / 2 TRANSIENT
+#    WITHOUT the wrapper it exits 2 for a MISSING CREDENTIAL, indistinguishable from
+#    exit 2 for "host still unborn" -- the state you are actually testing for.
 ```
 
 **Reading the result.** ANY `"no"` among the four assertions is a FAILED birth even if the

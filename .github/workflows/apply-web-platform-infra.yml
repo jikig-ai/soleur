@@ -4199,7 +4199,7 @@ jobs:
               WHERE dt > now() - INTERVAL 2 HOUR
                 AND JSONExtractString(raw,'stage') = 'boot_complete'
                 AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
-              ORDER BY dt DESC LIMIT 5" 2>/dev/null); rc=$?
+              ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow" 2>/dev/null); rc=$?
             # Match the PARSED field, not free text. A row is a JSON object carrying
             # "stage":"boot_complete"; the query text never appears on stdout.
             if [[ $rc -eq 0 ]] && printf '%s' "$out" | grep -q '"stage":"boot_complete"'; then

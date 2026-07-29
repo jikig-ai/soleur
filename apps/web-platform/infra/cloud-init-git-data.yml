@@ -318,7 +318,7 @@ runcmd:
       echo "[git-data] FATAL: boot emitter missing or non-executable. Refusing to continue into a boot nothing can report on." >&2
       exit 1
     fi
-    /usr/local/bin/git-data-emit "git-data cloud-init reached runcmd" gitdata_runcmd_early info ""
+    /usr/local/bin/git-data-emit "git-data cloud-init reached runcmd" gitdata_runcmd_ok info ""
     _emit_rc=$?
     # REFUSE ONLY ON rc 2 (structural). A blanket `if ! emit; exit 1` makes a 2xx from
     # sentry.io a HARD BOOT PRECONDITION, and runcmd is once-per-instance — a 429 would
@@ -342,7 +342,7 @@ runcmd:
     /usr/sbin/sshd -t 2>/run/git-data-sshd-t.err
     _sshd_t_rc=$?
     if [ "$_sshd_t_rc" -eq 126 ] || [ "$_sshd_t_rc" -eq 127 ]; then
-      /usr/local/bin/git-data-emit "git-data sshd -t could not run" sshd_config warning \
+      /usr/local/bin/git-data-emit "git-data sshd -t could not run" sshd_config_warn warning \
         /run/git-data-sshd-t.err "rc=$_sshd_t_rc" || true
       echo "[git-data] WARN: sshd -t unavailable (rc=$_sshd_t_rc) — cannot validate; restarting anyway rather than bricking the boot." >&2
       _sshd_t_rc=0
@@ -355,7 +355,7 @@ runcmd:
     fi
     systemctl restart sshd || {
       /usr/local/bin/git-data-emit "git-data sshd restart failed (config valid)" \
-        sshd_config warning "" || true
+        sshd_config_warn warning "" || true
     }
 
     # (#6982) Arm `set -e` only AFTER the Phase-0.4 classification. From here every

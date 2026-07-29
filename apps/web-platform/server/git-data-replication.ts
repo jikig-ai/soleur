@@ -411,7 +411,15 @@ export async function replicateToGitData(params: {
     reportSilentFallback(err, {
       feature: "worktree_lease",
       op: "git_data_replication_push",
-      extra: { workspaceId, leaseGeneration, userId },
+      // Hashed here too. `hashExtraUserId` renames `userId` ONLY, so a bare workspaceId
+      // (=== auth.users.id) reached BOTH sinks reportSilentFallback mirrors to. The commit
+      // that hashed the two log.* calls above stopped one site short of its own title.
+      extra: {
+        workspaceIdHash: hashUserId(workspaceId),
+        worktreeIdHash: hashUserId(worktreeId),
+        leaseGeneration,
+        userId,
+      },
       message:
         "git-data replication push failed — a fence reject (stale lease-gen) or " +
         "transport error; the workspace's objects were NOT replicated to the shared store",
