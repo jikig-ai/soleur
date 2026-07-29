@@ -184,8 +184,11 @@ on:
           RECREATES an existing web host (both volumes preserved by omission); it needs
           `web_host_key` + `confirm=REPLACE-<key>`, and it REFUSES web-1.
           git-data-host-create BIRTHS the never-provisioned git-data store; additive-only,
-          needs `confirm=BIRTH-GIT-DATA`, and is INTERLOCKED until #6982 ships an
-          off-host emitter.
+          needs `confirm=BIRTH-GIT-DATA`. HELD BY TWO MECHANICAL GATES: the sentinel
+          interlock released as of #6982 (the host now has an off-host emitter), but the
+          rung-2 rehearsal interlock REFUSES until committed boot evidence for the current
+          template lands under #7025. A dispatch today exits 1 before planning. Read
+          knowledge-base/engineering/operations/runbooks/git-data-birth.md first.
         required: false
         default: manual-rerun
         type: choice
@@ -215,10 +218,12 @@ on:
           # allow-set also rests on "preserved by OMISSION", an argument that INVERTS on a
           # birth (an omitted address is then a MISSING resource, not a protected one).
           #
-          # INTERLOCKED: the job sources a birth-readiness gate that refuses to plan while
+          # The job sources a birth-readiness gate that refuses to plan while
           # cloud-init-git-data.yml has no off-host emitter, because for this host a green
-          # apply and a dark boot are indistinguishable. #6982 ships the emitter and
-          # releases the interlock. See the git_data_host_create job and
+          # apply and a dark boot are indistinguishable. #6982 SHIPPED that emitter, so the
+          # gate now RELEASES — it remains armed as a regression check, not as a hold.
+          # Dispatch is still held by the runbook's DO-NOT-DISPATCH banner (rung-2 rehearsal
+          # evidence, #7025). See the git_data_host_create job and
           # knowledge-base/engineering/operations/runbooks/git-data-birth.md.
           - git-data-host-create
           # #6767: read-only retrospective drift audit of every declared ruleset's
@@ -3838,12 +3843,30 @@ jobs:
     # a separate inline copy in the `apply` job whose `if:` is mutually exclusive with this
     # one, so for this path the sourced birth gate is the ONLY check.
     #
-    # INTERLOCKED — this job REFUSES TO PLAN today, by design. cloud-init-git-data.yml emits
-    # nothing off-host (measured 0 for sentry_dsn/sentry/vector/betterstack/journald/
-    # heartbeat against the web host's 9/-/14/2/7/1 (grep -ci)), and nothing in its boot path fails
-    # closed. So a green apply and a dark host are indistinguishable, and ADR-145's readiness
-    # gates have no analogue here because there is nothing to poll. #6982 ships the emitter
-    # and releases the interlock. See ADR-149 for the full release checklist.
+    # THIS JOB IS STILL HELD, BY TWO GATES, AND BOTH ARE MECHANICAL.
+    #
+    # (1) The birth-readiness (sentinel) interlock RELEASED as of #6982. It held because
+    # cloud-init-git-data.yml emitted nothing off-host and nothing in its boot path failed
+    # closed, so a green apply and a dark host were indistinguishable and ADR-145's readiness
+    # gates had no analogue here (nothing to poll). #6982 shipped the emitter:
+    #
+    #   grep -vE '^[[:space:]]*#' apps/web-platform/infra/cloud-init-git-data.yml \
+    #     | grep -c 'sentry_dsn'          # => 2 (was 0; the gate's sentinel, non-comment)
+    #
+    # (2) The RUNG-2 REHEARSAL interlock HOLDS. Releasing (1) retired the only mechanical
+    # hold on this route, which left the birth held by the runbook's DO-NOT-DISPATCH banner
+    # alone — prose, in a different file from this button, and an earlier revision of THIS
+    # COMMENT said "the interlock is released", inviting the dispatch the banner forbids.
+    # ADR-149's own Alternatives table rejects a capability held only by prose. So the rung-2
+    # precondition is now enforced here: git_data_rung2_rehearsal_gate requires committed boot
+    # evidence hash-bound to the template being dispatched, and re-holds automatically on any
+    # later edit to cloud-init-git-data.yml.
+    #
+    # Rung 2 — booting the rendered template once on a throwaway host outside the
+    # hcloud_server.git_data address — is carried as #7025's own precondition and was
+    # deliberately NOT inherited as a pass from #6982's rung-1 container rehearsal. See
+    # ADR-149's release checklist and its #6982 disposition table for what each item
+    # delivered. The banner stays up until #7025 lands the evidence.
     #
     # DELTAS FROM web_host_create, each evidenced rather than inherited:
     #   • SINGLETON, not a for_each map — no host key input, and the gate's `def allow:`
@@ -3920,7 +3943,28 @@ jobs:
           # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
           if ! git_data_birth_readiness_gate "${GITHUB_WORKSPACE}/apps/web-platform/infra/cloud-init-git-data.yml"; then
-            echo "::error::git-data-host-create is INTERLOCKED: cloud-init-git-data.yml has no off-host emitter, so a failed birth would produce no signal at all and a green apply would be indistinguishable from a dark host. The gate's message above carries the full release checklist (#6982 / ADR-149). Nothing has been planned or created."
+            echo "::error::git-data-host-create is HELD: cloud-init-git-data.yml has no off-host emitter, so a failed birth would produce no signal at all and a green apply would be indistinguishable from a dark host. #6982 shipped that emitter and this gate released, so seeing this message now means the threading has REGRESSED — the \${sentry_dsn} interpolation is gone from non-comment template text. The gate's message above carries the ADR-149 release checklist. Nothing has been planned or created."
+            exit 1
+          fi
+
+      # THE SECOND INTERLOCK (#6982 A3). Separate step and separate function, because the
+      # two gates assert DIFFERENT facts and a reader should be able to tell which one held.
+      #
+      # The gate above went from HOLD to RELEASED when #6982 shipped the emitter, which
+      # retired the only MECHANICAL hold on this route — from then on the birth was held
+      # only by the DO-NOT-DISPATCH banner in a runbook, i.e. by prose, in a different file
+      # from this button. ADR-149's own Alternatives table rejects that posture. This gate
+      # restores a mechanical hold for the one precondition that is about the HOST BOOTING:
+      # rung-2 evidence, hash-bound to the template being dispatched so it self-invalidates
+      # the moment cloud-init-git-data.yml is edited again. #7025 carries rung 2 and lands
+      # the evidence file; until then this step HOLDS by design.
+      - name: Rung-2 rehearsal interlock (refuses while the template has never really booted)
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
+          if ! git_data_rung2_rehearsal_gate "${GITHUB_WORKSPACE}/apps/web-platform/infra/cloud-init-git-data.yml"; then
+            echo "::error::git-data-host-create is HELD: no rung-2 boot evidence for the CURRENT cloud-init-git-data.yml. #6982 reached rung 1 only (a container harness that never boots the rendered template), so the first real boot of this template would be the production host holding every user's source. The gate's message above says exactly what to commit to release it. Carried by #7025. Nothing has been planned or created."
             exit 1
           fi
 
@@ -3977,7 +4021,7 @@ jobs:
             exit 1
           fi
           if [[ -z "$DSN" ]]; then
-            echo "::error::SENTRY_DSN is empty in Doppler prd_terraform. Asserted here even though git-data's cloud-init does not consume it YET: it is item 1 of the ADR-149 interlock-release checklist, and the release lands the emitter that reads it. An empty DSN at release time would produce a host that LOOKS instrumented and emits nothing."
+            echo "::error::SENTRY_DSN is empty in Doppler prd_terraform. git-data's cloud-init CONSUMES it as of #6982 — it is baked into /usr/local/bin/git-data-emit, which is the host's only always-available off-host channel (Better Stack needs the Doppler stage to have run). An empty DSN here produces a host that LOOKS instrumented and emits nothing, which is exactly the dark-boot state ADR-149's interlock existed to prevent."
             exit 1
           fi
           echo "SENTRY_DSN present and non-empty (value not printed)."
@@ -3993,10 +4037,18 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         # Purely ADDITIVE: no -replace anywhere, and NO [ack-destroy] bypass on this path.
         #
-        # The eighteen -targets are the whole birth fan-out and MUST stay in lockstep with
-        # `def allow:` in tests/scripts/lib/git-data-host-birth-gate.sh and with
-        # GIT_DATA_BIRTH_TARGET_BASES in plugins/soleur/test/terraform-target-parity.test.ts.
-        # That test asserts all three are equal; this comment tells you why it will fail.
+        # The twenty -targets are the whole birth fan-out and MUST stay in lockstep with
+        # `def allow:` in tests/scripts/lib/git-data-host-birth-gate.sh, with that gate's
+        # SEPARATE presence loop, and with GIT_DATA_BIRTH_TARGET_BASES in
+        # plugins/soleur/test/terraform-target-parity.test.ts. That test asserts all of them
+        # agree; this comment tells you why it will fail.
+        #
+        # (#6982) 18 -> 20: doppler_secret.git_data_ssh_host (ADR-149 item 5 — without it
+        # every account deletion files a FALSE Art. 17 erasure-failed event from the moment
+        # the host exists) and doppler_secret.git_data_betterstack_logs_token (the ingest
+        # token the post-Doppler emits read). BOTH join the gate's PRESENCE half, never its
+        # entailed loop: entailed demands `creates == 1`, and on a resumed dispatch these
+        # legitimately re-plan as no-ops, so requiring a create would be a permanent wedge.
         #
         # Four of them are DOWNSTREAM of the server and so are NOT auto-pulled by
         # -target's upstream closure — omitting any one is a distinct catastrophe:
@@ -4034,6 +4086,8 @@ jobs:
               -target='doppler_secret.git_remove_ssh_private_key' \
               -target='random_password.git_data_luks' \
               -target='doppler_secret.git_data_luks_key' \
+              -target='doppler_secret.git_data_ssh_host' \
+              -target='doppler_secret.git_data_betterstack_logs_token' \
               -var="ssh_key_path=${CI_SSH_PUB}"
           rc=$?
           if [[ $rc -ne 0 ]]; then
@@ -4101,7 +4155,111 @@ jobs:
             echo "::error::TWO EXCEPTIONS. (1) If the SERVER landed and a later address did not, the retry plans ZERO server creates and the gate correctly refuses. Completing that host by hand does not fix it: cloud-init runcmd is once-per-instance and has already finished, and ADR-115 excludes git-data from the reboot primitive — that host must be REPLACED, not completed. (2) If the failure names doppler_config.git_data_prd already existing, the config was created outside terraform; a re-dispatch CANNOT succeed because the Doppler API returns 400 'Name is already in use' rather than adopting it. Run 'terraform import doppler_config.git_data_prd soleur.prd_git_data' first. See the runbook's partial-birth decision tree."
             exit 1
           fi
-          echo "birth applied. A green apply is NOT a green boot — and for THIS host there is currently no boot signal at all, which is why the interlock exists. See the summary below for what you now have and what you do not."
+          echo "birth applied. A green apply is NOT a green boot — the boot-signal poll below is what decides whether this host actually came up."
+
+      # (#6982, R20) POLL FOR THE BOOT SIGNAL. This is ADR-149 checklist item 4's honest
+      # discharge, and the step whose absence made the previous one a lie: until now the
+      # only post-apply step was a text summary whose own comment read "A green apply is
+      # NOT a green boot — and for THIS host there is currently no boot signal at all."
+      #
+      # #6982 ships the PRODUCER (git-data-bootstrap.sh's stage:boot_complete emit). A
+      # producer with no reader is not a signal, so this is the reader. ADR-145's R2-R5
+      # pattern is a poll INSIDE the birth job — "the job now waits for a bad outcome,
+      # which is what makes it a signal rather than a step".
+      #
+      # `if: always()` so a FAILED apply still reports what the host did or did not say —
+      # a partial birth is exactly when the boot evidence matters most.
+      #
+      # It reads BETTER STACK, not Sentry, and that is forced rather than chosen: the
+      # boot-completion emit goes to both, but scripts/sentry-issue.sh needs
+      # SENTRY_ISSUE_RO_TOKEN (its own header records that SENTRY_IAC_AUTH_TOKEN 403s on
+      # event:read), while the BETTERSTACK_QUERY_* credentials are already available.
+      - name: Poll for the git-data boot-completion signal
+        if: always()
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+        run: |
+          set -uo pipefail
+          # FAIL, do not warn. A `::warning::` inside a 4000-line workflow log is not a
+          # gate, and exiting 0 here reproduces exactly the state this whole interlock
+          # exists to prevent: a GREEN birth job over a host nobody has heard from. The
+          # credentials live in prd_terraform already, so their absence is a repo-config
+          # bug, not an expected operating condition.
+          if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then
+            echo "::error::BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not all present — the boot signal cannot be read, so this birth CANNOT be verified. Refusing to report success. Fix the workflow secrets and re-dispatch (the birth is additive; a re-dispatch is the normal remedy)."
+            exit 1
+          fi
+
+          # cloud-init on a fresh host: package install, the Doppler download, luksFormat
+          # on a 10 GB volume, then the bootstrap. ~6 minutes is the observed envelope on
+          # sibling hosts; 20 polls x 30 s bounds it at 10 minutes.
+          #
+          # MODE 1 (raw SQL) TAKES THE QUERY AS THE FIRST POSITIONAL AND NO CONVENIENCE
+          # FLAGS. betterstack-query.sh detects Mode 1 by matching $1 against ^(SELECT|WITH|
+          # SHOW); passing `--since 1h` first makes $1 a flag, so it falls into Mode 2, hits
+          # the SQL as an unrecognised argument and exits 64 having sent ZERO HTTP requests.
+          # The window therefore lives INSIDE the SQL.
+          #
+          # AND DO NOT CAPTURE STDERR INTO THE MATCH BUFFER. betterstack-query.sh echoes the
+          # failing query back on the error path, and that query CONTAINS the literal
+          # 'boot_complete' — so `out=$(… 2>&1)` + `grep -q boot_complete` matches the
+          # script's own error message and reports the boot signal as received on poll 1/20.
+          # A usage error would print "boot signal received" over a host that never booted,
+          # which is precisely the green-light-over-a-dark-host this interlock exists to
+          # prevent. stdout only; rc checked separately; the match is on a PARSED FIELD.
+          found=""
+          for i in $(seq 1 20); do
+            # Field-isolated raw SQL: a bare-substring --grep would match the shared source's
+            # inngest rows quoting issue bodies. The s3Cluster arm is REQUIRED, not
+            # belt-and-braces: remote() alone is the ~40-minute hot window and a once-per-boot
+            # marker falls out of it immediately. NOTE remote() takes NO `primary` argument —
+            # only s3Cluster does; the `remote(primary, …)` form needs a NAMED COLLECTION
+            # grant this credential does not have (measured: HTTP 500 ACCESS_DENIED).
+            out=$(bash scripts/betterstack-query.sh "
+              SELECT dt,
+                     JSONExtractString(raw,'stage')        AS stage,
+                     JSONExtractString(raw,'host_name')    AS host,
+                     JSONExtractString(raw,'luks_mounted') AS luks_mounted,
+                     JSONExtractString(raw,'repo_root')    AS repo_root,
+                     JSONExtractString(raw,'hooks_path')   AS hooks_path,
+                     JSONExtractString(raw,'provision')    AS provision
+              FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+                    UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+              WHERE dt > now() - INTERVAL 2 HOUR
+                AND JSONExtractString(raw,'stage') = 'boot_complete'
+                AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
+              ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow" 2>/dev/null); rc=$?
+            # Match the PARSED field, not free text. A row is a JSON object carrying
+            # "stage":"boot_complete"; the query text never appears on stdout.
+            if [[ $rc -eq 0 ]] && printf '%s' "$out" | grep -q '"stage":"boot_complete"'; then
+              found="$out"; break
+            fi
+            echo "poll ${i}/20: rc=${rc}, no boot_complete row yet"
+            sleep 30
+          done
+
+          if [[ -z "$found" ]]; then
+            echo "::error::No stage:boot_complete from soleur-git-data within 10 minutes. The apply may be green while the host booted DARK — that is precisely the state this interlock exists to catch. Do NOT treat this birth as complete: check Sentry for a git-data fatal (stage=runcmd_early/sshd_config/volume_mount/doppler_dl/doppler_run/luks_open/bootstrap), and see the runbook's partial-birth decision tree."
+            exit 1
+          fi
+
+          echo "$found"
+          # A boot_complete carrying a FALSE assertion is worse than none: the bootstrap
+          # reached its final stage with an invariant unmet. Checked per NAMED FIELD — a bare
+          # `grep -qE '\bno\b'` over the whole payload would match the word anywhere.
+          for f in luks_mounted repo_root hooks_path provision; do
+            if printf '%s' "$found" | grep -q "\"${f}\":\"no\""; then
+              echo "::error::boot_complete arrived with ${f}=no — the host is up but an invariant is unmet. Treat as a failed birth."
+              exit 1
+            fi
+            if ! printf '%s' "$found" | grep -q "\"${f}\":\"yes\""; then
+              echo "::error::boot_complete arrived WITHOUT a ${f} assertion. The emit contract and this reader have drifted; do not treat this birth as verified."
+              exit 1
+            fi
+          done
+          echo "boot signal received: git-data reported boot_complete with luks_mounted/repo_root/hooks_path/provision all positive."
 
       - name: Dispatch summary
         if: always()
@@ -4124,9 +4282,9 @@ jobs:
             echo ""
             echo "### What a green run gives you — and what it does not"
             echo ""
-            echo "It gives you: the eighteen-address fan-out CREATED IN TERRAFORM — the server, both volumes, both attachments, the private NIC and the deny-all firewall attachment."
+            echo "It gives you: the twenty-address fan-out CREATED IN TERRAFORM — the server, both volumes, both attachments, the private NIC, the deny-all firewall attachment, and (#6982) the GIT_DATA_SSH_HOST + Better Stack ingest secrets."
             echo ""
-            echo "It does NOT prove the host booted, that git-data-bootstrap.sh ran, or that the LUKS volume mounted. This host emits nothing off-host until #6982, which is the whole reason the route is interlocked — a green apply and a dark host are indistinguishable here."
+            echo "The APPLY alone does not prove the host booted, that git-data-bootstrap.sh ran, or that the LUKS volume mounted. Since #6982 that gap is closed by the boot-signal poll step above, NOT by the apply: the host emits stage:boot_complete with its four assertions, and this job fails if that signal does not arrive or arrives with any assertion false. If the poll step warned that BETTERSTACK_QUERY_* was absent, you are back to the old state and must verify manually before trusting this birth."
             echo ""
             echo "It does NOT give you:"
             echo "- a serving store — \`GIT_DATA_STORE_ENABLED\` is still absent from Doppler prd, so the feature stays dark;"

@@ -91,10 +91,51 @@ resource "doppler_secret" "git_data_luks_key" {
   visibility = "masked"
 }
 
-# Read-only service token scoped to `prd_git_data` (only GIT_DATA_LUKS_KEY). Handed to
-# the git-data host in place of the full-prd `var.doppler_token` so a git-data-host
-# compromise reads exactly one secret — restoring the "separate blast radii" property
-# git-data.tf already advertises. `.key` is Computed/write-once (same handling as
+# (#6982, W1/D1) Better Stack Logs INGEST token, in the same isolated config, so the
+# post-Doppler emits (boot-completion, gc faults) can ship a queryable copy off-box.
+# EXACT MIRROR of doppler_secret.registry_betterstack_logs_token (zot-registry.tf:261) —
+# same source-2457081 token, same `ignore_changes = [value]` (rotation is managed at the
+# source of truth), same TF-managed project/config references so a `-target` of this
+# secret pulls the config in rather than 404-ing at apply.
+#
+# WHY THIS IS READABLE AT ALL, and why it was nearly cut: the Phase-0 W0 probe measured
+# that `doppler run --config prd` under this project's single-config token exits 1
+# ("This token does not have access to requested config 'prd'"). Phase 3 corrects both
+# invocations to `--config prd_git_data`, which is the config this secret lives in — so
+# the token CAN read it (probe arm B: exit 0, secret present). Before that correction
+# this secret would have been dark by construction, which is the ADR-149 item-2 trap.
+#
+# SCOPE, stated because it is the whole safety argument: it is read ONLY by emits that
+# are post-Doppler BY CONSTRUCTION. The early boot stages and every FATAL emit use the
+# BAKED Sentry DSN with no Doppler dependency, precisely so they still work when Doppler
+# is itself the broken stage. Routing a fatal through this token would make the fatal
+# channel depend on the thing it most often has to report on.
+#
+# It is NEVER baked into user_data — user_data is retrievable from the Hetzner metadata
+# API, the same rationale that keeps the LUKS passphrase out. The Sentry DSN is different
+# and IS baked: it is semi-public (already in the client bundle) and baking it is what
+# makes the fatal channel independent.
+resource "doppler_secret" "git_data_betterstack_logs_token" {
+  project    = doppler_config.git_data_prd.project
+  config     = doppler_config.git_data_prd.name
+  name       = "BETTERSTACK_LOGS_TOKEN"
+  value      = var.betterstack_logs_token
+  visibility = "masked"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+# Read-only service token scoped to `prd_git_data`. Handed to the git-data host in place
+# of the full-prd `var.doppler_token` so a git-data-host compromise reads only this
+# config — restoring the "separate blast radii" property git-data.tf already advertises.
+#
+# CARDINALITY (#6982): this config now holds TWO secrets — GIT_DATA_LUKS_KEY and
+# BETTERSTACK_LOGS_TOKEN (the ingest token added above). It was one until #6982. The
+# blast-radius argument is unchanged in kind: an ingest token is write-only against a
+# shared log source and cannot read anything back, so a compromise still yields no
+# service-role, GIT_REMOVE or PROXY_TLS material. `.key` is Computed/write-once (same handling as
 # doppler_service_token.write / .kb_drift); rotate via
 # `terraform apply -replace=doppler_service_token.git_data`.
 resource "doppler_service_token" "git_data" {

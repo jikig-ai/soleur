@@ -1320,13 +1320,29 @@ async function replicateAndReleaseCcWorktreeLease(
   _ccWorktreeLeases.delete(key);
   try {
     if (isGitDataStoreEnabled()) {
-      await replicateToGitData({
+      const outcome = await replicateToGitData({
         workspacePath: record.workspacePath,
         workspaceId: record.workspaceId,
         worktreeId: resolveWorktreeId(userId),
         leaseGeneration: record.handle.leaseGeneration,
         userId,
       });
+      // B13 (#6982 review): a SHED is not a completed push. Replication is
+      // session-end-coupled, so a shed delta is never replicated later — "later" does not
+      // exist on this path. `replicateToGitData` already reports the shed itself; recording
+      // it HERE is what makes it attributable to the lease being released, which is the
+      // decision this function is actually making.
+      if (outcome.status === "shed") {
+        log.warn(
+          {
+            conversationId,
+            userIdHash: hashUserId(userId),
+            slotsBusy: outcome.slotsBusy,
+            queueTimeoutMs: outcome.queueTimeoutMs,
+          },
+          "cc worktree lease released after a git-data replication SHED — this session's delta was not replicated",
+        );
+      }
     }
   } catch {
     // Already reported (feature: worktree_lease) inside replicateToGitData;

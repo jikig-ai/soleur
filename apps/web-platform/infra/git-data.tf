@@ -67,6 +67,21 @@ resource "tls_private_key" "git_remove" {
 }
 
 locals {
+  # (#6982, W8) The host's stable private-net address, hoisted out of network.tf so
+  # doppler_secret.git_data_ssh_host below can publish it WITHOUT referencing any
+  # hcloud resource. Mirrors local.registry_private_ip (zot-registry.tf:40, #6415):
+  # the host's own file owns the constant, network.tf consumes it.
+  #
+  # THIS BEING A STATIC LITERAL IS THE WHOLE POINT. ADR-149 cut this secret from #6977
+  # because sourcing it from hcloud_server_network.git_data.ip (a COMPUTED attribute)
+  # would drag hcloud_server.git_data into any -target closure that reached the secret,
+  # and the natural remedy — a per-PR -target line — wedges every merge to main. A
+  # literal has no such edge: the secret is plannable and appliable with the host
+  # absent, which is exactly the state it must survive (see the resource comment).
+  #
+  # web = .10/.11, git-data = .20, registry = .30, inngest = .40.
+  git_data_private_ip = "10.0.1.20"
+
   # trimspace() strips the trailing newline tls_private_key.public_key_openssh
   # carries — without it the cloud-init authorized_keys line renders with a
   # trailing blank, breaking the forced-command entry. Same rationale as
@@ -179,10 +194,95 @@ resource "doppler_secret" "git_remove_ssh_private_key" {
   # RESIDUAL, recorded rather than claimed fixed: this anchors on the server OBJECT, not
   # on REACHABILITY. A birth where the server lands but hcloud_server_network.git_data
   # does not still arms the key against an unroutable 10.0.1.20. ADR-149 carries it.
-  depends_on = [hcloud_server.git_data]
+  #
+  # (#6982) The ANTIDOTE edge. This key's presence is the Art. 17 arming switch, and
+  # `removeGitDataRepo` resolves GIT_DATA_SSH_HOST at the same call site — so the arming
+  # switch must never land without it. Fewer-dependencies makes the antidote eligible
+  # earlier but does NOT order it (terraform orders only by edges, and -parallelism=10
+  # schedules both at once); a transient Doppler 5xx on the ssh-host write would otherwise
+  # leave the switch armed and the antidote missing, and every account deletion from that
+  # instant files a FALSE "erasure failed" event. No cycle: git_data_ssh_host reads a
+  # static local and has no upstream at all.
+  depends_on = [hcloud_server.git_data, doppler_secret.git_data_ssh_host]
+}
+
+# --- The git-data host's address → Doppler prd (#6982 W8 / ADR-149 §5, Residual 2) ---
+#
+# `resolveGitDataSshHost()` (git-data-replication.ts) reads GIT_DATA_SSH_HOST and THROWS in
+# production when it is unset. `removeGitDataRepo` — the Art. 17 erasure path — calls it. So
+# without this secret, from the instant the host exists EVERY account deletion throws and
+# files a "git-data Art. 17 erasure failed" Sentry event for a store that is fine. That is
+# 100 % false alarms on the one signal that must stay trustworthy, and it is why ADR-149
+# lists this as checklist item 5 rather than a nicety.
+#
+# NO `depends_on` — and that is deliberate, load-bearing, and the opposite of its three
+# sibling key secrets above (#6982 R9). ADR-149 Residual 2 corrected exactly this reasoning:
+# `depends_on` guarantees the value CO-LANDS with the server, and for the REMOVE KEY
+# co-landing is the harmful state (its presence is the arming switch for erasure). This
+# secret is the ANTIDOTE, not the poison — it is the thing that makes erasure work — so
+# co-landing is precisely what must NOT be required. Two consequences, both wanted:
+#
+#   1. AC35 is pinned by the explicit edge on the REMOVE key (see
+#      `doppler_secret.git_remove_ssh_private_key`), which is a mechanism rather than a
+#      scheduling accident. An earlier draft of this comment claimed ordering "BY
+#      CONSTRUCTION" from wave-eligibility; that was false — Terraform orders only by
+#      dependency edges, and under the default -parallelism=10 both are scheduled
+#      concurrently, so a transient Doppler 5xx on THIS write in an apply where the server
+#      and the remove key both succeed leaves the arming switch on with the antidote absent.
+#   2. It carries no edge that drags hcloud_server.git_data into any `-target` closure that
+#      EXISTS — the wedge ADR-149 feared when it cut this resource from #6977. Note this is
+#      now an argument about the actual -target lines, not about having no upstream: since
+#      DC-3 (below) the value reads `hcloud_server_network.git_data.ip`, so the resource DOES
+#      have an upstream and is no longer first-wave. The birth job already targets both
+#      `hcloud_server.git_data` and `hcloud_server_network.git_data`, so the edge drags
+#      nothing new in. An earlier revision of this block asserted "no upstream at all" and
+#      "no edge" as unconditional facts; both were falsified by DC-3 and are corrected here
+#      rather than left standing ten lines above the note that contradicts them.
+#
+# NO `lifecycle { ignore_changes = [value] }` either (#6982 R38): every sibling
+# doppler_secret in this root lets Terraform own the value, and pinning it here would
+# freeze a stale address the day the NIC's IP moves — silently re-creating the drift that
+# this single-sourcing exists to remove.
+resource "doppler_secret" "git_data_ssh_host" {
+  project = "soleur"
+  config  = "prd"
+  name    = "GIT_DATA_SSH_HOST"
+  # DC-3's MANDATED source. #6982's first draft shipped local.git_data_private_ip and
+  # recorded the mandate as "not satisfiable pre-birth"; review refuted that. The secret's
+  # ONLY -target line is the birth job, which already targets hcloud_server.git_data AND
+  # hcloud_server_network.git_data -- so the edge drags nothing new into any plan that
+  # exists, and there is no pre-birth window to protect because the secret is created BY
+  # the dispatch, not before it. The mandated form is also strictly stronger: it closes the
+  # residual above (a birth landing the server but not the NIC can no longer publish an
+  # address nothing answers on).
+  value      = hcloud_server_network.git_data.ip
+  visibility = "masked"
 }
 
 # --- The git-data host -------------------------------------------------------
+# (#6982, ADR-152) THE RATIONALE STRIP. Removes whole-line `#` comments from the nine
+# injected scripts/units AT RENDER TIME, so the repo keeps its rationale and user_data does
+# not pay for it. Hetzner's cap is a hard 32,768 B ForceNew gate and comments were 61% of the
+# raw payload; without this, every safety comment competes with a fail-closed invariant for
+# space, which on a host where a green apply and a dark host are indistinguishable is the
+# wrong trade. cloud-init-git-data.yml itself is NOT stripped.
+#
+# ANCHORED AT LINE START, and `#!` is preserved by construction. `${var#...}` and other
+# mid-line `#` are untouched because the match must begin the line; a `#`-anywhere rule
+# (`s/#.*//`) breaks four of the six scripts on parameter expansion — measured.
+# Preserving `#!` is not cosmetic: git-data-provision.sh, -remove.sh and -transport-wrapper.sh
+# are invoked via authorized_keys `command="..."`, so a lost shebang does NOT fail loudly —
+# it silently falls back to dash. That is the same class as the A2 defect this PR fixes.
+#
+# TWO INVARIANTS THIS EXPRESSION MUST KEEP, both load-bearing for downstream parsers in
+# plugins/soleur/test/cloud-init-user-data-size.test.ts: it contains NO brace (that file
+# counts brace depth to find the templatefile map), and every map entry below stays on ONE
+# physical line (its var parser is line-based). git-data-userdata-budget.sh mirrors this
+# expression byte-for-byte; git-data-render-strip-parity.test.sh is what keeps them equal.
+locals {
+  git_data_rationale_strip = "/(?m)^[ \t]*#([^!\n][^\n]*)?\n/"
+}
+
 resource "hcloud_server" "git_data" {
   name = "soleur-git-data"
   # Arch is DERIVED from this value (local.git_data_arch), never assumed — see the local.
@@ -221,17 +321,23 @@ resource "hcloud_server" "git_data" {
   # #5887's first `terraform plan`; fail-closed at first provisioning if decode fails
   # (web-host readiness check finds no git/bare-repo, blocks cutover). See ADR-080.
   user_data = base64gzip(templatefile("${path.module}/cloud-init-git-data.yml", {
-    git_data_bootstrap_b64               = base64encode(file("${path.module}/git-data-bootstrap.sh"))
-    git_data_pre_receive_placeholder_b64 = base64encode(file("${path.module}/git-data-pre-receive-placeholder.sh"))
+    git_data_bootstrap               = replace(file("${path.module}/git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
+    git_data_pre_receive_placeholder = replace(file("${path.module}/git-data-pre-receive-placeholder.sh"), local.git_data_rationale_strip, "")
     # The FIXED provision forced-command wrapper (git init --bare), delivered to
     # /usr/local/bin like the bootstrap (ADR provisioning amendment).
-    git_data_provision_b64 = base64encode(file("${path.module}/git-data-provision.sh"))
+    git_data_provision = replace(file("${path.module}/git-data-provision.sh"), local.git_data_rationale_strip, "")
     # The TRANSPORT allowlist forced-command wrapper (Sub-PR 3.D) — replaces the raw
     # git-shell forced command; delivered to /usr/local/bin like the others.
-    git_data_transport_wrapper_b64 = base64encode(file("${path.module}/git-data-transport-wrapper.sh"))
+    git_data_transport_wrapper = replace(file("${path.module}/git-data-transport-wrapper.sh"), local.git_data_rationale_strip, "")
     # The FIXED erasure forced-command wrapper (rm -rf <id>.git), Art. 17 (3.A;
     # app-side call lands in 3.D). Delivered to /usr/local/bin like the others.
-    git_data_remove_b64 = base64encode(file("${path.module}/git-data-remove.sh"))
+    git_data_remove = replace(file("${path.module}/git-data-remove.sh"), local.git_data_rationale_strip, "")
+    # (#6982, W4) The bounded maintenance unit set. Plain text like its siblings, so it
+    # gzips instead of paying base64's 33 % inflation against the 32 KB user_data cap.
+    git_data_gc                 = replace(file("${path.module}/git-data-gc.sh"), local.git_data_rationale_strip, "")
+    git_data_gc_service         = replace(file("${path.module}/git-data-gc.service"), local.git_data_rationale_strip, "")
+    git_data_gc_failure_service = replace(file("${path.module}/git-data-gc-failure.service"), local.git_data_rationale_strip, "")
+    git_data_gc_timer           = replace(file("${path.module}/git-data-gc.timer"), local.git_data_rationale_strip, "")
     # trimspace()'d — see local.git_transport_pubkey / local.git_provision_pubkey.
     git_transport_pubkey = local.git_transport_pubkey
     git_provision_pubkey = local.git_provision_pubkey
@@ -242,11 +348,16 @@ resource "hcloud_server" "git_data" {
     # The FRESH LUKS-at-rest cutover volume (Sub-PR 3.D, git-data-luks.tf). Guest-side
     # cryptsetup luksOpens + mounts it at /mnt/git-data-luks. by-id like the plaintext one.
     git_data_luks_volume_id = hcloud_volume.git_data_luks.id
-    # Doppler service token → 0600 root env file so the boot-time `doppler run` can
-    # read GIT_DATA_LUKS_KEY. SCOPED read-only token for the `prd_git_data` config
-    # (only GIT_DATA_LUKS_KEY) — NOT the full-prd var.doppler_token (3.D security review
-    # MEDIUM / CTO ruling: a git-data-host compromise must not yield service-role /
+    # Doppler service token → 0600 root env file so the boot-time `doppler run` can read
+    # GIT_DATA_LUKS_KEY and (since #6982) BETTERSTACK_LOGS_TOKEN. SCOPED read-only token
+    # for the `prd_git_data` config — NOT the full-prd var.doppler_token (3.D security
+    # review MEDIUM / CTO ruling: a git-data-host compromise must not yield service-role /
     # GIT_REMOVE / PROXY_TLS material). The passphrase itself is NEVER in this user_data.
+    #
+    # #6982: the runcmd invocations name `--config prd_git_data`, i.e. the config this
+    # token is actually scoped to. They named `--config prd` until #6982, which the W0
+    # probe measured as a hard failure ("This token does not have access to requested
+    # config 'prd'", exit 1) — so the LUKS heredoc ran zero times and the host booted dark.
     doppler_token = doppler_service_token.git_data.key
     # Dual-arch Doppler CLI download (#6570). BOTH are derived from
     # var.git_data_server_type — the cloud-init hardcoded the arm64 build and its checksum,
@@ -255,6 +366,24 @@ resource "hcloud_server" "git_data" {
     # a SHELL variable (double-$) that must pass through literally.
     doppler_arch   = local.git_data_arch
     doppler_sha256 = local.git_data_doppler_sha256
+    # (#6982, W1) The off-host emitter's three inputs.
+    #
+    # sentry_dsn is BAKED, and that is the point: it is the ONE channel that still works
+    # when Doppler is the broken stage, which on this host is the most likely stage to
+    # break. It is semi-public (already in the client bundle; variables.tf says so) and
+    # lands in tfstate + metadata-retrievable user_data — accepted, and the reason the
+    # LUKS passphrase and the Better Stack INGEST token are deliberately NOT baked.
+    #
+    # This interpolation is also the birth-readiness INTERLOCK's sentinel:
+    # git-data-birth-readiness-gate.sh refuses to plan while `${sentry_dsn}` is absent
+    # from non-comment template text. `templatefile` fails on an unsupplied variable, so
+    # threading it here IS the work — the sentinel cannot be faked by a comment.
+    sentry_dsn             = var.sentry_dsn
+    betterstack_ingest_url = local.betterstack_logs_ingest_url
+    # Baked at RENDER time, so it is a create-time constant rather than a runtime-
+    # guaranteed invariant — it discriminates git-data's rows from its siblings on the
+    # shared Better Stack source 2457081.
+    host_name = "soleur-git-data"
   }))
 
   # PHANTOM/WRONG-ARCH TRIPWIRE (#6570). Two jobs, and the second is why this block is
@@ -263,18 +392,21 @@ resource "hcloud_server" "git_data" {
   #      `-target=`. Unreferenced, that data source is PRUNED and never read, so the
   #      phantom-type guard would fire on zero production paths (every git-data dispatch is
   #      -targeted). Deleting this precondition silently disarms the data source above.
-  #   2. It catches a MIS-DERIVED arch at plan time. Nothing downstream does: the checksum
-  #      is selected BY local.git_data_arch, so a wrong derivation verifies the tarball it
-  #      just chose and `sha256sum -c -` passes. That runcmd item also carries no `set -e`,
-  #      so even a genuine checksum failure does not stop the following `tar xzf`.
-  #      NOTHING ABORTS. cloud-init concatenates runcmd into one non-`-e` script, so a
-  #      failed item is logged and boot CONTINUES. The LUKS block's `set -euo pipefail`
-  #      is not a backstop either: it is line 1 of the heredoc `doppler run` executes, so
-  #      on a missing or wrong-arch binary `doppler run` fails to exec and that line runs
-  #      ZERO times. The failure surfaces only as a non-zero runcmd exit in on-host
-  #      /var/log/cloud-init-output.log — git-data ships no log shipper — leaving sshd up
-  #      and the LUKS volume unmounted. Do not credit the checksum, or that `set -e`, with
-  #      failing closed: the plan-time precondition below is the only guard that fires.
+  #   2. It catches a MIS-DERIVED arch at plan time, and NOTHING DOWNSTREAM CAN — including
+  #      after #6982. The checksum is selected BY local.git_data_arch, so a wrong derivation
+  #      verifies the tarball it just chose and `sha256sum -c -` passes. That is a property
+  #      of the selection, not of error handling, so no amount of failing closed reaches it.
+  #      This precondition remains the only guard that fires on that case.
+  #
+  #      What #6982 DID change, so the rest of this note is not read as still true: the
+  #      runcmd path is now armed with a top-level `trap`/`set -e` ahead of the checksum
+  #      block, so a GENUINE checksum failure aborts instead of continuing into `tar xzf`
+  #      and `chmod +x` on an unverified tarball (the supply-chain half). It used to say
+  #      "NOTHING ABORTS" here, and that is no longer the case. The LUKS block's
+  #      `set -euo pipefail` still is not a backstop — it is line 1 of the heredoc
+  #      `doppler run` executes, so on a missing or wrong-arch binary that line runs ZERO
+  #      times — and the host now reports the failure off-host via /usr/local/bin/git-data-emit
+  #      rather than only into on-host /var/log/cloud-init-output.log.
   #
   # The enums are DELIBERATELY mapped, not compared. hcloud reports architecture as
   # `x86`/`arm`, while local.git_data_arch is the download token `amd64`/`arm64`. Comparing

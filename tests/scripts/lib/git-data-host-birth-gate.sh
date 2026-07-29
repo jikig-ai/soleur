@@ -26,9 +26,9 @@
 #   firewall_rules          == 0    the deny-all firewall stays deny-all
 #   luks_passphrase_touched == 0    no delete/forget/update on the passphrase pair
 #   reboot_updates          == 0    no live host power-cycled by the birth
-#   out_of_scope            == 0    nothing outside the eighteen-address fan-out
+#   out_of_scope            == 0    nothing outside the twenty-address fan-out
 #   the four ENTAILED members each create exactly once
-#   the thirteen PRESENCE members each appear with actions ⊆ {create, no-op}
+#   the fifteen PRESENCE members each appear with actions ⊆ {create, no-op}
 #
 # WHY THE REQUIREMENT ARM IS SPLIT BY ENTAILMENT. This is the most important contract in
 # the file, and getting it wrong breaks the gate in BOTH directions.
@@ -105,7 +105,9 @@ _GIT_DATA_BIRTH_ALLOW='def allow: [
       "doppler_secret.git_provision_ssh_private_key",
       "doppler_secret.git_remove_ssh_private_key",
       "random_password.git_data_luks",
-      "doppler_secret.git_data_luks_key"
+      "doppler_secret.git_data_luks_key",
+      "doppler_secret.git_data_ssh_host",
+      "doppler_secret.git_data_betterstack_logs_token"
 ];'
 
 git_data_host_birth_gate() {
@@ -383,7 +385,7 @@ git_data_host_birth_gate() {
         | select(.change.actions | any(. != "no-op" and . != "read"))
         | select(IN(.address; allow[]) | not) | .address ] | .[0:10] | join(", ")' \
       < "$plan_json" 2>/dev/null)
-    echo "git_data_host_birth_gate: ABORT — ${out_of_scope} out-of-scope change(s), outside the eighteen-address birth fan-out: ${offenders}. One authorization births one host and touches only that host's fan-out. Two addresses are refused here deliberately: betteruptime_heartbeat.git_data_prd (its feeder already shipped and is web-host-resident — creating a monitor this route cannot arm produces a green dashboard measuring nothing) and terraform_data.git_data_probe_install (it SSH-provisions web-1, the LIVE serving host, and remote-exec runs at APPLY, not at plan)."
+    echo "git_data_host_birth_gate: ABORT — ${out_of_scope} out-of-scope change(s), outside the twenty-address birth fan-out: ${offenders}. One authorization births one host and touches only that host's fan-out. Two addresses are refused here deliberately: betteruptime_heartbeat.git_data_prd (its feeder already shipped and is web-host-resident — creating a monitor this route cannot arm produces a green dashboard measuring nothing) and terraform_data.git_data_probe_install (it SSH-provisions web-1, the LIVE serving host, and remote-exec runs at APPLY, not at plan)."
     return 1
   fi
 
@@ -413,10 +415,28 @@ git_data_host_birth_gate() {
 
   # ── REQUIREMENT ARM — PRESENCE HALF ────────────────────────────────────────────
   #
-  # The remaining thirteen must APPEAR in the plan with actions ⊆ {create, no-op}. This
+  # The remaining fifteen must APPEAR in the plan with actions ⊆ {create, no-op}. This
   # catches a typo'd -target (an address absent from the closure fails presence, and
   # nothing else in CI asserts that a -target string names a declared address) while
   # NOT poisoning the retry: on a resumed dispatch these legitimately re-plan as no-ops.
+  #
+  # (#6982) The two newest members belong HERE and not in the entailed loop above, and the
+  # distinction is load-bearing rather than stylistic:
+  #
+  #   doppler_secret.git_data_ssh_host              — ADR-149 item 5. Publishes
+  #     GIT_DATA_SSH_HOST, which removeGitDataRepo resolves for Art. 17 erasure. Absent, a
+  #     partial birth that lands the server plus doppler_secret.git_remove_ssh_private_key
+  #     (the erasure ARMING switch) returns that path to a throw, and every account
+  #     deletion files a FALSE "erasure failed" event for a store that is fine.
+  #   doppler_secret.git_data_betterstack_logs_token — the ingest token the post-Doppler
+  #     emits read. Absent, the boot-completion copy is unqueryable and the follow-through
+  #     probe has nothing to read.
+  #
+  # Neither references hcloud_server.git_data.id, so neither is ENTAILED by the server's
+  # creation — putting them in the loop above would demand `creates == 1` and reproduce
+  # ADR-149's "Too strict -> a permanent wedge" on every resumed dispatch, where they
+  # correctly re-plan as no-ops. Presence is the arm that catches their ABSENCE without
+  # forbidding their pre-existence.
   #
   # `no-op` is accepted here and ONLY here. A destroy on one of these is caught above by
   # the destroy arm; an update on the passphrase pair or the firewall by their own arms.
@@ -433,7 +453,9 @@ git_data_host_birth_gate() {
     "doppler_secret.git_provision_ssh_private_key" \
     "doppler_secret.git_remove_ssh_private_key" \
     "random_password.git_data_luks" \
-    "doppler_secret.git_data_luks_key"; do
+    "doppler_secret.git_data_luks_key" \
+    "doppler_secret.git_data_ssh_host" \
+    "doppler_secret.git_data_betterstack_logs_token"; do
     present=$(jq --arg a "$present_addr" \
       '[.resource_changes[] | select(.address == $a) | select((.change.actions | length) > 0 and (.change.actions | all(. == "create" or . == "no-op")))] | length' \
       < "$plan_json" 2>/dev/null)
@@ -478,6 +500,6 @@ git_data_host_birth_gate() {
     return 1
   fi
 
-  echo "git_data_host_birth_gate: PASS — scoped birth of ${want_addr} permitted (exactly 1 host create, its 3 entailed members created + its firewall attachment bound to exactly 1 server, all 13 presence members create-or-no-op, 0 destroys, 0 volume destroys, 0 firewall rules, 0 passphrase mutations, 0 reboots, 0 out-of-scope changes)."
+  echo "git_data_host_birth_gate: PASS — scoped birth of ${want_addr} permitted (exactly 1 host create, its 3 entailed members created + its firewall attachment bound to exactly 1 server, all 15 presence members create-or-no-op, 0 destroys, 0 volume destroys, 0 firewall rules, 0 passphrase mutations, 0 reboots, 0 out-of-scope changes)."
   return 0
 }

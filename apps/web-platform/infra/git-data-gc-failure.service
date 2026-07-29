@@ -1,0 +1,33 @@
+[Unit]
+# (#6982) OnFailure= handler for git-data-gc.service.
+#
+# Its own unit because an OnFailure= naming a unit that does not exist is a DANGLING
+# REFERENCE — systemd logs job-not-found and the failure is otherwise silent, which on
+# this host would hide the one condition worth paging on (an OOM-killed repack), in the
+# very change that exists to make failures visible.
+Description=Report a git-data maintenance failure off-host
+Documentation=https://github.com/jikig-ai/soleur/issues/6982
+
+[Service]
+Type=oneshot
+# Same HOME requirement as the unit this reports for.
+Environment=HOME=/root
+# Under `doppler run` so the ingest token is injected and the event lands on BOTH channels
+# (the timer runs long after boot, so unlike the early boot stages the token IS readable).
+# --config prd_git_data is the config the service token is scoped to (#6982 W0).
+#
+# The fallback arm is deliberate: if `doppler run` is itself the broken thing, the Sentry
+# half still fires from the BAKED DSN. A reporter that can only report when its credential
+# works is not a reporter.
+#
+# That fallback was UNREACHABLE until EnvironmentFile=- replaced `. <file>`: /bin/sh is DASH,
+# where `.` is a special builtin, so a failed source kills the shell before either || arm runs
+# — and a host whose Doppler stage aborted is exactly the one with no env file (0600, written
+# after abortable stages). Verified: dash -c '. /nx || echo A; echo B' prints nothing, rc=2.
+#
+# set -- once, run twice: the two arms are the same command, one wrapped in `doppler run`.
+EnvironmentFile=-/etc/default/git-data-doppler
+ExecStart=/bin/sh -c 'set -- /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_GC unit failed" \
+  gc fatal "" "unit=git-data-gc.service"; \
+  /usr/local/bin/doppler run --project soleur --config prd_git_data -- "$@" || "$@"'
+TimeoutStartSec=120

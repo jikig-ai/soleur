@@ -127,7 +127,11 @@ fi
 [ -f /etc/default/git-data-doppler ] || { echo "[prepare-luks] FATAL: /etc/default/git-data-doppler absent — cannot fetch GIT_DATA_LUKS_KEY"; exit 1; }
 . /etc/default/git-data-doppler
 FRESH_ROOT="$FRESH_ROOT" LUKS_MAPPER="$LUKS_MAPPER" \
-  doppler run --project soleur --config prd -- bash -s <<'LUKSEOF'
+  # --config prd_git_data (#6982 W0). This runs ON the git-data host under
+  # doppler_service_token.git_data, which is scoped to prd_git_data — the CLI ERRORS on a
+  # config it is not scoped to, so `--config prd` exits 1 and the cutover dies at step 0.
+  # GIT_DATA_LUKS_KEY lives only in prd_git_data, so even a full-prd token resolves empty.
+  doppler run --project soleur --config prd_git_data -- bash -s <<'LUKSEOF'
 set -euo pipefail
 [ -n "${GIT_DATA_LUKS_KEY:-}" ] || { echo "[prepare-luks] FATAL: GIT_DATA_LUKS_KEY empty — refusing an unencrypted unlock"; exit 1; }
 if [ ! -e "$LUKS_MAPPER" ]; then

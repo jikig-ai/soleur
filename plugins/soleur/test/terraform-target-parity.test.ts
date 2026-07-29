@@ -633,9 +633,20 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // every git-data sibling — and it must NEVER be given a per-PR `-target` line. Both
   // Doppler writes above reference it, so a per-PR target would drag
   // hcloud_server.git_data into the per-merge plan through upstream closure, trip
-  // `host_creates > 0`, and wedge every merge to main. That is the exact mechanism that
-  // killed the `doppler_secret.git_data_ssh_host` proposal (DC-3).
+  // `host_creates > 0`, and wedge every merge to main.
+  //
+  // (#6982) DC-3 is now RESOLVED, not merely inherited. That mechanism was read as killing
+  // the `doppler_secret.git_data_ssh_host` proposal outright; it does not. It bites only
+  // under the remedy "give the new secret a per-PR -target line", which is not the remedy
+  // any of its five sibling secrets use — they sit in THIS set with no per-PR target at
+  // all. Sourcing the value from a static local (local.git_data_private_ip) instead of the
+  // computed NIC attribute removes the last edge that could reach the server. So the
+  // secret ships in #6982 as an exclusion + a birth -target, with no wedge.
   "doppler_config.git_data_prd",
+  // (#6982) Both ride the git-data-host-create dispatch, never the per-PR apply — same
+  // class as every git-data sibling above.
+  "doppler_secret.git_data_ssh_host",
+  "doppler_secret.git_data_betterstack_logs_token",
   // #6588 (ADR-119) — the ADDITIVE LUKS-at-rest /workspaces volume + its at-rest key +
   // its scoped read-only token ALL ride the operator's `workspaces-luks-cutover` dispatch
   // apply, NOT the #5566 per-PR-CI class. Same class as hcloud_volume.workspaces +
@@ -2204,6 +2215,16 @@ const GIT_DATA_BIRTH_TARGET_BASES = [
   // about the config CONTAINING the key. Omit these and luksOpen fails — silently.
   "random_password.git_data_luks",
   "doppler_secret.git_data_luks_key",
+  // (#6982) SIBLING, dependency-free by design. Publishes GIT_DATA_SSH_HOST from a STATIC
+  // local, never from hcloud_server_network.git_data.ip — that is what makes it plannable
+  // with the host absent and keeps it clear of any upstream closure onto the server.
+  // ADR-149 cut it from #6977 believing the opposite; see its resource comment. Omit it and
+  // every account deletion files a FALSE Art. 17 erasure-failed event from birth onward.
+  "doppler_secret.git_data_ssh_host",
+  // (#6982) SIBLING. The Better Stack ingest token in prd_git_data, read by the
+  // post-Doppler emits (boot-completion, gc faults). Omit it and the queryable copy of the
+  // boot signal never ships, which is what the follow-through probe reads.
+  "doppler_secret.git_data_betterstack_logs_token",
 ];
 
 // Asserted ABSENT from the -target set. Both are refused by the gate's out-of-scope arm
@@ -2244,7 +2265,7 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
 
   test("the -target set equals the constant, exactly", () => {
     const targets = [...extractAllTargets(jobBlock)].sort();
-    // Non-vacuity: the extraction must actually find the eighteen members.
+    // Non-vacuity: the extraction must actually find the twenty members.
     expect(targets.length).toBe(GIT_DATA_BIRTH_TARGET_BASES.length);
     expect(targets).toEqual([...GIT_DATA_BIRTH_TARGET_BASES].sort());
   });
@@ -2269,9 +2290,109 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(missing).toEqual([]);
   });
 
+  // ── (#6982, AC8a) THE FOURTH REGISTRATION SITE ────────────────────────────────────
+  //
+  // The gate carries `def allow:` (a PERMISSION set) *and* a separate hardcoded PRESENCE
+  // loop (a COMPLETENESS set) that nothing extracted until now. Those are different
+  // properties, and the three-way check above only ever pinned the first, so a
+  // THREE-OF-FOUR edit was fully green: a new address would be PERMITTED to change but
+  // not REQUIRED to appear, and a birth whose Doppler write is silently absent would
+  // PASS. That is the exact shape ADR-149 Residual 2 warns about, hiding behind a PASS.
+  //
+  // The partition is asserted as an equation rather than a count so it cannot rot:
+  //   presence ∪ entailed ∪ {server} ∪ {firewall_attachment} == the -target set
+  // Entailed and firewall_attachment are enumerated here because they are structural
+  // (they are the members the gate demands CREATE rather than merely appear).
+  test("the gate's PRESENCE loop + entailed + server + fw-attachment == the -target set", () => {
+    const gateSrc = readFileSync(
+      resolve(REPO_ROOT, "tests/scripts/lib/git-data-host-birth-gate.sh"),
+      "utf8",
+    );
+
+    // The presence loop is `for present_addr in \ "a" \ "b" …; do`. Anchor on the loop
+    // variable, NOT on a bare quoted-address run — the file is full of quoted addresses
+    // in prose, and a looser pattern would silently capture the wrong block.
+    const presenceBlock = /for present_addr in\s*\\\s*([\s\S]*?);\s*do/.exec(gateSrc);
+    expect(presenceBlock).not.toBeNull();
+    const presence = [...presenceBlock![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+
+    const entailedBlock = /for required_addr in\s*\\\s*([\s\S]*?);\s*do/.exec(gateSrc);
+    expect(entailedBlock).not.toBeNull();
+    const entailed = [...entailedBlock![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+
+    // Non-vacuity floors: an extraction that found nothing would make the union assertion
+    // below pass only by accident of the other terms.
+    expect(presence.length).toBeGreaterThan(10);
+    expect(entailed.length).toBe(3);
+
+    // The two members the gate handles by their own dedicated arms rather than by a loop:
+    // the server (the `creates == 1` identity arm) and the firewall attachment (an
+    // OUTCOME arm asserting server_ids ends at length 1 — deliberately NOT entailed).
+    const union = [
+      ...new Set([
+        ...presence,
+        ...entailed,
+        "hcloud_server.git_data",
+        "hcloud_firewall_attachment.git_data",
+      ]),
+    ].sort();
+
+    expect(union).toEqual([...GIT_DATA_BIRTH_TARGET_BASES].sort());
+
+    // (AC8b) The two #6982 additions must join the PRESENCE half specifically. In the
+    // entailed loop they would demand `creates == 1`, which a resumed dispatch cannot
+    // satisfy (they legitimately re-plan as no-ops) — ADR-149's "too strict → a permanent
+    // wedge". This is the half of the placement that a union check alone cannot see.
+    for (const addr of [
+      "doppler_secret.git_data_ssh_host",
+      "doppler_secret.git_data_betterstack_logs_token",
+    ]) {
+      expect(presence).toContain(addr);
+      expect(entailed).not.toContain(addr);
+    }
+  });
+
+  // ── (#6982, AC8c) THE ZERO-OF-N CASE ──────────────────────────────────────────────
+  //
+  // Every arm above compares the registration sites TO EACH OTHER, so declaring a new
+  // resource in git-data.tf and touching NONE of them is completely silent: the parity
+  // census does not cover general resources, and an untargeted resource is never planned,
+  // so `terraform validate`, `tsc` and a green PR branch all agree it is fine. It would
+  // surface for the first time at a birth, as an absence.
+  //
+  // Scoped to the address classes whose omission is actually harmful and which git-data.tf
+  // owns: Doppler writes (a secret that never lands) and Better Stack objects (a monitor
+  // that never exists). Both must be either in the birth set or explicitly excluded.
+  test("every doppler_secret/betteruptime address in git-data*.tf is registered or excluded", () => {
+    const declared = new Set<string>();
+    for (const f of [
+      "apps/web-platform/infra/git-data.tf",
+      "apps/web-platform/infra/git-data-luks.tf",
+    ]) {
+      const src = readFileSync(resolve(REPO_ROOT, f), "utf8");
+      for (const m of src.matchAll(
+        /^resource\s+"(doppler_secret|doppler_config|doppler_service_token|betteruptime_\w+)"\s+"([^"]+)"/gm,
+      )) {
+        declared.add(`${m[1]}.${m[2]}`);
+      }
+    }
+
+    // Non-vacuity: the scan must actually find the declarations it is grading.
+    expect(declared.size).toBeGreaterThan(5);
+    expect(declared.has("doppler_secret.git_data_ssh_host")).toBe(true);
+
+    const birthSet = new Set(GIT_DATA_BIRTH_TARGET_BASES);
+    const refused = new Set(GIT_DATA_BIRTH_REFUSED);
+    const unregistered = [...declared].filter(
+      (a) =>
+        !birthSet.has(a) && !OPERATOR_APPLIED_EXCLUSIONS.has(a) && !refused.has(a),
+    );
+    expect(unregistered).toEqual([]);
+  });
+
   test("stripDispatchJobs removes the job's targets from the coverage set", () => {
     const stripped = extractAllTargets(stripDispatchJobs(wf));
-    // All eighteen are exclusions, so folding them in would assert per-merge coverage for
+    // All twenty are exclusions, so folding them in would assert per-merge coverage for
     // a fan-out the per-merge apply deliberately never touches.
     expect(stripped.has("doppler_config.git_data_prd")).toBe(false);
     // Non-vacuity for the strip: the job block genuinely carries the target.
@@ -2293,15 +2414,25 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(jobBlock).toMatch(
       /^\s*if ! git_data_birth_readiness_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+"; then/m,
     );
+    // #6982 A3 added a SECOND interlock and did not inherit this pin. Measured: deleting its
+    // invocation, or putting `if: ${{ false }}` on its step, left this suite 98/0 GREEN —
+    // the same three mutations the comment above says were measured against gate 1, on the
+    // gate that is the only thing holding the birth today.
+    expect(jobBlock).toMatch(
+      /^\s*if ! git_data_rung2_rehearsal_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+"; then/m,
+    );
 
-    // The interlock is a separate STEP, so it can also be disarmed without touching its
-    // body at all. Pin the three ways: a conditional, continue-on-error, or a missing
+    // The interlocks are separate STEPS, so each can be disarmed without touching its body
+    // at all. Pin the three ways for BOTH: a conditional, continue-on-error, or a missing
     // non-zero exit.
-    const interlock = /- name: Birth-readiness interlock[\s\S]*?(?=\n      - name: )/.exec(jobBlock);
-    expect(interlock).not.toBeNull();
-    expect(interlock![0]).not.toMatch(/^\s*if:/m);
-    expect(interlock![0]).not.toMatch(/continue-on-error/);
-    expect(interlock![0]).toMatch(/^\s*exit 1$/m);
+    for (const stepName of ["Birth-readiness interlock", "Rung-2 rehearsal interlock"]) {
+      const step = new RegExp(`- name: ${stepName}[\\s\\S]*?(?=\\n      - name: )`).exec(jobBlock);
+      expect(step, `step not found: ${stepName}`).not.toBeNull();
+      expect(step![0]).not.toMatch(/^\s*if:/m);
+      expect(step![0]).not.toMatch(/continue-on-error/);
+      expect(step![0]).toMatch(/^\s*exit 1$/m);
+    }
+
   });
 
   test("the interlock inspects the SAME template git-data.tf renders", () => {
@@ -2405,14 +2536,21 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(birthAt).toBeLessThan(stockAt);
   });
 
-  test("the readiness interlock runs BEFORE the terraform plan", () => {
+  test("BOTH interlocks run BEFORE the terraform plan", () => {
     const interlockAt = jobBlock.search(/^\s*if ! git_data_birth_readiness_gate\b/m);
+    // #6982 A3's rung-2 gate is the second hold and had no ordering pin. A gate that runs
+    // after the plan still lets a held route pay for a plan and read a secret before it
+    // refuses, which is the cost the first gate's placement comment exists to avoid.
+    const rung2At = jobBlock.search(/^\s*if ! git_data_rung2_rehearsal_gate\b/m);
     // `terraform plan` WITH its flags — the invocation, not the words. The job header
-    // comment contains the bare phrase.
+    // comment contains the bare phrase. (I hit exactly this writing the rung-2 pin: an
+    // unanchored /terraform plan/ matched the header comment and the assertion inverted.)
     const planAt = jobBlock.search(/^\s*terraform plan -no-color/m);
     expect(interlockAt).toBeGreaterThan(-1);
+    expect(rung2At).toBeGreaterThan(-1);
     expect(planAt).toBeGreaterThan(-1);
     expect(interlockAt).toBeLessThan(planAt);
+    expect(rung2At).toBeLessThan(planAt);
   });
 
   test("the job carries the environment gate and reads HCLOUD_TOKEN for the preflight", () => {
@@ -2445,7 +2583,7 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
           .filter((a) => /^[a-z0-9_]+\.[a-z0-9_]+$/.test(a)),
       ),
     ].sort();
-    // Non-vacuity: the extraction must actually find the eighteen members.
+    // Non-vacuity: the extraction must actually find the twenty members.
     expect(gateBases.length).toBe(GIT_DATA_BIRTH_TARGET_BASES.length);
     expect(gateBases).toEqual([...GIT_DATA_BIRTH_TARGET_BASES].sort());
   });

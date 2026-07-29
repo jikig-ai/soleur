@@ -17,7 +17,17 @@
 # would let a stale gen=5 writer beat a fresh 0 (git-data-pre-receive.sh header).
 set -euo pipefail
 
-log() { echo "[git-data-bootstrap] $*"; }
+# (#6982, W1) Teach the EXISTING log() to speak off-box. Step 7 already asserts every
+# invariant the boot signal needs, fail-loud; the only defect was that `log` went NOWHERE
+# off-box on a host with no SSH and no console. Routing on the FATAL prefix (rather than a
+# die() at 12 sites) makes it impossible to add a future FATAL without an emit. Fail-open.
+GIT_DATA_EMIT="${GIT_DATA_EMIT:-/usr/local/bin/git-data-emit}"
+log() {
+  echo "[git-data-bootstrap] $*"
+  case "$*" in
+    FATAL:*) [ -x "$GIT_DATA_EMIT" ] && "$GIT_DATA_EMIT" "git-data bootstrap FATAL" bootstrap fatal "$*" || true ;;
+  esac
+}
 
 GIT_DATA_ROOT="/mnt/git-data"
 REPO_ROOT="$GIT_DATA_ROOT/repositories" # per-workspace bare repos land here
@@ -176,6 +186,47 @@ git config --system core.hooksPath "$HOOKS_DIR"
 #     is app-server-side; the in-sandbox GIT_PUSH_OPTION_* path lands in Phase 3.
 git config --system receive.advertisePushOptions true
 
+# 6c. (#6982, W4) Move maintenance OFF the push path and BOUND its peak. This is what makes
+# ADR-068 D1's "neither CPU- nor RAM-bound" true rather than asserted: git's DEFAULTS make a
+# 2 vCPU/4 GB/no-swap box burst-bound (receive.autogc ON = every push can trigger an inline
+# server-side repack; pack.windowMemory UNLIMITED; gc.autoDetach hides the OOM from the
+# pushing client). The burst is a CONFIG artifact, not a property of the store. Maintenance
+# still runs, daily, under systemd caps — `gc.auto 0` means "never as a side effect of
+# someone else's push". See ADR-068 D-SIZE.
+git config --system receive.autogc false
+git config --system gc.auto 0
+git config --system gc.autoDetach false
+# unpackLimit=1 — KEEP EVERY PUSH PACKED. Unset it inherits transfer.unpackLimit (100), so a
+# push under 100 objects explodes to loose — and the modal session push is under 100. Measured:
+# 79,411 objects = 700 MB/79,411 inodes loose vs 123 MiB/2 packed; mkfs gives this 10 GB volume
+# 655,360 inodes, so inodes exhaust at ~55-60% of BYTES — ENOSPC while df-bytes reads healthy.
+# gc.auto=0 means nothing packs it until the timer.
+git config --system receive.unpackLimit 1
+# receive.maxInputSize bounds a SINGLE push. Unset, one client can fill the shared 10 GB
+# volume for every other workspace -- a blast radius, not a per-user quota. 512 MiB, not the
+# 2 GiB first shipped: index-pack writes the incoming stream to disk WHILE validating, so the
+# limit is only enforced after the bytes have landed. At 2 GiB one push transiently takes 20%
+# of the shared store and five concurrent ones ENOSPC it for everyone -- which is the very
+# failure the bound exists to prevent, so the sizing had to survive its own argument.
+git config --system receive.maxInputSize 536870912
+# 64m window / 128m pack / single thread: sized to leave headroom on a 4 GB box that also
+# serves receive-pack. threads=1 because parallel delta search multiplies the window
+# budget by the thread count, which is the actual OOM path.
+git config --system pack.windowMemory 64m
+git config --system pack.packSizeLimit 128m
+git config --system pack.threads 1
+git config --system pack.deltaCacheSize 64m
+# Above this, store blobs undeltified rather than spending window memory on them.
+git config --system core.bigFileThreshold 32m
+# safe.directory — WITHOUT THIS THE MAINTENANCE TIMER IS A NO-OP THAT REPORTS SUCCESS.
+# The repos are created by git-data-provision.sh as the `git` user and REPO_ROOT is chowned
+# to git above; git-data-gc.service runs as ROOT. Since git 2.35 that combination is
+# refused: "fatal: detected dubious ownership in repository" (reproduced, rc=128) — so
+# reflog-expire, repack and prune ALL fail per repo, and because the script exits 0 on
+# per-repo failures systemd reports the unit successful. ADR-068's D-SIZE sizing argument
+# rests on this maintenance path actually running.
+git config --system safe.directory "$REPO_ROOT/*"
+
 # 7. Liveness assert — fail LOUD if any invariant is unmet (the post-merge
 #    readiness/cutover gate surfaces it; never leave a half-provisioned host
 #    silently "green" — hr-fresh-host-provisioning-reachable-from-terraform-apply).
@@ -199,6 +250,23 @@ mountpoint -q "$LUKS_ROOT" || {
   log "FATAL: receive.advertisePushOptions not advertised — push-option fence unreachable"
   exit 1
 }
+# (#6982, W4) RE-ASSERT every maintenance setting. A `git config` that silently failed to
+# take is indistinguishable from one that was never written, and the failure mode is not
+# an error — it is an OOM-killed repack weeks later, on the push path, invisible to the
+# client. Asserting the read-back is what makes the D1 claim an enforced invariant.
+for _kv in "receive.autogc=false" "gc.auto=0" "gc.autoDetach=false" \
+           "receive.unpackLimit=1" "receive.maxInputSize=536870912" \
+           "pack.windowMemory=64m" "pack.packSizeLimit=128m" "pack.threads=1" \
+           "pack.deltaCacheSize=64m" "core.bigFileThreshold=32m" \
+           "safe.directory=$REPO_ROOT/*"; do
+  _k="${_kv%%=*}"
+  _want="${_kv#*=}"
+  _got="$(git config --system "$_k" 2>/dev/null || true)"
+  [[ "$_got" == "$_want" ]] || {
+    log "FATAL: git config --system $_k is '$_got', expected '$_want' — maintenance would run unbounded on the push path"
+    exit 1
+  }
+done
 [[ "$(readlink -f "$GIT_HOME/repositories" 2>/dev/null)" == "$(readlink -f "$REPO_ROOT")" ]] || {
   log "FATAL: $GIT_HOME/repositories does not resolve to $REPO_ROOT — transport push URL and provisioned/fenced repo would diverge"
   exit 1
@@ -208,3 +276,27 @@ mountpoint -q "$LUKS_ROOT" || {
   exit 1
 }
 log "bootstrap complete: plaintext volume mounted, LUKS cutover volume mounted at $LUKS_ROOT, git+flock present, bare-repo root $REPO_ROOT, repositories symlink reconciled, provision wrapper present, fail-closed placeholder hook active, push-options advertised"
+
+# 8. (#6982, W1 / ADR-149 item 4) THE BOOT-COMPLETION SIGNAL — the post-apply signal this
+# host never had, emitted only here so its mere ARRIVAL means every assertion above passed.
+# The birth job POLLS for it rather than treating a green apply as a green boot.
+#
+# Chosen over arming the heartbeat: a TCP connect-and-close to :22 proves the port is OPEN,
+# not that git transport SERVES, and sshd is up before runcmd — so a host whose LUKS never
+# mounted answers on :22 and BEATS GREEN. The booleans are all `yes` by construction here;
+# they are emitted because the CONSUMER asserts on them, so a weakened assert shows up as a
+# false rather than a missing event.
+#
+# WORDING PINNED (AC30): `luks_mounted` is about the DEVICE. It says NOTHING about the
+# repositories being encrypted at rest — they are NOT, REPO_ROOT is the PLAINTEXT volume
+# until the cutover, and duplicating that false claim into telemetry would be the Art. 30
+# defect in a second artifact. df% is GIT_DATA_ROOT (the volume that fills). No repo paths,
+# no UUIDs: four booleans and an integer carry no identifier by construction.
+# ipcent too: inodes exhaust ahead of bytes (see 6c), so bytes-only reads healthy to ENOSPC.
+# `|| true` because read returns 1 on an empty df and this script is `set -e`.
+read -r _disk_pct _inode_pct < <(df --output=pcent,ipcent "$GIT_DATA_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9 \n') || true
+if [[ -x "$GIT_DATA_EMIT" ]]; then
+  "$GIT_DATA_EMIT" "git-data bootstrap complete" boot_complete info "" \
+    "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" \
+    "disk_pct=${_disk_pct:-unknown}" "inode_pct=${_inode_pct:-unknown}" || true
+fi

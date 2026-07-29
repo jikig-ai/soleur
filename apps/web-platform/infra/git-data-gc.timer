@@ -1,0 +1,37 @@
+[Unit]
+# (#6982, W4) Weekly trigger for the bounded git-data maintenance run.
+Description=Weekly git-data bare-repo maintenance
+Documentation=https://github.com/jikig-ai/soleur/issues/6982
+
+[Timer]
+# WEEKLY, Sunday 03:20 UTC, off the weekday push path. Jitter so a fleet restart cannot align
+# it.
+#
+# #6982's B12 changed this to DAILY on the reasoning that `--unpack-unreachable=2.weeks.ago`
+# loosens objects which "then sit until the next run", so a shorter interval would shorten
+# loose-object (and therefore inode) residency. THAT MECHANISM RUNS BACKWARDS, and review
+# measured it:
+#
+#   * loosened objects INHERIT THE SOURCE PACK'S MTIME (a pack aged 10 days yields loose
+#     objects dated 10 days ago), and `repack -A -d` does not refresh existing loose mtimes;
+#   * a pack older than the grace is DROPPED, never loosened.
+#
+# So a loose object lives until `pack_mtime + 14d` — WALL-CLOCK, independent of this interval.
+# A shorter interval only makes the loosening START EARLIER. Measured residency per orphaned
+# object: daily 14 days loose, weekly 8-9 days. Daily raises the time-averaged loose-inode
+# population ~1.75x, in precisely the resource git-data-bootstrap.sh §6c identifies as binding
+# (655,360 inodes; inodes exhaust at ~55-60% of BYTES).
+#
+# Daily also buys nothing on the push path any more: `receive.unpackLimit=1` means pushes
+# arrive PACKED, so the only loose objects on this store are the ones repack itself creates.
+#
+# If this is ever moved to daily, PRUNE_EXPIRE and --unpack-unreachable MUST come down to
+# match the cadence. Daily with a two-week grace is the worst of both.
+OnCalendar=Sun *-*-* 03:20:00
+RandomizedDelaySec=1800
+# Run a missed occurrence after a reboot. Cheap: the script is idempotent and holds a
+# non-blocking flock.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

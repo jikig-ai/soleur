@@ -48,7 +48,13 @@ resource "hcloud_server_network" "web" {
 resource "hcloud_server_network" "git_data" {
   server_id = hcloud_server.git_data.id
   subnet_id = hcloud_network_subnet.private.id
-  ip        = "10.0.1.20"
+  # #6982 — SINGLE-SOURCED from local.git_data_private_ip (git-data.tf), the same
+  # dead-local-plus-hardcoded-copy fix #6415 applied to registry above. It matters more
+  # here than it did there: doppler_secret.git_data_ssh_host publishes that same local to
+  # Doppler prd as GIT_DATA_SSH_HOST, and removeGitDataRepo resolves Art. 17 erasure
+  # against it. If the two literals drift, erasure targets an address nothing answers on
+  # and every account deletion files a FALSE "erasure failed" event.
+  ip = local.git_data_private_ip
 }
 
 # #6122 (ADR-096) — attach the zot registry host at a stable private IP. Web hosts + CI

@@ -188,3 +188,174 @@ describe("removeGitDataRepo — Art. 17 erasure of the git-data bare repo (AC9)"
     expect(sshProvision).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------------
+// (#6982, W6 / AC18) The client-side concurrency limiter.
+//
+// The limiter reads its bounds from env AT MODULE LOAD, so these tests re-import the
+// module under `vi.resetModules()` with small bounds. Importing once at the top of the
+// file would pin the production defaults and make the assertions untestable.
+//
+// The property under test is a GATE, so a final-state assertion is not enough: a test
+// that only checked "all N+1 eventually settle" passes identically with the semaphore
+// DELETED. Each case therefore asserts an INTERMEDIATE state — the live in-flight count
+// while calls are held open — which is the thing only the gate can produce.
+// ---------------------------------------------------------------------------------
+describe("replicateToGitData — concurrency limiter (#6982 W6)", () => {
+  async function loadWithLimits(max: string, timeoutMs: string) {
+    vi.resetModules();
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    vi.stubEnv("GIT_TRANSPORT_SSH_PRIVATE_KEY", "transport-key");
+    vi.stubEnv("GIT_PROVISION_SSH_PRIVATE_KEY", "provision-key");
+    vi.stubEnv("GIT_DATA_MAX_CONCURRENT", max);
+    vi.stubEnv("GIT_DATA_QUEUE_TIMEOUT_MS", timeoutMs);
+    return await import("../server/git-data-replication");
+  }
+
+  const call = (mod: typeof import("../server/git-data-replication"), id: string) =>
+    mod.replicateToGitData({
+      workspacePath: `/tmp/${id}`,
+      workspaceId: id,
+      worktreeId: "wt-1",
+      leaseGeneration: 1,
+      userId: "user-1",
+    });
+
+  it("holds concurrent replications at or below the limit", async () => {
+    const mod = await loadWithLimits("2", "10000");
+
+    // Block the push so slots stay held while we observe the counter. Resolving these is
+    // what lets the queued caller through.
+    let releasePush: () => void = () => {};
+    const pushGate = new Promise<Buffer>((res) => {
+      releasePush = () => res(Buffer.from(""));
+    });
+    gitPush.mockImplementation(() => pushGate);
+
+    const a = call(mod, "ws-a");
+    const b = call(mod, "ws-b");
+    const c = call(mod, "ws-c"); // third — must WAIT, not run
+
+    // Let the two admitted calls reach their (blocked) push.
+    await vi.waitFor(() => expect(mod.__gitDataInFlightForTest()).toBe(2));
+
+    // THE INTERMEDIATE ASSERTION. Without the semaphore this reads 3.
+    expect(mod.__gitDataInFlightForTest()).toBe(2);
+
+    releasePush();
+    await Promise.all([a, b, c]);
+    expect(mod.__gitDataInFlightForTest()).toBe(0);
+    gitPush.mockResolvedValue(Buffer.from(""));
+  });
+
+  it("SHEDS on queue timeout without blocking, and reports the shed", async () => {
+    // Zero-length queue window: the third caller gives up immediately rather than the
+    // test waiting out a real timeout.
+    const mod = await loadWithLimits("1", "0");
+
+    let releasePush: () => void = () => {};
+    const pushGate = new Promise<Buffer>((res) => {
+      releasePush = () => res(Buffer.from(""));
+    });
+    gitPush.mockImplementation(() => pushGate);
+    reportSilentFallback.mockClear();
+
+    const held = call(mod, "ws-held");
+    await vi.waitFor(() => expect(mod.__gitDataInFlightForTest()).toBe(1));
+
+    // The shed caller must RESOLVE (not hang, not throw): git-data is an overlay and
+    // session end must never block on it. And it must SAY it shed — B13 (#6982 review):
+    // returning bare `void` made a shed indistinguishable from a completed push at the call
+    // site, on a path where a shed delta is never replicated later.
+    await expect(call(mod, "ws-shed")).resolves.toEqual({
+      status: "shed",
+      slotsBusy: expect.any(Number),
+      queueTimeoutMs: expect.any(Number),
+    });
+
+    // ...and the shed must be OBSERVABLE. A silent shed is indistinguishable from a bug.
+    expect(reportSilentFallback).toHaveBeenCalled();
+    const opts = reportSilentFallback.mock.calls.at(-1)?.[1] as {
+      feature?: string;
+      op?: string;
+    };
+    expect(opts?.feature).toBe("git_data_replication");
+    expect(opts?.op).toBe("queue_shed");
+
+    // The shed must NOT have consumed a slot.
+    expect(mod.__gitDataInFlightForTest()).toBe(1);
+
+    releasePush();
+    await held;
+    gitPush.mockResolvedValue(Buffer.from(""));
+  });
+
+  it("releases the slot when the push THROWS (no leak)", async () => {
+    // The leak this guards: replicateToGitData re-throws on a fence reject, so a slot
+    // released only at the end of `try` would shrink the pool by one per failure until
+    // replication silently stopped.
+    const mod = await loadWithLimits("1", "0");
+    gitPush.mockRejectedValueOnce(new Error("fence reject: stale lease-gen"));
+
+    await expect(call(mod, "ws-boom")).rejects.toThrow(/fence reject/);
+    expect(mod.__gitDataInFlightForTest()).toBe(0);
+
+    // Proof the pool still works afterwards — the assertion above would also hold if the
+    // counter were merely reset rather than properly released.
+    gitPush.mockResolvedValue(Buffer.from(""));
+    await expect(call(mod, "ws-after")).resolves.toEqual({ status: "replicated" });
+  });
+});
+
+// #6982 review P3 — the replication logger must not ship a BARE workspace UUID.
+//
+// workspace_id === auth.users.id (mig-053 N2), so a bare workspaceId in a log line is a
+// raw user identifier on the app log sink — and Vector's `pii_scrub_string` does NOT
+// scrub a bare UUID in free text. That is the same reasoning that put a UUID redactor in
+// the git-data host emitter in this very PR; the app side was the outlier. The sibling
+// module git-data-client.ts already pseudonymises via hashUserId(workspaceId).
+describe("replicateToGitData — workspace id is pseudonymised in logs (#6982)", () => {
+  const REAL_WS = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
+  const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+  it("logs a hash, never the raw workspace id, on a successful push", async () => {
+    vi.resetModules();
+    const logCalls: unknown[][] = [];
+    vi.doMock("../server/logger", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../server/logger")>()),
+      createChildLogger: () => ({
+        info: (...a: unknown[]) => logCalls.push(a),
+        warn: (...a: unknown[]) => logCalls.push(a),
+        error: (...a: unknown[]) => logCalls.push(a),
+        debug: (...a: unknown[]) => logCalls.push(a),
+      }),
+    }));
+    vi.stubEnv("GIT_DATA_STORE_ENABLED", "true");
+    const mod = await import("../server/git-data-replication");
+    await mod.replicateToGitData({
+      workspacePath: "/tmp/ws",
+      workspaceId: REAL_WS,
+      worktreeId: WT,
+      leaseGeneration: 1,
+      userId: USER,
+    });
+
+    expect(logCalls.length).toBeGreaterThan(0);
+    const serialized = JSON.stringify(logCalls);
+    // The raw id must not be present in ANY form.
+    expect(serialized).not.toContain(REAL_WS);
+    // ...and not merely absent because nothing was logged about the workspace: a
+    // pseudonymous handle must be there instead.
+    expect(serialized).toMatch(/workspaceIdHash/);
+    // No OTHER bare UUID may ride either (worktreeId is one).
+    const structured = logCalls.map((c) => c[0]);
+    for (const obj of structured) {
+      for (const v of Object.values((obj ?? {}) as Record<string, unknown>)) {
+        if (typeof v === "string" && UUID_RE.test(v)) {
+          throw new Error(`bare UUID reached the log sink: ${String(v)}`);
+        }
+      }
+    }
+    vi.doUnmock("../server/logger");
+  });
+});

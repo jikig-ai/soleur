@@ -91,8 +91,7 @@ This runbook covers two operator flows:
 
    ```bash
    ssh root@135.181.45.178 "docker logs soleur-web-platform 2>&1 \
-     | grep -F 'userIdHash' \
-     | grep -F \"$HASH\""
+     | grep -E '\"(userIdHash|workspaceIdHash|worktreeIdHash)\":\"'\"$HASH\"'\"'"
    ```
 
    `grep -F` (fixed string) prevents accidental regex-metachar
@@ -100,14 +99,33 @@ This runbook covers two operator flows:
    files. The first grep narrows to lines emitted by `formatters.log()`;
    the second narrows to the operator's specific user.
 
-   **Anti-collision contract:** the double-grep is correct because
-   `userIdHash` is currently the only 64-hex-shaped pino field emitted by
-   `formatters.log()` (`apps/web-platform/server/userid-pseudonymize.ts`).
-   Any future pino-emitted 64-hex field (a content digest, bundle SHA,
-   request hash, etc.) must carry its own unique JSON-key prefix or this
-   runbook's grep target must be tightened to anchor on
-   `"userIdHash":"<hash>"` (full key-value pair). If you add a new
-   64-hex emission, update this section in the same PR.
+   **Anti-collision contract.** This used to be a double-grep narrowing on
+   `userIdHash` alone, correct while that was the only 64-hex-shaped pino
+   field emitted by `formatters.log()`
+   (`apps/web-platform/server/userid-pseudonymize.ts`). It no longer is:
+   #6982 added `workspaceIdHash` and `worktreeIdHash` in
+   `apps/web-platform/server/git-data-replication.ts`.
+
+   That broke the old form in BOTH directions, which is why the pattern
+   above is a single anchored `grep -E` on the full key-value pair rather
+   than a tightened double-grep:
+
+   - **False negatives.** A record carrying only `workspaceIdHash` or
+     `worktreeIdHash` was skipped by `grep -F 'userIdHash'` entirely — and
+     on this host those are recoverable identities too, because a repo is
+     `<workspace_id>.git` and `workspace_id === user_id` (mig-053 N2), so
+     `hashUserId(workspaceId)` yields the SAME digest as `userIdHash` for
+     the same person.
+   - **False positives.** A line carrying several hashed fields let the
+     second `grep -F "$HASH"` match a DIFFERENT field's value on a line
+     selected for containing the key name.
+
+   Anchoring on `"<key>":"<hash>"` fixes both: it selects the record only
+   when the hash is the value of one of the enumerated keys.
+
+   If you add a new 64-hex pino emission, add its key to the alternation
+   above in the same PR — or give it a key prefix that cannot be confused
+   with an identity field.
 
 ### Load-bearing primitive distinction
 

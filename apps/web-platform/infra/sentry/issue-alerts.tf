@@ -1693,6 +1693,150 @@ resource "sentry_issue_alert" "web_terminal_boot_fatal" {
   }
 }
 
+# #6982 — the git-data host's boot-stage fatal channel.
+#
+# WITHOUT THIS RULE EVERY EMIT #6982 ADDS IS WRITE-ONLY. That is not hypothetical: this file's
+# own web_terminal_boot_fatal comment records exactly that state for the web host's runcmd
+# stages before #6090. git-data is worse placed than the web host — deny-all public ingress, no
+# human SSH path (git-shell + three command=/no-pty forced commands), no console, and no log
+# shipper — so an unrouted Sentry event is the ONLY trace of a failed boot, read by nobody.
+#
+# `value = 0`, NOT the `value = 1` used by web_terminal_boot_fatal above. That comparison is a
+# STRICT `>`, so `value = 1` means ">1 event in the interval" and works there ONLY because the
+# shared `soleur-boot-emit` group is always already hot. git-data emits into a FRESH group: the
+# host has never existed, so its first-ever boot fatal is BY DEFINITION the first event in that
+# group and `value = 1` would NOT page for it. Copying the sibling's number would have made this
+# rule silently inert on precisely the event it exists to catch — the same class the
+# ci_deploy_ghcr_fallback comment above warns about.
+#
+# `filter_match = "any"`: these stages are alternatives, not conjuncts — one boot dies at one
+# stage. The set is the STAGE progression git-data's runcmd arms, plus the two child-shell
+# stages that only exist because the emitter is a /usr/local/bin binary (a parent shell function
+# cannot cross `doppler run`'s exec boundary — ADR-147's #6982 addendum).
+#
+# `bootcmd_start` is deliberately ABSENT: it is an `info` beacon, not a fatal, and its ABSENCE
+# (with no runcmd_early following) is what brackets a pre-runcmd death. Alerting on its presence
+# would page on every healthy boot.
+#
+# PII: the payload is four booleans, a df percentage, an rc, and a `detail` that passes the
+# emitter's internal redactor on EVERY path — a bare-UUID rule and a repo-path rule run BEFORE
+# the 180-byte cap, because on this host the repo identifier IS the user identifier
+# (<workspace_id>.git, workspace_id === user_id). No repo path and no raw UUID can reach here.
+resource "sentry_issue_alert" "git_data_boot_fatal" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "git-data-boot-fatal"
+  action_match = "all"
+  filter_match = "any"
+  frequency    = 24
+
+  conditions_v2 = [
+    {
+      event_frequency = {
+        comparison_type = "count"
+        value           = 0
+        interval        = "1h"
+      }
+    },
+  ]
+  # STAGE VALUES ARE HOST-PREFIXED WHERE THEY WOULD COLLIDE. The web host emits into this
+  # SAME project with the same `stage` tag key and uses `runcmd_early` and `doppler_dl`
+  # itself; with filter_match = "any" a host_name filter cannot be AND-ed on, so those two
+  # values would have paged a WEB-host boot fatal as "git-data-boot-fatal" and sent the
+  # operator to the git-data birth runbook. Only the two colliding values are prefixed —
+  # the other seven are unique to this host (verified by diffing both emitters' stage sets).
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "gitdata_runcmd_early"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "sshd_config"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "volume_mount"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "gitdata_doppler_dl"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "doppler_run"
+      }
+    },
+    {
+      # The heredoc-local stage. Without it a failed luksOpen would surface as doppler_run and
+      # the at-rest-encryption failure would be indistinguishable from a credential failure.
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "luks_open"
+      }
+    },
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "bootstrap"
+      }
+    },
+    {
+      # git-data-gc.service's OnFailure handler — the unit DIED (OOM kill, missing binary,
+      # timeout). Per-repo failures deliberately do NOT reach here; git-data-gc.sh exits 0 on
+      # those so this stays a signal rather than weekly noise.
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "gc"
+      }
+    },
+    {
+      # The timer-arming runcmd item. Both its commands carry `|| true` (a maintenance timer
+      # must never brick a boot), so the trap firing HERE is unlikely — but "unlikely" is not
+      # "impossible", and STAGE is whatever was last assigned when the trap fires. An emitted
+      # stage matching no filter is a WRITE-ONLY fatal, which is the exact failure this whole
+      # rule exists to prevent; leaving it out because it is improbable would reintroduce it
+      # in miniature. The emitted-stage set is reconciled against this filter list.
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "gc_timer"
+      }
+    },
+  ]
+  # N=1 accepted risk, mirroring every sibling apply-created rule: IssueOwners has no ownership
+  # rule on this project so it falls through to ActiveMembers, paging the solo founder.
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # #6441 — the first-boot private-NIC gate's non-ready outcomes (ADR-114 I1).
 #
 # WHY A SEPARATE RULE rather than two more stages on web_terminal_boot_fatal above: these are
