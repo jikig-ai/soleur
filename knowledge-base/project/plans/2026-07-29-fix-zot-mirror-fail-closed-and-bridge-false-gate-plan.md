@@ -1,5 +1,5 @@
 ---
-title: "fix(infra): make the zot mirror fail-closed, and replace the bridge's false gate"
+title: "fix(infra): make the zot mirror fail-closed, and stop the pipeline asserting a dead GHCR fallback"
 date: 2026-07-29
 type: fix
 lane: cross-domain
@@ -7,626 +7,538 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 branch: feat-one-shot-zot-mirror-fail-closed
 pr: 7071
+plan_version: 2
 ---
 
-# fix(infra): make the zot mirror fail-closed, and replace the bridge's false gate
+# fix(infra): make the zot mirror fail-closed, and stop the pipeline asserting a dead GHCR fallback
 
-> **Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed).** No
-> `knowledge-base/project/specs/feat-one-shot-zot-mirror-fail-closed/spec.md` exists; this plan is
-> the first artifact for the branch.
+> **v2 — rewritten, not patched.** v1 was reviewed by 7 independent reviewers (repo-research,
+> learnings, CTO, CPO, a strong-model advisor, then the escalated 5-agent panel). They returned
+> **5 P0s**, three of which invalidated v1's own design or premises. v1's incremental patching had
+> itself produced measurable drift (an AC encoding a design the FR forbade, an AC naming a
+> discriminator no FR defined, a count stated three different ways) — the fingerprint of appending
+> rather than integrating. This is an integrated rewrite; it is ~40% shorter than v1.
+>
+> **Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed).**
 
 ## Overview
 
-On 2026-07-29 the web-platform release for **v0.244.1** built and pushed to GHCR successfully, the
-release published, and then `deploy` died `image_pull_failed`. Production sat undeployable for ~5h.
+On 2026-07-29 the web-platform release for **v0.244.1** built, pushed to GHCR, and published green.
+The deploy then died `image_pull_failed` and production sat undeployable ~5h.
 
-The release was green because the CI zot-mirror step is **warn-only by design**: it emits
-`mirror_status=degraded` + a `::warning::` and exits 0. That tolerance was a correct decision when
-it was made — it rested on GHCR being a working break-glass fallback. **That premise is now
-false**, so the mirror must fail-closed.
+The release was green because the CI zot-mirror step is warn-only by design — a correct decision
+*when GHCR was a working break-glass fallback*. **That premise is now false**, so the mirror must
+fail-closed.
 
-This plan delivers three things:
+Three deliverables:
 
-- **A — the mirror becomes release-blocking**, via a *positive* post-mirror assertion (the
-  `v<version>` tag must resolve in zot at the same digest GHCR holds), not by trusting any step's
-  self-reported status.
-- **B — the bridge's `nc -z` false gate is replaced** with a positive `/v2/` probe, and two
-  *factually false* claims in the degraded message are corrected. **No Terraform, no Cloudflare
-  write, and no Doppler write is required** — see Premise Validation.
-- **C — the discarded zot-pull stderr is logged**, so the next occurrence is one query, not log
-  archaeology.
+- **A** — the mirror becomes release-blocking, via a positive post-copy assertion, **and the deploy
+  is actually gated on it** (v1 got this wrong; see P0-A).
+- **B** — stop the pipeline and its runbooks asserting a GHCR fallback that no longer exists, and
+  close the token-drift detector's coverage gap. **No Terraform, no Cloudflare write, no Doppler
+  write.**
+- **C** — log the zot-pull stderr that is currently discarded.
 
 ## Premise Validation
-
-Run before any research was dispatched (plan Phase 0.6). **Two of the three stated premises for
-Deliverable B were falsified by live evidence.** Deliverable A's premise was confirmed and
-strengthened.
 
 ### Confirmed
 
 | Premise | Evidence |
 |---|---|
-| Mirror step is warn-only and emitted `rc=bridge` | `reusable-release.yml` `degraded()` → `mirror_status=degraded`, `exit 0`, `continue-on-error: true`. Run **30468080168** annotation reproduces the quoted text verbatim. |
-| **GHCR is dead** | `GHCR_READ_TOKEN` in Doppler `prd` is a 40-char `ghp_` classic PAT. `GET api.github.com/user` → **401**. Registry pull-token mint → **403 `{"errors":[{"code":"DENIED"}]}`**. `GHCR_MINTER_DISABLED=true`. |
-| Deploy failed `image_pull_failed` | Job 90634334826: `##[error]ci-deploy.sh exited 1 (reason=image_pull_failed, tag=v0.244.1)`. |
-| `ci-deploy.sh` discards `$perr` on the zot arm | `ci-deploy.sh:1589` logs only the bare `IMAGE_PULL: zot pull failed …` line; `$perr` is captured at `:1554` and only read later by `pull_failure_event` (`tail -c 400`). |
-| A failed `release` job blocks deploy | `web-platform-release.yml`: `deploy: needs: [release, migrate, verify-migrations, verify-doppler-secrets, await-ci]`. |
+| Mirror is warn-only, emitted `rc=bridge` | `degraded()` → `mirror_status=degraded`, `exit 0`, `continue-on-error: true`. Run **30468080168** reproduces the quoted annotation verbatim. |
+| **GHCR is dead** | `GHCR_READ_TOKEN` is a 40-char `ghp_` classic PAT. `GET api.github.com/user` → **401**. Registry pull-token mint → **403 `{"errors":[{"code":"DENIED"}]}`**. `GHCR_MINTER_DISABLED=true`. |
+| Deploy failed `image_pull_failed` | Job 90634334826: `ci-deploy.sh exited 1 (reason=image_pull_failed, tag=v0.244.1)`. |
+| `$perr` is discarded on the zot arm | Captured at `perr="$(mktemp` (`ci-deploy.sh:1551`); the zot-failure branch at `:1589` logs only the bare `IMAGE_PULL: zot pull failed for …` line. |
+| Host verify is **warn**, not enforce | `ci-deploy.sh:54` `readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}"`; two tests assert the default stays `warn`. So an unsigned-but-present copy deploys **today**. |
+
+### P0-A — RETRACTED: "a failed `release` job blocks deploy" was FALSE
+
+v1 listed this as *Confirmed*, citing `deploy: needs: [release, migrate, …]`. **That is not the
+blocking mechanism.** Measured: `needs.release.result` appears **0 times** in
+`web-platform-release.yml`. The `deploy` job's condition leads with `always() &&`, which discards
+GitHub's implicit skip-on-failed-`needs`, and then gates on
+`needs.release.outputs.docker_pushed == 'true'` — an output written by `Set docker_pushed output`
+(`if: steps.docker_build.outcome == 'success'`), **ten steps before** where the new assertion sits.
+`migrate` is the same shape (`always() && needs.release.outputs.version != ''`).
+
+The tell is inside the same expression: `await-ci` and `verify-doppler-secrets` are gated on
+`.result`; `release` is gated only on an output.
+
+So whether a blocked release stops the deploy rests on an undocumented GitHub semantic v1 never
+named — whether a reusable workflow's `workflow_call.outputs` propagate when the called job
+concludes `failure`. If they do, the deploy **runs**: migrations apply, the webhook fires,
+`ci-deploy.sh` misses in zot, the revoked PAT denies GHCR, and prod is left on **new schema + old
+code** with neither a published release nor a deploy — *strictly worse than the v0.244.1 baseline*.
+
+**This is exactly the class of error this plan exists to fix: I read `needs:` and asserted a
+mechanism without reading the `if:`.** Fixed deterministically by FR-A5, independent of which
+semantic is true.
 
 ### Falsified — Deliverable B is re-scoped
 
-**F1. The `HTTP 200` + empty body from `https://registry.soleur.ai/v2/` is CORRECT BEHAVIOUR, not a
-broken origin.** The tunnel ingress for that hostname is `service: tcp://10.0.1.30:5000` — a
-**TCP-mode** ingress, consumable only via `cloudflared access tcp`. A plain HTTPS GET is not a
-WebSocket upgrade for that stream, so nothing is proxied. The repo already documents this:
-`cf-tunnel-registry-bridge/action.yml` header — *"`tcp://`, NOT `http://`: `cloudflared access tcp`
-bridges a raw TCP stream over a WebSocket"*. Reproduced: with CF Access headers → `200`, `size=0`,
-**no `content-type` at all**; without → `403`. A real origin response carries
-`content-type: application/json`.
+**F1. The `HTTP 200` + empty body from `https://registry.soleur.ai/v2/` is CORRECT BEHAVIOUR.** The
+ingress for that hostname is `service: tcp://10.0.1.30:5000` — **TCP-mode**, consumable only via
+`cloudflared access tcp`. A plain HTTPS GET is not a WebSocket upgrade for that stream, so nothing
+is proxied. The repo already documents this (`cf-tunnel-registry-bridge/action.yml` header:
+*"`tcp://`, NOT `http://`: `cloudflared access tcp` bridges a raw TCP stream over a WebSocket"*).
+Reproduced: with CF Access → `200`, `size=0`, **no `content-type` at all**; without → `403`.
 
-**F2. The private-net route to `10.0.1.30:5000` is present and working.** Live tunnel config
-(`GET /accounts/{acct}/cfd_tunnel/6410c1ec…/configurations`) shows the `registry.soleur.ai` →
-`tcp://10.0.1.30:5000` ingress. Verified end-to-end: `cloudflared access tcp --hostname
-registry.soleur.ai --url 127.0.0.1:15000`, then `GET http://127.0.0.1:15000/v2/` returned
-**HTTP 401 from zot itself** (`Www-Authenticate: Basic realm="Authorization Required"`, body
-`{"code":"UNAUTHORIZED","message":"authentication required",…}`). That is the origin answering
-through CF Access → tunnel → connector → zot. The 401 is simply "no htpasswd creds sent".
+**F2. The private-net route is present and working.** Live tunnel config shows the ingress.
+Verified end-to-end: `cloudflared access tcp --hostname registry.soleur.ai --url 127.0.0.1:15000`,
+then `GET /v2/` → **HTTP 401 from zot itself** (`Www-Authenticate: Basic realm=…`, zot-shaped JSON).
+That is the origin answering. *Limitation: this ran from the operator's laptop, not a runner — it
+proves the path is capable, not that a runner will succeed. AC-P1 defers the faithful test.*
 
-> **Honest limitation.** This probe ran from the operator's laptop, not a GitHub runner. It proves
-> the path is *capable* now; it does not prove a runner will succeed. The faithful test is a CI
-> run, which is a production mutation and is deliberately out of scope tonight. AC13 defers it.
-
-**F3. The actual root cause was a CF Access service-token rotation that did not propagate.** The
-bridge's own log, recovered from the teardown step of run 30468080168:
+**F3. The real cause was a CF Access service-token rotation that did not propagate.** Bridge log,
+recovered from the teardown step of run 30468080168:
 
 ```
 2026-07-29T16:01:14Z ERR failed to connect to origin error="websocket: bad handshake" originURL=https://registry.soleur.ai
 ```
 
-`websocket: bad handshake` is the *client* failing to establish the session at the edge — CF Access
-refused the upgrade. A missing origin route would instead produce a **successful** handshake then an
-origin-side failure. Timeline, exact:
+`websocket: bad handshake` is the *client* failing at the edge — CF Access refused the upgrade. A
+missing origin route would instead handshake successfully and fail origin-side.
 
 | Time (UTC) | Event |
 |---|---|
 | 15:53:26 | Run 30468080168 starts (release for #7065, *"make the CF Access service tokens rotatable via Terraform"*). |
-| **15:57:52** | `github-actions-registry-push` service token **created** (live CF API `created_at` == `updated_at`) — i.e. replaced. |
+| **15:57:52** | `github-actions-registry-push` service token **created** (live CF API `created_at == updated_at`) — i.e. replaced. |
 | 16:01:14 | Bridge runs with the **stale** Doppler value → `websocket: bad handshake` ×4. |
-| 16:01:14 | `nc -z 127.0.0.1 5000` still passes → bridge step `__run_2` reports **success**. |
-| 16:01:15 | `docker login` through the dead stream → `connection reset by peer` → `__run_3` **fails**. |
-| — | `zot_mirror` branches to `degraded "bridge"` → warn-only. Release **publishes v0.244.1**. |
-| — | Deploy: zot has no v0.244.1; GHCR fallback → PAT revoked → `image_pull_failed`. |
+| 16:01:14 | `nc -z 127.0.0.1 5000` **passes anyway** → bridge step `__run_2` reports success. |
+| 16:01:15 | `docker login` through the dead stream → `connection reset by peer` → `__run_3` fails. |
+| — | `degraded "bridge"` → warn-only. Release **publishes v0.244.1**. |
+| — | Deploy: zot lacks v0.244.1; GHCR fallback → revoked PAT → `image_pull_failed`. |
 
-The mechanism is gotcha #2 — every `doppler_secret` carrying a token declares
-`lifecycle { ignore_changes = [value] }`, so Terraform recreated the CF Access token but could never
-propagate the new secret. **The operator independently reached this same conclusion hours earlier**:
-commit `5eba7ec07` (#7067) names `REGISTRY_PUSH_ACCESS_TOKEN_*` as *"`prd` root stale after a
-Terraform replace"*. The token in Doppler `prd` works now (my probe minted a valid
-`CF_Authorization`), so this specific staleness is already remediated.
+Mechanism: every `doppler_secret` carrying a token declares `lifecycle { ignore_changes = [value] }`,
+so Terraform recreated the token but could never propagate the new secret. **The operator reached the
+same conclusion hours earlier** — commit `5eba7ec07` (#7067) names `REGISTRY_PUSH_ACCESS_TOKEN_*` as
+*"`prd` root stale after a Terraform replace"*. Doppler holds a working token now (my probe minted a
+valid `CF_Authorization`), so this staleness is already remediated.
 
-**Net effect on scope:** Deliverable B has **no infrastructure defect to fix**. It becomes a
-detection-and-truthfulness fix in code + docs. This is strictly better than the staged-Terraform
-outcome the task anticipated, and it removes the only part of the task that would have needed an
-operator `terraform apply`.
+**Net: Deliverable B has no infrastructure defect to fix.** It is a detection-and-truthfulness fix.
 
 ## Research Reconciliation — Spec vs. Codebase
 
-| Task claim | Reality | Plan response |
+| Claim | Reality | Response |
 |---|---|---|
-| "fix the CF-tunnel registry bridge that silently mirrored nothing" | Bridge is healthy; it failed once on a stale CF Access token, since remediated. | Re-scope B to the **false gate** + **false comment** + **detector coverage**. No infra change. |
-| "`/v2/` returns 200 empty ⇒ Cloudflare answering without a working origin" | Expected for a `tcp://` ingress (F1). | Correct the misdiagnosis in-repo so it is not repeated; add the correct probe shape to the runbook. |
-| "the tunnel connector may lack a private-net route to 10.0.1.30:5000" | False (F2). `model.c4:428` already records this #6416 failure mode as **closed** (web-2 retired 2026-07-17, #6538; surviving web-1 connector is a subnet member). | Delete the false claim from `reusable-release.yml:782`; replace with the measured cause class. |
-| "If the fix is Terraform, write it, run fmt/validate/plan only" | No Terraform needed. | Explicitly state no `.tf` change; skip the IaC gate with a reason. |
-| ADR-096 permits a warn-only mirror | True, but justified on GHCR **redundancy** — *"a mirror failure degrades zot redundancy, never the release/build verdict."* GHCR is dead, so zot is not redundant; it is the sole path. | Fail-closed requires an **ADR-096 amendment** — a deliverable of this plan, not a follow-up. |
-| "Keep `reusable-release-zot-mirror-retry.test.sh` green" | It extracts the step's `run:` block by literal `index($0, "- name: " target)` and executes it under stubs. | Deliver A as a **new sibling step**. *Corrected at review:* the original justification ("leaves the extracted block byte-identical") was self-contradictory — Phase 3 (FR-B3) edits the `degraded "bridge"` message, which lives **inside** that block. The real reason the sibling step is required is structural: **a step without `continue-on-error` cannot be the same step as one that has it.** The harness still needs no assertion change because it matches the literal step *name*, which is unchanged, and asserts on `mirror_status`, whose values are unchanged. |
+| "fix the CF-tunnel bridge that silently mirrored nothing" | Bridge is healthy; one failure from a stale token, since remediated. | Re-scope B to truthfulness + detector coverage. No infra change. |
+| "empty 200 ⇒ Cloudflare answering without a working origin" | Expected for a `tcp://` ingress (F1). | Record the probe trap so it is not repeated. |
+| "the connector may lack a private-net route" | False (F2). `model.c4:428` already records this #6416 mode as **closed** (web-2 retired 2026-07-17, #6538). | Delete the claim; replace with the measured cause class. |
+| "If the fix is Terraform, run fmt/validate/plan only" | No Terraform needed. | IaC gate skipped with reason. |
+| ADR-096 permits warn-only | True, justified on GHCR **redundancy**: *"a mirror failure degrades zot redundancy, never the release/build verdict."* GHCR is dead ⇒ zot is not redundant. | Fail-closed requires an **ADR-096 amendment** — an in-PR deliverable. |
+| A separate `zot_verify` step (v1 design) | **Breaks on the incident it targets.** On a bridge failure `degraded()` exits *before* `install_crane`, so a sibling step finds no `crane`; `docker login` never ran either, so `crane` would 401. v1's taxonomy would have reported *"CI regression — not a registry problem"*. | **Assertion moves INSIDE `zot_mirror`.** Converged by 3 reviewers. |
+| `crane digest` is "established precedent (16 sites)" | **False** — measured **3** repo-wide, and `apply-web-platform-infra.yml` records `crane digest` as a *deliberately rejected* deviation in favour of `docker buildx imagetools inspect`. | Drop the GHCR-side `crane` read entirely (FR-A2). My own unverified count in an evidence-first plan. |
+| "Keep the mirror harness green" | It extracts the `run:` block by literal step-*name* match and asserts on `mirror_status` values. | Cost of the honest fix is **two string literals** (`"0 degraded warn 3"`→`"1 …"`, `"0 degraded warn 0"`→`"1 …"`). Freezing them would be a test protecting the bug. |
 
 ## Hypotheses
 
-Ordered L3 → L7 per `hr-ssh-diagnosis-verify-firewall`. Routing was verified **before** any
-auth/service-layer conclusion.
+L3 → L7 per `hr-ssh-diagnosis-verify-firewall`; routing verified **before** any auth conclusion.
 
-1. **L3 — origin route missing (tunnel ingress lacks `10.0.1.30:5000`).** **REFUTED.** Live tunnel
-   configuration contains the ingress; zot answered 401 through it (F2).
-2. **L3 — DNS/edge.** **VERIFIED HEALTHY.** `registry.soleur.ai` is a proxied CNAME to
-   `<tunnel-id>.cfargotunnel.com`; edge answered on every probe (`server: cloudflare`, `cf-ray`
-   present).
-3. **L3 — connector homogeneity (a replica without a private NIC).** **REFUTED for this incident.**
-   Single web host since 2026-07-17 (#6538); `model.c4:428` records the mode closed. The tunnel's 4
-   connections are one cloudflared instance's 4 HA edge links, not 4 hosts.
-4. **L7 — TLS/proxy layer misconfiguration (empty 200 ⇒ broken origin).** **REFUTED.** Empty 200 is
-   the documented consequence of a `tcp://` ingress answering a non-WebSocket request (F1).
-5. **L7 — CF Access rejected the service token after a Terraform-driven rotation.** **CONFIRMED as
-   the mechanism**, with a 3-minute causal window and a matching client-side error (F3). Already
-   remediated in Doppler; the *detection* gap is what this plan closes.
-6. **L7 — zot itself down / disk-full.** **REFUTED.** zot served both hosts' v0.244.0 pulls the same
-   day (`IMAGE_PULL_OK: registry=zot`) and answered my probe.
+1. **L3 origin route missing** — **REFUTED** (F2).
+2. **L3 DNS/edge** — **HEALTHY** (proxied CNAME to `<tunnel>.cfargotunnel.com`; edge answered every probe).
+3. **L3 connector homogeneity** — **REFUTED** for this incident (single web host since #6538; `model.c4:428`; the tunnel's 4 connections are one cloudflared instance's 4 HA edge links).
+4. **L7 empty-200 ⇒ broken origin** — **REFUTED** (F1, by design).
+5. **L7 CF Access rejected a rotated service token** — **CONFIRMED** (F3), already remediated; the *detection* gap is what this plan closes.
+6. **L7 zot down / disk-full** — **REFUTED** (zot served both hosts' v0.244.0 pulls that day and answered my probe).
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** a release that reports success while production
-  keeps serving the previous build — the exact v0.244.1 shape, where `app.soleur.ai` silently stayed
-  ~5h behind `main`. In the permissive direction the user sees no error at all, which is why this
-  failed silently for a full release cycle.
+- **If this lands broken, the user experiences:** a release reporting success while `app.soleur.ai`
+  keeps serving the previous build — the v0.244.1 shape, ~5h silent. In the permissive direction
+  there is no error at all, which is why it survived a full release cycle.
 - **If this leaks, the user's data is exposed via:** the *blocked* remediation — **not by this PR,
-  which moves no personal data.** The exposure is **already live and independent of this change**: the
+  which moves no personal data.** The exposure is already live and independent of this change: the
   2026-07-27 laptop compromise
   (`knowledge-base/project/learnings/security-issues/2026-07-28-vscode-folderopen-task-rce-and-fleet-wide-key-rotation.md`)
   left the legacy Supabase `service_role` key valid and compromised. That key **bypasses RLS on every
-  table**, so the exposed class is the whole store — sharpest at the BYOK-encrypted customer API-key
-  material (`server/byok.ts`) and user PII. Disabling it requires first migrating the browser client
-  off the legacy anon key, which requires shipping a new image — which, with GHCR dead, requires the
-  mirror to actually land. **This PR removes a blocker to remediation; it does not create the
-  exposure.**
+  table**; the sharpest class is BYOK-encrypted customer API-key material (`server/byok.ts`) plus user
+  PII. Disabling it requires migrating the browser client off the legacy anon key, which requires
+  shipping an image — which, with GHCR dead, requires the mirror to land.
 - **Brand-survival threshold:** `single-user incident`
 
-**Threshold reasoning (re-framed at review — the first draft argued only the direction that favoured
-its own design).** On *first-order* blast radius this change is `none`-to-`aggregate pattern`: its own
-failure modes are release-pipeline availability, not data harm. It clears `single-user incident`
-**transitively**, which is admissible because `hr-weigh-every-decision-against-target-user-impact` is
-outcome-framed, not diff-framed. The honest form of the argument is that **both** failure directions
-extend the same compromised-key window — fail-open silently, fail-closed by delaying the migration —
-but the blocked-and-loud case is recoverable in minutes, while the silent case ran ~5h undetected and
-spent its diagnostic budget on a misdiagnosis. `aggregate pattern` is the wrong label because
-aggregate harms are *trend-shaped* (detected across many users over time); this harm is one named
-credential against named rows. The threshold is also doing real work procedurally: it is what pulls
-in `user-impact-reviewer` and CPO sign-off, and the CPO review is what caught the dead escape hatch
-(FR-B7).
+**Threshold reasoning.** First-order, this change is `none`-to-`aggregate pattern`: its own failure
+modes are release-pipeline availability. It clears `single-user incident` **transitively**, admissible
+because `hr-weigh-every-decision-against-target-user-impact` is outcome-framed. The honest form:
+**both** directions extend the same compromised-key window — fail-open silently, fail-closed by
+delaying the migration — but blocked-and-loud is recoverable in minutes while the silent case ran ~5h
+and spent its diagnostic budget on a misdiagnosis. `aggregate pattern` is wrong because aggregate
+harms are trend-shaped; this is one named credential against named rows.
 
 ## Functional Requirements
 
-### A — the mirror must fail-closed
+### A — fail-closed, asserted inside the step that does the work
 
-- **FR-A1.** A new workflow step, **`Verify zot mirror landed (fail-closed)`** (id `zot_verify`),
-  runs after `zot_mirror` and **before** `Tear down cloudflared registry bridge` (the probe needs
-  the bridge up; teardown is `if: always()` so it still runs on failure). Gated
-  `if: steps.docker_build.outcome == 'success'` — identical to `zot_mirror`, so a release that never
-  built an image is unaffected. **No `continue-on-error`.**
-- **FR-A2.** The gate is a **positive assertion, primary and independent of self-report**, and it
-  compares **crane-to-crane** so both sides use identical manifest-resolution semantics:
+- **FR-A1 — make `zot_mirror` blocking.** Delete `continue-on-error: true` from `zot_mirror`; change
+  `degraded()`'s `exit 0` to `exit 1`. Update the harness's two expected-rc literals. **No sibling
+  step** — v1's separate `zot_verify` was justified by a tautology ("a step without
+  `continue-on-error` cannot be the same step as one that has it"), which treated an editable line as
+  immovable. It also *broke on the target incident* (see Reconciliation) and required a
+  `degrade_stage` output contract, a duplicated `retry()`, a skip-condition proof, and an 8-way
+  taxonomy — all of which dissolve here.
+- **FR-A2 — positive post-copy assertion, one `crane` call.** Immediately **before**
+  `echo "mirror_status=ok"`, assert that `crane digest "${ZOT}:v${VERSION}"` resolves **and equals
+  `${DIGEST}`**; otherwise `degraded "verify" "<detail>"`. Both values are already in scope, and
+  `${DIGEST}`'s addressability in zot is already proven by the adjacent
+  `cosign sign --yes "${ZOT}@${DIGEST}"`. `${DIGEST}` — not GHCR's copy — is the authoritative
+  statement of "the bits this release built".
+  **Deliberately NO GHCR-side read:** it would put GHCR back on the release critical path of an ADR
+  whose purpose is removing it (a GHCR outage is not a reason production cannot pull), it is the one
+  prerequisite v1 never verified (`crane digest` against a private repo-linked package under the
+  release token, adjacent to the ADR-088 arm-b denial), and `crane digest` against GHCR is a
+  *rejected* in-repo deviation.
+- **FR-A3 — `degraded()` emits a truthful reason.** Add `mirror_reason=<bridge|crane_install|copy_v|copy_sha|copy_latest|sign|verify>`
+  to `$GITHUB_OUTPUT`, one label per call site. Load-bearing because `degraded()` currently writes
+  **only** `mirror_status`, so the state "copy landed but `mirror_status != ok`" has at least two
+  causes — and the plan's own analysis says the *copy-arm* case is the common one (`degraded()` is a
+  first-failure abort; a failure on the `${COMMIT_SHA}` or `latest` arm kills the loop before
+  `cosign sign` runs). v1 labelled that state `signing_failed` and prescribed *"likely a Sigstore
+  outage: wait and re-run"* — **actively wrong for its own dominant cause**, and the same
+  naming-an-unmeasured-cause defect this plan exists to fix (R6). Harness-safe: it stubs
+  `$GITHUB_OUTPUT` and asserts on `mirror_status` values, which are unchanged.
+- **FR-A4 — three truthful operator messages, not a taxonomy.** `degraded()` already takes a `$2`
+  detail per call site. Give the three real classes a cause + remedy a non-technical operator can
+  act on: **bridge** (stale CF Access token → run the drift detector, name
+  `scripts/check-cloudflare-token-drift.sh`); **copy/verify** (zot did not receive the image → the
+  `crane copy` + `cosign sign` backfill one-liner, then re-run); **sign** (copy landed at the correct
+  digest, signature missing → re-sign, or wait if Sigstore is out). Every message must also state
+  **nothing was half-shipped** — the release is an unpublished draft with no git tag and re-running is
+  non-destructive — and name `apply-deploy-pipeline-fix.yml` as the pipeline-bypass escape hatch, so
+  no remedy is a dead end.
+- **FR-A5 — gate the deploy on the release's RESULT. (The change that makes A actually fail-closed —
+  see P0-A.)** In `web-platform-release.yml`, add `needs.release.result == 'success'` to **both**
+  `migrate` and `deploy`. Deterministic regardless of whether `workflow_call.outputs` propagate from
+  a failed called job. Without this, FR-A1–A4 may protect nothing and can leave prod on new schema +
+  old code.
+- **FR-A6 — the failure has to reach a human.** Add `if: failure()` + `./.github/actions/notify-ops-email`
+  to the **release** job *and* the **deploy** job. Today both notify steps gate on
+  `create_release.released || idempotency.draft_exists` with **no status function**, so an implicit
+  `success()` means **neither fires on a blocked release**; the only remaining signal is GitHub's
+  failed-workflow email, routed to the triggering actor — possibly a GitHub App identity, i.e. nobody.
+  `if: failure()` + `notify-ops-email` is the established repo idiom (7 workflows). Body carries the
+  `mirror_reason` and the one-sentence remedy — never a checklist
+  (`hr-ship-message-no-operator-checklist`). **Disclose two consumers:** this lands in the shared
+  reusable workflow, so plugin releases via `version-bump-and-release.yml` also begin emailing ops.
+- **FR-A7 — one comment block, four clauses.** At the assertion site record: (i) the **GHCR coupling**
+  — this gate is correct only while GHCR is not a usable fallback, citing ADR-088 arm-b's *structural*
+  finding (App installation tokens can `docker login` GHCR but are DENIED `docker pull` of private
+  repo-linked packages), so the relaxation condition is testable rather than a matter of taste;
+  (ii) the **CF Access coupling** — the bridge is now effectively release-blocking, making that
+  service token a release-blocking credential whose propagation is deliberately only *detected*;
+  (iii) the gate's **load-bearing sub-value = publish-ordering / version-space integrity** — a blocked
+  release consumes no semver, materializes no git tag, publishes no notes; a deploy-side check cannot
+  have that property (this, not availability, is why the gate lives here, and without it a future
+  reader prunes it as redundant with `pull_image_with_fallback`); (iv) **outcome vs conclusion** —
+  read `steps.zot_bridge.outcome`, never `conclusion`, which `continue-on-error` forces to `success`
+  (#6416 bit this exact step once).
+- **FR-A8 — state what the gate does NOT prove.** It asserts the manifest is in zot **and readable by
+  the push credential over the tunnel**; it does **not** prove the host can pull. The host uses a
+  different transport (private NIC, no tunnel, no CF Access) and a different credential
+  (`ZOT_PULL_*`). Uncovered: private-net 10.0.1.10→10.0.1.30:5000 down; `ZOT_PULL_*` stale (the *same*
+  rotation-staleness class, one credential over — and `zot_gate_and_login` fails open to dead GHCR);
+  zot `accessControl` granting push-read but not pull-read. No cheap CI-side assertion closes this —
+  the gap is on the other side of the network. `web-zot-consumer-probe.sh` is the correct
+  non-redundant complement. This sentence must appear in FR-A7's comment **and** the ADR amendment,
+  or the amendment records a stronger claim than the mechanism supports and a future reader retires
+  the consumer probe.
+- **FR-A9 — export the verdict for legibility.** Add `mirror_verified` to the `release` job's
+  `outputs:`; the `deploy` job echoes it to `$GITHUB_STEP_SUMMARY` and `::warning::`s when not
+  `true`. **Deliberately not** a blocking conjunct — that would defeat the override's only legitimate
+  purpose. This lets `postmerge`/the operator digest distinguish a verified release from an
+  override-published one.
+- **FR-A10 — dispatch-only, reason-required override.** Three reviewers disagreed; the synthesis: an
+  override buys **nothing** when the gate is right (an unmirrored image cannot be pulled, so
+  overriding publishes a still-undeployable release) but is the difference between a 30-second unblock
+  and *editing a workflow on `main` under incident pressure* when the gate **misfires**. So: available
+  only via `workflow_dispatch`, inert without a non-empty reason, and when used emits a `::warning::`,
+  records to the step summary, fires FR-A6, and files an `action-required` issue.
+  **Implementation reality v1 missed:** `reusable-release.yml` is `workflow_call`-only and cannot read
+  a caller's dispatch inputs — this requires a new input on **`web-platform-release.yml`** (absent
+  from v1's file list) forwarded via `with:`, plus a *defaulted* `workflow_call` input so
+  `version-bump-and-release.yml` is unaffected. Gate on `github.event_name == 'workflow_dispatch'`
+  (precedent: `force_run`). **Drop v1's `environment:` required-reviewer clause** — `jobs.release` has
+  no `environment:`, so it checked a gate that does not exist. Document that the override also
+  bypasses `await-ci`, and that self-healing to the same version requires the **same `bump_type`**.
+- **FR-A11 — record the orphan-draft leak.** A blocked release leaves an unpublished draft. The
+  #4902 self-heal republishes it **only when a later run recomputes the identical tag**; a different
+  bump type orphans it permanently, and even the same-bump path never rewrites the notes (so a
+  republished draft carries the first PR's changelog). Record + file a tracking issue. No reaper.
 
-  ```
-  crane digest ghcr.io/${REPO}:v${VERSION}   ==   crane digest 127.0.0.1:5000/${REPO}:v${VERSION}
-  ```
+### B — stop asserting a dead fallback; close the detector's gap
 
-  Both invocations MUST succeed and the digests MUST be equal. **Do not compare against
-  `steps.docker_build.outputs.digest` as the primary signal**: buildx's `outputs.digest` may be an
-  index digest or a platform-manifest digest depending on provenance/multi-arch settings, whereas
-  `crane digest <tag>` resolves whatever the registry serves for that tag. Any semantic mismatch
-  there is *deterministic* red on every release — the "gate merged, first release fails, gate
-  hot-reverted" path. Crane-on-both-sides removes the question entirely at zero cost.
-  As a cheap extra check, when `steps.docker_build.outputs.digest` is **non-empty**, assert it also
-  matches; skip that arm when empty rather than failing on it.
-  `crane digest` is established precedent in this repo (16 existing call sites) and needs **no
-  insecure/plain-HTTP flag** for a loopback ref — the mirror step already records the Phase-0 spike
-  evidence: *"crane + cosign auto-treat loopback (127.0.0.1) as an insecure registry."*
-  Implementation location: `.github/workflows/reusable-release.yml`, new step after `zot_mirror`.
-- **FR-A3.** The gate ALSO requires `steps.zot_mirror.outputs.mirror_status == 'ok'` — the
-  suspenders, catching the **present-but-unsigned** state that FR-A2 alone would pass.
+- **FR-B1 — truthfulness sweep, widened to the artifacts that matter.** v1 swept two grep patterns
+  and reached the code and the C4 model but **missed the operator-facing runbook and the ADR's own
+  escape hatch**. Correct all of:
+  1. `reusable-release.yml` — the **whole** mirror step, not just `:782`: the step header
+     (*"a mirror failure must NEVER red a successful release"*), the `::warning::` at `:747`
+     (*"release UNAFFECTED (GHCR primary/break-glass)"*), the step summary at `:748`
+     (*"release OK (GHCR primary)"*), `:738` (*"the host's atomic GHCR fallback covers it cleanly"*),
+     `:743` (*"latency, not availability"*), `:713-716` (claims the Slack line reports a persistent
+     miss — it does not fire on a blocked release), and `:782`'s two false claims (the refuted #6416
+     route prediction, and *"the host's atomic GHCR fallback covers the pull"*).
+  2. `knowledge-base/engineering/operations/runbooks/zot-registry-revert.md` — **the highest-consequence
+     instance.** It instructs the operator during an outage to delete `ZOT_REGISTRY_URL` so hosts fall
+     through to GHCR, reassuring them the *"fallback registry is always warm and current"*. A runbook
+     is *instructions*, not a comment. Correct it and add the post-change recovery. Fold in the
+     `tcp://` probe trap (a plain HTTPS GET to `registry.soleur.ai` returns an empty 200 **by design**
+     and is not a health probe; the correct probe is `cloudflared access tcp` + `GET /v2/`, expect
+     200/401) — a section here, not a new file.
+  3. **ADR-096 itself** — §Cold-boot-dependency axis 1 (*"a zot outage degrades latency, not
+     availability"*) and the **"Instant revert"** bullet (*"unset `ZOT_REGISTRY_URL` → all sites revert
+     to GHCR-primary"*). The same dead escape hatch, restated in the normative record that R1b's
+     reasoning cites.
+  4. `knowledge-base/engineering/architecture/principles-register.md` (AP-016) — asserts the interim
+     PAT exception is live and that the GHCR path "MUST recover on a `docker pull` auth-denial". The
+     exception has **lapsed**. One dated clause.
+  5. `ADR-088` — dated note on its "interim GHCR break-glass" phrasing.
 
-  **This will be the MOST COMMON blocking discriminator, not the rarest** (corrected at review):
-  `degraded()` ends in `exit 0`, so it is a *first-failure abort*, not an accumulator. The copy loop
-  runs `v${VERSION}`, then `${COMMIT_SHA}`, then `latest` — so a failure on the `<sha>` or `latest`
-  arm kills the loop **before `cosign sign` ever runs**, leaving `v<version>` present *at the correct
-  digest* but unsigned. FR-A2 passes that state; FR-A3 blocks it.
-
-  **The availability trade must be stated as chosen, not implied as a prevented failure.** Host-side
-  verify is currently **`warn`**, not enforce — `ci-deploy.sh:54`:
-  `readonly IMAGE_VERIFY_MODE="${IMAGE_VERIFY_MODE:-warn}"` (two tests actively assert the default
-  stays `warn`; the enforce flip is soak-gated, #6023 open). So **today** an unsigned-but-present zot
-  copy emits `cosign_verify_event "unsigned"` and **deploys anyway**. FR-A3 therefore converts a
-  currently-deployable state into a blocked release, and adds **Sigstore (Fulcio/Rekor) availability
-  as a new release-blocking third-party dependency**. The trade is still the right one — with host
-  verify at `warn`, this gate becomes the *only* thing refusing an unsigned image in the sole pull
-  path — but it is a choice, not a prevention, and the plan says so.
-
-  Consequence for FR-A4: `mirror_degraded` MUST be split so the operator can tell "wait, Sigstore is
-  down" from "your registry is broken", and the signing arm's message MUST state that
-  **`v<version>` IS present in zot at the correct digest — the blocker is the missing signature** —
-  plus the exact re-sign one-liner. Otherwise the operator reads "release blocked" for a state where
-  production could in fact be served safely.
-- **FR-A4.** **Self-report before abort** (`2026-07-19` fail-closed-gate learning + the
-  evidence-discarding-gate learning). Before exiting non-zero the gate MUST emit one
-  discriminating record — to `::error::` **and** `$GITHUB_STEP_SUMMARY` — naming the image ref, the
-  tag, the expected and observed digests, a bounded tail of the failing command's stderr, and an
-  `outcome` drawn from a set that separates **every** competing root cause in one event:
-
-  **Every discriminator MUST ship with a plain-language operator remedy** — the observability
-  plumbing is worthless to a non-technical founder without the comprehension layer
-  (`hr-ship-message-no-operator-checklist`):
-
-  | `outcome` | Means | Operator remedy (rendered in the step summary) |
-  |---|---|---|
-  | `bridge_refused` | nothing listening on `127.0.0.1:5000` — the bridge never came up | run the Cloudflare token-drift detector; the CF Access token may be stale |
-  | `bridge_transport_error` | connected, then the stream failed (reset / empty reply / TLS negotiation) — **the v0.244.1 shape** | same as above; this is the rotation-staleness signature |
-  | `crane_missing` | `crane` absent from `PATH` (mirror degraded at `install_crane`) | CI regression — file an issue; not a registry problem |
-  | `ghcr_digest_unavailable` | the GHCR-side digest could not be read | GHCR read problem; no comparison possible — re-run |
-  | `tag_absent` | zot cannot resolve `v<version>` — nothing was mirrored | zot degraded — see the revert runbook, fix, then re-run |
-  | `digest_mismatch` | both sides resolve but differ | zot holds a different build — re-land via the backfill one-liner |
-  | `signing_failed` | copied OK, `cosign sign` failed — **the image IS present at the correct digest** | likely a Sigstore outage: wait and re-run, or re-sign with the printed one-liner. **Not** a registry fault |
-  | `mirror_degraded` | any other `mirror_status != ok` | read the mirror step's own warning |
-
-  Two separations are load-bearing. `bridge_refused` vs `bridge_transport_error` are exactly what the
-  old `nc -z` gate conflated, and the transport arm is the one that actually fired. `signing_failed`
-  vs the rest is what keeps "wait 20 minutes" from being confused with "your registry is broken" —
-  opposite remedies (FR-A3).
-
-  The record MUST also print: the `crane copy … && cosign sign --yes …` backfill command for the
-  affected tag (R1b), and the reassurance that **nothing was half-shipped** — the release is still an
-  unpublished draft with no git tag, and re-running is non-destructive (R1). A failed release's
-  default instinct is to fear a partial ship; that sentence belongs in the annotation, not only in a
-  risks table the operator will never open mid-incident.
-- **FR-A5.** A code comment at the gate MUST state the coupling: this gate is correct **only while
-  GHCR is not a usable fallback**, name the evidence (revoked `ghp_` PAT + `GHCR_MINTER_DISABLED=true`
-  per ADR-088 arm-b), and say explicitly that restoring a working GHCR pull credential is the
-  condition under which the gate may be relaxed back to warn-only.
-- **FR-A6.** `plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh` MUST stay green **with
-  no change to its assertions**. Delivering A as a sibling step keeps the extracted `run:` block
-  byte-identical; the harness matches on the literal step name
-  `"Mirror image GHCR→zot (crane) + cosign-sign the zot digest"`, which this plan does not rename.
-- **FR-A7 — bounded retry, so a transient blip is not a blocked release.** The assertion MUST retry
-  (3 attempts, 5s then 15s backoff, mirroring the mirror step's existing `retry()` helper) before
-  declaring failure. Without this, one mid-blob TCP reset over the multi-hop CF-tunnel — the exact
-  transient `continue-on-error` was originally added for (#6274) — becomes a red release train, and
-  the predictable organisational response to a flaky blocking gate is a hotfix that re-adds
-  `continue-on-error`. That hotfix is the wrong-architecture commit this FR exists to prevent.
-- **FR-A8 — a dispatch-only, reason-required override. (Three-way disagreement; this is the
-  synthesis, not a coin flip.)** The strong-model advisor and the CTO both argued **for** an override;
-  the CPO argued **against**. Each is right about a different case, and the distinction is whether
-  the gate is *correct*:
-  - When the gate is **right** (the image genuinely is not in zot), an override buys **nothing** — the
-    image cannot be pulled by any host, so overriding publishes a release that still cannot deploy.
-    That is the CPO's objection and it is valid.
-  - When the gate is **wrong** (a misfire — the image *is* present and pullable), an override is the
-    difference between a 30-second unblock and *editing a workflow on `main` under incident
-    pressure*, which is an unacceptable ask for a non-technical operator. That is the CTO's SPOF
-    finding and it is also valid.
-
-  Resolution — take the override, and make misuse structurally hard:
-  1. Available **only** via `workflow_dispatch`. A normal push-triggered release has no override at
-     all, so it can never be tripped silently.
-  2. Requires a **non-empty reason** input to take effect.
-  3. When used, it emits a loud `::warning::`, records the reason + the unverified digest to
-     `$GITHUB_STEP_SUMMARY`, fires FR-A10's notification, and **auto-files an `action-required`
-     issue**.
-  4. Its documentation states plainly that **the override does not make an unmirrored image
-     pullable** — its only legitimate use is a suspected gate misfire, and the operator should
-     otherwise prefer the `crane copy` + `cosign sign` backfill.
-
-  Confirm the dispatch's `environment:` required-reviewer set is **non-empty** before treating it as
-  a gate (DP-11 F8: a zero-reviewer environment auto-approves).
-- **FR-A10 — an `if: failure()` operator notification (see R2).** Add an
-  `if: failure()` + `./.github/actions/notify-ops-email` step to the release job so a blocked release
-  reaches `ops@jikigai.com` rather than only the triggering actor. The body MUST carry the FR-A4
-  discriminator **and** the one-sentence recovery action a non-technical operator can execute
-  (`hr-ship-message-no-operator-checklist`, `hr-no-ssh-fallback-in-runbooks`) — never a checklist.
-  Apply the same treatment to FR-B5's new scheduled detector workflow: a scheduled-workflow failure
-  notification routes to the workflow file's last committer, which is not a signal.
-- **FR-A11 — name the orphan-draft leak (see R1a).** The plan must not imply a clean self-heal. Either
-  add a draft-orphan reaper, or explicitly record the leak plus its manual clean-up
-  (`gh release delete <tag>`), and note the stale-release-notes case for the same-bump path. A reaper
-  is preferred but may be scoped out **with a tracking issue** — silence is not an option.
-- **FR-A9 — the skip condition must not drift away from the publish condition.** Verified for the
-  current workflow: no release can publish an image reference without `docker_build` having run, so
-  gating the new step on `steps.docker_build.outcome == 'success'` is sufficient today. Derivation:
-  `Finalise release (publish draft)` requires `check_changed == 'true'`; `Compute next version` is
-  gated on the same, so `next` is non-empty; `docker_build` is gated on
-  `steps.version.outputs.next != '' && inputs.docker_image != ''`, so for any component carrying a
-  `docker_image` the build necessarily ran. (`docker_build` has no `continue-on-error`, so a build
-  *failure* fails the job before any publish.) **This is an invariant, not a coincidence** — the
-  gate's skip expression and the publish expression are different expressions that happen to agree.
-  A comment at the gate MUST state the invariant so a future edit to either condition does not
-  silently open a publish-without-verify path.
-
-### B — replace the false gate, and stop asserting a false cause
-
-- **FR-B1.** In `.github/actions/cf-tunnel-registry-bridge/action.yml`, replace the `nc -z
-  127.0.0.1 5000` readiness gate with a **positive HTTP assertion through the forward**: `GET
-  http://127.0.0.1:5000/v2/` must return **200 or 401**. `nc -z` is a false gate — cloudflared opens
-  its local listener before the far end is proven reachable, which is exactly how `__run_2` reported
-  success while the path was dead. Measured expectation: pre-`docker login` the correct response is
-  **401 with `Www-Authenticate: Basic`**; a broken bridge yields a curl transport failure or `000`.
-  Reuses the `zot-entry-gate.sh` `manifest_resolves()` precedent shape.
-- **FR-B2.** On bridge failure the step MUST dump `/tmp/cloudflared-registry.log` **at the failing
-  step**. Today only the `nc -z` timeout path dumps it; the `docker login` path dumped nothing, and
-  the four `websocket: bad handshake` lines survived only incidentally in the `if: always()`
-  teardown, a step away from the error.
-- **FR-B3.** Delete both false claims from the `degraded "bridge"` message at
-  `.github/workflows/reusable-release.yml:782`:
-  1. *"the tunnel connector serving registry.soleur.ai may lack a private-net route to
-     10.0.1.30:5000 (#6416)"* — refuted (F2), and `model.c4:428` records #6416 as closed.
-  2. *"the host's atomic GHCR fallback covers the pull"* — false since the PAT was revoked. This is
-     the more dangerous of the two: it is the reassurance that made the warning ignorable.
-  Replace with the measured cause class (stale CF Access service token after rotation), a pointer to
-  `scripts/check-cloudflare-token-drift.sh`, and the correct diagnostic command.
-- **FR-B4.** Extend `scripts/check-cloudflare-token-drift.sh` to cover CF **Access service tokens**.
-  Two independent defects today: its key enumeration is `grep -oE 'CF_API_TOKEN[A-Z0-9_]*'`, which
-  **cannot match** `REGISTRY_PUSH_ACCESS_TOKEN_ID`/`_SECRET` — the very case its own header cites
-  first; and `verify_value()` uses `GET /client/v4/user/tokens/verify` with `Authorization: Bearer`,
-  which is the **API-token** endpoint and is wrong for a client-id/secret pair. Add a second
-  verification arm: present the pair as `CF-Access-Client-Id`/`CF-Access-Client-Secret` to the
-  CF-Access-protected hostname; **200 → LIVE, 403 → DEAD**. Keep enumeration Doppler-derived
-  (gotcha #4) — match `[A-Z0-9_]*ACCESS_TOKEN_(ID|SECRET)` rather than adding a hardcoded list.
-- **FR-B5.** Wire the detector into CI. `grep -rln check-cloudflare-token-drift` currently returns
-  **only the script itself** — nothing invokes it, so the class it was written to catch still
-  recurs silently. Add it as a scheduled check (and/or a release preflight), non-blocking on
-  transient API error (exit 2) and loud on exit 1.
-- **FR-B6.** Record the `tcp://`-ingress probe trap in the runbook: a plain HTTPS GET to
-  `registry.soleur.ai` returns an empty 200 **by design** and is **not** a health probe. Name the
-  correct probe (`cloudflared access tcp` + `GET /v2/`, expect 200/401). This is the misdiagnosis
-  that consumed the incident's diagnostic budget.
-- **FR-B7 — the truthfulness sweep MUST reach the document the operator actually reads.** Found at
-  plan review: my sweep fixed the machine-facing copy (`reusable-release.yml:782`) and the
-  architecture-facing copy (`model.c4`) and **missed the operator-facing one**.
-  `knowledge-base/engineering/operations/runbooks/zot-registry-revert.md` currently instructs the
-  operator, during a zot outage, to delete `ZOT_REGISTRY_URL` from Doppler `prd` so hosts *"fall
-  straight through to the unchanged private-GHCR path"*, and reassures them:
-
-  > *"GHCR remains dual-pushed + break-glass through the entire soak (the interim classic PAT stays
-  > live until Phase 5.5), so the fallback registry is always warm and current."*
-
-  **That is false as of 2026-07-29**, and it is the single highest-consequence instance of the class:
-  a runbook is *instructions*, not a comment, and this one documents a recovery procedure that now
-  fails `image_pull_failed`. Deliverable: correct the claim, and add the post-change recovery
-  (no bypass on the push path; fix zot or re-land the image, then re-run; re-running is safe because
-  the draft is unpublished — R1).
-
-  Sweep scope, verified and bounded: `grep -rniE "break-glass|always warm|fallback registry|PAT stays
-  live|atomic GHCR fallback"` over `knowledge-base/engineering`, `.github`,
-  `apps/web-platform/infra`, `scripts` returns this runbook, the two `model.c4` descriptions already
-  in scope, and `ADR-088`'s "interim GHCR break-glass" phrasing (add a dated note). The
-  2026-07-15 post-mortem also carries it and is **deliberately excluded** — a post-mortem is a
-  point-in-time record and must not be rewritten, exactly like `**/archive/**`.
+  Sweep patterns must be widened beyond v1's set to include `falls (straight )?through`,
+  `latency, not availability`, `Instant revert`, `GHCR-primary`, `release UNAFFECTED`,
+  `release OK \(GHCR primary\)`. **Excluded deliberately:** the 2026-07-15 post-mortem — a
+  point-in-time record, like `**/archive/**`.
+- **FR-B2 — dump the bridge log at the failing step.** Today only the `nc -z` timeout path dumps
+  `/tmp/cloudflared-registry.log`; the `docker login` path dumped nothing, and the four
+  `websocket: bad handshake` lines survived only incidentally in the `if: always()` teardown, a step
+  away from the error.
+- **FR-B3 — fix the token-drift detector's coverage gap.** `scripts/check-cloudflare-token-drift.sh`
+  has two independent defects: its enumeration is `grep -oE 'CF_API_TOKEN[A-Z0-9_]*'`, which
+  **cannot match** `REGISTRY_PUSH_ACCESS_TOKEN_ID`/`_SECRET` — the first case its own header cites —
+  and `verify_value()` uses `GET /client/v4/user/tokens/verify` with `Authorization: Bearer`, the
+  **API-token** endpoint, wrong for a client-id/secret pair. Add an Access-service-token arm:
+  present the pair as `CF-Access-Client-Id`/`-Secret` to the protected hostname, **200 → LIVE,
+  403 → DEAD**. Keep enumeration Doppler-derived (gotcha #4): match
+  `[A-Z0-9_]*ACCESS_TOKEN_(ID|SECRET)`, never a hardcoded list. The script claims coverage it does
+  not have; this is a bug fix, not a feature.
+- **FR-B4 — invoke the detector.** `grep -rln check-cloudflare-token-drift` returns **only the script
+  itself**. Add it as a **step in `scheduled-terraform-drift.yml`** — not a new workflow: that file
+  already runs twice daily, already sets `DOPPLER_CONFIG: prd_terraform` (exactly the detector's
+  documented invocation), already carries `notify-ops-email` twice, and is the workflow that *causes*
+  the drift. A new GHA `schedule:` would also be off-pattern — that same file's header states Inngest
+  is the single scheduling substrate (ADR-033). **Also add the release-preflight arm** (required, not
+  "and/or"): a scheduled detector can be hours stale relative to the release that trips over it; a
+  preflight turns a blocked release into a correctly-diagnosed one before the build spends its
+  minutes.
 
 ### C — stop discarding the pull error
 
-- **FR-C1.** At `apps/web-platform/infra/ci-deploy.sh:1589`, the zot-failure branch MUST log a
-  bounded tail of the captured stderr alongside the existing line, using the same shape
-  `pull_failure_event` already uses: `tail -c 400 "$perr"`. Newlines must be collapsed so the
-  `logger` record stays single-line and Vector-parseable.
+- **FR-C1.** In `ci-deploy.sh`, the zot-failure branch (anchor: the
+  `IMAGE_PULL: zot pull failed for` line, currently `:1589`) must log a bounded stderr tail using the
+  shape `pull_failure_event` already uses — `tail -c 400 "$perr"` — with newlines collapsed so the
+  `logger` record stays single-line and Vector-parseable. Anchor on content, not the line number
+  (`cq-cite-content-anchor-not-line-number`).
 
 ## Implementation Phases
 
-Phase order is dependency-directed: the contract-changing edits land before their consumers.
+Dependency-directed: contract changes precede their consumers.
 
-**Phase 0 — preconditions (no writes).**
-1. Confirm `crane` persists on `PATH` across steps (`sudo install` to `/usr/local/bin`) and that the
-   bridge's `docker login` to `127.0.0.1:5000` persists in `~/.docker/config.json` — both are what
-   make a sibling verify step viable.
-2. Re-run the two premise probes and paste the output into the PR: GHCR `401`/`403 DENIED`, and the
-   `cloudflared access tcp` → `/v2/` → `401` bridge check.
-3. Record the harness contract: `extract_run_block "Mirror image GHCR→zot (crane) + cosign-sign the
-   zot digest"` — the step name is load-bearing and must not change.
-
-**Phase 1 — FR-C (smallest, independent).** RED: extend `ci-deploy.test.sh` to assert the zot-arm
-log line carries the stderr tail. GREEN: implement FR-C1.
-
-**Phase 2 — FR-B1/B2 (bridge gate; contract change).** RED first: a test that a listener which
-accepts TCP but resets the stream is now **rejected** (this is the regression the false gate let
-through). GREEN: positive `/v2/` probe + failing-step log dump.
-
-**Phase 3 — FR-B3 (truthfulness).** Rewrite the `degraded "bridge"` detail. Re-run the mirror test
-to confirm the extracted block still executes (the message is inside the extracted block, so this
-phase *does* touch it — assertions on `mirror_status=degraded` are unaffected, but any test
-asserting the old message text must be updated).
-
-**Phase 4 — FR-B4/B5 (detector coverage + wiring).** Add the Access-service-token arm with a unit
-test for both verdicts; wire into CI.
-
-**Phase 5 — FR-A (the fail-closed gate).** Add the `zot_verify` step per FR-A1–A5. Confirm the
-mirror harness is still green **without assertion changes** (FR-A6).
-
-**Phase 6 — ADR-096 amendment + C4 description corrections** (see below).
-
-**Phase 7 — full-suite exit gate.** `plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh`,
-`ci-deploy.test.sh`, `actionlint` on the workflow, `bash -c` on extracted `run:` snippets (never
-`bash -n` on the YAML).
+- **Phase 0 — preconditions (no writes).** Confirm the harness's two rc literals and that it matches
+  on step *name*. Re-run the two premise probes (GHCR 401/403; the `cloudflared access tcp` → `/v2/`
+  → 401 bridge check) and paste into the PR. Confirm `${DIGEST}` is addressable in zot post-copy (the
+  adjacent `cosign sign "${ZOT}@${DIGEST}"` already proves it).
+- **Phase 1 — FR-C1.** RED: extend `ci-deploy.test.sh` to assert the zot-arm line carries the reason.
+  GREEN: implement.
+- **Phase 2 — FR-A3 + FR-A4 + FR-B1(1) + FR-B2** (all inside the extracted `run:` block / the bridge
+  action; contract change before its consumers).
+- **Phase 3 — FR-A1 + FR-A2** (make it blocking + the assertion) + FR-A7's comment block.
+- **Phase 4 — FR-A5 + FR-A6 + FR-A9 + FR-A10** (`web-platform-release.yml` and the release job).
+- **Phase 5 — FR-B3 + FR-B4** (detector + wiring).
+- **Phase 6 — FR-B1(2)–(5)** (runbook, ADR-096, AP-016, ADR-088) + the ADR-096 amendment + the three
+  C4 description corrections. **Ordering constraint:** FR-B1(2) (the runbook) cannot be deferred to a
+  later PR than FR-A — shipping the gate first leaves the runbook instructing a procedure that now
+  fails.
+- **Phase 7 — full-suite exit gate.** The mirror harness, `ci-deploy.test.sh`, `actionlint` on both
+  workflows, `bash -c` on extracted `run:` snippets (never `bash -n` on the YAML).
+- **Phase 8 — trackers** (see Deferred).
 
 ## Acceptance Criteria
 
-### Pre-merge (PR)
+Every AC is **presence-first** and uses `grep -F` with a guard that fails when the anchor is missing.
+v1's absence-only ACs were uniformly vacuous — measured: AC1's awk returned empty on a file with no
+such step, AC11's pattern returned **0** against code containing the string 6× (mid-pattern `$` is an
+ERE anchor under this machine's ugrep 7.5.0), and AC19's target string is **line-wrapped** so its
+absence grep passed on the unmodified runbook.
 
-- **AC1.** `.github/workflows/reusable-release.yml` contains a step named
-  `Verify zot mirror landed (fail-closed)` with **no** `continue-on-error`, positioned between
-  `zot_mirror` and `Tear down cloudflared registry bridge`.
-  Verify: `awk '/- name: Verify zot mirror landed/{f=1} f&&/continue-on-error/{print "FOUND"} /- name: Tear down/{f=0}'`
-  returns empty.
-- **AC2.** The gate asserts digest equality against `steps.docker_build.outputs.digest` (FR-A2) —
-  grep the step body for both `crane digest` and `docker_build.outputs.digest`.
-- **AC3.** The gate asserts `mirror_status == 'ok'` (FR-A3).
-- **AC4.** The gate emits all five `outcome` discriminators (FR-A4). Verify by asserting each of
-  `bridge_unreachable`, `crane_missing`, `tag_absent`, `digest_mismatch`, `mirror_degraded` appears
-  in the step body.
-- **AC5.** The GHCR-coupling comment exists and names both `GHCR_MINTER_DISABLED` and ADR-088
-  (FR-A5).
-- **AC6.** `bash plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh` **passes**, and
-  `git diff origin/main...HEAD -- plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh`
-  shows **no change to any assertion** (FR-A6). Comment-only or zero diff is acceptable.
-- **AC7.** `nc -z` is gone from the bridge's readiness gate and a `/v2/` probe accepting 200-or-401
-  replaces it (FR-B1). Verify: `grep -c 'nc -z' .github/actions/cf-tunnel-registry-bridge/action.yml`
-  returns `0`.
-- **AC8.** The string `lack a private-net route to 10.0.1.30:5000` appears **0** times in
-  `.github/workflows/reusable-release.yml`, and the phrase asserting the GHCR fallback covers the
-  pull is likewise gone (FR-B3). *Guard against the self-reference trap: this plan file and the
-  learning legitimately quote the old text, so scope the grep to the workflow only.*
-- **AC9.** `scripts/check-cloudflare-token-drift.sh` enumerates `*ACCESS_TOKEN_(ID|SECRET)` keys and
-  verifies them via `CF-Access-Client-Id`/`-Secret` against a protected hostname, asserting
-  **200 → LIVE / 403 → DEAD** (FR-B4). A unit test covers both verdicts with synthesized fixtures
-  (`cq-test-fixtures-synthesized-only`).
-- **AC10.** `grep -rln check-cloudflare-token-drift .github` returns **≥1** file (FR-B5) — i.e. the
-  detector is actually invoked by something.
-- **AC11.** `apps/web-platform/infra/ci-deploy.sh` zot-arm logs a bounded stderr tail; `grep -c
-  'tail -c 400 "$perr"'` increases by exactly 1 versus `origin/main` (FR-C1).
-- **AC12.** `ci-deploy.test.sh` has a case asserting the zot-arm line carries the reason, and it
-  passes.
-- **AC13.** `actionlint` clean on `reusable-release.yml`; embedded `run:` snippets checked with
-  `bash -c`, never `bash -n` on the YAML.
-- **AC14.** The gate retries 3× with backoff before failing (FR-A7) — assert the `retry` helper (or
-  an equivalent bounded loop) wraps both `crane digest` calls.
-- **AC15.** An `if: failure()` step invoking `./.github/actions/notify-ops-email` exists in the
-  release job, and its body interpolates the FR-A4 discriminator (FR-A10). The same idiom is present
-  in FR-B5's new scheduled workflow.
-- **AC16.** Each of the 8 FR-A4 discriminators appears in the step body **paired with its operator
-  remedy string**, and the step summary carries the "unpublished draft — re-running is safe" line.
-  *Assert the anchor, not the bare token* (`cq-assert-anchor-not-bare-token`): grep for the
-  `outcome=<name>` emit site, not the word alone.
-- **AC17.** The `signing_failed` message states that the digest is correct and the blocker is the
-  signature, and prints the re-sign one-liner (FR-A3).
-- **AC18.** The override is `workflow_dispatch`-only and inert without a non-empty reason (FR-A8):
-  assert the input exists, that the gate's bypass branch requires it non-empty, and that no
-  `push`-triggered path can reach it. Its documentation states the override does not make an
-  unmirrored image pullable.
-- **AC19.** `zot-registry-revert.md` no longer claims the GHCR fallback is "always warm and current",
-  and contains the post-change recovery procedure (FR-B7). Verify with a grep **scoped to that file**
-  — this plan and the learning legitimately quote the old text.
-- **AC20.** A comment at the gate records (a) the FR-A9 publish-vs-skip invariant and (b) that the
-  step must stay **before** the teardown because teardown runs `docker logout 127.0.0.1:5000`.
-- **AC21.** The ADR-096 amendment cites ADR-088 arm-b's structural finding (App installation tokens
-  are denied `docker pull` on private repo-linked packages) as the basis for rejecting a restored
-  GHCR credential, and records the single-pull-path restoration path as open architectural debt with
-  trackers.
-- **AC22.** The orphan-draft leak is either reaped or explicitly recorded with a tracking issue
-  (FR-A11) — not silent.
+### Pre-merge
 
-### Post-merge (operator)
+- **AC1.** `zot_mirror` no longer carries `continue-on-error`, and `degraded()` exits non-zero.
+  `awk '/^      - name: Mirror image GHCR→zot/{f=1;seen=1;next} f&&/^      - name: /{f=0} f&&/continue-on-error/{bad=1} END{if(!seen){print "ABSENT";exit 1} if(bad){print "FOUND";exit 1}}'`
+  succeeds; and `grep -cF 'exit 1' ` within the `degraded()` body is ≥1.
+- **AC2.** The assertion exists **before** `mirror_status=ok`: `crane digest` appears in the step, and
+  its line number is less than the `mirror_status=ok` line. It compares against `${DIGEST}` and makes
+  **no** `crane digest ghcr.io/` call (`grep -cF 'crane digest ghcr.io/'` == 0).
+- **AC3.** `degraded()` writes `mirror_reason=` (`grep -cF 'mirror_reason=' ` ≥ 6 — one per call site).
+- **AC4.** The three operator messages each name a cause, a remedy, the "unpublished draft — re-running
+  is safe" line, and `apply-deploy-pipeline-fix.yml`. No message contains the token `Sigstore` on the
+  copy-arm path.
+- **AC5.** `grep -cF 'needs.release.result' .github/workflows/web-platform-release.yml` == **2**
+  (measured baseline: **0**), once in `migrate` and once in `deploy`.
+- **AC6.** `if: failure()` + `notify-ops-email` present in both the release job and the `deploy` job.
+- **AC7.** FR-A7's comment block contains all four clauses and FR-A8's "does not prove" sentence;
+  assert on distinctive anchors (`ADR-088`, `publish-ordering`, `outcome`, `ZOT_PULL_`).
+- **AC8.** `mirror_verified` appears in the `release` job `outputs:` (FR-A9).
+- **AC9.** The override input exists on `web-platform-release.yml`, is forwarded via `with:`, has a
+  defaulted `workflow_call` counterpart, is gated on `github.event_name == 'workflow_dispatch'`, and
+  is inert without a non-empty reason. `grep -cF 'environment:' .github/workflows/reusable-release.yml`
+  == 0 confirms v1's dropped clause is not reintroduced.
+- **AC10 — truthfulness, wrap-immune and scoped.** For `reusable-release.yml`, each of these returns
+  **0**: `lack a private-net route`, `release UNAFFECTED`, `release OK (GHCR primary)`,
+  `latency, not availability`, `atomic GHCR fallback covers`. Each was verified **present** on
+  `origin/main` first, so the AC is non-vacuous. For the runbook and ADR-096, use
+  `tr '\n' ' ' < FILE | grep -c '<phrase with [[:space:]]* between words>'` == 0 — the strings wrap.
+  Greps are **scoped to the target files**; this plan and the learning legitimately quote the old text.
+- **AC11.** The corrected artifacts assert **presence**: the runbook contains the post-change recovery
+  and a dated correction; ADR-096's amendment exists; AP-016 carries a dated clause.
+- **AC12.** `grep -aFc 'tail -c 400 "$perr"' apps/web-platform/infra/ci-deploy.sh` == **7**
+  (measured baseline **6**). `-F` is mandatory: without it the pattern returns **0** on code
+  containing it 6×. Additionally the `IMAGE_PULL: zot pull failed for` line must now carry `reason=`.
+- **AC13.** `ci-deploy.test.sh` has a passing case asserting the zot-arm reason.
+- **AC14.** Detector: enumerates `*ACCESS_TOKEN_(ID|SECRET)` and verifies via
+  `CF-Access-Client-Id`/`-Secret` (200→LIVE, 403→DEAD), with a unit test covering both verdicts using
+  synthesized fixtures (`cq-test-fixtures-synthesized-only`).
+- **AC15.** `grep -rln 'check-cloudflare-token-drift' .github/workflows/` returns ≥1 **inside a `run:`
+  step** (baseline: 0 files under `.github`), and the release-preflight arm exists.
+- **AC16.** Mirror harness passes; its diff contains no line matching `^[+-].*(assert_eq|\[\[ )`
+  other than the two expected-rc literals.
+- **AC17.** `actionlint` clean on `reusable-release.yml` **and** `web-platform-release.yml`.
+- **AC18.** Every `knowledge-base/` path cited in this plan resolves
+  (`grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.(md|c4)'` → all exist).
 
-- **AC23.** On the first release after merge, `zot_verify` passes and the Actions log records the
-  digest match. **Automation: not feasible pre-merge** — the faithful test of a CI-side bridge is a
-  real release, which is a production mutation and is out of scope for this unattended run
-  (limitation stated under F2). Per `wg-block-pr-ready-on-undeferred-operator-steps` this MUST become
-  a tracked follow-through issue (`runbooks/followthrough-convention.md`) before PR-ready, **not** an
-  AC bullet left to memory.
+### Post-merge (operator) — tracked, not remembered
+
+- **AC-P1.** On the first release after merge, the assertion passes and the log records the digest
+  match. **Automation not feasible pre-merge** — the faithful test of a CI-side bridge is a real
+  release, a production mutation out of scope for an unattended run (F2's limitation). Per
+  `wg-block-pr-ready-on-undeferred-operator-steps` this MUST become a tracked follow-through issue
+  before PR-ready.
 
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: "zot_verify step outcome per release (digest match vs the five failure discriminators)"
-  cadence: "every web-platform release (on push to main touching apps/web-platform/**)"
-  alert_target: "GitHub Actions failed-workflow notification to ops@jikigai.com; ::error:: annotation + step summary on the run"
-  configured_in: ".github/workflows/reusable-release.yml (step id zot_verify)"
+  what: "zot_mirror step outcome per web-platform release: digest match, or mirror_reason naming the failing stage"
+  cadence: "every web-platform release (push to main touching apps/web-platform/**)"
+  alert_target: "if: failure() -> notify-ops-email to ops@jikigai.com (release AND deploy jobs); ::error:: + step summary on the run"
+  configured_in: ".github/workflows/reusable-release.yml (zot_mirror); .github/workflows/web-platform-release.yml (migrate/deploy needs.release.result, deploy notify)"
 error_reporting:
-  destination: "GitHub Actions annotation + $GITHUB_STEP_SUMMARY (release job); host-side pull errors to journald -> Vector -> Better Stack"
+  destination: "GitHub Actions annotation + $GITHUB_STEP_SUMMARY + notify-ops-email; host-side pull errors to journald -> Vector -> Better Stack"
   fail_loud: true
 failure_modes:
-  - mode: "bridge unreachable from the runner (stale CF Access token, tunnel down)"
-    detection: "bridge step's positive /v2/ probe fails (transport error or code not in {200,401}); cloudflared log dumped at the failing step"
-    alert_route: "bridge step fails -> zot_verify fails -> release job fails -> GitHub failed-workflow notification"
-  - mode: "crane copy silently mirrored nothing (the v0.244.1 shape)"
-    detection: "zot_verify outcome=tag_absent — crane digest against zot cannot resolve v<version>"
-    alert_route: "release job fails; deploy is skipped via needs:[release]"
-  - mode: "zot copy present but at a different digest"
-    detection: "zot_verify outcome=digest_mismatch, expected vs observed both emitted"
+  - mode: "bridge unreachable from the runner (stale CF Access service token after a rotation) — the v0.244.1 shape"
+    detection: "mirror_reason=bridge; cloudflared log dumped at the failing step (FR-B2)"
+    alert_route: "release job fails -> notify-ops-email naming the drift detector; deploy blocked by needs.release.result"
+  - mode: "crane copy mirrored nothing / partially"
+    detection: "mirror_reason=copy_v|copy_sha|copy_latest, or the post-copy assertion failing to resolve v<version>"
+    alert_route: "release job fails; migrate AND deploy skipped via needs.release.result"
+  - mode: "zot copy present at a DIFFERENT digest than this build"
+    detection: "post-copy assertion: crane digest != ${DIGEST}, both values emitted"
     alert_route: "release job fails"
-  - mode: "zot copy present at the correct digest but UNSIGNED (cosign sign failed after copy) — the most common blocking arm, since degraded() is a first-failure abort"
-    detection: "zot_verify outcome=signing_failed via mirror_status != ok; message states the digest IS correct and the blocker is the signature"
-    alert_route: "release job fails -> FR-A10 notify-ops-email carrying the discriminator + remedy"
-  - mode: "Sigstore (Fulcio/Rekor) unavailable — a NEW release-blocking third-party dependency introduced by FR-A3, outside the operator's control and unrelated to deployability"
-    detection: "zot_verify outcome=signing_failed; remedy line says wait-and-re-run, distinguishing it from a registry fault"
-    alert_route: "release job fails -> FR-A10 notify-ops-email; bounded retry (FR-A7) absorbs short blips first"
-  - mode: "host cannot pull from zot at deploy time"
-    detection: "IMAGE_PULL: zot pull failed ... now carrying the stderr tail (FR-C1), plus pull_failure_event"
-    alert_route: "Better Stack (Vector journald source) + Sentry via pull_failure_event"
+  - mode: "copy landed at the correct digest, cosign sign failed (incl. Sigstore outage) — a NEW release-blocking third-party dependency"
+    detection: "mirror_reason=sign; message states the digest IS correct and the blocker is the signature"
+    alert_route: "release job fails -> notify-ops-email with the re-sign one-liner"
+  - mode: "host cannot pull from zot at deploy time (private-net down, or ZOT_PULL_* stale — NOT covered by the CI gate, see FR-A8)"
+    detection: "IMAGE_PULL: zot pull failed ... now carrying the stderr tail (FR-C1); pull_failure_event; web-zot-consumer-probe heartbeat absence"
+    alert_route: "Better Stack (Vector journald) + Sentry"
   - mode: "a Cloudflare token rotation does not propagate to Doppler"
-    detection: "scripts/check-cloudflare-token-drift.sh exit 1, now covering Access service tokens (FR-B4) and actually invoked (FR-B5)"
-    alert_route: "scheduled workflow failure -> GitHub notification"
+    detection: "check-cloudflare-token-drift.sh exit 1, now covering Access service tokens and actually invoked (twice daily + release preflight)"
+    alert_route: "scheduled-terraform-drift.yml failure -> its existing notify-ops-email"
 logs:
   where: "GitHub Actions run logs (release job); Better Stack Logs source soleur-inngest-vector-prd for host-side IMAGE_PULL_* records"
-  retention: "GitHub Actions default retention; Better Stack per existing source retention"
+  retention: "GitHub Actions default; Better Stack per existing source retention"
 discoverability_test:
   command: "gh run list --workflow=web-platform-release.yml --limit 5 --json databaseId,conclusion && doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --grep IMAGE_PULL --since 24h"
   expected_output: "release runs with conclusion, and IMAGE_PULL_OK/IMAGE_PULL_FAIL records including the stderr tail on any zot miss"
 ```
 
-No `ssh` in any field. Both channels are reachable without touching a host.
+No `ssh` in any field.
 
 ## Architecture Decision (ADR/C4)
 
-This plan reverses a recorded decision, so the ADR and C4 edits are **deliverables here**, not
-follow-ups (`wg-architecture-decision-is-a-plan-deliverable`).
+### ADR — amend ADR-096 (status: *Adopting*)
 
-### ADR
+Its `## Decision` states the CI mirror is *"explicitly non-blocking … a mirror failure degrades zot
+**redundancy**, never the release/build verdict."* Sound only while GHCR is a working fallback. With
+the PAT revoked and the minter off, **zot is the sole pull path**, so a mirror miss is a release that
+cannot deploy.
 
-**Amend ADR-096** (status: *Adopting*). Its `## Decision` states the CI mirror is *"explicitly
-non-blocking … a mirror failure degrades zot **redundancy**, never the release/build verdict."* That
-reasoning is sound only while GHCR is a working fallback. With the `ghp_` PAT revoked and the minter
-deliberately off (ADR-088 arm-b), **zot is not redundant — it is the sole pull path**, so a mirror
-miss is a release that cannot deploy.
+The amendment must: **(a)** record the falsified premise with the 401/403 evidence; **(b)** change
+web-platform's mirror from non-blocking to **release-blocking via a positive post-copy assertion**;
+**(c)** add to `## Alternatives Considered` the rejected *restore-a-GHCR-credential* option, cited
+**structurally** — ADR-088 arm-b's finding that App installation tokens can `docker login` GHCR but
+are DENIED `docker pull` of private repo-linked packages, so no zero-touch GHCR pull credential
+exists (v1 rejected it as operator preference, a *reversible* reason a future reader could simply
+re-add); **(d)** state the testable relaxation condition; **(e)** correct the ADR's **own dead escape
+hatches** — §Cold-boot-dependency axis 1 and the "Instant revert" bullet (FR-B1(3)); **(f)** carry
+FR-A8's *proves-less-than-it-appears* sentence, so the amendment does not record a stronger claim than
+the mechanism supports; **(g)** frame fail-closed as a **mitigation for a single-pull-path
+architecture, not a resolution**, recording the restoration path (a working non-personal GHCR pull
+credential, or a second mirror) as **open architectural debt** with #6031/#6023 — otherwise a future
+reader inherits "one registry, no fallback" as a decision rather than a constraint; **(h)** scope the
+language to **web-platform's** mirror, since the inngest image's mirror stays non-blocking and the
+inngest host cannot use zot at all (see Deferred).
 
-The amendment must: (a) record the falsified premise with the 401/403 evidence; (b) change the
-mirror's status from non-blocking to **release-blocking via a positive post-mirror assertion**; (c)
-add to `## Alternatives Considered` the rejected option — *restore a GHCR pull credential and keep
-the mirror warn-only*; (d) state the relaxation condition, mirroring FR-A5.
-
-Two corrections from plan review:
-
-- **(c) must be cited structurally, not as operator preference.** My first draft rejected it because
-  "the operator deliberately removed a revocable personal PAT." That is a *reversible* reason — a
-  future reader could simply re-add one. The real basis is a GitHub-side limitation recorded in
-  ADR-088 arm-b and restated in `cron-ghcr-token-minter.ts`'s kill-switch comment: **a GitHub App
-  installation token can `docker login` to GHCR but is DENIED `docker pull` of private, repo-linked
-  packages.** So *no zero-touch GHCR pull credential exists today* — which also makes FR-A5's
-  relaxation condition concrete and testable ("GHCR pull succeeds with a non-personal credential")
-  instead of a matter of taste. This also satisfies `hr-github-app-auth-not-pat` rather than
-  appearing to violate it.
-- **The amendment must frame fail-closed as a MITIGATION for a single-pull-path architecture, not a
-  resolution of it.** Marking `ghcr` and `hetzner -> ghcr` as a dead fallback in the C4 model risks
-  enshrining single-path as the *intended* design, so that a future reader inherits "one registry, no
-  fallback" as a decision rather than a constraint. The amendment must therefore record the
-  restoration path — a working non-personal GHCR pull credential, or a second mirror — as **open
-  architectural debt**, with #6031 / #6023 as trackers.
-
-No new ADR ordinal is claimed, so there is no collision risk.
+No new ordinal is claimed.
 
 ### C4 views
 
-All three model files were read. No new element or `view include` is required — every external
-system and relationship this change touches is already modeled: `ghcr`, `zotRegistry`, `cloudflare`,
-`tunnel`, `github`, `doppler`, `betterstack`, `sentry`, `sigstore`, plus the edges
-`github -> tunnel`, `tunnel -> zotRegistry`, `hetzner -> zotRegistry`, `hetzner -> ghcr`. Enumerated
-and found already-present: **external human actors** — none new; **external systems/vendors** — none
-new; **containers/data stores** — none new (no new store; zot's store is modeled); **access
-relationships** — no new actor→surface grant.
+All three model files read. **No new element or `view include` is required** — enumerated and found
+already modelled: **external human actors** none new; **external systems/vendors** none new (`ghcr`,
+`zotRegistry`, `cloudflare`, `tunnel`, `github`, `doppler`, `betterstack`, `sentry`, `sigstore` all
+present, with edges `github -> tunnel`, `tunnel -> zotRegistry`, `hetzner -> zotRegistry`,
+`hetzner -> ghcr`); **containers/data stores** none new; **access relationships** no new actor→surface
+grant.
 
-Three **descriptions this change falsifies** must be corrected (the mandate requires fixing these,
-not only adding elements):
+Three descriptions this change **falsifies** must be corrected:
 
-1. `ghcr` (`model.c4:264`) — describes GHCR as the *"DUAL-PUSH + break-glass FALLBACK"*. It is no
-   longer a usable fallback: the pull credential is revoked and the minter is disabled. Correct to
-   record the fallback as **dead in practice**, with the date.
-2. `hetzner -> ghcr` (`model.c4:454`) — *"Atomic fallback pull when zot is unconfigured/unreachable
-   — dual-pushed + break-glass through the Phase-5 soak"*. Same falsification; the atomic fallback
-   cannot authenticate.
-3. `tunnel -> zotRegistry` (`model.c4:428`) — accurate that #6416's mode is closed, but should also
-   record the **2026-07-29 cause class** (stale CF Access service token after a Terraform replace)
-   so the next reader does not re-derive the refuted route hypothesis.
+1. `ghcr` (`model.c4:264`) — described as the *"DUAL-PUSH + break-glass FALLBACK"*. The pull
+   credential is revoked and the minter disabled: record the fallback as dead in practice, dated.
+2. `hetzner -> ghcr` (`model.c4:454`) — *"Atomic fallback pull when zot is unconfigured/unreachable"*.
+   Same falsification; it cannot authenticate.
+3. `tunnel -> zotRegistry` (`model.c4:428`) — correct that #6416's mode is closed, but should also
+   record the **2026-07-29 cause class** (stale CF Access service token after a Terraform replace) so
+   the next reader does not re-derive the refuted route hypothesis.
 
-After editing, run `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` — a
-`view include` referencing an undefined element fails there, not at `tsc`.
+Run `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts` after editing.
 
-### Sequencing
+## Infrastructure (IaC)
 
-The ADR amendment describes the state that is true the moment FR-A merges (the gate blocks
-immediately; there is no soak), so it is authored in this PR at full strength — no `adopting` note
-needed for the amendment itself.
+**Skipped, with reason.** No new server, service, cron, vendor account, DNS record, cert, secret, or
+firewall rule. The tunnel ingress, DNS record, CF Access application, and service token all already
+exist and were verified correct against the live API (F2). **No `.tf` file is edited**, so
+`apply-web-platform-infra.yml` does not fire, and **no `terraform apply`, Cloudflare write, or Doppler
+write is required** — the unattended constraint is satisfied by construction, not by deferral.
+FR-B4's wiring is a workflow step, not a provisioned resource.
+
+## Encryption Posture
+
+**Skipped, with reason.** No persistent store is introduced and no new cross-component connection is
+created — the assertion travels the **existing** bridge the step already opened and reads no data.
+zot's at-rest posture is unchanged (ADR-140 / `encryption-posture-ledger.json`).
+
+## GDPR / Compliance Gate
+
+**Skipped, with reason.** No regulated-data surface: no schema, migration, `.sql`, auth flow, or API
+route. No expansion trigger fires — no LLM/external-API processing of operator data, no new cron
+reading `learnings/`/`specs/`, no new artifact-distribution surface. The `single-user incident`
+threshold is satisfied procedurally by `user-impact-reviewer` at review time; this change moves no
+personal data.
 
 ## Domain Review
 
 **Domains relevant:** Engineering, Product
 
-### Engineering (CTO)
+### Engineering (CTO + architecture-strategist)
 
 **Status:** reviewed
-**Assessment:** Core design endorsed — positive digest equality in a sibling step is the correct
-mechanism and no cheaper stronger assertion exists. Both FR-A2 prerequisites verified: `crane`
-persists (`sudo install` to `/usr/local/bin`, same job/filesystem) and the zot credential persists in
-`~/.docker/config.json`. **New finding: step ordering is mandatory for a second reason** — the
-teardown step runs `docker logout 127.0.0.1:5000`, so `zot_verify` must precede it for the
-*credential*, not only the tunnel; a future reordering would break it silently. No cloudflared leak
-(teardown is `if: always()`). No bootstrap deadlock (workflow files take effect on push, without a
-deploy). Findings folded in: R1a (self-heal narrower than claimed), R1c (`:latest`/`:<sha>` orphan
-tags, currently harmless), R2 reversal (FR-A10), FR-A3's `IMAGE_VERIFY_MODE=warn` trade, FR-A8
-override, FR-A11 orphan-draft leak, the 6b reasoning fix, and the 6d ADR re-citation. One
-recommendation escalated to the operator rather than applied unilaterally — see **Sequencing
-decision** below.
+**Assessment:** Mechanism endorsed. **CI is the right layer and the right position** — before
+`Finalise release (publish draft)`. The deploy-side alternative was considered and rejected
+decisively: it lets the release publish (materializing the tag, consuming the semver, shipping the
+notes) and only then refuses, which *is* the v0.244.1 shape — "decoupling them is the bug".
+`zot-entry-gate.sh` reuse rejected for three reasons (it loops over both platform images, so the
+web-platform verdict would couple to the inngest mirror; its `HEAD == 200` predicate cannot express a
+digest mismatch; it presents `ZOT_PULL_*` as curl Basic auth) — transport is *not* the blocker,
+contrary to the plan's earlier framing. Verified: `crane` and the zot docker credential persist across
+steps, and the teardown's `docker logout 127.0.0.1:5000` makes the ordering mandatory. Folded in:
+P0-A, the assertion moving inside the step, FR-A3's reason output, FR-A7's four clauses, FR-A8,
+FR-A9, FR-B1's widened sweep, FR-B4's host workflow + required preflight.
 
 ### Product/UX Gate
 
@@ -638,201 +550,131 @@ decision** below.
 
 #### Findings
 
-**CPO verdict: SIGN-OFF WITH CONDITIONS.** Threshold `single-user incident` **sustained**, with the
-justification re-framed (the first draft argued only the fail-open direction — the direction that
-favoured the chosen design); tier **NONE confirmed** (no `components/**/*.tsx`, no `app/**/page.tsx`,
-no user-visible copy — the change does alter the operator's *failure* UX, but that surface is governed
-by observability/runbook quality, not visual design, so it redirects to FR-A4/FR-B7 rather than a
-`.pen`). Conditions folded in: C1 → **FR-B7** (the dead escape hatch in `zot-registry-revert.md` —
-the material gap: my truthfulness sweep reached the code and the model but not the document the
-operator reads during an outage); C2 → FR-A4's remedy column + the "nothing was half-shipped" line;
-C3 → FR-A3's disclosed Sigstore dependency and the `signing_failed` split; C4 → AC14 converted to a
-tracked follow-through plus the explicit residual-action note below.
+**CPO: SIGN-OFF WITH CONDITIONS.** Threshold `single-user incident` **sustained** with the
+justification re-framed (v1 argued only the direction favouring its own design); tier **NONE
+confirmed** — the change alters the operator's *failure* UX, but that surface is governed by
+observability/runbook quality, not visual design, so it redirects to FR-A4/FR-B1 rather than a `.pen`.
+Conditions folded in: the dead escape hatch (FR-B1(2) — the material gap, since v1's sweep reached the
+code and the model but not the document the operator opens during an outage); per-discriminator plain
+-language remedies + the "nothing was half-shipped" line (FR-A4); the disclosed Sigstore dependency
+(Observability); AC-P1 converted to a tracked follow-through.
 
-**Residual action after this merges (must be stated to the operator):** disabling the compromised
-legacy Supabase `service_role` key remains **OPEN**. This PR is a *prerequisite* for that
-remediation, not the remediation itself.
+**Residual action after this merges:** disabling the compromised legacy Supabase `service_role` key
+remains **OPEN**. This PR is a *prerequisite*, not the remediation.
 
-### Sequencing decision — operator's call, deliberately not made here
+### Sequencing — operator's call
 
-The CTO's highest-value structural finding: because this branch edits
-`apps/web-platform/infra/ci-deploy.sh`, which matches `on.push.paths: apps/web-platform/**`, **merging
-it is itself the first-ever execution of both the new gate (FR-A) and the new bridge probe (FR-B1)**.
-FR-B1 has **zero runner-side evidence** (F2's honest limitation — the probe was validated from a
-laptop), and it composes into the gate: a stricter bridge gate → `zot_bridge` failure → `degraded
-"bridge"` → FR-A3 blocks the release. One false negative in an unvalidated probe would block the
-release train, including the credential remediation.
-
-The CTO recommends a **two-PR split**: PR 1 = the non-gating set (FR-C, FR-B2, FR-B3, FR-B4/B5,
-FR-B6, FR-B7, ADR + C4), whose own release exercises the runner-side bridge path for real; PR 2 = the
-two gating changes (FR-A, FR-B1), landed once PR 1's release has proven the bridge works from a
-runner.
-
-**This plan does not unilaterally adopt the split**, because doing so would move the task's headline
-deliverable (A) out of this PR — a scope reduction that is the operator's decision, not the agent's.
-All of A/B/C is therefore planned and implemented on this branch, and because the run stops before
-`/ship`, the operator chooses at ship time. The Phase order already separates the gating from the
-non-gating work, so the split costs one branch if elected.
-
-## Infrastructure (IaC)
-
-**Skipped, with reason.** This plan introduces **no** new infrastructure: no server, service, cron,
-vendor account, DNS record, cert, secret, or firewall rule. The tunnel ingress, DNS record, CF Access
-application, and service token all already exist and were verified correct against the live API
-(F2). No `.tf` file is edited, so `apply-web-platform-infra.yml` does not fire. **No `terraform
-apply`, no Cloudflare write, and no Doppler write is required by this plan** — which satisfies the
-unattended constraint by construction rather than by deferral. FR-B5's CI wiring is a workflow file,
-not a provisioned resource.
-
-## Encryption Posture
-
-**Skipped, with reason.** No persistent data store is introduced and no new cross-component
-connection is created. The `/v2/` probe (FR-B1) travels the **existing** `cloudflared access tcp`
-bridge — the same connection the step already opened — and reads no data. zot's own at-rest posture
-is unchanged and remains governed by ADR-140 / `encryption-posture-ledger.json`.
-
-## GDPR / Compliance Gate
-
-**Skipped, with reason.** No regulated-data surface is touched: no schema, migration, `.sql`, auth
-flow, or API route. None of the expansion triggers fire — no LLM/external-API processing of
-operator-session data, no new cron reading `learnings/` or `specs/`, no new artifact-distribution
-surface. (The `single-user incident` threshold trigger is noted; it is satisfied by the
-`user-impact-reviewer` invocation at review time rather than a data-protection assessment, because
-this change moves no personal data.)
+The CTO recommends splitting gating from non-gating work into two PRs, because merging this branch
+edits `ci-deploy.sh` (matching `on.push.paths: apps/web-platform/**`) and is therefore itself the
+first-ever execution of the new gate. **Note this concern is substantially reduced in v2**: the
+remaining gating change is a read-side assertion over a path already proven to work, and v1's
+unvalidated bridge probe — the change the split was mostly *about* — is now surfaced as a scope
+decision rather than included. The plan does not adopt the split unilaterally, since it would move the
+task's headline deliverable out of this PR. **Constraint if elected:** FR-B1(2) (the runbook) must NOT
+land later than FR-A. Recorded in `decision-challenges.md`.
 
 ## Open Code-Review Overlap
 
-**None.** Queried 60 open `code-review` issues; none names any of the five planned files
-(`reusable-release.yml`, `cf-tunnel-registry-bridge/action.yml`, `ci-deploy.sh`,
-`check-cloudflare-token-drift.sh`, `reusable-release-zot-mirror-retry.test.sh`).
+**None.** Queried 60 open `code-review` issues; none names any file in this plan's edit list.
 
 ## Files to Edit
 
-- `.github/workflows/reusable-release.yml` — new `zot_verify` step (FR-A1–A9); `if: failure()`
-  notify step (FR-A10); `workflow_dispatch` override input (FR-A8); rewrite the `degraded "bridge"`
-  detail (FR-B3).
-- `knowledge-base/engineering/operations/runbooks/zot-registry-revert.md` — correct the false
-  GHCR-fallback reassurance + add the post-change recovery procedure (FR-B7, FR-B6).
-- `knowledge-base/engineering/architecture/decisions/ADR-088-…private-ghcr-reads.md` — dated note on
-  the "interim GHCR break-glass" phrasing (FR-B7 sweep).
-- `.github/actions/cf-tunnel-registry-bridge/action.yml` — positive `/v2/` gate replacing `nc -z`
-  (FR-B1); dump cloudflared log at the failing step (FR-B2).
-- `apps/web-platform/infra/ci-deploy.sh` — log bounded `$perr` tail on the zot arm (FR-C1).
-- `apps/web-platform/infra/ci-deploy.test.sh` — assertion for FR-C1.
-- `scripts/check-cloudflare-token-drift.sh` — Access-service-token arm (FR-B4).
-- `.github/workflows/` (one scheduled workflow) — invoke the detector (FR-B5).
-- `knowledge-base/engineering/architecture/decisions/ADR-096-…zot.md` — amendment.
+- `.github/workflows/reusable-release.yml` — FR-A1–A4, A7, A9, A10 (workflow_call input), B1(1), B2.
+- `.github/workflows/web-platform-release.yml` — **FR-A5** (`needs.release.result` on `migrate` +
+  `deploy`), FR-A6 (deploy notify), FR-A9 (echo), FR-A10 (dispatch input + `with:` forwarding).
+- `.github/actions/cf-tunnel-registry-bridge/action.yml` — FR-B2.
+- `.github/workflows/scheduled-terraform-drift.yml` — FR-B4.
+- `apps/web-platform/infra/ci-deploy.sh` + `ci-deploy.test.sh` — FR-C1.
+- `plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh` — the two expected-rc literals.
+- `scripts/check-cloudflare-token-drift.sh` — FR-B3.
+- `knowledge-base/engineering/operations/runbooks/zot-registry-revert.md` — FR-B1(2).
+- `knowledge-base/engineering/architecture/decisions/ADR-096-…zot.md` — amendment + FR-B1(3).
+- `knowledge-base/engineering/architecture/principles-register.md` — FR-B1(4).
+- `knowledge-base/engineering/architecture/decisions/ADR-088-…private-ghcr-reads.md` — FR-B1(5).
 - `knowledge-base/engineering/architecture/diagrams/model.c4` — three description corrections.
-- A runbook under `knowledge-base/engineering/operations/runbooks/` — the `tcp://` probe trap
-  (FR-B6).
 
 ## Files to Create
 
-- A test for the detector's Access-token arm (alongside `scripts/`, following the repo's
-  `*.test.sh` convention).
-- `knowledge-base/project/learnings/` — the misdiagnosis learning (see Risks).
+- A test for the detector's Access-token arm (`*.test.sh`, alongside `scripts/`).
+- `knowledge-base/project/learnings/` — the misdiagnosis learning (see Risks R6).
 
 ## Risks & Mitigations
 
-- **R1 — a zot outage now blocks releases.** Accepted and intended: with GHCR dead, a release that
-  cannot land in zot is a release that cannot deploy, so blocking at the release is strictly better
-  than publishing an undeployable version. **No version drift accrues** — verified: `steps.version`
-  derives `next` from `git tag --list "${TAG_PREFIX}*"`, and a draft materializes no git tag until
-  `gh release edit --draft=false` runs (*"on a draft it publishes (materializing the git tag)"*). The
-  gate sits **before** `Finalise release (publish draft)`, so a blocked release leaves an unpublished
-  draft and **no tag**, and the version number is not consumed.
-- **R1a — the #4902 self-heal is NARROWER than first stated (corrected at plan review).** My initial
-  claim that "a later green re-run publishes it" is true **only when the later run recomputes the
-  identical tag**. Two gaps, both real:
-  1. *Same bump type* (blocked `patch` → next PR `patch`): `draft_exists=true`, so the draft is
-     republished — but `Finalise release` only runs `gh release edit --draft=false` and **never
-     rewrites the notes**. The published release then carries the **first** PR's changelog while the
-     image contains both. Stale release notes, silently.
-  2. *Different bump type* (blocked `patch` → next PR `minor`): `idempotency` computes a different
-     tag, misses the orphan, `draft_exists=false`, and a new draft is created. **The original draft
-     is never published and never cleaned up** — an accumulating orphan.
-  Additionally, `check_changed` gates the job on the path filter, so a **docs-only** follow-up merge
-  does not trigger a self-heal run at all; recovery is re-running the failed run or
-  `workflow_dispatch`. The plan therefore names the orphan-draft leak explicitly rather than implying
-  a clean self-heal, and FR-A11 covers it.
-- **R1c — a blocked release leaves `:latest` and `:<sha>` pushed to both registries** pointing at a
-  build with no published release (`docker_build` and `zot_mirror` both run *before* the gate).
-  Verified currently harmless: nothing on the deploy path pulls `:latest` or `:<sha>` (no hits in
-  `ci-deploy.sh`, `zot-entry-gate.sh`, or the cloud-init bootstraps — every pull is digest- or
-  `v<version>`-addressed). Recorded so it **stays** harmless; a future consumer of `:latest` would
-  turn this into a real hazard.
-- **R1b — bootstrap deadlock: analysed, and the gate does not create one.** `ci-deploy.sh` is baked
-  into the image (`COPY … /opt/soleur/host-scripts/`), so a fix to the pull path needs a new image,
-  which needs a release. If zot were unreachable, could the gate block the very release that fixes
-  it? **The deadlock pre-exists the gate**: with GHCR's pull credential revoked, a new image cannot
-  reach production while zot is down *whether or not* the release publishes — today it simply fails
-  later, at `deploy`, having published a version that never shipped. Three properties keep the
-  escape hatches open: (i) `docker_build` runs **before** the gate, so the image is still pushed to
-  GHCR at a known digest and nothing is lost; (ii) infrastructure fixes do **not** traverse this
-  pipeline (`apply-web-platform-infra.yml` and the guarded `workflow_dispatch` routes are
-  unaffected), so zot itself can be repaired while releases are blocked; (iii) the documented
-  `crane copy` + `cosign sign` backfill re-lands the image in zot, after which a re-run publishes via
-  the self-heal path. **FR-A4 is therefore extended:** the gate's failure record MUST print that exact
-  backfill command, so the escape hatch is self-documenting at the point of failure rather than
-  something the operator must go and find.
-- **R2 — REVERSED at plan review; the failure notification is now in scope (FR-A10).** I originally
-  deferred this as "a reasonable follow-up [that] widens this PR's surface." That was backwards.
-  Both `Post to Slack (release)` and `Email notification (release)` gate on
-  `create_release.released == 'true' || idempotency.draft_exists == 'true'` with **no status
-  function**, so GitHub ANDs an implicit `success()` and **neither fires on a blocked release**. The
-  only remaining signal is GitHub's own failed-workflow email, which routes to the run's *triggering
-  actor* — on a merge-triggered push that may be a GitHub App identity (`hr-github-app-auth-not-pat`),
-  i.e. **nobody**. Meanwhile `if: failure()` + `./.github/actions/notify-ops-email` is the
-  **established idiom in this repo** (present in `weakness-miner.yml`, `rule-audit.yml`,
-  `rule-metrics-aggregate.yml`, `scheduled-terraform-drift.yml`, `scheduled-realtime-probe.yml`,
-  `post-merge-monitor.yml`, `scheduled-supabase-advisor-scan.yml`), so **omitting it was the
-  deviation**, not adding it. ~8 lines reusing a composite this file already calls.
-- **R3 — a spuriously-failing gate could block a healthy release.** Mitigated by choosing assertions
-  with no trust configuration: `crane digest` equality needs no cosign root, no identity regexp, and
-  no new credential. Signature correctness is delegated to the existing `mirror_status` signal rather
-  than re-verified in CI.
-- **R4 — editing the extracted `run:` block (Phase 3) could break the harness.** The harness matches
-  the literal step **name**, which is unchanged; only message text inside the block changes. AC6
-  gates on the harness passing with no assertion churn.
-- **R5 — the bridge probe's expected-status set could be wrong on a future zot config.** The 200-or-401
-  set is measured, not assumed (F2). If zot's access control changes, the probe fails closed, which
-  is the safe direction.
-- **R6 — the misdiagnosis recurs.** The empty-200 trap cost this incident its diagnostic budget and
-  was *caused by* a false comment in the repo. FR-B3 deletes the false claim and FR-B6 records the
-  correct probe. A learning file captures the general lesson: **a comment that names a root cause is
-  a claim to verify, not a fact to route on** — here it survived long enough to mislead the operator
-  into probing a `tcp://` ingress with HTTP.
+- **R1 — a zot outage now blocks releases.** Intended: with GHCR dead, a release that cannot land in
+  zot cannot deploy. **No version drift** — verified: `next` derives from
+  `git tag --list "${TAG_PREFIX}*"` and a draft materializes no tag until published, so a blocked
+  release consumes no version. This is also the gate's load-bearing sub-value (FR-A7 iii).
+- **R2 — the orphan-draft / stale-notes leak** (FR-A11). Recorded + tracked, not reaped.
+- **R3 — `:latest` and `:<sha>` are pushed before the gate**, so they can point at a build with no
+  published release. Conclusion (harmless) survives, but v1's reasoning was imprecise: the fresh-boot
+  cloud-init path *does* resolve `:latest` (`variables.tf` default), rewritten to the zot host. It is
+  harmless because every **automated** route pins a digest —
+  `apply-web-platform-infra.yml` resolves the pin from web-1's live `/health` and *explicitly refuses*
+  `:latest` ("a birth on an unvetted image is the ADR-080 stale-image trap"), and the per-PR apply path
+  halts on any `hcloud_server` create. The only route to `:latest` is a break-glass operator-local
+  apply without `-var image_name`, which that workflow already forbids. (Restated precisely because
+  v1's version was the very "verify the claim, don't route on the comment" failure R6 is about.)
+- **R4 — a spuriously-failing gate blocks a healthy release.** Mitigated by choosing an assertion with
+  no trust configuration and no second credential: one `crane digest` against a value already in
+  scope. No cosign verify, no GHCR read.
+- **R5 — the gate proves less than it appears** (FR-A8). Stated at the call site and in the ADR.
+- **R6 — the misdiagnosis recurs.** The empty-200 trap consumed this incident's diagnostic budget and
+  was *caused by a false comment in the repo*. FR-B1 deletes the false claims; the runbook records the
+  correct probe. A learning captures the general lesson: **a comment that names a root cause is a
+  claim to verify, not a fact to route on** — and, sharply, this plan's own v1 committed the same
+  defect twice (labelling an underivable state `signing_failed`, and asserting a `needs:`-based
+  deploy gate without reading the `if:`).
 
 ## Alternatives Considered
 
 | Alternative | Verdict |
 |---|---|
-| Make `degraded()` exit non-zero and drop `continue-on-error` from `zot_mirror` | **Rejected.** Trusts the step's own exit path — the precise signal the task calls untrustworthy — and forces churn in the harness that executes the block verbatim. |
-| Gate on `steps.zot_mirror.outputs.mirror_status` alone | **Rejected as primary.** It is self-report. Used only as suspenders (FR-A3) behind the independent digest assertion. |
-| Restore a GHCR pull credential and keep the mirror warn-only | **Rejected** (also recorded in the ADR amendment). The operator deliberately removed a revocable personal PAT from the deploy critical path; a replacement recreates the fragility a rotation just broke. |
-| Change the tunnel ingress from `tcp://` to `http://` so `curl` works | **Rejected.** `tcp://` is the deliberate design (`action.yml` header, ADR-096); the empty 200 is a probe error, not an origin defect. Changing it would also be a production Cloudflare mutation. |
-| Full `cosign verify` in the new gate | **Rejected.** Needs trust-root/identity configuration in CI and risks spuriously failing releases (R3). `mirror_status` already discriminates the unsigned state. |
-| Remove `lifecycle { ignore_changes = [value] }` so Terraform propagates rotations | **Rejected**, consistent with `check-cloudflare-token-drift.sh`'s own reasoning: it trades silent staleness for a churn bug the comments say was already hit. Detection is the safer fix — but it must actually *cover* Access tokens and actually *run* (FR-B4/B5). |
-| Defer B to a staged Terraform change for operator apply | **Unnecessary.** No infrastructure defect exists (F2). |
+| A separate `zot_verify` step (v1) | **Rejected.** Breaks on the target incident: `degraded()` exits before `install_crane`, so the step finds no crane and no zot login. Also spawned a taxonomy, an output contract, a duplicate retry helper, and a skip-invariant proof — all of which dissolve when the assertion lives in the step that does the copy. |
+| Make `degraded()` exit 1 and drop `continue-on-error` | **Adopted** (FR-A1). v1 rejected this as "trusting the step's own exit path", which was circular — the exit path is untrustworthy *because* it is hardcoded `exit 0`. |
+| Compare against `steps.docker_build.outputs.digest` only | Kept as the comparand (FR-A2) — it is authoritative for "the bits this release built". |
+| Add a GHCR-side `crane digest` (advisor's suggestion) | **Rejected.** Puts GHCR back on the release critical path of an ADR whose purpose is removing it; is the one unverified prerequisite; and `crane digest` against GHCR is a *rejected* in-repo deviation in favour of `docker buildx imagetools inspect`. |
+| Assert at the deploy job's start | **Rejected** (architecture review). The release would publish first — materializing the tag and notes — and only then refuse. That decoupling *is* the defect. Also needs cloudflared + Doppler + crane + a second login in a job that has none, and holds the `web-1-swap` lock. |
+| Call `zot-entry-gate.sh` from CI | **Rejected.** Loops over both platform images (coupling web-platform's verdict to the inngest mirror); `HEAD == 200` cannot express a digest mismatch; different credential mechanism. Transport is *not* the blocker. |
+| Full `cosign verify` in the gate | **Rejected.** Needs trust-root/identity config in CI and risks spuriously failing releases. |
+| Restore a GHCR pull credential, keep warn-only | **Rejected structurally** (not as preference): App installation tokens are DENIED `docker pull` on private repo-linked packages (ADR-088 arm-b), so no zero-touch GHCR pull credential exists. |
+| Remove `lifecycle { ignore_changes = [value] }` so Terraform propagates rotations | **Rejected**, consistent with the detector's own reasoning: trades silent staleness for a churn bug already hit. Detection is safer — but it must *cover* Access tokens and actually *run* (FR-B3/B4). |
+| A new scheduled workflow for the detector | **Rejected.** `scheduled-terraform-drift.yml` already has the credentials, cadence, and notify idiom, and a new GHA `schedule:` is off-pattern (ADR-033). |
+| Stage a Terraform fix for operator apply | **Unnecessary** — no infrastructure defect exists (F2). |
+
+## Deferred (tracking issues — Phase 8)
+
+Each needs a GitHub issue per `wg-when-deferring-a-capability-create-a`:
+
+1. **The inngest image's mirror stays non-blocking**, and `cloud-init-inngest.yml` hard-pins a
+   `ghcr.io` ref with **no zot path** and a fail-closed pull — so after this change the invariant holds
+   for one of two platform images. `build-inngest-bootstrap-image.yml` also still carries the **live
+   #6416 defect** (its mirror is gated `if: steps.zot_bridge.outcome == 'success'`, so a bridge failure
+   *skips* it and leaves `mirror_status` unset and the Slack line inert).
+2. **Two more instances of the same false `/v2/` gate** — `zot-entry-gate.sh:40` and
+   `cloud-init.yml:527` use `curl -s -o /dev/null` with no `-w '%{http_code}'`, so a 500 or an empty
+   200 passes. Fix the script inline if cheap; cloud-init needs a host reprovision.
+3. **`zot-entry-gate.sh` is unwired and asserts a stale contract** (advises backfilling "before
+   flipping" a phase already flipped). Add a dated header note recording it is superseded, or delete
+   it with its test.
+4. **AC-P1** (first-release verification) as a follow-through.
+5. **The orphan-draft / stale-notes leak** (FR-A11).
 
 ## Test Scenarios
 
-1. Bridge opens a listener but the stream resets → **bridge step fails** (regression the old `nc -z`
-   gate passed), cloudflared log dumped at the failing step.
-2. Bridge healthy, unauthenticated `/v2/` → `401` → probe **passes**.
-3. `crane copy` mirrored nothing → `zot_verify` → `tag_absent` → release job **fails**, deploy
-   skipped.
-4. zot holds the tag at a different digest → `digest_mismatch`, both digests emitted.
-5. Copy of `v<version>` landed at the correct digest, then the `<sha>` or `latest` arm failed so
-   `cosign sign` never ran → `signing_failed` → **fails**, with a message stating the digest is
-   correct and printing the re-sign one-liner.
-5b. Transient failure on attempt 1 that succeeds on attempt 2 → bounded retry absorbs it → **passes**
-   (no blocked release for a single TCP reset).
-5c. `workflow_dispatch` with an empty reason → override inert, gate still **fails**. With a non-empty
-   reason → warning + notification + `action-required` issue, release proceeds.
-6. Happy path → digest match + `mirror_status=ok` → release publishes and deploys.
-7. `docker_build` skipped (docs-only release) → `zot_verify` skipped, release unaffected.
-8. Detector: a dead Access service token (`403`) → exit 1 naming key + config; a live one (`200`) →
-   LIVE.
-9. `ci-deploy.sh` zot arm fails → log line carries a bounded, single-line stderr tail.
-10. Mirror harness passes unchanged (FR-A6/AC6).
+1. Bridge fails → `mirror_reason=bridge`, cloudflared log dumped at the failing step, **release job
+   fails**, `migrate` and `deploy` both skipped via `needs.release.result`.
+2. Bridge healthy, `crane copy` of `v<version>` mirrors nothing → assertion cannot resolve →
+   `mirror_reason=copy_v` → fails.
+3. `v<version>` copied, `<sha>` arm fails → loop aborts before `cosign sign` → `mirror_reason=copy_sha`;
+   the message must **not** blame Sigstore.
+4. zot holds `v<version>` at a different digest → assertion mismatch, both digests emitted.
+5. Copy + sign both fine → digest matches → `mirror_status=ok` → release publishes and deploys.
+6. `cosign sign` genuinely fails → `mirror_reason=sign`, message states the digest is correct and
+   prints the re-sign one-liner.
+7. `docker_build` skipped (plugin release, no `docker_image`) → mirror and assertion skipped; release
+   unaffected.
+8. `workflow_dispatch` override with empty reason → inert, still fails; with a reason → warning +
+   notification + `action-required` issue.
+9. Detector: dead Access service token (403) → exit 1 naming key + config; live (200) → LIVE.
+10. `ci-deploy.sh` zot arm fails → log line carries a bounded single-line stderr tail.
+11. Mirror harness passes with only the two expected-rc literals changed.
