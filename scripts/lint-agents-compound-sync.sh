@@ -84,7 +84,7 @@ extract_one() {
 COMPOUND_REL="plugins/soleur/skills/compound/SKILL.md"
 COMPOUND_ABS="$ROOT/$COMPOUND_REL"
 
-# The sentinel lives in the rule corpus, not the pointer index (ADR-150).
+# The sentinel lives in the rule corpus, not the pointer index (ADR-151).
 # Search the whole registry so this stays location-tolerant.
 AGENTS_THRESHOLD=""
 for f in "$ROOT"/AGENTS*.md; do

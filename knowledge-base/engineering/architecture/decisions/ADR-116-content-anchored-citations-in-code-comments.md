@@ -194,9 +194,9 @@ off `plugin`, not `engine`), is included in `views.c4` as an element only, has n
 etc.)"* — already absorbs a future guard. No ownership or access relationship changes, and no
 element description is falsified.
 
-## Amendment — ADR-150 (2026-07-28)
+## Amendment — ADR-151 (2026-07-28)
 
 The reach argument above was stated in loader-class terms ("injected on every
-code/infra session"). Under ADR-150 the rule corpus is unconditional, so the
+code/infra session"). Under ADR-151 the rule corpus is unconditional, so the
 rule's reach is simply **every session** — strictly broader than what this ADR
 claimed, so the Decision stands unchanged and is now better served.

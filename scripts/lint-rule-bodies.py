@@ -67,7 +67,7 @@ if _SCRIPTS_DIR not in sys.path:
 
 from _agents_md_sections import SECTIONS  # noqa: E402
 
-# ADR-150: one unconditional corpus. The tuple shape is retained (rather than a
+# ADR-151: one unconditional corpus. The tuple shape is retained (rather than a
 # bare string) so the parse/union plumbing below stays list-driven and a future
 # second corpus file needs no structural change.
 SIDECARS = ("AGENTS.rules.md",)
@@ -83,7 +83,7 @@ ACKS_REL = Path(".claude") / "rule-weakening-acks.txt"
 MANIFEST_SCHEMA = 1
 
 ID_RE = re.compile(r"\[id: ([a-z0-9-]+)\]")
-# Pointer line: `- [id: x] (tags)?` anchored end-of-line (ADR-150 dropped the
+# Pointer line: `- [id: x] (tags)?` anchored end-of-line (ADR-151 dropped the
 # class arrow). The corpus holds bodies; pointer-shaped lines are filtered
 # defensively so this parse mirrors lint-rule-ids.POINTER_LINE_RE.
 #
@@ -171,7 +171,7 @@ def build_body_map(
 ) -> dict[str, str]:
     """Union {id: raw_body_line} across the corpus file(s).
 
-    ADR-150 removed the cross-sidecar collision detector that used to live here.
+    ADR-151 removed the cross-sidecar collision detector that used to live here.
     It existed for threat F1: with three sidecars, a same-id decoy in a second
     file could win a last-file-wins merge and mask a weakening of the real,
     runtime-loaded body. With ONE unconditional corpus there is no second file to
@@ -398,7 +398,7 @@ def cmd_check(
     sections = _head_sections(root) | _base_sections(root, base_commit)
 
     # Head (working-tree) state. The cross-sidecar collision fail-closed is gone
-    # with the sidecars themselves (ADR-150); see build_body_map.
+    # with the sidecars themselves (ADR-151); see build_body_map.
     head_bodies = build_body_map(_read_worktree_sidecars(root), sections)
     head_hashes = hashes_for(head_bodies)
 
@@ -428,7 +428,7 @@ def cmd_check(
 
     # Base state (the corpus as of <base>, same section set).
     #
-    # ADR-150 MIGRATION NOTE (SE-1): `SIDECARS` is head-side, so while the base
+    # ADR-151 MIGRATION NOTE (SE-1): `SIDECARS` is head-side, so while the base
     # predates the corpus rename `git show <base>:AGENTS.rules.md` resolves to
     # nothing and this base map is EMPTY. CI's base is `git merge-base origin/main
     # HEAD`, so that is true for EVERY commit of the renaming PR, not just the one

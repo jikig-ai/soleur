@@ -130,16 +130,16 @@ element enumeration per the completeness mandate, not asserted by omission.
 | Frontmatter on the `AGENTS.md` index | `AGENTS.md` loads raw via the harness `@`-import every session (unstrippable) — the YAML would leak into context. Frontmatter lives on the hook-injected rule corpus only. |
 | Add a second overdue-review scanner for the rule layer | `review-reminder.yml` already walks the corpus; extend its feed + add a liveness assert instead of a parallel scanner. |
 
-## Amendment — ADR-150 (2026-07-28)
+## Amendment — ADR-151 (2026-07-28)
 
 The always-loaded file this decision named was merged into `AGENTS.rules.md`
-when ADR-150 collapsed the change-class sidecars. **The decision itself is
+when ADR-151 collapsed the change-class sidecars. **The decision itself is
 unchanged**: the freshness clock still applies to the always-loaded corpus,
 funded by the same frontmatter-strip, and `review-reminder.yml`'s
 `required_paths` now names `AGENTS.rules.md`.
 
 The rejected-alternative row above became load-bearing in a way it was not
-originally: it is the decisive reason ADR-150 kept hook injection rather than
+originally: it is the decisive reason ADR-151 kept hook injection rather than
 replacing it with an `@AGENTS.rules.md` @-import. An @-import cannot strip
 frontmatter, so the YAML would leak into context — exactly what this ADR
 rejected.

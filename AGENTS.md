@@ -1,6 +1,6 @@
 # Agent Instructions — Index
 
-Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart hook on every session (ADR-150 — no change-class conditionality). Do NOT merge the bodies into this file: the index/body split is what keeps per-turn cost at ~5 kB instead of ~42 kB (ADR-150 rejected that as option C-ii).
+Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart hook on every session (ADR-151 — no change-class conditionality). Do NOT merge the bodies into this file: the index/body split is what keeps per-turn cost at ~5 kB instead of ~42 kB (ADR-151 rejected that as option C-ii).
 
 ## Hard Rules
 

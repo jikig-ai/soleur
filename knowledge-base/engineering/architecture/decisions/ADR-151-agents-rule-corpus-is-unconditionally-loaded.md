@@ -4,7 +4,7 @@ status: active
 date: 2026-07-28
 ---
 
-# ADR-150: The AGENTS rule corpus is unconditionally loaded
+# ADR-151: The AGENTS rule corpus is unconditionally loaded
 
 ## Context
 

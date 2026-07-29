@@ -429,7 +429,7 @@ class TestCrossFileMode(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("duplicate", r.stderr)
 
-    # ---- Residency invariants: DELETED by ADR-150 ----
+    # ---- Residency invariants: DELETED by ADR-151 ----
     # `test_compliance_tier_rule_outside_core_fails` and
     # `test_hr_rule_outside_core_fails` asserted that `[compliance-tier]` and
     # `hr-*` bodies lived in the one sidecar the loader injected every session.

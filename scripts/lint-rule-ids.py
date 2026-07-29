@@ -154,7 +154,7 @@ def lint(path: Path, retired_ids: set[str]) -> int:
 
 
 # A pointer line has structure: `- [id: <slug>] (optional bracket tags)*$`
-# anchored at end-of-line. Per ADR-150 the class arrow is gone — the corpus is
+# anchored at end-of-line. Per ADR-151 the class arrow is gone — the corpus is
 # unconditional, so there is no class to name. A rule BODY always continues past
 # the id with prose, so the end-of-line anchor still separates the two kinds.
 POINTER_LINE_RE = re.compile(r"^- \[id: [a-z0-9-]+\](?:\s+\[[^\]]+\])*\s*$")
@@ -202,7 +202,7 @@ def is_pointer_line(line: str) -> bool:
 
     Rule bodies always continue past the id with prose, so the end-of-line
     anchor in POINTER_LINE_RE rejects them. `collect_residency_metadata` used to
-    live here; it was deleted with the core-pinning checks it fed (ADR-150).
+    live here; it was deleted with the core-pinning checks it fed (ADR-151).
     """
     return bool(POINTER_LINE_RE.match(line))
 
@@ -301,7 +301,7 @@ def lint_union(
         else:
             body_ids |= f_bodies
             # Pointers inside the corpus would be an authoring error (the corpus
-            # holds bodies). This check SURVIVES ADR-150 and is NOT vacuous:
+            # holds bodies). This check SURVIVES ADR-151 and is NOT vacuous:
             # dropping the class arrow widened the pointer shape to "id + tags and
             # nothing else", so an index line pasted into the corpus — or a body
             # truncated to its slug — now matches and is caught.
@@ -339,7 +339,7 @@ def lint_union(
         )
 
     # Residency invariants (CPO sign-off PR #3496, condition #3) are DELETED, not
-    # retargeted — ADR-150. They asserted that every `[compliance-tier]` rule and
+    # retargeted — ADR-151. They asserted that every `[compliance-tier]` rule and
     # every `hr-*` rule lived in the one change-class sidecar the loader injected
     # unconditionally. With a single unconditional corpus that invariant is TRUE
     # BY CONSTRUCTION: there is nowhere else for a body to be. Retargeting them at

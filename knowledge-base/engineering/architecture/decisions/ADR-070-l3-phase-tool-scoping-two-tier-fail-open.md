@@ -23,7 +23,7 @@ framing under-credited both:
 - **Change-class scoping already ships** via `.claude/hooks/session-rules-loader.sh`
   (#3493): it injects only the relevant rule sidecar(s) per diff class, with
   multi-class/empty → load-all (fail-open).
-  **Superseded by ADR-150 (2026-07-28):** this prior art was RETIRED. The
+  **Superseded by ADR-151 (2026-07-28):** this prior art was RETIRED. The
   change-class conditionality saved ~8% of session-start bytes while the majority
   of sessions were multi-class anyway, and it produced two silent-drop incidents.
   The corpus is now injected unconditionally. Cite this as a cautionary precedent
@@ -231,11 +231,11 @@ harm this ADR enumerates (a silent unknown-tool failure for a tool the paying us
 legitimately needs) does not arise. This carve-out is scoped to `persona:"support"`
 only; the Command Center path is unchanged.
 
-## Amendment — ADR-150 (2026-07-28)
+## Amendment — ADR-151 (2026-07-28)
 
 This ADR cited the change-class rules loader twice as prior art: once as evidence
 that context scoping "already ships", and once for its fail-open posture. That
-loader's **classifier** has since been retired (ADR-150) — measured at ~8% byte
+loader's **classifier** has since been retired (ADR-151) — measured at ~8% byte
 saving against a 70%-multi-class session population, with two production
 silent-drop incidents attributable to it.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Discoverability probe for the SessionStart rules loader (ADR-150).
+# Discoverability probe for the SessionStart rules loader (ADR-151).
 #
 # Prints exactly one token:
 #   OK        — the loader injected the WHOLE corpus (numerator == denominator, > 0)

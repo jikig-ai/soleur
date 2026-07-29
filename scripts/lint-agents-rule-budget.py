@@ -65,7 +65,7 @@ def _rule_line_count(text: str) -> int:
     only `key: value` YAML and leaves this count invariant."""
     return sum(1 for ln in text.splitlines() if _RULE_LINE_RE.match(ln))
 
-# Re-baselined 23000 -> 46000 by ADR-150, when the three change-class sidecars
+# Re-baselined 23000 -> 46000 by ADR-151, when the three change-class sidecars
 # collapsed into one unconditionally-loaded corpus.
 #
 # READ THIS BEFORE CONCLUDING THE BUDGET GOT LOOSER: it did not. The number rose
@@ -92,7 +92,7 @@ PER_RULE_CAP = 600
 # The two entries are NOT interchangeable and must stay two files. AGENTS.md is
 # a slug-only pointer index re-rendered EVERY TURN; AGENTS.rules.md holds the
 # bodies and is injected ONCE per session by the SessionStart hook. Merging them
-# (ADR-150 option C-ii) would put ~37 kB of bodies on every turn instead of ~5 kB
+# (ADR-151 option C-ii) would put ~37 kB of bodies on every turn instead of ~5 kB
 # of pointers — the one "simplification" that makes things dramatically worse.
 ALWAYS_LOADED = ("AGENTS.md", "AGENTS.rules.md")
 
@@ -188,7 +188,7 @@ def lint(paths: list[Path]) -> int:
     reject = False
 
     # The "demote a wg-* rule to a conditional sidecar" rung is gone with the
-    # sidecars (ADR-150) — there is nowhere to demote to. Per #6794 the retirement
+    # sidecars (ADR-151) — there is nowhere to demote to. Per #6794 the retirement
     # rung is not currently actionable either (the rules_unused_over_8w metric is
     # a per-worktree fragmentation under-count), so trimming prose is the honest
     # first move.

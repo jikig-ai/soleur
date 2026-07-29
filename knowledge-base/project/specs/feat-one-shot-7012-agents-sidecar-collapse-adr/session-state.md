@@ -20,7 +20,7 @@ None blocking. Five plan-level defects were caught by the review panel and fixed
 - **Measured, not projected.** Multi-class rate **70.0%** (N=80) / **72.0%** (N=200) vs the issue's 68%/72%. Simulated merge is **lossless (101/101 rules)**; new `B_ALWAYS` = **42,425 B**, i.e. **1,255 B smaller** than what 70% of sessions already load. Two `lint-rule-ids.py` failures pre-identified, both core-pinning (45 + 5 ids).
 - **The "23,000-byte harness ceiling" is not a harness limit** — the phrase exists only inside the lint's own warning string, and 70% of sessions already run at 1.9× it.
 - **Byte claims de-confounded.** The −939 B/turn arrow removal is available today with the split intact, so it is *not* a collapse win. The decision rests on **correctness** (two silent-drop incidents; ADR-140 records a hard rule the split prevented from being written), not bytes.
-- ADR number reserved: **ADR-150**. The ADR file itself is written in implementation Phase 9.1 via `soleur:architecture create` — it was correctly NOT written during planning.
+- ADR number reserved: **ADR-151**. The ADR file itself is written in implementation Phase 9.1 via `soleur:architecture create` — it was correctly NOT written during planning.
 
 ### Downstream issue disposition (recorded, not implemented)
 - **#7013** (B_FAILOPEN reporting) — premise retired by the collapse.

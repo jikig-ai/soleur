@@ -44,12 +44,12 @@ check "cron (ts)"   "$TS" 'RULE_LINE_RE = /^- .*\[id: /' 1
 check "loader (sh)" "$SH" "E '^- .*\[id: '" 3
 
 
-# --- POINTER_LINE_RE parity (added by ADR-150 review) ------------------------
+# --- POINTER_LINE_RE parity (added by ADR-151 review) ------------------------
 # lint-rule-ids.py CLASSIFIES a line as a pointer; lint-rule-bodies.py EXCLUDES
 # the same shape from the body map. They must agree, or a line is a body to one
 # gate and a pointer to the other.
 #
-# This became invisible-on-drift at ADR-150. The old shape ended in a mandatory
+# This became invisible-on-drift at ADR-151. The old shape ended in a mandatory
 # ` → (core|docs-only|rest)` arrow, so a one-sided edit almost always broke a
 # visible fixture. With the arrow gone the two definitions are a bare shared
 # string, and a one-sided tightening (e.g. dropping the optional-tags group)

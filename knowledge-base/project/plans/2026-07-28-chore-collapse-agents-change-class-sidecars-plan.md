@@ -1,15 +1,15 @@
 ---
-title: Collapse the AGENTS change-class sidecar split into a single always-loaded corpus (ADR-150)
+title: Collapse the AGENTS change-class sidecar split into a single always-loaded corpus (ADR-151)
 date: 2026-07-28
 type: chore
 issue: 7012
 lane: cross-domain
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
-adr: ADR-150 (provisional — re-verify next-free ordinal at ship)
+adr: ADR-151 (provisional — re-verify next-free ordinal at ship)
 ---
 
-# Collapse the AGENTS change-class sidecar split (ADR-150)
+# Collapse the AGENTS change-class sidecar split (ADR-151)
 
 ## Enhancement Summary
 
@@ -76,7 +76,7 @@ recorded, not skipped) · 4.55 Downtime (no serving surface)
   `AGENTS.core.md` (Correction 4).
 - ADR-140 records a hard rule the split *prevented from being written*; collapse
   unblocks it (E4).
-- No ADR ever owned the split — it shipped under a spec. ADR-150 supersedes a
+- No ADR ever owned the split — it shipped under a spec. ADR-151 supersedes a
   spec and amends seven ADRs.
 - Two files share the ADR-027 ordinal; only the `active` one is in scope.
 
@@ -253,7 +253,7 @@ Figures use the **measured merge simulation** (see "Measured merge", below).
 > residency is derived from *file membership*. The arrow is already-redundant
 > display metadata that could be deleted **today, with the split intact**.
 >
-> The honest statement, which is what ADR-150 must record: **collapse costs
+> The honest statement, which is what ADR-151 must record: **collapse costs
 > ≈ +2,344 B per session against the weighted mean (and saves 1,255 B on the
 > majority path), and buys the elimination of a silent-drop class. The −939 B/turn
 > arrow removal is an orthogonal cleanup that collapse merely makes free.**
@@ -320,11 +320,11 @@ mechanism this ADR retires.
 
 ### ADR
 
-Create **ADR-150** (provisional ordinal — highest on `origin/main` is ADR-149;
+Create **ADR-151** (provisional ordinal — highest on `origin/main` is ADR-149;
 `check-adr-ordinals.sh` passes; **re-verify at ship** per the ordinal-collision
 gate, and if renumbered, sweep this plan + `tasks.md` for the old ordinal).
 
-- Path: `knowledge-base/engineering/architecture/decisions/ADR-150-agents-rule-corpus-is-unconditionally-loaded.md`
+- Path: `knowledge-base/engineering/architecture/decisions/ADR-151-agents-rule-corpus-is-unconditionally-loaded.md`
 - Shape: **rich** (8 sections) — must be passed explicitly, since pipeline mode
   defaults to terse. Triggers hit: **#1 cross-cutting code surface** (~60 files)
   and **#5 teeth-bearing alternatives** (a/b/c-ii/c-iii with load-bearing
@@ -333,7 +333,7 @@ gate, and if renumbered, sweep this plan + `tasks.md` for the old ordinal).
 
 **There is no predecessor ADR to supersede.** The split shipped in #3493/#3496
 under a *spec* (`knowledge-base/project/specs/feat-agents-md-change-class-loader/`),
-never an ADR. ADR-150 therefore supersedes **a spec** and touches seven ADRs — but the
+never an ADR. ADR-151 therefore supersedes **a spec** and touches seven ADRs — but the
 weight is uneven: **4 substantive amendments** (092, 094, 140, 116), **1
 one-sentence factual fix** (070), **2 token swaps** (139, 027), and **1 no-op**
 (086). Stating that split keeps the perceived governance cost honest:
@@ -722,7 +722,7 @@ the deployed build fails open (Correction 4). Required steps:
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-150-agents-rule-corpus-is-unconditionally-loaded.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-151-agents-rule-corpus-is-unconditionally-loaded.md`
 - `AGENTS.rules.md`
 - `knowledge-base/project/specs/feat-one-shot-7012-agents-sidecar-collapse-adr/tasks.md`
 
@@ -836,7 +836,7 @@ Nine criteria. Earlier drafts carried eighteen; the cuts are recorded under
   `git grep` is used deliberately: it is tracked-files-only (no `node_modules` prune needed) and type-agnostic (the old `--include` list silently excluded `.md`/`.txt`/`.json`, which is where most residual references live). *(Subsumes the old AC14 — the brace form is now covered by the same alternation.)*
 - **AC7** `grep -c 'LOADER_FAIL_CLOSED\|DOCS_RE\|CODE_RE\|INFRA_RE' .claude/hooks/session-rules-loader.sh` returns **0**, and the manifest/session-context/tmpfs-alarm test cases **still exist** in `session-rules-loader.test.sh` (a deleted assertion passes a green suite silently).
 - **AC8** `bash scripts/test-all.sh` green, with the classifier-parity suite unwired and no other suite newly red vs. the Phase-0 baseline.
-- **AC9** `ADR-150-*.md` exists and `bash scripts/check-adr-ordinals.sh` passes, with no ordinal collision against a freshly-fetched `origin/main`.
+- **AC9** `ADR-151-*.md` exists and `bash scripts/check-adr-ordinals.sh` passes, with no ordinal collision against a freshly-fetched `origin/main`.
 
 **Cut ACs (considered, deliberately dropped):** ordered-id-list equality (cosmetic, and unsatisfiable as-is — see SE-11); "threshold comment contains four facts" (unfalsifiable by command); arrow-count grep (subsumed by AC2); separate `tmpfs-guard.test.sh` and compound-sync invocations (both already inside `test-all.sh`); "ADR is rich shape / names options / records dispositions" (prose paraphrase no gate checks); `Closes #7012` (a standing repo gate, `wg-use-closes-n-in-pr-body-not-title-to`); "settings.json still registers SessionStart" (asserts the absence of a change nobody proposed — SE-10 prose covers it).
 
@@ -1045,7 +1045,7 @@ SE-6): no resource, no provider, no variable, no state, no `terraform apply`.
 **Status:** to be reviewed at plan-review / deepen-plan.
 **Assessment:** Sole affected domain. This is a repo-internal governance-mechanism
 change with no product surface, no vendor, no cost, and no user-facing UI. The
-architectural weight sits in ADR-150 and in SE-1.
+architectural weight sits in ADR-151 and in SE-1.
 
 Product/UX Gate: **NONE** — no path in `## Files to Create` or `## Files to Edit`
 matches a UI-surface glob (`components/**/*.tsx`, `app/**/page.tsx`,

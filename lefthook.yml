@@ -82,7 +82,7 @@ pre-commit:
         - "AGENTS.md"
         - "AGENTS.rules.md"
         - "scripts/lint-agents-enforcement-tags.py"
-      # Enforcement tags live in the rule corpus (ADR-150).
+      # Enforcement tags live in the rule corpus (ADR-151).
       # Anchor-parity extension landed in #3684.
       run: python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.rules.md
     rule-budget-lint:

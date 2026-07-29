@@ -165,7 +165,7 @@ AGENTS_CORPUS="$REPO_ROOT/AGENTS.rules.md"
 # AGENTS.md (no leading `---`), so this matches the linter's authority
 # (b_index raw + b_corpus stripped) exactly.
 #
-# FAIL LOUD on a missing input (ADR-150). The previous `[[ -f … ]] &&` form read
+# FAIL LOUD on a missing input (ADR-151). The previous `[[ -f … ]] &&` form read
 # an absent file as a silent 0 bytes, which would UNDER-report the payload and
 # invent phantom headroom for the proposer — a governance instrument that
 # under-reports its own input is the #7008 defect class.
@@ -206,7 +206,7 @@ PROPOSE_ALWAYS_LOADED_BUDGET=44000
 PROMPT=$(cat <<EOF
 You are a clustering agent. Cluster the following learnings by problem/root-cause similarity. Return up to ${REMAINING} qualifying clusters (each with >=5 source learnings) as a JSON array.
 Schema: [{cluster_hash:'', tier:'skill'|'agents-core', target_path:string, source_learnings:[paths], proposed_diff_unified:string, rationale:string, byte_impact:{before:int,after:int,delta:int}}].
-Apply AGENTS.md cq-agents-md-tier-gate: already-enforced -> skip; domain-scoped -> skill; cross-cutting -> agents-core targeting AGENTS.rules.md. AGENTS.md (index) + AGENTS.rules.md (the whole rule corpus) are loaded on every session; there are no conditional sidecars (ADR-150).
+Apply AGENTS.md cq-agents-md-tier-gate: already-enforced -> skip; domain-scoped -> skill; cross-cutting -> agents-core targeting AGENTS.rules.md. AGENTS.md (index) + AGENTS.rules.md (the whole rule corpus) are loaded on every session; there are no conditional sidecars (ADR-151).
 Current always-loaded payload (AGENTS.md + AGENTS.rules.md) is ${ALWAYS_LOADED_NOW} bytes; propose against a budget of ${PROPOSE_ALWAYS_LOADED_BUDGET} bytes (the warn floor — leave headroom, do not aim for the hard ceiling). For agents-core targets, REFUSE the cluster if ${ALWAYS_LOADED_NOW} + your byte_impact.delta exceeds ${PROPOSE_ALWAYS_LOADED_BUDGET} — emit fewer/smaller clusters instead.
 target_path MUST be one of: AGENTS.rules.md, plugins/soleur/skills/<skill-name>/SKILL.md. The workflow refuses any other path. cluster_hash is ignored (the workflow computes it).
 Output ONLY the JSON array, nothing else.

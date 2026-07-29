@@ -167,7 +167,7 @@ brew install flock
 Without `flock`, the `emit_incident` helper still exits cleanly (the `|| true`
 guard) — you just won't get telemetry locally. CI (Ubuntu) always has `flock`.
 
-## Rule-corpus loader (#3493 index/body split, ADR-150 unconditional corpus)
+## Rule-corpus loader (#3493 index/body split, ADR-151 unconditional corpus)
 
 `session-rules-loader.sh` is a **SessionStart** hook (matchers
 `startup|resume|clear|compact`) — it does not block tool calls. It injects the
@@ -175,7 +175,7 @@ whole rule corpus (`AGENTS.rules.md`, frontmatter-stripped) into
 `hookSpecificOutput.additionalContext`, together with the `(N of M rules)` stamp,
 the `[session-context]` snapshot, and the tmpfs-guard alarm block.
 
-ADR-150 retired the change-class CLASSIFIER. There is no longer a per-session
+ADR-151 retired the change-class CLASSIFIER. There is no longer a per-session
 class, no conditional sidecar selection, and no fail-closed escape-hatch env var
 — every rule is in context from the first turn of every session. The measured
 saving from conditionality was ~8% of session-start bytes against a majority
@@ -212,7 +212,7 @@ bash .claude/hooks/session-rules-loader.sh < <(printf '{"cwd":"%s"}' "$PWD")
 Per-session manifests at `.claude/.session-manifests/<session_id>.json` carry
 the three fields `{timestamp, change_class, rule_ids_loaded}` — sufficient for
 SOC 2 CC6.1/CC7.2 evidence ("which rules were in context at session X").
-Since ADR-150 the key is kept rather than dropped so the evidence schema stays
+Since ADR-151 the key is kept rather than dropped so the evidence schema stays
 stable, and it carries `"all"` on the happy path. On a fail-safe path it carries
 `"fail-safe:<cause>"` instead — a bare constant would be unfalsifiable, and a
 blackout session would otherwise record `{"change_class":"all",

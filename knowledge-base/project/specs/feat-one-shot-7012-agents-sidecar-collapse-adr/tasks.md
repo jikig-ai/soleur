@@ -1,12 +1,12 @@
 ---
-title: Tasks — collapse the AGENTS change-class sidecars (ADR-150)
+title: Tasks — collapse the AGENTS change-class sidecars (ADR-151)
 plan: knowledge-base/project/plans/2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md
 issue: 7012
 lane: cross-domain
 brand_survival_threshold: single-user incident
 ---
 
-# Tasks — ADR-150 sidecar collapse
+# Tasks — ADR-151 sidecar collapse
 
 > **Commit topology (read first).** Phases below are work ordering, **not commit
 > boundaries**. Four `lefthook.yml` pre-commit jobs name the three sidecars in
@@ -16,7 +16,7 @@ brand_survival_threshold: single-user incident
 
 ## Phase 0 — Preconditions & baseline
 
-- [ ] 0.1 `git fetch origin main`; re-derive the next free ADR ordinal (plan assumes **ADR-150**; highest on origin/main = ADR-149). If it moved, renumber and sweep this file + the plan.
+- [ ] 0.1 `git fetch origin main`; re-derive the next free ADR ordinal (plan assumes **ADR-151**; highest on origin/main = ADR-149). If it moved, renumber and sweep this file + the plan.
 - [ ] 0.2 Record the current budget verdict verbatim (stderr matters):
       `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>&1`
 - [ ] 0.3 `python3 scripts/lint-rule-bodies.py --write`; snapshot `.claude/rule-body-hashes.txt` (74 gated entries) to scratch.
@@ -93,7 +93,7 @@ brand_survival_threshold: single-user incident
 
 ## Phase 9 — ADR + issue disposition
 
-- [ ] 9.1 `/soleur:architecture create` **shape: rich** → `ADR-150-agents-rule-corpus-is-unconditionally-loaded.md`.
+- [ ] 9.1 `/soleur:architecture create` **shape: rich** → `ADR-151-agents-rule-corpus-is-unconditionally-loaded.md`.
 - [ ] 9.2 Record in Consequences: the honest byte framing (+2,344 B/session vs weighted mean; −1,255 B vs majority path; the −939 B/turn arrow saving is **orthogonal**, not a collapse win).
 - [ ] 9.3 Amend ADR-092 (cross-sidecar decoy retired), ADR-094 (frontmatter host), ADR-140 (loader-class infeasibility voided), ADR-116; one-line fix to ADR-070; token swaps in ADR-139 and **`ADR-027-stateless-self-modifying-cron.md`** (a superseded second file shares that ordinal); ADR-086 is a **no-op**.
 - [ ] 9.4 Record an explicit **AP-017 deviation note**: the ADR-092 gate is knowingly blind for one commit (SE-1); the compensating control is the all-101 body-hash proof (AC3).

@@ -47,7 +47,7 @@ per-change ack. "Add a rule" is always safe; "revise/remove a rule" never is.
 **2. Body-weakening gate (`scripts/lint-rule-bodies.py`).** A committed `sha256`
 body-hash manifest (`.claude/rule-body-hashes.txt`) over the union of `hr-*`/`wg-*`
 body lines across the rule corpus (`AGENTS.rules.md`; three change-class sidecars
-until ADR-150 — see Amendment). The CI gate
+until ADR-151 — see Amendment). The CI gate
 `--check --base <merge-base>` **re-derives** every hash itself (never trusts the
 committed manifest value — a hand-edited/stale manifest is BLOCKED), diffs each body
 against its state at `git merge-base origin/main HEAD` (NOT `origin/main` tip), and
@@ -167,7 +167,7 @@ tag-drop to the rule corpus IS blocked by `--check`) — not the vacuous ∉ tau
   → merge blocked) for a smaller surface — the wrong trade for a single-user-incident
   guardrail whose value is being hard to silently remove.
 
-## Amendment — ADR-150 (2026-07-28)
+## Amendment — ADR-151 (2026-07-28)
 
 Two changes, both consequences of collapsing the three change-class sidecars into
 one unconditional `AGENTS.rules.md`:

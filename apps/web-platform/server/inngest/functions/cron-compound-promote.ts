@@ -171,7 +171,7 @@ function measureFileStrippedBytes(text: string, file: string): number {
  *
  * Callers MUST pass real file contents. Passing "" for a missing file (the old
  * existsSync-guarded behavior) silently under-reports the payload and invents
- * phantom headroom — the exact fail-open ADR-150 removed. `readAlwaysLoaded`
+ * phantom headroom — the exact fail-open ADR-151 removed. `readAlwaysLoaded`
  * below throws instead.
  */
 export function measureAlwaysLoadedBytes(
@@ -187,7 +187,7 @@ export function measureAlwaysLoadedBytes(
 /**
  * Read the always-loaded pair, failing LOUD if either file is absent.
  *
- * Before ADR-150 both reads were `existsSync(p) ? await readFile(p) : ""`. When
+ * Before ADR-151 both reads were `existsSync(p) ? await readFile(p) : ""`. When
  * the corpus filename changed, a deployed build running against a newer checkout
  * read the absent old file as 0 bytes, collapsing the measured payload from
  * ~40 kB to ~5 kB. That invented ~35 kB of headroom for the proposer AND

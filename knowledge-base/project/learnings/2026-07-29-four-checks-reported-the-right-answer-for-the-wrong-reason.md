@@ -5,14 +5,14 @@ module: verification
 tags: [verification, mutation-testing, false-green, git-index, contention, anti-vacuity]
 issue: 7012
 pr: 7034
-adr: ADR-150
+adr: ADR-151
 ---
 
 # Four checks reported the right answer for the wrong reason, and each one looked normal
 
 ## Problem
 
-Collapsing the AGENTS change-class sidecars (#7012 / ADR-150) is a governance
+Collapsing the AGENTS change-class sidecars (#7012 / ADR-151) is a governance
 change: it decides which rules are in an agent's context. So every claim in it
 was measured rather than asserted — and *four separate times* a measurement
 returned the expected value **for a reason that had nothing to do with what I
@@ -107,4 +107,4 @@ Verified work belongs in a commit before anything else runs.
 - `2026-07-27-my-refutation-measured-a-shim-and-my-safe-fixture-hid-12240-deletions.md` — the instrument removing the phenomenon it measures; same family, different mechanism.
 - `2026-07-27-a-check-that-cannot-report-is-indistinguishable-from-one-that-passed.md` — the direct predecessor; this session supplies four fresh instances and the git-index variant.
 - `2026-07-16-a-mutation-battery-only-covers-what-you-mutate.md` — why a self-run battery's green is evidence about the mutations, not the tests.
-- ADR-150 — the change this was learned on.
+- ADR-151 — the change this was learned on.

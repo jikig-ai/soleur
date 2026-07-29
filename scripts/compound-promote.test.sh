@@ -85,7 +85,7 @@ make_temp_root() {
   local root
   root=$(mktemp -d)
   mkdir -p "$root/knowledge-base/project/learnings" "$root/scripts"
-  # The always-loaded pair is a REQUIRED input: since ADR-150 the SUT refuses to
+  # The always-loaded pair is a REQUIRED input: since ADR-151 the SUT refuses to
   # compute a byte budget from a partial corpus rather than reading a missing
   # file as 0 bytes (which invented phantom headroom). Every temp root therefore
   # ships both files; T6 overwrites them to pin an exact sentinel.

@@ -330,7 +330,7 @@ if want_scripts; then
   # the same reason as its neighbours: scripts/*.test.sh is NOT auto-globbed, so an
   # unregistered suite is an ORPHAN that gates nothing.
   run_suite "scripts/raise-tmp-tmpfs-ceiling" bash scripts/raise-tmp-tmpfs-ceiling.test.sh
-  # ADR-150 / #7012: arms for the rules-loader discoverability probe. The
+  # ADR-151 / #7012: arms for the rules-loader discoverability probe. The
   # NEGATIVE arms carry the weight — a probe that prints OK unconditionally is
   # indistinguishable from a working one. T6 additionally pins that preflight
   # Check 10 can still EXECUTE the plan's command, so a later "simplify it back

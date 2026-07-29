@@ -145,7 +145,7 @@ the linter rejects any future reintroduction of the retired ID.
   AGENTS.rules.md 2>&1` for the current number
   and tier. Do not quote a figure here — run the command. The previously-frozen number in this
   spot (`B_ALWAYS=22900`, WARN tier, "expect essentially every agents-core proposal to be
-  refused") went stale at ADR-150 and inverted the operating conclusion: the corpus
+  refused") went stale at ADR-151 and inverted the operating conclusion: the corpus
   collapse re-scoped `B_ALWAYS` to what every session actually loads and re-baselined the
   thresholds, so the tree now sits in the `[OK]` tier with kilobytes of headroom and
   in-budget proposals should be ACCEPTED, not refused. That is exactly the failure this

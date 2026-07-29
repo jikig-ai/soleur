@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # session-rules-loader.sh — SessionStart hook that injects the AGENTS rule corpus.
 #
-# Issue: #3493 (index/body split), ADR-150 (unconditional corpus)
+# Issue: #3493 (index/body split), ADR-151 (unconditional corpus)
 # Matchers: startup|resume|clear|compact
 # Reads the envelope JSON on stdin and emits hookSpecificOutput.additionalContext
 # containing the whole rule corpus (AGENTS.rules.md) plus an operator-readable
 # stamp, the session-context snapshot, and the tmpfs-guard alarm block.
 #
-# ADR-150 retired the CHANGE-CLASS CLASSIFIER, not this hook. The corpus is now
+# ADR-151 retired the CHANGE-CLASS CLASSIFIER, not this hook. The corpus is now
 # injected in full on every session, so there is no class to compute, no
 # per-class sidecar to select, and no fail-closed escape-hatch env var (its only
 # job was to force the all-classes path that is now the only path). What the hook
@@ -30,11 +30,11 @@
 #
 # WHAT MUST NOT BE "SIMPLIFIED": do not merge AGENTS.rules.md into AGENTS.md.
 # The index is re-rendered every turn and the corpus is injected once per
-# session; collapsing them puts the whole corpus on every turn (ADR-150 C-ii).
+# session; collapsing them puts the whole corpus on every turn (ADR-151 C-ii).
 #
 # Mid-session pivot safety is no longer a concern the loader has to reason about:
 # every rule is in context from the first turn regardless of what the session
-# turns out to touch. That is the property ADR-150 bought.
+# turns out to touch. That is the property ADR-151 bought.
 #
 # Worktree path resolution (Kieran P0-1 fix): when invoked from a bare repo
 # root, `git rev-parse --show-toplevel` returns empty. Prefer envelope `cwd`,
@@ -188,7 +188,7 @@ fi
 # from writing manifests outside .claude/.session-manifests/.
 SESSION_ID="${SESSION_ID//[^A-Za-z0-9._-]/_}"
 
-# Read the rule corpus. ADR-150: there is no change-class classification — the
+# Read the rule corpus. ADR-151: there is no change-class classification — the
 # whole corpus is injected on every session, so this is a single guarded read
 # rather than a class-selected concatenation.
 CONTEXT=""
@@ -231,7 +231,7 @@ fi
 if (( FAIL_SAFE_TRIGGERED == 1 )); then
   CONTEXT=""
   # Carry a REMEDIATION clause, not just a diagnosis. Deleting the HINT line
-  # (ADR-150) removed the only actionable text the envelope ever carried, and
+  # (ADR-151) removed the only actionable text the envelope ever carried, and
   # Soleur's operator is non-technical: "0 of 101" is a diagnosis they cannot act
   # on. Kept short and root-free so the composed stamp stays inside the 200-byte
   # contract even with the over-strip note appended.
@@ -283,7 +283,7 @@ STAMP="[rules-loader] loaded: ${RULE_COUNT} of ${TOTAL_RULES} rules${FAIL_SAFE_N
 # never blanks out. The `|| …` guards below serve BOTH purposes: they produce
 # fallback VALUES *and* they are trap-safety.
 #
-# CORRECTION (2026-07-28, ADR-150): a prior note here claimed that a plain
+# CORRECTION (2026-07-28, ADR-151): a prior note here claimed that a plain
 # assignment `VAR=$(failing_cmd)` is ERR-exempt. That is FALSE under this file's
 # options, and it was load-bearing enough to be worth disproving in place:
 #
@@ -346,8 +346,8 @@ SESSION_CONTEXT="[session-context] branch: ${WS_BRANCH} | dirty: ${WS_DIRTY} fil
 # — a record asserting "all" for a session that loaded ZERO rules. On the
 # fail-safe path the field carries the CAUSE instead, so the retained artifact is
 # self-identifying and an auditor can separate a healthy session from a blackout
-# without inferring it from an empty id list. (It also separates post-ADR-150
-# rows from pre-ADR-150 rows, whose classifier emitted a literal "all" ~70% of
+# without inferring it from an empty id list. (It also separates post-ADR-151
+# rows from pre-ADR-151 rows, whose classifier emitted a literal "all" ~70% of
 # the time as its fail-closed multi-class default.)
 # SESSION_ID has already been stripped of any non-alphanum (see top of file);
 # if it ends up empty after sanitization (e.g., the envelope sent `../`), the
@@ -364,7 +364,7 @@ MANIFEST="$MANIFEST_DIR/${KEY}.json"
 MANIFEST_CLASS="all"
 (( FAIL_SAFE_TRIGGERED == 1 )) && MANIFEST_CLASS="fail-safe:${FAIL_SAFE_CAUSE:-corpus unreadable}"
 # `|| true` on the grep is load-bearing under `set -o pipefail` + the ERR trap.
-# Before ADR-150 an empty CONTEXT was unreachable: the fail-safe re-walked three
+# Before ADR-151 an empty CONTEXT was unreachable: the fail-safe re-walked three
 # sidecars, so at least one body was always present. With ONE corpus, a missing
 # or symlink-rejected file leaves CONTEXT genuinely empty, grep exits 1, pipefail
 # propagates it, and the assignment fires the ERR trap — replacing the honest
@@ -435,7 +435,7 @@ fi
 
 # Final output envelope. SESSION_CONTEXT lands on lines 3-5 — after the
 # operator-glanceable header (STAMP/manifest, lines 1-2) and before the rule
-# bodies. It was lines 4-6 until ADR-150 removed the HINT line; the loader tests
+# bodies. It was lines 4-6 until ADR-151 removed the HINT line; the loader tests
 # assert these offsets positionally, so any future line added to the header must
 # move them again in the same commit. The alarm block trails everything.
 OUT_BODY="${STAMP}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}${TMPFS_ALARM_BLOCK}"

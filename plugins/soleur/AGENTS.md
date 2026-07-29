@@ -52,7 +52,7 @@ skills/
 ```
 
 **Note:** `AGENTS.rules.md` at the repo root is the rule corpus injected on
-every session (ADR-150). It is *not* a plugin component — the plugin loader
+every session (ADR-151). It is *not* a plugin component — the plugin loader
 scans `plugins/soleur/{commands,skills,agents}/` only. Edits to the corpus route
 through the `cq-agents-md-tier-gate` placement gate and the
 `session-rules-loader.sh` SessionStart hook.

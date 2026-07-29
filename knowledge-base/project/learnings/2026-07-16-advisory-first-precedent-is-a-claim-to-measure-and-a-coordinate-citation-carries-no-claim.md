@@ -27,7 +27,7 @@ synced_to: [brainstorm]
 
 # Learning: an "advisory-first" precedent is a claim to measure, not a plan to copy
 
-> **SUPERSEDED IN PART — ADR-150 (2026-07-28).** The change-class sidecars
+> **SUPERSEDED IN PART — ADR-151 (2026-07-28).** The change-class sidecars
 > (`AGENTS.core.md` / `AGENTS.docs.md` / `AGENTS.rest.md`) and the loader's
 > class selection no longer exist: the whole rule corpus is injected on every
 > session from `AGENTS.rules.md`. **Do not follow any demotion / class-fit

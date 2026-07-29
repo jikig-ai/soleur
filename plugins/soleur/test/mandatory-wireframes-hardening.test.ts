@@ -80,7 +80,7 @@ describe("Feature B — merged stale-claim hard rule + promoted wireframe gate",
     expect(body.toLowerCase()).toContain("subagent");
   });
 
-  // ADR-150: the gate used to be asserted into the docs-class sidecar so it
+  // ADR-151: the gate used to be asserted into the docs-class sidecar so it
   // would load on docs-only sessions. With one unconditional corpus, residency is not a
   // choice — what still matters is that the rule EXISTS and is pointered 1:1.
   test("the promoted wireframe gate is in the corpus, pointer in index", () => {

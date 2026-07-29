@@ -27,7 +27,7 @@ if [[ ! -x "$HOOK" ]]; then
 fi
 
 # Make a temp repo with a rule-corpus fixture + an `origin/main` baseline.
-# ADR-150 retired the change-class classifier, so the change_pattern argument no
+# ADR-151 retired the change-class classifier, so the change_pattern argument no
 # longer selects which bodies load (the whole corpus always loads); it is kept
 # because several tests still exercise diff-shaped repos and the session-context
 # snapshot reads git state.
@@ -39,7 +39,7 @@ setup_repo() {
     git init -q -b main
     git config user.email t@test
     git config user.name t
-    # One corpus holding every rule body (ADR-150).
+    # One corpus holding every rule body (ADR-151).
     cat > AGENTS.rules.md <<'RULES'
 # AGENTS Rules
 ## Hard Rules
@@ -101,7 +101,7 @@ invoke_hook() {
 }
 
 # Tests 1-6 (per-change-class classifier assertions and the fail-closed override)
-# were DELETED by ADR-150: there is no classifier to assert and no override to
+# were DELETED by ADR-151: there is no classifier to assert and no override to
 # force, because the whole corpus loads on every session. The property they
 # protected — "the rules that should be in context are in context" — is now
 # structural; what remains observable is the stamp's numerator/denominator,
@@ -201,7 +201,7 @@ T11=$(mktemp -d); setup_repo "$T11" docs
 out11=$(invoke_hook "$T11")
 ctx11=$(printf '%s' "$out11" | jq -r '.hookSpecificOutput.additionalContext')
 # head -2: the operator-glanceable header is STAMP(1) + manifest(2). It was
-# head -3 until ADR-150 removed the HINT line.
+# head -3 until ADR-151 removed the HINT line.
 max_line=$(printf '%s' "$ctx11" | head -2 | awk '{ print length }' | sort -n | tail -1)
 if (( max_line <= 200 )); then
   echo "PASS: header lines ≤ 200 bytes (max=$max_line)"
@@ -352,7 +352,7 @@ rm -rf "$GITSHIM"
 # Long branch name (100 chars) + deep worktree path. Each [session-context]
 # line must be ≤ 512 bytes, and the 3 session-context lines must sit at envelope
 # positions 3-5 (after STAMP/manifest, outside Test 11's head -2 window).
-# Was 4-6 until ADR-150 removed the HINT line from the header.
+# Was 4-6 until ADR-151 removed the HINT line from the header.
 TOTAL=$((TOTAL+1))
 LONGBR=$(printf 'b%.0s' $(seq 1 100))
 T19_DEEP=$(mktemp -d)/aaaaaaaaaa/bbbbbbbbbb/cccccccccc/dddddddddd/eeeeeeeeee
@@ -670,7 +670,7 @@ fi
 # Under one unconditional corpus the happy path always stamps N of N, so the
 # numerator and denominator are indistinguishable there and a lockstep-collapse
 # bug would be invisible. A proper SUBSET is the only shape that pins the
-# numerator. Before ADR-150 this arm used a docs-only class fixture; the
+# numerator. Before ADR-151 this arm used a docs-only class fixture; the
 # equivalent shape now is a corpus TRUNCATED after the index was written —
 # exactly what a partial write or a botched merge leaves behind.
 
@@ -781,7 +781,7 @@ else
   FAIL=$((FAIL+1))
 fi
 
-# ------------- Test 32: the corpus is injected IN FULL (ADR-150's core claim) ----
+# ------------- Test 32: the corpus is injected IN FULL (ADR-151's core claim) ----
 # Nothing else in this suite observes WHAT REACHED CONTEXT. Every other arm reads
 # the stamp, and the stamp can be honest about a partial load (`1 of 3`) or, if
 # the numerator is ever re-derived from the file on disk instead of from

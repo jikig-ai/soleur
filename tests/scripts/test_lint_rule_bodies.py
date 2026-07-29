@@ -311,7 +311,7 @@ class TestBodyWeakeningGate(unittest.TestCase):
     def test_wg_body_moved_across_sections_and_weakened_is_caught(self):
         """AC12: a wg-* body MOVED to another section AND weakened is still caught.
 
-        Pre-ADR-150 this asserted a core→rest sidecar move. With one corpus the
+        Pre-ADR-151 this asserted a core→rest sidecar move. With one corpus the
         surviving analogue is a cross-SECTION move, which matters for the same
         reason: `parse_bodies` is section-scoped, so a body that relocates under a
         different `## <SECTION>` heading must not read as "unchanged" or slip out
@@ -366,7 +366,7 @@ class TestBodyWeakeningGate(unittest.TestCase):
             self.assertEqual(r.returncode, 2)
             self.assertIn("schema", r.stderr)
 
-    # test_cross_sidecar_duplicate_id_fails_closed was DELETED by ADR-150 along
+    # test_cross_sidecar_duplicate_id_fails_closed was DELETED by ADR-151 along
     # with the detector it exercised. Threat F1 was a same-id decoy in a SECOND
     # sidecar winning a last-file-wins merge and masking a weakening of the real,
     # runtime-loaded body. With one corpus there is no second file to host the

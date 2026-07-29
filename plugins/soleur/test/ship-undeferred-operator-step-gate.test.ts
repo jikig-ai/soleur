@@ -213,7 +213,7 @@ describe("TC-6: cross-reference invariant (both bodies now in one corpus)", () =
     expect(ruleLine!).toContain(GATE_ID);
   });
 
-  // ADR-150 dropped the ` → <class>` suffix from every pointer line, so the
+  // ADR-151 dropped the ` → <class>` suffix from every pointer line, so the
   // assertion is now pointer PRESENCE (still the 1:1 contract lint_union
   // enforces) rather than pointer-plus-residency.
   test("AGENTS.md pointer-index contains the new wg-* gate ID", () => {

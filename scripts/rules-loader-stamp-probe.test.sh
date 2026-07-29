@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Arms for scripts/rules-loader-stamp-probe.sh (ADR-150, #7012).
+# Arms for scripts/rules-loader-stamp-probe.sh (ADR-151, #7012).
 #
 # The probe is the operator-facing answer to "did my session actually load the
 # whole rule corpus?", so its NEGATIVE arms are the load-bearing ones: a probe

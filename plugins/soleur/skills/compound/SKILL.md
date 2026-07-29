@@ -253,7 +253,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
    Registry statistics the linter does not compute:
 
-   - `B_TOTAL=$(cat AGENTS.md AGENTS.rules.md 2>/dev/null | wc -c)` — full registry (informational; since ADR-150 `B_TOTAL == B_ALWAYS`)
+   - `B_TOTAL=$(cat AGENTS.md AGENTS.rules.md 2>/dev/null | wc -c)` — full registry (informational; since ADR-151 `B_TOTAL == B_ALWAYS`)
    - Rules: `A=$(grep -hE '^- .*\[id: ' AGENTS.rules.md 2>/dev/null | wc -l)` — corpus BODIES only; an `AGENTS*.md` glob also matches the index (one pointer per body) and doubles the count (#7008)
    - Longest: `L=$(grep -h '^- ' AGENTS.rules.md 2>/dev/null | awk '{print length}' | sort -n | tail -1)` (chars; the linter measures BYTES — it is the authority for the per-rule cap)
    - Constitution: `C=$(grep -c '^- ' knowledge-base/project/constitution.md 2>/dev/null)` (tracked separately; counts every bullet, NOT just rules — a ceiling, not a rule count)
@@ -270,7 +270,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    - If the linter reported **`[WARN]`** — the payload is approaching the ceiling, and this is the tier where remediation still has room to work, so act on it now rather than waiting for the reject:
      - Apply the placement gate (see Route Learning to Definition) and the discoverability litmus (`wg-every-session-error-must-produce-either`) **before adding any new rule**. Already-enforced and domain-scoped insights MUST route to a skill/agent, NOT `AGENTS.rules.md`.
      - Retire an existing rule via [retired-rule-ids.txt](../../../../scripts/retired-rule-ids.txt) (rule IDs are immutable — retire, never renumber or reuse).
-     - *(The demote-to-a-conditional-sidecar rung was REMOVED by ADR-150 — there is no class to demote into. The ladder now offers trim-prose and retire-a-rule only, and per #6794 the retirement rung needs usage evidence the telemetry cannot currently supply.)*
+     - *(The demote-to-a-conditional-sidecar rung was REMOVED by ADR-151 — there is no class to demote into. The ladder now offers trim-prose and retire-a-rule only, and per #6794 the retirement rung needs usage evidence the telemetry cannot currently supply.)*
      - When trimming `**Why:**` lines to fit, preserve per-issue mechanism labels (the text after each `#N`); strip redundant prose only. Correct: `**Why:** #2618 per-command-ack; #2880 non-interactive exec.` Over-trimmed: `**Why:** #2618; #2880.` (loses the per-issue mechanism distinction downstream readers use to map a rule to its triggering incident class).
    - If the linter **exited non-zero** — the commit is already blocked, and the fix depends on *why*:
      - a `[REJECT] B_ALWAYS>…` verdict means the always-loaded payload is over budget → shrink is mandatory before anything else lands; apply the same remediation ladder above, and do not attempt to add a rule first.
@@ -279,7 +279,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    - If `A > 115`: `"[ADVISORY] rule count (A/115) — bytes-first policy per cq-agents-md-why-single-line; count is informational."` <!-- rule-threshold: 115 -->
    - If `C > 300`: `"[WARNING] constitution.md is large (C/300) — consider migrating narrow rules to skill/agent instructions."`
 
-   B_TOTAL is informational only — the per-turn cost is `AGENTS.md`, the per-session-first-turn cost is the always-loaded payload the linter reports. Since ADR-150 there are no conditional sidecars, so `B_TOTAL == B_ALWAYS` and every rule is a first-turn cost on every session.
+   B_TOTAL is informational only — the per-turn cost is `AGENTS.md`, the per-session-first-turn cost is the always-loaded payload the linter reports. Since ADR-151 there are no conditional sidecars, so `B_TOTAL == B_ALWAYS` and every rule is a first-turn cost on every session.
 
    Additionally, if the repo has a rule-metrics aggregator at `./scripts/rule-metrics-aggregate.sh`, run it **for real** — compound is the authoritative local producer of `knowledge-base/project/rule-metrics.json` (ADR-091): it runs on the operator's machine where `.claude/.rule-incidents.jsonl` actually exists, so it, not a fresh-checkout CI cron, generates the metric. Stage the aggregate **only if it changed** (`git diff --quiet -- <OUT> || git add <OUT>`) so it lands in this session's compound commit; then parse `summary.rules_unused_over_8w` for the pruning hint. Only the redaction-safe aggregate (rule_id + counts + a 50-char public prefix) is committed — never the raw `command_snippet` log. On zero rule-carrying lines the aggregator no-ops (issue #6042), leaving the committed file untouched. Do not fail the phase if the aggregator is missing or errors, but do NOT silently swallow a crash — a stderr line tells the reader why the write/hint is absent:
 

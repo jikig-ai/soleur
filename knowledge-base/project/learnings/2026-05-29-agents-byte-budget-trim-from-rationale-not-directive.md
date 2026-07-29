@@ -1,6 +1,6 @@
 # Learning: AGENTS always-loaded byte-budget trims come from rationale bytes, not directive bytes
 
-> **SUPERSEDED IN PART — ADR-150 (2026-07-28).** The demotion lever this file
+> **SUPERSEDED IN PART — ADR-151 (2026-07-28).** The demotion lever this file
 > reasons about no longer exists: the change-class sidecars are merged into one
 > unconditionally-loaded `AGENTS.rules.md`, and `lint-rule-ids.py` no longer pins
 > residency at all (both core-pinning checks were deleted as structurally

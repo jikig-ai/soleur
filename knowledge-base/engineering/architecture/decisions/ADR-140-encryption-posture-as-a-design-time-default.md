@@ -114,7 +114,7 @@ uses for the terraform-drift cron.
 
 | Option | Why rejected |
 |---|---|
-| **An `AGENTS.md` `hr-*` hard rule** | Two independent, measured blockers. **Budget:** `B_ALWAYS = 22900/23000` (≈100 bytes headroom); an index pointer line costs ≈50-60 bytes, leaving ≈40 — the next sibling PR would trip `[REJECT]` and block every commit. **Loader-class infeasibility (decisive):** this rule's trigger surface spans `*.tf` (→ `infra` class → loads `core + rest`) **and** `plugins/*/skills/*/SKILL.md` (→ `.md` → `docs-only` class → loads `core + docs-only`). A rule that must fire on both could only live in the always-loaded sidecar, which had zero room; placing it in the code/infra sidecar would have made it a silent no-op on its own `docs-only` trigger. *(Void since ADR-150 — see Amendment below.)* The insight is domain-scoped (infra/data-design turns only), so it routes into the owning skills and agents (`terraform-architect`, `platform-strategist`, `provision-hetzner`, `provision-cloudflare`) instead. |
+| **An `AGENTS.md` `hr-*` hard rule** | Two independent, measured blockers. **Budget:** `B_ALWAYS = 22900/23000` (≈100 bytes headroom); an index pointer line costs ≈50-60 bytes, leaving ≈40 — the next sibling PR would trip `[REJECT]` and block every commit. **Loader-class infeasibility (decisive):** this rule's trigger surface spans `*.tf` (→ `infra` class → loads `core + rest`) **and** `plugins/*/skills/*/SKILL.md` (→ `.md` → `docs-only` class → loads `core + docs-only`). A rule that must fire on both could only live in the always-loaded sidecar, which had zero room; placing it in the code/infra sidecar would have made it a silent no-op on its own `docs-only` trigger. *(Void since ADR-151 — see Amendment below.)* The insight is domain-scoped (infra/data-design turns only), so it routes into the owning skills and agents (`terraform-architect`, `platform-strategist`, `provision-hetzner`, `provision-cloudflare`) instead. |
 | **An attribute-presence detector (`encrypted = true`)** | Structurally impossible for the stack in use: there is no `hcloud_volume` `encrypted` attribute (`hetznercloud/hcloud` v1.63.0, `.terraform.lock.hcl`; verbatim in `apps/web-platform/infra/workspaces-luks.tf` §SHARP EDGE and `git-data-luks.tf`). Such a detector would either be unpassable for every Hetzner volume, or — worse — satisfiable by a comment, which is the exact false-assurance shape the whole feature exists to prevent. |
 | **A declaration-only gate (design + ledger, no live probe)** | Reproduces #6588 exactly: the legal docs *declared* LUKS while the volume was ext4. A gate that never checks live state cannot catch a claim/reality divergence — only a Layer B live reconcile can. |
 | **Layer B as a bare GitHub Actions cron, with the `prefer-inngest` hook overridden** | The circularity argument for exempting Layer B from Inngest was unsound (see Decision, above) — a plaintext AOF does not crash Inngest. ADR-033's own scope note already names the correct shape (Inngest-dispatch → `workflow_dispatch`-only workflow) for exactly this class of credential-heavy infra cron; using the hook's override hatch here would have been citing a rejection that does not apply. |
@@ -183,12 +183,12 @@ threshold). Residual risk: the parity test validates that the two files *agree*,
 the *correct* id — the arming PR must confirm with a live post-apply check that a real PR reaches
 the `encryption-posture` required check as satisfied.
 
-## Amendment — ADR-150 (2026-07-28)
+## Amendment — ADR-151 (2026-07-28)
 
 The rejected-alternative row "An `AGENTS.md` `hr-*` hard rule" gave two blockers.
 **The one marked decisive is now void.** "Loader-class infeasibility" rested on a
 rule whose trigger surface spans both `*.tf` and `plugins/*/skills/*/SKILL.md`
-being unable to live anywhere that loads for both classes. ADR-150 removed the
+being unable to live anywhere that loads for both classes. ADR-151 removed the
 classes: every rule loads on every session, so a rule with a split trigger surface
 is now perfectly placeable.
 
