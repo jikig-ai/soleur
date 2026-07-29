@@ -184,11 +184,11 @@ on:
           RECREATES an existing web host (both volumes preserved by omission); it needs
           `web_host_key` + `confirm=REPLACE-<key>`, and it REFUSES web-1.
           git-data-host-create BIRTHS the never-provisioned git-data store; additive-only,
-          needs `confirm=BIRTH-GIT-DATA`. The birth-readiness interlock is RELEASED as of
-          #6982 (the host now has an off-host emitter), but DISPATCH IS STILL HELD: the
-          runbook's DO-NOT-DISPATCH banner stands until the rung-2 boot rehearsal evidence
-          lands under #7025. Read knowledge-base/engineering/operations/runbooks/
-          git-data-birth.md before choosing this.
+          needs `confirm=BIRTH-GIT-DATA`. HELD BY TWO MECHANICAL GATES: the sentinel
+          interlock released as of #6982 (the host now has an off-host emitter), but the
+          rung-2 rehearsal interlock REFUSES until committed boot evidence for the current
+          template lands under #7025. A dispatch today exits 1 before planning. Read
+          knowledge-base/engineering/operations/runbooks/git-data-birth.md first.
         required: false
         default: manual-rerun
         type: choice

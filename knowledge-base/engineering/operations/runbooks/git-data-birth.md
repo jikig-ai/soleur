@@ -2,12 +2,21 @@
 
 > ## ⛔ DO NOT DISPATCH THIS YET
 >
-> **The MECHANICAL hold is released; this banner is now the only thing holding the route.**
-> Read that twice before dispatching.
+> **The route is held MECHANICALLY, by two gates. This banner is not the only thing
+> stopping you** — but do not dispatch anyway, because the thing the gates are waiting for
+> has not happened.
 >
-> #6982 shipped the off-host emitter, so `git-data-birth-readiness-gate.sh` no longer
-> refuses — the sentinel it looks for (`${sentry_dsn}` in non-comment template text) is
-> present. A dispatch today would **plan and apply**. Nothing stops you but this paragraph.
+> #6982 shipped the off-host emitter, so `git_data_birth_readiness_gate` no longer refuses —
+> the sentinel it looks for (`${sentry_dsn}` in non-comment template text) is present. That
+> released the FIRST gate, and for a while this banner really was the only hold, which is the
+> posture ADR-149's own Alternatives table rejects.
+>
+> So #6982 also added a SECOND gate: `git_data_rung2_rehearsal_gate` runs in the same
+> dispatch job, before any provider is contacted, and refuses unless
+> `apps/web-platform/infra/git-data-rung2-boot-evidence.env` exists and attests a rung-2 boot
+> rehearsal **of the current template** (the evidence carries a sha256 of
+> `cloud-init-git-data.yml`, so it self-invalidates the moment that file is edited again).
+> That file does not exist. **A dispatch today exits 1 before planning anything.**
 >
 > **RELEASE CONDITION — clear this banner only when the rehearsal evidence exists.**
 > Every gate #6982 ships is STATIC, and the failure class it defends against
