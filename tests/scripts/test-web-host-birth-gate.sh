@@ -18,6 +18,12 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${DIR}/../.." && pwd)"
 GATE="${ROOT}/tests/scripts/lib/web-host-birth-gate.sh"
+# The mutation arms below source a COPY of the gate from $TMP. Since #6997 the gate
+# resolves the shared preamble relative to ${BASH_SOURCE[0]}, which for that copy is $TMP —
+# where plan-gate-preamble.sh does not exist. Pre-sourcing the real preamble in the same
+# shell satisfies the gate's `declare -F` re-source guard, so the copy finds the functions
+# already defined. Same shape as test-git-data-host-birth-gate.sh.
+PREAMBLE="${ROOT}/tests/scripts/lib/plan-gate-preamble.sh"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -343,7 +349,7 @@ mutate_and_check() {
     return
   fi
   # shellcheck source=/dev/null
-  out="$(bash -c "source '$mutated'; web_host_birth_gate '$plan' '$key'" 2>&1)"; rc=$?
+  out="$(bash -c "source '$PREAMBLE'; source '$mutated'; web_host_birth_gate '$plan' '$key'" 2>&1)"; rc=$?
   if [[ "$rc" -eq 0 ]]; then
     pass "$label (arm is load-bearing — neutering it lets the bad plan through)"
   else
@@ -372,7 +378,7 @@ mutate_layered() {
     fail "$label — the unmutated gate did not reject this plan via the '$own' arm; the fixture does not exercise it." "n/a" "$base"
     return
   fi
-  out="$(bash -c "source '$mutated'; web_host_birth_gate '$plan' '$key'" 2>&1)"; rc=$?
+  out="$(bash -c "source '$PREAMBLE'; source '$mutated'; web_host_birth_gate '$plan' '$key'" 2>&1)"; rc=$?
   if [[ "$rc" -eq 1 && "$out" != *"$own"* && "$out" == *"$fallback"* ]]; then
     pass "$label (layered — owns the rejection; neutering it hands off to '$fallback', never to PASS)"
   else
@@ -416,8 +422,23 @@ mutate_and_check "out-of-scope guard" 's/if \[\[ "\$out_of_scope" -ne 0 \]\]; th
 mutate_and_check "required-creates guard" 's/if \[\[ "\$required_creates" -ne 1 \]\]; then/if false; then/' \
   "$TMP/no-nic.json" "web-2"
 
-mutate_and_check "actions-shape guard" 's/^    echo "web_host_birth_gate: ABORT — unclassifiable.*/    return 0/' \
-  "$TMP/noactions.json" "web-2"
+# THE CLASSIFIABILITY ARM MOVED TO THE SHARED PREAMBLE (#6997), so this is no longer a
+# SOLE-GUARD mutation of this gate's own source — the guard is not in this file any more.
+# It is now proved from the preamble's side, in test-plan-gate-preamble.sh, which owns both
+# the assertion and its four non-vacuity probes.
+#
+# What is asserted HERE is the property that file cannot see: that this gate INVOKES the
+# preamble rather than merely sourcing it. Neutering the call must leave the plan rejected
+# (the numeric assert below still catches a no-actions plan) while the PREAMBLE-DISTINCTIVE
+# signature disappears.
+#
+# THE ANCHOR IS NOT THE GATE NAME. Every abort this gate emits — including its own — is
+# prefixed "web_host_birth_gate:", so a gate-name anchor cannot tell a preamble abort from a
+# gate abort, and an arm built on it would be a redness detector rather than a binding.
+mutate_layered "classifiability call (invoked, not merely sourced)" \
+  's/^  plan_gate_assert_classifiable .*/  :/' \
+  "$TMP/noactions.json" "web-2" \
+  "unclassifiable plan entry" "counter parse failed"
 
 # LAYERED: a create of web-1 is both an identity mismatch and out of scope. The
 # identity arm runs first and owns the message; the allow-set is the backstop.
@@ -433,6 +454,33 @@ mutate_layered "cardinality guard" 's/if \[\[ "\$creates" -ne 1 \]\]; then/if fa
 # future widening of the allow-set, which would silence the backstop but not it.
 mutate_layered "reboot guard" 's/if \[\[ "\$reboot_updates" -ne 0 \]\]; then/if false; then/' \
   "$TMP/reboot.json" "web-2" "reboot-forcing" "out-of-scope"
+
+
+
+
+# ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
+# non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
+# the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
+# the CALLS to those helpers silences all of them at once while the suite still exits 0,
+# because the only merge gate is the `fails -eq 0` expression below and CI reads only the
+# exit code. Measured: removing one arm block took a sibling suite from 13 assertions to 8,
+# still exit 0.
+#
+# DELIBERATELY SELF-CONTAINED — bash builtins and this suite's own counters only, no
+# harness function. The first version called a helper from gate-suite-harness.sh and the
+# harness `source` lived INSIDE the arm block, so deleting the arms also undefined the
+# floor: it exited 127 under `set -uo pipefail`, recorded nothing, and the suite passed. A
+# floor that depends on the thing it guards is not a floor.
+#
+# A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
+# suite on every legitimately-added assertion and train people to bump it unread.
+_ran=$((passes + fails))
+if [[ "$_ran" -lt 31 ]]; then
+  fails=$((fails + 1))
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 31. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+else
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 31)\n' "$_ran"
+fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

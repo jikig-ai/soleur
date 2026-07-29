@@ -10,6 +10,14 @@
 # CI-only (cannot run here): CodeQL, CLA, e2e Playwright container, tenant-integration
 # (dev Supabase), dependency-review, skill-security-scan, creds-gated propagation probes.
 #
+# NOT covered by any phase below: infra-validation.yml, whose suites live in
+# apps/web-platform/infra/ and are reachable only via that directory's own
+# run-registered-suites.sh. It is a required check and it is runnable locally, so its
+# absence here is a real gap, not a CI-only exclusion — when the diff touches
+# apps/web-platform/infra/, run it alongside this gate (test-all.sh announces this in its
+# preamble). Omitting it from the CI-only list above would have implied coverage this
+# gate does not have (#7014).
+#
 # Usage:
 #   bash plugins/soleur/scripts/grok-pre-push-gate.sh
 #   bash plugins/soleur/scripts/grok-pre-push-gate.sh --skip-build   # skip next build

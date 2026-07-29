@@ -59,14 +59,36 @@
 # Usage:  source tests/scripts/lib/workspaces-luks-cutover-gate.sh
 #         workspaces_luks_cutover_gate <plan-json-file>   # 0=PASS, 1=ABORT
 
+# THE FAIL-CLOSED PREAMBLE (#6997). A gate that authorises destructive production
+# infrastructure must never let "I could not check" read as "it is fine". These three
+# assertions refuse a plan document the gate cannot READ, cannot CLASSIFY, or whose
+# counters did not evaluate — the shapes that otherwise score zero-of-everything and PASS.
+#
+# The `declare -F` guard makes the source idempotent: the workflow step may have sourced
+# the preamble already, in either order.
+# shellcheck source=tests/scripts/lib/plan-gate-preamble.sh
+if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
+  _WLCG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=/dev/null
+  source "${_WLCG_DIR}/plan-gate-preamble.sh"
+fi
+
 workspaces_luks_cutover_gate() {
   local plan_json="$1"
-  local counts vc ac sc ovt oat wst lvd lpt rd oos v
+  local counts vc ac sc ovt oat wst lvd lpt rd oos
 
-  if [[ ! -f "$plan_json" ]]; then
-    echo "workspaces_luks_cutover_gate: plan JSON not found: ${plan_json}"
-    return 1
-  fi
+  # THE ASSERTS LIVE INSIDE THE FUNCTION, AS ITS FIRST STATEMENTS, because they consume
+  # $plan_json — a FUNCTION PARAMETER that does not exist at file scope. (Not, as an
+  # earlier revision claimed, because a file-scope failure would fail open: `set -e` is
+  # armed at every gate source site in apply-web-platform-infra.yml, so a file-scope
+  # failure fails CLOSED. Getting the right answer from the wrong mechanism is still a
+  # defect when the mechanism ends up in an ADR.)
+  #
+  # `|| return 1` also catches a 127 undefined-function status, so a preamble that failed
+  # to source aborts the gate rather than silently skipping the check.
+  plan_gate_assert_readable     "workspaces_luks_cutover_gate" "$plan_json" || return 1
+  plan_gate_assert_classifiable "workspaces_luks_cutover_gate" "$plan_json" || return 1
+
   # Read from the STRUCTURED plan JSON (terraform show -json), never stderr.
   # EXACT-EQUALITY membership via IN(.address; allow[]) — NOT `inside`/`contains`
   # (substring matching would false-match similar addresses). Verified on jq 1.8.x.
@@ -183,14 +205,11 @@ workspaces_luks_cutover_gate() {
   rd=$(echo "$counts" | jq -r '.resource_deletes')
   oos=$(echo "$counts" | jq -r '.out_of_scope')
 
-  # Parse-validate every counter. A jq null/empty would evaluate false in the
-  # arithmetic below and could silently mis-decide; fail LOUD instead.
-  for v in "$vc" "$ac" "$sc" "$ovt" "$oat" "$wst" "$lvd" "$lpt" "$rd" "$oos"; do
-    if [[ ! "$v" =~ ^[0-9]+$ ]]; then
-      echo "workspaces_luks_cutover_gate: counter parse failed (luks_volume_created='${vc}' luks_attachment_created='${ac}' luks_secret_created='${sc}' old_volume_touched='${ovt}' old_attachment_touched='${oat}' web1_server_touched='${wst}' luks_volume_destroyed='${lvd}' luks_passphrase_touched='${lpt}' resource_deletes='${rd}' out_of_scope='${oos}')"
-      return 1
-    fi
-  done
+  # Every counter is a non-negative integer BEFORE any arithmetic compares one.
+  # A counter that did not evaluate is the empty string, and [[ "" -gt 0 ]] is FALSE
+  # under bash coercion — so an uncomputed counter silently satisfies every threshold.
+  # The shared helper names WHICH counter failed rather than reporting them all.
+  plan_gate_assert_numeric "workspaces_luks_cutover_gate" "luks_volume_created=${vc}" "luks_attachment_created=${ac}" "luks_secret_created=${sc}" "old_volume_touched=${ovt}" "old_attachment_touched=${oat}" "web1_server_touched=${wst}" "luks_volume_destroyed=${lvd}" "luks_passphrase_touched=${lpt}" "resource_deletes=${rd}" "out_of_scope=${oos}" || return 1
 
   echo "luks_volume_created=${vc} luks_attachment_created=${ac} luks_secret_created=${sc} old_volume_touched=${ovt} old_attachment_touched=${oat} web1_server_touched=${wst} luks_volume_destroyed=${lvd} luks_passphrase_touched=${lpt} resource_deletes=${rd} out_of_scope=${oos}"
   if [[ "$vc" -ge 1 && "$ac" -ge 1 && "$sc" -ge 1 && "$ovt" -eq 0 && "$oat" -eq 0 && "$wst" -eq 0 && "$lvd" -eq 0 && "$lpt" -eq 0 && "$rd" -eq 0 && "$oos" -eq 0 ]]; then

@@ -3,9 +3,14 @@
 #
 # WHY THIS FILE EXISTS
 # ====================
-# `actionlint` runs in ZERO CI workflows (it is a local-only tool here), so there
-# is no CI gate a new workflow YAML must pass. A checked-in shape guard under
-# apps/*/infra/** is the enforceable pattern.
+# There is no CI gate that checks a new workflow YAML's SEMANTICS, so a checked-in shape
+# guard under apps/*/infra/** is the enforceable pattern.
+#
+# (#7002 note: `actionlint` now runs in CI, as a hang guard in ci.yml, where it asserts
+# only that the linter TERMINATES — the 93 pre-existing findings are deliberately
+# tolerated, tracked in #7042. It checks workflow syntax and shell, never this gate's
+# subject matter, so it does not subsume this file. The earlier wording here, "actionlint
+# runs in ZERO CI workflows (it is a local-only tool here)", is no longer true.)
 #
 # It is wired into .github/workflows/infra-validation.yml as an EXPLICIT step.
 # That workflow hand-enumerates ~50 `run: bash ...test.sh` steps and has no

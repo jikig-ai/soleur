@@ -40,10 +40,12 @@ set -uo pipefail
 # regression and is really a full RAM disk. It reproduces with the runner completely
 # idle, so it is capacity, not contention.
 #
-# test-all.sh already defaults this, but its own epilogue points here — the ONE runner
-# it structurally cannot cover — and that pointer used to land on a command still
-# requiring a manual `TMPDIR=/var/tmp` prefix. Defaulting it there and not here left
-# the footgun exactly where the hand-off sends you; #6977 removed it in both halves.
+# test-all.sh already defaults this, but it points here — the ONE runner it structurally
+# cannot cover — and that pointer used to land on a command still requiring a manual
+# `TMPDIR=/var/tmp` prefix. Defaulting it there and not here left the footgun exactly
+# where the hand-off sends you; #6977 removed it in both halves. (#7014 moved that
+# pointer to test-all.sh's PREAMBLE, so it now arrives before the run is paid for; a
+# one-line restatement stays in the epilogue for `tail` readers.)
 #
 # Respects an explicit caller value — CI or an operator pinning TMPDIR keeps it.
 export TMPDIR="${TMPDIR:-/var/tmp}"

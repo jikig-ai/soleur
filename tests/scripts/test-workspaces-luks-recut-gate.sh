@@ -138,6 +138,76 @@ if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fai
 write_plan "$(rc_obj 'hcloud_volume.workspaces_luks' '"create"'),$(rc_obj 'hcloud_volume_attachment.workspaces_luks' '"create"'),${PW_NOOP},${SECRET_NOOP}"
 if workspaces_luks_recut_gate "$TMP/plan.json" >/dev/null; then pass; else fail "Test 18: recovery bare create (no expected id) should PASS"; fi
 
+
+# ── #6997: the shared fail-closed preamble is INVOKED, not merely sourced ─────────
+#
+# A1/A2 pin the two degraded shapes the retrofit closes. Both PASSED this gate's
+# predecessor: an entry with "actions": [] is invisible to `any(...)` and to
+# `index("delete")` simultaneously, and a scalar `.change` makes a negative-search
+# classifiability check read a jq ERROR as "condition false".
+#
+# A4 is the arm that nothing in test-plan-gate-preamble.sh can replace: it proves THIS
+# gate CALLS the preamble. Neutering the call must leave the plan REJECTED (so the
+# retrofit never opened a door) while the preamble-distinctive signature DISAPPEARS (so
+# the rejection was really the preamble's).
+#
+# THE ANCHOR IS NOT THE GATE NAME. Every abort this gate emits — including its own
+# pre-existing ones — is prefixed with the gate name, so a name anchor cannot tell a
+# preamble abort from a gate abort and the arm would be a redness detector, not a
+# binding. `unclassifiable plan entry` is text only the preamble can produce.
+#
+# A3 (the happy plan still PASSES) is NOT duplicated here: this suite's existing PASS
+# arms already are it, and an always-aborting gate would redden them.
+_PG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GATE="${_PG_DIR}/lib/workspaces-luks-recut-gate.sh"
+PREAMBLE="${_PG_DIR}/lib/plan-gate-preamble.sh"
+# shellcheck source=tests/scripts/lib/gate-suite-harness.sh
+source "${_PG_DIR}/lib/gate-suite-harness.sh"
+
+mk_plan "$TMP/pg-d5.json" "[$(rc_empty_actions 'hcloud_volume.workspaces' 'hcloud_volume')]"
+mk_plan "$TMP/pg-d6.json" "[$(rc_scalar_change 'hcloud_volume.workspaces' 'hcloud_volume')]"
+
+gate_check "A1 (D5): an EMPTY actions array hiding a destroy => fail-closed ABORT" \
+  workspaces_luks_recut_gate 1 "unclassifiable plan entry" "$TMP/pg-d5.json"
+gate_check "A1 (D5): the ABORT is the preamble's and names this gate" \
+  workspaces_luks_recut_gate 1 "workspaces_luks_recut_gate: ABORT — unclassifiable" "$TMP/pg-d5.json"
+gate_check "A2 (D6): a SCALAR .change => fail-closed ABORT" \
+  workspaces_luks_recut_gate 1 "unclassifiable plan entry" "$TMP/pg-d6.json"
+gate_check "A2 (D6): the ABORT names the offending address" \
+  workspaces_luks_recut_gate 1 "hcloud_volume.workspaces" "$TMP/pg-d6.json"
+
+gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
+  's/^  plan_gate_assert_classifiable .*/  :/' \
+  "unclassifiable plan entry" "plan is NOT the exact scoped" \
+  workspaces_luks_recut_gate "$TMP/pg-d5.json"
+
+
+
+
+# ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
+# non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
+# the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
+# the CALLS to those helpers silences all of them at once while the suite still exits 0,
+# because the only merge gate is the `fails -eq 0` expression below and CI reads only the
+# exit code. Measured: removing one arm block took a sibling suite from 13 assertions to 8,
+# still exit 0.
+#
+# DELIBERATELY SELF-CONTAINED — bash builtins and this suite's own counters only, no
+# harness function. The first version called a helper from gate-suite-harness.sh and the
+# harness `source` lived INSIDE the arm block, so deleting the arms also undefined the
+# floor: it exited 127 under `set -uo pipefail`, recorded nothing, and the suite passed. A
+# floor that depends on the thing it guards is not a floor.
+#
+# A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
+# suite on every legitimately-added assertion and train people to bump it unread.
+_ran=$((passes + fails))
+if [[ "$_ran" -lt 23 ]]; then
+  fails=$((fails + 1))
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 23. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+else
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 23)\n' "$_ran"
+fi
+
 echo ""
 echo "workspaces-luks-recut-gate: ${passes} passed, ${fails} failed"
 [[ "$fails" -eq 0 ]]

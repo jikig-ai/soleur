@@ -92,14 +92,36 @@
 #         registry_luks_recut_gate <plan-json> <expected_volume_id> [probe_result]
 #         # 0=PASS, 1=ABORT
 
+# THE FAIL-CLOSED PREAMBLE (#6997). A gate that authorises destructive production
+# infrastructure must never let "I could not check" read as "it is fine". These three
+# assertions refuse a plan document the gate cannot READ, cannot CLASSIFY, or whose
+# counters did not evaluate — the shapes that otherwise score zero-of-everything and PASS.
+#
+# The `declare -F` guard makes the source idempotent: the workflow step may have sourced
+# the preamble already, in either order.
+# shellcheck source=tests/scripts/lib/plan-gate-preamble.sh
+if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
+  _RLRG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=/dev/null
+  source "${_RLRG_DIR}/plan-gate-preamble.sh"
+fi
+
 registry_luks_recut_gate() {
   local plan_json="${1-}" expected="${2-}" probe="${3-}"
-  local counts arm oos logsdel luks vmis srv vol att nic fw prog v
+  local counts arm oos logsdel luks vmis srv vol att nic fw prog
 
-  if [[ ! -f "$plan_json" ]]; then
-    echo "registry_luks_recut_gate: plan JSON not found: ${plan_json}"
-    return 1
-  fi
+  # THE ASSERTS LIVE INSIDE THE FUNCTION, AS ITS FIRST STATEMENTS, because they consume
+  # $plan_json — a FUNCTION PARAMETER that does not exist at file scope. (Not, as an
+  # earlier revision claimed, because a file-scope failure would fail open: `set -e` is
+  # armed at every gate source site in apply-web-platform-infra.yml, so a file-scope
+  # failure fails CLOSED. Getting the right answer from the wrong mechanism is still a
+  # defect when the mechanism ends up in an ADR.)
+  #
+  # `|| return 1` also catches a 127 undefined-function status, so a preamble that failed
+  # to source aborts the gate rather than silently skipping the check.
+  plan_gate_assert_readable     "registry_luks_recut_gate" "$plan_json" || return 1
+  plan_gate_assert_classifiable "registry_luks_recut_gate" "$plan_json" || return 1
+
 
   # FAIL-CLOSED ON OUR OWN ARGUMENT. The sibling workspaces-luks-recut gate treats an empty
   # $expected as "skip the id-pin"; inheriting that idiom here would silently disarm the one
@@ -286,14 +308,16 @@ registry_luks_recut_gate() {
   fw=$(echo "$counts" | jq -r '.firewall_ok')
   prog=$(echo "$counts" | jq -r '.completion_progress')
 
-  # Parse-validate EVERY counter. A jq null/empty would evaluate false in the arithmetic below
-  # and could silently mis-decide; fail LOUD instead.
-  for v in "$oos" "$logsdel" "$luks" "$vmis" "$srv" "$vol" "$att" "$nic" "$fw" "$prog"; do
-    if [[ ! "$v" =~ ^[0-9]+$ ]]; then
-      echo "registry_luks_recut_gate: counter parse failed (arm='${arm}' out_of_scope='${oos}' logs_secret_destroyed='${logsdel}' luks_key_touched='${luks}' volume_id_mismatch='${vmis}' server_provisioned='${srv}' volume_provisioned='${vol}' attachment_created='${att}' nic_created='${nic}' firewall_ok='${fw}' completion_progress='${prog}')"
-      return 1
-    fi
-  done
+  # Every counter is a non-negative integer BEFORE any arithmetic compares one.
+  # A counter that did not evaluate is the empty string, and [[ "" -gt 0 ]] is FALSE
+  # under bash coercion — so an uncomputed counter silently satisfies every threshold.
+  # The shared helper names WHICH counter failed rather than reporting them all.
+  #
+  # `arm` is DELIBERATELY ABSENT. It is a STRING discriminant ("recut" / "resume" /
+  # "preserve-store"), not a counter — it appears in the abort message for diagnostic
+  # context only, and the pre-#6997 hand-rolled loop never validated it either. Asserting
+  # it numeric would reject every well-formed plan.
+  plan_gate_assert_numeric "registry_luks_recut_gate" "out_of_scope=${oos}" "logs_secret_destroyed=${logsdel}" "luks_key_touched=${luks}" "volume_id_mismatch=${vmis}" "server_provisioned=${srv}" "volume_provisioned=${vol}" "attachment_created=${att}" "nic_created=${nic}" "firewall_ok=${fw}" "completion_progress=${prog}" || return 1
 
   # Echo every counter BEFORE the verdict — this line is the machine-readable ABORT reason the
   # workflow's ::error:: and the operator runbook both key on.
