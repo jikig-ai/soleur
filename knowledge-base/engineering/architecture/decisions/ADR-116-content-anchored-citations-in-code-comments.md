@@ -52,8 +52,8 @@ gate is not yet built.
 
 1. **Code comments cite `<file> › <symbol>()`, never `<file>:NNN`** — generalizing ADR-076
    item 3 from the domain-model register to all code. Carried by the rule
-   `cq-cite-content-anchor-not-line-number` (`AGENTS.rest.md`, injected on every code/infra
-   session by the class-aware loader — which is exactly the session class that writes code
+   `cq-cite-content-anchor-not-line-number` (`AGENTS.rules.md`, injected on every
+   session by the SessionStart rules loader — unconditionally, on every session, including the ones that write code
    comments).
 
 2. **Three carve-outs, all load-bearing:**
@@ -193,3 +193,10 @@ off `plugin`, not `engine`), is included in `views.c4` as an element only, has n
 `spec.c4`, and whose description — *"Guards tool calls (blocks commits to main, rm -rf,
 etc.)"* — already absorbs a future guard. No ownership or access relationship changes, and no
 element description is falsified.
+
+## Amendment — ADR-151 (2026-07-28)
+
+The reach argument above was stated in loader-class terms ("injected on every
+code/infra session"). Under ADR-151 the rule corpus is unconditional, so the
+rule's reach is simply **every session** — strictly broader than what this ADR
+claimed, so the Decision stands unchanged and is now better served.

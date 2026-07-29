@@ -8,7 +8,7 @@
 # `infra/github/` root:
 #   - Auth: GitHub App credentials (GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY)
 #     from Doppler `prd_terraform`. Migrated from GH_RULESET_PAT in #4384 per
-#     AGENTS.core.md hr-github-app-auth-not-pat.
+#     AGENTS.rules.md hr-github-app-auth-not-pat.
 #   - First-apply import: if state does not yet contain
 #     github_repository_ruleset.ci_required, the workflow imports it before
 #     plan. Idempotent — subsequent runs no-op the import.
@@ -115,7 +115,7 @@ jobs:
         run: |
           set -euo pipefail
           # #4384 — migrated from GH_RULESET_PAT to App-installation auth per
-          # AGENTS.core.md hr-github-app-auth-not-pat. App credentials are
+          # AGENTS.rules.md hr-github-app-auth-not-pat. App credentials are
           # mirrored from prd to prd_terraform by apps/web-platform/infra/'s
           # doppler_secret resources (#4150), so no separate mint step exists.
           APP_ID=$(doppler secrets get GITHUB_APP_ID --plain 2>/dev/null) || {

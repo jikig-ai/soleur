@@ -19,7 +19,7 @@ Two prior gates resolved this by argument rather than by code:
 
 | Gate | Guarded surface | Recorded argument |
 |---|---|---|
-| `rule-body-lint` (#6103 / ADR-092) | `AGENTS.{core,docs,rest}.md` | outside the action's `ALLOWED_PATHS` |
+| `rule-body-lint` (#6103 / ADR-092) | `AGENTS.rules.md` | outside the action's `ALLOWED_PATHS` |
 | `sentry-destroy-required` (#6589 / ADR-031 amendment) | `apps/web-platform/infra/sentry/**` | outside the action's `ALLOWED_PATHS` |
 
 Both are labelled FABRICATED-NOT-EARNED and are sound because the fabricated assertion is

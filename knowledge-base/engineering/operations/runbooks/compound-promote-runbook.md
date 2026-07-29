@@ -16,7 +16,7 @@ reads `knowledge-base/project/learnings/`, runs a deterministic GDPR +
 retired-rule pre-pass over the corpus, then calls the Anthropic API to cluster
 learnings by problem/root-cause. When a cluster reaches >=5 source learnings
 the loop opens up to **2 draft PRs per week**, each proposing a skill-instruction
-edit or an `AGENTS.core.md` rule addition. The loop **never auto-merges** —
+edit or an `AGENTS.rules.md` rule addition. The loop **never auto-merges** —
 an operator confirms each proposal via normal PR review.
 
 **Upstream weakness signal (#6037):** the weekly read-only weakness-miner
@@ -86,14 +86,14 @@ clicking **Ready for review**:
    the hash locally on the listed sources.
 2. **Tier placement.** `tier: skill` → diff edits a single
    `plugins/soleur/skills/*/SKILL.md` (domain-scoped). `tier: agents-core` →
-   diff edits `AGENTS.core.md` AND the new rule is genuinely cross-cutting
+   diff edits `AGENTS.rules.md` AND the new rule is genuinely cross-cutting
    (silent failure or blast radius, no single-file trigger). Reject anything
    that should be hook-enforced or scanner-enforced — those don't belong in
    the registry per `cq-agents-md-tier-gate`.
 3. **Byte budget.** For `agents-core` PRs, verify the post-merge always-loaded
    payload stays under the thresholds defined in
    `scripts/lint-agents-rule-budget.py` (the authority: warn at
-   `B_ALWAYS >= 20000`, reject above `23000`), which
+   `B_ALWAYS >= 44000`, reject above `46000`), which
    `cq-agents-md-why-single-line` restates. Measure by running the linter
    rather than `wc -c` — the thresholds are defined over frontmatter-stripped
    bytes, and a raw `wc -c` overstates the payload by the frontmatter size.
@@ -118,7 +118,7 @@ counts open PRs only, so a closed proposal won't block next week's run.
 If a merged promotion turns out to be a false positive, demote it via the
 standard rule-retirement path: append the rule's ID to
 `scripts/retired-rule-ids.txt` with format `<id> | <YYYY-MM-DD> | <PR> | <breadcrumb>`.
-The next `rule-prune` cron tick removes the rule from `AGENTS.core.md` and
+The next `rule-prune` cron tick removes the rule from `AGENTS.rules.md` and
 the linter rejects any future reintroduction of the retired ID.
 
 ## Sharp edges
@@ -142,14 +142,14 @@ the linter rejects any future reintroduction of the retired ID.
   second line of defense.
 - **Always-loaded payload is already tight.** Do not trust a figure quoted
   here — run `python3 scripts/lint-agents-rule-budget.py AGENTS.md
-  AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>&1` for the current number
-  and tier. As of 2026-07-20 it reports `B_ALWAYS=22900` in the WARN tier,
-  roughly two dozen bytes of raw headroom below the reject ceiling. Expect essentially
-  every `agents-core` proposal to be refused until a trim lands — that is the
-  budget genuinely being exhausted, not a stale constant. Retire stale rules
-  first to create headroom.
-- **DPIA candidate.** Art. 35 DPIA assessment is deferred until 4 weeks of
-  operation generate empirical data. Tracked in `compliance-posture.md`.
+  AGENTS.rules.md 2>&1` for the current number
+  and tier. Do not quote a figure here — run the command. The previously-frozen number in this
+  spot (`B_ALWAYS=22900`, WARN tier, "expect essentially every agents-core proposal to be
+  refused") went stale at ADR-151 and inverted the operating conclusion: the corpus
+  collapse re-scoped `B_ALWAYS` to what every session actually loads and re-baselined the
+  thresholds, so the tree now sits in the `[OK]` tier with kilobytes of headroom and
+  in-budget proposals should be ACCEPTED, not refused. That is exactly the failure this
+  runbook warns about two paragraphs above.
 
 ## Related artifacts
 

@@ -18,6 +18,16 @@ severity: high
 
 # AGENTS.md trim — loader-class fit and `[skill-enforced:]` tag-suffix dedup
 
+> **SUPERSEDED IN PART — ADR-151 (2026-07-28).** The change-class sidecars
+> (`AGENTS.core.md` / `AGENTS.docs.md` / `AGENTS.rest.md`) and the loader's
+> class selection no longer exist: the whole rule corpus is injected on every
+> session from `AGENTS.rules.md`. **Do not follow any demotion / class-fit
+> instruction below** — there is no class to demote into, `lint-rule-ids.py`
+> no longer pins residency, and a grep for `→ core` / `→ rest` returns zero
+> forever. The reasoning about *why* a rule must load on its own trigger is
+> what survives, and it is now structural rather than something a planner
+> verifies by hand.
+
 ## Problem
 
 Two adjacent failure modes surfaced when trimming AGENTS.md to fit the 22 k always-loaded budget:

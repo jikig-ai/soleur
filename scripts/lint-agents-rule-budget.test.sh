@@ -3,15 +3,16 @@
 #
 # Issue: #3684. Covers Phase 1 of the rule-budget pre-commit linter plan
 # (knowledge-base/project/plans/2026-05-12-chore-agents-md-pre-commit-rule-budget-plan.md):
-#   T1: current tree -> WARN tier fires (B_ALWAYS >= 20000), exit 0
-#   T2: AGENTS.core.md grown past 23 k -> exit 1 + `B_ALWAYS=... > 23000`
+#   T1: current tree lints clean, exit 0 (tier depends on the live corpus size;
+#       assert the EXIT CODE, never a tier — the tier moves as rules land)
+#   T2: AGENTS.rules.md grown past 46 k -> exit 1 + `B_ALWAYS=... > 46000`
 #   T3: one rule body > 600 B -> exit 1 + `exceeds 600 B`
-#   T4: AGENTS.core.md missing on disk -> exit 2 + `AGENTS.core.md missing`
-#   T5: per-rule cap fires across all four sidecars (not just AGENTS.core.md)
+#   T4: AGENTS.rules.md missing on disk -> exit 2 + `AGENTS.rules.md missing`
+#   T5: per-rule cap fires across the index and the corpus (not just AGENTS.rules.md)
 #   T6: pointer index lines short by construction -> never cap-rejected
 #
 # Isolation: each case builds a throwaway tree via `mktemp -d`, populates a
-# minimal AGENTS.{md,core.md,docs.md,rest.md} pair, and runs the linter.
+# minimal AGENTS.{md,rules.md} pair, and runs the linter.
 
 set -euo pipefail
 
@@ -78,26 +79,22 @@ t1a_current_tree_smoke() {
   set +e
   out=$(python3 "$SUT" \
     "$REPO_ROOT/AGENTS.md" \
-    "$REPO_ROOT/AGENTS.core.md" \
-    "$REPO_ROOT/AGENTS.docs.md" \
-    "$REPO_ROOT/AGENTS.rest.md" 2>&1)
+    "$REPO_ROOT/AGENTS.rules.md" 2>&1)
   rc=$?
   set -e
   assert_exit "T1a current tree exit 0" "0" "$rc"
   assert_contains "T1a B_ALWAYS reported" "B_ALWAYS=" "$out"
 }
 
-# Case T1b: WARN tier fires at synthetic ~20100 B AGENTS.core.md.
+# Case T1b: WARN tier fires at synthetic ~44100 B AGENTS.rules.md.
 # Padding lives in a comment block OUTSIDE any SECTIONS heading so it
 # does NOT trip the per-rule 600 B cap (which only counts `^- ` lines
 # under `## <SECTIONS>` headings).
 t1b_warn_synth() {
   local tmp; tmp=$(mktemp -d)
   make_index "$tmp/AGENTS.md"
-  : > "$tmp/AGENTS.docs.md"
-  : > "$tmp/AGENTS.rest.md"
   local index_size; index_size=$(wc -c < "$tmp/AGENTS.md")
-  local target=$((20100 - index_size))
+  local target=$((44100 - index_size))
   {
     echo "# AGENTS Core-class"
     echo
@@ -108,15 +105,13 @@ t1b_warn_synth() {
     echo "<!-- pad:"
     head -c "$target" /dev/zero | tr '\0' 'x'
     echo " -->"
-  } > "$tmp/AGENTS.core.md"
+  } > "$tmp/AGENTS.rules.md"
 
   local out rc
   set +e
   out=$(python3 "$SUT" \
     "$tmp/AGENTS.md" \
-    "$tmp/AGENTS.core.md" \
-    "$tmp/AGENTS.docs.md" \
-    "$tmp/AGENTS.rest.md" 2>&1)
+    "$tmp/AGENTS.rules.md" 2>&1)
   rc=$?
   set -e
   assert_exit "T1b WARN-synth exit 0" "0" "$rc"
@@ -124,30 +119,26 @@ t1b_warn_synth() {
   rm -rf "$tmp"
 }
 
-# Case T2: B_ALWAYS > 23000 -> reject.
+# Case T2: B_ALWAYS > 46000 -> reject.
 t2_byte_budget_reject() {
   local tmp; tmp=$(mktemp -d)
   make_index "$tmp/AGENTS.md"
-  make_core_minimal "$tmp/AGENTS.core.md"
-  : > "$tmp/AGENTS.docs.md"
-  : > "$tmp/AGENTS.rest.md"
-  # Pad AGENTS.core.md to drive B_ALWAYS past 23000. Padding goes in a comment
+  make_core_minimal "$tmp/AGENTS.rules.md"
+  # Pad AGENTS.rules.md to drive B_ALWAYS past 46000. Padding goes in a comment
   # block so the per-rule check does not pre-empt with an "exceeds 600 B" reject.
-  printf '\n<!-- pad: ' >> "$tmp/AGENTS.core.md"
-  head -c 24000 /dev/zero | tr '\0' 'x' >> "$tmp/AGENTS.core.md"
-  printf ' -->\n' >> "$tmp/AGENTS.core.md"
+  printf '\n<!-- pad: ' >> "$tmp/AGENTS.rules.md"
+  head -c 47000 /dev/zero | tr '\0' 'x' >> "$tmp/AGENTS.rules.md"
+  printf ' -->\n' >> "$tmp/AGENTS.rules.md"
 
   local out rc
   set +e
   out=$(python3 "$SUT" \
     "$tmp/AGENTS.md" \
-    "$tmp/AGENTS.core.md" \
-    "$tmp/AGENTS.docs.md" \
-    "$tmp/AGENTS.rest.md" 2>&1)
+    "$tmp/AGENTS.rules.md" 2>&1)
   rc=$?
   set -e
   assert_exit "T2 byte-budget reject exit 1" "1" "$rc"
-  assert_contains "T2 B_ALWAYS > 23000 reported" "> 23000" "$out"
+  assert_contains "T2 B_ALWAYS > 46000 reported" "> 46000" "$out"
   rm -rf "$tmp"
 }
 
@@ -155,9 +146,7 @@ t2_byte_budget_reject() {
 t3_per_rule_reject() {
   local tmp; tmp=$(mktemp -d)
   make_index "$tmp/AGENTS.md"
-  : > "$tmp/AGENTS.docs.md"
-  : > "$tmp/AGENTS.rest.md"
-  # AGENTS.core.md with one rule body line at 700 B.
+  # AGENTS.rules.md with one rule body line at 700 B.
   {
     echo "# AGENTS Core-class"
     echo
@@ -166,15 +155,13 @@ t3_per_rule_reject() {
     printf -- "- "
     head -c 700 /dev/zero | tr '\0' 'x'
     echo " [id: hr-test-pointer] **Why:** padded."
-  } > "$tmp/AGENTS.core.md"
+  } > "$tmp/AGENTS.rules.md"
 
   local out rc
   set +e
   out=$(python3 "$SUT" \
     "$tmp/AGENTS.md" \
-    "$tmp/AGENTS.core.md" \
-    "$tmp/AGENTS.docs.md" \
-    "$tmp/AGENTS.rest.md" 2>&1)
+    "$tmp/AGENTS.rules.md" 2>&1)
   rc=$?
   set -e
   assert_exit "T3 per-rule reject exit 1" "1" "$rc"
@@ -182,33 +169,28 @@ t3_per_rule_reject() {
   rm -rf "$tmp"
 }
 
-# Case T4: AGENTS.core.md missing -> exit 2.
+# Case T4: AGENTS.rules.md missing -> exit 2.
 t4_missing_core() {
   local tmp; tmp=$(mktemp -d)
   make_index "$tmp/AGENTS.md"
-  : > "$tmp/AGENTS.docs.md"
-  : > "$tmp/AGENTS.rest.md"
 
   local out rc
   set +e
   out=$(python3 "$SUT" \
     "$tmp/AGENTS.md" \
-    "$tmp/AGENTS.core.md" \
-    "$tmp/AGENTS.docs.md" \
-    "$tmp/AGENTS.rest.md" 2>&1)
+    "$tmp/AGENTS.rules.md" 2>&1)
   rc=$?
   set -e
   assert_exit "T4 missing core exit 2" "2" "$rc"
-  assert_contains "T4 AGENTS.core.md missing reported" "AGENTS.core.md missing" "$out"
+  assert_contains "T4 AGENTS.rules.md missing reported" "AGENTS.rules.md missing" "$out"
   rm -rf "$tmp"
 }
 
-# Case T5: per-rule cap fires in AGENTS.docs.md (not just core).
+# Case T5: per-rule cap fires in the corpus, not only in the index.
 t5_per_rule_in_docs_sidecar() {
   local tmp; tmp=$(mktemp -d)
   make_index "$tmp/AGENTS.md"
-  make_core_minimal "$tmp/AGENTS.core.md"
-  : > "$tmp/AGENTS.rest.md"
+  make_core_minimal "$tmp/AGENTS.rules.md"
   {
     echo "# AGENTS Docs-class"
     echo
@@ -217,19 +199,17 @@ t5_per_rule_in_docs_sidecar() {
     printf -- "- "
     head -c 700 /dev/zero | tr '\0' 'x'
     echo " [id: cq-test-overflow] **Why:** padded."
-  } > "$tmp/AGENTS.docs.md"
+  } > "$tmp/AGENTS.rules.md"
 
   local out rc
   set +e
   out=$(python3 "$SUT" \
     "$tmp/AGENTS.md" \
-    "$tmp/AGENTS.core.md" \
-    "$tmp/AGENTS.docs.md" \
-    "$tmp/AGENTS.rest.md" 2>&1)
+    "$tmp/AGENTS.rules.md" 2>&1)
   rc=$?
   set -e
   assert_exit "T5 docs sidecar per-rule reject exit 1" "1" "$rc"
-  assert_contains "T5 AGENTS.docs.md flagged" "AGENTS.docs.md" "$out"
+  assert_contains "T5 AGENTS.rules.md flagged" "AGENTS.rules.md" "$out"
   rm -rf "$tmp"
 }
 
@@ -239,8 +219,6 @@ t5_per_rule_in_docs_sidecar() {
 t7_multi_byte_utf8_per_rule() {
   local tmp; tmp=$(mktemp -d)
   make_index "$tmp/AGENTS.md"
-  : > "$tmp/AGENTS.docs.md"
-  : > "$tmp/AGENTS.rest.md"
   {
     echo "# AGENTS Core-class"
     echo
@@ -250,15 +228,13 @@ t7_multi_byte_utf8_per_rule() {
     printf -- "- [id: hr-test-utf8] "
     python3 -c "print('→' * 250, end='')"
     echo " **Why:** padded."
-  } > "$tmp/AGENTS.core.md"
+  } > "$tmp/AGENTS.rules.md"
 
   local out rc
   set +e
   out=$(python3 "$SUT" \
     "$tmp/AGENTS.md" \
-    "$tmp/AGENTS.core.md" \
-    "$tmp/AGENTS.docs.md" \
-    "$tmp/AGENTS.rest.md" 2>&1)
+    "$tmp/AGENTS.rules.md" 2>&1)
   rc=$?
   set -e
   assert_exit "T7 UTF-8 multi-byte per-rule reject exit 1" "1" "$rc"
@@ -266,15 +242,14 @@ t7_multi_byte_utf8_per_rule() {
   rm -rf "$tmp"
 }
 
-# Case T8: AGENTS.core.md leading YAML frontmatter is EXCLUDED from B_ALWAYS
+# Case T8: AGENTS.rules.md leading YAML frontmatter is EXCLUDED from B_ALWAYS
 # (issue #5999, ADR-094) — the lint measures LOADED bytes (post-strip), matching
 # the session loader. Reported B_ALWAYS must equal index + stripped-core bytes,
 # and be strictly less than the raw on-disk sum (the frontmatter had bytes).
 t8_frontmatter_excluded_from_b_always() {
   local tmp; tmp=$(mktemp -d)
   make_index "$tmp/AGENTS.md"
-  : > "$tmp/AGENTS.docs.md"; : > "$tmp/AGENTS.rest.md"
-  cat > "$tmp/AGENTS.core.md" <<'EOF'
+  cat > "$tmp/AGENTS.rules.md" <<'EOF'
 ---
 last_reviewed: 2026-07-05
 review_cadence: monthly
@@ -289,10 +264,10 @@ owner: founder
 EOF
   local idx_b stripped_b expected reported raw_core_b raw_sum out rc
   idx_b=$(wc -c < "$tmp/AGENTS.md")
-  stripped_b=$(python3 "$REPO_ROOT/scripts/lib/frontmatter-strip/strip.py" < "$tmp/AGENTS.core.md" | wc -c)
+  stripped_b=$(python3 "$REPO_ROOT/scripts/lib/frontmatter-strip/strip.py" < "$tmp/AGENTS.rules.md" | wc -c)
   expected=$((idx_b + stripped_b))
   set +e
-  out=$(python3 "$SUT" "$tmp/AGENTS.md" "$tmp/AGENTS.core.md" "$tmp/AGENTS.docs.md" "$tmp/AGENTS.rest.md" 2>&1)
+  out=$(python3 "$SUT" "$tmp/AGENTS.md" "$tmp/AGENTS.rules.md" 2>&1)
   rc=$?
   set -e
   reported=$(printf '%s' "$out" | grep -oE 'B_ALWAYS=[0-9]+' | head -1 | cut -d= -f2)
@@ -302,7 +277,7 @@ EOF
   else
     fail "T8 B_ALWAYS excludes frontmatter" "reported=$reported expected=$expected (idx=$idx_b stripped=$stripped_b)"
   fi
-  raw_core_b=$(wc -c < "$tmp/AGENTS.core.md")
+  raw_core_b=$(wc -c < "$tmp/AGENTS.rules.md")
   raw_sum=$((idx_b + raw_core_b))
   if [[ -n "$reported" ]] && (( reported < raw_sum )); then
     pass "T8 B_ALWAYS < raw on-disk sum (frontmatter bytes not counted)"
@@ -312,14 +287,13 @@ EOF
   rm -rf "$tmp"
 }
 
-# Case T9: malformed (unterminated) AGENTS.core.md frontmatter → the strip would
+# Case T9: malformed (unterminated) AGENTS.rules.md frontmatter → the strip would
 # consume the rule body, so the lint ERRORS (exit 1) rather than reporting a
 # falsely-low B_ALWAYS. This is the over-strip fail-hard guard.
 t9_malformed_frontmatter_errors() {
   local tmp; tmp=$(mktemp -d)
   make_index "$tmp/AGENTS.md"
-  : > "$tmp/AGENTS.docs.md"; : > "$tmp/AGENTS.rest.md"
-  cat > "$tmp/AGENTS.core.md" <<'EOF'
+  cat > "$tmp/AGENTS.rules.md" <<'EOF'
 ---
 last_reviewed: 2026-07-05
 review_cadence: monthly
@@ -332,7 +306,7 @@ review_cadence: monthly
 EOF
   local out rc
   set +e
-  out=$(python3 "$SUT" "$tmp/AGENTS.md" "$tmp/AGENTS.core.md" "$tmp/AGENTS.docs.md" "$tmp/AGENTS.rest.md" 2>&1)
+  out=$(python3 "$SUT" "$tmp/AGENTS.md" "$tmp/AGENTS.rules.md" 2>&1)
   rc=$?
   set -e
   assert_exit "T9 malformed frontmatter exit 1" "1" "$rc"
@@ -344,17 +318,13 @@ EOF
 t6_pointer_index_under_cap() {
   local tmp; tmp=$(mktemp -d)
   make_index "$tmp/AGENTS.md"
-  make_core_minimal "$tmp/AGENTS.core.md"
-  : > "$tmp/AGENTS.docs.md"
-  : > "$tmp/AGENTS.rest.md"
+  make_core_minimal "$tmp/AGENTS.rules.md"
 
   local out rc
   set +e
   out=$(python3 "$SUT" \
     "$tmp/AGENTS.md" \
-    "$tmp/AGENTS.core.md" \
-    "$tmp/AGENTS.docs.md" \
-    "$tmp/AGENTS.rest.md" 2>&1)
+    "$tmp/AGENTS.rules.md" 2>&1)
   rc=$?
   set -e
   assert_exit "T6 minimal tree exit 0" "0" "$rc"

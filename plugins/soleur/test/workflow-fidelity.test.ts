@@ -285,8 +285,8 @@ describe("workflow-fidelity sentinel markers in skills", () => {
     expect(gate).toContain("GROK_FIDELITY_SKIP_BUDGET");
   });
 
-  test("AGENTS.core.md pins pipeline, lifecycle, and merge-deploy hard rules", () => {
-    const core = readFileSync(resolve(PLUGIN_ROOT, "../../AGENTS.core.md"), "utf-8");
+  test("AGENTS.rules.md pins pipeline, lifecycle, and merge-deploy hard rules", () => {
+    const core = readFileSync(resolve(PLUGIN_ROOT, "../../AGENTS.rules.md"), "utf-8");
     expect(core).toContain("hr-pipeline-skills-never-inline-after-go-route");
     expect(core).toContain("BEHIND");
     expect(core).toContain("resync main");

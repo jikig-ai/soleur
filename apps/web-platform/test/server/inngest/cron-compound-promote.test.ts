@@ -106,14 +106,14 @@ describe("no claude binary spawn (AC11)", () => {
 });
 
 // =============================================================================
-// AC14: AGENTS.core.md hr- rule guard (FR10)
+// AC14: AGENTS.rules.md hr- rule guard (FR10)
 // =============================================================================
 
 describe("diffRemovesHardRule (AC14 / FR10)", () => {
   it("detects removal of a line containing [id: hr-", () => {
     const diff = [
-      "--- a/AGENTS.core.md",
-      "+++ b/AGENTS.core.md",
+      "--- a/AGENTS.rules.md",
+      "+++ b/AGENTS.rules.md",
       "@@ -10,3 +10,2 @@",
       " - [id: wg-something] some rule",
       "-  - [id: hr-foo] hard rule that must not be removed",
@@ -124,8 +124,8 @@ describe("diffRemovesHardRule (AC14 / FR10)", () => {
 
   it("allows removal of non-hr rules", () => {
     const diff = [
-      "--- a/AGENTS.core.md",
-      "+++ b/AGENTS.core.md",
+      "--- a/AGENTS.rules.md",
+      "+++ b/AGENTS.rules.md",
       "@@ -10,3 +10,2 @@",
       "-  - [id: wg-old-rule] old workflow gate",
       " - [id: cq-bar] code quality",
@@ -135,8 +135,8 @@ describe("diffRemovesHardRule (AC14 / FR10)", () => {
 
   it("allows additions of hr rules (not removals)", () => {
     const diff = [
-      "--- a/AGENTS.core.md",
-      "+++ b/AGENTS.core.md",
+      "--- a/AGENTS.rules.md",
+      "+++ b/AGENTS.rules.md",
       "@@ -10,2 +10,3 @@",
       "+  - [id: hr-new] new hard rule",
       " - [id: cq-bar] code quality",
@@ -150,8 +150,8 @@ describe("diffRemovesHardRule (AC14 / FR10)", () => {
 // =============================================================================
 
 describe("TARGET_ALLOW_RE (FR9)", () => {
-  it("allows AGENTS.core.md", () => {
-    expect(TARGET_ALLOW_RE.test("AGENTS.core.md")).toBe(true);
+  it("allows AGENTS.rules.md", () => {
+    expect(TARGET_ALLOW_RE.test("AGENTS.rules.md")).toBe(true);
   });
 
   it("allows plugins/soleur/skills/foo-bar/SKILL.md", () => {
@@ -293,7 +293,7 @@ describe("measureAlwaysLoadedBytes (#6794 — stripped-basis measurement)", () =
   it("measures index raw + core stripped, matching the linter's B_ALWAYS basis", () => {
     // AGENTS.md has no leading frontmatter → strip is a no-op (raw bytes).
     const indexText = "# AGENTS — index\n\n- [id: hr-alpha] → core\n";
-    // AGENTS.core.md carries a frontmatter block the strip must remove.
+    // AGENTS.rules.md carries a frontmatter block the strip must remove.
     const coreText =
       "---\nlast_reviewed: 2026-07-05\nowner: founder\n---\n\n- body [id: hr-alpha]\n- body [id: hr-beta]\n";
 

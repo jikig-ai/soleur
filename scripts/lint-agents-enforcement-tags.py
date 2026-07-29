@@ -105,7 +105,7 @@ def resolve_anchor(
       4. Agent-file fallback: anchor contains a hyphen, no digit, and
          `plugins/soleur/agents/**/<anchor>.md` exists.
 
-    The matcher is intentionally permissive — the 14-pair AGENTS.core.md
+    The matcher is intentionally permissive — the 14-pair rule-corpus
     corpus uses five notations across heading prefixes, mid-prose
     references, and agent names. A strict heading-only matcher would
     couple AGENTS rule wording to SKILL.md heading style and force

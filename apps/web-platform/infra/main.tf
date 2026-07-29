@@ -78,7 +78,7 @@ provider "betteruptime" {
 # 122213433 on jikig-ai) declares `secrets:write` in its permissions; the
 # integrations/github provider exchanges App-credentials for a short-lived
 # installation token at each `terraform plan/apply`. Net narrowing vs.
-# long-lived PAT. See AGENTS.core.md hr-github-app-auth-not-pat.
+# long-lived PAT. See AGENTS.rules.md hr-github-app-auth-not-pat.
 # autonomy-considered: reuse-applied (App credentials already in prd_terraform).
 provider "github" {
   owner = "jikig-ai"

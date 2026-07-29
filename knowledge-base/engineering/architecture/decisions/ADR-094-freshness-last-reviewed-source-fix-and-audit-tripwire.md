@@ -24,7 +24,7 @@ points:
    plus any commit outside the Claude Code Bash tool (Warp / IDE / CI / Inngest),
    bypass it entirely.
 
-The always-loaded constitutional layer (`AGENTS.core.md`) was also outside the review
+The always-loaded constitutional layer (the rule corpus) was also outside the review
 clock, and the byte budget (`B_ALWAYS` ≤ 23000, only ~5 bytes of headroom) left no
 room to add frontmatter naively.
 
@@ -53,8 +53,8 @@ room to add frontmatter naively.
 
    > This gate is a speed-bump + audit chokepoint, not an integrity guarantee. The `Context-Reviewed:` trailer is self-attestable by the committing agent; the gate relocates the honor-system boundary to a single greppable, incident-logged point. It does not prove human review; it is bypassed by `git commit -a`/pathspec (mitigated here via working-tree detection), by commits outside the Claude Code Bash tool (Warp/IDE/CI/Inngest), and by non-canonical key spellings. `last_reviewed` remains a cooperative signal, now with tamper-evidence. The trust anchor is the convention + the source-level fixes to known automated writers; the gate is its tripwire.
 
-5. **Bring `AGENTS.core.md` under the clock, funded by a frontmatter-strip — no rule
-   trim.** `AGENTS.core.md` gains `last_reviewed`/`review_cadence`/`owner` frontmatter.
+5. **Bring the always-loaded rule corpus under the clock, funded by a frontmatter-strip
+   — no rule trim.** The corpus gains `last_reviewed`/`review_cadence`/`owner` frontmatter.
    The session loader strips leading frontmatter before injection (at all three raw
    read-sites), and the budget lint measures *loaded* (post-strip) bytes — so `B_ALWAYS`
    is unchanged (22995) and no hard rule is trimmed for bytes the loader strips anyway.
@@ -66,7 +66,7 @@ room to add frontmatter naively.
    falsely-low `B_ALWAYS`.
 
 6. **Reuse the existing KB-corpus consumer; add no new scanner.** `review-reminder.yml`
-   is extended to also scan the repo-root `AGENTS.core.md` (which lives outside
+   is extended to also scan the repo-root rule corpus (which lives outside
    `knowledge-base/`) plus a required-constitutional-path *liveness assert* that fails the
    run loudly if that path is silently dropped from the scan (frontmatter/cadence removed,
    or feed drop). This acknowledges that the frontmatter is **already parsed by three
@@ -85,7 +85,7 @@ This extends Decision §5's frontmatter-strip contract; it is **not** a new deci
    `cron-compound-promote.ts` (the runtime promoter contract) imports `strip.ts` via an
    extracted, unit-tested `measureAlwaysLoadedBytes` helper; `compound-promote.sh` (operator
    hand-testing) sources `strip.sh`. This closes the documented raw-vs-stripped skew (~73 B on
-   `AGENTS.core.md`) that #6461 accepted knowingly as fail-safe — the promoter total now equals
+   the corpus) that #6461 accepted knowingly as fail-safe — the promoter total now equals
    the commit gate's `B_ALWAYS` **exactly** (verified 22900 == 22900 at implementation time).
    The runtime consumer keeps the *dangerous*-direction over-strip guard (a malformed strip that
    drops a `[id:]` rule line falls back to RAW bytes + `op="frontmatter-overstrip-fallback"`).
@@ -106,7 +106,7 @@ This extends Decision §5's frontmatter-strip contract; it is **not** a new deci
 - The loader is fail-closed-critical: the over-strip guard is load-bearing (a mangled
   sidecar = governance blackout). Kept aligned with the ≤200-byte stamp-header contract.
 - Fully reversible: delete the gate + its registration, revert the loader/lint strip and
-  the `AGENTS.core.md` frontmatter, revert the two writer fixes and the review-reminder
+  the corpus frontmatter, revert the two writer fixes and the review-reminder
   extension, and delete this ADR.
 
 ## C4 impact
@@ -127,5 +127,19 @@ element enumeration per the completeness mandate, not asserted by omission.
 | A `bump-frontmatter-updated.py` helper (original FR2) | Neither writer would call it (one is agent-prose, one is TypeScript); the gate + source-fixes are the enforcement. Cut. |
 | A separate threshold/registry file | A second source of truth; reuse in-file `review_cadence` + the one existing scanner instead. |
 | Fund the frontmatter via a hard-rule body trim | Trims *loaded* rule content for bytes the loader strips anyway; the lint measuring loaded (post-strip) bytes is the correct accounting. |
-| Frontmatter on the `AGENTS.md` index | `AGENTS.md` loads raw via the harness `@`-import every session (unstrippable) — the YAML would leak into context. Frontmatter lives on `AGENTS.core.md` only. |
+| Frontmatter on the `AGENTS.md` index | `AGENTS.md` loads raw via the harness `@`-import every session (unstrippable) — the YAML would leak into context. Frontmatter lives on the hook-injected rule corpus only. |
 | Add a second overdue-review scanner for the rule layer | `review-reminder.yml` already walks the corpus; extend its feed + add a liveness assert instead of a parallel scanner. |
+
+## Amendment — ADR-151 (2026-07-28)
+
+The always-loaded file this decision named was merged into `AGENTS.rules.md`
+when ADR-151 collapsed the change-class sidecars. **The decision itself is
+unchanged**: the freshness clock still applies to the always-loaded corpus,
+funded by the same frontmatter-strip, and `review-reminder.yml`'s
+`required_paths` now names `AGENTS.rules.md`.
+
+The rejected-alternative row above became load-bearing in a way it was not
+originally: it is the decisive reason ADR-151 kept hook injection rather than
+replacing it with an `@AGENTS.rules.md` @-import. An @-import cannot strip
+frontmatter, so the YAML would leak into context — exactly what this ADR
+rejected.

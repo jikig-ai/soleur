@@ -3,7 +3,7 @@
 // `hr-never-label-any-step-as-manual-without` at the `gh pr ready` boundary.
 //
 // The gate is documentation that an LLM agent reads at /ship time; the only
-// safety net against drift between the gate's bash regex and the AGENTS.core.md
+// safety net against drift between the gate's bash regex and the AGENTS.rules.md
 // rule cross-reference is this test file.
 //
 // Test harness: bun:test (matches sibling tests in plugins/soleur/test/*.ts).
@@ -15,8 +15,7 @@ import { readFileSync, existsSync } from "fs";
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const SHIP_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/ship/SKILL.md");
-const AGENTS_CORE = resolve(REPO_ROOT, "AGENTS.core.md");
-const AGENTS_REST = resolve(REPO_ROOT, "AGENTS.rest.md");
+const AGENTS_CORPUS = resolve(REPO_ROOT, "AGENTS.rules.md");
 const AGENTS_INDEX = resolve(REPO_ROOT, "AGENTS.md");
 const FIXTURE_DIR = resolve(
   REPO_ROOT,
@@ -89,8 +88,7 @@ function undeferredCount(body: string): number {
 
 let SHIP_TEXT: string;
 let GATE_SECTION: string;
-let CORE_TEXT: string;
-let REST_TEXT: string;
+let CORPUS_TEXT: string;
 let INDEX_TEXT: string;
 let FIXTURE_PR_H_TEXT: string;
 let FIXTURE_MIXED_TEXT: string;
@@ -113,8 +111,7 @@ beforeAll(() => {
   }
   SHIP_TEXT = readFileSync(SHIP_SKILL, "utf8");
   GATE_SECTION = getGateSection(SHIP_TEXT);
-  CORE_TEXT = readFileSync(AGENTS_CORE, "utf8");
-  REST_TEXT = readFileSync(AGENTS_REST, "utf8");
+  CORPUS_TEXT = readFileSync(AGENTS_CORPUS, "utf8");
   INDEX_TEXT = readFileSync(AGENTS_INDEX, "utf8");
   FIXTURE_PR_H_TEXT = readFileSync(FIXTURE_PR_H, "utf8");
   FIXTURE_MIXED_TEXT = readFileSync(FIXTURE_MIXED, "utf8");
@@ -203,21 +200,24 @@ describe("TC-5: sentinel detection in linked-issue body", () => {
   });
 });
 
-describe("TC-6: cross-reference invariant (core cross-ref + rest body)", () => {
-  test("AGENTS.rest.md contains the wg-* gate rule body", () => {
-    const line = REST_TEXT.split("\n").find((l) => l.includes(`[id: ${GATE_ID}]`));
+describe("TC-6: cross-reference invariant (both bodies now in one corpus)", () => {
+  test("the corpus contains the wg-* gate rule body", () => {
+    const line = CORPUS_TEXT.split("\n").find((l) => l.includes(`[id: ${GATE_ID}]`));
     expect(line).toBeDefined();
   });
 
   test(`hr-never-label rule body references the new wg-* gate ID`, () => {
     // Find the rule body line (single-line rules per cq-agents-md-why-single-line)
-    const ruleLine = CORE_TEXT.split("\n").find((l) => l.includes(`[id: ${RULE_ID}]`));
+    const ruleLine = CORPUS_TEXT.split("\n").find((l) => l.includes(`[id: ${RULE_ID}]`));
     expect(ruleLine).toBeDefined();
     expect(ruleLine!).toContain(GATE_ID);
   });
 
-  test("AGENTS.md pointer-index contains the new wg-* gate ID → rest", () => {
-    expect(INDEX_TEXT).toContain(`[id: ${GATE_ID}] → rest`);
+  // ADR-151 dropped the ` → <class>` suffix from every pointer line, so the
+  // assertion is now pointer PRESENCE (still the 1:1 contract lint_union
+  // enforces) rather than pointer-plus-residency.
+  test("AGENTS.md pointer-index contains the new wg-* gate ID", () => {
+    expect(INDEX_TEXT).toContain(`[id: ${GATE_ID}]`);
   });
 });
 
@@ -306,7 +306,7 @@ describe("TC-11: copy/copies verb-morphology", () => {
 
 describe("TC-9: new gate rule body fits within byte cap", () => {
   test("wg-block-pr-ready-on-undeferred-operator-steps body ≤600 B", () => {
-    const line = REST_TEXT.split("\n").find((l) => l.includes(`[id: ${GATE_ID}]`));
+    const line = CORPUS_TEXT.split("\n").find((l) => l.includes(`[id: ${GATE_ID}]`));
     expect(line).toBeDefined();
     expect(Buffer.byteLength(line!, "utf8")).toBeLessThanOrEqual(600);
   });

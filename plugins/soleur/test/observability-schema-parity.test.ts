@@ -13,7 +13,7 @@
 //   1 (canonical) plan/SKILL.md            — yaml block after "**Required schema (verbatim"
 //   2             plan-issue-templates.md   — 3 `## Observability` yaml blocks (one per tier)
 //   3             deepen-plan/SKILL.md §4.7 — prose enumeration of the 5 backticked names
-//   4             AGENTS.core.md rule       — count-parity only: `(5 fields)` + no-SSH invariant
+//   4             AGENTS.rules.md rule       — count-parity only: `(5 fields)` + no-SSH invariant
 //                 (the 5 names are intentionally NOT enumerated there — the always-loaded
 //                  rule budget is byte-capped, so this surface asserts the COUNT, not the names)
 //
@@ -33,7 +33,7 @@ const read = (p: string) => readFileSync(resolve(REPO_ROOT, p), "utf8");
 const PLAN_SKILL = "plugins/soleur/skills/plan/SKILL.md";
 const TEMPLATES = "plugins/soleur/skills/plan/references/plan-issue-templates.md";
 const DEEPEN = "plugins/soleur/skills/deepen-plan/SKILL.md";
-const AGENTS_CORE = "AGENTS.core.md";
+const AGENTS_CORPUS = "AGENTS.rules.md";
 
 const EXPECTED = [
   "liveness_signal",
@@ -111,18 +111,18 @@ describe("## Observability schema parity across the 4 surfaces", () => {
     expect(asSet(names)).toEqual(asSet(CANONICAL));
   });
 
-  test("surface 4 (AGENTS.core.md rule) — count parity + no-SSH invariant (names intentionally absent)", () => {
-    const rule = read(AGENTS_CORE)
+  test("surface 4 (AGENTS.rules.md rule) — count parity + no-SSH invariant (names intentionally absent)", () => {
+    const rule = read(AGENTS_CORPUS)
       .split(/\r?\n/)
       .find((l) => l.includes("hr-observability-as-plan-quality-gate"));
     expect(rule, "hr-observability-as-plan-quality-gate rule line must exist").toBeDefined();
     // Count derived from canonical length — stays correct if the schema legitimately grows.
-    expect(rule, "AGENTS.core.md rule must state count parity `(N fields)`").toContain(
+    expect(rule, "AGENTS.rules.md rule must state count parity `(N fields)`").toContain(
       `(${CANONICAL.length} fields)`,
     );
-    expect(rule, "AGENTS.core.md rule must reference discoverability_test").toContain(
+    expect(rule, "AGENTS.rules.md rule must reference discoverability_test").toContain(
       "discoverability_test",
     );
-    expect(rule, "AGENTS.core.md rule must state the WITHOUT SSH invariant").toContain("WITHOUT SSH");
+    expect(rule, "AGENTS.rules.md rule must state the WITHOUT SSH invariant").toContain("WITHOUT SSH");
   });
 });

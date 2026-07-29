@@ -170,7 +170,7 @@ run ≥1 green cycle. When all pass, flip the ADR-032 amendment status
 
 The provider authenticates as the `soleur-ai` GitHub App (id `3261325`,
 org-wide installation `122213433` on `jikig-ai`) per
-AGENTS.core.md `hr-github-app-auth-not-pat`. App credentials are already
+AGENTS.rules.md `hr-github-app-auth-not-pat`. App credentials are already
 mirrored from `prd` to `prd_terraform` by the `apps/web-platform/infra/`
 root's `doppler_secret` resources (PR #4150), so no fresh mint is needed.
 

@@ -149,14 +149,14 @@ assert_no_match() {
   fi
 }
 
-DIFF=$'plugins/soleur/skills/plan/SKILL.md\nplugins/soleur/skills/ship/SKILL.md\napps/web-platform/server/foo.ts\nAGENTS.core.md'
+DIFF=$'plugins/soleur/skills/plan/SKILL.md\nplugins/soleur/skills/ship/SKILL.md\napps/web-platform/server/foo.ts\nAGENTS.rules.md'
 
 # Exact-match cases (pre-existing behavior preserved)
 assert_match "exact-match-nested" \
   "plugins/soleur/skills/plan/SKILL.md" \
   "$DIFF"
 assert_match "exact-match-top-level" \
-  "AGENTS.core.md" \
+  "AGENTS.rules.md" \
   "$DIFF"
 
 # Suffix-match cases (new behavior)
