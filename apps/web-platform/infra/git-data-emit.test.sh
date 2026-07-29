@@ -386,8 +386,20 @@ done
 # So derive the producer's key set from the producer and compare it to the set asserted here.
 # Both directions: a key added to the producer and never asserted is untested, and a key
 # asserted here but no longer produced is a fixture that has drifted off the artifact.
-_producer_keys="$(sed -n '/boot_complete info/,/|| true/p' "$DIR/git-data-bootstrap.sh" \
-  | grep -oE '"[a-z_]+=' | tr -d '"=' | sort -u | tr '\n' ' ')"
+# COMMENTS STRIPPED FIRST, and the window anchored on the CALL, not on a bare token. Both
+# `sed` addresses were unanchored greps over an unstripped file, and `|| true` already occurs
+# in prose two lines above the emit. Measured: planting a comment above the call listing all
+# six keys, while DELETING luks_mounted and hooks_path from the real emit, harvested the keys
+# from the COMMENT and reported 44/44 GREEN — and because ADR-151 strips comments at render
+# time, the text making the gate green does not exist on the host. The boot signal whose
+# arrival is supposed to mean the LUKS device mounted would no longer say so, with three
+# consumers reading a payload this suite swore was complete. (cq-assert-anchor-not-bare-token)
+#
+# `[a-z0-9_]` not `[a-z_]`: the old class was blind to any key containing a digit, so a
+# `sha256_ok=` key would ship unasserted.
+_producer_keys="$(grep -vE '^[[:space:]]*#' "$DIR/git-data-bootstrap.sh" \
+  | sed -n '/^[[:space:]]*"\$GIT_DATA_EMIT".*boot_complete/,/|| true$/p' \
+  | grep -oE '"[a-z0-9_]+=' | tr -d '"=' | sort -u | tr '\n' ' ')"
 _asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision disk_pct inode_pct | sort -u | tr '\n' ' ')"
 if [ -z "$_producer_keys" ]; then
   fail "AC30-parity: derived NO keys from git-data-bootstrap.sh — the extraction drifted, so this parity check would pass vacuously"
@@ -430,6 +442,15 @@ if mutate_sub emit-noeqvalue 'kv#*=' 'kv##*='; then
     fail "AC30 MUTATION: ##-expansion still produced a=b — the '=' check is vacuous" "$(last_body)"
   else pass; fi
 else fail "AC30 MUTATION did not land (kv#*= absent)"; fi
+# RE-CAPTURE. $BODY was last assigned by the orphan-tag arm above, so this check used to
+# inspect a payload that could never carry the phrase -- the only far-side fixture in the AC30
+# family, and it was dead. Measured: making the boot_complete fixture claim "repos encrypted at
+# rest" left the suite 44/44 GREEN, i.e. the exact Art. 30 misstatement the comment above says
+# this exists to prevent was unguarded.
+: > "$CAPTURE"
+emit "git-data bootstrap complete" boot_complete info "" \
+  "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" "disk_pct=7" "inode_pct=9" >/dev/null 2>&1
+BODY="$(last_body)"
 if printf '%s' "$BODY" | grep -qiE 'encrypted at rest|repos.*encrypted|at-rest encryption'; then
   fail "AC30 the emit claims at-rest encryption of the repositories" "$BODY"
 else pass; fi

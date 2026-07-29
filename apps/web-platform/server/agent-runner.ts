@@ -2411,13 +2411,30 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // inside replicateToGitData and MUST NOT break the turn.
           if (isGitDataStoreEnabled() && worktreeLeaseHandle) {
             try {
-              await replicateToGitData({
+              const gitDataOutcome = await replicateToGitData({
                 workspacePath,
                 workspaceId: activeWorkspaceId,
                 worktreeId: resolveWorktreeId(userId),
                 leaseGeneration: worktreeLeaseHandle.leaseGeneration,
                 userId,
               });
+              // B13 (#6982 review): a SHED is not a completed push. Replication is
+              // session-end-coupled, so a shed delta is never replicated later — "later"
+              // does not exist on this path. `replicateToGitData` reports the shed itself;
+              // recording it HERE is the caller-side attribution, and THIS lineage is the
+              // higher-frequency of the two. The type change made the shed representable;
+              // an earlier revision wired only the cc-dispatcher caller while the doc
+              // comment claimed BOTH.
+              if (gitDataOutcome.status === "shed") {
+                log.warn(
+                  {
+                    userIdHash: hashUserId(userId),
+                    slotsBusy: gitDataOutcome.slotsBusy,
+                    queueTimeoutMs: gitDataOutcome.queueTimeoutMs,
+                  },
+                  "agent-runner released a worktree lease after a git-data replication SHED — this session's delta was not replicated",
+                );
+              }
             } catch {
               // Already reported (feature: worktree_lease) inside; swallow so a
               // replication failure never fails an otherwise-complete turn.

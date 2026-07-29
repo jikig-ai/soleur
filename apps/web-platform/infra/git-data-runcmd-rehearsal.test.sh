@@ -108,106 +108,160 @@ import sys, yaml, os, re, hashlib
 rendered, srcdir = sys.argv[1], sys.argv[2]
 
 # Payloads written inline in the template rather than from a repo file. Explicit, because
-# "no source file found" must not be self-certifying.
+# "no source file found" must not be self-certifying. These are NOT exempt from the
+# duplicate check below — an attacker-supplied second entry at an allowlisted path (a
+# permissive authorized_keys, a relaxed sshd_config) is precisely the escape an exemption
+# would open, and cloud-init applies write_files in order so the LAST one wins.
 INLINE_ALLOWLIST = {
     "/usr/local/bin/git-data-emit",
     "/home/git/.ssh/authorized_keys",
     "/etc/ssh/sshd_config.d/01-hardening.conf",
 }
+# An absolute floor, NOT a self-derived one. The first rewrite of this check derived the
+# expected roster from cloud-init-git-data.yml — the same artifact that produces the
+# delivered set — so deleting a payload shrank BOTH sides and the equality held. Measured:
+# deleting the git-data-gc.timer block reported "OK: 8 payloads". That was a net REGRESSION
+# against the `checked >= 9` floor it replaced, in the arm whose comment claimed to have
+# fixed a measured fail-open. The roster authority is git-data.tf; the floor is absolute.
+MIN_PAYLOADS = 9
 
-tpl = open(os.path.join(srcdir, "cloud-init-git-data.yml")).read()
+# THE DESTINATION CONTRACT, OWNED BY THIS TEST. Deriving the expected path from the template
+# too would re-create the tautology one level down: relocating a payload moves BOTH sides and
+# the equality holds. Measured — moving git-data-gc.timer to /tmp/junk/ (same basename, same
+# bytes) passed a derivation-based check while systemd would never see the unit again.
+#
+# These paths are load-bearing, not incidental: /etc/systemd/system is where systemd looks,
+# /usr/local/bin is what the authorized_keys forced commands name, and /tmp is where the
+# placeholder is staged for the bootstrap to install. A deliberate move must edit this map,
+# which is the review point.
+EXPECTED_PATHS = {
+    "git_data_bootstrap":               "/usr/local/bin/git-data-bootstrap.sh",
+    "git_data_provision":               "/usr/local/bin/git-data-provision.sh",
+    "git_data_transport_wrapper":       "/usr/local/bin/git-data-transport-wrapper.sh",
+    "git_data_remove":                  "/usr/local/bin/git-data-remove.sh",
+    "git_data_gc":                      "/usr/local/bin/git-data-gc.sh",
+    "git_data_gc_service":              "/etc/systemd/system/git-data-gc.service",
+    "git_data_gc_failure_service":      "/etc/systemd/system/git-data-gc-failure.service",
+    "git_data_gc_timer":                "/etc/systemd/system/git-data-gc.timer",
+    "git_data_pre_receive_placeholder": "/tmp/git-data-pre-receive-placeholder.sh",
+}
+
 tf = open(os.path.join(srcdir, "git-data.tf")).read()
+tpl = open(os.path.join(srcdir, "cloud-init-git-data.yml")).read()
 
 # The payloads are delivered with whole-line `#` comments stripped at render time (ADR-151),
-# so the source must be stripped the same way before the bytes are compared. The expression
-# is READ FROM git-data.tf rather than restated here: a hand-copied fourth spelling of it
-# would drift, and a stripper that silently disagreed with production would make this whole
-# check compare the wrong bytes while still reporting byte-identity.
+# so the source must be stripped the same way before the bytes are compared. Read the
+# expression FROM git-data.tf rather than restating it: a hand-copied spelling would drift,
+# and a stripper that silently disagreed with production would make this whole check compare
+# the wrong bytes while still reporting byte-identity.
 m = re.search(r'git_data_rationale_strip\s*=\s*"(.*)"', tf)
 if not m:
-    print("B1 FAIL: no git_data_rationale_strip in git-data.tf — cannot mirror the render-time "
-          "strip, so a byte comparison would be against the wrong bytes")
+    print("B1 FAIL: no git_data_rationale_strip in git-data.tf — cannot mirror the render-time strip")
     sys.exit(1)
 _expr = m.group(1)
 if not (_expr.startswith("/") and _expr.endswith("/")):
     print("B1 FAIL: git_data_rationale_strip is not a /…/ regex literal: %r" % _expr)
     sys.exit(1)
-# HCL turns \t and \n into real characters before terraform's regex engine sees them; do the
-# same so python compiles the identical pattern.
-_pat = _expr[1:-1].replace("\\t", "\t").replace("\\n", "\n")
-STRIP = re.compile(_pat)
+STRIP = re.compile(_expr[1:-1].replace("\\t", "\t").replace("\\n", "\n"))
 if not STRIP.search("#!/bin/sh\n# a comment\n"):
-    print("B1 FAIL: the strip expression from git-data.tf matches nothing on a known-"
-          "commented probe — it would make every payload trivially 'identical'")
+    print("B1 FAIL: the strip expression matches nothing on a known-commented probe — it "
+          "would make every payload trivially 'identical'")
     sys.exit(1)
 
-# var -> source filename, from git-data.tf's templatefile vars block.
+# ROSTER AUTHORITY: git-data.tf's file() bindings. var -> source filename.
 bindings = dict(re.findall(
     r'^\s*([a-z_]+)\s*=\s*(?:replace\()?file\("\$\{path\.module\}/([^"]+)"\)', tf, re.M))
-# The vars actually delivered via indent(6, …) in the template.
-delivered_vars = sorted(set(re.findall(r'\$\{indent\(6,\s*([a-z_]+)\)\}', tpl)))
+if len(bindings) < MIN_PAYLOADS:
+    print("B1 FAIL: git-data.tf binds only %d payload file()s (<%d) — the roster extraction "
+          "drifted, and a shrunken roster would make every check below vacuous"
+          % (len(bindings), MIN_PAYLOADS))
+    sys.exit(1)
 
-unbound = [v for v in delivered_vars if v not in bindings]
-if unbound:
-    print("B1 FAIL: indent(6, …) delivers %d var(s) with no file() binding in git-data.tf: %s"
-          % (len(unbound), ", ".join(unbound)))
+# PATH AUTHORITY: the template pairs `- path: <P>` with `${indent(6, <var>)}`. This is what
+# says WHERE each payload lands; identity is the FULL PATH, never the basename (relocating
+# git-data-gc.timer to /tmp/junk/ keeps its basename and its bytes, and systemd never sees it).
+delivery = dict((v, pth) for pth, v in re.findall(
+    r'-\s*path:\s*(\S+)\s*\n\s*content:\s*\|\s*\n\s*\$\{indent\(6,\s*([a-z_]+)\)\}', tpl))
+
+undelivered = sorted(v for v in bindings if v not in delivery)
+if undelivered:
+    print("B1 FAIL: %d payload(s) bound by file() in git-data.tf are NOT delivered by any "
+          "indent(6, …) block in cloud-init-git-data.yml: %s"
+          % (len(undelivered), ", ".join(undelivered)))
+    print("  A payload that git-data.tf reads but the template never writes is a file the "
+          "host will not have. If it is genuinely retired, remove its file() binding too.")
     sys.exit(1)
-expected_sources = {bindings[v] for v in delivered_vars}
-if not expected_sources:
-    print("B1 FAIL: derived an EMPTY expected set — the template/tf parse found nothing, "
-          "which is not the same as everything matching")
+
+# The template must deliver each payload to the path this test pins, not merely to SOME path.
+misrouted = sorted(
+    "%s -> %s (expected %s)" % (v, delivery[v], EXPECTED_PATHS[v])
+    for v in bindings if v in EXPECTED_PATHS and delivery[v] != EXPECTED_PATHS[v])
+if misrouted:
+    print("B1 FAIL: %d payload(s) are delivered to the WRONG PATH — same bytes, same "
+          "basename, wrong destination, so the consumer never sees them:" % len(misrouted))
+    for mr in misrouted:
+        print("  " + mr)
     sys.exit(1)
+unpinned = sorted(v for v in bindings if v not in EXPECTED_PATHS)
+if unpinned:
+    print("B1 FAIL: %d payload(s) have no pinned destination in EXPECTED_PATHS: %s"
+          % (len(unpinned), ", ".join(unpinned)))
+    print("  Add the destination to EXPECTED_PATHS so a later relocation is a review event.")
+    sys.exit(1)
+
+expected = {EXPECTED_PATHS[v]: bindings[v] for v in bindings}   # full path -> source filename
 
 d = yaml.safe_load(open(rendered))
-seen_basenames, delivered_sources, unknown, bad = [], {}, [], []
+seen_paths, delivered, unknown, bad = [], {}, [], []
 for wf in d["write_files"]:
     path = wf["path"]
-    base = os.path.basename(path)
-    if base in expected_sources:
-        seen_basenames.append(base)
-        delivered_sources[base] = wf["content"].encode()
-    elif path in INLINE_ALLOWLIST:
-        continue
-    else:
+    seen_paths.append(path)
+    if path in expected:
+        delivered[path] = wf["content"].encode()
+    elif path not in INLINE_ALLOWLIST:
         unknown.append(path)
+
+dupes = sorted({p for p in seen_paths if seen_paths.count(p) > 1})
+if dupes:
+    print("B1 FAIL: duplicate write_files path(s) %s — cloud-init applies in ORDER, so a "
+          "second entry at a delivered or allowlisted path silently overrides the first "
+          "(an unrestricted authorized_keys beats three command=-restricted ones)"
+          % ", ".join(dupes))
+    sys.exit(1)
 
 if unknown:
     print("B1 FAIL: %d delivered payload(s) are neither a known file-backed source nor on "
           "the inline allowlist, so nothing compared their bytes:" % len(unknown))
     for u in unknown:
         print("  " + u)
-    print("  If the payload is genuinely inline, add it to INLINE_ALLOWLIST. If it is "
-          "file-backed, bind it via file() in git-data.tf and deliver it with indent(6, …).")
     sys.exit(1)
 
-dupes = sorted({b for b in seen_basenames if seen_basenames.count(b) > 1})
-if dupes:
-    print("B1 FAIL: duplicate delivered basename(s) %s — a duplicate can satisfy a count "
-          "while a different member goes missing" % ", ".join(dupes))
-    sys.exit(1)
-
-missing = sorted(expected_sources - set(delivered_sources))
+missing = sorted(set(expected) - set(delivered))
 if missing:
-    print("B1 FAIL: %d expected source(s) were never delivered: %s"
+    print("B1 FAIL: %d expected payload path(s) were never delivered: %s"
           % (len(missing), ", ".join(missing)))
     sys.exit(1)
 
-for name in sorted(delivered_sources):
-    want = STRIP.sub("", open(os.path.join(srcdir, name)).read()).encode()
-    got = delivered_sources[name]
+if len(delivered) < MIN_PAYLOADS:
+    print("B1 FAIL: only %d file-backed payloads compared (<%d)" % (len(delivered), MIN_PAYLOADS))
+    sys.exit(1)
+
+for path in sorted(delivered):
+    want = STRIP.sub("", open(os.path.join(srcdir, expected[path])).read()).encode()
+    got = delivered[path]
     if hashlib.sha256(got).hexdigest() != hashlib.sha256(want).hexdigest():
-        bad.append("%s: rendered sha=%s (%d B) != source sha=%s (%d B)" % (
-            name, hashlib.sha256(got).hexdigest()[:12], len(got),
+        bad.append("%s: rendered sha=%s (%d B) != stripped source sha=%s (%d B)" % (
+            path, hashlib.sha256(got).hexdigest()[:12], len(got),
             hashlib.sha256(want).hexdigest()[:12], len(want)))
 if bad:
-    print("B1 FAIL: %d payload(s) are NOT byte-identical to their source:" % len(bad))
+    print("B1 FAIL: %d payload(s) are NOT byte-identical to their stripped source:" % len(bad))
     for b in bad:
         print("  " + b)
     sys.exit(1)
 
-print("B1 OK: delivered set == expected set (%d payloads), all byte-identical; "
-      "%d inline payload(s) allowlisted"
-      % (len(expected_sources), len(INLINE_ALLOWLIST)))
+print("B1 OK: %d file-backed payloads delivered at their exact paths, byte-identical to the "
+      "stripped source; %d inline payload(s) allowlisted; no duplicate paths"
+      % (len(delivered), len(INLINE_ALLOWLIST)))
 PY
 )"; _b1_rc=$?
 if [ "$_b1_rc" -eq 0 ]; then pass; else
