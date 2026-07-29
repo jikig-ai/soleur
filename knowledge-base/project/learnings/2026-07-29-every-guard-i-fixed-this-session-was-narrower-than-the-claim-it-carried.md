@@ -119,7 +119,7 @@ unstripped shell file, where `|| true` already occurs in prose two lines above t
 Measured: planting a comment listing all six keys **while deleting `luks_mounted` and
 `hooks_path` from the real emit** reported **44/44 GREEN**.
 
-The aggravating detail is specific to this PR: ADR-151 strips comments **at render time**, so
+The aggravating detail is specific to this PR: ADR-152 strips comments **at render time**, so
 the text that made the gate green *does not exist on the host*. The boot signal whose arrival is
 supposed to mean the LUKS device mounted would stop saying so, with three consumers reading a
 payload the suite swore was complete.
@@ -180,7 +180,7 @@ The sibling: **a lost shebang degrades silently, it does not raise ENOEXEC.** `e
 POSIX-mandated to retry `/bin/sh`, so `git`'s hook execution and `authorized_keys`
 `command="…"` both fall back to dash. Four of nine payloads degrade quietly if the render-time
 strip ever ate line 1 — which is why the strip's `#!` carve-out is load-bearing, and why an
-earlier ADR-151 table that put the pre-receive hook in the "loud" column understated it.
+earlier ADR-152 table that put the pre-receive hook in the "loud" column understated it.
 
 **`receive.unpackLimit` semantics, confirmed against git 2.53.0:** unset inherits
 `transfer.unpackLimit` (default 100); "equals or exceeds" stores a pack. Measured with a
@@ -212,10 +212,10 @@ off-by-one.
    counts as *ran*) and raised it to the branch's count. Prevention: when both sides add the
    same guard, keep the stronger mechanism and re-derive the number.
 3. **`user_data` went 260 B over a hard ForceNew cap mid-session** — Recovery: routed to the
-   `cto` agent as an architecture fork; ruling was ADR-151's render-time comment strip.
+   `cto` agent as an architecture fork; ruling was ADR-152's render-time comment strip.
    Prevention: a cap this tight needs a structural answer, not prose-shaving; the
    architectural-fork gate correctly routed it away from the operator.
-4. **My A1/A2 comments overran the cap twice** — Recovery: trimmed, then superseded by ADR-151.
+4. **My A1/A2 comments overran the cap twice** — Recovery: trimmed, then superseded by ADR-152.
    Prevention: check the budget in the same call as the edit on capped files.
 5. **CWD drift produced `No such file or directory`** — Recovery: chained `cd <abs> && …`.
    Prevention: already a documented rule; it still recurred after an earlier `cd` into a
@@ -262,11 +262,11 @@ off-by-one.
 18. **A3's invocation was unpinned and deletable at 98/0 green** — see Solution §5.
     Prevention: when adding a guard beside an existing one, diff the sibling's test coverage
     and copy its invocation pin — sourcing a library only defines, it never runs.
-19. **ADR-151 carried two figures reproducible from no commit** (42,277 / ~69,182 against a
+19. **ADR-152 carried two figures reproducible from no commit** (42,277 / ~69,182 against a
     measured 42,149 / 68,963) — Recovery: corrected to measured values with the command
     published beside them. Prevention: publish the command next to the number; a figure measured
     against an uncommitted tree is not reproducible by anyone.
-20. **ADR-151's shebang table misclassified the pre-receive hook as loud** — Recovery: the
+20. **ADR-152's shebang table misclassified the pre-receive hook as loud** — Recovery: the
     reviewer executed it; corrected to four-of-nine silent. Prevention: a table enumerating
     "which losses are loud" must be executed, not reasoned.
 21. **`RESUME.md` carried stale byte figures under a heading reading "verified this session"** —
@@ -279,7 +279,7 @@ off-by-one.
 
 ## Related
 
-- ADR-151 — the render-time rationale strip (this session's architecture ruling)
+- ADR-152 — the render-time rationale strip (this session's architecture ruling)
 - ADR-149 — the git-data birth route and its readiness interlock
 - [[2026-07-28-the-property-my-pr-existed-to-buy-was-pinned-by-nothing]] — the immediately
   preceding instance of a guard-building PR whose central property was pinned by nothing

@@ -11,7 +11,7 @@
 #   T3: cron TS constant changed alone                    -> exit 1, names the
 #                                                            file, expected/found,
 #                                                            AND the unit
-#   T4: threshold removed from AGENTS.docs.md (empty)     -> exit 1, fail-closed
+#   T4: threshold removed from AGENTS.rules.md (empty)     -> exit 1, fail-closed
 #   T5: a target file renamed/absent                      -> exit 1, diagnostic
 #                                                            names the path
 #   T6: compound/SKILL.md invocation deleted, or a
@@ -129,7 +129,7 @@ ALWAYS_LOADED_CAP=${FIX_REJECT}
 PROPOSE_ALWAYS_LOADED_BUDGET=${FIX_WARN}
 EOF
 
-  cat > "$root/AGENTS.docs.md" <<EOF
+  cat > "$root/AGENTS.rules.md" <<EOF
 # Docs sidecar
 
 - Budget: <= ${FIX_WARN} warn / <= ${FIX_REJECT} critical. Rules cap at ~${FIX_CAP} bytes. <!-- rule-threshold: 115 -->
@@ -168,7 +168,7 @@ make_compound_skill() {
    \`\`\`bash
    cd "\$(git rev-parse --show-toplevel)" && \\
      python3 scripts/lint-agents-rule-budget.py \\
-       AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md 2>&1
+       AGENTS.md AGENTS.rules.md 2>&1
    \`\`\`
 
    The \`2>&1\` above is load-bearing: [WARN] and [REJECT] go to stderr.
@@ -226,8 +226,8 @@ t2_linter_only_bump_names_every_site() {
     "cron-compound-promote.ts" "$GUARD_OUT"
   assert_contains "T2 names the compound-promote.sh site" \
     "compound-promote.sh" "$GUARD_OUT"
-  assert_contains "T2 names the AGENTS.docs.md site" \
-    "AGENTS.docs.md" "$GUARD_OUT"
+  assert_contains "T2 names the AGENTS.rules.md site" \
+    "AGENTS.rules.md" "$GUARD_OUT"
   assert_contains "T2 names the plan/SKILL.md site" \
     "plan/SKILL.md" "$GUARD_OUT"
   assert_contains "T2 names the grok-fidelity-gate.sh site" \
@@ -270,7 +270,7 @@ t3_single_site_drift_names_unit() {
 t4_empty_extraction_fails_closed() {
   local root; root="$(new_root)"
   make_fixture_tree "$root"
-  cat > "$root/AGENTS.docs.md" <<'EOF'
+  cat > "$root/AGENTS.rules.md" <<'EOF'
 # Docs sidecar
 
 - Budget guidance with every threshold removed. <!-- rule-threshold: 115 -->
@@ -279,7 +279,7 @@ EOF
 
   assert_exit "T4 empty extraction exits non-zero" "1" "$GUARD_RC"
   assert_contains "T4 names the file with the unextractable pattern" \
-    "AGENTS.docs.md" "$GUARD_OUT"
+    "AGENTS.rules.md" "$GUARD_OUT"
   assert_contains "T4 says the extraction was empty" "no match" "$GUARD_OUT"
   rm -rf "$root"
 }
@@ -458,7 +458,7 @@ t8_per_rule_cap_covers_every_site() {
   run_guard "$root"
 
   assert_exit "T8 PER_RULE_CAP bump exits non-zero" "1" "$GUARD_RC"
-  assert_contains "T8 covers AGENTS.docs.md"        "AGENTS.docs.md"    "$GUARD_OUT"
+  assert_contains "T8 covers AGENTS.rules.md"        "AGENTS.rules.md"    "$GUARD_OUT"
   assert_contains "T8 covers plan/SKILL.md"         "plan/SKILL.md"     "$GUARD_OUT"
   assert_contains "T8 covers compound/SKILL.md"     "compound/SKILL.md" "$GUARD_OUT"
   rm -rf "$root"
@@ -475,7 +475,7 @@ t9_warn_covers_every_site() {
     "cron-compound-promote.ts" "$GUARD_OUT"
   assert_contains "T9 covers the compound-promote.sh propose site" \
     "compound-promote.sh" "$GUARD_OUT"
-  assert_contains "T9 covers AGENTS.docs.md warn" "AGENTS.docs.md" "$GUARD_OUT"
+  assert_contains "T9 covers AGENTS.rules.md warn" "AGENTS.rules.md" "$GUARD_OUT"
   assert_contains "T9 covers the runbook warn site" \
     "compound-promote-runbook.md" "$GUARD_OUT"
   rm -rf "$root"

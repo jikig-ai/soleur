@@ -84,7 +84,7 @@ adr-ordinals
 # CONTENT-scoped gate, but the bot composite action does NOT reproduce it in its
 # Phase-4 ceiling — so the synthetic green is unconditional. This is SOUND ONLY
 # because the action's ALLOWED_PATHS = {weakness-digest.md, rule-metrics.json}
-# makes AGENTS.{core,docs,rest}.md physically unreachable by every bot PR today,
+# makes AGENTS.rules.md physically unreachable by every bot PR today,
 # so no bot can weaken a rule body under a fabricated green. The residual goes
 # LIVE the instant #6038's auto-proposer adds an AGENTS path to ALLOWED_PATHS —
 # and the #6049 ceiling forces that PR to reproduce `rule-body-lint --check`

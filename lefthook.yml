@@ -50,27 +50,24 @@ pre-commit:
       run: node apps/web-platform/scripts/lint-fixture-content.mjs {staged_files}
     rule-id-lint:
       priority: 4
-      # Run target is pinned to the full index+sidecar set, not `{staged_files}`:
+      # Run target is pinned to the full index+corpus set, not `{staged_files}`:
       # the cross-file linter (--index-file mode, #3493) needs the union to
       # validate pointer↔body 1:1, and when only retired-rule-ids.txt is
       # staged the positional path resolution would otherwise break.
       glob:
         - "AGENTS.md"
-        - "AGENTS.core.md"
-        - "AGENTS.docs.md"
-        - "AGENTS.rest.md"
+        - "AGENTS.rules.md"
         - "scripts/retired-rule-ids.txt"
-      run: python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
+      run: python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.rules.md
     agents-compound-sync:
       priority: 4
       # Enumerate EVERY file the guard reads. Two pre-existing gaps (#6461):
-      # (a) AGENTS.docs.md was missing -- the rule-threshold sentinel moved
-      #     there post-#3493 and this glob never followed, so editing the
-      #     sentinel did not fire the guard that reads it;
+      # (a) the sentinel's host file was missing from this glob, so editing the
+      #     rule-threshold sentinel did not fire the guard that reads it;
       # (b) no self-glob, so editing the guard did not re-run the guard.
       glob:
         - "AGENTS.md"
-        - "AGENTS.docs.md"
+        - "AGENTS.rules.md"
         - "plugins/soleur/skills/compound/SKILL.md"
         - "plugins/soleur/skills/plan/SKILL.md"
         - "scripts/lint-agents-rule-budget.py"
@@ -83,13 +80,11 @@ pre-commit:
       priority: 5
       glob:
         - "AGENTS.md"
-        - "AGENTS.core.md"
-        - "AGENTS.docs.md"
-        - "AGENTS.rest.md"
+        - "AGENTS.rules.md"
         - "scripts/lint-agents-enforcement-tags.py"
-      # Post-#3493 sidecar split: enforcement tags now live in sidecars.
+      # Enforcement tags live in the rule corpus (ADR-151).
       # Anchor-parity extension landed in #3684.
-      run: python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
+      run: python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.rules.md
     rule-budget-lint:
       priority: 5
       # Mirrors rule-id-lint's glob shape. Self-glob includes the linter
@@ -99,13 +94,11 @@ pre-commit:
       # both lint-rule-ids.py and lint-agents-rule-budget.py.
       glob:
         - "AGENTS.md"
-        - "AGENTS.core.md"
-        - "AGENTS.docs.md"
-        - "AGENTS.rest.md"
+        - "AGENTS.rules.md"
         - "scripts/lint-agents-rule-budget.py"
         - "scripts/lint-agents-rule-budget.test.sh"
         - "scripts/_agents_md_sections.py"
-      run: python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
+      run: python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md
     # Fail a plan/spec/runbook/ADR/legal-runbook that prescribes a *human-run*
     # terraform / SSH / reboot / verify-on-private-net infra step (actor +
     # imperative co-occurrence, not a bare-token denylist). Enforcement teeth

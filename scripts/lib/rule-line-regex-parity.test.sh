@@ -17,6 +17,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PY="$ROOT/scripts/lint-agents-rule-budget.py"
 TS="$ROOT/apps/web-platform/server/inngest/functions/cron-compound-promote.ts"
 SH="$ROOT/.claude/hooks/session-rules-loader.sh"
+IDS="$ROOT/scripts/lint-rule-ids.py"
+BODIES="$ROOT/scripts/lint-rule-bodies.py"
 
 PASS=0; FAIL=0
 pass() { echo "PASS: $1"; PASS=$((PASS+1)); }
@@ -38,8 +40,23 @@ check() {
 check "linter (py)" "$PY" '_RULE_LINE_RE = re.compile(r"^- .*\[id: ")' 1
 # Runtime promoter over-strip guard (#6794 — the copy this suite exists to pin).
 check "cron (ts)"   "$TS" 'RULE_LINE_RE = /^- .*\[id: /' 1
-# Session-rules loader over-strip + rule-count grep sites (4 today: L71/72/242/247).
+# Session-rules loader over-strip + rule-count grep sites (>=3 occurrences).
 check "loader (sh)" "$SH" "E '^- .*\[id: '" 3
+
+
+# --- POINTER_LINE_RE parity (added by ADR-151 review) ------------------------
+# lint-rule-ids.py CLASSIFIES a line as a pointer; lint-rule-bodies.py EXCLUDES
+# the same shape from the body map. They must agree, or a line is a body to one
+# gate and a pointer to the other.
+#
+# This became invisible-on-drift at ADR-151. The old shape ended in a mandatory
+# ` → (core|docs-only|rest)` arrow, so a one-sided edit almost always broke a
+# visible fixture. With the arrow gone the two definitions are a bare shared
+# string, and a one-sided tightening (e.g. dropping the optional-tags group)
+# would silently reclassify real rules with no fixture to notice.
+POINTER_RE_CANON='POINTER_LINE_RE = re.compile(r"^- \[id: [a-z0-9-]+\](?:\s+\[[^\]]+\])*\s*$")'
+check "pointer shape (lint-rule-ids.py)"    "$IDS"    "$POINTER_RE_CANON" 1
+check "pointer shape (lint-rule-bodies.py)" "$BODIES" "$POINTER_RE_CANON" 1
 
 echo
 echo "Total: $((PASS+FAIL))  Pass: $PASS  Fail: $FAIL"

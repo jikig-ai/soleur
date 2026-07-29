@@ -53,3 +53,22 @@ Registered as a sibling `Skill` matcher block (independently enable/disable-able
 - `.claude/hooks/skill-context-queries.test.sh` (git-init fixture repo): happy-path pointer, inline+block parse, glob determinism, traversal/symlink/untracked rejection, no-op fast-exit, adversarial-name no-exec, kill-switch, and a consistency check that the real pilot resolves ≥1 committed artifact.
 - **Web port (#6046):** `apps/web-platform/test/context-queries-hook.test.ts` (behavioural: all four gates, fail-open + no-leak synthetic-Error mirror, git-unavailable never-silent, MAX_GLOB cap, kill-switch) + `context-queries-shell-parity.test.ts` (cross-language byte-parity of the note against the real shell hook over a shared git fixture) + the `agent-runner-query-options.test.ts` two-flag independent-registration cases.
 - Upholds **AP-006** (committed-only, rejects `~/.gstack`), AP-010, AP-011.
+
+## Note — ADR-151 (2026-07-28)
+
+**The Decision here is unchanged.** ADR-151 collapsed the AGENTS change-class
+sidecars into one unconditionally-loaded `AGENTS.rules.md` and retired the
+classifier inside `session-rules-loader.sh`.
+
+Two things this ADR relies on still hold:
+
+- The rejected "Eager SessionStart scan" alternative remains rejected. Its
+  strongest objection — that it would entangle the compliance-critical
+  `session-rules-loader.sh` SOC 2 evidence path — is *unaffected*: ADR-151
+  deliberately REDUCED that hook rather than deleting it, precisely so the
+  per-session manifest, the `[session-context]` snapshot and the tmpfs-guard
+  alarm channel survive. The hard boundary stands.
+- The byte-budget discipline the rejection appeals to also stands, though its
+  headline number moved (`B_ALWAYS` 23000 → 46000) because the measurement was
+  re-scoped to what every session actually loads, not because the budget loosened.
+

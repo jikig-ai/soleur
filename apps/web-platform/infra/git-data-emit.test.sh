@@ -390,7 +390,7 @@ done
 # `sed` addresses were unanchored greps over an unstripped file, and `|| true` already occurs
 # in prose two lines above the emit. Measured: planting a comment above the call listing all
 # six keys, while DELETING luks_mounted and hooks_path from the real emit, harvested the keys
-# from the COMMENT and reported 44/44 GREEN — and because ADR-151 strips comments at render
+# from the COMMENT and reported 44/44 GREEN — and because ADR-152 strips comments at render
 # time, the text making the gate green does not exist on the host. The boot signal whose
 # arrival is supposed to mean the LUKS device mounted would no longer say so, with three
 # consumers reading a payload this suite swore was complete. (cq-assert-anchor-not-bare-token)

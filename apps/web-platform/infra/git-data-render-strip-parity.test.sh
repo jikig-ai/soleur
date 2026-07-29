@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# (#6982, ADR-151) The render-strip contract for the git-data injected payloads.
+# (#6982, ADR-152) The render-strip contract for the git-data injected payloads.
 #
 # WHY THIS SUITE EXISTS. git-data.tf renders nine scripts/units into user_data with whole-line
 # `#` comments stripped, so the repo keeps its rationale and Hetzner's hard 32,768 B ForceNew
@@ -115,7 +115,7 @@ fi
 # no second chance. The three units are worse off: CI's `systemd-analyze verify` lints the
 # SOURCE files, never the rendered ones.
 #
-# Latent today (0 hits) across ~20 continuation sites. Guarded because ADR-151 tells
+# Latent today (0 hits) across ~20 continuation sites. Guarded because ADR-152 tells
 # maintainers comments are now free, which is exactly the belief that trips it.
 _cont_hits="$(awk 'prev ~ /\\[ \t]*$/ && $0 ~ /^[ \t]*#/ {printf "%s:%d\n", FILENAME, NR} {prev=$0}' \
   "$DIR"/git-data-bootstrap.sh "$DIR"/git-data-provision.sh "$DIR"/git-data-transport-wrapper.sh \

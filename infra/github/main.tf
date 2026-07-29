@@ -21,7 +21,7 @@ terraform {
 # org-wide installation 122213433 on jikig-ai). The integrations/github
 # provider exchanges App credentials for a short-lived installation token at
 # each `terraform plan/apply`. Migrated from PAT auth (the eliminated
-# `gh_token` variable) in #4384 per AGENTS.core.md hr-github-app-auth-not-pat,
+# `gh_token` variable) in #4384 per AGENTS.rules.md hr-github-app-auth-not-pat,
 # mirroring the apps/web-platform/infra/main.tf:72-79 pattern landed by #4144.
 # App credentials live in Doppler `prd_terraform` as GITHUB_APP_ID +
 # GITHUB_APP_PRIVATE_KEY; rotation is App-side only. The App MUST have

@@ -1,4 +1,4 @@
-# ADR-151 — Strip rationale comments from the git-data injected scripts at render time
+# ADR-152 — Strip rationale comments from the git-data injected scripts at render time
 
 - **Status:** Accepted
 - **Date:** 2026-07-29

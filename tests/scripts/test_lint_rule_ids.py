@@ -350,18 +350,18 @@ class TestCrossFileMode(unittest.TestCase):
         sidecar → linter must reject."""
         index_body = (
             "# Index\n\n## Hard Rules\n\n"
-            "- [id: hr-real-rule] → core\n"
-            "- [id: hr-orphan-pointer] → core\n"
+            "- [id: hr-real-rule]\n"
+            "- [id: hr-orphan-pointer]\n"
         )
         core_body = (
             "# Core\n\n## Hard Rules\n\n"
             "- The real rule body [id: hr-real-rule].\n"
         )
         repo = self._seed_repo(
-            {"AGENTS.md": "# placeholder\n", "AGENTS.core.md": "# placeholder\n"},
-            {"AGENTS.md": index_body, "AGENTS.core.md": core_body},
+            {"AGENTS.md": "# placeholder\n", "AGENTS.rules.md": "# placeholder\n"},
+            {"AGENTS.md": index_body, "AGENTS.rules.md": core_body},
         )
-        r = self._run_xfile(repo, "AGENTS.md", ["AGENTS.md", "AGENTS.core.md"])
+        r = self._run_xfile(repo, "AGENTS.md", ["AGENTS.md", "AGENTS.rules.md"])
         self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
         self.assertIn("hr-orphan-pointer", r.stderr)
         self.assertIn("pointer", r.stderr.lower())
@@ -370,7 +370,7 @@ class TestCrossFileMode(unittest.TestCase):
         """Sidecar has a rule body for an id not present in the index → reject."""
         index_body = (
             "# Index\n\n## Hard Rules\n\n"
-            "- [id: hr-real-rule] → core\n"
+            "- [id: hr-real-rule]\n"
         )
         core_body = (
             "# Core\n\n## Hard Rules\n\n"
@@ -378,16 +378,16 @@ class TestCrossFileMode(unittest.TestCase):
             "- An orphan body in core [id: hr-orphan-body].\n"
         )
         repo = self._seed_repo(
-            {"AGENTS.md": "# placeholder\n", "AGENTS.core.md": "# placeholder\n"},
-            {"AGENTS.md": index_body, "AGENTS.core.md": core_body},
+            {"AGENTS.md": "# placeholder\n", "AGENTS.rules.md": "# placeholder\n"},
+            {"AGENTS.md": index_body, "AGENTS.rules.md": core_body},
         )
-        r = self._run_xfile(repo, "AGENTS.md", ["AGENTS.md", "AGENTS.core.md"])
+        r = self._run_xfile(repo, "AGENTS.md", ["AGENTS.md", "AGENTS.rules.md"])
         self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
         self.assertIn("hr-orphan-body", r.stderr)
 
     def test_removed_id_sibling_aware(self):
         """HEAD has rule body in AGENTS.md; working copy moves the body to
-        AGENTS.core.md and replaces the AGENTS.md entry with a pointer line.
+        AGENTS.rules.md and replaces the AGENTS.md entry with a pointer line.
         The linter must NOT flag it as 'removed' since it lives in a sibling
         sidecar.
         """
@@ -399,8 +399,8 @@ class TestCrossFileMode(unittest.TestCase):
         # Working copy: rule one moved out (body in core, pointer in index)
         working_index = (
             "# Index\n\n## Hard Rules\n\n"
-            "- [id: hr-moves-to-core] → core\n"
-            "- [id: hr-stays-here] → core\n"
+            "- [id: hr-moves-to-core]\n"
+            "- [id: hr-stays-here]\n"
         )
         working_core = (
             "# Core\n\n## Hard Rules\n\n"
@@ -409,9 +409,9 @@ class TestCrossFileMode(unittest.TestCase):
         )
         repo = self._seed_repo(
             {"AGENTS.md": head_index},
-            {"AGENTS.md": working_index, "AGENTS.core.md": working_core},
+            {"AGENTS.md": working_index, "AGENTS.rules.md": working_core},
         )
-        r = self._run_xfile(repo, "AGENTS.md", ["AGENTS.md", "AGENTS.core.md"])
+        r = self._run_xfile(repo, "AGENTS.md", ["AGENTS.md", "AGENTS.rules.md"])
         self.assertEqual(r.returncode, 0, f"stdout={r.stdout!r} stderr={r.stderr!r}")
         self.assertNotIn("removed id", r.stderr)
 
@@ -429,61 +429,13 @@ class TestCrossFileMode(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("duplicate", r.stderr)
 
-    # ---- Residency invariants (CPO sign-off PR #3496 condition #3) ----
-
-    def test_compliance_tier_rule_outside_core_fails(self):
-        """A `[compliance-tier]`-tagged rule whose body lives in a non-core
-        sidecar must fail the linter — these rules must load every session.
-        """
-        index = (
-            "# Index\n\n## Hard Rules\n\n"
-            "- [id: hr-must-stay-in-core] → core\n"
-            "- [id: cq-compliance-but-misplaced] → docs-only\n"
-        )
-        core = (
-            "# Core\n\n## Hard Rules\n\n"
-            "- A hard rule [id: hr-must-stay-in-core].\n"
-        )
-        # The `[compliance-tier]` body lives in the docs sidecar, not core.
-        docs = (
-            "# Docs\n\n## Code Quality\n\n"
-            "- Misplaced compliance rule [id: cq-compliance-but-misplaced] [compliance-tier].\n"
-        )
-        repo = self._seed_repo(
-            {"AGENTS.md": "# placeholder\n"},
-            {"AGENTS.md": index, "AGENTS.core.md": core, "AGENTS.docs.md": docs},
-        )
-        r = self._run_xfile(repo, "AGENTS.md", ["AGENTS.md", "AGENTS.core.md", "AGENTS.docs.md"])
-        self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
-        self.assertIn("compliance-tier", r.stderr)
-        self.assertIn("cq-compliance-but-misplaced", r.stderr)
-
-    def test_hr_rule_outside_core_fails(self):
-        """An `hr-*` rule whose body lives in a non-core sidecar must fail.
-        CPO sign-off explicitly forbids demoting hr-* — only wg-* may be
-        demoted on `core > 18k` redistribution.
-        """
-        index = (
-            "# Index\n\n## Hard Rules\n\n"
-            "- [id: hr-stays] → core\n"
-            "- [id: hr-misplaced] → rest\n"
-        )
-        core = (
-            "# Core\n\n## Hard Rules\n\n"
-            "- A hard rule [id: hr-stays].\n"
-        )
-        rest = (
-            "# Rest\n\n## Hard Rules\n\n"
-            "- A misplaced hard rule [id: hr-misplaced].\n"
-        )
-        repo = self._seed_repo(
-            {"AGENTS.md": "# placeholder\n"},
-            {"AGENTS.md": index, "AGENTS.core.md": core, "AGENTS.rest.md": rest},
-        )
-        r = self._run_xfile(repo, "AGENTS.md", ["AGENTS.md", "AGENTS.core.md", "AGENTS.rest.md"])
-        self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
-        self.assertIn("hr-misplaced", r.stderr)
-        self.assertIn("AGENTS.core.md", r.stderr)
+    # ---- Residency invariants: DELETED by ADR-151 ----
+    # `test_compliance_tier_rule_outside_core_fails` and
+    # `test_hr_rule_outside_core_fails` asserted that `[compliance-tier]` and
+    # `hr-*` bodies lived in the one sidecar the loader injected every session.
+    # With a single unconditional corpus that invariant holds by construction —
+    # there is nowhere else a body can be — so the checks were deleted rather
+    # than retargeted into gates that cannot fail (SE-4 anti-vacuity).
 
 
 if __name__ == "__main__":

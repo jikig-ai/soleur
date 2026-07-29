@@ -18,8 +18,8 @@ PLUGIN_ROOT="$REPO_ROOT/plugins/soleur"
 cd "$REPO_ROOT"
 
 if [[ "${GROK_FIDELITY_SKIP_BUDGET:-}" != "1" ]]; then
-  echo "==> AGENTS rule-budget lint (B_ALWAYS <= 23000)"
-  python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.core.md AGENTS.docs.md AGENTS.rest.md
+  echo "==> AGENTS rule-budget lint (B_ALWAYS <= 46000)"
+  python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md
 else
   echo "==> AGENTS rule-budget lint (skipped — grok-pre-push-gate already ran test-all)"
 fi

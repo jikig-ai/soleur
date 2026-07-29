@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests the review-reminder.yml liveness guard (#5999, ADR-094, AC9):
-#   - the repo-root AGENTS.core.md is appended to the scan feed;
+#   - the repo-root AGENTS.rules.md is appended to the scan feed;
 #   - the run FAILS loudly (::error:: + exit 1) when a required constitutional
 #     path is NOT evaluated (frontmatter/cadence removed, or feed drop);
 #   - the run passes (exit 0, no ::error::) when it IS evaluated.
@@ -35,11 +35,11 @@ if [[ -z "$SCRIPT" ]]; then
   exit 1
 fi
 
-# AC9 (static): the feed includes AGENTS.core.md via required_paths + append.
-if printf '%s' "$SCRIPT" | grep -q 'required_paths=("AGENTS.core.md")' \
+# AC9 (static): the feed includes AGENTS.rules.md via required_paths + append.
+if printf '%s' "$SCRIPT" | grep -q 'required_paths=("AGENTS.rules.md")' \
    && printf '%s' "$SCRIPT" | grep -qF 'printf' \
    && printf '%s' "$SCRIPT" | grep -qF '${required_paths[@]}'; then
-  pass "AC9 scan feed appends repo-root AGENTS.core.md"
+  pass "AC9 scan feed appends repo-root AGENTS.rules.md"
 else
   fail "AC9 feed inclusion" "required_paths / feed-append pattern not found"
 fi
@@ -58,9 +58,9 @@ GH
   rm -rf "$bin"
 }
 
-# Case A: AGENTS.core.md WITH frontmatter → evaluated → exit 0, no ::error::.
+# Case A: AGENTS.rules.md WITH frontmatter → evaluated → exit 0, no ::error::.
 dA=$(mktemp -d); mkdir -p "$dA/knowledge-base"
-cat > "$dA/AGENTS.core.md" <<'EOF'
+cat > "$dA/AGENTS.rules.md" <<'EOF'
 ---
 last_reviewed: 2026-07-05
 review_cadence: monthly
@@ -76,9 +76,9 @@ else
 fi
 rm -rf "$dA"
 
-# Case B: AGENTS.core.md WITHOUT frontmatter → not evaluated → ::error:: + exit 1.
+# Case B: AGENTS.rules.md WITHOUT frontmatter → not evaluated → ::error:: + exit 1.
 dB=$(mktemp -d); mkdir -p "$dB/knowledge-base"
-printf '# core, frontmatter removed\n' > "$dB/AGENTS.core.md"
+printf '# corpus, frontmatter removed\n' > "$dB/AGENTS.rules.md"
 run_scan "$dB"
 if [[ "$RC" == "1" ]] && grep -q '::error::Required constitutional path' <<<"$OUT"; then
   pass "liveness: core WITHOUT frontmatter → ::error:: + exit 1 (AC9)"
@@ -92,7 +92,7 @@ rm -rf "$dB"
 # "cadence removed" from "whole frontmatter removed" (Case B) — the run must fail
 # loudly on either, not just the total wipe.
 dC=$(mktemp -d); mkdir -p "$dC/knowledge-base"
-cat > "$dC/AGENTS.core.md" <<'EOF'
+cat > "$dC/AGENTS.rules.md" <<'EOF'
 ---
 last_reviewed: 2026-07-05
 owner: founder

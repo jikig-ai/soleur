@@ -260,7 +260,7 @@ resource "doppler_secret" "git_data_ssh_host" {
 }
 
 # --- The git-data host -------------------------------------------------------
-# (#6982, ADR-151) THE RATIONALE STRIP. Removes whole-line `#` comments from the nine
+# (#6982, ADR-152) THE RATIONALE STRIP. Removes whole-line `#` comments from the nine
 # injected scripts/units AT RENDER TIME, so the repo keeps its rationale and user_data does
 # not pay for it. Hetzner's cap is a hard 32,768 B ForceNew gate and comments were 61% of the
 # raw payload; without this, every safety comment competes with a fail-closed invariant for

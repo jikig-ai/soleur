@@ -84,7 +84,7 @@ extract_one() {
 COMPOUND_REL="plugins/soleur/skills/compound/SKILL.md"
 COMPOUND_ABS="$ROOT/$COMPOUND_REL"
 
-# Post-#3493 sidecar split: the sentinel lives in AGENTS.docs.md, not AGENTS.md.
+# The sentinel lives in the rule corpus, not the pointer index (ADR-151).
 # Search the whole registry so this stays location-tolerant.
 AGENTS_THRESHOLD=""
 for f in "$ROOT"/AGENTS*.md; do
@@ -133,9 +133,9 @@ SITES=(
   "apps/web-platform/server/inngest/functions/cron-compound-promote.ts|^const PROPOSE_ALWAYS_LOADED_BUDGET = ([0-9]+);|WARN"
   "scripts/compound-promote.sh|^ALWAYS_LOADED_CAP=([0-9]+)|REJECT"
   "scripts/compound-promote.sh|^PROPOSE_ALWAYS_LOADED_BUDGET=([0-9]+)|WARN"
-  "AGENTS.docs.md|([0-9]+) warn|WARN"
-  "AGENTS.docs.md|([0-9]+) critical|REJECT"
-  "AGENTS.docs.md|cap at ~([0-9]+) bytes|PER_RULE_CAP"
+  "AGENTS.rules.md|([0-9]+) warn|WARN"
+  "AGENTS.rules.md|([0-9]+) critical|REJECT"
+  "AGENTS.rules.md|cap at ~([0-9]+) bytes|PER_RULE_CAP"
   "plugins/soleur/skills/plan/SKILL.md|([0-9]+)-byte critical cap|REJECT"
   "plugins/soleur/skills/plan/SKILL.md|per-rule ([0-9]+)-byte cap|PER_RULE_CAP"
   "plugins/soleur/skills/compound/SKILL.md|cap per-rule length at ~([0-9]+)|PER_RULE_CAP"

@@ -4,7 +4,7 @@
 # (operator SSH, `doppler secrets set`, vendor-dashboard click-paths, etc.)
 # instead of routing through Terraform.
 #
-# Source rule: AGENTS.core.md `hr-all-infrastructure-provisioning-servers`.
+# Source rule: AGENTS.rules.md `hr-all-infrastructure-provisioning-servers`.
 # Routing target: plan Phase 2.8 (Infrastructure-as-Code Routing Gate) which
 # auto-invokes `terraform-architect` and requires a `## Infrastructure (IaC)`
 # section in the plan output.

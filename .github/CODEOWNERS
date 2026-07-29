@@ -43,9 +43,7 @@
 # the day branch protection enforces it. (Live enforcement today = the required
 # `rule-body-lint` CI check + deliberate ack authoring; CODEOWNERS-review on main
 # is a tracked operator follow-up — see this file's header.)
-/AGENTS.core.md                                         @deruelle
-/AGENTS.docs.md                                         @deruelle
-/AGENTS.rest.md                                         @deruelle
+/AGENTS.rules.md                                        @deruelle
 /scripts/lint-rule-bodies.py                            @deruelle
 /scripts/_agents_md_sections.py                         @deruelle
 /.claude/rule-body-hashes.txt                          @deruelle

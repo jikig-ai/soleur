@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Lint knowledge-base docs for prescribed *human-run* infra steps.
 
-Enforcement teeth for `hr-no-ssh-fallback-in-runbooks` (AGENTS.core.md): a
+Enforcement teeth for `hr-no-ssh-fallback-in-runbooks` (AGENTS.rules.md): a
 plan/spec/runbook that prescribes a human-run terraform / SSH / reboot /
 verify-on-private-net infra step must FAIL CI. Soleur users are non-technical
 and act only through the web app / CI, so each such step is an automation bug

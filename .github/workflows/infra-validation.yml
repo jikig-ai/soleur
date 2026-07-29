@@ -835,7 +835,7 @@ jobs:
       - name: Rehearse the git-data runcmd chain (abort ordering + rc guard)
         run: bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
 
-      # (#6982, ADR-151) The render-strip contract. git-data.tf strips whole-line comments
+      # (#6982, ADR-152) The render-strip contract. git-data.tf strips whole-line comments
       # from the nine injected payloads so rationale does not compete with the 32,768 B
       # ForceNew cap. Two things make that safe and neither is self-enforcing: the strip
       # expression is hand-mirrored in git-data-userdata-budget.sh (the render harness for

@@ -149,7 +149,7 @@ EXPECTED_PATHS = {
 tf = open(os.path.join(srcdir, "git-data.tf")).read()
 tpl = open(os.path.join(srcdir, "cloud-init-git-data.yml")).read()
 
-# The payloads are delivered with whole-line `#` comments stripped at render time (ADR-151),
+# The payloads are delivered with whole-line `#` comments stripped at render time (ADR-152),
 # so the source must be stripped the same way before the bytes are compared. Read the
 # expression FROM git-data.tf rather than restating it: a hand-copied spelling would drift,
 # and a stripper that silently disagreed with production would make this whole check compare

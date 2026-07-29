@@ -1,5 +1,5 @@
 variable "github_app_id" {
-  description = "GitHub App ID for soleur-ai (id 3261325). Mirrored from `prd` to `prd_terraform` so the App-auth `provider \"github\"` block can resolve it (see main.tf). Migrated from `gh_token` PAT auth in #4384 per AGENTS.core.md hr-github-app-auth-not-pat."
+  description = "GitHub App ID for soleur-ai (id 3261325). Mirrored from `prd` to `prd_terraform` so the App-auth `provider \"github\"` block can resolve it (see main.tf). Migrated from `gh_token` PAT auth in #4384 per AGENTS.rules.md hr-github-app-auth-not-pat."
   type        = string
   sensitive   = true
 }

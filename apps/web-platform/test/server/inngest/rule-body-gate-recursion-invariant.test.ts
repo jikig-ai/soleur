@@ -2,8 +2,8 @@
  * Recursion invariant for the hard-rule body-weakening gate (ADR-092, #6103).
  *
  * The #6038 auto-proposer may draft-edit anything matching `TARGET_ALLOW_RE`
- * (AGENTS.core.md + skill SKILL.md files). The body-weakening gate exists
- * precisely BECAUSE AGENTS.core.md is auto-editable. The gate's own control
+ * (AGENTS.rules.md + skill SKILL.md files). The body-weakening gate exists
+ * precisely BECAUSE AGENTS.rules.md is auto-editable. The gate's own control
  * surface — the linter, the committed manifest, the WORM ack file, the CI
  * wiring, the ADR, the C4 model — MUST stay OUTSIDE that auto-editable set, or a
  * proposer could weaken a rule and rewrite the gate that would have caught it in
@@ -15,7 +15,7 @@
  *      symbol, not a copy).
  *   2. Real catch property (NOT the vacuous ∉ tautology) — run the ACTUAL
  *      `scripts/lint-rule-bodies.py --check` against a temp git repo where a
- *      synthetic proposer-style diff to AGENTS.core.md weakens a body / drops a
+ *      synthetic proposer-style diff to AGENTS.rules.md weakens a body / drops a
  *      security tag, and assert it is BLOCKED. Proves the auto-editable target
  *      is genuinely gated, not merely that the gate files are un-editable.
  */
@@ -69,8 +69,8 @@ const GATE_CONTROL_FILES = [
 ];
 
 describe("rule-body gate recursion invariant (ADR-092, AC8)", () => {
-  it("the gate exists because AGENTS.core.md IS auto-editable (positive control)", () => {
-    expect(TARGET_ALLOW_RE.test("AGENTS.core.md")).toBe(true);
+  it("the gate exists because AGENTS.rules.md IS auto-editable (positive control)", () => {
+    expect(TARGET_ALLOW_RE.test("AGENTS.rules.md")).toBe(true);
   });
 
   it("no gate control file is inside the auto-editable set", () => {
@@ -121,9 +121,7 @@ describe("rule-body gate recursion invariant (ADR-092, AC8)", () => {
       git("init", "-q", "-b", "main");
       git("config", "user.email", "t@t");
       git("config", "user.name", "t");
-      writeFileSync(join(repo, "AGENTS.core.md"), CORE);
-      writeFileSync(join(repo, "AGENTS.docs.md"), "# Docs\n");
-      writeFileSync(join(repo, "AGENTS.rest.md"), "# Rest\n");
+      writeFileSync(join(repo, "AGENTS.rules.md"), CORE);
       mkdirSync(join(repo, ".claude"));
       writeFileSync(join(repo, ".claude", "rule-weakening-acks.txt"), "# acks\n");
       write();
@@ -134,9 +132,9 @@ describe("rule-body gate recursion invariant (ADR-092, AC8)", () => {
 
     afterEach(() => rmSync(repo, { recursive: true, force: true }));
 
-    it("BLOCKS a synthetic body weakening to AGENTS.core.md", () => {
+    it("BLOCKS a synthetic body weakening to AGENTS.rules.md", () => {
       writeFileSync(
-        join(repo, "AGENTS.core.md"),
+        join(repo, "AGENTS.rules.md"),
         CORE.replace("Do the safe thing.", "Optional: maybe."),
       );
       write();
@@ -146,9 +144,9 @@ describe("rule-body gate recursion invariant (ADR-092, AC8)", () => {
       expect(r.stderr).toContain("hr-never-dangerous");
     });
 
-    it("BLOCKS a synthetic security-tag drop on AGENTS.core.md", () => {
+    it("BLOCKS a synthetic security-tag drop on AGENTS.rules.md", () => {
       writeFileSync(
-        join(repo, "AGENTS.core.md"),
+        join(repo, "AGENTS.rules.md"),
         // Drop [compliance-tier] — a weakening the gate must catch.
         CORE.replace(" [compliance-tier].", "."),
       );

@@ -4,7 +4,7 @@
 # run_in_background:true whose command polls CI / PR / release state) and
 # redirects to the Monitor tool.
 #
-# Source rule: hr-monitor-not-run-in-background-for-polling (AGENTS.core.md).
+# Source rule: hr-monitor-not-run-in-background-for-polling (AGENTS.rules.md).
 # Mechanical backstop to the ship Phase 7 HARD GATE (ship/SKILL.md) — that gate
 # is prose, scoped to ship's code path, so a run that never loads ship (e.g. a
 # "compressed" one-shot that hand-rolls the merge wait) escapes it entirely.
@@ -131,7 +131,7 @@ Use the Monitor tool instead — it streams each state transition (e.g. OPEN BLO
 
   - For a PR merge / CI wait, use the canonical loop in plugins/soleur/skills/ship/SKILL.md Phase 7 (the phase-7-poll-block).
   - For a workflow-run wait, see ship/SKILL.md Step 3 (state-change + heartbeat).
-  - Rule: hr-monitor-not-run-in-background-for-polling (AGENTS.core.md).
+  - Rule: hr-monitor-not-run-in-background-for-polling (AGENTS.rules.md).
 
 If you genuinely need a one-shot wait (no loop) or a non-poll background job, drop run_in_background or restructure. To override this gate in a rare legitimate case, add the literal comment on its own line:
   # gate-override: background-poll-prefer-monitor"

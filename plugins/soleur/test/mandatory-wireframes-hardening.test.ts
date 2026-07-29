@@ -67,27 +67,28 @@ describe("Feature A — deepen-plan wireframe halt is Phase 4.9 (4.8 already tak
 
 describe("Feature B — merged stale-claim hard rule + promoted wireframe gate", () => {
   const agentsIndex = read("AGENTS.md");
-  const core = read("AGENTS.core.md");
-  const docs = read("AGENTS.docs.md");
+  const corpus = read("AGENTS.rules.md");
 
-  test("the merged hard rule is present in the index and in AGENTS.core.md", () => {
+  test("the merged hard rule is present in the index and in the corpus", () => {
     expect(agentsIndex).toContain("hr-verify-repo-capability-claim-before-assert");
-    expect(core).toContain("hr-verify-repo-capability-claim-before-assert");
+    expect(corpus).toContain("hr-verify-repo-capability-claim-before-assert");
   });
 
   test("the hard rule covers BOTH own-output and subagent-prompt premises", () => {
-    const idx = core.indexOf("hr-verify-repo-capability-claim-before-assert");
-    const body = core.slice(Math.max(0, idx - 400), idx + 200);
+    const idx = corpus.indexOf("hr-verify-repo-capability-claim-before-assert");
+    const body = corpus.slice(Math.max(0, idx - 400), idx + 200);
     expect(body.toLowerCase()).toContain("subagent");
   });
 
-  test("the promoted wireframe gate lives in AGENTS.docs.md (docs-only), pointer in index", () => {
+  // ADR-151: the gate used to be asserted into the docs-class sidecar so it
+  // would load on docs-only sessions. With one unconditional corpus, residency is not a
+  // choice — what still matters is that the rule EXISTS and is pointered 1:1.
+  test("the promoted wireframe gate is in the corpus, pointer in index", () => {
     expect(agentsIndex).toContain("wg-ui-feature-requires-pen-wireframe");
-    expect(docs).toContain("wg-ui-feature-requires-pen-wireframe");
+    expect(corpus).toContain("wg-ui-feature-requires-pen-wireframe");
   });
 
   test("the retired UX-gate id is NOT reintroduced as an active rule", () => {
-    expect(core).not.toContain("wg-for-user-facing-pages-with-a-product-ux");
-    expect(docs).not.toContain("wg-for-user-facing-pages-with-a-product-ux");
+    expect(corpus).not.toContain("wg-for-user-facing-pages-with-a-product-ux");
   });
 });

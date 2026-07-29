@@ -15,7 +15,7 @@ date: 2026-05-11
 
 Issue #2720 (parent #2718; supersedes #421) introduces Layer 2 of the
 self-healing-workflow design: a weekly cron that clusters
-`knowledge-base/project/learnings/` and proposes skill or `AGENTS.core.md`
+`knowledge-base/project/learnings/` and proposes skill or `AGENTS.rules.md`
 edits via draft PR. The architectural challenge is that the loop both
 **consumes** workflow context (Anthropic API call to cluster learnings) and
 **produces** workflow context (opens a PR, writes audit-log rows, applies a

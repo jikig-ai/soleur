@@ -780,7 +780,7 @@ assert_mutation "A28b key-never-on-argv (bootstrap)" p_key_never_on_argv \
 #
 # This had NO regression guard until now. Measured: reverting either unit to the sourcing form
 # left this suite 87/87 GREEN, `systemd-analyze verify` green (it does not model dash's
-# special-builtin abort), and the ADR-151 parity suite green. Sibling units ARE guarded —
+# special-builtin abort), and the ADR-152 parity suite green. Sibling units ARE guarded —
 # cron-egress-firewall.test.sh pins its `EnvironmentFile=-`, workspaces-luks-header.test.sh
 # pins luks-monitor's — these two were the gap.
 p_env_file_not_sourced() {
