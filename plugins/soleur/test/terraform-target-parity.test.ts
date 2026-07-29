@@ -2414,15 +2414,25 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(jobBlock).toMatch(
       /^\s*if ! git_data_birth_readiness_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+"; then/m,
     );
+    // #6982 A3 added a SECOND interlock and did not inherit this pin. Measured: deleting its
+    // invocation, or putting `if: ${{ false }}` on its step, left this suite 98/0 GREEN —
+    // the same three mutations the comment above says were measured against gate 1, on the
+    // gate that is the only thing holding the birth today.
+    expect(jobBlock).toMatch(
+      /^\s*if ! git_data_rung2_rehearsal_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+"; then/m,
+    );
 
-    // The interlock is a separate STEP, so it can also be disarmed without touching its
-    // body at all. Pin the three ways: a conditional, continue-on-error, or a missing
+    // The interlocks are separate STEPS, so each can be disarmed without touching its body
+    // at all. Pin the three ways for BOTH: a conditional, continue-on-error, or a missing
     // non-zero exit.
-    const interlock = /- name: Birth-readiness interlock[\s\S]*?(?=\n      - name: )/.exec(jobBlock);
-    expect(interlock).not.toBeNull();
-    expect(interlock![0]).not.toMatch(/^\s*if:/m);
-    expect(interlock![0]).not.toMatch(/continue-on-error/);
-    expect(interlock![0]).toMatch(/^\s*exit 1$/m);
+    for (const stepName of ["Birth-readiness interlock", "Rung-2 rehearsal interlock"]) {
+      const step = new RegExp(`- name: ${stepName}[\\s\\S]*?(?=\\n      - name: )`).exec(jobBlock);
+      expect(step, `step not found: ${stepName}`).not.toBeNull();
+      expect(step![0]).not.toMatch(/^\s*if:/m);
+      expect(step![0]).not.toMatch(/continue-on-error/);
+      expect(step![0]).toMatch(/^\s*exit 1$/m);
+    }
+
   });
 
   test("the interlock inspects the SAME template git-data.tf renders", () => {
@@ -2526,14 +2536,21 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(birthAt).toBeLessThan(stockAt);
   });
 
-  test("the readiness interlock runs BEFORE the terraform plan", () => {
+  test("BOTH interlocks run BEFORE the terraform plan", () => {
     const interlockAt = jobBlock.search(/^\s*if ! git_data_birth_readiness_gate\b/m);
+    // #6982 A3's rung-2 gate is the second hold and had no ordering pin. A gate that runs
+    // after the plan still lets a held route pay for a plan and read a secret before it
+    // refuses, which is the cost the first gate's placement comment exists to avoid.
+    const rung2At = jobBlock.search(/^\s*if ! git_data_rung2_rehearsal_gate\b/m);
     // `terraform plan` WITH its flags — the invocation, not the words. The job header
-    // comment contains the bare phrase.
+    // comment contains the bare phrase. (I hit exactly this writing the rung-2 pin: an
+    // unanchored /terraform plan/ matched the header comment and the assertion inverted.)
     const planAt = jobBlock.search(/^\s*terraform plan -no-color/m);
     expect(interlockAt).toBeGreaterThan(-1);
+    expect(rung2At).toBeGreaterThan(-1);
     expect(planAt).toBeGreaterThan(-1);
     expect(interlockAt).toBeLessThan(planAt);
+    expect(rung2At).toBeLessThan(planAt);
   });
 
   test("the job carries the environment gate and reads HCLOUD_TOKEN for the preflight", () => {
