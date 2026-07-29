@@ -29,8 +29,11 @@ Type=oneshot
 # disk climbs, Better Stack shows nothing, and systemctl reports success.
 #
 # --config prd_git_data is the config this host's token is scoped to (#6982 W0).
-ExecStart=/bin/sh -c 'set -a; . /etc/default/git-data-doppler; set +a; \
-  exec doppler run --project soleur --config prd_git_data -- /usr/local/bin/git-data-gc.sh'
+# EnvironmentFile=- not `. <file>`: /bin/sh is DASH, where `.` is a special builtin, so a
+# failed source kills the shell before doppler runs. See the OnFailure sibling for the
+# reachability bug this same shape caused there.
+EnvironmentFile=-/etc/default/git-data-doppler
+ExecStart=/usr/local/bin/doppler run --project soleur --config prd_git_data -- /usr/local/bin/git-data-gc.sh
 
 # MemoryMax is an OOM boundary for THIS cgroup, so a runaway repack is killed here rather
 # than letting the kernel choose — the other candidates on this host are sshd and the git

@@ -19,10 +19,15 @@ Environment=HOME=/root
 # The fallback arm is deliberate: if `doppler run` is itself the broken thing, the Sentry
 # half still fires from the BAKED DSN. A reporter that can only report when its credential
 # works is not a reporter.
-ExecStart=/bin/sh -c 'set -a; . /etc/default/git-data-doppler; set +a; \
-  doppler run --project soleur --config prd_git_data -- \
-  /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_GC unit failed" gc fatal "" \
-  "unit=git-data-gc.service" || \
-  /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_GC unit failed" gc fatal "" \
-  "unit=git-data-gc.service"'
+#
+# That fallback was UNREACHABLE until EnvironmentFile=- replaced `. <file>`: /bin/sh is DASH,
+# where `.` is a special builtin, so a failed source kills the shell before either || arm runs
+# — and a host whose Doppler stage aborted is exactly the one with no env file (0600, written
+# after abortable stages). Verified: dash -c '. /nx || echo A; echo B' prints nothing, rc=2.
+#
+# set -- once, run twice: the two arms are the same command, one wrapped in `doppler run`.
+EnvironmentFile=-/etc/default/git-data-doppler
+ExecStart=/bin/sh -c 'set -- /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_GC unit failed" \
+  gc fatal "" "unit=git-data-gc.service"; \
+  /usr/local/bin/doppler run --project soleur --config prd_git_data -- "$@" || "$@"'
 TimeoutStartSec=120
