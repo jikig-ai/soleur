@@ -56,7 +56,7 @@ variable "location" {
   # compared them, so the rehearsal would have booted in the wrong datacenter and the
   # evidence would have been silent about it. git-data-rung2-rehearsal.test.sh now pins
   # the two defaults against each other by shape.
-  default     = "hel1"
+  default = "hel1"
 }
 
 variable "git_data_server_type" {
