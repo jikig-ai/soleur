@@ -141,9 +141,15 @@ jobs:
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
           printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
 
+      # `-lockfile=readonly`, matching every other init in apply-web-platform-infra.yml. The
+      # rehearsal's entire claim is that it boots the bytes production would, and a provider
+      # that rendered or attached differently would make the evidence attest a boot nobody is
+      # going to get. Without the flag, `init` silently UPDATES .terraform.lock.hcl to whatever
+      # the registry serves that day — so the pinned-to-the-parent's-versions promise in
+      # main.tf would hold only until the next upstream release.
       - name: Terraform init (rehearsal root — DISTINCT state key)
         working-directory: ${{ env.REHEARSAL_DIR }}
-        run: terraform init -input=false
+        run: terraform init -input=false -lockfile=readonly
 
       # ── TEARDOWN-ONLY ARM (R12) ────────────────────────────────────────────────────
       #

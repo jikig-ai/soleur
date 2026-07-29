@@ -344,6 +344,45 @@ else
   fail "the parent apply excludes modules/ — a real production render change would not trigger an apply"
 fi
 
+# ── 11b. PROVIDER VERSIONS ARE PINNED TO THE PARENT ROOT'S, NOT MERELY CONSTRAINED ──
+#
+# main.tf claims the rehearsal is "PINNED TO THE PARENT ROOT'S VERSIONS", and a `~> 1.49`
+# CONSTRAINT does not deliver that — the LOCK does. Measured while building this: a fresh
+# `terraform init` in the rehearsal root resolved hetznercloud/hcloud to 1.68.0 while the
+# parent's lock pins 1.63.0, so the two roots would have rendered and attached under
+# DIFFERENT provider versions while the ADR claimed they matched.
+#
+# Both sides extracted BY SHAPE from their own lock file; a hardcoded expectation here would
+# pass while the parent moved. Compared over the INTERSECTION, since the parent legitimately
+# carries providers this root does not (cloudflare, github, better-uptime).
+_lock_par="$DIR/.terraform.lock.hcl"
+_lock_reh="$REH/.terraform.lock.hcl"
+if [[ ! -f "$_lock_par" || ! -f "$_lock_reh" ]]; then
+  fail "a committed .terraform.lock.hcl is missing" "parent=${_lock_par} rehearsal=${_lock_reh}"
+else
+  _lock_ver() {  # $1=lockfile $2=provider path -> version
+    awk -v p="provider \"registry.terraform.io/$2\" {" '
+      index($0,p){i=1; next} i && /version[[:space:]]*=/{gsub(/[",]/,""); print $NF; exit}' "$1"
+  }
+  _drift=""; _checked=0
+  for _prov in hetznercloud/hcloud hashicorp/random hashicorp/tls dopplerhq/doppler; do
+    _pv="$(_lock_ver "$_lock_par" "$_prov")"
+    _rv="$(_lock_ver "$_lock_reh" "$_prov")"
+    [[ -z "$_pv" || -z "$_rv" ]] && continue
+    _checked=$((_checked + 1))
+    [[ "$_pv" != "$_rv" ]] && _drift="${_drift} ${_prov}(parent=${_pv},rehearsal=${_rv})"
+  done
+  if [[ "$_checked" -lt 4 ]]; then
+    fail "provider-lock parity extraction found only ${_checked} shared provider(s) (<4)" \
+      "the awk extraction drifted; an empty intersection makes the comparison below vacuous"
+  elif [[ -z "$_drift" ]]; then
+    pass "all ${_checked} shared provider versions are locked identically in both roots"
+  else
+    fail "provider-lock DRIFT between the rehearsal root and production:${_drift}" \
+      "the rehearsal would render/attach under a different provider than the host it attests for"
+  fi
+fi
+
 # ── 12. THE ORPHAN SWEEP EXISTS AND FAILS CLOSED ───────────────────────────────────
 # `terraform plan` reports on resources IN STATE, so a host the rehearsal state has forgotten
 # is invisible to every plan in this repository. Only Hetzner can see it.
