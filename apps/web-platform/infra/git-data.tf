@@ -222,23 +222,27 @@ resource "doppler_secret" "git_remove_ssh_private_key" {
 # secret is the ANTIDOTE, not the poison — it is the thing that makes erasure work — so
 # co-landing is precisely what must NOT be required. Two consequences, both wanted:
 #
-#   1. It lands in terraform's FIRST wave (its value is a static local, so it has no
-#      upstream at all). NOTE the correction: that makes it ELIGIBLE earlier, it does NOT
-#      order it before an unrelated node — Terraform orders only by dependency edges, and
-#      under the default -parallelism=10 both are scheduled concurrently. An earlier draft
-#      of this comment claimed ordering "BY CONSTRUCTION"; that was false, and a transient
-#      Doppler 5xx on THIS write in an apply where the server and the remove key both
-#      succeed leaves the arming switch on with the antidote absent — exactly the state the
-#      claim denied. AC35 is pinned by the explicit edge on the REMOVE key instead (see
+#   1. AC35 is pinned by the explicit edge on the REMOVE key (see
 #      `doppler_secret.git_remove_ssh_private_key`), which is a mechanism rather than a
-#      scheduling accident.
-#   2. It carries no edge that could drag hcloud_server.git_data into an upstream
-#      `-target` closure — the wedge ADR-149 feared when it cut this resource from #6977.
+#      scheduling accident. An earlier draft of this comment claimed ordering "BY
+#      CONSTRUCTION" from wave-eligibility; that was false — Terraform orders only by
+#      dependency edges, and under the default -parallelism=10 both are scheduled
+#      concurrently, so a transient Doppler 5xx on THIS write in an apply where the server
+#      and the remove key both succeed leaves the arming switch on with the antidote absent.
+#   2. It carries no edge that drags hcloud_server.git_data into any `-target` closure that
+#      EXISTS — the wedge ADR-149 feared when it cut this resource from #6977. Note this is
+#      now an argument about the actual -target lines, not about having no upstream: since
+#      DC-3 (below) the value reads `hcloud_server_network.git_data.ip`, so the resource DOES
+#      have an upstream and is no longer first-wave. The birth job already targets both
+#      `hcloud_server.git_data` and `hcloud_server_network.git_data`, so the edge drags
+#      nothing new in. An earlier revision of this block asserted "no upstream at all" and
+#      "no edge" as unconditional facts; both were falsified by DC-3 and are corrected here
+#      rather than left standing ten lines above the note that contradicts them.
 #
 # NO `lifecycle { ignore_changes = [value] }` either (#6982 R38): every sibling
 # doppler_secret in this root lets Terraform own the value, and pinning it here would
-# freeze a stale IP the day local.git_data_private_ip moves — silently re-creating the
-# drift that this single-sourcing exists to remove.
+# freeze a stale address the day the NIC's IP moves — silently re-creating the drift that
+# this single-sourcing exists to remove.
 resource "doppler_secret" "git_data_ssh_host" {
   project = "soleur"
   config  = "prd"
