@@ -433,7 +433,7 @@ runcmd:
     set -a
     . /etc/default/git-data-doppler
     set +a
-    doppler run --project soleur --config prd_git_data -- bash -s <<'LUKSEOF'
+    doppler run --project soleur --config ${doppler_config_name} -- bash -s <<'LUKSEOF'
     set -euo pipefail
     # (#6982, R2) HEREDOC-LOCAL STAGE + TRAP. A CHILD of `doppler run`, so the parent's
     # STAGE/on_err do not cross the exec boundary — without it a failed luksOpen and a
@@ -496,7 +496,7 @@ runcmd:
       exit 1
     }
     trap bootstrap_err EXIT
-    doppler run --project soleur --config prd_git_data -- bash /usr/local/bin/git-data-bootstrap.sh
+    doppler run --project soleur --config ${doppler_config_name} -- bash /usr/local/bin/git-data-bootstrap.sh
 
   # (#6982, W4) Arm the maintenance timer. MUST-TOLERATE (Phase 0.4): a timer that fails to
   # enable is a degraded steady state, not a reason to abort a boot.

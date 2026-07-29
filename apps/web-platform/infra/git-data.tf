@@ -260,27 +260,36 @@ resource "doppler_secret" "git_data_ssh_host" {
 }
 
 # --- The git-data host -------------------------------------------------------
-# (#6982, ADR-152) THE RATIONALE STRIP. Removes whole-line `#` comments from the nine
-# injected scripts/units AT RENDER TIME, so the repo keeps its rationale and user_data does
-# not pay for it. Hetzner's cap is a hard 32,768 B ForceNew gate and comments were 61% of the
-# raw payload; without this, every safety comment competes with a fail-closed invariant for
-# space, which on a host where a green apply and a dark host are indistinguishable is the
-# wrong trade. cloud-init-git-data.yml itself is NOT stripped.
+# (#7025, R7) THE RENDER MOVED TO ./modules/git-data-userdata.
 #
-# ANCHORED AT LINE START, and `#!` is preserved by construction. `${var#...}` and other
-# mid-line `#` are untouched because the match must begin the line; a `#`-anywhere rule
-# (`s/#.*//`) breaks four of the six scripts on parameter expansion — measured.
-# Preserving `#!` is not cosmetic: git-data-provision.sh, -remove.sh and -transport-wrapper.sh
-# are invoked via authorized_keys `command="..."`, so a lost shebang does NOT fail loudly —
-# it silently falls back to dash. That is the same class as the A2 defect this PR fixes.
+# It used to be an inline `templatefile()` map here, plus a byte-for-byte duplicate of
+# `local.git_data_rationale_strip` kept equal by git-data-render-strip-parity.test.sh. The
+# rung-2 rehearsal root (apps/web-platform/infra/rung2-rehearsal/) needs the SAME render, and
+# a third copy is not safe the way the second one was: the rung-2 evidence hash is over
+# SOURCE FILES, so two copies that drift produce a BYTE-IDENTICAL hash for a DIFFERENT
+# render. The rehearsal would attest a payload it did not boot, and the attestation would
+# verify. One module called twice has no drift to detect.
 #
-# TWO INVARIANTS THIS EXPRESSION MUST KEEP, both load-bearing for downstream parsers in
-# plugins/soleur/test/cloud-init-user-data-size.test.ts: it contains NO brace (that file
-# counts brace depth to find the templatefile map), and every map entry below stays on ONE
-# physical line (its var parser is line-based). git-data-userdata-budget.sh mirrors this
-# expression byte-for-byte; git-data-render-strip-parity.test.sh is what keeps them equal.
-locals {
-  git_data_rationale_strip = "/(?m)^[ \t]*#([^!\n][^\n]*)?\n/"
+# The strip expression and the map now live in modules/git-data-userdata/main.tf. The
+# rung-2 gate derives its hash-input set by grepping THAT file — see
+# tests/scripts/lib/git-data-birth-readiness-gate.sh.
+module "git_data_userdata" {
+  source = "./modules/git-data-userdata"
+
+  host_name               = "soleur-git-data"
+  git_data_volume_id      = hcloud_volume.git_data.id
+  git_data_luks_volume_id = hcloud_volume.git_data_luks.id
+  doppler_token           = doppler_service_token.git_data.key
+  # (#7025, R1) The literal this template carried until #7025, now passed explicitly. It
+  # MUST name the config doppler_service_token.git_data is scoped to.
+  doppler_config_name    = "prd_git_data"
+  doppler_arch           = local.git_data_arch
+  doppler_sha256         = local.git_data_doppler_sha256
+  sentry_dsn             = var.sentry_dsn
+  betterstack_ingest_url = local.betterstack_logs_ingest_url
+  git_transport_pubkey   = local.git_transport_pubkey
+  git_provision_pubkey   = local.git_provision_pubkey
+  git_remove_pubkey      = local.git_remove_pubkey
 }
 
 resource "hcloud_server" "git_data" {
@@ -320,71 +329,7 @@ resource "hcloud_server" "git_data" {
   # stay byte-identical; only this expression changed. Byte-exact size is confirmed at
   # #5887's first `terraform plan`; fail-closed at first provisioning if decode fails
   # (web-host readiness check finds no git/bare-repo, blocks cutover). See ADR-080.
-  user_data = base64gzip(templatefile("${path.module}/cloud-init-git-data.yml", {
-    git_data_bootstrap               = replace(file("${path.module}/git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
-    git_data_pre_receive_placeholder = replace(file("${path.module}/git-data-pre-receive-placeholder.sh"), local.git_data_rationale_strip, "")
-    # The FIXED provision forced-command wrapper (git init --bare), delivered to
-    # /usr/local/bin like the bootstrap (ADR provisioning amendment).
-    git_data_provision = replace(file("${path.module}/git-data-provision.sh"), local.git_data_rationale_strip, "")
-    # The TRANSPORT allowlist forced-command wrapper (Sub-PR 3.D) — replaces the raw
-    # git-shell forced command; delivered to /usr/local/bin like the others.
-    git_data_transport_wrapper = replace(file("${path.module}/git-data-transport-wrapper.sh"), local.git_data_rationale_strip, "")
-    # The FIXED erasure forced-command wrapper (rm -rf <id>.git), Art. 17 (3.A;
-    # app-side call lands in 3.D). Delivered to /usr/local/bin like the others.
-    git_data_remove = replace(file("${path.module}/git-data-remove.sh"), local.git_data_rationale_strip, "")
-    # (#6982, W4) The bounded maintenance unit set. Plain text like its siblings, so it
-    # gzips instead of paying base64's 33 % inflation against the 32 KB user_data cap.
-    git_data_gc                 = replace(file("${path.module}/git-data-gc.sh"), local.git_data_rationale_strip, "")
-    git_data_gc_service         = replace(file("${path.module}/git-data-gc.service"), local.git_data_rationale_strip, "")
-    git_data_gc_failure_service = replace(file("${path.module}/git-data-gc-failure.service"), local.git_data_rationale_strip, "")
-    git_data_gc_timer           = replace(file("${path.module}/git-data-gc.timer"), local.git_data_rationale_strip, "")
-    # trimspace()'d — see local.git_transport_pubkey / local.git_provision_pubkey.
-    git_transport_pubkey = local.git_transport_pubkey
-    git_provision_pubkey = local.git_provision_pubkey
-    git_remove_pubkey    = local.git_remove_pubkey
-    # Mount the bare-repo volume by its specific id (server.tf/cloud-init.yml
-    # by-id pattern). Known at plan time; the attachment is a separate resource.
-    git_data_volume_id = hcloud_volume.git_data.id
-    # The FRESH LUKS-at-rest cutover volume (Sub-PR 3.D, git-data-luks.tf). Guest-side
-    # cryptsetup luksOpens + mounts it at /mnt/git-data-luks. by-id like the plaintext one.
-    git_data_luks_volume_id = hcloud_volume.git_data_luks.id
-    # Doppler service token → 0600 root env file so the boot-time `doppler run` can read
-    # GIT_DATA_LUKS_KEY and (since #6982) BETTERSTACK_LOGS_TOKEN. SCOPED read-only token
-    # for the `prd_git_data` config — NOT the full-prd var.doppler_token (3.D security
-    # review MEDIUM / CTO ruling: a git-data-host compromise must not yield service-role /
-    # GIT_REMOVE / PROXY_TLS material). The passphrase itself is NEVER in this user_data.
-    #
-    # #6982: the runcmd invocations name `--config prd_git_data`, i.e. the config this
-    # token is actually scoped to. They named `--config prd` until #6982, which the W0
-    # probe measured as a hard failure ("This token does not have access to requested
-    # config 'prd'", exit 1) — so the LUKS heredoc ran zero times and the host booted dark.
-    doppler_token = doppler_service_token.git_data.key
-    # Dual-arch Doppler CLI download (#6570). BOTH are derived from
-    # var.git_data_server_type — the cloud-init hardcoded the arm64 build and its checksum,
-    # which boot-bricks the moment the type moves to an x86 arm. `${doppler_arch}` is a
-    # TERRAFORM interpolation (single-$) in the template; `$${DOPPLER_VERSION}` beside it is
-    # a SHELL variable (double-$) that must pass through literally.
-    doppler_arch   = local.git_data_arch
-    doppler_sha256 = local.git_data_doppler_sha256
-    # (#6982, W1) The off-host emitter's three inputs.
-    #
-    # sentry_dsn is BAKED, and that is the point: it is the ONE channel that still works
-    # when Doppler is the broken stage, which on this host is the most likely stage to
-    # break. It is semi-public (already in the client bundle; variables.tf says so) and
-    # lands in tfstate + metadata-retrievable user_data — accepted, and the reason the
-    # LUKS passphrase and the Better Stack INGEST token are deliberately NOT baked.
-    #
-    # This interpolation is also the birth-readiness INTERLOCK's sentinel:
-    # git-data-birth-readiness-gate.sh refuses to plan while `${sentry_dsn}` is absent
-    # from non-comment template text. `templatefile` fails on an unsupplied variable, so
-    # threading it here IS the work — the sentinel cannot be faked by a comment.
-    sentry_dsn             = var.sentry_dsn
-    betterstack_ingest_url = local.betterstack_logs_ingest_url
-    # Baked at RENDER time, so it is a create-time constant rather than a runtime-
-    # guaranteed invariant — it discriminates git-data's rows from its siblings on the
-    # shared Better Stack source 2457081.
-    host_name = "soleur-git-data"
-  }))
+  user_data = base64gzip(module.git_data_userdata.rendered)
 
   # PHANTOM/WRONG-ARCH TRIPWIRE (#6570). Two jobs, and the second is why this block is
   # MANDATORY rather than a nicety:

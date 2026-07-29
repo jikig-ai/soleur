@@ -12,6 +12,15 @@
 #      git-data-runcmd-rehearsal.test.sh. If the strip expression is changed in one file and
 #      not the other, CI renders a DIFFERENT payload than production does — silently, on the
 #      gate whose whole job is to be the thing you trust. Nothing else compares them.
+#
+#      (#7025, R7) THE CANONICAL SIDE MOVED. It was git-data.tf; it is now
+#      modules/git-data-userdata/main.tf, which BOTH the production root and the rung-2
+#      rehearsal root call. That is why there are still exactly TWO copies and not three:
+#      the rehearsal renders through the module rather than duplicating the map. A third
+#      copy would have been strictly worse than the second, because the rung-2 evidence
+#      hash is over SOURCE FILES — two copies that drift hash IDENTICALLY while rendering
+#      differently, so the rehearsal would attest a payload it did not boot and the
+#      attestation would verify.
 #   2. The strip must never eat a shebang. Three of the nine (`git-data-provision.sh`,
 #      `git-data-remove.sh`, `git-data-transport-wrapper.sh`) are invoked through
 #      authorized_keys `command="..."`, where a lost `#!` does NOT raise ENOEXEC — the kernel
@@ -23,8 +32,17 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TF="$DIR/git-data.tf"
+# (#7025, R7) The canonical render lives in the shared module, not git-data.tf. Asserted
+# rather than assumed: pointing this suite at a file that no longer carries the map would
+# make every arm below vacuous (an empty extraction compared against an empty extraction).
+TF="$DIR/modules/git-data-userdata/main.tf"
 BUDGET="$DIR/git-data-userdata-budget.sh"
+
+if [[ ! -f "$TF" ]]; then
+  printf '\n=== git-data-render-strip-parity ===\n\n  FAIL canonical render module not found at %s\n' "$TF"
+  printf '\n=== git-data-render-strip-parity: 0 passed, 1 failed ===\n\n'
+  exit 1
+fi
 
 passes=0
 fails=0
@@ -58,14 +76,14 @@ budget_raw="$(extract_strip "$BUDGET")"
 budget_strip="${budget_raw//\\\\/\\}"
 
 if [[ -z "$tf_strip" ]]; then
-  fail "git-data.tf declares a strip expression" "no git_data_rationale_strip assignment found"
+  fail "modules/git-data-userdata/main.tf declares a strip expression" "no git_data_rationale_strip assignment found"
 elif [[ -z "$budget_raw" ]]; then
   fail "git-data-userdata-budget.sh mirrors the strip expression" "no git_data_rationale_strip assignment found"
 elif [[ "$tf_strip" == "$budget_strip" ]]; then
-  pass "strip expression is byte-identical in git-data.tf and git-data-userdata-budget.sh"
+  pass "strip expression is byte-identical in modules/git-data-userdata/main.tf and git-data-userdata-budget.sh"
 else
   fail "strip expression DRIFTED between the two hand-mirrored maps" \
-    "git-data.tf: ${tf_strip} | budget(as terraform sees it): ${budget_strip}"
+    "module: ${tf_strip} | budget(as terraform sees it): ${budget_strip}"
 fi
 
 # ── 2. Downstream-parser invariants (plugins/soleur/test/cloud-init-user-data-size.test.ts) ─
@@ -84,7 +102,7 @@ n_entries=$(grep -cE '^[[:space:]]+git_data_[a-z_]+[[:space:]]*=[[:space:]]*repl
 if [[ "$n_entries" -eq 9 ]]; then
   pass "all 9 stripped map entries are each on ONE physical line"
 else
-  fail "expected 9 single-line stripped map entries in git-data.tf, found ${n_entries}" \
+  fail "expected 9 single-line stripped map entries in the render module, found ${n_entries}" \
     "a wrapped entry defeats the line-based var parser in cloud-init-user-data-size.test.ts"
 fi
 
@@ -97,7 +115,7 @@ n_budget=$(grep -cE '^[[:space:]]+git_data_[a-z_]+[[:space:]]*=[[:space:]]*repla
 if [[ "$n_budget" -eq "$n_entries" ]]; then
   pass "git-data-userdata-budget.sh applies the strip to the same ${n_entries} payloads"
 else
-  fail "strip application DRIFTED: git-data.tf wraps ${n_entries}, budget harness wraps ${n_budget}" \
+  fail "strip application DRIFTED: the render module wraps ${n_entries}, budget harness wraps ${n_budget}" \
     "CI would measure and rehearse a different payload than production ships"
 fi
 

@@ -355,13 +355,28 @@ p_default_not_cax() {
 # LUKS heredoc, so its `set -euo pipefail` ran zero times, luksOpen never ran, and the
 # host booted dark with sshd up. A6 above asserts only that the STRING `doppler run`
 # survives — it is blind to the scope, which is why this arm exists.
+#
+# (#7025, R1) THE TEMPLATE NO LONGER CARRIES THE CONFIG NAME AS A LITERAL. The rung-2
+# rehearsal boots this same template against a SCRATCH Doppler config, and a token scoped
+# to that config exits 1 against a hardcoded `prd_git_data` — the identical W0 failure, in
+# the rehearsal instead of the birth. So the config name became `${doppler_config_name}`, a
+# templatefile var, and this guard splits in two:
+#
+#   A20  (here)  — every `doppler run` in the TEMPLATE names the same interpolation, so the
+#                  two invocations can never disagree with each other. A hardcoded `prd`
+#                  still fails, which is the regression this arm was built for.
+#   A20b (below) — the PRODUCTION caller binds that var to the config the service token is
+#                  actually scoped to. Without A20b, A20 alone would be satisfied by a
+#                  template that consistently names a variable pointing anywhere.
+#
+# The siblings keep the literal: they are plain scripts/units, never rendered.
 p_doppler_config_scope() {
   local n_run n_scoped
   # Anchor on the COMMAND at line start. A bare 'doppler run' also matches the prose
   # comment above the bootstrap invocation, which made this 3-vs-2 and the guard
   # permanently red (cq-assert-anchor-not-bare-token).
   n_run=$(grep -Ec '^[[:space:]]*doppler run ' "$1" || true)
-  n_scoped=$(grep -Ec '^[[:space:]]*doppler run --project soleur --config prd_git_data ' "$1" || true)
+  n_scoped=$(grep -Ec '^[[:space:]]*doppler run --project soleur --config \$\{doppler_config_name\} ' "$1" || true)
   # Guard the SIBLINGS too. Scoping this to cloud-init alone let the identical W0 defect
   # survive in git-data-cutover.sh — a file that runs ON this host under the same
   # single-config token — because the guard structurally could not see it.
@@ -372,6 +387,31 @@ p_doppler_config_scope() {
     n_scoped=$(( n_scoped + $(grep -Ec 'doppler run --project soleur --config prd_git_data ' "$_sib" || true) ))
   done
   if [ "$n_run" -ge 2 ] && [ "$n_run" -eq "$n_scoped" ]; then echo 1; else echo 0; fi
+}
+
+# A20b (#7025, R1): the PRODUCTION render binds ${doppler_config_name} to the config the
+# boot service token is actually scoped to.
+#
+# This is the half A20 structurally cannot see. Once the config name is a variable, the
+# template is internally consistent no matter WHAT the caller passes — so the binding is
+# where the W0 failure now lives. Both sides are extracted by shape from their own files
+# rather than compared against a hardcoded "prd_git_data": a literal here would pass while
+# the token moved, which is the drift this whole arm exists to catch.
+#
+# $1 = git-data.tf (the caller). The token's config is read from git-data-luks.tf, which
+# declares doppler_config.git_data_prd and points doppler_service_token.git_data at it.
+p_doppler_config_binding() {
+  local bound declared
+  bound="$(grep -oE '^[[:space:]]*doppler_config_name[[:space:]]*=[[:space:]]*"[^"]+"' "$1" \
+           | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
+  declared="$(awk '/^resource "doppler_config" "git_data_prd"/{i=1}
+                   i&&/^[[:space:]]*name[[:space:]]*=/{gsub(/[",]/,"");print $NF;exit}
+                   i&&/^}/{exit}' "$DIR/git-data-luks.tf")"
+  if [ -n "$bound" ] && [ -n "$declared" ] && [ "$bound" = "$declared" ]; then
+    echo 1
+  else
+    echo 0
+  fi
 }
 
 # A21: the boot emitter exists, is delivered as an executable file, and the FATAL channel
@@ -608,8 +648,19 @@ assert_mutation "A19 tripwire-edge" p_tripwire_edge "$GIT_DATA_TF" \
 # A20: the W0 config-scope regression guard.
 assert_holds    "A20 doppler-config-scope" p_doppler_config_scope "$CLOUD_INIT"
 # Mutation: revert to the pre-#6982 `--config prd`, the exact form measured to boot dark.
+# Targets the #7025 interpolation, because that is what the template carries now — the old
+# `s/--config prd_git_data/…/` expression would match NOTHING here and assert_mutation would
+# report the predicate as un-flippable rather than the guard as absent.
 assert_mutation "A20 doppler-config-scope" p_doppler_config_scope "$CLOUD_INIT" \
-  's/--config prd_git_data/--config prd/g'
+  's/--config \$\{doppler_config_name\}/--config prd/g'
+
+# A20b (#7025, R1): the production caller binds that interpolation to the token's own config.
+assert_holds    "A20b doppler-config-binding" p_doppler_config_binding "$GIT_DATA_TF"
+# Mutation: bind the render to `prd` — the full-prd config the boot token cannot read. This
+# is the #6982 W0 failure relocated from the template to the caller, and it is invisible to
+# A20, which would stay green because the template is still internally consistent.
+assert_mutation "A20b doppler-config-binding" p_doppler_config_binding "$GIT_DATA_TF" \
+  's/doppler_config_name([[:space:]]*)=([[:space:]]*)"prd_git_data"/doppler_config_name\1=\2"prd"/'
 
 # A21: the emitter exists and reads the BAKED DSN.
 assert_holds    "A21 emitter-present" p_emitter_present "$CLOUD_INIT"
@@ -706,8 +757,16 @@ p_no_shell_tracing() {
 # four traps ship verbatim with `_devalue` unarmed. That is precisely the failure this pair of
 # guards exists to prevent.
 #
-# The file list is DERIVED from git-data.tf's file() bindings rather than hardcoded, so a new
-# injected script is covered the day it is added rather than the day someone remembers.
+# The file list is DERIVED from the render module's file() bindings rather than hardcoded, so
+# a new injected script is covered the day it is added rather than the day someone remembers.
+#
+# (#7025, R7) The bindings moved from git-data.tf to modules/git-data-userdata/main.tf, and
+# `${path.module}` there resolves TWO LEVELS DOWN — so each extracted path is `../../<name>`
+# and must be resolved against the MODULE directory, not $DIR. Resolving against the old base
+# yields apps/web-platform/<name>, which does not exist, so every payload would silently drop
+# out of the quantifier and leave A28a/A28b asserting the property over the template alone —
+# the exact gap the floor below exists to catch, which is why the floor is not optional.
+GIT_DATA_USERDATA_MODULE="$DIR/modules/git-data-userdata"
 boot_path_files() {
   printf '%s\n' "$CLOUD_INIT"
   # git-data-cutover.sh is NOT file()-bound into user_data (it ships via the deploy pipeline),
@@ -716,8 +775,8 @@ boot_path_files() {
   # PASSPHRASE, not about user_data membership, so the quantifier has to include it explicitly.
   [ -f "$CUTOVER" ] && printf '%s\n' "$CUTOVER"
   sed -nE 's/^[[:space:]]*[a-z_]+[[:space:]]*=[[:space:]]*(replace\()?file\("\$\{path\.module\}\/([^"]+)".*/\2/p' \
-    "$DIR/git-data.tf" | sort -u | while read -r f; do
-      [ -n "$f" ] && [ -f "$DIR/$f" ] && printf '%s\n' "$DIR/$f"
+    "$GIT_DATA_USERDATA_MODULE/main.tf" | sort -u | while read -r f; do
+      [ -n "$f" ] && [ -f "$GIT_DATA_USERDATA_MODULE/$f" ] && printf '%s\n' "$GIT_DATA_USERDATA_MODULE/$f"
     done
 }
 
