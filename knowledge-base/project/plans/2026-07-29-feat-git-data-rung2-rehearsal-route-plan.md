@@ -39,6 +39,53 @@ atomically, so a banner cleared in the final commit clears at the same instant a
 never-executed rehearsal harness it is supposed to be downstream of. The harness must exist,
 merge, and then *run* before its output can release anything.
 
+## Plan Review Revisions (v2 — 2026-07-29, five-agent panel)
+
+The escalated panel (DHH, Kieran, architecture-strategist, spec-flow-analyzer, code-simplicity)
+found v1 **not implementable as written**. Every finding below was verified by measurement in
+this worktree before acceptance; agent claims were not taken at face value.
+
+### Design changes (v1 → v2)
+
+| # | v1 | v2 | Evidence |
+|---|---|---|---|
+| R1 | Scratch Doppler config threaded as `doppler_token` | **Parameterize `doppler_config_name`** as a templatefile var (default `prd_git_data`) | `cloud-init-git-data.yml:436,499` hardcode `--config prd_git_data`. A token scoped elsewhere **exits 1 before the LUKS heredoc** (ADR-149 item-2 disposition measured this). Operator decision 2026-07-29. Editing cloud-init is free **only while the host is unborn** (ADR-115); this window closes at birth. |
+| R2 | Attach to prod `10.0.1.0/24` with a deny-all firewall | **No network attachment at all** | `grep -c '10\.0\.1\.'` on cloud-init = **0**; NIC/`EXPECTED_IP` refs = **0**. The boot needs only public egress + Sentry/Better Stack. And `hcloud_firewall.git_data`'s own comment: intra-network traffic *"is open by network membership"* — the firewall never covered the private surface. Dropping the attachment deletes the leak vector **structurally**, and with it the `10.0.1.20` hazard (that address is free while git-data is unborn, and is baked into every web host as `GIT_DATA_ENDPOINT` at `server.tf:666`). |
+| R3 | Distinct `concurrency: git-data-rung2-rehearsal` | **Join `group: git-data-state`** | Inverted in v1. A distinct group *permits* concurrency. Birth and replace share the literal at `apply-web-platform-infra.yml:2312,3904` for exactly this reason. |
+| R4 | Hash helper extracted as-is | **Make the hash path-invariant** (basenames, `LC_ALL=C`) | Measured: identical bytes hash to `aa1447f2…` (relative) vs `b77f4998…` (absolute). Production invokes with `${GITHUB_WORKSPACE}/…`. Evidence produced at a different cwd would land `STALE EVIDENCE` forever, blaming the wrong cause. **Pre-existing defect in the merged gate; free to fix only because no evidence exists yet.** |
+| R5 | FAIL arm = `boot_complete` with `luks_mounted=no` | **FAIL arm = `stage IN ('luks_open','bootstrap') AND level='fatal'`** | `git-data-bootstrap.sh:298-300` emits the four booleans as **hardcoded literals** (*"all `yes` by construction"*). A dark boot emits no `boot_complete` at all. The `\bno\b` arm is dead against real telemetry. |
+| R6 | 5 diverging render vars, recorded in prose | **11 vars; identity-only allowlist, machine-checked via `RUNG2_VAR_DIVERGENCE`** | `doppler_arch` + `doppler_sha256` select *which binary is downloaded and which checksum verifies it* — the #6570 boot-brick class. Pin `git_data_server_type`, `location`, `betterstack_ingest_url`, `sentry_dsn`, `doppler_config_name` byte-identical to prod. |
+| R7 | Third copy of `git_data_rationale_strip` + parity-test extension | **Shared Terraform module** `modules/git-data-userdata/` called by both roots | The evidence hash is over **source files**, so a strip divergence yields a byte-identical hash with a different render — the self-invalidation property does not fire on this class. The parity test was v1's *sole* control and is structurally a two-file comparator. Three reviewers converged independently. |
+| R8 | `RUNG2_EVIDENCE_URL` matches `^https?://` | **Constrain to `^https://github\.com/jikig-ai/soleur/actions/runs/[0-9]+`** | `main` has **no `pull_request` ruleset** (no required approving reviews) and `can_approve_pull_request_reviews: true`. A hand-typed evidence file with `https://example.com` currently releases the last mechanical hold on the birth. |
+| R9 | Drift run would surface a leaked host | **Claim struck; add an anchored orphan sweep** | `scheduled-terraform-drift.yml`'s matrix is `apps/web-platform/infra` + `infra/github` only, and `terraform plan` cannot see an off-state host. A falsified capability claim inside the section describing how failures are caught (`hr-verify-repo-capability-claim-before-assert`). |
+| R10 | — | **`paths-ignore` the rehearsal subdir in the parent apply trigger** | `apply-web-platform-infra.yml` fires on `apps/web-platform/infra/**`, so a rehearsal-only edit triggers a **prod apply of the parent root**. |
+| R11 | — | **Register the rung-2 gate as a PR check** in `infra-validation.yml`, active only when evidence exists | The gate has exactly one non-test call site (the birth job). A payload edit merging after the rehearsal silently re-holds, and the operator learns only *after* spending the birth environment approval. |
+| R12 | — | **Add a `teardown_only` dispatch arm** | Teardown failure had detection but no recovery, leaving a paying private-net host with nothing to run (`hr-exhaust-all-automated-options-before`). |
+
+### Cuts (accepted, three or more reviewers converging)
+
+- **`fault_injection`** — incoherent with the hash binding (injecting a fault alters what boots, so the output can never be evidence), and `git-data-runcmd-rehearsal.test.sh` already proves the trap fires and emits `fatal` at rung 1. The clean arm proves real-host TLS egress. Delta was one JSON string field.
+- **`--verify-only`** — invented to fill an observability template field; no caller.
+- **Phase 3 (`--host-name` on the prod probe)** — couples a live scheduled sweeper to share ~15 lines of SQL the consumer must diverge from anyway (it needs the `bootcmd_start` anchor the probe deliberately lacks). It also hardcodes the host in **three** places, not one.
+- **`outputs.tf`** — no consumer; and `user_data_sha256` would name a *different quantity* from `RUNG2_TEMPLATE_SHA256` (render vs source), a maintenance trap.
+- **Phase 0's pinned hash** — a self-invalidating value nothing consumes; re-deriving is the useful act, recording it is a liability.
+- **Test scenarios 1–4** — already green on `main`. `test-git-data-birth-readiness-gate.sh` covers valid/absent/commented/FAIL/non-URL/malformed/stale/template-edit/payload-edit/trailing-comment, with an anti-vacuity floor of 31. The genuinely new arms are the `<10` payload floor and the capture-script contract. **Bump the floor when adding arms.**
+
+### AC corrections (14 → 8)
+
+- **AC4 was factually wrong.** `git_data_birth_readiness_gate` **RELEASES** today (`git-data-birth-readiness-gate.sh:9-11,184`); only the rung-2 gate holds. The command passed while the sentence was false — worse than a failing AC.
+- **AC7 both false-fails and false-passes.** `grep -c` over multiple files emits `path:count` per file (never `== 0`) and exits 1 on no-match, aborting under `set -e`. Its regex also missed `hcloud_volume.git_data_luks`, `doppler_service_token.git_data`, `random_password.git_data_luks` and four more. Replace with an **allowlist**: every `hcloud_*`/`doppler_*` address in the rehearsal root must match `\.rehearsal\b`.
+- **AC6 is self-defeating** — it freezes a `NOT SATISFIABLE AS WRITTEN` count of 1 while the plan's own amendment quotes the phrase. Anchor on the table row (`cq-assert-anchor-not-bare-token`).
+- **AC10 cannot pass** — the repo already reports **7 pre-existing orphans**. Restate as "the NOTE does not name `git-data-rung2-rehearsal.test.sh`" and file the 7 under `wg-when-an-audit-identifies-pre-existing`.
+- **AC2 was a tautology** ("structurally impossible" + a test for it). Replaced by a **path-invariance** assertion: same tree, two path forms, one hash.
+- **AC12** conflated a suite run with an anti-reconstruction rule that Phase 0 itself violated.
+
+### Narrowed isolation claim (rewrites DC-6)
+
+v1 claimed a separate state key makes prod-reach *structurally impossible*. That is true **only for Terraform's managed-resource lifecycle**. It does not isolate: the Hetzner project credential, the Doppler project, the Sentry project, the parent root's push-triggered apply, or (in v1) the shared private network. DC-6 must be written in ADR-149's own "an earlier draft said *impossible*; that overstated it" register, and record the teardown-GC gap as a named residual.
+
+**Also unresolved and now in scope:** the rehearsal root gets **zero `terraform validate` coverage** — `infra-validation.yml` collapses the subdir to the parent and does not descend. v2 adds a validation entry and an AC that the root parses.
+
 ## Premise Validation
 
 Both premises the issue body states are **stale** — it was written before PR #7015 (merged
@@ -411,30 +458,51 @@ Runbook, ADR-149 amendment, the `gitDataStore` C4 description fix, the banner *t
 (route now exists + how to run it — **banner NOT cleared**), and a comment on #7025 recording
 the two corrected premises.
 
-## Files to Create
+## Files to Create (v2)
 
-- `apps/web-platform/infra/rung2-rehearsal/main.tf`
-- `apps/web-platform/infra/rung2-rehearsal/variables.tf`
-- `apps/web-platform/infra/rung2-rehearsal/rehearsal.tf`
-- `apps/web-platform/infra/rung2-rehearsal/outputs.tf`
-- `.github/workflows/git-data-rung2-rehearsal.yml`
+- `apps/web-platform/infra/modules/git-data-userdata/{main,variables,outputs}.tf` — **R7.** The
+  single `locals` + `templatefile` + payload set, called by BOTH roots. Kills the third strip copy.
+- `apps/web-platform/infra/rung2-rehearsal/{main,variables,rehearsal}.tf` — backend key
+  `web-platform/rung2-rehearsal/terraform.tfstate` (directory-shaped, matching the `sentry/`
+  precedent). **No `outputs.tf`** (R-cut). **No network attachment** (R2).
+- `.github/workflows/git-data-rung2-rehearsal.yml` — `workflow_dispatch`; `confirm`, `dry_run`
+  (default true), `teardown_only` (R12). **No `fault_injection`** (R-cut).
+  `concurrency: group: git-data-state` (R3).
 - `scripts/followthroughs/git-data-rung2-evidence-capture.sh`
-- `apps/web-platform/infra/git-data-rung2-rehearsal.test.sh`
+- `apps/web-platform/infra/git-data-rung2-rehearsal.test.sh` — **top level, not inside the
+  subdir**: `run-registered-suites.sh` derives via a character class that excludes `/`, so a
+  suite nested under `rung2-rehearsal/` is silently underived AND exempt from the orphan report.
 - `tests/scripts/test-git-data-rung2-evidence-capture.sh`
-- `knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md`
+- `knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md` — ~30 lines: the
+  three artifacts, their queries, and the dispatch. Must not restate the workflow inputs or
+  become a second banner.
 
-## Files to Edit
+## Files to Edit (v2)
 
-- `tests/scripts/lib/git-data-birth-readiness-gate.sh` — extract `git_data_rung2_user_data_sha256()`
-- `tests/scripts/test-git-data-birth-readiness-gate.sh` — cover the extracted helper
-- `scripts/followthroughs/git-data-birth-emitter-6982.sh` — add `--host-name`
-- `apps/web-platform/infra/git-data-render-strip-parity.test.sh` — cover the third strip copy
-- `.github/workflows/infra-validation.yml` — register the new suite
-- `plugins/soleur/test/terraform-target-parity.test.ts` — assert the rehearsal root is **outside**
-  every shared-root `-target` set, and that the rehearsal workflow targets no `git_data` prod address
-- `knowledge-base/engineering/architecture/decisions/ADR-149-git-data-host-birth-route-and-readiness-interlock.md`
+- `tests/scripts/lib/git-data-birth-readiness-gate.sh` — extract `git_data_rung2_user_data_sha256()`,
+  **make it path-invariant + `LC_ALL=C`** (R4); tighten `RUNG2_EVIDENCE_URL` to the Actions-run
+  shape (R8); add the `RUNG2_VAR_DIVERGENCE` identity allowlist check (R6)
+- `tests/scripts/test-git-data-birth-readiness-gate.sh` — path-invariance arm, `<10` floor arm,
+  URL-shape arm, divergence-allowlist arm; **bump the anti-vacuity floor from 31**
+- `apps/web-platform/infra/cloud-init-git-data.yml` — **R1, the one permitted edit.** Replace the
+  two hardcoded `--config prd_git_data` occurrences (`:436`, `:499`) with `${doppler_config_name}`
+- `apps/web-platform/infra/git-data.tf` — call the shared module; pass `doppler_config_name = "prd_git_data"`
+- `apps/web-platform/infra/git-data-luks.test.sh` — re-anchor `:364`/`:372` to the **rendered** form
+- `apps/web-platform/infra/git-data-render-strip-parity.test.sh` — retarget to module-vs-budget-script
+- `apps/web-platform/infra/git-data-userdata-budget.sh` — follow the module extraction
+- `.github/workflows/infra-validation.yml` — register the suite; add `terraform validate` coverage
+  for the rehearsal root (it currently gets **none**); register the rung-2 gate as a PR check that
+  is active only when evidence exists (R11)
+- `.github/workflows/apply-web-platform-infra.yml` — `paths-ignore` the rehearsal subdir (R10)
+- `.github/workflows/scheduled-terraform-drift.yml` — anchored orphan sweep on the
+  `soleur-git-data-rehearsal-` prefix, **trailing hyphen load-bearing** (`soleur-git-data` is a
+  prefix of it; an unanchored glob matches prod) (R9)
+- `plugins/soleur/test/terraform-target-parity.test.ts` — DP-11 F8 coverage for the new workflow's
+  `environment:`
+- `knowledge-base/engineering/architecture/decisions/ADR-149-…md` — amendment + narrowed DC-6
 - `knowledge-base/engineering/architecture/diagrams/model.c4` — `gitDataStore` description fix
-- `knowledge-base/engineering/operations/runbooks/git-data-birth.md` — banner **text**, not cleared
+- `knowledge-base/engineering/operations/runbooks/git-data-birth.md` — banner **text** only; the
+  line-3 heading string is **frozen** (AC5 anchors on it)
 
 ## Acceptance Criteria
 

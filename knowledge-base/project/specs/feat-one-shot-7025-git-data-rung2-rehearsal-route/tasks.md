@@ -3,10 +3,24 @@
 Plan: `knowledge-base/project/plans/2026-07-29-feat-git-data-rung2-rehearsal-route-plan.md`
 Branch: `feat-one-shot-7025-git-data-rung2-rehearsal-route` · PR #7066 · Issue #7025
 
+> **⚠ SUPERSEDED IN PART BY PLAN v2.** The five-agent panel found v1 not implementable. Read
+> `## Plan Review Revisions (v2 …)` in the plan FIRST — it is authoritative where it conflicts
+> with the phases below. Materially: no private-network attachment (R2), join
+> `concurrency: git-data-state` (R3), the cloud-init Doppler-config edit is now REQUIRED (R1),
+> a shared Terraform module replaces the third strip copy (R7), and `fault_injection`,
+> `--verify-only`, Phase 3 and `outputs.tf` are CUT.
+
 **Hard constraints for every phase:** do NOT clear the DO-NOT-DISPATCH banner. Do NOT commit
-`git-data-rung2-boot-evidence.env`. Do NOT tick ADR-149 item 7. Do NOT edit
-`cloud-init-git-data.yml` or any of its nine `file()`-bound payloads (any edit invalidates the
-rung-2 hash and, post-birth, costs a destructive host replace under ADR-115).
+`git-data-rung2-boot-evidence.env`. Do NOT tick ADR-149 item 7.
+
+**The cloud-init constraint is now NARROWED, not lifted (v2/R1).** Exactly one edit to
+`cloud-init-git-data.yml` is permitted and required: replacing the two hardcoded
+`--config prd_git_data` occurrences (`:436`, `:499`) with `${doppler_config_name}`. Nothing else
+in the template, and none of the nine `file()`-bound payloads, may change. This edit is free
+**only because `hcloud_server.git_data` is unborn** — under ADR-115 `user_data` is ForceNew with
+no `ignore_changes`, so after the birth the same edit costs a destructive replace of the host
+holding every user's source code. It also invalidates any pinned hash and re-anchors
+`git-data-luks.test.sh:364,372` to the rendered form.
 
 ## Phase 0 — Preconditions (verify, do not assume)
 
