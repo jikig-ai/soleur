@@ -695,33 +695,79 @@ p_no_shell_tracing() {
   if grep -Eq '(^|[[:space:]])(set|(ba)?sh)[[:space:]]+-[a-z]*x[a-z]*([[:space:]]|$)' "$1"; then
     echo 0; else echo 1; fi
 }
-assert_holds    "A28a no-shell-tracing" p_no_shell_tracing "$CLOUD_INIT"
+# THE QUANTIFIER IS THE WHOLE BOOT PATH, NOT JUST THE TEMPLATE.
+#
+# A28a/A28b originally scanned $CLOUD_INIT alone. But the template is not the only place the
+# passphrase appears: git-data-bootstrap.sh is the SECOND GIT_DATA_LUKS_KEY site (it re-asserts
+# the LUKS mount idempotently), and it is a `file()`-injected script, so it was outside the
+# quantifier while the property was stated over the boot path. Measured: changing its
+# `set -euo pipefail` to `set -exuo pipefail` left this suite 62/62 GREEN, with every
+# expansion — including the key — traced into /var/log/cloud-init-output.log, which two of the
+# four traps ship verbatim with `_devalue` unarmed. That is precisely the failure this pair of
+# guards exists to prevent.
+#
+# The file list is DERIVED from git-data.tf's file() bindings rather than hardcoded, so a new
+# injected script is covered the day it is added rather than the day someone remembers.
+boot_path_files() {
+  printf '%s\n' "$CLOUD_INIT"
+  sed -nE 's/^[[:space:]]*[a-z_]+[[:space:]]*=[[:space:]]*(replace\()?file\("\$\{path\.module\}\/([^"]+)".*/\2/p' \
+    "$DIR/git-data.tf" | sort -u | while read -r f; do
+      [ -n "$f" ] && [ -f "$DIR/$f" ] && printf '%s\n' "$DIR/$f"
+    done
+}
+
+# A floor, because a derivation that silently returned only the template would re-create the
+# exact gap this fix closes while every arm below still reported green.
+_bp_count=$(boot_path_files | wc -l)
+if [ "$_bp_count" -ge 10 ]; then pass; else
+  fail "A28 boot-path derivation: only $_bp_count file(s) found (expected the template + 9 injected)"
+fi
+
+for _bp in $(boot_path_files); do
+  assert_holds "A28a no-shell-tracing ($(basename "$_bp"))" p_no_shell_tracing "$_bp"
+done
 # Mutation: arm tracing on the LUKS heredoc — every expansion, including the key, lands in
 # the shared log that the two unarmed traps ship verbatim.
 assert_mutation "A28a no-shell-tracing" p_no_shell_tracing "$CLOUD_INIT" \
   's/^([[:space:]]*)set -euo pipefail$/\1set -exuo pipefail/'
+# And the same mutation on the script that was outside the quantifier until this change. Its
+# `set -euo pipefail` is at column 0, which is why the template mutation above (indented,
+# inside a heredoc) never reached it.
+assert_mutation "A28a no-shell-tracing (bootstrap)" p_no_shell_tracing \
+  "$DIR/git-data-bootstrap.sh" 's/^set -euo pipefail$/set -exuo pipefail/'
 
 p_key_never_on_argv() {
-  # Every GIT_DATA_LUKS_KEY expansion in an EXECUTABLE line must be one of the two audited
-  # shapes. Comment lines are excluded (they name the variable in prose by design); the
-  # emitter's own `_devalue` body is matched by the `[ -n` / `printf '%s'` forms already.
+  # Every GIT_DATA_LUKS_KEY EXPANSION in an executable line must be one of the two audited
+  # shapes. The emitter's own `_devalue` body is matched by the `[ -n` / `printf '%s'` forms.
+  #
+  # IT MATCHES THE EXPANSION, NOT THE BARE TOKEN. A line that merely NAMES the variable
+  # cannot leak its value — `log "FATAL: GIT_DATA_LUKS_KEY empty"` prints the eleven-character
+  # name, not the passphrase. Anchoring on the bare token made this predicate report that
+  # exact line in git-data-bootstrap.sh as a violation the moment the scan was widened past
+  # the template (cq-assert-anchor-not-bare-token). Comment lines are still dropped first, so
+  # a commented-out expansion does not count either.
   local bad
-  bad=$(grep -nE 'GIT_DATA_LUKS_KEY' "$1" \
+  bad=$(grep -nE '\$+\{?GIT_DATA_LUKS_KEY' "$1" \
         | grep -vE '^[0-9]+:[[:space:]]*#' \
         | grep -vE '\[[[:space:]]+-n[[:space:]]+"\$+\{?GIT_DATA_LUKS_KEY' \
         | grep -vE "printf '%s' \"\\\$+\{?GIT_DATA_LUKS_KEY" \
         | grep -cE '.' || true)
   if [ "$bad" -eq 0 ]; then echo 1; else echo 0; fi
 }
-assert_holds    "A28b key-never-on-argv" p_key_never_on_argv "$CLOUD_INIT"
+for _bp in $(boot_path_files); do
+  assert_holds "A28b key-never-on-argv ($(basename "$_bp"))" p_key_never_on_argv "$_bp"
+done
 # Mutation: echo the key. This is the shape that actually puts it in the shared log.
 assert_mutation "A28b key-never-on-argv" p_key_never_on_argv "$CLOUD_INIT" \
   's;^([[:space:]]*)mkdir -p /mnt/git-data-luks$;\1echo "key=$GIT_DATA_LUKS_KEY";'
+# Same shape in the second key site, which the template-only scan could not see.
+assert_mutation "A28b key-never-on-argv (bootstrap)" p_key_never_on_argv \
+  "$DIR/git-data-bootstrap.sh" 's;^LUKS_ROOT="/mnt/git-data-luks"$;echo "key=$GIT_DATA_LUKS_KEY";'
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 total=$((passes + fails))
-if [ "$total" -lt 62 ]; then
-  echo "FAIL: ran only ${total} assertions (<62) — suite did not execute fully" >&2
+if [ "$total" -lt 83 ]; then
+  echo "FAIL: ran only ${total} assertions (<83) — suite did not execute fully" >&2
   exit 1
 fi
 
