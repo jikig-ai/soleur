@@ -3,7 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-07-27
 - **Issue:** #6977
-- **Amended by:** #7003 (operator decisions DC-2, DC-3 — 2026-07-27)
+- **Amended by:** #7003 (operator decisions DC-2, DC-3 — 2026-07-27); #7025 (DC-6 — the
+  rung-2 rehearsal route, shipped unfired, 2026-07-29)
 - **Supersedes / amends:** amends ADR-145 (`## Consequences`)
 - **Related:** ADR-068 (multi-host workspaces), ADR-103 (operator-applied exclusions),
   ADR-115 (dedicated-host boot convergence), ADR-130 (vendor-scope probes), ADR-143
@@ -187,8 +188,134 @@ repository. An earlier draft said "impossible"; that overstated it.
 | 5 — `GIT_DATA_SSH_HOST` | **SHIPPED, BOTH CONSTRAINTS MET.** `doppler_secret.git_data_ssh_host` ships and its `OPERATOR_APPLIED_EXCLUSIONS` entry lands in the same change (second constraint). The first constraint — single-source from `hcloud_server_network.git_data.ip` — is now met **as written**: the value reads that computed attribute. #6982's first draft shipped `local.git_data_private_ip` and recorded the divergence as DC-5 on the grounds that the computed attribute is unappliable pre-birth; **review refuted that** and the divergence was reversed before merge. See the DC-5 reversal note below. |
 | 6 — firewall entailment | **ALREADY DISCHARGED on `main`**, verified rather than assumed: the gate splits the attachment out of the entailed loop and asserts the OUTCOME (`server_ids` ends at length 1). No code change. |
 | 7 — replace the interlock mechanism (DC-2) | **NOT SATISFIABLE AS WRITTEN — recorded here per this item's own instruction.** #6982 ships the emitter as a FILE inside `user_data` (`/usr/local/bin/git-data-emit`), not as a Terraform resource: git-data has no bake path, so there is no resource to assert. ADR-147's #6982 addendum records that divergence. Per item 7's closing clause the `${sentry_dsn}`-pinned sentinel therefore **stays exactly as shipped**, and this recording is the precondition item 7 places on clearing item 8. |
-| 8 — clear the banner | **DELIBERATELY NOT DONE.** Moved to its own follow-up PR (**#7025**) whose precondition is the W12 rung-2 rehearsal evidence. A PR merges atomically, so a banner cleared in the final commit clears at the same instant as the untested code it is supposed to be downstream of. |
+| 8 — clear the banner | **DELIBERATELY NOT DONE.** Moved to its own follow-up PR (**#7025**) whose precondition is the W12 rung-2 rehearsal evidence. A PR merges atomically, so a banner cleared in the final commit clears at the same instant as the untested code it is supposed to be downstream of. **STILL OPEN after #7025** — see the #7025 disposition below: that PR shipped the *route* that produces the evidence, deliberately unfired, and the same atomicity argument applies to it with equal force. |
 | 9 — sizing | **DONE** (ADR-068 D-SIZE). |
+
+### Disposition — #7025 (2026-07-29): the rung-2 rehearsal route, shipped UNFIRED
+
+Item 8's precondition — rung-2 boot evidence — had **no producer**. Verified rather than
+assumed: `grep -rln 'rung2\|rung-2' .github apps/web-platform/infra tests scripts` returned
+only the apply workflow and the gate/test pair. Nothing booted a throwaway host and nothing
+captured the artifacts, so the gate was waiting on something that could only have happened as
+a hand-run laptop procedure.
+
+#7025 ships **the route, not the run**, mirroring how `registry-luks-recut` shipped as an
+unfired vehicle:
+
+- `.github/workflows/git-data-rung2-rehearsal.yml` — `workflow_dispatch` only, confirm token
+  `REHEARSE-GIT-DATA`, `dry_run` default **true**, `teardown_only` recovery arm,
+  `permissions: contents: read`.
+- `apps/web-platform/infra/rung2-rehearsal/` — a separate Terraform root (**DC-6**).
+- `scripts/followthroughs/git-data-rung2-evidence-capture.sh` — three-state capture that
+  writes the evidence file only on PASS.
+
+**Item 8 remains OPEN, and item 7 is untouched.** The atomicity argument that moved item 8
+out of #6982 applies to #7025 unchanged: a banner cleared in the same PR that builds the
+harness clears at the same instant as the never-executed harness it is supposed to be
+downstream of. The evidence file is deliberately not committed, both interlocks still hold,
+and the banner stays up.
+
+#### DC-6 — the rehearsal runs in a SEPARATE Terraform root
+
+`-target` is **transitive on dependencies**. A rehearsal address referencing any prod
+`git_data` attribute would drag `hcloud_server.git_data` into the plan closure, and a
+rehearsal apply reaching that address would create the production git-data host outside the
+birth route — bypassing its environment reviewer, its confirm token, both interlocks and its
+`-target` allow-set. That host would hold every connected user's source code and would have
+been born by a workflow whose approval prompt said "rehearsal".
+
+Alternatives considered:
+
+| Option | Disposition |
+|---|---|
+| `count`-gated resources in `apps/web-platform/infra/` | **Rejected.** Looks equivalent, is not — this is the same `for_each`-over-target-excluded-map hazard, and `count = 0` does not remove an address from a plan closure reached through a reference. |
+| A throwaway Hetzner account/project | **Rejected.** No such isolation exists in this account. |
+
+**The isolation claim is NARROWER than an earlier draft stated,** and the correction is
+recorded here in the same register the sentinel gate's own header already had to use once
+("an earlier draft said *impossible*; that overstated it"). A separate state file is
+structural **only for Terraform's managed-resource lifecycle**. It does not isolate: the
+Hetzner project credential, the Doppler project (only the *config* is scratch), the Sentry
+project (deliberately — the rehearsal must exercise the real channel), or the parent root's
+push-triggered apply (mitigated by a `paths` negation, which is a workflow property, not a
+state one).
+
+**Named residual — teardown garbage collection.** Nothing outside the workflow's
+`if: always()` destroy and the new orphan sweep reclaims a host the rehearsal state has
+forgotten. `terraform plan` reports on resources *in state*, so a host lost from state is
+invisible to every plan in this repository, forever. The sweep therefore asks the Hetzner API
+directly and fails closed on an unreachable API. An earlier draft claimed the existing
+scheduled drift run would surface such a host; that was false on two counts (its matrix
+excludes this root, and plan cannot see off-state resources) and the claim was struck rather
+than weakened.
+
+#### The hash binds SOURCE FILES, not render vars — recorded, not assumed away
+
+`RUNG2_TEMPLATE_SHA256` is a hash-of-hashes over the cloud-init template plus every
+`file()`-bound payload. It does **not** bind the `templatefile` arguments, so a rehearsal that
+diverged on the wrong one produces hash-valid evidence for a boot production would not get.
+`doppler_arch` and `doppler_sha256` are the sharp case: they select which binary is downloaded
+and which checksum verifies it, so a mis-derived pair verifies the tarball it just chose and
+passes — the #6570 boot-brick class, rehearsed away rather than rehearsed.
+
+Closed by **declaration**, not by inference: the capture script writes `RUNG2_VAR_DIVERGENCE`
+and the gate refuses any entry outside a **closed, identity-only** allowlist (`host_name`, the
+two volume ids, the Doppler token and config name, the three pubkeys). An unrecognised name
+refuses too — a typo'd or newly-introduced var is exactly where "not on a deny list" and
+"safe" come apart.
+
+#### Consequential decision: the render moved to a shared module, and the gate followed
+
+Avoiding a third copy of the templatefile map was not cosmetic. The evidence hash is over
+**source files**, so two copies that drift produce a **byte-identical hash for a different
+render** — the rehearsal would attest a payload it did not boot, and the attestation would
+verify. The self-invalidation property this whole binding exists to provide does not fire on
+that class at all.
+
+So `modules/git-data-userdata/` now owns the strip expression and the map, and both roots call
+it. That **forced** a change the plan did not spell out: the gate derived its payload set by
+grepping `git-data.tf` for `file("${path.module}/…")`, which the move empties — tripping the
+floor-of-10 `ABORT`. The derivation now reads the module's `main.tf` and resolves against the
+module directory. The hash **value** is unchanged across the move only because of the
+path-invariance fix below.
+
+#### A shipped defect fixed in passing: the hash was not path-invariant
+
+The derivation piped resolved *paths* through `xargs sha256sum`, whose output embeds each
+path. Measured on the live tree, identical bytes hashed three ways:
+
+| Invocation form | Hash |
+|---|---|
+| `apps/web-platform/infra/<name>` | `aa1447f2b3bfa964707e1d8a0f51f866b0de1b917eb628a92575d6fe52349ff3` |
+| `<name>` (cwd = `infra`) | `dcaa128171114639a3d011c77fe354510f03903ed547d8851a3075c5dd677733` |
+| `/abs/path/<name>` | `b77f4998413b684860aa6dd55f69b089ab0c1818962628625ab8fd7dc4b89a59` |
+
+Production invokes the gate with `${GITHUB_WORKSPACE}/…`; a capture script or a laptop run
+does not. Evidence captured at one cwd would have read `STALE EVIDENCE` **forever**, and the
+message would have blamed a template edit that never happened — a diagnosis that is both
+actionable and false. Now hashes `<sha>  <basename>` under `LC_ALL=C`, with a basename-
+uniqueness guard (a collision would silently bind the evidence to fewer files than ship). Free
+to fix only because no evidence file exists yet; after the first one is committed, changing the
+derivation invalidates it.
+
+#### The release checklist's "Sentry event from the fatal channel" was unsatisfiable
+
+The runbook's release condition demanded a Sentry event *from the fatal channel* as evidence of
+a **successful** rehearsal. The fatal channel fires only on failure — a clean boot emits `info`
+— so that clause could be met only by a rehearsal that failed, or by fabricating it. Corrected
+in the runbook: the fatal channel is proven at **rung 1** by `git-data-runcmd-rehearsal.test.sh`
+(the trap fires and emits `fatal`), and rung 2's job is the real-host facts rung 1 cannot reach
+— TLS egress from a real host, a real `doppler run`, a real `cryptsetup luksOpen`.
+
+Related, and it changed the capture design: `stage:bootcmd_start` reaches **Sentry only**. It is
+a bare `curl` in `bootcmd`, which runs before `write_files`, so `/usr/local/bin/git-data-emit`
+does not exist yet — and the emitter's Better Stack block is gated on `BETTERSTACK_LOGS_TOKEN`,
+present only under `doppler run`. On a successful boot the **only** Better Stack row a git-data
+host produces is `boot_complete` itself. The plan specified anchoring the empty-query discipline
+on `bootcmd_start`; that anchor is a strict prerequisite of the thing it anchors and would have
+returned zero rows on a perfect rehearsal, forever, reading as a dark boot. The capture script
+anchors on **source liveness** instead (any row from any *other* host), which separates "the
+host was silent" from "the instrument was broken" — the only two readings that matter.
 
 #### DC-5 REVERSED — item 5's mandated mechanism IS satisfiable (#6982 review, 2026-07-29)
 
