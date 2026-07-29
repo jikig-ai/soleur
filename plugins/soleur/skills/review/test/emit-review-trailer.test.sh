@@ -44,7 +44,17 @@ printf '\n=== emit-review-trailer coverage field ===\n\n'
 new_repo() {
   local d="$TMP/$1"; mkdir -p "$d"
   git -C "$d" init -q -b main
-  git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "base"
+  # LOCAL config, not `-c` on our own commits. The SUT runs its OWN `git commit`, so an
+  # identity supplied only via `-c` on the fixture's setup commits does not reach it — it
+  # inherits whatever the ambient environment has. On a developer laptop that is the global
+  # config and every arm passes; on a bare CI runner there is none and the SUT dies with
+  # "Please tell me who you are", which surfaces as `git commit failed` and 8 of 12 arms red.
+  # Measured: this suite was 12/12 locally and 4/8 in CI on its first run (#7070).
+  git -C "$d" config user.email soleur-test@example.invalid
+  git -C "$d" config user.name  "Soleur Test"
+  # Some runners set commit.gpgsign globally; a throwaway repo has no key.
+  git -C "$d" config commit.gpgsign false
+  git -C "$d" commit -q --allow-empty -m "base"
   git -C "$d" checkout -q -b feat-x
   printf '%s' "$d"
 }
