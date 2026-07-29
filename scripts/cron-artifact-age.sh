@@ -81,13 +81,20 @@ readonly MAX_THRESHOLD_DAYS=75
 #   cron-community-monitor.ts        commitMessage: "docs: daily community digest"
 #   cron-competitive-analysis.ts     commitMessage: "docs: update competitive intelligence report"
 #   cron-architecture-diagram-sync.ts commitMessage: "docs(arch): weekly architecture diagram sync"
+# NOTE (#6750): 7 of the 8 above now read `commitMessage: COMMIT_MESSAGE`, where
+# COMMIT_MESSAGE is a module const single-sourcing the literal for both
+# safeCommitAndPr and the handler's freshness probe. The literals quoted above are
+# still accurate, but grep for `const COMMIT_MESSAGE =` to find them, not for
+# `commitMessage: "`. The correspondence between this column and each handler's
+# COMMIT_MESSAGE is pinned by cron-safe-commit-parity.test.ts.
+#
 # cron-roadmap-review.ts has NO `commitMessage:` constant — it is a hook-guarded
 # Tier-1 self-commit, which is exactly why it is invisible to every
 # MIGRATED_PROMPT-shaped remedy. Its anchor is derived from its landed history.
 cron_producer_rows() {
   cat <<'ROWS'
 cron-seo-aeo-audit|0 11 * * 1|7|B|^fix\(seo\): weekly SEO/AEO audit fixes
-cron-content-generator|0 10 * * 2,4|4|A|^feat\(content\): auto-generate article
+cron-content-generator|0 10 * * 2,4|4|B|^feat\(content\): auto-generate article
 cron-growth-execution|0 10 1,15 * *|15|B|^fix\(growth\): biweekly keyword optimization
 cron-campaign-calendar|0 16 * * 1|7|A|^ci: update campaign calendar and content-strategy review
 cron-growth-audit|0 7 * * 1|7|A|^docs: weekly growth audit

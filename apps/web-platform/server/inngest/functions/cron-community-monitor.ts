@@ -260,6 +260,18 @@ CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log
 // EXPORTED so the three test suites that assert against the dated digest path
 // derive it from this value instead of hardcoding a mirror. The comment below
 // calls this the single source of truth; before the export it was not one.
+// #6750 (ADR-126 amendment) — this producer's class, single-sourced against
+// scripts/cron-artifact-age.sh's `class` column by a parity test so the shell
+// detector and the handler's liveness table cannot drift apart silently.
+// Class A: the prompt mandates a dated digest write on every run.
+//
+// Read by cron-safe-commit-parity.test.ts as SOURCE TEXT rather than imported:
+// importing a handler pulls its whole static graph (server/inngest/client.ts)
+// into the test, which throws `INNGEST_SIGNING_KEY missing at startup` at module
+// eval under CI's env. Exported so the declaration is an explicit part of the
+// module contract rather than an unread local.
+export const PRODUCER_CLASS = "A";
+
 export const COMMUNITY_DIGEST_DIR = "knowledge-base/support/community/";
 const COMMUNITY_MONITOR_ALLOWED_PATHS = [COMMUNITY_DIGEST_DIR] as const;
 
@@ -857,11 +869,11 @@ export async function cronCommunityMonitorHandler({
     // outside the try (a trailing throw must not skip the page).
     //
     // Reachability note for the `threw && !heartbeatOk → retry` hazard called
-    // out on the livenessOk declaration: livenessOk is falsified ONLY at the
-    // tail of the try, with nothing throwing after it, and a throw out of
-    // safe-commit-pr leaves it true by construction. So "threw AND liveness-red"
-    // is unreachable here, and this line cannot induce a replay against the
-    // already-deleted spawnCwd.
+    // out on the livenessOk declaration. #6750 correction: "threw AND
+    // liveness-red" is NOT unreachable. A throw out of safe-commit-pr skips the
+    // liveness table, so livenessOk keeps its `false` initialiser and this line
+    // lowers heartbeatOk. The replay against the already-deleted spawnCwd is
+    // prevented by `retryEligible: false` below, not by unreachability.
     if (!livenessOk) heartbeatOk = false;
 
     // --- Single authoritative terminal heartbeat (memoization-safe,

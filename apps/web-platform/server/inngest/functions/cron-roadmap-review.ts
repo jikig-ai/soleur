@@ -285,9 +285,16 @@ export async function cronRoadmapReviewHandler({
   // Wrap the entire post-setup pipeline in try/finally so the ephemeral
   // workspace is torn down even if claude-eval throws at the Inngest step
   // boundary. The teardown side-effect outside step.run is acceptable
-  // because rm {recursive:true, force:true} is idempotent — a replay
-  // re-creates a fresh ephemeralRoot from setup-workspace's memoization
-  // (or the existsSync guard at the top of spawnClaudeEval rebuilds it).
+  // because rm {recursive:true, force:true} is idempotent.
+  //
+  // #6750 — the previous version of this comment claimed a replay "re-creates a
+  // fresh ephemeralRoot from setup-workspace's memoization (or the existsSync
+  // guard at the top of spawnClaudeEval rebuilds it)". BOTH halves were false:
+  // memoization is precisely why setup-workspace does NOT re-run, and the
+  // existsSync guard (_cron-claude-eval-substrate.ts, anchor `no longer exists`)
+  // THROWS rather than rebuilding. A replay after teardown cannot recover, which
+  // is why every finalizeOutputAwareHeartbeat caller now passes
+  // `retryEligible: false`.
   try {
     // #5728 — flag pattern. The body (claude-eval → verify-output) runs in an
     // inner try whose throw sets `threw`; the single terminal heartbeat is
@@ -391,6 +398,21 @@ export async function cronRoadmapReviewHandler({
       sentryMonitorSlug: SENTRY_MONITOR_SLUG,
       cronName: "cron-roadmap-review",
       logger,
+      // #6750 (ADR-126 amendment) — a replay CANNOT recover a failure inside the
+      // guarded body: `setup-workspace` is memoized inside step.run, so an Inngest
+      // replay reads back an ephemeralRoot the `finally` below already deleted, and
+      // the re-spawned agent burns real Anthropic spend against a path that no
+      // longer exists. One honest terminal RED beats a retry that cannot succeed.
+      // Scoped precisely: throws BEFORE the try (token mint, setup-workspace
+      // itself) are unaffected and still retry into a fresh workspace, and
+      // DeployInProgressError still rethrows bare.
+      //
+      // This cron routes persistence through the agent's own hook-guarded commit
+      // rather than safeCommitAndPr, so it gains no `livenessOk` remedy — but its
+      // workspace lifecycle is byte-shape-identical to the cohort's, so the replay
+      // is equally incapable of recovery. Included here so the invariant carries no
+      // carve-out (a carve-out is where the next drift hides).
+      retryEligible: false,
       onBeforeHeartbeat: heartbeatOk
         ? undefined
         : async () => {

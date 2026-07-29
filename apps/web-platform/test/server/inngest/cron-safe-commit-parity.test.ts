@@ -396,3 +396,257 @@ describe("#6602 — cron-expenses-verify-by is a non-git dispatch-hybrid cron", 
     expect(TIER2_DEFERRED_CRONS.has("cron-expenses-verify-by")).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #6750 A1 pin 1 + pin 3 — the cohort pins that survive merge. ADD-ONLY:
+// nothing above this line is modified.
+// ---------------------------------------------------------------------------
+// The roster is DERIVED FROM BEHAVIOUR, not from the MIGRATED_PROMPT literal
+// above. MIGRATED_PROMPT is a hand-maintained array, so a 9th cron that calls
+// finalizeOutputAwareHeartbeat without being added to it would silently escape
+// this gate — and omission is the dangerous direction (see the ADR-126
+// amendment: omitting `retryEligible: false` while consuming safeCommitAndPr's
+// return value buys an Inngest replay that cannot succeed).
+const FINALIZE_CALLERS = cronFiles.filter((f) =>
+  /finalizeOutputAwareHeartbeat\(/.test(readFileSync(join(FUNCTIONS_DIR, f), "utf-8")),
+);
+
+describe("#6750 A1 pin 1 — every finalizeOutputAwareHeartbeat caller passes retryEligible: false", () => {
+  it("discovers the cohort by behaviour and finds a non-trivial roster", () => {
+    // Cardinality guard: a filter that silently matched nothing would make
+    // every it.each below vacuous (zero cases is a passing suite).
+    // EXACT, not a floor: a floor at 8 is already implied by the MIGRATED_PROMPT
+    // loop below, so it could only ever mask the 9th member disappearing.
+    expect(FINALIZE_CALLERS).toHaveLength(9);
+    for (const f of MIGRATED_PROMPT) expect(FINALIZE_CALLERS).toContain(f);
+    // The 9th is EXEMPT from liveness but shares the workspace lifecycle, so it
+    // carries retryEligible too. Named explicitly so its removal is loud.
+    expect(FINALIZE_CALLERS).toContain("cron-roadmap-review.ts");
+  });
+
+  it.each(FINALIZE_CALLERS.map((f) => [f]))(
+    "%s passes retryEligible: false AT THE CALL SITE",
+    (file) => {
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      // ANCHORED, not a bare token. Measured against the reference
+      // implementation at the time: the bare token `retryEligible: false`
+      // returned 2 (the field AND the mirrored explanatory comment), so a
+      // bare-token assertion stays GREEN after the FIELD is deleted — vacuous by
+      // construction. (The exact count has since grown with the added comments;
+      // the anchored form is what the mutation evidence rests on, not the count.)
+      // The leading indent and the trailing comma are both load-bearing: only
+      // an object-literal property can produce them, and a comment line cannot.
+      // Bound to the call site, not the file. A whole-file match is satisfied by
+      // the flag migrating into ANY object literal — including an indented line
+      // inside one of the large backtick prompt templates — while the finalize
+      // call silently loses it.
+      const calls = [...src.matchAll(/finalizeOutputAwareHeartbeat\(\{([\s\S]*?)\n    \}\)/g)];
+      expect(calls.length, `${file}: could not parse the finalize call — gate DISENGAGED`).toBeGreaterThan(0);
+      for (const [, body] of calls) {
+        expect(body, `${file}: a finalizeOutputAwareHeartbeat call omits retryEligible`).toMatch(
+          /^\s+retryEligible: false,$/m,
+        );
+      }
+    },
+  );
+});
+
+// A1 pin 3 — the class table is single-sourced in scripts/cron-artifact-age.sh.
+// Without this, the shell detector's `class` column and the handlers' compiled
+// class arms are two independent rosters that drift silently — which is exactly
+// how cron-content-generator came to be classified A in the detector while its
+// prompt carries two no-artifact stop paths (ADR-126 amendment, R3).
+describe("#6750 A1 pin 3 — the shell class table matches the handlers' class arms", () => {
+  const AGE_SCRIPT = resolve(__dirname, "../../../../../scripts/cron-artifact-age.sh");
+
+  /** name -> "A" | "B", parsed from the detector's pipe-delimited producer table. */
+  const shellClasses = (): Map<string, string> => {
+    const out = new Map<string, string>();
+    for (const line of readFileSync(AGE_SCRIPT, "utf-8").split("\n")) {
+      // name|cron_expr|interval_days|class|anchor_regex
+      const m = /^(cron-[a-z-]+)\|[^|]*\|[^|]*\|([AB])\|/.exec(line);
+      if (m) out.set(m[1], m[2]);
+    }
+    return out;
+  };
+
+  it("parses a non-empty table (guards against a silent regex/format drift)", () => {
+    const t = shellClasses();
+    expect(t.size).toBeGreaterThanOrEqual(9);
+  });
+
+  it("classifies cron-content-generator as B — it has two prompt-mandated no-artifact exits (R3)", () => {
+    // A near-miss pin on the ONE row this PR corrects. Under the old value (A)
+    // a legitimate no-topic / failed-citations run would false-RED the monitor.
+    expect(shellClasses().get("cron-content-generator")).toBe("B");
+  });
+
+  // F6 — the `class` column was single-sourced; `anchor_regex` was not, and it
+  // is the more load-bearing of the two: the freshness probe's soundness AND the
+  // detector's staleness measurement both rest on it. A handler renaming its
+  // COMMIT_MESSAGE updates its own probe automatically and silently desyncs the
+  // detector, which then pages at 22d for a healthy producer.
+  it("each handler's COMMIT_MESSAGE matches the detector's anchor_regex column", () => {
+    const rows = new Map<string, string>();
+    for (const line of readFileSync(AGE_SCRIPT, "utf-8").split("\n")) {
+      const m = /^(cron-[a-z-]+)\|[^|]*\|[^|]*\|[AB]\|(.+)$/.exec(line);
+      if (m) rows.set(m[1], m[2]);
+    }
+    let checked = 0;
+    for (const file of MIGRATED_PROMPT) {
+      const name = file.replace(/\.ts$/, "");
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      const cm = /^const COMMIT_MESSAGE = "([^"]+)";$/m.exec(src);
+      if (!cm) continue; // community-monitor predates the const; covered by its own suite
+      const anchor = rows.get(name);
+      expect(anchor, `${name} missing from cron-artifact-age.sh`).toBeDefined();
+      // The shell column is an ERE anchored at ^; unescape it and require it to
+      // be a prefix of what the handler actually commits.
+      const unescaped = anchor!.replace(/^\^/, "").replace(/\\([().])/g, "$1");
+      expect(
+        cm[1].startsWith(unescaped),
+        `${name}: handler commits "${cm[1]}" but the detector anchors on "${anchor}"`,
+      ).toBe(true);
+      checked += 1;
+    }
+    expect(checked).toBe(7);
+  });
+
+  // F5 — the constant alone pins NOTHING about behaviour. What actually differs
+  // by class is the presence of the `no-changes` -> GREEN arm, and that arm is
+  // hand-written and structurally unlinked to PRODUCER_CLASS: deleting it from a
+  // Class B handler, or adding it to a Class A handler, left the constant, the
+  // shell row and this whole describe untouched and green. This test closes that
+  // by asserting the ARM SHAPE the class is supposed to produce.
+  it("each handler's no-changes ARM matches its declared class", () => {
+    let checked = 0;
+    for (const file of MIGRATED_PROMPT) {
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      const m = /^export const PRODUCER_CLASS = "([AB])";$/m.exec(src);
+      if (!m) continue;
+      // Class B is exactly the set that treats a no-diff run as healthy.
+      const hasNoChangesGreenArm =
+        /commitResult\.status === "no-changes"/.test(src) &&
+        /reason: "no-changes-change-conditional"|livenessReason = "no-changes-change-conditional"/.test(src);
+      expect(
+        hasNoChangesGreenArm,
+        `${file}: declares class ${m[1]} but ${hasNoChangesGreenArm ? "HAS" : "lacks"} the no-changes GREEN arm`,
+      ).toBe(m[1] === "B");
+      checked += 1;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("agrees with each handler's compiled class arm for every MIGRATED_PROMPT cron", () => {
+    const table = shellClasses();
+    let checked = 0;
+    for (const file of MIGRATED_PROMPT) {
+      const name = file.replace(/\.ts$/, "");
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      const shellClass = table.get(name);
+      expect(shellClass, `${name} missing from cron-artifact-age.sh`).toBeDefined();
+      // The handler declares its own class as a single source-visible literal
+      // so the two rosters are mechanically comparable.
+      const m = /^export const PRODUCER_CLASS = "([AB])";$/m.exec(src);
+      expect(m, `${name} declares no PRODUCER_CLASS`).not.toBeNull();
+      expect(m![1], `${name}: shell says ${shellClass}, handler says ${m![1]}`).toBe(shellClass);
+      checked += 1;
+    }
+    // Cardinality: the loop must actually have run for the whole cohort.
+    expect(checked).toBe(MIGRATED_PROMPT.length);
+  });
+});
+
+// #6750 AC6b — the ANTI-VACUITY gate on the dedup hardening itself.
+//
+// digestCommittedOnDefaultBranch is an EXISTENCE probe. Pointed at a DATE-NAMED
+// path it proves "this run's artifact landed"; pointed at a directory or a
+// permanent file it returns 200 forever and becomes a guard that can never fail
+// — which would reproduce the always-green defect INSIDE its own fix. This test
+// is the thing that stops a future handler from taking the easy wrong arm.
+describe("#6750 AC6b — the existence probe is only used where it can actually fail", () => {
+  const COHORT = MIGRATED_PROMPT.filter((f) => f !== "cron-community-monitor.ts");
+
+  it("exactly ONE cohort handler uses the existence probe, and it is the date-named producer", () => {
+    const users = COHORT.filter((f) =>
+      /digestCommittedOnDefaultBranch\(/.test(readFileSync(join(FUNCTIONS_DIR, f), "utf-8")),
+    );
+    expect(users).toEqual(["cron-growth-audit.ts"]);
+  });
+
+  it("the other six use the FRESHNESS probe", () => {
+    const users = COHORT.filter((f) =>
+      /artifactCommittedSince\(/.test(readFileSync(join(FUNCTIONS_DIR, f), "utf-8")),
+    );
+    expect(users).toHaveLength(6);
+    expect(users).not.toContain("cron-growth-audit.ts");
+  });
+
+  it("NEGATIVE: no existence probe is passed a directory or an undated path", () => {
+    // FAIL-CLOSED. The previous form extracted `path:` with a regex that assumed
+    // it was the FIRST key; reordering the object literal made it match zero
+    // calls, the loop body never ran, and BOTH assertions silently skipped —
+    // leaving growth-audit's only dedup guard unguarded. A gate on vacuity that
+    // is itself vacuity-prone is the defect this PR exists to close, so the
+    // per-file cardinality assertion below is the load-bearing line.
+    let inspected = 0;
+    for (const file of COHORT) {
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      // Capture the whole call BODY, order-independently, then pull `path:` out.
+      const calls = [...src.matchAll(/digestCommittedOnDefaultBranch\(\{([\s\S]*?)\}\)/g)];
+      const declares = /digestCommittedOnDefaultBranch\(/.test(src);
+      expect(
+        calls.length > 0,
+        `${file}: calls digestCommittedOnDefaultBranch but the gate could not parse it — the gate is DISENGAGED`,
+      ).toBe(declares);
+      for (const [, body] of calls) {
+        const m = /(?:^|\n)\s*path:\s*([^\n]+?),\s*$/m.exec(body);
+        expect(m, `${file}: no path: argument found in the call body`).not.toBeNull();
+        const arg = m![1];
+        // A directory argument can never 404 once the directory exists.
+        expect(arg.trimEnd().replace(/[`"']/g, "")).not.toMatch(/\/$/);
+        // Nor may it be a bare directory CONSTANT — the source-text check above
+        // cannot see through an identifier.
+        expect(arg).not.toMatch(/^\s*[A-Z_]+\s*$/);
+        // The path MUST vary per run, or the probe is a constant-true guard. The
+        // only sanctioned source of that variance is the run date.
+        expect(arg).toMatch(/runStartedAt\.slice\(0, 10\)/);
+        inspected += 1;
+      }
+    }
+    // Cardinality: exactly one cohort handler uses the existence probe.
+    expect(inspected).toBe(1);
+  });
+
+  // F1 — the SYMMETRIC gate for the freshness probe, which the original AC6b
+  // omitted: the PR built an anti-vacuity gate for the 1 existence-probe
+  // producer and none for the 6 freshness-probe producers, i.e. the majority
+  // path. `sinceIso` is what makes it a FRESHNESS probe rather than an
+  // existence probe; pinning it to 1970 made it match forever and survived the
+  // whole suite.
+  it("NEGATIVE: every freshness probe binds its window AND its anchor to the run date", () => {
+    let inspected = 0;
+    for (const file of COHORT) {
+      const src = readFileSync(join(FUNCTIONS_DIR, file), "utf-8");
+      const calls = [...src.matchAll(/artifactCommittedSince\(\{([\s\S]*?)\}\)/g)];
+      const declares = /artifactCommittedSince\(/.test(src);
+      expect(
+        calls.length > 0,
+        `${file}: calls artifactCommittedSince but the gate could not parse it — the gate is DISENGAGED`,
+      ).toBe(declares);
+      for (const [, body] of calls) {
+        const since = /(?:^|\n)\s*sinceIso:\s*([^\n]+?),\s*$/m.exec(body);
+        expect(since, `${file}: no sinceIso argument`).not.toBeNull();
+        expect(since![1]).toMatch(/runStartedAt\.slice\(0, 10\)/);
+        const prefix = /(?:^|\n)\s*anchorPrefix:\s*([^\n]+?),\s*$/m.exec(body);
+        expect(prefix, `${file}: no anchorPrefix argument`).not.toBeNull();
+        // Date-bound anchor: a message-only anchor matches a PREVIOUS day's
+        // artifact that merged after midnight (safeCommitAndPr defaults to
+        // auto-merge, so the commit lands on main hours after the run).
+        expect(prefix![1]).toMatch(/runStartedAt\.slice\(0, 10\)/);
+        inspected += 1;
+      }
+    }
+    expect(inspected).toBe(6);
+  });
+});

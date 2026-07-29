@@ -65,7 +65,9 @@ import {
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   digestIssueExistsForDate,
   ensureDedupIssue,
+  artifactCommittedSince,
   ensureScheduledAuditIssue,
+  finalizeOutputAwareHeartbeat,
   formatTailForSentry,
   getAnthropicAdminReport,
   isRealScheduledDigest,
@@ -1694,5 +1696,275 @@ describe("getAnthropicAdminReport (Admin transport redaction, security F1)", () 
     }).catch((e: Error) => e);
     expect(err).toBeInstanceOf(AnthropicApiError);
     expect((err as AnthropicApiError).status).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #6750 A1 pin 2 — `retryEligible` is an IDENTITY test, and OMISSION is the
+// dangerous direction.
+// ---------------------------------------------------------------------------
+// `const failed = threw && !heartbeatOk && retryEligible !== false;`
+//
+// Both arms are pinned because only the PAIR proves the field is load-bearing:
+// asserting the `false` arm alone passes against an implementation that ignores
+// the field entirely and never retries. The omitted arm is what makes the
+// `false` arm mean something.
+//
+// Why this matters for the cohort (ADR-126 amendment): consuming
+// safeCommitAndPr's return value LOWERS heartbeatOk. On a run that also threw,
+// that flips `failed` true → {retry:true} → Inngest replays and re-spawns the
+// agent (real API spend, duplicate artifacts) against a workspace the handler's
+// `finally` already deleted — a replay that was never capable of recovery.
+// So `retryEligible: false` is a PREREQUISITE for return-value consumption,
+// never a peer of it.
+describe("finalizeOutputAwareHeartbeat — retryEligible identity (#6750 A1 pin 2)", () => {
+  const VALID_DOMAIN = "o4509.ingest.sentry.io";
+  const VALID_PROJECT = "4509999";
+  const VALID_PUBLIC_KEY = "abcdef0123456789abcdef0123456789";
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  // Described behaviourally rather than as a literal call: the helper also
+  // requires `step`, `sentryMonitorSlug`, `cronName` and `logger`, so an
+  // abbreviated literal would not typecheck.
+  const finalize = async (opts: { retryEligible?: boolean }) => {
+    const step = {
+      run: vi.fn(async (_id: string, fn: () => Promise<unknown>) => fn()),
+    };
+    const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const { retry } = await finalizeOutputAwareHeartbeat({
+      // The failure shape the cohort actually hits: the body threw AND produced
+      // no verified output, on a NON-final attempt (0 of 2).
+      threw: true,
+      heartbeatOk: false,
+      attempt: 0,
+      maxAttempts: 2,
+      sentryMonitorSlug: "scheduled-growth-audit",
+      cronName: "cron-growth-audit",
+      step: step as unknown as Parameters<
+        typeof finalizeOutputAwareHeartbeat
+      >[0]["step"],
+      logger: logger as unknown as Parameters<
+        typeof finalizeOutputAwareHeartbeat
+      >[0]["logger"],
+      ...("retryEligible" in opts ? { retryEligible: opts.retryEligible } : {}),
+    });
+    return { retry, step, logger };
+  };
+
+  beforeEach(() => {
+    fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.stubEnv("SENTRY_INGEST_DOMAIN", VALID_DOMAIN);
+    vi.stubEnv("SENTRY_PROJECT_ID", VALID_PROJECT);
+    vi.stubEnv("SENTRY_PUBLIC_KEY", VALID_PUBLIC_KEY);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("retryEligible: false → terminal {retry:false} and exactly ONE ?status=error check-in", async () => {
+    const { retry, step } = await finalize({ retryEligible: false });
+    expect(retry).toBe(false);
+    // The heartbeat step DID run — the run reports honestly instead of
+    // silently retrying into a torn-down workspace.
+    const ids = step.run.mock.calls.map((c) => c[0]);
+    expect(ids).toContain("sentry-heartbeat");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const url = fetchSpy.mock.calls[0][0] as string;
+    expect(url).toContain(
+      `/cron/scheduled-growth-audit/${VALID_PUBLIC_KEY}/?status=error`,
+    );
+    // Anchored: it must be the ERROR status, not merely "a check-in".
+    expect(url).not.toContain("?status=ok");
+  });
+
+  it("retryEligible OMITTED → {retry:true} and the heartbeat step is NEVER run (byte-identical to pre-#6714 behaviour)", async () => {
+    const { retry, step } = await finalize({});
+    expect(retry).toBe(true);
+    const ids = step.run.mock.calls.map((c) => c[0]);
+    expect(ids).not.toContain("sentry-heartbeat");
+    // No check-in of ANY colour is posted on a non-final retry — posting one
+    // here is what the memoization-safety rule forbids.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("retryEligible: true is explicitly identical to omitting it (the field is a !== false identity test, not a truthiness test)", async () => {
+    const omitted = await finalize({});
+    const explicitTrue = await finalize({ retryEligible: true });
+    expect(explicitTrue.retry).toBe(omitted.retry);
+    expect(explicitTrue.retry).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #6750 — artifactCommittedSince: the FRESHNESS probe.
+// ---------------------------------------------------------------------------
+// digestCommittedOnDefaultBranch is an EXISTENCE probe on an exact path. It is
+// sound evidence of "this run's artifact landed" only when the artifact is
+// date-named (a new file per run). Six of the seven cohort producers overwrite
+// a permanent file or directory, so the contents API returns 200 forever and an
+// existence probe there is a guard that CAN NEVER FAIL — the same always-green
+// defect this work exists to close, reproduced inside the fix.
+//
+// This probe asks a different question: did a commit matching THIS cron's own
+// message anchor land on the default branch within the dedup window? That is
+// the mechanism scripts/cron-artifact-age.sh already trusts.
+describe("artifactCommittedSince (#6750 freshness probe)", () => {
+  const SINCE = "2026-07-28T00:00:00.000Z";
+  const ANCHOR = "docs: update competitive intelligence report";
+
+  const octokitReturningCommits = (messages: string[]) => {
+    const request = vi
+      .fn()
+      .mockResolvedValue({ data: messages.map((m) => ({ commit: { message: m } })) });
+    return { request } as unknown as Parameters<
+      typeof artifactCommittedSince
+    >[0]["octokit"] & { request: typeof request };
+  };
+
+  it("returns TRUE when a commit matching the anchor landed in the window", async () => {
+    const octokit = octokitReturningCommits([
+      "chore: unrelated",
+      "docs: update competitive intelligence report (#123)",
+    ]);
+    await expect(
+      artifactCommittedSince({
+        anchorPrefix: ANCHOR,
+        sinceIso: SINCE,
+        cronName: "cron-competitive-analysis",
+        octokit,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("queries the DEFAULT branch and passes `since` through (a probe on the wrong ref or window proves nothing)", async () => {
+    const octokit = octokitReturningCommits(["docs: update competitive intelligence report"]);
+    await artifactCommittedSince({
+      anchorPrefix: ANCHOR,
+      sinceIso: SINCE,
+      cronName: "cron-competitive-analysis",
+      octokit,
+    });
+    expect(octokit.request).toHaveBeenCalledTimes(1);
+    const [route, params] = octokit.request.mock.calls[0];
+    expect(route).toBe("GET /repos/{owner}/{repo}/commits");
+    expect(params.sha).toBe("main");
+    expect(params.since).toBe(SINCE);
+  });
+
+  it("returns FALSE when commits landed but NONE match the anchor (the near-miss)", async () => {
+    // Near-miss fixture: a plausible sibling cron's message in the same window.
+    // Without the anchor this would pass, which is the whole point.
+    const octokit = octokitReturningCommits([
+      "docs: weekly growth audit",
+      "docs: update competitive intelligence REPORT",
+      "fix: docs: update competitive intelligence report",
+    ]);
+    await expect(
+      artifactCommittedSince({
+        anchorPrefix: ANCHOR,
+        sinceIso: SINCE,
+        cronName: "cron-competitive-analysis",
+        octokit,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("returns FALSE on an empty window", async () => {
+    await expect(
+      artifactCommittedSince({
+        anchorPrefix: ANCHOR,
+        sinceIso: SINCE,
+        cronName: "cron-competitive-analysis",
+        octokit: octokitReturningCommits([]),
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("FAILS CLOSED toward spawning on a read error, and reports it", async () => {
+    const request = vi.fn().mockRejectedValue(Object.assign(new Error("boom"), { status: 500 }));
+    const octokit = { request } as unknown as Parameters<
+      typeof artifactCommittedSince
+    >[0]["octokit"];
+    await expect(
+      artifactCommittedSince({
+        anchorPrefix: ANCHOR,
+        sinceIso: SINCE,
+        cronName: "cron-competitive-analysis",
+        octokit,
+      }),
+    ).resolves.toBe(false);
+    expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // A degraded 200 must never read as a match. Pinned across every shape the
+  // API can actually degrade into, not just `data: null` — "not evidence" is
+  // the invariant, and one shape cannot establish it over a set.
+  it.each([
+    ["data: null", { data: null }],
+    ["missing data key", {}],
+    ["null response", null],
+    ["array of empty objects", { data: [{}] }],
+    ["array of non-objects", { data: ["docs: update competitive intelligence report"] }],
+  ])("degraded 200 (%s) resolves FALSE without throwing", async (_label, payload) => {
+    const request = vi.fn().mockResolvedValue(payload);
+    const octokit = { request } as unknown as Parameters<
+      typeof artifactCommittedSince
+    >[0]["octokit"];
+    await expect(
+      artifactCommittedSince({
+        anchorPrefix: ANCHOR,
+        sinceIso: SINCE,
+        cronName: "cron-competitive-analysis",
+        octokit,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  // #6750 review F1 — the defect the date-bound anchor closes.
+  it("does NOT match a PREVIOUS day's artifact that merged after midnight", async () => {
+    // safeCommitAndPr's PR title is `<commitMessage> <run date>`; the squash
+    // merge carries it into the subject. This commit is YESTERDAY's artifact,
+    // merged 00:20 today — so it sits inside today's `since` window.
+    const octokit = octokitReturningCommits([
+      "docs: update competitive intelligence report 2026-07-27 (#1234)",
+    ]);
+    await expect(
+      artifactCommittedSince({
+        anchorPrefix: "docs: update competitive intelligence report 2026-07-28",
+        sinceIso: SINCE,
+        cronName: "cron-competitive-analysis",
+        octokit,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("DOES match today's artifact by its dated PR-title subject", async () => {
+    const octokit = octokitReturningCommits([
+      "docs: update competitive intelligence report 2026-07-28 (#1235)",
+    ]);
+    await expect(
+      artifactCommittedSince({
+        anchorPrefix: "docs: update competitive intelligence report 2026-07-28",
+        sinceIso: SINCE,
+        cronName: "cron-competitive-analysis",
+        octokit,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("escapes regex metacharacters in the prefix (a conventional-commit scope is not a group)", async () => {
+    // `fix(seo): ...` contains ( ) — unescaped these would be a capture group
+    // and the anchor would match a DIFFERENT string than the literal.
+    const octokit = octokitReturningCommits(["fixseo: weekly SEO/AEO audit fixes 2026-07-28"]);
+    await expect(
+      artifactCommittedSince({
+        anchorPrefix: "fix(seo): weekly SEO/AEO audit fixes 2026-07-28",
+        sinceIso: SINCE,
+        cronName: "cron-seo-aeo-audit",
+        octokit,
+      }),
+    ).resolves.toBe(false);
   });
 });

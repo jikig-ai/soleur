@@ -201,10 +201,23 @@ assert_eq "the 9th site (cron-roadmap-review) carries a full row" "1" \
 
 # Both classes are represented; a table that had collapsed to one class would
 # make the Class A/B threshold split dead code.
-assert_eq "real table contains Class A rows" "4" \
+#
+# #6750 rebaselined 4/5 -> 3/6: cron-content-generator was corrected A -> B. Its
+# prompt carries TWO mandated no-artifact exits ("If no usable topic, create
+# issue ... and stop"; "If content-writer aborts due to FAIL citations, create
+# issue and stop"), both of which file the audit issue and commit nothing. Those
+# are designed-healthy runs, so a Class A must-commit rule would false-RED them.
+# The A classification originated in the #6737 audit's table and was inherited
+# here; see the ADR-126 amendment.
+assert_eq "real table contains Class A rows" "3" \
   "$(grep -cE '^cron-[a-z-]+\|.*\|A\|' <<<"$REAL_ROWS" || true)"
-assert_eq "real table contains Class B rows" "5" \
+assert_eq "real table contains Class B rows" "6" \
   "$(grep -cE '^cron-[a-z-]+\|.*\|B\|' <<<"$REAL_ROWS" || true)"
+
+# #6750 — pin the corrected row itself, not just the cardinality. A count-only
+# assertion is satisfied by ANY other row flipping in compensation.
+assert_eq "cron-content-generator is Class B (#6750 correction)" "1" \
+  "$(grep -cE '^cron-content-generator\|0 10 \* \* 2,4\|4\|B\|' <<<"$REAL_ROWS" || true)"
 
 echo
 echo "Total: $((PASS + FAIL))  Pass: $PASS  Fail: $FAIL"
