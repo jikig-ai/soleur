@@ -17,6 +17,9 @@ LOCK="${GIT_DATA_GC_LOCK:-/var/lock/git-data-gc.lock}"
 # the system config still being right.
 WINDOW_MEMORY="${GIT_DATA_GC_WINDOW_MEMORY:-64m}"
 PRUNE_EXPIRE="${GIT_DATA_GC_PRUNE_EXPIRE:-2.weeks.ago}"
+# B8: per-repo wall-clock bound. Without it ONE pathological repo can consume the unit's whole
+# TimeoutStartSec, and every repo after it in glob order is silently never maintained.
+REPO_TIMEOUT="${GIT_DATA_GC_REPO_TIMEOUT:-900}"
 
 log() { echo "[git-data-gc] $*"; }
 
@@ -41,17 +44,66 @@ fi
 
 # flock on a SHARED lock so this never runs concurrently with a cutover fsck window. -n:
 # skipping a weekly run is correct; stacking two repacks on a 4 GB box is not.
-exec 9>"$LOCK" || { log "cannot open lock $LOCK"; exit 0; }
+# B10: both arms EMIT. A bare `exit 0` here is the anti-pattern this file argues against one
+# stanza above: a run that never happened is indistinguishable off-host from a clean one, and
+# if the lock is permanently wedged the store is never maintained again while every weekly
+# unit reports success.
+exec 9>"$LOCK" || {
+  log "cannot open lock $LOCK"
+  [ -x "$EMIT" ] && "$EMIT" "SOLEUR_GIT_DATA_GC lock unopenable" gc warning "" \
+    "lock=unopenable" || true
+  exit 0
+}
 if ! flock -n 9; then
   log "another maintenance holder owns $LOCK — skipping this run"
+  [ -x "$EMIT" ] && "$EMIT" "SOLEUR_GIT_DATA_GC run skipped (lock held)" gc info "" \
+    "lock=held" || true
   exit 0
 fi
 
 ERRLOG="$(mktemp -t git-data-gc-err.XXXXXXXX)"
-trap 'rm -f "$ERRLOG"' EXIT
 
 repos=0
 failed=0
+completed=0
+emitted=0
+
+# B8: THE SUMMARY EMITS FROM A TRAP, so a kill still reports. MemoryMax=1G and
+# TimeoutStartSec are real outcomes on a 4 GB box, and a SIGKILL/SIGTERM part-way through the
+# glob used to destroy the loop AND the emit together: the unit died, OnFailure fired a bare
+# "unit failed", and nothing said HOW FAR it got — so every repo after the offender in glob
+# order was silently unmaintained, indefinitely, with no signal naming the shortfall.
+#
+# Emitting `repos=` from the trap makes that shortfall visible: a run killed at repo 12 of 300
+# reports 12, and the gap against the previous run is the alarm. `emitted` guards the
+# double-fire when TERM is followed by EXIT.
+summarize() {
+  [ "$emitted" -eq 1 ] && return 0
+  emitted=1
+  read -r disk_pct inode_pct < <(df --output=pcent,ipcent "$GIT_DATA_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9 \n') || true
+  log "maintenance done: repos=${repos} failures=${failed} complete=${completed} disk=${disk_pct:-unknown}% inodes=${inode_pct:-unknown}%"
+  # NO per-repo identifiers, ever: a repo name is <workspace_id>.git and workspace_id IS the
+  # user id. Only aggregate counts leave this host.
+  if [ -x "$EMIT" ]; then
+    if [ "$completed" -ne 1 ]; then
+      "$EMIT" "SOLEUR_GIT_DATA_GC run did not complete" gc_report warning "$ERRLOG" \
+        "repos=${repos}" "failures=${failed}" "complete=no" \
+        "disk_pct=${disk_pct:-unknown}" "inode_pct=${inode_pct:-unknown}" || true
+    elif [ "$failed" -gt 0 ]; then
+      "$EMIT" "SOLEUR_GIT_DATA_GC" gc_report warning "$ERRLOG" \
+        "repos=${repos}" "failures=${failed}" "complete=yes" \
+        "disk_pct=${disk_pct:-unknown}" "inode_pct=${inode_pct:-unknown}" || true
+    else
+      "$EMIT" "SOLEUR_GIT_DATA_GC" gc_report info "" \
+        "repos=${repos}" "failures=0" "complete=yes" \
+        "disk_pct=${disk_pct:-unknown}" "inode_pct=${inode_pct:-unknown}" || true
+    fi
+  fi
+  rm -f "$ERRLOG"
+}
+trap summarize EXIT
+trap 'summarize; exit 143' TERM
+trap 'summarize; exit 130' INT
 for repo in "$REPO_ROOT"/*.git; do
   [[ -d "$repo" ]] || continue
   repos=$((repos + 1))
@@ -66,32 +118,19 @@ for repo in "$REPO_ROOT"/*.git; do
   # Capture stderr rather than discarding it: on a host with no shell it is the only way to
   # learn WHY a repo failed (e.g. "detected dubious ownership" if safe.directory regressed).
   # It rides the emit's detail arg, which redacts internally.
-  git -C "$repo" reflog expire --expire-unreachable=now --all >/dev/null 2>>"$ERRLOG" || failed=$((failed + 1))
-  git -C "$repo" repack -A -d -q --window-memory="$WINDOW_MEMORY" \
+  timeout -k 30 "$REPO_TIMEOUT" git -C "$repo" reflog expire --expire-unreachable=now --all >/dev/null 2>>"$ERRLOG" || failed=$((failed + 1))
+  # --threads: re-passed for the SAME reason as --window-memory (so a repack does not depend
+  # on the system config still being right) -- and it matters MORE, not less. The bootstrap
+  # calls parallel delta search "the actual OOM path" because it multiplies the window budget
+  # by the thread count, so re-passing the lesser control and trusting the config for the
+  # greater one had it exactly backwards.
+  timeout -k 30 "$REPO_TIMEOUT" git -C "$repo" repack -A -d -q --threads=1 \
+    --window-memory="$WINDOW_MEMORY" \
     --unpack-unreachable="$PRUNE_EXPIRE" >/dev/null 2>>"$ERRLOG" || failed=$((failed + 1))
-  git -C "$repo" prune --expire="$PRUNE_EXPIRE" >/dev/null 2>>"$ERRLOG" || failed=$((failed + 1))
+  timeout -k 30 "$REPO_TIMEOUT" git -C "$repo" prune --expire="$PRUNE_EXPIRE" >/dev/null 2>>"$ERRLOG" || failed=$((failed + 1))
 done
 
-# ipcent too: --unpack-unreachable loosens objects and each burns an inode; inodes exhaust at
-# ~55-60% of bytes, so a bytes-only metric reads healthy right up to ENOSPC.
-read -r disk_pct inode_pct < <(df --output=pcent,ipcent "$GIT_DATA_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9 \n') || true
-log "maintenance done: repos=${repos} failures=${failed} disk=${disk_pct:-unknown}% inodes=${inode_pct:-unknown}%"
-
-# Disk state rides THIS run and the boot-completion emit; there is deliberately no
-# 15-minute poller (an earlier design polled the LUKS mount, empty by construction until
-# the cutover, while the filesystem that actually fills went unwatched).
-#
-# NO per-repo identifiers, ever: a repo name is <workspace_id>.git and workspace_id IS the
-# user id. Only aggregate counts leave this host.
-if [[ -x "$EMIT" ]]; then
-  if [[ "$failed" -gt 0 ]]; then
-    "$EMIT" "SOLEUR_GIT_DATA_GC" gc_report warning "$ERRLOG" \
-      "repos=${repos}" "failures=${failed}" "disk_pct=${disk_pct:-unknown}" "inode_pct=${inode_pct:-unknown}" || true
-  else
-    "$EMIT" "SOLEUR_GIT_DATA_GC" gc_report info "" \
-      "repos=${repos}" "failures=0" "disk_pct=${disk_pct:-unknown}" "inode_pct=${inode_pct:-unknown}" || true
-  fi
-fi
+completed=1
 
 # Exit 0 on partial per-repo failures: OnFailure= is reserved for the unit DYING (OOM
 # kill, missing binary), the condition worth paging on.
