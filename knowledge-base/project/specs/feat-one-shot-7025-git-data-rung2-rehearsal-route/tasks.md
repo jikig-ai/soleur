@@ -129,5 +129,5 @@ holding every user's source code. It also invalidates any pinned hash and re-anc
 - [x] E.1 All 14 pre-merge ACs verified by running each gate's OWN invocation — never a
       hand-enumerated reconstruction of its input set.
 - [x] E.2 Confirm `git-data-rung2-boot-evidence.env` is absent and BOTH interlocks still HOLD.
-- [ ] E.3 `bash scripts/test-all.sh` + `bash apps/web-platform/infra/run-registered-suites.sh`
+- [x] E.3 `bash scripts/test-all.sh` + `bash apps/web-platform/infra/run-registered-suites.sh`
       both green (test-all does NOT cover the infra suites — both are required).
