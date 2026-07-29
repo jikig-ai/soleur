@@ -66,7 +66,7 @@ written. Both needed an answer and neither existed:
   All were decision-record/plan prose (two literally say an operator step is *impossible* here);
   wrapped in `lint-infra-ignore` regions at whole-table granularity so the GFM tables survive.
 
-## The one open verification — READ THIS BEFORE RE-RUNNING THE GATE
+## Gate is GREEN — 78/78. Read this before believing any future RED
 
 `run-registered-suites.sh` has reported **77/78 with exactly one RED on every run, and a
 DIFFERENT suite each time**: `soleur-host-bootstrap-observability`, then
@@ -82,13 +82,16 @@ worktree, and wait for a genuinely quiet machine. **Do not `pkill -f run-registe
 the pattern matches the invoking shell (exit 144) *and* kills the sibling's run. I did this once
 by accident; do not repeat it.
 
-Independent corroboration that the branch is fine: `gh pr checks 7015` shows
-`infra-validate-required`, `validate (apps/web-platform/infra)` and `plan
-(apps/web-platform/infra)` all **pass**, and every suite this PR touches is green (table above).
+**RESOLVED 2026-07-29.** Once the sibling exited and the machine was quiet (`/tmp` 42 %, no
+`run-registered-suites.sh` in `pgrep`), the gate ran **78 passed, 0 failed (of 78), rc=0**. So
+every earlier RED was a contention artifact, confirmed by measurement rather than argued.
+
+Independent corroboration: `gh pr checks 7015` shows `infra-validate-required`,
+`validate (apps/web-platform/infra)` and `plan (apps/web-platform/infra)` all **pass**.
 
 ## Remaining before ready
 
-- [ ] One clean `run-registered-suites.sh` on a quiet machine (the only open item).
+- [x] One clean `run-registered-suites.sh` on a quiet machine — **78/78, rc=0**.
 - [ ] AC walk: 1, 4, 5, 6, 8, 9, 10, 12, 13, 14, 16, 20 verified this session. **AC7** (`terraform
       plan` per-merge shows zero git-data creates) needs credentials — not run locally.
 - [ ] `/soleur:review` → `/soleur:ship`. Ship must verify `Closes #6982` is the only close-keyword
@@ -131,4 +134,4 @@ DO-NOT-DISPATCH banner stays up.
 
 ## Definition of done
 
-One clean registered-suite run, then `/soleur:review` → `/soleur:ship`.
+Registered-suite run is green (78/78). Remaining: `/soleur:review` → `/soleur:ship`.
