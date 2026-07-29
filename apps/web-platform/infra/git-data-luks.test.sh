@@ -764,6 +764,41 @@ assert_mutation "A28b key-never-on-argv" p_key_never_on_argv "$CLOUD_INIT" \
 assert_mutation "A28b key-never-on-argv (bootstrap)" p_key_never_on_argv \
   "$DIR/git-data-bootstrap.sh" 's;^LUKS_ROOT="/mnt/git-data-luks"$;echo "key=$GIT_DATA_LUKS_KEY";'
 
+# --- A2: the gc units must NOT source their env file in a shell -----------------------
+#
+# `/bin/sh` is DASH, where `.` is a POSIX SPECIAL BUILTIN: a failed source kills the shell
+# outright. Both gc units used to open with `set -a; . /etc/default/git-data-doppler; set +a`,
+# and that env file is mode 0600 written in runcmd AFTER stages that can abort — so on a host
+# whose Doppler stage failed, the FAILURE REPORTER died at its own first line, before either
+# arm of its `||` fallback. The one component whose job is reporting failures was guaranteed
+# silent on its most likely failure.
+#
+# This had NO regression guard until now. Measured: reverting either unit to the sourcing form
+# left this suite 87/87 GREEN, `systemd-analyze verify` green (it does not model dash's
+# special-builtin abort), and the ADR-151 parity suite green. Sibling units ARE guarded —
+# cron-egress-firewall.test.sh pins its `EnvironmentFile=-`, workspaces-luks-header.test.sh
+# pins luks-monitor's — these two were the gap.
+p_env_file_not_sourced() {
+  # The directive must be present with the leading `-` (tolerate absence), and the shell
+  # source of that same file must be gone. Anchored on the directive at line start, so a
+  # comment mentioning either shape cannot satisfy or break it.
+  if grep -Eq '^EnvironmentFile=-/etc/default/git-data-doppler$' "$1" \
+    && ! grep -Eq '^[^#]*(^|[[:space:];])\.[[:space:]]+/etc/default/git-data-doppler' "$1"; then
+    echo 1; else echo 0; fi
+}
+for _u in "${DIR}/git-data-gc.service" "${DIR}/git-data-gc-failure.service"; do
+  assert_holds "A2 env-file-not-sourced ($(basename "$_u"))" p_env_file_not_sourced "$_u"
+done
+# Both directions, per unit: dropping the directive, and reintroducing the dash-fatal source.
+assert_mutation "A2 env-file directive present (gc.service)" p_env_file_not_sourced \
+  "${DIR}/git-data-gc.service" 's|^EnvironmentFile=-/etc/default/git-data-doppler$|Environment=X=1|'
+assert_mutation "A2 env-file directive present (gc-failure.service)" p_env_file_not_sourced \
+  "${DIR}/git-data-gc-failure.service" 's|^EnvironmentFile=-/etc/default/git-data-doppler$|Environment=X=1|'
+assert_mutation "A2 no shell source (gc.service)" p_env_file_not_sourced \
+  "${DIR}/git-data-gc.service" "s|^ExecStart=/bin/sh -c 'exec |ExecStart=/bin/sh -c 'set -a; . /etc/default/git-data-doppler; set +a; exec |"
+assert_mutation "A2 no shell source (gc-failure.service)" p_env_file_not_sourced \
+  "${DIR}/git-data-gc-failure.service" "s|^ExecStart=/bin/sh -c 'set -- |ExecStart=/bin/sh -c 'set -a; . /etc/default/git-data-doppler; set +a; set -- |"
+
 # --- B16: the mkfs feature flags are MIGRATION-FORCING, so pin them ------------------
 #
 # `mkfs.ext4 -O quota,project` had zero assertions anywhere. Dropping either flag is not a
@@ -788,8 +823,8 @@ assert_mutation "B16 mkfs-quota-project (drop -O entirely)" p_mkfs_quota_project
 
 # --- Minimum-cardinality guard (a silent-empty harness must fail loud) ---
 total=$((passes + fails))
-if [ "$total" -lt 87 ]; then
-  echo "FAIL: ran only ${total} assertions (<87) — suite did not execute fully" >&2
+if [ "$total" -lt 93 ]; then
+  echo "FAIL: ran only ${total} assertions (<93) — suite did not execute fully" >&2
   exit 1
 fi
 
