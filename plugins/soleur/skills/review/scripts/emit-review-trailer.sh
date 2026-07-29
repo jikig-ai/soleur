@@ -144,7 +144,6 @@ for _pair in "AGENTS_RAN:$AGENTS_RAN" "AGENTS_EXPECTED:$AGENTS_EXPECTED"; do
     exit 2
   fi
 done
-AGENTS_RAN="${AGENTS_RAN//_/-}"  # no-op for digits; guards a stray underscore in a hand-typed value
 if [[ -n "$MODE" && ! "$MODE" =~ ^(full|degraded|inline-fallback)$ ]]; then
   echo "emit-review-trailer: --mode must be one of full|degraded|inline-fallback (got '${MODE}')" >&2
   exit 2
