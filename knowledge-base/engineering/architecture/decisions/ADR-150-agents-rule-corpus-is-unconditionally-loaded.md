@@ -273,11 +273,27 @@ share that ordinal — only the `active` one is in scope); and a note on **086**
 
 **Residual references.** Within the swept scope — everything except
 `knowledge-base/project/{plans,specs,brainstorms,learnings}` and `**/archive/**`,
-which are point-in-time records that must keep the old paths — exactly two remain,
-by decision: `.claude/rule-weakening-acks.txt` (append-only WORM, CODEOWNERS-gated;
-rewriting a historical ack would alter a signed audit record) and
-`tests/scripts/fixtures/tfplan-real-ruleset-baseline.json` (a captured Terraform
-plan, not a live assertion).
+which are point-in-time records that must keep the old paths — four remain, each
+by decision: the **ack record** at `.claude/rule-weakening-acks.txt` line 22
+(append-only WORM, CODEOWNERS-gated; rewriting a historical ack would alter a
+signed audit record); `tests/scripts/fixtures/tfplan-real-ruleset-baseline.json`
+(a captured Terraform plan, not a live assertion); and two self-references in this
+ADR — the base-side reconstruction recipe, which must name the base-side files to
+work, and the quotation of that ack's reasoning below.
+
+That file's **header comment** was a fifth hit and was *not* left in place: it is
+parser-ignored prose that instructed authors to ack changes to files that no longer
+exist, which is prescriptive-not-narrative and therefore the "appears retired, still
+advises" failure named above. It was corrected, along with a pre-existing typo
+pointing at `rule-body-hashes.json` where the manifest is `.txt`. The append-only
+property constrains ack *records*, not the header that explains them.
+
+The sweep regex itself needed widening to find any of this. The plan's AC6
+alternation matched `AGENTS.{core,docs,rest}.md` but not `AGENTS.{md,core.md,docs.md,rest.md}`
+— a different brace spelling that hid two live residuals, one of them inside
+`lint-agents-rule-budget.py`, the very script AC4 cites. A sweep is only as wide as
+its worst-covered spelling, which is the same lesson as the rest of this change:
+the check reported zero for a reason unrelated to the property being claimed.
 
 Outside that scope the narrative corpus still names the retired files ~100 times,
 which is correct for a historical record — with one caveat worth naming, because
@@ -285,6 +301,33 @@ it is this ADR's own thesis pointed at itself: a learning that *prescribes* a
 demotion ladder is not inert narrative, it is live advice that `learnings-researcher`
 will surface during `/plan`. "Appears retired, still advises" is the mirror of
 "appears enforced, is absent". The prescriptive ones carry a superseded marker.
+
+**Every new rule now costs always-loaded bytes — the zero-cost tier is gone.**
+This is the consequence most likely to surprise the next author, because it was
+never written down as a design property; it was simply the shape of the old
+system. Under the split, a `rest`-class rule was excluded from `B_ALWAYS`
+entirely, and authors reasoned that way explicitly — the WORM ack for
+`wg-when-an-audit-identifies-pre-existing` records the trade in exactly those
+terms ("AGENTS.rest.md is excluded from B_ALWAYS so this costs zero always-loaded
+bytes"). That escape valve is now closed, and nothing replaced it: there is no
+eviction, pruning, or demotion policy, while `/compound` proposes rules routinely.
+
+The current margin, measured: `B_ALWAYS = 42,547 B` against `44,000` warn and
+`46,000` reject — **1,453 B** and **3,453 B** of headroom. Mean rule body is
+**366 B** and the per-rule cap is **600 B**, so the ratchet is roughly **four
+average-sized rules to the warn tier and nine to hard reject** (three and six at
+the cap). `AC4` proves today's state and says nothing about the trajectory.
+
+The decision at the ratchet is deliberately **not** pre-authorized here, because
+"raise the ceiling" is the move that would quietly undo this ADR's own reasoning:
+the ceiling moved from 23,000 to 46,000 in this change because the *measurement*
+became honest, not because the budget loosened, and a second raise justified by
+citing the first would be a ratchet with no floor. When the warn tier is next
+reached, the options are, in order: retire a rule via `retired-rule-ids.txt`
+(rule IDs are immutable — retire, never reuse); route the insight to a skill or
+agent where it is enforced closer to the action; tighten an existing body against
+the 600 B cap. Re-baselining the ceiling is a last resort that requires its own
+recorded rationale, not an inline bump.
 
 ## Cost Impacts
 

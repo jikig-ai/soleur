@@ -1,12 +1,12 @@
 # rule-weakening-acks.txt — CODEOWNERS-owned WORM ack log (ADR-092).
 #
 # Append-only. Every change or deletion of an `hr-*`/`wg-*` rule BODY line in
-# AGENTS.{core,docs,rest}.md must be accompanied by a matching ack here, or the
+# AGENTS.rules.md must be accompanied by a matching ack here, or the
 # required `rule-body-lint` CI check BLOCKS the merge.
 #
 # Format (one per line; `#` comments + blank lines ignored):
 #   <id>|<sha256>|<date>|<PR>|<reason>
-# where <sha256> is the NEW normalized body hash from .claude/rule-body-hashes.json
+# where <sha256> is the NEW normalized body hash from .claude/rule-body-hashes.txt
 # after running `python3 scripts/lint-rule-bodies.py --write`. For a DELETION the
 # sha256 field is the literal token `DELETED`.
 #

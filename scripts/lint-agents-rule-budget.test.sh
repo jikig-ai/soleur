@@ -12,7 +12,7 @@
 #   T6: pointer index lines short by construction -> never cap-rejected
 #
 # Isolation: each case builds a throwaway tree via `mktemp -d`, populates a
-# minimal AGENTS.{md,core.md,docs.md,rest.md} pair, and runs the linter.
+# minimal AGENTS.{md,rules.md} pair, and runs the linter.
 
 set -euo pipefail
 

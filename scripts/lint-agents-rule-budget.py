@@ -234,7 +234,7 @@ def lint(paths: list[Path]) -> int:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Lint AGENTS.{md,core.md,docs.md,rest.md} for B_ALWAYS and per-rule budget.",
+        description="Lint AGENTS.{md,rules.md} for B_ALWAYS and per-rule budget.",
     )
     parser.add_argument(
         "files",
