@@ -22,6 +22,19 @@ SUT="$SCRIPT_DIR/rules-loader-stamp-probe.sh"
 
 PASS=0; FAIL=0
 
+# One owning trap for every fixture this suite allocates (ADR-129 rule (c)).
+# The per-arm `rm -rf` below is the happy path; this is what runs when an arm
+# dies between mktemp and cleanup. Registered BEFORE the first allocation --
+# a trap installed after mktemp does not own the window it exists to cover.
+FIXTURE_DIRS=()
+cleanup_fixtures() {
+  local d
+  for d in "${FIXTURE_DIRS[@]:-}"; do
+    [[ -n "$d" && -d "$d" ]] && rm -rf "$d"
+  done
+}
+trap cleanup_fixtures EXIT INT TERM
+
 ok()   { PASS=$((PASS+1)); echo "PASS: $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL: $1"; }
 
@@ -52,7 +65,7 @@ run_probe() { # <fixture-dir> -> echoes "<token> <rc>"
 }
 
 # --- T1: whole corpus -> OK ------------------------------------------------
-d=$(make_fixture 100000)
+d=$(make_fixture 100000); FIXTURE_DIRS+=("$d")
 read -r tok rc <<<"$(run_probe "$d")"
 check "T1 full corpus -> OK/0" "OK" "0" "$tok" "$rc"
 rm -rf "$d"
@@ -61,7 +74,7 @@ rm -rf "$d"
 # The arm that matters: a PARTIAL load is the governance-blackout mode. 12 lines
 # keeps the frontmatter + first heading + a few rules, so the loader emits a
 # real stamp with numerator < denominator (not a fail-safe).
-d=$(make_fixture 12)
+d=$(make_fixture 12); FIXTURE_DIRS+=("$d")
 read -r tok rc <<<"$(run_probe "$d")"
 check "T2 truncated corpus -> MISMATCH/1" "MISMATCH" "1" "$tok" "$rc"
 rm -rf "$d"
@@ -69,13 +82,13 @@ rm -rf "$d"
 # --- T3: missing corpus -> MISMATCH ----------------------------------------
 # The loader's fail-safe stamps `0 of N`, which the probe must reject rather
 # than treat as "nothing to load, therefore fine".
-d=$(make_fixture none)
+d=$(make_fixture none); FIXTURE_DIRS+=("$d")
 read -r tok rc <<<"$(run_probe "$d")"
 check "T3 missing corpus -> MISMATCH/1" "MISMATCH" "1" "$tok" "$rc"
 rm -rf "$d"
 
 # --- T4: missing hook -> NOSTAMP -------------------------------------------
-d=$(make_fixture 100000)
+d=$(make_fixture 100000); FIXTURE_DIRS+=("$d")
 rm -f "$d/.claude/hooks/session-rules-loader.sh"
 read -r tok rc <<<"$(run_probe "$d")"
 check "T4 missing loader hook -> NOSTAMP/1" "NOSTAMP" "1" "$tok" "$rc"
