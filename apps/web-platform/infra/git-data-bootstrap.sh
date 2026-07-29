@@ -196,6 +196,12 @@ git config --system receive.advertisePushOptions true
 git config --system receive.autogc false
 git config --system gc.auto 0
 git config --system gc.autoDetach false
+# unpackLimit=1 — KEEP EVERY PUSH PACKED. Unset it inherits transfer.unpackLimit (100), so a
+# push under 100 objects explodes to loose — and the modal session push is under 100. Measured:
+# 79,411 objects = 700 MB/79,411 inodes loose vs 123 MiB/2 packed; mkfs gives this 10 GB volume
+# 655,360 inodes, so inodes exhaust at ~55-60% of BYTES — ENOSPC while df-bytes reads healthy.
+# gc.auto=0 means nothing packs it until the timer.
+git config --system receive.unpackLimit 1
 # 64m window / 128m pack / single thread: sized to leave headroom on a 4 GB box that also
 # serves receive-pack. threads=1 because parallel delta search multiplies the window
 # budget by the thread count, which is the actual OOM path.
@@ -242,6 +248,7 @@ mountpoint -q "$LUKS_ROOT" || {
 # an error — it is an OOM-killed repack weeks later, on the push path, invisible to the
 # client. Asserting the read-back is what makes the D1 claim an enforced invariant.
 for _kv in "receive.autogc=false" "gc.auto=0" "gc.autoDetach=false" \
+           "receive.unpackLimit=1" \
            "pack.windowMemory=64m" "pack.packSizeLimit=128m" "pack.threads=1" \
            "pack.deltaCacheSize=64m" "core.bigFileThreshold=32m" \
            "safe.directory=$REPO_ROOT/*"; do
@@ -278,9 +285,11 @@ log "bootstrap complete: plaintext volume mounted, LUKS cutover volume mounted a
 # until the cutover, and duplicating that false claim into telemetry would be the Art. 30
 # defect in a second artifact. df% is GIT_DATA_ROOT (the volume that fills). No repo paths,
 # no UUIDs: four booleans and an integer carry no identifier by construction.
-_disk_pct="$(df --output=pcent "$GIT_DATA_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9')"
+# ipcent too: inodes exhaust ahead of bytes (see 6c), so bytes-only reads healthy to ENOSPC.
+# `|| true` because read returns 1 on an empty df and this script is `set -e`.
+read -r _disk_pct _inode_pct < <(df --output=pcent,ipcent "$GIT_DATA_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9 \n') || true
 if [[ -x "$GIT_DATA_EMIT" ]]; then
   "$GIT_DATA_EMIT" "git-data bootstrap complete" boot_complete info "" \
     "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" \
-    "disk_pct=${_disk_pct:-unknown}" || true
+    "disk_pct=${_disk_pct:-unknown}" "inode_pct=${_inode_pct:-unknown}" || true
 fi

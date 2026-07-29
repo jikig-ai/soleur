@@ -72,8 +72,10 @@ for repo in "$REPO_ROOT"/*.git; do
   git -C "$repo" prune --expire="$PRUNE_EXPIRE" >/dev/null 2>>"$ERRLOG" || failed=$((failed + 1))
 done
 
-disk_pct="$(df --output=pcent "$GIT_DATA_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9')"
-log "maintenance done: repos=${repos} failures=${failed} disk=${disk_pct:-unknown}%"
+# ipcent too: --unpack-unreachable loosens objects and each burns an inode; inodes exhaust at
+# ~55-60% of bytes, so a bytes-only metric reads healthy right up to ENOSPC.
+read -r disk_pct inode_pct < <(df --output=pcent,ipcent "$GIT_DATA_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9 \n') || true
+log "maintenance done: repos=${repos} failures=${failed} disk=${disk_pct:-unknown}% inodes=${inode_pct:-unknown}%"
 
 # Disk state rides THIS run and the boot-completion emit; there is deliberately no
 # 15-minute poller (an earlier design polled the LUKS mount, empty by construction until
@@ -84,10 +86,10 @@ log "maintenance done: repos=${repos} failures=${failed} disk=${disk_pct:-unknow
 if [[ -x "$EMIT" ]]; then
   if [[ "$failed" -gt 0 ]]; then
     "$EMIT" "SOLEUR_GIT_DATA_GC" gc_report warning "$ERRLOG" \
-      "repos=${repos}" "failures=${failed}" "disk_pct=${disk_pct:-unknown}" || true
+      "repos=${repos}" "failures=${failed}" "disk_pct=${disk_pct:-unknown}" "inode_pct=${inode_pct:-unknown}" || true
   else
     "$EMIT" "SOLEUR_GIT_DATA_GC" gc_report info "" \
-      "repos=${repos}" "failures=0" "disk_pct=${disk_pct:-unknown}" || true
+      "repos=${repos}" "failures=0" "disk_pct=${disk_pct:-unknown}" "inode_pct=${inode_pct:-unknown}" || true
   fi
 fi
 
