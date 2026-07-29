@@ -84,15 +84,37 @@
 # Usage:  source tests/scripts/lib/web2-retire-gate.sh
 #         web2_retire_gate <plan-json-file>   # 0=PASS, 1=ABORT
 
+# THE FAIL-CLOSED PREAMBLE (#6997). A gate that authorises destructive production
+# infrastructure must never let "I could not check" read as "it is fine". These three
+# assertions refuse a plan document the gate cannot READ, cannot CLASSIFY, or whose
+# counters did not evaluate — the shapes that otherwise score zero-of-everything and PASS.
+#
+# The `declare -F` guard makes the source idempotent: the workflow step may have sourced
+# the preamble already, in either order.
+# shellcheck source=tests/scripts/lib/plan-gate-preamble.sh
+if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
+  _W2RG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=/dev/null
+  source "${_W2RG_DIR}/plan-gate-preamble.sh"
+fi
+
 web2_retire_gate() {
   local plan_json="$1"
   local filter="${WEB2_GATE_FILTER:-$(dirname "${BASH_SOURCE[0]}")/destroy-guard-filter-web-platform.jq}"
-  local counts oos ndel rupd srv net vat vol fwu fwd hcreates members v
+  local counts oos ndel rupd srv net vat vol fwu fwd hcreates members
 
-  if [[ ! -f "$plan_json" ]]; then
-    echo "web2_retire_gate: plan JSON not found: ${plan_json}"
-    return 1
-  fi
+  # THE ASSERTS LIVE INSIDE THE FUNCTION, AS ITS FIRST STATEMENTS, because they consume
+  # $plan_json — a FUNCTION PARAMETER that does not exist at file scope. (Not, as an
+  # earlier revision claimed, because a file-scope failure would fail open: `set -e` is
+  # armed at every gate source site in apply-web-platform-infra.yml, so a file-scope
+  # failure fails CLOSED. Getting the right answer from the wrong mechanism is still a
+  # defect when the mechanism ends up in an ADR.)
+  #
+  # `|| return 1` also catches a 127 undefined-function status, so a preamble that failed
+  # to source aborts the gate rather than silently skipping the check.
+  plan_gate_assert_readable     "web2_retire_gate" "$plan_json" || return 1
+  plan_gate_assert_classifiable "web2_retire_gate" "$plan_json" || return 1
+
   # Read from the STRUCTURED plan JSON (terraform show -json), never stderr.
   if ! counts=$(jq -f "$filter" < "$plan_json" 2>/dev/null); then
     echo "web2_retire_gate: jq filter failed on ${plan_json}"
@@ -116,14 +138,11 @@ web2_retire_gate() {
   # that gate was deleted with #6575.)
   hcreates=$(echo "$counts" | jq -r '.host_creates')
 
-  # Parse-validate every counter. A jq null/empty would evaluate false in the
-  # arithmetic below and could silently mis-decide; fail LOUD instead.
-  for v in "$oos" "$ndel" "$rupd" "$srv" "$net" "$vat" "$vol" "$fwu" "$fwd" "$hcreates"; do
-    if [[ ! "$v" =~ ^[0-9]+$ ]]; then
-      echo "web2_retire_gate: counter parse failed (oos='${oos}' nested_deletes='${ndel}' reboot_updates='${rupd}' server='${srv}' network='${net}' volume_attachment='${vat}' volume='${vol}' fw_updates='${fwu}' fw_deletes='${fwd}' host_creates='${hcreates}')"
-      return 1
-    fi
-  done
+  # Every counter is a non-negative integer BEFORE any arithmetic compares one.
+  # A counter that did not evaluate is the empty string, and [[ "" -gt 0 ]] is FALSE
+  # under bash coercion — so an uncomputed counter silently satisfies every threshold.
+  # The shared helper names WHICH counter failed rather than reporting them all.
+  plan_gate_assert_numeric "web2_retire_gate" "oos=${oos}" "nested_deletes=${ndel}" "reboot_updates=${rupd}" "server=${srv}" "network=${net}" "volume_attachment=${vat}" "volume=${vol}" "fw_updates=${fwu}" "fw_deletes=${fwd}" "host_creates=${hcreates}" || return 1
 
   members=$((srv + net + vat + vol))
   echo "web2_retire_out_of_scope_changes=${oos} nested_deletes=${ndel} reboot_updates=${rupd} server=${srv} network=${net} volume_attachment=${vat} volume=${vol} fw_updates=${fwu} fw_deletes=${fwd} members=${members}"
