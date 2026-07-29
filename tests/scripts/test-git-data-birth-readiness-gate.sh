@@ -189,9 +189,34 @@ fi
 # rehearsal of a template that has since changed, and this template changes constantly.
 printf '\nrung-2 rehearsal gate\n'
 
+# The gate binds its evidence to EVERY file that composes user_data, not just the template —
+# a rehearsal is only meaningful for the payload set that actually boots. So the fixture models
+# that set: a git-data.tf with nine `file()` bindings and the nine payloads beside it.
 R2="$TMP/r2"; mkdir -p "$R2"
 cp "$TMP/mixed.yml" "$R2/ci.yml"
-R2_SHA="$(sha256sum "$R2/ci.yml" | cut -d' ' -f1)"
+_r2_payloads=(git-data-bootstrap.sh git-data-provision.sh git-data-transport-wrapper.sh
+              git-data-remove.sh git-data-gc.sh git-data-pre-receive-placeholder.sh
+              git-data-gc.service git-data-gc-failure.service git-data-gc.timer)
+{
+  printf 'resource "x" "y" {\n  user_data = templatefile("${path.module}/ci.yml", {\n'
+  for _p in "${_r2_payloads[@]}"; do
+    printf '    %s = file("${path.module}/%s")\n' "${_p//[-.]/_}" "$_p"
+  done
+  printf '  })\n}\n'
+} > "$R2/git-data.tf"
+for _p in "${_r2_payloads[@]}"; do printf '#!/usr/bin/env bash\n# %s\ntrue\n' "$_p" > "$R2/$_p"; done
+
+# Compute the expected hash exactly the way the gate does, so the fixture tracks the gate's
+# own definition rather than restating it.
+_r2_hash() {  # $1 = dir holding ci.yml + git-data.tf + payloads
+  local d="$1" ins=() f
+  ins+=("$d/ci.yml")
+  while IFS= read -r f; do
+    [[ -n "$f" && -r "$d/$f" ]] && ins+=("$d/$f")
+  done < <(sed -nE 's/^[[:space:]]*[a-z_]+[[:space:]]*=[[:space:]]*(replace\()?file\("\$\{path\.module\}\/([^"]+)"\).*/\2/p' "$d/git-data.tf" | sort -u)
+  printf '%s\n' "${ins[@]}" | sort | xargs sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1
+}
+R2_SHA="$(_r2_hash "$R2")"
 
 r2check() {
   local name="$1" want_rc="$2" needle="$3" ci="$4" ev="$5"
@@ -238,10 +263,18 @@ r2check "a missing cloud-init => ABORT" 1 "missing or not supplied" "$R2/nonexis
 # THE SELF-INVALIDATION PROPERTY, asserted end-to-end rather than inferred from (d): the
 # SAME evidence file that just released the gate must stop releasing it once the template
 # it attests to is edited. This is the whole reason the hash binding exists.
-cp "$R2/ci.yml" "$R2/ci-edited.yml"
-printf '\n# a later edit to the template\n' >> "$R2/ci-edited.yml"
-r2check "evidence goes stale when the template is edited" 1 "STALE EVIDENCE" \
-  "$R2/ci-edited.yml" "$R2/ok.env"
+R2E="$TMP/r2edited"; mkdir -p "$R2E"; cp "$R2"/* "$R2E"/ 2>/dev/null || true
+printf '\n# a later edit to the template\n' >> "$R2E/ci.yml"
+r2check "evidence goes stale when the TEMPLATE is edited" 1 "STALE EVIDENCE" \
+  "$R2E/ci.yml" "$R2/ok.env"
+
+# THE POINT OF BINDING ALL TEN INPUTS. An earlier version hashed the template ALONE — 1 of the
+# 10 files composing user_data — so editing a PAYLOAD left the evidence valid for a boot that
+# had changed. This is the arm that pins the fix.
+R2P="$TMP/r2payload"; mkdir -p "$R2P"; cp "$R2"/* "$R2P"/ 2>/dev/null || true
+printf '\n# a later edit to a shipped payload\n' >> "$R2P/git-data-gc.sh"
+r2check "evidence goes stale when a PAYLOAD is edited (not just the template)" 1 "STALE EVIDENCE" \
+  "$R2P/ci.yml" "$R2/ok.env"
 
 # ── MUTATION SECTION ──────────────────────────────────────────────────────────────
 # This gate is a single decision, so every arm is SOLE-GUARD: there is no second line of
@@ -354,11 +387,11 @@ r2check "trailing comments on valid evidence => still RELEASED" 0 "RELEASED" "$R
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
 # rather than masquerading as an empty suite.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 30 ]]; then
+if [[ "$_ran" -lt 31 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 30. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 31. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 30)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 31)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"

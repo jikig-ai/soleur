@@ -250,7 +250,7 @@ outside the hcloud_server.git_data address), then commit ${evidence} containing:
 
   RUNG2_BOOT_REHEARSAL=PASS
   RUNG2_EVIDENCE_URL=<workflow run or write-up URL>
-  RUNG2_TEMPLATE_SHA256=<sha256 of the cloud-init template that was booted>
+  RUNG2_TEMPLATE_SHA256=<hash-of-hashes over the template + every file()-bound payload>
 
 Carried by #7025, which owns rung 2 as its own precondition. Nothing has been planned or
 created.
@@ -278,17 +278,45 @@ HOLD
     return 1
   fi
 
-  live_sha="$(sha256sum "$cloud_init" 2>/dev/null | cut -d' ' -f1)"
+  # HASH EVERY INPUT THAT SHIPS, not just the template. The first version hashed
+  # cloud-init-git-data.yml alone — 1 of the 10 files that compose user_data — so editing
+  # git-data-gc.sh, either gc unit, the bootstrap or any forced-command wrapper left rung-2
+  # evidence VALID for a payload that had changed. That defeats the whole self-invalidation
+  # property this binding exists to provide: what boots is the RENDER, and the template is
+  # one input to it.
+  #
+  # A hash-of-hashes over the template plus every `file()`-bound payload in git-data.tf,
+  # sorted for determinism. Derived from the .tf rather than listed here so a newly injected
+  # payload is covered the day it is bound. No terraform needed, so the gate stays runnable
+  # in CI, in tests, and on a laptop.
+  local tf_dir tf_file _inputs=() _f
+  tf_dir="$(dirname "$cloud_init")"
+  tf_file="${tf_dir}/git-data.tf"
+  if [[ ! -r "$tf_file" ]]; then
+    echo "git_data_rung2_rehearsal_gate: ABORT — cannot read ${tf_file}, so the payload set backing the evidence hash is unknown. Fail-closed."
+    return 1
+  fi
+  _inputs+=("$cloud_init")
+  while IFS= read -r _f; do
+    [[ -n "$_f" && -r "${tf_dir}/${_f}" ]] && _inputs+=("${tf_dir}/${_f}")
+  done < <(sed -nE 's/^[[:space:]]*[a-z_]+[[:space:]]*=[[:space:]]*(replace\()?file\("\$\{path\.module\}\/([^"]+)"\).*/\2/p' "$tf_file" | sort -u)
+  # A floor: the template + nine payloads. A shrunken extraction would silently narrow what
+  # the evidence is bound to, which is the same fail-open in a different costume.
+  if [[ "${#_inputs[@]}" -lt 10 ]]; then
+    echo "git_data_rung2_rehearsal_gate: ABORT — resolved only ${#_inputs[@]} user_data input(s) (expected the template + 9 payloads). The payload-set extraction from ${tf_file} drifted. Fail-closed."
+    return 1
+  fi
+  live_sha="$(printf '%s\n' "${_inputs[@]}" | sort | xargs sha256sum 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1)"
   if [[ ! "$live_sha" =~ ^[0-9a-f]{64}$ ]]; then
-    echo "git_data_rung2_rehearsal_gate: ABORT — could not hash ${cloud_init}. Fail-closed."
+    echo "git_data_rung2_rehearsal_gate: ABORT — could not hash the ${#_inputs[@]} user_data inputs. Fail-closed."
     return 1
   fi
 
   if [[ "$claimed_sha" != "$live_sha" ]]; then
-    echo "git_data_rung2_rehearsal_gate: HOLD — STALE EVIDENCE. ${evidence} attests a rehearsal of template sha256 ${claimed_sha}, but ${cloud_init} is now ${live_sha}. The template changed after it was rehearsed, so the boot that was proven is not the boot that would happen. Re-run the rung-2 rehearsal against the current template and update the evidence."
+    echo "git_data_rung2_rehearsal_gate: HOLD — STALE EVIDENCE. ${evidence} attests a rehearsal of user_data sha256 ${claimed_sha}, but the ${#_inputs[@]} files composing user_data now hash to ${live_sha}. Something that ships to the host changed after it was rehearsed, so the boot that was proven is not the boot that would happen. Re-run the rung-2 rehearsal against the current template and update the evidence."
     return 1
   fi
 
-  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for template sha256 ${live_sha} (${url}). NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
+  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for user_data sha256 ${live_sha} (${#_inputs[@]} inputs) (${url}). NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
   return 0
 }
