@@ -491,7 +491,7 @@ Three architectural decisions, all **in-scope tasks of this PR** per
 itself argues git-data's type decision belongs in ADR-068 (*"git-data is this ADR's element"*) and
 establishes the addendum-not-new-ordinal convention. Records **D-SIZE** and a `D1-corrected` row.
 
-**Secondary: amend `ADR-149`.** Add checklist **item 8** (sizing confirmation — the release
+**Secondary: amend `ADR-149`.** Add checklist **item 9 as merged** (sizing confirmation — the release
 checklist has none today, and neither does the runbook's pre-dispatch table, whose step-7 stock
 preflight checks *orderability*, never *adequacy*). Amend the Alternatives table with **D-HB**'s
 evidence: the original *"Target the heartbeat too — Rejected"* verdict **stands**, but for a
@@ -1119,7 +1119,7 @@ on three independent grounds (per-merge `arm_one` wedge; reachability ≠ boot c
 verdict stands on better evidence) — now D-HB. Confirmed W8's feasibility trap is an artifact of one
 assumed remedy, not structural, and prescribed the static-local + `depends_on` + three-way-registration
 shape now in *Infrastructure (IaC)*. Named the highest-leverage residual risk: **the interlock is a
-one-bit latch guarding a seven-item checklist, and the bit flips on threading, not on emitting** —
+one-bit latch guarding a nine-item checklist, and the bit flips on threading, not on emitting** —
 mitigated by mutation-battery arms that go red when the trap and the emits are neutered (AC25), by
 doing W0's probe first, and by keeping W9 (the banner) as the final commit with an item-by-item
 checklist in the PR body. Recommended a 4-PR split; see A12 for why this plan keeps it atomic and
@@ -1434,7 +1434,7 @@ event when the limiter sheds, so shedding is visible. `server/concurrency.ts`'s 
 
 ### Phase 7 — Records (W7, W9, W10, W11) and tests
 
-7.1 Amend ADR-068's addendum (D1-corrected + D-SIZE) and ADR-149 (checklist item 8, the D-HB
+7.1 Amend ADR-068's addendum (D1-corrected + D-SIZE) and ADR-149 (checklist item 9 as merged, the D-HB
 Alternatives amendment, the Residual 2 disposition).
 7.2 W10 — Art. 30 register: wrap PA-1 (g)(13) and PA-2 (g)(17) in the DRAFTED / NOT-YET-ACTIVE
 pattern; amend PA-8 (c)(ii)/(d)/(f)/(g) for the additional emitting host.
@@ -1639,11 +1639,11 @@ probe (AC20) closes the loop without relying on human memory.
 | T7 | a boot where the LUKS mapper is absent | the boot-completion stage runs | it reports `luks_mounted=no` and fails loud — it does **not** report success |
 | T8 | a bare repo with unreachable objects from a prior `--force` push, plus one ref-reachable object | the gc timer body runs | unreachable objects are collected; the **reachable object survives**; the unit stays within `MemoryMax=` |
 | T9 | a push arriving while gc holds the lock | `git-receive-pack` runs | the push succeeds (`receive.autogc=false` keeps gc off the push path) and gc does not run concurrently with a cutover fsck |
-| T10 | `/mnt/git-data-luks` above the warn threshold, with repos named with real UUID shapes | the store monitor fires | one `SOLEUR_GIT_DATA_DISK` event with guest `df%` and aggregate counts, and **zero** UUID substrings in the payload |
+| T10 | `/mnt/git-data-luks` above the warn threshold, with repos named with real UUID shapes | the maintenance run reports | **AS SHIPPED: there is no `SOLEUR_GIT_DATA_DISK` event and no separate store monitor.** Disk state rides the `SOLEUR_GIT_DATA_GC` `gc_report` emit and the `boot_complete` emit, as `disk_pct` + `inode_pct` tags — a deliberate choice recorded at §853 of this plan (no 15-minute poller). The assertion that survives is the one that mattered: aggregate counts and `df%`/inode% only, and **zero** UUID substrings in the payload. |
 | T11 | N+1 concurrent session-ends | the limiter is engaged | at most N concurrent replications; the shed path emits an observable event and does **not** block session end |
 | T12 | tfplan for the per-merge allow-list path | destroy-guard + parity tests run | zero git-data creates; parity green three ways |
 | T13 | tfplan for the birth path including the SSH-host secret | `git-data-host-birth-gate.sh` runs | PASS — 1 host create, 3 entailed creates, firewall attachment bound to exactly 1 server, all presence members create-or-no-op, 0 destroys / 0 firewall rules / 0 passphrase mutations / 0 reboots / 0 out-of-scope |
-| T14 | live state today (host unborn) | the follow-through probe runs | exit 1 with a "still waiting" message, not a false alarm |
+| T14 | live state today (host unborn) | the follow-through probe runs | **AS SHIPPED: exit 2**, not 1, with a "still waiting" message and not a false alarm. The probe reserves **exit 1** for the genuine FAIL case (a `boot_complete` event carrying a FALSE assertion — a host that reached its final stage with an invariant unmet) and uses **exit 2** for every transient/not-yet condition, so "the host is not born" can never be mistaken for "the host booted dark". |
 | T15 | a payload fixture containing a Doppler token, an OpenSSH private key and a passphrase-shaped value | `git-data-redact` runs | all three are redacted — the value-based arm catches the one no pattern would |
 | T16 | the `trap on_err` / Sentry emit / boot-completion emit each neutered in turn | the registered suites run | each mutation turns a suite **red** |
 
@@ -1651,7 +1651,7 @@ probe (AC20) closes the loop without relying on human memory.
 
 | Risk | Mitigation |
 |---|---|
-| **The interlock is a one-bit latch guarding a seven-item checklist, and the bit flips on threading, not on emitting.** The gate's own success message says so, and a prior probe found that repointing its path argument at the web host's cloud-init left every suite green and released the gate. A well-intentioned PR that threads `sentry_dsn` without a working emitter permanently releases the hold on the route that creates the store holding every user's source code. **W12's rehearsal is the primary mitigation** — it converts the release condition from "the variable is referenced" to "the signal was received", and it is the only safeguard here that is not static. AC25's mutation arms are the secondary one: they prove the code *can go red when neutered*, which is necessary but never proves an event *arrives* when it is intact. W0's probe runs first, so "the credential is unreadable" is discharged before the design depends on it. And the banner-clear **moves out of this PR** (W12(b)): a PR merges atomically, so a banner cleared in the final commit clears at the same instant as the untested code it is meant to be downstream of. The PR body walks the checklist item-by-item so a reviewer checks seven boxes rather than trusting one bit. |
+| **The interlock is a one-bit latch guarding a nine-item checklist, and the bit flips on threading, not on emitting.** The gate's own success message says so, and a prior probe found that repointing its path argument at the web host's cloud-init left every suite green and released the gate. A well-intentioned PR that threads `sentry_dsn` without a working emitter permanently releases the hold on the route that creates the store holding every user's source code. **W12's rehearsal is the primary mitigation** — it converts the release condition from "the variable is referenced" to "the signal was received", and it is the only safeguard here that is not static. AC25's mutation arms are the secondary one: they prove the code *can go red when neutered*, which is necessary but never proves an event *arrives* when it is intact. W0's probe runs first, so "the credential is unreadable" is discharged before the design depends on it. And the banner-clear **moves out of this PR** (W12(b)): a PR merges atomically, so a banner cleared in the final commit clears at the same instant as the untested code it is meant to be downstream of. The PR body walks the checklist item-by-item so a reviewer checks nine boxes rather than trusting one bit. |
 | **`set -e` un-gates previously-tolerated non-zero exits and bricks every future boot.** The precedent is exact: a prior fix added assertions above the heredocs that create the files, under a top-level `set -e`, and would have darkened every new host, unpaged. | Phase 0.4 enumerates and classifies **every** runcmd item before `set -e` is armed; each must-tolerate command gets an explicit `|| true` with a naming comment. T5/T6 exercise the abort path in a harness. The emitter ships **before** `set -e` is armed (Phase 2 precedes Phase 3), so the first thing that can abort already has a voice. |
 | **W0's scope mismatch is worse than assumed and blocks the emitter design.** | It is Phase 0.1, before any design commits. Two remedies are pre-specified (bake vs correct-then-read); AC21 requires the shipped design to match the probe result rather than an assumption. |
 | **PII leak through the new channel** — repo paths are user UUIDs and `pii_scrub_string` does not catch bare UUIDs. | AC22 asserts zero UUID substrings across every emitter and unit body with a UUID-shaped fixture; AC23/AC24 cover the redactor's two arms and the log-excerpt path. The design avoids the hazard structurally: the monitor emits **aggregate** counts, never per-repo rows. |
@@ -1659,7 +1659,7 @@ probe (AC20) closes the loop without relying on human memory.
 | **`user_data` budget overrun.** | AC3 pins the measured base64-of-gzip value with headroom. The single largest candidate addition — a Vector agent — is rejected outright (A1). Comments count; prose bloat caused both prior breaches. |
 | **Partial-birth surface widens with every new address.** | Additions held to one (or two if W0 forces it); all three registration sites edited in the same commit; the parity test's exact-length equality makes a two-of-three edit fail loudly. |
 | **A green suite that asserts nothing.** The two most recent git-data PRs each shipped green batteries an agent panel then holed — one because `source`-ing a gate only *defines* the function, one because the two endpoints were asserted and the wire between them was not. | Every gate assertion asserts the **invocation** and that the step cannot be skipped; every new probe has a proven-RED arm (T1, T14, T16, AC20). New `*.test.sh` files must be registered in `infra-validation.yml` or they gate nothing (AC11). |
-| **Sizing is wrong.** | D-SIZE keeps headroom rather than the $104/yr saving, and W4 converts the boundedness claim from an assertion into an enforced invariant. The residual — no pre-birth measurement is possible — is stated in the ADR rather than papered over, and ADR-149 item 8 plus the runbook row make the next person confront it. The correction path (a destructive replace) is stated accurately, not overstated. |
+| **Sizing is wrong.** | D-SIZE keeps headroom rather than the $104/yr saving, and W4 converts the boundedness claim from an assertion into an enforced invariant. The residual — no pre-birth measurement is possible — is stated in the ADR rather than papered over, and ADR-149 item 9 (as merged) plus the runbook row make the next person confront it. The correction path (a destructive replace) is stated accurately, not overstated. |
 | **Art. 5(2) accountability failure after birth.** | W8, in this PR, with the trap dissolved by static-literal sourcing. |
 | **Scope size — eleven workstreams in one PR.** | See A12. The forcing function is shared (all pre-dispatch, and the sentinel releases the route on merge), the birth itself is out of scope, and the split boundary is pre-specified if `/work` needs one. |
 

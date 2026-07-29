@@ -161,7 +161,13 @@ repository. An earlier draft said "impossible"; that overstated it.
    **If #6982 ships the emitter without introducing a Terraform resource to assert**, this item is
    not satisfiable as written: the sentinel stays, and that outcome must be recorded here before
    item 8 is cleared.
-8. Clear the DO-NOT-DISPATCH banner in `git-data-birth.md`. *(Terminal: `git-data-birth.md`
+8. Clear the DO-NOT-DISPATCH banner in `git-data-birth.md`. **Since #6982 this item is no
+   longer held by prose alone:** releasing the `${sentry_dsn}` sentinel gate (item 1) retired
+   the only mechanical hold, so #6982 added a SECOND interlock,
+   `git_data_rung2_rehearsal_gate`, which the dispatch job runs alongside the first. It
+   requires committed rung-2 boot evidence hash-bound to the template being dispatched, and
+   re-holds automatically on any later edit to `cloud-init-git-data.yml`. #7025 carries rung 2
+   and lands that evidence. *(Terminal: `git-data-birth.md`
    instructs that it be cleared only when every item above is done.)*
 9. **Confirm the SIZING before the first birth** (added by #6982). The checklist had no
    sizing item and neither does the runbook's pre-dispatch table — step 7's stock preflight

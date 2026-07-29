@@ -1379,7 +1379,8 @@ who checks it discount everything around it.
 
 **No pre-birth measurement is possible.** The honest statement is *"unmeasured, sized for the
 burst, with the burst now explicitly bounded"* — not *"measured and unbound"*. ADR-149 gains
-a checklist item (8) so the next person confronts this rather than inheriting it.
+a checklist item (9 as merged — #7003 landed a sibling item ahead of it) so the next
+person confronts this rather than inheriting it.
 
 ### Companion decision — no swap file
 

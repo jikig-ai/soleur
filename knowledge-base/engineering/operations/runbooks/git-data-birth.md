@@ -27,7 +27,7 @@
 > throwaway-host rung as **its own** precondition.
 >
 > **Why the hold outlived the gate:** the interlock is a ONE-BIT LATCH guarding a
-> seven-item checklist, and the bit flips on *threading*, not on *emitting*. It cannot
+> nine-item checklist, and the bit flips on *threading*, not on *emitting*. It cannot
 > verify the emitter emits. ADR-115 additionally makes several #6982 items unfixable after
 > the birth — git-data is excluded from the reboot primitive, and `user_data` is ForceNew
 > with no `ignore_changes`, so **every** cloud-init edit after birth costs a destructive

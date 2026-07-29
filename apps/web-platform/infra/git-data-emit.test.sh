@@ -489,8 +489,8 @@ fi
 
 # --- Minimum-cardinality guard: a silently-empty harness must fail loud ---
 total=$((passes + fails))
-if [ "$total" -lt 40 ]; then
-  echo "FAIL: ran only ${total} assertions (<40) — suite did not execute fully" >&2
+if [ "$total" -lt 44 ]; then
+  echo "FAIL: ran only ${total} assertions (<44) — suite did not execute fully" >&2
   exit 1
 fi
 
