@@ -17,11 +17,36 @@ LOCK="${GIT_DATA_GC_LOCK:-/var/lock/git-data-gc.lock}"
 # the system config still being right.
 WINDOW_MEMORY="${GIT_DATA_GC_WINDOW_MEMORY:-64m}"
 PRUNE_EXPIRE="${GIT_DATA_GC_PRUNE_EXPIRE:-2.weeks.ago}"
-# B8: per-repo wall-clock bound. Without it ONE pathological repo can consume the unit's whole
-# TimeoutStartSec, and every repo after it in glob order is silently never maintained.
-REPO_TIMEOUT="${GIT_DATA_GC_REPO_TIMEOUT:-900}"
+# B8: per-repo wall-clock bound, SIZED AGAINST THE UNIT BUDGET. At the original 900s this was
+# applied per-COMMAND, so one repo could burn 3x900 = 2700s of git-data-gc.service's
+# TimeoutStartSec=3600 -- 75% of the budget, and two such repos starved the unit outright. The
+# comment claimed it stopped one pathological repo consuming the whole budget; at 75% it barely
+# did. 300s caps a single repo at 900s (25%).
+REPO_TIMEOUT="${GIT_DATA_GC_REPO_TIMEOUT:-300}"
+# Where the last completed run stopped. The glob is lexicographic and deterministic, so without
+# a cursor a persistently slow HEAD is retried every run and the TAIL is never maintained at
+# all -- the unbounded-growth failure this unit exists to prevent, just narrowed to a subset of
+# workspaces. On the volume, not /run: it must survive reboot like the fence it sits beside.
+CURSOR="${GIT_DATA_GC_CURSOR:-$GIT_DATA_ROOT/.gc-cursor}"
 
 log() { echo "[git-data-gc] $*"; }
+
+# One git command against one repo, wall-clock bounded, with its failure recorded.
+# `failed` is counted PER REPO by the caller, not per command: 3 command failures in one repo
+# is one unmaintained repo, and the old per-command count made that indistinguishable from
+# three different repos each failing once. rc 124 is timeout's own; GNU timeout prints nothing
+# without -v, so it is written here or the ERRLOG is empty for exactly the slow repo you need
+# to diagnose.
+_gc_run() {
+  local what="$1" repo="$2"; shift 2
+  local rc=0
+  timeout -k 30 "$REPO_TIMEOUT" git -C "$repo" "$@" >/dev/null 2>>"$ERRLOG" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    repo_failed=1
+    [ "$rc" -eq 124 ] && printf 'timeout after %ss: git %s (killed)\n' "$REPO_TIMEOUT" "$what" >>"$ERRLOG"
+    timeouts=$(( timeouts + (rc == 124 ? 1 : 0) ))
+  fi
+}
 
 # MOUNT FIRST, and emit on absence rather than exiting 0 quietly. /mnt/git-data exists as
 # a plain directory whether or not the volume is attached (`mkdir -p` in runcmd, fstab
@@ -81,6 +106,7 @@ ERRLOG="$(mktemp -t git-data-gc-err.XXXXXXXX)" || {
 
 repos=0
 failed=0
+timeouts=0
 completed=0
 emitted=0
 
@@ -104,21 +130,21 @@ summarize() {
   # TimeoutStopSec until systemd SIGKILLs, losing the summary on the failure class most
   # correlated with a full store. Emitting disk_pct=unknown beats emitting nothing.
   read -r disk_pct inode_pct < <(timeout 5 df --output=pcent,ipcent "$GIT_DATA_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9 \n') || true
-  log "maintenance done: repos=${repos} failures=${failed} complete=${completed} disk=${disk_pct:-unknown}% inodes=${inode_pct:-unknown}%"
+  log "maintenance done: repos=${repos} failures=${failed} timeouts=${timeouts} complete=${completed} disk=${disk_pct:-unknown}% inodes=${inode_pct:-unknown}%"
   # NO per-repo identifiers, ever: a repo name is <workspace_id>.git and workspace_id IS the
   # user id. Only aggregate counts leave this host.
   if [ -x "$EMIT" ]; then
     if [ "$completed" -ne 1 ]; then
       "$EMIT" "SOLEUR_GIT_DATA_GC run did not complete" gc_report warning "$ERRLOG" \
-        "repos=${repos}" "failures=${failed}" "complete=no" \
+        "repos=${repos}" "failures=${failed}" "timeouts=${timeouts}" "complete=no" \
         "disk_pct=${disk_pct:-unknown}" "inode_pct=${inode_pct:-unknown}" || true
     elif [ "$failed" -gt 0 ]; then
       "$EMIT" "SOLEUR_GIT_DATA_GC" gc_report warning "$ERRLOG" \
-        "repos=${repos}" "failures=${failed}" "complete=yes" \
+        "repos=${repos}" "failures=${failed}" "timeouts=${timeouts}" "complete=yes" \
         "disk_pct=${disk_pct:-unknown}" "inode_pct=${inode_pct:-unknown}" || true
     else
       "$EMIT" "SOLEUR_GIT_DATA_GC" gc_report info "" \
-        "repos=${repos}" "failures=0" "complete=yes" \
+        "repos=${repos}" "failures=0" "timeouts=0" "complete=yes" \
         "disk_pct=${disk_pct:-unknown}" "inode_pct=${inode_pct:-unknown}" || true
     fi
   fi
@@ -127,9 +153,24 @@ summarize() {
 trap summarize EXIT
 trap 'summarize; exit 143' TERM
 trap 'summarize; exit 130' INT
-for repo in "$REPO_ROOT"/*.git; do
-  [[ -d "$repo" ]] || continue
+# Start after the last repo the previous run finished, then wrap. `|| true` — a missing or
+# unreadable cursor must degrade to "start at the beginning", never abort the run.
+_resume=""
+[ -r "$CURSOR" ] && _resume="$(head -c 256 "$CURSOR" 2>/dev/null | tr -dc 'A-Za-z0-9._-')" || true
+_ordered=()
+for repo in "$REPO_ROOT"/*.git; do [[ -d "$repo" ]] && _ordered+=("$repo"); done
+if [[ -n "$_resume" ]]; then
+  _head=(); _tail=(); _seen=0
+  for repo in "${_ordered[@]+"${_ordered[@]}"}"; do
+    if [[ "$_seen" -eq 1 ]]; then _tail+=("$repo")
+    else _head+=("$repo"); [[ "$(basename "$repo")" == "$_resume" ]] && _seen=1; fi
+  done
+  [[ "$_seen" -eq 1 ]] && _ordered=("${_tail[@]+"${_tail[@]}"}" "${_head[@]+"${_head[@]}"}")
+fi
+
+for repo in "${_ordered[@]+"${_ordered[@]}"}"; do
   repos=$((repos + 1))
+  repo_failed=0
   # `-A`, NOT `-a` — a data-loss boundary. `repack -a -d` deletes the redundant packs in the
   # same step, so an object unreachable at scan time dies immediately and `prune --expire`
   # never applies its grace. `-A` keeps them and `--unpack-unreachable=<grace>` explodes the
@@ -141,16 +182,18 @@ for repo in "$REPO_ROOT"/*.git; do
   # Capture stderr rather than discarding it: on a host with no shell it is the only way to
   # learn WHY a repo failed (e.g. "detected dubious ownership" if safe.directory regressed).
   # It rides the emit's detail arg, which redacts internally.
-  timeout -k 30 "$REPO_TIMEOUT" git -C "$repo" reflog expire --expire-unreachable=now --all >/dev/null 2>>"$ERRLOG" || failed=$((failed + 1))
+  _gc_run reflog "$repo" reflog expire --expire-unreachable=now --all
   # --threads: re-passed for the SAME reason as --window-memory (so a repack does not depend
   # on the system config still being right) -- and it matters MORE, not less. The bootstrap
   # calls parallel delta search "the actual OOM path" because it multiplies the window budget
   # by the thread count, so re-passing the lesser control and trusting the config for the
   # greater one had it exactly backwards.
-  timeout -k 30 "$REPO_TIMEOUT" git -C "$repo" repack -A -d -q --threads=1 \
-    --window-memory="$WINDOW_MEMORY" \
-    --unpack-unreachable="$PRUNE_EXPIRE" >/dev/null 2>>"$ERRLOG" || failed=$((failed + 1))
-  timeout -k 30 "$REPO_TIMEOUT" git -C "$repo" prune --expire="$PRUNE_EXPIRE" >/dev/null 2>>"$ERRLOG" || failed=$((failed + 1))
+  _gc_run repack "$repo" repack -A -d -q --threads=1 \
+    --window-memory="$WINDOW_MEMORY" --unpack-unreachable="$PRUNE_EXPIRE"
+  _gc_run prune "$repo" prune --expire="$PRUNE_EXPIRE"
+  [ "$repo_failed" -eq 1 ] && failed=$((failed + 1))
+  # Advance only on a repo that got through every command: a failed repo should be retried.
+  [ "$repo_failed" -eq 0 ] && printf '%s\n' "$(basename "$repo")" > "$CURSOR" 2>/dev/null || true
 done
 
 completed=1
