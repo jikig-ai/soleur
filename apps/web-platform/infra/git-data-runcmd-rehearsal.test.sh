@@ -72,35 +72,105 @@ PY
 # from the one in the repo, which is the whole property the name claims.
 #
 # This is the actual comparison, and it belongs here because this is where the render is
-# already parsed. Mapping is by BASENAME of the delivered path, which is 1:1 with the
-# source file for all nine payloads; the count is asserted so a payload added without a
-# fixture cannot slip through as "nothing to check".
+# already parsed.
+#
+# IT ASSERTS A SET, IN BOTH DIRECTIONS, NOT A COUNT. The first version of this check mapped
+# each delivered path to `<srcdir>/<basename>`, `continue`d when no such file existed, and
+# floored on `checked >= 9`. Three ways that is narrower than the property it names:
+#
+#   1. UNCHECKED PAYLOADS. The bare `continue` cannot tell "legitimately inline" from
+#      "should have been file-backed, but the basename stopped resolving". A payload that
+#      falls out of the mapping is silently not compared, and silence reads as a pass.
+#   2. A COUNT IS NOT A SET. Dropping one file-backed payload while any other resolves keeps
+#      the total at 9. Measured fail-open.
+#   3. DUPLICATE BASENAMES could satisfy the count twice while a real member went missing.
+#
+# So the expected set is derived from the AUTHORITATIVE producer — the `indent(6, <var>)`
+# call sites in the template, resolved through git-data.tf's `<var> = file(".../<name>")`
+# bindings — and compared as a set against what was actually delivered. Every inline payload
+# is named in an explicit allowlist; an unrecognised path is a FAILURE, not a skip.
 _b1_out="$(python3 - "$TMP/rendered.yml" "$DIR" <<'PY'
-import sys, yaml, os, hashlib
+import sys, yaml, os, re, hashlib
 rendered, srcdir = sys.argv[1], sys.argv[2]
+
+# Payloads written inline in the template rather than from a repo file. Explicit, because
+# "no source file found" must not be self-certifying.
+INLINE_ALLOWLIST = {
+    "/usr/local/bin/git-data-emit",
+    "/home/git/.ssh/authorized_keys",
+    "/etc/ssh/sshd_config.d/01-hardening.conf",
+}
+
+tpl = open(os.path.join(srcdir, "cloud-init-git-data.yml")).read()
+tf = open(os.path.join(srcdir, "git-data.tf")).read()
+
+# var -> source filename, from git-data.tf's templatefile vars block.
+bindings = dict(re.findall(
+    r'^\s*([a-z_]+)\s*=\s*file\("\$\{path\.module\}/([^"]+)"\)', tf, re.M))
+# The vars actually delivered via indent(6, …) in the template.
+delivered_vars = sorted(set(re.findall(r'\$\{indent\(6,\s*([a-z_]+)\)\}', tpl)))
+
+unbound = [v for v in delivered_vars if v not in bindings]
+if unbound:
+    print("B1 FAIL: indent(6, …) delivers %d var(s) with no file() binding in git-data.tf: %s"
+          % (len(unbound), ", ".join(unbound)))
+    sys.exit(1)
+expected_sources = {bindings[v] for v in delivered_vars}
+if not expected_sources:
+    print("B1 FAIL: derived an EMPTY expected set — the template/tf parse found nothing, "
+          "which is not the same as everything matching")
+    sys.exit(1)
+
 d = yaml.safe_load(open(rendered))
-checked, bad = 0, []
+seen_basenames, delivered_sources, unknown, bad = [], {}, [], []
 for wf in d["write_files"]:
-    src = os.path.join(srcdir, os.path.basename(wf["path"]))
-    if not os.path.isfile(src):
-        continue            # inline payloads (git-data-emit, authorized_keys, sshd conf)
-    want = open(src, "rb").read()
-    got = wf["content"].encode()
-    checked += 1
+    path = wf["path"]
+    base = os.path.basename(path)
+    if base in expected_sources:
+        seen_basenames.append(base)
+        delivered_sources[base] = wf["content"].encode()
+    elif path in INLINE_ALLOWLIST:
+        continue
+    else:
+        unknown.append(path)
+
+if unknown:
+    print("B1 FAIL: %d delivered payload(s) are neither a known file-backed source nor on "
+          "the inline allowlist, so nothing compared their bytes:" % len(unknown))
+    for u in unknown:
+        print("  " + u)
+    print("  If the payload is genuinely inline, add it to INLINE_ALLOWLIST. If it is "
+          "file-backed, bind it via file() in git-data.tf and deliver it with indent(6, …).")
+    sys.exit(1)
+
+dupes = sorted({b for b in seen_basenames if seen_basenames.count(b) > 1})
+if dupes:
+    print("B1 FAIL: duplicate delivered basename(s) %s — a duplicate can satisfy a count "
+          "while a different member goes missing" % ", ".join(dupes))
+    sys.exit(1)
+
+missing = sorted(expected_sources - set(delivered_sources))
+if missing:
+    print("B1 FAIL: %d expected source(s) were never delivered: %s"
+          % (len(missing), ", ".join(missing)))
+    sys.exit(1)
+
+for name in sorted(delivered_sources):
+    want = open(os.path.join(srcdir, name), "rb").read()
+    got = delivered_sources[name]
     if hashlib.sha256(got).hexdigest() != hashlib.sha256(want).hexdigest():
         bad.append("%s: rendered sha=%s (%d B) != source sha=%s (%d B)" % (
-            wf["path"], hashlib.sha256(got).hexdigest()[:12], len(got),
+            name, hashlib.sha256(got).hexdigest()[:12], len(got),
             hashlib.sha256(want).hexdigest()[:12], len(want)))
-if checked < 9:
-    print("B1 FAIL: only %d file-backed payloads compared (<9) — the mapping found nothing "
-          "to check, which is not the same as everything matching" % checked)
-    sys.exit(1)
 if bad:
     print("B1 FAIL: %d payload(s) are NOT byte-identical to their source:" % len(bad))
     for b in bad:
         print("  " + b)
     sys.exit(1)
-print("B1 OK: %d payloads byte-identical" % checked)
+
+print("B1 OK: delivered set == expected set (%d payloads), all byte-identical; "
+      "%d inline payload(s) allowlisted"
+      % (len(expected_sources), len(INLINE_ALLOWLIST)))
 PY
 )"; _b1_rc=$?
 if [ "$_b1_rc" -eq 0 ]; then pass; else
