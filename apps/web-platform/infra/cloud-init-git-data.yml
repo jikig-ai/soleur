@@ -249,7 +249,7 @@ write_files:
     owner: root:root
     permissions: '0755'
 
-  # (#6982, W4/W5) Bounded weekly maintenance. The units carry the resource caps
+  # (#6982, W4/W5) Bounded daily maintenance. The units carry the resource caps
   # (MemoryMax/CPUQuota/IOSchedulingClass) that make `receive.autogc=false` safe:
   # maintenance still happens, it just stops happening inline on a user's push.
   - path: /usr/local/bin/git-data-gc.sh

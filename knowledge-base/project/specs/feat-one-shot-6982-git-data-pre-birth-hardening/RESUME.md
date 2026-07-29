@@ -33,7 +33,7 @@ one Bash call**. Do not batch a round of fixes and commit at the end.
 | `run-registered-suites.sh` | **78/78, rc=0** (on a quiet machine — see contention note) |
 | `git-data-emit` / `luks` / `rehearsal` / birth-gate / cred-guard | 42 / 62 / 12 / 93 / 35, all 0 failed |
 | `tsc --noEmit`, `lint-infra-no-human-steps`, `lint-encryption-posture` | clean |
-| `user_data` | **32,128 / 32,768 — 640 B headroom** |
+| `user_data` | **20,456 / 32,768 — 12,312 B headroom** (ADR-151 render-strip; was 32,128/640 before it) |
 
 **Suite contention:** three earlier gate runs each reddened a *different* suite that passed in
 isolation, because a sibling session was running the same runner from another worktree. Before
@@ -104,7 +104,7 @@ awareness. Re-derive with a `(?<!\\)\|` split before editing the issue.
 | B14 | `recover-userid-from-pino-stdout.md` filters on `grep -F 'userIdHash'`, which matches neither new hashed field. | data-integrity |
 | B15 | `encryption-posture-ledger.json` evidence cites `cloud-init-git-data.yml:170,173,180` — now inside the emitter. Re-anchor on content (`cq-cite-content-anchor-not-line-number`). | data-integrity |
 | B16 | `mkfs.ext4 -O quota,project` has **zero assertions**; dropping it later is migration-forcing. | data-integrity |
-| B17 | Stale counts/ordinals: `ADR-068:1382` "checklist item (8)" → **9**; "seven-item checklist" (runbook :30, session-state :20, plan ×2) → **nine**; plan `:494`/`:1437` item 8 → 9; emit floor 40 → **42**; plan T10 (`SOLEUR_GIT_DATA_DISK`) and T14 (exit 1 → **2**) contradict what shipped. | code-quality, architecture |
+| B17 | Stale counts/ordinals: `ADR-068:1382` "checklist item (8)" → **9**; "seven-item checklist" (runbook :30, session-state :20, plan ×2) → **nine**; plan `:494`/`:1437` item 8 → 9; emit floor 40 → **44** (42 was itself stale: B6's parity arm and A1's inode_pct landed after); plan T10 (`SOLEUR_GIT_DATA_DISK`) and T14 (exit 1 → **2**) contradict what shipped. | code-quality, architecture |
 
 ### C — P3s
 `_expand`/`is_sandboxed` still line-anchored (pre-existing); `$CAPTURE` dereferenced before
@@ -127,11 +127,11 @@ The DO-NOT-DISPATCH banner stays up.
 
 ## Gotchas — do not rediscover
 
-- **`user_data` is a hard 32,768 B gate and comments count.** 640 B left. Run
+- **`user_data` is a hard 32,768 B gate and comments count.** 12,312 B of headroom (ADR-151 strips comments at render time; it was 640 B before that). Run
   `bash apps/web-platform/infra/git-data-userdata-budget.sh` after every edit to
   `cloud-init-git-data.yml`, `git-data-bootstrap.sh`, `git-data-gc.sh` or the units. Measure with
-  Terraform's own `base64gzip` — `gzip -9` overstates headroom by ~34 %. **A1 and B7 both add
-  bytes; budget them together.**
+  Terraform's own `base64gzip` — `gzip -9` overstates headroom by ~34 %. **A1 and B7 both add bytes; ADR-151's render-strip is
+  what made them fit.**
 - **Terraform's template scanner does not skip YAML comments** — a `%{` or live `${…}` in a `#`
   comment breaks the render.
 - **A body-grep sees comments too.** Three guards this branch shipped were vacuous on first draft

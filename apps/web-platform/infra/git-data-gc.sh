@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# (#6982, W4/W5) Weekly bounded maintenance for the git-data bare-repo store.
+# (#6982, W4/W5) Daily bounded maintenance for the git-data bare-repo store.
 #
 # WHY: replicateToGitData force-pushes per-worktree namespaces at every session end, and
 # `--force` ORPHANS the old objects with nothing to prune them — on a 10 GB store that grows
@@ -27,7 +27,7 @@ log() { echo "[git-data-gc] $*"; }
 # a plain directory whether or not the volume is attached (`mkdir -p` in runcmd, fstab
 # `nofail`, `mount … || true`), so without this guard `df` below silently reports the ROOT
 # filesystem's usage and it ships as the store's. And a bare `exit 0` on a missing repo
-# root makes a VANISHED STORE indistinguishable off-box from a healthy weekly run: the
+# root makes a VANISHED STORE indistinguishable off-box from a healthy daily run: the
 # unit succeeds, OnFailure never fires, and nothing is emitted.
 if ! mountpoint -q "$GIT_DATA_ROOT" 2>/dev/null; then
   log "FATAL: $GIT_DATA_ROOT is not a mountpoint — the store volume is not attached"
@@ -43,10 +43,10 @@ if [[ ! -d "$REPO_ROOT" ]]; then
 fi
 
 # flock on a SHARED lock so this never runs concurrently with a cutover fsck window. -n:
-# skipping a weekly run is correct; stacking two repacks on a 4 GB box is not.
+# skipping one daily run is correct; stacking two repacks on a 4 GB box is not.
 # B10: both arms EMIT. A bare `exit 0` here is the anti-pattern this file argues against one
 # stanza above: a run that never happened is indistinguishable off-host from a clean one, and
-# if the lock is permanently wedged the store is never maintained again while every weekly
+# if the lock is permanently wedged the store is never maintained again while every
 # unit reports success.
 exec 9>"$LOCK" || {
   log "cannot open lock $LOCK"
@@ -66,7 +66,18 @@ if ! flock -n 9; then
   exit 0
 fi
 
-ERRLOG="$(mktemp -t git-data-gc-err.XXXXXXXX)"
+# CHECKED. Unchecked, a failed mktemp leaves ERRLOG="" and every `2>>"$ERRLOG"` redirect below
+# fails BEFORE exec -- so git never runs, `failed` counts every command, and the run still exits
+# 0 emitting complete=yes with an empty detail. Measured: 0 of 36 git invocations ran while the
+# emit reported `repos=12 failures=36 complete=yes`. That is the no-op-that-reports-success
+# shape git-data-bootstrap.sh argues against for safe.directory, and /tmp here is a PrivateTmp
+# tmpfs charging against MemoryMax=1G, so exhaustion is reachable.
+ERRLOG="$(mktemp -t git-data-gc-err.XXXXXXXX)" || {
+  log "FATAL: cannot create the error log — every git invocation would fail its redirect and the run would report success having done nothing"
+  [ -x "$EMIT" ] && "$EMIT" "SOLEUR_GIT_DATA_GC cannot create error log" gc fatal "" \
+    "errlog=unavailable" || true
+  exit 1
+}
 
 repos=0
 failed=0

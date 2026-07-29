@@ -1341,7 +1341,7 @@ property of it**.
 ### D-SIZE — keep `cpx22`, and remove the regime rather than argue about it
 
 #6982's W4 tuning (`receive.autogc=false`, `gc.auto=0`, `gc.autoDetach=false`, bounded
-`pack.*`, plus a resource-capped weekly `git-data-gc.timer`) moves maintenance **off the
+`pack.*`, plus a resource-capped daily `git-data-gc.timer`) moves maintenance **off the
 push path** and bounds its peak. **After it, "neither CPU- nor RAM-bound" is an ENFORCED
 INVARIANT rather than an unbacked assertion** — which is why the tuning and the sizing are
 one decision and not two, and why every setting is re-asserted fail-loud in

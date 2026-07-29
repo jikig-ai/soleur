@@ -28,14 +28,36 @@ inside `user_data`.
 
 Two facts made this an architecture decision rather than a wording exercise:
 
-1. **Comments are 61% of the raw payload** — 42,277 of ~69,182 raw bytes across the ten
-   files; `cloud-init-git-data.yml` alone carries 15,772 comment bytes of 27,582, and
-   `git-data-bootstrap.sh` 9,410 of 15,610.
-2. **Prose trimming returns badly after gzip.** Measured on this branch: ~450 raw bytes of
-   trimming bought **68 B stored**. Fitting the remaining fixes by hand meant cutting roughly
-   3,000 raw bytes of rationale — and that rationale is exactly what explains why each
-   fail-closed invariant exists, on a host where ADR-149 records that "a green
-   `terraform apply` and a dark host are indistinguishable."
+1. **Comments are 61% of the raw payload** — **42,149 of 68,963** raw bytes across the ten
+   files at `ba9423922` (the commit before the strip); `cloud-init-git-data.yml` alone carries
+   15,772 comment bytes of 27,582, and `git-data-bootstrap.sh` 9,410 of 15,610. Reproduce with:
+
+   ```sh
+   d=$(mktemp -d); git archive ba9423922 | tar -x -C "$d"
+   cd "$d/apps/web-platform/infra" && python3 -c '
+   import os
+   fs=["cloud-init-git-data.yml","git-data-bootstrap.sh","git-data-pre-receive-placeholder.sh",
+       "git-data-provision.sh","git-data-transport-wrapper.sh","git-data-remove.sh",
+       "git-data-gc.sh","git-data-gc.service","git-data-gc-failure.service","git-data-gc.timer"]
+   t=c=0
+   for f in fs:
+       for l in open(f):
+           t+=len(l.encode())
+           if l.lstrip().startswith("#"): c+=len(l.encode())
+   print(c,t,round(100*c/t,1))'
+   ```
+
+   An earlier revision of this ADR said "42,277 of ~69,182". Those were measured mid-session
+   against an uncommitted tree and are not reproducible from any commit in the branch; the
+   figures above are, which is why the command ships next to them.
+2. **Prose trimming returns badly after gzip.** Two rounds of comment-trimming during the
+   session moved `stored` from 33,220 B to 33,096 B and then to 33,028 B — roughly 60-125 B
+   of *stored* return per round, against edits of several hundred raw bytes each. (These were
+   intermediate working-tree states, not commits, so they are recorded as what was observed
+   rather than as something re-runnable.) At that rate, fitting the remaining fixes by hand
+   meant cutting on the order of 3,000 raw bytes of rationale — and that rationale is exactly
+   what explains why each fail-closed invariant exists, on a host where ADR-149 records that
+   "a green `terraform apply` and a dark host are indistinguishable."
 
 ## Decision
 
@@ -73,12 +95,18 @@ loud one. Losing line 1 does **not** fail uniformly:
 | payload | invoked by | effect of a lost `#!` |
 |---|---|---|
 | `git-data-gc.sh` | systemd / doppler, directly | **ENOEXEC**, unit dies (loud) |
-| `git-data-pre-receive-placeholder.sh` | git execs hooks directly | **ENOEXEC** (loud) |
+| `git-data-pre-receive-placeholder.sh` | git execs hooks via `execvp` | **silently falls back to `sh`** — see below |
 | `git-data-provision.sh`, `git-data-remove.sh`, `git-data-transport-wrapper.sh` | `authorized_keys` `command="…"` | **silently falls back to `sh`, which is dash on 24.04** |
 
-That last row is the same defect class as the `EnvironmentFile=-` fix in this very PR: dash
-and bash diverging silently on a fail-closed host. Three of the nine would have degraded
-without erroring.
+That is the same defect class as the `EnvironmentFile=-` fix in this very PR: dash and bash
+diverging silently on a fail-closed host. **FOUR of the nine** would degrade without erroring,
+not three — an earlier revision of this table put the pre-receive hook in the loud column.
+Review executed it: a hook with no shebang, mode 755, against git 2.53 **ran via the `sh`
+fallback and the push SUCCEEDED** (POSIX mandates `execvp` retry `/bin/sh` on `ENOEXEC`).
+The consequence there happens to be benign — dash does not know `set -o pipefail`, so it exits
+non-zero and the hook's fail-closed contract survives — but the classification was wrong, in a
+table whose entire purpose is enumerating which losses are loud. Correcting it makes the `#!`
+carve-out MORE load-bearing, not less.
 
 ## Consequences
 

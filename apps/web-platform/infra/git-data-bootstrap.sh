@@ -191,7 +191,7 @@ git config --system receive.advertisePushOptions true
 # 2 vCPU/4 GB/no-swap box burst-bound (receive.autogc ON = every push can trigger an inline
 # server-side repack; pack.windowMemory UNLIMITED; gc.autoDetach hides the OOM from the
 # pushing client). The burst is a CONFIG artifact, not a property of the store. Maintenance
-# still runs, weekly, under systemd caps — `gc.auto 0` means "never as a side effect of
+# still runs, daily, under systemd caps — `gc.auto 0` means "never as a side effect of
 # someone else's push". See ADR-068 D-SIZE.
 git config --system receive.autogc false
 git config --system gc.auto 0
