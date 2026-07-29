@@ -196,7 +196,16 @@ require_capture_ack=0
 if [[ "$capture_trigger" -eq 1 ]]; then
   if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
     VERIFY_CMD="${SDK_GATE_VERIFY_CMD:-SANDBOX_CANARY_CAPTURE=1 bun apps/web-platform/scripts/sandbox-canary.mjs --verify apps/web-platform/infra/sandbox-canary-argv.json}"
-    verdict_json="$(bash -c "$VERIFY_CMD" 2>/dev/null | tail -1 || true)"
+    # stderr is deliberately NOT discarded. Under the CI override (ci.yml sets
+    # SDK_GATE_VERIFY_CMD to sandbox-canary-verify-in-image.sh) the in-image copy
+    # prints "FATAL: in-image copy failed" there on a truncated tree (#7007); the
+    # DEFAULT command on the line above runs sandbox-canary.mjs directly and never
+    # reaches that copy, so locally there is nothing new to see. `$( )` captures
+    # stdout only, so letting stderr through cannot pollute the verdict.
+    # Pinned by T15 in sdk-bump-sandbox-gate.test.sh — every other arm's VERIFY_CMD
+    # is silent on stderr, so without T15 re-adding `2>/dev/null` stays green.
+    # `|| true` stays — the ack-fallback below is intentional (tracked in issue 7043).
+    verdict_json="$(bash -c "$VERIFY_CMD" | tail -1 || true)"
     v_verdict="$(printf '%s' "$verdict_json" | jq -r '.verdict // ""' 2>/dev/null || echo "")"
     v_reason="$(printf '%s' "$verdict_json" | jq -r '.reason // ""' 2>/dev/null || echo "")"
     if [[ "$v_reason" == "argv_drift" ]]; then

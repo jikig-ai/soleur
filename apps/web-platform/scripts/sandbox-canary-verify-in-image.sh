@@ -13,6 +13,12 @@
 # byte-diffs the committed fixture there. Emits the verify verdict JSON on stdout
 # (the SDK-bump gate reads its last line).
 #
+# /build is a FILTERED copy of /src, produced by scripts/lib/in-image-copy-src.sh
+# (node_modules and .terraform excluded — the next command, `npm ci`, rebuilds the
+# former and nothing here reads the latter; #7007). $APP_DIR must therefore carry
+# that file: the /src contract is "a directory carrying its own copy tool at
+# scripts/lib/in-image-copy-src.sh", not "any directory".
+#
 # Auth: the capture drives one real (paid) Haiku turn; ANTHROPIC_API_KEY must be
 # exported (the gate only reaches here when creds are present). permissionMode is
 # "default" (NOT bypassPermissions, which claude.exe refuses under the container's
@@ -37,11 +43,12 @@ docker run --rm \
   -v "$PWD/$APP_DIR:/src:ro" \
   "$IMG" bash -c '
     set -e
-    apt-get update -qq >/dev/null 2>&1
-    apt-get install -y -qq --no-install-recommends socat curl unzip ca-certificates >/dev/null 2>&1
-    cp -r /src /build && cd /build
-    npm ci --no-audit --no-fund >/dev/null 2>&1
-    curl -fsSL https://bun.sh/install 2>/dev/null | bash >/dev/null 2>&1
+    apt-get update -qq >/dev/null
+    apt-get install -y -qq --no-install-recommends socat curl unzip ca-certificates >/dev/null
+    bash /src/scripts/lib/in-image-copy-src.sh /src /build
+    cd /build
+    npm ci --no-audit --no-fund >/dev/null
+    curl -fsSL https://bun.sh/install 2>/dev/null | bash >/dev/null
     export PATH="/root/.bun/bin:$PATH"
     bun scripts/sandbox-canary.mjs --verify infra/sandbox-canary-argv.json
   '
