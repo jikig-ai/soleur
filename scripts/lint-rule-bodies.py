@@ -301,6 +301,50 @@ def _base_sections(root: Path, base_commit: str) -> set[str]:
     return extract_sections(text) if text is not None else set()
 
 
+def cmd_snapshot_all(root: Path, names: list[str]) -> int:
+    """Emit `<sha256>  <id>` for EVERY rule body, ignoring GATED_PREFIX_RE.
+
+    `--check`'s manifest covers only `^(hr|wg)-` (74 of 101 today), so it can say
+    nothing about the `cq-*`/`rf-*`/`pdr-*`/`cm-*` bodies. That is fine for the
+    weakening gate — those were never gated — but it makes the manifest unusable
+    as a MIGRATION proof, which is exactly when someone needs to show a corpus
+    move changed no rule text.
+
+    This mode exists so that proof is a re-runnable command rather than a number
+    somebody once pasted into a PR description. It deliberately reuses this
+    module's own `parse_bodies`/`_normalize`/`_sha256`, so it cannot drift from
+    what the gate itself considers a body.
+
+    Usage (prove a corpus move is lossless, entirely from git):
+
+        BASE=$(git merge-base origin/main HEAD); D=$(mktemp -d); mkdir -p "$D/scripts"
+        git show "$BASE:scripts/lint-rule-bodies.py" > "$D/scripts/lint-rule-bodies.py"
+        cp scripts/_agents_md_sections.py "$D/scripts/"
+        for f in <old corpus files>; do git show "$BASE:$f" > "$D/$f"; done
+        python3 "$D/scripts/lint-rule-bodies.py" --snapshot-all --root "$D" <old files> > /tmp/base.txt
+        python3 scripts/lint-rule-bodies.py      --snapshot-all <new files>          > /tmp/head.txt
+        diff /tmp/base.txt /tmp/head.txt     # every differing id must be justified
+    """
+    global GATED_PREFIX_RE
+    GATED_PREFIX_RE = re.compile(r"")  # zero-length match => admits every id
+    sections = _head_sections(root)
+    merged: dict[str, str] = {}
+    for name in names:
+        f = root / name
+        if not f.exists():
+            print(f"ERROR: {f} not found", file=sys.stderr)
+            return 2
+        merged.update(parse_bodies(f.read_text(), sections))
+    if not merged:
+        # A silent zero here would read exactly like "nothing changed".
+        print("ERROR: parsed 0 rule bodies — refusing to emit a vacuous snapshot", file=sys.stderr)
+        return 2
+    for rid in sorted(merged):
+        print(f"{_sha256(_normalize(merged[rid]))}  {rid}")
+    print(f"snapshot: {len(merged)} rule bodies", file=sys.stderr)
+    return 0
+
+
 def cmd_write(root: Path, manifest_path: Path) -> int:
     body_map = build_body_map(_read_worktree_sidecars(root), _head_sections(root))
     hashes = hashes_for(body_map)
@@ -497,6 +541,13 @@ def cmd_check(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true", help="Regenerate the manifest.")
+    parser.add_argument(
+        "--snapshot-all",
+        nargs="*",
+        metavar="FILE",
+        help="Emit `<sha256>  <id>` for EVERY rule body (ignores the hr/wg gate). "
+             "Migration-proof helper; defaults to AGENTS.rules.md.",
+    )
     parser.add_argument("--check", action="store_true", help="Run the CI gate.")
     parser.add_argument("--base", default=None, help="Base git ref for --check (merge-base).")
     parser.add_argument("--root", type=Path, default=None, help="Repo root (default: script parent's parent).")
@@ -506,6 +557,17 @@ def main() -> int:
     root = (args.root or Path(__file__).resolve().parents[1]).resolve()
     manifest_path = root / MANIFEST_REL
     acks_path = root / ACKS_REL
+
+    # `--snapshot-all` is a read-only reporter, not a mode of the gate: it is
+    # checked before the write/check XOR so it composes with neither.
+    if args.snapshot_all is not None:
+        if args.write or args.check:
+            print(
+                "ERROR: --snapshot-all does not combine with --write/--check",
+                file=sys.stderr,
+            )
+            return 2
+        return cmd_snapshot_all(root, list(args.snapshot_all) or list(SIDECARS))
 
     if args.write == args.check:
         print("ERROR: pass exactly one of --write or --check", file=sys.stderr)

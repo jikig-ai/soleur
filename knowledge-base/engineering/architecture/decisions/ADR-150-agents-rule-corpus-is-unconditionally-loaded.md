@@ -124,10 +124,31 @@ something it missed. `cq-agents-md-why-single-line` was rewritten because its ow
 text described the retired architecture and carries the threshold-mirror literals
 the compound-sync gate anchors on. It is `cq-*`, so `GATED_PREFIX_RE` never sees
 it: no ack was possible or required, and `.claude/rule-weakening-acks.txt` is
-untouched. Verified two independent ways — a full-corpus sha256 snapshot built
-from `lint-rule-bodies.py`'s own parse and normalization with the `^(hr|wg)-` gate
+untouched.
+
+Verified two independent ways — a full-corpus sha256 snapshot using
+`lint-rule-bodies.py`'s own parse and normalization with the `^(hr|wg)-` gate
 disabled (so it covers all **101**, not the 74 the committed manifest covers),
 and a sorted raw-body-line diff. Both report exactly that one id.
+
+**That proof is a committed command, not a number pasted into a PR.** Review
+flagged the first version as session-perishable evidence, which this repo treats
+as equivalent to uncommitted, so the ungated parse shipped as
+`lint-rule-bodies.py --snapshot-all`. Anyone can re-derive the result from git
+alone — the base side is reconstructed from the merge-base, including the
+base-revision linter, so no artifact of the migration session is trusted:
+
+```bash
+BASE=$(git merge-base origin/main HEAD); D=$(mktemp -d); mkdir -p "$D/scripts"
+git show "$BASE:scripts/lint-rule-bodies.py" > "$D/scripts/lint-rule-bodies.py"
+cp scripts/_agents_md_sections.py "$D/scripts/"
+for f in AGENTS.core.md AGENTS.docs.md AGENTS.rest.md; do git show "$BASE:$f" > "$D/$f"; done
+# base side: 101 bodies · head side: 101 bodies · diff: cq-agents-md-why-single-line
+python3 scripts/lint-rule-bodies.py --snapshot-all > /tmp/head.txt
+```
+
+The mode refuses to emit a snapshot that parsed zero bodies — a silent `0` would
+read exactly like "nothing changed", which is the failure it exists to rule out.
 
 **The decision rests on correctness, not bytes.** An earlier draft also credited
 collapse with −939 B/turn from dropping the class arrow; that is **confounded**.
