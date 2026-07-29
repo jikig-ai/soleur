@@ -498,9 +498,24 @@ runcmd:
     trap bootstrap_err EXIT
     doppler run --project soleur --config prd_git_data -- bash /usr/local/bin/git-data-bootstrap.sh
 
-  # (#6982, W4) Arm the weekly maintenance timer. MUST-TOLERATE (Phase 0.4): a timer that
-  # fails to enable is a degraded steady state, not a reason to abort a boot.
+  # (#6982, W4) Arm the maintenance timer. MUST-TOLERATE (Phase 0.4): a timer that fails to
+  # enable is a degraded steady state, not a reason to abort a boot.
+  #
+  # BUT IT MUST NOT BE SILENT. A bare `|| true` is the anti-pattern git-data-gc.sh argues
+  # against one file over: this timer is the ONLY thing that ever packs or prunes (gc.auto=0,
+  # receive.autogc=false), so if it fails to arm the store grows without bound while the host
+  # reports a completely healthy boot, and nothing else would ever notice. Tolerated, but
+  # REPORTED.
+  #
+  # It does NOT ride boot_complete, and that is an ordering fact rather than a choice:
+  # boot_complete is emitted at the end of git-data-bootstrap.sh, which runs in the stage
+  # ABOVE this one. Arming the timer earlier is worse than the gap it would close --
+  # `enable --now` starts git-data-gc.service immediately, and that unit FATALs when
+  # /mnt/git-data is not yet a mountpoint, so it would fail on every boot and fire OnFailure
+  # before the volume exists. So the failure gets its own event instead.
   - |
     STAGE=gc_timer
     systemctl daemon-reload || true
-    systemctl enable --now git-data-gc.timer || true
+    systemctl enable --now git-data-gc.timer || \
+      /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_GC timer failed to arm" "$STAGE" warning \
+        /var/log/cloud-init-output.log "gc_timer=unarmed" || true

@@ -202,6 +202,11 @@ git config --system gc.autoDetach false
 # 655,360 inodes, so inodes exhaust at ~55-60% of BYTES — ENOSPC while df-bytes reads healthy.
 # gc.auto=0 means nothing packs it until the timer.
 git config --system receive.unpackLimit 1
+# receive.maxInputSize bounds a SINGLE push. Unset, one client can fill the shared 10 GB
+# volume for every other workspace on the host -- the store is shared, so this is a blast
+# radius, not a per-user quota. 2 GiB is far above any plausible session push and far below
+# the volume.
+git config --system receive.maxInputSize 2147483648
 # 64m window / 128m pack / single thread: sized to leave headroom on a 4 GB box that also
 # serves receive-pack. threads=1 because parallel delta search multiplies the window
 # budget by the thread count, which is the actual OOM path.
@@ -248,7 +253,7 @@ mountpoint -q "$LUKS_ROOT" || {
 # an error — it is an OOM-killed repack weeks later, on the push path, invisible to the
 # client. Asserting the read-back is what makes the D1 claim an enforced invariant.
 for _kv in "receive.autogc=false" "gc.auto=0" "gc.autoDetach=false" \
-           "receive.unpackLimit=1" \
+           "receive.unpackLimit=1" "receive.maxInputSize=2147483648" \
            "pack.windowMemory=64m" "pack.packSizeLimit=128m" "pack.threads=1" \
            "pack.deltaCacheSize=64m" "core.bigFileThreshold=32m" \
            "safe.directory=$REPO_ROOT/*"; do
