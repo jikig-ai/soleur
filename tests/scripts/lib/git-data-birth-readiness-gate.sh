@@ -367,18 +367,18 @@ git_data_rung2_user_data_sha256() {
   # the resulting line just fine, and the ^[0-9a-f]{64}$ guard below could not see it — rc=0
   # with a well-formed hash of the wrong thing. Deterministic causes make both sides agree on
   # that wrong value, which is worse than disagreeing.
-  local _tmp_h _d
-  _tmp_h="$(mktemp -t gdr2hash.XXXXXXXX)" || return 1
+  # ACCUMULATED IN A VARIABLE, not a tempfile. This is a LIBRARY function, so an owning
+  # `trap ... EXIT` would clobber the caller's — and ADR-129 rule (c) correctly refuses an
+  # allocation nothing reclaims. Not allocating is the better answer than annotating the leak.
+  local _acc="" _d
   for _f in "${_inputs[@]}"; do
     _d="$(sha256sum "$_f")" || {
-      rm -f "$_tmp_h"
       echo "git_data_rung2_user_data_sha256: ABORT — could not hash ${_f}. A skipped input would produce a well-formed digest of an incomplete set. Fail-closed."
       return 1
     }
-    printf '%s  %s\n' "${_d%% *}" "${_f##*/}" >> "$_tmp_h"
+    _acc+="${_d%% *}  ${_f##*/}"$'\n'
   done
-  _line="$(LC_ALL=C sort "$_tmp_h" | sha256sum | cut -d' ' -f1)"
-  rm -f "$_tmp_h"
+  _line="$(printf '%s' "$_acc" | LC_ALL=C sort | sha256sum | cut -d' ' -f1)"
   if [[ ! "$_line" =~ ^[0-9a-f]{64}$ ]]; then
     echo "git_data_rung2_user_data_sha256: ABORT — could not hash the ${#_inputs[@]} user_data inputs. Fail-closed."
     return 1
