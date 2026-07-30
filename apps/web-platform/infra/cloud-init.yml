@@ -415,6 +415,14 @@ runcmd:
   - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/webhook-deploy
   - chmod 600 /etc/default/webhook-deploy
   - chown deploy:deploy /etc/default/webhook-deploy
+  # (#7095) Fresh-host parity for the RE-DELIVERABLE sibling of the file above. Rendered ONCE in
+  # server.tf (local.webhook_doppler_token_env) and injected here base64'd — never hand-written a
+  # second time, so the boot copy and the webhook-delivered copy cannot drift. Mode/owner is
+  # 640 root:deploy, matching infra-config-install.sh DEST_SPEC (deliberately NOT webhook-deploy's
+  # 600 deploy:deploy). install(1) pre-creates it with the final mode so the redirect never opens
+  # a world-readable window. Rationale lives in soleur-doppler-token.tmpl (not byte-budgeted).
+  - install -m 640 -o root -g deploy /dev/null /etc/default/soleur-doppler-token
+  - printf '%s' '${soleur_doppler_token_env_b64}' | base64 -d > /etc/default/soleur-doppler-token
   # (#6090) Bake the scoped GHCR read-creds so ci-deploy.sh's ghcr_prelude_and_login (the
   # app-pull + cosign-verify login) authenticates on a cold host even when Doppler answers
   # empty at the boot instant — the app-deploy analogue of the seed-pull bake above. Same
