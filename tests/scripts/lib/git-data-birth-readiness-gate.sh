@@ -492,6 +492,21 @@ HOLD
   # send the reader to the wrong one whenever both are true.
   local divergence _tok _allowed
   divergence="$(grep -E '^[[:space:]]*RUNG2_VAR_DIVERGENCE[[:space:]]*=' <<<"$body" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//')"
+  # A PRESENT KEY WITH AN EMPTY VALUE IS NOT A DECLARATION. The cardinality loop above counts
+  # lines matching the KEY; it never required a VALUE, so `RUNG2_VAR_DIVERGENCE=` counted as
+  # exactly 1, `divergence` came back empty, `read -ra` yielded zero tokens, the closed
+  # allowlist iterated zero times, and the gate RELEASED — measured. The release message then
+  # printed `${divergence:-none}`, asserting a declaration of "none" that nobody made.
+  #
+  # This is the same property the block above states ("Declaring 'nothing diverged' must be
+  # explicit, never inferred from silence") applied to the case it did not cover: that fix
+  # closed ABSENT and left EMPTY open. Whitespace-only is the same silence with extra bytes,
+  # so it is stripped before the test — and `--divergence` upstream validates with `-z` only,
+  # which `$'\n'` passes.
+  if [[ -z "${divergence//[[:space:]]/}" ]]; then
+    echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} carries RUNG2_VAR_DIVERGENCE with an EMPTY value. 'Nothing diverged' must be declared explicitly as RUNG2_VAR_DIVERGENCE=none; an empty value is silence, and silence cannot release this gate. Fail-closed." >&2
+    return 1
+  fi
   # `read -ra` + noglob, NOT an unquoted expansion. Caught in review: `for _tok in
   # ${divergence//,/ }` subjects the evidence file's value to PATHNAME EXPANSION, so a
   # `RUNG2_VAR_DIVERGENCE=*` is replaced by whatever happens to be in the caller's cwd.
@@ -545,6 +560,6 @@ HOLD
     return 1
   fi
 
-  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for user_data sha256 ${live_sha} (${url}); declared render-var divergence: ${divergence:-none}. NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
+  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for user_data sha256 ${live_sha} (${url}); declared render-var divergence: ${divergence}. NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
   return 0
 }

@@ -413,6 +413,24 @@ r2check "evidence with NO divergence line => HOLD" 1 "exactly 1 is required" \
 # rehearsal unreleasable, which is a different bug.
 r2check "explicit RUNG2_VAR_DIVERGENCE=none => RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/ok.env"
 
+# ── (#7066 review, P1) A PRESENT KEY WITH AN EMPTY VALUE IS NOT A DECLARATION ─────
+#
+# The arm above closed ABSENT and left EMPTY open. The cardinality loop counts lines matching
+# the KEY, so `RUNG2_VAR_DIVERGENCE=` counted as exactly 1; `divergence` came back empty,
+# `read -ra` yielded zero tokens, the closed allowlist iterated zero times, and the gate
+# RELEASED the birth interlock — while the release message printed `${divergence:-none}`,
+# asserting a declaration of "none" that nobody made. Whitespace-only is the same silence
+# with extra bytes, and `--divergence` upstream validates with `-z` only, so $'\n' reaches here.
+{ printf 'RUNG2_BOOT_REHEARSAL=PASS\nRUNG2_EVIDENCE_URL=%s\n' "$R2_URL"
+  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=\n' "$R2_SHA"; } > "$R2/emptydiv.env"
+r2check "an EMPTY RUNG2_VAR_DIVERGENCE is refused (silence cannot release)" 1 "EMPTY value" \
+  "$R2/ci.yml" "$R2/emptydiv.env"
+
+{ printf 'RUNG2_BOOT_REHEARSAL=PASS\nRUNG2_EVIDENCE_URL=%s\n' "$R2_URL"
+  printf 'RUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=   \n' "$R2_SHA"; } > "$R2/wsdiv.env"
+r2check "a WHITESPACE-ONLY RUNG2_VAR_DIVERGENCE is refused" 1 "EMPTY value" \
+  "$R2/ci.yml" "$R2/wsdiv.env"
+
 # ── (#7066 review, P1) DUPLICATE KEYS ARE REFUSED ─────────────────────────────────
 #
 # The PASS assertion was `grep -qE` (matches ANY line) while every other key used `head -1`,
@@ -597,11 +615,11 @@ r2check "trailing comments on valid evidence => still RELEASED" 0 "RELEASED" "$R
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
 # rather than masquerading as an empty suite.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 54 ]]; then
+if [[ "$_ran" -lt 56 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 54. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 56. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 54)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 56)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
